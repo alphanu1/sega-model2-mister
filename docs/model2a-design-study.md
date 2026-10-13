@@ -31883,3 +31883,277 @@ hardware behaviour neither models (likely inherited from MAME's segaic24 /
 model2 video model): the agent now works from the game's own tilemap/scroll
 write log (with beam position) during a slide, for the latch or per-line
 behaviour that would make the displayed motion smooth.
+
+**R825 -- THE RING'S DECISIONS ARE REGISTERED, TWO STAGES BEHIND THE STATE,
+AND USED ONLY WHILE THE STATE HAS NOT MOVED SINCE.**
+  * No ring decision path has more than one carry chain, and none has more
+    than 3 LUTs after a chain.
+  * What is left are the line_start-fanout paths. They have the same shape as
+    R823's, which fitted with +2.0 to +2.7 ns.
+  * On 25 MAME bursts in all three video modes, overruns are within 5% of
+    2e8e1fc's at every latency model.
+  * NOT FITTED. 2e8e1fc (R824) is INFERRED to fail clk_mem as well.
+
+(Follows R823 c and R824 c. R823's build, f1b4a1c s1030/s1032, failed
+clk_mem by -2.62 / -2.90 ns, and every failing path was the ring's.)
+
+*Believed:*
+  1. R824 c: registering the line terms (rg_lp, rg_wp, rg_lpar) shortens
+     R823's path. The distances and the decisions after them stayed
+     combinational, and R824 was not fitted.
+  2. R824 c's fallback: register rg_nd and rg_hd_d. Their inputs change at
+     most once a line or once a render. The decisions then move by a cycle,
+     which breaks the exact miter.
+
+*The change (rtl/video/m2_video.sv, LB_RING 1 only; LB_RING 0 is untouched):*
+  * Stage A registers the raw differences (pa_tn, pa_th): one 10-bit
+    subtract each, behind the interlace position mux and the head tag's 4:1
+    mux. It also registers nlp == 0 and vtotal - 1.
+  * Stage B registers everything that follows: the wrap add of vtotal, the
+    compares, and go, behind, npar, hstale, room and free.
+    - rg_nlp < rg_lp is no longer a separate compare. It is stage A's sign
+      bit.
+  * rg_quiet counts cycles since the last EVENT, saturating at 2. An event is
+    any of: line_start, a stale drop, push, start, skip, a change of
+    interlace, or a change of vtotal.
+    - A pop is either a line_start or a stale drop, so the line_start hit is
+      not on rg_quiet's path.
+    - The ring sees interlace and vtotal through its own registers (rg_il,
+      rg_vt), one cycle late. A mode or field-length change is therefore an
+      event, not an input moving under a registered decision.
+  * Start, skip and the stale-head drop act only while rg_quiet == 2.
+    - At that point the stage-B value was computed from the state of two
+      cycles ago, and with no event since, that is the state now.
+    - So the decision equals R824's combinational one.
+    - Otherwise the ring waits.
+  * The line_start pop does NOT wait.
+    - Its hit is precomputed per bank one cycle ahead (rg_hit[i]): the tag
+      bank i will hold, including a push in this cycle, against the line the
+      next line_start shows.
+    - At line_start: hit = cnt != 0 && rg_hit[rg_hd] && rg_vis.
+    - This is exact at every line_start, because no two line_starts are
+      within one cycle (they are 656 ce_pix apart).
+  * rg_lp loads rg_lpn_q at line_start, which is (vcnt + 3) mod vtotal one
+    cycle earlier. vcnt and the field last moved at the previous line_start.
+  * Simulation check (M2_RING_CHECK, on in test_m2_video_ovr). Every cycle it
+    recomputes R824's combinational decisions from the current state and
+    stops the run if:
+    - a registered decision that may be acted on (rg_quiet == 2) differs, or
+    - the line_start hit differs at any line_start.
+  * Bench: OVR_SKIP_RL=1 in tb_m2_video_ovr leaves out the shipped swap path
+    at L. That run does not depend on the variant, and leaving it out halves
+    an A/B sweep.
+
+*Hazard argument (each point is checked every cycle by M2_RING_CHECK):*
+  * Every action the ring takes is the action R824 takes from the same state.
+    - The registered value is used only when it equals R824's value for the
+      current state.
+    - The only other effect is cycles where R824 would act and this design
+      waits.
+    - Waiting cannot break any of R824's invariants:
+      - No start means no new bank is written.
+      - No stale drop leaves a finished line at the head.
+      - No skip leaves rg_nl as it was.
+  * It cannot render into the displayed bank.
+    - Start uses room_q and free_q. They are exact when used, so
+      free != rg_rb and rg_cnt <= 2, as in R824.
+  * It cannot pop a head that is not complete.
+    - The FIFO holds only pushed lines (Q_NEXT on layer 3).
+    - The line_start pop needs cnt != 0. The stale drop needs cnt != 0 and
+      only drops.
+  * It cannot miss a line_start.
+    - Everything done at line_start ignores rg_quiet: the pop, rg_rb, the
+      overrun count and the rg_lp/rg_wp/rg_lpar loads.
+    - A line_start in the same cycle as a start is the R824 case: both see
+      the pre-line_start state.
+  * Same-cycle push, pop and start:
+    - Push is in Q_NEXT and start is in Q_IDLE, so they never coincide.
+    - A pop and a start, or a pop and a push, in one cycle keep
+      rg_hd + rg_cnt == rg_wb, as in R824.
+    - A start with cnt == 0 never meets a pop, because a pop needs cnt != 0.
+  * Liveness: events are line_starts (one every 4,100+ cycles), pushes (one
+    per start), stale drops (bounded) and field or mode changes. rg_quiet
+    always reaches 2.
+    - A skip that leaves rg_nl unchanged re-arms the wait, but then R824 would
+      also be skipping every cycle.
+  * Cost: after each event, a start, skip or drop comes up to 2 cycles later.
+    That is ~2 cycles per rendered line, plus 2 after each line_start, out of
+    4,100.
+  * Can the delayed stale drop cost a line?
+    - Only if a line_start lands within 2 cycles of a late line's push.
+    - Then the FIFO holds only that stale line: rendering is serial, so no
+      later line is finished.
+    - R824 would not hit at that line_start either.
+
+*Now known -- VERIFIED:*
+  1. TIMING ESTIMATE IN THE FULL DESIGN.
+     - Quartus 17.0 quartus_map of the whole Model2 project, at f1b4a1c, at
+       2e8e1fc and with this change.
+     - Then quartus_sta --post_map, slow model. That has placement-free
+       delays, no fit.
+     - The table gives the worst path into each register group, as slack in
+       ns, with LUT levels + carry cells.
+
+     | Endpoint            | f1b4a1c (R823)          | 2e8e1fc (R824)          | R825                  |
+     |---------------------|-------------------------|-------------------------|-----------------------|
+     | rg_rb               | -6.04, 6 + 16 cc        | -2.53, 7 (hcnt)         | -1.00, 5 (hcnt)       |
+     | rg_hd               | -5.35, 6 + 16 cc        | -3.64, 6 + 11 cc        | -1.59, 7 (hcnt)       |
+     | rg_cnt              | -5.35, 6 + 16 cc        | -1.73, 7 (hcnt)         | -1.59, 7 (hcnt)       |
+     | rg_nl               | -4.71, 6 + 16 cc        | -4.03, 6 + 11 cc        | +5.10, 1 + 9 cc       |
+     | rg_wb, cur_line     | -4.72, 6 + 16 cc        | -3.03, 4 + 11 cc        | +6.60, 2              |
+     | q (the sequencer)   | -3.65, 6 + 16 cc        | -2.56, 5 + 11 cc        | +6.56, 2              |
+     | pa_* (stage A)      | --                      | --                      | +4.51, 0 + 10 cc      |
+     | go_q / behind_q     | --                      | --                      | +2.81 / +2.87, 5 + 2 cc |
+     | npar_q / hstale_q   | --                      | --                      | +3.12 / +3.68         |
+     | rg_hit              | --                      | --                      | +1.91, 3              |
+     | rg_quiet            | --                      | --                      | -0.83, 6 (hcnt)       |
+     | rg_lp (line_start)  | --                      | +0.21, 3 (hcnt)         | -0.22, 4 (hcnt)       |
+
+     - Only these R825 paths are below +1.9 ns, and each one starts at hcnt:
+       hcnt -> line_start (4 LUTs post-map: hcnt == 655 && ce_pix) -> pop
+       -> the pointer, or -> rg_quiet.
+     - With the line_start pulse taken out, the decision logic has at most 3
+       LUTs.
+     - In the f1b4a1c and 2e8e1fc columns, some of the worst paths come out
+       of an altshift_taps RAM (dv_hs1_rtl_0). That is where Quartus put the
+       interlace / line-count synchroniser shift registers.
+  2. CALIBRATION, the same paths post-fit. The f1b4a1c s1030 database was
+     copied to scratch and re-timed with quartus_sta.
+
+     | Path             | Post-fit (s1030) | Post-map (full design) |
+     |------------------|------------------|------------------------|
+     | vcnt -> rg_rb    | -2.621           | -6.04 (worst into rg_rb) |
+     | vcnt -> rg_hd    | -2.416           | -5.35                  |
+     | vcnt -> rg_nl    | -2.403           | -4.71                  |
+     | vcnt -> rg_wb    | -2.270           | -4.72                  |
+     | vcnt -> cur_line | -2.272           |                        |
+     | vcnt -> q        | -1.110           | -3.65                  |
+     | hcnt -> rg_rb    | +2.05            | -2.32                  |
+     | hcnt -> rg_hd    | +2.28            | -1.68                  |
+     | hcnt -> rg_cnt   | +2.69            | -1.68                  |
+
+     - The post-fit vcnt -> rg_rb, -2.621, is exactly the number reported for
+       s1030.
+     - So the full-design post-map figure is pessimistic by about 2.3-3.4 ns
+       on the ring's carry-chain paths, and about 4 ns on the hcnt
+       (line_start) paths.
+     - Also measured: m2_video mapped alone (virtual pins). There R825's
+       worst ring path is +1.35 (rg_wb -> rg_hit, 4 LUTs), against 2e8e1fc's
+       +0.21 and f1b4a1c's -3.40.
+  3. CONSTANT FOLD (quartus_map on a constant-input module).
+     - Checked: the stage-A subtract, the wrap add, vtotal - 1, go, behind,
+       npar, the 2'(i) loop compare in rg_hit, and the rg_quiet saturation.
+     - Every output pin's stuck-at value matched the expected constant: tn
+       3fb / 3ff, nd 1a3 / 1a7, go 0 / 1, behind 1, npar 0, hit 0110,
+       quiet 2 / 2.
+     - Only plain unsigned arithmetic and size casts are used.
+  4. AREA.
+     - Full-design map, ALMs needed: f1b4a1c 40,493, 2e8e1fc 40,478, R825
+       40,532 (+54 against 2e8e1fc).
+     - u_tilemap, combinational ALUTs / registers: f1b4a1c 2,050 / 2,252,
+       2e8e1fc 2,056 / 2,271, R825 2,108 / 2,330.
+     - Block memory bits are identical in all three: 4,358,651 total, and
+       122,880 in u_tilemap.
+     - m2_video mapped alone:
+     - 1,999 -> 2,064 ALMs needed (+65).
+     - 2,199 -> 2,248 combinational ALUTs.
+     - 2,736 -> 2,795 registers.
+     - Block memory bits unchanged at 122,880.
+  5. BENCH, MAME DUMPS.
+     - Data: MAME 0.289 daytona via sim/video/mame_m2_ovrdump.lua, R824's
+       25 bursts regenerated: attract at 600 ... 5700, and OV_RACE=1 at
+       1000 ... 4000, 7 frames each. That is 175 frames per mode.
+     - The dumps are ROM-derived. They stayed in scratch.
+     - The regenerated set reproduces R824's 2e8e1fc numbers exactly (native
+       45+U[0,30] 0.89 / 12%, 60 0.91 / 14%, 90 12.87 / 42%; i273 90
+       3.13 / 28% / 23; i262 90 3.10 / 28% / 26).
+     - Config: SIBLING 0 as shipped. Each run is the variant at L against the
+       shipped swap at L = 0.
+     - Units: overruns per frame (field) on visible lines / % of frames with
+       any / worst.
+
+       | Mode   | Latency                                       | 2e8e1fc          | R825             |
+       |--------|-----------------------------------------------|------------------|------------------|
+       | native | 0, 20, 30, 45, 14+U30, 14+U50, 30+U30, q      | 0                | 0                |
+       | native | 45+U[0,30]                                    | 0.89 / 12% / 14  | 0.90 / 13% / 14  |
+       | native | 60                                            | 0.91 / 14% / 13  | 0.95 / 14% / 13  |
+       | native | 90                                            | 12.87 / 42% / 66 | 13.01 / 42% / 66 |
+       | i273.5 | every model to 60                             | 0                | 0                |
+       | i273.5 | 90                                            | 3.13 / 28% / 23  | 3.13 / 28% / 23  |
+       | i262.5 | every model to 60                             | 0                | 0                |
+       | i262.5 | 90                                            | 3.10 / 28% / 26  | 3.11 / 28% / 26  |
+
+     - Wrong lines against r@0 equal the overrun counts in every row, both
+       designs.
+     - All 3 x 11 x 25 runs PASS:
+       - 0 frames differ from r@0 where the variant did not overrun.
+       - 0 wrong glyphs.
+       - M2_RING_CHECK never fired.
+     - The last edit took the hit off rg_quiet's path, which is a boolean
+       identity. The final RTL then re-ran all 50 sweep files: every SWEEP
+       line was identical, and so was every result line of make
+       test_m2_video_ovr.
+     - Scenes whose count changed: 2, 2 and 7 of 25 in the three native
+       overrunning rows, 1 in i262 at 90. Every other row is identical scene
+       by scene.
+  6. BENCH, SYNTHETIC (make test_m2_video_ovr, both SIBLING settings): PASS.
+     - Every line is identical to 2e8e1fc's run, including every mode-change
+       case, except rows that overrun heavily: random tile RAM at 14+U[0,30]
+       and sky at L = 90.
+     - Those move by small amounts in both directions. For example, sky
+       native L 90 goes 224.8 -> 222.2 (SIB 0), and sky i273 L 90 goes
+       63.3 -> 72.0 (SIB 0) but 120.2 -> 119.3 (SIB 1).
+     - Overruns at L ~ 90 are trajectory-sensitive. Sky, L = 80..100 in steps
+       of 2, total visible overruns over the 11 latencies (2e8e1fc -> R825):
+
+       | Mode   | 2e8e1fc | R825   | Change |
+       |--------|---------|--------|--------|
+       | native | 14,971  | 14,928 | -0.3%  |
+       | i273   | 4,479   | 4,388  | -2.0%  |
+       | i262   | 4,073   | 4,126  | +1.3%  |
+
+       Single latencies swing by up to ±30% either way, so the i273 L 90 row
+       is noise, not a regression.
+  7. The checker is live. A mutant that acts after one quiet cycle instead of
+     two stops within the first sky frame ("stale decision go 1/0 behind
+     0/1").
+  8. The rest of the checks:
+     - test_m2_video_timing 39/0 PASS. test_m2_char_cache PASS.
+     - test_m2_video_frame PASS on a MAME frame-5700 dump. LB_RING 0, and
+       LB_RING 1 both before and after: three byte-identical images.
+     - lint_top clean. lint_idx: the only m2_video entry is the pre-existing
+       xlat_tbl.
+     - Verilator -Wall on m2_video: the same warning set as 2e8e1fc under
+       LB_RING 0 and 1.
+     - quartus_map --analyze_file (17.0) on m2_video.sv, m2_video_timing.sv
+       and m2_video_ovr_top.sv: 0 errors.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. R825 should close clk_mem on the ring.
+     - The decision registers estimate at +2.8 ns or better post-map, which
+       is pessimistic by 2.3-3.4 ns on chain paths.
+     - The hcnt -> line_start -> pointer paths estimate at -1.0 to -1.6. The
+       same paths in f1b4a1c estimated -1.7 to -2.3 and fitted at +2.0 to
+       +2.7.
+     - rg_quiet's path is one LUT longer than rg_cnt's, at -0.83 post-map.
+     - Settles it: a fit (seed sweep). The ring's endpoints are rg_rb*,
+       rg_hd*, rg_cnt*, rg_quiet*, rg_hit*, rg_lp*, go_q, behind_q,
+       hstale_q and pa_*.
+  b. 2e8e1fc (R824) most likely FAILS clk_mem too, so it should not be swept
+     as it is.
+     - Its worst ring paths estimate at -3.64 / -4.03 post-map: 6 LUTs + 11
+       carry cells into rg_hd and rg_nl.
+     - On the R823 calibration that is about -0.5 to -1.7 post-fit.
+     - Settles it: a fit of 2e8e1fc, or of this change.
+  c. If the line_start paths show up in a fit, they are the same in the swap
+     design. The fix is to register hcnt == H_TOTAL - 1 as a flag: hcnt moves
+     only on ce_pix, and ce_pix is at least 6 cycles apart in steady state, so
+     the flag is current by the next ce_pix. line_start then becomes ce_pix
+     && flag, one LUT. Not done here.
+     - Model2.sv can hold ce_pix high for 2 cycles across a mode change (its
+       "start clean" branch does not clear ce_pix). That case would need
+       checking first.
+  d. The bench's pixel-enable model clears ce_pix in that same branch, so it
+     differs from Model2.sv there. It only affects mode-change cases.
+
+*Not verified:* any fit, the clk_mem slack of the full design, the board.

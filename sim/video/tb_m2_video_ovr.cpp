@@ -387,7 +387,11 @@ int main(int argc, char **argv) {
       for (int mode = 0; mode < 3; mode++)
         for (const auto &l : ls) {
           Result r = run(DUMP, int(fd.size()), l.lat, l.jit, mode, 11, 0, &tiles, &chr);
-          Result q = run(DUMP, int(fd.size()), l.lat, l.jit, mode, 11, -1, &tiles, &chr);
+          // R825: OVR_SKIP_RL=1 leaves out the shipped path at L (the rL_*
+          // fields read 0) -- it does not depend on the variant, so an A/B of
+          // two variants needs it once, and it is half the run time.
+          static const bool skip_rl = std::getenv("OVR_SKIP_RL") != nullptr;
+          Result q = skip_rl ? Result() : run(DUMP, int(fd.size()), l.lat, l.jit, mode, 11, -1, &tiles, &chr);
           std::printf("SWEEP mode %d lat %d jit %d frames %d d_vis %ld d_vis_fr %d d_vis_max %d d_cnt %ld difflines %ld r0_vis %ld cmp %d badfr %d badglyph %ld rL_vis %ld rL_cnt %ld rL_fr %d rL_max %d\n",
                       mode, l.lat, l.jit, r.frames, r.d_vis, r.d_vis_fr, r.d_vis_max, r.d_ovr, r.diff_lines, r.r_vis, r.cmp, r.bad_frames, r.bad_glyph + q.bad_glyph,
                       q.r_vis, q.r_ovr, q.r_ovr_fr, q.r_max);

@@ -741,6 +741,8 @@ obj_m2_vf/Vm2_video: $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
 # from sim/video/mame_m2_ovrdump.lua via TEST_ARGS=+burst=<dir>.
 # R824: in all three video modes (native, 15 kHz 273.5 and 262.5 lines a
 # field), and across a mid-frame mode change.
+# R825: built with M2_RING_CHECK, which stops the run if a pipelined ring
+# decision is acted on while it differs from R824's combinational one.
 test_m2_video_ovr: obj_m2_vovr/Vm2_video_ovr_top obj_m2_vovr_ns/Vm2_video_ovr_top
 	@echo "== test m2_video ring (LB_RING 1) against the shipped path"
 	@./obj_m2_vovr/Vm2_video_ovr_top $(TEST_ARGS)
@@ -750,11 +752,11 @@ test_m2_video_ovr: obj_m2_vovr/Vm2_video_ovr_top obj_m2_vovr_ns/Vm2_video_ovr_to
 M2VOVR_RTL := $(M2V_RTL) rtl/video/m2_char_cache.sv sim/video/m2_video_ovr_top.sv
 
 obj_m2_vovr/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
-	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=1 \
+	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=1 +define+M2_RING_CHECK \
 	  --Mdir obj_m2_vovr -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
 
 obj_m2_vovr_ns/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
-	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=0 \
+	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=0 +define+M2_RING_CHECK \
 	  --Mdir obj_m2_vovr_ns -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
 
 # The CPU bridge: decode, the 32-to-16 split, and the 25-to-40 MHz crossing.
