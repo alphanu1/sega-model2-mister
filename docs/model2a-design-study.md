@@ -33064,3 +33064,12 @@ maybe) or plus an I/O board (Virtua Cop: model1io2 + light guns). Model 2A
 is this core with the SCSP sound and the 315-5649 I/O swapped in. 2B swaps
 the geometry processor for a SHARC and 2C for a TGPx4 -- each a large new
 CPU core on top of 2A's sound and I/O.
+DECISION (Ben, 2026-10-13): Model 2B-CRX and Model 2C-CRX are DOCUMENTED
+ONLY -- not to be implemented. Caveat for any future reader: each replaces
+the TGP with a different geometry processor (2B: ADSP-21062 SHARC; 2C:
+MB86235 TGPx4), a large new CPU core on top of 2A's SCSP sound and 315-5649
+I/O, and the device is already at ~98-99% with the original board's TGP;
+there is no measured room for either. The game lists above are a record of
+the family, not a plan. Planned work stays: this core (original Model 2,
+Daytona; Desert Tank to be checked), then Virtua Cop and Model 2A as their
+own branches.
