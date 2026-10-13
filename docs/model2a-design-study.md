@@ -32806,3 +32806,10 @@ MultiPCM's key_wait; -0.334 in the fill's oz normaliser). s1051-s1053: s1052
 closes, clk_sys +0.041, holds >= +0.240, HDMI -0.106; 41,352 ALM. RBF
 build/Model2_20261013_s1052_mip.rbf. Contents: ring + shared MultiPCM + MIP
 (R826 off, no volume). Not yet on the board.
+R828 ON THE BOARD: s1052 (MIP 1): Ben -- "bad: the change is at too close a
+distance; the road a couple of quads in front is all blurry." The level
+comes from the footprint's MAJOR axis (max over edges); on the road, seen at
+a grazing angle, the compressed depth axis drops the near road to a blurry
+level (the classic isotropic-mip failure on oblique surfaces). MIP stays 0 on
+the branch. Next: measure minor-axis / log-average / anisotropy-clamped rules
+and a bias, and expose the bias as an OSD choice with Off.
