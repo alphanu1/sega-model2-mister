@@ -31862,3 +31862,18 @@ then the board was rebooted (ssh timeout, uptime 2 min at the next load),
 which cleared /tmp/m2-fps.py; restored from tools/. s1035 on the board from
 14:04 (board time), Revision A, 4 h watch: Ben to check tile overruns at 24
 and 15 kHz.
+s1035 on the board: Ben -- "much less overruns, but still noticeable" (as
+R823's bench predicted for SIBLING 0 alone: ~1 a frame native). The ring
+(R823/R824, being pipelined for clk_mem, R825) is the rest.
+
+**R826 -- OPEN: THE BACKGROUND JERKS WHEN SLIDING AND TURNING (Ben, long
+standing, not from recent changes).** "The background can be very jerky when
+sliding and turning corners -- it should be smooth transitions, not sudden
+jumps; the same on the straight road if you throw the car into a slide."
+Candidates, unmeasured: (1) the 2D layers (sky/backdrop) take their scroll at
+once while the 3D is shown a frame or more later (framebuffer, walk, swap),
+so they slip against each other when the view rotates; (2) the backdrop's
+scroll quantised (a lost fine-scroll bit); (3) a scroll register read at the
+wrong time or from the wrong word (R823's agent found hscr_r reading the
+previous sequencer address -- zero on its dumps). An agent is comparing
+against MAME frame by frame.
