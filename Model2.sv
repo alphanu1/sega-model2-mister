@@ -2772,7 +2772,7 @@ always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8];
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
-m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1)) u_sndboard (   // R573; R821: one MultiPCM engine, passed on the board (s1037)
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1), .YM_STUB(1'b1)) u_sndboard (   // R573; R821: one MultiPCM engine, passed on the board (s1037); R833: YM_STUB 1 = the YM3438 as timers only (Daytona never voices it)
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),

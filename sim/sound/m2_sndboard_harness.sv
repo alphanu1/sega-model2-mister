@@ -13,6 +13,7 @@ module m2_sndboard_harness #(
   parameter bit PCM_CACHE = 1'b1,
   parameter bit PCM_RATE  = 1'b1,
   parameter bit PCM_SHARED = 1'b0,        // R821
+  parameter bit YM_STUB    = 1'b0,        // R833
   // R738: the core clock in MHz, as Model2.sv passes SYS_MHZ. 50 keeps every
   // existing figure; 80 runs the enables at the ratios the board gets at 80.
   parameter int unsigned TICK_DEN = 50
@@ -74,6 +75,8 @@ module m2_sndboard_harness #(
   output logic        obs_as,
   output logic [23:0] obs_addr,
   output logic        obs_we,
+  output logic [15:0] obs_oedb, obs_iedb,  // R833: the 68000's data, both ways
+  output logic        obs_ym_rd,
   // R267: THE THREE SOURCES SEPARATELY. The user reports the music quiet
   // against the samples. The reference mixes the FM at 0.30 and each sample
   // chip at 0.5 (segam1audio.cpp), so the ratio is not the question -- what
@@ -86,7 +89,7 @@ module m2_sndboard_harness #(
   output logic        obs_p1_stb, obs_p2_stb
 );
 
-  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE), .PCM_SHARED(PCM_SHARED), .TICK_DEN(TICK_DEN)) u_board (
+  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE), .PCM_SHARED(PCM_SHARED), .YM_STUB(YM_STUB), .TICK_DEN(TICK_DEN)) u_board (
     .clk(clk), .rst_n(rst_n),
     .rx_data(rx_data), .rx_valid(rx_valid), .rx_ack(rx_ack),
     .tx_data(tx_data), .tx_valid(tx_valid), .tx_ack(tx_ack),
@@ -130,6 +133,9 @@ module m2_sndboard_harness #(
   assign obs_as   = u_board.as;
   assign obs_addr = u_board.addr;
   assign obs_we   = u_board.we;
+  assign obs_oedb = u_board.oedb;
+  assign obs_iedb = u_board.iedb;
+  assign obs_ym_rd = u_board.sel_ym && u_board.rd && u_board.ds;
 
   wire _unused = &{1'b0, ROM_LAT, 1'b0};
 

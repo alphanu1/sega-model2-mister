@@ -232,6 +232,18 @@ edges (the proof is in the SDC). An upstream bump that renames any of them, or
 adds a load outside `clk_en`, must revisit that block; a rename shows as its
 critical warning.
 
+**R833: `rtl/sound/m2_ym_timers.sv`, a timer-only stand-in, is derived from it**
+(GPL-3.0, from jt12 @ `4cf1c5b`; no jt12 file is changed). It re-expresses only
+jt12's timer path -- `jt12_top`'s cen_reg and timer enable, `jt12_div`'s 1/6
+prescaler and its negative-edge enables, `jt12_reg`'s 24-slot counter and
+`zero`, the address latch, registers 0x21 and 0x24-0x27 and busy from
+`jt12_mmr`, `jt12_timers`, `jt12_dout` -- and outputs silence. Selected by
+`m2_sound_board`'s `YM_STUB` (default 0: jt12, unchanged). Proven by
+`tb_m2_ym_timers` (dout and irq_n equal to jt12's after every clock edge, on
+MAME's captured write stream and random programming) and by
+`tb_m2_sndboard` with YM_STUB 1 (the 68000's bus and both MultiPCMs identical
+to jt12's board every cycle). Daytona never voices the FM (R819, R833).
+
 ### ijor/fx68k — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · UNMODIFIED*
 

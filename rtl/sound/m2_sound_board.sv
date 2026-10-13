@@ -54,6 +54,13 @@ module m2_sound_board #(
   // same names, same logic. On: the same samples from the same register
   // state (tb_m2_mpcm_dual), each chip still on its own fetcher and port.
   parameter bit PCM_SHARED = 1'b0,
+  // R833: THE YM3438 AS A TIMER-ONLY STAND-IN (m2_ym_timers) in place of
+  // jt12. Daytona never voices the FM (R819, R833: MAME's ymsnd output is
+  // zero on both sound programs); the 68000 uses timer B and polls the busy
+  // and timer flags, which the stand-in reproduces clock for clock. Off: the
+  // board is exactly as it was. On: the FM is SILENT -- not for a game that
+  // keys the YM with a non-zero level.
+  parameter bit YM_STUB = 1'b0,
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
   parameter int unsigned TICK_DEN = 50      // clk_sys
 ) (
@@ -238,10 +245,12 @@ module m2_sound_board #(
   );
 
   // ---------------------------------------------------------------- IPL
-  // segam1audio wires the UART's rxrdy to the 68000's IRQ2 and the YM's timer
-  // to IRQ4. Only the UART exists yet, so IRQ4 is never raised -- and that is
-  // recorded rather than left looking complete: a board that never sees its
-  // timer interrupt will not sequence music, whatever the UART does.
+  // segam1audio wires the UART's rxrdy to the 68000's IRQ2, and NOTHING ELSE.
+  // R833: this note used to say the YM's timer went to IRQ4 and was missing
+  // here. MAME 0.289's segam1audio.cpp connects no YM interrupt, and the
+  // firmware does not need one: it polls the YM's status for timer B (bit 1,
+  // at 0x528-0x5C8) and busy (bit 7, before every write), MAME and this board
+  // alike. ym_irq_n stays unconnected, as in the reference.
   always_comb begin
     ipl_n = 3'b111;                       // no interrupt
     if (uart_irq_rx) ipl_n = 3'b101;      // level 2, active low
@@ -315,14 +324,41 @@ module m2_sound_board #(
   wire               ym_sample;
   wire               ym_irq_n;
 
+  // R833: jt12 (YM_STUB 0) or the timer-only stand-in (YM_STUB 1), chosen by
+  // parameter-constant wires as R821 chose the MultiPCM: u_ym keeps its name
+  // and its logic with YM_STUB 0, and with YM_STUB 1 nothing reads it, so
+  // Quartus prunes it. Same inputs to both.
+  wire  [7:0] j_dout, t_dout;
+  wire signed [15:0] j_l, j_r, t_l, t_r;
+  wire               j_sample, t_sample, j_irq_n, t_irq_n;
+  assign ym_dout_i = YM_STUB ? t_dout   : j_dout;
+  assign ym_l      = YM_STUB ? t_l      : j_l;
+  assign ym_r      = YM_STUB ? t_r      : j_r;
+  assign ym_sample = YM_STUB ? t_sample : j_sample;
+  assign ym_irq_n  = YM_STUB ? t_irq_n  : j_irq_n;
+
   jt12 u_ym (
     .rst(!rst_n), .clk(clk), .cen(ym_cen),
     .din(ym_d_r), .addr(ym_a_r),
     .cs_n(!ym_wr_pend), .wr_n(!ym_wr_pend),
-    .dout(ym_dout_i), .irq_n(ym_irq_n),
+    .dout(j_dout), .irq_n(j_irq_n),
     .en_hifi_pcm(1'b0),
-    .snd_right(ym_r), .snd_left(ym_l), .snd_sample(ym_sample)
+    .snd_right(j_r), .snd_left(j_l), .snd_sample(j_sample)
   );
+
+  generate if (YM_STUB) begin : g_ymstub
+    m2_ym_timers u_ymt (
+      .rst(!rst_n), .clk(clk), .cen(ym_cen),
+      .din(ym_d_r), .addr(ym_a_r),
+      .cs_n(!ym_wr_pend), .wr_n(!ym_wr_pend),
+      .dout(t_dout), .irq_n(t_irq_n),
+      .en_hifi_pcm(1'b0),
+      .snd_right(t_r), .snd_left(t_l), .snd_sample(t_sample)
+    );
+  end else begin : g_ymjt12
+    assign t_dout = 8'd0; assign t_irq_n = 1'b1; assign t_sample = 1'b0;
+    assign t_l = 16'sd0;  assign t_r = 16'sd0;
+  end endgenerate
 
   // ----------------------------------------------------------- MULTIPCM x2
   //

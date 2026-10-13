@@ -333,6 +333,19 @@ int main(int argc, char **argv) {
   auto fold = [&](uint32_t v) {
     for (int k = 0; k < 4; ++k) { out_hash ^= (v >> (8 * k)) & 0xff; out_hash *= 1099511628211ULL; }
   };
+  // R833: THREE MORE, SO THE YM's PART CAN BE SEPARATED FROM EVERYTHING ELSE.
+  // cpu: the 68000's bus every cycle -- strobe, address, direction and the
+  // data either way -- which is its behaviour, clock for clock. pcm: both
+  // MultiPCMs, raw and rated, and their strobes -- the music and effects.
+  // mix: the board's output. With the YM's audio at zero, a stand-in that
+  // keeps the 68000 identical must print the same cpu and pcm hashes as jt12.
+  uint64_t cpu_hash = 1469598103934665603ULL, pcm_hash = cpu_hash, mix_hash = cpu_hash;
+  auto foldh = [&](uint64_t &h, uint32_t v) {
+    for (int k = 0; k < 4; ++k) { h ^= (v >> (8 * k)) & 0xff; h *= 1099511628211ULL; }
+  };
+  long ym_reads = 0, ym_rd_val[256] = {0};
+  long ym_nz = 0, ym_nz_first = -1, ym_nz_last = -1; int ym_nz_pk = 0;
+  int prev_ym_rd = 0;
   long c = 0;
   for (; c < MAXC; ++c) {
     // Offer the next byte when the wire is free and its line time has passed.
@@ -354,6 +367,21 @@ int main(int argc, char **argv) {
     fold((uint32_t(uint16_t(d->obs_p2_raw_l)) << 16) | uint16_t(d->obs_p2_raw_r));
     fold((uint32_t(d->obs_p1_stb) << 1) | d->obs_p2_stb);
     p1_stbs += d->obs_p1_stb; p2_stbs += d->obs_p2_stb;
+    foldh(cpu_hash, (uint32_t(d->obs_as) << 31) | (uint32_t(d->obs_we) << 30) | d->obs_addr);
+    if (d->obs_as) foldh(cpu_hash, d->obs_we ? d->obs_oedb : (uint32_t(d->obs_iedb) | 0x10000u));
+    foldh(pcm_hash, (uint32_t(uint16_t(d->obs_p1_l)) << 16) | uint16_t(d->obs_p1_r));
+    foldh(pcm_hash, (uint32_t(uint16_t(d->obs_p2_l)) << 16) | uint16_t(d->obs_p2_r));
+    foldh(pcm_hash, (uint32_t(uint16_t(d->obs_p1_raw_l)) << 16) | uint16_t(d->obs_p1_raw_r));
+    foldh(pcm_hash, (uint32_t(uint16_t(d->obs_p2_raw_l)) << 16) | uint16_t(d->obs_p2_raw_r));
+    foldh(pcm_hash, (uint32_t(d->obs_p1_stb) << 1) | d->obs_p2_stb);
+    foldh(mix_hash, (uint32_t(uint16_t(d->snd_l)) << 16) | uint16_t(d->snd_r));
+    if (d->obs_ym_l || d->obs_ym_r) {
+      ++ym_nz; if (ym_nz_first < 0) ym_nz_first = c; ym_nz_last = c;
+      int a = std::abs(int(int16_t(d->obs_ym_l))), b = std::abs(int(int16_t(d->obs_ym_r)));
+      if (a > ym_nz_pk) ym_nz_pk = a; if (b > ym_nz_pk) ym_nz_pk = b;
+    }
+    if (d->obs_ym_rd && !prev_ym_rd) { ++ym_reads; ++ym_rd_val[d->obs_iedb & 0xff]; }
+    prev_ym_rd = d->obs_ym_rd;
     if (dump1 && d->obs_p1_stb) { int16_t v[2] = {int16_t(d->obs_p1_raw_l), int16_t(d->obs_p1_raw_r)}; std::fwrite(v, 2, 2, dump1); }
     if (dump2 && d->obs_p2_stb) { int16_t v[2] = {int16_t(d->obs_p2_raw_l), int16_t(d->obs_p2_raw_r)}; std::fwrite(v, 2, 2, dump2); }
     if (d->obs_as && !prev_as) {
@@ -481,6 +509,13 @@ int main(int argc, char **argv) {
               c, (unsigned)d->dbg_insns, first_pc);
   std::printf("  output hash: %016llx (mix, YM, both chips raw and rated, every cycle; %ld + %ld chip samples)\n",
               (unsigned long long)out_hash, p1_stbs, p2_stbs);
+  std::printf("  R833 hashes: cpu %016llx  pcm %016llx  mix %016llx\n",
+              (unsigned long long)cpu_hash, (unsigned long long)pcm_hash, (unsigned long long)mix_hash);
+  std::printf("  YM audio: %ld cycles non-zero, first %ld, last %ld, peak %d\n",
+              ym_nz, ym_nz_first, ym_nz_last, ym_nz_pk);
+  std::printf("  YM status reads: %ld;", ym_reads);
+  for (int v = 0; v < 256; ++v) if (ym_rd_val[v]) std::printf(" %02x:%ld", v, ym_rd_val[v]);
+  std::printf("\n");
 
   // THE FM OUTPUT ITSELF. A CPU that follows MAME's path and emits silence has
   // not made sound, and that is the whole point of the exercise. Reported as

@@ -33706,3 +33706,175 @@ rail cap + R826_STEP): nine seeds s1072-s1080 -- best clk_mem -0.062, clk_sys
 41,316-41,446 ALM placed. Sweeps paused for room: a YM3438 timer-only stand-in
 (Daytona never voices the FM, R819; only timer B is used) is being built,
 expected ~500-650 ALM.
+
+**R833 -- THE YM3438 AS TIMERS ONLY: DAYTONA USES ONE TIMER AND TWO STATUS
+BITS OF IT, AND A STAND-IN THAT IS jt12 ON EVERY CLOCK FOR THOSE COSTS 69
+ALUT. BUILT BEHIND m2_sound_board's YM_STUB (DEFAULT 0); -769 ALMs-NEEDED,
+-1,190 ALUT, -604 REGISTERS, -1 DSP IN THE MAP.** (Room: the device is at
+~99% and the release candidate's seeds miss by fractions of a ns. R819
+measured that Daytona never voices the YM; jt12 is 629 ALMs-needed and 11
+M10K in s1072's fit.)
+
+*Believed:* R819 -- MAME's ymsnd output is zero over 300 s of attract and a
+game; the 68000 reloads timer B ~1,700 writes a second to pace its
+sequencer (R820). m2_sound_board's IPL note said the YM's timer went to the
+68000's IRQ4 in segam1audio and was missing here.
+
+*Now known -- VERIFIED (MAME 0.289, sim/sound/mame_m2_ym_usage.lua: a write
+tap and a read tap on 0xD00000-7 with the 68000's PC, MAME's ymsnd stream
+through the sound hook; 340 s = 200 s attract, three coins and start x4 at
+200 s, nobody drives, the race times out, GAME OVER at ~292-298 s):*
+
+  set (sound program)         YM writes  status reads  ymsnd samples  non-zero
+  daytona (Rev A, 16720/21)     590,248     2,759,998     18,888,701        0
+  daytona93 (16489/90)          590,234     2,773,303     18,888,701        0
+  vcopa (200 s, attract)        347,066     1,062,165     11,111,001        0
+  desert (200 s; coin/start
+    pulsed at 60 s, whether a
+    game started not checked)   346,664     1,080,559     11,111,001        0
+
+  EVERY data write -- the same registers with the same values in all four
+  sets (part 0 unless noted):
+    0x27 <- 0x2A         294,875 (daytona) / 294,951 (daytona93) -- 867 a
+                         second: reset flag B, flag B enabled, load B --
+                         one per overflow seen: the main loop's reads with
+                         bit 1 set total 294,872 (daytona) / 294,949
+                         (daytona93) against 294,875 / 294,951 writes.
+    the init block, once per sound-program start (daytona x3: 0.076 s,
+    0.538 s and 309.11 s; daytona93 x2; vcopa x1; desert x2):
+      0x22 <- 0x0A, 0x24 <- 0xFC, 0x25 <- 0x00, 0x26 <- 0xFC, 0x2B <- 0x00,
+      0x28 <- 00, 01, 02, 04, 05, 06 (KEY OFF, operator mask 0, every
+      channel), and in both parts 0x40-0x4E <- 0x7F (TL 127, all 12 slots),
+      0x80-0x8E <- 0xFF, 0x90-0x9E <- 0x00.
+    Nothing else, ever: no F-number/block (A0-AE), algorithm/feedback/pan
+    (B0-B6), DT/MUL (30-3E), rates (50-7E), 0x21, no part-1 timer write, and
+    no key-on with an operator bit set. With TL 127 and no key-on the chip
+    cannot sound; MAME's output is exactly zero.
+  Timer B: NB = 0xFC, 2304 x (256 - 252) / 8 MHz = 1.152 ms, 868 Hz -- the
+    867 rewrites a second. Timer A is loaded with 0x3F0 and never started
+    (0x27 bit 0 never set); its flag is never read set.
+  READS, all of the status byte, values 0x00 / 0x02 / 0x80 / 0x82 only:
+    bit 1 (timer B) polled at 0x528, 0x548, 0x586, 0x5A4, 0x5C8 (the main
+    loop; daytona93 0x528 0x00 x497,812 / 0x02 x225,715 ...), bit 7 (busy)
+    before every write at 0x7B6/0x7C8 (address) and 0x7DC/0x7EE (data).
+    vcopa and desert: the same driver at other addresses (0x4F8/0x56C;
+    0x6F8-0x730/0x76C-0x7A4).
+  THE INTERRUPT: segam1audio.cpp connects the i8251's rxrdy to IRQ2 and no
+    YM interrupt at all; m2_sound_board leaves ym_irq_n unconnected. The
+    board's note claiming IRQ4 was wrong and is corrected; the firmware
+    polls.
+
+THE STAND-IN (rtl/sound/m2_ym_timers.sv; THIRD_PARTY.md: derived from
+jt12 @ 4cf1c5b, GPL-3.0; jt12 untouched). jt12's ports, and of jt12 only the
+path to the status byte, re-expressed register for register: jt12_top's
+cen_reg and timer enable (fast_timers ? cen_reg : clk_en); jt12_div's 1/6
+prescaler (no reset, power-up 0) with cen_int and clk_en on the NEGATIVE
+edge; jt12_reg's 24-slot {cur_op, cur_ch} counter and `zero`; jt12_mmr's
+address latch and part bit, 0x21 bit 2, 0x24/0x25/0x26/0x27 (part 0 only,
+synchronous reset, the reset-flag bits clearing on clk_en only when no write
+is held) and busy (32 clk_en from a data write, asynchronous reset);
+jt12_timers (A: 10 bits a step per `zero`; B: 8 bits a step per 16, its
+4-bit free count), the flags and irq_n; jt12_dout, registered, {busy, 0,
+flag_B, flag_A} for every address. snd_left/right = 0. m2_sound_board's
+YM_STUB selects it by parameter-constant wires (R821's pattern): u_ym (jt12)
+keeps its name and logic at 0 and is pruned at 1 (the map shows no jt12).
+Model2.sv passes .YM_STUB(1'b0) -- unchanged until Ben decides. Model2.sdc:
+the three jt12 exceptions (R738, R762, R742) match nothing at 1; their
+no-match message becomes info when u_ymt exists (critical warning otherwise,
+so a jt12 rename is still caught) -- NOT yet run through TimeQuest.
+
+*Equivalence -- VERIFIED (Verilator 5.052):*
+ (a) tb_m2_ym_timers (new; make test_m2_ym_timers): jt12 and the stand-in on
+   one bus, dout and irq_n compared after EVERY clock edge, both edges.
+   A = MAME's stream at MAME's times; B = all of it, gaps clipped to 4,000
+   clk; C = 200,000 random operations (every register, both parts, timer
+   values biased to overflow, 0x27 and 0x21 at random, 394 resets; enables
+   at random 8/8..8/400, always on, or random; strobes board-style or held
+   1-40 clk):
+     daytona stream, 80 MHz: A 3 s, 5,264 writes, 2,466 timer B flags;
+       B 590,248 writes, 13,955 B flags; C 2,408 A flags, 1,221 B flags;
+       1.785 G cycles, 0 mismatches, stand-in audio 0
+     daytona93: the same, 0 mismatches; vcopa at 50 MHz: 476 M cycles, 0.
+   Seven deliberate faults, each caught: busy 31 clk_en; enables on the
+   rising edge; flag reset cleared during a held write; timer B prescale;
+   dout unregistered; part-1 writes reaching the timers; fast timers without
+   cen_reg's delay (the last two only by part C -- Daytona never exercises
+   them).
+ (b) THE WHOLE BOARD on the real ROM (fx68k, daytona93's epr-16489/16490,
+   both MultiPCMs on the sample ROMs), the release configuration (TICK_DEN
+   80, PCM_SHARED 1), driven by MAME's own link bytes at MAME's times, YM_STUB
+   0 against 1, four windows: W0 power-on + attract 0-14 s; W1 coins, menus
+   and race start (link from 226 s, after the 4 s boot), W2 the race (244 s),
+   W3 race end + GAME OVER (288 s), 16 s each:
+     - the 68000's bus on every cycle (AS, R/W, address, data both ways) --
+       hash IDENTICAL in all four (W0 54b878fc8fe12adb, W1 0b59d1b787e5fb83,
+       W2 23523cfe9d3d7743, W3 2e34644cbadef813): every MultiPCM register
+       write on the same clock, so the note timing is identical;
+     - both MultiPCMs raw and rated, every cycle -- hash IDENTICAL; each
+       chip's sample dump byte-identical (625,016 samples a chip in W0,
+       714,302 in W1-W3);
+     - the YM status reads identical in number and value (W3: 130,607 --
+       0x00 x88,334, 0x02 x41,382, 0x80 x446, 0x82 x445); YM writes 24,360
+       (W0) to 27,828; rate-stage underruns 0; sample cache 0 wrong.
+   The default bench (50 MHz, PCM_SHARED 0, 30 M cycles) likewise; its
+   YM_STUB 0 output hash is be5d9fc834bffead, R821's, so at 0 the board is
+   the same RTL.
+   The board's MIX differs, and only where jt12's own output is non-zero (the
+   MultiPCMs being identical): jt12 is non-zero from cycle 2,951 to
+   6,135,910 after reset and exactly zero for the rest of the window
+   (W3 at 80 MHz: 6,132,960 cycles, the first 76.7 ms, peak 30,720 at the
+   chip's own output; the 50 MHz bench: 4,519,800 cycles, 90 ms, peak
+   30,720), and the mix's non-zero count differs by exactly that figure
+   (1,044,238,826 against 1,038,105,866). The last tenth of every window is
+   identical in range and count.
+ (c) test_m2_sndlink, test_m2_mpcm_level (parts A, B), test_m2_mpcm_dual
+   (both runs) PASS; lint_top clean at YM_STUB 0 and 1; lint_idx the same
+   147 lines at 0 and 1, none new; quartus_map --analyze_file clean on
+   m2_ym_timers.sv and m2_sound_board.sv.
+
+*Area -- VERIFIED (whole-design quartus_map 17.0, this tree, YM_STUB 0 then
+1):*
+                         ALMs-needed  comb ALUT   regs     block bits  DSP
+   YM_STUB 0               40,300      57,498    48,826    4,359,058    91
+   YM_STUB 1               39,531      56,308    48,222    4,351,097    90
+   delta                     -769      -1,190      -604       -7,961    -1
+ YM_STUB 0 equals the release candidate's own map (s1078) on every figure.
+ The stand-in is 69 ALUT and 79 registers; jt12 was 1,086 / 683 / 7,961
+ bits / 1 DSP in the map; the rest of the drop is the mix's third adder input
+ going constant.
+*INFERRED (needs a fit):* placed, ~-570 to -620 ALM (jt12 was 629.2
+ALMs-needed, 634.4 placed, in s1072's fit; the stand-in ~40-50); M10K
+-11 (jt12's 11 in s1072: 540 -> ~529 of 553); DSP 91 -> 90.
+
+*Found on the way:*
+  - jt12's power-up burst: for the first 77-90 ms after reset, before the
+    firmware's init block (TL 127, key off) lands, jt12 sounds from its reset
+    state -- peak 30,720 at its output, and the doubled mix hits the rails
+    (-32,768..32,767) in every window; with the stand-in the range is the
+    MultiPCMs' alone (W0 -15,802..13,696). MAME's ymsnd is exactly zero
+    there. R819's "5,120 then zero" (MAME's writes replayed into jt12) is
+    probably the same burst measured another way (INFERRED). YM_STUB 1
+    removes it; whether it is audible on the board at power-on is
+    INFERRED (likely a click or burst), not listened for.
+  - quartus_map 17.0 re-saved Model2.qsf, appending files.qip's
+    m2_testpattern.sv (which does not exist) and three SDRAM FAST_*_REGISTER
+    assignments; lint_top then failed on the missing file. Reverted. A map run
+    in a worktree must be followed by a check of git diff Model2.qsf.
+
+*Risks.* A game that keys the FM with a non-zero level loses its FM
+entirely under YM_STUB 1. Measured silent: both Daytona programs (attract,
+game, GAME OVER), Virtua Cop Rev A (200 s attract) and Desert Tank (200 s) --
+all four run the same Sega driver, at different addresses. The candidates in
+R832 (Desert Tank, Virtua Cop) are measured only to 200 s; their gameplay
+must be measured before YM_STUB is set for them. Model 1 games that voice
+the FM (Virtua Racing's music is FM, R819) are not this core. The stand-in
+equals jt12, not ymfm or the silicon: busy lasts jt12's 32 internal clocks
+(24 us), and MAME's busy differs (MAME's 0x7B6 poll read busy 229 + 229
+times in 340 s on daytona93; the board's 446 + 445 in one 16 s window) --
+unchanged from today's board, and the tempo is timer B's (R820).
+The SDC's info path is untested until a fit runs.
+
+NEXT: a fit with YM_STUB 1 (one-character change in Model2.sv) for the
+placed ALM, M10K and timing; listen on the board (silence where jt12's boot
+burst was is the only audible difference expected).
+Merged with YM_STUB 1 set in Model2.sv (the release configuration).

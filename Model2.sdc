@@ -216,6 +216,17 @@ if {[get_collection_size $z80_ram] == 0 || [get_collection_size $z80_core] == 0}
 }
 
 
+# ---- R833: WITH m2_sound_board's YM_STUB THE YM3438 IS m2_ym_timers (u_ymt)
+# and nothing reads jt12, so synthesis removes it and the three jt12
+# exceptions below (R738, R762, R742) match nothing -- by design. Their
+# no-match message is then information, not a critical warning; with jt12 in
+# (u_ymt absent) it stays a critical warning, which is what catches a rename.
+if {[get_collection_size [get_registers -nowarn {*u_ymt|*}]] > 0} {
+    set ym_nomatch info
+} else {
+    set ym_nomatch critical_warning
+}
+
 # ---- R738: THE YM3438's OPERATOR COUNTER INTO ITS PHASE INCREMENT, TWO CYCLES.
 #
 # s783/s785/s787 at 80 MHz: u_reg|cur_ch -> u_pg|phinc_II, -0.010 .. -0.309 ns
@@ -239,7 +250,7 @@ if {[get_collection_size $z80_ram] == 0 || [get_collection_size $z80_core] == 0}
 set ym_from [get_registers -nowarn {*u_ym|u_jt12|u_mmr|u_reg|cur_ch* *u_ym|u_jt12|u_mmr|u_reg|cur_op*}]
 set ym_to   [get_registers -nowarn {*u_ym|u_jt12|u_pg|phinc_II* *u_ym|u_jt12|u_pg|keycode_II* *u_ym|u_jt12|u_pg|detune_mod_II*}]
 if {[get_collection_size $ym_from] == 0 || [get_collection_size $ym_to] == 0} {
-    post_message -type critical_warning \
+    post_message -type $ym_nomatch \
       "Model2.sdc: the YM3438 operator counter or phase registers did not match -- R738's exception is not applied."
 } else {
     set_multicycle_path -setup -end 2 -from $ym_from -to $ym_to
@@ -254,7 +265,7 @@ if {[get_collection_size $ym_from] == 0 || [get_collection_size $ym_to] == 0} {
 # u_lfo|lfo_mod -> u_pg|phinc_II -0.26 ns on 2 of 5 seeds at 80 MHz.)
 set yl_from [get_registers -nowarn {*u_ym|u_jt12|*u_lfo|lfo_mod*}]
 if {[get_collection_size $yl_from] == 0 || [get_collection_size $ym_to] == 0} {
-    post_message -type critical_warning \
+    post_message -type $ym_nomatch \
       "Model2.sdc: the YM3438 LFO or phase registers did not match -- R762's exception is not applied."
 } else {
     set_multicycle_path -setup -end 2 -from $yl_from -to $ym_to
@@ -455,7 +466,7 @@ if {[get_collection_size $gam_from] == 0} {
 set yp_from [get_registers -nowarn {*u_ym|u_jt12|u_pg|phinc_II* *u_ym|u_jt12|u_pg|keycode_II* *u_ym|u_jt12|u_pg|detune_mod_II*}]
 set yp_to   [get_keepers   -nowarn {*u_ym|u_jt12|u_pg|u_phsh|* *u_ym|u_jt12|u_eg|eg_V*}]
 if {[get_collection_size $yp_from] == 0 || [get_collection_size $yp_to] == 0} {
-    post_message -type critical_warning \
+    post_message -type $ym_nomatch \
       "Model2.sdc: the YM3438 phase registers or u_phsh did not match -- R742's exception is not applied."
 } else {
     set_multicycle_path -setup -end 2 -from $yp_from -to $yp_to
