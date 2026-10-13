@@ -127,7 +127,7 @@ localparam CONF_STR = {
 	// R639: 100% FIRST, so it is the power-up default (an OSD field is 0 until
 	// set). The menu index is XORed with 2 below to keep scale_lum's encoding
 	// (0 50%, 1 75%, 2 100%, 3 25%). A saved config from before reads shifted.
-	"O[22:21],Texture brightness,100%,25%,50%,75%;",
+	//"O[22:21],Texture brightness,100%,25%,50%,75%;",   // R831: tied to 100%
 	"R[17],Save settings (NVRAM);",
 	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
 	// of the picture, which is exactly where the game puts its own text. It
@@ -195,12 +195,15 @@ localparam CONF_STR = {
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
 	// updates at whichever is slower, the game or the draw. Latched per span:
 	// it changes cleanly at any time. (Bits 35:34 were the texture view's.)
-	"O[35:34],Texel step,1,2,4,8;",
+	// R831: TEXEL STEP, 3D PACING AND TEXTURE BRIGHTNESS LEAVE THE MENU (Ben).
+	// Each is tied to its default below (step 1, Hold game, 100%); the RTL
+	// behind them stays. The bits are not reused.
+	//"O[35:34],Texel step,1,2,4,8;",
 	// R652: HOLD GAME -- when the 3D draw is slower than the game, the game
 	// waits for it (no vblank interrupt while a finished list waits), so the
 	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
 	// the 3D fall behind the HUD.
-	"O[36],3D pacing,Hold game,Free;",
+	//"O[36],3D pacing,Hold game,Free;",   // R831: tied to Hold game
 	// R699: FRAME SKIP. The game writes and flips every list as always, so its
 	// own speed is untouched; only every second (1) or third (2) list is walked
 	// and drawn, and the screen keeps the last drawn picture between them. For
@@ -233,6 +236,7 @@ localparam CONF_STR = {
 	// lock; the others are taste.
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
+	"O[54],Right stick,Accel/Brake,Steering;",          // R831: Steering = R816 (a wheel)
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -628,8 +632,8 @@ logic [2:0] nowalk_s;
 // like every other status bit that reaches the datapath (R229).
 logic [2:0] tl0_s, tl1_s;
 always_ff @(posedge clk_sys) begin
-	tl0_s <= {tl0_s[1:0], status[21]};
-	tl1_s <= {tl1_s[1:0], status[22]};
+	tl0_s <= {tl0_s[1:0], 1'b0};   // R831: Texture brightness tied to 100% (was status[21])
+	tl1_s <= {tl1_s[1:0], 1'b0};   // R831 (was status[22])
 end
 wire [1:0] tex_lum_s2 = {~tl1_s[2], tl0_s[2]};   // R639: menu index ^ 2
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], 1'b0};   // R666: parked, On
@@ -650,7 +654,7 @@ always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
 // R650: the texel step, into clk_sys where m2_span_tex runs (three flops,
 // R229). Quasi-static, and each span latches it whole.
 reg [1:0] pxk_s1, pxk_s2, pxk_s3;
-always_ff @(posedge clk_sys) begin pxk_s1 <= status[35:34]; pxk_s2 <= pxk_s1; pxk_s3 <= pxk_s2; end
+always_ff @(posedge clk_sys) begin pxk_s1 <= 2'b00; pxk_s2 <= pxk_s1; pxk_s3 <= pxk_s2; end   // R831: Texel step tied to 1 (was status[35:34])
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
@@ -658,7 +662,7 @@ wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
 // (m2_raster3d list_hold, clk_sys) -- unless the OSD says Free.
 wire        r3d_list_hold;
 reg  [2:0]  pace_free_s;
-always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
+always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], 1'b0};   // R831: 3D pacing tied to Hold game (was status[36])
 wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
 reg  [1:0]  fskip_s1, fskip_s2, fskip_s3;   // R699: the OSD bits reach the walk through three flops
 always_ff @(posedge clk_sys) begin fskip_s1 <= status[44:43]; fskip_s2 <= fskip_s1; fskip_s3 <= fskip_s2; end
@@ -5020,7 +5024,12 @@ wire [7:0] iob_in1 = {1'b1, gearval, 3'b111, ~joystick_0[9]};
 wire signed [7:0] ax_l  = joy_analog[7:0];
 wire signed [7:0] ax_r  = joy_ranalog[7:0];
 wire              use_l = (ax_l > 8'sd12) || (ax_l < -8'sd12);
-wire              use_r = (ax_r > 8'sd12) || (ax_r < -8'sd12);
+// R831: ONLY WHEN THE OSD SAYS SO. "Right stick: Accel/Brake" (the default)
+// ignores the right stick's left/right, so a pad's pedal stick cannot steer;
+// "Steering" is R816's behaviour, for a wheel MiSTer maps onto that stick.
+reg  [2:0]        rsteer_s;
+always_ff @(posedge clk_sys) rsteer_s <= {rsteer_s[1:0], status[54]};
+wire              use_r = rsteer_s[2] && ((ax_r > 8'sd12) || (ax_r < -8'sd12));
 wire signed [7:0] ax    = use_l ? ax_l : ax_r;
 
 // STEERING SENSITIVITY, because three quarters is a choice and not a law.

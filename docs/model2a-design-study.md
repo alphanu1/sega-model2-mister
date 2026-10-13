@@ -32976,3 +32976,14 @@ lock, Wheel at the speed R830 measured as a sweep. Applies to paddle, stick
 and d-pad alike. lint_top clean; Quartus parse clean.
 And R826_STRICT / R826_SYNC are now ON by default (s1046: "better" on the
 board; the residual is R830's, and the alignment telemetry agent's).
+
+**R831 -- THE MENU, TRIMMED, AND THE RIGHT STICK AS AN OPTION (Ben).**
+Removed from the OSD and tied to their defaults (the RTL stays, the bits are
+not reused): Texel step (O[35:34] -> 1), 3D pacing (O[36] -> Hold game),
+Texture brightness (O[22:21] -> 100%). Added O[54] "Right stick: Accel/Brake
+(default), Steering": Accel/Brake ignores the right stick's left/right (a
+pad's pedal stick cannot steer); Steering is R816's behaviour for a wheel
+MiSTer maps onto the right stick. The release README's Controls section must
+say so at the next release. lint_top clean; Quartus parse clean.
+OSD bits in use: 0, 17, 27-33, 42-51 (45 15 kHz lines; 46-49 Volume; 50-51
+Steering smoothing), 54, 122:121.
