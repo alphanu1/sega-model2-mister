@@ -2,6 +2,17 @@
 
 ## 2026-10-13 (later): BRANCH headroom
 
+Since: R819/R820 audio (016ef91) -- s1019/s1020 missed clk_sys in the
+geometry FP pool / TGP divider (placement), not the sound logic. R818 area
+savings (fc1b5b5: -227 ALM est, -17 M10K). BUILDING s1021-s1023 = fc1b5b5
+(audio + savings; SPCULL still 0). Next: SPCULL 1 (R813's cull, +66 est).
+Users' black screens on 20261013 were download corruption (Ben); every
+release file was verified byte-identical to the board, and GitHub's raw
+downloads match. The board now has the release's Deluxe MRAs (old ones kept
+as .mra.old); they load fine. s1017's failing HDMI paths are all in ascal's
+polyphase colour maths (148.5 MHz), not control logic. Ben's MiSTer.ini:
+no video_mode (720p), vsync_adjust=1.
+
 Released Model2_20261013 (s1017) is on main (PRs #5, #6). New branch
 `headroom` from 8172b41. In flight: (1) an area / M10K audit
 (sm2-builds/sm2-area-8172b41, R818 draft) -- ALM 99%, M10K 553/553, bits
