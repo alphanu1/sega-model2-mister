@@ -32356,3 +32356,7 @@ suspect. Next hypothesis: the game's own per-frame backdrop scroll is uneven
 its motion from a timing input (timer, vblank/frame counter, the 0x98000c
 frame bit, interrupt rate) that MAME -- and this core after it -- models
 differently from the board.
+Ben: his displays run VRR (every frame shown as produced) and MAME itself
+shows the jerk -- "it's a MAME issue, needs fixing by us". The fault is in
+the hardware model MAME has and this core inherited; MAME is not the oracle
+for it. Agent: find the timing input the game's backdrop motion depends on.
