@@ -32966,3 +32966,13 @@ NEXT:
      (16 frames lock to lock), so it is a taste switch, not a fix.
   3. Separately: the i960 round-half-even vs MAME's half-away (above) is a
      real deviation with no known symptom; record, do not chase.
+
+**R830 -- STEERING SMOOTHING, AN OSD OPTION (Ben: "OSD option would be
+best").** O[51:50] "Steering smoothing: Off, Light, Wheel" (Off default =
+the raw value, unregistered, exactly as before). Light / Wheel limit the
+value the I/O board's ADC reads to ~22 / ~11 counts a 57.5 Hz frame (one
+count per SYS_MHZ*17391/22 or /11 clk_sys cycles): ~9 / ~17 frames lock to
+lock, Wheel at the speed R830 measured as a sweep. Applies to paddle, stick
+and d-pad alike. lint_top clean; Quartus parse clean.
+And R826_STRICT / R826_SYNC are now ON by default (s1046: "better" on the
+board; the residual is R830's, and the alignment telemetry agent's).

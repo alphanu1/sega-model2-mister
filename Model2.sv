@@ -232,6 +232,7 @@ localparam CONF_STR = {
 	// 3/4 is entry zero because it is the one where full stick equals full
 	// lock; the others are taste.
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
+	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -3144,8 +3145,8 @@ m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
 // holds the scroll words back until their list is on screen. Both directions
 // are needed: the first stops the 3D running early (30 Hz race), the second
 // the 2D (60 Hz, and the frames after a short iteration).
-localparam bit R826_STRICT = 1'b0;   // m2_geo AFTER_STRICT: the 3D never early
-localparam bit R826_SYNC   = 1'b0;   // m2_video SCR_SYNC: the 2D never early
+localparam bit R826_STRICT = 1'b1;   // m2_geo AFTER_STRICT: the 3D never early
+localparam bit R826_SYNC   = 1'b1;   // m2_video SCR_SYNC: the 2D never early
 localparam bit R826_HSCR   = 1'b0;   // m2_video HSCR_FIX: hscr_r read from its own word
 m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
@@ -5070,9 +5071,39 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 wire use_stick = use_l || use_r;   // R816
-wire [7:0] steer = |paddle ? paddle
+wire [7:0] steer_raw = |paddle ? paddle
                  : use_stick ? steer_an
                  : steer_dig;
+
+// R830: STEERING SMOOTHING (OSD, default Off). The game turns its camera on
+// how FAST the steering changes as well as where it is (a turning-centre
+// term recomputed a step late), so a pad flicked lock to lock in a frame or
+// two snaps the view; a cabinet wheel, with travel, a spring and the force
+// motor, cannot move that fast and sweeps. This limits how fast the value the
+// I/O board's ADC reads may move: Light ~22 counts a frame (~9 frames lock to
+// lock, 0x20..0xE0), Wheel ~11 (~17 frames, ~0.3 s -- R830 measured a sweep at
+// 16). Off is the raw value, unregistered, exactly as before.
+reg [2:0] ssm0_s, ssm1_s;
+always_ff @(posedge clk_sys) begin ssm0_s <= {ssm0_s[1:0], status[50]}; ssm1_s <= {ssm1_s[1:0], status[51]}; end
+wire [1:0] ssm = {ssm1_s[2], ssm0_s[2]};
+localparam int unsigned STEER_FRAME = SYS_MHZ * 17391;          // clk_sys cycles in a 57.5 Hz frame
+localparam int unsigned STEER_K_LT  = STEER_FRAME / 22;
+localparam int unsigned STEER_K_WH  = STEER_FRAME / 11;
+reg  [7:0]  steer_lim;
+reg  [17:0] steer_slew;
+always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
+	if (!cpu_rst_n) begin
+		steer_lim <= 8'h80; steer_slew <= '0;
+	end else if (ssm == 2'd0) begin
+		steer_lim <= steer_raw; steer_slew <= '0;
+	end else if (steer_slew == 18'd0) begin
+		steer_slew <= (ssm == 2'd1) ? 18'(STEER_K_LT - 1) : 18'(STEER_K_WH - 1);
+		if (steer_lim < steer_raw)      steer_lim <= steer_lim + 8'd1;
+		else if (steer_lim > steer_raw) steer_lim <= steer_lim - 8'd1;
+	end else
+		steer_slew <= steer_slew - 18'd1;
+end
+wire [7:0] steer = (ssm == 2'd0) ? steer_raw : steer_lim;
 
 // PEDALS ARE ANALOGUE, ON THE RIGHT STICK'S Y AXIS -- Model 1's arrangement,
 // tools/model1-ref/Model1.sv, and its reasoning transfers whole.
