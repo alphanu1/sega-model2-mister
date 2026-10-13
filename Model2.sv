@@ -237,6 +237,15 @@ localparam CONF_STR = {
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
 	"O[54],Right stick,Accel/Brake,Steering;",          // R831: Steering = R816 (a wheel)
+	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
+	// each quad's level moves from its footprint's major axis (R828, the
+	// mountains right, the near road blurry) towards the minor: Sharp half
+	// way, Medium a quarter, Smooth not at all (R828 exactly). Index 0 is the
+	// default, so the list starts there and wraps, as Volume does.
+	// Commented out while .MIP below is 0: the line changes CONF_STR and so
+	// hps_io's logic, and a MIP 0 build stays bit-identical without it.
+	// Uncomment it together with .MIP(1'b1).
+	//"O[53:52],Mip-mapping,Sharp,Medium,Smooth,Off;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -655,6 +664,12 @@ always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
 // R229). Quasi-static, and each span latches it whole.
 reg [1:0] pxk_s1, pxk_s2, pxk_s3;
 always_ff @(posedge clk_sys) begin pxk_s1 <= 2'b00; pxk_s2 <= pxk_s1; pxk_s3 <= pxk_s2; end   // R831: Texel step tied to 1 (was status[35:34])
+// R828a: the mip option, into clk_sys where m2_raster_fill runs (three
+// flops). Menu 0 Sharp, 1 Medium, 2 Smooth, 3 Off -> the fill's mip_mode 3,
+// 2, 1, 0. Quasi-static; the fill takes it per quad.
+reg [1:0] mip_s1, mip_s2, mip_s3;
+always_ff @(posedge clk_sys) begin mip_s1 <= status[53:52]; mip_s2 <= mip_s1; mip_s3 <= mip_s2; end
+wire [1:0] mip_mode = 2'd3 - mip_s3;
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
@@ -6316,6 +6331,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
+	.tex_mip_mode(mip_mode),      // R828a: the OSD's mip rule
 	.tex_gamma(gam_s2),           // R784: the curve, for a textured pixel's pedestal
 	.list_hold(r3d_list_hold),    // R652
 	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653

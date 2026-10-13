@@ -131,6 +131,13 @@ module m2_raster_fill #(
   // quarter levels, is span_mipk; m2_span_tex adds -2 log2(1/z) per group.
   // Worked out one edge a cycle beside S_OZ's normaliser, which already walks
   // the vertices with their raw u, v and 1/z. 0: span_mipk is 0 and unused.
+  // R828a: THE OSD CHOOSES HOW MUCH OF THE SMALLEST EDGE K COUNTS. The
+  // largest is the footprint's major axis, and on a road seen at a grazing
+  // angle that is the compressed depth axis: the near road went 2-4 levels
+  // blurry (s1052 on the board), while face-on surfaces (the mountains) looked
+  // right. K = max - (max - min) * w, w = 0 (R828 exactly), 1/4 or 1/2: a
+  // weighted mean of the logs, which leaves a face-on quad (max ~ min) where
+  // R828 put it and pulls an oblique one towards its minor axis.
   parameter bit MIP = 1'b0
 ) (
   input  logic               clk,
@@ -156,6 +163,12 @@ module m2_raster_fill #(
   input  logic [15:0]        in_oz0, in_oz1, in_oz2, in_oz3,
   input  logic [15:0]        in_frac,          // R626: {fy3,fx3..fy0,fx0}
   input  logic [23:0]        in_tex,
+  // R828a: the mip rule, run time (OSD, quasi-static, on clk): 0 no level
+  // (span_mipk -512, level 0 everywhere), 1 the largest edge K (R828), 2 max -
+  // (max - min) / 4, 3 max - (max - min) / 2. Unused without MIP.
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic [1:0]         mip_mode,
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // Viewport, inclusive on all four edges.
   input  logic signed [15:0] view_x1, view_x2, view_y1, view_y2,
@@ -1841,6 +1854,7 @@ module m2_raster_fill #(
   // texels (m2_span_tex: L = (K - 2 lq(ooz)) >> 2). The maxima are ORs and the
   // magnitudes one's complements -- a log only needs the leading bits.
   localparam logic signed [9:0] K_NONE = -10'sd512;
+  localparam logic signed [9:0] K_TOP  =  10'sd511;   // R828a: the min's start
   // x and y in 13 bits: m2_quad_store saturates every screen coordinate to
   // XW = 13 (R327), so the differences fit 14. The first vertex's x, y are
   // read from sx[0], sy[0], which hold until the next quad.
@@ -1850,6 +1864,11 @@ module m2_raster_fill #(
   logic               kz_lv, kp_lv, kf_lv;
   logic               k_close;
   logic signed [9:0]  k_r;
+  logic signed [9:0]  k_n;    // R828a: the smallest edge K
+  logic signed [9:0]  k_o;    // R828a: the quad's K as it leaves
+  // Every edge K lies in [49, 301] (lq's 0..63 each way, the two 1/z logs'
+  // -8..118, + 120), so with an edge the spread is 0..252 and nothing wraps.
+  wire  signed [9:0]  k_d = k_r - k_n;
   function automatic logic [5:0] lq(input logic [14:0] v);
     logic [3:0]  m;
     logic [16:0] w;
@@ -1915,7 +1934,7 @@ module m2_raster_fill #(
       kz_x <= '0; kz_y <= '0; kz_l <= '0; kz_lv <= 1'b0;
       kp_x <= '0; kp_y <= '0; kp_u <= '0; kp_v <= '0; kp_l <= '0; kp_lv <= 1'b0;
       kf_u <= '0; kf_v <= '0; kf_l <= '0; kf_lv <= 1'b0;
-      k_close <= 1'b0; k_r <= K_NONE;
+      k_close <= 1'b0; k_r <= K_NONE; k_n <= K_TOP; k_o <= K_NONE;
     end else begin
       if (ks1) begin
         kz_x  <= sx[oz_i][12:0];
@@ -1934,9 +1953,22 @@ module m2_raster_fill #(
       // above drop anything still in them from the last one)
       if (k_new)                          k_r <= K_NONE;
       else if (e3_v && (e3_k > k_r))      k_r <= e3_k;
+      // R828a: and the running min beside it
+      if (k_new)                          k_n <= K_TOP;
+      else if (e3_v && (e3_k < k_n))      k_n <= e3_k;
+      // E5 (R828a): the max less a quarter or a half of the spread, by the
+      // OSD; no edge, or the OSD's Off, is no level. One cycle after the max:
+      // final five cycles after the close, still ahead of the first span (the
+      // bench checks every span of every quad, back to back, and still passes
+      // with K held back 16 cycles more; 24 fails). A quad is not accepted while a
+      // span is held (R544), so k_o cannot change under one.
+      k_o <= ((mip_mode == 2'd0) || (k_r == K_NONE)) ? K_NONE
+           : (mip_mode == 2'd3) ? k_r - (k_d >>> 1)
+           : (mip_mode == 2'd2) ? k_r - (k_d >>> 2)
+           :                      k_r;
     end
   end
-  assign span_mipk = MIP ? k_r : 10'sd0;
+  assign span_mipk = MIP ? k_o : 10'sd0;
 
   // R544: AND NOT WHILE THE LAST SPAN IS STILL WAITING. span_tex_en and the
   // three gradients below are NOT latched with a span -- they are this quad's

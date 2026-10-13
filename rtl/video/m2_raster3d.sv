@@ -171,6 +171,10 @@ module m2_raster3d #(
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
   input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
+  // R828a: the mip rule, from the OSD, on clk (m2_raster_fill mip_mode):
+  // 0 off, 1 R828's largest edge K, 2 and 3 a quarter and a half of the way
+  // to the smallest. Unused without MIP.
+  input  logic [1:0]      tex_mip_mode,
   // R784: the OSD's output curve on clk (m2_geo_engine's encoding), for the
   // pedestal m2_span_tex adds to a textured pixel. q_tex[11] carries "luma
   // table row 1" from here on: the checker bit that sat there is taken from
@@ -579,6 +583,7 @@ module m2_raster3d #(
     .in_oz0(qo_oz0), .in_oz1(sp_oz1), .in_oz2(sp_oz2), .in_oz3(sp_oz3),  // R337
     .in_frac(sp_frac),                                                    // R626
     .in_tex(qo_tex),
+    .mip_mode(tex_mip_mode),                         // R828a
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
     .span_valid(fl_span_valid), .span_ready(fl_span_ready),

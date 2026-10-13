@@ -241,6 +241,7 @@ struct Dut {
     d->in_x0 = 0; d->in_y0 = 0; d->in_x1 = 0; d->in_y1 = 0;
     d->in_x2 = 0; d->in_y2 = 0; d->in_x3 = 0; d->in_y3 = 0;
     d->in_col = 0; d->in_moire = 0;
+    d->mip_mode = 3;   // R828a: the OSD's proposed default, Sharp
     d->eval();
     for (int i = 0; i < 4; i++) tick();
     d->rst_n = 1;
@@ -692,65 +693,85 @@ static void test_judder(Vm2_raster_fill* d) {
 // (0,1), (1,2), (2,3), (3,0) whose ends both have a usable 1/z,
 //   K_e = lq(|du| OR |dv|) - lq(|dx| OR |dy|) + lo_a + lo_b + 120,
 // magnitudes as one's complements, lq(v) = 4 msb(v) + the two bits below,
-// lo = 4 (14 - (emax - e)) + m[7:6] -- and K the largest, or -512 with none.
-// Random quads, a fifth of them triangles (a corner repeated: an edge of
-// length zero), a third with a vertex 9 to 23 octaves deeper than the
-// nearest (16 or more: no usable 1/z), and 1/z exponents over a 40-octave range.
+// lo = 4 (14 - (emax - e)) + m[7:6].
+// R828a: K = max - ((max - min) >> s) by the OSD's mip_mode (1: R828, the
+// max; 2: s = 2; 3: s = 1), or -512 with no usable edge or mode 0 (Off). Random quads, a fifth of them triangles (a
+// corner repeated: an edge of length zero), a third with a vertex 9 to 23
+// octaves deeper than the nearest (16 or more: no usable 1/z), and 1/z
+// exponents over a 40-octave range; every mode. EVERY span of
+// every quad is checked, first one quad at a time, then back to back (the
+// next quad presented the cycle the last is taken), where a K that settles
+// late or leaks from the quad before would show.
 static int lq_m(uint32_t v) {
   int m = 31 - __builtin_clz(v);
   int f = m >= 2 ? int((v >> (m - 2)) & 3) : int((v << (2 - m)) & 3);
   return 4 * m + f;
 }
+struct MipQuad { int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4]; int mode, K, Kmax; };
+static void mip_gen(long n, std::mt19937 &rng, MipQuad &q) {
+  const int ebase = 100 + int(rng() % 40);
+  for (int i = 0; i < 4; i++) {
+    q.X[i] = int32_t(rng() % 700) - 100; q.Y[i] = int32_t(rng() % 500) - 60;
+    q.U[i] = rng() % 8192; q.V[i] = rng() % 8192;
+    q.MF[i] = uint16_t(((ebase + int(rng() % 6)) << 8) | (rng() & 0xff));
+  }
+  if (n % 4 == 1) { for (int i = 0; i < 4; i++) { q.U[i] = (q.U[0] + rng() % 64) & 8191; q.V[i] = (q.V[0] + rng() % 64) & 8191; } }   // small, magnified
+  if (n % 7 == 3) { for (int i = 0; i < 4; i++) { q.Y[i] = 200 + int32_t(rng() % 40); } q.Y[2] = q.Y[3] = 383; }   // a road: flat and deep
+  if ((n % 5) == 0) { q.X[3] = q.X[2]; q.Y[3] = q.Y[2]; q.U[3] = q.U[2]; q.V[3] = q.V[2]; q.MF[3] = q.MF[2]; }
+  if ((n % 3) == 0) q.MF[rng() & 3] = uint16_t((ebase - 9 - int(rng() % 10)) << 8 | (rng() & 0xff));   // 9..23 octaves deeper: around the 16 limit
+  if ((n % 13) == 0) q.MF[rng() & 3] = 0;                // 1/z of zero
+  // the OSD: Off an eighth of the time, the three rules alike otherwise
+  const int r = int(rng() % 8);
+  q.mode = r == 0 ? 0 : 1 + int(r % 3);
+  // the model
+  int emax = 0;
+  for (int i = 0; i < 4; i++) emax = std::max(emax, int(q.MF[i] >> 8));
+  int Kx = -512, Kn = 100000;
+  for (int i = 0; i < 4; i++) {
+    const int j = (i + 1) & 3;
+    const int ea = q.MF[i] >> 8, eb = q.MF[j] >> 8, da = emax - ea, db = emax - eb;
+    if (ea == 0 || eb == 0 || da >= 16 || db >= 16) continue;
+    const int la = 56 - 4 * da + ((q.MF[i] >> 6) & 3), lb = 56 - 4 * db + ((q.MF[j] >> 6) & 3);
+    auto oc = [](int v) { return v < 0 ? ~v : v; };
+    const uint32_t dt = uint32_t(oc(int(q.U[j]) - int(q.U[i])) | oc(int(q.V[j]) - int(q.V[i]))) & 0x1fff;
+    const uint32_t ds = uint32_t(oc(q.X[j] - q.X[i]) | oc(q.Y[j] - q.Y[i])) & 0x7fff;
+    if (!dt || !ds) continue;
+    const int ke = lq_m(dt) - lq_m(ds) + la + lb + 120;
+    Kx = std::max(Kx, ke); Kn = std::min(Kn, ke);
+  }
+  q.Kmax = Kx;
+  q.K = (q.mode == 0 || Kx == -512) ? -512 : q.mode == 3 ? Kx - ((Kx - Kn) >> 1) : q.mode == 2 ? Kx - ((Kx - Kn) >> 2) : Kx;
+}
+static void mip_present(Vm2_raster_fill* d, const MipQuad &q) {
+  d->in_x0 = q.X[0]; d->in_y0 = q.Y[0]; d->in_x1 = q.X[1]; d->in_y1 = q.Y[1];
+  d->in_x2 = q.X[2]; d->in_y2 = q.Y[2]; d->in_x3 = q.X[3]; d->in_y3 = q.Y[3];
+  d->in_u0 = q.U[0]; d->in_v0 = q.V[0]; d->in_u1 = q.U[1]; d->in_v1 = q.V[1];
+  d->in_u2 = q.U[2]; d->in_v2 = q.V[2]; d->in_u3 = q.U[3]; d->in_v3 = q.V[3];
+  d->in_oz0 = q.MF[0]; d->in_oz1 = q.MF[1]; d->in_oz2 = q.MF[2]; d->in_oz3 = q.MF[3];
+  d->in_frac = 0; d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+}
 static void test_mip(Vm2_raster_fill* d, std::mt19937 &rng) {
-  printf("test: R828, the quad's mip bias\n");
+  printf("test: R828/R828a, the quad's mip bias (the edge K's max, less 0, 1/4 or 1/2 of the spread)\n");
   auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
   const long N = getenv("M2_MIP_N") ? atol(getenv("M2_MIP_N")) : 4000;
   d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
-  long seen = 0, bad = 0, none = 0;
+  long seen = 0, spans = 0, bad = 0, none = 0, off = 0, differs = 0;
+  auto check = [&](long n, const MipQuad &q, bool &got) {
+    if (!(d->span_valid && d->span_ready && d->span_tex_en)) return;
+    ++spans;
+    if (!got) { got = true; ++seen; if (q.Kmax == -512) ++none; if (!q.mode) ++off; if (q.K != q.Kmax && q.mode) ++differs; }
+    const int k = int(int16_t(uint16_t(d->span_mipk) << 6) >> 6);
+    if (k != q.K) { if (bad++ < 6) printf("  FAIL R828a quad %ld: span_mipk %d want %d (max %d, mode %d)\n", n, k, q.K, q.Kmax, q.mode); }
+  };
+  // one at a time
   for (long n = 0; n < N; n++) {
-    int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4];
-    const int ebase = 100 + int(rng() % 40);
-    for (int i = 0; i < 4; i++) {
-      X[i] = int32_t(rng() % 700) - 100; Y[i] = int32_t(rng() % 500) - 60;
-      U[i] = rng() % 8192; V[i] = rng() % 8192;
-      MF[i] = uint16_t(((ebase + int(rng() % 6)) << 8) | (rng() & 0xff));
-    }
-    if (n % 4 == 1) { for (int i = 0; i < 4; i++) { U[i] = (U[0] + rng() % 64) & 8191; V[i] = (V[0] + rng() % 64) & 8191; } }   // small, magnified
-    if ((n % 5) == 0) { X[3] = X[2]; Y[3] = Y[2]; U[3] = U[2]; V[3] = V[2]; MF[3] = MF[2]; }
-    if ((n % 3) == 0) MF[rng() & 3] = uint16_t((ebase - 9 - int(rng() % 10)) << 8 | (rng() & 0xff));   // 9..23 octaves deeper: around the 16 limit
-    if ((n % 13) == 0) MF[rng() & 3] = 0;                // 1/z of zero
-    // the model
-    int emax = 0;
-    for (int i = 0; i < 4; i++) emax = std::max(emax, int(MF[i] >> 8));
-    int K = -512;
-    for (int i = 0; i < 4; i++) {
-      const int j = (i + 1) & 3;
-      const int ea = MF[i] >> 8, eb = MF[j] >> 8, da = emax - ea, db = emax - eb;
-      if (ea == 0 || eb == 0 || da >= 16 || db >= 16) continue;
-      const int la = 56 - 4 * da + ((MF[i] >> 6) & 3), lb = 56 - 4 * db + ((MF[j] >> 6) & 3);
-      auto oc = [](int v) { return v < 0 ? ~v : v; };
-      const uint32_t dt = uint32_t(oc(int(U[j]) - int(U[i])) | oc(int(V[j]) - int(V[i]))) & 0x1fff;
-      const uint32_t ds = uint32_t(oc(X[j] - X[i]) | oc(Y[j] - Y[i])) & 0x7fff;
-      if (!dt || !ds) continue;
-      const int ke = lq_m(dt) - lq_m(ds) + la + lb + 120;
-      if (ke > K) K = ke;
-    }
-    d->in_x0 = X[0]; d->in_y0 = Y[0]; d->in_x1 = X[1]; d->in_y1 = Y[1];
-    d->in_x2 = X[2]; d->in_y2 = Y[2]; d->in_x3 = X[3]; d->in_y3 = Y[3];
-    d->in_u0 = U[0]; d->in_v0 = V[0]; d->in_u1 = U[1]; d->in_v1 = V[1];
-    d->in_u2 = U[2]; d->in_v2 = V[2]; d->in_u3 = U[3]; d->in_v3 = V[3];
-    d->in_oz0 = MF[0]; d->in_oz1 = MF[1]; d->in_oz2 = MF[2]; d->in_oz3 = MF[3];
-    d->in_frac = 0; d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+    MipQuad q; mip_gen(n, rng, q);
+    mip_present(d, q); d->mip_mode = q.mode;
     d->in_valid = 1; d->span_ready = 1; d->eval();
     bool acc = false, ret = false, got = false; int quiet = 0; long g = 0;
     for (;;) {
       d->eval();
-      if (d->span_valid && d->span_ready && d->span_tex_en && !got) {
-        got = true; ++seen;
-        const int k = int(int16_t(uint16_t(d->span_mipk) << 6) >> 6);
-        if (k != K) { if (bad++ < 6) printf("  FAIL R828 quad %ld: span_mipk %d want %d\n", n, k, K); }
-        if (K == -512) ++none;
-      }
+      check(n, q, got);
       if (d->quad_done && acc) ret = true;
       if (d->in_ready && d->in_valid) acc = true;
       const bool drained = ret && !d->span_valid && ++quiet >= 2;
@@ -762,10 +783,34 @@ static void test_mip(Vm2_raster_fill* d, std::mt19937 &rng) {
     d->in_valid = 0; d->eval();
     for (int k = 0; k < 4; k++) tickf();
   }
-  printf("  R828: %ld quads, %ld textured with a span (%ld with no usable edge), %ld wrong\n", N, seen, none, bad);
-  tex_checks += seen + 1; tex_fails += bad;
-  if (seen < N / 4) { printf("  FAIL R828: only %ld quads drew\n", seen); ++tex_fails; }
-  d->in_tex = 0;
+  // back to back: the next quad (and its OSD setting) goes up the cycle the last is taken
+  {
+    MipQuad cur, nxt; long ncur = -1; bool got = false;
+    mip_gen(N, rng, nxt); mip_present(d, nxt);
+    d->in_valid = 1; d->span_ready = 1;
+    long n = 0, g = 0, quiet = 0;
+    for (;;) {
+      d->eval();
+      if (ncur >= 0) check(ncur, cur, got);
+      const bool take = d->in_ready && d->in_valid;
+      tickf();
+      if (take) {
+        cur = nxt; ncur = N + n; got = false;
+        d->mip_mode = cur.mode;
+        if (++n < N) { mip_gen(N + n, rng, nxt); mip_present(d, nxt); } else d->in_valid = 0;
+        d->eval();
+      }
+      if (n >= N && !d->span_valid && d->in_ready) { if (++quiet > 40) break; } else quiet = 0;
+      if (++g > 400000L * 40) { printf("  FAIL R828a back to back: timeout\n"); ++bad; break; }
+    }
+    d->in_valid = 0; d->eval();
+  }
+  printf("  R828a: %ld quads x 2, %ld textured with a span (%ld no usable edge, %ld Off, %ld K != the max), %ld spans checked, %ld wrong\n",
+         N, seen, none, off, differs, spans, bad);
+  tex_checks += spans + 1; tex_fails += bad;
+  if (seen < N / 2) { printf("  FAIL R828: only %ld quads drew\n", seen); ++tex_fails; }
+  if (differs < seen / 3) { printf("  FAIL R828a: the mean and bias barely exercised (%ld)\n", differs); ++tex_fails; }
+  d->in_tex = 0; d->mip_mode = 3;
 }
 #endif
 

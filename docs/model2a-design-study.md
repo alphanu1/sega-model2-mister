@@ -33093,3 +33093,202 @@ could never fit, and whose internal-ROM code has never been dumped anyway.
 Inferred, not checked on a PCB: the original's five TGPs are one
 coprocessor plus four for the geometrizer.
 s1060 (the combined build) on the board: Ben -- "looking good".
+
+R828 ADDENDUM (draft) -- THE LEVEL IS AN OSD CHOICE: R828'S MAJOR AXIS, OR
+A QUARTER OR A HALF OF THE WAY FROM IT TO THE MINOR. THE NEAR ROAD WAS
+BLURRY BECAUSE A ROAD SEEN AT A GRAZING ANGLE IS THE MOST ANISOTROPIC
+SURFACE IN THE GAME; FACE-ON SURFACES (THE MOUNTAINS) WERE RIGHT AND STAY
+WHERE R828 PUT THEM. NOT BUILT.
+
+*Believed (R828):* the level is floor(K - 2 log2(1/z)), with K the largest
+edge K of the quad (the footprint's major axis). Nearest level and no blend
+already bring the shimmer down to the reference's.
+
+*Board (s1052, Ben):* "the change is at too close a distance; the road a
+couple of quads in front is all blurry", and "mip mapping on the mountains
+is good though -- so the setting is then user choice".
+
+*Now known -- VERIFIED (offline model, MAME 0.289 M2MIP dumps, f2000-2023 /
+f5000-5023 / f9000-9023 step 2, f7000-7007, every 3rd pixel):*
+  1. THE ROAD IS ONE TEXTURE. It is 256x256 at (0, 512), sheet 1, and covers
+     81-99% of the bottom 120 rows in the race frames. The road quads are
+     long:
+     - f2000: the first quad covers rows 233-384 and the second rows 203-233.
+     - f9000 (the oval, seen from above): 8+ quads are on screen.
+     - "Quad ahead" below is the count of distinct road quads that a column
+       walk meets going up from the screen's bottom (every 8th column).
+  2. R828 BLURS THE SECOND AND THIRD ROAD QUADS. The mean level by quad
+     ahead (1, 2, 3, 4):
+     - f2000: 0.06 / 2.56 / 2.95 / 4.35. Only 4% of the second quad is at L0.
+     - f5000: 0.49 / 1.96 / 1.05.
+     - f9000: 0.00 / 0.08 / 0.57 / 1.36 / 1.88 / 2.30.
+     Walking up a column from the bottom, the level first leaves 0 at
+     32.7 / 68.0 / 10.4 / 83.4 rows below the road's top (f2000 / f5000 /
+     f7000 / f9000). That is where z is 3.0-4.2x z at the bottom of the
+     screen.
+  3. THE EDGE MIN IS A GOOD MINOR AXIS. The quad's smallest edge K (the same
+     edges and arithmetic as R828's max, per split triangle) agrees with the
+     exact minor singular value of the texel Jacobian:
+     - Per pixel: equal 92.0-97.0%, within one level 99.9-100%.
+     - It is higher in 2.6-7.5% of pixels.
+     - The edge max against the exact major singular value: equal 80-89%,
+       within one level 97.6-99.1%.
+     Note that a min over edge directions is not in general the true minor
+     axis (it samples only the edges' directions). Measured, it is close.
+  4. THE RULES, against the 12x12-supersampled level-0 reference (GT). The
+     figures are in this order: f2000 / f5000 / f7000 / f9000.
+     - "shim": the mean |change| per 1/8-px pan step, as a multiple of GT's
+       (R828's metric).
+     - "|e|": the mean |difference| from GT, 0-255 texel scale.
+     - "iso": minified pixels with sigma1/sigma2 < 2 (face-on).
+     - "obl": minified pixels with sigma1/sigma2 >= 4 (oblique).
+
+       rule                    shim minified        shim iso             iso px != R828    shim obl
+       off (level 0)           2.03/2.58/1.67/2.15  1.59/2.02/1.82/1.61  40/74/74/56%      3.71/3.31/1.78/3.04
+       R828: max     (Smooth)  1.07/1.11/0.81/1.15  1.08/0.97/0.94/1.12  0                 1.24/1.37/0.67/1.18
+       max-(max-min)/4 (Med.)  1.18/1.26/0.90/1.25  1.09/0.99/0.95/1.14  1/2/1/4%          1.64/1.72/0.81/1.39
+       max-(max-min)/2 (Sharp) 1.30/1.49/1.22/1.42  1.13/1.05/1.01/1.20  6/20/10/12%       2.10/2.22/1.32/1.71
+       mean, floored           1.39/1.56/1.30/1.48  1.20/1.11/1.14/1.23  16/32/23/18%      2.25/2.30/1.43/1.79
+       mean + 1/2 level        1.16/1.30/1.08/1.24  0.99/0.91/0.92/1.04  15/16/8/9%        1.89/1.97/1.16/1.50
+       min (edge)              1.62/1.82/1.51/1.79  1.24/1.17/1.35/1.33  21/41/42/38%      3.20/2.85/1.70/2.48
+       max - 1 level           1.49/1.66/1.18/1.57  1.43/1.39/1.73/1.41  40/74/74/56%      1.84/2.02/0.94/1.74
+       aniso 2 (max(max-1,min)) 1.35/1.52/1.09/1.54 1.24/1.17/1.35/1.33  21/41/42/38%      1.81/1.99/0.94/1.73
+       aniso 4                 1.49/1.69/1.30/1.71  1.24/1.17/1.35/1.33  21/41/42/38%      2.44/2.46/1.32/2.20
+
+       rule                    road quads 2-4 |e|   first L>0, rows below road top   z there / z at bottom
+       off                     5.08/6.56/0.88       never                            -
+       R828 max (Smooth)       14.66/12.48/2.27     32.7/68.0/10.4/83.4              4.2/3.5/3.4/3.0
+       Medium                  7.39/9.77/1.84       19.8/51.0/7.1/76.3               5.8/4.7/5.6/3.3
+       Sharp                   5.40/7.79/1.18       9.5/45.6/2.7/57.8                9.0/6.8/8.9/4.1
+       mean + 1/2 level        5.85/9.21/1.57       12.8/47.5/4.0/69.7               7.5/5.7/8.3/3.5
+
+     The road's mean level by quad ahead, Sharp (against R828 in item 2):
+     - f2000: 0.00 / 0.45 / 1.78 / 2.38. 69% of the second quad is at L0
+       (R828: 4%).
+     - f5000: 0.06 / 0.62 / 0.58.
+     - f9000: 0.00 / 0.00 / 0.11 / 0.51 / 1.00 / 1.25.
+  5. WHAT DECIDED THE RULE:
+     - The anisotropy clamp (the textbook max(major - log2 A, minor)) moves
+       21-42% of FACE-ON pixels off R828's level. The edge K's spread
+       exceeds a level on many face-on quads, so the min wins there.
+     - So do the plain mean (16-32%) and any global bias:
+       - "major - 1" moves 40-74% of them.
+       - "mean + 1/2" blurs them (+0.07..+0.15 level).
+     - Ben's mountains are face-on. Only a weighted step from the max keeps
+       them, K = max - (max - min) * w:
+       - w = 1/4 leaves 96-99% of face-on pixels at R828's level.
+       - w = 1/2 leaves 80-94% of them, every change one level sharper.
+       - On the road, both pull the level towards the minor.
+  6. THE RTL (MIP 1 only; MIP 0 is the tree before, see 8).
+     - m2_raster_fill:
+       - A running min (k_n) beside R828's running max, on the same E3
+         edge K's.
+       - One more register (k_o) takes k_r, or k_r - (k_r - k_n) >>> 2,
+         or >>> 1, by mip_mode, or -512 for Off and for no edge.
+       - span_mipk = k_o. K is final one cycle later than R828's (five after
+         the close).
+     - m2_raster3d: a tex_mip_mode port into the fill.
+     - Model2.sv:
+       - O[53:52] "Mip-mapping: Sharp, Medium, Smooth, Off". Index 0 is the
+         default: the list starts there and wraps, like Volume.
+       - It crosses into clk_sys through three flops.
+       - mip_mode = 3 - menu.
+       - The menu line is COMMENTED OUT while .MIP is 0. CONF_STR is
+         hps_io logic, and with the line in, a MIP 0 map moved 40 ALUT
+         across unrelated entities (i960, ascal, hps_io).
+         mip-on-r828a.patch (in the worktree) flips .MIP and uncomments
+         the line together.
+     - Smooth is R828 exactly: span_mipk = the max, one cycle later.
+  7. BENCHES.
+     - test_m2_raster_fill_mip checks EVERY span of 4,000 quads one at a
+       time, then 4,000 back to back (the next quad and its mode presented
+       the cycle the last is taken). Every mode is used, with Off an eighth
+       of the time. The result: 1,957,376 spans, 0 wrong.
+     - Mutations caught:
+       - always the max;
+       - Sharp's shift by 2;
+       - the min not restarted per quad;
+       - Off ignored;
+       - the min missing an edge;
+       - the spread off by one;
+       - (an earlier draft) the mean rounded instead of floored.
+     - Mutation survived, and equivalent: dropping the no-edge guard.
+       -512 - 511 wraps to a spread of 1, so k_o is -512 regardless.
+     - The span K delayed 4, 8, 12 and 16 cycles more still passes; 24
+       fails. That is the slack before a quad's first span, and the bench
+       sees it.
+     - test_m2_span_tex_mip draws a third of its spans' K as the fill's
+       three rules make it from an edge max and min in [49, 301]: 45,832
+       fetches, every level visited, 0 wrong.
+     - These pass: test_m2_texel_bl_mip (both memory models),
+       test_m2_span_tex, test_m2_raster_fill, and test_m2_raster3d (MIP 0).
+     - lint_top is clean (MIP 0 and MIP 1). lint_idx has no new candidates.
+     - quartus_map --analyze_file (17.0) on m2_raster_fill.sv,
+       m2_raster3d.sv and Model2.sv: 0 errors. The constant-overflow warning
+       on K_NONE was already in HEAD.
+  8. MIP 0 IS THE TREE BEFORE. quartus_map 17.0, ecac6a3 against this, both
+     MIP 0:
+     - ALMs needed 40,114 = 40,114.
+     - Every entity's ALUT, register and block-memory count is identical.
+       The only differences in the hierarchy report are two generated RAM
+       instance names.
+     - In simulation, test_m2_raster_fill and test_m2_raster3d (MIP 0)
+       pass.
+  9. AREA. quartus_map 17.0, whole design, MIP 1 in both. ecac6a3 + MIP 1
+     against ecac6a3 + this + MIP 1 (with the menu line, i.e. as
+     mip-on-r828a.patch builds it):
+     - ALMs needed: 40,232 -> 40,309 (+77).
+     - Combinational ALUT: 57,392 -> 57,516 (+124).
+     - Registers: 48,776 -> 48,799 (+23).
+     - Block memory bits: +6. Quartus packed the three OSD sync flops into
+       the existing altshift_taps (texoff_s_rtl_0, 36 -> 42 bits), as it
+       already does with the other OSD synchronisers.
+     - DSP: 91 -> 91.
+     - m2_raster_fill: 5,174 -> 5,249 ALUT, 3,825 -> 3,844 registers.
+     - m2_span_tex: unchanged (1,338 / 1,497).
+  10. TIMING. quartus_sta --post_map, slow model. R825 calibrated it as
+      pessimistic by 2.3-4 ns.
+      - S_OZ -> k_n: +4.85 ns.
+      - k_r -> k_o: +5.67 ns.
+      - k_o -> the span queue's M10K: +10.93 ns.
+      - S_OZ -> k_r: +5.18 -> +4.85.
+      - Unchanged: every span_tex path, e.g. d1a -> d1_L at +5.13.
+        st.T_RUN -> d1_L is -2.43 in both builds.
+      - texel_bl's p2_tex_f -> k_d is -8.16 -> -8.98. That is clk_mem, a
+        path R828 already reported as -7.0..-8.2 and the same in both of its
+        builds; nothing on it changed here, so this is map-to-map variation.
+        Not settled.
+
+*Decision:* the level is K = max - (max - min) * w, and the OSD chooses w:
+1/2 (Sharp), 1/4 (Medium) or 0 (Smooth = R828). Off is level 0.
+
+The proposed default is Sharp:
+  - It is the only choice that moves the road's first non-zero level out
+    to near the horizon: 9.5 rows below the road top on f2000, against
+    32.7, with z 9.0x the bottom's against 4.2x.
+  - Its near road is within 0.3-1.2 |e| of level 0 on quads 2-4.
+  - Face-on surfaces keep R828's level on 80-94% of pixels, and their
+    shimmer is 1.01-1.20x the reference (R828's is 0.94-1.12x).
+  - The cost is the shimmer of oblique surfaces at distance. Minified,
+    overall: 1.22-1.49x the reference, against R828's 0.81-1.15x and
+    off's 1.67-2.58x.
+
+Medium is the conservative choice: face-on is as R828, and the road's blur
+is halved. Ben picks after the board.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. On the board, Sharp's near road looks like MIP off for the first two
+     or three road quads, and the mountains look as on s1052. Settles it:
+     Ben, all three settings on one build.
+  b. Placed area is about +40..+80 ALM over R828: the map's +77 ALMs needed,
+     at R821's 0.55-0.62x placement ratio (R798 saw up to 2.5x). One 10-bit
+     register and comparator (k_n), one 10-bit subtract, a 3:1 mux, the k_o register and six OSD sync
+     flops. Settles it: a fit.
+  c. Timing closes on the new paths: +4.85 ns or better post-map (item 10).
+     Settles it: a fit.
+  d. In 4-7% of pixels the level still steps by one along a split
+     triangle's diagonal, as R828 does.
+
+*Not verified:* any fit; the board; the images in
+sm2-builds/mipmaps/img/mipbias_*.png are grey texel values from the offline
+model, not the core's colours.

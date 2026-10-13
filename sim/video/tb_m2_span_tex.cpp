@@ -991,7 +991,8 @@ int main(int argc, char **argv) {
 #endif
 
 #ifdef TB_MIP
-  // R828: THE MIP LEVEL OF EVERY FETCH, against the formula worked out here:
+  // R828: THE MIP LEVEL OF EVERY FETCH, against the formula worked out here
+  // (R828a: with K as the fill's three rules make it on some spans):
   //   L = clamp((K - 2 lq(ooz)) >> 2, 0, min(log2 min(w, h) - 1, 7)),
   //   lq(v) = 4 * msb(v) + the two bits below it,
   // with ooz the group's 1/z as the issue pointer walks it (in_ooz, then
@@ -1026,6 +1027,11 @@ int main(int argc, char **argv) {
       q.G  = int64_t(roll(4000));
       const int k4 = int(roll(9));                       // K across the whole range
       q.K = (k4 == 0) ? -512 : int(roll(600)) - 200;
+      // R828a: some spans carry a K as the fill now makes it from an edge
+      // max and min, each in [49, 301]: the max (Smooth, R828), or the max
+      // less a quarter (Medium) or a half (Sharp) of the spread
+      if (k4 >= 5) { const int a = 49 + int(roll(253)), b = 49 + int(roll(253)), mx = std::max(a, b), mn = std::min(a, b);
+                     q.K = k4 == 5 ? mx : k4 == 6 ? mx - ((mx - mn) >> 2) : mx - ((mx - mn) >> 1); }
       sp.push_back(q);
       want_n += (q.x1 - q.x0) / STEP + 1;
     }
