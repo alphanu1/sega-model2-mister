@@ -33497,5 +33497,5 @@ rails are flat white textures with every mip setting -- only Off is right.
 A texel fetch fault at levels > 0 for that texture (level cap by the smaller
 dimension, a texture the game never mips, or mirror/wrap/sheet handling at a
 level). Screenshot sm2-builds/mipmaps/board/s1068_sharp_rails_white.png.
-Also (Ben, s1068 mip on): the sky reflection on the car windows breaks, in
-races and at car select. Same investigation as the rails.
+Also (Ben, s1068 mip on): the sky reflection on the car windows breaks --
+corrected: ONLY on the car select screen; in game it is fine. Same investigation as the rails.
