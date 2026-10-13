@@ -32765,3 +32765,9 @@ is MAME's, bit for bit.
 
 *Not verified:* any fit; the board; MIP with texel step 2-8 (the level
 ignores the step, so step > 1 still aliases along x); interlace.
+R826 BUILT: s1042-s1047 = 78ab95b + R826_STRICT + R826_SYNC (r826-on.patch;
+ring + shared MultiPCM). s1042-s1044 missed clk_sys (fill/store/geometry/jt12
+paths, none R826's); s1046 passes the rule: clk_sys +0.173, clk_mem +0.267,
+clk_i960 +1.980, holds >= +0.145, HDMI -1.116 (report-only); 41,288 ALM. RBF
+build/Model2_20261013_s1046_r826.rbf 2b870c07. (Fitter success, then the
+usual Quartus segfault on exit.) Not yet on the board.
