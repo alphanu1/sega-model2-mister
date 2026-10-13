@@ -32991,3 +32991,7 @@ R831 (cont.): Draw method loses "Every 3rd frame" -- now O[43] "Double
 Buffered / Single buffered"; the walk's frame-skip input is {0, status[43]},
 so the every-third path is constant and synthesises away. A saved config on
 Every 3rd (bits 44:43 = 10) reads as Double. Bit 44 is no longer read.
+R828 (Ben, s1052): "mip mapping on the mountains is good" -- the face-on
+distance is right with the major-axis rule; only the oblique near road is too
+blurry. Decision: mip becomes a user choice in the OSD (Off + rules/biases,
+R828's own behaviour kept as one choice); Ben picks the default on the board.
