@@ -32157,3 +32157,8 @@ clk_mem by -2.62 / -2.90 ns, and every failing path was the ring's.)
      differs from Model2.sv there. It only affects mode-change cases.
 
 *Not verified:* any fit, the clk_mem slack of the full design, the board.
+s1037 (PCM_SHARED 1) on the board: Ben -- "some of the voices are only in
+the right channel". s1035 (PCM_SHARED 0, R819's pan law) reloaded for an A/B
+sound test: if s1035 is right, the shared engine mis-pans (bench claimed
+bit-identical per chip -- check whether it compared L and R separately); if
+s1035 does it too, R819's att_side / mute_side pan law is the suspect.
