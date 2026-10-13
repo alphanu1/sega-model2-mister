@@ -33092,3 +33092,4 @@ TGP for the game's microcode, and the geometrizer as dedicated RTL
 could never fit, and whose internal-ROM code has never been dumped anyway.
 Inferred, not checked on a PCB: the original's five TGPs are one
 coprocessor plus four for the geometrizer.
+s1060 (the combined build) on the board: Ben -- "looking good".
