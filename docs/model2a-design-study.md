@@ -31603,3 +31603,13 @@ counts stay at 0 up to L = 60. Progressive scan is cycle-exact with R823.**
 either 15 kHz mode. A Quartus constant-fold check of the new arithmetic was
 not run (no map allowed). It is plain unsigned arithmetic and size casts, not
 the signed-cast idiom of R662.
+
+**R823 DID NOT MEET clk_mem.** s1030-s1032 (f1b4a1c, the ring on, 80/40):
+s1030 clk_mem -2.621, s1032 -2.901 (s1031 a Quartus TDB internal error);
+every failing path the ring's control: m2_video_timing vcnt -> line_number ->
+ldist -> the compares -> rg_rb / rg_hd / rg_nl (~12.6 ns in a 10 ns cycle),
+the path R823's own note flagged. R824 (2e8e1fc) registers the line terms
+but is unfitted. Next: an agent pipelines the ring's decisions (R825); and
+s1033-s1035 = 2e8e1fc with LB_RING 0, SIBLING 0 (build/worktree_patches/
+ring-off.patch) -- R823's bench: SIBLING 0 alone takes native overruns 8.04
+-> 1.11 a frame (57% -> 11% of frames) at 14+U[0,30], and interlaced to 0.
