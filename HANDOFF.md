@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-13: RELEASED Model2_20261013.rbf = s1017 (7932d11)
+
+releases/: Model2_20261013.rbf (77dc39cf90c61c6ea2538b3b5f2f7b79), the
+Deluxe MRAs that find split/merged sets, the CRT MRAs. README: races at
+full speed (Ben: no visible slowdown, incl. the corner s1011 slowed on;
+99% of frames on time), brief scene-change pauses, wheel steering via the
+right stick (R816), 8 KB i-cache + R817 fetch. s1017 ran 11 h+ attract with
+no lock. Merged to main by PR (merge commit). NEXT: area audit (99% ALM,
+M10K 553/553) for the audio filter, tile overruns (char cache / SDRAM
+priority), R813's span cull; quiet music; the wheel on real hardware.
+
 ## 2026-10-12 (evening): R816 steering, R817 fetch -- building in turn
 
 ON THE BOARD: s1017 = 7932d11 (s1011 + R816 + R817, 80/40), RBF

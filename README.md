@@ -14,8 +14,8 @@ differ swapped in, before its games can run.
 
 **This is a work in progress, released as a beta.** **Daytona USA (Deluxe
 '93)** boots and runs its attract mode with the full picture — textured, lit 3D
-over the 2D layers — and with sound, at 57 frames a second of the arcade's
-57.5 in attract and 57 for 80-90% of a race. **Daytona USA (Revision A)**,
+over the 2D layers — and with sound, at the arcade's speed: 57 frames a
+second of 57.5, in attract and in a race. **Daytona USA (Revision A)**,
 the 1994 set, runs too. `mra/` holds their MRAs, a Virtua Cop MRA that loads
 its ROMs but does not run yet (its I/O board is not in the core), and a 2D
 tilemap test pattern. What follows is what is built and measured, not a
@@ -35,13 +35,13 @@ README with the ROMs you need, the settings, and what is not finished.
 | **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
 | **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
 | **3D renderer** | **Working on hardware.** Display-list walker, geometry (transform, lighting, clipping, projection), quad store and a textured rasteriser drawing **front to back** into a **DDR3 framebuffer**, shown only when a frame is complete. Checked against MAME frame by frame in simulation, and by eye on the board. |
-| **Speed** | With `Draw method: Double Buffered` (the default) and `Texel step 1`: attract a solid **57 frames a second** of 57.5; a race **57 for 80-90% of the time**, dipping in the busiest moments. The remaining cost is the 3D draw's texture lookups (design study R808). |
+| **Speed** | With `Draw method: Double Buffered` (the default) and `Texel step 1`: **57 frames a second** of 57.5 in attract and in a race, 99% of frames on time, with brief pauses only at scene changes. The main CPU now sets the pace, not the 3D (design study R814-R817). |
 | **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs, confirmed on a set. `[15kHz CRT]` MRAs start the core in 15 kHz. |
 
 ### What is open
 
-- **Full speed in the heaviest race scenes.** About 10-20% of race time dips
-  below 57; the 3D draw's per-texture-lookup cost is what is left (R808).
+- **Brief pauses at scene changes** (into and out of a race): the main CPU
+  setting up the next scene (R814).
 - **Background music and the game-over speech** are too quiet.
 - **No mip-mapping**, so distant textures shimmer.
 
@@ -61,7 +61,7 @@ fail criteria each phase was accepted against. Status as of this commit:
 | **P5** | Sound | **Done.** Audible on hardware — the sound board's 68000, FM and MultiPCM. |
 | **P2** | 3D renderer | **Done.** Textured, lit 3D on hardware, front to back into a DDR3 framebuffer. |
 | **P3** | The fit verdict | **Answered, and it is tight.** Everything fits the device together, with essentially no headroom — which is why debug instruments now have to replace each other rather than accumulate. |
-| **P6** | Integration | **Released as a beta.** Daytona runs with 3D and sound at 57 fps in attract and mostly 57 in a race; the open items above remain. |
+| **P6** | Integration | **Released as a beta.** Daytona runs with 3D and sound at the arcade's 57 fps in attract and in a race; the open items above remain. |
 
 The phases are listed here in the order they were completed, not numerically:
 P4 and P5 were finished before P2, because the coprocessor and the sound board
