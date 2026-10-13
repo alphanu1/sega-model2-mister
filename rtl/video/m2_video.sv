@@ -52,7 +52,29 @@
 `timescale 1ns/1ps
 
 module m2_video #(
-  parameter int unsigned COLUMNS = 62
+  parameter int unsigned COLUMNS = 62,
+  // R823: FOUR LINE BUFFERS IN A RING, RENDERING UP TO THREE LINES AHEAD OF
+  // THE BEAM. 0 = the two-bank swap at every line_start (unchanged).
+  //
+  // The overruns are not a per-line budget the engine cannot meet: at zero
+  // char latency the worst Daytona line takes ~2,100 of 4,100 clk_mem cycles.
+  // They are a 4-line BURST. A full-screen picture layer (the sky, the title)
+  // misses the glyph cache on every column of the line that enters a new
+  // 4-row group of its tiles -- ~60 misses, each a demand fetch and then its
+  // sibling fill serialised behind it -- and the three lines after it hit.
+  // At ~30 cycles a fetch that line needs ~5,500 cycles, its neighbours
+  // ~1,800, and the four together average ~2,700. A ring lets the cheap lines
+  // pay for the dear one.
+  //
+  // Free in M10K: each (layer, lane) memory goes from 256 x 15 to 512 x 15,
+  // still one block (512 x 20 mode). Only progressive scan uses the ring;
+  // interlaced (R682) keeps the swap, in the same 2-bit bank registers.
+  //
+  // Lines in vertical blanking are not rendered in ring mode, and an overrun
+  // is counted only for a VISIBLE line whose buffer was not ready at its
+  // line_start -- the two-bank count included blanking lines.
+  parameter bit          LB_RING = 1'b0,
+  parameter int unsigned RING_LEAD = 2      // render at most line_number + this
 ) (
   input  logic        clk,
   input  logic        ce_pix,
@@ -112,6 +134,12 @@ module m2_video #(
   // docs/m1-m4-plan.md and task 2a in HANDOFF. When it is, line_start arrives
   // while the sequencer is still in Q_RUN, the bank does not flip and the
   // previous line is displayed again.
+  //
+  // R823: THE NUMBERS ABOVE ARE STALE. They are the serial engine at 80 MHz.
+  // Today's (clk_mem, 100 MHz) line is 4,100 cycles and the pipelined engine
+  // needs ~1,800 on Daytona, worst ~2,100, with a perfect glyph memory. What
+  // overruns is the cost of glyph-cache MISSES, which arrive in bursts: see
+  // LB_RING.
   //
   // That is a deliberate, locally-wrong-but-stable failure, and it is invisible
   // from the outside: the picture is merely wrong. Counted here so "the image
@@ -261,6 +289,12 @@ module m2_video #(
   // Double buffered: `bank` is written while ~bank is displayed.
   logic bank;
   logic [14:0] rd_q [4];              // {masked, prio, transparent, pal_index}
+  // R823 ring (LB_RING): rg_wb is the bank being rendered, rg_rb the bank being
+  // displayed, and rg_hd / rg_cnt the FIFO of finished lines waiting to be
+  // shown, in bank order, each with the line it holds in rg_tag.
+  logic [1:0]  rg_wb, rg_rb, rg_hd, rg_cnt;
+  logic [8:0]  rg_tag [4];
+  logic [8:0]  rg_nl;                 // the next line to render
 
   // EIGHT SEPARATE RAMS, NOT ONE ARRAY INDEXED BY BANK
   //
@@ -518,6 +552,37 @@ module m2_video #(
     .fetches(f_fetches), .tw_nonblank(f_tw_nonblank)
   );
 
+  // ------------------------------------------------ R823 ring bookkeeping
+  // Distances are in display order, modulo the 424-line frame. The renderer
+  // never gets more than a few lines ahead or behind, so a distance of 256 or
+  // more means "behind".
+  localparam logic [9:0] VT = 10'd424;
+  function automatic logic [9:0] ldist(input logic [8:0] a, input logic [8:0] b);
+    logic [9:0] t;
+    t = {1'b0, a} - {1'b0, b};
+    ldist = t[9] ? t + VT : t;
+  endfunction
+  wire        ring_on   = LB_RING && !interlace;
+  // The line the next line_start will show: line_number names the line to
+  // RENDER, two ahead of the beam, so the one displayed next is one before it.
+  wire [8:0]  rg_want   = (line_number == 9'd0) ? 9'd423 : line_number - 9'd1;
+  wire [9:0]  rg_nd     = ldist(rg_nl, line_number);
+  wire        rg_go     = (rg_nd <= 10'(RING_LEAD)) || (rg_nd == VT - 10'd1);
+  wire        rg_behind = (rg_nd >= 10'd256) && (rg_nd != VT - 10'd1);
+  wire [8:0]  rg_htag   = rg_tag[rg_hd];
+  wire        rg_hhit   = (rg_cnt != 2'd0) && (rg_htag == rg_want);
+  wire        rg_hstale = (rg_cnt != 2'd0) && (ldist(rg_htag, rg_want) >= 10'd256);
+  // The next free bank follows the FIFO, except when the FIFO is empty and
+  // its head has come round to the displayed bank -- which happens when late
+  // lines are dropped (rg_hstale) while the display repeats a line. Then the
+  // bank after the displayed one is free; following the head would wait for a
+  // display pop that cannot come, because nothing is being rendered.
+  wire [1:0]  rg_free   = ((rg_cnt == 2'd0) && (rg_hd == rg_rb)) ? rg_rb + 2'd1
+                                                                 : rg_hd + rg_cnt;
+  wire        rg_room   = (rg_cnt <= 2'd2) && (rg_free != rg_rb);
+  wire        rg_pop    = ring_on && ((line_start && rg_hhit) || (!line_start && rg_hstale));
+  wire        rg_push   = ring_on && (q == Q_NEXT) && (cur_layer == 2'd3);
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       q <= Q_IDLE; cur_layer <= '0; cur_line <= '0;
@@ -528,7 +593,24 @@ module m2_video #(
       mask_r <= '0; mask_i <= '0;
       seq_tram_addr <= '0; seq_owns_tram <= 1'b1;
       bank <= 1'b0; dbg_fetches <= '0; dbg_overruns <= '0;
+      rg_wb <= 2'd1; rg_rb <= 2'd0; rg_hd <= 2'd1; rg_cnt <= 2'd0; rg_nl <= 9'd0;
+      for (int i = 0; i < 4; i++) rg_tag[i] <= '0;
     end else begin
+      // R823: the ring's FIFO of finished lines. A push and a pop in one
+      // cycle leave rg_hd + rg_cnt -- the next free bank -- where it was.
+      if (rg_pop) begin
+        if (line_start) rg_rb <= rg_hd;        // shown from the next line on
+        rg_hd <= rg_hd + 2'd1;
+      end
+      if (rg_push) rg_tag[rg_wb] <= cur_line;
+      rg_cnt <= rg_cnt + {1'b0, rg_push} - {1'b0, rg_pop};
+      if (ring_on && line_start && !rg_hhit && (rg_want < 9'd384)
+          && !(&ovr_acc)) begin
+        // A visible line whose buffer is not ready: the bank is not
+        // changed and the line before is shown again, as in Q_RUN below.
+        ovr_acc <= ovr_acc + 1'd1;
+        if (!(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
+      end
       // A whole frame's overruns, latched where they are counted.
       if (vblank_start) begin
         dbg_ovr_frame <= ovr_acc;
@@ -539,7 +621,31 @@ module m2_video #(
       case (q)
         Q_IDLE: begin
           seq_owns_tram <= 1'b1;
-          if (line_start) begin
+          if (ring_on) begin
+            // R823: start the next line as soon as a bank is free and the
+            // line is within RING_LEAD of line_number; skip ahead when the
+            // renderer has fallen behind the beam.
+            if (rg_room && rg_go) begin
+              cur_line    <= rg_nl;
+              cur_layer   <= 2'd0;
+              dbg_fetches <= '0;
+              rg_wb       <= rg_free;
+              if (rg_cnt == 2'd0) rg_hd <= rg_free;   // keeps rg_hd + rg_cnt == rg_wb
+              q           <= Q_HSCR;
+            end else if (rg_behind) begin
+              rg_nl <= (line_number >= 9'd384) ? 9'd0 : line_number;
+            end
+          end else if (LB_RING && line_start) begin
+            // Interlaced: the two-bank swap, on the ring's registers.
+            cur_line    <= line_number;
+            cur_layer   <= 2'd0;
+            dbg_fetches <= '0;
+            rg_rb       <= rg_wb;
+            rg_wb       <= rg_wb + 2'd1;
+            rg_hd       <= rg_wb + 2'd2;
+            rg_cnt      <= 2'd0;
+            q           <= Q_HSCR;
+          end else if (!LB_RING && line_start) begin
             // Only reached when the previous line finished in time. If it did
             // not, the sequencer is still in Q_RUN and this edge is ignored —
             // see the overrun note on Q_RUN.
@@ -672,8 +778,8 @@ module m2_video #(
           // a one-line overrun.
           // Saturating, not wrapping: a counter that rolls over reads as a
           // small number on a screen and says the opposite of what happened.
-          if (line_start && !(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
-          if (line_start && !(&ovr_acc))       ovr_acc      <= ovr_acc + 1'd1;
+          if (!ring_on && line_start && !(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
+          if (!ring_on && line_start && !(&ovr_acc))       ovr_acc      <= ovr_acc + 1'd1;
           // The latch lives here too: one process must own ovr_acc, and the
           // increment cannot move to the stats process without dragging the
           // whole sequencer state with it.
@@ -686,7 +792,10 @@ module m2_video #(
 
         Q_NEXT: begin
           seq_owns_tram <= 1'b1;
-          if (cur_layer == 2'd3) q <= Q_IDLE;
+          if (cur_layer == 2'd3) begin
+            q <= Q_IDLE;
+            if (ring_on) rg_nl <= (cur_line >= 9'd383) ? 9'd0 : cur_line + 9'd1;
+          end
           else begin
             cur_layer <= cur_layer + 2'd1;
             q         <= Q_HSCR;
@@ -764,12 +873,22 @@ module m2_video #(
         // ramstyle attribute or not). The 128-word arrays before this were
         // only ever recovered from registers after elaboration
         // ("mem[0][14]__7"), never inferred from the HDL.
-        m2_lbuf_ram u_ram (
-          .clk(clk),
-          .we(wen), .wa({bank, waddr}),
-          .wd({f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx], f_lb_pal[widx]}),
-          .ra({~bank, hcnt[8:2]}), .q(lane_q[gn])
-        );
+        if (LB_RING) begin : g_ring
+          // R823: four banks, 512 x 15 -- still one M10K (512 x 20 mode).
+          m2_lbuf_ram #(.AW(9)) u_ram (
+            .clk(clk),
+            .we(wen), .wa({rg_wb, waddr}),
+            .wd({f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx], f_lb_pal[widx]}),
+            .ra({rg_rb, hcnt[8:2]}), .q(lane_q[gn])
+          );
+        end else begin : g_swap
+          m2_lbuf_ram u_ram (
+            .clk(clk),
+            .we(wen), .wa({bank, waddr}),
+            .wd({f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx], f_lb_pal[widx]}),
+            .ra({~bank, hcnt[8:2]}), .q(lane_q[gn])
+          );
+        end
       end
 
       // The select is registered from the same hcnt as the address, so the
@@ -964,15 +1083,17 @@ endmodule
 
 // R818: one tilemap line-buffer lane, both banks: 256 x 15, one write port,
 // one registered read port -- one M10K.
-module m2_lbuf_ram (
-  input  logic        clk,
-  input  logic        we,
-  input  logic  [7:0] wa,
-  input  logic [14:0] wd,
-  input  logic  [7:0] ra,
-  output logic [14:0] q
+module m2_lbuf_ram #(
+  parameter int unsigned AW = 8          // R823: 9 for the four-bank ring
+) (
+  input  logic          clk,
+  input  logic          we,
+  input  logic [AW-1:0] wa,
+  input  logic   [14:0] wd,
+  input  logic [AW-1:0] ra,
+  output logic   [14:0] q
 );
-  (* ramstyle = "M10K" *) logic [14:0] mem [256];
+  (* ramstyle = "M10K" *) logic [14:0] mem [1 << AW];
   always_ff @(posedge clk) begin
     if (we) mem[wa] <= wd;
     q <= mem[ra];

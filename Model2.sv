@@ -5887,7 +5887,9 @@ wire cwr_inval = cwr_s[1] || (cwr_tail != 4'd0);
 // R644: BACK TO 64 KB. R313 halved it for block RAM; the framebuffer (R640)
 // returned ~50 M10K, and R313/R320 measured the halving at 14 -> 53 scanline
 // overruns a frame -- the tile rows Ben still sees repeat.
-m2_char_cache #(.IDX_BITS(13)) u_char_cache (
+// R823: no sibling fetch -- with the line-buffer ring it measured 0 overruns to
+// a port-3 latency of ~60 cycles, against ~45 with it (tb_m2_video_ovr).
+m2_char_cache #(.IDX_BITS(13), .SIBLING(1'b0)) u_char_cache (
 	.clk(clk_mem), .rst_n(cc_rst_n_s),
 	.v_req(ccf_req), .v_addr(ccf_addr),
 	.v_ack(ccf_ack), .v_data(ccf_data),
@@ -6296,7 +6298,10 @@ end
 wire vid_rst_n_s = vid_rst_sync[1];
 wire cc_rst_n_s  = cc_rst_sync[1];
 
-m2_video u_tilemap (
+// R823: four line banks as a ring, rendering up to two lines ahead -- a
+// layer's burst of glyph misses borrows time from the lines around it.
+// Tile overruns: 0 on 114 MAME frames at the board's latency (was 8 a frame).
+m2_video #(.LB_RING(1'b1)) u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather

@@ -31095,3 +31095,243 @@ but "still some tile overruns" are visible: R822 alone did not cure them.
 Next: a why build of 22887ae to count them against s1009's (57-62% of
 frames), and a simulation of the fetch engine at zero char latency to tell
 the queueing (R822's premise) from the engine's own per-line budget.
+
+**R823 -- TILE OVERRUNS ARE GLYPH-CACHE MISS BURSTS, NOT THE ENGINE'S LINE
+BUDGET. A FOUR-BANK LINE-BUFFER RING, WHICH COSTS NO M10K, REMOVES THEM IN
+SIMULATION UP TO ~45 CYCLES OF PORT-3 LATENCY.** (R822 asked for this
+measurement.)
+
+*Believed:*
+  1. m2_video's own note (R818 g): four dense layers need ~6,456 cycles a line
+     against ~3,280. If that were the limit, no memory priority or cache size
+     could help.
+  2. R822's premise: the cost is the glyph port queueing behind the i960 and
+     the texel port.
+
+*Method.*
+  * Data: MAME 0.289, Daytona Revision A, dumped with
+    sim/video/mame_m2_ovrdump.lua. 19 bursts of 6 consecutive frames each.
+    - 9 from attract: race views, the VR text screens, the title.
+    - 10 from a coin-up: circuit select, mission select, "GENTLEMEN START",
+      the rolling start, a race (4 points), results and the title.
+    - Each frame is tile RAM. char RAM is dumped once per burst; the write tap
+      saw no char writes in any dumped frame.
+  * The DUT is m2_video plus m2_char_cache, IDX_BITS 13 as shipped.
+  * Clock: clk_mem with the board's 16/100 pixel enable. A line is 4,100
+    cycles.
+  * Port 3 is served by a model: one transaction at a time, the request must
+    drop between transactions, and the latency is L or L + U[0, J].
+  * Warm-up: 1 frame, which is also the cold cache. Measurement: 6 frames per
+    burst, 114 in all.
+  * Counting:
+    - Overruns are counted on VISIBLE lines, as any line_start that arrives
+      while the sequencer is busy.
+    - The DUT's own counter also counts the 40 blanking lines, but only
+      counts line_starts that land in Q_RUN. A line_start that lands in a
+      layer's setup states (Q_HSCR..Q_MASK_W, Q_NEXT: ~19 cycles a layer) is
+      a lost line that the counter does not see. Net: 8.86 by the DUT against
+      9.03 by this count, a frame, at L = 30. The board's count is therefore a
+      few percent low.
+  * Bench: tb_ovr (the scratch harness). The committed form is
+    test_m2_video_ovr.
+
+*Now known -- VERIFIED (measured, simulation):*
+  1. THE ENGINE FITS WITH HALF THE LINE TO SPARE.
+     - At L = 0, and with a perfect memory that bypasses the cache, there are
+       0 overruns on every scene.
+     - Lines take 1,790-1,800 cycles on average; the worst is 2,107, which is
+       51% of 4,100.
+     - Per 8-pixel column:
+       - 6 cycles when the per-line 16-entry cache hits: ~192 of the ~252
+         columns a line.
+       - 9 cycles when the glyph cache hits: ~50 columns a line.
+       - ~11 cycles plus the memory when it misses: 8-10 columns a line.
+     - The sequencer adds 76 cycles a line, about 19 per layer.
+     - m2_video's 6,456 / 3,280 is the serial engine at 80 MHz, and is stale.
+  2. LATENCY IS THE LEVER. HEAD, fixed L, overruns per frame (% of frames
+     with any):
+
+     | L      | 0, 12 | 20         | 30        | 45         | 60         | 90         |
+     |--------|-------|------------|-----------|------------|------------|------------|
+     | HEAD   | 0     | 1.50 (24%) | 9.0 (57%) | 30.6 (74%) | 43.0 (84%) | 62.6 (98%) |
+
+     - With jitter, 14 + U[0, 30] (mean 29): 8.0 per frame, in 57% of frames,
+       worst 34.
+     - 14 + U[0, 50] (mean 39): 23.3, 73%.
+     - Near L = 30 the slope is ~1.5-2 overruns a frame per cycle of latency.
+     - Demand misses are 2,056 a frame at 64 KB. R283's board figure at 64 KB
+       was 2,146.
+  3. THE CAUSE IS A 4-LINE BURST ON ONE LAYER.
+     - Tilemap 2 is the sky or picture layer. Daytona runs pair 2/3 in window
+       mode 1.
+     - It misses on all ~60-63 columns of a line that enters a new 4-row group
+       of its tiles, then hits on the next 3 lines. A demand line holds 2 glyph
+       rows and its sibling holds 2 more.
+     - Race 1 at L = 30:
+       - Miss lines are 2 of every 8. They average 30.4 misses (63 at worst);
+         the other lines have 0-2.2.
+       - The worst line takes 5,491 cycles. Of these, tilemap 2 takes 4,261,
+         and 3,879 of those are waiting. The 3 lines after it take 1,792.
+     - A miss costs 62-69 cycles at L = 30, which is 2L + ~6. The next
+       column's demand fetch waits for the previous miss's sibling fill,
+       because the port has one transaction in flight.
+     - Over 4 lines the work is ~2,700 cycles a line. Only the peak exceeds
+       4,100.
+     - The 64 KB direct-mapped cache cannot hold that layer from frame to
+       frame, so these misses recur every frame. Demand misses per frame:
+
+       | Cache            | Misses | Overruns at L = 30 |
+       |------------------|--------|--------------------|
+       | 64 KB (shipped)  | 2,056  | 9.0                |
+       | 128 KB           | 839    | 2.23               |
+       | 256 KB           | 87     | 0.21               |
+
+     - By scene, at 14 + U[0, 30]:
+       - The attract race views overrun 9-34 a frame, in 100% of frames.
+       - The VR text screens: 4-10.
+       - The rolling start: 25.5. Race point 1: 20.2. GENTLEMEN: 2.3.
+       - Zero on the menus, the title, results and race points 2-4.
+  4. THE FIXES, measured on all 114 frames. Each cell is overruns per frame /
+     % of frames with any / worst frame.
+
+     | Variant (cost)                       | 14+U[0,30] | 14+U[0,50] | L 45        | L 60        | L 90        |
+     |--------------------------------------|------------|------------|-------------|-------------|-------------|
+     | HEAD                                 | 8.04 57% 34 | 23.3 73% 69 | 30.6 74% 73 | 43.0 84% 102 | 62.6 98% 134 |
+     | SIBLING 0 (cache, no area)           | 1.11 11% 25 | 6.86 37% 38 | 12.5 53% 59 | 21.9 64% 76 | 66.0 82%    |
+     | LB_RING 1 (m2_video, 0 M10K)         | 0          | 0.42 3% 12 | 0.35 3% 10  | 1.91 25% 17 | 19.3 52%    |
+     | LB_RING 1 + SIBLING 0                | 0          | 0          | 0           | 1.11 9% 18  | 17.7 44%    |
+     | IDX_BITS 14, 128 KB (+42..66 M10K)   | --         | --         | 12.2        | --          | --          |
+
+     IDX_BITS 14 at L = 30 gives 2.23.
+
+     Further detail:
+     - Queue model (14 + U[0,6], plus U[0,80] with p = 0.6; mean 41): HEAD
+       26.1, SIBLING 0 9.9, LB_RING 0.30, both 0.
+     - Overruns first appear at L ≈ 20 for HEAD, ≈ 45 for LB_RING and ≈ 60
+       for both.
+     - SIBLING 0 roughly doubles the demand misses (3,884 a frame) but issues
+       the same SDRAM transactions: 3,884 against 2,056 + 2,056 sibling fills.
+  5. EQUIVALENCE: make test_m2_video_ovr. Shipped and variant run side by
+     side, each with its own glyph cache and port 3.
+     - In every frame where neither overran, every visible pixel's palette
+       index matches. Every glyph a cache returned is checked against char RAM.
+     - Synthetic scenes: sky (4,096 distinct tiles scrolling) and random tile
+       RAM, both progressive and interlaced. Both LB_RING 1 / SIBLING 1 and
+       LB_RING 1 / SIBLING 0 PASS.
+     - The variant at 30 cycles against the shipped path at 0 matches.
+     - On all 19 MAME bursts, the variant at 30 and at 45 against the shipped
+       path at 0 gives 76 runs, 0 pixels differing and 0 wrong glyphs.
+     - Default parameters against 8cde963, as a miter with HEAD's m2_video and
+       m2_char_cache renamed: every visible pixel and the overrun count are
+       equal in every frame, including frames that overran (sky at L 0-90, and
+       random with jitter).
+     - lint_top clean. Verilator -Wall on m2_video: the same 10 warnings as
+       HEAD under both settings. lint_idx: the only m2_video entry is the
+       pre-existing xlat_tbl. test_m2_video_timing 39/0 PASS.
+       test_m2_char_cache PASS. test_m2_video_frame PASS on a MAME title
+       dump.
+  6. MODEL 1 (tools/model1-ref 0b5d04f, up to date with the local repo) HAS
+     NO HEADROOM TO COPY.
+     - m2_tile_fetch is a fork of m1_tile_fetch: the same two FSMs with a
+       one-column hand-off and one request in flight.
+     - Glyphs come from SDRAM port p1 with NO cache. The only reuse is a
+       one-entry repeat. Reads are 32-bit (blen 2).
+     - Two banks, rendering one line ahead across the whole line. It does not
+       fetch in blanking only and skips nothing.
+     - clk 80 MHz gives 3,280 cycles a line.
+     - It overruns too: ~1.7 a frame on hardware (findings.md:2813).
+       HANDOFF.md:3113 says "18 cycles ... still misses 9,434 deadlines ... not
+       memory contention", and a strict-priority arbiter there "moved the
+       figure by nothing".
+     - Two glyph-cache attempts there were reverted on hardware: a second port,
+       and a next-scanline cache.
+     - The board difference that matters: with no cache Model 1's demand is
+       uniform, while ours is cache-shaped and therefore bursty. That is why
+       buffering is the lever here.
+     - R85 parked a four-bank buffer on "burstiness 1.87x". That figure counted
+       requests per line, not misses times latency. Misses run 63 at peak
+       against a mean of ~8, roughly 7.5x.
+
+*Side finding -- VERIFIED in simulation, latent on Daytona:*
+  * m2_video's Q_HSCR_W reads hscr from the PREVIOUS sequencer address.
+    - The tile RAM registers its address (m2_tdp_ram2c, R648).
+    - Q_HSCR sets the address and Q_HSCR_W takes tram_data the next cycle.
+      That data is for the address presented in Q_HSCR, which is the last
+      row-mask word of the layer before: 0x6000/0x6800 + 4*line + 3.
+    - Every other sequencer read has its wait state (Q_VSCR / Q_VSCR_W ...).
+  * Seen in sim: hscr_r = 0 where tile RAM held 3 and 6.
+  * It affects hscr in non-window modes, including bit 15's per-line table
+    select. Window mode is unaffected (it uses hctrl_r, which is read
+    correctly).
+  * Every dumped Daytona frame has the true hscr = 0 on those layers and those
+    mask words = 0, so nothing visible changes on these scenes.
+  * Model 1 has the same Q_HSCR code (m1_video.sv:593). Its tile RAM latency
+    was not checked.
+  * Fix (not made): set seq_tram_addr = 0x5000 + layer one state earlier (in
+    Q_IDLE's start and Q_NEXT), or add a Q_HSCR wait state, which costs 1
+    cycle a layer.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. The board's effective port-3 round trip is ~25-30 clk_mem cycles under
+     contention. HEAD at 14 + U[0, 30] matches R814's 5-12 overruns a frame in
+     55-62% of frames. The scene mix differs from Ben's captures.
+     Settles it: a 'G' record of port-3 latency, or cr_hi / cf_cnt per frame
+     (Model2.sv already counts both).
+  b. R822 could only shave latency. At ~1.5-2 overruns a frame per cycle,
+     removing a few cycles of queueing leaves overruns, which matches "still
+     some tile overruns" on s1024.
+  c. Area, by construction (no Quartus):
+     - LB_RING 1:
+       - The 16 line-buffer memories go from 256 x 15 to 512 x 15. That is
+         still one M10K each (512 x 20 mode), so +0 M10K and +61,440 block
+         bits.
+       - ~53 registers: 4 x 9-bit tags, the next line, 4 x 2-bit pointers.
+       - ~100-150 ALUT: three 10-bit modulo-424 distances, a 4:1 tag select,
+         compares and FIFO arithmetic. Estimate ~+60-100 ALM.
+       - Timing risk on clk_mem: the path from line_number through the
+         distance to the pop and the bank select is ~10 levels.
+         line_number / rg_want only change at line boundaries, so they can be
+         registered if it misses.
+     - SIBLING 0: the bg FSM, bg_data (64 bits), bg_idx and bg_tag prune away:
+       ~-80 registers, ~-40 ALM.
+     - IDX_BITS 14: +42..+66 M10K (R818 b). 14 are free.
+  d. Behaviour changes with LB_RING 1, by design:
+     - Blanking lines are not rendered: 40 of 424 lines, ~9% of the fetch
+       work.
+     - Lines 0-2 are rendered from vcnt 420 (today 422-423), up to 3 lines
+       ahead of the beam. MAME draws a whole frame at once, so this is not a
+       fidelity change. A game write landing mid-frame shows up to 3 lines
+       later.
+     - dbg_overruns / dbg_ovr_frame now count VISIBLE lines whose buffer was
+       not ready at their line_start, as R85 said a buffered design must.
+     - Interlaced (R682) keeps the two-bank swap.
+  e. An 8-word port-3 burst (the demand line and its sibling in one
+     transaction) should land between SIBLING 0 and HEAD in transactions, at
+     L + 4 a miss. Not measured: it needs an m2_sdram port change.
+
+*Ranked:*
+  1. LB_RING 1. Zero at the board-like latency and to L ≈ 45, for ~+60-100
+     ALM and 0 M10K.
+  2. Add SIBLING 0. Zero to L ≈ 60, and it saves area.
+  3. SIBLING 0 alone. 8.0 -> 1.1 a frame, for negative area.
+  4. A bigger cache. Not affordable.
+  Not worth chasing: engine per-column speed (51% at L = 0), clock, SDRAM
+  priority.
+
+*Changed (uncommitted, sm2-builds/sm2-ovr-8cde963):*
+  - rtl/video/m2_video.sv: LB_RING (default 0), RING_LEAD, m2_lbuf_ram AW.
+  - rtl/video/m2_char_cache.sv: SIBLING (default 1).
+  - New: sim/video/m2_video_ovr_top.sv, sim/video/tb_m2_video_ovr.cpp,
+    sim/video/mame_m2_ovrdump.lua.
+  - Makefile: test_m2_video_ovr.
+  - Model2.sv is not touched. Turning it on is `m2_video #(.LB_RING(1))
+    u_tilemap` and `m2_char_cache #(.IDX_BITS(13), .SIBLING(0))`.
+
+*Not verified:* any Quartus map or fit (block counts, ALM, clk_mem timing),
+and the board.
+Merged with LB_RING 1 and SIBLING 0 set in Model2.sv (the measured best).
+Note from the bench: on RANDOM tile RAM at 14 + U[0,30] (nearly every column
+a miss -- a stress case no game screen resembles) both designs overrun
+heavily, the ring more by its own count (376 vs 318 a frame; its counter
+counts visible lines not ready, a different definition). Every MAME scene
+is 0 with the ring. Not yet on the board.

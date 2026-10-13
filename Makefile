@@ -398,7 +398,7 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_mpcm_level test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+.PHONY: test test_m2_video_ovr test_m2_mpcm_level test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
 test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
@@ -713,6 +713,27 @@ M2V_RTL := rtl/video/m2_video_timing.sv rtl/video/m2_tile_decode.sv \
 obj_m2_vf/Vm2_video: $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
 	$(VBUILD) -Wno-fatal --top-module m2_video -CFLAGS "-O2" \
 	  --Mdir obj_m2_vf -o Vm2_video $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
+
+# R823: tile overruns. The shipped tilemap path (two-bank swap, sibling fill)
+# beside a variant -- LB_RING and/or SIBLING -- through whole frames with the
+# glyph cache and a port-3 latency model: pixel equivalence wherever neither
+# overran, and overruns per frame by latency. Synthetic scenes; MAME dumps
+# from sim/video/mame_m2_ovrdump.lua via TEST_ARGS=+burst=<dir>.
+test_m2_video_ovr: obj_m2_vovr/Vm2_video_ovr_top obj_m2_vovr_ns/Vm2_video_ovr_top
+	@echo "== test m2_video ring (LB_RING 1) against the shipped path"
+	@./obj_m2_vovr/Vm2_video_ovr_top $(TEST_ARGS)
+	@echo "== ... and the ring with no sibling fill (LB_RING 1, SIBLING 0)"
+	@./obj_m2_vovr_ns/Vm2_video_ovr_top $(TEST_ARGS)
+
+M2VOVR_RTL := $(M2V_RTL) rtl/video/m2_char_cache.sv sim/video/m2_video_ovr_top.sv
+
+obj_m2_vovr/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
+	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=1 \
+	  --Mdir obj_m2_vovr -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
+
+obj_m2_vovr_ns/Vm2_video_ovr_top: $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
+	$(VBUILD) -Wno-fatal --top-module m2_video_ovr_top -CFLAGS "-O2" -GLBR=1 -GSIB=0 \
+	  --Mdir obj_m2_vovr_ns -o Vm2_video_ovr_top $(M2VOVR_RTL) sim/video/tb_m2_video_ovr.cpp
 
 # The CPU bridge: decode, the 32-to-16 split, and the 25-to-40 MHz crossing.
 test_m2_geo: obj_m2_geo/Vm2_geo
