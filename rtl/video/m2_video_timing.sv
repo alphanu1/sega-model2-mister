@@ -113,7 +113,8 @@ module m2_video_timing #(
   // Frame boundary, for the i960's vblank interrupt.
   output logic       vblank_start,
   output logic       field,       // R682: 0 even lines, 1 odd (0 when progressive)
-  output logic [8:0] ypos         // R682: the logical line on screen (vcnt when progressive)
+  output logic [8:0] ypos,        // R682: the logical line on screen (vcnt when progressive)
+  output logic [9:0] vtotal       // R824: this field's line count (V_TOTAL when progressive)
 );
 
   // this field's line count and visible lines
@@ -123,6 +124,7 @@ module m2_video_timing #(
   wire [9:0] vss = ntsc_lines ? 10'(VN_SYNC_START) : 10'(VI_SYNC_START);   // R783
   wire [9:0] vse = ntsc_lines ? 10'(VN_SYNC_END)   : 10'(VI_SYNC_END);
   wire [9:0] vv  = !interlace ? 10'(V_VISIBLE) : 10'(VI_VISIBLE);
+  assign vtotal = vt;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

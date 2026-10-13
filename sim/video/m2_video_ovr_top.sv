@@ -16,6 +16,7 @@ module m2_video_ovr_top #(
   input  logic        ce_pix,
   input  logic        rst_n,
   input  logic        interlace,
+  input  logic        ntsc_lines,   // R824: 262.5-line fields when interlaced
   // tile RAM, one read port per path (registered by the bench)
   output logic [14:0] r_tram_addr, d_tram_addr,
   input  logic [15:0] r_tram_data, d_tram_data,
@@ -49,7 +50,7 @@ module m2_video_ovr_top #(
     .vid_cat1(), .vid_r(), .vid_g(), .vid_b(), .vid_hs(), .vid_vs(), .vid_hb(), .vid_vb(),
     .vblank_irq(vblank_start), .dbg_fetches(), .dbg_overruns(r_ovr), .dbg_ovr_frame(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_hscr(), .dbg_vscr(), .dbg_layer_have(),
-    .vid_x(hcnt), .vid_y(vcnt), .interlace(interlace), .ntsc_lines(1'b0), .vid_field()
+    .vid_x(hcnt), .vid_y(vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .vid_field()
   );
   m2_char_cache #(.IDX_BITS(13)) u_rc (
     .clk(clk), .rst_n(rst_n),
@@ -68,7 +69,7 @@ module m2_video_ovr_top #(
     .vid_cat1(), .vid_r(), .vid_g(), .vid_b(), .vid_hs(), .vid_vs(), .vid_hb(), .vid_vb(),
     .vblank_irq(), .dbg_fetches(), .dbg_overruns(d_ovr), .dbg_ovr_frame(),
     .dbg_layer_px(), .dbg_ctrl(), .dbg_hscr(), .dbg_vscr(), .dbg_layer_have(),
-    .vid_x(d_hcnt), .vid_y(d_vcnt), .interlace(interlace), .ntsc_lines(1'b0), .vid_field()
+    .vid_x(d_hcnt), .vid_y(d_vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .vid_field()
   );
   m2_char_cache #(.IDX_BITS(13), .SIBLING(SIB)) u_dc (
     .clk(clk), .rst_n(rst_n),

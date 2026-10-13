@@ -31335,3 +31335,271 @@ a miss -- a stress case no game screen resembles) both designs overrun
 heavily, the ring more by its own count (376 vs 318 a frame; its counter
 counts visible lines not ready, a different definition). Every MAME scene
 is 0 with the ring. Not yet on the board.
+
+**R824 -- THE LINE-BUFFER RING IN 15 kHz INTERLACED TOO. In the bench the
+shipped interlaced path (two-bank swap, SIBLING 0) does not overrun at the
+board-like latency; it starts at about L = 45. With the ring, both 15 kHz line
+counts stay at 0 up to L = 60. Progressive scan is cycle-exact with R823.**
+(Follows R823 d, which left interlace on the swap.)
+
+*Believed:*
+  1. R823 d: the ring's arithmetic assumes the native frame. It has VT = 424,
+     line_number running 0..423, and the next line is the current one + 1. So
+     interlaced (R682, R783) kept the two-bank swap.
+  2. Ben sees tile overruns in 15 kHz interlaced (Video: 15kHz interlaced, or
+     the [15kHz CRT] MRAs). The ring should fix them there too.
+
+*How interlace numbers lines (read from m2_video_timing, Model2.sv):*
+  * A field is vcnt rows 0..vt-1:
+    - 273.5-line mode (R682/R701): field 0 has 274 rows, field 1 has 273.
+    - 262.5-line mode (R783): field 0 has 263 rows, field 1 has 262.
+  * Rows 0..191 are visible. They show logical line 2*row + field (ypos).
+    Rows 192..vt-1 are blanking: 82/81 rows, or 71/70.
+  * The field toggles where vcnt wraps.
+  * line_start comes on the last pixel of a row. line_number then names the
+    logical line two rows ahead. Near the end of a field, rows vt-2 and vt-1
+    of the current field name rows 0 and 1 of the next field, parity flipped.
+  * line_number is {dln[7:0], parity}. For blanking rows 256..273 (vcnt
+    254..271, 273.5 mode only) it ALIASES to lines 0..35:
+    - The swap renders them into buffers that are never shown, so this is
+      harmless there.
+    - It is not usable as a ring position.
+  * The line budget, in clk_mem cycles of 656 pixels:
+
+    | Mode   | Pixel enable | Cycles a line |
+    |--------|--------------|---------------|
+    | Native | 16/100       | 4,100         |
+    | 273.5  | 547/5300     | 6,356         |
+    | 262.5  | 861/8692     | 6,622         |
+
+    A field renders 192 lines, at the same 57.52 Hz as a native frame.
+
+*Method:*
+  * Bench: make test_m2_video_ovr. It is R823's bench, extended:
+    - Every scene runs in all three modes, with Model2.sv's pixel-enable
+      accumulator for each mode (including its "start clean" on a change).
+    - New "difflines" count: visible lines where the variant differs from the
+      shipped path run at L = 0 (r@0). This is the number of wrong lines on
+      the screen, independent of either overrun counter. The swap shows 2
+      wrong lines per overrun: the repeat, then the late line one row low.
+    - Mode-change cases (below).
+  * Data: MAME 0.289 daytona, sim/video/mame_m2_ovrdump.lua, regenerated (not
+    R823's set, which was not kept):
+    - 25 bursts of 7 frames. Attract: 13 bursts, at frames 600-5700. Coin-up
+      (OV_RACE=1): 12 bursts, at frames 1000-4000.
+    - That gives 175 measured frames per mode. Each MAME frame drives one
+      FIELD. The 7th measured field repeats the 7th dump.
+    - The dumps are ROM-derived. They stayed in scratch and are deleted.
+  * Shipped config: m2_video LB_RING 1 and m2_char_cache SIBLING 0, as
+    Model2.sv sets them.
+  * "Before" is f1b4a1c's RTL. "After" is this change. Both were run with the
+    same bench binary source.
+  * Cross-check: the pre-R823 HEAD config (swap, SIBLING 1) gives 9.9
+    overruns a frame (73% of frames) native at 14 + U[0,30] on these scenes.
+    R823 had 8.0 (57%) on its 19 bursts.
+
+*Now known -- VERIFIED (simulation):*
+  1. MEASURED, before and after. Units: overruns per field on visible lines /
+     % of fields with any / worst field / wrong lines per field against r@0.
+     175 MAME fields per row. "q" is R823's queue model: 14 + U[0,6], plus
+     U[0,80] with p = 0.6 (mean 41).
+
+     15 kHz, 273.5-line fields (547/5300):
+
+     | Latency    | Before (f1b4a1c)    | After |
+     |------------|---------------------|-------|
+     | 0 to 30    | 0                   | 0     |
+     | 14+U[0,30] | 0                   | 0     |
+     | 14+U[0,50] | 0.03 / 2% / 2 / 0.06 | 0    |
+     | q          | 0.11 / 6% / 4 / 0.24 | 0    |
+     | 30+U[0,30] | 0.29 / 8% / 7 / 0.58 | 0    |
+     | 45         | 0.31 / 8% / 6 / 0.62 | 0    |
+     | 45+U[0,30] | 1.53 / 23% / 12 / 3.13 | 0  |
+     | 60         | 1.53 / 23% / 12 / 3.06 | 0  |
+     | 90         | 7.57 / 70% / 35 / 14.9 | 3.13 / 28% / 23 / 3.13 |
+
+     15 kHz, 262.5-line fields (861/8692):
+
+     | Latency    | Before (f1b4a1c)    | After |
+     |------------|---------------------|-------|
+     | 0 to 30    | 0                   | 0     |
+     | 14+U[0,30] | 0                   | 0     |
+     | 14+U[0,50] | 0                   | 0     |
+     | q          | 0.03 / 3% / 1 / 0.06 | 0    |
+     | 30+U[0,30] | 0.10 / 5% / 3 / 0.21 | 0    |
+     | 45         | 0.08 / 4% / 2 / 0.16 | 0    |
+     | 45+U[0,30] | 0.92 / 21% / 10 / 1.85 | 0  |
+     | 60         | 0.87 / 21% / 10 / 1.79 | 0  |
+     | 90         | 6.52 / 69% / 33 / 12.9 | 3.10 / 28% / 26 / 3.10 |
+
+     Native, identical before and after. 0 through L = 45, at 14 + U[0,30],
+     14 + U[0,50], 30 + U[0,30] and q. Then:
+
+     | Latency    | Overruns per frame |
+     |------------|--------------------|
+     | 45+U[0,30] | 0.89 (12%)         |
+     | 60         | 0.91 (14%)         |
+     | 90         | 12.87 (42%)        |
+
+     Synthetic sky (4,096 distinct tiles), 6 fields a run:
+     - 273.5 mode:
+       - L = 45: swap with SIBLING 1 128 a field; f1b4a1c 0; after 0.
+       - L = 60: f1b4a1c 6.7; after 0.
+       - L = 90: f1b4a1c 126.7 (1,036 wrong lines in 6 fields); after 63.3
+         (380 wrong lines).
+     - 262.5 mode: the same shape. At L = 90, 126.7 before and 83.3 after.
+     - Random tile RAM at 14 + U[0,30], which no game screen resembles:
+       - 273.5 mode: wrong lines go 956 -> 992 in 6 fields.
+       - 262.5 mode: 953 -> 971.
+       - As R823 found progressive, the ring is slightly worse on random
+         tile RAM.
+  2. THE SHIPPED INTERLACED PATH IS ALREADY CLEAN AT THE BOARD-LIKE LATENCY
+     IN THE BENCH.
+     - 0 overruns on 175 fields in both modes at 14 + U[0,30].
+     - The 15 kHz line is 55-62% longer. SIBLING 0, which f1b4a1c turned on
+       in all modes, takes the swap's onset to L ~ 45.
+     - The pre-R823 config (SIBLING 1, swap) gives 0.16 a field at
+       14 + U[0,30] and 3.0 a field (45%) under the queue model.
+  3. EQUIVALENCE.
+     - In every field where the variant did not overrun, every visible
+       pixel's palette index equals the shipped path at L = 0.
+     - Every glyph a cache returned matches char RAM.
+     - Coverage: all 25 bursts × 3 modes × 11 latency models. Also sky and
+       random tile RAM in both 15 kHz modes, at L = 0 and at
+       14 + U[0,30].
+     - Result: 0 fields differ, 0 wrong glyphs.
+  4. PROGRESSIVE IS CYCLE-EXACT WITH f1b4a1c (a miter).
+     - Setup: f1b4a1c's m2_video and m2_video_timing, renamed, run beside
+       the new ones, each with its own cache and port.
+     - Compared every cycle: pal_addr, the overrun counter, the port-3
+       request and address, the tile RAM address and the glyph request.
+     - Scenes and latencies:
+       - Sky and random at L = 0/20/30/45/60/90, 14 + U[0,30] and
+         14 + U[0,50].
+       - All 25 MAME bursts at L = 0/30/45/60/90 and 14 + U[0,30].
+       - Both SIBLING settings.
+     - Result: 300 + 32 runs, 4.64e9 + 0.44e9 cycles, 0 differing. The
+       overrun counts are equal, including 5,980 overruns at high latency
+       and ~2,300 a run on random tile RAM.
+     - Against the f1b4a1c bench's own output (the SIBLING 0 build), all 14
+       measurement lines are identical: native, plus the two interlaced
+       L = 0 lines.
+  5. A MODE CHANGE MID-FRAME (the OSD) RECOVERS WITHIN THE FRAME OF THE
+     CHANGE.
+     - Directions: native <-> 273.5, native <-> 262.5, 273.5 <-> 262.5, at
+       latency 0 and 14 + U[0,30].
+     - Change landing at row 100: 0-1 overruns in the frame of the change,
+       then 0 overruns and 0 differing pixels in every following frame.
+     - Change landing past the new total: native -> 273.5 at row 300,
+       native -> 262.5 at 380, and 273.5 -> 262.5 at 268. The timing
+       generator's vcnt then runs to 1,023 and wraps with the field bit
+       unchanged, so two fields share one parity. Result: 1-3 overruns in
+       the frame of the change, then 0.
+     - The first form of the change used R823's "behind = half a frame". On
+       interlaced -> native it showed 104 overruns in the frame of the
+       change: tags and rg_nl in row numbering read as lines ~2x ahead and
+       blocked the FIFO head. f1b4a1c itself shows 102 on a 262.5 ->
+       native change at 14 + U[0,30], from the swap's leftover ring state.
+       The tightened test below takes both to 1.
+  6. The rest of the checks:
+     - test_m2_video_timing 39/0 PASS. test_m2_char_cache PASS.
+       test_m2_video_ovr PASS, both builds. test_m2_video_frame PASS on a
+       MAME title dump.
+     - lint_top clean. lint_idx: the only m2_video entry is the
+       pre-existing xlat_tbl.
+     - Verilator -Wall on m2_video: 9 warnings, as for f1b4a1c, under
+       LB_RING 0 and 1.
+     - quartus_map --analyze_file (17.0) on m2_video.sv, m2_video_timing.sv
+       and m2_video_ovr_top.sv: 0 errors.
+  7. A CARRIED FIELD PARITY ALSO RECOVERS. This was tested because the code
+     comment first claimed otherwise.
+     - Experiment: render rg_nl's own parity bit instead of the beam's.
+     - Result: it passes every mode-change case, including the
+       non-alternating fields. The runaway makes the ring fall behind and
+       re-seed rg_nl from the beam (rg_skip).
+     - The beam-derived parity is kept for robustness, not because it was
+       shown to be needed.
+
+*The change (uncommitted, sm2-builds/sm2-ring15-f1b4a1c):*
+  * The ring works in DISPLAY ORDER:
+    - Progressive: the line, modulo the 424-line frame.
+    - Interlaced: the field row, modulo this field's vtotal. The line rendered
+      is {row, parity}.
+    - After row 191 comes row 0 of the next field, rendered in this field's
+      blanking. This is how lines 0-2 are rendered at the end of a
+      progressive frame.
+  * The line-derived terms are registers loaded at line_start, with the value
+    for the line after it:
+    - rg_lp = (vcnt + 3) mod vtotal, which is line_number's position.
+    - rg_wp = the previous rg_lp, the position shown next.
+    - rg_lpar = that row's field parity.
+    - Each equals R823's combinational value in every cycle, so the miter is
+      exact. This also removes the line_number aliasing.
+  * The parity of a row being started comes from the beam: rg_lpar, flipped
+    when the row lies ahead across the field boundary.
+  * "Behind" is "not reachable":
+    - The FIFO head is stale when it is more than RING_LEAD + 1 ahead of the
+      line shown next.
+    - rg_nl skips when it is more than RING_LEAD + 1 ahead. The exception is
+      rg_nl at line/row 0, which waits through blanking. That case keeps
+      R823's half-modulus test: 256, or 128 interlaced.
+    - Steady state cannot reach the states this adds, which the miter
+      confirms.
+  * Removed: the interlaced two-bank fallback.
+  * m2_video_timing gains an output, vtotal: this field's line count.
+  * dbg_overruns / dbg_ovr_frame now count, in 15 kHz too, VISIBLE lines not
+    ready, latched per FIELD. Before, they counted every line_start that
+    landed in Q_RUN, blanking lines included.
+  * Bench files: sim/video/tb_m2_video_ovr.cpp (modes, difflines, mode
+    changes, +sweep / +sweep2 / +quick, the queue latency model) and
+    m2_video_ovr_top.sv (an ntsc_lines input).
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. If the board shows tile overruns in 15 kHz on an f1b4a1c build, then its
+     effective port-3 latency in that mode is ~45 cycles or more, or has a
+     heavy tail, or what is seen is not an overrun. The bench gives the
+     shipped path 0 overruns at 14 + U[0,30] in both 15 kHz modes.
+     - Settles it: the overlay's dbg_ovr_frame in 15 kHz. On f1b4a1c it
+       counts blanking lines too, so 0 there is decisive and a non-zero value
+       is not. Or a 'G' record of port-3 latency. Then this build: if the
+       artifact persists while the counter reads 0, it is something else.
+  b. Why interlaced misses come every line (not measured line by line):
+     - A SIBLING 0 demand line holds glyph rows 2k and 2k+1.
+     - A field uses one of the two, so every rendered line on the picture
+       layer enters a new demand line. Progressive enters one every other
+       line.
+     - The ~55-62% longer line covers this, up to L ~ 45.
+     - Settles it: per-line miss counts from the bench in interlace (R823
+       3's instrument).
+  c. clk_mem timing (no Quartus):
+     - rg_lp's D path: vcnt + 3, then the subtract and compare against
+       vtotal, then a 2:1 mux. That is 2 carry chains. vtotal is a mux of
+       five constants on three registers, one LUT level.
+     - The decision path R823 flagged (line_number -> distance -> pop / bank
+       select, ~10 levels):
+       - It loses line_number's +2, compare, subtract and mux (2-3 carry
+         chains), which are now a register.
+       - It gains one LUT, the interlace position mux.
+       - What remains: mux, subtract, +vtotal (2 chains), compares (~2 LUT),
+         go/behind (1), next state (1-2).
+       - Net shorter than R823's.
+     - The head path: tag 4:1 mux, interlace mux, subtract, +vtotal, compare
+       > 3, then pop. That is the same depth as R823's, perhaps one LUT more
+       for the 10-bit compare.
+     - If it fails, rg_nd and rg_hd_d can be registered: their inputs change
+       at most once a line or a render. That moves decisions by a cycle and
+       breaks the exact miter, so re-measure if it is done.
+  d. Area (no Quartus):
+     - Added: +19 registers (rg_lp, rg_wp, rg_lpar), ~+25-45 ALUT.
+     - Removed (LB_RING 1):
+       - The interlace swap fallback.
+       - R823's rg_want subtract/compare.
+       - m2_video_timing's line_number logic, which nothing reads any more.
+     - Estimate ~+0-30 ALM, 0 M10K.
+  e. With the ring, tile RAM writes landing mid-field show up to 3 rows
+     later, as R823 d said for progressive.
+
+*Not verified:* quartus_map / fit (ALM, clk_mem slack) and the board, in
+either 15 kHz mode. A Quartus constant-fold check of the new arithmetic was
+not run (no map allowed). It is plain unsigned arithmetic and size casts, not
+the signed-cast idiom of R662.

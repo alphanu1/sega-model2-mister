@@ -67,8 +67,15 @@ module m2_video #(
   // pay for the dear one.
   //
   // Free in M10K: each (layer, lane) memory goes from 256 x 15 to 512 x 15,
-  // still one block (512 x 20 mode). Only progressive scan uses the ring;
-  // interlaced (R682) keeps the swap, in the same 2-bit bank registers.
+  // still one block (512 x 20 mode).
+  //
+  // R824: AND 15 kHz INTERLACED (R682, R783) TOO, which R823 left on the
+  // swap. The ring works in DISPLAY ORDER: progressive, the line itself in a
+  // 424-line frame; interlaced, the field's row (vcnt) in a field of
+  // vtotal lines, the line rendered being 2 * row + the field's parity. The
+  // next line after a field's last visible row is row 0 of the NEXT field,
+  // so the ring renders the next field's first rows in this one's blanking
+  // exactly as it renders lines 0-2 in the progressive frame's.
   //
   // Lines in vertical blanking are not rendered in ring mode, and an overrun
   // is counted only for a VISIBLE line whose buffer was not ready at its
@@ -239,6 +246,7 @@ module m2_video #(
   logic       hblank, vblank, visible, line_start, vblank_start;
   logic       hsync_i, vsync_i;
   logic [8:0] line_number;
+  logic [9:0] vtotal;       // R824: this field's (frame's) line count
 
   m2_video_timing timing (
     .clk(clk), .ce_pix(ce_pix), .rst_n(rst_n),
@@ -247,7 +255,8 @@ module m2_video #(
     .hsync(hsync_i), .vsync(vsync_i), .visible(visible),
     .line_start(line_start), .line_number(line_number),
     .vblank_start(vblank_start),
-    .interlace(interlace), .ntsc_lines(ntsc_lines), .field(vid_field), .ypos()   // R682, R783
+    .interlace(interlace), .ntsc_lines(ntsc_lines), .field(vid_field), .ypos(),  // R682, R783
+    .vtotal(vtotal)                                                                // R824
   );
 
   assign vblank_irq  = vblank_start;
@@ -553,25 +562,82 @@ module m2_video #(
   );
 
   // ------------------------------------------------ R823 ring bookkeeping
-  // Distances are in display order, modulo the 424-line frame. The renderer
-  // never gets more than a few lines ahead or behind, so a distance of 256 or
-  // more means "behind".
-  localparam logic [9:0] VT = 10'd424;
-  function automatic logic [9:0] ldist(input logic [8:0] a, input logic [8:0] b);
+  // Distances are in display order, modulo the frame -- or, interlaced, the
+  // field (R824). The renderer never gets more than a few lines ahead or
+  // behind, so a distance of half the modulus or more means "behind": 256 of
+  // 424, and 128 of 262-274 (a field's blanking is 70-82 rows, and the ring
+  // waits there at most that far ahead of its next line).
+  function automatic logic [9:0] ldist(input logic [8:0] a, input logic [8:0] b,
+                                       input logic [9:0] m);
     logic [9:0] t;
     t = {1'b0, a} - {1'b0, b};
-    ldist = t[9] ? t + VT : t;
+    ldist = t[9] ? t + m : t;
   endfunction
-  wire        ring_on   = LB_RING && !interlace;
-  // The line the next line_start will show: line_number names the line to
-  // RENDER, two ahead of the beam, so the one displayed next is one before it.
-  wire [8:0]  rg_want   = (line_number == 9'd0) ? 9'd423 : line_number - 9'd1;
-  wire [9:0]  rg_nd     = ldist(rg_nl, line_number);
-  wire        rg_go     = (rg_nd <= 10'(RING_LEAD)) || (rg_nd == VT - 10'd1);
-  wire        rg_behind = (rg_nd >= 10'd256) && (rg_nd != VT - 10'd1);
-  wire [8:0]  rg_htag   = rg_tag[rg_hd];
-  wire        rg_hhit   = (rg_cnt != 2'd0) && (rg_htag == rg_want);
-  wire        rg_hstale = (rg_cnt != 2'd0) && (ldist(rg_htag, rg_want) >= 10'd256);
+  wire        ring_on   = LB_RING;
+  // R824: THE LINE-DERIVED TERMS ARE REGISTERS. They are functions of vcnt
+  // and the field, which change only at line_start, so each is loaded AT
+  // line_start with its value for the line after it -- computed from the
+  // line before -- and is then equal, every cycle, to what line_number and
+  // vcnt give combinationally (R823's form). That takes vcnt's +2, the
+  // compare with the total and the wrap out of the distance path R823
+  // counted ~10 levels deep, and changes nothing a cycle sees: progressive
+  // scan is cycle-for-cycle R823 (a miter of the two, below in R824).
+  //   rg_lp  line_number's display position: the line (progressive) or the
+  //          field row (interlaced) two ahead of the beam
+  //   rg_lpar  interlaced: the parity of the field that row belongs to
+  //   rg_wp  the position the next line_start will show, rg_lp - 1 -- which
+  //          is the rg_lp of the line before, so it is simply rg_lp delayed
+  // After a frame or field of N lines the beam's next line is (vcnt+1) mod N,
+  // so line_number's is (vcnt + 3) mod N in the field being left -- correct
+  // across the field boundary, where rows 0-1 of the next field are reached.
+  logic [8:0] rg_lp, rg_wp;
+  logic       rg_lpar;
+  wire  [9:0] rg_v3   = vcnt + 10'd3;
+  wire  [8:0] rg_v3w  = 9'(rg_v3 - vtotal);   // < 512 whenever it is used
+  wire        rg_v3ge = (rg_v3 >= vtotal);
+  wire  [8:0] rg_lpn  = rg_v3ge ? rg_v3w : rg_v3[8:0];
+  wire        rg_vis_w = interlace ? (rg_wp < 9'd192) : (rg_wp < 9'd384);
+  // The line the next line_start will show, as the line number a tag holds.
+  wire  [8:0] rg_want = interlace ? {rg_wp[7:0], rg_lpar} : rg_wp;
+  // Where to resume after falling behind: line_number, or the first line of
+  // the next frame (field) when line_number is in blanking.
+  wire  [8:0] rg_skip = !interlace ? ((rg_lp >= 9'd384) ? 9'd0 : rg_lp)
+                      : (rg_lp < 9'd192) ? {rg_lp[7:0], rg_lpar} : {8'd0, ~vid_field};
+  // Display positions of the next line to render and of the FIFO head.
+  wire  [8:0] rg_nlp  = interlace ? {1'b0, rg_nl[8:1]} : rg_nl;
+  wire  [8:0] rg_htag = rg_tag[rg_hd];
+  wire  [8:0] rg_hp   = interlace ? {1'b0, rg_htag[8:1]} : rg_htag;
+  wire  [9:0] rg_nd     = ldist(rg_nlp, rg_lp, vtotal);   // how far ahead the next line is
+  wire  [9:0] rg_hd_d   = ldist(rg_hp, rg_wp, vtotal);    // ... and the FIFO head
+  // R824: WHAT THE RING CAN REACH, AND EVERYTHING ELSE IS "BEHIND". A line
+  // starts no more than RING_LEAD ahead of line_number (one more than that
+  // ahead of the line shown next), so a finished line's tag, and rg_nl after
+  // it, are never more than RING_LEAD + 1 ahead -- except rg_nl at the first
+  // line of the next frame (field), which waits there through the blanking.
+  // R823 called only a distance of half the frame "behind"; any other
+  // distance was unreachable, so the tighter test changes nothing in steady
+  // state (the progressive miter in R824 is cycle-exact), but a mode change
+  // leaves tags and rg_nl in the other mode's numbering -- interlaced to
+  // progressive reads row r as line ~2r, ~100 lines AHEAD -- and the head
+  // then blocked the FIFO for ~100 lines. Now it is dropped at once.
+  wire        rg_far_n  = interlace ? (rg_nd[9:7] != 3'd0)   : (rg_nd[9:8] != 2'd0);
+  wire        rg_ahead  = (rg_nd <= 10'(RING_LEAD));
+  wire        rg_go     = rg_ahead || (rg_nd == vtotal - 10'd1);
+  wire        rg_behind = ((rg_nlp == 9'd0) ? rg_far_n : (rg_nd > 10'(RING_LEAD + 1)))
+                          && (rg_nd != vtotal - 10'd1);
+  wire        rg_hhit   = (rg_cnt != 2'd0) && (rg_htag == rg_want) && rg_vis_w;
+  // Interlaced, the field a row is rendered for comes from the beam, not
+  // from rg_nl: line_number's field, or the next one when the row is ahead of
+  // line_number across the field boundary. A parity carried in rg_nl from
+  // line to line holds only while the fields alternate, and they do not
+  // when a mode change lands past the new total: vcnt runs on to 1,023 and
+  // wraps with the field bit unchanged. The ring then falls "behind" and
+  // re-seeds rg_nl from the beam anyway (rg_skip), so a carried parity also
+  // recovered in the bench (R824); deriving it costs a compare and does not
+  // depend on that.
+  wire        rg_npar   = rg_lpar ^ (rg_ahead && (rg_nlp < rg_lp));
+  wire  [8:0] rg_line   = interlace ? {rg_nl[8:1], rg_npar} : rg_nl;
+  wire        rg_hstale = (rg_cnt != 2'd0) && (rg_hd_d > 10'(RING_LEAD + 1));
   // The next free bank follows the FIFO, except when the FIFO is empty and
   // its head has come round to the displayed bank -- which happens when late
   // lines are dropped (rg_hstale) while the display repeats a line. Then the
@@ -582,6 +648,18 @@ module m2_video #(
   wire        rg_room   = (rg_cnt <= 2'd2) && (rg_free != rg_rb);
   wire        rg_pop    = ring_on && ((line_start && rg_hhit) || (!line_start && rg_hstale));
   wire        rg_push   = ring_on && (q == Q_NEXT) && (cur_layer == 2'd3);
+
+  // Loaded at line_start, as vcnt is. Reset: vcnt 0 of field 0, so line_number
+  // is line (row) 2 of field 0 and the next line shown is 1.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rg_lp <= 9'd2; rg_wp <= 9'd1; rg_lpar <= 1'b0;
+    end else if (line_start) begin
+      rg_lp   <= rg_lpn;
+      rg_wp   <= rg_lp;      // line_number steps by one a line, mod the total
+      rg_lpar <= vid_field ^ rg_v3ge;
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -604,7 +682,7 @@ module m2_video #(
       end
       if (rg_push) rg_tag[rg_wb] <= cur_line;
       rg_cnt <= rg_cnt + {1'b0, rg_push} - {1'b0, rg_pop};
-      if (ring_on && line_start && !rg_hhit && (rg_want < 9'd384)
+      if (ring_on && line_start && !rg_hhit && rg_vis_w
           && !(&ovr_acc)) begin
         // A visible line whose buffer is not ready: the bank is not
         // changed and the line before is shown again, as in Q_RUN below.
@@ -626,26 +704,16 @@ module m2_video #(
             // line is within RING_LEAD of line_number; skip ahead when the
             // renderer has fallen behind the beam.
             if (rg_room && rg_go) begin
-              cur_line    <= rg_nl;
+              cur_line    <= rg_line;
               cur_layer   <= 2'd0;
               dbg_fetches <= '0;
               rg_wb       <= rg_free;
               if (rg_cnt == 2'd0) rg_hd <= rg_free;   // keeps rg_hd + rg_cnt == rg_wb
               q           <= Q_HSCR;
             end else if (rg_behind) begin
-              rg_nl <= (line_number >= 9'd384) ? 9'd0 : line_number;
+              rg_nl <= rg_skip;
             end
-          end else if (LB_RING && line_start) begin
-            // Interlaced: the two-bank swap, on the ring's registers.
-            cur_line    <= line_number;
-            cur_layer   <= 2'd0;
-            dbg_fetches <= '0;
-            rg_rb       <= rg_wb;
-            rg_wb       <= rg_wb + 2'd1;
-            rg_hd       <= rg_wb + 2'd2;
-            rg_cnt      <= 2'd0;
-            q           <= Q_HSCR;
-          end else if (!LB_RING && line_start) begin
+          end else if (line_start) begin
             // Only reached when the previous line finished in time. If it did
             // not, the sequencer is still in Q_RUN and this edge is ignored —
             // see the overrun note on Q_RUN.
@@ -794,7 +862,10 @@ module m2_video #(
           seq_owns_tram <= 1'b1;
           if (cur_layer == 2'd3) begin
             q <= Q_IDLE;
-            if (ring_on) rg_nl <= (cur_line >= 9'd383) ? 9'd0 : cur_line + 9'd1;
+            // R824: interlaced, the next row of this field (+2), or after
+            // its last visible row (191) row 0 of the next field.
+            if (ring_on) rg_nl <= !interlace ? ((cur_line >= 9'd383) ? 9'd0 : cur_line + 9'd1)
+                                 : (cur_line[8:1] >= 8'd191) ? {8'd0, ~cur_line[0]} : cur_line + 9'd2;
           end
           else begin
             cur_layer <= cur_layer + 2'd1;

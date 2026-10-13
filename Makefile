@@ -719,6 +719,8 @@ obj_m2_vf/Vm2_video: $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
 # glyph cache and a port-3 latency model: pixel equivalence wherever neither
 # overran, and overruns per frame by latency. Synthetic scenes; MAME dumps
 # from sim/video/mame_m2_ovrdump.lua via TEST_ARGS=+burst=<dir>.
+# R824: in all three video modes (native, 15 kHz 273.5 and 262.5 lines a
+# field), and across a mid-frame mode change.
 test_m2_video_ovr: obj_m2_vovr/Vm2_video_ovr_top obj_m2_vovr_ns/Vm2_video_ovr_top
 	@echo "== test m2_video ring (LB_RING 1) against the shipped path"
 	@./obj_m2_vovr/Vm2_video_ovr_top $(TEST_ARGS)
