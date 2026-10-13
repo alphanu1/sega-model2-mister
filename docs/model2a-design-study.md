@@ -33696,3 +33696,6 @@ Tools (sm2-builds/mipmaps/tools/mipwhite/, local): railan.c (per-pixel MAME
 and R828a levels), lvcount.c / rules*.py / final_sweep.py (the sweep),
 lev.py / chain.py (level images), kspread.c (edge K range), build.sh / run.sh
 (the core-config bench), nav.lua / att.lua (MAME menus and attract).
+RELEASE CANDIDATE CONFIG: MIP 1 with the Mip-mapping menu (Sharp default)
+and R826_STEP (depth 2) are now ON in Model2.sv on headroom -- the release
+build is the branch head itself.

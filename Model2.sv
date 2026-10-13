@@ -245,7 +245,7 @@ localparam CONF_STR = {
 	// Commented out while .MIP below is 0: the line changes CONF_STR and so
 	// hps_io's logic, and a MIP 0 build stays bit-identical without it.
 	// Uncomment it together with .MIP(1'b1).
-	//"O[53:52],Mip-mapping,Sharp,Medium,Smooth,Off;",
+	"O[53:52],Mip-mapping,Sharp,Medium,Smooth,Off;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
@@ -3198,7 +3198,7 @@ localparam bit R826_HSCR   = 1'b0;   // m2_video HSCR_FIX: hscr_r read from its 
 // chosen by the list they are for (r826_ttag), not by counting flips -- right
 // across a step that takes two vblanks, and one vblank of 3D lateness without
 // the tile-RAM fallback. Needs R826_SYNC (and R826_STRICT).
-localparam bit          R826_STEP  = 1'b0;
+localparam bit          R826_STEP  = 1'b1;
 localparam int unsigned R826_DEPTH = 2;   // copies (2 or 3)
 m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
@@ -6335,7 +6335,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
               .TXLW8(1'b1), // R787/R796: 128-bit texel lines, eight-word reads on all four miss ports
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
-              .MIP(1'b0),       // R828: mip levels from each quad's edge footprint -- off until the board has seen it
+              .MIP(1'b1),       // R828: mip levels from each quad's edge footprint -- off until the board has seen it
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
