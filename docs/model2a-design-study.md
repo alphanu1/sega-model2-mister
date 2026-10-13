@@ -32813,3 +32813,156 @@ a grazing angle, the compressed depth axis drops the near road to a blurry
 level (the classic isotropic-mip failure on oblique surfaces). MIP stays 0 on
 the branch. Next: measure minor-axis / log-average / anisotropy-clamped rules
 and a bias, and expose the bias as an OSD choice with Off.
+
+**R830 -- THE SLIDE-REVERSAL SNAP IS THE GAME'S OWN RESPONSE TO HOW FAST THE
+STEERING MOVES. NO OPERATION ON THE YAW PATH IS EMULATED WRONGLY.**
+
+What was believed (Ben, and af5c71a's note under R826): the game smooths its
+camera (car+0x2a = car+0x48 + ((car+0x58 - car+0x48) >> 2) + (car+0xbc >> 5)),
+so a snap means a term feeding it changes discontinuously -- most likely
+car+0xbc -- because MAME gets an op on the physics path wrong (TGP or i960 FP,
+e.g. at the zero crossing of the slide angle), and this core copies MAME.
+
+How it was checked: MAME 0.289, Daytona Revision A, Lua drives with the
+paddle set per frame. Per frame: the player car's whole struct
+(car = [0x501220], 0x000-0x2fc), 0x5018a0-ac, the shake 0x501834 and Y
+0x5014a8. Write taps (with PC) on car+0xbc/0x128/0x18c/0x18e and the analog
+block 0x5fe5d0. Taps on the TGP function port 0x880000 and FIFO 0x884000
+(writes and reads, with the i960 PC and g13 = the player car), so every TGP
+call of the yaw code is logged with its arguments and result. The drive:
+straight, pedal 224, wheel to 40 at frame 2780 (slide one way), then to 216
+from 2810 at 176 (one frame), 44, 22, 11 or 6 ADC counts a frame, centre at
+2850. Scripts and logs are scratch (ROM-derived output), not committed.
+
+VERIFIED (MAME, Revision A):
+
+THE CODE PATH, per car, per step (in this order):
+  * car+0xbc, steering: 0xf064. bc += (T - bc) / 2, T = (adc - 0x80) * 384
+    clamped to +-32512 (full lock at |adc - 0x80| >= 85). adc is the steer
+    byte, adc << 8 in 0x5fe5d0's low half (accel in its high half, brake at
+    0x5fe5d4), written once a step at 0x1dab4/0x1dacc. T fits the logged
+    steps exactly with no averaging (0x54 -> -16896, 0xd8 -> 32512), so the
+    R826 addendum's "4-sample box filter" at 0x5fe5d0 looks like four
+    channels, not four samples -- worth a second look before it is relied
+    on.
+  * car+0x128 = -bc >> 3, the front wheel angle: 0xfd50-0xfd5c.
+  * 0xffe8-0x102d8, the yaw. g0 = 128 + 18c + r7, g1 = 18e + r7, g2 = g0 - g1,
+    r7 = +-0x4000 picked by the sign of (128 + 18c - 18e) (0x10000). TGP
+    calls (function numbers are the game's TGP program): 1d = r sin a,
+    1e = r cos a, 1b = sin a (a a 16-bit angle), 03 = a / b, 02 = a * b,
+    0a = atan2 in 16-bit angle units, 24-29/25 an accumulate chain (v / R x
+    65536/2pi). R = wheelbase 2.75 / sin(g2) is the turning radius; 0a gives
+    the travel direction g5; slip = g5 - r7 (or g0 when g1 == g0, straight).
+    Heading car+0x58 += cvtri(v / R) (0x101c0-0x101cc); car+0x48 = heading +
+    slip (0x10204-0x10214); car+0x2a as above (0x102b4-0x102d8).
+  * 0x10454-0x10820, after the yaw: 18e (rear, 0x10624/0x1081c) and 18c
+    (front, 0x107a8) are recomputed from the NEW 128.
+  So the yaw step sees 128 of THIS step against 18c of the LAST step: the
+  front-rear angle it builds the turning centre from carries the whole of
+  this step's steering change, Delta128 = Delta(bc)/8.
+
+THE REVERSAL, one-frame swing (adc 40 -> 216 at 2810; yaw units, 65536 a
+turn, 32 = 1 px of backdrop):
+  frame  bc      128   18c   18e   h58    h48   slip  bc>>5  2a     rate | d(h48) d(q) d(bc>>5)
+  2811  -32512  4064 -4860 -1066   -185  -1207 -1022 -1016  -1968   159 |   181   -22     0
+  2812  -24704  3088 -3712  -887   -425  -1845 -1420  -772  -2262  -294 |  -638   100   244
+  2813    3904  -488  -111  -631  -1585  -4195 -2610   122  -3421 -1159 | -2350   297   894
+  2814   18208 -2276  1474  -375  -2185  -3705 -1520   569  -2756   665 |   490  -272   447
+  2815   25360 -3170  2516  -119  -2634  -3673 -1039   792  -2622   134 |    32  -121   223
+  2816   28936 -3617  3221   137  -2967  -3578  -611   904  -2522   100 |    95  -107   112
+  (rate = d(2a) a frame; q = (h58 - h48) >> 2. car+0xf2 and the shake are 0
+  throughout, so Y = 2a.) The view turns +159 a frame, then -294, -1159,
+  +665: a 6.4-degree jump in one frame and back. In step 2813 the yaw code
+  saw front-rear = 128 + 18c_old - 18e = -488 - 3712 + 887 = -3313 (steady
+  value ~+280, plus Delta128 = -3576): TGP 1b(-3313) = -0.3123, R =
+  03(2.75, -0.3123) = 8.77 (102 the step before), 0a -> g5 = -18994, and the
+  heading itself stepped -1160. With 18c caught up, front-rear is back to
+  -1756, -1321, -982.
+  The slide onset (adc 128 -> 40) shows the same: rate 59, 266, 699, -39,
+  -246 (the R826 addendum's 229/655/-71/-297).
+
+THE SAME REVERSAL AT FIVE STEERING SPEEDS (frames 2806-2849; "jerk" = the
+largest change of yaw rate between consecutive frames):
+  lock-to-lock     adc/frame   jerk   max |rate|
+  1 frame             176      1824     1159
+  4 frames             44       507      385
+  8 frames             22       324      359
+  16 frames            11       127      239
+  30 frames             6        69      178
+  For scale, a steady t100 corner has frame-to-frame rate changes of <= 3,
+  and R826 counted >= 128 as a visible 4 px step. At 16 frames (0.27 s) the
+  rate goes 159 101 43 109 173 208 199 176 141 14 -84 -130 ... : the view
+  sweeps across. At 1 frame it reverses in a frame and kicks back.
+
+THE OPERATIONS ON THE PATH, against exact arithmetic (every TGP call of
+0xffe8-0x102e0 for 95 frames, finite results):
+  02 a*b      190 calls, rel err <= 5.9e-8
+  03 a/b      178 calls, rel err <= 1.8e-7
+  1b sin      190 calls, abs err <= 2.9e-8
+  1d r sin    279 calls, rel err <= 1.0e-7
+  1e r cos    273 calls, rel err <= 7.9e-8
+  0a atan2     95 calls, err <= 1.04 angle units (0.006 degree)
+  All are single-precision accurate. 0a is continuous through its x = 0
+  crossing (0a(-0.878,-37.85) = -16625, 0a(0.255,-44.59) = -16325,
+  0a(1.380,-48.98) = -16091), and the r7 = +-0x4000 side flip is
+  continuous: in the 16-frame swing the flip (front-rear 135 -> -112, step
+  2814) moves the rate 101 -> 43 -> 109, nothing more. The spike starts
+  before any TGP call, in the i960's INTEGER adds of stored game state
+  (128 + 18c + r7), so no FP or TGP rounding can make or remove it.
+  i960 AC in the race = 0x3f001001: rounding mode 0, all FP faults masked.
+  MAME's mode 0 is C round() (half away from zero); IEEE 754 round to
+  nearest, which the i960KB claims, is half to even (the manual was not
+  re-read for this). This core copies MAME (i960_fpmisc.sv) -- a real
+  deviation, but it touches exact .5 ties only, <= 1 unit of heading, not
+  this.
+  Straight-line case: front == rear, so sin 0 = 0, R = 2.75/0 = inf, and the
+  chain ends in NaN; cvtri(NaN) gives 0x80000000 (MAME, x86), whose low 16
+  bits add 0 to the heading; the slip takes the g0 path. What the real TGP
+  does with x/0 (its reciprocal table at exponent 0) is unknown, but any
+  difference shows only when front == rear exactly, not in a reversal.
+
+INPUTS, as the game sees them:
+  * MAME gave one intermediate sample at the one-frame swing: the steer byte
+    read 0x28, 0x54, 0xd8 -- 0x54 is exactly a quarter of the way, which
+    fits MAME interpolating an analog port within the frame (inferred, not
+    read in MAME's source).
+  * This core (Model2.sv ~5055): the stick goes straight to the ADC byte;
+    the d-pad "ramp" steps 1 count every 1024 clk_sys -- rail to rail
+    (190 counts) in ~3 ms at 60 MHz, i.e. one game step. Its comment says it
+    ramps "so the wheel sweeps as a real one would"; to the game it is the
+    1-frame row above. (Model 1's core sends the d-pad straight to full
+    lock, tools/model1-ref/Model1.sv:347, so this matches the oracle's
+    choice; it does not match the comment.)
+
+INFERRED (not measured on the board or the arcade):
+  * The arcade "mostly sweeps" because a cabinet wheel cannot go lock to
+    lock in one or two frames: it has travel, a return spring and the drive
+    board's motor (sj25_0207_01; MAME leaves its output unconnected, which
+    changes nothing the game computes). A pad's stick or d-pad can. The
+    game's camera follows the steering twice -- directly through bc >> 5
+    (11 degrees lock to lock, halving lag) and through the turning-centre
+    spike above -- so the snap is proportional to the steering speed, on
+    any hardware.
+  * This predicts the same snap on the arcade with a fast enough hand, and
+    a sweep in MAME / the recomp / this core with a slow one. Ben's three
+    emulators agreeing is what one game program fed by fast pad inputs
+    would give; it does not need a shared emulation error.
+  * MAME's keyboard steering ramps (KEYDELTA 10 on 0x20-0xe0), so a
+    keyboard should look closer to the arcade than a stick flick. Not
+    checked.
+
+Nothing in the RTL was changed. No emulation error was found, so there is
+nothing to put behind a parameter, and tgp_replay_check's baseline is
+unaffected.
+
+NEXT:
+  1. Ben: say what steered in each test (pad stick, d-pad, keyboard, wheel)
+     and repeat one reversal on the core with the stick moved slowly
+     (~1/4 s lock to lock). A sweep confirms this entry; a snap at that
+     speed refutes it.
+  2. If wanted: an optional steering slew limit in Model2.sv's input path
+     (OSD, default off), max ~11 ADC counts a frame for a wheel-like sweep
+     (jerk 1824 -> 127 above). It costs pad players steering latency
+     (16 frames lock to lock), so it is a taste switch, not a fix.
+  3. Separately: the i960 round-half-even vs MAME's half-away (above) is a
+     real deviation with no known symptom; record, do not chase.
