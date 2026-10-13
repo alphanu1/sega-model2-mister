@@ -166,6 +166,9 @@ int main(int argc, char **argv) {
   d->tex_bilinear = std::getenv("M2_R3D_POINT") ? 0 : 1;
   // R650: the texel step, log2 (0-3 for 1/2/4/8); default 2, PIXSTEP 4
   d->tex_pxk = std::getenv("M2_R3D_PXK") ? std::atoi(std::getenv("M2_R3D_PXK")) : 2;
+  // R828b: the mip rule in a MIP build (0 Off, 1 Smooth, 2 Medium, 3 Sharp);
+  // 0 unless M2_R3D_MIPMODE says, so a MIP build with no setting draws level 0
+  d->tex_mip_mode = std::getenv("M2_R3D_MIPMODE") ? std::atoi(std::getenv("M2_R3D_MIPMODE")) : 0;
   d->fb_test = 0;   // R653: set by M2_R3D_FBTEST below
   d->fb_pace = std::getenv("M2_R3D_PACE") ? std::atoi(std::getenv("M2_R3D_PACE")) : 0;   // R656
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;

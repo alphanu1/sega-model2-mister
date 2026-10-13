@@ -707,7 +707,8 @@ static int lq_m(uint32_t v) {
   int f = m >= 2 ? int((v >> (m - 2)) & 3) : int((v << (2 - m)) & 3);
   return 4 * m + f;
 }
-struct MipQuad { int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4]; int mode, K, Kmax; };
+struct MipQuad { int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4]; int mode, K, Kmax, Kmin; uint32_t tex = 1; };
+static const bool MIP_CLASS = getenv("M2_MIP_CLASS") != nullptr;   // R828b: only the class quads (a diagnostic)
 static void mip_gen(long n, std::mt19937 &rng, MipQuad &q) {
   const int ebase = 100 + int(rng() % 40);
   for (int i = 0; i < 4; i++) {
@@ -720,6 +721,35 @@ static void mip_gen(long n, std::mt19937 &rng, MipQuad &q) {
   if ((n % 5) == 0) { q.X[3] = q.X[2]; q.Y[3] = q.Y[2]; q.U[3] = q.U[2]; q.V[3] = q.V[2]; q.MF[3] = q.MF[2]; }
   if ((n % 3) == 0) q.MF[rng() & 3] = uint16_t((ebase - 9 - int(rng() % 10)) << 8 | (rng() & 0xff));   // 9..23 octaves deeper: around the 16 limit
   if ((n % 13) == 0) q.MF[rng() & 3] = 0;                // 1/z of zero
+  // R828b: THE CLASS s1068 DREW WHITE, as m2_geometry presents it (MAME
+  // 0.289 M2MIP dumps, u/v in quarter-texels after the R609 rebase): a far
+  // panel of the wooden fence (f2000 poly 507, 64x256 translucent, 2 px wide
+  // and 7 tall for 64 x 256 texels -- level 5 by the footprint) and the
+  // car's window frame (f5000 poly 130, 64x128 translucent). Their K is the
+  // fill's as for any quad; m2_span_tex holds such textures at level 1.
+  if (MIP_CLASS || (n % 11) == 5) {
+    static const int32_t FX[2][4] = {{160, 160, 162, 162}, {225, 228, 267, 270}};
+    static const int32_t FY[2][4] = {{195, 188, 189, 195}, {266, 222, 222, 266}};
+    static const uint32_t FU[2][4] = {{256, 0, 0, 256}, {256, 0, 0, 256}};
+    static const uint32_t FV[2][4] = {{0, 0, 1024, 1024}, {128, 128, 384, 384}};
+    static const uint16_t FM[2][4] = {{0x78b2, 0x78b2, 0x788a, 0x7889}, {0x7db7, 0x7d69, 0x7d69, 0x7db7}};
+    const int c = int((n / 11) & 1);
+    for (int i = 0; i < 4; i++) { q.X[i] = FX[c][i]; q.Y[i] = FY[c][i]; q.U[i] = FU[c][i]; q.V[i] = FV[c][i]; q.MF[i] = FM[c][i]; }
+    q.tex = c ? (1u | (1u << 1) | (2u << 4) | (1u << 8) | (1u << 12) | (16u << 13))
+              : (1u | (1u << 1) | (3u << 4) | (1u << 8) | (1u << 12) | (28u << 13) | (8u << 19));
+  } else q.tex = 1;
+  // R828b: THE WIDEST EDGE SPREAD THE FILL CAN MAKE -- a sliver with one edge
+  // of 8,191 quarter-texels over one pixel at the nearest 1/z (edge K ~289)
+  // and one of a quarter-texel over 600 pixels 15 octaves deeper (76):
+  // Sharp's and Medium's max - (max - min) >> s must still be <= the max and
+  // >= the min (a 10-bit wrap would make the 'sharper' level the deepest).
+  if ((n % 17) == 8) {
+    const int e = 100 + int(rng() % 40);
+    const int32_t X[4] = {0, 1, 600, 0}, Y[4] = {0, 0, 300, 299};
+    const uint32_t U[4] = {0, 8191, 8190, 8190}, V[4] = {0, 0, 1, 2};
+    const uint16_t M[4] = {uint16_t(e << 8 | 0xff), uint16_t(e << 8 | 0xff), uint16_t((e - 15) << 8), uint16_t((e - 15) << 8)};
+    for (int i = 0; i < 4; i++) { q.X[i] = X[i]; q.Y[i] = Y[i]; q.U[i] = U[i]; q.V[i] = V[i]; q.MF[i] = M[i]; }
+  }
   // the OSD: Off an eighth of the time, the three rules alike otherwise
   const int r = int(rng() % 8);
   q.mode = r == 0 ? 0 : 1 + int(r % 3);
@@ -739,7 +769,7 @@ static void mip_gen(long n, std::mt19937 &rng, MipQuad &q) {
     const int ke = lq_m(dt) - lq_m(ds) + la + lb + 120;
     Kx = std::max(Kx, ke); Kn = std::min(Kn, ke);
   }
-  q.Kmax = Kx;
+  q.Kmax = Kx; q.Kmin = Kn;
   q.K = (q.mode == 0 || Kx == -512) ? -512 : q.mode == 3 ? Kx - ((Kx - Kn) >> 1) : q.mode == 2 ? Kx - ((Kx - Kn) >> 2) : Kx;
 }
 static void mip_present(Vm2_raster_fill* d, const MipQuad &q) {
@@ -748,20 +778,26 @@ static void mip_present(Vm2_raster_fill* d, const MipQuad &q) {
   d->in_u0 = q.U[0]; d->in_v0 = q.V[0]; d->in_u1 = q.U[1]; d->in_v1 = q.V[1];
   d->in_u2 = q.U[2]; d->in_v2 = q.V[2]; d->in_u3 = q.U[3]; d->in_v3 = q.V[3];
   d->in_oz0 = q.MF[0]; d->in_oz1 = q.MF[1]; d->in_oz2 = q.MF[2]; d->in_oz3 = q.MF[3];
-  d->in_frac = 0; d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = 1;
+  d->in_frac = 0; d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = q.tex;   // R828b: the class's header
 }
 static void test_mip(Vm2_raster_fill* d, std::mt19937 &rng) {
   printf("test: R828/R828a, the quad's mip bias (the edge K's max, less 0, 1/4 or 1/2 of the spread)\n");
   auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
   const long N = getenv("M2_MIP_N") ? atol(getenv("M2_MIP_N")) : 4000;
   d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
-  long seen = 0, spans = 0, bad = 0, none = 0, off = 0, differs = 0;
+  long seen = 0, spans = 0, bad = 0, none = 0, off = 0, differs = 0, cls = 0, bad_rng = 0, spread_max = 0;   // R828b
   auto check = [&](long n, const MipQuad &q, bool &got) {
     if (!(d->span_valid && d->span_ready && d->span_tex_en)) return;
     ++spans;
-    if (!got) { got = true; ++seen; if (q.Kmax == -512) ++none; if (!q.mode) ++off; if (q.K != q.Kmax && q.mode) ++differs; }
+    if (!got) { got = true; ++seen; if (q.Kmax == -512) ++none; if (!q.mode) ++off; if (q.K != q.Kmax && q.mode) ++differs; if (q.tex != 1) ++cls; }
     const int k = int(int16_t(uint16_t(d->span_mipk) << 6) >> 6);
     if (k != q.K) { if (bad++ < 6) printf("  FAIL R828a quad %ld: span_mipk %d want %d (max %d, mode %d)\n", n, k, q.K, q.Kmax, q.mode); }
+    // R828b: whatever the formula says, the RTL's K for Medium / Sharp lies in
+    // [the edge min, the edge max], and the spread fits (s1068: rails white)
+    if (q.mode >= 2 && q.Kmax != -512) {
+      spread_max = std::max(spread_max, long(q.Kmax - q.Kmin));
+      if (k > q.Kmax || k < q.Kmin) { if (bad_rng++ < 6) printf("  FAIL R828b quad %ld: span_mipk %d outside [%d, %d] (mode %d)\n", n, k, q.Kmin, q.Kmax, q.mode); }
+    }
   };
   // one at a time
   for (long n = 0; n < N; n++) {
@@ -807,9 +843,13 @@ static void test_mip(Vm2_raster_fill* d, std::mt19937 &rng) {
   }
   printf("  R828a: %ld quads x 2, %ld textured with a span (%ld no usable edge, %ld Off, %ld K != the max), %ld spans checked, %ld wrong\n",
          N, seen, none, off, differs, spans, bad);
+  printf("  R828b: %ld of them the fence / window-frame quads; widest edge spread %ld (10-bit K: wraps past 511); K outside [min, max]: %ld\n", cls, spread_max, bad_rng);
+  tex_fails += bad_rng;
+  if (spread_max < 200) { printf("  FAIL R828b: the widest spread was not reached (%ld)\n", spread_max); ++tex_fails; }
+  if (cls < N / 20) { printf("  FAIL R828b: the class quads barely drew (%ld)\n", cls); ++tex_fails; }
   tex_checks += spans + 1; tex_fails += bad;
   if (seen < N / 2) { printf("  FAIL R828: only %ld quads drew\n", seen); ++tex_fails; }
-  if (differs < seen / 3) { printf("  FAIL R828a: the mean and bias barely exercised (%ld)\n", differs); ++tex_fails; }
+  if (!MIP_CLASS && differs < seen / 3) { printf("  FAIL R828a: the mean and bias barely exercised (%ld)\n", differs); ++tex_fails; }
   d->in_tex = 0; d->mip_mode = 3;
 }
 #endif

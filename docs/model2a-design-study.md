@@ -33507,3 +33507,192 @@ car-select reflection) -- for the alignment check with Mip-mapping Off.
 R831 (cont., Ben): the Right stick labels were unclear -- "Steering" meant
 pedals AND steering. Now "Right stick: Pedals only (default) / Pedals+steer"
 (short: the OSD shows ~28 characters a line). Release README updated.
+
+R828 ADDENDUM (draft) -- R828b: THE WHITE GUARD RAILS ARE THE GAME'S OWN SMALL
+MIP LEVELS. A TRANSLUCENT TEXTURE'S 4- AND 2-TEXEL LEVELS ARE BOX AVERAGES
+THAT COUNT THE TRANSPARENT NIBBLE AS A COLOUR, SO A FENCE TURNS INTO A SOLID
+LIGHT PANEL THERE. THE FETCH IS RIGHT; THE DEEPEST LEVEL IS NOW THE ONE
+WHOSE SMALLER SIDE IS 32 TEXELS (TRANSLUCENT) OR 16 (OPAQUE). NOT BUILT.
+
+(Section: §10, R828 and its addenda. Authority: MAME 0.289 model2rd.ipp for
+the addressing; the game's texture RAM as MAME holds it for the level
+content. Model 1 has no mip.)
+
+*Believed (R828, R828a):*
+  1. The levels are in the sheets where MAME addresses them, each a halved
+     copy of level 0, down to the 2x2 level (R828 verified 2: road and tree,
+     levels 1-4; inferred d: levels 5-7 "may not be where the board keeps
+     them").
+  2. So the deepest level is MAME's: log2(min(w, h)) - 1, at most 7.
+
+*Board (s1068 = 0e34aeb + MIP 1 + the R828a menu; Ben):* "Sharp looks good
+98% of the time, but the guard rails are just flat white textures. Only Off
+works." Screenshot sm2-builds/mipmaps/board/s1068_sharp_rails_white.png: the
+far panels of the wooden fence (left, and continuing ahead on the right) are
+solid white quads -- the gaps between the rails filled, not just the rails
+whitened. Then (correction): white ONLY with Sharp; Medium and Smooth fine.
+And: the sky reflection on the car windows breaks at "car select" (fine in
+the race).
+
+*Now known -- VERIFIED:*
+  1. THE FENCE TEXTURE. Daytona Revision A, MAME 0.289 M2MIP dumps (f2000-2023
+     is the same course as the screenshot):
+     - Posts and rails: 64x256, h0 0x6419 / 0x64d9 (textured, TRANSLUCENT,
+       no mirror, no wrap), x 896, y 256, sheet 1, 4-bit texels, texlod
+       1251 / 1410. Rail planks: 64x32, h0 0x6401, x 640, y 928, sheet 0.
+     - Its stored levels (rendered from the sheets at MAME's level origin,
+       sm2-builds/mipmaps/img/mipwhite_chain_fence_64x256.png):
+         level   size   texels 0xF   mean
+         0       64x256  0.66        12.1
+         1-3     ..8x32  0.66        12.1-12.2  (transparency kept)
+         4       4x16    0.12        11.5
+         5       2x8     0.00        12.0
+       Levels 4 and 5 are a box average of level 0 with 0xF counted as the
+       value 15: the gaps become light grey, opaque. The 64x32 planks' level
+       4 (4x2) is the same (mipwhite_chain_rail_64x32.png).
+     - MAME's own level on the fence pixels of f2000: L0 3,664 of 3,829
+       (L4 17, L5 2). R828a's (offline model of the RTL): Sharp L4 130, L5
+       32; Smooth L4 198, L5 156.
+  2. THE RTL DRAWS THE PANELS, AND THE FETCH IS EXACT. tb_m2_raster3d in the
+     core configuration (FTB, FB_DDR3 + wcomb, SPLIT_TRI, PXC, FRB 2, M2COV,
+     TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16, TXLW8, bilinear, R107; MIP 1; a new
+     M2_R3D_MIPMODE selects the rule), MAME's f2000 list: the far fence
+     panels come out solid white -- with Sharp, Medium AND Smooth, not with
+     Off (mipwhite_fence_f2000.png). New near-white pixels against Off,
+     rows 140-214: Sharp 270, Medium 460, Smooth 520. Every texel answer of
+     those runs equals the Python model of fetch_bilinear_texel at the
+     fetch's level (tools/chkfetch.py): the cache returns exactly what the
+     game stored there.
+  3. NOT A 10-BIT WRAP IN THE FILL'S K (the coordinator's lead): every edge
+     K is lq(13 bits) - lq(13 bits) + two 1/z logs in [-4, 59] + 120, i.e. in
+     [53, 297], so the spread is <= 244 and k_r - (k_r - k_n) >>> s cannot
+     wrap; k_n's sentinel (511) only stands while k_r is K_NONE, which forces
+     K_NONE. Over every split triangle of the dumps (95,200): edge K in
+     [210, 287], widest spread 37, Sharp's K above the max: 0.
+     test_m2_raster_fill_mip now checks K against [edge min, edge max] on
+     every Medium / Sharp span, with a sliver built for the widest spread
+     the fill can make (213): 0 outside, 1,830,055 spans exact.
+  4. THE RULE IS MONOTONE. Sharp's K = max - (max - min)/2 <= Medium's <=
+     Smooth's, and the level is a monotone function of K, so Sharp never
+     picks a deeper level than Smooth on any pixel. In the bench the white
+     area grows Sharp < Medium < Smooth (item 2).
+  5. THE CLASS, OVER EVERY TEXTURE IN THE DUMPS (162 textures, 105 drawn
+     translucent; f2000-2023, f5000-5023, f7000-7007, f9000-9023; every
+     iterated unoccluded pixel, 14.8 M). A stored level is SEVERE when a
+     translucent texture keeps < 40% of level 0's transparent texels (or
+     goes > 95% transparent), or an opaque one moves its mean > 3 of 15 or
+     goes flat; MODERATE when it keeps < 75% of the transparency, or its
+     opaque texels' mean moves > 2 (opaque: the mean > 2). It is a property
+     of the game's data, not of any rule:
+     - By the level's smaller side, translucent levels losing > half their
+       transparency: side 2 22%, side 4 11%, side 8 1%, side 16 1%, 32+ 0.
+     - Opaque levels with the mean off > 2: side 2 27%, 4 8%, 8 3%,
+       16 2%, 32+ 0.
+     - Examples (mipwhite_chain_*.png): a 64x64 arrow sign whose level 1
+       already shows another picture on its right half; a 32x32 glow whose
+       level 1 is flat; 32x64 decals whose level 4 is wholly transparent
+       (the polygon vanishes); 2x2 levels holding a constant 0 or 15.
+     Pixels drawn from such a level (rule as built -> R828b):
+       rule     severe px (textures)       moderate px (textures)
+       Sharp    41,330 (40) ->     0 (0)   46,542 (40) ->  4,509 (2)
+       Medium   77,766 (60) ->     0 (0)   83,608 (42) -> 43,099 (3)
+       Smooth  155,983 (76) ->     0 (0)   55,884 (40) -> 45,941 (3)
+     (MAME's own level, by texlod: 833 severe, 4,120 moderate of 453,624
+     pixels above level 0.) The moderate ones left are a 32x32 glow at
+     level 1 in the f7000 attract (Medium / Smooth only), the arrow sign's
+     level 1, and the road's level 4 (305 px).
+  6. THE CAR WINDOWS. The glass is two textures: the sky, 64x64 OPAQUE at
+     (768, 448) sheet 1 (h0 0x4409; its levels are good to level 4), drawn
+     with u near 4,100 texels (moved to ~130 by R609; no fault), and over it
+     the frame, 64x128 TRANSLUCENT at (512, 0) sheet 1 (h0 0x6411): level 1
+     keeps the panes clear (0xF 0.51 vs 0.55) but draws the frame's top
+     edge and centre bar wider and brighter; levels 2-3 thicken them more;
+     4-5 are solid (mipwhite_chain_windowframe_64x128.png). The player's car
+     in f5000 takes the frame at level 1 on its upper rows with Sharp
+     (rho 1.5-2; MAME level 0) -- a white top edge and a wider centre bar
+     over the reflection (mipwhite_window_f5000.png). The car-select screen
+     was NOT found in Revision A: coin + start in MAME 0.289 gives Circuit
+     Select and Mission Select, whose 3D (dumped every 50 frames, 1000-1950)
+     is the course maps and a highlight quad -- level 0 under every rule.
+  7. THE FIX (m2_span_tex, MIP 1 only): the deepest level a span may use is
+     the level whose smaller side is 32 texels for a translucent texture
+     (in_tex[8]) and 16 for an opaque one: with c the smaller size code
+     (side 32 << c), c (translucent) or c + 1 (opaque), at most 7 -- in
+     place of 4 + c. The fence and the window frame stop at level 1 (32x128,
+     32x64); the road (256x256) at 4; the 32-wide translucent decals at 0.
+     It costs depth, not coverage: Sharp keeps 3,535,914 of 3,631,263
+     pixels above level 0 (95,349, 32-wide translucent textures, go to 0);
+     546,674 (15.1%, Sharp) are held at a shallower level, by 1.44 levels
+     on average (Medium 16.1%, Smooth 18.0%).
+     - tb_m2_raster3d, f2000 / f5000 / f7000 / f9000, Sharp and Smooth: the
+       panels are gone (mipwhite_fence_f2000.png, rows 140-214 near-white
+       px 270 / 460 / 520 -> 170 / 222 / 231, the rest the fence's own level
+       1 planks); every texel answer still equals the model (224,221 /
+       161,202 / 115,392 / 200,006 answers, 0 differ).
+     - MIP 0 is the tree before: the bench's pixel hash, fetch count and
+       painted pixels are identical to HEAD on f2000 and f5000
+       (98bef5bf / b7199d05).
+  8. BENCHES (each new check mutation-tested):
+     - test_m2_span_tex_mip: the model's deepest level is the new rule;
+       random spans now set the translucent bit; a new class of 400 spans
+       -- the fence and window-frame headers, translucent and opaque, at K
+       200-300 -- 5,945 fetches, 5,934 asking past the cap, 0 past it.
+       Caught: R828's cap (5,934 past it), translucent / opaque swapped
+       (5,945), translucency ignored (2,966), no saturation at 7 (random
+       spans, level 0 for level 7).
+     - test_m2_texel_bl_mip: an eighth of the runs (all with M2_TBL_CLASS)
+       are the two class headers at every level they have, coordinates over
+       the whole texture: 200,000 x 2 memory models pass. The fix is not in
+       this module, so this case passes with and without it; it proves the
+       class is addressed exactly at any level. Caught (class only): the
+       level's y-origin without its top-bit fill (164,877 of 200,000).
+     - test_m2_raster_fill_mip: the f2000 far fence panel (poly 507) and
+       the f5000 window frame (poly 130) as m2_geometry presents them, 727
+       quads; and the widest-spread sliver; K inside [min, max] on every
+       Medium / Sharp span. Also not where the fix is. Caught (class quads
+       only, M2_MIP_CLASS): no closing edge.
+     - Pass: test_m2_span_tex, test_m2_span_tex_ftb, test_m2_texel_bl8,
+       test_m2_raster_fill, test_m2_raster3d.
+     - lint_top clean with MIP 0 and with mip-on-r828a.patch; no new
+       m2_span_tex warning. lint_idx: the same 147 lines as HEAD, MIP 0
+       and MIP 1. quartus_map --analyze_file (17.0) m2_span_tex.sv: 0
+       errors (the two constant-overflow warnings are HEAD's).
+
+*Decision (a departure from MAME, recorded):* MAME clamps at the 2x2 level
+and never shows these levels because the game's texlod keeps the polygons
+at level 0 (MAME's own level puts 0.2% of pixels above 0 on the fence). This
+walk has no texlod (R665), so it would reach them wherever the footprint
+says; the cap stops it at the levels the game's data actually holds. A
+per-texture flag does not exist in the header (h0 bits 0-15 are all
+assigned), and reading the texture to judge it is not affordable.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. Ben's "Sharp only" disagrees with items 2 and 4 (the bench shows the
+     panels with all three rules, larger with Smooth, and the rule is
+     monotone). Likely Medium / Smooth drew them too, further out or
+     blended into the general blur. Settles it: the same spot on the board
+     with each setting, on this build.
+  b. The car-select report is the window frame's levels 1-3 (item 6), if
+     that screen shows the car smaller than the chase view; the cap leaves
+     level 1 (a brighter top edge and a wider centre bar) where rho >= 2.
+     Settles it: Ben names the screen or sends a picture; if level 1 is
+     still too much, one level of bias for translucent textures (L - 1 when
+     in_tex[8]) is the next lever -- it puts the player's frame at level 0
+     and costs the trees a level.
+  c. Area: one 3-bit compare and mux and a 3-bit increment on mipl_p's load
+     (replacing R828's compare, two muxes and adder): +0..+5 ALUT in
+     m2_span_tex, no register or M10K change; MIP 0 prunes mipl_p as before.
+     Timing: the load path (span queue -> mipl_p) keeps its depth; mp_L is
+     unchanged. Settles it: quartus_map (not run -- a fit was not checked
+     for), then a fit with mip-on-r828a.patch.
+  d. Some shimmer returns at the very far distance (the deepest levels are
+     gone): 15.1% of Sharp's mipped pixels sit 1.44 levels shallower. Settles
+     it: Ben on the board, the mountains and the far road.
+
+*Not verified:* any build; the board; Deluxe '93 (its ROM set is incomplete
+here: epr-16489.7 / epr-16490.8 missing); the car-select screen.
+
+Tools (sm2-builds/mipmaps/tools/mipwhite/, local): railan.c (per-pixel MAME
+and R828a levels), lvcount.c / rules*.py / final_sweep.py (the sweep),
+lev.py / chain.py (level images), kspread.c (edge K range), build.sh / run.sh
+(the core-config bench), nav.lua / att.lua (MAME menus and attract).

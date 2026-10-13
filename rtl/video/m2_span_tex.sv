@@ -95,7 +95,9 @@ module m2_span_tex #(
   // R828: MIP LEVELS. Each group's level is chosen from the span's in_mipk (the
   // quad's edge footprint, m2_raster_fill MIP) and the group's own 1/z, where
   // the divide already has its log: L = floor((K - 2 log2(ooz)) / 4), clamped
-  // to [0, min(log2 min(w, h) - 1, 7)]. The divide's un-normalising shift takes
+  // to [0, the deepest level whose smaller side is 32 texels for a translucent
+  // texture, 16 for an opaque one] (R828b; MAME's own cap is the 2x2 level,
+  // R828's was min(log2 min(w, h) - 1, 7)). The divide's un-normalising shift takes
   // L more, so u and v leave already at the level, and L rides to m2_texel_bl
   // in tx_tex[26:24], which addresses the level's copy. 0: level 0 always, and
   // the walk is the one before R828.
@@ -296,6 +298,17 @@ module m2_span_tex #(
   // coordinates clamp to zero rather than wrapping into the top of the sheet:
   // a plane fitted through a clipped quad can step slightly outside it.
   /* verilator lint_off UNUSEDSIGNAL */
+  // R828b: the deepest mip level a span may use -- the level whose smaller
+  // side is 32 texels (translucent) or 16 (opaque), at most 7; see ld_span
+  function automatic logic [2:0] mip_deepest(input logic [2:0] wc, input logic [2:0] hc,
+                                             input logic tr);
+    logic [2:0] c;
+    begin
+      c = (wc < hc) ? wc : hc;
+      mip_deepest = (tr || c == 3'd7) ? c : c + 3'd1;
+    end
+  endfunction
+
   function automatic logic [19:0] to_tx(input logic signed [31:0] q);
     to_tx = q[31] ? 20'd0 : q[29:10];      // the fraction below bit 10 is dropped
   endfunction
@@ -1035,12 +1048,21 @@ module m2_span_tex #(
           col_p[slot]   <= in_col;
           moire_p[slot] <= in_moire;
           tex_p[slot]   <= in_tex;
-          // R828: the bias, and the deepest level: log2(min(w, h)) - 1 (down
-          // to 2x2, as the reference), at most 7
+          // R828: the bias, and the deepest level.
+          // R828b: NOT DOWN TO 2x2. The game's small levels are not faithful
+          // copies: a translucent texture's 4- and 2-texel levels are box
+          // averages that count the transparent nibble (0xF) as a colour, so
+          // a fence or a window frame turns into a solid light panel there
+          // (Ben, s1068: "the guard rails are just flat white textures"), and
+          // some small textures' levels are blank or another picture. MAME
+          // never shows it because the game's texlod keeps those polygons at
+          // level 0, and this walk has no texlod. Measured over every texture
+          // in the M2MIP dumps (study R828b): no level whose smaller side is
+          // 32 texels or more (translucent) or 16 or more (opaque) loses its
+          // transparency or its picture. With c the smaller size code (side
+          // 32 << c): translucent (in_tex[8]) c, opaque c + 1, at most 7.
           mipk_p[slot]  <= in_mipk;
-          mipl_p[slot]  <= (in_tex[3:1] < in_tex[6:4])
-                             ? ((in_tex[3:1] >= 3'd3) ? 3'd7 : 3'd4 + in_tex[3:1])
-                             : ((in_tex[6:4] >= 3'd3) ? 3'd7 : 3'd4 + in_tex[6:4]);
+          mipl_p[slot]  <= mip_deepest(in_tex[3:1], in_tex[6:4], in_tex[8]);
           du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
           dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;

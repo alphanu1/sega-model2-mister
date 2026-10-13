@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 8; i++) tick();
   d->rst_n = 1;
   std::deque<Req> sent;
-  long issued = 0, answered = 0, cyc = 0;
+  long issued = 0, answered = 0, cyc = 0, n_class = 0;   // R828b: n_class
   int lat[4] = {-1, -1, -1, -1}; uint32_t ad[4] = {0, 0, 0, 0};
   // R650: M2_TBL_SDRAM=1 -- the port as m2_sdram really is: a request is
   // dispatched on its RISING edge only, one at a time, and the acknowledge and
@@ -229,12 +229,24 @@ int main(int argc, char **argv) {
         uint32_t t = 1u | ((rng() % 6) << 1) | ((rng() % 6) << 4) | ((rng() & 1) << 7)
                    | ((rng() % 5 == 0) << 8) | ((rng() % 5 == 0) << 9) | ((rng() % 5 == 0) << 10)
                    | ((rng() & 1) << 12) | ((rng() % 64) << 13) | ((rng() % 32) << 19);
+        // R828b: THE CLASS s1068 DREW WHITE, an eighth of the runs (all of
+        // them with M2_TBL_CLASS): Daytona's fence, 64x256 translucent at
+        // (896, 256) sheet 1, and the car's window frame, 64x128 translucent
+        // at (512, 0) sheet 1 -- clamped at both edges, at every level they
+        // have (m2_span_tex now stops them at level 1, but this unit must
+        // address any level it is sent), over the whole texture
+        static const bool CLASS = std::getenv("M2_TBL_CLASS") != nullptr;
+        bool cls = MIPB && (CLASS || rng() % 8 == 0);
+        if (cls) t = (rng() & 1) ? (1u | (1u << 1) | (3u << 4) | (1u << 8) | (1u << 12) | (28u << 13) | (8u << 19))
+                                 : (1u | (1u << 1) | (2u << 4) | (1u << 8) | (1u << 12) | (16u << 13));
         if (MIPB) {   // R828: a level the texture has: down to 2x2, at most 7
           const int wc = (t >> 1) & 7, hc = (t >> 4) & 7, mc = wc < hc ? wc : hc;
           const int ml = (4 + mc) > 7 ? 7 : 4 + mc;
           t |= uint32_t(rng() % (ml + 1)) << 24;
         }
+        if (cls) ++n_class;
         run = {t, (uint32_t)(rng() & 0xfffff), (uint32_t)(rng() & 0xfffff), (int)(rng() % 4 != 0)};
+        if (cls) { run.u = rng() % (64u << 8); run.v = rng() % (256u << 8); }   // inside, edges included
         runlen = 1 + rng() % 40;
       }
       cur = run; have = true; --runlen;
@@ -271,6 +283,7 @@ int main(int argc, char **argv) {
   }
   std::printf("m2_texel_bl: %ld answered of %ld issued in %ld cycles, hits %u misses %u lost %u sweeps %u\n",
               answered, issued, cyc, d->dbg_hits, d->dbg_misses, d->dbg_lost, d->dbg_sweeps);
+  if (MIPB) std::printf("m2_texel_bl: R828b class runs (fence / window frame): %ld\n", n_class);
   std::printf("m2_texel_bl: checks=%d fails=%d\n", checks, fails);
   std::printf(fails || answered < N ? "FAIL\n" : "PASS\n");
   delete d;
