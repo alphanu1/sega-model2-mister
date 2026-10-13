@@ -77,6 +77,11 @@ module m2_span_tex #(
   // Modelled on MAME's heavy frames: with m2_texel_bl's point mode (R627)
   // it cuts the misses by 57-59% where point alone cuts 37%.
   parameter bit          REUSE  = 1'b0,
+  // R813: SPAN CULL. A span whose pixels are all painted already (FTB) is
+  // dropped at the input instead of being walked a group a cycle. CULLG
+  // pixels are checked as one (a span's ends are rounded out to them).
+  parameter bit          SPCULL = 1'b0,   // R813: off -- the whole of R813 did not fit (s995-s997); s999 closes without it
+  parameter int unsigned CULLG  = 4,
   // R616: SAMPLE EACH GROUP AT ITS CENTRE. One texel serves PIXSTEP pixels;
   // taken at the group's first pixel it lags the rest by up to PIXSTEP-1
   // pixels of gradient. 1 starts the walk (PIXSTEP-1)/2 pixels in, for u/z,
@@ -192,7 +197,13 @@ module m2_span_tex #(
   // tag is needed because the pipeline preserves order and sh_last already
   // marks each span's final group -- the output advances sp_out when it sees
   // one leave.
-  logic signed [31:0] y_p [2], x1_p [2];
+  // R813: y, x1 -- and the walk's x (iss_x, 17 bits: x1 + 7 for any 16-bit
+  // x1), the retire stage's and the emit's -- are 16 bits, not 32. Every span
+  // comes from the 16-bit queue (m2_raster3d sign-extends sq_y/x0/x1) and
+  // every consumer of out_y/x0/x1 takes [15:0] (R553, R684), so the values are
+  // the same; the 32-bit adders and compares were ~54 ALUT in the full map
+  // (-111 registers standalone), which pays most of the span cull below.
+  logic signed [15:0] y_p [2], x1_p [2];
   logic [1:0]         k_p [2];      // R650: each span's pxk, latched with it
   function automatic logic signed [31:0] stp(input logic [1:0] k);
     stp = 32'sd1 <<< k;
@@ -327,6 +338,8 @@ module m2_span_tex #(
   /* verilator lint_on UNUSEDSIGNAL */
 
   wire tex_now = in_tex_en && in_tex[0];
+  wire cull;            // R813: the span at the input is dropped (declared with its check below)
+  wire in_vk = in_valid && !cull;
 
   // R326: THE TRANSLUCENT TEXEL TEST, WHICH IS THE WHOLE OF MAME'S ALPHA.
   //
@@ -359,13 +372,13 @@ module m2_span_tex #(
   // register instead puts every pixel one to the right of where its texel came
   // from: the walk advances in the same cycle the pixel is offered, so the
   // combinational read sees the NEXT x.
-  logic signed [31:0] e_x;
+  logic signed [15:0] e_x;    // R813: 16 bits
   // AND THE GROUP'S LAST PIXEL, REGISTERED WITH IT. Computing `min(x + PIXSTEP
   // - 1, x1)` on the way OUT puts a 32-bit add, a compare and a mux between a
   // register and the band buffer's write decode -- combinational the whole
   // way, because a flat span passes through this unit as wires. It is latched
   // here instead.
-  logic signed [31:0] e_x1;
+  logic signed [15:0] e_x1;   // R813: 16 bits
   // R490: the pixel standing at the output is its span's LAST. The span's
   // parameter set cannot be released until that pixel has been TAKEN, or out_y
   // and out_moire would switch to the next span's values while the previous
@@ -373,12 +386,12 @@ module m2_span_tex #(
   logic               e_last;
 
   // Flat spans go through as wires; textured pixels come from the registers.
-  assign out_valid = idle ? (in_valid && !tex_now) : e_valid;
-  assign out_y     = idle ? in_y     : y_p[e_p];
-  assign out_x0    = idle ? in_x0    : e_x;
+  assign out_valid = idle ? (in_vk && !tex_now) : e_valid;
+  assign out_y     = idle ? in_y     : 32'(y_p[e_p]);   // R813: sign-extended
+  assign out_x0    = idle ? in_x0    : 32'(e_x);
   // PIXSTEP wide, clipped at the span's end -- computed when the pixel is
   // formed, not when it is offered.
-  assign out_x1    = idle ? in_x1 : e_x1;
+  assign out_x1    = idle ? in_x1 : 32'(e_x1);
   assign out_col   = idle ? in_col   : {tfin(e_pr[0], e_z[0], ped),   // R784
                                           tfin(e_pr[1], e_z[1], ped),
                                           tfin(e_pr[2], e_z[2], ped)};
@@ -390,7 +403,7 @@ module m2_span_tex #(
   // R490: a FLAT span still needs the unit truly idle -- passed through as
   // wires, it would overtake the textured pixels still in the pipeline. Only a
   // textured one may be accepted on top of a draining span.
-  assign in_ready  = (idle && (tex_now || out_ready)) || ld_over;
+  assign in_ready  = (idle && (tex_now || out_ready)) || ld_over || cull;   // R813
   assign dbg_hot    = st;          // R446: free, no counter behind it
 
   // R520: THE LONGEST STRETCH THIS UNIT WAS BUSY AND DID NOTHING.
@@ -448,10 +461,10 @@ module m2_span_tex #(
   // they emerge. The divide's six cycles are paid once per SPAN instead of once
   // per group.
   logic signed [31:0] iss_u, iss_v, iss_ooz;
-  logic signed [31:0] iss_x;
+  logic signed [16:0] iss_x;   // R813: 17 bits: x1 + 7 for any 16-bit x1
   logic               iss_run;      // still issuing groups for this span
   logic [3:0]         iss_step;     // R650: the issuing span's step, 1-8
-  wire                iss_last  = (iss_x + 32'(iss_step) - 32'sd1) >= x1_p[sp_iss];
+  wire                iss_last  = (iss_x + 17'(iss_step) - 17'sd1) >= 17'(x1_p[sp_iss]);
 
   wire signed [31:0] dv_o    = iss_ooz;
   wire signed [31:0] dv_u    = iss_u;
@@ -544,13 +557,94 @@ module m2_span_tex #(
     mp_f1   = (qrow < 16'sd0) || (qrow >= QBH) || (xb < xa);
     mp_f0   = !mp_f1 && (xa[15:5] != xb[15:5]);
   end
+  // R813: the span cull's shape (its check is below)
+  localparam int unsigned CG   = 32 / CULLG;         // mask bits a word
+  localparam int unsigned CGW  = $clog2(CG);
+  localparam int unsigned GSH  = $clog2(CULLG);
+  localparam int unsigned BHW  = $clog2(BAND_H);
+  localparam bit          CULL_OK = SPCULL && FTB && ((1 << BHW) == BAND_H) && (MROW == 16);
   logic mq_full;
+  // R813: THE SPAN CULL (below) READS THIS PORT FIRST. A cycle it reads, the
+  // group at the query's read stage is answered "not full" -- fetched rather
+  // than skipped, which costs a fetch and never a pixel: the writer's own
+  // mask test keeps the picture exact. A check is a word or two a waiting
+  // span, against ~12 groups a hidden span walks. Both addresses and the
+  // select (cs_run) are registers: one LUT before the MLAB's address.
+  // (Its own copy of the mask instead was ~1% faster and +52 ALM standalone.)
+  logic           cs_run;
+  logic [MAW-1:0] cs_wi;                 // the word the cull reads
+  wire            cs_port = CULL_OK && cs_run;
+  wire [MAW-1:0]  mk_ri = cs_port ? cs_wi : mq_wi;
+  wire [31:0]     mk_rw = mk_valid[mk_ri] ? mk[mk_ri] : 32'd0;
   always_comb begin
-    automatic logic [31:0] w = mk_valid[mq_wi] ? mk[mq_wi] : 32'd0;
-    if (mq_f1)      mq_full = 1'b1;
-    else if (mq_f0) mq_full = 1'b0;
+    automatic logic [31:0] w = mk_rw;
+    if (mq_f1)        mq_full = 1'b1;
+    else if (cs_port) mq_full = 1'b0;   // R813: the cull has the port
+    else if (mq_f0)   mq_full = 1'b0;
     else            mq_full = ((w & mq_need) == mq_need);
   end
+  // R813: THE SPAN CULL'S CHECK, on the span standing at the input. A span
+  // whose every pixel is already painted this band paints nothing (the
+  // writer's mask test, MAME's `if (fill[x]) continue`), yet it was walked a
+  // group a cycle and held a span slot until its last group had passed the
+  // in-flight queue. Hidden spans were 103k-292k of the 142k-321k skipped
+  // groups a draw (r57, rpk). Now: registered first, the span's first mask
+  // word, how many more it covers and where it starts and ends in them -- bit
+  // slices of its own x0, x1 and y. Then one mask word a cycle, through the
+  // query's port (above): a word not painted wherever the span covers it ends
+  // the check (the span is walked as before); the last word painted too and
+  // the span is taken and dropped. The answer is used only while the same
+  // span still stands (nothing taken since the check began), so a span taken
+  // at once is never delayed -- only one that waits is checked. CULLG pixels
+  // a bit, set only when all of them are painted: conservative, never wrong.
+  logic               cs1_v;                 // the span stood last cycle too
+  logic               cs_done, cs_hid;
+  logic [3:0]         cs_n;                  // words after cs_wi
+  logic               cs_first;
+  logic [CGW-1:0]     cs_a, cs_b;            // first / last bit in the first / last word
+  logic               cs_in;                 // on the screen
+  wire  [CGW-1:0]     cp_a  = CGW'(in_x0[4:0] >> GSH);
+  wire  [CGW-1:0]     cp_b  = CGW'(in_x1[4:0] >> GSH);
+  wire  [3:0]         cp_n  = 4'(in_x1[8:5] - in_x0[8:5]);
+  wire  [MAW-1:0]     cp_wi = MAW'({in_y[BHW-1:0], in_x0[8:5]});   // row * MROW + word
+  // Only x is checked: a span off the left or right edge would read another
+  // word. y is not -- a row outside the band reads some row of this band's
+  // mask, and whichever way that goes nothing is painted: the walk's own
+  // query counts every pixel outside the band as painted (mp_f1).
+  wire                cp_in = !in_x0[15] && (in_x1[15:9] == 7'd0);
+  logic [CG-1:0]      cs_w;
+  always_comb
+    for (int g = 0; g < CG; g++) cs_w[g] = &mk_rw[g * CULLG +: CULLG];
+  wire        in_take = in_valid && in_ready;
+  wire [CG-1:0] cs_need = (cs_first ? ({CG{1'b1}} << cs_a) : {CG{1'b1}})
+                        & ((cs_n == 4'd0) ? ({CG{1'b1}} >> (CGW'(CG - 1) - cs_b)) : {CG{1'b1}});
+  wire        cs_ok   = (cs_w & cs_need) == cs_need;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      cs1_v <= 1'b0; cs_run <= 1'b0; cs_done <= 1'b0; cs_hid <= 1'b0;   // R813
+      cs_wi <= '0; cs_n <= '0; cs_first <= 1'b1; cs_a <= '0; cs_b <= '0; cs_in <= 1'b0;
+    end else begin
+      cs1_v <= in_valid && !in_take;
+      cs_in <= cp_in; cs_a <= cp_a; cs_b <= cp_b;
+      if (!in_valid || in_take) begin
+        cs_run <= 1'b0; cs_done <= 1'b0; cs_hid <= 1'b0;
+      end else if (!cs_run && !cs_done) begin
+        if (cs1_v && CULL_OK) begin          // the same span a second cycle: start
+          cs_wi <= cp_wi; cs_n <= cp_n; cs_first <= 1'b1;
+          if (cs_in) cs_run <= 1'b1;
+          else       cs_done <= 1'b1;        // not culled
+        end
+      end else if (cs_run) begin
+        if (!cs_ok)              begin cs_run <= 1'b0; cs_done <= 1'b1; cs_hid <= 1'b0; end
+        else if (cs_n == 4'd0)   begin cs_run <= 1'b0; cs_done <= 1'b1; cs_hid <= 1'b1; end
+        else begin   // the next word of the same row
+          cs_wi <= {cs_wi[MAW-1:4], cs_wi[3:0] + 4'd1}; cs_n <= cs_n - 4'd1; cs_first <= 1'b0;
+        end
+      end
+    end
+  end
+  assign cull = CULL_OK && cs_done && cs_hid && in_valid;
+
   /* verilator lint_off UNUSEDSIGNAL */   // R553: only [15:0] is queued
   wire signed [31:0]  res_x     = sh_x[PIPE_D-1];
   /* verilator lint_on UNUSEDSIGNAL */
@@ -580,7 +674,7 @@ module m2_span_tex #(
   // a cycle per group, because the next fetch is issued on the same edge.
   logic               rt_valid;
   logic               rt_texel;    // R784: the discard bit only (R620 held {discard, t})
-  logic signed [31:0] rt_x;
+  logic signed [15:0] rt_x;   // R813: 16 bits
   logic               rt_last;
   logic               rt_p, e_p;   // R490
   logic               rt_skip;     // R607
@@ -594,7 +688,7 @@ module m2_span_tex #(
   logic [5:0]         rt_lum;  // R784: the texel's luma, 0..63 (was R741's rt_i1)
   logic [6:0]         ped;     // R784: the output curve's pedestal, from gamma_sel
   logic [1:0]         rt_k;
-  logic signed [31:0] rt_x1;
+  logic signed [15:0] rt_x1;  // R813: 16 bits
   logic [8:0]         lt_texel;    // R633: the last fetched answer, for a reuse
 
   // Take a result when there is one, no fetch is outstanding, and the emit
@@ -607,8 +701,8 @@ module m2_span_tex #(
   // The overlap case must NOT clear the shadow -- the valids in it belong to
   // the span still draining and are wanted.
   wire sp_room   = (sp_n < 2'd2);
-  wire ld_cold   = (st == T_IDLE) && in_valid && tex_now;
-  wire ld_over   = (st == T_RUN) && in_valid && tex_now && !iss_run && sp_room
+  wire ld_cold   = (st == T_IDLE) && in_vk && tex_now;
+  wire ld_over   = (st == T_RUN) && in_vk && tex_now && !iss_run && sp_room
                 && pipe_en;
   wire ld_span   = ld_cold || ld_over;
   // R616: (PIXSTEP-1)/2 pixels of each gradient, 16.16 (gradients are 8.8).
@@ -689,7 +783,7 @@ module m2_span_tex #(
   logic        [23:0] dbg_fetch_c /*verilator public_flat_rd*/;
   assign dbg_fetch   = tx_req;
   assign dbg_fetch_x = res_x;
-  assign dbg_fetch_y = y_p[res_p];
+  assign dbg_fetch_y = 32'(y_p[res_p]);
   assign dbg_fetch_u = tx_u;
   assign dbg_fetch_v = tx_v;
   assign dbg_fetch_t = tex_p[res_p];
@@ -725,7 +819,7 @@ module m2_span_tex #(
       iss_u   <= in_u   + gc_du;     // R616
       iss_v   <= in_v   + gc_dv;
       iss_ooz <= in_ooz + gc_do;
-      iss_x   <= in_x0;
+      iss_x   <= 17'(in_x0);
       iss_step <= 4'd1 << pxk;       // R650
       iss_run <= 1'b1;
       if (ld_cold) begin
@@ -753,7 +847,7 @@ module m2_span_tex #(
         iss_u   <= in_u   + gc_du;   // R616
         iss_v   <= in_v   + gc_dv;
         iss_ooz <= in_ooz + gc_do;
-        iss_x   <= in_x0;
+        iss_x   <= 17'(in_x0);
         iss_step <= 4'd1 << pxk;     // R650
         iss_run <= 1'b1;
       end else if (iss_run) begin
@@ -762,7 +856,7 @@ module m2_span_tex #(
         iss_u   <= iss_u   + du_r;
         iss_v   <= iss_v   + dv_r;
         iss_ooz <= iss_ooz + doz_r;
-        iss_x   <= iss_x   + 32'(iss_step);
+        iss_x   <= iss_x   + 17'(iss_step);
         if (iss_last) iss_run <= 1'b0;
       end
       // R739: for PIPE_D-3, a stage early
@@ -770,7 +864,7 @@ module m2_span_tex #(
       q_x1 <= x1_p[sh_p[PIPE_D-4]][15:0];
       q_y  <= y_p [sh_p[PIPE_D-4]][15:0];
       sh_v[0]    <= iss_run;
-      sh_x[0]    <= iss_x;
+      sh_x[0]    <= 32'(iss_x);
       sh_last[0] <= iss_run && iss_last;
       sh_p[0]    <= sp_iss;                 // R490
       sh_m       <= mq_full;                // R607: follows sh_*[PIPE_D-1]
@@ -889,8 +983,8 @@ module m2_span_tex #(
 
         if (done_e ^ done_rt) sp_out <= ~sp_out;   // both: two steps, same slot
         if (ld_span) begin
-          y_p[slot]     <= in_y;
-          x1_p[slot]    <= in_x1;
+          y_p[slot]     <= in_y[15:0];
+          x1_p[slot]    <= in_x1[15:0];
           col_p[slot]   <= in_col;
           moire_p[slot] <= in_moire;
           tex_p[slot]   <= in_tex;
@@ -949,7 +1043,7 @@ module m2_span_tex #(
             rt_lum   <= tlum(head_reuse ? lt_texel[7:0] : tx_texel[7:0],
                              tex_p[of_p[of_rp[OW-2:0]]][11]);   // R784
             if (!head_skip && !head_reuse) lt_texel <= tx_texel;
-            rt_x     <= 32'(of_x[of_rp[OW-2:0]]);   // sign-extended
+            rt_x     <= of_x[of_rp[OW-2:0]];
             rt_last  <= of_last[of_rp[OW-2:0]];
             rt_p     <= of_p   [of_rp[OW-2:0]];
             rt_col   <= col_p[of_p[of_rp[OW-2:0]]];   // R731
@@ -968,8 +1062,8 @@ module m2_span_tex #(
             e_valid <= !skip;                     // R326: transparent texel
             e_last  <= rt_last;                   // R490
             e_x     <= rt_x;
-            e_x1    <= ((rt_x + stp(rt_k) - 32'sd1) > rt_x1)
-                         ? rt_x1 : (rt_x + stp(rt_k) - 32'sd1);   // R650, R731
+            e_x1    <= ((17'(rt_x) + 17'(stp(rt_k)) - 17'sd1) > 17'(rt_x1))
+                         ? rt_x1 : 16'(rt_x + 16'(stp(rt_k)) - 16'sd1);   // R650, R731; R813 16 bits
             // R784: the product alone here (R741's path); tfin finishes it
             for (int k = 0; k < 3; k++) begin
               e_pr[k] <= 14'(rt_col[23 - 8 * k -: 8]) * 14'(rt_lum);

@@ -16,6 +16,9 @@
 //      consumer stalls.
 
 #include "Vm2_span_tex.h"
+#ifdef TB_FTB
+#include "Vm2_span_tex___024root.h"   // R813: the cull is read through public access
+#endif
 #include "verilated.h"
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +27,7 @@
 #include <cstdint>
 #include <vector>
 #include <deque>
+#include <tuple>
 
 static Vm2_span_tex *d;
 // R791: THE FILL'S u/z FORMAT. This bench's coordinates are written in the
@@ -162,6 +166,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1; tick();
 
+#ifndef TB_FTB   // R813: the FTB build runs only the cull's test (every other test's rows are outside its band)
   // 1. A FLAT SPAN, IN ONE CYCLE.
   {
     got.clear();
@@ -909,6 +914,76 @@ int main(int argc, char **argv) {
     ck("R784: nibble 8, row 0, MAME: the colour itself", tcol(0x80c010, 0x88, false, 0), 0x80c010);
     ck("R784: nibble F, row 1: luma 3", lum_of(0xff, true), 3);
   }
+
+#else
+  // 6. R813: THE SPAN CULL (FTB). The mask says which pixels of the band are
+  //    painted; a textured span all of whose pixels are painted is taken and
+  //    dropped without a walk, and only while it has to wait (it stands two
+  //    cycles behind a span being walked). Row 10 of band 8..15 is painted
+  //    except pixel 100; row 11 is empty. Each case is presented while a long
+  //    span on row 11 is walking, so it waits.
+  {
+    std::printf("test: R813, the span cull\n");
+    for (int k = 0; k < 4; ++k) d->mk_valid[k] = 0xffffffffu;
+    d->mk_band_y0 = 8;
+    for (int w = 0; w < 128; ++w) {          // row r, word c: address r * 16 + c
+      const int r = w / 16, c = w % 16;
+      uint32_t v = (r == 2) ? 0xffffffffu : 0u;
+      if (r == 2 && c == 3) v &= ~(1u << (100 - 96));
+      d->mk_we = 1; d->mk_waddr = w; d->mk_wdata = v; tick();
+    }
+    d->mk_we = 0;
+    long culls = 0;
+    auto present = [&](int y, int x0, int x1) {
+      d->in_valid = 1; d->in_y = y; d->in_x0 = x0; d->in_x1 = x1;
+      d->in_col = 0xffffff; d->in_moire = 0;
+      d->in_u = UZ(0); d->in_v = UZ(0); d->in_dudx = GZ(0x40); d->in_dvdx = GZ(0);
+      d->in_tex = 0x000001; d->in_tex_en = 1; d->in_ooz = 1 << 30; d->in_doozdx = 0;
+      for (int i = 0; i < 4000; ++i) {
+        const bool c = d->rootp->m2_span_tex__DOT__cull;
+        tick();
+        if (last_in_taken) { if (c) ++culls; break; }
+      }
+      d->in_valid = 0;
+    };
+    // one case: a walk on row 11 (visible), then the span under test
+    auto run = [&](int x0, int x1, int y = 10) {
+      got.clear(); culls = 0;
+      present(11, 0, 300);
+      present(y, x0, x1);
+      for (int i = 0; i < 2000 && d->busy; ++i) tick();
+      for (int i = 0; i < 8; ++i) tick();
+      long row = 0; bool has100 = false;
+      for (const Out &o : got) if (o.y == y) { ++row; if (o.x0 <= 100 && o.x1 >= 100) has100 = true; }
+      return std::make_tuple(culls, row, has100);
+    };
+    long c, n; bool h;
+    std::tie(c, n, h) = run(40, 60);
+    ck("R813: hidden, one word: culled", c, 1);       ck("  and draws nothing", n, 0);
+    std::tie(c, n, h) = run(20, 90);
+    ck("R813: hidden, three words: culled", c, 1);    ck("  and draws nothing", n, 0);
+    std::tie(c, n, h) = run(98, 102);
+    ck("R813: pixel 100 open: not culled", c, 0);     ck("  and pixel 100 drawn", h, 1);
+    std::tie(c, n, h) = run(70, 100);
+    ck("R813: open in its LAST word: not culled", c, 0); ck("  and pixel 100 drawn", h, 1);
+    std::tie(c, n, h) = run(100, 140);
+    ck("R813: open in its FIRST pixel: not culled", c, 0); ck("  and pixel 100 drawn", h, 1);
+    std::tie(c, n, h) = run(101, 103);
+    ck("R813: painted, but its 4-pixel group is not: not culled (conservative)", c, 0);
+    ck("  and the walk draws nothing", n, 0);
+    std::tie(c, n, h) = run(-5, 40);
+    ck("R813: off the left edge: not culled", c, 0);  ck("  and draws nothing", n, 0);
+    std::tie(c, n, h) = run(40, 60, 11);
+    ck("R813: an empty row: not culled", c, 0);       ck("  and draws the span", n > 0, 1);
+    // a hidden span taken at once (the unit idle) is walked, not delayed
+    got.clear(); culls = 0;
+    for (int i = 0; i < 20; ++i) tick();
+    present(10, 40, 60);
+    for (int i = 0; i < 400 && d->busy; ++i) tick();
+    ck("R813: a span taken at once is not held for the check", culls, 0);
+    for (int k = 0; k < 4; ++k) d->mk_valid[k] = 0;
+  }
+#endif
 
   std::printf("m2_span_tex: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");

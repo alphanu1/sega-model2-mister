@@ -201,6 +201,144 @@ static void cpu_account() {
   acc_ack_d = dut->bus_ack;
 }
 
+
+#ifdef IFETCH_PROF
+// R817: WHERE AN INSTRUCTION-FETCH WAIT GOES. Bench-only (the profiling build,
+// --public-flat-rw): every CPU cycle in T_FETCH_W / T_FETCH2_W is booked by
+// what the cache, the i960's bus grant, the bridge and the memory side are
+// doing, and every i-cache line fill is timed from its start to its first
+// word, to the word the CPU waits for, and to its completion.
+//   M2_IP_OUT=f  the retired instruction addresses (u32 each), and
+//   M2_DA_OUT=f  every load/store {instruction count, address | we} -- the
+//                inputs tb_m2_ifetch_replay needs to replay this run (that is
+//                how the replay's sequencer model was checked against this CPU)
+//   M2_PTRACE=n  a cycle-by-cycle trace of the front end, cache and bridge from
+//                CPU cycle n (4,000 lines)
+#define PR_C(x)  (dut->rootp->m2_cpu_real_harness__DOT__u_cpu__DOT__##x)
+#define PR_IC(x) (dut->rootp->m2_cpu_real_harness__DOT__u_cpu__DOT__u_icache__DOT__##x)
+#define PR_BR(x) (dut->rootp->m2_cpu_real_harness__DOT__u_mem__DOT__u_bridge__DOT__##x)
+enum { K_HIT, K_STALE_OTHER, K_GRANT, K_BR_IDLE, K_XIN, K_DC, K_SD, K_XOUT, K_ACK, K_DONE, K_SWEEP, K_N };
+static const char *k_name[K_N] = {"cache answering (hit pipeline)", "cache filling ANOTHER line", "bus held by LSU/RF",
+  "bridge C_IDLE (lb word / gap)", "request crossing in", "memory side: d-cache", "memory side: SDRAM",
+  "answer crossing back", "bridge registering ack", "fill done (S_DONE)", "sweep"};
+static unsigned long long k_cyc[2][K_N];         // [0] T_FETCH_W, [1] T_FETCH2_W
+static unsigned long long k_stale[K_N];          // sub-phase while the line being filled is NOT the wanted one
+static unsigned long long ep_n[2][4], ep_cyc[2][4];   // episodes by outcome: hit, miss, stale-then-hit, stale-then-miss
+static unsigned long long fw_total = 0, f2w_total = 0, cpu_cyc_prof = 0, retired_prof = 0, memw_total = 0;
+static unsigned long long ts_hist[32];
+static int ep_kind = -1; static bool ep_saw_fill = false, ep_saw_stale = false; static unsigned ep_len = 0; static uint32_t ep_addr = 0;
+// fills
+static unsigned long long fl_start_n = 0, fl_done_n = 0, fl_abandon_n = 0, fl_demand_n = 0;
+static unsigned long long fl_first_sum = 0, fl_done_sum = 0, fl_want_sum = 0, fl_want_n = 0;
+static std::vector<unsigned> fl_first_hist(256, 0), fl_done_hist(256, 0);
+static bool fl_on = false; static unsigned long long fl_t0 = 0; static int fl_words = 0; static uint32_t fl_base = 0;
+static bool fl_first_seen = false; static bool fl_want_seen = false; static bool fl_demand = false;
+static int prev_ics = 0;
+static FILE *ip_out = nullptr; static uint32_t prof_last_acc = 0;
+static FILE *da_out = nullptr;   // M2_DA_OUT: {instruction index, address | we} per LSU transaction
+static uint32_t da_pend = 0; static bool da_pwe = false;
+static void prof_cycle() {
+  if (!dut->cpu_rst_n) return;
+  ++cpu_cyc_prof;
+  const int ts = PR_C(ts) & 31; ++ts_hist[ts];
+  const uint32_t fa = PR_C(fetch_addr);
+  const int ics = PR_IC(state) & 3;
+  const uint32_t fb = PR_IC(fill_base);
+  const int gsel = PR_C(gsel) & 7;
+  const bool fw = (ts == 1 || ts == 3);
+  if (ts == 7) ++memw_total;
+  const uint32_t acc = dut->dbg_acc_cnt;
+  if (acc != prof_last_acc) { retired_prof += acc - prof_last_acc; prof_last_acc = acc;
+    if (ip_out) std::fwrite(&dut->dbg_ip, 4, 1, ip_out); }
+  if (da_out && gsel == 3) {
+    if (!dut->bus_ack) { da_pend = dut->bus_addr; da_pwe = dut->bus_we; }
+    else { const uint32_t rec[2] = { uint32_t(retired_prof), (da_pend & ~1u) | (da_pwe ? 1u : 0u) }; std::fwrite(rec, 4, 2, da_out); }
+  }
+  // ---- fill timing (the cache's own view)
+  if (ics == 1 && (prev_ics != 1 || (fl_on && (fb != fl_base)))) {
+    if (fl_on && fb != fl_base) ++fl_abandon_n;          // redirected onto another line
+    fl_on = true; fl_t0 = cpu_cyc_prof; fl_base = fb; fl_words = 0; fl_first_seen = false; fl_want_seen = false;
+    fl_demand = fw && ((fa >> 4) == (fb >> 4)); ++fl_start_n; if (fl_demand) ++fl_demand_n;
+  }
+  if (fl_on && ics == 1 && dut->bus_ack && gsel == 4) {
+    const unsigned dt = unsigned(cpu_cyc_prof - fl_t0);
+    if (!fl_first_seen) { fl_first_seen = true; fl_first_sum += dt; ++fl_first_hist[std::min(dt, 255u)]; }
+    if (fw && ((fa >> 2) == ((fb >> 2) + unsigned(PR_IC(fill_word) & 3))) && !fl_want_seen) { fl_want_seen = true; fl_want_sum += dt; ++fl_want_n; }
+    ++fl_words;
+  }
+  if (fl_on && PR_IC(tag_we)) { ++fl_done_n; fl_done_sum += cpu_cyc_prof - fl_t0; ++fl_done_hist[std::min<unsigned long long>(cpu_cyc_prof - fl_t0, 255)]; fl_on = false; }
+  if (fl_on && ics != 1) { ++fl_abandon_n; fl_on = false; }   // left S_FILL without writing its tag: abandoned
+  prev_ics = ics;
+  { static long tr_from = std::getenv("M2_PTRACE") ? atol(std::getenv("M2_PTRACE")) : -1; static long tr_n = 0;
+    if (tr_from >= 0 && (long)cpu_cyc_prof >= tr_from && tr_n < 4000) { ++tr_n;
+      std::printf("    c%-8llu ts=%2d ip=%08x fa=%08x icreq=%d ics=%d fb=%08x fw=%d hit=%d v=%d va=%08x | gsel=%d breq=%d ack=%d ba=%08x cph=%d st=%d\n",
+        cpu_cyc_prof, ts, dut->dbg_ip, fa, (int)PR_C(ic_req), ics, fb, (int)PR_IC(fill_word), (int)PR_IC(hit), (int)PR_IC(valid), (unsigned)PR_IC(req_addr_q) << 2,
+        gsel, (int)dut->bus_req, (int)dut->bus_ack, dut->bus_addr, (int)PR_BR(cph), (int)PR_BR(st)); } }
+  // ---- the fetch-wait cycle
+  if (fw) {
+    if (ts == 1) ++fw_total; else ++f2w_total;
+    int k;
+    const bool want_fill = (ics == 1) && ((fa >> 4) == (fb >> 4));
+    if (ics == 3) k = K_SWEEP;
+    else if (ics == 0) k = K_HIT;
+    else if (ics == 2) k = K_DONE;
+    else {
+      const int cph = PR_BR(cph) & 7;
+      const int st  = PR_BR(st) & 15;
+      const bool pend = PR_BR(req_mem) != PR_BR(req_seen);
+      const bool back = PR_BR(ack_cpu) != PR_BR(ack_seen);
+      if (gsel != 4 && gsel != 0) k = K_GRANT;
+      else if (cph == 0) k = K_BR_IDLE;
+      else if (back) k = K_ACK;
+      else if (pend) k = K_XIN;
+      else if (st == 8 || st == 11) k = K_DC;          // S_DCK, S_DCN
+      else if (st == 5 || st == 4) k = K_SD;           // S_RDB, S_HI_W
+      else if (st == 0) k = K_XOUT;                    // done on the memory side, ack crossing
+      else k = K_SD;
+    }
+    if (ics == 1 && !want_fill) { ++k_stale[k]; ep_saw_stale = true; k = K_STALE_OTHER; }
+    if (want_fill) ep_saw_fill = true;
+    ++k_cyc[ts == 3][k];
+    if (ep_len == 0) { ep_addr = fa; ep_kind = (ts == 3); }
+    ++ep_len;
+  }
+  if (ep_len && (!fw || PR_C(fetch_addr) != ep_addr)) {
+    const int o = ep_saw_fill ? (ep_saw_stale ? 3 : 1) : (ep_saw_stale ? 2 : 0);
+    ++ep_n[ep_kind][o]; ep_cyc[ep_kind][o] += ep_len;
+    ep_len = 0; ep_saw_fill = ep_saw_stale = false;
+  }
+}
+static void prof_report() {
+  const double c = double(cpu_cyc_prof), n = double(retired_prof ? retired_prof : 1);
+  std::printf("  IFETCH PROFILE: %llu CPU cycles, %llu instructions, CPI %.2f\n", cpu_cyc_prof, retired_prof, c / n);
+  std::printf("    T_FETCH_W %llu (%.1f%%, %.2f/insn)  T_FETCH2_W %llu (%.1f%%, %.2f/insn)  T_MEM_W %.1f%% (%.2f/insn)\n",
+              fw_total, 100.0 * fw_total / c, fw_total / n, f2w_total, 100.0 * f2w_total / c, f2w_total / n,
+              100.0 * memw_total / c, memw_total / n);
+  const char *on[4] = {"hit", "miss (filled the wanted line)", "another line's fill, then hit", "another line's fill, then miss"};
+  for (int w = 0; w < 2; ++w) for (int o = 0; o < 4; ++o)
+    if (ep_n[w][o]) std::printf("    %s episodes %-32s %9llu  %10llu cycles  %.2f each  (%.3f/insn)\n", w ? "T_FETCH2_W" : "T_FETCH_W ",
+                                on[o], ep_n[w][o], ep_cyc[w][o], double(ep_cyc[w][o]) / ep_n[w][o], ep_cyc[w][o] / n);
+  std::printf("    fetch-wait cycles by phase (T_FETCH_W + T_FETCH2_W):\n");
+  for (int k = 0; k < K_N; ++k) { const unsigned long long v = k_cyc[0][k] + k_cyc[1][k];
+    if (v) std::printf("      %-34s %10llu  %5.1f%% of fetch wait  %.3f/insn\n", k_name[k], v, 100.0 * v / double(fw_total + f2w_total), v / n); }
+  std::printf("    ... of 'cache filling ANOTHER line', what that fill was doing:\n");
+  for (int k = 0; k < K_N; ++k) if (k_stale[k]) std::printf("      %-34s %10llu\n", k_name[k], k_stale[k]);
+  std::printf("    fills: %llu started (%llu with the CPU waiting on them), %llu completed, %llu abandoned\n",
+              fl_start_n, fl_demand_n, fl_done_n, fl_abandon_n);
+  std::printf("    fill latency: first word %.1f cycles avg, wanted word %.1f (n=%llu), line complete %.1f (CPU cycles)\n",
+              fl_first_sum / double(fl_start_n ? fl_start_n : 1), fl_want_sum / double(fl_want_n ? fl_want_n : 1), fl_want_n,
+              fl_done_sum / double(fl_done_n ? fl_done_n : 1));
+  std::printf("    first-word latency histogram:");
+  for (int i = 0; i < 64; ++i) if (fl_first_hist[i]) std::printf(" %d:%u", i, fl_first_hist[i]);
+  std::printf("\n    line-complete histogram:");
+  for (int i = 0; i < 80; ++i) if (fl_done_hist[i]) std::printf(" %d:%u", i, fl_done_hist[i]);
+  std::printf("\n    sequencer states:");
+  static const char *tsn[] = {"FETCH","FETCH_W","FETCH2","FETCH2_W","DECODE","EXEC","MEM","MEM_W","MULDIV","MULTI","PAIR","FP","WB","FRAME","TRAP","BOOT","SYNRD","SYNWR","INTR","RET7","MODPC","SYNQ"};
+  for (int i = 0; i < 22; ++i) if (ts_hist[i]) std::printf(" %s %.2f", tsn[i], ts_hist[i] / n);
+  std::printf("  (cycles/insn)\n");
+}
+#endif
+
 static void step() {
   ++tk;
   drive_traffic();
@@ -219,6 +357,9 @@ static void step() {
     }
     note_reads();
     if (c) cpu_account();
+#ifdef IFETCH_PROF
+    if (c) prof_cycle();
+#endif
     return;
   }
   if ((tk % CPU_DIV) == 0) { dut->clk_cpu = 0; dut->eval(); }
@@ -227,6 +368,9 @@ static void step() {
   if ((tk % MEM_DIV) == 0) { dut->clk_mem = 1; dut->eval(); }
   note_reads();          // R530: after the edges, so bus_* are this tick's values
   if ((tk % CPU_DIV) == 0) cpu_account();   // R548
+#ifdef IFETCH_PROF
+  if ((tk % CPU_DIV) == 0) prof_cycle();
+#endif
 }
 
 static bool load_file(const std::string &path, std::vector<uint8_t> &out) {
@@ -313,6 +457,10 @@ int main(int argc, char **argv) {
   const long N = std::getenv("M2_INSNS") ? atol(std::getenv("M2_INSNS")) : 100000;
   const unsigned long long QUIET_LIMIT = 400000;   // ticks with no retirement
   dut->cpu_rst_n = 1;
+#ifdef IFETCH_PROF
+  if (const char *f = std::getenv("M2_IP_OUT")) ip_out = std::fopen(f, "wb");
+  if (const char *f = std::getenv("M2_DA_OUT")) da_out = std::fopen(f, "wb");
+#endif
 
   uint32_t last_acc = dut->dbg_acc_cnt;
   unsigned long long t0 = tk, last_change = tk, worst_quiet = 0;
@@ -387,6 +535,11 @@ int main(int argc, char **argv) {
     std::printf(" %x:%03x", i, v);
   }
   std::printf("\n");
+#ifdef IFETCH_PROF
+  prof_report();
+  if (ip_out) std::fclose(ip_out);
+  if (da_out) std::fclose(da_out);
+#endif
   std::printf("  I/O accesses: %ld\n", io_accesses);
   for (auto &e : io_hist) std::printf("    io %08x  x%ld\n", e.first, e.second);
   std::printf("m2_cpu_real: checks=%d fails=%d\n", checks, fails);

@@ -31,7 +31,11 @@ module m2_cpu_real_harness #(
   parameter int unsigned COL_BITS      = 10,
   parameter bit          DCACHE_EN_TOP = 1'b1,
   parameter int unsigned XMODE         = 0,      // R561: see m2_cpu_sdram_harness
-  parameter bit          CPU_ASYNC     = 1'b0    // R576
+  parameter bit          CPU_ASYNC     = 1'b0,   // R576
+  // R817: i960_top's front-end options, so the profiling build can A/B them
+  parameter bit          IC_HUF        = 1'b1,
+  parameter bit          IC_ER         = 1'b1,
+  parameter bit          PF2W          = 1'b1
 ) (
   input  logic        clk_cpu,
   input  logic        clk_mem,
@@ -119,7 +123,7 @@ module m2_cpu_real_harness #(
 
   logic  [3:0] bus_be;
 
-  i960_top u_cpu (
+  i960_top #(.IC_HUF(IC_HUF), .IC_ER(IC_ER), .PF2W(PF2W)) u_cpu (
     .clk(clk_cpu), .rst_n(cpu_rst_n),
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),

@@ -30076,3 +30076,606 @@ mechanism is not confirmed for this one.
 232ce658) -- Ben, 2026-10-11: "game over is now working as it should". The G
 is drawn. Confirms the inferred half of R810: the board's results-screen
 walks do start before their swap.
+
+**R813 -- THE DRAW'S NEXT TWO COSTS WERE NOT THE TEXEL PATH: THE CLEAR RAN
+ALONE BEFORE EVERY DRAW, AND HIDDEN SPANS WERE WALKED A GROUP A CYCLE. THE
+CLEAR NOW RUNS UNDER THE DRAW AND A HIDDEN SPAN IS DROPPED: -16..-25% (L12).**
+
+After R808 (s991) the board holds 57 fps in attract and 80-90% of the time in
+game. R808's profile and its list of measured levers set the order of the
+search; the ALM budget (98%, LAB-limited, ~+150 placed without a saving, R798)
+set the measure: draw time saved per ALM.
+
+*Believed:*
+  1. The 1.32 ms framebuffer clear before every draw (R808's last lever) was a
+     fixed cost of the double buffer: the buffer drawn next is the one shown
+     until the swap, so it cannot be cleared early, and the draw cannot start
+     on a line the clear has not reached.
+  2. Hidden (FTB) groups, 0.96 cycles a lookup, needed "hidden-group runs":
+     the mask read at issue time, skipping painted runs 8 groups a cycle --
+     an upper bound of 1.0-3.2 ms a draw, at the cost of a second read before
+     the divide pipeline.
+  3. Loading a span on its predecessor's last issue was worth ~3% (R808: one
+     bubble a span, 0.15 a lookup).
+
+*Now known:*
+  1. THE CLEAR CAN RUN UNDER THE DRAW. The clear is the writer's own burst
+     source on the same DDR3 port, so ORDER, not the buffer swap, is the
+     constraint: a pixel must not be cleared after it is drawn. A window
+     (m2_fb_wcomb's write burst) goes out only once the clear has passed its
+     line -- clr_y moves on a line's last ack and the port writes in order --
+     so the first band starts at once and waits only for its own 8 lines. The
+     port has the room: during a draw the writer's own beats are ~100k against
+     ~700k cycles (r57 L12).
+  2. WHEN the clear takes the port matters more than whether it does. Issued
+     at any free cycle, its 32-word chunks hid only 0.86 ms of the 1.32 (r57
+     L12): a chunk holds the port ~34 cycles while a textured span a few
+     pixels long closes a window every few cycles, and with both windows full
+     the walk stalls (writer refusals 73.9k -> 116.7k cycles). Shorter chunks
+     helped (16 words: 1.13 ms, 8: 1.20). Issuing a chunk only while the
+     writer is QUIET (no span held or walking, no word in B, no window open)
+     -- or when a window is waiting on the clear -- hid 1.28 ms (r57) and
+     1.31 ms (rpk) with the original 32-word chunks (refusals 77.8k, as HEAD).
+     The clear then ends ~200k cycles into the draw (r57), not at 105k.
+  3. MOST HIDDEN GROUPS ARE WHOLE HIDDEN SPANS, not runs inside visible ones.
+     Of the skipped groups a draw: r57 103,535 of 142k in 8,707 fully hidden
+     spans; rpk 291,911 of 321k (32,277 spans); r66 123k of 200k; f2200 108k
+     of 176k; apk 62k of 114k. A hidden span costs a group a cycle AND holds a
+     span slot until its last group has passed the in-flight queue -- the
+     slot every visible span behind it waits for (R808 item 3).
+  4. SO THE LEVER IS A SPAN CULL AT THE INPUT, not a faster skip. A span that
+     WAITS at m2_span_tex's input (and most do: two spans in flight) is
+     checked against the fill mask a word a cycle; all painted, it is taken
+     and dropped. It reads the mask through the walk's own query port, first:
+     that cycle the query's group is answered "not full" -- fetched instead of
+     skipped, never a wrong pixel, since the writer's mask test keeps the
+     picture exact. +2..+6% fetches (rpk 226,759 -> 239,978), all answered
+     identically. Its own mask copy was ~1% faster and +52 ALM standalone;
+     reading only when the port was free lost half the gain. A coarse check
+     (4 pixels a bit, a span's ends rounded out) costs 0.2% of the draw
+     against an exact one (r57 609.8k vs 608.8k cycles, own-copy builds).
+  5. Loading the next span on the last issue: <= 0.5% even with the timing
+     ignored (iss_last combinational into ld_over). With two span sets a slot
+     is almost never free at that moment. Dropped.
+  6. FOUR SPAN SETS (R808's NSP 4) still pays on top: -5..-9% more (L12),
+     -22..-30% against HEAD. With the slot values narrowed (below) its cost is
+     +21 ALUT / +192 registers in the full map -- registers, not logic.
+  7. The span walk carried y, x1 and its own x in 32 bits from a 16-bit queue,
+     and every consumer takes [15:0]. Narrowed (iss_x 17 bits, so x1 + 7
+     cannot wrap), the same answers: -54 ALUT / -15 registers in the full map
+     (-69 ALM, -111 registers standalone), which pays most of the cull.
+
+*The change* (m2_fb_wcomb, m2_raster3d, m2_span_tex):
+  * m2_fb_wcomb: I_CLR/I_CLRW leave the intake. The clear (cl_on, clr_y,
+    clr_x) is a second source for the burst FSM: F_IDLE sends a window if one
+    is pending and its line is below clr_y (f_win), else a clear chunk if the
+    writer is quiet or a window waits. The clear starts, as before, only once
+    what was drawn before the request is flushed; in_ready is low only between
+    the request and that start. clear_busy = cl_on until the last line's ack.
+    `empty` does not include the clear. m_din/m_be select on the register
+    f_cl (was the ist decode).
+  * m2_raster3d: C_IDLE waits for the clear to be TAKEN (fb_clear_req low),
+    not done (FB_WCOMB only); the LAST band's C_DONE (fb_complete) also waits
+    for !fb_clear_busy, so a frame is never published half-cleared.
+  * m2_span_tex: SPCULL (default 1, active with FTB) and CULLG 4. A span that
+    stood one cycle starts the check from bit slices of its own x0, x1, y
+    (first word {y[2:0], x0[8:5]}, words after it x1[8:5] - x0[8:5]); one word
+    a cycle through the query's port; culled only while the same span still
+    stands. A span off the left/right edge is never culled; a row outside the
+    band is not checked (the walk's own query counts it painted, mp_f1).
+    The cull's take: in_ready ORs `cull`, and ld_cold / ld_over / the flat
+    pass-through use in_valid && !cull.
+  * m2_span_tex: y_p, x1_p, rt_x, rt_x1, e_x, e_x1 16 bits, iss_x 17; the
+    outputs sign-extend.
+
+*Measured* (tb_m2_raster3d, the core's configuration as R808 -- FTB, PXC, FRB
+2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16,
+TXLW8, UZF 4, step 1, bilinear, R107 RN 10 RD 8; MAME's lists r57, r66, apk,
+rpk, f2200; L1 / L12 / L30 as R808. HEAD 5bc60fb reproduces R808's numbers to
+the 0.01 ms. Draw at 80 MHz, ms):
+
+                          r57    r66    apk    rpk  f2200
+  L1   HEAD              9.08   9.33  10.22  12.58  10.37
+       clear under draw  7.81   8.02   8.91  11.27   9.02   -10.4..-14.1%
+       cull only         8.34   8.23   9.84  11.42   9.87    -3.7..-11.8%
+       clear + cull      7.09   6.89   8.49  10.11   8.52   -16.9..-26.2%
+       + NSP 4           6.66   6.40   7.73   9.62   7.96   -23.3..-31.5%
+  L12  HEAD              9.75  10.01  11.16  13.16  11.00
+       clear under draw  8.48   8.66   9.81  11.85   9.65   -10.0..-13.5%
+       cull only         8.95   8.90  10.78  12.09  10.51    -3.4..-11.1%
+       clear + cull      7.71   7.55   9.43  10.73   9.16   -15.5..-24.6%
+       + NSP 4           7.11   6.96   8.55  10.20   8.57   -22.1..-30.4%
+  L30  HEAD             12.31  12.66  14.89  15.32  13.38
+       clear under draw 11.08  11.33  13.54  14.00  12.01    -8.6..-10.5%
+       cull only        11.52  11.58  14.59  14.35  12.98    -2.0..-8.6%
+       clear + cull     10.27  10.26  13.22  13.02  11.63   -11.2..-18.9%
+       + NSP 4           9.43   9.53  12.17  12.43  10.99   -17.8..-24.7%
+  Bus jitter (M2_R3D_JIT 200, L12): HEAD 15.24 15.88 17.18 18.20 16.28;
+       clear 13.04 13.42 14.71 15.57 13.58; clear + cull 12.96 13.49 14.76
+       14.50 13.11 (r66 / apk +0.05 against the clear alone).
+  HPS write queue (WQ 4, scaler 30%): r57 / rpk 18.09 / 20.47 -> clear 15.93 /
+       16.58 -> clear + cull 15.46 / 15.71.
+
+Profile (cycles a real lookup, mean of five lists, L12): the clear moved
+"queue empty" 0.80 -> 0.27; the cull moved "group skipped" 0.96 -> 0.39.
+What is left: issue 1.00, pipe refill 0.42, two spans in flight 0.51 (NSP 4's
+two), queue empty 0.38 (the fill not keeping up -- now visible), credit stalls
+0.36, in-flight queue full 0.17.
+
+*Answers.* Against HEAD, every texel answer common to both is identical and the
+displayed frame's hash is identical: clear + cull 2,991,040 common fetches,
+0 differ, hash 15 of 15 (5 lists x L1/L12/L30); clear alone 2,991,072 / 0 /
+15; with NSP 4 2,991,024 / 0 / 15; the bus-jitter and write-queue runs, hash 7
+of 7, 0 Avalon violations.
+
+*Benches* (the worktree): test_m2_fb_wcomb 43/0 and test_m2_fb_write 42/0
+(new: spans sent while the clear runs survive it, every pixel of 384 x 496
+checked; m2_fb_write passes it by refusing them); test_m2_fbw_chain all 9 pass;
+test_m2_span_tex 7,214/0; new test_m2_span_tex_ftb 17/0 (the cull: one-word and
+multi-word hidden spans culled; open first pixel / last word / coarse group,
+off-edge and empty row not culled; a span taken at once not held);
+test_m2_raster3d 40/0; test_m2_raster_fill 152,373/0; lint_top clean; lint_idx
+the same 147 candidates as HEAD. Mutations:
+  writer bench:  no line block (f_win = pend)  1 fail (987 px wrong); also the
+                 whole renderer, r57 hash 1149a338 -> 43468163
+                 block on > not >=                1 fail (966 px)
+                 clear at any free cycle          0 (speed only, as meant)
+  cull, test_m2_span_tex_ftb / whole renderer (r57, rpk hash):
+                 last word not checked            2 / both differ
+                 first word's start off by one    3 / both differ
+                 query answers "full" on a steal  - / both differ
+                 a word not painted ignored       8 / -
+                 coarse bit = OR, not AND         7 / -
+                 off-edge check removed           1 / -
+                 stage-1 alignment (cs1_v = 1)    1 / -
+                 answer kept across a take        - / not caught: the queue's
+                                                  bubble after a pop resets it
+                                                  (unreachable in the core)
+
+*Cost.* Full-design quartus_map (17.0, Model2.qsf), HEAD -> this change:
+  m2_fb_wcomb       484 -> 499 ALUT (+15), 448 -> 449 registers
+  m2_span_tex     1,578 -> 1,669 ALUT (+91), 1,467 -> 1,475 registers (+8)
+                  (the cull +148 / +23, the narrowing -54 / -15)
+  m2_raster3d    11,343 -> 11,440 ALUT (+97), 10,466 -> 10,476 registers
+  design estimate 40,319 -> 40,398 ALM (+79, with +71 i960_top / -58
+                  m2_geometry of map noise in untouched modules), 48,831 ->
+                  48,843 registers; DSP 87, block bits, the 10 uninferred-RAM
+                  instances unchanged; span_tex's mask still an MLAB
+  standalone      m2_fb_wcomb 429 -> 439 ALM; m2_span_tex 1,404 -> 1,375 ALM
+                  (cull alone 1,444, +40)
+Budget: +97 ALUT / +10 registers, ~+68 ALM at the design's 1.43 ALUT/ALM,
+<= ~+170 placed by R798's 2.5x; the standalone maps sum to -19. 0 M10K, 0 DSP.
+NSP 4 on top: m2_span_tex +21 ALUT / +192 registers, design estimate +96,
+standalone +77 ALM: ~+100..+240 placed -- still a study-level decision.
+
+*Timing, by construction* (80 MHz; no fit):
+  * Writer: f_win is pend[fk] and a 9-bit compare of wkey[fk]'s line (fk a
+    register) against clr_y -- ~4 LUT levels into the F_IDLE enables (addr_r,
+    m_blen, ridx, f_cl, fst); the clear's address arithmetic is the one I_CLR
+    had, on the same addr_r. w_quiet, m_din/m_be's select (f_cl) and in_ready
+    (n_v, clear_req, cl_on) are registers. The known near-miss s972 wlo ->
+    mk_valid (c_go -> pg_we) is not touched.
+  * Span walk: the query's MLAB address gains a 2:1 select (cs_run, a
+    register, between two registers) -- one LUT before mk[] and the 128:1
+    mk_valid select; mq_full gains one priority term (a register). The cull's
+    path is register -> address select -> MLAB -> 4-input AND -> 8-bit
+    compare -> its own state: about the query's own second half. Stage one
+    is bit slices and a 4-bit subtract from the queue's head. `cull` is
+    registers AND in_valid (a register), so in_ready / ld_over's late input
+    (pipe_en) is unchanged; ld_cold, ld_over and the flat pass-through gain
+    one register-driven input.
+  * The narrowing only shortens adders and compares (iss_last 32 -> 17 bits,
+    e_x1 32 -> 17).
+
+*Model 1* has no framebuffer, no texture walk and no fill mask: its band
+painter clears each band in the fill path (1,984 cycles, four banks) and gave
+up its background clear because it wrote a DISPLAYED buffer behind the beam --
+a dual-clock M10K read during write (m1_raster_band). Here the clear writes the
+DDR3 buffer the scanout is not reading (fb_draw != fb_show from the swap), so
+that hazard does not arise; the hazard that does -- a pixel cleared after it
+is drawn -- is what the line block closes.
+
+*Not verified:* the fit, timing at 80 MHz, the board. The bench's DDR3 takes a
+beat a cycle; on the board the clear's chunks and the draw's windows share the
+HPS bridge with the scanout (which keeps its priority), so the clear's hiding
+is bench-measured only. The bus-jitter and write-queue runs say the gain
+survives a slower bus; they do not say how much of the 1.3 ms the board's
+clear really costs.
+
+*Next levers, measured* (on top of this): four span sets -5..-9% (L12,
++~100..+240 placed; regs, so moving col_p / tex_p's single-reader fields to
+MLAB is the place to look for its saving); the fill's supply (queue empty 0.38
+a lookup, m2_raster_fill's per-quad setup) is now visible; the rest is the
+texel round trip.
+s994 (the release: R812 with R808 and R810, 80/40) -- Ben's play and attract,
+72 min from load with no lock (41 fps readings, none zero). The build without
+R812 at the same speed (s991) locked in a race at ~10-14 min.
+
+**R813 DID NOT FIT AS A WHOLE.** s995-s997 (7f07bf1 = s994 + R813, 80/40):
+41,486 ALM (99%, +133 on s994). s995 clk_sys -0.452 (m2_geo push queue rp),
+s996 clk_sys -0.300 (m2_raster_fill S_PF_N -> det_r) and a Quartus segfault
+after the fit, s997 "Can't fit design in device" after 75 min of routing.
+None of the failing paths is in the changed logic: placement pressure, the
+same picture as R796's first 128-bit build. Next: s998-s1000 = 7f07bf1 with
+SPCULL = 0 (build/worktree_patches/spcull-off.patch) -- the clear under the
+draw and the 16-bit narrowing, the cull removed by its parameter. Bench:
+the clear alone -10..-14% (L12) for +15 ALUT.
+s998-s1000 (7f07bf1 + SPCULL = 0): all three close every core clock --
+s999 setup >= +0.209, hold >= +0.208, HDMI -0.847 (report-only); 41,437 ALM.
+RBF build/Model2_20261011_s999_clrdraw.rbf 49c9517b5d52f71d97e31f843aa9ddd3.
+s994 meanwhile: 150 min from load, no lock.
+s999 on the board (Rev A, from 18:05): no lock in 240 min of fps readings;
+Ben: speed "seems the same" as s994 -- R813's clear under the draw does not
+show. Read with R813's bench (heavy race lists 7.7-10.7 ms idle, 10.3-13.2
+contended, against 17.4): the draw may no longer be the stage that misses.
+Next: R814, a build that classifies every vblank (held for the draw / walk
+busy / game late) -- s1001 (7f07bf1 + SPCULL 0 + the 'V' 'D' 'S' records,
+75/37.5; core >= +0.263, hold >= +0.219, HDMI -0.951; RBF
+build/Model2_20261011_s1001_why.rbf 7066d457, patch
+build/worktree_patches/why-r814-7f07bf1.patch).
+
+**R814 -- IN ATTRACT THE DRAW IS NEVER LATE; THE DROPS ARE THE GAME.** s1001
+(the why build, 75/37.5) on the board, Revision A attract, two captures
+(120 s and 300 s, 24,158 vblanks):
+                                     120 s      300 s
+  new picture possible (flipped)     98.9%      98.7%
+  draw behind (game held, R652)       0.0%       0.0%
+  walk behind (no flip, walk busy)    0.0%       0.0%
+  game behind (no flip, walk idle)    1.1%       1.3%
+  draw ms: median / p90 / max        8.1/12.3/16.1   8.1/12.5/16.8
+  SDRAM busy median (p90)            60% (69%)  60% (70%)
+  waits: texel / i960 / geometry     4.2/2.4/7.5%    3.9/2.3/7.2%
+Every draw fits the 17.39 ms vblank even at 75 MHz (0 of 29,870 sampled
+periods over one vblank). So after R808 the attract drops are the GAME --
+the i960 and TGP not finishing a frame -- and R813 could not show there,
+as Ben saw. Race capture to follow (Ben, later).
+The game-late vblanks are NOT spread: they repeat with the attract loop
+(55.4 s), the same places every loop -- a 29-vblank pause (0.5 s) at one
+scene change, 3-5 at +6.5 s and ~+40 s. In the no-flip vblanks the TGP
+retires 0 instructions (963 median the vblank before, 19,312 in a normal
+one): it is idle, not the limit. The i960 is flat out: 57,577 instructions
+a vblank in the pauses (3.31 MIPS at 37.5 MHz) against 24,445 elsewhere
+(1.41 -- it normally waits for the TGP and the vblank). So each pause is
+~1.7 M instructions of CPU work, a scene's setup. Inferred, not measured:
+the arcade pauses there too -- a 25 MHz i960KB cannot do 1.7 M instructions
+in one vblank at any plausible rate -- but for fewer vblanks; ours is the
+CPU's own speed (CPI ~11-12 at 40 MHz on s999). Never take a MAME cycle
+count as the real length (standing rule).
+RACE (Ben driving, Revision A, 150 s, 8,627 vblanks, s1001 at 75/37.5):
+new picture 85.8%, draw behind 0.0%, walk behind 0.5%, GAME behind 13.6%.
+Draw median 11.4 ms, p90 13.7, max 16.6 -- 0 of 10,667 periods over a
+vblank. SDRAM busy 65% (p90 73%); waits texel 4.4%, i960 3.0%, geo 6.9%.
+So the race, too, is limited by the game, not the 3D. Unlike attract, the
+TGP is BUSY in the late vblanks (57,006 instructions median, 64,097 max;
+50k in on-time ones), and game frames that took 2+ vblanks carried more TGP
+work (median 66k, p90 116k, against 50k). The i960 ran 18,474 instructions
+a vblank median -- a third of its flat-out 57,577 -- so neither unit is
+saturated: at CPI ~4.9 the TGP's 57k instructions are ~22% of a vblank. The
+frame is the CPU and the TGP waiting on each other (R770: the i960 held
+4.8-5.5 ms a frame on the TGP's output FIFO). Inferred: our i960 (CPI
+~11-12) is the slow half -- a real i960KB at 25 MHz retires several times
+more per second; our TGP at CPI 4.9 x 80 MHz is near a real MB86234's one
+instruction a cycle at 16 MHz. Next measurement: the i960's cycles split
+into executing, instruction fetch, data memory, and held on the TGP FIFO.
+
+**R814 v2 -- WHERE THE i960's CYCLES GO.** s1005 (the why build plus 'I'
+{T_FETCH_W + T_FETCH2_W cycles | T_MEM_W cycles} and 'K' {copro_stall |
+geo_push_stall cycles}; 75/37.5; core >= +0.610, hold >= +0.212, HDMI
+-0.809; RBF build/Model2_20261012_s1005_why2.rbf 302aa10b, patch
+why2-r814-7f07bf1.patch). Medians per vblank (651,947 i960 cycles):
+                              attract     race (Ben driving)
+  instruction-fetch wait       33.7%       31.7%
+  data access wait (T_MEM_W)   25.7%       30.4%
+    held by the TGP             0.8%        3.2%
+    held by the geometry push   0.0%        0.0%
+  instructions retired         24,905      18,510
+  game behind (vblanks)         1.3%       15.5%   draw behind 0.0% both
+A third of the CPU's time is waiting on instruction fetch -- ~11 cycles a
+retired instruction -- and the TGP holds it for only 1-3%. R770's "4.8-5.5
+ms on the TGP" is gone with R771-R775. The remaining data wait is the CPU's
+own memory traffic. R786 cut the i-cache 8 KB -> 512 B when the draw was
+the limit; now the CPU is, so it is measured again: s1007-s1009 = s1005 with
+LINES 512 (8 KB). m2_cpu_real (boot code, 100k instructions) is 12.03 CPI
+at 32, 128 and 512 lines alike -- the boot's loops fit any of them, so it
+cannot answer this; the board can.
+
+**R815 -- THE 8 KB I-CACHE BACK: R786 WAS RIGHT THEN AND WRONG NOW.** R786
+cut the i960's i-cache 8 KB -> 512 B for the texel path's room, because the
+8 KB cache "changed nothing on the board" -- true while the 3D draw was the
+limit (R780). After R808 the game is the limit (R814), and a third of the
+i960's cycles were instruction-fetch wait. s1009 = s1005 (the why2 build,
+75/37.5) with LINES 512: core >= +0.497, hold >= +0.158, HDMI -0.915; 41,398
+ALM -- the same as the 512 B build (41,283-41,393): R786's "~264 ALM" does
+not hold on this design (the valid-in-tag LUT-RAM, R768). RBF
+build/Model2_20261012_s1009_why8k.rbf 1df24dfa.
+                       attract 512 B / 8 KB     race 512 B / 8 KB
+  game behind           1.3% / 1.2%              15.5% / 1.0%
+  walk behind           0.0% / 0.0%               0.0% / 1.0%
+  new picture          98.7% / 98.8%             84.5% / 98.0%
+  i-fetch wait         33.7% / 31.1%             31.7% / 22.4%
+  data wait            25.7% / 27.4%             30.4% / 37.5%
+    held by the TGP     0.8% / 0.8%               3.2% / 5.0%
+  instructions/vblank  24,905 / 26,335           18,510 / 20,665
+Ben, racing on s1009: "it made a huge difference in game. I would say 99%
+of the time full speed. still not 100 but really good." (Two different
+races, so the per-race numbers are indicative; Ben's judgement agrees.)
+Attract's remaining drops are R814's scene-setup pauses, which a cache does
+not shorten. The CPU's i-fetch wait is still 22% in a race: an agent is
+measuring the miss path in simulation (fill latency, footprint, next-line
+prefetch) -- R816 to follow.
+
+**R816 -- A WHEEL STEERS FROM THE RIGHT STICK.** Ben (from a tester's wheel):
+MiSTer maps a wheel onto the right stick -- steering on its X, the pedals on
+its Y. The core read steering only from the paddle, the left stick's X or
+the d-pad, so the pedals worked and the wheel did not steer. Now: paddle,
+then the left stick's X if past the dead zone (+-12), then the right stick's
+X past the same dead zone, then the d-pad. No OSD option, at Ben's call: a
+pad keeps the left stick, and the right stick's X only steers while the
+left is centred, so pressing the pedals on a pad's right stick can drift the
+steering only by more than the dead zone, and only with the left stick
+released. The Steering sensitivity applies to both. lint_top clean; Quartus
+parse clean. Not yet on the board.
+
+**R815 ON THE BOARD AT 80/40.** s1011 (5422e84: s999 + the 8 KB i-cache,
+80/40; core >= +0.144, hold >= +0.214, HDMI -0.676; RBF 3dec0ace), Revision
+A, m2-fps.py (framebuffer clears from Linux; no telemetry in a release
+build). Attract 20 s: 57.5 fps, 99% of 3D frames in one vblank. Race (Ben
+driving), 119 s: mean 57.0 fps, 99% in one vblank; dips only at ~51-52 s
+(42, 48 fps), and single seconds at 53-54. One 504 ms frame (29 vblanks) and
+a 452 ms one (26) in the two logs were the race's end and start -- Ben: going
+back to the menu and attract -- scene changes, the same class as R814's
+29-vblank attract pause (CPU-bound setup). The race itself is at the
+arcade's rate for nearly all of its frames.
+
+**R817 -- WHERE THE i960's FETCH WAIT GOES ON THE GAME'S OWN CODE; WHY 8 KB
+MOVED THE RACE AND NOT ATTRACT; HIT UNDER FILL, EARLY RESTART, AND THE
+PREFETCH AFTER A TWO-WORD INSTRUCTION.**
+
+*What was believed.* R814 v2 / R815: a third of the i960's cycles are
+instruction-fetch wait (33.7% attract, 31.7% race); the 8 KB cache took the
+race's late vblanks 15.5% -> 1.0% but moved attract's fetch share only 33.7 ->
+31.1%, so "the fetch wait is not capacity misses of a 512 B cache, or not
+only". R768 (MAME trace): ~80% of misses are fall-through, so next-line
+prefetch was the next lever. m2_cpu_real (boot code) could not answer any of
+it: its loops fit every cache size.
+
+*The telemetry decoder undercounts (verified).* decode_why.py takes medians of
+rates between ADJACENT records and drops pairs with no vblank edge between
+them. The records are not vblank-synchronous (10,667 'V' and 20,258 'P' in
+8,627 vblanks), so 11,629 of 20,256 'P' pairs and 2,100 of 10,667 'I' pairs
+were dropped and the rest span ~0.8 of a vblank: instructions were low by
+~60%, fetch wait by ~20%. Whole-capture totals (last minus first counter over
+the vblanks between), and medians over 30-vblank windows, agree to <2%:
+                           attract 512 B / 8 KB    race 512 B / 8 KB
+  instructions / vblank     63,128 / 66,255          51,658 / 54,205
+  fetch wait                42.2% / 38.9%            40.0% / 29.6%
+    a retired instruction   4.36 / 3.83              5.05 / 3.56 cycles
+  data wait (T_MEM_W)       32.1% / 34.3%            36.6% / 44.5%
+  held by the TGP           2.4% / 3.0%              6.5% / 9.8%
+  CPI over the vblank       10.3 / 9.8               12.6 / 12.0
+(37.5 MHz, 651,947 cycles a vblank; R814 v2's and R815's tables used the
+medians.) The corrected decoder is the same script with rates over >= 30-
+vblank windows.
+
+*How the game's code was run through the real fetch path.* The full-system
+bench never leaves the settings screen (R733), so: MAME 0.289, daytona
+(Revision A, the board's set), cold NVRAM, nine windows of six frames traced
+uncollapsed AND with read/write taps on the i960's space in the same run
+(sim/ifetch/tracetap.lua), so every instruction carries its own loads and
+stores (tapconv.py; the tap stream's instruction sequence equals the trace's,
+645,735 of 645,735 etc. in every window). Attract: frames 1200, 2800, 4200,
+5100, 5900 (17,050-31,000 busy instructions a frame). Race: coin, start, full
+throttle, frames 2000, 2400, 3000, 3600 (38,134-47,652 busy a frame; R768's
+race 47,371). "Busy" = everything but the frame-sync spin (Revision A: ldob
+0x500000 / cmpibe at 0x1394-0x139c, 71-84% of MAME's attract instructions).
+tb_m2_ifetch_replay drives the REAL i960_icache, i960_top's grant, the real
+m2_cpu_bridge (FAST_ACK 0, CC_EN 0, as the board) and m2_sdram_cdc + m2_sdram
+at 40 / 80 / 100 MHz from that stream; only the sequencer is a model of
+i960_top's front end (T_FETCH / T_FETCH_W / T_FETCH2_W / prefetch / T_EXEC /
+the load-store held to its acknowledge). Competing SDRAM traffic: none (c0) or
+ports 2 and 3 asking 40% of controller cycles (c40); the board (60-65% busy,
+R814) sits between the two in every check below.
+The model checked against the REAL i960_top on the same path
+(tb_m2_cpu_real + its retired stream and load/stores fed to the replay):
+                                   real CPU             replay
+  boot 100k, R815 cache            fetch 1.53/insn       1.54     CPI 11.40 / 11.14
+  boot 100k, hit under fill        fetch 0.51            0.51     CPI 10.66 / 10.36
+  3 M (a two-word poll), R815      FW 1.91 FW2 0.83      1.91 0.83 CPI 7.21 / 7.17
+  3 M, + early restart             FW 1.74 FW2 0.83      1.74 0.83 CPI 7.05 / 7.03
+  3 M, + two-word prefetch         FW 0.91 FW2 0.83      0.91 0.83 CPI 6.22 / 6.20
+
+*Footprint (MAME stream, 16-byte lines, demand line changes, verified).*
+Distinct code a frame: attract 22-25 KB (1,400-1,630 lines), race 31-37 KB
+(2,000-2,400). Reuse distance is bimodal: ~45-50% within 64 lines, ~30% at
+128-256 lines (2-4 KB), and 13-15% at 1-4 K lines -- code run once a frame.
+So 16 KB buys almost nothing over 8 KB; only >= 32 KB holds the frame.
+  misses (line changes)    512 B      2 KB      8 KB      32 KB    8 KB 2-way/4-way
+  attract                  47-60%    37-46%    20-24%     8-11%     17-22 / 16-22%
+  race                     56-65%    36-45%    18-22%    10-13%     17-19 / 13-18%
+~80% of misses at every size are line N+1 after N (R768's figure stands).
+
+*Where the fetch wait goes at R815 (8 KB), cycles a busy instruction, 40 MHz
+(c0 / c40, averaged over the windows):*
+                               attract        race
+  busy CPI                   10.03 / 13.34   9.45 / 12.24
+  fetch wait                  3.36 / 4.70    3.12 / 4.28
+    SDRAM (fill's line not
+      in the bridge's d-cache)1.26 / 2.42    1.08 / 2.07
+    hit pipeline (T_FETCH_W
+      after a redirect or a
+      two-word instruction)   0.77 / 0.77    0.87 / 0.87
+    words 2-4 from the line
+      buffer (word-0-first)   0.66 / 0.65    0.56 / 0.56
+    a mispredicted prefetch's
+      fill (the redirect waits
+      for its first word)     0.24 / 0.41    0.22 / 0.38
+    crossings, d-cache, ack,
+      S_DONE                  0.45 / 0.45    0.40 / 0.40
+    behind a load/store       0.00           0.00
+  data (T_MEM_W)              4.34 / 6.31    3.97 / 5.61
+A demand miss: the wanted word 24 cycles after the fill starts at c0, 39 at
+c40 (600 / 975 ns); 80% of i-cache misses also miss the bridge's 16 KB data
+cache and go to the SDRAM -- as two four-word reads, one per half line.
+
+*Why 8 KB moved the race and not attract (inferred from the above and the
+board's totals).* The model's busy CPI falls 11-14% (attract) and 15-18%
+(race) from 512 B to 8 KB (c40 / c0). A race frame's busy work at 512 B is 38-48 k instructions
+x 11.5-14 CPI = 440-660 k cycles -- at the 652 k budget -- so the cut shows as
+frames made (late 15.5% -> 1.0%). Attract's is 17-31 k x 11.6-15 = 200-470 k:
+it fitted already, and the time freed goes into the frame-sync spin. The spin
+is fetch-heavy at any cache size (a two-word ldob and a backward cmpibe,
+2-4 cycles of fetch wait an instruction, c0-c40), so the fetch SHARE barely moves and the
+instructions rise +3,127 a vblank -- all spin. The board's measured share is
+mostly the idle loop's composition, not the work's. (The model's attract
+gain is 21-65 k cycles a frame by scene; the board's +3,127 spin instructions
+a vblank at ~8.5-10 cycles each imply ~27-31 k averaged over the attract loop
+-- the same order, not checked scene by scene.)
+
+*Found: a fall-through fill abandoned every time round a loop (verified).*
+Every accepted one-word instruction prefetches ip+4. When that word starts a
+line the cache lacks and the instruction is a taken branch, the prefetch
+starts a fill; the branch target is a hit; R548's redirect waited for the
+fill's outstanding word and then ABANDONED the fill -- its line never
+installed -- so the next iteration did it again, at any cache size. On the
+real CPU path (boot, 8 KB): 24,692 of 24,730 fills abandoned, 1.52 of 1.53
+fetch-wait cycles an instruction. In the game it is 0.22-0.41 a busy
+instruction, and every iteration of Revision A's frame-sync spin (cmpibe is
+the last word of line 0x1390).
+
+*The changes (i960_icache, i960_top; on by parameter, default on):*
+  * HUF (hit under fill): a request for a line already present is answered
+    during a fill, from the read port the fill does not use; the fill runs on
+    and installs its line; a fill nobody waits for ends without a `valid`
+    (fill_wanted). A request for the fill's own line, or a hit answered under
+    it, supersedes a redirect still waiting for its acknowledge (redir_live).
+  * ER (critical word first, early restart): a fill starts at the word asked
+    for and wraps (fill_cnt counts four); that word is answered as it arrives
+    -- registered (byp_q), `data` = byp_sel ? byp_q : cdata_q -- with the line
+    completing behind it; a request for the line's later words is answered as
+    each arrives.
+  * PF2W (i960_top): when a two-word instruction's displacement lands in
+    T_FETCH2_W, ip+8 is prefetched exactly as a one-word accept prefetches
+    ip+4 (fetch_addr, pf_ip, pf_issued; R812's ic_ok covers it). Two-word
+    instructions are 11-16% of the busy stream and each made the next
+    instruction pay T_FETCH + two T_FETCH_W even on a hit.
+
+*Measured (busy CPI, cycles a busy instruction; c0 / c40; MAME windows
+through the real fetch path):*
+                                attract          race          busy fetch wait (race)
+  R815 (8 KB)                10.03 / 13.34    9.45 / 12.24     3.12 / 4.28
+  + HUF                       9.89 / 13.20    9.32 / 12.10     2.95 / 4.00
+  + HUF + ER                  9.50 / 12.82    8.97 / 11.75     2.62 / 3.73
+  + HUF + ER + PF2W           9.24 / 12.55    8.66 / 11.45     2.30 / 3.41
+     (all three: -7.9% / -5.9% attract, -8.4% / -6.5% race)
+  for comparison:
+  LINES 32 as R786 (512 B)   11.60 / 15.02   11.53 / 14.42     5.27 / 6.76
+  LINES 32 + all three       10.23 / 13.62    9.97 / 12.83     3.66 / 5.13
+  32 KB (2048 lines) + HUF    8.81 / 11.69    8.64 / 11.18     2.28 / 3.03
+Evaluated and NOT kept:
+  * Next-line prefetch in the cache (fill N+1 when a waited-for fill of N
+    completes): fetch wait -1.0 a busy instruction, but CPI only -0.18 / -0.10
+    on top of HUF and ~0 on top of ER -- the bridge takes one transaction at a
+    time, so the speculative line read (two SDRAM reads) delays loads and
+    stores by as much as it saves. Streaming (every completed fill arms the
+    next) is worse than none (+0.3..+1.4 CPI). Patch kept (build/ is not
+    tracked): build/worktree_patches/r817-icache-with-nlp.patch.
+  * A static branch-target prefetch (unconditional and backward branches): a
+    further -0.13 / -0.13 race on top of all three -- model only, an i960_top
+    change for 1.5%.
+  * 2-way 8 KB: 10-18% fewer misses -- a second tag RAM; not built.
+  * 32 KB: -0.8 / -1.0 CPI more, +24 M10K and four times the tag MLAB.
+  * R728's code cache: a second 8 KB holds what the first holds -- the
+    misses left are at reuse distances of 1-4 K lines.
+  * The i-fetch port's SDRAM priority: already first (R766).
+Per busy race frame (47.7 k instructions, c40) that is 584 k -> 546 k cycles of
+the 652 k at 37.5 MHz (695 k at 40).
+
+*Where the rest goes, after all three (race, c0 / c40):* SDRAM 1.10 / 2.13,
+hit pipeline 0.51 / 0.50, line-buffer words 0.27 / 0.27, a mispredicted
+prefetch's fill 0.11 / 0.19, crossings and ack 0.31 / 0.31. The SDRAM part is
+two four-word reads per line, one after the other. Next lever, inferred and
+not built: line reads as one eight-word burst on port 1 (R787's p_long; the
+CPU's port crosses m2_sdram_cdc, which carries one 64-bit half today), worth
+an estimated -0.5..-0.9 CPI at c40.
+
+*Area (quartus_map 17.0, the whole design, f552eaa vs f552eaa + R817):*
+ALMs-needed estimate 40,581 -> 40,562; ALUT 57,771 -> 57,765; registers
+48,832 -> 48,866; block memory bits identical (4,297,979). By entity:
+i960_icache 347 -> 411 ALUT, 138 -> 174 registers; i960_top's own logic 3,803
+-> 3,828 ALUT. cdata still M10K (2048 x 32), ctag still MLAB (512 x 20).
+Calibrated as R798 (+64 ALUT / +194 registers -> +20..+40 ALM placed), +89
+ALUT / +36 registers is an estimated +40..+70 ALM placed: under the ~150 that
+would need a saving, not measured by a fit.
+
+*Timing (inferred, no fit yet).* Everything is on clk_i960 (40 MHz, 25 ns;
+setup slack +2.1..+2.6 ns on s1010-s1012). HUF's huf_hit and redir_live are
+the existing redirect compares (the LUT-RAM tag read, idx/tag == fill) feeding
+flop enables. ER adds a 2-bit compare and, on `data`, one 2:1 mux whose select
+is a register -- one LUT on the cdata_q -> fetch_word -> decode path, the one
+to read in the first fit's clk_i960 report. PF2W adds an input to the
+fetch_addr / pf_ip muxes (ip+8 already exists for ip_next). Nothing on clk_sys
+or clk_mem changes; the bridge is untouched.
+
+*Verified.* Retired-IP hash a95ee045a6c3424b unchanged (tb_m2_cpu_real, 100 k,
+25/40 MHz and 40/80/100); 3 M instructions c6e8c0509640f463 identical with all
+three on and off. test_i960_icache, test_i960_top, _irq, _lat, test_i960_rom,
+test_m2_cpu_real, test_m2_cpu_bridge (925/0), test_m2_cpu_sdram, test_m2_boot
+pass; lint_top clean; lint_idx: nothing in rtl/cpu/i960. NEW test_i960_icache_
+r817: the cache against a bus answering each word after 0..N cycles (N = 0,
+3, 12, 40; a moved address under an outstanding word is a failure) and a
+requester that keeps one current address, accepts only a `valid` naming it
+(R812), abandons only prefetches and never a demand fetch; every `valid` is
+checked against memory, a demand unanswered for 4,000 cycles is a hang; plus
+"a loop's fall-through line is fetched once" (HUF) and "a miss on word 3 is
+answered before its line completes" (ER). 8 KB and 512 B with HUF + ER, HUF
+alone, and R815's cache: 1.6 M answers each, 0 fails. Planted faults caught:
+the stale-redirect fix removed (hangs), early restart on the first word
+instead of the wanted one (wrong words), the hit under fill not renaming
+vaddr (wrong words and the loop hangs), `data` without the bypass (wrong
+words). The stale-redirect fault was real: the first HUF version hung the
+replay on game code (a prefetch of 0x1360 deferred while 0x1900 filled, then
+a demand for 0x1900), which no existing bench reached; without HUF the CPU
+cannot issue a request while a redirect is pending, so R815's cache cannot
+reach it.
+
+tb_i960_icache changed twice for early restart, both in what it observes:
+a miss is now a line fetched on the bus (a sequential fetch answered by the
+fill still running waited with bus_req up and was booked as a miss: 0.750
+"out of bounds"), and the speculative-during-fill case watches for the demand
+word's early answer from the first cycle (it arrives before the speculative
+request: 9 "stalls"). It passes R815's cache, HUF alone, and HUF + ER at 512 B
+and 8 KB (i960_icache's defaults are now HUF 1, ER 1, as i960_top uses them).
+
+*Not established.* That the board shows the gain: the model brackets the
+board's contention between c0 and c40 but its loads are cheaper than the
+board's. Board telemetry will read differently for a reason that is not the
+game: the spin's own fetch wait changes with HUF and PF2W, so attract's
+fetch share is not the measure -- late vblanks in a race are, and busy cycles
+need the IP-tagged sample (R721's 'C') or a spin-excluding counter.
+
+Tools (committed with this): sim/mem/tb_m2_ifetch_replay.cpp +
+m2_ifetch_replay_harness.sv (make replay_m2_ifetch; RP_LINES / RP_HUF /
+RP_ER), tb_m2_cpu_real's IFETCH_PROF build (make prof_m2_cpu_ifetch: every
+fetch-wait cycle booked by phase, every fill timed; M2_IP_OUT / M2_DA_OUT for
+the replay), sim/ifetch/ (MAME trace + taps, conversion, footprint and
+reuse). The traces are ROM-derived and stay outside the repository.
+
+**R817 BUILT.** s1013-s1015 (5504691, R816 only) gave no RBF: Quartus
+internal errors (STA; a fitter segfault) while the R817 agent's replays and
+maps ran beside them -- memory pressure, the standing reading -- and s1015
+missed clk_sys by 1.771. s1016-s1018 = 7932d11 (s1011 + R816 + R817, 80/40):
+s1017 closes, core >= +0.448, hold >= +0.165, HDMI -0.776, 41,498 ALM; RBF
+build/Model2_20261012_s1017_r817.rbf 77dc39cf. On the board from 20:26 with
+Ben's go-ahead, Revision A, 4 h fps/lock watch. s1011 before it: 64 min of
+the watch, no lock, 57.0-57.4 fps at the end.
+s1017: NO LOCK in 240 min of the watch (135 readings, none zero, 103 at
+>= 57 fps, none under 50; attract, unattended). The first long soak of R817's
+fetch changes on the board.
+s1017 at 07:43 the next morning: ~11 h 17 min from load, still 57.6 fps,
+every 3D frame in one vblank (m2-fps.py); Ben: "still running over 7 hours".
+s1017 race (Ben driving, ~11.5 h after load): m2-fps.py 119 s, mean 56.8,
+99% of frames in one vblank, the race-start frame 452 ms (26 vblanks, as
+s1011 -- that pause is not shortened by R817, so it is not fetch-bound).
+Ben: "I did not visually see or feel a slowdown, compared to s1011, where I
+did see and feel a slowdown on one corner every time." The per-second log
+cannot isolate one corner's dip; the eye can.

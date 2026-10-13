@@ -72,6 +72,11 @@ module m2_fb_wcomb #(
   // bit 24 a cleared word is simply zero: not painted, so the mixer shows the
   // tilemap through it. 248 beats a line for 384 lines, posted writes, to the
   // buffer the scanout is not reading.
+  // R813: THE CLEAR RUNS UNDER THE DRAW. It is a burst source beside the
+  // windows, not a state of the intake: spans are taken while it runs, and a
+  // window goes out only once the clear has passed its line. clear_busy stays
+  // high until the last line is written, so the caller must not publish the
+  // frame before it drops; `empty` does not wait for it.
   input  logic        clear_req,
   output logic        clear_busy,
 
@@ -143,14 +148,16 @@ module m2_fb_wcomb #(
   logic              ib;                   // the window spans go into
 
   // ------------------------------------------------------------ span intake
-  typedef enum logic [1:0] { I_IDLE, I_RUN, I_CLR, I_CLRW } ist_t;
+  typedef enum logic { I_IDLE, I_RUN } ist_t;   // R813: the clear is not an intake state
   ist_t ist;
   logic signed [15:0] x_r, x1_r;
   logic               sel_r;
   logic [8:0]         y_r;
   logic [31:0]        px_r;
   logic               s0_r, s1_r;          // the stipple keeps the even / odd pixel
-  logic [8:0]         clr_y, clr_x;
+  logic [8:0]         clr_y, clr_x;        // R813: the line being cleared, and the beat in it
+  logic               cl_on;               // R813: a clear is running (clear_busy)
+  logic               f_cl;                // R813: the burst on the bus is the clear's
   logic [$clog2(IDLE_T+1)-1:0] idle_n;
   // R808: ONE SPAN HELD AT THE INTAKE, so a span is taken while the walk is
   // on the previous one's last word. A span was accepted only in I_IDLE, and
@@ -230,6 +237,19 @@ module m2_fb_wcomb #(
   typedef enum logic { F_IDLE, F_RUN } fst_t;
   fst_t fst;
   wire           fk    = pend[1];          // the closed window (never both, see ORDER)
+  // R813: a window waits while the clear has not passed its line. Lines below
+  // clr_y are written whole (clr_y moves on the line's last ack), and the
+  // port writes in order, so a pixel can never be cleared after it is drawn.
+  wire  [8:0]    fk_y  = wkey[fk][KW-2 -: 9];
+  wire           f_win = pend[fk] && !(cl_on && (fk_y >= clr_y));
+  // R813: and the clear takes the port only while the writer is QUIET -- no
+  // span held or walking, no word in B, no window open -- or when a window is
+  // waiting on it. A 32-word chunk issued while spans stream holds the port
+  // ~34 cycles, and a span a few pixels long closes a window every few
+  // cycles: with both windows full the walk stalls. Issued at any free cycle,
+  // the clear hid 0.86 ms of its 1.32 (r57, L12); issued only while quiet,
+  // 1.28 ms. Shorter chunks (16 / 8 words) at any free cycle hid 1.13 / 1.20.
+  wire           w_quiet = !dirty[ib] && !b_v && (ist == I_IDLE) && !n_v;
   // The beat on the bus is word ridx, read combinationally -- MLAB reads
   // without a clock -- so a beat taken (wacc) moves ridx and the next word is
   // there the following cycle.
@@ -242,18 +262,19 @@ module m2_fb_wcomb #(
   wire  [31:0]   q_hi = mhi[{fk, ridx}];
   wire  [1:0]    q_v  = {vhi[fk][ridx], vlo[fk][ridx]};
 
-  wire clearing = (ist == I_CLR) || (ist == I_CLRW);
-  assign m_din   = clearing ? 64'd0 : {q_hi, q_lo};
-  assign m_be    = clearing ? 8'hFF : {{4{q_v[1]}}, {4{q_v[0]}}};
+  assign m_din   = f_cl ? 64'd0 : {q_hi, q_lo};
+  assign m_be    = f_cl ? 8'hFF : {{4{q_v[1]}}, {4{q_v[0]}}};
   assign m_we    = 1'b1;
   logic [24:0] addr_r;
   assign m_addr  = addr_r;
 
   // R808: not only in I_IDLE -- the held span is the room (was ist == I_IDLE)
-  assign in_ready   = !n_v && !clear_req && !clearing;
-  assign clear_busy = clearing;
+  // R813: and not during the clear -- only between its request and its start,
+  // while what was drawn before it is flushed
+  assign in_ready   = !n_v && !(clear_req && !cl_on);
+  assign clear_busy = cl_on;
   assign empty      = (ist == I_IDLE) && !n_v && !b_v && (dirty == 2'b00) && (pend == 2'b00) && (fst == F_IDLE);
-  assign dbg_st     = {1'b0, fst, ist};
+  assign dbg_st     = {cl_on, f_cl, fst, ist};   // R813
   assign pg_ry      = y_r;
   assign pg_rx0     = {x_r[8:1], 1'b0};
   assign pg_we      = FTB && (b_wr != 2'b00);
@@ -265,7 +286,7 @@ module m2_fb_wcomb #(
     if (!rst_n) begin
       ist <= I_IDLE; fst <= F_IDLE; ib <= 1'b0;
       x_r <= '0; x1_r <= '0; sel_r <= 1'b0; y_r <= '0; px_r <= '0; s0_r <= 1'b1; s1_r <= 1'b1;
-      clr_y <= 9'd0; clr_x <= 9'd0; idle_n <= '0;
+      clr_y <= 9'd0; clr_x <= 9'd0; idle_n <= '0; cl_on <= 1'b0; f_cl <= 1'b0;   // R813
       n_v <= 1'b0; n_sel <= 1'b0; n_s0 <= 1'b1; n_s1 <= 1'b1; n_y <= '0;   // R808
       n_x0 <= '0; n_x1 <= '0; n_px <= '0;
       dirty <= 2'b00; pend <= 2'b00; ridx <= '0; addr_r <= '0;
@@ -298,12 +319,12 @@ module m2_fb_wcomb #(
                   : (idle_n == ($clog2(IDLE_T+1))'(IDLE_T)) ? idle_n : idle_n + 1'b1;
           if (ld_n) begin
             // R808: a span held before a clear was asked for is drawn first
-          end else if (clear_req) begin
+          end else if (clear_req && !cl_on) begin
             // the clear goes out after everything drawn before it (B first)
             if (b_v) begin end
             else if (dirty[ib] && other_free) begin pend[ib] <= 1'b1; ib <= ~ib; end
             else if (!dirty[ib] && pend == 2'b00 && fst == F_IDLE) begin
-              clr_y <= 9'd0; clr_x <= 9'd0; ist <= I_CLR;
+              clr_y <= 9'd0; clr_x <= 9'd0; cl_on <= 1'b1;   // R813: runs beside the draw
             end
           end else if (in_valid) begin
             // R808: loaded below (ld_in)
@@ -316,31 +337,6 @@ module m2_fb_wcomb #(
         I_RUN: if (a_go) begin
           x_r <= x_nx;
           if (x_nx > x1_r) ist <= I_IDLE;   // unless the next span loads (below)
-        end
-
-        I_CLR: begin
-          m_req  <= 1'b1;
-          // THE VISIBLE LINE, NOT THE STRIDE: 248 beats, a WBURST chunk at a time.
-          m_blen <= 8'(((9'(BEATS) - clr_x) > 9'(WBURST)) ? 9'(WBURST) : (9'(BEATS) - clr_x));
-          addr_r <= ({fb_sel, 9'(clr_y)} * 25'(STRIDE / 2)) + 25'(clr_x);   // R360/R362
-          ist    <= I_CLRW;
-        end
-
-        I_CLRW: begin
-          if (m_wnext) m_req <= 1'b0;
-          if (m_ack) begin
-            m_req <= 1'b0;
-            if ((clr_x + 9'(WBURST)) >= 9'(BEATS)) begin
-              clr_x <= 9'd0;
-              if (clr_y == 9'(SCR_H - 1)) begin
-                ist <= I_IDLE;
-                if (!(&dbg_clears)) dbg_clears <= dbg_clears + 16'd1;   // R364
-              end else begin clr_y <= clr_y + 9'd1; ist <= I_CLR; end
-            end else begin
-              clr_x <= clr_x + 9'(WBURST);
-              ist   <= I_CLR;
-            end
-          end
         end
 
         default: ist <= I_IDLE;
@@ -392,13 +388,22 @@ module m2_fb_wcomb #(
         b_mk  <= a_same ? b_wd : pg_rword;
       end else if (c_go) b_v <= 1'b0;
 
-      // ---- a closed window, out as one burst
+      // ---- a closed window, out as one burst -- or, R813, a chunk of the
+      // clear: the window first unless it waits on the clear's line
       case (fst)
-        F_IDLE: if (pend[fk] && !clearing) begin
+        F_IDLE: if (f_win) begin
           m_req  <= 1'b1;
           m_blen <= 8'(whi[fk] - wlo[fk]) + 8'd1;
           addr_r <= 25'({wkey[fk], wlo[fk]});
           ridx   <= wlo[fk];
+          f_cl   <= 1'b0;
+          fst    <= F_RUN;
+        end else if (cl_on && (pend[fk] || w_quiet)) begin
+          m_req  <= 1'b1;
+          // THE VISIBLE LINE, NOT THE STRIDE: 248 beats, a WBURST chunk at a time.
+          m_blen <= 8'(((9'(BEATS) - clr_x) > 9'(WBURST)) ? 9'(WBURST) : (9'(BEATS) - clr_x));
+          addr_r <= ({fb_sel, 9'(clr_y)} * 25'(STRIDE / 2)) + 25'(clr_x);   // R360/R362
+          f_cl   <= 1'b1;
           fst    <= F_RUN;
         end
         F_RUN: begin
@@ -407,11 +412,22 @@ module m2_fb_wcomb #(
           if (m_wnext) m_req <= 1'b0;
           if (m_ack) begin
             m_req     <= 1'b0;
-            pend[fk]  <= 1'b0;
-            dirty[fk] <= 1'b0;
-            vlo[fk]   <= '0;
-            vhi[fk]   <= '0;
             fst       <= F_IDLE;
+            if (f_cl) begin
+              // R813: the clear's chunk; the line is passed on its last ack
+              if ((clr_x + 9'(WBURST)) >= 9'(BEATS)) begin
+                clr_x <= 9'd0;
+                if (clr_y == 9'(SCR_H - 1)) begin
+                  cl_on <= 1'b0;
+                  if (!(&dbg_clears)) dbg_clears <= dbg_clears + 16'd1;   // R364
+                end else clr_y <= clr_y + 9'd1;
+              end else clr_x <= clr_x + 9'(WBURST);
+            end else begin
+              pend[fk]  <= 1'b0;
+              dirty[fk] <= 1'b0;
+              vlo[fk]   <= '0;
+              vhi[fk]   <= '0;
+            end
           end
         end
         default: fst <= F_IDLE;

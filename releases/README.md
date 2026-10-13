@@ -4,11 +4,11 @@ Copy to the SD card:
 
 | from | to |
 |---|---|
-| `Model2_20261011.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
-| `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
+| `Model2_20261013.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
+| `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` — **updated**: also finds split and merged ROM sets |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 revision |
-| `Daytona USA (Deluxe 93) [15kHz CRT].mra` | `/media/fat/_Arcade/` — **new**: starts in 15 kHz, for a CRT |
-| `Daytona USA (Revision A) [15kHz CRT].mra` | `/media/fat/_Arcade/` — **new**: starts in 15 kHz, for a CRT |
+| `Daytona USA (Deluxe 93) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT; **updated** as above |
+| `Daytona USA (Revision A) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT |
 
 **One core, deliberately.** If you need an older build, it is in the git
 history of this repository.
@@ -20,7 +20,7 @@ names them. Nothing here contains ROM data.
 
 | zip | what for |
 |---|---|
-| `daytona93.zip` | `Daytona USA (Deluxe 93)` — program, data, polygons, textures, tiles, samples |
+| `daytona93.zip` | `Daytona USA (Deluxe 93)`. A **split** set also needs `daytona.zip` beside it, for the files the two share; a **merged** `daytona.zip` alone also works. |
 | `daytona.zip` | `Daytona USA (Revision A)`, the 1994 set (MAME's `daytona`) — the whole set |
 | `model1io.zip` **or** the game's zip | the I/O board's Z80 ROM, `epr-14869c.25` |
 
@@ -32,8 +32,8 @@ I/O board is what the game reads coins, start and steering through, so a missing
 The TGP coprocessor's microcode needs no separate download. It lives inside the
 game's own data ROM and the core extracts it.
 
-**Check what you are running.** `Model2_20261011.rbf` is
-`232ce65807684c4b676d584b133ea385`, 4,637,380 bytes. If the core on your card
+**Check what you are running.** `Model2_20261013.rbf` is
+`77dc39cf90c61c6ea2538b3b5f2f7b79`, 4,639,008 bytes. If the core on your card
 does not have that md5, you are not running this build — and the usual reason is
 a second file: MiSTer keeps the lexicographically greatest name beginning
 `Model2` followed by `.` or `_`, and `_` sorts after `.`, so a spare
@@ -45,8 +45,8 @@ The 3D is drawn into the DE10-Nano's own DDR3; nothing extra is needed for that.
 
 ## What this build does
 
-**Daytona USA runs at close to arcade speed, with the 3D on screen** —
-textured, lit polygons over the 2D layers, with sound.
+**Daytona USA runs at arcade speed, with the 3D on screen** — textured,
+lit polygons over the 2D layers, with sound.
 
 **Speed, measured on a DE10-Nano with `Draw method` on `Double Buffered`
 (the default) and `Texel step` on `1`:**
@@ -54,9 +54,12 @@ textured, lit polygons over the 2D layers, with sound.
 | | frames a second (the arcade runs at 57.5) |
 |---|---|
 | Attract mode | **57**, solid |
-| In a race | **57 for 80-90% of the time**, dipping in the busiest moments |
+| In a race | **57**: 99% of frames on time, and no slowdown seen in testing, including the heaviest corners |
 
-The last release ran races at about 29.
+The game pauses briefly at a few scene changes: going into and out of a
+race, and a couple of points in the attract loop. That is the main CPU
+setting up the next scene. The real board pauses there too, though for
+less time.
 
 - **The whole board is in the FPGA:** the i960 main CPU, the TGP geometry
   coprocessor and its microcode, the geometrizer, a hardware 3D renderer, the
@@ -67,7 +70,24 @@ The last release ran races at about 29.
 - **Polygons are drawn front to back, as the real board draws them**, and
   texture reads are skipped for pixels something nearer already covers.
 
-**New since `Model2_20261008b`:**
+**New since `Model2_20261011`:**
+
+- **Races at full speed.** The last release dipped below full speed for
+  10-20% of a race. The main CPU is now the part that sets the pace, so it
+  was made faster:
+  - its instruction cache is 8 KB again, up from 512 bytes;
+  - a cache fault that threw away half-fetched code on every loop is fixed;
+  - on a cache miss, the instruction it is waiting for now comes back
+    first;
+  - it now reads ahead after two-word instructions.
+- **The framebuffer is cleared while the 3D draws**, not before it.
+- **A steering wheel works.** MiSTer maps a wheel onto the right stick, and
+  the core now steers from the right stick's left/right as well as the left
+  stick's. Pads are unchanged. See *Controls*.
+- **Split and merged ROM sets** now work for `Daytona USA (Deluxe 93)`.
+- **Soak-tested:** this build ran 11 hours of attract without a lock.
+
+**Earlier, in `Model2_20261011`:**
 
 - **Much faster races.** The core runs at a higher clock. The geometry
   coprocessor does the same work in less than half the time. Texture reads
@@ -163,21 +183,42 @@ which TV, how it's connected, and which settings work.
 
 | | |
 |---|---|
-| Steer | left stick |
+| Steer | left stick or right stick (left/right), a wheel that MiSTer reports as a **paddle**, or the d-pad |
 | Accelerate / brake | right stick up / down, or the `Accel` and `Brake` buttons |
 | Gears | `Gear Up` / `Gear Down` |
 | View buttons | `VR1 Red`, `VR2 Blue`, `VR3 Yellow`, `VR4 Green` |
 | Start, Coin | `Start`, `Coin` |
 | Test, Service | available to map in MiSTer's input settings |
 
-## Not finished, as of `Model2_20261011.rbf`
+**How the core reads the analogue controls:**
+
+- **Steering** comes from the first of these that is in use: a **paddle**
+  (MiSTer can report a wheel's rotation as a paddle), then the **left
+  stick's left/right**, then the **right stick's left/right**, then the
+  **d-pad**, which steers gradually and recentres when released. Both sticks
+  ignore a small movement around the centre, so the left stick always wins
+  while it is held.
+- **Both pedals are on one axis: the right stick's up/down.** One direction
+  is the accelerator, the other the brake, and the further you push, the
+  harder it presses. Which direction is which depends on the controller, so
+  if they come out backwards, set `Pedals` to `Swapped` in the OSD. The
+  `Accel` and `Brake` buttons always press fully.
+- **`Steering`** in the OSD sets how much stick gives full lock: `3/4`,
+  `Full`, `5/4` or `Half`.
+
+**With a wheel and pedals:** MiSTer maps a wheel onto the **right stick**:
+steering on its left/right and the pedals on its up/down, the accelerator
+one way and the brake the other. That works as it is, with no setting to
+change. If the pedals come out reversed, use `Pedals: Swapped`; if the
+steering feels too light or too heavy, try the `Steering` options.
+
+## Not finished, as of `Model2_20261013.rbf`
 
 This list describes the RBF named above. **The heading carries the RBF's name so
 that if the two disagree, you trust neither and check.**
 
-- **Races are not quite full speed all the time.** About 10-20% of the time,
-  in the busiest moments, the frame rate dips. That is what is being worked
-  on next.
+- **Brief pauses at scene changes**, about half a second going into and
+  out of a race. See *What this build does*.
 - **Background music and the game-over speech are too quiet** against the
   rest of the sound.
 - **No mip-mapping**, so distant textures shimmer.

@@ -398,8 +398,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_fx68k test_m2_sndboard test_m2_ioboard test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -464,6 +464,26 @@ test_i960_icache: obj_i960_icache/Vi960_icache
 obj_i960_icache/Vi960_icache: $(ICA_RTL) $(TB)/tb_i960_icache.cpp
 	$(VBUILD) --top-module i960_icache -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_icache -o Vi960_icache $(ICA_RTL) $(TB)/tb_i960_icache.cpp
+
+# R817: the cache against a slow bus and a requester that does not wait, in the
+# configurations that matter: i960_top's (8 KB, HUF, ER), the 512 B cache with
+# both, HUF alone, and R815's (neither). Directories are obj_ic17_LINES_HUF_ER. +huf / +er turn on the efficiency
+# checks that only hold with the option. BUS_MAX of 0 is the old bench's
+# same-cycle memory; 40 is past the bridge's SDRAM round trip.
+IC17_CFGS := 512_1_1 32_1_1 512_1_0 512_0_0
+test_i960_icache_r817: $(foreach c,$(IC17_CFGS),obj_ic17_$(c)/Vi960_icache)
+	@echo "== test i960_icache_r817 (slow bus, a requester that does not wait)"
+	@set -e; for c in $(IC17_CFGS); do \
+	  huf=$$(echo $$c | cut -d_ -f2); er=$$(echo $$c | cut -d_ -f3); \
+	  fl=""; [ $$huf = 1 ] && fl="$$fl +huf"; [ $$er = 1 ] && fl="$$fl +er"; \
+	  for b in 0 3 12 40; do echo "-- LINES_HUF_ER $$c bus 0..$$b"; \
+	    ./obj_ic17_$$c/Vi960_icache +bus=$$b $$fl $(TEST_ARGS) | tail -8; done; done
+
+obj_ic17_%/Vi960_icache: $(ICA_RTL) $(TB)/tb_i960_icache_r817.cpp
+	$(VBUILD) --top-module i960_icache -CFLAGS "-O2" \
+	  -GLINES=$(word 1,$(subst _, ,$*)) -GHUF=$(word 2,$(subst _, ,$*)) \
+	  -GER=$(word 3,$(subst _, ,$*)) \
+	  --Mdir obj_ic17_$* -o Vi960_icache $(ICA_RTL) $(TB)/tb_i960_icache_r817.cpp
 
 test_i960_muldiv: obj_i960_muldiv/Vi960_muldiv
 	@echo "== test i960_muldiv"
@@ -735,6 +755,52 @@ obj_m2_cr/Vm2_cpu_real_harness: $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sd
 	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
 	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
+
+# R817: THE SAME COMPOSITION, PROFILED. Every instruction-fetch wait cycle
+# booked by what the cache, the bus grant, the bridge and the memory side are
+# doing, and every line fill timed. Built with the board's arrangement: the
+# controller behind m2_sdram_cdc (XMODE 2) on its own clock. Run it at the
+# board's 40 / 80 / 100 MHz with 1.25 ns ticks:
+#   M2_CPU_DIV=20 M2_MEM_DIV=10 M2_SD_DIV=8 ./obj_m2_crp/Vm2_cpu_real_harness
+# Not part of `make test`: it is a measurement, with nothing to pass or fail
+# beyond what test_m2_cpu_real already checks.
+PROF_XMODE ?= 2
+PROF_GFLAGS ?=
+prof_m2_cpu_ifetch: obj_m2_crp/Vm2_cpu_real_harness
+	@M2_CPU_DIV=20 M2_MEM_DIV=10 M2_SD_DIV=8 ./obj_m2_crp/Vm2_cpu_real_harness $(TEST_ARGS)
+
+obj_m2_crp/Vm2_cpu_real_harness: $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
+	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
+	$(VBUILD) -Wno-fatal -Wno-PINCONNECTEMPTY --public-flat-rw --top-module m2_cpu_real_harness \
+	  -GXMODE=$(PROF_XMODE) $(PROF_GFLAGS) -CFLAGS "-O2 -DIFETCH_PROF" \
+	  --Mdir obj_m2_crp -o Vm2_cpu_real_harness $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv \
+	  sim/mem/m2_cpu_real_harness.sv sim/mem/tb_m2_cpu_real.cpp
+
+# R817: A RECORDED INSTRUCTION STREAM THROUGH THE REAL FETCH PATH (i960_icache,
+# the bus grant, m2_cpu_bridge, m2_sdram_cdc, m2_sdram). The game's code cannot
+# be run on the real CPU in simulation (R733), so the sequencer is a model of
+# i960_top's front end, checked against the real one on the boot. See
+# tb_m2_ifetch_replay.cpp. RP_LINES / RP_HUF choose the cache; one object
+# directory per configuration.
+RP_LINES ?= 512
+RP_HUF   ?= 1
+RP_ER    ?= 1
+RP_OBJ    = obj_m2_rp_$(RP_LINES)_$(RP_HUF)$(if $(filter-out 0,$(RP_ER)),_e)
+replay_m2_ifetch: $(RP_OBJ)/Vm2_ifetch_replay_harness
+	@./$(RP_OBJ)/Vm2_ifetch_replay_harness $(TEST_ARGS)
+
+$(RP_OBJ)/Vm2_ifetch_replay_harness: $(ICA_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv \
+	  rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv sim/mem/sdram_model.sv \
+	  sim/mem/m2_cpu_sdram_harness.sv sim/mem/m2_ifetch_replay_harness.sv sim/mem/tb_m2_ifetch_replay.cpp
+	$(VBUILD) -Wno-fatal -Wno-PINCONNECTEMPTY --public-flat-rw --top-module m2_ifetch_replay_harness \
+	  -GLINES=$(RP_LINES) -GHUF=$(RP_HUF) -GER=$(RP_ER) -CFLAGS "-O2" --Mdir $(RP_OBJ) -o Vm2_ifetch_replay_harness \
+	  $(ICA_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/m2_sdram.sv rtl/mem/m2_sdram_x2.sv rtl/mem/m2_sdram_cdc.sv \
+	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/m2_ifetch_replay_harness.sv \
+	  sim/mem/tb_m2_ifetch_replay.cpp
 
 # Real ROM execution. P1 exit criterion 3, and the only test here whose input
 # this project did not write. Skips with a message when the set is absent -- a
@@ -1100,6 +1166,17 @@ obj_spantex/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
 	  -GPIXSTEP=$(PIXSTEP) --Mdir obj_spantex -o Vm2_span_tex \
 	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP)" \
+	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+
+# R813: the FTB build -- the fill mask and the span cull
+test_m2_span_tex_ftb: obj_spantex_ftb/Vm2_span_tex
+	@echo "== test m2_span_tex, FTB (the span cull)"
+	@./obj_spantex_ftb/Vm2_span_tex
+
+obj_spantex_ftb/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex --public-flat-rw \
+	  -GPIXSTEP=$(PIXSTEP) -GFTB=1 -GSPCULL=1 --Mdir obj_spantex_ftb -o Vm2_span_tex \
+	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP) -DTB_FTB" \
 	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 
 test_m2_handshake_cdc: obj_hscdc/Vm2_handshake_cdc

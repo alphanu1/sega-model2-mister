@@ -1732,7 +1732,10 @@ module m2_raster3d #(
         // only the once-a-list clear, and a list already drawn (fb_complete)
         // is not drawn again (R358/R359).
         C_IDLE: if (FB_DDR3) begin
-          if (dvalid && !fb_complete && !fb_clear_req && !fb_clear_busy && !fb_test) begin   // R653
+          // R813: the combining writer clears UNDER the draw (a window waits
+          // for the clear to pass its line), so the first band no longer waits
+          // for the whole clear -- only for it to be taken (fb_clear_req low).
+          if (dvalid && !fb_complete && !fb_clear_req && !(fb_clear_busy && !FB_WCOMB) && !fb_test) begin   // R653
             bd_y0[fill_buf]   <= 16'sd0 + 16'(fill_band) * 16'(BAND_H);
             bd_band[fill_buf] <= fill_band;
             cst <= C_REPLAY;
@@ -1765,7 +1768,8 @@ module m2_raster3d #(
           // as "a frame with no new list painted 2214, the previous 2009".
           else if (!qs_out_valid && !qs_replay_busy
                    && !sq_busy && !spantex_busy
-                   && tx_span_ready && fbw_empty) cst <= C_DONE;   // and the band has painted the last one (R660: and written it)
+                   && tx_span_ready && fbw_empty   // and the band has painted the last one (R660: and written it)
+                   && !(fill_band == BW'(NBANDS-1) && fb_clear_busy)) cst <= C_DONE;   // R813: the frame is whole only once the clear is
         end
         C_FILLW: if (fl_quad_done) cst <= C_FILL;
         C_DONE: begin

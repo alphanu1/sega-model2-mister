@@ -34,7 +34,14 @@
 // raises `trap` with the opcode latched, which is the same discipline the
 // blocks use for what the reference reaches fatalerror on.
 
-module i960_top (
+module i960_top #(
+  // R817: the instruction cache's hit under fill and critical-word-first
+  // early restart (i960_icache HUF / ER), and the prefetch after a two-word
+  // instruction (PF2W, below). 0 restores each to the R815 behaviour.
+  parameter bit IC_HUF = 1'b1,
+  parameter bit IC_ER  = 1'b1,
+  parameter bit PF2W   = 1'b1
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -788,7 +795,7 @@ module i960_top (
   // board (R768: the menus' trouble was the capture card, R770), the game
   // now keeps up and the 3D draw is the limit (R780), and its tag RAM was
   // ~264 ALM the texel path needs. The valid-bit-in-tag design stays.
-  i960_icache #(.LINES(32)) u_icache (
+  i960_icache #(.LINES(512), .HUF(IC_HUF), .ER(IC_ER)) u_icache (   // R815: 8 KB again -- the game is the limit now (R814); R817: HUF, ER
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),
@@ -1326,6 +1333,20 @@ module i960_top (
         T_FETCH2_W: if (ic_ok) begin
           disp_word <= ic_data;
           ts        <= T_EXEC;
+          // R817 (PF2W): and predict sequential from here, as a one-word
+          // instruction does at its accept. A two-word instruction used the
+          // cache port for its displacement, so the word after it was never
+          // prefetched and every one paid T_FETCH + two cycles of T_FETCH_W
+          // for the next instruction even on a hit -- 11-16% of the game's
+          // instructions are two-word (MAME's trace, Revision A). The request
+          // goes out on fetch_addr like every other, so R812's ic_ok check
+          // covers it; a taken bx/callx simply misses pf_ip == ip.
+          if (PF2W) begin
+            fetch_addr <= ip + 32'd8;
+            ic_req     <= 1'b1;
+            pf_ip      <= ip + 32'd8;
+            pf_issued  <= 1'b1;
+          end
         end
 
         T_EXEC: begin

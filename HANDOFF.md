@@ -1,5 +1,53 @@
 # Handoff
 
+## 2026-10-13: RELEASED Model2_20261013.rbf = s1017 (7932d11)
+
+releases/: Model2_20261013.rbf (77dc39cf90c61c6ea2538b3b5f2f7b79), the
+Deluxe MRAs that find split/merged sets, the CRT MRAs. README: races at
+full speed (Ben: no visible slowdown, incl. the corner s1011 slowed on;
+99% of frames on time), brief scene-change pauses, wheel steering via the
+right stick (R816), 8 KB i-cache + R817 fetch. s1017 ran 11 h+ attract with
+no lock. Merged to main by PR (merge commit). NEXT: area audit (99% ALM,
+M10K 553/553) for the audio filter, tile overruns (char cache / SDRAM
+priority), R813's span cull; quiet music; the wheel on real hardware.
+
+## 2026-10-12 (evening): R816 steering, R817 fetch -- building in turn
+
+ON THE BOARD: s1017 = 7932d11 (s1011 + R816 + R817, 80/40), RBF
+build/Model2_20261012_s1017_r817.rbf 77dc39cf -- 240 min attract, no lock.
+To check: a race (vs s1011's 99%), a wheel / pad, longer soaks.
+
+s1011 (8 KB, 80/40) ON THE BOARD: races at the arcade rate ~99% of frames.
+BUILDING s1013-s1015 = 5504691 (s1011 + R816 right-stick steering).
+R817 (9eb2e92, NOT yet built): i960_icache hit under fill (fixes fills
+abandoned on every taken branch -- R548's redirect), critical word first
+with early restart, and a prefetch after a two-word instruction (i960_top
+PF2W). Replay of MAME's game code through the real bridge/SDRAM: race CPI
+-6.5..-8.4%; m2_cpu_real 12.03 -> 11.26; test_m2_boot (3M) PASS; ~+40-70
+ALM placed (map). Same state machine as R811/R812's lock: SOAK it long.
+R817 also corrects R814 v2 / R815's tables: decode_why.py's medians read
+instructions ~60% and fetch wait ~20% low (scratchpad decode_why.py is now
+the fixed one; decode_why_old.py kept). Next build after s1013: HEAD with
+R817 at 80/40, then a race + a long soak.
+
+## 2026-10-12: THE GAME IS THE LIMIT (R814); 8 KB I-CACHE BACK (R815)
+
+R814 (why builds s1001/s1005, 75/37.5): the draw is NEVER behind, in attract
+or a race; the game is (race: 15.5% of vblanks). The i960 spent ~32% of its
+cycles waiting on instruction fetch; the TGP holds it only 1-5%. Attract's
+drops are scene-setup pauses on the 55.4 s attract loop (CPU flat out, TGP
+idle). R815: the 8 KB i-cache (R768's, cut by R786) costs no ALM here; on
+s1009 the race's late vblanks went 15.5% -> 1.0%; Ben: "99% of the time
+full speed". Committed 5422e84 (LINES 512, and SPCULL default 0 -- R813's
+cull did not fit). ON THE BOARD: s1011 -- race mean 57.0 fps, 99% of frames in one vblank;
+long frames only at race start/end (scene changes). s1011 = 5422e84 at 80/40 (release candidate:
+s999 + 8 KB; core >= +0.144, hold >= +0.214, HDMI -0.676; RBF
+build/Model2_20261012_s1011_8k.rbf 3dec0ace). Since: R816 right-stick
+steering (1c63a20), split/merged-set Deluxe MRAs (fe29fb8) -- not in s1011. Agent measuring the fetch miss path in sim
+(sm2-builds/sm2-ifetch-1546abf, R816 draft to come). s999 ran ~19 h with
+no core lock (Ben's frozen view was OBS; board screenshots were live).
+Debug patches: build/worktree_patches/why-r814 / why2-r814 (75/37.5).
+
 ## 2026-10-11 (afternoon): RELEASED Model2_20261011.rbf = s994 (c02b233)
 
 releases/: Model2_20261011.rbf (232ce65807684c4b676d584b133ea385), the two
@@ -10,6 +58,19 @@ section, and a new "Not finished" list. Top-level README speed/video rows
 updated. Merged to main by PR (merge commit). s994 on the board with a 4 h
 fps/lock watch from 14:51. NEXT: speed -- the remaining 10-20% of race frames
 (an agent is measuring R808's levers per ALM in sm2-builds/sm2-speed2-5bc60fb).
+R810 CONFIRMED on the board (s994: the G is back). PR #3: README corrections
+(original Model 2, not 2A-CRX; fixed items out of the open lists).
+SPEED NEXT, R813 (7f07bf1): the FB clear runs under the draw (a window waits
+for the clear to pass its line; frame published only after the clear) and a
+span whose pixels are all painted is dropped at the span walk's input; the
+walk's x/y narrowed to 16 bits to pay for it. Bench -16..-25% draw (L12),
+answers and frames identical, ~+97 ALUT. s995-s997 = s994 + R813 DID NOT CLOSE
+(2 clk_sys misses outside R813's logic, 1 no-fit; 99%). READY: s999 = R813 with
+SPCULL=0 (sm2-builds/sm2-clr-7f07bf1, spcull-off.patch), core >= +0.209,
+HDMI -0.847; RBF build/Model2_20261011_s999_clrdraw.rbf 49c9517b. All 3
+seeds closed. s994: 150 min, no lock. Next after that: NSP4 (-5..-9% more,
++100..240 ALM placed; patch in scratch speed2/nsp4_on_r813.patch; needs a
+saving -- col_p/tex_p into MLAB untried).
 
 ## 2026-10-11 (late morning): THE LOCK FOUND AND FIXED IN SIM (R811/R812)
 

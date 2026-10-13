@@ -43,7 +43,20 @@
 // it is read and compared combinationally on every fetch.
 
 module i960_icache #(
-  parameter int unsigned LINES = 32           // 32 x 16 B = 512 B
+  parameter int unsigned LINES = 32,          // 32 x 16 B = 512 B
+  // R817: HIT UNDER FILL. 1: a request for a line already in the cache is
+  // answered while a fill is in flight, and the fill runs on to completion and
+  // installs its line. 0: R548's behaviour -- the hit waits for the fill's
+  // outstanding word and the fill is ABANDONED, its line never installed.
+  parameter bit          HUF   = 1'b1,
+  // R817: CRITICAL WORD FIRST, EARLY RESTART. 1: a fill starts at the word
+  // asked for and wraps, and that word is answered as it arrives (from the
+  // bus, through a register), the line completing behind it. 0: the fill
+  // starts at word 0 and answers only when the line is complete (S_DONE).
+  // Needs HUF: the requester runs on while the line completes.
+  // Both default on, as i960_top uses them, so every bench of the module
+  // alone tests the configuration that ships.
+  parameter bit          ER    = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -132,6 +145,10 @@ module i960_icache #(
   state_e state;
 
   logic [1:0]       fill_word;
+  logic [1:0]       fill_cnt;    // R817: words acknowledged so far (ER: the fill wraps)
+  logic [31:0]      byp_q;       // R817: the early-restart answer, from the bus
+  logic             byp_sel;     //       `data` is byp_q this cycle
+  wire              fill_last = ER ? (fill_cnt == 2'd3) : (fill_word == 2'd3);
   logic [IDX_W-1:0] fill_idx;
   logic [TAG_W-1:0] fill_tag;
   logic [31:0]      fill_base;
@@ -179,6 +196,29 @@ module i960_icache #(
   logic redir_now;
   assign redir_now = (state == S_FILL) && req && req_demand &&
                      ((idx != fill_idx) || (tag != fill_tag));
+  // R817: a request in S_FILL for ANOTHER line that is already in the cache.
+  // With HUF it is answered now, from the read port the fill does not use --
+  // the fill writes through the other port -- and the fill carries on.
+  //
+  // WHY. Every taken branch prefetches the word after it (i960_top predicts
+  // sequential). When that word starts a line the cache does not hold, the
+  // prefetch starts a fill; the branch then asks for its target, a hit, and
+  // R548's redirect waited for the fill's outstanding word and abandoned it.
+  // The line was never installed, so the next time round the loop did it
+  // all again: a loop whose branch is the last word of its line paid a fill's
+  // first word every iteration, however large the cache. Measured on the
+  // real CPU, bridge and SDRAM (tb_m2_cpu_real, boot code, 8 KB): 24,692 of
+  // 24,730 fills abandoned, 1.52 of the 1.53 fetch-wait cycles an instruction.
+  wire huf_hit  = HUF && redir_now && hit;
+  wire redir_mx = redir_now && !huf_hit;     // a redirect that restarts the fill
+  // Someone is waiting on the fill in flight. Cleared when a hit-under-fill
+  // answers the requester instead; set again by a request for the fill's own
+  // line. A fill nobody waits for installs its line and returns to S_IDLE
+  // without a `valid` -- R812's vaddr check would discard one, but none is
+  // the cleaner contract.
+  logic             fill_wanted;
+  wire same_now = (state == S_FILL) && req && req_demand &&
+                  (idx == fill_idx) && (tag == fill_tag);
 
   // Where a redirect is going, held from when it arrives until an acknowledge
   // makes it safe to move the address. See S_FILL.
@@ -192,17 +232,31 @@ module i960_icache #(
   logic [IDX_W-1:0] redir_idx;
   logic [TAG_W-1:0] redir_tag;
   logic [31:2]      redir_addr;
+  // A deferred redirect still in force this cycle. The newest request wins:
+  // one for the line being filled, or a hit answered under the fill, makes a
+  // redirect still waiting for its acknowledge stale. Without this a requester
+  // that moved on -- possible only once hits are answered under a fill, so the
+  // CPU keeps running and prefetching -- had its request for the fill's own
+  // line overtaken by the stale redirect's restart, and waited forever. Found
+  // by tb_m2_ifetch_replay on the game's code: a prefetch of 0x1360 deferred
+  // while 0x1900 filled, then a demand for 0x1900.
+  wire redir_live = redir_q && !same_now && !huf_hit;
   assign rd_waddr = {fill_idx, fill_word};
   assign rd_wdata = bus_rdata;
   assign rd_we    = (state == S_FILL) && bus_ack;
 
-  assign data = cdata_q;
+  assign data = byp_sel ? byp_q : cdata_q;
 
   // R552: the tag write, from a block with no reset so the array can be an
   // MLAB. The condition is exactly the FSM's completed-fill branch: the last
   // word acknowledged with no redirect standing.
-  wire tag_we = (state == S_FILL) && bus_ack && !redir_now && !redir_q
-             && (fill_word == 2'd3);
+  wire tag_we = (state == S_FILL) && bus_ack && !redir_mx && !redir_live
+             && fill_last;
+  // R817 (ER): the word this acknowledge delivers is the one the requester
+  // waits for -- the fill's own, or a request for its line arriving now.
+  wire [1:0] ans_word = same_now ? addr[3:2] : req_addr_q[3:2];
+  wire er_ans = ER && (state == S_FILL) && bus_ack && (fill_wanted || same_now)
+             && !huf_hit && !redir_mx && !redir_live && (fill_word == ans_word);
   // R768: the invalidates, from the same conditions the FSM below acts on.
   logic [IDX_W-1:0] sweep_idx;
   // A request arriving during a sweep is REMEMBERED and served when it ends:
@@ -211,8 +265,8 @@ module i960_icache #(
   logic             sw_pend;
   logic [31:2]      sw_addr;
   wire inv_idle  = ((state == S_IDLE) || (state == S_DONE)) && req && !hit;
-  wire inv_redir = (state == S_FILL) && bus_ack && (redir_now || redir_q)
-                && !((redir_now && hit) || (!redir_now && redir_q && redir_hit));
+  wire inv_redir = (state == S_FILL) && bus_ack && (redir_mx || redir_live)
+                && !((redir_mx && hit) || (!redir_now && redir_live && redir_hit));
   wire inv_sweep = (state == S_SWEEP);
   wire [IDX_W-1:0] inv_idx = inv_sweep ? sweep_idx
                            : inv_redir ? (redir_now ? idx : redir_idx) : idx;
@@ -227,6 +281,9 @@ module i960_icache #(
       valid      <= 1'b0;
       req_addr_q <= '0;
       fill_word <= 2'd0;
+      fill_cnt  <= 2'd0;
+      byp_q     <= 32'd0;
+      byp_sel   <= 1'b0;
       fill_idx  <= '0;
       fill_tag  <= '0;
       fill_base <= 32'd0;
@@ -235,12 +292,14 @@ module i960_icache #(
       redir_idx  <= '0;
       redir_tag  <= '0;
       redir_addr <= '0;
+      fill_wanted <= 1'b1;
       sweep_idx  <= '0;
       sw_pend    <= 1'b0;
       sw_addr    <= '0;
       state      <= S_SWEEP;   // R768: clear every line's valid bit
     end else begin
-      valid <= 1'b0;
+      valid   <= 1'b0;
+      byp_sel <= 1'b0;
 
       if (inval) begin   // R768: a sweep, as at reset
         sweep_idx <= '0;
@@ -260,8 +319,10 @@ module i960_icache #(
             end else begin
               fill_idx  <= idx;
               fill_tag  <= tag;
-              fill_word <= 2'd0;
+              fill_word <= ER ? addr[3:2] : 2'd0;
+              fill_cnt  <= 2'd0;
               fill_base <= {addr[31:4], 4'd0};
+              fill_wanted <= 1'b1;
               // Invalidate BEFORE filling. cvalid is only set on completion,
               // but the data array is written word by word during the fill, so
               // a line valid under a different tag has its data destroyed while
@@ -291,8 +352,11 @@ module i960_icache #(
           // written for a redirect within a line and predates speculative
           // requests existing; with a prefetch issuing its own requests it let
           // `vaddr` name one address while `data` carried another's word.
-          if (req && req_demand && (idx == fill_idx) && (tag == fill_tag))
-            req_addr_q <= addr;
+          if (same_now) begin
+            req_addr_q  <= addr;
+            fill_wanted <= 1'b1;
+            redir_q     <= 1'b0;   // R817: supersedes a deferred redirect
+          end
           // A redirect -- taken branch or mispredicted prefetch -- can ask for
           // a different line mid-fill. Restart on it rather than making the
           // requester wait out a line nothing wants.
@@ -332,12 +396,28 @@ module i960_icache #(
           // (its line is already invalid, set at the fill's start) and the
           // target is answered from the array through S_DONE, which reads
           // req_addr_q -- the same completion path a finished fill takes.
-          if (bus_ack && ((redir_now && hit) || (!redir_now && redir_q && redir_hit))) begin
+          if (huf_hit) begin
+            // R817: answer the hit now (cdata_q is read at {idx, word} this
+            // cycle: req_accept) and let the fill run on. It installs its line
+            // on completion; nobody waits for it, so no `valid` then.
+            req_addr_q  <= addr;
+            valid       <= 1'b1;
+            fill_wanted <= 1'b0;
+            redir_q     <= 1'b0;   // a redirect still pending is superseded
+            if (bus_ack) begin
+              fill_cnt <= fill_cnt + 2'd1;
+              if (fill_last) begin
+                bus_req <= 1'b0;
+                state   <= S_IDLE;   // tag written by tag_we
+              end else
+                fill_word <= fill_word + 2'd1;
+            end
+          end else if (bus_ack && ((redir_now && hit) || (!redir_now && redir_live && redir_hit))) begin
             redir_q    <= 1'b0;
             bus_req    <= 1'b0;
             req_addr_q <= redir_now ? addr : redir_addr;
             state      <= S_DONE;
-          end else if (bus_ack && (redir_now || redir_q)) begin
+          end else if (bus_ack && (redir_now || redir_live)) begin
             // Safe here: the outstanding fetch has just been answered, so
             // moving the address starts a new transaction rather than
             // corrupting one in progress.
@@ -346,7 +426,9 @@ module i960_icache #(
             fill_tag    <= redir_now ? tag  : redir_tag;
             fill_base   <= redir_now ? {addr[31:4], 4'd0}
                                      : {redir_addr[31:4], 4'd0};
-            fill_word   <= 2'd0;
+            fill_word   <= !ER ? 2'd0 : redir_now ? addr[3:2] : redir_addr[3:2];
+            fill_cnt    <= 2'd0;
+            fill_wanted <= 1'b1;
             // R768: invalidated by inv_redir
             req_addr_q  <= redir_now ? addr : redir_addr;
           end else if (redir_now) begin
@@ -358,10 +440,23 @@ module i960_icache #(
             redir_tag  <= tag;
             redir_addr <= addr;
           end else if (bus_ack) begin
-            if (fill_word == 2'd3) begin
+            fill_cnt <= fill_cnt + 2'd1;
+            if (er_ans) begin
+              // R817: the word waited for, straight from the bus.
+              byp_q       <= bus_rdata;
+              byp_sel     <= 1'b1;
+              valid       <= 1'b1;
+              fill_wanted <= 1'b0;
+            end
+            if (fill_last) begin
               bus_req          <= 1'b0;
               // R552 / R768: ctag (tag and valid) is written by tag_we
-              state            <= S_DONE;
+              // R817: S_DONE answers the fill's requester; a fill nobody
+              // waits for any more just ends.
+              // A request for this line arriving in this very cycle renames
+              // it (above) and must be answered too: the old fill_wanted
+              // is what is read here.
+              state            <= ((fill_wanted || same_now) && !er_ans) ? S_DONE : S_IDLE;
             end else begin
               fill_word <= fill_word + 2'd1;
             end
@@ -377,8 +472,10 @@ module i960_icache #(
             req_addr_q  <= addr;
             fill_idx    <= idx;
             fill_tag    <= tag;
-            fill_word   <= 2'd0;
+            fill_word   <= ER ? addr[3:2] : 2'd0;
+            fill_cnt    <= 2'd0;
             fill_base   <= {addr[31:4], 4'd0};
+            fill_wanted <= 1'b1;
             state       <= S_FILL;   // R768: invalidated by inv_idle
           end else begin
             // R812: a hit arriving now is read at ITS address (req_accept), so
@@ -399,9 +496,11 @@ module i960_icache #(
               req_addr_q <= req ? addr : sw_addr;
               fill_idx   <= req ? idx : sw_addr[IDX_W+3:4];
               fill_tag   <= req ? tag : sw_addr[31:IDX_W+4];
-              fill_word  <= 2'd0;
+              fill_word  <= !ER ? 2'd0 : req ? addr[3:2] : sw_addr[3:2];
+              fill_cnt   <= 2'd0;
               fill_base  <= req ? {addr[31:4], 4'd0} : {sw_addr[31:4], 4'd0};
               sw_pend    <= 1'b0;
+              fill_wanted <= 1'b1;
               state      <= S_FILL;
             end else
               state      <= S_IDLE;
