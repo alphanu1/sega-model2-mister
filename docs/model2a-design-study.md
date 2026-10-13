@@ -33073,3 +33073,9 @@ there is no measured room for either. The game lists above are a record of
 the family, not a plan. Planned work stays: this core (original Model 2,
 Daytona; Desert Tank to be checked), then Virtua Cop and Model 2A as their
 own branches.
+
+**THE COMBINED BUILD.** s1060-s1062 = 7d0d088 (R819/R820 sound, R821 shared
+MultiPCM, R823-R825 ring, R826 STRICT/SYNC on, R829 Volume, R830 Steering
+smoothing, R831 trimmed menu + Right stick; MIP off), 80/40: s1060 closes,
+clk_sys +0.282, holds >= +0.171, HDMI -1.128; s1062 also (+0.005). 41,267
+ALM, M10K 540/553, DSP 91/112. RBF build/Model2_20261013_s1060_combined.rbf.
