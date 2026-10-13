@@ -33492,3 +33492,8 @@ s1066-s1068 (the same mip build): all route; s1068 closes, clk_sys +0.081,
 holds >= +0.210, HDMI -0.850; 41,300 ALM. RBF
 build/Model2_20261014_s1068_mip.rbf. = s1060 + MIP with the Sharp / Medium /
 Smooth / Off menu (Sharp the default). Not yet on the board.
+s1068 ON THE BOARD (Ben): Sharp "looks good 98% of the time", but the guard
+rails are flat white textures with every mip setting -- only Off is right.
+A texel fetch fault at levels > 0 for that texture (level cap by the smaller
+dimension, a texture the game never mips, or mirror/wrap/sheet handling at a
+level). Screenshot sm2-builds/mipmaps/board/s1068_sharp_rails_white.png.
