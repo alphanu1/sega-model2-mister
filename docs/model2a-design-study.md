@@ -31066,3 +31066,15 @@ Quartus parse clean. NOT YET MEASURED where it matters: whether overruns fall
 needs the 'G' record (a why build); the area agent's caution stands -- m2_video
 notes four dense layers can want ~6,456 cycles against ~3,280, and no SDRAM
 priority helps that.
+
+**R818 -- REQUIREMENT FOR THE SINGLE-PRECISION FPU, IF IT IS EVER DONE (Ben,
+2026-10-13).** Model 2A will be its own branch (never merged; eventually its
+own repository) and may need the full FPU. So a reduced FPU must be a
+COMPILE-TIME PARAMETER (e.g. FP_EXT: 1 = the full extended/double datapath,
+0 = reduced), set per branch -- the same pattern as IC_HUF / IC_ER / PF2W
+(R817) and SPCULL (R813): one RTL, the full path kept and tested, a one-line
+switch. And it must TRAP, not compute wrongly, on any instruction or fp0-fp3
+use the reduced unit does not cover. The evidence for "never used" is
+Daytona's traced code only (R818); other Model 2 games (Virtua Cop, Desert
+Tank) must be traced, or built with FP_EXT 1. Still no action (R818
+decisions).
