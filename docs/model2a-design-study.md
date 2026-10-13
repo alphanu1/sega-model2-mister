@@ -33079,3 +33079,16 @@ MultiPCM, R823-R825 ring, R826 STRICT/SYNC on, R829 Volume, R830 Steering
 smoothing, R831 trimmed menu + Right stick; MIP off), 80/40: s1060 closes,
 clk_sys +0.282, holds >= +0.171, HDMI -1.128; s1062 also (+0.005). 41,267
 ALM, M10K 540/553, DSP 91/112. RBF build/Model2_20261013_s1060_combined.rbf.
+R832 (cont.) -- HOW MANY GEOMETRY PROCESSORS, AND HOW MANY ARE MODELLED.
+MAME 0.289's own header: "Sega Model 2: i960KB + (5x TGP) or (2x SHARC) or
+(2x TGPx4)"; model2_v.cpp: the original and 2A boards keep the geometry code
+"in an internal ROM inside the DSP itself", 2B and 2C upload it; MAME uses a
+high-level C version of the geometrizer for original and 2A games (written
+from a 2B game's geometry-code disassembly) and instantiates ONE processor
+per board (-listdevices: one MB86234 / ADSP21062 / MB86235 -- the
+coprocessor that runs the game's own code). This core does the same: one
+TGP for the game's microcode, and the geometrizer as dedicated RTL
+(m2_geometry, walker, clipper) after MAME's model -- not four TGPs, which
+could never fit, and whose internal-ROM code has never been dumped anyway.
+Inferred, not checked on a PCB: the original's five TGPs are one
+coprocessor plus four for the geometrizer.
