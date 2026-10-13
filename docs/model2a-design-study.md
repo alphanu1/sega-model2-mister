@@ -32337,3 +32337,14 @@ THE FIX (default off; Model2.sv localparams R826_STRICT, R826_SYNC, R826_HSCR):
      the 30 Hz race's case) and then with the gate.
   For MAME / the recompilation: show the polygons one frame later than now
      (present the previous frame's 3D with this frame's tilemaps).
+R826 TEST (Ben, his recomp): with the 3D delayed one frame under the 2D the
+jerk is UNCHANGED -- the 2D/3D alignment hypothesis does not explain what Ben
+sees (R826_SYNC's 150-250 ALM is not spent; the switches stay off).
+Hypothesis now (not yet tested): 57.5 Hz content on a 60 Hz display -- one
+frame repeated every ~0.4 s, visible only in fast lateral motion (slides,
+spins, corners). Fits the recomp (a PC at 60 Hz), the smooth arcade (a 57.5
+Hz CRT shows every frame once), and the MiSTer if the picture is watched
+through the 60 fps capture/OBS path or a display that converts (Ben's ini:
+vsync_adjust=1, so the HDMI output itself follows the core's 57.5 Hz).
+Asked Ben: is the jerk on the directly connected display, and what rate does
+the display report?
