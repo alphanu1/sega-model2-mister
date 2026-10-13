@@ -213,7 +213,7 @@ localparam CONF_STR = {
 	// speed (measured on s686: 28.4 pictures a second, every one two game
 	// frames apart -- 56.8 of 57.5). The menu order is mapped back to the skip
 	// count below: menu 0 -> skip 1, menu 1 -> skip 0, menu 2 -> skip 2.
-	"O[44:43],Draw method,Double Buffered,Single buffered,Every 3rd frame;",   // R781: Double first, the default
+	"O[43],Draw method,Double Buffered,Single buffered;",   // R781: Double first, the default; R831: Every 3rd frame removed
 	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
 	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
 	// R660 ended -- to make room for the combining writer (R661). The bits stay
@@ -665,7 +665,7 @@ reg  [2:0]  pace_free_s;
 always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], 1'b0};   // R831: 3D pacing tied to Hold game (was status[36])
 wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
 reg  [1:0]  fskip_s1, fskip_s2, fskip_s3;   // R699: the OSD bits reach the walk through three flops
-always_ff @(posedge clk_sys) begin fskip_s1 <= status[44:43]; fskip_s2 <= fskip_s1; fskip_s3 <= fskip_s2; end
+always_ff @(posedge clk_sys) begin fskip_s1 <= {1'b0, status[43]}; fskip_s2 <= fskip_s1; fskip_s3 <= fskip_s2; end   // R831: Every 3rd tied off (bit 44 not read)
 // R653: the framebuffer self-test's switch and its per-frame results (clk_sys)
 // R664: parked -- tied off, so Quartus removes the generator and checker
 wire        fb_test = 1'b0;

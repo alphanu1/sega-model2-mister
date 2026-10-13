@@ -32987,3 +32987,7 @@ MiSTer maps onto the right stick. The release README's Controls section must
 say so at the next release. lint_top clean; Quartus parse clean.
 OSD bits in use: 0, 17, 27-33, 42-51 (45 15 kHz lines; 46-49 Volume; 50-51
 Steering smoothing), 54, 122:121.
+R831 (cont.): Draw method loses "Every 3rd frame" -- now O[43] "Double
+Buffered / Single buffered"; the walk's frame-skip input is {0, status[43]},
+so the every-third path is constant and synthesises away. A saved config on
+Every 3rd (bits 44:43 = 10) reads as Double. Bit 44 is no longer read.
