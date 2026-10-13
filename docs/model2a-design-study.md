@@ -31850,3 +31850,10 @@ s1035 closes, core >= +0.115, hold >= +0.245, HDMI -0.320; 41,255 ALM,
 M10K 539/553. RBF build/Model2_20261013_s1035_sib0.rbf 5a13cfd2. Contents:
 s1017 + R819/R820 audio + R818 area + R822 glyph priority + SIBLING 0. Not
 yet on the board.
+R821 FITTED. s1036-s1038 = 92d1e5c with LB_RING 0, SIBLING 0 and PCM_SHARED 1
+(pcmshared-on.patch) -- s1035's configuration plus the shared engine only.
+All three close every core clock; s1037 closes EVERY clock including HDMI
+(+0.067), core >= +0.097, hold >= +0.095. ALM 40,873 / 40,894 / 40,928
+against s1035's 41,255 (same config, PCM_SHARED 0): -327..-382 placed; DSP
+91 -> 89. RBF build/Model2_20261013_s1037_pcmshared.rbf. Not yet on the
+board: Ben to listen for any difference against s1035.
