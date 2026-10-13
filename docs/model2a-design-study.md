@@ -30671,3 +30671,5 @@ the watch, no lock, 57.0-57.4 fps at the end.
 s1017: NO LOCK in 240 min of the watch (135 readings, none zero, 103 at
 >= 57 fps, none under 50; attract, unattended). The first long soak of R817's
 fetch changes on the board.
+s1017 at 07:43 the next morning: ~11 h 17 min from load, still 57.6 fps,
+every 3D frame in one vblank (m2-fps.py); Ben: "still running over 7 hours".
