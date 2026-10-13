@@ -31081,3 +31081,12 @@ decisions).
 Ben: Virtua Cop and Desert Tank need different I/O boards and will be
 separate cores anyway -- so this core is Daytona-only, which is exactly what
 R818's traces cover, and every other core sets FP_EXT for itself.
+
+**R819/R820/R818/R822 BUILT.** s1019/s1020 (016ef91, audio only) missed clk_sys
+in the geometry FP pool and the TGP divider; s1021-s1023 (fc1b5b5, + R818)
+missed by 0.2 ns, each fit then segfaulting in Quartus AFTER "Fitter was
+successful" (an exit crash, not memory). s1024-s1026 = 22887ae (s1017 +
+R819/R820 audio + R818 area + R822 glyph priority, 80/40): s1024 closes,
+core >= +0.224, hold >= +0.218, HDMI -0.579; 41,330 ALM, M10K 539/553 (R818's
+-14 blocks visible in the fit), DSP 91/112 (R819's four multiplies). RBF
+build/Model2_20261013_s1024_audio.rbf a6d3ef97. Not yet on the board.
