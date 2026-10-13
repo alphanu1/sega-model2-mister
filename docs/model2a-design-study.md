@@ -31090,3 +31090,8 @@ R819/R820 audio + R818 area + R822 glyph priority, 80/40): s1024 closes,
 core >= +0.224, hold >= +0.218, HDMI -0.579; 41,330 ALM, M10K 539/553 (R818's
 -14 blocks visible in the fit), DSP 91/112 (R819's four multiplies). RBF
 build/Model2_20261013_s1024_audio.rbf a6d3ef97. Not yet on the board.
+s1024 on the board (Revision A): Ben -- the sound "seems good" (R819/R820),
+but "still some tile overruns" are visible: R822 alone did not cure them.
+Next: a why build of 22887ae to count them against s1009's (57-62% of
+frames), and a simulation of the fetch engine at zero char latency to tell
+the queueing (R822's premise) from the engine's own per-line budget.
