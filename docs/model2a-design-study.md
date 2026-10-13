@@ -33699,3 +33699,10 @@ lev.py / chain.py (level images), kspread.c (edge K range), build.sh / run.sh
 RELEASE CANDIDATE CONFIG: MIP 1 with the Mip-mapping menu (Sharp default)
 and R826_STEP (depth 2) are now ON in Model2.sv on headroom -- the release
 build is the branch head itself.
+THE RELEASE CANDIDATE DOES NOT FIT RELIABLY. 51bb563 (s1060 + MIP menu + the
+rail cap + R826_STEP): nine seeds s1072-s1080 -- best clk_mem -0.062, clk_sys
+-0.374..-0.747, two "Can't fit" (routing), four Quartus crashes mid-fit
+(segfault / TDC internal error, with 22 GB free and nothing else running).
+41,316-41,446 ALM placed. Sweeps paused for room: a YM3438 timer-only stand-in
+(Daytona never voices the FM, R819; only timer B is used) is being built,
+expected ~500-650 ALM.
