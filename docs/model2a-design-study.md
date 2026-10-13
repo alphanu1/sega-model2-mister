@@ -32511,3 +32511,6 @@ NEXT:
      they freeze the whole picture for a frame.
   Nothing in the RTL was changed for this addendum. No timing input was
   found, so there was nothing to put behind a parameter.
+R825 ON THE BOARD: s1041 (s1035 + the pipelined ring) -- Ben: "looking good,
+tile overruns seem to be gone". R823-R825 closes the tile-overrun item
+(R85/R276's line shown twice) at 24 kHz; 15 kHz to be confirmed on the CRT.
