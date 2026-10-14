@@ -33883,3 +33883,5 @@ Merged with YM_STUB 1 set in Model2.sv (the release configuration).
 stand-in): 40,841 / 40,872 / 39,707 ALM (97-98%, was 41,316-41,446), M10K
 529/553 (was 540). s1082 closes: clk_sys +0.350, holds >= +0.240, HDMI
 -0.632. RBF build/Model2_20261014_s1082_rc.rbf. Not yet on the board.
+s1068 (mip, Sharp default): NO LOCK in 240 min of the watch (135 readings,
+none zero, 103 at >= 57 fps).
