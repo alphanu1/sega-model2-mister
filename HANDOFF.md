@@ -1,6 +1,6 @@
 # Handoff
 
-## 2026-10-14: headroom -- release candidate s1082, two fixes before release
+## 2026-10-14: headroom -- s1082 on the board; R834 + R828c building
 
 ON THE BOARD: s1082 (db9fbc9, the release candidate): 240 min, no lock;
 rails, sound and background good (Ben). One fault: the player car's rear
@@ -15,9 +15,18 @@ is 192 lines in a 273.5-line field (4% shorter), not a sync fault. Narrow is
 not the default: a set whose width follows trace time would be ~4% too
 narrow. The OSD text is the framework's, the same in every mode. Benches:
 timing 112/0, ring overruns PASS in all six modes and mode switches.
-NEXT: merge the mip-window fix, one RC build with both, Ben checks the
-window, car select, 15.4 kHz and Narrow; then the release (releases/
-README has the 15 kHz rows; the mip row is still to add).
+MERGED: b559f27 R828c -- the window fix. Daytona sets no per-object LOD
+(lod 128, every coef 1.0, 91,196 polygons); MAME's level is floor(2 log2 z
+- log2|dotp| - 7) for all. A one-bit geometry flag draws a polygon at level
+0 when that level is <= -3 at its far end (R3D_MIPZ_B in Model2.sv). Bench:
+player car off level 0 842 -> 14 px (f5000), car select 6.8k -> 320-471;
+far road, trees, mountains unchanged. Flag agrees with MAME's on 99.8% of
+13,081 polygons. Also corrects R665: the log RAM IS a log2 table. Map: +48
+ALM, no new M10K. The car-select screen is Deluxe '93's (Rev A shows none).
+BUILDING: s1084-s1086 = b559f27 (R834 + R828c) in sm2-builds/sm2-rc-b559f27.
+NEXT: the passing seed to Ben: rear window, car select (Deluxe '93), rails,
+15.4 kHz, Narrow. Then the release (releases/README has the 15 kHz rows;
+the mip row is still to add).
 
 ## 2026-10-13 (evening): headroom -- overruns fixed, mip built, R826 building
 
