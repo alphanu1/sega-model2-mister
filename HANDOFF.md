@@ -28,7 +28,7 @@ holds +0.206, HDMI -1.250 (report-only). build/Model2_20261014_s1085_rc.rbf
 (e2ec410b...), on the board: Ben "looks good". Reseeds s1087-s1092: s1087
 HDMI -0.003, core >= +0.218, hold +0.215 (build/Model2_20261014_s1087_rc.rbf,
 52cb1d31...) -- Ben: "87 it is". On the board since 2026-10-14 17:35 (board
-clock), watch running. RELEASE PREPARED: releases/Model2_20261014.rbf
+clock); 240 min watch: no lock, 136 readings, 108 at >= 57 fps. RELEASE PREPARED: releases/Model2_20261014.rbf
 (s1087), 20261013 removed, release README filled (mip row and notes, 15 kHz
 rows), README's what's-left updated. PR headroom -> main open; merge (merge
 commit) on Ben's word.

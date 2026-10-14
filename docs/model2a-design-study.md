@@ -34269,3 +34269,5 @@ by clock: s1087 HDMI -0.003 (one path), core >= +0.218, hold +0.215,
 outright. s1087 assembled: build/Model2_20261014_s1087_rc.rbf, md5
 52cb1d3199ceeb7db7cdeff65ebf6944. s1085 on the board: no lock and 57.4-57.6
 fps through the first 56 min of the watch.
+s1087 (the release pick) on the board: NO LOCK in 240 min of the watch (136
+readings, none zero, 108 at >= 57 fps, lowest 52.4).
