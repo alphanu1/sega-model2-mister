@@ -23,7 +23,9 @@ player car off level 0 842 -> 14 px (f5000), car select 6.8k -> 320-471;
 far road, trees, mountains unchanged. Flag agrees with MAME's on 99.8% of
 13,081 polygons. Also corrects R665: the log RAM IS a log2 table. Map: +48
 ALM, no new M10K. The car-select screen is Deluxe '93's (Rev A shows none).
-BUILDING: s1084-s1086 = b559f27 (R834 + R828c) in sm2-builds/sm2-rc-b559f27.
+BUILT: s1085 = b559f27 (R834 + R828c), 40,873 ALM, core clocks >= +0.338,
+holds +0.206, HDMI -1.250 (report-only). build/Model2_20261014_s1085_rc.rbf
+(e2ec410b...). s1084/s1086 crashed mid-fit. Awaiting "load it".
 NEXT: the passing seed to Ben: rear window, car select (Deluxe '93), rails,
 15.4 kHz, Narrow. Then the release (releases/README has the 15 kHz rows;
 the mip row is still to add).

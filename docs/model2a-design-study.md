@@ -34254,3 +34254,10 @@ Tools (local; sm2-builds/mipmaps/tools/miplod/):
   - pm.tcl: post-map paths.
   - sel_rev_a.lua and sel_93.lua: the race and car-select drives.
 MAME dumps (ROM-derived, local only) are in build/miplod/.
+
+**s1084-s1086 = b559f27 (R834 + R828c).** s1085 fits: 40,873 ALM (98%),
+M10K 529/553 (unchanged); every core clock positive (+0.338 / +0.626 /
++1.462), holds >= +0.206, HDMI -1.250 (report-only, ascal). s1084 (Segment
+Violation) and s1086 (Internal Error, DYN) crashed mid-fit, as at 98-99%
+before. RBF build/Model2_20261014_s1085_rc.rbf, md5
+e2ec410b2ffe8b4890089f8dfa6e6275. Not yet on the board.
