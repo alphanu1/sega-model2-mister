@@ -33885,3 +33885,6 @@ stand-in): 40,841 / 40,872 / 39,707 ALM (97-98%, was 41,316-41,446), M10K
 -0.632. RBF build/Model2_20261014_s1082_rc.rbf. Not yet on the board.
 s1068 (mip, Sharp default): NO LOCK in 240 min of the watch (135 readings,
 none zero, 103 at >= 57 fps).
+s1082 (the release candidate): NO LOCK in 240 min of the watch (135
+readings, none zero, 103 at >= 57 fps). Awaiting Ben's checks: rails per mip
+setting, sound, background in slides, car select, the mip default.
