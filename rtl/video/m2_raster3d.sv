@@ -145,6 +145,10 @@ module m2_raster3d #(
   input  logic [12:0] q_u0, q_v0, q_u1, q_v1,
   input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
   input  logic [23:0] q_tex,
+  // R828c: the geometry's no-mip flag (m2_geometry q_mipz): the game's own
+  // level stays well under 0 over the whole polygon, so it is drawn at level
+  // 0. Stored with the quad (one bit, no M10K) and given to the fill. MIP only.
+  input  logic        q_mipz,
   input  logic        q_end,                // last quad of the frame
   // R826: WHICH LIST IS ON SCREEN. q_tag names the list being collected (the
   // top level's flip count at its walk); it rides with the list through the
@@ -349,6 +353,7 @@ module m2_raster3d #(
   logic [15:0] qo_oz0, qo_oz1, qo_oz2, qo_oz3;
   logic [15:0] qo_frac;                              // R626
   logic [23:0] qo_tex;
+  logic        qo_mipz;   // R828c
   // R275: the texel fetch's wires, declared here because two modules share them.
   logic        tex_req, tex_ack;
   logic        tex_rdy, tex_take;   // R539: a credit is free / the walk takes an answer
@@ -398,7 +403,7 @@ module m2_raster3d #(
   // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
-                  .FTB(FTB), .FRB(FRB)) u_store (   // R607, R626
+                  .FTB(FTB), .FRB(FRB), .MZ(MIP)) u_store (   // R607, R626, R828c
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -409,7 +414,7 @@ module m2_raster3d #(
     .in_frac(q_frac), .out_frac(qo_frac),                             // R626
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
-    .in_tex(q_tex),
+    .in_tex(q_tex), .in_mipz(q_mipz),                                 // R828c
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
@@ -420,7 +425,7 @@ module m2_raster3d #(
     .out_oz0(qo_oz0), .out_oz1(qo_oz1), .out_oz2(qo_oz2), .out_oz3(qo_oz3),   // R334
     .out_u0(qo_u0), .out_v0(qo_v0), .out_u1(qo_u1), .out_v1(qo_v1),
     .out_u2(qo_u2), .out_v2(qo_v2), .out_u3(qo_u3), .out_v3(qo_v3),
-    .out_tex(qo_tex),
+    .out_tex(qo_tex), .out_mipz(qo_mipz),                             // R828c
     .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped), .dbg_tiny(dbg_tiny)
   );
 
@@ -584,6 +589,7 @@ module m2_raster3d #(
     .in_frac(sp_frac),                                                    // R626
     .in_tex(qo_tex),
     .mip_mode(tex_mip_mode),                         // R828a
+    .in_mipz(qo_mipz),                               // R828c
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
     .span_valid(fl_span_valid), .span_ready(fl_span_ready),

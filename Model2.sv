@@ -3403,6 +3403,12 @@ wire [7:0] q3d_lum;                       // R271: for the exact colour path, no
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_tex;
 wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
+wire        q3d_mipz;                       // R828c: the game's level keeps this polygon at 0
+// R828: mip-mapping in the rasteriser, and R828c's per-polygon flag in the
+// geometry with it. MIPZ_B: a polygon is drawn at level 0 when MAME's own
+// level (the game's texlod) is at most -MIPZ_B over all of it.
+localparam bit R3D_MIP = 1'b1;
+localparam int R3D_MIPZ_B = 3;
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -3433,7 +3439,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry u_geometry (
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B)) u_geometry (   // R828c
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -3473,6 +3479,7 @@ m2_geometry u_geometry (
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
 	.q_tlinv(q3d_tlinv),                                              // R784
+	.q_mipz(q3d_mipz),                                                // R828c
 	.q_frac(q3d_frac),                                                // R626
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
@@ -6364,7 +6371,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
               .TXLW8(1'b1), // R787/R796: 128-bit texel lines, eight-word reads on all four miss ports
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
-              .MIP(1'b1),       // R828: mip levels from each quad's edge footprint -- off until the board has seen it
+              .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
@@ -6418,6 +6425,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// shadow and the minimap panel. The band has stippled since R225; it was
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
+	.q_mipz(q3d_mipz),                                                // R828c
 	.q_tag(r826_wtag), .show_tag(r826_stag),   // R826
 	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il), .scan_field(vid_field),               // R682

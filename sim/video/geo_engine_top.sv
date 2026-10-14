@@ -62,7 +62,7 @@ module m2_geo_engine_top (
     .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .mem_space(mem_space),
     .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(poly_luma), .dbg_col_miss(dbg_col_miss),
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1), .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
-    .poly_tex(poly_tex)
+    .poly_tex(poly_tex), .poly_dotp()   // R828c: checked end to end by test_m2_geometry_mipz
   );
 
   logic [1:0] p_mul_req, p_mul_gnt, p_mul_rsp;

@@ -33956,3 +33956,301 @@ modes, and switches into and out of them mid-frame. lint_top clean;
 Quartus 17.0 parses m2_video_timing, m2_video and Model2.sv.
 Not seen by any bench: a set. Ben to try 15.4 kHz, and Narrow at 15.4 and
 15.7 kHz.
+
+**R828c -- THE GAME DOES NOT SET A PER-OBJECT LOD.
+geo->lod IS 128 AND EVERY coef IS 1.0, SO MAME'S LEVEL IS
+floor(2 log2 z - log2 |dotp| - 7) FOR EVERY POLYGON: A FOOTPRINT THAT
+ASSUMES THE SAME TEXEL DENSITY FOR EVERY OBJECT. THE PLAYER'S CAR SITS AT
+-5. A POLYGON WHOSE OWN LEVEL STAYS AT -3 OR BELOW IS NOW DRAWN AT LEVEL 0.
+THIS IS A FLAG FROM THE GEOMETRY, ONE BIT PER QUAD.**
+
+(Section: §10, R828 and its addenda; R665 corrected. Authority: MAME 0.289
+model2_v.cpp and model2rd.ipp for what the silicon computes (texlod, the
+level). Model 1 has no mip.)
+
+*Believed:*
+  1. R665: Daytona's log RAM "is not a log table". The final table is
+     0xFFFF in 32,488 of 32 K entries and is rewritten every frame, so
+     texlod cannot be produced in logic.
+  2. R828 / R828a / R828b: MAME's level sits 2-6 levels under the
+     footprint for no stated reason. This walk has no texlod, so it mips
+     wherever its edge footprint says.
+  3. The brief for this addendum: the game sets geo->lod per object, which
+     is why MAME never mips the player's car.
+
+*Board (s1082 = db9fbc9, Sharp; Ben):* "all looking good except the
+windows on the car: the mip mapping is too early, and only the middle
+texture has changed, not the outside". Screenshot
+sm2-builds/mipmaps/board/s1082_rear_window.png. Earlier (s1068): the sky
+reflection on the car windows breaks "on the car select screen".
+
+*Now known -- VERIFIED:*
+
+All of this was measured on MAME 0.289 in build/mame289-mip, with a new
+instrument M2GLOD (diff: build/mame_patches/m2instruments_m2glod.patch).
+M2GLOD writes the following:
+  - A G line per polygon in the M2MIP .poly dumps: geo->lod, coef,
+    |dotp|, attr, cb[10], the log RAM byte read, oba, tha, the object's
+    index and its translation.
+  - "L= D=" (texlod and |dotp|) on M2DIFF's polys.txt lines and on
+    M2GEO's geopolys.txt lines.
+The runs covered:
+  - Daytona Revision A attract, lists 2000-2023, 5000-5023, 7000-7007 and
+    9000-9023, plus samples at 3000-8500.
+  - A Revision A race: 3 coins, start, nobody steering. M2GEO walks
+    5251-6601.
+  - The Deluxe '93 car select (daytona93, three coins and start; rompath
+    ~/roms/Model2). M2GEO walks 3301-5101 and lists 3700 and 3950.
+The runs were deterministic: the 2000 list was identical in two runs.
+
+  1. THERE IS NO PER-OBJECT LOD.
+     - All 91,196 textured polygons logged have lod = 128.0 (0x43000000)
+       and coef = 1.0 (0x3f800000). That covers attract, the race and the
+       car select.
+     - The coefficient table at every one of 38 dumped walks holds 1.0 in
+       all 32 entries (1,216 of 1,216).
+     - geo->lod as left at a walk's start is 128.0 at 37 walks. The one
+       exception is 120.15, at Deluxe '93's circuit select (walk 3301:
+       12 polygons, the course panels). That is 0.09 levels.
+  2. THE LOG RAM IS A LOG TABLE (R665 is corrected). At walks 5000
+     (Revision A) and 4201 (Deluxe '93) every one of the 32,768 bytes
+     equals round(128 log2(1 + i/32768)) within 1, and none is 255. Every
+     polygon's log RAM read (the G lines' lr) agrees with that formula.
+     So texlod = 128 log2(coef |dotp| lod), exactly as written in
+     model2_v.cpp:436. R665's capture (p15) did not hold this table, and
+     why is not known; the dumps do.
+  3. SO MAME'S LEVEL IS floor(2 log2 z - log2 |dotp| - 7) EVERYWHERE.
+     - z is the pixel's depth. dotp = normal . P0(n), the distance of the
+       polygon's plane from the eye in view units.
+     - This is the major axis of a perspective footprint at one fixed
+       texel density, the same for the road, a mountain and a car window.
+       It has no texture-scale term.
+     - That is R828's "2-6 levels sharper than the footprint". A densely
+       textured near object, such as the car, sits far under 0.
+     - The player's car in chase view (f5000): MAME's mml/128 is -5.4 to
+       -4.9 on both the window glass (64x64 opaque at (768,448)) and the
+       frame (64x128 translucent at (512,0)).
+     - The f7000 attract close-up: -4.9 to -2.3.
+     - The same textures on cars 110-150 units ahead: +0.6 to +2.8.
+  4. WHY s1082 MIPS THE PLAYER'S WINDOW. The edge footprint (R828) sees
+     the rear window's real texel density: tilted away, with 64 texels over
+     about 40 rows. tb_m2_raster3d is the core configuration plus MIP 1 and
+     Sharp (MAME list f5000), and on it 842 of the player car's 15,352
+     pixels are off level 0. They are the middle of the window: the glass,
+     and the frame's centre bar, which the R828b cap holds at level 1.
+     That is Ben's "middle changed, outer not"
+     (sm2-builds/mipmaps/img/miplod_window_f5000.png, row 3).
+  5. THE RULE (R828c). A polygon is drawn at level 0 when the game's own
+     level at its far end is at most -B, with B = 3. Elsewhere R828a/b's
+     level is unchanged; the flag can only make a level shallower.
+     - The far end is the largest vertex z, where the level is highest.
+       With hzmax and |dotp|, the test is 2 L(hzmax) - L(|dotp|) <
+       2144 + 16 (1 - B).
+     - Here L(x) is 16 x (the IEEE exponent) plus a 16-entry table of
+       round(16 log2(1 + j/16)) on the top four mantissa bits. That is
+       sixteenths of a level, with the bias folded into the constant.
+     - The candidates were each measured against MAME's exact level, using
+       the offline model (miplod.c), Sharp with R828b's cap as the base,
+       and every unoccluded pixel. The per-pixel rule was
+       min(Sharp, MAME + B). The per-quad rules were a cap of
+       clamp(MAME_far + B, 0, 7) and the flag. Results:
+
+       rule (f2000/f5000/f7000/f9000)  Sharp's mipped px kept   player car at L0   shimmer, minified (x GT)
+       Sharp, s1082                    100/100/100/100%         -/96.3/96.3/-      1.39/1.66/1.36/1.24
+       per pixel, B=3                  79/89/43/87%             -/99.9/99.9/-      1.49/1.73/1.52/1.28
+       per quad cap, B=3               96.2/92.7/84.6/88.7%     -/99.9/99.9/-      1.41/1.70/1.42/1.28
+       per quad FLAG, B=3 (chosen)     96.2/94.7/84.6/90.7%     -/99.9/99.9/-      1.41/1.69/1.42/1.27
+       per quad flag, B=4              100/98.2/94.6/100%       -/99.8/97.7/-      1.39/1.67/1.37/1.24
+       MAME's level, nearest           3/5/5/6%                 -/100/100/-        1.88/2.30/1.62/1.39
+       off (level 0)                   -                        100%               2.01/2.58/1.73/1.62
+
+     - f2000 is the in-car view, with no player car.
+     - "Player car" means objects whose translation z is under 8. In
+       f9000 that class is not the car: the grandstand's object also sits
+       near the eye, so f9000's player column is blank.
+     - Shimmer is R828's metric: the mean |change| per 1/8-px pan step,
+       against the 12x12 supersampled level-0 reference. On face-on
+       minified pixels (iso) the flag gives 1.19/1.36/1.32/1.27, against
+       Sharp's 1.16/1.30/1.31/1.20.
+     - MAME's level-0 pixels at level 0: 84.5/75.8/92.5/84.5% (Sharp:
+       83.7/74.1/91.0/82.7%). MAME's mipped pixels still mipped: unchanged
+       (98.6/95.5/92.0/87.3%).
+     - Why the flag and not the cap: the flag measured within 0-2 points
+       of the cap on every frame. It needs no change to m2_span_tex or to
+       the span queue, because the fill's K becomes -512, as Off does.
+     - Why B = 3 and not 4: B = 4 leaves 2.3% of the f7000 close-up's car
+       mipped. That is the car's side decal (128x128 at (384,640)), where
+       MAME's far-end level is -3. B = 3 also returns the other cars
+       mid-distance (f9000) and the near fence panels (f2000) to level 0,
+       as MAME draws them. MIPZ_B is a localparam in Model2.sv
+       (R3D_MIPZ_B).
+  6. THE RTL'S FLAG AGAINST MAME'S OWN, polygon by polygon. The geodiff
+     replay pushes MAME's walk through this core's walker, engine,
+     projector and clipper (m2_geometry with MIPZ). Each MAME polygon's
+     run of quads was aligned as geodiff.py aligns it, and its q_mipz was
+     compared with MAME's exact flag (mipz_gd.py).
+     - Ten walks: attract 2000/5000/7000/9000, the race 5251/5701/6301,
+       and the car select 3901/4201/4501.
+     - 13,081 polygons, 13,055 agree (99.80%).
+     - All 26 disagreements are on the boundary: MAME -3 with ours clear,
+       or MAME -2 with ours set. These come from the table's rounding
+       against MAME's fast_log2 and from cb[10]'s truncation.
+     - No polygon's quads disagree among themselves.
+     - The bit model also gives the same result as MAME's exact flag on
+       99.8% of the bench lists' quads: 1,434/1,436 f5000, 303/303 f7000,
+       1,606/1,607 f2000, 689/694 f9000, 1,345/1,349 and 1,351/1,356 car
+       select.
+  7. ON THE PICTURE. tb_m2_raster3d in the core configuration, MIP 1,
+     Sharp. M2_R3D_MIPZ=3 feeds each quad the flag as m2_geometry forms
+     it, from the list's max vertex z and |dotp|. The figures below are
+     pixels off level 0 (the Off picture):
+       - player car f5000:   842 -> 14 (of 15,352)
+       - player car f7000: 1,123 -> 19 (of 34,797)
+       - Deluxe '93 car select, lists 3700 / 3950: 6,863 -> 320 and
+         6,789 -> 471. These are the cars, the windows' sky reflection
+         and the decals, at MAME levels -4..-3. What is left is where
+         MAME's own level is above -3.
+     Scenery changed from s1082's Sharp:
+       - f2000: 1,736 px, the near fence (64x256 at (896,256)), 1,359 of
+         3,865, back to level 0.
+       - f5000: 787.
+       - f9000: 412, cars ahead (32x64 at (608,128)). The road
+         (256x256 at (0,512)) changed by 1 px.
+       - Far road, trees and mountains: unchanged.
+     The images are in sm2-builds/mipmaps/img/:
+       - miplod_window_f5000.png and miplod_window_f7000.png: MAME, Off,
+         s1082 Sharp, Sharp + R828c.
+       - miplod_carselect_3700.png and miplod_carselect_3950.png.
+       - miplod_scenery_f2000.png, miplod_scenery_f5000.png and
+         miplod_scenery_f9000.png.
+  8. THE RTL (merged onto headroom after R834).
+     - m2_geo_engine: poly_dotp, |normal . point| as {exponent, 4 mantissa
+       bits}. It is latched with the face test (E_DOTA, the point pass)
+       and held until the polygon is handed over: 12 registers.
+     - m2_geometry: #(MIPZ, MIPZ_B).
+       - pdotp is latched with the polygon (Q_IDLE).
+       - pmipz is set in Q_CHK from hzmax (the polygon's largest vertex z,
+         latched since Q_MM2) and pdotp.
+       - Two table lookups, two 13-bit adds and a 15-bit compare. Unsigned,
+         with no signed casts (R662).
+       - There is no |dotp| = 0 guard: L(0) = 0 sets the flag only when
+         z < 2^-61.
+     - m2_geo_clip: in_mipz -> a_mipz -> out_mipz, carried to every piece.
+     - Model2.sv: localparam R3D_MIP (m2_raster3d .MIP and m2_geometry
+       .MIPZ together) and R3D_MIPZ_B = 3; q3d_mipz from the geometry to
+       the rasteriser.
+     - m2_raster3d -> m2_quad_store #(MZ = MIP): one bit at the top of the
+       texture word (uvt 192 -> 193 bits; 195 fit in 39 M10K a bank in
+       the 2048x5 mode) -> m2_raster_fill in_mipz, latched with the quad
+       (mz_r).
+     - m2_raster_fill: k_o is K_NONE when mz_r, beside Off's test.
+     MIP 0 prunes all of it.
+  9. MIP 0 IS HEAD.
+     - quartus_map 17.0 with .MIP 0 in both trees: ALMs needed 39,446 =
+       39,446, combinational ALUT 56,095 = 56,095, registers 47,917 =
+       47,917, block bits 4,350,723 = 4,350,723, DSP 90 = 90. The
+       per-entity differences are generated RAM / shift-tap instance names
+       and m2_geometry's parameter section.
+     - In the bench (tb_m2_raster3d, core configuration, MIP 0, f5000) the
+       pixel hash 0f4acde5 and fetches 162,485 equal HEAD's.
+     - MIP 1 with no flag fed equals HEAD's MIP 1 (e34da033, 161,952
+       fetches).
+  10. BENCHES.
+     - test_m2_geometry_mipz is new (MIPZ 1). Four fixed cases and 380
+       random polygons in one strip object, with one-component
+       power-of-two normals so the engine's dot product is exact and the
+       model's |dotp| is the RTL's. z ranges over 0.25-2000.
+       - The fixed cases are: the s1082 rear window (zmax 3.78, |dotp|
+         1.89, level -5: set), far scenery (127/63.6: clear), |dotp| = 0
+         (clear) and "the far corner decides" (clear).
+       - Every flag equals the bit model, 56 of 384 are set, and all 384
+         equal MAME's exact flag.
+       - Mutations caught: hzmin for hzmax (212 fails), the z mantissa
+         table dropped (16), the dotp table dropped (12), B off by one
+         (17), and poly_dotp never latched (59).
+       - The |dotp| = 0 guard survived its mutation, because it is
+         equivalent, so it was removed.
+     - test_m2_geometry (MIPZ 0): q_mipz 0 on all 384 quads.
+     - test_m2_raster_fill_mip now presents in_mipz.
+       - A sixth of the quads at random are flagged, and so is ALWAYS the
+         f5000 window-frame quad (the player's rear window, which fails
+         before the fix).
+       - The expected K is -512 when the quad is flagged.
+       - 1,830,055 spans, 0 wrong. 1,362 flagged quads that would
+         otherwise carry a level, 319 of them the window frame.
+       - Mutations caught: the flag ignored (280,532 fails), and the flag
+         taken live from the input rather than latched with the quad
+         (411,737 fails, back to back).
+     - Pass: test_m2_raster_fill, test_m2_raster3d, test_m2_quad_store,
+       test_m2_geo_clip, test_m2_geo_engine, test_m2_geo,
+       test_m2_span_tex, test_m2_span_tex_mip and test_m2_texel_bl_mip.
+     - lint_top is clean. Its warnings are identical to HEAD's with MIP 1
+       and with MIP 0.
+     - lint_idx: the same 147 lines as HEAD.
+     - quartus_map --analyze_file (17.0) on the six changed modules and
+       Model2.sv: 0 errors (the constant-overflow warnings are HEAD's).
+     - Quartus constant-fold of the flag arithmetic (cf.sv, seven constant
+       cases): the stuck-at pins spell 1,0,0,1,1,1,0, the model's values.
+  11. AREA. quartus_map 17.0, whole design, MIP 1, HEAD a4e8ce4 (= the
+      release candidate's RTL) against this:
+      - ALMs needed: 39,531 -> 39,579 (+48).
+      - Combinational ALUT: 56,308 -> 56,348 (+40).
+      - Registers: 48,222 -> 48,252 (+30).
+      - Block bits: +4,096 (the quad store's bit, both banks).
+      - DSP: 90 = 90.
+      - By entity (LC / registers): m2_geometry 7,544 -> 7,561 /
+        8,358 -> 8,384; m2_geo_engine +1 / +12; m2_quad_store +2 / +5;
+        m2_raster_fill 5,210 -> 5,199 / -1; m2_geo_clip -1 / +1.
+  12. TIMING. quartus_sta --post_map, slow model; R825 calibrated it as
+      2.3-4 ns pessimistic.
+      - geometry -> pmipz: +7.67 ns (hzmax -> pmipz +8.04).
+      - FP pool -> poly_dotp: +6.88.
+      - -> a_mipz: +5.09.
+      - store -> fill mz_r: +4.44, the same as the existing store -> tex_r.
+      - mz_r -> k_o: +10.14.
+      - Unchanged: every path into k_o is +5.67, and the paths into
+        uvt_* are -7.45 in both trees (an existing post-map path).
+
+*Decision (a departure from R828, towards what MAME computes):* the level
+stays the edge footprint's (R828a, R828b), but the game's own level
+(texlod, which is floor(2 log2 z - log2 |dotp| - 7) at Daytona's lod 128 and
+coef 1.0) vetoes it. A polygon the game keeps at least three levels sharp
+all over is drawn at level 0, as MAME draws it. The lod and coef are
+constants in the RTL (log2(128) = 7 is folded into the threshold) because
+the game never sets anything else in a race or on the select screens.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. On the board, the player's windows (glass and frame) look as with
+     mip Off. Far road, trees, mountains and Sharp's look are unchanged.
+     The near fence (in-car view) and the cars ahead are a little sharper,
+     at MAME's level 0. Settles it: Ben, s1082 against this build, the
+     same spot.
+  b. The car-select reflection Ben reported (s1068) is (7): Sharp put
+     levels 1-2 on the cars' sky reflection and decals, where MAME has -4.
+     It is gone except where MAME itself is above -3. Settles it: Ben on
+     the Deluxe '93 car select. Revision A has no car on that screen: it
+     shows Mission Select without cars.
+  c. Placed area is +25..+50 ALM (the map's +48 at R821's 0.55-0.62x,
+     though R798 saw up to 2.5x). M10K should be unchanged: 193 bits still
+     take 39 blocks a bank. Settles it: a fit.
+  d. Timing: every new path is +4.4 ns or better post-map. Settles it: a
+     fit.
+  e. Another game, or a Daytona screen not measured, that sets lod or a
+     coefficient other than 128 / 1.0 would shift the threshold by
+     log2(lod coef / 128) levels. Op 0x16's operand (and coef_table, the
+     second word of each op 0x06 entry, which m2_geo steps over) could be
+     latched for about 12 registers and an adder if that ever matters.
+     Settles it: M2GLOD on that game.
+
+*Not verified:* any fit; the board; MIP with texel step 2-8; the
+interlaced picture.
+
+Tools (local; sm2-builds/mipmaps/tools/miplod/):
+  - miplod.c: the offline sweep (rules, shimmer, agreement, per texture).
+  - capchk.py and flagchk.py: the bit model against MAME on polys.txt.
+  - mipz_gd.py: the geodiff replay's q_mipz against MAME, aligned.
+  - cmpimg.py and crops.py: bench pictures by region.
+  - build.sh and run.sh: the core-configuration bench; M2_R3D_MIPZ=<B>.
+  - pm.tcl: post-map paths.
+  - sel_rev_a.lua and sel_93.lua: the race and car-select drives.
+MAME dumps (ROM-derived, local only) are in build/miplod/.

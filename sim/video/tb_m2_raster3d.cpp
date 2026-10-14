@@ -778,7 +778,7 @@ int main(int argc, char **argv) {
     }
     g_tbase1 = d->tex_base1;
     struct V { double x, y, z, pu, pv; };
-    struct P { int idx; unsigned z, h0, h1, h2, h3, luma; std::vector<V> v; };
+    struct P { int idx; unsigned z, h0, h1, h2, h3, luma; std::vector<V> v; int texlod = 0; uint32_t dotp = 0; bool has_lod = false; };   // R828c: L=, D=
     auto load_polys = [&](const std::string &pdir) {
     std::vector<P> polys;
     { FILE *f = std::fopen((pdir + "/polys.txt").c_str(), "r"); char line[8192];
@@ -789,6 +789,8 @@ int main(int argc, char **argv) {
         p.luma = luma;   // R784
         q = std::strstr(q, " n="); q = std::strchr(q + 1, ' ');
         for (int i = 0; i < n && q; i++) { V v; if (std::sscanf(q, " %lf,%lf,%lf,%lf,%lf", &v.x, &v.y, &v.z, &v.pu, &v.pv) != 5) break; p.v.push_back(v); q = std::strchr(q + 1, ' '); }
+        // R828c: the polygon's texlod and |dotp| (MAME + M2GLOD), when the dump has them
+        if (const char *lq = std::strstr(line, " L=")) { unsigned dd = 0; if (std::sscanf(lq, " L=%d D=%x", &p.texlod, &dd) == 2) { p.dotp = dd; p.has_lod = true; } }
         polys.push_back(p);
       }
       if (f) std::fclose(f); }
@@ -860,6 +862,30 @@ int main(int argc, char **argv) {
     // the board's case when a walk overran a vblank (R763). A copy of the
     // list is collected first to be that READY list.
     bool hold_next = false; long held_ticks = 0;
+    // R828c: M2_R3D_MIPZ=<B> -- the geometry's no-mip flag, from the
+    // polygon's largest vertex z and |dotp| exactly as m2_geometry forms it
+    // (sixteenths of a level, the same 16-entry table). Unset: 0, as before.
+    static const int MIPZ_B = std::getenv("M2_R3D_MIPZ") ? std::atoi(std::getenv("M2_R3D_MIPZ")) : -1;
+    static long mipz_polys = 0, mipz_set = 0, mipz_mame = 0, mipz_agree = 0;
+    auto mipz_of = [&](const P &p) -> int {
+      if (MIPZ_B < 0 || !p.has_lod) return 0;
+      static const int LT16[16] = {0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15};
+      double zf = 0; for (const V &v : p.v) zf = std::max(zf, v.z);
+      float zff = (float)zf; uint32_t zb; std::memcpy(&zb, &zff, 4);
+      const uint32_t ez = (zb >> 23) & 0xff, jz = (zb >> 19) & 15, ed = (p.dotp >> 23) & 0xff, jd = (p.dotp >> 19) & 15;
+      const int lz = 16 * ez + LT16[jz], ld = 16 * ed + LT16[jd];
+      return (2 * lz < ld + 2160 - 16 * MIPZ_B) ? 1 : 0;   // no |dotp| == 0 guard, as the RTL (it would need z < 2^-61)
+    };
+    auto mipz_mame_of = [&](const P &p) -> int {   // MAME's own: (-texlod + fast_log2(z)) >> 7 at the far vertex
+      double zf = 0; for (const V &v : p.v) zf = std::max(zf, v.z);
+      float z = (float)zf; uint32_t iv; std::memcpy(&iv, &z, 4); iv >>= 16;
+      static const uint8_t t[128] = {0,2,5,8,11,14,16,19,22,25,27,30,33,35,38,40,43,46,48,51,53,56,58,61,63,65,68,70,73,75,77,80,
+        82,84,87,89,91,93,96,98,100,102,104,106,109,111,113,115,117,119,121,123,125,127,129,132,134,136,138,140,141,143,145,147,
+        149,151,153,155,157,159,161,162,164,166,168,170,172,173,175,177,179,181,182,184,186,188,189,191,193,194,196,198,200,201,203,205,
+        206,208,209,211,213,214,216,218,219,221,222,224,225,227,229,230,232,233,235,236,238,239,241,242,244,245,247,248,250,251,253,254};
+      const int32_t fl = (int32_t(((iv >> 7) & 0xff)) - 127) * 256 + t[iv & 127];
+      return ((-p.texlod + fl) >> 7) <= -MIPZ_B ? 1 : 0;
+    };
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
@@ -920,6 +946,8 @@ int main(int argc, char **argv) {
 #endif
       }
       d->q_z = 0x3F800000u | (p.z & 0xffff);
+      d->q_mipz = mipz_of(p);   // R828c
+      if (MIPZ_B >= 0 && p.has_lod) { const int mm = mipz_mame_of(p); ++mipz_polys; mipz_set += d->q_mipz; mipz_mame += mm; mipz_agree += (mm == (int)d->q_mipz); }
       d->q_end = last;
       if (hold_next) {   // R810: held across the swap, taken on the first edge that sees q_ready
         hold_next = false;
@@ -990,6 +1018,7 @@ int main(int argc, char **argv) {
     }
     push_all(polys);
     std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
+    if (MIPZ_B >= 0) std::printf("  R828c MIPZ B=%d: %ld quads with a lod, flag set %ld (MAME's own level says %ld), agree %ld\n", MIPZ_B, mipz_polys, mipz_set, mipz_mame, mipz_agree);
     // R657: M2_R3D_DUMPA -- THE FRAME DRAWN WHILE THE NEXT LIST IS COLLECTED.
     // On the board every frame is drawn while the walker fills the store's
     // other bank and the sort reorders it; a frozen frame (the walk off) is the

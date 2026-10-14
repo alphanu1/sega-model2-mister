@@ -145,6 +145,13 @@ module m2_geo_engine #(
   // ITS LUMINANCE. Not only for the bench any more (R271): the textured path
   // scales every texel's brightness by this same number.
   output logic [7:0]  poly_luma,
+  // R828c: |normal . point| -- MAME's dotp, the polygon plane's distance from
+  // the eye -- as its IEEE exponent and top four mantissa bits. The reference's
+  // texture LOD is coef * |dotp| * lod per polygon (model2_v.cpp); m2_geometry
+  // turns this into the game's own level at the polygon's far end. Latched
+  // with the face test, held until the polygon is handed over (the next one's
+  // face test comes after E_EMIT). Unused (pruned) unless m2_geometry MIPZ.
+  output logic [11:0] poly_dotp,
   output logic [15:0] dbg_col_miss,        // colour cache misses
 
   // ---- a SECOND pool client, for those two multiplies. The pool exists to be
@@ -538,6 +545,7 @@ module m2_geo_engine #(
       for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
       th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
+      poly_dotp <= 12'd0;                                                              // R828c
       tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0; uv_last <= 1'b0;
       poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
@@ -751,6 +759,7 @@ module m2_geo_engine #(
             else if (!dsel) begin
               dot_neg   <= fadd_res[31] && (fadd_res[30:0] != 31'd0);
               dotp_zero <= (fadd_res[30:0] == 31'd0);
+              poly_dotp <= fadd_res[30:19];                        // R828c
               if ((attr[9:8] == 2'd0) || (fadd_res[31] && (fadd_res[30:0] != 31'd0) && !attr[17])) begin
                 // R696: E_EMIT WILL CULL THIS POLYGON (the same test, on the same
                 // dot), so nothing between here and there is used: not the light,

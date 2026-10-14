@@ -130,7 +130,11 @@ module m2_quad_store #(
   // at a z is drawn first). With the fill mask, first write wins, so the last
   // submitted wins a tie, exactly as it does under the painter's last-write-
   // wins. 0 keeps the painter's order (z descending, submission order).
-  parameter bit          FTB    = 1'b0
+  parameter bit          FTB    = 1'b0,
+  // R828c: one more bit a quad, the geometry's no-mip flag (m2_geometry
+  // q_mipz), at the top of the texture word: 192 -> 193 bits, still 39
+  // M10K a bank in the 2048x5 mode (195 bits). 0: not stored, out_mipz 0.
+  parameter bit          MZ     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -155,6 +159,7 @@ module m2_quad_store #(
   input  logic [OZW-1:0] in_oz0, in_oz1, in_oz2, in_oz3,   // R334
   input  logic [15:0]    in_frac,                           // R626: {fy3,fx3..fy0,fx0}
   input  logic [TXW-1:0] in_tex,
+  input  logic           in_mipz,                           // R828c (MZ)
 
   // ---- sort
   input  logic        sort_start,
@@ -183,6 +188,7 @@ module m2_quad_store #(
   output logic [OZW-1:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
   output logic [15:0]    out_frac,                             // R626
   output logic [TXW-1:0] out_tex,
+  output logic           out_mipz,                          // R828c (MZ)
 
   output logic [15:0] dbg_count,
   output logic [15:0] dbg_dropped,
@@ -241,7 +247,7 @@ module m2_quad_store #(
   // a 5-bit remainder rather than straddling the vertex word.
   // R334: + four 1/z. 104 + 24 + 64 = 192 bits, which is 39 M10K per bank in
   // the 2048x5 mode against 26 at 128 -- the +26 blocks R331 costs.
-  localparam int unsigned UW  = 4 * 2 * UVW + TXW + 4 * OZW;
+  localparam int unsigned UW  = 4 * 2 * UVW + TXW + 4 * OZW + (MZ ? 1 : 0);   // R828c
   localparam int unsigned OZ0 = 4 * 2 * UVW + TXW;   // where the 1/z block starts
   (* ramstyle = "M10K" *) logic [UW-1:0] uvt_0 [NQ], uvt_1 [NQ];
 
@@ -479,17 +485,17 @@ module m2_quad_store #(
                                     satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
                                     satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
                                     satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])};
-          uvt_1[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
+          uvt_1[wcount[IW-1:0]]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,   // R828c: the cast drops in_mipz without MZ
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
-                                     in_v1, in_u1, in_v0, in_u0};
+                                     in_v1, in_u1, in_v0, in_u0});
         end else begin
           vtx_0[wcount[IW-1:0]] <= {satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
                                     satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
                                     satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
                                     satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])};
-          uvt_0[wcount[IW-1:0]]  <= {in_oz3, in_oz2, in_oz1, in_oz0,
+          uvt_0[wcount[IW-1:0]]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
-                                     in_v1, in_u1, in_v0, in_u0};
+                                     in_v1, in_u1, in_v0, in_u0});
         end
         // R246: in_z CARRIES THE REFERENCE'S 16-BIT z VALUE in its low half
         // (m2_geometry's zval, model2_v.cpp's float_to_zval), not a float.
@@ -761,6 +767,7 @@ module m2_quad_store #(
   assign out_oz1 = uvt_r[OZ0 + 1*OZW +: OZW];
   assign out_oz2 = uvt_r[OZ0 + 2*OZW +: OZW];
   assign out_oz3 = uvt_r[OZ0 + 3*OZW +: OZW];
+  assign out_mipz = MZ && uvt_r[UW-1];          // R828c
 
   wire v0 = sc_run && (pi < rcount);
 
