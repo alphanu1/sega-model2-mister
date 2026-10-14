@@ -25,7 +25,9 @@ far road, trees, mountains unchanged. Flag agrees with MAME's on 99.8% of
 ALM, no new M10K. The car-select screen is Deluxe '93's (Rev A shows none).
 BUILT: s1085 = b559f27 (R834 + R828c), 40,873 ALM, core clocks >= +0.338,
 holds +0.206, HDMI -1.250 (report-only). build/Model2_20261014_s1085_rc.rbf
-(e2ec410b...). s1084/s1086 crashed mid-fit. Awaiting "load it".
+(e2ec410b...), on the board: Ben "looks good". Reseeds s1087-s1092: s1087
+HDMI -0.003, core >= +0.218, hold +0.215 (build/Model2_20261014_s1087_rc.rbf,
+52cb1d31...) -- the release pick if Ben agrees.
 NEXT: the passing seed to Ben: rear window, car select (Deluxe '93), rails,
 15.4 kHz, Narrow. Then the release (releases/README has the 15 kHz rows;
 the mip row is still to add).

@@ -34261,3 +34261,11 @@ M10K 529/553 (unchanged); every core clock positive (+0.338 / +0.626 /
 Violation) and s1086 (Internal Error, DYN) crashed mid-fit, as at 98-99%
 before. RBF build/Model2_20261014_s1085_rc.rbf, md5
 e2ec410b2ffe8b4890089f8dfa6e6275. Not yet on the board.
+Reseeds of b559f27 for the HDMI slack (Ben), slow 100C model, worst setup
+by clock: s1087 HDMI -0.003 (one path), core >= +0.218, hold +0.215,
+40,851 ALM -- the best; s1089 HDMI -0.019, core >= +0.138; s1092 HDMI
+-0.052, core >= +0.238, hold +0.147; s1088 and s1090 miss a core clock
+(-0.486, -0.232); s1091 crashed (Internal Error, TDC). None closes HDMI
+outright. s1087 assembled: build/Model2_20261014_s1087_rc.rbf, md5
+52cb1d3199ceeb7db7cdeff65ebf6944. s1085 on the board: no lock and 57.4-57.6
+fps through the first 56 min of the watch.
