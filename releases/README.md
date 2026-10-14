@@ -4,7 +4,7 @@
 
 | file | where it goes on the SD card |
 |---|---|
-| `NEXT_RBF` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261014.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `Daytona USA (Revision A) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT |
@@ -33,7 +33,7 @@ ignores you.
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `NEXT_RBF` has the md5 `NEXT_MD5`.
+**Check you're running the right file.** `Model2_20261014.rbf` has the md5 `52cb1d3199ceeb7db7cdeff65ebf6944`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -62,6 +62,13 @@ finished, so there's no tearing.
 
 ## New in this release
 
+- **Mip-mapping.** Distant textures used to shimmer and crawl as you drove,
+  because they were always read at full size, however far away they were.
+  Now they're read from smaller, pre-filtered versions as they recede, as
+  the arcade board does. `Mip-mapping` in the OSD picks how soon that
+  happens: `Sharp` (default) keeps the most detail, `Smooth` the least
+  shimmer, and `Off` turns it off. Your own car and anything else the
+  game keeps sharp stay at full detail.
 - **Sound now matches the arcade's balance.** Each voice's volume used to be
   set in coarse steps that left the music about 3.5 dB too loud, which made
   the speech sound quiet next to it. The GAME OVER speech now comes through
@@ -116,6 +123,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `15kHz width` | `Full` (default) or `Narrow`, for a picture that looks squashed at 15.4 or 15.7 kHz — see the CRT section |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
+| `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions |
 | `Draw method` | `Double Buffered` (default) draws every frame; `Single buffered` draws every other one |
 | `Gamma` | `MAME` (default), `Off` or `Mild`. Affects 2D and 3D together. |
 | `Volume` | 80% by default, in 10% steps; goes from 100% round to 0% |
@@ -194,9 +202,6 @@ framework file `sys/audio_out.sv`, kept as a patch in
 
 ## Still to come
 
-- **Mip-mapping.** Distant textures shimmer because they're always read at
-  full size. A version that fixes it is being tuned so the near road stays
-  sharp.
 - **Reports from CRT and wheel owners** (see above), and from anyone running
   the Deluxe '93 set for long stretches.
 - **Virtua Cop** needs a different I/O board (light guns and an LCD), so it

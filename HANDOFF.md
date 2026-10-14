@@ -27,7 +27,11 @@ BUILT: s1085 = b559f27 (R834 + R828c), 40,873 ALM, core clocks >= +0.338,
 holds +0.206, HDMI -1.250 (report-only). build/Model2_20261014_s1085_rc.rbf
 (e2ec410b...), on the board: Ben "looks good". Reseeds s1087-s1092: s1087
 HDMI -0.003, core >= +0.218, hold +0.215 (build/Model2_20261014_s1087_rc.rbf,
-52cb1d31...) -- the release pick if Ben agrees.
+52cb1d31...) -- Ben: "87 it is". On the board since 2026-10-14 17:35 (board
+clock), watch running. RELEASE PREPARED: releases/Model2_20261014.rbf
+(s1087), 20261013 removed, release README filled (mip row and notes, 15 kHz
+rows), README's what's-left updated. PR headroom -> main open; merge (merge
+commit) on Ben's word.
 NEXT: the passing seed to Ben: rear window, car select (Deluxe '93), rails,
 15.4 kHz, Narrow. Then the release (releases/README has the 15 kHz rows;
 the mip row is still to add).

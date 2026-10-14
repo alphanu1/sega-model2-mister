@@ -28,18 +28,16 @@ a 2D tilemap test pattern.
 |---|---|
 | **i960KB CPU** | Complete. Runs Daytona's real boot code instruction for instruction against MAME (803,355 instructions in lockstep), with an 8 KB instruction cache and a fetch path tuned on the game's own code. |
 | **TGP coprocessor** | The MB86233 runs the game's own microcode, which the core extracts from the data ROM. On a recorded race its results match MAME's, apart from how a few NaNs are encoded. |
-| **3D** | Display-list walker, geometry (transform, lighting, clipping, projection), and a textured rasteriser drawing front to back into a DDR3 framebuffer. A frame is only shown once it's complete. |
+| **3D** | Display-list walker, geometry (transform, lighting, clipping, projection), and a textured, mip-mapped rasteriser drawing front to back into a DDR3 framebuffer. A frame is only shown once it's complete. |
 | **2D tilemap** | Pixel-exact against MAME. A four-line buffer ring stops it dropping scanlines on busy screens. |
 | **Sound board** | Its own 68000 (fx68k), the YM3438 (jt12), and both MultiPCM sample chips on one shared engine. Levels match MAME's to within about a dB. |
 | **I/O board** | The real Z80 program running on the real board design, shared with the Model 1 core. |
 | **SDRAM** | Thirteen ports, 64 MB, read timing fixed (not calibrated) since it was proven there's only one right setting. |
 | **Speed** | 57 of 57.5 frames a second in attract and in a race, 99% of frames on time. The main CPU sets the pace now, not the 3D. |
-| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs, with MRAs that start straight in 15 kHz. |
+| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs at 15.1, 15.4 or 15.7 kHz, with MRAs that start straight in 15 kHz. |
 
 ### What's left
 
-- **Mip-mapping**, so distant textures stop shimmering. A small version is
-  built and is being tuned so the near road stays sharp.
 - **Confirmation from CRT and wheel owners**, and long runs of the Deluxe '93
   set.
 - **MiSTer's audio filter** is switched off to save space (see Building). It
