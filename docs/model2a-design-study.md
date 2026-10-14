@@ -33888,3 +33888,11 @@ none zero, 103 at >= 57 fps).
 s1082 (the release candidate): NO LOCK in 240 min of the watch (135
 readings, none zero, 103 at >= 57 fps). Awaiting Ben's checks: rails per mip
 setting, sound, background in slides, car select, the mip default.
+s1082 on the board (Ben): "all looking good except the windows on the car:
+the mip mapping is too early, and only the middle texture has changed, not
+the outside" -- the player car's rear window: the opaque sky glass (64x64)
+takes a level > 0 (tilted away, a large major axis though the car is near)
+while the translucent frame over it stays at 0. MAME keeps the player car at
+level 0 -- the game's per-object LOD (geo->lod in texlod) says so. Screenshot
+sm2-builds/mipmaps/board/s1082_rear_window.png. Next: follow the game's
+per-object LOD intent if it is cheaply available in the geometry pipeline.
