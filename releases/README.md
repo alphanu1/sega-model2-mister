@@ -83,6 +83,9 @@ finished, so there's no tearing.
   (`Pedals only`). Set `Right stick` to `Pedals+steer` if you use a wheel that
   MiSTer maps onto the right stick: then left/right steers and up/down still
   works the pedals. See Controls.
+- **More for CRTs.** A 15.4 kHz setting between the other two, for sets that
+  won't take 15.1 kHz, and a `15kHz width` option for sets that show the
+  picture squashed at 15.4 or 15.7 kHz.
 - **A shorter menu.** Texel step, 3D pacing, Texture brightness and Draw
   method's "every 3rd frame" are gone. They're fixed at the settings that work
   best now the core runs at full speed.
@@ -109,7 +112,8 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 |---|---|
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
-| `15kHz lines` | `262/263 (15.1kHz)` (default) or `273/274 (15.7kHz)` — see the CRT section |
+| `15kHz lines` | `262/263 (15.1kHz)` (default), `268/269 (15.4kHz)` or `273/274 (15.7kHz)` — see the CRT section |
+| `15kHz width` | `Full` (default) or `Narrow`, for a picture that looks squashed at 15.4 or 15.7 kHz — see the CRT section |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
 | `Draw method` | `Double Buffered` (default) draws every frame; `Single buffered` draws every other one |
@@ -159,8 +163,16 @@ MiSTer menu. It starts in 15 kHz straight away. With a normal MRA, set
 `Video` to `15kHz interlaced`.
 
 `15kHz lines` starts at `262/263`, NTSC's line count, which keeps most TVs
-locked. If your set prefers it, `273/274` keeps the standard line rate
-instead.
+locked. Some sets won't sync to that, because it puts the line rate at
+15.1 kHz, below the standard 15.7. For those, `273/274` gives the standard
+line rate, and `268/269` sits halfway between the two.
+
+The game runs at 57.5 frames a second, not 60, so a faster line rate means
+more lines in each field, and the picture uses fewer of them. On many sets
+that makes it look shorter at 15.4 and 15.7 kHz than at 15.1. If yours does
+that, set `15kHz width` to `Narrow`: the picture is pulled in from the sides
+by the same amount, so it keeps its shape. If it looks too narrow, leave it
+on `Full`. It has no effect at 15.1 kHz.
 
 It's been tested on real CRTs, but more reports are very welcome: which TV,
 how it's connected, and which settings work for you.

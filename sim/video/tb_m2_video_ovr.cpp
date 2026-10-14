@@ -106,8 +106,15 @@ struct Result {
 // R824: the pixel enable per video mode, as Model2.sv makes it on clk_mem:
 // 0 native (16/100), 1 15 kHz interlaced 273.5-line fields (547/5300, R682),
 // 2 15 kHz interlaced 262.5-line fields (861/8692, R783).
-static const unsigned CE_NUM[3] = {16, 547, 861};
-static const unsigned CE_DEN[3] = {100, 5300, 8692};
+// R834: 3 268.5-line fields (537/5300), 4 the same on the 672-pixel narrow
+// line (11277/108650), 5 273.5-line fields on the 684-pixel one (93537/869200).
+static const int NMODE = 6;
+static const unsigned CE_NUM[NMODE] = {16, 547, 861, 537, 11277, 93537};
+static const unsigned CE_DEN[NMODE] = {100, 5300, 8692, 5300, 108650, 869200};
+static void set_mode(Vm2_video_ovr_top *d, int mode) {
+  d->interlace = mode != 0; d->ntsc_lines = mode == 2;
+  d->mid_lines = mode == 3 || mode == 4; d->narrow = mode == 4 || mode == 5;
+}
 
 enum Scene { SKY, RAND, DUMP };
 
@@ -159,7 +166,7 @@ static Result run(Scene sc, int frames, int lat, int jit, int mode, uint64_t see
   if (rlat >= 0) { pr.lat = rlat; pr.jit = 0; }   // the shipped path at its own latency
   pr.rng.s = seed * 7 + 3; pd.rng.s = seed * 7 + 3;     // same draws while both ask alike
   bool il = mode != 0;
-  d->rst_n = 0; d->ce_pix = 0; d->interlace = il; d->ntsc_lines = mode == 2; d->r_m_ack = 0; d->d_m_ack = 0;
+  d->rst_n = 0; d->ce_pix = 0; set_mode(d, mode); d->r_m_ack = 0; d->d_m_ack = 0;
   uint16_t rq = 0, dq = 0;
   unsigned ce_acc = 0;
   int frame = -1;
@@ -205,7 +212,7 @@ static Result run(Scene sc, int frames, int lat, int jit, int mode, uint64_t see
       }
     if (sw_frame >= 0 && frame == sw_frame && d->vcnt == sw_line && d->hcnt == 300 && d->ce_pix) {
       mode = sw_mode; il = mode != 0;
-      d->interlace = il; d->ntsc_lines = mode == 2;
+      set_mode(d, mode);
     }
     if (d->vblank_start) {
       fr_diff += ldiff; ldiff = false;     // the last visible line
@@ -254,7 +261,7 @@ int main(int argc, char **argv) {
     if (r.bad_glyph) { std::printf("  FAIL %s: a glyph cache answered with the wrong word\n", name); fails++; }
     return r.bad_glyph == 0;
   };
-  static const char *MN[3] = {"", " i273", " i262"};
+  static const char *MN[NMODE] = {"", " i273", " i262", " i268", " i268n", " i273n"};
 
   if (!sweep) {
   std::printf("test: equivalence -- every visible pixel, frames where neither path overran\n");
@@ -283,7 +290,7 @@ int main(int argc, char **argv) {
   // The variant at a latency where the shipped path overruns must draw the
   // picture the shipped path draws with no latency at all -- the whole claim.
   std::printf("test: the variant at 30 cycles against the shipped path at 0\n");
-  for (int mode = 0; mode < 3; mode++) {
+  for (int mode = 0; mode < NMODE; mode++) {
     char nm[64]; std::snprintf(nm, sizeof nm, "sky%s d@30 vs r@0", MN[mode]);
     Result r = run(SKY, frames, 30, 0, mode, 9, 0, nullptr, nullptr);
     show(nm, r);
@@ -309,6 +316,10 @@ int main(int argc, char **argv) {
       {1, 2, SKY, 0, 0, 100}, {2, 1, SKY, 0, 0, 100}, {1, 2, RAND, 0, 0, 100}, {0, 1, RAND, 0, 0, 100},
       {2, 0, SKY, 14, 30, 100}, {0, 2, SKY, 14, 30, 100},
       {0, 1, SKY, 0, 0, 300}, {0, 2, SKY, 0, 0, 380}, {1, 2, SKY, 0, 0, 268}, {1, 2, SKY, 14, 30, 268},
+      // R834: into and out of 268.5 lines and the narrow line, which also
+      // changes the line's length mid-line (hcnt past 656 runs on to 1,023)
+      {0, 3, SKY, 0, 0, 100}, {3, 0, SKY, 0, 0, 100}, {1, 5, SKY, 0, 0, 100}, {5, 1, SKY, 0, 0, 100},
+      {0, 4, RAND, 0, 0, 100}, {4, 2, SKY, 0, 0, 100}, {3, 5, SKY, 0, 0, 100}, {5, 0, SKY, 14, 30, 100},
     };
     for (const auto &w : sw) {
       char nm[64]; std::snprintf(nm, sizeof nm, "%s %d->%d @%d lat %d+%d", w.sc == SKY ? "sky" : "rand", w.from, w.to, w.line, w.lat, w.jit);
@@ -350,7 +361,7 @@ int main(int argc, char **argv) {
   std::printf("  at 30 cycles: shipped %d overruns, variant %d\n", r30, d30);
   // R824: the same in both 15 kHz modes, the variant against r@0 (difflines
   // is then the number of wrong lines on the screen)
-  for (int mode = 1; mode < 3; mode++)
+  for (int mode = 1; mode < NMODE; mode++)
     for (int lat : {30, 45, 60, 90}) {
       char nm[64]; std::snprintf(nm, sizeof nm, "sky%s lat %d (r@%d)", MN[mode], lat, lat);
       Result r = run(SKY, frames, lat, 0, mode, 9, -1, nullptr, nullptr);
@@ -384,7 +395,7 @@ int main(int argc, char **argv) {
       struct L { int lat, jit; };
       const std::vector<L> ls = sweep2 ? std::vector<L>{{14,50},{-1,-1},{30,30},{45,30}}
                                        : std::vector<L>{{0,0},{14,30},{20,0},{30,0},{45,0},{60,0},{90,0}};
-      for (int mode = 0; mode < 3; mode++)
+      for (int mode = 0; mode < NMODE; mode++)
         for (const auto &l : ls) {
           Result r = run(DUMP, int(fd.size()), l.lat, l.jit, mode, 11, 0, &tiles, &chr);
           // R825: OVR_SKIP_RL=1 leaves out the shipped path at L (the rL_*

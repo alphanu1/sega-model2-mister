@@ -87,7 +87,15 @@ localparam CONF_STR = {
 	// 273.5. Game speed and picture are the same either way.
 	// R799: 262/263 first, the default (Ben: it fixes the alignment on his
 	// set); labelled by the fields' own line counts, no half line.
-	"O[45],15kHz lines,262/263 (15.1kHz),273/274 (15.7kHz);",
+	// R834: and 268/269 (15.4kHz) between them, for sets that take neither
+	// end. O[45:44] so a saved 273/274 (bit 45) still opens as 273/274 --
+	// a set that needed it cannot show the OSD to set it again. Bit 44 was
+	// "Every 3rd frame"'s (R831); a config holding both reads as 273/274.
+	"O[45:44],15kHz lines,262/263 (15.1kHz),268/269 (15.4kHz),273/274 (15.7kHz);",
+	// R834: Narrow lengthens the 15.4/15.7 kHz line in the ratio their fields
+	// are longer, so the picture keeps the 15.1 kHz picture's shape on a set
+	// that shows it shorter. No effect at 15.1 kHz or 24 kHz.
+	"O[55],15kHz width,Full,Narrow;",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -438,15 +446,36 @@ reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
 wire       vid_il_sel;                    // R795: the OSD bit or the CRT MRA's flag, on clk_sys below
 always @(posedge clk_mem) vil_s <= {vil_s[1:0], vid_il_sel};
 wire       vid_il = vil_s[2];
+// R834: 268.5-line fields at 656 pixels: 537 x 656 a frame = 537/5300
+// (10.1321 MHz, 15,445 Hz a line). With the narrow line (m2_video_timing's
+// HM_TOTAL / HI_TOTAL) the same line rate on 672 and 684 pixels:
+// 537 x 672 = 11277/108650 (10.3792 MHz), 547 x 684 = 93537/869200
+// (10.7613 MHz). 869,200 takes the accumulator to 20 bits.
+localparam int unsigned CEM_NUM  = 537;
+localparam int unsigned CEM_DEN  = 5300;
+localparam int unsigned CEMW_NUM = 11277;
+localparam int unsigned CEMW_DEN = 108650;
+localparam int unsigned CEIW_NUM = 93537;
+localparam int unsigned CEIW_DEN = 869200;
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
-always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], ~status[45]};   // R799: 0 = 262/263
+reg [2:0]  vml_s;                         // R834: 268.5 lines
+reg [2:0]  vnw_s;                         // R834: the narrow line
+always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[45:44] == 2'd0};   // R799: 0 = 262/263
+always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[45:44] == 2'd1};   // R834
+always @(posedge clk_mem) vnw_s <= {vnw_s[1:0], status[55]};              // R834
 wire       vid_nl = vnl_s[2];
-reg [13:0] ce_acc;
+wire       vid_ml = vml_s[2];
+wire       vid_nw = vnw_s[2];
+reg [19:0] ce_acc;
 reg        ce_pix;
-wire [13:0] ce_num = !vid_il ? 14'(CE_NUM) : vid_nl ? 14'(CEN_NUM) : 14'(CEI_NUM);
-wire [13:0] ce_den = !vid_il ? 14'(CE_DEN) : vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);
+wire [19:0] ce_num = !vid_il ? 20'(CE_NUM) : vid_nl ? 20'(CEN_NUM)
+                   : vid_ml ? (vid_nw ? 20'(CEMW_NUM) : 20'(CEM_NUM))
+                   :          (vid_nw ? 20'(CEIW_NUM) : 20'(CEI_NUM));
+wire [19:0] ce_den = !vid_il ? 20'(CE_DEN) : vid_nl ? 20'(CEN_DEN)
+                   : vid_ml ? (vid_nw ? 20'(CEMW_DEN) : 20'(CEM_DEN))
+                   :          (vid_nw ? 20'(CEIW_DEN) : 20'(CEI_DEN));
 always @(posedge clk_mem) begin
-	if (ce_acc >= ce_den) ce_acc <= 14'd0;             // a mode change: start clean
+	if (ce_acc >= ce_den) ce_acc <= 20'd0;             // a mode change: start clean
 	else if (ce_acc + ce_num >= ce_den) begin
 		ce_acc <= ce_acc + ce_num - ce_den;
 		ce_pix <= 1'b1;
@@ -6488,6 +6517,7 @@ m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
 	.dbg_ovr_frame(vid_ovr_frame),
 	.vid_x(vid_x), .vid_y(vid_y),
 	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
+	.mid_lines(vid_ml), .narrow(vid_nw),                                // R834
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have),
 	.scr_flip(r826_flip_tgl), .scr_tag(r826_stag),   // R826

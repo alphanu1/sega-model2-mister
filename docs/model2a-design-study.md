@@ -33896,3 +33896,63 @@ while the translucent frame over it stays at 0. MAME keeps the player car at
 level 0 -- the game's per-object LOD (geo->lod in texlod) says so. Screenshot
 sm2-builds/mipmaps/board/s1082_rear_window.png. Next: follow the game's
 per-object LOD intent if it is cheaply available in the geometry pipeline.
+
+**R834 -- 15 kHz: A 268/269-LINE MODE (15.4 kHz), AND A NARROW LINE THAT
+KEEPS THE PICTURE'S SHAPE AT 15.4 AND 15.7 kHz.** Ben, 2026-10-14, on his
+JVC TM-H150C with the 20261013 release: some users' sets will not sync at
+15.1 kHz; at 15.7 kHz the picture is "squashed (widescreen)" and the OSD
+text looks rough. Asked for 15.4 kHz and no squash.
+
+*The squash is the field, not a fault.* Every 15 kHz mode shows the same
+192 lines a field at the game's 57.5242 Hz. More lines a field means a
+faster line, and on a set with a fixed scan height those 192 lines take a
+smaller share of it: 192/273.5 against 192/262.5, 4% shorter at 15.7 kHz.
+Ben's two photographs (same set, same framing) agree: the picture the same
+width, about 3.5% shorter at 15.7. The width does not change, because the
+line is 656 pixels in both, so 496 of them are the same share of a line.
+Nothing in the core can add lines without changing the game's rate (a 60 Hz
+field would run the game 4% fast) or repeating lines (a step every ~24
+lines, visible on every diagonal). What it can do is narrow the picture by
+the same ratio.
+
+*The change (m2_video_timing, Model2.sv):*
+  * 268.5-line fields (269 / 268), vsync 226-229 (between R783's 223 and
+    R701's 229), 15,445 Hz a line; at 656 pixels, 537/5300 of 100 MHz
+    (10.1321 MHz).
+  * The narrow line (`narrow`, interlaced 268.5 / 273.5 only): 672 and 684
+    pixels at the same line rate, so 496 pixels are the same share of a
+    line as 192 lines are of a field -- the 262.5-line picture's shape.
+    Pixel clocks 11277/108650 (10.3792 MHz) and 93537/869200 (10.7613 MHz);
+    the ce accumulator goes from 14 to 20 bits. 680 was tried first and is
+    0.5% off the shape, which the bench refuses. hsync moves to 527 / 532
+    so the picture's centre keeps its distance from it (0.585 of a line).
+    Nothing downstream counts pixels a line: the tile fetch, the line ring
+    and the 3D line fetch run from line_start and have more time, and the
+    line buffer's hcnt[8:2] read wraps only in the blank.
+  * OSD: "15kHz lines" is O[45:44] -- 262/263 (15.1kHz), 268/269 (15.4kHz),
+    273/274 (15.7kHz) -- so a saved 273/274 (bit 45) still opens as 273/274;
+    a set that needed it could not show the OSD to set it again. Bit 44 was
+    Every 3rd frame's (R831), and a config holding both reads as 273/274.
+    "15kHz width" O[55]: Full (default, unchanged) or Narrow.
+  * Narrow is a choice, not the default, because which picture is right
+    depends on the set. On Ben's, width follows the share of the line, and
+    Narrow should restore the shape. A set whose width follows the trace
+    time instead (a plain flyback scan) already shrinks the 15.7 kHz picture
+    in both directions, and Narrow would make it about 4% too narrow there.
+  * The OSD text is the framework's (sys/osd.v): it counts the 192 active
+    lines, the same in every 15 kHz mode, and draws in its half-height
+    mode in all of them. What differs at 15.7 kHz is the set's lock, which
+    R799 already found worse on Ben's set at 273.5 ("fixes alignment and
+    other bugs" at 262.5). 15.4 kHz is the in-between for it.
+
+*Checked:* tb_m2_video_timing over six 15 kHz configurations (273.5,
+262.5, 268.5, 268.5 narrow, 273.5 narrow, 262.5 with narrow asked): lines
+and pixels a frame, every line 0-383 once a frame, field 1 half a line
+below field 0, every vsync-to-vsync equal, hsync where intended, the field
+at 57.5242 Hz, the shape within 0.5% and the centre within 0.2% of the
+262.5-line picture's, and native 656 x 424 with mid_lines and narrow set:
+112 checks, 0 fail. tb_m2_video_ovr runs every scene in the three new
+modes, and switches into and out of them mid-frame. lint_top clean;
+Quartus 17.0 parses m2_video_timing, m2_video and Model2.sv.
+Not seen by any bench: a set. Ben to try 15.4 kHz, and Narrow at 15.4 and
+15.7 kHz.

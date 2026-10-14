@@ -94,10 +94,25 @@ int main(int argc, char **argv) {
 
   // ---- R682: 15 kHz INTERLACED. Two fields from a field-0 boundary.
   // R783: and again with NTSC's line count (262.5-line fields, 525 a frame).
-  for (int nl = 0; nl < 2; ++nl) {
-    dut->interlace = 1; dut->ntsc_lines = nl;
-    const long FT = nl ? 525 : 547;            // lines a frame
-    if (nl) std::printf("  -- R783: 262.5-line fields\n");
+  // R834: and 268.5-line fields, and the narrow line at 268.5 and 273.5
+  // (and asked for at 262.5, where it must change nothing).
+  struct Mode { int nl, ml, nw; long FT, H, HSS; double num, den; const char *name; };
+  const Mode modes[] = {
+    {0, 0, 0, 547, 656, 520,   547.0,   5300.0, "273.5-line fields"},
+    {1, 0, 0, 525, 656, 520,   861.0,   8692.0, "R783: 262.5-line fields"},
+    {0, 1, 0, 537, 656, 520,   537.0,   5300.0, "R834: 268.5-line fields"},
+    {0, 1, 1, 537, 672, 527, 11277.0, 108650.0, "R834: 268.5-line fields, narrow"},
+    {0, 0, 1, 547, 684, 532, 93537.0, 869200.0, "R834: 273.5-line fields, narrow"},
+    {1, 0, 1, 525, 656, 520,   861.0,   8692.0, "R834: 262.5-line fields, narrow asked (no change)"},
+  };
+  // the 262.5-line picture's shape and centre, which the narrow modes keep
+  const double shape0  = (496.0 / 656.0) / (192.0 / 262.5);
+  const double centre0 = (656.0 - 520.0 + 248.0) / 656.0;
+  for (const Mode &m : modes) {
+    dut->interlace = 1; dut->ntsc_lines = m.nl; dut->mid_lines = m.ml; dut->narrow = m.nw;
+    const long FT = m.FT;                      // lines a frame
+    const long H = m.H;                        // pixels a line
+    std::printf("  -- %s\n", m.name);
     // settle: run until a vblank_start in field 0 (so the next field is 1)
     int settle = 0;
     for (long g = 0; g < 4000000 && settle < 3; ++g) { tick(); if (dut->vblank_start) ++settle; }
@@ -124,7 +139,7 @@ int main(int argc, char **argv) {
       if (dut->vcnt != prev_v) { ++lines[fld]; if (prev_v < 192) ++visl[fld]; prev_v = dut->vcnt; ++G; shownG.push_back(-1); }
       if (dut->vblank_start) { ++vbs2; if (vbs2 == 2) break; }
     }
-    ck(lines[1] == FT / 2 || lines[1] == FT / 2 + 1, "interlaced: field 1 lines", lines[1], 273);
+    ck(lines[1] == FT / 2 || lines[1] == FT / 2 + 1, "interlaced: field 1 lines", lines[1], FT / 2);
     ck(lines[0] + lines[1] == FT, "interlaced: lines a frame (two fields)", lines[0] + lines[1], FT);
     ck(visl[0] == 192 && visl[1] == 192, "interlaced: 192 visible lines a field", visl[0] + visl[1], 384);
     ck(vbs2 == 2, "interlaced: one vblank_start a field", vbs2, 2);
@@ -137,7 +152,7 @@ int main(int argc, char **argv) {
     long ahead_bad = 0, ahead_n = 0;
     for (auto &p : ln_at) { size_t k = p.first + 2; if (k < shownG.size() && shownG[k] >= 0) { ++ahead_n; if (shownG[k] != p.second) ++ahead_bad; } }
     ck(ahead_n > 300 && ahead_bad == 0, "interlaced: line_number is the line shown next", ahead_bad, 0);
-    ck(vs_start_h[0] == 0 && vs_start_h[1] == 656 / 2, "interlaced: field 1's vsync starts half a line in", vs_start_h[1], 328);
+    ck(vs_start_h[0] == 0 && vs_start_h[1] == H / 2, "interlaced: field 1's vsync starts half a line in", vs_start_h[1], H / 2);
     // R701: WHAT MAKES A SET INTERLACE -- both fields the same length from
     // vsync to vsync (273.5 lines, 179,416 pixels), and field 1's picture
     // starting half a line later after its vsync than field 0's does, so the
@@ -160,15 +175,39 @@ int main(int argc, char **argv) {
         pvis = dut->visible;
         ++pix; tick();
       }
-      long bad = 0; for (long v : ivl) if (v != FT * 656 / 2) ++bad;
+      long bad = 0; for (long v : ivl) if (v != FT * H / 2) ++bad;
       ck(ivl.size() >= 6 && bad == 0, "R701 interlaced: every vsync-to-vsync is 273.5 lines", bad, 0);
       // after field 0's vsync comes field 1's picture (odd lines): half a line later than after field 1's
-      ck(d_after[0] - d_after[1] == 656 / 2, "R701 interlaced: field 1 sits half a line below field 0", d_after[0] - d_after[1], 328);
+      ck(d_after[0] - d_after[1] == H / 2, "R701 interlaced: field 1 sits half a line below field 0", d_after[0] - d_after[1], H / 2);
     }
     ck(hs2 == (584 - 520) * FT, "interlaced: hsync cycles a frame", hs2, (584 - 520) * FT);
-    const double pixclk = nl ? 100.0e6 * 861.0 / 8692.0 : 100.0e6 * 547.0 / 5300.0;
-    std::printf("  interlaced at %.4f MHz: line %.1f Hz, field %.3f Hz\n", pixclk / 1e6, pixclk / 656.0, pixclk / (656.0 * FT / 2.0));
-    ck(pixclk / (656.0 * FT / 2.0) > 57.50 && pixclk / (656.0 * FT / 2.0) < 57.55, "interlaced: field rate is the game's", 0, 0);
+    ck(pix2 == H * FT, "interlaced: pixels a frame", pix2, H * FT);
+    // R834: where hsync starts, and what that and the line do to the picture
+    {
+      long hss = -1; int ph = dut->hsync;
+      for (long g = 0; g < 4 * H && hss < 0; ++g) { tick(); if (dut->hsync && !ph) hss = dut->hcnt; ph = dut->hsync; }
+      ck(hss == m.HSS, "R834 interlaced: hsync starts at", hss, m.HSS);
+    }
+    const double shape  = (496.0 / double(H)) / (192.0 / (FT / 2.0));
+    const double centre = (double(H) - double(m.HSS) + 248.0) / double(H);
+    std::printf("  picture shape %.4f (262.5 lines: %.4f), centre %.4f of a line after hsync (%.4f)\n", shape, shape0, centre, centre0);
+    if (m.nw || m.nl) {
+      ck(shape / shape0 > 0.995 && shape / shape0 < 1.005, "R834 narrow: the 262.5-line picture's shape", long(shape * 1e4), long(shape0 * 1e4));
+      ck(centre / centre0 > 0.998 && centre / centre0 < 1.002, "R834 narrow: its centre as far from hsync", long(centre * 1e4), long(centre0 * 1e4));
+    }
+    const double pixclk = 100.0e6 * m.num / m.den;
+    std::printf("  interlaced at %.4f MHz: line %.1f Hz, field %.4f Hz\n", pixclk / 1e6, pixclk / double(H), pixclk / (double(H) * FT / 2.0));
+    ck(pixclk / (double(H) * FT / 2.0) > 57.524 && pixclk / (double(H) * FT / 2.0) < 57.525, "interlaced: field rate is the game's", long(pixclk / (double(H) * FT / 2.0) * 1e4), 575242);
+  }
+
+  // R834: natively, neither the 268.5-line fields nor the narrow line apply
+  {
+    dut->interlace = 0; dut->ntsc_lines = 0; dut->mid_lines = 1; dut->narrow = 1;
+    for (long g = 0; g < 4000000 && !dut->vblank_start; ++g) tick();
+    for (long g = 0; g < 4000000; ++g) { tick(); if (dut->vblank_start) break; }   // settle a frame
+    long pixn = 0;
+    for (long g = 0; g < 4000000; ++g) { ++pixn; tick(); if (dut->vblank_start) break; }
+    ck(pixn == 656 * 424, "R834 native: 656 x 424 whatever mid_lines/narrow say", pixn, 656 * 424);
   }
 
   std::printf("  %llu checks, %llu mismatches\n",

@@ -81,13 +81,37 @@ module m2_video_timing #(
   parameter int unsigned VN_TOTAL0     = 263,
   parameter int unsigned VN_TOTAL1     = 262,
   parameter int unsigned VN_SYNC_START = 223,
-  parameter int unsigned VN_SYNC_END   = 226
+  parameter int unsigned VN_SYNC_END   = 226,
+  // R834: 15.4 kHz, BETWEEN THE TWO. Ben: some sets will not take 15.1 kHz
+  // and his own squashes the picture at 15.7. Fields of 269 and 268 (268.5
+  // at the game's 57.5242 Hz, 15,445 Hz a line), vsync between the other
+  // two modes' so the 192 visible sit as they do there.
+  parameter int unsigned VM_TOTAL0     = 269,
+  parameter int unsigned VM_TOTAL1     = 268,
+  parameter int unsigned VM_SYNC_START = 226,
+  parameter int unsigned VM_SYNC_END   = 229,
+  // R834: THE NARROW LINE. The 192 visible lines are a smaller share of a
+  // 268.5- or 273.5-line field than of 262.5, so a set with a fixed scan
+  // height shows the picture shorter -- 4% at 15.7 kHz, which is the squash
+  // Ben photographed. `narrow` lengthens the line in the same ratio at the
+  // same line rate (the pixel clock rises with it), so 496 pixels take the
+  // same share of a line as their 192 lines take of a field: the shape of
+  // the 262.5-line picture. 672 ~ 656 x 268.5/262.5, 684 ~ 656 x 273.5/262.5,
+  // rounded to even totals (half a line is the interlace) -- 680 was 0.5% off,
+  // which the bench refuses. Sync
+  // is placed so the picture's centre keeps its distance from hsync.
+  parameter int unsigned HM_TOTAL      = 672,
+  parameter int unsigned HM_SYNC_START = 527,
+  parameter int unsigned HI_TOTAL      = 684,
+  parameter int unsigned HI_SYNC_START = 532
 ) (
   input  logic       clk,        // 16 MHz pixel clock enable domain
   input  logic       ce_pix,
   input  logic       rst_n,
   input  logic       interlace,  // R682: held; changed only by the OSD (resync is expected)
   input  logic       ntsc_lines, // R783: with interlace, 262.5-line fields (held, OSD)
+  input  logic       mid_lines,  // R834: with interlace and not ntsc_lines, 268.5 (held, OSD)
+  input  logic       narrow,     // R834: with interlace, 268.5/273.5's line lengthened (held, OSD)
 
   output logic [9:0] hcnt,
   output logic [9:0] vcnt,
@@ -120,9 +144,16 @@ module m2_video_timing #(
   // this field's line count and visible lines
   wire [9:0] vt  = !interlace ? 10'(V_TOTAL)
                  : ntsc_lines ? (field ? 10'(VN_TOTAL1) : 10'(VN_TOTAL0))   // R783
+                 : mid_lines  ? (field ? 10'(VM_TOTAL1) : 10'(VM_TOTAL0))   // R834
                  :              (field ? 10'(VI_TOTAL1) : 10'(VI_TOTAL0));
-  wire [9:0] vss = ntsc_lines ? 10'(VN_SYNC_START) : 10'(VI_SYNC_START);   // R783
-  wire [9:0] vse = ntsc_lines ? 10'(VN_SYNC_END)   : 10'(VI_SYNC_END);
+  wire [9:0] vss = ntsc_lines ? 10'(VN_SYNC_START) : mid_lines ? 10'(VM_SYNC_START) : 10'(VI_SYNC_START);
+  wire [9:0] vse = ntsc_lines ? 10'(VN_SYNC_END)   : mid_lines ? 10'(VM_SYNC_END)   : 10'(VI_SYNC_END);
+  // R834: this line's length and hsync. 656 natively and at 262.5 lines,
+  // whatever `narrow` says (that picture is the shape the others match).
+  wire       nw  = interlace && narrow && !ntsc_lines;
+  wire [9:0] ht  = !nw ? 10'(H_TOTAL) : mid_lines ? 10'(HM_TOTAL) : 10'(HI_TOTAL);
+  wire [9:0] hss = !nw ? 10'(H_SYNC_START) : mid_lines ? 10'(HM_SYNC_START) : 10'(HI_SYNC_START);
+  wire [9:0] hse = hss + 10'(H_SYNC_END - H_SYNC_START);
   wire [9:0] vv  = !interlace ? 10'(V_VISIBLE) : 10'(VI_VISIBLE);
   assign vtotal = vt;
 
@@ -132,7 +163,7 @@ module m2_video_timing #(
       vcnt  <= '0;
       field <= 1'b0;
     end else if (ce_pix) begin
-      if (hcnt == 10'(H_TOTAL - 1)) begin
+      if (hcnt == ht - 10'd1) begin
         hcnt <= '0;
         if (vcnt == vt - 10'd1) begin
           vcnt  <= '0;
@@ -148,7 +179,7 @@ module m2_video_timing #(
   assign vblank  = (vcnt >= vv);
   assign visible = !hblank && !vblank;
 
-  assign hsync = (hcnt >= 10'(H_SYNC_START)) && (hcnt < 10'(H_SYNC_END));
+  assign hsync = (hcnt >= hss) && (hcnt < hse);
   // R701: FIELD 1'S VSYNC RUNS FROM THE MIDDLE OF THE LINE BEFORE -- half a
   // line EARLY, not late. With fields of 274 and 273 lines the two vsync-to-
   // vsync intervals are equal (273.5) only if field 1's vsync sits at
@@ -157,7 +188,7 @@ module m2_video_timing #(
   // a line -- on Ben's CRT, "does not look like it's interlacing".
   wire [19:0] vpos  = {vcnt, hcnt};
   wire        vs_i0 = (vcnt >= vss) && (vcnt < vse);
-  wire        vs_i1 = (vpos >= {vss - 10'd1, 10'(H_TOTAL / 2)}) && (vpos < {vse - 10'd1, 10'(H_TOTAL / 2)});
+  wire        vs_i1 = (vpos >= {vss - 10'd1, ht >> 1}) && (vpos < {vse - 10'd1, ht >> 1});
   assign vsync = !interlace ? ((vcnt >= 10'(V_SYNC_START)) && (vcnt < 10'(V_SYNC_END)))
                             : (field ? vs_i1 : vs_i0);
 
@@ -170,7 +201,7 @@ module m2_video_timing #(
   // zero is then read from the previous line's buffer — one wrong pixel down
   // the left edge of every line, with everything after it correct, which
   // reads as a fetch fault rather than a timing one.
-  assign line_start = ce_pix && (hcnt == 10'(H_TOTAL - 1));
+  assign line_start = ce_pix && (hcnt == ht - 10'd1);
 
   // Two lines ahead, not one. At this instant the swap is about to make the
   // buffer written during the current line the one displayed on the next, so

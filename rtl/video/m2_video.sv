@@ -285,6 +285,8 @@ module m2_video #(
   input  logic        scr_vtgl,
   input  logic  [3:0] scr_ttag,
   input  logic        ntsc_lines,   // R783: 262.5-line fields when interlaced
+  input  logic        mid_lines,    // R834: 268.5-line fields when interlaced and not ntsc_lines
+  input  logic        narrow,       // R834: interlaced 268.5/273.5 on a longer line
   output logic        vid_field
 );
 
@@ -305,7 +307,7 @@ module m2_video #(
     .hsync(hsync_i), .vsync(vsync_i), .visible(visible),
     .line_start(line_start), .line_number(line_number),
     .vblank_start(vblank_start),
-    .interlace(interlace), .ntsc_lines(ntsc_lines), .field(vid_field), .ypos(),  // R682, R783
+    .interlace(interlace), .ntsc_lines(ntsc_lines), .mid_lines(mid_lines), .narrow(narrow), .field(vid_field), .ypos(),  // R682, R783
     .vtotal(vtotal)                                                                // R824
   );
 
