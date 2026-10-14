@@ -1,5 +1,24 @@
 # Handoff
 
+## 2026-10-14: headroom -- release candidate s1082, two fixes before release
+
+ON THE BOARD: s1082 (db9fbc9, the release candidate): 240 min, no lock;
+rails, sound and background good (Ben). One fault: the player car's rear
+window mips too early (the glass takes a level > 0, its translucent frame
+stays at 0); an agent is following the game's per-object LOD (MAME keeps the
+player car at level 0).
+NEW, PUSHED, NOT BUILT: ecfa488 R834 -- 15 kHz lines 262/263, 268/269
+(15.4 kHz, new) or 273/274 (O[45:44]; a saved 273/274 keeps it); "15kHz
+width" Full/Narrow (O[55]): Narrow lengthens the 15.4/15.7 kHz line to
+672/684 px so the picture keeps the 15.1 kHz shape. Ben's 15.7 kHz squash
+is 192 lines in a 273.5-line field (4% shorter), not a sync fault. Narrow is
+not the default: a set whose width follows trace time would be ~4% too
+narrow. The OSD text is the framework's, the same in every mode. Benches:
+timing 112/0, ring overruns PASS in all six modes and mode switches.
+NEXT: merge the mip-window fix, one RC build with both, Ben checks the
+window, car select, 15.4 kHz and Narrow; then the release (releases/
+README has the 15 kHz rows; the mip row is still to add).
+
 ## 2026-10-13 (evening): headroom -- overruns fixed, mip built, R826 building
 
 ON THE BOARD: s1041 (ring) -- tile overruns gone (24 kHz; 15 kHz on a
