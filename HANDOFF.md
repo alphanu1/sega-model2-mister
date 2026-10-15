@@ -6,7 +6,11 @@ PLAN (Ben, 2026-10-15): do NOT merge PR #8 yet. When Desert Tank is
 confirmed working: merge desert into headroom, push headroom (PR #8 then
 carries it). Branch vcop off headroom for Virtua Cop (I/O board type 2 by
 game ID in one core if the firmware allows -- see the study). PR to main
-once Virtua Cop boots and everything else still works.
+once Virtua Cop boots and everything else still works. Virtua Cop work
+WAITS until Desert Tank is confirmed (Ben). Every Virtua Cop addition (type-2
+I/O map, its firmware's M10K, light guns, crosshair, any timer) goes behind
+a compile-time parameter, off-able for the 2A/2B/2C branches, and game-ID
+selected inside it.
 Branch desert (from headroom 0f3cbc4): Desert Tank MRAs (+ 15 kHz CRT), game
 ID 2 (prog_ext as Virtua Cop; IN1 = machine gun / cannon / shift toggle on
 Gear Up / Gear Down / VR4), cabinet inputs moved to rtl/io/m2_cab_inputs.sv
