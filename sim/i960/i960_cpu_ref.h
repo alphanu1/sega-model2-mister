@@ -55,6 +55,9 @@ struct Cpu {
   // register file and breaks every retire after it — so the program ends here,
   // the same as for a flushed subnormal.
   bool fp_nan_result = false;
+  // R836: this retire wrote a long-real result to the register PAIR
+  // fp_sdest, fp_sdest + 1 (a NaN there exempts both words).
+  bool fp_rl = false;
   // Modelled, not excluded. Abandoning every program that touched a subnormal
   // cost 111 of 200 -- most of the run, and it truncated at the deepest
   // retires first, which is where the interesting state is. The flush is a
@@ -292,6 +295,7 @@ struct Cpu {
     fp_denorm_operand = false;
     fp_sdest          = -1;
     fp_nan_result     = false;
+    fp_rl             = false;
     const uint32_t insn = rd(IP);
     const Decoded d = i960ref::decode(insn);
     const uint32_t ip_next = IP + (d.insn_len2 ? 8 : 4);
@@ -483,6 +487,57 @@ struct Cpu {
           IP = ip_next;
           if (((t1 >> 16) & 0x1fu) > ((PC >> 16) & 0x1fu)) check_pending_irqs();
           break;
+        }
+
+        // ---- R836: LONG-REAL (double) FP -- addrl subrl mulrl divrl (0x79),
+        // cmprl (0x69.5), movrl (0x6d.9). MAME i960.cpp get_1_rifl /
+        // get_2_rifl / set_rifl: a register operand is the EVEN-ALIGNED pair
+        // {r[n|1], r[n & 0x1e]} read as one double; a literal is fp0-fp3, 1.0
+        // at 0x16, else 0.0; a register destination is the pair at
+        // (dst & 0x1e), a literal one fp0-fp3. The units flush subnormal
+        // doubles (§8.1), so the reference does too.
+        {
+          auto pair = [&](uint32_t n) {
+            const uint64_t v = uint64_t(rf.r[n & 0x1e]) | (uint64_t(rf.r[(n & 0x1e) + 1]) << 32);
+            double x; std::memcpy(&x, &v, 8); return x;
+          };
+          const uint32_t k = (uint32_t(d.op) << 4) | d.op2;
+          if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9) {
+            const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
+            const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
+            // movrl copies the pair as MAME does, subnormal or not (the
+            // module's move path does not flush); the arithmetic units flush
+            // a subnormal operand where the host does not -- the recorded
+            // deviation (§8.1), skipped as it is for the single forms.
+            if (k != 0x6d9 && (std::fpclassify(fa) == FP_SUBNORMAL || std::fpclassify(fb) == FP_SUBNORMAL))
+              fp_denorm_operand = true;
+            // A subnormal moved is exact here, but it is the one way a subnormal
+            // reaches fp0-fp3, and every later FP op that reads it meets the
+            // deviation -- so the program ends at the move.
+            if (k == 0x6d9 && std::fpclassify(fa) == FP_SUBNORMAL)
+              fp_denorm_operand = true;
+            if (k == 0x695) {                                          // cmprl
+              AC &= ~7u;
+              if (!(std::isnan(fa) || std::isnan(fb)))
+                AC |= (fa < fb) ? 4 : (fa == fb) ? 2 : 1;
+            } else {
+              const double r = (k == 0x79f) ? fb + fa : (k == 0x79d) ? fb - fa
+                             : (k == 0x79c) ? fb * fa : (k == 0x79b) ? fb / fa : fa;
+              const double fr = (k == 0x6d9) ? r : flush_d(r);
+              if (d.dst_lit) {
+                if (d.srcdst & 0x1c) { trapped = true; trap_op = d.op; break; }   // set_rifl: fatalerror
+                fp[d.srcdst & 3] = fr;
+              } else {
+                uint64_t v; std::memcpy(&v, &fr, 8);
+                rf.r[d.srcdst & 0x1e]       = uint32_t(v);
+                rf.r[(d.srcdst & 0x1e) + 1] = uint32_t(v >> 32);
+                fp_sdest = int(d.srcdst & 0x1e); fp_rl = true;
+              }
+              if (std::isnan(fr)) fp_nan_result = true;
+            }
+            IP = ip_next;
+            break;
+          }
         }
 
         // ---- single-precision FP, the subset wired into the CPU ----

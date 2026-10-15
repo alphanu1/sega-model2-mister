@@ -40,7 +40,12 @@ module i960_top #(
   // instruction (PF2W, below). 0 restores each to the R815 behaviour.
   parameter bit IC_HUF = 1'b1,
   parameter bit IC_ER  = 1'b1,
-  parameter bit PF2W   = 1'b1
+  parameter bit PF2W   = 1'b1,
+  // R836: THE LONG-REAL FORMS -- addrl subrl mulrl divrl (0x79), cmprl
+  // (0x69.5), movrl (0x6d.9). Desert Tank runs them from the title's end
+  // (MAME: first movrl at frame 1105, 19.23 s) and this core trapped on every
+  // one, halting the i960. 0 traps on them as before.
+  parameter bit RL     = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -349,7 +354,8 @@ module i960_top #(
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
     T_TRAP,
     T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR,
-    T_INTR, T_RET7, T_MODPC, T_SYNQ
+    T_INTR, T_RET7, T_MODPC, T_SYNQ,
+    T_RLLO                                   // R836: a long-real op's low words
   } tstate_e;
 
   tstate_e ts;
@@ -560,9 +566,18 @@ module i960_top #(
     else                   fp_lit = 64'd0;
   endfunction
 
+  // R836: A LONG-REAL REGISTER OPERAND IS THE EVEN-ALIGNED PAIR read as one
+  // double (MAME get_1_rifl / get_2_rifl: m_r[n & 0x1e] low, m_r[(n & 0x1e)+1]
+  // high). The two read ports cannot take four words at once, so the low
+  // words are read in T_RLLO into rl_lo1 / rl_lo2 and the high words stay on
+  // rd1 / rd2 through T_FP (ra1 / ra2 held at the odd register). rl_lo1 then
+  // carries the result's high word to T_PAIR.
+  logic        is_rl;
+  logic [31:0] rl_lo1, rl_lo2;
+  logic        rl_wb;                            // T_PAIR writes rl_lo1, not md_hi
   logic [63:0] fp_a, fp_b;
-  assign fp_a = d_src1_lit ? fp_lit(d_src1, fpr[d_src1[1:0]]) : fp_a_wide;
-  assign fp_b = d_src2_lit ? fp_lit(d_src2, fpr[d_src2[1:0]]) : fp_b_wide;
+  assign fp_a = d_src1_lit ? fp_lit(d_src1, fpr[d_src1[1:0]]) : (is_rl ? {rd1, rl_lo1} : fp_a_wide);
+  assign fp_b = d_src2_lit ? fp_lit(d_src2, fpr[d_src2[1:0]]) : (is_rl ? {rd2, rl_lo2} : fp_b_wide);
 
   logic        fadd_req, fadd_done, fmul_req, fmul_done;
   // busy is not consulted: the sequencer waits on `done` and issues nothing
@@ -648,7 +663,21 @@ module i960_top #(
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
     fmisc_op = 3'd7;
+    is_rl = 1'b0;
     case (d_op)
+      8'h79: if (RL) case (d_op2)                // R836: long-real arithmetic
+               4'hf: begin is_rl = 1'b1; fp_is_add = 1'b1; end                   // addrl
+               4'hd: begin is_rl = 1'b1; fp_is_add = 1'b1; fadd_sub = 1'b1; end  // subrl
+               4'hc: begin is_rl = 1'b1; fp_is_mul = 1'b1; end                   // mulrl
+               4'hb: begin is_rl = 1'b1; fp_is_div = 1'b1; end                   // divrl
+               default: ;
+             endcase
+      8'h69: if (RL && d_op2 == 4'h5) begin                                      // cmprl
+               is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd0;
+             end
+      8'h6d: if (RL && d_op2 == 4'h9) begin                                      // movrl
+               is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7;
+             end
       8'h78: case (d_op2)                        // single-precision arithmetic
                4'hf: fp_is_add = 1'b1;                              // addr
                4'hd: begin fp_is_add = 1'b1; fadd_sub = 1'b1; end   // subr
@@ -1041,6 +1070,12 @@ module i960_top #(
       T_MULTI:        ra1 = mw_src + 5'({1'b0, mw_i}) + 5'd1;
       default: ;
     endcase
+    // R836: a long-real op reads its pairs' low words in T_RLLO (addresses
+    // presented in T_EXEC) and holds the high words from T_RLLO through T_FP.
+    if (is_rl && (d_fmt == 2'd2)) begin
+      if (ts == T_EXEC) begin ra1 = {d_src1[4:1], 1'b0}; ra2 = {d_src2[4:1], 1'b0}; end
+      else if ((ts == T_RLLO) || (ts == T_FP)) begin ra1 = {d_src1[4:1], 1'b1}; ra2 = {d_src2[4:1], 1'b1}; end
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -1119,6 +1154,9 @@ module i960_top #(
       fmul_req  <= 1'b0;
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
+      rl_lo1    <= 32'd0;   // R836
+      rl_lo2    <= 32'd0;
+      rl_wb     <= 1'b0;
     end else begin
       // ONE SHOT. Set in T_BOOT's last step and cleared here, so the frame
       // pointer is initialised once rather than held over every register the
@@ -1516,6 +1554,9 @@ module i960_top #(
                 we <= 1'b1;
                 mw_i <= 3'd1;
                 ts   <= T_MULTI;
+              end else if (fp_valid && is_rl) begin
+                // R836: the low words first (T_RLLO), then the units.
+                ts        <= T_RLLO;
               end else if (fp_valid) begin
                 // Single-cycle units (fpmisc) still route through T_FP so the
                 // writeback path is shared and there is one place that knows
@@ -1578,10 +1619,22 @@ module i960_top #(
 
         T_PAIR: begin
           wa <= mw_base + 5'd1;
-          wd <= md_hi;
+          wd <= rl_wb ? rl_lo1 : md_hi;   // R836: a long-real result's high word
           we <= 1'b1;
+          rl_wb <= 1'b0;
           ip <= ip_next;
           ts <= T_FETCH;
+        end
+
+        // R836: the pairs' low words are on rd1 / rd2 now; the high words
+        // follow next cycle and stay through T_FP.
+        T_RLLO: begin
+          rl_lo1    <= rd1;
+          rl_lo2    <= rd2;
+          fadd_req  <= fp_is_add;
+          fmul_req  <= fp_is_mul;
+          fdiv_req  <= fp_is_div;
+          ts        <= T_FP;
         end
 
         T_MULTI: begin
@@ -1612,12 +1665,25 @@ module i960_top #(
               wa <= d_srcdst; wd <= fmisc_yi_q; we <= 1'b1;
             end else if (d_dst_lit) begin
               // A "literal" destination on an FP op selects fp0-fp3.
+              // R836: set_rifl's literal destination with bits 23:21 set is a
+              // fatalerror in the reference; the single forms never checked
+              // it either (set_rif has the same rule) and no game emits it.
               fpr[d_srcdst[1:0]] <= fp_res_wide;
+            end else if (is_rl) begin
+              // R836: set_rifl -- the pair at (dst & 0x1e), low word now, the
+              // high word in T_PAIR.
+              wa <= {d_srcdst[4:1], 1'b0}; wd <= fp_res_wide[31:0]; we <= 1'b1;
+              mw_base <= {d_srcdst[4:1], 1'b0};
+              rl_lo1  <= fp_res_wide[63:32];
+              rl_wb   <= 1'b1;
             end else begin
               wa <= d_srcdst; wd <= fp_res_single; we <= 1'b1;
             end
-            ip <= ip_next;
-            ts <= T_FETCH;
+            if (is_rl && !fp_writes_cc && !d_dst_lit) ts <= T_PAIR;   // R836: ip moves there
+            else begin
+              ip <= ip_next;
+              ts <= T_FETCH;
+            end
           end
         end
 
