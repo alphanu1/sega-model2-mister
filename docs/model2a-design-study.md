@@ -35079,3 +35079,181 @@ a board screenshot ~60 s in shows the attract's tutorial scene -- textured
 life marks and the game is over"). Past 14.7 s, so the trig forms run.
 Screenshot sm2-builds/mipmaps/board/vcop_s1126.png. s1127/s1128 also missed
 clk_sys; s1129-s1131 fitting.
+
+**R846 -- VIRTUA COP'S GUNS FROM MISTER'S STICKS AND MOUSE, THE CROSSHAIRS,
+AND WHY THE ATTRACT IS IN JAPANESE.** (Route 1 of R841; Ben, 2026-10-15:
+joystick and mouse only, GunCon / SNAC stays documented. M2_VCOP_GUN, now ON
+by default.)
+
+*Believed (R839 / R841):* the core's mapping (rtl/io/m2_vcop_guns.sv, never
+built) scales the stick and a mouse to MAME's ranges; MiSTer's mouse path
+might carry an absolute gun position ("TO BE CHECKED"); the crosshair draws
+on the game's aim point; a gun's trigger reaches the core as a joystick
+button.
+
+*Now known -- VERIFIED:*
+  1. HOW MISTER CORES TAKE A GUN (read, not run; shallow clones): System 32
+     (meathax/s32 512b547, s32_lightgun.sv: JTFRAME's contract), PSX
+     (PSX_MiSTer cd17b5a, GunCon / Justifier), MegaDrive, SNES, NES
+     lightgun / zapper, and Main_MiSTer 13f1de9 (input.cpp, user_io.cpp).
+     System 24's core is published as an .rbf only (no source found).
+       - Aim: every core takes joystick_l_analog_N as an ABSOLUTE screen
+         position, u = a + 128, pos = u * dim >> 8 (S32, PSX; MD / SNES /
+         NES the same up to scale). P1 = analog_0, P2 = analog_1.
+       - Main: a USB gun (Sinden, GUN4IR, GunCon 3, OpenFIRE, ...;
+         QUIRK_LIGHTGUN) sends its ABS axes to the left stick, calibrated by
+         MiSTer's F10 screen to -127..+127 edge to edge (-128 only for PSX),
+         saturating off the screen; no deadzone. Its BUTTONS go to the MOUSE
+         buttons (ps2_mouse[2:0]), not the joystick's. There is NO absolute
+         mouse channel: ps2_mouse is relative deltas of all mice merged, and
+         a gun's axes never become mouse motion. So R841's "absolute mouse"
+         does not exist; a mouse aims by accumulation, and only one player
+         can have it.
+       - Mouse: accumulated per packet toggle, 1:1 (S32 halves it), y -= dy,
+         clamped to the screen. Trigger from ps2_mouse[0] (S32 ORs it into
+         P1's trigger always).
+       - Off-screen: full deflection at an edge is off-screen (PSX, MD,
+         SNES, NES); reload is a button that forces off-screen and fires
+         (PSX Triangle; MD / SNES Justifier B).
+       - Cursor: drawn in the native pixel domain before the scaler; a small
+         '+' (3x3 / 7x7) or JTFRAME's 8x8 white-on-black sight; hidden off
+         the screen; per-player colours (PSX: P1 blue, P2 yellow).
+  2. THE GAME'S OWN AIM POINT (MAME 0.289, sim/io/mame_m2_vcop_marks.lua):
+     Virtua Cop's test menu has GUN SETTING -> GUN MARK CHECK, which draws
+     each player's mark (P1 cyan, P2 pink) where the game puts the gun, and
+     prints the calibration it uses: AD1 X 0x083-0x276, Y 0x024-0x1a9; AD2
+     X 0x080-0x273, Y 0x027-0x1a9 -- MAME's PORT_MINMAX are the game's own
+     default calibration. With the coordinates forced at the I/O board
+     (24 points, both guns, 43 unclipped marks; sim/io/vcop_marks.py) the
+     mark's centroid sits on pixel floor((v - min) * dim / span) -- MAME's
+     crosshair pixel (PORT_CROSSHAIR scale 1.0 over the 496 x 384 visible
+     area) -- with residual x +0.13 +- 0.32 px, y 0.00 +- 0.32 px, at most
+     0.7 px. So "MAME's crosshair" and "where the game shoots" are the same
+     pixel, measured, not assumed.
+  3. THE MAPPING (m2_vcop_guns, rewritten): stick -> pixel u * 496 >> 8,
+     u * 384 >> 8; pixel -> the smallest game unit on that pixel, v - min =
+     ceil(px * span / dim): X px + (px>0) + (px>=166) + (px>=331); Y1 py +
+     (py>0) + (py>=77) + (py>=154) + (py>=231) + (py>=308); Y2 py + (py>0) +
+     (py>=193). The mouse (OSD "Mouse": Gun 1 trigger [default], Gun 1
+     aim+trigger, Gun 2 trigger, Gun 2 aim+trigger) aims one gun when told
+     to; its left / right buttons are ALWAYS that gun's Trigger / Reload, so
+     a USB gun on player 1 works with the defaults (aim on analog_0, trigger
+     on the mouse button). Joystick bits 4 Trigger, 5 Reload, 6 Start, 7
+     Coin, 8 Test, 9 Service (P1); the Virtua Cop MRA names them (Daytona's
+     J1 unchanged). IN0 / IN1 as MAME's vcop map. Off-screen: MAME
+     model1io2 fpga_r's 5% border on the game units (a calibrated gun at
+     +-127 lands inside it). RELOAD holds the gun at the off-screen corner
+     at once and pulls the trigger 1-2 ticks later (tick = 2^17 clk_sys =
+     1.64 ms), and keeps the corner ~3 ticks after release: the I/O board
+     reads IN1 and the coordinates at different moments of its 1 kHz scan,
+     so a simultaneous change could be read as a shot on the screen. "Gun
+     reload: Auto" is DSW1 bit 0 (MAME "Reloading"), as R839 wired it.
+     Every stage registered (hps_io inputs; pixels; units; off-screen):
+     nothing longer than an adder and a compare on clk_sys (R843); the
+     mouse arithmetic is plain concatenations, no signed casts (R662).
+  4. THE CROSSHAIRS (rtl/video/m2_vcop_xhair.sv, clk_mem): a '+' per gun,
+     arms 5 (Small) / 9 (Large), in the game's own player colours (P1 69FFFF
+     cyan, P2 FF90A4 pink, from its GUN MARK CHECK) with a 1-px black
+     outline, P1 over P2, hidden when the gun is off the screen, "Off" in
+     the OSD for real guns. x is vid_x_d (the column the picture shows,
+     R779); y is vcnt, or at 15 kHz interlaced the field row compared as
+     line {row, cy[0]}, so the horizontal arm shows in BOTH fields (lines
+     cy & ~1, cy | 1) rather than flickering at 30 Hz. R839's draft compared
+     the field row with the 0..383 line (wrong in interlace: it drew at
+     2x the height, in one field) and inverted the picture (invisible on
+     mid grey); both replaced. Pipeline: dy per line, dx per pixel, the
+     range tests, the colour -- three clk_mem cycles, inside the 6.25-cycle
+     (24 kHz) / ~9.7-cycle (15 kHz) pixel.
+  5. BENCHES:
+       - test_m2_vcop_guns: every stick value of both axes of both guns
+         (against the edges and centre): crosshair pixel, units inside
+         MAME's range, units on the SAME pixel by the game's floor rule;
+         every pixel 0..495 / 0..383 walked through the mouse for both guns
+         by the same rule; 200,000 random mouse packets (deltas to +-255) in
+         all four OSD modes against an accumulate-and-clamp model; 100,000
+         random button sets against MAME's IN0 / IN1; 2,000,000 cycles of
+         random reloads (joystick and mouse right button): 0 cycles with the
+         trigger on the screen, the corner always leads the trigger by >= 1
+         tick and outlasts it by >= 1 tick; a gun at +-127 reads off-screen;
+         en low hides the crosshair. 417,523 checks, 0 failures. Planted
+         faults caught: a threshold off by one (166 -> 167; Y2's 193 term
+         dropped), the mouse's y sign, a border constant, the mouse buttons
+         on both guns, Start / Coin swapped, the reload's trigger delay
+         removed, the corner released early.
+       - test_m2_vcop_xhair: m2_vcop_xhair in the real m2_video_timing with
+         Model2.sv's ce_pix accumulator and vid_x_d, the picture being its
+         own coordinates, sampled at ce_pix as the framework does: every
+         visible pixel of a whole frame classified and compared with the
+         expected cross, 18 cases (24 kHz and 15 kHz 273/274 interlaced;
+         Small, Large, Off; corners; overlapping crosses; hidden guns;
+         random): 0 wrong pixels, the aim pixel itself P1's colour in each,
+         and every pixel not under a cross exactly the picture's (nothing
+         moved). Planted: the interlace line rule, dx off by one, three
+         extra cycles of latency -- caught; ONE extra cycle passes (that is
+         the margin).
+       - Daytona / Desert Tank identity: the guns' in0 / in1 reach m2_ioz80
+         only through the unchanged `vc_gun ? vc_in0 : iob_in0` (vc_gun =
+         game ID 1), the crosshair draws only with c_on (en = vc_gun) and
+         Size != Off, and the bench shows the picture untouched with the
+         crosses off; everything else new is inside generate blocks
+         (VCOP_GUN). With M2_NO_VCOP_GUN the RTL is the pre-R846 core:
+         quartus_map below.
+       - lint_top clean with the guns on and off; lint_idx the same 147
+         lines as 05e371c (only CONF_STR's text differs); quartus_map
+         --analyze_file 0 errors (Model2.sv, m2_vcop_guns, m2_vcop_xhair).
+  6. AREA, quartus_map 17.0, whole design:
+
+       build                              ALMs est.  ALUTs   registers  block bits  DSP
+       05e371c (R845, 77f69df's RTL)        40,181   57,379    48,780   4,379,775   90
+       this, M2_NO_VCOP_GUN=1               40,181   57,379    48,780   4,379,775   90
+       this, as committed (guns on)         40,468   57,778    49,166   4,379,775   90
+
+     So the guns cost +287 ALM estimated (+399 ALUT, +386 registers), no
+     block memory, no DSP. By entity: m2_vcop_guns 279 ALUT / 194 registers,
+     m2_vcop_xhair 141 / 160, hps_io +42 / +55 (joystick_1, analog_1 and
+     the mouse outputs now read, and the longer CONF_STR). OFF IS THE
+     PRE-R846 CORE EXACTLY in all five numbers. A first version that kept
+     separate crosshair registers in m2_vcop_guns measured +362 ALM; they
+     now read the pixel registers. R836's ratio (+135 est -> +91 placed)
+     suggests ~+200 placed on s1126's 41,267 of 41,910 -- ~41,470 (99%).
+     The guns are ON by default (Ben: "if the area is modest"); it is the
+     smallest piece of Virtua Cop so far, but the chip is nearly full and
+     clk_sys has been missing on most seeds, so if a fit fails to place or
+     close because of it, M2_NO_VCOP_GUN=1 in the QSF is the switch.
+
+  7. TIMING RISK: the gun logic is four register stages on clk_sys, each one
+     small adder or compare deep, and reads hps_io only through its own
+     input registers (R842 / R843's lesson). The crosshair is on clk_mem
+     (100 MHz): an 11-bit subtract, then 4-bit range tests, then a 4-way
+     colour mux, each registered; its inputs from clk_sys are quasi-static
+     and cross by two flops (sys_top's clock groups make clk_sys / clk_mem
+     asynchronous, so they are not timed). What it adds to clk_sys is
+     placement pressure at ~41,270 / 41,910 ALM.
+  8. THE JAPANESE TEXT IS THE SET, NOT THE CORE. MAME 0.289 vcopa on a fresh
+     NVRAM shows the same Japanese tutorial at 45-60 s. The language follows
+     the COUNTRY in backup RAM byte 0x1b (CPU 0x01d0001b; 0 USA, 1 JPN, 2
+     EXP -- the strings at program 0x29d20; the boot's WARNING routine at
+     0x3a60 runs only when it reads 1, 0x1d40). A fresh backup RAM is filled
+     from the data ROM at 0x2831ba0 (pc 0x2cf58-0x2cf68), which puts 1
+     (Japan) there: the default of this ROM set, as MAME's model2.cpp notes
+     for other sets ("Default country is USA / Japan"). Holding the byte at
+     0 in MAME (sim/io/mame_m2_vcop_country.lua) gives the English tutorial
+     ("The Lock-on Sight automatically targets enemies", "When your supply
+     of bullets is depleted, aim the gun outside the screen") and the US
+     attract (the EPA "Recycle it" screen, no WARNING). The core's I/O
+     EEPROM and DSWs play no part. Not changed: the core matches MAME. A
+     country switch would be a backup-RAM patch, a design decision for Ben.
+
+*INFERRED (each with what settles it):*
+  a. On the board a stick's crosshair sits on the game's aim: the board's
+     GUN MARK CHECK (TEST -> GUN SETTING) with the stick and Crosshair
+     Small should show each mark inside its cross, and AD1 / AD2 reading
+     83 / 24 / 276 / 1a9 and 80 / 27 / 273 / 1a9 (a gun adjustment done in
+     the game's own menu would move the marks off the crosses; DEFAULT
+     ADJUSTMENT restores it).
+  b. A USB gun calibrated in MiSTer (F10) aims where it points, its trigger
+     arriving on the mouse button (default Mouse = Gun 1 trigger); aiming
+     off the screen and pulling reloads. Untested: no gun here.
+  c. The 1.64 ms reload lead is enough: the I/O handler's scan is ~1 ms
+     (R839: 1,010 / s); the board will show a reload, not a shot.
+  d. The build still fits and closes at the area above (a fit).
