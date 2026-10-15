@@ -34839,3 +34839,15 @@ for game ID 1. Not yet benched.
      first 6 s) is tv80's instruction timing and harmless. The board.
   d. The watchdogs (TMPZ84C015 WDT, MB3773) do not matter: MAME does not
      reset the board on them and the game runs.
+
+**R840 -- 15.7 kHz (273/274) IS THE 15 kHz DEFAULT.** Ben, 2026-10-15: most
+users report only 15.7 kHz works on their sets (R799 made 262/263 the
+default for Ben's JVC, which loses sync at 273.5). With a [15kHz CRT] MRA a
+set that cannot show the starting rate leaves no OSD to change it, so the
+default must be the rate most sets take. "15kHz lines" moves to O[61:60]
+(0 = 273/274, 1 = 268/269, 2 = 262/263; 3 reads as 273/274) so every saved
+config, the old default's included, opens at 15.7; O[45:44] is retired.
+Removing 15.1/15.4 instead was weighed and not done: ~30-60 ALM (the line
+and ce selections) against sets like Ben's that need them. m2_video_timing
+is untouched (tb_m2_video_timing unchanged); lint_top clean. The release
+README's CRT section says so.

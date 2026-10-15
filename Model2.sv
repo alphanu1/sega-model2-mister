@@ -105,7 +105,13 @@ localparam CONF_STR = {
 	// end. O[45:44] so a saved 273/274 (bit 45) still opens as 273/274 --
 	// a set that needed it cannot show the OSD to set it again. Bit 44 was
 	// "Every 3rd frame"'s (R831); a config holding both reads as 273/274.
-	"O[45:44],15kHz lines,262/263 (15.1kHz),268/269 (15.4kHz),273/274 (15.7kHz);",
+	// R840: 273/274 (15.7kHz) IS THE DEFAULT (Ben: most users' sets only take
+	// 15.7 kHz, and a [15kHz CRT] MRA that starts at a rate the set cannot
+	// show leaves its owner no OSD to change it). New bits, O[61:60], so every
+	// saved config -- including the old default's 262/263 -- opens at 15.7;
+	// O[45:44] is retired. A set that needs 15.1 kHz (Ben's JVC, R799) picks
+	// it once.
+	"O[61:60],15kHz lines,273/274 (15.7kHz),268/269 (15.4kHz),262/263 (15.1kHz);",
 	// R834: Narrow lengthens the 15.4/15.7 kHz line in the ratio their fields
 	// are longer, so the picture keeps the 15.1 kHz picture's shape on a set
 	// that shows it shorter. No effect at 15.1 kHz or 24 kHz.
@@ -487,8 +493,8 @@ localparam int unsigned CEIW_DEN = 869200;
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
 reg [2:0]  vml_s;                         // R834: 268.5 lines
 reg [2:0]  vnw_s;                         // R834: the narrow line
-always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[45:44] == 2'd0};   // R799: 0 = 262/263
-always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[45:44] == 2'd1};   // R834
+always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[61:60] == 2'd2};   // R840: 2 = 262/263
+always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R834; 0 and 3 = 273/274
 always @(posedge clk_mem) vnw_s <= {vnw_s[1:0], status[55]};              // R834
 wire       vid_nl = vnl_s[2];
 wire       vid_ml = vml_s[2];

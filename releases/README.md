@@ -90,9 +90,11 @@ finished, so there's no tearing.
   (`Pedals only`). Set `Right stick` to `Pedals+steer` if you use a wheel that
   MiSTer maps onto the right stick: then left/right steers and up/down still
   works the pedals. See Controls.
-- **More for CRTs.** A 15.4 kHz setting between the other two, for sets that
-  won't take 15.1 kHz, and a `15kHz width` option for sets that show the
-  picture squashed at 15.4 or 15.7 kHz.
+- **More for CRTs.** 15 kHz now starts at the standard 15.7 kHz, which is
+  what most TVs need, so the `[15kHz CRT]` MRAs should show a picture straight
+  away. Your saved line setting is reset to it once. There's also a new
+  15.4 kHz setting, and a `15kHz width` option for sets that show the picture
+  squashed at 15.4 or 15.7 kHz.
 - **A shorter menu.** Texel step, 3D pacing, Texture brightness and Draw
   method's "every 3rd frame" are gone. They're fixed at the settings that work
   best now the core runs at full speed.
@@ -119,7 +121,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 |---|---|
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
-| `15kHz lines` | `262/263 (15.1kHz)` (default), `268/269 (15.4kHz)` or `273/274 (15.7kHz)` — see the CRT section |
+| `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
 | `15kHz width` | `Full` (default) or `Narrow`, for a picture that looks squashed at 15.4 or 15.7 kHz — see the CRT section |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
@@ -170,10 +172,10 @@ The easy way is to **load the `[15kHz CRT]` version** of the game from the
 MiSTer menu. It starts in 15 kHz straight away. With a normal MRA, set
 `Video` to `15kHz interlaced`.
 
-`15kHz lines` starts at `262/263`, NTSC's line count, which keeps most TVs
-locked. Some sets won't sync to that, because it puts the line rate at
-15.1 kHz, below the standard 15.7. For those, `273/274` gives the standard
-line rate, and `268/269` sits halfway between the two.
+`15kHz lines` starts at `273/274`, the standard 15.7 kHz line rate, which is
+what most TVs want. A few sets prefer NTSC's line count instead: if yours
+rolls or loses sync, try `262/263` (15.1 kHz), or `268/269` (15.4 kHz) in
+between.
 
 The game runs at 57.5 frames a second, not 60, so a faster line rate means
 more lines in each field, and the picture uses fewer of them. On many sets
