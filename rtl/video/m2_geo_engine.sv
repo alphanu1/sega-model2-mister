@@ -366,6 +366,7 @@ module m2_geo_engine #(
   logic         g_go;
   logic         g_wait;     // R784: E_XLG holds a second cycle for the scale stage
   logic         tx_c;       // R784: this resolution is a textured polygon's
+  logic [1:0]   g_sel;      // R847: gam()'s curve for g_raw, a cycle ahead
   logic [7:0]   lm;         // R784: the luma the slope is scaled by (the key's, midpoint)
   logic [7:0]   lt;         // R784: ... and by the output curve's gain (Off, Mild)
   // The texture parameters as floats, converted once when the walker streams
@@ -452,14 +453,49 @@ module m2_geo_engine #(
   endfunction
   // The gamma curve, m2_palette's: max((v - 64) * 255 / 191, 0), truncated.
   // R630: the curve is an OSD choice, exactly as m2_palette's
+  //   bias = sel[0] ? 32 : 64;  p = (v - bias) * (sel[0] ? 74941 : 87496);
+  //   gam  = sel[1] ? v : (v <= bias) ? 0 : min(255, p >> 16)
+  // R847: AS TWO 256-ENTRY TABLES IN LOGIC, NOT A MULTIPLY. The multiply went
+  // to a DSP block across the chip (s1129: DSP_X86, the engine near X40) and
+  // its result into the next DSP's input register, so tx_c / xl_raw -> g_raw
+  // failed at 80 MHz (-1.078 / -0.771 ns, 110 paths). Each entry below is the
+  // formula above, generated and checked against it for all 1,024 inputs.
+  localparam logic [2047:0] GAM_B64 = {   // entry v at [8v +: 8]
+    128'hfffdfcfaf9f8f6f5f4f2f1f0eeedecea,
+    128'he9e8e6e5e4e2e1e0dedddcdad9d8d6d5,
+    128'hd4d2d1d0cecdcccac9c8c6c5c4c2c1c0,
+    128'hbebdbcbab9b8b6b5b4b2b1b0aeadacaa,
+    128'ha9a8a6a5a4a2a1a09e9d9c9a99989695,
+    128'h949291908e8d8c8a8988868584828180,
+    128'h7e7d7c7a79787675747271706e6d6c6a,
+    128'h69686665646261605e5d5c5a59585655,
+    128'h545251504e4d4c4a4948464544424140,
+    128'h3e3d3c3a39383635343231302e2d2c2a,
+    128'h29282625242221201e1d1c1a19181615,
+    128'h141211100e0d0c0a0908060504020100,
+    128'h00000000000000000000000000000000,
+    128'h00000000000000000000000000000000,
+    128'h00000000000000000000000000000000,
+    128'h00000000000000000000000000000000};
+  localparam logic [2047:0] GAM_B32 = {   // entry v at [8v +: 8]
+    128'hfffdfcfbfaf9f8f6f5f4f3f2f1f0eeed,
+    128'hecebeae9e8e6e5e4e3e2e1e0dedddcdb,
+    128'hdad9d8d6d5d4d3d2d1d0cecdcccbcac9,
+    128'hc8c6c5c4c3c2c1c0bebdbcbbbab9b8b6,
+    128'hb5b4b3b2b1b0aeadacabaaa9a8a6a5a4,
+    128'ha3a2a1a09e9d9c9b9a99989695949392,
+    128'h91908e8d8c8b8a898886858483828180,
+    128'h7e7d7c7b7a7978767574737271706e6d,
+    128'h6c6b6a6968666564636261605e5d5c5b,
+    128'h5a5958565554535251504e4d4c4b4a49,
+    128'h48464544434241403e3d3c3b3a393836,
+    128'h3534333231302e2d2c2b2a2928262524,
+    128'h232221201e1d1c1b1a19181615141312,
+    128'h11100e0d0c0b0a090806050403020100,
+    128'h00000000000000000000000000000000,
+    128'h00000000000000000000000000000000};
   function automatic logic [7:0] gam(input logic [7:0] v, input logic [1:0] sel);
-    logic [24:0] p;
-    logic [7:0]  bias;
-    begin
-      bias = sel[0] ? 8'd32 : 8'd64;
-      p = ({17'd0, (v - bias)} * (sel[0] ? 25'd74941 : 25'd87496));
-      gam = sel[1] ? v : (v <= bias) ? 8'd0 : (p[24:16] > 9'd255) ? 8'd255 : p[23:16];
-    end
+    gam = sel[1] ? v : sel[0] ? GAM_B32[{v, 3'd0} +: 8] : GAM_B64[{v, 3'd0} +: 8];
   endfunction
   // A header word's dword address in the texture space: RAM indexes 64 K
   // words, the ROM 4 M; mem_addr[23] says which.
@@ -552,7 +588,7 @@ module m2_geo_engine #(
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
       rgb[0] <= 8'd0; rgb[1] <= 8'd0; rgb[2] <= 8'd0;
       xl_raw <= 8'd0; xl_i <= 2'd0; xl_go <= 1'b0;   // R718
-      g_raw <= 8'd0; g_i <= 2'd0; g_go <= 1'b0; g_wait <= 1'b0; tx_c <= 1'b0; lm <= 8'd0; lt <= 8'd0;   // R784
+      g_raw <= 8'd0; g_sel <= 2'd0; g_i <= 2'd0; g_go <= 1'b0; g_wait <= 1'b0; tx_c <= 1'b0; lm <= 8'd0; lt <= 8'd0;   // R784
       xaddr <= 24'd0; xhalf <= 1'b0; xspace <= 2'd0; cc_wait <= 1'b0; cc_idx <= 8'd0;
       cc_valid <= '0; cc_dirty <= 1'b0; poly_col <= 24'd0; dbg_col_miss <= 16'd0; tex_flat <= 1'b0; lum_x <= 8'd0; tex_lum_d <= 2'd0; gam_d <= 2'd0;
       for (int k = 0; k < 3; k++) begin
@@ -1056,7 +1092,11 @@ module m2_geo_engine #(
       // R718: the curve a cycle after the read. R784: textured, always
       // MAME's curve (the pedestal off), then the slope scaled by the luma
       // a cycle later still -- the multiply never follows the curve's.
-      if (xl_go) begin g_raw <= gam(xl_raw, tx_c ? 2'd0 : gamma_sel); g_i <= xl_i; end
+      // R847: the curve's select registered (g_sel): tx_c is set entering
+      // E_XL and xl_go is first high the cycle after E_XL's first mem_go, so
+      // g_sel has followed it by then.
+      g_sel <= tx_c ? 2'd0 : gamma_sel;
+      if (xl_go) begin g_raw <= gam(xl_raw, g_sel); g_i <= xl_i; end
       g_go <= xl_go;
       if (g_go) rgb[g_i] <= tx_c ? tslope(g_raw, lt, g_i, c555, gamma_sel != 2'd0) : g_raw;
       // R784: Off and Mild re-apply their own curve per pixel as A + B x lin
