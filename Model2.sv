@@ -82,7 +82,13 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_VCOP_FPU
 `define M2_VCOP_FPU 1
 `endif
-// M2_VCOP_GUN: off in the first boot build; define it to build the guns.
+// M2_VCOP_GUN: Virtua Cop's two guns, their crosshairs and OSD lines. Off in
+// the first boot build (R839); ON BY DEFAULT since R846 (+287 ALM estimated,
+// quartus_map). VERILOG_MACRO "M2_NO_VCOP_GUN=1" (or -DM2_NO_VCOP_GUN to lint)
+// builds without them -- the core before R846 exactly, CONF_STR included.
+`ifndef M2_NO_VCOP_GUN
+`define M2_VCOP_GUN
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -279,8 +285,9 @@ localparam CONF_STR = {
 	// missing in BOTH layouts is missing for a real reason.
 `ifdef M2_VCOP_GUN
 	// R839: Virtua Cop's guns (shown only for it: menumask bit 1)
+	// R846: O[58] (Gun 1 Stick / Mouse, never in a build) is not reused.
 	"h1O[57:56],Crosshair,Small,Large,Off;",
-	"h1O[58],Gun 1,Stick,Mouse;",
+	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
 	"h1O[59],Gun reload,Shoot off-screen,Auto;",
 `endif
 	"R[0],Reset and close OSD;",
@@ -4019,15 +4026,19 @@ wire  [7:0] vc_in0, vc_in1;
 wire  [9:0] vc_p1x, vc_p1y, vc_p2x, vc_p2y;
 wire  [1:0] vc_off;
 wire  [8:0] vc_c1x, vc_c1y, vc_c2x, vc_c2y;
+wire  [1:0] vc_con;
 generate if (VCOP_GUN) begin : g_vcgun
-	m2_vcop_guns #(.MOUSE(1'b1)) u_vcop_guns (
-		.clk(clk_sys), .rst_n(cpu_rst_n),
+	// R846: aim from the sticks (absolute; USB guns arrive so) or the mouse
+	// (relative, one gun); the mouse's buttons are a trigger / reload for the
+	// gun the OSD gives it, which is where MiSTer sends a USB gun's trigger.
+	m2_vcop_guns u_vcop_guns (
+		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun),
 		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
 		.ana0(joy_analog), .ana1(joy_analog_1),
-		.ps2_mouse(ps2_mouse), .use_mouse(status[58]),
+		.ps2_mouse(ps2_mouse), .mouse_sel(status[63:62]),
 		.in0(vc_in0), .in1(vc_in1),
 		.p1x(vc_p1x), .p1y(vc_p1y), .p2x(vc_p2x), .p2y(vc_p2y), .off(vc_off),
-		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y)
+		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y), .c_on(vc_con)
 	);
 end else begin : g_novcgun
 	assign vc_in0 = iob_in0; assign vc_in1 = 8'hFF;
@@ -4035,6 +4046,7 @@ end else begin : g_novcgun
 	assign vc_p2x = 10'h179; assign vc_p2y = 10'h0e8;
 	assign vc_off = 2'b00;
 	assign vc_c1x = 9'd0; assign vc_c1y = 9'd0; assign vc_c2x = 9'd0; assign vc_c2y = 9'd0;
+	assign vc_con = 2'b00;
 end endgenerate
 // The type-2 board's DSW1: bit 0 Reloading (0 = Auto, the OSD's "Gun
 // reload"), bit 1 Enemy Character (1 = Normal), the rest unused (1).
@@ -6579,48 +6591,26 @@ end endgenerate
 // input to the mix holds for a whole pixel period and the framework samples on
 // ce_pix, so a register clocked every cycle moves nothing on screen.
 logic [7:0] mix_r_q, mix_g_q, mix_b_q;
-// R839: VIRTUA COP'S CROSSHAIRS (VCOP_GUN, game ID 1, OSD "Crosshair"): a
-// '+' with arms of 5 (Small) or 9 (Large) pixels at each gun's screen
-// position, drawn by inverting the picture under it so it shows on any
-// background -- player 1 all three channels, player 2 green and blue only.
-// The positions are quasi-static (they move at the stick's rate) and cross
-// from clk_sys by two flops; a pixel is several clk_mem cycles, so the hit
-// is registered once ahead of the colour register.
-logic xh1, xh2;
+// R839 / R846: VIRTUA COP'S CROSSHAIRS (VCOP_GUN, game ID 1, OSD "Crosshair"):
+// a '+' per gun in the game's own player colours with a black outline, on
+// the pixel the game aims at, at 24 kHz and 15 kHz interlaced alike. See
+// rtl/video/m2_vcop_xhair.sv. Without the guns the colour register is the
+// one it always was.
 generate if (VCOP_GUN) begin : g_xhair
-	logic [8:0] x1a, y1a, x2a, y2a, x1b, y1b, x2b, y2b;
-	logic [2:0] ena, enb;
-	always_ff @(posedge clk_mem) begin
-		x1a <= vc_c1x; y1a <= vc_c1y; x2a <= vc_c2x; y2a <= vc_c2y;
-		x1b <= x1a;    y1b <= y1a;    x2b <= x2a;    y2b <= y2a;
-		ena <= {vc_gun, status[57:56]}; enb <= ena;
-	end
-	wire       xon = enb[2] && (enb[1:0] != 2'd2);   // 2 = Off
-	wire [3:0] arm = enb[0] ? 4'd9 : 4'd5;
-	function automatic logic xhit(input logic [9:0] bx, input logic [9:0] by,
-	                              input logic [8:0] cx, input logic [8:0] cy,
-	                              input logic [3:0] len);
-		logic signed [10:0] dx, dy;
-		logic [9:0] ax, ay;
-		dx = $signed({1'b0, bx}) - $signed({2'b00, cx});
-		dy = $signed({1'b0, by}) - $signed({2'b00, cy});
-		ax = dx[10] ? 10'(-dx) : dx[9:0];
-		ay = dy[10] ? 10'(-dy) : dy[9:0];
-		return ((dy == 11'sd0) && (ax <= {6'd0, len})) || ((dx == 11'sd0) && (ay <= {6'd0, len}));
-	endfunction
-	always_ff @(posedge clk_mem) begin
-		xh1 <= xon && xhit(vid_x_d, vid_y, x1b, y1b, arm);
-		xh2 <= xon && xhit(vid_x_d, vid_y, x2b, y2b, arm);
-	end
+	m2_vcop_xhair u_vcop_xhair (
+		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
+		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),
+		.il(vid_il), .vx(vid_x_d), .vy(vid_y),
+		.in_r(mix_r), .in_g(mix_g), .in_b(mix_b),
+		.out_r(mix_r_q), .out_g(mix_g_q), .out_b(mix_b_q)
+	);
 end else begin : g_noxhair
-	assign xh1 = 1'b0;
-	assign xh2 = 1'b0;
+	always_ff @(posedge clk_mem) begin
+		mix_r_q <= mix_r;
+		mix_g_q <= mix_g;
+		mix_b_q <= mix_b;
+	end
 end endgenerate
-always_ff @(posedge clk_mem) begin
-	mix_r_q <= mix_r ^ {8{xh1}};
-	mix_g_q <= mix_g ^ {8{xh1 | xh2}};
-	mix_b_q <= mix_b ^ {8{xh1 | xh2}};
-end
 assign ov_r = mix_r_q;
 assign ov_g = mix_g_q;
 assign ov_b = mix_b_q;

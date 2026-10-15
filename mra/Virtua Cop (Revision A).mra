@@ -118,4 +118,13 @@
         </interleave>
 
     </rom>
+
+    <!-- The guns' buttons (R846), per player: joystick 1 is player 1's gun,
+         joystick 2 player 2's. Aim with the left stick (a USB light gun
+         arrives as that stick, calibrated in MiSTer's F10 menu) or the mouse
+         (OSD "Mouse"); the mouse's left / right buttons, where MiSTer puts a
+         USB gun's trigger, are Trigger / Reload too. Reload is "shoot off the
+         screen"; aiming off the screen and pulling the trigger does the same.
+         Test and Service are player 1's. -->
+    <buttons names="Trigger,Reload,Start,Coin,Test,Service"/>
 </misterromdescription>
