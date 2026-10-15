@@ -215,6 +215,48 @@ if {[get_collection_size $z80_ram] == 0 || [get_collection_size $z80_core] == 0}
     set_multicycle_path -hold  -end 1 -from $z80_ram -to $z80_core
 }
 
+# ---- R847: AND FROM THE SAME RAMS INTO tv80s's di_reg AND THE TYPE-2 BOARD'S
+# f_op, TWO CYCLES.
+#
+# The wrapper's di_reg is NOT loaded on cen: tv80s.v loads it on every clk
+# with tstate[2] && wait_n && !write && !no_read, so R590's argument does not
+# reach it by itself. What does:
+#   1. Nothing reads di_reg but the core (tv80s: `.di(di_reg)` and nothing
+#      else), and every core register loads only on cen or ClkEn = cen &&
+#      !BusAck (busrq_n is tied high, so BusAck stays 0). So di_reg is only
+#      ever USED at a cen edge, and the value used there is the one it loaded
+#      at the edge before.
+#   2. cen is never high on two consecutive cycles: at 80 MHz one in 20
+#      (type 1, 4 MHz) and one in 8.14 (type 2, 6144 / (80 x 625), 9.8304
+#      MHz) -- never closer than 8 cycles apart.
+#   3. The RAMs are read on the NEGEDGE from A (a core register, so it moves
+#      only at a cen edge) and written from aw_l / dw_l at the negedge after
+#      wr_stb, the trailing edge of a write strobe, during a WRITE machine
+#      cycle in which di_reg does not load; the firmware is written only while
+#      the Z80 is in reset (rst_n includes fw_ready). So their output changes
+#      only at the negedge half a cycle after a cen edge Ej (or after a write
+#      that precedes the next read cycle by at least one T-state).
+#   With two cycles that change arrives by Ej + 2. The next cen edge is at
+#   Ej + 8 or later, so the load it uses (at Ej + 7 or later) sees it settled.
+# f_op (m2_ioz80's RETI watch, type 2 only) is the same shape: it loads di on
+# every cycle of an opcode fetch's read strobe and is read only on the cycle
+# after the strobe ends (f_prev <= f_op, the ED 4D compare). The strobe (rd_n,
+# a wrapper register) starts the cycle after the cen edge that set A and ends
+# the cycle after the NEXT cen edge, so its last load is at Ej + 9 or later.
+# The default relationship here is HALF a cycle (negedge launch, posedge
+# capture), which is why di_reg fails (s1126-s1130: altsyncram_3ap1 ->
+# di_reg, to -0.856 ns) and f_op is next (post-map +0.685, the worst left in
+# m2_ioz80). Only paths from the two RAMs; the I/O mux's other sources (the
+# DPRAM, the ports, the CTC vector) stay timed at one cycle.
+set z80_dir [get_registers -nowarn {*u_ioz80|u_z80|di_reg[*] *u_ioz80|g_t2.f_op[*]}]
+if {[get_collection_size $z80_ram] == 0 || [get_collection_size $z80_dir] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the Z80's RAMs or tv80s di_reg did not match -- R847's exception is not applied."
+} else {
+    set_multicycle_path -setup -end 2 -from $z80_ram -to $z80_dir
+    set_multicycle_path -hold  -end 1 -from $z80_ram -to $z80_dir
+}
+
 
 # ---- R833: WITH m2_sound_board's YM_STUB THE YM3438 IS m2_ym_timers (u_ymt)
 # and nothing reads jt12, so synthesis removes it and the three jt12
