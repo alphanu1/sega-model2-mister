@@ -34851,3 +34851,67 @@ Removing 15.1/15.4 instead was weighed and not done: ~30-60 ALM (the line
 and ce selections) against sets like Ben's that need them. m2_video_timing
 is untouched (tb_m2_video_timing unchanged); lint_top clean. The release
 README's CRT section says so.
+
+**R841 -- LIGHT GUNS FOR VIRTUA COP: THE PLAN, AND CRT GUNS (DOCUMENTED, NOT
+BUILT).** Ben, 2026-10-15, with a MiSTer moderator's note: "USB light guns
+report as either analog joysticks or mice. If you support those, you should
+be good for any USB gun -- plus then you can test input without a lightgun
+too, especially if you have an option to display a cursor." Ben: CRT light
+guns (GunCon) must be supported in time; documented now so the direction is
+known.
+
+*What the game needs (VERIFIED, R839 / MAME 0.289 model1io2.cpp):* the
+type-2 I/O board's 0x8100-0x810F block returns four 10-bit coordinates (P1Y,
+P1X, P2Y, P2X, two bytes each) and an off-screen byte (bit 0 P1, bit 1 P2;
+MAME sets it within a border of the range); MAME's ranges: P1_X
+0x083-0x276 (centre 0x17c), P1_Y 0x024-0x1a9 (centre 0x0e6), P2 similar.
+Reads return 0x80 until the firmware has written its "FPGA" upload (0x1400
+writes). Triggers are IN1 bits 0/1; reload is shooting off-screen (DSW1
+"Reloading" option). Whatever the gun hardware, the core's job ends at
+those registers.
+
+*Route 1 -- USB guns (PLANNED, the first gun step; rtl/io/m2_vcop_guns.sv
+written, not benched, behind M2_VCOP_GUN).* Sinden, Gun4IR, GunCon 2/3 on
+USB and similar reach the core through MiSTer's input layer as an analog
+joystick or a mouse. The core scales either to the game's ranges, with:
+  * analog stick (absolute): the stick's -128..127 to the game's range;
+  * mouse: must place the aim where the gun points. A gun that reports
+    ABSOLUTE positions through MiSTer must not be integrated as relative
+    motion (that drifts); how MiSTer hands an absolute-mouse gun to a core
+    is TO BE CHECKED in the framework (hps_io ps2_mouse vs an absolute
+    channel) before the mapping is written;
+  * a crosshair (Small / Large / Off) for stick and mouse players, and for
+    testing without a gun; off for real guns;
+  * player 2 from the second joystick / mouse;
+  * Trigger and Reload buttons; reload also by aiming off-screen.
+Works on HDMI and CRT alike, because the gun or MiSTer computes the
+position. Calibration lives in MiSTer's gun setup, not the core.
+
+*Route 2 -- the original GunCon (PlayStation G-Con 45) on SNAC (DOCUMENTED
+ONLY).* Ben has one. From memory, NOT YET CHECKED against any source: the
+G-Con 45 takes the composite video through its own cable, times the beam
+itself, and reports an X count (time since hsync) and a Y count (scanline)
+plus its buttons over the PlayStation controller protocol. The core would
+need:
+  1. a PlayStation controller master on MiSTer's user port (SNAC): clock,
+     attention, command / data -- a small state machine; read the MiSTer
+     PSX core's SNAC GunCon support first and follow it (Model 1 rule:
+     start from a working design);
+  2. a mapping from the gun's counts to Virtua Cop's 10-bit X/Y. Model 2's
+     line (656 px at 16 MHz native; 15 kHz interlaced at 9.9-10.8 MHz, R834)
+     and field timing differ from a PlayStation's, so an offset and scale
+     per video mode, OSD-adjustable, and attention to which interlaced field
+     is showing;
+  3. trigger / button bits into IN1;
+  4. the gun needs the analog video (CRT out), so route 2 is CRT-only.
+Cost INFERRED small (a serial state machine, two latches, scaling; no
+M10K), behind M2_VCOP_GUN with route 1.
+
+*Route 3 -- arcade-style beam timing in the core (NOT PLANNED).* A light
+sensor wired to the user port, its pulse latching the core's own beam
+position (hcnt/vcnt less the video pipeline's latency). The original
+cabinet works this way; no MiSTer gun hardware does, so it is noted only.
+
+*Order:* boot (R839) -> the trig instructions (tanrl/cosrl/sinrl/atanrl) ->
+route 1 (stick, mouse, crosshair, P2) -> route 2 (GunCon on SNAC), each
+behind M2_VCOP_GUN and measured for area (the core is at ~98%).
