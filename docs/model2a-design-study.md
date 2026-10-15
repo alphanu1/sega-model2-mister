@@ -34652,3 +34652,14 @@ triggers they are full presses (ACCEL 0xe0), not analogue. "Pedals:
 Swapped" flips the right stick's Y (the turret on a pad; which half is
 forward on a wheel). "Steering" and "Steering smoothing" act on the handle
 as in Daytona.
+
+**s1104 on the board (Desert Tank):** 87 min of the watch at 28.4-28.8 fps,
+no lock; the "LOCK at +90m" the watch reported was Ben loading Virtua Cop
+(the screenshot is vcopa's, black while it loaded). Virtua Cop on s1104
+(type-1 I/O firmware, no guns): 11.3 fps on one reading, so the main board
+draws its 3D; not yet looked at.
+**s1105-s1107 = 1e48035 (R837, Desert Tank's controls).** s1107 closes:
+core clocks >= +0.220, holds >= +0.228, HDMI -0.332; 40,983 ALM. s1105
+(-0.194) and s1106 (-0.611) miss clk_sys. RBF
+build/Model2_20261015_s1107_desert.rbf, md5
+3812a76e8c09528de4138370802f2ae2. Not yet on the board.
