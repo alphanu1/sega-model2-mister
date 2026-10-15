@@ -503,6 +503,22 @@ module m2_raster_fill #(
     pr_u1 <= pf_u1; pr_u2 <= pf_u2; pr_v1 <= pf_v1; pr_v2 <= pf_v2;
     pr_o1 <= pf_o1; pr_o2 <= pf_o2;
   end
+  // R847: THE DETERMINANT'S TWO PRODUCTS, REGISTERED EVERY CYCLE FROM pr_*.
+  // det_r = ax*by - bx*ay was one cycle of multiply and subtract, and Quartus
+  // SHARED its multipliers with nxo's (o1*by - o2*ay: the same by and ay, a
+  // different state), so the path was pr_* -> the operand mux -> one DSP ->
+  // a second DSP's adder -> det_r: s1129-s1131 -0.35 .. -0.55 ns, 160-422
+  // paths a seed (pf_st.S_PF_N, the mux's select, and pr_o1 -> det_r / nxo).
+  // Loaded every cycle, with no reset and no enable, these cannot be shared
+  // and pack into their DSP's output registers; det_r subtracts them a cycle
+  // later. They follow pr_* by a cycle, so S_PF_DW now waits two cycles
+  // (dw_2) -- one more cycle per pass through it, two or three a quad.
+  logic signed [31:0] dp_ab, dp_ba;
+  always_ff @(posedge clk) begin
+    dp_ab <= 32'(pr_ax) * 32'(pr_by);
+    dp_ba <= 32'(pr_bx) * 32'(pr_ay);
+  end
+  logic dw_2;   // R847: S_PF_DW's second cycle
 
   // A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction -- texels per
   // pixel, usually between 1/16 and 16 -- and an integer divider returns zero
@@ -1159,6 +1175,7 @@ module m2_raster_fill #(
       span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0; span_ooz <= '0;
       pf_a <= 1'b0; pf_b <= 1'b0;
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; mz_r <= 1'b0; pf_ph <= 2'd0; det_first_abs <= '0;
+      dw_2 <= 1'b0;   // R847
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
@@ -1257,10 +1274,12 @@ module m2_raster_fill #(
           end
         end
 
-        S_PF_DW: pf_st <= S_PF_D;   // R727
+        // R727: pr_* follow pf_second; R847: and dp_* follow pr_*, a cycle each
+        S_PF_DW: if (!dw_2) dw_2 <= 1'b1;
+                 else begin dw_2 <= 1'b0; pf_st <= S_PF_D; end
 
         S_PF_D: begin
-          det_r <= 32'(pr_ax) * 32'(pr_by) - 32'(pr_bx) * 32'(pr_ay);   // R727: pr_*
+          det_r <= dp_ab - dp_ba;   // R847: the products registered (R727: of pr_*)
           pf_st <= S_PF_N;
         end
 
@@ -1521,6 +1540,7 @@ module m2_raster_fill #(
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
             pf_ph     <= 2'd0;                // R674
+            dw_2      <= 1'b0;                // R847: a fit abandoned in S_PF_DW
             dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
             // An untextured quad pays nothing for any of this.
             // R337: normalise 1/z before the plane fit, because the fit runs
