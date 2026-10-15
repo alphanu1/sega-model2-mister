@@ -58,6 +58,8 @@
 // IN0 (active low): 0x01 Coin 1, 0x02 Coin 2, 0x04 Test, 0x08 Service,
 // 0x10 1P Start, 0x20 2P Start. IN1: 0x01 P1 trigger, 0x02 P2 trigger.
 //
+// R849: a crosshair shows only while its player is in play (play, the game's
+// own state from m2_vcop_state) and on the screen.
 // en low (any game but Virtua Cop) shows no crosshair; Model2.sv takes in0 /
 // in1 from here only for game ID 1 (vc_gun), as it did before this module was
 // built, so Daytona and Desert Tank see the inputs they always did.
@@ -75,6 +77,7 @@ module m2_vcop_guns #(
   input  logic        clk,            // clk_sys
   input  logic        rst_n,
   input  logic        en,             // Virtua Cop with the guns built (vc_gun)
+  input  logic  [1:0] play,           // {P2, P1} in play (m2_vcop_state, clk_i960 = clk / 2; R849)
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic [15:0] joy0, joy1,     // joystick_0 / joystick_1 [15:0]
   input  logic [15:0] ana0, ana1,     // joystick_l_analog_0 / _1: {Y, X}, signed
@@ -86,7 +89,7 @@ module m2_vcop_guns #(
   output logic  [1:0] off,                  // {P2, P1} off-screen
   output logic  [8:0] c1x, c2x,             // crosshairs, screen pixels
   output logic  [8:0] c1y, c2y,
-  output logic  [1:0] c_on                  // {P2, P1}: draw it (en, on the screen)
+  output logic  [1:0] c_on                  // {P2, P1}: draw it (en, in play, on the screen)
 );
 
   // ------------------------------------------------------ inputs, registered
@@ -97,12 +100,14 @@ module m2_vcop_guns #(
   /* verilator lint_on UNUSEDSIGNAL */
   logic  [1:0] sel_q;
   logic        en_q;
+  logic  [1:0] play_q;
   always_ff @(posedge clk) begin
     a0_q <= ana0;  a1_q <= ana1;
     b0_q <= joy0[9:4]; b1_q <= joy1[9:4];
     ms_q <= ps2_mouse;
     sel_q <= mouse_sel;
     en_q <= en;
+    play_q <= play;
   end
 
   // ------------------------------------------------------ stick to pixel
@@ -228,7 +233,7 @@ module m2_vcop_guns #(
       off <= 2'b00; c_on <= 2'b00; in0 <= 8'hFF; in1 <= 8'hFF;
     end else begin
       off  <= {o2, o1};
-      c_on <= {en_q & ~o2, en_q & ~o1};
+      c_on <= {en_q & play_q[1] & ~o2, en_q & play_q[0] & ~o1};
       in0  <= ~{2'b00, b1_q[2], b0_q[2], b0_q[5], b0_q[4], b1_q[3], b0_q[3]};
       in1  <= ~{6'd0, fire_q};
     end

@@ -4031,8 +4031,17 @@ generate if (VCOP_GUN) begin : g_vcgun
 	// R846: aim from the sticks (absolute; USB guns arrive so) or the mouse
 	// (relative, one gun); the mouse's buttons are a trigger / reload for the
 	// gun the OSD gives it, which is where MiSTer sends a USB gun's trigger.
+	// R849: each crosshair only while its player is in play, as the game's
+	// own work RAM says (the i960's writes, snooped on clk_i960).
+	wire [1:0] vc_play;
+	m2_vcop_state u_vcop_state (
+		.clk(clk_i960), .rst_n(cpu_rst_n), .en(vc_gun), .test(joystick_0[8]),   // the MRA's Test
+		.bus_req(cpu_req), .bus_we(cpu_we), .bus_ack(cpu_ack),
+		.bus_addr(cpu_addr), .bus_wdata(cpu_wdata), .bus_be(cpu_be),
+		.play(vc_play)
+	);
 	m2_vcop_guns u_vcop_guns (
-		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun),
+		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun), .play(vc_play),
 		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
 		.ana0(joy_analog), .ana1(joy_analog_1),
 		.ps2_mouse(ps2_mouse), .mouse_sel(status[63:62]),

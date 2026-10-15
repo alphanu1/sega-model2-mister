@@ -17,7 +17,7 @@
 //  4. RELOAD: random presses; the trigger it pulls is never seen while the
 //     gun is on the screen (the property the cabinet's "shoot off-screen"
 //     needs), it does arrive, and the gun leaves the corner afterwards.
-//  5. en low: no crosshair.
+//  5. a player not in play (R849): no crosshair. 6. en low: none.
 #include "Vm2_vcop_guns.h"
 #include "verilated.h"
 #include <cstdio>
@@ -48,7 +48,7 @@ static void set_ana(int p, int x, int y) {   // signed -128..127
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_vcop_guns;
-  d->rst_n = 0; d->en = 1; d->joy0 = 0; d->joy1 = 0; d->ana0 = 0; d->ana1 = 0;
+  d->rst_n = 0; d->en = 1; d->play = 3; d->joy0 = 0; d->joy1 = 0; d->ana0 = 0; d->ana1 = 0;
   d->ps2_mouse = 0; d->mouse_sel = 0;
   tick(4); d->rst_n = 1; tick(4);
 
@@ -193,7 +193,14 @@ int main(int argc, char** argv) {
   printf("reload: %ld / %ld presses, trigger held %ld / %ld cycles, 0 / 0 on the screen expected (%ld / %ld)\n",
          presses[0], presses[1], seen_trig[0], seen_trig[1], bad[0], bad[1]);
 
-  // ---------------------------------------------------------- 5. en low
+  // ---------------------------------------------------------- 5. in play (R849)
+  set_ana(0, 0, 0); set_ana(1, 0, 0);
+  for (int pl = 0; pl < 4; pl++) {
+    d->play = pl; tick(8);
+    CHECK(d->c_on == unsigned(pl), "play %d: c_on %d", pl, d->c_on);
+  }
+  d->play = 3;
+  // ---------------------------------------------------------- 6. en low
   d->en = 0; tick(8);
   CHECK(d->c_on == 0, "en low: c_on %d", d->c_on);
 

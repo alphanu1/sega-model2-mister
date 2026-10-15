@@ -399,7 +399,7 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair
+.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
 test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
@@ -1775,6 +1775,20 @@ obj_m2_vcg/Vm2_vcop_guns: rtl/io/m2_vcop_guns.sv sim/io/tb_m2_vcop_guns.cpp
 	$(VBUILD) --top-module m2_vcop_guns -GTICK_LOG2=6 \
 	  --Mdir obj_m2_vcg -o Vm2_vcop_guns -CFLAGS "-O2" \
 	  rtl/io/m2_vcop_guns.sv sim/io/tb_m2_vcop_guns.cpp
+
+# R849: who is in play, from the i960's writes, against MAME's own record.
+# The captures live in build/ (not committed); sim/io/mame_m2_vcop_play.lua
+# writes them (<name>_wlog.txt: every write to the three words; <name>_state.txt:
+# the words as MAME's work RAM holds them every 0.5 s). Scenarios: see R849.
+VCOPSTATE ?= build/vcopstate
+test_m2_vcop_state: obj_m2_vcs/Vm2_vcop_state
+	@echo "== test m2_vcop_state (each player in play, against MAME's record, R849)"
+	@./obj_m2_vcs/Vm2_vcop_state $(foreach s,$(sort $(basename $(notdir $(wildcard $(VCOPSTATE)/*_wlog.txt)))),$(VCOPSTATE)/$(s).txt $(VCOPSTATE)/$(subst _wlog,_state,$(s)).txt)
+
+obj_m2_vcs/Vm2_vcop_state: rtl/io/m2_vcop_state.sv sim/io/tb_m2_vcop_state.cpp
+	$(VBUILD) --top-module m2_vcop_state \
+	  --Mdir obj_m2_vcs -o Vm2_vcop_state -CFLAGS "-O2" \
+	  rtl/io/m2_vcop_state.sv sim/io/tb_m2_vcop_state.cpp
 
 test_m2_vcop_xhair: obj_m2_vcx/Vtb_m2_vcop_xhair_top
 	@echo "== test m2_vcop_xhair (the crosshairs on the aim pixel, 24 kHz and 15 kHz interlaced, R846)"
