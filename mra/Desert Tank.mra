@@ -125,8 +125,11 @@
 
     </rom>
 
-    <!-- The core's button list, renamed for this game (R835). The positions
-         are the core's J1 line; only the names change. Shift is the forward /
-         reverse lever: each press flips it, as MAME's PORT_TOGGLE does. -->
-    <buttons names="Coin,Start,Test,Service,VR1 Blue,Shift,Accel,Brake,Machine Gun,Cannon,VR2 Green,VR3 Red"/>
+    <!-- The core's button list, renamed for this game (R835, R837). The
+         positions are the core's J1 line; only the names change. Forward and
+         Reverse (Daytona's Accel and Brake; put them on the triggers) each
+         press the one drive pedal fully and set the forward / reverse lever;
+         Shift flips the lever by hand. The right stick's Y aims the cannon
+         (the d-pad's up / down too); the left stick steers. -->
+    <buttons names="Coin,Start,Test,Service,VR1 Blue,Shift,Forward,Reverse,Machine Gun,Cannon,VR2 Green,VR3 Red"/>
 </misterromdescription>
