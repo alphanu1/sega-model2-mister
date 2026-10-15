@@ -71,14 +71,14 @@ local function field(p, pat)
 end
 
 local held = {}   -- presses to release: {t, field}
-local ai = 1
+local ix = 1
 DTI_F = emu.add_machine_frame_notifier(function()
   local t = emu.time()
   for i = #held, 1, -1 do
     if t >= held[i].t then held[i].f:set_value(0); table.remove(held, i) end
   end
-  while ai <= #acts and t >= acts[ai].t do
-    local a = acts[ai]; ai = ai + 1
+  while ix <= #acts and t >= acts[ix].t do
+    local a = acts[ix]; ix = ix + 1
     log:write(string.format("%.3f f%d %s %s %s %s\n", t, scr:frame_number(), a.op, a.a or "", a.b or "", a.c or ""))
     if a.op == "press" or a.op == "hold" then
       local f, n = field(a.a, a.b)
