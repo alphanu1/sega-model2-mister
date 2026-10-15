@@ -34676,3 +34676,5 @@ test screen's label rather than the drive direction; not re-checked).
 directed checks follow (320M Desert checks, 0 mismatches; Daytona 30M, 0).
 To settle on the board: Forward drives ahead, Reverse backs up, and the
 tank starts in forward.
+R838 on the board: s1108 (6e8db44; clk_mem -0.120, loaded for an input
+check only) -- Ben: "forward and reverse work correctly now".
