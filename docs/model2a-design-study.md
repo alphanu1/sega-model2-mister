@@ -35554,3 +35554,188 @@ screen (play[0] no longer gates it); c_on[1] = en & play[1] & on the screen,
 as R849. The OSD Off and off-screen still hide both. tb_m2_vcop_guns'
 in-play check follows (417,527 checks, 0 failures); lint_top clean;
 analyze_file 0 errors. m2_vcop_state is unchanged (its P1 bit is unused).
+
+**R848 -- clk_sys AT 80 MHz, THE NEXT EIGHT PATHS: EACH EXACT, ONE COMMIT
+EACH, AND WHAT THEY COST.** On c545187 (R850). Ben's position, binding:
+99-100% closes at 80 MHz when the recurring paths are fixed properly -- no
+feature removal, no clock reduction. Every change below is bit- and
+cycle-identical where a bench can show it, and none adds a cycle anywhere.
+
+*The recurrence table* (post-fit, worst slack / failing paths, from the seed
+reports; s1128, s1132, s1133, s1136 and s1137 re-reported with
+report_timing -npaths 600 on their databases, seconds each):
+
+    group                                   seeds failing (worst)                 R848
+    Z80 RAMs -> di_reg                      7 of 11 (s1130 -0.856)                R847 fixed
+    aob -> MultiPCM key_wait / s_active     4 (s1132 -0.926)                      R847 fixed
+    clip / project -> pool -> engine st     s1130, s1131 (-0.833), s1132 (-1.103) 1
+    clip cs -> pool operands                s1130 (-0.398); s1137 +0.63           1
+    qoz -> oz_n                             s1130 (-0.476)                        2
+    qoz -> oz_emax                          s1127, s1133 (-0.376)                 8
+    det_r -> numerators                     post-map only (-0.90)                 3
+    TGP opr_add -> fp_add stage A           s1134 (-1.072, 29); s1137 +0.53       4
+    MultiPCM v -> pos_zero                  s1134 (-0.418)                        5
+    store vtx_r -> tournament round 1       s1126, s1132 (-1.022), s1136 (-0.379, 6
+                                            its ONLY failing group)
+    eng_ra data -> engine xaddr (E_PAL)     s1137's worst (+0.116)                7
+    eng_ra data -> engine poly_uv (F_UV)    s1132, s1133 (-1.352)                 not fixed
+    fb_wcomb ib / b_idx -> vlo / vhi        s1127, s1133 (-1.077, 141)            not fixed
+    pool multiplier result -> xform / eng   s1132 (-1.291)                        not fixed
+    joy_analog_q -> cab steer_rq            s1128, s1132 (-0.626)                 not fixed
+    hps_io byte_cnt -> status               s1132, s1134 (sys/, framework)        not ours
+
+*Now known -- VERIFIED (each its own commit on c545187):*
+  1. THE GEOMETRY POOL (7781046). *Believed* (R727): the pool's grant is
+     combinational by design and short. *Now known:* the post-map path was
+     ELEVEN cells -- the clipper's cs (fanout 111) -> its request decode (2)
+     -> the pool's winner index (fanout ~100: it also drives the operand mux
+     and the tags) -> another client's grant -> SIX levels of m2_geo_engine's
+     one-hot next-state chain (Quartus builds a shared hold term, so a grant
+     used in E_LUMM / E_LUMA reached st.E_DONE, E_NORM, E_LINK, E_CC). Three
+     exact changes: (a) m2_fp_pool's grant written directly (rr_onehot: a
+     client is granted when it requests and no client before it in the
+     rotation does), not decoded from the winner -- every request vector x
+     every pointer, NC 2..6, against rr_pick: 640 checks, 0 differ
+     (make test_fp_pool_gnt; three planted faults caught); (b) the engine's
+     E_LUMM / E_LUMA and the clipper's K_TEST / K_CLIP leave on the grant a
+     cycle later (lw_go, gnt_q), the request already down, inside the pool's
+     5/6-cycle latency, so st and kst read no grant; (c) the clipper's
+     requests are registers, set on every move into K_TEST / K_CLIP with the
+     operation cs names there and dropped on their own grant. Tried and
+     rejected on the way: registering the request from a blocking next-state
+     copy (kst_n) was exact but stopped Quartus extracting kst as a state
+     machine -- binary kst, post-map kst -> rq_add -2.342; and a first edit
+     missed two `kst  <=` written with extra spaces, which geodiff caught as
+     a HANG on all five walks. Three request forms compared in a spike of
+     m2_geometry (post-map clip -> others / clip -> pool operands / clip
+     ALUT): registered +8.6 / +3.0 / +72; a decode of the one-hot state and
+     a registered op class +6.3 / +1.5 / +41; the old decode masked by gnt_q
+     +4.8 / -0.08 / +14 (base +2.5 / +1.3). The registered form is
+     committed: it is the only one that also lifts the operand path (s1130
+     cs -> mul_a_q -0.398).
+     Evidence: geometry benches unchanged (engine 70, clip 2,003, xform
+     7,813, project 20,437, geometry 438, mipz 444 -- 0 failures); geodiff on
+     w2300 / w5000 / w9000 / w1000 / r5701: cycles 822,322 / 868,855 /
+     624,572 / 902,720 / 855,310 identical, quads identical (md5 of the
+     lists), and a NEW per-cycle hash (M2GD_POOLHASH=1 in tb_m2_geodiff:
+     every client's request / grant / response, the operands the pool took,
+     and the engine's memory request with its address and space) identical
+     on all five. Post-map: clip -> engine st -3.282 -> no path; any -> st
+     +1.892; clip -> pool operands +0.018 -> +3.633; inside the clipper
+     -1.989 -> +0.598.
+  2. THE 1/z NORMALISER'S VERTEX (ad1513f). qoz[oz_i] held in oz_mf, loaded
+     a cycle ahead (vertex 0 at acceptance, oz_i + 1 in each stage-one cycle;
+     stage two never writes a vertex stage one has still to read). oz_n is
+     packed into the u/z multiplier's DSP input register, so the 4:1 mux,
+     kd_e's subtract and the shift were followed by the route to the DSP
+     column: post-map +5.5 against post-fit -0.476 (R847's warning again).
+     Now oz_mf -> oz_n +6.344, qoz -> oz_n no path. Evidence: a simulation
+     checker (not committed) oz_mf == qoz[oz_i] in every reading cycle: 0
+     mismatches in test_m2_raster_fill (152,373), _mip (1,989,828),
+     test_m2_raster3d and four frames; planted (load qoz[oz_i]): 467,206
+     checker reports and 1,494,288 bench failures. Four frames (core
+     configuration, MIP mode 1): pixels identical (c3857662 6d8e0e69 e04fb93e
+     1f325f0f), fetch lists identical, every cycle statistic identical.
+  3. THE ZERO DETERMINANT (0718d37). det_z = ((dp_ab - dp_ba) == 0),
+     registered beside det_r from the SAME subtract; S_PF_N tests det_z.
+     *Believed first:* dp_ab == dp_ba is the same truth and cheaper. *Now
+     known:* written that way Quartus pulled the subtract out of the DSP's
+     adder to share the products -- +1 DSP, +33 registers, dp -> det_r +10.0
+     -> +3.6 post-map (spike of m2_raster_fill in the core's parameters).
+     The shared-subtract form: DSP 38, ALM unchanged. det_r -> numerators
+     -0.871 -> no path (det_z -> nxv +4.468). Checker det_z == (det_r == 0):
+     0 mismatches after reset (one report each run at t = 0, before the
+     first reset edge); frames identical as in 2.
+  4. THE TGP ADDER (7ce9926). fp_add IN_REG: the ALU's operand register
+     moves into fp_add, and the alignment's decisions (e_gt, e_eq, sig_ge,
+     saturation, shamt -- fp_add_align) are registered beside the operands;
+     the ALU forms them for each of its three operand pairs (d,a) (d,p)
+     (b,a) from its operand registers and selects them with the operands.
+     *Believed first:* align after the mux. *Now known:* that put alu_op_r
+     (fanout 96) -> the op decode -> the mux -> compare / subtract /
+     saturate in one cycle (post-map -1.361) and unfolded the 2:1 mux from
+     the registers' synchronous load (+66 ALUT). Per pair: stage A +0.247 ->
+     +5.713, the new stage 0 (pre_d -> dec_q) +1.761. Exponents only (the
+     significand compare left in stage A) measured +3.8 / +80 ALUT in a
+     spike; not taken. Evidence: a lockstep of the new fp_add against
+     c545187's (plain, PIPE_A2, and IN_REG against old-behind-a-register,
+     FLUSH 0 and 1), 20 M cycles biased to the alignment's corners: 0
+     differ; test_tgp's benches pass (test_mb86233_regs fails 46,966 on
+     c545187 too -- not this); the race replay (30 frames, 192,746 result
+     words) IDENTICAL to c545187's, 9,726,730 cycles both. Planted: in_dec
+     left 0 (10 M cycles differ), FMSD given the (d,a) decisions (37,484 ALU
+     failures), |d| mux wrong (caught); two mutants passed and are
+     equivalent, not missed: saturation at 27 instead of 26, and sig_ge as >
+     (equal magnitudes give the same sum either way). Cost: +117 ALUT (three
+     aligners ~48 each, fp_add -56, ALU +28) -- the dearest change here, and
+     separable.
+  5. MULTIPCM'S FIRST-STEP FLAG (4e963ab). pos_zero[v] cleared at pv_we from
+     pv_v (the step's registered slot), a cycle after the step, instead of
+     behind v -> s_active[v] -> step_now -> seq_hold -> the enable -> a
+     64-way decode. Nothing reads it in between (the slot's next step is a
+     pass away), and a descriptor completing in that cycle still wins (its
+     set is later in the block); a step and a set of one slot in one cycle
+     cannot happen (key_wait is never set while the slot is active). Sound
+     board in the core's configuration: output hash 27b719043c354a31
+     (TICK_DEN 80) and 8288d950fec92093 (50) with cpu / pcm / mix hashes,
+     identical to c545187's; test_m2_mpcm_dual (4 seeds, and mid-pass writes
+     at latency 60) and test_m2_sndboard_shared pass. Post-map v -> pos_zero
+     no path; pv_v -> pos_zero +7.040.
+  6. THE TOURNAMENT'S FIRST ROUND (37b74ee). m01_r .. x23_r compared in
+     S_MINMAX's first cycle (mm_pre, R743's) from the latched sye -- the
+     same y the acceptance compared -- not from the store's outputs through
+     the triangle split's mux at acceptance. s1136's only failing group.
+     Post-map vtx_r -> x23 +1.012 -> no path; sf -> m01_r +7.420. Frames,
+     fetches and cycles identical; fill benches pass.
+  7. THE ENGINE'S PALETTE ENTRY (29a63eb). E_PAL registers the half-word
+     only (pal_raw); the grey test, c555 and the first translation address
+     follow a cycle later, in the cycle the port holds its request down
+     (mem_go_d), so the port sees the same address when it next requests.
+     Post-map eng_ra -> xaddr +2.912 -> +4.569 (post-fit it was s1137's
+     worst, +0.116). geodiff's memory-port hash identical on five walks.
+  8. THE LARGEST 1/z EXPONENT (b6389e8). Six compares side by side and a
+     one-hot select instead of a two-round tournament in oz_pre: all 2^16
+     4-bit four-tuples and 2 M random 8-bit ones, 0 differ. Post-map qoz ->
+     oz_emax +5.542 -> +7.614. Frames identical.
+  Every commit: lint_top clean, lint_idx the same 147 lines as c545187,
+  quartus_map --analyze_file 0 errors on each changed file, whole-design
+  quartus_map 0 errors.
+
+*AREA (quartus_map 17.0, whole design, the same session):*
+
+    c545187 (R850)        40,417 ALM est.  57,774 ALUT  49,295 regs  88 DSP  4,379,775 bits
+    b6389e8 (R848 tip)    40,614           57,983       49,336       88      4,379,775
+
+  +197 ALM estimated. Synthesis noise is +-40 (1732a65 maps to 40,452 and to
+  40,491); by entity the changes are the TGP ~+117 ALUT (4), the clipper
+  +32 and the pool +33 (1; m2_geometry's own -40), the fill ~+29 / +8
+  registers (2, 3, 6, 8; raster3d's own -36), the engine +9 / +17 registers
+  (7), MultiPCM +10 (5), and i960_fpmisc +46 that no change touches
+  (noise). At R836's estimate-to-placed ratio that is perhaps +130 placed:
+  s1137's 41,407 becomes ~41,540 of 41,910. s1135 (41,472) could not route,
+  so area is not free: 4 is the commit to drop first if a sweep shows
+  routing trouble.
+
+*QSF (recommendation, not changed):* the fits are NOT congested -- router
+average interconnect 40-47%, peak 56-66% on every seed s1114-s1137 -- yet
+FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION is ALWAYS, put back when the router
+segfaulted at 99.5% (this file's own criterion), and it spreads logic, which
+lengthens exactly the cross-module routes these paths die of. Worth one A/B on
+a fixed tree: AUTOMATICALLY vs ALWAYS, three seeds each, measuring commit /
+crash / unroutable, clk_sys WNS and TNS, placed ALM. Not worth testing again:
+REGISTER_DUPLICATION ON (R405's unpackable SDRAM IOE copies), OPTIMIZATION
+TECHNIQUE SPEED or mode BALANCED (no bitstream / +3,400 ALM), turning off the
+physical-synthesis combo pass (R406/R416: 10 of 10 crashed). s1135's routing
+failure under ALWAYS says AUTOMATICALLY may route worse; the A/B settles it.
+
+*NOT addressed:* eng_ra data -> poly_uv (F_UV; the read's data fans out to
+~15 engine registers -- a register on mem_data adds a cycle a read, and
+R696 prices that at 0.07 vblank a cycle); fb_wcomb ib / b_idx -> vlo / vhi;
+the pool multiplier's result -> its consumers; joy_analog_q -> steer_rq (a
+second register adds 12.5 ns to the steering, or a multicycle argued from
+hps_io's update rate); clip ti -> projector inputs (post-map -1.42, never
+post-fit); HDMI (s1137 -0.925, the framework's scaler domain).
+
+*INFERRED (what settles it):* a. the eight groups are gone post-fit and more
+seeds close than s1135-s1137's one in three -- a sweep of b6389e8. b. none of
+it is visible on the board: Daytona, Desert Tank and Virtua Cop as before.
