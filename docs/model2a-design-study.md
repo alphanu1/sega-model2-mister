@@ -34915,3 +34915,28 @@ cabinet works this way; no MiSTer gun hardware does, so it is noted only.
 *Order:* boot (R839) -> the trig instructions (tanrl/cosrl/sinrl/atanrl) ->
 route 1 (stick, mouse, crosshair, P2) -> route 2 (GunCon on SNAC), each
 behind M2_VCOP_GUN and measured for area (the core is at ~98%).
+
+R841 addendum (Ben): the gun mapping is checked against MiSTer cores that
+already take guns before it is written -- the Sega System 24 and System 32
+cores (System 32 is meathax/s32, already this project's MultiPCM source,
+GPL-3.0) and the PSX core (GunCon, if implemented): how each receives an
+absolute-position gun (analog joystick / mouse), scales it to the game's
+range, and handles off-screen, reload and the cursor. Model 1 rule: start
+from a working design.
+
+**R842 -- TWO CLK_SYS PATHS FROM STATIC SOURCES.** s1114-s1116 (533e621,
+R839's boot build) all missed clk_sys (-1.212 / -1.101 / -0.565). Most
+failing paths are the renderer's placement-sensitive ones (m2_raster_fill
+S_PF_N -> det_r, m2_span_tex of_wp/of_rp, as on earlier seeds), but two
+are new and come from signals that do not change while they are used:
+  * hps_io's joystick_l_analog_0 -> m2_cab_inputs steer_lim (s1114's worst,
+    -1.212): the stick crosses the chip into the steering limiter. Now
+    registered once in Model2.sv (joy_analog_q, joy_ranalog_q, paddle_q)
+    beside m2_cab_inputs; one more 12.5 ns cycle on a USB-rate input;
+    m2_cab_inputs and its bench unchanged.
+  * game_id -> m2_ioz80's type-2 decode -> the Z80's IR (s1115): game_id is
+    written once during the ROM download with every master it steers held
+    in reset. Model2.sdc: set_false_path -from game_id[*], as R731 did for
+    the gamma select; the pattern matches exactly the 8 game_id registers
+    (checked on s1115's netlist).
+lint_top clean.

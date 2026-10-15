@@ -5136,11 +5136,22 @@ end
 // ---------------------------------------------------------- cabinet inputs
 // R835: the block that was here is rtl/io/m2_cab_inputs.sv -- unchanged for
 // Daytona (game_id 0), with Desert Tank's map behind is_desert.
+// R842: the analog inputs registered once here, beside the logic they feed.
+// s1114 failed clk_sys at -1.212 from hps_io's joystick_l_analog_0 across the
+// chip into the steering limiter (steer_lim). The stick moves at USB rates;
+// one 12.5 ns cycle more is nothing. m2_cab_inputs is unchanged.
+logic [15:0] joy_analog_q, joy_ranalog_q;
+logic  [7:0] paddle_q;
+always_ff @(posedge clk_sys) begin
+	joy_analog_q  <= joy_analog;
+	joy_ranalog_q <= joy_ranalog;
+	paddle_q      <= paddle;
+end
 wire [7:0] iob_in0, iob_in1, steer, accel, brake;
 m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.clk(clk_sys), .rst_n(cpu_rst_n), .is_desert(is_desert),
-	.joystick_0(joystick_0), .joy_analog(joy_analog), .joy_ranalog(joy_ranalog),
-	.paddle(paddle),
+	.joystick_0(joystick_0), .joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q),
+	.paddle(paddle_q),
 	.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
 	.st_rsteer(status[54]),
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)

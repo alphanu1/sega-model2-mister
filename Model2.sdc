@@ -453,6 +453,23 @@ if {[get_collection_size $gam_from] == 0} {
 }
 
 
+# ---- R842: THE GAME ID, A FALSE PATH LIKE THE GAMMA SELECT (R731).
+#
+# game_id is written once, from the MRA's index 4 during the ROM download,
+# while every master it steers is held in reset (the CPUs come out of reset
+# on rom_loaded / cp_done, long after). It never changes while they run, so
+# nothing that reads it -- is_vcop / is_desert / the type-2 I/O board's
+# decode in m2_ioz80 (s1115: game_id -> the Z80's IR) -- is a one-cycle path
+# from it.
+set gid_from [get_registers -nowarn {game_id[*] *|game_id[*]}]
+if {[get_collection_size $gid_from] == 0} {
+    post_message -type critical_warning \
+      "Model2.sdc: the game ID registers did not match -- R842's false path is not applied."
+} else {
+    set_false_path -from $gid_from
+}
+
+
 # ---- R742: THE YM3438 PHASE INCREMENT INTO ITS PHASE SHIFT REGISTER, TWO CYCLES.
 #
 # jt12_pg's phinc_II / keycode_II / detune_mod_II load only on clk_en
