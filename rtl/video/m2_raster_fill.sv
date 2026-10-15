@@ -436,6 +436,14 @@ module m2_raster_fill #(
   // with 550 ALMs free.
   logic signed [23:0] dudx, dudy, dvdx, dvdy;   // R618
   logic signed [31:0] det_r;
+  // R848: det_r == 0, registered beside it. S_PF_N's zero test was a 32-bit
+  // compare of det_r (fanout 151) in front of the enables of all six
+  // numerators and det_abs_r (post-map det_r -> nxv -0.901). It is formed
+  // in the cycle that forms det_r, from the SAME subtract, which stays in the
+  // DSP's adder. (Written as dp_ab == dp_ba -- the same truth -- Quartus took
+  // the subtract out of the DSP to share the products: +1 DSP, +33
+  // registers, and dp -> det_r fell from +10.0 to +3.6 post-map in a spike.)
+  logic               det_z;
   // R674: THE FIT TAKES THE BETTER OF ITS TWO TRIANGLES. It fitted on vertices
   // 0,1,2 and fell back to 0,2,3 only when that determinant was exactly zero.
   // A flat quad's u/z, v/z and 1/z ARE planes in screen space, so any three
@@ -1186,7 +1194,7 @@ module m2_raster_fill #(
       pf_a <= 1'b0; pf_b <= 1'b0;
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; mz_r <= 1'b0; pf_ph <= 2'd0; det_first_abs <= '0;
       dw_2 <= 1'b0;   // R847
-      det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
+      det_r <= '0; det_z <= 1'b1; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
@@ -1294,6 +1302,7 @@ module m2_raster_fill #(
 
         S_PF_D: begin
           det_r <= dp_ab - dp_ba;   // R847: the products registered (R727: of pr_*)
+          det_z <= ((dp_ab - dp_ba) == 32'sd0);   // R848: det_r == 0
           pf_st <= S_PF_N;
         end
 
@@ -1309,7 +1318,7 @@ module m2_raster_fill #(
             pf_ph <= 2'd2;
             if (det_first_abs >= det_abs) pf_second <= 1'b0;
             pf_st <= S_PF_DW;
-          end else if (det_r == 32'sd0) begin
+          end else if (det_z) begin   // R848: det_r == 0
             if (!pf_second) begin
               pf_second <= 1'b1;
               pf_st     <= S_PF_DW;
