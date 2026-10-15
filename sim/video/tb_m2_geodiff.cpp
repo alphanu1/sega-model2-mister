@@ -276,7 +276,8 @@ int main(int argc, char **argv) {
   std::map<int,long> h_eng, h_q, h_k, h_eq; long t_last = 0;
   std::map<int,long> s_eng, s_q, s_k, s_eq;   // snapshots at the last quad
   // R848: M2GD_POOLHASH=1 -- every cycle's FP pool traffic hashed: each
-  // client's request, grant and response, and the operands the pool took. Two
+  // client's request, grant and response, and the operands the pool took,
+  // and the engine's memory request with its address and space. Two
   // builds with the same hash put the same operation on the same unit in the
   // same cycle for the whole walk, which is what "cycle-identical" means for a
   // change to how a request or a grant is formed.
@@ -303,6 +304,8 @@ int main(int argc, char **argv) {
       pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__add_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__add_b_q);
       pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__div_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__div_b_q);
       if (rg & 0x0f0f0f0fULL) pops++;
+      // and the engine's memory port: the address and space while it requests
+      pmix(d->mem_req ? ((1ULL << 40) | ((uint64_t)d->mem_space << 24) | d->mem_addr) : 0);
     }
     if (prof) {
       auto *r = d->rootp;
