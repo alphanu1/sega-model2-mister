@@ -35546,3 +35546,11 @@ that area had to come out. RBF build/Model2_20261016_s1137_vcop.rbf, md5
 df223b1725b751aa1548a064ff94ea11. s1134 (a3dd42f, timing-short) on the
 board: the guns work with a joystick and the mouse (Ben); his asks --
 crosshairs only in play, P2's only when P2 plays -- are R849 (bb29501).
+
+**R850 -- PLAYER 1'S CROSSHAIR ALL THE TIME; PLAYER 2'S ONLY IN PLAY.**
+Ben, after R849: "crosshair should be there all the time for player 1, but
+player 2 should only show if 2 player". m2_vcop_guns: c_on[0] = en & on the
+screen (play[0] no longer gates it); c_on[1] = en & play[1] & on the screen,
+as R849. The OSD Off and off-screen still hide both. tb_m2_vcop_guns'
+in-play check follows (417,527 checks, 0 failures); lint_top clean;
+analyze_file 0 errors. m2_vcop_state is unchanged (its P1 bit is unused).

@@ -17,7 +17,7 @@
 //  4. RELOAD: random presses; the trigger it pulls is never seen while the
 //     gun is on the screen (the property the cabinet's "shoot off-screen"
 //     needs), it does arrive, and the gun leaves the corner afterwards.
-//  5. a player not in play (R849): no crosshair. 6. en low: none.
+//  5. player 2 not in play (R849): no P2 crosshair; P1's always (R850). 6. en low: none.
 #include "Vm2_vcop_guns.h"
 #include "verilated.h"
 #include <cstdio>
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
   set_ana(0, 0, 0); set_ana(1, 0, 0);
   for (int pl = 0; pl < 4; pl++) {
     d->play = pl; tick(8);
-    CHECK(d->c_on == unsigned(pl), "play %d: c_on %d", pl, d->c_on);
+    CHECK(d->c_on == unsigned(1 | (pl & 2)), "play %d: c_on %d (R850: P1 always)", pl, d->c_on);
   }
   d->play = 3;
   // ---------------------------------------------------------- 6. en low

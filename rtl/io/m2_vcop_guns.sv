@@ -60,6 +60,9 @@
 //
 // R849: a crosshair shows only while its player is in play (play, the game's
 // own state from m2_vcop_state) and on the screen.
+// R850 (Ben): player 1's crosshair is shown ALL the time (attract, menus,
+// test included) while on the screen -- it is the aim for the menus too;
+// only player 2's waits for player 2 to be in play.
 // en low (any game but Virtua Cop) shows no crosshair; Model2.sv takes in0 /
 // in1 from here only for game ID 1 (vc_gun), as it did before this module was
 // built, so Daytona and Desert Tank see the inputs they always did.
@@ -100,7 +103,9 @@ module m2_vcop_guns #(
   /* verilator lint_on UNUSEDSIGNAL */
   logic  [1:0] sel_q;
   logic        en_q;
-  logic  [1:0] play_q;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic  [1:0] play_q;                // R850: bit 0 (P1) no longer gates its cross
+  /* verilator lint_on UNUSEDSIGNAL */
   always_ff @(posedge clk) begin
     a0_q <= ana0;  a1_q <= ana1;
     b0_q <= joy0[9:4]; b1_q <= joy1[9:4];
@@ -233,7 +238,7 @@ module m2_vcop_guns #(
       off <= 2'b00; c_on <= 2'b00; in0 <= 8'hFF; in1 <= 8'hFF;
     end else begin
       off  <= {o2, o1};
-      c_on <= {en_q & play_q[1] & ~o2, en_q & play_q[0] & ~o1};
+      c_on <= {en_q & play_q[1] & ~o2, en_q & ~o1};   // R850: P1 always
       in0  <= ~{2'b00, b1_q[2], b0_q[2], b0_q[5], b0_q[4], b1_q[3], b0_q[3]};
       in1  <= ~{6'd0, fire_q};
     end
