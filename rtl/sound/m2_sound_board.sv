@@ -442,10 +442,27 @@ module m2_sound_board #(
     // One pass serves both chips, so one enable: u_rate1's. Both rate stages
     // push on the same strobe and pop on identical accumulators, so their
     // levels -- and therefore their throttles -- are always equal.
+    // R847: THE 68000's REGISTER WRITE, REGISTERED BEFORE THE ENGINE SEES IT.
+    // aob -> the address decode -> the slot select (fanout 149) -> the 64-way
+    // demux into key_wait / s_active was one cycle (s1130 -0.518, 233 paths;
+    // s1131). Select, strobe, address and data move together, so the engine
+    // sees the same writes in the same order one clk later; a write is held
+    // for many clks of a 68000 bus cycle and nothing reads the chips back.
+    logic       pw_cs0, pw_cs1, pw_we;
+    logic [1:0] pw_a;
+    logic [7:0] pw_d;
+    always_ff @(posedge clk) begin
+      if (!rst_n) begin
+        pw_cs0 <= 1'b0; pw_cs1 <= 1'b0; pw_we <= 1'b0;
+      end else begin
+        pw_cs0 <= sel_pcm1 && ds; pw_cs1 <= sel_pcm2 && ds; pw_we <= we;
+      end
+      pw_a <= addr[2:1]; pw_d <= oedb[7:0];
+    end
     m2_multipcm_dual u_pcm (
       .clk(clk), .ce(ce_pcm1), .rst(!rst_n),
-      .cs0(sel_pcm1 && ds), .cs1(sel_pcm2 && ds),
-      .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]),
+      .cs0(pw_cs0), .cs1(pw_cs1),
+      .we(pw_we), .addr(pw_a), .wdata(pw_d),
       .rom_req0(d1_creq), .rom_slot0(d1_cslot), .rom_addr0(d1_caddr),
       .rom_data0(p1_cdata), .rom_ack0(p1_cack),
       .rom_req1(d2_creq), .rom_slot1(d2_cslot), .rom_addr1(d2_caddr),
