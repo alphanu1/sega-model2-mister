@@ -35,6 +35,8 @@ std::map<uint32_t,uint32_t> mem;
 uint64_t dut_only_traps = 0;   // R836
 uint64_t fpwrites = 0, fpany = 0, rlany = 0;   // R836: rlany, long-real ops retired
 uint64_t vcsq = 0, vccp = 0, vccv = 0;          // R839: sqrtrl, cpysre, cvtzril retired
+uint64_t vcfl = 0;                                // R844: flushreg retired
+uint64_t syn_unal_stops = 0;                      // R844: programs ended at a synmov to 0xff000005..7
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 int lat_max = 0, lat_wait = 0;                // +lat=N, see tick()
@@ -586,8 +588,9 @@ int main(int argc, char **argv) {
         // FP-register-destination path was never once reached.
         const size_t nfp = (sizeof FPOPS / sizeof FPOPS[0]) - (no_rl ? 6 : 0);
         // R839: with +vc, a quarter of the FP mix is sqrtrl / cpysre / cvtzril
-        static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u };
-        const uint32_t sel = (use_vc && (rng() % 4) == 0) ? VCOPS[rng() % 3] : FPOPS[rng() % nfp];
+        // R844: and flushreg
+        static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x66du };
+        const uint32_t sel = (use_vc && (rng() % 4) == 0) ? VCOPS[rng() % 4] : FPOPS[rng() % nfp];
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;
@@ -1270,7 +1273,8 @@ int main(int argc, char **argv) {
         if (o==0x78||o==0x68||o==0x6c||o==0x67||o==0x79||o==0x69||o==0x6d) fpany++;
         if (o==0x79||o==0x69||o==0x6d) rlany++;   // R836
         { const uint32_t k = (o << 4) | ((iw >> 7) & 0xf);   // R839
-          if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++; }
+          if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
+          else if (k == 0x66d) vcfl++; }
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       if (itrace && (dut->dbg_intr_cnt != intr_before))
         std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
@@ -1354,6 +1358,7 @@ int main(int argc, char **argv) {
       // program at that point, the same as a trap.
       if (ref.fp_denorm_operand) { ++denorm_skips; break; }
       if (ref.fp_nan_result)     { ++nan_stops;    break; }
+      if (ref.unaligned_syn)     { ++syn_unal_stops; break; }   // R844
       // SELF-MODIFYING CODE. A random program can clobber SP or FP, and the
       // next call then spills sixteen words wherever that garbage points --
       // including over the program. The i960 has an instruction cache with no
@@ -1431,6 +1436,8 @@ int main(int argc, char **argv) {
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu, long-real (R836): %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites, (unsigned long long)rlany);
+  if (use_vc) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
+  if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
   if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
   std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"

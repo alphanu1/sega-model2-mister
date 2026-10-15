@@ -42,6 +42,7 @@ struct Cpu {
   // once the divisor flushes. Flagged rather than avoided, so the suite skips
   // exactly the deviation and still compares everything else on that retire.
   bool fp_denorm_operand = false;
+  bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   // Which general register this retire's FP result narrowed into, or -1. A
   // single-precision NaN's sign and payload differ between the units' canonical
@@ -294,6 +295,7 @@ struct Cpu {
   void step() {
     if (trapped) return;
     fp_denorm_operand = false;
+    unaligned_syn = false;
     fp_sdest          = -1;
     fp_nan_result     = false;
     fp_rl             = false;
@@ -433,6 +435,11 @@ struct Cpu {
           // generator does not emit unaligned synmov, and nothing here is
           // claimed about that case.
           const uint32_t t1 = s1, t2 = s2;
+          // R844: an unaligned address can still arrive through a register
+          // (an addc left 0xff000005 in r3 in a +vc program); MAME compares
+          // the destination unaligned (0xff000005 is memory there, ICR in the
+          // module, which aligns first). Outside the claimed domain: end.
+          if ((t1 & ~3u) == 0xff000004u && t1 != 0xff000004u) unaligned_syn = true;
           const uint32_t v  = rd(t2);
           ++syn_count;
           if (t1 == 0xff000004u) { ICR = v; ++syn_icr_count; } else wr(t1, v);
@@ -487,6 +494,14 @@ struct Cpu {
           rf.r[d.srcdst] = t1;
           IP = ip_next;
           if (((t1 >> 16) & 0x1fu) > ((PC >> 16) & 0x1fu)) check_pending_irqs();
+          break;
+        }
+
+        // ---- R844: flushreg (0x66.d), live in the module only with VC and
+        // vc_en (Virtua Cop runs it at boot): MAME's flushreg on the cache.
+        if (ref_vc && d.op == 0x66 && d.op2 == 0xd) {
+          rf.flushreg();
+          IP = ip_next;
           break;
         }
 

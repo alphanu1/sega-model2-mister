@@ -1578,6 +1578,16 @@ module i960_top #(
                 we <= 1'b1;
                 mw_i <= 3'd1;
                 ts   <= T_MULTI;
+              end else if (vc_on && (d_op == 8'h66) && (d_op2 == 4'hd)) begin
+                // R844: flushreg -- Virtua Cop runs it at boot (instruction
+                // 1,907, IP 0x6e0) and this trapped, halting the i960 before
+                // anything reached the screen. i960_regs has always done the
+                // work (MAME's: clamp the depth to the cache, write every
+                // cached frame out, depth 0); only the dispatch was missing.
+                // T_FRAME waits for the file to finish; the IP moves now.
+                rf_flush <= 1'b1;
+                ip       <= ip_next;
+                ts       <= T_FRAME;
               end else if (fp_valid && is_rl) begin
                 // R836: the low words first (T_RLLO), then the units.
                 ts        <= T_RLLO;

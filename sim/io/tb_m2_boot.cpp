@@ -328,6 +328,16 @@ int main(int argc, char **argv) {
       std::printf("  FULL IMAGE: %zu bytes (%.2f MB), %zu words from %s\n",
                   full.size(), double(full.size())/1048576.0, nw, ip);
       mem_words = nw;
+      // R839: Virtua Cop's program second half sits after the '93 image
+      // (byte 0x2BE0000); the core's loader moves it to GAME_POLYX, and the
+      // harness (VCOP=1) reads it at word 0x1880000.
+      if (std::getenv("M2_VCOP")) {
+        for (size_t w = 0; w < 0x20000; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
+        // and the harness's work RAM (word 0x1600000, which Model2.sv keeps
+        // apart at 0x1620000) back to unwritten: the image's tail lies there
+        for (size_t w = 0x1600000; w < 0x1610000; ++w) mem[w] = 0xffff;
+        std::printf("  VCOP: program 0x40000-0x7FFFF copied to word 0x1880000\n");
+      }
     } else {
       std::printf("  M2_BOOT_IMAGE set but %s could not be read\n", ip);
     }
