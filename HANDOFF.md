@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-10-15 (later): Desert Tank confirmed; headroom = desert; branch vcop
+
+Ben on s1108 (6e8db44, input check build, clk_mem -0.120): Desert Tank's
+sound and every button work, Forward/Reverse correct (R838); Daytona still
+working well. desert fast-forwarded into headroom (be50862) and pushed --
+PR #8 now carries Desert Tank too (still NOT to be merged: PR to main once
+Virtua Cop boots and everything else still works). s1111-s1113 (6e8db44)
+fitting for a timing-clean Desert Tank build. Branch vcop (from be50862):
+Virtua Cop on one core, type-2 I/O board by game ID, every addition behind a
+compile-time parameter (Ben); an agent is reading the firmware and running
+MAME first.
+
 ## 2026-10-15: branch desert -- Desert Tank (R835), s1101 built
 
 PLAN (Ben, 2026-10-15): do NOT merge PR #8 yet. When Desert Tank is
