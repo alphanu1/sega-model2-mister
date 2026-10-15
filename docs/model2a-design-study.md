@@ -35739,3 +35739,9 @@ post-fit); HDMI (s1137 -0.925, the framework's scaler domain).
 *INFERRED (what settles it):* a. the eight groups are gone post-fit and more
 seeds close than s1135-s1137's one in three -- a sweep of b6389e8. b. none of
 it is visible on the board: Daytona, Desert Tank and Virtua Cop as before.
+
+**s1141-s1143 = c545187 (R850; R847's fixes, the guns, R849/R850).** Two of
+three close at 99%: s1142 core clocks >= +0.260 (clk_sys +0.299), holds
+>= +0.244, HDMI -0.350, 41,455 ALM; s1143 >= +0.004, HDMI -0.523. s1141
+misses general[0] (-0.145). RBF build/Model2_20261016_s1142_vcop.rbf, md5
+in HANDOFF. s1144-s1146 (dbf06b4, R848) queued.
