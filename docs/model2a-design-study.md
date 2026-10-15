@@ -35379,3 +35379,40 @@ sound worked in the releases and fail now from fullness; the I/O board is new.
 clk_sys closes with margin on most seeds; the geometry pool grant is then
 the worst left -- a seed sweep of 900760d. b. none of the five changes is
 visible on the board: Daytona, Desert Tank and Virtua Cop as before.
+
+*R847 addendum -- a3dd42f (the guns) and area.* s1132-s1134 (a3dd42f,
+41,416-41,471 ALM, 99%): clk_sys -1.291 / -1.352 / -1.224, and s1134's groups
+are NOT e252aa0's: m2_raster_div d_mag -> rem (507), the TGP's mb86233_alu
+opr_add_b -> fp_add (29), hps_io cmd / byte_cnt -> status (24), MultiPCM v ->
+pos_zero (4), the Z80's di_reg (2). So at 99% the failure moves with
+placement; removing one recurring path exposes the next.
+  * The divider's group is fixed like the others (db879d7). *Believed
+    first:* the d + 2d add in front of each radix-4 step was the cost, so
+    3 x |den| was registered at load -- and post-map got WORSE (-3.19 ->
+    -4.07): the add was not on the worst path at all. *Now known:* written
+    as `>=` then `-`, Quartus built each compare as an 8-level LUT tree and
+    put the subtract's carry chain after it. Each compare is now its own
+    subtract's borrow (three 35-bit differences side by side), with 3d
+    registered: post-map d_mag -> rem -3.190 -> +1.032, any -> rem -3.240
+    -> +0.658, -37 ALM estimated. The step against the old one on 117 M
+    inputs (every rem and d below 2048, 100 M random): 0 differ. Four
+    frames identical in pixels, fetches and draw cycles;
+    test_m2_raster_fill / _mip / test_m2_raster3d pass.
+  * AREA, measured (quartus_map 17.0, one switch at a time, ALM estimate; placed has
+    run ~2.3% above the estimate on this design: 40,500 est -> 41,416-41,471
+    placed for a3dd42f):
+      f29e343 (before the borrow form)    40,489  (a3dd42f 40,500; db879d7 40,452)
+      M2_VCOP_FPU=0 (trig microcode)      40,224  -265, -24,576 bits
+      M2_NO_VCOP_GUN (guns, crosshairs)   40,263  -226
+      R3D_MIP = 0 (mip levels)            40,396   -93, -4,470 bits
+    Seeds closed at ~40.9-41.0k placed (s877 41,072; s1085 40,873), so
+    ~450-550 placed ALM have to come out. No single cheap switch does it,
+    and the two largest remove Virtua Cop features. Larger candidates in
+    our own RTL, not measured: i960_regs (1,859 ALUT own: 32 x 32-bit loc /
+    glb in flip-flops behind two 32:1 read muxes), m2_quad_store (1,869 /
+    2,794), the two m2_raster_div (630 ALUT and 5 DSP each).
+  * JUDGEMENT (INFERRED): the R847 fixes remove paths that recurred on four
+    to six seeds and cost no area (40,500 -> 40,452 ALM estimated), so they raise the
+    odds per seed; they cannot by themselves make 99% close reliably. That
+    needs area back to ~41.0k placed. Settles it: a sweep of db879d7 (how
+    many seeds close, and what the worst groups are then).
