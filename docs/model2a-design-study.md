@@ -34948,3 +34948,18 @@ boot build, clk_sys -0.565; the updated MRA with EPR-17181; md5s checked):
 the same black screen, 0.0 fps, no WARNING screen. Under investigation in a
 whole-core boot simulation. s1112 (Desert Tank) ran 71 min of the watch at
 28.6-28.8 fps, no lock, before it was replaced for this test.
+
+**R843 -- THE STEERING PATH, REGISTERED INSIDE m2_cab_inputs.** s1117-s1119
+(b8b890c, with R842) all missed clk_sys again (-0.625 / -0.995 / -1.885;
+s1119 also hold -0.095 on m2_cpu_bridge l_data -> lb). R842's top-level
+register did not help: the worst group is still joy_analog_q ->
+m2_cab_inputs steer_lim (188 paths on s1117, 142 on s1119), so the fault is
+logic depth -- stick select, sensitivity scale, centre, ADC clamp, the
+source mux and the limiter's compare in one cycle -- not distance. Now
+steer_raw is registered (steer_rq) and the limiter and the output read it:
+steering one 12.5 ns cycle later from every source. The reference copy
+(sim/io/m2_cab_inputs_ref.sv) carries the same register so
+tb_m2_cab_inputs still proves nothing else moved: 30M Daytona checks and
+320M Desert Tank checks, 0 mismatches. The renderer's placement-sensitive
+groups (m2_span_tex of_wp/of_rp -> tex_p, m2_raster_fill mul_delta ->
+mul_plo) remain, as on every seed at this fill.

@@ -182,6 +182,16 @@ wire use_stick = use_l || use_r;   // R816
 wire [7:0] steer_raw = |paddle ? paddle
                  : use_stick ? steer_an
                  : steer_dig;
+// R843: steer_raw REGISTERED. The stick's path -- the dead zone's stick
+// select, the sensitivity scale, the centre and the ADC clamp -- into the
+// limiter's compare was one clk_sys cycle and failed it on every seed of
+// b8b890c (s1117 -0.625, s1119 -1.885: joy_analog_q -> steer_lim). One
+// cycle later from every source (paddle, stick, d-pad) alike; the limiter
+// and the output read the register. The bench's reference carries the same
+// register (sim/io/m2_cab_inputs_ref.sv), so the comparison still proves
+// nothing else moved.
+reg [7:0] steer_rq;
+always_ff @(posedge clk) steer_rq <= steer_raw;
 
 // R830: STEERING SMOOTHING (OSD, default Off). The game turns its camera on
 // how FAST the steering changes as well as where it is (a turning-centre
@@ -203,15 +213,15 @@ always_ff @(posedge clk or negedge rst_n) begin
 	if (!rst_n) begin
 		steer_lim <= 8'h80; steer_slew <= '0;
 	end else if (ssm == 2'd0) begin
-		steer_lim <= steer_raw; steer_slew <= '0;
+		steer_lim <= steer_rq; steer_slew <= '0;
 	end else if (steer_slew == 18'd0) begin
 		steer_slew <= (ssm == 2'd1) ? 18'(STEER_K_LT - 1) : 18'(STEER_K_WH - 1);
-		if (steer_lim < steer_raw)      steer_lim <= steer_lim + 8'd1;
-		else if (steer_lim > steer_raw) steer_lim <= steer_lim - 8'd1;
+		if (steer_lim < steer_rq)       steer_lim <= steer_lim + 8'd1;
+		else if (steer_lim > steer_rq)  steer_lim <= steer_lim - 8'd1;
 	end else
 		steer_slew <= steer_slew - 18'd1;
 end
-assign steer = (ssm == 2'd0) ? steer_raw : steer_lim;
+assign steer = (ssm == 2'd0) ? steer_rq : steer_lim;
 
 // PEDALS ARE ANALOGUE, ON THE RIGHT STICK'S Y AXIS -- Model 1's arrangement,
 // tools/model1-ref/Model1.sv, and its reasoning transfers whole.
