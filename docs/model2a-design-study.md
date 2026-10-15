@@ -35416,3 +35416,123 @@ placement; removing one recurring path exposes the next.
     odds per seed; they cannot by themselves make 99% close reliably. That
     needs area back to ~41.0k placed. Settles it: a sweep of db879d7 (how
     many seeds close, and what the worst groups are then).
+
+**R849 -- THE CROSSHAIRS ONLY IN PLAY: THE GAME'S OWN STATE, SNOOPED ON THE
+i960's WRITES.** Board, s1134 (a3dd42f): the guns work with joystick and
+mouse (Ben). Two changes asked: a crosshair only IN GAME (not attract,
+title, menus / test, continue, game over), and player 2's only while player
+2 is playing. (M2_VCOP_GUN; game ID 1 only.)
+
+*Believed (R846):* a crosshair shows whenever the guns are built, the game
+is Virtua Cop and the gun is on the screen. That draws one over the attract
+-- whose tutorial plays a 1P demo with its own revolver, hearts and lock-on
+sights, so it looks like a game -- and over every menu, and player 2's
+whenever a stick or mouse is near the middle.
+
+*Now known -- VERIFIED (MAME 0.289 vcopa, sim/io/mame_m2_vcop_play.lua:
+coins, starts, triggers and Test by schedule, the guns swept at the I/O
+board, work RAM 0x500000-0x51ffff dumped every 0.1-0.5 s, snapshots every
+0.25-2 s; then every write to the bytes found, with its IP):*
+  1. THE ADDRESSES (work RAM, byte 0 of each word; the game writes them
+     with st, whole words, mask ffffffff):
+       0x5016d4  the game's MODE. 0 boot / the reboot after test mode (IP
+                 0x267c, 0x20e8, ...), 1 attract (0xa2f0, 0x11f40, ...), 2
+                 credited start (0x6ddd0), 3 / 4 / 6 into and out of STAGE
+                 SELECT (0x6df9c, 0x59b60, 0x59e7c), 7 PLAYING (0xa4f0), 0x0c
+                 the continue countdown when no player is left (0x99f8 /
+                 0x9acc), 0x0d game over (0xacf4).
+       0x50ee30  PLAYER 1: 0 out, 1 in play (0x20e0 at a start, 0xad48 at a
+                 join or a continue taken), 2 its continue countdown (0x99d8
+                 / 0x9a44), 3 its own game over while the other plays on
+                 (seen for P2, 0x524a0), then 0 (0xacbc, 0x52518).
+       0x50ee34  PLAYER 2: the same (0x221c / 0xae78 join, 0x9aac / 0x9b18
+                 continue).
+     Found by separating dumps: across scenario A (a 1P game to game over,
+     then a 2P-start with one credit, P2 alone, to game over), 0x5016d4 was
+     the one byte whose in-game values ({7}) never occur in the attract,
+     continue or game-over phases (6 candidates; the other five are scroll
+     / timer counters with overlapping ranges); 0x50ee30 / 0x50ee34 are the
+     ones that are 1 exactly while that player plays. In the attract the
+     words are rewritten every frame (IP 0x2144 / 0x224c, all 0; the mode
+     stays 1); in a game only on a change.
+  2. THE TIMELINES (state every 0.5 s; snapshots agree):
+       A: attract 15-41 s (mode 1, demo with hearts and sights), start 41.5
+          (2, P1 = 1), stage select 44.5 (4), PLAYING 45.5-76.5 (7, P1 1),
+          continue 76.5 (0x0c, P1 2), game over 81 (0x0d, P1 0), attract
+          87; P2 alone: 91.5 (2, P2 1) ... 7 at 112.5, 0x0c at 133, 0x0d at
+          153.5.
+       B: P2 joins at 56.5 (mode stays 7, P2 1); P1's continue 74.5-77.5
+          (P1 2, mode 7 -- P2 still playing; the continue taken: P1 1); P2's
+          continue 80-101 (P2 2), P2's game over 101-104 (P2 3), P2 0; P1
+          dies at 108.5: mode 0x0c, 0x0d at 113.5.
+       C: No Enemies, both play 45-150 s through SCENE 1 / 2 / 4 RESULTS
+          (mode 7 throughout); Test at 150 and 170.
+       D: Test in the attract (20 s, 23 s), then a game, Test in the game
+          (80 s, 95 s).
+       E: P2 starts alone (41.5), P1 joins at 61.5, P2's continue and own
+          game over (76.5, 84.5), P1 dies: 0x0c at 89, 0x0d at 94.
+  3. TEST MODE IN A GAME (D, C): the test menu is on the screen from the
+     press (snapshots 60.3 s on: TEST MODE, then EXIT TEST MODE) while all
+     three words still read 7 / 1 for ~3 s; leaving it reboots the game,
+     whose first act is a write of 0 to the mode word (IP 0x267c). No other
+     byte marks the test screens: the 140 separating candidates are the
+     test program's own scratch and an input latch (0x50156c holds the IN0
+     edge, 4 = Test) that also carries 1 / 0x10 for coin / start. In the
+     attract the mode is already 1. So the RULE is: in play = mode 7 and
+     player byte 1 and no Test press since the last write of the mode word.
+
+*The core (rtl/io/m2_vcop_state.sv, clk_i960, inside g_vcgun):* a completed
+i960 write (bus_req & bus_we & bus_ack & be[0]) to 0x5016d4 / 0x50ee30 /
+0x50ee34 is decoded on the bus and five flops take the answers (which word,
+lane 0 == 7, lane 0 == 1); three flops keep in-game / P1 / P2, one the test
+latch (joystick 0 bit 8, the MRA's Test); play = en & in-game & ~test &
+player, registered, into m2_vcop_guns (one more flop on clk_sys; clk_i960 is
+an exact / 2), where c_on = en & play & on-screen. Nothing reads work RAM;
+nothing is on clk_sys's paths but that flop. Stage select (mode 3 / 4 / 6)
+is a menu, so no crosshairs there either ("shoot to select" has three large
+panels); the SCENE RESULTS between scenes keep mode 7 and show them.
+
+*Benches:*
+  - test_m2_vcop_state (new; captures in build/vcopstate, not committed --
+    mame_m2_vcop_play.lua writes them): the five scenarios' 43,438 logged
+    writes (and their Test presses) replayed on the module's bus in order,
+    with random traffic between them it must ignore (reads of the words,
+    words +-8, other 64 KB banks, one address bit off, lane 0 disabled, no
+    ack); at every 0.5 s sample (2,005) the module equals MAME's RAM rule
+    (mode 7 and player 1), except the 12 samples from a Test press to the
+    next mode write, which the snapshots show as test screens: 0
+    mismatches; P1 in play 515 samples, P2 327, 24 state changes. Directed:
+    only lane 0's whole byte counts (0x0f / 0x87 / 0x17 / 0x81 / 0x11 are
+    not 7 / 1; a lane-0-off write keeps the state), the test latch holds
+    through a mode write made while Test is down; en low: never in play.
+    45,550 checks, 0 failures. Planted faults caught: P2's word address, any
+    lane instead of lane 0, the ack ignored, the 7 / 1 compares on fewer
+    bits, the test latch never set / cleared at once, en ignored, the high
+    address bits half-decoded.
+  - test_m2_vcop_guns: + play gating (each bit hides its own crosshair),
+    417,527 checks, 0 failures. test_m2_vcop_xhair unchanged, PASS.
+  - Daytona / Desert Tank: the module is inside the VCOP_GUN generate and
+    its output is en-gated (en = vc_gun = game ID 1); the guns' in0 / in1
+    mux is untouched; M2_NO_VCOP_GUN still builds the pre-R846 core.
+    test_m2_cab_inputs PASS. lint_top clean on and off; lint_idx the same
+    147 lines; quartus_map --analyze_file 0 errors (m2_vcop_state,
+    m2_vcop_guns, Model2.sv).
+  - AREA, quartus_map 17.0, whole design, measured both:
+       1732a65 (R847)          40,491 ALM est.  57,848 ALUT  49,282 regs  88 DSP
+       this                    40,485           57,824       49,296       88
+    m2_vcop_state is 18 ALUT / 12 registers, m2_vcop_guns +2 registers; the
+    totals moved -6 ALM / -24 ALUT / +14 registers, i.e. within synthesis
+    perturbation. (R847's addendum quotes db879d7 at 40,452; the same RTL
+    maps to 40,491 here.)
+
+*INFERRED (each with what settles it):*
+  a. On the board: no crosshair in the attract, title, stage select,
+     continue, game over or the test menu; P1's from the first scene of a
+     1P game; P2's only after P2 starts or joins, gone at P2's continue
+     countdown and back when P2 continues. The board, with a stick.
+  b. Later stages, the boss scenes and the ending keep mode 7 (or leave it
+     only for menus): MAME's scripted play never cleared stage 1 (No
+     Enemies stalls at the boss), so between-stage screens are unseen.
+     Settles it: a played-through game on the board or in MAME by hand.
+  c. vcop (Revision B) uses the same addresses: its program differs; only
+     vcopa was examined.
