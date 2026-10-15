@@ -17,8 +17,9 @@ and a README covering the ROMs you need, the settings and the controls.
 
 **Only the original Model 2 for now.** The later boards (Model 2A-CRX, 2B-CRX
 and 2C-CRX) use different hardware, and each will need its own branch with
-those parts swapped in. Games with a different I/O board, like Virtua Cop
-(light guns) or Desert Tank, will be separate cores for the same reason.
+those parts swapped in. Virtua Cop needs a different I/O board (light guns),
+so it will be a separate core for the same reason. Desert Tank uses Daytona's
+I/O board and runs on this core with its own MRA (work in progress).
 `mra/` also has a Virtua Cop MRA that loads its ROMs but doesn't run yet, and
 a 2D tilemap test pattern.
 
