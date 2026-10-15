@@ -34413,3 +34413,99 @@ HDMI -0.031; 40,809 ALM, M10K 529/553 (the release's 40,851 / 529).
 s1099 also closes (+0.218, HDMI -0.949). RBF
 build/Model2_20261015_s1101_desert.rbf, md5
 e9a2d912791c4795ab083f401caf61db. Not yet on the board.
+
+**R836 -- DESERT TANK STOPS AT THE END OF ITS TITLE BECAUSE THE i960 TRAPS
+ON A LONG-REAL (DOUBLE) INSTRUCTION. NOT THE 3D PIPELINE.**
+(Board, s1101 = 2328964: the 3D title, then the 3D gone and the machine
+locked; a screenshot shows the demo's 2D backdrop -- sky, distant mountains,
+sand -- and CREDIT 0/1, the framebuffer counter at 0 fps.)
+
+*Believed:*
+  * R835 a (inferred): "it boots and plays on the core".
+  * R835 3/4: the RTL TGP runs Desert's workload bit-exact, so the
+    coprocessor cannot be what stops it.
+  * The parent's leading suspicion: a 3D handshake (walk, engine, quad,
+    flip) that Desert's lists exercise and Daytona's never did -- a NaN once
+    wedged the whole walk on hardware while MAME shrugged it off.
+  * i960_top's header: "traps loudly rather than guessing" -- and the
+    whole-CPU lockstep would have shown any instruction it does not run.
+
+*Now known -- VERIFIED:*
+  1. THE BOARD'S PICTURE IS MAME'S FRAMES 1106-1109. Snapshots of every
+     frame 1095-1115 (sim/io/mame_m2_desert_geo.lua, DG_SNAPFROM): 1098-1105
+     the title with its 3D shield; 1106-1109 sky, mountains, sand and CREDIT
+     0/1 with NO 3D (the two walks there are empty lists, "end" at dword
+     0x4000); the demo's 3D starts at 1110. No coin is involved -- CREDIT
+     0/1 is the attract's own line.
+  2. THE FIRST LONG-REAL INSTRUCTION DESERT EVER EXECUTES IS IN THAT FRAME.
+     A MAME i960 trace from power-on to 19.7 s (141.6 M instructions, loops
+     not collapsed, a frame marker per frame; sm2-builds/.../firstuse.sh with
+     sim/io/mame_m2_trace_window.lua): movrl fp0,r10 at 0x29d8c and mulrl in
+     frame 1105 (19.228 s), cmprl the same frame, subrl 1107, addrl 1109;
+     divrl first at frame 1781 (31.0 s). NONE before 19.2 s. To 19.7 s:
+     movrl 685, cmprl 465, mulrl 66, subrl 32, addrl 3.
+  3. THE RTL i960 TRAPPED ON ALL OF THEM. i960_dec lists 0x69, 0x6d and 0x79
+     as implemented opcodes, but i960_top dispatched only the single forms
+     (0x78, 0x68, 0x6c, 0x67) to the FPU -- the header says the rl forms
+     were "flagged rather than half-wired" -- so 0x79 / 0x69.5 / 0x6d.9
+     fell to T_TRAP: the i960 halts, no flip, no walk, no frame. Daytona
+     never executes them (its 15-20 s trace: no long-real form), which is
+     why nothing showed it.
+  4. THE LOCKSTEP COULD NOT HAVE SEEN IT. tb_i960_top ended a program on a
+     module trap WHETHER OR NOT THE REFERENCE TRAPPED, so an instruction the
+     module lacks and MAME runs passed as "ended early". Now a module-only
+     trap is a failure. With the rl forms generated against the unfixed RTL:
+     "MODULE TRAP at IP 00000100 insn 79e01614 (trap_op 79): the reference
+     executes it" -- FAIL.
+  5. THE FIX (6d98cb1, i960_top RL=1): addrl subrl mulrl divrl cmprl movrl.
+     A register operand is the even pair {r[n|1], r[n & 0x1e]} as one double
+     (MAME get_1_rifl / get_2_rifl), read low words in a new state T_RLLO,
+     high words held on the ports through T_FP; the result goes to the pair
+     (dst & 0x1e) through T_PAIR, or to fp0-fp3 (set_rifl). The existing
+     double units do the arithmetic. Reference model (i960_cpu_ref.h) gets
+     the same forms transcribed from MAME. Lockstep: 60 seeds 0 failures,
+     40 seeds x 200 programs 8,071 long-real retires, the latency / irq /
+     loop variants all PASS. +norl (the old mix) output BYTE-IDENTICAL to
+     before, cycle counts included; tb_i960_rom (Daytona's ROM, 200,000
+     instructions) output identical before / after. Also fixed in the bench:
+     the prefetch check looked up an unaligned IP (seed 7: 0x1787, from a
+     random ret / vector) unmasked and called it a front-end fault.
+  6. THE 3D PATH IS NOT AT FAULT. 18 MAME walks dumped across the title,
+     the transition and the demo's first 3 s (walks 437-638), replayed
+     through m2_geo + m2_geometry (geodiff, now with a hang watchdog): every
+     walk ends; quads within 0.6% of MAME's polygons; engine reads of
+     polygon ROM >= 8 MB 0, of texture ROM pair two 0 (R835 c/e hold for
+     these). The lists are Daytona-shaped: objects all in ROM (obc 10600,
+     the engine caps at 4096 and ends on the terminator), matrix, window,
+     focal, light, zsort; no texture / polygon data, no jumps, no unusual
+     opcode. The TGP over frames 1050-1200 (tgp_capture + tb_tgp_replay):
+     PASS, bit-exact.
+  7. AREA. i960_top alone, quartus_map 17.0: 8,263 -> 8,398 ALM estimated
+     (+135), 4,908 -> 4,972 registers, ALUT 11,913 -> 12,128. lint_top
+     clean, lint_idx the same 147 lines, analyze_file 0 errors.
+  8. NOT NEW: Desert sets geo mode 3 then 1 (specular) as Daytona does
+     (mode 1, specular_control 7 on several entries); the core ignores mode
+     in both.
+
+*INFERRED (each with what settles it):*
+  a. The board's lock is this trap. Time and picture match exactly and the
+     trap is unconditional; settled by a build with 6d98cb1 passing the
+     title-to-demo transition. If a COIN on s1101 still raised the credit
+     count, the i960 was not halted and this is not the whole story.
+  b. Desert's own rl code computes MAME's values: the units are verified
+     against host doubles, but subnormals flush (§8.1) where MAME keeps them.
+  c. No other instruction Desert runs traps. A static scan of the program
+     (tools/i960_fpscan.py) finds unsupported FP forms in a maths library
+     at 0x46xxx (tanr, tanrl, sqrtrl, sinrl, cpysre, scalerl, logr) plus
+     atanrl / logrl at 0xa20-0xa48 and cvtzril at 0xecd8: 35 addresses. A
+     MAME breakpoint on each (sim/io/mame_m2_bphits.lua; controls at the
+     movrl 0x29d8c and divrl 0x13178, which hit at frames 1106 and 1782):
+     NONE hit in 300 s of attract, nor in 480 s with coins at 20 s and
+     260 s and R835's play inputs (whether both games reached play was not
+     checked by snapshot). Non-FP opcodes were checked only over the 17-22 s
+     trace (every form outside Daytona's set was an FP form). Settled by
+     the board, or a trace of a whole game.
+  d. Fit: +135 ALM on s1101's 40,809. A fit.
+
+*Decision:* the long-real forms go in (RL=1). Next: a build, Ben runs
+Desert's attract past the title, then a game.
