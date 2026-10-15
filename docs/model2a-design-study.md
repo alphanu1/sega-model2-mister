@@ -34940,3 +34940,11 @@ are new and come from signals that do not change while they are used:
     the gamma select; the pattern matches exactly the 8 game_id registers
     (checked on s1115's netlist).
 lint_top clean.
+
+*Correction (Ben):* the 11.3 fps reading of Virtua Cop on s1104 (above,
+"so the main board draws its 3D") was probably taken while Ben was switching
+games; it is not evidence that Virtua Cop drew 3D. s1116 (533e621, R839's
+boot build, clk_sys -0.565; the updated MRA with EPR-17181; md5s checked):
+the same black screen, 0.0 fps, no WARNING screen. Under investigation in a
+whole-core boot simulation. s1112 (Desert Tank) ran 71 min of the watch at
+28.6-28.8 fps, no lock, before it was replaced for this test.
