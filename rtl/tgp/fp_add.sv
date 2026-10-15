@@ -37,12 +37,52 @@
 
 `timescale 1ns/1ps
 
+// R848: THE ALIGNMENT'S DECISIONS, as one function of the two operands:
+// {e_gt, e_eq, sig_ge, saturated, shamt[4:0]} -- exactly the values R739's
+// stage-A logic in fp_add formed from a and b (b's sign plays no part, so
+// neither does sub). fp_add computes it from its operands; with IN_REG its
+// caller does, before its operand mux, and hands it in as in_dec.
+module fp_add_align (
+  input  logic [31:0] x,
+  input  logic [31:0] y,
+  output logic [8:0]  dec
+);
+  logic [7:0]  ae, be;
+  logic [23:0] as, bs;
+  logic [8:0]  dab, dba, dd;
+  logic        gt, sat;
+  always_comb begin
+    ae  = (x[30:23] == 8'h00) ? 8'd1 : x[30:23];
+    be  = (y[30:23] == 8'h00) ? 8'd1 : y[30:23];
+    as  = {(x[30:23] != 8'h00), x[22:0]};
+    bs  = {(y[30:23] != 8'h00), y[22:0]};
+    gt  = (ae > be);
+    dab = {1'b0, ae} - {1'b0, be};
+    dba = {1'b0, be} - {1'b0, ae};
+    dd  = gt ? dab : dba;
+    sat = (dd > 9'd26);
+    dec = {gt, (ae == be), (as >= bs), sat, sat ? 5'd26 : dd[4:0]};
+  end
+endmodule
+
 module fp_add #(
   parameter bit FLUSH_DENORM_IN = 1'b0,
   // R740: 1 = a register between the compare and the align shift -- LATENCY
   // 5, not 4. For m2_fp_pool only (80 MHz: add_b_q -> sA_small -0.462 even
   // after R739); mb86233_alu's alignment depends on 4 and keeps 0.
-  parameter bit PIPE_A2 = 1'b0
+  parameter bit PIPE_A2 = 1'b0,
+  // R848: 1 = the caller's operand register is HERE, and the alignment's
+  // decisions (which exponent is larger, by how much, the shift, its
+  // saturation, the significand compare) arrive as in_dec, computed by the
+  // caller from the operands BEFORE that register and registered beside
+  // them. Stage A then starts at the shift. Latency 5 from a / b / sub /
+  // in_valid, the same as a register in front of a PIPE_A2 = 0 adder; every
+  // value is the same function of the same operands, so the result is bit-
+  // and cycle-identical (a lockstep of 20 M operations against the old adder
+  // behind a register, R848). For mb86233_alu (s1134: the TGP's opr_add_b ->
+  // sA_small, -1.072), which forms in_dec for each of its three operand
+  // pairs from its operand registers and selects it with the operands.
+  parameter bit IN_REG = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -51,6 +91,9 @@ module fp_add #(
   input  logic [31:0] a,
   input  logic [31:0] b,
   input  logic        sub,          // compute a - b
+  // R848: IN_REG only -- fp_add_align of THESE a and b, which the caller
+  // forms from its operands before its own mux (unused, tie to 0, otherwise)
+  input  logic [8:0]  in_dec,
 
   output logic        out_valid,
   output logic [31:0] result,
@@ -59,16 +102,40 @@ module fp_add #(
   output logic        invalid       // inf - inf, or NaN operand
 );
 
+  // ------------------------------------------------- R848: the input register
+  logic        v_i, sub_i;
+  logic [31:0] a_i, b_i;
+  logic [8:0]  dec;
+  generate if (IN_REG) begin : g_in
+    logic        v_q, sub_q;
+    logic [31:0] a_q, b_q;
+    logic [8:0]  dec_q;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) v_q <= 1'b0;
+      else        v_q <= in_valid;
+    end
+    always_ff @(posedge clk) begin
+      a_q <= a;  b_q <= b;  sub_q <= sub;
+      dec_q <= in_dec;
+    end
+    assign v_i = v_q;  assign a_i = a_q;  assign b_i = b_q;  assign sub_i = sub_q;
+    assign dec = dec_q;
+  end else begin : g_dir
+    assign v_i = in_valid;  assign a_i = a;  assign b_i = b;  assign sub_i = sub;
+    fp_add_align u_align (.x(a), .y(b), .dec(dec));
+    wire unused_dec = &{1'b0, in_dec};
+  end endgenerate
+
   // ------------------------------------------------------------- unpack
 
   logic [31:0] b_eff;
-  assign b_eff = {b[31] ^ sub, b[30:0]};
+  assign b_eff = {b_i[31] ^ sub_i, b_i[30:0]};
 
   logic        a_sign, b_sign;
   logic [7:0]  a_exp,  b_exp;
   logic [22:0] a_frac, b_frac;
 
-  assign a_sign = a[31];      assign a_exp = a[30:23];      assign a_frac = a[22:0];
+  assign a_sign = a_i[31];    assign a_exp = a_i[30:23];    assign a_frac = a_i[22:0];
   assign b_sign = b_eff[31];  assign b_exp = b_eff[30:23];  assign b_frac = b_eff[22:0];
 
   logic a_is_zero, b_is_zero, a_is_inf, b_is_inf, a_is_nan, b_is_nan;
@@ -101,9 +168,11 @@ module fp_add #(
   // unshifted operands with a 2:1 mux after it. Every value below is the
   // same as before, bit for bit.
   logic e_gt, e_eq, sig_ge, a_ge;
-  assign e_gt   = (a_e_eff >  b_e_eff);
-  assign e_eq   = (a_e_eff == b_e_eff);
-  assign sig_ge = (a_sig >= b_sig);
+  // R848: align_dec's -- (a_e_eff > b_e_eff), (a_e_eff == b_e_eff),
+  // (a_sig >= b_sig), registered with the operands when IN_REG.
+  assign e_gt   = dec[8];
+  assign e_eq   = dec[7];
+  assign sig_ge = dec[6];
   assign a_ge   = e_gt || (e_eq && sig_ge);
 
   logic [23:0] big_sig;
@@ -115,17 +184,13 @@ module fp_add #(
   assign big_sign   = a_ge ? a_sign  : b_sign;
   assign small_sign = a_ge ? b_sign  : a_sign;
 
-  logic [8:0] exp_diff_full;
   logic [4:0] shamt;
   logic       shift_saturated;
 
-  // R739: e_gt, not a_ge -- with equal exponents both differences are 0
-  logic [8:0] d_ab, d_ba;
-  assign d_ab            = {1'b0, a_e_eff} - {1'b0, b_e_eff};
-  assign d_ba            = {1'b0, b_e_eff} - {1'b0, a_e_eff};
-  assign exp_diff_full   = e_gt ? d_ab : d_ba;
-  assign shift_saturated = (exp_diff_full > 9'd26);
-  assign shamt           = shift_saturated ? 5'd26 : exp_diff_full[4:0];
+  // R739: e_gt, not a_ge -- with equal exponents both differences are 0.
+  // R848: the difference, its saturation and the shift are align_dec's.
+  assign shift_saturated = dec[5];
+  assign shamt           = dec[4:0];
 
   // 3 extra low bits: guard, round, sticky.
   logic [26:0] small_ext, small_aligned;
@@ -182,7 +247,7 @@ module fp_add #(
     always_ff @(posedge clk or negedge rst_n) begin
       if (!rst_n) p_valid <= 1'b0;
       else begin
-        p_valid <= in_valid;
+        p_valid <= v_i;
         p_sign <= big_sign;  p_exp <= big_exp;  p_big <= big_ext;  p_eff_sub <= eff_sub;
         p_sh <= {sh_sig, 3'b000};  p_b <= {b_sig, 3'b000};  p_swap <= e_eq && sig_ge;
         p_shamt <= shamt;  p_sat <= shift_saturated;
@@ -191,7 +256,7 @@ module fp_add #(
       end
     end
   end else begin : g_a1
-    assign p_valid = in_valid;
+    assign p_valid = v_i;
     assign p_sign = big_sign;  assign p_exp = big_exp;  assign p_big = big_ext;  assign p_eff_sub = eff_sub;
     assign p_sh = {sh_sig, 3'b000};  assign p_b = {b_sig, 3'b000};  assign p_swap = e_eq && sig_ge;
     assign p_shamt = shamt;  assign p_sat = shift_saturated;
