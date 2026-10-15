@@ -275,12 +275,29 @@ module m2_span_tex #(
   end
 
   // Where the leading one of ooz sits, so it can be normalised to [2^23, 2^24).
-  function automatic logic [5:0] top_bit(input logic [31:0] v);
-    logic [5:0] n;
+  // R847: AS TWO LEVELS, NOT A CHAIN. Written as a loop over 32 bits with
+  // "n == 0" in the condition, Quartus built a priority chain: iss_ooz ->
+  // d0_e was 11 cells deep on s1129 (-0.702 ns, 106 paths at 80 MHz). Now
+  // each byte encodes its own top bit (8 inputs, one or two LUTs) beside its
+  // OR, and the highest non-zero byte picks one: the same number -- the top
+  // set bit's index, 0 when there is none.
+  function automatic logic [2:0] top_bit8(input logic [7:0] b);
+    logic [2:0] n;
     begin
-      n = 6'd0;
-      for (int i = 31; i >= 0; i--) if (v[i] && n == 6'd0) n = 6'(i);
-      top_bit = n;
+      n = 3'd0;
+      for (int i = 0; i < 8; i++) if (b[i]) n = 3'(i);
+      top_bit8 = n;
+    end
+  endfunction
+  function automatic logic [5:0] top_bit(input logic [31:0] v);
+    logic [2:0] e3, e2, e1, e0;
+    begin
+      e3 = top_bit8(v[31:24]); e2 = top_bit8(v[23:16]);
+      e1 = top_bit8(v[15:8]);  e0 = top_bit8(v[7:0]);
+      top_bit = (|v[31:24]) ? {1'b0, 2'd3, e3}
+              : (|v[23:16]) ? {1'b0, 2'd2, e2}
+              : (|v[15:8])  ? {1'b0, 2'd1, e1}
+              :               {1'b0, 2'd0, e0};
     end
   endfunction
   logic [23:0]        tex_p [2];
