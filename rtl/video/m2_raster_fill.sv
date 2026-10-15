@@ -389,9 +389,21 @@ module m2_raster_fill #(
   // because emax has to be known before the first vertex is rewritten.
   // R731: now off the latched copies, in S_OZ's first cycle (oz_pre). They
   // are qoz exactly as accepted: nothing rewrites qoz before stage two.
-  wire [7:0] oze01_q = (qoz[1][15:8] > qoz[0][15:8]) ? qoz[1][15:8] : qoz[0][15:8];
-  wire [7:0] oze23_q = (qoz[3][15:8] > qoz[2][15:8]) ? qoz[3][15:8] : qoz[2][15:8];
-  wire [7:0] oz_emax_q = (oze23_q > oze01_q) ? oze23_q : oze01_q;
+  // R848: THE LARGEST OF FOUR IN ONE COMPARE LEVEL. It was a two-round
+  // tournament -- compare, select, compare, select -- in oz_pre's one cycle
+  // (s1127 qoz -> oz_emax -0.146, s1133 -0.376). The six pairwise compares
+  // run side by side and the exponent that no other beats (the lowest index
+  // on a tie) is selected; the value is the maximum either way: all 2^16
+  // four-tuples of 4-bit exponents and 2 M random 8-bit ones, 0 differ.
+  wire [7:0] oze0 = qoz[0][15:8], oze1 = qoz[1][15:8], oze2 = qoz[2][15:8], oze3 = qoz[3][15:8];
+  wire       oz_g10 = oze1 > oze0, oz_g20 = oze2 > oze0, oz_g30 = oze3 > oze0;
+  wire       oz_g21 = oze2 > oze1, oz_g31 = oze3 > oze1, oz_g32 = oze3 > oze2;
+  wire       oz_s0 = !oz_g10 && !oz_g20 && !oz_g30;
+  wire       oz_s1 =  oz_g10 && !oz_g21 && !oz_g31;
+  wire       oz_s2 =  oz_g20 &&  oz_g21 && !oz_g32;
+  wire       oz_s3 =  oz_g30 &&  oz_g31 &&  oz_g32;
+  wire [7:0] oz_emax_q = ({8{oz_s0}} & oze0) | ({8{oz_s1}} & oze1)
+                       | ({8{oz_s2}} & oze2) | ({8{oz_s3}} & oze3);
 
   // One minifloat to the quad's common fixed scale. The implicit 1 is restored,
   // the mantissa shifted up so the largest lands on bit 15, and the difference
