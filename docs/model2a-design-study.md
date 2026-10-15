@@ -35001,3 +35001,70 @@ addresses. Virtua Cop's IN1 in this build is Daytona's (0x8F); MAME boots to
 WARNING with 0x8F, so harmless until the gun step. The trig forms (sinrl /
 cosrl / tanrl / atanrl, needed from 14.73 s) are on branch vc-wip, to be
 rebased (R845).
+
+**R845 -- sinrl, cosrl, tanrl, atanrl: MICROCODE ON THE i960's OWN DOUBLE
+UNITS, CORRECTLY ROUNDED.** *Believed (R839, §3):* the transcendentals are
+"not a 1-2K block" and want CORDIC or polynomials with tables in M10K; R839
+estimated ~150-250 ALM and 2-3 M10K for a microsequencer. MAME's i960.cpp
+computes them on host doubles: set_rifl(sin / cos / tan(get_1_rifl)),
+atanrl = atan2(src2, src1); nothing passes through float.
+*Now known (VERIFIED):*
+  1. MAME's bits are the host's libm, not a fixed function: glibc 2.44 here
+     is correctly rounded on all but 0.1-0.2% of arguments (mpmath, 20,000
+     each: sin 32, cos 22, tan 37, atan2 17) and uses FMA where the CPU has
+     it. The real 80960KB works in 80-bit extended and rounds to double. So
+     the target is the correctly rounded value.
+  2. i960_fptrans (VC only, live for game ID 1): a 512 x 32 microcode ROM
+     (498 words), 128 x 64 registers in M10K (73 constants, initialised),
+     a four-deep return stack and two operand registers that drive the
+     existing adder, multiplier and divider while it runs (i960_top muxes
+     them in; the result mux takes the sequencer's unit). The programs
+     (tools/i960_fptrans.py, which assembles the ROM and is the reference)
+     work in double-double with Dekker's products (the units have no FMA):
+     fdlibm-style 3-part Cody-Waite reduction, exact for |x| < 2^19 pi/2;
+     sin / cos kernels with the first three Taylor terms in double-double;
+     tan = sin / cos in double-double; atan2 with breakpoints 0.2 / 7/16 /
+     11/16 (atan 1/4, 1/2, 1 in double-double) and a power-of-two rescale
+     that keeps Dekker's split in range at both ends of the exponent range.
+  3. Accuracy: 0 results not correctly rounded in 18,000 mpmath checks
+     (sin / cos on +-4 and +-3e4, tan on +-1.56, atan2 on +-40 and across
+     2^+-1000; outside: subnormal results, which the units flush). On the
+     game's own arguments (a MAME capture of every call in 300 s with play:
+     602 distinct tanrl, 42 cosrl, 40 sinrl, 15 atanrl arguments) the
+     results equal MAME's on all but 5 tanrl arguments, and on those 5
+     glibc is the one not correctly rounded.
+  4. Benches: test_i960_fptrans -- the RTL on the real units against the
+     interpreter, 20,000 vectors (zeros, NaN, inf, |x| to 1e4, atan2 across
+     the exponent range), 0 mismatches; cycles sin / cos ~2,200, tan
+     ~4,240, atan ~3,740 (clk_i960). Lockstep +vc (reference: host libm,
+     a one-ulp difference adopted as the recorded deviation): 60 seeds, 0
+     fails, ~700-800 of each form; no one-ulp case arose. Planted faults
+     (a constant's last bit, sin/cos entries swapped, the negate modifier
+     lost, act dropped with fin, the quadrant bit misread) all caught by
+     the harness or the lockstep. Default test_i960_top byte-identical to
+     before; a VC build with vc_en low too. lint_top (VCOP on and off)
+     clean, lint_idx the same 147, analyze_file 0 errors.
+  5. AREA, quartus_map 17.0, whole design:
+
+       build                         ALMs est.  ALUTs   registers  block bits
+       efdc64c, VCOP_FPU 1             39,940   56,993    48,573   4,355,199
+       efdc64c, VCOP_FPU 0             39,847   56,898    48,568   4,355,199
+       77f69df (this), VCOP_FPU 1      40,181   57,379    48,780   4,379,775
+       77f69df (this), VCOP_FPU 0      39,847   56,898    48,568   4,355,199
+
+     So +241 ALM estimated (+386 ALUT, +207 registers), 24,576 bits (the ROM
+     inferred as a 512 x 32 AUTO ROM, the registers as an M10K 128 x 64:
+     about 4 M10K) -- the top of R839's range, not under it. Off is the old
+     core exactly. By entity: i960_fptrans 172 ALUT / 201 registers;
+     i960_fpadd +121 ALUT (the operand mux merged into its first stage);
+     i960_top +95; the rest +-1..47 of synthesis perturbation.
+  6. TIMING: everything is on clk_i960 (40 MHz), none on clk_sys. The new
+     path at risk is the adder's: register file -> fpcvt widening -> the
+     u_a / u_b mux -> the adder's alignment stage. The sequencer's own
+     paths (M10K output -> condition test over 63 bits -> upc -> ROM
+     address; unit result -> fp_res_wide -> register-file M10K) are short.
+     clk_sys only feels the extra placement pressure.
+*INFERRED (each with what settles it):* a. the attract and a game run past
+14.7 s on the board; b. the extra ~240 ALM still fits and closes (a fit;
+s1123-s1125 are R844 without it); c. args beyond |x| = 2^19 pi/2 (where the
+reduction stops being exact) never occur (the game's largest was 4.0).
