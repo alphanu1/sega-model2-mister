@@ -35536,3 +35536,13 @@ panels); the SCENE RESULTS between scenes keep mode 7 and show them.
      Settles it: a played-through game on the board or in MAME by hand.
   c. vcop (Revision B) uses the same addresses: its program differs; only
      vcopa was examined.
+
+**s1135-s1137 = 1732a65 (R847's six timing fixes, with the guns).** s1137
+CLOSES at 99%: clk_sys +0.116, every core clock positive, holds >= +0.141,
+HDMI -0.925; 41,407 ALM. s1136 misses clk_sys (-0.379); s1135 could not
+route. The design closes at 99% when its recurring paths are fixed (Ben:
+"100% can still fit, but it needs to be done right"), against R847's view
+that area had to come out. RBF build/Model2_20261016_s1137_vcop.rbf, md5
+df223b1725b751aa1548a064ff94ea11. s1134 (a3dd42f, timing-short) on the
+board: the guns work with a joystick and the mouse (Ben); his asks --
+crosshairs only in play, P2's only when P2 plays -- are R849 (bb29501).
