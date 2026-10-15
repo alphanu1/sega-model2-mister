@@ -126,6 +126,11 @@ static void ra_tick(int ra, int lat, int occ) {
 
 static bool wr_pend = false; static uint32_t wr_a; static uint16_t wr_d;
 static long nq = 0; static FILE *fo = nullptr;
+static bool g_hang = false;   // R836
+// R836: engine reads outside what a Desert Tank image fills: polygon ROM at or
+// past 8 MB (dword 0x200000), texture ROM in its second pair (word 0x400000
+// and up in MAME's region, tha/tpa bit 22)
+static long g_poly_hi = 0, g_tex_hi = 0;
 
 static void tick() {
 #ifdef GD_RA
@@ -194,6 +199,8 @@ static void tick() {
       else if (PC >= 3) lat_left = ra_read(g_ra[PC == 3 ? (d->mem_space & 3) : 0], dw, LAT, OCC);
       else { if (!hit) ++g_porttrips; lat_left = hit ? 0 : LAT; }
       ++g_memreqs;
+      if (d->mem_space == 0 && (d->obj_oba_r & 0x1800000) == 0x800000 && (d->mem_addr & 0x3fffff) >= 0x200000) ++g_poly_hi;   // R836
+      if (d->mem_space == 1 && !(d->mem_addr & 0x800000) && (d->mem_addr & 0x100000)) ++g_tex_hi;                              // R836
       // R696: which memory, which engine state, and whether this exact word was read before in this list
       const int est = d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
       g_rd_by[(d->mem_space << 8) | est]++;
@@ -299,6 +306,21 @@ int main(int argc, char **argv) {
       }
     }
     if (d->walk_frames >= 1) { quiet = (nq == before) ? quiet + 1 : 0; if (quiet > 200000) break; }
+    // R836: A WALK THAT NEVER ENDS IS THE FINDING, not a long run. M2GD_HANG
+    // cycles (default 50 M, ~0.6 s at 80 MHz) with no walk end: report where
+    // the walk, the engine, the projector and the clipper are sitting, and stop.
+    static const long HANG = std::getenv("M2GD_HANG") ? std::atol(std::getenv("M2GD_HANG")) : 50000000L;
+    if (d->walk_frames < 1 && t >= HANG) {
+      auto *r = d->rootp;
+      std::printf("HANG %s: no walk end in %ld cycles -- walk state %d ip %05x ops %u objs %u | engine st %d | projector %d | clipper %d | quads %ld\n",
+        dp, t, (int)r->geodiff_top__DOT__u_geo__DOT__wst, (unsigned)r->geodiff_top__DOT__u_geo__DOT__w_ip,
+        (unsigned)r->geodiff_top__DOT__u_geo__DOT__w_ops, (unsigned)d->walk_objs,
+        (int)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st,
+        (int)r->geodiff_top__DOT__u_geometry__DOT__qst,
+        (int)r->geodiff_top__DOT__u_geometry__DOT__u_clip__DOT__kst, nq);
+      g_hang = true;
+      break;
+    }
   }
   std::fclose(fo); if (fh) std::fclose(fh);
   std::printf("geodiff %s: start %05x, %ld cycles, %ld engine memory reads\n", dp, start, t, g_memreqs);
@@ -341,6 +363,7 @@ int main(int argc, char **argv) {
     d->walk_ops, d->walk_objs, d->walk_frames, d->walk_unknown, d->mtx_n, d->foc_n, d->lit_n, d->tp_n);
   std::printf("  geometry: polys %u objects %u culled %u clip in %u out %u dropped %u nonfinite %u behind %u | quads %ld\n",
     d->polys, d->objects, d->culled, d->clip_in, d->clip_out, d->clip_dropped, d->n_nonfinite, d->behind, nq);
+  std::printf("  R836: engine reads of polygon ROM >= 8 MB %ld, of texture ROM pair two %ld%s\n", g_poly_hi, g_tex_hi, g_hang ? " | HANG" : "");
   delete d;
-  return 0;
+  return g_hang ? 2 : 0;
 }
