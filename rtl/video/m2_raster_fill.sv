@@ -996,9 +996,12 @@ module m2_raster_fill #(
   logic               mm_pre;
   wire  m_fin = lo23_v < lo01_v;   // pmin23 strictly lower: the tie goes to 0/1
   wire  x_fin = hi23_v > hi01_v;
-  function automatic logic signed [15:0] ye_in(input logic signed [15:0] y, input logic [1:0] f);
-    ye_in = M2COV ? $signed({y[13:0], f}) : y;
-  endfunction
+  // R848: the first round, from the latched sye in S_MINMAX's first cycle
+  // (it was ye_in() of the inputs at acceptance; ye_in is gone with it).
+  wire  m01_c = sye[1] < sye[0];
+  wire  m23_c = sye[3] < sye[2];
+  wire  x01_c = sye[1] > sye[0];
+  wire  x23_c = sye[3] > sye[2];
   always_comb begin
     pmin01 = m01_r ? 2'd1 : 2'd0;   // R658: on the edge y
     pmin23 = m23_r ? 2'd3 : 2'd2;
@@ -1543,11 +1546,7 @@ module m2_raster_fill #(
             sx[3] <= in_x3; sy[3] <= in_y3;
             sf[0] <= in_frac[3:0];  sf[1] <= in_frac[7:4];     // R626
             sf[2] <= in_frac[11:8]; sf[3] <= in_frac[15:12];
-            // R735: the tournament's first round, from the same values
-            m01_r <= ye_in(in_y1, in_frac[7:6])   < ye_in(in_y0, in_frac[3:2]);
-            m23_r <= ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]);
-            x01_r <= ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]);
-            x23_r <= ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]);
+            // R735's first round was compared here; R848 moved it to mm_pre
             mm_pre <= 1'b1;   // R743: the pairs' values in S_MINMAX's first cycle
             col   <= in_col;
             moire <= in_moire;
@@ -1592,8 +1591,16 @@ module m2_raster_fill #(
         S_MINMAX: if (mm_pre) begin
           // R743: sye[] is the accepted y, the bits the acceptance's compares
           mm_pre <= 1'b0;
-          lo01_v <= m01_r ? sye[1] : sye[0];  lo23_v <= m23_r ? sye[3] : sye[2];
-          hi01_v <= x01_r ? sye[1] : sye[0];  hi23_v <= x23_r ? sye[3] : sye[2];
+          // R848: and the first round's compares here too, from the latched
+          // sye, not from the store's outputs at acceptance: vtx_r -> the
+          // triangle split's mux -> a 16-bit compare -> m01_r..x23_r failed
+          // on s1126, s1132 (-1.022) and s1136 (-0.379, that seed's worst).
+          // sye[i] is {sy[13:0], sf[i][3:2]} -- ye_in() of the very values
+          // the acceptance compared -- so the bits are the same, a cycle
+          // later, in a cycle that already existed (R743's).
+          m01_r  <= m01_c;  m23_r <= m23_c;  x01_r <= x01_c;  x23_r <= x23_c;
+          lo01_v <= m01_c ? sye[1] : sye[0];  lo23_v <= m23_c ? sye[3] : sye[2];
+          hi01_v <= x01_c ? sye[1] : sye[0];  hi23_v <= x23_c ? sye[3] : sye[2];
         end else begin
           // One cycle of pure comparison, and now the ONLY cycle that does it.
           td_r   <= two_distinct;
