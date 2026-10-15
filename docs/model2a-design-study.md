@@ -34963,3 +34963,41 @@ tb_m2_cab_inputs still proves nothing else moved: 30M Daytona checks and
 320M Desert Tank checks, 0 mismatches. The renderer's placement-sensitive
 groups (m2_span_tex of_wp/of_rp -> tex_p, m2_raster_fill mul_delta ->
 mul_plo) remain, as on every seed at this fill.
+
+**R844 -- VIRTUA COP'S BLACK SCREEN: THE i960 TRAPPED ON flushreg AT ITS
+1,907th INSTRUCTION.** *Believed (R839):* the black screen was the missing
+type-2 I/O board, then cvtzril at 3.29 s. *Now known (VERIFIED, the whole-
+core boot simulation as Virtua Cop: m2_boot_harness VCOP=1, the vcopa image
+from rom_csum.py --out, EPR-17181, the program's second half where the core
+puts it):* Virtua Cop runs flushreg (0x66.d) 1,907 instructions after reset
+(IP 0x6e0; MAME at 0.019 s, its first frame). i960_regs implemented it
+(MAME's semantics, unit-tested) but i960_top never dispatched it, so it
+trapped and the CPU halted -- black from power-on whatever the I/O board,
+which is both boards' symptom on the board (R839 note). R839's scan missed
+it because it compared Virtua Cop against Daytona's STATIC instruction set,
+and 0x66.d occurs in both programs (Daytona never executes it): a static
+opcode-set comparison is NOT a valid test for "never executed"; only a
+trace or breakpoints on every occurrence are.
+*Fix (f688e35):* i960_top dispatches flushreg (rf_flush, the IP moves, waits
+in T_FRAME for the register file), gated by vc_on (VC parameter and game ID
+1); Daytona and Desert Tank untouched. Lockstep +vc 60 seeds, 0 fails
+(34-52 flushreg each); a planted no-dispatch fault fails 5/5; default
+test_i960_top byte-identical; test_m2_boot (Daytona) passes; lint_top,
+lint_idx (147), analyze_file clean.
+*After the fix, in simulation:* 45 M instructions / 510 vblanks (~8.8 s) with
+no trap; the type-2 I/O handshake completes (status 0x40); the game sits in
+its 30 Hz frame-sync loop (0x9124 polling 0x98000c). NOT YET EXPLAINED: the
+WARNING text never appears in the bench (MAME writes it from 4.155 s: fill
+at 0x2f03c, text at 0x5558; the bench never reaches those writers, and
+writes 152,064 zero tile words from 0x5861c that MAME does not in its first
+5 s). Bench artifact (vblank / interrupt timing in 30 Hz mode) or a core
+difference: undecided; the board will say.
+*Also:* a 900 s MAME run (three credited games, gun firing) with breakpoints
+on every static occurrence of a form MAME implements and the RTL lacked hit
+only flushreg (once); calls, cvtilr and logr never ran. An unrelated
+deviation, not fixed: synmov to 0xff000005-7 writes ICR in the RTL (the
+address is aligned first) where MAME writes memory; games use aligned
+addresses. Virtua Cop's IN1 in this build is Daytona's (0x8F); MAME boots to
+WARNING with 0x8F, so harmless until the gun step. The trig forms (sinrl /
+cosrl / tanrl / atanrl, needed from 14.73 s) are on branch vc-wip, to be
+rebased (R845).
