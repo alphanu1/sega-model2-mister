@@ -95,29 +95,18 @@ module mb86233_alu #(
   // three operand pairs, and the subtract flag carries the rest.
   logic [31:0] add_a, add_b;
   logic        add_sub;
-  // R848: fp_add's alignment decisions for each operand pair, formed from
-  // the operand registers BESIDE the op decode rather than after the mux, and
-  // selected with the operands -- so the mux still folds into fp_add's input
-  // registers' synchronous load, and the op decode (alu_op_r, fanout 96) is
-  // not in front of the compares. (Formed after the mux, the first version
-  // moved s1134's stage-A path into this stage: post-map alu_op_r ->
-  // fp_add dec_q -1.361, and +66 ALUT for the unfolded mux.)
-  logic [8:0]  dec_da, dec_dp, dec_ba, add_dec;
-  fp_add_align u_al_da (.x(reg_d), .y(reg_a), .dec(dec_da));
-  fp_add_align u_al_dp (.x(reg_d), .y(reg_p), .dec(dec_dp));
-  fp_add_align u_al_ba (.x(reg_b), .y(reg_a), .dec(dec_ba));
 
   always_comb begin
     unique case (op)
-      mb86233_pkg::ALU_FCPD: begin add_a = reg_d; add_b = reg_a; add_sub = 1'b1; add_dec = dec_da; end
-      mb86233_pkg::ALU_FADD: begin add_a = reg_d; add_b = reg_a; add_sub = 1'b0; add_dec = dec_da; end
-      mb86233_pkg::ALU_FSBD: begin add_a = reg_d; add_b = reg_a; add_sub = 1'b1; add_dec = dec_da; end
-      mb86233_pkg::ALU_FMSD: begin add_a = reg_d; add_b = reg_p; add_sub = 1'b0; add_dec = dec_dp; end
-      mb86233_pkg::ALU_FMRD: begin add_a = reg_d; add_b = reg_p; add_sub = 1'b1; add_dec = dec_dp; end
-      mb86233_pkg::ALU_FSMD: begin add_a = reg_d; add_b = reg_p; add_sub = 1'b0; add_dec = dec_dp; end
-      mb86233_pkg::ALU_BAPA: begin add_a = reg_b; add_b = reg_a; add_sub = 1'b0; add_dec = dec_ba; end
-      mb86233_pkg::ALU_BSPA: begin add_a = reg_b; add_b = reg_a; add_sub = 1'b1; add_dec = dec_ba; end
-      default:  begin add_a = reg_d; add_b = reg_a; add_sub = 1'b0; add_dec = dec_da; end
+      mb86233_pkg::ALU_FCPD: begin add_a = reg_d; add_b = reg_a; add_sub = 1'b1; end
+      mb86233_pkg::ALU_FADD: begin add_a = reg_d; add_b = reg_a; add_sub = 1'b0; end
+      mb86233_pkg::ALU_FSBD: begin add_a = reg_d; add_b = reg_a; add_sub = 1'b1; end
+      mb86233_pkg::ALU_FMSD: begin add_a = reg_d; add_b = reg_p; add_sub = 1'b0; end
+      mb86233_pkg::ALU_FMRD: begin add_a = reg_d; add_b = reg_p; add_sub = 1'b1; end
+      mb86233_pkg::ALU_FSMD: begin add_a = reg_d; add_b = reg_p; add_sub = 1'b0; end
+      mb86233_pkg::ALU_BAPA: begin add_a = reg_b; add_b = reg_a; add_sub = 1'b0; end
+      mb86233_pkg::ALU_BSPA: begin add_a = reg_b; add_b = reg_a; add_sub = 1'b1; end
+      default:  begin add_a = reg_d; add_b = reg_a; add_sub = 1'b0; end
     endcase
   end
 
@@ -129,18 +118,14 @@ module mb86233_alu #(
   //
   // This costs one more cycle of ALU latency, which is why ALU_LAT is 5 while
   // the FP units are 4.
-  // R848: the adder's operand register is now fp_add's own (IN_REG), which
-  // also registers the alignment's decisions (add_dec, above) here, in the
-  // stage the mux leaves short; same cycle, same values. s1134: opr_add_b ->
-  // fp_add|sA_small -1.072, 29 paths -- the exponent compare, the subtract,
-  // the saturation and the 27-bit shift in one cycle.
-  logic [31:0] opr_mul_a, opr_mul_b;
-  logic        opr_valid;
+  logic [31:0] opr_add_a, opr_add_b, opr_mul_a, opr_mul_b;
+  logic        opr_sub, opr_valid;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) opr_valid <= 1'b0;
     else begin
       opr_valid <= in_valid;
+      opr_add_a <= add_a;  opr_add_b <= add_b;  opr_sub <= add_sub;
       opr_mul_a <= reg_a;  opr_mul_b <= reg_b;
     end
   end
@@ -197,9 +182,9 @@ module mb86233_alu #(
     .overflow(mul_ovf), .underflow(mul_unf), .invalid(mul_inv)
   );
 
-  fp_add #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN), .IN_REG(1'b1)) u_add (   // R848
+  fp_add #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN)) u_add (
     .clk(clk), .rst_n(rst_n),
-    .in_valid(in_valid), .a(add_a), .b(add_b), .sub(add_sub), .in_dec(add_dec),
+    .in_valid(opr_valid), .a(opr_add_a), .b(opr_add_b), .sub(opr_sub),
     .out_valid(add_ovalid), .result(add_result),
     .overflow(add_ovf), .underflow(add_unf), .invalid(add_inv)
   );

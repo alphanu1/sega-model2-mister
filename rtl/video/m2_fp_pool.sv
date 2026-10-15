@@ -287,7 +287,7 @@ module m2_fp_pool #(
   fp_add #(.PIPE_A2(ADD_A2)) u_add (
     .clk(clk), .rst_n(rst_n),
     .in_valid(add_v_q), .a(add_a_q), .b(add_b_q),
-    .sub(add_sub_q), .in_dec(9'd0),   // R848: IN_REG only
+    .sub(add_sub_q),
     .out_valid(a_valid), .result(a_res),
     .overflow(a_ovf), .underflow(a_unf), .invalid(a_inv)
   );
