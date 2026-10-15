@@ -35257,3 +35257,125 @@ button.
   c. The 1.64 ms reload lead is enough: the I/O handler's scan is ~1 ms
      (R839: 1,010 / s); the board will show a reload, not a shot.
   d. The build still fits and closes at the area above (a fit).
+
+**R847 -- clk_sys AT 80 MHz: FIVE RECURRING PATHS, ONE COMMIT EACH.**
+e252aa0 (Daytona + Desert Tank + Virtua Cop's type-2 I/O board and i960
+forms, ~41,300 / 41,910 ALM, M10K 533/553) failed clk_sys on six of six
+seeds (s1126-s1131: -0.558 .. -1.233). Reseeding does not close it; the same
+groups recur. Read post-fit from four seeds' databases (s1129, s1131 re-timed
+in sm2-builds/sm2-tim-sta with -detail full_path), each fixed on its own
+commit on a3dd42f so they can be taken separately. Renderer, geometry and
+sound worked in the releases and fail now from fullness; the I/O board is new.
+
+*Now known -- VERIFIED (what each path really was, and the change):*
+  1. THE Z80's FIRMWARE / WORK RAM -> tv80s di_reg (worst group on s1126,
+     s1127, s1130; to -0.856). The RAMs are read on the NEGEDGE, so this is
+     a HALF-cycle path (6.25 ns), and di_reg is in the wrapper, outside
+     R590/R762's core-only exception. di_reg is NOT loaded on cen (tv80s
+     loads it every clk of T2), so R590's argument does not reach it by
+     itself; the argument that does is written in Model2.sdc: nothing but
+     the core reads di_reg, every core register loads only on cen (busrq_n
+     is tied, so ClkEn = cen), cen is never closer than 8 clks at 80 MHz
+     (type 1 one in 20, type 2 6144 / (80 x 625) = one in 8.14), and the
+     RAM output changes only half a clk after a cen edge (A moves only
+     there) or after a write strobe ends in a write cycle (di_reg not
+     loading). Type 2's f_op (the RETI watch) is the same shape -- loaded
+     through a fetch strobe, read only after it ends -- and was next
+     (post-map +0.685). Commit 2914d83: R847's two-cycle exception, RAMs ->
+     {di_reg, g_t2.f_op}. Checked by simulation, not just argument: the
+     ioz80 benches rebuilt at the REAL pacing (TICK 4/80, T2 6144) with the
+     RAM data held back by exactly the two cycles the exception allows
+     (fw_q / ram_q through two posedge registers), and separately with all
+     of di held back two cycles into di_reg and the core's dinst: type 1
+     hash 7606a0e5ca41b432, type 2 hash 699238baabf0fc75 (every M1 address
+     and DPRAM write with its clk), 5,047 DPRAM writes, 7,445 interrupts,
+     identical in all three. test_m2_ioz80_t2 (MAME) and _t1same pass.
+  2. m2_raster_fill det_r (s1127-s1131, to -0.547, up to 422 paths;
+     pf_st.S_PF_N -> det_r, pr_ax / pr_o1 -> det_r, pr_o1 -> nxo).
+     *Believed:* R727's registers had taken the plane fit off the critical
+     list. *Now known:* Quartus RESOURCE-SHARES det's multipliers with nxo's
+     (ax*by - bx*ay and o1*by - o2*ay share by and ay; different states),
+     so the path is pr_* -> an operand mux selected by the state register
+     -> DSP Mult9 -> DSP Mult10's adder -> det_r: 0.5 + 2.5 routing + 3.9
+     + 1.7 + 2.25 ns. S_PF_N appears as the SOURCE because it drives the
+     mux select. Commit 9043cd5: dp_ab / dp_ba = the two products,
+     registered every cycle (no reset, no enable: unshareable), det_r =
+     dp_ab - dp_ba in S_PF_D; S_PF_DW waits two cycles (dw_2, cleared at
+     quad accept), one more per pass, two or three a quad. Four frames,
+     core configuration (MIP on, mode 1): every pixel identical (c3857662
+     6d8e0e69 e04fb93e 1f325f0f); draw +0.44 / +0.02 / +0.41 / +0.51%
+     (f2000 687,834 -> 690,834); fetch lists 0..4 of ~200,000 different
+     (texel-cache timing, as R727). test_m2_raster_fill 152,373 / 0, _mip
+     1,989,828 / 0, test_m2_raster3d 40 / 0.
+  3. m2_span_tex iss_ooz -> d0_e (s1129 -0.702, 106 paths). Not distance:
+     top_bit()'s loop with `n == 0` in its condition became an 11-cell
+     priority chain. Commit 26e37f7: each byte encodes its own top bit,
+     the highest non-zero byte picks. All 2^32 inputs against the old
+     function: 0 differ. Four frames: pixels, fetch lists and draw cycles
+     identical. test_m2_span_tex 7,214 / 0, _ftb 17 / 0, _mip 7,222 / 0.
+  4. m2_geo_engine tx_c / xl_raw -> g_raw (s1129 -1.078 / -0.771, 110
+     paths). gam()'s constant multiply landed in a DSP at X86 (the engine
+     sits near X40) and g_raw packed into the NEXT DSP's input register
+     (tslope's, X32): two long DSP routes in one cycle. Commit c96ca76: the
+     curve as two 256-entry tables in logic (generated from the formula,
+     all 1,024 inputs checked: 0 differ) and its select registered (g_sel:
+     tx_c is set entering E_XL, xl_go is first high the cycle after E_XL's
+     first mem_go). No ROM inferred (block bits unchanged), one DSP fewer.
+     geodiff on w2300 / w5000 / w9000 (textured polygons take curve 0):
+     quads, colours and cycles identical (822,322 / 868,855 / 624,572).
+     test_m2_geo_engine 70 / 0, test_m2_geometry 438 / 0, _mipz 444 / 0.
+  5. fx68k aob -> m2_multipcm_dual key_wait / s_active (s1130 -0.518, 233
+     paths; s1131). aob -> the address decode -> the slot select (fanout
+     149) -> the 64-way demux -> the enables. A multicycle would need aob
+     never to move while AS is asserted, which is a claim about fx68k's
+     microcode, not provable here; so a register. Commit 900760d: select,
+     strobe, address and data registered together before the engine (one
+     clk later, same order; nothing reads the chips back). Sound board in
+     the core's configuration (PCM_SHARED, YM_STUB, TICK_DEN 80, 30 M
+     cycles, 5,399 MultiPCM writes): output hash 27b719043c354a31 (every
+     chip sample every cycle) and the cpu / pcm / mix hashes identical; at
+     TICK_DEN 50 likewise (08146a194550d7c3).
+  6. POST-MAP (quartus_map + quartus_sta --post_map, slow model, a3dd42f ->
+     900760d), worst slack per path:
+       S_PF_N / pf_st -> det_r     +3.230 -> +9.995
+       iss_ooz -> d0_e             -1.171 -> +8.318
+       tx_c -> g_raw                +5.343 -> (no path)
+       xl_raw -> g_raw              +6.607 -> +8.539
+       aob -> key_wait / s_active   -6.388 / -6.272 -> (no path; aob ends
+                                    at the new registers)
+       Z80 RAMs -> di_reg / f_op    +0.685 -> +13.185 (two cycles); di_reg's
+                                    worst is now IR -> its enable, +1.158
+  7. POST-MAP IS NOT PESSIMISTIC FOR DSP-ROUTED PATHS. R825 calibrated it
+     at 2.3-4 ns pessimistic on carry chains. Here det_r was +3.23 post-map
+     and -0.55 post-fit, g_raw +5.34 and -1.08: post-map leaves out the
+     route to a DSP column, which is most of these paths. A path that runs
+     DSP to DSP needs a post-fit reading; a good post-map number says
+     nothing about it.
+  8. AREA (map estimate): 40,500 -> 40,498 ALM, ALUT 57,838 -> 57,827,
+     registers 49,170 -> 49,218, DSP 90 -> 88, block bits 4,379,775
+     unchanged. By entity (ALUT / registers / DSP): m2_raster_fill
+     5,225 -> 5,213 / +33 / 39 -> 38; m2_span_tex -16 / 0; m2_geo_engine
+     +37 / +2 / 3 -> 2; m2_sound_board +3 / +13.
+
+*NOT addressed (each seen post-fit, each its own cause):*
+  - m2_geo_clip kst / cs -> the pool's round-robin grant -> m2_geo_engine st
+    (s1131 -0.833, s1130 cs -> kst / mul_a_q -0.53): R727's "by design"
+    combinational grant; post-map -3.28 before and after. The next
+    candidate.
+  - qoz -> oz_n / oz_emax (s1130 -0.476, s1127 -0.146): the vertex mux,
+    kd_e's subtract and oz_norm's shift into a DSP input register; a
+    different cause from the determinant. Taking kd_e a cycle early (the
+    first vertex's in oz_pre from oz_emax_q) would keep S_OZ's cycles.
+  - det_r -> its zero test -> the numerators' enables (post-map -0.90;
+    not seen post-fit): a det_z = (dp_ab == dp_ba) register beside det_r
+    would be exact.
+  - ldr_top -> sw_burst (s1130 -0.225), m2_texel_cdc s_wp_g2 -> s_rp
+    (-0.445), m2_eng_ra idx_q -> s_fill, raster3d pst -> the store's RAM,
+    m2_geo_view sm_r -> a_right: once each.
+  - sys_top gp_outr -> PhaseInc (s1131 -1.233, its worst): the framework's
+    HPS config write, not ours.
+
+*INFERRED (what settles it):* a. the five groups are gone post-fit and
+clk_sys closes with margin on most seeds; the geometry pool grant is then
+the worst left -- a seed sweep of 900760d. b. none of the five changes is
+visible on the board: Daytona, Desert Tank and Virtua Cop as before.
