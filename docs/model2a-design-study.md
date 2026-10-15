@@ -35745,3 +35745,12 @@ three close at 99%: s1142 core clocks >= +0.260 (clk_sys +0.299), holds
 >= +0.244, HDMI -0.350, 41,455 ALM; s1143 >= +0.004, HDMI -0.523. s1141
 misses general[0] (-0.145). RBF build/Model2_20261016_s1142_vcop.rbf, md5
 in HANDOFF. s1144-s1146 (dbf06b4, R848) queued.
+
+**s1144-s1146 = dbf06b4 (R848's eight fixes): NONE FIT -- placement, not
+routing.** "Fitter requires 4196 / 4196 / 4201 LABs ... the device contains
+only 4191" (Error 170012): 5-10 LABs over. R848's +197 ALM estimate (its
+own note: ~+130 placed, to ~41,540) crossed the LAB limit. Its dearest
+commit, the TGP adder's alignment before its operand register (7ce9926,
+~+117 ALUT), is reverted (9ecb403), as R848 advised; the other seven stay.
+test_tgp's mb86233_regs failures (46,966) predate this work (R848 found them
+on c545187 too) -- open, not yet looked at. Next: s1147-s1149 of 9ecb403.
