@@ -154,15 +154,28 @@ module m2_raster_div #(
   wire [33:0] shifted = {rem, n_mag[31:30]};
   wire [33:0] d1 = {2'b00, d_mag};
   wire [33:0] d2 = {1'b0,  d_mag, 1'b0};
-  wire [33:0] d3 = d1 + d2;
+  // R847: 3d registered as the operands load (d_mag only changes there), so
+  // the 34-bit add is not in front of every step (a3dd42f s1134: d_mag ->
+  // rem, 507 paths at 80 MHz). The same value: 3 x |den|.
+  logic [33:0] d3_r;
+  wire  [33:0] d3 = d3_r;
+
+  // R847: AND EACH COMPARE IS ITS SUBTRACT'S BORROW. Written as `>=` and
+  // then `-`, Quartus built the compares as LUT trees (8 levels post-map)
+  // and put the subtract's carry chain after them. The three differences
+  // are formed side by side, one carry chain each; shifted >= dk exactly
+  // when the 35-bit difference does not borrow.
+  wire [34:0] s3 = {1'b0, shifted} - {1'b0, d3};
+  wire [34:0] s2 = {1'b0, shifted} - {1'b0, d2};
+  wire [34:0] s1 = {1'b0, shifted} - {1'b0, d1};
 
   logic [1:0]  qdig;
   logic [33:0] rnext;
   always_comb begin
-    if      (shifted >= d3) begin qdig = 2'd3; rnext = shifted - d3; end
-    else if (shifted >= d2) begin qdig = 2'd2; rnext = shifted - d2; end
-    else if (shifted >= d1) begin qdig = 2'd1; rnext = shifted - d1; end
-    else                    begin qdig = 2'd0; rnext = shifted;      end
+    if      (!s3[34]) begin qdig = 2'd3; rnext = s3[33:0]; end
+    else if (!s2[34]) begin qdig = 2'd2; rnext = s2[33:0]; end
+    else if (!s1[34]) begin qdig = 2'd1; rnext = s1[33:0]; end
+    else              begin qdig = 2'd0; rnext = shifted;  end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -174,6 +187,7 @@ module m2_raster_div #(
       qd_lo     <= '0; qd_hi <= '0;
       n_mag     <= 32'd0;
       d_mag     <= 32'd0;
+      d3_r      <= 34'd0;
       rem       <= 32'd0;
       q         <= 32'd0;
       neg       <= 1'b0;
@@ -192,6 +206,7 @@ module m2_raster_div #(
             // hence unsigned registers.
             n_mag <= num[31] ? (~num + 32'd1) : num;
             d_mag <= den[31] ? (~den + 32'd1) : den;
+            d3_r  <= {2'b00, d_abs} + {1'b0, d_abs, 1'b0};   // R847
             neg   <= num[31] ^ den[31];
             rem   <= 32'd0;
             q     <= 32'd0;
