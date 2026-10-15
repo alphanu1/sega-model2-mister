@@ -313,7 +313,30 @@ always_ff @(posedge clk or negedge rst_n) begin
 	end else
 		tur_div <= tur_div - 20'd1;
 end
-wire        [7:0] dt_turret = tur_use ? tur_an : tur_dig;
+wire        [7:0] tur_raw   = tur_use ? tur_an : tur_dig;
+// A SLEW LIMIT, BECAUSE THE GAME'S GUN SERVO BREAKS ON A BIG DOWNWARD JUMP.
+// MAME 0.289 (sim/io/mame_m2_desert_input.lua): with the gun fully up, a
+// jump of the TURRET value to 0xc8 or beyond (0x20 -> 0xc8 / 0xd0 / 0xe0,
+// 0x30 -> 0xe0) sends the gun the wrong way -- it stays pinned up, ignores
+// the input for 10-20 s and comes back inverted for a while -- where 0x20 ->
+// 0xc0 and 0x30 -> 0xb8 work, every upward jump works, and a ramp from 0x20
+// to 0xe0 over 0.5 s or more works. A stick flicked from full up to full
+// down does exactly the breaking thing. So the value moves one count each
+// ~3.9 ms -- 0x20..0xe0 in 0.75 s, faster than the gun itself (~0x60 in
+// 0.6 s), so nothing is lost but the jump.
+localparam int unsigned TUR_S = SYS_MHZ * 3906;
+logic [7:0]  dt_turret;
+logic [18:0] tur_sdiv;
+always_ff @(posedge clk or negedge rst_n) begin
+	if (!rst_n) begin
+		dt_turret <= 8'h80; tur_sdiv <= '0;
+	end else if (tur_sdiv == 19'd0) begin
+		tur_sdiv <= 19'(TUR_S - 1);
+		if (dt_turret < tur_raw)      dt_turret <= dt_turret + 8'd1;
+		else if (dt_turret > tur_raw) dt_turret <= dt_turret - 8'd1;
+	end else
+		tur_sdiv <= tur_sdiv - 19'd1;
+end
 
 assign accel = is_desert ? dt_accel  : dy_accel;
 assign brake = is_desert ? dt_turret : dy_brake;
