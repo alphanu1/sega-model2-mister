@@ -35068,3 +35068,14 @@ atanrl = atan2(src2, src1); nothing passes through float.
 14.7 s on the board; b. the extra ~240 ALM still fits and closes (a fit;
 s1123-s1125 are R844 without it); c. args beyond |x| = 2^19 pi/2 (where the
 reduction stops being exact) never occur (the game's largest was 4.0).
+
+**VIRTUA COP RUNS ON THE BOARD.** s1126 (e252aa0: R839 type-2 I/O board,
+R844 flushreg, R845 the trig forms; clk_sys -0.558, other core clocks
+positive, hold +0.198; 41,267 ALM, M10K 533/553), loaded for a boot test:
+3D at 28.5 fps (the game's 30 Hz mode) from ~45 s after the load request;
+a board screenshot ~60 s in shows the attract's tutorial scene -- textured
+3D (the gangster, containers, the KEEP OUT barrier), the 2D life marks,
+"(C) SEGA 1994", CREDIT 0, and the tutorial text in Japanese ("lose all the
+life marks and the game is over"). Past 14.7 s, so the trig forms run.
+Screenshot sm2-builds/mipmaps/board/vcop_s1126.png. s1127/s1128 also missed
+clk_sys; s1129-s1131 fitting.
