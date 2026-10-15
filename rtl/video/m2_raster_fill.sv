@@ -374,6 +374,16 @@ module m2_raster_fill #(
   // ns at 75 MHz (s759), short of 80. Every 5-bit pf_st is taken, so a flag
   // rather than a state; one cycle per textured quad.
   logic               oz_pre;
+  // R848: qoz[oz_i], held in its own register. The normaliser read it through
+  // the 4:1 vertex mux, then kd_e's subtract and oz_norm's shift, into oz_n
+  // -- which Quartus packs into the u/z multiplier's DSP input register, so
+  // the long route to the DSP column came last (s1130: qoz -> oz_n -0.476,
+  // s1127 qoz -> oz_emax -0.146; +5.5 post-map, which leaves that route out).
+  // oz_i only counts up 0..3 and stage two never writes a vertex stage one
+  // has still to read, so the next vertex's minifloat is loaded a cycle
+  // ahead: at acceptance (vertex 0) and in each stage-one cycle (oz_i + 1).
+  // So in every cycle that reads it, oz_mf == qoz[oz_i].
+  logic [15:0]        oz_mf;
 
   // R337: the four exponents and the largest, combinational off the INPUTS
   // because emax has to be known before the first vertex is rewritten.
@@ -1191,6 +1201,7 @@ module m2_raster_fill #(
       dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; oz_pre <= 1'b0; dodx <= '0; dody <= '0;
+      oz_mf <= 16'd0;   // R848
       base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
       span_valid <= 1'b0;
       s1_valid   <= 1'b0;   // R715
@@ -1253,13 +1264,16 @@ module m2_raster_fill #(
         end else begin
           // R566: stage one -- select vertex oz_i and normalise its 1/z.
           if (!oz_last) begin
-            oz_n   <= oz_norm(qoz[oz_i], oz_emax);
+            oz_n   <= oz_norm(oz_mf, oz_emax);   // R848: oz_mf == qoz[oz_i]
             oz_u   <= qu[oz_i][12:0];   // R791: the raw u, before the rewrite
             oz_v   <= qv[oz_i][12:0];
             oz_w   <= oz_i;
             oz_w_v <= 1'b1;
             if (oz_i == 2'd3) oz_last <= 1'b1;
-            else              oz_i    <= oz_i + 2'd1;
+            else begin
+              oz_i  <= oz_i + 2'd1;
+              oz_mf <= qoz[oz_i + 2'd1];   // R848: the next vertex, untouched yet
+            end
           end else begin
             oz_w_v <= 1'b0;
           end
@@ -1535,6 +1549,7 @@ module m2_raster_fill #(
             qoz[2] <= in_oz2; qoz[3] <= in_oz3;
             oz_pre  <= 1'b1;                        // R731: emax in S_OZ's first cycle
             oz_i    <= 2'd0;
+            oz_mf   <= in_oz0;                      // R848: qoz[0], as oz_i
             tex_r     <= in_tex;
             mz_r      <= in_mipz;                // R828c
             tex_ok    <= 1'b0;
@@ -1909,7 +1924,7 @@ module m2_raster_fill #(
   endfunction
   wire        ks1   = MIP && (pf_st == S_OZ) && !oz_pre && !oz_last;   // stage one
   wire        ks2   = MIP && (pf_st == S_OZ) && !oz_pre && oz_w_v;     // stage two
-  wire [7:0]  kd_e  = oz_emax - qoz[oz_i][15:8];
+  wire [7:0]  kd_e  = oz_emax - oz_mf[15:8];   // R848: oz_mf == qoz[oz_i] in ks1
   // the edge: from kp to the vertex in stage two, or to the first on the close
   wire signed [12:0] kb_x = k_close ? sx[0][12:0] : kz_x;
   wire signed [12:0] kb_y = k_close ? sy[0][12:0] : kz_y;
@@ -1965,8 +1980,8 @@ module m2_raster_fill #(
       if (ks1) begin
         kz_x  <= sx[oz_i][12:0];
         kz_y  <= sy[oz_i][12:0];
-        kz_lv <= (qoz[oz_i][15:8] != 8'd0) && (kd_e < 8'd16);
-        kz_l  <= 7'sd56 - 7'({1'b0, kd_e[3:0], 2'b00}) + 7'({5'd0, qoz[oz_i][7:6]});
+        kz_lv <= (oz_mf[15:8] != 8'd0) && (kd_e < 8'd16);
+        kz_l  <= 7'sd56 - 7'({1'b0, kd_e[3:0], 2'b00}) + 7'({5'd0, oz_mf[7:6]});
       end
       k_close <= ks2 && (oz_w == 2'd3);
       if (ks2) begin
