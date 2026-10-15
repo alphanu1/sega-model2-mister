@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-15: branch desert -- Desert Tank (R835), s1101 built
+
+PR #8 (release Model2_20261014, s1087) is open, awaiting Ben's "merge".
+Branch desert (from headroom 0f3cbc4): Desert Tank MRAs (+ 15 kHz CRT), game
+ID 2 (prog_ext as Virtua Cop; IN1 = machine gun / cannon / shift toggle on
+Gear Up / Gear Down / VR4), cabinet inputs moved to rtl/io/m2_cab_inputs.sv
+(Daytona bit-identical, 30M bench checks), rom_csum.py folds repeat,
+tools/mra_vs_mame.py. MAME: Desert plays; FM never keyed (YM_STUB fine); TGP
+upload = Daytona's program; renders at 30 Hz. BUILT: s1101 (core >= +0.591,
+HDMI -0.031) build/Model2_20261015_s1101_desert.rbf (e9a2d912...). NEXT:
+Ben "load it" -- copy the two Desert MRAs to /media/fat/_Arcade/, check
+Daytona unchanged, Desert boots, controls, ~29 fps, 15 kHz MRA.
+Six of nine seeds failed (two unroutable, two short, three Quartus crashes;
+/tmp was 5.1 GB for the crashes).
+
 ## 2026-10-14: headroom -- s1082 on the board; R834 + R828c building
 
 ON THE BOARD: s1082 (db9fbc9, the release candidate): 240 min, no lock;

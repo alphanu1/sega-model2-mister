@@ -34403,3 +34403,13 @@ the left of the screen, the kind of 3D fault that earns the flag (INFERRED).
 
 *Decision:* Desert Tank is this core plus an MRA, game ID 2 and an IN1 mux
 behind it; YM_STUB 1 stays. Next: a fit, then Ben on the board.
+
+**s1093-s1101 = 2328964 (R835, Desert Tank).** s1093 and s1100 could not
+route; s1094 (clk_sys -0.100, m2_span_tex of_skip -> m2_texel_cdc r_tex
+address) and s1095 (-0.872) missed; s1096-s1098 all crashed in the fitter
+(STA, A2T, Segment Violation) with /tmp holding 5.1 GB -- cleared to 0.6 GB
+before s1099-s1101. s1101 closes: core clocks >= +0.591, holds >= +0.238,
+HDMI -0.031; 40,809 ALM, M10K 529/553 (the release's 40,851 / 529).
+s1099 also closes (+0.218, HDMI -0.949). RBF
+build/Model2_20261015_s1101_desert.rbf, md5
+e9a2d912791c4795ab083f401caf61db. Not yet on the board.
