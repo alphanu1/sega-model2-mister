@@ -796,6 +796,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_i8251.sv
 set_global_assignment -name SEARCH_PATH rtl/mem
 set_global_assignment -name SEARCH_PATH rtl/sound/fx68k
 set_global_assignment -name SEARCH_PATH rtl/sound/jt12
+set_global_assignment -name SEARCH_PATH rtl/cpu/i960
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_sound_link.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_multipcm.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_multipcm_dual.sv
@@ -904,6 +905,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpdiv.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpsqrt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpmisc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpcvt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fptrans.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_top.sv
 
 # The coprocessor. mb86233_pkg declares the types the rest of these use, so

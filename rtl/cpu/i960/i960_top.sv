@@ -617,14 +617,41 @@ module i960_top #(
   end
   logic        fadd_sub;
 
-  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req),
-                        .sub(fadd_sub), .a(fp_b), .b(fp_a),
+  // R845: while the transcendental sequencer runs (VC only) it owns the
+  // adder, multiplier and divider: its operands, requests and subtract.
+  logic        tr_act, tr_add_req, tr_mul_req, tr_div_req, tr_sub;
+  logic        tr_sel_add, tr_sel_mul, tr_sel_div, tr_fin;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic        tr_start;                         // read only when VC
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic [63:0] tr_opa, tr_opb;
+  wire         tr_on   = VC && tr_act;
+  wire  [63:0] u_a     = tr_on ? tr_opa : fp_b;
+  wire  [63:0] u_b     = tr_on ? tr_opb : fp_a;
+  generate if (VC) begin : g_trans
+    i960_fptrans u_trans (
+      .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry),
+      .x(fp_a), .y(fp_b),
+      .act(tr_act), .opa(tr_opa), .opb(tr_opb),
+      .add_req(tr_add_req), .mul_req(tr_mul_req), .div_req(tr_div_req), .sub(tr_sub),
+      .sel_add(tr_sel_add), .sel_mul(tr_sel_mul), .sel_div(tr_sel_div),
+      .add_done(fadd_done), .mul_done(fmul_done), .div_done(fdiv_done),
+      .res(fp_res_wide), .fin(tr_fin)
+    );
+  end else begin : g_notrans
+    assign tr_act = 1'b0; assign tr_opa = 64'd0; assign tr_opb = 64'd0;
+    assign tr_add_req = 1'b0; assign tr_mul_req = 1'b0; assign tr_div_req = 1'b0;
+    assign tr_sub = 1'b0; assign tr_sel_add = 1'b0; assign tr_sel_mul = 1'b0;
+    assign tr_sel_div = 1'b0; assign tr_fin = 1'b0;
+  end endgenerate
+  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (VC && tr_add_req)),
+                        .sub(tr_on ? tr_sub : fadd_sub), .a(u_a), .b(u_b),
                         .y(fadd_y), .done(fadd_done));
-  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req),
-                        .a(fp_b), .b(fp_is_scale ? pow2 : fp_a),
+  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (VC && tr_mul_req)),
+                        .a(u_a), .b((fp_is_scale && !tr_on) ? pow2 : u_b),
                         .y(fmul_y), .done(fmul_done));
-  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req),
-                        .a(fp_b), .b(fp_a), .y(fdiv_y),
+  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req | (VC && tr_div_req)),
+                        .a(u_a), .b(u_b), .y(fdiv_y),
                         .busy(fdiv_busy), .done(fdiv_done));
   i960_fpsqrt u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
                         .a(fp_a), .y(fsqrt_y),
@@ -651,9 +678,14 @@ module i960_top #(
                                                  : {1'b0, pow2_exp[10:0], 52'd0};
 
   logic [2:0] fmisc_op;
-  assign fp_res_wide = fp_is_add  ? fadd_y
-                     : fp_is_mul  ? fmul_y
-                     : fp_is_div  ? fdiv_y
+  // R845: the sequencer's unit selects the result while it runs (the
+  // transcendental's own decode flags are all clear, so they cannot clash)
+  wire r_add = fp_is_add || (VC && tr_sel_add);
+  wire r_mul = fp_is_mul || (VC && tr_sel_mul);
+  wire r_div = fp_is_div || (VC && tr_sel_div);
+  assign fp_res_wide = r_add  ? fadd_y
+                     : r_mul      ? fmul_y
+                     : r_div      ? fdiv_y
                      : fp_is_sqrt ? fsqrt_y
                      : fp_is_cpys ? {cpys_neg, fmisc_y_q[62:0]}   // R839
                                   : fmisc_y_q;          // R566: registered
@@ -667,13 +699,29 @@ module i960_top #(
   // Which unit an opcode belongs to, and whether it is wired at all.
   logic fp_is_add, fp_is_mul, fp_is_div, fp_is_sqrt, fp_is_misc, fp_valid;
   logic fp_is_cpys, fp_is_cvtl;                  // R839: cpysre, cvtzril
+  logic fp_is_trans;                             // R845: sinrl cosrl tanrl atanrl
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [1:0] tr_entry;                          // read only when VC
+  /* verilator lint_on UNUSEDSIGNAL */
   wire  vc_on = VC && RL && vc_en;
   always_comb begin
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
     fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
+    fp_is_trans = 1'b0; tr_entry = 2'd0;
     fmisc_op = 3'd7;
     is_rl = 1'b0;
+    // R845: the transcendentals, long-real pairs in and out (get_1_rifl /
+    // get_2_rifl / set_rifl): atanrl is atan2(src2, src1).
+    if (vc_on && d_op == 8'h69) begin
+      case (d_op2)
+        4'hc: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinrl
+        4'hd: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd1; end   // cosrl
+        4'he: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd2; end   // tanrl
+        4'h0: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanrl
+        default: ;
+      endcase
+    end
     // R839: get_1_rifl -> sqrt -> set_rifl; cpysre: |src1| with src2's
     // "sign" as MAME tests it (src2 >= 0.0, so -0.0 counts as positive and a
     // NaN as negative); cvtzril: get_1_rif (the single-form operand) ->
@@ -726,7 +774,7 @@ module i960_top #(
              endcase
       default: ;
     endcase
-    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc;
+    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc | fp_is_trans;
   end
 
   // cmpr writes only the condition code; cvtri and cvtzri write an integer;
@@ -1178,6 +1226,7 @@ module i960_top #(
       fmul_req  <= 1'b0;
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
+      tr_start  <= 1'b0;    // R845
       rl_lo1    <= 32'd0;   // R836
       rl_lo2    <= 32'd0;
       rl_wb     <= 1'b0;
@@ -1198,6 +1247,7 @@ module i960_top #(
       fmul_req  <= 1'b0;
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
+      tr_start  <= 1'b0;    // R845
 
       // A prefetch issued in decode lands during execute. Capture it wherever
       // the sequencer happens to be.
@@ -1669,6 +1719,7 @@ module i960_top #(
           fmul_req  <= fp_is_mul;
           fdiv_req  <= fp_is_div;
           fsqrt_req <= VC && fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it; VC = 0 leaves T_RLLO as it was)
+          tr_start  <= VC && fp_is_trans;  // R845: the sequencer starts; the operands stay on fp_a / fp_b
           ts        <= T_FP;
         end
 
@@ -1693,7 +1744,8 @@ module i960_top #(
               || (fp_is_add  && fadd_done)
               || (fp_is_mul  && fmul_done)
               || (fp_is_div  && fdiv_done)
-              || (fp_is_sqrt && fsqrt_done)) begin
+              || (fp_is_sqrt && fsqrt_done)
+              || (VC && fp_is_trans && tr_fin)) begin
             if (fp_writes_cc) begin
               ac <= {ac[31:3], fmisc_cc_q};
             end else if (fp_writes_int) begin

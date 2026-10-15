@@ -29,7 +29,7 @@ TB      := $(SIM_DIR)/i960
 # -Wall, and UNUSED is deliberately NOT suppressed. An unused signal here is
 # usually a field extracted and then forgotten, which is the bug class this CPU
 # is most exposed to. It has already caught one import that earned nothing.
-VFLAGS := -Wall -Wno-DECLFILENAME --timing
+VFLAGS := -Wall -Wno-DECLFILENAME --timing -Irtl/cpu/i960
 VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 
 
@@ -64,7 +64,7 @@ FPC_RTL  := $(I960)/i960_fpcvt.sv
 TOP_RTL  := $(DEC_RTL) $(ALU_RTL) $(REG_RTL) $(AGU_RTL) $(LST_RTL) \
             $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(MDV_RTL) \
             $(FPM_RTL) $(FPA_RTL) $(FPD_RTL) $(FPS_RTL) $(FPX_RTL) $(FPC_RTL) \
-            $(I960)/i960_top.sv
+            $(I960)/i960_fptrans.sv $(I960)/i960_top.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -159,14 +159,14 @@ syn_check:
 lint_idx:
 	@echo "== variable selects past an array's end (R807 class)"
 	@rm -rf obj_idx && verilator --json-only -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE --top-module emu \
-	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
+	  -Irtl/sound/jt12 -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
 	@python3 sim/lint/idxcheck.py obj_idx/Vemu.tree.json obj_idx/Vemu.tree.meta.json
 
 # R839: LINT_DEFS=-DM2_VCOP_GUN (or -DM2_VCOP_IO=0 ...) lints another build of the core.
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu $(LINT_DEFS) \
-	  -Irtl/sound/jt12 -Isys $(LINTTOP_RTL) \
+	  -Irtl/sound/jt12 -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) \
 	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv > .lint_top.raw 2>&1 || true
 	@grep -E "syntax error|Cannot find file containing module" .lint_top.raw \
 	  | grep -vE "sys/|rtl/pll/|sim/lint/" > .lint_top.syn || true
@@ -736,9 +736,22 @@ test_i960_top_lat: obj_i960_top/Vi960_top
 
 # --public-flat-rw exposes the register file so lockstep can read architectural
 # state without adding debug ports that would change what is measured.
-obj_i960_top/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+obj_i960_top/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_top -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R845: the transcendental sequencer on the RTL units against its microcode's
+# interpreter (tools/i960_fptrans.py), 20,000 vectors.
+.PHONY: test_i960_fptrans
+test_i960_fptrans: obj_i960_fptrans/Vi960_fptrans_harness
+	@echo "== test i960_fptrans (sinrl cosrl tanrl atanrl microcode, R845)"
+	@python3 -I tools/i960_fptrans.py --vec obj_i960_fptrans/vec.txt 20000
+	@./obj_i960_fptrans/Vi960_fptrans_harness +vec=obj_i960_fptrans/vec.txt
+obj_i960_fptrans/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fptrans_rom.svh $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
+                                        sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
+	$(VBUILD) --top-module i960_fptrans_harness -CFLAGS "-O2" --Mdir obj_i960_fptrans -o Vi960_fptrans_harness \
+	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
+# The ROM is generated: tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
 
 # R839: the same lockstep on a VC=1 build with vc_en high (+vc): sqrtrl,
 # cpysre and cvtzril in the FP mix against the reference's MAME semantics.
@@ -746,8 +759,8 @@ obj_i960_top/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 test_i960_top_vc: obj_i960_top_vc/Vi960_top
 	@echo "== test i960_top VC (Virtua Cop's FP forms, R839)"
 	./obj_i960_top_vc/Vi960_top +vc $(TEST_ARGS)
-obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
-	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
+obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
 	  --Mdir obj_i960_top_vc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # Render a whole frame out of m2_video, from the tile/char/palette images our
@@ -1232,7 +1245,7 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
-                           $(wildcard rtl/cpu/i960/*.sv)
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
@@ -1250,7 +1263,7 @@ obj_boot_vc/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
-                           $(wildcard rtl/cpu/i960/*.sv)
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_vc -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GVCOP=1 \

@@ -44,6 +44,14 @@ struct Cpu {
   bool fp_denorm_operand = false;
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
+  // R845: sinrl / cosrl / tanrl / atanrl computed with the host's libm, as
+  // MAME does. The module returns the correctly rounded value; libm is not
+  // correctly rounded on ~0.2% of arguments, so a one-ulp difference on
+  // these is the recorded deviation: the bench checks it and takes the
+  // module's value (fp_trans_* say where the result went).
+  bool fp_trans = false;
+  int  fp_trans_reg = -1;         // the pair's low register, or -1 for fp[fp_trans_fp]
+  int  fp_trans_fp = 0;
   // Which general register this retire's FP result narrowed into, or -1. A
   // single-precision NaN's sign and payload differ between the units' canonical
   // quiet NaN and the host's propagation — recorded, and already exempted for
@@ -295,6 +303,7 @@ struct Cpu {
   void step() {
     if (trapped) return;
     fp_denorm_operand = false;
+    fp_trans = false; fp_trans_reg = -1;
     unaligned_syn = false;
     fp_sdest          = -1;
     fp_nan_result     = false;
@@ -534,8 +543,9 @@ struct Cpu {
             IP = ip_next;
             break;
           }
+          const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690);
           if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
-              || (ref_vc && (k == 0x698 || k == 0x6e2))) {
+              || (ref_vc && (k == 0x698 || k == 0x6e2)) || trans) {
             const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
             const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
             // movrl copies the pair as MAME does, subnormal or not (the
@@ -555,20 +565,33 @@ struct Cpu {
               if (!(std::isnan(fa) || std::isnan(fb)))
                 AC |= (fa < fb) ? 4 : (fa == fb) ? 2 : 1;
             } else {
+              // R845: outside what the microcode reduces exactly (|x| up
+              // to 2^19 for sin / cos / tan) or where results come near the
+              // flush threshold, the module and libm part by more than an
+              // ulp -- recorded deviations that end the program.
+              if (trans) {
+                fp_trans = true;
+                if (k != 0x690 && std::fabs(fa) > 524288.0) fp_denorm_operand = true;
+              }
               const double r = (k == 0x79f) ? fb + fa : (k == 0x79d) ? fb - fa
                              : (k == 0x79c) ? fb * fa : (k == 0x79b) ? fb / fa
+                             : (k == 0x69c) ? std::sin(fa) : (k == 0x69d) ? std::cos(fa)
+                             : (k == 0x69e) ? std::tan(fa) : (k == 0x690) ? std::atan2(fb, fa)
                              : (k == 0x698) ? std::sqrt(fa)
                              : (k == 0x6e2) ? ((fb >= 0.0) ? std::fabs(fa) : -std::fabs(fa))
                              : fa;
               const double fr = (k == 0x6d9 || k == 0x6e2) ? r : flush_d(r);
+              if (trans && fr != 0.0 && std::fabs(fr) < 1e-290) fp_denorm_operand = true;   // R845
               if (d.dst_lit) {
                 if (d.srcdst & 0x1c) { trapped = true; trap_op = d.op; break; }   // set_rifl: fatalerror
                 fp[d.srcdst & 3] = fr;
+                fp_trans_fp = int(d.srcdst & 3);
               } else {
                 uint64_t v; std::memcpy(&v, &fr, 8);
                 rf.r[d.srcdst & 0x1e]       = uint32_t(v);
                 rf.r[(d.srcdst & 0x1e) + 1] = uint32_t(v >> 32);
                 fp_sdest = int(d.srcdst & 0x1e); fp_rl = true;
+                fp_trans_reg = int(d.srcdst & 0x1e);
               }
               if (std::isnan(fr)) fp_nan_result = true;
             }
