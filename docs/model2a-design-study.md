@@ -34663,3 +34663,16 @@ core clocks >= +0.220, holds >= +0.228, HDMI -0.332; 40,983 ALM. s1105
 (-0.194) and s1106 (-0.611) miss clk_sys. RBF
 build/Model2_20261015_s1107_desert.rbf, md5
 3812a76e8c09528de4138370802f2ae2. Not yet on the board.
+
+**R838 -- DESERT TANK'S LEVER IS THE OTHER WAY ROUND: IN1 BIT 0 HIGH IS
+REVERSE.** s1107 on the board (Ben): "forward and reverse are swapped" --
+Forward drove the tank backwards, Reverse forwards. *Believed (R837):* bit 0
+low = reverse, read off the game's input test and gameplay snapshots in
+MAME. *Now known:* the board is the oracle and says the opposite; why MAME's
+reading disagreed is not established (the R837 snapshots may have read the
+test screen's label rather than the drive direction; not re-checked).
+*Change:* m2_cab_inputs drives bit 0 = dt_shift (1 = reverse) instead of
+~dt_shift; out of reset it is 0, forward. tb_m2_cab_inputs' model and
+directed checks follow (320M Desert checks, 0 mismatches; Daytona 30M, 0).
+To settle on the board: Forward drives ahead, Reverse backs up, and the
+tank starts in forward.

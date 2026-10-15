@@ -100,8 +100,12 @@ end
 // (released), MAME's default -- forward. R837: the Forward / Reverse buttons
 // now set it, and VR4 still flips it; the register is at the end of this
 // file, beside the drive pedal it goes with.
-logic dt_shift;                      // 1 = lever in reverse (IN1 bit 0 low)
-wire [7:0] iob_in1_dt = {2'b11, ~joystick_0[13], ~joystick_0[12], 3'b111, ~dt_shift};
+// R838: THE BOARD SAYS THE OTHER WAY ROUND. With bit 0 low for reverse
+// (R837, read off MAME's input test) Ben's Forward drove the tank backwards
+// and Reverse forwards on s1107, so bit 0 is HIGH in reverse. Out of reset
+// it is 0: forward.
+logic dt_shift;                      // 1 = lever in reverse (IN1 bit 0 high, R838)
+wire [7:0] iob_in1_dt = {2'b11, ~joystick_0[13], ~joystick_0[12], 3'b111, dt_shift};
 assign in1 = is_desert ? iob_in1_dt : {1'b1, gearval, 3'b111, ~joystick_0[9]};
 
 // STEERING: the analog stick, with the D-pad as a ramp for anyone without one.

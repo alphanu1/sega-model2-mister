@@ -12,7 +12,7 @@
 // Tank's HANDLE is Daytona's steering, unchanged); in1, accel and brake equal
 // a model of R837's map, written from the study entry, not the RTL -- for the
 // SYS_MHZ 80 copy and for a SYS_MHZ 1 copy whose timers step 80x as often:
-//   in1   MAME's INPUT_PORTS_START(desert): 0x01 Shift (low = reverse),
+//   in1   MAME's INPUT_PORTS_START(desert): 0x01 Shift (high = reverse, R838 -- the board; R837 had low),
 //         0x10 Machine Gun (bit 12), 0x20 Cannon (bit 13), every other bit 1.
 //         Shift is a latch: Reverse (bit 11) or a wheel's reverse half sets
 //         it, Forward (bit 10) or a wheel's forward half clears it (Reverse
@@ -69,7 +69,7 @@ static DtComb dt_comb(const Model &m) {
   int fl4 = (rx >= 0) ? rx / 4 : -((-rx + 3) / 4);      // floor(rx / 4)
   bool use = !wheel && (ax > 12 || ax < -12);
   c.raw = use ? ((0x80 + rx - fl4) & 0xff) : m.tur_dig;
-  c.in1 = 0xc0 | (((j >> 13) & 1) ? 0 : 0x20) | (((j >> 12) & 1) ? 0 : 0x10) | 0x0e | (m.shift ? 0 : 1);
+  c.in1 = 0xc0 | (((j >> 13) & 1) ? 0 : 0x20) | (((j >> 12) & 1) ? 0 : 0x10) | 0x0e | (m.shift ? 1 : 0);   // R838: high = reverse
   return c;
 }
 static void model_edge(Model &m, bool count) {
@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
   hold(8);
   expect("rest: TURRET (brake) centred", t->f_brake, 0x80);
   expect("rest: ACCEL idle", t->f_accel, 0x20);
-  expect("rest: IN1, lever forward", t->f_in1, 0xff);
+  expect("rest: IN1, lever forward", t->f_in1, 0xfe);
   t->joy_ranalog = 0x8000; hold(SL * 10);               // stick fully up (-128)
   expect("right stick full up, 10 slew steps", t->f_brake, 0x80 - 10);
   hold(SL * 100);
@@ -223,24 +223,24 @@ int main(int argc, char **argv) {
   expect("d-pad down held 200 steps: aim-down rail", t->f_brake, 0xe0);
   t->joystick_0 = 1u << 11; hold(4);
   expect("Reverse: ACCEL full", t->f_accel, 0xe0);
-  expect("Reverse: IN1 lever reverse", t->f_in1, 0xfe);
+  expect("Reverse: IN1 lever reverse", t->f_in1, 0xff);
   t->joystick_0 = 0; hold(4);
   expect("released: ACCEL idle", t->f_accel, 0x20);
-  expect("released: lever stays reverse", t->f_in1, 0xfe);
+  expect("released: lever stays reverse", t->f_in1, 0xff);
   t->joystick_0 = 1u << 10; hold(4);
-  expect("Forward: IN1 lever forward", t->f_in1, 0xff);
+  expect("Forward: IN1 lever forward", t->f_in1, 0xfe);
   t->joystick_0 = (1u << 10) | (1u << 11); hold(4);
-  expect("both: Reverse wins", t->f_in1, 0xfe);
+  expect("both: Reverse wins", t->f_in1, 0xff);
   t->joystick_0 = 0; hold(4);
   t->joystick_0 = 1u << 9; hold(4); t->joystick_0 = 0; hold(4);
-  expect("VR4 press: lever flips to forward", t->f_in1, 0xff);
+  expect("VR4 press: lever flips to forward", t->f_in1, 0xfe);
   t->st_rsteer = 1; t->joy_ranalog = 0x8000; hold(8);    // wheel, Y up = forward half
   expect("wheel mode, Y up: ACCEL 0x20 + 190", t->f_accel, 0xde);   // Daytona's scaling
-  expect("wheel mode, Y up: lever forward", t->f_in1, 0xff);
+  expect("wheel mode, Y up: lever forward", t->f_in1, 0xfe);
   expect("wheel mode: TURRET is the d-pad's", t->f_brake, 0xe0);
   t->joy_ranalog = 0x4000; hold(8);                     // +64: the reverse half
   expect("wheel mode, Y +64: ACCEL 0x20 + 96", t->f_accel, 0x20 + 96);
-  expect("wheel mode, Y +64: lever reverse", t->f_in1, 0xfe);
+  expect("wheel mode, Y +64: lever reverse", t->f_in1, 0xff);
   printf("   %llu failures\n", (unsigned long long)(mism - c1));
 
   bool ok = (mism == 0) && d > 1000 && m80.n_tstep > 10 && m1.n_tstep > 1000 && m1.n_slew > 1000
