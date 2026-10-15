@@ -34678,3 +34678,7 @@ To settle on the board: Forward drives ahead, Reverse backs up, and the
 tank starts in forward.
 R838 on the board: s1108 (6e8db44; clk_mem -0.120, loaded for an input
 check only) -- Ben: "forward and reverse work correctly now".
+**s1108-s1113 = 6e8db44 (R838).** s1112 closes: core clocks >= +0.126,
+holds >= +0.235, HDMI -0.846; 40,975 ALM. s1113 also (+0.068, HDMI -0.557);
+s1108-s1111 miss a core clock (-0.037 to -0.531). RBF
+build/Model2_20261015_s1112_desert.rbf, md5 in HANDOFF. Not yet on the board.
