@@ -1630,6 +1630,11 @@ test_m2_geo_clip: obj_m2_geo_clip/Vtb_clip_top
 	@echo "== test m2_geo_clip (clipping and the float->screen conversion)"
 	@./obj_m2_geo_clip/Vtb_clip_top
 
+# R848: the pool's direct grant against the rr_pick decode it replaced.
+test_fp_pool_gnt:
+	@echo "== test m2_fp_pool grant (rr_onehot against rr_pick, NC 2..6)"
+	@iverilog -g2012 -o obj_fp_pool_gnt.vvp sim/video/tb_fp_pool_gnt.sv && vvp obj_fp_pool_gnt.vvp; s=$$?; rm -f obj_fp_pool_gnt.vvp; exit $$s
+
 .PHONY: test_geo
 # THE JOIN, which is the only thing the per-stage benches cannot cover: three
 # clients on one FP pool, the clipper's projector port answered by a type

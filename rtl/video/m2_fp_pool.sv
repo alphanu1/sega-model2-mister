@@ -151,6 +151,32 @@ module m2_fp_pool #(
                     : first;
   endfunction
 
+  // R848: THE GRANT WITHOUT THE WINNER'S INDEX. rr_pick's index drives the
+  // operand mux and the tag (fanout ~100), and the grant was decoded from it:
+  // a request reached another client's grant through two LUTs and that long
+  // net (s1131: cs -> add_req -> add_win -> add_gnt[1] -> the engine). The
+  // grant is the same function written directly -- client i is granted when
+  // it requests and no client before it in the rotation from `first` does --
+  // so each bit is one LUT of the requests and the pointer. Same rotation,
+  // same priority, nothing granted when nothing requests: every request
+  // vector against every pointer, NC = 2..6, against rr_pick, 0 differ
+  // (sim/video/tb_fp_pool_gnt.sv).
+  function automatic [NC-1:0] rr_onehot(input logic [NC-1:0] req, input logic [CW-1:0] first);
+    logic [NC-1:0] g;
+    logic          seen;
+    g = '0;
+    for (int f = 0; f < NC; f++) begin
+      if (first == CW'(f)) begin
+        seen = 1'b0;
+        for (int j = 0; j < NC; j++) begin
+          if (req[(f + j) % NC] && !seen) g[(f + j) % NC] = 1'b1;
+          seen = seen | req[(f + j) % NC];
+        end
+      end
+    end
+    rr_onehot = g;
+  endfunction
+
   wire [CW-1:0] mul_win = rr_pick(mul_req, mul_rr);
   wire [CW-1:0] add_win = rr_pick(add_req, add_rr);
   // A CLIENT IS MASKED FOR ONE CYCLE AFTER ITS GRANT.
@@ -280,13 +306,11 @@ module m2_fp_pool #(
   // A grant is combinational and means "accepted this cycle" - the pipelines
   // always accept, so the only client that can be refused is one that lost the
   // arbitration.
+  // R848: from the requests directly, not decoded from *_win (see rr_onehot).
   always_comb begin
-    mul_gnt = '0;
-    add_gnt = '0;
-    div_gnt = '0;
-    if (mul_any) mul_gnt[mul_win] = 1'b1;
-    if (add_any) add_gnt[add_win] = 1'b1;
-    if (div_issue) div_gnt[div_win] = 1'b1;
+    mul_gnt = rr_onehot(mul_req, mul_rr);
+    add_gnt = rr_onehot(add_req, add_rr);
+    div_gnt = div_issue ? rr_onehot(div_elig, div_rr) : '0;
   end
 
   // ------------------------------------------------------------- tag pipelines

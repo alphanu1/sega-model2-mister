@@ -275,9 +275,35 @@ int main(int argc, char **argv) {
   const bool prof = std::getenv("M2GD_PROF") != nullptr;
   std::map<int,long> h_eng, h_q, h_k, h_eq; long t_last = 0;
   std::map<int,long> s_eng, s_q, s_k, s_eq;   // snapshots at the last quad
+  // R848: M2GD_POOLHASH=1 -- every cycle's FP pool traffic hashed: each
+  // client's request, grant and response, and the operands the pool took. Two
+  // builds with the same hash put the same operation on the same unit in the
+  // same cycle for the whole walk, which is what "cycle-identical" means for a
+  // change to how a request or a grant is formed.
+  const bool phash = std::getenv("M2GD_POOLHASH") != nullptr;
+  uint64_t ph = 1469598103934665603ULL; long pops = 0;
+  auto pmix = [&](uint64_t v) { for (int i = 0; i < 8; i++) { ph ^= (v >> (8 * i)) & 0xff; ph *= 1099511628211ULL; } };
   for (t = 0; t < 400000000L; t++) {
     const long before = nq;
     tick();
+    if (phash) {
+      auto *r = d->rootp;
+      const uint64_t rg =
+          (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__mul_req
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__mul_gnt << 4
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__mul_rsp << 8
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__add_req << 12
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__add_gnt << 16
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__add_rsp << 20
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__div_req << 24
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__div_gnt << 28
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__div_rsp << 32;
+      pmix(rg);
+      pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__mul_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__mul_b_q);
+      pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__add_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__add_b_q);
+      pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__div_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__div_b_q);
+      if (rg & 0x0f0f0f0fULL) pops++;
+    }
     if (prof) {
       auto *r = d->rootp;
       const int es = r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
@@ -324,6 +350,7 @@ int main(int argc, char **argv) {
   }
   std::fclose(fo); if (fh) std::fclose(fh);
   std::printf("geodiff %s: start %05x, %ld cycles, %ld engine memory reads\n", dp, start, t, g_memreqs);
+  if (phash) std::printf("  pool hash %016llx over %ld cycles (%ld with a request)\n", (unsigned long long)ph, t, pops);
   if (std::getenv("M2GD_RDS")) {
     static const char *SP[4] = {"polygon", "texture", "palette", "xlat"};
     std::printf("  port trips %ld (M2GD_PC=%s)\n", g_porttrips, std::getenv("M2GD_PC") ? std::getenv("M2GD_PC") : "0");

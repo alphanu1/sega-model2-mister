@@ -371,30 +371,46 @@ module m2_geo_clip (
   endfunction
 
   // ---------------------------------------------------------- pool requests
+  // R848: THE REQUESTS ARE REGISTERS; the operands stay a decode of the state.
+  // The request was this decode too -- kst and cs (fanout 111) through two
+  // LUTs -- and it fed the pool's round-robin grant, which every OTHER client
+  // reads in the same cycle: s1131's worst path ran cs -> add_req -> the
+  // pool's winner -> the engine's grant -> the engine's whole next-state
+  // chain (-0.833; -3.28 post-map). rq_* are set on every move INTO K_TEST
+  // or K_CLIP, with the operation cs names there, and dropped on their own
+  // grant; nothing else touches them. So each is high exactly when the decode
+  // was: from the cycle the state is entered to its grant (the state then
+  // waits a cycle on gnt_q, with the request down, where the decode had left
+  // it). Written beside each move rather than from a next-state copy: a
+  // blocking kst_n stopped Quartus extracting kst as a state machine, and the
+  // binary decode it built instead was worse (post-map kst -> rq_add -2.34).
+  logic rq_mul, rq_add, rq_div;
+  logic gnt_q;                       // this module's request was granted last cycle
+  assign mul_req = rq_mul;
+  assign add_req = rq_add;
+  assign div_req = rq_div;
   always_comb begin
-    mul_req = 1'b0; mul_a = '0; mul_b = '0;
-    add_req = 1'b0; add_a = '0; add_b = '0; add_sub = 1'b0;
-    div_req = 1'b0; div_a = '0; div_b = '0;
+    mul_a = '0; mul_b = '0;
+    add_a = '0; add_b = '0; add_sub = 1'b0;
+    div_a = '0; div_b = '0;
     case (kst)
-      K_TEST: begin mul_req = 1'b1; mul_a = qz[ti]; mul_b = plane_a; end
+      K_TEST: begin mul_a = qz[ti]; mul_b = plane_a; end
       K_CLIP: case (cs)
-        4'd0: begin mul_req = 1'b1; mul_a = bz;    mul_b = plane_a; end
-        4'd1: begin add_req = 1'b1; add_a = c_num; add_b = b_v;  add_sub = 1'b1; end
-        4'd2: begin add_req = 1'b1; add_a = bz;    add_b = az;    add_sub = 1'b1; end
-        4'd3: begin mul_req = 1'b1; mul_a = c_den; mul_b = plane_a; end
-        4'd4: begin add_req = 1'b1; add_a = b_v;   add_b = a_v;   add_sub = 1'b1; end
-        4'd5: begin add_req = 1'b1; add_a = c_den; add_b = c_m1;  add_sub = 1'b1; end
-        4'd6: begin div_req = 1'b1; div_a = c_num; div_b = c_den; end
-        4'd7: begin add_req = 1'b1; add_a = F_ONE; add_b = c_t;   add_sub = 1'b1; end
-        4'd8: begin mul_req = 1'b1;
-                    mul_a = (c_axis == 3'd0) ? ax : (c_axis == 3'd1) ? ay
+        4'd0: begin mul_a = bz;    mul_b = plane_a; end
+        4'd1: begin add_a = c_num; add_b = b_v;  add_sub = 1'b1; end
+        4'd2: begin add_a = bz;    add_b = az;    add_sub = 1'b1; end
+        4'd3: begin mul_a = c_den; mul_b = plane_a; end
+        4'd4: begin add_a = b_v;   add_b = a_v;   add_sub = 1'b1; end
+        4'd5: begin add_a = c_den; add_b = c_m1;  add_sub = 1'b1; end
+        4'd6: begin div_a = c_num; div_b = c_den; end
+        4'd7: begin add_a = F_ONE; add_b = c_t;   add_sub = 1'b1; end
+        4'd8: begin mul_a = (c_axis == 3'd0) ? ax : (c_axis == 3'd1) ? ay
                           : (c_axis == 3'd2) ? az : (c_axis == 3'd3) ? au : av;
                     mul_b = c_t; end
-        4'd9: begin mul_req = 1'b1;
-                    mul_a = (c_axis == 3'd0) ? bx : (c_axis == 3'd1) ? by
+        4'd9: begin mul_a = (c_axis == 3'd0) ? bx : (c_axis == 3'd1) ? by
                           : (c_axis == 3'd2) ? bz : (c_axis == 3'd3) ? bu : bv;
                     mul_b = c_u; end
-        default: begin add_req = 1'b1; add_a = c_m1; add_b = c_m2; end
+        default: begin add_a = c_m1; add_b = c_m2; end
       endcase
       default: ;
     endcase
@@ -431,6 +447,7 @@ module m2_geo_clip (
       rot <= '0; ccase <= '0; cn <= '0; cn_last <= '0;
       cp_a <= '0; cp_b <= '0; cp_dst <= '0; second_child <= 1'b0;
       cs <= '0; c_axis <= '0;
+      rq_mul <= 1'b0; rq_add <= 1'b0; rq_div <= 1'b0; gnt_q <= 1'b0;   // R848
       c_num <= '0; c_den <= '0; c_t <= '0; c_u <= '0; c_m1 <= '0; c_m2 <= '0;
       a_col <= '0; a_z <= '0; a_moire <= 1'b0; a_tex <= '0; a_lum <= '0; a_mipz <= 1'b0;
       dbg_in <= '0; dbg_out <= '0; dbg_dropped <= '0;
@@ -464,7 +481,7 @@ module m2_geo_clip (
           a_tex <= in_tex; a_lum <= in_lum; a_mipz <= in_mipz;   // R828c
           lvl <= 3'd0; sp <= '0; ti <= '0;
           if (dbg_in != 16'hffff) dbg_in <= dbg_in + 16'd1;
-          kst <= K_TEST;
+          kst <= K_TEST; rq_mul <= 1'b1;   // R848
         end
 
         // Pop: the top of the stack is entry 0, so this is a shift up.
@@ -489,10 +506,15 @@ module m2_geo_clip (
             sp  <= sp - 3'd1;
             ti  <= '0;
             pcnt <= 3'd0;
-            kst <= (sk_lvl[sp - 3'd1] == 3'd4) ? K_EPROJ : K_TEST;
+            if (sk_lvl[sp - 3'd1] == 3'd4) kst <= K_EPROJ;
+            else begin kst <= K_TEST; rq_mul <= 1'b1; end   // R848
           end else pcnt <= pcnt + 3'd1;
         end
-        K_TEST:  if (mul_gnt) kst <= K_TESTW;
+        // R848: ON THE GRANT A CYCLE LATER (gnt_q), so the state no longer
+        // waits on the pool's arbiter. The request is already down in that
+        // cycle, and no result can come back before K_TESTW: the pool
+        // answers 5 (multiply), 6 (add) or more (divide) cycles after it.
+        K_TEST:  if (gnt_q) kst <= K_TESTW;
         K_TESTW: if (mul_rsp) begin
           is_out[ti] <= plane_gt ? fgt(test_v_q, mul_res) : fgt(mul_res, test_v_q);   // R587
           if (ti == 2'd3) begin
@@ -500,7 +522,7 @@ module m2_geo_clip (
             // cycle later - which is why the decision lives in K_ROT.
             ti  <= '0;
             kst <= K_ROT;
-          end else begin ti <= ti + 2'd1; kst <= K_TEST; end
+          end else begin ti <= ti + 2'd1; kst <= K_TEST; rq_mul <= 1'b1; end   // R848
         end
 
         K_ROT: begin
@@ -508,7 +530,8 @@ module m2_geo_clip (
             // Wholly inside: on to the next plane, nothing created.
             lvl <= lvl + 3'd1;
             ti  <= '0;
-            kst <= (lvl + 3'd1 == 3'd4) ? K_EPROJ : K_TEST;
+            if (lvl + 3'd1 == 3'd4) kst <= K_EPROJ;
+            else begin kst <= K_TEST; rq_mul <= 1'b1; end   // R848
           end else if (is_out == 4'b1111) begin
             if (dbg_dropped != 16'hffff) dbg_dropped <= dbg_dropped + 16'd1;
             kst <= K_POP;
@@ -546,25 +569,22 @@ module m2_geo_clip (
           cs     <= '0;
           c_axis <= 3'd0;
           kst    <= K_CLIP;
+          rq_mul <= 1'b1;   // R848: cs 0 multiplies
         end
 
-        K_CLIP: case (cs)
-          4'd0, 4'd3, 4'd8, 4'd9: if (mul_gnt) kst <= K_CLIPW;
-          4'd6:                   if (div_gnt) kst <= K_CLIPW;
-          default:                if (add_gnt) kst <= K_CLIPW;
-        endcase
+        K_CLIP: if (gnt_q) kst <= K_CLIPW;   // R848: as K_TEST
 
         K_CLIPW: case (cs)
-          4'd0: if (mul_rsp) begin c_num <= mul_res; cs <= 4'd1; kst <= K_CLIP; end
-          4'd1: if (add_rsp) begin c_num <= add_res; cs <= 4'd2; kst <= K_CLIP; end
-          4'd2: if (add_rsp) begin c_den <= add_res; cs <= 4'd3; kst <= K_CLIP; end
-          4'd3: if (mul_rsp) begin c_den <= mul_res; cs <= 4'd4; kst <= K_CLIP; end
-          4'd4: if (add_rsp) begin c_m1  <= add_res; cs <= 4'd5; kst <= K_CLIP; end
-          4'd5: if (add_rsp) begin c_den <= add_res; cs <= 4'd6; kst <= K_CLIP; end
-          4'd6: if (div_rsp) begin c_t   <= div_res; cs <= 4'd7; kst <= K_CLIP; end
-          4'd7: if (add_rsp) begin c_u   <= add_res; cs <= 4'd8; kst <= K_CLIP; end
-          4'd8: if (mul_rsp) begin c_m1  <= mul_res; cs <= 4'd9; kst <= K_CLIP; end
-          4'd9: if (mul_rsp) begin c_m2  <= mul_res; cs <= 4'd10; kst <= K_CLIP; end
+          4'd0: if (mul_rsp) begin c_num <= mul_res; cs <= 4'd1; kst <= K_CLIP; rq_add <= 1'b1; end
+          4'd1: if (add_rsp) begin c_num <= add_res; cs <= 4'd2; kst <= K_CLIP; rq_add <= 1'b1; end
+          4'd2: if (add_rsp) begin c_den <= add_res; cs <= 4'd3; kst <= K_CLIP; rq_mul <= 1'b1; end
+          4'd3: if (mul_rsp) begin c_den <= mul_res; cs <= 4'd4; kst <= K_CLIP; rq_add <= 1'b1; end
+          4'd4: if (add_rsp) begin c_m1  <= add_res; cs <= 4'd5; kst <= K_CLIP; rq_add <= 1'b1; end
+          4'd5: if (add_rsp) begin c_den <= add_res; cs <= 4'd6; kst <= K_CLIP; rq_div <= 1'b1; end
+          4'd6: if (div_rsp) begin c_t   <= div_res; cs <= 4'd7; kst <= K_CLIP; rq_add <= 1'b1; end
+          4'd7: if (add_rsp) begin c_u   <= add_res; cs <= 4'd8; kst <= K_CLIP; rq_mul <= 1'b1; end
+          4'd8: if (mul_rsp) begin c_m1  <= mul_res; cs <= 4'd9; kst <= K_CLIP; rq_mul <= 1'b1; end
+          4'd9: if (mul_rsp) begin c_m2  <= mul_res; cs <= 4'd10; kst <= K_CLIP; rq_add <= 1'b1; end
           default: if (add_rsp) begin
             case (c_axis)
               3'd0:    tx[cp_dst] <= add_res;
@@ -578,7 +598,7 @@ module m2_geo_clip (
               // camera coordinates and is projected when its quad is emitted.
               if (cn == cn_last) kst <= K_CHILD;
               else begin cn <= cn + 2'd1; kst <= K_SET; end
-            end else begin c_axis <= c_axis + 3'd1; cs <= 4'd8; kst <= K_CLIP; end
+            end else begin c_axis <= c_axis + 3'd1; cs <= 4'd8; kst <= K_CLIP; rq_mul <= 1'b1; end
           end
         endcase
 
@@ -637,6 +657,12 @@ module m2_geo_clip (
 
         default: kst <= K_IDLE;
       endcase
+      // R848: a request is set only on a move into K_TEST / K_CLIP, from a
+      // state that requests nothing, so this never meets a set.
+      gnt_q <= (rq_mul && mul_gnt) || (rq_add && add_gnt) || (rq_div && div_gnt);
+      if (mul_gnt) rq_mul <= 1'b0;
+      if (add_gnt) rq_add <= 1'b0;
+      if (div_gnt) rq_div <= 1'b0;
     end
   end
 

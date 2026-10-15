@@ -288,6 +288,11 @@ module m2_geo_engine #(
   wire         f_act = (fs != F_IDLE) && (fs != F_DONE);
   // R757: the two focus multiplies of a point are issued back to back.
   logic        fiss_done, fgot;
+  // R848: E_LUMM / E_LUMA leave on the grant a cycle late (lw_go), so st's
+  // next state reads no grant: the pool's grant is a function of every
+  // client's request, and through st's one-hot hold chain it reached every
+  // state bit (s1131: m2_geo_clip cs -> the pool -> st.E_DONE, -0.833).
+  logic        lw_go;
   // R759: P1(n)'s focus waits until it is needed. The cull test reads P0(n)'s
   // transformed point and the normal; the light and the luminance read
   // neither P1(n) nor its focus. So P0(n) is focused, the cull is decided,
@@ -577,6 +582,7 @@ module m2_geo_engine #(
       tq_wr <= 2'd0; tq_rd <= 2'd0; raw_v <= 2'b00; fq_cur <= 1'b0; fq_slot <= 1'b0;   // R754
       fs <= F_IDLE; h3w <= 16'd0; fiss_done <= 1'b0; fgot <= 1'b0;                     // R757
       cull_q <= 1'b0;                                                                  // R759
+      lw_go <= 1'b0;                                                                   // R848
       for (int k = 0; k < 4; k++) tq[k] <= 3'd0;
       for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
@@ -824,17 +830,24 @@ module m2_geo_engine #(
         end
 
         // ---- R222: luminance = (dotl*dotp < 0 ? 0 : |dotl|) * diffuse + ambient
-        E_LUMM: begin
+        // R848: the request drops on the grant as before; the STATE moves a
+        // cycle later, on lw_go. The extra cycle is spent with the request
+        // already down, inside the multiply's latency (the pool answers 5 or
+        // 6 cycles after the grant), so E_LUMMW / E_LUMAW still see the
+        // response in the same cycle and every port is cycle-identical.
+        E_LUMM: if (lw_go) begin lw_go <= 1'b0; st <= E_LUMMW; end
+        else begin
           fmul_req <= 1'b1;
           fmul_a   <= ((dotl[30:0] != 31'd0) && !dotp_zero && (dotl[31] != dot_neg))
                       ? 32'd0 : {1'b0, dotl[30:0]};
           fmul_b   <= tp_rd[31:0];                       // diffuse, as a float
-          if (fmul_gnt) begin fmul_req <= 1'b0; st <= E_LUMMW; end
+          if (fmul_gnt) begin fmul_req <= 1'b0; lw_go <= 1'b1; end
         end
         E_LUMMW: if (fmul_rsp) begin lum <= fmul_res; st <= E_LUMA; end
-        E_LUMA: begin
+        E_LUMA: if (lw_go) begin lw_go <= 1'b0; st <= E_LUMAW; end
+        else begin
           fadd_req <= 1'b1; fadd_a <= lum; fadd_b <= tp_rd[63:32];   // + ambient
-          if (fadd_gnt) begin fadd_req <= 1'b0; st <= E_LUMAW; end
+          if (fadd_gnt) begin fadd_req <= 1'b0; lw_go <= 1'b1; end
         end
         E_LUMAW: if (fadd_rsp) begin
           luma8  <= f2i8(fadd_res);
