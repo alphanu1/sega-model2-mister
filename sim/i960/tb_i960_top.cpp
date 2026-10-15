@@ -34,6 +34,7 @@ i960ref::Cpu ref;
 std::map<uint32_t,uint32_t> mem;
 uint64_t dut_only_traps = 0;   // R836
 uint64_t fpwrites = 0, fpany = 0, rlany = 0;   // R836: rlany, long-real ops retired
+uint64_t vcsq = 0, vccp = 0, vccv = 0;          // R839: sqrtrl, cpysre, cvtzril retired
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 int lat_max = 0, lat_wait = 0;                // +lat=N, see tick()
@@ -106,6 +107,7 @@ uint64_t gate_arms = 0;
 // Off by default: a loop narrows what a single program covers, and the default
 // mix exists to cover instruction forms. Use it for fetch and cache work.
 bool loop_mode = false;
+bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
 bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
@@ -488,6 +490,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+bus_probe")) bus_probe = true;
     if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
     if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
+    if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
     if (!std::strcmp (argv[i], "+directed"))  directed  = true;
     if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
     if (!std::strcmp (argv[i], "+mix=daytona")) mix_daytona = true;
@@ -521,6 +524,7 @@ int main(int argc, char **argv) {
     intr_total += ref.intr_taken; queued_total += ref.intr_queued;
     dequeued_total += ref.intr_dequeued;
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
+    ref.ref_vc = use_vc;
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -581,13 +585,18 @@ int main(int argc, char **argv) {
         // 0x07 for 0x78f -- an invalid opcode that traps, which is why the
         // FP-register-destination path was never once reached.
         const size_t nfp = (sizeof FPOPS / sizeof FPOPS[0]) - (no_rl ? 6 : 0);
-        const uint32_t sel = FPOPS[rng() % nfp];
+        // R839: with +vc, a quarter of the FP mix is sqrtrl / cpysre / cvtzril
+        static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u };
+        const uint32_t sel = (use_vc && (rng() % 4) == 0) ? VCOPS[rng() % 3] : FPOPS[rng() % nfp];
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;
         if (rng() & 1) insn |= 0x1000;
         // A literal destination writes fp0-fp3 and needs bits 23:21 clear.
         if ((rng() % 4) == 0) insn = (insn | 0x2000u) & ~0x00e00000u;
+        // R839: cvtzril writes dst and dst + 1, unmasked, never a literal
+        // (MAME fatalerrors): dst <= 30, as emul's.
+        if (sel == 0x6c3u) insn = (insn & ~0x00f82000u) | ((rng() % 31) << 19);
       } else if (cls == 8) {                           // mov / bit scan / modac
         static const uint8_t B64[] = {0x0,0x1,0x4,0x5};
         const bool use5c = (rng() & 1);
@@ -904,6 +913,7 @@ int main(int argc, char **argv) {
     // and it only appeared once a program actually left a line asserted.
     irq_state = 0; dut->irq = 0; pend_valid = false; pend2_valid = false;
     dut->rst_n = 0; dut->bus_ack = 0;
+    dut->vc_en = use_vc;
     for (int i = 0; i < 4; i++) tick();
     // NO LONGER POKED. The module now walks the boot record itself in T_BOOT --
     // mem[0] to SAT, mem[4] to PRCB, mem[12] to the IP -- so it arrives at
@@ -1259,6 +1269,8 @@ int main(int argc, char **argv) {
       { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
         if (o==0x78||o==0x68||o==0x6c||o==0x67||o==0x79||o==0x69||o==0x6d) fpany++;
         if (o==0x79||o==0x69||o==0x6d) rlany++;   // R836
+        { const uint32_t k = (o << 4) | ((iw >> 7) & 0xf);   // R839
+          if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++; }
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       if (itrace && (dut->dbg_intr_cnt != intr_before))
         std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
@@ -1419,6 +1431,7 @@ int main(int argc, char **argv) {
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu, long-real (R836): %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites, (unsigned long long)rlany);
+  if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
   std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
               ", %llu: self-modifying code, %llu: IP left the program"

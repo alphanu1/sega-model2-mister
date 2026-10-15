@@ -124,7 +124,7 @@ module m2_cpu_real_harness #(
   logic  [3:0] bus_be;
 
   i960_top #(.IC_HUF(IC_HUF), .IC_ER(IC_ER), .PF2W(PF2W)) u_cpu (
-    .clk(clk_cpu), .rst_n(cpu_rst_n),
+    .clk(clk_cpu), .rst_n(cpu_rst_n), .vc_en(1'b0),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),

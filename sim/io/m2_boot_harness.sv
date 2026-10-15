@@ -553,7 +553,7 @@ module m2_boot_harness #(
   end
 
   i960_top u_cpu (
-    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold),
+    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(1'b0),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),

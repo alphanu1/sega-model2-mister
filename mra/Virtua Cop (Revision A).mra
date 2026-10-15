@@ -4,10 +4,9 @@
       SPDX-License-Identifier: GPL-3.0-or-later
 
       Virtua Cop, Revision A. Derived from MAME 0.289 model2.cpp
-      ROM_START(vcopa). Study R726. ROM LAYOUT ONLY: this boots the game on
-      Daytona's hardware model. It cannot be PLAYED yet - Virtua Cop's I/O
-      board is the Model 1 I/O board type 2 (light guns, an LCD), which the
-      core does not model, and the core has no light-gun input.
+      ROM_START(vcopa). Study R726 (the layout) and R839 (the I/O board): the
+      game ID below selects the type-2 I/O board (MAME model1io2) in a core
+      built with VCOP_IO, and the i960 forms Virtua Cop needs (VCOP_FPU).
 
       THE '93 LAYOUT, BYTE FOR BYTE, so nothing in the core moves for this
       game (R299 moved it and broke Daytona '93; this does not):
@@ -23,10 +22,12 @@
         * index 4, the game ID (Model 1's scheme), is 1: Virtua Cop. The
           Daytona MRAs send none and the core reads 0 - Daytona.
 
-      I/O BOARD FIRMWARE: the type-1 board's epr-14869c, which the core's
-      I/O board model runs (Daytona's). The game's own is epr-17181.6, for
-      the type-2 board; if the game refuses to start on the type-1 firmware,
-      that is the type-2 board this core does not have.
+      I/O BOARD FIRMWARE: the type-2 board's EPR-17181 (MAME model1io2,
+      BIOS epr17181), as the cabinet has it. The file is 64 KB and the board
+      maps 32 KB; the program ends at 0x31ff and the core loads the first
+      16 KB (R839). It is in MAME's vcop / vcopa sets and in model1io2.zip.
+      (R726 loaded the type-1 board's epr-14869c; on the board that core
+      showed a black screen.)
     -->
     <name>Virtua Cop (Revision A)</name>
     <setname>vcopa</setname>
@@ -35,8 +36,8 @@
     <rom index="4" md5="none">
         <part>01 00</part>
     </rom>
-    <rom index="3" zip="model1io.zip|daytona93.zip|daytona.zip" md5="none">
-        <part name="epr-14869c.25"/>
+    <rom index="3" zip="vcopa.zip|vcop.zip|model1io2.zip" md5="none">
+        <part name="epr-17181.6" crc="1add2b82"/>
     </rom>
     <mameversion>0289</mameversion>
     <year>1994</year>

@@ -257,6 +257,10 @@ localparam CONF_STR = {
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
+	// R839: Virtua Cop's guns (shown only for it: menumask bit 1)
+	"h1O[57:56],Crosshair,Small,Large,Off;",
+	"h1O[58],Gun 1,Stick,Mouse;",
+	"h1O[59],Gun reload,Shoot off-screen,Auto;",
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -271,6 +275,7 @@ wire        forced_scandoubler;
 wire  [1:0] buttons;
 wire [127:0] status;
 wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
+wire         vc_gun;    // R839: Virtua Cop with guns built, declared ahead of hps_io (assigned below)
 
 wire [10:0] ps2_key;
 
@@ -304,7 +309,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({15'd0, crt_mra}),   // R801: the CRT MRA's own Video line
+	.status_menumask({14'd0, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -313,7 +318,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
 	.joystick_0(joystick_0),
+	.joystick_1(joystick_1),             // R839: Virtua Cop's second gun
 	.joystick_l_analog_0(joy_analog),
+	.joystick_l_analog_1(joy_analog_1),
+	.ps2_mouse(ps2_mouse),
 	.joystick_r_analog_0(joy_ranalog),
 	.paddle_0(paddle),
 	.ioctl_wait(ioctl_wait),
@@ -331,7 +339,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 );
 
 wire [31:0] joystick_0;
+wire [31:0] joystick_1;     // R839
 wire [15:0] joy_analog;
+wire [15:0] joy_analog_1;   // R839
+wire [24:0] ps2_mouse;      // R839
 wire [15:0] joy_ranalog;
 wire  [7:0] paddle;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
@@ -2318,6 +2329,22 @@ wire is_vcop = (game_id[6:0] == 7'd1);
 // second half at GAME_POLYX, as Virtua Cop's) and its own controls (below).
 wire is_desert = (game_id[6:0] == 7'd2);
 wire prog_ext  = is_vcop | is_desert;   // program 0x40000-0x7FFFF from GAME_POLYX
+// R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
+// off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
+// SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
+// exactly the core they saw before.
+//   VCOP_IO   the type-2 I/O board in m2_ioz80 (TMPZ84C015 at 9.8304 MHz, its
+//             map, CTC channel 1, the gun registers). Its firmware EPR-17181
+//             is 0x3200 bytes and lands in the type-1 board's 16 KB: no M10K.
+//   VCOP_GUN  two light guns from MiSTer's sticks / a mouse, P2's buttons,
+//             the crosshairs and their OSD lines (needs VCOP_IO).
+//   VCOP_FPU  the i960 forms Virtua Cop runs and Daytona never did (cvtzril,
+//             cpysre, sqrtrl, sinrl / cosrl / tanrl / atanrl).
+localparam bit VCOP_IO  = 1'b1;
+localparam bit VCOP_GUN = VCOP_IO & 1'b0;   // R839: off for the first boot build (guns at rest, Daytona's buttons)
+localparam bit VCOP_FPU = 1'b1;
+wire vc_io  = VCOP_IO  & is_vcop;
+assign vc_gun = VCOP_GUN & is_vcop;
 assign crt_mra = game_id[7];   // R801
 // R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
 // switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
@@ -2335,8 +2362,12 @@ assign vid_il_sel = vid_il_r;
 wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
 wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for telemetry
-i960_top u_i960 (
-	.clk(clk_i960), .rst_n(cpu_rst_n),
+// R839: is_vcop into the i960's clock (quasi-static: set by the MRA's load,
+// while the CPU is held in reset).
+logic [1:0] vc_fpu_s;
+always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], VCOP_FPU & is_vcop};
+i960_top #(.VC(VCOP_FPU)) u_i960 (
+	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 	.irq(cpu_irq),
@@ -3956,21 +3987,51 @@ wire  [7:0] zio_wdata, zio_rdata;
 wire [31:0] dc_hits, dc_miss;
 wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
 wire [15:0] iob_seccnt;   // times the firmware has selected them
-m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ)) u_ioz80 (   // 4 MHz exactly, on clk_sys (R573)
+// R839: Virtua Cop's guns and buttons (VCOP_GUN), into the type-2 board.
+wire  [7:0] vc_in0, vc_in1;
+wire  [9:0] vc_p1x, vc_p1y, vc_p2x, vc_p2y;
+wire  [1:0] vc_off;
+wire  [8:0] vc_c1x, vc_c1y, vc_c2x, vc_c2y;
+generate if (VCOP_GUN) begin : g_vcgun
+	m2_vcop_guns #(.MOUSE(1'b1)) u_vcop_guns (
+		.clk(clk_sys), .rst_n(cpu_rst_n),
+		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
+		.ana0(joy_analog), .ana1(joy_analog_1),
+		.ps2_mouse(ps2_mouse), .use_mouse(status[58]),
+		.in0(vc_in0), .in1(vc_in1),
+		.p1x(vc_p1x), .p1y(vc_p1y), .p2x(vc_p2x), .p2y(vc_p2y), .off(vc_off),
+		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y)
+	);
+end else begin : g_novcgun
+	assign vc_in0 = iob_in0; assign vc_in1 = 8'hFF;
+	assign vc_p1x = 10'h17c; assign vc_p1y = 10'h0e6;   // MAME's rest positions
+	assign vc_p2x = 10'h179; assign vc_p2y = 10'h0e8;
+	assign vc_off = 2'b00;
+	assign vc_c1x = 9'd0; assign vc_c1y = 9'd0; assign vc_c2x = 9'd0; assign vc_c2y = 9'd0;
+end endgenerate
+// The type-2 board's DSW1: bit 0 Reloading (0 = Auto, the OSD's "Gun
+// reload"), bit 1 Enemy Character (1 = Normal), the rest unused (1).
+wire [7:0] vc_dsw1 = {6'h3F, 1'b1, ~(VCOP_GUN & status[59])};
+
+m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ),   // 4 MHz exactly, on clk_sys (R573)
+           .TYPE2(VCOP_IO), .T2_SCALE(625), .T2_NUM(6144)) u_ioz80 (   // R839: 9.8304 MHz type 2
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
+	.type2(vc_io),
+	.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y),
+	.gun_off(vc_off),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
 	.fw_we(fw_we_q),       // R593: registered, see fw_we_q
 	.fw_addr(fw_addr_q),
 	.fw_data(fw_data_q),
-	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF), .dp_busy(dp_busy),
+	.in0(vc_gun ? vc_in0 : iob_in0), .in1(vc_gun ? vc_in1 : iob_in1), .in2(8'hFF), .dp_busy(dp_busy),   // R839: the guns' buttons for Virtua Cop
 	// The I/O BOARD's three DIP banks, not the game's. Daytona defines all 24
 	// bits PORT_DIPUNUSED_DIPLOC with the default equal to the mask, so every
 	// bank reads 0xFF -- and 0xFF is what the firmware must see when it selects
 	// secondary controls. Constants rather than OSD switches on purpose: every
 	// bit is unused for this game, so a switch would only offer a way to be
 	// wrong. They are ports so a game that does use them can drive them.
-	.dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),
+	.dsw1(vc_io ? vc_dsw1 : 8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),   // R839: type 2 reads DSW1 at 0x8080
 	// an_callback<0..2> are STEER/ACCEL/BRAKE; <3> is never bound for this
 	// game and an unbound devcb_read8 reads 0xFF, which is what MAME's
 	// firmware deposits at DPRAM 0x03.
@@ -6480,8 +6541,47 @@ end endgenerate
 // input to the mix holds for a whole pixel period and the framework samples on
 // ce_pix, so a register clocked every cycle moves nothing on screen.
 logic [7:0] mix_r_q, mix_g_q, mix_b_q;
+// R839: VIRTUA COP'S CROSSHAIRS (VCOP_GUN, game ID 1, OSD "Crosshair"): a
+// '+' with arms of 5 (Small) or 9 (Large) pixels at each gun's screen
+// position, drawn by inverting the picture under it so it shows on any
+// background -- player 1 all three channels, player 2 green and blue only.
+// The positions are quasi-static (they move at the stick's rate) and cross
+// from clk_sys by two flops; a pixel is several clk_mem cycles, so the hit
+// is registered once ahead of the colour register.
+logic xh1, xh2;
+generate if (VCOP_GUN) begin : g_xhair
+	logic [8:0] x1a, y1a, x2a, y2a, x1b, y1b, x2b, y2b;
+	logic [2:0] ena, enb;
+	always_ff @(posedge clk_mem) begin
+		x1a <= vc_c1x; y1a <= vc_c1y; x2a <= vc_c2x; y2a <= vc_c2y;
+		x1b <= x1a;    y1b <= y1a;    x2b <= x2a;    y2b <= y2a;
+		ena <= {vc_gun, status[57:56]}; enb <= ena;
+	end
+	wire       xon = enb[2] && (enb[1:0] != 2'd2);   // 2 = Off
+	wire [3:0] arm = enb[0] ? 4'd9 : 4'd5;
+	function automatic logic xhit(input logic [9:0] bx, input logic [9:0] by,
+	                              input logic [8:0] cx, input logic [8:0] cy,
+	                              input logic [3:0] len);
+		logic signed [10:0] dx, dy;
+		logic [9:0] ax, ay;
+		dx = $signed({1'b0, bx}) - $signed({2'b00, cx});
+		dy = $signed({1'b0, by}) - $signed({2'b00, cy});
+		ax = dx[10] ? 10'(-dx) : dx[9:0];
+		ay = dy[10] ? 10'(-dy) : dy[9:0];
+		return ((dy == 11'sd0) && (ax <= {6'd0, len})) || ((dx == 11'sd0) && (ay <= {6'd0, len}));
+	endfunction
+	always_ff @(posedge clk_mem) begin
+		xh1 <= xon && xhit(vid_x_d, vid_y, x1b, y1b, arm);
+		xh2 <= xon && xhit(vid_x_d, vid_y, x2b, y2b, arm);
+	end
+end else begin : g_noxhair
+	assign xh1 = 1'b0;
+	assign xh2 = 1'b0;
+end endgenerate
 always_ff @(posedge clk_mem) begin
-	mix_r_q <= mix_r; mix_g_q <= mix_g; mix_b_q <= mix_b;
+	mix_r_q <= mix_r ^ {8{xh1}};
+	mix_g_q <= mix_g ^ {8{xh1 | xh2}};
+	mix_b_q <= mix_b ^ {8{xh1 | xh2}};
 end
 assign ov_r = mix_r_q;
 assign ov_g = mix_g_q;

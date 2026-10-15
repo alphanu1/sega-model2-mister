@@ -45,10 +45,16 @@ module i960_top #(
   // (0x69.5), movrl (0x6d.9). Desert Tank runs them from the title's end
   // (MAME: first movrl at frame 1105, 19.23 s) and this core trapped on every
   // one, halting the i960. 0 traps on them as before.
-  parameter bit RL     = 1'b1
+  parameter bit RL     = 1'b1,
+  // R839: THE FORMS VIRTUA COP RUNS AND DAYTONA NEVER DID -- sqrtrl
+  // (0x69.8), cpysre (0x6e.2) and cvtzril (0x6c.3), MAME's semantics. Built
+  // only with VC = 1, and then live only while vc_en (the game ID says
+  // Virtua Cop): with vc_en low they trap exactly as before. Needs RL.
+  parameter bit VC     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
+  input  logic        vc_en,        // R839: quasi-static, synchronous to clk
 
   // One 32-bit bus port, arbitrated between instruction fetch and data.
   output logic        bus_req,
@@ -649,6 +655,7 @@ module i960_top #(
                      : fp_is_mul  ? fmul_y
                      : fp_is_div  ? fdiv_y
                      : fp_is_sqrt ? fsqrt_y
+                     : fp_is_cpys ? {cpys_neg, fmisc_y_q[62:0]}   // R839
                                   : fmisc_y_q;          // R566: registered
   // R575: STAGED -- a register inside the unit after the round add, so the
   // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
@@ -659,11 +666,25 @@ module i960_top #(
 
   // Which unit an opcode belongs to, and whether it is wired at all.
   logic fp_is_add, fp_is_mul, fp_is_div, fp_is_sqrt, fp_is_misc, fp_valid;
+  logic fp_is_cpys, fp_is_cvtl;                  // R839: cpysre, cvtzril
+  wire  vc_on = VC && RL && vc_en;
   always_comb begin
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
+    fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
     fmisc_op = 3'd7;
     is_rl = 1'b0;
+    // R839: get_1_rifl -> sqrt -> set_rifl; cpysre: |src1| with src2's
+    // "sign" as MAME tests it (src2 >= 0.0, so -0.0 counts as positive and a
+    // NaN as negative); cvtzril: get_1_rif (the single-form operand) ->
+    // (int64_t) -> set_ri64, the unmasked pair dst, dst+1.
+    if (vc_on && d_op == 8'h69 && d_op2 == 4'h8) begin is_rl = 1'b1; fp_is_sqrt = 1'b1; end
+    if (vc_on && d_op == 8'h6e && d_op2 == 4'h2) begin
+      is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7; fp_is_cpys = 1'b1;
+    end
+    if (vc_on && d_op == 8'h6c && d_op2 == 4'h3) begin
+      fp_is_misc = 1'b1; fmisc_op = 3'd4; fp_is_cvtl = 1'b1;
+    end
     case (d_op)
       8'h79: if (RL) case (d_op2)                // R836: long-real arithmetic
                4'hf: begin is_rl = 1'b1; fp_is_add = 1'b1; end                   // addrl
@@ -713,6 +734,9 @@ module i960_top #(
   logic fp_writes_int, fp_writes_cc;
   assign fp_writes_cc  = fp_is_misc && (fmisc_op == 3'd0);
   assign fp_writes_int = fp_is_misc && ((fmisc_op == 3'd3) || (fmisc_op == 3'd4));
+  // R839: cpysre's sign. MAME: t2f >= 0.0 ? fabs(t1f) : -fabs(t1f).
+  wire fp_b_nan  = (fp_b[62:52] == 11'h7ff) && (fp_b[51:0] != 52'd0);
+  wire cpys_neg  = fp_b_nan || (fp_b[63] && (fp_b[62:0] != 63'd0));
   // R566: counts an fpmisc instruction's T_FP cycles. It retires when the
   // registered result is ready: after 1 (R566's output register) or, with the
   // unit STAGED (R575), after 2.
@@ -1634,6 +1658,7 @@ module i960_top #(
           fadd_req  <= fp_is_add;
           fmul_req  <= fp_is_mul;
           fdiv_req  <= fp_is_div;
+          fsqrt_req <= fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it)
           ts        <= T_FP;
         end
 
@@ -1663,6 +1688,14 @@ module i960_top #(
               ac <= {ac[31:3], fmisc_cc_q};
             end else if (fp_writes_int) begin
               wa <= d_srcdst; wd <= fmisc_yi_q; we <= 1'b1;
+              if (fp_is_cvtl) begin
+                // R839: cvtzril -- (int64_t) of a value cvtzri converts; the
+                // high word is the sign. Exact while |x| < 2^31: Virtua Cop's
+                // results measured -57,796..39,835 (MAME, 300 s with a game).
+                mw_base <= d_srcdst;
+                rl_lo1  <= {32{fmisc_yi_q[31]}};
+                rl_wb   <= 1'b1;
+              end
             end else if (d_dst_lit) begin
               // A "literal" destination on an FP op selects fp0-fp3.
               // R836: set_rifl's literal destination with bits 23:21 set is a
@@ -1679,7 +1712,7 @@ module i960_top #(
             end else begin
               wa <= d_srcdst; wd <= fp_res_single; we <= 1'b1;
             end
-            if (is_rl && !fp_writes_cc && !d_dst_lit) ts <= T_PAIR;   // R836: ip moves there
+            if ((is_rl && !fp_writes_cc && !d_dst_lit) || fp_is_cvtl) ts <= T_PAIR;   // R836: ip moves there
             else begin
               ip <= ip_next;
               ts <= T_FETCH;

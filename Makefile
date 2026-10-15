@@ -739,6 +739,16 @@ obj_i960_top/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_top -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
+# R839: the same lockstep on a VC=1 build with vc_en high (+vc): sqrtrl,
+# cpysre and cvtzril in the FP mix against the reference's MAME semantics.
+.PHONY: test_i960_top_vc
+test_i960_top_vc: obj_i960_top_vc/Vi960_top
+	@echo "== test i960_top VC (Virtua Cop's FP forms, R839)"
+	./obj_i960_top_vc/Vi960_top +vc $(TEST_ARGS)
+obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_top_vc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
 # Render a whole frame out of m2_video, from the tile/char/palette images our
 # own i960 built. Skips when they are absent.
 test_m2_video_frame: obj_m2_vf/Vm2_video
@@ -1672,6 +1682,32 @@ obj_ioz80/Vm2_ioz80_harness: sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv \
 	  sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv rtl/cpu/tv80/tv80s.v \
 	  rtl/cpu/tv80/tv80_core.v rtl/cpu/tv80/tv80_alu.v rtl/cpu/tv80/tv80_mcode.v \
 	  rtl/cpu/tv80/tv80_reg.v sim/io/tb_m2_ioz80.cpp
+
+# R839: the type-2 board (Virtua Cop) against a MAME capture, and the type-1
+# board unchanged in a TYPE2 build. ROM-dependent, so not in `make test`:
+#   M2_IOFW=epr-17181.6 M2_GW=gw.log M2_DPW=dpw.log make test_m2_ioz80_t2
+#   M2_IOFW=epr-14869c.25 make test_m2_ioz80_t1same
+IOZ80_T2_SRC = sim/io/m2_ioz80_harness.sv rtl/io/m2_ioz80.sv rtl/cpu/tv80/tv80s.v \
+	  rtl/cpu/tv80/tv80_core.v rtl/cpu/tv80/tv80_alu.v rtl/cpu/tv80/tv80_mcode.v \
+	  rtl/cpu/tv80/tv80_reg.v sim/io/tb_m2_ioz80_t2.cpp
+IOZ80_T2_W = -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-DECLFILENAME
+obj_ioz80_t2/Vm2_ioz80_harness: $(IOZ80_T2_SRC)
+	$(VBUILD) --top-module m2_ioz80_harness $(IOZ80_T2_W) -GTYPE2=1 \
+	  --Mdir obj_ioz80_t2 -o Vm2_ioz80_harness -CFLAGS "-O2" $(IOZ80_T2_SRC)
+obj_ioz80_t1/Vm2_ioz80_harness: $(IOZ80_T2_SRC)
+	$(VBUILD) --top-module m2_ioz80_harness $(IOZ80_T2_W) -GTYPE2=0 \
+	  --Mdir obj_ioz80_t1 -o Vm2_ioz80_harness -CFLAGS "-O2" $(IOZ80_T2_SRC)
+.PHONY: test_m2_ioz80_t2 test_m2_ioz80_t1same
+test_m2_ioz80_t2: obj_ioz80_t2/Vm2_ioz80_harness
+	@echo "== test m2_ioz80 type 2 (EPR-17181 against MAME, R839)"
+	@M2_T2=1 ./obj_ioz80_t2/Vm2_ioz80_harness $(TEST_ARGS)
+test_m2_ioz80_t1same: obj_ioz80_t1/Vm2_ioz80_harness obj_ioz80_t2/Vm2_ioz80_harness
+	@echo "== test m2_ioz80 type 1 identical in a TYPE2 build (R839)"
+	@a=$$(M2_T2=0 ./obj_ioz80_t1/Vm2_ioz80_harness $(TEST_ARGS) | grep HASH); \
+	 b=$$(M2_T2=0 ./obj_ioz80_t2/Vm2_ioz80_harness $(TEST_ARGS) | grep HASH); \
+	 echo "  TYPE2=0 $$a"; echo "  TYPE2=1 $$b"; \
+	 if [ -n "$$a" ] && [ "$$a" = "$$b" ]; then echo PASS; else echo FAIL; exit 1; fi
 
 test_m2_ioboard: obj_m2_io/Vm2_ioboard
 	@echo "== test m2_ioboard (the two replies, on their two triggers)"

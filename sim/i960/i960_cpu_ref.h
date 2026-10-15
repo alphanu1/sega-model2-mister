@@ -42,6 +42,7 @@ struct Cpu {
   // once the divisor flushes. Flagged rather than avoided, so the suite skips
   // exactly the deviation and still compares everything else on that retire.
   bool fp_denorm_operand = false;
+  bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   // Which general register this retire's FP result narrowed into, or -1. A
   // single-precision NaN's sign and payload differ between the units' canonical
   // quiet NaN and the host's propagation — recorded, and already exempted for
@@ -502,15 +503,33 @@ struct Cpu {
             double x; std::memcpy(&x, &v, 8); return x;
           };
           const uint32_t k = (uint32_t(d.op) << 4) | d.op2;
-          if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9) {
+          // R839 (i960_top VC, live while vc_en): sqrtrl 0x69.8 and cpysre
+          // 0x6e.2 are long-real forms; cvtzril 0x6c.3 reads a single-form
+          // operand and writes the unmasked pair dst, dst + 1 (set_ri64).
+          if (ref_vc && k == 0x6c3) {
+            const double fa = d.src1_lit ? fp_lit(d.src1) : u2f_t(rf.r[d.src1]);
+            if (d.dst_lit) { trapped = true; trap_op = d.op; break; }   // set_ri64: fatalerror
+            // The module converts through cvtzri and sign-extends: exact for
+            // |x| < 2^31 (Virtua Cop's own values); outside that MAME's
+            // (int64_t) differs, a recorded deviation that ends the program.
+            if (std::isnan(fa) || fa >= 2147483648.0 || fa <= -2147483649.0) fp_denorm_operand = true;
+            const int64_t v = std::isnan(fa) ? 0 : (fa >= 9.2e18 || fa <= -9.2e18) ? 0 : int64_t(fa);
+            rf.r[d.srcdst]     = uint32_t(uint64_t(v));
+            rf.r[d.srcdst + 1] = uint32_t(uint64_t(v) >> 32);
+            IP = ip_next;
+            break;
+          }
+          if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
+              || (ref_vc && (k == 0x698 || k == 0x6e2))) {
             const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
             const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
             // movrl copies the pair as MAME does, subnormal or not (the
             // module's move path does not flush); the arithmetic units flush
             // a subnormal operand where the host does not -- the recorded
             // deviation (§8.1), skipped as it is for the single forms.
-            if (k != 0x6d9 && (std::fpclassify(fa) == FP_SUBNORMAL || std::fpclassify(fb) == FP_SUBNORMAL))
+            if (k != 0x6d9 && k != 0x6e2 && (std::fpclassify(fa) == FP_SUBNORMAL || std::fpclassify(fb) == FP_SUBNORMAL))
               fp_denorm_operand = true;
+            if (k == 0x6e2 && std::fpclassify(fa) == FP_SUBNORMAL) fp_denorm_operand = true;
             // A subnormal moved is exact here, but it is the one way a subnormal
             // reaches fp0-fp3, and every later FP op that reads it meets the
             // deviation -- so the program ends at the move.
@@ -522,8 +541,11 @@ struct Cpu {
                 AC |= (fa < fb) ? 4 : (fa == fb) ? 2 : 1;
             } else {
               const double r = (k == 0x79f) ? fb + fa : (k == 0x79d) ? fb - fa
-                             : (k == 0x79c) ? fb * fa : (k == 0x79b) ? fb / fa : fa;
-              const double fr = (k == 0x6d9) ? r : flush_d(r);
+                             : (k == 0x79c) ? fb * fa : (k == 0x79b) ? fb / fa
+                             : (k == 0x698) ? std::sqrt(fa)
+                             : (k == 0x6e2) ? ((fb >= 0.0) ? std::fabs(fa) : -std::fabs(fa))
+                             : fa;
+              const double fr = (k == 0x6d9 || k == 0x6e2) ? r : flush_d(r);
               if (d.dst_lit) {
                 if (d.srcdst & 0x1c) { trapped = true; trap_op = d.op; break; }   // set_rifl: fatalerror
                 fp[d.srcdst & 3] = fr;
