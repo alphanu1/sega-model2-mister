@@ -1658,7 +1658,7 @@ module i960_top #(
           fadd_req  <= fp_is_add;
           fmul_req  <= fp_is_mul;
           fdiv_req  <= fp_is_div;
-          fsqrt_req <= fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it)
+          fsqrt_req <= VC && fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it; VC = 0 leaves T_RLLO as it was)
           ts        <= T_FP;
         end
 

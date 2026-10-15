@@ -69,6 +69,20 @@ assign VIDEO_ARX = (!ar) ? 12'd4 : (ar - 1'd1);
 assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 
 `include "build_id.v"
+
+// R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
+// Model 2A/2B/2C branches). Macros rather than parameters because the OSD
+// lines that go with the guns must leave CONF_STR entirely when they are off
+// -- a longer CONF_STR is a bigger hps_io string mux (+~50 ALUT measured), so
+// "off" is only byte-for-byte the old core if the text goes too. Override
+// from the QSF (VERILOG_MACRO "M2_VCOP_IO=0") or here. See VCOP_* below.
+`ifndef M2_VCOP_IO
+`define M2_VCOP_IO 1
+`endif
+`ifndef M2_VCOP_FPU
+`define M2_VCOP_FPU 1
+`endif
+// M2_VCOP_GUN: off in the first boot build; define it to build the guns.
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -257,10 +271,12 @@ localparam CONF_STR = {
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
+`ifdef M2_VCOP_GUN
 	// R839: Virtua Cop's guns (shown only for it: menumask bit 1)
 	"h1O[57:56],Crosshair,Small,Large,Off;",
 	"h1O[58],Gun 1,Stick,Mouse;",
 	"h1O[59],Gun reload,Shoot off-screen,Auto;",
+`endif
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -2340,9 +2356,14 @@ wire prog_ext  = is_vcop | is_desert;   // program 0x40000-0x7FFFF from GAME_POL
 //             the crosshairs and their OSD lines (needs VCOP_IO).
 //   VCOP_FPU  the i960 forms Virtua Cop runs and Daytona never did (cvtzril,
 //             cpysre, sqrtrl, sinrl / cosrl / tanrl / atanrl).
-localparam bit VCOP_IO  = 1'b1;
-localparam bit VCOP_GUN = VCOP_IO & 1'b0;   // R839: off for the first boot build (guns at rest, Daytona's buttons)
-localparam bit VCOP_FPU = 1'b1;
+// (The switches are the M2_VCOP_* macros at the top of this file.)
+localparam bit VCOP_IO  = (`M2_VCOP_IO != 0);
+`ifdef M2_VCOP_GUN
+localparam bit VCOP_GUN = VCOP_IO;
+`else
+localparam bit VCOP_GUN = 1'b0;      // the first boot build: guns at rest, Daytona's buttons
+`endif
+localparam bit VCOP_FPU = (`M2_VCOP_FPU != 0);
 wire vc_io  = VCOP_IO  & is_vcop;
 assign vc_gun = VCOP_GUN & is_vcop;
 assign crt_mra = game_id[7];   // R801
