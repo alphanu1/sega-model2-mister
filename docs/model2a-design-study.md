@@ -34509,3 +34509,10 @@ sand -- and CREDIT 0/1, the framebuffer counter at 0 fps.)
 
 *Decision:* the long-real forms go in (RL=1). Next: a build, Ben runs
 Desert's attract past the title, then a game.
+
+**s1102-s1104 = 90601c5 (R836, the long-real forms).** s1104 closes: core
+clocks >= +0.582, holds >= +0.235, HDMI -0.148; 40,900 ALM (s1101: 40,809,
+so +91 placed against R836's +135 map estimate), M10K 529/553. s1103 also
+closes (+0.306, HDMI -1.159); s1102 misses clk_sys (-0.427). RBF
+build/Model2_20261015_s1104_desert.rbf, md5
+816c13ea966f7c8a5f297768a98ce04e. Not yet on the board.

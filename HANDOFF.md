@@ -10,7 +10,10 @@ Gear Up / Gear Down / VR4), cabinet inputs moved to rtl/io/m2_cab_inputs.sv
 tools/mra_vs_mame.py. MAME: Desert plays; FM never keyed (YM_STUB fine); TGP
 upload = Daytona's program; renders at 30 Hz. BUILT: s1101 (core >= +0.591,
 HDMI -0.031) build/Model2_20261015_s1101_desert.rbf (e9a2d912...). NEXT:
-Ben "load it" -- copy the two Desert MRAs to /media/fat/_Arcade/, check
+s1101 ON THE BOARD: Desert Tank locked at the title -> demo (the i960 trapped on
+movrl/mulrl/cmprl, R836). FIXED in 90601c5; s1104 built (core >= +0.582, HDMI
+-0.148), build/Model2_20261015_s1104_desert.rbf (816c13ea...). NEXT: Ben "load it";
+the MRAs are already on the board. Check
 Daytona unchanged, Desert boots, controls, ~29 fps, 15 kHz MRA.
 Six of nine seeds failed (two unroutable, two short, three Quartus crashes;
 /tmp was 5.1 GB for the crashes).
