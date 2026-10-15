@@ -1684,9 +1684,10 @@ obj_m2_io/Vm2_ioboard: rtl/io/m2_ioboard.sv sim/io/tb_m2_ioboard.cpp
 
 # R835: the cabinet inputs, moved out of Model2.sv. is_desert = 0 against the
 # block as it was at 0f3cbc4 (sim/io/m2_cab_inputs_ref.sv), and Desert Tank's
-# IN1 (machine gun, cannon, the shift lever's toggle) with it set.
+# map with it set -- R837: TURRET on channel 2, the lever from Forward /
+# Reverse -- against a model, plus directed checks.
 test_m2_cab_inputs: obj_m2_cab/Vtb_m2_cab_inputs_top
-	@echo "== test m2_cab_inputs (Daytona unchanged; Desert Tank's IN1)"
+	@echo "== test m2_cab_inputs (Daytona unchanged; Desert Tank's map, R837)"
 	@./obj_m2_cab/Vtb_m2_cab_inputs_top $(TEST_ARGS)
 
 obj_m2_cab/Vtb_m2_cab_inputs_top: rtl/io/m2_cab_inputs.sv sim/io/m2_cab_inputs_ref.sv sim/io/tb_m2_cab_inputs_top.sv sim/io/tb_m2_cab_inputs.cpp

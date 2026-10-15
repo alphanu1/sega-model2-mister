@@ -33,7 +33,8 @@ module m2_cab_inputs #(
   input  logic        st_rsteer,    // status[54]  Right stick
   output logic  [7:0] in0,          // the I/O board's IN0 / IN1, active low
   output logic  [7:0] in1,
-  output logic  [7:0] steer,        // its ADC channels 0..2
+  output logic  [7:0] steer,        // its ADC channels 0..2 (Desert Tank:
+                                    // HANDLE, ACCEL, TURRET -- R837)
   output logic  [7:0] accel,
   output logic  [7:0] brake
 );
@@ -95,17 +96,11 @@ end
 // MRA renames them (Model 1's <buttons names>, no CONF_STR change): VR4
 // becomes Shift, Gear Up / Gear Down become Machine Gun / Cannon.
 // SHIFT IS A LEVER, NOT A BUTTON: the cabinet's forward / reverse switch
-// latches, and MAME models it as a toggle, so each press flips it. Out of
-// reset it reads 1 (released), MAME's default -- forward.
-logic dt_shift, dt_shf_d;
-always_ff @(posedge clk or negedge rst_n) begin
-	if (!rst_n) begin
-		dt_shift <= 1'b0; dt_shf_d <= 1'b0;
-	end else begin
-		dt_shf_d <= joystick_0[9];
-		if (joystick_0[9] && !dt_shf_d) dt_shift <= ~dt_shift;
-	end
-end
+// latches, and MAME models it as a toggle. Out of reset it reads 1
+// (released), MAME's default -- forward. R837: the Forward / Reverse buttons
+// now set it, and VR4 still flips it; the register is at the end of this
+// file, beside the drive pedal it goes with.
+logic dt_shift;                      // 1 = lever in reverse (IN1 bit 0 low)
 wire [7:0] iob_in1_dt = {2'b11, ~joystick_0[13], ~joystick_0[12], 3'b111, ~dt_shift};
 assign in1 = is_desert ? iob_in1_dt : {1'b1, gearval, 3'b111, ~joystick_0[9]};
 
@@ -248,7 +243,79 @@ wire              pedal_up  = st_pedswap ? ~pedal_ax[7] : pedal_ax[7];
 // every second, 60 s of play). So Daytona's 0x20..0xe0 is full travel there.
 wire        [7:0] accel_an  = pedal_up ? pedal_an : 8'h20;
 wire        [7:0] brake_an  = pedal_up ? 8'h20    : pedal_an;
-assign accel = joystick_0[10] ? 8'he0 : accel_an;
-assign brake = joystick_0[11] ? 8'he0 : brake_an;
+wire        [7:0] dy_accel  = joystick_0[10] ? 8'he0 : accel_an;   // Daytona's, as before
+wire        [7:0] dy_brake  = joystick_0[11] ? 8'he0 : brake_an;
+
+// ------------------------------------------------- R837: Desert Tank's ADC
+//
+// THE GAME NAMES ITS CHANNELS (service mode, INPUT TEST, MAME 0.289):
+// HANDLE (0), ACCEL (1), TURRET (2) -- three, and nothing on 3-7. There is
+// no brake: channel 2 is the CANNON'S ELEVATION, an absolute position with
+// 0x80 at centre (MAME's own default for it), lower = aim up (the crosshair
+// at the top of the screen by 0x28), higher = aim down; the game slews the
+// gun to it in about a second. Feeding it a pedal's idle 0x20 is what
+// pinned the board's cannon straight up (s1104). ACCEL is the only drive
+// pedal, and the shift lever (IN1 bit 0, low = reverse) chooses which way it
+// drives; let go and the tank stops.
+//
+// So, for a pad: Forward / Reverse (the Accel / Brake buttons, which players
+// put on the triggers) press the one drive pedal fully AND set the lever --
+// Reverse wins if both are held. The right stick's Y aims the cannon,
+// centred at rest; the d-pad's up / down move a held aim for anyone without
+// a right stick. "Right stick: Pedals+steer" (a wheel: X steers, Y the
+// pedals) keeps that meaning here: Y drives, its sign choosing the lever,
+// and the cannon is the d-pad's. "Pedals: Swapped" flips the right stick's
+// Y in both modes. VR4 still flips the lever, as a cabinet's would be.
+wire              dt_wheel  = rsteer_s[2];
+wire              dt_fwd_b  = joystick_0[10];
+wire              dt_rev_b  = joystick_0[11];
+wire              dt_ped_on = dt_wheel && (pedal_mag > 7'd12);
+wire              dt_go_rev = dt_rev_b || (!dt_fwd_b && dt_ped_on && !pedal_up);
+wire              dt_go_fwd = !dt_rev_b && (dt_fwd_b || (dt_ped_on && pedal_up));
+logic             dt_shf_d;
+always_ff @(posedge clk or negedge rst_n) begin
+	if (!rst_n) begin
+		dt_shift <= 1'b0; dt_shf_d <= 1'b0;
+	end else begin
+		dt_shf_d <= joystick_0[9];
+		if (dt_go_rev)                         dt_shift <= 1'b1;
+		else if (dt_go_fwd)                    dt_shift <= 1'b0;
+		else if (joystick_0[9] && !dt_shf_d)   dt_shift <= ~dt_shift;
+	end
+end
+// The drive pedal: a button is a full press; a wheel's pedal is analogue,
+// Daytona's scaling, and held at rest inside the dead zone so the tank stands.
+wire        [7:0] dt_accel  = (dt_fwd_b || dt_rev_b) ? 8'he0
+                            : dt_ped_on ? pedal_an : 8'h20;
+
+// The turret. Three quarters of the stick is exactly +-96 about 0x80, the
+// steering's arithmetic; -128 negated is +128, which ten bits hold.
+wire signed [7:0] ry        = joy_ranalog[15:8];
+wire signed [9:0] ry_x      = st_pedswap ? -{{2{ry[7]}}, ry} : {{2{ry[7]}}, ry};
+wire signed [9:0] ry_sc     = ry_x - (ry_x >>> 2);
+wire        [7:0] tur_an    = 8'h80 + ry_sc[7:0];
+wire              tur_use   = !dt_wheel && ((ry > 8'sd12) || (ry < -8'sd12));
+// The d-pad's aim HOLDS where it is left (a cannon has no spring), one count
+// every ~7.8 ms: the full 0x20..0xe0 in 1.5 s.
+localparam int unsigned TUR_K = SYS_MHZ * 7812;
+logic [7:0]  tur_dig;
+logic [19:0] tur_div;
+always_ff @(posedge clk or negedge rst_n) begin
+	if (!rst_n) begin
+		tur_dig <= 8'h80; tur_div <= '0;
+	end else if (tur_div == 20'd0) begin
+		tur_div <= 20'(TUR_K - 1);
+		if (joystick_0[3] && !joystick_0[2]) begin           // up: aim up
+			if (tur_dig > 8'h20) tur_dig <= tur_dig - 8'd1;
+		end else if (joystick_0[2] && !joystick_0[3]) begin  // down
+			if (tur_dig < 8'he0) tur_dig <= tur_dig + 8'd1;
+		end
+	end else
+		tur_div <= tur_div - 20'd1;
+end
+wire        [7:0] dt_turret = tur_use ? tur_an : tur_dig;
+
+assign accel = is_desert ? dt_accel  : dy_accel;
+assign brake = is_desert ? dt_turret : dy_brake;
 
 endmodule
