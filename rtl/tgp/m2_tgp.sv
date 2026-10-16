@@ -47,6 +47,8 @@ module m2_tgp #(
   // R852: 4096 for Model 2A -- Virtua Fighter 2 uploads 3,802 words (MAME's
   // program map is 0x000-0xfff) and runs above 0x7ff 53% of the time.
   parameter int unsigned PROG_WORDS = 2048,
+  // R852: subnormal products in the TGP's multiplier (Model 2A)
+  parameter bit SUBNORM = 1'b0,
   // AN EMPTY COMMAND FIFO STALLS THE PROCESSOR. OFF IS THE REFERENCE.
   //
   // gen_fifo.cpp's pop() returns T() on an empty FIFO -- but only AFTER firing
@@ -272,7 +274,7 @@ module m2_tgp #(
   logic        u_mwe, u_mre;
   logic [7:0]  u_c0, u_c1, u_rep;
 
-  mb86233_core core (
+  mb86233_core #(.SUBNORM(SUBNORM)) core (
     .clk(clk), .rst_n(rst_n && sw_done && rel_done),
     .prog_addr(prog_addr), .prog_rdata(prog_rdata),
     .io_addr(io_addr), .io_rd(io_rd), .io_wr(io_wr),

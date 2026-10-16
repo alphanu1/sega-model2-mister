@@ -784,7 +784,7 @@ module m2_boot_harness #(
     end
   end
 
-  m2_copro #(.PROG_WORDS(TGP_PROG)) u_copro (
+  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2)) u_copro (
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),

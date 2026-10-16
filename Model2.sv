@@ -2878,9 +2878,6 @@ logic [31:0]     sc_first;      // what the first candidate held, for the log
 //
 // Latched on the acknowledge and compared the cycle after. One extra cycle per
 // candidate on a scan that runs once at power-on.
-// R852: the scan and the board exist only with M2_M1SOUND (the original
-// board); a 2A build has the SCSP's stand-in below instead.
-generate if (M1SOUND) begin : g_sndscan
 logic [63:0] sc_dat;
 logic        sc_dv;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -2905,7 +2902,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		snd_base <= SND_SCAN_LO; snd_found <= 1'b0; sc_first <= 32'd0;
 	end else begin
 		case (sc_st)
-			SC_IDLE: if (cp_done) begin
+			SC_IDLE: if (cp_done && M1SOUND) begin   // R852: idle on the 2A board (no Model 1 sound board)
 				sc_req <= 1'b1;
 				sc_st  <= SC_REQ;
 			end
@@ -2938,12 +2935,6 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (sc_st == SC_IDLE && !cp_done) sc_req <= 1'b0;
 	end
 end
-end else begin : g_nosndscan
-	always_comb begin
-		sc_st = SC_IDLE; sc_addr = SND_SCAN_LO; sc_req = 1'b0;
-		snd_base = SND_SCAN_LO; snd_found = 1'b0; sc_first = 32'd0;
-	end
-end endgenerate
 
 wire signed [15:0] snd_l, snd_r;
 // R829: THE OSD VOLUME. status[49:46] indexes 80, 90, 100, 0, 10 .. 70 %;
@@ -3961,7 +3952,7 @@ end
 // clocking alone cannot close that -- but a coprocessor that is slow is a
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
-m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048)) u_copro (   // R852
+m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A)) u_copro (   // R852
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),

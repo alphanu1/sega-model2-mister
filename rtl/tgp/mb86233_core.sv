@@ -42,7 +42,9 @@
 
 `timescale 1ns/1ps
 
-module mb86233_core (
+module mb86233_core #(
+  parameter bit SUBNORM = 1'b0   // R852: subnormal products (fp_mul)
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -436,7 +438,7 @@ module mb86233_core (
     end
   end
 
-  mb86233_alu #(.SHORT(1'b1)) u_alu (   // R774
+  mb86233_alu #(.SHORT(1'b1), .SUBNORM(SUBNORM)) u_alu (   // R774; R852
     .clk(clk), .rst_n(rst_n),
     .in_valid(alu_in_valid), .op(alu_op_r),
     .reg_a(pre_a), .reg_b(pre_b), .reg_d(pre_d), .reg_p(pre_p),

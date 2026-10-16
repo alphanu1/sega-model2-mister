@@ -1555,6 +1555,19 @@ endef
 
 $(eval $(call TGP_UNIT,fp_mul,$(TGP)/fp_mul.sv))
 $(eval $(call TGP_UNIT,fp_add,$(TGP)/fp_add.sv))
+# R852: fp_mul with SUBNORM=1 (the Model 2A TGP), subnormals checked against host floats
+obj_fp_mul_sub/Vfp_mul: $(TGP)/fp_mul.sv sim/tgp/tb_fp_mul.cpp
+	$(VBUILD) --top-module fp_mul -GSUBNORM=1 -CFLAGS "-O2 -I../sim/tgp -DFPM_SUBNORM" $(TGPFLAGS) \
+	  --Mdir obj_fp_mul_sub -o Vfp_mul $(TGP)/fp_mul.sv sim/tgp/tb_fp_mul.cpp
+test_fp_mul_subnorm: obj_fp_mul_sub/Vfp_mul
+	@echo "== test fp_mul SUBNORM=1"
+	@./obj_fp_mul_sub/Vfp_mul
+obj_fp_add_sub/Vfp_add: $(TGP)/fp_add.sv sim/tgp/tb_fp_add.cpp
+	$(VBUILD) --top-module fp_add -GSUBNORM=1 -CFLAGS "-O2 -I../sim/tgp -DFPA_SUBNORM" $(TGPFLAGS) \
+	  --Mdir obj_fp_add_sub -o Vfp_add $(TGP)/fp_add.sv sim/tgp/tb_fp_add.cpp
+test_fp_add_subnorm: obj_fp_add_sub/Vfp_add
+	@echo "== test fp_add SUBNORM=1"
+	@./obj_fp_add_sub/Vfp_add
 $(eval $(call TGP_UNIT,fp_div,$(TGP)/fp_div.sv))
 $(eval $(call TGP_UNIT,mb86233_alu,$(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv))
 $(eval $(call TGP_UNIT,mb86233_agu,$(TGP)/mb86233_agu.sv))
@@ -1572,13 +1585,14 @@ TGPCAP     ?= build/tgpcap/race5400
 TGPCAP_RUN ?= build/tgpcap/run
 TGP_LAT    ?= 6
 TGP_REPLAY_RTL := $(TGP_CORE) $(TGP)/m2_tgp.sv $(TGP)/m2_fifo_m10k.sv $(TGP)/m2_copro.sv
-# R852: TGP_PROG=4096 builds the Model 2A program RAM (Virtua Fighter 2's
+# R852: TGP_PROG=4096 builds the Model 2A TGP (its program RAM for Virtua Fighter 2's
 # 3,802-word program), in its own object directory.
 TGP_PROG   ?= 2048
 TGP_ROBJ   := obj_tgp_replay$(if $(filter 2048,$(TGP_PROG)),,_$(TGP_PROG))
 $(TGP_ROBJ)/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
 	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
-	  -GPROG_WORDS=$(TGP_PROG) -CFLAGS "-O2 -DTGP_PROG_WORDS=$(TGP_PROG)" -O3 -LDFLAGS "-lz" \
+	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) \
+	  -CFLAGS "-O2 -DTGP_PROG_WORDS=$(TGP_PROG)" -O3 -LDFLAGS "-lz" \
 	  --Mdir $(TGP_ROBJ) -o Vm2_copro sim/tgp/tgp_replay.vlt \
 	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)
 tgp_replay: $(TGP_ROBJ)/Vm2_copro

@@ -37,7 +37,15 @@
 
 module fp_mul #(
   parameter bit FLUSH_DENORM_IN  = 1'b0,
-  parameter bit FLUSH_DENORM_OUT = 1'b0
+  parameter bit FLUSH_DENORM_OUT = 1'b0,
+  // R852: SUBNORMAL PRODUCTS, as MAME's host floats give them. 0 is the unit
+  // as it was (a product whose significand is below 1 -- a subnormal operand
+  // -- is not renormalised, and a result below the normal range flushes).
+  // 1 normalises the product by its leading zeros (stage 2) and shifts a
+  // result below 2^-126 right into a subnormal before rounding (stage 3).
+  // Virtua Fighter 2's TGP program multiplies subnormals on purpose (integers
+  // carried as subnormal floats; 152 of 28,787 outputs in a 31-frame window).
+  parameter bit SUBNORM          = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -117,9 +125,18 @@ module fp_mul #(
   logic [47:0]        norm_prod;
   logic signed [10:0] norm_exp;
 
+  // SUBNORM: by the leading zeros, so a subnormal operand's product is
+  // normalised too (norm_prod[47] set, the value unchanged).
+  logic [5:0] lz;
+  always_comb begin
+    lz = 6'd47;
+    for (int i = 0; i <= 47; i++) if (s1_prod[i]) lz = 6'(47 - i);
+  end
   assign norm_shift = s1_prod[47];
-  assign norm_prod  = norm_shift ? s1_prod : (s1_prod << 1);
-  assign norm_exp   = s1_exp + (norm_shift ? 11'sd1 : 11'sd0);
+  assign norm_prod  = SUBNORM ? (s1_prod << lz)
+                    : (norm_shift ? s1_prod : (s1_prod << 1));
+  assign norm_exp   = SUBNORM ? (s1_exp + 11'sd1 - $signed({5'd0, lz}))
+                    : (s1_exp + (norm_shift ? 11'sd1 : 11'sd0));
 
   // norm_prod[47] is the implicit bit, [46:24] the fraction.
   // ------------------------------------------- stage 2: register normalised
@@ -145,10 +162,30 @@ module fp_mul #(
   logic [22:0] frac_pre;
   logic        guard, round_bit, sticky;
 
-  assign frac_pre  = s2_prod[46:24];
-  assign guard     = s2_prod[23];
-  assign round_bit = s2_prod[22];
-  assign sticky    = |s2_prod[21:0];
+  // SUBNORM: an exponent of 0 or below is a subnormal result -- shift right
+  // by 1 - exp (the shifted-out bits kept as a sticky bit 0), exponent 0. A
+  // round carry out of it gives exponent 1, the smallest normal, as IEEE.
+  logic [47:0]        dn_prod;
+  logic signed [10:0] dn_exp;
+  logic [10:0]        dn_rsh;
+  always_comb begin
+    dn_prod = s2_prod;
+    dn_exp  = s2_exp;
+    dn_rsh  = 11'd1 - s2_exp;
+    if (SUBNORM && s2_exp <= 11'sd0) begin
+      dn_exp = 11'sd0;
+      if (dn_rsh >= 11'd48) dn_prod = {47'd0, |s2_prod};
+      else begin
+        dn_prod = s2_prod >> dn_rsh[5:0];
+        dn_prod[0] = dn_prod[0] | |(s2_prod & ~(48'hFFFF_FFFF_FFFF << dn_rsh[5:0]));
+      end
+    end
+  end
+
+  assign frac_pre  = dn_prod[46:24];
+  assign guard     = dn_prod[23];
+  assign round_bit = dn_prod[22];
+  assign sticky    = |dn_prod[21:0];
 
   // Round to nearest, ties to even.
   logic round_up;
@@ -159,12 +196,12 @@ module fp_mul #(
   logic [22:0]        frac_final;
 
   assign frac_rnd   = {1'b0, frac_pre} + {23'd0, round_up};
-  assign exp_rnd    = s2_exp + (frac_rnd[23] ? 11'sd1 : 11'sd0);
+  assign exp_rnd    = dn_exp + (frac_rnd[23] ? 11'sd1 : 11'sd0);
   assign frac_final = frac_rnd[23] ? 23'd0 : frac_rnd[22:0];
 
   logic ovf, unf;
   assign ovf = (exp_rnd >= 11'sd255);
-  assign unf = (exp_rnd <= 11'sd0);
+  assign unf = SUBNORM ? 1'b0 : (exp_rnd <= 11'sd0);   // SUBNORM: exponent 0 packs as subnormal
 
   // Registered between the round adder and the pack, so the carry chain and
   // the special-case mux are not on one path.

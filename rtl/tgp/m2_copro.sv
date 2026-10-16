@@ -54,7 +54,9 @@
 module m2_copro #(
   // R852: the TGP's program RAM -- 2048 words on the original board's games,
   // 4096 for Model 2A's Virtua Fighter 2 (3,802 words uploaded)
-  parameter int unsigned PROG_WORDS = 2048
+  parameter int unsigned PROG_WORDS = 2048,
+  // R852: subnormal products (VF2's TGP program relies on them; MAME keeps them)
+  parameter bit SUBNORM = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -444,7 +446,7 @@ module m2_copro #(
   // the consumer stops draining results. Ours drains synchronously -- see the
   // `stall` line above -- so it cannot; and if it ever does, the signature is
   // everything freezing at once, not the frame-1 hang this replaces.
-  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS)) u_tgp (
+  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM)) u_tgp (
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),

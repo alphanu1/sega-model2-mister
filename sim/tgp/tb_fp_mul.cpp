@@ -46,11 +46,17 @@ int main(int argc, char** argv) {
   std::mt19937 rng(20260814u);
   std::uniform_int_distribution<uint32_t> dist(0, 0xffffffffu);
 
+#ifdef FPM_SUBNORM
+  // R852: SUBNORM=1 -- subnormal operands and results are checked too, and
+  // half the random operands are drawn near or below the normal range.
+  const int N = 4000000;
+#else
   const int N = 2000000;
+#endif
   struct Pend { uint32_t a, b; bool live; };
   // Depth follows fp_mul's latency, now 4 to match fp_add after the retime.
   Pend pipe[6] = {};
-  long checked = 0, skipped = 0, fails = 0;
+  long checked = 0, skipped = 0, fails = 0, sub_n = 0;
 
   // Interesting operands seeded ahead of the random stream.
   const uint32_t seeds[] = {
@@ -68,6 +74,32 @@ int main(int argc, char** argv) {
     uint32_t a, b;
     if (i < NS * NS) { a = seeds[i / NS]; b = seeds[i % NS]; }
     else             { a = dist(rng);     b = dist(rng);     }
+#ifdef FPM_SUBNORM
+    // (2m+1)/2 ulps of 2^-149 plus (2m+1) * 2^-173 * 2^-23: a near-tie that only the
+    // bits the denormalising shift drops decide (rounds up; even without them)
+    if (i >= NS * NS && i < NS * NS + 4096) {
+      const uint32_t m = uint32_t(i - NS * NS) & 2047;
+      // a = (1 + 2^-23) * 2^-40, b = (2m+1) * 2^-110: both normal, so the
+      // product's low bits lie ~46 bits below the subnormal ulp
+      a = 0x2b800001u | ((i & 2048) ? 0x80000000u : 0u); b = f2u(std::ldexp(float(2 * m + 1), -110));
+    }
+#endif
+#ifdef FPM_SUBNORM
+    if (i >= NS * NS) {
+      const uint32_t r = dist(rng);
+      if (r & 1) a = (a & 0x807fffffu) | ((r >> 1) & 0x07) << 23;            // exponent 0-7
+      if (r & 2) b = (b & 0x807fffffu) | ((((r >> 4) & 0x7f) + 0x40) << 23); // exponent 64-191
+      if ((r & 0x30) == 0x10) a &= 0x80000fffu;                              // a tiny subnormal
+      if ((r & 0xc0) == 0x40) std::swap(a, b);
+      if ((r & 0x700) == 0x100) {
+        // sparse significands whose product lands just below 2^-126: ties and
+        // near-ties decided only by bits the denormalising shift drops
+        const uint32_t ea = 1 + ((r >> 12) & 0x3f), eb = 126 - ea - ((r >> 18) & 0x1f) + 64;
+        a = (r & 0x80000000u) | (ea << 23) | (((r >> 20) & 7) << 20) | 1;
+        b = ((r << 1) & 0x80000000u) | ((eb & 0xff) << 23) | (((r >> 24) & 7) << 20);
+      }
+    }
+#endif
 
     bool feed = (i < N);
     dut->in_valid = feed;
@@ -87,8 +119,13 @@ int main(int argc, char** argv) {
       // Denormal INPUTS are out of scope: the RTL has no pre-normaliser.
       // Denormal RESULTS are out of scope: the RTL flushes, the host does not.
       // Both are tracked as open questions in docs/m0-mb86233-spike.md.
+#ifdef FPM_SUBNORM
+      if (std::isnan(ref_f)) { skipped++; continue; }
+      if (is_denorm(pipe[3].a) || is_denorm(pipe[3].b) || is_denorm(ref)) ++sub_n;
+#else
       if (is_denorm(pipe[3].a) || is_denorm(pipe[3].b) ||
           is_denorm(ref) || std::isnan(ref_f)) { skipped++; continue; }
+#endif
 
       checked++;
       if (got != ref) {
@@ -102,7 +139,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  printf("fp_mul: checked=%ld skipped=%ld fails=%ld\n", checked, skipped, fails);
+  printf("fp_mul: checked=%ld (with a subnormal operand or result: %ld) skipped=%ld fails=%ld\n", checked, sub_n, skipped, fails);
   delete dut;
   return fails ? 1 : 0;
 }

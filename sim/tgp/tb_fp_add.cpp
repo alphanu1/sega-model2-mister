@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
   // showed 1.87 M failures that were entirely a depth off-by-one. See
   // docs/rtl-conventions.md.
   Pend pipe[6] = {};
-  long checked = 0, skipped = 0, fails = 0;
+  long checked = 0, skipped = 0, fails = 0, sub_n = 0;
 
   // Interesting operands seeded ahead of the random stream.
   const uint32_t seeds[] = {
@@ -71,6 +71,16 @@ int main(int argc, char** argv) {
     uint32_t a, b;
     if (i < NS * NS) { a = seeds[i / NS]; b = seeds[i % NS]; }
     else             { a = dist(rng);     b = dist(rng);     }
+#ifdef FPA_SUBNORM
+    // R852: operands at the bottom of the range (exponent 0-3), often close
+    // to each other, so sums and differences land on the subnormal grid
+    if (i >= NS * NS) {
+      const uint32_t r = dist(rng);
+      if (r & 1) a = (a & 0x807fffffu) | (((r >> 1) & 3) << 23);
+      if (r & 8) b = (b & 0x807fffffu) | (((r >> 4) & 3) << 23);
+      if ((r & 0x300) == 0x100) b = (a & 0x7fffffffu) ^ ((r >> 12) & 0xff) ^ ((r & 0x400) ? 0x80000000u : 0);
+    }
+#endif
 
     bool feed = (i < N);
     dut->in_valid = feed;
@@ -93,8 +103,13 @@ int main(int argc, char** argv) {
       // Denormal INPUTS are out of scope: the RTL has no pre-normaliser.
       // Denormal RESULTS are out of scope: the RTL flushes, the host does not.
       // Both are tracked as open questions in docs/m0-mb86233-spike.md.
+#ifdef FPA_SUBNORM
+      if (std::isnan(ref_f)) { skipped++; continue; }
+      if (is_denorm(pipe[3].a) || is_denorm(pipe[3].b) || is_denorm(ref)) ++sub_n;
+#else
       if (is_denorm(pipe[3].a) || is_denorm(pipe[3].b) ||
           is_denorm(ref) || std::isnan(ref_f)) { skipped++; continue; }
+#endif
 
       checked++;
       if (got != ref) {
@@ -108,7 +123,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  printf("fp_add: checked=%ld skipped=%ld fails=%ld\n", checked, skipped, fails);
+  printf("fp_add: checked=%ld (with a subnormal operand or result: %ld) skipped=%ld fails=%ld\n", checked, sub_n, skipped, fails);
   delete dut;
   return fails ? 1 : 0;
 }

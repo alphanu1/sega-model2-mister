@@ -48,7 +48,9 @@ module mb86233_alu #(
   // three cycles early. Only for a caller that issues one op and waits for
   // out_valid (mb86233_core does): a later long op could otherwise meet an
   // earlier short one in the last stage. 0 keeps the uniform latency.
-  parameter bit SHORT = 1'b0
+  parameter bit SHORT = 1'b0,
+  // R852: fp_mul's subnormal products (Model 2A's Virtua Fighter 2)
+  parameter bit SUBNORM = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -175,14 +177,14 @@ module mb86233_alu #(
   logic mul_ovalid, mul_ovf, mul_unf, mul_inv;
   logic add_ovalid, add_ovf, add_unf, add_inv;
 
-  fp_mul #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN)) u_mul (
+  fp_mul #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN), .SUBNORM(SUBNORM)) u_mul (
     .clk(clk), .rst_n(rst_n),
     .in_valid(opr_valid), .a(opr_mul_a), .b(opr_mul_b),
     .out_valid(mul_ovalid), .result(mul_result),
     .overflow(mul_ovf), .underflow(mul_unf), .invalid(mul_inv)
   );
 
-  fp_add #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN)) u_add (
+  fp_add #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN), .SUBNORM(SUBNORM)) u_add (
     .clk(clk), .rst_n(rst_n),
     .in_valid(opr_valid), .a(opr_add_a), .b(opr_add_b), .sub(opr_sub),
     .out_valid(add_ovalid), .result(add_result),

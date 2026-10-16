@@ -42,7 +42,13 @@ module fp_add #(
   // R740: 1 = a register between the compare and the align shift -- LATENCY
   // 5, not 4. For m2_fp_pool only (80 MHz: add_b_q -> sA_small -0.462 even
   // after R739); mb86233_alu's alignment depends on 4 and keeps 0.
-  parameter bit PIPE_A2 = 1'b0
+  parameter bit PIPE_A2 = 1'b0,
+  // R852: SUBNORMAL RESULTS, as MAME's host floats give them. 0 is the unit as
+  // it was (a sum below 2^-126 flushes to zero). 1 stops the normalising
+  // shift at exponent 1 and packs what is left as a subnormal -- exact, since
+  // a sum of numbers on the subnormal grid is on it too. Model 2A's TGP
+  // (Virtua Fighter 2 accumulates subnormal products).
+  parameter bit SUBNORM = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -290,6 +296,13 @@ module fp_add #(
       shifted  = s1_sum >> 1;
       lost_bit = s1_sum[0];
       exp_adj  = $signed({2'b00, s1_exp}) + 10'sd1;
+    end else if (SUBNORM && ({2'b00, s1_exp} < {5'd0, lzc})) begin
+      // R852: the full shift would take the exponent below 1 -- shift only to
+      // exponent 1 (s1_exp >= 1, so by at most 25); bit 26 stays clear and
+      // the pack writes a subnormal.
+      shifted  = s1_sum << (s1_exp - 8'd1);
+      lost_bit = 1'b0;
+      exp_adj  = 10'sd1;
     end else begin
       // lzc == 1 means the leading one already sits at bit 26.
       shifted  = s1_sum << (lzc - 5'd1);
@@ -377,6 +390,10 @@ module fp_add #(
         result <= {sC_zero_sign, 8'h00, 23'd0};
       end else if (sC_exact_cancel || is_zero_result) begin
         result <= 32'h00000000;
+      end else if (SUBNORM && sC_exp_adj == 10'sd1 && !sC_shifted[26]) begin
+        // R852: a subnormal (exponent field 0), or -- rounded up out of it --
+        // the smallest normal (exponent 1, fraction 0)
+        result <= {sC_sign, 7'd0, frac_rnd[23], frac_final};
       end else if (ovf) begin
         result   <= {sC_sign, 8'hff, 23'd0};
         overflow <= s1_valid;
