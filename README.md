@@ -3,126 +3,123 @@
 
 # Sega Model 2 for MiSTer
 
-An FPGA implementation of Sega's Model 2 arcade board, the original Model 2
-that Daytona USA runs on, for the
-[MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) platform, targeting the
-DE10-Nano's Cyclone V `5CSEBA6U23I7`.
+An FPGA recreation of Sega's original Model 2 arcade board for
+[MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) on the DE10-Nano
+(Cyclone V `5CSEBA6U23I7`).
 
-**Only Model 2 for now.** The later boards (Model 2A-CRX, 2B-CRX and 2C-CRX)
-use different hardware. Each will need its own branch, with the parts that
-differ swapped in, before its games can run.
+**It runs all three original Model 2 games, from one core:**
 
-**This is a work in progress, released as a beta.** **Daytona USA (Deluxe
-'93)** boots and runs its attract mode with the full picture — textured, lit 3D
-over the 2D layers — and with sound, at the arcade's speed: 57 frames a
-second of 57.5, in attract and in a race. **Daytona USA (Revision A)**,
-the 1994 set, runs too. `mra/` holds their MRAs, a Virtua Cop MRA that loads
-its ROMs but does not run yet (its I/O board is not in the core), and a 2D
-tilemap test pattern. What follows is what is built and measured, not a
-plan.
+- **Daytona USA**, both the Deluxe '93 set and the 1994 Revision A, at the
+  arcade's speed: textured, lit 3D over the 2D layers, full sound, 57 frames
+  a second in attract and in races.
+- **Desert Tank**, with its cannon on the right stick and forward/reverse on
+  the triggers.
+- **Virtua Cop**, with its own I/O board and light-gun input from an analog
+  stick or a mouse, so USB light guns work too.
 
-**To run it, see [`releases/`](releases/)** — a dated `.rbf`, the MRAs, and a
-README with the ROMs you need, the settings, and what is not finished.
+It's still a beta, and the list of what's left is below.
 
-## State
+**To play it, go to [`releases/`](releases/).** That has the core, the MRAs,
+and a README covering the ROMs you need, the settings and the controls.
+
+**Only the original Model 2.** The later boards (Model 2A-CRX, 2B-CRX and
+2C-CRX) use different hardware: new sound, new I/O and, for 2B and 2C, a
+different geometry processor. 2A would need its own branch with those parts
+swapped in; 2B and 2C are documented in the design study but not planned.
+Everything added here for one game, like Virtua Cop's I/O board and its
+guns, sits behind a compile-time switch so a later branch can leave it out.
+`mra/` also has a 2D tilemap test pattern.
+
+## Where it stands
 
 | | |
 |---|---|
-| **i960KB CPU** | Complete. Runs Daytona's real boot ROM with a program-counter stream identical to MAME's for 803,355 instructions. On hardware it executes, services interrupts and does not trap. |
-| **2D tilemap (S24TILE)** | Pixel-exact against MAME — ten frames, 190,464/190,464 pixels each. |
-| **SDRAM controller** | Thirteen ports (`NPORTS = 13`; the module's own default is 5, which the top level overrides), 64 MB geometry, verified against the packed ROM image on hardware region by region. Read capture depth is calibrated on boot and overridable from the OSD. |
-| **I/O board** | Working. The board answers, the exchange completes and the game runs. It needs the I/O board's Z80 ROM, taken from either `model1io.zip` or `daytona93.zip` — both sets carry all three revisions (`epr-14869.25`, `epr-14869b.25`, `epr-14869c.25`) and this core uses **revision C**. The Model 1 core is the same physical board and selects the base revision; both work, and the difference is a revision, not a disagreement. |
-| **Sound board** | Working on hardware — the board's own 68000 (fx68k), its FM (jt12) and its MultiPCM samples. |
-| **TGP coprocessor** | Implemented. The MB86233 runs, and Daytona's 2,024-word microcode uploads and executes — verified on hardware, not only in simulation. The microcode is **not a separate download**: it lives inside the game's own data ROM and `tools/extract_tgp_microcode.py` locates it. |
-| **3D renderer** | **Working on hardware.** Display-list walker, geometry (transform, lighting, clipping, projection), quad store and a textured rasteriser drawing **front to back** into a **DDR3 framebuffer**, shown only when a frame is complete. Checked against MAME frame by frame in simulation, and by eye on the board. |
-| **Speed** | With `Draw method: Double Buffered` (the default) and `Texel step 1`: **57 frames a second** of 57.5 in attract and in a race, 99% of frames on time. The main CPU now sets the pace, not the 3D (design study R814-R817). |
-| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs, confirmed on a set. `[15kHz CRT]` MRAs start the core in 15 kHz. |
+| **i960KB CPU** | Complete. Runs Daytona's real boot code instruction for instruction against MAME (803,355 instructions in lockstep), with an 8 KB instruction cache and a fetch path tuned on the game's own code. |
+| **TGP coprocessor** | The MB86233 runs the game's own microcode, which the core extracts from the data ROM. On a recorded race its results match MAME's, apart from how a few NaNs are encoded. |
+| **3D** | Display-list walker, geometry (transform, lighting, clipping, projection), and a textured, mip-mapped rasteriser drawing front to back into a DDR3 framebuffer. A frame is only shown once it's complete. |
+| **2D tilemap** | Pixel-exact against MAME. A four-line buffer ring stops it dropping scanlines on busy screens. |
+| **Sound board** | Its own 68000 (fx68k), the YM3438 (jt12), and both MultiPCM sample chips on one shared engine. Levels match MAME's to within about a dB. |
+| **I/O boards** | Both of the original Model 2's: Daytona's and Desert Tank's (shared with the Model 1 core), and Virtua Cop's type 2, each running its real Z80 firmware. The MRA's game ID picks which. |
+| **Light guns** | Two players, from an analog stick or a mouse, the way MiSTer delivers USB guns. Crosshairs at 24 and 15 kHz. |
+| **SDRAM** | Thirteen ports, 64 MB, read timing fixed (not calibrated) since it was proven there's only one right setting. |
+| **Speed** | Daytona: 57 of 57.5 frames a second in attract and in a race, 99% of frames on time. Desert Tank and Virtua Cop: 29, which is their own rate (they draw every other frame). |
+| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs at 15.7 (default), 15.4 or 15.1 kHz, with MRAs that start straight in 15 kHz. |
 
-### What is open
+### What's left
 
-- **Background music and the game-over speech** are too quiet.
-- **No mip-mapping**, so distant textures shimmer.
+- **Confirmation from CRT, wheel and light-gun owners**, and long runs of
+  the Deluxe '93 set.
+- **More Virtua Cop testing**, past its first stage, and an option for its
+  country setting (it starts in Japanese, as MAME does).
+- **CRT light guns** (GunCon on the SNAC port), documented in the study but
+  not built.
+- **MiSTer's audio filter** is switched off to save space (see Building). It
+  comes back once everything else is in, if there's room.
 
-`HANDOFF.md` carries the current state and the measurements behind it.
+`HANDOFF.md` has the day-to-day state and the measurements behind it.
 
 ## Milestones
 
-`docs/milestones.md` sets the order of work and holds the detail — the pass and
-fail criteria each phase was accepted against. Status as of this commit:
+`docs/milestones.md` sets the order of work and the pass/fail criteria each
+phase was held to.
 
 | | Phase | State |
 |---|---|---|
-| **P0** | Measure before building | **Done.** The costing that decided the approach, taken from instrumented MAME and from other cores on this part rather than estimated. |
-| **P1** | i960KB CPU | **Done.** Exit criteria met, including the third — lockstep against MAME on the real boot ROM. |
-| **P1.5** | 2D on hardware | **Done.** Renders correctly on hardware, pixel-exact against MAME. |
-| **P4** | TGP coprocessor | **Done.** The MB86233 runs on hardware and the game's own microcode uploads and executes. |
-| **P5** | Sound | **Done.** Audible on hardware — the sound board's 68000, FM and MultiPCM. |
-| **P2** | 3D renderer | **Done.** Textured, lit 3D on hardware, front to back into a DDR3 framebuffer. |
-| **P3** | The fit verdict | **Answered, and it is tight.** Everything fits the device together, with essentially no headroom — which is why debug instruments now have to replace each other rather than accumulate. |
-| **P6** | Integration | **Released as a beta.** Daytona runs with 3D and sound at the arcade's 57 fps in attract and in a race; the open items above remain. |
+| **P0** | Measure before building | Done. The approach was costed from instrumented MAME and from other cores on this chip, not guessed. |
+| **P1** | i960KB CPU | Done, including lockstep against MAME on the real boot ROM. |
+| **P1.5** | 2D on hardware | Done, pixel-exact against MAME. |
+| **P4** | TGP coprocessor | Done. |
+| **P5** | Sound | Done. |
+| **P2** | 3D renderer | Done. |
+| **P3** | Does it fit? | Yes, but only just: 99% of the FPGA with all three games, and every core clock meets timing. |
+| **P6** | Integration | Released as a beta, running at the arcade's speed. |
 
-The phases are listed here in the order they were completed, not numerically:
-P4 and P5 were finished before P2, because the coprocessor and the sound board
-each had a working reference to follow and the renderer did not.
-
-### Building this core: timing varies by seed
-
-The design fills about 99% of the part's logic, so whether a build meets timing
-depends on the fitter seed. Every release is a seed that closes every core
-clock, checked on hardware. Earlier in the project three of four seeds did not
-boot at all (an unconstrained startup race); the builds tested on hardware
-since late September have all booted, but if you build this yourself and the
-screen stays black, try another `SEED` in `Model2.qsf` before suspecting your
-setup, and see `tools/seed-pair.sh` below.
-
-**Releases** are in [`releases/`](releases/): one dated `.rbf` and the MRAs, in
-the layout MiSTer expects, with a README of what works and what does not.
+They're listed in the order they were finished. The coprocessor and the sound
+board came before the renderer because each had a working design to learn
+from and the renderer didn't.
 
 ## Building
 
-Quartus Prime **Lite 17.0.0 Build 595** is the only supported toolchain. Later
-versions infer memory differently and the MiSTer framework targets 17.0.x.
+Quartus Prime **Lite 17.0.0 Build 595** is the only supported version. Newer
+versions infer memory differently, and the MiSTer framework targets 17.0.x.
 
 ```
-quartus_sh --flow compile Model2      # the bitstream, ~25 minutes
-make release                          # package .rbf and .mra, refusing a stale build
-tools/seed-pair.sh 1604 1607          # one tree at several seeds, in parallel
+quartus_sh --flow compile Model2      # the bitstream, about 25 minutes
+make release                          # packages the .rbf and .mra, and refuses a stale build
+tools/seed-sweep.sh 3 1000            # fit three seeds at once and report which closed
 ```
 
-`make release` checks source timestamps against the bitstream and the reported
-flow status, because a stale `.rbf` has shipped twice.
+The design fills 99% of the chip, so whether a build meets timing comes down
+to the fitter seed, and it's normal for some seeds to miss. Every
+release is a seed that meets every core clock, tested on the board. If you
+build it yourself and get a black screen, try a different `SEED` in
+`Model2.qsf` before suspecting anything else.
 
-`tools/seed-pair.sh` exists because seeds must be compared **within one
-session**: `build_id.v` is stamped per build, so two bitstreams built on
-different days differ by more than the seed, and that mistake invalidated a
-whole measurement once.
+`make release` compares the source timestamps against the bitstream, because
+a stale `.rbf` has been shipped by mistake before.
 
-### The MiSTer framework carries one patch
+### The framework carries one patch
 
-`sys/` is MiSTer-devel's framework, unmodified except for **one switchable
-patch**, `docs/framework-patches/audio-filter-disable.patch`. It turns off
-MiSTer's built-in audio filter (about 430 ALM) when
-`MISTER_DISABLE_AUDIO_FILTER` is set, and `Model2.qsf` sets it. The design
-is about 99% of the FPGA, and that room goes to the 3D renderer's texture
-fetching (study R788). The game's sound is unaffected; MiSTer's audio filter
-presets do nothing on this core. **This is meant to be temporary:** if room
-can be freed elsewhere, the filter goes back on (drop the macro from
-`Model2.qsf`; the patched file then builds as upstream).
+`sys/` is MiSTer-devel's framework, unchanged except for one small switchable
+patch, `docs/framework-patches/audio-filter-disable.patch`. With
+`MISTER_DISABLE_AUDIO_FILTER` set in `Model2.qsf` it leaves out MiSTer's audio
+filter, which saves about 430 ALM. The game's sound is unaffected; only
+MiSTer's filter presets stop doing anything on this core. It's meant to be
+temporary: drop the macro and the file builds exactly as upstream.
 
-**When updating `sys/` from Template_MiSTer, re-apply it:**
+If you update `sys/` from Template_MiSTer, re-apply it:
 
 ```
 git apply docs/framework-patches/audio-filter-disable.patch
 ```
 
-If it no longer applies cleanly, `docs/framework-patches/README.md` describes
-the three-line change to make by hand. Without the patch the build still
-compiles, because the macro is then unused, but the filter comes back and the
-design loses that room.
+If it doesn't apply cleanly, `docs/framework-patches/README.md` describes the
+three-line change. Without it the build still works, but the filter comes back
+and takes that room.
 
 ## Testing
 
-Everything is simulated before it reaches the fitter. Verilator 5.050 and
+Everything is simulated before it goes near the fitter, with Verilator and
 iverilog.
 
 ```
@@ -130,34 +127,34 @@ make lint      # every RTL module, -Wall
 make test      # the whole suite
 ```
 
-The suite covers each i960 unit, the FPU, whole-CPU lockstep against a
-transcription of MAME, real ROM execution, the SDRAM controller across three
-module geometries, the ROM loader, the CPU bridge, the video timing and a
-whole-frame render, the MB86233 and its arithmetic, the geometry pipeline stage
-by stage, the 68000, the sound board and the I/O board.
+The suite covers every i960 unit and the FPU, whole-CPU lockstep against a
+transcription of MAME, real ROM execution, the SDRAM controller, the ROM
+loader, the CPU bridge, video timing and whole-frame renders, the TGP, the
+geometry and 3D pipeline stage by stage, the texture cache, the 68000, the
+sound board against MAME's own register streams, and the I/O board.
 
-**Differential testing against MAME** is the instrument this project leans on
-hardest, and `docs/differential-testing.md` explains why and what it cannot do:
+Comparing against MAME is the tool this project leans on most, and
+`docs/differential-testing.md` explains why and where it falls short:
 
 ```
-tools/i960-diff.sh [ms] [set]        # our PC stream against MAME's, instruction by instruction
-tools/i960-resync-diff.py            # the same, across wait loops the two machines spin differently
-tools/m2-framediff.sh                # a rendered frame against MAME's, demanding 100%
-tools/rom_csum.py <mra> <dir> --scan # what each 2 MB of the ROM image should fold to
+tools/i960-diff.sh [ms] [set]        # our CPU against MAME's, instruction by instruction
+tools/i960-resync-diff.py            # the same, across wait loops the two spin differently
+tools/m2-framediff.sh                # a rendered frame against MAME's
+tools/rom_csum.py <mra> <dir> --scan # what each 2 MB of the ROM image should add up to
 ```
 
-**Simulation is not the last word, and has been wrong about hardware.** The
-same RTL that renders 478 polygons in the bench renders none on the board. Where
-the bench and the board disagree, the board wins. Simulation also cannot see
-memory inference: only a Quartus build can tell you whether an array landed in
-M10K or in flip-flops, and it reports success either way.
+Simulation doesn't have the last word, though. The same code that drew 478
+polygons in a testbench once drew none on the board, and simulation can't
+tell you whether Quartus put a memory in block RAM or in flip-flops. When the
+bench and the board disagree, the board wins. MAME isn't the last word either:
+it's a reference for what the chips compute, and a few things it gets wrong
+had to be worked out from the hardware.
 
 ## ROMs
 
-**No ROM, ROM fragment, or ROM-derived binary is in this repository and none
-ever will be.** `.mra` files describing a layout are fine; the bytes are not.
-`docs/rom-layout.md` describes what a set must contain and how to build the
-test images from MAME.
+No ROM, piece of a ROM, or anything built from ROM data is in this repository,
+and none ever will be. MRA files describing the layout are fine; the bytes are
+not. `docs/rom-layout.md` describes what a set must contain.
 
 ## Layout
 
@@ -170,43 +167,44 @@ rtl/sound/              sound board, 68000, FM, MultiPCM
 rtl/mem/                SDRAM controller
 rtl/io/                 ROM loader, CPU bridge, I/O board, backup SRAM
 sim/                    testbenches, one directory per area
-tools/                  differential scripts, MAME instrumentation, deployment
+tools/                  comparison scripts, MAME instrumentation, deployment
 docs/                   the design study, and one file per subsystem
-third_party/            vendored cores, each recorded in THIRD_PARTY.md
+third_party/            outside cores, each recorded in THIRD_PARTY.md
 ```
 
 ## Documents
 
-- **`docs/model2a-design-study.md`** — the binding one. What fits, what has an
-  oracle, what has a licence, and §10: every finding that turned out wrong, what
-  was believed, and how it was corrected. Read the relevant section before
-  making a design decision.
-- `docs/milestones.md` — order of work.
-- `docs/differential-testing.md` — the method, and its limits.
+- **`docs/model2a-design-study.md`** is the main one: what fits, what's been
+  checked against what, what has a licence, and, in §10, every finding that
+  turned out to be wrong, what was believed and how it was corrected.
+- `docs/milestones.md`: the order of work.
+- `docs/differential-testing.md`: the method and its limits.
 - `docs/io-board.md`, `docs/rom-layout.md`, `docs/mister-integration.md`.
-- `HANDOFF.md` — current state and everything open.
+- `HANDOFF.md`: the current state and everything open.
 
-The recorded failures in §10 are the most useful part of this repository. Six
-separate defects here were a model gentler than the thing it modelled, and
-several were found only because the wrong answer had been written down the first
-time.
+The recorded mistakes in §10 are honestly the most useful part of the
+repository. Several bugs here were a model that was gentler than the thing
+it modelled, and more than one was only found because the wrong answer had
+been written down the first time.
 
 ## Third party
 
-Recorded in `THIRD_PARTY.md` with upstream, commit, licence, and what was
-changed:
+Each is recorded in `THIRD_PARTY.md` with its source, commit, licence and what
+was changed:
 
-- **[sega-model1-mister](https://github.com/alphanu1/sega-model1-mister)** —
-  sibling project, and **the oracle for this one**: a working Sega renderer on
-  the same part. The MB86233 came from it with its verification, and the I/O
-  board is the same physical device.
-- **[fx68k](https://github.com/ijor/fx68k)** — cycle-exact 68000, GPL-3.0, for
-  the sound CPU.
-- **[jt12](https://github.com/jotego/jt12)** — the FM chip, GPL-3.0, by Jose
+- **[sega-model1-mister](https://github.com/alphanu1/sega-model1-mister)**, the
+  sister project and the reference for this one: a working Sega renderer on the
+  same chip. The TGP came from it, and the I/O board is the same device.
+- **[fx68k](https://github.com/ijor/fx68k)**, a cycle-exact 68000 (GPL-3.0),
+  for the sound CPU.
+- **[jt12](https://github.com/jotego/jt12)**, the FM chip (GPL-3.0), by Jose
   Tejada.
-- **[meathax/s32](https://github.com/meathax/s32)** — the MultiPCM, GPL-3.0.
-- **tv80**, by Guy Hutchison after Daniel Wallner's T80 — the I/O board's Z80.
-- **[MAME](https://www.mamedev.org/)** — a reference for what the silicon
+- **[meathax/s32](https://github.com/meathax/s32)**, the MultiPCM (GPL-3.0),
+  with its volume and pan brought in line with MAME and both chips sharing one
+  engine.
+- **tv80**, by Guy Hutchison after Daniel Wallner's T80, for the I/O board's
+  Z80.
+- **[MAME](https://www.mamedev.org/)**, as a reference for what the hardware
   computes. Not linked or distributed.
 
 ## Licence

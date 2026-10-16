@@ -123,7 +123,22 @@ module m2_raster_fill #(
   // The u/v span values are (u/z) << 18 for every UZF: 18 - UZF fraction bits
   // over 13 + UZF integer ones, so a 32-bit signed value always holds them.
   // 0 is the old precision (the representation differs; the values do not).
-  parameter int unsigned UZF = 4
+  parameter int unsigned UZF = 4,
+  // R828: THE QUAD'S MIP BIAS. For a projective map the texel footprint along
+  // any screen direction is N * z^2 with N constant along that direction, and
+  // along a quad's edge N is the edge's texels per pixel times the two ends'
+  // 1/z: |duv| * oz_a * oz_b / |dxy|. The largest over the edges, as a log in
+  // quarter levels, is span_mipk; m2_span_tex adds -2 log2(1/z) per group.
+  // Worked out one edge a cycle beside S_OZ's normaliser, which already walks
+  // the vertices with their raw u, v and 1/z. 0: span_mipk is 0 and unused.
+  // R828a: THE OSD CHOOSES HOW MUCH OF THE SMALLEST EDGE K COUNTS. The
+  // largest is the footprint's major axis, and on a road seen at a grazing
+  // angle that is the compressed depth axis: the near road went 2-4 levels
+  // blurry (s1052 on the board), while face-on surfaces (the mountains) looked
+  // right. K = max - (max - min) * w, w = 0 (R828 exactly), 1/4 or 1/2: a
+  // weighted mean of the logs, which leaves a face-on quad (max ~ min) where
+  // R828 put it and pulls an oblique one towards its minor axis.
+  parameter bit MIP = 1'b0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -148,6 +163,16 @@ module m2_raster_fill #(
   input  logic [15:0]        in_oz0, in_oz1, in_oz2, in_oz3,
   input  logic [15:0]        in_frac,          // R626: {fy3,fx3..fy0,fx0}
   input  logic [23:0]        in_tex,
+  // R828a: the mip rule, run time (OSD, quasi-static, on clk): 0 no level
+  // (span_mipk -512, level 0 everywhere), 1 the largest edge K (R828), 2 max -
+  // (max - min) / 4, 3 max - (max - min) / 2. Unused without MIP.
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic [1:0]         mip_mode,
+  // R828c: the geometry's no-mip flag for this quad (m2_geometry q_mipz):
+  // the game's own level is at most -MIPZ_B all over the polygon, so its
+  // spans carry no level (K_NONE), as Off does. Unused without MIP.
+  input  logic               in_mipz,
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // Viewport, inclusive on all four edges.
   input  logic signed [15:0] view_x1, view_x2, view_y1, view_y2,
@@ -180,6 +205,7 @@ module m2_raster_fill #(
   output logic signed [23:0] span_doozdx,
   output logic [23:0]        span_tex,
   output logic               span_tex_en,
+  output logic signed [9:0]  span_mipk,      // R828: the quad's mip bias (MIP)
 
   // One cycle. Note quad_done can land in the same cycle as the quad's last
   // span, and in_ready can rise with that span still in flight — the next quad
@@ -390,6 +416,7 @@ module m2_raster_fill #(
   logic signed [31:0] base_o, nxo, nyo;
   logic               pf_c;              // the third fit's second divide is back
   logic [23:0]        tex_r;
+  logic               mz_r;      // R828c: in_mipz, latched with the quad
   logic               tex_ok;            // the fit succeeded and the poly is textured
   // SIXTEEN-BIT GRADIENTS, 8.8 TEXELS PER PIXEL (R286). Thirty-two bits of
   // gradient buys nothing a picture can show: the steepest useful slope is a
@@ -476,6 +503,22 @@ module m2_raster_fill #(
     pr_u1 <= pf_u1; pr_u2 <= pf_u2; pr_v1 <= pf_v1; pr_v2 <= pf_v2;
     pr_o1 <= pf_o1; pr_o2 <= pf_o2;
   end
+  // R847: THE DETERMINANT'S TWO PRODUCTS, REGISTERED EVERY CYCLE FROM pr_*.
+  // det_r = ax*by - bx*ay was one cycle of multiply and subtract, and Quartus
+  // SHARED its multipliers with nxo's (o1*by - o2*ay: the same by and ay, a
+  // different state), so the path was pr_* -> the operand mux -> one DSP ->
+  // a second DSP's adder -> det_r: s1129-s1131 -0.35 .. -0.55 ns, 160-422
+  // paths a seed (pf_st.S_PF_N, the mux's select, and pr_o1 -> det_r / nxo).
+  // Loaded every cycle, with no reset and no enable, these cannot be shared
+  // and pack into their DSP's output registers; det_r subtracts them a cycle
+  // later. They follow pr_* by a cycle, so S_PF_DW now waits two cycles
+  // (dw_2) -- one more cycle per pass through it, two or three a quad.
+  logic signed [31:0] dp_ab, dp_ba;
+  always_ff @(posedge clk) begin
+    dp_ab <= 32'(pr_ax) * 32'(pr_by);
+    dp_ba <= 32'(pr_bx) * 32'(pr_ay);
+  end
+  logic dw_2;   // R847: S_PF_DW's second cycle
 
   // A DIVIDE THAT KEEPS ITS BITS. The gradient is a fraction -- texels per
   // pixel, usually between 1/16 and 16 -- and an integer divider returns zero
@@ -1131,7 +1174,8 @@ module m2_raster_fill #(
       got_b      <= 1'b0;
       span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0; span_ooz <= '0;
       pf_a <= 1'b0; pf_b <= 1'b0;
-      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; pf_ph <= 2'd0; det_first_abs <= '0;
+      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; mz_r <= 1'b0; pf_ph <= 2'd0; det_first_abs <= '0;
+      dw_2 <= 1'b0;   // R847
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
@@ -1230,10 +1274,12 @@ module m2_raster_fill #(
           end
         end
 
-        S_PF_DW: pf_st <= S_PF_D;   // R727
+        // R727: pr_* follow pf_second; R847: and dp_* follow pr_*, a cycle each
+        S_PF_DW: if (!dw_2) dw_2 <= 1'b1;
+                 else begin dw_2 <= 1'b0; pf_st <= S_PF_D; end
 
         S_PF_D: begin
-          det_r <= 32'(pr_ax) * 32'(pr_by) - 32'(pr_bx) * 32'(pr_ay);   // R727: pr_*
+          det_r <= dp_ab - dp_ba;   // R847: the products registered (R727: of pr_*)
           pf_st <= S_PF_N;
         end
 
@@ -1490,9 +1536,11 @@ module m2_raster_fill #(
             oz_pre  <= 1'b1;                        // R731: emax in S_OZ's first cycle
             oz_i    <= 2'd0;
             tex_r     <= in_tex;
+            mz_r      <= in_mipz;                // R828c
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
             pf_ph     <= 2'd0;                // R674
+            dw_2      <= 1'b0;                // R847: a fit abandoned in S_PF_DW
             dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
             // An untextured quad pays nothing for any of this.
             // R337: normalise 1/z before the plane fit, because the fit runs
@@ -1817,6 +1865,137 @@ module m2_raster_fill #(
   assign span_doozdx = dodx;                               // R337
   assign span_tex    = tex_r;
   assign span_tex_en = tex_ok;
+
+  // ------------------------------------------------------------ R828: the mip bias
+  // Stage one of S_OZ selects vertex oz_i (oz_u, oz_v are its raw 11.2 u, v);
+  // this takes its x, y and log2 of its 1/z on the quad's normalised scale
+  // alongside. Stage two -- the vertex standing in oz_u -- makes the edge from
+  // the vertex before it; after vertex 3 one more cycle closes 3 -> 0. A
+  // triangle (a corner repeated) has an edge of length zero, which is skipped.
+  //
+  // In quarter levels: lq(v) = 4 * msb(v) + the two bits below it, and
+  //   K_e = lq(max|du|,|dv|) - lq(max|dx|,|dy|) + lo_a + lo_b + 120
+  // where lo = 4 * (14 - (emax - e)) + m[7:6] is log2 of oz_norm's value, and
+  // 120 = 8 * 16 - 8 folds in span_ooz's 16 fraction bits and the quarter
+  // texels (m2_span_tex: L = (K - 2 lq(ooz)) >> 2). The maxima are ORs and the
+  // magnitudes one's complements -- a log only needs the leading bits.
+  localparam logic signed [9:0] K_NONE = -10'sd512;
+  localparam logic signed [9:0] K_TOP  =  10'sd511;   // R828a: the min's start
+  // x and y in 13 bits: m2_quad_store saturates every screen coordinate to
+  // XW = 13 (R327), so the differences fit 14. The first vertex's x, y are
+  // read from sx[0], sy[0], which hold until the next quad.
+  logic signed [12:0] kz_x, kz_y, kp_x, kp_y;
+  logic [12:0]        kp_u, kp_v, kf_u, kf_v;
+  logic signed [6:0]  kz_l, kp_l, kf_l;
+  logic               kz_lv, kp_lv, kf_lv;
+  logic               k_close;
+  logic signed [9:0]  k_r;
+  logic signed [9:0]  k_n;    // R828a: the smallest edge K
+  logic signed [9:0]  k_o;    // R828a: the quad's K as it leaves
+  // Every edge K lies in [49, 301] (lq's 0..63 each way, the two 1/z logs'
+  // -8..118, + 120), so with an edge the spread is 0..252 and nothing wraps.
+  wire  signed [9:0]  k_d = k_r - k_n;
+  function automatic logic [5:0] lq(input logic [14:0] v);
+    logic [3:0]  m;
+    logic [16:0] w;
+    begin
+      m = 4'd0;
+      for (int i = 0; i < 15; i++) if (v[i]) m = 4'(i);
+      // the two bits below the leading one: w[m+1:m] of v with two zeros
+      // under it -- in range for every m (R807: no select past the end)
+      w  = {v, 2'b00};
+      lq = {m, w[{1'b0, m} +: 2]};
+    end
+  endfunction
+  wire        ks1   = MIP && (pf_st == S_OZ) && !oz_pre && !oz_last;   // stage one
+  wire        ks2   = MIP && (pf_st == S_OZ) && !oz_pre && oz_w_v;     // stage two
+  wire [7:0]  kd_e  = oz_emax - qoz[oz_i][15:8];
+  // the edge: from kp to the vertex in stage two, or to the first on the close
+  wire signed [12:0] kb_x = k_close ? sx[0][12:0] : kz_x;
+  wire signed [12:0] kb_y = k_close ? sy[0][12:0] : kz_y;
+  wire [12:0]        kb_u = k_close ? kf_u : oz_u;
+  wire [12:0]        kb_v = k_close ? kf_v : oz_v;
+  wire signed [6:0]  kb_l = k_close ? kf_l : kz_l;
+  wire               kb_lv = k_close ? kf_lv : kz_lv;
+  // THREE STAGES, NOT ONE (post-map timing: the whole edge in one cycle,
+  // k_close -> subtract -> magnitude -> leading one -> sum -> max -> k_r,
+  // was -8.1 ns at clk_sys). E1 the differences' magnitudes and the 1/z logs'
+  // sum, E2 the two logs, E3 K_e, then the running max. K is final four
+  // cycles after the close, and the first span waits for the plane fit
+  // (~18 cycles after S_OZ), so nothing waits for it.
+  wire               ke_go = (ks2 && (oz_w != 2'd0)) || k_close;   // an edge this cycle
+  wire               k_new = ks2 && (oz_w == 2'd0);                // a new quad's first vertex
+  wire signed [13:0] ke_du = 14'({1'b0, kb_u}) - 14'({1'b0, kp_u});
+  wire signed [13:0] ke_dv = 14'({1'b0, kb_v}) - 14'({1'b0, kp_v});
+  wire signed [13:0] ke_dx = 14'(kb_x) - 14'(kp_x);
+  wire signed [13:0] ke_dy = 14'(kb_y) - 14'(kp_y);
+  logic              e1_v, e2_v, e3_v;
+  logic [12:0]       e1_t;
+  logic [12:0]       e1_s;
+  logic signed [7:0] e1_l, e2_l;
+  logic [5:0]        e2_lt, e2_ls;
+  logic signed [9:0] e3_k;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      e1_v <= 1'b0; e2_v <= 1'b0; e3_v <= 1'b0;
+      e1_t <= '0; e1_s <= '0; e1_l <= '0; e2_l <= '0; e2_lt <= '0; e2_ls <= '0; e3_k <= '0;
+    end else begin
+      // E1
+      e1_v <= ke_go && !k_new && kp_lv && kb_lv;
+      e1_t <= 13'(ke_du ^ {14{ke_du[13]}}) | 13'(ke_dv ^ {14{ke_dv[13]}});
+      e1_s <= 13'(ke_dx ^ {14{ke_dx[13]}}) | 13'(ke_dy ^ {14{ke_dy[13]}});
+      e1_l <= {kp_l[6], kp_l} + {kb_l[6], kb_l};
+      // E2 -- an edge of length zero (a triangle's repeated corner) is no edge
+      e2_v  <= e1_v && !k_new && (e1_t != 13'd0) && (e1_s != 13'd0);
+      e2_lt <= lq({2'd0, e1_t});
+      e2_ls <= lq({2'd0, e1_s});
+      e2_l  <= e1_l;
+      // E3
+      e3_v <= e2_v && !k_new;
+      e3_k <= 10'({4'd0, e2_lt}) - 10'({4'd0, e2_ls}) + {{2{e2_l[7]}}, e2_l} + 10'sd120;
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      kz_x <= '0; kz_y <= '0; kz_l <= '0; kz_lv <= 1'b0;
+      kp_x <= '0; kp_y <= '0; kp_u <= '0; kp_v <= '0; kp_l <= '0; kp_lv <= 1'b0;
+      kf_u <= '0; kf_v <= '0; kf_l <= '0; kf_lv <= 1'b0;
+      k_close <= 1'b0; k_r <= K_NONE; k_n <= K_TOP; k_o <= K_NONE;
+    end else begin
+      if (ks1) begin
+        kz_x  <= sx[oz_i][12:0];
+        kz_y  <= sy[oz_i][12:0];
+        kz_lv <= (qoz[oz_i][15:8] != 8'd0) && (kd_e < 8'd16);
+        kz_l  <= 7'sd56 - 7'({1'b0, kd_e[3:0], 2'b00}) + 7'({5'd0, qoz[oz_i][7:6]});
+      end
+      k_close <= ks2 && (oz_w == 2'd3);
+      if (ks2) begin
+        kp_x <= kz_x; kp_y <= kz_y; kp_u <= oz_u; kp_v <= oz_v; kp_l <= kz_l; kp_lv <= kz_lv;
+        if (oz_w == 2'd0) begin
+          kf_u <= oz_u; kf_v <= oz_v; kf_l <= kz_l; kf_lv <= kz_lv;
+        end
+      end
+      // E4: the running max; a new quad starts it again (and the stages
+      // above drop anything still in them from the last one)
+      if (k_new)                          k_r <= K_NONE;
+      else if (e3_v && (e3_k > k_r))      k_r <= e3_k;
+      // R828a: and the running min beside it
+      if (k_new)                          k_n <= K_TOP;
+      else if (e3_v && (e3_k < k_n))      k_n <= e3_k;
+      // E5 (R828a): the max less a quarter or a half of the spread, by the
+      // OSD; no edge, or the OSD's Off, is no level. One cycle after the max:
+      // final five cycles after the close, still ahead of the first span (the
+      // bench checks every span of every quad, back to back, and still passes
+      // with K held back 16 cycles more; 24 fails). A quad is not accepted while a
+      // span is held (R544), so k_o cannot change under one.
+      // R828c: and a quad the game keeps at level 0 (mz_r) is no level too.
+      k_o <= ((mip_mode == 2'd0) || (k_r == K_NONE) || mz_r) ? K_NONE
+           : (mip_mode == 2'd3) ? k_r - (k_d >>> 1)
+           : (mip_mode == 2'd2) ? k_r - (k_d >>> 2)
+           :                      k_r;
+    end
+  end
+  assign span_mipk = MIP ? k_o : 10'sd0;
 
   // R544: AND NOT WHILE THE LAST SPAN IS STILL WAITING. span_tex_en and the
   // three gradients below are NOT latched with a span -- they are this quad's

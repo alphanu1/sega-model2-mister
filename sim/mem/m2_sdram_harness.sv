@@ -29,6 +29,7 @@ module m2_sdram_harness #(
   parameter int unsigned NPP     = 11,
   parameter logic [12:0] PRI     = '0,
   parameter int unsigned PRI_CAP = 2,
+  parameter logic [12:0] PRI_TOP = '0,   // R822
   // Set with -GCOL_BITS at build time. 9 = 32 MB module, 11 = 128 MB. The
   // device model follows the same number, so a geometry the controller decodes
   // wrongly shows up as a read mismatch rather than silently aliasing.
@@ -174,7 +175,7 @@ module m2_sdram_harness #(
     .COL_BITS(COL_BITS),
     .NP(NP), .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC), .T_RAS(T_RAS),
     .T_WR(T_WR), .CL(CL), .T_REFI(T_REFI), .INIT_NOP(INIT_NOP), .ACK_HOLD(2),
-    .PRI(PRI[NP-1:0]), .PRI_CAP(PRI_CAP)                             // R574
+    .PRI(PRI[NP-1:0]), .PRI_CAP(PRI_CAP), .PRI_TOP(PRI_TOP[NP-1:0])                             // R574
   ) dut (
     .clk(clk), .rst_n(rst_n), .ready(ready),
     // CL+3, what the device MODEL needs, and after the selector range moved

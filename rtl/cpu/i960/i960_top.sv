@@ -40,10 +40,21 @@ module i960_top #(
   // instruction (PF2W, below). 0 restores each to the R815 behaviour.
   parameter bit IC_HUF = 1'b1,
   parameter bit IC_ER  = 1'b1,
-  parameter bit PF2W   = 1'b1
+  parameter bit PF2W   = 1'b1,
+  // R836: THE LONG-REAL FORMS -- addrl subrl mulrl divrl (0x79), cmprl
+  // (0x69.5), movrl (0x6d.9). Desert Tank runs them from the title's end
+  // (MAME: first movrl at frame 1105, 19.23 s) and this core trapped on every
+  // one, halting the i960. 0 traps on them as before.
+  parameter bit RL     = 1'b1,
+  // R839: THE FORMS VIRTUA COP RUNS AND DAYTONA NEVER DID -- sqrtrl
+  // (0x69.8), cpysre (0x6e.2) and cvtzril (0x6c.3), MAME's semantics. Built
+  // only with VC = 1, and then live only while vc_en (the game ID says
+  // Virtua Cop): with vc_en low they trap exactly as before. Needs RL.
+  parameter bit VC     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
+  input  logic        vc_en,        // R839: quasi-static, synchronous to clk
 
   // One 32-bit bus port, arbitrated between instruction fetch and data.
   output logic        bus_req,
@@ -349,7 +360,8 @@ module i960_top #(
     T_EXEC, T_MEM, T_MEM_W, T_MULDIV, T_MULTI, T_PAIR, T_FP, T_WB, T_FRAME,
     T_TRAP,
     T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR,
-    T_INTR, T_RET7, T_MODPC, T_SYNQ
+    T_INTR, T_RET7, T_MODPC, T_SYNQ,
+    T_RLLO                                   // R836: a long-real op's low words
   } tstate_e;
 
   tstate_e ts;
@@ -560,9 +572,18 @@ module i960_top #(
     else                   fp_lit = 64'd0;
   endfunction
 
+  // R836: A LONG-REAL REGISTER OPERAND IS THE EVEN-ALIGNED PAIR read as one
+  // double (MAME get_1_rifl / get_2_rifl: m_r[n & 0x1e] low, m_r[(n & 0x1e)+1]
+  // high). The two read ports cannot take four words at once, so the low
+  // words are read in T_RLLO into rl_lo1 / rl_lo2 and the high words stay on
+  // rd1 / rd2 through T_FP (ra1 / ra2 held at the odd register). rl_lo1 then
+  // carries the result's high word to T_PAIR.
+  logic        is_rl;
+  logic [31:0] rl_lo1, rl_lo2;
+  logic        rl_wb;                            // T_PAIR writes rl_lo1, not md_hi
   logic [63:0] fp_a, fp_b;
-  assign fp_a = d_src1_lit ? fp_lit(d_src1, fpr[d_src1[1:0]]) : fp_a_wide;
-  assign fp_b = d_src2_lit ? fp_lit(d_src2, fpr[d_src2[1:0]]) : fp_b_wide;
+  assign fp_a = d_src1_lit ? fp_lit(d_src1, fpr[d_src1[1:0]]) : (is_rl ? {rd1, rl_lo1} : fp_a_wide);
+  assign fp_b = d_src2_lit ? fp_lit(d_src2, fpr[d_src2[1:0]]) : (is_rl ? {rd2, rl_lo2} : fp_b_wide);
 
   logic        fadd_req, fadd_done, fmul_req, fmul_done;
   // busy is not consulted: the sequencer waits on `done` and issues nothing
@@ -596,14 +617,41 @@ module i960_top #(
   end
   logic        fadd_sub;
 
-  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req),
-                        .sub(fadd_sub), .a(fp_b), .b(fp_a),
+  // R845: while the transcendental sequencer runs (VC only) it owns the
+  // adder, multiplier and divider: its operands, requests and subtract.
+  logic        tr_act, tr_add_req, tr_mul_req, tr_div_req, tr_sub;
+  logic        tr_sel_add, tr_sel_mul, tr_sel_div, tr_fin;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic        tr_start;                         // read only when VC
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic [63:0] tr_opa, tr_opb;
+  wire         tr_on   = VC && tr_act;
+  wire  [63:0] u_a     = tr_on ? tr_opa : fp_b;
+  wire  [63:0] u_b     = tr_on ? tr_opb : fp_a;
+  generate if (VC) begin : g_trans
+    i960_fptrans u_trans (
+      .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry),
+      .x(fp_a), .y(fp_b),
+      .act(tr_act), .opa(tr_opa), .opb(tr_opb),
+      .add_req(tr_add_req), .mul_req(tr_mul_req), .div_req(tr_div_req), .sub(tr_sub),
+      .sel_add(tr_sel_add), .sel_mul(tr_sel_mul), .sel_div(tr_sel_div),
+      .add_done(fadd_done), .mul_done(fmul_done), .div_done(fdiv_done),
+      .res(fp_res_wide), .fin(tr_fin)
+    );
+  end else begin : g_notrans
+    assign tr_act = 1'b0; assign tr_opa = 64'd0; assign tr_opb = 64'd0;
+    assign tr_add_req = 1'b0; assign tr_mul_req = 1'b0; assign tr_div_req = 1'b0;
+    assign tr_sub = 1'b0; assign tr_sel_add = 1'b0; assign tr_sel_mul = 1'b0;
+    assign tr_sel_div = 1'b0; assign tr_fin = 1'b0;
+  end endgenerate
+  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (VC && tr_add_req)),
+                        .sub(tr_on ? tr_sub : fadd_sub), .a(u_a), .b(u_b),
                         .y(fadd_y), .done(fadd_done));
-  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req),
-                        .a(fp_b), .b(fp_is_scale ? pow2 : fp_a),
+  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (VC && tr_mul_req)),
+                        .a(u_a), .b((fp_is_scale && !tr_on) ? pow2 : u_b),
                         .y(fmul_y), .done(fmul_done));
-  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req),
-                        .a(fp_b), .b(fp_a), .y(fdiv_y),
+  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req | (VC && tr_div_req)),
+                        .a(u_a), .b(u_b), .y(fdiv_y),
                         .busy(fdiv_busy), .done(fdiv_done));
   i960_fpsqrt u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
                         .a(fp_a), .y(fsqrt_y),
@@ -630,10 +678,16 @@ module i960_top #(
                                                  : {1'b0, pow2_exp[10:0], 52'd0};
 
   logic [2:0] fmisc_op;
-  assign fp_res_wide = fp_is_add  ? fadd_y
-                     : fp_is_mul  ? fmul_y
-                     : fp_is_div  ? fdiv_y
+  // R845: the sequencer's unit selects the result while it runs (the
+  // transcendental's own decode flags are all clear, so they cannot clash)
+  wire r_add = fp_is_add || (VC && tr_sel_add);
+  wire r_mul = fp_is_mul || (VC && tr_sel_mul);
+  wire r_div = fp_is_div || (VC && tr_sel_div);
+  assign fp_res_wide = r_add  ? fadd_y
+                     : r_mul      ? fmul_y
+                     : r_div      ? fdiv_y
                      : fp_is_sqrt ? fsqrt_y
+                     : fp_is_cpys ? {cpys_neg, fmisc_y_q[62:0]}   // R839
                                   : fmisc_y_q;          // R566: registered
   // R575: STAGED -- a register inside the unit after the round add, so the
   // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
@@ -644,11 +698,55 @@ module i960_top #(
 
   // Which unit an opcode belongs to, and whether it is wired at all.
   logic fp_is_add, fp_is_mul, fp_is_div, fp_is_sqrt, fp_is_misc, fp_valid;
+  logic fp_is_cpys, fp_is_cvtl;                  // R839: cpysre, cvtzril
+  logic fp_is_trans;                             // R845: sinrl cosrl tanrl atanrl
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [1:0] tr_entry;                          // read only when VC
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire  vc_on = VC && RL && vc_en;
   always_comb begin
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
+    fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
+    fp_is_trans = 1'b0; tr_entry = 2'd0;
     fmisc_op = 3'd7;
+    is_rl = 1'b0;
+    // R845: the transcendentals, long-real pairs in and out (get_1_rifl /
+    // get_2_rifl / set_rifl): atanrl is atan2(src2, src1).
+    if (vc_on && d_op == 8'h69) begin
+      case (d_op2)
+        4'hc: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinrl
+        4'hd: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd1; end   // cosrl
+        4'he: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd2; end   // tanrl
+        4'h0: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanrl
+        default: ;
+      endcase
+    end
+    // R839: get_1_rifl -> sqrt -> set_rifl; cpysre: |src1| with src2's
+    // "sign" as MAME tests it (src2 >= 0.0, so -0.0 counts as positive and a
+    // NaN as negative); cvtzril: get_1_rif (the single-form operand) ->
+    // (int64_t) -> set_ri64, the unmasked pair dst, dst+1.
+    if (vc_on && d_op == 8'h69 && d_op2 == 4'h8) begin is_rl = 1'b1; fp_is_sqrt = 1'b1; end
+    if (vc_on && d_op == 8'h6e && d_op2 == 4'h2) begin
+      is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7; fp_is_cpys = 1'b1;
+    end
+    if (vc_on && d_op == 8'h6c && d_op2 == 4'h3) begin
+      fp_is_misc = 1'b1; fmisc_op = 3'd4; fp_is_cvtl = 1'b1;
+    end
     case (d_op)
+      8'h79: if (RL) case (d_op2)                // R836: long-real arithmetic
+               4'hf: begin is_rl = 1'b1; fp_is_add = 1'b1; end                   // addrl
+               4'hd: begin is_rl = 1'b1; fp_is_add = 1'b1; fadd_sub = 1'b1; end  // subrl
+               4'hc: begin is_rl = 1'b1; fp_is_mul = 1'b1; end                   // mulrl
+               4'hb: begin is_rl = 1'b1; fp_is_div = 1'b1; end                   // divrl
+               default: ;
+             endcase
+      8'h69: if (RL && d_op2 == 4'h5) begin                                      // cmprl
+               is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd0;
+             end
+      8'h6d: if (RL && d_op2 == 4'h9) begin                                      // movrl
+               is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7;
+             end
       8'h78: case (d_op2)                        // single-precision arithmetic
                4'hf: fp_is_add = 1'b1;                              // addr
                4'hd: begin fp_is_add = 1'b1; fadd_sub = 1'b1; end   // subr
@@ -676,7 +774,7 @@ module i960_top #(
              endcase
       default: ;
     endcase
-    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc;
+    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc | fp_is_trans;
   end
 
   // cmpr writes only the condition code; cvtri and cvtzri write an integer;
@@ -684,6 +782,9 @@ module i960_top #(
   logic fp_writes_int, fp_writes_cc;
   assign fp_writes_cc  = fp_is_misc && (fmisc_op == 3'd0);
   assign fp_writes_int = fp_is_misc && ((fmisc_op == 3'd3) || (fmisc_op == 3'd4));
+  // R839: cpysre's sign. MAME: t2f >= 0.0 ? fabs(t1f) : -fabs(t1f).
+  wire fp_b_nan  = (fp_b[62:52] == 11'h7ff) && (fp_b[51:0] != 52'd0);
+  wire cpys_neg  = fp_b_nan || (fp_b[63] && (fp_b[62:0] != 63'd0));
   // R566: counts an fpmisc instruction's T_FP cycles. It retires when the
   // registered result is ready: after 1 (R566's output register) or, with the
   // unit STAGED (R575), after 2.
@@ -1041,6 +1142,12 @@ module i960_top #(
       T_MULTI:        ra1 = mw_src + 5'({1'b0, mw_i}) + 5'd1;
       default: ;
     endcase
+    // R836: a long-real op reads its pairs' low words in T_RLLO (addresses
+    // presented in T_EXEC) and holds the high words from T_RLLO through T_FP.
+    if (is_rl && (d_fmt == 2'd2)) begin
+      if (ts == T_EXEC) begin ra1 = {d_src1[4:1], 1'b0}; ra2 = {d_src2[4:1], 1'b0}; end
+      else if ((ts == T_RLLO) || (ts == T_FP)) begin ra1 = {d_src1[4:1], 1'b1}; ra2 = {d_src2[4:1], 1'b1}; end
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -1119,6 +1226,10 @@ module i960_top #(
       fmul_req  <= 1'b0;
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
+      tr_start  <= 1'b0;    // R845
+      rl_lo1    <= 32'd0;   // R836
+      rl_lo2    <= 32'd0;
+      rl_wb     <= 1'b0;
     end else begin
       // ONE SHOT. Set in T_BOOT's last step and cleared here, so the frame
       // pointer is initialised once rather than held over every register the
@@ -1136,6 +1247,7 @@ module i960_top #(
       fmul_req  <= 1'b0;
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
+      tr_start  <= 1'b0;    // R845
 
       // A prefetch issued in decode lands during execute. Capture it wherever
       // the sequencer happens to be.
@@ -1516,6 +1628,19 @@ module i960_top #(
                 we <= 1'b1;
                 mw_i <= 3'd1;
                 ts   <= T_MULTI;
+              end else if (vc_on && (d_op == 8'h66) && (d_op2 == 4'hd)) begin
+                // R844: flushreg -- Virtua Cop runs it at boot (instruction
+                // 1,907, IP 0x6e0) and this trapped, halting the i960 before
+                // anything reached the screen. i960_regs has always done the
+                // work (MAME's: clamp the depth to the cache, write every
+                // cached frame out, depth 0); only the dispatch was missing.
+                // T_FRAME waits for the file to finish; the IP moves now.
+                rf_flush <= 1'b1;
+                ip       <= ip_next;
+                ts       <= T_FRAME;
+              end else if (fp_valid && is_rl) begin
+                // R836: the low words first (T_RLLO), then the units.
+                ts        <= T_RLLO;
               end else if (fp_valid) begin
                 // Single-cycle units (fpmisc) still route through T_FP so the
                 // writeback path is shared and there is one place that knows
@@ -1578,10 +1703,24 @@ module i960_top #(
 
         T_PAIR: begin
           wa <= mw_base + 5'd1;
-          wd <= md_hi;
+          wd <= rl_wb ? rl_lo1 : md_hi;   // R836: a long-real result's high word
           we <= 1'b1;
+          rl_wb <= 1'b0;
           ip <= ip_next;
           ts <= T_FETCH;
+        end
+
+        // R836: the pairs' low words are on rd1 / rd2 now; the high words
+        // follow next cycle and stay through T_FP.
+        T_RLLO: begin
+          rl_lo1    <= rd1;
+          rl_lo2    <= rd2;
+          fadd_req  <= fp_is_add;
+          fmul_req  <= fp_is_mul;
+          fdiv_req  <= fp_is_div;
+          fsqrt_req <= VC && fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it; VC = 0 leaves T_RLLO as it was)
+          tr_start  <= VC && fp_is_trans;  // R845: the sequencer starts; the operands stay on fp_a / fp_b
+          ts        <= T_FP;
         end
 
         T_MULTI: begin
@@ -1605,19 +1744,41 @@ module i960_top #(
               || (fp_is_add  && fadd_done)
               || (fp_is_mul  && fmul_done)
               || (fp_is_div  && fdiv_done)
-              || (fp_is_sqrt && fsqrt_done)) begin
+              || (fp_is_sqrt && fsqrt_done)
+              || (VC && fp_is_trans && tr_fin)) begin
             if (fp_writes_cc) begin
               ac <= {ac[31:3], fmisc_cc_q};
             end else if (fp_writes_int) begin
               wa <= d_srcdst; wd <= fmisc_yi_q; we <= 1'b1;
+              if (fp_is_cvtl) begin
+                // R839: cvtzril -- (int64_t) of a value cvtzri converts; the
+                // high word is the sign. Exact while |x| < 2^31: Virtua Cop's
+                // results measured -57,796..39,835 (MAME, 300 s with a game).
+                mw_base <= d_srcdst;
+                rl_lo1  <= {32{fmisc_yi_q[31]}};
+                rl_wb   <= 1'b1;
+              end
             end else if (d_dst_lit) begin
               // A "literal" destination on an FP op selects fp0-fp3.
+              // R836: set_rifl's literal destination with bits 23:21 set is a
+              // fatalerror in the reference; the single forms never checked
+              // it either (set_rif has the same rule) and no game emits it.
               fpr[d_srcdst[1:0]] <= fp_res_wide;
+            end else if (is_rl) begin
+              // R836: set_rifl -- the pair at (dst & 0x1e), low word now, the
+              // high word in T_PAIR.
+              wa <= {d_srcdst[4:1], 1'b0}; wd <= fp_res_wide[31:0]; we <= 1'b1;
+              mw_base <= {d_srcdst[4:1], 1'b0};
+              rl_lo1  <= fp_res_wide[63:32];
+              rl_wb   <= 1'b1;
             end else begin
               wa <= d_srcdst; wd <= fp_res_single; we <= 1'b1;
             end
-            ip <= ip_next;
-            ts <= T_FETCH;
+            if ((is_rl && !fp_writes_cc && !d_dst_lit) || fp_is_cvtl) ts <= T_PAIR;   // R836: ip moves there
+            else begin
+              ip <= ip_next;
+              ts <= T_FETCH;
+            end
           end
         end
 

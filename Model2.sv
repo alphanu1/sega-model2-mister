@@ -47,8 +47,9 @@ assign HDMI_BOB_DEINT = 0;
 // becomes a very loud positive one, which is the classic full-scale buzz over
 // the top of otherwise correct music.
 assign AUDIO_S   = 1;
-assign AUDIO_L   = snd_l;
-assign AUDIO_R   = snd_r;
+logic signed [15:0] vol_l, vol_r;   // R829: the sound after the OSD's Volume (below)
+assign AUDIO_L   = vol_l;
+assign AUDIO_R   = vol_r;
 assign AUDIO_MIX = 0;
 
 // LED_USER included deliberately: the first build left it undriven, which is
@@ -68,6 +69,26 @@ assign VIDEO_ARX = (!ar) ? 12'd4 : (ar - 1'd1);
 assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 
 `include "build_id.v"
+
+// R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
+// Model 2A/2B/2C branches). Macros rather than parameters because the OSD
+// lines that go with the guns must leave CONF_STR entirely when they are off
+// -- a longer CONF_STR is a bigger hps_io string mux (+~50 ALUT measured), so
+// "off" is only byte-for-byte the old core if the text goes too. Override
+// from the QSF (VERILOG_MACRO "M2_VCOP_IO=0") or here. See VCOP_* below.
+`ifndef M2_VCOP_IO
+`define M2_VCOP_IO 1
+`endif
+`ifndef M2_VCOP_FPU
+`define M2_VCOP_FPU 1
+`endif
+// M2_VCOP_GUN: Virtua Cop's two guns, their crosshairs and OSD lines. Off in
+// the first boot build (R839); ON BY DEFAULT since R846 (+287 ALM estimated,
+// quartus_map). VERILOG_MACRO "M2_NO_VCOP_GUN=1" (or -DM2_NO_VCOP_GUN to lint)
+// builds without them -- the core before R846 exactly, CONF_STR included.
+`ifndef M2_NO_VCOP_GUN
+`define M2_VCOP_GUN
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -86,7 +107,21 @@ localparam CONF_STR = {
 	// 273.5. Game speed and picture are the same either way.
 	// R799: 262/263 first, the default (Ben: it fixes the alignment on his
 	// set); labelled by the fields' own line counts, no half line.
-	"O[45],15kHz lines,262/263 (15.1kHz),273/274 (15.7kHz);",
+	// R834: and 268/269 (15.4kHz) between them, for sets that take neither
+	// end. O[45:44] so a saved 273/274 (bit 45) still opens as 273/274 --
+	// a set that needed it cannot show the OSD to set it again. Bit 44 was
+	// "Every 3rd frame"'s (R831); a config holding both reads as 273/274.
+	// R840: 273/274 (15.7kHz) IS THE DEFAULT (Ben: most users' sets only take
+	// 15.7 kHz, and a [15kHz CRT] MRA that starts at a rate the set cannot
+	// show leaves its owner no OSD to change it). New bits, O[61:60], so every
+	// saved config -- including the old default's 262/263 -- opens at 15.7;
+	// O[45:44] is retired. A set that needs 15.1 kHz (Ben's JVC, R799) picks
+	// it once.
+	"O[61:60],15kHz lines,273/274 (15.7kHz),268/269 (15.4kHz),262/263 (15.1kHz);",
+	// R834: Narrow lengthens the 15.4/15.7 kHz line in the ratio their fields
+	// are longer, so the picture keeps the 15.1 kHz picture's shape on a set
+	// that shows it shorter. No effect at 15.1 kHz or 24 kHz.
+	"O[55],15kHz width,Full,Narrow;",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -126,7 +161,7 @@ localparam CONF_STR = {
 	// R639: 100% FIRST, so it is the power-up default (an OSD field is 0 until
 	// set). The menu index is XORed with 2 below to keep scale_lum's encoding
 	// (0 50%, 1 75%, 2 100%, 3 25%). A saved config from before reads shifted.
-	"O[22:21],Texture brightness,100%,25%,50%,75%;",
+	//"O[22:21],Texture brightness,100%,25%,50%,75%;",   // R831: tied to 100%
 	"R[17],Save settings (NVRAM);",
 	// OFF BY DEFAULT. The overlay is 24 rows of hex painted over the top-left
 	// of the picture, which is exactly where the game puts its own text. It
@@ -194,12 +229,15 @@ localparam CONF_STR = {
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
 	// updates at whichever is slower, the game or the draw. Latched per span:
 	// it changes cleanly at any time. (Bits 35:34 were the texture view's.)
-	"O[35:34],Texel step,1,2,4,8;",
+	// R831: TEXEL STEP, 3D PACING AND TEXTURE BRIGHTNESS LEAVE THE MENU (Ben).
+	// Each is tied to its default below (step 1, Hold game, 100%); the RTL
+	// behind them stays. The bits are not reused.
+	//"O[35:34],Texel step,1,2,4,8;",
 	// R652: HOLD GAME -- when the 3D draw is slower than the game, the game
 	// waits for it (no vblank interrupt while a finished list waits), so the
 	// 2D keeps the 3D's pace: arcade slowdown. FREE lets the game run on and
 	// the 3D fall behind the HUD.
-	"O[36],3D pacing,Hold game,Free;",
+	//"O[36],3D pacing,Hold game,Free;",   // R831: tied to Hold game
 	// R699: FRAME SKIP. The game writes and flips every list as always, so its
 	// own speed is untouched; only every second (1) or third (2) list is walked
 	// and drawn, and the screen keeps the last drawn picture between them. For
@@ -209,7 +247,7 @@ localparam CONF_STR = {
 	// speed (measured on s686: 28.4 pictures a second, every one two game
 	// frames apart -- 56.8 of 57.5). The menu order is mapped back to the skip
 	// count below: menu 0 -> skip 1, menu 1 -> skip 0, menu 2 -> skip 2.
-	"O[44:43],Draw method,Double Buffered,Single buffered,Every 3rd frame;",   // R781: Double first, the default
+	"O[43],Draw method,Double Buffered,Single buffered;",   // R781: Double first, the default; R831: Every 3rd frame removed
 	// R664: O[37] (FB self-test, R653), O[38] (FB address, R654) and O[41:39]
 	// (FB write pace, R656) are parked -- diagnostics of the scanline hunt that
 	// R660 ended -- to make room for the combining writer (R661). The bits stay
@@ -222,15 +260,36 @@ localparam CONF_STR = {
 	// mapped below to the palette's encoding (0 MAME, 1 mild, 2/3 off).
 	// R790: MAME first now -- Ben's default. Menu 0 MAME, 1 Off, 2 Mild.
 	"O[33:32],Gamma,MAME,Off,Mild;",
+	// R829: Volume, 80% by default (Ben). Index 0 is the default, so the list
+	// runs 80, 90, 100, then wraps through 0..70 -- one press steps 10%.
+	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 	"O[28],Pedals,Normal,Swapped;",
 	// 3/4 is entry zero because it is the one where full stick equals full
 	// lock; the others are taste.
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
+	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
+	"O[54],Right stick,Pedals only,Pedals+steer;",      // R831: Pedals+steer = R816 (a wheel): X steers, Y still the pedals
+	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
+	// each quad's level moves from its footprint's major axis (R828, the
+	// mountains right, the near road blurry) towards the minor: Sharp half
+	// way, Medium a quarter, Smooth not at all (R828 exactly). Index 0 is the
+	// default, so the list starts there and wraps, as Volume does.
+	// Commented out while .MIP below is 0: the line changes CONF_STR and so
+	// hps_io's logic, and a MIP 0 build stays bit-identical without it.
+	// Uncomment it together with .MIP(1'b1).
+	"O[53:52],Mip-mapping,Sharp,Medium,Smooth,Off;",
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
+`ifdef M2_VCOP_GUN
+	// R839: Virtua Cop's guns (shown only for it: menumask bit 1)
+	// R846: O[58] (Gun 1 Stick / Mouse, never in a build) is not reused.
+	"h1O[57:56],Crosshair,Small,Large,Off;",
+	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
+	"h1O[59],Gun reload,Shoot off-screen,Auto;",
+`endif
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
 	// between the two R items it silently broke everything after it -- the OSD
@@ -245,6 +304,7 @@ wire        forced_scandoubler;
 wire  [1:0] buttons;
 wire [127:0] status;
 wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
+wire         vc_gun;    // R839: Virtua Cop with guns built, declared ahead of hps_io (assigned below)
 
 wire [10:0] ps2_key;
 
@@ -278,7 +338,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({15'd0, crt_mra}),   // R801: the CRT MRA's own Video line
+	.status_menumask({14'd0, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -287,7 +347,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
 	.joystick_0(joystick_0),
+	.joystick_1(joystick_1),             // R839: Virtua Cop's second gun
 	.joystick_l_analog_0(joy_analog),
+	.joystick_l_analog_1(joy_analog_1),
+	.ps2_mouse(ps2_mouse),
 	.joystick_r_analog_0(joy_ranalog),
 	.paddle_0(paddle),
 	.ioctl_wait(ioctl_wait),
@@ -305,7 +368,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 );
 
 wire [31:0] joystick_0;
+wire [31:0] joystick_1;     // R839
 wire [15:0] joy_analog;
+wire [15:0] joy_analog_1;   // R839
+wire [24:0] ps2_mouse;      // R839
 wire [15:0] joy_ranalog;
 wire  [7:0] paddle;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
@@ -420,15 +486,36 @@ reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
 wire       vid_il_sel;                    // R795: the OSD bit or the CRT MRA's flag, on clk_sys below
 always @(posedge clk_mem) vil_s <= {vil_s[1:0], vid_il_sel};
 wire       vid_il = vil_s[2];
+// R834: 268.5-line fields at 656 pixels: 537 x 656 a frame = 537/5300
+// (10.1321 MHz, 15,445 Hz a line). With the narrow line (m2_video_timing's
+// HM_TOTAL / HI_TOTAL) the same line rate on 672 and 684 pixels:
+// 537 x 672 = 11277/108650 (10.3792 MHz), 547 x 684 = 93537/869200
+// (10.7613 MHz). 869,200 takes the accumulator to 20 bits.
+localparam int unsigned CEM_NUM  = 537;
+localparam int unsigned CEM_DEN  = 5300;
+localparam int unsigned CEMW_NUM = 11277;
+localparam int unsigned CEMW_DEN = 108650;
+localparam int unsigned CEIW_NUM = 93537;
+localparam int unsigned CEIW_DEN = 869200;
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
-always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], ~status[45]};   // R799: 0 = 262/263
+reg [2:0]  vml_s;                         // R834: 268.5 lines
+reg [2:0]  vnw_s;                         // R834: the narrow line
+always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[61:60] == 2'd2};   // R840: 2 = 262/263
+always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R834; 0 and 3 = 273/274
+always @(posedge clk_mem) vnw_s <= {vnw_s[1:0], status[55]};              // R834
 wire       vid_nl = vnl_s[2];
-reg [13:0] ce_acc;
+wire       vid_ml = vml_s[2];
+wire       vid_nw = vnw_s[2];
+reg [19:0] ce_acc;
 reg        ce_pix;
-wire [13:0] ce_num = !vid_il ? 14'(CE_NUM) : vid_nl ? 14'(CEN_NUM) : 14'(CEI_NUM);
-wire [13:0] ce_den = !vid_il ? 14'(CE_DEN) : vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);
+wire [19:0] ce_num = !vid_il ? 20'(CE_NUM) : vid_nl ? 20'(CEN_NUM)
+                   : vid_ml ? (vid_nw ? 20'(CEMW_NUM) : 20'(CEM_NUM))
+                   :          (vid_nw ? 20'(CEIW_NUM) : 20'(CEI_NUM));
+wire [19:0] ce_den = !vid_il ? 20'(CE_DEN) : vid_nl ? 20'(CEN_DEN)
+                   : vid_ml ? (vid_nw ? 20'(CEMW_DEN) : 20'(CEM_DEN))
+                   :          (vid_nw ? 20'(CEIW_DEN) : 20'(CEI_DEN));
 always @(posedge clk_mem) begin
-	if (ce_acc >= ce_den) ce_acc <= 14'd0;             // a mode change: start clean
+	if (ce_acc >= ce_den) ce_acc <= 20'd0;             // a mode change: start clean
 	else if (ce_acc + ce_num >= ce_den) begin
 		ce_acc <= ce_acc + ce_num - ce_den;
 		ce_pix <= 1'b1;
@@ -623,8 +710,8 @@ logic [2:0] nowalk_s;
 // like every other status bit that reaches the datapath (R229).
 logic [2:0] tl0_s, tl1_s;
 always_ff @(posedge clk_sys) begin
-	tl0_s <= {tl0_s[1:0], status[21]};
-	tl1_s <= {tl1_s[1:0], status[22]};
+	tl0_s <= {tl0_s[1:0], 1'b0};   // R831: Texture brightness tied to 100% (was status[21])
+	tl1_s <= {tl1_s[1:0], 1'b0};   // R831 (was status[22])
 end
 wire [1:0] tex_lum_s2 = {~tl1_s[2], tl0_s[2]};   // R639: menu index ^ 2
 always_ff @(posedge clk_sys) nowalk_s <= {nowalk_s[1:0], 1'b0};   // R666: parked, On
@@ -645,7 +732,13 @@ always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
 // R650: the texel step, into clk_sys where m2_span_tex runs (three flops,
 // R229). Quasi-static, and each span latches it whole.
 reg [1:0] pxk_s1, pxk_s2, pxk_s3;
-always_ff @(posedge clk_sys) begin pxk_s1 <= status[35:34]; pxk_s2 <= pxk_s1; pxk_s3 <= pxk_s2; end
+always_ff @(posedge clk_sys) begin pxk_s1 <= 2'b00; pxk_s2 <= pxk_s1; pxk_s3 <= pxk_s2; end   // R831: Texel step tied to 1 (was status[35:34])
+// R828a: the mip option, into clk_sys where m2_raster_fill runs (three
+// flops). Menu 0 Sharp, 1 Medium, 2 Smooth, 3 Off -> the fill's mip_mode 3,
+// 2, 1, 0. Quasi-static; the fill takes it per quad.
+reg [1:0] mip_s1, mip_s2, mip_s3;
+always_ff @(posedge clk_sys) begin mip_s1 <= status[53:52]; mip_s2 <= mip_s1; mip_s3 <= mip_s2; end
+wire [1:0] mip_mode = 2'd3 - mip_s3;
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
@@ -653,10 +746,10 @@ wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
 // (m2_raster3d list_hold, clk_sys) -- unless the OSD says Free.
 wire        r3d_list_hold;
 reg  [2:0]  pace_free_s;
-always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], status[36]};
+always_ff @(posedge clk_sys) pace_free_s <= {pace_free_s[1:0], 1'b0};   // R831: 3D pacing tied to Hold game (was status[36])
 wire        r3d_game_hold = r3d_list_hold && !pace_free_s[2];
 reg  [1:0]  fskip_s1, fskip_s2, fskip_s3;   // R699: the OSD bits reach the walk through three flops
-always_ff @(posedge clk_sys) begin fskip_s1 <= status[44:43]; fskip_s2 <= fskip_s1; fskip_s3 <= fskip_s2; end
+always_ff @(posedge clk_sys) begin fskip_s1 <= {1'b0, status[43]}; fskip_s2 <= fskip_s1; fskip_s3 <= fskip_s2; end   // R831: Every 3rd tied off (bit 44 not read)
 // R653: the framebuffer self-test's switch and its per-frame results (clk_sys)
 // R664: parked -- tied off, so Quartus removes the generator and checker
 wire        fb_test = 1'b0;
@@ -1313,7 +1406,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // texel port 2, the glyph fetch (3, R639's per-scanline deadline) and
            // the walker (4) still go first; the cap (2) still lets one
            // round-robin grant through after two class grants.
-           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2)) u_sdram (
+           // R822: and port 3 (the glyph fetch) FIRST within the class. Its
+           // misses have a per-scanline deadline (R639) -- a line it does not
+           // finish is shown twice (a tile overrun, 55-62% of frames on the
+           // board, R814 captures) -- and it uses ~558 of a 3,280-cycle line
+           // (R283), so its wait is queueing behind 1 and 2, not bandwidth.
+           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2), .PRI_TOP(13'b0_0000_0000_1000)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -2072,6 +2170,13 @@ end
 // part way through has already corrupted the entries before it: writing on
 // arrival and blocking the rest leaves a half-replaced table, which is worse
 // than either accepting or rejecting the lot.
+// R818: the copy engine exists only for the tilemap test image, which is a
+// development fixture -- off in a release build (M2_NO_DEBUG).
+`ifdef M2_NO_DEBUG
+localparam bit TESTIMG = 1'b0;
+`else
+localparam bit TESTIMG = 1'b1;
+`endif
 logic [7:0] xlat_stage [96];
 logic       xlat_ok;
 logic [7:0] xlat_first;
@@ -2092,11 +2197,22 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		xlat_we_r  <= 1'b0;
 		cp_tram_we <= 1'b0;
 		cp_pal_we  <= 1'b0;
-		if (game_image) begin
+		// R818: IN A RELEASE BUILD (M2_NO_DEBUG) THE COPY NEVER RUNS. The
+		// small image is the 2D tilemap test, a development fixture an MRA
+		// never loads; its copy engine and the 96-byte staging array (one M10K,
+		// xlat_stage_rtl_0) were built into every release regardless. With
+		// TESTIMG 0 cp_done rises with rom_loaded -- on a game image the same
+		// cycle as before, since game_image is rom_loaded there -- and the
+		// copy, the staging and their port-2 requests synthesise away. A test
+		// image on a release build leaves the CPU in reset (game_image) and
+		// the tilemap as it powered up. Every branch below is gated by
+		// TESTIMG too: gating only cp_done left the commit phase reachable as
+		// far as synthesis could tell, and xlat_stage still inferred.
+		if (TESTIMG ? game_image : rom_loaded) begin
 			// Nothing to copy: the CPU writes tile RAM, the palette and the
 			// translation table itself.
 			cp_done <= 1'b1;
-		end else if (cp_phase == 2'd3) begin
+		end else if (TESTIMG && cp_phase == 2'd3) begin
 			// Commit phase: no bus traffic, one entry per cycle.
 			xlat_we_r   <= xlat_ok;
 			xlat_addr_r <= cp_idx[6:0];
@@ -2105,14 +2221,14 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			else cp_idx <= cp_idx + 16'd1;
 		// NOT UNTIL THE CAPTURE IS CALIBRATED. This copy is made once and kept
 		// (study R47), so reading it at the wrong depth is permanent.
-		end else if (!cp_req && rom_loaded && cal_done) begin
+		end else if (TESTIMG && !cp_req && rom_loaded && cal_done) begin
 			case (cp_phase)
 				2'd0:    cp_addr <= TRAM_BASE + SDR_AW'(cp_idx);
 				2'd1:    cp_addr <= PAL_BASE  + SDR_AW'(cp_idx);
 				default: cp_addr <= xlat_rd_addr;
 			endcase
 			cp_req  <= 1'b1;
-		end else if (cp_req && p2s_ack) begin   // R561
+		end else if (TESTIMG && cp_req && p2s_ack) begin   // R561
 			cp_req   <= 1'b0;
 			cp_wdata <= p_dout[2][15:0];
 			case (cp_phase)
@@ -2238,6 +2354,31 @@ always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as M
 // R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);
+// R835: 2 is Desert Tank -- the same board as Daytona, a 512 KB program (its
+// second half at GAME_POLYX, as Virtua Cop's) and its own controls (below).
+wire is_desert = (game_id[6:0] == 7'd2);
+wire prog_ext  = is_vcop | is_desert;   // program 0x40000-0x7FFFF from GAME_POLYX
+// R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
+// off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
+// SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
+// exactly the core they saw before.
+//   VCOP_IO   the type-2 I/O board in m2_ioz80 (TMPZ84C015 at 9.8304 MHz, its
+//             map, CTC channel 1, the gun registers). Its firmware EPR-17181
+//             is 0x3200 bytes and lands in the type-1 board's 16 KB: no M10K.
+//   VCOP_GUN  two light guns from MiSTer's sticks / a mouse, P2's buttons,
+//             the crosshairs and their OSD lines (needs VCOP_IO).
+//   VCOP_FPU  the i960 forms Virtua Cop runs and Daytona never did (cvtzril,
+//             cpysre, sqrtrl, sinrl / cosrl / tanrl / atanrl).
+// (The switches are the M2_VCOP_* macros at the top of this file.)
+localparam bit VCOP_IO  = (`M2_VCOP_IO != 0);
+`ifdef M2_VCOP_GUN
+localparam bit VCOP_GUN = VCOP_IO;
+`else
+localparam bit VCOP_GUN = 1'b0;      // the first boot build: guns at rest, Daytona's buttons
+`endif
+localparam bit VCOP_FPU = (`M2_VCOP_FPU != 0);
+wire vc_io  = VCOP_IO  & is_vcop;
+assign vc_gun = VCOP_GUN & is_vcop;
 assign crt_mra = game_id[7];   // R801
 // R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
 // switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
@@ -2255,8 +2396,12 @@ assign vid_il_sel = vid_il_r;
 wire        cpu_ifetch;      // R724: the i960's request is an instruction fetch
 wire  [4:0] cpu_dbg_ts;      // R721: the i960's sequencer state, for telemetry
 wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for telemetry
-i960_top u_i960 (
-	.clk(clk_i960), .rst_n(cpu_rst_n),
+// R839: is_vcop into the i960's clock (quasi-static: set by the MRA's load,
+// while the CPU is held in reset).
+logic [1:0] vc_fpu_s;
+always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], VCOP_FPU & is_vcop};
+i960_top #(.VC(VCOP_FPU)) u_i960 (
+	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 	.irq(cpu_irq),
@@ -2360,7 +2505,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
-	.prog_ext(is_vcop), .base_progx(GAME_POLYX),   // R726
+	.prog_ext(prog_ext), .base_progx(GAME_POLYX),   // R726, R835
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
 	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
 	.base_texs0(GAME_TEXS0), .base_texs1(GAME_TEXS1), .base_luma(GAME_LUMA), .col_inval(cpu_col_inval),
@@ -2680,6 +2825,33 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 
 wire signed [15:0] snd_l, snd_r;
+// R829: THE OSD VOLUME. status[49:46] indexes 80, 90, 100, 0, 10 .. 70 %;
+// the gain is that percentage of 256 (rounded), applied as one 16 x 10
+// signed multiply per channel and the product's [23:8]: at 100% exactly the
+// input, never louder, so it cannot clip. Three flops bring the OSD bits into
+// clk_sys like every other option here.
+reg  [3:0] vol_s1, vol_s2, vol_s3;
+always_ff @(posedge clk_sys) begin vol_s1 <= status[49:46]; vol_s2 <= vol_s1; vol_s3 <= vol_s2; end
+reg  [8:0] vol_gain;
+always_comb begin
+	case (vol_s3)
+		4'd0:  vol_gain = 9'd205;   // 80%
+		4'd1:  vol_gain = 9'd230;   // 90%
+		4'd2:  vol_gain = 9'd256;   // 100%
+		4'd3:  vol_gain = 9'd0;     // 0%
+		4'd4:  vol_gain = 9'd26;    // 10%
+		4'd5:  vol_gain = 9'd51;    // 20%
+		4'd6:  vol_gain = 9'd77;    // 30%
+		4'd7:  vol_gain = 9'd102;   // 40%
+		4'd8:  vol_gain = 9'd128;   // 50%
+		4'd9:  vol_gain = 9'd154;   // 60%
+		4'd10: vol_gain = 9'd179;   // 70%
+		default: vol_gain = 9'd205;
+	endcase
+end
+(* multstyle = "dsp" *) wire signed [25:0] vol_pl = snd_l * $signed({1'b0, vol_gain});
+(* multstyle = "dsp" *) wire signed [25:0] vol_pr = snd_r * $signed({1'b0, vol_gain});
+always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8]; end
 
 // Byte out of the burst: word by [2:1], byte within it by [0].
 // The byte select moved INTO m2_pcm_fetch with the burst, and doing it here as
@@ -2698,7 +2870,7 @@ wire signed [15:0] snd_l, snd_r;
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
-m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ)) u_sndboard (   // R573
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1), .YM_STUB(1'b1)) u_sndboard (   // R573; R821: one MultiPCM engine, passed on the board (s1037); R833: YM_STUB 1 = the YM3438 as timers only (Daytona never voices it)
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -2910,6 +3082,54 @@ wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
 wire geo_wr_ctl   = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h980008);
 wire geo_wr_setwp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h801008);
 wire geo_wr_setrp = cpu_io_sel && cpu_io_we && (cpu_io_addr[23:0]  == 24'h803008);
+// R826: the game's flips, counted and toggled for m2_video (SCR_SYNC), and
+// the list each walk takes -- the latest flipped, flip count - 1 -- for
+// m2_raster3d to carry to the screen. Synthesised away when R826_SYNC is 0
+// (m2_video ignores scr_flip / scr_tag then, and nothing else reads them).
+// R826_STRICT and R826_SYNC are independent; both are needed for the race.
+wire        geo_walk_started;
+logic [3:0] r826_fc, r826_wtag;
+logic       r826_flip_tgl, r826_setrp_d;
+wire  [3:0] r826_stag;
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		r826_fc <= 4'd0; r826_wtag <= 4'd0; r826_flip_tgl <= 1'b0; r826_setrp_d <= 1'b0;
+	end else begin
+		r826_setrp_d <= geo_wr_setrp;
+		if (geo_wr_setrp && !r826_setrp_d) begin
+			r826_fc       <= r826_fc + 4'd1;
+			r826_flip_tgl <= ~r826_flip_tgl;
+		end
+		if (geo_walk_started) r826_wtag <= r826_fc - 4'd1;
+	end
+end
+// R826b: THE LIST THE SCROLL WORDS WRITTEN AT EACH VBLANK ARE FOR (m2_video
+// SCR_STEP; synthesised away while R826_STEP is 0). The game starts a step only
+// after a vblank IRQ that comes after its last step's flip (0x138c waits for
+// the IRQ's count to change, MAME debugger, Rev A), and that IRQ writes the
+// scroll for the list two before the new step: so the words written at a
+// vblank are for list (flips acknowledged before it) - 1, a flip being
+// acknowledged by the first vblank the game is given after it -- or by the
+// vblank whose IRQ is still pending when it lands (the game flipped before it
+// took the IRQ). A vblank R652 withholds writes nothing and moves nothing.
+// The tag is set a cycle before the toggle, and both held for the frame.
+logic [3:0] r826_ack, r826_ttag;
+logic       r826_vtgl, r826_vtgl_p;
+wire        r826_vgive = vbl_d && !vbl_dd && !r3d_game_hold;   // the IRQ's own condition
+wire        r826_fnow  = geo_wr_setrp && !r826_setrp_d;          // the edge r826_fc counts
+always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+	if (!mem_rst_n) begin
+		r826_ack <= 4'd0; r826_ttag <= 4'd15; r826_vtgl <= 1'b0; r826_vtgl_p <= 1'b0;
+	end else begin
+		r826_vtgl_p <= 1'b0;
+		if (r826_vtgl_p) r826_vtgl <= ~r826_vtgl;
+		if (r826_vgive) begin
+			r826_ttag   <= r826_ack - 4'd1;
+			r826_ack    <= r826_fc + {3'd0, r826_fnow};
+			r826_vtgl_p <= 1'b1;
+		end else if (r826_fnow && io_intreq[0]) r826_ack <= r826_fc + 4'd1;
+	end
+end
 // THE OPCODE IS IN THE ADDRESS, NOT IN THE DATA, and missing that is why no
 // geometry has ever drawn.
 //
@@ -3063,7 +3283,22 @@ m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
 	.a_bottom(gv_a_bottom), .a_top(gv_a_top)
 );
 
-m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
+// R826: THE 2D HELD TO ITS 3D (default off). AFTER_STRICT makes the walk
+// in "After flip" wait for a vblank that came after the flip, so a list is
+// never on screen before the scroll the game wrote for it; m2_video SCR_SYNC
+// holds the scroll words back until their list is on screen. Both directions
+// are needed: the first stops the 3D running early (30 Hz race), the second
+// the 2D (60 Hz, and the frames after a short iteration).
+localparam bit R826_STRICT = 1'b1;   // m2_geo AFTER_STRICT: the 3D never early
+localparam bit R826_SYNC   = 1'b1;   // m2_video SCR_SYNC: the 2D never early
+localparam bit R826_HSCR   = 1'b0;   // m2_video HSCR_FIX: hscr_r read from its own word
+// R826b: with R826_SYNC, the copies taken at each vblank the game is given and
+// chosen by the list they are for (r826_ttag), not by counting flips -- right
+// across a step that takes two vblanks, and one vblank of 3D lateness without
+// the tile-RAM fallback. Needs R826_SYNC (and R826_STRICT).
+localparam bit          R826_STEP  = 1'b1;
+localparam int unsigned R826_DEPTH = 2;   // copies (2 or 3)
+m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
@@ -3082,6 +3317,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128)) u_geo (
 	.dbg_walk_frames(geo_walk_frames), .dbg_walk_unknown(geo_walk_unknown),
 	.dbg_walk_state(geo_walk_state),
 	.dbg_rp(geo_dbg_rp), .dbg_wp(geo_dbg_wp),
+	.walk_started(geo_walk_started),   // R826
 	.mtx0(), .mtx4(), .mtx8(), .mtx11(),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.eng_busy(eng_busy | eng_ra_busy),   // R709: and the read-ahead's last fetch off port 4
@@ -3236,6 +3472,12 @@ wire [7:0] q3d_lum;                       // R271: for the exact colour path, no
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_tex;
 wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
+wire        q3d_mipz;                       // R828c: the game's level keeps this polygon at 0
+// R828: mip-mapping in the rasteriser, and R828c's per-polygon flag in the
+// geometry with it. MIPZ_B: a polygon is drawn at level 0 when MAME's own
+// level (the game's texlod) is at most -MIPZ_B over all of it.
+localparam bit R3D_MIP = 1'b1;
+localparam int R3D_MIPZ_B = 3;
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -3266,7 +3508,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry u_geometry (
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B)) u_geometry (   // R828c
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -3306,6 +3548,7 @@ m2_geometry u_geometry (
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
 	.q_tlinv(q3d_tlinv),                                              // R784
+	.q_mipz(q3d_mipz),                                                // R828c
 	.q_frac(q3d_frac),                                                // R626
 	.q_col(q3d_col), .q_z(q3d_z),
 	.dbg_polys(geo_polys), .dbg_objects(geo_objs_done), .dbg_capped(geo_capped),
@@ -3778,21 +4021,65 @@ wire  [7:0] zio_wdata, zio_rdata;
 wire [31:0] dc_hits, dc_miss;
 wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
 wire [15:0] iob_seccnt;   // times the firmware has selected them
-m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ)) u_ioz80 (   // 4 MHz exactly, on clk_sys (R573)
+// R839: Virtua Cop's guns and buttons (VCOP_GUN), into the type-2 board.
+wire  [7:0] vc_in0, vc_in1;
+wire  [9:0] vc_p1x, vc_p1y, vc_p2x, vc_p2y;
+wire  [1:0] vc_off;
+wire  [8:0] vc_c1x, vc_c1y, vc_c2x, vc_c2y;
+wire  [1:0] vc_con;
+generate if (VCOP_GUN) begin : g_vcgun
+	// R846: aim from the sticks (absolute; USB guns arrive so) or the mouse
+	// (relative, one gun); the mouse's buttons are a trigger / reload for the
+	// gun the OSD gives it, which is where MiSTer sends a USB gun's trigger.
+	// R849: each crosshair only while its player is in play, as the game's
+	// own work RAM says (the i960's writes, snooped on clk_i960).
+	wire [1:0] vc_play;
+	m2_vcop_state u_vcop_state (
+		.clk(clk_i960), .rst_n(cpu_rst_n), .en(vc_gun), .test(joystick_0[8]),   // the MRA's Test
+		.bus_req(cpu_req), .bus_we(cpu_we), .bus_ack(cpu_ack),
+		.bus_addr(cpu_addr), .bus_wdata(cpu_wdata), .bus_be(cpu_be),
+		.play(vc_play)
+	);
+	m2_vcop_guns u_vcop_guns (
+		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun), .play(vc_play),
+		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
+		.ana0(joy_analog), .ana1(joy_analog_1),
+		.ps2_mouse(ps2_mouse), .mouse_sel(status[63:62]),
+		.in0(vc_in0), .in1(vc_in1),
+		.p1x(vc_p1x), .p1y(vc_p1y), .p2x(vc_p2x), .p2y(vc_p2y), .off(vc_off),
+		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y), .c_on(vc_con)
+	);
+end else begin : g_novcgun
+	assign vc_in0 = iob_in0; assign vc_in1 = 8'hFF;
+	assign vc_p1x = 10'h17c; assign vc_p1y = 10'h0e6;   // MAME's rest positions
+	assign vc_p2x = 10'h179; assign vc_p2y = 10'h0e8;
+	assign vc_off = 2'b00;
+	assign vc_c1x = 9'd0; assign vc_c1y = 9'd0; assign vc_c2x = 9'd0; assign vc_c2y = 9'd0;
+	assign vc_con = 2'b00;
+end endgenerate
+// The type-2 board's DSW1: bit 0 Reloading (0 = Auto, the OSD's "Gun
+// reload"), bit 1 Enemy Character (1 = Normal), the rest unused (1).
+wire [7:0] vc_dsw1 = {6'h3F, 1'b1, ~(VCOP_GUN & status[59])};
+
+m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ),   // 4 MHz exactly, on clk_sys (R573)
+           .TYPE2(VCOP_IO), .T2_SCALE(625), .T2_NUM(6144)) u_ioz80 (   // R839: 9.8304 MHz type 2
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
+	.type2(vc_io),
+	.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y),
+	.gun_off(vc_off),
 	// First 16 KB only: the EPROM is 64 KB, the Z80 maps 0x0000-0x3fff, and a
 	// wrapping fw_addr[13:0] would leave the LAST quarter in the ROM.
 	.fw_we(fw_we_q),       // R593: registered, see fw_we_q
 	.fw_addr(fw_addr_q),
 	.fw_data(fw_data_q),
-	.in0(iob_in0), .in1(iob_in1), .in2(8'hFF), .dp_busy(dp_busy),
+	.in0(vc_gun ? vc_in0 : iob_in0), .in1(vc_gun ? vc_in1 : iob_in1), .in2(8'hFF), .dp_busy(dp_busy),   // R839: the guns' buttons for Virtua Cop
 	// The I/O BOARD's three DIP banks, not the game's. Daytona defines all 24
 	// bits PORT_DIPUNUSED_DIPLOC with the default equal to the mask, so every
 	// bank reads 0xFF -- and 0xFF is what the firmware must see when it selects
 	// secondary controls. Constants rather than OSD switches on purpose: every
 	// bit is unused for this game, so a switch would only offer a way to be
 	// wrong. They are ports so a game that does use them can drive them.
-	.dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),
+	.dsw1(vc_io ? vc_dsw1 : 8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),   // R839: type 2 reads DSW1 at 0x8080
 	// an_callback<0..2> are STEER/ACCEL/BRAKE; <3> is never bound for this
 	// game and an unbound devcb_read8 reads 0xFF, which is what MAME's
 	// firmware deposits at DPRAM 0x03.
@@ -4868,156 +5155,28 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 
 // ---------------------------------------------------------- cabinet inputs
-//
-// model2.cpp's `daytona` port map, which is `model2` plus `gears` with IN0 and
-// IN1 modified. Four buttons were wired and the rest -- the four VR buttons,
-// the gearbox and every analog axis -- were not connected at all.
-//
-//   IN0  0x01 COIN1   0x02 COIN2   0x04 TEST    0x08 SERVICE
-//        0x10 START1  0x20 VR1 Red 0x40 VR2 Blue 0x80 VR3 Yellow    all active low
-//   IN1  0x01 VR4 Green (active low)   0x0e unused
-//        0x70 GEARBOX -- ACTIVE HIGH, and the one field here that is not
-//        0x80 unused
-//   IN2  unused, 0xff
-//
-// Analog goes through the I/O board's ADC: channel 0 steering with 0x80 at
-// centre, 1 accelerator and 2 brake both idling at 0x20. MAME's own limits are
-// PORT_MINMAX(0x20, 0xe0) on all three.
-wire [7:0] iob_in0 = ~{joystick_0[15], joystick_0[14], joystick_0[8],
-                       joystick_0[5], joystick_0[7], joystick_0[6],
-                       1'b0, joystick_0[4]};
-
-// THE GEARBOX IS A STATE, NOT A BUTTON. The cabinet has a five-position shifter
-// and MAME models it as five buttons feeding daytona_gearbox_r, which returns
-// gearvalue[] = {0, 2, 1, 6, 5} for N,1,2,3,4 -- deliberately NOT a binary
-// count, because the real shifter is a set of microswitches and the game reads
-// their pattern. A gamepad has no shifter, so Gear Up and Gear Down step
-// through the five positions and the same table converts.
-logic [2:0] gear;                    // 0=N, 1..4
-wire        gup   = joystick_0[12];
-wire        gdn   = joystick_0[13];
-logic       gup_d, gdn_d;
-always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
-	if (!cpu_rst_n) begin
-		gear <= 3'd0; gup_d <= 1'b0; gdn_d <= 1'b0;
-	end else begin
-		gup_d <= gup; gdn_d <= gdn;
-		if (gup && !gup_d && gear != 3'd4) gear <= gear + 3'd1;
-		if (gdn && !gdn_d && gear != 3'd0) gear <= gear - 3'd1;
-	end
-end
-logic [2:0] gearval;
-always_comb begin
-	case (gear)
-		3'd1:    gearval = 3'd2;
-		3'd2:    gearval = 3'd1;
-		3'd3:    gearval = 3'd6;
-		3'd4:    gearval = 3'd5;
-		default: gearval = 3'd0;     // neutral
-	endcase
-end
-
-wire [7:0] iob_in1 = {1'b1, gearval, 3'b111, ~joystick_0[9]};
-
-// STEERING: the analog stick, with the D-pad as a ramp for anyone without one.
-//
-// MAME's range is 0x20..0xe0, so +-96 about 0x80. The stick is signed +-127, so
-// three quarters of it lands exactly on that range. The digital ramp exists
-// because a menu that needs left and right is unusable on a d-pad otherwise,
-// and it is a RAMP rather than a jump to the rail so the wheel sweeps as a real
-// one would.
-// R816: OR THE RIGHT STICK'S LEFT/RIGHT. MiSTer maps a wheel there -- steering
-// on the right stick's X with the pedals on its Y (Ben, from a tester's wheel)
-// -- and this core read only the left stick, so a wheel did not steer. Both
-// sticks steer: the left when it is pushed past the dead zone, otherwise the
-// right. A pad is unchanged; a wheel needs no setting.
-wire signed [7:0] ax_l  = joy_analog[7:0];
-wire signed [7:0] ax_r  = joy_ranalog[7:0];
-wire              use_l = (ax_l > 8'sd12) || (ax_l < -8'sd12);
-wire              use_r = (ax_r > 8'sd12) || (ax_r < -8'sd12);
-wire signed [7:0] ax    = use_l ? ax_l : ax_r;
-
-// STEERING SENSITIVITY, because three quarters is a choice and not a law.
-//
-// The 3/4 above exists because the stick is +-127 and the ADC's range is +-96
-// about 0x80, so three quarters lands exactly on the rails: full stick equals
-// full lock. That is the RIGHT default and it stays entry zero -- but a wheel
-// is not a stick, and how much lock a player wants for a given thumb movement
-// is taste, not arithmetic. More sensitive than 3/4 reaches full lock before
-// the stick's edge and CLAMPS there; less sensitive never reaches it.
-//
-// Written as shifts and adds: 1/2, 3/4, 1, and 5/4 of the axis.
-reg [2:0] ssens0_s, ssens1_s;    // three flops, like every other OSD bit here
+// R835: the block that was here is rtl/io/m2_cab_inputs.sv -- unchanged for
+// Daytona (game_id 0), with Desert Tank's map behind is_desert.
+// R842: the analog inputs registered once here, beside the logic they feed.
+// s1114 failed clk_sys at -1.212 from hps_io's joystick_l_analog_0 across the
+// chip into the steering limiter (steer_lim). The stick moves at USB rates;
+// one 12.5 ns cycle more is nothing. m2_cab_inputs is unchanged.
+logic [15:0] joy_analog_q, joy_ranalog_q;
+logic  [7:0] paddle_q;
 always_ff @(posedge clk_sys) begin
-	ssens0_s <= {ssens0_s[1:0], status[29]};
-	ssens1_s <= {ssens1_s[1:0], status[30]};
+	joy_analog_q  <= joy_analog;
+	joy_ranalog_q <= joy_ranalog;
+	paddle_q      <= paddle;
 end
-wire [1:0] ssens = {ssens1_s[2], ssens0_s[2]};
-wire signed [9:0] ax_x  = {{2{ax[7]}}, ax};                 // sign-extended
-wire signed [9:0] ax_h  = {{3{ax[7]}}, ax[7:1]};            // x/2
-wire signed [9:0] ax_q  = {{4{ax[7]}}, ax[7:2]};            // x/4
-wire signed [9:0] ax_sc = (ssens == 2'd0) ? (ax_x - ax_q)   // 3/4, the default
-                        : (ssens == 2'd1) ? ax_x            // 1
-                        : (ssens == 2'd2) ? (ax_x + ax_q)   // 5/4
-                        :                   ax_h;           // 1/2
-// The ADC's own rails: past them the wheel is already at full lock.
-wire signed [10:0] ax_sum = 11'sh080 + {ax_sc[9], ax_sc};
-// NAMED FOR WHAT IT IS NOW. It was `ax34`, an OFFSET from centre that the
-// consumer added 0x80 to; it is now the finished ADC value, centre and clamp
-// included, and calling it the old name is how the offset gets added twice.
-wire        [7:0]  steer_an = (ax_sum > 11'sh0e0) ? 8'he0
-                            : (ax_sum < 11'sh020) ? 8'h20 : ax_sum[7:0];
-logic [7:0] steer_dig;
-logic [9:0] steer_div;
-always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
-	if (!cpu_rst_n) begin
-		steer_dig <= 8'h80; steer_div <= 10'd0;
-	end else begin
-		steer_div <= steer_div + 10'd1;
-		if (steer_div == 10'd0) begin
-			if (joystick_0[1]) begin                       // left
-				if (steer_dig > 8'h21) steer_dig <= steer_dig - 8'd1;
-			end else if (joystick_0[0]) begin              // right
-				if (steer_dig < 8'hdf) steer_dig <= steer_dig + 8'd1;
-			end else if (steer_dig > 8'h80) steer_dig <= steer_dig - 8'd1;
-			else if (steer_dig < 8'h80) steer_dig <= steer_dig + 8'd1;
-		end
-	end
-end
-wire use_stick = use_l || use_r;   // R816
-wire [7:0] steer = |paddle ? paddle
-                 : use_stick ? steer_an
-                 : steer_dig;
-
-// PEDALS ARE ANALOGUE, ON THE RIGHT STICK'S Y AXIS -- Model 1's arrangement,
-// tools/model1-ref/Model1.sv, and its reasoning transfers whole.
-//
-// MiSTer has no dedicated trigger signal: hps_io offers the two sticks, the
-// paddles and the spinners, and a pad's triggers arrive as an analog axis. One
-// axis per pedal was tried there and put the accelerator on the LEFT stick,
-// which moves while steering. BOTH PEDALS ON ONE AXIS, SPLIT BY SIGN, leaves
-// the left stick to steering alone.
-//
-// WHICH HALF IS WHICH DEPENDS ON THE PAD, and axis polarity is not
-// standardised, so `Pedals` swaps them rather than making it a rebuild.
-//
-// THE RANGE IS MODEL 2'S, NOT MODEL 1'S. This board's ADC idles at 0x20 and
-// tops at 0xe0 -- MAME's PORT_MINMAX(0x20,0xe0) on all three channels -- where
-// Model 1 runs 0x01..0xff. The magnitude is seven bits, so three halves of it
-// spans 0..190 and lands on 0x20..0xde; full travel saturates to 0xe0 so the
-// rail is reachable. The buttons stay live and give full travel.
-wire signed [7:0] pedal_ax  = joy_ranalog[15:8];        // right stick Y
-// -128 HAS NO SEVEN-BIT MAGNITUDE: negating it gives zero, so a pad at full
-// deflection would read as a pedal at rest. Clamped to 127.
-wire        [6:0] pedal_mag = (pedal_ax == -8'sd128) ? 7'd127
-                            : pedal_ax[7] ? (~pedal_ax[6:0] + 7'd1) : pedal_ax[6:0];
-wire        [8:0] pedal_scl = {2'd0, pedal_mag} + {3'd0, pedal_mag[6:1]};   // mag * 3/2
-wire        [7:0] pedal_an  = (pedal_scl >= 9'd192) ? 8'he0 : (8'h20 + pedal_scl[7:0]);
-wire              pedal_up  = status[28] ? ~pedal_ax[7] : pedal_ax[7];
-wire        [7:0] accel_an  = pedal_up ? pedal_an : 8'h20;
-wire        [7:0] brake_an  = pedal_up ? 8'h20    : pedal_an;
-wire [7:0] accel = joystick_0[10] ? 8'he0 : accel_an;
-wire [7:0] brake = joystick_0[11] ? 8'he0 : brake_an;
+wire [7:0] iob_in0, iob_in1, steer, accel, brake;
+m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
+	.clk(clk_sys), .rst_n(cpu_rst_n), .is_desert(is_desert),
+	.joystick_0(joystick_0), .joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q),
+	.paddle(paddle_q),
+	.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
+	.st_rsteer(status[54]),
+	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
+);
 
 // COIN PATH INSTRUMENT. The board hears a coin -- it plays the sound -- and does
 // not credit it, and there are three different places that can be true in: the
@@ -5864,7 +6023,9 @@ wire cwr_inval = cwr_s[1] || (cwr_tail != 4'd0);
 // R644: BACK TO 64 KB. R313 halved it for block RAM; the framebuffer (R640)
 // returned ~50 M10K, and R313/R320 measured the halving at 14 -> 53 scanline
 // overruns a frame -- the tile rows Ben still sees repeat.
-m2_char_cache #(.IDX_BITS(13)) u_char_cache (
+// R823: no sibling fetch -- with the line-buffer ring it measured 0 overruns to
+// a port-3 latency of ~60 cycles, against ~45 with it (tb_m2_video_ovr).
+m2_char_cache #(.IDX_BITS(13), .SIBLING(1'b0)) u_char_cache (
 	.clk(clk_mem), .rst_n(cc_rst_n_s),
 	.v_req(ccf_req), .v_addr(ccf_addr),
 	.v_ack(ccf_ack), .v_data(ccf_data),
@@ -6160,6 +6321,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
               .TXLW8(1'b1), // R787/R796: 128-bit texel lines, eight-word reads on all four miss ports
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
+              .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
@@ -6188,6 +6350,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
+	.tex_mip_mode(mip_mode),      // R828a: the OSD's mip rule
 	.tex_gamma(gam_s2),           // R784: the curve, for a textured pixel's pedestal
 	.list_hold(r3d_list_hold),    // R652
 	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653
@@ -6212,6 +6375,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// shadow and the minimap panel. The band has stippled since R225; it was
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
+	.q_mipz(q3d_mipz),                                                // R828c
+	.q_tag(r826_wtag), .show_tag(r826_stag),   // R826
 	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il), .scan_field(vid_field),               // R682
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
@@ -6273,7 +6438,11 @@ end
 wire vid_rst_n_s = vid_rst_sync[1];
 wire cc_rst_n_s  = cc_rst_sync[1];
 
-m2_video u_tilemap (
+// R823: four line banks as a ring, rendering up to two lines ahead -- a
+// layer's burst of glyph misses borrows time from the lines around it.
+// Tile overruns: 0 on 114 MAME frames at the board's latency (was 8 a frame).
+m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
+           .SCR_STEP(R826_STEP), .SCR_DEPTH(R826_DEPTH)) u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
@@ -6306,8 +6475,11 @@ m2_video u_tilemap (
 	.dbg_ovr_frame(vid_ovr_frame),
 	.vid_x(vid_x), .vid_y(vid_y),
 	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
+	.mid_lines(vid_ml), .narrow(vid_nw),                                // R834
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
-	.dbg_layer_have(vid_layer_have)
+	.dbg_layer_have(vid_layer_have),
+	.scr_flip(r826_flip_tgl), .scr_tag(r826_stag),   // R826
+	.scr_vtgl(r826_vtgl), .scr_ttag(r826_ttag)        // R826b
 );
 
 ///////////////////////   VIDEO   ////////////////////////////////
@@ -6428,9 +6600,26 @@ end endgenerate
 // input to the mix holds for a whole pixel period and the framework samples on
 // ce_pix, so a register clocked every cycle moves nothing on screen.
 logic [7:0] mix_r_q, mix_g_q, mix_b_q;
-always_ff @(posedge clk_mem) begin
-	mix_r_q <= mix_r; mix_g_q <= mix_g; mix_b_q <= mix_b;
-end
+// R839 / R846: VIRTUA COP'S CROSSHAIRS (VCOP_GUN, game ID 1, OSD "Crosshair"):
+// a '+' per gun in the game's own player colours with a black outline, on
+// the pixel the game aims at, at 24 kHz and 15 kHz interlaced alike. See
+// rtl/video/m2_vcop_xhair.sv. Without the guns the colour register is the
+// one it always was.
+generate if (VCOP_GUN) begin : g_xhair
+	m2_vcop_xhair u_vcop_xhair (
+		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
+		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),
+		.il(vid_il), .vx(vid_x_d), .vy(vid_y),
+		.in_r(mix_r), .in_g(mix_g), .in_b(mix_b),
+		.out_r(mix_r_q), .out_g(mix_g_q), .out_b(mix_b_q)
+	);
+end else begin : g_noxhair
+	always_ff @(posedge clk_mem) begin
+		mix_r_q <= mix_r;
+		mix_g_q <= mix_g;
+		mix_b_q <= mix_b;
+	end
+end endgenerate
 assign ov_r = mix_r_q;
 assign ov_g = mix_g_q;
 assign ov_b = mix_b_q;

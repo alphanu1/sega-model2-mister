@@ -139,7 +139,13 @@ The layout, both new MRAs and the constant shift are preserved in commit
 
 ## Fix this first, or do not start
 
-`tools/rom_csum.py` **cannot see padding.** Its element walk is:
+**Fixed (R835):** `tools/rom_csum.py` now expands inline parts
+(`<part>02 00</part>`), `repeat="N"` and `offset` / `length`, and finds a
+part by CRC first and then by name, as MiSTer's loader does. `--out FILE`
+writes the image, and `tools/mra_vs_mame.py` checks it slot by slot against
+the regions MAME's own ROM_START loads. What follows is the history.
+
+`tools/rom_csum.py` **could not see padding.** Its element walk was:
 
 ```python
 elif ch.tag == 'part' and ch.get('name'):
@@ -265,3 +271,18 @@ byte 0x2be0000 -> 0x2ee0000   polygons 13-16 MB (index 0, after the TGP tables)
 
 The engine reads polygon-ROM dwords 0x340000 and up from GAME_POLYX. The
 '93 set never reads past 13 MB and loads nothing there.
+
+## Desert Tank (MAME `desert`) -- study R835
+
+`mra/Desert Tank.mra` (and its `[15kHz CRT]` twin) follows Virtua Cop's
+pattern exactly: the '93 layout byte for byte, every smaller region
+zero-padded, the program's second 256 KB (epr-16970 / 16971) appended at
+0x2BE0000 for GAME_POLYX, and the game ID 2 on index 4. The I/O firmware is
+Daytona's epr-14869c (desert.zip does not carry it). Image 0x2C20000 bytes;
+`tools/mra_vs_mame.py` passes every slot against ROM_START(desert), and the
+core's sound scan finds the 68000 program at 0x2340000.
+
+```
+python3 tools/rom_csum.py "mra/Desert Tank.mra" ~/roms/Model2 --out /tmp/dt.bin
+python3 -I tools/mra_vs_mame.py /tmp/dt.bin <mame>/src/mame/sega/model2.cpp desert ~/roms/Model2/desert.zip
+```

@@ -15,10 +15,18 @@ module m2_ioz80_harness #(
   // 25/50 = a 25 MHz Z80, the fast pacing tb_m2_ioz80 wants so the firmware's
   // multi-second delay loops finish inside a simulation.
   parameter int unsigned TICK_NUM = 25,
-  parameter int unsigned TICK_DEN = 50
+  parameter int unsigned TICK_DEN = 50,
+  // R839: the type-2 board; T2_NUM 15625 / (50 * 625) runs its Z80 at clk / 2
+  parameter bit          TYPE2    = 1'b0,
+  parameter int unsigned T2_NUM   = 15625
 ) (
   input  logic        clk,
   input  logic        rst_n,
+  input  logic        type2,
+  input  logic  [9:0] gun_p1x, gun_p1y, gun_p2x, gun_p2y,
+  input  logic  [1:0] gun_off,
+  output logic        spy_iorq_n,
+  output logic        spy_ius,
 
   input  logic        fw_we,
   input  logic [12:0] fw_addr,
@@ -70,8 +78,11 @@ module m2_ioz80_harness #(
   assign spy_addr = z_addr;
   assign spy_data = z_wdata;
 
-  m2_ioz80 #(.TICK_NUM(TICK_NUM), .TICK_DEN(TICK_DEN)) u_board (
-    .clk(clk), .rst_n(rst_n),
+  m2_ioz80 #(.TICK_NUM(TICK_NUM), .TICK_DEN(TICK_DEN), .TYPE2(TYPE2),
+             .T2_SCALE(625), .T2_NUM(T2_NUM)) u_board (
+    .clk(clk), .rst_n(rst_n), .type2(type2),
+    .gun_p1x(gun_p1x), .gun_p1y(gun_p1y), .gun_p2x(gun_p2x), .gun_p2y(gun_p2y),
+    .gun_off(gun_off),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(in0), .in1(in1), .in2(in2), .dp_busy(1'b0),
     .dsw1(dsw1), .dsw2(dsw2), .dsw3(dsw3),
@@ -81,5 +92,12 @@ module m2_ioz80_harness #(
     .dbg_rd_end(spy_rd_end), .dbg_ra(spy_ra), .dbg_rdat(spy_rdat), .dbg_m1_n(spy_m1_n), .dbg_a(spy_a),
     .dbg_last_wr(), .dbg_pf(), .dbg_pa(), .dbg_seccnt()
   );
+
+  assign spy_iorq_n = u_board.iorq_n;
+  generate if (TYPE2) begin : g_s
+    assign spy_ius = u_board.g_t2.c_ius;
+  end else begin : g_s0
+    assign spy_ius = 1'b0;
+  end endgenerate
 
 endmodule

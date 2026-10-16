@@ -98,8 +98,9 @@ Study M2-F.
 *IN USE 2026-08-30 · `rtl/sound/m2_multipcm.sv` from `rtl/audio/s32_multipcm.sv` @ **`7905361`***
 
 The Sega 315-5560 MultiPCM (Yamaha YMW-258-F GEW8), two of them, at MAME's
-figure of 10,000,000 Hz. **Changed: module renamed `s32_multipcm` → `m2_multipcm`.
-Nothing else.** System 32 and the Model 1 sound board carry the same part, and the
+figure of 10,000,000 Hz. **Changed: module renamed `s32_multipcm` → `m2_multipcm`;
+the total level and pan rewritten to MAME's law (R819, below); and a two-chip
+variant added (R821, below).** System 32 and the Model 1 sound board carry the same part, and the
 register, descriptor and pitch semantics follow MAME's `multipcm.cpp`.
 
 **It is an HLE and says so in its own header**: "Envelope curves, interpolation
@@ -160,12 +161,50 @@ bypassed, and sample latencies of 1, 6 and 60 cycles, and over 150 M cycles at
 bench's own checks still pass; a mutant in the loop wrap changes only the
 150 M-cycle hash, so that run is the one that reaches a sample loop.
 
+**CHANGED (R819, 2026-10-13): the total level and pan are MAME's, not shifts.**
+Upstream applied TL as `sample >>> (tl >> 4)` (6 dB steps, truncated, so TL
+16n..16n+15 all played at -6n dB) and pan as one more shift per two pan steps.
+MAME's `gew.cpp` has 0.375 dB per TL step and 3 dB per pan step. Each side is
+now one attenuation in 0.375 dB units, TL + 8 x pan, split into a 6 dB shift
+and one of sixteen fractions (a 16 x 9-bit table, within 0.03 dB of
+10^(-0.375k/20)), applied as an 8 x 10 multiply per side on the fetched byte:
+`pan_sample()` is gone, `ac_tl`/`ac_pan` became each side's fraction and shift,
+and one more register stage (`pm_*`) sits between the multiply and the add --
+two edges of the seven the R738 note proves are there. Unity (TL 0, pan 0) is
+the old `{byte, 8'h00}` exactly; MAME's mutes (pan 8; 7 left; 9 right) kept.
+Checked by `tb_m2_mpcm_level`: every TL and every pan against MAME's formula,
+28 voices saturating without wrapping, and MAME's own register stream.
+Not changed: the envelope, the LFOs, TL interpolation (reg 5 bit 0) and linear
+interpolation between samples, all still absent; each measured at under 0.2 dB
+of level on Daytona (R819).
+
+**ADDED (R821, 2026-10-13): `rtl/sound/m2_multipcm_dual.sv`, both chips on one
+engine -- derived from `m2_multipcm.sv` above, so the same upstream, licence and
+commit.** Selected by `m2_sound_board`'s `PCM_SHARED`. The module's default is
+0 (the two `m2_multipcm`); `Model2.sv` sets 1, so the core uses the shared
+engine since it passed on the board (s1037). The arithmetic is `m2_multipcm.sv`'s verbatim
+(`banked()` takes the page as an argument); the schedule is new: one sequencer
+over 56 slots `{slot, chip}` at 4 enables each (224 a pass, as before), one
+step / pitch / level / multiply datapath, per-slot state in 64-deep MLABs and
+56-bit vectors, each chip keeping its own register selection, accumulators,
+output and fetch port. Differences from two `m2_multipcm`, all in the file's
+header: a fetch holds the sequencer only when that chip's next slot would step
+while it is still outstanding; level and pan are read at the step, not at the
+acknowledge; one descriptor fetch at a time for both chips; the sample number
+is an MLAB not cleared by reset (read registered, so a descriptor starts one
+cycle after its pick); the sample fetch is issued one edge after the step. Proven by `tb_m2_mpcm_dual`: with register writes applied between passes,
+and with them applied mid-pass at the same slot of both, every sample of both
+chips equals two `m2_multipcm`'s, on random register streams and on MAME's own
+(R821).
+
 ### jotego/jt12 — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/jt12/` @ **`4cf1c5b`** · UNMODIFIED*
 
 The YM3438 (OPN2C) on the sound board, at MAME's own figure of 8,000,000 Hz —
 which divides 48 MHz by exactly six, so it takes a counter rather than the phase
-accumulator the 10 MHz 68000 needs. Copyright Jose Tejada Gomez; GPL-3 to GPL-3,
+accumulator the 10 MHz 68000 needs. (Since the core left 48 MHz it has been an
+accumulator, and until R820 it ran at 8.333 MHz -- a /6 of 50 kept as if it
+were the part's clock; it is 8 / TICK_DEN of clk_sys now, 8 MHz exactly.) Copyright Jose Tejada Gomez; GPL-3 to GPL-3,
 so reuse is direct.
 
 `cfg/jt12.yaml` declares `hdl/*.v` plus `hdl/adpcm/*.v` — 57 files. The ADPCM
@@ -192,6 +231,18 @@ on jt12's internal `clk_en`, which is never high on two consecutive clk_sys
 edges (the proof is in the SDC). An upstream bump that renames any of them, or
 adds a load outside `clk_en`, must revisit that block; a rename shows as its
 critical warning.
+
+**R833: `rtl/sound/m2_ym_timers.sv`, a timer-only stand-in, is derived from it**
+(GPL-3.0, from jt12 @ `4cf1c5b`; no jt12 file is changed). It re-expresses only
+jt12's timer path -- `jt12_top`'s cen_reg and timer enable, `jt12_div`'s 1/6
+prescaler and its negative-edge enables, `jt12_reg`'s 24-slot counter and
+`zero`, the address latch, registers 0x21 and 0x24-0x27 and busy from
+`jt12_mmr`, `jt12_timers`, `jt12_dout` -- and outputs silence. Selected by
+`m2_sound_board`'s `YM_STUB` (default 0: jt12, unchanged). Proven by
+`tb_m2_ym_timers` (dout and irq_n equal to jt12's after every clock edge, on
+MAME's captured write stream and random programming) and by
+`tb_m2_sndboard` with YM_STUB 1 (the 68000's bus and both MultiPCMs identical
+to jt12's board every cycle). Daytona never voices the FM (R819, R833).
 
 ### ijor/fx68k — GPL-3.0
 *IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · UNMODIFIED*

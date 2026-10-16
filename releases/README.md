@@ -1,237 +1,289 @@
 # Sega Model 2 — releases
 
-Copy to the SD card:
+## What to copy
 
-| from | to |
+| file | where it goes on the SD card |
 |---|---|
-| `Model2_20261013.rbf` | `/media/fat/_Arcade/cores/` — **rename to `Model2.rbf` on the card** |
-| `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` — **updated**: also finds split and merged ROM sets |
-| `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 revision |
-| `Daytona USA (Deluxe 93) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT; **updated** as above |
-| `Daytona USA (Revision A) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT |
+| `Model2_20261016.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
+| `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
+| `Desert Tank.mra` | `/media/fat/_Arcade/` |
+| `Virtua Cop (Revision A).mra` | `/media/fat/_Arcade/` |
+| the four `[15kHz CRT]` versions of those | `/media/fat/_Arcade/` — each starts in 15 kHz, for a CRT |
 
-**One core, deliberately.** If you need an older build, it is in the git
-history of this repository.
+There's only ever one core here, and it runs all three games: the MRA you
+pick tells it which. Older builds are in this repository's git history if
+you need one.
 
-ROMs are supplied by you and must be in `/media/fat/games/mame/` as the MRA
-names them. Nothing here contains ROM data.
+You supply the ROMs. They go in `/media/fat/games/mame/`, named the way the
+MRA expects. Nothing in this folder contains ROM data.
 
-## ROMs you need
+## ROMs
 
-| zip | what for |
+| zip | for |
 |---|---|
-| `daytona93.zip` | `Daytona USA (Deluxe 93)`. A **split** set also needs `daytona.zip` beside it, for the files the two share; a **merged** `daytona.zip` alone also works. |
-| `daytona.zip` | `Daytona USA (Revision A)`, the 1994 set (MAME's `daytona`) — the whole set |
-| `model1io.zip` **or** the game's zip | the I/O board's Z80 ROM, `epr-14869c.25` |
+| `daytona.zip` | Daytona USA (Revision A), MAME's `daytona` set |
+| `daytona93.zip` | Daytona USA (Deluxe '93). With a split set you also need `daytona.zip` next to it, because the two share files. A merged `daytona.zip` on its own works too. |
+| `desert.zip` | Desert Tank, MAME's `desert` set. Older sets name two of the polygon ROMs `.21` / `.20` instead of `.20` / `.21`; either works. |
+| `vcopa.zip` | Virtua Cop (Revision A), MAME's `vcopa` set |
+| `model1io.zip`, or a Daytona zip | Daytona's and Desert Tank's I/O board ROM, `epr-14869c.25` |
 
-The I/O board ROM is searched for in `model1io.zip` **and** the game's own zip, so whichever of the two your
-ROM set puts it in will be found. **Without it the core has no controls** — the
-I/O board is what the game reads coins, start and steering through, so a missing
-`epr-14869c.25` looks like a machine that runs and ignores you.
+Daytona and Desert Tank use the same I/O board, and its ROM is looked for in
+`model1io.zip` and in the Daytona zips, so it will be found wherever your set
+keeps it (`desert.zip` doesn't carry it). Without it you get no controls at
+all: the game reads coins, start and steering through the I/O board, so a
+missing `epr-14869c.25` looks like a machine that runs and ignores you.
 
-The TGP coprocessor's microcode needs no separate download. It lives inside the
-game's own data ROM and the core extracts it.
+Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
+`vcopa.zip` (or `model1io2.zip`).
 
-**Check what you are running.** `Model2_20261013.rbf` is
-`77dc39cf90c61c6ea2538b3b5f2f7b79`, 4,639,008 bytes. If the core on your card
-does not have that md5, you are not running this build — and the usual reason is
-a second file: MiSTer keeps the lexicographically greatest name beginning
-`Model2` followed by `.` or `_`, and `_` sorts after `.`, so a spare
-`Model2_old.rbf` in `cores/` silently wins over `Model2.rbf`. Keep exactly one,
-and keep fallbacks out of `cores/` entirely.
+The TGP coprocessor's microcode is not a separate download. It sits inside
+the game's data ROM and the core pulls it out.
 
-**SDRAM:** the core addresses **64 MB**, so it needs a 64 MB or larger module.
-The 3D is drawn into the DE10-Nano's own DDR3; nothing extra is needed for that.
+**Check you're running the right file.** `Model2_20261016.rbf` has the md5 `644e28fa0dee02c90d4b2d93c2d99fbd`.
+If yours doesn't match, the usual reason is a second core file in `cores/`.
+MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
+`Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
+any backups out of `cores/`.
 
-## What this build does
+**SDRAM:** the core needs a 64 MB or larger module. The 3D is drawn into the
+DE10-Nano's own DDR3, so nothing else is needed for that.
 
-**Daytona USA runs at arcade speed, with the 3D on screen** — textured,
-lit polygons over the 2D layers, with sound.
+## What works
 
-**Speed, measured on a DE10-Nano with `Draw method` on `Double Buffered`
-(the default) and `Texel step` on `1`:**
+Three games run on one core: **Daytona USA** (Revision A and Deluxe '93),
+**Desert Tank** and **Virtua Cop**.
 
-| | frames a second (the arcade runs at 57.5) |
+| | frames a second |
 |---|---|
-| Attract mode | **57**, solid |
-| In a race | **57**: 99% of frames on time, and no slowdown seen in testing, including the heaviest corners |
+| Daytona USA, attract and races | 57 of the arcade's 57.5, 99% of frames on time |
+| Desert Tank | 29 — the game draws every other frame, as it does on the arcade board |
+| Virtua Cop | 29 — the same |
 
-- **The whole board is in the FPGA:** the i960 main CPU, the TGP geometry
-  coprocessor and its microcode, the geometrizer, a hardware 3D renderer, the
-  2D tilemap layers, the I/O board, and the sound board — its own 68000, the
-  YM3438 and both MultiPCMs.
-- **The 3D is drawn into a DDR3 framebuffer** and shown only when a frame is
-  complete, so there is no tearing and no half-drawn picture.
-- **Polygons are drawn front to back, as the real board draws them**, and
-  texture reads are skipped for pixels something nearer already covers.
+The whole arcade board is in the FPGA: the i960 main CPU, the TGP geometry
+coprocessor running the game's own microcode, the geometrizer, a hardware 3D
+renderer drawing front to back like the real board, the 2D tile layers, the
+I/O boards, and the sound board with its own 68000, YM3438 and MultiPCM
+sample chips. The 3D goes into a framebuffer and is only shown when a frame
+is finished, so there's no tearing.
 
-**New since `Model2_20261011`:**
+Daytona has had the most play by far. Desert Tank has been played through
+its missions with no lock in an 87-minute run. Virtua Cop is the newest:
+it boots, plays, and takes light-gun input, but expect rough edges, and
+please report what you find.
 
-- **Races at full speed.** The last release dipped below full speed for
-  10-20% of a race. The main CPU is now the part that sets the pace, so it
-  was made faster:
-  - its instruction cache is 8 KB again, up from 512 bytes;
-  - a cache fault that threw away half-fetched code on every loop is fixed;
-  - on a cache miss, the instruction it is waiting for now comes back
-    first;
-  - it now reads ahead after two-word instructions.
-- **The framebuffer is cleared while the 3D draws**, not before it.
-- **A steering wheel works.** MiSTer maps a wheel onto the right stick, and
-  the core now steers from the right stick's left/right as well as the left
-  stick's. Pads are unchanged. See *Controls*.
-- **Split and merged ROM sets** now work for `Daytona USA (Deluxe 93)`.
-- **Soak-tested:** this build ran 11 hours of attract without a lock.
+## New in this release
 
-**Earlier, in `Model2_20261011`:**
+- **Desert Tank.** Its own MRA, on the same core. Left stick steers, the
+  right stick aims the cannon, and the triggers drive forward and reverse.
+  See Controls.
+- **Virtua Cop.** Its own I/O board is now built into the core, and the main
+  CPU gained the maths instructions the game needs. Aim with an analog stick
+  or a mouse, so USB light guns that report as either (Sinden, GUN4IR and
+  others) work too. Two players, a crosshair each, and reload by shooting
+  off-screen. See Controls.
+- **Mip-mapping.** Distant textures used to shimmer and crawl as you drove,
+  because they were always read at full size, however far away they were.
+  Now they're read from smaller, pre-filtered versions as they recede, as
+  the arcade board does. `Mip-mapping` in the OSD picks how soon that
+  happens: `Sharp` (default) keeps the most detail, `Smooth` the least
+  shimmer, and `Off` turns it off. Your own car and anything else the
+  game keeps sharp stay at full detail.
+- **Sound now matches the arcade's balance.** Each voice's volume used to be
+  set in coarse steps that left the music about 3.5 dB too loud, which made
+  the speech sound quiet next to it. The GAME OVER speech now comes through
+  as it should. The music also played about 4% too fast; it now runs at the
+  arcade's tempo.
+- **No more doubled scanlines in the 2D.** The tile layers sometimes didn't
+  finish a line in time and repeated the one before. That's gone, at 24 kHz
+  and at 15 kHz.
+- **The background stays with the scene.** The sky and mountains are drawn
+  as 2D, the road and cars as 3D, and the two could show different moments of
+  the game, so in a slide the backdrop jumped against everything else. They're
+  now kept in step.
+- **Volume control** in the OSD, starting at 80%.
+- **Steering smoothing** in the OSD. Daytona swings its camera as hard as you
+  move the steering, so a pad flicked from lock to lock snaps the view in a
+  way a real wheel never could. `Light` or `Wheel` limits how fast the
+  steering can move, so a slide sweeps across instead. Off by default.
+- **Right stick option.** By default the right stick only works the pedals
+  (`Pedals only`). Set `Right stick` to `Pedals+steer` if you use a wheel that
+  MiSTer maps onto the right stick: then left/right steers and up/down still
+  works the pedals. See Controls.
+- **More for CRTs.** 15 kHz now starts at the standard 15.7 kHz, which is
+  what most TVs need, so the `[15kHz CRT]` MRAs should show a picture straight
+  away. Your saved line setting is reset to it once. There's also a new
+  15.4 kHz setting, and a `15kHz width` option for sets that show the picture
+  squashed at 15.4 or 15.7 kHz.
+- **A shorter menu.** Texel step, 3D pacing, Texture brightness and Draw
+  method's "every 3rd frame" are gone. They're fixed at the settings that work
+  best now the core runs at full speed.
+- **Room to grow.** Several parts were made smaller, including both sound
+  chips now sharing one engine. That freed space on the FPGA for what comes
+  next.
 
-- **Much faster races.** The core runs at a higher clock. The geometry
-  coprocessor does the same work in less than half the time. Texture reads
-  miss less often and can wait on four misses at once. The step that writes
-  the 3D into the framebuffer used to take only half a pixel a clock; it now
-  takes a whole one. That last fix alone took races from mostly 30 to mostly
-  full speed.
-- **The random lock-up is fixed.** After 20-60 minutes, usually in attract,
-  the 3D could freeze for good. The main CPU was sometimes handed the wrong
-  instruction when a delayed memory answer arrived at the wrong moment.
-  Revision A has since run 2.5 hours of attract without a lock.
-- **The 3D no longer goes black** after a while in attract.
-- **Car windows stay**: the glass and its sky reflection no longer drop out
-  after a few minutes.
-- **Textures look like the arcade's.** Textured surfaces take their colour
-  the way the real board does, so decals, windows and signs are no longer
-  washed out or too dark.
-- **The road close to the camera no longer judders or shakes** in motion.
-- **The car-select tyres are back**, no longer missing or see-through.
-- **ROLLING START scrolls across the screen**, and the mini-map, the
-  condition panel and the rev needle are in the right place.
-- **No black band above the sky** when driving uphill.
-- **The right edge of the 3D** lines up with the 2D.
-- **The "G" of GAME OVER is back.** The first polygon of a frame could be
-  lost when the 3D was running a frame late, and on the results screen that
-  polygon is the G.
-- **15 kHz for CRTs**, with two new `[15kHz CRT]` MRAs that start the core in
-  15 kHz. See below.
-- **Defaults changed:** `Draw method` is now `Double Buffered`, and `Gamma`
-  is now `MAME`.
+### Earlier releases
+
+**20261013:** races at full speed, from a faster main CPU (8 KB instruction
+cache and better instruction fetching). Steering wheel support. Split and
+merged ROM sets for Deluxe '93. An 11-hour soak without a lock.
+
+**20261011:** the random lock-up after 20 to 60 minutes was fixed, and races
+went from mostly 30 to mostly 57 frames a second. Also: the 3D no longer goes
+black; car windows stay; textures take the arcade's colours; the near road
+stopped juddering; the car-select tyres came back; ROLLING START scrolls; the
+mini-map and condition panel sit in the right place; no black band above the
+sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 
 ## OSD settings
 
 | setting | what it does |
 |---|---|
-| `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it shows `15kHz (CRT MRA)` and is fixed — see below. |
-| `15kHz lines` | `262/263 (15.1kHz)` (the default) or `273/274 (15.7kHz)` — see below. |
-| `Aspect ratio` | as MiSTer's other cores. |
-| `Textures` | `On`, or `Off` to draw every polygon flat. |
-| `Texture filter` | `Bilinear` or `Point`. |
-| `Texel step` | how many pixels share one texture read. `1` is the most detailed; `2`, `4` and `8` are faster and blurrier. |
-| `Texture brightness` | brightness of textured polygons. |
-| `Draw method` | **`Double Buffered` (the default)**: every frame is drawn, at the speeds above. `Single buffered` draws every second frame. `Every 3rd frame` draws one in three. |
-| `3D pacing` | `Hold game` keeps the game in step with the 3D, as an overloaded arcade board slows down; `Free` lets the game run ahead of the picture. |
-| `Gamma` | **`MAME` (the default)**, `Off` or `Mild`. Applies to 2D and 3D together. |
-| `Pedals` | swaps throttle and brake on the right stick — axis direction differs between pads. |
-| `Steering` | how much stick gives full lock: `3/4`, `Full`, `5/4` or `Half`. |
-| `Save settings (NVRAM)` | writes the game's backup memory to the SD card. |
-
-## MiSTer's audio filter is switched off
-
-**This core turns off MiSTer's built-in audio filter.** The game's sound is unchanged: the same sound board, the same
-mix and the same output on HDMI, the 3.5 mm jack and S/PDIF. What stops working
-is MiSTer's own audio filter setting (the filter presets in the MiSTer menu and
-`MiSTer.ini`). It has no effect on this core.
-
-**Why.** The Model 2 board barely fits in the DE10-Nano's FPGA; it is about 99%
-full. MiSTer's audio filter costs about 430 of the FPGA's logic blocks, and
-that room now goes to the 3D renderer's texture fetching, which is what holds
-races below full speed. Your MiSTer setup is not touched; this applies only
-while the Model 2 core is running.
-
-**It is not meant to be permanent.** If room in the FPGA can be freed up
-elsewhere later, the audio filter will be switched back on.
-
-**For anyone building the core:** this is one small, switchable change to the
-MiSTer framework file `sys/audio_out.sv`. It is kept as a patch in
-`docs/framework-patches/audio-filter-disable.patch`, explained in the README
-beside it, and turned on by `MISTER_DISABLE_AUDIO_FILTER` in `Model2.qsf`. When
-the framework is updated, re-apply the patch. If it no longer applies cleanly,
-the README shows how to make the three-line change by hand.
-
-## On a 15 kHz CRT
-
-The game's own video is 24 kHz, which a 15 kHz TV cannot show. The core has
-a 15 kHz interlaced mode for CRTs, at the game's own speed, with all 384
-lines shown as two fields.
-
-**Load the `[15kHz CRT]` version of the game** from the MiSTer menu, for
-example `Daytona USA (Deluxe 93) [15kHz CRT].mra`. It starts the core in
-15 kHz straight away, so you never need to see the 24 kHz picture. With the
-normal MRA, set `Video` to `15kHz interlaced` in the OSD.
-
-**`15kHz lines`** defaults to **262/263 (15.1kHz)**: fields of 262 and 263
-lines, NTSC's count, at the game's own speed. That keeps most TVs locked and
-the picture aligned. If yours prefers it, `273/274 (15.7kHz)` keeps the
-standard line rate instead.
-
-This has been tested and works on a real CRT. More reports are very welcome:
-which TV, how it's connected, and which settings work.
+| `Aspect ratio` | as on other MiSTer cores |
+| `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
+| `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
+| `15kHz width` | `Full` (default) or `Narrow`, for a picture that looks squashed at 15.4 or 15.7 kHz — see the CRT section |
+| `Textures` | `On`, or `Off` to draw every polygon flat |
+| `Texture filter` | `Bilinear` (default) or `Point` |
+| `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions |
+| `Draw method` | `Double Buffered` (default) draws every frame; `Single buffered` draws every other one |
+| `Gamma` | `MAME` (default), `Off` or `Mild`. Affects 2D and 3D together. |
+| `Volume` | 80% by default, in 10% steps; goes from 100% round to 0% |
+| `Pedals` | swaps accelerator and brake if your controller has them the other way round |
+| `Steering` | how much stick gives full lock: `3/4` (default), `Full`, `5/4` or `Half` |
+| `Steering smoothing` | `Off` (default), `Light` or `Wheel` — see above |
+| `Right stick` | `Pedals only` (default), or `Pedals+steer`: left/right steers as well, for a wheel |
+| `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
+| `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
+| `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
+| `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
 ## Controls
 
+### Daytona USA
+
 | | |
 |---|---|
-| Steer | left stick or right stick (left/right), a wheel that MiSTer reports as a **paddle**, or the d-pad |
+| Steer | left stick, the d-pad, or a wheel (see below) |
 | Accelerate / brake | right stick up / down, or the `Accel` and `Brake` buttons |
 | Gears | `Gear Up` / `Gear Down` |
 | View buttons | `VR1 Red`, `VR2 Blue`, `VR3 Yellow`, `VR4 Green` |
 | Start, Coin | `Start`, `Coin` |
-| Test, Service | available to map in MiSTer's input settings |
+| Test, Service | can be mapped in MiSTer's input settings |
 
-**How the core reads the analogue controls:**
+Both pedals share one axis, the right stick's up and down: one way
+accelerates, the other brakes, and how far you push sets how hard. If they
+come out backwards, set `Pedals` to `Swapped`. The `Accel` and `Brake`
+buttons always press fully.
 
-- **Steering** comes from the first of these that is in use: a **paddle**
-  (MiSTer can report a wheel's rotation as a paddle), then the **left
-  stick's left/right**, then the **right stick's left/right**, then the
-  **d-pad**, which steers gradually and recentres when released. Both sticks
-  ignore a small movement around the centre, so the left stick always wins
-  while it is held.
-- **Both pedals are on one axis: the right stick's up/down.** One direction
-  is the accelerator, the other the brake, and the further you push, the
-  harder it presses. Which direction is which depends on the controller, so
-  if they come out backwards, set `Pedals` to `Swapped` in the OSD. The
-  `Accel` and `Brake` buttons always press fully.
-- **`Steering`** in the OSD sets how much stick gives full lock: `3/4`,
-  `Full`, `5/4` or `Half`.
+Steering comes from a paddle if MiSTer provides one (some wheels show up that
+way), otherwise from the left stick, otherwise from the d-pad, which ramps
+and recentres. A small movement around the centre of a stick is ignored.
 
-**With a wheel and pedals:** MiSTer maps a wheel onto the **right stick**:
-steering on its left/right and the pedals on its up/down, the accelerator
-one way and the brake the other. That works as it is, with no setting to
-change. If the pedals come out reversed, use `Pedals: Swapped`; if the
-steering feels too light or too heavy, try the `Steering` options.
+**With a wheel:** MiSTer usually maps a wheel onto the right stick, with
+steering on left/right and the pedals on up/down. Set `Right stick` to
+`Pedals+steer` and it will work. If the pedals are reversed, use `Pedals`. If the
+steering feels too light or too heavy, try the `Steering` settings. I'd love
+to hear from wheel owners: this has been built to how MiSTer maps wheels, but
+not yet tried on one.
 
-## Not finished, as of `Model2_20261013.rbf`
+### Desert Tank
 
-This list describes the RBF named above. **The heading carries the RBF's name so
-that if the two disagree, you trust neither and check.**
+| | |
+|---|---|
+| Steer the tank | left stick, the d-pad's left/right, or a wheel |
+| Aim the cannon up / down | right stick up / down (level when you let go); the d-pad's up/down nudges it and it stays put |
+| Drive forward / reverse | the `Forward` and `Reverse` buttons — put them on your triggers |
+| Machine gun, cannon | `Machine Gun`, `Cannon` |
+| Views | `VR1 Blue`, `VR2 Green`, `VR3 Red` |
+| Shift | flips the forward/reverse lever by hand (Forward and Reverse set it for you) |
 
-- **Background music and the game-over speech are too quiet** against the
-  rest of the sound.
-- **No mip-mapping**, so distant textures shimmer.
-- **Virtua Cop is not supported yet.** Its I/O board (light guns, an LCD) is
-  a different one and is not in the core.
-- **Play it and report what you find.**
+The MRA renames the buttons, so MiSTer's define-buttons screen asks for these
+names. With `Right stick: Pedals+steer` (a wheel), the wheel steers, the
+pedal axis drives forward or back, and the d-pad aims.
+
+### Virtua Cop
+
+| | |
+|---|---|
+| Aim | player 1: the left stick of controller 1, or the mouse (see `Mouse`); player 2: the left stick of controller 2 |
+| Fire | `Trigger`, or the mouse's left button |
+| Reload | shoot off the screen, or `Reload`, or the mouse's right button |
+| Start, Coin | `Start`, `Coin` on each player's controller |
+| Test, Service | player 1's controller |
+
+**With a USB light gun:** MiSTer sends a USB gun's position as the left
+analog stick and its buttons as the mouse's, which is exactly what the core
+takes. Calibrate the gun in MiSTer's own menu (F10), leave `Mouse` at its
+default, and set `Crosshair` to `Off`. A second gun goes on controller 2.
+
+The attract's tutorial text is in Japanese: Virtua Cop keeps its country in
+its own backup RAM, and a fresh set starts as Japan. MAME does the same.
+
+## On a 15 kHz CRT
+
+The game's own picture is 24 kHz, which a 15 kHz TV can't show. The core has a
+15 kHz interlaced mode that shows all 384 lines as two fields, at the game's
+own speed.
+
+The easy way is to **load the `[15kHz CRT]` version** of the game from the
+MiSTer menu. It starts in 15 kHz straight away. With a normal MRA, set
+`Video` to `15kHz interlaced`.
+
+`15kHz lines` starts at `273/274`, the standard 15.7 kHz line rate, which is
+what most TVs want. A few sets prefer NTSC's line count instead: if yours
+rolls or loses sync, try `262/263` (15.1 kHz), or `268/269` (15.4 kHz) in
+between.
+
+The game runs at 57.5 frames a second, not 60, so a faster line rate means
+more lines in each field, and the picture uses fewer of them. On many sets
+that makes it look shorter at 15.4 and 15.7 kHz than at 15.1. If yours does
+that, set `15kHz width` to `Narrow`: the picture is pulled in from the sides
+by the same amount, so it keeps its shape. If it looks too narrow, leave it
+on `Full`. It has no effect at 15.1 kHz.
+
+It's been tested on real CRTs, but more reports are very welcome: which TV,
+how it's connected, and which settings work for you.
+
+## MiSTer's audio filter is switched off
+
+This core switches off MiSTer's own audio filter. The game sounds exactly the
+same on HDMI, the 3.5 mm jack and S/PDIF; it's only MiSTer's filter presets
+(in the menu and `MiSTer.ini`) that have no effect while this core is running.
+Nothing in your MiSTer setup is changed.
+
+The reason is space: the whole Model 2 board only just fits in the FPGA, and
+the filter takes about 430 of its logic blocks. It's meant to come back once
+the remaining features are in, if there's room left.
+
+If you build the core yourself: it's one small, switchable change to the
+framework file `sys/audio_out.sv`, kept as a patch in
+`docs/framework-patches/` with a README explaining it.
+
+## Still to come
+
+- **Reports from CRT, wheel and light-gun owners** (see above), and from
+  anyone running the Deluxe '93 set for long stretches.
+- **More Virtua Cop testing.** It's the newest game here; only the first
+  stage has been checked closely.
+- **CRT light guns** (GunCon on MiSTer's SNAC port) are planned, not built.
+- **An option for Virtua Cop's country,** so its text can be in English.
+
+If you find something wrong, please report it.
 
 ## Credits
 
-The framework is **MiSTer-devel**'s. The sound board's 68000 is **fx68k**, by
-Jorge Cwik (ijor), and its YM3438 is **jt12**, by Jose Tejada (jotego). The
-MultiPCM is from **[meathax](https://github.com/meathax)**'s
-[s32](https://github.com/meathax/s32) System 32 project. The I/O board's Z80 is
-**tv80**, by Guy Hutchison, after Daniel Wallner's T80. The TGP and the video
-timing come from the Sega Model 1 core, which solved the same problems first on
-the same part.
+The framework is MiSTer-devel's. The sound board's 68000 is fx68k by Jorge
+Cwik (ijor), and its YM3438 is jt12 by Jose Tejada (jotego). The MultiPCM
+comes from [meathax](https://github.com/meathax)'s
+[s32](https://github.com/meathax/s32) System 32 project. The I/O board's Z80
+is tv80 by Guy Hutchison, after Daniel Wallner's T80. The TGP and the video
+timing come from the Sega Model 1 core, which solved the same problems first
+on the same hardware.
 
-Hardware behaviour was verified throughout against **MAME**, whose Model 2
-driver is by R. Belmont, Olivier Galibert, ElSemi, Angelo Salese and Matthew
+Hardware behaviour was checked throughout against MAME, whose Model 2 driver
+is by R. Belmont, Olivier Galibert, ElSemi, Angelo Salese and Matthew
 Daniels, and whose i960 is by Farfetch'd and R. Belmont.
 
-GPL-3.0-or-later. Full third-party detail and licences are in `THIRD_PARTY.md`
-in the source repository.
+GPL-3.0-or-later. Third-party details and licences are in `THIRD_PARTY.md` in
+the source repository.

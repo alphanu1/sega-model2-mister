@@ -65,7 +65,14 @@ module m2_char_cache #(
   // 2,146. Expect 32 KB to roughly double again, and the scanline overruns with
   // it. That is the price of a build that fits at all.
   parameter int unsigned IDX_BITS = 12,
-  parameter int unsigned ADDR_BITS = 18
+  parameter int unsigned ADDR_BITS = 18,
+  // R823: 0 = NO SIBLING FILL. Default 1 (unchanged). The sibling halves the
+  // demand misses but holds the port for a second transaction, and the next
+  // column's miss waits behind it: on a line where every column misses (a
+  // full-screen picture layer entering a new 4-row group of its tiles) each
+  // miss then costs two round trips instead of one. Measured on MAME's Daytona
+  // scenes (tb_m2_video_ovr): see the study's R823.
+  parameter bit          SIBLING = 1'b1
 ) (
   input  logic                   clk,
   input  logic                   rst_n,
@@ -393,7 +400,7 @@ module m2_char_cache #(
           // Arm the sibling. The port is idle this cycle and stays idle for
           // BG_GAP as well, which is what the adapter needs to retire the
           // transaction just finished.
-          bg_arm <= 1'b1;
+          bg_arm <= SIBLING;
           bg_idx <= idx_r ^ IDX_BITS'(1);   // the sibling; BG_WR walks to the rest
           bg_tag <= tag_r;
           st     <= S_ACK;

@@ -12,6 +12,15 @@
 //
 // The two documented departures are modelled as the RTL makes them: a texel
 // widens by replication (x * 0x11), and LERP is taken per field.
+//
+// R828: built with -DTB_MIP (and -GMIP=1) every request also carries a random
+// mip level L in tex[26:24] -- 0..min(log2 min(w, h) - 1, 7) -- and the model
+// addresses it as fetch_bilinear_texel does at miplevel L: width and height
+// >> L, origin ((x - 2048) >> L) & 2047 and ((y - 1024) >> L) & 1023, sheet
+// texsheet[L & 1]. u and v are the level's own (the span walk shifts them).
+// The request is sent as m2_span_tex sends it -- the sheet bit flipped by
+// L & 1 and the two mirror decisions in tex[27] and tex[28] (bit 13 + code -
+// L of the coordinate) -- while the model works from the header as it was.
 
 #include "Vm2_texel_bl.h"
 #include "verilated.h"
@@ -53,7 +62,7 @@ static void set_lo(int p, uint64_t l) {
   if (p == 3) { d->m4_lo = 1; d->m4_data = l; }
 }
 
-struct Req { uint32_t tex, u, v; int bl; };
+struct Req { uint32_t tex, u, v; int bl; uint32_t tex0; };   // R828: tex0 the header the model reads
 
 // model2rd.ipp get_texel
 static int get_texel(int base_x, int base_y, int x, int y, int sh) {
@@ -68,17 +77,25 @@ static int get_texel(int base_x, int base_y, int x, int y, int sh) {
 }
 static int lerp(int x, int y, int a) { return x + (((y - x) * a) >> 8); }
 
-// model2rd.ipp fetch_bilinear_texel, level 0; returns {discard, t}
+#ifdef TB_MIP
+static const bool MIPB = true;
+#else
+static const bool MIPB = false;
+#endif
+// model2rd.ipp fetch_bilinear_texel, at the request's level (0 unless TB_MIP);
+// returns {discard, t}
 static uint32_t model(const Req &r) {
-  const uint32_t t = r.tex;
+  const uint32_t t = r.tex0;
+  const int L = MIPB ? int((t >> 24) & 7) : 0;
   const int wcode = (t >> 1) & 7, hcode = (t >> 4) & 7;
-  const int W = 32 << wcode, H = 32 << hcode;
+  const int W = (32 << wcode) >> L, H = (32 << hcode) >> L;
   const int mirx = (t >> 9) & 1, miry = (t >> 10) & 1;
   const int wrapx = ((t >> 7) & 1) & !mirx;
   const int wrapy = 1 & !miry;                 // poly_tex has no wrap-y bit (R620)
   const int tl = (t >> 8) & 1;
-  const int tex_x = ((t >> 13) & 0x3f) * 32, tex_y = ((t >> 19) & 0x1f) * 32;
-  const int sh = (t >> 12) & 1;
+  const int tex_x = int(((uint32_t(((t >> 13) & 0x3f) * 32) - 2048u) >> L) & 2047u);
+  const int tex_y = int(((uint32_t(((t >> 19) & 0x1f) * 32) - 1024u) >> L) & 1023u);
+  const int sh = int((t >> 12) & 1) ^ (L & 1);   // texsheet[L & 1]
   int32_t u = (int32_t)r.u, v = (int32_t)r.v;   // 12.8, non-negative, 20 bits
   if (mirx && (u & (W << 8))) u = ~u & 0xfffff;
   if (miry && (v & (H << 8))) v = ~v & 0xfffff;
@@ -129,7 +146,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 8; i++) tick();
   d->rst_n = 1;
   std::deque<Req> sent;
-  long issued = 0, answered = 0, cyc = 0;
+  long issued = 0, answered = 0, cyc = 0, n_class = 0;   // R828b: n_class
   int lat[4] = {-1, -1, -1, -1}; uint32_t ad[4] = {0, 0, 0, 0};
   // R650: M2_TBL_SDRAM=1 -- the port as m2_sdram really is: a request is
   // dispatched on its RISING edge only, one at a time, and the acknowledge and
@@ -212,10 +229,35 @@ int main(int argc, char **argv) {
         uint32_t t = 1u | ((rng() % 6) << 1) | ((rng() % 6) << 4) | ((rng() & 1) << 7)
                    | ((rng() % 5 == 0) << 8) | ((rng() % 5 == 0) << 9) | ((rng() % 5 == 0) << 10)
                    | ((rng() & 1) << 12) | ((rng() % 64) << 13) | ((rng() % 32) << 19);
+        // R828b: THE CLASS s1068 DREW WHITE, an eighth of the runs (all of
+        // them with M2_TBL_CLASS): Daytona's fence, 64x256 translucent at
+        // (896, 256) sheet 1, and the car's window frame, 64x128 translucent
+        // at (512, 0) sheet 1 -- clamped at both edges, at every level they
+        // have (m2_span_tex now stops them at level 1, but this unit must
+        // address any level it is sent), over the whole texture
+        static const bool CLASS = std::getenv("M2_TBL_CLASS") != nullptr;
+        bool cls = MIPB && (CLASS || rng() % 8 == 0);
+        if (cls) t = (rng() & 1) ? (1u | (1u << 1) | (3u << 4) | (1u << 8) | (1u << 12) | (28u << 13) | (8u << 19))
+                                 : (1u | (1u << 1) | (2u << 4) | (1u << 8) | (1u << 12) | (16u << 13));
+        if (MIPB) {   // R828: a level the texture has: down to 2x2, at most 7
+          const int wc = (t >> 1) & 7, hc = (t >> 4) & 7, mc = wc < hc ? wc : hc;
+          const int ml = (4 + mc) > 7 ? 7 : 4 + mc;
+          t |= uint32_t(rng() % (ml + 1)) << 24;
+        }
+        if (cls) ++n_class;
         run = {t, (uint32_t)(rng() & 0xfffff), (uint32_t)(rng() & 0xfffff), (int)(rng() % 4 != 0)};
+        if (cls) { run.u = rng() % (64u << 8); run.v = rng() % (256u << 8); }   // inside, edges included
         runlen = 1 + rng() % 40;
       }
       cur = run; have = true; --runlen;
+      cur.tex0 = cur.tex;
+      if (MIPB) {   // R828: as m2_span_tex sends it
+        const uint32_t L = (cur.tex >> 24) & 7, wc = (cur.tex >> 1) & 7, hc = (cur.tex >> 4) & 7;
+        const uint32_t bu = 13 + wc - L, bv = 13 + hc - L;
+        const uint32_t fu = ((cur.tex >> 9) & 1) && bu < 20 && ((cur.u >> bu) & 1);
+        const uint32_t fv = ((cur.tex >> 10) & 1) && bv < 20 && ((cur.v >> bv) & 1);
+        cur.tex = (cur.tex ^ ((L & 1) << 12)) | (fu << 27) | (fv << 28);
+      }
       run.u = (run.u + (rng() % 300)) & 0xfffff;           // mostly small steps: magnified
       run.v = (run.v + (rng() % 7) - 3) & 0xfffff;
     }
@@ -241,6 +283,7 @@ int main(int argc, char **argv) {
   }
   std::printf("m2_texel_bl: %ld answered of %ld issued in %ld cycles, hits %u misses %u lost %u sweeps %u\n",
               answered, issued, cyc, d->dbg_hits, d->dbg_misses, d->dbg_lost, d->dbg_sweeps);
+  if (MIPB) std::printf("m2_texel_bl: R828b class runs (fence / window frame): %ld\n", n_class);
   std::printf("m2_texel_bl: checks=%d fails=%d\n", checks, fails);
   std::printf(fails || answered < N ? "FAIL\n" : "PASS\n");
   delete d;

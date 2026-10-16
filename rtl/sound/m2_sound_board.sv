@@ -49,6 +49,18 @@ module m2_sound_board #(
   // width mismatch in Model2.sv, R94 -- was making everything unlistenable.
   parameter bit PCM_CACHE = 1'b1,          // per-voice sample line
   parameter bit PCM_RATE  = 1'b1,          // headroom + fixed-rate drain
+  // R821: ONE MULTIPCM ENGINE FOR BOTH CHIPS (m2_multipcm_dual) in place of
+  // two m2_multipcm. Off: the board is exactly as it was -- same instances,
+  // same names, same logic. On: the same samples from the same register
+  // state (tb_m2_mpcm_dual), each chip still on its own fetcher and port.
+  parameter bit PCM_SHARED = 1'b0,
+  // R833: THE YM3438 AS A TIMER-ONLY STAND-IN (m2_ym_timers) in place of
+  // jt12. Daytona never voices the FM (R819, R833: MAME's ymsnd output is
+  // zero on both sound programs); the 68000 uses timer B and polls the busy
+  // and timer flags, which the stand-in reproduces clock for clock. Off: the
+  // board is exactly as it was. On: the FM is SILENT -- not for a game that
+  // keys the YM with a non-zero level.
+  parameter bit YM_STUB = 1'b0,
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
   parameter int unsigned TICK_DEN = 50      // clk_sys
 ) (
@@ -233,10 +245,12 @@ module m2_sound_board #(
   );
 
   // ---------------------------------------------------------------- IPL
-  // segam1audio wires the UART's rxrdy to the 68000's IRQ2 and the YM's timer
-  // to IRQ4. Only the UART exists yet, so IRQ4 is never raised -- and that is
-  // recorded rather than left looking complete: a board that never sees its
-  // timer interrupt will not sequence music, whatever the UART does.
+  // segam1audio wires the UART's rxrdy to the 68000's IRQ2, and NOTHING ELSE.
+  // R833: this note used to say the YM's timer went to IRQ4 and was missing
+  // here. MAME 0.289's segam1audio.cpp connects no YM interrupt, and the
+  // firmware does not need one: it polls the YM's status for timer B (bit 1,
+  // at 0x528-0x5C8) and busy (bit 7, before every write), MAME and this board
+  // alike. ym_irq_n stays unconnected, as in the reference.
   always_comb begin
     ipl_n = 3'b111;                       // no interrupt
     if (uart_irq_rx) ipl_n = 3'b101;      // level 2, active low
@@ -264,8 +278,17 @@ module m2_sound_board #(
   // the note here said whoever moved the core clock must restore the ratio;
   // R573 (60) and R580 (70) moved it and did not. At 70 the chip ran at
   // 11.67 MHz: every FM note 40% sharp and the music 40% fast.
-  localparam int unsigned YM_NUM = 25;
-  localparam int unsigned YM_DEN = 3 * TICK_DEN;
+  //
+  // R820: AND 8.333 WAS NEVER THE CHIP's CLOCK. MAME's is 8,000,000 Hz --
+  // `YM3438(config, m_ym, 16_MHz_XTAL / 2)` in segam1audio.cpp, and -listxml
+  // says the same, as does the note above: a divide by six is 8 MHz only from
+  // 48 MHz. From 50 it was 8.333, and R227 kept that as if it were the part's
+  // own clock. The 68000 sequences the music on the
+  // YM's timer B, so every tempo ran 4.2% fast: the sound board, driven by
+  // MAME's own link bytes, played the attract tune's first 426 notes in MAME's
+  // order and 3.8% sooner. 8 / TICK_DEN of clk_sys is 8 MHz at any core clock.
+  localparam int unsigned YM_NUM = 8;
+  localparam int unsigned YM_DEN = TICK_DEN;
   logic [$clog2(YM_DEN):0] ym_acc;
   logic       ym_cen;
   logic       ym_wr_pend, ym_bus_d;
@@ -301,14 +324,41 @@ module m2_sound_board #(
   wire               ym_sample;
   wire               ym_irq_n;
 
+  // R833: jt12 (YM_STUB 0) or the timer-only stand-in (YM_STUB 1), chosen by
+  // parameter-constant wires as R821 chose the MultiPCM: u_ym keeps its name
+  // and its logic with YM_STUB 0, and with YM_STUB 1 nothing reads it, so
+  // Quartus prunes it. Same inputs to both.
+  wire  [7:0] j_dout, t_dout;
+  wire signed [15:0] j_l, j_r, t_l, t_r;
+  wire               j_sample, t_sample, j_irq_n, t_irq_n;
+  assign ym_dout_i = YM_STUB ? t_dout   : j_dout;
+  assign ym_l      = YM_STUB ? t_l      : j_l;
+  assign ym_r      = YM_STUB ? t_r      : j_r;
+  assign ym_sample = YM_STUB ? t_sample : j_sample;
+  assign ym_irq_n  = YM_STUB ? t_irq_n  : j_irq_n;
+
   jt12 u_ym (
     .rst(!rst_n), .clk(clk), .cen(ym_cen),
     .din(ym_d_r), .addr(ym_a_r),
     .cs_n(!ym_wr_pend), .wr_n(!ym_wr_pend),
-    .dout(ym_dout_i), .irq_n(ym_irq_n),
+    .dout(j_dout), .irq_n(j_irq_n),
     .en_hifi_pcm(1'b0),
-    .snd_right(ym_r), .snd_left(ym_l), .snd_sample(ym_sample)
+    .snd_right(j_r), .snd_left(j_l), .snd_sample(j_sample)
   );
+
+  generate if (YM_STUB) begin : g_ymstub
+    m2_ym_timers u_ymt (
+      .rst(!rst_n), .clk(clk), .cen(ym_cen),
+      .din(ym_d_r), .addr(ym_a_r),
+      .cs_n(!ym_wr_pend), .wr_n(!ym_wr_pend),
+      .dout(t_dout), .irq_n(t_irq_n),
+      .en_hifi_pcm(1'b0),
+      .snd_right(t_r), .snd_left(t_l), .snd_sample(t_sample)
+    );
+  end else begin : g_ymjt12
+    assign t_dout = 8'd0; assign t_irq_n = 1'b1; assign t_sample = 1'b0;
+    assign t_l = 16'sd0;  assign t_r = 16'sd0;
+  end endgenerate
 
   // ----------------------------------------------------------- MULTIPCM x2
   //
@@ -362,13 +412,79 @@ module m2_sound_board #(
   wire [21:0] p1_caddr, p2_caddr;
   wire  [7:0] p1_cdata, p2_cdata;
 
+  // R821: the two chips' outputs come from u_pcm1 / u_pcm2 (PCM_SHARED 0) or
+  // from one m2_multipcm_dual (PCM_SHARED 1). The selects are on a parameter,
+  // so they are wires: the unused side has no fanout and is not built, and
+  // with PCM_SHARED 0 every instance keeps its name and its logic.
+  wire        s1_creq, s2_creq, s1_stb, s2_stb;
+  wire  [4:0] s1_cslot, s2_cslot;
+  wire [21:0] s1_caddr, s2_caddr;
+  wire signed [15:0] s1_l, s1_r, s2_l, s2_r;
+  wire        d1_creq, d2_creq, d_stb;
+  wire  [4:0] d1_cslot, d2_cslot;
+  wire [21:0] d1_caddr, d2_caddr;
+  wire signed [15:0] d1_l, d1_r, d2_l, d2_r;
+
+  assign p1_creq  = PCM_SHARED ? d1_creq  : s1_creq;
+  assign p1_cslot = PCM_SHARED ? d1_cslot : s1_cslot;
+  assign p1_caddr = PCM_SHARED ? d1_caddr : s1_caddr;
+  assign p1_stb   = PCM_SHARED ? d_stb    : s1_stb;
+  assign p1_raw_l = PCM_SHARED ? d1_l     : s1_l;
+  assign p1_raw_r = PCM_SHARED ? d1_r     : s1_r;
+  assign p2_creq  = PCM_SHARED ? d2_creq  : s2_creq;
+  assign p2_cslot = PCM_SHARED ? d2_cslot : s2_cslot;
+  assign p2_caddr = PCM_SHARED ? d2_caddr : s2_caddr;
+  assign p2_stb   = PCM_SHARED ? d_stb    : s2_stb;
+  assign p2_raw_l = PCM_SHARED ? d2_l     : s2_l;
+  assign p2_raw_r = PCM_SHARED ? d2_r     : s2_r;
+
+  generate if (PCM_SHARED) begin : g_shared
+    // One pass serves both chips, so one enable: u_rate1's. Both rate stages
+    // push on the same strobe and pop on identical accumulators, so their
+    // levels -- and therefore their throttles -- are always equal.
+    // R847: THE 68000's REGISTER WRITE, REGISTERED BEFORE THE ENGINE SEES IT.
+    // aob -> the address decode -> the slot select (fanout 149) -> the 64-way
+    // demux into key_wait / s_active was one cycle (s1130 -0.518, 233 paths;
+    // s1131). Select, strobe, address and data move together, so the engine
+    // sees the same writes in the same order one clk later; a write is held
+    // for many clks of a 68000 bus cycle and nothing reads the chips back.
+    logic       pw_cs0, pw_cs1, pw_we;
+    logic [1:0] pw_a;
+    logic [7:0] pw_d;
+    always_ff @(posedge clk) begin
+      if (!rst_n) begin
+        pw_cs0 <= 1'b0; pw_cs1 <= 1'b0; pw_we <= 1'b0;
+      end else begin
+        pw_cs0 <= sel_pcm1 && ds; pw_cs1 <= sel_pcm2 && ds; pw_we <= we;
+      end
+      pw_a <= addr[2:1]; pw_d <= oedb[7:0];
+    end
+    m2_multipcm_dual u_pcm (
+      .clk(clk), .ce(ce_pcm1), .rst(!rst_n),
+      .cs0(pw_cs0), .cs1(pw_cs1),
+      .we(pw_we), .addr(pw_a), .wdata(pw_d),
+      .rom_req0(d1_creq), .rom_slot0(d1_cslot), .rom_addr0(d1_caddr),
+      .rom_data0(p1_cdata), .rom_ack0(p1_cack),
+      .rom_req1(d2_creq), .rom_slot1(d2_cslot), .rom_addr1(d2_caddr),
+      .rom_data1(p2_cdata), .rom_ack1(p2_cack),
+      .bank_sel0(bank1), .bank_sel1(bank2),
+      .sample_stb(d_stb),
+      .out0_l(d1_l), .out0_r(d1_r), .out1_l(d2_l), .out1_r(d2_r)
+    );
+  end else begin : g_two
+    assign d1_creq = 1'b0; assign d2_creq = 1'b0; assign d_stb = 1'b0;
+    assign d1_cslot = 5'd0; assign d2_cslot = 5'd0;
+    assign d1_caddr = 22'd0; assign d2_caddr = 22'd0;
+    assign d1_l = 16'sd0; assign d1_r = 16'sd0; assign d2_l = 16'sd0; assign d2_r = 16'sd0;
+  end endgenerate
+
   m2_multipcm u_pcm1 (
     .clk(clk), .ce(ce_pcm1), .rst(!rst_n),
     .cs(sel_pcm1 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
-    .rom_req(p1_creq), .rom_slot(p1_cslot), .rom_addr(p1_caddr),
+    .rom_req(s1_creq), .rom_slot(s1_cslot), .rom_addr(s1_caddr),
     .rom_data(p1_cdata), .rom_ack(p1_cack),
-    .bank_sel(bank1), .sample_stb(p1_stb),
-    .out_l(p1_raw_l), .out_r(p1_raw_r)
+    .bank_sel(bank1), .sample_stb(s1_stb),
+    .out_l(s1_l), .out_r(s1_r)
   );
 
   m2_pcm_fetch #(.BYPASS(!PCM_CACHE)) u_p1fetch (
@@ -382,10 +498,10 @@ module m2_sound_board #(
   m2_multipcm u_pcm2 (
     .clk(clk), .ce(ce_pcm2), .rst(!rst_n),
     .cs(sel_pcm2 && ds), .we(we), .addr(addr[2:1]), .wdata(oedb[7:0]), .rdata(),
-    .rom_req(p2_creq), .rom_slot(p2_cslot), .rom_addr(p2_caddr),
+    .rom_req(s2_creq), .rom_slot(s2_cslot), .rom_addr(s2_caddr),
     .rom_data(p2_cdata), .rom_ack(p2_cack),
-    .bank_sel(bank2), .sample_stb(p2_stb),
-    .out_l(p2_raw_l), .out_r(p2_raw_r)
+    .bank_sel(bank2), .sample_stb(s2_stb),
+    .out_l(s2_l), .out_r(s2_r)
   );
 
   m2_pcm_fetch #(.BYPASS(!PCM_CACHE)) u_p2fetch (
@@ -505,6 +621,17 @@ module m2_sound_board #(
   // values well past 16 bits and its 0.30/0.5 route gains bring them back
   // down, while ours arrive already scaled. Doubling lands at 18,496 against
   // its 17,140, and the saturation below is what keeps that safe.
+  //
+  // R819: THE GAIN IS RIGHT, THE BALANCE ARGUMENT ABOVE IS NOT. A MultiPCM's
+  // output here is its voices summed and shifted right by two, MAME's is the
+  // sum at unity, so x2 is exactly MAME's 0.5 route gain. But Daytona never
+  // voices the YM3438 -- MAME's ymsnd output is zero through 300 s of attract
+  // and a whole game -- and the 5,120 above was jt12 settling in its first
+  // 0.3 s. The music-to-effects balance is set inside the two MultiPCMs, by
+  // their per-voice level (m2_multipcm, R819). Measured against MAME the YM
+  // path here is ~20 dB hot (x2 on jt12, which is +3.8 dB over ymfm per
+  // operator, against MAME's 0.30): inaudible in Daytona, not yet checked in a
+  // game that voices the FM.
   wire signed [17:0] sum_l = {{2{ym_l[15]}}, ym_l}
                            + {{2{p1_l[15]}}, p1_l}
                            + {{2{p2_l[15]}}, p2_l};

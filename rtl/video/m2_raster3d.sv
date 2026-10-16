@@ -113,6 +113,11 @@ module m2_raster3d #(
   // along the edges. Needs M2COV, whose pixel-centre rule shares the diagonal
   // without a gap or a pixel drawn twice.
   parameter bit SPLIT_TRI = 1'b0,
+  // R828: MIP LEVELS -- the level chosen from each quad's edge footprint and
+  // each group's 1/z (m2_raster_fill, m2_span_tex), the level's copy read from
+  // the sheets (m2_texel_bl). Nearest level, the existing bilinear, no blend.
+  // 0 is level 0 always: every module as before R828.
+  parameter bit MIP = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25
 ) (
@@ -140,7 +145,19 @@ module m2_raster3d #(
   input  logic [12:0] q_u0, q_v0, q_u1, q_v1,
   input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
   input  logic [23:0] q_tex,
+  // R828c: the geometry's no-mip flag (m2_geometry q_mipz): the game's own
+  // level stays well under 0 over the whole polygon, so it is drawn at level
+  // 0. Stored with the quad (one bit, no M10K) and given to the fill. MIP only.
+  input  logic        q_mipz,
   input  logic        q_end,                // last quad of the frame
+  // R826: WHICH LIST IS ON SCREEN. q_tag names the list being collected (the
+  // top level's flip count at its walk); it rides with the list through the
+  // sort, the draw and the publish, and show_tag names the list the beam is
+  // showing -- so the 2D can be held to the list its scroll belongs to
+  // (m2_video SCR_SYNC). Four registers of four bits; nothing reads them in
+  // here.
+  input  logic  [3:0] q_tag,
+  output logic  [3:0] show_tag,
 
   // ---- scan-out, on the video clock
   input  logic        scan_clk,
@@ -158,6 +175,10 @@ module m2_raster3d #(
   input  logic            tex_inval,
   input  logic            tex_bilinear,   // R620: on clk_mem, quasi-static (OSD)
   input  logic [1:0]      tex_pxk,        // R650: texel step 1/2/4/8 as log2, on clk (OSD)
+  // R828a: the mip rule, from the OSD, on clk (m2_raster_fill mip_mode):
+  // 0 off, 1 R828's largest edge K, 2 and 3 a quarter and a half of the way
+  // to the smallest. Unused without MIP.
+  input  logic [1:0]      tex_mip_mode,
   // R784: the OSD's output curve on clk (m2_geo_engine's encoding), for the
   // pedestal m2_span_tex adds to a textured pixel. q_tex[11] carries "luma
   // table row 1" from here on: the checker bit that sat there is taken from
@@ -332,6 +353,7 @@ module m2_raster3d #(
   logic [15:0] qo_oz0, qo_oz1, qo_oz2, qo_oz3;
   logic [15:0] qo_frac;                              // R626
   logic [23:0] qo_tex;
+  logic        qo_mipz;   // R828c
   // R275: the texel fetch's wires, declared here because two modules share them.
   logic        tex_req, tex_ack;
   logic        tex_rdy, tex_take;   // R539: a credit is free / the walk takes an answer
@@ -381,7 +403,7 @@ module m2_raster3d #(
   // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
-                  .FTB(FTB), .FRB(FRB)) u_store (   // R607, R626
+                  .FTB(FTB), .FRB(FRB), .MZ(MIP)) u_store (   // R607, R626, R828c
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -392,7 +414,7 @@ module m2_raster3d #(
     .in_frac(q_frac), .out_frac(qo_frac),                             // R626
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
-    .in_tex(q_tex),
+    .in_tex(q_tex), .in_mipz(q_mipz),                                 // R828c
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
@@ -403,7 +425,7 @@ module m2_raster3d #(
     .out_oz0(qo_oz0), .out_oz1(qo_oz1), .out_oz2(qo_oz2), .out_oz3(qo_oz3),   // R334
     .out_u0(qo_u0), .out_v0(qo_v0), .out_u1(qo_u1), .out_v1(qo_v1),
     .out_u2(qo_u2), .out_v2(qo_v2), .out_u3(qo_u3), .out_v3(qo_v3),
-    .out_tex(qo_tex),
+    .out_tex(qo_tex), .out_mipz(qo_mipz),                             // R828c
     .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped), .dbg_tiny(dbg_tiny)
   );
 
@@ -438,6 +460,7 @@ module m2_raster3d #(
   logic signed [23:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8; R618: 16.8
   logic [23:0] fl_span_tex;
   logic        fl_span_tex_en;
+  logic signed [9:0] fl_span_mipk;   // R828
 
   // R310: A SPAN FIFO, BECAUSE THE TEXEL FETCH BLOCKS EVERY SPAN BEHIND IT.
   //
@@ -470,7 +493,9 @@ module m2_raster3d #(
   // R337: 194 -> 242, carrying 1/z (32) and its gradient (16) for the
   // perspective divide. The queue is MLAB since R332, so this is ALM and not
   // M10K -- which is the only reason it is affordable at 553/553 blocks.
-  localparam int unsigned SQ_DW = 266;   // R618: three gradients 16 -> 24 bits
+  // R828: + 10 with MIP, the quad's mip bias -- 276 of the 280 bits seven
+  // M10K hold at 32 x 40, so no block more
+  localparam int unsigned SQ_DW = MIP ? 276 : 266;   // R618: three gradients 16 -> 24 bits
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
@@ -480,12 +505,15 @@ module m2_raster3d #(
   // silently, and a silently dropped span is a hole in the picture.
   assign fl_span_ready = sq_in_rdy;
 
-  assign sq_din = { fl_span_y, fl_span_x0, fl_span_x1,
+  wire [265:0] sq_din0 = { fl_span_y, fl_span_x0, fl_span_x1,
                     fl_span_ooz, fl_span_doozdx,                   // R337
                     fl_span_u, fl_span_v,
                     fl_span_dudx, fl_span_dvdx,
                     fl_span_col, fl_span_tex,
                     fl_span_moire, fl_span_tex_en };
+  // R828: the bias above the rest, so every other field keeps its slice
+  // (without MIP the cast drops it again)
+  assign sq_din = SQ_DW'({fl_span_mipk, sq_din0});
 
   // R313: BACK TO BLOCK MEMORY, to trade ALM for M10K. The register queue
   // (R312) is the better part -- no bubble -- but it costs ~484 ALM, and ALM is
@@ -530,6 +558,7 @@ module m2_raster3d #(
   wire        [23:0] sq_tex  = sq_q[25:2];
   wire               sq_moire  = sq_q[1];
   wire               sq_tex_en = sq_q[0];
+  wire signed [9:0]  sq_mipk = MIP ? sq_q[SQ_DW-1 -: 10] : 10'sd0;   // R828
   // R275: the textured span, expanded a pixel at a time. tx_* is the span as
   // the band buffers see it -- identical in shape, one pixel wide when the
   // polygon wears a texture.
@@ -544,7 +573,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF)) u_fill (   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP)) u_fill (   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -559,6 +588,8 @@ module m2_raster3d #(
     .in_oz0(qo_oz0), .in_oz1(sp_oz1), .in_oz2(sp_oz2), .in_oz3(sp_oz3),  // R337
     .in_frac(sp_frac),                                                    // R626
     .in_tex(qo_tex),
+    .mip_mode(tex_mip_mode),                         // R828a
+    .in_mipz(qo_mipz),                               // R828c
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
     .view_y1(band_y1), .view_y2(band_y2),
     .span_valid(fl_span_valid), .span_ready(fl_span_ready),
@@ -568,6 +599,7 @@ module m2_raster3d #(
     .span_dudx(fl_span_dudx), .span_dvdx(fl_span_dvdx),
     .span_ooz(fl_span_ooz), .span_doozdx(fl_span_doozdx),     // R337
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
+    .span_mipk(fl_span_mipk),                                  // R828
     .quad_done(fl_quad_done), .line_case(fl_line_case),
     .dbg_hot(dbg_fill_hot), .dbg_hotcyc(dbg_fill_hotcyc)   // R436
   );
@@ -621,7 +653,7 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .UZF(UZF)) u_spantex (   // R633, R791
+                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP)) u_spantex (   // R633, R791, R828
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784
@@ -636,6 +668,7 @@ module m2_raster3d #(
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
     .in_ooz(sq_ooz), .in_doozdx(sq_doozdx),                   // R337
     .in_tex(sq_tex), .in_tex_en(sq_tex_en),
+    .in_mipk(sq_mipk),                                        // R828
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
     .out_col(tx_span_col), .out_moire(tx_span_moire),
@@ -741,7 +774,7 @@ module m2_raster3d #(
   // R620: m2_texel_bl, the bilinear fetch -- the same 4,096 lines as two
   // 2,048-line banks by row-pair parity (IB 11), so a 2x2 block comes back in
   // one access 87.5% of the time. Point mode is the old picture.
-  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS), .LW8(TXLW8)) u_texel (   // R622: 4 entries, measured equal; R789: TXRSP; R787: LW8
+  m2_texel_bl #(.AW(TEX_AW), .IB(11), .RSP_D(TXRSP), .NS(TXNS), .LW8(TXLW8), .MIP(MIP)) u_texel (   // R828   // R622: 4 entries, measured equal; R789: TXRSP; R787: LW8
     .clk(clk_mem), .rst_n(rst_n),
     .base_s0(tex_base0), .base_s1(tex_base1), .bilinear(tex_bilinear),
     .req(txf_req), .rdy(txf_rdy), .ack(txf_ack), .tex(txf_tex),
@@ -818,6 +851,22 @@ module m2_raster3d #(
           if (!(&dbg_fb_pub)) dbg_fb_pub <= dbg_fb_pub + 16'd1;
         end
       end else if (fb_complete) fb_busy <= 1'b0;
+    end
+  end
+
+  // R826: the list's tag, collected -> drawn -> shown, on the same events as
+  // the list itself: q_end in P_COLLECT, the swap, and the publish (FB_DDR3:
+  // fb_show taking fb_draw; the band path shows the list from its swap).
+  logic [3:0] tag_coll, tag_draw;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      tag_coll <= '0; tag_draw <= '0; show_tag <= '0;
+    end else begin
+      if ((pst == P_COLLECT) && q_end) tag_coll <= q_tag;
+      if (swap) tag_draw <= tag_coll;
+      if (FB_DDR3) begin
+        if (frame_start && fb_complete && !fb_test) show_tag <= tag_draw;
+      end else if (swap) show_tag <= tag_coll;
     end
   end
 

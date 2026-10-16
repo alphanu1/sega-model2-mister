@@ -1,0 +1,6 @@
+`verilator_config
+// R826b bench (tb_m2_video_r826b): the sequencer state it reads back
+public_flat_rd -module "m2_video" -var "q"
+public_flat_rd -module "m2_video" -var "cur_layer"
+public_flat_rd -module "m2_video" -var "cur_line"
+public_flat_rd -module "m2_video" -var "hctrl_r"

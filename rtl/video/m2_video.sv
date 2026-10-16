@@ -52,7 +52,75 @@
 `timescale 1ns/1ps
 
 module m2_video #(
-  parameter int unsigned COLUMNS = 62
+  parameter int unsigned COLUMNS = 62,
+  // R823: FOUR LINE BUFFERS IN A RING, RENDERING UP TO THREE LINES AHEAD OF
+  // THE BEAM. 0 = the two-bank swap at every line_start (unchanged).
+  //
+  // The overruns are not a per-line budget the engine cannot meet: at zero
+  // char latency the worst Daytona line takes ~2,100 of 4,100 clk_mem cycles.
+  // They are a 4-line BURST. A full-screen picture layer (the sky, the title)
+  // misses the glyph cache on every column of the line that enters a new
+  // 4-row group of its tiles -- ~60 misses, each a demand fetch and then its
+  // sibling fill serialised behind it -- and the three lines after it hit.
+  // At ~30 cycles a fetch that line needs ~5,500 cycles, its neighbours
+  // ~1,800, and the four together average ~2,700. A ring lets the cheap lines
+  // pay for the dear one.
+  //
+  // Free in M10K: each (layer, lane) memory goes from 256 x 15 to 512 x 15,
+  // still one block (512 x 20 mode).
+  //
+  // R824: AND 15 kHz INTERLACED (R682, R783) TOO, which R823 left on the
+  // swap. The ring works in DISPLAY ORDER: progressive, the line itself in a
+  // 424-line frame; interlaced, the field's row (vcnt) in a field of
+  // vtotal lines, the line rendered being 2 * row + the field's parity. The
+  // next line after a field's last visible row is row 0 of the NEXT field,
+  // so the ring renders the next field's first rows in this one's blanking
+  // exactly as it renders lines 0-2 in the progressive frame's.
+  //
+  // Lines in vertical blanking are not rendered in ring mode, and an overrun
+  // is counted only for a VISIBLE line whose buffer was not ready at its
+  // line_start -- the two-bank count included blanking lines.
+  parameter bit          LB_RING = 1'b0,
+  parameter int unsigned RING_LEAD = 2,     // render at most line_number + this
+  // R826: Q_HSCR READ THE WORD BEFORE ITS OWN. The tile RAM answers a cycle
+  // after its address, and Q_HSCR set the address in the same cycle Q_HSCR_W
+  // took the data -- so hscr_r was the word at the PREVIOUS sequencer address
+  // (the last row-mask word of the layer before). Only the plain (non-window)
+  // scroll path uses hscr_r; Daytona's race runs both pairs in window mode,
+  // whose scroll comes from hctrl_r (read correctly), so the race never saw
+  // it. 1: the address is set on entry to Q_HSCR. 0: unchanged.
+  parameter bit          HSCR_FIX = 1'b0,
+  // R826: THE 2D WAITS FOR ITS 3D. The game writes the eight scroll words at
+  // the start of each iteration for the list it flipped TWO iterations before
+  // (measured in MAME: the 3D's per-frame motion leads the 2D's by exactly
+  // one frame, r = 0.98-0.99, because MAME shows a list one frame sooner than
+  // the board). Here the 3D is published two or three vblanks after its flip
+  // while tile RAM is shown at once, so the backdrop and the HUD shake move
+  // against the 3D whenever the view turns. 1: the scroll words written for
+  // iteration j are shown only once list j-2 is on screen (scr_tag); until
+  // then the copy taken at flip j (two copies kept) stands in. Falls back to
+  // tile RAM when the 3D is three or more lists behind. Implies HSCR_FIX (the
+  // copies are taken from the sequencer's own reads). 0: unchanged.
+  parameter bit          SCR_SYNC = 1'b0,
+  // R826b: THE COPIES TAKEN AT THE GAME'S VBLANKS AND NAMED BY THE LIST THEY
+  // BELONG TO (SCR_SYNC only). SCR_SYNC numbers tile RAM by the flips it has
+  // seen and copies it at each flip; that is right only while every flip comes
+  // before the vblank that ends its step. A step whose flip lands after that
+  // vblank (the game ~1% late) has had its scroll rewritten by the vblank IRQ
+  // already, and the copy and the count are then a step ahead (the 2D one step
+  // ahead for a frame); and a 3D one vblank late (walk + sort past the vblank)
+  // takes the gate to three lists behind at the next flip, where it falls back
+  // to tile RAM mid-frame -- two steps ahead below the flip line, every frame,
+  // until the game next misses a vblank. Here each vblank the game is given
+  // (scr_vtgl) moves the words just shown into a history of SCR_DEPTH copies,
+  // and every copy and tile RAM carry the list their words were written for
+  // (scr_ttag, worked out at the top level from the flips and the vblank IRQ);
+  // the copy whose list is the one on screen (scr_tag) is shown. None: one
+  // list older than the oldest copy shows the oldest copy (the nearest);
+  // anything else shows tile RAM (the 3D stalled, or no 3D). 0: SCR_SYNC as it
+  // was. The same two copies as SCR_SYNC at SCR_DEPTH 2.
+  parameter bit          SCR_STEP  = 1'b0,
+  parameter int unsigned SCR_DEPTH = 2     // 2 or 3
 ) (
   input  logic        clk,
   input  logic        ce_pix,
@@ -112,6 +180,12 @@ module m2_video #(
   // docs/m1-m4-plan.md and task 2a in HANDOFF. When it is, line_start arrives
   // while the sequencer is still in Q_RUN, the bank does not flip and the
   // previous line is displayed again.
+  //
+  // R823: THE NUMBERS ABOVE ARE STALE. They are the serial engine at 80 MHz.
+  // Today's (clk_mem, 100 MHz) line is 4,100 cycles and the pipelined engine
+  // needs ~1,800 on Daytona, worst ~2,100, with a perfect glyph memory. What
+  // overruns is the cost of glyph-cache MISSES, which arrive in bursts: see
+  // LB_RING.
   //
   // That is a deliberate, locally-wrong-but-stable failure, and it is invisible
   // from the outside: the picture is merely wrong. Counted here so "the image
@@ -199,7 +273,20 @@ module m2_video #(
   // R682: 15 kHz interlaced (clk domain, held): vid_y is then the displayed
   // line of field vid_field, and the render-ahead line steps by two
   input  logic        interlace,
+  // R826 (SCR_SYNC): asynchronous to clk -- scr_flip toggles at each game flip
+  // (0x803008), scr_tag is m2_raster3d's show_tag (changes at most once a
+  // frame, at its frame_start).
+  input  logic        scr_flip,
+  input  logic  [3:0] scr_tag,
+  // R826b (SCR_STEP): asynchronous to clk. scr_vtgl toggles at each vblank
+  // whose IRQ the game is given (not at a vblank R652 withholds); scr_ttag,
+  // set at least a cycle of its own clock before that toggle and held for the
+  // frame, names the list the scroll words written in that vblank are for.
+  input  logic        scr_vtgl,
+  input  logic  [3:0] scr_ttag,
   input  logic        ntsc_lines,   // R783: 262.5-line fields when interlaced
+  input  logic        mid_lines,    // R834: 268.5-line fields when interlaced and not ntsc_lines
+  input  logic        narrow,       // R834: interlaced 268.5/273.5 on a longer line
   output logic        vid_field
 );
 
@@ -211,6 +298,7 @@ module m2_video #(
   logic       hblank, vblank, visible, line_start, vblank_start;
   logic       hsync_i, vsync_i;
   logic [8:0] line_number;
+  logic [9:0] vtotal;       // R824: this field's (frame's) line count
 
   m2_video_timing timing (
     .clk(clk), .ce_pix(ce_pix), .rst_n(rst_n),
@@ -219,7 +307,8 @@ module m2_video #(
     .hsync(hsync_i), .vsync(vsync_i), .visible(visible),
     .line_start(line_start), .line_number(line_number),
     .vblank_start(vblank_start),
-    .interlace(interlace), .ntsc_lines(ntsc_lines), .field(vid_field), .ypos()   // R682, R783
+    .interlace(interlace), .ntsc_lines(ntsc_lines), .mid_lines(mid_lines), .narrow(narrow), .field(vid_field), .ypos(),  // R682, R783
+    .vtotal(vtotal)                                                                // R824
   );
 
   assign vblank_irq  = vblank_start;
@@ -261,6 +350,12 @@ module m2_video #(
   // Double buffered: `bank` is written while ~bank is displayed.
   logic bank;
   logic [14:0] rd_q [4];              // {masked, prio, transparent, pal_index}
+  // R823 ring (LB_RING): rg_wb is the bank being rendered, rg_rb the bank being
+  // displayed, and rg_hd / rg_cnt the FIFO of finished lines waiting to be
+  // shown, in bank order, each with the line it holds in rg_tag.
+  logic [1:0]  rg_wb, rg_rb, rg_hd, rg_cnt;
+  logic [8:0]  rg_tag [4];
+  logic [8:0]  rg_nl;                 // the next line to render
 
   // EIGHT SEPARATE RAMS, NOT ONE ARRAY INDEXED BY BANK
   //
@@ -277,7 +372,10 @@ module m2_video #(
   // a single M10K. Both banks are read every cycle at the same address and the
   // result is muxed afterwards, which costs a 14-bit mux instead of an address
   // mux and keeps the memories inferrable.
-  wire [14:0] lb_q [2][4];
+  // R818: the bank is now an ADDRESS bit of each (layer, lane) memory --
+  // a constant-indexed array, read and written at {bank, ...} / {~bank, ...}
+  // -- which is not the dynamic selection across arrays described above; see
+  // the line buffers below.
 
   // ---------------------------------------------------------- sequencer
   typedef enum logic [3:0] {
@@ -515,6 +613,357 @@ module m2_video #(
     .fetches(f_fetches), .tw_nonblank(f_tw_nonblank)
   );
 
+  // ------------------------------------------------ R823 ring bookkeeping
+  // Distances are in display order, modulo the frame -- or, interlaced, the
+  // field (R824). The renderer never gets more than a few lines ahead or
+  // behind, so a distance of half the modulus or more means "behind": 256 of
+  // 424, and 128 of 262-274 (a field's blanking is 70-82 rows, and the ring
+  // waits there at most that far ahead of its next line).
+  //
+  // R825: THE DECISIONS ARE REGISTERED, AND ACTED ON ONLY WHILE THE STATE IS
+  // STILL THE STATE THEY WERE COMPUTED FROM. R823 failed clk_mem by 2.6-2.9 ns,
+  // every failing path the ring's: line number -> distance (a subtract, then
+  // a wrap add) -> compares -> go / behind / stale -> the pointers, in one
+  // cycle. The ring's inputs move only on a few events -- a line_start, a pop,
+  // a finished line (push), a start, a skip, a mode or field-length change --
+  // and sit still for thousands of cycles between them. So:
+  //   stage A  the raw differences (one subtract each)          -> pa_*
+  //   stage B  the wrap add, the compares and the decisions      -> *_q
+  //   rg_quiet counts the cycles since the last event (to 2). A stage-B
+  //            register read with rg_quiet == 2 was computed from the state
+  //            of two cycles ago, which is the state now: it equals R824's
+  //            combinational decision exactly. Otherwise the ring waits.
+  // So the ring is R824 with some cycles in which it does nothing: a start or
+  // a skip at most two cycles later after each event (two a rendered line),
+  // and a stale head dropped two cycles later. Nothing here can render into
+  // the displayed bank (room and free are exact when acted on), pop a line
+  // that is not finished (only pushed lines are in the FIFO), or miss a
+  // line_start: the pop at line_start does not wait. Its hit is precomputed
+  // per bank one cycle ahead (rg_hit) from the next cycle's tags, and is exact
+  // at every line_start because no line_start follows another within a
+  // cycle. `make test_m2_video_ovr` checks both claims every cycle
+  // (M2_RING_CHECK, below).
+  wire        ring_on   = LB_RING;
+  // The ring's own view of the mode and the field's length, one cycle behind
+  // the timing generator. A change is then an event the ring sees, not an
+  // input moving under a registered decision.
+  logic       rg_il;
+  logic [9:0] rg_vt;
+  // R824: THE LINE-DERIVED TERMS ARE REGISTERS. They are functions of vcnt
+  // and the field, which change only at line_start, so each is loaded AT
+  // line_start with its value for the line after it -- computed from the
+  // line before -- and is then equal, every cycle, to what line_number and
+  // vcnt give combinationally (R823's form).
+  //   rg_lp  line_number's display position: the line (progressive) or the
+  //          field row (interlaced) two ahead of the beam
+  //   rg_lpar  interlaced: the parity of the field that row belongs to
+  //   rg_wp  the position the next line_start will show, rg_lp - 1 -- which
+  //          is the rg_lp of the line before, so it is simply rg_lp delayed
+  // After a frame or field of N lines the beam's next line is (vcnt+1) mod N,
+  // so line_number's is (vcnt + 3) mod N in the field being left -- correct
+  // across the field boundary, where rows 0-1 of the next field are reached.
+  // R825: and the value they load is itself a register (rg_lpn_q), a cycle
+  // old: vcnt and the field last moved at the previous line_start. Only an
+  // OSD mode change in the cycle before a line_start makes it stale, for
+  // that one line, which the ring then treats as any mode change.
+  logic [8:0] rg_lp, rg_wp;
+  logic       rg_lpar;
+  wire  [9:0] rg_v3   = vcnt + 10'd3;
+  wire  [8:0] rg_v3w  = 9'(rg_v3 - vtotal);   // < 512 whenever it is used
+  wire        rg_v3ge = (rg_v3 >= vtotal);
+  wire  [8:0] rg_lpn  = rg_v3ge ? rg_v3w : rg_v3[8:0];
+  logic [8:0] rg_lpn_q;
+  logic       rg_v3ge_q;
+  // Where to resume after falling behind: line_number, or the first line of
+  // the next frame (field) when line_number is in blanking.
+  wire  [8:0] rg_skip = !rg_il ? ((rg_lp >= 9'd384) ? 9'd0 : rg_lp)
+                      : (rg_lp < 9'd192) ? {rg_lp[7:0], rg_lpar} : {8'd0, ~vid_field};
+  // Display positions of the next line to render and of the FIFO head.
+  wire  [8:0] rg_nlp  = rg_il ? {1'b0, rg_nl[8:1]} : rg_nl;
+  wire  [8:0] rg_htag = rg_tag[rg_hd];
+  wire  [8:0] rg_hp   = rg_il ? {1'b0, rg_htag[8:1]} : rg_htag;
+  // Stage A: how far ahead the next line is, and the FIFO head, before the
+  // wrap (negative = behind, or across the frame's end).
+  logic [9:0] pa_tn, pa_th, pa_vtm1;
+  logic       pa_n0;
+  // Stage B: the distances modulo the frame (field), as R824's ldist.
+  wire  [9:0] rg_nd   = pa_tn[9] ? pa_tn + rg_vt : pa_tn;
+  wire  [9:0] rg_hd_d = pa_th[9] ? pa_th + rg_vt : pa_th;
+  // R824: WHAT THE RING CAN REACH, AND EVERYTHING ELSE IS "BEHIND". A line
+  // starts no more than RING_LEAD ahead of line_number (one more than that
+  // ahead of the line shown next), so a finished line's tag, and rg_nl after
+  // it, are never more than RING_LEAD + 1 ahead -- except rg_nl at the first
+  // line of the next frame (field), which waits there through the blanking.
+  // R823 called only a distance of half the frame "behind"; any other
+  // distance was unreachable, so the tighter test changes nothing in steady
+  // state, but a mode change leaves tags and rg_nl in the other mode's
+  // numbering -- interlaced to progressive reads row r as line ~2r, ~100
+  // lines AHEAD -- and the head then blocked the FIFO for ~100 lines. Now it
+  // is dropped at once.
+  wire        rg_far_n  = rg_il ? (rg_nd[9:7] != 3'd0) : (rg_nd[9:8] != 2'd0);
+  wire        rg_ahead  = (rg_nd <= 10'(RING_LEAD));
+  wire        rg_go     = rg_ahead || (rg_nd == pa_vtm1);
+  wire        rg_behind = (pa_n0 ? rg_far_n : (rg_nd > 10'(RING_LEAD + 1)))
+                          && (rg_nd != pa_vtm1);
+  // Interlaced, the field a row is rendered for comes from the beam, not
+  // from rg_nl: line_number's field, or the next one when the row is ahead of
+  // line_number across the field boundary (rg_nlp < rg_lp: stage A's sign).
+  // A parity carried in rg_nl from line to line holds only while the fields
+  // alternate, and they do not when a mode change lands past the new total:
+  // vcnt runs on to 1,023 and wraps with the field bit unchanged (R824).
+  wire        rg_npar   = rg_lpar ^ (rg_ahead && pa_tn[9]);
+  wire        rg_hstale = (rg_cnt != 2'd0) && (rg_hd_d > 10'(RING_LEAD + 1));
+  // The next free bank follows the FIFO, except when the FIFO is empty and
+  // its head has come round to the displayed bank -- which happens when late
+  // lines are dropped (rg_hstale) while the display repeats a line. Then the
+  // bank after the displayed one is free; following the head would wait for a
+  // display pop that cannot come, because nothing is being rendered.
+  wire [1:0]  rg_free   = ((rg_cnt == 2'd0) && (rg_hd == rg_rb)) ? rg_rb + 2'd1
+                                                                 : rg_hd + rg_cnt;
+  wire        rg_room   = (rg_cnt <= 2'd2) && (rg_free != rg_rb);
+  logic       go_q, behind_q, npar_q, hstale_q, room_q;
+  logic [1:0] free_q;
+  logic [1:0] rg_quiet;                    // cycles since the last event, to 2
+  wire        rg_ok     = rg_quiet[1];
+  // The line_start hit, per bank, a cycle ahead: the tag each bank will hold
+  // (this cycle's push included) against the line the next line_start shows.
+  logic [3:0] rg_hit;
+  logic       rg_vis;                      // that line is visible
+  wire  [8:0] rg_want_n = interlace ? {rg_wp[7:0], rg_lpar} : rg_wp;
+  wire        rg_hhit   = (rg_cnt != 2'd0) && rg_hit[rg_hd] && rg_vis;
+  wire        rg_pop    = ring_on && (line_start ? rg_hhit : (rg_ok && hstale_q));
+  wire        rg_push   = ring_on && (q == Q_NEXT) && (cur_layer == 2'd3);
+  wire        rg_start  = ring_on && (q == Q_IDLE) && rg_ok && room_q && go_q;
+  wire        rg_skipe  = ring_on && (q == Q_IDLE) && rg_ok && !(room_q && go_q) && behind_q;
+  wire  [8:0] rg_line   = rg_il ? {rg_nl[8:1], npar_q} : rg_nl;
+  // Everything that moves the state the decisions are computed from. A pop
+  // is a line_start or a stale drop, so the line_start hit is not on this
+  // path.
+  wire        rg_ev     = line_start || (rg_ok && hstale_q) || rg_push || rg_start || rg_skipe
+                          || (interlace != rg_il) || (vtotal != rg_vt);
+
+  // Reset: vcnt 0 of field 0, so line_number is line (row) 2 of field 0 and
+  // the next line shown is 1.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rg_lp <= 9'd2; rg_wp <= 9'd1; rg_lpar <= 1'b0;
+      rg_lpn_q <= 9'd3; rg_v3ge_q <= 1'b0;
+      rg_il <= 1'b0; rg_vt <= 10'd424;
+      pa_tn <= '0; pa_th <= '0; pa_vtm1 <= '0; pa_n0 <= 1'b0;
+      go_q <= 1'b0; behind_q <= 1'b0; npar_q <= 1'b0; hstale_q <= 1'b0;
+      room_q <= 1'b0; free_q <= '0;
+      rg_quiet <= '0; rg_hit <= '0; rg_vis <= 1'b0;
+    end else begin
+      rg_lpn_q  <= rg_lpn;
+      rg_v3ge_q <= rg_v3ge;
+      if (line_start) begin
+        rg_lp   <= rg_lpn_q;
+        rg_wp   <= rg_lp;      // line_number steps by one a line, mod the total
+        rg_lpar <= vid_field ^ rg_v3ge_q;
+      end
+      rg_il <= interlace;
+      rg_vt <= vtotal;
+      // stage A
+      pa_tn   <= {1'b0, rg_nlp} - {1'b0, rg_lp};
+      pa_th   <= {1'b0, rg_hp}  - {1'b0, rg_wp};
+      pa_n0   <= (rg_nlp == 9'd0);
+      pa_vtm1 <= rg_vt - 10'd1;
+      // stage B
+      go_q     <= rg_go;
+      behind_q <= rg_behind;
+      npar_q   <= rg_npar;
+      hstale_q <= rg_hstale;
+      room_q   <= rg_room;
+      free_q   <= rg_free;
+      rg_quiet <= rg_ev ? 2'd0 : rg_quiet[1] ? 2'd2 : rg_quiet + 2'd1;
+      for (int i = 0; i < 4; i++)
+        rg_hit[i] <= (((rg_push && rg_wb == 2'(i)) ? cur_line : rg_tag[i]) == rg_want_n);
+      rg_vis <= interlace ? (rg_wp < 9'd192) : (rg_wp < 9'd384);
+    end
+  end
+
+`ifdef M2_RING_CHECK
+  // R825: THE PIPELINED DECISIONS AGAINST R824's COMBINATIONAL ONES, every
+  // cycle, from the state as it is now. Wherever the ring may act on a
+  // registered decision (rg_ok) they must be equal, and at every line_start
+  // so must the precomputed hit. Simulation only.
+  function automatic logic [9:0] ldist(input logic [8:0] a, input logic [8:0] b,
+                                       input logic [9:0] m);
+    logic [9:0] t;
+    t = {1'b0, a} - {1'b0, b};
+    ldist = t[9] ? t + m : t;
+  endfunction
+  wire  [9:0] ck_nd     = ldist(rg_nlp, rg_lp, rg_vt);
+  wire  [9:0] ck_hdd    = ldist(rg_hp, rg_wp, rg_vt);
+  wire        ck_ahead  = (ck_nd <= 10'(RING_LEAD));
+  wire        ck_go     = ck_ahead || (ck_nd == rg_vt - 10'd1);
+  wire        ck_behind = ((rg_nlp == 9'd0) ? (rg_il ? (ck_nd[9:7] != 3'd0) : (ck_nd[9:8] != 2'd0))
+                                            : (ck_nd > 10'(RING_LEAD + 1)))
+                          && (ck_nd != rg_vt - 10'd1);
+  wire        ck_npar   = rg_lpar ^ (ck_ahead && (rg_nlp < rg_lp));
+  wire        ck_hstale = (rg_cnt != 2'd0) && (ck_hdd > 10'(RING_LEAD + 1));
+  wire        ck_hhit   = (rg_cnt != 2'd0) && (rg_htag == (rg_il ? {rg_wp[7:0], rg_lpar} : rg_wp))
+                          && (rg_il ? (rg_wp < 9'd192) : (rg_wp < 9'd384));
+  always_ff @(posedge clk) if (rst_n && ring_on) begin
+    if (rg_ok && ({go_q, behind_q, npar_q, hstale_q, room_q, free_q}
+                  != {ck_go, ck_behind, ck_npar, ck_hstale, rg_room, rg_free})) begin
+      $display("M2_RING_CHECK: stale decision go %b/%b behind %b/%b npar %b/%b stale %b/%b room %b/%b free %0d/%0d",
+               go_q, ck_go, behind_q, ck_behind, npar_q, ck_npar, hstale_q, ck_hstale,
+               room_q, rg_room, free_q, rg_free);
+      $stop;
+    end
+    if (line_start && (rg_hhit != ck_hhit)) begin
+      $display("M2_RING_CHECK: line_start hit %b, R824 gives %b", rg_hhit, ck_hhit);
+      $stop;
+    end
+  end
+`endif
+
+
+  // ------------------------------------------- R826: scroll words held to the 3D
+  // Word i is tile RAM 0x5000 + i: 0-3 the hscr of tilemaps 0-3, 4-7 their
+  // vscr (4 and 6 are also the pairs' ctrl). ss_c holds two copies, taken at
+  // the game's flips from the sequencer's latest reads of each word (dbg_hscr
+  // / dbg_vscr: under a line old, and the game writes these only in vblank).
+  //   ss_nf   flips seen = the iteration the game is in now
+  //   ss_p    the list on screen (scr_tag)
+  //   ss_d    ss_nf - (ss_p + 2): > 0 means tile RAM holds words for a list
+  //           not yet on screen; 1-2 take the copy from flip ss_p + 2, more
+  //           than that (the 3D stalled, or no 3D) take tile RAM.
+  localparam bit HSCR_RD = HSCR_FIX || SCR_SYNC;
+  localparam bit SS_STEP = SCR_SYNC && SCR_STEP;            // R826b
+  localparam int SD      = (SCR_DEPTH >= 3) ? 3 : 2;
+  logic [2:0]  ss_fs;                 // scr_flip synchroniser + edge
+  logic [3:0]  ss_t1, ss_t2, ss_p;    // scr_tag synchroniser, taken when stable
+  logic [3:0]  ss_nf;
+  logic [15:0] ss_c [2][8];
+  wire  [3:0]  ss_a   = ss_p + 4'd2;
+  wire  [3:0]  ss_d   = ss_nf - ss_a;
+  // Registered: the choice moves only at a flip or a publish, so a cycle's
+  // delay costs nothing and keeps the 4-bit arithmetic out of the read path.
+  logic        ss_use, ss_slot;
+  logic [1:0]  sv_sel;                // R826b: 0 tile RAM, n copy n-1
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) begin ss_use <= 1'b0; ss_slot <= 1'b0; end
+    else if (SS_STEP) begin
+      ss_use  <= (sv_sel != 2'd0);
+      ss_slot <= 1'b0;
+    end else begin
+      ss_use  <= SCR_SYNC && ((ss_d == 4'd1) || (ss_d == 4'd2));
+      ss_slot <= ss_a[0];
+    end
+  // The copy standing in for each of the sequencer's four reads of a layer.
+  logic [15:0] ss_h, ss_v, ss_cw, ss_hc;
+  // R826b: the history, newest first, and the list each copy's words are for
+  logic [15:0] sv_c [SD][8];
+  logic [3:0]  sv_ht [SD];
+  logic [SD-1:0] sv_hv;
+  logic [3:0]  sv_tt;                 // the list tile RAM's words are for
+  logic [2:0]  sv_s;                  // scr_vtgl synchroniser + edge
+  logic [3:0]  sv_t1, sv_t2;          // scr_ttag synchroniser
+  logic        sv_ld;                 // a vblank seen, its tag not yet taken
+  logic [1:0]  sv_q;                  // registered copy index (sv_sel - 1)
+  always_comb begin
+    if (SS_STEP) begin
+      // constant copy indices only (an index past SD would wrap, R807)
+      ss_h  = sv_c[0][{1'b0, cur_layer}];
+      ss_v  = sv_c[0][{1'b1, cur_layer}];
+      ss_cw = sv_c[0][{1'b1, cur_layer[1], 1'b0}];
+      ss_hc = sv_c[0][{1'b0, cur_layer[1], 1'b0}];
+      if (sv_q == 2'd1) begin
+        ss_h  = sv_c[1][{1'b0, cur_layer}];
+        ss_v  = sv_c[1][{1'b1, cur_layer}];
+        ss_cw = sv_c[1][{1'b1, cur_layer[1], 1'b0}];
+        ss_hc = sv_c[1][{1'b0, cur_layer[1], 1'b0}];
+      end
+      if (sv_q == 2'd2) begin
+        ss_h  = sv_c[SD-1][{1'b0, cur_layer}];
+        ss_v  = sv_c[SD-1][{1'b1, cur_layer}];
+        ss_cw = sv_c[SD-1][{1'b1, cur_layer[1], 1'b0}];
+        ss_hc = sv_c[SD-1][{1'b0, cur_layer[1], 1'b0}];
+      end
+    end else begin
+      ss_h  = ss_c[ss_slot][{1'b0, cur_layer}];         // hscr
+      ss_v  = ss_c[ss_slot][{1'b1, cur_layer}];         // vscr
+      ss_cw = ss_c[ss_slot][{1'b1, cur_layer[1], 1'b0}]; // ctrl
+      ss_hc = ss_c[ss_slot][{1'b0, cur_layer[1], 1'b0}]; // hctrl
+    end
+  end
+  generate if (SS_STEP) begin : g_sv
+    // The vblank toggle three flops deep against the tag's two, so the tag is
+    // settled when the edge is seen (it is also set a cycle ahead at source);
+    // sv_ld then takes it only once two samples agree.
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin
+        sv_s <= '0; sv_t1 <= '0; sv_t2 <= '0; sv_ld <= 1'b0; sv_tt <= 4'd8;
+        sv_hv <= '0; sv_sel <= 2'd0; sv_q <= 2'd0;
+        for (int i = 0; i < SD; i++) sv_ht[i] <= 4'd8;
+      end else begin
+        sv_s  <= {sv_s[1:0], scr_vtgl};
+        sv_t1 <= scr_ttag; sv_t2 <= sv_t1;
+        if (sv_s[2] != sv_s[1]) begin
+          // the words shown since the last vblank become the newest copy
+          sv_ht[0] <= sv_tt; sv_hv[0] <= 1'b1;
+          for (int i = 1; i < SD; i++) begin sv_ht[i] <= sv_ht[i-1]; sv_hv[i] <= sv_hv[i-1]; end
+          sv_ld <= 1'b1;
+        end else if (sv_ld && (sv_t1 == sv_t2)) begin
+          sv_tt <= sv_t2; sv_ld <= 1'b0;
+        end
+        // The choice, registered (it moves only at a vblank or a publish).
+        // Tile RAM, then the copies newest first; failing those, one list
+        // older than the oldest copy takes the oldest; otherwise tile RAM.
+        sv_sel <= 2'd0;
+        if (sv_tt != ss_p) begin
+          if (sv_hv[SD-1] && (sv_ht[SD-1] - ss_p == 4'd1)) sv_sel <= 2'(SD);
+          for (int i = SD - 1; i >= 0; i--)
+            if (sv_hv[i] && (sv_ht[i] == ss_p)) sv_sel <= 2'(i + 1);
+        end
+        sv_q <= (sv_sel == 2'd0) ? 2'd0 : sv_sel - 2'd1;
+      end
+    end
+    // Not reset: values, selected only once their valid bit is set.
+    always_ff @(posedge clk)
+      if (sv_s[2] != sv_s[1])
+        for (int i = 0; i < 4; i++) begin
+          sv_c[0][i]     <= dbg_hscr[i];
+          sv_c[0][4 + i] <= dbg_vscr[i];
+          for (int k = 1; k < SD; k++) begin
+            sv_c[k][i]     <= sv_c[k-1][i];
+            sv_c[k][4 + i] <= sv_c[k-1][4 + i];
+          end
+        end
+  end else begin : g_no_sv
+    assign sv_s = '0; assign sv_t1 = '0; assign sv_t2 = '0; assign sv_ld = 1'b0;
+    assign sv_tt = '0; assign sv_hv = '0; assign sv_sel = 2'd0; assign sv_q = 2'd0;
+    always_comb for (int i = 0; i < SD; i++) sv_ht[i] = '0;
+    always_comb for (int b = 0; b < SD; b++) for (int i = 0; i < 8; i++) sv_c[b][i] = '0;
+    wire _unused_sv = &{1'b0, scr_vtgl, scr_ttag, sv_s, sv_t1, sv_t2, sv_ld, sv_tt, sv_hv, sv_ht[0], sv_ht[1]};
+  end endgenerate
+  generate if (SCR_SYNC) begin : g_ss
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin
+        ss_fs <= '0; ss_t1 <= '0; ss_t2 <= '0; ss_p <= '0; ss_nf <= '0;
+      end else begin
+        ss_fs <= {ss_fs[1:0], scr_flip};
+        ss_t1 <= scr_tag; ss_t2 <= ss_t1;
+        if (ss_t1 == ss_t2) ss_p <= ss_t2;
+        if (ss_fs[2] != ss_fs[1]) ss_nf <= ss_nf + 4'd1;
+      end
+    end
+    // Not reset: values, and ss_use cannot select them before two flips.
+    always_ff @(posedge clk)
+      if (ss_fs[2] != ss_fs[1])
+        for (int i = 0; i < 4; i++) begin
+          ss_c[ss_nf[0]][i]     <= dbg_hscr[i];
+          ss_c[ss_nf[0]][4 + i] <= dbg_vscr[i];
+        end
+  end else begin : g_no_ss
+    assign ss_fs = '0; assign ss_t1 = '0; assign ss_t2 = '0;
+    assign ss_p  = '0; assign ss_nf = '0;
+    always_comb for (int b = 0; b < 2; b++) for (int i = 0; i < 8; i++) ss_c[b][i] = '0;
+    wire _unused_ss = &{1'b0, scr_flip, scr_tag, ss_fs, ss_t1, ss_t2};
+  end endgenerate
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       q <= Q_IDLE; cur_layer <= '0; cur_line <= '0;
@@ -525,7 +974,24 @@ module m2_video #(
       mask_r <= '0; mask_i <= '0;
       seq_tram_addr <= '0; seq_owns_tram <= 1'b1;
       bank <= 1'b0; dbg_fetches <= '0; dbg_overruns <= '0;
+      rg_wb <= 2'd1; rg_rb <= 2'd0; rg_hd <= 2'd1; rg_cnt <= 2'd0; rg_nl <= 9'd0;
+      for (int i = 0; i < 4; i++) rg_tag[i] <= '0;
     end else begin
+      // R823: the ring's FIFO of finished lines. A push and a pop in one
+      // cycle leave rg_hd + rg_cnt -- the next free bank -- where it was.
+      if (rg_pop) begin
+        if (line_start) rg_rb <= rg_hd;        // shown from the next line on
+        rg_hd <= rg_hd + 2'd1;
+      end
+      if (rg_push) rg_tag[rg_wb] <= cur_line;
+      rg_cnt <= rg_cnt + {1'b0, rg_push} - {1'b0, rg_pop};
+      if (ring_on && line_start && !rg_hhit && rg_vis
+          && !(&ovr_acc)) begin
+        // A visible line whose buffer is not ready: the bank is not
+        // changed and the line before is shown again, as in Q_RUN below.
+        ovr_acc <= ovr_acc + 1'd1;
+        if (!(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
+      end
       // A whole frame's overruns, latched where they are counted.
       if (vblank_start) begin
         dbg_ovr_frame <= ovr_acc;
@@ -536,12 +1002,29 @@ module m2_video #(
       case (q)
         Q_IDLE: begin
           seq_owns_tram <= 1'b1;
-          if (line_start) begin
+          if (ring_on) begin
+            // R823: start the next line as soon as a bank is free and the
+            // line is within RING_LEAD of line_number; skip ahead when the
+            // renderer has fallen behind the beam.
+            // R825: on the registered decisions, only while rg_ok.
+            if (rg_start) begin
+              cur_line    <= rg_line;
+              cur_layer   <= 2'd0;
+              if (HSCR_RD) seq_tram_addr <= 15'h5000;   // R826
+              dbg_fetches <= '0;
+              rg_wb       <= free_q;
+              if (rg_cnt == 2'd0) rg_hd <= free_q;    // keeps rg_hd + rg_cnt == rg_wb
+              q           <= Q_HSCR;
+            end else if (rg_skipe) begin
+              rg_nl <= rg_skip;
+            end
+          end else if (line_start) begin
             // Only reached when the previous line finished in time. If it did
             // not, the sequencer is still in Q_RUN and this edge is ignored —
             // see the overrun note on Q_RUN.
             cur_line    <= line_number;
             cur_layer   <= 2'd0;
+            if (HSCR_RD) seq_tram_addr <= 15'h5000;   // R826
             dbg_fetches <= '0;
             // Flip on the line boundary: what was just rendered becomes what
             // is displayed.
@@ -556,14 +1039,14 @@ module m2_video #(
           q             <= Q_HSCR_W;
         end
         Q_HSCR_W: begin
-          hscr_r        <= tram_data;
+          hscr_r        <= ss_use ? ss_h  : tram_data;
           dbg_hscr[cur_layer] <= tram_data;
           seq_tram_addr <= 15'h5004 + {13'd0, cur_layer};
           q             <= Q_VSCR;
         end
         Q_VSCR: q <= Q_VSCR_W;
         Q_VSCR_W: begin
-          vscr_r        <= tram_data;
+          vscr_r        <= ss_use ? ss_v  : tram_data;
           dbg_vscr[cur_layer] <= tram_data;
           // ctrl is the PAIR's EVEN vscr, not this layer's own register:
           // MAME reads tile_ram[0x5004 + ((layer >> 1) & 2)], which for our
@@ -576,7 +1059,7 @@ module m2_video #(
 
         Q_CTRL: q <= Q_CTRL_W;
         Q_CTRL_W: begin
-          ctrl_r        <= tram_data;
+          ctrl_r        <= ss_use ? ss_cw : tram_data;
           // Same value the window logic is about to act on, kept for the
           // overlay. Latched here rather than re-read at vblank so it cannot
           // disagree with what actually drove the decision.
@@ -588,7 +1071,7 @@ module m2_video #(
 
         Q_HCTRL: q <= Q_HCTRL_W;
         Q_HCTRL_W: begin
-          hctrl_r       <= tram_data;
+          hctrl_r       <= ss_use ? ss_hc : tram_data;
           // Per-line H-scroll word, read unconditionally (used only when the
           // governing hscr has bit 15 set). Window mode: the pair's EVEN table;
           // otherwise this map's own. ctrl_r is already latched here.
@@ -669,8 +1152,8 @@ module m2_video #(
           // a one-line overrun.
           // Saturating, not wrapping: a counter that rolls over reads as a
           // small number on a screen and says the opposite of what happened.
-          if (line_start && !(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
-          if (line_start && !(&ovr_acc))       ovr_acc      <= ovr_acc + 1'd1;
+          if (!ring_on && line_start && !(&dbg_overruns)) dbg_overruns <= dbg_overruns + 1'd1;
+          if (!ring_on && line_start && !(&ovr_acc))       ovr_acc      <= ovr_acc + 1'd1;
           // The latch lives here too: one process must own ovr_acc, and the
           // increment cannot move to the stats process without dragging the
           // whole sequencer state with it.
@@ -683,9 +1166,16 @@ module m2_video #(
 
         Q_NEXT: begin
           seq_owns_tram <= 1'b1;
-          if (cur_layer == 2'd3) q <= Q_IDLE;
+          if (cur_layer == 2'd3) begin
+            q <= Q_IDLE;
+            // R824: interlaced, the next row of this field (+2), or after
+            // its last visible row (191) row 0 of the next field.
+            if (ring_on) rg_nl <= !rg_il ? ((cur_line >= 9'd383) ? 9'd0 : cur_line + 9'd1)
+                                 : (cur_line[8:1] >= 8'd191) ? {8'd0, ~cur_line[0]} : cur_line + 9'd2;
+          end
           else begin
             cur_layer <= cur_layer + 2'd1;
+            if (HSCR_RD) seq_tram_addr <= 15'h5000 + {13'd0, cur_layer + 2'd1};   // R826
             q         <= Q_HSCR;
           end
         end
@@ -713,81 +1203,80 @@ module m2_video #(
   // A per-lane byte-enable would have been the obvious alternative and Quartus
   // 17.0 does not infer RAM from it at all — see rtl/m1_mainram.sv, where that
   // idiom cost 28,816 ALM before it was found.
-  genvar gb, gl, gn;
+  //
+  // R818: ONE MEMORY PER (LAYER, LANE), THE BANK AS ITS TOP ADDRESS BIT.
+  //
+  // This was one 128 x 15 memory per (bank, layer, lane), and Quartus put each
+  // in an M10K of its own: 32 blocks holding 61,440 bits, 18.8% of their
+  // capacity, with M10K at 553 of 553. The bank is written at `bank` and read
+  // at `~bank`, so as an address bit it never puts the write and the read on
+  // the same word, and each (layer, lane) is still one write port and one read
+  // port -- 256 x 15, one M10K. 32 blocks -> 16, and the 2:1 bank select after
+  // the read is gone.
+  //
+  // The one difference: the bank now selects at the read's address, one cycle
+  // before the old select at its output. The two disagree only in the cycle
+  // after the flip, and that read is for hcnt = H_TOTAL - 1 -- the last column
+  // of the horizontal blank (line_start is ce_pix at hcnt == H_TOTAL - 1).
+  //
+  // (Recorded from the version before: (* ramstyle = "MLAB" *) on these
+  // memories was declined by Quartus 17.0 -- the summary kept them AUTO.)
+  genvar gl, gn;
   generate
-    for (gb = 0; gb < 2; gb++) begin : g_bank
-      for (gl = 0; gl < 4; gl++) begin : g_layer
-        logic [14:0] lane_q [4];
-        logic [1:0]  sel_q;
+    for (gl = 0; gl < 4; gl++) begin : g_layer
+      logic [14:0] lane_q [4];
+      logic [1:0]  sel_q;
 
-        for (gn = 0; gn < 4; gn++) begin : g_lane
-          // TRIED AS MLAB AND QUARTUS DECLINED IT. Recorded so it is not
-          // tried a third time without new information.
-          //
-          //
-          // 128 words of 15 bits is 1,920 bits. Untagged, Quartus puts each of
-          // these in an M10K, which holds 10,240 -- so the sixteen per bank,
-          // thirty-two in all, spend 32 blocks to store 61,440 bits. That is
-          // the worst efficiency of any memory in the design by a factor of
-          // four: 5.3x, against 1.2-1.4x everywhere else.
-          //
-          // A Cyclone V MLAB is 32 words by 20 bits, built out of the LUT
-          // storage that is already there, so 128x15 is four of them -- about
-          // 40 ALMs -- and thirty-two instances cost roughly 1,280 ALM.
-          //
-          // That trade only makes sense in one direction and this is it: M10K
-          // is 553 of 553 with texture still to come, ALM is 89% with ~4,600
-          // free.
-          //
-          // BUT (* ramstyle = "MLAB" *) AND "MLAB, no_rw_check" BOTH LEAVE IT
-          // AS `AUTO` in the synthesis RAM summary, and block memory bits do
-          // not move. The attribute is not being ignored generally -- 47
-          // memories in this design report "M10K block" and one reports "MLAB"
-          // -- so Quartus is declining it for THIS access pattern rather than
-          // for the syntax. Whatever the reason, it is not a one-line change,
-          // and the 32 blocks are not the biggest prize anyway: m2_quad_store
-          // holds 2,048 quads in ~66 blocks while the board is emitting ~216
-          // per frame.
-          logic [14:0] mem [128];
+      for (gn = 0; gn < 4; gn++) begin : g_lane
+        // Which incoming pixel belongs to this lane, and which group it
+        // lands in. Pixels before the base's own lane have wrapped into the
+        // next group.
+        logic [1:0] widx;
+        logic [8:0] wpos;
+        logic [6:0] waddr;
+        logic       wen;
+        assign widx  = 2'(gn[1:0] - f_lb_addr[1:0]);
+        // The screen position this lane is writing, then its group. Written
+        // as the sum rather than "base group plus a carry" because the carry
+        // form makes lane 3's comparison constant, which is true but reads
+        // as a mistake and trips -Wall.
+        assign wpos  = f_lb_addr + 9'(widx);
+        assign waddr = wpos[8:2];
+        assign wen   = f_lb_we[widx] && (cur_layer == 2'(gl));
 
-          // Which incoming pixel belongs to this lane, and which group it
-          // lands in. Pixels before the base's own lane have wrapped into the
-          // next group.
-          logic [1:0] widx;
-          logic [8:0] wpos;
-          logic [6:0] waddr;
-          logic       wen;
-          assign widx  = 2'(gn[1:0] - f_lb_addr[1:0]);
-          // The screen position this lane is writing, then its group. Written
-          // as the sum rather than "base group plus a carry" because the carry
-          // form makes lane 3's comparison constant, which is true but reads
-          // as a mistake and trips -Wall.
-          assign wpos  = f_lb_addr + 9'(widx);
-          assign waddr = wpos[8:2];
-          assign wen   = f_lb_we[widx] && (bank == gb[0])
-                       && (cur_layer == 2'(gl));
-
-          always_ff @(posedge clk) begin
-            if (wen)
-              mem[waddr] <= {f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx],
-                             f_lb_pal[widx]};
-            lane_q[gn] <= mem[hcnt[8:2]];
-          end
+        // Writes go to the bank being rendered; reads come from the other.
+        // A module of its own: inline in this generate, as {bank, waddr} /
+        // {~bank, hcnt[8:2]} indices into a 256-word array, Quartus 17.0
+        // built all 32 lanes as flip-flops (61,440 registers, no warning,
+        // ramstyle attribute or not). The 128-word arrays before this were
+        // only ever recovered from registers after elaboration
+        // ("mem[0][14]__7"), never inferred from the HDL.
+        if (LB_RING) begin : g_ring
+          // R823: four banks, 512 x 15 -- still one M10K (512 x 20 mode).
+          m2_lbuf_ram #(.AW(9)) u_ram (
+            .clk(clk),
+            .we(wen), .wa({rg_wb, waddr}),
+            .wd({f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx], f_lb_pal[widx]}),
+            .ra({rg_rb, hcnt[8:2]}), .q(lane_q[gn])
+          );
+        end else begin : g_swap
+          m2_lbuf_ram u_ram (
+            .clk(clk),
+            .we(wen), .wa({bank, waddr}),
+            .wd({f_lb_masked[widx], f_lb_prio[widx], f_lb_transparent[widx], f_lb_pal[widx]}),
+            .ra({~bank, hcnt[8:2]}), .q(lane_q[gn])
+          );
         end
-
-        // The select is registered from the same hcnt as the address, so the
-        // mux picks the lane that address fetched. Registering only the data
-        // and muxing with live hcnt would take the wrong lane for the cycles
-        // between a counter step and the read landing.
-        always_ff @(posedge clk) sel_q <= hcnt[1:0];
-        assign lb_q[gb][gl] = lane_q[sel_q];
       end
+
+      // The select is registered from the same hcnt as the address, so the
+      // mux picks the lane that address fetched. Registering only the data
+      // and muxing with live hcnt would take the wrong lane for the cycles
+      // between a counter step and the read landing.
+      always_ff @(posedge clk) sel_q <= hcnt[1:0];
+      assign rd_q[gl] = lane_q[sel_q];
     end
   endgenerate
-
-  // Writes go to the bank being rendered; reads come from the other one.
-  always_comb
-    for (int L = 0; L < 4; L++) rd_q[L] = lb_q[bank ? 0 : 1][L];
 
   // ------------------------------------------------------------- mixing
   logic [3:0][11:0] mix_pal;
@@ -968,4 +1457,23 @@ module m2_video #(
     end
   end
 
+endmodule
+
+// R818: one tilemap line-buffer lane, both banks: 256 x 15, one write port,
+// one registered read port -- one M10K.
+module m2_lbuf_ram #(
+  parameter int unsigned AW = 8          // R823: 9 for the four-bank ring
+) (
+  input  logic          clk,
+  input  logic          we,
+  input  logic [AW-1:0] wa,
+  input  logic   [14:0] wd,
+  input  logic [AW-1:0] ra,
+  output logic   [14:0] q
+);
+  (* ramstyle = "M10K" *) logic [14:0] mem [1 << AW];
+  always_ff @(posedge clk) begin
+    if (we) mem[wa] <= wd;
+    q <= mem[ra];
+  end
 endmodule

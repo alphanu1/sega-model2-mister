@@ -1,5 +1,152 @@
 # Handoff
 
+## 2026-10-16: RELEASE Model2_20261016 (s1142) -- Daytona, Desert Tank, Virtua Cop
+
+Released from c545187's RTL as s1142 (releases/Model2_20261016.rbf,
+644e28fa0dee02c90d4b2d93c2d99fbd; core clocks >= +0.260, hold +0.244, HDMI
+-0.350, 41,455 ALM, M10K 533/553). New MRAs in releases/: Desert Tank and
+Virtua Cop (Revision A), each with a [15kHz CRT] version (Virtua Cop's game
+ID 0x81 is new in this release). Release and main READMEs rewritten for three
+games. vcop merged into headroom; PR #8 (headroom -> main) updated and
+merged with a merge commit (Ben). Open items as in the entry below.
+
+## 2026-10-16: branch vcop -- Virtua Cop runs, guns work; s1142 the candidate
+
+ON THE BOARD (last loaded): s1134 (a3dd42f, timing-short) -- Virtua Cop
+attract and guns work (Ben: joystick and mouse). CANDIDATE: s1142
+(c545187; build/Model2_20261016_s1142_vcop.rbf, 644e28fa...): core clocks
+>= +0.260, hold +0.244, HDMI -0.350, 41,455 ALM, M10K 533/553. It has
+Daytona, Desert Tank, Virtua Cop (R839 type-2 I/O, R844 flushreg, R845
+trig), guns (R846: sticks + mouse, crosshairs), R849/R850 (P1's crosshair
+always, P2's only in play), R840 15.7 kHz default, R842/R843/R847 timing.
+Not yet on the board. TIMING: the design closes at 99% (s1137, s1142, s1143)
+with R847's six fixes; R848's eight further fixes made it worse (did not
+fit with the TGP adder fix; 0/3 without) and are withdrawn -- rtl/ is
+c545187's (62b77a2). OPEN: test_mb86233_regs fails 46,966 checks (predates
+this work); a FITTER_AGGRESSIVE_ROUTABILITY ALWAYS vs AUTOMATICALLY A/B
+(R848) not run; Virtua Cop's country byte (R846, Japan by default) is
+Ben's call. PR #8 (headroom -> main) still held until Virtua Cop is
+confirmed and everything else still works.
+
+## 2026-10-15 (later): Desert Tank confirmed; headroom = desert; branch vcop
+
+Ben on s1108 (6e8db44, input check build, clk_mem -0.120): Desert Tank's
+sound and every button work, Forward/Reverse correct (R838); Daytona still
+working well. desert fast-forwarded into headroom (be50862) and pushed --
+PR #8 now carries Desert Tank too (still NOT to be merged: PR to main once
+Virtua Cop boots and everything else still works). s1111-s1113 (6e8db44)
+fitting for a timing-clean Desert Tank build. Branch vcop (from be50862):
+Virtua Cop on one core, type-2 I/O board by game ID, every addition behind a
+compile-time parameter (Ben); an agent is reading the firmware and running
+MAME first.
+
+## 2026-10-15: branch desert -- Desert Tank (R835), s1101 built
+
+PLAN (Ben, 2026-10-15): do NOT merge PR #8 yet. When Desert Tank is
+confirmed working: merge desert into headroom, push headroom (PR #8 then
+carries it). Branch vcop off headroom for Virtua Cop (I/O board type 2 by
+game ID in one core if the firmware allows -- see the study). PR to main
+once Virtua Cop boots and everything else still works. Virtua Cop work
+WAITS until Desert Tank is confirmed (Ben). Every Virtua Cop addition (type-2
+I/O map, its firmware's M10K, light guns, crosshair, any timer) goes behind
+a compile-time parameter, off-able for the 2A/2B/2C branches, and game-ID
+selected inside it.
+Branch desert (from headroom 0f3cbc4): Desert Tank MRAs (+ 15 kHz CRT), game
+ID 2 (prog_ext as Virtua Cop; IN1 = machine gun / cannon / shift toggle on
+Gear Up / Gear Down / VR4), cabinet inputs moved to rtl/io/m2_cab_inputs.sv
+(Daytona bit-identical, 30M bench checks), rom_csum.py folds repeat,
+tools/mra_vs_mame.py. MAME: Desert plays; FM never keyed (YM_STUB fine); TGP
+upload = Daytona's program; renders at 30 Hz. BUILT: s1101 (core >= +0.591,
+HDMI -0.031) build/Model2_20261015_s1101_desert.rbf (e9a2d912...). NEXT:
+s1101 ON THE BOARD: Desert Tank locked at the title -> demo (the i960 trapped on
+movrl/mulrl/cmprl, R836). FIXED in 90601c5; s1104 built (core >= +0.582, HDMI
+-0.148), build/Model2_20261015_s1104_desert.rbf (816c13ea...). NEXT: Ben "load it";
+the MRAs are already on the board. Check
+Daytona unchanged, Desert boots, controls, ~29 fps, 15 kHz MRA.
+Six of nine seeds failed (two unroutable, two short, three Quartus crashes;
+/tmp was 5.1 GB for the crashes).
+
+## 2026-10-14: headroom -- s1082 on the board; R834 + R828c building
+
+ON THE BOARD: s1082 (db9fbc9, the release candidate): 240 min, no lock;
+rails, sound and background good (Ben). One fault: the player car's rear
+window mips too early (the glass takes a level > 0, its translucent frame
+stays at 0); an agent is following the game's per-object LOD (MAME keeps the
+player car at level 0).
+NEW, PUSHED, NOT BUILT: ecfa488 R834 -- 15 kHz lines 262/263, 268/269
+(15.4 kHz, new) or 273/274 (O[45:44]; a saved 273/274 keeps it); "15kHz
+width" Full/Narrow (O[55]): Narrow lengthens the 15.4/15.7 kHz line to
+672/684 px so the picture keeps the 15.1 kHz shape. Ben's 15.7 kHz squash
+is 192 lines in a 273.5-line field (4% shorter), not a sync fault. Narrow is
+not the default: a set whose width follows trace time would be ~4% too
+narrow. The OSD text is the framework's, the same in every mode. Benches:
+timing 112/0, ring overruns PASS in all six modes and mode switches.
+MERGED: b559f27 R828c -- the window fix. Daytona sets no per-object LOD
+(lod 128, every coef 1.0, 91,196 polygons); MAME's level is floor(2 log2 z
+- log2|dotp| - 7) for all. A one-bit geometry flag draws a polygon at level
+0 when that level is <= -3 at its far end (R3D_MIPZ_B in Model2.sv). Bench:
+player car off level 0 842 -> 14 px (f5000), car select 6.8k -> 320-471;
+far road, trees, mountains unchanged. Flag agrees with MAME's on 99.8% of
+13,081 polygons. Also corrects R665: the log RAM IS a log2 table. Map: +48
+ALM, no new M10K. The car-select screen is Deluxe '93's (Rev A shows none).
+BUILT: s1085 = b559f27 (R834 + R828c), 40,873 ALM, core clocks >= +0.338,
+holds +0.206, HDMI -1.250 (report-only). build/Model2_20261014_s1085_rc.rbf
+(e2ec410b...), on the board: Ben "looks good". Reseeds s1087-s1092: s1087
+HDMI -0.003, core >= +0.218, hold +0.215 (build/Model2_20261014_s1087_rc.rbf,
+52cb1d31...) -- Ben: "87 it is". On the board since 2026-10-14 17:35 (board
+clock); 240 min watch: no lock, 136 readings, 108 at >= 57 fps. RELEASE PREPARED: releases/Model2_20261014.rbf
+(s1087), 20261013 removed, release README filled (mip row and notes, 15 kHz
+rows), README's what's-left updated. PR headroom -> main open; merge (merge
+commit) on Ben's word.
+NEXT: the passing seed to Ben: rear window, car select (Deluxe '93), rails,
+15.4 kHz, Narrow. Then the release (releases/README has the 15 kHz rows;
+the mip row is still to add).
+
+## 2026-10-13 (evening): headroom -- overruns fixed, mip built, R826 building
+
+ON THE BOARD: s1041 (ring) -- tile overruns gone (24 kHz; 15 kHz on a
+deinterlacing monitor; a user CRT test wanted). Passed on the board this
+branch: R819/R820 sound, R821 shared MultiPCM (s1037), R823-R825 ring.
+MERGED, OFF: R826 2D/3D alignment (STRICT + SYNC; the game's backdrop and 3D
+camera share one yaw, so any 2D/3D frame offset jerks in slides -- MAME is +1,
+we were -1); R828 MIP (edge-footprint level, nearest level + bilinear,
+~+145..260 ALM est; shimmer ~2x -> ~1x reference; draw -2..-26%).
+BUILDING: s1045-s1047 = 78ab95b + R826 STRICT/SYNC (s1042-s1044 missed
+clk_sys in fill/store/geometry paths, not R826's). QUEUED: s1048-s1050 =
+662002b + MIP 1 (starts when the fits end). Local only, ~2.7 GB:
+build/mipdump, build/mame289-mip (ROM-derived, git-ignored).
+DECISIONS: audio filter last; reduced FPU last resort.
+
+## 2026-10-13 (later): BRANCH headroom
+
+DECISION: audio filter back LAST, only if room remains (Ben). Reduced FPU
+(FP_EXT 0, ~-1,000..-1,250 placed, R818) = LAST RESORT, not started. R821 shared
+MultiPCM passed on the board (s1037) and is on by default (de9796c).
+
+DECISIONS (Ben): R813's span cull is paid for by R818 (+66 vs -227 est) --
+next after the audio build, not yet on. Audio filter back (~+700 est) needs
+the FP32 FPU or a shared MultiPCM -- no action. NOW: testing one MultiPCM
+shared by both chips (R821).
+
+Since: R819/R820 audio (016ef91) -- s1019/s1020 missed clk_sys in the
+geometry FP pool / TGP divider (placement), not the sound logic. R818 area
+savings (fc1b5b5: -227 ALM est, -17 M10K). BUILDING s1021-s1023 = fc1b5b5
+(audio + savings; SPCULL still 0). Next: SPCULL 1 (R813's cull, +66 est).
+Users' black screens on 20261013 were download corruption (Ben); every
+release file was verified byte-identical to the board, and GitHub's raw
+downloads match. The board now has the release's Deluxe MRAs (old ones kept
+as .mra.old); they load fine. s1017's failing HDMI paths are all in ascal's
+polyphase colour maths (148.5 MHz), not control logic. Ben's MiSTer.ini:
+no video_mode (720p), vsync_adjust=1.
+
+Released Model2_20261013 (s1017) is on main (PRs #5, #6). New branch
+`headroom` from 8172b41. In flight: (1) an area / M10K audit
+(sm2-builds/sm2-area-8172b41, R818 draft) -- ALM 99%, M10K 553/553, bits
+76% -- to pay for the audio filter, tile overruns (char cache), R813's cull,
+eventually mip (R665); (2) the quiet music / game-over speech against MAME
+(sm2-builds/sm2-audio-8172b41, R819 draft). Wheel steering (R816) still
+untested on a real wheel.
+
 ## 2026-10-13: RELEASED Model2_20261013.rbf = s1017 (7932d11)
 
 releases/: Model2_20261013.rbf (77dc39cf90c61c6ea2538b3b5f2f7b79), the

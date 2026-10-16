@@ -32,7 +32,12 @@ namespace {
 Vi960_top   *dut = nullptr;
 i960ref::Cpu ref;
 std::map<uint32_t,uint32_t> mem;
-uint64_t fpwrites = 0, fpany = 0;
+uint64_t dut_only_traps = 0;   // R836
+uint64_t fpwrites = 0, fpany = 0, rlany = 0;   // R836: rlany, long-real ops retired
+uint64_t vcsq = 0, vccp = 0, vccv = 0;          // R839: sqrtrl, cpysre, cvtzril retired
+uint64_t vcfl = 0;                                // R844: flushreg retired
+uint64_t syn_unal_stops = 0;                      // R844: programs ended at a synmov to 0xff000005..7
+uint64_t vctr[4] = {0, 0, 0, 0};                  // R845: sinrl cosrl tanrl atanrl retired
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 int lat_max = 0, lat_wait = 0;                // +lat=N, see tick()
@@ -105,6 +110,9 @@ uint64_t gate_arms = 0;
 // Off by default: a loop narrows what a single program covers, and the default
 // mix exists to cover instruction forms. Use it for fetch and cache work.
 bool loop_mode = false;
+bool no_trans = false;  // R845: +notrans -- the same programs with cmprl for each transcendental
+bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
+bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
 struct Trace { uint64_t t; int ts; int req, valid, busy; uint32_t addr, data, insn, ip; };
@@ -153,7 +161,11 @@ void tick() {
   if (checking && !prog_dirty && (ts_now == 0 || ts_now == 1) &&
       dut->rootp->i960_top__DOT__fetch_word_ok) {
     const uint32_t at = dut->rootp->i960_top__DOT__ip;
-    auto it = mem.find(at);
+    // R836: the word AT the aligned address, as the reference's rd() and the
+    // module's fetch both read it. An IP that a random ret or interrupt vector
+    // leaves unaligned (seed 7: 0x1787) found no entry here and was reported
+    // as a front-end fault while both sides fetched the same word.
+    auto it = mem.find(at & ~3u);
     const uint32_t want = (it == mem.end()) ? 0xffffffffu : it->second;
     const uint32_t got  = dut->rootp->i960_top__DOT__fetch_word;
     if (got != want && pf_bad < 6) {
@@ -338,7 +350,34 @@ int pick_class(std::mt19937_64 &rng) {
   return C_REGALU;
 }
 
+uint64_t trans_ret = 0, trans_ulp = 0;   // R845: transcendentals retired, one-ulp libm differences taken
+
+// R845: a transcendental's result one ulp from libm's is the recorded
+// deviation (the module is correctly rounded, libm is not always): adopt it.
+void trans_adopt() {
+  if (!ref.fp_trans) return;
+  ++trans_ret;
+  uint64_t g, w;
+  if (ref.fp_trans_reg >= 0) {
+    g = uint64_t(dreg(ref.fp_trans_reg)) | (uint64_t(dreg(ref.fp_trans_reg + 1)) << 32);
+    w = uint64_t(ref.rf.r[ref.fp_trans_reg]) | (uint64_t(ref.rf.r[ref.fp_trans_reg + 1]) << 32);
+  } else {
+    g = dfp(ref.fp_trans_fp); w = ref_fp_bits(ref.fp_trans_fp);
+  }
+  if (g == w) return;
+  const bool same_sign = (g >> 63) == (w >> 63);
+  const uint64_t mg = g & 0x7fffffffffffffffull, mw = w & 0x7fffffffffffffffull;
+  if (!same_sign || (mg != mw + 1 && mw != mg + 1)) return;   // let compare() report it
+  ++trans_ulp;
+  if (ref.fp_trans_reg >= 0) {
+    ref.rf.r[ref.fp_trans_reg] = uint32_t(g); ref.rf.r[ref.fp_trans_reg + 1] = uint32_t(g >> 32);
+  } else {
+    double v; std::memcpy(&v, &g, 8); ref.fp[ref.fp_trans_fp] = v;
+  }
+}
+
 bool compare(uint64_t n) {
+  trans_adopt();
   // Skip the retire outright when the reference widened a subnormal single.
   // The units flush, the host does not, and the divergence is real but already
   // recorded (§8.1). Skipping is what the block harnesses do; counting the
@@ -346,9 +385,11 @@ bool compare(uint64_t n) {
   bool ok = true;
   for (int i = 0; i < 32; i++) {
     ++checks;
-    const bool fp_nan_ok = (i == ref.fp_sdest) &&
+    const bool fp_nan_ok = ((i == ref.fp_sdest) &&
                            ((dreg(i)      & 0x7fffffffu) > 0x7f800000u) &&
-                           ((ref.rf.r[i]  & 0x7fffffffu) > 0x7f800000u);
+                           ((ref.rf.r[i]  & 0x7fffffffu) > 0x7f800000u))
+                        // R836: a long-real NaN fills a register pair
+                        || (ref.fp_rl && ref.fp_nan_result && (i == ref.fp_sdest || i == ref.fp_sdest + 1));
     if (dreg(i) != ref.rf.r[i] && !fp_nan_ok) {
       ok = false;
       if (fails < MAX_REPORT)
@@ -479,6 +520,9 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+probe_fp"))  probe_fp = true;
     if (!std::strcmp (argv[i], "+bus_probe")) bus_probe = true;
     if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
+    if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
+    if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
+    if (!std::strcmp (argv[i], "+notrans"))   no_trans = true;  // R845
     if (!std::strcmp (argv[i], "+directed"))  directed  = true;
     if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
     if (!std::strcmp (argv[i], "+mix=daytona")) mix_daytona = true;
@@ -512,6 +556,7 @@ int main(int argc, char **argv) {
     intr_total += ref.intr_taken; queued_total += ref.intr_queued;
     dequeued_total += ref.intr_dequeued;
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
+    ref.ref_vc = use_vc;
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -562,18 +607,30 @@ int main(int argc, char **argv) {
           0x78fu, 0x78du, 0x78cu, 0x78bu,      // addr subr mulr divr
           0x688u, 0x68au, 0x68bu, 0x685u,      // sqrtr logbnr roundr cmpr
           0x6c0u, 0x6c2u, 0x6c9u,              // cvtri cvtzri movr
-          0x674u, 0x677u };                    // cvtir scaler
+          0x674u, 0x677u,                      // cvtir scaler
+          // R836: the long-real forms Desert Tank runs (addrl subrl mulrl
+          // divrl cmprl movrl). Off with +norl, which is how the bench is shown
+          // to fail on an RTL without them: they trapped there.
+          0x79fu, 0x79du, 0x79cu, 0x79bu, 0x695u, 0x6d9u };
         // The table packs opcode and sub-opcode as 0xOOS across THREE hex
         // digits, so the opcode is (sel >> 4) & 0xff. Using sel >> 8 yields
         // 0x07 for 0x78f -- an invalid opcode that traps, which is why the
         // FP-register-destination path was never once reached.
-        const uint32_t sel = FPOPS[rng() % (sizeof FPOPS / sizeof FPOPS[0])];
+        const size_t nfp = (sizeof FPOPS / sizeof FPOPS[0]) - (no_rl ? 6 : 0);
+        // R839: with +vc, a quarter of the FP mix is sqrtrl / cpysre / cvtzril
+        // R845: and the transcendentals sinrl cosrl tanrl atanrl; R844: flushreg
+        static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x69cu, 0x69du, 0x69eu, 0x690u, 0x66du };
+        uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % 8] : FPOPS[rng() % nfp];
+        if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
         if (rng() & 1) insn |= 0x0800;
         if (rng() & 1) insn |= 0x1000;
         // A literal destination writes fp0-fp3 and needs bits 23:21 clear.
         if ((rng() % 4) == 0) insn = (insn | 0x2000u) & ~0x00e00000u;
+        // R839: cvtzril writes dst and dst + 1, unmasked, never a literal
+        // (MAME fatalerrors): dst <= 30, as emul's.
+        if (sel == 0x6c3u) insn = (insn & ~0x00f82000u) | ((rng() % 31) << 19);
       } else if (cls == 8) {                           // mov / bit scan / modac
         static const uint8_t B64[] = {0x0,0x1,0x4,0x5};
         const bool use5c = (rng() & 1);
@@ -890,6 +947,7 @@ int main(int argc, char **argv) {
     // and it only appeared once a program actually left a line asserted.
     irq_state = 0; dut->irq = 0; pend_valid = false; pend2_valid = false;
     dut->rst_n = 0; dut->bus_ack = 0;
+    dut->vc_en = use_vc;
     for (int i = 0; i < 4; i++) tick();
     // NO LONGER POKED. The module now walks the boot record itself in T_BOOT --
     // mem[0] to SAT, mem[4] to PRCB, mem[12] to the IP -- so it arrives at
@@ -1185,7 +1243,9 @@ int main(int argc, char **argv) {
       // module leaves T_FETCH in the same cycle it accepts, so the boundary
       // test was false exactly when the count said stop.
       const uint32_t acc_before = dut->dbg_acc_cnt;
-      while (guard++ < 400 + 64 * lat_max && !dut->trap && dut->dbg_acc_cnt == acc_before) {
+      // R845: a transcendental runs its microcode, up to ~4,400 cycles
+      const int stall_lim = (use_vc ? 6000 : 400) + 64 * lat_max;
+      while (guard++ < stall_lim && !dut->trap && dut->dbg_acc_cnt == acc_before) {
         if (probe)
           std::printf("        ts=%2d req=%d done=%d busy=%d fp_a=%016llx "
                       "sqrt=%d valid=%d dstlit=%d fpr2=%016llx\n",
@@ -1199,9 +1259,54 @@ int main(int argc, char **argv) {
                       dut->rootp->i960_top__DOT__d_dst_lit,
                       (unsigned long long)dfp(2));
         tick();
+#ifdef TB_VC
+        if (std::getenv("TB_TRDBG") && (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__st == 2
+            && ((dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__uw >> 28) == 8
+             || (dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__uw >> 28) == 9))
+          std::printf("    LD%c x %016llx y %016llx\n",
+                      (dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__uw >> 28) == 8 ? 'X' : 'Y',
+                      (unsigned long long)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__x,
+                      (unsigned long long)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__y);
+        if (std::getenv("TB_TRDBG") && dut->rootp->i960_top__DOT__tr_fin)
+          std::printf("    FIN res %016llx\n", (unsigned long long)dut->rootp->i960_top__DOT__fp_res_wide);
+        if (std::getenv("TB_TRDBG") && (iw_now >> 24) == 0x69 && guard < 0)
+          std::printf("    dbg g%d ts %d tr_start %d st %d fp_is_trans %d fp_valid %d is_rl %d vc_en %d\n", guard,
+                      (int)dut->rootp->i960_top__DOT__ts, (int)dut->rootp->i960_top__DOT__tr_start,
+                      (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__st,
+                      (int)dut->rootp->i960_top__DOT__fp_is_trans, (int)dut->rootp->i960_top__DOT__fp_valid,
+                      (int)dut->rootp->i960_top__DOT__is_rl, (int)dut->vc_en);
+#endif
       }
-      if (dut->trap) break;
-      if (guard >= 400 + 64 * lat_max) { std::printf("STALL at IP %08x\n", ip_before); ++fails; break; }
+      // R836: A TRAP THE REFERENCE DOES NOT TAKE IS A FAILURE. This used to end
+      // the program silently whichever side trapped, so an instruction the
+      // module does not implement and the reference executes -- Desert Tank's
+      // long-real forms, which halt the i960 on the board -- passed as "ended
+      // early". The reference is stepped once to ask.
+      if (dut->trap) {
+        const uint32_t tip = ref.IP, tinsn = ref.rd(ref.IP);
+        ref.step();
+        if (!ref.trapped) {
+          if (fails < MAX_REPORT)
+            std::printf("  MODULE TRAP at IP %08x insn %08x (trap_op %02x): the reference executes it\n",
+                        tip, tinsn, (unsigned)dut->trap_op);
+          ++fails; ++dut_only_traps;
+        }
+        break;
+      }
+      if (guard >= stall_lim) {
+        const uint32_t si = ref.rd(ip_before);
+        std::printf("STALL at IP %08x insn %08x ts %d  src1 pair %08x%08x  src2 pair %08x%08x\n", ip_before, si,
+                    (int)dut->rootp->i960_top__DOT__ts, dreg((si & 0x1e) + 1), dreg(si & 0x1e),
+                    dreg(((si >> 14) & 0x1e) + 1), dreg((si >> 14) & 0x1e));
+#ifdef TB_VC
+        std::printf("  fptrans st %d upc %d act %d fin %d\n",
+                    (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__st,
+                    (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__upc,
+                    (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__act,
+                    (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__fin);
+#endif
+        ++fails; break;
+      }
       // NO EXTRA TICK. It used to be needed because the window closed when the
       // IP changed, which is the execute state's own edge -- `we` is registered
       // there, so the register write had not landed yet and one more tick was
@@ -1213,6 +1318,9 @@ int main(int argc, char **argv) {
       // simple op finishes in one T_EXEC cycle -- the module then read one
       // instruction AHEAD of the reference.
       exec_ip = ref.IP; exec_insn = ref.rd(ref.IP);
+      if (std::getenv("TB_RETLOG"))
+        std::printf("    ret ip %08x insn %08x g0 %08x r3 %08x icr %08x/%08x\n", exec_ip, exec_insn,
+                    ref.rf.r[16], ref.rf.r[3], ref.ICR, dicr());
       const uint64_t last_calls = calls_prev; calls_prev = rf_call_cnt;
       const uint64_t last_rets  = rets_prev;  rets_prev  = rf_ret_cnt;
       if (directed || dtrace)
@@ -1228,7 +1336,12 @@ int main(int argc, char **argv) {
                     (int)dut->rootp->i960_top__DOT__u_regs__DOT__rcache_pos,
                     (int)ref.rf.rcache_pos);
       { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
-        if (o==0x78||o==0x68||o==0x6c||o==0x67) fpany++;
+        if (o==0x78||o==0x68||o==0x6c||o==0x67||o==0x79||o==0x69||o==0x6d) fpany++;
+        if (o==0x79||o==0x69||o==0x6d) rlany++;   // R836
+        { const uint32_t k = (o << 4) | ((iw >> 7) & 0xf);   // R839
+          if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
+          else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
+          else if (k == 0x66d) vcfl++; }
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       if (itrace && (dut->dbg_intr_cnt != intr_before))
         std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
@@ -1312,6 +1425,7 @@ int main(int argc, char **argv) {
       // program at that point, the same as a trap.
       if (ref.fp_denorm_operand) { ++denorm_skips; break; }
       if (ref.fp_nan_result)     { ++nan_stops;    break; }
+      if (ref.unaligned_syn)     { ++syn_unal_stops; break; }   // R844
       // SELF-MODIFYING CODE. A random program can clobber SP or FP, and the
       // next call then spills sixteen words wherever that garbage points --
       // including over the program. The i960 has an instruction cache with no
@@ -1388,7 +1502,14 @@ int main(int argc, char **argv) {
   if (total_retires)
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
-  std::printf("  FP ops executed: %llu, of which FP-register destination: %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites);
+  std::printf("  FP ops executed: %llu, of which FP-register destination: %llu, long-real (R836): %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites, (unsigned long long)rlany);
+  if (use_vc) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
+  if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
+  if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
+  if (use_vc) std::printf("  R845 forms retired: sinrl %llu, cosrl %llu, tanrl %llu, atanrl %llu; one-ulp libm differences taken %llu\n",
+                          (unsigned long long)vctr[0], (unsigned long long)vctr[1], (unsigned long long)vctr[2],
+                          (unsigned long long)vctr[3], (unsigned long long)trans_ulp);
+  std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
               ", %llu: self-modifying code, %llu: IP left the program"
               "  (all recorded deviations)\n",

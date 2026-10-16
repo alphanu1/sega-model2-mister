@@ -59,12 +59,10 @@ patch is three hunks and easy to redo by hand:
 **Checked:**
 
 - applies cleanly to the current `sys/`;
-- Verilator lint of `audio_out` both with and without the macro.
+- Verilator lint of `audio_out` both with and without the macro;
+- built with the macro set in every release since `Model2_20261011`, and the
+  sound checked on the board each time.
 
-**Not checked:**
-
-- a Quartus build with the macro set;
-- the sound on the board.
-
-Both are due before it ships in a release.
+**When it comes back:** the plan is to switch the filter back on once the
+remaining features are in, if the room is still there.
 

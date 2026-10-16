@@ -45,7 +45,16 @@
 
 module m2_geo #(
   parameter int unsigned AW    = 25,
-  parameter int unsigned DEPTH = 128
+  parameter int unsigned DEPTH = 128,
+  // R826: "THE VBLANK AFTER A FLIP" MEANS A VBLANK THAT CAME AFTER THE FLIP.
+  // trig_after was frame_pend && flip_seen, and frame_pend is set at EVERY
+  // vblank and cleared only by a walk. When the game spends two frames on a
+  // list (Daytona's race on the board, R763) the vblank in the middle of its
+  // frame finds no flip, stays pending, and the flip itself then starts the
+  // walk mid-frame -- the list is drawn a frame earlier than the 2D scroll
+  // the game wrote for it (see m2_video SCR_SYNC). 1: a walk in mode 2 waits
+  // for a vblank that arrived with the flip already made. 0: unchanged.
+  parameter bit          AFTER_STRICT = 1'b0
 ) (
   input  logic          clk,
   input  logic          rst_n,
@@ -211,7 +220,9 @@ module m2_geo #(
   // empty list, and the only way to tell an empty list from a walk aimed at
   // the wrong buffer is to see where it starts against where the pushes land.
   output logic [19:0]   dbg_rp,          // where the walk starts (0x00803008)
-  output logic [19:0]   dbg_wp           // where the pushes land (0x00801008)
+  output logic [19:0]   dbg_wp,          // where the pushes land (0x00801008)
+  // R826: one pulse as a walk starts -- the top level tags the list with it.
+  output logic          walk_started
 );
 
   // ---------------------------------------------------------------- registers
@@ -658,7 +669,8 @@ module m2_geo #(
   logic        nodraw;                   // R711: this walk runs state only
   wire         trig_flip   = flip_pend || (frame_pend && no_flips);
   wire         trig_vblank = frame_pend;
-  wire         trig_after  = frame_pend && flip_seen;
+  logic        vbl_after_flip;           // R826: a vblank has come since the flip
+  wire         trig_after  = frame_pend && flip_seen && (!AFTER_STRICT || vbl_after_flip);
   wire         trig_setwp  = wp_pend || (frame_pend && no_flips);
   wire         trig_sel    = (trig_mode == 2'd0) ? trig_flip   :
                              (trig_mode == 2'd1) ? trig_vblank :
@@ -741,6 +753,7 @@ module m2_geo #(
                 || (wst == W_OPRD) || (wst == W_PDA) || (wst == W_PDR)
                 || (wst == W_TPI)  || (wst == W_TPP) || (wst == W_TPC));
   assign rd_addr = w_ip;
+  assign walk_started = walk_go && (wst == W_IDLE);   // R826
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -754,6 +767,7 @@ module m2_geo #(
       flip_seq <= 16'd0;   // R752
       dbg_walk_flip <= 16'd0; dbg_walk_fallback <= 16'd0;
       setwp_q <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0; skip_cnt <= 2'd0;   // R699
+      vbl_after_flip <= 1'b0;                                                   // R826
       nd_pend <= 1'b0; nodraw <= 1'b0;                                          // R711
       pd_addr <= 32'd0; pd_n <= 16'd0; pd_i <= 16'd0;
       pd_req <= 1'b0; pd_wdata <= 32'd0;
@@ -777,6 +791,7 @@ module m2_geo #(
     end else begin
       obj_valid <= 1'b0;
       // Remember the vblank; clear it when the walk actually starts.
+      if (frame_start && (flip_seen || setrp_q)) vbl_after_flip <= 1'b1;   // R826
       if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0;
                              dbg_nops <= nops_f; nops_f <= 16'd0; end   // R255: latch per frame
       // R638: the grace counts only while no walk runs. Counted during a walk,
@@ -803,6 +818,7 @@ module m2_geo #(
       if (setwp_q) begin wp_pend <= 1'b1; drain_wait <= 10'd0; end
       if (walk_go && (wst == W_IDLE)) begin
         frame_pend <= 1'b0; flip_pend <= 1'b0; wp_pend <= 1'b0; flip_seen <= 1'b0;
+        vbl_after_flip <= 1'b0;   // R826
         nodraw <= flip_pend && nd_pend;   // R711: a fallback walk always draws
         nd_pend <= 1'b0;
         // R263: the game's own list-ready write, or the vblank fallback.

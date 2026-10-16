@@ -57,6 +57,7 @@ module geodiff_top #(
   output logic [23:0] q_col,
   output logic [31:0] q_z,
   output logic [7:0]  q_lum,
+  output logic        q_mipz,     // R828c
   output logic [15:0] q_oz0, q_oz1, q_oz2, q_oz3,
   // what the walk and the engine counted
   output logic [15:0] walk_ops, walk_objs, walk_frames, mtx_n, foc_n, lit_n, tp_n,
@@ -101,7 +102,7 @@ module geodiff_top #(
     .dbg_walk_ops(walk_ops), .dbg_walk_objs(walk_objs),
     .dbg_walk_frames(walk_frames), .dbg_walk_unknown(walk_unknown),
     .dbg_walk_state(),
-    .dbg_rp(), .dbg_wp(),
+    .dbg_rp(), .dbg_wp(), .walk_started(),
     .mtx0(), .mtx4(), .mtx8(), .mtx11(),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
     .eng_busy(geo_eng_busy),
@@ -176,7 +177,7 @@ module geodiff_top #(
   assign geo_eng_busy = eng_busy;
 `endif
 
-  m2_geometry u_geometry (
+  m2_geometry #(.MIPZ(1'b1), .MIPZ_B(3)) u_geometry (   // R828c: the flag, as the core builds it
     .clk(clk), .rst_n(rst_n),
     .start(obj_valid), .oba(obj_oba), .obc(obj_obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -197,6 +198,7 @@ module geodiff_top #(
     .q_u2(q_u2), .q_v2(q_v2), .q_u3(q_u3), .q_v3(q_v3),
     .q_tex(q_tex), .q_lum(q_lum),
     .q_tlinv(),   // R784
+    .q_mipz(q_mipz),   // R828c
     .q_frac(q_frac),
     .q_col(q_col), .q_z(q_z),
     .dbg_polys(polys), .dbg_objects(objects), .dbg_capped(),

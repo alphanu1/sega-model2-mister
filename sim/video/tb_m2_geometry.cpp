@@ -40,6 +40,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <algorithm>
 
 static Vm2_geometry* d;
 static std::vector<uint32_t> obj(4096, 0);
@@ -572,6 +573,118 @@ int main(int argc, char** argv) {
     ck("R791: kept corners seen", (int32_t)(kept >= 2), 1);
     d->tpa = 0;
     for (int i = 0; i < 8; i++) thdr[TP + i] = 0;
+  }
+
+  // ---- R828c: THE GAME'S OWN LEVEL AS A NO-MIP FLAG (q_mipz).
+  //
+  // MAME's level is (-texlod + fast_log2(z)) >> 7, texlod = 128 log2(coef *
+  // |dotp| * lod) (lod 128 and coef 1 in Daytona), so a polygon is flagged
+  // when floor(2 log2 zmax - log2 |dotp| - 7) <= -MIPZ_B, zmax its largest
+  // vertex z and dotp = normal . P0(n) (the first new point, pre-focus). The
+  // RTL forms it in sixteenths of a level; the model below is that bit for
+  // bit, and MAME's own (log RAM = 128 log2 of the mantissa) is counted
+  // beside it. Normals have ONE non-zero component, a power of two, so the
+  // engine's dot product is exact and the model's |dotp| is the RTL's.
+  // Built with -GMIPZ=1 (TB_MIPZ): every flag against the model, the player
+  // car's rear window (s1082) flagged and a far scenery quad not. Without
+  // it (the default build, MIPZ 0): q_mipz must stay 0 on every quad.
+  {
+#ifdef TB_MIPZ
+    const int MB = 3;
+#endif
+    auto lg16t = [](uint32_t j) { static const int T[16] = {0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15}; return T[j & 15]; };
+    auto model = [&](float zmax, float dotp, int B) -> int {
+      const uint32_t zb = f2u(zmax), db = f2u(std::fabs(dotp));
+      const uint32_t ez = (zb >> 23) & 0xff, jz = (zb >> 19) & 15, ed = (db >> 23) & 0xff, jd = (db >> 19) & 15;
+      return (2 * (16 * (int)ez + lg16t(jz)) < 16 * (int)ed + lg16t(jd) + 2160 - 16 * B) ? 1 : 0;
+    };
+    auto mame = [&](float zmax, float dotp, int B) -> int {
+      static const uint8_t t[128] = {0,2,5,8,11,14,16,19,22,25,27,30,33,35,38,40,43,46,48,51,53,56,58,61,63,65,68,70,73,75,77,80,
+        82,84,87,89,91,93,96,98,100,102,104,106,109,111,113,115,117,119,121,123,125,127,129,132,134,136,138,140,141,143,145,147,
+        149,151,153,155,157,159,161,162,164,166,168,170,172,173,175,177,179,181,182,184,186,188,189,191,193,194,196,198,200,201,203,205,
+        206,208,209,211,213,214,216,218,219,221,222,224,225,227,229,230,232,233,235,236,238,239,241,242,244,245,247,248,250,251,253,254};
+      const uint32_t cb = f2u(1.0f * std::fabs(dotp) * 128.0f) >> 8;
+      const int texlod = int((cb >> 8) & 0x7f80) - 0x3f80 + (int)std::lround(128.0 * std::log2(1.0 + (cb & 0x7fff) / 32768.0));
+      const uint32_t iv = f2u(zmax) >> 16;
+      const int fl = (int((iv >> 7) & 0xff) - 127) * 256 + t[iv & 127];
+      return ((-texlod + fl) >> 7) <= -B ? 1 : 0;
+    };
+    struct MP { float p0[3], p1[3], n[3], q0[3], q1[3]; const char *name; };
+    std::vector<MP> polys;
+    // the player's car, s1082's rear window (MAME f5000: z 2.37-2.80, |dotp| 1.89, level -5)
+    polys.push_back({{-0.6f, 0.3f, 2.40f}, {-0.6f, -0.3f, 2.80f}, {0.0f, 0.0f, 0.5f}, {0.6f, 0.3f, 3.78f}, {0.6f, -0.3f, 2.79f}, "rear window, level -5"});
+    // scenery far away (MAME f5000 obj 17: z 110, |dotp| 63.6, level +0.6)
+    polys.push_back({{-20.f, 5.f, 108.f}, {-20.f, -5.f, 110.f}, {0.0f, 0.0f, 0.5f}, {20.f, 5.f, 127.2f}, {20.f, -5.f, 109.f}, "far scenery, level 0"});
+    // |dotp| exactly 0 (normal along x, P0(n) at x = 0): MAME's deepest level, no flag
+    polys.push_back({{-1.f, 1.f, 3.f}, {-1.f, -1.f, 3.f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.f, 3.f}, {1.f, -1.f, 3.f}, "dotp 0"});
+    // the far end decides: near corners at z 2, one far corner at z 64, |dotp| 2 -> level +4
+    polys.push_back({{-1.f, 1.f, 2.f}, {-1.f, -1.f, 2.f}, {0.0f, 0.0f, 1.0f}, {1.f, 1.f, 2.f}, {1.f, -1.f, 64.f}, "far corner decides"});
+    // random: one-component power-of-two normals, z 0.25 .. 2000 (log-uniform)
+    uint32_t rs = 0x2468ace1u;
+    auto rnd = [&]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; };
+    auto ru = [&]() { return (rnd() & 0xffffff) / 16777216.0f; };
+    for (int i = 0; i < 380; i++) {
+      MP m{}; m.name = "random";
+      const float zc = std::exp2(-2.0f + 13.0f * ru());
+      float *pts[4] = {m.p0, m.p1, m.q0, m.q1};
+      for (int k = 0; k < 4; k++) { const float z = zc * std::exp2(2.0f * ru() - 1.0f); pts[k][2] = z; pts[k][0] = (ru() - 0.5f) * z; pts[k][1] = (ru() - 0.5f) * z; }
+      const int ax = rnd() % 3; const float sc = std::exp2((float)((int)(rnd() % 13) - 6)) * ((rnd() & 1) ? -1.0f : 1.0f);
+      m.n[ax] = sc;
+      polys.push_back(m);
+    }
+    // ONE OBJECT, link 2 (each polygon reuses the last one's P0(n), P1(n)), so
+    // polygon i's corners are polys[i-1].q0/q1 (or p0/p1 for the first) and its own q0, q1.
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+    load_identity();
+    d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+    size_t w = 0;
+    std::vector<int> want, want_mame; std::vector<float> zmx, dps;
+    for (size_t i = 0; i < polys.size(); i++) {
+      MP &m = polys[i];
+      if (i > 0) { std::memcpy(m.p0, polys[i - 1].q0, 12); std::memcpy(m.p1, polys[i - 1].q1, 12); }
+      if (i == 0) { w = put_v(w, m.p0[0], m.p0[1], m.p0[2]); w = put_v(w, m.p1[0], m.p1[1], m.p1[2]); }
+      obj[w++] = 0x00020201u;                       // quad, link 2, double-sided
+      w = put_v(w, m.n[0], m.n[1], m.n[2]);
+      w = put_v(w, m.q0[0], m.q0[1], m.q0[2]);      // P0(n): the dot product's point
+      w = put_v(w, m.q1[0], m.q1[1], m.q1[2]);
+      const float zm = std::max(std::max(m.p0[2], m.p1[2]), std::max(m.q0[2], m.q1[2]));
+      const float dp = m.n[0] * m.q0[0] + m.n[1] * m.q0[1] + m.n[2] * m.q0[2];   // one term is non-zero
+      zmx.push_back(zm); dps.push_back(dp);
+#ifdef TB_MIPZ
+      want.push_back(model(zm, dp, MB)); want_mame.push_back(mame(zm, dp, MB));
+#else
+      want.push_back(0); want_mame.push_back(0);
+#endif
+    }
+    obj[w++] = 0x00000000u;
+    d->obc = 0x1000;
+    d->start = 1; tick(); d->start = 0;
+    std::vector<int> got;
+    for (long budget = 0; budget < 4000000 && got.size() < polys.size(); budget++) {
+      tick();
+      if (d->q_valid && d->q_ready) got.push_back(d->q_mipz);
+    }
+    for (int i = 0; i < 400; i++) { tick(); if (d->q_valid && d->q_ready) got.push_back(d->q_mipz); }
+    std::printf("test: R828c, the per-polygon no-mip flag (%zu polygons, %zu quads)\n", polys.size(), got.size());
+    ck("R828c: one quad per polygon", (int32_t)got.size(), (int32_t)polys.size());
+    long set = 0, agree_mame = 0;
+    for (size_t i = 0; i < polys.size() && i < got.size(); i++) {
+      if (got[i] != want[i]) {
+        std::printf("  FAIL R828c poly %zu (%s): zmax %g |dotp| %g q_mipz %d want %d\n", i, polys[i].name, zmx[i], std::fabs(dps[i]), got[i], want[i]);
+        ++fails;
+      }
+      ++checks; set += got[i]; agree_mame += (got[i] == want_mame[i]);
+    }
+#ifdef TB_MIPZ
+    ck("R828c: the rear window is flagged", got.size() > 0 ? got[0] : -1, 1);
+    ck("R828c: far scenery is not", got.size() > 1 ? got[1] : -1, 0);
+    ck("R828c: |dotp| 0 is not", got.size() > 2 ? got[2] : -1, 0);
+    ck("R828c: the far corner decides", got.size() > 3 ? got[3] : -1, 0);
+    ck("R828c: some random polygons flagged", (int32_t)(set > 20), 1);
+    ck("R828c: and some not", (int32_t)(set < (long)polys.size() - 20), 1);
+#endif
+    std::printf("  flagged %ld of %zu; equal to MAME's own (exact logs) on %ld\n", set, got.size(), agree_mame);
+    d->obc = 32;
   }
 
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);

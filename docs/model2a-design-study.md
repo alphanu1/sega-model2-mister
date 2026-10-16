@@ -30682,3 +30682,5089 @@ cannot isolate one corner's dip; the eye can.
 Ben: the half-second frames going into and out of a race are the game's own
 2D loading screen -- no 3D frames there by design, not a stall to fix. The
 release notes no longer list them.
+
+**R819 -- THE MUSIC WAS NOT QUIET AGAINST MAME; THE SPEECH WAS, BY 3-4 dB,
+AND THE MULTIPCM's 6 dB LEVEL STEPS WERE WHY.** R703 item 3: "the background
+music and the game-over samples are too quiet". R703's first reading put the
+suspect inside m2_multipcm (level, pan law or envelope) and not in the mix.
+That was the right place; half of the complaint reproduces against MAME and
+half does not.
+
+THE ORACLE, PER CHIP. MAME 0.289's Lua sound hook gives each device's own
+output before the route gains. sim/sound/mame_m2_sound_levels.lua captures it,
+with every write the sound 68000 makes to the MultiPCMs and the YM and the
+link bytes, over a 200 s game (three coins, start, defaults, no driving: the
+race times out into RESULTS / GAME OVER) and 300 s of attract:
+
+    MAME, dBFS RMS (pcm1 / pcm2 / ym)      attract      race 50-110 s   GAME OVER 120-122 s
+    pcm1  (music)                          -15.9        -20.7           -24.1
+    pcm2  (engine, effects, speech)        silent       -8.2 (2.7% clamped)  -7.5 (6% clamped)
+    ym3438                                 0            0               0
+
+VERIFIED: DAYTONA NEVER VOICES THE YM3438. Its output is exactly zero for all
+500 s; the boot sets every operator to TL 127, and from then on the 68000
+writes the chip ~1,700 times a second, reloading timer B, which paces its
+sequencer. The music is MultiPCM 1 (twenty-odd voices at TL 30-60); the
+engine, effects and speech are MultiPCM 2, keyed at TL 0 (the engine's TL is
+then rewritten ~3,200 times a second, mostly 0-24, with interpolation).
+The game-over words are one sample keyed on TWELVE voices at once, four
+centre, four hard left, four hard right (pcm2 samples 122 then 136); the
+course-select speech is one voice a side, also at TL 0.
+
+A MODEL OF THE REFERENCE, CHECKED AGAINST IT. A C++ port of gew.cpp +
+multipcm.cpp driven by the captured writes reproduces MAME's chip output to
+within 0.03 dB in every window (pcm1 0-200 s -17.58 / -17.58; pcm2 race -8.18
+/ -8.17), with switches for each approximation the RTL makes. Our RTL, driven
+by the same writes, equals that model with all the switches on, -12.04 dB
+(the chip's >> 2), over all 300 s of attract (-25.59 against -25.54). What
+each approximation is worth, on the mean level (verified, model):
+
+                                    pcm1 race    pcm2 race
+    TL as >> (tl >> 4), truncated   +3.47 dB     +2.0 dB
+    no envelope (attack/decay/rel.) -0.07        +0.02
+    pan 6 dB per 2 steps            0.00         +0.01
+    nearest sample, no interp.      -0.03        +0.14
+    no LFO; no TL interpolation     0.00         0.00
+
+So the one approximation that moves level is the total level. MAME's is 0.375
+dB a step and 3 dB a pan step; ours was 6 dB a step, rounded towards loud, so
+TL 16n..16n+15 all played at -6n dB -- up to 5.6 dB hot. The music lives at
+TL 30-60 and got +3.5 dB in a race; the engine and effects, TL 0-24, got
++2.0; the speech, at TL 0, got nothing. Against MAME the speech fell under the
+music, and the music rose slightly over the effects.
+
+tb_m2_mpcm_level part C (the RTL itself on MAME's register stream, 2 s windows,
+0-130 s, ours clamped to one voice as MAME's stream is; VERIFIED):
+
+                                    before (6 dB TL)          after
+    pcm1 against MAME               mean +3.29, worst +4.96   mean -0.09, worst +0.83
+    pcm2 against MAME               mean +1.94, worst +5.73   mean +0.21, worst -1.03
+    pcm2 - pcm1 against MAME        mean -1.54, worst -4.56   mean +0.33, worst -1.11
+    GAME OVER, speech over music    +12.3 dB (MAME +16.5)     +16.6
+    course select, 22-40 s          2.4-3.4 dB under MAME     0.2-1.1 over
+
+THE FIX (m2_multipcm, THIRD_PARTY.md): each side is one attenuation in 0.375
+dB units, TL + 8 x pan step, split into a 6 dB shift and one of sixteen
+fractions round(256 x 10^(-0.375k/20)) -- 0.03 dB from exact; 0.02 dB an
+octave from MAME's 6.0, so 0.23 dB at the deepest attenuation used. An 8 x 10
+multiply per side on the fetched byte, `multstyle = "dsp"`; one more register
+stage between multiply and add (two edges of the seven R738 proved). Unity is
+the old {byte, 8'h00} exactly; MAME's mutes kept. Part A keys a synthetic
+square wave (no ROM) at TL 0..127 and every pan: 352 checks, 0 off MAME's
+formula, worst -0.36 dB at TL 100 pan 5 (19 LSB); the old law fails 292 of
+them, worst +5.62 dB at TL 15. Part B keys 1..28 voices at TL 0: linear to
+four voices (32,512), then saturates at 32,767 / -32,768 on every count to 28
+with exactly 20 sign changes in 640 samples -- no wrap.
+
+THE BACKGROUND MUSIC: NOT REPRODUCED, AND THIS MOVES IT THE OTHER WAY. In a
+race MAME puts the effects 12.7 dB over the music. Our board, as built, had
+them 0.4 dB under that (the music a little hot) and now has them 0.6 dB over
+(0.3 with MAME's chip clamp applied): the music drops ~1 dB against the engine
+with this change, to within 0.6 dB of MAME. At GAME OVER the speech goes from
+3.0 dB under MAME's balance to 1.3 dB over it. If the race music still sounds
+quiet on the board, the cause is not a difference from MAME in the sound
+board's computation, which part C covers end to end, and nothing here is an
+oracle for changing it. (OPTION, not taken: clamping each chip's output at one
+full-scale voice, as MAME's stream does, would put the race within 0.3 dB and
+GAME OVER at parity -- the speech 1.3 dB quieter than this change leaves it --
+for a compare in clamp16 and no other cost.)
+
+THE MIX AND CLIPPING (verified, final mix sat16(2 x (pcm1 + pcm2)) against
+MAME's 0.5 + 0.5): the saturation removes at most 0.13 dB of RMS anywhere;
+clipped samples before / after: race 0.10% / 0.03%, race end 0.34 / 0.08,
+GAME OVER 0.38 / 0.37, its tail 0.15 / 0.15 -- nothing new clips. The speech
+still sums past full scale (pre-saturation peak 58,536); MAME clamps the same
+speech harder, at the chip (6% of its samples). Ours clamps a chip at four
+voices and the mix at two; MAME clamps a chip at one. Kept: the firmware
+stacking twelve voices argues the silicon had headroom (INFERRED), and the
+difference is +0.3-1.4 dB on stacked pcm2 content only.
+
+R267, CORRECTED. Its "FM peaks at 5,120" was jt12 settling in the first 0.3 s
+of boot (MAME's own YM writes replayed into jt12: 5,120 then zero); the FM is
+silent in Daytona, and comparing that transient's peak with the 0.30 : 0.5
+route gains was not a balance measurement. Its x2 is right for another reason:
+our chip is MAME's / 4, so x2 is MAME's 0.5. ALSO VERIFIED, NOT CHANGED: the
+YM path is ~20 dB hot against MAME -- one operator at TL 0 is 9,872 peak /
+5,951 RMS from jt12 and 5,461 / 3,852 from ymfm (MAME, Lua-written patch), and
+the board mixes jt12 at 2 where MAME mixes ymfm at 0.30. Silent in Daytona;
+it matters to any game that voices the FM (Model 1's notes already ask for
+the YM at MAME's 0.30, on the assumption that jt12 and ymfm agree; they
+differ by 3.8 dB RMS a voice).
+
+ALSO VERIFIED, NOT CHANGED: the sound 68000 reads 0xC00001 bit 0 in its
+note-on path (`btst #0, $c00001` at 0x9CA) to choose one of two velocity
+curves. MAME maps nothing there and reads 0x00; our board answers 0xFFFF (the
+unwritten-memory rule) and so takes the other curve. Driven by MAME's link
+bytes the board plays the attract tune's first 426 notes in MAME's order on
+the same samples, with soft notes 1-5 TL steps apart. Measured by forcing the
+read to 0xFF in MAME: music +0.03 to +0.32 dB, effects within 0.06. Which value
+the PCB returns (a jumper?) is not known; MAME is not an oracle for an
+unmapped address.
+
+MODEL 1: tools/model1-ref @ 0b5d04f carries the same m2_multipcm and
+m2_sound_board (copied from here), so the same TL law. Its docs record a 6 dB
+overall shortfall (>> 2 against 0.5) fixed long ago and no music/speech
+balance complaint; its Virtua Racing music is FM, which is where its YM-gain
+note applies. No independent oracle for this from Model 1.
+
+AREA (INFERRED, not mapped -- Quartus was in use): per chip, two 8 x 10
+multiplies in one DSP block (18 x 18 mode), 16-entry fraction tables, two 8-bit
+attenuation adders, two 18-bit shifters by 0..11 replacing a 16-bit shifter by
+0..7 and two pan shifters, ~40 more flip-flops: about +10 to +40 ALM a chip,
++20 to +80 in all, and +2 DSP (87 -> 89 of 112). If Quartus builds the
+multiplies in logic instead it is ~+350 ALM, which does not fit (412 free at
+s1017): the map must confirm 2 DSP. NEEDS: quartus_map --analyze_file on
+m2_multipcm.sv and m2_sound_board.sv, a map for the DSP count and ALM, then a
+fit. lint_top clean; make lint_idx: the same 25 pre-existing findings in these
+two files, none new; test_m2_sndboard, test_m2_sndlink, test_fx68k,
+test_m2_mpcm_level PASS.
+
+Not built, each under 0.2 dB of level on Daytona: the envelope, LFOs, TL
+interpolation (reg 5 bit 0), linear interpolation between samples.
+
+**R820 -- THE SOUND BOARD's MUSIC RAN 4% FAST: THE YM3438 WAS AT 8.333 MHz,
+NOT 8.** MAME: `YM3438(config, m_ym, 16_MHz_XTAL / 2)` in segam1audio.cpp;
+-listxml clock="8000000". m2_sound_board's first version said so ("48/8 is six
+exactly") and used /6 -- right only at 48 MHz. At 50 it was 8.333, and R227
+carried 8.333 forward as the part's own clock ("8.333 MHz at any core clock"),
+as did R680. The 68000 sequences the music on the YM's timer B, so every
+tempo was 4.2% fast. VERIFIED in simulation: the whole sound board (fx68k,
+jt12, both MultiPCMs, cache, rate stage) driven by MAME's own link bytes at
+MAME's times played the attract tune's first 426 key-ons in MAME's exact order
+of samples, 3.8% sooner (18.61 s against MAME's 19.32 s). Now YM_NUM / YM_DEN
+= 8 / TICK_DEN: 8 MHz at any core clock. After, same bench, 12 s: 133 of 133
+key-ons in MAME's order, 11.933 s against MAME's 11.923 -- tempo 0.999 of
+MAME's (VERIFIED). The FM's pitch moves by the same 4% where a game voices it
+(not Daytona). Area: the accumulator loses a bit (240 -> 80), ~0 ALM.
+
+BOTH, ON THE WHOLE BOARD (verified, the same full-board bench, attract
+3-11.5 s): music -16.16 dBFS against MAME's -16.11 (x4, MAME's units); the
+board's mix -22.18 dBFS against MAME's speaker -22.13, peak 16,070 against
+15,190. Before both changes the same board was +3.1 to +3.8 dB on the music
+and 3.8% fast.
+
+**R818 -- THE AREA AUDIT AFTER s1017: WHERE THE ROOM IS, PRICED. THE TILEMAP'S
+LINE BUFFERS TAKE 16 M10K, NOT 32; THE TEST-IMAGE COPY ENGINE LEAVES THE
+RELEASE; THE TEXEL SPEED FEATURES ALL STILL EARN THEIR AREA.**
+
+s1017 (7932d11, the 20261013 release) at 80/40: 41,498 / 41,910 ALM (99%),
+4,191 / 4,191 LABs, M10K 553 / 553 with block memory BITS at 76%. Wanted, in
+Ben's order: the framework audio filter back (R788, ~430 ALM placed), fewer
+tile overruns (a bigger m2_char_cache, or the glyph port's SDRAM priority),
+R813's span cull (SPCULL, <= ~170 placed), mip-mapping (R665, large).
+
+*Method.* Whole-design quartus_map 17.0 from Model2.qsf, one at a time
+(~160-240 s each), against the s1017 map -- reproduced exactly at 8172b41
+(40,562 ALMs-needed estimate, 57,765 ALUT, 48,866 registers, 4,297,979 bits:
+map is deterministic for identical input). Draw time on tb_m2_raster3d, the
+core's configuration as R813 (FTB, PXC, FRB 2, M2COV, SPLIT_TRI, FB_DDR3 +
+wcomb, TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16, TXLW8, UZF 4, step 1), MAME's
+r57 / r66 / apk / rpk / f2200 at L1 / L12 / L30; HEAD reproduces R813's
+"clear under draw" row to the 0.01 ms. No fit was run: block counts below are
+by construction from the RAM shapes unless the fit report is cited, and
+placed ALM is estimated (the map estimate and R798's calibration bracket it;
+R788's filter was +700 in this map and 432 placed in s927 -- the map
+estimate is not a placed number in either direction).
+
+*Believed:*
+  1. M10K is exhausted (553 / 553) and only a smaller cache somewhere could
+     pay for a larger char cache.
+  2. The texel speed features of R789 / R796-R798 might be surplus now the
+     draw has headroom (R814: worst draw ~15.6 ms at 80 MHz against 17.39).
+  3. There is debug-only logic still synthesised in the release.
+
+*Now known -- VERIFIED (measured):*
+  1. THE FIT REPORT'S 553 IS PACKED, NOT THE DEMAND. s1017's RAM summary lists
+     567 logical blocks; the fitter already shares blocks between RAMs that
+     have matching addressing (uvt_n + vtx_n 3 each, lbe + lbo 4, the loader's
+     three FIFOs 1, the PCM rate pairs 2). 18 more are Quartus's own
+     shift-register replacement (altshift_taps: TGP pop 3, jt12 7, shadowmask
+     2, dv_hs1 2, five others 1 each, 3,487 bits in 18 blocks). Those are
+     ELASTIC, as R313 found: turning recognition off for seven of them
+     (instance assignments) freed 226 bits net -- Quartus put five other
+     shift registers into M10K instead (audmix_l a1, emu vil_s, TGP pint,
+     jt12 egpad, vga_scaler csync1). Off globally
+     (AUTO_SHIFT_REGISTER_RECOGNITION OFF): all 3,487 bits leave M10K for
+     +3,409 registers, -202 ALUT, +450 map estimate.
+  2. THE WORST-USED MEMORY WAS THE TILEMAP'S LINE BUFFER: 32 x (128 x 15),
+     one M10K each, 18.8% full -- 26 blocks of air. The bank (written at
+     `bank`, read at `~bank`) is now the top ADDRESS bit of one 256 x 15
+     memory per (layer, lane): 16 memories, one M10K each by shape (256 deep
+     is the x40 mode). Map: block bits identical (4,297,979), m2_video own
+     logic 1,143 -> 1,008 ALUT (the 2:1 bank select after the read is gone),
+     design estimate 40,562 -> 40,480. Inline in the generate it was NOT
+     inferred -- 61,440 registers, no warning, (* ramstyle *) or not (the old
+     128-word arrays were only ever recovered from registers after
+     elaboration, "mem[0][14]__7"); as a module of its own (m2_lbuf_ram) it
+     infers as 16 altsyncram. Equivalence: the old and new m2_video side by
+     side (a miter, random tile / char / palette contents, char latency 0-90
+     including 565-706 overruns a run): every output equal on every cycle, 3
+     seeds x 4 latencies x 2 frames; tram and char requests identical; the
+     palette address differs only in the cycle after a flip (hcnt =
+     H_TOTAL - 1, blanking) and never reaches the picture. Mutations caught:
+     read bank not inverted (585,782 visible cycles differ), write bank
+     dropped (337,662). lint_top clean; lint_idx 146 candidates, the same 146
+     as 8172b41; test_m2_video_timing 39/0; test_m2_video_frame SKIP (no
+     dumps).
+  3. DEBUG-ONLY IN THE RELEASE: the copy engine for the 2D tilemap test image
+     (the "small" image, a development fixture no MRA loads) and its 96-byte
+     staging array xlat_stage (1 M10K). Under M2_NO_DEBUG (TESTIMG 0) cp_done
+     rises with rom_loaded -- on a game image the same cycle as before,
+     since game_image is rom_loaded there -- and every copy branch is gated.
+     Gating only cp_done did NOT remove it: the commit phase stayed reachable
+     to synthesis and xlat_stage still inferred (map, block bits unchanged).
+     Gated throughout: -768 bits (xlat_stage), emu's own logic 869 -> 744
+     ALUT and 869 -> 741 registers, design estimate -145. Sweeper (SWEEP_EN
+     0), overlay and stream were already gone.
+  4. Items 2 + 3 together (8172b41 + both): 40,562 -> 40,335 estimate (-227),
+     ALUT 57,765 -> 57,456 (-309), registers 48,866 -> 48,735 (-131), M10K -17
+     (16 + 1, by shape). DSP 87 unchanged.
+  5. THE TEXEL SPEED FEATURES ALL EARN THEIR AREA. Every answer identical to
+     HEAD in all variants (2.99 M common fetches, 0 differ, frame hash 15 of
+     15 each). Draw at 80 MHz, ms, L30 (L12 in brackets where it matters):
+                      r57    r66    apk    rpk   f2200   map vs HEAD
+     HEAD            11.08  11.33  13.54  14.00  12.01
+     TXLW8 0         11.73  12.45  15.05  15.47  13.60   +270 est, +188 ALUT,
+                                                         +295 regs, +14,336 bits
+     TXNS 2          13.07  13.09  16.49  14.87  13.11   (not mapped alone)
+     TXK 8           12.66  13.40  15.50  16.24  14.56   (small: cdc + span_tex)
+     TXNS 2 + TXK 8  14.67  15.09  18.32  17.08  15.65   -230 est, -180 ALUT,
+                                                         -337 regs, ~0 M10K
+     + TXLW8 0       15.82  16.70  20.81  18.91  17.64   (= R782's state)
+     TXLW8 0, IB 10  14.39  15.40  20.99  19.91  20.82   texel cache halved,
+                                                         -12..-13 M10K
+     The board's worst draw is ~11% above the bench's worst L30 list (15.6
+     vs 14.00 ms), so a removal costing more than ~+6% on the worst list
+     passes 16.5 ms. All do: 128-bit lines +6..+13% (and since R798 they are
+     CHEAPER than 64-bit lines -- the slots' lines are LUT RAM, LW8 0 puts
+     them back in flops and doubles the tags); two slots +6..+22% (~19 ms on
+     the board); eight credits +14..+21%; both +22..+35% (~21 ms). At L1 the
+     128-bit lines cost 2-5% (lw0 7.50 8.46 11.06 against 7.81 8.91 11.27) --
+     they pay only when the bus is contended, which is the board's case.
+  6. R813's cull on today's tree: span_tex +129 ALUT / +23 registers, design
+     estimate +66; draw L30 -2.4..-9.4% (10.27 10.26 13.22 13.02 11.63), L12
+     -3.9..-12.8%, answers identical (2,991,041 / 0, hash 15 / 15) -- R813's
+     numbers to the 0.01 ms.
+  7. The framework audio filter (MISTER_DISABLE_AUDIO_FILTER removed): IIR
+     +701 ALUT / +353 registers, +8 DSP, design estimate +700 (s927's fit
+     placed it at 432 ALM).
+  8. An analog-only build (MISTER_DEBUG_NOHDMI, a sys_top macro, no patch):
+     -3,861 estimate, -5,451 ALUT, -7,068 registers, -279,687 bits (ascal 35,
+     HDMI OSD 4, shadowmask 3, vga_scaler 1 by the fit report: ~43 M10K), -13
+     DSP. No HDMI at all.
+  9. What Daytona's i960 runs of the FPU (MAME 0.289 trace windows of R817:
+     5 attract + 4 race, 6 frames each, 1.68 M instructions outside the
+     frame-sync spin): FP-class instructions are 1.4% (attract) / 1.5%
+     (race) of busy instructions -- cvtri 0.45%, subr 0.40%, addr 0.29-0.31%,
+     cmpr 0.12-0.24%, cvtzri 0.03-0.08%, scaler 0.017%, cvtir 0.015%. NO
+     mulr, divr, sqrtr, logbnr, roundr or movr in any window, and every FP
+     instruction reads and writes general registers (m-bits): fp0-fp3 are
+     never a destination. i960_fpmisc's cost is one shared 64-bit datapath:
+     restricting its op set in a standalone map (STAGED, registered outputs)
+     moves nothing (1,690-1,701 ALUT for every subset).
+ 10. The char cache with (* max_depth = 2048 *) on cdata: +69 ALUT in the
+     map (the 4:1 read select); the data RAM is generated as 2048-deep slices
+     (256 primitives, 4 x 64) instead of 8192-deep (64).
+
+*Now known -- INFERRED (not measured; each says what would settle it):*
+  a. max_depth 2048 packs the char cache's 8192 x 64 into 2048 x 5 blocks:
+     13 x 4 = 52 against 64 (-12; the fitter used x5 packing for uvt's 2048 x
+     192 -- 41 blocks, under the 48 of x4). A fit settles it.
+  b. Doubling the char cache (IDX_BITS 14) as written: data 16,384 x 64 at
+     8192-deep slices = 128 blocks, tags 16,384 x 3 = 6: +66 M10K over today's
+     68. With max_depth 2048: 8 x 13 = 104 + tags 8 = ~112: +42..+44, for an
+     8:1 select (~+140 ALUT). R283's measurement is the only evidence of the
+     gain: 128 KB 694 misses / 12 overruns a frame against 64 KB 2,146 / 51.
+  c. A single-precision FPU datapath. The core decodes only the single
+     forms; for single operands and general-register destinations, double
+     arithmetic narrowed to single equals single arithmetic for + - x / sqrt
+     (53 >= 2 x 24 + 2) and is exact for cvt / cmp / round / logb / scale. So
+     on all traced code the answers are the same; they differ only if the
+     game writes fp0-fp3 (never seen). fpadd + fpmisc + fpmul + fpdiv +
+     fpsqrt are 2,304 ALM placed in s1017 (3,645 ALUT); at 24-bit mantissas
+     roughly half: ~-1,000..-1,250 placed. A study-level decision (section
+     2.2 chose 64-bit to follow MAME's doubles); the benches and tb_i960_rom
+     would verify it.
+  d. One MultiPCM datapath for both chips (each is 745 ALM; 28 slots x 8
+     ticks at a 10 MHz enable, cycle-deterministic): ~-500..-600 placed if it
+     runs the 56 slots at twice the rate with its state RAMs (MLAB) doubled.
+     The ROM fetch window per slot halves -- R738's timing and the PCM fetch
+     cache decide whether it holds.
+  e. divr and sqrtr (never traced) sharing one iterative unit: ~-150..-200.
+  f. M10K to MLAB where a block holds almost nothing: span_q 32 x 252 (7
+     blocks -> 13 MLAB LABs), sk_mem 20 x 163 (5 -> 9), texel_cdc q 16 x 144
+     (2 -> 8), ascal's i/o_dpram 32 x 128 (4 -> 7 each, a sys/ patch). Each
+     MLAB is a whole LAB at 100% LABs; R684 moved span_q the other way for
+     exactly that reason.
+  g. The SDRAM's glyph port (3) ahead of the i960 in the priority class: no
+     area; the glyph fetch's worst latency in the saturating bench is 398 of
+     a ~6,600-cycle line (R796). Whether the overruns are miss-bound or
+     fetch-engine-bound at today's clocks is not measured (m2_video's own
+     note says four dense layers want ~6,456 cycles a line against ~3,280);
+     a bigger cache does nothing for the second.
+
+*Framework, without a patch:* MISTER_DOWNSCALE_NN, _DISABLE_ADAPTIVE,
+_DISABLE_YC, _DISABLE_ALSA are set; _SMALL_VBUF saves DDR3, not FPGA;
+_DUAL_SDRAM takes the VGA pins (no analog video, no CRT MRA); _DEBUG_NOHDMI is
+item 8. QSF instance assignments (AUTO_SHIFT_REGISTER_RECOGNITION) reach
+framework registers with no patch to sys/. With a patch (fit-report ALM):
+pll_hdmi_adj 453 (vsync_adjust 1/2 stop working), video_calc 317 (the
+resolution Main uses for scaling, vsync_adjust and the info line), vga_osd
+462 + 4 M10K (no menu on analog), shadowmask 145 + 3 (no HDMI masks),
+vga_scaler_out 135 + 1 (vga_scaler=1 gone), aud_mix 160 (audio_mix gone),
+ascal pal1_mem 2 M10K (framebuffer palette; unused without MISTER_FB, not
+tried). None is free to a user.
+
+*So, against the asks (placed ALM; the map estimate in brackets):*
+  * R813's cull (~+66 est, <= ~170 placed) -- items 2 + 3 (-227 est, -309
+    ALUT) cover it in the same currency. The measured next build.
+  * The audio filter (~430-620 placed, +700 est) -- items 2 + 3 cover about
+    a third of it. Nothing measured and free covers the rest; c (FPU
+    single precision) or d (one MultiPCM) would, each alone. Or the filter
+    goes into an analog-only RBF where room is not the question (item 8).
+  * A char-cache doubling (+42..+66 M10K) -- items 2 + 3 give 17. The rest
+    needs a+b's packing (+~140 ALUT) and either the 18 shift-tap blocks
+    (+3,409 registers) or MLAB moves (f) -- ALM the design does not have
+    until c or d lands. Measure g first: it is free.
+  * Mip-mapping (R665) is out of reach of anything listed short of c + d.
+
+*Changed (uncommitted, sm2-builds/sm2-area-8172b41):* rtl/video/m2_video.sv
+(R818 line buffers, m2_lbuf_ram), Model2.sv (TESTIMG). Tools and numbers:
+build/area-r818/ (miter, bench and map scripts, map summaries, draw table).
+
+*Not verified:* the fit and its timing for items 2 + 3 (by construction:
+the line buffer's read address gains an inverter on a register; the copy
+engine only loses logic); block counts not read from a fit report; every
+"placed" figure; the board.
+
+**R818 -- DECISIONS (Ben, 2026-10-13): RECORDED, NO ACTION YET.**
+  * R813's span cull (SPCULL 1): draw -3..-13% (L12), +66 ALM estimate. PAID
+    FOR by R818's savings (-227 estimate). Not switched on yet; it is the
+    next change after the audio build (R819/R820) is proven on the board.
+  * The framework audio filter back (R788): ~+700 ALM estimate (+8 DSP; 432
+    placed in s927). NOT paid for: needs the single-precision i960 FPU
+    (~-1,000..-1,250 placed) or one MultiPCM serving both chips (~-500..-600).
+    No action on either for now.
+Next, at Ben's call: TEST one MultiPCM shared by both sound chips (R821) --
+measured equivalence and area first, nothing switched in until both hold.
+
+**R822 -- THE GLYPH FETCH FIRST WITHIN THE SDRAM PRIORITY CLASS (TILE
+OVERRUNS).** The R814 captures show tile overruns -- a scanline the fetch
+engine does not finish is shown twice (R85, m2_video Q_RUN) -- in 55-62% of
+frames, 5-12 lines a frame, worst 75, unchanged by the 8 KB i-cache (R815).
+Port 3 (the glyph cache's misses) has been in the class since R639, but the
+class grants its LOWEST set port, so it waited behind the i960 (1, R766) and
+the texel port (2). Its traffic is small (~558 of a 3,280-cycle line, R283),
+so the cost is queueing per miss, not bandwidth. m2_sdram gains PRI_TOP
+(default 0 = unchanged): a ready PRI_TOP port is granted before the rest of
+the class; Model2.sv sets port 3. Cost: one AND (PRI_TOP is a constant
+one-hot) and a 2:1 select in front of arb_sel on clk_mem.
+Bench: test_m2_sdram13 gains a PRI_TOP = port 3 run: 2,279,440 checks, 0
+fails, 0 violations, max latency 507 (as without it); test_m2_sdram,
+test_m2_sdram128, test_m2_cpu_sdram PASS; m2_cpu_real 11.26 CPI unchanged.
+Quartus parse clean. NOT YET MEASURED where it matters: whether overruns fall
+needs the 'G' record (a why build); the area agent's caution stands -- m2_video
+notes four dense layers can want ~6,456 cycles against ~3,280, and no SDRAM
+priority helps that.
+
+**R818 -- REQUIREMENT FOR THE SINGLE-PRECISION FPU, IF IT IS EVER DONE (Ben,
+2026-10-13).** Model 2A will be its own branch (never merged; eventually its
+own repository) and may need the full FPU. So a reduced FPU must be a
+COMPILE-TIME PARAMETER (e.g. FP_EXT: 1 = the full extended/double datapath,
+0 = reduced), set per branch -- the same pattern as IC_HUF / IC_ER / PF2W
+(R817) and SPCULL (R813): one RTL, the full path kept and tested, a one-line
+switch. And it must TRAP, not compute wrongly, on any instruction or fp0-fp3
+use the reduced unit does not cover. The evidence for "never used" is
+Daytona's traced code only (R818); other Model 2 games (Virtua Cop, Desert
+Tank) must be traced, or built with FP_EXT 1. Still no action (R818
+decisions).
+Ben: Virtua Cop and Desert Tank need different I/O boards and will be
+separate cores anyway -- so this core is Daytona-only, which is exactly what
+R818's traces cover, and every other core sets FP_EXT for itself.
+
+**R819/R820/R818/R822 BUILT.** s1019/s1020 (016ef91, audio only) missed clk_sys
+in the geometry FP pool and the TGP divider; s1021-s1023 (fc1b5b5, + R818)
+missed by 0.2 ns, each fit then segfaulting in Quartus AFTER "Fitter was
+successful" (an exit crash, not memory). s1024-s1026 = 22887ae (s1017 +
+R819/R820 audio + R818 area + R822 glyph priority, 80/40): s1024 closes,
+core >= +0.224, hold >= +0.218, HDMI -0.579; 41,330 ALM, M10K 539/553 (R818's
+-14 blocks visible in the fit), DSP 91/112 (R819's four multiplies). RBF
+build/Model2_20261013_s1024_audio.rbf a6d3ef97. Not yet on the board.
+s1024 on the board (Revision A): Ben -- the sound "seems good" (R819/R820),
+but "still some tile overruns" are visible: R822 alone did not cure them.
+Next: a why build of 22887ae to count them against s1009's (57-62% of
+frames), and a simulation of the fetch engine at zero char latency to tell
+the queueing (R822's premise) from the engine's own per-line budget.
+
+**R823 -- TILE OVERRUNS ARE GLYPH-CACHE MISS BURSTS, NOT THE ENGINE'S LINE
+BUDGET. A FOUR-BANK LINE-BUFFER RING, WHICH COSTS NO M10K, REMOVES THEM IN
+SIMULATION UP TO ~45 CYCLES OF PORT-3 LATENCY.** (R822 asked for this
+measurement.)
+
+*Believed:*
+  1. m2_video's own note (R818 g): four dense layers need ~6,456 cycles a line
+     against ~3,280. If that were the limit, no memory priority or cache size
+     could help.
+  2. R822's premise: the cost is the glyph port queueing behind the i960 and
+     the texel port.
+
+*Method.*
+  * Data: MAME 0.289, Daytona Revision A, dumped with
+    sim/video/mame_m2_ovrdump.lua. 19 bursts of 6 consecutive frames each.
+    - 9 from attract: race views, the VR text screens, the title.
+    - 10 from a coin-up: circuit select, mission select, "GENTLEMEN START",
+      the rolling start, a race (4 points), results and the title.
+    - Each frame is tile RAM. char RAM is dumped once per burst; the write tap
+      saw no char writes in any dumped frame.
+  * The DUT is m2_video plus m2_char_cache, IDX_BITS 13 as shipped.
+  * Clock: clk_mem with the board's 16/100 pixel enable. A line is 4,100
+    cycles.
+  * Port 3 is served by a model: one transaction at a time, the request must
+    drop between transactions, and the latency is L or L + U[0, J].
+  * Warm-up: 1 frame, which is also the cold cache. Measurement: 6 frames per
+    burst, 114 in all.
+  * Counting:
+    - Overruns are counted on VISIBLE lines, as any line_start that arrives
+      while the sequencer is busy.
+    - The DUT's own counter also counts the 40 blanking lines, but only
+      counts line_starts that land in Q_RUN. A line_start that lands in a
+      layer's setup states (Q_HSCR..Q_MASK_W, Q_NEXT: ~19 cycles a layer) is
+      a lost line that the counter does not see. Net: 8.86 by the DUT against
+      9.03 by this count, a frame, at L = 30. The board's count is therefore a
+      few percent low.
+  * Bench: tb_ovr (the scratch harness). The committed form is
+    test_m2_video_ovr.
+
+*Now known -- VERIFIED (measured, simulation):*
+  1. THE ENGINE FITS WITH HALF THE LINE TO SPARE.
+     - At L = 0, and with a perfect memory that bypasses the cache, there are
+       0 overruns on every scene.
+     - Lines take 1,790-1,800 cycles on average; the worst is 2,107, which is
+       51% of 4,100.
+     - Per 8-pixel column:
+       - 6 cycles when the per-line 16-entry cache hits: ~192 of the ~252
+         columns a line.
+       - 9 cycles when the glyph cache hits: ~50 columns a line.
+       - ~11 cycles plus the memory when it misses: 8-10 columns a line.
+     - The sequencer adds 76 cycles a line, about 19 per layer.
+     - m2_video's 6,456 / 3,280 is the serial engine at 80 MHz, and is stale.
+  2. LATENCY IS THE LEVER. HEAD, fixed L, overruns per frame (% of frames
+     with any):
+
+     | L      | 0, 12 | 20         | 30        | 45         | 60         | 90         |
+     |--------|-------|------------|-----------|------------|------------|------------|
+     | HEAD   | 0     | 1.50 (24%) | 9.0 (57%) | 30.6 (74%) | 43.0 (84%) | 62.6 (98%) |
+
+     - With jitter, 14 + U[0, 30] (mean 29): 8.0 per frame, in 57% of frames,
+       worst 34.
+     - 14 + U[0, 50] (mean 39): 23.3, 73%.
+     - Near L = 30 the slope is ~1.5-2 overruns a frame per cycle of latency.
+     - Demand misses are 2,056 a frame at 64 KB. R283's board figure at 64 KB
+       was 2,146.
+  3. THE CAUSE IS A 4-LINE BURST ON ONE LAYER.
+     - Tilemap 2 is the sky or picture layer. Daytona runs pair 2/3 in window
+       mode 1.
+     - It misses on all ~60-63 columns of a line that enters a new 4-row group
+       of its tiles, then hits on the next 3 lines. A demand line holds 2 glyph
+       rows and its sibling holds 2 more.
+     - Race 1 at L = 30:
+       - Miss lines are 2 of every 8. They average 30.4 misses (63 at worst);
+         the other lines have 0-2.2.
+       - The worst line takes 5,491 cycles. Of these, tilemap 2 takes 4,261,
+         and 3,879 of those are waiting. The 3 lines after it take 1,792.
+     - A miss costs 62-69 cycles at L = 30, which is 2L + ~6. The next
+       column's demand fetch waits for the previous miss's sibling fill,
+       because the port has one transaction in flight.
+     - Over 4 lines the work is ~2,700 cycles a line. Only the peak exceeds
+       4,100.
+     - The 64 KB direct-mapped cache cannot hold that layer from frame to
+       frame, so these misses recur every frame. Demand misses per frame:
+
+       | Cache            | Misses | Overruns at L = 30 |
+       |------------------|--------|--------------------|
+       | 64 KB (shipped)  | 2,056  | 9.0                |
+       | 128 KB           | 839    | 2.23               |
+       | 256 KB           | 87     | 0.21               |
+
+     - By scene, at 14 + U[0, 30]:
+       - The attract race views overrun 9-34 a frame, in 100% of frames.
+       - The VR text screens: 4-10.
+       - The rolling start: 25.5. Race point 1: 20.2. GENTLEMEN: 2.3.
+       - Zero on the menus, the title, results and race points 2-4.
+  4. THE FIXES, measured on all 114 frames. Each cell is overruns per frame /
+     % of frames with any / worst frame.
+
+     | Variant (cost)                       | 14+U[0,30] | 14+U[0,50] | L 45        | L 60        | L 90        |
+     |--------------------------------------|------------|------------|-------------|-------------|-------------|
+     | HEAD                                 | 8.04 57% 34 | 23.3 73% 69 | 30.6 74% 73 | 43.0 84% 102 | 62.6 98% 134 |
+     | SIBLING 0 (cache, no area)           | 1.11 11% 25 | 6.86 37% 38 | 12.5 53% 59 | 21.9 64% 76 | 66.0 82%    |
+     | LB_RING 1 (m2_video, 0 M10K)         | 0          | 0.42 3% 12 | 0.35 3% 10  | 1.91 25% 17 | 19.3 52%    |
+     | LB_RING 1 + SIBLING 0                | 0          | 0          | 0           | 1.11 9% 18  | 17.7 44%    |
+     | IDX_BITS 14, 128 KB (+42..66 M10K)   | --         | --         | 12.2        | --          | --          |
+
+     IDX_BITS 14 at L = 30 gives 2.23.
+
+     Further detail:
+     - Queue model (14 + U[0,6], plus U[0,80] with p = 0.6; mean 41): HEAD
+       26.1, SIBLING 0 9.9, LB_RING 0.30, both 0.
+     - Overruns first appear at L ≈ 20 for HEAD, ≈ 45 for LB_RING and ≈ 60
+       for both.
+     - SIBLING 0 roughly doubles the demand misses (3,884 a frame) but issues
+       the same SDRAM transactions: 3,884 against 2,056 + 2,056 sibling fills.
+  5. EQUIVALENCE: make test_m2_video_ovr. Shipped and variant run side by
+     side, each with its own glyph cache and port 3.
+     - In every frame where neither overran, every visible pixel's palette
+       index matches. Every glyph a cache returned is checked against char RAM.
+     - Synthetic scenes: sky (4,096 distinct tiles scrolling) and random tile
+       RAM, both progressive and interlaced. Both LB_RING 1 / SIBLING 1 and
+       LB_RING 1 / SIBLING 0 PASS.
+     - The variant at 30 cycles against the shipped path at 0 matches.
+     - On all 19 MAME bursts, the variant at 30 and at 45 against the shipped
+       path at 0 gives 76 runs, 0 pixels differing and 0 wrong glyphs.
+     - Default parameters against 8cde963, as a miter with HEAD's m2_video and
+       m2_char_cache renamed: every visible pixel and the overrun count are
+       equal in every frame, including frames that overran (sky at L 0-90, and
+       random with jitter).
+     - lint_top clean. Verilator -Wall on m2_video: the same 10 warnings as
+       HEAD under both settings. lint_idx: the only m2_video entry is the
+       pre-existing xlat_tbl. test_m2_video_timing 39/0 PASS.
+       test_m2_char_cache PASS. test_m2_video_frame PASS on a MAME title
+       dump.
+  6. MODEL 1 (tools/model1-ref 0b5d04f, up to date with the local repo) HAS
+     NO HEADROOM TO COPY.
+     - m2_tile_fetch is a fork of m1_tile_fetch: the same two FSMs with a
+       one-column hand-off and one request in flight.
+     - Glyphs come from SDRAM port p1 with NO cache. The only reuse is a
+       one-entry repeat. Reads are 32-bit (blen 2).
+     - Two banks, rendering one line ahead across the whole line. It does not
+       fetch in blanking only and skips nothing.
+     - clk 80 MHz gives 3,280 cycles a line.
+     - It overruns too: ~1.7 a frame on hardware (findings.md:2813).
+       HANDOFF.md:3113 says "18 cycles ... still misses 9,434 deadlines ... not
+       memory contention", and a strict-priority arbiter there "moved the
+       figure by nothing".
+     - Two glyph-cache attempts there were reverted on hardware: a second port,
+       and a next-scanline cache.
+     - The board difference that matters: with no cache Model 1's demand is
+       uniform, while ours is cache-shaped and therefore bursty. That is why
+       buffering is the lever here.
+     - R85 parked a four-bank buffer on "burstiness 1.87x". That figure counted
+       requests per line, not misses times latency. Misses run 63 at peak
+       against a mean of ~8, roughly 7.5x.
+
+*Side finding -- VERIFIED in simulation, latent on Daytona:*
+  * m2_video's Q_HSCR_W reads hscr from the PREVIOUS sequencer address.
+    - The tile RAM registers its address (m2_tdp_ram2c, R648).
+    - Q_HSCR sets the address and Q_HSCR_W takes tram_data the next cycle.
+      That data is for the address presented in Q_HSCR, which is the last
+      row-mask word of the layer before: 0x6000/0x6800 + 4*line + 3.
+    - Every other sequencer read has its wait state (Q_VSCR / Q_VSCR_W ...).
+  * Seen in sim: hscr_r = 0 where tile RAM held 3 and 6.
+  * It affects hscr in non-window modes, including bit 15's per-line table
+    select. Window mode is unaffected (it uses hctrl_r, which is read
+    correctly).
+  * Every dumped Daytona frame has the true hscr = 0 on those layers and those
+    mask words = 0, so nothing visible changes on these scenes.
+  * Model 1 has the same Q_HSCR code (m1_video.sv:593). Its tile RAM latency
+    was not checked.
+  * Fix (not made): set seq_tram_addr = 0x5000 + layer one state earlier (in
+    Q_IDLE's start and Q_NEXT), or add a Q_HSCR wait state, which costs 1
+    cycle a layer.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. The board's effective port-3 round trip is ~25-30 clk_mem cycles under
+     contention. HEAD at 14 + U[0, 30] matches R814's 5-12 overruns a frame in
+     55-62% of frames. The scene mix differs from Ben's captures.
+     Settles it: a 'G' record of port-3 latency, or cr_hi / cf_cnt per frame
+     (Model2.sv already counts both).
+  b. R822 could only shave latency. At ~1.5-2 overruns a frame per cycle,
+     removing a few cycles of queueing leaves overruns, which matches "still
+     some tile overruns" on s1024.
+  c. Area, by construction (no Quartus):
+     - LB_RING 1:
+       - The 16 line-buffer memories go from 256 x 15 to 512 x 15. That is
+         still one M10K each (512 x 20 mode), so +0 M10K and +61,440 block
+         bits.
+       - ~53 registers: 4 x 9-bit tags, the next line, 4 x 2-bit pointers.
+       - ~100-150 ALUT: three 10-bit modulo-424 distances, a 4:1 tag select,
+         compares and FIFO arithmetic. Estimate ~+60-100 ALM.
+       - Timing risk on clk_mem: the path from line_number through the
+         distance to the pop and the bank select is ~10 levels.
+         line_number / rg_want only change at line boundaries, so they can be
+         registered if it misses.
+     - SIBLING 0: the bg FSM, bg_data (64 bits), bg_idx and bg_tag prune away:
+       ~-80 registers, ~-40 ALM.
+     - IDX_BITS 14: +42..+66 M10K (R818 b). 14 are free.
+  d. Behaviour changes with LB_RING 1, by design:
+     - Blanking lines are not rendered: 40 of 424 lines, ~9% of the fetch
+       work.
+     - Lines 0-2 are rendered from vcnt 420 (today 422-423), up to 3 lines
+       ahead of the beam. MAME draws a whole frame at once, so this is not a
+       fidelity change. A game write landing mid-frame shows up to 3 lines
+       later.
+     - dbg_overruns / dbg_ovr_frame now count VISIBLE lines whose buffer was
+       not ready at their line_start, as R85 said a buffered design must.
+     - Interlaced (R682) keeps the two-bank swap.
+  e. An 8-word port-3 burst (the demand line and its sibling in one
+     transaction) should land between SIBLING 0 and HEAD in transactions, at
+     L + 4 a miss. Not measured: it needs an m2_sdram port change.
+
+*Ranked:*
+  1. LB_RING 1. Zero at the board-like latency and to L ≈ 45, for ~+60-100
+     ALM and 0 M10K.
+  2. Add SIBLING 0. Zero to L ≈ 60, and it saves area.
+  3. SIBLING 0 alone. 8.0 -> 1.1 a frame, for negative area.
+  4. A bigger cache. Not affordable.
+  Not worth chasing: engine per-column speed (51% at L = 0), clock, SDRAM
+  priority.
+
+*Changed (uncommitted, sm2-builds/sm2-ovr-8cde963):*
+  - rtl/video/m2_video.sv: LB_RING (default 0), RING_LEAD, m2_lbuf_ram AW.
+  - rtl/video/m2_char_cache.sv: SIBLING (default 1).
+  - New: sim/video/m2_video_ovr_top.sv, sim/video/tb_m2_video_ovr.cpp,
+    sim/video/mame_m2_ovrdump.lua.
+  - Makefile: test_m2_video_ovr.
+  - Model2.sv is not touched. Turning it on is `m2_video #(.LB_RING(1))
+    u_tilemap` and `m2_char_cache #(.IDX_BITS(13), .SIBLING(0))`.
+
+*Not verified:* any Quartus map or fit (block counts, ALM, clk_mem timing),
+and the board.
+Merged with LB_RING 1 and SIBLING 0 set in Model2.sv (the measured best).
+Note from the bench: on RANDOM tile RAM at 14 + U[0,30] (nearly every column
+a miss -- a stress case no game screen resembles) both designs overrun
+heavily, the ring more by its own count (376 vs 318 a frame; its counter
+counts visible lines not ready, a different definition). Every MAME scene
+is 0 with the ring. Not yet on the board.
+
+**R824 -- THE LINE-BUFFER RING IN 15 kHz INTERLACED TOO. In the bench the
+shipped interlaced path (two-bank swap, SIBLING 0) does not overrun at the
+board-like latency; it starts at about L = 45. With the ring, both 15 kHz line
+counts stay at 0 up to L = 60. Progressive scan is cycle-exact with R823.**
+(Follows R823 d, which left interlace on the swap.)
+
+*Believed:*
+  1. R823 d: the ring's arithmetic assumes the native frame. It has VT = 424,
+     line_number running 0..423, and the next line is the current one + 1. So
+     interlaced (R682, R783) kept the two-bank swap.
+  2. Ben sees tile overruns in 15 kHz interlaced (Video: 15kHz interlaced, or
+     the [15kHz CRT] MRAs). The ring should fix them there too.
+
+*How interlace numbers lines (read from m2_video_timing, Model2.sv):*
+  * A field is vcnt rows 0..vt-1:
+    - 273.5-line mode (R682/R701): field 0 has 274 rows, field 1 has 273.
+    - 262.5-line mode (R783): field 0 has 263 rows, field 1 has 262.
+  * Rows 0..191 are visible. They show logical line 2*row + field (ypos).
+    Rows 192..vt-1 are blanking: 82/81 rows, or 71/70.
+  * The field toggles where vcnt wraps.
+  * line_start comes on the last pixel of a row. line_number then names the
+    logical line two rows ahead. Near the end of a field, rows vt-2 and vt-1
+    of the current field name rows 0 and 1 of the next field, parity flipped.
+  * line_number is {dln[7:0], parity}. For blanking rows 256..273 (vcnt
+    254..271, 273.5 mode only) it ALIASES to lines 0..35:
+    - The swap renders them into buffers that are never shown, so this is
+      harmless there.
+    - It is not usable as a ring position.
+  * The line budget, in clk_mem cycles of 656 pixels:
+
+    | Mode   | Pixel enable | Cycles a line |
+    |--------|--------------|---------------|
+    | Native | 16/100       | 4,100         |
+    | 273.5  | 547/5300     | 6,356         |
+    | 262.5  | 861/8692     | 6,622         |
+
+    A field renders 192 lines, at the same 57.52 Hz as a native frame.
+
+*Method:*
+  * Bench: make test_m2_video_ovr. It is R823's bench, extended:
+    - Every scene runs in all three modes, with Model2.sv's pixel-enable
+      accumulator for each mode (including its "start clean" on a change).
+    - New "difflines" count: visible lines where the variant differs from the
+      shipped path run at L = 0 (r@0). This is the number of wrong lines on
+      the screen, independent of either overrun counter. The swap shows 2
+      wrong lines per overrun: the repeat, then the late line one row low.
+    - Mode-change cases (below).
+  * Data: MAME 0.289 daytona, sim/video/mame_m2_ovrdump.lua, regenerated (not
+    R823's set, which was not kept):
+    - 25 bursts of 7 frames. Attract: 13 bursts, at frames 600-5700. Coin-up
+      (OV_RACE=1): 12 bursts, at frames 1000-4000.
+    - That gives 175 measured frames per mode. Each MAME frame drives one
+      FIELD. The 7th measured field repeats the 7th dump.
+    - The dumps are ROM-derived. They stayed in scratch and are deleted.
+  * Shipped config: m2_video LB_RING 1 and m2_char_cache SIBLING 0, as
+    Model2.sv sets them.
+  * "Before" is f1b4a1c's RTL. "After" is this change. Both were run with the
+    same bench binary source.
+  * Cross-check: the pre-R823 HEAD config (swap, SIBLING 1) gives 9.9
+    overruns a frame (73% of frames) native at 14 + U[0,30] on these scenes.
+    R823 had 8.0 (57%) on its 19 bursts.
+
+*Now known -- VERIFIED (simulation):*
+  1. MEASURED, before and after. Units: overruns per field on visible lines /
+     % of fields with any / worst field / wrong lines per field against r@0.
+     175 MAME fields per row. "q" is R823's queue model: 14 + U[0,6], plus
+     U[0,80] with p = 0.6 (mean 41).
+
+     15 kHz, 273.5-line fields (547/5300):
+
+     | Latency    | Before (f1b4a1c)    | After |
+     |------------|---------------------|-------|
+     | 0 to 30    | 0                   | 0     |
+     | 14+U[0,30] | 0                   | 0     |
+     | 14+U[0,50] | 0.03 / 2% / 2 / 0.06 | 0    |
+     | q          | 0.11 / 6% / 4 / 0.24 | 0    |
+     | 30+U[0,30] | 0.29 / 8% / 7 / 0.58 | 0    |
+     | 45         | 0.31 / 8% / 6 / 0.62 | 0    |
+     | 45+U[0,30] | 1.53 / 23% / 12 / 3.13 | 0  |
+     | 60         | 1.53 / 23% / 12 / 3.06 | 0  |
+     | 90         | 7.57 / 70% / 35 / 14.9 | 3.13 / 28% / 23 / 3.13 |
+
+     15 kHz, 262.5-line fields (861/8692):
+
+     | Latency    | Before (f1b4a1c)    | After |
+     |------------|---------------------|-------|
+     | 0 to 30    | 0                   | 0     |
+     | 14+U[0,30] | 0                   | 0     |
+     | 14+U[0,50] | 0                   | 0     |
+     | q          | 0.03 / 3% / 1 / 0.06 | 0    |
+     | 30+U[0,30] | 0.10 / 5% / 3 / 0.21 | 0    |
+     | 45         | 0.08 / 4% / 2 / 0.16 | 0    |
+     | 45+U[0,30] | 0.92 / 21% / 10 / 1.85 | 0  |
+     | 60         | 0.87 / 21% / 10 / 1.79 | 0  |
+     | 90         | 6.52 / 69% / 33 / 12.9 | 3.10 / 28% / 26 / 3.10 |
+
+     Native, identical before and after. 0 through L = 45, at 14 + U[0,30],
+     14 + U[0,50], 30 + U[0,30] and q. Then:
+
+     | Latency    | Overruns per frame |
+     |------------|--------------------|
+     | 45+U[0,30] | 0.89 (12%)         |
+     | 60         | 0.91 (14%)         |
+     | 90         | 12.87 (42%)        |
+
+     Synthetic sky (4,096 distinct tiles), 6 fields a run:
+     - 273.5 mode:
+       - L = 45: swap with SIBLING 1 128 a field; f1b4a1c 0; after 0.
+       - L = 60: f1b4a1c 6.7; after 0.
+       - L = 90: f1b4a1c 126.7 (1,036 wrong lines in 6 fields); after 63.3
+         (380 wrong lines).
+     - 262.5 mode: the same shape. At L = 90, 126.7 before and 83.3 after.
+     - Random tile RAM at 14 + U[0,30], which no game screen resembles:
+       - 273.5 mode: wrong lines go 956 -> 992 in 6 fields.
+       - 262.5 mode: 953 -> 971.
+       - As R823 found progressive, the ring is slightly worse on random
+         tile RAM.
+  2. THE SHIPPED INTERLACED PATH IS ALREADY CLEAN AT THE BOARD-LIKE LATENCY
+     IN THE BENCH.
+     - 0 overruns on 175 fields in both modes at 14 + U[0,30].
+     - The 15 kHz line is 55-62% longer. SIBLING 0, which f1b4a1c turned on
+       in all modes, takes the swap's onset to L ~ 45.
+     - The pre-R823 config (SIBLING 1, swap) gives 0.16 a field at
+       14 + U[0,30] and 3.0 a field (45%) under the queue model.
+  3. EQUIVALENCE.
+     - In every field where the variant did not overrun, every visible
+       pixel's palette index equals the shipped path at L = 0.
+     - Every glyph a cache returned matches char RAM.
+     - Coverage: all 25 bursts × 3 modes × 11 latency models. Also sky and
+       random tile RAM in both 15 kHz modes, at L = 0 and at
+       14 + U[0,30].
+     - Result: 0 fields differ, 0 wrong glyphs.
+  4. PROGRESSIVE IS CYCLE-EXACT WITH f1b4a1c (a miter).
+     - Setup: f1b4a1c's m2_video and m2_video_timing, renamed, run beside
+       the new ones, each with its own cache and port.
+     - Compared every cycle: pal_addr, the overrun counter, the port-3
+       request and address, the tile RAM address and the glyph request.
+     - Scenes and latencies:
+       - Sky and random at L = 0/20/30/45/60/90, 14 + U[0,30] and
+         14 + U[0,50].
+       - All 25 MAME bursts at L = 0/30/45/60/90 and 14 + U[0,30].
+       - Both SIBLING settings.
+     - Result: 300 + 32 runs, 4.64e9 + 0.44e9 cycles, 0 differing. The
+       overrun counts are equal, including 5,980 overruns at high latency
+       and ~2,300 a run on random tile RAM.
+     - Against the f1b4a1c bench's own output (the SIBLING 0 build), all 14
+       measurement lines are identical: native, plus the two interlaced
+       L = 0 lines.
+  5. A MODE CHANGE MID-FRAME (the OSD) RECOVERS WITHIN THE FRAME OF THE
+     CHANGE.
+     - Directions: native <-> 273.5, native <-> 262.5, 273.5 <-> 262.5, at
+       latency 0 and 14 + U[0,30].
+     - Change landing at row 100: 0-1 overruns in the frame of the change,
+       then 0 overruns and 0 differing pixels in every following frame.
+     - Change landing past the new total: native -> 273.5 at row 300,
+       native -> 262.5 at 380, and 273.5 -> 262.5 at 268. The timing
+       generator's vcnt then runs to 1,023 and wraps with the field bit
+       unchanged, so two fields share one parity. Result: 1-3 overruns in
+       the frame of the change, then 0.
+     - The first form of the change used R823's "behind = half a frame". On
+       interlaced -> native it showed 104 overruns in the frame of the
+       change: tags and rg_nl in row numbering read as lines ~2x ahead and
+       blocked the FIFO head. f1b4a1c itself shows 102 on a 262.5 ->
+       native change at 14 + U[0,30], from the swap's leftover ring state.
+       The tightened test below takes both to 1.
+  6. The rest of the checks:
+     - test_m2_video_timing 39/0 PASS. test_m2_char_cache PASS.
+       test_m2_video_ovr PASS, both builds. test_m2_video_frame PASS on a
+       MAME title dump.
+     - lint_top clean. lint_idx: the only m2_video entry is the
+       pre-existing xlat_tbl.
+     - Verilator -Wall on m2_video: 9 warnings, as for f1b4a1c, under
+       LB_RING 0 and 1.
+     - quartus_map --analyze_file (17.0) on m2_video.sv, m2_video_timing.sv
+       and m2_video_ovr_top.sv: 0 errors.
+  7. A CARRIED FIELD PARITY ALSO RECOVERS. This was tested because the code
+     comment first claimed otherwise.
+     - Experiment: render rg_nl's own parity bit instead of the beam's.
+     - Result: it passes every mode-change case, including the
+       non-alternating fields. The runaway makes the ring fall behind and
+       re-seed rg_nl from the beam (rg_skip).
+     - The beam-derived parity is kept for robustness, not because it was
+       shown to be needed.
+
+*The change (uncommitted, sm2-builds/sm2-ring15-f1b4a1c):*
+  * The ring works in DISPLAY ORDER:
+    - Progressive: the line, modulo the 424-line frame.
+    - Interlaced: the field row, modulo this field's vtotal. The line rendered
+      is {row, parity}.
+    - After row 191 comes row 0 of the next field, rendered in this field's
+      blanking. This is how lines 0-2 are rendered at the end of a
+      progressive frame.
+  * The line-derived terms are registers loaded at line_start, with the value
+    for the line after it:
+    - rg_lp = (vcnt + 3) mod vtotal, which is line_number's position.
+    - rg_wp = the previous rg_lp, the position shown next.
+    - rg_lpar = that row's field parity.
+    - Each equals R823's combinational value in every cycle, so the miter is
+      exact. This also removes the line_number aliasing.
+  * The parity of a row being started comes from the beam: rg_lpar, flipped
+    when the row lies ahead across the field boundary.
+  * "Behind" is "not reachable":
+    - The FIFO head is stale when it is more than RING_LEAD + 1 ahead of the
+      line shown next.
+    - rg_nl skips when it is more than RING_LEAD + 1 ahead. The exception is
+      rg_nl at line/row 0, which waits through blanking. That case keeps
+      R823's half-modulus test: 256, or 128 interlaced.
+    - Steady state cannot reach the states this adds, which the miter
+      confirms.
+  * Removed: the interlaced two-bank fallback.
+  * m2_video_timing gains an output, vtotal: this field's line count.
+  * dbg_overruns / dbg_ovr_frame now count, in 15 kHz too, VISIBLE lines not
+    ready, latched per FIELD. Before, they counted every line_start that
+    landed in Q_RUN, blanking lines included.
+  * Bench files: sim/video/tb_m2_video_ovr.cpp (modes, difflines, mode
+    changes, +sweep / +sweep2 / +quick, the queue latency model) and
+    m2_video_ovr_top.sv (an ntsc_lines input).
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. If the board shows tile overruns in 15 kHz on an f1b4a1c build, then its
+     effective port-3 latency in that mode is ~45 cycles or more, or has a
+     heavy tail, or what is seen is not an overrun. The bench gives the
+     shipped path 0 overruns at 14 + U[0,30] in both 15 kHz modes.
+     - Settles it: the overlay's dbg_ovr_frame in 15 kHz. On f1b4a1c it
+       counts blanking lines too, so 0 there is decisive and a non-zero value
+       is not. Or a 'G' record of port-3 latency. Then this build: if the
+       artifact persists while the counter reads 0, it is something else.
+  b. Why interlaced misses come every line (not measured line by line):
+     - A SIBLING 0 demand line holds glyph rows 2k and 2k+1.
+     - A field uses one of the two, so every rendered line on the picture
+       layer enters a new demand line. Progressive enters one every other
+       line.
+     - The ~55-62% longer line covers this, up to L ~ 45.
+     - Settles it: per-line miss counts from the bench in interlace (R823
+       3's instrument).
+  c. clk_mem timing (no Quartus):
+     - rg_lp's D path: vcnt + 3, then the subtract and compare against
+       vtotal, then a 2:1 mux. That is 2 carry chains. vtotal is a mux of
+       five constants on three registers, one LUT level.
+     - The decision path R823 flagged (line_number -> distance -> pop / bank
+       select, ~10 levels):
+       - It loses line_number's +2, compare, subtract and mux (2-3 carry
+         chains), which are now a register.
+       - It gains one LUT, the interlace position mux.
+       - What remains: mux, subtract, +vtotal (2 chains), compares (~2 LUT),
+         go/behind (1), next state (1-2).
+       - Net shorter than R823's.
+     - The head path: tag 4:1 mux, interlace mux, subtract, +vtotal, compare
+       > 3, then pop. That is the same depth as R823's, perhaps one LUT more
+       for the 10-bit compare.
+     - If it fails, rg_nd and rg_hd_d can be registered: their inputs change
+       at most once a line or a render. That moves decisions by a cycle and
+       breaks the exact miter, so re-measure if it is done.
+  d. Area (no Quartus):
+     - Added: +19 registers (rg_lp, rg_wp, rg_lpar), ~+25-45 ALUT.
+     - Removed (LB_RING 1):
+       - The interlace swap fallback.
+       - R823's rg_want subtract/compare.
+       - m2_video_timing's line_number logic, which nothing reads any more.
+     - Estimate ~+0-30 ALM, 0 M10K.
+  e. With the ring, tile RAM writes landing mid-field show up to 3 rows
+     later, as R823 d said for progressive.
+
+*Not verified:* quartus_map / fit (ALM, clk_mem slack) and the board, in
+either 15 kHz mode. A Quartus constant-fold check of the new arithmetic was
+not run (no map allowed). It is plain unsigned arithmetic and size casts, not
+the signed-cast idiom of R662.
+
+**R823 DID NOT MEET clk_mem.** s1030-s1032 (f1b4a1c, the ring on, 80/40):
+s1030 clk_mem -2.621, s1032 -2.901 (s1031 a Quartus TDB internal error);
+every failing path the ring's control: m2_video_timing vcnt -> line_number ->
+ldist -> the compares -> rg_rb / rg_hd / rg_nl (~12.6 ns in a 10 ns cycle),
+the path R823's own note flagged. R824 (2e8e1fc) registers the line terms
+but is unfitted. Next: an agent pipelines the ring's decisions (R825); and
+s1033-s1035 = 2e8e1fc with LB_RING 0, SIBLING 0 (build/worktree_patches/
+ring-off.patch) -- R823's bench: SIBLING 0 alone takes native overruns 8.04
+-> 1.11 a frame (57% -> 11% of frames) at 14+U[0,30], and interlaced to 0.
+
+**R821 -- ONE MULTIPCM ENGINE FOR BOTH SOUND CHIPS: BUILT, BIT-IDENTICAL
+WHEREVER A WRITE LANDS AT A SLOT BOUNDARY, -631 ALMs-NEEDED IN THE MAP
+(-759 ALUT, -880 REGISTERS, -2 DSP), AND HALF OF IT IS NOT SHARING.**
+(R818 decisions: "TEST one MultiPCM shared by both sound chips". Nothing is
+switched in: m2_sound_board PCM_SHARED defaults to 0, and with it at 0 the
+board is the same RTL -- tb_m2_sndboard's every-cycle hash is HEAD's,
+be5d9fc834bffead.)
+
+*Believed (R818 item d):* one engine running 56 slots at twice the rate saves
+~500-600 placed ALM (each chip 745 placed in s1017 / ~800 in s999); the fetch
+window per slot halves, and R738's timing and the PCM cache decide whether it
+holds.
+
+*Model 1 (the oracle):* tools/model1-ref @ 0b5d04f (= the local repository's
+HEAD) instantiates two m2_multipcm (copied from here, pre-R738), each with its
+own m2_pcm_fetch and m2_pcm_rate. It has never shared one; no finding either
+way. Nothing in MAME bears on it: sharing is an implementation question, and
+the arithmetic below is m2_multipcm's verbatim.
+
+THE DESIGN (rtl/sound/m2_multipcm_dual.sv, THIRD_PARTY.md: derived from
+m2_multipcm.sv, i.e. meathax/s32 @ 7905361, GPL-3.0):
+  * One sequencer over 56 slots {slot, chip} -- c0s0, c1s0, c0s1, ... -- at
+    4 enables a slot: 224 a pass, exactly one chip's 28 x 8, so the rate
+    stage's enable (20 / TICK_DEN) and its 2x headroom are unchanged. Both
+    chips strobe their sample at the end of the pass.
+  * One step / pitch / level / multiply datapath (R819's 8 x 10 multiply now
+    once, not twice); per-slot state in 64-deep MLABs (pan, level, pitch,
+    octave, sample number, descriptor, position) and 56-bit vectors (active,
+    pending, key-wait, position-zero); per chip only the register selection,
+    the accumulators, the output, the gains of the sample in flight and the
+    fetch port.
+  * Each chip keeps its OWN m2_pcm_fetch and SDRAM port (6 and 7). Model2.sv
+    and the arbiter are untouched.
+  * Where it differs from two m2_multipcm, all in the file header:
+      1. a fetch does not freeze the sequencer: a slot waits only if it would
+         step while ITS chip's previous sample is still being fetched or
+         multiplied, so a fetch has the other chip's slot (8 enables) to land
+         in; the pass end waits for everything in flight;
+      2. level and pan are read at the step, not at the acknowledge;
+      3. one descriptor fetch at a time for both chips;
+      4. the sample number (reg 1, reg 2 bit 0) is an MLAB, NOT cleared by
+         reset -- the same as the single chip after power-up, different after
+         a soft reset that is followed by a key-on of a never-written slot;
+      5. the sample fetch issues one edge after the step, from the step's
+         registered operands (the 56:1 pos_zero select, the 22-bit add and the
+         bank page are not on the end of the step's path -- R738's lesson);
+      6. the descriptor's sample number is taken one cycle after the pick
+         (a registered MLAB read; see "found on the way").
+  * m2_sound_board: PCM_SHARED selects the dual by parameter-constant wires;
+    u_pcm1 / u_pcm2 keep their names and are pruned when unused. u_rate1's
+    enable drives the engine; both rate stages push on the same strobe and pop
+    on identical accumulators, so their levels -- and throttles -- are equal.
+
+*Now known -- VERIFIED (simulation; Verilator 5.052):*
+
+ Q1, STATE AGAINST DATAPATH (standalone quartus_map 17.0, module alone):
+                                    ALMs-needed  comb ALUT  mem ALUT  regs  DSP
+   m2_multipcm (HEAD)                  750         1,024      118     934    2
+   m2_multipcm, sample no. in MLAB     639           901      127     692    2
+   m2_multipcm_dual                  1,052         1,473      254   1,000    2
+   So against two chips (1,500): -448. Of that, -222 is the sample-number
+   registers (252 flip-flops and their 28:1 select per chip) moving to an
+   MLAB, which the two-instance design could take WITHOUT sharing; the
+   sharing itself is the other -226 (1,278 -> 1,052). Registers: the dual
+   keeps 1,000 against 2 x 692 -- what does not share is the per-slot state
+   (4 x 56 status bits, the MLAB output registers) and per chip the
+   accumulators and outputs (2 x 76), fetch address, gains and register
+   selection; what does is the step, pitch, level and multiply datapath and
+   its pipeline, the descriptor engine and its 8-byte buffer, the
+   forwarding registers and the sequencer.
+   TIME: a pass is 224 enables either way. At 80 MHz the enable is every 4th
+   clk (20/80) and a sample is 1,792 clk; the pass takes 896 clk plus stalls.
+   The single chip stops its tick for every fetch; the dual's fetch overlaps
+   the other chip's slot (8 enables = 32 clk at 80 MHz) and costs nothing
+   until it is longer than that. Measured cycles a sample (random register
+   streams, enable 20/80, mean / max):
+     latency 0..6      reference (slower chip) 961 / 2,149   shared 909 / 3,277
+     latency 0..60          1,210 / 3,365          1,029 / 5,173
+     latency 20..120        1,568 / 5,269          1,405 / 8,769
+     latency 0..600         3,691 / 16,769         4,225 / 26,689
+   The shared engine is faster up to ~100 cycles of latency and ~14% slower
+   past it, where two chips' stalls in one sequencer cost max(L0, L1) a slot
+   pair where two sequencers cost each its own. Its worst samples are
+   longer (descriptor bursts are serialised for both chips); the rate stage's
+   16-sample FIFO absorbs them -- see the board below. On MAME's own 200 s
+   stream at 20/80, latency 0..30: reference 918 / 1,166, shared 897 / 1,038.
+
+ Q2, THE FETCH: two ports, as now, each one request outstanding; per port
+   the requests are what they were (one per active voice per pass, plus 12 a
+   key-on), so the arbiter sees the same thing. One shared port is NOT
+   implemented: it would halve the per-fetch window back to one slot and save
+   one m2_pcm_fetch (~116 ALUT / 122 registers in the map) plus an arbiter
+   port. Board-level latency limit, whole sound board at TICK_DEN 80 driven by
+   MAME's link bytes into GAME OVER (constant sample-port latency, 18.5 s):
+     latency (clk)      20     200     400        600
+     reference          0      0       14 underr.  9,944 underr., 9,945 samples lost
+     shared             0      0       0           8,835 underr., 8,835 samples lost
+   (each chip: 825,909 samples where nothing is lost; the cache returned 0
+   wrong bytes of 5.3-5.4 M in every run.) The shared engine holds to the
+   same latency as two chips, slightly further; the SDRAM's own latency is
+   tens of clk, so 400 is an order of magnitude past it.
+
+ Q3, OUTPUT-IDENTICAL -- the same samples from the same register state:
+   tb_m2_mpcm_dual runs two m2_multipcm and the dual side by side, each chip
+   behind its own m2_pcm_fetch, every output sample of both chips compared.
+   Register writes land (a) between passes, every engine stopped at the end
+   of its own pass, or (b) mid-pass: both engines stopped just before the same
+   slot of the same chip steps, the last write followed on the very next edge
+   by that slot's step (the cycle in which only the forward carries it).
+   Swept: enable every clk / 20/80 / 20/50 / random 50%; latency 0..6, 1, 0..60,
+   20..120, 0..600, 300..3,000, 2,000..6,000 (random a fetch), acknowledge held
+   1-3 cycles.
+   * random register streams on random 4 MB sample ROMs (512 descriptors,
+     loops and no-loops, holes in the slot select, bank writes): 12
+     configurations x 4 seeds x 3,000 samples, between passes; 4 x 4 x 3,000
+     mid-pass (45,024 writes at 6,038 stops a configuration): 0 samples
+     differ. The reference's own outputs hash identically in every
+     configuration (6a33266e3062b3d9 / 8e55bb7d40832be0): the latency and the
+     enable do not reach the output once the write position is fixed.
+   * MAME 0.289's own register stream (mame_m2_sound_levels.lua, 200 s:
+     attract, three coins, a race left to time out, RESULTS, GAME OVER;
+     3,479,917 writes to the MultiPCMs): 8,928,771 samples x 2 chips, 0
+     differ -- between passes at 20/80 latency 0..30 and at random enables
+     latency 0..600, and mid-pass (1,030,033 stops, 869,302 writes there) at
+     random enables latency 0..60. The shared engine against MAME, as
+     tb_m2_mpcm_level C: pcm1 98 windows mean -0.02 dB worst +1.15, pcm2 45
+     windows mean +0.21 worst -1.03 (R819: -0.09 / +0.83 and +0.21 / -1.03
+     over 0-130 s).
+   * Mutants, each caught: a gain-table LSB, the loop-wrap compare (>= to >,
+     3 samples in 9,000), the bank page of chip 1, the descriptor byte select,
+     the pass-end wait on the multiply, the RAM read look-ahead, the hold on a
+     sample still being multiplied (needs latency > 6 to show), and each of the
+     four register forwards (mid-pass only; between passes cannot see them --
+     the first version of the mid-pass test could not either, until the step
+     was made to follow the write on the next edge). Not caught, and
+     unreachable by construction: the hold on a fetch about to issue (the
+     same chip's next step is >= 4 enables after its step).
+   * The whole board (test_m2_sndboard_shared, fx68k on the real sound ROM,
+     MAME's link bytes at MAME's times): PASS, 0 underruns, 0 wrong cache
+     bytes. Free-running, the 68000's writes land at different points of the
+     two designs' passes, so the sample streams are NOT bit-identical; and the
+     reference is not identical to itself either. Per chip, fraction of
+     samples identical / difference energy re signal:
+                                        pcm1               pcm2
+     80 MHz GAME OVER, ref L20 vs ref L200    83.6% / -18.7 dB   97.0% / -29.7
+     80 MHz GAME OVER, ref L20 vs shared L20  97.8% / -29.1 dB   99.4% / -46.3
+     50 MHz GAME OVER, ref L6 vs shared L6    91.6% / -29.4 dB   97.7% / -34.7
+     50 MHz attract,   ref L6 vs ref L60      98.1% / -39.8 dB   (silent)
+     50 MHz attract,   ref L6 vs shared L6    59.1% / -17.0 dB   (silent)
+     Level, every active 1 s window, all pairs: within 0.024 dB. The
+     differences start at a note and re-converge after it (attract: 100% to
+     4 s, 59.5 / 1.4 / 78.4 / 32.9% identical over 5-8 s); -17 dB is what a
+     one-sample offset of ~1 kHz content is (|1 - e^-jw|^2). At the core's
+     own clock the shared engine is closer to the reference than the
+     reference is to itself at another latency.
+
+*Now known -- VERIFIED (quartus_map 17.0, whole design from Model2.qsf,
+  PCM_SHARED 0 vs 1, no fit):*
+                                  OFF        ON        delta
+   ALMs needed (estimate)        40,440     39,809     -631
+   comb ALUT (logic)             57,618     56,859     -759
+   memory ALUT                    1,428      1,446      +18
+   registers                     48,863     47,983     -880
+   block memory bits          4,297,211  4,297,211        0   (M10K unchanged)
+   DSP blocks                        91         89       -2
+   Entities: u_pcm1 + u_pcm2 1,023 + 1,030 ALUT / 926 + 934 reg -> the dual
+   1,370 / 1,000; u_rate2 93 -> 71 ALUT (its unused enable is pruned);
+   fetchers unchanged; m2_sound_board subtree 6,569 -> 5,873 ALUT,
+   4,545 -> 3,672 registers.
+
+*Now known -- INFERRED (not measured; what would settle each):*
+  a. PLACED: ~-400..-550 ALM. s1017 placed the same six entities (two
+     chips, two fetchers, two rate stages) at 1,843 ALM for 2,383 ALUT in its
+     fit report (0.77 ALM / ALUT, MLAB included; pre-R819, no multiply); the
+     map's delta for them is -700 ALUT: ~-540. R788's filter went +700
+     estimate -> +432 placed (0.62): -631 x 0.62 = ~-390. A fit settles it.
+  b. Against the asks: the audio filter is +700 estimate / 432 placed
+     (s927). This alone is -631 / ~-400..-550, so it pays for the filter in
+     placed ALM and nearly in the estimate; with R818's remaining -161
+     (-227, less the cull's +66) the estimate is covered too.
+  c. TIMING at 80 MHz (no fit): the paths that changed are the descriptor
+     pick (56-bit priority encode -> MLAB read address, data registered:
+     ~3 LUT levels + a registered MLAB read), st_rd_addr (6-bit increment and
+     compare, as before, into more MLAB read ports), the shared multiply's
+     2:1 input select before the DSP, and a 2:1 on the CPU slot select. The
+     step's path is shorter than the single chip's (the address add moved a
+     cycle later, item 5). The worst new candidate is the 56:1 pos_zero /
+     s_active selects (one LUT level over 28:1) into pv_pos and the hold
+     logic's wide enable fan-out. A fit (sta.rpt for *u_pcm*) settles it.
+  d. Sharing the SDRAM port as well (one m2_pcm_fetch, 64 lines): a further
+     ~-60..-90 ALM and one arbiter port, for half the per-fetch window
+     (Q1's numbers say the window is not what limits it below ~100 clk).
+     Not built.
+  e. The sample-number MLAB in the TWO-instance design (-222 estimate,
+     standalone) is available alone, cycle-different only in the descriptor
+     fetch starting one cycle later. Not built in RTL here (the standalone
+     variant was for measurement only).
+
+*Found on the way:*
+  * An asynchronous MLAB read is not inferred by Quartus 17 here ("RAM logic
+    ... uninferred due to unsupported read-during-write behavior"), nor is a
+    read inside the reset branch of a control always block: both left the
+    sample number in 504 registers, and the first ON map read -325, not
+    -631. Read registered in the RAM's own block, it infers.
+  * The first dual took a descriptor byte from whichever port still had
+    rom_is_desc set -- chip 1's flag stays set after its descriptor fetch --
+    so chip 0's descriptors read chip 1's ROM: caught at once (1,999 of 2,000
+    samples) by the random-stream bench.
+  * A soft reset between two random streams without a fresh model differed
+    in 1,981 of 2,000 samples: the reference clears its sample numbers in
+    reset, the MLAB does not (item 4). Power-up is identical; the bench now
+    uses a fresh model a seed.
+  * Ack-after-step gains: the hold has to cover a sample that has been
+    acknowledged but not yet multiplied, or a step overwrites its gains;
+    without it 1,063 of 9,000 samples differed at latency 0..30 and none at
+    0..6.
+
+*Changed (uncommitted, sm2-builds/sm2-mpcm1-d697fda):* rtl/sound/
+m2_multipcm_dual.sv (new), rtl/sound/m2_sound_board.sv (PCM_SHARED, default
+0), Model2.qsf (the file), THIRD_PARTY.md, sim/sound/m2_mpcm_dual_harness.sv
++ tb_m2_mpcm_dual.cpp (new; Makefile test_m2_mpcm_dual, in `make test`),
+sim/sound/m2_sndboard_harness.sv (PCM_SHARED), tb_m2_sndboard.cpp
+(M2_SND_LINKLOG / LINKFROM / MHZ: MAME's link bytes at MAME's times;
+M2_SND_PCMDUMP: each chip's samples), Makefile (test_m2_sndboard_shared,
+SNDB_G). lint_top clean; with PCM_SHARED 1 no Verilator warning in the new
+module; lint_idx 146 candidates both ways, the same 146, none new.
+test_m2_mpcm_level, test_m2_sndlink, test_m2_sndboard (hash unchanged),
+test_m2_sndboard_shared, test_m2_mpcm_dual PASS.
+
+*Not verified:* any fit, its timing or placed ALM; the board. Not switched
+in.
+s1033-s1035 = 2e8e1fc with LB_RING 0, SIBLING 0 (ring-off.patch), 80/40:
+s1035 closes, core >= +0.115, hold >= +0.245, HDMI -0.320; 41,255 ALM,
+M10K 539/553. RBF build/Model2_20261013_s1035_sib0.rbf 5a13cfd2. Contents:
+s1017 + R819/R820 audio + R818 area + R822 glyph priority + SIBLING 0. Not
+yet on the board.
+R821 FITTED. s1036-s1038 = 92d1e5c with LB_RING 0, SIBLING 0 and PCM_SHARED 1
+(pcmshared-on.patch) -- s1035's configuration plus the shared engine only.
+All three close every core clock; s1037 closes EVERY clock including HDMI
+(+0.067), core >= +0.097, hold >= +0.095. ALM 40,873 / 40,894 / 40,928
+against s1035's 41,255 (same config, PCM_SHARED 0): -327..-382 placed; DSP
+91 -> 89. RBF build/Model2_20261013_s1037_pcmshared.rbf. Not yet on the
+board: Ben to listen for any difference against s1035.
+s1024 (audio + R818 + R822): 213 min of the watch, 119 readings, no lock --
+then the board was rebooted (ssh timeout, uptime 2 min at the next load),
+which cleared /tmp/m2-fps.py; restored from tools/. s1035 on the board from
+14:04 (board time), Revision A, 4 h watch: Ben to check tile overruns at 24
+and 15 kHz.
+s1035 on the board: Ben -- "much less overruns, but still noticeable" (as
+R823's bench predicted for SIBLING 0 alone: ~1 a frame native). The ring
+(R823/R824, being pipelined for clk_mem, R825) is the rest.
+
+**R826 -- OPEN: THE BACKGROUND JERKS WHEN SLIDING AND TURNING (Ben, long
+standing, not from recent changes).** "The background can be very jerky when
+sliding and turning corners -- it should be smooth transitions, not sudden
+jumps; the same on the straight road if you throw the car into a slide."
+Candidates, unmeasured: (1) the 2D layers (sky/backdrop) take their scroll at
+once while the 3D is shown a frame or more later (framebuffer, walk, swap),
+so they slip against each other when the view rotates; (2) the backdrop's
+scroll quantised (a lost fine-scroll bit); (3) a scroll register read at the
+wrong time or from the wrong word (R823's agent found hscr_r reading the
+previous sequencer address -- zero on its dumps). An agent is comparing
+against MAME frame by frame.
+R826 evidence (Ben): his Windows static recompilation of Daytona jerks the
+same way -- so not our framebuffer path -- and the REAL ARCADE IS SMOOTH. A
+hardware behaviour neither models (likely inherited from MAME's segaic24 /
+model2 video model): the agent now works from the game's own tilemap/scroll
+write log (with beam position) during a slide, for the latch or per-line
+behaviour that would make the displayed motion smooth.
+
+**R825 -- THE RING'S DECISIONS ARE REGISTERED, TWO STAGES BEHIND THE STATE,
+AND USED ONLY WHILE THE STATE HAS NOT MOVED SINCE.**
+  * No ring decision path has more than one carry chain, and none has more
+    than 3 LUTs after a chain.
+  * What is left are the line_start-fanout paths. They have the same shape as
+    R823's, which fitted with +2.0 to +2.7 ns.
+  * On 25 MAME bursts in all three video modes, overruns are within 5% of
+    2e8e1fc's at every latency model.
+  * NOT FITTED. 2e8e1fc (R824) is INFERRED to fail clk_mem as well.
+
+(Follows R823 c and R824 c. R823's build, f1b4a1c s1030/s1032, failed
+clk_mem by -2.62 / -2.90 ns, and every failing path was the ring's.)
+
+*Believed:*
+  1. R824 c: registering the line terms (rg_lp, rg_wp, rg_lpar) shortens
+     R823's path. The distances and the decisions after them stayed
+     combinational, and R824 was not fitted.
+  2. R824 c's fallback: register rg_nd and rg_hd_d. Their inputs change at
+     most once a line or once a render. The decisions then move by a cycle,
+     which breaks the exact miter.
+
+*The change (rtl/video/m2_video.sv, LB_RING 1 only; LB_RING 0 is untouched):*
+  * Stage A registers the raw differences (pa_tn, pa_th): one 10-bit
+    subtract each, behind the interlace position mux and the head tag's 4:1
+    mux. It also registers nlp == 0 and vtotal - 1.
+  * Stage B registers everything that follows: the wrap add of vtotal, the
+    compares, and go, behind, npar, hstale, room and free.
+    - rg_nlp < rg_lp is no longer a separate compare. It is stage A's sign
+      bit.
+  * rg_quiet counts cycles since the last EVENT, saturating at 2. An event is
+    any of: line_start, a stale drop, push, start, skip, a change of
+    interlace, or a change of vtotal.
+    - A pop is either a line_start or a stale drop, so the line_start hit is
+      not on rg_quiet's path.
+    - The ring sees interlace and vtotal through its own registers (rg_il,
+      rg_vt), one cycle late. A mode or field-length change is therefore an
+      event, not an input moving under a registered decision.
+  * Start, skip and the stale-head drop act only while rg_quiet == 2.
+    - At that point the stage-B value was computed from the state of two
+      cycles ago, and with no event since, that is the state now.
+    - So the decision equals R824's combinational one.
+    - Otherwise the ring waits.
+  * The line_start pop does NOT wait.
+    - Its hit is precomputed per bank one cycle ahead (rg_hit[i]): the tag
+      bank i will hold, including a push in this cycle, against the line the
+      next line_start shows.
+    - At line_start: hit = cnt != 0 && rg_hit[rg_hd] && rg_vis.
+    - This is exact at every line_start, because no two line_starts are
+      within one cycle (they are 656 ce_pix apart).
+  * rg_lp loads rg_lpn_q at line_start, which is (vcnt + 3) mod vtotal one
+    cycle earlier. vcnt and the field last moved at the previous line_start.
+  * Simulation check (M2_RING_CHECK, on in test_m2_video_ovr). Every cycle it
+    recomputes R824's combinational decisions from the current state and
+    stops the run if:
+    - a registered decision that may be acted on (rg_quiet == 2) differs, or
+    - the line_start hit differs at any line_start.
+  * Bench: OVR_SKIP_RL=1 in tb_m2_video_ovr leaves out the shipped swap path
+    at L. That run does not depend on the variant, and leaving it out halves
+    an A/B sweep.
+
+*Hazard argument (each point is checked every cycle by M2_RING_CHECK):*
+  * Every action the ring takes is the action R824 takes from the same state.
+    - The registered value is used only when it equals R824's value for the
+      current state.
+    - The only other effect is cycles where R824 would act and this design
+      waits.
+    - Waiting cannot break any of R824's invariants:
+      - No start means no new bank is written.
+      - No stale drop leaves a finished line at the head.
+      - No skip leaves rg_nl as it was.
+  * It cannot render into the displayed bank.
+    - Start uses room_q and free_q. They are exact when used, so
+      free != rg_rb and rg_cnt <= 2, as in R824.
+  * It cannot pop a head that is not complete.
+    - The FIFO holds only pushed lines (Q_NEXT on layer 3).
+    - The line_start pop needs cnt != 0. The stale drop needs cnt != 0 and
+      only drops.
+  * It cannot miss a line_start.
+    - Everything done at line_start ignores rg_quiet: the pop, rg_rb, the
+      overrun count and the rg_lp/rg_wp/rg_lpar loads.
+    - A line_start in the same cycle as a start is the R824 case: both see
+      the pre-line_start state.
+  * Same-cycle push, pop and start:
+    - Push is in Q_NEXT and start is in Q_IDLE, so they never coincide.
+    - A pop and a start, or a pop and a push, in one cycle keep
+      rg_hd + rg_cnt == rg_wb, as in R824.
+    - A start with cnt == 0 never meets a pop, because a pop needs cnt != 0.
+  * Liveness: events are line_starts (one every 4,100+ cycles), pushes (one
+    per start), stale drops (bounded) and field or mode changes. rg_quiet
+    always reaches 2.
+    - A skip that leaves rg_nl unchanged re-arms the wait, but then R824 would
+      also be skipping every cycle.
+  * Cost: after each event, a start, skip or drop comes up to 2 cycles later.
+    That is ~2 cycles per rendered line, plus 2 after each line_start, out of
+    4,100.
+  * Can the delayed stale drop cost a line?
+    - Only if a line_start lands within 2 cycles of a late line's push.
+    - Then the FIFO holds only that stale line: rendering is serial, so no
+      later line is finished.
+    - R824 would not hit at that line_start either.
+
+*Now known -- VERIFIED:*
+  1. TIMING ESTIMATE IN THE FULL DESIGN.
+     - Quartus 17.0 quartus_map of the whole Model2 project, at f1b4a1c, at
+       2e8e1fc and with this change.
+     - Then quartus_sta --post_map, slow model. That has placement-free
+       delays, no fit.
+     - The table gives the worst path into each register group, as slack in
+       ns, with LUT levels + carry cells.
+
+     | Endpoint            | f1b4a1c (R823)          | 2e8e1fc (R824)          | R825                  |
+     |---------------------|-------------------------|-------------------------|-----------------------|
+     | rg_rb               | -6.04, 6 + 16 cc        | -2.53, 7 (hcnt)         | -1.00, 5 (hcnt)       |
+     | rg_hd               | -5.35, 6 + 16 cc        | -3.64, 6 + 11 cc        | -1.59, 7 (hcnt)       |
+     | rg_cnt              | -5.35, 6 + 16 cc        | -1.73, 7 (hcnt)         | -1.59, 7 (hcnt)       |
+     | rg_nl               | -4.71, 6 + 16 cc        | -4.03, 6 + 11 cc        | +5.10, 1 + 9 cc       |
+     | rg_wb, cur_line     | -4.72, 6 + 16 cc        | -3.03, 4 + 11 cc        | +6.60, 2              |
+     | q (the sequencer)   | -3.65, 6 + 16 cc        | -2.56, 5 + 11 cc        | +6.56, 2              |
+     | pa_* (stage A)      | --                      | --                      | +4.51, 0 + 10 cc      |
+     | go_q / behind_q     | --                      | --                      | +2.81 / +2.87, 5 + 2 cc |
+     | npar_q / hstale_q   | --                      | --                      | +3.12 / +3.68         |
+     | rg_hit              | --                      | --                      | +1.91, 3              |
+     | rg_quiet            | --                      | --                      | -0.83, 6 (hcnt)       |
+     | rg_lp (line_start)  | --                      | +0.21, 3 (hcnt)         | -0.22, 4 (hcnt)       |
+
+     - Only these R825 paths are below +1.9 ns, and each one starts at hcnt:
+       hcnt -> line_start (4 LUTs post-map: hcnt == 655 && ce_pix) -> pop
+       -> the pointer, or -> rg_quiet.
+     - With the line_start pulse taken out, the decision logic has at most 3
+       LUTs.
+     - In the f1b4a1c and 2e8e1fc columns, some of the worst paths come out
+       of an altshift_taps RAM (dv_hs1_rtl_0). That is where Quartus put the
+       interlace / line-count synchroniser shift registers.
+  2. CALIBRATION, the same paths post-fit. The f1b4a1c s1030 database was
+     copied to scratch and re-timed with quartus_sta.
+
+     | Path             | Post-fit (s1030) | Post-map (full design) |
+     |------------------|------------------|------------------------|
+     | vcnt -> rg_rb    | -2.621           | -6.04 (worst into rg_rb) |
+     | vcnt -> rg_hd    | -2.416           | -5.35                  |
+     | vcnt -> rg_nl    | -2.403           | -4.71                  |
+     | vcnt -> rg_wb    | -2.270           | -4.72                  |
+     | vcnt -> cur_line | -2.272           |                        |
+     | vcnt -> q        | -1.110           | -3.65                  |
+     | hcnt -> rg_rb    | +2.05            | -2.32                  |
+     | hcnt -> rg_hd    | +2.28            | -1.68                  |
+     | hcnt -> rg_cnt   | +2.69            | -1.68                  |
+
+     - The post-fit vcnt -> rg_rb, -2.621, is exactly the number reported for
+       s1030.
+     - So the full-design post-map figure is pessimistic by about 2.3-3.4 ns
+       on the ring's carry-chain paths, and about 4 ns on the hcnt
+       (line_start) paths.
+     - Also measured: m2_video mapped alone (virtual pins). There R825's
+       worst ring path is +1.35 (rg_wb -> rg_hit, 4 LUTs), against 2e8e1fc's
+       +0.21 and f1b4a1c's -3.40.
+  3. CONSTANT FOLD (quartus_map on a constant-input module).
+     - Checked: the stage-A subtract, the wrap add, vtotal - 1, go, behind,
+       npar, the 2'(i) loop compare in rg_hit, and the rg_quiet saturation.
+     - Every output pin's stuck-at value matched the expected constant: tn
+       3fb / 3ff, nd 1a3 / 1a7, go 0 / 1, behind 1, npar 0, hit 0110,
+       quiet 2 / 2.
+     - Only plain unsigned arithmetic and size casts are used.
+  4. AREA.
+     - Full-design map, ALMs needed: f1b4a1c 40,493, 2e8e1fc 40,478, R825
+       40,532 (+54 against 2e8e1fc).
+     - u_tilemap, combinational ALUTs / registers: f1b4a1c 2,050 / 2,252,
+       2e8e1fc 2,056 / 2,271, R825 2,108 / 2,330.
+     - Block memory bits are identical in all three: 4,358,651 total, and
+       122,880 in u_tilemap.
+     - m2_video mapped alone:
+     - 1,999 -> 2,064 ALMs needed (+65).
+     - 2,199 -> 2,248 combinational ALUTs.
+     - 2,736 -> 2,795 registers.
+     - Block memory bits unchanged at 122,880.
+  5. BENCH, MAME DUMPS.
+     - Data: MAME 0.289 daytona via sim/video/mame_m2_ovrdump.lua, R824's
+       25 bursts regenerated: attract at 600 ... 5700, and OV_RACE=1 at
+       1000 ... 4000, 7 frames each. That is 175 frames per mode.
+     - The dumps are ROM-derived. They stayed in scratch.
+     - The regenerated set reproduces R824's 2e8e1fc numbers exactly (native
+       45+U[0,30] 0.89 / 12%, 60 0.91 / 14%, 90 12.87 / 42%; i273 90
+       3.13 / 28% / 23; i262 90 3.10 / 28% / 26).
+     - Config: SIBLING 0 as shipped. Each run is the variant at L against the
+       shipped swap at L = 0.
+     - Units: overruns per frame (field) on visible lines / % of frames with
+       any / worst.
+
+       | Mode   | Latency                                       | 2e8e1fc          | R825             |
+       |--------|-----------------------------------------------|------------------|------------------|
+       | native | 0, 20, 30, 45, 14+U30, 14+U50, 30+U30, q      | 0                | 0                |
+       | native | 45+U[0,30]                                    | 0.89 / 12% / 14  | 0.90 / 13% / 14  |
+       | native | 60                                            | 0.91 / 14% / 13  | 0.95 / 14% / 13  |
+       | native | 90                                            | 12.87 / 42% / 66 | 13.01 / 42% / 66 |
+       | i273.5 | every model to 60                             | 0                | 0                |
+       | i273.5 | 90                                            | 3.13 / 28% / 23  | 3.13 / 28% / 23  |
+       | i262.5 | every model to 60                             | 0                | 0                |
+       | i262.5 | 90                                            | 3.10 / 28% / 26  | 3.11 / 28% / 26  |
+
+     - Wrong lines against r@0 equal the overrun counts in every row, both
+       designs.
+     - All 3 x 11 x 25 runs PASS:
+       - 0 frames differ from r@0 where the variant did not overrun.
+       - 0 wrong glyphs.
+       - M2_RING_CHECK never fired.
+     - The last edit took the hit off rg_quiet's path, which is a boolean
+       identity. The final RTL then re-ran all 50 sweep files: every SWEEP
+       line was identical, and so was every result line of make
+       test_m2_video_ovr.
+     - Scenes whose count changed: 2, 2 and 7 of 25 in the three native
+       overrunning rows, 1 in i262 at 90. Every other row is identical scene
+       by scene.
+  6. BENCH, SYNTHETIC (make test_m2_video_ovr, both SIBLING settings): PASS.
+     - Every line is identical to 2e8e1fc's run, including every mode-change
+       case, except rows that overrun heavily: random tile RAM at 14+U[0,30]
+       and sky at L = 90.
+     - Those move by small amounts in both directions. For example, sky
+       native L 90 goes 224.8 -> 222.2 (SIB 0), and sky i273 L 90 goes
+       63.3 -> 72.0 (SIB 0) but 120.2 -> 119.3 (SIB 1).
+     - Overruns at L ~ 90 are trajectory-sensitive. Sky, L = 80..100 in steps
+       of 2, total visible overruns over the 11 latencies (2e8e1fc -> R825):
+
+       | Mode   | 2e8e1fc | R825   | Change |
+       |--------|---------|--------|--------|
+       | native | 14,971  | 14,928 | -0.3%  |
+       | i273   | 4,479   | 4,388  | -2.0%  |
+       | i262   | 4,073   | 4,126  | +1.3%  |
+
+       Single latencies swing by up to ±30% either way, so the i273 L 90 row
+       is noise, not a regression.
+  7. The checker is live. A mutant that acts after one quiet cycle instead of
+     two stops within the first sky frame ("stale decision go 1/0 behind
+     0/1").
+  8. The rest of the checks:
+     - test_m2_video_timing 39/0 PASS. test_m2_char_cache PASS.
+     - test_m2_video_frame PASS on a MAME frame-5700 dump. LB_RING 0, and
+       LB_RING 1 both before and after: three byte-identical images.
+     - lint_top clean. lint_idx: the only m2_video entry is the pre-existing
+       xlat_tbl.
+     - Verilator -Wall on m2_video: the same warning set as 2e8e1fc under
+       LB_RING 0 and 1.
+     - quartus_map --analyze_file (17.0) on m2_video.sv, m2_video_timing.sv
+       and m2_video_ovr_top.sv: 0 errors.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. R825 should close clk_mem on the ring.
+     - The decision registers estimate at +2.8 ns or better post-map, which
+       is pessimistic by 2.3-3.4 ns on chain paths.
+     - The hcnt -> line_start -> pointer paths estimate at -1.0 to -1.6. The
+       same paths in f1b4a1c estimated -1.7 to -2.3 and fitted at +2.0 to
+       +2.7.
+     - rg_quiet's path is one LUT longer than rg_cnt's, at -0.83 post-map.
+     - Settles it: a fit (seed sweep). The ring's endpoints are rg_rb*,
+       rg_hd*, rg_cnt*, rg_quiet*, rg_hit*, rg_lp*, go_q, behind_q,
+       hstale_q and pa_*.
+  b. 2e8e1fc (R824) most likely FAILS clk_mem too, so it should not be swept
+     as it is.
+     - Its worst ring paths estimate at -3.64 / -4.03 post-map: 6 LUTs + 11
+       carry cells into rg_hd and rg_nl.
+     - On the R823 calibration that is about -0.5 to -1.7 post-fit.
+     - Settles it: a fit of 2e8e1fc, or of this change.
+  c. If the line_start paths show up in a fit, they are the same in the swap
+     design. The fix is to register hcnt == H_TOTAL - 1 as a flag: hcnt moves
+     only on ce_pix, and ce_pix is at least 6 cycles apart in steady state, so
+     the flag is current by the next ce_pix. line_start then becomes ce_pix
+     && flag, one LUT. Not done here.
+     - Model2.sv can hold ce_pix high for 2 cycles across a mode change (its
+       "start clean" branch does not clear ce_pix). That case would need
+       checking first.
+  d. The bench's pixel-enable model clears ce_pix in that same branch, so it
+     differs from Model2.sv there. It only affects mode-change cases.
+
+*Not verified:* any fit, the clk_mem slack of the full design, the board.
+s1037 (PCM_SHARED 1) on the board: Ben -- "some of the voices are only in
+the right channel". s1035 (PCM_SHARED 0, R819's pan law) reloaded for an A/B
+sound test: if s1035 is right, the shared engine mis-pans (bench claimed
+bit-identical per chip -- check whether it compared L and R separately); if
+s1035 does it too, R819's att_side / mute_side pan law is the suspect.
+R821 ON THE BOARD: Ben A/B'd s1037 (shared) against s1035 (two engines): the
+right-channel-only voices are the same on both -- "it's correct" (the game's
+own pan) -- and the shared engine "seems good". PCM_SHARED is now 1 in
+Model2.sv. Fit (s1037): -327..-382 ALM placed, -2 DSP, every clock closed.
+DECISION (Ben, 2026-10-13): the framework audio filter (R788) waits until
+everything else is done -- added back at the end, if the room is still
+there. The room freed by R818 and R821 is not reserved for it.
+
+**R827 -- OPEN: MIP-MAPPING, AS SMALL AS POSSIBLE (Ben: "the important one,
+and it needs to be small").** R665's route (the geometrizer's per-polygon
+texlod + a capture of the game's log RAM + log2(z) per pixel + a second
+fetch for the blend) priced past the device. The small route to test: the
+mip levels are already in texture ROM (MAME: origin, size and u/v shifted by
+the level, sheet = texsheet[level & 1]), so the cost is the level choice and
+an address shift. Choose the level from the span walker's existing texture
+gradients (the footprint method) instead of the z/texlod formula -- a
+departure from what the silicon computes, to be measured against MAME's
+choice and recorded as a decision if taken -- and skip the level+1 blend
+(nearest level + the existing bilinear) unless measurement says it is
+needed. An agent is measuring and designing it.
+
+**R825 FITTED.** s1039-s1041 = ee636e1 (s1035 + the pipelined ring, LB_RING
+1, PCM_SHARED 0), 80/40: all three close every core clock -- clk_mem no longer
+fails (R823's -2.6 ns). s1041: clk_sys +0.029, clk_mem +0.208, clk_i960
++1.697, holds >= +0.240, HDMI -0.576; 41,360 ALM. RBF
+build/Model2_20261013_s1041_ring.rbf 38d4837a. Not yet on the board.
+DECISION (Ben, 2026-10-13): the reduced FPU (FP_EXT 0, ~-1,000..-1,250 ALM
+placed, R818) is the LAST RESORT -- not started; used only if nothing else
+can pay for a wanted feature. Its evidence and requirements stand above.
+
+**R826 -- THE JERKY BACKGROUND IS THE 2D AND THE 3D SHOWING DIFFERENT GAME
+FRAMES. The game writes the backdrop's scroll for the list it flipped TWO
+iterations earlier, which is right only if a list reaches the screen two
+frames after its flip. MAME shows it one frame after (3D a frame early, every
+frame); this core shows it two or three after, and in the race, where the
+board runs the game at ~30 Hz, about a third of the frames show the 3D a game
+step ahead of the 2D, alternating. Fix built behind R826_SYNC (default off),
+not fitted.**
+
+Ben (long standing): the background jerks when sliding and turning; the same
+on the straight in a slide. Then: his Windows static recompilation of Daytona
+jerks the same way, and the real arcade is smooth.
+
+WHAT THE BACKGROUND IS (MAME 0.289, Revision A, headless, Lua
+sim/video/mame_m2_scrlog.lua; race driven at full lock left/right):
+  * Tilemap 2: pair 2/3 in window mode 1, ctrl 0x5006 = 0x2012-0x22xx, so
+    v = (-ctrl) & 0x1ff >= 384 and map 2 alone covers the screen -- the sky
+    and the mountains. Its horizontal scroll is 0x5002 (hscr2), in whole
+    pixels, written once a frame. Pair 0/1 (the HUD) is window mode 2,
+    ctrl 0x4000. Per-line H tables: only map 0's (56 words a frame, lines
+    184-239, the banner); none for the backdrop.
+
+VERIFIED (MAME):
+  * Every scroll write in a race is in vblank: 14,537 writes at lines 384-413
+    (6,888 at 385), 12 in the visible area, all at the race's set-up (f1854).
+    8 words a frame, every frame. Not mid-frame, no per-line scroll, no fine
+    bits, no 30 Hz alternation: candidates (a), (b), (d), (e) of the open
+    entry are out.
+  * The list flip (0x803008) once a frame in the race, lines 122-187
+    (median 145): 60 Hz in MAME.
+  * hscr2 per frame over 1,501 race frames: step 0 on 31%, 1-9 px on 59%,
+    10+ on 10%. Normal cornering is smooth (e.g. f2590-2700: 7,7,7,4,4,5,6,
+    ... 2,2,2). The big steps are spins and the game's own SHAKE: wall
+    scrapes put hscr0 through 0x0010, 0, 0xfff0, 0 (the HUD shaken +-16 px,
+    period 4 frames) and hscr2 through a +-8 period-4 wobble on its ramp
+    (+13,+13,-3,-3); repeated bumps give a decaying 12-frame pattern
+    (8,-7,-4,8,3,-5,-2,2,2,-2,-1,1).
+  * The 3D shakes too, and ONE FRAME EARLIER. Snapshots of the same frames
+    (r826_shift.py, best integer shift per frame of a region): the 3D
+    grandstand/pits against the tilemap mountains, correlation of the 3D's
+    motion at frame t with the 2D's at t + lag:
+        f2871-2929 (bumps)        lag +1: 0.991   lag 0: -0.25   lag +2: -0.17
+        f2796-2829 (wall scrape)  lag +1: 0.981   lag 0: +0.04   lag +2: -0.02
+    The 12-frame pattern rules out lag -3 (0.51). The motion also stops a
+    frame earlier in the 3D (f2829) than in the 2D (f2830). So in MAME the
+    backdrop moves AGAINST the scene by the shake every frame (e.g. -13, +3,
+    +14, -2 px) and by the change of the turn rate in a slide.
+  * Why MAME is a frame early (source): screen_vblank runs geo_parse at
+    vblank START (model2.cpp:2420), and with VIDEO_UPDATE_AFTER_VBLANK
+    (model2.cpp:2517, screen.cpp vblank_end) the frame is composited at
+    vblank END -- the list flipped in frame F with the scroll written in the
+    vblank after F, shown as frame F+1. No pipeline for the 3D at all.
+
+INFERRED (from the above and Ben's "the arcade is smooth"):
+  * The game pairs list k with the scroll of iteration k+2. The scroll for
+    list k cannot be shown before frame F+2 (it is written in the vblank
+    after F+1), so on the board a list is shown two frames after its flip:
+    flip in F, geometry and drawing in F+1, the swap at that vblank. The
+    other way round -- a tile chip latching late -- would make MAME's 2D
+    later still, not earlier. The recompilation shares MAME's zero-frame 3D
+    (not checked: it is Ben's code) and so MAME's one-frame lead.
+  * Nothing here is a MAME cycle count: the evidence is the game's own
+    pairing of what it writes, and where MAME composites.
+
+THIS CORE (RTL and benches; the board not measured):
+  * 2D: m2_video reads the eight words from tile RAM a line or three ahead
+    of the beam, so a vblank write is on screen from the next frame.
+  * 3D: m2_geo "After flip" (trig_after = frame_pend && flip_seen) walks at
+    the first vblank after the flip -- OR AT THE FLIP ITSELF when a vblank
+    has passed with no flip: frame_pend is set by every vblank and cleared
+    only by a walk. tb_m2_geo (new R826 test): vblank with no flip, then a
+    mid-frame flip -> the walk starts at the flip. m2_raster3d swaps a
+    P_READY list in only at a frame_start and publishes the draw at the
+    frame_start after it (scratch FB_DDR3 bench: list complete -> on the
+    beam two frame_starts later; show_tag below moved with it).
+  * So: lists every frame (60) -- shown at flip + 3, the 2D one game frame
+    AHEAD of the 3D on every frame. Lists every second frame (Daytona's race
+    on the board, R763: 28.4-28.7 lists/s) -- the game flips in the second
+    frame of its iteration, the middle vblank found no flip, the walk starts
+    at the flip; when walk + sort end before the next vblank the list is
+    shown one vblank early, with the scroll of the iteration before its own,
+    then with its own: misaligned, then aligned, for every such list.
+  * Event model of exactly these rules (scratch, not committed; board inputs:
+    walk 0-0.6 frame (R763 median 0-6 ms, p90 10-12), draw 0.5-1.02 frame
+    (p90 15-17 ms of 17.4), flip anywhere in the iteration's last frame),
+    share of frames whose 2D is the iteration written for the 3D shown, and
+    changes of slip per 1,000 frames (each change is a jump of one game step
+    of the backdrop against the scene):
+                        60 Hz        30 Hz        30 + 2% 3-frame   15% 1-frame
+      MAME              0  (-1 all)  0            0                 0
+      board-as-inferred 100          50 (1000)    50 (990)          54 (920)
+      core now          0  (+1 all)  64 (713)     64 (715)          66 (670)
+      core strict       0  (+1 all)  98 (33)      97 (53)           90 (162)
+      core strict+gate  100          100 (0)      99 (18)           100 (0)
+    (At 30 Hz even the inferred board alternates -- the game is built for 60.)
+    The core's race jerk is therefore expected to be a shudder of the
+    backdrop against the scene at ~20 Hz whenever the view turns, plus the
+    game's shake landing a frame apart. Not yet seen on the board.
+
+THE FIX (default off; Model2.sv localparams R826_STRICT, R826_SYNC, R826_HSCR):
+  1. m2_geo AFTER_STRICT: in "After flip" the walk waits for a vblank that
+     came after the flip (vbl_after_flip, set at frame_start when a flip has
+     been made, cleared by the walk). The 3D can then never be early: a list
+     is on screen no sooner than the vblank its scroll is written in.
+     tb_m2_geo built both ways (135 checks each; R699/R711 and the rest pass
+     strict too). Costs a flip-to-screen frame at 30 Hz -- the frame the game
+     expects. 1 FF.
+  2. m2_video SCR_SYNC: the 2D never early. The game's flips (a toggle) and
+     the list on screen (m2_raster3d show_tag: Model2.sv tags each walk with
+     the flip count - 1, the tag rides q_end -> swap -> publish) cross to
+     clk_mem; tile RAM's words for iteration j are shown only once list j-2
+     is on screen, and until then the copy taken at flip j-2 stands in (two
+     copies, from the sequencer's own reads of the eight words). Three or
+     more lists behind (3D stalled, no 3D): tile RAM as written. Implies 3.
+  3. m2_video HSCR_FIX (found on the way, R823's side finding): Q_HSCR set
+     the tile-RAM address in the same cycle Q_HSCR_W took the data, so
+     hscr_r was the previous sequencer address's word -- the last row-mask
+     word of the layer before. Only plain-mode scroll uses hscr_r; Daytona's
+     race is window mode on both pairs (in 3,600 MAME frames, 2 had a plain
+     pair with hscr != 0), so not this jerk. Now the address is set on entry
+     to Q_HSCR.
+  Benches: make test_m2_video_r826 (new; m2_video_ovr_top with HSF/SSY):
+     hscr-eq (window mode) d == r; hscr-trap/1-3 (plain mode, r's wrong
+     word made equal to 0x5000+L) d == r, every pixel; hscr-disc (0x5000+L
+     changed) 6 of 6 frames differ. SCR_SYNC against r fed the words the
+     rule should show, scripted game + 3D: sync-none, sync-play/1-3 (1-3
+     frame iterations), sync-60, sync-stall -- 0 differing pixels in 217
+     frames (one sync-stall frame, released mid-frame, not compared); sync-disc (r on tile RAM as written) 40 of 42 frames differ.
+     Aligned frames in the scripted game: gated 37-38 of 39 against 25-28
+     ungated; sync-60 39 of 39 against 0.
+     test_m2_video_ovr (+quick) PASS, test_m2_raster3d 40/0, test_m2_geo
+     135/0 x2, geodiff and boot harness build. lint_top clean with R826 off
+     and on, no new Verilator warning either way; lint_idx 146 candidates,
+     the same, both ways. quartus_map --analyze_file: m2_video, m2_geo,
+     m2_raster3d, Model2.sv 0 errors.
+  Area (estimated, not fitted): strict ~2 ALM; tags ~22 FF (~12 ALM); the
+     gate two copies of ~96 used bits (Quartus prunes the unread bits of the
+     16) + four 16:1 read muxes, ~150-250 ALM. All of it prunes away with the
+     localparams at 0. Timing: the copy mux reaches the hscr/vscr/ctrl registers
+     beside the tile-RAM output (one LUT on that path); the select is
+     registered.
+  Not done: a fit; the board. Ben to try R826_STRICT alone first (nearly free,
+     the 30 Hz race's case) and then with the gate.
+  For MAME / the recompilation: show the polygons one frame later than now
+     (present the previous frame's 3D with this frame's tilemaps).
+R826 TEST (Ben, his recomp): with the 3D delayed one frame under the 2D the
+jerk is UNCHANGED -- the 2D/3D alignment hypothesis does not explain what Ben
+sees (R826_SYNC's 150-250 ALM is not spent; the switches stay off).
+Hypothesis now (not yet tested): 57.5 Hz content on a 60 Hz display -- one
+frame repeated every ~0.4 s, visible only in fast lateral motion (slides,
+spins, corners). Fits the recomp (a PC at 60 Hz), the smooth arcade (a 57.5
+Hz CRT shows every frame once), and the MiSTer if the picture is watched
+through the 60 fps capture/OBS path or a display that converts (Ben's ini:
+vsync_adjust=1, so the HDMI output itself follows the core's 57.5 Hz).
+Asked Ben: is the jerk on the directly connected display, and what rate does
+the display report?
+Ben: the display runs at the game's 57.5 Hz with vsync -- the 57.5-on-60
+judder is RULED OUT. And the recomp's renderer derives from MAME, so the
+recomp is not independent evidence: MAME's hardware model is the shared
+suspect. Next hypothesis: the game's own per-frame backdrop scroll is uneven
+(MAME log: 31% of race frames move hscr2 by 0 px) because the game derives
+its motion from a timing input (timer, vblank/frame counter, the 0x98000c
+frame bit, interrupt rate) that MAME -- and this core after it -- models
+differently from the board.
+Ben: his displays run VRR (every frame shown as produced) and MAME itself
+shows the jerk -- "it's a MAME issue, needs fixing by us". The fault is in
+the hardware model MAME has and this core inherited; MAME is not the oracle
+for it. Agent: find the timing input the game's backdrop motion depends on.
+
+R826 ADDENDUM -- NO TIMING INPUT: THE BACKDROP'S SCROLL IS A FIXED-STEP
+FUNCTION OF THE GAME'S CAMERA YAW, ONE STEP A VBLANK IN MAME. THE GAME'S OWN
+MOTION IS UNEVEN IN SLIDES, KICKS, SHAKES AND CRASHES, AND WOULD BE ON ANY
+HARDWARE THAT RUNS ONE STEP A VBLANK. WHAT IS LEFT IS ALIGNMENT.
+
+What was believed (the previous R826 entry): the game works out the
+backdrop's motion from a timing input -- a timer, the vblank or frame
+count, the 0x98000c frame bit, the interrupt rate, or the copro's
+completion. MAME, and this core after it, would model that input
+differently from the board, so the backdrop moves by uneven amounts.
+
+How it was checked: MAME 0.289, Revision A. The MAME debugger was used to
+disassemble the code, and Lua write and read taps were placed on every link
+of the chain. The new instruments are sim/video/mame_m2_bgtime.lua (a log per
+frame) and sim/video/r826_bgtime.py (the analysis). Drives:
+  * t100: from 2560, a constant left turn (Paddle 100), pedal floored.
+  * t60: the same with Paddle 60.
+  * slide: straight, then at 2800 the wheel to 30, at 2900 to 200, at 3000
+    back to 128.
+  * The earlier scrlog drive, which includes the rolling start.
+Frames 2560-3400 of each drive are the race under the player's control.
+Before 2560 the game is in the rolling start: AUTO DRIVE with a keyframed
+camera.
+
+VERIFIED (MAME, Revision A):
+
+THE CHAIN, from the tile register back to the car:
+  * hscr2 (tile word 0x5002, byte 0x0100A004) is written from the shadow
+    0x501308 by the vblank IRQ's copy at 0x1ba58 (0x1b9a0 copies all eight
+    words). The handler entry is at 0xe34. The order is the I/O call
+    0x1d750, then the copy 0x1b9a0, then the vblank count 0x500000 += 1.
+  * The shadow is set in the same IRQ, at line 384, by 0x1df9c-0x1dfb8:
+    0x501308 = (0x5fe11a >> 5) & 0x1ff. The yaw is a 16-bit angle, 32 angle
+    units = 1 px, 2,048 px a turn, wrapping on the 512 px map. First, 0x1dfd0
+    streams the tile columns that have come into view between the old angle
+    (0x5fe118) and the new one (0x5fe11a). In the race it always returns 0,
+    so the scroll is written on every vblank.
+  * 0x5fe118/0x5fe11a are set by 0x4500, at line ~386, at the START of each
+    game step: 0x5fe118 = the old value, 0x5fe11a = [0x50174c] +
+    [0x501748] << 5. In the race 0x501748 = 0.
+  * In the chase views, 0x50174c = 0x5014a8 = Y. This is 0x6d88-0x6da0 and
+    0x6e4c, with Y = car+0x2a + car+0xf2 + [0x501834]:
+      - car = [0x501220];
+      - +0x2a is the display yaw;
+      - +0xf2 is an offset, non-zero only on impact;
+      - 0x501834 is the game's shake.
+    View 2 uses car+0x4e (plus +0xa4) in place of +0x2a. The same Y goes to
+    the 3D camera object (g13+0x2a, 0x6de4).
+  * The car's display yaw is car+0x2a = car+0x48 + ((car+0x58 - car+0x48) >>
+    2) + (car+0xbc >> 5), at 0x102b4-0x102d8. The heading itself is
+    car+0x58 += cvtri(...) once per step, at 0x101c8: a fixed step.
+  * Rolling start only: a keyframed camera (0x65b4-0x69e0; keyframes in data
+    ROM; 0x5014a0 is a step counter). The yaw there is an atan2 on the TGP of
+    a camera position interpolated between keyframes.
+
+THE TIMING INPUTS. These are every read in 3 x 841 race frames, outside the
+vblank wait at 0x138c:
+  * Timers 0xf00000-f: 0 reads. Timer 0 is loaded with 0xfffff (42 ms at
+    25 MHz) at the top of every step (0x134c). Its IRQ handler (0xeb0) only
+    reloads it, so it is a watchdog, not a clock.
+  * Vblank count 0x500000: read only by the wait loop (0x1394, 0x13a8) and
+    the IRQ's own increment (0xe44). The loop runs one step, waits for the
+    count to change, increments 0x5010b4 if the count reached 2 (an overrun
+    tally that is never read), clears the count, and loops.
+  * 0x98000c: one read a step (0x17f24). Bit 2 picks the list buffer
+    (0x501368 -> geo 0x1008 / 0x3008), and nothing else.
+  * 0x5010b0: a counter of steps, not of vblanks (0x1858, 0x1b0fc).
+  * TGP: its results come back through blocking FIFO reads. They are
+    deterministic in value; when they arrive changes nothing.
+  * Inputs: 0x1d9f0 reads the DPRAM analog channels once a step into a
+    4-sample box filter (0x5fe5d0). In MAME the I/O board answers every
+    vblank: 0x1c00040 is read 0 and written 1 at line 384 in every frame.
+    Under a 1/frame Paddle ramp the steering byte follows with 2 frames'
+    latency and moves 1 per frame, and the filtered value moves 256 per
+    frame.
+  * Game steps per frame in MAME: 1 in every frame of 3 x 841 race frames
+    and of 1,701 frames of the rolling-start drive.
+
+SO MAME's PER-FRAME hscr2 IS THE GAME'S PER-STEP hscr2. Per frame, in
+units of yaw (32 = 1 px of backdrop):
+  * Steady turn (t100, 2850-3150): a yaw rate of 87-89 a frame, changing
+    by <= 3. hscr2 steps 2,3,3,2,3,3. t60: 113-116, steps 3,4,3,4. The
+    only unevenness is the whole-pixel truncation of the angle. The tile
+    chip has no fine scroll, so that is the hardware, not MAME.
+  * The game's shake, 0x501834: a square wave of +-256 (+-8 px), period 4
+    frames, decaying 256/128/64/32, on every wall contact.
+  * Crash spins: a constant 276-351 a frame for ~30 frames, with entries
+    of +-1,000 to 2,900 in one frame.
+  * Slide onset (slide drive, 2800): 0, 229, 655, -71, -297, -129, 15, 60,
+    then a smooth 51 -> 155.
+  * Kicks off the road and on kerbs: a yaw-rate sawtooth with a period of
+    6-8 frames. Examples: 140 105 82 79 60 40 31 34 | 137 97 76 ... and
+    58 57 17 41 48 51 52 122 97 83 86 88 89 138.
+  Counts of frames whose yaw rate changed by >= 128 (4 px): t100 40, t60 41,
+  slide 263, of 841 each. Backdrop step change of >= 4 px: t100 39,
+  t60 43, slide 292.
+  All of this is fixed-step game state, and any hardware that runs one step
+  a vblank shows the same values. THE GAME'S PER-FRAME MOTION IS GENUINELY
+  UNEVEN in slides, kicks, shakes and crashes, in screen terms. But the 3D
+  camera takes the same Y, so the 3D moves with it.
+
+THIS CORE'S SIDE OF THE SAME INPUTS (Model2.sv):
+  * 0x98000c is MAME's videoctl_r (R765).
+  * Vblank IRQ: on tile_vb, but WITHHELD while r3d_game_hold (R652). A
+    withheld vblank is a step the game does not take. That is a hitch MAME
+    never has, though not a slide jerk.
+  * The timers 0xf00000 are not implemented: writes are ignored and reads
+    return 0. This is harmless to Revision A, which never reads them and
+    whose watchdog only reloads them. It is a gap for any game that reads
+    them.
+  * The I/O board is the real Z80 program (m2_ioz80), as in MAME.
+  * At 99% one step a vblank (R815, R817), the core is in the 60 Hz row of
+    R826's table: the 2D one step AHEAD of the 3D on every frame.
+
+INFERRED (not measured on the board or the arcade):
+  * The arcade can look smooth only if the backdrop and the 3D move
+    together, so that the game's uneven yaw reads as the whole view turning.
+    The game's own pairing points that way: R826 found that the scroll for
+    list k is written two steps late, which is right for a flip-to-screen of
+    2 frames. Model 1's RTL (tools/model1-ref m1_raster3d.sv:1174-1176,
+    :1112-1114, :1425) gets the same 2 frames on its board design: the walk
+    starts at the vblank after the flip, the swap comes just before the next
+    vblank, and the pass is shown 2 vblanks after the flip.
+  * The backdrop's jump against the scene per frame is its offset from the
+    3D. The sizes below are from the MAME yaw logs above, with
+    d = 0: aligned; d = +1: MAME (3D early); d = -1: this core at one step a
+    vblank.
+                     d=0     d=+1 or d=-1           d=+2
+       t100 (turn)    0      >=2 px 50, >=4 px 39   76 / 62
+       slide          0      >=2 px 369, >=4 px 261 518 / 414
+    Steady cornering gives ~0 in every case, and slides and kicks give a
+    lot. That matches Ben: "jerky when sliding and turning corners ... the
+    same on the straight if you throw the car into a slide."
+  * Ben's recompilation test (3D delayed one frame, jerk unchanged)
+    contradicts this only if the recompilation started at MAME's d=+1. If
+    it started at d=+2 or d=-1, a one-frame delay leaves it at |d| = 1,
+    which looks the same: d=+1 and d=-1 give equal counts above. This is not
+    checked; the recompilation is Ben's code.
+
+NEXT:
+  1. Measure the recompilation's d directly, before and after the delay:
+     r826_shift.py on its snapshots, or its hscr2 against the list index
+     shown.
+  2. On the board: R826_STRICT + R826_SYNC (the gate). This is the only
+     switch that gives d = 0 at one step a vblank. R826_STRICT alone leaves
+     the core at -1 at 60.
+  3. Keep the R652 hold and the 1% two-vblank steps apart from this jerk:
+     they freeze the whole picture for a frame.
+  Nothing in the RTL was changed for this addendum. No timing input was
+  found, so there was nothing to put behind a parameter.
+R825 ON THE BOARD: s1041 (s1035 + the pipelined ring) -- Ben: "looking good,
+tile overruns seem to be gone". R823-R825 closes the tile-overrun item
+(R85/R276's line shown twice) at 24 kHz; 15 kHz to be confirmed on the CRT.
+s1041 at 15 kHz interlaced (Ben, a monitor that accepts 15 kHz but
+deinterlaces): no overruns seen. A user's real CRT is still wanted to confirm
+the interlaced picture itself.
+
+**R828 -- MIP-MAPPING (R827), BUILT BEHIND MIP (DEFAULT 0). THE LEVEL COMES
+FROM EACH QUAD'S EDGES AND THE PIXEL'S 1/z, NOT FROM MAME'S z/texlod FORMULA.
+MAME'S OWN LEVEL BARELY MIPS DAYTONA, SO MATCHING IT WOULD NOT REMOVE THE
+SHIMMER. NEAREST LEVEL, THE EXISTING BILINEAR, NO BLEND. +260 ALMs NEEDED
+(MAP), THE DRAW 2-26% FASTER, SDRAM LINE READS -43..-73%.**
+
+*Believed (R606 / R665 / R827):*
+  1. Mip-mapping needs the geometrizer's per-polygon texlod (cb[10] and the
+     game's log RAM), which R665 priced past the device.
+  2. The mip levels are already in the texture sheets, so the cost is the
+     level choice and an address shift.
+  3. MAME's level formula is the silicon's, so the target is agreement with
+     MAME's level.
+  4. R606: 95% of MAME's pixels are at level 0, so mip "moves misses 7%".
+
+*Now known -- VERIFIED:*
+  1. MAME'S LEVEL SITS 2-6 LEVELS BELOW THE TEXEL FOOTPRINT, AND MAME
+     SHIMMERS. This was measured in MAME 0.289 with M2MIP instrumentation (a
+     copy in build/mame289-mip; the env vars M2MIP_RANGES and M2MIP_OUT). The
+     instrumentation dumps every iterated textured pixel (1/z, u/z, v/z,
+     MAME's mml and level, the final texel), each polygon's texture state and
+     texlod, and its vertices. The run was Daytona attract with
+     -numprocessors 1, over frames 2000-2023 (race), 5000-5023 (race),
+     7000-7007 (attract) and 9000-9023 (oval).
+     - An offline C port of fetch_bilinear_texel / draw_scanline_tex
+       reproduces MAME's final texel for every drawn pixel: 12.6 M pixels, 0
+       differ.
+     - MAME's level among drawn pixels: L0 97.0 / 93.7 / 99.2 / 97.7%.
+       The level+1 blend is active on 6.1 / 14.7 / 2.7 / 6.4% of pixels (with
+       a weight of 16/128 or more on 5.1 / 12.1 / 1.8 / 5.2%). The
+       microtexture is used on 0%. Textured polygons with any pixel above
+       level 0: 17 / 32 / 8 / 15%.
+     - The true footprint is rho = max |du/dx|, |dv/dx|, |du/dy|, |dv/dy|,
+       taken from each polygon's planes. Of the drawn pixels, 53 / 58 / 45 /
+       40% are minified (rho > 1). floor(log2 rho) puts L0 at 77 / 57 / 76 /
+       76% of pixels.
+     - MAME's mml/128 minus log2 rho, with median and p10..p90:
+       - frames 2000-2023: -3.0, from -3.5 to -2.25.
+       - frames 5000-5023: -3.5, from -5.0 to -2.25.
+       - frames 7000-7007: -3.5, from -5.5 to -2.5.
+       - frames 9000-9023: -2.5, from -4.25 to -2.5.
+     - So MAME's level is not even a constant offset of the footprint.
+     - log_ram is u8 in MAME (model2.h), so a game write of 0xFFFF lands as
+       +255, about 2 levels of bias. Whether the board reads it otherwise is
+       not known.
+  2. THE LEVELS ARE IN THE SHEETS WHERE MAME ADDRESSES THEM. Levels 0..max
+     of the most-drawn textures were rendered from frame 2000's sheets at
+     MAME's origin ((t - 2048) >> L & 2047, (t - 1024) >> L & 1023) and
+     sheet texsheet[L & 1]. Each is a halved copy of level 0.
+     - Correlation with a 2^L box downsample of level 0, levels 1-4:
+       - road, 256x256: 0.96 / 0.94 / 0.85 / 0.87.
+       - tree, 256x128: 0.92 / 0.89 / 0.85 / 0.81, and 0.68 at L5.
+     - Some L5+ levels (8x8 and smaller) correlate weakly. That is not
+       settled (see inferred d).
+     - No mip generation is needed.
+  3. THE FOOTPRINT, CHEAPLY: N z^2 WITH N FROM THE QUAD'S EDGES. For a
+     projective map, the texel footprint along any screen direction is
+     N * z^2, and N is constant along that direction. Along an edge,
+     N = |duv| * oz_a * oz_b / |dxy|. This is the same z^2 law as MAME's
+     2 log2 z. The edges supply the per-polygon scale that texlod supplies in
+     MAME.
+     - So each quad gets K = max over its edges of log2 N. Each pixel's level
+       is floor(K - 2 log2(1/z)).
+     - The bit-level model of the RTL (Kh) uses:
+       - 4 msb + 2 bits as the log;
+       - ORs as the maxima and one's complements as the magnitudes;
+       - the fill's normalised 1/z.
+     - Kh against the exact floor(log2 rho), equal / within 1:
+       80.4 / 99.0%, 69.4 / 95.6%, 85.6 / 99.2%, 89.4 / 99.5%.
+     - Kh against MAME's level, equal: 67.5 / 48.1 / 71.3 / 74.6%. That is
+       mostly both at 0.
+     - The variants tried:
+       - Only two edges: shimmer 1.3x GT.
+       - x-only footprint, the span walker's own du/dx: shimmer 1.14-1.21x
+         GT (0.86 on f7000) and more blur in x. The road's depth direction is y.
+       - The log with no mantissa bits: over-blurs.
+       - A global bias on 2 log2 z: MAME's 3-level spread above shows the
+         per-polygon term is needed.
+  4. SHIMMER. Every sampled minified pixel (rho > 1) was re-rendered at 8
+     positions panning 1/8 px right and 1/16 px down a step. The figure is
+     the mean |change| per step, against a box-supersampled level-0 ground
+     truth (GT), as a ratio to GT:
+
+       variant                         f2000  f5000  f7000  f9000
+       today (L0 bilinear)              2.02   2.57   1.65   2.14
+       MAME, full (L/L+1 blend)         1.77   2.06   1.47   1.94
+       MAME's level, nearest            1.88   2.29   1.52   2.03
+       exact footprint, floor           1.12   0.98   0.75   1.11
+       Kh per quad                      0.98   1.00   0.77   1.06
+       Kh per split triangle (BUILT)    1.08   1.09   0.88   1.14
+       trilinear on the footprint       0.79   0.69   0.58   0.81
+
+     - Frame to frame, the mean |change| of minified pixels over the 24
+       consecutive frames:
+       - GT: 19.8 / 11.4 / 33.4 / 19.4.
+       - today: 24.6 / 15.6 / 38.4 / 21.8, which is +13..+37%.
+       - MAME: 23.6 / 14.4 / 37.5 / 21.3.
+       - edge-K: 20.5 / 12.0 / 32.1 / 19.4, which is -4..+5%.
+     - The price is blur. The mean |difference| from GT on minified pixels
+       goes from 6-8 to 11-18 (of 255). Part of that is the game's own
+       level content.
+     - The per-triangle K (SPLIT_TRI) equals the per-quad K on 92.6-96.0% of
+       pixels.
+  5. THE RTL, BEHIND m2_raster3d MIP (Model2.sv .MIP(1'b0)).
+     - m2_raster_fill:
+       - Beside S_OZ's normaliser, which already walks the vertices with
+         their raw u, v and 1/z, one edge a cycle (closing 3 -> 0).
+       - Three pipeline stages (magnitudes; logs; K_e), then a running max.
+       - K is final 4 cycles after S_OZ, and the first span waits for the
+         plane fit anyway.
+       - span_mipk is 10 bits and rides the span queue: 276 of the 280 bits
+         its seven M10K hold.
+     - m2_span_tex:
+       - L = clamp((K - 2 lq(ooz)) >> 2, 0, min(log2 min(w,h) - 1, 7)). It is
+         chosen as a group enters d1, from the divide's own leading-one and
+         normalised mantissa, and is carried down d1..d4.
+       - The un-normalising shift takes L more, so u and v leave at the
+         level. It is rebased past its fixed 18: 4 bits instead of 5.
+       - tx_tex[26:24] = L. Bit 12 is the sheet already ^ L[0]. Bits 27/28
+         are the mirror decisions (bit 13 + code - L of the level's u, v).
+     - m2_texel_bl:
+       - At K: the level's width masks and origin, registered.
+       - At A/P: they replace the level-0 ones.
+       - The nibble is chosen by the texture-relative parity, as get_texel
+         does it. That is the same at level 0, and it differs from L5 where
+         the origin can be odd.
+     - Nothing waits on any of this, and no stage or handshake is added.
+     - Model 1 has no mip. The change sits inside the stages Model 1's walk
+       already has.
+  6. MIP 0 IS HEAD. tb_m2_raster3d, core configuration:
+     - The configuration: FTB, PXC, FRB 2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb,
+       TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16, TXLW8 with -DR3D_LW8, step 1,
+       bilinear, R107.
+     - MAME lists f2000, f2300, f3910, f5000 and f9000, at TEXMEM latency 12
+       and at 30 + 0..30 jitter.
+     - Pixel hash, draw cycles, fetch count and SDRAM line reads are all
+       identical to HEAD in 10 of 10 runs (10e0093, and again on 78ab95b for
+       three lists at L12).
+  7. MIP 1, EVERY TEXEL EXACT. Every texel answer in those runs was checked
+     against a Python model of fetch_bilinear_texel written from MAME at the
+     fetch's level (plus the documented x*0x11 widening): 1,991,570
+     answers, 0 differ.
+     - Fetches by level (f5000): 79.7k / 36.3k / 23.9k / 11.1k / 7.0k /
+       2.5k / 136 / 33.
+     - Draw at 80 MHz, MIP 0 -> 1:
+
+                 L12                          L30
+       f2000   8.94 -> 8.58 ms  -4.1%     10.82 ->  9.79  -9.5%
+       f2300  10.59 -> 10.16    -4.0%     12.56 -> 11.21 -10.8%
+       f3910   7.14 -> 6.99     -2.0%      8.27 ->  7.76  -6.2%
+       f5000   6.67 -> 5.96    -10.7%      9.22 ->  6.82 -26.0%
+       f9000   7.09 -> 6.61     -6.8%      9.28 ->  7.75 -16.6%
+
+     - SDRAM line reads (L12): 12,995 -> 6,367; 14,627 -> 5,869;
+       8,983 -> 5,158; 19,720 -> 5,390; 16,728 -> 5,720. That is -43..-73%.
+     - Mip reduces texel-cache misses at distance, as R827 expected. R606's
+       "7%" was MAME's own, barely-mipped level.
+  8. BENCHES. Each takes a level, and each check was mutated to make sure it
+     can fail:
+     - test_m2_texel_bl_mip: random levels, the model at the level, 200k x 2
+       memory models, and 2 M with latency to 300. Mutations caught: the
+       level's top bit dropped; the mirror decision ignored.
+     - test_m2_span_tex_mip: every test above with K = -512, then 3,000
+       random back-to-back spans (30,000 swept). It checks every fetch's
+       level, the coordinate against the divide's arithmetic at the level
+       and the exact quotient, and the texture word. Mutations caught: the
+       wrong slot's K; the wrong mantissa bits; the level shift off by a
+       stage; the mirror bit index off by one.
+     - test_m2_raster_fill_mip: 4,000 quads (40,000 swept), span_mipk
+       against the formula from the quad as presented. Mutations caught: no
+       closing edge; the wrong lq bits; the 16-octave limit off by one; the
+       closing edge from the wrong vertex.
+     - All existing texel, span, fill, cdc and raster3d benches pass.
+     - lint_top clean. lint_idx: no new candidates.
+     - quartus_map --analyze_file (17.0) on the four modules and Model2.sv:
+       0 errors.
+  9. AREA. quartus_map 17.0, whole design, the same tree, MIP 0 -> 1:
+     - ALMs needed: 39,920 -> 40,180 (+260).
+     - Combinational ALUT: 56,995 -> 57,432 (+437).
+     - Registers: 48,112 -> 48,395 (+283).
+     - Memory ALUT: 1,446, unchanged.
+     - Block memory bits: +368. The span queue is 252 -> 261 bits after
+       pruning, still at most 280, so 7 M10K by construction. The cdc gains
+       5 bits x 16.
+     - DSP: 89 -> 89.
+     - By entity, ALUT / registers:
+
+       entity            ALUT              registers
+       m2_raster_fill    4,981 -> 5,199    3,629 -> 3,825
+       m2_span_tex       1,517 -> 1,477    1,452 -> 1,454
+       m2_texel_bl       1,690 -> 1,799    1,286 -> 1,352
+       m2_texel_cdc         93 -> 95         206 -> 216
+
+  10. TIMING. quartus_sta --post_map, slow model. R825 calibrated it as
+      pessimistic by 2.3-4 ns.
+      - clk_sys:
+        - d1a -> d1_L: +5.13.
+        - d3 -> d4a_sr: +8.41.
+        - d4a -> d4: +5.75. MIP 0 is +2.47 here; the rebased shift is
+          shorter.
+        - d4 -> cdc: +7.99.
+        - fill E1 / E2 / E3 / k_r: +4.56 / +8.48 / +5.53 / +5.18.
+        - In one cycle that edge was -8.15, hence the stages.
+      - clk_mem (m2_texel_bl):
+
+        path                   MIP 0     MIP 1
+        cdc f_* -> K           +3.18     +1.44
+        K -> A                 +1.62     +2.21
+        A -> P                 +2.71     +1.62
+
+        - With the level worked out where it is used (first try), these were
+          +0.01 / -1.28 / -0.13.
+        - The module's worst clk_mem paths are p2_tex_f's stall into K and P
+          (-7.0..-8.2 and -4.53 post-map). They are the same in both builds.
+
+*Decision (recorded as a departure from what MAME computes):* the level is
+the footprint's (edge K + 2 log2 z), not model2rd.ipp's
+(-texlod + log2 z^2) >> 7. MAME's formula, fed the game's texlod as MAME
+reads it, is 2-6 levels sharper than the footprint (item 1) and shimmers
+1.5-2.1x the supersampled reference. Following it would leave the shimmer
+R827 exists to remove. The blend with level+1 and the microtexture are left
+out: nearest level + bilinear already brings the shimmer to the reference's
+(item 4). The addressing at a level (origin, size, sheet, u/v >> L, parity)
+is MAME's, bit for bit.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. Placed area +145..+260 ALM. The map delta (+260 ALMs needed) has
+     placed at 0.55-0.62x in R821 / R788, but R798 saw small deltas grow up
+     to 2.5x. R821 freed -327..-382. Settles it: a fit with .MIP(1'b1).
+  b. Timing should close. Every new path is +1.4 ns or better post-map, and
+     the clk_mem worst paths are unchanged. Settles it: the same fit.
+  c. Visible: distant road and walls smooth, with lane dashes fading at
+     distance (the game's own level content). In 4-7% of pixels the level
+     steps by one along the split diagonal (per-triangle K). The level also
+     steps in bands, as any nearest-level mip does: there is no blend.
+     Settles it: Ben on the board, R827's "distant textures shimmer".
+  d. Levels 5-7 (8x8 and smaller copies, 0.5-3% of fetches) may not be
+     where the board keeps them. Some correlate weakly with level 0, MAME
+     never exercises them, and the parity rule there is MAME's. Settles it:
+     the board image at distance; capping L at 4 is a one-constant change
+     (mipl_p).
+  e. Whether the arcade itself mips this much: MAME's log RAM read (u8) is
+     the only source for texlod, and it is suspect. Settles it: board video
+     of the arcade, or the log RAM's real width.
+
+*Not verified:* any fit; the board; MIP with texel step 2-8 (the level
+ignores the step, so step > 1 still aliases along x); interlace.
+R826 BUILT: s1042-s1047 = 78ab95b + R826_STRICT + R826_SYNC (r826-on.patch;
+ring + shared MultiPCM). s1042-s1044 missed clk_sys (fill/store/geometry/jt12
+paths, none R826's); s1046 passes the rule: clk_sys +0.173, clk_mem +0.267,
+clk_i960 +1.980, holds >= +0.145, HDMI -1.116 (report-only); 41,288 ALM. RBF
+build/Model2_20261013_s1046_r826.rbf 2b870c07. (Fitter success, then the
+usual Quartus segfault on exit.) Not yet on the board.
+
+**R829 -- AN OSD VOLUME, 80% BY DEFAULT (Ben).** status[49:46] ("Volume":
+80%, 90%, 100%, 0%, 10% .. 70% -- index 0 is the default, so the list starts
+at 80 and wraps). Gain = round(pct x 256 / 100), one 16 x 10 signed multiply
+per channel (multstyle dsp: +2 DSP, 89 -> 91 of 112), the product's [23:8]
+registered on clk_sys, into AUDIO_L/R. At 100% the output equals the sound
+board's exactly; never louder, so it cannot clip. Three flops bring the OSD
+bits in. lint_top clean; Model2.sv parses in Quartus 17. The constant-fold
+check (project memory, R662) could not read the values -- Quartus kept the
+constant multiply in DSP -- so the board test is the check: 100% must sound
+identical to before, 80% quieter. Not yet built.
+R826 ON THE BOARD: s1046 (STRICT + SYNC): Ben -- "background sky is better
+but still a bit jerky; e.g. quick start a slide then swap to the other
+direction -- really jerky, but better". Alignment was a large part of it; some
+frames are still mismatched. Suspects: the gate's fallback (3D >= 3 lists
+behind shows tile RAM as written), game steps that take two vblanks (~1%),
+and R652's held vblank (Hold game), each breaking the one-step-a-vblank
+pairing. Next: telemetry of the per-frame 2D/3D offset, fallbacks and
+two-vblank steps on the board, and the cases in simulation.
+Ben, refining R826: on the arcade a slide swung from one side to the other
+"mostly sweeps" the view across; in emulation it jumps instantly. The game
+smooths its own camera (car+0x2a = car+0x48 + ((car+0x58 - car+0x48) >> 2) +
+(car+0xbc >> 5)), so a jump means a term feeding it -- likely car+0xbc --
+changes discontinuously. Hypothesis: an op on the physics path (TGP or i960
+FP; e.g. at the zero crossing of the slide angle) that MAME emulates wrongly
+and this core reproduces. An agent is tracing it. Smoothing the 2D scroll in
+the display was considered and rejected: it would make the backdrop lag the
+3D on every frame.
+
+**R828 FITTED.** s1048-s1050 (662002b + MIP 1, mip-on.patch) missed narrowly
+(clk_mem -0.031 in the SDRAM arbiter; clk_sys -0.344 fx68k -> the shared
+MultiPCM's key_wait; -0.334 in the fill's oz normaliser). s1051-s1053: s1052
+closes, clk_sys +0.041, holds >= +0.240, HDMI -0.106; 41,352 ALM. RBF
+build/Model2_20261013_s1052_mip.rbf. Contents: ring + shared MultiPCM + MIP
+(R826 off, no volume). Not yet on the board.
+R828 ON THE BOARD: s1052 (MIP 1): Ben -- "bad: the change is at too close a
+distance; the road a couple of quads in front is all blurry." The level
+comes from the footprint's MAJOR axis (max over edges); on the road, seen at
+a grazing angle, the compressed depth axis drops the near road to a blurry
+level (the classic isotropic-mip failure on oblique surfaces). MIP stays 0 on
+the branch. Next: measure minor-axis / log-average / anisotropy-clamped rules
+and a bias, and expose the bias as an OSD choice with Off.
+
+**R830 -- THE SLIDE-REVERSAL SNAP IS THE GAME'S OWN RESPONSE TO HOW FAST THE
+STEERING MOVES. NO OPERATION ON THE YAW PATH IS EMULATED WRONGLY.**
+
+What was believed (Ben, and af5c71a's note under R826): the game smooths its
+camera (car+0x2a = car+0x48 + ((car+0x58 - car+0x48) >> 2) + (car+0xbc >> 5)),
+so a snap means a term feeding it changes discontinuously -- most likely
+car+0xbc -- because MAME gets an op on the physics path wrong (TGP or i960 FP,
+e.g. at the zero crossing of the slide angle), and this core copies MAME.
+
+How it was checked: MAME 0.289, Daytona Revision A, Lua drives with the
+paddle set per frame. Per frame: the player car's whole struct
+(car = [0x501220], 0x000-0x2fc), 0x5018a0-ac, the shake 0x501834 and Y
+0x5014a8. Write taps (with PC) on car+0xbc/0x128/0x18c/0x18e and the analog
+block 0x5fe5d0. Taps on the TGP function port 0x880000 and FIFO 0x884000
+(writes and reads, with the i960 PC and g13 = the player car), so every TGP
+call of the yaw code is logged with its arguments and result. The drive:
+straight, pedal 224, wheel to 40 at frame 2780 (slide one way), then to 216
+from 2810 at 176 (one frame), 44, 22, 11 or 6 ADC counts a frame, centre at
+2850. Scripts and logs are scratch (ROM-derived output), not committed.
+
+VERIFIED (MAME, Revision A):
+
+THE CODE PATH, per car, per step (in this order):
+  * car+0xbc, steering: 0xf064. bc += (T - bc) / 2, T = (adc - 0x80) * 384
+    clamped to +-32512 (full lock at |adc - 0x80| >= 85). adc is the steer
+    byte, adc << 8 in 0x5fe5d0's low half (accel in its high half, brake at
+    0x5fe5d4), written once a step at 0x1dab4/0x1dacc. T fits the logged
+    steps exactly with no averaging (0x54 -> -16896, 0xd8 -> 32512), so the
+    R826 addendum's "4-sample box filter" at 0x5fe5d0 looks like four
+    channels, not four samples -- worth a second look before it is relied
+    on.
+  * car+0x128 = -bc >> 3, the front wheel angle: 0xfd50-0xfd5c.
+  * 0xffe8-0x102d8, the yaw. g0 = 128 + 18c + r7, g1 = 18e + r7, g2 = g0 - g1,
+    r7 = +-0x4000 picked by the sign of (128 + 18c - 18e) (0x10000). TGP
+    calls (function numbers are the game's TGP program): 1d = r sin a,
+    1e = r cos a, 1b = sin a (a a 16-bit angle), 03 = a / b, 02 = a * b,
+    0a = atan2 in 16-bit angle units, 24-29/25 an accumulate chain (v / R x
+    65536/2pi). R = wheelbase 2.75 / sin(g2) is the turning radius; 0a gives
+    the travel direction g5; slip = g5 - r7 (or g0 when g1 == g0, straight).
+    Heading car+0x58 += cvtri(v / R) (0x101c0-0x101cc); car+0x48 = heading +
+    slip (0x10204-0x10214); car+0x2a as above (0x102b4-0x102d8).
+  * 0x10454-0x10820, after the yaw: 18e (rear, 0x10624/0x1081c) and 18c
+    (front, 0x107a8) are recomputed from the NEW 128.
+  So the yaw step sees 128 of THIS step against 18c of the LAST step: the
+  front-rear angle it builds the turning centre from carries the whole of
+  this step's steering change, Delta128 = Delta(bc)/8.
+
+THE REVERSAL, one-frame swing (adc 40 -> 216 at 2810; yaw units, 65536 a
+turn, 32 = 1 px of backdrop):
+  frame  bc      128   18c   18e   h58    h48   slip  bc>>5  2a     rate | d(h48) d(q) d(bc>>5)
+  2811  -32512  4064 -4860 -1066   -185  -1207 -1022 -1016  -1968   159 |   181   -22     0
+  2812  -24704  3088 -3712  -887   -425  -1845 -1420  -772  -2262  -294 |  -638   100   244
+  2813    3904  -488  -111  -631  -1585  -4195 -2610   122  -3421 -1159 | -2350   297   894
+  2814   18208 -2276  1474  -375  -2185  -3705 -1520   569  -2756   665 |   490  -272   447
+  2815   25360 -3170  2516  -119  -2634  -3673 -1039   792  -2622   134 |    32  -121   223
+  2816   28936 -3617  3221   137  -2967  -3578  -611   904  -2522   100 |    95  -107   112
+  (rate = d(2a) a frame; q = (h58 - h48) >> 2. car+0xf2 and the shake are 0
+  throughout, so Y = 2a.) The view turns +159 a frame, then -294, -1159,
+  +665: a 6.4-degree jump in one frame and back. In step 2813 the yaw code
+  saw front-rear = 128 + 18c_old - 18e = -488 - 3712 + 887 = -3313 (steady
+  value ~+280, plus Delta128 = -3576): TGP 1b(-3313) = -0.3123, R =
+  03(2.75, -0.3123) = 8.77 (102 the step before), 0a -> g5 = -18994, and the
+  heading itself stepped -1160. With 18c caught up, front-rear is back to
+  -1756, -1321, -982.
+  The slide onset (adc 128 -> 40) shows the same: rate 59, 266, 699, -39,
+  -246 (the R826 addendum's 229/655/-71/-297).
+
+THE SAME REVERSAL AT FIVE STEERING SPEEDS (frames 2806-2849; "jerk" = the
+largest change of yaw rate between consecutive frames):
+  lock-to-lock     adc/frame   jerk   max |rate|
+  1 frame             176      1824     1159
+  4 frames             44       507      385
+  8 frames             22       324      359
+  16 frames            11       127      239
+  30 frames             6        69      178
+  For scale, a steady t100 corner has frame-to-frame rate changes of <= 3,
+  and R826 counted >= 128 as a visible 4 px step. At 16 frames (0.27 s) the
+  rate goes 159 101 43 109 173 208 199 176 141 14 -84 -130 ... : the view
+  sweeps across. At 1 frame it reverses in a frame and kicks back.
+
+THE OPERATIONS ON THE PATH, against exact arithmetic (every TGP call of
+0xffe8-0x102e0 for 95 frames, finite results):
+  02 a*b      190 calls, rel err <= 5.9e-8
+  03 a/b      178 calls, rel err <= 1.8e-7
+  1b sin      190 calls, abs err <= 2.9e-8
+  1d r sin    279 calls, rel err <= 1.0e-7
+  1e r cos    273 calls, rel err <= 7.9e-8
+  0a atan2     95 calls, err <= 1.04 angle units (0.006 degree)
+  All are single-precision accurate. 0a is continuous through its x = 0
+  crossing (0a(-0.878,-37.85) = -16625, 0a(0.255,-44.59) = -16325,
+  0a(1.380,-48.98) = -16091), and the r7 = +-0x4000 side flip is
+  continuous: in the 16-frame swing the flip (front-rear 135 -> -112, step
+  2814) moves the rate 101 -> 43 -> 109, nothing more. The spike starts
+  before any TGP call, in the i960's INTEGER adds of stored game state
+  (128 + 18c + r7), so no FP or TGP rounding can make or remove it.
+  i960 AC in the race = 0x3f001001: rounding mode 0, all FP faults masked.
+  MAME's mode 0 is C round() (half away from zero); IEEE 754 round to
+  nearest, which the i960KB claims, is half to even (the manual was not
+  re-read for this). This core copies MAME (i960_fpmisc.sv) -- a real
+  deviation, but it touches exact .5 ties only, <= 1 unit of heading, not
+  this.
+  Straight-line case: front == rear, so sin 0 = 0, R = 2.75/0 = inf, and the
+  chain ends in NaN; cvtri(NaN) gives 0x80000000 (MAME, x86), whose low 16
+  bits add 0 to the heading; the slip takes the g0 path. What the real TGP
+  does with x/0 (its reciprocal table at exponent 0) is unknown, but any
+  difference shows only when front == rear exactly, not in a reversal.
+
+INPUTS, as the game sees them:
+  * MAME gave one intermediate sample at the one-frame swing: the steer byte
+    read 0x28, 0x54, 0xd8 -- 0x54 is exactly a quarter of the way, which
+    fits MAME interpolating an analog port within the frame (inferred, not
+    read in MAME's source).
+  * This core (Model2.sv ~5055): the stick goes straight to the ADC byte;
+    the d-pad "ramp" steps 1 count every 1024 clk_sys -- rail to rail
+    (190 counts) in ~3 ms at 60 MHz, i.e. one game step. Its comment says it
+    ramps "so the wheel sweeps as a real one would"; to the game it is the
+    1-frame row above. (Model 1's core sends the d-pad straight to full
+    lock, tools/model1-ref/Model1.sv:347, so this matches the oracle's
+    choice; it does not match the comment.)
+
+INFERRED (not measured on the board or the arcade):
+  * The arcade "mostly sweeps" because a cabinet wheel cannot go lock to
+    lock in one or two frames: it has travel, a return spring and the drive
+    board's motor (sj25_0207_01; MAME leaves its output unconnected, which
+    changes nothing the game computes). A pad's stick or d-pad can. The
+    game's camera follows the steering twice -- directly through bc >> 5
+    (11 degrees lock to lock, halving lag) and through the turning-centre
+    spike above -- so the snap is proportional to the steering speed, on
+    any hardware.
+  * This predicts the same snap on the arcade with a fast enough hand, and
+    a sweep in MAME / the recomp / this core with a slow one. Ben's three
+    emulators agreeing is what one game program fed by fast pad inputs
+    would give; it does not need a shared emulation error.
+  * MAME's keyboard steering ramps (KEYDELTA 10 on 0x20-0xe0), so a
+    keyboard should look closer to the arcade than a stick flick. Not
+    checked.
+
+Nothing in the RTL was changed. No emulation error was found, so there is
+nothing to put behind a parameter, and tgp_replay_check's baseline is
+unaffected.
+
+NEXT:
+  1. Ben: say what steered in each test (pad stick, d-pad, keyboard, wheel)
+     and repeat one reversal on the core with the stick moved slowly
+     (~1/4 s lock to lock). A sweep confirms this entry; a snap at that
+     speed refutes it.
+  2. If wanted: an optional steering slew limit in Model2.sv's input path
+     (OSD, default off), max ~11 ADC counts a frame for a wheel-like sweep
+     (jerk 1824 -> 127 above). It costs pad players steering latency
+     (16 frames lock to lock), so it is a taste switch, not a fix.
+  3. Separately: the i960 round-half-even vs MAME's half-away (above) is a
+     real deviation with no known symptom; record, do not chase.
+
+**R830 -- STEERING SMOOTHING, AN OSD OPTION (Ben: "OSD option would be
+best").** O[51:50] "Steering smoothing: Off, Light, Wheel" (Off default =
+the raw value, unregistered, exactly as before). Light / Wheel limit the
+value the I/O board's ADC reads to ~22 / ~11 counts a 57.5 Hz frame (one
+count per SYS_MHZ*17391/22 or /11 clk_sys cycles): ~9 / ~17 frames lock to
+lock, Wheel at the speed R830 measured as a sweep. Applies to paddle, stick
+and d-pad alike. lint_top clean; Quartus parse clean.
+And R826_STRICT / R826_SYNC are now ON by default (s1046: "better" on the
+board; the residual is R830's, and the alignment telemetry agent's).
+
+**R831 -- THE MENU, TRIMMED, AND THE RIGHT STICK AS AN OPTION (Ben).**
+Removed from the OSD and tied to their defaults (the RTL stays, the bits are
+not reused): Texel step (O[35:34] -> 1), 3D pacing (O[36] -> Hold game),
+Texture brightness (O[22:21] -> 100%). Added O[54] "Right stick: Accel/Brake
+(default), Steering": Accel/Brake ignores the right stick's left/right (a
+pad's pedal stick cannot steer); Steering is R816's behaviour for a wheel
+MiSTer maps onto the right stick. The release README's Controls section must
+say so at the next release. lint_top clean; Quartus parse clean.
+OSD bits in use: 0, 17, 27-33, 42-51 (45 15 kHz lines; 46-49 Volume; 50-51
+Steering smoothing), 54, 122:121.
+R831 (cont.): Draw method loses "Every 3rd frame" -- now O[43] "Double
+Buffered / Single buffered"; the walk's frame-skip input is {0, status[43]},
+so the every-third path is constant and synthesises away. A saved config on
+Every 3rd (bits 44:43 = 10) reads as Double. Bit 44 is no longer read.
+R828 (Ben, s1052): "mip mapping on the mountains is good" -- the face-on
+distance is right with the major-axis rule; only the oblique near road is too
+blurry. Decision: mip becomes a user choice in the OSD (Off + rules/biases,
+R828's own behaviour kept as one choice); Ben picks the default on the board.
+
+**R832 -- THE MODEL 2 FAMILY, BOARD BY BOARD: WHAT CARRIES OVER, AND WHICH
+GAMES SHARE A SETUP (Ben: "record it, and which other games use the same
+board").** Source: MAME 0.289 sega/model2.cpp (machine configs and GAME()
+lines; mame -listdevices). MAME's MACHINE_NOT_WORKING flags describe MAME's
+emulation, not the hardware. Board identity is MAME's; a real board may
+differ in details MAME does not model (notably the 2A/2B/2C "CRX" video
+boards, which MAME renders with the original Model 2's code).
+
+COMMON TO EVERY BOARD: i960KB at 25 MHz, the System 24 tilemap, the
+geometrizer / 3D renderer (as MAME models it), timers, video timing,
+the comms board. So this core's CPU, tilemap and renderer carry to all.
+
+ORIGINAL MODEL 2 (model2o_state): MB86234 TGP at 50 MHz; Model 1 sound board
+(68000 at 10 MHz, two MultiPCM, YM3438, serial link); Model 1 I/O board
+(own Z80 + MB8421 dual-port RAM at 0x01c00000, ADC); 128 KB work RAM at
+0x200000 with a program-ROM mirror at 0x220000.
+  * Daytona USA -- daytona, daytona93, daytonase, daytonas (config daytona:
+    I/O board + the sj25-0207-01 drive/force-feedback board, analog steer /
+    accel / brake). THIS CORE. daytonam ("To The MAXX") and daytonagtx (GTX
+    2004 Edition) are Daytona with their own CPU memory maps
+    (model2o_maxx_mem / model2o_gtx_mem) -- a map change from this core.
+  * Desert Tank -- desert (config desert): the SAME Model 1 I/O board as
+    Daytona (default BIOS epr-14869c), analog STEER / ACCEL / BRAKE, no drive
+    board. Per MAME a candidate for THIS core with its own MRA and input
+    mapping (MAME flags it not working -- why is not yet checked).
+  * Virtua Cop -- vcop, vcopa (config vcop): Model 1 I/O board 2 (model1io2,
+    BIOS epr-17181) with light guns: a different I/O board, so its own core
+    (as Ben said).
+
+MODEL 2A-CRX (model2a_state): same i960 and MB86234 TGP; sound is a Yamaha
+SCSP (YMF292, the Saturn's: 32 voices + effects DSP, 22.58 MHz) driven by a
+68000 at 11.29 MHz; I/O is a single Sega 315-5649 controller on the main
+board read directly by the i960 (no Z80, no dual-port RAM), plus a 93C46
+EEPROM; 256 KB work RAM over 0x200000-0x23ffff (no ROM mirror); an optional
+lamp "billboard" (its own Z80). For a 2A branch: remove the Model 1 sound
+board (~4,650 ALM in s999's fit) and the I/O Z80 (~950); add an SCSP (the
+MiSTer Saturn core has one -- the obvious source, licence to be checked; its
+area is THE unknown for the fit); small: the 315-5649, the EEPROM, the map.
+ROMs fit: vf2 is 47.2 MB (Daytona 46.4).
+  * Plain model2a: Virtua Fighter 2 (vf2 + clones), Hanguk Pro Yagu 98.
+  * With analog / special inputs: Sega Rally Championship (srallyc: drive
+    board + steer/accel/brake), Manx TT Superbike (manxtt: throttle/brake/
+    bank; manxttdx also carries a Model 1 sound board), Motor Raid (manxtt
+    config), Sky Target (analog stick), Virtua Cop 2 (light guns over the
+    315-5649's serial channel), Air Walkers (four-player inputs).
+  * With protection: model2a_0229 (Dead or Alive Model 2A sets: doaa,
+    doaab, doaae -- the 315-5838 compression/protection chip) and
+    model2a_5881 (Dynamite Cop / Dynamite Deka 2, Pilot Kids 2A, Zero
+    Gunner 2A -- the 315-5881 decryption chip).
+
+MODEL 2B-CRX (model2b_state): the TGP is replaced by an Analog Devices
+ADSP-21062 SHARC DSP at 32 MHz (the geometry runs as SHARC code); SCSP sound
+and 315-5649 I/O as 2A. Virtua Striker, Fighting Vipers, Virtual-On, Sonic
+Championship, Last Bronx (model2b); Gunblade NY; Dead or Alive (2B); Super GT
+24h (indy500 config); Power Sled; Dynamite Baseball / '97; Zero Gunner;
+Pilot Kids; Rail Chase 2.
+
+MODEL 2C-CRX (model2c_state): the geometry processor is a Fujitsu MB86235
+"TGPx4" at 20 MHz; SCSP and 315-5649 as 2A. Sega Ski Super G, Wave Runner,
+Behind Enemy Lines, The House of the Dead, Over Rev, Royal Ascot II, Sega
+Water Ski, Top Skater.
+
+WHAT THIS MEANS FOR FUTURE CORES (Ben: each its own branch, then its own
+repository): original Model 2 games are this core plus an MRA (Desert Tank,
+maybe) or plus an I/O board (Virtua Cop: model1io2 + light guns). Model 2A
+is this core with the SCSP sound and the 315-5649 I/O swapped in. 2B swaps
+the geometry processor for a SHARC and 2C for a TGPx4 -- each a large new
+CPU core on top of 2A's sound and I/O.
+DECISION (Ben, 2026-10-13): Model 2B-CRX and Model 2C-CRX are DOCUMENTED
+ONLY -- not to be implemented. Caveat for any future reader: each replaces
+the TGP with a different geometry processor (2B: ADSP-21062 SHARC; 2C:
+MB86235 TGPx4), a large new CPU core on top of 2A's SCSP sound and 315-5649
+I/O, and the device is already at ~98-99% with the original board's TGP;
+there is no measured room for either. The game lists above are a record of
+the family, not a plan. Planned work stays: this core (original Model 2,
+Daytona; Desert Tank to be checked), then Virtua Cop and Model 2A as their
+own branches.
+
+**THE COMBINED BUILD.** s1060-s1062 = 7d0d088 (R819/R820 sound, R821 shared
+MultiPCM, R823-R825 ring, R826 STRICT/SYNC on, R829 Volume, R830 Steering
+smoothing, R831 trimmed menu + Right stick; MIP off), 80/40: s1060 closes,
+clk_sys +0.282, holds >= +0.171, HDMI -1.128; s1062 also (+0.005). 41,267
+ALM, M10K 540/553, DSP 91/112. RBF build/Model2_20261013_s1060_combined.rbf.
+R832 (cont.) -- HOW MANY GEOMETRY PROCESSORS, AND HOW MANY ARE MODELLED.
+MAME 0.289's own header: "Sega Model 2: i960KB + (5x TGP) or (2x SHARC) or
+(2x TGPx4)"; model2_v.cpp: the original and 2A boards keep the geometry code
+"in an internal ROM inside the DSP itself", 2B and 2C upload it; MAME uses a
+high-level C version of the geometrizer for original and 2A games (written
+from a 2B game's geometry-code disassembly) and instantiates ONE processor
+per board (-listdevices: one MB86234 / ADSP21062 / MB86235 -- the
+coprocessor that runs the game's own code). This core does the same: one
+TGP for the game's microcode, and the geometrizer as dedicated RTL
+(m2_geometry, walker, clipper) after MAME's model -- not four TGPs, which
+could never fit, and whose internal-ROM code has never been dumped anyway.
+Inferred, not checked on a PCB: the original's five TGPs are one
+coprocessor plus four for the geometrizer.
+s1060 (the combined build) on the board: Ben -- "looking good".
+
+R828 ADDENDUM (draft) -- THE LEVEL IS AN OSD CHOICE: R828'S MAJOR AXIS, OR
+A QUARTER OR A HALF OF THE WAY FROM IT TO THE MINOR. THE NEAR ROAD WAS
+BLURRY BECAUSE A ROAD SEEN AT A GRAZING ANGLE IS THE MOST ANISOTROPIC
+SURFACE IN THE GAME; FACE-ON SURFACES (THE MOUNTAINS) WERE RIGHT AND STAY
+WHERE R828 PUT THEM. NOT BUILT.
+
+*Believed (R828):* the level is floor(K - 2 log2(1/z)), with K the largest
+edge K of the quad (the footprint's major axis). Nearest level and no blend
+already bring the shimmer down to the reference's.
+
+*Board (s1052, Ben):* "the change is at too close a distance; the road a
+couple of quads in front is all blurry", and "mip mapping on the mountains
+is good though -- so the setting is then user choice".
+
+*Now known -- VERIFIED (offline model, MAME 0.289 M2MIP dumps, f2000-2023 /
+f5000-5023 / f9000-9023 step 2, f7000-7007, every 3rd pixel):*
+  1. THE ROAD IS ONE TEXTURE. It is 256x256 at (0, 512), sheet 1, and covers
+     81-99% of the bottom 120 rows in the race frames. The road quads are
+     long:
+     - f2000: the first quad covers rows 233-384 and the second rows 203-233.
+     - f9000 (the oval, seen from above): 8+ quads are on screen.
+     - "Quad ahead" below is the count of distinct road quads that a column
+       walk meets going up from the screen's bottom (every 8th column).
+  2. R828 BLURS THE SECOND AND THIRD ROAD QUADS. The mean level by quad
+     ahead (1, 2, 3, 4):
+     - f2000: 0.06 / 2.56 / 2.95 / 4.35. Only 4% of the second quad is at L0.
+     - f5000: 0.49 / 1.96 / 1.05.
+     - f9000: 0.00 / 0.08 / 0.57 / 1.36 / 1.88 / 2.30.
+     Walking up a column from the bottom, the level first leaves 0 at
+     32.7 / 68.0 / 10.4 / 83.4 rows below the road's top (f2000 / f5000 /
+     f7000 / f9000). That is where z is 3.0-4.2x z at the bottom of the
+     screen.
+  3. THE EDGE MIN IS A GOOD MINOR AXIS. The quad's smallest edge K (the same
+     edges and arithmetic as R828's max, per split triangle) agrees with the
+     exact minor singular value of the texel Jacobian:
+     - Per pixel: equal 92.0-97.0%, within one level 99.9-100%.
+     - It is higher in 2.6-7.5% of pixels.
+     - The edge max against the exact major singular value: equal 80-89%,
+       within one level 97.6-99.1%.
+     Note that a min over edge directions is not in general the true minor
+     axis (it samples only the edges' directions). Measured, it is close.
+  4. THE RULES, against the 12x12-supersampled level-0 reference (GT). The
+     figures are in this order: f2000 / f5000 / f7000 / f9000.
+     - "shim": the mean |change| per 1/8-px pan step, as a multiple of GT's
+       (R828's metric).
+     - "|e|": the mean |difference| from GT, 0-255 texel scale.
+     - "iso": minified pixels with sigma1/sigma2 < 2 (face-on).
+     - "obl": minified pixels with sigma1/sigma2 >= 4 (oblique).
+
+       rule                    shim minified        shim iso             iso px != R828    shim obl
+       off (level 0)           2.03/2.58/1.67/2.15  1.59/2.02/1.82/1.61  40/74/74/56%      3.71/3.31/1.78/3.04
+       R828: max     (Smooth)  1.07/1.11/0.81/1.15  1.08/0.97/0.94/1.12  0                 1.24/1.37/0.67/1.18
+       max-(max-min)/4 (Med.)  1.18/1.26/0.90/1.25  1.09/0.99/0.95/1.14  1/2/1/4%          1.64/1.72/0.81/1.39
+       max-(max-min)/2 (Sharp) 1.30/1.49/1.22/1.42  1.13/1.05/1.01/1.20  6/20/10/12%       2.10/2.22/1.32/1.71
+       mean, floored           1.39/1.56/1.30/1.48  1.20/1.11/1.14/1.23  16/32/23/18%      2.25/2.30/1.43/1.79
+       mean + 1/2 level        1.16/1.30/1.08/1.24  0.99/0.91/0.92/1.04  15/16/8/9%        1.89/1.97/1.16/1.50
+       min (edge)              1.62/1.82/1.51/1.79  1.24/1.17/1.35/1.33  21/41/42/38%      3.20/2.85/1.70/2.48
+       max - 1 level           1.49/1.66/1.18/1.57  1.43/1.39/1.73/1.41  40/74/74/56%      1.84/2.02/0.94/1.74
+       aniso 2 (max(max-1,min)) 1.35/1.52/1.09/1.54 1.24/1.17/1.35/1.33  21/41/42/38%      1.81/1.99/0.94/1.73
+       aniso 4                 1.49/1.69/1.30/1.71  1.24/1.17/1.35/1.33  21/41/42/38%      2.44/2.46/1.32/2.20
+
+       rule                    road quads 2-4 |e|   first L>0, rows below road top   z there / z at bottom
+       off                     5.08/6.56/0.88       never                            -
+       R828 max (Smooth)       14.66/12.48/2.27     32.7/68.0/10.4/83.4              4.2/3.5/3.4/3.0
+       Medium                  7.39/9.77/1.84       19.8/51.0/7.1/76.3               5.8/4.7/5.6/3.3
+       Sharp                   5.40/7.79/1.18       9.5/45.6/2.7/57.8                9.0/6.8/8.9/4.1
+       mean + 1/2 level        5.85/9.21/1.57       12.8/47.5/4.0/69.7               7.5/5.7/8.3/3.5
+
+     The road's mean level by quad ahead, Sharp (against R828 in item 2):
+     - f2000: 0.00 / 0.45 / 1.78 / 2.38. 69% of the second quad is at L0
+       (R828: 4%).
+     - f5000: 0.06 / 0.62 / 0.58.
+     - f9000: 0.00 / 0.00 / 0.11 / 0.51 / 1.00 / 1.25.
+  5. WHAT DECIDED THE RULE:
+     - The anisotropy clamp (the textbook max(major - log2 A, minor)) moves
+       21-42% of FACE-ON pixels off R828's level. The edge K's spread
+       exceeds a level on many face-on quads, so the min wins there.
+     - So do the plain mean (16-32%) and any global bias:
+       - "major - 1" moves 40-74% of them.
+       - "mean + 1/2" blurs them (+0.07..+0.15 level).
+     - Ben's mountains are face-on. Only a weighted step from the max keeps
+       them, K = max - (max - min) * w:
+       - w = 1/4 leaves 96-99% of face-on pixels at R828's level.
+       - w = 1/2 leaves 80-94% of them, every change one level sharper.
+       - On the road, both pull the level towards the minor.
+  6. THE RTL (MIP 1 only; MIP 0 is the tree before, see 8).
+     - m2_raster_fill:
+       - A running min (k_n) beside R828's running max, on the same E3
+         edge K's.
+       - One more register (k_o) takes k_r, or k_r - (k_r - k_n) >>> 2,
+         or >>> 1, by mip_mode, or -512 for Off and for no edge.
+       - span_mipk = k_o. K is final one cycle later than R828's (five after
+         the close).
+     - m2_raster3d: a tex_mip_mode port into the fill.
+     - Model2.sv:
+       - O[53:52] "Mip-mapping: Sharp, Medium, Smooth, Off". Index 0 is the
+         default: the list starts there and wraps, like Volume.
+       - It crosses into clk_sys through three flops.
+       - mip_mode = 3 - menu.
+       - The menu line is COMMENTED OUT while .MIP is 0. CONF_STR is
+         hps_io logic, and with the line in, a MIP 0 map moved 40 ALUT
+         across unrelated entities (i960, ascal, hps_io).
+         mip-on-r828a.patch (in the worktree) flips .MIP and uncomments
+         the line together.
+     - Smooth is R828 exactly: span_mipk = the max, one cycle later.
+  7. BENCHES.
+     - test_m2_raster_fill_mip checks EVERY span of 4,000 quads one at a
+       time, then 4,000 back to back (the next quad and its mode presented
+       the cycle the last is taken). Every mode is used, with Off an eighth
+       of the time. The result: 1,957,376 spans, 0 wrong.
+     - Mutations caught:
+       - always the max;
+       - Sharp's shift by 2;
+       - the min not restarted per quad;
+       - Off ignored;
+       - the min missing an edge;
+       - the spread off by one;
+       - (an earlier draft) the mean rounded instead of floored.
+     - Mutation survived, and equivalent: dropping the no-edge guard.
+       -512 - 511 wraps to a spread of 1, so k_o is -512 regardless.
+     - The span K delayed 4, 8, 12 and 16 cycles more still passes; 24
+       fails. That is the slack before a quad's first span, and the bench
+       sees it.
+     - test_m2_span_tex_mip draws a third of its spans' K as the fill's
+       three rules make it from an edge max and min in [49, 301]: 45,832
+       fetches, every level visited, 0 wrong.
+     - These pass: test_m2_texel_bl_mip (both memory models),
+       test_m2_span_tex, test_m2_raster_fill, and test_m2_raster3d (MIP 0).
+     - lint_top is clean (MIP 0 and MIP 1). lint_idx has no new candidates.
+     - quartus_map --analyze_file (17.0) on m2_raster_fill.sv,
+       m2_raster3d.sv and Model2.sv: 0 errors. The constant-overflow warning
+       on K_NONE was already in HEAD.
+  8. MIP 0 IS THE TREE BEFORE. quartus_map 17.0, ecac6a3 against this, both
+     MIP 0:
+     - ALMs needed 40,114 = 40,114.
+     - Every entity's ALUT, register and block-memory count is identical.
+       The only differences in the hierarchy report are two generated RAM
+       instance names.
+     - In simulation, test_m2_raster_fill and test_m2_raster3d (MIP 0)
+       pass.
+  9. AREA. quartus_map 17.0, whole design, MIP 1 in both. ecac6a3 + MIP 1
+     against ecac6a3 + this + MIP 1 (with the menu line, i.e. as
+     mip-on-r828a.patch builds it):
+     - ALMs needed: 40,232 -> 40,309 (+77).
+     - Combinational ALUT: 57,392 -> 57,516 (+124).
+     - Registers: 48,776 -> 48,799 (+23).
+     - Block memory bits: +6. Quartus packed the three OSD sync flops into
+       the existing altshift_taps (texoff_s_rtl_0, 36 -> 42 bits), as it
+       already does with the other OSD synchronisers.
+     - DSP: 91 -> 91.
+     - m2_raster_fill: 5,174 -> 5,249 ALUT, 3,825 -> 3,844 registers.
+     - m2_span_tex: unchanged (1,338 / 1,497).
+  10. TIMING. quartus_sta --post_map, slow model. R825 calibrated it as
+      pessimistic by 2.3-4 ns.
+      - S_OZ -> k_n: +4.85 ns.
+      - k_r -> k_o: +5.67 ns.
+      - k_o -> the span queue's M10K: +10.93 ns.
+      - S_OZ -> k_r: +5.18 -> +4.85.
+      - Unchanged: every span_tex path, e.g. d1a -> d1_L at +5.13.
+        st.T_RUN -> d1_L is -2.43 in both builds.
+      - texel_bl's p2_tex_f -> k_d is -8.16 -> -8.98. That is clk_mem, a
+        path R828 already reported as -7.0..-8.2 and the same in both of its
+        builds; nothing on it changed here, so this is map-to-map variation.
+        Not settled.
+
+*Decision:* the level is K = max - (max - min) * w, and the OSD chooses w:
+1/2 (Sharp), 1/4 (Medium) or 0 (Smooth = R828). Off is level 0.
+
+The proposed default is Sharp:
+  - It is the only choice that moves the road's first non-zero level out
+    to near the horizon: 9.5 rows below the road top on f2000, against
+    32.7, with z 9.0x the bottom's against 4.2x.
+  - Its near road is within 0.3-1.2 |e| of level 0 on quads 2-4.
+  - Face-on surfaces keep R828's level on 80-94% of pixels, and their
+    shimmer is 1.01-1.20x the reference (R828's is 0.94-1.12x).
+  - The cost is the shimmer of oblique surfaces at distance. Minified,
+    overall: 1.22-1.49x the reference, against R828's 0.81-1.15x and
+    off's 1.67-2.58x.
+
+Medium is the conservative choice: face-on is as R828, and the road's blur
+is halved. Ben picks after the board.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. On the board, Sharp's near road looks like MIP off for the first two
+     or three road quads, and the mountains look as on s1052. Settles it:
+     Ben, all three settings on one build.
+  b. Placed area is about +40..+80 ALM over R828: the map's +77 ALMs needed,
+     at R821's 0.55-0.62x placement ratio (R798 saw up to 2.5x). One 10-bit
+     register and comparator (k_n), one 10-bit subtract, a 3:1 mux, the k_o register and six OSD sync
+     flops. Settles it: a fit.
+  c. Timing closes on the new paths: +4.85 ns or better post-map (item 10).
+     Settles it: a fit.
+  d. In 4-7% of pixels the level still steps by one along a split
+     triangle's diagonal, as R828 does.
+
+*Not verified:* any fit; the board; the images in
+sm2-builds/mipmaps/img/mipbias_*.png are grey texel values from the offline
+model, not the core's colours.
+
+R826 ADDENDUM 2 (draft) -- THE RESIDUAL. SCR_SYNC NUMBERS THE SCROLL BY THE
+FLIPS IT HAS SEEN, BUT THE GAME'S VBLANK IRQ REWRITES THE SCROLL ON EVERY
+VBLANK FROM THE YAW ITS LAST STEP LATCHED; AND AT 60 Hz THE GATE ENDS EVERY
+FRAME AT ITS LAST COPY. A STEP OVER A VBLANK PUTS THE 2D A STEP AHEAD FOR A
+FRAME; A 3D ONE VBLANK LATE STAYS LATE AND TEARS THE 2D AT THE FLIP LINE ON
+EVERY FRAME UNTIL THE GAME NEXT MISSES A VBLANK. R826_STEP (DEFAULT OFF):
+THE COPIES TAKEN AT THE GAME'S VBLANKS AND NAMED BY THE LIST THEY ARE FOR.
+NOT FITTED, NOT ON THE BOARD; A TELEMETRY PATCH MEASURES WHICH CASE IT IS.
+
+(Section: §10, R826 and its addenda; R830 for the snap that is the game's own.
+Model 1 shows a list two vblanks after its flip, this core three -- that one
+frame is why the 2D is delayed by copies at all; nothing here changes the 3D.)
+
+*What was believed (R826, R826 ON THE BOARD):*
+  1. The game writes iteration j's eight scroll words at the vblank the
+     iteration starts in, and they stand until the next iteration; SCR_SYNC
+     therefore numbers tile RAM by the flips seen (ss_nf) and keeps the words
+     of iteration j by copying them at flip j.
+  2. R826's event model: "core strict+gate" 100% aligned at 30 Hz, 99% with
+     2% three-frame iterations, 100% with 15% one-frame ones.
+  3. The residual Ben sees on s1046 ("better but still a bit jerky ... quick
+     slide reversal really jerky") is the gate's fallback, the ~1% two-vblank
+     steps, or R652's held vblank.
+
+*Now known -- VERIFIED:*
+  1. THE GAME LOOP (MAME 0.289 debugger, Revision A, dasm 0x12f0-0x13d0,
+     0x17c00-0x17f50, 0x1c4a8, 0xe34):
+       0x131c-0x1374  the step: ... 0x1354 call 0x17ed8, 0x183c, 0x1900,
+                      0x1360 call 0x17ef0 -- which reads the TGP and then
+                      FLIPS (0x17f10 st r3,0x3008(g10) = 0x803008) -- then
+                      0x1364 call 0x1c4a8 (ten instructions, one I/O-board
+                      DPRAM byte at 0x1c00022), 0x1370 call 0x138c.
+       0x138c         g0 = count (0x500000); spin until count != g0; if
+                      count >= 2, 0x5010b4 += 1; count = 0; call 0x17f1c
+                      (reads 0x98000c, picks the list buffer); next step.
+     So a step starts only after a vblank IRQ that comes AFTER the step
+     before it ended; a step that overruns a vblank waits for the next one
+     (there are no back-to-back steps). The flip is ~20 instructions before
+     the wait. (The R826 addendum's "waits for the count to change" is exact:
+     it waits for a change from the value it found, not for non-zero.)
+  2. With the addendum's chain (0x4500 latches 0x5fe11a = the yaw of the step
+     before, at each step start; every vblank IRQ writes hscr2 from
+     0x5fe11a): THE WORDS WRITTEN AT A GIVEN VBLANK ARE FOR LIST N - 2, N =
+     steps started before it. In a step that spans a vblank, that middle
+     vblank already writes the NEXT list's scroll, before the step has
+     flipped. Belief 1 is wrong there, and R826's event model and
+     tb_m2_video_r826's sync-play both encode belief 1 -- which is why
+     neither could show it.
+  3. THE RTL AGREES WITH THE MODEL THAT SAYS SO. sim/video/r826_evmodel.py
+     is the game (item 1-2), m2_geo AFTER_STRICT (walk at a frame_start
+     after the flip, the latest list, tag fc - 1), m2_raster3d (store
+     P_COLLECT -> sort -> P_READY; swap at a frame_start when P_READY and
+     the draw idle; publish at the frame_start after the draw; list_hold ->
+     no IRQ, no walk, no swap, no publish) and m2_video SCR_SYNC (flip-time
+     copies of the sequencer's last read; ss_d 1-2 a copy, else tile RAM),
+     rule for rule. tb_m2_video_r826b (new) plays its schedules -- the IRQ's
+     writes, flips, publishes at their line and cycle -- into m2_video and
+     reads back the scroll tilemap 2 latched (hctrl_r) on every line:
+     12 schedules x 3 builds (SCR_SYNC; SCR_STEP depth 2; depth 3), 788
+     compared frames a build, the RTL equal to the model at lines 0 and 383
+     on every one of the 2,364 (make test_m2_video_r826b). It can fail: the
+     SCR_SYNC build played the STEP model's "walk late once" schedule agrees
+     on 12 of 43 frames and exits 1.
+  4. THE CASES (STRICT + SYNC, today's default; 60 Hz otherwise steady).
+     Offsets are the 2D's list minus the 3D's list; +1 = the backdrop a game
+     step ahead of the scene.
+       step over a vblank, its flip after the frame's
+         first scroll read (line -2)              one frame +1
+       ... its flip inside that vblank, before the
+         first read                               aligned (the flip-time copy
+                                                  still holds the old words)
+       step over two vblanks                      one frame +1
+       tail over the vblank (flip just before
+         it, wait just after)                     aligned
+       flip between the vblank edge and the IRQ   one frame torn, +2 below
+                                                  the flip (a list skipped)
+       3D one vblank late (walk + sort past the
+         vblank after its walk starts)            the 3D stays one list late:
+                                                  each later walk queues
+                                                  behind the P_READY list.
+                                                  Every frame, the mid-frame
+                                                  flip takes ss_d 2 -> 3: the
+                                                  tile-RAM fallback, +2 below
+                                                  the flip line. Ends only
+                                                  when the game misses a
+                                                  vblank, or a walk starts
+                                                  after the next flip (a
+                                                  list skipped).
+       draw over a vblank, a list waiting         R652 holds: no IRQ, no swap,
+                                                  no publish -- 2D and 3D
+                                                  freeze together, aligned
+                                                  (a missed game step, not a
+                                                  jerk). Never at today's draw
+                                                  (max 15.6 ms at 80, 16.6 at
+                                                  75, of 17.39).
+       every step two vblanks (30 Hz)             50% aligned, +1 alternating
+                                                  (belief 2 said 100%)
+       30% of steps two vblanks                   78% aligned
+     The tag crossings add nothing: show_tag moves once a frame at the
+     frame_start and is taken when two samples agree, ~40 lines before the
+     first read; a flip that crosses during a line changes the choice only
+     between identical words (the copy taken at a flip is tile RAM's words
+     then). The copies are overwritten exactly when ss_d reaches 3 -- the
+     fallback above, not a separate case.
+
+*Now known -- INFERRED (each says what settles it):*
+  a. HOW OFTEN, at today's measured timing (event model, 30,000 frames a
+     row; 1% of steps over a vblank (R815 race); "walk late" = a list's walk +
+     sort ending after the next vblank, never measured as such; flip times
+     either clustered late (N(0.80, 0.086) frames after the step start) or
+     spread (0.4-0.95, 1% at 1.0-1.4)). Aligned % / torn % (changes of
+     offset per 1,000 frames):
+                       walk late 0     0.2%          0.5%          1%
+       SYNC, clustered   99.95/0 (1)  86.9/13.0 (5) 69.7/29.9 (11) 53.2/45.9 (19)
+       SYNC, spread      99.31/0 (14) 95.6/3.7 (18) 92.7/6.5 (24)  88.0/11.1 (32)
+       STEP 2, clustered 100 (0)      99.93 (0.7)   99.60 (4)      99.11 (9)
+       STEP 2, spread    100 (0)      99.99 (0.1)   99.90 (1)      99.76 (2)
+       STEP 3, either    100 (0)      100 (0)       100 (0)        100 (0.1)
+     With no late walks SYNC's residual is the over-vblank steps whose flip
+     lands after the first read: 0.05-0.7% of frames, 1 to 24 one-frame
+     jerks a minute. Any late walk at all makes the fallback tear dominate.
+     A torn frame shows only where the tilemap does, above the 3D: a flip
+     low on the screen hides most of it under the road. Settles it: the
+     telemetry below (flip line, 3D latency, ss_d, game-late vblanks).
+  b. The slide reversal itself is R830's (the game's own camera snap at pad
+     speeds); misalignment adds to it in the same frames, because heavy
+     frames (spins, smoke) are the ones that overrun a vblank (R814: 2+
+     vblank frames carried more TGP work). Settles it: telemetry during a
+     reversal, Steering smoothing Off and Wheel.
+  c. R826_STEP depth 2 costs about what SCR_SYNC does (the same two copies;
+     SCR_SYNC's flip counter and copies prune away; +4-bit tags, valid bits,
+     three comparators, ~10 FF at the top): +0..+30 ALM. Depth 3: one more
+     copy and a 3:1 mux, ~+60..+100 ALM. Settles it: a fit.
+
+*The fix, behind R826_STEP (Model2.sv, default 0), needs R826_SYNC:*
+  * Model2.sv (clk_sys): r826_ack counts the flips acknowledged -- by the
+    first vblank the game is given after them, or by the vblank whose IRQ is
+    still pending when they land (io_intreq[0]). At each given vblank
+    (r826_vgive = the IRQ's own condition, so R652's withheld vblanks do
+    nothing) r826_ttag = r826_ack - 1, the list the IRQ is about to write
+    the scroll for, and a cycle later r826_vtgl toggles.
+  * m2_video SCR_STEP / SCR_DEPTH (2 or 3): at each r826_vtgl edge (three
+    flops; the tag two flops, taken when two samples agree) the words the
+    sequencer read in the frame just shown become copy 0 with tile RAM's tag
+    (a shift history), and tile RAM takes the new tag. Shown: tile RAM if
+    its tag is the 3D's list (scr_tag), else the newest copy whose tag is,
+    else -- one list older than the oldest copy -- the oldest copy, else
+    tile RAM (no 3D, or the 3D stalled: the 2D runs live, as SCR_SYNC's
+    fallback did). The choice is registered; constant copy indices only.
+  * tb_m2_video_r826b: depth 2 aligned on every frame of every case except
+    two late walks ten frames apart (2 frames +1); depth 3 aligned on every
+    frame of every case, both stochastic runs included. SCR_SYNC in the same
+    bench shows each case above. test_m2_video_r826 (SCR_STEP 0) and
+    test_m2_video_ovr +quick unchanged; lint_top: no new warning with
+    R826_STEP 0, 1 and depth 3; lint_idx: the same candidates as HEAD in all
+    three; quartus_map --analyze_file (17.0): m2_video.sv, Model2.sv and a
+    STEP 1 / depth 3 copy, 0 errors.
+  * At 30 Hz and with mixed 1/2-vblank steps, STEP is 100% in the model
+    (SYNC 50% / 78%).
+
+*Telemetry (build/worktree_patches/r826-telemetry.patch, applies to headroom
+bff8982 and 64e7a7b -- R826 STRICT/SYNC on, MIP off, as they are; DEBUG_LITE,
+75 / 37.5 as R814's why builds; SPCULL left on):* an 'R' record every
+vblank in place of 'G': the 2D's list against the 3D's list at lines 0 and
+383, by GAME STEP -- independent of the RTL's own numbering: a step is
+counted where Daytona's wait loop clears 0x500000 (i960 bus, clk_i960), each
+flip is mapped to the step it came in, the scroll written at a given vblank
+is the list N - 2, SCR_SYNC's copies are traced by flip -- plus ss_d (the
+fallback), held / game-late / walk-late / 3D-late / swap / publish / draw-busy
+/ flip-during-IRQ flags, the frame's flip and step-start times, and the shown
+list's flip-to-screen latency in vblanks (3 on time). Decoder:
+build/m2scripts/decode_r826.py (a copy in the session scratchpad): per-frame
+histogram aligned / +1 / -1 / torn, ss_d, event rates, flip-time
+distribution, 3D latency, the cause of each misaligned frame, runs, and per
+10 s. Checked against the event model's own records (it reproduces the
+model's numbers); the Verilog itself only linted (lint, lint_idx, LITE + NO_DEBUG
+both) and parsed (analyze_file with the macros), not simulated. Daytona Rev A
+and 24 kHz only (the 2D's list is taken at line 420).
+
+*Not verified:* any fit; the board; whether walks are ever late at today's
+timing (no record has ever separated a late P_READY from the rest); 15 kHz;
+games other than Daytona (the step model is Daytona's loop).
+
+NEXT:
+  1. The telemetry build, a race with slides and reversals (Steering
+     smoothing Off), and the attract loop: the share of frames misaligned,
+     and which case.
+  2. If the 3D-late backlog shows: R826_STEP with depth 2 (or 3 if the decoder
+     shows the 3D two lists late). If only over-vblank steps: depth 2.
+
+R828 BUILD: s1063-s1065 = 0e34aeb + MIP 1 and the mip menu (mip-on-r828a
+patch; s1060's config + mip): s1063 / s1064 "Can't fit" -- routing, the
+last attempt with only TWO contested LAB inputs (X42_Y7, X21_Y45);
+41,382 / 41,288 ALM placed; s1065 a Quartus TDC internal error. Marginal, not
+a resource count: more seeds.
+s1066-s1068 (the same mip build): all route; s1068 closes, clk_sys +0.081,
+holds >= +0.210, HDMI -0.850; 41,300 ALM. RBF
+build/Model2_20261014_s1068_mip.rbf. = s1060 + MIP with the Sharp / Medium /
+Smooth / Off menu (Sharp the default). Not yet on the board.
+s1068 ON THE BOARD (Ben): Sharp "looks good 98% of the time", but the guard
+rails are flat white textures with every mip setting -- only Off is right.
+A texel fetch fault at levels > 0 for that texture (level cap by the smaller
+dimension, a texture the game never mips, or mirror/wrap/sheet handling at a
+level). Screenshot sm2-builds/mipmaps/board/s1068_sharp_rails_white.png.
+Also (Ben, s1068 mip on): the sky reflection on the car windows breaks --
+corrected: ONLY on the car select screen; in game it is fine. Same investigation as the rails.
+R826_STEP BUILT: s1069-s1071 = d9f52c3 + MIP 1 (menu) + R826_STEP, depth 2
+(mip-step-on.patch): s1070 closes, clk_sys +0.032, holds >= +0.225, HDMI
+-0.580; 41,413 ALM; s1069 clk_mem -0.034, s1071 did not route. RBF
+build/Model2_20261014_s1070_step.rbf. Has the s1068 mip fetch fault (rails,
+car-select reflection) -- for the alignment check with Mip-mapping Off.
+R831 (cont., Ben): the Right stick labels were unclear -- "Steering" meant
+pedals AND steering. Now "Right stick: Pedals only (default) / Pedals+steer"
+(short: the OSD shows ~28 characters a line). Release README updated.
+
+R828 ADDENDUM (draft) -- R828b: THE WHITE GUARD RAILS ARE THE GAME'S OWN SMALL
+MIP LEVELS. A TRANSLUCENT TEXTURE'S 4- AND 2-TEXEL LEVELS ARE BOX AVERAGES
+THAT COUNT THE TRANSPARENT NIBBLE AS A COLOUR, SO A FENCE TURNS INTO A SOLID
+LIGHT PANEL THERE. THE FETCH IS RIGHT; THE DEEPEST LEVEL IS NOW THE ONE
+WHOSE SMALLER SIDE IS 32 TEXELS (TRANSLUCENT) OR 16 (OPAQUE). NOT BUILT.
+
+(Section: §10, R828 and its addenda. Authority: MAME 0.289 model2rd.ipp for
+the addressing; the game's texture RAM as MAME holds it for the level
+content. Model 1 has no mip.)
+
+*Believed (R828, R828a):*
+  1. The levels are in the sheets where MAME addresses them, each a halved
+     copy of level 0, down to the 2x2 level (R828 verified 2: road and tree,
+     levels 1-4; inferred d: levels 5-7 "may not be where the board keeps
+     them").
+  2. So the deepest level is MAME's: log2(min(w, h)) - 1, at most 7.
+
+*Board (s1068 = 0e34aeb + MIP 1 + the R828a menu; Ben):* "Sharp looks good
+98% of the time, but the guard rails are just flat white textures. Only Off
+works." Screenshot sm2-builds/mipmaps/board/s1068_sharp_rails_white.png: the
+far panels of the wooden fence (left, and continuing ahead on the right) are
+solid white quads -- the gaps between the rails filled, not just the rails
+whitened. Then (correction): white ONLY with Sharp; Medium and Smooth fine.
+And: the sky reflection on the car windows breaks at "car select" (fine in
+the race).
+
+*Now known -- VERIFIED:*
+  1. THE FENCE TEXTURE. Daytona Revision A, MAME 0.289 M2MIP dumps (f2000-2023
+     is the same course as the screenshot):
+     - Posts and rails: 64x256, h0 0x6419 / 0x64d9 (textured, TRANSLUCENT,
+       no mirror, no wrap), x 896, y 256, sheet 1, 4-bit texels, texlod
+       1251 / 1410. Rail planks: 64x32, h0 0x6401, x 640, y 928, sheet 0.
+     - Its stored levels (rendered from the sheets at MAME's level origin,
+       sm2-builds/mipmaps/img/mipwhite_chain_fence_64x256.png):
+         level   size   texels 0xF   mean
+         0       64x256  0.66        12.1
+         1-3     ..8x32  0.66        12.1-12.2  (transparency kept)
+         4       4x16    0.12        11.5
+         5       2x8     0.00        12.0
+       Levels 4 and 5 are a box average of level 0 with 0xF counted as the
+       value 15: the gaps become light grey, opaque. The 64x32 planks' level
+       4 (4x2) is the same (mipwhite_chain_rail_64x32.png).
+     - MAME's own level on the fence pixels of f2000: L0 3,664 of 3,829
+       (L4 17, L5 2). R828a's (offline model of the RTL): Sharp L4 130, L5
+       32; Smooth L4 198, L5 156.
+  2. THE RTL DRAWS THE PANELS, AND THE FETCH IS EXACT. tb_m2_raster3d in the
+     core configuration (FTB, FB_DDR3 + wcomb, SPLIT_TRI, PXC, FRB 2, M2COV,
+     TXLATE 3, TXNS 4 / TXRSP 4 / TXK 16, TXLW8, bilinear, R107; MIP 1; a new
+     M2_R3D_MIPMODE selects the rule), MAME's f2000 list: the far fence
+     panels come out solid white -- with Sharp, Medium AND Smooth, not with
+     Off (mipwhite_fence_f2000.png). New near-white pixels against Off,
+     rows 140-214: Sharp 270, Medium 460, Smooth 520. Every texel answer of
+     those runs equals the Python model of fetch_bilinear_texel at the
+     fetch's level (tools/chkfetch.py): the cache returns exactly what the
+     game stored there.
+  3. NOT A 10-BIT WRAP IN THE FILL'S K (the coordinator's lead): every edge
+     K is lq(13 bits) - lq(13 bits) + two 1/z logs in [-4, 59] + 120, i.e. in
+     [53, 297], so the spread is <= 244 and k_r - (k_r - k_n) >>> s cannot
+     wrap; k_n's sentinel (511) only stands while k_r is K_NONE, which forces
+     K_NONE. Over every split triangle of the dumps (95,200): edge K in
+     [210, 287], widest spread 37, Sharp's K above the max: 0.
+     test_m2_raster_fill_mip now checks K against [edge min, edge max] on
+     every Medium / Sharp span, with a sliver built for the widest spread
+     the fill can make (213): 0 outside, 1,830,055 spans exact.
+  4. THE RULE IS MONOTONE. Sharp's K = max - (max - min)/2 <= Medium's <=
+     Smooth's, and the level is a monotone function of K, so Sharp never
+     picks a deeper level than Smooth on any pixel. In the bench the white
+     area grows Sharp < Medium < Smooth (item 2).
+  5. THE CLASS, OVER EVERY TEXTURE IN THE DUMPS (162 textures, 105 drawn
+     translucent; f2000-2023, f5000-5023, f7000-7007, f9000-9023; every
+     iterated unoccluded pixel, 14.8 M). A stored level is SEVERE when a
+     translucent texture keeps < 40% of level 0's transparent texels (or
+     goes > 95% transparent), or an opaque one moves its mean > 3 of 15 or
+     goes flat; MODERATE when it keeps < 75% of the transparency, or its
+     opaque texels' mean moves > 2 (opaque: the mean > 2). It is a property
+     of the game's data, not of any rule:
+     - By the level's smaller side, translucent levels losing > half their
+       transparency: side 2 22%, side 4 11%, side 8 1%, side 16 1%, 32+ 0.
+     - Opaque levels with the mean off > 2: side 2 27%, 4 8%, 8 3%,
+       16 2%, 32+ 0.
+     - Examples (mipwhite_chain_*.png): a 64x64 arrow sign whose level 1
+       already shows another picture on its right half; a 32x32 glow whose
+       level 1 is flat; 32x64 decals whose level 4 is wholly transparent
+       (the polygon vanishes); 2x2 levels holding a constant 0 or 15.
+     Pixels drawn from such a level (rule as built -> R828b):
+       rule     severe px (textures)       moderate px (textures)
+       Sharp    41,330 (40) ->     0 (0)   46,542 (40) ->  4,509 (2)
+       Medium   77,766 (60) ->     0 (0)   83,608 (42) -> 43,099 (3)
+       Smooth  155,983 (76) ->     0 (0)   55,884 (40) -> 45,941 (3)
+     (MAME's own level, by texlod: 833 severe, 4,120 moderate of 453,624
+     pixels above level 0.) The moderate ones left are a 32x32 glow at
+     level 1 in the f7000 attract (Medium / Smooth only), the arrow sign's
+     level 1, and the road's level 4 (305 px).
+  6. THE CAR WINDOWS. The glass is two textures: the sky, 64x64 OPAQUE at
+     (768, 448) sheet 1 (h0 0x4409; its levels are good to level 4), drawn
+     with u near 4,100 texels (moved to ~130 by R609; no fault), and over it
+     the frame, 64x128 TRANSLUCENT at (512, 0) sheet 1 (h0 0x6411): level 1
+     keeps the panes clear (0xF 0.51 vs 0.55) but draws the frame's top
+     edge and centre bar wider and brighter; levels 2-3 thicken them more;
+     4-5 are solid (mipwhite_chain_windowframe_64x128.png). The player's car
+     in f5000 takes the frame at level 1 on its upper rows with Sharp
+     (rho 1.5-2; MAME level 0) -- a white top edge and a wider centre bar
+     over the reflection (mipwhite_window_f5000.png). The car-select screen
+     was NOT found in Revision A: coin + start in MAME 0.289 gives Circuit
+     Select and Mission Select, whose 3D (dumped every 50 frames, 1000-1950)
+     is the course maps and a highlight quad -- level 0 under every rule.
+  7. THE FIX (m2_span_tex, MIP 1 only): the deepest level a span may use is
+     the level whose smaller side is 32 texels for a translucent texture
+     (in_tex[8]) and 16 for an opaque one: with c the smaller size code
+     (side 32 << c), c (translucent) or c + 1 (opaque), at most 7 -- in
+     place of 4 + c. The fence and the window frame stop at level 1 (32x128,
+     32x64); the road (256x256) at 4; the 32-wide translucent decals at 0.
+     It costs depth, not coverage: Sharp keeps 3,535,914 of 3,631,263
+     pixels above level 0 (95,349, 32-wide translucent textures, go to 0);
+     546,674 (15.1%, Sharp) are held at a shallower level, by 1.44 levels
+     on average (Medium 16.1%, Smooth 18.0%).
+     - tb_m2_raster3d, f2000 / f5000 / f7000 / f9000, Sharp and Smooth: the
+       panels are gone (mipwhite_fence_f2000.png, rows 140-214 near-white
+       px 270 / 460 / 520 -> 170 / 222 / 231, the rest the fence's own level
+       1 planks); every texel answer still equals the model (224,221 /
+       161,202 / 115,392 / 200,006 answers, 0 differ).
+     - MIP 0 is the tree before: the bench's pixel hash, fetch count and
+       painted pixels are identical to HEAD on f2000 and f5000
+       (98bef5bf / b7199d05).
+  8. BENCHES (each new check mutation-tested):
+     - test_m2_span_tex_mip: the model's deepest level is the new rule;
+       random spans now set the translucent bit; a new class of 400 spans
+       -- the fence and window-frame headers, translucent and opaque, at K
+       200-300 -- 5,945 fetches, 5,934 asking past the cap, 0 past it.
+       Caught: R828's cap (5,934 past it), translucent / opaque swapped
+       (5,945), translucency ignored (2,966), no saturation at 7 (random
+       spans, level 0 for level 7).
+     - test_m2_texel_bl_mip: an eighth of the runs (all with M2_TBL_CLASS)
+       are the two class headers at every level they have, coordinates over
+       the whole texture: 200,000 x 2 memory models pass. The fix is not in
+       this module, so this case passes with and without it; it proves the
+       class is addressed exactly at any level. Caught (class only): the
+       level's y-origin without its top-bit fill (164,877 of 200,000).
+     - test_m2_raster_fill_mip: the f2000 far fence panel (poly 507) and
+       the f5000 window frame (poly 130) as m2_geometry presents them, 727
+       quads; and the widest-spread sliver; K inside [min, max] on every
+       Medium / Sharp span. Also not where the fix is. Caught (class quads
+       only, M2_MIP_CLASS): no closing edge.
+     - Pass: test_m2_span_tex, test_m2_span_tex_ftb, test_m2_texel_bl8,
+       test_m2_raster_fill, test_m2_raster3d.
+     - lint_top clean with MIP 0 and with mip-on-r828a.patch; no new
+       m2_span_tex warning. lint_idx: the same 147 lines as HEAD, MIP 0
+       and MIP 1. quartus_map --analyze_file (17.0) m2_span_tex.sv: 0
+       errors (the two constant-overflow warnings are HEAD's).
+
+*Decision (a departure from MAME, recorded):* MAME clamps at the 2x2 level
+and never shows these levels because the game's texlod keeps the polygons
+at level 0 (MAME's own level puts 0.2% of pixels above 0 on the fence). This
+walk has no texlod (R665), so it would reach them wherever the footprint
+says; the cap stops it at the levels the game's data actually holds. A
+per-texture flag does not exist in the header (h0 bits 0-15 are all
+assigned), and reading the texture to judge it is not affordable.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. Ben's "Sharp only" disagrees with items 2 and 4 (the bench shows the
+     panels with all three rules, larger with Smooth, and the rule is
+     monotone). Likely Medium / Smooth drew them too, further out or
+     blended into the general blur. Settles it: the same spot on the board
+     with each setting, on this build.
+  b. The car-select report is the window frame's levels 1-3 (item 6), if
+     that screen shows the car smaller than the chase view; the cap leaves
+     level 1 (a brighter top edge and a wider centre bar) where rho >= 2.
+     Settles it: Ben names the screen or sends a picture; if level 1 is
+     still too much, one level of bias for translucent textures (L - 1 when
+     in_tex[8]) is the next lever -- it puts the player's frame at level 0
+     and costs the trees a level.
+  c. Area: one 3-bit compare and mux and a 3-bit increment on mipl_p's load
+     (replacing R828's compare, two muxes and adder): +0..+5 ALUT in
+     m2_span_tex, no register or M10K change; MIP 0 prunes mipl_p as before.
+     Timing: the load path (span queue -> mipl_p) keeps its depth; mp_L is
+     unchanged. Settles it: quartus_map (not run -- a fit was not checked
+     for), then a fit with mip-on-r828a.patch.
+  d. Some shimmer returns at the very far distance (the deepest levels are
+     gone): 15.1% of Sharp's mipped pixels sit 1.44 levels shallower. Settles
+     it: Ben on the board, the mountains and the far road.
+
+*Not verified:* any build; the board; Deluxe '93 (its ROM set is incomplete
+here: epr-16489.7 / epr-16490.8 missing); the car-select screen.
+
+Tools (sm2-builds/mipmaps/tools/mipwhite/, local): railan.c (per-pixel MAME
+and R828a levels), lvcount.c / rules*.py / final_sweep.py (the sweep),
+lev.py / chain.py (level images), kspread.c (edge K range), build.sh / run.sh
+(the core-config bench), nav.lua / att.lua (MAME menus and attract).
+RELEASE CANDIDATE CONFIG: MIP 1 with the Mip-mapping menu (Sharp default)
+and R826_STEP (depth 2) are now ON in Model2.sv on headroom -- the release
+build is the branch head itself.
+THE RELEASE CANDIDATE DOES NOT FIT RELIABLY. 51bb563 (s1060 + MIP menu + the
+rail cap + R826_STEP): nine seeds s1072-s1080 -- best clk_mem -0.062, clk_sys
+-0.374..-0.747, two "Can't fit" (routing), four Quartus crashes mid-fit
+(segfault / TDC internal error, with 22 GB free and nothing else running).
+41,316-41,446 ALM placed. Sweeps paused for room: a YM3438 timer-only stand-in
+(Daytona never voices the FM, R819; only timer B is used) is being built,
+expected ~500-650 ALM.
+
+**R833 -- THE YM3438 AS TIMERS ONLY: DAYTONA USES ONE TIMER AND TWO STATUS
+BITS OF IT, AND A STAND-IN THAT IS jt12 ON EVERY CLOCK FOR THOSE COSTS 69
+ALUT. BUILT BEHIND m2_sound_board's YM_STUB (DEFAULT 0); -769 ALMs-NEEDED,
+-1,190 ALUT, -604 REGISTERS, -1 DSP IN THE MAP.** (Room: the device is at
+~99% and the release candidate's seeds miss by fractions of a ns. R819
+measured that Daytona never voices the YM; jt12 is 629 ALMs-needed and 11
+M10K in s1072's fit.)
+
+*Believed:* R819 -- MAME's ymsnd output is zero over 300 s of attract and a
+game; the 68000 reloads timer B ~1,700 writes a second to pace its
+sequencer (R820). m2_sound_board's IPL note said the YM's timer went to the
+68000's IRQ4 in segam1audio and was missing here.
+
+*Now known -- VERIFIED (MAME 0.289, sim/sound/mame_m2_ym_usage.lua: a write
+tap and a read tap on 0xD00000-7 with the 68000's PC, MAME's ymsnd stream
+through the sound hook; 340 s = 200 s attract, three coins and start x4 at
+200 s, nobody drives, the race times out, GAME OVER at ~292-298 s):*
+
+  set (sound program)         YM writes  status reads  ymsnd samples  non-zero
+  daytona (Rev A, 16720/21)     590,248     2,759,998     18,888,701        0
+  daytona93 (16489/90)          590,234     2,773,303     18,888,701        0
+  vcopa (200 s, attract)        347,066     1,062,165     11,111,001        0
+  desert (200 s; coin/start
+    pulsed at 60 s, whether a
+    game started not checked)   346,664     1,080,559     11,111,001        0
+
+  EVERY data write -- the same registers with the same values in all four
+  sets (part 0 unless noted):
+    0x27 <- 0x2A         294,875 (daytona) / 294,951 (daytona93) -- 867 a
+                         second: reset flag B, flag B enabled, load B --
+                         one per overflow seen: the main loop's reads with
+                         bit 1 set total 294,872 (daytona) / 294,949
+                         (daytona93) against 294,875 / 294,951 writes.
+    the init block, once per sound-program start (daytona x3: 0.076 s,
+    0.538 s and 309.11 s; daytona93 x2; vcopa x1; desert x2):
+      0x22 <- 0x0A, 0x24 <- 0xFC, 0x25 <- 0x00, 0x26 <- 0xFC, 0x2B <- 0x00,
+      0x28 <- 00, 01, 02, 04, 05, 06 (KEY OFF, operator mask 0, every
+      channel), and in both parts 0x40-0x4E <- 0x7F (TL 127, all 12 slots),
+      0x80-0x8E <- 0xFF, 0x90-0x9E <- 0x00.
+    Nothing else, ever: no F-number/block (A0-AE), algorithm/feedback/pan
+    (B0-B6), DT/MUL (30-3E), rates (50-7E), 0x21, no part-1 timer write, and
+    no key-on with an operator bit set. With TL 127 and no key-on the chip
+    cannot sound; MAME's output is exactly zero.
+  Timer B: NB = 0xFC, 2304 x (256 - 252) / 8 MHz = 1.152 ms, 868 Hz -- the
+    867 rewrites a second. Timer A is loaded with 0x3F0 and never started
+    (0x27 bit 0 never set); its flag is never read set.
+  READS, all of the status byte, values 0x00 / 0x02 / 0x80 / 0x82 only:
+    bit 1 (timer B) polled at 0x528, 0x548, 0x586, 0x5A4, 0x5C8 (the main
+    loop; daytona93 0x528 0x00 x497,812 / 0x02 x225,715 ...), bit 7 (busy)
+    before every write at 0x7B6/0x7C8 (address) and 0x7DC/0x7EE (data).
+    vcopa and desert: the same driver at other addresses (0x4F8/0x56C;
+    0x6F8-0x730/0x76C-0x7A4).
+  THE INTERRUPT: segam1audio.cpp connects the i8251's rxrdy to IRQ2 and no
+    YM interrupt at all; m2_sound_board leaves ym_irq_n unconnected. The
+    board's note claiming IRQ4 was wrong and is corrected; the firmware
+    polls.
+
+THE STAND-IN (rtl/sound/m2_ym_timers.sv; THIRD_PARTY.md: derived from
+jt12 @ 4cf1c5b, GPL-3.0; jt12 untouched). jt12's ports, and of jt12 only the
+path to the status byte, re-expressed register for register: jt12_top's
+cen_reg and timer enable (fast_timers ? cen_reg : clk_en); jt12_div's 1/6
+prescaler (no reset, power-up 0) with cen_int and clk_en on the NEGATIVE
+edge; jt12_reg's 24-slot {cur_op, cur_ch} counter and `zero`; jt12_mmr's
+address latch and part bit, 0x21 bit 2, 0x24/0x25/0x26/0x27 (part 0 only,
+synchronous reset, the reset-flag bits clearing on clk_en only when no write
+is held) and busy (32 clk_en from a data write, asynchronous reset);
+jt12_timers (A: 10 bits a step per `zero`; B: 8 bits a step per 16, its
+4-bit free count), the flags and irq_n; jt12_dout, registered, {busy, 0,
+flag_B, flag_A} for every address. snd_left/right = 0. m2_sound_board's
+YM_STUB selects it by parameter-constant wires (R821's pattern): u_ym (jt12)
+keeps its name and logic at 0 and is pruned at 1 (the map shows no jt12).
+Model2.sv passes .YM_STUB(1'b0) -- unchanged until Ben decides. Model2.sdc:
+the three jt12 exceptions (R738, R762, R742) match nothing at 1; their
+no-match message becomes info when u_ymt exists (critical warning otherwise,
+so a jt12 rename is still caught) -- NOT yet run through TimeQuest.
+
+*Equivalence -- VERIFIED (Verilator 5.052):*
+ (a) tb_m2_ym_timers (new; make test_m2_ym_timers): jt12 and the stand-in on
+   one bus, dout and irq_n compared after EVERY clock edge, both edges.
+   A = MAME's stream at MAME's times; B = all of it, gaps clipped to 4,000
+   clk; C = 200,000 random operations (every register, both parts, timer
+   values biased to overflow, 0x27 and 0x21 at random, 394 resets; enables
+   at random 8/8..8/400, always on, or random; strobes board-style or held
+   1-40 clk):
+     daytona stream, 80 MHz: A 3 s, 5,264 writes, 2,466 timer B flags;
+       B 590,248 writes, 13,955 B flags; C 2,408 A flags, 1,221 B flags;
+       1.785 G cycles, 0 mismatches, stand-in audio 0
+     daytona93: the same, 0 mismatches; vcopa at 50 MHz: 476 M cycles, 0.
+   Seven deliberate faults, each caught: busy 31 clk_en; enables on the
+   rising edge; flag reset cleared during a held write; timer B prescale;
+   dout unregistered; part-1 writes reaching the timers; fast timers without
+   cen_reg's delay (the last two only by part C -- Daytona never exercises
+   them).
+ (b) THE WHOLE BOARD on the real ROM (fx68k, daytona93's epr-16489/16490,
+   both MultiPCMs on the sample ROMs), the release configuration (TICK_DEN
+   80, PCM_SHARED 1), driven by MAME's own link bytes at MAME's times, YM_STUB
+   0 against 1, four windows: W0 power-on + attract 0-14 s; W1 coins, menus
+   and race start (link from 226 s, after the 4 s boot), W2 the race (244 s),
+   W3 race end + GAME OVER (288 s), 16 s each:
+     - the 68000's bus on every cycle (AS, R/W, address, data both ways) --
+       hash IDENTICAL in all four (W0 54b878fc8fe12adb, W1 0b59d1b787e5fb83,
+       W2 23523cfe9d3d7743, W3 2e34644cbadef813): every MultiPCM register
+       write on the same clock, so the note timing is identical;
+     - both MultiPCMs raw and rated, every cycle -- hash IDENTICAL; each
+       chip's sample dump byte-identical (625,016 samples a chip in W0,
+       714,302 in W1-W3);
+     - the YM status reads identical in number and value (W3: 130,607 --
+       0x00 x88,334, 0x02 x41,382, 0x80 x446, 0x82 x445); YM writes 24,360
+       (W0) to 27,828; rate-stage underruns 0; sample cache 0 wrong.
+   The default bench (50 MHz, PCM_SHARED 0, 30 M cycles) likewise; its
+   YM_STUB 0 output hash is be5d9fc834bffead, R821's, so at 0 the board is
+   the same RTL.
+   The board's MIX differs, and only where jt12's own output is non-zero (the
+   MultiPCMs being identical): jt12 is non-zero from cycle 2,951 to
+   6,135,910 after reset and exactly zero for the rest of the window
+   (W3 at 80 MHz: 6,132,960 cycles, the first 76.7 ms, peak 30,720 at the
+   chip's own output; the 50 MHz bench: 4,519,800 cycles, 90 ms, peak
+   30,720), and the mix's non-zero count differs by exactly that figure
+   (1,044,238,826 against 1,038,105,866). The last tenth of every window is
+   identical in range and count.
+ (c) test_m2_sndlink, test_m2_mpcm_level (parts A, B), test_m2_mpcm_dual
+   (both runs) PASS; lint_top clean at YM_STUB 0 and 1; lint_idx the same
+   147 lines at 0 and 1, none new; quartus_map --analyze_file clean on
+   m2_ym_timers.sv and m2_sound_board.sv.
+
+*Area -- VERIFIED (whole-design quartus_map 17.0, this tree, YM_STUB 0 then
+1):*
+                         ALMs-needed  comb ALUT   regs     block bits  DSP
+   YM_STUB 0               40,300      57,498    48,826    4,359,058    91
+   YM_STUB 1               39,531      56,308    48,222    4,351,097    90
+   delta                     -769      -1,190      -604       -7,961    -1
+ YM_STUB 0 equals the release candidate's own map (s1078) on every figure.
+ The stand-in is 69 ALUT and 79 registers; jt12 was 1,086 / 683 / 7,961
+ bits / 1 DSP in the map; the rest of the drop is the mix's third adder input
+ going constant.
+*INFERRED (needs a fit):* placed, ~-570 to -620 ALM (jt12 was 629.2
+ALMs-needed, 634.4 placed, in s1072's fit; the stand-in ~40-50); M10K
+-11 (jt12's 11 in s1072: 540 -> ~529 of 553); DSP 91 -> 90.
+
+*Found on the way:*
+  - jt12's power-up burst: for the first 77-90 ms after reset, before the
+    firmware's init block (TL 127, key off) lands, jt12 sounds from its reset
+    state -- peak 30,720 at its output, and the doubled mix hits the rails
+    (-32,768..32,767) in every window; with the stand-in the range is the
+    MultiPCMs' alone (W0 -15,802..13,696). MAME's ymsnd is exactly zero
+    there. R819's "5,120 then zero" (MAME's writes replayed into jt12) is
+    probably the same burst measured another way (INFERRED). YM_STUB 1
+    removes it; whether it is audible on the board at power-on is
+    INFERRED (likely a click or burst), not listened for.
+  - quartus_map 17.0 re-saved Model2.qsf, appending files.qip's
+    m2_testpattern.sv (which does not exist) and three SDRAM FAST_*_REGISTER
+    assignments; lint_top then failed on the missing file. Reverted. A map run
+    in a worktree must be followed by a check of git diff Model2.qsf.
+
+*Risks.* A game that keys the FM with a non-zero level loses its FM
+entirely under YM_STUB 1. Measured silent: both Daytona programs (attract,
+game, GAME OVER), Virtua Cop Rev A (200 s attract) and Desert Tank (200 s) --
+all four run the same Sega driver, at different addresses. The candidates in
+R832 (Desert Tank, Virtua Cop) are measured only to 200 s; their gameplay
+must be measured before YM_STUB is set for them. Model 1 games that voice
+the FM (Virtua Racing's music is FM, R819) are not this core. The stand-in
+equals jt12, not ymfm or the silicon: busy lasts jt12's 32 internal clocks
+(24 us), and MAME's busy differs (MAME's 0x7B6 poll read busy 229 + 229
+times in 340 s on daytona93; the board's 446 + 445 in one 16 s window) --
+unchanged from today's board, and the tempo is timer B's (R820).
+The SDC's info path is untested until a fit runs.
+
+NEXT: a fit with YM_STUB 1 (one-character change in Model2.sv) for the
+placed ALM, M10K and timing; listen on the board (silence where jt12's boot
+burst was is the only audible difference expected).
+Merged with YM_STUB 1 set in Model2.sv (the release configuration).
+
+**THE RELEASE CANDIDATE FITS.** s1081-s1083 = db9fbc9 (51bb563 + R833 YM
+stand-in): 40,841 / 40,872 / 39,707 ALM (97-98%, was 41,316-41,446), M10K
+529/553 (was 540). s1082 closes: clk_sys +0.350, holds >= +0.240, HDMI
+-0.632. RBF build/Model2_20261014_s1082_rc.rbf. Not yet on the board.
+s1068 (mip, Sharp default): NO LOCK in 240 min of the watch (135 readings,
+none zero, 103 at >= 57 fps).
+s1082 (the release candidate): NO LOCK in 240 min of the watch (135
+readings, none zero, 103 at >= 57 fps). Awaiting Ben's checks: rails per mip
+setting, sound, background in slides, car select, the mip default.
+s1082 on the board (Ben): "all looking good except the windows on the car:
+the mip mapping is too early, and only the middle texture has changed, not
+the outside" -- the player car's rear window: the opaque sky glass (64x64)
+takes a level > 0 (tilted away, a large major axis though the car is near)
+while the translucent frame over it stays at 0. MAME keeps the player car at
+level 0 -- the game's per-object LOD (geo->lod in texlod) says so. Screenshot
+sm2-builds/mipmaps/board/s1082_rear_window.png. Next: follow the game's
+per-object LOD intent if it is cheaply available in the geometry pipeline.
+
+**R834 -- 15 kHz: A 268/269-LINE MODE (15.4 kHz), AND A NARROW LINE THAT
+KEEPS THE PICTURE'S SHAPE AT 15.4 AND 15.7 kHz.** Ben, 2026-10-14, on his
+JVC TM-H150C with the 20261013 release: some users' sets will not sync at
+15.1 kHz; at 15.7 kHz the picture is "squashed (widescreen)" and the OSD
+text looks rough. Asked for 15.4 kHz and no squash.
+
+*The squash is the field, not a fault.* Every 15 kHz mode shows the same
+192 lines a field at the game's 57.5242 Hz. More lines a field means a
+faster line, and on a set with a fixed scan height those 192 lines take a
+smaller share of it: 192/273.5 against 192/262.5, 4% shorter at 15.7 kHz.
+Ben's two photographs (same set, same framing) agree: the picture the same
+width, about 3.5% shorter at 15.7. The width does not change, because the
+line is 656 pixels in both, so 496 of them are the same share of a line.
+Nothing in the core can add lines without changing the game's rate (a 60 Hz
+field would run the game 4% fast) or repeating lines (a step every ~24
+lines, visible on every diagonal). What it can do is narrow the picture by
+the same ratio.
+
+*The change (m2_video_timing, Model2.sv):*
+  * 268.5-line fields (269 / 268), vsync 226-229 (between R783's 223 and
+    R701's 229), 15,445 Hz a line; at 656 pixels, 537/5300 of 100 MHz
+    (10.1321 MHz).
+  * The narrow line (`narrow`, interlaced 268.5 / 273.5 only): 672 and 684
+    pixels at the same line rate, so 496 pixels are the same share of a
+    line as 192 lines are of a field -- the 262.5-line picture's shape.
+    Pixel clocks 11277/108650 (10.3792 MHz) and 93537/869200 (10.7613 MHz);
+    the ce accumulator goes from 14 to 20 bits. 680 was tried first and is
+    0.5% off the shape, which the bench refuses. hsync moves to 527 / 532
+    so the picture's centre keeps its distance from it (0.585 of a line).
+    Nothing downstream counts pixels a line: the tile fetch, the line ring
+    and the 3D line fetch run from line_start and have more time, and the
+    line buffer's hcnt[8:2] read wraps only in the blank.
+  * OSD: "15kHz lines" is O[45:44] -- 262/263 (15.1kHz), 268/269 (15.4kHz),
+    273/274 (15.7kHz) -- so a saved 273/274 (bit 45) still opens as 273/274;
+    a set that needed it could not show the OSD to set it again. Bit 44 was
+    Every 3rd frame's (R831), and a config holding both reads as 273/274.
+    "15kHz width" O[55]: Full (default, unchanged) or Narrow.
+  * Narrow is a choice, not the default, because which picture is right
+    depends on the set. On Ben's, width follows the share of the line, and
+    Narrow should restore the shape. A set whose width follows the trace
+    time instead (a plain flyback scan) already shrinks the 15.7 kHz picture
+    in both directions, and Narrow would make it about 4% too narrow there.
+  * The OSD text is the framework's (sys/osd.v): it counts the 192 active
+    lines, the same in every 15 kHz mode, and draws in its half-height
+    mode in all of them. What differs at 15.7 kHz is the set's lock, which
+    R799 already found worse on Ben's set at 273.5 ("fixes alignment and
+    other bugs" at 262.5). 15.4 kHz is the in-between for it.
+
+*Checked:* tb_m2_video_timing over six 15 kHz configurations (273.5,
+262.5, 268.5, 268.5 narrow, 273.5 narrow, 262.5 with narrow asked): lines
+and pixels a frame, every line 0-383 once a frame, field 1 half a line
+below field 0, every vsync-to-vsync equal, hsync where intended, the field
+at 57.5242 Hz, the shape within 0.5% and the centre within 0.2% of the
+262.5-line picture's, and native 656 x 424 with mid_lines and narrow set:
+112 checks, 0 fail. tb_m2_video_ovr runs every scene in the three new
+modes, and switches into and out of them mid-frame. lint_top clean;
+Quartus 17.0 parses m2_video_timing, m2_video and Model2.sv.
+Not seen by any bench: a set. Ben to try 15.4 kHz, and Narrow at 15.4 and
+15.7 kHz.
+
+**R828c -- THE GAME DOES NOT SET A PER-OBJECT LOD.
+geo->lod IS 128 AND EVERY coef IS 1.0, SO MAME'S LEVEL IS
+floor(2 log2 z - log2 |dotp| - 7) FOR EVERY POLYGON: A FOOTPRINT THAT
+ASSUMES THE SAME TEXEL DENSITY FOR EVERY OBJECT. THE PLAYER'S CAR SITS AT
+-5. A POLYGON WHOSE OWN LEVEL STAYS AT -3 OR BELOW IS NOW DRAWN AT LEVEL 0.
+THIS IS A FLAG FROM THE GEOMETRY, ONE BIT PER QUAD.**
+
+(Section: §10, R828 and its addenda; R665 corrected. Authority: MAME 0.289
+model2_v.cpp and model2rd.ipp for what the silicon computes (texlod, the
+level). Model 1 has no mip.)
+
+*Believed:*
+  1. R665: Daytona's log RAM "is not a log table". The final table is
+     0xFFFF in 32,488 of 32 K entries and is rewritten every frame, so
+     texlod cannot be produced in logic.
+  2. R828 / R828a / R828b: MAME's level sits 2-6 levels under the
+     footprint for no stated reason. This walk has no texlod, so it mips
+     wherever its edge footprint says.
+  3. The brief for this addendum: the game sets geo->lod per object, which
+     is why MAME never mips the player's car.
+
+*Board (s1082 = db9fbc9, Sharp; Ben):* "all looking good except the
+windows on the car: the mip mapping is too early, and only the middle
+texture has changed, not the outside". Screenshot
+sm2-builds/mipmaps/board/s1082_rear_window.png. Earlier (s1068): the sky
+reflection on the car windows breaks "on the car select screen".
+
+*Now known -- VERIFIED:*
+
+All of this was measured on MAME 0.289 in build/mame289-mip, with a new
+instrument M2GLOD (diff: build/mame_patches/m2instruments_m2glod.patch).
+M2GLOD writes the following:
+  - A G line per polygon in the M2MIP .poly dumps: geo->lod, coef,
+    |dotp|, attr, cb[10], the log RAM byte read, oba, tha, the object's
+    index and its translation.
+  - "L= D=" (texlod and |dotp|) on M2DIFF's polys.txt lines and on
+    M2GEO's geopolys.txt lines.
+The runs covered:
+  - Daytona Revision A attract, lists 2000-2023, 5000-5023, 7000-7007 and
+    9000-9023, plus samples at 3000-8500.
+  - A Revision A race: 3 coins, start, nobody steering. M2GEO walks
+    5251-6601.
+  - The Deluxe '93 car select (daytona93, three coins and start; rompath
+    ~/roms/Model2). M2GEO walks 3301-5101 and lists 3700 and 3950.
+The runs were deterministic: the 2000 list was identical in two runs.
+
+  1. THERE IS NO PER-OBJECT LOD.
+     - All 91,196 textured polygons logged have lod = 128.0 (0x43000000)
+       and coef = 1.0 (0x3f800000). That covers attract, the race and the
+       car select.
+     - The coefficient table at every one of 38 dumped walks holds 1.0 in
+       all 32 entries (1,216 of 1,216).
+     - geo->lod as left at a walk's start is 128.0 at 37 walks. The one
+       exception is 120.15, at Deluxe '93's circuit select (walk 3301:
+       12 polygons, the course panels). That is 0.09 levels.
+  2. THE LOG RAM IS A LOG TABLE (R665 is corrected). At walks 5000
+     (Revision A) and 4201 (Deluxe '93) every one of the 32,768 bytes
+     equals round(128 log2(1 + i/32768)) within 1, and none is 255. Every
+     polygon's log RAM read (the G lines' lr) agrees with that formula.
+     So texlod = 128 log2(coef |dotp| lod), exactly as written in
+     model2_v.cpp:436. R665's capture (p15) did not hold this table, and
+     why is not known; the dumps do.
+  3. SO MAME'S LEVEL IS floor(2 log2 z - log2 |dotp| - 7) EVERYWHERE.
+     - z is the pixel's depth. dotp = normal . P0(n), the distance of the
+       polygon's plane from the eye in view units.
+     - This is the major axis of a perspective footprint at one fixed
+       texel density, the same for the road, a mountain and a car window.
+       It has no texture-scale term.
+     - That is R828's "2-6 levels sharper than the footprint". A densely
+       textured near object, such as the car, sits far under 0.
+     - The player's car in chase view (f5000): MAME's mml/128 is -5.4 to
+       -4.9 on both the window glass (64x64 opaque at (768,448)) and the
+       frame (64x128 translucent at (512,0)).
+     - The f7000 attract close-up: -4.9 to -2.3.
+     - The same textures on cars 110-150 units ahead: +0.6 to +2.8.
+  4. WHY s1082 MIPS THE PLAYER'S WINDOW. The edge footprint (R828) sees
+     the rear window's real texel density: tilted away, with 64 texels over
+     about 40 rows. tb_m2_raster3d is the core configuration plus MIP 1 and
+     Sharp (MAME list f5000), and on it 842 of the player car's 15,352
+     pixels are off level 0. They are the middle of the window: the glass,
+     and the frame's centre bar, which the R828b cap holds at level 1.
+     That is Ben's "middle changed, outer not"
+     (sm2-builds/mipmaps/img/miplod_window_f5000.png, row 3).
+  5. THE RULE (R828c). A polygon is drawn at level 0 when the game's own
+     level at its far end is at most -B, with B = 3. Elsewhere R828a/b's
+     level is unchanged; the flag can only make a level shallower.
+     - The far end is the largest vertex z, where the level is highest.
+       With hzmax and |dotp|, the test is 2 L(hzmax) - L(|dotp|) <
+       2144 + 16 (1 - B).
+     - Here L(x) is 16 x (the IEEE exponent) plus a 16-entry table of
+       round(16 log2(1 + j/16)) on the top four mantissa bits. That is
+       sixteenths of a level, with the bias folded into the constant.
+     - The candidates were each measured against MAME's exact level, using
+       the offline model (miplod.c), Sharp with R828b's cap as the base,
+       and every unoccluded pixel. The per-pixel rule was
+       min(Sharp, MAME + B). The per-quad rules were a cap of
+       clamp(MAME_far + B, 0, 7) and the flag. Results:
+
+       rule (f2000/f5000/f7000/f9000)  Sharp's mipped px kept   player car at L0   shimmer, minified (x GT)
+       Sharp, s1082                    100/100/100/100%         -/96.3/96.3/-      1.39/1.66/1.36/1.24
+       per pixel, B=3                  79/89/43/87%             -/99.9/99.9/-      1.49/1.73/1.52/1.28
+       per quad cap, B=3               96.2/92.7/84.6/88.7%     -/99.9/99.9/-      1.41/1.70/1.42/1.28
+       per quad FLAG, B=3 (chosen)     96.2/94.7/84.6/90.7%     -/99.9/99.9/-      1.41/1.69/1.42/1.27
+       per quad flag, B=4              100/98.2/94.6/100%       -/99.8/97.7/-      1.39/1.67/1.37/1.24
+       MAME's level, nearest           3/5/5/6%                 -/100/100/-        1.88/2.30/1.62/1.39
+       off (level 0)                   -                        100%               2.01/2.58/1.73/1.62
+
+     - f2000 is the in-car view, with no player car.
+     - "Player car" means objects whose translation z is under 8. In
+       f9000 that class is not the car: the grandstand's object also sits
+       near the eye, so f9000's player column is blank.
+     - Shimmer is R828's metric: the mean |change| per 1/8-px pan step,
+       against the 12x12 supersampled level-0 reference. On face-on
+       minified pixels (iso) the flag gives 1.19/1.36/1.32/1.27, against
+       Sharp's 1.16/1.30/1.31/1.20.
+     - MAME's level-0 pixels at level 0: 84.5/75.8/92.5/84.5% (Sharp:
+       83.7/74.1/91.0/82.7%). MAME's mipped pixels still mipped: unchanged
+       (98.6/95.5/92.0/87.3%).
+     - Why the flag and not the cap: the flag measured within 0-2 points
+       of the cap on every frame. It needs no change to m2_span_tex or to
+       the span queue, because the fill's K becomes -512, as Off does.
+     - Why B = 3 and not 4: B = 4 leaves 2.3% of the f7000 close-up's car
+       mipped. That is the car's side decal (128x128 at (384,640)), where
+       MAME's far-end level is -3. B = 3 also returns the other cars
+       mid-distance (f9000) and the near fence panels (f2000) to level 0,
+       as MAME draws them. MIPZ_B is a localparam in Model2.sv
+       (R3D_MIPZ_B).
+  6. THE RTL'S FLAG AGAINST MAME'S OWN, polygon by polygon. The geodiff
+     replay pushes MAME's walk through this core's walker, engine,
+     projector and clipper (m2_geometry with MIPZ). Each MAME polygon's
+     run of quads was aligned as geodiff.py aligns it, and its q_mipz was
+     compared with MAME's exact flag (mipz_gd.py).
+     - Ten walks: attract 2000/5000/7000/9000, the race 5251/5701/6301,
+       and the car select 3901/4201/4501.
+     - 13,081 polygons, 13,055 agree (99.80%).
+     - All 26 disagreements are on the boundary: MAME -3 with ours clear,
+       or MAME -2 with ours set. These come from the table's rounding
+       against MAME's fast_log2 and from cb[10]'s truncation.
+     - No polygon's quads disagree among themselves.
+     - The bit model also gives the same result as MAME's exact flag on
+       99.8% of the bench lists' quads: 1,434/1,436 f5000, 303/303 f7000,
+       1,606/1,607 f2000, 689/694 f9000, 1,345/1,349 and 1,351/1,356 car
+       select.
+  7. ON THE PICTURE. tb_m2_raster3d in the core configuration, MIP 1,
+     Sharp. M2_R3D_MIPZ=3 feeds each quad the flag as m2_geometry forms
+     it, from the list's max vertex z and |dotp|. The figures below are
+     pixels off level 0 (the Off picture):
+       - player car f5000:   842 -> 14 (of 15,352)
+       - player car f7000: 1,123 -> 19 (of 34,797)
+       - Deluxe '93 car select, lists 3700 / 3950: 6,863 -> 320 and
+         6,789 -> 471. These are the cars, the windows' sky reflection
+         and the decals, at MAME levels -4..-3. What is left is where
+         MAME's own level is above -3.
+     Scenery changed from s1082's Sharp:
+       - f2000: 1,736 px, the near fence (64x256 at (896,256)), 1,359 of
+         3,865, back to level 0.
+       - f5000: 787.
+       - f9000: 412, cars ahead (32x64 at (608,128)). The road
+         (256x256 at (0,512)) changed by 1 px.
+       - Far road, trees and mountains: unchanged.
+     The images are in sm2-builds/mipmaps/img/:
+       - miplod_window_f5000.png and miplod_window_f7000.png: MAME, Off,
+         s1082 Sharp, Sharp + R828c.
+       - miplod_carselect_3700.png and miplod_carselect_3950.png.
+       - miplod_scenery_f2000.png, miplod_scenery_f5000.png and
+         miplod_scenery_f9000.png.
+  8. THE RTL (merged onto headroom after R834).
+     - m2_geo_engine: poly_dotp, |normal . point| as {exponent, 4 mantissa
+       bits}. It is latched with the face test (E_DOTA, the point pass)
+       and held until the polygon is handed over: 12 registers.
+     - m2_geometry: #(MIPZ, MIPZ_B).
+       - pdotp is latched with the polygon (Q_IDLE).
+       - pmipz is set in Q_CHK from hzmax (the polygon's largest vertex z,
+         latched since Q_MM2) and pdotp.
+       - Two table lookups, two 13-bit adds and a 15-bit compare. Unsigned,
+         with no signed casts (R662).
+       - There is no |dotp| = 0 guard: L(0) = 0 sets the flag only when
+         z < 2^-61.
+     - m2_geo_clip: in_mipz -> a_mipz -> out_mipz, carried to every piece.
+     - Model2.sv: localparam R3D_MIP (m2_raster3d .MIP and m2_geometry
+       .MIPZ together) and R3D_MIPZ_B = 3; q3d_mipz from the geometry to
+       the rasteriser.
+     - m2_raster3d -> m2_quad_store #(MZ = MIP): one bit at the top of the
+       texture word (uvt 192 -> 193 bits; 195 fit in 39 M10K a bank in
+       the 2048x5 mode) -> m2_raster_fill in_mipz, latched with the quad
+       (mz_r).
+     - m2_raster_fill: k_o is K_NONE when mz_r, beside Off's test.
+     MIP 0 prunes all of it.
+  9. MIP 0 IS HEAD.
+     - quartus_map 17.0 with .MIP 0 in both trees: ALMs needed 39,446 =
+       39,446, combinational ALUT 56,095 = 56,095, registers 47,917 =
+       47,917, block bits 4,350,723 = 4,350,723, DSP 90 = 90. The
+       per-entity differences are generated RAM / shift-tap instance names
+       and m2_geometry's parameter section.
+     - In the bench (tb_m2_raster3d, core configuration, MIP 0, f5000) the
+       pixel hash 0f4acde5 and fetches 162,485 equal HEAD's.
+     - MIP 1 with no flag fed equals HEAD's MIP 1 (e34da033, 161,952
+       fetches).
+  10. BENCHES.
+     - test_m2_geometry_mipz is new (MIPZ 1). Four fixed cases and 380
+       random polygons in one strip object, with one-component
+       power-of-two normals so the engine's dot product is exact and the
+       model's |dotp| is the RTL's. z ranges over 0.25-2000.
+       - The fixed cases are: the s1082 rear window (zmax 3.78, |dotp|
+         1.89, level -5: set), far scenery (127/63.6: clear), |dotp| = 0
+         (clear) and "the far corner decides" (clear).
+       - Every flag equals the bit model, 56 of 384 are set, and all 384
+         equal MAME's exact flag.
+       - Mutations caught: hzmin for hzmax (212 fails), the z mantissa
+         table dropped (16), the dotp table dropped (12), B off by one
+         (17), and poly_dotp never latched (59).
+       - The |dotp| = 0 guard survived its mutation, because it is
+         equivalent, so it was removed.
+     - test_m2_geometry (MIPZ 0): q_mipz 0 on all 384 quads.
+     - test_m2_raster_fill_mip now presents in_mipz.
+       - A sixth of the quads at random are flagged, and so is ALWAYS the
+         f5000 window-frame quad (the player's rear window, which fails
+         before the fix).
+       - The expected K is -512 when the quad is flagged.
+       - 1,830,055 spans, 0 wrong. 1,362 flagged quads that would
+         otherwise carry a level, 319 of them the window frame.
+       - Mutations caught: the flag ignored (280,532 fails), and the flag
+         taken live from the input rather than latched with the quad
+         (411,737 fails, back to back).
+     - Pass: test_m2_raster_fill, test_m2_raster3d, test_m2_quad_store,
+       test_m2_geo_clip, test_m2_geo_engine, test_m2_geo,
+       test_m2_span_tex, test_m2_span_tex_mip and test_m2_texel_bl_mip.
+     - lint_top is clean. Its warnings are identical to HEAD's with MIP 1
+       and with MIP 0.
+     - lint_idx: the same 147 lines as HEAD.
+     - quartus_map --analyze_file (17.0) on the six changed modules and
+       Model2.sv: 0 errors (the constant-overflow warnings are HEAD's).
+     - Quartus constant-fold of the flag arithmetic (cf.sv, seven constant
+       cases): the stuck-at pins spell 1,0,0,1,1,1,0, the model's values.
+  11. AREA. quartus_map 17.0, whole design, MIP 1, HEAD a4e8ce4 (= the
+      release candidate's RTL) against this:
+      - ALMs needed: 39,531 -> 39,579 (+48).
+      - Combinational ALUT: 56,308 -> 56,348 (+40).
+      - Registers: 48,222 -> 48,252 (+30).
+      - Block bits: +4,096 (the quad store's bit, both banks).
+      - DSP: 90 = 90.
+      - By entity (LC / registers): m2_geometry 7,544 -> 7,561 /
+        8,358 -> 8,384; m2_geo_engine +1 / +12; m2_quad_store +2 / +5;
+        m2_raster_fill 5,210 -> 5,199 / -1; m2_geo_clip -1 / +1.
+  12. TIMING. quartus_sta --post_map, slow model; R825 calibrated it as
+      2.3-4 ns pessimistic.
+      - geometry -> pmipz: +7.67 ns (hzmax -> pmipz +8.04).
+      - FP pool -> poly_dotp: +6.88.
+      - -> a_mipz: +5.09.
+      - store -> fill mz_r: +4.44, the same as the existing store -> tex_r.
+      - mz_r -> k_o: +10.14.
+      - Unchanged: every path into k_o is +5.67, and the paths into
+        uvt_* are -7.45 in both trees (an existing post-map path).
+
+*Decision (a departure from R828, towards what MAME computes):* the level
+stays the edge footprint's (R828a, R828b), but the game's own level
+(texlod, which is floor(2 log2 z - log2 |dotp| - 7) at Daytona's lod 128 and
+coef 1.0) vetoes it. A polygon the game keeps at least three levels sharp
+all over is drawn at level 0, as MAME draws it. The lod and coef are
+constants in the RTL (log2(128) = 7 is folded into the threshold) because
+the game never sets anything else in a race or on the select screens.
+
+*Now known -- INFERRED (each says what would settle it):*
+  a. On the board, the player's windows (glass and frame) look as with
+     mip Off. Far road, trees, mountains and Sharp's look are unchanged.
+     The near fence (in-car view) and the cars ahead are a little sharper,
+     at MAME's level 0. Settles it: Ben, s1082 against this build, the
+     same spot.
+  b. The car-select reflection Ben reported (s1068) is (7): Sharp put
+     levels 1-2 on the cars' sky reflection and decals, where MAME has -4.
+     It is gone except where MAME itself is above -3. Settles it: Ben on
+     the Deluxe '93 car select. Revision A has no car on that screen: it
+     shows Mission Select without cars.
+  c. Placed area is +25..+50 ALM (the map's +48 at R821's 0.55-0.62x,
+     though R798 saw up to 2.5x). M10K should be unchanged: 193 bits still
+     take 39 blocks a bank. Settles it: a fit.
+  d. Timing: every new path is +4.4 ns or better post-map. Settles it: a
+     fit.
+  e. Another game, or a Daytona screen not measured, that sets lod or a
+     coefficient other than 128 / 1.0 would shift the threshold by
+     log2(lod coef / 128) levels. Op 0x16's operand (and coef_table, the
+     second word of each op 0x06 entry, which m2_geo steps over) could be
+     latched for about 12 registers and an adder if that ever matters.
+     Settles it: M2GLOD on that game.
+
+*Not verified:* any fit; the board; MIP with texel step 2-8; the
+interlaced picture.
+
+Tools (local; sm2-builds/mipmaps/tools/miplod/):
+  - miplod.c: the offline sweep (rules, shimmer, agreement, per texture).
+  - capchk.py and flagchk.py: the bit model against MAME on polys.txt.
+  - mipz_gd.py: the geodiff replay's q_mipz against MAME, aligned.
+  - cmpimg.py and crops.py: bench pictures by region.
+  - build.sh and run.sh: the core-configuration bench; M2_R3D_MIPZ=<B>.
+  - pm.tcl: post-map paths.
+  - sel_rev_a.lua and sel_93.lua: the race and car-select drives.
+MAME dumps (ROM-derived, local only) are in build/miplod/.
+
+**s1084-s1086 = b559f27 (R834 + R828c).** s1085 fits: 40,873 ALM (98%),
+M10K 529/553 (unchanged); every core clock positive (+0.338 / +0.626 /
++1.462), holds >= +0.206, HDMI -1.250 (report-only, ascal). s1084 (Segment
+Violation) and s1086 (Internal Error, DYN) crashed mid-fit, as at 98-99%
+before. RBF build/Model2_20261014_s1085_rc.rbf, md5
+e2ec410b2ffe8b4890089f8dfa6e6275. Not yet on the board.
+Reseeds of b559f27 for the HDMI slack (Ben), slow 100C model, worst setup
+by clock: s1087 HDMI -0.003 (one path), core >= +0.218, hold +0.215,
+40,851 ALM -- the best; s1089 HDMI -0.019, core >= +0.138; s1092 HDMI
+-0.052, core >= +0.238, hold +0.147; s1088 and s1090 miss a core clock
+(-0.486, -0.232); s1091 crashed (Internal Error, TDC). None closes HDMI
+outright. s1087 assembled: build/Model2_20261014_s1087_rc.rbf, md5
+52cb1d3199ceeb7db7cdeff65ebf6944. s1085 on the board: no lock and 57.4-57.6
+fps through the first 56 min of the watch.
+s1087 (the release pick) on the board: NO LOCK in 240 min of the watch (136
+readings, none zero, 108 at >= 57 fps, lowest 52.4).
+
+**R835 -- DESERT TANK (MAME `desert`) ON THIS CORE: AN MRA, GAME ID 2, AND
+ITS IN1. NOTHING ELSE IN THE CORE IS DAYTONA'S. NOT YET ON THE BOARD.**
+(DRAFT for docs/model2a-design-study.md section 10; R832 asked "why MAME
+flags it not working -- not yet checked", R833 asked for its gameplay before
+YM_STUB is set for it.)
+
+*Believed:*
+  * R832: Desert Tank is the same original Model 2 board as Daytona (Model 1
+    I/O board, epr-14869c), "a candidate for THIS core with its own MRA and
+    input mapping".
+  * R833: its FM was silent over 200 s of attract only; "gameplay must be
+    measured before YM_STUB is set for them".
+  * R725: "the TGP's microcode is transcribed into the RTL".
+  * R306 / rom-layout.md: tools/rom_csum.py cannot see padding, so no
+    padded MRA could be checked by the project's own tool.
+
+*Now known -- VERIFIED:*
+  1. MAME 0.289 (build/mame289-mip, sim/io/mame_m2_desert.lua; coin at 60 s
+     and 260 s, start, accelerator held, wheel swept, machine gun and cannon
+     fired; 420 s) BOOTS, ATTRACTS AND PLAYS: mission select, two games, the
+     desert and canyon stages, score, the ranking screen.
+  2. THE FM IS NEVER VOICED. 728,064 YM3438 writes (103,922 attract,
+     624,142 play): the init block once per sound-program start and timer B
+     reloads (0x27 <- 0x2A, 312,071 in play); no key-on with an operator bit,
+     no TL below 127, no F-number. ymsnd: 23,333,101 samples, 0 non-zero.
+     Daytona '93 on the same script: the same picture. YM_STUB 1 (the
+     release) is right for Desert Tank.
+  3. THE TGP RUNS THE SAME PROGRAM. MAME's TGP program RAM after the upload
+     (copro_ctl1 bit 31, the FIFO port) is 2024 words, crc32 d6d611dd, in
+     desert and daytona93 alike, and equal word for word to
+     tools/extract_tgp_microcode.py's copy from Daytona's data ROM.
+     CORRECTION to R725: the core does not carry a transcribed microcode --
+     m2_copro writes the game's own upload into m2_tgp's program RAM
+     (uc_we); the README is right.
+  4. THE RTL TGP IS BIT-EXACT ON DESERT TANK. Two 30-frame gameplay windows
+     captured with sim/tgp/tgp_capture.lua (frames 6000 and 9001; 35,124 /
+     30,049 FIFO words in, 27,468 / 22,599 out) replayed through m2_copro
+     (tb_tgp_replay, lat 6): every output, every i960 pop, every io read
+     and write equal to MAME, 0 NaN-encoding differences, unimplemented-
+     opcode flag 0 cycles -- "PASS (bit-exact against MAME)". Desert Tank
+     calls TGP functions 07, 0e, 18, 1f, 2d and 2e, which the Daytona race
+     capture (race5400) does not; they are covered. TGP load: 74.6 / 71.3
+     ms per 30 frames at 80 MHz (the Daytona race: 121.6).
+  5. RENDER MODE. Desert writes 0x10000000 once (0, the 30 Hz mode; IP
+     0x3713c) and videocontrol once (1); its main loop waits for the vblank
+     count to change and then to be even (0x2fc18-0x2fc3c) and flips
+     0x803008 28-29 times a second (303 of 420 seconds at 29). The core's
+     0x98000c already returns framenum[1] in bit 2 when render mode is 0
+     (R765), and its walk runs after the game's flip (R764), so a 30 Hz
+     game is what the Daytona race already is.
+  6. WHAT IT TOUCHES THAT DAYTONA DOES NOT (the same script on daytona93,
+     i960 accesses by address outside RAM and program ROM, diffed):
+       - the TIMERS, 0x00f00000: timer 0 loaded with 0xfffff once a game
+         frame and read 1.6 M times in 150 s. This core has no timers;
+         those reads return 0. Disassembly (MAME's debugger): the main loop
+         (0x2fb30) and the task scheduler (0x30910) compute elapsed
+         microseconds per task and per frame from it, store them (task
+         +0x14, max +0x18) and count overruns past 0x87d0 us at 0x5212e0 --
+         a profiler. MEASURED HARMLESS: with every timer read forced to 0
+         in MAME (DT_TIMER0=1; the tap takes -- the game's "remaining"
+         word at 0x5212dc reads 0x87d0 against 0x5b58-0x7f27 with real
+         timers), 241 snapshots, one a second over 240 s (attract, coin,
+         mission select, a game), are byte-identical to the real-timer run,
+         and so are the flips per second and the YM log. No timers needed.
+       - comms RAM 0x01a00000: 2 writes, no reads (the core drops them, as
+         an unpopulated comms board would);
+       - geo_r 0x801xxx: 7 reads (MAME and the core both return 0);
+       - backup RAM 0x01d01000-0x01d03fff: within the core's 16 KB;
+       - main_data reads end below 9 MB (0x028fffff), as its ROMs do; nothing
+         at 0x06000000.
+     Daytona-only: geo_r 0x802008 polling, data 9-10 MB, DPRAM words 5/8.
+     DSWs: MAME declares all three banks unused (0xFF, the core's value).
+     Outputs (lamps, gun and cannon motors) go to lamp_output_w: not
+     modelled, not needed.
+  7. INPUTS. MAME's ports: IN0 is Daytona's bit for bit (VR1-3 at
+     0x20/0x40/0x80); IN1 0x01 Shift (PORT_TOGGLE), 0x10 Machine Gun, 0x20
+     Cannon. The analog ranges: MAME gives 0x00..0xff with no MINMAX, but
+     the game clamps -- accelerator 0x20 == 0x00 ("GAS PEDAL", the tank
+     stands) and 0xe0 == 0xff, wheel 0x20 == 0x00 and 0xe0 == 0xff: the same
+     run, every snapshot identical for 61 s of play. So Daytona's
+     0x20..0xe0 ADC values serve unchanged.
+  8. THE MRA. mra/Desert Tank.mra (+ [15kHz CRT], 82 on index 4): the '93
+     layout, zero-padded, program second half at 0x2BE0000, game ID 2.
+     tools/rom_csum.py (now folding repeat, inline parts and offset /
+     length, CRC-first like MiSTer's FileOpenZip) builds 0x2C20000 bytes;
+     tools/mra_vs_mame.py (new; parses ROM_START and loads by CRC with
+     MAME's semantics, sharing no code with rom_csum) passes all 11 slots
+     against ROM_START(desert) and finds the 68000 vector at 0x2340000 where
+     the core's scan will. Same tool: vcopa passes; daytona93 differs only
+     where it should (textures above 4 MB, MAME's hole; no program second
+     half). Planted faults caught: a swapped interleave, FF padding, a wrong
+     CRC. The 43.62 MB Daytona images are unchanged (md5 dbd71f6d...).
+  9. THE CORE. game_id 2 = is_desert; prog_ext = is_vcop | is_desert (R726's
+     path, tb_m2_cpu_bridge 925 / 0). The cabinet-input block moved to
+     rtl/io/m2_cab_inputs.sv; with is_desert its IN1 is {11, ~Gear Down,
+     ~Gear Up, 111, ~shift} where shift toggles on each press of the VR4
+     button (reset: released = forward, MAME's default). CONF_STR is
+     unchanged: the MRA renames the buttons (<buttons names>, Model 1's
+     scheme) -- VR4 -> Shift, Gear Up / Down -> Machine Gun / Cannon.
+     tb_m2_cab_inputs (new, in `make test`): game ID 0 against the block as
+     it was at 0f3cbc4, 30,000,000 output checks, 0 differences; game ID 2,
+     30,000,000 checks against MAME's IN1, 0 differences, 1,978 shift
+     toggles. Five planted faults all caught (a gear-table entry, shift on
+     level, gun / cannon swapped, Desert pedal at rest 0x00, shift reset
+     pressed). lint_top clean; lint_idx the same 147 lines; quartus_map
+     17.0 --analyze_file on m2_cab_inputs.sv and Model2.sv: 0 errors (the
+     -8'sd128 overflow warning is the old line, also in the reference).
+
+*Why MAME flags it MACHINE_NOT_WORKING:* not recorded -- no comment in
+model2.cpp, no per-game TODO, and the only commit naming it since 2018 is a
+2024-10 ROM-name fix (mpr-16964/16965 .20/.21). In MAME 0.289 it plays (1);
+one gameplay snapshot (frame 6031) shows a large stray flat polygon across
+the left of the screen, the kind of 3D fault that earns the flag (INFERRED).
+
+*INFERRED (each with what settles it):*
+  a. It boots and plays on the core. The board.
+  b. The zero timers change nothing past the 240 s measured (6) -- e.g. a
+     long session whose overrun count is shown in a test screen. The
+     board's service menu.
+  c. Polygon ROM reads stay below 8 MB (MAME masks the 8 MB region; the
+     core reads zeros at 8-13 MB and the program at 13-16 MB). A tap on
+     geo_object_data's oba in MAME, or the board.
+  d. Area: +10 ALM or less (a 7-bit compare, an OR, two flops, an 8-bit
+     2:1 mux); the hierarchy move costs nothing. A fit.
+  e. The texture-header reads land inside 0-4 MB, where the slot equals
+     MAME's region (Daytona's second pair sits at MAME 8 MB, collapsed to
+     4 MB in the slot). The board.
+  f. The player needs model1io.zip or a Daytona zip for epr-14869c.
+
+*Decision:* Desert Tank is this core plus an MRA, game ID 2 and an IN1 mux
+behind it; YM_STUB 1 stays. Next: a fit, then Ben on the board.
+
+**s1093-s1101 = 2328964 (R835, Desert Tank).** s1093 and s1100 could not
+route; s1094 (clk_sys -0.100, m2_span_tex of_skip -> m2_texel_cdc r_tex
+address) and s1095 (-0.872) missed; s1096-s1098 all crashed in the fitter
+(STA, A2T, Segment Violation) with /tmp holding 5.1 GB -- cleared to 0.6 GB
+before s1099-s1101. s1101 closes: core clocks >= +0.591, holds >= +0.238,
+HDMI -0.031; 40,809 ALM, M10K 529/553 (the release's 40,851 / 529).
+s1099 also closes (+0.218, HDMI -0.949). RBF
+build/Model2_20261015_s1101_desert.rbf, md5
+e9a2d912791c4795ab083f401caf61db. Not yet on the board.
+
+**R836 -- DESERT TANK STOPS AT THE END OF ITS TITLE BECAUSE THE i960 TRAPS
+ON A LONG-REAL (DOUBLE) INSTRUCTION. NOT THE 3D PIPELINE.**
+(Board, s1101 = 2328964: the 3D title, then the 3D gone and the machine
+locked; a screenshot shows the demo's 2D backdrop -- sky, distant mountains,
+sand -- and CREDIT 0/1, the framebuffer counter at 0 fps.)
+
+*Believed:*
+  * R835 a (inferred): "it boots and plays on the core".
+  * R835 3/4: the RTL TGP runs Desert's workload bit-exact, so the
+    coprocessor cannot be what stops it.
+  * The parent's leading suspicion: a 3D handshake (walk, engine, quad,
+    flip) that Desert's lists exercise and Daytona's never did -- a NaN once
+    wedged the whole walk on hardware while MAME shrugged it off.
+  * i960_top's header: "traps loudly rather than guessing" -- and the
+    whole-CPU lockstep would have shown any instruction it does not run.
+
+*Now known -- VERIFIED:*
+  1. THE BOARD'S PICTURE IS MAME'S FRAMES 1106-1109. Snapshots of every
+     frame 1095-1115 (sim/io/mame_m2_desert_geo.lua, DG_SNAPFROM): 1098-1105
+     the title with its 3D shield; 1106-1109 sky, mountains, sand and CREDIT
+     0/1 with NO 3D (the two walks there are empty lists, "end" at dword
+     0x4000); the demo's 3D starts at 1110. No coin is involved -- CREDIT
+     0/1 is the attract's own line.
+  2. THE FIRST LONG-REAL INSTRUCTION DESERT EVER EXECUTES IS IN THAT FRAME.
+     A MAME i960 trace from power-on to 19.7 s (141.6 M instructions, loops
+     not collapsed, a frame marker per frame; sm2-builds/.../firstuse.sh with
+     sim/io/mame_m2_trace_window.lua): movrl fp0,r10 at 0x29d8c and mulrl in
+     frame 1105 (19.228 s), cmprl the same frame, subrl 1107, addrl 1109;
+     divrl first at frame 1781 (31.0 s). NONE before 19.2 s. To 19.7 s:
+     movrl 685, cmprl 465, mulrl 66, subrl 32, addrl 3.
+  3. THE RTL i960 TRAPPED ON ALL OF THEM. i960_dec lists 0x69, 0x6d and 0x79
+     as implemented opcodes, but i960_top dispatched only the single forms
+     (0x78, 0x68, 0x6c, 0x67) to the FPU -- the header says the rl forms
+     were "flagged rather than half-wired" -- so 0x79 / 0x69.5 / 0x6d.9
+     fell to T_TRAP: the i960 halts, no flip, no walk, no frame. Daytona
+     never executes them (its 15-20 s trace: no long-real form), which is
+     why nothing showed it.
+  4. THE LOCKSTEP COULD NOT HAVE SEEN IT. tb_i960_top ended a program on a
+     module trap WHETHER OR NOT THE REFERENCE TRAPPED, so an instruction the
+     module lacks and MAME runs passed as "ended early". Now a module-only
+     trap is a failure. With the rl forms generated against the unfixed RTL:
+     "MODULE TRAP at IP 00000100 insn 79e01614 (trap_op 79): the reference
+     executes it" -- FAIL.
+  5. THE FIX (6d98cb1, i960_top RL=1): addrl subrl mulrl divrl cmprl movrl.
+     A register operand is the even pair {r[n|1], r[n & 0x1e]} as one double
+     (MAME get_1_rifl / get_2_rifl), read low words in a new state T_RLLO,
+     high words held on the ports through T_FP; the result goes to the pair
+     (dst & 0x1e) through T_PAIR, or to fp0-fp3 (set_rifl). The existing
+     double units do the arithmetic. Reference model (i960_cpu_ref.h) gets
+     the same forms transcribed from MAME. Lockstep: 60 seeds 0 failures,
+     40 seeds x 200 programs 8,071 long-real retires, the latency / irq /
+     loop variants all PASS. +norl (the old mix) output BYTE-IDENTICAL to
+     before, cycle counts included; tb_i960_rom (Daytona's ROM, 200,000
+     instructions) output identical before / after. Also fixed in the bench:
+     the prefetch check looked up an unaligned IP (seed 7: 0x1787, from a
+     random ret / vector) unmasked and called it a front-end fault.
+  6. THE 3D PATH IS NOT AT FAULT. 18 MAME walks dumped across the title,
+     the transition and the demo's first 3 s (walks 437-638), replayed
+     through m2_geo + m2_geometry (geodiff, now with a hang watchdog): every
+     walk ends; quads within 0.6% of MAME's polygons; engine reads of
+     polygon ROM >= 8 MB 0, of texture ROM pair two 0 (R835 c/e hold for
+     these). The lists are Daytona-shaped: objects all in ROM (obc 10600,
+     the engine caps at 4096 and ends on the terminator), matrix, window,
+     focal, light, zsort; no texture / polygon data, no jumps, no unusual
+     opcode. The TGP over frames 1050-1200 (tgp_capture + tb_tgp_replay):
+     PASS, bit-exact.
+  7. AREA. i960_top alone, quartus_map 17.0: 8,263 -> 8,398 ALM estimated
+     (+135), 4,908 -> 4,972 registers, ALUT 11,913 -> 12,128. lint_top
+     clean, lint_idx the same 147 lines, analyze_file 0 errors.
+  8. NOT NEW: Desert sets geo mode 3 then 1 (specular) as Daytona does
+     (mode 1, specular_control 7 on several entries); the core ignores mode
+     in both.
+
+*INFERRED (each with what settles it):*
+  a. The board's lock is this trap. Time and picture match exactly and the
+     trap is unconditional; settled by a build with 6d98cb1 passing the
+     title-to-demo transition. If a COIN on s1101 still raised the credit
+     count, the i960 was not halted and this is not the whole story.
+  b. Desert's own rl code computes MAME's values: the units are verified
+     against host doubles, but subnormals flush (§8.1) where MAME keeps them.
+  c. No other instruction Desert runs traps. A static scan of the program
+     (tools/i960_fpscan.py) finds unsupported FP forms in a maths library
+     at 0x46xxx (tanr, tanrl, sqrtrl, sinrl, cpysre, scalerl, logr) plus
+     atanrl / logrl at 0xa20-0xa48 and cvtzril at 0xecd8: 35 addresses. A
+     MAME breakpoint on each (sim/io/mame_m2_bphits.lua; controls at the
+     movrl 0x29d8c and divrl 0x13178, which hit at frames 1106 and 1782):
+     NONE hit in 300 s of attract, nor in 480 s with coins at 20 s and
+     260 s and R835's play inputs (whether both games reached play was not
+     checked by snapshot). Non-FP opcodes were checked only over the 17-22 s
+     trace (every form outside Daytona's set was an FP form). Settled by
+     the board, or a trace of a whole game.
+  d. Fit: +135 ALM on s1101's 40,809. A fit.
+
+*Decision:* the long-real forms go in (RL=1). Next: a build, Ben runs
+Desert's attract past the title, then a game.
+
+**s1102-s1104 = 90601c5 (R836, the long-real forms).** s1104 closes: core
+clocks >= +0.582, holds >= +0.235, HDMI -0.148; 40,900 ALM (s1101: 40,809,
+so +91 placed against R836's +135 map estimate), M10K 529/553. s1103 also
+closes (+0.306, HDMI -1.159); s1102 misses clk_sys (-0.427). RBF
+build/Model2_20261015_s1104_desert.rbf, md5
+816c13ea966f7c8a5f297768a98ce04e. Not yet on the board.
+
+**R837 -- DESERT TANK'S THIRD ANALOG CHANNEL IS THE CANNON'S ELEVATION, NOT A
+BRAKE; THE ONE DRIVE PEDAL GOES WHERE THE SHIFT LEVER SAYS.**
+(DRAFT for docs/model2a-design-study.md section 10. Board, s1104: "the cannon
+just looks straight and cannot be controlled"; then "half works but keeps
+going straight up" -- the right stick reached it, through ADC channel 2.)
+
+*Believed:*
+  * R835 7: "Daytona's 0x20..0xe0 ADC values serve unchanged" -- channel 0
+    steer, 1 accelerator, 2 brake, both pedals idling at 0x20, the right
+    stick's Y split by sign between them.
+  * MAME 0.289's INPUT_PORTS(desert) names the ports STEER / ACCEL / BRAKE.
+    BRAKE is declared IPT_AD_STICK_Y, and nothing in the driver says why.
+  * The cabinet has a brake pedal, as Daytona's does.
+
+*Now known -- VERIFIED (MAME 0.289, sim/io/mame_m2_desert_input.lua: a
+timed script of inputs, snapshots and forced DPRAM analog bytes):*
+  1. THE GAME NAMES ITS CHANNELS. Service mode (TEST) -> INPUT TEST lists
+     CHUTE 1/2, TEST, SERVICE, START, VR3(RED), VR2(GREEN), VR1(BLUE),
+     MACHINE GUN, CANNON, SHIFT, and three analog values: HANDLE (channel
+     0), ACCEL (1), TURRET (2). Driving each MAME port moved exactly its
+     line (0x00, 0x20, 0x80, 0xe0, 0xff all shown as written). Forcing the
+     DPRAM bytes of channels 3-7 (0x10..0xc8) showed nothing: the test has
+     no line for them. At rest MAME shows HANDLE 80, ACCEL 00, TURRET 80 --
+     an AD_STICK with no MINMAX centres at 0x80, so MAME feeds the turret
+     its centre and the core fed it a pedal's idle 0x20.
+  2. TURRET IS AN ABSOLUTE ELEVATION, 0x80 CENTRE, LOWER = AIM UP. In
+     play, tank standing, the gun crosshair's screen y (496x384 snapshot)
+     against the value, 2 s per value: 0x20 14.9, 0x28 14.9 (pinned at the
+     top from about here), 0x30 19.8, 0x50 62, 0x60 95, 0x70 112, 0x80
+     133.8, 0x90 153, 0xa0 172, 0xb0 191, 0xc0 204, 0xd0 / 0xe0 below the
+     tank (not visible); 0x00-0x18 the same as 0x20. Back to 0x80 it
+     returns to 133.8. The game slews the gun to the value: about 0x60 in
+     0.6 s, 0x20 -> 0xc0 settled in about 1.5 s. A value held at 0x20 is
+     the gun pinned straight up -- the board's symptom.
+  3. THE GUN SERVO BREAKS ON A BIG DOWNWARD JUMP. With the gun up, a jump
+     to 0xc8 or beyond (0x20 -> 0xc8, 0xd0, 0xe0; 0x28 -> 0xe0; 0x30 ->
+     0xe0) leaves the gun pinned up, ignoring the input for 10-20 s, and
+     then for a while it moves the wrong way (0x20 drew the crosshair at
+     y 190-198). 0x20 -> 0xc0, 0x30 -> 0xb8, 0x30 -> 0xa8, every upward
+     jump (0xe0 -> 0x20) and every jump from 0x80 work. It is the input,
+     not the moment: the same sequence 14 s later does the same, and
+     0x20 -> 0x80 at the same moment works. Ramps from 0x20 to 0xe0, one
+     step a frame: 0.5, 1, 2, 3, 5 s all work; 0x20 a step every 3 frames
+     (0.25 s) breaks. Nothing in the input path wraps: 0x30 -> 0xb8 (+0x88,
+     -0x78 as a signed byte) goes down correctly.
+  4. THERE IS NO BRAKE. ACCEL is the only drive pedal and SHIFT (IN1 bit 0,
+     low = ON) is the forward / reverse lever: lever OFF + ACCEL drives
+     forward, ON + ACCEL drives backward (the minimap marker: forward y
+     +3.3 px/s at 0xff, +1.4 px/s at 0x60 -- ACCEL is analogue; reverse
+     -4.5 px/s), and letting go of ACCEL stops the tank within a second.
+     Throwing the lever to reverse while driving forward with ACCEL held
+     slows the tank and backs it up (no stop needed first).
+  5. NO CALIBRATION. The test menu is BOOKKEEPING, GAME SYSTEM, INPUT TEST,
+     OUTPUT TEST, SOUND TEST, TGP TEST, MEMORY TEST, BACKUP RAM CLEAR, EXIT;
+     GAME SYSTEM holds coin/credit, country, advertise sound and the two
+     difficulties. Nothing stores analog limits.
+  6. THE CORE (rtl/io/m2_cab_inputs.sv, game ID 2 only):
+       - channel 0 HANDLE: Daytona's steering path unchanged (paddle, left
+         stick X, right stick X in "Pedals+steer", d-pad left/right ramp,
+         Steering scale, Steering smoothing).
+       - channel 2 TURRET: target = 0x80 + 3/4 of the right stick's Y
+         (exactly 0x20..0xe0; up = aim up), used when the stick is past the
+         +-12 dead zone in pad mode; otherwise the d-pad's held aim (up /
+         down, one count each 7.8 ms, 0x20..0xe0, 0x80 out of reset, holds
+         when released). The output follows the target one count each
+         3.9 ms (0x20..0xe0 in 0.75 s, faster than the gun) -- (3).
+         "Pedals: Swapped" flips the stick's Y.
+       - channel 1 ACCEL: 0xe0 while Forward or Reverse (the J1 Accel /
+         Brake buttons) is held; in "Pedals+steer" (a wheel) the right
+         stick's Y as Daytona's pedal (0x20 + 3/2 of the magnitude, sign
+         chooses the direction, held at 0x20 within +-12); else 0x20.
+       - IN1 bit 0, the lever: a latch. Reverse (or a wheel's reverse half)
+         sets it, Forward (or the forward half) clears it -- Reverse wins
+         if both -- and VR4 ("Shift") still flips it by hand. Reset:
+         forward.
+     tb_m2_cab_inputs: part A, game ID 0 against the 0f3cbc4 block,
+     30,000,000 checks, 0 differences (Daytona bit-identical); part B, game
+     ID 2 against a model of this entry at SYS_MHZ 80 and a second copy at
+     SYS_MHZ 1 (so the millisecond timers step: 1,518 d-pad steps, 3,922
+     slew steps), 320,000,000 checks, 0 differences, 13,450 lever sets,
+     2,032 VR4 flips; part C, 24 directed checks (rest 0x80 / 0x20 / 0xff,
+     rails, slew, dead zone, d-pad saturation and hold, lever, wheel mode).
+     Eight planted faults all caught: turret d-pad rest 0x20 (s1104's
+     symptom), Reverse not setting the lever, Daytona's brake routed to the
+     turret, Pedals not flipping the turret, the stick aiming in wheel
+     mode, the d-pad reversed, no slew limit, slew output reset 0x20.
+     lint_top clean; lint_idx the same 147 lines; quartus_map 17.0
+     --analyze_file: 0 errors (the -8'sd128 warning is the old line).
+     Quartus constant-fold of the turret arithmetic (stick -128, +127,
+     both swapped, -50, +13): 0x20, 0xe0, 0xe0, 0x21, 0x5b, 0x8a -- what
+     the model computes.
+  7. THE MRA. Both Desert Tank MRAs' <buttons names>: Accel / Brake become
+     Forward / Reverse; the rest unchanged (VR1 Blue, Shift, Machine Gun,
+     Cannon, VR2 Green, VR3 Red). CONF_STR's J1 line, Daytona's names, is
+     unchanged.
+
+*INFERRED (each with what settles it):*
+  a. The servo break (3) is the game's, not MAME's -- it runs the game's own
+     code. A cabinet's lever cannot jump 0xc0 in a frame, so it would never
+     have shown. Ben on the board: flick the stick full up to full down
+     with the slew limit in; the gun should follow.
+  b. 0xe0 is the gun's lowest elevation (the crosshair is hidden under the
+     tank from 0xd0). A RAM tap on the game's elevation variable.
+  c. Channels 3-7 are unused in play as in the test screen (the i960 reads
+     DPRAM bytes 0-7 together, 2,250 times each in 40 s). A play run with
+     them forced.
+  d. HANDLE has no jump fault like the turret's. A pad flicked lock to
+     lock; Steering smoothing already exists if it does.
+  e. Area: about +70 ALM (two 8-bit registers, a 20- and a 19-bit counter,
+     compares, muxes). A fit.
+  f. The turret's direction (stick up = aim up) suits most pads; "Pedals:
+     Swapped" is the escape. Ben on the board.
+
+*Decision:* Desert Tank's channel 2 is the turret, centred and slew-limited;
+Forward / Reverse buttons drive the one pedal and set the lever. Daytona is
+unchanged. README.md line 21 still says Desert Tank "will be a separate core"
+-- stale since R835; releases/README.md has no Desert Tank section yet.
+
+*Controls (Desert Tank, game ID 2):*
+
+| Cabinet                  | Pad (default)                       | Wheel ("Right stick: Pedals+steer") |
+|--------------------------|-------------------------------------|-------------------------------------|
+| Handle (steer the tank)  | Left stick X (d-pad left / right)   | Wheel (right stick X)               |
+| Turret (cannon up/down)  | Right stick Y, centred at rest; d-pad up / down move a held aim | D-pad up / down |
+| Gas pedal, forward       | Forward button (Accel), a full press -- put it on a trigger | Pedal: the forward half of right stick Y |
+| Gas pedal, reverse       | Reverse button (Brake), a full press; sets the lever to reverse | Pedal: the other half |
+| Shift lever              | Set by Forward / Reverse; Shift (VR4) flips it by hand | the same |
+| Machine gun / Cannon     | Machine Gun / Cannon (Gear Up / Gear Down's slots) | the same |
+| VR1 / VR2 / VR3          | VR1 Blue / VR2 Green / VR3 Red (service menu: Red up, Blue down, Start selects; Green + Blue exit the input test) | the same |
+
+MiSTer delivers the Forward / Reverse buttons as digital: on a pad's
+triggers they are full presses (ACCEL 0xe0), not analogue. "Pedals:
+Swapped" flips the right stick's Y (the turret on a pad; which half is
+forward on a wheel). "Steering" and "Steering smoothing" act on the handle
+as in Daytona.
+
+**s1104 on the board (Desert Tank):** 87 min of the watch at 28.4-28.8 fps,
+no lock; the "LOCK at +90m" the watch reported was Ben loading Virtua Cop
+(the screenshot is vcopa's, black while it loaded). Virtua Cop on s1104
+(type-1 I/O firmware, no guns): 11.3 fps on one reading, so the main board
+draws its 3D; not yet looked at.
+**s1105-s1107 = 1e48035 (R837, Desert Tank's controls).** s1107 closes:
+core clocks >= +0.220, holds >= +0.228, HDMI -0.332; 40,983 ALM. s1105
+(-0.194) and s1106 (-0.611) miss clk_sys. RBF
+build/Model2_20261015_s1107_desert.rbf, md5
+3812a76e8c09528de4138370802f2ae2. Not yet on the board.
+
+**R838 -- DESERT TANK'S LEVER IS THE OTHER WAY ROUND: IN1 BIT 0 HIGH IS
+REVERSE.** s1107 on the board (Ben): "forward and reverse are swapped" --
+Forward drove the tank backwards, Reverse forwards. *Believed (R837):* bit 0
+low = reverse, read off the game's input test and gameplay snapshots in
+MAME. *Now known:* the board is the oracle and says the opposite; why MAME's
+reading disagreed is not established (the R837 snapshots may have read the
+test screen's label rather than the drive direction; not re-checked).
+*Change:* m2_cab_inputs drives bit 0 = dt_shift (1 = reverse) instead of
+~dt_shift; out of reset it is 0, forward. tb_m2_cab_inputs' model and
+directed checks follow (320M Desert checks, 0 mismatches; Daytona 30M, 0).
+To settle on the board: Forward drives ahead, Reverse backs up, and the
+tank starts in forward.
+R838 on the board: s1108 (6e8db44; clk_mem -0.120, loaded for an input
+check only) -- Ben: "forward and reverse work correctly now".
+**s1108-s1113 = 6e8db44 (R838).** s1112 closes: core clocks >= +0.126,
+holds >= +0.235, HDMI -0.846; 40,975 ALM. s1113 also (+0.068, HDMI -0.557);
+s1108-s1111 miss a core clock (-0.037 to -0.531). RBF
+build/Model2_20261015_s1112_desert.rbf, md5 in HANDOFF. Not yet on the board.
+
+**R839 -- VIRTUA COP: THE TYPE-2 I/O BOARD (MODEL1IO2) AND FOUR i960 FORMS;
+WHY THE BOARD SHOWED BLACK. FIRST STEP: A BOOT BUILD.**
+(DRAFT for docs/model2a-design-study.md section 10. Board, s1104 / s1112
+era, Virtua Cop MRA with the type-1 firmware epr-14869c: a black screen, the
+framebuffer-clear counter at ~11 fps.)
+
+*Believed:*
+  * R726: the MRA's layout is right and the game "boots on Daytona's hardware
+    model" if the type-1 firmware will do; "if the game refuses to start on
+    the type-1 firmware, that is the type-2 board this core does not have".
+  * R832 / Model 1 docs/io-board.md: the type-2 board is a TMPZ84C015 (Z80
+    + CTC + dual SIO + PIO) and much of it "may be dead weight for a single
+    cabinet"; the CTC's role was the open question. Its firmware is 64 KB
+    with 32 KB mapped, so the ROM array was expected to double (+16 M10K).
+  * R836: Desert Tank's long-real forms were the last i960 gap.
+
+*Now known -- VERIFIED:*
+  1. WHY BLACK -- TWO CAUSES, EITHER SUFFICIENT. (MAME 0.289,
+     sim/io/mame_m2_snaps.lua, a snapshot every 0.5 s.)
+     a. Without its own I/O board the game never leaves the boot: with the
+        board's Z80 suspended from power-on (the debugger's "suspend") the
+        screen is black for all 20 s and the i960 sits at 0x2384-0x2394.
+        Normally: black 0-4 s ("memory destroyed" briefly at 2.5 s on a
+        fresh NVRAM), the WARNING screen 4.5-14.5 s, the 3D attract from
+        15 s.
+     b. The i960 executes cvtzril first at 3.287 s (frame 188, before the
+        WARNING screen), and the RTL trapped on it: the core halts there
+        whatever the I/O board does.
+     The ~11 fps clear count on the board is not examined (INFERRED: the
+     renderer's own clears; the i960 cannot have flipped past 3.3 s).
+  2. WHAT EPR-17181 USES (sim/io/mame_m2_vcop_io.lua; boot, attract, a coin,
+     a game with a gun swept and fired, a continue; 300 s):
+       - ROM 0x0000-0x31ff only; the file is 0xff from 0x3200 and nothing at
+         0x3200-0x7fff is ever read. The type-1 board's 16 KB array holds it:
+         NO NEW M10K (not +16).
+       - RAM 0xf000-0xffff only (4 KB); 0xe000-0xefff never touched. The
+         type-1 board's 8 KB array covers 0xe000-0xffff.
+       - IM 2, I = 0, ONE interrupt source: CTC channel 1 (control 0xa5:
+         timer, prescale 256, interrupt on; constant 0x26 = 38; vector base
+         0xe8 from channel 0) -> vector 0xea -> handler 0x0a05, 1,010.5 / s
+         measured (9.8304 MHz / 256 / 38). The handler does the board's work
+         (inputs, guns, DPRAM); mean 519.6 us, max 643.7 us in MAME.
+       - SIO A / B: initialised only (SIO A's receive interrupt is enabled,
+         nothing is attached); PIO: data ports read 0xff (DSW2 / DSW3);
+         TMPZ84C015 watchdog (0xf0 = 0xfb, 0xf1 = 0x4e once) and daisy
+         register (0xf4 = 0): written once. None modelled.
+       - 315-5338A: direction 0x07 -- PA / PB / PC are inputs IN0 / IN1 /
+         IN2 (type 1: PB / PC / PD); PF drives the 93C46 (bit 6 DI, 5 CLK, 4
+         CS), its DO read at 0x8040 bit 6; PG7 the MB3773 watchdog, PG6 the
+         ADC bank; PD the lamps / recoil.
+       - 0x8100 "FPGA": 5,120 bitstream writes; reads 0x80 until 0x1400 of
+         them, then the four gun coordinates and the off-screen byte.
+       - MSM6253 at 0x8200 (mirror 0x8204): every read 0x01 (no channel
+         bound).
+  3. TWO REFERENCE DETAILS THE TYPE-1 MODEL DOES NOT FOLLOW, found by the
+     firmware bench, fixed for type 2 ONLY (Daytona must not move):
+       - 315-5338A status (0x0d): the core returns {4'd0, 3'b001, busy} =
+         0x02 / 0x03, bit 3 CLEAR, against its own comment ("bit 3 stays
+         set"); MAME returns 0x08. EPR-17181 polls bit 3 up to 32 times on
+         every DPRAM read (0x15bd): its boot ran 2.7x slow and the game's
+         command 3 arrived before it listened. Type 2 returns 0x08 | busy.
+         THE TYPE-1 BOARD HAS THE SAME FAULT: EPR-14869C on the core against
+         a MAME Daytona '93 capture writes DPRAM 0x21 9,252 times in 30 s to
+         MAME's 33,079 and starts 1.8% late. Not touched here; a question
+         for a Daytona build, not this one.
+       - 93C46 read timing: MAME's 93Cxx puts the dummy 0 out as the
+         address's last bit is clocked and shifts on the FALLING clock,
+         ones after D0; the core shifts on the rising clock (one bit late
+         against MAME). EPR-17181 read 0x7fff for 0xffff. Type 2 follows
+         MAME.
+     And tv80's own timing: it latches an IN byte and the IM 2 vector at the
+     end of T2, after IORQ has lifted, so the board holds both until the
+     next memory cycle / M1's end.
+  4. THE FIRMWARE BENCH (sim/io/tb_m2_ioz80_t2.cpp, make test_m2_ioz80_t2):
+     m2_ioz80 TYPE2 on EPR-17181 with the game's DPRAM writes replayed from
+     a MAME capture (VC_GUNFIX=1: guns held, nothing pressed), 30 s: CTC
+     interrupts 1,010.53 / s (MAME 1,010.5); first DPRAM write 2.1623 s
+     (MAME 2.1623 s); 59,084 DPRAM writes (MAME 59,105); all 157 DPRAM
+     addresses with MAME's sequence of values; the first 844 writes in
+     MAME's exact order; handler 50.5% of the time (MAME ~51%). Before the
+     three fixes in (3) and the IN / vector holds it failed (1 interrupt; 0
+     writes; 0x7f bytes; DPRAM 0x0c = 0x00).
+     Type 1 unchanged: make test_m2_ioz80_t1same (EPR-14869C, a MAME Daytona
+     '93 capture replayed, 30 s, 36,908 DPRAM writes): the trace hash of
+     every DPRAM write and every opcode fetch with its cycle is equal on a
+     TYPE2=0 and a TYPE2=1 build (de296b799108f18a).
+  5. THE i960 (R836's method). Static scan (tools/i960_fpscan.py) of the
+     512 KB program: trapping candidates cvtilr, logr, atanrl, sqrtrl,
+     sinrl, cosrl, tanrl, cvtzril, cpysre. MAME breakpoints on all 99
+     (sim/io/mame_m2_bphits.lua, coins at 40 s and 250 s, 480 s, a gun
+     swept and fired): EXECUTED -- cvtzril (from 3.29 s), tanrl and cosrl
+     (14.73 s), cpysre, sqrtrl, atanrl (18.3 s), sinrl (169.6 s); counts in
+     480 s: cosrl 14,658, tanrl 13,395, cpysre 31,915, cvtzril ~150,000,
+     sqrtrl 10,035, atanrl 78, sinrl 80. NEVER: cvtilr, logr. Non-FP forms
+     outside Daytona's static set are all ones MAME and the RTL implement
+     (nor, addc, spanbit, emul; MEMB modes 5/d/e/f). Timers: one write at
+     2.5 s, no reads (Desert polled one); IRQs as Daytona (intena 0x001 /
+     0x401).
+     Operand values (MAME, 300 s): cosrl 0.3927 / 0.6283 / 3.14-3.99, tanrl
+     0.056-0.275, sinrl 3.14-3.99, atanrl args 0-36, sqrtrl 0.007-0.197;
+     cvtzril results -57,796..39,835 (inside int32).
+  6. THE FORMS ADDED (i960_top VC = 1, live only while vc_en = game ID 1):
+     sqrtrl (the existing double square root on the long-real path), cpysre
+     (MAME: src2 >= 0.0 ? |src1| : -|src1|), cvtzril (cvtzri, its sign into
+     the high word of the unmasked pair dst, dst + 1). Reference model
+     extended; lockstep +vc, 60 seeds: 1,499 sqrtrl, 1,679 cpysre, 1,680
+     cvtzril retired, 0 mismatches. Planted faults (sign inverted, high word
+     zero, sqrt not started) all caught. Default build's test_i960_top output
+     byte-identical to be50862's, and the VC=1 build with vc_en low too;
+     test_i960_top_irq / _lat, test_i960_rom PASS.
+  7. THE CORE: Model2.sv VCOP_IO (1), VCOP_GUN (0 in this build), VCOP_FPU
+     (1). MRA index 3 is epr-17181.6 (crc 1add2b82; vcopa.zip, vcop.zip,
+     model1io2.zip); tools/rom_csum.py + mra_vs_mame.py: all 11 slots PASS.
+     lint_top clean, lint_idx the same 147 findings, quartus_map
+     --analyze_file 0 errors (m2_ioz80, m2_vcop_guns, i960_top, Model2).
+     AREA, quartus_map 17.0, whole design (Model2), the same tree three ways:
+
+       build                          ALMs est.  ALUTs   registers  block bits  DSP
+       be50862 (before)                 39,713   56,620    48,387   4,355,199   90
+       this, M2_VCOP_IO=0 / FPU=0       39,731   56,633    48,387   4,355,199   90
+       this, as committed (IO, FPU on)  39,864   56,940    48,532   4,355,199   90
+
+     So VCOP_IO + VCOP_FPU cost ~+133 ALM estimated (+307 ALUT, +145
+     registers) and NO block memory. Off is the old core in registers,
+     memory and DSP exactly; its +13 ALUT (+0.02%) is spread as +-1..7 over
+     modules the change does not touch (ascal, fpadd, m2_geometry, m2_geo),
+     i.e. synthesis perturbation from the changed source, not logic -- the
+     benches show the behaviour byte-identical (test_i960_top output,
+     test_m2_ioz80_t1same hash). R836's +135 estimated was +91 placed.
+
+*Not done -- the boot build stops at 14.7 s:* tanrl / cosrl (14.73 s, as
+the attract's 3D starts), atanrl (18.3 s) and sinrl still trap. MAME
+computes them with the host's libm (tan, cos, sin, atan2). Planned: a
+microsequencer in i960_top that runs Horner polynomials on the existing
+double add / mul / div units (range reduction by the 1.5 x 2^52 rounding
+trick, constants and microcode in M10K); estimated ~150-250 ALM + 2-3
+M10K, a few hundred cycles each (they run ~60 times a second).
+
+*Also built, off (VCOP_GUN = 0):* rtl/io/m2_vcop_guns.sv -- two guns from
+MiSTer's left analog axes (absolute; MiSTer's light-gun delivery) or a mouse
+for P1, Trigger / Reload (Reload = off-screen + trigger), P2 buttons from
+joystick 1, IN0 / IN1 to MAME's vcop map, MAME's 5% off-screen rule; a '+'
+crosshair per gun drawn by inverting the picture; OSD lines (Crosshair, Gun
+1 Stick / Mouse, Gun reload Shoot off-screen / Auto = DSW1 bit 0) shown only
+for game ID 1. Not yet benched.
+
+*INFERRED (each with what settles it):*
+  a. The boot build shows the WARNING screen from ~4.5 s and halts at
+     ~14.7 s (the first tanrl). The board.
+  b. Nothing else Virtua Cop's first 15 s needs is missing: the I/O
+     handshake is the bench's, the FP forms the breakpoints', the timers
+     unused. The board.
+  c. The handler's 3% longer run on tv80 (5,259 vs 5,108 Z80 cycles in the
+     first 6 s) is tv80's instruction timing and harmless. The board.
+  d. The watchdogs (TMPZ84C015 WDT, MB3773) do not matter: MAME does not
+     reset the board on them and the game runs.
+
+**R840 -- 15.7 kHz (273/274) IS THE 15 kHz DEFAULT.** Ben, 2026-10-15: most
+users report only 15.7 kHz works on their sets (R799 made 262/263 the
+default for Ben's JVC, which loses sync at 273.5). With a [15kHz CRT] MRA a
+set that cannot show the starting rate leaves no OSD to change it, so the
+default must be the rate most sets take. "15kHz lines" moves to O[61:60]
+(0 = 273/274, 1 = 268/269, 2 = 262/263; 3 reads as 273/274) so every saved
+config, the old default's included, opens at 15.7; O[45:44] is retired.
+Removing 15.1/15.4 instead was weighed and not done: ~30-60 ALM (the line
+and ce selections) against sets like Ben's that need them. m2_video_timing
+is untouched (tb_m2_video_timing unchanged); lint_top clean. The release
+README's CRT section says so.
+
+**R841 -- LIGHT GUNS FOR VIRTUA COP: THE PLAN, AND CRT GUNS (DOCUMENTED, NOT
+BUILT).** Ben, 2026-10-15, with a MiSTer moderator's note: "USB light guns
+report as either analog joysticks or mice. If you support those, you should
+be good for any USB gun -- plus then you can test input without a lightgun
+too, especially if you have an option to display a cursor." Ben: CRT light
+guns (GunCon) must be supported in time; documented now so the direction is
+known.
+
+*What the game needs (VERIFIED, R839 / MAME 0.289 model1io2.cpp):* the
+type-2 I/O board's 0x8100-0x810F block returns four 10-bit coordinates (P1Y,
+P1X, P2Y, P2X, two bytes each) and an off-screen byte (bit 0 P1, bit 1 P2;
+MAME sets it within a border of the range); MAME's ranges: P1_X
+0x083-0x276 (centre 0x17c), P1_Y 0x024-0x1a9 (centre 0x0e6), P2 similar.
+Reads return 0x80 until the firmware has written its "FPGA" upload (0x1400
+writes). Triggers are IN1 bits 0/1; reload is shooting off-screen (DSW1
+"Reloading" option). Whatever the gun hardware, the core's job ends at
+those registers.
+
+*Route 1 -- USB guns (PLANNED, the first gun step; rtl/io/m2_vcop_guns.sv
+written, not benched, behind M2_VCOP_GUN).* Sinden, Gun4IR, GunCon 2/3 on
+USB and similar reach the core through MiSTer's input layer as an analog
+joystick or a mouse. The core scales either to the game's ranges, with:
+  * analog stick (absolute): the stick's -128..127 to the game's range;
+  * mouse: must place the aim where the gun points. A gun that reports
+    ABSOLUTE positions through MiSTer must not be integrated as relative
+    motion (that drifts); how MiSTer hands an absolute-mouse gun to a core
+    is TO BE CHECKED in the framework (hps_io ps2_mouse vs an absolute
+    channel) before the mapping is written;
+  * a crosshair (Small / Large / Off) for stick and mouse players, and for
+    testing without a gun; off for real guns;
+  * player 2 from the second joystick / mouse;
+  * Trigger and Reload buttons; reload also by aiming off-screen.
+Works on HDMI and CRT alike, because the gun or MiSTer computes the
+position. Calibration lives in MiSTer's gun setup, not the core.
+
+*Route 2 -- the original GunCon (PlayStation G-Con 45) on SNAC (DOCUMENTED
+ONLY).* Ben has one. From memory, NOT YET CHECKED against any source: the
+G-Con 45 takes the composite video through its own cable, times the beam
+itself, and reports an X count (time since hsync) and a Y count (scanline)
+plus its buttons over the PlayStation controller protocol. The core would
+need:
+  1. a PlayStation controller master on MiSTer's user port (SNAC): clock,
+     attention, command / data -- a small state machine; read the MiSTer
+     PSX core's SNAC GunCon support first and follow it (Model 1 rule:
+     start from a working design);
+  2. a mapping from the gun's counts to Virtua Cop's 10-bit X/Y. Model 2's
+     line (656 px at 16 MHz native; 15 kHz interlaced at 9.9-10.8 MHz, R834)
+     and field timing differ from a PlayStation's, so an offset and scale
+     per video mode, OSD-adjustable, and attention to which interlaced field
+     is showing;
+  3. trigger / button bits into IN1;
+  4. the gun needs the analog video (CRT out), so route 2 is CRT-only.
+Cost INFERRED small (a serial state machine, two latches, scaling; no
+M10K), behind M2_VCOP_GUN with route 1.
+
+*Route 3 -- arcade-style beam timing in the core (NOT PLANNED).* A light
+sensor wired to the user port, its pulse latching the core's own beam
+position (hcnt/vcnt less the video pipeline's latency). The original
+cabinet works this way; no MiSTer gun hardware does, so it is noted only.
+
+*Order:* boot (R839) -> the trig instructions (tanrl/cosrl/sinrl/atanrl) ->
+route 1 (stick, mouse, crosshair, P2) -> route 2 (GunCon on SNAC), each
+behind M2_VCOP_GUN and measured for area (the core is at ~98%).
+
+R841 addendum (Ben): the gun mapping is checked against MiSTer cores that
+already take guns before it is written -- the Sega System 24 and System 32
+cores (System 32 is meathax/s32, already this project's MultiPCM source,
+GPL-3.0) and the PSX core (GunCon, if implemented): how each receives an
+absolute-position gun (analog joystick / mouse), scales it to the game's
+range, and handles off-screen, reload and the cursor. Model 1 rule: start
+from a working design.
+
+**R842 -- TWO CLK_SYS PATHS FROM STATIC SOURCES.** s1114-s1116 (533e621,
+R839's boot build) all missed clk_sys (-1.212 / -1.101 / -0.565). Most
+failing paths are the renderer's placement-sensitive ones (m2_raster_fill
+S_PF_N -> det_r, m2_span_tex of_wp/of_rp, as on earlier seeds), but two
+are new and come from signals that do not change while they are used:
+  * hps_io's joystick_l_analog_0 -> m2_cab_inputs steer_lim (s1114's worst,
+    -1.212): the stick crosses the chip into the steering limiter. Now
+    registered once in Model2.sv (joy_analog_q, joy_ranalog_q, paddle_q)
+    beside m2_cab_inputs; one more 12.5 ns cycle on a USB-rate input;
+    m2_cab_inputs and its bench unchanged.
+  * game_id -> m2_ioz80's type-2 decode -> the Z80's IR (s1115): game_id is
+    written once during the ROM download with every master it steers held
+    in reset. Model2.sdc: set_false_path -from game_id[*], as R731 did for
+    the gamma select; the pattern matches exactly the 8 game_id registers
+    (checked on s1115's netlist).
+lint_top clean.
+
+*Correction (Ben):* the 11.3 fps reading of Virtua Cop on s1104 (above,
+"so the main board draws its 3D") was probably taken while Ben was switching
+games; it is not evidence that Virtua Cop drew 3D. s1116 (533e621, R839's
+boot build, clk_sys -0.565; the updated MRA with EPR-17181; md5s checked):
+the same black screen, 0.0 fps, no WARNING screen. Under investigation in a
+whole-core boot simulation. s1112 (Desert Tank) ran 71 min of the watch at
+28.6-28.8 fps, no lock, before it was replaced for this test.
+
+**R843 -- THE STEERING PATH, REGISTERED INSIDE m2_cab_inputs.** s1117-s1119
+(b8b890c, with R842) all missed clk_sys again (-0.625 / -0.995 / -1.885;
+s1119 also hold -0.095 on m2_cpu_bridge l_data -> lb). R842's top-level
+register did not help: the worst group is still joy_analog_q ->
+m2_cab_inputs steer_lim (188 paths on s1117, 142 on s1119), so the fault is
+logic depth -- stick select, sensitivity scale, centre, ADC clamp, the
+source mux and the limiter's compare in one cycle -- not distance. Now
+steer_raw is registered (steer_rq) and the limiter and the output read it:
+steering one 12.5 ns cycle later from every source. The reference copy
+(sim/io/m2_cab_inputs_ref.sv) carries the same register so
+tb_m2_cab_inputs still proves nothing else moved: 30M Daytona checks and
+320M Desert Tank checks, 0 mismatches. The renderer's placement-sensitive
+groups (m2_span_tex of_wp/of_rp -> tex_p, m2_raster_fill mul_delta ->
+mul_plo) remain, as on every seed at this fill.
+
+**R844 -- VIRTUA COP'S BLACK SCREEN: THE i960 TRAPPED ON flushreg AT ITS
+1,907th INSTRUCTION.** *Believed (R839):* the black screen was the missing
+type-2 I/O board, then cvtzril at 3.29 s. *Now known (VERIFIED, the whole-
+core boot simulation as Virtua Cop: m2_boot_harness VCOP=1, the vcopa image
+from rom_csum.py --out, EPR-17181, the program's second half where the core
+puts it):* Virtua Cop runs flushreg (0x66.d) 1,907 instructions after reset
+(IP 0x6e0; MAME at 0.019 s, its first frame). i960_regs implemented it
+(MAME's semantics, unit-tested) but i960_top never dispatched it, so it
+trapped and the CPU halted -- black from power-on whatever the I/O board,
+which is both boards' symptom on the board (R839 note). R839's scan missed
+it because it compared Virtua Cop against Daytona's STATIC instruction set,
+and 0x66.d occurs in both programs (Daytona never executes it): a static
+opcode-set comparison is NOT a valid test for "never executed"; only a
+trace or breakpoints on every occurrence are.
+*Fix (f688e35):* i960_top dispatches flushreg (rf_flush, the IP moves, waits
+in T_FRAME for the register file), gated by vc_on (VC parameter and game ID
+1); Daytona and Desert Tank untouched. Lockstep +vc 60 seeds, 0 fails
+(34-52 flushreg each); a planted no-dispatch fault fails 5/5; default
+test_i960_top byte-identical; test_m2_boot (Daytona) passes; lint_top,
+lint_idx (147), analyze_file clean.
+*After the fix, in simulation:* 45 M instructions / 510 vblanks (~8.8 s) with
+no trap; the type-2 I/O handshake completes (status 0x40); the game sits in
+its 30 Hz frame-sync loop (0x9124 polling 0x98000c). NOT YET EXPLAINED: the
+WARNING text never appears in the bench (MAME writes it from 4.155 s: fill
+at 0x2f03c, text at 0x5558; the bench never reaches those writers, and
+writes 152,064 zero tile words from 0x5861c that MAME does not in its first
+5 s). Bench artifact (vblank / interrupt timing in 30 Hz mode) or a core
+difference: undecided; the board will say.
+*Also:* a 900 s MAME run (three credited games, gun firing) with breakpoints
+on every static occurrence of a form MAME implements and the RTL lacked hit
+only flushreg (once); calls, cvtilr and logr never ran. An unrelated
+deviation, not fixed: synmov to 0xff000005-7 writes ICR in the RTL (the
+address is aligned first) where MAME writes memory; games use aligned
+addresses. Virtua Cop's IN1 in this build is Daytona's (0x8F); MAME boots to
+WARNING with 0x8F, so harmless until the gun step. The trig forms (sinrl /
+cosrl / tanrl / atanrl, needed from 14.73 s) are on branch vc-wip, to be
+rebased (R845).
+
+**R845 -- sinrl, cosrl, tanrl, atanrl: MICROCODE ON THE i960's OWN DOUBLE
+UNITS, CORRECTLY ROUNDED.** *Believed (R839, §3):* the transcendentals are
+"not a 1-2K block" and want CORDIC or polynomials with tables in M10K; R839
+estimated ~150-250 ALM and 2-3 M10K for a microsequencer. MAME's i960.cpp
+computes them on host doubles: set_rifl(sin / cos / tan(get_1_rifl)),
+atanrl = atan2(src2, src1); nothing passes through float.
+*Now known (VERIFIED):*
+  1. MAME's bits are the host's libm, not a fixed function: glibc 2.44 here
+     is correctly rounded on all but 0.1-0.2% of arguments (mpmath, 20,000
+     each: sin 32, cos 22, tan 37, atan2 17) and uses FMA where the CPU has
+     it. The real 80960KB works in 80-bit extended and rounds to double. So
+     the target is the correctly rounded value.
+  2. i960_fptrans (VC only, live for game ID 1): a 512 x 32 microcode ROM
+     (498 words), 128 x 64 registers in M10K (73 constants, initialised),
+     a four-deep return stack and two operand registers that drive the
+     existing adder, multiplier and divider while it runs (i960_top muxes
+     them in; the result mux takes the sequencer's unit). The programs
+     (tools/i960_fptrans.py, which assembles the ROM and is the reference)
+     work in double-double with Dekker's products (the units have no FMA):
+     fdlibm-style 3-part Cody-Waite reduction, exact for |x| < 2^19 pi/2;
+     sin / cos kernels with the first three Taylor terms in double-double;
+     tan = sin / cos in double-double; atan2 with breakpoints 0.2 / 7/16 /
+     11/16 (atan 1/4, 1/2, 1 in double-double) and a power-of-two rescale
+     that keeps Dekker's split in range at both ends of the exponent range.
+  3. Accuracy: 0 results not correctly rounded in 18,000 mpmath checks
+     (sin / cos on +-4 and +-3e4, tan on +-1.56, atan2 on +-40 and across
+     2^+-1000; outside: subnormal results, which the units flush). On the
+     game's own arguments (a MAME capture of every call in 300 s with play:
+     602 distinct tanrl, 42 cosrl, 40 sinrl, 15 atanrl arguments) the
+     results equal MAME's on all but 5 tanrl arguments, and on those 5
+     glibc is the one not correctly rounded.
+  4. Benches: test_i960_fptrans -- the RTL on the real units against the
+     interpreter, 20,000 vectors (zeros, NaN, inf, |x| to 1e4, atan2 across
+     the exponent range), 0 mismatches; cycles sin / cos ~2,200, tan
+     ~4,240, atan ~3,740 (clk_i960). Lockstep +vc (reference: host libm,
+     a one-ulp difference adopted as the recorded deviation): 60 seeds, 0
+     fails, ~700-800 of each form; no one-ulp case arose. Planted faults
+     (a constant's last bit, sin/cos entries swapped, the negate modifier
+     lost, act dropped with fin, the quadrant bit misread) all caught by
+     the harness or the lockstep. Default test_i960_top byte-identical to
+     before; a VC build with vc_en low too. lint_top (VCOP on and off)
+     clean, lint_idx the same 147, analyze_file 0 errors.
+  5. AREA, quartus_map 17.0, whole design:
+
+       build                         ALMs est.  ALUTs   registers  block bits
+       efdc64c, VCOP_FPU 1             39,940   56,993    48,573   4,355,199
+       efdc64c, VCOP_FPU 0             39,847   56,898    48,568   4,355,199
+       77f69df (this), VCOP_FPU 1      40,181   57,379    48,780   4,379,775
+       77f69df (this), VCOP_FPU 0      39,847   56,898    48,568   4,355,199
+
+     So +241 ALM estimated (+386 ALUT, +207 registers), 24,576 bits (the ROM
+     inferred as a 512 x 32 AUTO ROM, the registers as an M10K 128 x 64:
+     about 4 M10K) -- the top of R839's range, not under it. Off is the old
+     core exactly. By entity: i960_fptrans 172 ALUT / 201 registers;
+     i960_fpadd +121 ALUT (the operand mux merged into its first stage);
+     i960_top +95; the rest +-1..47 of synthesis perturbation.
+  6. TIMING: everything is on clk_i960 (40 MHz), none on clk_sys. The new
+     path at risk is the adder's: register file -> fpcvt widening -> the
+     u_a / u_b mux -> the adder's alignment stage. The sequencer's own
+     paths (M10K output -> condition test over 63 bits -> upc -> ROM
+     address; unit result -> fp_res_wide -> register-file M10K) are short.
+     clk_sys only feels the extra placement pressure.
+*INFERRED (each with what settles it):* a. the attract and a game run past
+14.7 s on the board; b. the extra ~240 ALM still fits and closes (a fit;
+s1123-s1125 are R844 without it); c. args beyond |x| = 2^19 pi/2 (where the
+reduction stops being exact) never occur (the game's largest was 4.0).
+
+**VIRTUA COP RUNS ON THE BOARD.** s1126 (e252aa0: R839 type-2 I/O board,
+R844 flushreg, R845 the trig forms; clk_sys -0.558, other core clocks
+positive, hold +0.198; 41,267 ALM, M10K 533/553), loaded for a boot test:
+3D at 28.5 fps (the game's 30 Hz mode) from ~45 s after the load request;
+a board screenshot ~60 s in shows the attract's tutorial scene -- textured
+3D (the gangster, containers, the KEEP OUT barrier), the 2D life marks,
+"(C) SEGA 1994", CREDIT 0, and the tutorial text in Japanese ("lose all the
+life marks and the game is over"). Past 14.7 s, so the trig forms run.
+Screenshot sm2-builds/mipmaps/board/vcop_s1126.png. s1127/s1128 also missed
+clk_sys; s1129-s1131 fitting.
+
+**R846 -- VIRTUA COP'S GUNS FROM MISTER'S STICKS AND MOUSE, THE CROSSHAIRS,
+AND WHY THE ATTRACT IS IN JAPANESE.** (Route 1 of R841; Ben, 2026-10-15:
+joystick and mouse only, GunCon / SNAC stays documented. M2_VCOP_GUN, now ON
+by default.)
+
+*Believed (R839 / R841):* the core's mapping (rtl/io/m2_vcop_guns.sv, never
+built) scales the stick and a mouse to MAME's ranges; MiSTer's mouse path
+might carry an absolute gun position ("TO BE CHECKED"); the crosshair draws
+on the game's aim point; a gun's trigger reaches the core as a joystick
+button.
+
+*Now known -- VERIFIED:*
+  1. HOW MISTER CORES TAKE A GUN (read, not run; shallow clones): System 32
+     (meathax/s32 512b547, s32_lightgun.sv: JTFRAME's contract), PSX
+     (PSX_MiSTer cd17b5a, GunCon / Justifier), MegaDrive, SNES, NES
+     lightgun / zapper, and Main_MiSTer 13f1de9 (input.cpp, user_io.cpp).
+     System 24's core is published as an .rbf only (no source found).
+       - Aim: every core takes joystick_l_analog_N as an ABSOLUTE screen
+         position, u = a + 128, pos = u * dim >> 8 (S32, PSX; MD / SNES /
+         NES the same up to scale). P1 = analog_0, P2 = analog_1.
+       - Main: a USB gun (Sinden, GUN4IR, GunCon 3, OpenFIRE, ...;
+         QUIRK_LIGHTGUN) sends its ABS axes to the left stick, calibrated by
+         MiSTer's F10 screen to -127..+127 edge to edge (-128 only for PSX),
+         saturating off the screen; no deadzone. Its BUTTONS go to the MOUSE
+         buttons (ps2_mouse[2:0]), not the joystick's. There is NO absolute
+         mouse channel: ps2_mouse is relative deltas of all mice merged, and
+         a gun's axes never become mouse motion. So R841's "absolute mouse"
+         does not exist; a mouse aims by accumulation, and only one player
+         can have it.
+       - Mouse: accumulated per packet toggle, 1:1 (S32 halves it), y -= dy,
+         clamped to the screen. Trigger from ps2_mouse[0] (S32 ORs it into
+         P1's trigger always).
+       - Off-screen: full deflection at an edge is off-screen (PSX, MD,
+         SNES, NES); reload is a button that forces off-screen and fires
+         (PSX Triangle; MD / SNES Justifier B).
+       - Cursor: drawn in the native pixel domain before the scaler; a small
+         '+' (3x3 / 7x7) or JTFRAME's 8x8 white-on-black sight; hidden off
+         the screen; per-player colours (PSX: P1 blue, P2 yellow).
+  2. THE GAME'S OWN AIM POINT (MAME 0.289, sim/io/mame_m2_vcop_marks.lua):
+     Virtua Cop's test menu has GUN SETTING -> GUN MARK CHECK, which draws
+     each player's mark (P1 cyan, P2 pink) where the game puts the gun, and
+     prints the calibration it uses: AD1 X 0x083-0x276, Y 0x024-0x1a9; AD2
+     X 0x080-0x273, Y 0x027-0x1a9 -- MAME's PORT_MINMAX are the game's own
+     default calibration. With the coordinates forced at the I/O board
+     (24 points, both guns, 43 unclipped marks; sim/io/vcop_marks.py) the
+     mark's centroid sits on pixel floor((v - min) * dim / span) -- MAME's
+     crosshair pixel (PORT_CROSSHAIR scale 1.0 over the 496 x 384 visible
+     area) -- with residual x +0.13 +- 0.32 px, y 0.00 +- 0.32 px, at most
+     0.7 px. So "MAME's crosshair" and "where the game shoots" are the same
+     pixel, measured, not assumed.
+  3. THE MAPPING (m2_vcop_guns, rewritten): stick -> pixel u * 496 >> 8,
+     u * 384 >> 8; pixel -> the smallest game unit on that pixel, v - min =
+     ceil(px * span / dim): X px + (px>0) + (px>=166) + (px>=331); Y1 py +
+     (py>0) + (py>=77) + (py>=154) + (py>=231) + (py>=308); Y2 py + (py>0) +
+     (py>=193). The mouse (OSD "Mouse": Gun 1 trigger [default], Gun 1
+     aim+trigger, Gun 2 trigger, Gun 2 aim+trigger) aims one gun when told
+     to; its left / right buttons are ALWAYS that gun's Trigger / Reload, so
+     a USB gun on player 1 works with the defaults (aim on analog_0, trigger
+     on the mouse button). Joystick bits 4 Trigger, 5 Reload, 6 Start, 7
+     Coin, 8 Test, 9 Service (P1); the Virtua Cop MRA names them (Daytona's
+     J1 unchanged). IN0 / IN1 as MAME's vcop map. Off-screen: MAME
+     model1io2 fpga_r's 5% border on the game units (a calibrated gun at
+     +-127 lands inside it). RELOAD holds the gun at the off-screen corner
+     at once and pulls the trigger 1-2 ticks later (tick = 2^17 clk_sys =
+     1.64 ms), and keeps the corner ~3 ticks after release: the I/O board
+     reads IN1 and the coordinates at different moments of its 1 kHz scan,
+     so a simultaneous change could be read as a shot on the screen. "Gun
+     reload: Auto" is DSW1 bit 0 (MAME "Reloading"), as R839 wired it.
+     Every stage registered (hps_io inputs; pixels; units; off-screen):
+     nothing longer than an adder and a compare on clk_sys (R843); the
+     mouse arithmetic is plain concatenations, no signed casts (R662).
+  4. THE CROSSHAIRS (rtl/video/m2_vcop_xhair.sv, clk_mem): a '+' per gun,
+     arms 5 (Small) / 9 (Large), in the game's own player colours (P1 69FFFF
+     cyan, P2 FF90A4 pink, from its GUN MARK CHECK) with a 1-px black
+     outline, P1 over P2, hidden when the gun is off the screen, "Off" in
+     the OSD for real guns. x is vid_x_d (the column the picture shows,
+     R779); y is vcnt, or at 15 kHz interlaced the field row compared as
+     line {row, cy[0]}, so the horizontal arm shows in BOTH fields (lines
+     cy & ~1, cy | 1) rather than flickering at 30 Hz. R839's draft compared
+     the field row with the 0..383 line (wrong in interlace: it drew at
+     2x the height, in one field) and inverted the picture (invisible on
+     mid grey); both replaced. Pipeline: dy per line, dx per pixel, the
+     range tests, the colour -- three clk_mem cycles, inside the 6.25-cycle
+     (24 kHz) / ~9.7-cycle (15 kHz) pixel.
+  5. BENCHES:
+       - test_m2_vcop_guns: every stick value of both axes of both guns
+         (against the edges and centre): crosshair pixel, units inside
+         MAME's range, units on the SAME pixel by the game's floor rule;
+         every pixel 0..495 / 0..383 walked through the mouse for both guns
+         by the same rule; 200,000 random mouse packets (deltas to +-255) in
+         all four OSD modes against an accumulate-and-clamp model; 100,000
+         random button sets against MAME's IN0 / IN1; 2,000,000 cycles of
+         random reloads (joystick and mouse right button): 0 cycles with the
+         trigger on the screen, the corner always leads the trigger by >= 1
+         tick and outlasts it by >= 1 tick; a gun at +-127 reads off-screen;
+         en low hides the crosshair. 417,523 checks, 0 failures. Planted
+         faults caught: a threshold off by one (166 -> 167; Y2's 193 term
+         dropped), the mouse's y sign, a border constant, the mouse buttons
+         on both guns, Start / Coin swapped, the reload's trigger delay
+         removed, the corner released early.
+       - test_m2_vcop_xhair: m2_vcop_xhair in the real m2_video_timing with
+         Model2.sv's ce_pix accumulator and vid_x_d, the picture being its
+         own coordinates, sampled at ce_pix as the framework does: every
+         visible pixel of a whole frame classified and compared with the
+         expected cross, 18 cases (24 kHz and 15 kHz 273/274 interlaced;
+         Small, Large, Off; corners; overlapping crosses; hidden guns;
+         random): 0 wrong pixels, the aim pixel itself P1's colour in each,
+         and every pixel not under a cross exactly the picture's (nothing
+         moved). Planted: the interlace line rule, dx off by one, three
+         extra cycles of latency -- caught; ONE extra cycle passes (that is
+         the margin).
+       - Daytona / Desert Tank identity: the guns' in0 / in1 reach m2_ioz80
+         only through the unchanged `vc_gun ? vc_in0 : iob_in0` (vc_gun =
+         game ID 1), the crosshair draws only with c_on (en = vc_gun) and
+         Size != Off, and the bench shows the picture untouched with the
+         crosses off; everything else new is inside generate blocks
+         (VCOP_GUN). With M2_NO_VCOP_GUN the RTL is the pre-R846 core:
+         quartus_map below.
+       - lint_top clean with the guns on and off; lint_idx the same 147
+         lines as 05e371c (only CONF_STR's text differs); quartus_map
+         --analyze_file 0 errors (Model2.sv, m2_vcop_guns, m2_vcop_xhair).
+  6. AREA, quartus_map 17.0, whole design:
+
+       build                              ALMs est.  ALUTs   registers  block bits  DSP
+       05e371c (R845, 77f69df's RTL)        40,181   57,379    48,780   4,379,775   90
+       this, M2_NO_VCOP_GUN=1               40,181   57,379    48,780   4,379,775   90
+       this, as committed (guns on)         40,468   57,778    49,166   4,379,775   90
+
+     So the guns cost +287 ALM estimated (+399 ALUT, +386 registers), no
+     block memory, no DSP. By entity: m2_vcop_guns 279 ALUT / 194 registers,
+     m2_vcop_xhair 141 / 160, hps_io +42 / +55 (joystick_1, analog_1 and
+     the mouse outputs now read, and the longer CONF_STR). OFF IS THE
+     PRE-R846 CORE EXACTLY in all five numbers. A first version that kept
+     separate crosshair registers in m2_vcop_guns measured +362 ALM; they
+     now read the pixel registers. R836's ratio (+135 est -> +91 placed)
+     suggests ~+200 placed on s1126's 41,267 of 41,910 -- ~41,470 (99%).
+     The guns are ON by default (Ben: "if the area is modest"); it is the
+     smallest piece of Virtua Cop so far, but the chip is nearly full and
+     clk_sys has been missing on most seeds, so if a fit fails to place or
+     close because of it, M2_NO_VCOP_GUN=1 in the QSF is the switch.
+
+  7. TIMING RISK: the gun logic is four register stages on clk_sys, each one
+     small adder or compare deep, and reads hps_io only through its own
+     input registers (R842 / R843's lesson). The crosshair is on clk_mem
+     (100 MHz): an 11-bit subtract, then 4-bit range tests, then a 4-way
+     colour mux, each registered; its inputs from clk_sys are quasi-static
+     and cross by two flops (sys_top's clock groups make clk_sys / clk_mem
+     asynchronous, so they are not timed). What it adds to clk_sys is
+     placement pressure at ~41,270 / 41,910 ALM.
+  8. THE JAPANESE TEXT IS THE SET, NOT THE CORE. MAME 0.289 vcopa on a fresh
+     NVRAM shows the same Japanese tutorial at 45-60 s. The language follows
+     the COUNTRY in backup RAM byte 0x1b (CPU 0x01d0001b; 0 USA, 1 JPN, 2
+     EXP -- the strings at program 0x29d20; the boot's WARNING routine at
+     0x3a60 runs only when it reads 1, 0x1d40). A fresh backup RAM is filled
+     from the data ROM at 0x2831ba0 (pc 0x2cf58-0x2cf68), which puts 1
+     (Japan) there: the default of this ROM set, as MAME's model2.cpp notes
+     for other sets ("Default country is USA / Japan"). Holding the byte at
+     0 in MAME (sim/io/mame_m2_vcop_country.lua) gives the English tutorial
+     ("The Lock-on Sight automatically targets enemies", "When your supply
+     of bullets is depleted, aim the gun outside the screen") and the US
+     attract (the EPA "Recycle it" screen, no WARNING). The core's I/O
+     EEPROM and DSWs play no part. Not changed: the core matches MAME. A
+     country switch would be a backup-RAM patch, a design decision for Ben.
+
+*INFERRED (each with what settles it):*
+  a. On the board a stick's crosshair sits on the game's aim: the board's
+     GUN MARK CHECK (TEST -> GUN SETTING) with the stick and Crosshair
+     Small should show each mark inside its cross, and AD1 / AD2 reading
+     83 / 24 / 276 / 1a9 and 80 / 27 / 273 / 1a9 (a gun adjustment done in
+     the game's own menu would move the marks off the crosses; DEFAULT
+     ADJUSTMENT restores it).
+  b. A USB gun calibrated in MiSTer (F10) aims where it points, its trigger
+     arriving on the mouse button (default Mouse = Gun 1 trigger); aiming
+     off the screen and pulling reloads. Untested: no gun here.
+  c. The 1.64 ms reload lead is enough: the I/O handler's scan is ~1 ms
+     (R839: 1,010 / s); the board will show a reload, not a shot.
+  d. The build still fits and closes at the area above (a fit).
+
+**R847 -- clk_sys AT 80 MHz: FIVE RECURRING PATHS, ONE COMMIT EACH.**
+e252aa0 (Daytona + Desert Tank + Virtua Cop's type-2 I/O board and i960
+forms, ~41,300 / 41,910 ALM, M10K 533/553) failed clk_sys on six of six
+seeds (s1126-s1131: -0.558 .. -1.233). Reseeding does not close it; the same
+groups recur. Read post-fit from four seeds' databases (s1129, s1131 re-timed
+in sm2-builds/sm2-tim-sta with -detail full_path), each fixed on its own
+commit on a3dd42f so they can be taken separately. Renderer, geometry and
+sound worked in the releases and fail now from fullness; the I/O board is new.
+
+*Now known -- VERIFIED (what each path really was, and the change):*
+  1. THE Z80's FIRMWARE / WORK RAM -> tv80s di_reg (worst group on s1126,
+     s1127, s1130; to -0.856). The RAMs are read on the NEGEDGE, so this is
+     a HALF-cycle path (6.25 ns), and di_reg is in the wrapper, outside
+     R590/R762's core-only exception. di_reg is NOT loaded on cen (tv80s
+     loads it every clk of T2), so R590's argument does not reach it by
+     itself; the argument that does is written in Model2.sdc: nothing but
+     the core reads di_reg, every core register loads only on cen (busrq_n
+     is tied, so ClkEn = cen), cen is never closer than 8 clks at 80 MHz
+     (type 1 one in 20, type 2 6144 / (80 x 625) = one in 8.14), and the
+     RAM output changes only half a clk after a cen edge (A moves only
+     there) or after a write strobe ends in a write cycle (di_reg not
+     loading). Type 2's f_op (the RETI watch) is the same shape -- loaded
+     through a fetch strobe, read only after it ends -- and was next
+     (post-map +0.685). Commit 2914d83: R847's two-cycle exception, RAMs ->
+     {di_reg, g_t2.f_op}. Checked by simulation, not just argument: the
+     ioz80 benches rebuilt at the REAL pacing (TICK 4/80, T2 6144) with the
+     RAM data held back by exactly the two cycles the exception allows
+     (fw_q / ram_q through two posedge registers), and separately with all
+     of di held back two cycles into di_reg and the core's dinst: type 1
+     hash 7606a0e5ca41b432, type 2 hash 699238baabf0fc75 (every M1 address
+     and DPRAM write with its clk), 5,047 DPRAM writes, 7,445 interrupts,
+     identical in all three. test_m2_ioz80_t2 (MAME) and _t1same pass.
+  2. m2_raster_fill det_r (s1127-s1131, to -0.547, up to 422 paths;
+     pf_st.S_PF_N -> det_r, pr_ax / pr_o1 -> det_r, pr_o1 -> nxo).
+     *Believed:* R727's registers had taken the plane fit off the critical
+     list. *Now known:* Quartus RESOURCE-SHARES det's multipliers with nxo's
+     (ax*by - bx*ay and o1*by - o2*ay share by and ay; different states),
+     so the path is pr_* -> an operand mux selected by the state register
+     -> DSP Mult9 -> DSP Mult10's adder -> det_r: 0.5 + 2.5 routing + 3.9
+     + 1.7 + 2.25 ns. S_PF_N appears as the SOURCE because it drives the
+     mux select. Commit 9043cd5: dp_ab / dp_ba = the two products,
+     registered every cycle (no reset, no enable: unshareable), det_r =
+     dp_ab - dp_ba in S_PF_D; S_PF_DW waits two cycles (dw_2, cleared at
+     quad accept), one more per pass, two or three a quad. Four frames,
+     core configuration (MIP on, mode 1): every pixel identical (c3857662
+     6d8e0e69 e04fb93e 1f325f0f); draw +0.44 / +0.02 / +0.41 / +0.51%
+     (f2000 687,834 -> 690,834); fetch lists 0..4 of ~200,000 different
+     (texel-cache timing, as R727). test_m2_raster_fill 152,373 / 0, _mip
+     1,989,828 / 0, test_m2_raster3d 40 / 0.
+  3. m2_span_tex iss_ooz -> d0_e (s1129 -0.702, 106 paths). Not distance:
+     top_bit()'s loop with `n == 0` in its condition became an 11-cell
+     priority chain. Commit 26e37f7: each byte encodes its own top bit,
+     the highest non-zero byte picks. All 2^32 inputs against the old
+     function: 0 differ. Four frames: pixels, fetch lists and draw cycles
+     identical. test_m2_span_tex 7,214 / 0, _ftb 17 / 0, _mip 7,222 / 0.
+  4. m2_geo_engine tx_c / xl_raw -> g_raw (s1129 -1.078 / -0.771, 110
+     paths). gam()'s constant multiply landed in a DSP at X86 (the engine
+     sits near X40) and g_raw packed into the NEXT DSP's input register
+     (tslope's, X32): two long DSP routes in one cycle. Commit c96ca76: the
+     curve as two 256-entry tables in logic (generated from the formula,
+     all 1,024 inputs checked: 0 differ) and its select registered (g_sel:
+     tx_c is set entering E_XL, xl_go is first high the cycle after E_XL's
+     first mem_go). No ROM inferred (block bits unchanged), one DSP fewer.
+     geodiff on w2300 / w5000 / w9000 (textured polygons take curve 0):
+     quads, colours and cycles identical (822,322 / 868,855 / 624,572).
+     test_m2_geo_engine 70 / 0, test_m2_geometry 438 / 0, _mipz 444 / 0.
+  5. fx68k aob -> m2_multipcm_dual key_wait / s_active (s1130 -0.518, 233
+     paths; s1131). aob -> the address decode -> the slot select (fanout
+     149) -> the 64-way demux -> the enables. A multicycle would need aob
+     never to move while AS is asserted, which is a claim about fx68k's
+     microcode, not provable here; so a register. Commit 900760d: select,
+     strobe, address and data registered together before the engine (one
+     clk later, same order; nothing reads the chips back). Sound board in
+     the core's configuration (PCM_SHARED, YM_STUB, TICK_DEN 80, 30 M
+     cycles, 5,399 MultiPCM writes): output hash 27b719043c354a31 (every
+     chip sample every cycle) and the cpu / pcm / mix hashes identical; at
+     TICK_DEN 50 likewise (08146a194550d7c3).
+  6. POST-MAP (quartus_map + quartus_sta --post_map, slow model, a3dd42f ->
+     900760d), worst slack per path:
+       S_PF_N / pf_st -> det_r     +3.230 -> +9.995
+       iss_ooz -> d0_e             -1.171 -> +8.318
+       tx_c -> g_raw                +5.343 -> (no path)
+       xl_raw -> g_raw              +6.607 -> +8.539
+       aob -> key_wait / s_active   -6.388 / -6.272 -> (no path; aob ends
+                                    at the new registers)
+       Z80 RAMs -> di_reg / f_op    +0.685 -> +13.185 (two cycles); di_reg's
+                                    worst is now IR -> its enable, +1.158
+  7. POST-MAP IS NOT PESSIMISTIC FOR DSP-ROUTED PATHS. R825 calibrated it
+     at 2.3-4 ns pessimistic on carry chains. Here det_r was +3.23 post-map
+     and -0.55 post-fit, g_raw +5.34 and -1.08: post-map leaves out the
+     route to a DSP column, which is most of these paths. A path that runs
+     DSP to DSP needs a post-fit reading; a good post-map number says
+     nothing about it.
+  8. AREA (map estimate): 40,500 -> 40,498 ALM, ALUT 57,838 -> 57,827,
+     registers 49,170 -> 49,218, DSP 90 -> 88, block bits 4,379,775
+     unchanged. By entity (ALUT / registers / DSP): m2_raster_fill
+     5,225 -> 5,213 / +33 / 39 -> 38; m2_span_tex -16 / 0; m2_geo_engine
+     +37 / +2 / 3 -> 2; m2_sound_board +3 / +13.
+
+*NOT addressed (each seen post-fit, each its own cause):*
+  - m2_geo_clip kst / cs -> the pool's round-robin grant -> m2_geo_engine st
+    (s1131 -0.833, s1130 cs -> kst / mul_a_q -0.53): R727's "by design"
+    combinational grant; post-map -3.28 before and after. The next
+    candidate.
+  - qoz -> oz_n / oz_emax (s1130 -0.476, s1127 -0.146): the vertex mux,
+    kd_e's subtract and oz_norm's shift into a DSP input register; a
+    different cause from the determinant. Taking kd_e a cycle early (the
+    first vertex's in oz_pre from oz_emax_q) would keep S_OZ's cycles.
+  - det_r -> its zero test -> the numerators' enables (post-map -0.90;
+    not seen post-fit): a det_z = (dp_ab == dp_ba) register beside det_r
+    would be exact.
+  - ldr_top -> sw_burst (s1130 -0.225), m2_texel_cdc s_wp_g2 -> s_rp
+    (-0.445), m2_eng_ra idx_q -> s_fill, raster3d pst -> the store's RAM,
+    m2_geo_view sm_r -> a_right: once each.
+  - sys_top gp_outr -> PhaseInc (s1131 -1.233, its worst): the framework's
+    HPS config write, not ours.
+
+*INFERRED (what settles it):* a. the five groups are gone post-fit and
+clk_sys closes with margin on most seeds; the geometry pool grant is then
+the worst left -- a seed sweep of 900760d. b. none of the five changes is
+visible on the board: Daytona, Desert Tank and Virtua Cop as before.
+
+*R847 addendum -- a3dd42f (the guns) and area.* s1132-s1134 (a3dd42f,
+41,416-41,471 ALM, 99%): clk_sys -1.291 / -1.352 / -1.224, and s1134's groups
+are NOT e252aa0's: m2_raster_div d_mag -> rem (507), the TGP's mb86233_alu
+opr_add_b -> fp_add (29), hps_io cmd / byte_cnt -> status (24), MultiPCM v ->
+pos_zero (4), the Z80's di_reg (2). So at 99% the failure moves with
+placement; removing one recurring path exposes the next.
+  * The divider's group is fixed like the others (db879d7). *Believed
+    first:* the d + 2d add in front of each radix-4 step was the cost, so
+    3 x |den| was registered at load -- and post-map got WORSE (-3.19 ->
+    -4.07): the add was not on the worst path at all. *Now known:* written
+    as `>=` then `-`, Quartus built each compare as an 8-level LUT tree and
+    put the subtract's carry chain after it. Each compare is now its own
+    subtract's borrow (three 35-bit differences side by side), with 3d
+    registered: post-map d_mag -> rem -3.190 -> +1.032, any -> rem -3.240
+    -> +0.658, -37 ALM estimated. The step against the old one on 117 M
+    inputs (every rem and d below 2048, 100 M random): 0 differ. Four
+    frames identical in pixels, fetches and draw cycles;
+    test_m2_raster_fill / _mip / test_m2_raster3d pass.
+  * AREA, measured (quartus_map 17.0, one switch at a time, ALM estimate; placed has
+    run ~2.3% above the estimate on this design: 40,500 est -> 41,416-41,471
+    placed for a3dd42f):
+      f29e343 (before the borrow form)    40,489  (a3dd42f 40,500; db879d7 40,452)
+      M2_VCOP_FPU=0 (trig microcode)      40,224  -265, -24,576 bits
+      M2_NO_VCOP_GUN (guns, crosshairs)   40,263  -226
+      R3D_MIP = 0 (mip levels)            40,396   -93, -4,470 bits
+    Seeds closed at ~40.9-41.0k placed (s877 41,072; s1085 40,873), so
+    ~450-550 placed ALM have to come out. No single cheap switch does it,
+    and the two largest remove Virtua Cop features. Larger candidates in
+    our own RTL, not measured: i960_regs (1,859 ALUT own: 32 x 32-bit loc /
+    glb in flip-flops behind two 32:1 read muxes), m2_quad_store (1,869 /
+    2,794), the two m2_raster_div (630 ALUT and 5 DSP each).
+  * JUDGEMENT (INFERRED): the R847 fixes remove paths that recurred on four
+    to six seeds and cost no area (40,500 -> 40,452 ALM estimated), so they raise the
+    odds per seed; they cannot by themselves make 99% close reliably. That
+    needs area back to ~41.0k placed. Settles it: a sweep of db879d7 (how
+    many seeds close, and what the worst groups are then).
+
+**R849 -- THE CROSSHAIRS ONLY IN PLAY: THE GAME'S OWN STATE, SNOOPED ON THE
+i960's WRITES.** Board, s1134 (a3dd42f): the guns work with joystick and
+mouse (Ben). Two changes asked: a crosshair only IN GAME (not attract,
+title, menus / test, continue, game over), and player 2's only while player
+2 is playing. (M2_VCOP_GUN; game ID 1 only.)
+
+*Believed (R846):* a crosshair shows whenever the guns are built, the game
+is Virtua Cop and the gun is on the screen. That draws one over the attract
+-- whose tutorial plays a 1P demo with its own revolver, hearts and lock-on
+sights, so it looks like a game -- and over every menu, and player 2's
+whenever a stick or mouse is near the middle.
+
+*Now known -- VERIFIED (MAME 0.289 vcopa, sim/io/mame_m2_vcop_play.lua:
+coins, starts, triggers and Test by schedule, the guns swept at the I/O
+board, work RAM 0x500000-0x51ffff dumped every 0.1-0.5 s, snapshots every
+0.25-2 s; then every write to the bytes found, with its IP):*
+  1. THE ADDRESSES (work RAM, byte 0 of each word; the game writes them
+     with st, whole words, mask ffffffff):
+       0x5016d4  the game's MODE. 0 boot / the reboot after test mode (IP
+                 0x267c, 0x20e8, ...), 1 attract (0xa2f0, 0x11f40, ...), 2
+                 credited start (0x6ddd0), 3 / 4 / 6 into and out of STAGE
+                 SELECT (0x6df9c, 0x59b60, 0x59e7c), 7 PLAYING (0xa4f0), 0x0c
+                 the continue countdown when no player is left (0x99f8 /
+                 0x9acc), 0x0d game over (0xacf4).
+       0x50ee30  PLAYER 1: 0 out, 1 in play (0x20e0 at a start, 0xad48 at a
+                 join or a continue taken), 2 its continue countdown (0x99d8
+                 / 0x9a44), 3 its own game over while the other plays on
+                 (seen for P2, 0x524a0), then 0 (0xacbc, 0x52518).
+       0x50ee34  PLAYER 2: the same (0x221c / 0xae78 join, 0x9aac / 0x9b18
+                 continue).
+     Found by separating dumps: across scenario A (a 1P game to game over,
+     then a 2P-start with one credit, P2 alone, to game over), 0x5016d4 was
+     the one byte whose in-game values ({7}) never occur in the attract,
+     continue or game-over phases (6 candidates; the other five are scroll
+     / timer counters with overlapping ranges); 0x50ee30 / 0x50ee34 are the
+     ones that are 1 exactly while that player plays. In the attract the
+     words are rewritten every frame (IP 0x2144 / 0x224c, all 0; the mode
+     stays 1); in a game only on a change.
+  2. THE TIMELINES (state every 0.5 s; snapshots agree):
+       A: attract 15-41 s (mode 1, demo with hearts and sights), start 41.5
+          (2, P1 = 1), stage select 44.5 (4), PLAYING 45.5-76.5 (7, P1 1),
+          continue 76.5 (0x0c, P1 2), game over 81 (0x0d, P1 0), attract
+          87; P2 alone: 91.5 (2, P2 1) ... 7 at 112.5, 0x0c at 133, 0x0d at
+          153.5.
+       B: P2 joins at 56.5 (mode stays 7, P2 1); P1's continue 74.5-77.5
+          (P1 2, mode 7 -- P2 still playing; the continue taken: P1 1); P2's
+          continue 80-101 (P2 2), P2's game over 101-104 (P2 3), P2 0; P1
+          dies at 108.5: mode 0x0c, 0x0d at 113.5.
+       C: No Enemies, both play 45-150 s through SCENE 1 / 2 / 4 RESULTS
+          (mode 7 throughout); Test at 150 and 170.
+       D: Test in the attract (20 s, 23 s), then a game, Test in the game
+          (80 s, 95 s).
+       E: P2 starts alone (41.5), P1 joins at 61.5, P2's continue and own
+          game over (76.5, 84.5), P1 dies: 0x0c at 89, 0x0d at 94.
+  3. TEST MODE IN A GAME (D, C): the test menu is on the screen from the
+     press (snapshots 60.3 s on: TEST MODE, then EXIT TEST MODE) while all
+     three words still read 7 / 1 for ~3 s; leaving it reboots the game,
+     whose first act is a write of 0 to the mode word (IP 0x267c). No other
+     byte marks the test screens: the 140 separating candidates are the
+     test program's own scratch and an input latch (0x50156c holds the IN0
+     edge, 4 = Test) that also carries 1 / 0x10 for coin / start. In the
+     attract the mode is already 1. So the RULE is: in play = mode 7 and
+     player byte 1 and no Test press since the last write of the mode word.
+
+*The core (rtl/io/m2_vcop_state.sv, clk_i960, inside g_vcgun):* a completed
+i960 write (bus_req & bus_we & bus_ack & be[0]) to 0x5016d4 / 0x50ee30 /
+0x50ee34 is decoded on the bus and five flops take the answers (which word,
+lane 0 == 7, lane 0 == 1); three flops keep in-game / P1 / P2, one the test
+latch (joystick 0 bit 8, the MRA's Test); play = en & in-game & ~test &
+player, registered, into m2_vcop_guns (one more flop on clk_sys; clk_i960 is
+an exact / 2), where c_on = en & play & on-screen. Nothing reads work RAM;
+nothing is on clk_sys's paths but that flop. Stage select (mode 3 / 4 / 6)
+is a menu, so no crosshairs there either ("shoot to select" has three large
+panels); the SCENE RESULTS between scenes keep mode 7 and show them.
+
+*Benches:*
+  - test_m2_vcop_state (new; captures in build/vcopstate, not committed --
+    mame_m2_vcop_play.lua writes them): the five scenarios' 43,438 logged
+    writes (and their Test presses) replayed on the module's bus in order,
+    with random traffic between them it must ignore (reads of the words,
+    words +-8, other 64 KB banks, one address bit off, lane 0 disabled, no
+    ack); at every 0.5 s sample (2,005) the module equals MAME's RAM rule
+    (mode 7 and player 1), except the 12 samples from a Test press to the
+    next mode write, which the snapshots show as test screens: 0
+    mismatches; P1 in play 515 samples, P2 327, 24 state changes. Directed:
+    only lane 0's whole byte counts (0x0f / 0x87 / 0x17 / 0x81 / 0x11 are
+    not 7 / 1; a lane-0-off write keeps the state), the test latch holds
+    through a mode write made while Test is down; en low: never in play.
+    45,550 checks, 0 failures. Planted faults caught: P2's word address, any
+    lane instead of lane 0, the ack ignored, the 7 / 1 compares on fewer
+    bits, the test latch never set / cleared at once, en ignored, the high
+    address bits half-decoded.
+  - test_m2_vcop_guns: + play gating (each bit hides its own crosshair),
+    417,527 checks, 0 failures. test_m2_vcop_xhair unchanged, PASS.
+  - Daytona / Desert Tank: the module is inside the VCOP_GUN generate and
+    its output is en-gated (en = vc_gun = game ID 1); the guns' in0 / in1
+    mux is untouched; M2_NO_VCOP_GUN still builds the pre-R846 core.
+    test_m2_cab_inputs PASS. lint_top clean on and off; lint_idx the same
+    147 lines; quartus_map --analyze_file 0 errors (m2_vcop_state,
+    m2_vcop_guns, Model2.sv).
+  - AREA, quartus_map 17.0, whole design, measured both:
+       1732a65 (R847)          40,491 ALM est.  57,848 ALUT  49,282 regs  88 DSP
+       this                    40,485           57,824       49,296       88
+    m2_vcop_state is 18 ALUT / 12 registers, m2_vcop_guns +2 registers; the
+    totals moved -6 ALM / -24 ALUT / +14 registers, i.e. within synthesis
+    perturbation. (R847's addendum quotes db879d7 at 40,452; the same RTL
+    maps to 40,491 here.)
+
+*INFERRED (each with what settles it):*
+  a. On the board: no crosshair in the attract, title, stage select,
+     continue, game over or the test menu; P1's from the first scene of a
+     1P game; P2's only after P2 starts or joins, gone at P2's continue
+     countdown and back when P2 continues. The board, with a stick.
+  b. Later stages, the boss scenes and the ending keep mode 7 (or leave it
+     only for menus): MAME's scripted play never cleared stage 1 (No
+     Enemies stalls at the boss), so between-stage screens are unseen.
+     Settles it: a played-through game on the board or in MAME by hand.
+  c. vcop (Revision B) uses the same addresses: its program differs; only
+     vcopa was examined.
+
+**s1135-s1137 = 1732a65 (R847's six timing fixes, with the guns).** s1137
+CLOSES at 99%: clk_sys +0.116, every core clock positive, holds >= +0.141,
+HDMI -0.925; 41,407 ALM. s1136 misses clk_sys (-0.379); s1135 could not
+route. The design closes at 99% when its recurring paths are fixed (Ben:
+"100% can still fit, but it needs to be done right"), against R847's view
+that area had to come out. RBF build/Model2_20261016_s1137_vcop.rbf, md5
+df223b1725b751aa1548a064ff94ea11. s1134 (a3dd42f, timing-short) on the
+board: the guns work with a joystick and the mouse (Ben); his asks --
+crosshairs only in play, P2's only when P2 plays -- are R849 (bb29501).
+
+**R850 -- PLAYER 1'S CROSSHAIR ALL THE TIME; PLAYER 2'S ONLY IN PLAY.**
+Ben, after R849: "crosshair should be there all the time for player 1, but
+player 2 should only show if 2 player". m2_vcop_guns: c_on[0] = en & on the
+screen (play[0] no longer gates it); c_on[1] = en & play[1] & on the screen,
+as R849. The OSD Off and off-screen still hide both. tb_m2_vcop_guns'
+in-play check follows (417,527 checks, 0 failures); lint_top clean;
+analyze_file 0 errors. m2_vcop_state is unchanged (its P1 bit is unused).
+
+**R848 -- clk_sys AT 80 MHz, THE NEXT EIGHT PATHS: EACH EXACT, ONE COMMIT
+EACH, AND WHAT THEY COST.** On c545187 (R850). Ben's position, binding:
+99-100% closes at 80 MHz when the recurring paths are fixed properly -- no
+feature removal, no clock reduction. Every change below is bit- and
+cycle-identical where a bench can show it, and none adds a cycle anywhere.
+
+*The recurrence table* (post-fit, worst slack / failing paths, from the seed
+reports; s1128, s1132, s1133, s1136 and s1137 re-reported with
+report_timing -npaths 600 on their databases, seconds each):
+
+    group                                   seeds failing (worst)                 R848
+    Z80 RAMs -> di_reg                      7 of 11 (s1130 -0.856)                R847 fixed
+    aob -> MultiPCM key_wait / s_active     4 (s1132 -0.926)                      R847 fixed
+    clip / project -> pool -> engine st     s1130, s1131 (-0.833), s1132 (-1.103) 1
+    clip cs -> pool operands                s1130 (-0.398); s1137 +0.63           1
+    qoz -> oz_n                             s1130 (-0.476)                        2
+    qoz -> oz_emax                          s1127, s1133 (-0.376)                 8
+    det_r -> numerators                     post-map only (-0.90)                 3
+    TGP opr_add -> fp_add stage A           s1134 (-1.072, 29); s1137 +0.53       4
+    MultiPCM v -> pos_zero                  s1134 (-0.418)                        5
+    store vtx_r -> tournament round 1       s1126, s1132 (-1.022), s1136 (-0.379, 6
+                                            its ONLY failing group)
+    eng_ra data -> engine xaddr (E_PAL)     s1137's worst (+0.116)                7
+    eng_ra data -> engine poly_uv (F_UV)    s1132, s1133 (-1.352)                 not fixed
+    fb_wcomb ib / b_idx -> vlo / vhi        s1127, s1133 (-1.077, 141)            not fixed
+    pool multiplier result -> xform / eng   s1132 (-1.291)                        not fixed
+    joy_analog_q -> cab steer_rq            s1128, s1132 (-0.626)                 not fixed
+    hps_io byte_cnt -> status               s1132, s1134 (sys/, framework)        not ours
+
+*Now known -- VERIFIED (each its own commit on c545187):*
+  1. THE GEOMETRY POOL (7781046). *Believed* (R727): the pool's grant is
+     combinational by design and short. *Now known:* the post-map path was
+     ELEVEN cells -- the clipper's cs (fanout 111) -> its request decode (2)
+     -> the pool's winner index (fanout ~100: it also drives the operand mux
+     and the tags) -> another client's grant -> SIX levels of m2_geo_engine's
+     one-hot next-state chain (Quartus builds a shared hold term, so a grant
+     used in E_LUMM / E_LUMA reached st.E_DONE, E_NORM, E_LINK, E_CC). Three
+     exact changes: (a) m2_fp_pool's grant written directly (rr_onehot: a
+     client is granted when it requests and no client before it in the
+     rotation does), not decoded from the winner -- every request vector x
+     every pointer, NC 2..6, against rr_pick: 640 checks, 0 differ
+     (make test_fp_pool_gnt; three planted faults caught); (b) the engine's
+     E_LUMM / E_LUMA and the clipper's K_TEST / K_CLIP leave on the grant a
+     cycle later (lw_go, gnt_q), the request already down, inside the pool's
+     5/6-cycle latency, so st and kst read no grant; (c) the clipper's
+     requests are registers, set on every move into K_TEST / K_CLIP with the
+     operation cs names there and dropped on their own grant. Tried and
+     rejected on the way: registering the request from a blocking next-state
+     copy (kst_n) was exact but stopped Quartus extracting kst as a state
+     machine -- binary kst, post-map kst -> rq_add -2.342; and a first edit
+     missed two `kst  <=` written with extra spaces, which geodiff caught as
+     a HANG on all five walks. Three request forms compared in a spike of
+     m2_geometry (post-map clip -> others / clip -> pool operands / clip
+     ALUT): registered +8.6 / +3.0 / +72; a decode of the one-hot state and
+     a registered op class +6.3 / +1.5 / +41; the old decode masked by gnt_q
+     +4.8 / -0.08 / +14 (base +2.5 / +1.3). The registered form is
+     committed: it is the only one that also lifts the operand path (s1130
+     cs -> mul_a_q -0.398).
+     Evidence: geometry benches unchanged (engine 70, clip 2,003, xform
+     7,813, project 20,437, geometry 438, mipz 444 -- 0 failures); geodiff on
+     w2300 / w5000 / w9000 / w1000 / r5701: cycles 822,322 / 868,855 /
+     624,572 / 902,720 / 855,310 identical, quads identical (md5 of the
+     lists), and a NEW per-cycle hash (M2GD_POOLHASH=1 in tb_m2_geodiff:
+     every client's request / grant / response, the operands the pool took,
+     and the engine's memory request with its address and space) identical
+     on all five. Post-map: clip -> engine st -3.282 -> no path; any -> st
+     +1.892; clip -> pool operands +0.018 -> +3.633; inside the clipper
+     -1.989 -> +0.598.
+  2. THE 1/z NORMALISER'S VERTEX (ad1513f). qoz[oz_i] held in oz_mf, loaded
+     a cycle ahead (vertex 0 at acceptance, oz_i + 1 in each stage-one cycle;
+     stage two never writes a vertex stage one has still to read). oz_n is
+     packed into the u/z multiplier's DSP input register, so the 4:1 mux,
+     kd_e's subtract and the shift were followed by the route to the DSP
+     column: post-map +5.5 against post-fit -0.476 (R847's warning again).
+     Now oz_mf -> oz_n +6.344, qoz -> oz_n no path. Evidence: a simulation
+     checker (not committed) oz_mf == qoz[oz_i] in every reading cycle: 0
+     mismatches in test_m2_raster_fill (152,373), _mip (1,989,828),
+     test_m2_raster3d and four frames; planted (load qoz[oz_i]): 467,206
+     checker reports and 1,494,288 bench failures. Four frames (core
+     configuration, MIP mode 1): pixels identical (c3857662 6d8e0e69 e04fb93e
+     1f325f0f), fetch lists identical, every cycle statistic identical.
+  3. THE ZERO DETERMINANT (0718d37). det_z = ((dp_ab - dp_ba) == 0),
+     registered beside det_r from the SAME subtract; S_PF_N tests det_z.
+     *Believed first:* dp_ab == dp_ba is the same truth and cheaper. *Now
+     known:* written that way Quartus pulled the subtract out of the DSP's
+     adder to share the products -- +1 DSP, +33 registers, dp -> det_r +10.0
+     -> +3.6 post-map (spike of m2_raster_fill in the core's parameters).
+     The shared-subtract form: DSP 38, ALM unchanged. det_r -> numerators
+     -0.871 -> no path (det_z -> nxv +4.468). Checker det_z == (det_r == 0):
+     0 mismatches after reset (one report each run at t = 0, before the
+     first reset edge); frames identical as in 2.
+  4. THE TGP ADDER (7ce9926). fp_add IN_REG: the ALU's operand register
+     moves into fp_add, and the alignment's decisions (e_gt, e_eq, sig_ge,
+     saturation, shamt -- fp_add_align) are registered beside the operands;
+     the ALU forms them for each of its three operand pairs (d,a) (d,p)
+     (b,a) from its operand registers and selects them with the operands.
+     *Believed first:* align after the mux. *Now known:* that put alu_op_r
+     (fanout 96) -> the op decode -> the mux -> compare / subtract /
+     saturate in one cycle (post-map -1.361) and unfolded the 2:1 mux from
+     the registers' synchronous load (+66 ALUT). Per pair: stage A +0.247 ->
+     +5.713, the new stage 0 (pre_d -> dec_q) +1.761. Exponents only (the
+     significand compare left in stage A) measured +3.8 / +80 ALUT in a
+     spike; not taken. Evidence: a lockstep of the new fp_add against
+     c545187's (plain, PIPE_A2, and IN_REG against old-behind-a-register,
+     FLUSH 0 and 1), 20 M cycles biased to the alignment's corners: 0
+     differ; test_tgp's benches pass (test_mb86233_regs fails 46,966 on
+     c545187 too -- not this); the race replay (30 frames, 192,746 result
+     words) IDENTICAL to c545187's, 9,726,730 cycles both. Planted: in_dec
+     left 0 (10 M cycles differ), FMSD given the (d,a) decisions (37,484 ALU
+     failures), |d| mux wrong (caught); two mutants passed and are
+     equivalent, not missed: saturation at 27 instead of 26, and sig_ge as >
+     (equal magnitudes give the same sum either way). Cost: +117 ALUT (three
+     aligners ~48 each, fp_add -56, ALU +28) -- the dearest change here, and
+     separable.
+  5. MULTIPCM'S FIRST-STEP FLAG (4e963ab). pos_zero[v] cleared at pv_we from
+     pv_v (the step's registered slot), a cycle after the step, instead of
+     behind v -> s_active[v] -> step_now -> seq_hold -> the enable -> a
+     64-way decode. Nothing reads it in between (the slot's next step is a
+     pass away), and a descriptor completing in that cycle still wins (its
+     set is later in the block); a step and a set of one slot in one cycle
+     cannot happen (key_wait is never set while the slot is active). Sound
+     board in the core's configuration: output hash 27b719043c354a31
+     (TICK_DEN 80) and 8288d950fec92093 (50) with cpu / pcm / mix hashes,
+     identical to c545187's; test_m2_mpcm_dual (4 seeds, and mid-pass writes
+     at latency 60) and test_m2_sndboard_shared pass. Post-map v -> pos_zero
+     no path; pv_v -> pos_zero +7.040.
+  6. THE TOURNAMENT'S FIRST ROUND (37b74ee). m01_r .. x23_r compared in
+     S_MINMAX's first cycle (mm_pre, R743's) from the latched sye -- the
+     same y the acceptance compared -- not from the store's outputs through
+     the triangle split's mux at acceptance. s1136's only failing group.
+     Post-map vtx_r -> x23 +1.012 -> no path; sf -> m01_r +7.420. Frames,
+     fetches and cycles identical; fill benches pass.
+  7. THE ENGINE'S PALETTE ENTRY (29a63eb). E_PAL registers the half-word
+     only (pal_raw); the grey test, c555 and the first translation address
+     follow a cycle later, in the cycle the port holds its request down
+     (mem_go_d), so the port sees the same address when it next requests.
+     Post-map eng_ra -> xaddr +2.912 -> +4.569 (post-fit it was s1137's
+     worst, +0.116). geodiff's memory-port hash identical on five walks.
+  8. THE LARGEST 1/z EXPONENT (b6389e8). Six compares side by side and a
+     one-hot select instead of a two-round tournament in oz_pre: all 2^16
+     4-bit four-tuples and 2 M random 8-bit ones, 0 differ. Post-map qoz ->
+     oz_emax +5.542 -> +7.614. Frames identical.
+  Every commit: lint_top clean, lint_idx the same 147 lines as c545187,
+  quartus_map --analyze_file 0 errors on each changed file, whole-design
+  quartus_map 0 errors.
+
+*AREA (quartus_map 17.0, whole design, the same session):*
+
+    c545187 (R850)        40,417 ALM est.  57,774 ALUT  49,295 regs  88 DSP  4,379,775 bits
+    b6389e8 (R848 tip)    40,614           57,983       49,336       88      4,379,775
+
+  +197 ALM estimated. Synthesis noise is +-40 (1732a65 maps to 40,452 and to
+  40,491); by entity the changes are the TGP ~+117 ALUT (4), the clipper
+  +32 and the pool +33 (1; m2_geometry's own -40), the fill ~+29 / +8
+  registers (2, 3, 6, 8; raster3d's own -36), the engine +9 / +17 registers
+  (7), MultiPCM +10 (5), and i960_fpmisc +46 that no change touches
+  (noise). At R836's estimate-to-placed ratio that is perhaps +130 placed:
+  s1137's 41,407 becomes ~41,540 of 41,910. s1135 (41,472) could not route,
+  so area is not free: 4 is the commit to drop first if a sweep shows
+  routing trouble.
+
+*QSF (recommendation, not changed):* the fits are NOT congested -- router
+average interconnect 40-47%, peak 56-66% on every seed s1114-s1137 -- yet
+FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION is ALWAYS, put back when the router
+segfaulted at 99.5% (this file's own criterion), and it spreads logic, which
+lengthens exactly the cross-module routes these paths die of. Worth one A/B on
+a fixed tree: AUTOMATICALLY vs ALWAYS, three seeds each, measuring commit /
+crash / unroutable, clk_sys WNS and TNS, placed ALM. Not worth testing again:
+REGISTER_DUPLICATION ON (R405's unpackable SDRAM IOE copies), OPTIMIZATION
+TECHNIQUE SPEED or mode BALANCED (no bitstream / +3,400 ALM), turning off the
+physical-synthesis combo pass (R406/R416: 10 of 10 crashed). s1135's routing
+failure under ALWAYS says AUTOMATICALLY may route worse; the A/B settles it.
+
+*NOT addressed:* eng_ra data -> poly_uv (F_UV; the read's data fans out to
+~15 engine registers -- a register on mem_data adds a cycle a read, and
+R696 prices that at 0.07 vblank a cycle); fb_wcomb ib / b_idx -> vlo / vhi;
+the pool multiplier's result -> its consumers; joy_analog_q -> steer_rq (a
+second register adds 12.5 ns to the steering, or a multicycle argued from
+hps_io's update rate); clip ti -> projector inputs (post-map -1.42, never
+post-fit); HDMI (s1137 -0.925, the framework's scaler domain).
+
+*INFERRED (what settles it):* a. the eight groups are gone post-fit and more
+seeds close than s1135-s1137's one in three -- a sweep of b6389e8. b. none of
+it is visible on the board: Daytona, Desert Tank and Virtua Cop as before.
+
+**s1141-s1143 = c545187 (R850; R847's fixes, the guns, R849/R850).** Two of
+three close at 99%: s1142 core clocks >= +0.260 (clk_sys +0.299), holds
+>= +0.244, HDMI -0.350, 41,455 ALM; s1143 >= +0.004, HDMI -0.523. s1141
+misses general[0] (-0.145). RBF build/Model2_20261016_s1142_vcop.rbf, md5
+in HANDOFF. s1144-s1146 (dbf06b4, R848) queued.
+
+**s1144-s1146 = dbf06b4 (R848's eight fixes): NONE FIT -- placement, not
+routing.** "Fitter requires 4196 / 4196 / 4201 LABs ... the device contains
+only 4191" (Error 170012): 5-10 LABs over. R848's +197 ALM estimate (its
+own note: ~+130 placed, to ~41,540) crossed the LAB limit. Its dearest
+commit, the TGP adder's alignment before its operand register (7ce9926,
+~+117 ALUT), is reverted (9ecb403), as R848 advised; the other seven stay.
+test_tgp's mb86233_regs failures (46,966) predate this work (R848 found them
+on c545187 too) -- open, not yet looked at. Next: s1147-s1149 of 9ecb403.
+
+**s1147-s1149 = b5f0c4d (R848 less the TGP adder): WORSE THAN c545187 --
+R848's RTL IS WITHDRAWN.** clk_sys -1.060 / -1.582 / -1.385 (s1149 also
+misses general[0] -0.048 and general[3] -0.264) at 41,453-41,476 ALM, none
+closing -- against c545187 (R847 only), 2 of 3 closing (clk_sys +0.204 /
++0.299 / +0.058) at 41,455-41,496. *Believed (R848):* each fix gives its
+path margin with no cycle added, so more seeds close. *Now known:* at 99%
+the area the seven fixes add (~+80 ALM est. without the TGP adder) costs
+the fitter more than the margin they buy; post-map gains on individual
+paths did not survive placement. Three seeds each is a small sample, but
+the difference is large and one-sided. rtl/ is restored to c545187's;
+R848's benches stay (tb_fp_pool_gnt passes against the original arbiter;
+geodiff's M2GD_POOLHASH is harmless) and its commits remain in history to
+re-apply if area is ever freed. s1142 (c545187) stays the candidate.

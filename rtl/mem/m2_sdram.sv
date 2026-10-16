@@ -102,7 +102,11 @@ module m2_sdram #(
   // goes through, so nothing starves. Default none: the controller exactly as
   // it was. PRI_CAP must be at least 1.
   parameter logic [NP-1:0] PRI     = '0,
-  parameter int unsigned   PRI_CAP = 2
+  parameter int unsigned   PRI_CAP = 2,
+  // R822: PORTS GRANTED FIRST WITHIN THE CLASS. The class grants its lowest
+  // set port; a port in PRI_TOP (and in PRI) goes ahead of every other class
+  // member. 0 leaves the class exactly as it was.
+  parameter logic [NP-1:0] PRI_TOP = '0
 ) (
   input  logic                 clk,
   input  logic                 rst_n,
@@ -583,7 +587,11 @@ module m2_sdram #(
   wire           pri_capped = (pri_run == ($clog2(PRI_CAP+1))'(PRI_CAP));
   wire [NP-1:0]  pri_ready  = arb_ready & PRI;
   wire           oth_ready  = |(arb_ready & ~PRI);
-  wire [NP-1:0]  low_pri    = pri_ready & (~pri_ready + {{(NP-1){1'b0}}, 1'b1});
+  wire [NP-1:0]  low_cls    = pri_ready & (~pri_ready + {{(NP-1){1'b0}}, 1'b1});
+  // R822: a PRI_TOP port, if one is ready, before the rest of the class.
+  wire [NP-1:0]  top_ready  = pri_ready & PRI_TOP;
+  wire [NP-1:0]  low_top    = top_ready & (~top_ready + {{(NP-1){1'b0}}, 1'b1});
+  wire [NP-1:0]  low_pri    = (|top_ready) ? low_top : low_cls;
   wire           use_pri    = (|pri_ready) && !(oth_ready && pri_capped);
   wire [NP-1:0]  arb_sel    = use_pri ? low_pri : rr_sel;
   // R498: arb_rot, arb_idx and arb_sum are gone with the rotate -- the barrel

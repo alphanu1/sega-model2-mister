@@ -65,10 +65,30 @@
 
 module m2_ioz80 #(
   parameter int unsigned TICK_NUM = 4,      // 4 MHz
-  parameter int unsigned TICK_DEN = 50      // clk_sys
+  parameter int unsigned TICK_DEN = 50,     // clk_sys
+  // R839: THE TYPE-2 BOARD (MAME model1io2, Virtua Cop's 837-11130 with
+  // EPR-17181). 0 = this module exactly as it was: none of the logic below
+  // marked TYPE2 exists. 1 = it is built, and the `type2` input (the game ID
+  // says Virtua Cop) selects it at run time; with type2 low the board is the
+  // type-1 board bit for bit -- the pacing accumulator is the same fraction
+  // scaled by T2_SCALE, so it pulses on exactly the same cycles.
+  //
+  // The type-2 CPU is a TMPZ84C015 at 19.6608 MHz / 2 = 9.8304 MHz: T2_NUM /
+  // (TICK_DEN * T2_SCALE). 9.8304 = 6144 / 625.
+  parameter bit          TYPE2    = 1'b0,
+  parameter int unsigned T2_SCALE = 625,
+  parameter int unsigned T2_NUM   = 6144
 ) (
   input  logic        clk,
   input  logic        rst_n,
+  // R839: run-time select, used only when TYPE2 (tie 0 otherwise).
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        type2,
+  // The light guns, as MAME's model1io2 fpga_r hands them over: 10-bit
+  // coordinates in the game's own units, and the off-screen bits {P2, P1}.
+  input  logic  [9:0] gun_p1x, gun_p1y, gun_p2x, gun_p2y,
+  input  logic  [1:0] gun_off,
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // Firmware load, 16-BIT WIDE. hps_io runs WIDE=1: ioctl_addr advances by 2
   // and each ioctl_wr carries two bytes. The first byte-wide version stored
@@ -137,29 +157,56 @@ module m2_ioz80 #(
   // Widths are explicit. m2_sound_board writes this same accumulator with bare
   // parameters and its bench does not run -Wall; this one does, and unsized
   // parameters in the arithmetic are a WIDTHTRUNC there.
-  localparam int unsigned ACCW = $clog2(TICK_DEN) + 1;
-  logic [ACCW-1:0] acc;
   logic cen;
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin acc <= '0; cen <= 1'b0; end
-    else if (acc + ACCW'(TICK_NUM) >= ACCW'(TICK_DEN)) begin
-      acc <= acc + ACCW'(TICK_NUM) - ACCW'(TICK_DEN);
-      cen <= 1'b1;
-    end else begin
-      acc <= acc + ACCW'(TICK_NUM);
-      cen <= 1'b0;
+  generate if (!TYPE2) begin : g_pace1
+    localparam int unsigned ACCW = $clog2(TICK_DEN) + 1;
+    logic [ACCW-1:0] acc;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin acc <= '0; cen <= 1'b0; end
+      else if (acc + ACCW'(TICK_NUM) >= ACCW'(TICK_DEN)) begin
+        acc <= acc + ACCW'(TICK_NUM) - ACCW'(TICK_DEN);
+        cen <= 1'b1;
+      end else begin
+        acc <= acc + ACCW'(TICK_NUM);
+        cen <= 1'b0;
+      end
     end
-  end
+  end else begin : g_pace2
+    // R839: the same accumulator over TICK_DEN * T2_SCALE. Type 1 adds
+    // TICK_NUM * T2_SCALE: acc is always T2_SCALE times the type-1 value, so
+    // the compare is true on the same cycles (from reset, acc = 0 in both).
+    localparam int unsigned DEN2 = TICK_DEN * T2_SCALE;
+    localparam int unsigned ACCW = $clog2(DEN2) + 1;
+    localparam logic [ACCW-1:0] N1 = ACCW'(TICK_NUM * T2_SCALE);
+    localparam logic [ACCW-1:0] N2 = ACCW'(T2_NUM);
+    localparam logic [ACCW-1:0] D2 = ACCW'(DEN2);
+    logic [ACCW-1:0] acc;
+    wire  [ACCW-1:0] num = type2 ? N2 : N1;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin acc <= '0; cen <= 1'b0; end
+      else if (acc + num >= D2) begin
+        acc <= acc + num - D2;
+        cen <= 1'b1;
+      end else begin
+        acc <= acc + num;
+        cen <= 1'b0;
+      end
+    end
+  end endgenerate
 
   // ------------------------------------------------------------ the CPU
   logic [15:0] A;
   logic  [7:0] di, dout;
   logic        mreq_n, rd_n, wr_n;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic        iorq_n;            // R839: read only by the type-2 board
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic        z_int_n;           // R839: the CTC's request; 1 on type 1
 
   tv80s u_z80 (
     .reset_n(rst_n), .clk(clk), .cen(cen),
-    .wait_n(1'b1), .int_n(1'b1), .nmi_n(1'b1), .busrq_n(1'b1),
-    .m1_n(dbg_m1_n), .mreq_n(mreq_n), .iorq_n(), .rd_n(rd_n), .wr_n(wr_n),
+    .wait_n(1'b1), .int_n(z_int_n), .nmi_n(1'b1), .busrq_n(1'b1),
+    .m1_n(dbg_m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
     .rfsh_n(), .halt_n(), .busak_n(),
     .A(A), .di(di), .dout(dout)
   );
@@ -185,6 +232,10 @@ module m2_ioz80 #(
   logic  [7:0] dw_l;
   always_ff @(posedge clk) if (mem_wr) begin aw_l <= A; dw_l <= dout; end
   wire wr_stb = !mem_wr && mem_wr_d;   // trailing edge; aw_l/dw_l hold truth
+
+  // R839: the type-2 board (constant 0 when TYPE2 is 0) and its RAM window.
+  wire t2 = TYPE2 && type2;
+  wire ram_wsel = t2 ? (aw_l[15:13] == 3'b111) : (aw_l[15:13] == 3'b010);
   wire rd_end = !mem_rd && mem_rd_d;   // read completed: safe to shift
 
   // ------------------------------------------------------------ ROM and RAM
@@ -237,7 +288,9 @@ module m2_ioz80 #(
   // a cycle of write delay is invisible to it. The read keeps the async-ROM
   // shape tv80 needs -- data half a cycle after the address.
   always_ff @(negedge clk) begin
-    if (wr_stb && aw_l[15:13] == 3'b010) ram[aw_l[12:0]] <= dw_l;   // 0x4000-0x5fff
+    // 0x4000-0x5fff; R839: on the type-2 board 0xe000-0xffff (its "backup"
+    // 4 KB at 0xe000, never touched by EPR-17181, and its 4 KB at 0xf000)
+    if (wr_stb && ram_wsel) ram[aw_l[12:0]] <= dw_l;
   end
   always_ff @(negedge clk) ram_q <= ram[A[12:0]];
 
@@ -381,9 +434,11 @@ module m2_ioz80 #(
   logic  [5:0] ee_addr;
   typedef enum logic [2:0] {EE_CMD, EE_READ, EE_WRITE, EE_DONE} ee_st_t;
   ee_st_t ee_st;
-  wire ee_clk = port_out[0][7];
-  wire ee_cs  = port_out[0][6];
-  wire ee_di  = port_out[0][5];
+  // R839: the type-2 board wires the 93C46 to PF (model1io2.cpp io_pf_w:
+  // bit 6 DI, bit 5 CLK, bit 4 CS) and reads DO at 0x8040 bit 6.
+  wire ee_clk = t2 ? port_out[5][5] : port_out[0][7];
+  wire ee_cs  = t2 ? port_out[5][4] : port_out[0][6];
+  wire ee_di  = t2 ? port_out[5][6] : port_out[0][5];
   logic ee_clk_d;
   initial for (int i = 0; i < 64; i++) ee[i] = 16'hffff;
   always_ff @(posedge clk) begin
@@ -404,6 +459,15 @@ module m2_ioz80 #(
       if (ee_ld[1]) ee_out <= {1'b0, ee_q};
       if (!ee_cs) begin
         ee_st <= EE_CMD; ee_nbits <= 4'd0; ee_sh <= 9'd0; ee_do <= 1'b1;
+      end else if (t2 && !ee_clk && ee_clk_d && ee_st == EE_READ) begin
+        // R839: the type-2 firmware reads the 93C46 the way MAME models it
+        // (eepromser.cpp, 93Cxx: output on the FALLING clock): the dummy 0
+        // as the address's last bit is taken, then D15 at the first falling
+        // edge. The type-1 path above (data on the rising edge) reads every
+        // word one bit late against that -- 0x7fff for 0xffff -- which this
+        // firmware stores; type 1's firmware is unaffected and left alone.
+        ee_do  <= ee_out[15];
+        ee_out <= {ee_out[15:0], 1'b1};   // and ones after D0, as MAME shifts in
       end else if (ee_clk && !ee_clk_d) begin
         case (ee_st)
           EE_CMD: begin
@@ -417,7 +481,8 @@ module m2_ioz80 #(
                 ee_addr <= {ee_sh[4:0], ee_di};
                 case (ee_sh[6:5])
                   2'b10: begin ee_st <= EE_READ;
-                               ee_ra <= {ee_sh[4:0], ee_di}; ee_ld <= 2'b01; end
+                               ee_ra <= {ee_sh[4:0], ee_di}; ee_ld <= 2'b01;
+                               if (t2) ee_do <= 1'b0; end   // R839: MAME's dummy 0, now
                   2'b01: begin ee_st <= EE_WRITE; ee_wcnt <= 5'd0; end
                   2'b11: begin if (ee_ewen) begin ee_we <= 1'b1; ee_wa <= {ee_sh[4:0], ee_di}; ee_wd <= 16'hffff; end
                                ee_st <= EE_DONE; end
@@ -427,7 +492,7 @@ module m2_ioz80 #(
               end
             end
           end
-          EE_READ: begin
+          EE_READ: if (!t2) begin
             ee_do  <= ee_out[16];
             ee_out <= {ee_out[15:0], 1'b0};
           end
@@ -518,10 +583,192 @@ module m2_ioz80 #(
     end
   end
 
+  // ------------------------------------------------------------ TYPE 2 (R839)
+  //
+  // What EPR-17181 was measured to touch (MAME 0.289, sim/io/mame_m2_vcop_io
+  // .lua: power-on, attract, a coin, a game with both guns, 300 s):
+  //
+  //   ROM    0x0000-0x31ff only (the image is 0xff from 0x3200; nothing above
+  //          0x3fff is ever read) -- so the type-1 board's 16 KB array holds
+  //          it, and 0x4000-0x7fff read 0xff as the EPROM does there.
+  //   RAM    0xf000-0xffff only; 0xe000-0xefff ("backup") never touched.
+  //   0x8000 the 315-5338A. PA/PB/PC are INPUTS (direction 0x07): IN0, IN1,
+  //          IN2. PD outputs (lamps / recoil), PE the LCD data, PF the EEPROM
+  //          and LCD strobes, PG the watchdog and the ADC bank switch.
+  //   0x8040 board: bit 6 = EEPROM DO, the rest jumpers and buttons, all off.
+  //   0x8080 DSW1 (Reloading, Enemy Character).
+  //   0x8100 the "FPGA": 5,120 writes (its bitstream, counted and dropped);
+  //          until 0x1400 of them every read is 0x80; then +0..+7 are the four
+  //          10-bit gun coordinates (P1Y, P1X, P2Y, P2X; low byte, high
+  //          byte) and +8 the off-screen bits, 0xfc | {P2, P1}.
+  //   0x8200 the MSM6253, mirrored at 0x8204: Virtua Cop binds no channel, so
+  //          every read is 0x01 (MAME: n 75,792 per address, value 01 always).
+  //   on-die: CTC channel 1 is the ONLY interrupt source: control 0xa5 (timer,
+  //          prescale 256, interrupts on), constant 0x26 = 38, vector base 0xe8
+  //          from channel 0, IM 2 with I = 0 -- 9.8304 MHz / 256 / 38 =
+  //          1,010.5 Hz, measured 1,010.5 / s at vector 0xea, and the handler
+  //          (0x0a05) is where the board does its work. Channel 2 is SIO A's
+  //          baud clock (no interrupt), SIO A / B are set up and never read,
+  //          the PIO's data ports read DSW2 / DSW3 (0xff), the TMPZ84C015
+  //          watchdog and daisy registers are written once. None of those is
+  //          modelled; IN from any port reads 0xff.
+  logic [7:0] t2_di;
+  generate if (!TYPE2) begin : g_no_t2
+    assign z_int_n = 1'b1;
+    assign t2_di   = 8'hff;
+  end else begin : g_t2
+    // -------------------------------------------------------- I/O writes
+    wire io_wr = !iorq_n && !wr_n;
+    logic io_wr_d;
+    logic [7:0] iw_a, iw_d;
+    always_ff @(posedge clk) if (io_wr) begin iw_a <= A[7:0]; iw_d <= dout; end
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) io_wr_d <= 1'b0; else io_wr_d <= io_wr;
+    wire io_stb = !io_wr && io_wr_d;     // trailing edge, as the memory writes
+
+    // -------------------------------------------------------- RETI
+    // The CTC watches the bus for ED 4D in two opcode fetches (M1 cycles).
+    wire fetch = !dbg_m1_n && !mreq_n && !rd_n;
+    logic fetch_d;
+    logic [7:0] f_op, f_prev;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin fetch_d <= 1'b0; f_op <= 8'h00; f_prev <= 8'h00; end
+      else begin
+        fetch_d <= fetch;
+        if (fetch) f_op <= di;
+        if (fetch_d && !fetch) f_prev <= f_op;
+      end
+    end
+    wire reti = fetch_d && !fetch && (f_prev == 8'hed) && (f_op == 8'h4d);
+
+    // -------------------------------------------------------- CTC channel 1
+    // Timer mode only (the firmware's 0xa5): the prescaler counts the CPU
+    // clock (cen), the down counter steps once per 16 or 256, and reaching
+    // zero reloads the constant and requests an interrupt. Interrupt under
+    // service (IUS) from the acknowledge to RETI, as the daisy chain holds
+    // it: the handler re-enables interrupts on its first instruction, and a
+    // request that lands inside it waits for the RETI.
+    wire inta = !dbg_m1_n && !iorq_n;
+    logic inta_d;
+    // tv80 takes the vector (TmpAddr <= dinst) at T2 of the acknowledge,
+    // when it has already lifted IORQ: hold it until M1 rises.
+    logic inta_hold;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) inta_hold <= 1'b0;
+      else if (inta) inta_hold <= 1'b1;
+      else if (dbg_m1_n) inta_hold <= 1'b0;
+    // The same for IN: tv80 latches the byte (di_reg) at the end of T2, after
+    // it has lifted IORQ and RD, so the port read is held until the next
+    // memory cycle -- otherwise IN returns the ROM byte at {A, port}.
+    logic iord_hold;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) iord_hold <= 1'b0;
+      else if (!iorq_n && !rd_n && dbg_m1_n) iord_hold <= 1'b1;
+      else if (!mreq_n) iord_hold <= 1'b0;
+    logic [4:0] vec_base;
+    logic       c_ie, c_p256, c_cmode, c_wtc, c_run, c_pend, c_ius;
+    logic [7:0] c_tc, c_cnt, c_pre;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin
+        inta_d <= 1'b0; vec_base <= 5'd0;
+        c_ie <= 1'b0; c_p256 <= 1'b0; c_cmode <= 1'b0; c_wtc <= 1'b0;
+        c_run <= 1'b0; c_pend <= 1'b0; c_ius <= 1'b0;
+        c_tc <= 8'd0; c_cnt <= 8'd0; c_pre <= 8'd0;
+      end else begin
+        inta_d <= inta;
+        if (inta && !inta_d) begin c_pend <= 1'b0; c_ius <= 1'b1; end
+        if (reti) c_ius <= 1'b0;
+        if (c_run && !c_cmode && cen) begin
+          if (c_pre == 8'd0) begin
+            c_pre <= c_p256 ? 8'd255 : 8'd15;
+            if (c_cnt == 8'd1) begin
+              c_cnt <= c_tc;                 // 0 = 256 counts
+              if (c_ie) c_pend <= 1'b1;
+            end else c_cnt <= c_cnt - 8'd1;
+          end else c_pre <= c_pre - 8'd1;
+        end
+        if (io_stb && iw_a == 8'h10 && !iw_d[0]) vec_base <= iw_d[7:3];
+        if (io_stb && iw_a == 8'h11) begin
+          if (c_wtc) begin
+            c_tc <= iw_d; c_cnt <= iw_d; c_wtc <= 1'b0; c_run <= 1'b1;
+            c_pre <= c_p256 ? 8'd255 : 8'd15;
+          end else if (iw_d[0]) begin
+            c_ie <= iw_d[7]; c_cmode <= iw_d[6]; c_p256 <= iw_d[5];
+            if (iw_d[2]) c_wtc <= 1'b1;
+            if (iw_d[1]) c_run <= 1'b0;
+            if (!iw_d[7]) c_pend <= 1'b0;
+          end
+        end
+      end
+    end
+    assign z_int_n = !(c_pend && !c_ius);
+    wire [7:0] vector = {vec_base, 2'b01, 1'b0};   // channel 1
+
+    // -------------------------------------------------------- the "FPGA"
+    logic [12:0] fpga_cnt;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) fpga_cnt <= 13'd0;
+      else if (wr_stb && aw_l[15:4] == 12'h810 && fpga_cnt != 13'h1400)
+        fpga_cnt <= fpga_cnt + 13'd1;
+    end
+    logic [7:0] fpga_q;
+    always_comb begin
+      fpga_q = 8'hff;
+      if (fpga_cnt != 13'h1400) fpga_q = 8'h80;
+      else case (A[3:0])
+        4'h0: fpga_q = gun_p1y[7:0];
+        4'h1: fpga_q = {6'd0, gun_p1y[9:8]};
+        4'h2: fpga_q = gun_p1x[7:0];
+        4'h3: fpga_q = {6'd0, gun_p1x[9:8]};
+        4'h4: fpga_q = gun_p2y[7:0];
+        4'h5: fpga_q = {6'd0, gun_p2y[9:8]};
+        4'h6: fpga_q = gun_p2x[7:0];
+        4'h7: fpga_q = {6'd0, gun_p2x[9:8]};
+        4'h8: fpga_q = {6'h3f, gun_off};
+        default: ;
+      endcase
+    end
+
+    // -------------------------------------------------------- 315-5338A
+    // Ports 0-6: an input when its direction bit is set, else the latch.
+    logic [7:0] pin, port_q;
+    always_comb begin
+      case (A[2:0])
+        3'd0: pin = in0;
+        3'd1: pin = in1;
+        3'd2: pin = in2;
+        default: pin = 8'hff;              // PD-PG: nothing drives them
+      endcase
+      port_q = dir_r[A[2:0]] ? pin : port_out[A[2:0]];
+    end
+
+    always_comb begin
+      t2_di = 8'hff;
+      if (inta || inta_hold)          t2_di = vector;                     // INTA
+      else if (!iorq_n || iord_hold)  t2_di = 8'hff;                      // IN
+      else if (!A[15])                t2_di = A[14] ? 8'hff : fw_q;
+      else if (A[15:13] == 3'b111)    t2_di = ram_q;
+      // Status (0x0d) is MAME's 0x08 with BUSY in bit 0. The type-1 path
+      // above returns {4'd0, 3'b001, busy} = 0x02 / 0x03 -- bit 3 CLEAR,
+      // against its own comment -- and EPR-17181 waits up to 32 polls for
+      // bit 3 on every DPRAM read (0x15bd), which ran its boot 2.7x slow and
+      // let the game's command 3 arrive before the board was listening.
+      // Type 1 is left as it is (Daytona must not move); see R839.
+      else if (io_sel)                t2_di = (!A[3] && A[2:0] != 3'd7) ? port_q
+                                            : (A[3:0] == 4'hd) ? {4'd0, 1'b1, 2'd0, dp_busy}
+                                            : io_q;
+      else if (A == 16'h8040)         t2_di = {1'b1, ee_do, 6'h3f};
+      else if (A == 16'h8080)         t2_di = dsw1;
+      else if (A[15:4] == 12'h810)    t2_di = fpga_q;
+      else if (A[15:3] == 13'h1040)   t2_di = 8'h01;   // MSM6253: no channel bound
+    end
+  end endgenerate
+
   // ------------------------------------------------------------ read mux
   always_comb begin
     di = 8'hff;
-    if      (A[15:14] == 2'b00) di = fw_q;                    // 0x0000-0x3fff
+    if      (t2)                 di = t2_di;                  // R839
+    else if (A[15:14] == 2'b00) di = fw_q;                    // 0x0000-0x3fff
     else if (A[15:13] == 3'b010) di = ram_q;                  // 0x4000-0x5fff
     else if (io_sel)             di = io_q;
     // d0_r returns the bit in position 0 with the unmapped bits reading as

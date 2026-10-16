@@ -71,7 +71,19 @@ module m2_texel_bl #(
   // halves on consecutive cycles. Texel trace of MAME's lists: SDRAM line
   // reads -24..-39% on top of R782's fold (bench: r57 30.8k -> 23.3k, rpk
   // 21.4k -> 13.1k). LW8 needs IB = 11 (the fold below).
-  parameter bit          LW8 = 1'b0
+  parameter bit          LW8 = 1'b0,
+  // R828: MIP LEVELS. The request is addressed as model2rd.ipp's
+  // fetch_bilinear_texel does at miplevel L, the level the span walk chose
+  // (m2_span_tex MIP): width and height >> L, origin ((x - 2048) >> L) & 2047
+  // and ((y - 1024) >> L) & 1023, sheet texsheet[L & 1] -- the halved copies
+  // the game keeps in the sheets beside each texture. The walk sends u and v
+  // already at the level, the sheet bit already flipped, and the mirror
+  // DECISIONS (tex[27] u, tex[28] v: the coordinate's bit at the level's
+  // width, which it can pick where its clock has room); tex[26:24] is L, for
+  // the width and the origin, which this module works out as the request
+  // enters K and registers -- every one of these on clk_mem's paths cost 2-3
+  // ns post-map when it was worked out where it is used. 0: none of it.
+  parameter bit          MIP = 1'b0
 ) (
   input  logic             clk,
   input  logic             rst_n,
@@ -133,26 +145,34 @@ module m2_texel_bl #(
     fold_x = (x2 >= 12'd1024) ? {x2[11:10] - 2'd1, x2[9:0]} : x2;
   endfunction
 
-  // texel coordinate (tu, tv inside the texture) to its place on the sheet
-  function automatic tx_t place(input logic [31:0] t, input logic [11:0] tu, input logic [11:0] tv);
+  // texel coordinate (tu, tv inside the texture) to its place on the sheet.
+  // R828: with MIP the origin (ox, oy) is the level's, worked out at K.
+  /* verilator lint_off UNUSEDSIGNAL */
+  function automatic tx_t place(input logic [31:0] t, input logic [10:0] ox, input logic [9:0] oy,
+                                input logic [11:0] tu, input logic [11:0] tv);
+  /* verilator lint_on UNUSEDSIGNAL */
     logic [11:0] x0, y0, x2, y2;
     logic [18:0] wa;
     tx_t r;
     begin
-      x0 = {1'b0, t[18:13], 5'd0} + tu;
-      y0 = {2'd0, t[23:19], 5'd0} + tv;
+      x0 = MIP ? ({1'b0, ox} + tu) : ({1'b0, t[18:13], 5'd0} + tu);
+      y0 = MIP ? ({2'd0, oy} + tv) : ({2'd0, t[23:19], 5'd0} + tv);
       x2 = fold_x(x0);
       y2 = (x0 >= 12'd1024) ? (y0 ^ 12'd1024) : y0;
       // THE WORD ADDRESS AS A SUM, as get_texel forms it: one fold can leave
       // x2 at 1024 or more, and (y2 / 2) * 512 + x2 / 2 then carries into the
       // next row pair -- which a line id cut from x2 alone would miss.
       wa = {y2[10:1], 9'd0} + {8'd0, x2[11:1]};
-      r.sheet = t[12];
+      r.sheet = t[12];   // R828: with MIP already texsheet[L & 1] (the walk flips it)
       r.rp    = wa[18:9];
       r.cg    = wa[8:2];
       r.wsel  = wa[1:0];
-      r.px    = x2[0];
-      r.py    = y2[0];
+      // R828: THE NIBBLE BY THE TEXEL'S PARITY IN THE TEXTURE, as get_texel
+      // takes it ((x & 1), (y & 1) of the texture coordinate), not the
+      // sheet's. The same at level 0, whose origin is a multiple of 32; from
+      // level 5 the origin can be odd and the two differ.
+      r.px    = MIP ? tu[0] : x2[0];
+      r.py    = MIP ? tv[0] : y2[0];
       place   = r;
     end
   endfunction
@@ -171,23 +191,29 @@ module m2_texel_bl #(
       axis_pre = m - 20'h80;
     end
   endfunction
+  // R828: the same with the mirror decided by the walk
+  function automatic logic [19:0] axis_pre_m(input logic [19:0] c, input logic flip);
+    axis_pre_m = (flip ? ~c : c) - 20'h80;
+  endfunction
   // Returns {i0, i1, frac(9)}.
-  function automatic logic [32:0] axis(input logic [19:0] a, input logic [2:0] code,
+  // R828: wm is the width less one -- (32 << code) - 1, or with MIP the
+  // level's, (32 << code >> L) - 1 (down to 1, a texture's 2x2 level), a
+  // mask worked out at K -- so w - 1 is wm and w - 2 is wm with bit 0 clear
+  function automatic logic [32:0] axis(input logic [19:0] a, input logic [11:0] wm,
                                        input logic wrap);
-    logic [11:0] w, i0, i1;
+    logic [11:0] i0, i1;
     logic [8:0]  f;
     begin
-      w  = 12'(32 << code);
       f  = {1'b0, a[7:0]};
-      i0 = a[19:8] & (w - 12'd1);
-      i1 = (i0 + 12'd1) & (w - 12'd1);
+      i0 = a[19:8] & wm;
+      i1 = (i0 + 12'd1) & wm;
       if (!wrap && i1 == 12'd0) begin
         // model2rd.ipp's edge clamp, EXACTLY: (0, 1) at weight 0 or (w-2, w-1)
         // at weight 0x100. Resolving it to one column is the same colour but
         // not the same translucency -- a transparent texel takes its
         // NEIGHBOUR's value first, and the neighbour is column 1 or w-2.
         if (f >= 9'h80) begin i0 = 12'd0;          i1 = 12'd1;          f = 9'd0;   end
-        else            begin i0 = w - 12'd2;      i1 = w - 12'd1;      f = 9'h100; end
+        else            begin i0 = {wm[11:1], 1'b0}; i1 = wm;           f = 9'h100; end
       end
       axis = {i0, i1, f};
     end
@@ -213,7 +239,10 @@ module m2_texel_bl #(
   // which is a few gates from D's registers, not on a compare.
 
   // ---- K and A
-  typedef struct packed { logic [31:0] tex; logic [19:0] u, v; logic bl; } k_t;   // u, v: axis_pre()
+  // R828: + the level's width and height less one (masks) and its origin
+  // (MIP; unread and dropped without it)
+  typedef struct packed { logic [31:0] tex; logic [19:0] u, v; logic bl;
+                          logic [11:0] wmx, wmy; logic [10:0] ox; logic [9:0] oy; } k_t;   // u, v: axis_pre()
   // model2_v.cpp: "disable smooth wrapping if mirroring is enabled".
   // poly_tex carries texwrapx (bit 7) but not texwrapy -- bit 8 is
   // translucent (R326) -- so v wraps unless mirrored (R620).
@@ -221,12 +250,25 @@ module m2_texel_bl #(
   k_t k_in;
   // R627: tex[31] set -- m2_raster3d's fill is running late -- point-samples
   // this request whatever the OSD says
-  assign k_in = {tex, axis_pre(u, tex[3:1], tex[9]), axis_pre(v, tex[6:4], tex[10]), bilinear && !tex[31]};
+  // R828: the level's origin. texx * 32 < 2048, so ((texx * 32 - 2048) >> L)
+  // & 2047 is the top L bits set ORed with (texx * 32) >> L; at L = 0 both
+  // masks are empty and this is the level-0 origin.
+  wire [2:0]  k_lv = MIP ? tex[26:24] : 3'd0;
+  wire [10:0] k_ox = (11'h7FF & ~(11'h7FF >> k_lv)) | ({tex[18:13], 5'd0} >> k_lv);
+  wire [9:0]  k_oy = (10'h3FF & ~(10'h3FF >> k_lv)) | ({tex[23:19], 5'd0} >> k_lv);
+  assign k_in = {tex,
+                 MIP ? axis_pre_m(u, tex[27]) : axis_pre(u, tex[3:1], tex[9]),
+                 MIP ? axis_pre_m(v, tex[28]) : axis_pre(v, tex[6:4], tex[10]),
+                 bilinear && !tex[31],
+                 12'((32 << tex[3:1]) >> k_lv) - 12'd1, 12'((32 << tex[6:4]) >> k_lv) - 12'd1,
+                 k_ox, k_oy};
   logic        k_v [2];
   k_t          k_d [2];
   logic        a_v;
   logic [31:0] a_tex;
   logic [32:0] a_ax, a_ay;   // axis(): {i0, i1, frac}
+  logic [10:0] a_ox;         // R828: the level's origin
+  logic [9:0]  a_oy;
   logic        a_bl;
 
   // ---- P
@@ -822,7 +864,7 @@ module m2_texel_bl #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       k_v[0] <= 1'b0; k_v[1] <= 1'b0; k_d[0] <= '0; k_d[1] <= '0;
-      a_v <= 1'b0; a_tex <= '0; a_ax <= '0; a_ay <= '0; a_bl <= 1'b0;
+      a_v <= 1'b0; a_tex <= '0; a_ax <= '0; a_ay <= '0; a_bl <= 1'b0; a_ox <= '0; a_oy <= '0;
       p_v <= 1'b0; p_uf <= '0; p_vf <= '0; p_tl <= 1'b0; p_bl <= 1'b0;
       for (int k = 0; k < 4; k++) begin p_tx[k] <= '0; b_tx[k] <= '0; end
       b_v <= 1'b0; b_done <= '0; b_ent <= '0; b_bank <= '0; b_eq <= '0;
@@ -881,18 +923,18 @@ module m2_texel_bl #(
       endcase
       // A: the axes
       if (k_pop) begin
-        a_v <= 1'b1; a_tex <= k_d[0].tex; a_bl <= k_d[0].bl;
-        a_ax <= axis(k_d[0].u, k_d[0].tex[3:1], k_d[0].tex[7] && !k_d[0].tex[9]);
-        a_ay <= axis(k_d[0].v, k_d[0].tex[6:4], !k_d[0].tex[10]);
+        a_v <= 1'b1; a_tex <= k_d[0].tex; a_bl <= k_d[0].bl; a_ox <= k_d[0].ox; a_oy <= k_d[0].oy;
+        a_ax <= axis(k_d[0].u, MIP ? k_d[0].wmx : 12'((32 << k_d[0].tex[3:1]) - 1), k_d[0].tex[7] && !k_d[0].tex[9]);
+        a_ay <= axis(k_d[0].v, MIP ? k_d[0].wmy : 12'((32 << k_d[0].tex[6:4]) - 1), !k_d[0].tex[10]);
       end else if (a_take) a_v <= 1'b0;
 
       // ---- P: the four texels placed
       if (a_take) begin
         p_v <= 1'b1;
-        p_tx[0] <= place(a_tex, a_ax[32:21], a_ay[32:21]);
-        p_tx[1] <= place(a_tex, a_ax[20:9],  a_ay[32:21]);
-        p_tx[2] <= place(a_tex, a_ax[32:21], a_ay[20:9]);
-        p_tx[3] <= place(a_tex, a_ax[20:9],  a_ay[20:9]);
+        p_tx[0] <= place(a_tex, a_ox, a_oy, a_ax[32:21], a_ay[32:21]);
+        p_tx[1] <= place(a_tex, a_ox, a_oy, a_ax[20:9],  a_ay[32:21]);
+        p_tx[2] <= place(a_tex, a_ox, a_oy, a_ax[32:21], a_ay[20:9]);
+        p_tx[3] <= place(a_tex, a_ox, a_oy, a_ax[20:9],  a_ay[20:9]);
         p_uf <= a_ax[8:0]; p_vf <= a_ay[8:0]; p_tl <= a_tex[8]; p_bl <= a_bl;
       end else if (p_take) p_v <= 1'b0;
 

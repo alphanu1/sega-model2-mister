@@ -55,7 +55,11 @@ module m2_boot_harness #(
   // this the desk served every "next dword" from a flat array and could not
   // show the row-edge fault.
   parameter bit          PAIR_EN         = 1'b0,
-  parameter int unsigned RD_LAT_SEL      = 3      // REAL_MEM only: the controller's read-capture selector (-G friendly)
+  parameter int unsigned RD_LAT_SEL      = 3,     // REAL_MEM only: the controller's read-capture selector (-G friendly)
+  // R839: Virtua Cop (game ID 1) as Model2.sv builds it: the type-2 I/O
+  // board (EPR-17181 in M2_IOFW), the i960's VC forms, and the program's
+  // second half at word 0x1880000 (tb_m2_boot copies it there under M2_VCOP).
+  parameter bit          VCOP            = 1'b0
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -552,8 +556,8 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top u_cpu (
-    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold),
+  i960_top #(.VC(VCOP)) u_cpu (
+    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(irq),
@@ -642,7 +646,7 @@ module m2_boot_harness #(
     // The top level's own bases for a game image (Model2.sv GAME_*), so the
     // address arithmetic under test is the arithmetic that runs on the board.
     .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
-    .prog_ext(1'b0), .base_progx('0),   // R726
+    .prog_ext(VCOP), .base_progx(AW'(32'h1880000)),   // R726 / R839
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     // R257: THE SAME BUFFER BASE THE WALKER USES. This said 0x16d0000 while
     // the geometrizer below says 0x16f0000, so at the desk the CPU wrote the
@@ -700,8 +704,10 @@ module m2_boot_harness #(
   logic [10:0] zio_addr;
   logic  [7:0] zio_wdata, zio_rdata;
 
-  m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(50)) u_ioz80 (
+  m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(50), .TYPE2(VCOP), .T2_SCALE(625), .T2_NUM(6144)) u_ioz80 (
     .clk(clk_m), .rst_n(rst_n & fw_ready),
+    .type2(VCOP),
+    .gun_p1x(10'h17c), .gun_p1y(10'h0e6), .gun_p2x(10'h179), .gun_p2y(10'h0e8), .gun_off(2'b00),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
     .in0(cab_in0), .in1(8'h8f), .in2(8'hff), .dp_busy(dp_busy_s),
     // The board's own DIP banks. Daytona defines all 24 bits PORT_DIPUNUSED

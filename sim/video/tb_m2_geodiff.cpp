@@ -126,6 +126,11 @@ static void ra_tick(int ra, int lat, int occ) {
 
 static bool wr_pend = false; static uint32_t wr_a; static uint16_t wr_d;
 static long nq = 0; static FILE *fo = nullptr;
+static bool g_hang = false;   // R836
+// R836: engine reads outside what a Desert Tank image fills: polygon ROM at or
+// past 8 MB (dword 0x200000), texture ROM in its second pair (word 0x400000
+// and up in MAME's region, tha/tpa bit 22)
+static long g_poly_hi = 0, g_tex_hi = 0;
 
 static void tick() {
 #ifdef GD_RA
@@ -194,6 +199,8 @@ static void tick() {
       else if (PC >= 3) lat_left = ra_read(g_ra[PC == 3 ? (d->mem_space & 3) : 0], dw, LAT, OCC);
       else { if (!hit) ++g_porttrips; lat_left = hit ? 0 : LAT; }
       ++g_memreqs;
+      if (d->mem_space == 0 && (d->obj_oba_r & 0x1800000) == 0x800000 && (d->mem_addr & 0x3fffff) >= 0x200000) ++g_poly_hi;   // R836
+      if (d->mem_space == 1 && !(d->mem_addr & 0x800000) && (d->mem_addr & 0x100000)) ++g_tex_hi;                              // R836
       // R696: which memory, which engine state, and whether this exact word was read before in this list
       const int est = d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
       g_rd_by[(d->mem_space << 8) | est]++;
@@ -213,13 +220,13 @@ static void tick() {
   else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & ((1u << 25) - 1); wr_d = d->sd_wr_din; wr_pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
   if (d->q_valid && d->q_ready) {
-    std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x\n",
+    std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x mz=%u\n",
       nq++, (int16_t)d->q_x0, (int16_t)d->q_y0, (int16_t)d->q_x1, (int16_t)d->q_y1,
       (int16_t)d->q_x2, (int16_t)d->q_y2, (int16_t)d->q_x3, (int16_t)d->q_y3, (unsigned)d->q_frac,
       (unsigned)d->q_u0, (unsigned)d->q_v0, (unsigned)d->q_u1, (unsigned)d->q_v1,
       (unsigned)d->q_u2, (unsigned)d->q_v2, (unsigned)d->q_u3, (unsigned)d->q_v3,
       (unsigned)d->q_tex, (unsigned)d->q_col, (unsigned)d->q_z, (unsigned)d->q_lum,
-      (unsigned)d->q_oz0, (unsigned)d->q_oz1, (unsigned)d->q_oz2, (unsigned)d->q_oz3);
+      (unsigned)d->q_oz0, (unsigned)d->q_oz1, (unsigned)d->q_oz2, (unsigned)d->q_oz3, (unsigned)d->q_mipz);   // R828c
   }
 }
 
@@ -268,9 +275,38 @@ int main(int argc, char **argv) {
   const bool prof = std::getenv("M2GD_PROF") != nullptr;
   std::map<int,long> h_eng, h_q, h_k, h_eq; long t_last = 0;
   std::map<int,long> s_eng, s_q, s_k, s_eq;   // snapshots at the last quad
+  // R848: M2GD_POOLHASH=1 -- every cycle's FP pool traffic hashed: each
+  // client's request, grant and response, and the operands the pool took,
+  // and the engine's memory request with its address and space. Two
+  // builds with the same hash put the same operation on the same unit in the
+  // same cycle for the whole walk, which is what "cycle-identical" means for a
+  // change to how a request or a grant is formed.
+  const bool phash = std::getenv("M2GD_POOLHASH") != nullptr;
+  uint64_t ph = 1469598103934665603ULL; long pops = 0;
+  auto pmix = [&](uint64_t v) { for (int i = 0; i < 8; i++) { ph ^= (v >> (8 * i)) & 0xff; ph *= 1099511628211ULL; } };
   for (t = 0; t < 400000000L; t++) {
     const long before = nq;
     tick();
+    if (phash) {
+      auto *r = d->rootp;
+      const uint64_t rg =
+          (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__mul_req
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__mul_gnt << 4
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__mul_rsp << 8
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__add_req << 12
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__add_gnt << 16
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__add_rsp << 20
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__div_req << 24
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__div_gnt << 28
+        | (uint64_t)r->geodiff_top__DOT__u_geometry__DOT__div_rsp << 32;
+      pmix(rg);
+      pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__mul_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__mul_b_q);
+      pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__add_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__add_b_q);
+      pmix((uint64_t)r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__div_a_q << 32 | r->geodiff_top__DOT__u_geometry__DOT__u_pool__DOT__div_b_q);
+      if (rg & 0x0f0f0f0fULL) pops++;
+      // and the engine's memory port: the address and space while it requests
+      pmix(d->mem_req ? ((1ULL << 40) | ((uint64_t)d->mem_space << 24) | d->mem_addr) : 0);
+    }
     if (prof) {
       auto *r = d->rootp;
       const int es = r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
@@ -299,9 +335,25 @@ int main(int argc, char **argv) {
       }
     }
     if (d->walk_frames >= 1) { quiet = (nq == before) ? quiet + 1 : 0; if (quiet > 200000) break; }
+    // R836: A WALK THAT NEVER ENDS IS THE FINDING, not a long run. M2GD_HANG
+    // cycles (default 50 M, ~0.6 s at 80 MHz) with no walk end: report where
+    // the walk, the engine, the projector and the clipper are sitting, and stop.
+    static const long HANG = std::getenv("M2GD_HANG") ? std::atol(std::getenv("M2GD_HANG")) : 50000000L;
+    if (d->walk_frames < 1 && t >= HANG) {
+      auto *r = d->rootp;
+      std::printf("HANG %s: no walk end in %ld cycles -- walk state %d ip %05x ops %u objs %u | engine st %d | projector %d | clipper %d | quads %ld\n",
+        dp, t, (int)r->geodiff_top__DOT__u_geo__DOT__wst, (unsigned)r->geodiff_top__DOT__u_geo__DOT__w_ip,
+        (unsigned)r->geodiff_top__DOT__u_geo__DOT__w_ops, (unsigned)d->walk_objs,
+        (int)r->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st,
+        (int)r->geodiff_top__DOT__u_geometry__DOT__qst,
+        (int)r->geodiff_top__DOT__u_geometry__DOT__u_clip__DOT__kst, nq);
+      g_hang = true;
+      break;
+    }
   }
   std::fclose(fo); if (fh) std::fclose(fh);
   std::printf("geodiff %s: start %05x, %ld cycles, %ld engine memory reads\n", dp, start, t, g_memreqs);
+  if (phash) std::printf("  pool hash %016llx over %ld cycles (%ld with a request)\n", (unsigned long long)ph, t, pops);
   if (std::getenv("M2GD_RDS")) {
     static const char *SP[4] = {"polygon", "texture", "palette", "xlat"};
     std::printf("  port trips %ld (M2GD_PC=%s)\n", g_porttrips, std::getenv("M2GD_PC") ? std::getenv("M2GD_PC") : "0");
@@ -341,6 +393,7 @@ int main(int argc, char **argv) {
     d->walk_ops, d->walk_objs, d->walk_frames, d->walk_unknown, d->mtx_n, d->foc_n, d->lit_n, d->tp_n);
   std::printf("  geometry: polys %u objects %u culled %u clip in %u out %u dropped %u nonfinite %u behind %u | quads %ld\n",
     d->polys, d->objects, d->culled, d->clip_in, d->clip_out, d->clip_dropped, d->n_nonfinite, d->behind, nq);
+  std::printf("  R836: engine reads of polygon ROM >= 8 MB %ld, of texture ROM pair two %ld%s\n", g_poly_hi, g_tex_hi, g_hang ? " | HANG" : "");
   delete d;
-  return 0;
+  return g_hang ? 2 : 0;
 }

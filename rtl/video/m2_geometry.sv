@@ -59,7 +59,22 @@
 
 `timescale 1ns/1ps
 
-module m2_geometry (
+module m2_geometry #(
+  // R828c: THE GAME'S OWN LEVEL, AS A PER-POLYGON "NO MIP" FLAG (q_mipz).
+  // MAME's level is (-texlod + log2 z^2) >> 7 with texlod = 128 log2(coef *
+  // |dotp| * lod) (model2_v.cpp, model2rd.ipp; log RAM holds 128 log2 of the
+  // mantissa, verified in Daytona's dumps), and Daytona sets lod = 128 and
+  // every coef = 1.0 -- so the game's level is floor(2 log2 z - log2 |dotp|
+  // - 7): the major axis of a footprint whose texel density is the same for
+  // every object. Close, densely textured objects (the player's car) sit
+  // 4-6 levels under 0; this core's edge footprint (R828) mips them. When
+  // the game's level at the polygon's FAR end (z = the largest vertex z,
+  // where it is highest) is at most -MIPZ_B, the polygon is drawn at level 0
+  // (m2_raster_fill). The logs are the IEEE exponent and a 16-entry table on
+  // four mantissa bits, in sixteenths of a level. 0: q_mipz is 0, pruned.
+  parameter bit MIPZ   = 1'b0,
+  parameter int MIPZ_B = 3
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -122,6 +137,7 @@ module m2_geometry (
   // inverse ramp its decals use; m2_raster3d takes it in q_tex[11].
   output logic        q_tlinv,
   output logic  [7:0] q_lum,
+  output logic        q_mipz,          // R828c: the game's level stays <= -MIPZ_B: no mip
   // R626: each vertex's quarter pixel below q_x/q_y, {fy3,fx3,...,fy0,fx0}.
   // For the texture plane fit only (m2_geo_project says why).
   output logic [15:0] q_frac,
@@ -181,6 +197,7 @@ module m2_geometry (
   logic  [1:0] poly_zmode;          // R246: the engine's per-polygon z mode
   logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3;   // R268
   logic [31:0] poly_tex;                                 // R271
+  logic [11:0] poly_dotp;                                // R828c: |normal . point|, exp + 4 bits
 
   logic [4:0] eng_dbg_st;   // R719: telemetry
   m2_geo_engine u_engine (
@@ -191,7 +208,7 @@ module m2_geometry (
     // R268: the per-vertex texture coordinates, read beside the header
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1),
     .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
-    .poly_tex(poly_tex),
+    .poly_tex(poly_tex), .poly_dotp(poly_dotp),            // R828c
     .clk(clk), .rst_n(rst_n),
     .start(start), .oba(oba), .obc(obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
@@ -610,6 +627,29 @@ module m2_geometry (
 
   logic [31:0] hu [4], hv [4];
   logic [31:0] ptex;  logic [7:0] plum;
+  // R828c: the polygon's |dotp| (latched with it) and its no-mip flag, set in
+  // Q_CHK from hzmax and handed to the clipper with the texture state.
+  logic [11:0] pdotp;
+  logic        pmipz;
+  function automatic logic [3:0] lg16(input logic [3:0] j);   // round(16 log2(1 + j/16))
+    case (j)
+      4'd0: lg16 = 4'd0;   4'd1: lg16 = 4'd1;   4'd2: lg16 = 4'd3;   4'd3: lg16 = 4'd4;
+      4'd4: lg16 = 4'd5;   4'd5: lg16 = 4'd6;   4'd6: lg16 = 4'd7;   4'd7: lg16 = 4'd8;
+      4'd8: lg16 = 4'd9;   4'd9: lg16 = 4'd10;  4'd10: lg16 = 4'd11; 4'd11: lg16 = 4'd12;
+      4'd12: lg16 = 4'd13; 4'd13: lg16 = 4'd14; default: lg16 = 4'd15;
+    endcase
+  endfunction
+  // 16 log2 of each, less 16 x 127 (the bias cancels to a constant below):
+  // level16 = 2 lz - ld - 2144, and the flag is level16 < 16 (1 - MIPZ_B).
+  wire  [12:0] mz_lz  = {1'b0, hzmax[30:23], 4'd0} + {9'd0, lg16(hzmax[22:19])};
+  wire  [12:0] mz_ld  = {1'b0, pdotp[11:4], 4'd0}  + {9'd0, lg16(pdotp[3:0])};
+  // Unsigned (no signed casts, R662): 2 lz < ld + T, T = 2144 + 16 (1 - B).
+  localparam logic [14:0] MZ_T = 15'(2160 - 16 * MIPZ_B);
+  wire  [14:0] mz_a = {1'b0, mz_lz, 1'b0};
+  wire  [14:0] mz_b = {2'b00, mz_ld} + MZ_T;
+  // |dotp| 0 (or denormal) is MAME's deepest level, so no flag -- and none
+  // here either: ld is then 0 and 2 lz < T needs z < 2^-61. No guard needed.
+  wire         mz_flag = MIPZ && (mz_a < mz_b);
   logic        c_bad;                      // R566: the non-finite test, registered
   logic [1:0]  c_zmode;                    // R578
   // R578: THE z PICK AND "BEHIND THE EYE" FROM THE REGISTERED MIN AND MAX. At 70
@@ -626,7 +666,7 @@ module m2_geometry (
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
-      ptex <= 32'd0; plum <= 8'd0;
+      ptex <= 32'd0; plum <= 8'd0; pdotp <= 12'd0; pmipz <= 1'b0;   // R828c
       c_bad <= 1'b0; c_zmode <= 2'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
@@ -671,6 +711,7 @@ module m2_geometry (
           hu[3] <= u2f(poly_uv3[15:0]); hv[3] <= u2f(poly_uv3[31:16]);
           pcol  <= poly_col;                       // R222
           ptex  <= poly_tex; plum <= dbg_lum;      // R271: the lighting luminance
+          pdotp <= poly_dotp;                      // R828c
           c_bad    <= poly_bad;
           c_zmode  <= poly_zmode;          // R578: picked in Q_CHK, from hzmin/hzmax
           qst      <= Q_MM;                // R589
@@ -690,6 +731,7 @@ module m2_geometry (
           // R246: the reference sets raster->polygon_z BEFORE it culls, so a
           // culled polygon still decides what a later "old value" reads.
           zprev <= c_zsel;
+          pmipz <= mz_flag;                        // R828c: hzmax is the polygon's, since Q_MM2
           if (c_bad || c_behind) begin      // R578: c_zsel / c_behind are wires on hzmin/hzmax
             if (c_bad) dbg_nonfinite <= dbg_nonfinite + 16'd1;
             else       dbg_behind    <= dbg_behind + 16'd1;
@@ -965,6 +1007,7 @@ module m2_geometry (
     .in_u2(hu[2]), .in_v2(hv[2]), .in_u3(hu[3]), .in_v3(hv[3]),
     .in_col(pcol), .in_z({16'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
     .in_tex(ptex), .in_lum(plum),                            // R271
+    .in_mipz(pmipz), .out_mipz(q_mipz),                      // R828c
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),
     .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res),
     .add_req(add_req[2]), .add_a(add_a[2]), .add_b(add_b[2]), .add_sub(add_sub[2]),

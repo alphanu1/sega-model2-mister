@@ -241,6 +241,7 @@ struct Dut {
     d->in_x0 = 0; d->in_y0 = 0; d->in_x1 = 0; d->in_y1 = 0;
     d->in_x2 = 0; d->in_y2 = 0; d->in_x3 = 0; d->in_y3 = 0;
     d->in_col = 0; d->in_moire = 0;
+    d->mip_mode = 3;   // R828a: the OSD's proposed default, Sharp
     d->eval();
     for (int i = 0; i < 4; i++) tick();
     d->rst_n = 1;
@@ -686,6 +687,184 @@ static void test_judder(Vm2_raster_fill* d) {
   d->in_tex = 0;
 }
 
+#ifdef TB_MIP
+// R828: THE QUAD'S MIP BIAS, span_mipk, against the formula worked out here
+// from the quad as presented (not from the RTL's registers): for each edge
+// (0,1), (1,2), (2,3), (3,0) whose ends both have a usable 1/z,
+//   K_e = lq(|du| OR |dv|) - lq(|dx| OR |dy|) + lo_a + lo_b + 120,
+// magnitudes as one's complements, lq(v) = 4 msb(v) + the two bits below,
+// lo = 4 (14 - (emax - e)) + m[7:6].
+// R828a: K = max - ((max - min) >> s) by the OSD's mip_mode (1: R828, the
+// max; 2: s = 2; 3: s = 1), or -512 with no usable edge or mode 0 (Off). Random quads, a fifth of them triangles (a
+// corner repeated: an edge of length zero), a third with a vertex 9 to 23
+// octaves deeper than the nearest (16 or more: no usable 1/z), and 1/z
+// exponents over a 40-octave range; every mode. EVERY span of
+// every quad is checked, first one quad at a time, then back to back (the
+// next quad presented the cycle the last is taken), where a K that settles
+// late or leaks from the quad before would show.
+static int lq_m(uint32_t v) {
+  int m = 31 - __builtin_clz(v);
+  int f = m >= 2 ? int((v >> (m - 2)) & 3) : int((v << (2 - m)) & 3);
+  return 4 * m + f;
+}
+struct MipQuad { int32_t X[4], Y[4]; uint32_t U[4], V[4]; uint16_t MF[4]; int mode, K, Kmax, Kmin; uint32_t tex = 1; int mz = 0; };   // R828c: mz, the geometry's flag
+static const bool MIP_CLASS = getenv("M2_MIP_CLASS") != nullptr;   // R828b: only the class quads (a diagnostic)
+static void mip_gen(long n, std::mt19937 &rng, MipQuad &q) {
+  const int ebase = 100 + int(rng() % 40);
+  for (int i = 0; i < 4; i++) {
+    q.X[i] = int32_t(rng() % 700) - 100; q.Y[i] = int32_t(rng() % 500) - 60;
+    q.U[i] = rng() % 8192; q.V[i] = rng() % 8192;
+    q.MF[i] = uint16_t(((ebase + int(rng() % 6)) << 8) | (rng() & 0xff));
+  }
+  if (n % 4 == 1) { for (int i = 0; i < 4; i++) { q.U[i] = (q.U[0] + rng() % 64) & 8191; q.V[i] = (q.V[0] + rng() % 64) & 8191; } }   // small, magnified
+  if (n % 7 == 3) { for (int i = 0; i < 4; i++) { q.Y[i] = 200 + int32_t(rng() % 40); } q.Y[2] = q.Y[3] = 383; }   // a road: flat and deep
+  if ((n % 5) == 0) { q.X[3] = q.X[2]; q.Y[3] = q.Y[2]; q.U[3] = q.U[2]; q.V[3] = q.V[2]; q.MF[3] = q.MF[2]; }
+  if ((n % 3) == 0) q.MF[rng() & 3] = uint16_t((ebase - 9 - int(rng() % 10)) << 8 | (rng() & 0xff));   // 9..23 octaves deeper: around the 16 limit
+  if ((n % 13) == 0) q.MF[rng() & 3] = 0;                // 1/z of zero
+  // R828b: THE CLASS s1068 DREW WHITE, as m2_geometry presents it (MAME
+  // 0.289 M2MIP dumps, u/v in quarter-texels after the R609 rebase): a far
+  // panel of the wooden fence (f2000 poly 507, 64x256 translucent, 2 px wide
+  // and 7 tall for 64 x 256 texels -- level 5 by the footprint) and the
+  // car's window frame (f5000 poly 130, 64x128 translucent). Their K is the
+  // fill's as for any quad; m2_span_tex holds such textures at level 1.
+  if (MIP_CLASS || (n % 11) == 5) {
+    static const int32_t FX[2][4] = {{160, 160, 162, 162}, {225, 228, 267, 270}};
+    static const int32_t FY[2][4] = {{195, 188, 189, 195}, {266, 222, 222, 266}};
+    static const uint32_t FU[2][4] = {{256, 0, 0, 256}, {256, 0, 0, 256}};
+    static const uint32_t FV[2][4] = {{0, 0, 1024, 1024}, {128, 128, 384, 384}};
+    static const uint16_t FM[2][4] = {{0x78b2, 0x78b2, 0x788a, 0x7889}, {0x7db7, 0x7d69, 0x7d69, 0x7db7}};
+    const int c = int((n / 11) & 1);
+    for (int i = 0; i < 4; i++) { q.X[i] = FX[c][i]; q.Y[i] = FY[c][i]; q.U[i] = FU[c][i]; q.V[i] = FV[c][i]; q.MF[i] = FM[c][i]; }
+    q.tex = c ? (1u | (1u << 1) | (2u << 4) | (1u << 8) | (1u << 12) | (16u << 13))
+              : (1u | (1u << 1) | (3u << 4) | (1u << 8) | (1u << 12) | (28u << 13) | (8u << 19));
+  } else q.tex = 1;
+  // R828b: THE WIDEST EDGE SPREAD THE FILL CAN MAKE -- a sliver with one edge
+  // of 8,191 quarter-texels over one pixel at the nearest 1/z (edge K ~289)
+  // and one of a quarter-texel over 600 pixels 15 octaves deeper (76):
+  // Sharp's and Medium's max - (max - min) >> s must still be <= the max and
+  // >= the min (a 10-bit wrap would make the 'sharper' level the deepest).
+  if ((n % 17) == 8) {
+    const int e = 100 + int(rng() % 40);
+    const int32_t X[4] = {0, 1, 600, 0}, Y[4] = {0, 0, 300, 299};
+    const uint32_t U[4] = {0, 8191, 8190, 8190}, V[4] = {0, 0, 1, 2};
+    const uint16_t M[4] = {uint16_t(e << 8 | 0xff), uint16_t(e << 8 | 0xff), uint16_t((e - 15) << 8), uint16_t((e - 15) << 8)};
+    for (int i = 0; i < 4; i++) { q.X[i] = X[i]; q.Y[i] = Y[i]; q.U[i] = U[i]; q.V[i] = V[i]; q.MF[i] = M[i]; }
+  }
+  // R828c: THE GEOMETRY'S NO-MIP FLAG (in_mipz). A sixth of the quads at
+  // random, and ALWAYS the window frame above: it is the player's car's rear
+  // window (s1082 on the board), which m2_geometry flags -- MAME's own level
+  // there is -5 (the geodiff replay agrees on every such polygon). Flagged,
+  // the quad's spans carry no level (-512) whatever the rule.
+  q.mz = ((n % 6) == 2) || ((MIP_CLASS || (n % 11) == 5) && ((n / 11) & 1)) ? 1 : 0;
+  // the OSD: Off an eighth of the time, the three rules alike otherwise
+  const int r = int(rng() % 8);
+  q.mode = r == 0 ? 0 : 1 + int(r % 3);
+  // the model
+  int emax = 0;
+  for (int i = 0; i < 4; i++) emax = std::max(emax, int(q.MF[i] >> 8));
+  int Kx = -512, Kn = 100000;
+  for (int i = 0; i < 4; i++) {
+    const int j = (i + 1) & 3;
+    const int ea = q.MF[i] >> 8, eb = q.MF[j] >> 8, da = emax - ea, db = emax - eb;
+    if (ea == 0 || eb == 0 || da >= 16 || db >= 16) continue;
+    const int la = 56 - 4 * da + ((q.MF[i] >> 6) & 3), lb = 56 - 4 * db + ((q.MF[j] >> 6) & 3);
+    auto oc = [](int v) { return v < 0 ? ~v : v; };
+    const uint32_t dt = uint32_t(oc(int(q.U[j]) - int(q.U[i])) | oc(int(q.V[j]) - int(q.V[i]))) & 0x1fff;
+    const uint32_t ds = uint32_t(oc(q.X[j] - q.X[i]) | oc(q.Y[j] - q.Y[i])) & 0x7fff;
+    if (!dt || !ds) continue;
+    const int ke = lq_m(dt) - lq_m(ds) + la + lb + 120;
+    Kx = std::max(Kx, ke); Kn = std::min(Kn, ke);
+  }
+  q.Kmax = Kx; q.Kmin = Kn;
+  q.K = (q.mode == 0 || Kx == -512 || q.mz) ? -512 : q.mode == 3 ? Kx - ((Kx - Kn) >> 1) : q.mode == 2 ? Kx - ((Kx - Kn) >> 2) : Kx;
+}
+static void mip_present(Vm2_raster_fill* d, const MipQuad &q) {
+  d->in_x0 = q.X[0]; d->in_y0 = q.Y[0]; d->in_x1 = q.X[1]; d->in_y1 = q.Y[1];
+  d->in_x2 = q.X[2]; d->in_y2 = q.Y[2]; d->in_x3 = q.X[3]; d->in_y3 = q.Y[3];
+  d->in_u0 = q.U[0]; d->in_v0 = q.V[0]; d->in_u1 = q.U[1]; d->in_v1 = q.V[1];
+  d->in_u2 = q.U[2]; d->in_v2 = q.V[2]; d->in_u3 = q.U[3]; d->in_v3 = q.V[3];
+  d->in_oz0 = q.MF[0]; d->in_oz1 = q.MF[1]; d->in_oz2 = q.MF[2]; d->in_oz3 = q.MF[3];
+  d->in_frac = 0; d->in_col = 0xffffff; d->in_moire = 0; d->in_tex = q.tex;   // R828b: the class's header
+  d->in_mipz = q.mz;                                                          // R828c
+}
+static void test_mip(Vm2_raster_fill* d, std::mt19937 &rng) {
+  printf("test: R828/R828a, the quad's mip bias (the edge K's max, less 0, 1/4 or 1/2 of the spread)\n");
+  auto tickf = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
+  const long N = getenv("M2_MIP_N") ? atol(getenv("M2_MIP_N")) : 4000;
+  d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
+  long seen = 0, spans = 0, bad = 0, none = 0, off = 0, differs = 0, cls = 0, bad_rng = 0, spread_max = 0;   // R828b
+  long mzq = 0, mz_win = 0;                                                                                   // R828c
+  auto check = [&](long n, const MipQuad &q, bool &got) {
+    if (!(d->span_valid && d->span_ready && d->span_tex_en)) return;
+    ++spans;
+    if (!got) { got = true; ++seen; if (q.Kmax == -512) ++none; if (!q.mode) ++off; if (q.K != q.Kmax && q.mode && !q.mz) ++differs; if (q.tex != 1) ++cls;
+                if (q.mz && q.mode && q.Kmax != -512) { ++mzq; if (q.tex != 1) ++mz_win; } }   // R828c: flagged, would have had a level
+    const int k = int(int16_t(uint16_t(d->span_mipk) << 6) >> 6);
+    if (k != q.K) { if (bad++ < 6) printf("  FAIL R828a quad %ld: span_mipk %d want %d (max %d, mode %d)\n", n, k, q.K, q.Kmax, q.mode); }
+    // R828b: whatever the formula says, the RTL's K for Medium / Sharp lies in
+    // [the edge min, the edge max], and the spread fits (s1068: rails white)
+    if (q.mode >= 2 && q.Kmax != -512 && !q.mz) {
+      spread_max = std::max(spread_max, long(q.Kmax - q.Kmin));
+      if (k > q.Kmax || k < q.Kmin) { if (bad_rng++ < 6) printf("  FAIL R828b quad %ld: span_mipk %d outside [%d, %d] (mode %d)\n", n, k, q.Kmin, q.Kmax, q.mode); }
+    }
+  };
+  // one at a time
+  for (long n = 0; n < N; n++) {
+    MipQuad q; mip_gen(n, rng, q);
+    mip_present(d, q); d->mip_mode = q.mode;
+    d->in_valid = 1; d->span_ready = 1; d->eval();
+    bool acc = false, ret = false, got = false; int quiet = 0; long g = 0;
+    for (;;) {
+      d->eval();
+      check(n, q, got);
+      if (d->quad_done && acc) ret = true;
+      if (d->in_ready && d->in_valid) acc = true;
+      const bool drained = ret && !d->span_valid && ++quiet >= 2;
+      tickf();
+      if (acc) { d->in_valid = 0; d->eval(); }
+      if (drained) break;
+      if (++g > 400000) { printf("  FAIL R828 quad %ld timeout\n", n); ++bad; break; }
+    }
+    d->in_valid = 0; d->eval();
+    for (int k = 0; k < 4; k++) tickf();
+  }
+  // back to back: the next quad (and its OSD setting) goes up the cycle the last is taken
+  {
+    MipQuad cur, nxt; long ncur = -1; bool got = false;
+    mip_gen(N, rng, nxt); mip_present(d, nxt);
+    d->in_valid = 1; d->span_ready = 1;
+    long n = 0, g = 0, quiet = 0;
+    for (;;) {
+      d->eval();
+      if (ncur >= 0) check(ncur, cur, got);
+      const bool take = d->in_ready && d->in_valid;
+      tickf();
+      if (take) {
+        cur = nxt; ncur = N + n; got = false;
+        d->mip_mode = cur.mode;
+        if (++n < N) { mip_gen(N + n, rng, nxt); mip_present(d, nxt); } else d->in_valid = 0;
+        d->eval();
+      }
+      if (n >= N && !d->span_valid && d->in_ready) { if (++quiet > 40) break; } else quiet = 0;
+      if (++g > 400000L * 40) { printf("  FAIL R828a back to back: timeout\n"); ++bad; break; }
+    }
+    d->in_valid = 0; d->eval();
+  }
+  printf("  R828a: %ld quads x 2, %ld textured with a span (%ld no usable edge, %ld Off, %ld K != the max), %ld spans checked, %ld wrong\n",
+         N, seen, none, off, differs, spans, bad);
+  printf("  R828b: %ld of them the fence / window-frame quads; widest edge spread %ld (10-bit K: wraps past 511); K outside [min, max]: %ld\n", cls, spread_max, bad_rng);
+  printf("  R828c: %ld flagged quads that would otherwise carry a level (%ld of them the player's rear-window frame): K -512 on every span\n", mzq, mz_win);
+  if (mzq < N / 20 || mz_win < N / 60) { printf("  FAIL R828c: the flag barely exercised (%ld, %ld)\n", mzq, mz_win); ++tex_fails; }
+  tex_fails += bad_rng;
+  if (spread_max < 200) { printf("  FAIL R828b: the widest spread was not reached (%ld)\n", spread_max); ++tex_fails; }
+  if (cls < N / 20) { printf("  FAIL R828b: the class quads barely drew (%ld)\n", cls); ++tex_fails; }
+  tex_checks += spans + 1; tex_fails += bad;
+  if (seen < N / 2) { printf("  FAIL R828: only %ld quads drew\n", seen); ++tex_fails; }
+  if (!MIP_CLASS && differs < seen / 3) { printf("  FAIL R828a: the mean and bias barely exercised (%ld)\n", differs); ++tex_fails; }
+  d->in_tex = 0; d->mip_mode = 3;
+}
+#endif
+
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   std::mt19937 rng(20260815u);
@@ -1057,6 +1236,9 @@ int main(int argc, char** argv) {
 
   test_plane(dut.d);
   test_judder(dut.d);   // R791
+#ifdef TB_MIP
+  test_mip(dut.d, rng);   // R828
+#endif
   checks += tex_checks; fails += tex_fails;
 
   printf("m2_raster_fill: checks=%ld fails=%ld spans=%ld lines=%ld empty=%ld\n",

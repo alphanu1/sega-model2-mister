@@ -23,6 +23,11 @@
 #   tools/rom_csum.py <mra> <zipdir> --region N      one 2 MB region, as the OSD
 #   tools/rom_csum.py <mra> <zipdir> --scan          every region, for bisecting
 #
+# --out FILE writes the built image (ROM-derived: keep it outside the tree).
+#
+# Parts are found as MiSTer finds them: by crc first, then by name. Inline
+# parts (<part>02 00</part>) and repeat="N" are expanded (R306, R835).
+#
 # --zip NAME.zip adds a zip to the search, repeatable. A MiSTer MRA names the
 # MERGED set it expects on the target ("daytona93.zip"), but a local MAME romset
 # is usually SPLIT, with the shared parts in the parent ("daytona.zip"). The MRA
@@ -41,7 +46,7 @@
 # whatever it holds. --scan marks those regions rather than printing a number
 # that invites a comparison it cannot support.
 
-import sys, os, zipfile
+import sys, os, zipfile, zlib
 import xml.etree.ElementTree as ET
 
 def build_image(mra_path, zip_dir, extra=()):
@@ -63,11 +68,41 @@ def build_image(mra_path, zip_dir, extra=()):
             p = os.path.join(zip_dir, n.strip())
             if os.path.exists(p):
                 zips.append(zipfile.ZipFile(p))
-        def read(nm):
+        # BY CRC FIRST, THEN BY NAME -- MiSTer's FileOpenZip order. A part's
+        # crc is its identity; the name is only which socket it sat in, and
+        # Desert Tank's sets disagree about two of them (rom-layout.md). A
+        # crc that is given and matches nothing is an error, not a fallback:
+        # the board would load the named file, and that is the wrong ROM.
+        # offset / length select a slice of the file, as mra_loader does
+        # (R725's Revision A MRA splits one polygon pair across two places).
+        def read(p):
+            d = read_whole(p)
+            off = int(p.get('offset', '0'), 0)
+            ln = p.get('length')
+            return d[off:off + int(ln, 0)] if ln else d[off:]
+        def read_whole(p):
+            nm, crc = p.get('name'), p.get('crc')
+            if crc:
+                want = int(crc, 16)
+                for z in zips:
+                    for zi in z.infolist():
+                        if zi.CRC == want:
+                            return z.read(zi)
             for z in zips:
-                try: return z.read(nm)
+                try: data = z.read(nm)
                 except KeyError: continue
+                if crc and (zlib.crc32(data) & 0xffffffff) != int(crc, 16):
+                    raise SystemExit(f"{nm}: crc {zlib.crc32(data):08x}, MRA says {crc}")
+                return data
             raise SystemExit(f"missing from zips: {nm}")
+        # R835: <part repeat="N">hex</part> -- inline bytes, N times, as
+        # MiSTer's mra_loader expands them. R306: this walk used to skip
+        # every part without a name, so padding was invisible to it.
+        def inline(p):
+            hx = ''.join((p.text or '').split())
+            if len(hx) % 2:
+                raise SystemExit(f"odd-length inline part {hx!r}")
+            return bytes.fromhex(hx) * int(p.get('repeat', '1'), 0)
         for ch in rom:
             if ch.tag == 'interleave':
                 # `output` IS NOT ALWAYS 32, and assuming it was is what made
@@ -78,7 +113,7 @@ def build_image(mra_path, zip_dir, extra=()):
                 # sat 256 KB late in the reconstruction while the board had it
                 # in the right place. The board was right. See study R39.
                 ow    = int(ch.get('output', '32')) // 8   # output bytes/group
-                parts = [read(p.get('name')) for p in ch]
+                parts = [read(p) for p in ch]
                 maps  = [p.get('map') for p in ch]
                 for mp in maps:
                     if len(mp) != ow:
@@ -102,7 +137,9 @@ def build_image(mra_path, zip_dir, extra=()):
                             if src < len(part): word[oi] = part[src]
                     out += word
             elif ch.tag == 'part' and ch.get('name'):
-                out += read(ch.get('name'))
+                out += read(ch) * int(ch.get('repeat', '1'), 0)
+            elif ch.tag == 'part':
+                out += inline(ch)
     return bytes(out)
 
 def fold(img, start_word, n_words):
@@ -145,17 +182,25 @@ if __name__ == '__main__':
         raise SystemExit(__doc__)
     mra, zdir = sys.argv[1], sys.argv[2]
     argv, extra = sys.argv[3:], []
+    out_path = None
     rest = []
     i = 0
     while i < len(argv):
         if argv[i] == '--zip':
             extra.append(argv[i+1]); i += 2
+        elif argv[i] == '--out':
+            out_path = argv[i+1]; i += 2
         else:
             rest.append(argv[i]); i += 1
     img = build_image(mra, zdir, extra)
     nwords = len(img) // 2
     print(f"  image      : 0x{len(img):X} bytes ({len(img)/1048576:.2f} MB)")
     print(f"  last word  : 0x{nwords - 1:X}")
+    if out_path:
+        # The built index-0 image, for an independent check. ROM-derived:
+        # write it outside the repository.
+        with open(out_path, 'wb') as f: f.write(img)
+        print(f"  written    : {out_path}")
 
     if rest and rest[0] == '--scan':
         print(f"  {'rgn':>3}  {'first word':>10}  {'expected':>8}")

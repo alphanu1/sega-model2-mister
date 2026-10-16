@@ -88,6 +88,8 @@ static uint32_t tcolN(uint32_t col, int t) { return tcol(col, t * 0x11, false, 0
 static std::vector<Out> got;
 static bool rec_issue = false;                 // R791: record every fetch's u
 static std::vector<uint32_t> issued_u;
+struct Iss { uint32_t u, v, tex; };            // R828: and its v and texture word
+static std::vector<Iss> issued;
 
 // The texel the fetch returns: a function of the coordinate, so a wrong step
 // shows up as a wrong colour.
@@ -153,7 +155,7 @@ static void tick(bool stall = false) {
     long at = ticks_done + lat;
     if (!tq.empty() && tq.back().ready_at > at) at = tq.back().ready_at;
     tq.push_back({iu, iv, at, itex});
-    if (rec_issue) issued_u.push_back(iu);
+    if (rec_issue) { issued_u.push_back(iu); issued.push_back({iu, iv, itex}); }
   }
 }
 
@@ -161,6 +163,9 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vm2_span_tex;
   d->rst_n = 0; d->in_valid = 0; d->out_ready = 1; d->tx_ack = 0;
+  // R828: no mip level unless a test asks for one (-512: the quad had no edge),
+  // so with MIP built every other test must see the walk exactly as before
+  d->in_mipk = 0x200;
   // R650: the step is a run-time input now; drive it to the value under test
   d->pxk = (STEP == 8) ? 3 : (STEP == 4) ? 2 : (STEP == 2) ? 1 : 0;
   for (int i = 0; i < 4; ++i) tick();
@@ -982,6 +987,152 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 400 && d->busy; ++i) tick();
     ck("R813: a span taken at once is not held for the check", culls, 0);
     for (int k = 0; k < 4; ++k) d->mk_valid[k] = 0;
+  }
+#endif
+
+#ifdef TB_MIP
+  // R828: THE MIP LEVEL OF EVERY FETCH, against the formula worked out here
+  // (R828a: with K as the fill's three rules make it on some spans):
+  //   L = clamp((K - 2 lq(ooz)) >> 2, 0, min(log2 min(w, h) - 1, 7)),
+  //   lq(v) = 4 * msb(v) + the two bits below it,
+  // with ooz the group's 1/z as the issue pointer walks it (in_ooz, then
+  // + (doozdx << 8) << pxk a group), and the coordinate at that level: the
+  // exact quotient V * 2^29 / ooz >> L, within one 1/256-texel step (2f's
+  // tolerance). Spans back to back, so the two parameter slots alternate --
+  // a level taken from the wrong span's K is a wrong level. Random K (every
+  // level, both clamps, and -512), random sizes, depths and slopes.
+  {
+    std::printf("test: R828, the mip level and the coordinate at it\n");
+    uint32_t rng = 0x31415u;
+    auto roll = [&](uint32_t n) { rng = rng * 1664525u + 1013904223u; return (rng >> 8) % n; };
+    const long NS = std::getenv("M2_MIP_N") ? atol(std::getenv("M2_MIP_N")) : 3000;
+    const int UVS = 18 - TB_UZF;
+    auto lq = [](uint32_t v) { int m = 31 - __builtin_clz(v); int f = m >= 2 ? int((v >> (m - 2)) & 3) : int((v << (2 - m)) & 3); return 4 * m + f; };
+    struct M { int x0, x1, K; int64_t V, G, O, DO; uint32_t tex; };
+    std::vector<M> sp;
+    long want_n = 0;
+    for (long i = 0; i < NS; ++i) {
+      M q;
+      q.x0 = 4 + int(roll(200)); q.x1 = q.x0 + int(roll(60));
+      const int wc = int(roll(8)), hc = int(roll(8));
+      q.tex = 1u | (uint32_t(wc) << 1) | (uint32_t(hc) << 4) | (uint32_t(roll(64)) << 13) | (uint32_t(roll(32)) << 19)
+            | (uint32_t(roll(2)) << 9) | (uint32_t(roll(2)) << 10) | (uint32_t(roll(2)) << 12)    // mirrors, sheet
+            | (uint32_t(roll(2)) << 8);                                                           // R828b: translucent
+      // 1/z from 2^23 to 2^31 (the fill puts the quad's nearest at 2^30), falling
+      // or rising along the span but staying positive; K is drawn wide enough
+      // that every level and both clamps still occur
+      q.O  = int64_t(1) << (23 + roll(8)); q.O += int64_t(roll(uint32_t(q.O)));
+      if (q.O > 0x7fff0000) q.O = 0x7fff0000;
+      q.DO = int64_t(roll(2001)) - 1000;                 // the 24-bit gradient, small
+      q.V  = int64_t(roll(uint32_t(q.O)));               // (u/z) * 2^18: u = V/O * 4096 texels at most
+      q.G  = int64_t(roll(4000));
+      const int k4 = int(roll(9));                       // K across the whole range
+      q.K = (k4 == 0) ? -512 : int(roll(600)) - 200;
+      // R828a: some spans carry a K as the fill now makes it from an edge
+      // max and min, each in [49, 301]: the max (Smooth, R828), or the max
+      // less a quarter (Medium) or a half (Sharp) of the spread
+      if (k4 >= 5) { const int a = 49 + int(roll(253)), b = 49 + int(roll(253)), mx = std::max(a, b), mn = std::min(a, b);
+                     q.K = k4 == 5 ? mx : k4 == 6 ? mx - ((mx - mn) >> 2) : mx - ((mx - mn) >> 1); }
+      sp.push_back(q);
+      want_n += (q.x1 - q.x0) / STEP + 1;
+    }
+    // R828b: THE TEXTURE CLASS s1068 DREW WHITE. Daytona's wooden fence,
+    // 64x256 translucent at (896, 256) sheet 1, and the car's window frame,
+    // 64x128 translucent at (512, 0), seen far enough off that the footprint
+    // asks for level 3..7 (K 200..300 at 1/z 2^23..2^24); and the same
+    // sizes opaque. Their 4- and 2-texel levels are solid (study R828b), so
+    // the walk must stop at the level whose smaller side is 32 (translucent)
+    // or 16 (opaque): level 1 and level 2 here, whatever K asks.
+    const long n_class0 = long(sp.size());
+    for (int i = 0; i < 400; ++i) {
+      M q;
+      q.x0 = 4 + int(roll(200)); q.x1 = q.x0 + 8 + int(roll(40));
+      const bool fence = roll(2), tr = (i & 1) == 0;
+      q.tex = 1u | (1u << 1) | ((fence ? 3u : 2u) << 4) | (fence ? (28u << 13) | (8u << 19) : (16u << 13))
+            | (1u << 12) | (tr ? (1u << 8) : 0u);
+      q.O  = (int64_t(1) << 23) + int64_t(roll(1u << 23));
+      q.DO = int64_t(roll(201)) - 100;
+      q.V  = int64_t(roll(uint32_t(q.O)));
+      q.G  = int64_t(roll(4000));
+      q.K  = 200 + int(roll(101));
+      sp.push_back(q);
+      want_n += (q.x1 - q.x0) / STEP + 1;
+    }
+    issued.clear(); issued_u.clear(); rec_issue = true; got.clear(); force_texel = 0x8;
+    size_t next = 0;
+    for (long guard = 0; guard < 400 * NS + 10000; ++guard) {
+      if (next < sp.size()) {
+        const M &q = sp[next];
+        d->in_valid = 1; d->in_y = 20; d->in_x0 = q.x0; d->in_x1 = q.x1;
+        d->in_col = 0x404040; d->in_moire = 0;
+        d->in_u = uint32_t(q.V); d->in_v = uint32_t(q.V + 12345); d->in_dudx = uint32_t(q.G) & 0xffffffu; d->in_dvdx = uint32_t(q.G) & 0xffffffu;
+        d->in_ooz = uint32_t(q.O); d->in_doozdx = uint32_t(q.DO) & 0xffffffu;
+        d->in_tex = q.tex; d->in_tex_en = 1; d->in_mipk = uint32_t(q.K) & 0x3ffu;
+      } else d->in_valid = 0;
+      d->out_ready = 1; d->eval();
+      tick();
+      if (last_in_taken) ++next;
+      if (next >= sp.size() && long(issued.size()) >= want_n && !d->busy) break;
+    }
+    d->in_valid = 0; d->in_mipk = 0x200; rec_issue = false; force_texel = -1;
+    ck("R828: one fetch per group", long(issued.size()), want_n);
+    long bad_l = 0, bad_u = 0, bad_t = 0, bad_q = 0, n = 0, lv[8] = {0};
+    long cls_n = 0, cls_capped = 0, cls_bad = 0;   // R828b
+    size_t k = 0;
+    for (const M &q : sp) {
+      const int g = (q.x1 - q.x0) / STEP + 1;
+      // R828b: the deepest level -- smaller side 32 texels translucent, 16 opaque
+      const int mc = int(std::min((q.tex >> 1) & 7u, (q.tex >> 4) & 7u));
+      const int ml = ((q.tex >> 8) & 1u) ? mc : std::min(mc + 1, 7);
+      const bool cls = long(&q - &sp[0]) >= n_class0;
+      for (int j = 0; j < g && k < issued.size(); ++j, ++k) {
+        const int64_t O = q.O + ((q.DO << 8) * STEP) * j;
+        const int64_t Vj = q.V + ((q.G << (UVS - 8)) * STEP) * j;
+        const int L4 = q.K - 2 * lq(uint32_t(O));
+        const int L = (L4 < 0) ? 0 : std::min(L4 >> 2, ml);
+        const Iss &is = issued[k];
+        ++n; ++lv[L];
+        if (cls) { ++cls_n; if (L4 >= 4 * (ml + 1)) ++cls_capped; }
+        if (int((is.tex >> 24) & 7) != L) { if (cls) ++cls_bad; if (bad_l++ < 5) std::printf("  FAIL level: span K=%d ooz=%lld tex %06x got %u want %d\n", q.K, (long long)O, q.tex, (is.tex >> 24) & 7, L); }
+        {   // the word as m2_texel_bl takes it: sheet ^ (L & 1), the mirror decisions at the level's width
+          const uint32_t bu = 13 + ((q.tex >> 1) & 7) - L, bv = 13 + ((q.tex >> 4) & 7) - L;
+          const uint32_t fu = ((q.tex >> 9) & 1) && bu < 20 && ((is.u >> bu) & 1);
+          const uint32_t fv = ((q.tex >> 10) & 1) && bv < 20 && ((is.v >> bv) & 1);
+          const uint32_t want_t = (q.tex ^ (uint32_t(L & 1) << 12)) | (uint32_t(L) << 24) | (fu << 27) | (fv << 28);
+          if (is.tex != want_t) { if (bad_t++ < 5) std::printf("  FAIL word: got %08x want %08x\n", is.tex, want_t); }
+        }
+        // the divide's own arithmetic (R339/R433: the 128-entry seed, one
+        // Newton step) -- its error against the exact quotient is 2f's
+        // business; here the question is the level's shift on top of it
+        const uint32_t Ou = uint32_t(O);
+        const int e = 31 - __builtin_clz(Ou);
+        const uint64_t m = (e >= 23) ? (uint64_t(Ou) >> (e - 23)) : (uint64_t(Ou) << (23 - e));
+        const uint64_t r = (uint64_t(1) << 47) / (uint64_t(128 + ((m >> 16) & 127)) << 16);
+        const uint64_t nd = ((uint64_t(1) << 48) - m * r) >> 24;
+        const uint64_t r1 = ((r * (nd & 0xffffffffu)) >> 23) & 0x1ffffff;
+        const int sh = (e < 23) ? 18 : e - 5;
+        const uint64_t pu = uint64_t(Vj) * r1;
+        const uint64_t q0 = pu >> (sh + L);
+        const uint32_t want = (q0 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q0 >> 10) & 0xfffff);
+        const uint32_t mask = (1u << (20 - L)) - 1;
+        if (((is.u ^ want) & mask) != 0) { if (bad_u++ < 5) std::printf("  FAIL u at L%d: got %05x want %05x\n", L, is.u, want); }
+        // and the divide is still the quotient, to its 2f tolerance scaled
+        // (where the divide normalises: 1/z at 2^23 or more)
+        const int64_t ex = (((Vj << 29) / O) >> 10) >> L;
+        if (O >= (int64_t(1) << 23) && std::llabs((int64_t(want) & mask) - (ex & mask)) > 2 + (ex >> 12)) { if (bad_q++ < 5) std::printf("  FAIL quotient at L%d: %05x vs exact %05llx (O %llx V %llx)\n", L, want, (long long)ex, (long long)O, (long long)Vj); }
+      }
+    }
+    ck("R828: every fetch's level", bad_l, 0);
+    ck("R828: every fetch's coordinate, at its level", bad_u, 0);
+    ck("R828: every fetch's texture word", bad_t, 0);
+    ck("R828: and the coordinate is the quotient at the level", bad_q, 0);
+    std::printf("  R828: %ld fetches, by level:", n);
+    for (int i = 0; i < 8; ++i) std::printf(" %ld", lv[i]);
+    std::printf("\n");
+    ck("R828: every level visited", long(std::count_if(lv, lv + 8, [](long c) { return c > 0; })), 8);
+    std::printf("  R828b: fence / window-frame class: %ld fetches, %ld held at the cap\n", cls_n, cls_capped);
+    ck("R828b: the class's fetches mostly ask past the cap", cls_capped * 2 > cls_n, 1);
+    ck("R828b: and none goes past it", cls_bad, 0);
   }
 #endif
 
