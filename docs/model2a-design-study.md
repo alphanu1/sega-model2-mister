@@ -36133,3 +36133,18 @@ with the same instructions (the fetch-wait difference is in the same
 >= 42% (Y, I, K on s1160 say). Levers not yet measured: the TGP's latency
 (~20% of the foreground waits on it), the i960's data path under
 contention.
+
+**R854 on the board: s1160 (the 2A telemetry build), VF2, 120 s each.**
+                                         attract           fight
+  vblanks with no flip ("GAME behind")   47.7%             49.5%  (29.1 fps)
+  DRAW / WALK behind                     0 / 0             0 / 0
+  i960 instruction-fetch wait            37.1%             38.5%  of 695,410 cycles a vblank
+  i960 data-access wait                  40.3%             39.6%
+    of which TGP holds / geometry push   9.6% / 5.3%       10.1% / 5.7%
+  instructions retired a vblank          57,127 (CPI 12.2) 53,929 (CPI 12.9)
+  TGP instructions a vblank (median)     29,714            34,924
+The 3D and the walk never hold the game; the i960 waits on memory for ~78%
+of every vblank, about evenly instruction fetch and data access, the TGP only
+~10%. So the fix is the i960's memory path for VF2's code and data, not the
+TGP or the renderer. The decoder printed no Y ("frame work") line -- to be
+checked. Captures: session scratch vf2why/ (not committed).
