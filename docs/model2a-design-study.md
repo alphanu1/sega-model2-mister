@@ -36040,3 +36040,11 @@ board.
      ALMs with fx68k against 4,593 freed.
   3. The non-finite polygons above; EEPROM persistence through the NVRAM
      path if a 2A game needs it; Virtua Cop 2 (the 315-5649's serial guns).
+
+**s1150-s1152 = 3467328 (the first 2A build: VF2, silent).** s1150 closes on
+EVERY clock, HDMI included -- the first build of this project to do so:
+clk_sys +0.656, clk_mem +0.801, clk_i960 +1.962, HDMI +0.122, holds >=
++0.173; 35,775 ALM (85%), M10K 485/553, DSP 86/112. s1151 closes the core
+clocks (HDMI -0.030); s1152 crashed (Internal Error, STA). RBF
+build/Model2A_20261016_s1150_vf2.rbf (on the SD card as Model2A.rbf, the
+name the VF2 MRAs ask for). Not yet on the board.
