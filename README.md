@@ -3,25 +3,32 @@
 
 # Sega Model 2 for MiSTer
 
-An FPGA recreation of Sega's Model 2 arcade board, the original Model 2 that
-Daytona USA runs on, for [MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/)
-on the DE10-Nano (Cyclone V `5CSEBA6U23I7`).
+An FPGA recreation of Sega's original Model 2 arcade board for
+[MiSTer](https://mister-devel.github.io/MkDocs_MiSTer/) on the DE10-Nano
+(Cyclone V `5CSEBA6U23I7`).
 
-**Daytona USA runs at the arcade's speed**, both the Deluxe '93 set and the
-1994 Revision A: textured, lit 3D over the 2D layers, full sound, 57 frames a
-second in attract and in races. It's still a beta, and the list of what's left
-is below.
+**It runs all three original Model 2 games, from one core:**
+
+- **Daytona USA**, both the Deluxe '93 set and the 1994 Revision A, at the
+  arcade's speed: textured, lit 3D over the 2D layers, full sound, 57 frames
+  a second in attract and in races.
+- **Desert Tank**, with its cannon on the right stick and forward/reverse on
+  the triggers.
+- **Virtua Cop**, with its own I/O board and light-gun input from an analog
+  stick or a mouse, so USB light guns work too.
+
+It's still a beta, and the list of what's left is below.
 
 **To play it, go to [`releases/`](releases/).** That has the core, the MRAs,
 and a README covering the ROMs you need, the settings and the controls.
 
-**Only the original Model 2 for now.** The later boards (Model 2A-CRX, 2B-CRX
-and 2C-CRX) use different hardware, and each will need its own branch with
-those parts swapped in. Virtua Cop needs a different I/O board (light guns),
-so it will be a separate core for the same reason. Desert Tank uses Daytona's
-I/O board and runs on this core with its own MRA (work in progress).
-`mra/` also has a Virtua Cop MRA that loads its ROMs but doesn't run yet, and
-a 2D tilemap test pattern.
+**Only the original Model 2.** The later boards (Model 2A-CRX, 2B-CRX and
+2C-CRX) use different hardware: new sound, new I/O and, for 2B and 2C, a
+different geometry processor. 2A would need its own branch with those parts
+swapped in; 2B and 2C are documented in the design study but not planned.
+Everything added here for one game, like Virtua Cop's I/O board and its
+guns, sits behind a compile-time switch so a later branch can leave it out.
+`mra/` also has a 2D tilemap test pattern.
 
 ## Where it stands
 
@@ -32,15 +39,20 @@ a 2D tilemap test pattern.
 | **3D** | Display-list walker, geometry (transform, lighting, clipping, projection), and a textured, mip-mapped rasteriser drawing front to back into a DDR3 framebuffer. A frame is only shown once it's complete. |
 | **2D tilemap** | Pixel-exact against MAME. A four-line buffer ring stops it dropping scanlines on busy screens. |
 | **Sound board** | Its own 68000 (fx68k), the YM3438 (jt12), and both MultiPCM sample chips on one shared engine. Levels match MAME's to within about a dB. |
-| **I/O board** | The real Z80 program running on the real board design, shared with the Model 1 core. |
+| **I/O boards** | Both of the original Model 2's: Daytona's and Desert Tank's (shared with the Model 1 core), and Virtua Cop's type 2, each running its real Z80 firmware. The MRA's game ID picks which. |
+| **Light guns** | Two players, from an analog stick or a mouse, the way MiSTer delivers USB guns. Crosshairs at 24 and 15 kHz. |
 | **SDRAM** | Thirteen ports, 64 MB, read timing fixed (not calibrated) since it was proven there's only one right setting. |
-| **Speed** | 57 of 57.5 frames a second in attract and in a race, 99% of frames on time. The main CPU sets the pace now, not the 3D. |
-| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs at 15.1, 15.4 or 15.7 kHz, with MRAs that start straight in 15 kHz. |
+| **Speed** | Daytona: 57 of 57.5 frames a second in attract and in a race, 99% of frames on time. Desert Tank and Virtua Cop: 29, which is their own rate (they draw every other frame). |
+| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs at 15.7 (default), 15.4 or 15.1 kHz, with MRAs that start straight in 15 kHz. |
 
 ### What's left
 
-- **Confirmation from CRT and wheel owners**, and long runs of the Deluxe '93
-  set.
+- **Confirmation from CRT, wheel and light-gun owners**, and long runs of
+  the Deluxe '93 set.
+- **More Virtua Cop testing**, past its first stage, and an option for its
+  country setting (it starts in Japanese, as MAME does).
+- **CRT light guns** (GunCon on the SNAC port), documented in the study but
+  not built.
 - **MiSTer's audio filter** is switched off to save space (see Building). It
   comes back once everything else is in, if there's room.
 
@@ -59,7 +71,7 @@ phase was held to.
 | **P4** | TGP coprocessor | Done. |
 | **P5** | Sound | Done. |
 | **P2** | 3D renderer | Done. |
-| **P3** | Does it fit? | Yes, but only just: 98 to 99% of the FPGA. Recent savings freed a little room for what's left. |
+| **P3** | Does it fit? | Yes, but only just: 99% of the FPGA with all three games, and every core clock meets timing. |
 | **P6** | Integration | Released as a beta, running at the arcade's speed. |
 
 They're listed in the order they were finished. The coprocessor and the sound
@@ -77,8 +89,8 @@ make release                          # packages the .rbf and .mra, and refuses 
 tools/seed-sweep.sh 3 1000            # fit three seeds at once and report which closed
 ```
 
-The design fills 98 to 99% of the chip, so whether a build meets timing comes
-down to the fitter seed, and it's normal for some seeds to miss. Every
+The design fills 99% of the chip, so whether a build meets timing comes down
+to the fitter seed, and it's normal for some seeds to miss. Every
 release is a seed that meets every core clock, tested on the board. If you
 build it yourself and get a black screen, try a different `SEED` in
 `Model2.qsf` before suspecting anything else.

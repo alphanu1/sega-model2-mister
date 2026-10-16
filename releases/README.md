@@ -4,14 +4,16 @@
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261014.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261016.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
-| `Daytona USA (Revision A) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT |
-| `Daytona USA (Deluxe 93) [15kHz CRT].mra` | `/media/fat/_Arcade/` — starts in 15 kHz, for a CRT |
+| `Desert Tank.mra` | `/media/fat/_Arcade/` |
+| `Virtua Cop (Revision A).mra` | `/media/fat/_Arcade/` |
+| the four `[15kHz CRT]` versions of those | `/media/fat/_Arcade/` — each starts in 15 kHz, for a CRT |
 
-There's only ever one core here. Older builds are in this repository's git
-history if you need one.
+There's only ever one core here, and it runs all three games: the MRA you
+pick tells it which. Older builds are in this repository's git history if
+you need one.
 
 You supply the ROMs. They go in `/media/fat/games/mame/`, named the way the
 MRA expects. Nothing in this folder contains ROM data.
@@ -22,18 +24,23 @@ MRA expects. Nothing in this folder contains ROM data.
 |---|---|
 | `daytona.zip` | Daytona USA (Revision A), MAME's `daytona` set |
 | `daytona93.zip` | Daytona USA (Deluxe '93). With a split set you also need `daytona.zip` next to it, because the two share files. A merged `daytona.zip` on its own works too. |
-| `model1io.zip`, or inside the game's zip | the I/O board's Z80 ROM, `epr-14869c.25` |
+| `desert.zip` | Desert Tank, MAME's `desert` set. Older sets name two of the polygon ROMs `.21` / `.20` instead of `.20` / `.21`; either works. |
+| `vcopa.zip` | Virtua Cop (Revision A), MAME's `vcopa` set |
+| `model1io.zip`, or a Daytona zip | Daytona's and Desert Tank's I/O board ROM, `epr-14869c.25` |
 
-The I/O board ROM is looked for in `model1io.zip` and in the game's own zip,
-so it will be found wherever your set keeps it. Without it you get no
-controls at all: the game reads coins, start and steering through the I/O
-board, so a missing `epr-14869c.25` looks like a machine that runs and
-ignores you.
+Daytona and Desert Tank use the same I/O board, and its ROM is looked for in
+`model1io.zip` and in the Daytona zips, so it will be found wherever your set
+keeps it (`desert.zip` doesn't carry it). Without it you get no controls at
+all: the game reads coins, start and steering through the I/O board, so a
+missing `epr-14869c.25` looks like a machine that runs and ignores you.
+
+Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
+`vcopa.zip` (or `model1io2.zip`).
 
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261014.rbf` has the md5 `52cb1d3199ceeb7db7cdeff65ebf6944`.
+**Check you're running the right file.** `Model2_20261016.rbf` has the md5 `644e28fa0dee02c90d4b2d93c2d99fbd`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -44,24 +51,37 @@ DE10-Nano's own DDR3, so nothing else is needed for that.
 
 ## What works
 
-Daytona USA runs at the arcade's speed, with textured, lit 3D over the 2D
-layers and full sound. Both versions, Revision A and Deluxe '93, are
-supported.
+Three games run on one core: **Daytona USA** (Revision A and Deluxe '93),
+**Desert Tank** and **Virtua Cop**.
 
-| | frames a second (the arcade runs at 57.5) |
+| | frames a second |
 |---|---|
-| Attract mode | 57 |
-| A race | 57 — 99% of frames on time, with no slowdown seen in testing |
+| Daytona USA, attract and races | 57 of the arcade's 57.5, 99% of frames on time |
+| Desert Tank | 29 — the game draws every other frame, as it does on the arcade board |
+| Virtua Cop | 29 — the same |
 
 The whole arcade board is in the FPGA: the i960 main CPU, the TGP geometry
 coprocessor running the game's own microcode, the geometrizer, a hardware 3D
 renderer drawing front to back like the real board, the 2D tile layers, the
-I/O board, and the sound board with its own 68000, YM3438 and MultiPCM sample
-chips. The 3D goes into a framebuffer and is only shown when a frame is
-finished, so there's no tearing.
+I/O boards, and the sound board with its own 68000, YM3438 and MultiPCM
+sample chips. The 3D goes into a framebuffer and is only shown when a frame
+is finished, so there's no tearing.
+
+Daytona has had the most play by far. Desert Tank has been played through
+its missions with no lock in an 87-minute run. Virtua Cop is the newest:
+it boots, plays, and takes light-gun input, but expect rough edges, and
+please report what you find.
 
 ## New in this release
 
+- **Desert Tank.** Its own MRA, on the same core. Left stick steers, the
+  right stick aims the cannon, and the triggers drive forward and reverse.
+  See Controls.
+- **Virtua Cop.** Its own I/O board is now built into the core, and the main
+  CPU gained the maths instructions the game needs. Aim with an analog stick
+  or a mouse, so USB light guns that report as either (Sinden, GUN4IR and
+  others) work too. Two players, a crosshair each, and reload by shooting
+  off-screen. See Controls.
 - **Mip-mapping.** Distant textures used to shimmer and crawl as you drove,
   because they were always read at full size, however far away they were.
   Now they're read from smaller, pre-filtered versions as they recede, as
@@ -133,9 +153,14 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Steering` | how much stick gives full lock: `3/4` (default), `Full`, `5/4` or `Half` |
 | `Steering smoothing` | `Off` (default), `Light` or `Wheel` — see above |
 | `Right stick` | `Pedals only` (default), or `Pedals+steer`: left/right steers as well, for a wheel |
+| `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
+| `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
+| `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
 ## Controls
+
+### Daytona USA
 
 | | |
 |---|---|
@@ -161,6 +186,39 @@ steering on left/right and the pedals on up/down. Set `Right stick` to
 steering feels too light or too heavy, try the `Steering` settings. I'd love
 to hear from wheel owners: this has been built to how MiSTer maps wheels, but
 not yet tried on one.
+
+### Desert Tank
+
+| | |
+|---|---|
+| Steer the tank | left stick, the d-pad's left/right, or a wheel |
+| Aim the cannon up / down | right stick up / down (level when you let go); the d-pad's up/down nudges it and it stays put |
+| Drive forward / reverse | the `Forward` and `Reverse` buttons — put them on your triggers |
+| Machine gun, cannon | `Machine Gun`, `Cannon` |
+| Views | `VR1 Blue`, `VR2 Green`, `VR3 Red` |
+| Shift | flips the forward/reverse lever by hand (Forward and Reverse set it for you) |
+
+The MRA renames the buttons, so MiSTer's define-buttons screen asks for these
+names. With `Right stick: Pedals+steer` (a wheel), the wheel steers, the
+pedal axis drives forward or back, and the d-pad aims.
+
+### Virtua Cop
+
+| | |
+|---|---|
+| Aim | player 1: the left stick of controller 1, or the mouse (see `Mouse`); player 2: the left stick of controller 2 |
+| Fire | `Trigger`, or the mouse's left button |
+| Reload | shoot off the screen, or `Reload`, or the mouse's right button |
+| Start, Coin | `Start`, `Coin` on each player's controller |
+| Test, Service | player 1's controller |
+
+**With a USB light gun:** MiSTer sends a USB gun's position as the left
+analog stick and its buttons as the mouse's, which is exactly what the core
+takes. Calibrate the gun in MiSTer's own menu (F10), leave `Mouse` at its
+default, and set `Crosshair` to `Off`. A second gun goes on controller 2.
+
+The attract's tutorial text is in Japanese: Virtua Cop keeps its country in
+its own backup RAM, and a fresh set starts as Japan. MAME does the same.
 
 ## On a 15 kHz CRT
 
@@ -204,10 +262,12 @@ framework file `sys/audio_out.sv`, kept as a patch in
 
 ## Still to come
 
-- **Reports from CRT and wheel owners** (see above), and from anyone running
-  the Deluxe '93 set for long stretches.
-- **Virtua Cop** needs a different I/O board (light guns and an LCD), so it
-  will be its own core.
+- **Reports from CRT, wheel and light-gun owners** (see above), and from
+  anyone running the Deluxe '93 set for long stretches.
+- **More Virtua Cop testing.** It's the newest game here; only the first
+  stage has been checked closely.
+- **CRT light guns** (GunCon on MiSTer's SNAC port) are planned, not built.
+- **An option for Virtua Cop's country,** so its text can be in English.
 
 If you find something wrong, please report it.
 

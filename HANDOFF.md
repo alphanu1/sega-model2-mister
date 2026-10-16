@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-16: RELEASE Model2_20261016 (s1142) -- Daytona, Desert Tank, Virtua Cop
+
+Released from c545187's RTL as s1142 (releases/Model2_20261016.rbf,
+644e28fa0dee02c90d4b2d93c2d99fbd; core clocks >= +0.260, hold +0.244, HDMI
+-0.350, 41,455 ALM, M10K 533/553). New MRAs in releases/: Desert Tank and
+Virtua Cop (Revision A), each with a [15kHz CRT] version (Virtua Cop's game
+ID 0x81 is new in this release). Release and main READMEs rewritten for three
+games. vcop merged into headroom; PR #8 (headroom -> main) updated and
+merged with a merge commit (Ben). Open items as in the entry below.
+
 ## 2026-10-16: branch vcop -- Virtua Cop runs, guns work; s1142 the candidate
 
 ON THE BOARD (last loaded): s1134 (a3dd42f, timing-short) -- Virtua Cop
