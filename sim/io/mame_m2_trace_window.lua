@@ -6,7 +6,7 @@
 -- executes that another never does. Run with -debug and a debugscript that
 -- says "go"; the trace goes to TW_FILE (a file or a fifo).
 --
---   TW_FILE=<path> TW_ON=<s> TW_OFF=<s> [TW_COIN=<s>]
+--   TW_FILE=<path> TW_ON=<s> TW_OFF=<s> [TW_COIN=<s>] [TW_CPU=:copro_tgp]
 --
 -- Everything written is ROM-derived and stays outside the repository.
 local FILE = assert(os.getenv("TW_FILE"))
@@ -41,7 +41,7 @@ TW_F = emu.add_machine_frame_notifier(function()
     end
   end
   if not on and t >= T_ON then
-    m.debugger:command("trace " .. FILE .. ",:maincpu,noloop")
+    m.debugger:command("trace " .. FILE .. "," .. (os.getenv("TW_CPU") or ":maincpu") .. ",noloop")
     on = true
   end
   if on and not off and MARK then
