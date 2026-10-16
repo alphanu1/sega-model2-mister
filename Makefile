@@ -2252,3 +2252,18 @@ clean:
 
 distclean: clean
 	rm -rf db incremental_db output_files simulation greybox_tmp
+
+# ------------------------------------------------------- the Model 2A SCSP (R856)
+# Benches against sim/sound/scsp_ref.h (MAME 0.289 scsp.cpp, ported; bit-exact
+# to MAME's mix on four 2A games). SCSP_CAP=<p16 capture dir> for the replays.
+SCSP_DIR  := rtl/sound/scsp
+SCSP_VFL  := -Wall -Wno-DECLFILENAME -I$(SCSP_DIR) -Isim/sound -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/sim/sound"
+
+.PHONY: test_m2_scsp_level
+test_m2_scsp_level: obj_scsp_level/Vm2_scsp_level
+	@echo "== test m2_scsp_level (the level word against MAME's 64 K-entry table, every encoding)"
+	@cp -f $(SCSP_DIR)/*.hex obj_scsp_level/ && cd obj_scsp_level && ./Vm2_scsp_level
+
+obj_scsp_level/Vm2_scsp_level: $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/scsp_lvl.hex sim/sound/tb_m2_scsp_level.cpp sim/sound/scsp_ref.h
+	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) --top-module m2_scsp_level --Mdir obj_scsp_level \
+	  $(SCSP_DIR)/m2_scsp_level.sv sim/sound/tb_m2_scsp_level.cpp
