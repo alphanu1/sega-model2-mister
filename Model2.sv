@@ -3410,8 +3410,22 @@ wire [19:0] geo_dbg_rp, geo_dbg_wp;
 // R642: the window command's words, and the projection made from them.
 wire [31:0] geo_win_vp_s, geo_win_vp_e, geo_win_c0;
 wire [31:0] gv_xc, gv_yc, gv_a_left, gv_a_right, gv_a_bottom, gv_a_top;
-m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_geo_view (
-	.clk(clk_sys), .rst_n(mem_rst_n),
+// R852: THE 3D's CRTC OFFSETS FROM THE GAME (2A only): MAME's tilemap-chip
+// sync registers -- xhout (0x01040000, mirror 0x01140000) gives x = 84 +
+// data, xvout (0x01060000) y = 130 + data, 16-bit signed, the low half of
+// the dword. Daytona writes them to 0 / 128, the constants the original core
+// keeps; Virtua Fighter 2 writes y = 127.
+logic signed [15:0] crtc_xo, crtc_yo;
+always_ff @(posedge clk_sys or negedge cpu_rst_n)
+	if (!cpu_rst_n) begin crtc_xo <= 16'sd0; crtc_yo <= 16'sd128; end
+	else if (M2A && cpu_io_sel && cpu_io_we && (cpu_io_addr[31:21] == 11'h008)
+	         && (cpu_io_addr[19:0] == 20'h40000) && (|cpu_io_be[1:0]))
+		crtc_xo <= 16'sd84 + $signed(cpu_io_wdata[15:0]);
+	else if (M2A && cpu_io_sel && cpu_io_we && (cpu_io_addr[31:21] == 11'h008)
+	         && (cpu_io_addr[19:0] == 20'h60000) && (|cpu_io_be[1:0]))
+		crtc_yo <= 16'sd130 + $signed(cpu_io_wdata[15:0]);
+m2_geo_view #(.CRTC_X(0), .CRTC_Y(128), .LIVE(M2A)) u_geo_view (
+	.clk(clk_sys), .rst_n(mem_rst_n), .crtc_x(crtc_xo), .crtc_y(crtc_yo),
 	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0),
 	.xc(gv_xc), .yc(gv_yc), .a_left(gv_a_left), .a_right(gv_a_right),
 	.a_bottom(gv_a_bottom), .a_top(gv_a_top)

@@ -33,10 +33,19 @@
 
 module m2_geo_view #(
   parameter int CRTC_X = 0,
-  parameter int CRTC_Y = 128
+  parameter int CRTC_Y = 128,
+  // R852: 1 = the offsets come from crtc_x / crtc_y, which the top level
+  // latches from the game's writes to the tilemap chip's sync registers
+  // (MAME horizontal_sync_w / vertical_sync_w: 84 + xhout, 130 + xvout).
+  // Virtua Fighter 2 sets y to 127 where Daytona sets 128: with the constant
+  // its whole 3D sat one line low (geodiff, walk 1500: 467 of 523 polygons
+  // off by 1.0-1.1 px in y). 0 keeps the constants, as the original core.
+  parameter bit LIVE = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
+  input  logic signed [15:0] crtc_x,
+  input  logic signed [15:0] crtc_y,
   input  logic [31:0] win_vp_s,     // {x[27:16], y[11:0]}, 12-bit signed
   input  logic [31:0] win_vp_e,
   input  logic [31:0] win_c0,
@@ -96,8 +105,8 @@ module m2_geo_view #(
       ixc <= 16'sd248; iyc <= 16'sd192;
       il  <= -16'sd248; ir  <= 16'sd248; it <= 16'sd192; ib <= -16'sd192;   // R740: negated
     end else begin
-      ixc <= 16'(CRTC_X) + cx;
-      iyc <= 16'sd384 - cy + 16'(CRTC_Y);
+      ixc <= (LIVE ? crtc_x : 16'(CRTC_X)) + cx;
+      iyc <= 16'sd384 - cy + (LIVE ? crtc_y : 16'(CRTC_Y));
       il  <= vx0 - cx;   // R740: stored negated (a_left = -left)
       ir  <= vx1 - cx;
       it  <= vy1 - cy;

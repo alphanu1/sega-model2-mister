@@ -14,7 +14,10 @@
 `timescale 1ns/1ps
 
 module geodiff_top #(
-  parameter int unsigned AW = 25
+  parameter int unsigned AW = 25,
+  // R852: the walk's CRTC offsets (state.txt "crtc"): Daytona 0 / 128, VF2 0 / 127
+  parameter int CRTC_X = 0,
+  parameter int CRTC_Y = 128
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -125,8 +128,8 @@ module geodiff_top #(
     .dbg_mtx_n(mtx_n), .dbg_foc_n(foc_n)
   );
 
-  m2_geo_view #(.CRTC_X(0), .CRTC_Y(128)) u_view (
-    .clk(clk), .rst_n(rst_n),
+  m2_geo_view #(.CRTC_X(CRTC_X), .CRTC_Y(CRTC_Y)) u_view (
+    .clk(clk), .rst_n(rst_n), .crtc_x(16'sd0), .crtc_y(16'sd0),
     .win_vp_s(win_vp_s), .win_vp_e(win_vp_e), .win_c0(win_c0),
     .xc(xc), .yc(yc), .a_left(a_left), .a_right(a_right),
     .a_bottom(a_bottom), .a_top(a_top)

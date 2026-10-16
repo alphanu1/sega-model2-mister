@@ -1038,6 +1038,17 @@ obj_geodiff/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp r
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
 
+# R852: the same for a Virtua Fighter 2 walk (its CRTC y offset is 127)
+geodiff_2a: obj_geodiff_2a/Vgeodiff_top
+	@./obj_geodiff_2a/Vgeodiff_top $(TEST_ARGS)
+
+obj_geodiff_2a/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff_2a -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
 # R709: the same bench with the engine's reads through the RTL read-ahead
 # (m2_eng_ra) and the bench answering its port. M2GD_LAT=<port latency>,
 # M2GD_RABYPASS=1 for no copies at all.
