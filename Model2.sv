@@ -1456,6 +1456,13 @@ end
 // OF THE ROUND-ROBIN, capped at two grants in a row while anyone else waits.
 // At 100/60/30 the band sequencer's critical time is 78% texel wait (R573)
 // and port 10 alone spends 8.2% of every frame queued for the bus.
+// R854: on the 2A board the TGP's two read ports (8: tables, 9: its banked
+// window, buffer RAM for VF2) join the priority class, behind the i960, the
+// texel port 2, the glyph fetch and the walker and ahead of texel misses 10-12.
+// s1160: VF2's i960 is held by the TGP ~10% of every vblank, and the TGP waits
+// on each read (one outstanding) behind the whole class. Original core: as
+// before.
+localparam logic [12:0] SDR_PRI = M2A ? 13'b1_1111_0001_1110 : 13'b1_1100_0001_1110;
 m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // R639: port 3 (the glyph cache -- the tile fetch) joins the class.
            // It is the one reader with a per-scanline deadline: a line it does
@@ -1485,7 +1492,7 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // finish is shown twice (a tile overrun, 55-62% of frames on the
            // board, R814 captures) -- and it uses ~558 of a 3,280-cycle line
            // (R283), so its wait is queueing behind 1 and 2, not bandwidth.
-           .PRI(13'b1_1100_0001_1110), .PRI_CAP(2), .PRI_TOP(13'b0_0000_0000_1000)) u_sdram (
+           .PRI(SDR_PRI), .PRI_CAP(2), .PRI_TOP(13'b0_0000_0000_1000)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -3446,7 +3453,11 @@ localparam bit R826_HSCR   = 1'b0;   // m2_video HSCR_FIX: hscr_r read from its 
 // the tile-RAM fallback. Needs R826_SYNC (and R826_STRICT).
 localparam bit          R826_STEP  = 1'b1;
 localparam int unsigned R826_DEPTH = 2;   // copies (2 or 3)
-m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
+// R854: 2A -- the push hold covers only the walk's own list buffer (VF2's
+// four lists are 8,192 dwords apart and jump inside each; R638's window held
+// the next list and stopped the i960 every frame). 0: R638 unchanged.
+localparam int unsigned GEO_LIST_WIN = M2A ? 4096 : 0;
+m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIST_WIN)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
@@ -5257,17 +5268,19 @@ end else begin : g_nodbg
 	//   'D' {last draw} | {longest draw since the last D}, clk_sys cycles
 	//   'W' {last walk} | {longest walk since the last W}, clk_sys cycles
 	//   'Y' {last frame's work} | {longest since the last Y}, clk_sys cycles
-	//       from the vblank edge to the CPU's first instruction at one of the
-	//       WHY_SYNC addresses (VF2: its vblank spin 0x10f98 and its idle
-	//       coroutine's entries 0x4aeac, 0x4cb7c, 0x4cd30); a frame that has
-	//       not reached it by the next vblank goes on counting, so a value over
-	//       one vblank (1,390,820 at 80 MHz) is a frame the CPU overran
+	//       from the vblank edge to the CPU's first instruction at WHY_SYNC
+	//       (VF2: 0x4bcd4, the foreground's end); a frame that has not reached
+	//       it by the next vblank goes on counting, so a value over one vblank
+	//       (1,390,820 at 80 MHz) is a frame the CPU overran
 	//   'I' (clk_i960) {cycles in T_FETCH_W / T_FETCH2_W} | {cycles in T_MEM_W}
 	//   'K' (clk_sys) {cycles the TGP holds the CPU} | {the geometry push queue}
 	//   'P' {instructions retired} | {data-cache hits}
 	//   'G' every vblank: {flips | vblanks} | {TGP retires | tile overruns}
-	localparam logic [31:0] WHY_SYNC0 = 32'h0001_0F98, WHY_SYNC1 = 32'h0004_AEAC,
-	                        WHY_SYNC2 = 32'h0004_CB7C, WHY_SYNC3 = 32'h0004_CD30;
+	// R854: 0x4bcd4 alone -- the call that ends VF2's foreground and picks
+	// mode 0 or 2 -- so Y is the foreground itself (s1160 used the spin and the
+	// background's entries, which a mode-0 frame may never reach).
+	localparam logic [31:0] WHY_SYNC0 = 32'h0004_BCD4, WHY_SYNC1 = 32'h0004_BCD4,
+	                        WHY_SYNC2 = 32'h0004_BCD4, WHY_SYNC3 = 32'h0004_BCD4;
 	logic [15:0] wy_hold, wy_walk, wy_game, wy_vbl;
 	logic        wy_flip;
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -5343,21 +5356,44 @@ end else begin : g_nodbg
 			if (geo_push_stall) wy_gst <= wy_gst + 32'd1;
 		end
 	end
-	// slot 0 turns V, D, V, W, V, Y, V, D ...; slot 1 P, slot 2 K, slot 3 I
-	logic [1:0] wy_s0;
-	logic [2:0] wy_r0;   // 0 V, 1 D, 2 W, 3 Y
-	always_ff @(posedge clk_sys or negedge mem_rst_n)
-		if (!mem_rst_n) wy_s0 <= '0;
-		else if (prof_tick && lt_div == 3'd0) wy_s0 <= wy_s0 + 2'd1;
-	always_comb wy_r0 = wy_s0[0] ? 3'd0 : (wy_s0 == 2'd0) ? 3'd1 : (wy_s0 == 2'd2) ? 3'd2 : 3'd3;
-	logic [2:0] wy_rsel;   // what this a-record carries, held with lt_asel
-	always_comb wy_rsel = (lt_asel == 2'd1) ? 3'd4 : (lt_asel == 2'd2) ? 3'd5 : (lt_asel == 2'd3) ? 3'd6 : wy_r0;
-	assign wy_dclr = lt_a_valid && (wy_rsel == 3'd1);
-	assign wy_wclr = lt_a_valid && (wy_rsel == 3'd2);
-	assign wy_yclr = lt_a_valid && (wy_rsel == 3'd3);
+	// R854 (s1160 on the board): a record is 20 characters, 1.74 ms at
+	// 115,200 baud, and prof_tick comes every 0.82 ms -- the lite block's
+	// slots at ticks 0, 3 and 6 of 8 left 1.64 ms between the third and the
+	// first, so the first slot's record (V / D / W / Y here) was dropped nearly
+	// every time (421 V, 0 D/W/Y against 16,571 P in 120 s). Our own slots:
+	// ticks 0, 3 and 6 of NINE, 2.46 ms apart. Slot 0 turns V, D, V, W, V, Y;
+	// slot 1 is P; slot 2 alternates K and I.
+	logic [3:0] wy_div;
+	logic [2:0] wy_s0;
+	logic       wy_s2;
+	logic       wy_a_valid;
+	logic [2:0] wy_rsel;   // 0 V, 1 D, 2 W, 3 Y, 4 P, 5 K, 6 I
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			wy_div <= '0; wy_s0 <= '0; wy_s2 <= 1'b0; wy_a_valid <= 1'b0; wy_rsel <= '0;
+		end else begin
+			wy_a_valid <= 1'b0;
+			if (prof_tick) begin
+				wy_div <= (wy_div == 4'd8) ? 4'd0 : wy_div + 4'd1;
+				if (wy_div == 4'd0) begin
+					wy_a_valid <= 1'b1;
+					wy_rsel <= wy_s0[0] ? 3'd0 : (wy_s0 == 3'd0) ? 3'd1 : (wy_s0 == 3'd2) ? 3'd2 : 3'd3;
+					wy_s0 <= (wy_s0 == 3'd5) ? 3'd0 : wy_s0 + 3'd1;
+				end else if (wy_div == 4'd3) begin
+					wy_a_valid <= 1'b1; wy_rsel <= 3'd4;
+				end else if (wy_div == 4'd6) begin
+					wy_a_valid <= 1'b1; wy_rsel <= wy_s2 ? 3'd6 : 3'd5; wy_s2 <= ~wy_s2;
+				end
+			end
+		end
+	end
+	assign wy_dclr = wy_a_valid && (wy_rsel == 3'd1);
+	assign wy_wclr = wy_a_valid && (wy_rsel == 3'd2);
+	assign wy_yclr = wy_a_valid && (wy_rsel == 3'd3);
+	wire _unused_wy = &{1'b0, lt_a_valid, lt_asel};
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
-		.a_valid(lt_a_valid),
+		.a_valid(wy_a_valid),
 		.a_addr((wy_rsel == 3'd4) ? cpu_dbg_acc : (wy_rsel == 3'd5) ? wy_cst : (wy_rsel == 3'd6) ? wy_ifw :
 		        (wy_rsel == 3'd1) ? {8'd0, dg_last} : (wy_rsel == 3'd2) ? {8'd0, wk_last} :
 		        (wy_rsel == 3'd3) ? {8'd0, ys_last} : {wy_hold, wy_walk}),

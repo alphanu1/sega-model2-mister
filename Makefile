@@ -563,13 +563,21 @@ obj_m2_sdram/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 # R789: Model2.sv's thirteen ports and its priority class (1, 2, 3, 4, 10, 11, 12;
 # cap 2) -- the texel cache's four miss ports with the glyph fetch's deadline
-test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness obj_m2_sdram13t/Vm2_sdram_harness
+test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness obj_m2_sdram13t/Vm2_sdram_harness obj_m2_sdram13p/Vm2_sdram_harness
 	@echo "== test m2_sdram, Model2.sv's 13 ports and priority class (R789)"
 	./obj_m2_sdram13/Vm2_sdram_harness
 	@echo "== ... with the four texel miss ports (2, 10, 11, 12) reading eight words (R796)"
 	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13/Vm2_sdram_harness
 	@echo "== ... and port 3 first within the class, as Model2.sv sets it (R822)"
 	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13t/Vm2_sdram_harness
+	@echo "== ... and the TGP's ports 8 and 9 in the class, as the 2A build sets it (R854)"
+	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13p/Vm2_sdram_harness
+
+obj_m2_sdram13p/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1111100011110 -GPRI_TOP=13\'b0000000001000 \
+	  --Mdir obj_m2_sdram13p -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 obj_m2_sdram13t/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
@@ -849,11 +857,13 @@ test_m2_video_r826b: $(R826B_OBJ)
 	  --obj2 obj_m2_vr826b2/Vm2_video_ovr_top --obj3 obj_m2_vr826b3/Vm2_video_ovr_top $(TEST_ARGS)
 
 # The CPU bridge: decode, the 32-to-16 split, and the 25-to-40 MHz crossing.
-test_m2_geo: obj_m2_geo/Vm2_geo obj_m2_geo_s/Vm2_geo
+test_m2_geo: obj_m2_geo/Vm2_geo obj_m2_geo_s/Vm2_geo obj_m2_geo_lw/Vm2_geo
 	@echo "== test m2_geo (geometrizer front door + display-list walk)"
 	@./obj_m2_geo/Vm2_geo $(TEST_ARGS)
 	@echo "== test m2_geo AFTER_STRICT=1 (R826)"
 	@./obj_m2_geo_s/Vm2_geo $(TEST_ARGS)
+	@echo "== test m2_geo LIST_WIN=4096 AFTER_STRICT=1 (R854, the 2A build)"
+	@./obj_m2_geo_lw/Vm2_geo $(TEST_ARGS)
 
 obj_m2_geo/Vm2_geo: rtl/video/m2_geo.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_geo.cpp
 	$(VBUILD) --top-module m2_geo -CFLAGS "-O2" \
@@ -863,6 +873,11 @@ obj_m2_geo/Vm2_geo: rtl/video/m2_geo.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_
 obj_m2_geo_s/Vm2_geo: rtl/video/m2_geo.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_geo.cpp
 	$(VBUILD) --top-module m2_geo -CFLAGS "-O2 -DAFTER_STRICT_BUILD=1" -GAFTER_STRICT=1 \
 	  --Mdir obj_m2_geo_s -o Vm2_geo rtl/video/m2_geo.sv rtl/tgp/m2_fifo_m10k.sv \
+	  sim/video/tb_m2_geo.cpp
+
+obj_m2_geo_lw/Vm2_geo: rtl/video/m2_geo.sv rtl/tgp/m2_fifo_m10k.sv sim/video/tb_m2_geo.cpp
+	$(VBUILD) --top-module m2_geo -CFLAGS "-O2 -DAFTER_STRICT_BUILD=1 -DLIST_WIN_BUILD=1" -GAFTER_STRICT=1 -GLIST_WIN=4096 \
+	  --Mdir obj_m2_geo_lw -o Vm2_geo rtl/video/m2_geo.sv rtl/tgp/m2_fifo_m10k.sv \
 	  sim/video/tb_m2_geo.cpp
 
 test_m2_cpu_bridge: obj_m2_bridge/Vm2_cpu_bridge
@@ -1286,7 +1301,7 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
                            $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_2a -o Vm2_boot_harness \
-	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GTGP_PROG=4096 \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \

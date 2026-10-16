@@ -45,6 +45,7 @@ static bool auto_end = true;
 // pushed word that drains ahead of the walk is one the walk really reads.
 static int rd_slow = 0, rd_cnt = 0;
 static int wr_slow = 0, wr_cnt = 0;   // R752
+static unsigned long g_stall_ticks = 0;   // R854: cycles the pusher was held
 static uint16_t rdm(uint32_t a){ auto it = mem.find(a); return it == mem.end() ? 0xFFFF : it->second; }
 static void tick() {
   if (rd_slow) { d->rd_ack = 0;
@@ -72,7 +73,7 @@ static void w(int which, uint32_t v){
   // until it is taken. A pusher that ignores the stall loses the word silently,
   // which is worse than the drop this replaces.
   d->eval();
-  for(int guard=0; which==3 && d->push_stall && guard<4096; ++guard) tick();
+  for(int guard=0; which==3 && d->push_stall && guard<4096; ++guard) { tick(); ++g_stall_ticks; }
   tick(); idle();
 }
 static void ck(const char*w_,uint32_t got,uint32_t want){
@@ -677,6 +678,76 @@ int main(int argc,char**argv){
     ck("walk A read its whole list", ops_a, N + 1);
     ck("walk B read its whole list", d->dbg_walk_ops, NB + 1);
     ck("no word drained into a walk's window", d->dbg_overtake, 0);
+    rd_slow = 0;
+  }
+  // ---- 8b. R854: VIRTUA FIGHTER 2'S LISTS -- four buffers 8,192 dwords apart
+  // (0x0000 / 0x2000 / 0x4000 / 0x6000), every list jumping inside its own
+  // buffer. A slow walk of A (at 0x2000, jumping forward to +0x200) runs
+  // while the pusher writes list B, 300 dwords, into the NEXT buffer
+  // (0x4000, 8,192 ahead -- inside R638's 12,288-dword window). With the
+  // LIST_WIN build (Model2.sv's 2A: 4096) B lands during the walk and the
+  // pusher is never held to its end; words written into A's own buffer after
+  // its jump -- behind the walk or ahead -- are held until the walk ends; both
+  // lists are walked whole. The plain build shows R638's fault: B is held.
+  {
+    d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; idle(2);
+    mem.clear();
+    auto put = [&](uint32_t dw, uint32_t v){ uint32_t a = BASE + (dw << 1);
+                                             mem[a] = v & 0xFFFF; mem[a + 1] = v >> 16; };
+    auto get = [&](uint32_t dw) -> uint32_t { uint32_t a = BASE + (dw << 1);
+                                              return uint32_t(rdm(a)) | (uint32_t(rdm(a + 1)) << 16); };
+    const uint32_t A = 0x2000, J = A + 0x200, N = 16, M = 48, B = 0x4000, NB = 299, END = 0x0fu << 23;
+    for (uint32_t i = 0; i < N; i++) put(A + i, 0);           // nops
+    put(A + N, 0x80000000u | (J * 4));                        // jump forward inside the buffer
+    for (uint32_t i = 0; i < M; i++) put(J + i, 0);
+    put(J + M, END);
+    rd_slow = 200;
+    w(2, A * 4);                                             // flip: walk A
+    for (int i = 0; i < (N + 8) * 200; i++) tick();          // past the jump
+    unsigned held_cycles = 0;
+    w(1, B * 4);
+    const unsigned long st0 = g_stall_ticks;
+    for (uint32_t i = 0; i < NB; i++) w(3, 0);
+    held_cycles = unsigned(g_stall_ticks - st0);
+    w(3, END);
+    for (int i = 0; i < 1500; i++) tick();
+    bool b_ok = true;
+    for (uint32_t i = 0; i < NB; i++) if (get(B + i) != 0) b_ok = false;
+    if (get(B + NB) != END) b_ok = false;
+    const uint32_t a_frames = d->dbg_walk_frames;
+#ifdef LIST_WIN_BUILD
+    ck("R854 next buffer landed during the walk", b_ok ? 1u : 0u, 1u);
+    // only the drain's own pace (two 16-bit writes a dword), never the walk:
+    // the walk runs ~13,000 cycles, R638's rule held the pusher 8,936
+    ck("R854 pusher held only by the drain (< 1000 cycles)", held_cycles < 1000 ? 1u : 0u, 1u);
+    ck("R854 walk A still running after list B", a_frames, 0);
+#else
+    ck("R854 (R638 rule) next buffer held by the jumped walk", b_ok ? 1u : 0u, 0u);
+    // ...and the pusher held to the walk's end: the bench's pusher gives up
+    // after 4,096 cycles a word and loses it, so B arrives short here
+    ck("R854 (R638 rule) pusher held", held_cycles > 0 ? 1u : 0u, 1u);
+#endif
+    w(2, B * 4);                                             // flip B, pending
+    // after the jump: words behind the walk and ahead of it, in A's buffer
+    w(1, (A + 2) * 4);  w(3, END);
+    w(1, (J + M - 4) * 4); w(3, END);
+    for (int i = 0; i < 64; i++) tick();
+#ifdef LIST_WIN_BUILD
+    ck("R854 behind the walk, after its jump: held", get(A + 2), 0);
+    ck("R854 ahead of the walk: held", get(J + M - 4), 0);
+#endif
+    uint32_t ops_a = 0;
+    for (int i = 0; i < 2000000 && d->dbg_walk_frames < 1; i++) tick();
+    ops_a = d->dbg_walk_ops;
+    for (int i = 0; i < 2000000 && d->dbg_walk_frames < 2; i++) tick();
+    std::printf("test: R854 walk A %u ops, walk B %u ops, pusher held %u cycles, overtakes %u\n",
+                ops_a, d->dbg_walk_ops, held_cycles, d->dbg_overtake);
+    ck("R854 walk A read its whole list (the jump is an op)", ops_a, N + M + 2);
+#ifdef LIST_WIN_BUILD
+    ck("R854 walk B read its whole list", d->dbg_walk_ops, NB + 1);
+#endif
+    ck("R854 words held in A landed after it", get(J + M - 4), END);
+    ck("R854 no word drained into a walk's list", d->dbg_overtake, 0);
     rd_slow = 0;
   }
   // ---- R699: FRAME SKIP. Six lists flipped, one a frame; skip 0 walks all

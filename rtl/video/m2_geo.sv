@@ -54,7 +54,17 @@ module m2_geo #(
   // walk mid-frame -- the list is drawn a frame earlier than the 2D scroll
   // the game wrote for it (see m2_video SCR_SYNC). 1: a walk in mode 2 waits
   // for a vblank that arrived with the flip already made. 0: unchanged.
-  parameter bit          AFTER_STRICT = 1'b0
+  parameter bit          AFTER_STRICT = 1'b0,
+  // R854: THE HOLD COVERS THE WALK'S OWN LIST BUFFER ONLY. 0: R638 as it was
+  // (a word in [w_ip, w_ip + HOLD_WIN) is held; after a jump every word is).
+  // N > 0: a word is held only if it lands in [start, start + N) of the list
+  // being walked -- at or past w_ip, or anywhere in it once the walk has
+  // jumped. Virtua Fighter 2 keeps four lists 8,192 dwords apart and jumps
+  // inside every one (MAME 0.289, 4,315 walks: starts 0x0000 / 0x2000 /
+  // 0x4000 / 0x6000 dwords, 3,322 with jumps, ends <= 3,033 dwords in), so
+  // R638's rule held the NEXT list, filled the push queue and stopped the
+  // i960 until the walk ended, every frame.
+  parameter int unsigned LIST_WIN = 0
 ) (
   input  logic          clk,
   input  logic          rst_n,
@@ -399,9 +409,15 @@ module m2_geo #(
   // back is the case this does not cover).
   localparam logic [18:0] HOLD_WIN = 19'h3000;
   logic walk_jumped;
+  logic [18:0] w_start;   // R854: the dword the walk started at
   wire [18:0] q_dw     = 19'(q_data[48:34]);
   wire        q_in_win = (q_dw >= w_ip) && (q_dw < w_ip + HOLD_WIN);
-  wire        pop_ok   = !walk_active || (!walk_jumped && !q_in_win);
+  wire [18:0] q_rel    = q_dw - w_start;   // wraps: below the start is far away
+  localparam logic [18:0] LWIN = 19'((LIST_WIN == 0) ? 1 : LIST_WIN);   // 0 never reaches the compare
+  wire        q_in_lst = (q_rel < LWIN);
+  wire        pop_ok   = (LIST_WIN == 0)
+                         ? (!walk_active || (!walk_jumped && !q_in_win))
+                         : (!walk_active || !q_in_lst || (!walk_jumped && (q_dw < w_ip)));
   assign q_pop   = (dst == D_IDLE) && !pd_req && q_valid && pop_ok;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -758,7 +774,7 @@ module m2_geo #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       wst <= W_IDLE; w_ip <= 19'd0; w_ops <= 16'd0; w_skip <= 16'd0; w_op <= 5'd0;
-      walk_jumped <= 1'b0;
+      walk_jumped <= 1'b0; w_start <= 19'd0;
       dbg_walk_ops <= 16'd0; dbg_walk_objs <= 16'd0;
       dbg_walk_frames <= 16'd0; dbg_walk_unknown <= 8'd0;
       w_cap <= 3'd0; w_ci <= 4'd0; obj_valid <= 1'b0; eng_seen <= 1'b0;
@@ -861,6 +877,7 @@ module m2_geo #(
           // no unknown to explain it. That is what the board reported --
           // ops=1, objs=0, frames frozen, unknown clear.
           w_ip  <= 19'(geo_rp[16:2]);       // the read pointer is a BYTE address
+          w_start <= 19'(geo_rp[16:2]);    // R854
           walk_jumped <= 1'b0;             // R638
           w_ops <= 16'd0;
           wst   <= W_FETCH;
@@ -1169,7 +1186,8 @@ module m2_geo #(
   // buffer), so this counts the window only; zero is the answer that matters.
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) dbg_overtake <= 16'd0;
-    else if (q_pop && (wst != W_IDLE) && q_in_win)
+    else if (q_pop && (wst != W_IDLE) &&
+             ((LIST_WIN == 0) ? q_in_win : (q_in_lst && (walk_jumped || (q_dw >= w_ip)))))   // R854
       dbg_overtake <= dbg_overtake + 16'd1;
   end
 

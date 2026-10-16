@@ -2024,7 +2024,7 @@ int main(int argc, char **argv) {
           ++f_cyc; ++f_cyc_abs;
           ++f_ts[d->obs_ts & 31];
           if (d->obs_copro_stall) ++f_cst;
-          if (w_on) { ++w_ts[d->obs_ts & 31]; if (d->obs_copro_stall) ++w_cst; if (d->obs_io_sel) ++w_io; }
+          if (w_on) { ++w_ts[d->obs_ts & 31]; if (d->obs_copro_stall) ++w_cst; if (d->obs_push_stall) ++w_io; }
         }
         cp = d->clk_cpu;
         // the bridge's io_sel is a clk_mem pulse: sampled every clk_mem cycle
@@ -2058,7 +2058,7 @@ int main(int argc, char **argv) {
             if (ip == w_s) { w_on = true; w_cyc0 = f_cyc_abs; w_ins0 = w_ins; w_cst = w_io = 0; for (auto &x : w_ts) x = 0; }
             else if (ip == w_e && w_on) {
               w_on = false;
-              std::fprintf(fsf, "W v %llu cyc %llu ins %llu cst %llu io %llu ts", (unsigned long long)vblanks,
+              std::fprintf(fsf, "W v %llu cyc %llu ins %llu cst %llu gst %llu ts", (unsigned long long)vblanks,
                            (unsigned long long)(f_cyc_abs - w_cyc0), (unsigned long long)(w_ins - w_ins0),
                            (unsigned long long)w_cst, (unsigned long long)w_io);
               for (int k = 0; k < 23; ++k) std::fprintf(fsf, " %llu", (unsigned long long)w_ts[k]);

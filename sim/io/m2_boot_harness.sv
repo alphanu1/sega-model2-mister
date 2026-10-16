@@ -69,7 +69,9 @@ module m2_boot_harness #(
   // R852: the TGP program RAM (4096 for A2)
   parameter int unsigned TGP_PROG        = 2048,
   // R854: the i960's i-cache lines (i960_top IC_LINES)
-  parameter int unsigned IC_LINES        = 512
+  parameter int unsigned IC_LINES        = 512,
+  // R854: m2_geo LIST_WIN (Model2.sv GEO_LIST_WIN: 4096 with 2A, 0 otherwise)
+  parameter int unsigned GEO_LIST_WIN    = 0
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -410,6 +412,7 @@ module m2_boot_harness #(
   output logic [31:0] obs_out_data,
   output logic [31:0] obs_out_pushed,
   output logic        obs_copro_stall,
+  output logic        obs_push_stall,   // R854
   // THE COPROCESSOR CONVERSATION, event by event. The reference can be tapped
   // at the same four windows with a Lua memory tap, so logging the i960's bus
   // cycles here makes the two traces directly diffable: same microcode upload,
@@ -659,6 +662,7 @@ module m2_boot_harness #(
   end
 
   wire        geo_push_busy;   // R697: pushed words not yet in buffer RAM; the CPU's buffer stores wait
+  wire        geo_push_stall;  // R854: the push queue full, the CPU held (A2 only)
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
@@ -694,7 +698,7 @@ module m2_boot_harness #(
 // 32 writes per channel, which proves the ADDRESSES land; it says nothing about
 // the VALUES, and a table whose R and B ramps are wrong renders white as green.
     .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
-    .io_stall(copro_stall),
+    .io_stall(copro_stall | (A2 && geo_push_stall)),   // R854: A2 as Model2.sv (cpu_io_stall)
     .buf_wr_stall(geo_push_busy),   // R697: as Model2.sv
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
@@ -756,6 +760,7 @@ module m2_boot_harness #(
   wire [31:0] copro_rdata;
   wire        copro_stall;
   assign obs_copro_stall = copro_stall;
+  assign obs_push_stall  = A2 && geo_push_stall;   // R854
 
   wire        cop_bufw_req;
   wire [18:0] cop_bufw_addr;
@@ -904,8 +909,12 @@ module m2_boot_harness #(
     end
   end
 
-  m2_geo #(.AW(AW), .DEPTH(128)) u_geo (
+  // R854: with A2 the walker as Model2.sv's 2A build runs it -- "After flip"
+  // (trig_mode 2, AFTER_STRICT), the push queue holding the CPU, and the hold
+  // windowed to the walk's own list (GEO_LIST_WIN); without A2 as before.
+  m2_geo #(.AW(AW), .DEPTH(128), .AFTER_STRICT(A2), .LIST_WIN(GEO_LIST_WIN)) u_geo (
     .clk(clk_mem), .rst_n(rst_n),
+    .trig_mode(A2 ? 2'd2 : 2'd0), .push_stall(geo_push_stall),
     .skip(2'd0),   // R699
     .push_busy(geo_push_busy),   // R697
     .wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
