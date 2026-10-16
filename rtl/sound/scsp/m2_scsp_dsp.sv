@@ -46,6 +46,8 @@ module m2_scsp_dsp (
   input  logic [11:1] w_addr,
   input  logic [15:0] w_data,
   input  logic  [1:0] w_be,
+  input  logic [11:1] r_addr,             // the 68000 reads COEF / MADRS / MPRO (when idle):
+  output logic [15:0] r_q,                // r_q the clock after r_addr
   // sound RAM (word address), one access at a time; req falls for a clock
   // after every ack
   output logic        m_req,
@@ -94,6 +96,9 @@ module m2_scsp_dsp (
     coef_q  <= {coef_h[co_ra], coef_l[co_ra]};
     madrs_q <= {madrs_h[ma_ra], madrs_l[ma_ra]};
   end
+  // the 68000's read (MAME r16): 0x700 COEF, 0x780 / 0x7c0 MADRS, 0x800 MPRO
+  assign r_q = (r_addr < 11'h3c0) ? coef_q : (r_addr < 11'h400) ? madrs_q : mp_q[{r_addr[2:1], 4'd0} +: 16];
+
   // TEMP 128 x 24, MEMS 32 x 24
   (* ramstyle = "M10K" *) logic [23:0] temp [128];
   (* ramstyle = "M10K" *) logic [23:0] mems [32];
@@ -142,8 +147,8 @@ module m2_scsp_dsp (
   (* multstyle = "dsp" *) logic signed [37:0] prod;
   always_ff @(posedge clk) prod <= mx_x * mx_y;
 
-  logic [63:0] ins_r;
-  wire  [63:0] ins = (ph == 2'd1) ? mp_q : ins_r;   // the step: from the RAM in ph 1
+  // the step: MPRO's output, which holds while k does (ph 1 to the end of ph 2)
+  wire  [63:0] ins = mp_q;
   wire  [6:0] TRA   = ins[14:8];
   wire        TWT   = ins[7];
   wire  [6:0] TWA   = ins[6:0];
@@ -184,6 +189,12 @@ module m2_scsp_dsp (
   end
   assign mx_q  = mx_zr ? 20'd0 : mx_raw;
   assign ef_rq = ef_zr ? 16'd0 : ef_raw;
+
+  // MAME's clamp to 24 bits (x > 0x7fffff, x < -0x800000), by the sign bits
+  function automatic logic signed [23:0] sat24(input logic signed [31:0] x);
+    if (x[31:23] == {9{x[31]}}) sat24 = x[23:0];
+    else sat24 = x[31] ? -24'sh800000 : 24'sh7fffff;
+  endfunction
 
   // PACK / UNPACK (MAME's)
   function automatic logic [15:0] pack(input logic [23:0] v);
@@ -240,8 +251,8 @@ module m2_scsp_dsp (
   logic        r_nofl;
   wire  [15:0] r_word_l = lk_data[{r_a[2:1], 4'b0} +: 16];
   wire  [15:0] r_word_f = fill_data[{r_a[2:1], 4'b0} +: 16];
-  wire  [23:0] up_l = unpack(r_word_l);
-  wire  [23:0] up_f = unpack(r_word_f);
+  wire  [15:0] r_word   = (rs == R_LOOK) ? r_word_l : r_word_f;
+  wire  [23:0] up       = unpack(r_word);
 
 
   assign mad    = madrs_q;
@@ -270,8 +281,8 @@ module m2_scsp_dsp (
     endcase
     acc2 = acc <<< 1;
     case (SHFT)
-      2'd0:    shifted = (acc  > 32'sh007fffff) ? 24'sh7fffff : (acc  < -32'sh00800000) ? -24'sh800000 : acc[23:0];
-      2'd1:    shifted = (acc2 > 32'sh007fffff) ? 24'sh7fffff : (acc2 < -32'sh00800000) ? -24'sh800000 : acc2[23:0];
+      2'd0:    shifted = sat24(acc);
+      2'd1:    shifted = sat24(acc2);
       2'd2:    shifted = acc2[23:0];
       default: shifted = acc[23:0];
     endcase
@@ -288,12 +299,12 @@ module m2_scsp_dsp (
   assign exec  = dst == D_RUN && ph == 2'd2 && !stall && !abort;
 
   always_comb begin
-    mp_ra = (dst == D_SCAN) ? scan_i : k[6:0];
+    mp_ra = (dst == D_SCAN) ? scan_i : (dst == D_IDLE) ? r_addr[9:3] : k[6:0];
     t_ra  = TRA + dec[6:0];
     t_wa  = TWA + dec[6:0];
     m_ra  = IRA[4:0];
-    co_ra = COEFI;
-    ma_ra = MASA;
+    co_ra = (dst == D_IDLE) ? r_addr[6:1] : COEFI;
+    ma_ra = (dst == D_IDLE) ? r_addr[5:1] : MASA;
     mx_ra = (dst == D_RUN) ? IRA[3:0] : mix_sel;
     ef_ra = (dst == D_RUN) ? EWA : ef_idx;
     t_we  = exec && TWT;
@@ -338,14 +349,14 @@ module m2_scsp_dsp (
       case (rs)
         R_LOOK: begin
           if (lk_hit) begin
-            memval <= r_nofl ? {1'b0, r_word_l, 8'd0} : {up_l[23], up_l}; mv_pend <= 1'b0; rs <= R_IDLE;
+            memval <= r_nofl ? {1'b0, r_word, 8'd0} : {up[23], up}; mv_pend <= 1'b0; rs <= R_IDLE;
           end else rs <= R_FILL;
         end
         R_FILL: if (fill_done) begin
 `ifdef SCSP_DEBUG
-          if (dbg_on) $display("F r_a %h fill %h word %h up %h nofl %0d", r_a, fill_data, r_word_f, up_f, r_nofl);
+          if (dbg_on) $display("F r_a %h fill %h word %h up %h nofl %0d", r_a, fill_data, r_word, up, r_nofl);
 `endif
-          memval <= r_nofl ? {1'b0, r_word_f, 8'd0} : {up_f[23], up_f}; mv_pend <= 1'b0; rs <= R_IDLE;
+          memval <= r_nofl ? {1'b0, r_word, 8'd0} : {up[23], up}; mv_pend <= 1'b0; rs <= R_IDLE;
         end
         default: ;
       endcase
@@ -374,7 +385,7 @@ module m2_scsp_dsp (
         D_RUN: begin
           case (ph)
             2'd0: ph <= 2'd1;
-            2'd1: begin ins_r <= mp_q; ph <= 2'd2; end
+            2'd1: ph <= 2'd2;
             default: begin
               if (abort) begin
                 dst <= D_IDLE; done <= 1'b1;              // MAME returns: no DEC, MIXS kept
