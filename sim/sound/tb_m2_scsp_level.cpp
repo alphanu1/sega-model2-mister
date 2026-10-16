@@ -35,14 +35,14 @@ int main(int argc, char **argv) {
 		t->req = 1; tick(); t->req = 0;
 		int n = 0;
 		while (t->busy) { tick(); if (++n > 100) { printf("FAIL: hung\n"); return 1; } }
-		int got[5];
-		for (int k = 0; k < 5; k++) { t->rd_addr = (slot << 3) | k; tick(); got[k] = t->rd_q; }
+		int got[6];
+		for (int k = 0; k < 6; k++) { t->rd_addr = (slot << 3) | k; tick(); got[k] = t->rd_q; }
 		int etl = sdir ? 0 : tl;
 		int e0 = etl | (pan << 8) | (sdl << 13);
 		int e2 = etl | (sdl << 13);
 		int e3 = (pan << 8) | (sdl << 13);
-		int want[5] = { T.LPANTABLE[e0], T.RPANTABLE[e0], T.LPANTABLE[e2], T.LPANTABLE[e3], T.RPANTABLE[e3] };
-		for (int k = 0; k < 5; k++) {
+		int want[6] = { T.LPANTABLE[e0], T.RPANTABLE[e0], T.LPANTABLE[e2], T.LPANTABLE[e3], T.RPANTABLE[e3], T.LPANTABLE[etl | (7 << 13)] };
+		for (int k = 0; k < 6; k++) {
 			checks++;
 			if (got[k] != want[k]) { if (bad < 10) printf("  enc %04x sdir %d word %d: %d want %d\n", enc, sdir, k, got[k], want[k]); bad++; }
 		}

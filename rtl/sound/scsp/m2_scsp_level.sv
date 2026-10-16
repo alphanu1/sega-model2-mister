@@ -3,7 +3,7 @@
 // Sega Model 2 core for MiSTer FPGA
 // Copyright (C) 2026 alphanu1
 //
-// THE SCSP's FIVE LEVEL WORDS OF A SLOT, WITHOUT MAME's 64 K-ENTRY TABLE
+// THE SCSP's SIX LEVEL WORDS OF A SLOT, WITHOUT MAME's 64 K-ENTRY TABLE
 // (study R856). Derived from MAME 0.289 scsp.cpp (BSD-3-Clause, ElSemi,
 // R. Belmont; notice in THIRD_PARTY.md), which mixes a slot through
 // LPANTABLE / RPANTABLE[TL | PAN << 8 | SDL << 13] = FIX(4.0f * LPAN * TL *
@@ -14,14 +14,15 @@
 // result is x 2^14 and truncated -- equal to MAME's table in all 131,072
 // entries (sim/sound/scsp_level_check.cpp; tb_m2_scsp_level checks this RTL).
 //
-// The five words of slot s (MAME's DoMasterSamples), RAM row {s, word}:
+// The six words of slot s (MAME's DoMasterSamples, UpdateSlot), RAM row {s, word}:
 //   0 direct L  Enc = (SDIR ? 0 : TL) | DIPAN << 8 | DISDL << 13, LPANTABLE
 //   1 direct R  the same Enc, RPANTABLE
 //   2 DSP send  Enc = (SDIR ? 0 : TL) | IMXL << 13 (pan 0: LPAN = 1.0)
 //   3 effect L  Enc = EFPAN << 8 | EFSDL << 13 (TL 0: 1.0), LPANTABLE
 //   4 effect R  the same, RPANTABLE
+//   5 FM ring   Enc = (SDIR ? 0 : TL) | 7 << 13 (a slot's write to the ring buffer)
 // recomputed when the engine hands over the slot's words 6, 10 and 11 after
-// a write to one of them; 35 clocks a slot. A word is 15 bits (<= 16,384).
+// a write to one of them; 42 clocks a slot. A word is 15 bits (<= 16,384).
 //
 // Every factor is <= 1.0, so an exponent is kept as its negation N >= 0
 // (value = 1.m x 2^-N) and the word is the mantissa >> (9 + N).
@@ -81,8 +82,10 @@ module m2_scsp_level (
                      zero_w = imxl == 3'd0; end
       3'd3:    begin a_idx = (efpan < 5'd16) ? PAN + {5'd0, efpan[3:0]} : ONE; b_idx = ONE;        c_idx = SDL + {6'd0, efsdl};
                      zero_w = (efpan == 5'd15) || efsdl == 3'd0; end
-      default: begin a_idx = (efpan < 5'd16) ? ONE : PAN + {5'd0, efpan[3:0]}; b_idx = ONE;        c_idx = SDL + {6'd0, efsdl};
+      3'd4:    begin a_idx = (efpan < 5'd16) ? ONE : PAN + {5'd0, efpan[3:0]}; b_idx = ONE;        c_idx = SDL + {6'd0, efsdl};
                      zero_w = (efpan == 5'd31) || efsdl == 3'd0; end
+      default: begin a_idx = ONE;                                              b_idx = {1'b0, tl}; c_idx = SDL + 9'd7;
+                     zero_w = 1'b0; end   // 5: the FM ring's write, Enc = (SDIR ? 0 : TL) | 7 << 13
     endcase
     case (ph)
       3'd0:    f_addr = a_idx;
@@ -137,7 +140,7 @@ module m2_scsp_level (
         3'd6: begin
           ph <= 3'd0;
           w  <= w + 3'd1;
-          if (w == 3'd4) run <= 1'b0;
+          if (w == 3'd5) run <= 1'b0;
         end
         default: ;
       endcase

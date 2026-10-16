@@ -2269,7 +2269,7 @@ obj_scsp_level/Vm2_scsp_level: $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/scsp_lvl
 	  $(SCSP_DIR)/m2_scsp_level.sv sim/sound/tb_m2_scsp_level.cpp
 
 SCSP_RTL := $(SCSP_DIR)/m2_scsp.sv $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/m2_scsp_cache.sv $(SCSP_DIR)/m2_scsp_dsp.sv
-SCSP_HEX := $(SCSP_DIR)/scsp_lvl.hex $(SCSP_DIR)/scsp_eg.hex $(SCSP_DIR)/scsp_pscale.hex $(SCSP_DIR)/scsp_ascale.hex
+SCSP_HEX := $(SCSP_DIR)/scsp_lvl.hex $(SCSP_DIR)/scsp_eg.hex $(SCSP_DIR)/scsp_pscale.hex $(SCSP_DIR)/scsp_ascale.hex $(SCSP_DIR)/scsp_lfonoise.hex
 
 .PHONY: test_m2_scsp
 # SCSP_CAP=build/scsp/<game> (a p16 capture); SCSP_N samples (default 441,000 = 10 s)

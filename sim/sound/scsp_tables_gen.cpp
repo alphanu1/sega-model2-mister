@@ -5,9 +5,10 @@
 // formulas (via scsp_ref.h, whose tables equal MAME's dump -- scsp_replay).
 // Data derived from BSD-3-Clause code (ElSemi, R. Belmont); see THIRD_PARTY.md.
 //
-//   scsp_tables_gen <dir>   writes scsp_eg.hex (1,024 x 13), scsp_pscale.hex
+//   scsp_tables_gen <dir> [tables.bin]   writes scsp_eg.hex (1,024 x 13), scsp_pscale.hex
 //   (2,048 x 9: PSCALES[s][i], index s << 8 | i), scsp_ascale.hex (2,048 x 9),
-//   and scsp_tables.svh (AR / DR rates, LFO phase steps, level factors).
+//   and scsp_tables.svh (AR / DR rates, LFO phase steps), and with MAME's
+//   tables.bin (p16) scsp_lfonoise.hex (the noise LFO, 256 x 8).
 #include "scsp_ref.h"
 #include <cstdio>
 #include <string>
@@ -22,7 +23,21 @@ int main(int argc, char **argv) {
 	fclose(f);
 	f = fopen((d + "/scsp_pscale.hex").c_str(), "w");
 	for (int s = 0; s < 8; s++) for (int i = 0; i < 256; i++) fprintf(f, "%03x\n", T.PSCALES[s][i]);
+	// (the noise wave's p + 128 reaches 256; past PSCALES[7] MAME reads the
+	// next member, ASCALES[0][0] = 256 -- m2_scsp supplies that one)
+	if (T.ASCALES[0][0] != 256) { fprintf(stderr, "ASCALES[0][0] is not 256\n"); return 1; }
 	fclose(f);
+	// the noise LFO's 256 values, MAME's machine().rand() (from a p16 tables.bin)
+	if (argc > 2) {
+		FILE *t = fopen(argv[2], "rb");
+		static int buf[0x10000 * 2 + 0x400 + 64 * 2 + 8 * 256 * 2 + 256 * 2];
+		size_t want = sizeof(s32) * 0x400 + sizeof(int) * (0x10000 * 2 + 64 * 2 + 8 * 256 * 2);   // ALFO_NOI
+		if (!t || fseek(t, long(want), SEEK_SET) != 0 || fread(buf, sizeof(int), 256, t) != 256) { fprintf(stderr, "no noise table\n"); return 1; }
+		fclose(t);
+		f = fopen((d + "/scsp_lfonoise.hex").c_str(), "w");
+		for (int i = 0; i < 256; i++) fprintf(f, "%02x\n", buf[i] & 0xff);
+		fclose(f);
+	}
 	f = fopen((d + "/scsp_ascale.hex").c_str(), "w");
 	for (int s = 0; s < 8; s++) for (int i = 0; i < 256; i++) fprintf(f, "%03x\n", T.ASCALES[s][i]);
 	fclose(f);
