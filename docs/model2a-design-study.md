@@ -36243,3 +36243,186 @@ geometry push 0% (was 5.3%), CPI 12.0. The margin is ~2-3 ms a frame; the
 TGP hold is now the largest single wait (a later tightening, not a
 blocker). Ben: "a few visual bugs" -- to be listed and fixed after sound
 (his order).
+
+**R856 -- THE MODEL 2A SOUND BOARD: WHAT FOUR 2A GAMES ASK OF THE SCSP, ITS
+DSP AND ITS 68000 (MEASURED IN MAME), AND OUR OWN SCSP DESIGNED TO THAT,
+SMALLER THAN THE SATURN CORE'S. DESIGN ONLY -- NOTHING BUILT IN THIS ENTRY.**
+(Ben: we write our own Model 2A sound board and make it smaller than the
+Saturn core's SCSP, 2,577 ALMs est. / ~25 M10K / 5 DSP (R852), so that the
+room the 2A board frees (~4,600 ALMs) takes it with margin; sound before the
+visual bugs.)
+
+*The reference and its licence -- VERIFIED (headers read, MAME 0.289):*
+src/devices/sound/scsp.cpp, scsp.h, scspdsp.cpp, scspdsp.h: `license:
+BSD-3-Clause`, `copyright-holders: ElSemi, R. Belmont` (scsp.cpp also
+`thanks-to: kingshriek`). In 0.289 the LFO is inside scsp.cpp (there is no
+scsplfo.hxx). src/mame/sega/model2.cpp: BSD-3-Clause, R. Belmont, Olivier
+Galibert, ElSemi, Angelo Salese, Matthew Daniels. Everything below derives
+from BSD-3 sources only (THIRD_PARTY.md). The Saturn core's SCSP (no
+licence) was not read; only its measured size (R852) is used.
+
+*The method.* A patch (sim/sound/mame_p16_scsp.sh, applied to a private copy
+of the MAME tree; inert without M2SCSP_OUT) logs every 68000 write and read
+of the SCSP's registers and every 68000 write to sound RAM, each against the
+sample it lands before (MAME brings the stream up to date on every register
+access, so writes land between samples); MAME's mix per sample before the
+clamp; every key-on with the slot's sixteen registers; the DSP program at
+each start; MIDI bytes in; interrupt-line calls; the 68000's accesses by
+region; MAME's derived tables. sim/sound/mame_m2_2a_snd.lua plays any 2A
+game headless for 300 s (coins at 40, 110, 200 s, Start pulsed, every
+digital player field on a fixed pseudo-random sequence, analog fields
+walked for vcop2 / srallyc); sim/sound/scsp_usage.py summarises.
+THE MEASUREMENT IS CHECKED, NOT TRUSTED: sim/sound/scsp_ref.h is scsp.cpp +
+scspdsp.cpp ported standalone (BSD-3; the timers, interrupts, MIDI, DMA and
+stream framework left out -- none reaches the mix), and scsp_replay drives
+it with the logged writes. MAME's derived tables: identical. The mix:
+
+    game      samples (300 s)  non-zero    differ from MAME's mix
+    vf2         13,230,649     12,622,991     0
+    vcop2       13,230,649     13,212,559     0
+    srallyc     13,230,649     12,448,595     0
+    zeroguna    13,230,649     12,386,880     0
+
+So the logs are complete for the output, writes at sample boundaries are
+MAME's semantics, and scsp_ref.h is a bit-exact golden model for the RTL.
+(zeroguna is model2a_5881 with init_zerogun's patch, as MAME runs it;
+srallyc is MACHINE_NOT_WORKING in MAME but plays attract and races with
+sound -- and never loads a DSP program.)
+
+*Measured usage (MAME 0.289, 300 s each; slot-sample = one active slot for
+one sample):*
+
+                              vf2         vcop2       srallyc     zeroguna
+  key-ons / s                 33.2        30.5        37.7        36.4
+  max active slots            32          31          32          32
+  mean active (when any)      15.5        14.9        18.0        20.5
+  PCM                         8-bit only  8-bit only  8-bit only  8-bit only
+  loop modes (LPCTL)          1           0, 1        0, 1        0, 1
+  FM (MDL / MDXSL / MDYSL)    never       never       never       never
+  pitch LFO, of slot-samples  tri 0.16%   tri 0.44%   tri 1.6%    never
+  amplitude LFO               never       tri, 26 slot-samples   never   never
+  SSCTL / SBCTL / SDIR /
+    STWINH / EGHOLD / LPSLNK  all 0       all 0       all 0       all 0
+  KRS                         0           0           0           0
+  AR / D1R / D2R / RR         31 / 0 /    16,31 / 0 / 31 / 0,4 /  31 / 0-11 /
+                              0-8 / 10-31 0 / 11-31   0,4 / 10-31 0-20 / 5-31
+  TL                          0-97        4-98        7-127       2-124
+  octave                      -4..0       -4..0       -3..0       -3..+1
+  sound RAM read by slots     0x10000-    0x10000-    0x10000-    0x03000-
+                              0x6ffff     0x6efff     0x79fff     0x73fff
+  DSP program (steps)         82          84          none        102
+  DSP reads / writes a sample 12.98/3.99  22.97/9.99  0 / 0       12.96/3.99
+  DSP ring buffer             RBP 0x38, RBL 2: 32 K words at 0x70000-0x7ffff
+                              (64 KB) in all four (srallyc never uses it)
+  DISDL / EFSDL               3 / 6,7     2-4 / 4     3 / 0       2-4 / 7
+  68000 sound-RAM writes / s  269,798     140,710     316,665     353,940
+  68000 RAM reads / s         218,345     301,119     204,093     228,932
+  68000 program-ROM reads / s 1,234,818   1,551,382   1,170,030   1,385,646
+    (instruction fetch included)
+  68000 sample-ROM reads / s  226,440     66,500      266,985     266,598
+  timers used                 A, B        A, B, C     A, B        A, B
+  SCSP interrupt levels       1 timer B, 2 timer A, 3 MIDI (SCILV), all four
+  MIDI in / s (i960 -> 68000) 8.4         6.5         157.3       46.4
+  MIDI out, DMA               none        none        none        none
+  MSLC writes / CA reads / s  37,640 /    62,095 /    32,512 /    44,823 /
+                              9,242       3,282       8,827       11,516
+  mix peak before the >> 2    101,410     26,066      10,850      22,893
+                              (0 samples clamped in any game)
+
+All four DSP programs use only MRD MWT IWT TWT EWT XSEL BSEL ZERO NXADR,
+YSEL 0 / 1 and SHIFT 0 / 1 -- never TABLE, ADREB, ADRL, FRCL, YRL, NEGB or
+NOFL. Not one game uses FM, PCM16, a reverse or ping-pong loop, noise,
+SBCTL, SDIR, STWINH, EGHOLD, LPSLNK, DMA or MIDI out. Every one uses all 32
+slots, the pitch LFO (triangle; zeroguna excepted) and timers A and B; Sega
+Rally alone has no DSP program; Virtua Cop 2 alone touches the amplitude
+LFO (26 slot-samples in 300 s) and timer C. EVERY 4 KB PAGE OF SOUND RAM IS
+WRITTEN BY THE 68000: the samples are STREAMED -- the sound program copies
+them from the 8 MB ROM into looping windows in sound RAM and refills behind
+the playing position, polling CA (the position, 4 KB granularity) 3,000-
+11,500 times a second.
+
+*Sound-RAM bandwidth (scsp_replay's cache models on MAME's own access
+stream):* slots read 26-38 bytes a sample; 256 direct-mapped 8-byte lines
+(one SDRAM burst) miss 6.5-10.8%: 1.6-4.1 line fetches a sample. DSP reads
+into 64 x 4-word lines miss 1.1% (vcop2) to 27% (zeroguna): 0.25-3.5
+fetches a sample; DSP writes 4-10 single words a sample. The 68000: ~5 RAM
+reads and ~8 RAM writes a sample, 26-35 program words a sample (a cache's
+job). Worst case ~25 SDRAM transactions a sample, 1.1 M/s -- the order of
+the Model 1 board's two MultiPCMs and uncached 68000 that the 2A build
+removed.
+
+*THE DESIGN (rtl/sound/scsp/, behind M2_2A; the original core unaffected):*
+  1. ONE SLOT ENGINE, TIME-MULTIPLEXED, IN MAME's ORDER: 32 slots a sample
+     in slot order, then the DSP, then the effect returns and the mix --
+     DoMasterSamples' order, so a replay can be bit-exact. Per slot: the
+     registers from a 512 x 16 M10K (also the 68000's view); state
+     (position, next position, envelope volume / state / rate indices / DL /
+     hold, LFO phases, active, backwards; ~160 bits) in M10K; ONE 27 x 27
+     multiplier shared by the pitch LFO, the interpolation (p1 x 4096 +
+     (p2 - p1) x f -- MAME's sum exactly), the amplitude LFO, the envelope
+     and the three level products. MAME's tables as ROMs: EG_TABLE (1,024 x
+     13), PSCALES and ASCALES (8 x 256), AR / DR (64), LFO steps (32).
+  2. THE LEVEL WORD WITHOUT THE 64 K TABLE. MAME's LPAN / RPANTABLE[TL |
+     PAN << 8 | SDL << 13] is FIX(4.0f x LPAN x TL x fSDL) in single
+     precision. VERIFIED (sim/sound/scsp_level_check.cpp): two 24-bit
+     mantissa products, each rounded to nearest-even as a float multiply
+     rounds, from 256 + 16 + 8 factor entries, then x 2^14 and truncated,
+     equal MAME's table in all 131,072 entries. A small serial evaluator
+     recomputes a slot's five words (direct L / R, DSP send, effect L / R)
+     when TL, SDIR, IMXL, DISDL, DIPAN, EFSDL or EFPAN is written (~700
+     slot writes a second); the engine reads the stored words.
+  3. THE DSP AS A SEQUENCED UNIT: MPRO (128 x 64) and TEMP (128 x 24) in
+     M10K, MEMS / MIXS / COEF / MADRS / EFREG in MLAB, one 24 x 13 MAC, a
+     step every ~2 clocks, MAME's semantics including its quirks (memory only
+     on odd steps; LastStep from the 0xBF0 start; MIXS accumulating while
+     stopped; DEC). All instruction fields are built -- they are cheap -- and
+     the unused ones are benched with random programs against scsp_ref.h.
+  4. SOUND RAM IN SDRAM, DECOUPLED RATHER THAN FIXED-LATENCY. 512 KB is ~410
+     M10K, and the ring buffer alone (64 KB) is ~52 of the ~68 the 2A build
+     leaves (s1164: 485 / 553). So it lives in SDRAM at byte 0x2580000 (the
+     2A layout's unloaded hole, after the board RAM), on the three ports the
+     2A build freed: 5 the 68000 (program ROM, sample ROM, sound RAM), 6 the
+     slots' line fills, 7 the DSP (line fills and writes). No arbiter change.
+     This SDRAM cannot promise the Saturn's fixed slot (R852), so the engine
+     does what R821's MultiPCM does on this board: it runs ahead of real time
+     into a small output FIFO, stalls on a miss, and the FIFO drains at
+     exactly 44,100 Hz (22.5792 MHz / 512). Pitch, envelopes, LFOs and the
+     timers count samples, so they stay exact; the engine needs ~1,000 of
+     the 1,814 clk_sys a sample has at 80 MHz. Caches: slots 256 x 8 bytes,
+     DSP 64 x 4 words (a DSP write patches a present line); the 68000's
+     writes are snooped and invalidate either.
+  5. TIMERS, INTERRUPTS, MIDI AS MAME HAS THEM: timers A / B / C count
+     output samples ((255 - count) x prescale); SCIEB / SCIPD / SCIRE (with
+     MAME's re-pend of an expired timer) / SCILV and the per-level line
+     calls; the 32-byte MIDI-in FIFO fed from m2_sound_link's far end, MIBUF
+     reads popping it; MSLC / CA / SGC / EG latched each sample.
+     NOT BUILT (unused by all four; each would come back as a parameter and
+     its bench): FM (MDL / MDXSL / MDYSL and the 64-entry ring), reverse and
+     ping-pong loops, noise (SSCTL 1, LFO waveform 3 -- MAME's own is
+     machine().rand()), DMA, MIDI out, the main-CPU interrupt (MCIEB / MCIPD
+     stored, not wired; MAME binds no main_irq on Model 2).
+  6. THE 68000 (fx68k, vendored) at 11.2896 MHz from clk_sys by a phase
+     accumulator (enPhi at 22.5792 MHz), MAME's model2_snd map: 0x000000 RAM
+     512 KB, 0x100000 SCSP, 0x400000 the bank latch (no 2A set has more than
+     8 MB of samples, so it never banks), 0x600000 program ROM 512 KB,
+     0x800000-0xffffff the sample ROM, linear. Autovectored interrupts at the
+     SCSP's levels. Reset copies the 16-byte vector table from ROM to RAM, as
+     MAME's reset_model2_scsp does. A 2 KB read cache on the ROM windows.
+
+*Area target (quartus_map 17.0, ALMs needed est. -- the measure the Saturn
+core's 2,577 is in):* the SCSP alone <= 1,800 ALMs est., <= 20 M10K, <= 3
+DSP (Saturn: 2,577 / ~25 / 5); with fx68k and the board's glue <= 4,000
+ALMs est. against the 4,593 the 2A build freed. INFERRED split: slot engine
+~550, level evaluator ~120, DSP ~350, registers / timers / IRQ / MIDI /
+monitor ~200, caches and three ports ~250, FIFO and output ~60, 68000 glue
+~150; fx68k ~2,100. Measured block by block as each is built.
+
+*Benches:* every block against scsp_ref.h driven by MAME's own captures --
+bit-exact, since nothing any game uses is non-deterministic: the level
+evaluator exhaustively; the slot engine per slot and the mix, replayed with
+writes at sample boundaries; the DSP on the three games' programs and on
+random programs; then the whole board (fx68k on the real sound ROM, MIDI
+from MAME's bytes at MAME's times) at latency sweeps an order of magnitude
+past the SDRAM's, for underruns and for level and timing against MAME's
+mix (free-running, the 68000's writes land mid-sample, so not bit-exact --
+R821's case).
