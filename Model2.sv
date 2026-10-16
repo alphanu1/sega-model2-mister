@@ -129,7 +129,11 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `define M2_VCOP_GUN
 `endif
 localparam CONF_STR = {
+`ifdef M2_2A
+	"Model2A;;",   // R852: its own core name; its MRAs say <rbf>Model2A</rbf>
+`else
 	"Model2;;",
+`endif
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// R682: 15 kHz INTERLACED for a 15 kHz CRT -- 57.52 fields a second (the

@@ -11,7 +11,7 @@
 # the region MAME would show there. The two share no code, so an MRA mistake
 # has to be made twice, in two different languages, to pass.
 #
-#   tools/mra_vs_mame.py <image.bin> <model2.cpp> <set> <zip>[,<zip>...]
+#   tools/mra_vs_mame.py <image.bin> <model2.cpp> <set> <zip>[,<zip>...] [--layout=2a]
 #
 # <image.bin> is `tools/rom_csum.py <mra> <romdir> --out image.bin`. Every
 # file is ROM-derived; keep them outside the repository.
@@ -34,6 +34,20 @@ SLOTS = [
     ("TGP tables",       0x2ba0000, 0x040000, "copro_tgp_tables", 0x000000),
     ("program 256-512K", 0x2be0000, 0x040000, "maincpu",          0x040000),
 ]
+# R852: the Model 2A core's layout (branch model2a; Model2.sv M2_2A): the
+# program whole, 16 MB of data, no copro data, the samples last (the loader
+# moves them above the RAMs). `--layout 2a` checks an MRA against these.
+SLOTS_2A = [
+    ("program",          0x0000000, 0x080000, "maincpu",          0x000000),
+    ("main_data",        0x0080000, 0x1000000, "main_data",       0x000000),
+    ("textures 0-4M",    0x1080000, 0x400000, "textures",         0x000000),
+    ("textures 8-12M",   0x1480000, 0x400000, "textures",         0x800000),
+    ("polygons",         0x1880000, 0xc00000, "polygons",         0x000000),
+    ("TGP tables",       0x2480000, 0x040000, "copro_tgp_tables", 0x000000),
+    ("68000 program",    0x24c0000, 0x080000, "audiocpu",         0x000000),
+    ("samples",          0x2540000, 0x800000, "samples",          0x000000),
+]
+IMG_END_2A = 0x2d40000
 ALIAS = {"M1AUDIO_CPU_REGION": "m1audio:sndcpu", "M1AUDIO_MPCM1_REGION": "m1audio:pcm1",
          "M1AUDIO_MPCM2_REGION": "m1audio:pcm2",
          "cpu3": "comms", "cpu4": "comms"}   # daytona names it cpu3, desert / vcopa cpu4
@@ -89,13 +103,15 @@ def build(body, zips):
     return regions
 
 def main():
-    img_path, src_path, setname, zipnames = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    args = [a for a in sys.argv[1:] if not a.startswith("--layout")]
+    m2a = "--layout=2a" in sys.argv[1:] or "--layout2a" in sys.argv[1:]
+    img_path, src_path, setname, zipnames = args[0], args[1], args[2], args[3]
     img = open(img_path, "rb").read()
     src = open(src_path, encoding="utf-8", errors="replace").read()
     zips = [zipfile.ZipFile(z) for z in zipnames.split(",")]
     regions = build(rom_start(src, setname), zips)
     bad = 0
-    for name, io, size, tag, roff in SLOTS:
+    for name, io, size, tag, roff in (SLOTS_2A if m2a else SLOTS):
         want = bytes(regions.get(tag, b"")[roff:roff + size])
         want += bytes(size - len(want))              # past the region: 0 (the MRA's pad)
         got = img[io:io + size]
@@ -107,6 +123,12 @@ def main():
         else:
             first = next(i for i in range(size) if got[i] != want[i])
             print(f"  {name:18s} 0x{io:07X}  DIFFERS from MAME {tag} at +0x{first:X}"); bad += 1
+    if m2a:
+        # the 2A core has no sound scan: the 68000 program's base is fixed
+        if len(img) != IMG_END_2A:
+            print(f"  image size 0x{len(img):X}, expected 0x{IMG_END_2A:X}"); bad += 1
+        print("PASS" if bad == 0 else f"FAIL ({bad})")
+        sys.exit(1 if bad else 0)
     if len(img) != 0x2be0000 + 0x40000:
         print(f"  image size 0x{len(img):X}, expected 0x2C20000"); bad += 1
     # The sound scan (Model2.sv SC_*): 64 KB steps from byte 0x1000000, the
