@@ -36052,3 +36052,84 @@ s1150 ON THE BOARD (Model2A.rbf, VF2 MRA, vf2.zip copied; md5s checked):
 VF2 runs -- the attract's 3D fight scene (Shun Di at the temple: textured
 characters, buildings and floor, "CREDIT 0/2", "(C) SEGA 1994"), silent as
 designed. Screenshot sm2-builds/mipmaps/board/vf2_s1150.png.
+
+**R854 -- VF2 AT 28.75 FPS: THE GAME LOCKS ITSELF TO TWO VBLANKS WHENEVER
+ITS FOREGROUND OVERRUNS ONE. MAME's VF2 NEVER OVERRUNS; OURS DOES EVERY
+FRAME. NOT THE DRAW, NOT THE WALK. NO FIX YET; s1160 MEASURES IT ON THE
+BOARD.**
+
+*What was believed.* s1150 on the board: m2-fps.py reads 28.7-29.0 in the
+attract and in play (79 readings over 25 min, mean 29.5, four higher ones
+at screen changes); Ben: it feels slow. MAME's render_mode_w comment lists
+30 Hz games (skytargt, desert, vstriker, vcop) without vf2. The original
+core's Daytona was CPU/TGP-bound until R815-R817.
+
+*MAME's target (0.289, vf2, sim/io/mame_m2_vf2_boot.lua, traces with
+sim/io/mame_m2_trace_window.lua TW_CPU).*
+  * render_mode_w 0x00000004 at frame 3 (60 Hz mode); videoctl 0 (geo_parse
+    every vblank). Flips (0x803008) 57-58 a second from frame 11 on, in the
+    boot, the attract and a fight: ONE NEW LIST EVERY VBLANK, 57.5 fps.
+  * i960 a frame: attract foreground 33.0 k instructions (32.3-33.4 k, 18
+    frames), the rest of the frame a background decompression coroutine
+    (resumed at 0x4aeac, saved at 0x4add0-0x4aea8; 110-167 k); fight 39.1 k
+    busy plus 56 k in the vblank spin at 0x10f98. FP forms 5% of the
+    foreground (mulr 537, addr 581, cmpr 304 a frame).
+  * TGP 67.6 k (fight) / 68.6 k (attract) instructions a frame; FIFO in
+    ~2,700 words a frame, out ~930. Polygons a rendered list: attract mean
+    888 (max 1,598), fight 1,500-1,650.
+  * Code: 34.9 KB distinct a fight frame; line-change misses a frame 3,016
+    (8 KB direct), 2,113 (16 KB), 1,192 (32 KB) -- the size of Daytona's race.
+
+*The mechanism (MAME dasm, verified in the bench).* 0x500000 is a vblank
+counter the IRQ raises; the frame loop clears it at 0x10fc8. When the
+foreground ends it calls 0x4bcd4: counter 0 (done inside the vblank) ->
+mode byte 0x50006d = 0 and the background runs; counter != 0 (OVERRAN) ->
+mode 2 (0x4bce0) and no background. At 0x10f74 mode 2 waits at
+0x10f90/0x10f98 for the counter to CHANGE -- the next vblank. So a
+foreground of 1.0-2.0 vblanks gives exactly two vblanks a frame, 28.75 fps,
+and the game logic steps once a frame: half speed, which is what Ben feels.
+Mode 0 with the counter at 1 goes on at once; counter >= 2 bumps 0x500018
+(the game's own "CPU_FAIL" meter beside "CPU_POWER" / "CPU_WORST").
+
+*Not the 3D (simulation).*
+  * Draw, tb_m2_raster3d in Model2.sv's m2_raster3d configuration (step 1,
+    bilinear, MIP Sharp, R107 100:80, TEXLAT 12, 80 MHz), MAME's lists:
+    attract 5.3-5.9 ms (lists 400, 900, 1000), fight 8.2-8.3 ms (1500, 3000,
+    3800 with a coin at 26 s); Daytona f2000 8.8 ms as a check.
+  * Walk, geodiff_ra (the read-ahead, M2GD_LAT 12): fight walks 3450 / 5175
+    / 2700 to the last quad 781 k / 748 k / 726 k clk_sys (0.52-0.56
+    vblank); attract 2300 721 k. ~60 k engine reads a walk.
+
+*The whole-core bench (test_m2_boot_2a, new M2_FRAMESTAT / M2_WORK_IPS
+accounting; i960 24 MHz, SDRAM model 48 MHz -- a bench vblank is 417 k CPU
+cycles, the board's 695 k).* 3D attract, frames 1170-1300:
+  * foreground (0x10fc8 -> 0x4bcd4) 35.1 k instructions (MAME 33 k), 490 k
+    CPU cycles mean, CPI 14: fetch wait 2.7-4.7, T_MEM_W 6.0-6.7 (the TGP
+    holding the CPU 87-98 k cycles a frame, 18-20%), FRAME 1.1-2.0, FP 0.18.
+  * LAT 6: frames alternate 371 k / 630 k (fetch wait 73 k vs 248 k in the
+    same code), 1.50 vblanks a frame, half the frames mode 2. LAT 16: every
+    frame 485-522 k, every frame mode 2, 2.00 vblanks a frame -- THE BOARD'S
+    CADENCE REPRODUCED. The mean is the same at both (490 k): the
+    foreground is not set by the SDRAM model's latency.
+  * 32 KB i-cache (new i960_top IC_LINES = 2048): mean 490.6 k against
+    490.3 k. NOT the lever (R817's caution: misses are not what is left).
+  * At the board's clocks the bench's 490 k would be 0.71 vblank and fit; the
+    board does not, so its foreground costs >= 1.42x the bench's cycles --
+    the SDRAM under the walk, texels and scanout, which the bench does not
+    have. INFERRED, settled by s1160's 'Y' record.
+
+*The diagnostic build.* M2_WHY (Model2.sv, with M2_DEBUG_LITE): R814's V /
+I / K / P / D records plus W (walk length) and Y (vblank to the first of
+0x10f98 / 0x4aeac / 0x4cb7c / 0x4cd30: the frame's work; in mode 2 frames
+the foreground exactly). tools/decode_why.py decodes all of them. s1160-
+s1162 = 1844e35 + build/worktree_patches/why-r854-1844e35.patch (80/40):
+s1160 core clocks >= +0.631, hold >= +0.247, HDMI -0.020; 36,123 ALM (86%),
+M10K 485/553; RBF build/Model2A_20261016_s1160_why.rbf 45dd160e. s1161 and
+s1162: Quartus Internal Error (DYN) with four Verilator benches running.
+
+*Open, recorded:* why the LAT-6 bench alternates 371 k / 630 k foregrounds
+with the same instructions (the fetch-wait difference is in the same
+0x23900 / 0x28900 code); what in the board's foreground costs the extra
+>= 42% (Y, I, K on s1160 say). Levers not yet measured: the TGP's latency
+(~20% of the foreground waits on it), the i960's data path under
+contention.

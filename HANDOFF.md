@@ -1,5 +1,32 @@
 # Handoff
 
+## 2026-10-16 (evening): model2a -- why VF2 runs at 28.75 fps (R854)
+
+FOUND: VF2 locks itself to two vblanks whenever its frame's foreground
+overruns one (0x4bcd4 sets mode 2; 0x10f90 waits for the next vblank). MAME
+never overruns (one flip every vblank, 57.5 fps; foreground 33-39 k
+instructions, TGP ~68 k). Our foreground overruns every frame on the board,
+so every frame takes exactly two vblanks and the game runs at half speed.
+Not the draw (5.3-8.3 ms) and not the walk (0.52-0.56 vblank) in simulation.
+The 2A boot bench reproduces the lock (LAT 16: every frame mode 2, 2.00
+vblanks a frame); the bench's foreground is 35 k instructions at CPI 14,
+~20% of it waiting on the TGP. A 32 KB i-cache changes nothing (490.6 k vs
+490.3 k cycles). Study R854 has the numbers.
+
+BUILT, NOT ON THE BOARD: s1160 (1844e35 + M2_WHY telemetry,
+build/worktree_patches/why-r854-1844e35.patch), core clocks >= +0.631, hold
+>= +0.247, HDMI -0.020, 36,123 ALM, RBF build/Model2A_20261016_s1160_why.rbf
+(45dd160e2666f66da84545aeb80b8a19). Load as Model2A.rbf with the VF2 MRA;
+capture the UART (ttyS1, 115200) with uart_capture.py for 120 s of attract
+and 120 s of a fight, plus m2-fps.py; decode with
+`tools/decode_why.py <capture> 80`. The 'Y' line is the frame's work in ms:
+over 17.4 ms is the overrun. I / K say where the i960's cycles go.
+
+NEXT: from s1160's Y / I / K, pick the lever (the TGP's latency, the i960's
+data path under SDRAM contention); the foreground must come under 17.4 ms.
+OPEN: the LAT-6 bench alternates 371 k / 630 k-cycle foregrounds with the
+same instructions.
+
 ## 2026-10-16 (later): model2a -- VF2 reaches its 3D attract in simulation (silent)
 
 Study R852 (the start of the study's MODEL 2A-CRX section) has every number.
