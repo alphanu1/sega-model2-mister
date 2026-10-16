@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-10-16: BRANCH model2a -- the Model 2A-CRX core. NEVER MERGE INTO main.
+
+Created from main at 4b81d89 (release Model2_20261016). This branch is the
+Model 2A-CRX bring-up and is headed for its own repository: it is never
+merged into main and no PR from it targets main. Shared fixes are made on
+main/headroom and merged INTO model2a, never the other way. The plan and the
+board differences are study R832 (MODEL 2A-CRX): same i960 and TGP; SCSP
+(YMF292) sound with its own 68000 replaces the Model 1 sound board; a Sega
+315-5649 I/O controller read by the i960 directly (and a 93C46 EEPROM)
+replaces the I/O board's Z80 and dual-port RAM; 256 KB work RAM, no program
+mirror. Bring-up ROM: to be decided (see the R-entry that starts this branch).
+
 ## 2026-10-16: RELEASE Model2_20261016 (s1142) -- Daytona, Desert Tank, Virtua Cop
 
 Released from c545187's RTL as s1142 (releases/Model2_20261016.rbf,
