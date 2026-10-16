@@ -149,6 +149,7 @@ public:
 	u8 latched_MSLC = 0;
 	// per-sample observation for the benches
 	s32 slot_out[32]; u8 slot_was_active[32]; s32 last_l = 0, last_r = 0;
+	s32 mix_add[16];   // this sample's DSP sends, per MIXS entry (benches)
 
 	SCSP(const Tables &t, u16 *r) : T(t), ram(r) {
 		memset(udata, 0, sizeof(udata)); memset(RINGBUF, 0, sizeof(RINGBUF));
@@ -453,6 +454,7 @@ public:
 			else SHIFTED = sext(ACC, 24);
 			Y = sext(Y, 13);
 			s64 v = (s64(X) * s64(Y)) >> 12;
+			if (dbg_dsp) printf("M k %d acc %d sh %d in %d x %d y %d b %d mv %d dec %u ira %x iwt %d iwa %d mixs %x\n", step, ACC, SHIFTED, INPUTS, X, Y, B, MEMVAL, D.DEC & 0xffff, IRA, IWT, IWA, IRA >= 0x20 && IRA < 0x30 ? D.MIXS[IRA - 0x20] : 0);
 			ACC = int(v + B);
 			if (TWT) D.TEMP[(TWA + D.DEC) & 0x7f] = SHIFTED;
 			if (FRCL) { if (SHIFTv == 3) FRC_REG = SHIFTED & 0x0fff; else FRC_REG = (SHIFTED >> 11) & 0x1fff; }
@@ -464,6 +466,7 @@ public:
 				if (!TABLE) ADDR &= D.RBL - 1; else ADDR &= 0xffff;
 				ADDR += D.RBP << 12;
 				ADDR <<= 1;
+				if (dbg_dsp) printf("M   addr %05x (words %05x) rbl %u rbp %x\n", ADDR, ADDR >> 1, D.RBL, D.RBP);
 				if (MRD && (step & 1)) { if (mem_hook) mem_hook(hook_ctx, 2, ADDR); auto h = mem_hook; mem_hook = nullptr;
 					if (NOFL) MEMVAL = read_word(ADDR) << 8; else MEMVAL = UNPACK(read_word(ADDR)); dsp_reads++; mem_hook = h; }
 				if (MWT && (step & 1)) { if (NOFL) write_word(ADDR, SHIFTED >> 8); else write_word(ADDR, PACK(SHIFTED)); dsp_writes++; }
@@ -475,10 +478,12 @@ public:
 		std::fill(std::begin(D.MIXS), std::end(D.MIXS), 0);
 	}
 	uint64_t dsp_reads = 0, dsp_writes = 0;
+	bool dbg_dsp = false;
 
 	// ---------------------------------------------------------------- one sample (MAME DoMasterSamples, one iteration)
 	void sample(s32 &outl, s32 &outr) {
 		s32 smpl = 0, smpr = 0;
+		for (int i = 0; i < 16; i++) mix_add[i] = 0;
 		for (int sl = 0; sl < 32; ++sl) {
 			RBUFDST = RINGBUF + BUFPTR;
 			slot_was_active[sl] = S[sl].active; slot_out[sl] = 0;
@@ -489,6 +494,7 @@ public:
 				u16 eff_tl = SDIR(slot) ? 0 : TL(slot);
 				u16 Enc = eff_tl | (IMXL(slot) << 0xd);
 				D.MIXS[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
+				mix_add[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
 				Enc = eff_tl | (DIPAN(slot) << 0x8) | (DISDL(slot) << 0xd);
 				smpl += (smp * T.LPANTABLE[Enc]) >> SHIFT;
 				smpr += (smp * T.RPANTABLE[Enc]) >> SHIFT;

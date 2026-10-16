@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
 		Ctx *x = (Ctx *)c;
 		if (k == 0 || k == 1) { x->slot->look(a & 0xfffff); }
 		else if (k == 2) { for (auto &m : *x->dsp) m.look(a); x->dr++; }
-		else { x->dw++; }
+		else { x->dw++; if (getenv("DSP_WINV")) for (auto &m : *x->dsp) m.inval(a); }
 	};
 	uint64_t wrong = 0, first_wrong = ~0ull, n = 0, nz = 0, maxd = 0;
 	s32 o[2];

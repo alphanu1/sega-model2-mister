@@ -2267,3 +2267,26 @@ test_m2_scsp_level: obj_scsp_level/Vm2_scsp_level
 obj_scsp_level/Vm2_scsp_level: $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/scsp_lvl.hex sim/sound/tb_m2_scsp_level.cpp sim/sound/scsp_ref.h
 	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) --top-module m2_scsp_level --Mdir obj_scsp_level \
 	  $(SCSP_DIR)/m2_scsp_level.sv sim/sound/tb_m2_scsp_level.cpp
+
+SCSP_RTL := $(SCSP_DIR)/m2_scsp.sv $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/m2_scsp_cache.sv $(SCSP_DIR)/m2_scsp_dsp.sv
+SCSP_HEX := $(SCSP_DIR)/scsp_lvl.hex $(SCSP_DIR)/scsp_eg.hex $(SCSP_DIR)/scsp_pscale.hex $(SCSP_DIR)/scsp_ascale.hex
+
+.PHONY: test_m2_scsp
+# SCSP_CAP=build/scsp/<game> (a p16 capture); SCSP_N samples (default 441,000 = 10 s)
+test_m2_scsp: obj_scsp_top$(SCSP_SFX)/Vm2_scsp
+	@echo "== test m2_scsp (MAME's own register stream replayed, sample for sample)"
+	@cp -f $(SCSP_HEX) obj_scsp_top$(SCSP_SFX)/ && cd obj_scsp_top$(SCSP_SFX) && SCSP_CAP=$(abspath $(SCSP_CAP)) ./Vm2_scsp
+
+obj_scsp_top$(SCSP_SFX)/Vm2_scsp: $(SCSP_RTL) $(SCSP_DIR)/scsp_tables.svh $(SCSP_HEX) sim/sound/tb_m2_scsp.cpp sim/sound/scsp_ref.h
+	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY \
+	  $(SCSP_DEFS) --top-module m2_scsp --Mdir obj_scsp_top$(SCSP_SFX) $(SCSP_RTL) sim/sound/tb_m2_scsp.cpp
+
+.PHONY: test_m2_scsp_dsp
+# SCSP_CAP=build/scsp/<game> SCSP_N=<samples>, or DSP_RANDOM=<programs>
+test_m2_scsp_dsp: obj_scsp_dsp$(SCSP_SFX)/Vm2_scsp_dsp
+	@echo "== test m2_scsp_dsp (the DSP alone: EFREG and its writes against MAME's, each sample)"
+	@cd obj_scsp_dsp$(SCSP_SFX) && SCSP_CAP=$(abspath $(SCSP_CAP)) ./Vm2_scsp_dsp
+
+obj_scsp_dsp$(SCSP_SFX)/Vm2_scsp_dsp: $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_scsp_cache.sv sim/sound/tb_m2_scsp_dsp.cpp sim/sound/scsp_ref.h
+	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY \
+	  $(SCSP_DEFS) --top-module m2_scsp_dsp --Mdir obj_scsp_dsp$(SCSP_SFX) $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_scsp_cache.sv sim/sound/tb_m2_scsp_dsp.cpp
