@@ -36048,3 +36048,7 @@ clk_sys +0.656, clk_mem +0.801, clk_i960 +1.962, HDMI +0.122, holds >=
 clocks (HDMI -0.030); s1152 crashed (Internal Error, STA). RBF
 build/Model2A_20261016_s1150_vf2.rbf (on the SD card as Model2A.rbf, the
 name the VF2 MRAs ask for). Not yet on the board.
+s1150 ON THE BOARD (Model2A.rbf, VF2 MRA, vf2.zip copied; md5s checked):
+VF2 runs -- the attract's 3D fight scene (Shun Di at the temple: textured
+characters, buildings and floor, "CREDIT 0/2", "(C) SEGA 1994"), silent as
+designed. Screenshot sm2-builds/mipmaps/board/vf2_s1150.png.
