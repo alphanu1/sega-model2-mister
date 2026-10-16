@@ -92,6 +92,18 @@ module fp_mul #(
   assign a_e_eff = (a_exp == 8'h00) ? 11'sd1 : $signed({3'b000, a_exp});
   assign b_e_eff = (b_exp == 8'h00) ? 11'sd1 : $signed({3'b000, b_exp});
 
+  // SUBNORM: the operands' leading zeros, counted beside the multiply (not in
+  // front of it) and registered with the product -- so stage 2 normalises by
+  // a registered amount, and the subnormal decision is two registered flags
+  // and one product bit (R852: a leading-zero count and a denormalising shift
+  // in one stage were -7.8 ns post-map at 80 MHz).
+  function automatic logic [4:0] lz24(input logic [23:0] v);
+    lz24 = 5'd24;
+    for (int i = 0; i < 24; i++) if (v[i]) lz24 = 5'(23 - i);
+  endfunction
+  wire [5:0] in_lz = SUBNORM ? ({1'b0, lz24(a_sig)} + {1'b0, lz24(b_sig)}) : 6'd0;
+  wire signed [10:0] in_exp = a_e_eff + b_e_eff - 11'sd127;
+
   // ------------------------------------------------------------ stage 1
 
   logic               s1_valid;
@@ -99,6 +111,12 @@ module fp_mul #(
   logic signed [10:0] s1_exp;
   logic [47:0]        s1_prod;
   logic               s1_zero, s1_inf, s1_nan, s1_invalid;
+  logic [5:0]         s1_lz;          // SUBNORM: the operands' leading zeros
+  logic signed [10:0] s1_explz;       // s1_exp + 1 - s1_lz: the exponent if bit 47 ends up set
+  logic               s1_xle0, s1_xeq1;   // s1_explz <= 0, == 1
+  logic               s1_epos;        // s1_exp > 0
+  logic [5:0]         s1_lsh;         // s1_exp, clamped to 0..47 (a subnormal result's left shift)
+  logic [5:0]         s1_rsh;         // -s1_exp, clamped to 0..48 (... or its right shift)
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -106,7 +124,14 @@ module fp_mul #(
     end else begin
       s1_valid   <= in_valid;
       s1_sign    <= a_sign ^ b_sign;
-      s1_exp     <= a_e_eff + b_e_eff - 11'sd127;
+      s1_exp     <= in_exp;
+      s1_lz      <= in_lz;
+      s1_explz   <= in_exp + 11'sd1 - $signed({5'd0, in_lz});
+      s1_xle0    <= (in_exp + 11'sd1 - $signed({5'd0, in_lz})) <= 11'sd0;
+      s1_xeq1    <= (in_exp + 11'sd1 - $signed({5'd0, in_lz})) == 11'sd1;
+      s1_epos    <= in_exp > 11'sd0;
+      s1_lsh     <= (in_exp > 11'sd47) ? 6'd47 : (in_exp > 11'sd0) ? in_exp[5:0] : 6'd0;
+      s1_rsh     <= (in_exp < -11'sd47) ? 6'd48 : (in_exp < 11'sd0) ? 6'(-in_exp) : 6'd0;
       s1_prod    <= a_sig * b_sig;
       s1_invalid <= (a_is_nan | b_is_nan)
                   | (a_is_inf & b_is_zero) | (b_is_inf & a_is_zero);
@@ -125,18 +150,25 @@ module fp_mul #(
   logic [47:0]        norm_prod;
   logic signed [10:0] norm_exp;
 
-  // SUBNORM: by the leading zeros, so a subnormal operand's product is
-  // normalised too (norm_prod[47] set, the value unchanged).
-  logic [5:0] lz;
-  always_comb begin
-    lz = 6'd47;
-    for (int i = 0; i <= 47; i++) if (s1_prod[i]) lz = 6'(47 - i);
-  end
+  // SUBNORM: shifted by the operands' leading zeros the product has bit 47
+  // or 46 set; one more step normalises it (the original unit's step). A
+  // result below 2^-126 is the product shifted by s1_exp itself -- left, or
+  // right with the lost bits kept as a sticky bit 0 -- with exponent 0: the
+  // normalised product shifted right by 1 - exponent comes to exactly that.
+  wire [47:0] p_lz   = s1_prod << s1_lz;
+  wire        p_nsh  = !p_lz[47];
+  wire        p_den  = SUBNORM && (s1_xle0 || (s1_xeq1 && p_nsh));
+  wire [47:0] p_left = s1_prod << s1_lsh;
+  wire [47:0] p_rgt  = (s1_rsh >= 6'd48) ? {47'd0, |s1_prod}
+                     : ((s1_prod >> s1_rsh[5:0])
+                        | {47'd0, |(s1_prod & ~(48'hFFFF_FFFF_FFFF << s1_rsh[5:0]))});
   assign norm_shift = s1_prod[47];
-  assign norm_prod  = SUBNORM ? (s1_prod << lz)
-                    : (norm_shift ? s1_prod : (s1_prod << 1));
-  assign norm_exp   = SUBNORM ? (s1_exp + 11'sd1 - $signed({5'd0, lz}))
-                    : (s1_exp + (norm_shift ? 11'sd1 : 11'sd0));
+  assign norm_prod  = !SUBNORM ? (norm_shift ? s1_prod : (s1_prod << 1))
+                    : p_den    ? (s1_epos ? p_left : p_rgt)
+                    : (p_nsh ? (p_lz << 1) : p_lz);
+  assign norm_exp   = !SUBNORM ? (s1_exp + (norm_shift ? 11'sd1 : 11'sd0))
+                    : p_den    ? 11'sd0
+                    : (s1_explz - (p_nsh ? 11'sd1 : 11'sd0));
 
   // norm_prod[47] is the implicit bit, [46:24] the fraction.
   // ------------------------------------------- stage 2: register normalised
@@ -162,25 +194,10 @@ module fp_mul #(
   logic [22:0] frac_pre;
   logic        guard, round_bit, sticky;
 
-  // SUBNORM: an exponent of 0 or below is a subnormal result -- shift right
-  // by 1 - exp (the shifted-out bits kept as a sticky bit 0), exponent 0. A
+  // SUBNORM: a subnormal arrives here already shifted, with exponent 0; a
   // round carry out of it gives exponent 1, the smallest normal, as IEEE.
-  logic [47:0]        dn_prod;
-  logic signed [10:0] dn_exp;
-  logic [10:0]        dn_rsh;
-  always_comb begin
-    dn_prod = s2_prod;
-    dn_exp  = s2_exp;
-    dn_rsh  = 11'd1 - s2_exp;
-    if (SUBNORM && s2_exp <= 11'sd0) begin
-      dn_exp = 11'sd0;
-      if (dn_rsh >= 11'd48) dn_prod = {47'd0, |s2_prod};
-      else begin
-        dn_prod = s2_prod >> dn_rsh[5:0];
-        dn_prod[0] = dn_prod[0] | |(s2_prod & ~(48'hFFFF_FFFF_FFFF << dn_rsh[5:0]));
-      end
-    end
-  end
+  wire [47:0]        dn_prod = s2_prod;
+  wire signed [10:0] dn_exp  = s2_exp;
 
   assign frac_pre  = dn_prod[46:24];
   assign guard     = dn_prod[23];
