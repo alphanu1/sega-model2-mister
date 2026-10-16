@@ -1,5 +1,45 @@
 # Handoff
 
+## 2026-10-16 (later): model2a -- VF2 reaches its 3D attract in simulation (silent)
+
+Study R852 (the start of the study's MODEL 2A-CRX section) has every number.
+Not fitted, not on a board, nothing pushed.
+
+DONE:
+  * M2_2A (default on; VERILOG_MACRO "M2_NO_2A=1" builds main's core with
+    every switch at main's default: lint clean, test_m2_boot byte-identical,
+    quartus_map +1 register / +8 ALUT against 4b81d89). New switches
+    M2_M1SOUND and M2_IOZ80 for the original board's sound board and I/O
+    Z80; Virtua Cop's default off on this branch. The core is named Model2A.
+  * The 2A board: 256 KB board RAM, no mirror; m2_315_5649 + m2_93c46;
+    m2_timers (VF2's timer-3 interrupt and its busy-waits); m2_2a_snd_stub
+    (VF2 never reads the UART -- MAME boots and plays with the sound CPU
+    suspended and with IRQ 10 stripped); TGP program RAM 4096 words and
+    subnormal fp_mul / fp_add (VF2 has its own 3,802-word TGP program; the
+    replay is bit-exact); live CRTC offsets (VF2 y = 127; geodiff 523/523
+    and 760/762); char RAM zeroed at boot.
+  * mra/Virtua Fighter 2 (Version 2.1).mra (+ [15kHz CRT]): the 2A layout,
+    <rbf>Model2A</rbf>; tools/mra_vs_mame.py --layout=2a passes all slots.
+  * Benches: test_m2_315_5649, test_fp_mul_subnorm, test_fp_add_subnorm,
+    tgp_replay TGP_PROG=4096, geodiff_2a, test_m2_boot_2a (M2_MAXFRAMES).
+  * Area (quartus_map 17.0): 2A 35,823 ALMs est. against main's 40,416.
+    The SCSP (MiSTer-devel Saturn core, unlicensed, no MIDI) measures 2,577
+    ALMs alone; with its 68000 ~4,700 -- about what the 2A board frees.
+
+SIM: test_m2_boot_2a to frame 1300 (87.8 M instructions, ~29 min): boot
+screen, WARNING, SEGA logo and the first polygons at 805, the 3D attract at
+1070 (MAME 988; the bench is ~80 frames behind from the boot on), no trap.
+Open: 4,023 polygons refused as non-finite in the bench's 3D frames that
+MAME's own walks (geodiff) never have.
+
+FOUND, A BENCH FAULT: tb_m2_boot served the TGP's buffer RAM at 0x16d0000
+while the bridge's is at 0x16f0000. Fixed for the 2A bench only; Daytona's
+bench still has the split (a question for main).
+
+NEXT: a fit of this branch and Ben on the board with the VF2 MRA (silent);
+then the SCSP (licence or from scratch, MIDI, a deterministic sound-RAM
+port); the non-finite polygons; Virtua Cop 2.
+
 ## 2026-10-16: BRANCH model2a -- the Model 2A-CRX core. NEVER MERGE INTO main.
 
 Created from main at 4b81d89 (release Model2_20261016). This branch is the
