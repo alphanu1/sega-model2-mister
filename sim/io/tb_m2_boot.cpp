@@ -1981,6 +1981,77 @@ int main(int argc, char **argv) {
       ++retired;
       pc_acc_prev = d->dbg_acc;
     }
+    // R854: PER-FRAME ACCOUNTING (M2_FRAMESTAT=<file>), one line a vblank:
+    // instructions retired, and of them the FOREGROUND -- a game that runs a
+    // background coroutine in its idle time (VF2: resumed at M2_BG_RESUME,
+    // suspended by the `ret` at M2_BG_SUSP) has no idle spin to subtract --
+    // the CPU cycle of the frame's first retire at any of M2_SYNC_IPS (the
+    // frame's work done: VF2's background resume or its vblank spin), of its
+    // first flip (0x803008), FIFO and geo writes, TGP instructions retired,
+    // the i960's cycles in every sequencer state (ts0..ts22, i960_top's
+    // tstate_e), the copro holding it, and the clk_mem cycles the walker and
+    // the geometry engine were busy.
+    {
+      static FILE *fsf = std::getenv("M2_FRAMESTAT") ? std::fopen(std::getenv("M2_FRAMESTAT"), "w") : nullptr;
+      if (fsf) {
+        static const uint32_t bg_res = std::getenv("M2_BG_RESUME") ? uint32_t(std::strtoul(std::getenv("M2_BG_RESUME"), nullptr, 16)) : 0xffffffffu;
+        static const uint32_t bg_sus = std::getenv("M2_BG_SUSP") ? uint32_t(std::strtoul(std::getenv("M2_BG_SUSP"), nullptr, 16)) : 0xffffffffu;
+        static std::vector<uint32_t> sync_ips;
+        static bool sync_init = false;
+        if (!sync_init) {
+          sync_init = true;
+          if (const char *si = std::getenv("M2_SYNC_IPS")) {
+            std::string v(si); size_t p0 = 0;
+            while (p0 < v.size()) { size_t p1 = v.find(',', p0); if (p1 == std::string::npos) p1 = v.size();
+              sync_ips.push_back(uint32_t(std::strtoul(v.substr(p0, p1 - p0).c_str(), nullptr, 16))); p0 = p1 + 1; }
+          }
+        }
+        static uint64_t f_cyc = 0, f_ins = 0, f_fg = 0, f_cst = 0, f_walk = 0, f_eng = 0, f_ts[32] = {0};
+        static uint64_t f_flips = 0, f_fifo = 0, f_geo = 0, f_flip_at = 0, f_sync_at = 0, f_sync_ins = 0;
+        static int in_bg = 0, cp = 0, sel_p = 0; static uint32_t acc_p = 0; static uint64_t f_tgp = 0;
+        if ((d->geo_state & 15) != 0) ++f_walk;
+        if (d->obs_eng_busy) ++f_eng;
+        if (d->obs_tgp_retire) ++f_tgp;   // the TGP runs on clk_mem here: one sample a cycle
+        if (d->clk_cpu && !cp) {
+          ++f_cyc;
+          ++f_ts[d->obs_ts & 31];
+          if (d->obs_copro_stall) ++f_cst;
+          if (d->obs_io_sel && !sel_p && d->obs_io_we) {
+            const uint32_t a = d->obs_io_addr & 0xffffff;
+            if (a == 0x803008) { if (!f_flips) f_flip_at = f_cyc; ++f_flips; }
+            else if (a >= 0x884000 && a < 0x888000) ++f_fifo;
+            else if (a >= 0x800000 && a < 0x801000) ++f_geo;
+          }
+          sel_p = d->obs_io_sel;
+        }
+        cp = d->clk_cpu;
+        if (d->dbg_acc != acc_p) {
+          const uint32_t ip = uint32_t(d->dbg_ip);
+          ++f_ins;
+          if (ip == bg_res) in_bg = 1;
+          if (!in_bg) ++f_fg;
+          if (ip == bg_sus && in_bg) in_bg = 0;
+          if (!f_sync_at) for (uint32_t s : sync_ips) if (ip == s) { f_sync_at = f_cyc; f_sync_ins = f_ins; break; }
+          acc_p = d->dbg_acc;
+        }
+        if (mem_edges >= next_vbl) {
+          std::fprintf(fsf, "V %llu fr %llu cyc %llu ins %llu fg %llu sync_at %llu sync_ins %llu flips %llu flip_at %llu fifo %llu geo %llu tgp %u cst %llu walk %llu eng %llu ts",
+                       (unsigned long long)vblanks, (unsigned long long)g_frames_done,
+                       (unsigned long long)f_cyc, (unsigned long long)f_ins, (unsigned long long)f_fg,
+                       (unsigned long long)f_sync_at, (unsigned long long)f_sync_ins,
+                       (unsigned long long)f_flips, (unsigned long long)f_flip_at,
+                       (unsigned long long)f_fifo, (unsigned long long)f_geo, (unsigned)f_tgp,
+                       (unsigned long long)f_cst, (unsigned long long)f_walk, (unsigned long long)f_eng);
+          for (int k = 0; k < 23; ++k) std::fprintf(fsf, " %llu", (unsigned long long)f_ts[k]);
+          std::fprintf(fsf, "\n");
+          std::fflush(fsf);
+          f_tgp = 0;
+          f_cyc = f_ins = f_fg = f_cst = f_walk = f_eng = 0;
+          for (auto &x : f_ts) x = 0;
+          f_flips = f_fifo = f_geo = f_flip_at = f_sync_at = f_sync_ins = 0;
+        }
+      }
+    }
     if (mem_edges >= next_vbl) {
       next_vbl += VBL; ++vblanks;
       d->irq = 0x1;                       // level, cleared below
