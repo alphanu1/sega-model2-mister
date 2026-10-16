@@ -35768,3 +35768,22 @@ the difference is large and one-sided. rtl/ is restored to c545187's;
 R848's benches stay (tb_fp_pool_gnt passes against the original arbiter;
 geodiff's M2GD_POOLHASH is harmless) and its commits remain in history to
 re-apply if area is ever freed. s1142 (c545187) stays the candidate.
+
+**R851 -- AFTER THE RELEASE (Model2_20261016, merged f7c41ad): BEN'S
+ANSWERS, AND THE TGP REGISTER BENCH.**
+  * Virtua Cop is PLAYABLE past its first stage on the board (Ben); R849's
+    "MAME never got past stage 1" no longer limits what is known to work.
+  * Virtua Cop's country (R846: a fresh backup RAM starts as Japan) is the
+    game's own setting -- its test menu, or a ROM set from another region.
+    Nothing for the core to do; no option will be added.
+  * GunCon on SNAC (R841 route 2): noted for later, not being worked on.
+  * test_mb86233_regs' 46,966 failures (R848 found them on c545187) were the
+    BENCH, not the RTL. tb_mb86233_regs.cpp came from Model 1 with register
+    0x21 as plain storage; on Model 2, rf 1 (0x21) is the input FIFO's pop
+    and 0x22 the output FIFO's push (R112, 0e49c54, model2.cpp's
+    copro_tgp_rf_map), which the RTL has implemented since 31 August -- every
+    failure was a read of 0x21 expecting a stored value and getting the
+    harness's FIFO input (0). The bench now drives rf_fifo_rdata with a fresh
+    value each cycle, expects it on 0x21, and checks rf_fifo_rd (0x21 reads)
+    and rf_fifo_wr (0x22 writes): 3,000,000 checks, 0 failures. No RTL
+    change. All three games run on the board, as they did.

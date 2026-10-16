@@ -53,9 +53,16 @@ struct Model {
 
 static bool in_rf(uint32_t r) { return r >= 0x20 && r < 0x30; }
 
+// R851: ON MODEL 2, rf 1 (register 0x21) IS THE INPUT FIFO'S POP, NOT STORAGE
+// (R112, 0e49c54: model2.cpp's copro_tgp_rf_map). This model came from Model 1
+// with 0x21 as a plain register and was never updated, so it failed every read
+// of 0x21 (46,966 of 3,000,000) while the RTL was right. The bench now drives
+// rf_fifo_rdata with a fresh value each cycle and expects it back on 0x21,
+// and checks the pop / push strobes.
 static uint32_t read_reg(const Model& m, uint32_t r, uint8_t c0, uint8_t c1,
-                         bool* unimpl) {
+                         bool* unimpl, uint32_t fifo) {
   *unimpl = false;
+  if (r == 0x21) return fifo;
   if (in_rf(r)) return m.rf[r & 0x0f];
   switch (r) {
     case 0x00: return m.b0;
@@ -157,6 +164,7 @@ int main(int argc, char** argv) {
     uint32_t dv = dist(rng), pv = dist(rng);
     uint16_t x0v = (uint16_t)dist(rng), x1v = (uint16_t)dist(rng);
     uint8_t  c0v = (uint8_t)dist(rng), c1v = (uint8_t)dist(rng);
+    uint32_t fifov = dist(rng);                  // R851: the input FIFO's head
 
     dut->rd_addr = ra;
     dut->wr_en = we; dut->wr_addr = wa; dut->wr_data = wd;
@@ -165,12 +173,13 @@ int main(int argc, char** argv) {
     dut->agu_x0_we = x0we; dut->agu_x0 = x0v;
     dut->agu_x1_we = x1we; dut->agu_x1 = x1v;
     dut->c0 = c0v; dut->c1 = c1v;
+    dut->rf_fifo_rdata = fifov;
     dut->eval();
 
     // Combinational read is checked against the state BEFORE this cycle's
     // writes land, matching MAME where read_reg happens before write_reg.
     bool ref_rd_unimpl = false;
-    uint32_t ref_rd = read_reg(m, ra, c0v, c1v, &ref_rd_unimpl);
+    uint32_t ref_rd = read_reg(m, ra, c0v, c1v, &ref_rd_unimpl, fifov);
 
     bool ref_wr_unimpl = false;
     bool ref_c0_we = we && wa == 0x0c;
@@ -181,6 +190,8 @@ int main(int argc, char** argv) {
     if ((bool)dut->rd_unimpl != ref_rd_unimpl)      bad = true;
     if ((bool)dut->c0_we != ref_c0_we)              bad = true;
     if ((bool)dut->c1_we != ref_c1_we)              bad = true;
+    if ((bool)dut->rf_fifo_rd != (ra == 0x21))      bad = true;   // R851: one pop per 0x21 read
+    if ((bool)dut->rf_fifo_wr != (we && wa == 0x22)) bad = true;  // R851: 0x22 is the push
 
     if (bad) {
       if (fails < 20) {
