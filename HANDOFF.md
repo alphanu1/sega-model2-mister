@@ -4,7 +4,9 @@
 
 Created from main at 4b81d89 (release Model2_20261016). This branch is the
 Model 2A-CRX bring-up and is headed for its own repository: it is never
-merged into main and no PR from it targets main. Shared fixes are made on
+merged into main and no PR from it targets main. RELEASES TOO (Ben): every
+2A file -- RBF, MRAs, release README -- goes into releases/ on THIS branch
+only; nothing is moved or copied to main. Shared fixes are made on
 main/headroom and merged INTO model2a, never the other way. The plan and the
 board differences are study R832 (MODEL 2A-CRX): same i960 and TGP; SCSP
 (YMF292) sound with its own 68000 replaces the Model 1 sound board; a Sega
