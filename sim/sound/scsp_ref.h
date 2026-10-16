@@ -5,16 +5,19 @@
 // A standalone port of MAME 0.289's src/devices/sound/scsp.cpp and
 // scspdsp.cpp (the Sega/Yamaha YMF292-F SCSP), for the Model 2A sound board's
 // benches (study R856). It keeps MAME's arithmetic, tables and order of
-// operations exactly; what is left out is what cannot reach the output: the
-// timers, interrupts, MIDI, DMA (unused by every 2A game measured) and the
-// sound-stream plumbing. Driven by p16's logs (register writes and the
-// 68000's sound-RAM writes, each applied before the sample it was logged
-// against), it must reproduce MAME's own mix sample for sample.
+// operations exactly; what is left out is DMA (unused by every 2A game
+// measured), MIDI out and the sound-stream plumbing. Driven by p16's logs
+// (register writes and the 68000's sound-RAM writes, each applied before the
+// sample it was logged against), it must reproduce MAME's own mix sample for
+// sample. The timers, interrupts, MIDI in and the 0x408 monitor are MAME's
+// too, except that a timer counts samples (tick() after each) where MAME's
+// is a scheduler timer of the same period: the RTL's design (R856).
 //
 // Modifications from MAME (2026, alphanu1, for sega-model2-mister): the
 // device and stream framework removed; RAM is a local array; the noise LFO
 // tables are loaded from MAME's dump (machine().rand() is MAME's own); the
-// per-slot sample and the DSP send are exposed for the benches.
+// per-slot sample and the DSP send are exposed for the benches; the timers
+// count samples; the 68000's interrupt lines are a bit mask (lines).
 //
 // BSD-3-Clause: see THIRD_PARTY.md (MAME) for the notice and conditions.
 
@@ -147,6 +150,14 @@ public:
 	DSP D;
 	u16 *ram;                  // 0x40000 words, big-endian bytes, owned by the caller
 	u8 latched_MSLC = 0;
+	u16 latched_MSLC_data = 0;
+	// interrupts, timers, MIDI in
+	u8 lines = 0;                          // the 68000's lines asserted, bit per level (bit 0: MAME's line 0)
+	u32 TimCnt[3] = { 0xffff, 0xffff, 0xffff };
+	int tim_left[3] = { 0, 0, 0 };         // samples to a timer's callback; 0: not running
+	u8 MidiStack[32] = {}; u8 MidiW = 0, MidiR = 0;
+	u8 IrqTimA = 0, IrqTimBC = 0, IrqMidi = 0;
+	u16 mcieb = 0, mcipd = 0;
 	// per-sample observation for the benches
 	s32 slot_out[32]; u8 slot_was_active[32]; s32 last_l = 0, last_r = 0;
 	s32 mix_add[16];   // this sample's DSP sends, per MIXS entry (benches)
@@ -309,11 +320,76 @@ public:
 		for (i = 127; i >= 0; --i) { const u16 *IPtr = D.MPRO + i * 4; if (IPtr[0] || IPtr[1] || IPtr[2] || IPtr[3]) break; }
 		D.LastStep = i + 1;
 	}
+	void irq(u8 level, bool on) { if (on) lines |= u8(1 << level); else lines &= u8(~(1 << level)); }
+	u8 DecodeSCI(int b) { return u8(((udata[0x24 / 2] >> b) & 1) | (((udata[0x26 / 2] >> b) & 1) << 1) | (((udata[0x28 / 2] >> b) & 1) << 2)); }
+	void CheckPendingIRQ() {
+		u32 pend = udata[0x20 / 2], en = udata[0x1e / 2];
+		if (MidiW != MidiR) { udata[0x20 / 2] |= 8; pend |= 8; }
+		if (!pend) return;
+		if ((pend & 0x40) && (en & 0x40)) { irq(IrqTimA, 1); return; }
+		if ((pend & 0x80) && (en & 0x80)) { irq(IrqTimBC, 1); return; }
+		if ((pend & 0x100) && (en & 0x100)) { irq(IrqTimBC, 1); return; }
+		if ((pend & 8) && (en & 8)) { irq(IrqMidi, 1); return; }
+		irq(0, 0);
+	}
+	void ResetInterrupts() {
+		u32 reset = udata[0x22 / 2];
+		if (reset & 0x40) irq(IrqTimA, 0);
+		if (reset & 0x180) irq(IrqTimBC, 0);
+		if (reset & 0x8) irq(IrqMidi, 0);
+		CheckPendingIRQ();
+	}
+	void timer_cb(int t) {
+		TimCnt[t] = 0xffff;
+		udata[0x20 / 2] |= u16(0x40 << t);
+		udata[(0x18 + 2 * t) / 2] = u16((udata[(0x18 + 2 * t) / 2] & 0xff00) | 0xff);
+		CheckPendingIRQ();
+		if (t == 0) mcipd |= 0x40;          // MainCheckPendingIRQ(0x40)
+	}
+	// one sample's time: the timers (after the sample, as the RTL's)
+	void tick() { for (int t = 0; t < 3; t++) if (tim_left[t] && --tim_left[t] == 0) timer_cb(t); }
+	// a MIDI byte from the main board (rcv_complete)
+	void midi_in(u8 b) { MidiStack[MidiW++] = b; MidiW &= 31; CheckPendingIRQ(); }
 	void UpdateReg(int reg) {
 		switch (reg & 0x3f) {
 		case 0x2: case 0x3: D.RBL = (8 * 1024) << RBL(); D.RBP = RBP(); break;
 		case 8: case 9: latched_MSLC = (udata[0x8 / 2] & 0xf800) >> 11; break;
-		default: break;   // timers, interrupts, MIDI, DMA: not output-affecting (no DMA in any 2A game)
+		case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c: case 0x1d: {
+			int t = ((reg & 0x3f) - 0x18) >> 1;
+			u16 v = udata[(0x18 + 2 * t) / 2];
+			TimCnt[t] = (v & 0xff) << 8;
+			if ((v & 0xff) != 255) tim_left[t] = (255 - (v & 0xff)) << ((v >> 8) & 7);
+			break;
+		}
+		case 0x1e: case 0x1f: CheckPendingIRQ(); break;
+		case 0x22: case 0x23:
+			udata[0x20 / 2] &= u16(~udata[0x22 / 2]);
+			ResetInterrupts();
+			if (TimCnt[0] == 0xffff) udata[0x20 / 2] |= 0x40;
+			if (TimCnt[1] == 0xffff) udata[0x20 / 2] |= 0x80;
+			if (TimCnt[2] == 0xffff) udata[0x20 / 2] |= 0x100;
+			break;
+		case 0x24: case 0x25: case 0x26: case 0x27: case 0x28: case 0x29:
+			IrqTimA = DecodeSCI(6); IrqTimBC = DecodeSCI(7); IrqMidi = DecodeSCI(3); break;
+		case 0x2a: case 0x2b: mcieb = udata[0x2a / 2]; break;
+		case 0x2c: case 0x2d: if (udata[0x2c / 2] & 0x20) mcipd |= 0x20; break;
+		case 0x2e: case 0x2f: mcipd &= u16(~udata[0x2e / 2]); break;
+		default: break;   // MIDI out, DMA: not modelled (no DMA in any 2A game)
+		}
+	}
+	void UpdateRegR(int reg) {
+		switch (reg & 0x3f) {
+		case 4: case 5: {
+			u16 v = u16((udata[0x4 / 2] & 0xff00) | MidiStack[MidiR]);
+			if (MidiR != MidiW) { ++MidiR; MidiR &= 31; }
+			if (MidiR == MidiW) { irq(IrqMidi, 0); udata[0x20 / 2] &= u16(~8); }
+			udata[0x4 / 2] = v;
+			break;
+		}
+		case 8: case 9: udata[0x8 / 2] = latched_MSLC_data; break;
+		case 0x2a: case 0x2b: udata[0x2a / 2] = mcieb; break;
+		case 0x2c: case 0x2d: udata[0x2c / 2] = mcipd; break;
+		default: break;
 		}
 	}
 	void w16(u32 addr, u16 val) {
@@ -331,7 +407,7 @@ public:
 	u16 r16(u32 addr) {
 		addr &= 0xffff;
 		if (addr < 0x400) return S[addr / 0x20].data[(addr & 0x1f) >> 1];
-		if (addr < 0x600) return addr < 0x430 ? udata[(addr & 0x3f) >> 1] : 0;
+		if (addr < 0x600) { if (addr >= 0x430) return 0; UpdateRegR(int(addr & 0x3f)); return udata[(addr & 0x3f) >> 1]; }
 		if (addr < 0x700) return RINGBUF[(addr - 0x600) / 2];
 		if (addr < 0x780) return D.COEF[(addr - 0x700) / 2];
 		if (addr < 0x7c0) return D.MADRS[(addr - 0x780) / 2];
@@ -520,6 +596,9 @@ public:
 			}
 		}
 		outl = last_l = smpl; outr = last_r = smpr;
+		// the 0x408 monitor, latched after each update (MAME sound_stream_update)
+		const Slot *m = S + latched_MSLC;
+		latched_MSLC_data = u16((((m->cur_addr >> (SHIFT + 12)) & 0xf) << 7) | ((u32(m->EG.state) & 3) << 5) | ((0x1f - (m->EG.volume >> (EG_SHIFT + 5))) & 0x1f));
 	}
 };
 
