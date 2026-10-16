@@ -32,6 +32,12 @@ TB      := $(SIM_DIR)/i960
 VFLAGS := -Wall -Wno-DECLFILENAME --timing -Irtl/cpu/i960
 VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 
+# R852: the parts of the Model 2A board the harness builds with A2=1 (every
+# boot build compiles them; only A2=1 instantiates them).
+BOOT_2A_RTL := rtl/io/m2_timers.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv \
+               rtl/sound/m2_i8251.sv rtl/sound/m2_sound_link.sv rtl/sound/m2_2a_snd_stub.sv
+
+
 
 DEC_RTL  := $(I960)/i960_dec.sv
 ALU_RTL  := $(I960)/i960_alu.sv
@@ -1244,12 +1250,33 @@ test_m2_boot: obj_boot/Vm2_boot_harness
 obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
-                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) $(BOOT_2A_RTL) \
                            $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
-	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
+	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
+	  sim/io/tb_m2_boot.cpp
+
+# R852: THE MODEL 2A BOOT (Virtua Fighter 2): A2=1, the 4096-word TGP program,
+# the 2A image from tools/rom_csum.py --out in M2_BOOT_IMAGE, and M2_A2=1.
+#   M2_A2=1 M2_BOOT_IMAGE=<vf2.bin> ./obj_boot_2a/Vm2_boot_harness +insn=<n>
+test_m2_boot_2a: obj_boot_2a/Vm2_boot_harness
+	@echo "== test m2_boot 2A (Virtua Fighter 2 through the real bridge)"
+	@M2_A2=1 ./obj_boot_2a/Vm2_boot_harness $(TEST_ARGS)
+
+obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+                           rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_2a -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GTGP_PROG=4096 \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
 	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
@@ -1259,7 +1286,7 @@ obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
 # tools/rom_csum.py --out in M2_BOOT_IMAGE, M2_VCOP=1, EPR-17181 in M2_IOFW,
 # and M2_ROMPATH at a directory whose daytona93/ holds only the two program
 # ROMs (the bench insists on them; the image overwrites them).
-obj_boot_vc/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
+obj_boot_vc/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
@@ -1267,7 +1294,7 @@ obj_boot_vc/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_vc -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GVCOP=1 \
-	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
 	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
@@ -1298,7 +1325,7 @@ obj_boot_vc/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
 # this list once lacked them -- Verilator then failed on MODMISSING fp_mul
 # and the rule looked "up to date" against a binary from August), plus the
 # real memory stack.
-BOOTSRC := sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv \
+BOOTSRC := sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
            rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/io/m2_ioz80.sv \
            rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) \
            $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \

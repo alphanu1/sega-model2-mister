@@ -1762,26 +1762,39 @@ end
 // Word order: the bridge selects the half with r_addr[1] and sd_word is
 // base + r_addr[16:1], so an EVEN word index is the LOW half of the dword.
 localparam int unsigned BUF_WORDS = 65536;      // 128 KB as 16-bit words
+// R852: ON THE 2A BOARD THE SAME SWEEP ALSO ZEROES CHAR RAM (512 KB, after the
+// buffer). Virtua Fighter 2 never writes parts of its glyphs and relies on
+// them reading 0, as MAME's RAM does: with unwritten SDRAM (0xFFFF in the
+// bench) whole rows of its boot and WARNING text were missing (tb_m2_boot
+// A2: tile RAM and palette equal to MAME's, char RAM 166,432 words 0xFFFF
+// where MAME has 0).
+localparam int unsigned CHR_WORDS = M2A ? 32'h40000 : 0;
+localparam int unsigned BI_W      = M2A ? 19 : 17;
 logic            bi_run, bi_req, bi_done;
 logic [SDR_AW:1] bi_addr;
 logic [15:0]     bi_din;
-logic [16:0]     bi_idx;
+logic [BI_W-1:0] bi_idx;
 
 assign bi_run = rom_loaded && cal_done && !bi_done;
 
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	if (!mem_rst_n) begin
-		bi_req <= 1'b0; bi_done <= 1'b0; bi_idx <= 17'd0;
+		bi_req <= 1'b0; bi_done <= 1'b0; bi_idx <= '0;
 		bi_addr <= '0; bi_din <= 16'd0;
 	end else if (rom_loaded && cal_done && !bi_done) begin
 		if (!bi_req) begin
-			bi_addr <= GAME_BUFFER + SDR_AW'(bi_idx);
-			bi_din  <= bi_idx[0] ? 16'h0780 : 16'h0f0f;
+			if (M2A && bi_idx >= BI_W'(BUF_WORDS)) begin   // R852: char RAM to zero
+				bi_addr <= GAME_CHAR + SDR_AW'(bi_idx - BI_W'(BUF_WORDS));
+				bi_din  <= 16'h0000;
+			end else begin
+				bi_addr <= GAME_BUFFER + SDR_AW'(bi_idx);
+				bi_din  <= bi_idx[0] ? 16'h0780 : 16'h0f0f;
+			end
 			bi_req  <= 1'b1;
 		end else if (wr_ack_bi) begin
 			bi_req <= 1'b0;
-			if (bi_idx == 17'(BUF_WORDS - 1)) bi_done <= 1'b1;
-			else                              bi_idx  <= bi_idx + 17'd1;
+			if (bi_idx == BI_W'(BUF_WORDS + CHR_WORDS - 1)) bi_done <= 1'b1;
+			else                                            bi_idx  <= bi_idx + 1'b1;
 		end
 	end
 end

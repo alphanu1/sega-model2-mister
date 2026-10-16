@@ -59,7 +59,15 @@ module m2_boot_harness #(
   // R839: Virtua Cop (game ID 1) as Model2.sv builds it: the type-2 I/O
   // board (EPR-17181 in M2_IOFW), the i960's VC forms, and the program's
   // second half at word 0x1880000 (tb_m2_boot copies it there under M2_VCOP).
-  parameter bit          VCOP            = 1'b0
+  parameter bit          VCOP            = 1'b0,
+  // R852: the Model 2A board as Model2.sv builds it with M2_2A: the bridge's
+  // 2A map (256 KB board RAM at word 0x12a0000, no mirror), the 315-5649 and
+  // its 93C46 in place of the I/O board and its Z80, the four timers, the
+  // i8251 with the silent sound stand-in on its far end, and the interrupt
+  // controller of Model2.sv (the tb's irq[0] is then only the vblank event).
+  parameter bit          A2              = 1'b0,
+  // R852: the TGP program RAM (4096 for A2)
+  parameter int unsigned TGP_PROG        = 2048
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -77,6 +85,12 @@ module m2_boot_harness #(
   // Cabinet switches, active low, MAME's IN0 order: bit2 is the TEST switch
   // (MAME calls it Service Mode) and FB is that switch held.
   input  logic  [7:0] cab_in0,
+  input  logic  [7:0] cab_in1,        // R852: A2's IN1 / IN2 (players 1 and 2)
+  input  logic  [7:0] cab_in2,
+  output logic [31:0] a2_snd_bytes,   // R852: bytes the i960 sent the sound side
+  output logic [31:0] a2_snd_sig,
+  output logic [11:0] obs_intreq,
+  output logic [11:0] obs_intena,
   // DO THE TWO SIDES ACTUALLY COLLIDE? Testable rather than assertable: count
   // cycles where the game is inside the block window AND the Z80 is writing it.
   // Zero collisions would mean the BUSY fix addresses nothing.
@@ -420,6 +434,14 @@ module m2_boot_harness #(
   logic        bus_ifetch;   // R724
   logic [31:0] bus_addr, bus_wdata, bus_rdata;
   logic  [3:0] bus_be;
+  // R852: the A2 board's signals (see g_a2)
+  logic [11:0] io_intreq, io_intena;
+  logic        a2_irq0_d, a2_uirq_d;
+  wire  [3:0]  a2_irq;
+  wire  [3:0]  a2_tmr_expire;
+  wire [31:0]  a2_tmr_rdata, a2_io_rdata;
+  wire  [7:0]  a2_uart_stat, a2_uart_data;
+  wire         a2_uirq;
 
   // [31:24] is unread: every decode below is on the low 24 bits, which is what
   // the top level does too.
@@ -560,7 +582,7 @@ module m2_boot_harness #(
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
-    .irq(irq),
+    .irq(A2 ? a2_irq : irq),
     .dbg_pc(dbg_pc), .dbg_sat(), .dbg_prcb(obs_prcb), .dbg_icr(),
     .dbg_intr_cnt(), .dbg_intr_work(), .dbg_acc_cnt(dbg_acc),
     .dbg_ip(dbg_ip), .dbg_insn(),
@@ -635,7 +657,7 @@ module m2_boot_harness #(
   end
 
   wire        geo_push_busy;   // R697: pushed words not yet in buffer RAM; the CPU's buffer stores wait
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(1'b0), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
@@ -645,9 +667,9 @@ module m2_boot_harness #(
     // The bases the top level uses for a game image.
     // The top level's own bases for a game image (Model2.sv GAME_*), so the
     // address arithmetic under test is the arithmetic that runs on the board.
-    .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
+    .base_prog (AW'(32'h0000000)), .base_data (A2 ? AW'(32'h0040000) : AW'(32'h0020000)),   // R852: 2A data at byte 0x80000
     .prog_ext(VCOP), .base_progx(AW'(32'h1880000)),   // R726 / R839
-    .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
+    .base_work (AW'(32'h1600000)), .base_board(A2 ? AW'(32'h12a0000) : AW'(32'h1680000)),   // R852
     // R257: THE SAME BUFFER BASE THE WALKER USES. This said 0x16d0000 while
     // the geometrizer below says 0x16f0000, so at the desk the CPU wrote the
     // display list 128 KB away from where the walker read it. Everything the
@@ -762,7 +784,7 @@ module m2_boot_harness #(
     end
   end
 
-  m2_copro u_copro (
+  m2_copro #(.PROG_WORDS(TGP_PROG)) u_copro (
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),
@@ -1064,7 +1086,6 @@ module m2_boot_harness #(
     (cpu_io_addr[3:0] == 4'hB) ? 8'h4B : (cpu_io_addr[3:0] == 4'hD) ? 8'h4D :
     (cpu_io_addr[3:0] == 4'hE) ? 8'h54 : (cpu_io_addr[3:0] == 4'hF) ? 8'h4B : 8'h00;
 
-  logic [11:0] io_intreq, io_intena;
   // Only the low bits are read, exactly as in Model2.sv -- videoctl's mode bit
   // and the frame counter's parity. Kept full width so the shapes match the top
   // level rather than quietly diverging from it.
@@ -1092,6 +1113,9 @@ module m2_boot_harness #(
     // on a list the bench itself had malformed.
     (cpu_io_addr[23:0] == 24'h802008) ? geo_wp_o :
     (cpu_io_addr[23:0] == 24'h803008) ? geo_rp_o :
+    (A2 && cpu_io_addr[23:2] == 22'h32_0000) ? {8'd0, a2_uart_stat, 8'd0, a2_uart_data} :   // R852
+    (A2 && cpu_io_addr[23:4] == 20'hf0000)   ? a2_tmr_rdata :
+    (A2 && iob_sel)                   ? ((cpu_io_addr[11:5] == 7'd0) ? a2_io_rdata : 32'd0) :
     iob_sel                           ? iob_rdata :
     bak_sel                           ? bak_rdata :
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
@@ -1105,13 +1129,90 @@ module m2_boot_harness #(
   always_ff @(posedge clk_m or negedge rst_n) begin
     if (!rst_n) begin
       io_intreq <= '0; io_intena <= '0; io_videoctl <= '0; io_framenum <= '0; io_render_mode <= 1'b0;
-    end else if (cpu_io_sel && cpu_io_we) begin
-      if (cpu_io_addr[23:0] == 24'he80000) io_intreq   <= io_intreq & cpu_io_wdata[11:0];
-      if (cpu_io_addr[23:0] == 24'he80004) io_intena   <= cpu_io_wdata[11:0];
-      if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
-      if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
+      a2_irq0_d <= 1'b0; a2_uirq_d <= 1'b0;
+    end else begin
+      // R852: with A2, Model2.sv's controller: the vblank (the tb's irq[0]
+      // rising) counts the frame and requests bit 0; the timers request bit
+      // timer + 2; the i8251 requests bit 10 on its edge or on the mask write.
+      a2_irq0_d <= irq[0];
+      a2_uirq_d <= a2_uirq;
+      if (A2 && irq[0] && !a2_irq0_d) begin
+        io_framenum <= io_framenum + 32'd1;
+        if (io_intena[0]) io_intreq[0] <= 1'b1;
+      end
+      if (cpu_io_sel && cpu_io_we) begin
+        if (cpu_io_addr[23:0] == 24'he80000) io_intreq   <= io_intreq & cpu_io_wdata[11:0];
+        if (cpu_io_addr[23:0] == 24'he80004) io_intena   <= cpu_io_wdata[11:0];
+        if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
+        if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
+      end
+      if (A2) begin
+        for (int t = 0; t < 4; t++)
+          if (a2_tmr_expire[t] && io_intena[t + 2]) io_intreq[t + 2] <= 1'b1;
+        if (io_intena[10] && ((a2_uirq && !a2_uirq_d) ||
+                              (a2_uirq && cpu_io_sel && cpu_io_we &&
+                               cpu_io_addr[23:0] == 24'he80004 && cpu_io_wdata[10])))
+          io_intreq[10] <= 1'b1;
+      end
     end
   end
+
+  // ---------------------------------------------------------- R852: MODEL 2A
+  assign a2_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
+                    io_intreq[1], io_intreq[0] };
+  generate if (A2) begin : g_a2
+    // the timers count real time: 25 MHz of the tb's 48 MHz memory clock
+    m2_timers #(.TICK_NUM(25), .TICK_DEN(48)) u_timers (
+      .clk(clk_m), .rst_n(rst_n),
+      .sel(cpu_io_sel && (cpu_io_addr[23:4] == 20'hf0000)), .we(cpu_io_we),
+      .idx(cpu_io_addr[3:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
+      .rdata(a2_tmr_rdata), .expire(a2_tmr_expire)
+    );
+    m2_315_5649 u_315_5649 (
+      .clk(clk_m), .por_n(rst_n), .rst_n(rst_n),
+      .sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
+      .word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
+      .rdata(a2_io_rdata),
+      .in0(cab_in0), .in1(cab_in1), .in2(cab_in2), .sw(8'hFF),
+      .lamps(), .dbg_pa(), .dbg_dir()
+    );
+    // the i8251 at 0x01c80000, as Model2.sv: data in byte 0, status/command
+    // in byte 2; the far end is the silent stand-in (31.25 kbaud, 48 MHz)
+    wire uart_sel = cpu_io_sel && (cpu_io_addr[23:2] == 22'h32_0000);
+    wire uart_ctl = uart_sel && cpu_io_be[2];
+    wire uart_dat = uart_sel && cpu_io_be[0];
+    wire uart_rd_dat = uart_sel && !cpu_io_we && cpu_io_be[0] && !cpu_io_be[2];
+    wire [7:0] a_tx_d, a_rx_d, b_tx_d, b_rx_d;
+    wire a_tx_v, a_tx_a, a_rx_v, a_rx_a, b_tx_v, b_tx_a, b_rx_v, b_rx_a;
+    m2_i8251 u_uart (
+      .clk(clk_m), .rst_n(rst_n),
+      .sel((cpu_io_we && (uart_dat | uart_ctl)) || uart_rd_dat),
+      .we(cpu_io_we), .addr(uart_ctl & ~uart_dat),
+      .din(uart_ctl & ~uart_dat ? cpu_io_wdata[23:16] : cpu_io_wdata[7:0]),
+      .dout(), .data_o(a2_uart_data), .stat_o(a2_uart_stat),
+      .tx_data(a_tx_d), .tx_valid(a_tx_v), .tx_ack(a_tx_a),
+      .rx_data(a_rx_d), .rx_valid(a_rx_v), .rx_ack(a_rx_a),
+      .irq(a2_uirq), .irq_rx(), .irq_tx()
+    );
+    m2_sound_link #(.BYTE_CYCLES(320 * 48)) u_link (
+      .clk(clk_m), .rst_n(rst_n),
+      .a_tx_data(a_tx_d), .a_tx_valid(a_tx_v), .a_tx_ack(a_tx_a),
+      .a_rx_data(a_rx_d), .a_rx_valid(a_rx_v), .a_rx_ack(a_rx_a),
+      .b_tx_data(b_tx_d), .b_tx_valid(b_tx_v), .b_tx_ack(b_tx_a),
+      .b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_a),
+      .dbg_a_bytes(a2_snd_bytes), .dbg_a_last(), .dbg_a_sig(a2_snd_sig)
+    );
+    m2_2a_snd_stub u_snd (
+      .clk(clk_m), .rst_n(rst_n),
+      .rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
+      .tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
+      .dbg_rx_bytes(), .dbg_tx_bytes()
+    );
+  end else begin : g_noa2
+    assign a2_tmr_expire = 4'd0; assign a2_tmr_rdata = 32'd0; assign a2_io_rdata = 32'd0;
+    assign a2_uart_stat = 8'd0; assign a2_uart_data = 8'd0; assign a2_uirq = 1'b0;
+    assign a2_snd_bytes = 32'd0; assign a2_snd_sig = 32'd0;
+  end endgenerate
 
   /* verilator lint_off UNUSEDSIGNAL */
   wire _unused = &{1'b0, oc_tram_we, oc_pal_we, oc_addr, oc_din,
@@ -1130,6 +1231,8 @@ assign obs_xlat_we   = oc_xlat_we;
 assign obs_xlat_addr = oc_xlat_addr;
 assign obs_xlat_din  = oc_xlat_din;
 
+  assign obs_intreq = io_intreq;
+  assign obs_intena = io_intena;
   assign obs_ts       = u_cpu.ts;
   assign obs_pf_valid = u_cpu.pf_valid;
   assign obs_pf_armed = u_cpu.pf_armed;

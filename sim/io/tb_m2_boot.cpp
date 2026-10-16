@@ -43,6 +43,11 @@ static Vm2_boot_harness *d;
 // 25-bit word address space, 64 MB. Unwritten reads 0xFFFF, per the standing
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
+// R852: the Model 2A bench (M2_A2=1; harness built with A2=1): the 2A image
+// layout's word bases, Model2.sv's GAME_* with M2A. Daytona's otherwise.
+static bool     g_a2      = false;
+static uint32_t G_TEX     = 0x0720000u;   // texture ROM
+static uint32_t G_POLY    = 0x0b20000u;   // polygon ROM
 // R222 PROBE: where the texture headers live and what they say. On every new
 // object the walker starts, read its header from the texture ROM image (word
 // 0x0720000 = byte 0x0e40000 in the MRA stream; tha is a 16-bit-word index
@@ -88,7 +93,7 @@ static void th_probe(uint32_t tha) {
   ++g_th_objs;
   if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("    TEXHDR sample: object %u tha %08x\n", g_th_objs, tha);
   if (tha & 0x800000u) { ++g_th_ram; return; }
-  const uint32_t a = 0x0720000u + (tha & 0x3fffffu);
+  const uint32_t a = G_TEX + (tha & 0x3fffffu);
   if (a + 3 >= mem.size()) return;
   const uint16_t h0 = mem[a], h3 = mem[a + 3];
   if (g_th_objs <= 6 || (g_th_objs % 400) == 0) std::printf("      header %04x %04x %04x %04x\n", mem[a], mem[a+1], mem[a+2], mem[a+3]);
@@ -262,13 +267,19 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++)
     if (!std::strncmp(argv[i], "+out=", 5)) outfile = argv[i] + 5;
 
+  g_a2 = std::getenv("M2_A2") != nullptr;
+  if (g_a2) { G_TEX = 0x0840000u; G_POLY = 0x0c40000u; }
   const char *rp = std::getenv("M2_ROMPATH");
   const std::string dir = std::string(rp ? rp :
       (std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/roms/Model2"))
       + "/daytona93/";
 
   std::vector<uint8_t> lo, hi;
-  if (!load_file(dir + "epr-16530a.12", lo) || !load_file(dir + "epr-16531a.13", hi)) {
+  if (g_a2 && !std::getenv("M2_BOOT_IMAGE")) {
+    std::printf("SKIP (M2_A2 needs M2_BOOT_IMAGE: tools/rom_csum.py <2A mra> <romdir> --out <bin>)\n");
+    return 0;
+  }
+  if (!g_a2 && (!load_file(dir + "epr-16530a.12", lo) || !load_file(dir + "epr-16531a.13", hi))) {
     std::printf("SKIP (no ROMs; set M2_ROMPATH to a directory holding daytona93/)\n");
     return 0;
   }
@@ -303,6 +314,7 @@ int main(int argc, char **argv) {
     mem[0x16d0000 + i] = (i & 1) ? 0x0780 : 0x0f0f;
 
   // Program ROM: two 16-bit halves at 32-bit stride, at GAME_PROG = word 0.
+  // (lo / hi are empty for the 2A bench: everything comes from the image.)
   for (size_t w = 0; w * 2 < lo.size(); ++w) {
     mem[w * 2 + 0] = uint16_t(lo[w * 2] | (lo[w * 2 + 1] << 8));
     mem[w * 2 + 1] = uint16_t(hi[w * 2] | (hi[w * 2 + 1] << 8));
@@ -331,6 +343,23 @@ int main(int argc, char **argv) {
       // R839: Virtua Cop's program second half sits after the '93 image
       // (byte 0x2BE0000); the core's loader moves it to GAME_POLYX, and the
       // harness (VCOP=1) reads it at word 0x1880000.
+      // R852: the 2A image's samples (bytes 0x2540000-0x2D40000) go where
+      // Model2.sv's loader puts them (XTRA: byte 0x3400000), and their flat
+      // place -- where the RAMs of this harness are -- back to unwritten.
+      if (g_a2) {
+        for (size_t w = 0; w < 0x400000; ++w) {
+          mem[0x1A00000 + w] = mem[0x12A0000 + w];
+          mem[0x12A0000 + w] = 0xffff;
+        }
+        // and the harness's display list and texture RAM as above
+        for (uint32_t i = 0; i < 0x10000u; i++) mem[0x16f0000u + i] = (i & 1) ? 0x0780 : 0x0f0f;
+        for (uint32_t i = 0; i < 65536; ++i) mem[0x16d0000 + i] = (i & 1) ? 0x0780 : 0x0f0f;
+        for (size_t i = 0; i < 0x10000; i++) mem[0x1740000 + i] = 0;
+        // char RAM reads 0 until written, as MAME's does and as Model2.sv's
+        // boot sweep makes it on the 2A board (R852)
+        for (size_t i = 0; i < 0x40000; i++) mem[0x1690000 + i] = 0;
+        std::printf("  A2: samples moved to word 0x1A00000; 2A bases tex 0x%x poly 0x%x\n", G_TEX, G_POLY);
+      }
       if (std::getenv("M2_VCOP")) {
         for (size_t w = 0; w < 0x20000; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
         // and the harness's work RAM (word 0x1600000, which Model2.sv keeps
@@ -351,6 +380,7 @@ int main(int argc, char **argv) {
   };
   int md_ok = 0;
   for (auto &e : md) {
+      if (g_a2) break;   // R852: the 2A image already holds everything
     std::vector<uint8_t> f;
     if (!load_file(dir + e.n, f)) continue;
     ++md_ok;
@@ -381,6 +411,7 @@ int main(int argc, char **argv) {
     };
     int cd_ok = 0;
     for (auto &e : cd) {
+      if (g_a2) break;   // R852: the 2A image already holds everything
       std::vector<uint8_t> f;
       if (!load_file(dir + e.n, f)) continue;
       ++cd_ok;
@@ -419,6 +450,7 @@ int main(int argc, char **argv) {
     };
     int pg_ok = 0;
     for (auto &e : pg) {
+      if (g_a2) break;   // R852: the 2A image already holds everything
       std::vector<uint8_t> f;
       if (!load_file(dir + e.n, f)) continue;
       ++pg_ok;
@@ -441,6 +473,7 @@ int main(int argc, char **argv) {
       };
       int tx_ok = 0;
       for (auto &e : tx) {
+      if (g_a2) break;   // R852: the 2A image already holds everything
         std::vector<uint8_t> f;
         if (!load_file(dir + e.n, f)) continue;
         ++tx_ok;
@@ -473,10 +506,13 @@ int main(int argc, char **argv) {
   // itself. That is what the .mra's interleave already produced, and checking
   // it against the reference cost one script and settles a byte order that
   // cost four builds the last time it was assumed (R94).
-  const uint32_t TBL_BASE = 0x15d0000;      // GAME_TGPTBL, word address (R203: 0x2BA0000 bytes, not 0x2BB0000)
+  const uint32_t TBL_BASE = g_a2 ? 0x1240000u   // R852: 2A, byte 0x2480000
+                          : 0x15d0000u;      // GAME_TGPTBL, word address (R203: 0x2BA0000 bytes, not 0x2BB0000)
   {
     std::vector<uint8_t> ta, tb;
-    if (load_file(dir + "opr-14742a.45", ta) && load_file(dir + "opr-14743a.46", tb)) {
+    if (g_a2) {
+      std::printf("  TGP math tables: from the 2A image at word 0x%x\n", TBL_BASE);
+    } else if (load_file(dir + "opr-14742a.45", ta) && load_file(dir + "opr-14743a.46", tb)) {
       const size_t n = std::min(ta.size(), tb.size()) / 2;   // 32-bit words
       for (size_t i = 0; i < n; ++i) {
         const size_t w = TBL_BASE + i * 2;
@@ -933,11 +969,11 @@ int main(int argc, char **argv) {
           // colour-table read out of polygon memory, so the one model that
           // represents the BOARD was the one giving the wrong colours.
           if      (el_space == 1)       { if (el_addr & 0x800000u) { base = 0x1740000u; off = el_addr & 0x7fffu; }
-                                          else                    { base = 0x0720000u; off = el_addr & 0x1fffffu; } }
+                                          else                    { base = G_TEX; off = el_addr & 0x1fffffu; } }
           else if (el_space == 2)       { base = 0x1730000u; off = el_addr & 0x1ffu;    }
           else if (el_space == 3)       { base = 0x1731000u; off = el_addr & 0x3fffu;   }
           else if (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
-          else if (el_oba & (1u << 23)) { base = 0x0b20000u; off = el_addr & 0x3fffffu; }
+          else if (el_oba & (1u << 23)) { base = G_POLY; off = el_addr & 0x3fffffu; }
           else                          { base = 0x1710000u; off = el_addr & 0x7fffu;   }
           const uint32_t a = (base + off * 2u) & 0x1ffffff;
           el_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
@@ -978,11 +1014,11 @@ int main(int argc, char **argv) {
       const unsigned space = d->eng_mem_space;          // R222
       uint32_t base, off;
       if      (space == 1)       { if (idx & 0x800000u) { base = 0x1740000u; off = idx & 0x7fffu; }
-                                   else                 { base = 0x0720000u; off = idx & 0x1fffffu; } }
+                                   else                 { base = G_TEX; off = idx & 0x1fffffu; } }
       else if (space == 2)       { base = 0x1730000u; off = idx & 0x1ffu;    }
       else if (space == 3)       { base = 0x1731000u; off = idx & 0x3fffu;   }
       else if (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }
-      else if (oba & (1u << 23)) { base = 0x0b20000u; off = idx & 0x3fffffu; }
+      else if (oba & (1u << 23)) { base = G_POLY; off = idx & 0x3fffffu; }
       else                       { base = 0x1710000u; off = idx & 0x7fffu;   }
       const uint32_t a = (base + (off << 1)) & 0x1ffffff;
       d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
@@ -1333,6 +1369,7 @@ int main(int argc, char **argv) {
       // 0x481-0x4B5 and never reached the mailbox clear at 0x4C4.
       dat_data = rd32((d->tgp_dat_is_buf ? BUF_BASE : COPRO_BASE)
                       + (uint32_t(d->tgp_dat_addr) << 1));
+      if (g_a2 && !d->tgp_dat_is_buf) dat_data = 0;   // R852: no copro data ROM on 2A (as Model2.sv)
       // WHERE THE COUNT COMES FROM. 0x47C is `mov (x0+1)(e), $0x4a`; MAME's x0
       // there is ~0x1088/0x11B1, small dword offsets into buffer RAM.
       // EVERY read, with the pc, rather than filtering on 0x47C: the pc probe
@@ -1399,6 +1436,7 @@ int main(int argc, char **argv) {
     unsigned c = 0xff;
     if (const char *cv = std::getenv("M2_IN0")) c = std::strtoul(cv, nullptr, 16);
     d->cab_in0 = c;
+    d->cab_in1 = 0xff; d->cab_in2 = 0xff;   // R852: A2's players, nothing pressed
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
   int slow_prev = 0;
@@ -2871,7 +2909,17 @@ int main(int argc, char **argv) {
   }
 
   int fail = 0;
-  if (d->iob_win_rd == 0) {
+  if (g_a2) {
+    // R852: THE 2A BOOT. There is no I/O board exchange to judge; the bench
+    // fails on a trap or halt, and says how far the game got.
+    std::printf("\n  2A: intena %03x intreq %03x, %u bytes to the sound side (sig %08x)\n",
+                (unsigned)d->obs_intena, (unsigned)d->obs_intreq,
+                (unsigned)d->a2_snd_bytes, (unsigned)d->a2_snd_sig);
+    if (d->cpu_trap || d->cpu_halt) {
+      std::printf("  2A: the i960 TRAPPED / HALTED at ip %08x\n", (unsigned)d->dbg_ip);
+      fail = 1;
+    }
+  } else if (d->iob_win_rd == 0) {
     std::printf("\n  BLOCKED: the i960 never read the block window -- the\n"
                 "  exchange itself is broken in this composition. Step that\n"
                 "  before asking about the race.\n");
@@ -3265,6 +3313,14 @@ int main(int argc, char **argv) {
   if (dtr) { std::fclose(dtr); std::printf("  data address trace written\n"); }
   if (out) { std::fclose(out); std::printf("  PC stream written to %s\n", outfile); }
   if (charstream) { std::fclose(charstream); std::printf("  char write stream written\n"); }
+  // R852: char RAM as the SDRAM holds it at the end (512 KB, the harness's
+  // base_char word 0x1690000), to set against the write stream applied.
+  if (const char *cd = std::getenv("M2_CHARDUMP")) {
+    if (FILE *f = std::fopen(cd, "wb")) {
+      std::fwrite(&mem[0x1690000], 2, 0x40000, f); std::fclose(f);
+      std::printf("  char RAM dumped to %s\n", cd);
+    }
+  }
   // R275: DOES THE GAME UPLOAD ITS TEXTURE SHEETS AT ALL? Printed
   // unconditionally, at the end, because th_report() only runs in one mode and
   // this question has to be answerable from any run.
