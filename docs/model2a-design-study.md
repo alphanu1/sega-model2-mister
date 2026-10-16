@@ -36148,3 +36148,86 @@ of every vblank, about evenly instruction fetch and data access, the TGP only
 ~10%. So the fix is the i960's memory path for VF2's code and data, not the
 TGP or the renderer. The decoder printed no Y ("frame work") line -- to be
 checked. Captures: session scratch vf2why/ (not committed).
+
+**R855 -- THE i960 WAS HELD BY THE GEOMETRIZER'S PUSH QUEUE, NOT BY ITS
+MEMORY: R638's HOLD WINDOW DOES NOT FIT VF2's LISTS. FIXED FOR 2A
+(m2_geo LIST_WIN); THE TGP's PORTS JOIN THE SDRAM CLASS.**
+
+*What was believed (R854 on the board).* The i960 waits on memory ~78% of
+every vblank, about half instruction fetch and half data, the TGP ~10% and
+the geometry push 5.3-5.7%: "far worse than Daytona's tuned path", so the
+fix would be the i960's memory path for VF2's code and data.
+
+*What is now known.*
+  1. VF2's DISPLAY LISTS (MAME 0.289, M2JMP_OUT, 4,315 walks, coin at 26 s):
+     four buffers 8,192 dwords apart -- walks start at dword 0x0000 /
+     0x2000 / 0x4000 / 0x6000 in turn -- every game list jumps inside its own
+     buffer (3,322 walks with jumps; jump targets and ends <= 3,033 dwords
+     from the start; only the boot's first ten walks run off empty memory).
+     Daytona's are two buffers 16,384 apart with no jumps (R638).
+  2. R638 holds a pushed word while a walk runs if it lands in [w_ip,
+     w_ip + 12,288) -- and EVERY word once the walk has jumped. For VF2 the
+     next list (8,192 ahead) is inside the window and every walk jumps, so
+     everything the game pushes while the previous list is walked is held:
+     the 128-word queue fills and push_stall holds the i960 (s1160's K), and
+     push_busy stays high, so every store the i960 makes into buffer RAM
+     waits for the walk's end too (R697's gate) -- in the bench that shows as
+     fetch wait (5.9-6.3 cycles an instruction against 1.5-2.2 without it),
+     the bridge holding the store while the i-cache's fill waits behind it.
+  3. FIX: m2_geo LIST_WIN (default 0 = R638 unchanged; Model2.sv sets 4096
+     with M2A). A word is held only inside [start, start + LIST_WIN) of the
+     list being walked: at or past w_ip, or anywhere in it once the walk has
+     jumped. 4,096 is half VF2's buffer spacing and 1.35x its longest list;
+     Daytona's other buffer (16,384 away) was already outside R638's window
+     and its lists never reach 4,096, so the original core's behaviour is the
+     same with either rule (the original core keeps 0).
+  4. ALSO FOR 2A, NOT MEASURED ON A BENCH THAT CAN SHOW IT: the TGP's read
+     ports (8 tables, 9 its banked window -- buffer RAM for VF2, ~1,300
+     external reads a frame in MAME's TGP trace) join m2_sdram's priority
+     class behind the i960, texel port 2, the glyph fetch and the walker
+     (SDR_PRI). The TGP waits on each read with one outstanding and was
+     behind the whole class. s1160's K (TGP holds ~10%) is the measure.
+
+*Measured (2A boot bench, made board-like for this: the walker runs "After
+flip" with AFTER_STRICT as Model2.sv does, the push queue's stall reaches
+the i960 as cpu_io_stall; foreground = 0x10fc8 -> 0x4bcd4; 3D attract
+frames 1170-1330; bench vblank 417 k CPU cycles):*
+
+                          R638 (LIST_WIN 0)          LIST_WIN 4096
+  LAT 6   foreground      579 k cycles, CPI 16.1     383 k, CPI 11.3   (-34%)
+          vblanks a frame 1.98 (every frame mode 2)  1.00 (none overran)
+  LAT 16  foreground      641 k, CPI 18.0            491 k, CPI 13.8   (-23%)
+          vblanks a frame 2.02                       2.00 (bench vblank only)
+  fetch wait / instr      5.9-6.3                    1.5-2.2
+  TGP holds a frame       87-103 k                   87-97 k (unchanged)
+
+At LAT 6 the bench goes from two vblanks a frame to ONE -- 57.5 fps -- with
+nothing else changed. The R854 bench (no push stall wired, walker on the
+plain flip trigger) had hidden most of this. Projected on the board (R854's
+estimate of a ~733 k-cycle foreground against a 695 k vblank, by the bench's
+-23..-34%): ~480-565 k, 0.70-0.81 vblank. INFERRED until s116x's Y.
+
+*Benches:* test_m2_geo gains a LIST_WIN build (R854: list A at 0x2000
+jumping to +0x200, list B pushed into 0x4000 during A's walk): B lands
+during the walk and the pusher waits 422 cycles (the drain's pace) against
+8,936 under R638; words behind and ahead of the walk in A's buffer after its
+jump are held and land after it; both lists walked whole; overtakes 0. The
+plain build checks R638's behaviour (B held). Mutations caught: releasing
+words behind w_ip after a jump; holding the whole list window regardless.
+test_m2_sdram13 gains the 2A class (ports 8 and 9): 2,281,121 checks, 0
+fails. test_m2_boot (Daytona) PASS. lint_top clean (2A, M2_NO_2A, and with
+M2_WHY), Quartus 17 analyze clean, lint_idx nothing new.
+
+*Telemetry (M2_WHY) corrected:* s1160 delivered 421 V, 419 I and no D / W /
+Y against 16,571 P and 17,458 K in 120 s: a record is 1.74 ms at 115,200
+baud and prof_tick 0.82 ms, and the lite block's slots (ticks 0, 3, 6 of 8)
+left 1.64 ms before the first slot. M2_WHY now has its own slots, ticks 0, 3
+and 6 of nine (2.46 ms): slot 0 turns V, D, V, W, V, Y; slot 1 P; slot 2
+alternates K and I. Y now ends at 0x4bcd4 alone, the foreground's end.
+
+*Built:* s1163-s1165 = 3474771 + build/worktree_patches/why-r854-3474771.patch
+(M2_DEBUG_LITE + M2_WHY, 80/40). s1164 CLOSES EVERY CLOCK: clk_sys +0.346,
+clk_mem +0.544, clk_i960 +1.277, HDMI +0.177, holds >= +0.244; 36,223 ALM
+(86%; s1160 36,123), M10K 485/553, DSP 86/112. s1163 / s1165 miss HDMI only
+(-0.074 / -0.316). RBF build/Model2A_20261016_s1164_r855.rbf
+f80a966054a5642b92b89b7189c16162. Not yet on the board.

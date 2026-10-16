@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-16 (night): model2a -- VF2's 30 fps cause found and fixed in simulation (R855)
+
+CAUSE: not the i960's memory path. m2_geo's R638 push hold (built for
+Daytona's two lists 16,384 dwords apart, no jumps) holds VF2's NEXT list:
+VF2 keeps four lists 8,192 dwords apart and jumps inside every one, and
+after a jump R638 holds every pushed word until the walk ends. The push
+queue fills (s1160's "geometry push" 5.5%) and push_busy keeps every i960
+store into buffer RAM waiting for the walk's end (seen as fetch / data wait).
+FIX (2A only, Model2.sv GEO_LIST_WIN = 4096): hold only inside the walked
+list's own buffer. Also 2A: the TGP's SDRAM ports 8 and 9 join the priority
+class (unmeasured; s1160's K shows the TGP holding the i960 ~10%).
+BENCH (2A boot bench made board-like: After-flip walker, push stall wired):
+foreground 579 k -> 383 k cycles at LAT 6 (two vblanks a frame -> ONE),
+641 k -> 491 k at LAT 16. test_m2_geo (new LIST_WIN build), test_m2_sdram13
+(2A class), test_m2_boot PASS; lint / analyze / idx clean.
+BUILT, NOT ON THE BOARD: s1164 (3474771 + M2_WHY), every clock closes, HDMI
++0.177; build/Model2A_20261016_s1164_r855.rbf (f80a9660...). Load as
+Model2A.rbf with the VF2 MRA; capture 120 s attract + 120 s fight (UART +
+m2-fps.py); `tools/decode_why.py <cap> 80`. Expect ~57 fps, flips/vblank
+~1.0, GAME behind near 0, geometry push ~0, and now the D / W / Y lines
+(Y = the foreground, under 17.4 ms). Ben should see VF2 at full speed.
+
 ## 2026-10-16 (evening): model2a -- why VF2 runs at 28.75 fps (R854)
 
 FOUND: VF2 locks itself to two vblanks whenever its frame's foreground
