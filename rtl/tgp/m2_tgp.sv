@@ -44,6 +44,8 @@ module m2_tgp #(
   parameter bit MATH_ZERO = 1'b0,
   // AS_PROGRAM is 0x000-0x7ff. The microcode is exactly this size, so a smaller
   // parameter would silently alias rather than fail.
+  // R852: 4096 for Model 2A -- Virtua Fighter 2 uploads 3,802 words (MAME's
+  // program map is 0x000-0xfff) and runs above 0x7ff 53% of the time.
   parameter int unsigned PROG_WORDS = 2048,
   // AN EMPTY COMMAND FIFO STALLS THE PROCESSOR. OFF IS THE REFERENCE.
   //
@@ -88,7 +90,7 @@ module m2_tgp #(
   // write side is finished before the core leaves reset.
   input  logic        ucode_clk,
   input  logic        ucode_we,
-  input  logic [10:0] ucode_addr,
+  input  logic [11:0] ucode_addr,   // R852: [10:0] used when PROG_WORDS is 2048
   input  logic [31:0] ucode_data,
 
   // ------------------------------------------------------- copro RAM port
@@ -173,13 +175,14 @@ module m2_tgp #(
 
   // ------------------------------------------------------------ microcode ROM
   // 2048 x 32 is 8 M10K. One write port for the loader, one read for the core.
+  localparam int unsigned PAW = $clog2(PROG_WORDS);
   (* ramstyle = "M10K" *) logic [31:0] prog [PROG_WORDS];
 
   logic [15:0] prog_addr;
   logic [31:0] prog_rdata;
 
   always_ff @(posedge ucode_clk) begin
-    if (ucode_we) prog[ucode_addr] <= ucode_data;
+    if (ucode_we) prog[ucode_addr[PAW-1:0]] <= ucode_data;
   end
   // ------------------------------------------- program-RAM read-back checksum
   //
@@ -209,7 +212,7 @@ module m2_tgp #(
   // instrument cannot silently bring the hang back.
   localparam int RELEASE_DELAY = 2048;
 
-  logic [11:0] sw_addr;
+  logic [12:0] sw_addr;   // R852: one bit more, so 4096 words can end
   logic        sw_busy, sw_done;
   logic [23:0] sw_csum;
   logic [11:0] rel_cnt;
@@ -226,13 +229,13 @@ module m2_tgp #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      sw_addr <= 12'd0; sw_busy <= 1'b1; sw_done <= 1'b0; sw_csum <= 24'd0;
+      sw_addr <= 13'd0; sw_busy <= 1'b1; sw_done <= 1'b0; sw_csum <= 24'd0;
     end else if (sw_busy) begin
-      sw_addr <= sw_addr + 12'd1;
+      sw_addr <= sw_addr + 13'd1;
       // One cycle of read latency: fold the word for the PREVIOUS address.
-      if (sw_addr != 12'd0)
+      if (sw_addr != 13'd0)
         sw_csum <= {sw_csum[22:0], sw_csum[23]} ^ prog_rdata[23:0];
-      if (sw_addr == 12'(PROG_WORDS)) begin
+      if (sw_addr == 13'(PROG_WORDS)) begin
         sw_busy <= 1'b0;
         sw_done <= 1'b1;
       end
@@ -248,7 +251,7 @@ module m2_tgp #(
   assign dbg_ucode_ram_ok   = sw_done;
 
   always_ff @(posedge clk) begin
-    prog_rdata <= prog[sw_busy ? sw_addr[10:0] : prog_addr[10:0]];
+    prog_rdata <= prog[sw_busy ? sw_addr[PAW-1:0] : prog_addr[PAW-1:0]];
   end
 
   // ----------------------------------------------------------- the core

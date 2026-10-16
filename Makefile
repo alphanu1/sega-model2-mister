@@ -399,8 +399,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -1545,18 +1545,23 @@ TGPCAP     ?= build/tgpcap/race5400
 TGPCAP_RUN ?= build/tgpcap/run
 TGP_LAT    ?= 6
 TGP_REPLAY_RTL := $(TGP_CORE) $(TGP)/m2_tgp.sv $(TGP)/m2_fifo_m10k.sv $(TGP)/m2_copro.sv
-obj_tgp_replay/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
+# R852: TGP_PROG=4096 builds the Model 2A program RAM (Virtua Fighter 2's
+# 3,802-word program), in its own object directory.
+TGP_PROG   ?= 2048
+TGP_ROBJ   := obj_tgp_replay$(if $(filter 2048,$(TGP_PROG)),,_$(TGP_PROG))
+$(TGP_ROBJ)/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
 	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
-	  -CFLAGS "-O2" -O3 -LDFLAGS "-lz" --Mdir obj_tgp_replay -o Vm2_copro sim/tgp/tgp_replay.vlt \
+	  -GPROG_WORDS=$(TGP_PROG) -CFLAGS "-O2 -DTGP_PROG_WORDS=$(TGP_PROG)" -O3 -LDFLAGS "-lz" \
+	  --Mdir $(TGP_ROBJ) -o Vm2_copro sim/tgp/tgp_replay.vlt \
 	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)
-tgp_replay: obj_tgp_replay/Vm2_copro
-	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) $(TEST_ARGS)
-tgp_replay_baseline: obj_tgp_replay/Vm2_copro
+tgp_replay: $(TGP_ROBJ)/Vm2_copro
+	./$(TGP_ROBJ)/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) $(TEST_ARGS)
+tgp_replay_baseline: $(TGP_ROBJ)/Vm2_copro
 	mkdir -p $(TGPCAP_RUN)
-	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) --profile 0 \
+	./$(TGP_ROBJ)/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) --profile 0 \
 	  --dump-rtl $(TGPCAP_RUN)/rtl_baseline.bin || true
-tgp_replay_check: obj_tgp_replay/Vm2_copro
-	./obj_tgp_replay/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) \
+tgp_replay_check: $(TGP_ROBJ)/Vm2_copro
+	./$(TGP_ROBJ)/Vm2_copro $(TGPCAP) --lat $(TGP_LAT) --wlat $(TGP_LAT) \
 	  --vs-rtl $(TGPCAP_RUN)/rtl_baseline.bin $(TEST_ARGS)
 tgp_capture:
 	rm -rf $(TGPCAP_RUN)/cfg $(TGPCAP_RUN)/nvram $(TGPCAP_RUN)/snap && mkdir -p $(TGPCAP) $(TGPCAP_RUN)
@@ -1767,6 +1772,17 @@ obj_m2_cab/Vtb_m2_cab_inputs_top: rtl/io/m2_cab_inputs.sv sim/io/m2_cab_inputs_r
 	$(VBUILD) --top-module tb_m2_cab_inputs_top -Wno-UNUSEDSIGNAL \
 	  --Mdir obj_m2_cab -o Vtb_m2_cab_inputs_top -CFLAGS "-O2" \
 	  rtl/io/m2_cab_inputs.sv sim/io/m2_cab_inputs_ref.sv sim/io/tb_m2_cab_inputs_top.sv sim/io/tb_m2_cab_inputs.cpp
+
+# R852: the Model 2A I/O controller (315-5649) and its 93C46 EEPROM against a
+# transcription of MAME 0.289's devices, every read compared.
+test_m2_315_5649: obj_m2_5649/Vm2_315_5649
+	@echo "== test m2_315_5649 (the 2A I/O and its 93C46 against MAME's)"
+	@./obj_m2_5649/Vm2_315_5649 $(TEST_ARGS)
+
+obj_m2_5649/Vm2_315_5649: rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
+	$(VBUILD) --top-module m2_315_5649 -Wno-UNUSEDSIGNAL \
+	  --Mdir obj_m2_5649 -o Vm2_315_5649 -CFLAGS "-O2" \
+	  rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
 
 # R846: Virtua Cop's guns -- MiSTer's sticks and mouse to the game's gun
 # ports (every stick value, every pixel against the game's own aim rule,

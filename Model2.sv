@@ -70,6 +70,45 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 
 `include "build_id.v"
 
+// R852: THE MODEL 2A-CRX BOARD, compile time. ON on this branch (model2a);
+// VERILOG_MACRO "M2_NO_2A=1" (or -DM2_NO_2A to lint) builds the original
+// Model 2 core of main instead, every other switch at main's default. With
+// M2_2A: the 2A map (256 KB work RAM at 0x200000-0x23ffff, no program mirror),
+// the 315-5649 I/O controller and its 93C46 EEPROM at 0x01c00000, the 2A ROM
+// layout (one 512 KB program, 16 MB of data, samples above the RAMs), and a
+// silent stand-in for the SCSP and its 68000 on the i8251's far end. The
+// original board's parts stay in the source behind their own switches:
+//   M2_M1SOUND  the Model 1 sound board (68000, MultiPCM, YM3438) -- 2A: 0
+//   M2_IOZ80    the I/O board's Z80 + MB8421 DPRAM + cabinet inputs -- 2A: 0
+//   M2_VCOP_*   Virtua Cop's additions (need M2_IOZ80) -- 2A: off
+`ifndef M2_NO_2A
+`define M2_2A
+`endif
+`ifdef M2_2A
+`ifndef M2_M1SOUND
+`define M2_M1SOUND 0
+`endif
+`ifndef M2_IOZ80
+`define M2_IOZ80 0
+`endif
+`ifndef M2_VCOP_IO
+`define M2_VCOP_IO 0
+`endif
+`ifndef M2_VCOP_FPU
+`define M2_VCOP_FPU 0
+`endif
+`ifndef M2_NO_VCOP_GUN
+`define M2_NO_VCOP_GUN
+`endif
+`else
+`ifndef M2_M1SOUND
+`define M2_M1SOUND 1
+`endif
+`ifndef M2_IOZ80
+`define M2_IOZ80 1
+`endif
+`endif
+
 // R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
 // Model 2A/2B/2C branches). Macros rather than parameters because the OSD
 // lines that go with the guns must leave CONF_STR entirely when they are off
@@ -265,12 +304,14 @@ localparam CONF_STR = {
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
+`ifndef M2_2A
 	"O[28],Pedals,Normal,Swapped;",
 	// 3/4 is entry zero because it is the one where full stick equals full
 	// lock; the others are taste.
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
 	"O[54],Right stick,Pedals only,Pedals+steer;",      // R831: Pedals+steer = R816 (a wheel): X steers, Y still the pedals
+`endif
 	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
 	// each quad's level moves from its footprint's major axis (R828, the
 	// mountains right, the near road blurry) towards the minor: Sharp half
@@ -295,10 +336,25 @@ localparam CONF_STR = {
 	// between the two R items it silently broke everything after it -- the OSD
 	// Reset stopped pulsing status[0], measured as a reset-edge counter that
 	// ignored the button entirely.
+`ifdef M2_2A
+	// R852: Model 2A (Virtua Fighter 2): a stick and three buttons a player,
+	// player 2 on the second joystick in the same layout.
+	"J1,Punch,Kick,Guard,Start,Coin,Test,Service;",
+`else
 	"J1,Coin,Start,Test,Service,VR1 Red,VR4 Green,Accel,Brake,Gear Up,Gear Down,VR2 Blue,VR3 Yellow;",
+`endif
 	"v,0;",
 	"V,v",`BUILD_DATE
 };
+
+// R852: the board switches as constants (see the macros at the top).
+`ifdef M2_2A
+localparam bit M2A = 1'b1;
+`else
+localparam bit M2A = 1'b0;
+`endif
+localparam bit M1SOUND = (`M2_M1SOUND != 0);
+localparam bit IOZ80   = (`M2_IOZ80 != 0);
 
 wire        forced_scandoubler;
 wire  [1:0] buttons;
@@ -628,7 +684,8 @@ localparam logic [SDR_AW:1] GAME_COPRO  = SDR_AW'(32'h0520000);
 // cosine, inverse and inverse-square-root 64 KB into the table. Found by
 // searching the index-0 image built by tools/rom_csum.py for the tables'
 // first words (00000000 38c90fdb 39490fdb): byte 0x2BA0000, word 0x15D0000.
-localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d0000);
+localparam logic [SDR_AW:1] GAME_TGPTBL = M2A ? SDR_AW'(32'h1240000)    // R852: 2A, byte 0x2480000
+                                              : SDR_AW'(32'h15d0000);
 // THE POLYGON ROM, WHERE THE GEOMETRY'S VERTICES LIVE (R169).
 //
 // geo_object_data's `oba` selects the source -- bit 24 fast polygon RAM, bit 23
@@ -673,10 +730,23 @@ localparam logic [SDR_AW:1] GAME_TGPTBL = SDR_AW'(32'h15d0000);
 // (XTRA_FROM / XTRA_TO) puts them at GAME_POLYX in free SDRAM above the RAMs.
 // The engine reads polygon ROM at dword 0x340000 (13 MB) and up from there.
 // '93 never reads past 13 MB; before this an oba there read the sound program.
-localparam logic [SDR_AW:1] GAME_POLY   = SDR_AW'(32'h0b20000);   // byte 0x1640000, 13 MB
+localparam logic [SDR_AW:1] GAME_POLY   = M2A ? SDR_AW'(32'h0c40000)    // R852: 2A, byte 0x1880000, 12 MB
+                                              : SDR_AW'(32'h0b20000);   // byte 0x1640000, 13 MB
 localparam logic [SDR_AW:1] GAME_POLYX  = SDR_AW'(32'h1880000);   // byte 0x3100000, 3 MB: polygon ROM 13-16 MB
 localparam logic [SDR_AW:1] GAME_POLYXB = GAME_POLYX - SDR_AW'(32'h0680000);   // so that + 2 x dword lands in it
 localparam logic [26:0]     MRA_END_93  = 27'h2BE0000;            // the '93 image's last byte + 1 (the TGP tables' end)
+// R852: THE 2A LAYOUT (mra/Virtua Fighter 2 (Version 2.1).mra), MRA byte offsets:
+//   0x0000000 program 512 KB, whole    0x0080000 main_data 16 MB
+//   0x1080000 textures 8 MB            0x1880000 polygons 12 MB
+//   0x2480000 TGP tables 256 KB        0x24C0000 68000 sound program 512 KB
+//   0x2540000 samples 8 MB -> moved by the loader (XTRA) to byte 0x3400000
+// No copro data (MAME: ROMREGION_ERASE00 -- the TGP's reads of it answer 0)
+// and no program second half: the bridge reads the program linearly.
+// Bytes 0x2540000-0x2C40000 are never loaded; the 2A board RAM (256 KB)
+// lives there, at word 0x12A0000.
+localparam logic [26:0]     XTRA_FROM_2A = 27'h2540000;
+localparam logic [SDR_AW:1] GAME_SAMP_2A = SDR_AW'(32'h1A00000);   // byte 0x3400000, 8 MB
+localparam logic [SDR_AW:1] GAME_SND_2A  = SDR_AW'(32'h1260000);   // byte 0x24C0000, 512 KB
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -1456,7 +1526,8 @@ wire mem_ready_s = mem_ready_sy[1];
 // `ioctl_wait` STALLS THE HPS ITSELF, so the loader gates it on `ioctl_download`
 // internally — and it ASKS the host to stop rather than stopping it, which is why
 // it buffers into a FIFO with margin instead of trusting the wait to take effect.
-m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(MRA_END_93), .XTRA_TO(GAME_POLYX[SDR_AW:1])) u_loader (   // R725
+m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(M2A ? XTRA_FROM_2A : MRA_END_93),
+               .XTRA_TO(M2A ? GAME_SAMP_2A[SDR_AW:1] : GAME_POLYX[SDR_AW:1])) u_loader (   // R725
 	.clk(clk_sys), .rst(~mem_rst_n),
 	.mem_ready(mem_ready_s),   // R571: synchronised -- see below
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -1873,7 +1944,8 @@ localparam logic [SDR_AW:1] XLAT_BASE = SDR_AW'(32'h4A000);
 //   0x00000000  program ROM   (epr-16530a + epr-16531a, interleaved to 32 bits)
 //   0x00040000  main_data     (mpr-16528 onwards)
 localparam logic [SDR_AW:1] GAME_PROG  = SDR_AW'(32'h0000000);   // byte 0
-localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0020000);   // byte 0x40000
+localparam logic [SDR_AW:1] GAME_DATA  = M2A ? SDR_AW'(32'h0040000)   // R852: 2A, byte 0x80000, 16 MB
+                                             : SDR_AW'(32'h0020000);   // byte 0x40000
 // MOVED UP 256 KB WHEN THE TGP TABLES WENT INTO THE MRA. R19 recorded the
 // margin above the last ROM word as deliberate rather than incidental -- 0x30000
 // words, 384 KB -- and adding the 256 KB of copro_tgp_tables took the image from
@@ -1881,7 +1953,8 @@ localparam logic [SDR_AW:1] GAME_DATA  = SDR_AW'(32'h0020000);   // byte 0x40000
 // is not margin: the next ROM anyone adds silently lands on work RAM, and the
 // symptom would be the game corrupting its own variables.
 localparam logic [SDR_AW:1] GAME_WORK  = SDR_AW'(32'h1620000);   // 1 MB
-localparam logic [SDR_AW:1] GAME_BOARD = SDR_AW'(32'h16a0000);   // 128 KB
+localparam logic [SDR_AW:1] GAME_BOARD = M2A ? SDR_AW'(32'h12a0000)   // R852: 2A, 256 KB, in the layout's unloaded hole
+                                             : SDR_AW'(32'h16a0000);   // 128 KB
 localparam logic [SDR_AW:1] GAME_CHAR  = SDR_AW'(32'h16b0000);   // 512 KB
 // 0x16f0000 is the first word free after GAME_CHAR; ST_BASE is at 0x1F00000.
 localparam logic [SDR_AW:1] GAME_BUFFER = SDR_AW'(32'h16f0000);   // 128 KB, 0x00900000
@@ -1909,7 +1982,8 @@ localparam logic [SDR_AW:1] GAME_TEXRAM = SDR_AW'(32'h1740000);   // 128 KB
 localparam logic [SDR_AW:1] GAME_TEXS0  = SDR_AW'(32'h1760000);   // 1 MB
 localparam logic [SDR_AW:1] GAME_TEXS1  = SDR_AW'(32'h17E0000);   // 1 MB
 localparam logic [SDR_AW:1] GAME_LUMA   = SDR_AW'(32'h1860000);   // 32 K words, texture RAM
-localparam logic [SDR_AW:1] GAME_TEX    = SDR_AW'(32'h0720000);   // texture ROM, byte 0x0e40000 in the MRA, 8 MB
+localparam logic [SDR_AW:1] GAME_TEX    = M2A ? SDR_AW'(32'h0840000)  // R852: 2A, byte 0x1080000
+                                              : SDR_AW'(32'h0720000);   // texture ROM, byte 0x0e40000 in the MRA, 8 MB
 
 // WHERE CHARACTER RAM LIVES, AS ONE SIGNAL, because two things that must agree
 // should not be two constants (study R51).
@@ -2357,7 +2431,7 @@ wire is_vcop = (game_id[6:0] == 7'd1);
 // R835: 2 is Desert Tank -- the same board as Daytona, a 512 KB program (its
 // second half at GAME_POLYX, as Virtua Cop's) and its own controls (below).
 wire is_desert = (game_id[6:0] == 7'd2);
-wire prog_ext  = is_vcop | is_desert;   // program 0x40000-0x7FFFF from GAME_POLYX
+wire prog_ext  = !M2A & (is_vcop | is_desert);   // program 0x40000-0x7FFFF from GAME_POLYX (R852: 2A reads it linearly)
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -2496,7 +2570,7 @@ wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
 m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
-                  , .AW(SDR_AW), .BOARD_2A(1'b0), .DCACHE_EN(1'b1)) u_cpu_bridge (
+                  , .AW(SDR_AW), .BOARD_2A(M2A), .DCACHE_EN(1'b1)) u_cpu_bridge (   // R852
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -2546,6 +2620,22 @@ logic        io_render_mode;
 logic [31:0] io_framenum;
 logic        vbl_s, vbl_d, vbl_dd;   // R564: vbl_s is the first synchroniser stage
 
+// R852: THE FOUR TIMERS at 0x00f00000 (m2_timers), on the 2A board only:
+// Virtua Fighter 2 runs its second interrupt (bit 5) and its busy-waits on
+// them. The original core keeps reading zero there (R835).
+wire  [3:0] tmr_expire;
+wire [31:0] tmr_rdata;
+generate if (M2A) begin : g_timers
+	m2_timers #(.TICK_NUM(25), .TICK_DEN(SYS_MHZ)) u_timers (
+		.clk(clk_sys), .rst_n(cpu_rst_n),
+		.sel(cpu_io_sel && (cpu_io_addr[23:4] == 20'hf0000)), .we(cpu_io_we),
+		.idx(cpu_io_addr[3:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
+		.rdata(tmr_rdata), .expire(tmr_expire)
+	);
+end else begin : g_notimers
+	assign tmr_expire = 4'd0; assign tmr_rdata = 32'd0;
+end endgenerate
+
 // V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
 // folds the twelve request bits onto the i960's four lines.
 wire  uart_irq;      // TXRDY|RXRDY, gated by TxEN/RxEN -- txrdy_r()||rxrdy_r()
@@ -2590,6 +2680,11 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 			if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
 			if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
 		end
+		// R852: the main-board timers' expiries (2A only; zero otherwise) --
+		// after the acknowledge above, so a request raised in the cycle of
+		// an acknowledge is not lost.
+		for (int t = 0; t < 4; t++)
+			if (tmr_expire[t] && io_intena[t + 2]) io_intreq[t + 2] <= 1'b1;
 
 		// ---- THE SOUND INTERRUPT, WHICH IS WHAT ACTUALLY SENDS THE BYTES.
 		//
@@ -2766,6 +2861,9 @@ logic [31:0]     sc_first;      // what the first candidate held, for the log
 //
 // Latched on the acknowledge and compared the cycle after. One extra cycle per
 // candidate on a scan that runs once at power-on.
+// R852: the scan and the board exist only with M2_M1SOUND (the original
+// board); a 2A build has the SCSP's stand-in below instead.
+generate if (M1SOUND) begin : g_sndscan
 logic [63:0] sc_dat;
 logic        sc_dv;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
@@ -2823,6 +2921,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (sc_st == SC_IDLE && !cp_done) sc_req <= 1'b0;
 	end
 end
+end else begin : g_nosndscan
+	always_comb begin
+		sc_st = SC_IDLE; sc_addr = SND_SCAN_LO; sc_req = 1'b0;
+		snd_base = SND_SCAN_LO; snd_found = 1'b0; sc_first = 32'd0;
+	end
+end endgenerate
 
 wire signed [15:0] snd_l, snd_r;
 // R829: THE OSD VOLUME. status[49:46] indexes 80, 90, 100, 0, 10 .. 70 %;
@@ -2870,6 +2974,12 @@ always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8];
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
+wire [31:0] snd_pc, snd_insns;
+wire [15:0] snd_ymw, snd_pcmw;
+wire [31:0] snd_samples;
+wire [15:0] snd_lat, snd_miss, snd_under;
+wire  [7:0] snd_level;
+generate if (M1SOUND) begin : g_m1snd
 m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1), .YM_STUB(1'b1)) u_sndboard (   // R573; R821: one MultiPCM engine, passed on the board (s1037); R833: YM_STUB 1 = the YM3438 as timers only (Daytona never voices it)
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
@@ -2887,12 +2997,27 @@ m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHA
 	.dbg_pcm_lat(snd_lat), .dbg_pcm_miss(snd_miss),
 	.dbg_pcm_under(snd_under), .dbg_pcm_level(snd_level)
 );
+end else begin : g_2asnd
+	// R852: THE MODEL 2A SOUND SIDE, SILENT. On the 2A board the i8251's TXD
+	// goes to the SCSP's MIDI in and the SCSP's MIDI out back to its RXD, and
+	// the SCSP's 68000 runs the sound program. Until the SCSP is in, this
+	// answers the i960 on that wire with what the game waits for (see
+	// m2_2a_snd_stub) and makes no sound.
+	m2_2a_snd_stub u_snd_stub (
+		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
+		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
+		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
+		.dbg_rx_bytes(snd_insns), .dbg_tx_bytes(snd_pc)
+	);
+	assign snd_l = 16'sd0;  assign snd_r = 16'sd0;
+	assign snd_rom_req = 1'b0; assign snd_rom_addr = '0;
+	assign pcm1_req = 1'b0; assign pcm1_addr = '0;
+	assign pcm2_req = 1'b0; assign pcm2_addr = '0;
+	assign snd_ymw = 16'd0; assign snd_pcmw = 16'd0; assign snd_samples = 32'd0;
+	assign snd_lat = 16'd0; assign snd_miss = 16'd0; assign snd_under = 16'd0;
+	assign snd_level = 8'd0;
+end endgenerate
 
-wire [31:0] snd_pc, snd_insns;
-wire [15:0] snd_ymw, snd_pcmw;
-wire [31:0] snd_samples;
-wire [15:0] snd_lat, snd_miss, snd_under;
-wire  [7:0] snd_level;
 
 assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
                    io_intreq[1],           io_intreq[0] };
@@ -3021,6 +3146,7 @@ assign cpu_io_rdata =
 	                                     io_videoctl[1:0]} :
 	(cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
 	(cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
+	(M2A && cpu_io_addr[23:4] == 20'hf0000) ? tmr_rdata :   // R852
 	32'd0;
 
 // The ID is byte-wide; the i960 reads it a dword at a time and takes the lane
@@ -3364,7 +3490,7 @@ wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TE
                          : (eng_mem_space == 2'd2) ? GAME_PAL3D
                          : (eng_mem_space == 2'd3) ? GAME_XLAT3D
                          : geo_obj_oba_r[24] ? GAME_PRAM1
-                         : geo_obj_oba_r[23] ? ((eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB : GAME_POLY)   // R725
+                         : geo_obj_oba_r[23] ? ((!M2A && eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB : GAME_POLY)   // R725; R852: 2A's 12 MB are contiguous
                                              : GAME_PRAM0;
 wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, eng_mem_addr[14:0]}   // 64 K words
                                                                        : {3'd0, eng_mem_addr[20:0]})  // 4 M words
@@ -3711,7 +3837,8 @@ always_ff @(posedge clk_sys) begin
 	// per-owner qualification, plus a dead cycle on owner change. Same family as
 	// R144 on the write side.
 	tgp_dat_ack_r   <= p_ack[9] & tgp_dat_req_r;
-	tgp_dat_rdata_r <= p_dout[9][31:0];
+	// R852: 2A has no copro data ROM (MAME ROMREGION_ERASE00): those reads are 0
+	tgp_dat_rdata_r <= (M2A && !tgp_dat_is_buf_r) ? 32'd0 : p_dout[9][31:0];
 	tgp_tbl_req_r   <= tgp_tbl_req;
 	tgp_tbl_addr_r  <= tgp_tbl_addr;
 	tgp_dat_req_r   <= tgp_dat_req;
@@ -3817,7 +3944,7 @@ end
 // clocking alone cannot close that -- but a coprocessor that is slow is a
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
-m2_copro u_copro (
+m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048)) u_copro (   // R852
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
@@ -4061,6 +4188,9 @@ end endgenerate
 // reload"), bit 1 Enemy Character (1 = Normal), the rest unused (1).
 wire [7:0] vc_dsw1 = {6'h3F, 1'b1, ~(VCOP_GUN & status[59])};
 
+// R852: the I/O board (its Z80, DPRAM, firmware and cabinet inputs) only with
+// M2_IOZ80; the 2A board reads its 315-5649 directly (below, at u_ioboard).
+generate if (IOZ80) begin : g_ioz80
 m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ),   // 4 MHz exactly, on clk_sys (R573)
            .TYPE2(VCOP_IO), .T2_SCALE(625), .T2_NUM(6144)) u_ioz80 (   // R839: 9.8304 MHz type 2
 	.clk(clk_sys), .rst_n(cpu_rst_n & fw_ready),
@@ -4090,6 +4220,10 @@ m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ),   // 4 MHz exactly, on clk_sys (R57
 	.dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
 	.dbg_pa(iob_pa), .dbg_seccnt(iob_seccnt)
 );
+end else begin : g_noioz80
+	assign zio_we = 1'b0; assign zio_addr = 11'd0; assign zio_wdata = 8'd0;
+	assign iob_pa = 8'hFF; assign iob_seccnt = 16'd0;
+end endgenerate
 
 // WHERE DOES THE TEST SWITCH STOP? The buttons are mapped, the firmware path
 // is proven in simulation (R65: in0=FB puts FB in DPRAM byte 0x08, byte for
@@ -5169,6 +5303,7 @@ always_ff @(posedge clk_sys) begin
 	paddle_q      <= paddle;
 end
 wire [7:0] iob_in0, iob_in1, steer, accel, brake;
+generate if (IOZ80) begin : g_cab
 m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.clk(clk_sys), .rst_n(cpu_rst_n), .is_desert(is_desert),
 	.joystick_0(joystick_0), .joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q),
@@ -5177,6 +5312,10 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.st_rsteer(status[54]),
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
+end else begin : g_nocab
+	assign iob_in0 = 8'hFF; assign iob_in1 = 8'hFF;
+	assign steer = 8'h80; assign accel = 8'h00; assign brake = 8'h00;
+end endgenerate
 
 // COIN PATH INSTRUMENT. The board hears a coin -- it plays the sound -- and does
 // not credit it, and there are three different places that can be true in: the
@@ -5272,6 +5411,7 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	end
 end
 
+generate if (IOZ80) begin : g_ioboard
 m2_ioboard #(
 	.USE_Z80(1'b1),
 	// RESCALED TO clk_sys. These are measured in FRAMES -- status at 7 and
@@ -5301,6 +5441,45 @@ m2_ioboard #(
 	.win_busy(dp_busy),
 	.dbg_word4(iob_word4)
 );
+end else begin : g_noioboard
+	assign dp_busy = 1'b0; assign zio_rdata = 8'hFF;
+	assign iob_win_rd = 16'd0; assign iob_flag_rd = 16'd0; assign iob_seen = 16'd0;
+	assign iob_word4 = 24'd0;
+	if (M2A) begin : g_5649
+		// R852: THE 2A I/O, the 315-5649 at 0x01c00000-0x01c0001f (MAME
+		// model2a_crx_mem; 0x01c00040 is a write MAME drops, as this does).
+		// Inputs as MAME's model2crx / vf2 ports, active low:
+		//   IN0  0 coin 1, 1 coin 2, 2 test, 3 service, 4 start 1, 5 start 2
+		//   IN1  0 punch, 1 kick, 2 guard, 3 unused, 4 down, 5 up, 6 right,
+		//        7 left (player 1, joystick 0); IN2 the same for player 2
+		//   SW   SW3, all unused by VF2 (0xFF)
+		// MiSTer: joystick bits 0 right, 1 left, 2 down, 3 up, then the J1
+		// line: 4 Punch, 5 Kick, 6 Guard, 7 Start, 8 Coin, 9 Test, 10 Service.
+		wire [7:0] a2_in0 = ~{2'b00, joystick_1[7], joystick_0[7], joystick_0[10],
+		                      joystick_0[9], joystick_1[8], joystick_0[8]};
+		wire [7:0] a2_in1 = ~{joystick_0[1], joystick_0[0], joystick_0[3], joystick_0[2],
+		                      1'b0, joystick_0[6], joystick_0[5], joystick_0[4]};
+		wire [7:0] a2_in2 = ~{joystick_1[1], joystick_1[0], joystick_1[3], joystick_1[2],
+		                      1'b0, joystick_1[6], joystick_1[5], joystick_1[4]};
+		logic [7:0] a2_in0_q, a2_in1_q, a2_in2_q;
+		always_ff @(posedge clk_sys) begin
+			a2_in0_q <= a2_in0; a2_in1_q <= a2_in1; a2_in2_q <= a2_in2;
+		end
+		wire [31:0] a2_rdata;
+		m2_315_5649 u_315_5649 (
+			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
+			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
+			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
+			.rdata(a2_rdata),
+			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
+			.lamps(), .dbg_pa(), .dbg_dir()
+		);
+		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
+		assign iob_dbg   = 32'd0;
+	end else begin : g_noio
+		assign iob_rdata = 32'd0; assign iob_dbg = 32'd0;
+	end
+end endgenerate
 
 // ---------------------------------------------------------- PORT 4 SWEEP
 //

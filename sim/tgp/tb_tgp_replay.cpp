@@ -260,7 +260,10 @@ split_done:
   // ---- program upload through the real path: ctl bit 31 up, words, bit 31 down
   const unsigned nup = st.count("UPLOAD_WORDS") ? st["UPLOAD_WORDS"] : 2048;
   clear_bus(); top->sel_ctl = 1; top->we = 1; top->wdata = 0x80000000u; tick();
-  for (unsigned i = 0; i < nup && i < 2048; ++i) {
+#ifndef TGP_PROG_WORDS
+#define TGP_PROG_WORDS 2048   // R852: 4096 for the Model 2A build (make TGP_PROG=4096)
+#endif
+  for (unsigned i = 0; i < nup && i < TGP_PROG_WORDS; ++i) {
     clear_bus(); top->sel_fifo = 1; top->we = 1; top->wdata = prog[i]; tick();
   }
   clear_bus(); tick();

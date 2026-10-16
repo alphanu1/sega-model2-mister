@@ -51,7 +51,11 @@
 
 `timescale 1ns/1ps
 
-module m2_copro (
+module m2_copro #(
+  // R852: the TGP's program RAM -- 2048 words on the original board's games,
+  // 4096 for Model 2A's Virtua Fighter 2 (3,802 words uploaded)
+  parameter int unsigned PROG_WORDS = 2048
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -180,7 +184,7 @@ module m2_copro (
 
   // ------------------------------------------------------- program upload
   logic        uc_we;
-  logic [10:0] uc_addr;
+  logic [11:0] uc_addr;   // R852: 12 bits; m2_tgp uses [10:0] at 2048 words
   logic [31:0] uc_data;
 
   // --------------------------------------------------------------- FIFOs
@@ -333,7 +337,7 @@ module m2_copro (
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       coproctl <= 32'd0; coprocnt <= 12'd0; halted <= 1'b1;
-      uc_we <= 1'b0; uc_addr <= 11'd0; uc_data <= 32'd0;
+      uc_we <= 1'b0; uc_addr <= 12'd0; uc_data <= 32'd0;
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
       dbg_fctl_reads <= 32'd0;
       dbg_in_popped <= 32'd0; dbg_pop_data <= 32'd0; dbg_push_data <= 32'd0;
@@ -358,7 +362,7 @@ module m2_copro (
       if (fifo_wr) begin
         if (uploading) begin
           uc_we   <= 1'b1;
-          uc_addr <= coprocnt[10:0];
+          uc_addr <= coprocnt[11:0];
           uc_data <= wdata;
           coprocnt <= coprocnt + 12'd1;
           if (!(&dbg_prog_words)) dbg_prog_words <= dbg_prog_words + 16'd1;
@@ -440,7 +444,7 @@ module m2_copro (
   // the consumer stops draining results. Ours drains synchronously -- see the
   // `stall` line above -- so it cannot; and if it ever does, the signature is
   // everything freezing at once, not the frame-1 hang this replaces.
-  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0)) u_tgp (
+  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS)) u_tgp (
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
@@ -472,7 +476,7 @@ module m2_copro (
   );
 
   assign dbg_uc_we   = uc_we;
-  assign dbg_uc_addr = {1'b0, uc_addr};
+  assign dbg_uc_addr = uc_addr;
   assign dbg_uc_data = uc_data;
 
   assign dbg_ram_req = ram_req_w;
