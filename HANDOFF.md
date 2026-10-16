@@ -8,7 +8,11 @@ Released from c545187's RTL as s1142 (releases/Model2_20261016.rbf,
 Virtua Cop (Revision A), each with a [15kHz CRT] version (Virtua Cop's game
 ID 0x81 is new in this release). Release and main READMEs rewritten for three
 games. vcop merged into headroom; PR #8 (headroom -> main) updated and
-merged with a merge commit (Ben). Open items as in the entry below.
+merged with a merge commit (Ben), f7c41ad. AFTER (R851): Virtua Cop is
+playable past stage 1 (Ben); its country is the game's own (test menu / ROM
+region), nothing for us; GunCon on SNAC noted, not now; test_mb86233_regs
+fixed (the bench, not the RTL: 0x21 is the input FIFO's pop on Model 2).
+Nothing open that blocks.
 
 ## 2026-10-16: branch vcop -- Virtua Cop runs, guns work; s1142 the candidate
 

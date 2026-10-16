@@ -49,10 +49,8 @@ guns, sits behind a compile-time switch so a later branch can leave it out.
 
 - **Confirmation from CRT, wheel and light-gun owners**, and long runs of
   the Deluxe '93 set.
-- **More Virtua Cop testing**, past its first stage, and an option for its
-  country setting (it starts in Japanese, as MAME does).
-- **CRT light guns** (GunCon on the SNAC port), documented in the study but
-  not built.
+- **CRT light guns** (GunCon on the SNAC port), documented in the study for
+  later, not being worked on now.
 - **MiSTer's audio filter** is switched off to save space (see Building). It
   comes back once everything else is in, if there's room.
 

@@ -68,9 +68,9 @@ sample chips. The 3D goes into a framebuffer and is only shown when a frame
 is finished, so there's no tearing.
 
 Daytona has had the most play by far. Desert Tank has been played through
-its missions with no lock in an 87-minute run. Virtua Cop is the newest:
-it boots, plays, and takes light-gun input, but expect rough edges, and
-please report what you find.
+its missions with no lock in an 87-minute run. Virtua Cop is playable
+through its stages with light-gun input. It's the newest, so please report
+anything you find.
 
 ## New in this release
 
@@ -218,7 +218,9 @@ takes. Calibrate the gun in MiSTer's own menu (F10), leave `Mouse` at its
 default, and set `Crosshair` to `Off`. A second gun goes on controller 2.
 
 The attract's tutorial text is in Japanese: Virtua Cop keeps its country in
-its own backup RAM, and a fresh set starts as Japan. MAME does the same.
+its own backup RAM, and a fresh set starts as Japan, as it does in MAME. The
+country is the game's own setting, so change it in its test menu, or use a
+ROM set from another region.
 
 ## On a 15 kHz CRT
 
@@ -264,10 +266,8 @@ framework file `sys/audio_out.sv`, kept as a patch in
 
 - **Reports from CRT, wheel and light-gun owners** (see above), and from
   anyone running the Deluxe '93 set for long stretches.
-- **More Virtua Cop testing.** It's the newest game here; only the first
-  stage has been checked closely.
-- **CRT light guns** (GunCon on MiSTer's SNAC port) are planned, not built.
-- **An option for Virtua Cop's country,** so its text can be in English.
+- **CRT light guns** (GunCon on MiSTer's SNAC port) are noted for later,
+  not being worked on now.
 
 If you find something wrong, please report it.
 
