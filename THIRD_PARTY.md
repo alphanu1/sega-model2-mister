@@ -363,10 +363,11 @@ individually:
 |---|---|---|---|
 | `src/devices/cpu/mb86233/mb86233.{cpp,h,d.cpp}` | BSD-3-Clause | Olivier Galibert | TGP, and the M2-C finding |
 | `src/devices/cpu/i960/i960.cpp` | BSD-3-Clause | Farfetch'd, R. Belmont | i960KB — the only reference that exists |
-| `src/devices/sound/scsp.cpp` | BSD-3-Clause | ElSemi, R. Belmont | SCSP, written from scratch against it |
+| `src/devices/sound/scsp.cpp`, `scsp.h`, `scspdsp.cpp`, `scspdsp.h` | BSD-3-Clause | ElSemi, R. Belmont (scsp.cpp: thanks-to kingshriek) | The Model 2A SCSP, below (headers read at 0.289, study R856) |
 | `src/mame/sega/segaic24.cpp` | BSD-3-Clause | — | S24TILE tilemap |
 | `src/mame/sega/315_5649.cpp` | BSD-3-Clause | Dirk Best | I/O chip |
-| `src/mame/sega/model2.cpp`, `model2_v.cpp` | check before use | — | Board, memory map, renderer behaviour |
+| `src/mame/sega/model2.cpp` | BSD-3-Clause (checked at 0.289, R856) | R. Belmont, Olivier Galibert, ElSemi, Angelo Salese, Matthew Daniels | Board, memory map, the sound board's map |
+| `src/mame/sega/model2_v.cpp` | check before use | — | Renderer behaviour |
 
 **MAME is GPL-2.0 as a whole and individual files carry their own SPDX
 headers.** Check the header of every file you read. Do not rely on the
@@ -379,6 +380,39 @@ documents it — the behaviour of Sega's and Intel's silicon is fact, not MAME's
 expression. The distinction bites on *structure* rather than function: where
 MAME made a decomposition choice that alternatives existed for, mirroring that
 choice is a different question from reproducing what the chip does.
+
+### The Model 2A SCSP — derived from MAME 0.289's scsp.cpp / scspdsp.cpp (BSD-3-Clause)
+
+*Headers read 2026-10-16 at MAME 0.289 (study R856).*
+
+Written for this core: `rtl/sound/scsp/m2_scsp.sv`, `m2_scsp_dsp.sv`,
+`m2_scsp_level.sv`, `m2_scsp_cache.sv` (RTL, GPL-3.0-or-later, whose
+arithmetic, tables and order of operations follow MAME's so that MAME's own
+register streams give MAME's own mix), the generated tables
+`rtl/sound/scsp/scsp_*.hex` and `scsp_tables.svh` (MAME's formulas, through
+`sim/sound/scsp_tables_gen.cpp`; `scsp_lfonoise.hex` is MAME's own 256
+`machine().rand()` values from a capture), and `sim/sound/scsp_ref.h`, a
+standalone port of the two files (it keeps their BSD-3 header; changes: the
+device and stream framework removed, RAM a local array, the noise tables
+loaded, the timers counting samples, bench observation points). The Saturn
+core's SCSP (no licence) was not read. The notice the BSD-3 terms require:
+
+    license:BSD-3-Clause
+    copyright-holders:ElSemi, R. Belmont
+    thanks-to: kingshriek
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met: (1) redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer; (2)
+    redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution; (3) neither the
+    name of the copyright holder nor the names of its contributors may be
+    used to endorse or promote products derived from this software without
+    specific prior written permission. THIS SOFTWARE IS PROVIDED BY THE
+    COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+    WARRANTIES ARE DISCLAIMED.
 
 ### MiSTer-devel/N64_MiSTer — GPL-3.0, VHDL
 *Verified 2026-08-16*
