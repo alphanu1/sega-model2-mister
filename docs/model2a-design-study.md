@@ -36231,3 +36231,15 @@ clk_mem +0.544, clk_i960 +1.277, HDMI +0.177, holds >= +0.244; 36,223 ALM
 (86%; s1160 36,123), M10K 485/553, DSP 86/112. s1163 / s1165 miss HDMI only
 (-0.074 / -0.316). RBF build/Model2A_20261016_s1164_r855.rbf
 f80a966054a5642b92b89b7189c16162. Not yet on the board.
+
+**R855 ON THE BOARD: VF2 AT FULL SPEED.** s1164 (3474771 + M2_WHY; every
+clock positive incl. HDMI) as Model2A.rbf: m2-fps 57.0-57.5 fps (was 28.5-29
+on s1150/s1160). Attract, 120 s: flips/vblank 0.997 (57.3 game fps), GAME
+behind 0.3% (was 47.7%), DRAW / WALK behind 0; frame work (vblank to
+0x4bcd4) median 14.1 ms, p90 15.4, over one vblank 10 of 2,586 (0.4%; max
+124.5 ms, a scene load); draw median 7.1 ms, walk 11.3 ms; i960 per vblank:
+fetch wait 20.8% (was 37.1%), data wait 52.3% of which TGP holds 21.2%,
+geometry push 0% (was 5.3%), CPI 12.0. The margin is ~2-3 ms a frame; the
+TGP hold is now the largest single wait (a later tightening, not a
+blocker). Ben: "a few visual bugs" -- to be listed and fixed after sound
+(his order).
