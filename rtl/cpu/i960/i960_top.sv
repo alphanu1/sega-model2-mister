@@ -50,7 +50,10 @@ module i960_top #(
   // (0x69.8), cpysre (0x6e.2) and cvtzril (0x6c.3), MAME's semantics. Built
   // only with VC = 1, and then live only while vc_en (the game ID says
   // Virtua Cop): with vc_en low they trap exactly as before. Needs RL.
-  parameter bit VC     = 1'b0
+  parameter bit VC     = 1'b0,
+  // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
+  // original core's; the 2A core has the M10K for more.
+  parameter int unsigned IC_LINES = 512
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -896,7 +899,7 @@ module i960_top #(
   // board (R768: the menus' trouble was the capture card, R770), the game
   // now keeps up and the 3D draw is the limit (R780), and its tag RAM was
   // ~264 ALM the texel path needs. The valid-bit-in-tag design stays.
-  i960_icache #(.LINES(512), .HUF(IC_HUF), .ER(IC_ER)) u_icache (   // R815: 8 KB again -- the game is the limit now (R814); R817: HUF, ER
+  i960_icache #(.LINES(IC_LINES), .HUF(IC_HUF), .ER(IC_ER)) u_icache (   // R815: 8 KB again -- the game is the limit now (R814); R817: HUF, ER
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),

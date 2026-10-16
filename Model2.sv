@@ -5245,6 +5245,133 @@ end else begin : g_nodbg
 			end
 		end
 	end
+`ifdef M2_WHY
+	// R854: WHY THE PICTURE MOVES EVERY OTHER VBLANK -- R814's "why" records
+	// (V, I, K, P, D) for this branch, plus W (the walk's length) and Y (the
+	// game's frame work: vblank to the frame-sync loop). VERILOG_MACRO
+	// "M2_WHY=1" with M2_DEBUG_LITE (and without M2_NO_DEBUG). Decoder:
+	// tools/decode_why.py. All counters are running totals or last/max pairs.
+	//   'V' {vblanks held: a finished list waits for the draw (the 3D behind) |
+	//        vblanks with no flip since the last, the walk busy} |
+	//       {vblanks with no flip, the walk idle (the game late) | vblanks}
+	//   'D' {last draw} | {longest draw since the last D}, clk_sys cycles
+	//   'W' {last walk} | {longest walk since the last W}, clk_sys cycles
+	//   'Y' {last frame's work} | {longest since the last Y}, clk_sys cycles
+	//       from the vblank edge to the CPU's first instruction at one of the
+	//       WHY_SYNC addresses (VF2: its vblank spin 0x10f98 and its idle
+	//       coroutine's entries 0x4aeac, 0x4cb7c, 0x4cd30); a frame that has
+	//       not reached it by the next vblank goes on counting, so a value over
+	//       one vblank (1,390,820 at 80 MHz) is a frame the CPU overran
+	//   'I' (clk_i960) {cycles in T_FETCH_W / T_FETCH2_W} | {cycles in T_MEM_W}
+	//   'K' (clk_sys) {cycles the TGP holds the CPU} | {the geometry push queue}
+	//   'P' {instructions retired} | {data-cache hits}
+	//   'G' every vblank: {flips | vblanks} | {TGP retires | tile overruns}
+	localparam logic [31:0] WHY_SYNC0 = 32'h0001_0F98, WHY_SYNC1 = 32'h0004_AEAC,
+	                        WHY_SYNC2 = 32'h0004_CB7C, WHY_SYNC3 = 32'h0004_CD30;
+	logic [15:0] wy_hold, wy_walk, wy_game, wy_vbl;
+	logic        wy_flip;
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			wy_hold <= '0; wy_walk <= '0; wy_game <= '0; wy_vbl <= '0; wy_flip <= 1'b0;
+		end else if (vbl_d && !vbl_dd) begin
+			wy_vbl <= wy_vbl + 16'd1;
+			if (r3d_game_hold)                           wy_hold <= wy_hold + 16'd1;
+			else if (!wy_flip && geo_walk_state != 4'd0) wy_walk <= wy_walk + 16'd1;
+			else if (!wy_flip)                           wy_game <= wy_game + 16'd1;
+			wy_flip <= geo_wr_setrp;
+		end else if (geo_wr_setrp) wy_flip <= 1'b1;
+	end
+	// last / max pairs: the max clears when its record is sent
+	logic        wy_dclr, wy_wclr, wy_yclr;
+	logic [23:0] dg_cnt, dg_last, dg_max;
+	logic        dg_busy_d;
+	wire         dg_busy = r3d_dbg_pipe[2];   // fb_busy
+	always_ff @(posedge clk_sys) begin
+		dg_busy_d <= dg_busy;
+		if (dg_busy && !dg_busy_d) dg_cnt <= 24'd1;
+		else if (dg_busy && !(&dg_cnt)) dg_cnt <= dg_cnt + 24'd1;
+		if (!dg_busy && dg_busy_d) begin
+			dg_last <= dg_cnt;
+			if (wy_dclr || dg_cnt > dg_max) dg_max <= dg_cnt;
+		end else if (wy_dclr) dg_max <= '0;
+	end
+	logic [23:0] wk_cnt, wk_last, wk_max;
+	logic        wk_busy_d;
+	wire         wk_busy = (geo_walk_state != 4'd0);
+	always_ff @(posedge clk_sys) begin
+		wk_busy_d <= wk_busy;
+		if (wk_busy && !wk_busy_d) wk_cnt <= 24'd1;
+		else if (wk_busy && !(&wk_cnt)) wk_cnt <= wk_cnt + 24'd1;
+		if (!wk_busy && wk_busy_d) begin
+			wk_last <= wk_cnt;
+			if (wy_wclr || wk_cnt > wk_max) wk_max <= wk_cnt;
+		end else if (wy_wclr) wk_max <= '0;
+	end
+	// the frame-sync address, compared in the CPU's domain, two flops across
+	logic       ys_hit_c;
+	logic [1:0] ys_hit_s;
+	always_ff @(posedge clk_i960)
+		ys_hit_c <= (cpu_dbg_ip == WHY_SYNC0) || (cpu_dbg_ip == WHY_SYNC1) ||
+		            (cpu_dbg_ip == WHY_SYNC2) || (cpu_dbg_ip == WHY_SYNC3);
+	always_ff @(posedge clk_sys) ys_hit_s <= {ys_hit_s[0], ys_hit_c};
+	logic [23:0] ys_cnt, ys_last, ys_max;
+	logic        ys_run;
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			ys_run <= 1'b0; ys_cnt <= '0; ys_last <= '0; ys_max <= '0;
+		end else begin
+			if (ys_run && !(&ys_cnt)) ys_cnt <= ys_cnt + 24'd1;
+			if (ys_run && ys_hit_s[1]) begin
+				ys_run <= 1'b0; ys_last <= ys_cnt;
+				if (wy_yclr || ys_cnt > ys_max) ys_max <= ys_cnt;
+			end else if (wy_yclr) ys_max <= '0;
+			if (vbl_d && !vbl_dd && !ys_run) begin ys_run <= 1'b1; ys_cnt <= 24'd1; end
+		end
+	end
+	logic [31:0] wy_ifw, wy_mw, wy_cst, wy_gst;
+	always_ff @(posedge clk_i960 or negedge cpu_rst_n) begin
+		if (!cpu_rst_n) begin wy_ifw <= '0; wy_mw <= '0; end
+		else begin
+			if (cpu_dbg_ts == 5'd1 || cpu_dbg_ts == 5'd3) wy_ifw <= wy_ifw + 32'd1;   // T_FETCH_W, T_FETCH2_W
+			if (cpu_dbg_ts == 5'd7)                       wy_mw  <= wy_mw  + 32'd1;   // T_MEM_W
+		end
+	end
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin wy_cst <= '0; wy_gst <= '0; end
+		else begin
+			if (copro_stall)    wy_cst <= wy_cst + 32'd1;
+			if (geo_push_stall) wy_gst <= wy_gst + 32'd1;
+		end
+	end
+	// slot 0 turns V, D, V, W, V, Y, V, D ...; slot 1 P, slot 2 K, slot 3 I
+	logic [1:0] wy_s0;
+	logic [2:0] wy_r0;   // 0 V, 1 D, 2 W, 3 Y
+	always_ff @(posedge clk_sys or negedge mem_rst_n)
+		if (!mem_rst_n) wy_s0 <= '0;
+		else if (prof_tick && lt_div == 3'd0) wy_s0 <= wy_s0 + 2'd1;
+	always_comb wy_r0 = wy_s0[0] ? 3'd0 : (wy_s0 == 2'd0) ? 3'd1 : (wy_s0 == 2'd2) ? 3'd2 : 3'd3;
+	logic [2:0] wy_rsel;   // what this a-record carries, held with lt_asel
+	always_comb wy_rsel = (lt_asel == 2'd1) ? 3'd4 : (lt_asel == 2'd2) ? 3'd5 : (lt_asel == 2'd3) ? 3'd6 : wy_r0;
+	assign wy_dclr = lt_a_valid && (wy_rsel == 3'd1);
+	assign wy_wclr = lt_a_valid && (wy_rsel == 3'd2);
+	assign wy_yclr = lt_a_valid && (wy_rsel == 3'd3);
+	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
+		.clk(clk_sys), .rst_n(mem_rst_n),
+		.a_valid(lt_a_valid),
+		.a_addr((wy_rsel == 3'd4) ? cpu_dbg_acc : (wy_rsel == 3'd5) ? wy_cst : (wy_rsel == 3'd6) ? wy_ifw :
+		        (wy_rsel == 3'd1) ? {8'd0, dg_last} : (wy_rsel == 3'd2) ? {8'd0, wk_last} :
+		        (wy_rsel == 3'd3) ? {8'd0, ys_last} : {wy_hold, wy_walk}),
+		.a_data((wy_rsel == 3'd4) ? dc_hits : (wy_rsel == 3'd5) ? wy_gst : (wy_rsel == 3'd6) ? wy_mw :
+		        (wy_rsel == 3'd1) ? {8'd0, dg_max} : (wy_rsel == 3'd2) ? {8'd0, wk_max} :
+		        (wy_rsel == 3'd3) ? {8'd0, ys_max} : {wy_game, wy_vbl}),
+		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
+		.a_tag((wy_rsel == 3'd4) ? 8'h50 : (wy_rsel == 3'd5) ? 8'h4B : (wy_rsel == 3'd6) ? 8'h49 :
+		       (wy_rsel == 3'd1) ? 8'h44 : (wy_rsel == 3'd2) ? 8'h57 : (wy_rsel == 3'd3) ? 8'h59 : 8'h56),
+		.b_tag(8'h47),   // 'P','K','I','D','W','Y','V'; 'G'
+		.enable(1'b1),
+		.tx(UART_TXD), .dbg_dropped(uart_dropped)
+	);
+`else
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(lt_a_valid),
@@ -5255,6 +5382,7 @@ end else begin : g_nodbg
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
+`endif   // M2_WHY
 `else
 	assign UART_TXD = 1'b1;        // idle high; a floating TX reads as framing errors
 	assign uart_dropped = 32'd0;   // read by the overlay, which is also gone

@@ -67,7 +67,9 @@ module m2_boot_harness #(
   // controller of Model2.sv (the tb's irq[0] is then only the vblank event).
   parameter bit          A2              = 1'b0,
   // R852: the TGP program RAM (4096 for A2)
-  parameter int unsigned TGP_PROG        = 2048
+  parameter int unsigned TGP_PROG        = 2048,
+  // R854: the i960's i-cache lines (i960_top IC_LINES)
+  parameter int unsigned IC_LINES        = 512
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -578,7 +580,7 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top #(.VC(VCOP)) u_cpu (
+  i960_top #(.VC(VCOP), .IC_LINES(IC_LINES)) u_cpu (
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
