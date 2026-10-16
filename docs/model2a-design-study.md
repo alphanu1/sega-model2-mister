@@ -386,6 +386,10 @@ project's GPL-3 position". Checked directly:
 | `srg320/Saturn_MiSTer` | **none** (archived) | no, it consumes the above |
 | `MiSTer-devel/Saturn_MiSTer` | **none** | no |
 
+(R852, 2026-10-16: MiSTer-devel/Saturn_MiSTer @ a23bbb2 now carries the SCSP itself --
+`rtl/Saturn/SCSP/SCSP.sv`, newer than srg320's -- and still has no licence. Measured with
+quartus_map 17.0: 2,577 ALMs est., ~25 M10K. It has no MIDI, which Model 2A needs.)
+
 `SCSP.sv` carries no SPDX header and no copyright notice, and GitHub's licence detection
 reports `null` for all three repositories. **No licence means all rights reserved: no
 permission to copy and none to adapt.** This is precisely the `frangarcj/geometrizer`
@@ -35787,3 +35791,252 @@ ANSWERS, AND THE TGP REGISTER BENCH.**
     value each cycle, expects it on 0x21, and checks rf_fifo_rd (0x21 reads)
     and rf_fifo_wr (0x22 writes): 3,000,000 checks, 0 failures. No RTL
     change. All three games run on the board, as they did.
+
+---
+
+## MODEL 2A-CRX (branch model2a)
+
+This section is the Model 2A-CRX core's. It lives only on branch `model2a`,
+which is never merged into main (HANDOFF, 476fd6f / fa0b883): the 2A core is
+headed for its own repository, its releases (RBF, MRAs, README) go into
+releases/ on that branch only, and fixes that belong to both cores are made on
+main/headroom and merged INTO model2a, never the other way. R832 (MODEL 2A-CRX)
+is the board's description; the entries below are the bring-up.
+
+**R852 -- MODEL 2A-CRX: THE BRANCH, THE BRING-UP GAME (VIRTUA FIGHTER 2), THE
+2A BOARD BEHIND ONE SWITCH, AND VF2 IN THE WHOLE-CORE BENCH. NOT FITTED, NOT
+ON A BOARD.**
+
+*The branch rule.* `model2a` (from main 4b81d89; 476fd6f, fa0b883) is the
+Model 2A-CRX core and is never merged into main: not code, not files. Its
+releases go into releases/ on this branch only; fixes shared with the
+original core are made on main/headroom and merged into model2a. The core
+calls itself Model2A (CONF_STR) and its MRAs say `<rbf>Model2A</rbf>`.
+
+*The bring-up ROM: Virtua Fighter 2, Version 2.1 (MAME `vf2`).* Chosen from
+R832's 2A list because it is the plain board and nothing else (MAME 0.289,
+GAME lines 7636-7639):
+  * machine config `model2a` itself -- no drive board, no analog inputs, no
+    light guns, no protection chip (not model2a_0229 / model2a_5881);
+  * MAME flags 0 (works); Hanguk Pro Yagu 98 shares the config but is
+    MACHINE_NOT_WORKING;
+  * inputs: a digital stick and three buttons a player (INPUT_PORTS(vf2)
+    over model2crx).
+Next: Virtua Cop 2 (`vcop2`, flags 0): the same board plus light guns read
+through the 315-5649's serial channel 2 (lightgun_mux_r / _w). Not Sega Rally
+(`srallyc`, all sets MACHINE_NOT_WORKING in MAME, and the drive board), not
+Sky Target / Manx TT (MACHINE_NOT_WORKING).
+
+*What changed in the core (Model2.sv; with M2_NO_2A the original core):*
+  1. SWITCHES. `M2_2A` (default on here; VERILOG_MACRO "M2_NO_2A=1" off) and
+     two new switches for the original board's parts, both following it:
+     M2_M1SOUND (the Model 1 sound board: fx68k, MultiPCM, YM3438, the ROM
+     scan -- the scan stays at the top level and idles, see 9) and M2_IOZ80
+     (the I/O board: Z80, MB8421, firmware, m2_cab_inputs). With M2_2A the
+     M2_VCOP_* default off. With M2_NO_2A every switch is main's default.
+  2. THE 2A MAP (MAME model2a_crx_mem): the bridge's BOARD_2A (it existed,
+     unused) -- 256 KB RAM at 0x200000-0x23ffff, no program mirror -- at
+     SDRAM word 0x12a0000; the 315-5649 at 0x01c00000-0x01c0001f
+     (m2_315_5649: ports A-G, direction, mode, the RS-422 and analog
+     registers as MAME's device answers them; umask32 0x00ff00ff, so device
+     offset n is lane 0 / 2 of dword n >> 1) with the 93C46 on port A
+     (m2_93c46, eepromser.cpp's 93Cxx: streaming reads, output on the falling
+     clock, locked at power-on, no reset pin); 0x01c00040 and the boot ROM's
+     other 0x01c000xx writes go nowhere and read 0, as in MAME.
+  3. THE TIMERS (m2_timers, 0x00f00000): VF2 uses them and the original core
+     has none (R835 measured Desert Tank's profiler harmless). VF2's interrupt
+     enable is 0x21 -- vblank and TIMER 3 -- and its timer 3 handler starts
+     the sound UART's byte chain; timer 2 is a stopwatch it busy-waits on
+     (8.7 M reads in 90 s; 76% of the bench's instructions in its first 30 M
+     are those loops). 25 MHz real time, expiry raises bit timer + 2.
+  4. THE SOUND SIDE, SILENT (m2_2a_snd_stub). VF2 NEVER READS THE i8251
+     (MAME, five runs: boot, attract, play, second boot); it sends 312 bytes
+     in 90 s of attract from the interrupt-10 handler (31.25 kbaud, TxRDY
+     idle-high), and boots, attracts and plays a round identically with the
+     sound 68000 suspended from power-on AND with interrupt 10 stripped from
+     every enable write. So the stand-in takes every byte and answers none.
+  5. THE 2A ROM LAYOUT (mra/Virtua Fighter 2 (Version 2.1).mra, + [15kHz
+     CRT]; image 0x2D40000 bytes): program 512 KB whole at 0 (no second half
+     elsewhere -- the original core's prog_ext is off), main_data 16 MB at
+     0x80000, textures 8 MB at 0x1080000 (MAME's 0-4 MB and 8-12 MB, the hole
+     collapsed as on the original board), polygons 12 MB at 0x1880000, TGP
+     tables at 0x2480000, 68000 program at 0x24C0000, samples 8 MB at
+     0x2540000 moved by the loader's XTRA to SDRAM byte 0x3400000 (below
+     ST_BASE). No copro data: vf2's region is ROMREGION_ERASE00 and the TGP's
+     reads of it answer 0. The 1/x and 1/sqrt tables and the 2A video
+     board's mpr-16310..16312 are unused by MAME and not loaded. VERIFIED:
+     tools/rom_csum.py builds it; tools/mra_vs_mame.py --layout=2a (new)
+     matches all eight slots against ROM_START(vf2) by CRC; a swapped
+     polygon interleave is caught. vf2.zip holds MODEL2_CPU_BOARD's and
+     MODEL2A_VID_BOARD's ROMs.
+  6. THE TGP: VF2 DOES NOT RUN DAYTONA'S PROGRAM. Its upload is 3,802 words
+     (crc32 fd8d0383; Daytona and Desert Tank: 2,024, d6d611dd), one upload
+     at 0.204 s, and MAME's program map is 0x000-0xfff: the core's 2,048-word
+     RAM could not hold it (replay: desync at the 4th io write, 437 of 465
+     outputs wrong). PROG_WORDS 4096 with M2A (+8 M10K inferred). With it the
+     replay of a 31-frame attract window (frames 1500-1531: 83,494 FIFO words
+     in, 28,787 out, 81,637 io reads, 82,114 io writes; 53% of retired TGP
+     instructions above 0x7ff) left 152 outputs wrong: MAME subnormal
+     (8003ceda ...), RTL zero -- VF2's TGP program carries small integers as
+     subnormal floats through fmul / fadd (pc 0xb31-0xb43). fp_mul and fp_add
+     now take SUBNORM (on with M2A): the replay is BIT-EXACT against MAME,
+     unimplemented-opcode flag 0 cycles. Daytona's race replay stays PASS at
+     2048 and at 4096 + SUBNORM (its 15 differences are NaN encoding, as
+     before). INFERRED: the MB86234 keeps subnormals as MAME's host floats do
+     -- VF2's code depends on them, which it could not on a part that
+     flushed.
+  7. THE 3D's CRTC OFFSETS come from the game on the 2A board: MAME's
+     horizontal_sync_w / vertical_sync_w (the tilemap chip's xhout / xvout at
+     0x01040000 / 0x01060000: 84 + x, 130 + y). Daytona writes 0 / 128, the
+     constants the core had; VF2 writes y = 127. Measured with the geometry
+     differential (MAME 0.289 + p14 dumps, walks 1500 and 4600):
+     m2_geo_view with the constant put 467 of 523 polygons 1.0-1.1 px low;
+     LIVE (2A) -- walk 1500 523 of 523 equal, walk 4600 760 of 762 (one
+     screen-edge clip vertex 1.4 px, one 5-vertex clip split differently);
+     u/v, sort z and texture parameters equal on both; no hang (M2GD_HANG).
+  8. CHAR RAM IS ZEROED AT BOOT ON THE 2A BOARD (the buffer-RAM sweep, 512 KB
+     more). VF2 leaves parts of its glyphs unwritten and relies on MAME's
+     zeroed RAM: in the bench at the WARNING screen tile RAM and palette
+     equal MAME's (32,768 and 4,096 words, 0 differ) and the CPU's 190,432
+     char writes equal MAME's stream, but 166,432 char words read 0xFFFF
+     where MAME has 0 -- rows of every glyph missing ("GAME" read "GAML").
+  9. THE ORIGINAL CORE IS UNCHANGED WITH M2_NO_2A: lint_top clean in both;
+     test_m2_boot (Daytona, 3 M instructions) output byte-identical to main;
+     Daytona's TGP replay PASS; quartus_map 17.0 against main (4b81d89):
+     registers 49,291 -> 49,292 (+1: the TGP upload address is 12 bits),
+     block memory bits and DSP equal, combinational ALUTs 57,774 -> 57,782
+     (+8, spread +-1..10 over modules the change does not touch -- synthesis
+     perturbation, as R839's +13), ALMs needed 40,416 -> 40,463. Found on the
+     way: wrapping the sound board's ROM scan in a generate block mapped to
+     30 fewer registers and ~100 more ALUTs with every switch at main's value
+     (bisected over five maps); the scan stays at the top level and idles
+     when M2_M1SOUND is 0.
+
+*Benches added:* test_m2_315_5649 (the 315-5649 and 93C46 against a
+transcription of MAME's devices: 2,000,000 random operations, 1.1 M EEPROM
+commands, 26.4 M reads compared, 6,000 machine resets and 1,949 power cycles,
+0 wrong; six planted faults caught, one -- the denormalising sticky bit -- an
+equivalent mutation); test_fp_mul_subnorm (4.0 M products, 1.28 M with a
+subnormal) and test_fp_add_subnorm (2.0 M, 0.55 M), 0 wrong against host
+floats; tgp_replay TGP_PROG=4096; geodiff_2a; test_m2_boot_2a (VF2 through
+m2_boot_harness A2=1: the 2A map, the 315-5649, the timers, the i8251 with
+the silent end, Model2.sv's interrupt controller).
+
+*Area, quartus_map 17.0 (Model2, ALMs needed is the map's estimate):*
+
+    build                         ALMs est.  comb. ALUT  registers  block bits   DSP
+    main 4b81d89                    40,416      57,774     49,291   4,379,775    88
+    this, M2_NO_2A                  40,463      57,782     49,292   4,379,775    88
+    this, 2A                        35,823      50,940     44,623   4,019,640    86
+
+  The 2A build drops the Model 1 sound board (4,823 ALUT, 171,680 bits), the
+  I/O Z80 board (1,785 + 72 ALUT, 229,376 bits), the cabinet inputs (321),
+  Virtua Cop's guns and crosshairs (420) and the i960's transcendental
+  microcode (172, 24,576 bits); it adds the timers (335 ALUT), the 315-5649
+  and 93C46 (222), the 4K TGP program (+65,536 bits) and the subnormal units
+  (TGP +472 ALUT). Net: -4,593 ALMs estimated. Post-map timing (slow model,
+  pessimistic by 2.3-4 ns, R825): the subnormal fp_mul's worst internal path
+  -2.23 ns against -1.85 with SUBNORM off (a first cut was -7.77 and was
+  restructured: the operands' leading zeros are counted beside the DSP
+  multiply), fp_add -2.22 (-3.30 off), the new blocks >= +3.6.
+
+*The SCSP -- what the freed room has to take (assessment only, not built):*
+  * Source: MiSTer-devel/Saturn_MiSTer @ a23bbb2 (2026-09-16) now carries the
+    SCSP itself (rtl/Saturn/SCSP/SCSP.sv 3,141 lines + SCSP_pkg.sv 671).
+    CORRECTION to §5.3's table: "MiSTer-devel/Saturn_MiSTer -- SCSP RTL
+    present: no" is out of date; it is newer than srg320/Saturn's copy (89.7
+    against 77.5 KB). STILL NO LICENCE: no LICENSE file, no header in either
+    SCSP file, GitHub reports none -- §5.3's position (read it, do not adapt
+    it; ask srg320) stands.
+  * Measured, quartus_map 17.0, the SCSP alone (virtual pins): 2,577 ALMs
+    est., 3,604 ALUT, 2,022 registers, 21,920 block bits in 24 tiny RAMs
+    (~25 M10K, ~9% full each), 5 DSP. The 2023 copy: 2,073 -- the study's
+    2,030 was that code. With fx68k (2,134 ALM fitted, R60-era; already
+    vendored here) the sound side is ~4,700 ALMs against 4,593 freed: the 2A
+    core would land where main does (40,416 est.), at ~98-99%.
+  * Features: 32 slots, the effects DSP, DMA, timers and interrupts are in
+    it. MIDI IS NOT -- and on Model 2A MIDI is the i960's only channel to the
+    sound CPU; CR2 / CR3 are plain registers, no FIFOs, no status, no
+    interrupt. Its sound-RAM port has fixed timing and no stall (RAM_RDY
+    unused): an access every 4 SCSP clocks, data sampled ~265 ns later --
+    the Saturn gives it a time slot of its own SDRAM. This core's 13-port
+    round-robin m2_sdram cannot promise 265 ns.
+  * The SCSP sees only its 512 KB of sound RAM (as MAME's scsp_map): the
+    68000 must move samples from the 8 MB ROM into it, and its program ROM
+    (0x600000) and sample ROM windows (0x800000-0xffffff, banked by 0x400000
+    bit 5) come from SDRAM with DTACK stalls, as m2_sound_board does.
+  So the SCSP is: a licence (or a from-scratch SCSP against MAME's BSD-3
+  scsp.cpp, §5.3), MIDI added, a deterministic sound-RAM port, ~25 M10K (or
+  MLAB), and ~4,700 ALMs with its 68000.
+
+*THE WHOLE-CORE BENCH (make test_m2_boot_2a; M2_A2=1, the 2A image from
+rom_csum.py, M2_MAXFRAMES=1300): VF2 REACHES ITS 3D ATTRACT, silent.*
+87.8 M i960 instructions, 1,300 video frames, no trap, PASS; ~29 min on this
+PC. Against MAME 0.289 (fresh NVRAM both):
+
+    event                                   MAME frame   bench frame
+    BACKUP RAM IS BROKEN / SOUND INITIALIZE     6           ~20
+    WARNING screen                             ~85         ~170
+    grey, SEGA logo, the first polygons        727          805
+    3D attract (sky, landscape, fighters)      988         1070
+
+The bench runs 78-90 frames behind from the boot screen on and the gap
+holds, so the difference is the boot's speed (the bench's i960 at 24 MHz
+against MAME's idealised timing), not a stall. From frame 1070: 1,000-1,800
+polygons a frame out of the geometry engine; over the run 1,183 walks,
+14,241 objects, 248,078 textured polygons (198 texture states), 1.45 M
+texture words uploaded by the CPU, the walker's opcodes all known (unknown
+0), no projection abandoned, the TGP never reads copro data (0 reads -- the
+2A zero gate is never exercised by VF2). The bench has no rasteriser: its
+frames show the 2D only -- at frame 1200 the attract's sky and mountains,
+"INSERT COIN(S)", "CREDIT 0/2", "(c) SEGA 1994". 21 bytes went to the sound
+side by frame 1300; intena 0x21 throughout.
+
+Found and fixed on the way (each recorded above or in its commit):
+  a. TGP program RAM too small (6), subnormals (6), CRTC offsets (7), char
+     RAM never zeroed (8).
+  b. A BENCH FAULT, NOT THE CORE'S: the bench served the TGP's buffer-RAM
+     reads and writes at word 0x16d0000 while the harness's bridge puts the
+     CPU's at 0x16f0000 (R257 moved one, not the other). VF2's TGP reads what
+     the CPU writes there; on the reset pattern it ran off to pc 0x3233 and
+     the i960 stalled on the empty output FIFO from frame ~830 (grey screen,
+     no logo, for 3,000+ frames). The TGP replay of MAME frames 20-760 (8,690
+     words in) was bit-exact, which put it in the bench. The 2A bench now
+     uses the bridge's base; Daytona's bench keeps the split so its output
+     is unchanged -- the same stale constant is in main's bench (a question
+     for main, not this branch).
+
+*Not explained, recorded:* the geometry engine refused 4,023 polygons as
+non-finite (an Inf / NaN input) over the bench's ~230 3D frames (~1.6%);
+the geodiff of MAME's own walks 1500 and 4600 refuses none. So the bench's
+lists carry non-finite values MAME's do not -- from the i960's FP or from
+upstream state. Settles it: a geodiff of a BENCH walk (dump the bench's
+buffer RAM at a walk) against the MAME walk of the same frame, or the
+board.
+
+*VERIFIED (above), INFERRED (each with what settles it):*
+  i.   The i960 forms: every form VF2 executes is implemented (breakpoints
+       on all 249 static candidates of 14 forms over 600 s of attract, coin,
+       character select and fights: none hit; full traces of 0-6 s, 20-24 s
+       and a fight: all mnemonics implemented). INFERRED for code those runs
+       never reached.
+  ii.  The MB86234 keeps subnormals as MAME does (6). The board.
+  iii. VF2 needs nothing from the EEPROM (never selected in five MAME runs;
+       test mode not tried). Its settings live in backup RAM.
+  iv.  The SCSP's absence costs only sound (MAME, (4)). The board.
+  v.   Timing: the 2A additions close where main does. Post-map they are
+       within main's own post-map numbers (fp_mul -2.23 against -1.85);
+       only a fit says.
+  vi.  M10K: the 2A build frees ~54 blocks (sound board ~23, I/O board ~28,
+       the trig microcode 3) and adds 8 (the 4K TGP program) -- from the
+       map's block bits; only a fit counts blocks.
+
+*NEXT -- the first board build:*
+  1. A fit of this branch as it is (Model2A, silent): Ben on the board with
+     the VF2 MRA. Not run here (no fit, no board, by instruction).
+  2. Then the SCSP: the licence (srg320, §5.3) or MAME's scsp.cpp from
+     scratch; MIDI in / out in it; a deterministic 512 KB sound-RAM port in
+     m2_sdram (or a time slot); the 68000's ROM and sample windows; ~4,700
+     ALMs with fx68k against 4,593 freed.
+  3. The non-finite polygons above; EEPROM persistence through the NVRAM
+     path if a 2A game needs it; Virtua Cop 2 (the 315-5649's serial guns).
