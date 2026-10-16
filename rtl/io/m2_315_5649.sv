@@ -61,7 +61,7 @@ module m2_315_5649 (
   output logic  [7:0] dbg_dir
 );
 
-  logic [7:0] pv [7];       // port latches A-G
+  logic [7:0] pv [8];       // port latches A-G (8 entries: a 3-bit index never runs off the end, R807)
   logic [7:0] dir;          // 1 = input
   logic [7:0] mode;
   logic [2:0] an_ch;
@@ -102,7 +102,7 @@ module m2_315_5649 (
 
   always_ff @(posedge clk or negedge por_n) begin
     if (!por_n) begin
-      for (int i = 0; i < 7; i++) pv[i] <= 8'hff;
+      for (int i = 0; i < 8; i++) pv[i] <= 8'hff;
     end else if (sel && we) begin
       if (be[0] && off_lo <= 4'd6) pv[off_lo[2:0]] <= wdata[7:0];
       if (be[2] && off_hi <= 4'd6) pv[off_hi[2:0]] <= wdata[23:16];
