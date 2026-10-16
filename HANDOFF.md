@@ -40,6 +40,21 @@ NEXT: a fit of this branch and Ben on the board with the VF2 MRA (silent);
 then the SCSP (licence or from scratch, MIDI, a deterministic sound-RAM
 port); the non-finite polygons; Virtua Cop 2.
 
+## 2026-10-16 (evening): model2a -- VF2 runs on the board, silent, at ~29 fps
+
+s1150 (3467328, every clock positive incl. HDMI, 35,775 ALM) on the board as
+Model2A.rbf with the VF2 MRA: the attract's 3D fight scene draws. A 25-min
+monitor: 79 readings, mean 29.5 fps (28.7-29.0, four readings 36-53); Ben:
+"the frame rate is slow" -- MAME lists VF2 among the 60 Hz-mode games, so
+~57 is likely the target. IN PROGRESS (one thing at a time, after an editor
+crash): the VF2 speed investigation (MAME cadence, sim accounting, then a
+fix). PAUSED: the 2A sound board (own SCSP from MAME's BSD-3 scsp.cpp, Ben's
+decision; its agent had only started measurement scripts, uncommitted, in
+its worktree). Other 2A sets now in ~/roms/Model2: vcop2, srallyc, zeroguna
+(+ zerogun parent; needs the 315-5881 decryption chip), segabill (the
+optional billboard's ROM, not needed). MiSTer: kernel 5.15.1-MiSTer
+(2025-04-02), Linux image 250402.
+
 ## 2026-10-16: BRANCH model2a -- the Model 2A-CRX core. NEVER MERGE INTO main.
 
 Created from main at 4b81d89 (release Model2_20261016). This branch is the
