@@ -374,36 +374,14 @@ module m2_raster_fill #(
   // ns at 75 MHz (s759), short of 80. Every 5-bit pf_st is taken, so a flag
   // rather than a state; one cycle per textured quad.
   logic               oz_pre;
-  // R848: qoz[oz_i], held in its own register. The normaliser read it through
-  // the 4:1 vertex mux, then kd_e's subtract and oz_norm's shift, into oz_n
-  // -- which Quartus packs into the u/z multiplier's DSP input register, so
-  // the long route to the DSP column came last (s1130: qoz -> oz_n -0.476,
-  // s1127 qoz -> oz_emax -0.146; +5.5 post-map, which leaves that route out).
-  // oz_i only counts up 0..3 and stage two never writes a vertex stage one
-  // has still to read, so the next vertex's minifloat is loaded a cycle
-  // ahead: at acceptance (vertex 0) and in each stage-one cycle (oz_i + 1).
-  // So in every cycle that reads it, oz_mf == qoz[oz_i].
-  logic [15:0]        oz_mf;
 
   // R337: the four exponents and the largest, combinational off the INPUTS
   // because emax has to be known before the first vertex is rewritten.
   // R731: now off the latched copies, in S_OZ's first cycle (oz_pre). They
   // are qoz exactly as accepted: nothing rewrites qoz before stage two.
-  // R848: THE LARGEST OF FOUR IN ONE COMPARE LEVEL. It was a two-round
-  // tournament -- compare, select, compare, select -- in oz_pre's one cycle
-  // (s1127 qoz -> oz_emax -0.146, s1133 -0.376). The six pairwise compares
-  // run side by side and the exponent that no other beats (the lowest index
-  // on a tie) is selected; the value is the maximum either way: all 2^16
-  // four-tuples of 4-bit exponents and 2 M random 8-bit ones, 0 differ.
-  wire [7:0] oze0 = qoz[0][15:8], oze1 = qoz[1][15:8], oze2 = qoz[2][15:8], oze3 = qoz[3][15:8];
-  wire       oz_g10 = oze1 > oze0, oz_g20 = oze2 > oze0, oz_g30 = oze3 > oze0;
-  wire       oz_g21 = oze2 > oze1, oz_g31 = oze3 > oze1, oz_g32 = oze3 > oze2;
-  wire       oz_s0 = !oz_g10 && !oz_g20 && !oz_g30;
-  wire       oz_s1 =  oz_g10 && !oz_g21 && !oz_g31;
-  wire       oz_s2 =  oz_g20 &&  oz_g21 && !oz_g32;
-  wire       oz_s3 =  oz_g30 &&  oz_g31 &&  oz_g32;
-  wire [7:0] oz_emax_q = ({8{oz_s0}} & oze0) | ({8{oz_s1}} & oze1)
-                       | ({8{oz_s2}} & oze2) | ({8{oz_s3}} & oze3);
+  wire [7:0] oze01_q = (qoz[1][15:8] > qoz[0][15:8]) ? qoz[1][15:8] : qoz[0][15:8];
+  wire [7:0] oze23_q = (qoz[3][15:8] > qoz[2][15:8]) ? qoz[3][15:8] : qoz[2][15:8];
+  wire [7:0] oz_emax_q = (oze23_q > oze01_q) ? oze23_q : oze01_q;
 
   // One minifloat to the quad's common fixed scale. The implicit 1 is restored,
   // the mantissa shifted up so the largest lands on bit 15, and the difference
@@ -448,14 +426,6 @@ module m2_raster_fill #(
   // with 550 ALMs free.
   logic signed [23:0] dudx, dudy, dvdx, dvdy;   // R618
   logic signed [31:0] det_r;
-  // R848: det_r == 0, registered beside it. S_PF_N's zero test was a 32-bit
-  // compare of det_r (fanout 151) in front of the enables of all six
-  // numerators and det_abs_r (post-map det_r -> nxv -0.901). It is formed
-  // in the cycle that forms det_r, from the SAME subtract, which stays in the
-  // DSP's adder. (Written as dp_ab == dp_ba -- the same truth -- Quartus took
-  // the subtract out of the DSP to share the products: +1 DSP, +33
-  // registers, and dp -> det_r fell from +10.0 to +3.6 post-map in a spike.)
-  logic               det_z;
   // R674: THE FIT TAKES THE BETTER OF ITS TWO TRIANGLES. It fitted on vertices
   // 0,1,2 and fell back to 0,2,3 only when that determinant was exactly zero.
   // A flat quad's u/z, v/z and 1/z ARE planes in screen space, so any three
@@ -1008,12 +978,9 @@ module m2_raster_fill #(
   logic               mm_pre;
   wire  m_fin = lo23_v < lo01_v;   // pmin23 strictly lower: the tie goes to 0/1
   wire  x_fin = hi23_v > hi01_v;
-  // R848: the first round, from the latched sye in S_MINMAX's first cycle
-  // (it was ye_in() of the inputs at acceptance; ye_in is gone with it).
-  wire  m01_c = sye[1] < sye[0];
-  wire  m23_c = sye[3] < sye[2];
-  wire  x01_c = sye[1] > sye[0];
-  wire  x23_c = sye[3] > sye[2];
+  function automatic logic signed [15:0] ye_in(input logic signed [15:0] y, input logic [1:0] f);
+    ye_in = M2COV ? $signed({y[13:0], f}) : y;
+  endfunction
   always_comb begin
     pmin01 = m01_r ? 2'd1 : 2'd0;   // R658: on the edge y
     pmin23 = m23_r ? 2'd3 : 2'd2;
@@ -1209,7 +1176,7 @@ module m2_raster_fill #(
       pf_a <= 1'b0; pf_b <= 1'b0;
       tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; mz_r <= 1'b0; pf_ph <= 2'd0; det_first_abs <= '0;
       dw_2 <= 1'b0;   // R847
-      det_r <= '0; det_z <= 1'b1; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
+      det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
       nxu_z <= '0; nyu_z <= '0; nxv_z <= '0; nyv_z <= '0;
       nxo_z <= '0; nyo_z <= '0; mul_n <= '0; mul_z <= 6'd0;   // R441/R442
@@ -1224,7 +1191,6 @@ module m2_raster_fill #(
       dudx <= '0; dudy <= '0; dvdx <= '0; dvdy <= '0;
       for (int k = 0; k < 4; k++) begin qu[k] <= '0; qv[k] <= '0; qoz[k] <= '0; end
       oz_i <= 2'd0; oz_emax <= 8'd0; oz_pre <= 1'b0; dodx <= '0; dody <= '0;
-      oz_mf <= 16'd0;   // R848
       base_o <= '0; nxo <= '0; nyo <= '0; pf_c <= 1'b0;
       span_valid <= 1'b0;
       s1_valid   <= 1'b0;   // R715
@@ -1287,16 +1253,13 @@ module m2_raster_fill #(
         end else begin
           // R566: stage one -- select vertex oz_i and normalise its 1/z.
           if (!oz_last) begin
-            oz_n   <= oz_norm(oz_mf, oz_emax);   // R848: oz_mf == qoz[oz_i]
+            oz_n   <= oz_norm(qoz[oz_i], oz_emax);
             oz_u   <= qu[oz_i][12:0];   // R791: the raw u, before the rewrite
             oz_v   <= qv[oz_i][12:0];
             oz_w   <= oz_i;
             oz_w_v <= 1'b1;
             if (oz_i == 2'd3) oz_last <= 1'b1;
-            else begin
-              oz_i  <= oz_i + 2'd1;
-              oz_mf <= qoz[oz_i + 2'd1];   // R848: the next vertex, untouched yet
-            end
+            else              oz_i    <= oz_i + 2'd1;
           end else begin
             oz_w_v <= 1'b0;
           end
@@ -1317,7 +1280,6 @@ module m2_raster_fill #(
 
         S_PF_D: begin
           det_r <= dp_ab - dp_ba;   // R847: the products registered (R727: of pr_*)
-          det_z <= ((dp_ab - dp_ba) == 32'sd0);   // R848: det_r == 0
           pf_st <= S_PF_N;
         end
 
@@ -1333,7 +1295,7 @@ module m2_raster_fill #(
             pf_ph <= 2'd2;
             if (det_first_abs >= det_abs) pf_second <= 1'b0;
             pf_st <= S_PF_DW;
-          end else if (det_z) begin   // R848: det_r == 0
+          end else if (det_r == 32'sd0) begin
             if (!pf_second) begin
               pf_second <= 1'b1;
               pf_st     <= S_PF_DW;
@@ -1558,7 +1520,11 @@ module m2_raster_fill #(
             sx[3] <= in_x3; sy[3] <= in_y3;
             sf[0] <= in_frac[3:0];  sf[1] <= in_frac[7:4];     // R626
             sf[2] <= in_frac[11:8]; sf[3] <= in_frac[15:12];
-            // R735's first round was compared here; R848 moved it to mm_pre
+            // R735: the tournament's first round, from the same values
+            m01_r <= ye_in(in_y1, in_frac[7:6])   < ye_in(in_y0, in_frac[3:2]);
+            m23_r <= ye_in(in_y3, in_frac[15:14]) < ye_in(in_y2, in_frac[11:10]);
+            x01_r <= ye_in(in_y1, in_frac[7:6])   > ye_in(in_y0, in_frac[3:2]);
+            x23_r <= ye_in(in_y3, in_frac[15:14]) > ye_in(in_y2, in_frac[11:10]);
             mm_pre <= 1'b1;   // R743: the pairs' values in S_MINMAX's first cycle
             col   <= in_col;
             moire <= in_moire;
@@ -1569,7 +1535,6 @@ module m2_raster_fill #(
             qoz[2] <= in_oz2; qoz[3] <= in_oz3;
             oz_pre  <= 1'b1;                        // R731: emax in S_OZ's first cycle
             oz_i    <= 2'd0;
-            oz_mf   <= in_oz0;                      // R848: qoz[0], as oz_i
             tex_r     <= in_tex;
             mz_r      <= in_mipz;                // R828c
             tex_ok    <= 1'b0;
@@ -1603,16 +1568,8 @@ module m2_raster_fill #(
         S_MINMAX: if (mm_pre) begin
           // R743: sye[] is the accepted y, the bits the acceptance's compares
           mm_pre <= 1'b0;
-          // R848: and the first round's compares here too, from the latched
-          // sye, not from the store's outputs at acceptance: vtx_r -> the
-          // triangle split's mux -> a 16-bit compare -> m01_r..x23_r failed
-          // on s1126, s1132 (-1.022) and s1136 (-0.379, that seed's worst).
-          // sye[i] is {sy[13:0], sf[i][3:2]} -- ye_in() of the very values
-          // the acceptance compared -- so the bits are the same, a cycle
-          // later, in a cycle that already existed (R743's).
-          m01_r  <= m01_c;  m23_r <= m23_c;  x01_r <= x01_c;  x23_r <= x23_c;
-          lo01_v <= m01_c ? sye[1] : sye[0];  lo23_v <= m23_c ? sye[3] : sye[2];
-          hi01_v <= x01_c ? sye[1] : sye[0];  hi23_v <= x23_c ? sye[3] : sye[2];
+          lo01_v <= m01_r ? sye[1] : sye[0];  lo23_v <= m23_r ? sye[3] : sye[2];
+          hi01_v <= x01_r ? sye[1] : sye[0];  hi23_v <= x23_r ? sye[3] : sye[2];
         end else begin
           // One cycle of pure comparison, and now the ONLY cycle that does it.
           td_r   <= two_distinct;
@@ -1952,7 +1909,7 @@ module m2_raster_fill #(
   endfunction
   wire        ks1   = MIP && (pf_st == S_OZ) && !oz_pre && !oz_last;   // stage one
   wire        ks2   = MIP && (pf_st == S_OZ) && !oz_pre && oz_w_v;     // stage two
-  wire [7:0]  kd_e  = oz_emax - oz_mf[15:8];   // R848: oz_mf == qoz[oz_i] in ks1
+  wire [7:0]  kd_e  = oz_emax - qoz[oz_i][15:8];
   // the edge: from kp to the vertex in stage two, or to the first on the close
   wire signed [12:0] kb_x = k_close ? sx[0][12:0] : kz_x;
   wire signed [12:0] kb_y = k_close ? sy[0][12:0] : kz_y;
@@ -2008,8 +1965,8 @@ module m2_raster_fill #(
       if (ks1) begin
         kz_x  <= sx[oz_i][12:0];
         kz_y  <= sy[oz_i][12:0];
-        kz_lv <= (oz_mf[15:8] != 8'd0) && (kd_e < 8'd16);
-        kz_l  <= 7'sd56 - 7'({1'b0, kd_e[3:0], 2'b00}) + 7'({5'd0, oz_mf[7:6]});
+        kz_lv <= (qoz[oz_i][15:8] != 8'd0) && (kd_e < 8'd16);
+        kz_l  <= 7'sd56 - 7'({1'b0, kd_e[3:0], 2'b00}) + 7'({5'd0, qoz[oz_i][7:6]});
       end
       k_close <= ks2 && (oz_w == 2'd3);
       if (ks2) begin

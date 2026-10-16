@@ -35754,3 +35754,17 @@ commit, the TGP adder's alignment before its operand register (7ce9926,
 ~+117 ALUT), is reverted (9ecb403), as R848 advised; the other seven stay.
 test_tgp's mb86233_regs failures (46,966) predate this work (R848 found them
 on c545187 too) -- open, not yet looked at. Next: s1147-s1149 of 9ecb403.
+
+**s1147-s1149 = b5f0c4d (R848 less the TGP adder): WORSE THAN c545187 --
+R848's RTL IS WITHDRAWN.** clk_sys -1.060 / -1.582 / -1.385 (s1149 also
+misses general[0] -0.048 and general[3] -0.264) at 41,453-41,476 ALM, none
+closing -- against c545187 (R847 only), 2 of 3 closing (clk_sys +0.204 /
++0.299 / +0.058) at 41,455-41,496. *Believed (R848):* each fix gives its
+path margin with no cycle added, so more seeds close. *Now known:* at 99%
+the area the seven fixes add (~+80 ALM est. without the TGP adder) costs
+the fitter more than the margin they buy; post-map gains on individual
+paths did not survive placement. Three seeds each is a small sample, but
+the difference is large and one-sided. rtl/ is restored to c545187's;
+R848's benches stay (tb_fp_pool_gnt passes against the original arbiter;
+geodiff's M2GD_POOLHASH is harmless) and its commits remain in history to
+re-apply if area is ever freed. s1142 (c545187) stays the candidate.

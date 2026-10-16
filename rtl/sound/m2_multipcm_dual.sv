@@ -343,17 +343,6 @@ always @(posedge clk) begin
         // pos_zero select, the 22-bit add and the bank page are then one
         // cycle of their own, not the tail of the step's.
         if (pv_we) begin
-            // R848: THE FIRST-STEP FLAG CLEARS HERE, A CYCLE AFTER THE STEP
-            // THAT READ IT, from the step's own registered slot. Cleared in
-            // the step itself it sat behind v -> s_active[v] -> step_now ->
-            // seq_hold -> the step's enable -> a 64-way decode of v (s1134:
-            // v -> pos_zero -0.418). Nothing reads pos_zero[pv_v] in between
-            // -- the slot's next step is a pass away -- and a descriptor that
-            // sets it in this same cycle (below, later) still wins, as it did
-            // when the clear came a cycle earlier. (A step and a set of the
-            // same slot in ONE cycle cannot happen: the set needs key_wait,
-            // and key_wait is never set while the slot is active.)
-            pos_zero[pv_v] <= 1'b0;
             if (pv_v[0]) begin
                 rom_req1 <= 1'b1; rom_is_desc1 <= 1'b0;
                 rom_addr1 <= banked(pv_start + pv_pos[37:16], bank_sel1);
@@ -501,6 +490,7 @@ always @(posedge clk) begin
                     pv_end  <= s_end_cur;
                     pv_loop <= s_loop_cur;
                     pv_start <= s_start_cur;
+                    pos_zero[v] <= 1'b0;
                     if (vc) begin
                         play_slot1 <= v[5:1];
                         g_l1 <= gain_l; g_r1 <= gain_r;

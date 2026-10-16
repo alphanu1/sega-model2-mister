@@ -288,11 +288,6 @@ module m2_geo_engine #(
   wire         f_act = (fs != F_IDLE) && (fs != F_DONE);
   // R757: the two focus multiplies of a point are issued back to back.
   logic        fiss_done, fgot;
-  // R848: E_LUMM / E_LUMA leave on the grant a cycle late (lw_go), so st's
-  // next state reads no grant: the pool's grant is a function of every
-  // client's request, and through st's one-hot hold chain it reached every
-  // state bit (s1131: m2_geo_clip cs -> the pool -> st.E_DONE, -0.833).
-  logic        lw_go;
   // R759: P1(n)'s focus waits until it is needed. The cull test reads P0(n)'s
   // transformed point and the normal; the light and the luminance read
   // neither P1(n) nor its focus. So P0(n) is focused, the cull is decided,
@@ -399,16 +394,6 @@ module m2_geo_engine #(
   // always resolves to the same grey and the cache stays consistent.
   localparam logic [14:0] TEX_GREY = 15'h4210;
   logic [7:0] lum_x;         // the luminance the table is read at, chosen at E_PAL
-  // R848: E_PAL takes the palette half-word and nothing else from the read;
-  // its grey test, c555 and the first translation address follow a cycle
-  // later (pal_go), in the cycle the port spends with its request down
-  // (mem_go_d). s1137's worst path (+0.116), and s1132/s1133's eng_ra data ->
-  // engine group (-0.41 .. -1.35), ran the read's data -> the half select ->
-  // pe == 0 -> TEX_GREY -> xl_dw -> xaddr's state mux in the read's cycle.
-  logic [14:0] pal_raw;
-  logic        pal_go;
-  wire         pal_grey = tex_flat && (pal_raw == 15'd0);   // R234: no colour at all
-  wire  [14:0] pal_pe   = pal_grey ? TEX_GREY : pal_raw;
   logic [1:0] tex_lum_d;
   logic [1:0] gam_d;          // R630     // R239: the mode last used; a change empties the cache
   // R259: HALF IS THE DEFAULT, so it is selector 0. An OSD bit reads as zero
@@ -592,8 +577,6 @@ module m2_geo_engine #(
       tq_wr <= 2'd0; tq_rd <= 2'd0; raw_v <= 2'b00; fq_cur <= 1'b0; fq_slot <= 1'b0;   // R754
       fs <= F_IDLE; h3w <= 16'd0; fiss_done <= 1'b0; fgot <= 1'b0;                     // R757
       cull_q <= 1'b0;                                                                  // R759
-      pal_go <= 1'b0;                                                                  // R848
-      lw_go <= 1'b0;                                                                   // R848
       for (int k = 0; k < 4; k++) tq[k] <= 3'd0;
       for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
@@ -841,24 +824,17 @@ module m2_geo_engine #(
         end
 
         // ---- R222: luminance = (dotl*dotp < 0 ? 0 : |dotl|) * diffuse + ambient
-        // R848: the request drops on the grant as before; the STATE moves a
-        // cycle later, on lw_go. The extra cycle is spent with the request
-        // already down, inside the multiply's latency (the pool answers 5 or
-        // 6 cycles after the grant), so E_LUMMW / E_LUMAW still see the
-        // response in the same cycle and every port is cycle-identical.
-        E_LUMM: if (lw_go) begin lw_go <= 1'b0; st <= E_LUMMW; end
-        else begin
+        E_LUMM: begin
           fmul_req <= 1'b1;
           fmul_a   <= ((dotl[30:0] != 31'd0) && !dotp_zero && (dotl[31] != dot_neg))
                       ? 32'd0 : {1'b0, dotl[30:0]};
           fmul_b   <= tp_rd[31:0];                       // diffuse, as a float
-          if (fmul_gnt) begin fmul_req <= 1'b0; lw_go <= 1'b1; end
+          if (fmul_gnt) begin fmul_req <= 1'b0; st <= E_LUMMW; end
         end
         E_LUMMW: if (fmul_rsp) begin lum <= fmul_res; st <= E_LUMA; end
-        E_LUMA: if (lw_go) begin lw_go <= 1'b0; st <= E_LUMAW; end
-        else begin
+        E_LUMA: begin
           fadd_req <= 1'b1; fadd_a <= lum; fadd_b <= tp_rd[63:32];   // + ambient
-          if (fadd_gnt) begin fadd_req <= 1'b0; lw_go <= 1'b1; end
+          if (fadd_gnt) begin fadd_req <= 1'b0; st <= E_LUMAW; end
         end
         E_LUMAW: if (fadd_rsp) begin
           luma8  <= f2i8(fadd_res);
@@ -895,10 +871,12 @@ module m2_geo_engine #(
           st <= E_PAL;
         end
         E_PAL: if (mem_go) begin
+          automatic logic [14:0] pe;
+          automatic logic        grey;
           automatic logic [7:0]  lu;
-          // R848: the entry, raw; R234's grey and c555 from it next cycle
-          pal_raw <= xhalf ? mem_data[30:16] : mem_data[14:0];
-          pal_go  <= 1'b1;
+          pe   = xhalf ? mem_data[30:16] : mem_data[14:0];
+          grey = tex_flat && (pe == 15'd0);                   // R234: no colour at all
+          if (grey) pe = TEX_GREY;
           // R261: THE BRIGHTNESS CONTROL REACHES THE PLACEHOLDER TOO. It used
           // to scale only a textured polygon that HAS a palette colour, while
           // one whose entry is black -- drawn as the grey placeholder -- was
@@ -912,9 +890,10 @@ module m2_geo_engine #(
           // R784: a textured polygon's table is read at luma 32 (128 >> 2) and
           // its own luma, the key's six bits at their midpoint so a cached
           // entry is the same whichever polygon filled it, scales the slope.
-          lum_x <= tex_flat ? 8'd128 : lu;
+          c555  <= pe; lum_x <= tex_flat ? 8'd128 : lu;
           tx_c  <= tex_flat; lm <= {lu[7:2], 2'b10};
           xi    <= 2'd0;
+          xaddr <= xl_dw(2'd0, pe, tex_flat ? 8'd128 : lu);
           xhalf <= tex_flat ? 1'b0 : lu[2]; xspace <= 2'd3;
           st    <= E_XL;
         end
@@ -1099,15 +1078,6 @@ module m2_geo_engine #(
         default: ;
       endcase
 
-      // R848: E_PAL's second half, the cycle after its read (st is E_XL, its
-      // request still down: mem_go_d). lum_x is E_PAL's tex_flat ? 128 : lu,
-      // so the address is the one E_PAL formed; nothing reads c555 or xaddr
-      // before E_XL's first read goes out next cycle.
-      if (pal_go) begin
-        pal_go <= 1'b0;
-        c555   <= pal_pe;
-        xaddr  <= xl_dw(2'd0, pal_pe, lum_x);
-      end
       // R754: a transform's result, wherever the engine is. In issue order.
       if (xf_out_valid) begin
         tq_rd <= tq_rd + 2'd1;
