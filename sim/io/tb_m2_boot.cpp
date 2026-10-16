@@ -172,7 +172,16 @@ static std::vector<std::array<int,10>> g_quads;  // screen quads, colour (R222),
 // base_buffer, as passed to m2_cpu_bridge -- the SAME array the CPU reaches
 // buffer RAM through, so the coprocessor and the CPU finally share one memory.
 // File scope because mem_tick() is defined above the base constants it needs.
-static const uint32_t BUF_BASE = 0x16d0000;
+// R852: NOT the bridge's. The harness's bridge has base_buffer 0x16f0000
+// (R257) while this, the coprocessor's view, stayed 0x16d0000: the TGP and
+// the CPU did not share buffer RAM at the desk, as they do in Model2.sv
+// (GAME_BUFFER for both). Virtua Fighter 2's TGP program reads buffer RAM
+// the CPU writes, and in the bench it read the reset pattern instead, ran
+// off its program to pc 0x3233 and the i960 stalled on the empty FIFO at
+// frame ~830. The 2A bench (M2_A2) uses the bridge's base; Daytona's keeps
+// the old one so its bench output stays what it was (the same stale split
+// is there -- a question for main).
+static uint32_t BUF_BASE = 0x16d0000;
 static uint64_t cpu_buf_writes = 0;
 static uint32_t cpu_buf_lo = 0xffffffffu, cpu_buf_hi = 0;
 static uint64_t mem_words = 0;
@@ -268,7 +277,7 @@ int main(int argc, char **argv) {
     if (!std::strncmp(argv[i], "+out=", 5)) outfile = argv[i] + 5;
 
   g_a2 = std::getenv("M2_A2") != nullptr;
-  if (g_a2) { G_TEX = 0x0840000u; G_POLY = 0x0c40000u; }
+  if (g_a2) { G_TEX = 0x0840000u; G_POLY = 0x0c40000u; BUF_BASE = 0x16f0000u; }
   const char *rp = std::getenv("M2_ROMPATH");
   const std::string dir = std::string(rp ? rp :
       (std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/roms/Model2"))
@@ -1204,7 +1213,7 @@ int main(int argc, char **argv) {
       lc_prev_pc = pc;
     }
     if (d->obs_bufw_wr) {
-      const uint32_t w = 0x16d0000u + uint32_t(d->obs_bufw_waddr);
+      const uint32_t w = BUF_BASE + uint32_t(d->obs_bufw_waddr);
       if (w < mem.size()) { mem[w] = uint16_t(d->obs_bufw_wdata); ++bufw_applied; }
       // THE WHOLE MAILBOX BLOCK, not just 0x7FFC. 0x4BC writes the result count
       // to dword 0x7FFD and the CPU reads two result dwords at 0x91FFF4 and
@@ -1872,7 +1881,11 @@ int main(int argc, char **argv) {
   int pf_match_in_fetch = 0;
   int pf_dump = 0;
 
-  while (d->dbg_acc < max_instr || (warm_at && !warm_done)) {
+  // R852: M2_MAXFRAMES=<n> ends the run at video frame n as well -- a CPU
+  // stalled on a bus access retires nothing, so +insn alone never ends it.
+  const uint64_t max_frames = std::getenv("M2_MAXFRAMES") ? std::strtoull(std::getenv("M2_MAXFRAMES"), nullptr, 10) : 0;
+  while ((d->dbg_acc < max_instr || (warm_at && !warm_done)) &&
+         !(max_frames && g_frames_done >= max_frames)) {
     if (!fw_pending.empty() && d->dbg_acc >= fw_late) {
       for (int a = 0; a < 8192; ++a) {
         d->fw_we = 1; d->fw_addr = a;
@@ -2910,6 +2923,14 @@ int main(int argc, char **argv) {
 
   int fail = 0;
   if (g_a2) {
+    std::printf("\n  2A END: frame %llu, %u instructions retired, ip %08x; last i/o %06x %s %08x;"
+                " copro stall %d, TGP pc %04x retires %u, FIFO in %u out %u, in popped %u out pushed %u\n",
+                (unsigned long long)g_frames_done, (unsigned)d->dbg_acc, (unsigned)d->dbg_ip,
+                (unsigned)d->obs_io_addr, d->obs_io_we ? "W" : "R",
+                d->obs_io_we ? (unsigned)d->obs_io_wdata : (unsigned)d->obs_io_rdata,
+                (int)d->obs_copro_stall, (unsigned)d->obs_tgp_pc, (unsigned)d->obs_tgp_retires,
+                (unsigned)d->obs_copro_in, (unsigned)d->obs_copro_out,
+                (unsigned)d->obs_in_popped, (unsigned)d->obs_out_pushed);
     // R852: THE 2A BOOT. There is no I/O board exchange to judge; the bench
     // fails on a trap or halt, and says how far the game got.
     std::printf("\n  2A: intena %03x intreq %03x, %u bytes to the sound side (sig %08x)\n",
