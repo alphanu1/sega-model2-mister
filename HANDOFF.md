@@ -1,5 +1,23 @@
 # Handoff
 
+## 2026-10-16: branch vcop -- Virtua Cop runs, guns work; s1142 the candidate
+
+ON THE BOARD (last loaded): s1134 (a3dd42f, timing-short) -- Virtua Cop
+attract and guns work (Ben: joystick and mouse). CANDIDATE: s1142
+(c545187; build/Model2_20261016_s1142_vcop.rbf, 644e28fa...): core clocks
+>= +0.260, hold +0.244, HDMI -0.350, 41,455 ALM, M10K 533/553. It has
+Daytona, Desert Tank, Virtua Cop (R839 type-2 I/O, R844 flushreg, R845
+trig), guns (R846: sticks + mouse, crosshairs), R849/R850 (P1's crosshair
+always, P2's only in play), R840 15.7 kHz default, R842/R843/R847 timing.
+Not yet on the board. TIMING: the design closes at 99% (s1137, s1142, s1143)
+with R847's six fixes; R848's eight further fixes made it worse (did not
+fit with the TGP adder fix; 0/3 without) and are withdrawn -- rtl/ is
+c545187's (62b77a2). OPEN: test_mb86233_regs fails 46,966 checks (predates
+this work); a FITTER_AGGRESSIVE_ROUTABILITY ALWAYS vs AUTOMATICALLY A/B
+(R848) not run; Virtua Cop's country byte (R846, Japan by default) is
+Ben's call. PR #8 (headroom -> main) still held until Virtua Cop is
+confirmed and everything else still works.
+
 ## 2026-10-15 (later): Desert Tank confirmed; headroom = desert; branch vcop
 
 Ben on s1108 (6e8db44, input check build, clk_mem -0.120): Desert Tank's
