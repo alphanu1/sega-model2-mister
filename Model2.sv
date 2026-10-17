@@ -2694,10 +2694,12 @@ end endgenerate
 wire  uart_irq;      // TXRDY|RXRDY, gated by TxEN/RxEN -- txrdy_r()||rxrdy_r()
 wire  uart_irq_rx, uart_irq_tx;   // the halves; the i960 takes the OR, the 68000 takes RX
 logic uart_irq_d;
+logic uart_irq_rx_d, uart_irq_tx_d;   // R860: each half's last value (MAME's two handlers)
 always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 	if (!cpu_rst_n) begin
 		io_intreq <= 12'd0; io_intena <= 12'd0; io_videoctl <= 32'd0; io_render_mode <= 1'b0;   // R765
 		uart_irq_d <= 1'b0;
+		uart_irq_rx_d <= 1'b0; uart_irq_tx_d <= 1'b0;
 		io_framenum <= 32'd0; vbl_s <= 1'b0; vbl_d <= 1'b0; vbl_dd <= 1'b0;
 	end else begin
 		// FROM THE PICTURE'S OWN VBLANK, not the duplicate timing generator.
@@ -2764,7 +2766,17 @@ always_ff @(posedge clk_sys or negedge cpu_rst_n) begin
 		// left to catch and the first interrupt never arrives. The mask write
 		// is what fires it, exactly as irq_mask_delayed_update does.
 		uart_irq_d <= uart_irq;
-		if (io_intena[10] && ((uart_irq && !uart_irq_d) ||
+		uart_irq_rx_d <= uart_irq_rx; uart_irq_tx_d <= uart_irq_tx;
+		// R860: MAME CALLS sound_ready_w FROM EACH HALF'S OWN HANDLER -- rxrdy's
+		// and txrdy's -- whenever that line changes, and asserts line 10 if
+		// EITHER is then high. An edge of the OR misses TXRDY rising while
+		// RXRDY is already high: once the 2A sound board sent the i960 a byte
+		// (MIDI out) that the game never reads, RXRDY stayed high, the OR never
+		// fell, no TX interrupt came again, and VF2's music commands stalled --
+		// silent on the board (s1176) and in the boot bench. Daytona's board
+		// never sends, so RXRDY stays 0 and this is the same edge as before.
+		if (io_intena[10] && (((uart_irq_rx != uart_irq_rx_d) || (uart_irq_tx != uart_irq_tx_d)) && uart_irq ||
+		                      (uart_irq && !uart_irq_d) ||
 		                      (uart_irq && cpu_io_sel && cpu_io_we &&
 		                       cpu_io_addr[23:0] == 24'he80004 && cpu_io_wdata[10])))
 			io_intreq[10] <= 1'b1;
