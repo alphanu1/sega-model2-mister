@@ -37169,3 +37169,100 @@ i960_top.sv: 0 errors.
 
 *What the board must show:* Sega Rally and Zero Gunner past the black
 screen (attract, 57.5 / 28.75 fps); VF2 and Virtua Cop 2 unchanged.
+
+**R866 -- AREA FOR THE 2A BUILD: THE REDUCED FPU IS IMPOSSIBLE (SEGA RALLY AND
+ZERO GUNNER RUN LONG-REAL CODE FROM WORK RAM); THREE FLIP-FLOP ARRAYS MOVED
+TO MLAB, EXACT, -896 ALMs ESTIMATED. AND R865 IS INCOMPLETE: BOTH GAMES STILL
+TRAP.**
+(Goal, Ben: room in the 2A build -- 98%, 41,034 ALM in s1192 -- for Zero
+Gunner's 315-5881 and more; every change exact, benched against the old
+RTL.)
+
+*Believed (R818 c, R865):* a single-precision i960 FPU (FP_EXT 0, ~-1,000..
+-1,250 placed) might serve the 2A games; R865's breakpoints said Sega Rally
+and Zero Gunner run flushreg and nothing else the 2A core lacks. FP_EXT does
+not exist in the RTL: R818 named it as a requirement, never built.
+
+*Now known (VERIFIED, MAME 0.289):*
+  1. SEGA RALLY AND ZERO GUNNER RUN FROM A COPY IN WORK RAM. A trace at 30 s
+     shows Sega Rally at PC 0x5cxxxx; dumps of 0x500000-0x5fffff at 5 / 15 /
+     40 / 80 s (sim/io/mame_m2_ramdump.lua) match the program ROM: Sega
+     Rally RAM 0x5a0000-0x5fd7ff = ROM 0x1000-0x5e7ff, Zero Gunner RAM
+     0x540000-0x5cebff = ROM 0x40000-0xcebff, unchanged from 15 s on. A ROM
+     breakpoint never fires for that code, so R865's "no other candidate is
+     ever hit" saw only the boot. VF2 and Virtua Cop 2 run from ROM.
+  2. Every FP-class word of each program tagged RL (long-real / extended
+     form), FPR (a single form naming fp0-fp3) or SGL (sim/io/
+     i960_fpext_scan.py), breakpointed at its ROM address and at its RAM
+     copy, one-shot (mame_m2_bphits.lua BP_ONCE), coins and play inputs
+     (BP_MASH). Forms executed (distinct PCs, first time):
+       VF2 (420 s): addr subr mulr divr cmpr cvtri cvtzri cvtir -- SGL only.
+       Virtua Cop 2 (420 s): the same set plus sqrtr (122.9 s) -- SGL only.
+       Zero Gunner (420 s): movr/movrl/addrl/subrl/mulrl/cmprl from 1.57 s,
+         divrl 26.5 s, fp0-fp3 throughout, and CPYSRE AT 39.95 s.
+       Sega Rally (97 s): movr/movrl/divrl/mulrl/addrl and fp0-fp3 from
+         0.089 s, CVTZRIL AT 0.123 s, then at 23.54 s cmprl, ATANR, REMR,
+         CPYSRE, and SINR at 46.37 s.
+     Traces confirm each: 0x5a2dc4 cvtzril fp0,g4 (0.10-0.13 s);
+     0x5465f0 cpysre fp0,+0.0,fp0 (Zero Gunner, 39.93 s); 0x5ddd40 atanr
+     g6,g7,g6 and 0x5ddd54 remr r11,g6,g5 (Sega Rally, 23.53 s).
+  3. So FP_EXT 0 IS NOT POSSIBLE on a core that runs Sega Rally or Zero
+     Gunner: both live in long-real arithmetic and fp0-fp3 from boot. Not
+     built. The full double datapath stays.
+  4. R865'S BUILD STILL TRAPS. On the 2A core (VC 0, FR 1) cvtzril and
+     cpysre trap (VC forms); atanr, remr and sinr have no RTL at all
+     (vf2_formscan RTL_LACKS). Sega Rally halts at its 0.123 s cvtzril --
+     black, as before flushreg was fixed; Zero Gunner at ~40 s. Needed:
+     cvtzril and cpysre live under FR-like gating (they are VC's own forms,
+     no microcode); atanr / sinr as the single forms of R845's sequencer
+     (MAME: atan2 / sin on the widened double, rounded to float -- so the
+     VC microcode, ~+241 ALM, 4 M10K); remr (fmod, exact) is new: an
+     iterative remainder. NOT DONE HERE.
+
+*Changed (each exact; quartus_map 17.0, whole design, 2A build):*
+
+     build                                   ALMs est.  ALUT    regs   mem ALUT
+     c3ee7d2 (= s1200's map)                   40,006   57,161  48,487  1,238
+     + i960 register file in MLAB              39,465   56,340  47,588  1,622
+     + TGP rf in MLAB                          39,267   56,210  47,124  1,654
+     + geometry xform matrix in MLAB           39,110   56,046  46,740  1,718
+
+  a. i960_regs: r0-r2 and g15 (PFP, SP, RIP, FP: multi-written by the frame
+     ops, read by the interrupt path) stay flops; the other 28 are four MLAB
+     banks by number [1:0], eight words at {g, row}, so a frame row is one
+     address and S_RET_CAP lands a row a cycle as before. Three copies, read
+     at ra1, ra2 and the call-save row; the registered ports and bypass are
+     unchanged. Bank writes are gated in reset (the flops' writes sat in the
+     reset's else branch -- the first miter run caught it). i960_regs 1,858 /
+     1,496 -> 1,021 / 600; +384 memory ALUT (12 MLABs, 24 LABs).
+     test_i960_regs_miter: old and new side by side, random inputs legal and
+     not, resets mid-frame, 2 x 4 M cycles, 0 differences; 7 planted faults
+     caught. test_i960_regs, test_i960_top (+irq, lat, fr, vc), test_i960_rom
+     PASS with output identical to c3ee7d2, cycle counts included.
+  b. mb86233_regs: rf 0x20-0x2f in one 16 x 32 MLAB, rf 3 (the bank) in
+     flops, a valid bit per word cleared by reset standing for the reset's
+     clear. test_mb86233_regs_miter 2 x 4 M cycles, 0 differences; test_tgp
+     PASS; Daytona tgp_replay (race5400) report identical to c3ee7d2.
+  c. m2_geo_xform: the 12-word matrix as two 16 x 32 MLABs (multiplier read,
+     adder read). test_m2_geo_xform_miter 2 x 4 M cycles, 0 differences;
+     test_m2_geo_xform / _engine / test_m2_geometry PASS.
+  Running total: -896 ALMs estimated, -1,115 ALUT, -1,747 registers, +480
+  memory ALUT (30 MLAB LABs = 300 ALMs of LAB that hold no logic). Whether
+  the map estimate counts MLAB ALMs is NOT KNOWN: the placed saving is
+  between ~600 and ~900. A fit settles it, and its timing (the MLAB reads
+  are asynchronous, like i960_icache's tags).
+
+*Candidates, not built (estimates, not measured):*
+  * More flip-flop arrays with few read ports: m2_geo_xform r[2][9] (576
+    regs, reset-cleared, three reads -- the reset is unobservable but the
+    module outputs are not, so a geometry-level miter is needed), i960 fpr
+    0-3 (256 regs, two reads; marginal: 8 MLAB LABs).
+  * m2_raster3d / m2_geometry features the 2A games do not use: no trace
+    method for renderer features exists yet (the FP-form method needs an
+    opcode; display-list commands would need a MAME tap in model2_v.cpp).
+  * Recorded so it is not retried: fpmisc op-set restriction moves nothing
+    (R818 9); divr / sqrtr are executed (VF2 divr, Virtua Cop 2 sqrtr, all
+    four), so neither unit can go.
+
+*Not verified:* the fit, the placed ALMs, timing; the board. Sega Rally
+beyond 97 s and every test mode (the runs were stopped: MAME limit).
