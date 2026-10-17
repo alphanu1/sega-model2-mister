@@ -41,7 +41,7 @@ IDX = dict(SLOT=0, SW=1, MSLC=2)
 FLOW = dict(NEXT=0, BR=1, JMP=2, DISPATCH=3, WAIT=4, RET=5, SLOTEND=6)
 COND = dict(ALWAYS=0, PLFO=1, ALFO=2, LOOP1=3, LOOP2=4, FMMOD=5, NSTWINH=6, NMVOL15=7,
             START=8, NKB=9, MORESW=10, MOREI=11, SSCTL3=12, FETCHED=13, GO=14, DSPIDLE=15)
-OP = dict(ADD=0, SUB=1, PASSA=2, PASSB=3, OR=4, ADDSGN=5, EG=6, RATEIDX=7, EGBASE=8, SBC=9,
+OP = dict(ADD=0, SUB=1, PASSA=2, PASSB=3, ANDN=4, ADDSGN=5, EG=6, RATEIDX=7, EGBASE=8, SBC=9,
           DAC=10, CSEL=11, ADDSPLIT=12)
 A = dict(RA=0, Q=1, ST=2, CSH=3, PSL=4, P2=5, RING=6, EFQ=7)
 B = dict(RB=0, IMM=1, Q=2, SA=3, SQ12=4, LFOI=5, RATE=6, P1=7)
@@ -180,7 +180,7 @@ def sweep():
         ('SWEEP', m(idx='SW', swb=0, st='VOL', fset='KBREL')),
         (None, m(idx='SW')),
         (None, m(idx='SW', flow='BR', bc='START', tgt='SWSTART')),
-        ('SWNEXT', m(idx='SW', st='VOL', op='OR', a='ST', b='IMM', imm=0x0c00, immhi=1, pred='NKB',
+        ('SWNEXT', m(idx='SW', st='VOL', op='ANDN', a='ST', b='IMM', imm=0x0c00, immhi=1, pred='NKB',
                      stw='VOL', s2='SWINC')),
         (None, m(idx='SW', flow='BR', bc='MORESW', tgt='SWEEP')),
         (None, m(flow='RET')),
@@ -192,7 +192,7 @@ def sweep():
         (None, m(idx='SW', swb=5, ra='T2', op='RATEIDX', a='RA', imm=RI['RR'], stw='RRR')),
         (None, m(idx='SW', op='PASSB', b='IMM', imm=0, stw='CUR')),
         (None, m(idx='SW', op='PASSB', b='IMM', imm=4096, stw='NXT')),
-        (None, m(idx='SW', op='PASSB', b='IMM', imm=0x17f, immhi=1, stw='VOL', s2='ACTSET',
+        (None, m(idx='SW', op='PASSB', b='IMM', imm=0x0d7f, immhi=1, stw='VOL', s2='ACTSET',
                  flow='JMP', tgt='SWNEXT')),
     ]
 

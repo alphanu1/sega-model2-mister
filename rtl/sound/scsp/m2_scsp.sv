@@ -190,19 +190,13 @@ module m2_scsp #(
   // the monitor
   logic  [3:0] mon_ca;
   logic [15:0] mon;
-  // common registers, timers, interrupts, MIDI
-  logic [15:0] c400, c402, c406;
-  logic  [7:0] c404h;
-  logic [10:0] c418, c41a, c41c;
-  logic  [7:0] scilv0, scilv1, scilv2;
-  logic [10:0] scieb, scipd, scire, mcieb, mcipd;
+  // common registers, timers, interrupts, MIDI (m2_scsp_regs)
+  logic  [3:0] mvol;
+  logic        dac18;
+  logic  [1:0] rbl;
+  logic  [5:0] rbp;
   logic  [4:0] mslc;
-  logic  [7:1] lines;
-  (* ramstyle = "MLAB" *) logic [7:0] mfifo [32];
-  logic  [7:0] mf_head;
-  logic  [4:0] mw, mr;
-  logic [2:0][14:0] tcd;
-  logic  [2:0] tarm, texp;
+  logic [15:0] regs_q;
   logic        cw_en, mi_pop;
 
   // the microinstruction's fields
@@ -306,7 +300,7 @@ module m2_scsp #(
       4'(C_LOOP2):   cond = loop_on && f2;
       4'(C_FMMOD):   cond = FM && fm_mod;
       4'(C_NSTWINH): cond = FM && !stwinh;
-      4'(C_NMVOL15): cond = c400[3:0] != 4'hf;
+      4'(C_NMVOL15): cond = mvol != 4'hf;
       4'(C_START):   cond = fk && fr;
       4'(C_NKB):     cond = !fk;
       4'(C_MORESW):  cond = sw != 5'd31;
@@ -402,8 +396,9 @@ module m2_scsp #(
     sqb <= sreg[srb];
   end
 
-  // slot state: eight rows a slot (CUR, NXT, PH = {pph, aph}, VOL = {egst at
-  // [27:26], vol 26}, and the rate rows AR = {hold, ar}, D1R, D2R, RR)
+  // slot state: eight rows a slot -- CUR, NXT, PH = {pph, aph}, VOL = {~egst
+  // at [27:26] (so a cleared row is RELEASE, where MAME's slots start), vol
+  // 26}, and the rate rows AR = {hold, ar}, D1R, D2R, RR
   logic  [7:0] st_ra, st_wa;
   logic        st_we;
   (* ramstyle = "M10K" *) logic [31:0] st [256];
@@ -451,7 +446,8 @@ module m2_scsp #(
       2'(PSL_S6):  psl_v = prod[37:6];
       2'(PSL_S12): psl_v = 32'(p_lo >>> 12);
       2'(PSL_S16): psl_v = 32'(p_lo >>> 16);
-      default:     psl_v = 32'(p_lo >>> 17) & ~{31'd0, !pcm8};   // FM: x 2^(MDL + PCM16) >> 17
+      default:     psl_v = 32'(prod >>> 17) & ~{31'd0, !pcm8};    // FM: x 2^(MDL + PCM16) >> 17 (no 32-bit wrap: MAME's
+                                                                  // own steps stay below 2^28)
     endcase
   end
   wire [8:0] lfo_step = scsp_lfostep(lfof);
@@ -548,8 +544,8 @@ module m2_scsp #(
     case (e_op)
       4'(OP_PASSA): alu_r = a_v;
       4'(OP_PASSB): alu_r = b_v;
-      4'(OP_OR):    alu_r = a_v | b_v;
-      4'(OP_EG):    alu_r = {4'd0, egst_n, eg_v};
+      4'(OP_ANDN):  alu_r = a_v & ~b_v;
+      4'(OP_EG):    alu_r = {4'd0, ~egst_n, eg_v};                 // (the state row keeps ~egst: 0 is RELEASE)
       4'(OP_RATEIDX): begin
         logic [4:0] r5;
         logic signed [9:0] x;
@@ -577,7 +573,7 @@ module m2_scsp #(
         if (sbctl[1]) s = {{2{~s[15]}}, ~s[15], s[14:0]};   // (s16)(sample ^ 0x8000)
         alu_r = 32'($signed(s));
       end
-      4'(OP_DAC):   alu_r = 32'(dac($signed(a_v), c400[8]));
+      4'(OP_DAC):   alu_r = 32'(dac($signed(a_v), dac18));
       4'(OP_CSEL):  alu_r = pred_ok ? sum : rb_q;
       default:      alu_r = sum;                          // ADD SUB ADDSGN ADDSPLIT
     endcase
@@ -615,7 +611,7 @@ module m2_scsp #(
         3'(MB_EGV):   mul_b <= $signed({5'd0, egv});
         3'(MB_LV):    mul_b <= $signed({3'd0, lv_q});
         3'(MB_FRAC):  mul_b <= $signed({6'd0, frac});
-        default:      mul_b <= $signed({1'b0, mvol_gain(c400[3:0])});
+        default:      mul_b <= $signed({1'b0, mvol_gain(mvol)});
       endcase
     end
     prod <= mul_a * mul_b;
@@ -650,7 +646,7 @@ module m2_scsp #(
         2'(LATB_W7): begin mdl <= sqb[15:12]; fm_mod <= sqb != 16'd0; end
         default: ;
       endcase
-      if (e_fset == 3'(FSET_KBREL)) begin fk <= sqb[11]; fr <= st_q[27:26] == REL; end
+      if (e_fset == 3'(FSET_KBREL)) begin fk <= sqb[11]; fr <= st_q[27:26] == 2'd0; end
       if (go_e) begin
         case (e_s1)
           4'(S1_TADRP): tadr <= {1'b0, plfos, plfows, alu_r[31:24]};
@@ -659,7 +655,7 @@ module m2_scsp #(
             egt_a <= alu_r[25:16]; eg_lv <= alu_r[25:16];
             eg_lin <= eg_pre == ATT; eg_hold <= hold_r;
           end
-          4'(S1_LATEG): egst_l <= st_q[27:26];
+          4'(S1_LATEG): egst_l <= ~st_q[27:26];
           4'(S1_FETCH1): frac <= st_q[11:0];
           4'(S1_DBG): begin dbg_slot_valid <= 1'b1; dbg_slot <= slot_e; dbg_slot_smp <= alu_r; end
           4'(S1_OUTLRAW): out_l_raw <= alu_r;
@@ -675,7 +671,7 @@ module m2_scsp #(
             if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
           end
           4'(S2_MON1): mon_ca <= st_q[27:24];
-          4'(S2_MON2): mon <= {5'd0, mon_ca, st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
+          4'(S2_MON2): mon <= {5'd0, mon_ca, ~st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
           default: ;
         endcase
       end
@@ -685,13 +681,13 @@ module m2_scsp #(
   // =====================================================================
   // the sample bytes: a1 then a2 through the slot cache
   // =====================================================================
+  // One pick, from the cache's lookup only: a miss fills, then looks again.
   typedef enum logic [2:0] { G_IDLE, G_L1, G_W1, G_F1, G_L2, G_W2, G_F2 } gst_t;
   gst_t        gs;
   logic        lk_req, lk_hit, fill_req, fill_done;
   logic [15:0] lk_line, fill_line;
   logic [63:0] lk_data, fill_data;
-  wire  [63:0] g_line = (gs == G_W1 || gs == G_W2) ? lk_data : fill_data;
-  function automatic logic signed [16:0] pick(input logic [63:0] ln, input logic [19:0] a, input logic p8);
+  function automatic logic signed [16:0] pick(input logic [63:0] ln, input logic [2:0] a, input logic p8);
     logic [15:0] wd;
     wd = ln[{a[2:1], 4'b0} +: 16];
     if (p8) pick = a[0] ? $signed({wd[7], wd[7:0], 8'd0}) : $signed({wd[15], wd[15:8], 8'd0});
@@ -699,16 +695,13 @@ module m2_scsp #(
   endfunction
   wire fetch1 = go_e && e_s1 == 4'(S1_FETCH1);
   wire fetch2 = go_e && e_s1 == 4'(S1_FETCH2);
-  wire same   = fa2[19:3] == fa1[19:3];
+  wire signed [16:0] pk = pick(lk_data, (gs == G_W2) ? fa2[2:0] : fa1[2:0], pcm8);
+  wire second = gs == G_L2 || gs == G_W2 || gs == G_F2;
   always_comb begin
-    lk_req = 1'b0; lk_line = fa1[18:3]; fill_req = 1'b0; fill_line = fa1[18:3];
-    case (gs)
-      G_L1: lk_req = 1'b1;
-      G_F1: fill_req = 1'b1;
-      G_L2: begin lk_req = 1'b1; lk_line = fa2[18:3]; end
-      G_F2: begin fill_req = 1'b1; fill_line = fa2[18:3]; end
-      default: ;
-    endcase
+    lk_line = second ? fa2[18:3] : fa1[18:3];
+    fill_line = lk_line;
+    lk_req = gs == G_L1 || (gs == G_L2 && f2_known && !fa2[19]);
+    fill_req = gs == G_F1 || gs == G_F2;
   end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -724,28 +717,22 @@ module m2_scsp #(
       if (fetch2) begin fa2 <= alu_r[19:0]; f2_known <= 1'b1; end
       case (gs)
         G_L1: gs <= G_W1;
-        G_W1, G_F1: if (gs == G_W1 ? lk_hit : fill_done) begin
-          p1v <= pick(g_line, fa1, pcm8); p1_ok <= 1'b1;
-          if (f2_known && !fa2[19] && same) begin p2v <= pick(g_line, fa2, pcm8); p2_ok <= 1'b1; gs <= G_IDLE; end
-          else gs <= G_L2;
-        end else if (gs == G_W1) gs <= G_F1;
+        G_W1: if (lk_hit) begin p1v <= pk; p1_ok <= 1'b1; gs <= G_L2; end else gs <= G_F1;
+        G_F1: if (fill_done) gs <= G_L1;
         G_L2: if (f2_known) begin
           if (fa2[19]) begin p2v <= '0; p2_ok <= 1'b1; gs <= G_IDLE; end
           else gs <= G_W2;
         end
-        G_W2, G_F2: if (gs == G_W2 ? lk_hit : fill_done) begin
-          p2v <= pick(g_line, fa2, pcm8); p2_ok <= 1'b1; gs <= G_IDLE;
-        end else if (gs == G_W2) gs <= G_F2;
+        G_W2: if (lk_hit) begin p2v <= pk; p2_ok <= 1'b1; gs <= G_IDLE; end else gs <= G_F2;
+        G_F2: if (fill_done) gs <= G_L2;
         default: ;
       endcase
     end
   end
-  // (G_L2 issues its lookup only once fa2 is known; the µcode starts both
-  // fetches on consecutive microinstructions, so it always is by then)
 
   m2_scsp_cache #(.IDX(8)) u_cache (
     .clk(clk), .rst_n(rst_n),
-    .lk_req(lk_req && (gs != G_L2 || (f2_known && !fa2[19]))), .lk_line(lk_line), .lk_hit(lk_hit), .lk_data(lk_data),
+    .lk_req(lk_req), .lk_line(lk_line), .lk_hit(lk_hit), .lk_data(lk_data),
     .fill_req(fill_req), .fill_line(fill_line), .fill_done(fill_done), .fill_data(fill_data),
     .m_req(sm_req), .m_line(sm_line), .m_ack(sm_ack), .m_data(sm_data),
     .snp(snp), .snp_line(snp_addr[18:3]), .snp2(dsp_wr_done), .snp2_line(dsp_wr_addr[18:3]),
@@ -795,7 +782,7 @@ module m2_scsp #(
   m2_scsp_dsp u_dsp (
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
-    .rbl(c402[8:7]), .rbp(c402[5:0]),
+    .rbl(rbl), .rbp(rbp),
     .mix_sel(isel), .mix_we(mix_we), .mix_val(mix_val),
     .ef_idx(slot[3:0]), .ef_q(ef_q),
     .w_en(dw_en), .w_addr(o_addr), .w_data(o_data), .w_be(o_be), .r_addr(o_addr), .r_q(dsp_rq),
@@ -826,7 +813,8 @@ module m2_scsp #(
     end
   end
   assign dw_en = op_busy && !op_rd && oc == 3'd0 && o_dsp;
-  assign cw_en = op_busy && !op_rd && oc == 3'd0 && o_addr >= 11'h200 && o_addr < 11'h218;
+  wire   o_com = o_addr >= 11'h200 && o_addr < 11'h218;
+  assign cw_en = op_busy && !op_rd && oc == 3'd1 && o_com;   // (the old word read at oc 0)
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -856,8 +844,8 @@ module m2_scsp #(
               3'd2: begin w6l <= {sqa[8], sqa[7:0]}; oc <= 3'd3; end   // word 11 asked
               default: if (!lv_busy && !lv_req) begin lv_req <= 1'b1; op_busy <= 1'b0; end
             endcase
-          end else if (o_ring && o_be != 2'b11 && oc == 3'd0) begin
-            wq_pop <= 1'b1; oc <= 3'd1;                   // a byte of the ring: read, merge
+          end else if (((o_ring && o_be != 2'b11) || o_com) && oc == 3'd0) begin
+            wq_pop <= 1'b1; oc <= 3'd1;                   // read the old word, then merge
           end else begin
             if (oc == 3'd0) wq_pop <= 1'b1;
             op_busy <= 1'b0;
@@ -869,7 +857,8 @@ module m2_scsp #(
             if (o_addr < 11'h200) cpu_dout <= sqb;
             else if (o_ring) cpu_dout <= ring_q;
             else if (o_dsp) cpu_dout <= dsp_rq;
-            else cpu_dout <= common_read(o_addr[5:1]);
+            else if (o_addr < 11'h218) cpu_dout <= regs_q;
+            else cpu_dout <= 16'd0;
             if (o_addr == 11'h202) mi_pop <= 1'b1;
             rd_done <= 1'b1; op_busy <= 1'b0;
           end
@@ -879,179 +868,36 @@ module m2_scsp #(
   end
 
   // =====================================================================
-  // common registers, timers, interrupts, MIDI (MAME UpdateReg & co.)
+  // common registers, timers, interrupts, MIDI
   // =====================================================================
-  always_comb begin
-    ipl = 3'd0;
-    for (int l = 1; l < 8; l++) if (lines[l]) ipl = 3'(l);
-  end
+  m2_scsp_regs #(.MIDI_OUT(MIDI_OUT)) u_regs (
+    .clk(clk), .rst_n(rst_n),
+    .a(o_addr[5:1]), .we(cw_en), .d(o_data), .be(o_be), .q(regs_q), .mi_pop(mi_pop), .mon(mon),
+    .tick44(tick44),
+    .midi_data(midi_data), .midi_valid(midi_valid), .midi_ack(midi_ack),
+    .mout_data(mout_data), .mout_valid(mout_valid), .mout_ack(mout_ack),
+    .ipl(ipl), .mvol(mvol), .dac18(dac18), .rbl(rbl), .rbp(rbp), .mslc(mslc)
+  );
 
+`ifdef SCSP_DEBUG
+  // the E stage, microinstruction by microinstruction, for one slot over a
+  // range of samples: +dslot=<n> +dfrom=<sample> +dto=<sample>
+  logic [4:0]  dbg_sel;
+  logic [31:0] dbg_from, dbg_to;
+  logic  [7:0] upc_e;
+  initial begin
+    if (!$value$plusargs("dslot=%d", dbg_sel)) dbg_sel = 5'd0;
+    if (!$value$plusargs("dfrom=%d", dbg_from)) dbg_from = 32'd0;
+    if (!$value$plusargs("dto=%d", dbg_to)) dbg_to = 32'd0;
+  end
   always_ff @(posedge clk) begin
-    if (midi_valid && !midi_ack) mfifo[mw] <= midi_data;
-    mf_head <= mfifo[mr];                  // (a read comes clocks after mr moves)
+    upc_e <= ea_n;
+    if (slot_e == dbg_sel && dbg_samples >= dbg_from && dbg_samples < dbg_to && upc_e != UA_NOP)
+      $display("n %0d s %0d u %0d op %0d a %h b %h r %h q %h st %h sqa %h sqb %h P %h pred %0d f %0d%0d%0d%0d eg %0d/%0d",
+               dbg_samples, slot_e, upc_e, e_op, a_v, b_v, alu_r, q, st_q, sqa, sqb, p_lo, pred_ok,
+               f1, f2, f3, f4, egst_l, eg_pre);
   end
-
-  // MAME's r16 of a common register
-  function automatic logic [15:0] common_read(input logic [5:1] a);
-    case (a)
-      5'h00: common_read = c400;
-      5'h01: common_read = c402;
-      5'h02: common_read = {c404h, mf_head};
-      5'h03: common_read = c406;
-      5'h04: common_read = mon;            // 0x408: the monitor, latched after each sample
-      5'h0c: common_read = {5'd0, c418};
-      5'h0d: common_read = {5'd0, c41a};
-      5'h0e: common_read = {5'd0, c41c};
-      5'h0f: common_read = {5'd0, scieb};
-      5'h10: common_read = {5'd0, scipd};
-      5'h11: common_read = {5'd0, scire};
-      5'h12: common_read = {8'd0, scilv0};
-      5'h13: common_read = {8'd0, scilv1};
-      5'h14: common_read = {8'd0, scilv2};
-      5'h15: common_read = {5'd0, mcieb};
-      5'h16: common_read = {5'd0, mcipd};
-      default: common_read = 16'd0;
-    endcase
-  endfunction
-
-  // this clock's events in MAME's order (a 68000 write, a MIBUF read, a MIDI
-  // byte, the timers, then CheckPendingIRQ) on working copies. The interrupt
-  // lines MAME's events clear all come before the one CheckPendingIRQ sets,
-  // so the lines are (lines & ~clear) | set.
-  wire [15:0] cw_d  = o_data;
-  wire  [1:0] cw_be = o_be;
-  function automatic logic [15:0] merge(input logic [15:0] old, input logic [15:0] d, input logic [1:0] be);
-    merge = {be[1] ? d[15:8] : old[15:8], be[0] ? d[7:0] : old[7:0]};
-  endfunction
-  wire [15:0] mrg   = merge(common_read(o_addr[5:1]), cw_d, cw_be);
-  wire [14:0] tload = 15'(({7'd0, ~mrg[7:0]} << mrg[10:8]) - 15'd1);
-  logic [15:0] c400_n, c402_n;
-  logic  [7:0] c404h_n, scilv0_n, scilv1_n, scilv2_n;
-  logic [10:0] c418_n, c41a_n, c41c_n, scieb_n, scipd_n, scipd_c, mcieb_n, mcipd_n;
-  logic  [4:0] mslc_n, mw_n, mr_n;
-  logic  [2:0] arm_n, ex_n, rep, clr;      // clr: {MIDI, timer B / C, timer A}
-  logic [2:0][14:0] tcd_n;
-  logic        chk;
-  always_comb begin
-    c400_n = c400; c402_n = c402; c404h_n = c404h; c418_n = c418; c41a_n = c41a; c41c_n = c41c;
-    scilv0_n = scilv0; scilv1_n = scilv1; scilv2_n = scilv2;
-    scieb_n = scieb; scipd_n = scipd; mcieb_n = mcieb; mcipd_n = mcipd; mslc_n = mslc;
-    mw_n = mw; mr_n = mr; arm_n = tarm; ex_n = texp; tcd_n = tcd;
-    chk = 1'b0; rep = 3'b000; clr = 3'b000;
-
-    if (cw_en) begin
-      case (o_addr[5:1])
-        5'h00: c400_n = mrg;
-        5'h01: c402_n = mrg;
-        5'h02: begin                         // MIBUF: r16 pops it first
-          c404h_n = mrg[15:8];
-          if (mw_n != mr_n) mr_n = mr_n + 5'd1;
-          if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
-        end
-        5'h04: mslc_n = mrg[15:11];
-        5'h0c: begin c418_n = mrg[10:0]; ex_n[0] = 1'b0; if (mrg[7:0] != 8'hff) begin arm_n[0] = 1'b1; tcd_n[0] = tload; end end
-        5'h0d: begin c41a_n = mrg[10:0]; ex_n[1] = 1'b0; if (mrg[7:0] != 8'hff) begin arm_n[1] = 1'b1; tcd_n[1] = tload; end end
-        5'h0e: begin c41c_n = mrg[10:0]; ex_n[2] = 1'b0; if (mrg[7:0] != 8'hff) begin arm_n[2] = 1'b1; tcd_n[2] = tload; end end
-        5'h0f: begin scieb_n = mrg[10:0]; chk = 1'b1; end
-        5'h10: scipd_n = mrg[10:0];
-        5'h11: begin                         // SCIRE: clear, ResetInterrupts, check, re-pend
-          scipd_n = scipd_n & ~mrg[10:0];
-          clr = {mrg[3], mrg[7] | mrg[8], mrg[6]};
-          chk = 1'b1; rep = 3'b111;
-        end
-        5'h12: scilv0_n = mrg[7:0];
-        5'h13: scilv1_n = mrg[7:0];
-        5'h14: scilv2_n = mrg[7:0];
-        5'h15: mcieb_n = mrg[10:0];
-        5'h16: if (mrg[5]) mcipd_n[5] = 1'b1;
-        5'h17: mcipd_n = mcipd_n & ~mrg[10:0];
-        default: ;
-      endcase
-    end
-    if (mi_pop) begin
-      if (mw_n != mr_n) mr_n = mr_n + 5'd1;
-      if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
-    end
-    if (midi_valid && !midi_ack) begin mw_n = mw_n + 5'd1; chk = 1'b1; end
-    if (tick44) begin
-      for (int t = 0; t < 3; t++) begin
-        if (arm_n[t]) begin
-          if (tcd_n[t] != 15'd0) tcd_n[t] = tcd_n[t] - 15'd1;
-          else begin
-            arm_n[t] = 1'b0; ex_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
-            if (t == 0) begin c418_n[7:0] = 8'hff; mcipd_n[6] = 1'b1; end
-            if (t == 1) c41a_n[7:0] = 8'hff;
-            if (t == 2) c41c_n[7:0] = 8'hff;
-          end
-        end
-      end
-    end
-    if (chk && mw_n != mr_n) scipd_n[3] = 1'b1;
-    scipd_c = scipd_n;
-    for (int t = 0; t < 3; t++) if (rep[t] && ex_n[t]) scipd_n[6 + t] = 1'b1;
-  end
-
-  wire [7:0] dec_ta = 8'(1) << {scilv2[6], scilv1[6], scilv0[6]};
-  wire [7:0] dec_tb = 8'(1) << {scilv2[7], scilv1[7], scilv0[7]};
-  wire [7:0] dec_mi = 8'(1) << {scilv2[3], scilv1[3], scilv0[3]};
-  logic [7:0] irq_set;
-  always_comb begin
-    irq_set = 8'd0;
-    if (chk) begin
-      if (scipd_c[6] && scieb_n[6])      irq_set = dec_ta;
-      else if (scipd_c[7] && scieb_n[7]) irq_set = dec_tb;
-      else if (scipd_c[8] && scieb_n[8]) irq_set = dec_tb;
-      else if (scipd_c[3] && scieb_n[3]) irq_set = dec_mi;
-    end
-  end
-  wire [7:0] irq_clr = ({8{clr[0]}} & dec_ta) | ({8{clr[1]}} & dec_tb) | ({8{clr[2]}} & dec_mi);
-  wire [7:0] ln_n    = (({lines, 1'b0}) & ~irq_clr) | irq_set;
-
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      c400 <= '0; c402 <= '0; c404h <= '0; c418 <= '0; c41a <= '0; c41c <= '0;
-      scilv0 <= '0; scilv1 <= '0; scilv2 <= '0; scieb <= '0; scipd <= '0; scire <= '0; mcieb <= '0; mcipd <= '0;
-      mslc <= '0; lines <= '0; mw <= '0; mr <= '0; midi_ack <= 1'b0;
-      tarm <= '0; texp <= 3'b111;            // MAME init(): TimCnt = 0xffff
-      tcd <= '0;
-    end else begin
-      c400 <= c400_n; c402 <= c402_n; c404h <= c404h_n; c418 <= c418_n; c41a <= c41a_n; c41c <= c41c_n;
-      scilv0 <= scilv0_n; scilv1 <= scilv1_n; scilv2 <= scilv2_n;
-      scieb <= scieb_n; scipd <= scipd_n; if (cw_en && o_addr[5:1] == 5'h11) scire <= mrg[10:0];
-      mcieb <= mcieb_n; mcipd <= mcipd_n; mslc <= mslc_n;
-      lines <= ln_n[7:1]; mw <= mw_n; mr <= mr_n; tarm <= arm_n; texp <= ex_n;
-      tcd <= tcd_n;
-      midi_ack <= midi_valid && !midi_ack;
-    end
-  end
-
-  // ---- MIDI out (MOBUF): MAME's 32-byte stack, sent in order
-  // (any write to 0x406 sends its stored low byte; the word reads back)
-  generate if (MIDI_OUT) begin : g_mout
-    (* ramstyle = "MLAB" *) logic [7:0] mo_fifo [32];
-    logic [4:0] mo_w, mo_wd, mo_r;
-    wire mo_push = cw_en && o_addr[5:1] == 5'h03;
-    wire mo_pop  = mout_valid && mout_ack;
-    wire [15:0] mo_m = merge(c406, cw_d, cw_be);
-    always_ff @(posedge clk) begin
-      if (mo_push) mo_fifo[mo_w] <= mo_m[7:0];
-      mout_data <= mo_fifo[mo_pop ? mo_r + 5'd1 : mo_r];
-    end
-    always_ff @(posedge clk or negedge rst_n) begin
-      if (!rst_n) begin mo_w <= '0; mo_wd <= '0; mo_r <= '0; c406 <= '0; end
-      else begin
-        if (mo_push) c406 <= mo_m;
-        if (mo_push) mo_w <= mo_w + 5'd1;
-        mo_wd <= mo_w;
-        if (mo_pop) mo_r <= mo_r + 5'd1;
-      end
-    end
-    assign mout_valid = mo_wd != mo_r;
-  end else begin : g_nomout
-    assign c406       = 16'd0;
-    assign mout_valid = 1'b0;
-    assign mout_data  = 8'd0;
-  end endgenerate
+`endif
 
   assign quiet = upc == UA_IDLE && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
                  !lv_busy && !lv_req && !dsp_busy;

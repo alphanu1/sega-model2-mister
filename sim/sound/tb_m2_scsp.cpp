@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
 			static uint64_t d0 = getenv("DREF_FROM") ? strtoull(getenv("DREF_FROM"), nullptr, 0) : 0, d1 = getenv("DREF_TO") ? strtoull(getenv("DREF_TO"), nullptr, 0) : ~0ull;
 			const Slot &q = R.S[ds];
 			if (n >= d0 && n < d1)
-				printf("ref n %llu slot %d act %d eg %d vol %x cur %08x r0 %04x out %d ar %x d1r %x d2r %x rr %x dl %x w4 %04x w5 %04x w8 %04x w9 %04x ring %04x\n", (unsigned long long)n, ds, q.active, int(q.EG.state), q.EG.volume, q.cur_addr, q.data[0], R.slot_out[ds], q.EG.AR, q.EG.D1R, q.EG.D2R, q.EG.RR, q.EG.DL, q.data[4], q.data[5], q.data[8], q.data[9], uint16_t(R.RINGBUF[(32 * n + ds) & 63]));
+				printf("ref n %llu slot %d act %d eg %d vol %x cur %08x r0 %04x out %d ar %x d1r %x d2r %x rr %x dl %x w4 %04x w5 %04x w8 %04x w9 %04x ring %04x pph %04x/%x aph %04x/%x\n", (unsigned long long)n, ds, q.active, int(q.EG.state), q.EG.volume, q.cur_addr, q.data[0], R.slot_out[ds], q.EG.AR, q.EG.D1R, q.EG.D2R, q.EG.RR, q.EG.DL, q.data[4], q.data[5], q.data[8], q.data[9], uint16_t(R.RINGBUF[(32 * n + ds) & 63]), q.PLFO.phase, q.PLFO.phase_step, q.ALFO.phase, q.ALFO.phase_step);
 		}
 		// the RTL's
 		t->step_go = 1; tick(); t->step_go = 0;
