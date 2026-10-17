@@ -1,5 +1,19 @@
 # Handoff
 
+## 2026-10-17: VF2 HAS SOUND ON THE BOARD (s1205, R871)
+
+ON THE BOARD: s1205 (f7c5a0d, M2_PROBE telemetry, M2_NO_2A_RALLY;
+build/Model2A_20261017_s1205_sndfix.rbf, 4c532818...; 40,997 ALM, 539 M10K,
+clk_sys -0.243). Ben: "we have sound!" The fault was the board dropping the
+SDRAM byte enables (R82) and the 2A sound board trusting them; byte writes
+are now read-merge-write (R871). Also in s1205: Virtua Cop 2's guns (R870,
+not yet tried on the board), the area work (R866), the TGP probe. NOT in
+s1205: the texture colour path (R867, merged 8877d15). VF2's attract lockup
+(R871) is the TGP not answering the i960 at 0x7dc4 -- the probe now reports
+the TGP's pc for the next one. Running: the i960 FP forms for Sega Rally /
+Zero Gunner (R869), Zero Gunner's 315-5881 patch-out (R873, Ben: patch
+first). Block RAM is the next limit (539 + 9 texture + ~4 trig of 553).
+
 ## 2026-10-17: the ORIGINAL core has the texture colour fault too (main R872)
 
 R867's fault (Daytona's luma model hardwired) is also on main: Virtua Cop's

@@ -37598,6 +37598,10 @@ old model) and FAILS on any masked write. Bench: the old RTL on the new
 model reads 4,088 wrong -- THE BOARD'S NUMBER; the new RTL 0 wrong, 0 masked
 writes of 1,772,621, SCSP writes 98.2% in MAME's order, PASS (6 s).
 *What the board must show:* the check 0 wrong, and VF2's sound.
+*ON THE BOARD (s1205 = f7c5a0d + M2_PROBE + M2_NO_2A_RALLY; 40,997 ALM, 539
+M10K, clk_sys -0.243 ns): THE CHECK READS 0 WRONG; the output peak reaches
+14,854 (non-zero in 695 of 4,075 T records in 50 s from load); VF2 at 57.5
+fps. Ben: "we have sound!" -- CONFIRMED.*
 
 *The lockup (same capture session, s1203):* VF2 froze in attract (Lau's
 close-up, 0 fps). Over 12 s every C record was IP 0x00007dc4 with the TGP
