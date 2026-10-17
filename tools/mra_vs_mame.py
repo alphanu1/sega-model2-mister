@@ -131,6 +131,26 @@ def init_patches(src, setname, regions):
         out.append((g.group(1), off, val))
     return out
 
+# R873: patches the core's MRA carries that MAME's init does not -- our own
+# instruction words, applied to MAME's side so the rest of the slot is still
+# compared byte for byte. Zero Gunner: its 315-5881 checks, "be" -> "b".
+CORE_PATCHES = {
+    "zeroguna": [(0x443c8, 0x08000028)] + [(a, 0x08000018) for a in (
+        0x446e0, 0x449bc, 0x44bac, 0x44e14, 0x474dc, 0x475e8, 0x477f4,
+        0x4cc34, 0x55cd4, 0x56204)],
+}
+
+def core_patches(setname, regions):
+    out = []
+    for off, val in CORE_PATCHES.get(setname, []):
+        old = int.from_bytes(regions["maincpu"][off:off + 4], "little")
+        # only the opcode byte may change: be (0x12) -> b (0x08)
+        if old != (val & 0x00ffffff) | 0x12000000:
+            raise SystemExit(f"core patch at 0x{off:X}: MAME has 0x{old:08X}, not the expected be")
+        regions["maincpu"][off:off + 4] = val.to_bytes(4, "little")
+        out.append((off, old, val))
+    return out
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--layout")]
     m2a = "--layout=2a" in sys.argv[1:] or "--layout2a" in sys.argv[1:]
@@ -141,6 +161,8 @@ def main():
     regions = build(rom_start(src, setname), zips)
     for fn, off, val in init_patches(src, setname, regions):
         print(f"  {fn}: maincpu 0x{off:X} = 0x{val:08X} (applied to MAME's side)")
+    for off, old, val in core_patches(setname, regions):
+        print(f"  core patch (R873): maincpu 0x{off:X} 0x{old:08X} -> 0x{val:08X} (applied to MAME's side)")
     bad = 0
     slots = SLOTS
     if m2a:

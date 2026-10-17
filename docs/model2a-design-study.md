@@ -36909,6 +36909,9 @@ play):
   (R857 / R858). Stopped here for Ben's decision. A table of the 16
   answers would be ~30 ALMs but is ROM-derived data in the RTL (rule 4):
   not an option.
+  [R873: NOT NEEDED. The chip is only a check -- nothing it decrypts is
+  used -- and eleven one-byte MRA patches bypass it, 0 ALM. "So Zero
+  Gunner needs the chip" above is wrong.]
 
 *VIRTUA COP 2'S GUNS -- WHAT THE AIM PATH NEEDS (MAME 0.289), NOT BUILT.*
   * vcop2's machine config binds the 315-5649's RS-422 channel 2: a write of
@@ -37880,3 +37883,103 @@ data that exercises it, is the leading explanation for a fault no simulation
 shows. R875: the path is being cut; s1207 / s1208 (other placement) test it
 on the board meanwhile.
 
+
+**R873 -- ZERO GUNNER'S 315-5881 IS ONLY A CHECK: NOTHING IT DECRYPTS IS
+USED. ELEVEN ONE-BYTE MRA PATCHES REPLACE IT, 0 ALM. PROVED IN MAME 0.289
+OVER FOUR TWO-PLAYER CREDITS (840 s).**
+(Ben: try to patch out the decryption checks before building the chip.)
+
+*Believed (R862):* with the decrypt reads at 0 MAME plays the first credit
+"with small differences from t = 40 s", then stays black; "so Zero Gunner
+needs the chip" -- ~300-400 ALMs and 1 M10K (R862 a + b + d).
+
+*Found (MAME 0.289, read / write taps with the i960's IP and registers,
+MAME's disassembly of the work-RAM copy -- R866: RAM 0x540000-0x5cebff is
+program 0x40000-0xcebff, the code runs there):*
+  1. ONE ROUTINE TALKS TO THE CHIP, 0x56b8d0 (program 0x6b8d0): address / 2
+     to 0x01d90008, the subkey to 0x01d9000c, a dummy read, the status at
+     0x01d90000 polled until bit 0 clears, then (length - 4) / 2 halves from
+     0x01d9000e, byte-swapped, stored to the buffer in g0. The boot (program
+     0x810 / 0x860) copies 192 bytes from 0x56de40 to the chip's RAM with
+     0x56b820 -- the only use of 0x01d80000.
+  2. ELEVEN CALLERS, ALL THE SAME SEQUENCE: r4 = random(16) (0x54b430);
+     subkey 0x27a44[r4], length 0x27a24[r4] (12), address 0x27a64[r4];
+     decrypt 8 bytes to 0x40(fp); ldl the double at 0x279a4[r4 * 8], cmprl it
+     with the decrypted double; on a mismatch 0x513000 += 1; return. Every
+     one of the eleven functions returns straight after its compare: the
+     decrypted bytes are never read again.
+  3. THE COUNTER 0x513000: zeroed at boot (0x54b1e0), read only by the
+     eleven checks and by the main loop at 0x54b2e4 (a read tap over 840 s
+     saw no other reader): once it passes 10 the loop adds 1 a frame and
+     skips the game's state machine (the dispatch at 0x54b310); after 3600
+     frames it calls 0x54b560 (a reseed) and sets 11 again -- for good.
+  4. THE CORE TODAY (run B below, reads 0, unpatched): 1 at the boot check,
+     7 by 47.7 s (one per check of the first credit), 10 at 160 s, 11 at
+     179.45 s; from then the 3D background still scrolls but with no HUD,
+     no enemies, coins ignored, and MAME itself stopped at 241 s ("I960:
+     84051000: Unhandled 00") a second after the next coin. R862's black
+     screen at 110 s is this lockout on its schedule.
+  5. R862'S "SMALL DIFFERENCES FROM 40 s" ARE NOT DATA: B's frames part
+     from A's at the first credit's checks (40 s) while C -- the same zeros,
+     the increment not taken -- matches A to 83.55 s. INFERRED: the cycles
+     of the taken increment path shift the game's timing (MAME's i960
+     counts cycles; the seed below mixes [0x5021d6] / [0x5021d8]).
+  6. THE RANDOM NUMBER GENERATOR READS THE PROGRAM: 0x54b430 (and 0x54b560)
+     do seed += ROM[seed & 0xffffc] + 0x2b67 + [0x5021d6] + [0x5021d8] +
+     [0x5000cc]. So ANY patched program word changes the random sequence
+     when the seed lands on it -- MAME's own init_zerogun at 0x700 does,
+     against the board. In run A the seed lands on two of the eleven site
+     words in 840 s: 0x55cd4 at 83.550078 s and 0x475e8 at 657.795779 s
+     (data reads with IP 0x54b470, the ld at 0x54b46c).
+
+*THE PATCH (Zero Gunner (Export, Model 2A).mra):* each check's "be" past the
+increment becomes "b" -- opcode 0x12 -> 0x08, the displacement kept -- so a
+check never counts and 0x513000 stays 0, as with the chip. Program offsets
+(= MRA image offsets: all below 0x80000); RAM copy at +0x500000:
+     0x443c8 12000028 -> 08000028   <patch>28 00 00 08</patch>
+     0x446e0 0x449bc 0x44bac 0x44e14 0x474dc 0x475e8 0x477f4 0x4cc34
+     0x55cd4 0x56204: 12000018 -> 08000018   <patch>18 00 00 08</patch>
+Three sites (0x474dc, 0x449bc, 0x44e14) never ran in 840 s; same sequence,
+patched anyway. The boot's copy carries the patch (read back at 5 s).
+Alternative not taken: one word, the main loop's test at 0x4b2ec
+(cmpibge 10,g5 -> b 0x54b310, 24 00 00 08) -- one RNG-visible word instead
+of eleven, but the counter then climbs with every check and RAM no longer
+matches the chip's; not run.
+tools/mra_vs_mame.py: a CORE_PATCHES table applies these to MAME's side
+(checking each was MAME's be): --layout=2a PASS.
+
+*PROOF (sim/prot/mame_m2_zg_patch.lua, sim/prot/zg_patch_cmp.py; MAME
+0.289, fresh nvram each run; 840 s: credits at 40 / 240 / 440 / 640 s --
+two coins, 1P and 2P start, both players weave and fire until game over
+(~90 s), attract between; per second the counter and FNV hashes of work RAM
+0x500000-0x53ffff, RAM 0x200000-0x23ffff, buffer RAM 0x900000-0x91ffff, the
+code copy every 30 s; 420 snapshots; RAM dumps every 60 s):*
+     A   real chip, MAME's program            39 checks, all pass
+     AL  A again (with the ROM-read log)      == A in everything
+     B   reads 0, unpatched (the core today)  lockout 179.45 s, crash 241 s
+     C   reads 0, the MRA's program (rom_csum image loaded over maincpu, 11
+         words differ)                        counter 0 all run; 4 games to
+                                              game over, attract between;
+                                              39 checks at A's times to 83 s
+     D   real chip, the MRA's program         == C: every hash, 420 / 420
+                                              snapshots, 28 / 28 dumps
+     CF  as C, the RNG's reads of the 11 words given MAME's original
+                                              == A: 420 / 420 snapshots, all
+                                              hashes all 840 s; dumps differ
+                                              only in the 11 patched words
+  D == C bit for bit means the chip's answers have NO effect once the checks
+  are bypassed: nothing decrypted is consumed. CF == A means the patch
+  changes nothing else -- the only difference left between C and A is the
+  random sequence parting at the seed's reads of patched words (A vs C
+  first differs at 84 s, the second after the 83.55 s read).
+
+*What the board must show:* Zero Gunner, once it runs past R866's FP forms
+(cpysre at ~40 s traps on the 2A build; another change), plays credit after
+credit: no lockout after the first game, coins and starts answered. The
+0x01d8 / 0x01d9 traffic is unchanged (the boot upload, the subkey writes,
+the status read as 0 ends the poll). Its board black screen at boot is a
+separate fault. NOT VERIFIED on the board; not run on the core in
+simulation.
+*Cost:* 0 ALM, 0 M10K -- R862's chip (a + b + d) is not needed for Zero
+Gunner. The other 315-5881 sets in MAME (keys 2c2a4a93, 042e2dc1; not 2A
+games) are not assessed.
