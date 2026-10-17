@@ -1,0 +1,126 @@
+R869: MAME 0.289 i960 form log (Sega Model 2 core for MiSTer FPGA, study R869).
+Every distinct opcode form the i960 executes -- REG op.op2, MEM op + mode bits,
+ret by frame type, CTRL / COBR op -- with its first PC, word and time (FIRST),
+a count of each at exit (COUNT), and for the REG forms i960_top lacked
+(sim/io/vf2_formscan.py RTL_LACKS) every new PC (PC) and every distinct
+operand tuple with MAME's result (V). Wherever the code runs -- ROM or a copy
+in work RAM (R866) -- so nothing depends on a candidate list. R869_OUT=<file>
+turns it on; without it MAME runs as before. Read by sim/io/i960_formcheck.cpp
+and sim/io/mame_i960_formlog.py; sim/io/mame_m2_2a_play.lua plays the game.
+Apply in a MAME 0.289 tree: patch -p1 < mame_i960_formlog.patch, then e.g.
+make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
+(BSD-3-Clause, i960.cpp's own licence); it is a tool, not part of the core.
+
+--- a/src/devices/cpu/i960/i960.h
++++ b/src/devices/cpu/i960/i960.h
+@@ -174,6 +174,8 @@
+ 	void test(uint32_t opcode, int mask);
+ 	double round_to_int(double val);
+ 	void execute_op(uint32_t opcode);
++	void r869_pre(uint32_t opcode, uint32_t &key, uint64_t &a, uint64_t &b);
++	void r869_post(uint32_t opcode, uint32_t key, uint64_t a, uint64_t b);
+ 	void execute_burst_stall_op(uint32_t opcode);
+ 	void take_interrupt(int vector, int lvl);
+ 	void check_immediate_irqs();
+--- a/src/devices/cpu/i960/i960.cpp
++++ b/src/devices/cpu/i960/i960.cpp
+@@ -2203,6 +2203,85 @@
+ 
+ }
+ 
++// ---- R869: FORM LOG. Every distinct opcode form the i960 executes (first PC,
++// first time, count), wherever the code lives (ROM or a copy in RAM), and for
++// the forms the 2A core lacks every instance's operands and MAME's result.
++// R869_OUT=<file> turns it on.
++#include <unordered_map>
++#include <unordered_set>
++#include <map>
++namespace {
++struct r869_key_info { uint32_t pc; double t; uint64_t n; };
++struct r869_log {
++	FILE *f = nullptr;
++	bool tried = false;
++	std::map<uint32_t, r869_key_info> keys;           // form -> first
++	std::unordered_set<uint64_t> pcs;                  // (form, pc) of interest seen
++	std::unordered_set<std::string> vals;              // distinct operand tuples
++	std::map<uint32_t, uint64_t> nval;
++	bool open() {
++		if (!tried) { tried = true; const char *o = getenv("R869_OUT"); if (o) f = fopen(o, "w"); }
++		return f != nullptr;
++	}
++	~r869_log() {
++		if (!f) return;
++		for (auto &k : keys) fprintf(f, "COUNT %04x pc %08x t %.4f n %llu\n", k.first, k.second.pc, k.second.t, (unsigned long long)k.second.n);
++		for (auto &k : nval) fprintf(f, "NVAL %04x %llu\n", k.first, (unsigned long long)k.second);
++		fclose(f);
++	}
++};
++r869_log g_r869;
++inline uint64_t r869_d2u(double d) { uint64_t v; memcpy(&v, &d, 8); return v; }
++// REG forms MAME runs that i960_top lacks (sim/io/vf2_formscan.py RTL_LACKS)
++inline bool r869_interest(uint32_t k) {
++	switch (k) {
++	case 0x660: case 0x66d: case 0x675: case 0x676:
++	case 0x680: case 0x681: case 0x682: case 0x683: case 0x689: case 0x68c: case 0x68d: case 0x68e:
++	case 0x690: case 0x692: case 0x698: case 0x699: case 0x69a: case 0x69b: case 0x69c: case 0x69d: case 0x69e:
++	case 0x6c1: case 0x6c3: case 0x6e1: case 0x6e2: return true;
++	default: return false;
++	}
++}
++}
++
++void i960_cpu_device::r869_pre(uint32_t opcode, uint32_t &key, uint64_t &a, uint64_t &b)
++{
++	const uint32_t op = opcode >> 24;
++	if (op >= 0x58 && op < 0x80) key = (op << 4) | ((opcode >> 7) & 0xf);
++	else if (op >= 0x80) key = 0x8000 | (op << 4) | ((opcode >> 10) & 0xf);   // MEM: op and mode bits 13:10
++	else if (op == 0x0a) key = 0x0a0 | (m_r[I960_PFP] & 7);                  // ret: the frame type
++	else key = op << 4;
++	const double t = machine().time().as_double();
++	auto it = g_r869.keys.find(key);
++	if (it == g_r869.keys.end()) {
++		g_r869.keys[key] = { m_PIP, t, 1 };
++		fprintf(g_r869.f, "FIRST %04x pc %08x insn %08x t %.4f\n", key, m_PIP, opcode, t); fflush(g_r869.f);
++	} else it->second.n++;
++	a = b = 0;
++	if (r869_interest(key)) {
++		const uint64_t pk = (uint64_t(key) << 32) | m_PIP;
++		if (g_r869.pcs.insert(pk).second) { fprintf(g_r869.f, "PC %04x %08x insn %08x t %.4f\n", key, m_PIP, opcode, t); fflush(g_r869.f); }
++		const bool rl = (op == 0x69) || (op == 0x6e) || key == 0x676;
++		a = r869_d2u(rl ? get_1_rifl(opcode) : get_1_rif(opcode));
++		b = r869_d2u(rl ? get_2_rifl(opcode) : get_2_rif(opcode));
++	}
++}
++
++void i960_cpu_device::r869_post(uint32_t opcode, uint32_t key, uint64_t a, uint64_t b)
++{
++	if (!r869_interest(key)) return;
++	const uint32_t d = (opcode >> 19) & 0x1f;
++	uint64_t res;
++	if (opcode & 0x2000) res = r869_d2u(m_fp[d & 3]);
++	else res = uint64_t(m_r[d]) | (uint64_t(m_r[(d + 1) & 0x1f]) << 32);
++	char buf[160];
++	snprintf(buf, sizeof(buf), "V %04x %08x m%d%d%d %016llx %016llx %016llx", key, m_PIP,
++		(opcode >> 11) & 1, (opcode >> 12) & 1, (opcode >> 13) & 1,
++		(unsigned long long)a, (unsigned long long)b, (unsigned long long)res);
++	g_r869.nval[key]++;
++	if (g_r869.vals.size() < 4000000 && g_r869.vals.insert(buf).second) fprintf(g_r869.f, "%s t %.4f\n", buf, machine().time().as_double());
++}
++
+ void i960_cpu_device::execute_run()
+ {
+ 	uint32_t opcode;
+@@ -2222,7 +2301,12 @@
+ 
+ 		if(m_stall_state.burst_mode == true)
+ 			execute_burst_stall_op(opcode);
+-		else
++		else if (g_r869.open()) {
++			uint32_t key; uint64_t a, b;
++			r869_pre(opcode, key, a, b);
++			execute_op(opcode);
++			r869_post(opcode, key, a, b);
++		} else
+ 			execute_op(opcode);
+ 	}
+ }

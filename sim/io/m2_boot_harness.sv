@@ -70,6 +70,12 @@ module m2_boot_harness #(
   // sound program and the SCSP) in place of the silent stand-in, its three
   // SDRAM ports answered by the tb (snd_*), as Model2.sv's M2_2A_SOUND
   parameter bit          A2_SOUND        = 1'b0,
+  // R869: with A2, Sega Rally / Virtua Cop 2 / Zero Gunner as Model2.sv
+  // builds them: the program extension (prog_ext, GAME_PROGXB_2A; tb_m2_boot
+  // copies it to word 0x1300000 under M2_A2X) and the i960's FR + F2A forms
+  // live (M2_2A_FPU, vc_en high)
+  parameter bit          A2X             = 1'b0,
+  parameter bit          A2X_F2A         = 1'b1,   // 0: R865's 2A core (FR alone), to show the trap
   // R852: the TGP program RAM (4096 for A2)
   parameter int unsigned TGP_PROG        = 2048,
   // R854: the i960's i-cache lines (i960_top IC_LINES)
@@ -618,8 +624,8 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top #(.VC(VCOP), .IC_LINES(IC_LINES)) u_cpu (
-    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP),   // R839
+  i960_top #(.VC(VCOP), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES)) u_cpu (   // R869: FR, F2A
+    .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP | A2X),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
     .irq(A2 ? a2_irq : irq),
@@ -709,7 +715,7 @@ module m2_boot_harness #(
     // The top level's own bases for a game image (Model2.sv GAME_*), so the
     // address arithmetic under test is the arithmetic that runs on the board.
     .base_prog (AW'(32'h0000000)), .base_data (A2 ? AW'(32'h0040000) : AW'(32'h0020000)),   // R852: 2A data at byte 0x80000
-    .prog_ext(VCOP), .base_progx(AW'(32'h1880000)),   // R726 / R839
+    .prog_ext(VCOP | A2X), .base_progx(A2X ? AW'(32'h12C0000) : AW'(32'h1880000)),   // R726 / R839; R869
     .base_work (AW'(32'h1600000)), .base_board(A2 ? AW'(32'h12a0000) : AW'(32'h1680000)),   // R852
     // R257: THE SAME BUFFER BASE THE WALKER USES. This said 0x16d0000 while
     // the geometrizer below says 0x16f0000, so at the desk the CPU wrote the

@@ -53,8 +53,15 @@ module i960_top #(
   parameter bit VC     = 1'b0,
   // R865: flushreg (0x66.d) ALONE, live while vc_en, without the rest of VC
   // (no transcendental microcode, no M10K). Sega Rally and Zero Gunner run
-  // it once at boot and no other form VC adds (MAME, 220 s each).
+  // it once at boot; R866 found the rest of what they run (F2A below).
   parameter bit FR     = 1'b0,
+  // R869: THE FORMS SEGA RALLY AND ZERO GUNNER RUN FROM THEIR COPY IN WORK RAM
+  // (R866), live while vc_en: cvtzril and cpysre (VC's own paths), atanr and
+  // sinr (the single forms of R845's sequencer: atan2 / sin on the widened
+  // double, narrowed like every r form) and remr (exact fmod, i960_fprem).
+  // Builds the sequencer (4 M10K) and i960_fprem; not sqrtrl or the rl
+  // transcendentals, which neither game runs. 0 is the core as before.
+  parameter bit F2A    = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
   parameter int unsigned IC_LINES = 512
@@ -626,16 +633,18 @@ module i960_top #(
 
   // R845: while the transcendental sequencer runs (VC only) it owns the
   // adder, multiplier and divider: its operands, requests and subtract.
+  // R869: built for F2A too (atanr, sinr); TRB says it exists.
+  localparam bit TRB = VC || F2A;
   logic        tr_act, tr_add_req, tr_mul_req, tr_div_req, tr_sub;
   logic        tr_sel_add, tr_sel_mul, tr_sel_div, tr_fin;
   /* verilator lint_off UNUSEDSIGNAL */
-  logic        tr_start;                         // read only when VC
+  logic        tr_start;                         // read only when TRB
   /* verilator lint_on UNUSEDSIGNAL */
   logic [63:0] tr_opa, tr_opb;
-  wire         tr_on   = VC && tr_act;
+  wire         tr_on   = TRB && tr_act;
   wire  [63:0] u_a     = tr_on ? tr_opa : fp_b;
   wire  [63:0] u_b     = tr_on ? tr_opb : fp_a;
-  generate if (VC) begin : g_trans
+  generate if (TRB) begin : g_trans
     i960_fptrans u_trans (
       .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry),
       .x(fp_a), .y(fp_b),
@@ -651,15 +660,28 @@ module i960_top #(
     assign tr_sub = 1'b0; assign tr_sel_add = 1'b0; assign tr_sel_mul = 1'b0;
     assign tr_sel_div = 1'b0; assign tr_fin = 1'b0;
   end endgenerate
-  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (VC && tr_add_req)),
+  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
                         .sub(tr_on ? tr_sub : fadd_sub), .a(u_a), .b(u_b),
                         .y(fadd_y), .done(fadd_done));
-  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (VC && tr_mul_req)),
+  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (TRB && tr_mul_req)),
                         .a(u_a), .b((fp_is_scale && !tr_on) ? pow2 : u_b),
                         .y(fmul_y), .done(fmul_done));
-  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req | (VC && tr_div_req)),
+  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req | (TRB && tr_div_req)),
                         .a(u_a), .b(u_b), .y(fdiv_y),
                         .busy(fdiv_busy), .done(fdiv_done));
+  // R869: remr -- fmod(src2, src1), exact; its operands held on fp_b / fp_a
+  // through T_FP as the sequencer's are.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic        frem_req;                         // read only when F2A
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic        frem_done;
+  logic [63:0] frem_y;
+  generate if (F2A) begin : g_rem
+    i960_fprem u_fprem (.clk(clk), .rst_n(rst_n), .req(frem_req),
+                        .x(fp_b), .y(fp_a), .q(frem_y), .done(frem_done));
+  end else begin : g_norem
+    assign frem_y = 64'd0; assign frem_done = 1'b0;
+  end endgenerate
   i960_fpsqrt u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
                         .a(fp_a), .y(fsqrt_y),
                         .busy(fsqrt_busy), .done(fsqrt_done));
@@ -687,13 +709,15 @@ module i960_top #(
   logic [2:0] fmisc_op;
   // R845: the sequencer's unit selects the result while it runs (the
   // transcendental's own decode flags are all clear, so they cannot clash)
-  wire r_add = fp_is_add || (VC && tr_sel_add);
-  wire r_mul = fp_is_mul || (VC && tr_sel_mul);
-  wire r_div = fp_is_div || (VC && tr_sel_div);
+  wire r_add = fp_is_add || (TRB && tr_sel_add);
+  wire r_mul = fp_is_mul || (TRB && tr_sel_mul);
+  wire r_div = fp_is_div || (TRB && tr_sel_div);
+  wire r_rem = F2A && fp_is_rem;                 // R869
   assign fp_res_wide = r_add  ? fadd_y
                      : r_mul      ? fmul_y
                      : r_div      ? fdiv_y
                      : fp_is_sqrt ? fsqrt_y
+                     : r_rem      ? frem_y
                      : fp_is_cpys ? {cpys_neg, fmisc_y_q[62:0]}   // R839
                                   : fmisc_y_q;          // R566: registered
   // R575: STAGED -- a register inside the unit after the round add, so the
@@ -707,16 +731,19 @@ module i960_top #(
   logic fp_is_add, fp_is_mul, fp_is_div, fp_is_sqrt, fp_is_misc, fp_valid;
   logic fp_is_cpys, fp_is_cvtl;                  // R839: cpysre, cvtzril
   logic fp_is_trans;                             // R845: sinrl cosrl tanrl atanrl
+  logic fp_is_rem;                               // R869: remr
   /* verilator lint_off UNUSEDSIGNAL */
-  logic [1:0] tr_entry;                          // read only when VC
+  logic [1:0] tr_entry;                          // read only when TRB
   /* verilator lint_on UNUSEDSIGNAL */
   wire  vc_on = VC && RL && vc_en;
   wire  fr_on = (VC || FR) && vc_en;               // R865: flushreg's dispatch
+  wire  ta_on = F2A && RL && vc_en;                // R869: the 2A games' forms
   always_comb begin
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
     fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
     fp_is_trans = 1'b0; tr_entry = 2'd0;
+    fp_is_rem = 1'b0;
     fmisc_op = 3'd7;
     is_rl = 1'b0;
     // R845: the transcendentals, long-real pairs in and out (get_1_rifl /
@@ -735,11 +762,23 @@ module i960_top #(
     // NaN as negative); cvtzril: get_1_rif (the single-form operand) ->
     // (int64_t) -> set_ri64, the unmasked pair dst, dst+1.
     if (vc_on && d_op == 8'h69 && d_op2 == 4'h8) begin is_rl = 1'b1; fp_is_sqrt = 1'b1; end
-    if (vc_on && d_op == 8'h6e && d_op2 == 4'h2) begin
+    if ((vc_on || ta_on) && d_op == 8'h6e && d_op2 == 4'h2) begin
       is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7; fp_is_cpys = 1'b1;
     end
-    if (vc_on && d_op == 8'h6c && d_op2 == 4'h3) begin
+    if ((vc_on || ta_on) && d_op == 8'h6c && d_op2 == 4'h3) begin
       fp_is_misc = 1'b1; fmisc_op = 3'd4; fp_is_cvtl = 1'b1;
+    end
+    // R869: the single forms MAME computes on the widened double --
+    // set_rif(atan2(t2f, t1f)), set_rif(sin(t1f)), set_rif(fmod(t2f, t1f)):
+    // the sequencer and i960_fprem on fp_a / fp_b, the result narrowed (a
+    // register destination) or kept whole (fp0-fp3) as every r form's.
+    if (ta_on && d_op == 8'h68) begin
+      case (d_op2)
+        4'h0: begin fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanr
+        4'hc: begin fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinr
+        4'h3: fp_is_rem = 1'b1;                                // remr
+        default: ;
+      endcase
     end
     case (d_op)
       8'h79: if (RL) case (d_op2)                // R836: long-real arithmetic
@@ -782,7 +821,7 @@ module i960_top #(
              endcase
       default: ;
     endcase
-    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc | fp_is_trans;
+    fp_valid = fp_is_add | fp_is_mul | fp_is_div | fp_is_sqrt | fp_is_misc | fp_is_trans | fp_is_rem;
   end
 
   // cmpr writes only the condition code; cvtri and cvtzri write an integer;
@@ -1235,6 +1274,7 @@ module i960_top #(
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
       tr_start  <= 1'b0;    // R845
+      frem_req  <= 1'b0;    // R869
       rl_lo1    <= 32'd0;   // R836
       rl_lo2    <= 32'd0;
       rl_wb     <= 1'b0;
@@ -1256,6 +1296,7 @@ module i960_top #(
       fdiv_req  <= 1'b0;
       fsqrt_req <= 1'b0;
       tr_start  <= 1'b0;    // R845
+      frem_req  <= 1'b0;    // R869
 
       // A prefetch issued in decode lands during execute. Capture it wherever
       // the sequencer happens to be.
@@ -1657,6 +1698,8 @@ module i960_top #(
                 fmul_req  <= fp_is_mul;
                 fdiv_req  <= fp_is_div;
                 fsqrt_req <= fp_is_sqrt;
+                tr_start  <= F2A && fp_is_trans;   // R869: atanr, sinr
+                frem_req  <= F2A && fp_is_rem;     // R869: remr
                 ts        <= T_FP;
               end else if (md_valid) begin
                 // Multiply, divide, remainder and modulo. Multi-cycle and
@@ -1753,7 +1796,8 @@ module i960_top #(
               || (fp_is_mul  && fmul_done)
               || (fp_is_div  && fdiv_done)
               || (fp_is_sqrt && fsqrt_done)
-              || (VC && fp_is_trans && tr_fin)) begin
+              || (TRB && fp_is_trans && tr_fin)
+              || (F2A && fp_is_rem && frem_done)) begin
             if (fp_writes_cc) begin
               ac <= {ac[31:3], fmisc_cc_q};
             end else if (fp_writes_int) begin

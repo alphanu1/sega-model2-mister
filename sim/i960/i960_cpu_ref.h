@@ -45,6 +45,7 @@ struct Cpu {
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   bool ref_fr = false;            // R865: i960_top FR with vc_en -- flushreg alone
+  bool ref_f2a = false;           // R869: i960_top F2A with vc_en -- cvtzril, cpysre, atanr, sinr, remr
   // R845: sinrl / cosrl / tanrl / atanrl computed with the host's libm, as
   // MAME does. The module returns the correctly rounded value; libm is not
   // correctly rounded on ~0.2% of arguments, so a one-ulp difference on
@@ -53,6 +54,7 @@ struct Cpu {
   bool fp_trans = false;
   int  fp_trans_reg = -1;         // the pair's low register, or -1 for fp[fp_trans_fp]
   int  fp_trans_fp = 0;
+  int  fp_trans_s = -1;           // R869: a single form's register destination (atanr, sinr)
   // Which general register this retire's FP result narrowed into, or -1. A
   // single-precision NaN's sign and payload differ between the units' canonical
   // quiet NaN and the host's propagation — recorded, and already exempted for
@@ -304,7 +306,7 @@ struct Cpu {
   void step() {
     if (trapped) return;
     fp_denorm_operand = false;
-    fp_trans = false; fp_trans_reg = -1;
+    fp_trans = false; fp_trans_reg = -1; fp_trans_s = -1;
     unaligned_syn = false;
     fp_sdest          = -1;
     fp_nan_result     = false;
@@ -531,7 +533,7 @@ struct Cpu {
           // R839 (i960_top VC, live while vc_en): sqrtrl 0x69.8 and cpysre
           // 0x6e.2 are long-real forms; cvtzril 0x6c.3 reads a single-form
           // operand and writes the unmasked pair dst, dst + 1 (set_ri64).
-          if (ref_vc && k == 0x6c3) {
+          if ((ref_vc || ref_f2a) && k == 0x6c3) {
             const double fa = d.src1_lit ? fp_lit(d.src1) : u2f_t(rf.r[d.src1]);
             if (d.dst_lit) { trapped = true; trap_op = d.op; break; }   // set_ri64: fatalerror
             // The module converts through cvtzri and sign-extends: exact for
@@ -546,7 +548,7 @@ struct Cpu {
           }
           const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690);
           if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
-              || (ref_vc && (k == 0x698 || k == 0x6e2)) || trans) {
+              || (ref_vc && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans) {
             const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
             const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
             // movrl copies the pair as MAME does, subnormal or not (the
@@ -617,7 +619,25 @@ struct Cpu {
           // was always false, and every FP instruction trapped in the reference
           // while the DUT executed it — which ended the lockstep loop before it
           // could compare anything and made the FP-register check look inert.
-          switch ((uint32_t(d.op) << 4) | d.op2) {
+          const uint32_t ks = (uint32_t(d.op) << 4) | d.op2;
+          // R869 (i960_top F2A, live while vc_en): atanr, sinr, remr --
+          // set_rif(atan2(t2f, t1f)), set_rif(sin(t1f)), set_rif(fmod(t2f,
+          // t1f)) on the widened operands. atanr / sinr run R845's sequencer
+          // (correctly rounded double, then narrowed): host libm's one-ulp
+          // misses are the recorded deviation the harness adopts, and sin
+          // past the sequencer's exact reduction (|x| > 2^19) ends the
+          // program as sinrl's does. fmod is exact on both sides.
+          const bool f2a_s = ref_f2a && (ks == 0x680 || ks == 0x68c || ks == 0x683);
+          if (f2a_s) {
+            fres = (ks == 0x680) ? std::atan2(fb, fa) : (ks == 0x68c) ? std::sin(fa) : std::fmod(fb, fa);
+            if (ks != 0x683) {
+              fp_trans = true;
+              if (d.dst_lit) fp_trans_fp = int(d.srcdst & 3); else fp_trans_s = int(d.srcdst);
+              if (ks == 0x68c && std::fabs(fa) > 524288.0) fp_denorm_operand = true;
+              if (fres != 0.0 && std::fabs(fres) < 1e-290) fp_denorm_operand = true;
+            }
+          }
+          switch (f2a_s ? 0u : ks) {
             case 0x78f: fres = fb + fa; break;                       // addr
             case 0x78d: fres = fb - fa; break;                       // subr
             case 0x78c: fres = fb * fa; break;                       // mulr
@@ -637,6 +657,7 @@ struct Cpu {
             case 0x6c9: fres = fa; break;                                          // movr
             case 0x674: fres = double(int32_t(s1)); break;                          // cvtir
             case 0x677: fres = fb * std::pow(2.0, double(int32_t(s1))); break;      // scaler
+            case 0u: handled = f2a_s; break;                                        // R869
             default: handled = false; break;
           }
           if (handled) {

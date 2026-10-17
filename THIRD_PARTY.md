@@ -362,7 +362,7 @@ individually:
 | File | SPDX | Copyright | Used for |
 |---|---|---|---|
 | `src/devices/cpu/mb86233/mb86233.{cpp,h,d.cpp}` | BSD-3-Clause | Olivier Galibert | TGP, and the M2-C finding |
-| `src/devices/cpu/i960/i960.cpp` | BSD-3-Clause | Farfetch'd, R. Belmont | i960KB — the only reference that exists |
+| `src/devices/cpu/i960/i960.cpp` | BSD-3-Clause | Farfetch'd, R. Belmont | i960KB — the only reference that exists. `sim/io/mame_i960_formlog.patch` (R869) is a patch to it and `i960.h` at 0.289 (a form log for the trace runs; a tool, not built into the core), under that file's BSD-3 terms |
 | `src/devices/sound/scsp.cpp`, `scsp.h`, `scspdsp.cpp`, `scspdsp.h` | BSD-3-Clause | ElSemi, R. Belmont (scsp.cpp: thanks-to kingshriek) | The Model 2A SCSP, below (headers read at 0.289, study R856) |
 | `src/mame/sega/segaic24.cpp` | BSD-3-Clause | — | S24TILE tilemap |
 | `src/mame/sega/315_5649.cpp` | BSD-3-Clause | Dirk Best | I/O chip |

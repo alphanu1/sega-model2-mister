@@ -70,7 +70,7 @@ FPC_RTL  := $(I960)/i960_fpcvt.sv
 TOP_RTL  := $(DEC_RTL) $(ALU_RTL) $(REG_RTL) $(AGU_RTL) $(LST_RTL) \
             $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(MDV_RTL) \
             $(FPM_RTL) $(FPA_RTL) $(FPD_RTL) $(FPS_RTL) $(FPX_RTL) $(FPC_RTL) \
-            $(I960)/i960_fptrans.sv $(I960)/i960_top.sv
+            $(I960)/i960_fptrans.sv $(I960)/i960_fprem.sv $(I960)/i960_top.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -406,7 +406,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -536,6 +536,16 @@ test_i960_fpdiv: obj_i960_fpdiv/Vi960_fpdiv
 obj_i960_fpdiv/Vi960_fpdiv: $(FPD_RTL) $(TB)/tb_i960_fpdiv.cpp
 	$(VBUILD) --top-module i960_fpdiv -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpdiv -o Vi960_fpdiv $(FPD_RTL) $(TB)/tb_i960_fpdiv.cpp
+
+# R869: remr's exact fmod unit against the host's fmod, 1,000,000 vectors
+.PHONY: test_i960_fprem
+test_i960_fprem: obj_i960_fprem/Vi960_fprem
+	@echo "== test i960_fprem (remr, R869)"
+	./obj_i960_fprem/Vi960_fprem $(TEST_ARGS)
+
+obj_i960_fprem/Vi960_fprem: $(I960)/i960_fprem.sv $(TB)/tb_i960_fprem.cpp
+	$(VBUILD) --top-module i960_fprem -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_fprem -o Vi960_fprem $(I960)/i960_fprem.sv $(TB)/tb_i960_fprem.cpp
 
 test_i960_fpsqrt: obj_i960_fpsqrt/Vi960_fpsqrt
 	@echo "== test i960_fpsqrt"
@@ -809,6 +819,17 @@ test_i960_top_fr: obj_i960_top_fr/Vi960_top
 obj_i960_top_fr/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top -GFR=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_top_fr -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R869: the 2A core's i960 (FR=1, F2A=1, VC=0) with vc_en high (+fx): cvtzril,
+# cpysre, atanr, sinr, remr and flushreg against MAME's semantics, edge values
+# seeded. Forced off: run +fx on obj_i960_top_fr (F2A=0) -- it must FAIL.
+.PHONY: test_i960_top_fx
+test_i960_top_fx: obj_i960_top_fx/Vi960_top
+	@echo "== test i960_top F2A (the 2A games' forms, R869)"
+	./obj_i960_top_fx/Vi960_top +fx $(TEST_ARGS)
+obj_i960_top_fx/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GFR=1 -GF2A=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
+	  --Mdir obj_i960_top_fx -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # Render a whole frame out of m2_video, from the tile/char/palette images our
 # own i960 built. Skips when they are absent.
@@ -1345,6 +1366,26 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_2a -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
+	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
+	  sim/io/tb_m2_boot.cpp
+
+# R869: the 2A boot as Sega Rally / Virtua Cop 2 / Zero Gunner (A2X=1: the
+# program extension and the i960's FR + F2A forms):
+#   M2_A2=1 M2_A2X=1 M2_BOOT_IMAGE=<srallyc.bin> ./obj_boot_2ax/Vm2_boot_harness +insn=<n>
+# BOOT_2AX_G=-GA2X_F2A=0 BOOT_2AX_DIR=<dir> builds R865's core (FR alone) to show the trap.
+BOOT_2AX_DIR ?= obj_boot_2ax
+BOOT_2AX_G   ?=
+$(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+                           rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir $(BOOT_2AX_DIR) -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GA2X=1 $(BOOT_2AX_G) -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \

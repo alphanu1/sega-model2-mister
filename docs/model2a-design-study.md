@@ -37613,3 +37613,195 @@ holding the CPU: 0x7dc0 is a ret, 0x7dc4-0x7dcc three ldq (g11)[g12] -- the
 routine that reads 12 result words from the TGP's output FIFO. The TGP never
 produced them. The sound board kept running. M2_PROBE now carries the TGP's
 pc and its queue counts ('Q') so the next lockup says where the TGP is.
+
+**R869 -- THE 2A GAMES' i960 FORMS, COMPLETE, FROM A FORM LOG IN MAME'S OWN
+i960 (NOT BREAKPOINTS). ZERO GUNNER'S FIRST TRAP IS cvtzril AT 2.57 s, NOT
+cpysre AT 40 s. i960_top F2A: cvtzril, cpysre, atanr, sinr AND AN EXACT remr,
+LIVE FOR THE THREE 2A GAMES. +354 ALMs ESTIMATED, 4 M10K. NOT FITTED.**
+(Ben: establish the complete set of forms Sega Rally, Zero Gunner and Virtua
+Cop 2 execute that the 2A core traps on, then implement exactly that set.
+Limits: one MAME at a time, one Verilator build at a time, no fits, no board,
+whole-core simulations under ~10 minutes.)
+
+*Believed (R866):* Sega Rally traps on cvtzril at 0.123 s, then atanr, remr,
+cpysre at 23.5 s and sinr at 46.4 s; Zero Gunner's first trap is cpysre at
+39.95 s; atanr / sinr need R845's sequencer; remr needs an exact iterative
+fmod. Found by one-shot breakpoints on every candidate word of the program,
+at its ROM address and at its copy in work RAM.
+
+*THE METHOD (sim/io/mame_i960_formlog.patch, a patch to MAME 0.289's
+i960.cpp; a tool, not the core).* R866 showed that a ROM breakpoint cannot
+see code run from RAM; a candidate list cannot see code it does not list.
+So the log sits in execute_run, ahead of execute_op: every distinct FORM the
+CPU executes -- REG op.op2, MEM op + mode bits 13:10, ret by its frame type,
+CTRL / COBR op -- with its first PC, instruction word and time, and a count
+of each at exit; and, for the REG forms i960_top lacked (vf2_formscan.py
+RTL_LACKS), every new PC and every distinct operand tuple with MAME's result.
+Wherever the code lives. Then:
+  * sim/io/i960_formcheck.cpp steps the lockstep's whole-CPU reference
+    (sim/i960/i960_cpu_ref.h, whose traps the lockstep holds the module to,
+    R836) once on each form's first word, in the 2A core as it was (FR 1, VC
+    0), as it is now (F2A 1) and in the main core (VC 1);
+  * sim/io/mame_i960_formlog.py checks every logged operand tuple against
+    what the module computes (fmod exactly; atanr / sinr through R845's own
+    microcode interpreter, tools/i960_fptrans.py, then narrowed; cvtzril as
+    cvtzri sign-extended; cpysre);
+  * sim/io/mame_m2_2a_play.lua plays the game (a fresh NVRAM each run).
+
+*Found (VERIFIED, MAME 0.289, headless, one run at a time):*
+  1. SEGA RALLY, 600 s (attract; credits at 30 / 220 / 410 s; the gear lever
+     stepped 1-2-3-4, accelerator held 18 s in 20, the wheel swept +-0x60,
+     brake, hand brake, VR; three races driven badly but at speed): 150
+     forms. The old 2A core traps on FIVE, and on nothing else:
+        cvtzril  0.144 s  0x5a2dc4   105,064 executions, 10 PCs
+        atanr   23.57 s   0x5ddd40    74,957, 6 PCs (to 93.1 s)
+        remr    23.57 s   0x5ddd54    38,014, 1 PC
+        cpysre  23.57 s   0x5d0910    52,375, 3 PCs
+        sinr    36.36 s   0x5e27ac         3, 1 PC
+     (sinr at 36.4 s here, 46.4 s in R866's run: input-dependent.) A
+     second run, 330 s -- attract only to 240 s (its demo races later stages
+     at speed), then the test menu walked (CRT test and on): 145 forms, the
+     same traps but sinr, nothing new; every operand tuple again equal.
+  2. ZERO GUNNER, 600 s (attract; credits at 60 / 230 / 400 s, button 1
+     held, button 2 every 5 s, the stick on a walk; mission 1 played): 153
+     forms. The old 2A core traps on TWO:
+        CVTZRIL  2.573 s  0x554590    68,680, 3 PCs (0x55762c / 0x557644 at 5.23 s)
+        cpysre  39.99 s   0x5465f0   107,160, 8 PCs (to 74.8 s)
+     So Zero Gunner halts at 2.57 s on the R865 core -- before its first
+     picture (MAME: the Psikyo logo at ~5 s, 3D attract by 15 s), which is
+     the board's "black from the first seconds". R866 RECORDED cpysre AT
+     39.95 s AS THE FIRST, AND THAT WAS WRONG: the ROM word at 0x54590 is
+     0x6c801980 (cvtzril fp0, g0), copied to 0x554590 as R866's own map
+     says, so it was a candidate; why the one-shot breakpoint run did not
+     report it is not established (one candidate: BP_ONCE disables
+     breakpoint n by the list's numbering, which is MAME's only if nothing
+     else ever set one). The form log needs no candidate list.
+  3. VIRTUA COP 2, 600 s (attract; credits at 30 / 200 / 370 s, the gun
+     swept and fired, reloads off-screen, play to game over and the
+     continues): 203 forms; the 2A core traps on NONE (it runs no flushreg
+     either). It runs from ROM (R866), so this agrees with R866's
+     breakpoints; it now holds for every form, not only the FP candidates.
+  4. EVERY EXECUTED INSTANCE, CHECKED (the log keeps every distinct operand
+     tuple; distinct / executions): Sega Rally atanr 50,868 / 74,957, remr
+     23,189 / 38,014, cvtzril 58,218 / 105,064, cpysre 35,240 / 52,375, sinr
+     1 / 3; Zero Gunner cvtzril 92 / 68,680, cpysre 16,842 / 107,160. The
+     module's result equals MAME's on every one. Operand classes:
+       * remr: register singles in, register out. The divisor is ALWAYS
+         0x40c90fdb (2 pi as a single, 6.2831855); dividends -6.355..6.607,
+         so |x / y| <= 1.052 and the exponent difference is 0 or less: one
+         quotient bit. No zero, infinity, NaN or subnormal. Sega Rally needs
+         fmod only over that range; the unit below is exact everywhere
+         anyway (it is what MAME computes, and its cost is the subtractor and
+         two counters, not the range).
+       * atanr: register singles, or a literal src1 (1.0: atan2(y, 1));
+         register out; src1 -277..369; no specials.
+       * sinr: three executions, one argument (0.2468), register in and out.
+       * cvtzril: always fp0-fp3 (doubles) into a register pair; Sega Rally
+         -0.72..4,095.9, Zero Gunner -16,384..16,384 -- inside the module's
+         exact range (|x| < 2^31, R839).
+       * cpysre: fp0 / fp1 / fp3 with a literal src2 (0.0 or 1.0: the sign
+         always positive), into the same fp register.
+  5. The main core (VC 1) would trap on Sega Rally's atanr, remr and sinr
+     (VC has the rl transcendentals, not these single forms) -- recorded,
+     irrelevant: the main core does not load the 2A games.
+
+*BUILT -- i960_top F2A (Model2.sv: F2A = FPU2A, the M2_2A_FPU switch, live
+by vc_en for game IDs 0x10-0x12 as FR is):*
+  a. cvtzril and cpysre: VC's own decode, gated (vc_on || ta_on). No new
+     logic beyond the gate.
+  b. atanr (0x68.0, entry 3) and sinr (0x68.c, entry 0): R845's sequencer,
+     now built when VC || F2A (TRB), started from the single forms' T_EXEC
+     path (not T_RLLO); its operands are the widened single (fp_a_wide /
+     fp_b_wide) or fp0-fp3; the result narrows through u_cvt_a into a
+     register or stays whole in fp0-fp3 -- MAME's set_rif(atan2(t2f, t1f)) /
+     set_rif(sin(t1f)) on the widened double. The rl transcendentals and
+     sqrtrl stay VC-only (neither game runs them).
+  c. remr (0x68.3): rtl/cpu/i960/i960_fprem.sv, new. Restoring division of
+     the significands, a quotient bit a cycle, keeping only the remainder;
+     then normalised a bit a cycle (the exponent counts down from y's).
+     Exact: nothing rounds (fmod's remainder is always representable). C99
+     F.9.7.1 for the specials; the units' flush for subnormals (§8.1). Up to
+     ex - ey + 53 cycles (2,048 measured over doubles; Sega Rally's take
+     ~3). Its operands are held on fp_b / fp_a through T_FP, as the
+     sequencer's are; the result is read in done's cycle (no 64-bit result
+     register: 192 ALUT / 71 registers, against 297 / 144 with one).
+  Everything new is gated by F2A (a parameter) and ta_on (F2A && vc_en):
+  with F2A 0 every new term is a constant 0 -- the main core's i960 (VC 1,
+  FR 0, F2A 0) is the logic it was; with vc_en low (VF2, game 0) none of it
+  can start.
+
+*BENCHES:*
+  * test_i960_fprem (new): i960_fprem against the host's fmod with the
+    flush modelled, 1,000,841 vectors -- 841 specials x specials (zeros,
+    infinities, NaN, subnormals, the extremes, 2 pi, 360), doubles over the
+    whole exponent range (differences to 2,046), widened singles, exact
+    multiples k*y and their neighbours, |x| next to |y|, the largest ratio
+    (DBL_MAX by the smallest normals) -- 0 mismatches; max 2,048 cycles.
+    Seven planted faults: five caught (thousands of mismatches each), two
+    equivalent and proved so (an early exit when ex == ey and mx < my;
+    d[53] for d[54] as the borrow).
+  * test_i960_top_fx (new; FR 1, F2A 1, VC 0, vc_en high, +fx): a third of
+    the FP mix is cvtzril / cpysre / atanr / sinr / remr / flushreg, a
+    quarter of the registers seeded with edge values (+-0, +-inf, NaN, a
+    subnormal, +-FLT_MAX, FLT_MIN, 1, pi, 2 pi, 360, 2^16, 2^24, pi/2);
+    the reference computes atanr / sinr with libm (a one-ulp libm miss
+    adopted, as R845) and remr with fmod. Seeds 1 / 2 / 3, 20,000 programs
+    each: 0 mismatches; retired cpysre 4,861, cvtzril 4,945, atanr 5,319,
+    sinr 4,812, remr 7,107; no one-ulp case arose. FORCED OFF -- +fx on the
+    FR-only build (obj_i960_top_fr): FAIL (MODULE TRAP on remr). Six
+    planted faults, each FAIL: remr's decode dropped, atanr on sin's entry,
+    remr's operands swapped, cpysre / cvtzril left VC-only, the sequencer's
+    result written unnarrowed.
+  * Unchanged, output IDENTICAL to 8ec3d63 line for line (cycle counts and
+    CPI included): test_i960_top, _irq, _lat, _vc, _fr, test_i960_regs,
+    test_i960_regs_miter, test_i960_rom; and the F2A build with vc_en low
+    gives test_i960_top's default output exactly.
+  * lint_top clean (2A; M2_NO_2A, the main core; M2_2A_FPU=0); lint_idx: the
+    same 75 candidates as 8ec3d63, none in the i960; quartus_map 17.0
+    --analyze_file i960_fprem.sv, i960_top.sv, Model2.sv: 0 errors.
+  * WHOLE-CORE BOOT, SEGA RALLY (m2_boot_harness A2X=1, new: the program
+    extension at word 0x1300000 as XTRA2 puts it, GAME_PROGXB_2A, FR + F2A,
+    vc_en high; the srallyc image from rom_csum.py): R869's core runs 4 M
+    instructions to frame 63 with no trap, through 0x5a2dc4 at frame 20,
+    and ends in the loop at 0x5a379c where MAME sits at 1-2 s (112 s wall).
+    R865's core (A2X_F2A=0): TRAPPED / HALTED AT 0x5a2dc4, frame 20,
+    instruction 1,744,500 -- the board's black screen, reproduced.
+  * WHOLE-CORE BOOT, ZERO GUNNER (same harness, zeroguna image with the
+    0x700 patch): R865's core runs 20 M instructions, 225 frames (~3.7 s),
+    with no trap -- but never reaches 0x554590: 48% of its time is in a
+    loop at 0x5622xx that MAME is in at 1 s and has left by 2 s. Whether
+    that is the harness (the silent sound stand-in, the 315-5881 reading 0)
+    or the core is NOT settled; so the simulation neither shows nor rules
+    out the trap at 2.57 s.
+
+*AREA, quartus_map 17.0, whole design, the 2A build (one map each):*
+
+     build                         ALMs est.  ALUT    regs    block bits
+     8ec3d63                         39,110   56,046  46,740  4,343,411
+     this (F2A)                      39,464   56,539  47,014  4,367,987
+
+  +354 ALMs estimated, +493 ALUT, +274 registers, +24,576 bits (the
+  sequencer's 512 x 32 ROM and 128 x 64 registers: ~4 M10K, R866's 540 of
+  553 -> ~544). By entity: i960_fprem 192 ALUT / 71 registers; i960_fptrans
+  169 / 201; i960_top's own decode and muxes ~+118; the units' operand
+  muxes fpadd +28, fpdiv +45, fpmul +7; fpmisc -85 and alu +23 (synthesis
+  perturbation). The first i960_fprem, with a registered result, mapped to
+  39,525. The 8ec3d63 row equals R866's last.
+
+*What the board must show (one 2A build with M2_2A_FPU, the default):*
+  1. Sega Rally past 0.14 s: title, attract, its demo race from ~23.5 s
+     (atanr / remr / cpysre), coin, start, a race.
+  2. Zero Gunner past 2.57 s: the logo by ~5 s, 3D attract by ~15 s, a
+     mission played. The telemetry build of the R865 core (FR only) should
+     read Sega Rally halted at IP 0x5a2dc4 and Zero Gunner at IP 0x554590,
+     trap_op 0x6c both. If Zero Gunner's IP is elsewhere, its black screen
+     has a second cause (see the boot simulation above).
+  3. VF2 and Virtua Cop 2 unchanged.
+
+*Not verified:* the fit, timing (the sequencer's adder path, R845 6) and the
+board; Sega Rally's later stages by play (no scripted run finished a stage;
+the attract demo drove them); Zero Gunner's and Virtua Cop 2's test modes
+(Virtua Cop 2's 0.3 s test press did not enter its menu; the script now
+holds it 1 s, which entered Sega Rally's); Zero Gunner's whole-core boot
+past 2.57 s. MAME ran at 37-45% speed under the machine's load: each 600 s
+run took ~25 minutes.
