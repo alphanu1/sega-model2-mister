@@ -36954,3 +36954,22 @@ zerogun.zip):*
      that game, with small differences in play before it.
   5. Not run: any whole-core simulation of the three (by instruction);
      quartus_map of the whole core (a fit was running).
+
+**R863 -- LINK PLAY OVER TCP/IP (Ben: "not for now", but for BOTH cores):
+NOTED, NOT PLANNED YET.** Ben's Daytona recomp
+(github.com/alphanu1/daytona-arcade-recomp) links cabinets over TCP:
+src/runtime/comm_board.{h,cpp} transplants MAME's m2comm in its
+M2COMM_SIMULATION mode (BSD-3, Ariane Fugmann; the board's Z80 program
+EPR-16726 is not run, its protocol is): a 16 KB shared RAM the game maps at
+0x01a00000, the CN / FG registers, a ring of cabinets (each sends to the
+next), a numbering token from the master, then each frame's race-data block
+(frame offset 0x1c0) passed on, and a vsync token; the host supplies a
+non-blocking transport (TCP). Shape for MiSTer, small in the FPGA: the core
+exposes only the shared RAM (in DDR3 rather than 13+ M10K -- main sits at
+~529-533 of 553 M10K, 2A at ~539) and the CN/FG registers through the HPS
+bridge, and a small Linux helper on the MiSTer (like MidiLink) runs the
+ring protocol and the TCP sockets; estimated ~100-200 ALM in the core. A
+UART path is too slow (a frame's block x 57.5 Hz is tens of KB/s against
+115,200 baud). Applies to the original core (Daytona Revision A's link
+board) and to 2A games with a link (Sega Rally among them). Behind its own
+compile-time switch when it is built.
