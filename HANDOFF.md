@@ -4,7 +4,8 @@
 
 ON THE BOARD: s1205 (f7c5a0d, M2_PROBE telemetry, M2_NO_2A_RALLY;
 build/Model2A_20261017_s1205_sndfix.rbf, 4c532818...; 40,997 ALM, 539 M10K,
-clk_sys -0.243). Ben: "we have sound!" The fault was the board dropping the
+clk_sys -0.243). Ben: "we have sound!" -- but the effects are ~1% of the
+music's level and the mix "not right" (R874, open). The fault was the board dropping the
 SDRAM byte enables (R82) and the 2A sound board trusting them; byte writes
 are now read-merge-write (R871). Also in s1205: Virtua Cop 2's guns (R870,
 not yet tried on the board), the area work (R866), the TGP probe. NOT in

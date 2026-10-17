@@ -37602,6 +37602,10 @@ writes of 1,772,621, SCSP writes 98.2% in MAME's order, PASS (6 s).
 M10K, clk_sys -0.243 ns): THE CHECK READS 0 WRONG; the output peak reaches
 14,854 (non-zero in 695 of 4,075 T records in 50 s from load); VF2 at 57.5
 fps. Ben: "we have sound!" -- CONFIRMED.*
+*BUT (Ben, same build): "I don't think it's right" and the sound effects are
+"at a very low volume", "like 1% compared to music". The music plays; the
+effects are heard, ~40 dB down. R859's bench compared music levels only --
+no effect was ever compared with MAME. Open: R874.*
 
 *The lockup (same capture session, s1203):* VF2 froze in attract (Lau's
 close-up, 0 fps). Over 12 s every C record was IP 0x00007dc4 with the TGP
