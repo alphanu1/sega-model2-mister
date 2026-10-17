@@ -1807,9 +1807,20 @@ test_mb86233_core: obj_mb86233_core/Vmb86233_core
 	@echo "== test mb86233_core (the ASSEMBLED core: directed + lockstep)"
 	@./obj_mb86233_core/Vmb86233_core
 
+# R866: the TGP register file with rf in LUT RAM against the flip-flop one.
+obj_mb86233_regs_miter/Vmb86233_regs_miter: $(TGP_PKG) $(TGP)/mb86233_regs.sv sim/tgp/ref/mb86233_regs_ff.sv \
+                                            sim/tgp/mb86233_regs_miter.sv sim/tgp/tb_mb86233_regs_miter.cpp
+	$(VBUILD) --top-module mb86233_regs_miter -CFLAGS "-O2" $(TGPFLAGS) \
+	  --Mdir obj_mb86233_regs_miter -o Vmb86233_regs_miter $(TGP_PKG) $(TGP)/mb86233_regs.sv \
+	  sim/tgp/ref/mb86233_regs_ff.sv sim/tgp/mb86233_regs_miter.sv sim/tgp/tb_mb86233_regs_miter.cpp
+test_mb86233_regs_miter: obj_mb86233_regs_miter/Vmb86233_regs_miter
+	@echo "== test mb86233_regs_miter"
+	@./obj_mb86233_regs_miter/Vmb86233_regs_miter +seed=1
+	@./obj_mb86233_regs_miter/Vmb86233_regs_miter +seed=5
+
 .PHONY: test_tgp
 test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_alu_short test_mb86233_agu \
-          test_mb86233_regs test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
+          test_mb86233_regs test_mb86233_regs_miter test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
           test_mb86233_seq test_mb86233_core test_m2_geo_xform
 
 test_m2_backup: obj_backup/Vm2_backup

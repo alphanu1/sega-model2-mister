@@ -296,7 +296,7 @@ split_done:
     REGS(i0) = st["I0"]; REGS(i1) = st["I1"]; REGS(sp) = st["SP"]; REGS(mask) = st["MASK"];
     REGS(sft) = st["SFT"]; REGS(rpc) = st["RPC"];
     REGS(vsm) = st["VSM"] & 7; REGS(vsmr) = (8u << (st["VSM"] & 7)) - 1;
-    REGS(rf)[3] = st["BANK"];
+    REGS(rf3) = st["BANK"];                           // R866: rf 3 is a flop
     CORE(reg_m) = st["M"];
     TGP(sincos_base) = st["SINCOS"]; TGP(inv_base) = st["INV"]; TGP(isqrt_base) = st["ISQRT"];
     for (int i = 0; i < 4; ++i) TGP(atan_base)[i] = st["ATAN" + std::to_string(i)];

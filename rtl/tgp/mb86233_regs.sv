@@ -127,7 +127,14 @@ module mb86233_regs (
   logic [15:0] sp;
   logic [7:0]  rpc;
   logic [2:0]  vsm;
-  logic [31:0] rf [0:15];            // 0x20-0x2f, indexed by addr[3:0]
+  // R866: rf 0x20-0x2f in LUT RAM (MLAB, an asynchronous read), except rf 3
+  // -- the memory bank, read all the time -- in flops. A valid bit per word,
+  // cleared by reset, stands for the reset's clear: a word not written since
+  // reads 0, as the flip-flop file did (sim/tgp/tb_mb86233_regs_miter.cpp).
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] rf [0:15];   // indexed by addr[3:0]
+  logic [31:0] rf3;
+  logic [15:0] rf_ok;
+  logic [31:0] rf_rd;
 
   // POWER-ON CONTENTS ARE ZERO. Sixteen 32-bit registers are flip-flops on the
   // device and come up cleared; MAME's RF space is zero-filled RAM. Verilator
@@ -144,8 +151,7 @@ module mb86233_regs (
   // arrays follow the same pattern and a reset on a wider one would cost RAM
   // inference. An `initial` is what Quartus uses, and it must NOT be wrapped in a
   // synthesis-pragma comment — the linter honours those and would skip it.
-  integer zr;
-  initial for (zr = 0; zr < 16; zr = zr + 1) rf[zr] = 32'd0;
+  // R866: the valid bits (reset, and zero at power-on) now carry this.
 
   // --------------------------------------------------------------- read
   //
@@ -167,7 +173,9 @@ module mb86233_regs (
     rd_unimpl = 1'b0;
     if (in_rf) begin
       // rf 1 is the input FIFO, not a register.
-      rd_data = (rd_addr[3:0] == 4'd1) ? rf_fifo_rdata : rf[rd_addr[3:0]];
+      rd_data = (rd_addr[3:0] == 4'd1) ? rf_fifo_rdata
+              : (rd_addr[3:0] == 4'd3) ? rf3
+              : rf_ok[rd_addr[3:0]]    ? rf_rd : 32'd0;
     end else begin
       unique case (rd_addr)
         6'h00: rd_data = {16'd0, b0};
@@ -204,7 +212,12 @@ module mb86233_regs (
   // written here and read by nobody. `copro_tgp_bank_w` forms the base of
   // EVERY banked memory access from it: bits 23:16 supply the window and
   // bits 23:22 decide whether the window exists at all. Study R133.
-  assign bank_reg = rf[3];
+  assign bank_reg = rf3;
+
+  // R866: the RAM's ports. A write in reset is harmless: its word stays
+  // invalid (rf_ok is held clear) until written again.
+  assign rf_rd = rf[rd_addr[3:0]];
+  always_ff @(posedge clk) if (wr_rf) rf[wr_addr[3:0]] <= wr_data;
 
   // c0/c1 live in the sequencer; forward the write rather than holding it.
   assign c0_we = wr_en && (wr_addr == 6'h0c);
@@ -230,7 +243,6 @@ module mb86233_regs (
     end
   end
 
-  integer k;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       // Reset values from device_reset: everything zero except the counters,
@@ -241,9 +253,10 @@ module mb86233_regs (
       sp <= 16'd0; mask <= 16'd0;
       sft <= 8'd0; rpc <= 8'd1;
       vsm <= 3'd0; vsmr <= 16'd7;                // (8 << 0) - 1
-      for (k = 0; k < 16; k = k + 1) rf[k] <= 32'd0;
+      rf3 <= 32'd0; rf_ok <= 16'd0;
     end else begin
-      if (wr_rf) rf[wr_addr[3:0]] <= wr_data;
+      if (wr_rf) rf_ok[wr_addr[3:0]] <= 1'b1;
+      if (wr_rf && wr_addr[3:0] == 4'd3) rf3 <= wr_data;
 
       if (wr_en && !wr_rf) begin
         unique case (wr_addr)
