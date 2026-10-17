@@ -11,6 +11,9 @@
 4. LINK PLAY for Sega Rally on this core AND Daytona Revision A on main (R863:
    comm-board RAM in DDR3 + a Linux helper running the recomp's protocol;
    Sega Rally's frame offset and Twin/DX link default to check in MAME).
+5. VISUAL BUGS: textures and polygons on the 2A games (Ben: "a few visual
+   bugs" in VF2 since s1164; to list with screenshots). Known lead: R852's
+   1.6% of VF2's polygons refused as non-finite in the bench, none in MAME.
 Also open: Virtua Cop 2's gun aim (315-5649 serial), Zero Gunner's 315-5881.
 
 ## 2026-10-17 (evening): model2a -- the 2A sound board in the core; SCSP redesigned (R858, R859)
