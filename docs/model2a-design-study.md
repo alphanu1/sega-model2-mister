@@ -37099,3 +37099,73 @@ power-up content.
 *NOT DONE:* the 68000's wait states measured against a real board; the
 SDRAM latency the board sees on ports 5-7 under load (the engine needs it
 low: at 20-400 clocks its mean is ~3,300 a sample, past real time).
+
+**R865 -- SEGA RALLY AND ZERO GUNNER BLACK AT 0 FPS (s1192): BOTH TRAP ON
+flushreg IN THEIR FIRST INSTRUCTIONS. flushreg ALONE (i960_top FR) NOW LIVE
+FOR THE THREE 2A GAMES (M2_2A_FPU). NOT YET FITTED.**
+(Board, s1192 = model2a 6f55e59: VF2 and Virtua Cop 2 run at 57.5 fps --
+so R862's program extension and bridge window work; Sega Rally and Zero
+Gunner black, 0 fps, for 2 minutes. MRA parts checked against the zips.)
+
+*Believed (R862):* the three games need only their MRA, inputs and layout;
+the i960 forms were not re-checked for them -- R852's form check was VF2's.
+
+*Found (MAME 0.289, static scan + breakpoints; no simulation):*
+  1. sim/io/vf2_formscan.py over each program: Sega Rally holds 372
+     candidates of 23 forms this core traps on in the 2A build (VCOP_FPU is
+     0 there), Zero Gunner 151 of 16, Virtua Cop 2 36 of 9 (none executed --
+     it runs).
+  2. sim/io/mame_m2_bphits.lua with a breakpoint on every candidate:
+     FLUSHREG IS EXECUTED AT 0x005C0 BY SEGA RALLY (frame 4) AND AT 0x00670
+     BY ZERO GUNNER (frame 0) -- the boot. On this core that is a trap and a
+     halted i960: a black screen at 0 fps, exactly R844's Virtua Cop 1 fault.
+     flushreg is one of i960_top's VC forms (R844), in the original core for
+     Virtua Cop and left out of the 2A build with the rest of VCOP_FPU (R852:
+     the trig microcode, 172 ALUT + 24,576 bits).
+     Over the whole session (220 s each: boot, attract, coins at 60 s and
+     150 s, starts, play -- Sega Rally with the accelerator held and the
+     wheel swept) NO OTHER CANDIDATE IS EVER HIT: flushreg once per game,
+     nothing else of the 372 / 151 (calls, cvtilr, atanr, logr, sinr, the rl
+     transcendentals, cvtzril, cpysre, movre ...). INFERRED for code those
+     runs never reached (later stages, test mode).
+  3. Ruled out on the way:
+     * MiSTer's <patch> (Main_MiSTer support/arcade/mra_loader.cpp): the
+       whole <rom> is assembled in one buffer (rom_checksz reallocs) and
+       rom_patch memcpys at the offset from its start once the parts are in
+       -- our 0x700 in the image, little-endian bytes 04 00 00 08 = MAME's
+       ROM[0x700/4] = 0x08000004. Right as written.
+     * Sega Rally's copro data: its TGP reads none at boot (0 copro-data
+       reads in the first 3 s); the TGP program is not even uploaded until
+       frame 81 (1,665 words) -- frames 12-81 are a frame-count delay polling
+       videoctl (0x98000c), not 0x980004. The two TGP windows replayed
+       through m2_copro (4096 words, SUBNORM): Zero Gunner frames 12-102 (204
+       in, 44 out, 104 io reads) and Sega Rally 81-171 / 83-143 -- PASS,
+       bit-exact against MAME.
+     * The comm board: Sega Rally reads 0x01a14000 once and writes it twice;
+       it does not wait on it. The drive board is write-only from the i960
+       (port E). Backup RAM stays inside 0x01d00000-0x01d03fff.
+     * The EEPROM: Sega Rally reads 18 words (all 0xFFFF fresh), writes its
+       defaults and polls ready after each write; Zero Gunner likewise. The
+       93C46 is benched against MAME's device (R852) including that polling.
+     * Zero Gunner's 315-5881 reads 0 here, as in R862's zeroed MAME run
+       (which boots and plays a credit). The i8251: Zero Gunner polls status
+       for TxRDY (0x81 / 0x85) before each byte, never reads data.
+
+*FIX:* i960_top has a new parameter FR -- flushreg's dispatch live while
+vc_en, without the rest of VC (no transcendental microcode, no M10K; the
+register file has always done the work, R844). Model2.sv: M2_2A_FPU
+(default 1) builds VC = VCOP_FPU (0 on 2A) and FR = FPU2A, vc_en =
+(VCOP_FPU & is_vcop) | (FPU2A & (is_srally | is_vcop2 | is_zerogun)). VF2
+(game 0) keeps vc_en low: its core is as before. A first cut turned on the
+whole of VC (+3 M10K, ~172 ALUT, R852) and was replaced once the breakpoints
+showed flushreg is all either game needs. Cost now: one AND-OR in the
+dispatch, two flops of sync; not mapped.
+Bench: test_i960_top_fr (new: the whole-CPU lockstep on an FR=1, VC=0 build
+with vc_en high, the reference's flushreg live -- 200 programs, 0
+mismatches on seeds 1 / 7 / 11, 27 / 7 / 36 flushregs retired; FR forced
+off: FAIL); test_i960_top and test_i960_top_vc unchanged, PASS. lint_top
+clean (2A, M2_NO_2A, M2_2A_FPU=0); quartus_map --analyze_file Model2.sv,
+i960_top.sv: 0 errors.
+
+*What the board must show:* Sega Rally and Zero Gunner past the black
+screen (attract, 57.5 / 28.75 fps); VF2 and Virtua Cop 2 unchanged.

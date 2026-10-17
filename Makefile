@@ -788,6 +788,15 @@ obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960
 	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
 	  --Mdir obj_i960_top_vc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
+# R865: flushreg alone (FR=1, VC=0) with vc_en high (+fr): the 2A games' form
+.PHONY: test_i960_top_fr
+test_i960_top_fr: obj_i960_top_fr/Vi960_top
+	@echo "== test i960_top FR (flushreg alone, R865)"
+	./obj_i960_top_fr/Vi960_top +fr $(TEST_ARGS)
+obj_i960_top_fr/Vi960_top: $(TOP_RTL) $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GFR=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_top_fr -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
 # Render a whole frame out of m2_video, from the tile/char/palette images our
 # own i960 built. Skips when they are absent.
 test_m2_video_frame: obj_m2_vf/Vm2_video

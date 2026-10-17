@@ -44,6 +44,7 @@ struct Cpu {
   bool fp_denorm_operand = false;
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
+  bool ref_fr = false;            // R865: i960_top FR with vc_en -- flushreg alone
   // R845: sinrl / cosrl / tanrl / atanrl computed with the host's libm, as
   // MAME does. The module returns the correctly rounded value; libm is not
   // correctly rounded on ~0.2% of arguments, so a one-ulp difference on
@@ -508,7 +509,7 @@ struct Cpu {
 
         // ---- R844: flushreg (0x66.d), live in the module only with VC and
         // vc_en (Virtua Cop runs it at boot): MAME's flushreg on the cache.
-        if (ref_vc && d.op == 0x66 && d.op2 == 0xd) {
+        if ((ref_vc || ref_fr) && d.op == 0x66 && d.op2 == 0xd) {
           rf.flushreg();
           IP = ip_next;
           break;

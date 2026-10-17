@@ -113,12 +113,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_RALLY
 `define M2_2A_RALLY
 `endif
-// R865: M2_2A_FPU, the i960 forms Virtua Cop runs and VF2 never did (flushreg,
-// cvtzril, cpysre, sqrtrl, sinrl / cosrl / tanrl / atanrl: i960_top VC),
-// live for Sega Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally
-// executes flushreg at 0x5c0 and Zero Gunner at 0x670, in their first
-// instructions; without these forms both trap there (black screen, R844's
-// Virtua Cop fault again). 1 by default; 0 leaves them out (VF2 only).
+// R865: M2_2A_FPU, the i960's flushreg (i960_top FR: the one VC form without
+// the rest of VC -- no transcendental microcode, no M10K), live for Sega
+// Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally executes it at
+// 0x5c0 and Zero Gunner at 0x670, in their first instructions; without it
+// both trap there (black screen, R844's Virtua Cop fault again). MAME, 220 s
+// each with a breakpoint on every candidate of every form this core traps
+// on: flushreg is the ONLY one either game executes. 1 by default; 0 leaves
+// it out (VF2 only).
 `ifndef M2_2A_FPU
 `define M2_2A_FPU 1
 `endif
@@ -2594,7 +2596,7 @@ logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
                                            | (FPU2A & (is_srally | is_vcop2 | is_zerogun))};
-i960_top #(.VC(VCOP_FPU | FPU2A)) u_i960 (
+i960_top #(.VC(VCOP_FPU), .FR(FPU2A)) u_i960 (
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),

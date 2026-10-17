@@ -51,6 +51,10 @@ module i960_top #(
   // only with VC = 1, and then live only while vc_en (the game ID says
   // Virtua Cop): with vc_en low they trap exactly as before. Needs RL.
   parameter bit VC     = 1'b0,
+  // R865: flushreg (0x66.d) ALONE, live while vc_en, without the rest of VC
+  // (no transcendental microcode, no M10K). Sega Rally and Zero Gunner run
+  // it once at boot and no other form VC adds (MAME, 220 s each).
+  parameter bit FR     = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
   parameter int unsigned IC_LINES = 512
@@ -707,6 +711,7 @@ module i960_top #(
   logic [1:0] tr_entry;                          // read only when VC
   /* verilator lint_on UNUSEDSIGNAL */
   wire  vc_on = VC && RL && vc_en;
+  wire  fr_on = (VC || FR) && vc_en;               // R865: flushreg's dispatch
   always_comb begin
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
@@ -1631,7 +1636,7 @@ module i960_top #(
                 we <= 1'b1;
                 mw_i <= 3'd1;
                 ts   <= T_MULTI;
-              end else if (vc_on && (d_op == 8'h66) && (d_op2 == 4'hd)) begin
+              end else if ((vc_on || fr_on) && (d_op == 8'h66) && (d_op2 == 4'hd)) begin
                 // R844: flushreg -- Virtua Cop runs it at boot (instruction
                 // 1,907, IP 0x6e0) and this trapped, halting the i960 before
                 // anything reached the screen. i960_regs has always done the

@@ -111,6 +111,7 @@ uint64_t gate_arms = 0;
 // mix exists to cover instruction forms. Use it for fetch and cache work.
 bool loop_mode = false;
 bool no_trans = false;  // R845: +notrans -- the same programs with cmprl for each transcendental
+bool use_fr = false;   // R865: +fr -- an FR=1 build (VC=0); vc_en high; flushreg live, the VC FP forms still trap
 bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
 bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
@@ -522,6 +523,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
     if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
     if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
+    if (!std::strcmp (argv[i], "+fr"))        use_fr = true;  // R865
     if (!std::strcmp (argv[i], "+notrans"))   no_trans = true;  // R845
     if (!std::strcmp (argv[i], "+directed"))  directed  = true;
     if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
@@ -557,6 +559,7 @@ int main(int argc, char **argv) {
     dequeued_total += ref.intr_dequeued;
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
     ref.ref_vc = use_vc;
+    ref.ref_fr = use_fr;
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -947,7 +950,7 @@ int main(int argc, char **argv) {
     // and it only appeared once a program actually left a line asserted.
     irq_state = 0; dut->irq = 0; pend_valid = false; pend2_valid = false;
     dut->rst_n = 0; dut->bus_ack = 0;
-    dut->vc_en = use_vc;
+    dut->vc_en = use_vc || use_fr;
     for (int i = 0; i < 4; i++) tick();
     // NO LONGER POKED. The module now walks the boot record itself in T_BOOT --
     // mem[0] to SAT, mem[4] to PRCB, mem[12] to the IP -- so it arrives at
@@ -1503,7 +1506,7 @@ int main(int argc, char **argv) {
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu, long-real (R836): %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites, (unsigned long long)rlany);
-  if (use_vc) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
+  if (use_vc || use_fr) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
   if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
   if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
   if (use_vc) std::printf("  R845 forms retired: sinrl %llu, cosrl %llu, tanrl %llu, atanrl %llu; one-ulp libm differences taken %llu\n",
