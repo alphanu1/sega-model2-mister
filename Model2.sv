@@ -105,6 +105,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_SOUND
 `define M2_2A_SOUND 1
 `endif
+// R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
+// m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
+// On by default; VERILOG_MACRO "M2_NO_2A_RALLY=1" (or -DM2_NO_2A_RALLY to
+// lint) leaves the block and the OSD lines out -- the analog channels then
+// read Sega Rally's rest values and the shifter stays in neutral.
+`ifndef M2_NO_2A_RALLY
+`define M2_2A_RALLY
+`endif
 `else
 `ifndef M2_2A_SOUND
 `define M2_2A_SOUND 0
@@ -323,6 +331,13 @@ localparam CONF_STR = {
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
 	"O[54],Right stick,Pedals only,Pedals+steer;",      // R831: Pedals+steer = R816 (a wheel): X steers, Y still the pedals
+`elsif M2_2A_RALLY
+	// R862: the same four, the same bits, shown only for Sega Rally
+	// (status_menumask bit 2).
+	"h2O[28],Pedals,Normal,Swapped;",
+	"h2O[30:29],Steering,3/4,Full,5/4,Half;",
+	"h2O[51:50],Steering smoothing,Off,Light,Wheel;",
+	"h2O[54],Right stick,Pedals only,Pedals+steer;",
 `endif
 	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
 	// each quad's level moves from its footprint's major axis (R828, the
@@ -368,6 +383,12 @@ localparam bit M2A = 1'b0;
 localparam bit M1SOUND = (`M2_M1SOUND != 0);
 localparam bit IOZ80   = (`M2_IOZ80 != 0);
 localparam bit SND2A   = !M1SOUND && (`M2_2A_SOUND != 0);   // R859
+`ifdef M2_2A_RALLY
+localparam bit RALLY2A = M2A;                                 // R862
+`else
+localparam bit RALLY2A = 1'b0;
+`endif
+wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
 wire        forced_scandoubler;
 wire  [1:0] buttons;
@@ -407,7 +428,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({14'd0, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines
+	.status_menumask({13'd0, a2_rally_menu, vc_gun, crt_mra}),   // R862: bit 2 Sega Rally's lines   // R801: the CRT MRA's own Video line; R839: the gun lines
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -756,10 +777,21 @@ localparam logic [26:0]     MRA_END_93  = 27'h2BE0000;            // the '93 ima
 // No copro data (MAME: ROMREGION_ERASE00 -- the TGP's reads of it answer 0)
 // and no program second half: the bridge reads the program linearly.
 // Bytes 0x2540000-0x2C40000 are never loaded; the 2A board RAM (256 KB)
-// lives there, at word 0x12A0000.
+// lives there, at word 0x12A0000 (R862: and the extension, below).
 localparam logic [26:0]     XTRA_FROM_2A = 27'h2540000;
 localparam logic [SDR_AW:1] GAME_SAMP_2A = SDR_AW'(32'h1A00000);   // byte 0x3400000, 8 MB
 localparam logic [SDR_AW:1] GAME_SND_2A  = SDR_AW'(32'h1260000);   // byte 0x24C0000, 512 KB
+// R862: THE 2A EXTENSION, appended after VF2's image (whose slots stay where
+// they are) and moved by the loader's second remap (XTRA2) into the 2A SDRAM
+// hole after the sound RAM, below GAME_WORK (0x1300000-0x161FFFF free):
+//   MRA 0x2D40000  i960 program 512 KB-2 MB, 1.5 MB -> word 0x1300000
+//   MRA 0x2EC0000  TGP copro data, 4 MB         -> word 0x13C0000 (to 0x15C0000)
+// Sega Rally carries both (0x32C0000 bytes), Virtua Cop 2 and Zero Gunner the
+// program (0x2EC0000), VF2 neither (0x2D40000).
+localparam logic [26:0]     XTRA2_FROM_2A  = 27'h2D40000;
+localparam logic [SDR_AW:1] GAME_PROGX_2A  = SDR_AW'(32'h1300000);   // byte 0x2600000
+localparam logic [SDR_AW:1] GAME_PROGXB_2A = GAME_PROGX_2A - SDR_AW'(32'h0040000);   // so that + the CPU's word lands in it
+localparam logic [SDR_AW:1] GAME_COPRO_2A  = SDR_AW'(32'h13C0000);   // byte 0x2780000
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -1277,7 +1309,7 @@ always_comb begin
 	// waits; the walk has a whole frame and can take its turn.
 	// PORT 9 IS THE COPROCESSOR'S ALONE (R167). The walker moved to port 4.
 	p_req[9]  = tgp_dat_req_r;
-	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : GAME_COPRO)
+	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : (M2A ? GAME_COPRO_2A : GAME_COPRO))   // R862
 	          + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
 	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
 	// which keeps p_we/p_din out of the arbiter's command decode.
@@ -1567,7 +1599,9 @@ wire mem_ready_s = mem_ready_sy[1];
 // internally — and it ASKS the host to stop rather than stopping it, which is why
 // it buffers into a FIFO with margin instead of trusting the wait to take effect.
 m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(M2A ? XTRA_FROM_2A : MRA_END_93),
-               .XTRA_TO(M2A ? GAME_SAMP_2A[SDR_AW:1] : GAME_POLYX[SDR_AW:1])) u_loader (   // R725
+               .XTRA_TO(M2A ? GAME_SAMP_2A[SDR_AW:1] : GAME_POLYX[SDR_AW:1]),
+               .XTRA2_FROM(M2A ? XTRA2_FROM_2A : 27'h7FF_FFFF),                  // R862
+               .XTRA2_TO(M2A ? GAME_PROGX_2A[SDR_AW:1] : SDR_AW'(0))) u_loader (   // R725
 	.clk(clk_sys), .rst(~mem_rst_n),
 	.mem_ready(mem_ready_s),   // R571: synchronised -- see below
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -2484,7 +2518,24 @@ wire is_vcop = (game_id[6:0] == 7'd1);
 // R835: 2 is Desert Tank -- the same board as Daytona, a 512 KB program (its
 // second half at GAME_POLYX, as Virtua Cop's) and its own controls (below).
 wire is_desert = (game_id[6:0] == 7'd2);
-wire prog_ext  = !M2A & (is_vcop | is_desert);   // program 0x40000-0x7FFFF from GAME_POLYX (R852: 2A reads it linearly)
+// R862: THE MODEL 2A GAMES, FROM 0x10 (clear of the original core's 1 and 2;
+// VF2 is 0, as its MRA always sent). Each MRA's comment has its layout.
+//   0x10 Sega Rally Championship (srallyc)  program 1 MB, copro data 4 MB,
+//        steering / pedals / shifter on the 315-5649 (m2_2a_inputs)
+//   0x11 Virtua Cop 2 (vcop2)               program 2 MB, two triggers
+//   0x12 Zero Gunner (zeroguna)             program 1 MB, two sticks
+wire is_srally  = M2A && (game_id[6:0] == 7'h10);
+wire is_vcop2   = M2A && (game_id[6:0] == 7'h11);
+wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
+// R726 / R835: program 0x40000-0x7FFFF from GAME_POLYX. R852: the 2A board
+// reads its 512 KB slot linearly; R862: and 0x80000-0x1FFFFF from the
+// extension (GAME_PROGX_2A) for the three games whose program is larger.
+wire prog_ext  = M2A ? (is_srally | is_vcop2 | is_zerogun) : (is_vcop | is_desert);
+assign a2_rally_menu = RALLY2A & is_srally;
+// R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
+// other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
+logic a2_copro_rom;
+always_ff @(posedge clk_sys) a2_copro_rom <= is_srally;
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -2632,7 +2683,7 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),
-	.prog_ext(prog_ext), .base_progx(GAME_POLYX),   // R726, R835
+	.prog_ext(prog_ext), .base_progx(M2A ? GAME_PROGXB_2A : GAME_POLYX),   // R726, R835; R862
 	.base_board(GAME_BOARD), .base_char(char_base), .base_buffer(GAME_BUFFER),
 	.base_pal3d(GAME_PAL3D), .base_xlat3d(GAME_XLAT3D),
 	.base_texs0(GAME_TEXS0), .base_texs1(GAME_TEXS1), .base_luma(GAME_LUMA), .col_inval(cpu_col_inval),
@@ -3944,8 +3995,9 @@ always_ff @(posedge clk_sys) begin
 	// per-owner qualification, plus a dead cycle on owner change. Same family as
 	// R144 on the write side.
 	tgp_dat_ack_r   <= p_ack[9] & tgp_dat_req_r;
-	// R852: 2A has no copro data ROM (MAME ROMREGION_ERASE00): those reads are 0
-	tgp_dat_rdata_r <= (M2A && !tgp_dat_is_buf_r) ? 32'd0 : p_dout[9][31:0];
+	// R852: 2A has no copro data ROM (MAME ROMREGION_ERASE00): those reads are 0.
+	// R862: except Sega Rally's, whose 4 MB are at GAME_COPRO_2A.
+	tgp_dat_rdata_r <= (M2A && !a2_copro_rom && !tgp_dat_is_buf_r) ? 32'd0 : p_dout[9][31:0];   // R862
 	tgp_tbl_req_r   <= tgp_tbl_req;
 	tgp_tbl_addr_r  <= tgp_tbl_addr;
 	tgp_dat_req_r   <= tgp_dat_req;
@@ -5708,23 +5760,21 @@ end else begin : g_noioboard
 	if (M2A) begin : g_5649
 		// R852: THE 2A I/O, the 315-5649 at 0x01c00000-0x01c0001f (MAME
 		// model2a_crx_mem; 0x01c00040 is a write MAME drops, as this does).
-		// Inputs as MAME's model2crx / vf2 ports, active low:
-		//   IN0  0 coin 1, 1 coin 2, 2 test, 3 service, 4 start 1, 5 start 2
-		//   IN1  0 punch, 1 kick, 2 guard, 3 unused, 4 down, 5 up, 6 right,
-		//        7 left (player 1, joystick 0); IN2 the same for player 2
-		//   SW   SW3, all unused by VF2 (0xFF)
-		// MiSTer: joystick bits 0 right, 1 left, 2 down, 3 up, then the J1
-		// line: 4 Punch, 5 Kick, 6 Guard, 7 Start, 8 Coin, 9 Test, 10 Service.
-		wire [7:0] a2_in0 = ~{2'b00, joystick_1[7], joystick_0[7], joystick_0[10],
-		                      joystick_0[9], joystick_1[8], joystick_0[8]};
-		wire [7:0] a2_in1 = ~{joystick_0[1], joystick_0[0], joystick_0[3], joystick_0[2],
-		                      1'b0, joystick_0[6], joystick_0[5], joystick_0[4]};
-		wire [7:0] a2_in2 = ~{joystick_1[1], joystick_1[0], joystick_1[3], joystick_1[2],
-		                      1'b0, joystick_1[6], joystick_1[5], joystick_1[4]};
-		logic [7:0] a2_in0_q, a2_in1_q, a2_in2_q;
-		always_ff @(posedge clk_sys) begin
-			a2_in0_q <= a2_in0; a2_in1_q <= a2_in1; a2_in2_q <= a2_in2;
-		end
+		// R862: the cabinet per game (VF2, Sega Rally, Virtua Cop 2, Zero
+		// Gunner) is m2_2a_inputs -- MAME's INPUT_PORTS for each, the buttons
+		// in each MRA's <buttons names> order; VF2's map exactly as it was
+		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
+		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2;
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .RALLY(RALLY2A)) u_2a_inputs (
+			.clk(clk_sys), .rst_n(cpu_rst_n),
+			.is_srally(is_srally), .is_vcop2(is_vcop2), .is_zerogun(is_zerogun),
+			.joystick_0(joystick_0), .joystick_1(joystick_1),
+			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .paddle(paddle_q),
+			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
+			.st_rsteer(status[54]),
+			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
+			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2)
+		);
 		wire [31:0] a2_rdata;
 		m2_315_5649 u_315_5649 (
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
@@ -5732,6 +5782,7 @@ end else begin : g_noioboard
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
 			.rdata(a2_rdata),
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
+			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
 			.lamps(), .dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
