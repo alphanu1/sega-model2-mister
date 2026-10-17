@@ -98,17 +98,22 @@ module m2_scsp_regs #(
 
   wire [14:0] gnext = gcnt + 15'd1;
   wire [14:0] tdue  = gcnt + 15'({7'd0, ~mrg[7:0]} << mrg[10:8]);    // now + (255 - count) << prescale
+  // (a timer written this clock falls due at the next sample, tdue == gnext,
+  // only for count 254 at prescale 0: tested directly, not through the adder
+  // -- R859, timing)
+  wire        tone  = mrg[10:0] == 11'h0fe;
   logic [10:0] scipd_n, scipd_c, mcipd_n;
   logic  [4:0] mw_n, mr_n;
   logic  [2:0] arm_n, ex_n, fired_n, rep, clr;   // clr: {MIDI, timer B / C, timer A}
   logic [2:0][14:0] due_n;
   logic        chk;
+  logic  [2:0] wrt;                              // the timer written this clock
   always_comb begin
     logic [1:0] tw;
     tw = (ar == 5'h0c) ? 2'd0 : (ar == 5'h0d) ? 2'd1 : 2'd2;
     scipd_n = scipd; mcipd_n = mcipd; mw_n = mw; mr_n = mr;
     arm_n = tarm; ex_n = texp; fired_n = fired; due_n = due;
-    chk = 1'b0; rep = 3'b000; clr = 3'b000;
+    chk = 1'b0; rep = 3'b000; clr = 3'b000; wrt = 3'b000;
     if (we) begin
       case (ar)
         5'h02: begin                       // MIBUF: r16 pops it first
@@ -117,7 +122,7 @@ module m2_scsp_regs #(
         end
         5'h0c, 5'h0d, 5'h0e: begin
           ex_n[tw] = 1'b0; fired_n[tw] = 1'b0;
-          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; end    // MAME re-arms below 255
+          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; wrt[tw] = 1'b1; end   // MAME re-arms below 255
         end
         5'h0f: chk = 1'b1;                 // SCIEB
         5'h10: scipd_n = mrg[10:0];
@@ -138,7 +143,7 @@ module m2_scsp_regs #(
     if (midi_valid && !midi_ack) begin mw_n = mw_n + 5'd1; chk = 1'b1; end
     if (tick44) begin
       for (int t = 0; t < 3; t++) begin
-        if (arm_n[t] && due_n[t] == gnext) begin
+        if (arm_n[t] && (wrt[t] ? tone : due[t] == gnext)) begin
           arm_n[t] = 1'b0; ex_n[t] = 1'b1; fired_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
           if (t == 0) mcipd_n[6] = 1'b1;
         end
