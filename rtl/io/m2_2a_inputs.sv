@@ -36,9 +36,13 @@
 //         {0,2,1,6,5}; 3:0 and 7 unused (1)
 //     IN2 the hand brake, MAME's PEDAL3: 0x00 at rest -- a button: 0xFF held
 //     AN0 steering (0x80 centre), AN1 accelerator, AN2 brake
-//   Virtua Cop 2 (vcop2). The guns' POSITION is not here (R862: the
-//                 315-5649's serial channel 2, the next step).
-//     J  4 Trigger 5 Start 6 Coin 7 Test 8 Service (P2: joystick 1)
+//   Virtua Cop 2 (vcop2). The guns' POSITION is not here: R870 reads it
+//                 through the 315-5649's serial channel 2 (m2_315_5649 GUN),
+//                 from Virtua Cop's driver m2_vcop_guns (V2). R870: the
+//                 buttons are Virtua Cop's (its MRA's order, so the same
+//                 driver reads them), and with GUN the triggers come from
+//                 the driver (the mouse's button, Reload's shot off-screen).
+//     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
 //     IN0 model2's; IN1 0 P1 trigger 1 P2 trigger, rest unused; IN2 0xFF
 //   Zero Gunner (zeroguna). model2crx with IN1 / IN2 0x0c unused.
 //     J  4 Button 1 5 Button 2 6 Start 7 Coin 8 Test 9 Service
@@ -50,7 +54,8 @@
 
 module m2_2a_inputs #(
   parameter int unsigned SYS_MHZ = 80,
-  parameter bit          RALLY   = 1'b1   // Sega Rally's analog block (M2_2A_RALLY)
+  parameter bit          RALLY   = 1'b1,  // Sega Rally's analog block (M2_2A_RALLY)
+  parameter bit          GUN     = 1'b0   // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
@@ -66,6 +71,9 @@ module m2_2a_inputs #(
   input  logic  [1:0] st_ssens,     // status[30:29] Steering
   input  logic  [1:0] st_ssm,       // status[51:50] Steering smoothing
   input  logic        st_rsteer,    // status[54]  Right stick
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic  [7:0] gun_in1,      // R870 (GUN): m2_vcop_guns in1, the triggers
+  /* verilator lint_on UNUSEDSIGNAL */
   output logic  [7:0] in0,          // registered, as Model2.sv's were
   output logic  [7:0] in1,
   output logic  [7:0] in2,
@@ -87,9 +95,10 @@ module m2_2a_inputs #(
   wire [7:0] zg_in1 = ~{j0[1], j0[0], j0[3], j0[2], 2'b00, j0[5], j0[4]};
   wire [7:0] zg_in2 = ~{j1[1], j1[0], j1[3], j1[2], 2'b00, j1[5], j1[4]};
 
-  // ---- Virtua Cop 2: the triggers (both on IN1), starts and coins
-  wire [7:0] v2_in0 = ~{2'b00, j1[5], j0[5], j0[8], j0[7], j1[6], j0[6]};
-  wire [7:0] v2_in1 = ~{6'b000000, j1[4], j0[4]};
+  // ---- Virtua Cop 2: the triggers (both on IN1), starts and coins; R870
+  // Virtua Cop's button order (m2_vcop_guns' in0 is this same map)
+  wire [7:0] v2_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
+  wire [7:0] v2_in1 = GUN ? gun_in1 : ~{6'b000000, j1[4], j0[4]};
 
   // ---- Sega Rally
   wire [7:0] sr_in0 = ~{1'b0, j0[5], j0[8], 1'b0, j0[7], j0[6], 1'b0, j0[4]};

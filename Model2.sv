@@ -113,6 +113,16 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_RALLY
 `define M2_2A_RALLY
 `endif
+// R870: M2_2A_VCOP2_GUN, Virtua Cop 2's guns -- Virtua Cop's driver
+// (m2_vcop_guns / m2_vcop_state with V2, m2_vcop_xhair; sticks, mouse,
+// reload, crosshairs) read through the 315-5649's serial channel 2, and the
+// Crosshair / Mouse OSD lines shown for that game (menumask bit 1). On by
+// default; VERILOG_MACRO "M2_NO_2A_VCOP2_GUN=1" (or -DM2_NO_2A_VCOP2_GUN to
+// lint) leaves them out -- the triggers then come from the buttons alone and
+// the guns read 0x00, as before R870.
+`ifndef M2_NO_2A_VCOP2_GUN
+`define M2_2A_VCOP2_GUN
+`endif
 // R865: M2_2A_FPU, the i960's flushreg (i960_top FR: the one VC form without
 // the rest of VC -- no transcendental microcode, no M10K), live for Sega
 // Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally executes it at
@@ -368,6 +378,12 @@ localparam CONF_STR = {
 	"h1O[57:56],Crosshair,Small,Large,Off;",
 	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
 	"h1O[59],Gun reload,Shoot off-screen,Auto;",
+`elsif M2_2A_VCOP2_GUN
+	// R870: Virtua Cop 2's, the same bits and menumask bit 1 (is_vcop2).
+	// No "Gun reload": that was Virtua Cop's I/O board DSW; the 2A board
+	// has none (the game's own test menu holds its settings).
+	"h1O[57:56],Crosshair,Small,Large,Off;",
+	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
 `endif
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
@@ -399,6 +415,11 @@ localparam bit RALLY2A = M2A;                                 // R862
 `else
 localparam bit RALLY2A = 1'b0;
 `endif
+`ifdef M2_2A_VCOP2_GUN
+localparam bit VCOP2GUN = M2A;                                // R870
+`else
+localparam bit VCOP2GUN = 1'b0;
+`endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
 wire        forced_scandoubler;
@@ -406,6 +427,7 @@ wire  [1:0] buttons;
 wire [127:0] status;
 wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
 wire         vc_gun;    // R839: Virtua Cop with guns built, declared ahead of hps_io (assigned below)
+wire         v2_gun;    // R870: Virtua Cop 2 with guns built (the same, assigned at g_vcgun)
 
 wire [10:0] ps2_key;
 
@@ -439,7 +461,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({13'd0, a2_rally_menu, vc_gun, crt_mra}),   // R862: bit 2 Sega Rally's lines   // R801: the CRT MRA's own Video line; R839: the gun lines
+	.status_menumask({13'd0, a2_rally_menu, vc_gun | v2_gun, crt_mra}),   // R862: bit 2 Sega Rally's lines   // R801: the CRT MRA's own Video line; R839: the gun lines
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -4340,21 +4362,25 @@ wire  [9:0] vc_p1x, vc_p1y, vc_p2x, vc_p2y;
 wire  [1:0] vc_off;
 wire  [8:0] vc_c1x, vc_c1y, vc_c2x, vc_c2y;
 wire  [1:0] vc_con;
-generate if (VCOP_GUN) begin : g_vcgun
+// R870: the same driver for Virtua Cop 2 on the 2A build (VCOP2GUN; V2 sets
+// its ranges and its in-play words). The two never share a build: VCOP_GUN
+// needs the I/O board's Z80, which the 2A build leaves out.
+assign v2_gun = VCOP2GUN & is_vcop2;
+generate if (VCOP_GUN || VCOP2GUN) begin : g_vcgun
 	// R846: aim from the sticks (absolute; USB guns arrive so) or the mouse
 	// (relative, one gun); the mouse's buttons are a trigger / reload for the
 	// gun the OSD gives it, which is where MiSTer sends a USB gun's trigger.
 	// R849: each crosshair only while its player is in play, as the game's
 	// own work RAM says (the i960's writes, snooped on clk_i960).
 	wire [1:0] vc_play;
-	m2_vcop_state u_vcop_state (
-		.clk(clk_i960), .rst_n(cpu_rst_n), .en(vc_gun), .test(joystick_0[8]),   // the MRA's Test
+	m2_vcop_state #(.V2(VCOP2GUN)) u_vcop_state (
+		.clk(clk_i960), .rst_n(cpu_rst_n), .en(vc_gun | v2_gun), .test(joystick_0[8]),   // the MRA's Test
 		.bus_req(cpu_req), .bus_we(cpu_we), .bus_ack(cpu_ack),
 		.bus_addr(cpu_addr), .bus_wdata(cpu_wdata), .bus_be(cpu_be),
 		.play(vc_play)
 	);
-	m2_vcop_guns u_vcop_guns (
-		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun), .play(vc_play),
+	m2_vcop_guns #(.V2(VCOP2GUN)) u_vcop_guns (
+		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun | v2_gun), .play(vc_play),
 		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
 		.ana0(joy_analog), .ana1(joy_analog_1),
 		.ps2_mouse(ps2_mouse), .mouse_sel(status[63:62]),
@@ -5861,24 +5887,26 @@ end else begin : g_noioboard
 		// in each MRA's <buttons names> order; VF2's map exactly as it was
 		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
 		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2;
-		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .RALLY(RALLY2A)) u_2a_inputs (
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .RALLY(RALLY2A), .GUN(VCOP2GUN)) u_2a_inputs (
 			.clk(clk_sys), .rst_n(cpu_rst_n),
 			.is_srally(is_srally), .is_vcop2(is_vcop2), .is_zerogun(is_zerogun),
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
 			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
-			.st_rsteer(status[54]),
+			.st_rsteer(status[54]), .gun_in1(vc_in1),   // R870: the guns' triggers
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2)
 		);
 		wire [31:0] a2_rdata;
-		m2_315_5649 u_315_5649 (
+		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
+		m2_315_5649 #(.GUN(VCOP2GUN)) u_315_5649 (
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
 			.rdata(a2_rdata),
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
+			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
 			.lamps(), .dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
@@ -7191,7 +7219,7 @@ logic [7:0] mix_r_q, mix_g_q, mix_b_q;
 // the pixel the game aims at, at 24 kHz and 15 kHz interlaced alike. See
 // rtl/video/m2_vcop_xhair.sv. Without the guns the colour register is the
 // one it always was.
-generate if (VCOP_GUN) begin : g_xhair
+generate if (VCOP_GUN || VCOP2GUN) begin : g_xhair   // R870: and Virtua Cop 2's
 	m2_vcop_xhair u_vcop_xhair (
 		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
 		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),

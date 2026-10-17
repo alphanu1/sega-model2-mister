@@ -33,7 +33,7 @@ module tb_m2_2a_inputs_top (
   m2_2a_inputs #(.SYS_MHZ(80), .RALLY(1'b1)) dut (
     .clk, .rst_n, .is_srally, .is_vcop2, .is_zerogun, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
-    .in0, .in1, .in2, .an0, .an1, .an2);
+    .gun_in1(8'hFF), .in0, .in1, .in2, .an0, .an1, .an2);
 
   // Model2.sv at 9fb631d, g_5649 -- verbatim
   wire [7:0] a2_in0 = ~{2'b00, joystick_1[7], joystick_0[7], joystick_0[10],

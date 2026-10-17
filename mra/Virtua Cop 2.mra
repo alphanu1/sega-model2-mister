@@ -25,8 +25,10 @@
       core answers the TGP's reads of it with 0).
 
       Index 4, the game ID: 0x11 (R862). Bit 7 would be the 15 kHz CRT flag.
-      THE GUNS ARE NOT IN YET: triggers, starts and coins are mapped; the
-      aim (the 315-5649's serial channel 2, R862) is the next step.
+      THE GUNS (R870): Virtua Cop's driver, read by the game through the
+      315-5649's serial channel 2 (M2_2A_VCOP2_GUN, on by default). Aim with
+      the left stick or the mouse, crosshairs and the OSD's Crosshair /
+      Mouse lines as Virtua Cop (study R846, R850, R870).
     -->
     <name>Virtua Cop 2</name>
     <setname>vcop2</setname>
@@ -130,6 +132,12 @@
 
     </rom>
 
-    <!-- Player 1 on joystick 1, player 2 on joystick 2, the same buttons. -->
-    <buttons names="Trigger,Start,Coin,Test,Service"/>
+    <!-- The guns' buttons, Virtua Cop's (R846, R870), per player: joystick 1
+         is player 1's gun, joystick 2 player 2's. Aim with the left stick (a
+         USB light gun arrives as that stick, calibrated in MiSTer's F10 menu)
+         or the mouse (OSD "Mouse"); the mouse's left / right buttons, where
+         MiSTer puts a USB gun's trigger, are Trigger / Reload too. Reload is
+         "shoot off the screen"; aiming off the screen and pulling the trigger
+         does the same. Test and Service are player 1's. -->
+    <buttons names="Trigger,Reload,Start,Coin,Test,Service"/>
 </misterromdescription>

@@ -37266,3 +37266,172 @@ not exist in the RTL: R818 named it as a requirement, never built.
 
 *Not verified:* the fit, the placed ALMs, timing; the board. Sega Rally
 beyond 97 s and every test mode (the runs were stopped: MAME limit).
+
+**R870 -- VIRTUA COP 2'S GUNS: VIRTUA COP'S DRIVER ON THE 315-5649'S SERIAL
+CHANNEL 2. M2_2A_VCOP2_GUN, ON BY DEFAULT IN THE 2A BUILD. +289 ALMs
+ESTIMATED. NOTHING FITTED, NOTHING ON A BOARD.**
+(Ben: "Virtua Cop 2 has no gun driver for joypad or mouse. It should use the
+same as Virtua Cop." The last open item of R862's Virtua Cop 2 section.)
+
+*Believed (R862):* channel 2 is the gun board (lightgun_mux_w / _r, read from
+model2.cpp, not run); "X ~ pixel + 137, Y ~ line + 36 over 496 x 384"
+(INFERRED); the guns, crosshairs and VCop 1's OSD lines go across under the
+vcop2 game ID; R849's in-play rule (mode word, player words, a Test latch)
+would carry over with new addresses.
+
+*Now known -- VERIFIED (MAME 0.289, sim/io/mame_m2_vcop2_play.lua; five runs,
+one MAME at a time, -video none):*
+  1. HOW THE GAME READS ITS GUNS. A write tap on CPU 0x01c00014 (device
+     offset 0x0a, lane 0) and a read tap on 0x01c00018 (offset 0x0c, lane 0):
+     after a boot handshake in the first 0.07 s (the mux written with
+     0x00..0xff, 0x7d, 0xfc, 0xfd ... -- MAME answers all >= 8 with the
+     off-screen byte), the game writes the mux 0, 1, ..., 8 and reads each
+     value TWICE (pc 0x373b8 / 0x373e4 write, 0x373cc / 0x373e0 and 0x373f8 /
+     0x3740c read; 0x37330 / 0x37344 for mux 8), once a frame: 114-116 reads
+     of each mux value a second in every second of 200 s. Defaults read
+     e6 00 7f 01 e6 00 7c 01 fc: P1_Y 0x0e6, P1_X 0x17f, P2_Y 0x0e6, P2_X
+     0x17c, LOW BYTE AT THE EVEN MUX, the off-screen byte 0xfc. Every byte
+     equals lightgun_mux_r recomputed in Lua from MAME's ports: 0 mismatches.
+  2. THE GAME USES WHAT IT READS. Coordinates forced at the tap (60-61 s P1
+     (200,100) P2 (500,300); 61-62 s (137,36) (627,425); then (383,230)
+     (380,230)) appear as 16-bit words at 0x507204 / 08 / 0c / 10 (P1_X,
+     P1_Y, P2_X, P2_Y; copies at +0x10 / +0x20) in the RAM dumps at 61 / 62 /
+     63 s, and nowhere else with that sequence.
+  3. THE GAME'S CALIBRATION IS MAME'S RANGES, AND ITS AIM IS MAME'S LINEAR
+     MAP. TEST -> GUN SETTING -> GUN MARK CHECK (the test menu opens on EXIT:
+     Service x9 to GUN SETTING, Test, Service x1, Test) prints AD1 XMIN 137
+     YMIN 36 XMAX 630 YMAX 425, AD2 134 / 36 / 627 / 425 -- exactly
+     INPUT_PORTS_START(vcop2)'s PORT_MINMAX -- and draws each player's mark
+     in Virtua Cop's own colours (P1 69FFFF, P2 FF90A4: m2_vcop_xhair's
+     colours are right for this game too). At five forced points per gun the
+     mark's centroid sits at floor((v - min) * 496 / span) + (-0.49, -1.62)
+     px, the SAME offset at all nine unobstructed marks (spread 0.00): the
+     game's aim is MAME's crosshair map; the constant is the splash sprite's
+     own centroid against its anchor (INFERRED: it does not move with the
+     coordinates). R846 measured +0.13 / 0.00 on Virtua Cop's marks.
+  4. VCOP2'S RANGES AGAINST VCOP'S: X spans 493 (vcop 499), Y 389 for BOTH
+     guns (vcop P1 389, P2 386); P1_X min 137 (vcop 131), P2_X 134 (128).
+     Off-screen by int(span * 0.05f): X 24, Y 19 (as vcop) -- P1 X <= 161 or
+     >= 606, P2 X <= 158 or >= 603, Y <= 55 or >= 406. Pixel to unit, the
+     smallest unit on the pixel (R846's rule): v - min = ceil(px * 493 / 496)
+     = px - (px>=166) - (px>=331), Virtua Cop's two X thresholds subtracted
+     instead of added; Y is Virtua Cop's P1_Y rule for both. 493 units over
+     496 pixels leave pixels 165, 330 and 495 without a unit (MAME's
+     crosshair skips them); they take the next pixel's. The bottom line, 383,
+     is unit 424, not 425 (425 is MAME's pixel 384) -- Virtua Cop's Y alike.
+  5. WHO IS IN PLAY (RAM dumps every 1 s, then write taps -- NOTE: a tap kept
+     in a Lua local is garbage-collected and silently stops; run 2's write
+     log has only the boot clear. The taps are globals now):
+       0x500034 word  the main mode, ONE-HOT, written whole EVERY frame (pc
+                      0x273c): 0x02 boot, 0x20 / 0x80 the two attract
+                      sequences, 0x100 a game, 0x2000 / 0x4000 / 0x8000 /
+                      0x04 / 0x10 results and the way back to the attract.
+       0x500038 byte  the step in the mode (0x500039 holds a copy, written as
+                      its own byte): in a game 2 start, 3-7 stage select and
+                      the way in, 8 play, 9 continue with nobody left, 0x0a
+                      game over. TEST MODE WRITES 0 HERE on entry (pc 0x1ffc)
+                      and stops the mode writer.
+       0x502088 word  P1: 0 out, 1 in play, 2 its continue countdown; in the
+                      attract the demo player toggles it 1 / 0 every frame.
+       0x50208c word  P2: 1 at a start or join (pc 0x5fdc, 0x305c alone), 2
+                      at its countdown (0x6280), 0 at game over (0x5f10).
+     Run 3 (P1 starts 44 s, P2 joins 56 s, P1 continues 69.6 s, P2 77.7 s,
+     both out 88 s, game over 94 s; P2 alone 160 s, Test in play 175 s, out
+     190 s): every in-game change is one write; the mode word stays 0x100
+     through Test (written one more frame after the press, at 175.022, then
+     the test entry writes step 0 at 175.040). So R849's Test latch -- held
+     until the next mode write -- would clear one frame later and show P2's
+     crosshair over the test menu. V2's rule: a player is in play when the
+     mode is 0x100, the step is not 0 and its word is 1. P2's crosshair then
+     shows from P2's start (its stage select included when P2 starts: it
+     aims at the panels) to its countdown or game over, and never in test.
+     (Virtua Cop hides P2's in stage select; here it is kept, by choice:
+     a P2 who starts alone selects the stage, and later stages' steps are
+     unseen -- see c below.)
+
+*Changed:*
+  * m2_vcop_guns V2 (parameter, 0 = Virtua Cop exactly): vcop2's minima,
+    rest values, reload corner, off-screen thresholds and the X rule above.
+  * m2_vcop_state V2: vcop2's three words (mode on lane 1, == 0x01) and a
+    step-not-zero flop in place of the Test latch.
+  * m2_315_5649 GUN: the mux byte (written at offset 0x0a, lane 0; 0 from
+    power-on, kept through a machine reset as MAME's member) and offset
+    0x0c = lightgun_mux_r. Without GUN, 0x0c reads 0x00 as before.
+  * m2_2a_inputs GUN: Virtua Cop 2's IN1 from the driver (the mouse's
+    button, Reload's off-screen shot); Virtua Cop 2's buttons are now
+    Virtua Cop's order (Trigger, Reload, Start, Coin, Test, Service), so
+    one driver reads them; the MRA follows.
+  * Model2.sv: M2_2A_VCOP2_GUN (on; M2_NO_2A_VCOP2_GUN=1 leaves it out),
+    VCOP2GUN, v2_gun = VCOP2GUN & is_vcop2; g_vcgun / g_xhair built for
+    VCOP_GUN || VCOP2GUN (never both: VCOP_GUN needs the I/O board's Z80);
+    menumask bit 1 = vc_gun | v2_gun; the 2A CONF_STR gains Crosshair and
+    Mouse (status 57:56, 63:62, Virtua Cop's bits), not Gun reload (that was
+    the type-2 board's DSW). The main core elaborates as before.
+
+*Benches:*
+  - test_m2_vcop2_guns (new; in `make test`): Model2.sv's 2A wiring
+    (m2_vcop_guns V2 -> m2_315_5649 GUN, IN1 through m2_2a_inputs GUN), every
+    value read on the i960's side by writing the mux and reading 0x0c, as
+    the game does, against MAME's lightgun_mux_r / _offscreen_r and vcop2's
+    ranges: every stick value of each axis against the edges and centre
+    (units, high bytes, off byte, c_on, crosshair pixel); every pixel walked
+    by the mouse for both guns; 40,000 random packets per aiming mode; ten
+    screens past each edge (clamped: P1 630 / 137 / 36 / 424, P2 627 / 134 /
+    36 / 424, off-screen, no crosshair); 20,000 random button sets through
+    ports B / C; 300,000 cycles of reloads through the chip (the trigger
+    never read with the gun on the screen: 0 / 0; 77 / 76 presses); every
+    mux 8..255; the mux through a machine reset and a power-on; P2's
+    crosshair only in play. 223,916 checks, 0 failures. Centre stick reads
+    P1 (384, 231), P2 (381, 231), off 0xfc. Ten planted faults all caught (X
+    threshold 166 -> 167, P1_X min, P2's off-screen X, P2_Y by vcop's Y2
+    rule, the byte order, P1_X / P1_Y order, the mux >= 8 test on one bit,
+    the mux cleared by a machine reset, IN1 from the buttons, the mux from
+    lane 2).
+  - test_m2_vcop2_state (new; captures in build/vcop2state, not committed --
+    mame_m2_vcop2_play.lua writes them): run 3's 40,234 writes replayed in
+    order as the i960 drives them (byte stores replicated, or junk in the
+    other lanes), random traffic between them that must be ignored; at each
+    of 401 samples the module equals MAME's RAM rule (P1 in play 69, P2 87,
+    11 changes), the log's RAM equals the dump in every in-game sample, plus
+    directed cases (0x500039 is not the step, step 0 hides, two mode bits
+    are not a game, lane 1 off ignored, P2 word 0x101 / 0x11, the Test
+    button ignored, en low). 588 checks, 0 failures. Planted: P2's word +4,
+    the gate ignored, the mode on lane 0, the step on any lane, Virtua Cop's
+    Test latch instead, the mode compared on bit 8 only -- all caught.
+  - Virtua Cop unchanged: test_m2_vcop_guns 417,527 / 0 (the bench as it
+    was); m2_vcop_state V2=0 PROVEN equivalent to a4b29a3's by yosys
+    (equiv_simple / equiv_induct, 14 of 14); m2_vcop_guns V2=0 and
+    m2_315_5649 GUN=0 against a4b29a3's in a Verilator miter, 20 M random
+    cycles, 0 differences (with V2 / GUN set: differences in every cycle /
+    5.0 M -- the miter sees). R849's captures are gone, so test_m2_vcop_state
+    was not rerun; the yosys proof stands in for it.
+  - test_m2_2a_inputs (Virtua Cop 2's model now the new order) 120 M checks,
+    0 mismatches; test_m2_315_5649 PASS.
+  - lint_top clean: the 2A build, -DM2_NO_2A_VCOP2_GUN, -DM2_NO_2A, -DM2_NO_2A
+    -DM2_NO_VCOP_GUN. lint_idx: nothing in the changed modules (111 lines,
+    all elsewhere). quartus_map 17.0 --analyze_file 0 errors: Model2.sv,
+    m2_vcop_guns, m2_vcop_state, m2_315_5649, m2_2a_inputs.
+  - AREA, quartus_map 17.0, whole design, the 2A build:
+       a4b29a3 (= R866's last row)   39,110 ALM est.  56,046 ALUT  46,740 regs
+       this                          39,399           56,515       47,128
+    +289 ALMs estimated (+469 ALUT, +388 registers), no block memory, no
+    DSP -- Virtua Cop's own cost on the main core was +287 (R846). By
+    entity (ALUT / registers): m2_vcop_guns 289 / 183, m2_vcop_xhair
+    141 / 160, m2_vcop_state 18 / 10, m2_315_5649 +33 / +8, hps_io +26 /
+    +50, m2_2a_inputs 0 / 0. One copy of the driver, as asked; nothing in it
+    is Virtua Cop 1 only (in0 is trimmed with V2). R866 freed ~-896.
+
+*INFERRED (each with what settles it):*
+  a. On the board, Virtua Cop 2 with a stick: P1's crosshair everywhere,
+     P2's from P2's start to its countdown; the game's GUN MARK CHECK puts
+     each mark inside its cross (its splash about 1.6 px above the cross's
+     centre, the sprite's anchor), AD1 / AD2 reading 137 / 36 / 630 / 425
+     and 134 / 36 / 627 / 425. A gun adjustment made in the game's own menu
+     would move the marks off the crosses; PLAYERn GUN DEFAULT ADJUSTMENT
+     restores it.
+  b. Reload: the Reload button, or aim off the screen and shoot (the game
+     reads the off-screen byte every frame).
+  c. Later stages keep the step inside 1..0x0a (only stage 1 was played by
+     script). If a later step were 0 in play, P2's crosshair would vanish
+     there -- the board or a played-through MAME game settles it.
+  d. The build still fits at +289 estimated (a fit).

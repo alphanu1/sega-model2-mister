@@ -67,6 +67,24 @@
 // in1 from here only for game ID 1 (vc_gun), as it did before this module was
 // built, so Daytona and Desert Tank see the inputs they always did.
 //
+// VIRTUA COP 2 (V2 = 1, the 2A build's M2_2A_VCOP2_GUN; R870): the same
+// sticks, mouse, buttons, reload and crosshairs, scaled to MAME 0.289
+// INPUT_PORTS_START(vcop2):
+//
+//   P1_X 137..630 (0x089..0x276)   P1_Y 36..425 (0x024..0x1a9)
+//   P2_X 134..627 (0x086..0x273)   P2_Y 36..425 (0x024..0x1a9)
+//
+// rest 0x17f / 0x0e6 / 0x17c / 0x0e6; off-screen by the same int(span * 0.05f)
+// rule (lightgun_offscreen_r: X 24, Y 19). Y is Virtua Cop's P1_Y for both
+// guns. X spans 493 units over 496 pixels, so v - min = ceil(px * 493 / 496)
+// = px - (px>=166) - (px>=331): the SAME two thresholds as Virtua Cop's X,
+// subtracted. Pixels 165, 330 and 495 have no unit of their own (MAME's
+// crosshair skips them); they take the next pixel's. The game reads the four
+// coordinates and the off-screen bits through the 315-5649's serial channel 2
+// (m2_315_5649 GUN), not an I/O board; in0 is unused there (m2_2a_inputs has
+// the same map) and the game's in-play state is its own (m2_vcop_state V2).
+// V2 = 0 is Virtua Cop exactly: every V2 term is a parameter constant.
+//
 // TIMING: every stage is registered -- the hps_io inputs once, the pixel,
 // then the game units, then the off-screen test -- so no path is longer than
 // one small adder and a compare (R843's lesson: a stick into a long chain
@@ -75,7 +93,8 @@
 `timescale 1ns/1ps
 
 module m2_vcop_guns #(
-  parameter int unsigned TICK_LOG2 = 17     // reload tick: 2^17 clk_sys = 1.64 ms at 80 MHz
+  parameter int unsigned TICK_LOG2 = 17,    // reload tick: 2^17 clk_sys = 1.64 ms at 80 MHz
+  parameter bit          V2        = 1'b0   // R870: Virtua Cop 2's ranges
 ) (
   input  logic        clk,            // clk_sys
   input  logic        rst_n,
@@ -195,9 +214,23 @@ module m2_vcop_guns #(
   wire fire2 = t2 | (r2 & rs2[1]);
 
   // ------------------------------------------------------ stage C: game units
+  // each game's ranges (R870: V2 is Virtua Cop 2's; constants either way)
+  localparam logic [9:0] X1LO = V2 ? 10'h089 : 10'h083;   // P1_X min
+  localparam logic [9:0] X2LO = V2 ? 10'h086 : 10'h080;   // P2_X min
+  localparam logic [9:0] Y2LO = V2 ? 10'h024 : 10'h027;   // P2_Y min
+  localparam logic [9:0] P1X0 = V2 ? 10'h17f : 10'h17c;   // MAME's rest positions
+  localparam logic [9:0] P2X0 = V2 ? 10'h17c : 10'h179;
+  localparam logic [9:0] P2Y0 = V2 ? 10'h0e6 : 10'h0e8;
+  localparam logic [9:0] O1XL = V2 ? 10'h0a1 : 10'h09b;   // min + int(span * 0.05f)
+  localparam logic [9:0] O2XL = V2 ? 10'h09e : 10'h098;
+  localparam logic [9:0] O2YL = V2 ? 10'h037 : 10'h03a;
   // the corrections are 0..5: a 3-bit count of the thresholds passed
   function automatic logic [9:0] ux(input logic [8:0] p, input logic [9:0] lo);
     logic [2:0] k;
+    if (V2) begin                     // span 493: ceil(px * 493 / 496)
+      k = {2'b00, p >= 9'd166} + {2'b00, p >= 9'd331};
+      return lo + {1'b0, p} - {7'd0, k};
+    end
     k = {2'b00, p != 9'd0} + {2'b00, p >= 9'd166} + {2'b00, p >= 9'd331};
     return lo + {1'b0, p} + {7'd0, k};
   endfunction
@@ -215,13 +248,13 @@ module m2_vcop_guns #(
   logic [1:0] fire_q;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      p1x <= 10'h17c; p1y <= 10'h0e6; p2x <= 10'h179; p2y <= 10'h0e8;   // MAME's rest positions
+      p1x <= P1X0; p1y <= 10'h0e6; p2x <= P2X0; p2y <= P2Y0;   // MAME's rest positions
       fire_q <= 2'b00;
     end else begin
-      p1x <= hold1 ? 10'h083 : ux(s1x, 10'h083);
+      p1x <= hold1 ? X1LO : ux(s1x, X1LO);
       p1y <= hold1 ? 10'h024 : uy1(s1y);
-      p2x <= hold2 ? 10'h080 : ux(s2x, 10'h080);
-      p2y <= hold2 ? 10'h027 : uy2(s2y);
+      p2x <= hold2 ? X2LO : ux(s2x, X2LO);
+      p2y <= hold2 ? Y2LO : (V2 ? uy1(s2y) : uy2(s2y));
       fire_q <= {fire2, fire1};
     end
   end
@@ -231,8 +264,9 @@ module m2_vcop_guns #(
 
   // ------------------------------------------------------ stage D: off-screen, the ports
   // MAME's 5% border, from the coordinates as the board hands them over
-  wire o1 = (p1x <= 10'h09b) || (p1x >= 10'h25e) || (p1y <= 10'h037) || (p1y >= 10'h196);
-  wire o2 = (p2x <= 10'h098) || (p2x >= 10'h25b) || (p2y <= 10'h03a) || (p2y >= 10'h196);
+  // (V2: lightgun_offscreen_r's, the same rule on Virtua Cop 2's ranges)
+  wire o1 = (p1x <= O1XL) || (p1x >= 10'h25e) || (p1y <= 10'h037) || (p1y >= 10'h196);
+  wire o2 = (p2x <= O2XL) || (p2x >= 10'h25b) || (p2y <= O2YL) || (p2y >= 10'h196);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       off <= 2'b00; c_on <= 2'b00; in0 <= 8'hFF; in1 <= 8'hFF;

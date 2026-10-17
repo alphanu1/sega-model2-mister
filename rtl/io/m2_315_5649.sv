@@ -24,6 +24,12 @@
 //         the input; MAME's counter callbacks are unset for model2a).
 //   8     direction (1 = input), 0xFF at reset
 //   9/10  RS-422 TX (dropped)        11/12 RS-422 RX: 0x00 (MAME's default)
+//         R870, GUN (Virtua Cop 2, MAME model2a_state::vcop2): channel 2 is
+//         the gun board -- a write of 10 is lightgun_mux_w (the mux byte), a
+//         read of 12 is lightgun_mux_r: mux 0-7 the low / high byte (mux bit
+//         0) of P1_Y, P1_X, P2_Y, P2_X (mux 2:1), mux >= 8 0xFC | P2 off << 1
+//         | P1 off (lightgun_offscreen_r(0)). The mux is 0 from power-on and
+//         survives a machine reset (MAME: a member set at construction).
 //   13    RS-422 status: 0x0C (MAME's HACK: RX full, TX empty)
 //   14    mode                       15 analog: read = channel, auto-
 //         increments; write = select. R862: channels 0-2 are an0..an2
@@ -40,7 +46,9 @@
 
 `timescale 1ns/1ps
 
-module m2_315_5649 (
+module m2_315_5649 #(
+  parameter bit GUN = 1'b0          // R870: Virtua Cop 2's guns on serial channel 2
+) (
   input  logic        clk,
   // MAME's machine reset: direction, mode and ctrlmode (R862: not the
   // analog channel, which starts at power-on).
@@ -62,6 +70,10 @@ module m2_315_5649 (
   input  logic  [7:0] an0,          // R862: analog channels 0-2
   input  logic  [7:0] an1,
   input  logic  [7:0] an2,
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic  [9:0] gun_p1x, gun_p1y, gun_p2x, gun_p2y,   // R870 (GUN): game units
+  input  logic  [1:0] gun_off,      // {P2, P1} off-screen
+  /* verilator lint_on UNUSEDSIGNAL */
   output logic  [7:0] lamps,        // PF
   output logic  [7:0] dbg_pa,
   output logic  [7:0] dbg_dir
@@ -91,11 +103,28 @@ module m2_315_5649 (
     endcase
   endfunction
 
+  // R870: the gun board on serial channel 2 (GUN; otherwise 12 reads 0x00)
+  wire [7:0] gun_byte;
+  generate if (GUN) begin : g_gun
+    logic [7:0] gmux;
+    always_ff @(posedge clk or negedge por_n) begin
+      if (!por_n) gmux <= 8'h00;
+      else if (sel && we && be[0] && word == 3'd5) gmux <= wdata[7:0];   // offset 10
+    end
+    wire [9:0] gv = (gmux[2:1] == 2'd0) ? gun_p1y : (gmux[2:1] == 2'd1) ? gun_p1x
+                  : (gmux[2:1] == 2'd2) ? gun_p2y : gun_p2x;
+    assign gun_byte = (gmux[7:3] != 5'd0) ? {6'h3f, gun_off}
+                    : gmux[0] ? {6'd0, gv[9:8]} : gv[7:0];
+  end else begin : g_nogun
+    assign gun_byte = 8'h00;
+  end endgenerate
+
   function automatic logic [7:0] rd(input logic [3:0] off);
     if (off <= 4'd6)
       rd = dir[off[2:0]] ? port_in(off[2:0]) : pv[off[2:0]];
     else case (off)
-      4'hb, 4'hc: rd = 8'h00;
+      4'hb:       rd = 8'h00;
+      4'hc:       rd = gun_byte;          // R870
       4'hd:       rd = 8'h0c;
       4'hf:       rd = (an_ch == 3'd0) ? an0 : (an_ch == 3'd1) ? an1
                      : (an_ch == 3'd2) ? an2 : 8'hff;   // R862
