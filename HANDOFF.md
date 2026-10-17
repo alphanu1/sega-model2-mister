@@ -1,5 +1,25 @@
 # Handoff
 
+## 2026-10-17: OPEN BUG, TO BE FIXED HERE -- textured colour is Daytona's luma model (R872)
+
+Found on the Model 2A branch (model2a R867, fixed there in 526ef64 / 47dd93c,
+merged 8877d15) and PRESENT ON THIS CORE: m2_span_tex (tlum / tfin) and
+m2_geo_engine's tslope hardwire Daytona's luma RAM (row 0 = i/2, row 1 =
+63 - i/2, every other row as row 0) and a straight colour table read once at
+luma 32. Measured against MAME's own lists through tb_m2_raster3d:
+  * Virtua Cop: luma row 16 drawn as row 0 -- mean error 164 / 255, every
+    pixel of those polygons over 32; its row 1 is 42 - i/3, not Daytona's
+    ramp (error 53).
+  * Desert Tank: row 11 off by 51.
+  * Daytona: correct (the model was written from it).
+THE FIX is model2a's: each texel coloured as MAME does (lumaram[row][t>>1] *
+luma >> 8, the colour table, the output curve), with on-chip copies of the
+luma rows each game uses, the 3D palette and the colour table, filled from
+the CPU's SDRAM writes. Cost there: ~9 M10K (this core is at 533 / 553),
+~+30 ALM, +1 DSP. Port it behind its own switch, with the luma rows per game
+taken from MAME's data (Virtua Cop: 0, 1, 16; Desert Tank: include 11), and
+prove Daytona's frames unchanged.
+
 ## 2026-10-16: RELEASE Model2_20261016 (s1142) -- Daytona, Desert Tank, Virtua Cop
 
 Released from c545187's RTL as s1142 (releases/Model2_20261016.rbf,

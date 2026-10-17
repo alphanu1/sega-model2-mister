@@ -35787,3 +35787,23 @@ ANSWERS, AND THE TGP REGISTER BENCH.**
     value each cycle, expects it on 0x21, and checks rf_fifo_rd (0x21 reads)
     and rf_fifo_wr (0x22 writes): 3,000,000 checks, 0 failures. No RTL
     change. All three games run on the board, as they did.
+
+**R872 -- OPEN ON THIS CORE: TEXTURED COLOUR IS DAYTONA'S LUMA MODEL, AND
+VIRTUA COP AND DESERT TANK ARE WRONG.** (Recorded on main from the Model 2A
+branch's R867; numbered clear of that branch's entries.)
+*Believed (R784):* textured colour can be taken from a fixed model of the
+luma RAM -- row 0 a ramp (i/2), row 1 its inverse (63 - i/2), any other row
+as row 0 -- and a colour table that is a straight line, read once at luma 32.
+That is Daytona's data, and Daytona is right with it.
+*Found (model2a R867, tb_m2_raster3d on MAME's own display lists):* the luma
+rows and the colour table are the GAME's data. Virtua Cop draws row 16 as row
+0 here (mean error 164 / 255, every pixel over 32) and its row 1 is 42 - i/3
+(error 53); Desert Tank's row 11 is off by 51. On the 2A games the same model
+inverted VF2's row-1 polygons outright (the "checkerboard" on heads).
+*Fix (to be ported):* model2a 526ef64 / 47dd93c -- per texel, MAME's
+L = min(63, lumaram[row][t >> 1] * luma >> 8), then the colour table and the
+output curve, from on-chip copies (the luma rows a game uses, the 3D palette,
+the colour table) filled from the CPU's SDRAM writes. ~9 M10K on this core
+(533 / 553 at s1142). Behind a switch; Daytona's frames must stay
+byte-identical with it off and match MAME with it on.
+
