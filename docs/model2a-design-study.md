@@ -36726,3 +36726,231 @@ The register block has to act in the clock tick44 or a MIDI byte arrives
 (MAME's order, which the IPL bench checks) and so cannot be sequenced.
 Against srg320's complete SCSP (2,577 est., ~25 M10K, 5 DSP): 1,868 est.,
 ~45 M10K, 3 DSP -- 28% fewer ALMs, more block RAM.
+
+**R862 -- THE OTHER THREE 2A GAMES: SEGA RALLY, VIRTUA COP 2, ZERO GUNNER.
+MRAs, GAME IDs 0x10-0x12, A LAYOUT EXTENSION, PER-GAME INPUTS. ZERO
+GUNNER'S 315-5881 ASSESSED, NOT BUILT; VIRTUA COP 2'S GUN AIM SPECIFIED, NOT
+BUILT. NOTHING FITTED, NOTHING ON A BOARD.**
+(Ben: finish the mapping and MRAs for the other three 2A games; no 15 kHz
+MRAs; static work -- MRA image checks, MAME source and short MAME runs, unit
+benches; no whole-core simulation. NOTE: commit 88a02f1 on model2a, made in
+parallel, also names R862 in its message (the 2A telemetry); this entry is
+the games.)
+
+*Believed (R852):* Sega Rally is out ("all sets MACHINE_NOT_WORKING in MAME,
+and the drive board"); every 2A set fits VF2's layout; the 315-5649's analog
+channel is cleared by a machine reset.
+
+*THE LAYOUT -- VF2's slots do not move; an EXTENSION is appended (VERIFIED by
+the tools; the SDRAM side by bench).* The three sets do not fit VF2's image:
+  * program: VF2 512 KB; Sega Rally and Zero Gunner 1 MB (two 512 KB EPROMs
+    interleaved), Virtua Cop 2 2 MB (CPU 0x000000-0x1fffff, four EPROMs);
+  * copro data: VF2 none (ERASE00); Sega Rally 4 MB (mpr-17754 / 17755, the
+    TGP's terrain data -- MAME's region 8 MB, the top 4 empty);
+  * smaller regions (data 12 MB, textures / samples 4 MB, polygons 4-8 MB,
+    a 256 KB sound program) are zero-padded to the slot, as MAME's unloaded
+    space reads 0.
+  The extension follows VF2's 0x2D40000-byte image: MRA 0x2D40000 the
+  program from 512 KB (1.5 MB slot, CPU 0x080000-0x1fffff), MRA 0x2EC0000
+  the copro data (4 MB). The first remap (XTRA, the samples) already sends
+  everything past 0x2540000 to SDRAM byte 0x3400000, which would put the
+  copro data across ST_BASE (0x3E00000, written after the load) and past 64
+  MB; so m2_rom_loader has a SECOND remap (XTRA2_FROM / XTRA2_TO, default
+  off -- main's core unchanged): bytes from 0x2D40000 go to SDRAM word
+  0x1300000, the 2A hole between the sound RAM and GAME_WORK (program slot
+  0x1300000, GAME_COPRO_2A 0x13C0000, ending 0x15C0000 < 0x1620000).
+  Images: Sega Rally 0x32C0000, Virtua Cop 2 and Zero Gunner 0x2EC0000 (Zero
+  Gunner's program slot padded whole, so 0x100000-0x1fffff reads 0 as in
+  MAME), VF2 0x2D40000 (unchanged; the same tools PASS).
+  The bridge (BOARD_2A): prog_ext now sends CPU 0x080000-0x1fffff to
+  base_progx + the CPU's word (base_progx = slot - 0x40000 words); without
+  prog_ext (VF2, game 0) the program reads linearly as before. Port 9 (copro
+  data) reads GAME_COPRO_2A, and R852's zero gate opens only for Sega Rally
+  (a2_copro_rom); for the others those reads stay 0.
+  Checks: tools/rom_csum.py (now applies <patch>) builds each image;
+  tools/mra_vs_mame.py --layout=2a (now: ROM_COPY, the GAME line's init
+  patches applied to MAME's side, the two extension slots required wherever
+  MAME's region has data there) -- PASS for all four sets, every slot equal
+  to ROM_START by CRC (srallyc 10 slots, vcop2 / zeroguna 9, vf2 8).
+  tb_m2_rom_xtra2a (new: the two remaps as Model2.sv sets them, the last
+  byte of Sega Rally's image included, 9 / 0) and tb_m2_rom_xtra (7 / 0);
+  tb_m2_cpu_bridge on the 2A decode (new build, BOARD_2A: 0x80010, 0x100020,
+  0x1FFFF8 from the extension, 0x40030 / 0x7FFF0 from the slot, 0x80040
+  linear with prog_ext clear -- 927 / 0) and on main's (925 / 0).
+  INFERRED: polygon and texture addresses past each set's ROM read the
+  slot's padding (zeros) or the next slot where MAME reads 0 or wraps (a
+  4 MB texture region masks to 4 MB in MAME); copro reads at 4-8 MB wrap
+  into 0-4 MB here (a 20-bit dword index) where MAME reads 0. None of the
+  three is known to read there.
+
+*GAME IDs (index 4):* 0x10 Sega Rally, 0x11 Virtua Cop 2, 0x12 Zero Gunner
+(2A games from 0x10, clear of the original core's 1 / 2; VF2 stays 0).
+Model2.sv: is_srally / is_vcop2 / is_zerogun (M2A only), prog_ext for all
+three.
+
+*INPUTS -- rtl/io/m2_2a_inputs.sv (new), from MAME 0.289's INPUT_PORTS; the
+joystick bits follow each MRA's <buttons names>:*
+  * VF2: R852's expressions moved here unchanged.
+  * Sega Rally (srallyc + gears): IN0 0x01 coin, 0x04 test, 0x08 service,
+    0x20 VR (view), 0x40 start; IN1 6:4 the shifter, ACTIVE HIGH,
+    daytona_gearbox_r's {0,2,1,6,5} for N,1,2,3,4 (Gear Up / Down step it);
+    IN2 PEDAL3 (hand brake): 0x00 rest, 0xFF held; analog channels 0-2
+    STEER / ACCEL / BRAKE. The analog side and the shifter are Daytona's
+    m2_cab_inputs, unchanged, with its four OSD lines (Pedals, Steering,
+    Steering smoothing, Right stick) now in the 2A CONF_STR behind "h2"
+    (status_menumask bit 2 = Sega Rally), on main's status bits. Behind the
+    switch M2_2A_RALLY (default on; M2_NO_2A_RALLY leaves the block and the
+    lines out). The MRA's buttons are Daytona's J1 order (Coin, Start,
+    Test, Service, View, Hand Brake, Accel, Brake, Gear Up, Gear Down) so
+    m2_cab_inputs reads the bits it always did.
+    THE RANGE, MEASURED IN MAME 0.289 (headless, coin + start, auto-picked
+    menus, a race held 120 s at fixed analog values, PNG every 5 s, md5
+    compared): accelerator 0x00 = 0x20 = 0x30 (rest) and 0xC0 = 0xE0 =
+    0xFF (full); steering 0x00 = 0x20 and 0xE0 = 0xFF (0x40 differs: the
+    control); brake 0x20 / 0x30 = 0x00 at full throttle. So Daytona's
+    0x20..0xE0 is full travel for Sega Rally too. The game has no
+    calibration screen (GAME ASSIGNMENTS: advertise sound, country, cabinet,
+    link, difficulty, mode); its INPUT TEST shows HANDLE / ACCEL / BRAKE raw.
+  * Virtua Cop 2 (vcop2): IN0 model2's (coins, test, service, starts); IN1
+    0x01 P1 trigger, 0x02 P2 trigger (both on IN1); IN2 0xFF. MRA buttons
+    Trigger, Start, Coin, Test, Service; player 2 on joystick 2.
+  * Zero Gunner (zerogun): model2crx with IN1 / IN2 0x0c unused; the stick
+    and two buttons a player (the game's I/O CHECK calls them SW1 / SW2;
+    the MRA says Button 1 / Button 2); SW3 0xFF (bit 0 low = its debug menu).
+  THE 315-5649 now reads analog channels 0-2 from the cabinet (0xFF for a
+  game with none, MAME's unbound default), 3-7 0xFF. CORRECTION to R852:
+  MAME's device_reset sets only the direction and the mode -- the analog
+  channel is 0 at construction and survives a machine reset; here it was
+  cleared on the game reset (invisible while every channel read 0xFF). It
+  now starts at power-on only.
+  Benches: tb_m2_2a_inputs (new, in `make test`): 20 M cycles, the game
+  switched at random, 120 M checks, 0 wrong -- VF2 against Model2.sv's
+  expressions at 9fb631d bit for bit; Sega Rally against a model of MAME's
+  ports (the gear table from daytona_gearbox_r; 45,857 shifter moves, every
+  position seen) with the analog channels equal to an unchanged
+  m2_cab_inputs; Virtua Cop 2 and Zero Gunner against MAME's ports. Seven
+  planted faults all caught (start / view swapped, the triggers swapped,
+  Zero Gunner's button 2 on bit 2, VF2's coin 2 from start 2, the hand
+  brake inverted, a gear-table entry, analog channels 1 / 2 swapped).
+  tb_m2_315_5649: 2 M operations, the analog channels now moving and read,
+  26.4 M reads compared, 0 wrong; a reference that clears the channel on
+  reset gives 5,676 mismatches, channels 1 / 2 swapped 13,922.
+  lint_top clean (2A, M2_NO_2A, M2_NO_2A_RALLY); lint_idx: nothing in the
+  changed modules; quartus_map 17.0 --analyze_file on m2_2a_inputs,
+  m2_315_5649, m2_cpu_bridge, m2_rom_loader, Model2.sv: 0 errors.
+  AREA, NOT MEASURED (no map: a fit was running): m2_cab_inputs comes back
+  (321 ALUT when R852 dropped it) plus the loader's second remap, the
+  bridge window, the analog mux and the input muxes -- ~+250-300 ALMs
+  estimated with M2_2A_RALLY, ~+40 without.
+
+*SEGA RALLY: WHY MAME SAYS MACHINE_NOT_WORKING, AND WHETHER IT MATTERS.*
+model2.cpp's own TODO: "srallyc: initial enemy car placement seems to be
+slightly incorrect for a few cars, seems to be affected by i960 clock speed,
+may need wait state emulation to fix". MAME's February 2026 cleanup
+(5aa8d67f35, "tentatively promoted some games to working": Virtua Cop 1 / 2,
+Zero Gunner, Pilot Kids, Virtua Striker) left every srallyc set flagged, and
+it still is on MAME master; the drive board (force feedback, 838-11661) is
+hooked up but does nothing. In MAME 0.289 the game boots, attracts, takes
+coins and races (above). For this core it does not matter: a start-grid
+difference MAME ties to its idealised i960 timing (this core has real wait
+states, closer to the board), and the drive board's outputs are ignored here
+as on Daytona.
+
+*ZERO GUNNER'S PATCH (init_zerogun: maincpu 0x700 = 0x08000004), CHECKED.*
+0x700 is `st g14,(g5)` inside the boot's clear of work RAM 0x500000-
+0x53ffff (loop 0x6fc-0x718; g14 is 0). Before it the boot copies the PRCB
+from ROM (0xb0) to RAM 0x5000b0 and reinitialises the processor on it with
+an IAC (synmovq to 0xff000010 at 0x63c / 0x660); the clear then zeroes that
+PRCB, whose +20 is the interrupt table pointer (0xae0 in ROM's copy). MAME's
+i960 re-reads PRCB+20 on every interrupt (i960.cpp, three places) and so does
+this core's (i960_top.sv T_INTR: boot_addr <= prcb_reg + 20 in every mode),
+so both vector through a zeroed table; the board does not, so the 80960KB
+must keep the pointers it read at the reinitialisation (INFERRED -- the only
+reading under which the unpatched program runs on silicon). 0x08000004 is
+`b` to the next word: the store is skipped, the PRCB survives. The MRA
+carries it as <patch offset="0x700">04 00 00 08</patch>, and mra_vs_mame
+applies MAME's init to MAME's side: PASS. The silicon-faithful alternative
+-- latch PRCB+20 / +24 at reset and at an IAC reinitialise -- would drop the
+patch and change every game's interrupt path; not done.
+
+*ZERO GUNNER'S 315-5881 -- MEASURED, ASSESSED, NOT BUILT.*
+MAME 0.289 (sim/prot/mame_m2_zg_5881.lua, 200 s: attract, two credits,
+play):
+  * the game writes 96 halves (192 bytes, offsets 0x00-0xbf) into the RAM at
+    0x01d80000 once, at 0.97 s, and never reads it (all 152 reads are the
+    chip's); it then runs 19 CHECKS: write the address (16 six-word entries,
+    0x00-0x5a) and the subkey -- a 16-entry table in the program at 0x27a44,
+    one per entry -- read the status (0), the dummy word and FOUR words;
+  * every header is 0x00700 (plain, 8 x 1): the decompressor is never used;
+  * WITH THE DECRYPT READS FORCED TO 0 (what this core does now) MAME plays
+    the first credit with small differences from t = 40 s and then stays on
+    a black screen from the end of that game (t = 110 s on); the real run
+    goes on to the second credit. So Zero Gunner needs the chip.
+  sim/prot/m2_5881_ref.h (new: MAME's 315-5881_crypt.cpp standalone, BSD-3,
+  THIRD_PARTY.md) and sim/prot/zg_5881_replay.cpp replay the capture: 19
+  sessions, 95 decrypt reads, 0 differ from MAME -- the oracle an RTL chip
+  would be benched against.
+  WHAT A BUILD NEEDS (ESTIMATED, not mapped):
+    a. the RAM: 64 KB in MAME's map, 192 bytes used -- a 256-byte MLAB /
+       one M10K at 0x01d80000 (written by the i960, read by the chip), ~10
+       ALMs;
+    b. the block cipher: two 4-round Feistel networks, 32 six-in / two-out
+       s-boxes (64 LUTs), the key schedule (the game key a per-game
+       constant -- 0x042c0d13 is MAME's ROM_PARAMETER; the sequence key
+       latched at the subkey write; the middle result per word), the
+       counter, the 2-bit dec_hist splice and the header parse: ~250-350
+       ALMs pipelined over a few clocks at 80 MHz;
+    c. the decompressor (two 512-byte line buffers, nine Huffman trees):
+       ~200-300 ALMs + 1-2 M10K -- NOT NEEDED by Zero Gunner;
+    d. the bridge side: the read of 0x01d9000c must wait for its word
+       (m2_cpu_bridge has io_stall), plus the 0x01d8 / 0x01d9 decode.
+  So a Zero-Gunner-only chip (a + b + d) is ~300-400 ALMs and 1 M10K behind
+  a switch -- not small against the 2A build's margin with the sound board
+  (R857 / R858). Stopped here for Ben's decision. A table of the 16
+  answers would be ~30 ALMs but is ROM-derived data in the RTL (rule 4):
+  not an option.
+
+*VIRTUA COP 2'S GUNS -- WHAT THE AIM PATH NEEDS (MAME 0.289), NOT BUILT.*
+  * vcop2's machine config binds the 315-5649's RS-422 channel 2: a write of
+    offset 0x0a (dword 5, the low lane) is lightgun_mux_w (m_lightgun_mux =
+    data); a read of offset 0x0c (dword 6, the low lane) is lightgun_mux_r.
+    The status at 0x0d stays MAME's HACK 0x0c. Today the core drops 0x0a
+    and reads 0x0c as 0x00.
+  * lightgun_mux_r: mux < 8 -> lightgun_data_r(mux) = port[mux >> 1], the
+    high byte when mux bit 0 is set, of four 10-bit ports in the order
+    P1_Y, P1_X, P2_Y, P2_X; mux >= 8 -> lightgun_offscreen_r(0): 0xFC | P1
+    off-screen (bit 0) | P2 off-screen (bit 1).
+  * ranges: P1_X 137..630 (default 0x17f), P2_X 134..627 (0x17c), both Y
+    36..425 (0x0e6); off-screen within 5% of an end, as ints: X 24, Y 19.
+    The reload is a shot with the gun off-screen and the trigger (IN1 bit
+    0 / 1, mapped now).
+  * so: an 8-bit mux register and a byte read mux in m2_315_5649 (~30
+    ALMs); positions from MiSTer's sticks / mouse -- R846's m2_vcop_guns
+    gives screen coordinates, rescaled to the ranges above (X ~ pixel +
+    137, Y ~ line + 36 over 496 x 384: INFERRED; the game's own gun
+    adjustment in its test menu settles it); its crosshairs (m2_vcop_xhair)
+    and VCop 1's OSD lines under the vcop2 game ID. R852 measured the guns
+    and crosshairs at ~420 ALUT on the original core.
+
+*VERIFIED / INFERRED, AND WHAT THE BOARD MUST SHOW (one build: Model2A.rbf
+with these MRAs; zips as named -- Zero Gunner wants zeroguna.zip and
+zerogun.zip):*
+  1. VF2: exactly as before (game 0 everywhere: same image, same inputs --
+     benched; the loader and bridge changes act only at 0x2D40000+ /
+     prog_ext). Board: VF2 loads, plays and sounds as on 9fb631d.
+  2. Sega Rally (INFERRED to boot -- not simulated): title / attract, coin
+     and start, the menus, a race; steering on either stick, pedals on the
+     right stick's Y or the Accel / Brake buttons, the four OSD lines shown
+     only for this game; the shifter N-1-2-3-4 (INPUT TEST, SHIFT1-4); the
+     terrain (copro data) right -- cars on the road, not floating or
+     sinking. MAME's start-grid note may show as cars a little off their
+     slots.
+  3. Virtua Cop 2 (INFERRED to boot): attract, coin, start, the Trigger
+     button; the aim does not move (next step). A crash early in the
+     attract would point at the program extension.
+  4. Zero Gunner (INFERRED): boots with the patch (without it, a crash at
+     the first interrupt), attracts, plays the first credit; then, as MAME
+     with the chip's reads zeroed, it is expected to go black at the end of
+     that game, with small differences in play before it.
+  5. Not run: any whole-core simulation of the three (by instruction);
+     quartus_map of the whole core (a fit was running).
