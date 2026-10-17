@@ -2332,6 +2332,8 @@ obj_scsp_dsp$(SCSP_SFX)/Vm2_scsp_dsp: $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_
 # sound RAM in SDRAM. SND_IMG=build/snd2a/<game> (sim/sound/snd_img.py),
 # SCSP_CAP=build/scsp/<game> (MAME's MIDI, writes, mix), SND_S=<seconds>
 .PHONY: test_m2_2a_sound
+# the board's clock in MHz (the boot harness runs it at 48)
+SND2A_MHZ ?= 80
 SND2A_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv rtl/sound/fx68k/uaddrPla.sv \
              rtl/sound/m2_2a_sound.sv $(SCSP_RTL)
 test_m2_2a_sound: obj_snd2a$(SCSP_SFX)/Vm2_2a_sound
@@ -2347,6 +2349,7 @@ obj_snd2a$(SCSP_SFX)/Vm2_2a_sound: $(SND2A_RTL) $(SCSP_DIR)/scsp_uc.svh $(SCSP_H
 	  -Wno-WIDTH -Wno-UNSIGNED -Wno-CMPCONST -Wno-REALCVT -Wno-SELRANGE -Wno-IMPLICIT -Wno-ASCRANGE \
 	  -Wno-SIDEEFFECT -Wno-EOFNEWLINE -Wno-PROCASSINIT -Wno-GENUNNAMED \
 	  -GRAM_BASE=25\'h12C0000 -GROM_BASE=25\'h1260000 -GSMP_BASE=25\'h1A00000 \
+	  -GPHI_NUM=225792 -GPHI_DEN=$(SND2A_MHZ)0000 -GT44_NUM=441 -GT44_DEN=$(SND2A_MHZ)0000 -CFLAGS -DCLK_MHZ=$(SND2A_MHZ) \
 	  $(SCSP_DEFS) --top-module m2_2a_sound --Mdir obj_snd2a$(SCSP_SFX) $(SND2A_RTL) sim/sound/tb_m2_2a_sound.cpp
 
 # R859: THE 2A BOOT WITH SOUND: as test_m2_boot_2a, and the 2A sound board

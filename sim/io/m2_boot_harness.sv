@@ -97,6 +97,8 @@ module m2_boot_harness #(
   input  logic  [7:0] cab_in2,
   output logic [31:0] a2_snd_bytes,   // R852: bytes the i960 sent the sound side
   output logic [31:0] a2_snd_sig,
+  output logic  [7:0] a2_snd_last,    // R859: the last byte the i960 sent
+  output logic [31:0] a2_snd_back,    // R859: bytes the sound side sent the i960
   // R859: the 2A sound board's SDRAM ports (A2_SOUND), on clk_m: the 68000
   // (a), the SCSP's slot fills (b), its DSP (c); four-word read bursts, one-
   // word writes, m2_sdram_cdc's contract (the ack held while the request is)
@@ -122,6 +124,9 @@ module m2_boot_harness #(
   output logic [23:0] snd_addr,       // its last bus address
   output logic [31:0] snd_samples,    // samples the SCSP made
   output logic [15:0] snd_under,      // the output FIFO found empty
+  output logic        snd_wr,         // a 68000 write to the SCSP, this clock
+  output logic [11:1] snd_wa,
+  output logic [15:0] snd_wd,
   output logic [11:0] obs_intreq,
   output logic [11:0] obs_intena,
   // DO THE TWO SIDES ACTUALLY COLLIDE? Testable rather than assertable: count
@@ -453,6 +458,7 @@ module m2_boot_harness #(
   output logic [23:0] obs_io_addr,
   output logic [31:0] obs_io_wdata,
   output logic [31:0] obs_io_rdata,
+  output logic  [3:0] obs_io_be,      // R859
   output logic [31:0] obs_in_dropped,
   output logic [31:0] obs_out_dropped,
   output logic [15:0] obs_tgp_io_addr,
@@ -1140,6 +1146,7 @@ module m2_boot_harness #(
   assign obs_io_addr  = cpu_io_addr[23:0];
   assign obs_io_wdata = cpu_io_wdata;
   assign obs_io_rdata = cpu_io_rdata;
+  assign obs_io_be    = cpu_io_be;
 
   assign cpu_io_rdata =
     // R254: THE GEOMETRY POINTERS, WHICH THIS BENCH NEVER RETURNED. Model2.sv
@@ -1241,8 +1248,11 @@ module m2_boot_harness #(
       .a_rx_data(a_rx_d), .a_rx_valid(a_rx_v), .a_rx_ack(a_rx_a),
       .b_tx_data(b_tx_d), .b_tx_valid(b_tx_v), .b_tx_ack(b_tx_a),
       .b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_a),
-      .dbg_a_bytes(a2_snd_bytes), .dbg_a_last(), .dbg_a_sig(a2_snd_sig)
+      .dbg_a_bytes(a2_snd_bytes), .dbg_a_last(a2_snd_last), .dbg_a_sig(a2_snd_sig)
     );
+    always_ff @(posedge clk_m or negedge rst_n)
+      if (!rst_n) a2_snd_back <= 32'd0;
+      else if (b_tx_v && b_tx_a) a2_snd_back <= a2_snd_back + 32'd1;
     if (A2_SOUND) begin : g_snd
       // R859: as Model2.sv, at this harness's 48 MHz
       m2_2a_sound #(.AW(AW), .RAM_BASE(AW'(32'h12C0000)), .ROM_BASE(AW'(32'h1260000)),
@@ -1258,7 +1268,7 @@ module m2_boot_harness #(
         .c_ack(snd_c_ack), .c_dout(snd_c_dout),
         .snd_l(snd_l), .snd_r(snd_r),
         .dbg_addr(snd_addr), .dbg_cycles(snd_cycles), .dbg_samples(snd_samples), .dbg_under(snd_under),
-        .dbg_scsp_we(), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be()
+        .dbg_scsp_we(snd_wr), .dbg_scsp_a(snd_wa), .dbg_scsp_d(snd_wd), .dbg_scsp_be()
       );
     end else begin : g_stub
       m2_2a_snd_stub u_snd (
@@ -1271,12 +1281,12 @@ module m2_boot_harness #(
   end else begin : g_noa2
     assign a2_tmr_expire = 4'd0; assign a2_tmr_rdata = 32'd0; assign a2_io_rdata = 32'd0;
     assign a2_uart_stat = 8'd0; assign a2_uart_data = 8'd0; assign a2_uirq = 1'b0;
-    assign a2_snd_bytes = 32'd0; assign a2_snd_sig = 32'd0;
+    assign a2_snd_bytes = 32'd0; assign a2_snd_sig = 32'd0; assign a2_snd_last = 8'd0; assign a2_snd_back = 32'd0;
   end endgenerate
   generate if (!(A2 && A2_SOUND)) begin : g_nosnd
     assign {snd_a_req, snd_a_we, snd_b_req, snd_c_req, snd_c_we} = '0;
     assign {snd_a_addr, snd_b_addr, snd_c_addr, snd_a_din, snd_c_din, snd_a_be} = '0;
-    assign {snd_l, snd_r, snd_cycles, snd_addr, snd_samples, snd_under} = '0;
+    assign {snd_l, snd_r, snd_cycles, snd_addr, snd_samples, snd_under, snd_wr, snd_wa, snd_wd} = '0;
   end endgenerate
 
   /* verilator lint_off UNUSEDSIGNAL */

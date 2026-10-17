@@ -696,7 +696,17 @@ int main(int argc, char **argv) {
     for (int w = 0; w < 4; ++w) v |= uint64_t(mem[(a + w) & 0x1ffffff]) << (16 * w);
     return v;
   };
+  // M2_SND_GUARD=1: a shadow of the sound RAM that only the sound board writes,
+  // compared with the memory every 60 frames -- anything else writing there?
+  static const bool snd_guard = std::getenv("M2_SND_GUARD") != nullptr;
+  std::vector<uint16_t> snd_shadow;
   auto snd_wr = [&](uint32_t a, uint16_t v, int be) {
+    if (snd_guard && snd_shadow.empty()) snd_shadow.assign(mem.begin() + 0x12C0000, mem.begin() + 0x1300000);
+    if (snd_guard && a >= 0x12C0000 && a < 0x1300000) {
+      uint16_t &y = snd_shadow[a - 0x12C0000];
+      if (be & 2) y = uint16_t((y & 0x00ff) | (v & 0xff00));
+      if (be & 1) y = uint16_t((y & 0xff00) | (v & 0x00ff));
+    }
     uint16_t &x = mem[a & 0x1ffffff];
     if (be & 2) x = uint16_t((x & 0x00ff) | (v & 0xff00));
     if (be & 1) x = uint16_t((x & 0xff00) | (v & 0x00ff));
@@ -1571,6 +1581,65 @@ int main(int argc, char **argv) {
       if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
       slow_prev = d->clk_slow_o;
     } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); snd_tick(); d->eval(); tgp_sample(); ++mem_edges; }
+    // R859: M2_SND_LOG=1 -- every byte across the i8251, with its video frame
+    {
+      static const bool snd_log = std::getenv("M2_SND_LOG") != nullptr;
+      static uint32_t snd_seen = 0, back_seen = 0;
+      if (snd_log && d->a2_snd_bytes != snd_seen) {
+        snd_seen = d->a2_snd_bytes;
+        std::printf("    SND frame %llu: i960 -> sound byte %u = %02x\n", (unsigned long long)g_frames_done, snd_seen, (unsigned)d->a2_snd_last);
+      }
+      // and the i960's accesses to the i8251 (0x01c80000), each once
+      static bool uart_prev = false;
+      const bool uart_now = d->obs_io_sel && (d->obs_io_addr & 0xfffffc) == 0xc80000;
+      if (snd_log && uart_now && !uart_prev && g_frames_done >= 600 && g_frames_done <= 810)
+        std::printf("    UART frame %llu: %s be %x %08x\n", (unsigned long long)g_frames_done,
+                    d->obs_io_we ? "W" : "R", (unsigned)d->obs_io_be,
+                    d->obs_io_we ? (unsigned)d->obs_io_wdata : (unsigned)d->obs_io_rdata);
+      uart_prev = uart_now;
+      // M2_SND_RAMDUMP=<file> M2_SND_RAMDUMP_AT=<frame>: the sound RAM (the 68000's
+      // view, big end first) at that frame
+      static bool rd_done_ = false;
+      if (!rd_done_ && std::getenv("M2_SND_RAMDUMP") && g_frames_done >= std::strtoull(std::getenv("M2_SND_RAMDUMP_AT") ? std::getenv("M2_SND_RAMDUMP_AT") : "170", nullptr, 10)) {
+        rd_done_ = true;
+        if (FILE *rf = std::fopen(std::getenv("M2_SND_RAMDUMP"), "wb")) {
+          for (uint32_t w = 0; w < 0x40000; w++) { uint8_t b2[2] = {uint8_t(mem[0x12C0000 + w] >> 8), uint8_t(mem[0x12C0000 + w])}; std::fwrite(b2, 1, 2, rf); }
+          std::fclose(rf);
+        }
+      }
+      static uint64_t guard_frame = 0;
+      if (snd_guard && !snd_shadow.empty() && g_frames_done != guard_frame && g_frames_done % 20 == 0) {
+        guard_frame = g_frames_done;
+        for (uint32_t w = 0; w < 0x40000; w++)
+          if (mem[0x12C0000 + w] != snd_shadow[w]) {
+            std::printf("    GUARD frame %llu: sound RAM word %05x is %04x, the sound board wrote %04x\n",
+                        (unsigned long long)g_frames_done, w, mem[0x12C0000 + w], snd_shadow[w]);
+            snd_shadow[w] = mem[0x12C0000 + w];
+          }
+      }
+      // the 68000's bus addresses, the last 512, dumped at the first write to
+      // 0x42c / 0x42e (no sound program writes there)
+      static uint32_t trail[512]; static int trail_n = 0; static uint32_t trail_last = ~0u; static bool trail_done = false;
+      if (snd_log && (uint32_t)d->snd_addr != trail_last) { trail_last = d->snd_addr; trail[trail_n++ & 511] = trail_last; }
+      // (M2_SND_TRAIL_VEC: dump at the first fetch of an exception vector below
+      // 0x40 other than the reset's, after frame 100, instead)
+      static const bool trail_vec = std::getenv("M2_SND_TRAIL_VEC") != nullptr;
+      const bool vec_hit = trail_vec && g_frames_done > 100 && trail_last >= 0x08 && trail_last < 0x40;
+      if (snd_log && !trail_done && (vec_hit || (!trail_vec && d->snd_wr && (d->snd_wa << 1) >= 0x42c && (d->snd_wa << 1) < 0x430))) {
+        trail_done = true;
+        std::printf("    TRAIL frame %llu (oldest first):", (unsigned long long)g_frames_done);
+        for (int i = 0; i < 512; i++) { if (i % 16 == 0) std::printf("\n     "); std::printf(" %06x", trail[(trail_n + i) & 511]); }
+        std::printf("\n");
+      }
+      // the 68000's writes to the SCSP's common registers (0x400-0x42f)
+      if (snd_log && d->snd_wr && (d->snd_wa << 1) >= 0x400 && (d->snd_wa << 1) < 0x430)
+        std::printf("    SCSP frame %llu: 68000 writes %03x = %04x\n", (unsigned long long)g_frames_done,
+                    (unsigned)(d->snd_wa << 1), (unsigned)d->snd_wd);
+      if (snd_log && d->a2_snd_back != back_seen) {
+        back_seen = d->a2_snd_back;
+        std::printf("    SND frame %llu: sound -> i960 byte %u\n", (unsigned long long)g_frames_done, back_seen);
+      }
+    }
     if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
     // M2_COPRO_TRACE: log the i960's coprocessor bus cycles in the same shape a
     // Lua memory tap produces from the reference, so the two are diffable. The

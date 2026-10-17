@@ -29,7 +29,10 @@
 
 static Vm2_2a_sound *t;
 static uint64_t cyc = 0;
-static const double CLK = 80e6;
+#ifndef CLK_MHZ
+#define CLK_MHZ 80
+#endif
+static const double CLK = CLK_MHZ * 1e6;   // (SND2A_MHZ: the boot harness runs the board at 48)
 // SDRAM, word addressed as the core's: the board's parameters below
 static const uint32_t RAM_BASE = 0x12C0000, ROM_BASE = 0x1260000, SMP_BASE = 0x1A00000;
 static std::vector<uint16_t> ram(0x40000), rom(0x40000), smp(0x400000);
@@ -136,6 +139,10 @@ int main(int argc, char **argv) {
 	if (wav) { uint8_t h[44] = {0}; fwrite(h, 1, 44, wav); }
 	std::vector<W> rw;
 	size_t mi = 0;
+	const char *ramdump = getenv("SND_RAMDUMP");
+	const double ramdump_at = getenv("SND_RAMDUMP_AT") ? atof(getenv("SND_RAMDUMP_AT")) : 3.0;
+	const uint64_t midi_gap = getenv("SND_MIDI_GAP") ? strtoull(getenv("SND_MIDI_GAP"), nullptr, 0) : 0;
+	uint64_t midi_next = 0;
 	uint64_t end = uint64_t(secs * CLK), midi_bytes = 0, tx_bytes = 0;
 	std::vector<double> ours_rms, mame_rms;
 	double acc_l = 0; uint64_t nacc = 0; int16_t last_l = 0; uint64_t last_samples = 0;
@@ -143,7 +150,11 @@ int main(int argc, char **argv) {
 	while (cyc < end) {
 		double now = cyc / CLK;
 		// MIDI: the next byte once its time has come and the last was taken
-		if (!t->rx_valid && mi < midi.size() && midi[mi].first <= now) { t->rx_data = uint8_t(midi[mi].second); t->rx_valid = 1; }
+		// (SND_MIDI_GAP=<clocks>: at least that long from one byte to the next, as the
+		// serial line spaces them -- 320 us at 31,250 baud; MAME delivers at once)
+		if (!t->rx_valid && mi < midi.size() && midi[mi].first <= now && cyc >= midi_next) {
+			t->rx_data = uint8_t(midi[mi].second); t->rx_valid = 1; midi_next = cyc + midi_gap;
+		}
 		tick();
 		if (t->rx_valid && t->rx_ack) { t->rx_valid = 0; mi++; midi_bytes++; }
 		t->tx_ack = t->tx_valid;
@@ -152,14 +163,22 @@ int main(int argc, char **argv) {
 			uint16_t m = uint16_t(((t->dbg_scsp_be & 2) ? 0xff00 : 0) | ((t->dbg_scsp_be & 1) ? 0x00ff : 0));
 			rw.push_back({cyc / CLK, uint16_t(t->dbg_scsp_a << 1), uint16_t(t->dbg_scsp_d & m), m});
 		}
+		// SND_RAMDUMP=<file> SND_RAMDUMP_AT=<seconds>: the sound RAM, big end first
+		if (ramdump && now >= ramdump_at) {
+			if (FILE *rf = fopen(ramdump, "wb")) {
+				for (uint32_t w = 0; w < 0x40000; w++) { uint8_t b2[2] = {uint8_t(ram[w] >> 8), uint8_t(ram[w])}; fwrite(b2, 1, 2, rf); }
+				fclose(rf);
+			}
+			ramdump = nullptr;
+		}
 		// the output, one value per drained sample
-		if (cyc % 1814 == 0) {   // (the ports are unsigned in C++: the sign by hand)
+		if (cyc % uint64_t(CLK / 44100) == 0) {   // (the ports are unsigned in C++: the sign by hand)
 			const int16_t l = int16_t(t->snd_l), r = int16_t(t->snd_r);
 			acc_l += double(l) * l; nacc++;
 			if (wav) { int16_t sm[2] = {l, r}; fwrite(sm, 2, 2, wav); nwav++; }
 		}
 		if (nacc == 44100) { ours_rms.push_back(sqrt(acc_l / nacc)); acc_l = 0; nacc = 0; }
-		if ((cyc % 8000000) == 0) {
+		if ((cyc % uint64_t(CLK / 10)) == 0) {
 			if (t->dbg_addr == pc_last) pc_same++; else pc_same = 0;
 			pc_last = t->dbg_addr;
 			printf("  %.1f s: 68000 cycles %u, samples %u, FIFO empty %u, MIDI in %llu, out %llu, SCSP writes %zu (MAME %zu by then)\n",
