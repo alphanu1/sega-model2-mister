@@ -310,6 +310,47 @@ int main(int argc, char** argv) {
     ck("translucent bit",  (seen_tex >> 8) & 1, 1);
     thdr[0x100 + 0] = 0x0000;
   }
+#ifdef TB_TEXLUT
+  // ---- R867: TEXLUT -- a textured polygon hands on its colour base (header
+  // word 3 >> 6) for the pixel path; textures Off colours it as a flat one
+  // and clears its textured bit.
+  {
+    thdr[0x100 + 0] = 0x4000;
+    for (int off = 0; off < 2; off++) {
+      d->tex_off = off;
+      d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+      for (int i = 0; i < 12; i++) {
+        static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+        d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+      }
+      d->mat_we = 0;
+      d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+      d->start = 1; tick(); d->start = 0;
+      uint32_t n = 0, col = 0, lu = 0, tx = 0, miss0 = d->dbg_col_miss;
+      for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) {
+        tick();
+        if (d->poly_valid && d->poly_ready) { if (!n) { col = d->poly_col; lu = d->poly_luma; tx = d->poly_tex; } n++; }
+      }
+      if (!off) {
+        std::printf("test: R867 TEXLUT, a textured polygon carries its colour base\n");
+        ck("polygons emitted", n, 3);
+        ck("poly_col is header word 3 >> 6", col, 0x155);
+        ck("textured bit", tx & 1, 1);
+        ck("no colour reads", d->dbg_col_miss - miss0, 0);
+      } else {
+        std::printf("test: R867 TEXLUT, textures Off: the flat colour, not textured\n");
+        ck("polygons emitted", n, 3);
+        ck("the flat colour at its luma", col, ref_colour(C555, (int)lu));
+        ck("textured bit clear", tx & 1, 0);
+      }
+    }
+    d->tex_off = 0;
+    thdr[0x100 + 0] = 0x0000;
+  }
+  std::printf("m2_geo_engine: checks=%ld fails=%ld\n", checks, fails);
+  delete d;
+  return fails ? 1 : 0;
+#endif
   // ---- and a TEXTURED OPAQUE header still draws, flat, in its palette colour
   {
     thdr[0x100 + 0] = 0x4000;

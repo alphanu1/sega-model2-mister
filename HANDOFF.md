@@ -1,5 +1,24 @@
 # Handoff
 
+## 2026-10-17 (night): model2a -- VF2's "checkerboard" heads: the textured colour model, fixed (R867)
+
+CAUSE: not the checker bit (MAME's VF2 lists have none on characters;
+geodiff_2a: 0 texture-parameter differences). R784's colour model assumed
+Daytona's luma RAM (row 0 i/2, row 1 63 - i/2) and a straight-line colour
+table. VF2's row 1 is 49 + i/8 and its table has a second ramp above luma 48:
+every row-1 polygon came out inverted and full-contrast (Shun Di's beard
+black, Akira's brows white, the floor white for teal, the walls white).
+FIX (2A only, R3D_TEXLUT = M2A): m2_span_tex colours each texel through the
+game's own tables (luma RAM 8 rows per game, 3D palette, colour table at luma
+0-63) shadowed from the CPU's SDRAM writes; 9 M10K, ~+30 ALM est. in the
+module, +1 DSP; the quad store's spare bits, 0 M10K there. Bench (MAME's
+lists through the raster RTL, mean error /255): VF2 24-109 -> 1.3-6.0, VCop2
+25-81 -> 0.9-4.2. Main byte-identical (TEXLUT 0). NOT FITTED.
+MAIN HAS THE SAME FAULT: Virtua Cop's row 16 (164 / 255 mean), row 1 (53),
+Desert Tank row 11 (51) -- Ben decides (it costs main ~9 M10K).
+NEXT: a 2A build with it; the board should show VF2's heads, floor and walls
+as MAME does. Zero Gunner's row map is from its rows only, not benched.
+
 ## 2026-10-17: model2a -- the plan, in order (Ben)
 
 1. Sound on VF2 (s1176/s1190 silent: MVOL never written on the board; the

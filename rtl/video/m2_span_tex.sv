@@ -102,6 +102,17 @@ module m2_span_tex #(
   // in tx_tex[26:24], which addresses the level's copy. 0: level 0 always, and
   // the walk is the one before R828.
   parameter bit          MIP    = 1'b0,
+  // R867: THE TEXTURED COLOUR THROUGH THE REFERENCE'S OWN TABLES. 0: R784's
+  // model (in_col the slope, the luma table taken as Daytona's two rows). 1:
+  // in_col of a textured span is {3'd0, luma slot[2:0], polygon luma[7:0],
+  // colour base[9:0]} and each pixel is MAME's
+  //     L = min(63, lumaram[row][t >> 1] * luma >> 8)
+  //     colour = gamma(colorxlat[ch][palette3d[base].c5[ch]][L])
+  // from three shadows written by lut_* (the CPU's writes to eight rows of the
+  // luma RAM, the game's own -- Model2.sv; to the 3D palette; and to the
+  // colour table, luma 0-63). Five
+  // stages between the retire and the output instead of one (study R867).
+  parameter bit          TEXLUT = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -175,6 +186,16 @@ module m2_span_tex #(
   // R784: the OSD's output curve (m2_geo_engine's encoding: 0 MAME, 1 Mild,
   // 2/3 Off), for the pedestal a textured pixel adds. Quasi-static.
   input  logic [1:0]         gamma_sel,
+  // R867: the table shadows' write port (TEXLUT only). sel 0 the luma RAM
+  // ({slot[2:0], index[6:0]}, data[7:0]), 1 the 3D palette (entry[9:0],
+  // data[14:0]), 2 the colour table ({channel[1:0], c5[4:0], luma[5:0]},
+  // data[7:0]).
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic               lut_we,
+  input  logic [1:0]         lut_sel,
+  input  logic [12:0]        lut_addr,
+  input  logic [15:0]        lut_data,
+  /* verilator lint_on UNUSEDSIGNAL */
 
   output logic [31:0]        dbg_texpix,      // textured pixels emitted
   // TEXELS THAT ARE NOT 0xF, which is the question "did the game upload its
@@ -374,6 +395,14 @@ module m2_span_tex #(
   // luma table: Daytona's row 0 is i/2 and row 1 is 63 - i/2 (dumped, MAME
   // 0.289; rows 2-65 are effects ramps no measured pixel used), so with t >> 1
   // as the index the luma is t/4 or its complement.
+  // R867: the luma table's index, MAME's t >> 1 with t on its 0..240 scale.
+  function automatic logic [6:0] tidx(input logic [7:0] t);
+    logic [7:0] tm;
+    begin
+      tm   = t - {4'd0, t[7:4]};
+      tidx = tm[7:1];
+    end
+  endfunction
   function automatic logic [5:0] tlum(input logic [7:0] t, input logic inv);
     logic [7:0] tm;
     begin
@@ -408,12 +437,18 @@ module m2_span_tex #(
   // mode reduces to the rule above. It arrives here as bit 8 of the answer.
 
   wire idle    = (st == T_IDLE);
-  assign busy  = !idle || e_valid;
+  // R867: with TEXLUT the textured pixels leave through five more stages
+  // (lp_*); a flat span may pass only once they are empty too.
+  wire lp_busy;
+  wire pass    = idle && !lp_busy;
+  assign busy  = !idle || e_valid || lp_busy;
 
   // The registered half, used only while a textured span is being walked.
   logic               e_valid;
+  /* verilator lint_off UNUSEDSIGNAL */   // R867: unused with TEXLUT
   logic [13:0]        e_pr [3];   // R784: c * lum per channel (R, G, B), the emit's product
   logic [2:0]         e_z;        // R784: ... and whether the table is 0 there
+  /* verilator lint_on UNUSEDSIGNAL */
   // THE PIXEL'S OWN x, LATCHED WITH ITS COLOUR. Taking it from the walking
   // register instead puts every pixel one to the right of where its texel came
   // from: the walk advances in the same cycle the pixel is offered, so the
@@ -431,7 +466,34 @@ module m2_span_tex #(
   // span's final pixel is still being presented.
   logic               e_last;
 
+  // R867: the output stage of the table path (TEXLUT): the pixel, its span's
+  // y and stipple carried by value (a skipped last texel can free the span's
+  // parameter set while its earlier pixels are still in these stages), and
+  // the three gamma products.
+  /* verilator lint_off UNUSEDSIGNAL */   // read only with TEXLUT
+  logic               lp4_v, lp4_last, lp4_moire;
+  logic signed [15:0] lp4_x, lp4_x1, lp4_y;
+  logic [24:0]        lp4_g [3];
+  /* verilator lint_on UNUSEDSIGNAL */
+  // the downstream handshake the emit sees: the band itself, or (TEXLUT) the
+  // table stages, which all move together whenever their output can.
+  wire lp_adv = !lp4_v || out_ready;
+  wire e_rdy  = TEXLUT ? lp_adv : out_ready;
+  /* verilator lint_off UNUSEDSIGNAL */   // g[15:0], below the result
+  function automatic logic [7:0] gfin(input logic [24:0] g);
+    gfin = (g[24] != 1'b0) ? 8'hff : g[23:16];
+  endfunction
+  /* verilator lint_on UNUSEDSIGNAL */
+
   // Flat spans go through as wires; textured pixels come from the registers.
+  generate if (TEXLUT) begin : g_out_lut
+    assign out_valid = pass ? (in_vk && !tex_now) : lp4_v;
+    assign out_y     = pass ? in_y     : 32'(lp4_y);
+    assign out_x0    = pass ? in_x0    : 32'(lp4_x);
+    assign out_x1    = pass ? in_x1    : 32'(lp4_x1);
+    assign out_col   = pass ? in_col   : {gfin(lp4_g[0]), gfin(lp4_g[1]), gfin(lp4_g[2])};
+    assign out_moire = pass ? in_moire : lp4_moire;
+  end else begin : g_out_lin
   assign out_valid = idle ? (in_vk && !tex_now) : e_valid;
   assign out_y     = idle ? in_y     : 32'(y_p[e_p]);   // R813: sign-extended
   assign out_x0    = idle ? in_x0    : 32'(e_x);
@@ -442,6 +504,7 @@ module m2_span_tex #(
                                           tfin(e_pr[1], e_z[1], ped),
                                           tfin(e_pr[2], e_z[2], ped)};
   assign out_moire = idle ? in_moire : moire_p[e_p];
+  end endgenerate
 
   // A flat span is accepted only when the band takes it, which is the handshake
   // the fill saw before this unit existed. A textured one is accepted at once
@@ -449,7 +512,8 @@ module m2_span_tex #(
   // R490: a FLAT span still needs the unit truly idle -- passed through as
   // wires, it would overtake the textured pixels still in the pipeline. Only a
   // textured one may be accepted on top of a draining span.
-  assign in_ready  = (idle && (tex_now || out_ready)) || ld_over || cull;   // R813
+  assign in_ready  = TEXLUT ? ((idle && tex_now) || (pass && out_ready) || ld_over || cull)   // R867
+                            : ((idle && (tex_now || out_ready)) || ld_over || cull);   // R813
   assign dbg_hot    = st;          // R446: free, no counter behind it
 
   // R520: THE LONGEST STRETCH THIS UNIT WAS BUSY AND DID NOTHING.
@@ -732,7 +796,12 @@ module m2_span_tex #(
   // (R490), which the emit-time read below always relied on.
   logic [23:0]        rt_col;
   logic [5:0]         rt_lum;  // R784: the texel's luma, 0..63 (was R741's rt_i1)
+  /* verilator lint_off UNUSEDSIGNAL */   // R867: TEXLUT reads rt_idx; R784's path ped, e_pr, e_z
+  logic [6:0]         rt_idx;  // R867: the luma table's index, t >> 1 on the reference's scale
+  /* verilator lint_on UNUSEDSIGNAL */
+  /* verilator lint_off UNUSEDSIGNAL */   // R867: unused with TEXLUT
   logic [6:0]         ped;     // R784: the output curve's pedestal, from gamma_sel
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [1:0]         rt_k;
   logic signed [15:0] rt_x1;  // R813: 16 bits
   logic [8:0]         lt_texel;    // R633: the last fetched answer, for a reuse
@@ -759,7 +828,7 @@ module m2_span_tex #(
   // R478: the retire slot only has to be free by the NEXT edge, not this one.
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
   // the emit that frees it happens on the same edge the fetch would start.
-  wire rt_frees  = rt_valid && (!e_valid || out_ready);
+  wire rt_frees  = rt_valid && (!e_valid || e_rdy);   // R867: e_rdy
   // R539: a result is issued as a fetch whenever a credit is free -- no longer
   // only when the previous fetch has come back. The retire slot is not
   // reserved here; the answer waits in the adapter until it is free.
@@ -787,7 +856,7 @@ module m2_span_tex #(
   always_comb begin
     wait_why = 3'd0;
     if (busy) begin
-      if (e_valid && !out_ready)                        wait_why = 3'd1;
+      if (TEXLUT ? (lp4_v && !out_ready) : (e_valid && !out_ready)) wait_why = 3'd1;   // R867
       else if ((of_wp != of_rp) && !tx_ack && !head_skip && !head_reuse) wait_why = 3'd2;
       else if (res_valid && !tx_rdy)                    wait_why = 3'd3;
       else if (!res_valid)                              wait_why = 3'd4;
@@ -1012,6 +1081,7 @@ module m2_span_tex #(
       st <= T_IDLE; dv_age <= 3'd0; of_wp <= '0; of_rp <= '0;   // R539
       rt_valid <= 1'b0; rt_texel <= 1'b0; rt_x <= '0; rt_last <= 1'b0;   // R478
       rt_lum <= 6'd0; ped <= 7'd0;                                      // R784
+      rt_idx <= 7'd0;                                                   // R867
       for (int k = 0; k < 2; k++) begin
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
@@ -1029,7 +1099,7 @@ module m2_span_tex #(
       e_z <= '0;   // R784
       dbg_texpix <= '0; dbg_texnz <= '0;
     end else begin
-      if (e_valid && out_ready) e_valid <= 1'b0;
+      if (e_valid && e_rdy) e_valid <= 1'b0;   // R867: e_rdy
       // R784: Off keeps the table's pedestal (64), Mild its own curve's
       // (32 x 1.14 = 37); MAME's curve removes it. Registered, so tfin's
       // add reads a flop.
@@ -1051,8 +1121,10 @@ module m2_span_tex #(
       // translucent edges are common in a real scene and absent from every
       // bench until the soak sent them.
       begin
-        automatic logic done_e  = e_valid && out_ready && e_last;
-        automatic logic done_rt = rt_valid && (!e_valid || out_ready) && rt_last
+        // R867: with TEXLUT a pixel is finished at the table stages' output
+        automatic logic done_e  = TEXLUT ? (lp4_v && out_ready && lp4_last)
+                                         : (e_valid && out_ready && e_last);
+        automatic logic done_rt = rt_valid && (!e_valid || e_rdy) && rt_last
                                   && (rt_skip || rt_texel);   // R607, R620
         automatic logic [2:0] n_next = 3'(sp_n) + 3'(ld_span)
                                      - 3'(done_e) - 3'(done_rt);
@@ -1134,6 +1206,7 @@ module m2_span_tex #(
             rt_texel <= head_reuse ? lt_texel[8] : tx_texel[8];   // R633, R784
             rt_lum   <= tlum(head_reuse ? lt_texel[7:0] : tx_texel[7:0],
                              tex_p[of_p[of_rp[OW-2:0]]][11]);   // R784
+            rt_idx   <= tidx(head_reuse ? lt_texel[7:0] : tx_texel[7:0]);   // R867
             if (!head_skip && !head_reuse) lt_texel <= tx_texel;
             rt_x     <= of_x[of_rp[OW-2:0]];
             rt_last  <= of_last[of_rp[OW-2:0]];
@@ -1148,7 +1221,7 @@ module m2_span_tex #(
           end
 
           // Colour and emit the retired group.
-          if (rt_valid && (!e_valid || out_ready)) begin
+          if (rt_valid && (!e_valid || e_rdy)) begin   // R867: e_rdy
             automatic logic       skip = rt_skip || rt_texel;   // R607, R620
             if (!rt_take) rt_valid <= 1'b0;       // R539: a take refills it
             e_valid <= !skip;                     // R326: transparent texel
@@ -1170,5 +1243,103 @@ module m2_span_tex #(
       endcase
     end
   end
+
+  // R867: THE TABLE PATH (TEXLUT). The reference colours a texel as
+  //     L = min(63, lumaram[lumabase + (t >> 1)] * luma / 256)
+  //     colour = gamma(colortable_ch[(c5_ch << 8) | L])
+  // (model2rd.ipp draw_scanline_tex), every table the game's own. R784's
+  // slope model is exact only for a table that is a pedestal plus a straight
+  // line and a luma RAM that is Daytona's (row 0 i/2, row 1 63 - i/2). VF2's
+  // is neither: its row 1 is 49 + i/8 and its colour table has a second ramp
+  // above luma 48, which row 1 selects -- the model inverted those polygons
+  // (the faces' and heads' "checkerboard", the floor white for teal).
+  //   emit (rt -> e): the luma RAM and the palette read, e_pl latched
+  //   e -> lp2:       L = min(63, lr * luma >> 8); the palette entry
+  //   lp2 -> lp3:     the three colour-table reads at {c5, L}
+  //   lp3 -> lp3b:    v - bias, 0 at or below it (m2_geo_engine's gam())
+  //   lp3b -> lp4:    times K; the output takes >> 16, clamped at 255
+  // (R847: the curve's multiply straight off a block RAM's output is the
+  // path that failed in the engine, so the subtract has its own stage.)
+  // All five stages move together whenever the output can (lp_adv).
+  generate if (TEXLUT) begin : g_lut
+    (* ramstyle = "M10K" *) logic [7:0]  lr_mem  [1024];   // eight luma RAM rows (slots)
+    (* ramstyle = "M10K" *) logic [14:0] pal_mem [1024];   // palram 0x1000-0x13ff
+    (* ramstyle = "M10K" *) logic [7:0]  xr_mem  [2048];   // colorxlat, luma 0-63
+    (* ramstyle = "M10K" *) logic [7:0]  xg_mem  [2048];
+    (* ramstyle = "M10K" *) logic [7:0]  xb_mem  [2048];
+    always_ff @(posedge clk) begin
+      if (lut_we && lut_sel == 2'd0) lr_mem [lut_addr[9:0]] <= lut_data[7:0];
+      if (lut_we && lut_sel == 2'd1) pal_mem[lut_addr[9:0]] <= lut_data[14:0];
+      if (lut_we && lut_sel == 2'd2 && lut_addr[12:11] == 2'd0) xr_mem[lut_addr[10:0]] <= lut_data[7:0];
+      if (lut_we && lut_sel == 2'd2 && lut_addr[12:11] == 2'd1) xg_mem[lut_addr[10:0]] <= lut_data[7:0];
+      if (lut_we && lut_sel == 2'd2 && lut_addr[12:11] == 2'd2) xb_mem[lut_addr[10:0]] <= lut_data[7:0];
+    end
+
+    wire emit_go = (st == T_RUN) && rt_valid && (!e_valid || e_rdy);
+    logic [7:0]         e_pl;
+    logic               lp2_v, lp2_last, lp2_moire, lp3_v, lp3_last, lp3_moire;
+    logic signed [15:0] lp2_x, lp2_x1, lp2_y, lp3_x, lp3_x1, lp3_y;
+    logic               lp3b_v, lp3b_last, lp3b_moire;
+    logic signed [15:0] lp3b_x, lp3b_x1, lp3b_y;
+    logic [7:0]         lp3b_d [3];
+    logic [5:0]         lp2_L;
+    logic [14:0]        lp2_c;
+    logic [1:0]         g_sel;
+    logic [7:0]  lr_q;
+    logic [14:0] pal_q;
+    logic [7:0]  xq [3];
+    always_ff @(posedge clk) begin   // registered reads, enabled with their stage
+      if (emit_go) begin
+        lr_q  <= lr_mem [{rt_col[20:18], rt_idx}];
+        pal_q <= pal_mem[rt_col[9:0]];
+      end
+      if (lp_adv) begin
+        xq[0] <= xr_mem[{lp2_c[4:0],   lp2_L}];
+        xq[1] <= xg_mem[{lp2_c[9:5],   lp2_L}];
+        xq[2] <= xb_mem[{lp2_c[14:10], lp2_L}];
+      end
+    end
+
+    /* verilator lint_off UNUSEDSIGNAL */   // lpr[7:0], below the luma
+    wire  [15:0]        lpr  = 16'(lr_q) * 16'(e_pl);
+    /* verilator lint_on UNUSEDSIGNAL */
+    wire  [7:0]         gbias = g_sel[1] ? 8'd0 : g_sel[0] ? 8'd32 : 8'd64;
+    wire  [16:0]        gk    = g_sel[1] ? 17'd65536 : g_sel[0] ? 17'd74941 : 17'd87496;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin
+        e_pl <= 8'd0; g_sel <= 2'd0;
+        lp2_v <= 1'b0; lp2_last <= 1'b0; lp2_moire <= 1'b0; lp2_x <= '0; lp2_x1 <= '0; lp2_y <= '0;
+        lp2_L <= 6'd0; lp2_c <= 15'd0;
+        lp3_v <= 1'b0; lp3_last <= 1'b0; lp3_moire <= 1'b0; lp3_x <= '0; lp3_x1 <= '0; lp3_y <= '0;
+        lp3b_v <= 1'b0; lp3b_last <= 1'b0; lp3b_moire <= 1'b0; lp3b_x <= '0; lp3b_x1 <= '0; lp3b_y <= '0;
+        for (int k = 0; k < 3; k++) lp3b_d[k] <= 8'd0;
+        lp4_v <= 1'b0; lp4_last <= 1'b0; lp4_moire <= 1'b0; lp4_x <= '0; lp4_x1 <= '0; lp4_y <= '0;
+        for (int k = 0; k < 3; k++) lp4_g[k] <= '0;
+      end else begin
+        g_sel <= gamma_sel;
+        if (emit_go) e_pl <= rt_col[17:10];
+        if (lp_adv) begin
+          lp2_v <= e_valid; lp2_last <= e_last; lp2_x <= e_x; lp2_x1 <= e_x1;
+          lp2_y <= y_p[e_p]; lp2_moire <= moire_p[e_p];
+          lp2_L <= (lpr[15:8] > 8'd63) ? 6'd63 : lpr[13:8];
+          lp2_c <= pal_q;
+          lp3_v <= lp2_v; lp3_last <= lp2_last; lp3_x <= lp2_x; lp3_x1 <= lp2_x1;
+          lp3_y <= lp2_y; lp3_moire <= lp2_moire;
+          lp3b_v <= lp3_v; lp3b_last <= lp3_last; lp3b_x <= lp3_x; lp3b_x1 <= lp3_x1;
+          lp3b_y <= lp3_y; lp3b_moire <= lp3_moire;
+          for (int k = 0; k < 3; k++) lp3b_d[k] <= (xq[k] > gbias) ? xq[k] - gbias : 8'd0;
+          lp4_v <= lp3b_v; lp4_last <= lp3b_last; lp4_x <= lp3b_x; lp4_x1 <= lp3b_x1;
+          lp4_y <= lp3b_y; lp4_moire <= lp3b_moire;
+          for (int k = 0; k < 3; k++) lp4_g[k] <= 25'(lp3b_d[k]) * 25'(gk);
+        end
+      end
+    end
+    assign lp_busy = lp2_v || lp3_v || lp3b_v || lp4_v;
+  end else begin : g_nolut
+    assign lp_busy = 1'b0;
+    assign lp4_v = 1'b0; assign lp4_last = 1'b0; assign lp4_moire = 1'b0;
+    assign lp4_x = '0; assign lp4_x1 = '0; assign lp4_y = '0;
+    assign lp4_g[0] = '0; assign lp4_g[1] = '0; assign lp4_g[2] = '0;
+  end endgenerate
 
 endmodule

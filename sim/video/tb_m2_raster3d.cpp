@@ -816,6 +816,17 @@ int main(int argc, char **argv) {
 #ifndef R784_OLD
       d->tex_gamma = GSEL;
 #endif
+#ifdef R3D_TEXLUT
+      // R867: the colour path's shadows, written as Model2.sv's snoop writes
+      // them: luma RAM rows 0-3, the 3D palette, the colour table at luma 0-63
+      auto lw = [&](int sel, int a, int v) { d->lut_we = 1; d->lut_sel = sel; d->lut_addr = a; d->lut_data = v; tick(); };
+      for (int i = 0; i < 512; i++) { lw(0, i, lram[i]); lw(0, 512 + i, lram[16 * 128 + i]); }   // rows 0-3, 16-19
+      for (int i = 0; i < 1024; i++) lw(1, i, pal[0x1000 + i] & 0x7fff);
+      for (int ch = 0; ch < 3; ch++) for (int c5 = 0; c5 < 32; c5++) for (int l = 0; l < 64; l++)
+        lw(2, (ch << 11) | (c5 << 6) | l, xl[ch * 0x2000 + (c5 << 8) + l] & 0xff);
+      d->lut_we = 0;
+      std::printf("  R867 TEXLUT: luma rows 0-3 and 16-19, 3D palette and colour table written\n");
+#endif
     }
     // m2_geo_engine's gam(): sel 0 MAME (bias 64), 1 Mild (bias 32), 2/3 Off
     auto gam_rtl = [](int v, int sel) -> int {
@@ -941,7 +952,19 @@ int main(int argc, char **argv) {
       d->q_tex = NOTEX ? 0u : (tex & 0xffffff); d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       if (REALCOL) {   // R784: the real colour, and bit 11 as Model2.sv packs it
         d->q_col = eng_col(p);
-#ifndef R784_OLD
+#ifdef R3D_TEXLUT
+        // R867: as Model2.sv packs for TEXLUT -- a textured quad carries
+        // {luma, colour base} and the row; a flat one RGB565
+        { const uint32_t cb = (p.h3 >> 6) & 0x3ff, c = d->q_col;
+          if (!NOTEX && (tex & 1)) {
+            d->q_col = ((p.luma & 0xff) << 9) | (cb >> 1);
+            d->q_tex = (((p.h1 >> 4) & 1u) << 26) | ((p.h1 & 3u) << 24) | (tex & 0xfff7ffu) | ((cb & 1u) << 11);
+          } else {
+            d->q_col = (((c >> 19) & 31) << 11) | (((c >> 10) & 63) << 5) | ((c >> 3) & 31);
+            d->q_tex = NOTEX ? 0u : (tex & 0xfff7ffu);
+          }
+        }
+#elif !defined(R784_OLD)
         if (!NOTEX) d->q_tex = (tex & 0xfff7ffu) | (((p.h1 & 0xff) == 1) ? 0x800u : 0u);
 #endif
       }

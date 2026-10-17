@@ -1746,6 +1746,16 @@ test_m2_geo_engine: obj_m2_geo_engine/Vm2_geo_engine_top
 	@echo "== test m2_geo_engine (object_data -> quads: vertex order, links, rope)"
 	@./obj_m2_geo_engine/Vm2_geo_engine_top
 
+# R867: the engine's TEXLUT build (the 2A core's): a textured polygon's colour base
+test_m2_geo_engine_lut: obj_m2_geo_engine_lut/Vm2_geo_engine_top
+	@echo "== test m2_geo_engine TEXLUT (R867: the colour base for the pixel path)"
+	@./obj_m2_geo_engine_lut/Vm2_geo_engine_top
+obj_m2_geo_engine_lut/Vm2_geo_engine_top: rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv $(GEO_RTL) sim/video/geo_engine_top.sv sim/video/tb_m2_geo_engine.cpp
+	$(VBUILD) --top-module m2_geo_engine_top -GTEXLUT=1 -CFLAGS "-O2 -DTB_TEXLUT" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	  --Mdir obj_m2_geo_engine_lut -o Vm2_geo_engine_top sim/video/geo_engine_top.sv \
+	  rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv $(GEO_RTL) \
+	  sim/video/tb_m2_geo_engine.cpp
+
 # The clipper has its own top: it drives m2_geo_project as well as the pool.
 obj_m2_geo_clip/Vtb_clip_top: rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_clip_top.sv sim/video/tb_m2_geo_clip.cpp
 	$(VBUILD) --top-module tb_clip_top -CFLAGS "-O2" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
