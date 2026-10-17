@@ -36973,3 +36973,14 @@ UART path is too slow (a frame's block x 57.5 Hz is tens of KB/s against
 115,200 baud). Applies to the original core (Daytona Revision A's link
 board) and to 2A games with a link (Sega Rally among them). Behind its own
 compile-time switch when it is built.
+R863 addendum (Ben, agreed plan): THE ROUTE IS A HELPER PROGRAM ON MiSTer's
+OWN LINUX, NO KERNEL CHANGE. On the DE10-Nano the Ethernet PHY is wired to
+the HPS's EMAC, not the FPGA, so the core cannot reach the network directly
+(the debug UART also ends in Linux, as /dev/ttyS1). Plan: the core puts the
+comm board's 16 KB shared RAM in DDR3 and its CN/FG registers behind the HPS
+bridge (~100-200 ALM, own switch); an ordinary userspace program, started
+from Scripts or at boot like MidiLink, runs the ring protocol (the recomp's
+comm_board.cpp, BSD-3 from MAME's m2comm) and the TCP sockets over Ethernet
+or Wi-Fi. Rejected for now: a user-port Ethernet module with hardware TCP/IP
+(e.g. WIZnet W5500 over SPI, ~150-250 ALM, no Linux) -- it needs an add-on
+board for every player. Not scheduled.
