@@ -66,6 +66,10 @@ module m2_boot_harness #(
   // i8251 with the silent sound stand-in on its far end, and the interrupt
   // controller of Model2.sv (the tb's irq[0] is then only the vblank event).
   parameter bit          A2              = 1'b0,
+  // R859: with A2, the 2A sound board (m2_2a_sound: the 68000 on the game's
+  // sound program and the SCSP) in place of the silent stand-in, its three
+  // SDRAM ports answered by the tb (snd_*), as Model2.sv's M2_2A_SOUND
+  parameter bit          A2_SOUND        = 1'b0,
   // R852: the TGP program RAM (4096 for A2)
   parameter int unsigned TGP_PROG        = 2048,
   // R854: the i960's i-cache lines (i960_top IC_LINES)
@@ -93,6 +97,31 @@ module m2_boot_harness #(
   input  logic  [7:0] cab_in2,
   output logic [31:0] a2_snd_bytes,   // R852: bytes the i960 sent the sound side
   output logic [31:0] a2_snd_sig,
+  // R859: the 2A sound board's SDRAM ports (A2_SOUND), on clk_m: the 68000
+  // (a), the SCSP's slot fills (b), its DSP (c); four-word read bursts, one-
+  // word writes, m2_sdram_cdc's contract (the ack held while the request is)
+  output logic        snd_a_req,
+  output logic [AW:1] snd_a_addr,
+  output logic        snd_a_we,
+  output logic [15:0] snd_a_din,
+  output logic  [1:0] snd_a_be,
+  input  logic        snd_a_ack,
+  input  logic [63:0] snd_a_dout,
+  output logic        snd_b_req,
+  output logic [AW:1] snd_b_addr,
+  input  logic        snd_b_ack,
+  input  logic [63:0] snd_b_dout,
+  output logic        snd_c_req,
+  output logic [AW:1] snd_c_addr,
+  output logic        snd_c_we,
+  output logic [15:0] snd_c_din,
+  input  logic        snd_c_ack,
+  input  logic [63:0] snd_c_dout,
+  output logic signed [15:0] snd_l, snd_r,
+  output logic [31:0] snd_cycles,     // the 68000's bus cycles
+  output logic [23:0] snd_addr,       // its last bus address
+  output logic [31:0] snd_samples,    // samples the SCSP made
+  output logic [15:0] snd_under,      // the output FIFO found empty
   output logic [11:0] obs_intreq,
   output logic [11:0] obs_intena,
   // DO THE TWO SIDES ACTUALLY COLLIDE? Testable rather than assertable: count
@@ -1213,16 +1242,40 @@ module m2_boot_harness #(
       .b_rx_data(b_rx_d), .b_rx_valid(b_rx_v), .b_rx_ack(b_rx_a),
       .dbg_a_bytes(a2_snd_bytes), .dbg_a_last(), .dbg_a_sig(a2_snd_sig)
     );
-    m2_2a_snd_stub u_snd (
-      .clk(clk_m), .rst_n(rst_n),
-      .rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
-      .tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
-      .dbg_rx_bytes(), .dbg_tx_bytes()
-    );
+    if (A2_SOUND) begin : g_snd
+      // R859: as Model2.sv, at this harness's 48 MHz
+      m2_2a_sound #(.AW(AW), .RAM_BASE(AW'(32'h12C0000)), .ROM_BASE(AW'(32'h1260000)),
+                    .SMP_BASE(AW'(32'h1A00000)), .ROM_SWAP(1'b1),
+                    .PHI_NUM(225792), .PHI_DEN(480000), .T44_NUM(441), .T44_DEN(480000)) u_snd (
+        .clk(clk_m), .rst_n(rst_n),
+        .rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
+        .tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
+        .a_req(snd_a_req), .a_addr(snd_a_addr), .a_we(snd_a_we), .a_din(snd_a_din), .a_be(snd_a_be),
+        .a_ack(snd_a_ack), .a_dout(snd_a_dout),
+        .b_req(snd_b_req), .b_addr(snd_b_addr), .b_ack(snd_b_ack), .b_dout(snd_b_dout),
+        .c_req(snd_c_req), .c_addr(snd_c_addr), .c_we(snd_c_we), .c_din(snd_c_din),
+        .c_ack(snd_c_ack), .c_dout(snd_c_dout),
+        .snd_l(snd_l), .snd_r(snd_r),
+        .dbg_addr(snd_addr), .dbg_cycles(snd_cycles), .dbg_samples(snd_samples), .dbg_under(snd_under),
+        .dbg_scsp_we(), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be()
+      );
+    end else begin : g_stub
+      m2_2a_snd_stub u_snd (
+        .clk(clk_m), .rst_n(rst_n),
+        .rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
+        .tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
+        .dbg_rx_bytes(), .dbg_tx_bytes()
+      );
+    end
   end else begin : g_noa2
     assign a2_tmr_expire = 4'd0; assign a2_tmr_rdata = 32'd0; assign a2_io_rdata = 32'd0;
     assign a2_uart_stat = 8'd0; assign a2_uart_data = 8'd0; assign a2_uirq = 1'b0;
     assign a2_snd_bytes = 32'd0; assign a2_snd_sig = 32'd0;
+  end endgenerate
+  generate if (!(A2 && A2_SOUND)) begin : g_nosnd
+    assign {snd_a_req, snd_a_we, snd_b_req, snd_c_req, snd_c_we} = '0;
+    assign {snd_a_addr, snd_b_addr, snd_c_addr, snd_a_din, snd_c_din, snd_a_be} = '0;
+    assign {snd_l, snd_r, snd_cycles, snd_addr, snd_samples, snd_under} = '0;
   end endgenerate
 
   /* verilator lint_off UNUSEDSIGNAL */

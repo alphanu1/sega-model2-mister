@@ -683,6 +683,61 @@ int main(int argc, char **argv) {
     }
     if (!req) p.done = 0;
   };
+  // R859: THE 2A SOUND BOARD'S THREE SDRAM PORTS (harness A2_SOUND), on the
+  // same memory as everything else: m2_sdram_cdc's contract -- a request is a
+  // level held until its acknowledge, which stays up while the request does;
+  // a read returns four words, a write stores one under its byte enables.
+  // M2_SND_LAT sets the latency in memory clocks (default 12).
+  struct SndPort { bool busy = false, done = false; int lat = 0; };
+  SndPort snd_pa, snd_pb, snd_pc;
+  const int snd_lat = std::getenv("M2_SND_LAT") ? std::atoi(std::getenv("M2_SND_LAT")) : 12;
+  auto snd_rd4 = [&](uint32_t a) {
+    uint64_t v = 0;
+    for (int w = 0; w < 4; ++w) v |= uint64_t(mem[(a + w) & 0x1ffffff]) << (16 * w);
+    return v;
+  };
+  auto snd_wr = [&](uint32_t a, uint16_t v, int be) {
+    uint16_t &x = mem[a & 0x1ffffff];
+    if (be & 2) x = uint16_t((x & 0x00ff) | (v & 0xff00));
+    if (be & 1) x = uint16_t((x & 0xff00) | (v & 0x00ff));
+  };
+  auto snd_port = [&](SndPort &p, bool req) -> bool {   // true on the clock the access happens
+    if (!req) { p.busy = false; p.done = false; return false; }
+    if (!p.busy && !p.done) { p.busy = true; p.lat = snd_lat; return false; }
+    if (p.busy && --p.lat <= 0) { p.busy = false; p.done = true; return true; }
+    return false;
+  };
+  // the output, one sample per 44,100th of a second of the 48 MHz clock
+  uint64_t snd_acc = 0, snd_n = 0, snd_nz = 0;
+  double snd_sq = 0; int snd_peak = 0;
+  FILE *snd_wav = nullptr;
+  if (const char *wp = std::getenv("M2_SND_WAV")) {
+    snd_wav = std::fopen(wp, "wb");
+    if (snd_wav) { uint8_t h[44] = {0}; std::fwrite(h, 1, 44, snd_wav); }   // the header at the end
+  }
+  auto snd_tick = [&]() {
+    if (snd_port(snd_pa, d->snd_a_req)) {
+      if (d->snd_a_we) snd_wr(uint32_t(d->snd_a_addr), uint16_t(d->snd_a_din), int(d->snd_a_be));
+      else d->snd_a_dout = snd_rd4(uint32_t(d->snd_a_addr));
+    }
+    d->snd_a_ack = snd_pa.done && d->snd_a_req;
+    if (snd_port(snd_pb, d->snd_b_req)) d->snd_b_dout = snd_rd4(uint32_t(d->snd_b_addr));
+    d->snd_b_ack = snd_pb.done && d->snd_b_req;
+    if (snd_port(snd_pc, d->snd_c_req)) {
+      if (d->snd_c_we) snd_wr(uint32_t(d->snd_c_addr), uint16_t(d->snd_c_din), 3);
+      else d->snd_c_dout = snd_rd4(uint32_t(d->snd_c_addr));
+    }
+    d->snd_c_ack = snd_pc.done && d->snd_c_req;
+    snd_acc += 441;
+    if (snd_acc >= 480000) {
+      snd_acc -= 480000;
+      const int16_t l = int16_t(d->snd_l), r = int16_t(d->snd_r);
+      ++snd_n; snd_sq += double(l) * l;
+      if (l || r) ++snd_nz;
+      snd_peak = std::max(snd_peak, std::max(std::abs(int(l)), std::abs(int(r))));
+      if (snd_wav) { int16_t sm[2] = {l, r}; std::fwrite(sm, 2, 2, snd_wav); }
+    }
+  };
   auto geo_tick = [&]() {
     if (d->pair_en) {
       pair_serve(pp_geo, d->geo_p_req, uint32_t(d->geo_p_idx));
@@ -1515,7 +1570,7 @@ int main(int argc, char **argv) {
       d->eval();
       if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
       slow_prev = d->clk_slow_o;
-    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); d->eval(); tgp_sample(); ++mem_edges; }
+    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); snd_tick(); d->eval(); tgp_sample(); ++mem_edges; }
     if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
     // M2_COPRO_TRACE: log the i960's coprocessor bus cycles in the same shape a
     // Lua memory tap produces from the reference, so the two are diffable. The
@@ -3044,6 +3099,23 @@ int main(int argc, char **argv) {
     std::printf("\n  2A: intena %03x intreq %03x, %u bytes to the sound side (sig %08x)\n",
                 (unsigned)d->obs_intena, (unsigned)d->obs_intreq,
                 (unsigned)d->a2_snd_bytes, (unsigned)d->a2_snd_sig);
+    // R859: the sound board (harness A2_SOUND; all zero with the stand-in)
+    if (d->snd_cycles) {
+      std::printf("  2A sound: 68000 bus cycles %u (last address %06x), SCSP samples %u, "
+                  "FIFO found empty %u; output %llu samples, %llu not silent, RMS %.0f, peak %d\n",
+                  (unsigned)d->snd_cycles, (unsigned)d->snd_addr, (unsigned)d->snd_samples,
+                  (unsigned)d->snd_under, (unsigned long long)snd_n, (unsigned long long)snd_nz,
+                  snd_n ? std::sqrt(snd_sq / double(snd_n)) : 0.0, snd_peak);
+    }
+    if (snd_wav) {   // a 44,100 Hz stereo WAV of the run
+      const uint32_t db = uint32_t(snd_n * 4);
+      uint8_t h[44] = {'R','I','F','F'};
+      auto le32 = [&](int o, uint32_t v) { for (int i = 0; i < 4; i++) h[o + i] = uint8_t(v >> (8 * i)); };
+      le32(4, 36 + db); std::memcpy(h + 8, "WAVEfmt ", 8); le32(16, 16);
+      h[20] = 1; h[22] = 2; le32(24, 44100); le32(28, 44100 * 4); h[32] = 4; h[34] = 16;
+      std::memcpy(h + 36, "data", 4); le32(40, db);
+      std::fseek(snd_wav, 0, SEEK_SET); std::fwrite(h, 1, 44, snd_wav); std::fclose(snd_wav);
+    }
     if (d->cpu_trap || d->cpu_halt) {
       std::printf("  2A: the i960 TRAPPED / HALTED at ip %08x\n", (unsigned)d->dbg_ip);
       fail = 1;
