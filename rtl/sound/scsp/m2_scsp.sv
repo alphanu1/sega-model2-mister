@@ -268,20 +268,32 @@ module m2_scsp #(
   wire         o_ring   = FM && o_addr >= 11'h300 && o_addr < 11'h380;   // 0x600-0x6ff
   wire         o_dsp    = o_addr >= 11'h380 && o_addr < 11'h600;
 
+  // A WRITE IS ACKNOWLEDGED WHEN IT IS IN THE QUEUE, NOT BEFORE (R859): the
+  // queue drains only in the engine's operation windows, and a 68000 writing
+  // back to back outran its four entries -- the fifth write was lost (VF2's
+  // RBP / RBL on the boot bench, then its program). A write that finds the
+  // queue full waits in wh, and its acknowledge (the 68000's DTACK) with it.
+  logic [28:0] wh;
+  logic        wh_v;
+  wire         wq_room = wq_n != 3'd4;
+  wire         wq_push = wq_room && ((cpu_req && cpu_we) || wh_v);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       wq_rd <= '0; wq_wr <= '0; wq_n <= '0; rd_pend <= 1'b0; cpu_ack <= 1'b0; rd_a <= '0;
+      wh <= '0; wh_v <= 1'b0;
     end else begin
       cpu_ack <= 1'b0;
-      if (cpu_req && cpu_we) begin
-        wq[wq_wr] <= {cpu_be, cpu_addr, cpu_din};
+      if (cpu_req && cpu_we && !wq_room) begin wh <= {cpu_be, cpu_addr, cpu_din}; wh_v <= 1'b1; end
+      if (wq_push) begin
+        wq[wq_wr] <= wh_v ? wh : {cpu_be, cpu_addr, cpu_din};
         wq_wr <= wq_wr + 2'd1;
         cpu_ack <= 1'b1;
+        wh_v <= 1'b0;
       end
       if (cpu_req && !cpu_we) begin rd_pend <= 1'b1; rd_a <= cpu_addr; end
       if (rd_done) begin rd_pend <= 1'b0; cpu_ack <= 1'b1; end
       if (wq_pop) wq_rd <= wq_rd + 2'd1;
-      wq_n <= wq_n + {2'd0, cpu_req && cpu_we} - {2'd0, wq_pop};
+      wq_n <= wq_n + {2'd0, wq_push} - {2'd0, wq_pop};
     end
   end
 
