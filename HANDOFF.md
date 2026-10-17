@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-10-17: model2a -- the plan, in order (Ben)
+
+1. Sound on VF2 (s1176/s1190 silent: MVOL never written on the board; the
+   sound-RAM clear 3c609bd is in c3ee7d2; s1200-s1202 test it).
+2. All four 2A games boot (VF2, Virtua Cop 2 run on s1192; Sega Rally and Zero
+   Gunner trapped on flushreg -- R865 fix in c3ee7d2).
+3. Area: make modules as small as possible (an agent on the i960 FPU /
+   register file first) -- room for Zero Gunner's 315-5881 and more.
+4. LINK PLAY for Sega Rally on this core AND Daytona Revision A on main (R863:
+   comm-board RAM in DDR3 + a Linux helper running the recomp's protocol;
+   Sega Rally's frame offset and Twin/DX link default to check in MAME).
+Also open: Virtua Cop 2's gun aim (315-5649 serial), Zero Gunner's 315-5881.
+
 ## 2026-10-17 (evening): model2a -- the 2A sound board in the core; SCSP redesigned (R858, R859)
 
 STATE: rtl/sound/scsp/ is a microcoded slot engine + serial DSP (R858:
