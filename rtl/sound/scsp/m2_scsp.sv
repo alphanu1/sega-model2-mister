@@ -101,7 +101,8 @@ module m2_scsp #(
   output logic  [4:0] dbg_slot,
   output logic signed [31:0] dbg_slot_smp,
   output logic [31:0] dbg_samples,
-  output logic [31:0] dbg_miss
+  output logic [31:0] dbg_miss,
+  output logic  [3:0] dbg_mvol           // MVOL as the common registers hold it (telemetry, R864)
 );
 
 `include "scsp_tables.svh"
@@ -946,6 +947,7 @@ module m2_scsp #(
   end
 `endif
 
+  assign dbg_mvol = mvol;
   assign quiet = upc == UA_IDLE && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
                  !lv_busy && !lv_req && !dsp_busy;
 

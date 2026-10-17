@@ -11,8 +11,11 @@
 //   400000         the sample bank latch (ignored: no 2A set has more than
 //                  8 MB of samples, so MAME's banks are linear)
 //   600000-67ffff  program ROM                       800000-ffffff  samples
-// At reset the first 16 bytes of the program ROM are copied into RAM (MAME
-// reset_model2_scsp) -- the 68000 boots from RAM -- and then it is let go.
+// At reset the sound RAM is checked (a pattern through the 68000's port,
+// read back: dbg_selftest counts the words that came back wrong) and then
+// cleared to zero, as MAME's starts (R864); then the first 16 bytes of the
+// program ROM are copied into RAM (MAME reset_model2_scsp) -- the 68000 boots
+// from RAM -- and it is let go.
 // Its interrupts are the SCSP's levels, autovectored (VPA on the acknowledge).
 //
 // ALL OF IT IS IN SDRAM, on three ports: the 68000's (program, samples and
@@ -81,6 +84,10 @@ module m2_2a_sound #(
   output logic [31:0] dbg_cycles,        // its bus cycles
   output logic [31:0] dbg_samples,       // samples made
   output logic [15:0] dbg_under,         // the FIFO found empty at a drain
+  output logic [15:0] dbg_selftest,      // sound-RAM words wrong in the pre-boot check (R864)
+  output logic  [3:0] dbg_mvol,          // MVOL as the SCSP holds it
+  output logic [15:0] dbg_w400,          // 68000 writes to 0x400-0x401 (MVOL, DAC18, ...)
+  output logic [15:0] dbg_w418,          // 68000 writes to 0x418 (timer A)
   output logic        dbg_scsp_we,       // a 68000 write to the SCSP, this clock
   output logic [11:1] dbg_scsp_a,
   output logic [15:0] dbg_scsp_d,
@@ -193,7 +200,8 @@ module m2_2a_sound #(
     .snp(snp), .snp_addr(snp_a),
     .out_ready(o_ready), .out_valid(o_valid), .out_l_raw(), .out_r_raw(), .out_l(o_l), .out_r(o_r),
     .tick44(tick44), .step_mode(1'b0), .step_go(1'b0), .quiet(),
-    .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss()
+    .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss(),
+    .dbg_mvol(dbg_mvol)
   );
   assign b_req  = sm_req;
   assign b_addr = RAM_BASE + AW'({sm_line, 2'b00});
@@ -220,19 +228,36 @@ module m2_2a_sound #(
   end
 
   // ---------------------------------------------------------------- the bus
-  // V_*: the vector copy (ROM words 0-7 to RAM words 0-7) before the 68000
-  // runs; then a 68000 cycle at a time
-  typedef enum logic [3:0] { V_CLR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK } bst_t;
+  // V_*: before the 68000 runs -- the cache's valid bits cleared (V_CLR); the
+  // sound RAM checked: 4 K words written with a pattern (V_TW), every word's
+  // upper or lower byte rewritten alone (V_TB, the byte enables), all read back
+  // and compared (V_TR); the whole 256 K words cleared to zero (V_ZR); the
+  // vector copy (V_RD / V_WR: ROM words 0-7 to RAM words 0-7). Then a 68000
+  // cycle at a time.
+  typedef enum logic [3:0] { V_CLR, V_TW, V_TB, V_TR, V_ZR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK } bst_t;
   bst_t        bs;
   logic  [2:0] vi;
+  logic [17:0] ti;                         // the check's and the clear's word
+  // the check's words: a pattern, then one byte of each rewritten
+  function automatic logic [15:0] tpat(input logic [11:0] i);
+    tpat = {i[7:0] ^ 8'h5a, i[11:4] ^ 8'hc3};
+  endfunction
+  function automatic logic [15:0] texp(input logic [11:0] i);
+    logic [15:0] p;
+    p = tpat(i);
+    texp = i[0] ? {p[15:8], ~i[7:0]} : {~i[7:0], p[7:0]};
+  endfunction
   logic [63:0] vline;
   logic [15:0] rq;
+  function automatic logic [15:0] sat16(input logic [15:0] c, input logic [2:0] n);
+    sat16 = (c > 16'hfffb) ? 16'hffff : c + 16'(n);
+  endfunction
   function automatic logic [15:0] swp(input logic [15:0] w);
     swp = ROM_SWAP ? {w[7:0], w[15:8]} : w;
   endfunction
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      bs <= V_CLR; vi <= '0; vclr <= 1'b1; vclr_i <= '0; cpu_go <= 1'b0; dtackn <= 1'b1;
+      bs <= V_CLR; vi <= '0; ti <= '0; dbg_selftest <= '0; vclr <= 1'b1; vclr_i <= '0; cpu_go <= 1'b0; dtackn <= 1'b1;
       a_req <= 1'b0; a_we <= 1'b0; a_addr <= '0; a_din <= '0; a_be <= 2'b11; ln_we <= 1'b0;
       s_req <= 1'b0; snp <= 1'b0; rq <= 16'hffff; vline <= '0; ln_wi <= '0; ln_wt <= '0; snp_a <= '0;
     end else begin
@@ -240,7 +265,45 @@ module m2_2a_sound #(
       case (bs)
         V_CLR: begin                                  // the cache's valid bits, cleared
           vclr_i <= vclr_i + 1'b1;
-          if (&vclr_i) begin vclr <= 1'b0; bs <= V_RD; end
+          if (&vclr_i) begin vclr <= 1'b0; bs <= V_TW; ti <= '0; end
+        end
+        V_TW: begin                                   // word ti = the pattern
+          if (!a_req && !a_ack) begin
+            a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11;
+            a_addr <= RAM_BASE + AW'(ti[11:0]); a_din <= tpat(ti[11:0]);
+          end else if (a_ack) begin
+            a_req <= 1'b0; a_we <= 1'b0; ti <= ti + 18'd1;
+            if (ti[11:0] == 12'hfff) begin bs <= V_TB; ti <= '0; end
+          end
+        end
+        V_TB: begin                                   // one byte of word ti, alone
+          if (!a_req && !a_ack) begin
+            a_req <= 1'b1; a_we <= 1'b1; a_be <= ti[0] ? 2'b01 : 2'b10;
+            a_addr <= RAM_BASE + AW'(ti[11:0]); a_din <= {~ti[7:0], ~ti[7:0]};
+          end else if (a_ack) begin
+            a_req <= 1'b0; a_we <= 1'b0; ti <= ti + 18'd1;
+            if (ti[11:0] == 12'hfff) begin bs <= V_TR; ti <= '0; end
+          end
+        end
+        V_TR: begin                                   // words ti .. ti + 3, compared
+          if (!a_req && !a_ack) begin
+            a_req <= 1'b1; a_we <= 1'b0; a_addr <= RAM_BASE + AW'({ti[11:2], 2'b00});
+          end else if (a_ack) begin
+            a_req <= 1'b0;
+            dbg_selftest <= sat16(dbg_selftest,
+                                  {1'b0, a_dout[15:0]  != texp({ti[11:2], 2'd0})} + {1'b0, a_dout[31:16] != texp({ti[11:2], 2'd1})} +
+                                  {1'b0, a_dout[47:32] != texp({ti[11:2], 2'd2})} + {1'b0, a_dout[63:48] != texp({ti[11:2], 2'd3})});
+            ti <= ti + 18'd4;
+            if (ti[11:2] == 10'h3ff) begin bs <= V_ZR; ti <= '0; end
+          end
+        end
+        V_ZR: begin                                   // the whole sound RAM to zero
+          if (!a_req && !a_ack) begin
+            a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11; a_addr <= RAM_BASE + AW'(ti); a_din <= 16'h0000;
+          end else if (a_ack) begin
+            a_req <= 1'b0; a_we <= 1'b0; ti <= ti + 18'd1;
+            if (&ti) bs <= V_RD;
+          end
         end
         V_RD: begin                                   // ROM words vi .. vi + 3
           if (!a_req && !a_ack) begin a_req <= 1'b1; a_we <= 1'b0; a_addr <= ROM_BASE + AW'(vi); end
@@ -292,8 +355,10 @@ module m2_2a_sound #(
   // ---------------------------------------------------------------- debug
   logic as_d;
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin dbg_addr <= '0; dbg_cycles <= '0; as_d <= 1'b0; end
+    if (!rst_n) begin dbg_addr <= '0; dbg_cycles <= '0; as_d <= 1'b0; dbg_w400 <= '0; dbg_w418 <= '0; end
     else begin
+      if (s_req && !rwn && addr[11:1] == 11'h200 && !(&dbg_w400)) dbg_w400 <= dbg_w400 + 16'd1;
+      if (s_req && !rwn && addr[11:1] == 11'h20c && !(&dbg_w418)) dbg_w418 <= dbg_w418 + 16'd1;
       as_d <= as;
       if (as && !as_d) begin
         dbg_addr <= addr;

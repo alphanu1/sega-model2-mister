@@ -235,6 +235,9 @@ int main(int argc, char **argv) {
 	}
 	printf("tb_m2_2a_sound %s: %.1f s, 68000 bus cycles %u (last address %06x), samples %u, FIFO found empty %u times\n",
 		cap, secs, t->dbg_cycles, t->dbg_addr, t->dbg_samples, t->dbg_under);
+	printf("  pre-boot sound-RAM check: %u words wrong; MVOL %u; 68000 writes to 0x400 %u, to 0x418 %u\n",
+		(unsigned)t->dbg_selftest, (unsigned)t->dbg_mvol, (unsigned)t->dbg_w400, (unsigned)t->dbg_w418);
+	if (t->dbg_selftest) { printf("FAIL: the sound-RAM check found wrong words\n"); return 1; }
 	printf("  MIDI in %llu of MAME's %zu (in the time); MIDI out %llu bytes; sound-RAM writes %llu, stray writes %llu\n",
 		(unsigned long long)midi_bytes, size_t(std::count_if(midi.begin(), midi.end(), [&](const std::pair<double, int> &m) { return m.first <= secs; })), (unsigned long long)tx_bytes, (unsigned long long)ram_writes, (unsigned long long)bad_writes);
 	printf("  SCSP writes: ours %zu, MAME's %zu; in MAME's order (LCS of %zu / %zu from %.2f s) %zu = %.1f%% of MAME's\n",
