@@ -5,10 +5,10 @@
 // formulas (via scsp_ref.h, whose tables equal MAME's dump -- scsp_replay).
 // Data derived from BSD-3-Clause code (ElSemi, R. Belmont); see THIRD_PARTY.md.
 //
-//   scsp_tables_gen <dir> [tables.bin]   writes scsp_eg.hex (1,024 x 13), scsp_pscale.hex
-//   (2,048 x 9: PSCALES[s][i], index s << 8 | i), scsp_ascale.hex (2,048 x 9),
-//   and scsp_tables.svh (AR / DR rates, LFO phase steps), and with MAME's
-//   tables.bin (p16) scsp_lfonoise.hex (the noise LFO, 256 x 8).
+//   scsp_tables_gen <dir> [tables.bin]   writes scsp_eg.hex (1,024 x 13),
+//   scsp_lfo.hex (the two LFOs, waves baked in, 16,384 x 9), scsp_rate.hex
+//   (AR / DR, 128 x 27), scsp_tables.svh (LFO phase steps), and with MAME's
+//   tables.bin (p16) scsp_lfonoise.hex (the noise LFO, 256 x 8, for the benches).
 #include "scsp_ref.h"
 #include <cstdio>
 #include <string>
@@ -21,12 +21,6 @@ int main(int argc, char **argv) {
 	FILE *f = fopen((d + "/scsp_eg.hex").c_str(), "w");
 	for (int i = 0; i < 0x400; i++) fprintf(f, "%04x\n", T.EG_TABLE[i]);
 	fclose(f);
-	f = fopen((d + "/scsp_pscale.hex").c_str(), "w");
-	for (int s = 0; s < 8; s++) for (int i = 0; i < 256; i++) fprintf(f, "%03x\n", T.PSCALES[s][i]);
-	// (the noise wave's p + 128 reaches 256; past PSCALES[7] MAME reads the
-	// next member, ASCALES[0][0] = 256 -- m2_scsp supplies that one)
-	if (T.ASCALES[0][0] != 256) { fprintf(stderr, "ASCALES[0][0] is not 256\n"); return 1; }
-	fclose(f);
 	// the noise LFO's 256 values, MAME's machine().rand() (from a p16 tables.bin)
 	if (argc > 2) {
 		FILE *t = fopen(argv[2], "rb");
@@ -38,9 +32,41 @@ int main(int argc, char **argv) {
 		for (int i = 0; i < 256; i++) fprintf(f, "%02x\n", buf[i] & 0xff);
 		fclose(f);
 	}
-	f = fopen((d + "/scsp_ascale.hex").c_str(), "w");
-	for (int s = 0; s < 8; s++) for (int i = 0; i < 256; i++) fprintf(f, "%03x\n", T.ASCALES[s][i]);
-	fclose(f);
+	// the LFOs with their waves baked in (R858): [0, 8K) the pitch LFO, address
+	// {LFOS, LFOWS, phase >> 8} -> PSCALES[LFOS][wave + 128], read flat as MAME's
+	// pointer does (index 256 is the next row's first; past PSCALES[7], ASCALES[0][0]);
+	// [8K, 16K) the amplitude LFO -> ASCALES[LFOS][wave]. The noise wave needs
+	// MAME's table (tables.bin); without it, MAME's defaults stand in.
+	{
+		static int an[256], pn[256];
+		for (int i = 0; i < 256; i++) { an[i] = 0; pn[i] = 128; }
+		if (argc > 2) {
+			FILE *t = fopen(argv[2], "rb");
+			static int nb[256];
+			size_t want = sizeof(s32) * 0x400 + sizeof(int) * (0x10000 * 2 + 64 * 2 + 8 * 256 * 2);
+			if (!t || fseek(t, long(want), SEEK_SET) != 0 || fread(nb, sizeof(int), 256, t) != 256) { fprintf(stderr, "no noise table\n"); return 1; }
+			fclose(t);
+			for (int i = 0; i < 256; i++) { an[i] = nb[i] & 0xff; pn[i] = 128 - an[i]; }
+		}
+		const int *flat = &T.PSCALES[0][0];   // PSCALES then ASCALES, as in MAME's class
+		f = fopen((d + "/scsp_lfo.hex").c_str(), "w");
+		for (int sel = 0; sel < 2; sel++) for (int s = 0; s < 8; s++) for (int w = 0; w < 4; w++) for (int i = 0; i < 256; i++) {
+			int v;
+			if (sel == 0) {
+				int p = w == 0 ? T.PLFO_SAW[i] : w == 1 ? T.PLFO_SQR[i] : w == 2 ? T.PLFO_TRI[i] : pn[i];
+				v = flat[s * 256 + p + 128];
+			} else {
+				int a = w == 0 ? T.ALFO_SAW[i] : w == 1 ? T.ALFO_SQR[i] : w == 2 ? T.ALFO_TRI[i] : an[i];
+				v = T.ASCALES[s][a];
+			}
+			fprintf(f, "%03x\n", v);
+		}
+		fclose(f);
+		f = fopen((d + "/scsp_rate.hex").c_str(), "w");
+		for (int i = 0; i < 64; i++) fprintf(f, "%07x\n", T.ARTABLE[i]);
+		for (int i = 0; i < 64; i++) fprintf(f, "%07x\n", T.DRTABLE[i]);
+		fclose(f);
+	}
 	int mx = 0;
 	for (int s = 0; s < 8; s++) for (int i = 0; i < 256; i++) { mx = std::max(mx, T.PSCALES[s][i]); mx = std::max(mx, T.ASCALES[s][i]); }
 	fprintf(stderr, "scale max %d, EG max %d\n", mx, T.EG_TABLE[0x3ff]);

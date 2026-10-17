@@ -3,7 +3,7 @@
 // Sega Model 2 core for MiSTer FPGA
 // Copyright (C) 2026 alphanu1
 //
-// THE SCSP (Yamaha YMF292-F) OF THE MODEL 2A SOUND BOARD (study R856).
+// THE SCSP (Yamaha YMF292-F) OF THE MODEL 2A SOUND BOARD (study R856-R858).
 //
 // Written for this core against MAME 0.289's src/devices/sound/scsp.cpp and
 // scspdsp.cpp (BSD-3-Clause, copyright-holders ElSemi, R. Belmont; thanks-to
@@ -12,33 +12,37 @@
 // register stream replayed into it gives MAME's own mix, sample for sample
 // (tb_m2_scsp, against sim/sound/scsp_ref.h, itself bit-exact to MAME).
 //
-// ONE ENGINE, TIME-MULTIPLEXED: a sample is the 32 slots in order, then the
-// DSP, then the 16 effect returns -- MAME's DoMasterSamples. A slot's
-// registers come from a 512 x 16 M10K (two words a clock), its state from a
-// 64 x 80 M10K (two rows a slot, byte-enabled), its level words from
-// m2_scsp_level, its sample bytes from m2_scsp_cache; one multiplier serves
-// the pitch LFO, the interpolation, the amplitude LFO, the envelope and the
-// level products. 18 clocks an active slot (19 with FM), 1 an idle one.
+// A NARROW, MICROCODED ENGINE (R858). The slots, the effect returns, the
+// output, MAME's key-on sweep and the word-5 rates are microprograms
+// (sim/sound/scsp_uasm.py, which also checks their pipeline timing) run by one
+// datapath: a 32-bit ALU, one 27 x 18 multiplier, a 16-entry register file
+// in M10K, and all per-slot state in M10K -- eight 32-bit rows a slot (cur,
+// nxt, the LFO phases, the envelope, its four rates). A microinstruction is
+// fetched into F, which issues the reads and picks the next address, and
+// executes in E the clock after. An active slot is ~23 microinstructions.
+// The effects DSP (m2_scsp_dsp) and the level words (m2_scsp_level) are
+// their own units; the timers, interrupts and MIDI stay plain logic (their
+// order against the 68000's accesses is MAME's to the clock).
 //
 // SOUND RAM HAS NO FIXED LATENCY (it is SDRAM), so the engine keeps no real
 // time itself: it makes a sample when the output FIFO outside has room
-// (out_ready), stalls on a cache miss, and the FIFO drains at 44,100 Hz.
-// The timers count drained samples (tick44).
+// (out_ready), waits on a cache miss, and the FIFO drains at 44,100 Hz. The
+// timers count drained samples (tick44).
 //
 // THE 68000's ACCESSES are queued and applied in order at a slot boundary,
-// between samples, or while the DSP runs (not DSP writes, then). MAME applies
-// them between samples; here a write can land between two slots of a sample
-// -- the one departure, R821's. A read waits for the queue to empty.
+// between samples, or while the DSP runs (not to the DSP's registers, then).
+// MAME applies them between samples; here a write can land between two slots
+// of a sample -- the one departure, R821's.
 //
-// SWITCHES (R856; each feature measured in the four 2A games' drivers):
+// SWITCHES (R856 / R857):
 //   FM         the ring buffer, MDL / MDXSL / MDYSL, STWINH and the 68000's
-//              access to 0x600-0x67f (Zero Gunner's driver has an FM program)
+//              access to 0x600-0x6ff (Zero Gunner's driver has an FM program)
 //   MIDI_OUT   MOBUF to the i960 (Zero Gunner's driver writes it)
-//   LFO_NOISE  LFO waveform 3, MAME's own 256 values (scsp_lfonoise.hex)
-// NOT BUILT (unreachable in all four drivers, R856): reverse and ping-pong
-// loops (LPCTL 2 / 3 play as 1), noise samples (SSCTL 1 gives 0), DMA. The
-// main-CPU interrupt (MCIEB / MCIPD) is stored, not wired, as on Model 2;
-// the DSP's registers read 0 (no game reads them).
+//   LFO_NOISE  (kept for the parameter list: the noise wave is baked into
+//              scsp_lfo.hex with the others; MAME's own 256 values)
+// NOT BUILT (unreachable in all four drivers, R857): reverse and ping-pong
+// loops (LPCTL 2 / 3 play as 1), noise samples (SSCTL 1 gives 0), SDIR, DMA.
+// The main-CPU interrupt (MCIEB / MCIPD) is stored, not wired, as on Model 2.
 
 `timescale 1ns/1ps
 
@@ -101,190 +105,169 @@ module m2_scsp #(
 );
 
 `include "scsp_tables.svh"
+  /* verilator lint_off UNUSEDPARAM */
+`include "scsp_uc.svh"
+  /* verilator lint_on UNUSEDPARAM */
 
   localparam logic [1:0] ATT = 2'd0, DC1 = 2'd1, DC2 = 2'd2, REL = 2'd3;
-  localparam logic [4:0] C_END = FM ? 5'd18 : 5'd17;     // a slot's last step
 
   // =====================================================================
   // declarations
   // =====================================================================
-  typedef enum logic [2:0] { E_IDLE, E_OP, E_SLOT, E_DSP, E_EFF, E_OUT } est_t;
-  typedef enum logic [2:0] { L_WAIT, L_W1, L_F1, L_A2, L_W2, L_F2, L_DONE } lst_t;
+  // sequencer
+  logic  [7:0] upc, upc_n, ret_addr, ea_n;
+  logic [UF_W-1:0] uf;                    // F: this clock's microinstruction (reads, flow)
+  logic [UE_W-1:0] ue;                    // E: last clock's (execute)
+  logic        hold;
+  logic  [5:0] slot;                      // the slot (or effect return) index; 32 = slots done
+  logic  [4:0] sw, slot_e, sw_e;          // the sweep's index; E's copies
+  logic        par;                       // BUFPTR's top bit: (32 n + slot) mod 64
+  logic [31:0] active;
 
-  est_t        est, op_ret;
-  logic  [4:0] slot;
-  logic  [4:0] c;
-  logic [31:0] active, kb;
-  logic [31:0][1:0] egst;               // the envelope state of each slot
-  logic        par;                     // BUFPTR's top bit: (32 n + slot) mod 64
-
-  // RAM ports
-  logic  [8:0] ra_addr, rb_addr;
-  logic [15:0] ra_q, rb_q, rb_d;
-  logic  [1:0] rb_be;
-  logic  [7:0] st_addr;
-  logic        st_we;
-  logic [39:0] st_d, st_q;
-  logic  [9:0] eg_a;
-  logic [11:0] ps_a;
-  logic [10:0] as_a;
-  logic [12:0] eg_q;
-  logic  [8:0] ps_q, as_q;
-  logic signed [26:0] mu_a;               // one 27 x 18 multiply
-  logic signed [17:0] mu_b;
-  logic signed [44:0] mu_p;
-
-  // the 68000's queue
+  // the 68000's queue and accesses
   logic [28:0] wq [4];                    // {be 2, addr 11, data 16}
   logic  [1:0] wq_rd, wq_wr;
   logic  [2:0] wq_n;
   logic        rd_pend;
   logic [11:1] rd_a;
   logic        wq_pop, rd_done;
-
-  // ops
-  logic        op_rd;
+  logic        op_busy, op_rd;
   logic [11:1] o_addr;
   logic [15:0] o_data;
   logic  [1:0] o_be;
-  logic  [4:0] oc;
-  logic  [4:0] sw;
-  logic [15:0] t0, t1, t2;                // an op's register words
-  logic  [3:0] mon_ca;
+  logic  [2:0] oc;
+  logic  [8:0] w6l;                       // the level request's word 6 (TL, SDIR)
+  logic        call_go;
+  logic  [7:0] call_to;
+  logic  [4:0] call_sw;
 
-  // sub-blocks
-  logic        lv_req, lv_busy;
-  logic  [7:0] lv_raddr;
+  // datapath
+  logic [31:0] q, a_v, b_v, alu_r, sum;
+  logic        borrow, scmp;
+  logic [31:0] ra_q, rb_q, st_q;
+  logic [15:0] sqa, sqb;
   logic [14:0] lv_q;
-  logic        lk_req, lk_hit, fill_req, fill_done;
-  logic [15:0] lk_line, fill_line;
-  logic [63:0] lk_data, fill_data;
-  logic        dsp_wr_done;
-  logic [18:1] dsp_wr_addr;
-  logic        dsp_go, dsp_done, dsp_busy, dsp_started, dsp_fin;
+  logic signed [26:0] mul_a;
+  logic signed [17:0] mul_b;
+  logic signed [44:0] prod;
+  logic [31:0] psl_v;
+  // flags and latches
+  logic        f1, f2, f3, f4, stop_rel, fk, fr;
+  logic [15:0] w0l;                       // word 0 of the slot
+  logic [14:0] w9l;                       // LFOF, PLFOWS, PLFOS, ALFOWS, ALFOS
+  logic  [3:0] mdl;
+  logic        fm_mod, lpslnk, d2r_zero, stwinh;
+  logic  [3:0] isel;
+  logic  [1:0] egst_l;                    // the slot's envelope state (LATEG)
+  logic        hold_r;                    // EGHOLD from the AR row
+  logic        eg_lin, eg_hold;
+  logic  [9:0] eg_lv;
+  logic [11:0] frac;
+  // tables
+  logic [13:0] tadr;
+  logic  [8:0] tbl_q;
+  logic  [9:0] egt_a;
+  logic [12:0] egt_q;
+  logic [26:0] rate_q;
+  // fetch
+  logic [19:0] fa1, fa2;
+  logic        f2_known, p1_ok, p2_ok;
+  logic signed [16:0] p1v, p2v;
+  // ring
+  logic [15:0] ring_q;
+  logic  [6:0] ring_ra;
+  // the DSP and the level words
+  logic        dsp_go, dsp_done, dsp_busy, dsp_pend;
   logic        mix_we;
   logic [19:0] mix_val;
-  logic  [3:0] ef_idx;
   logic signed [15:0] ef_q;
-  logic  [3:0] isel_r;
+  logic        dw_en;
+  logic        dsp_wr_done;
+  logic [18:1] dsp_wr_addr;
   logic [15:0] dsp_rq;
-
+  logic        lv_req, lv_busy;
+  logic  [7:0] lv_raddr;
+  // the monitor
+  logic  [3:0] mon_ca;
+  logic [15:0] mon;
   // common registers, timers, interrupts, MIDI
   logic [15:0] c400, c402, c406;
   logic  [7:0] c404h;
-  logic [10:0] c418, c41a, c41c;          // {prescale 3, count 8}
+  logic [10:0] c418, c41a, c41c;
   logic  [7:0] scilv0, scilv1, scilv2;
-  logic [10:0] scieb, scipd, scire, mcieb, mcipd;   // (SCIRE kept: MAME merges a byte write with it)
+  logic [10:0] scieb, scipd, scire, mcieb, mcipd;
   logic  [4:0] mslc;
   logic  [7:1] lines;
   (* ramstyle = "MLAB" *) logic [7:0] mfifo [32];
-  logic  [7:0] mf_head;                   // the byte MIBUF reads
+  logic  [7:0] mf_head;
   logic  [4:0] mw, mr;
-  logic [2:0][14:0] tcd;                  // samples to go, less one
+  logic [2:0][14:0] tcd;
   logic  [2:0] tarm, texp;
   logic        cw_en, mi_pop;
-  logic [15:0] mon;                       // (CA << 7) | (SGC << 5) | EG of slot MSLC
 
-  // the slot in flight
-  logic [15:0] r0, r1, r2, r3, r4, r5, r6, r7, r8, r9;
-  logic [31:0] cur, nxt, cur_a;
-  logic [15:0] pph, aph, pph_n, aph_n;
-  logic signed [27:0] vol;
-  logic  [5:0] ar_i, d1r_i, d2r_i, rr_i;
-  logic  [4:0] dl;
-  logic        hold;
-  logic [31:0] step0, step;
-  logic signed [16:0] p1, p2;
-  lst_t        ls;
-  logic [19:0] a1, a2;
-  logic  [1:0] eg_pre;
-  logic        stop_loop;
-  logic [31:0] cur_n, nxt_n;
-  logic signed [27:0] vol_n;
-  logic  [1:0] eg_n;
-  logic        stop_rel, eg_lin;
-  logic [12:0] eg_lv;
-  logic signed [27:0] vol_r;
-  logic  [1:0] eg_r;
-  logic        stop_r, lin_r;
-  logic [12:0] lv_r;
-  logic signed [17:0] s1, s2, s3;
-  logic [14:0] v_d, v_l, v_r, v_g;
-  logic signed [31:0] smpl, smpr;
-  logic  [3:0] ei;
-  logic  [2:0] ec;
-  logic signed [15:0] ef_r;
-  // FM
-  logic signed [15:0] ring_q, ring_x, ring_y;   // (ring_y: the trace only)
-  logic  [6:0] ring_a;
-  logic signed [19:0] fmoff;
-  logic [15:0] w7_q;
+  // the microinstruction's fields
+  wire  [3:0] f_ra    = uf[`UF_RA];
+  wire  [3:0] f_rb    = uf[`UF_RB];
+  wire        f_st    = uf[`UF_ST];
+  wire  [2:0] f_strow = uf[`UF_STROW];
+  wire        f_streg = uf[`UF_STREG];
+  wire  [1:0] f_idx   = uf[`UF_IDX];
+  wire  [3:0] f_swa   = uf[`UF_SWA];
+  wire  [3:0] f_swb   = uf[`UF_SWB];
+  wire  [2:0] f_lw    = uf[`UF_LW];
+  wire  [2:0] f_flow  = uf[`UF_FLOW];
+  wire  [3:0] f_bc    = uf[`UF_BC];
+  wire  [7:0] f_tgt   = uf[`UF_TGT];
+  wire  [3:0] e_op    = ue[`UE_OP];
+  wire  [2:0] e_a     = ue[`UE_A];
+  wire  [2:0] e_b     = ue[`UE_B];
+  wire  [1:0] e_psl   = ue[`UE_PSL];
+  wire [15:0] e_imm   = ue[`UE_IMM];
+  wire        e_immhi = ue[`UE_IMMHI];
+  wire        e_rdwe  = ue[`UE_RDWE];
+  wire  [3:0] e_rd    = ue[`UE_RD];
+  wire  [3:0] e_pred  = ue[`UE_PRED];
+  wire        e_stwe  = ue[`UE_STWE];
+  wire  [2:0] e_stwrow = ue[`UE_STWROW];
+  wire  [1:0] e_widx  = ue[`UE_WIDX];
+  wire        e_mul   = ue[`UE_MUL];
+  wire  [1:0] e_ma    = ue[`UE_MA];
+  wire  [2:0] e_mb    = ue[`UE_MB];
+  wire  [2:0] e_fset  = ue[`UE_FSET];
+  wire  [2:0] e_lata  = ue[`UE_LATA];
+  wire  [1:0] e_latb  = ue[`UE_LATB];
+  wire  [3:0] e_s1    = ue[`UE_S1];
+  wire  [3:0] e_s2    = ue[`UE_S2];
 
-  wire  [28:0] wq_h   = wq[wq_rd];
-  wire  [11:1] h_addr = wq_h[26:16];
-  wire   [4:0] o_slot = o_addr[9:5];
-  wire   [3:0] o_word = o_addr[4:1];
-  // the queue's count and the read flag settle a clock after a pop / an answer
-  wire         op_ready = ((wq_n != 3'd0) || rd_pend) && !wq_pop && !rd_done;
-  // (the DSP's registers are not touched while it runs: a write waits, and so
-  // does a read, which uses its read ports)
-  wire  [11:1] nx_addr  = (wq_n != 3'd0) ? h_addr : rd_a;
-  wire         head_dsp = nx_addr >= 11'h380 && nx_addr < 11'h600;
-  wire         op_ok    = op_ready && !(head_dsp && dsp_busy);
-  wire         o_ring   = FM && o_addr >= 11'h300 && o_addr < 11'h380;   // 0x600-0x6ff
-
-  // =====================================================================
-  // RAMs and ROMs
-  // =====================================================================
-  // slot registers: port A reads, port B reads and writes (byte enables)
-  (* ramstyle = "M10K" *) logic [1:0][7:0] sreg [512];
-  always_ff @(posedge clk) ra_q <= sreg[ra_addr];
-  always_ff @(posedge clk) begin
-    if (rb_be[0]) sreg[rb_addr][0] <= rb_d[7:0];
-    if (rb_be[1]) sreg[rb_addr][1] <= rb_d[15:8];
-    rb_q <= sreg[rb_addr];
-  end
-
-  // slot state: one M10K, eight 40-bit rows a slot, each written whole --
-  //   0 cur   1 nxt   2 {pph, aph}   3 vol (26 bits; 0 .. 0x3ff << 16)
-  //   4 {ar, d1r, d2r, hold} (key on)   5 {rr, dl} (key on, word 5)
-  localparam logic [2:0] S_CUR = 3'd0, S_NXT = 3'd1, S_PH = 3'd2, S_VOL = 3'd3, S_RT = 3'd4, S_RR = 3'd5;
-  (* ramstyle = "M10K" *) logic [39:0] st [256];
-  always_ff @(posedge clk) begin
-    if (st_we) st[st_addr] <= st_d;
-    st_q <= st[st_addr];
-  end
-
-  // MAME's EG_TABLE, PSCALES, ASCALES
-  (* ramstyle = "M10K" *) logic [12:0] eg_rom [1024];
-  (* ramstyle = "M10K" *) logic  [8:0] ps_rom [2048];
-  logic ps_past;                          // PSCALES[8][0]: MAME reads ASCALES[0][0] = 256
-  (* ramstyle = "M10K" *) logic  [8:0] as_rom [2048];
-  initial begin
-    $readmemh("scsp_eg.hex", eg_rom);
-    $readmemh("scsp_pscale.hex", ps_rom);
-    $readmemh("scsp_ascale.hex", as_rom);
-  end
-  always_ff @(posedge clk) begin
-    eg_q <= eg_rom[eg_a];
-    ps_q <= ps_rom[ps_a[10:0]];
-    ps_past <= ps_a[11];
-    as_q <= as_rom[as_a];
-  end
-
-  // the multiplier: operands and product registered (a product is valid two
-  // clocks after its operands are set)
-  always_ff @(posedge clk) mu_p <= mu_a * mu_b;
-  wire signed [31:0] mu_lo = mu_p[31:0];     // MAME's int product (wraps at 32 bits)
-  wire signed [31:0] mu_s12 = mu_lo >>> 12;     // (a wire: keeps the shift arithmetic in any context)
+  // the slot's register fields
+  wire        pcm8    = w0l[4];
+  wire        loop_on = w0l[6:5] != 2'd0;   // LPCTL 2 / 3 play as 1
+  wire  [1:0] ssctl   = w0l[8:7];
+  wire  [1:0] sbctl   = w0l[10:9];
+  wire  [4:0] lfof    = w9l[14:10];
+  wire  [1:0] plfows  = w9l[9:8];
+  wire  [2:0] plfos   = w9l[7:5];
+  wire  [1:0] alfows  = w9l[4:3];
+  wire  [2:0] alfos   = w9l[2:0];
+  wire  [1:0] eg_pre  = (f3 && lpslnk && egst_l == ATT) ? DC1 : egst_l;   // LPSLNK, before EG_Update
 
   // =====================================================================
   // the 68000's queue
   // =====================================================================
+  wire  [28:0] wq_h   = wq[wq_rd];
+  wire  [11:1] h_addr = wq_h[26:16];
+  wire   [4:0] o_slot = o_addr[9:5];
+  wire   [3:0] o_word = o_addr[4:1];
+  wire         op_ready = ((wq_n != 3'd0) || rd_pend) && !wq_pop && !rd_done;
+  wire  [11:1] nx_addr  = (wq_n != 3'd0) ? h_addr : rd_a;
+  wire         head_dsp = nx_addr >= 11'h380 && nx_addr < 11'h600;
+  wire         op_ok    = op_ready && !(head_dsp && dsp_busy);
+  wire         o_ring   = FM && o_addr >= 11'h300 && o_addr < 11'h380;   // 0x600-0x6ff
+  wire         o_dsp    = o_addr >= 11'h380 && o_addr < 11'h600;
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      wq_rd <= '0; wq_wr <= '0; wq_n <= '0; rd_pend <= 1'b0; cpu_ack <= 1'b0;
-      rd_a <= '0;
+      wq_rd <= '0; wq_wr <= '0; wq_n <= '0; rd_pend <= 1'b0; cpu_ack <= 1'b0; rd_a <= '0;
     end else begin
       cpu_ack <= 1'b0;
       if (cpu_req && cpu_we) begin
@@ -300,30 +283,521 @@ module m2_scsp #(
   end
 
   // =====================================================================
-  // the level words, the sample cache, the DSP
+  // the microcode ROMs and the sequencer
   // =====================================================================
-  m2_scsp_level u_level (
-    .clk(clk), .rst_n(rst_n),
-    .req(lv_req), .req_slot(o_slot), .req_w6(t0), .req_w10(t1), .req_w11(t2),
-    .busy(lv_busy), .rd_addr(lv_raddr), .rd_q(lv_q)
-  );
+  (* ramstyle = "M10K" *) logic [UF_W-1:0] ucf [256];
+  (* ramstyle = "M10K" *) logic [UE_W-1:0] uce [256];
+  initial begin
+    $readmemh("scsp_ucf.hex", ucf);
+    $readmemh("scsp_uce.hex", uce);
+  end
+  always_ff @(posedge clk) begin
+    uf <= ucf[upc_n];
+    ue <= uce[ea_n];
+  end
+
+  // conditions
+  function automatic logic cond(input logic [3:0] c);
+    case (c)
+      4'(C_ALWAYS):  cond = 1'b1;
+      4'(C_PLFO):    cond = plfos != 3'd0;
+      4'(C_ALFO):    cond = alfos != 3'd0;
+      4'(C_LOOP1):   cond = loop_on && f1;
+      4'(C_LOOP2):   cond = loop_on && f2;
+      4'(C_FMMOD):   cond = FM && fm_mod;
+      4'(C_NSTWINH): cond = FM && !stwinh;
+      4'(C_NMVOL15): cond = c400[3:0] != 4'hf;
+      4'(C_START):   cond = fk && fr;
+      4'(C_NKB):     cond = !fk;
+      4'(C_MORESW):  cond = sw != 5'd31;
+      4'(C_MOREI):   cond = slot != 6'd16;
+      4'(C_SSCTL3):  cond = ssctl == 2'd3;
+      default:       cond = 1'b0;
+    endcase
+  endfunction
+
+  wire go_ok    = step_mode ? (step_go && !lv_busy && !lv_req) : out_ready;
+  wire dsp_idle = !dsp_busy && !dsp_pend;
+  wire op_win   = (f_flow == 3'(FLOW_DISPATCH)) ||
+                  (f_flow == 3'(FLOW_WAIT) && (f_bc == 4'(C_GO) || f_bc == 4'(C_DSPIDLE)));
+  wire op_start = op_win && !op_busy && !call_go && op_ok;
+  wire stop_now = (!loop_on && ((f3 && f1) || (f4 && f2))) || stop_rel;
+  wire [4:0] idx_f = (f_idx == 2'(IDX_SW)) ? sw : (f_idx == 2'(IDX_MSLC)) ? mslc : slot[4:0];
+
+  logic boot;                              // (the ROMs' registers have no reset)
+  always_ff @(posedge clk or negedge rst_n) if (!rst_n) boot <= 1'b1; else boot <= 1'b0;
+  always_comb begin
+    upc_n = upc + 8'd1; hold = 1'b0;
+    if (call_go) upc_n = call_to;
+    else if (op_busy || op_start) hold = 1'b1;
+    else case (f_flow)
+      3'(FLOW_BR):      if (cond(f_bc)) upc_n = f_tgt;
+      3'(FLOW_JMP):     upc_n = f_tgt;
+      3'(FLOW_RET):     upc_n = ret_addr;
+      3'(FLOW_SLOTEND): upc_n = UA_DISPATCH;
+      3'(FLOW_DISPATCH): begin
+        if (slot[5]) ;                                   // all slots done
+        else if (active[slot[4:0]]) upc_n = UA_SLOT;
+        else hold = 1'b1;                                // (the next slot, next clock)
+      end
+      3'(FLOW_WAIT): begin
+        case (f_bc)
+          4'(C_GO):      hold = !(go_ok && dsp_idle && !op_ready);
+          4'(C_DSPIDLE): hold = !dsp_idle;
+          4'(C_FETCHED): hold = !(p1_ok && p2_ok);
+          default:       hold = 1'b0;
+        endcase
+      end
+      default: ;
+    endcase
+    if (hold) upc_n = upc;
+    ea_n = (hold || call_go) ? UA_NOP : upc;
+    if (boot) begin upc_n = UA_IDLE; ea_n = UA_NOP; end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      upc <= UA_IDLE; ret_addr <= UA_IDLE; slot <= 6'd32; sw <= '0; slot_e <= '0; sw_e <= '0;
+      active <= '0; f1 <= 1'b0; f2 <= 1'b0; f3 <= 1'b0; f4 <= 1'b0; stop_rel <= 1'b0;
+    end else begin
+      upc <= upc_n;
+      if (!hold && !call_go) begin slot_e <= slot[4:0]; sw_e <= sw; end
+      if (call_go) begin ret_addr <= upc; sw <= call_sw; end
+      if (!hold && !call_go && !op_busy) begin
+        if (f_flow == 3'(FLOW_DISPATCH) && !slot[5] && active[slot[4:0]]) begin
+          f1 <= 1'b0; f2 <= 1'b0; f3 <= 1'b0; f4 <= 1'b0; stop_rel <= 1'b0;   // a slot starts
+        end
+        if (f_flow == 3'(FLOW_SLOTEND)) begin
+          slot <= slot + 6'd1;
+          if (stop_now && upc != UA_SKIP) active[slot[4:0]] <= 1'b0;
+        end
+      end
+      if (hold && !op_busy && !op_start && f_flow == 3'(FLOW_DISPATCH) && !slot[5] && !active[slot[4:0]])
+        slot <= slot + 6'd1;
+      // ---- E-stage effects on the sequencer's state
+      if (e_s2 == 4'(S2_ICLR)) slot <= 6'd0;
+      if (e_s2 == 4'(S2_IINC)) slot <= slot + 6'd1;
+      if (e_s2 == 4'(S2_SWINC)) sw <= sw + 5'd1;
+      if (e_s2 == 4'(S2_ACTSET)) active[sw_e] <= 1'b1;
+      if (e_fset == 3'(FSET_F1)) f1 <= !borrow;
+      if (e_fset == 3'(FSET_F2)) f2 <= !borrow;
+      if (e_fset == 3'(FSET_F3)) f3 <= scmp;
+      if (e_fset == 3'(FSET_F4)) f4 <= scmp;
+      if (e_op == 4'(OP_EG) && egst_n_rel_stop) stop_rel <= 1'b1;
+    end
+  end
+
+  // =====================================================================
+  // RAMs: slot registers, slot state, the register file
+  // =====================================================================
+  logic  [8:0] sra, srb;
+  logic        srb_we;
+  logic  [1:0] srb_be;
+  logic [15:0] srb_d;
+  (* ramstyle = "M10K" *) logic [1:0][7:0] sreg [512];
+  always_ff @(posedge clk) sqa <= sreg[sra];
+  always_ff @(posedge clk) begin
+    if (srb_we && srb_be[0]) sreg[srb][0] <= srb_d[7:0];
+    if (srb_we && srb_be[1]) sreg[srb][1] <= srb_d[15:8];
+    sqb <= sreg[srb];
+  end
+
+  // slot state: eight rows a slot (CUR, NXT, PH = {pph, aph}, VOL = {egst at
+  // [27:26], vol 26}, and the rate rows AR = {hold, ar}, D1R, D2R, RR)
+  logic  [7:0] st_ra, st_wa;
+  logic        st_we;
+  (* ramstyle = "M10K" *) logic [31:0] st [256];
+  always_ff @(posedge clk) begin
+    if (st_we) st[st_wa] <= alu_r;
+    st_q <= st[st_ra];
+  end
+
+  // the register file: two copies, one per read port
+  logic        rf_we;
+  (* ramstyle = "M10K" *) logic [31:0] rfa [16];
+  (* ramstyle = "M10K" *) logic [31:0] rfb [16];
+  always_ff @(posedge clk) begin
+    if (rf_we) begin rfa[e_rd] <= alu_r; rfb[e_rd] <= alu_r; end
+    ra_q <= rfa[f_ra];
+    rb_q <= rfb[f_rb];
+  end
+
+  // =====================================================================
+  // tables
+  // =====================================================================
+  // the LFOs, waves baked in: [0, 8K) PSCALES by {PLFOS, PLFOWS, phase >> 8},
+  // [8K, 16K) ASCALES by {ALFOS, ALFOWS, phase >> 8}
+  (* ramstyle = "M10K" *) logic [8:0] lfo_rom [16384];
+  (* ramstyle = "M10K" *) logic [12:0] eg_rom [1024];
+  (* ramstyle = "M10K" *) logic [26:0] rate_rom [128];
+  initial begin
+    $readmemh("scsp_lfo.hex", lfo_rom);
+    $readmemh("scsp_eg.hex", eg_rom);
+    $readmemh("scsp_rate.hex", rate_rom);
+  end
+  always_ff @(posedge clk) begin
+    tbl_q  <= lfo_rom[tadr];
+    egt_q  <= eg_rom[egt_a];
+    rate_q <= rate_rom[{eg_pre != ATT, st_q[5:0]}];    // the row read last clock (STREG)
+    hold_r <= st_q[6];
+  end
+
+  // =====================================================================
+  // the operands
+  // =====================================================================
+  wire signed [31:0] p_lo = prod[31:0];               // MAME's int product (wraps at 32 bits)
+  always_comb begin
+    case (e_psl)
+      2'(PSL_S6):  psl_v = prod[37:6];
+      2'(PSL_S12): psl_v = 32'(p_lo >>> 12);
+      2'(PSL_S16): psl_v = 32'(p_lo >>> 16);
+      default:     psl_v = 32'(p_lo >>> 17) & ~{31'd0, !pcm8};   // FM: x 2^(MDL + PCM16) >> 17
+    endcase
+  end
+  wire [8:0] lfo_step = scsp_lfostep(lfof);
+
+  always_comb begin
+    case (e_a)
+      3'(A_RA):   a_v = ra_q;
+      3'(A_Q):    a_v = q;
+      3'(A_ST):   a_v = (e_op == 4'(OP_EG)) ? {6'd0, st_q[25:0]} : st_q;
+      3'(A_CSH):  a_v = pcm8 ? {12'd0, st_q[31:12]} : {11'd0, st_q[31:12], 1'b0};
+      3'(A_PSL):  a_v = psl_v;
+      3'(A_P2):   a_v = 32'(p2v);
+      3'(A_RING): a_v = FM ? 32'($signed(ring_q)) : 32'd0;
+      default:    a_v = 32'(ef_q);
+    endcase
+    case (e_b)
+      3'(B_RB):   b_v = rb_q;
+      3'(B_IMM):  b_v = e_immhi ? {e_imm, 16'd0} : {16'd0, e_imm};
+      3'(B_Q):    b_v = q;
+      3'(B_SA):   b_v = {12'd0, sqb[3:0], sqa};
+      3'(B_SQ12): b_v = {4'd0, sqa, 12'd0};
+      3'(B_LFOI): b_v = {7'd0, (plfos != 3'd0) ? lfo_step : 9'd0, 7'd0, (alfos != 3'd0) ? lfo_step : 9'd0};
+      3'(B_RATE): b_v = {5'd0, rate_q};
+      default:    b_v = 32'(p1v);
+    endcase
+  end
+
+  // =====================================================================
+  // the ALU
+  // =====================================================================
+  // the envelope (MAME EG_Update) on vol +- rate, in eg_pre's state
+  logic [1:0] egst_n;
+  logic       egst_n_rel_stop;
+  logic [25:0] eg_v;
+  wire  [4:0] eg_dl = 5'h1f - sqa[9:5];                 // EG.DL = 0x1f - DL (word 5, live)
+  wire        eg_sub = eg_pre != ATT;
+
+  always_comb begin
+    logic [31:0] bb;
+    logic        sub, split, cin;
+    sub = e_op == 4'(OP_SUB) || (e_op == 4'(OP_EG) && eg_sub);
+    split = e_op == 4'(OP_ADDSPLIT);
+    cin = sub || (e_op == 4'(OP_ADDSGN) && a_v[31]);
+    bb = (e_op == 4'(OP_ADDSGN)) ? 32'd0 : sub ? ~b_v : b_v;
+    begin
+      logic [16:0] lo;
+      logic [16:0] hi;
+      lo = {1'b0, a_v[15:0]} + {1'b0, bb[15:0]} + {16'd0, cin};
+      hi = {1'b0, a_v[31:16]} + {1'b0, bb[31:16]} + {16'd0, lo[16] && !split};
+      sum = {hi[15:0], lo[15:0]};
+      borrow = sub && !hi[16];
+    end
+    scmp = sum[31:28] != 4'd0 || sum[27:12] >= sqa;     // (sum >> 12) >= LSA, the side compare
+  end
+
+  always_comb begin
+    logic signed [31:0] v;
+    v = $signed(sum);
+    egst_n = eg_pre; egst_n_rel_stop = 1'b0;
+    case (eg_pre)
+      ATT: begin
+        if (v >= 32'sh03ff0000) begin
+          if (!lpslnk) egst_n = DC1;
+          v = 32'sh03ff0000;
+        end
+      end
+      DC1: begin
+        if (v < 0) v = 0;
+        if (v[25:21] <= eg_dl) egst_n = DC2;
+      end
+      DC2: begin
+        if (d2r_zero) v = $signed({6'd0, st_q[25:0]});
+        else if (v < 0) v = 0;
+      end
+      default: begin
+        if (v <= 0) begin v = 0; egst_n_rel_stop = 1'b1; end
+      end
+    endcase
+    eg_v = v[25:0];
+  end
+
+  function automatic logic signed [15:0] dac(input logic signed [31:0] s, input logic d18);
+    logic signed [31:0] x;
+    x = d18 ? s : (s >>> 2);
+    if (d18) begin
+      if (x[31:17] != {15{x[31]}}) x = x[31] ? -32'sd131072 : 32'sd131071;
+      x = x >>> 2;
+    end else if (x[31:15] != {17{x[31]}}) x = x[31] ? -32'sd32768 : 32'sd32767;
+    dac = x[15:0];
+  endfunction
+
+  wire pred_ok = cond(e_pred);
+  always_comb begin
+    case (e_op)
+      4'(OP_PASSA): alu_r = a_v;
+      4'(OP_PASSB): alu_r = b_v;
+      4'(OP_OR):    alu_r = a_v | b_v;
+      4'(OP_EG):    alu_r = {4'd0, egst_n, eg_v};
+      4'(OP_RATEIDX): begin
+        logic [4:0] r5;
+        logic signed [9:0] x;
+        case (e_imm[1:0])
+          2'(RI_AR):  r5 = sqa[4:0];
+          2'(RI_D1R): r5 = sqa[10:6];
+          2'(RI_D2R): r5 = sqa[15:11];
+          default:    r5 = sqb[4:0];
+        endcase
+        x = $signed(a_v[9:0]) + $signed({4'd0, r5, 1'b0});
+        if (x < 0) x = 0;
+        else if (x > 63) x = 63;
+        alu_r = {25'd0, e_imm[1:0] == 2'(RI_AR) && sqa[5], x[5:0]};   // AR's row: EGHOLD in bit 6
+      end
+      4'(OP_EGBASE): begin
+        // Compute_EG: octave + 2 KRS + FNS[9], or 0 when KRS = 0xf (sqa = w8, sqb = w5)
+        if (sqb[13:10] == 4'hf) alu_r = 32'd0;
+        else alu_r = 32'($signed(sqa[14:11])) + {26'd0, sqb[13:10], 1'b0} + {31'd0, sqa[9]};
+      end
+      4'(OP_SBC): begin
+        logic [17:0] s;
+        s = sum[17:0];
+        if (ssctl != 2'd0) s = 18'd0;
+        if (sbctl[0]) s = s ^ 18'h07fff;
+        if (sbctl[1]) s = {{2{~s[15]}}, ~s[15], s[14:0]};   // (s16)(sample ^ 0x8000)
+        alu_r = 32'($signed(s));
+      end
+      4'(OP_DAC):   alu_r = 32'(dac($signed(a_v), c400[8]));
+      4'(OP_CSEL):  alu_r = pred_ok ? sum : rb_q;
+      default:      alu_r = sum;                          // ADD SUB ADDSGN ADDSPLIT
+    endcase
+  end
+
+  // a microinstruction's effects: all of them under its predicate, but a
+  // CSEL's, whose predicate chooses its result
+  wire go_e = (e_op == 4'(OP_CSEL)) || pred_ok;
+  assign rf_we = e_rdwe && go_e;
+  assign st_we = e_stwe && go_e;
+  assign st_wa = {(e_widx == 2'(IDX_SW)) ? sw_e : slot_e, e_stwrow};
+  assign st_ra = {idx_f, f_streg ? {1'b1, eg_pre} : f_strow};
+
+  // =====================================================================
+  // the multiplier
+  // =====================================================================
+  wire [16:0] pow2p = 17'(1) << {~sqa[14], sqa[13:11]};              // 2^(octave + 8)
+  wire [16:0] pow2f = 17'(1) << ({1'b0, mdl} + {4'd0, !pcm8});        // 2^(MDL + PCM16)
+  wire [12:0] egv   = eg_lin ? (eg_hold ? 13'h0ffc : {1'b0, eg_lv, 2'b00}) : egt_q;
+  function automatic logic [16:0] mvol_gain(input logic [3:0] mv);
+    mvol_gain = 17'((({13'd0, mv} * 17'd65536) + 17'd7) / 17'd15);
+  endfunction
+  always_ff @(posedge clk) begin
+    if (e_mul && go_e) begin
+      case (e_ma)
+        2'(MA_RA):  mul_a <= $signed(ra_q[26:0]);
+        2'(MA_Q):   mul_a <= $signed(q[26:0]);
+        2'(MA_PSL): mul_a <= $signed(psl_v[26:0]);
+        default:    mul_a <= $signed({16'd0, 1'b1, sqa[9:0]});           // FNS + 1024
+      endcase
+      case (e_mb)
+        3'(MB_POW2P): mul_b <= $signed({1'b0, pow2p});
+        3'(MB_POW2F): mul_b <= $signed({1'b0, pow2f});
+        3'(MB_TBL4):  mul_b <= $signed({5'd0, tbl_q, 4'd0});              // LFO_Step returns p << 4
+        3'(MB_EGV):   mul_b <= $signed({5'd0, egv});
+        3'(MB_LV):    mul_b <= $signed({3'd0, lv_q});
+        3'(MB_FRAC):  mul_b <= $signed({6'd0, frac});
+        default:      mul_b <= $signed({1'b0, mvol_gain(c400[3:0])});
+      endcase
+    end
+    prod <= mul_a * mul_b;
+  end
+
+  // =====================================================================
+  // E: registers, latches, side effects
+  // =====================================================================
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      q <= '0; w0l <= '0; w9l <= '0; mdl <= '0; fm_mod <= 1'b0; lpslnk <= 1'b0; d2r_zero <= 1'b0;
+      stwinh <= 1'b0; isel <= '0; egst_l <= REL; eg_lin <= 1'b0; eg_hold <= 1'b0; eg_lv <= '0;
+      tadr <= '0; egt_a <= '0; frac <= '0; fk <= 1'b0; fr <= 1'b0;
+      dsp_go <= 1'b0; dsp_pend <= 1'b0; out_valid <= 1'b0; dbg_slot_valid <= 1'b0;
+      dbg_samples <= '0; par <= 1'b0; mon <= '0; mon_ca <= '0;
+      out_l_raw <= '0; out_r_raw <= '0; out_l <= '0; out_r <= '0; dbg_slot <= '0; dbg_slot_smp <= '0;
+    end else begin
+      dsp_go <= 1'b0; out_valid <= 1'b0; dbg_slot_valid <= 1'b0;
+      if (dsp_done) dsp_pend <= 1'b0;
+      q <= alu_r;
+      // latches (port A: words 9, 4, 5, 6, 10; port B: words 0, 7)
+      case (e_lata)
+        3'(LATA_W9):  w9l <= sqa[14:0];
+        3'(LATA_W4):  d2r_zero <= sqa[15:11] == 5'd0;
+        3'(LATA_W5):  lpslnk <= sqa[14];
+        3'(LATA_W6):  stwinh <= sqa[9];
+        3'(LATA_W10): isel <= sqa[6:3];
+        default: ;
+      endcase
+      case (e_latb)
+        2'(LATB_W0): w0l <= sqb;
+        2'(LATB_W7): begin mdl <= sqb[15:12]; fm_mod <= sqb != 16'd0; end
+        default: ;
+      endcase
+      if (e_fset == 3'(FSET_KBREL)) begin fk <= sqb[11]; fr <= st_q[27:26] == REL; end
+      if (go_e) begin
+        case (e_s1)
+          4'(S1_TADRP): tadr <= {1'b0, plfos, plfows, alu_r[31:24]};
+          4'(S1_TADRA): tadr <= {1'b1, alfos, alfows, alu_r[15:8]};
+          4'(S1_TADRE): begin
+            egt_a <= alu_r[25:16]; eg_lv <= alu_r[25:16];
+            eg_lin <= eg_pre == ATT; eg_hold <= hold_r;
+          end
+          4'(S1_LATEG): egst_l <= st_q[27:26];
+          4'(S1_FETCH1): frac <= st_q[11:0];
+          4'(S1_DBG): begin dbg_slot_valid <= 1'b1; dbg_slot <= slot_e; dbg_slot_smp <= alu_r; end
+          4'(S1_OUTLRAW): out_l_raw <= alu_r;
+          4'(S1_OUTRRAW): out_r_raw <= alu_r;
+          4'(S1_OUTL): out_l <= alu_r[15:0];
+          4'(S1_OUTR): out_r <= alu_r[15:0];
+          default: ;
+        endcase
+        case (e_s2)
+          4'(S2_DSPGO): begin dsp_go <= 1'b1; dsp_pend <= 1'b1; end
+          4'(S2_OUTV): begin
+            out_valid <= 1'b1; par <= ~par;
+            if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
+          end
+          4'(S2_MON1): mon_ca <= st_q[27:24];
+          4'(S2_MON2): mon <= {5'd0, mon_ca, st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
+          default: ;
+        endcase
+      end
+    end
+  end
+
+  // =====================================================================
+  // the sample bytes: a1 then a2 through the slot cache
+  // =====================================================================
+  typedef enum logic [2:0] { G_IDLE, G_L1, G_W1, G_F1, G_L2, G_W2, G_F2 } gst_t;
+  gst_t        gs;
+  logic        lk_req, lk_hit, fill_req, fill_done;
+  logic [15:0] lk_line, fill_line;
+  logic [63:0] lk_data, fill_data;
+  wire  [63:0] g_line = (gs == G_W1 || gs == G_W2) ? lk_data : fill_data;
+  function automatic logic signed [16:0] pick(input logic [63:0] ln, input logic [19:0] a, input logic p8);
+    logic [15:0] wd;
+    wd = ln[{a[2:1], 4'b0} +: 16];
+    if (p8) pick = a[0] ? $signed({wd[7], wd[7:0], 8'd0}) : $signed({wd[15], wd[15:8], 8'd0});
+    else    pick = $signed({wd[15], wd});
+  endfunction
+  wire fetch1 = go_e && e_s1 == 4'(S1_FETCH1);
+  wire fetch2 = go_e && e_s1 == 4'(S1_FETCH2);
+  wire same   = fa2[19:3] == fa1[19:3];
+  always_comb begin
+    lk_req = 1'b0; lk_line = fa1[18:3]; fill_req = 1'b0; fill_line = fa1[18:3];
+    case (gs)
+      G_L1: lk_req = 1'b1;
+      G_F1: fill_req = 1'b1;
+      G_L2: begin lk_req = 1'b1; lk_line = fa2[18:3]; end
+      G_F2: begin fill_req = 1'b1; fill_line = fa2[18:3]; end
+      default: ;
+    endcase
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      gs <= G_IDLE; p1_ok <= 1'b0; p2_ok <= 1'b0; f2_known <= 1'b0; fa1 <= '0; fa2 <= '0;
+      p1v <= '0; p2v <= '0;
+    end else begin
+      if (fetch1) begin
+        fa1 <= alu_r[19:0]; p1_ok <= 1'b0; p2_ok <= 1'b0; f2_known <= 1'b0;
+        if (ssctl != 2'd0) begin p1v <= '0; p2v <= '0; p1_ok <= 1'b1; p2_ok <= 1'b1; gs <= G_IDLE; end
+        else if (alu_r[19]) begin p1v <= '0; p1_ok <= 1'b1; gs <= G_L2; end   // past 512 KB: MAME reads 0
+        else gs <= G_L1;
+      end
+      if (fetch2) begin fa2 <= alu_r[19:0]; f2_known <= 1'b1; end
+      case (gs)
+        G_L1: gs <= G_W1;
+        G_W1, G_F1: if (gs == G_W1 ? lk_hit : fill_done) begin
+          p1v <= pick(g_line, fa1, pcm8); p1_ok <= 1'b1;
+          if (f2_known && !fa2[19] && same) begin p2v <= pick(g_line, fa2, pcm8); p2_ok <= 1'b1; gs <= G_IDLE; end
+          else gs <= G_L2;
+        end else if (gs == G_W1) gs <= G_F1;
+        G_L2: if (f2_known) begin
+          if (fa2[19]) begin p2v <= '0; p2_ok <= 1'b1; gs <= G_IDLE; end
+          else gs <= G_W2;
+        end
+        G_W2, G_F2: if (gs == G_W2 ? lk_hit : fill_done) begin
+          p2v <= pick(g_line, fa2, pcm8); p2_ok <= 1'b1; gs <= G_IDLE;
+        end else if (gs == G_W2) gs <= G_F2;
+        default: ;
+      endcase
+    end
+  end
+  // (G_L2 issues its lookup only once fa2 is known; the µcode starts both
+  // fetches on consecutive microinstructions, so it always is by then)
 
   m2_scsp_cache #(.IDX(8)) u_cache (
     .clk(clk), .rst_n(rst_n),
-    .lk_req(lk_req), .lk_line(lk_line), .lk_hit(lk_hit), .lk_data(lk_data),
+    .lk_req(lk_req && (gs != G_L2 || (f2_known && !fa2[19]))), .lk_line(lk_line), .lk_hit(lk_hit), .lk_data(lk_data),
     .fill_req(fill_req), .fill_line(fill_line), .fill_done(fill_done), .fill_data(fill_data),
     .m_req(sm_req), .m_line(sm_line), .m_ack(sm_ack), .m_data(sm_data),
     .snp(snp), .snp_line(snp_addr[18:3]), .snp2(dsp_wr_done), .snp2_line(dsp_wr_addr[18:3]),
     .dbg_fills(dbg_miss)
   );
 
-  wire dw_en = est == E_OP && !op_rd && oc == 5'd0 && o_addr >= 11'h380 && o_addr < 11'h600;
+  // =====================================================================
+  // FM: the ring buffer (MAME's RINGBUF; the slots use the first 64 words)
+  // =====================================================================
+  logic        ring_we;
+  logic  [6:0] ring_wa;
+  logic [15:0] ring_wd;
+  always_comb begin
+    ring_ra = {1'b0, 6'({par, slot_e} + ((e_s1 == 4'(S1_RINGX)) ? sqa[11:6] : sqa[5:0]))};
+    ring_we = go_e && e_s1 == 4'(S1_RINGW) && FM;
+    ring_wa = {1'b0, par, slot_e};
+    ring_wd = 16'(p_lo >>> 13);                         // (sample x level 5) >> (SHIFT + 1)
+    if (op_busy) begin
+      ring_ra = o_addr[7:1];
+      ring_we = !op_rd && o_ring && ((oc == 3'd0 && o_be == 2'b11) || oc == 3'd1);
+      ring_wa = o_addr[7:1];
+      ring_wd = (oc == 3'd0) ? o_data : {o_be[1] ? o_data[15:8] : ring_q[15:8], o_be[0] ? o_data[7:0] : ring_q[7:0]};
+    end
+  end
+  generate if (FM) begin : g_fm
+    (* ramstyle = "MLAB" *) logic [15:0] ring [128];
+    always_ff @(posedge clk) begin
+      if (ring_we) ring[ring_wa] <= ring_wd;
+      ring_q <= ring[ring_ra];
+    end
+  end else begin : g_nofm
+    assign ring_q = 16'd0;
+  end endgenerate
+
+  // =====================================================================
+  // the level words, the DSP
+  // =====================================================================
+  assign lv_raddr = {idx_f, f_lw};
+  m2_scsp_level u_level (
+    .clk(clk), .rst_n(rst_n),
+    .req(lv_req), .req_slot(o_slot), .req_w6({7'd0, w6l}), .req_w10(sqb), .req_w11(sqa),
+    .busy(lv_busy), .rd_addr(lv_raddr), .rd_q(lv_q)
+  );
+
+  assign mix_we  = go_e && e_s1 == 4'(S1_MIXW);
+  assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
   m2_scsp_dsp u_dsp (
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
     .rbl(c402[8:7]), .rbp(c402[5:0]),
-    .mix_sel(isel_r), .mix_we(mix_we), .mix_val(mix_val),
-    .ef_idx(ef_idx), .ef_q(ef_q),
+    .mix_sel(isel), .mix_we(mix_we), .mix_val(mix_val),
+    .ef_idx(slot[3:0]), .ef_q(ef_q),
     .w_en(dw_en), .w_addr(o_addr), .w_data(o_data), .w_be(o_be), .r_addr(o_addr), .r_q(dsp_rq),
     .m_req(dm_req), .m_we(dm_we), .m_addr(dm_addr), .m_wdata(dm_wdata),
     .m_ack(dm_ack), .m_data(dm_data), .snp(snp), .snp_addr(snp_addr),
@@ -331,108 +805,78 @@ module m2_scsp #(
   );
 
   // =====================================================================
-  // FM: the ring buffer (MAME's RINGBUF, 64 used) and word 7's shadow
+  // the 68000's accesses
   // =====================================================================
-  logic        ring_we;
-  logic  [6:0] ring_wa;
-  logic [15:0] ring_wd;
-  generate if (FM) begin : g_fm
-    // MAME's 128 words: the slots use the first 64, the 68000 sees all
-    (* ramstyle = "MLAB" *) logic [15:0] ring [128];
-    (* ramstyle = "MLAB" *) logic  [7:0] w7h [32];
-    (* ramstyle = "MLAB" *) logic  [7:0] w7l [32];
-    wire w7_we = est == E_OP && !op_rd && oc == 5'd0 && o_addr < 11'h200 && o_word == 4'd7;
-    always_ff @(posedge clk) begin
-      if (ring_we) ring[ring_wa] <= ring_wd;
-      ring_q <= ring[ring_a];
-      if (w7_we && o_be[1]) w7h[o_slot] <= o_data[15:8];
-      if (w7_we && o_be[0]) w7l[o_slot] <= o_data[7:0];
-      w7_q <= {w7h[slot], w7l[slot]};
+  // a slot register write: port B writes (KEYONEX is not stored); then
+  // KEYONEX -> the sweep, word 5 -> its rates, words 6 / 10 / 11 -> the
+  // level words. A read of a slot register is port B's.
+  wire slotend_clr = !op_busy && f_flow == 3'(FLOW_SLOTEND) && !hold && !call_go && stop_now && upc != UA_SKIP;
+  always_comb begin
+    sra = {idx_f, f_swa}; srb = {idx_f, f_swb};
+    srb_we = 1'b0; srb_be = 2'b11; srb_d = o_data;
+    if (slotend_clr) begin                              // MAME StopSlot: KEYONB cleared
+      srb = {slot[4:0], 4'd0}; srb_we = 1'b1; srb_be = 2'b10; srb_d = {w0l[15:12], 1'b0, w0l[10:0]};
     end
-  end else begin : g_nofm
-    assign ring_q = 16'sd0;
-    assign w7_q   = 16'd0;
-  end endgenerate
-
-  // =====================================================================
-  // helpers (MAME's formulas)
-  // =====================================================================
-  // the LFO noise wave: MAME's 256 rand() values. The pitch wave's is read
-  // with the phase being stored at c = 3 (PSCALES is wanted at c = 4); the
-  // amplitude wave's from the stored phase (ASCALES is not wanted until c = 8)
-  wire  [8:0] lfo_st = scsp_lfostep(lfof);
-  wire [15:0] pph_c  = st_q[31:16] + {7'd0, lfo_st};
-  wire [15:0] aph_c  = st_q[15:0] + {7'd0, lfo_st};
-  logic [7:0] nz_p, nz_a;
-  generate if (LFO_NOISE) begin : g_noise
-    (* ramstyle = "M10K" *) logic [7:0] noise_rom [256];
-    initial $readmemh("scsp_lfonoise.hex", noise_rom);
-    always_ff @(posedge clk) begin
-      nz_p <= noise_rom[pph_c[15:8]];
-      nz_a <= noise_rom[aph_n[15:8]];        // (the ALFO product is not until c = 8)
-    end
-  end else begin : g_nonoise
-    assign nz_p = 8'd0;
-    assign nz_a = 8'd0;
-  end endgenerate
-  // PSCALES index: the pitch LFO's signed wave p, + 128 (LFO_Init); 9 bits,
-  // the noise wave reaching 256
-  function automatic logic [8:0] plfo_idx(input logic [1:0] ws, input logic [7:0] i, input logic [7:0] nz);
-    logic signed [9:0] p;
-    case (ws)
-      2'd0: p = $signed({{2{i[7]}}, i});                           // i < 128 ? i : i - 256
-      2'd1: p = i[7] ? -10'sd128 : 10'sd127;
-      2'd2: begin
-        if (i < 8'd64)       p = $signed({1'b0, i, 1'b0});
-        else if (i < 8'd128) p = 10'sd255 - $signed({1'b0, i, 1'b0});
-        else if (i < 8'd192) p = 10'sd256 - $signed({1'b0, i, 1'b0});
-        else                 p = $signed({1'b0, i, 1'b0}) - 10'sd511;
+    if (op_busy) begin
+      sra = {o_slot, (oc >= 3'd2) ? 4'd11 : 4'd6};
+      srb = {o_slot, (oc >= 3'd1 && !op_rd) ? 4'd10 : o_word};
+      if (!op_rd && oc == 3'd0 && o_addr < 11'h200) begin
+        srb_we = 1'b1; srb_be = o_be; srb_d = (o_word == 4'd0) ? (o_data & 16'hefff) : o_data;
       end
-      default: p = LFO_NOISE ? 10'sd128 - $signed({2'b00, nz}) : 10'sd0;
-    endcase
-    plfo_idx = 9'(p + 10'sd128);
-  endfunction
-  // the amplitude LFO's wave, 0..255
-  function automatic logic [7:0] alfo_wave(input logic [1:0] ws, input logic [7:0] i, input logic [7:0] nz);
-    case (ws)
-      2'd0: alfo_wave = 8'd255 - i;
-      2'd1: alfo_wave = i[7] ? 8'd0 : 8'd255;
-      2'd2: alfo_wave = i[7] ? {i[6:0], 1'b0} : 8'd255 - {i[6:0], 1'b0};
-      default: alfo_wave = LFO_NOISE ? nz : 8'd0;
-    endcase
-  endfunction
-  // Step(): (FNS + 1024) << (octave + 2), octave signed
-  function automatic logic [31:0] pitch(input logic [3:0] o, input logic [9:0] f);
-    logic signed [5:0] sh;
-    logic [31:0] fn;
-    sh = $signed({{2{o[3]}}, o}) + 6'sd2;
-    fn = {21'd0, 1'b1, f};
-    if (sh >= 0) pitch = fn << sh[3:0];
-    else         pitch = fn >> 6'(-sh);
-  endfunction
-  // Get_AR / Get_DR's index, clamp(base + 2 R, 0, 63)
-  function automatic logic [5:0] rate_i(input logic signed [7:0] base, input logic [4:0] r);
-    logic signed [7:0] x;
-    x = base + $signed({2'b00, r, 1'b0});
-    if (x < 0)       rate_i = 6'd0;
-    else if (x > 63) rate_i = 6'd63;
-    else             rate_i = x[5:0];
-  endfunction
-  // Compute_EG's base: octave + 2 KRS + FNS[9], or 0 when KRS = 0xf
-  function automatic logic signed [7:0] eg_base(input logic [15:0] w5, input logic [15:0] w8);
-    if (w5[13:10] == 4'hf) eg_base = 8'sd0;
-    else eg_base = $signed({{4{w8[14]}}, w8[14:11]}) + $signed({3'b000, w5[13:10], 1'b0}) + $signed({7'd0, w8[9]});
-  endfunction
-  // a byte (as int8 << 8) or a word of a line
-  function automatic logic signed [16:0] pick(input logic [63:0] ln, input logic [19:0] a, input logic p8);
-    logic [15:0] wd;
-    wd = ln[{a[2:1], 4'b0} +: 16];
-    if (p8) pick = a[0] ? $signed({wd[7], wd[7:0], 8'd0}) : $signed({wd[15], wd[15:8], 8'd0});
-    else    pick = $signed({wd[15], wd});
-  endfunction
-  function automatic logic [15:0] merge(input logic [15:0] old, input logic [15:0] d, input logic [1:0] be);
-    merge = {be[1] ? d[15:8] : old[15:8], be[0] ? d[7:0] : old[7:0]};
-  endfunction
+    end
+  end
+  assign dw_en = op_busy && !op_rd && oc == 3'd0 && o_dsp;
+  assign cw_en = op_busy && !op_rd && oc == 3'd0 && o_addr >= 11'h200 && o_addr < 11'h218;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      op_busy <= 1'b0; op_rd <= 1'b0; o_addr <= '0; o_data <= '0; o_be <= '0; oc <= '0;
+      wq_pop <= 1'b0; rd_done <= 1'b0; mi_pop <= 1'b0; lv_req <= 1'b0; w6l <= '0;
+      call_go <= 1'b0; call_to <= UA_IDLE; call_sw <= '0; cpu_dout <= '0;
+    end else begin
+      wq_pop <= 1'b0; rd_done <= 1'b0; mi_pop <= 1'b0; call_go <= 1'b0;
+      if (lv_req && !lv_busy) lv_req <= 1'b0;
+      if (op_start) begin
+        op_busy <= 1'b1; oc <= '0; op_rd <= wq_n == 3'd0;
+        o_addr <= nx_addr; o_data <= wq_h[15:0]; o_be <= wq_h[28:27];
+      end else if (op_busy) begin
+        if (!op_rd) begin
+          if (o_addr < 11'h200) begin
+            case (oc)
+              3'd0: begin
+                wq_pop <= 1'b1;
+                if (o_word == 4'd0 && o_be[1] && o_data[12]) begin
+                  call_go <= 1'b1; call_to <= UA_SWEEP; call_sw <= 5'd0; op_busy <= 1'b0;
+                end else if (o_word == 4'd5) begin
+                  call_go <= 1'b1; call_to <= UA_W5; call_sw <= o_slot; op_busy <= 1'b0;
+                end else if (o_word == 4'd6 || o_word == 4'd10 || o_word == 4'd11) oc <= 3'd1;
+                else op_busy <= 1'b0;
+              end
+              3'd1: oc <= 3'd2;                           // words 6, 10 asked
+              3'd2: begin w6l <= {sqa[8], sqa[7:0]}; oc <= 3'd3; end   // word 11 asked
+              default: if (!lv_busy && !lv_req) begin lv_req <= 1'b1; op_busy <= 1'b0; end
+            endcase
+          end else if (o_ring && o_be != 2'b11 && oc == 3'd0) begin
+            wq_pop <= 1'b1; oc <= 3'd1;                   // a byte of the ring: read, merge
+          end else begin
+            if (oc == 3'd0) wq_pop <= 1'b1;
+            op_busy <= 1'b0;
+          end
+        end else begin
+          // a read (MAME r16)
+          if (oc == 3'd0) oc <= 3'd1;
+          else begin
+            if (o_addr < 11'h200) cpu_dout <= sqb;
+            else if (o_ring) cpu_dout <= ring_q;
+            else if (o_dsp) cpu_dout <= dsp_rq;
+            else cpu_dout <= common_read(o_addr[5:1]);
+            if (o_addr == 11'h202) mi_pop <= 1'b1;
+            rd_done <= 1'b1; op_busy <= 1'b0;
+          end
+        end
+      end
+    end
+  end
 
   // =====================================================================
   // common registers, timers, interrupts, MIDI (MAME UpdateReg & co.)
@@ -474,12 +918,12 @@ module m2_scsp #(
   // byte, the timers, then CheckPendingIRQ) on working copies. The interrupt
   // lines MAME's events clear all come before the one CheckPendingIRQ sets,
   // so the lines are (lines & ~clear) | set.
-  assign cw_en = est == E_OP && !op_rd && oc == 5'd0 && o_addr >= 11'h200 && o_addr < 11'h218;
   wire [15:0] cw_d  = o_data;
   wire  [1:0] cw_be = o_be;
-  // MAME write(): r16, combine, w16 -- one merge with the register's old value
+  function automatic logic [15:0] merge(input logic [15:0] old, input logic [15:0] d, input logic [1:0] be);
+    merge = {be[1] ? d[15:8] : old[15:8], be[0] ? d[7:0] : old[7:0]};
+  endfunction
   wire [15:0] mrg   = merge(common_read(o_addr[5:1]), cw_d, cw_be);
-  // a timer's write: (255 - count) << prescale samples, less one
   wire [14:0] tload = 15'(({7'd0, ~mrg[7:0]} << mrg[10:8]) - 15'd1);
   logic [15:0] c400_n, c402_n;
   logic  [7:0] c404h_n, scilv0_n, scilv1_n, scilv2_n;
@@ -495,7 +939,6 @@ module m2_scsp #(
     mw_n = mw; mr_n = mr; arm_n = tarm; ex_n = texp; tcd_n = tcd;
     chk = 1'b0; rep = 3'b000; clr = 3'b000;
 
-    // ---- a register write (UpdateReg)
     if (cw_en) begin
       case (o_addr[5:1])
         5'h00: c400_n = mrg;
@@ -525,17 +968,11 @@ module m2_scsp #(
         default: ;
       endcase
     end
-
-    // ---- a MIBUF read
     if (mi_pop) begin
       if (mw_n != mr_n) mr_n = mr_n + 5'd1;
       if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
     end
-
-    // ---- a MIDI byte arrives (rcv_complete: push, CheckPendingIRQ)
     if (midi_valid && !midi_ack) begin mw_n = mw_n + 5'd1; chk = 1'b1; end
-
-    // ---- the timers count a drained sample
     if (tick44) begin
       for (int t = 0; t < 3; t++) begin
         if (arm_n[t]) begin
@@ -549,15 +986,11 @@ module m2_scsp #(
         end
       end
     end
-
-    // ---- CheckPendingIRQ (the one line it sets is in irq_set below)
     if (chk && mw_n != mr_n) scipd_n[3] = 1'b1;
     scipd_c = scipd_n;
-    // ---- SCIRE's last act: an expired timer pends again (MAME, cfr. sakurat)
     for (int t = 0; t < 3; t++) if (rep[t] && ex_n[t]) scipd_n[6 + t] = 1'b1;
   end
 
-  // the lines: one-hot levels
   wire [7:0] dec_ta = 8'(1) << {scilv2[6], scilv1[6], scilv0[6]};
   wire [7:0] dec_tb = 8'(1) << {scilv2[7], scilv1[7], scilv0[7]};
   wire [7:0] dec_mi = 8'(1) << {scilv2[3], scilv1[3], scilv0[3]};
@@ -584,13 +1017,13 @@ module m2_scsp #(
     end else begin
       c400 <= c400_n; c402 <= c402_n; c404h <= c404h_n; c418 <= c418_n; c41a <= c41a_n; c41c <= c41c_n;
       scilv0 <= scilv0_n; scilv1 <= scilv1_n; scilv2 <= scilv2_n;
-      scieb <= scieb_n; scipd <= scipd_n; if (cw_en && o_addr[5:1] == 5'h11) scire <= mrg[10:0]; mcieb <= mcieb_n; mcipd <= mcipd_n; mslc <= mslc_n;
+      scieb <= scieb_n; scipd <= scipd_n; if (cw_en && o_addr[5:1] == 5'h11) scire <= mrg[10:0];
+      mcieb <= mcieb_n; mcipd <= mcipd_n; mslc <= mslc_n;
       lines <= ln_n[7:1]; mw <= mw_n; mr <= mr_n; tarm <= arm_n; texp <= ex_n;
       tcd <= tcd_n;
       midi_ack <= midi_valid && !midi_ack;
     end
   end
-
 
   // ---- MIDI out (MOBUF): MAME's 32-byte stack, sent in order
   // (any write to 0x406 sends its stored low byte; the word reads back)
@@ -600,7 +1033,6 @@ module m2_scsp #(
     wire mo_push = cw_en && o_addr[5:1] == 5'h03;
     wire mo_pop  = mout_valid && mout_ack;
     wire [15:0] mo_m = merge(c406, cw_d, cw_be);
-    // registered read of the next byte; valid a clock after the write lands
     always_ff @(posedge clk) begin
       if (mo_push) mo_fifo[mo_w] <= mo_m[7:0];
       mout_data <= mo_fifo[mo_pop ? mo_r + 5'd1 : mo_r];
@@ -621,543 +1053,11 @@ module m2_scsp #(
     assign mout_data  = 8'd0;
   end endgenerate
 
-  // =====================================================================
-  // the slot's combinational parts
-  // =====================================================================
-  wire        pcm8   = r0[4];
-  wire  [1:0] lpctl  = r0[6:5];
-  wire  [1:0] ssctl  = r0[8:7];
-  wire  [1:0] sbctl  = r0[10:9];
-  wire [19:0] sa     = {r0[3:0], r1};
-  wire [15:0] lsa    = r2;
-  wire [15:0] lea    = r3;
-  wire  [4:0] d2r_r  = r4[15:11];
-  wire        lpslnk = r5[14];
-  wire        sdir   = r6[8];
-  wire        stwinh = r6[9];
-  wire  [3:0] mdl    = r7[15:12];
-  wire  [5:0] mdxsl  = r7[11:6];
-  wire  [5:0] mdysl  = r7[5:0];
-  wire        fm_mod = FM && (mdl != 4'd0 || mdxsl != 6'd0 || mdysl != 6'd0);
-  wire  [4:0] lfof   = r9[14:10];
-  wire  [1:0] plfows = r9[9:8];
-  wire  [2:0] plfos  = r9[7:5];
-  wire  [1:0] alfows = r9[4:3];
-  wire  [2:0] alfos  = r9[2:0];
-  wire        live   = ssctl != 2'd3;      // MAME: SSCTL 3 returns 0, touching nothing
-  wire        alfo_on = alfos != 3'd0 && !sdir && live;
-  wire  [4:0] lk_from = fm_mod ? 5'd4 : 5'd2;   // the sample bytes: after the FM offset
-
-  logic signed [19:0] fmoff_c;
-  // MAME's FM offset: (RING[x] + RING[y]) / 2 (C division), << 10, >> (26 - MDL),
-  // << 1 for PCM16; added to both sample addresses
-  always_comb begin
-    logic signed [16:0] sum, half;
-    logic signed [31:0] sh;
-    sum  = {ring_x[15], ring_x} + {ring_q[15], ring_q};
-    half = (sum >>> 1) + $signed({16'd0, sum[16] & sum[0]});   // C: toward zero (all signed, or >>> is logical)
-    sh   = ($signed({{15{half[16]}}, half}) <<< 10) >>> (5'd26 - {1'b0, mdl});
-    if (!pcm8) sh = sh <<< 1;
-    // (registered at c = 3 as fmoff, from x read at c = 1 and y at c = 2)
-    fmoff_c = sh[19:0];
-  end
-
-  // the two sample addresses (bytes; MAME's read_byte masks to 20 bits)
-  always_comb begin
-    logic [31:0] o1, o2;
-    o1 = pcm8 ? (cur >> 12) : ((cur >> 11) & ~32'd1);
-    o2 = pcm8 ? (nxt >> 12) : ((nxt >> 11) & ~32'd1);
-    a1 = sa + o1[19:0] + (fm_mod ? fmoff : 20'sd0);
-    a2 = sa + o2[19:0] + (fm_mod ? fmoff : 20'sd0);
-  end
-
-  // the loop, after the step (LPCTL 2 / 3 play as 1: not built)
-  always_comb begin
-    logic [31:0] n_a;
-    logic [19:0] ad1, ad2;
-    logic [19:0] lp_d;                    // (LSA - LEA), signed
-    logic        hi1, hi2;
-    n_a = cur_a + 32'd4096;
-    lp_d = 20'($signed({1'b0, lsa}) - $signed({1'b0, lea}));
-    ad1 = cur_a[31:12]; ad2 = n_a[31:12];
-    hi1 = cur_a[31:28] != 4'd0; hi2 = n_a[31:28] != 4'd0;   // >= 2^16: past any LSA / LEA
-    eg_pre = egst[slot];
-    if ((hi1 || ad1[15:0] >= lsa) && lpslnk && egst[slot] == ATT) eg_pre = DC1;
-    cur_n = cur_a; nxt_n = n_a; stop_loop = 1'b0;
-    if (lpctl == 2'd0) begin
-      if (((hi1 || ad1[15:0] >= lsa) && (hi1 || ad1[15:0] >= lea)) ||
-          ((hi2 || ad2[15:0] >= lsa) && (hi2 || ad2[15:0] >= lea))) stop_loop = 1'b1;
-    end else begin
-      if (hi1 || ad1[15:0] >= lea) cur_n = cur_a + {lp_d, 12'd0};
-      if (hi2 || ad2[15:0] >= lea) nxt_n = n_a   + {lp_d, 12'd0};
-    end
-    if (!live) begin cur_n = cur; nxt_n = nxt; stop_loop = 1'b0; eg_pre = egst[slot]; end
-  end
-
-  // the envelope (MAME EG_Update) from eg_pre, with the one rate this state
-  // uses; SDIR leaves it alone
-  logic  [5:0] dr_i;
-  logic [18:0] dr_v;
-  always_comb begin
-    case (eg_pre)
-      DC1:     dr_i = d1r_i;
-      DC2:     dr_i = d2r_i;
-      default: dr_i = rr_i;
-    endcase
-    dr_v = scsp_drtab(dr_i);
-  end
-  always_comb begin
-    logic signed [28:0] v;
-    v = {vol[27], vol};
-    eg_n = eg_pre; stop_rel = 1'b0;
-    case (eg_pre)
-      ATT: begin
-        v = v + $signed({2'b00, scsp_artab(ar_i)});
-        if (v >= $signed({3'b000, 10'h3ff, 16'd0})) begin
-          if (!lpslnk) eg_n = DC1;          // (D1R >= 1024 << 16 never holds with DRTABLE)
-          v = {3'b000, 10'h3ff, 16'd0};
-        end
-      end
-      DC1: begin
-        v = v - $signed({10'd0, dr_v});
-        if (v[28]) v = '0;
-        if (v[25:21] <= dl) eg_n = DC2;
-      end
-      DC2: begin
-        if (d2r_r != 5'd0) begin
-          v = v - $signed({10'd0, dr_v});
-          if (v[28]) v = '0;
-        end
-      end
-      default: begin
-        v = v - $signed({10'd0, dr_v});
-        if (v[28] || v == 29'sd0) begin v = '0; stop_rel = 1'b1; end
-      end
-    endcase
-    vol_n  = v[27:0];
-    eg_lin = eg_pre == ATT;
-    eg_lv  = hold ? 13'h0ffc : {1'b0, vol_n[25:16], 2'b00};
-    if (sdir || !live) begin vol_n = vol; eg_n = eg_pre; stop_rel = 1'b0; end
-  end
-
-  // the interpolated, SBCTL'd sample (at c = 8, from the product)
-  logic signed [17:0] s1c;
-  always_comb begin
-    logic signed [29:0] s;
-    logic signed [17:0] s0;
-    s  = ($signed({{13{p1[16]}}, p1}) <<< 12) + $signed(mu_lo[29:0]);
-    s0 = s[29:12];
-    if (ssctl != 2'd0) s0 = 18'sd0;
-    s1c = s0;
-    if (sbctl[0]) s1c = s1c ^ 18'sh07fff;
-    if (sbctl[1]) s1c = {{2{~s1c[15]}}, ~s1c[15], s1c[14:0]};   // (s16)(sample ^ 0x8000)
-  end
-  wire signed [17:0] s3c = !live ? 18'sd0 : sdir ? s2 : 18'(mu_s12);
-
-  // =====================================================================
-  // address muxes
-  // =====================================================================
-  wire [63:0] ln_any = (ls == L_W1 || ls == L_W2) ? lk_data : fill_data;
-  wire signed [16:0] pk1 = pick(ln_any, a1, pcm8);
-  wire signed [16:0] pk2 = pick(ln_any, a2, pcm8);
-  wire        lk_go  = est == E_SLOT && c >= lk_from;
-
-  always_comb begin
-    ra_addr = {slot, 4'd0}; rb_addr = {slot, 4'd1}; rb_d = o_data; rb_be = 2'b00;
-    st_addr = {slot, (c >= 5'd5) ? S_RR : S_CUR}; st_we = 1'b0; st_d = '0;
-    // PSCALES[s][i] read flat, as MAME's does: i = 256 reaches [s + 1][0]
-    ps_a = {1'b0, plfos, 8'd0} + {3'd0, plfo_idx(plfows, pph_n[15:8], nz_p)};
-    as_a = {alfos, alfo_wave(alfows, aph_n[15:8], nz_a)};
-    eg_a = vol_r[25:16];
-    lv_raddr = {slot, 3'd0};
-    lk_req = 1'b0; lk_line = a1[18:3];
-    fill_req = 1'b0; fill_line = a1[18:3];
-    ef_idx = ei;
-    mix_we = 1'b0; mix_val = mu_lo[29:10];
-    ring_a = {1'b0, 6'({par, slot} + mdxsl)}; ring_we = 1'b0; ring_wa = {1'b0, par, slot}; ring_wd = 16'(mu_lo >>> 13);
-    case (est)
-      E_OP: begin
-        ra_addr = {o_slot, o_word}; rb_addr = {o_slot, o_word};
-        ring_a = o_addr[7:1];
-        if (!op_rd) begin
-          case (oc)
-            5'd0: begin
-              if (o_addr < 11'h200) begin rb_be = o_be; rb_d = (o_word == 4'd0) ? (o_data & 16'hefff) : o_data; end
-              if (o_ring && o_be == 2'b11) begin ring_we = 1'b1; ring_wa = o_addr[7:1]; ring_wd = o_data; end
-            end
-            5'd1: begin
-              rb_addr = {o_slot, 4'd5};
-              if (o_ring) begin ring_we = 1'b1; ring_wa = o_addr[7:1]; ring_wd = merge(ring_q, o_data, o_be); end
-            end
-            5'd2: begin st_addr = {o_slot, S_RR}; st_we = 1'b1;   // RR (base 0), DL
-                        st_d[10:0] = {rate_i(8'sd0, rb_q[4:0]), 5'h1f - rb_q[9:5]}; end
-            5'd4: begin ra_addr = {o_slot, 4'd6}; rb_addr = {o_slot, 4'd10}; end
-            5'd5: ra_addr = {o_slot, 4'd11};
-            5'd8: begin ra_addr = {sw, 4'd4}; rb_addr = {sw, 4'd5}; end
-            5'd9: ra_addr = {sw, 4'd8};
-            // StartSlot: cur 0, nxt 4096, volume 0x17f << 16, the rates;
-            // the LFO phases kept
-            5'd11: begin st_addr = {sw, S_CUR}; st_we = 1'b1; st_d = 40'd0; end
-            5'd12: begin st_addr = {sw, S_NXT}; st_we = 1'b1; st_d = 40'd4096; end
-            5'd15: begin st_addr = {sw, S_VOL}; st_we = 1'b1; st_d = 40'h17F0000; end
-            5'd16: begin st_addr = {sw, S_RT}; st_we = 1'b1;
-                         st_d[18:0] = {rate_i(eg_base(t1, t2), t0[4:0]), rate_i(eg_base(t1, t2), t0[10:6]),
-                                       rate_i(eg_base(t1, t2), t0[15:11]), t0[5]}; end
-            5'd17: begin st_addr = {sw, S_RR}; st_we = 1'b1;
-                         st_d[10:0] = {rate_i(eg_base(t1, t2), t1[4:0]), 5'h1f - t1[9:5]}; end
-            default: ;
-          endcase
-        end
-      end
-      E_SLOT: begin
-        case (c)
-          5'd0: begin ra_addr = {slot, 4'd0}; rb_addr = {slot, 4'd1}; st_addr = {slot, S_CUR}; end
-          5'd1: begin ra_addr = {slot, 4'd8}; rb_addr = {slot, 4'd9}; st_addr = {slot, S_NXT};
-                      ring_a = {1'b0, 6'({par, slot} + w7_q[11:6])}; end   // ring x (MDXSL from the shadow)
-          5'd2: begin ra_addr = {slot, 4'd2}; rb_addr = {slot, 4'd3}; st_addr = {slot, S_PH}; ring_a = {1'b0, 6'({par, slot} + mdysl)}; end
-          5'd3: begin ra_addr = {slot, 4'd4}; rb_addr = {slot, 4'd5}; st_addr = {slot, S_VOL}; end
-          5'd4: begin ra_addr = {slot, 4'd6}; rb_addr = {slot, 4'd10}; st_addr = {slot, S_RT}; end
-          5'd9: begin
-            st_addr = {slot, S_CUR}; st_we = live; st_d[31:0] = cur_n;
-            lv_raddr = {slot, 3'd2};
-          end
-          5'd10: begin
-            st_addr = {slot, S_NXT}; st_we = live; st_d[31:0] = nxt_n;
-            lv_raddr = {slot, 3'd0};
-          end
-          5'd11: begin
-            st_addr = {slot, S_PH}; st_we = live;
-            st_d[31:0] = {(plfos != 3'd0) ? pph_n : pph, alfo_on ? aph_n : aph};
-            lv_raddr = {slot, 3'd1};
-          end
-          5'd12: begin
-            st_addr = {slot, S_VOL}; st_we = live; st_d[25:0] = vol_r[25:0];
-            lv_raddr = {slot, 3'd5};
-          end
-          5'd17: begin   // MAME StopSlot clears KEYONB in the register
-            rb_addr = {slot, 4'd0}; rb_be = {stop_r, 1'b0}; rb_d = {r0[15:12], 1'b0, r0[10:0]};
-          end
-          5'd18: begin ring_we = FM && !stwinh && live; end    // the slot's output into the ring
-          default: ;
-        endcase
-        if (c == 5'd15) mix_we = 1'b1;
-        if (lk_go) begin
-          case (ls)
-            L_WAIT: begin lk_req = ssctl == 2'd0 && a1 < 20'h80000; lk_line = a1[18:3]; end
-            L_A2:   begin lk_req = a2 < 20'h80000; lk_line = a2[18:3]; end
-            L_F1:   begin fill_req = 1'b1; fill_line = a1[18:3]; end
-            L_F2:   begin fill_req = 1'b1; fill_line = a2[18:3]; end
-            default: ;
-          endcase
-        end
-      end
-      E_EFF: lv_raddr = {1'b0, ei, ec == 3'd0 ? 3'd3 : 3'd4};
-      E_OUT: st_addr = {mslc, (ec == 3'd0) ? S_CUR : S_VOL};
-      default: ;
-    endcase
-  end
-
-  assign quiet = est == E_IDLE && !op_ready && !wq_pop && !rd_done && !lv_busy && !lv_req && !dsp_busy;
-  wire go_ok = step_mode ? (step_go && !lv_busy && !lv_req) : out_ready;
-
-  // the output: MAME's DAC (smpl >> 2 clamped to 16 bits, or the 18-bit
-  // range), then MVOL / 15 -- the speaker's gain, round(65536 x MVOL / 15)
-  // through the engine's multiplier; 15 is unity
-  function automatic logic signed [15:0] dac(input logic signed [31:0] s, input logic d18);
-    logic signed [31:0] x;
-    x = d18 ? s : (s >>> 2);
-    if (d18) begin
-      if (x[31:17] != {15{x[31]}}) x = x[31] ? -32'sd131072 : 32'sd131071;
-      x = x >>> 2;
-    end else if (x[31:15] != {17{x[31]}}) x = x[31] ? -32'sd32768 : 32'sd32767;
-    dac = x[15:0];
-  endfunction
-  function automatic logic [16:0] mvol_gain(input logic [3:0] mv);
-    mvol_gain = 17'((({13'd0, mv} * 17'd65536) + 17'd7) / 17'd15);
-  endfunction
-  wire signed [15:0] dac_l = dac(smpl, c400[8]);
-  wire signed [15:0] dac_r = dac(smpr, c400[8]);
-
-`ifdef SCSP_DEBUG
-  logic [4:0]  dbg_sel;
-  logic [31:0] dbg_from, dbg_to;
-  initial begin
-    if (!$value$plusargs("dslot=%d", dbg_sel)) dbg_sel = 5'd0;
-    if (!$value$plusargs("dfrom=%d", dbg_from)) dbg_from = 32'd0;
-    if (!$value$plusargs("dto=%d", dbg_to)) dbg_to = 32'd0;
-  end
-`endif
-
-  // =====================================================================
-  // the engine
-  // =====================================================================
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      est <= E_IDLE; op_ret <= E_IDLE; slot <= '0; c <= '0; oc <= '0; sw <= '0; op_rd <= 1'b0;
-      o_addr <= '0; o_data <= '0; o_be <= '0;
-      active <= '0; kb <= '0; par <= 1'b0;
-      egst <= {32{REL}};
-      wq_pop <= 1'b0; rd_done <= 1'b0; lv_req <= 1'b0; dsp_go <= 1'b0;
-      dsp_started <= 1'b0; dsp_fin <= 1'b0; mi_pop <= 1'b0;
-      out_valid <= 1'b0; dbg_samples <= '0; dbg_slot_valid <= 1'b0;
-      ls <= L_WAIT; smpl <= '0; smpr <= '0; mon <= '0; cpu_dout <= '0;
-    end else begin
-      wq_pop <= 1'b0; rd_done <= 1'b0; dsp_go <= 1'b0; out_valid <= 1'b0;
-      dbg_slot_valid <= 1'b0; mi_pop <= 1'b0;
-      if (lv_req && !lv_busy) lv_req <= 1'b0;
-      if (dsp_done) dsp_fin <= 1'b1;
-
-      case (est)
-        // ------------------------------------------------ between samples
-        E_IDLE: begin
-          if (op_ok) begin
-            est <= E_OP; op_ret <= E_IDLE; oc <= '0; op_rd <= wq_n == 3'd0;
-            o_addr <= (wq_n != 3'd0) ? h_addr : rd_a; o_data <= wq_h[15:0]; o_be <= wq_h[28:27];
-          end else if (go_ok && !dsp_busy && !op_ready) begin
-            est <= E_SLOT; slot <= 5'd0; c <= 5'd0; ls <= L_WAIT; smpl <= '0; smpr <= '0;
-          end
-        end
-
-        // ------------------------------------------------ a queued access
-        E_OP: begin
-          if (!op_rd) begin
-            if (o_addr < 11'h200) begin
-              // a slot register: w16, then UpdateSlotReg
-              case (oc)
-                5'd0: begin
-                  wq_pop <= 1'b1;
-                  if (o_word == 4'd0 && o_be[1]) kb[o_slot] <= o_data[11];
-                  if (o_word == 4'd0 && o_be[1] && o_data[12]) begin oc <= 5'd7; sw <= 5'd0; end
-                  else if (o_word == 4'd5) oc <= 5'd1;
-                  else if (o_word == 4'd6 || o_word == 4'd10 || o_word == 4'd11) oc <= 5'd4;
-                  else est <= op_ret;
-                end
-                5'd1: oc <= 5'd2;                         // word 5 asked
-                5'd2: est <= op_ret;                      // row 1's RR (base 0), DL written
-                5'd4: oc <= 5'd5;                         // words 6, 10 asked
-                5'd5: begin t0 <= ra_q; t1 <= rb_q; oc <= 5'd6; end
-                5'd6: begin t2 <= ra_q; oc <= 5'd13; end
-                5'd13: if (!lv_busy && !lv_req) begin lv_req <= 1'b1; oc <= 5'd14; end
-                5'd14: est <= op_ret;                     // (the evaluator has taken t0-t2)
-                // the KEYONEX sweep: start a released slot that is keyed,
-                // release one that is not
-                5'd7: begin
-                  if (kb[sw] && egst[sw] == REL) oc <= 5'd8;
-                  else begin
-                    if (!kb[sw]) egst[sw] <= REL;
-                    if (sw == 5'd31) est <= op_ret; else sw <= sw + 5'd1;
-                  end
-                end
-                5'd8: oc <= 5'd9;                         // words 4, 5 asked
-                5'd9: begin t0 <= ra_q; t1 <= rb_q; oc <= 5'd10; end
-                5'd10: begin t2 <= ra_q; oc <= 5'd11; end
-                5'd11: oc <= 5'd12;                       // the state rows written
-                5'd12: oc <= 5'd15;
-                5'd15: oc <= 5'd16;
-                5'd16: oc <= 5'd17;
-                5'd17: begin
-                  active[sw] <= 1'b1; egst[sw] <= ATT;
-                  if (sw == 5'd31) est <= op_ret; else begin sw <= sw + 5'd1; oc <= 5'd7; end
-                end
-                default: est <= op_ret;
-              endcase
-            end else if (o_ring && o_be != 2'b11 && oc == 5'd0) begin
-              wq_pop <= 1'b1; oc <= 5'd1;                 // a byte of the ring: read, merge
-            end else begin
-              // a common register, the DSP's, the ring, or nothing: one clock
-              if (oc == 5'd0) wq_pop <= 1'b1;
-              est <= op_ret;
-            end
-          end else begin
-            // a read (MAME r16)
-            case (oc)
-              5'd0: oc <= 5'd1;
-              default: begin
-                if (o_addr < 11'h200) cpu_dout <= rb_q;
-                else if (o_ring) cpu_dout <= ring_q;
-                else if (o_addr >= 11'h380 && o_addr < 11'h600) cpu_dout <= dsp_rq;
-                else cpu_dout <= common_read(o_addr[5:1]);
-                if (o_addr == 11'h202) mi_pop <= 1'b1;
-                rd_done <= 1'b1; est <= op_ret;
-              end
-            endcase
-          end
-        end
-
-        // ------------------------------------------------ a slot
-        E_SLOT: begin
-          if (c == 5'd0 && op_ok) begin
-            est <= E_OP; op_ret <= E_SLOT; oc <= '0; op_rd <= wq_n == 3'd0;
-            o_addr <= (wq_n != 3'd0) ? h_addr : rd_a; o_data <= wq_h[15:0]; o_be <= wq_h[28:27];
-          end else if (c == 5'd0 && !active[slot]) begin
-            if (slot == 5'd31) begin est <= E_DSP; dsp_started <= 1'b0; dsp_fin <= 1'b0; end
-            slot <= slot + 5'd1;
-          end else begin
-            c <= c + 5'd1;
-            // ---- the sample bytes (from c = 2, or 4 under FM; p1, p2 by c = 6)
-            if (lk_go) begin
-              case (ls)
-                L_WAIT: begin
-                  if (ssctl != 2'd0) begin p1 <= '0; p2 <= '0; ls <= L_DONE; end
-                  else if (a1 >= 20'h80000) begin p1 <= '0; ls <= L_A2; end
-                  else ls <= L_W1;
-                end
-                L_W1: begin
-                  if (lk_hit) begin
-                    p1 <= pk1;
-                    if (a2[19:3] == a1[19:3]) begin p2 <= pk2; ls <= L_DONE; end
-                    else ls <= L_A2;
-                  end else ls <= L_F1;
-                end
-                L_F1: if (fill_done) begin
-                  p1 <= pk1;
-                  if (a2[19:3] == a1[19:3]) begin p2 <= pk2; ls <= L_DONE; end
-                  else ls <= L_A2;
-                end
-                L_A2: begin
-                  if (a2 >= 20'h80000) begin p2 <= '0; ls <= L_DONE; end
-                  else ls <= L_W2;
-                end
-                L_W2: begin
-                  if (lk_hit) begin p2 <= pk2; ls <= L_DONE; end
-                  else ls <= L_F2;
-                end
-                L_F2: if (fill_done) begin p2 <= pk2; ls <= L_DONE; end
-                default: ;
-              endcase
-            end
-            case (c)
-              5'd1: begin
-                r0 <= ra_q; r1 <= rb_q; cur <= st_q[31:0];
-                r7 <= w7_q;
-              end
-              5'd2: begin r8 <= ra_q; r9 <= rb_q; ring_x <= ring_q; nxt <= st_q[31:0]; end
-              5'd3: begin
-                r2 <= ra_q; r3 <= rb_q;
-                fmoff <= fmoff_c; ring_y <= ring_q;
-                step0 <= pitch(r8[14:11], r8[9:0]);
-                pph <= st_q[31:16]; aph <= st_q[15:0]; pph_n <= pph_c; aph_n <= aph_c;
-              end
-              5'd4: begin r4 <= ra_q; r5 <= rb_q; vol <= {2'b00, st_q[25:0]}; end   // ps_q / as_q asked
-              5'd5: begin
-                ar_i <= st_q[18:13]; d1r_i <= st_q[12:7]; d2r_i <= st_q[6:1]; hold <= st_q[0];
-                r6 <= ra_q; isel_r <= rb_q[6:3];
-                mu_a <= step0[26:0]; mu_b <= {5'd0, ps_past ? 9'd256 : ps_q, 4'd0}; // PLFO_Step returns p << 4 (step0 < 2^22)
-              end
-              5'd6: begin
-                rr_i <= st_q[10:5]; dl <= st_q[4:0];       // (row 5 held while this waits)
-                if (ls != L_DONE) c <= c;                 // the sample bytes are not in yet
-                else begin
-                  mu_a <= {{10{p2[16]}}, p2} - {{10{p1[16]}}, p1};
-                  mu_b <= {6'd0, cur[11:0]};
-                end
-              end
-              5'd7: step <= (plfos != 3'd0) ? mu_s12 : step0;
-              5'd8: begin
-                cur_a <= cur + step;
-                s1 <= s1c;
-                mu_a <= {{9{s1c[17]}}, s1c}; mu_b <= {5'd0, as_q, 4'd0};     // ALFO_Step returns p << 4
-              end
-              5'd9: begin                                  // row 0 written; the envelope
-                vol_r <= vol_n; eg_r <= eg_n; stop_r <= stop_loop | stop_rel; lin_r <= eg_lin; lv_r <= eg_lv;
-              end
-              5'd10: begin                                 // row 1 written; ALFO product
-                s2 <= alfo_on ? 18'(mu_s12) : s1;
-                v_d <= lv_q;
-              end
-              5'd11: begin                                 // EG_TABLE in; the EG product
-                mu_a <= {{9{s2[17]}}, s2}; mu_b <= {5'd0, lin_r ? lv_r : eg_q};
-                v_l <= lv_q;
-              end
-              5'd12: v_r <= lv_q;
-              5'd13: begin
-                s3 <= s3c;
-                mu_a <= {{9{s3c[17]}}, s3c}; mu_b <= {3'd0, v_d};
-                v_g <= lv_q;
-              end
-              5'd14: begin mu_a <= {{9{s3[17]}}, s3}; mu_b <= {3'd0, v_l}; end
-              5'd15: begin mu_a <= {{9{s3[17]}}, s3}; mu_b <= {3'd0, v_r}; end   // the DSP send lands
-              5'd16: begin
-                smpl <= smpl + mu_s12;
-                mu_a <= {{9{s3[17]}}, s3}; mu_b <= {3'd0, v_g};              // (FM) the ring's write
-              end
-              5'd17: smpr <= smpr + mu_s12;
-              default: ;
-            endcase
-            if (c == C_END) begin
-              if (live) egst[slot] <= eg_r;
-              if (stop_r) begin active[slot] <= 1'b0; kb[slot] <= 1'b0; end
-              dbg_slot_valid <= 1'b1; dbg_slot <= slot; dbg_slot_smp <= 32'(s3);
-`ifdef SCSP_DEBUG
-              if (slot == dbg_sel && dbg_samples >= dbg_from && dbg_samples < dbg_to)
-                $display("n %0d slot %0d r0 %h sa %h lsa %h lea %h cur %h nxt %h step %h a1 %h a2 %h p1 %0d p2 %0d s1 %0d s2 %0d s3 %0d vol %h eg %0d r9 %h r7 %h rw %0d %h %h fm %h %h %h",
-                         dbg_samples, slot, r0, sa, lsa, lea, cur, nxt, step, a1, a2, p1, p2, s1, s2, s3, vol, egst[slot], r9, r7, ring_we, ring_wa, ring_wd, ring_x, ring_y, fmoff);
-`endif
-              c <= 5'd0; ls <= L_WAIT;
-              if (slot == 5'd31) begin est <= E_DSP; dsp_started <= 1'b0; dsp_fin <= 1'b0; end
-              slot <= slot + 5'd1;
-            end
-          end
-        end
-
-        // ------------------------------------------------ the DSP
-        E_DSP: begin
-          if (op_ok) begin
-            est <= E_OP; op_ret <= E_DSP; oc <= '0; op_rd <= wq_n == 3'd0;
-            o_addr <= (wq_n != 3'd0) ? h_addr : rd_a; o_data <= wq_h[15:0]; o_be <= wq_h[28:27];
-          end else if (!dsp_started) begin
-            if (!dsp_busy) begin dsp_go <= 1'b1; dsp_started <= 1'b1; end
-          end else if (dsp_fin || dsp_done) begin
-            est <= E_EFF; ei <= 4'd0; ec <= 3'd0;
-          end
-        end
-
-        // ------------------------------------------------ effect returns
-        E_EFF: begin
-          ec <= ec + 3'd1;
-          case (ec)
-            3'd0: ;                                       // level 3, EFREG asked
-            3'd1: begin v_d <= lv_q; ef_r <= ef_q; end    // level 4 asked
-            3'd2: begin v_l <= lv_q; mu_a <= {{11{ef_r[15]}}, ef_r}; mu_b <= {3'd0, v_d}; end
-            3'd3: begin mu_a <= {{11{ef_r[15]}}, ef_r}; mu_b <= {3'd0, v_l}; end
-            3'd4: smpl <= smpl + mu_s12;
-            default: begin
-              smpr <= smpr + mu_s12;
-              ec <= 3'd0;
-              if (ei == 4'd15) est <= E_OUT;   // E_OUT counts on ec from 0
-              ei <= ei + 4'd1;
-            end
-          endcase
-        end
-
-        // ------------------------------------------------ the sample
-        default: begin
-          ec <= ec + 3'd1;
-          case (ec)
-            3'd0: begin mu_a <= {{11{dac_l[15]}}, dac_l}; mu_b <= {1'b0, mvol_gain(c400[3:0])}; end
-            3'd1: begin mu_a <= {{11{dac_r[15]}}, dac_r}; mu_b <= {1'b0, mvol_gain(c400[3:0])}; mon_ca <= st_q[27:24]; end
-            3'd2: begin
-              out_l <= (c400[3:0] == 4'hf) ? dac_l : mu_p[31:16];
-              mon <= {5'd0, mon_ca, egst[mslc], 5'h1f - st_q[25:21]};   // MAME latches it after each update
-            end
-            default: begin
-              out_r <= (c400[3:0] == 4'hf) ? dac_r : mu_p[31:16];
-              out_valid <= 1'b1;
-              out_l_raw <= smpl; out_r_raw <= smpr;
-              if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
-              par <= ~par;
-              ec <= 3'd0;
-              est <= E_IDLE;
-            end
-          endcase
-        end
-      endcase
-    end
-  end
+  assign quiet = upc == UA_IDLE && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
+                 !lv_busy && !lv_req && !dsp_busy;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, r4[10:0], r5[13:0], r5[15], r6[15:10], r6[7:0], r8[15], r8[10], r9[15],
-                   lk_line[0], st_q[39:32], mu_p[44:32], eg_r};
+  wire _unused = &{1'b0, LFO_NOISE, prod[44:38], w0l[11], egst_n_rel_stop, ue[`UE_IMM]};
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule
