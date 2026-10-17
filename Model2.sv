@@ -5348,7 +5348,53 @@ m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(
 	.tx(UART_TXD), .dbg_dropped(uart_dropped)
 );
 end else begin : g_nodbg
-`ifdef M2_DEBUG_LITE
+`ifdef M2_PROBE
+	// R867: THE PROBE -- the smallest stream that answers "where does the i960
+	// stop" and "does the sound board start", for a build with no room for
+	// M2_WHY (s1194-s1199: 4,192-4,211 LABs of 4,191). VERILOG_MACRO
+	// "M2_PROBE=1" without M2_DEBUG_LITE. One record every third prof_tick
+	// (2.46 ms), turning C, S, T, U; no 'G'. Decoder: tools/decode_why.py.
+	//   'C' {the i960's IP} | {copro_stall, sequencer state, bridge, 9'd0}
+	//   'S' {68000 bus cycles} | {SCSP writes by the 68000 | bytes the i960 sent the sound side}
+	//   'T' {the 68000's last address | bytes the sound side sent the i960}
+	//       | {loudest |left| since the last T | output FIFO underruns}
+	//   'U' {68000 writes to 0x400 | to 0x418} | {sound-RAM check's wrong words | 12'd0, MVOL}
+	logic [1:0]  pb_div, pb_sel;
+	logic        pb_valid;
+	logic [15:0] sd_scw, sd_rx, sd_peak;
+	logic  [7:0] sd_tx;
+	wire  [15:0] sd_abs = snd_l[15] ? (~snd_l + 16'd1) : snd_l;
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			pb_div <= '0; pb_sel <= '0; pb_valid <= 1'b0;
+			sd_scw <= '0; sd_rx <= '0; sd_tx <= '0; sd_peak <= '0;
+		end else begin
+			pb_valid <= 1'b0;
+			if (prof_tick) begin
+				pb_div <= (pb_div == 2'd2) ? 2'd0 : pb_div + 2'd1;
+				if (pb_div == 2'd0) begin pb_valid <= 1'b1; pb_sel <= pb_sel + 2'd1; end
+			end
+			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
+			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
+			if (b_tx_v && b_tx_a) sd_tx  <= sd_tx + 8'd1;
+			if (pb_valid && pb_sel == 2'd2) sd_peak <= sd_abs;
+			else if (sd_abs > sd_peak)      sd_peak <= sd_abs;
+		end
+	end
+	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
+		.clk(clk_sys), .rst_n(mem_rst_n),
+		.a_valid(pb_valid),
+		.a_addr((pb_sel == 2'd1) ? snd_insns : (pb_sel == 2'd2) ? {snd_pc[23:0], sd_tx} :
+		        (pb_sel == 2'd3) ? {snd_w400, snd_w418} : cpu_dbg_ip),
+		.a_data((pb_sel == 2'd1) ? {sd_scw, sd_rx} : (pb_sel == 2'd2) ? {sd_peak, snd_under} :
+		        (pb_sel == 2'd3) ? {snd_selftest, 12'd0, snd_mvol} : {copro_stall, cpu_dbg_ts, cpu_br_sample, 9'd0}),
+		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
+		.a_tag((pb_sel == 2'd1) ? 8'h53 : (pb_sel == 2'd2) ? 8'h54 : (pb_sel == 2'd3) ? 8'h55 : 8'h43),
+		.b_tag(8'h47),   // 'C','S','T','U'
+		.enable(1'b1),
+		.tx(UART_TXD), .dbg_dropped(uart_dropped)
+	);
+`elsif M2_DEBUG_LITE
 	// R637: TELEMETRY LITE -- the one question "why does the game run slow"
 	// needs, in the area the keeper build has left (~230 ALM against the full
 	// stream's ~850, R612). Two channels on m2_dbg_stream's UART:
