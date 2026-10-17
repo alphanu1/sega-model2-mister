@@ -3086,6 +3086,10 @@ wire [15:0] snd_ymw, snd_pcmw;
 wire [31:0] snd_samples;
 wire [15:0] snd_lat, snd_miss, snd_under;
 wire        snd_scsp_we;   // R862: a 68000 write to the SCSP this clock (2A board; 0 otherwise)
+// R864: the 2A board's pre-boot sound-RAM check (words wrong), MVOL as the
+// SCSP holds it, and the 68000's writes to 0x400-0x401 and 0x418 (0 otherwise)
+wire [15:0] snd_selftest, snd_w400, snd_w418;
+wire  [3:0] snd_mvol;
 wire  [7:0] snd_level;
 generate if (M1SOUND) begin : g_m1snd
 assign {s2a_a_req, s2a_a_we, s2a_b_req, s2a_c_req, s2a_c_we} = '0;
@@ -3108,6 +3112,7 @@ m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHA
 	.dbg_pcm_under(snd_under), .dbg_pcm_level(snd_level)
 );
 assign snd_scsp_we = 1'b0;   // R862
+assign snd_selftest = 16'd0; assign snd_w400 = 16'd0; assign snd_w418 = 16'd0; assign snd_mvol = 4'd0;   // R864
 end else if (SND2A) begin : g_2asnd
 	// R859: THE MODEL 2A SOUND BOARD. The i8251's TXD is the SCSP's MIDI in
 	// and the SCSP's MIDI out its RXD (m2_sound_link, as the Model 1 board's
@@ -3128,7 +3133,8 @@ end else if (SND2A) begin : g_2asnd
 		.c_ack(p_ack[7]), .c_dout(p_dout[7]),
 		.snd_l(snd_l), .snd_r(snd_r),
 		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
-		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be()
+		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
+		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418)
 	);
 	assign snd_pc[31:24] = 8'd0;
 	assign snd_rom_req = 1'b0; assign snd_rom_addr = '0;
@@ -3157,6 +3163,7 @@ end else begin : g_2astub
 	assign pcm2_req = 1'b0; assign pcm2_addr = '0;
 	assign snd_ymw = 16'd0; assign snd_pcmw = 16'd0; assign snd_samples = 32'd0;
 	assign snd_lat = 16'd0; assign snd_miss = 16'd0; assign snd_under = 16'd0; assign snd_scsp_we = 1'b0;
+	assign snd_selftest = 16'd0; assign snd_w400 = 16'd0; assign snd_w418 = 16'd0; assign snd_mvol = 4'd0;   // R864
 	assign snd_level = 8'd0;
 end endgenerate
 
@@ -5493,13 +5500,13 @@ end else begin : g_nodbg
 	// slot 1 is P; slot 2 alternates K and I.
 	logic [3:0] wy_div;
 	logic [2:0] wy_s0;
-	logic [1:0] wy_s2;   // R862: K, I, S, T
+	logic [2:0] wy_s2;   // R862: K, I, S, T; R864: U
 	logic       wy_a_valid;
 	logic [2:0] wy_rsel;   // 0 V, 1 D, 2 W, 3 Y, 4 P, 5 K, 6 I, 7 S/T (R862)
-	logic       wy_st;     // R862: with rsel 7, 0 S, 1 T
+	logic [1:0] wy_st;     // R862: with rsel 7, 0 S, 1 T; R864: 2 U
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
-			wy_div <= '0; wy_s0 <= '0; wy_s2 <= 2'd0; wy_a_valid <= 1'b0; wy_rsel <= '0; wy_st <= 1'b0;
+			wy_div <= '0; wy_s0 <= '0; wy_s2 <= 3'd0; wy_a_valid <= 1'b0; wy_rsel <= '0; wy_st <= 2'd0;
 		end else begin
 			wy_a_valid <= 1'b0;
 			if (prof_tick) begin
@@ -5511,9 +5518,9 @@ end else begin : g_nodbg
 				end else if (wy_div == 4'd3) begin
 					wy_a_valid <= 1'b1; wy_rsel <= 3'd4;
 				end else if (wy_div == 4'd6) begin
-					wy_a_valid <= 1'b1; wy_s2 <= wy_s2 + 2'd1;
-					wy_rsel <= (wy_s2 == 2'd0) ? 3'd5 : (wy_s2 == 2'd1) ? 3'd6 : 3'd7;
-					wy_st <= (wy_s2 == 2'd3);
+					wy_a_valid <= 1'b1; wy_s2 <= (wy_s2 == 3'd4) ? 3'd0 : wy_s2 + 3'd1;
+					wy_rsel <= (wy_s2 == 3'd0) ? 3'd5 : (wy_s2 == 3'd1) ? 3'd6 : 3'd7;
+					wy_st <= (wy_s2 == 3'd4) ? 2'd2 : (wy_s2 == 3'd3) ? 2'd1 : 2'd0;
 				end
 			end
 		end
@@ -5522,10 +5529,12 @@ end else begin : g_nodbg
 	//   'S' {68000 bus cycles} | {SCSP writes by the 68000 | bytes the i960 sent the sound side}
 	//   'T' {the 68000's last bus address, 24 bits | bytes the sound side sent the i960}
 	//       | {loudest |left| since the last T | output FIFO underruns}
+	//   'U' {68000 writes to 0x400-0x401 | to 0x418} (R864)
+	//       | {the pre-boot sound-RAM check's wrong words | 12'd0, MVOL}
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
 	wire  [15:0] sd_abs = snd_l[15] ? (~snd_l + 16'd1) : snd_l;
-	wire         sd_tclr = wy_a_valid && (wy_rsel == 3'd7) && wy_st;
+	wire         sd_tclr = wy_a_valid && (wy_rsel == 3'd7) && wy_st == 2'd1;
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin sd_scw <= '0; sd_rx <= '0; sd_tx <= '0; sd_peak <= '0; end
 		else begin
@@ -5543,14 +5552,14 @@ end else begin : g_nodbg
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(wy_a_valid),
-		.a_addr((wy_rsel == 3'd7) ? (wy_st ? {snd_pc[23:0], sd_tx} : snd_insns) : (wy_rsel == 3'd4) ? cpu_dbg_acc : (wy_rsel == 3'd5) ? wy_cst : (wy_rsel == 3'd6) ? wy_ifw :
+		.a_addr((wy_rsel == 3'd7) ? ((wy_st == 2'd2) ? {snd_w400, snd_w418} : (wy_st == 2'd1) ? {snd_pc[23:0], sd_tx} : snd_insns) : (wy_rsel == 3'd4) ? cpu_dbg_acc : (wy_rsel == 3'd5) ? wy_cst : (wy_rsel == 3'd6) ? wy_ifw :
 		        (wy_rsel == 3'd1) ? {8'd0, dg_last} : (wy_rsel == 3'd2) ? {8'd0, wk_last} :
 		        (wy_rsel == 3'd3) ? {8'd0, ys_last} : {wy_hold, wy_walk}),
-		.a_data((wy_rsel == 3'd7) ? (wy_st ? {sd_peak, snd_under} : {sd_scw, sd_rx}) : (wy_rsel == 3'd4) ? dc_hits : (wy_rsel == 3'd5) ? wy_gst : (wy_rsel == 3'd6) ? wy_mw :
+		.a_data((wy_rsel == 3'd7) ? ((wy_st == 2'd2) ? {snd_selftest, 12'd0, snd_mvol} : (wy_st == 2'd1) ? {sd_peak, snd_under} : {sd_scw, sd_rx}) : (wy_rsel == 3'd4) ? dc_hits : (wy_rsel == 3'd5) ? wy_gst : (wy_rsel == 3'd6) ? wy_mw :
 		        (wy_rsel == 3'd1) ? {8'd0, dg_max} : (wy_rsel == 3'd2) ? {8'd0, wk_max} :
 		        (wy_rsel == 3'd3) ? {8'd0, ys_max} : {wy_game, wy_vbl}),
 		.b_valid(lt_b_valid), .b_addr(lt_b_addr), .b_data(lt_b_data),
-		.a_tag((wy_rsel == 3'd7) ? (wy_st ? 8'h54 : 8'h53) : (wy_rsel == 3'd4) ? 8'h50 : (wy_rsel == 3'd5) ? 8'h4B : (wy_rsel == 3'd6) ? 8'h49 :
+		.a_tag((wy_rsel == 3'd7) ? ((wy_st == 2'd2) ? 8'h55 : (wy_st == 2'd1) ? 8'h54 : 8'h53) : (wy_rsel == 3'd4) ? 8'h50 : (wy_rsel == 3'd5) ? 8'h4B : (wy_rsel == 3'd6) ? 8'h49 :
 		       (wy_rsel == 3'd1) ? 8'h44 : (wy_rsel == 3'd2) ? 8'h57 : (wy_rsel == 3'd3) ? 8'h59 : 8'h56),
 		.b_tag(8'h47),   // 'P','K','I','D','W','Y','V'; 'G'
 		.enable(1'b1),
