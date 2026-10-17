@@ -1,5 +1,49 @@
 # Handoff
 
+## 2026-10-17 (evening): model2a -- the 2A sound board in the core; SCSP redesigned (R858, R859)
+
+STATE: rtl/sound/scsp/ is a microcoded slot engine + serial DSP (R858:
+1,868 -> 1,926 ALMs est. with R859's timing fixes, 3 DSP, ~45 M10K), every
+bench bit-exact. rtl/sound/m2_2a_sound.sv (fx68k + SCSP, RAM / ROM / samples
+in SDRAM ports 5-7, sound RAM at word 0x12C0000) is in Model2.sv behind
+M2_2A_SOUND (1 on 2A). Pre-boot: a sound-RAM check and a clear to zero
+(3c609bd); M2_WHY 'U' record = check result, MVOL, writes to 0x400 / 0x418
+(86dc162, decode_why prints it).
+
+ON THE BOARD: s1176 / s1190 SILENT -- 68000 runs, i960 bytes arrive, voices
+programmed, output exactly 0. The bench at the same RTL plays (VF2 20 s
+level within 1-11% of MAME's from 13 s). Exact zero = MVOL 0: the driver's
+init diverges on hardware (no 0x408 scan either). NEXT: a build of 86dc162
+with M2_WHY; the 'U' record says MVOL, whether 0x400 / 0x418 were written,
+and whether the sound RAM holds what port 5 writes.
+
+TIMING (R859): three batches. The SCSP engine closed after the envelope
+went over two clocks and the E microword was registered (517a535) and a
+timer-write path was cut (bab8ea6): s1176 clk_sys +0.363. Left: m2_sdram's
+arbiter on clk_mem (-0.22, ports 5-7 now live) and HDMI -- seed luck at 98%
+ALMs; one seed of three did not route.
+
+FOUND (R859; R860 / R861 are the parent's commits):
+  * quartus_map area says nothing about timing: the first SCSP build missed
+    by -1.86 ns, all in E (block-RAM outputs unregistered + a 32-bit add +
+    the envelope's compares + the result mux in one clock).
+  * The SCSP's 68000 write queue (4) had no full check -- a fifth write was
+    lost (VF2's RBP / RBL); the 68000 crashed and wrote MOBUF from its
+    exception stack. The SCSP bench waits for quiet after each write and
+    could never see it. Fixed: DTACK waits (9fb631d).
+  * Model2.sv's IRQ 10 on a rising edge of TXRDY | RXRDY lost TXRDY once a
+    byte came back (7acf224, the parent's).
+  * Bench faults, not the board's: MAME's capture keeps a byte write's data
+    on both bytes (mask it); the board bench read the output as unsigned.
+  * The 68000 boots 57 ms (now 138 ms with the clear) after MAME's: MAME
+    gives its RAM one wait state, ours waits on SDRAM.
+
+BENCHES: test_m2_scsp (300 s x 4 games, 40 random), test_m2_scsp_dsp,
+test_m2_scsp_level, test_m2_2a_sound (SND_IMG from sim/sound/snd_img.py;
+SND_S, SND_FROM / SND_OFS, SND_WAV, SND_DUMP, SND_MIDI_GAP, SND_RAMDUMP,
+SND2A_MHZ), test_m2_boot_2as (M2_SND_LOG, M2_SND_WAV, M2_SND_GUARD,
+M2_SND_TRAIL_VEC, M2_SND_RAMDUMP).
+
 ## 2026-10-17: model2a -- the 2A SCSP built and benched bit-exact; area 2,720, does not fit with margin (R857)
 
 STATE: rtl/sound/scsp/ (m2_scsp, m2_scsp_dsp, m2_scsp_level, m2_scsp_cache)

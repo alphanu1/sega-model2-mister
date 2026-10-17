@@ -36984,3 +36984,118 @@ comm_board.cpp, BSD-3 from MAME's m2comm) and the TCP sockets over Ethernet
 or Wi-Fi. Rejected for now: a user-port Ethernet module with hardware TCP/IP
 (e.g. WIZnet W5500 over SPI, ~150-250 ALM, no Linux) -- it needs an add-on
 board for every player. Not scheduled.
+
+**R859 -- THE 2A SOUND BOARD: THE 68000, THE SCSP AND THEIR RAM IN SDRAM,
+IN Model2.sv BEHIND M2_2A_SOUND. 4,421 ALMs EST. FOR THE WHOLE BOARD.**
+
+*THE BOARD (rtl/sound/m2_2a_sound.sv), as MAME 0.289's model2.cpp has it:*
+  * fx68k at 11.2896 MHz (enPhi from an 882 / 3125 accumulator of 80 MHz;
+    Model2.sv passes 225792 / SYS_MHZ x 10000), model2_snd_map: RAM
+    000000-07ffff, SCSP 100000-100fff, program ROM 600000-67ffff, samples
+    800000-ffffff, the bank latch at 400000 ignored (no 2A set has more
+    than 8 MB of samples, so MAME's banks are linear).
+  * reset_model2_scsp: the program's first 16 bytes copied into RAM before
+    the 68000 leaves reset (it boots from RAM). Its interrupts are the
+    SCSP's levels, autovectored (VPA on the acknowledge).
+  * EVERYTHING IN SDRAM on ports 5, 6, 7 (the Model 1 board's, free on 2A):
+    the 68000 (program and samples through a 128-line x 4-word cache, read-
+    only so never invalidated; RAM uncached, every RAM write snooped by the
+    SCSP's caches), the SCSP's slot fills, its DSP. Sound RAM at word
+    0x12C0000 (byte 0x2580000), the 2A layout's unloaded hole after the
+    board RAM. ROM_SWAP: the loader stores a word little end first.
+  * The SCSP runs ahead into an eight-sample FIFO (MLAB) drained at 44,100
+    Hz; tick44 also counts its timers.
+  * Model2.sv: `M2_2A_SOUND` (1 on the 2A build; 0 is R852's silent
+    stand-in). Reset is the stand-in's: cpu_rst_n & mem_rst_n & cp_done.
+  * Area (quartus_map 17.0, the board alone): 4,421 ALMs est., 5,850 ALUT,
+    3,196 registers, 3 DSP blocks, 323 Kbit of block RAM.
+
+*BENCHES:*
+  * tb_m2_2a_sound (make test_m2_2a_sound SND_IMG=build/snd2a/<game>
+    SCSP_CAP=build/scsp/<game>; the images from sim/sound/snd_img.py): the
+    board free-running on VF2's real sound program at 80 MHz against three
+    SDRAM ports of random latency 6-40, with MAME's MIDI bytes at MAME's
+    times. Not bit-exact by design (the 68000's accesses land when its own
+    timing puts them, R821's case): the SCSP write stream is compared with
+    MAME's in order (an LCS over a window; SND_FROM / SND_OFS move it).
+    First 1.5 s: all 1,405 writes in MAME's order (100%), 0 stray writes,
+    the FIFO never empty. VF2 20 s with MAME's MIDI: every byte taken, 98.2%
+    of writes in MAME's order, the level against MAME's second by second
+    from 13 s: 902/919, 1,867/1,927, 1,272/1,414, 1,869/1,937, 2,240/2,324,
+    2,816/3,163, 2,709/2,720. VCop2 17 s: 2,716/2,716 from 3 s; Zero Gunner
+    6 s: 65/74, 154/178; Sega Rally 19 s: 247/240, 198/203, 237/238 (the
+    shortfall is the later boot). The bench first read the output port as
+    unsigned -- a small negative sample showed as full scale; fixed.
+  * The comparison first said 16-67%: MAME's capture holds a byte write's
+    data on both bytes (the 68000 drives both halves); the bench now masks
+    MAME's data with its byte mask too. A bench fault, not the board's.
+  * THE 68000 BOOTS ~57 ms LATER THAN MAME'S (its first SCSP write at 0.456
+    s against 0.399 s, 14% later; the offset constant after): the boot's
+    RAM loop goes uncached to SDRAM and each access waits for it. MAME's
+    model2_snd gives RAM and SCSP accesses ONE wait state ("the same
+    waitstate weights as Saturn", before_delay 1) and the ROM none; ours
+    take as many as the SDRAM port's latency costs. Sound is timed by the
+    SCSP's timers, not the 68000, so this moves when the program gets
+    there, not its tempo. Not changed.
+  * MAME's sample map is three windows (800000 the first 2 MB, a00000
+    bank4 = samples + 0x200000, e00000 bank5 = + 0x600000) that are LINEAR
+    as reset leaves them; model2snd_ctrl moves the banks only for a region
+    over 8 MB, which no 2A set has. So the board's linear 800000-ffffff
+    window is MAME's, and the 400000 latch is ignored.
+  * test_m2_boot_2as (new; the harness's A2_SOUND, the board on the i8251
+    as Model2.sv has it, SDRAM ports at latency 12 with m2_sdram_cdc's held
+    acknowledge): VF2 to frame 1,300 with the same picture as without sound
+    -- once two faults were found (below).
+
+*AREA AND TIMING -- WHAT quartus_map COULD NOT SAY.* The board alone:
+4,421 ALMs est. The whole 2A core with it: 39,699 est., 40,9xx-41,0xx of
+41,910 fitted (98%), M10K 539 / 553. The first build (s1170-s1172) failed
+by -1.86 / -1.94 / -2.69 ns, every path in the SCSP engine: E started from
+block-RAM outputs read unregistered (~3.3 ns of the 12.5 before any logic)
+and ran operand mux, 32-bit adder, the envelope's clamp compares and the
+result mux in one clock (q -> q alone was -0.49). Fixed (517a535) without
+changing the microcode's meaning: OP_EG adds in E and clamps / writes /
+loads EGV's address the clock after (the checker forbids a state write or a
+Q use in the clock after an EG); the E microword read with F's and
+registered (a bubble in its place on a hold); FETCH / TADR / output
+captures from the sum or the operand, not the result mux (the checker
+asserts their operations); the common registers decode from a registered
+address; the level shift a clock after its rounding. Second build
+(s1173-s1175): the engine's paths gone, clk_sys -0.85 / -0.38 / -0.003 on
+one path left -- a timer written in the clock tick44 fires, through the
+due adder; tested directly (count 254, prescale 0 is the only case,
+bab8ea6). Third build (s1176-s1178): clk_sys +0.363 / +0.058; what fails is
+m2_sdram's arbiter on clk_mem (-0.22, live since ports 5-7 are) and the
+HDMI scaler -- seed territory at 98%; s1178 did not route. The whole SCSP
+now 1,926 ALMs est. (+58), every bench bit-exact.
+
+*TWO FAULTS THE BOOT BENCH FOUND (on its 48 MHz clock):*
+  * THE 68000's FIFTH WRITE WAS LOST (9fb631d, R861): m2_scsp acknowledged
+    every write into a four-entry queue with no full check, and the queue
+    drains only in the engine's operation windows. VF2's RBP / RBL write was
+    lost; the DSP ring landed at word 0, on the vectors; the 68000 took an
+    illegal instruction at frame 175 and an address-error storm with its
+    stack in the SCSP's registers at 649, writing MOBUF on the way -- the
+    "MIDI byte back". The SCSP bench never saw it: it waits for the engine
+    to go quiet after every write ("the 68000 is never faster than this" --
+    false on the board). A write that finds the queue full now waits, and
+    its DTACK with it.
+  * The i960 stalled its command burst once a byte came back: Model2.sv
+    raised IRQ 10 on a rising edge of TXRDY | RXRDY (R860, the parent's
+    fix: MAME asserts while either is high).
+
+*s1176 / s1190 ON THE BOARD: SILENT.* The 68000 runs, bytes arrive, voices
+are programmed, no underruns -- and the board's output is 0 in every record
+while the bench at the same RTL plays. Exact zero is MVOL = 0 (the output
+is T0 x mvol_gain(0) >> 16); in sim the driver writes MVOL at 3.03 s after
+its RAM phase, with the timers, then scans 0x408 at ~80,000 writes a
+second -- the board shows no such scan. So the driver's init diverges on
+the hardware. 3c609bd checks the sound RAM through port 5 before the 68000
+runs (4 K words, the byte enables too) and clears all 512 KB to zero as
+MAME's starts; 86dc162's 'U' record reports the check, MVOL and the writes
+to 0x400 / 0x418 -- the next board run decides between the SDRAM path and
+power-up content.
+
+*NOT DONE:* the 68000's wait states measured against a real board; the
+SDRAM latency the board sees on ports 5-7 under load (the engine needs it
+low: at 20-400 clocks its mean is ~3,300 a sample, past real time).
