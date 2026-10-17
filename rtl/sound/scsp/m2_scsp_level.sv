@@ -22,7 +22,7 @@
 //   4 effect R  the same, RPANTABLE
 //   5 FM ring   Enc = (SDIR ? 0 : TL) | 7 << 13 (a slot's write to the ring buffer)
 // recomputed when the engine hands over the slot's words 6, 10 and 11 after
-// a write to one of them; 42 clocks a slot. A word is 15 bits (<= 16,384).
+// a write to one of them; 54 clocks a slot. A word is 15 bits (<= 16,384).
 //
 // Every factor is <= 1.0, so an exponent is kept as its negation N >= 0
 // (value = 1.m x 2^-N) and the word is the mantissa >> (9 + N).
@@ -56,12 +56,12 @@ module m2_scsp_level (
   always_ff @(posedge clk) f_q <= from[f_addr];
 
   logic        run;
-  logic  [2:0] w, ph;
+  logic  [2:0] w;
+  logic  [3:0] ph;
   logic        zero_w;
   logic  [8:0] a_idx, b_idx, c_idx;
   logic        z_acc;
-  logic  [6:0] n_acc, n_c;
-  logic [23:0] m_c;
+  logic  [6:0] n_acc;
   logic [23:0] ma, mb;
   (* multstyle = "dsp" *) logic [47:0] prod;
 
@@ -88,9 +88,9 @@ module m2_scsp_level (
                      zero_w = 1'b0; end   // 5: the FM ring's write, Enc = (SDIR ? 0 : TL) | 7 << 13
     endcase
     case (ph)
-      3'd0:    f_addr = a_idx;
-      3'd1:    f_addr = b_idx;
-      default: f_addr = c_idx;
+      4'd0:    f_addr = a_idx;
+      4'd1:    f_addr = b_idx;
+      default: f_addr = c_idx;                   // (and held: c is read where it is used)
     endcase
   end
 
@@ -113,32 +113,32 @@ module m2_scsp_level (
     else       begin r_m = q[23:0];    r_d = {1'b0, prod[47]};        end
   end
 
+  // the word: r_m >> (N + 9), taken through the multiplier as
+  // (r_m x 2^(24 - N - 9)) >> 24; past a shift of 23 it is 0
   logic [6:0]  n_fin;
   logic [7:0]  sh;
-  logic [14:0] v;
   always_comb begin
     n_fin = n_acc - {5'd0, r_d};
     sh    = {1'b0, n_fin} + 8'd9;
-    if (z_acc || sh >= 8'd24) v = 15'd0;
-    else                      v = 15'(r_m >> sh[4:0]);
   end
+  wire [14:0] v = prod[38:24];
 
-  // ph 0 read a | 1 read b | 2 a, b in; read c | 3 c in; product | 4 round,
-  // times c | 5 product | 6 round, write the word
+  // ph 0 read a | 1 a in; read b | 2 b in; read c | 3 product a b | 4 round,
+  // times c | 5 product | 6 round, times 2^(24 - shift) | 7 product | 8 write
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      run <= 1'b0; w <= 3'd0; ph <= 3'd0;
+      run <= 1'b0; w <= 3'd0; ph <= 4'd0;
     end else if (!run) begin
-      if (req) begin run <= 1'b1; w <= 3'd0; ph <= 3'd0; end
+      if (req) begin run <= 1'b1; w <= 3'd0; ph <= 4'd0; end
     end else begin
-      ph <= ph + 3'd1;
+      ph <= ph + 4'd1;
       case (ph)
-        3'd1: begin ma <= {1'b1, f_q[22:0]}; n_acc <= {2'd0, f_q[27:23]}; end
-        3'd2: begin mb <= {1'b1, f_q[22:0]}; n_acc <= n_acc + {2'd0, f_q[27:23]}; z_acc <= zero_w; end
-        3'd3: begin m_c <= {1'b1, f_q[22:0]}; n_c <= {2'd0, f_q[27:23]}; end
-        3'd4: begin ma <= r_m; mb <= m_c; n_acc <= n_acc - {5'd0, r_d} + n_c; end
-        3'd6: begin
-          ph <= 3'd0;
+        4'd1: begin ma <= {1'b1, f_q[22:0]}; n_acc <= {2'd0, f_q[27:23]}; end
+        4'd2: begin mb <= {1'b1, f_q[22:0]}; n_acc <= n_acc + {2'd0, f_q[27:23]}; z_acc <= zero_w; end
+        4'd4: begin ma <= r_m; mb <= {1'b1, f_q[22:0]}; n_acc <= n_acc - {5'd0, r_d} + {2'd0, f_q[27:23]}; end
+        4'd6: begin ma <= r_m; mb <= (z_acc || sh >= 8'd24) ? 24'd0 : 24'(1) << (5'd24 - sh[4:0]); end
+        4'd8: begin
+          ph <= 4'd0;
           w  <= w + 3'd1;
           if (w == 3'd5) run <= 1'b0;
         end
@@ -162,7 +162,7 @@ module m2_scsp_level (
   // registers (DISDL / IMXL / EFSDL 0: fSDL = 0)
   (* ramstyle = "M10K" *) logic [14:0] lram [256];
   always_ff @(posedge clk) begin
-    if (run && ph == 3'd6) lram[{s_slot, w}] <= v;
+    if (run && ph == 4'd8) lram[{s_slot, w}] <= v;
     rd_q <= lram[rd_addr];
   end
 
