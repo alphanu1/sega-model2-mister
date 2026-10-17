@@ -12,7 +12,8 @@
 // udata; only the bits something reads live are flops. An access is two
 // clocks: the old word is read (rd_a held), then a write merges into it
 // (MAME's write(): r16, COMBINE_DATA, w16, UpdateReg). The timers count
-// drained samples ((255 - count) << prescale, MAME's period, R856); this
+// drained samples ((255 - count) << prescale, MAME's period, R856) on one
+// shared counter, each timer holding the count its callback falls due at; this
 // clock's events go in MAME's order: a 68000 write, a MIBUF read, a MIDI
 // byte, the timers, then CheckPendingIRQ.
 
@@ -61,7 +62,8 @@ module m2_scsp_regs #(
   logic  [3:0] eb;                        // SCIEB bits 8, 7, 6, 3
   logic [10:0] scipd, mcipd;
   logic  [7:1] lines;
-  logic [2:0][14:0] tcd;
+  logic [14:0] gcnt;                     // drained samples, mod 2^15
+  logic [2:0][14:0] due;                  // when each timer's callback falls due
   logic  [2:0] tarm, texp, fired;
   (* ramstyle = "MLAB" *) logic [7:0] mfifo [32];
   logic  [7:0] mf_head;
@@ -88,17 +90,18 @@ module m2_scsp_regs #(
   end
   assign mrg = {be[1] ? d[15:8] : q[15:8], be[0] ? d[7:0] : q[7:0]};
 
-  wire [14:0] tload = 15'(({7'd0, ~mrg[7:0]} << mrg[10:8]) - 15'd1);   // (255 - count) << prescale, less one
+  wire [14:0] gnext = gcnt + 15'd1;
+  wire [14:0] tdue  = gcnt + 15'({7'd0, ~mrg[7:0]} << mrg[10:8]);    // now + (255 - count) << prescale
   logic [10:0] scipd_n, scipd_c, mcipd_n;
   logic  [4:0] mw_n, mr_n;
   logic  [2:0] arm_n, ex_n, fired_n, rep, clr;   // clr: {MIDI, timer B / C, timer A}
-  logic [2:0][14:0] tcd_n;
+  logic [2:0][14:0] due_n;
   logic        chk;
   always_comb begin
     logic [1:0] tw;
     tw = (a == 5'h0c) ? 2'd0 : (a == 5'h0d) ? 2'd1 : 2'd2;
     scipd_n = scipd; mcipd_n = mcipd; mw_n = mw; mr_n = mr;
-    arm_n = tarm; ex_n = texp; fired_n = fired; tcd_n = tcd;
+    arm_n = tarm; ex_n = texp; fired_n = fired; due_n = due;
     chk = 1'b0; rep = 3'b000; clr = 3'b000;
     if (we) begin
       case (a)
@@ -108,7 +111,7 @@ module m2_scsp_regs #(
         end
         5'h0c, 5'h0d, 5'h0e: begin
           ex_n[tw] = 1'b0; fired_n[tw] = 1'b0;
-          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; tcd_n[tw] = tload; end   // MAME re-arms below 255
+          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; end    // MAME re-arms below 255
         end
         5'h0f: chk = 1'b1;                 // SCIEB
         5'h10: scipd_n = mrg[10:0];
@@ -129,12 +132,9 @@ module m2_scsp_regs #(
     if (midi_valid && !midi_ack) begin mw_n = mw_n + 5'd1; chk = 1'b1; end
     if (tick44) begin
       for (int t = 0; t < 3; t++) begin
-        if (arm_n[t]) begin
-          if (tcd_n[t] != 15'd0) tcd_n[t] = tcd_n[t] - 15'd1;
-          else begin
-            arm_n[t] = 1'b0; ex_n[t] = 1'b1; fired_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
-            if (t == 0) mcipd_n[6] = 1'b1;
-          end
+        if (arm_n[t] && due_n[t] == gnext) begin
+          arm_n[t] = 1'b0; ex_n[t] = 1'b1; fired_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
+          if (t == 0) mcipd_n[6] = 1'b1;
         end
       end
     end
@@ -176,11 +176,12 @@ module m2_scsp_regs #(
     if (!rst_n) begin
       lv_ta <= '0; lv_tb <= '0; lv_mi <= '0; eb <= '0; scipd <= '0; mcipd <= '0; lines <= '0;
       mw <= '0; mr <= '0; midi_ack <= 1'b0; tarm <= '0; texp <= 3'b111;   // MAME init(): TimCnt = 0xffff
-      fired <= '0; tcd <= '0; mvol <= '0; dac18 <= 1'b0; rbl <= '0; rbp <= '0; mslc <= '0;
+      fired <= '0; due <= '0; gcnt <= '0; mvol <= '0; dac18 <= 1'b0; rbl <= '0; rbp <= '0; mslc <= '0;
     end else begin
       lv_ta <= lv_ta_n; lv_tb <= lv_tb_n; lv_mi <= lv_mi_n; eb <= eb_n;
       scipd <= scipd_n; mcipd <= mcipd_n; lines <= ln_n[7:1]; mw <= mw_n; mr <= mr_n;
-      tarm <= arm_n; texp <= ex_n; fired <= fired_n; tcd <= tcd_n;
+      tarm <= arm_n; texp <= ex_n; fired <= fired_n; due <= due_n;
+      if (tick44) gcnt <= gnext;
       midi_ack <= midi_valid && !midi_ack;
       if (we && a == 5'h00) begin mvol <= mrg[3:0]; dac18 <= mrg[8]; end
       if (we && a == 5'h01) begin rbl <= mrg[8:7]; rbp <= mrg[5:0]; end
