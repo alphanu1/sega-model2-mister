@@ -5349,7 +5349,7 @@ m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(
 );
 end else begin : g_nodbg
 `ifdef M2_PROBE
-	// R867: THE PROBE -- the smallest stream that answers "where does the i960
+	// R868: THE PROBE -- the smallest stream that answers "where does the i960
 	// stop" and "does the sound board start", for a build with no room for
 	// M2_WHY (s1194-s1199: 4,192-4,211 LABs of 4,191). VERILOG_MACRO
 	// "M2_PROBE=1" without M2_DEBUG_LITE. One record every third prof_tick

@@ -108,7 +108,7 @@ if U:
     print("  68000 writes to 0x400-0x401 (MVOL): %d -> %d   to 0x418 (timer A): %d -> %d" % (U[0][0], U[-1][0], U[0][1], U[-1][1]))
     print("  MVOL as the SCSP holds it: first %d last %d   pre-boot sound-RAM check: %d of 4096 words wrong%s"
           % (U[0][3], U[-1][3], U[-1][2], "" if U[-1][2] == 0 else "  <-- THE SOUND RAM DOES NOT HOLD WHAT IS WRITTEN"))
-# R867: the M2_PROBE build's 'C' {i960 IP} | {copro_stall, sequencer state, bridge, 9'd0}
+# R868: the M2_PROBE build's 'C' {i960 IP} | {copro_stall, sequencer state, bridge, 9'd0}
 C = [(a, d >> 31, (d >> 26) & 0x1f) for t, a, d in recs if t == 'C']
 if C:
     from collections import Counter
