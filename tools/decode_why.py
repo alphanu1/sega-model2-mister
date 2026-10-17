@@ -85,3 +85,20 @@ if len(I) > 2 and len(K) > 2 and len(P) > 2:
         print("    of which TGP holds    %7.0f  %4.1f%%" % (med(cst) / 2, 100 * med(cst) / VBL))
         print("    geometry push holds   %7.0f  %4.1f%%" % (med(gst) / 2, 100 * med(gst) / VBL))
         print("  instructions retired    %7.0f  (CPI over the vblank %.1f)" % (med(ins), cpu_vbl / max(med(ins), 1)))
+
+# R862: the 2A sound board -- 'S' {68000 bus cycles} | {SCSP writes | bytes in}
+#                             'T' {68000 last address(24) | bytes out(8)} | {peak |left| | underruns}
+S = [(a, d >> 16, d & 0xffff) for t, a, d in recs if t == 'S']
+T = [(a >> 8, a & 0xff, d >> 16, d & 0xffff) for t, a, d in recs if t == 'T']
+if S:
+    c0, c1 = S[0][0], S[-1][0]
+    print("SOUND (%d S records, %d T records):" % (len(S), len(T)))
+    print("  68000 bus cycles: first %d last %d (%s)" % (c0, c1, "RUNNING" if d32(c0, c1) else "NOT MOVING"))
+    print("  SCSP writes by the 68000: %d -> %d   bytes i960 -> sound: %d -> %d" % (S[0][1], S[-1][1], S[0][2], S[-1][2]))
+if T:
+    addrs = [t[0] for t in T]
+    from collections import Counter
+    print("  68000 last bus address, commonest: %s" % ", ".join("%06x x%d" % (a, n) for a, n in Counter(addrs).most_common(6)))
+    print("  bytes sound -> i960: %d -> %d   output FIFO underruns: %d -> %d" % (T[0][1], T[-1][1], T[0][3], T[-1][3]))
+    pk = [t[2] for t in T]
+    print("  output peak |left| per T record: median %d max %d (%d of %d records non-zero)" % (med(pk), max(pk), sum(1 for p in pk if p), len(pk)))
