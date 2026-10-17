@@ -1709,6 +1709,17 @@ test_m2_geo_xform: obj_m2_geo_xform/Vm2_geo_xform_top
 	@echo "== test m2_geo_xform (transform_point / transform_vector, on the shared pool)"
 	@./obj_m2_geo_xform/Vm2_geo_xform_top
 
+# R866: the matrix in LUT RAM against the flip-flop xform it replaced.
+obj_m2_geo_xform_miter/Vm2_geo_xform_miter: rtl/video/m2_geo_xform.sv sim/video/ref/m2_geo_xform_ff.sv \
+                                            sim/video/m2_geo_xform_miter.sv sim/video/tb_m2_geo_xform_miter.cpp
+	$(VBUILD) --top-module m2_geo_xform_miter -CFLAGS "-O2" $(TGPFLAGS) \
+	  --Mdir obj_m2_geo_xform_miter -o Vm2_geo_xform_miter rtl/video/m2_geo_xform.sv \
+	  sim/video/ref/m2_geo_xform_ff.sv sim/video/m2_geo_xform_miter.sv sim/video/tb_m2_geo_xform_miter.cpp
+test_m2_geo_xform_miter: obj_m2_geo_xform_miter/Vm2_geo_xform_miter
+	@echo "== test m2_geo_xform_miter"
+	@./obj_m2_geo_xform_miter/Vm2_geo_xform_miter +seed=1
+	@./obj_m2_geo_xform_miter/Vm2_geo_xform_miter +seed=9
+
 GEO_RTL := rtl/video/m2_fp_pool.sv rtl/video/fp_to_int.sv $(GEO_FP)
 define GEO_UNIT
 obj_m2_$(1)/Vm2_$(1)_top: rtl/video/m2_$(1).sv $$(GEO_RTL) $(2) sim/video/geo_wrappers.sv sim/video/tb_m2_$(1).cpp
@@ -1821,7 +1832,7 @@ test_mb86233_regs_miter: obj_mb86233_regs_miter/Vmb86233_regs_miter
 .PHONY: test_tgp
 test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_alu_short test_mb86233_agu \
           test_mb86233_regs test_mb86233_regs_miter test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
-          test_mb86233_seq test_mb86233_core test_m2_geo_xform
+          test_mb86233_seq test_mb86233_core test_m2_geo_xform test_m2_geo_xform_miter
 
 test_m2_backup: obj_backup/Vm2_backup
 	@echo "== test m2_backup (byte lanes, the 0xFF power-up, the save path)"
