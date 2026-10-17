@@ -36426,3 +36426,176 @@ from MAME's bytes at MAME's times) at latency sweeps an order of magnitude
 past the SDRAM's, for underruns and for level and timing against MAME's
 mix (free-running, the 68000's writes land mid-sample, so not bit-exact --
 R821's case).
+
+**R857 -- THE 2A SCSP BUILT AND BENCHED BIT-EXACT; WHAT THE DRIVERS CAN
+REACH (BEN'S CHALLENGE TO R856); AND THE AREA: 2,720 ALMs est., NOT R856's
+1,800 -- THE SCSP + fx68k DO NOT FIT WITH MARGIN. STOPPED THERE (Ben's rule).**
+(rtl/sound/scsp/: m2_scsp, m2_scsp_dsp, m2_scsp_level, m2_scsp_cache; not
+yet instantiated in Model2.sv; nothing fitted, nothing on the board.)
+
+*Reachability, per game per feature (Ben: 300 s shows what was HEARD, not
+what the games CAN play).* STATIC: capstone over the four sound programs
+(sim/sound/snd_dasm.py, snd_scsp_writes.py, snd_rom_find.py,
+snd_bank_vcop2.py; every driver keeps 0x100000 in a5): every instruction
+that writes through a5, each written value traced to its source; the tone
+banks walked program by program. DYNAMIC: the 300 s plays of R856. NOT YET
+DONE: the test-menu sound tests in MAME (the dynamic cross-check).
+
+    feature            vf2        vcop2               srallyc    zeroguna
+    FM (MDL/MDXSL/     unreach.   unreach. (FM path   unreach.   REACHABLE, unheard: bank
+      MDYSL, STWINH,   (word 7    in the driver; no   (word 7    0x6084ca prog 1 is FM --
+      ring buffer)     only 0)    FM program in its   only 0)    MDL 10, MDXSL = MDYSL 0,
+                                  one bank, 54 progs)            STWINH 1, ring preset
+                                                                 0x3825 / 0x3fe3, and the
+                                                                 68000 adds into the ring
+                                                                 itself (600728: RMW 0x600+)
+    PCM16              unreach.   REACHABLE, unheard  unreach.   REACHABLE, unheard
+                                  (word 0 | 0x1020xxxx)
+    LPCTL 2 / 3        unreachable in all four: word 0's low byte only from
+                       immediates 0x30 / 0x20 / 0x10 and andi #$9f, every writer
+                       checked against its own ori.l constant
+    SSCTL 1 (noise)    unreachable in all four
+    SSCTL 2            unreach.   REACHABLE (ori.b #1, high byte)  REACHABLE
+    SBCTL, SDIR        never set in any of the four
+    DMA (0x412-0x417)  never written in any of the four
+    MIDI out (MOBUF)   never      never               never      REACHABLE, unheard
+                                                                 (move.b d0 / d1, $407(a5)
+                                                                 at 6004f8, 602b9e)
+    LFO wave 3 (noise),
+      EGHOLD, LPSLNK   from instrument data, not provable either way; built
+    RBL / RBP          immediate 0x138 in all four (64 KB ring at 0x70000)
+    DSP register reads never      never               never      USED: 13,700 reads of COEF /
+      (0x700-0xbff)                                              MADRS / MPRO in 300 s (R856's
+                                                                 "no game reads them" was WRONG)
+
+So built, behind switches on by default for 2A (m2_scsp parameters): FM
+(the 128-word ring, MAME's RINGBUF, the 68000's 0x600-0x6ff, MDL / MDXSL /
+MDYSL, STWINH, BUFPTR = 32 n + slot mod 64), MIDI_OUT (MOBUF to the i960,
+32 bytes), LFO_NOISE (MAME's own 256 rand() values, scsp_lfonoise.hex, from
+a capture's tables.bin). Always built: PCM16, SSCTL 2 / 3, the DSP's
+COEF / MADRS / MPRO read-back. Not built: LPCTL 2 / 3 (play as 1), SSCTL 1
+(reads 0), SDIR, DMA. Measured, each switch off alone: FM -181 ALMs est.
+(the static estimate was 150-250), MIDI_OUT -7, LFO_NOISE -9; all three
+-187.
+
+*Benches -- all bit-exact against sim/sound/scsp_ref.h (MAME 0.289's
+scsp.cpp / scspdsp.cpp ported, itself 0 differing from MAME's mix on all four
+300 s captures):*
+  * tb_m2_scsp, MAME's own captures replayed (writes, the 68000's reads,
+    MIDI in, sound-RAM writes at their samples), 300 s each, SDRAM latency
+    6-40 clocks (85d8034's RTL less the SCIRE fix, which no game's word
+    writes touch):
+
+      game      samples     slot-samples    68000 reads  engine clocks a
+                (300 s)     checked         checked      sample, mean / max
+      vf2       13,230,649  194,928,084     2,788,745      817 / 1,689
+      vcop2     13,230,649  173,521,701     1,585,431      861 / 1,677
+      srallyc   13,230,649  223,523,253     2,737,444      503 / 1,382
+      zeroguna  13,230,649  254,039,266     3,515,646    1,012 / 1,830
+
+    the mix, every slot's sample, every read and the IPL every sample: 0
+    wrong in all four. (Budget 1,814 clocks a sample at 80 MHz: the means
+    have room; a peak past it is the output FIFO's to carry.)
+  * the same at latency 20-400, an order past the SDRAM's (vcop2,
+    zeroguna, 50 s each): 0 wrong -- but the engine then needs 3,021-3,045
+    clocks a sample on average (max 8,636) against 1,814: exact at any
+    latency, real-time only while the ports' mean latency stays near the
+    6-40 benched above. The ports' real latency under the core's load is
+    to be measured on the board build.
+  * sim/sound/scsp_randcap.cpp, random captures for what no game plays: FM
+    (half the slots modulated, the 68000 writing the ring word and byte),
+    PCM16, every LFO wave (noise included), SSCTL 2 / 3, SBCTL, LPSLNK,
+    EGHOLD, loops 0 / 1 past and inside 512 KB, MOBUF, timers / SCIEB /
+    SCIPD / SCIRE / SCILV / MSLC writes, common-register and ring reads,
+    random MIDI in: 40 captures of 10 s (seeds 2-13, 20-31, 40-55; latency
+    6-40, every third 20-400), 0 wrong after the SCIRE fix below.
+  * every 68000 read checked against the reference's r16, every MIDI-out
+    byte, and the IPL every sample against the reference's lines (MAME's
+    interrupts, timers counted in samples): 0 wrong in all of the above.
+  * tb_m2_scsp_dsp: 1,000,000 runs of random programs (latency 1-400) and
+    the games' programs: 0 EFREG / RAM words wrong. tb_m2_scsp_level: all
+    393,216 words (6 a slot now) exact.
+  Found by the random bench, none reachable by the four captures: the
+  pitch LFO's step x PSCALES wraps at 32 bits as MAME's int does (an
+  unsigned context had made the shift logical); FM's (x + y) / 2 truncates
+  toward zero (same cause); the noise ALFO wave read at the wrong clock; the
+  loop wrap (LSA - LEA) not sign-extended; PSCALES indexed s << 9 not s << 8
+  (this one did show in Sega Rally at 17.5 s); a byte write to SCIRE
+  merged with 0 where MAME merges it with the last SCIRE written (SCIRE is
+  now kept). The timer / interrupt random captures found the last one; the
+  four games write SCIRE as words.
+  Against MAME's own interrupt log (irq.txt) the reference's lines differ
+  in 4.5-5.5% of samples over 300 s. Examined in VCop2's first 10 s (180
+  runs): EVERY run is MAME's line asserted while the reference's is not
+  yet; 72 runs are 46-47 samples long (about one timer period at those
+  settings), 86 are 1-2, 8 are 6-39. The cause: the log stamps a call with
+  g_m2s_n, the samples generated so far, which only moves when the stream
+  is updated -- on an SCSP access -- so a timer callback with no access
+  since is stamped up to a period early. Not checked past those 10 s; a
+  capture stamped from machine time would settle it. The 68000's reads
+  against MAME's logged values differ for 0.02-1.2% (the order of reads,
+  writes and MIDI within a sample is not logged); against the reference,
+  which sees the bench's order, 0.
+
+*Departures from MAME, recorded:* the timers count output samples (MAME's
+are scheduler timers of the same period, (255 - count) << prescale /
+44,100 s, truncated in MAME's integer division -- a fraction of a sample
+late at most); a register keeps only its defined bits (MAME keeps all 16:
+an undefined bit written reads back differently -- no game does, 0 of the
+reads in four captures); the 68000's writes may land between two slots of a
+sample (R821); the 0x408 monitor is latched after each sample from MSLC as
+MAME's sound_stream_update does.
+
+*AREA (quartus_map 17.0, sim/sound/scsp_area_top.sv: the SCSP as the core
+will use it, bench outputs unconnected; all switches on):*
+
+    m2_scsp total          2,720 ALMs est.  3,774 ALUT  2,202 regs  3 DSP
+      engine (own)                          2,645 ALUT  1,381 regs
+      DSP (+ its cache)                       759 (+69)   377 (+64)
+      level evaluator                         185         170
+      slot cache                               75          94
+    M10K, counted from the RAM summary (not a fit): ~25 (Saturn ~25)
+    FM off: 2,539; all three switches off: 2,533
+    R856 target: 1,800 / 20 M10K / 3 DSP.  Saturn core: 2,577 / ~25 / 5.
+
+R856's INFERRED split was wrong by 2x in the engine: engine ~550 assumed,
+~1,600 ALMs measured; DSP ~350 assumed, ~480; registers / timers / IRQ ~200
+assumed, ~250 (variant maps: the register block's writes and timers ~365
+before this rewrite, ~250 after). Cuts made and measured: the state RAM as
+one 40-bit M10K (was 80-bit byte-enabled, split by Quartus into 9 RAMs);
+the MIDI FIFOs in MLAB (512 flops); one merge for every register write;
+timers as down-counters; interrupt lines as clear / set masks; the DSP
+without its instruction register, one UNPACK, clamps by sign bits (-88).
+Net 2,815 -> 2,720. What is left is the datapath itself: the loop
+arithmetic, the envelope, the operand muxes of the one multiplier, the
+pitch shifter, the queue, the egst / key-on muxes, each 50-150 ALMs.
+
+*THE FIT ARITHMETIC.* The plain 2A build (s1150, 3467328): 35,775 ALMs
+fitted (85%), M10K 485 / 553; its map said 35,823 est. (R852) -- the two
+agree. (s1164's 36,223 carries M2_DEBUG_LITE and M2_WHY.) fx68k: 2,134 ALMs
+fitted (R852). The SCSP 2,720 est. + fx68k + the board glue (~150-300: ROM
+cache, MIDI link, IPL, rate FIFO) = 5,000-5,150 against the 4,593 the 2A
+build freed: ~40,800-40,950 ALMs, ~97.5% -- main's own level (main 4b81d89
+40,416 est.; R848-R851: main closes there only with seed sweeps, some seeds
+failing to fit by 5-10 LABs). It would fit as main does: NOT WITH MARGIN.
+M10K: ~25 + fx68k's against 68 free -- fine.
+
+*Options (ALMs of 41,910; as built: ~40,800-40,950, ~97.5%):*
+  A. Cut further, every feature kept: ~250 more is in sight (the queue to
+     one entry, the 68000 held on DTACK; egst into the state RAM; the
+     key-on rates serial; the duplicate tag RAMs in MLAB) -> SCSP ~2,450,
+     core ~40,550-40,700 (~97%).
+  B. FM only in a Zero Gunner build (a board-feature parameter, as the
+     VCop guns are): -181 for VF2 / VCop2 / Sega Rally. (MIDI out and the
+     noise LFO cost 7 and 9: not worth a switch's testing.) A + B:
+     ~40,350-40,500 (~96.5%) -- main's own map estimate (40,416).
+  C. Telemetry stays out of the sound build (M2_DEBUG_LITE alone was 374 +
+     98 ALUTs and its counters, R679) -- the plain build already is.
+  D. A different engine: a microcoded slot datapath (one adder beside the
+     one multiplier, a slot's arithmetic as a 30-40-clock sequence) might
+     reach R856's 1,800. Time is the price: the engine's mean is 810-1,000
+     of the 1,814 clocks a sample now (18 a slot); at ~35 a slot the mean
+     rises to ~1,150-1,350 and the peaks pass 1,814, so the output FIFO
+     must carry them. Core ~39,900-40,000 (~95.3%).
+     A rewrite of the engine; the benches above stand unchanged and would
+     re-qualify it.

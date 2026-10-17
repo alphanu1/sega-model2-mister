@@ -1,5 +1,62 @@
 # Handoff
 
+## 2026-10-17: model2a -- the 2A SCSP built and benched bit-exact; area 2,720, does not fit with margin (R857)
+
+STATE: rtl/sound/scsp/ (m2_scsp, m2_scsp_dsp, m2_scsp_level, m2_scsp_cache)
+is the whole SCSP of the 2A sound board, written against MAME 0.289's
+scsp.cpp / scspdsp.cpp (BSD-3, THIRD_PARTY.md), bit-exact against
+sim/sound/scsp_ref.h (MAME's code ported; 0 differing from MAME's mix on
+four 300 s captures). NOT in Model2.sv yet; no 68000 yet; nothing fitted.
+STOPPED before the 68000 board on Ben's rule: the SCSP + fx68k would put the
+2A core at ~97.5% (main's level), not with margin. Study R857 has the
+options with numbers (cut further ~250; FM only in a Zero Gunner build
+-181; a microcoded engine for R856's 1,800). Ben decides.
+
+BENCHES (all 0 wrong; make test_m2_scsp SCSP_CAP=build/scsp/<game>):
+  * MAME's captures, 300 s each of vf2 / vcop2 / srallyc / zeroguna: the
+    mix, 846 M slot-samples, 10.6 M 68000 reads and the IPL every sample.
+    Engine 503-1,012 clocks a sample mean, 1,830 max (budget 1,814).
+  * Latency 20-400 (vcop2, zeroguna, 50 s): exact, but ~3,000 clocks a
+    sample mean -- real time needs the ports near 6-40 clocks.
+  * 40 random captures (sim/sound/scsp_randcap.cpp; FM, PCM16, noise LFO,
+    SSCTL 2/3, MOBUF, timers / interrupts / MIDI in), build/scsp/randrun.sh.
+  * DSP 1 M random-program runs; level evaluator exhaustive.
+AREA (build/qmap.sh with sim/sound/scsp_area_top.sv): 2,720 ALMs est., 3
+DSP, ~25 M10K; FM costs 181, MIDI out 7, noise 9.
+
+FOUND THIS SESSION, INCLUDING WHAT WAS WRONG:
+  * R856's "no game uses FM / MIDI out / PCM16" was what the plays HEARD.
+    Static reachability (capstone over the four drivers): Zero Gunner can
+    play an FM program and writes MOBUF; VCop2 and Zero Gunner can play
+    PCM16 and SSCTL 2. LPCTL 2/3, SSCTL 1, SBCTL, SDIR, DMA: unreachable.
+  * R856's "the DSP's registers read 0, no game reads them" was WRONG:
+    Zero Gunner reads COEF / MADRS / MPRO ~13,700 times in 300 s. Built.
+  * R856's inferred area split was wrong by 2x in the engine (550 assumed,
+    ~1,600 measured). The cuts that worked: state RAM as one 40-bit M10K
+    (Quartus had split the 80-bit byte-enabled one into 9 RAMs); MIDI FIFOs
+    with registered reads (they had become 512 flops); the DSP without its
+    instruction register. A full rewrite of the register block (one merge,
+    down-counting timers, line masks) saved almost nothing.
+  * Bugs only the random captures found (no game capture reaches them):
+    two where an unsigned operand made >>> logical (the PLFO step's 32-bit
+    wrap, FM's (x + y) / 2) -- keep shifted products in a signed wire; the
+    noise ALFO read at the wrong clock; a byte write to SCIRE merged with 0
+    where MAME merges with the last SCIRE. The game captures found the loop
+    wrap's missing sign extension (Zero Gunner) and PSCALES indexed s << 9
+    (Sega Rally).
+  * MAME's interrupt log stamps a timer callback with the sample of the last
+    SCSP access, so it shows lines up to a timer period early. The
+    reference differs from it in 4.5-5.5% of samples; in VCop2's first 10 s
+    every run was MAME asserting first. Not checked further.
+
+NEXT (once Ben chooses): the 68000 board (fx68k, MAME's model2_snd map, a
+memory unit on SDRAM ports 5/6/7 with a ROM cache, the vector copy, MIDI
+from m2_sound_link, autovectored IPL, the 44.1 kHz drain FIFO), Model2.sv
+behind a switch with the silent stand-in as the other side, the boot bench
+with sound, then a board build (seeds from s1170, max 3).
+NOT DONE: the dynamic reachability cross-check (test-menu sound tests in
+MAME).
+
 ## 2026-10-16 (night): model2a -- VF2's 30 fps cause found and fixed in simulation (R855)
 
 CAUSE: not the i960's memory path. m2_geo's R638 push hold (built for
