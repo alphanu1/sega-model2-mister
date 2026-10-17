@@ -39,10 +39,10 @@ E_FIELDS = [('op', 4), ('a', 3), ('b', 3), ('psl', 2), ('imm', 16), ('immhi', 1)
 
 IDX = dict(SLOT=0, SW=1, MSLC=2)
 FLOW = dict(NEXT=0, BR=1, JMP=2, DISPATCH=3, WAIT=4, RET=5, SLOTEND=6)
-COND = dict(ALWAYS=0, PLFO=1, ALFO=2, LOOP1=3, LOOP2=4, FMMOD=5, NSTWINH=6, NMVOL15=7,
+COND = dict(ALWAYS=0, PLFO=1, ALFO=2, LOOP1=3, LOOP2=4, FMMOD=5, MVOL15=6, NMVOL15=7,
             START=8, NKB=9, MORESW=10, MOREI=11, SSCTL3=12, FETCHED=13, GO=14, DSPIDLE=15)
 OP = dict(ADD=0, SUB=1, PASSA=2, PASSB=3, ANDN=4, ADDSGN=5, EG=6, RATEIDX=7, EGBASE=8, SBC=9,
-          DAC=10, CSEL=11, ADDSPLIT=12)
+          DAC=10, ADDSPLIT=12)
 A = dict(RA=0, Q=1, ST=2, CSH=3, PSL=4, P2=5, RING=6, EFQ=7)
 B = dict(RB=0, IMM=1, Q=2, SA=3, SQ12=4, LFOI=5, RATE=6, P1=7)
 PSL = dict(S6=0, S12=1, S16=2, FM=3)
@@ -51,9 +51,9 @@ MB = dict(POW2P=0, POW2F=1, TBL4=2, EGV=3, LV=4, FRAC=5, MVG=6)
 FSET = dict(NONE=0, F1=1, F2=2, F3=3, F4=4, KBREL=5)
 LATA = dict(NONE=0, W9=1, W4=2, W5=3, W6=4, W10=5)
 LATB = dict(NONE=0, W0=1, W7=2)
-S1 = dict(NONE=0, FETCH1=1, FETCH2=2, TADRP=3, TADRA=4, TADRE=5, MIXW=6, RINGW=7, DBG=8,
+S1 = dict(NONE=0, FETCH1=1, FETCH2=2, TADRP=3, TADRA=4, TADRE=5, DBG=8,
           RINGX=9, RINGY=10, LATEG=11, OUTLRAW=12, OUTRRAW=13, OUTL=14, OUTR=15)
-S2 = dict(NONE=0, OUTV=1, DSPGO=2, ACTSET=3, SWINC=4, ICLR=5, IINC=6, MON1=7, MON2=8)
+S2 = dict(NONE=0, OUTV=1, DSPGO=2, ACTSET=3, SWINC=4, ICLR=5, IINC=6, MON1=7, MON2=8, MIXW=9, RINGW=10)
 ST = dict(CUR=0, NXT=1, PH=2, VOL=3, RAR=4, RD1=5, RD2=6, RRR=7)
 RI = dict(AR=0, D1R=1, D2R=2, RR=3)       # RATEIDX: imm[1:0] picks the rate field
 R = dict(SMPL=0, SMPR=1, STEP=2, S=3, CURA=4, NA=5, CREM=6, NREM=7, SAFM=8, PH=9,
@@ -127,19 +127,21 @@ def slot_alfo():
     ]
 
 def slot_tail():
+    # the loop's ends: cur / nxt written as stepped, then overwritten wrapped
+    # (LSA + (stepped - LEA), LPCTL 1) where the address passed LEA
     return [
         m(mul=('Q', 'EGV', 'eg'), ra='NA', swa=3, op='SUB', a='RA', b='SQ12', rd='NREM', fset='F2'),
-        m(ra='CREM', rb='CURA', swa=2, op='CSEL', a='RA', b='SQ12', pred='LOOP1', stw='CUR'),
+        m(ra='CURA', op='PASSA', a='RA', stw='CUR'),
         m(op='PASSA', a='PSL', psl='S12', P='eg', rd='S', s1='DBG'),
-        m(mul=('Q', 'LV', 'l0'), lw=0, ra='NREM', rb='NA', swa=2, op='CSEL', a='RA', b='SQ12',
-          pred='LOOP2', stw='NXT'),
+        m(mul=('Q', 'LV', 'l0'), lw=0, ra='NA', op='PASSA', a='RA', stw='NXT'),
         m(mul=('RA', 'LV', 'l1'), lw=1, ra='S'),
         m(mul=('RA', 'LV', 'l2'), lw=2, ra='S', rb='SMPL', op='ADD', a='PSL', psl='S12', P='l0',
           b='RB', rd='SMPL'),
         m(mul=('RA', 'LV', 'l5'), lw=5, ra='S', rb='SMPR', op='ADD', a='PSL', psl='S12', P='l1',
           b='RB', rd='SMPR'),
-        m(s1='MIXW', P='l2'),
-        m(s1='RINGW', P='l5', pred='NSTWINH', flow='SLOTEND'),
+        m(s2='MIXW', P='l2', ra='CREM', swa=2, op='ADD', a='RA', b='SQ12', pred='LOOP1', stw='CUR'),
+        m(s2='RINGW', P='l5', ra='NREM', swa=2, op='ADD', a='RA', b='SQ12', pred='LOOP2', stw='NXT',
+          flow='SLOTEND'),
     ]
 
 # ===================================================================== the rest
@@ -166,10 +168,11 @@ def sample_head():
         (None, m(ra='SMPL', op='DAC', a='RA', rd='T0')),
         (None, m(ra='SMPR', op='DAC', a='RA', rd='T1', mul=('Q', 'MVG', 'ol'))),
         (None, m(mul=('Q', 'MVG', 'or'), idx='MSLC', st='CUR', s2='MON1')),
-        (None, m(rb='T0', op='CSEL', a='PSL', psl='S16', P='ol', b='IMM', imm=0, pred='NMVOL15',
-                 s1='OUTL', idx='MSLC', st='VOL', s2='MON2')),
-        (None, m(rb='T1', op='CSEL', a='PSL', psl='S16', P='or', b='IMM', imm=0, pred='NMVOL15',
-                 s1='OUTR')),
+        (None, m(op='PASSA', a='PSL', psl='S16', P='ol', pred='NMVOL15', s1='OUTL', idx='MSLC', st='VOL',
+                 s2='MON2')),
+        (None, m(op='PASSA', a='PSL', psl='S16', P='or', pred='NMVOL15', s1='OUTR')),
+        (None, m(ra='T0', op='PASSA', a='RA', pred='MVOL15', s1='OUTL')),
+        (None, m(ra='T1', op='PASSA', a='RA', pred='MVOL15', s1='OUTR')),
         (None, m(s2='OUTV', flow='JMP', tgt='IDLE')),
     ]
 
@@ -266,6 +269,8 @@ def check(name, seq):
     return len(err)
 
 nerr = sum(check(n, s) for n, s in paths.items())
+nerr += check('head', [mi for _, mi in sample_head()][8:])     # from the effect returns on
+nerr += check('sweep', [mi for _, mi in sweep()][6:])
 
 # ===================================================================== encode
 def enc(fields, vals):

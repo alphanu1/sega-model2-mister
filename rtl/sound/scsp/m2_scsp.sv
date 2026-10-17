@@ -299,7 +299,7 @@ module m2_scsp #(
       4'(C_LOOP1):   cond = loop_on && f1;
       4'(C_LOOP2):   cond = loop_on && f2;
       4'(C_FMMOD):   cond = FM && fm_mod;
-      4'(C_NSTWINH): cond = FM && !stwinh;
+      4'(C_MVOL15):  cond = mvol == 4'hf;
       4'(C_NMVOL15): cond = mvol != 4'hf;
       4'(C_START):   cond = fk && fr;
       4'(C_NKB):     cond = !fk;
@@ -574,14 +574,13 @@ module m2_scsp #(
         alu_r = 32'($signed(s));
       end
       4'(OP_DAC):   alu_r = 32'(dac($signed(a_v), dac18));
-      4'(OP_CSEL):  alu_r = pred_ok ? sum : rb_q;
       default:      alu_r = sum;                          // ADD SUB ADDSGN ADDSPLIT
     endcase
   end
 
-  // a microinstruction's effects: all of them under its predicate, but a
-  // CSEL's, whose predicate chooses its result
-  wire go_e = (e_op == 4'(OP_CSEL)) || pred_ok;
+  // a microinstruction's writes and first side effect are under its
+  // predicate (the second, s2, is not)
+  wire go_e = pred_ok;
   assign rf_we = e_rdwe && go_e;
   assign st_we = e_stwe && go_e;
   assign st_wa = {(e_widx == 2'(IDX_SW)) ? sw_e : slot_e, e_stwrow};
@@ -664,17 +663,17 @@ module m2_scsp #(
           4'(S1_OUTR): out_r <= alu_r[15:0];
           default: ;
         endcase
-        case (e_s2)
-          4'(S2_DSPGO): begin dsp_go <= 1'b1; dsp_pend <= 1'b1; end
-          4'(S2_OUTV): begin
-            out_valid <= 1'b1; par <= ~par;
-            if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
-          end
-          4'(S2_MON1): mon_ca <= st_q[27:24];
-          4'(S2_MON2): mon <= {5'd0, mon_ca, ~st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
-          default: ;
-        endcase
       end
+      case (e_s2)                                     // (not under the predicate)
+        4'(S2_DSPGO): begin dsp_go <= 1'b1; dsp_pend <= 1'b1; end
+        4'(S2_OUTV): begin
+          out_valid <= 1'b1; par <= ~par;
+          if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
+        end
+        4'(S2_MON1): mon_ca <= st_q[27:24];
+        4'(S2_MON2): mon <= {5'd0, mon_ca, ~st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
+        default: ;
+      endcase
     end
   end
 
@@ -747,7 +746,7 @@ module m2_scsp #(
   logic [15:0] ring_wd;
   always_comb begin
     ring_ra = {1'b0, 6'({par, slot_e} + ((e_s1 == 4'(S1_RINGX)) ? sqa[11:6] : sqa[5:0]))};
-    ring_we = go_e && e_s1 == 4'(S1_RINGW) && FM;
+    ring_we = e_s2 == 4'(S2_RINGW) && FM && !stwinh;   // (STWINH: the slot does not write the ring)
     ring_wa = {1'b0, par, slot_e};
     ring_wd = 16'(p_lo >>> 13);                         // (sample x level 5) >> (SHIFT + 1)
     if (op_busy) begin
@@ -777,7 +776,7 @@ module m2_scsp #(
     .busy(lv_busy), .rd_addr(lv_raddr), .rd_q(lv_q)
   );
 
-  assign mix_we  = go_e && e_s1 == 4'(S1_MIXW);
+  assign mix_we  = e_s2 == 4'(S2_MIXW);
   assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
   m2_scsp_dsp u_dsp (
     .clk(clk), .rst_n(rst_n),
