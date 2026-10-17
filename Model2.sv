@@ -3779,7 +3779,7 @@ wire        [15:0] q3d_frac;   // R626: the quarter pixel below each vertex
 wire [12:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R273
 wire [15:0] q3d_oz0, q3d_oz1, q3d_oz2, q3d_oz3;   // R334: 1/z per vertex
 /* verilator lint_off UNUSEDSIGNAL */
-wire [7:0] q3d_lum;                       // R271: for the exact colour path, not yet built
+wire [7:0] q3d_lum;                       // R271: the polygon's luma (R867: the exact colour path)
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_tex;
 wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
@@ -3789,6 +3789,12 @@ wire        q3d_mipz;                       // R828c: the game's level keeps thi
 // level (the game's texlod) is at most -MIPZ_B over all of it.
 localparam bit R3D_MIP = 1'b1;
 localparam int R3D_MIPZ_B = 3;
+// R867: the textured colour per pixel through the game's own luma RAM, 3D
+// palette and colour table (m2_span_tex TEXLUT) -- on the 2A build, where
+// VF2's tables are not Daytona's and R784's model inverted its faces. Main
+// keeps R784's model.
+localparam bit R3D_TEXLUT = M2A;
+wire [2:0] q3d_trow;                       // R867: the luma table's slot, {row[4], row[1:0]}
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -3819,7 +3825,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B)) u_geometry (   // R828c
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT)) u_geometry (   // R828c, R867
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -3842,7 +3848,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B)) u_geometry (   // R828c
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
-	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .gamma_sel(gam_s2), .mem_space(eng_mem_space), .dbg_col_miss(),
+	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .gamma_sel(gam_s2), .tex_off(texoff_s[2]), .mem_space(eng_mem_space), .dbg_col_miss(),   // R867
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
@@ -3859,6 +3865,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B)) u_geometry (   // R828c
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
 	.q_tlinv(q3d_tlinv),                                              // R784
+	.q_trow(q3d_trow),                                                // R867
 	.q_mipz(q3d_mipz),                                                // R828c
 	.q_frac(q3d_frac),                                                // R626
 	.q_col(q3d_col), .q_z(q3d_z),
@@ -6852,6 +6859,48 @@ m2_ddr3 u_ddr3 (
 
 // R640: FB_DDR3 -- the 3D layer is drawn into DDR3 and shown only when whole.
 // R683: front to back, the combining writer feeding the fill mask.
+// R867: THE RASTERISER'S QUAD, PACKED FOR ITS COLOUR PATH, AND THE SHADOWS OF
+// THE THREE TABLES THAT PATH READS. Each is written where the CPU's own write
+// lands in SDRAM (m2_cpu_bridge's port 1): the luma RAM's rows 0-3 and 16-19
+// (one byte a 16-bit word, R264; VF2 uses rows 0-3, Virtua Cop 2 0, 1 and
+// 16), the 3D palette (palram 0x1000-0x13ff) and the colour table's first 64
+// lumas of each component -- all MAME's renderer reads.
+localparam int R3D_QTW = R3D_TEXLUT ? 27 : 24;
+wire [23:0]        r3d_qcol;
+wire [R3D_QTW-1:0] r3d_qtex;
+logic              r3d_lut_we;
+logic [1:0]        r3d_lut_sel;
+logic [12:0]       r3d_lut_addr;
+logic [15:0]       r3d_lut_data;
+generate if (R3D_TEXLUT) begin : g_r3d_lut
+	assign r3d_qcol = q3d_tex[0] ? {7'd0, q3d_lum, q3d_col[9:1]}
+	                             : {8'd0, q3d_col[23:19], q3d_col[15:10], q3d_col[7:3]};
+	assign r3d_qtex = {q3d_trow, q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
+	wire [SDR_AW:1] w_luma = cpu_sd_addr - GAME_LUMA;
+	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
+	wire [SDR_AW:1] w_xlat = cpu_sd_addr - GAME_XLAT3D;
+	wire            sd_wr  = cpu_sd_req && cpu_sd_we && p_ack[1];
+	always_ff @(posedge clk_sys) begin
+		r3d_lut_we   <= 1'b0;
+		r3d_lut_data <= cpu_sd_din;
+		if (sd_wr && (w_luma < SDR_AW'(32'h200) ||                          // rows 0-3
+		              (w_luma >= SDR_AW'(32'h800) && w_luma < SDR_AW'(32'hA00)))) begin   // rows 16-19
+			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd0; r3d_lut_addr <= {3'd0, w_luma[12], w_luma[9:1]};
+		end
+		if (sd_wr && w_pal < SDR_AW'(32'h400)) begin
+			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd1; r3d_lut_addr <= 13'(w_pal[10:1]);
+		end
+		if (sd_wr && w_xlat < SDR_AW'(32'h6000) && w_xlat[8:7] == 2'd0) begin   // luma 0-63
+			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd2;
+			r3d_lut_addr <= {w_xlat[15:14], w_xlat[13:9], w_xlat[6:1]};
+		end
+	end
+end else begin : g_r3d_lin
+	assign r3d_qcol = q3d_col;
+	assign r3d_qtex = {q3d_tex[23:12], q3d_tlinv, q3d_tex[10:1], q3d_tex[0] && !texoff_s[2]};
+	assign r3d_lut_we = 1'b0; assign r3d_lut_sel = 2'd0; assign r3d_lut_addr = 13'd0; assign r3d_lut_data = 16'd0;
+end endgenerate
+
 m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DDR3(1'b1),
               .FB_WCOMB(1'b1),   // R661: the combining writer (room from R664)
               .SPLIT_TRI(1'b1),  // R677: textured quads as two triangles
@@ -6863,7 +6912,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
               .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
-              .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
+              .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
+              .TEXLUT(R3D_TEXLUT)) u_raster3d (   // R564: scan on clk_mem; R867
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -6875,7 +6925,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2),
 	.q_x3(q3d_x3), .q_y3(q3d_y3),
-	.q_col(q3d_col), .q_z(q3d_z),
+	.q_col(r3d_qcol), .q_z(q3d_z),   // R867
 	// R273/R275: the texture, through the store and out to the texel fetch.
 	.q_oz0(q3d_oz0), .q_oz1(q3d_oz1), .q_oz2(q3d_oz2), .q_oz3(q3d_oz3),   // R334
 	.q_frac(q3d_frac),                                                // R626
@@ -6886,7 +6936,11 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// fall back to what they did before in one place.
 	// R784: bit 11 (the checker, taken below as q_moire) carries the luma
 	// table's row-1 flag into the rasteriser -- no wider store or queue.
-	.q_tex({q3d_tex[23:12], q3d_tlinv, q3d_tex[10:1], q3d_tex[0] && !texoff_s[2]}),
+	// R867: with TEXLUT the engine applies Off itself (and colours the polygon
+	// flat), and a textured quad's colour is the pixel path's inputs:
+	// q_col {7'd0, luma, colour base[9:1]}, q_tex[11] colour base[0],
+	// q_tex[25:24] the luma table's row; a flat quad's q_col is RGB565.
+	.q_tex(r3d_qtex), .lut_we(r3d_lut_we), .lut_sel(r3d_lut_sel), .lut_addr(r3d_lut_addr), .lut_data(r3d_lut_data),
 	.tex_base0(GAME_TEXS0), .tex_base1(GAME_TEXS1), .tex_inval(cpu_tex_inval),
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step

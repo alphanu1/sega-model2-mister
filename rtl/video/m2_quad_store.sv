@@ -88,6 +88,13 @@ module m2_quad_store #(
   parameter int unsigned NBANK  = 2,
   parameter int unsigned XW     = 13,
   parameter int unsigned CW     = 16,
+  // R867: RAW COLOUR -- the colour field is stored as the low CW bits of
+  // in_col and handed back zero-extended, not as 565 (m2_raster3d TEXLUT packs
+  // and unpacks it). 0: 888 -> 565 -> 888 as before.
+  parameter bit          RAWCOL = 1'b0,
+  // R867: one more bit a quad (in_vx / out_vx), stored with the vertices: 104
+  // bits fill 21 M10K in the 2048x5 mode with one to spare. 0: not stored.
+  parameter bit          VX     = 1'b0,
   parameter int unsigned KW     = 16,      // R246: the reference's 16-bit z value, not a float
   // R216: A QUAD UNDER TINY PIXELS IN BOTH DIMENSIONS IS NOT STORED. The
   // title's busiest frames carry ~4,200 quads against 2,048 held and the
@@ -159,6 +166,9 @@ module m2_quad_store #(
   input  logic [OZW-1:0] in_oz0, in_oz1, in_oz2, in_oz3,   // R334
   input  logic [15:0]    in_frac,                           // R626: {fy3,fx3..fy0,fx0}
   input  logic [TXW-1:0] in_tex,
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        in_vx,             // R867: VX only
+  /* verilator lint_on UNUSEDSIGNAL */
   input  logic           in_mipz,                           // R828c (MZ)
 
   // ---- sort
@@ -188,6 +198,7 @@ module m2_quad_store #(
   output logic [OZW-1:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
   output logic [15:0]    out_frac,                             // R626
   output logic [TXW-1:0] out_tex,
+  output logic        out_vx,            // R867: VX only, else 0
   output logic           out_mipz,                          // R828c (MZ)
 
   output logic [15:0] dbg_count,
@@ -234,7 +245,8 @@ module m2_quad_store #(
   // word fills three 40-bit slices instead of eight mismatched ones. It also
   // turns four reads into one in the replay path.
   localparam int unsigned VW = 4 * 2 * XW;      // four vertices, {y,x} each
-  (* ramstyle = "M10K" *) logic [VW-1:0] vtx_0 [NQ], vtx_1 [NQ];
+  localparam int unsigned VWX = VW + (VX ? 1 : 0);   // R867: and in_vx
+  (* ramstyle = "M10K" *) logic [VWX-1:0] vtx_0 [NQ], vtx_1 [NQ];
   // A BAND RANGE, NOT A MASK (R213): {hi, lo} in BW bits each. With 48 bands
   // a mask was 48 bits an entry; a range is 12, and the replay test is two
   // compares. A quad off the screen is stored as lo > hi and never hits.
@@ -284,12 +296,14 @@ module m2_quad_store #(
   endfunction
   // 888 -> 565 and back: m2_raster3d takes [23:19], [15:10], [7:3] of out_col,
   // so an entry expanded this way yields the same 565 it was stored from.
+  /* verilator lint_off UNUSEDSIGNAL */   // RAWCOL keeps c[CW-1:0]; 565 drops the low bits
   function automatic [CW-1:0] c565(input logic [23:0] c);
-    c565 = {c[23:19], c[15:10], c[7:3]};
+    c565 = RAWCOL ? c[CW-1:0] : CW'({c[23:19], c[15:10], c[7:3]});
   endfunction
   function automatic [23:0] c888(input logic [CW-1:0] c);
-    c888 = {c[15:11], 3'b000, c[10:5], 2'b00, c[4:0], 3'b000};
+    c888 = RAWCOL ? 24'(c) : {c[15:11], 3'b000, c[10:5], 2'b00, c[4:0], 3'b000};
   endfunction
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // Two index arrays, ping-ponged by the radix passes.
   // THE FINAL ORDER, ONE ARRAY PER BANK. As a single {bank, index} array
@@ -481,18 +495,20 @@ module m2_quad_store #(
       // withheld when it is tiny: the slot is simply reused by the next quad.
       if (in_valid && has_room) begin
         if (wbank) begin
-          vtx_1[wcount[IW-1:0]] <= {satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
+          vtx_1[wcount[IW-1:0]] <= VWX'({in_vx,                                    // R867: dropped without VX
+                                    satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
                                     satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
                                     satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
-                                    satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])};
+                                    satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])});
           uvt_1[wcount[IW-1:0]]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,   // R828c: the cast drops in_mipz without MZ
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0});
         end else begin
-          vtx_0[wcount[IW-1:0]] <= {satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
+          vtx_0[wcount[IW-1:0]] <= VWX'({in_vx,                                    // R867: dropped without VX
+                                    satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
                                     satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
                                     satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
-                                    satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])};
+                                    satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])});
           uvt_0[wcount[IW-1:0]]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0});
@@ -744,7 +760,8 @@ module m2_quad_store #(
   logic [AT_W-1:0] att_rd;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
-  logic [VW-1:0] vtx_r;
+  logic [VWX-1:0] vtx_r;
+  assign out_vx = VX ? vtx_r[VWX-1] : 1'b0;   // R867
   logic [UW-1:0] uvt_r;
   wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];

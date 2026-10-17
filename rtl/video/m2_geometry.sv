@@ -73,7 +73,8 @@ module m2_geometry #(
   // (m2_raster_fill). The logs are the IEEE exponent and a 16-entry table on
   // four mantissa bits, in sixteenths of a level. 0: q_mipz is 0, pruned.
   parameter bit MIPZ   = 1'b0,
-  parameter int MIPZ_B = 3
+  parameter int MIPZ_B = 3,
+  parameter bit TEXLUT = 1'b0    // R867: m2_geo_engine's (the textured colour per pixel)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -116,6 +117,7 @@ module m2_geometry #(
   input  logic        col_inval,
   input  logic [1:0]  tex_lum,           // R239
   input  logic [1:0]  gamma_sel,         // R630
+  input  logic        tex_off,           // R867: TEXLUT only (m2_geo_engine)
   output logic [1:0]  mem_space,
   output logic [15:0] dbg_col_miss,
 
@@ -136,6 +138,7 @@ module m2_geometry #(
   // poly_tex[31:24], which q_tex does not carry). Daytona's row 1 is the
   // inverse ramp its decals use; m2_raster3d takes it in q_tex[11].
   output logic        q_tlinv,
+  output logic  [2:0] q_trow,          // R867: the luma table's slot, {row[4], row[1:0]}
   output logic  [7:0] q_lum,
   output logic        q_mipz,          // R828c: the game's level stays <= -MIPZ_B: no mip
   // R626: each vertex's quarter pixel below q_x/q_y, {fy3,fx3,...,fy0,fx0}.
@@ -200,10 +203,10 @@ module m2_geometry #(
   logic [11:0] poly_dotp;                                // R828c: |normal . point|, exp + 4 bits
 
   logic [4:0] eng_dbg_st;   // R719: telemetry
-  m2_geo_engine u_engine (
+  m2_geo_engine #(.TEXLUT(TEXLUT)) u_engine (   // R867
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .mem_space(mem_space),
+    .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .tex_off(tex_off), .mem_space(mem_space),
     .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(dbg_lum), .dbg_col_miss(dbg_col_miss),
     // R268: the per-vertex texture coordinates, read beside the header
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1),
@@ -985,6 +988,7 @@ module m2_geometry #(
   assign q_u3 = ru[3]; assign q_v3 = rv[3];
   assign q_tex = ctex[23:0];
   assign q_tlinv = (ctex[31:24] == 8'd1);   // R784
+  assign q_trow  = {ctex[28], ctex[25:24]};   // R867
   assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 
