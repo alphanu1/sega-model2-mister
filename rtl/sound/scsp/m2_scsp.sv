@@ -174,7 +174,7 @@ module m2_scsp #(
   logic  [7:0] c404h;
   logic [10:0] c418, c41a, c41c;          // {prescale 3, count 8}
   logic  [7:0] scilv0, scilv1, scilv2;
-  logic [10:0] scieb, scipd, mcieb, mcipd;
+  logic [10:0] scieb, scipd, scire, mcieb, mcipd;   // (SCIRE kept: MAME merges a byte write with it)
   logic  [4:0] mslc;
   logic  [7:1] lines;
   (* ramstyle = "MLAB" *) logic [7:0] mfifo [32];
@@ -460,6 +460,7 @@ module m2_scsp #(
       5'h0e: common_read = {5'd0, c41c};
       5'h0f: common_read = {5'd0, scieb};
       5'h10: common_read = {5'd0, scipd};
+      5'h11: common_read = {5'd0, scire};
       5'h12: common_read = {8'd0, scilv0};
       5'h13: common_read = {8'd0, scilv1};
       5'h14: common_read = {8'd0, scilv2};
@@ -576,14 +577,14 @@ module m2_scsp #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       c400 <= '0; c402 <= '0; c404h <= '0; c418 <= '0; c41a <= '0; c41c <= '0;
-      scilv0 <= '0; scilv1 <= '0; scilv2 <= '0; scieb <= '0; scipd <= '0; mcieb <= '0; mcipd <= '0;
+      scilv0 <= '0; scilv1 <= '0; scilv2 <= '0; scieb <= '0; scipd <= '0; scire <= '0; mcieb <= '0; mcipd <= '0;
       mslc <= '0; lines <= '0; mw <= '0; mr <= '0; midi_ack <= 1'b0;
       tarm <= '0; texp <= 3'b111;            // MAME init(): TimCnt = 0xffff
       tcd <= '0;
     end else begin
       c400 <= c400_n; c402 <= c402_n; c404h <= c404h_n; c418 <= c418_n; c41a <= c41a_n; c41c <= c41c_n;
       scilv0 <= scilv0_n; scilv1 <= scilv1_n; scilv2 <= scilv2_n;
-      scieb <= scieb_n; scipd <= scipd_n; mcieb <= mcieb_n; mcipd <= mcipd_n; mslc <= mslc_n;
+      scieb <= scieb_n; scipd <= scipd_n; if (cw_en && o_addr[5:1] == 5'h11) scire <= mrg[10:0]; mcieb <= mcieb_n; mcipd <= mcipd_n; mslc <= mslc_n;
       lines <= ln_n[7:1]; mw <= mw_n; mr <= mr_n; tarm <= arm_n; texp <= ex_n;
       tcd <= tcd_n;
       midi_ack <= midi_valid && !midi_ack;
