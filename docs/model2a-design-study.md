@@ -36599,3 +36599,130 @@ M10K: ~25 + fx68k's against 68 free -- fine.
      must carry them. Core ~39,900-40,000 (~95.3%).
      A rewrite of the engine; the benches above stand unchanged and would
      re-qualify it.
+
+
+**R858 -- THE 2A SCSP REDESIGNED: A MICROCODED SLOT ENGINE AND A SERIALISED
+DSP. 2,720 -> 1,868 ALMs est., BIT-EXACT ON EVERY BENCH. NOT THE 1,300 BEN
+ASKED FOR, NOR R857's 1,450-1,500 -- WHY, BLOCK BY BLOCK.**
+(Ben, after R857: a stripped SCSP larger than srg320's complete one (2,577)
+means the architecture is wrong; rebuild it narrow and sequenced, target
+~1,300, the engine alone under ~700. Then, on the engine's numbers: go on
+to the projection of R857's option 1.)
+
+*THE DESIGN (rtl/sound/scsp/):*
+  1. m2_scsp -- THE SLOT ENGINE IS A MICROCODED DATAPATH. One 32-bit ALU,
+     the one 27 x 18 multiplier, a 16-entry register file in M10K (two
+     copies, one per read port), all per-slot state in one M10K: eight
+     32-bit rows a slot (CUR, NXT, the two LFO phases, ~EGST + VOL, the AR /
+     D1R / D2R / RR rate rows -- the state row of eg_pre is read directly).
+     A microinstruction is fetched into F (its reads: two registers, one
+     state row, a slot-register word on each of two ports, one level word;
+     its next address) and executes in E the clock after (one ALU result, a
+     multiply, flags, latches, two side effects). The two halves are two
+     ROMs (256 x 41, 256 x 66), the E one addressed a clock later; a hold
+     (DISPATCH, WAIT) keeps a microinstruction in F and feeds E bubbles, so
+     nothing ever stalls in E. sim/sound/scsp_uasm.py is the assembler, the
+     program and a pipeline checker (register, product, table, flag and
+     ring latencies on every execution path), and writes the include the
+     RTL takes its field layout from. A slot is 23 microinstructions (26
+     with the amplitude LFO, 30 with FM, 33 both); SSCTL 3 skips at the
+     fourth. The effect returns, the output (DAC, MVOL, the 0x408 monitor),
+     MAME's key-on sweep and the word-5 rates are microprograms too. The
+     LFO waves are baked into one 16 K x 9 ROM (PSCALES / ASCALES read
+     flat, as MAME's pointers do), the AR / DR rates into a 128 x 27 one.
+  2. m2_scsp_regs -- the common registers as the 68000 wrote them in an
+     MLAB (MAME's udata), only the bits read live in flops; the timers on
+     one shared sample counter, each timer holding the count its callback
+     falls due at; the interrupt lines as clear / set masks; MIDI in / out.
+  3. m2_scsp_dsp -- SERIALISED: five clocks a step and one multiplier for
+     X x Y, PACK's shift (x 2^e) and UNPACK's (x 2^(11-e), >> 11); B is
+     never registered (ACC = (X Y >> 12) +- B at ph 4, every write of the
+     step from the old ACC's SHIFTED then); MAME's all-at-once EFREG / MIXS
+     clears are sixteen writes each (before / after a run); a go taken
+     during the reset's clears is held.
+  4. m2_scsp_level -- the final shift of a level word through its own
+     multiplier ((m x 2^(24-s)) >> 24); the third factor read where it is
+     used. 54 clocks a slot's six words.
+  5. The fetch: one pick, from the cache's lookup only (a miss fills, then
+     looks again).
+
+*BENCHES (all unchanged; every one bit-exact against scsp_ref.h):*
+  * tb_m2_scsp on MAME's 300 s captures of VF2, VCop2, Sega Rally and
+    Zero Gunner (d81cfb6, SDRAM latency 6-40): 0 samples differ from the
+    reference or from MAME's mix, the IPL right on every sample, 846 M
+    slot-samples checked, 0 wrong.
+  * The 40 random captures (FM, PCM16, the noise LFO, SSCTL 2 / 3, MOBUF,
+    timers / interrupts / MIDI in; every third at latency 20-400): 40 PASS
+    (and again on R859's timing changes, 517a535).
+  * tb_m2_scsp_dsp: random programs at latency 6-40 and 1-400 (1,000,000
+    runs) and the three games' programs, 30 s each: 0 EFREG / RAM words
+    wrong. tb_m2_scsp_level: all 393,216 words.
+  The benches found, in the redesign: a cleared state RAM reading as
+  ATTACK (MAME's slots start in RELEASE -- key-ons ignored; the row now
+  keeps ~EGST); the FM offset taken from the 32-bit-wrapped product (MAME's
+  own steps never wrap; the slice is now of the full product); MON2 under
+  a predicate that was false when MVOL = 15 (side effect 2 is never
+  predicated now); a DSP go lost in the reset's clears.
+
+*AREA (quartus_map 17.0, sim/sound/scsp_area_top.sv, all switches on):*
+
+    step                                         ALMs est.
+    R857 (the old engine, three-clock DSP)          2,720
+    the slot engine microcoded                      2,137
+    the common registers in an MLAB                 2,072
+    one pick, no fill-data path                     2,013
+    the DSP serialised                              1,966
+    the level shift through its multiplier;
+      no select in the ALU                          1,896
+    the timers on one counter                       1,868
+
+    block (final)                          ALUT   regs   ~ALMs
+    engine (sequencer, datapath, fetch,
+      the 68000's accesses)                1,188    561    ~900
+    common registers / timers / IRQ / MIDI   329    178    ~250
+    slot cache                                65     94     ~50
+    DSP (+ its 64-line cache)             629+64 310+64    ~530
+    level evaluator                          145    144    ~110
+    total                                  2,463  1,436   1,868   3 DSP blocks
+
+    M10K: ~45 (the LFO ROM 18, microcode 4, caches 8, the rest one or two
+    each) against the 68 the 2A build leaves -- the LFO ROM is the first to
+    compute in logic if block RAM gets tight (+~40 ALUT for the waves).
+    Engine clocks a sample at SDRAM latency 6-40, 300 s (mean / max of
+    the 1,814 a sample has at 80 MHz): VF2 1,092 / 2,087, VCop2 1,119 /
+    2,056, Sega Rally 622 / 1,615, Zero Gunner 1,351 / 2,275. The peaks
+    pass 1,814 and the output FIFO (eight samples) carries them; a random
+    capture at latency 20-400 peaks at 5,192 with its mean at 1,284.
+
+*WHAT R856 AND R857 GOT WRONG:*
+  * R856's split (engine ~550, DSP ~350, registers ~200) was a guess and
+    wrong by 2x; R857 recorded it.
+  * R857's projection for the remaining work (DSP ~585 -> ~300, timers -70,
+    level -40, engine -100: ~1,450-1,500 total) was too optimistic by
+    ~400. Measured: the DSP's serialisation gave -47 ALMs, not -285 -- its
+    shifters were ~120 ALMs, the rest is spread over ten muxes and adders of
+    20-30 ALMs each (inputs, X, Y, B, SHIFTED, the address, the EFREG and
+    MIXS adds, the 68000's read-back) and ~310 flops (ACC, MEMVAL, FRC,
+    Y_REG, ADRS, DEC, the write and read addresses), all of which a
+    five-clock step still needs. The timers could not go onto one
+    decrementer: tb_m2_scsp checks the IPL the clock after tick44, so the
+    three timers must count in that clock (the shared counter instead gave
+    -34). The ALU-mux merges (PASSA / PASSB into the adder, RING / EFREG on
+    one input, LFOI / RATE on one) measured +27 -- inside quartus_map's
+    noise -- and were reverted.
+  * Measured costs of what the engine is (variants, one piece removed):
+    the A operand mux 92 ALMs, B 66, the ALU's result mux 102, FM (ring,
+    MDL, the 68000's 0x600 window) 74, the envelope 40, the product slices
+    30; ~560 flops (fetch addresses and samples, the latched register
+    fields, 32 active bits, the 68000's access, the outputs, the monitor).
+
+*WHY NOT 1,300.* The arithmetic is cheap; the cost is per-bit muxing and
+flops of datapaths that must keep MAME's exact 32-bit int arithmetic, and
+there have to be two of them: one sequenced datapath for slots and DSP
+together would need ~770 clocks (32 slots) + ~1,000-1,300 (the DSP in
+microcode) of the 1,814 a sample has, and running the DSP beside the next
+sample's slots needs it to have its own datapath -- which is what costs.
+The register block has to act in the clock tick44 or a MIDI byte arrives
+(MAME's order, which the IPL bench checks) and so cannot be sequenced.
+Against srg320's complete SCSP (2,577 est., ~25 M10K, 5 DSP): 1,868 est.,
+~45 M10K, 3 DSP -- 28% fewer ALMs, more block RAM.
