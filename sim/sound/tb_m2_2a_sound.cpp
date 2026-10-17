@@ -16,6 +16,10 @@
 //   SND_IMG=<dir with prog.bin, samp.bin (snd_img.py)>  SCSP_CAP=<p16 capture>
 //   SND_S=<seconds, default 10>  LAT_LO / LAT_HI (default 6 / 40)
 //   SND_RAMFILL=<word>  what unwritten sound RAM reads (default 0xffff)
+//   LAT_A_LO / LAT_A_HI the 68000's port alone (R874)
+//   SND_SHIFT=<s> [SND_SHIFT_AFTER=<s>, default 5]  MAME's MIDI and writes from
+//     SND_SHIFT_AFTER moved SND_SHIFT seconds earlier, to reach a late event
+//     in a short run (R874: VF2's music at 4.77 s with SND_SHIFT=9)
 #include "Vm2_2a_sound.h"
 #include "verilated.h"
 #include <cstdio>
@@ -40,6 +44,12 @@ static uint16_t ramfill = 0xffff;
 static uint32_t rng_s = 1;
 static int lat_lo = 6, lat_hi = 40;
 static int lat() { rng_s = rng_s * 1103515245u + 12345u; return lat_lo + int((rng_s >> 8) % unsigned(lat_hi - lat_lo + 1)); }
+// LAT_A_LO / LAT_A_HI: the 68000's port alone (default: LAT_LO / LAT_HI)
+static int lat_a_lo = -1, lat_a_hi = -1;
+static int lat_a() {
+	if (lat_a_lo < 0) return lat();
+	rng_s = rng_s * 1103515245u + 12345u; return lat_a_lo + int((rng_s >> 8) % unsigned(lat_a_hi - lat_a_lo + 1));
+}
 
 static uint16_t rd16(uint32_t w) {
 	if (w >= RAM_BASE && w < RAM_BASE + 0x40000) return ram[w - RAM_BASE];
@@ -71,7 +81,7 @@ static Port pa, pb, pc;
 static void tick() {
 	t->clk = 0; t->eval();
 	t->a_ack = 0; t->b_ack = 0; t->c_ack = 0;
-	if (t->a_req && !pa.was && !pa.busy) { pa.busy = true; pa.wait = lat(); }
+	if (t->a_req && !pa.was && !pa.busy) { pa.busy = true; pa.wait = lat_a(); }
 	if (pa.busy && --pa.wait <= 0) {
 		pa.busy = false; t->a_ack = 1;
 		if (t->a_we) wr16(t->a_addr, t->a_din, t->a_be); else t->a_dout = rd64(t->a_addr);
@@ -110,6 +120,13 @@ int main(int argc, char **argv) {
 	double secs = getenv("SND_S") ? atof(getenv("SND_S")) : 10.0;
 	if (getenv("LAT_LO")) lat_lo = atoi(getenv("LAT_LO"));
 	if (getenv("LAT_HI")) lat_hi = atoi(getenv("LAT_HI"));
+	if (getenv("LAT_A_LO")) { lat_a_lo = atoi(getenv("LAT_A_LO")); lat_a_hi = getenv("LAT_A_HI") ? atoi(getenv("LAT_A_HI")) : lat_a_lo; }
+	// SND_SHIFT=<s>: MAME's MIDI bytes and register writes from SND_SHIFT_AFTER
+	// seconds (default 5) moved SND_SHIFT seconds earlier -- to reach a late
+	// event (VF2's first sound effect, 19.8 s) in a short run
+	const double shift = getenv("SND_SHIFT") ? atof(getenv("SND_SHIFT")) : 0.0;
+	const double shift_after = getenv("SND_SHIFT_AFTER") ? atof(getenv("SND_SHIFT_AFTER")) : 5.0;
+	auto shifted = [&](double tm) { return tm >= shift_after ? tm - shift : tm; };
 	if (getenv("SND_RAMFILL")) ramfill = uint16_t(strtoul(getenv("SND_RAMFILL"), nullptr, 0));
 	std::fill(ram.begin(), ram.end(), ramfill);
 	if (!load(std::string(img) + "/prog.bin", rom) || !load(std::string(img) + "/samp.bin", smp)) { fprintf(stderr, "no images in %s\n", img); return 2; }
@@ -119,13 +136,17 @@ int main(int argc, char **argv) {
 	std::vector<std::pair<double, int>> midi;
 	if (FILE *f = fopen((d + "/midi.txt").c_str(), "r")) {
 		unsigned long long n; char dir[8]; unsigned b;
-		while (fscanf(f, "%llu %7s %x", &n, dir, &b) == 3) if (!strcmp(dir, "in")) midi.push_back({n / 44100.0, int(b)});
+		while (fscanf(f, "%llu %7s %x", &n, dir, &b) == 3) if (!strcmp(dir, "in")) midi.push_back({shifted(n / 44100.0), int(b)});
 		fclose(f);
 	}
 	std::vector<W> mw;
 	if (FILE *f = fopen((d + "/regs.bin").c_str(), "rb")) {
 		Rec r;
-		while (fread(&r, sizeof r, 1, f) == 1) { if (r.n / 44100.0 > secs) break; if (!r.pad) mw.push_back({r.n / 44100.0, r.off, uint16_t(r.data & r.mask), r.mask}); }
+		while (fread(&r, sizeof r, 1, f) == 1) {
+			const double tm = r.n / 44100.0;
+			if (shifted(tm) > secs) break;
+			if (!r.pad && (shift == 0.0 || tm < shift_after - shift || tm >= shift_after)) mw.push_back({shifted(tm), r.off, uint16_t(r.data & r.mask), r.mask});
+		}
 		fclose(f);
 	}
 	std::vector<int32_t> mout;   // MAME's mix, pre-clamp L / R

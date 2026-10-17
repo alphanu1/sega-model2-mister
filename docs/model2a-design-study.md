@@ -37609,3 +37609,67 @@ holding the CPU: 0x7dc0 is a ret, 0x7dc4-0x7dcc three ldq (g11)[g12] -- the
 routine that reads 12 result words from the TGP's output FIFO. The TGP never
 produced them. The sound board kept running. M2_PROBE now carries the TGP's
 pc and its queue counts ('Q') so the next lockup says where the TGP is.
+
+**R874 -- "SFX AT ~1% OF THE MUSIC, DRUMS MISSING" (Ben, s1205, VF2): NOT
+REPRODUCED IN SIMULATION. THE SCSP AND THE 68000'S STREAMING GIVE MAME'S
+SOUND EFFECTS AND DRUMS; THE FAULT IS IN SOMETHING THE BENCHES DO NOT MODEL.
+NO RTL CHANGE.**
+
+*Believed (the task):* a gross attenuation (~40 dB) on one SCSP path that
+only sound effects use -- the effect send, the DSP's MIXS / EFREG scaling,
+EFSDL, MVOL -- never seen because R859 compared music levels only.
+
+*Measured (MAME 0.289 vf2 capture, keyon.txt / regs.bin / ramw.bin, 300 s):*
+  1. EVERY VF2 VOICE IS THE SAME KIND. All 9,967 key-ons: PCM8B, LPCTL 1,
+     SA = 0x10000 + slot x 0x2000 (a fixed 8 KB ring per slot, LSA 0, LEA
+     0x1fff), DISDL 3, ISEL 0, MDL 0, SDIR 0, SSCTL 0, slots handed out
+     round-robin. The 68000 copies every sample from ROM into its slot's
+     ring (word writes only: 220 K words/s, 1 ROM read per RAM write; the
+     first 512 words land 16 samples BEFORE the key-on, the whole ring in
+     ~30 ms). There is no separate SFX path: the direct send, the DSP send
+     and the effect returns are the music's.
+  2. THE SOUND EFFECTS are MIDI channel 14 note-ons (9e nn vv; first at
+     19.78 s). They and the music's drums share, and no melodic voice has:
+     word 8 = 0x7800 (OCT -1, FNS 0: unpitched, 22,050 Hz) with word 4 =
+     0x001f (AR 31, D1R 0, D2R 0) and RR 31, KRS 0. SFX: TL 4, DL 0, word
+     9 0x5100; drums: TL 0x15-0x1e, DL 0 or 31, word 9 0x5300. Melodic
+     voices have FNS != 0 and D2R != 0.
+  3. THE SCSP RTL IS ALREADY PROVEN ON EXACTLY THESE: tb_m2_scsp replays this
+     capture's register AND sound-RAM writes for all 300 s bit-exact against
+     scsp_ref.h and MAME's mix (R857/R858: 194,928,084 slot-samples, 0
+     wrong) -- every SFX and drum included. So level, pan, the DSP and the EG
+     are MAME's for these voices in simulation.
+  4. THE 68000 SIDE (tb_m2_2a_sound, new SND_SHIFT=9: MAME's MIDI from 5 s
+     moved 9 s earlier, so the music starts at 4.77 s and the first SFX at
+     10.79 s in an 11.6 s run, 48 MHz, ~9 min):
+     * our sound RAM against MAME's (rebuilt from ramw.bin) at the music's
+       start: rings 0-21 equal word for word where both have filled them;
+     * the first SFX: keyed on with TL 4 as MAME's; its ring holds MAME's
+       sample bytes, 3,840 of 4,096 words equal (the rest our refill, later
+       in time), the decaying envelope of the effect the same block by block;
+     * output RMS in 50 ms windows against MAME's out.bin across the SFX:
+       ratio 0.76-1.37, mean ~1.07 -- no 40 dB loss; at the music's start
+       (drums keyed at 4.78 / 4.89 s) 0.64-1.12.
+  5. LONGER LATENCY (LAT_A_LO / LAT_A_HI new, the 68000's port alone): at
+     100-400 clocks the boot (pre-boot check, clear, the RAM loop) takes
+     past 5 s and the driver is not running yet; at 30-200 on all ports at
+     48 MHz the engine starves (273 FIFO empties). Neither is the board
+     (no underruns, the driver running). Not a reproduction.
+  6. Ruled out on the way: the 0x400000 bank latch (VF2's 8 MB is linear,
+     model2snd_ctrl banks only past 8 MB), the sample MRA order (program and
+     samples both ROM_LOAD16_WORD_SWAP, both map="12"), the 2A SDRAM layout
+     (samples at byte 0x3400000-0x3BFFFFF, nothing else there), m2_sdram's
+     write acknowledge (given after the WRITE command, not posted: the slot
+     cache's snoop cannot be outrun), the OSD volume stage, the MIDI FIFO
+     (32 entries, MAME's), FM / MIDI_OUT (same on the board and benches).
+
+*What is left (the board is the oracle):* the bench reproduces MAME for these
+voices, so the board differs in something it does not model: (a) s1205 fails
+clk_sys setup by -0.243 ns (TNS -0.436) -- which path is not in the saved
+report; quartus_sta on the s1205 database names it, and an SCSP engine path
+(the envelope or the step multiplier) would fit a fault confined to one
+envelope / pitch shape; (b) the real i960's MIDI (the SFX only -- the drums
+are sequenced by the 68000, no MIDI during the music); (c) the board's
+SDRAM latency on ports 5-7 under load, never measured. Next: name the
+failing path; an M2_PROBE record of one slot's words 4-8 and its EG level
+after an SFX key-on on the board.
