@@ -272,9 +272,38 @@ void tick() {
 
 // Verilated internals, exposed with --public-flat-rd. Reading the register file
 // directly avoids adding debug ports that would change what is measured.
+//
+// R866: r0-r2 and g15 are flops (r_pfp, r_sp, r_rip, g_fp); the other 28 are
+// four banks by number [1:0], eight words at {g, row}, in three copies that
+// are always written alike (u_b1, u_b2, u_br).
+#define RFQ(x) dut->rootp->i960_top__DOT__u_regs__DOT__##x
+#define RFB(b, c) RFQ(g_bank__BRA__##b##__KET____DOT__u_##c##__DOT__mem)
+static IData &rf_cell(int b, int c, int a) {
+  switch (b * 3 + c) {
+  case 0: return RFB(0, b1)[a];  case 1: return RFB(0, b2)[a];  case 2: return RFB(0, br)[a];
+  case 3: return RFB(1, b1)[a];  case 4: return RFB(1, b2)[a];  case 5: return RFB(1, br)[a];
+  case 6: return RFB(2, b1)[a];  case 7: return RFB(2, b2)[a];  case 8: return RFB(2, br)[a];
+  case 9: return RFB(3, b1)[a];  case 10: return RFB(3, b2)[a]; default: return RFB(3, br)[a];
+  }
+}
 uint32_t dreg(int i) {
-  return (i < 16) ? dut->rootp->i960_top__DOT__u_regs__DOT__loc[i]
-                  : dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16];
+  switch (i) {
+  case 0: return RFQ(r_pfp);
+  case 1: return RFQ(r_sp);
+  case 2: return RFQ(r_rip);
+  case 31: return RFQ(g_fp);
+  default: return rf_cell(i & 3, 0, ((i >> 4) << 2) | ((i >> 2) & 3));
+  }
+}
+void wreg(int i, uint32_t v) {
+  switch (i) {
+  case 0: RFQ(r_pfp) = v; break;
+  case 1: RFQ(r_sp) = v; break;
+  case 2: RFQ(r_rip) = v; break;
+  case 31: RFQ(g_fp) = v; break;
+  default: break;
+  }
+  for (int c = 0; c < 3; c++) rf_cell(i & 3, c, ((i >> 4) << 2) | ((i >> 2) & 3)) = v;
 }
 uint32_t dac() { return dut->rootp->i960_top__DOT__ac; }
 uint32_t dicr() { return dut->rootp->i960_top__DOT__icr_reg; }
@@ -990,8 +1019,7 @@ int main(int argc, char **argv) {
       const uint32_t e = (v >> 23) & 0xff;
       if (e == 0x00 || e == 0xff) v = (v & 0x807fffffu) | (0x7fu << 23);
       ref.rf.r[i] = v;
-      if (i < 16) dut->rootp->i960_top__DOT__u_regs__DOT__loc[i] = v;
-      else        dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16] = v;
+      wreg(i, v);
     }
     // The i960 requires a valid stack before any call. Seeding SP/FP at random
     // was invisible while the generator emitted no calls; with callx it puts a
@@ -1017,7 +1045,7 @@ int main(int argc, char **argv) {
     // small enough that the check_pending_irqs arm of modpc would hardly ever
     // fire -- the instruction would execute constantly and test one path.
     ref.rf.r[2] = 0x001f0000u;
-    dut->rootp->i960_top__DOT__u_regs__DOT__loc[2] = 0x001f0000u;
+    wreg(2, 0x001f0000u);
     // r5 holds synmovq's IAC port, and r4 points at a message for it. Without a
     // real message every IAC would read whatever the source register addressed
     // and dispatch on a random type byte, which traps on both sides and ends
@@ -1053,19 +1081,19 @@ int main(int argc, char **argv) {
       ref.rf.r[5] = 0xff000010u;
       ref.rf.r[6] = 0x0b40;                 // synmovq source block
       ref.rf.r[7] = 0x0b80;                 // and its destination
-      dut->rootp->i960_top__DOT__u_regs__DOT__loc[4] = iac_at;
-      dut->rootp->i960_top__DOT__u_regs__DOT__loc[5] = 0xff000010u;
-      dut->rootp->i960_top__DOT__u_regs__DOT__loc[6] = 0x0b40;
-      dut->rootp->i960_top__DOT__u_regs__DOT__loc[7] = 0x0b80;
+      wreg(4, iac_at);
+      wreg(5, 0xff000010u);
+      wreg(6, 0x0b40);
+      wreg(7, 0x0b80);
     }
     // r3 holds the magic synmov destination, so the ICR path gets exercised.
     ref.rf.r[3]  = 0xff000004;
-    dut->rootp->i960_top__DOT__u_regs__DOT__loc[3] = 0xff000004;
+    wreg(3, 0xff000004);
     // The module loads FP itself in T_BOOT now; these keep the two sides
     // identical rather than fighting it.
-    dut->rootp->i960_top__DOT__u_regs__DOT__glb[15] = INT_STACK;
-    dut->rootp->i960_top__DOT__u_regs__DOT__loc[1]  = INT_STACK + 64;
-    dut->rootp->i960_top__DOT__u_regs__DOT__loc[0]  = 0x2000;   // PFP, as the ref
+    wreg(31, INT_STACK);
+    wreg(1, INT_STACK + 64);
+    wreg(0, 0x2000);   // PFP, as the ref
     ref.AC = 0; ref.IP = PROG_BASE;
     // SAT and PRCB. The MODULE walks the boot record itself in T_BOOT; the
     // reference has no boot sequence, so it has to be handed the same values or

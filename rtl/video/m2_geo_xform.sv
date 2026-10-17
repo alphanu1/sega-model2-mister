@@ -131,8 +131,12 @@ module m2_geo_xform #(
   output logic [31:0] out_x, out_y, out_z
 );
 
-  logic [31:0] mat [12];
-  always_ff @(posedge clk) if (mat_we) mat[mat_idx] <= mat_data;
+  // R866: THE MATRIX IS LUT RAM, two copies (one per read: the multiplier's
+  // m_sel and the adder's column 9-11), each a 16 x 32 MLAB with an
+  // asynchronous read -- what the twelve flip-flop words and their two 12:1
+  // selects did, on every cycle. Words 12-15 take writes nothing reads.
+  logic [31:0] mat_mq, mat_aq;
+  logic [3:0]  mat_ara;
 
   // ------------------------------------------------------------ product bank
   // Two banks of nine products: one being filled by the multiplier for point N
@@ -170,7 +174,9 @@ module m2_geo_xform #(
   // -0.548). The same invariant, m_sel == term*3 + comp, at every site.
   logic [3:0] m_sel;
 
-  assign mul_a = mat[m_sel];
+  m2_xf_mat u_mat_m (.clk(clk), .we(mat_we), .wa(mat_idx), .wd(mat_data), .ra(m_sel),   .q(mat_mq));
+  m2_xf_mat u_mat_a (.clk(clk), .we(mat_we), .wa(mat_idx), .wd(mat_data), .ra(mat_ara), .q(mat_aq));
+  assign mul_a = mat_mq;
   assign mul_b = (term == 2'd0) ? px : (term == 2'd1) ? py : pz;
 
   wire mul_out_valid = mul_rsp;
@@ -201,19 +207,20 @@ module m2_geo_xform #(
   // three variable-index reads of a 9-deep array; a constant-index case makes
   // each a 3:1 mux. a_comp == 3 cannot matter here: add_req is gated on a_slot.
   logic [31:0] rsel0, rsel1, rsel2, matsel;
+  assign matsel = mat_aq;
   always_comb begin
     case (a_comp[1:0])
       2'd0: begin
         rsel0 = r[sum_bank][0]; rsel1 = r[sum_bank][1]; rsel2 = r[sum_bank][2];
-        matsel = mat[9];
+        mat_ara = 4'd9;
       end
       2'd1: begin
         rsel0 = r[sum_bank][3]; rsel1 = r[sum_bank][4]; rsel2 = r[sum_bank][5];
-        matsel = mat[10];
+        mat_ara = 4'd10;
       end
       default: begin
         rsel0 = r[sum_bank][6]; rsel1 = r[sum_bank][7]; rsel2 = r[sum_bank][8];
-        matsel = mat[11];
+        mat_ara = 4'd11;
       end
     endcase
   end
@@ -356,4 +363,19 @@ module m2_geo_xform #(
     end
   end
 
+endmodule
+
+// R866: one copy of the view matrix -- 16 words, one write port, an
+// asynchronous read (MLAB). Never cleared, as the flip-flop array was not.
+module m2_xf_mat (
+  input  logic        clk,
+  input  logic        we,
+  input  logic [3:0]  wa,
+  input  logic [31:0] wd,
+  input  logic [3:0]  ra,
+  output logic [31:0] q
+);
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] mem [0:15];
+  always_ff @(posedge clk) if (we) mem[wa] <= wd;
+  assign q = mem[ra];
 endmodule

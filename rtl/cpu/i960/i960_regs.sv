@@ -15,9 +15,23 @@
 //
 // i960KB register file, register cache, and the call/return frame machinery.
 //
-// 16 locals (r0-r15) and 16 globals (g0-g15) live in flip-flops and are read
-// combinationally. Four saved frames live in a small memory. Spill and fill
-// beyond four frames go to external memory through a request/ack port.
+// 16 locals (r0-r15) and 16 globals (g0-g15), read through registered ports.
+// Four saved frames live in a small memory. Spill and fill beyond four frames
+// go to external memory through a request/ack port.
+//
+// R866: THE REGISTERS ARE LUT RAM, NOT FLIP-FLOPS. r0-r2 and g15 (PFP, SP,
+// RIP, FP) stay in flops: the frame operations write two or three of them in
+// one cycle and the interrupt path reads them all the time. The other 28 live
+// in MLAB as four banks by register number [1:0] (bank b holds r/g {row, b},
+// eight words addressed {g, row}), so a frame row is four words at one address
+// -- the cache's own shape -- and S_RET_CAP still lands a row a cycle. Every
+// write into the banks is one architectural write, one memory fill word or one
+// row: never two in a cycle (the architectural write needs !busy, the others
+// are busy states). Three copies are written alike and read at three
+// addresses: ra1, ra2 and the frame row the call save copies out. The reads are
+// asynchronous and the registered ports and their bypass are unchanged, so
+// every output is the flip-flop file's on every cycle (sim/i960/
+// tb_i960_regs_miter.cpp runs both side by side).
 //
 // Named registers, from i960.h:
 //   r0  PFP  previous frame pointer      r1  SP   stack pointer
@@ -168,8 +182,41 @@ module i960_regs #(
 
   // --------------------------------------------------------------- storage
 
-  logic [31:0] loc [0:15];
-  logic [31:0] glb [0:15];
+  // R866: r0-r2 and g15 in flops; the other 28 in the banks below.
+  logic [31:0] r_pfp, r_sp, r_rip, g_fp;
+
+  // Bank write port: one address and a word enable per bank, shared by the
+  // three copies.
+  logic [3:0]   bk_we;
+  logic [2:0]   bk_wa;
+  logic [127:0] bk_wd;
+  logic [127:0] bk_q1, bk_q2, bk_qr;           // rows at ra1, ra2, the frame row
+  wire  [2:0]   bk_ra1 = {ra1[4], ra1[3:2]};
+  wire  [2:0]   bk_ra2 = {ra2[4], ra2[3:2]};
+  logic [2:0]   bk_rar;                        // {0, idx[3:2]}, below idx
+
+  genvar gb;
+  generate for (gb = 0; gb < 4; gb = gb + 1) begin : g_bank
+    i960_rf_bank u_b1 (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
+                       .ra(bk_ra1), .q(bk_q1[gb*32 +: 32]));
+    i960_rf_bank u_b2 (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
+                       .ra(bk_ra2), .q(bk_q2[gb*32 +: 32]));
+    i960_rf_bank u_br (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
+                       .ra(bk_rar), .q(bk_qr[gb*32 +: 32]));
+  end endgenerate
+
+  // A register by number from a bank row, the four flops taking their own.
+  function automatic logic [31:0] pick(input logic [4:0] n, input logic [127:0] row,
+                                       input logic [31:0] pfp, input logic [31:0] sp,
+                                       input logic [31:0] rip, input logic [31:0] fp);
+    case (n)
+      5'd0:    pick = pfp;
+      5'd1:    pick = sp;
+      5'd2:    pick = rip;
+      5'd31:   pick = fp;
+      default: pick = row[n[1:0]*32 +: 32];
+    endcase
+  endfunction
 
   // Four saved frames, four words per row. MLAB rather than M10K — see header.
   // Dedicated ports: one write, one registered read, each with its own address.
@@ -238,8 +285,8 @@ module i960_regs #(
   // whether that is right. See HANDOFF.md.
   logic [31:0] rd1_c, rd2_c;
   always_comb begin
-    rd1_c = ra1[4] ? glb[ra1[3:0]] : loc[ra1[3:0]];
-    rd2_c = ra2[4] ? glb[ra2[3:0]] : loc[ra2[3:0]];
+    rd1_c = pick(ra1, bk_q1, r_pfp, r_sp, r_rip, g_fp);
+    rd2_c = pick(ra2, bk_q2, r_pfp, r_sp, r_rip, g_fp);
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -283,6 +330,7 @@ module i960_regs #(
   logic [3:0]  rc_fl_idx;
   logic [1:0]  fl_word;      // word within the row being flushed
   assign rc_wr_idx = {slot, idx[3:2]};
+  assign bk_rar    = {1'b0, idx[3:2]};
   assign rc_fl_idx = {fl_frame[1:0], idx[3:2]};
 
   // Memory port drive. Combinational from state so the array block above stays
@@ -290,8 +338,9 @@ module i960_regs #(
   always_comb begin
     rc_we    = (state == S_CALL_SAVE) && !to_memory;
     rc_waddr = rc_wr_idx;
-    rc_wdata = {loc[{idx[3:2], 2'd3}], loc[{idx[3:2], 2'd2}],
-                loc[{idx[3:2], 2'd1}], loc[{idx[3:2], 2'd0}]};
+    // R866: the frame row from the bank copy at {0, idx[3:2]}; row 0's first
+    // three words are the flops
+    rc_wdata = (idx[3:2] == 2'd0) ? {bk_qr[127:96], r_rip, r_sp, r_pfp} : bk_qr;
     // The read address must be HELD for as long as rc_q is being consumed, not
     // just during the cycle that issues it: the array registers rc_q every
     // cycle, so letting the address move mid-row silently replaces the data
@@ -304,23 +353,41 @@ module i960_regs #(
 
   assign busy = (state != S_IDLE);
 
-  assign dbg_rip        = loc[R_RIP];
-  assign dbg_pfp        = loc[R_PFP];
+  // R866: the banks' one write port. The architectural write needs !busy; the
+  // memory fill word and the cache row are busy states -- never two at once.
+  // Nothing is written in reset, as the flip-flop file's writes sat in the
+  // reset's else branch.
+  always_comb begin
+    bk_we = 4'd0;
+    bk_wa = {wa[4], wa[3:2]};
+    bk_wd = {4{wd}};
+    if (we && !busy) bk_we[wa[1:0]] = 1'b1;
+    if (state == S_RET_LOAD && to_memory && mem_ack) begin
+      bk_wa = {1'b0, idx[3:2]};
+      bk_wd = {4{mem_rdata}};
+      bk_we = 4'd1 << idx[1:0];
+    end
+    if (state == S_RET_CAP) begin
+      bk_wa = {1'b0, idx[3:2]};
+      bk_wd = rc_q;
+      bk_we = 4'hf;
+    end
+    if (!rst_n) bk_we = 4'd0;
+  end
+
+  assign dbg_rip        = r_rip;
+  assign dbg_pfp        = r_pfp;
   assign dbg_rcache_pos = rcache_pos;
   assign dbg_to_memory  = to_memory;
 
-  // Frame pointer is g15. Named for readability; there is no separate storage.
-  localparam int unsigned R_PFP = 0;
-  localparam int unsigned R_SP  = 1;
-  localparam int unsigned R_RIP = 2;
-  localparam int unsigned G_FP  = 15;
+  // r0 = r_pfp, r1 = r_sp, r2 = r_rip, g15 (the frame pointer) = g_fp.
 
   logic [31:0] fp_masked;
-  assign fp_masked = glb[G_FP] & 32'hffff_ffc0;   // FP & ~0x3f
+  assign fp_masked = g_fp & 32'hffff_ffc0;   // FP & ~0x3f
 
-  assign cur_fp       = glb[G_FP];
-  assign cur_sp       = loc[R_SP];
-  assign cur_pfp_type = loc[R_PFP][2:0];
+  assign cur_fp       = g_fp;
+  assign cur_sp       = r_sp;
+  assign cur_pfp_type = r_pfp[2:0];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -346,16 +413,23 @@ module i960_regs #(
       // Ordinary write. Frame operations own the file while busy, so an
       // external write during a spill would race the copy.
       if (we && !busy) begin
-        if (wa[4]) glb[wa[3:0]] <= wd;
-        else       loc[wa[3:0]] <= wd;
+        // R866: the four flops here; every number also goes to the banks
+        // (bk_we, below), where 0-2 and 31 are written and never read.
+        case (wa)
+          5'd0:  r_pfp <= wd;
+          5'd1:  r_sp  <= wd;
+          5'd2:  r_rip <= wd;
+          5'd31: g_fp  <= wd;
+          default: ;
+        endcase
       end
 
       // Written outside the state machine: it happens once, during T_BOOT,
       // before any instruction has executed and so before any state the
       // machine below could be in.
       if (boot_fp_we) begin
-        glb[G_FP] <= boot_fp;
-        loc[R_SP] <= boot_fp + 32'd64;
+        g_fp <= boot_fp;
+        r_sp <= boot_fp + 32'd64;
       end
 
       case (state)
@@ -365,20 +439,20 @@ module i960_regs #(
           if (op_call) begin
             // do_call step 1: RIP takes the return address BEFORE the save, so
             // the saved frame carries it.
-            loc[R_RIP] <= call_ip;
+            r_rip      <= call_ip;
             slot       <= rcache_pos[1:0];
             to_memory  <= (rcache_pos >= $signed(CACHE_FRAMES));
             spill_base <= fp_masked;
             idx        <= 4'd0;
             state      <= S_CALL_SAVE;
-          end else if (op_ret && (loc[R_PFP][2:0] != 3'd0)
-                                && (loc[R_PFP][2:0] != 3'd7)) begin
+          end else if (op_ret && (r_pfp[2:0] != 3'd0)
+                                && (r_pfp[2:0] != 3'd7)) begin
             ret_unsupported <= 1'b1;
           end else if (op_ret) begin
             // do_ret_0 step 1: FP <- PFP & ~0x3f, then the depth decrements and
             // decides where the frame comes from.
-            glb[G_FP]  <= loc[R_PFP] & 32'hffff_ffc0;
-            spill_base <= loc[R_PFP] & 32'hffff_ffc0;
+            g_fp       <= r_pfp & 32'hffff_ffc0;
+            spill_base <= r_pfp & 32'hffff_ffc0;
             slot       <= 2'((rcache_pos - 32'sd1));
             to_memory  <= ((rcache_pos - 32'sd1) >= $signed(CACHE_FRAMES)) ||
                           ((rcache_pos - 32'sd1) <  32'sd0);
@@ -403,7 +477,7 @@ module i960_regs #(
             mem_req   <= 1'b1;
             mem_we    <= 1'b1;
             mem_addr  <= spill_base + {26'd0, idx, 2'b00};
-            mem_wdata <= loc[idx];
+            mem_wdata <= pick({1'b0, idx}, bk_qr, r_pfp, r_sp, r_rip, g_fp);
             if (mem_ack) begin
               mem_req <= 1'b0;
               if (idx == 4'd15) state <= S_CALL_FIN;
@@ -424,10 +498,10 @@ module i960_regs #(
           // the caller's values, which is what the reference does and what the
           // header explains at length.
           rcache_pos    <= rcache_pos + 32'sd1;
-          loc[R_PFP]    <= (glb[G_FP] & 32'hffff_fff8) | {29'd0, call_type};
-          glb[G_FP]     <= ((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
+          r_pfp         <= (g_fp & 32'hffff_fff8) | {29'd0, call_type};
+          g_fp          <= ((call_type == 3'd7 ? call_stack : r_sp) + 32'd63)
                            & 32'hffff_ffc0;
-          loc[R_SP]     <= (((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
+          r_sp          <= (((call_type == 3'd7 ? call_stack : r_sp) + 32'd63)
                            & 32'hffff_ffc0) + 32'd64;
           next_ip       <= call_target;
           next_ip_valid <= 1'b1;
@@ -442,7 +516,12 @@ module i960_regs #(
             mem_addr <= spill_base + {26'd0, idx, 2'b00};
             if (mem_ack) begin
               mem_req  <= 1'b0;
-              loc[idx] <= mem_rdata;
+              case (idx)                     // R866: the banks take it too
+                4'd0: r_pfp <= mem_rdata;
+                4'd1: r_sp  <= mem_rdata;
+                4'd2: r_rip <= mem_rdata;
+                default: ;
+              endcase
               if (idx == 4'd15) state <= S_RET_FIN;
               else              idx   <= idx + 4'd1;
             end
@@ -453,14 +532,14 @@ module i960_regs #(
         end
 
         S_RET_CAP: begin
-          {loc[{idx[3:2], 2'd3}], loc[{idx[3:2], 2'd2}],
-           loc[{idx[3:2], 2'd1}], loc[{idx[3:2], 2'd0}]} <= rc_q;
+          if (idx[3:2] == 2'd0)              // R866: the banks take the row
+            {r_rip, r_sp, r_pfp} <= rc_q[95:0];
           if (idx[3:2] == 2'd3) state <= S_RET_FIN;
           else begin idx <= idx + 4'd4; state <= S_RET_LOAD; end
         end
 
         S_RET_FIN: begin
-          next_ip       <= loc[R_RIP];
+          next_ip       <= r_rip;
           next_ip_valid <= 1'b1;
           state         <= S_IDLE;
         end
@@ -505,4 +584,19 @@ module i960_regs #(
     end
   end
 
+endmodule
+
+// R866: one bank of the register file -- eight 32-bit words, one write port,
+// an asynchronous read (MLAB, like the i-cache's tags). Never cleared.
+module i960_rf_bank (
+  input  logic        clk,
+  input  logic        we,
+  input  logic [2:0]  wa,
+  input  logic [31:0] wd,
+  input  logic [2:0]  ra,
+  output logic [31:0] q
+);
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] mem [0:7];
+  always_ff @(posedge clk) if (we) mem[wa] <= wd;
+  assign q = mem[ra];
 endmodule
