@@ -19,8 +19,9 @@
 //                       (a model here, not the RTL), N out of reset;
 //                   IN2 PEDAL3 (hand brake): 0x00 at rest, 0xFF held;
 //                   AN0..2 == Daytona's block's steer / accel / brake.
-//   Virtua Cop 2  INPUT_PORTS_START(vcop2) (J 4 Trigger 5 Start 6 Coin
-//                 7 Test 8 Service, P2 on joystick 1): IN0 model2's (coins,
+//   Virtua Cop 2  INPUT_PORTS_START(vcop2) (J 4 Trigger 5 Reload 6 Start
+//                 7 Coin 8 Test 9 Service -- Virtua Cop's order, R870 --
+//                 P2 on joystick 1; GUN 0 here: IN1 from the buttons): IN0 model2's (coins,
 //                 test, service, starts), IN1 0x01 P1 trigger 0x02 P2
 //                 trigger, the rest 1; IN2 0xFF; AN 0xFF.
 //   Zero Gunner   INPUT_PORTS_START(zerogun) (J 4 Button 1 5 Button 2
@@ -58,7 +59,7 @@ static Want want_now(int game) {
     w.in2 = b(j0, 9) ? 0xff : 0x00;
     w.an0 = t->c_steer; w.an1 = t->c_accel; w.an2 = t->c_brake;
   } else if (game == 2) {   // Virtua Cop 2
-    w.in0 = lo(b(j0, 6) << 0 | b(j1, 6) << 1 | b(j0, 7) << 2 | b(j0, 8) << 3 | b(j0, 5) << 4 | b(j1, 5) << 5);
+    w.in0 = lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 8) << 2 | b(j0, 9) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5);
     w.in1 = lo(b(j0, 4) << 0 | b(j1, 4) << 1);
     w.in2 = 0xff; w.an0 = w.an1 = w.an2 = 0xff;
   } else if (game == 3) {   // Zero Gunner

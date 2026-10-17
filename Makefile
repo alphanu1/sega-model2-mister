@@ -406,7 +406,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -1941,6 +1941,20 @@ obj_m2_vcg/Vm2_vcop_guns: rtl/io/m2_vcop_guns.sv sim/io/tb_m2_vcop_guns.cpp
 	  --Mdir obj_m2_vcg -o Vm2_vcop_guns -CFLAGS "-O2" \
 	  rtl/io/m2_vcop_guns.sv sim/io/tb_m2_vcop_guns.cpp
 
+# R870: Virtua Cop 2's guns as the 2A build wires them -- m2_vcop_guns (V2)
+# into the 315-5649's serial channel 2, the triggers through m2_2a_inputs --
+# read on the i960's side against MAME's lightgun_mux_r and vcop2's ranges.
+.PHONY: test_m2_vcop2_guns
+test_m2_vcop2_guns: obj_m2_vcg2/Vtb_m2_vcop2_top
+	@echo "== test m2_vcop_guns V2 through m2_315_5649 (Virtua Cop 2's guns as the i960 reads them, R870)"
+	@./obj_m2_vcg2/Vtb_m2_vcop2_top $(TEST_ARGS)
+
+obj_m2_vcg2/Vtb_m2_vcop2_top: rtl/io/m2_vcop_guns.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv sim/io/tb_m2_vcop2_top.sv sim/io/tb_m2_vcop2_guns.cpp
+	$(VBUILD) --top-module tb_m2_vcop2_top -Wno-UNUSEDSIGNAL \
+	  --Mdir obj_m2_vcg2 -o Vtb_m2_vcop2_top -CFLAGS "-O2" \
+	  rtl/io/m2_vcop_guns.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv \
+	  sim/io/tb_m2_vcop2_top.sv sim/io/tb_m2_vcop2_guns.cpp
+
 # R849: who is in play, from the i960's writes, against MAME's own record.
 # The captures live in build/ (not committed); sim/io/mame_m2_vcop_play.lua
 # writes them (<name>_wlog.txt: every write to the three words; <name>_state.txt:
@@ -1954,6 +1968,21 @@ obj_m2_vcs/Vm2_vcop_state: rtl/io/m2_vcop_state.sv sim/io/tb_m2_vcop_state.cpp
 	$(VBUILD) --top-module m2_vcop_state \
 	  --Mdir obj_m2_vcs -o Vm2_vcop_state -CFLAGS "-O2" \
 	  rtl/io/m2_vcop_state.sv sim/io/tb_m2_vcop_state.cpp
+
+# R870: the same module with V2 (Virtua Cop 2's words), against MAME's record:
+# VCOP2STATE holds <name>_wlog.txt / <name>_state.txt from
+# sim/io/mame_m2_vcop2_play.lua (V2_WLOG / V2_STATE with
+# V2_WATCH=500034,500038,502088,50208c); not committed, as R849's.
+VCOP2STATE ?= build/vcop2state
+.PHONY: test_m2_vcop2_state
+test_m2_vcop2_state: obj_m2_vcs2/Vm2_vcop_state
+	@echo "== test m2_vcop_state V2 (Virtua Cop 2's players in play, against MAME's record, R870)"
+	@./obj_m2_vcs2/Vm2_vcop_state $(foreach s,$(sort $(basename $(notdir $(wildcard $(VCOP2STATE)/*_wlog.txt)))),$(VCOP2STATE)/$(s).txt $(VCOP2STATE)/$(subst _wlog,_state,$(s)).txt)
+
+obj_m2_vcs2/Vm2_vcop_state: rtl/io/m2_vcop_state.sv sim/io/tb_m2_vcop2_state.cpp
+	$(VBUILD) --top-module m2_vcop_state -GV2=1 \
+	  --Mdir obj_m2_vcs2 -o Vm2_vcop_state -CFLAGS "-O2" \
+	  rtl/io/m2_vcop_state.sv sim/io/tb_m2_vcop2_state.cpp
 
 test_m2_vcop_xhair: obj_m2_vcx/Vtb_m2_vcop_xhair_top
 	@echo "== test m2_vcop_xhair (the crosshairs on the aim pixel, 24 kHz and 15 kHz interlaced, R846)"
