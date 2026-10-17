@@ -234,9 +234,18 @@ module m2_2a_sound #(
   // and compared (V_TR); the whole 256 K words cleared to zero (V_ZR); the
   // vector copy (V_RD / V_WR: ROM words 0-7 to RAM words 0-7). Then a 68000
   // cycle at a time.
-  typedef enum logic [3:0] { V_CLR, V_TW, V_TB, V_TR, V_ZR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK } bst_t;
+  // R871: THE BYTE ENABLES DO NOT REACH THE SDRAM (R82: a byte store lands in
+  // every lane -- the board, not the controller). A byte write is therefore a
+  // read of its line, the byte merged in, and the whole word written back
+  // (B_RMR / B_RMW for the 68000; V_TB's two phases for the check), as
+  // m2_cpu_bridge does since R729. Every simulation honoured the mask; s1203
+  // read the check's 4,088 of 4,096 words wrong -- the 8 that matched are
+  // exactly those a lost mask leaves right.
+  typedef enum logic [3:0] { V_CLR, V_TW, V_TB, V_TR, V_ZR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK,
+                             B_RMR, B_RMW } bst_t;
   bst_t        bs;
   logic  [2:0] vi;
+  logic        tb_ph;                      // V_TB: 0 read the line, 1 write the merged word
   logic [17:0] ti;                         // the check's and the clear's word
   // the check's words: a pattern, then one byte of each rewritten
   function automatic logic [15:0] tpat(input logic [11:0] i);
@@ -258,7 +267,7 @@ module m2_2a_sound #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       bs <= V_CLR; vi <= '0; ti <= '0; dbg_selftest <= '0; vclr <= 1'b1; vclr_i <= '0; cpu_go <= 1'b0; dtackn <= 1'b1;
-      a_req <= 1'b0; a_we <= 1'b0; a_addr <= '0; a_din <= '0; a_be <= 2'b11; ln_we <= 1'b0;
+      a_req <= 1'b0; a_we <= 1'b0; a_addr <= '0; a_din <= '0; a_be <= 2'b11; ln_we <= 1'b0; tb_ph <= 1'b0;
       s_req <= 1'b0; snp <= 1'b0; rq <= 16'hffff; vline <= '0; ln_wi <= '0; ln_wt <= '0; snp_a <= '0;
     end else begin
       ln_we <= 1'b0; s_req <= 1'b0; snp <= 1'b0;
@@ -276,13 +285,20 @@ module m2_2a_sound #(
             if (ti[11:0] == 12'hfff) begin bs <= V_TB; ti <= '0; end
           end
         end
-        V_TB: begin                                   // one byte of word ti, alone
+        V_TB: begin                                   // one byte of word ti, alone (R871: merged)
           if (!a_req && !a_ack) begin
-            a_req <= 1'b1; a_we <= 1'b1; a_be <= ti[0] ? 2'b01 : 2'b10;
-            a_addr <= RAM_BASE + AW'(ti[11:0]); a_din <= {~ti[7:0], ~ti[7:0]};
+            a_req <= 1'b1; a_we <= tb_ph; a_be <= 2'b11;
+            a_addr <= tb_ph ? RAM_BASE + AW'(ti[11:0]) : RAM_BASE + AW'({ti[11:2], 2'b00});
           end else if (a_ack) begin
-            a_req <= 1'b0; a_we <= 1'b0; ti <= ti + 18'd1;
-            if (ti[11:0] == 12'hfff) begin bs <= V_TR; ti <= '0; end
+            a_req <= 1'b0; a_we <= 1'b0;
+            if (!tb_ph) begin
+              tb_ph <= 1'b1;
+              a_din <= ti[0] ? {a_dout[{ti[1:0], 4'd0} + 8 +: 8], ~ti[7:0]}
+                             : {~ti[7:0], a_dout[{ti[1:0], 4'd0} +: 8]};
+            end else begin
+              tb_ph <= 1'b0; ti <= ti + 18'd1;
+              if (ti[11:0] == 12'hfff) begin bs <= V_TR; ti <= '0; end
+            end
           end
         end
         V_TR: begin                                   // words ti .. ti + 3, compared
@@ -324,8 +340,11 @@ module m2_2a_sound #(
           dtackn <= 1'b1;
           if (as && ds && !iack) begin
             if (sel_rom || sel_smp) bs <= B_LOOK;     // (the cache reads this clock)
-            else if (sel_ram) begin
-              bs <= B_RAM; a_req <= 1'b1; a_we <= !rwn; a_be <= {!udsn, !ldsn};
+            else if (sel_ram && !rwn && (udsn != ldsn)) begin   // R871: a byte write, merged
+              bs <= B_RMR; a_req <= 1'b1; a_we <= 1'b0; a_be <= 2'b11;
+              a_addr <= RAM_BASE + AW'({addr[18:3], 2'b00});
+            end else if (sel_ram) begin
+              bs <= B_RAM; a_req <= 1'b1; a_we <= !rwn; a_be <= 2'b11;
               a_addr <= RAM_BASE + AW'(rwn ? {addr[18:3], 2'b00} : addr[18:1]); a_din <= oedb;
             end else if (sel_scsp) begin bs <= B_SCSP; s_req <= 1'b1; end
             else begin rq <= 16'hffff; dtackn <= 1'b0; bs <= B_ACK; end   // the bank latch, unmapped
@@ -344,6 +363,21 @@ module m2_2a_sound #(
           rq <= a_dout[{addr[2:1], 4'd0} +: 16];
           if (!rwn) begin snp <= 1'b1; snp_a <= addr[18:1]; end   // the SCSP's caches see it
           dtackn <= 1'b0; bs <= B_ACK;
+        end
+        B_RMR: if (a_ack) begin                       // R871: the word, its other byte kept
+          a_req <= 1'b0;
+          a_din <= udsn ? {a_dout[{addr[2:1], 4'd0} + 8 +: 8], oedb[7:0]}
+                        : {oedb[15:8], a_dout[{addr[2:1], 4'd0} +: 8]};
+          bs <= B_RMW;
+        end
+        B_RMW: begin                                  // and written whole
+          if (!a_req && !a_ack) begin
+            a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11; a_addr <= RAM_BASE + AW'(addr[18:1]);
+          end else if (a_ack) begin
+            a_req <= 1'b0; a_we <= 1'b0;
+            snp <= 1'b1; snp_a <= addr[18:1];         // the SCSP's caches see it
+            dtackn <= 1'b0; bs <= B_ACK;
+          end
         end
         B_SCSP: if (s_ack) begin rq <= s_dout; dtackn <= 1'b0; bs <= B_ACK; end
         default: if (!as) begin dtackn <= 1'b1; bs <= B_IDLE; end   // B_ACK

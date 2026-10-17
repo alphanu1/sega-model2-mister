@@ -48,12 +48,19 @@ static uint16_t rd16(uint32_t w) {
 	return 0xffff;
 }
 static uint64_t rd64(uint32_t w) { w &= ~3u; uint64_t v = 0; for (int i = 0; i < 4; i++) v |= uint64_t(rd16(w + i)) << (16 * i); return v; }
-static uint64_t ram_writes = 0, bad_writes = 0;
+static uint64_t ram_writes = 0, bad_writes = 0, part_writes = 0;   // R871: part = a write with be != 3
 static void wr16(uint32_t w, uint16_t d, int be) {
 	if (w >= RAM_BASE && w < RAM_BASE + 0x40000) {
 		uint16_t &x = ram[w - RAM_BASE];
-		if (be & 2) x = uint16_t((x & 0x00ff) | (d & 0xff00));
-		if (be & 1) x = uint16_t((x & 0xff00) | (d & 0x00ff));
+		// R871: AS THE BOARD DOES IT -- the byte enables never reach the
+		// SDRAM (R82), so a write lands in both lanes whatever be says.
+		// SND_BE_HONOUR=1 brings the old model back.
+		static const bool honour = getenv("SND_BE_HONOUR") != nullptr;
+		if (honour) {
+			if (be & 2) x = uint16_t((x & 0x00ff) | (d & 0xff00));
+			if (be & 1) x = uint16_t((x & 0xff00) | (d & 0x00ff));
+		} else x = d;
+		if (be != 3) part_writes++;
 		ram_writes++;
 	} else bad_writes++;
 }
@@ -249,7 +256,8 @@ int main(int argc, char **argv) {
 	for (size_t s = 0; s < std::max(ours_rms.size(), mame_rms.size()); s++)
 		printf(" %.0f/%.0f", s < ours_rms.size() ? ours_rms[s] : -1.0, s < mame_rms.size() ? mame_rms[s] : -1.0);
 	printf("\n");
-	bool ok = t->dbg_under == 0 && bad_writes == 0 && t->dbg_cycles > 1000 && (nb == 0 || mtch >= nb * 9 / 10);
+	printf("  RAM writes with a byte mask (R871: must be 0 -- the board drops the mask): %llu\n", (unsigned long long)part_writes);
+	bool ok = t->dbg_under == 0 && bad_writes == 0 && part_writes == 0 && t->dbg_cycles > 1000 && (nb == 0 || mtch >= nb * 9 / 10);
 	printf("%s\n", ok ? "PASS" : "FAIL");
 	return ok ? 0 : 1;
 }

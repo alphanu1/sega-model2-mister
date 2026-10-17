@@ -63,6 +63,10 @@ module m2_sdram_harness #(
                                p10_addr, p11_addr, p12_addr,
   input  logic [15:0] p0_din,
   input  logic [1:0]  p0_be,
+  // R871: the 2A sound board writes on 5 (its 68000) and 7 (the SCSP's DSP)
+  input  logic        p5_we, p7_we,
+  input  logic [15:0] p5_din, p7_din,
+  input  logic [1:0]  p5_be, p7_be,
   output logic [63:0] p0_dout, p1_dout, p2_dout, p3_dout, p4_dout,
                       p5_dout, p6_dout, p7_dout, p8_dout, p9_dout, p10_dout,
                       p11_dout, p12_dout,
@@ -139,6 +143,8 @@ module m2_sdram_harness #(
     p_we[0]  = p0_we;
     p_din[0] = p0_din;
     p_be[0]  = p0_be;
+    p_we[5] = p5_we; p_din[5] = p5_din; p_be[5] = p5_be;   // R871
+    p_we[7] = p7_we; p_din[7] = p7_din; p_be[7] = p7_be;
   end
 
   assign p0_ack = p_ack[0]; assign p1_ack = p_ack[1]; assign p2_ack = p_ack[2];

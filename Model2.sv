@@ -5353,13 +5353,19 @@ end else begin : g_nodbg
 	// stop" and "does the sound board start", for a build with no room for
 	// M2_WHY (s1194-s1199: 4,192-4,211 LABs of 4,191). VERILOG_MACRO
 	// "M2_PROBE=1" without M2_DEBUG_LITE. One record every third prof_tick
-	// (2.46 ms), turning C, S, T, U; no 'G'. Decoder: tools/decode_why.py.
-	//   'C' {the i960's IP} | {copro_stall, sequencer state, bridge, 9'd0}
+	// (2.46 ms), turning C, S, T, U, Q; no 'G'. Decoder: tools/decode_why.py.
+	//   'C' {the i960's IP} | {copro_stall, TGP unimplemented op, 14'd0, the TGP's pc}
+	//       (R871: s1203's lockup held the i960 at 0x7dc4 on the TGP's output
+	//       and could not say where the TGP was -- the sequencer and bridge
+	//       fields gave their place to its pc)
+	//   'Q' {words the i960 pushed to the TGP | words it popped} |
+	//       {words the TGP pushed out | input words dropped | output words dropped}
 	//   'S' {68000 bus cycles} | {SCSP writes by the 68000 | bytes the i960 sent the sound side}
 	//   'T' {the 68000's last address | bytes the sound side sent the i960}
 	//       | {loudest |left| since the last T | output FIFO underruns}
 	//   'U' {68000 writes to 0x400 | to 0x418} | {sound-RAM check's wrong words | 12'd0, MVOL}
-	logic [1:0]  pb_div, pb_sel;
+	logic [1:0]  pb_div;
+	logic [2:0]  pb_sel;
 	logic        pb_valid;
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
@@ -5372,25 +5378,27 @@ end else begin : g_nodbg
 			pb_valid <= 1'b0;
 			if (prof_tick) begin
 				pb_div <= (pb_div == 2'd2) ? 2'd0 : pb_div + 2'd1;
-				if (pb_div == 2'd0) begin pb_valid <= 1'b1; pb_sel <= pb_sel + 2'd1; end
+				if (pb_div == 2'd0) begin pb_valid <= 1'b1; pb_sel <= (pb_sel == 3'd4) ? 3'd0 : pb_sel + 3'd1; end
 			end
 			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
 			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
 			if (b_tx_v && b_tx_a) sd_tx  <= sd_tx + 8'd1;
-			if (pb_valid && pb_sel == 2'd2) sd_peak <= sd_abs;
+			if (pb_valid && pb_sel == 3'd2) sd_peak <= sd_abs;
 			else if (sd_abs > sd_peak)      sd_peak <= sd_abs;
 		end
 	end
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(pb_valid),
-		.a_addr((pb_sel == 2'd1) ? snd_insns : (pb_sel == 2'd2) ? {snd_pc[23:0], sd_tx} :
-		        (pb_sel == 2'd3) ? {snd_w400, snd_w418} : cpu_dbg_ip),
-		.a_data((pb_sel == 2'd1) ? {sd_scw, sd_rx} : (pb_sel == 2'd2) ? {sd_peak, snd_under} :
-		        (pb_sel == 2'd3) ? {snd_selftest, 12'd0, snd_mvol} : {copro_stall, cpu_dbg_ts, cpu_br_sample, 9'd0}),
+		.a_addr((pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
+		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {copro_in_pushed, copro_out_popped} : cpu_dbg_ip),
+		.a_data((pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
+		        (pb_sel == 3'd3) ? {snd_selftest, 12'd0, snd_mvol} :
+		        (pb_sel == 3'd4) ? {copro_out_pushed[15:0], copro_in_dropped[7:0], copro_out_dropped[7:0]} :
+		        {copro_stall, tgp_unimpl, 14'd0, tgp_pc}),
 		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
-		.a_tag((pb_sel == 2'd1) ? 8'h53 : (pb_sel == 2'd2) ? 8'h54 : (pb_sel == 2'd3) ? 8'h55 : 8'h43),
-		.b_tag(8'h47),   // 'C','S','T','U'
+		.a_tag((pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h51 : 8'h43),
+		.b_tag(8'h47),   // 'C','S','T','U','Q'
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);

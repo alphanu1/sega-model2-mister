@@ -108,11 +108,19 @@ if U:
     print("  68000 writes to 0x400-0x401 (MVOL): %d -> %d   to 0x418 (timer A): %d -> %d" % (U[0][0], U[-1][0], U[0][1], U[-1][1]))
     print("  MVOL as the SCSP holds it: first %d last %d   pre-boot sound-RAM check: %d of 4096 words wrong%s"
           % (U[0][3], U[-1][3], U[-1][2], "" if U[-1][2] == 0 else "  <-- THE SOUND RAM DOES NOT HOLD WHAT IS WRITTEN"))
-# R868: the M2_PROBE build's 'C' {i960 IP} | {copro_stall, sequencer state, bridge, 9'd0}
-C = [(a, d >> 31, (d >> 26) & 0x1f) for t, a, d in recs if t == 'C']
+# R868: the M2_PROBE build's 'C' {i960 IP} | {copro_stall, TGP unimplemented, 14'd0, TGP pc} (R871)
+C = [(a, d >> 31, (d >> 30) & 1, d & 0xffff) for t, a, d in recs if t == 'C']
 if C:
     from collections import Counter
     ips = Counter(c[0] for c in C)
-    print("i960 (%d C records): distinct IPs %d; last %08x; TGP stalling in %d" % (len(C), len(ips), C[-1][0], sum(c[1] for c in C)))
+    print("i960 (%d C records): distinct IPs %d; last %08x; TGP stalling it in %d; TGP unimplemented op seen in %d" % (
+        len(C), len(ips), C[-1][0], sum(c[1] for c in C), sum(c[2] for c in C)))
     print("  commonest IPs: %s" % ", ".join("%08x x%d" % (a, n) for a, n in ips.most_common(8)))
-    print("  last 8 IPs: %s" % " ".join("%08x" % c[0] for c in C[-8:]))
+    print("  commonest TGP pcs: %s" % ", ".join("%04x x%d" % (a, n) for a, n in Counter(c[3] for c in C).most_common(8)))
+    print("  last 8 (IP / TGP pc): %s" % " ".join("%08x/%04x" % (c[0], c[3]) for c in C[-8:]))
+# R871: 'Q' {words pushed to the TGP | popped from it} | {words it pushed out | in dropped(8) | out dropped(8)}
+Q = [(a >> 16, a & 0xffff, d >> 16, (d >> 8) & 0xff, d & 0xff) for t, a, d in recs if t == 'Q']
+if Q:
+    print("TGP queues (%d Q records), first -> last: pushed in %d -> %d, popped out %d -> %d, TGP pushed out %d -> %d, in dropped %d, out dropped %d" % (
+        len(Q), Q[0][0], Q[-1][0], Q[0][1], Q[-1][1], Q[0][2], Q[-1][2], Q[-1][3], Q[-1][4]))
+    print("  last: TGP has produced %d words the i960 has not taken (mod 64K)" % ((Q[-1][2] - Q[-1][1]) & 0xffff))

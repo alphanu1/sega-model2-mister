@@ -63,6 +63,7 @@ static const int NP = TB_NP;   // R275: the texel fetch made eleven; R789: -DTB_
 // acknowledge. Default 0 -- the controller exactly as before.
 static const unsigned g_long = std::getenv("M2_SDRAM_LONG") ? unsigned(std::strtoul(std::getenv("M2_SDRAM_LONG"), nullptr, 16)) : 0u;
 static int burst_of(int p) { return ((g_long >> p) & 1) ? 8 : (p == 8 || p == 9) ? 2 : 4; }
+static const bool g_w57 = std::getenv("M2_SDRAM_W57") != nullptr;   // R871
 
 struct Harness {
   Vm2_sdram_harness* d;
@@ -128,6 +129,7 @@ struct Harness {
     d->wr_req = 0; d->wr_addr = 0; d->wr_din = 0; d->wr_be = 3;
     d->p0_req = d->p1_req = d->p2_req = d->p3_req = d->p4_req = 0;
     d->p0_we = 0; d->p0_din = 0; d->p0_be = 3;
+    d->p5_we = 0; d->p5_din = 0; d->p5_be = 3; d->p7_we = 0; d->p7_din = 0; d->p7_be = 3;   // R871
     d->p0_addr = d->p1_addr = d->p2_addr = d->p3_addr = d->p4_addr = 0;
     d->mon_sel = 0; d->mon_snap = 0;
     d->long_mask = g_long;   // R787
@@ -274,6 +276,8 @@ struct Harness {
     port[p].issued_at = cyc;
     setAddr(p, addr);
     if (p == 0) { d->p0_we = write; d->p0_din = data; d->p0_be = be; }
+    if (p == 5) { d->p5_we = write; d->p5_din = data; d->p5_be = be; }   // R871
+    if (p == 7) { d->p7_we = write; d->p7_din = data; d->p7_be = be; }
     setReq(p, 1);
     port[p].req_held = true;
     if (write) {
@@ -375,7 +379,8 @@ int main(int argc, char** argv) {
         // which is what the real board presents.
         unsigned thresh = (p == 0) ? 40 : (p == 2) ? 30 : 12;
         if ((rng() % 100) >= thresh) continue;
-        bool write = (p == 0) && ((rng() & 7) == 0);
+        // R871 (M2_SDRAM_W57=1): ports 5 and 7 write too, as the 2A sound board does
+        bool write = (p == 0 || (g_w57 && (p == 5 || p == 7))) && ((rng() & 7) == 0);
         uint8_t be = 3;
         if (write && (rng() & 7) == 0) be = (rng() & 1) ? 1 : 2;  // byte writes
         h.issue(p, pick_addr(rng), write, (uint16_t)rng(), be);
