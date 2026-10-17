@@ -122,7 +122,14 @@ module m2_rom_loader #(
   // free SDRAM instead of over the regions the core keeps above the ROMs.
   // XTRA_FROM all-ones (the default) leaves every address as it was.
   parameter logic [26:0] XTRA_FROM = 27'h7FF_FFFF,
-  parameter logic [SDR_AW-1:0] XTRA_TO = '0
+  parameter logic [SDR_AW-1:0] XTRA_TO = '0,
+  // R862: A SECOND REMAP, ABOVE THE FIRST. The 2A layout's extension (the
+  // program above 512 KB, Sega Rally's copro data) is appended after VF2's
+  // image, whose samples the first remap has already moved; bytes from
+  // XTRA2_FROM on go to XTRA2_TO instead (the 2A SDRAM hole). Must be above
+  // XTRA_FROM. All-ones (the default) leaves the first remap as it was.
+  parameter logic [26:0] XTRA2_FROM = 27'h7FF_FFFF,
+  parameter logic [SDR_AW-1:0] XTRA2_TO = '0
 ) (
   input  logic        clk,
   input  logic        rst,
@@ -249,7 +256,9 @@ module m2_rom_loader #(
 
   // R725: where this byte's word goes
   wire [26:0]       ld_rel  = ioctl_addr - XTRA_FROM;
-  wire [SDR_AW-1:0] ld_word = (ioctl_addr >= XTRA_FROM) ? (XTRA_TO + SDR_AW'(ld_rel[26:1]))
+  wire [26:0]       ld_rel2 = ioctl_addr - XTRA2_FROM;   // R862
+  wire [SDR_AW-1:0] ld_word = (ioctl_addr >= XTRA2_FROM) ? (XTRA2_TO + SDR_AW'(ld_rel2[26:1]))
+                            : (ioctl_addr >= XTRA_FROM) ? (XTRA_TO + SDR_AW'(ld_rel[26:1]))
                                                         : ioctl_addr[SDR_AW:1];
 
   always_ff @(posedge clk or posedge rst) begin

@@ -97,10 +97,12 @@ struct Ee93 {
 struct Io5649 {
   uint8_t pv[7]; uint8_t dir = 0xff, mode = 0; int an = 0;
   uint8_t in0 = 0xff, in1 = 0xff, in2 = 0xff, sw = 0xff;
+  uint8_t anv[3] = {0xff, 0xff, 0xff};   // R862: an_port_cb 0-2 (srallyc); 3-7 unbound
   Ee93 ee; bool ctrlmode = false;
-  void power_on() { for (auto &v : pv) v = 0xff; ee.reset(); ee.cs = ee.clk = ee.di = 1; reset(); }
-  // machine_reset: the device's direction and mode, and model2's m_ctrlmode
-  void reset() { dir = 0xff; mode = 0; an = 0; ctrlmode = false; }
+  void power_on() { for (auto &v : pv) v = 0xff; ee.reset(); ee.cs = ee.clk = ee.di = 1; an = 0; reset(); }
+  // machine_reset: the device's direction and mode, and model2's m_ctrlmode.
+  // R862: not m_analog_channel -- 0 at construction, untouched by device_reset.
+  void reset() { dir = 0xff; mode = 0; ctrlmode = false; }
   uint8_t in_port(int p) {
     switch (p) {
       case 1: return ctrlmode ? uint8_t(0xc0 | (ee.do_read() << 5) | 0x10 | (in0 & 0x0f)) : in0;
@@ -114,7 +116,7 @@ struct Io5649 {
         return (dir >> off) & 1 ? in_port(off) : pv[off];
       case 0xb: case 0xc: return 0x00;
       case 0xd: return 0x0c;
-      case 0xf: an = (an + 1) & 7; return 0xff;
+      case 0xf: { uint8_t v = an < 3 ? anv[an] : 0xff; an = (an + 1) & 7; return v; }
       default: return 0xff;
     }
   }
@@ -145,6 +147,7 @@ int main(int argc, char **argv) {
   Io5649 ref; ref.power_on();
   d->clk = 0; d->por_n = 0; d->rst_n = 0; d->sel = 0; d->we = 0; d->word = 0; d->be = 0; d->wdata = 0;
   d->in0 = 0xff; d->in1 = 0xff; d->in2 = 0xff; d->sw = 0xff;
+  d->an0 = 0xff; d->an1 = 0xff; d->an2 = 0xff;
   for (int i = 0; i < 4; i++) tick();
   d->por_n = 1; d->rst_n = 1; tick();
 
@@ -235,8 +238,10 @@ int main(int argc, char **argv) {
     } else {   // inputs move
       ref.in0 = d->in0 = uint8_t(rng()); ref.in1 = d->in1 = uint8_t(rng());
       ref.in2 = d->in2 = uint8_t(rng()); ref.sw = d->sw = uint8_t(rng());
+      ref.anv[0] = d->an0 = uint8_t(rng()); ref.anv[1] = d->an1 = uint8_t(rng());
+      ref.anv[2] = d->an2 = uint8_t(rng());
       d->eval();
-      access(false, int(1 + rng() % 3), 0);
+      access(false, (rng() & 1) ? 0xf : int(1 + rng() % 3), 0);
     }
     ++ops;
   }

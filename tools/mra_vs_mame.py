@@ -48,6 +48,16 @@ SLOTS_2A = [
     ("samples",          0x2540000, 0x800000, "samples",          0x000000),
 ]
 IMG_END_2A = 0x2d40000
+# R862: the 2A layout's extension, appended after VF2's image (whose slots do
+# not move) and put by the loader's second remap (XTRA2) in the 2A SDRAM hole:
+# the program above 512 KB (Sega Rally and Zero Gunner 1 MB, Virtua Cop 2
+# 2 MB), then the TGP's copro data (Sega Rally only). A set whose MAME region
+# has data there must carry the slot; one that does not may end before it.
+SLOTS_2A_EXT = [
+    ("program 512K-2M",  0x2d40000, 0x180000, "maincpu",          0x080000),
+    ("copro_data",       0x2ec0000, 0x400000, "copro_data",       0x000000),
+]
+IMG_ENDS_2A = (0x2d40000, 0x2ec0000, 0x32c0000)
 ALIAS = {"M1AUDIO_CPU_REGION": "m1audio:sndcpu", "M1AUDIO_MPCM1_REGION": "m1audio:pcm1",
          "M1AUDIO_MPCM2_REGION": "m1audio:pcm2",
          "cpu3": "comms", "cpu4": "comms"}   # daytona names it cpu3, desert / vcopa cpu4
@@ -100,7 +110,26 @@ def build(body, zips):
                 r[off + i] = d[i + 1]; r[off + i + 1] = d[i]
         else:
             r[off:off + ln] = d
+    # ROM_COPY( "region", src, dst, len ) -- Virtua Cop 2's main_data mirrors
+    for m in re.finditer(r"ROM_COPY\(\s*\"([^\"]+)\"\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)\s*\)", body):
+        r = regions[m.group(1)]
+        src, dst, ln = (int(m.group(i), 16) for i in (2, 3, 4))
+        r[dst:dst + ln] = r[src:src + ln]
     return regions
+
+def init_patches(src, setname, regions):
+    """R862: the GAME line's init function, if it writes maincpu words
+    (init_zerogun: ROM[0x700/4] = 0x08000004), applied as MAME applies it."""
+    g = re.search(r"GAME\(\s*\d+\??\s*,\s*%s\s*,[^,]*,[^,]*,[^,]*,[^,]*,\s*(\w+)" % re.escape(setname), src)
+    if not g or g.group(1) == "empty_init":
+        return []
+    f = re.search(r"::%s\(\)\s*\{(.*?)\n\}" % re.escape(g.group(1)), src, re.S)
+    out = []
+    for m in re.finditer(r"^\s*ROM\[(0x[0-9a-fA-F]+)\s*/\s*4\]\s*=\s*(0x[0-9a-fA-F]+)\s*;", f.group(1) if f else "", re.M):
+        off, val = int(m.group(1), 16), int(m.group(2), 16)
+        regions["maincpu"][off:off + 4] = val.to_bytes(4, "little")
+        out.append((g.group(1), off, val))
+    return out
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--layout")]
@@ -110,8 +139,20 @@ def main():
     src = open(src_path, encoding="utf-8", errors="replace").read()
     zips = [zipfile.ZipFile(z) for z in zipnames.split(",")]
     regions = build(rom_start(src, setname), zips)
+    for fn, off, val in init_patches(src, setname, regions):
+        print(f"  {fn}: maincpu 0x{off:X} = 0x{val:08X} (applied to MAME's side)")
     bad = 0
-    for name, io, size, tag, roff in (SLOTS_2A if m2a else SLOTS):
+    slots = SLOTS
+    if m2a:
+        slots = list(SLOTS_2A)
+        for s_ in SLOTS_2A_EXT:
+            name, io, size, tag, roff = s_
+            need = any(regions.get(tag, b"")[roff:roff + size])
+            if len(img) > io or need:
+                slots.append(s_)
+                if need and len(img) < io + size:
+                    print(f"  {name:18s} MAME has data here and the image does not carry the slot")
+    for name, io, size, tag, roff in slots:
         want = bytes(regions.get(tag, b"")[roff:roff + size])
         want += bytes(size - len(want))              # past the region: 0 (the MRA's pad)
         got = img[io:io + size]
@@ -125,8 +166,9 @@ def main():
             print(f"  {name:18s} 0x{io:07X}  DIFFERS from MAME {tag} at +0x{first:X}"); bad += 1
     if m2a:
         # the 2A core has no sound scan: the 68000 program's base is fixed
-        if len(img) != IMG_END_2A:
-            print(f"  image size 0x{len(img):X}, expected 0x{IMG_END_2A:X}"); bad += 1
+        if len(img) not in IMG_ENDS_2A:
+            print(f"  image size 0x{len(img):X}, expected one of "
+                  + ", ".join(f"0x{e:X}" for e in IMG_ENDS_2A)); bad += 1
         print("PASS" if bad == 0 else f"FAIL ({bad})")
         sys.exit(1 if bad else 0)
     if len(img) != 0x2be0000 + 0x40000:

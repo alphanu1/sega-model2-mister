@@ -889,6 +889,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_ioz80.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_93c46.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_timers.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_315_5649.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_2a_inputs.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_2a_snd_stub.sv
 # R859: the 2A sound board -- its 68000 is fx68k (above), the SCSP is these;
 # the SCSP's ROMs (scsp_*.hex) are $readmemh'd and its tables `included by

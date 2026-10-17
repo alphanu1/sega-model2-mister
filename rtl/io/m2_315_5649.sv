@@ -26,7 +26,9 @@
 //   9/10  RS-422 TX (dropped)        11/12 RS-422 RX: 0x00 (MAME's default)
 //   13    RS-422 status: 0x0C (MAME's HACK: RX full, TX empty)
 //   14    mode                       15 analog: read = channel, auto-
-//         increments; write = select. No channel bound: 0xFF.
+//         increments; write = select. R862: channels 0-2 are an0..an2
+//         (Sega Rally's STEER / ACCEL / BRAKE; 0xFF for a game with none,
+//         MAME's unbound default), 3-7 read 0xFF.
 //   other reads 0xFF.
 // model2a's callbacks: PA out -> eeprom_w (bit 0 ctrlmode, 5 DI, 6 CS, 7 CLK);
 // PB in -> in0_r (ctrlmode: 0xC0 | DO << 5 | 0x10 | IN0[3:0], else IN0);
@@ -40,7 +42,8 @@
 
 module m2_315_5649 (
   input  logic        clk,
-  // MAME's machine reset: direction, mode, the analog channel and ctrlmode.
+  // MAME's machine reset: direction, mode and ctrlmode (R862: not the
+  // analog channel, which starts at power-on).
   // The port latches and the EEPROM keep their state across it (MAME resets
   // neither -- a 93C46 has no reset pin); they start at power-on (por_n).
   input  logic        por_n,
@@ -56,6 +59,9 @@ module m2_315_5649 (
   input  logic  [7:0] in1,          // player 1
   input  logic  [7:0] in2,          // player 2
   input  logic  [7:0] sw,           // SW3 DIP bank
+  input  logic  [7:0] an0,          // R862: analog channels 0-2
+  input  logic  [7:0] an1,
+  input  logic  [7:0] an2,
   output logic  [7:0] lamps,        // PF
   output logic  [7:0] dbg_pa,
   output logic  [7:0] dbg_dir
@@ -91,7 +97,8 @@ module m2_315_5649 (
     else case (off)
       4'hb, 4'hc: rd = 8'h00;
       4'hd:       rd = 8'h0c;
-      4'hf:       rd = 8'hff;          // analog: no channel bound
+      4'hf:       rd = (an_ch == 3'd0) ? an0 : (an_ch == 3'd1) ? an1
+                     : (an_ch == 3'd2) ? an2 : 8'hff;   // R862
       default:    rd = 8'hff;
     endcase
   endfunction
@@ -111,18 +118,22 @@ module m2_315_5649 (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      dir <= 8'hff; mode <= 8'h00; an_ch <= 3'd0; ctrlmode <= 1'b0;
-    end else if (sel) begin
-      if (we) begin
-        if (be[0]) begin
-          if (off_lo == 4'h0) ctrlmode <= wdata[0];
-          if (off_lo == 4'h8) dir  <= wdata[7:0];
-          else if (off_lo == 4'he) mode <= wdata[7:0];
-        end
-        if (be[2] && off_hi == 4'hf) an_ch <= wdata[18:16];
-      end else if (be[2] && off_hi == 4'hf)
-        an_ch <= an_ch + 3'd1;
+      dir <= 8'hff; mode <= 8'h00; ctrlmode <= 1'b0;
+    end else if (sel && we && be[0]) begin
+      if (off_lo == 4'h0) ctrlmode <= wdata[0];
+      if (off_lo == 4'h8) dir  <= wdata[7:0];
+      else if (off_lo == 4'he) mode <= wdata[7:0];
     end
+  end
+
+  // R862: THE ANALOG CHANNEL SURVIVES A MACHINE RESET. MAME's device_reset
+  // sets only the direction and the mode; m_analog_channel is 0 from
+  // construction. Invisible while no channel was bound (every read 0xFF);
+  // with Sega Rally's three it is not, so it now starts at power-on only.
+  always_ff @(posedge clk or negedge por_n) begin
+    if (!por_n) an_ch <= 3'd0;
+    else if (sel && be[2] && off_hi == 4'hf)
+      an_ch <= we ? wdata[18:16] : an_ch + 3'd1;
   end
 
   assign lamps   = pv[5];
@@ -130,7 +141,7 @@ module m2_315_5649 (
   assign dbg_dir = dir;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, be[1], be[3], wdata[31:24], wdata[15:8], wdata[23:19], mode, an_ch};
+  wire _unused = &{1'b0, be[1], be[3], wdata[31:24], wdata[15:8], wdata[23:19], mode};
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule
