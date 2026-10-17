@@ -113,6 +113,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_RALLY
 `define M2_2A_RALLY
 `endif
+// R865: M2_2A_FPU, the i960 forms Virtua Cop runs and VF2 never did (flushreg,
+// cvtzril, cpysre, sqrtrl, sinrl / cosrl / tanrl / atanrl: i960_top VC),
+// live for Sega Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally
+// executes flushreg at 0x5c0 and Zero Gunner at 0x670, in their first
+// instructions; without these forms both trap there (black screen, R844's
+// Virtua Cop fault again). 1 by default; 0 leaves them out (VF2 only).
+`ifndef M2_2A_FPU
+`define M2_2A_FPU 1
+`endif
 `else
 `ifndef M2_2A_SOUND
 `define M2_2A_SOUND 0
@@ -2555,6 +2564,11 @@ localparam bit VCOP_GUN = VCOP_IO;
 localparam bit VCOP_GUN = 1'b0;      // the first boot build: guns at rest, Daytona's buttons
 `endif
 localparam bit VCOP_FPU = (`M2_VCOP_FPU != 0);
+`ifdef M2_2A_FPU
+localparam bit FPU2A    = M2A && (`M2_2A_FPU != 0);   // R865
+`else
+localparam bit FPU2A    = 1'b0;
+`endif
 wire vc_io  = VCOP_IO  & is_vcop;
 assign vc_gun = VCOP_GUN & is_vcop;
 assign crt_mra = game_id[7];   // R801
@@ -2577,8 +2591,10 @@ wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for te
 // R839: is_vcop into the i960's clock (quasi-static: set by the MRA's load,
 // while the CPU is held in reset).
 logic [1:0] vc_fpu_s;
-always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], VCOP_FPU & is_vcop};
-i960_top #(.VC(VCOP_FPU)) u_i960 (
+// R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
+always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
+                                           | (FPU2A & (is_srally | is_vcop2 | is_zerogun))};
+i960_top #(.VC(VCOP_FPU | FPU2A)) u_i960 (
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
