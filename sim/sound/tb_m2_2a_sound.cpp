@@ -130,6 +130,10 @@ int main(int argc, char **argv) {
 	for (int i = 0; i < 8; i++) tick();
 	t->rst_n = 1;
 
+	// SND_WAV=<path>: the output as a 44.1 kHz stereo WAV (header written at the end)
+	FILE *wav = getenv("SND_WAV") ? fopen(getenv("SND_WAV"), "wb") : nullptr;
+	uint64_t nwav = 0;
+	if (wav) { uint8_t h[44] = {0}; fwrite(h, 1, 44, wav); }
 	std::vector<W> rw;
 	size_t mi = 0;
 	uint64_t end = uint64_t(secs * CLK), midi_bytes = 0, tx_bytes = 0;
@@ -149,7 +153,11 @@ int main(int argc, char **argv) {
 			rw.push_back({cyc / CLK, uint16_t(t->dbg_scsp_a << 1), uint16_t(t->dbg_scsp_d & m), m});
 		}
 		// the output, one value per drained sample
-		if (cyc % 1814 == 0) { acc_l += double(t->snd_l) * t->snd_l; nacc++; }
+		if (cyc % 1814 == 0) {   // (the ports are unsigned in C++: the sign by hand)
+			const int16_t l = int16_t(t->snd_l), r = int16_t(t->snd_r);
+			acc_l += double(l) * l; nacc++;
+			if (wav) { int16_t sm[2] = {l, r}; fwrite(sm, 2, 2, wav); nwav++; }
+		}
 		if (nacc == 44100) { ours_rms.push_back(sqrt(acc_l / nacc)); acc_l = 0; nacc = 0; }
 		if ((cyc % 8000000) == 0) {
 			if (t->dbg_addr == pc_last) pc_same++; else pc_same = 0;
@@ -190,6 +198,15 @@ int main(int argc, char **argv) {
 		else if (L[i - 1][j] >= L[i][j - 1]) i--; else j--;
 	}
 	std::sort(dt.begin(), dt.end());
+	if (wav) {
+		const uint32_t db = uint32_t(nwav * 4);
+		uint8_t h[44] = {'R', 'I', 'F', 'F'};
+		auto le32 = [&](int o, uint32_t v) { for (int i = 0; i < 4; i++) h[o + i] = uint8_t(v >> (8 * i)); };
+		le32(4, 36 + db); memcpy(h + 8, "WAVEfmt ", 8); le32(16, 16);
+		h[20] = 1; h[22] = 2; le32(24, 44100); le32(28, 44100 * 4); h[32] = 4; h[34] = 16;
+		memcpy(h + 36, "data", 4); le32(40, db);
+		fseek(wav, 0, SEEK_SET); fwrite(h, 1, 44, wav); fclose(wav);
+	}
 	if (const char *dp = getenv("SND_DUMP")) {   // both write streams, for a diff
 		if (FILE *f = fopen(dp, "w")) {
 			for (const W &w : rw) fprintf(f, "ours %.6f %03x %04x %04x\n", w.t, w.off, w.data, w.mask);
