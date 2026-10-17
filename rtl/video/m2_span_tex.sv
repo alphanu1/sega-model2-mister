@@ -108,9 +108,9 @@ module m2_span_tex #(
   // colour base[9:0]} and each pixel is MAME's
   //     L = min(63, lumaram[row][t >> 1] * luma >> 8)
   //     colour = gamma(colorxlat[ch][palette3d[base].c5[ch]][L])
-  // from three shadows written by lut_* (the CPU's writes to the luma RAM's
-  // rows 0-3 and 16-19 -- slot {row[4], row[1:0]}; to the 3D palette; and to
-  // the colour table, luma 0-63). Five
+  // from three shadows written by lut_* (the CPU's writes to eight rows of the
+  // luma RAM, the game's own -- Model2.sv; to the 3D palette; and to the
+  // colour table, luma 0-63). Five
   // stages between the retire and the output instead of one (study R867).
   parameter bit          TEXLUT = 1'b0,
   parameter int unsigned SCR_W  = 496,
@@ -1262,7 +1262,7 @@ module m2_span_tex #(
   // path that failed in the engine, so the subtract has its own stage.)
   // All five stages move together whenever the output can (lp_adv).
   generate if (TEXLUT) begin : g_lut
-    (* ramstyle = "M10K" *) logic [7:0]  lr_mem  [1024];   // luma RAM rows 0-3, 16-19
+    (* ramstyle = "M10K" *) logic [7:0]  lr_mem  [1024];   // eight luma RAM rows (slots)
     (* ramstyle = "M10K" *) logic [14:0] pal_mem [1024];   // palram 0x1000-0x13ff
     (* ramstyle = "M10K" *) logic [7:0]  xr_mem  [2048];   // colorxlat, luma 0-63
     (* ramstyle = "M10K" *) logic [7:0]  xg_mem  [2048];

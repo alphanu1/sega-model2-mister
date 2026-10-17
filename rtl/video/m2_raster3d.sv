@@ -122,8 +122,8 @@ module m2_raster3d #(
   parameter int unsigned TEX_AW = 25,
   // R867: THE TEXTURED COLOUR THROUGH THE GAME'S TABLES (m2_span_tex TEXLUT).
   // A textured quad's q_col is {7'd0, polygon luma[7:0], colour base[9:1]}
-  // and q_tex is 27 bits: [26:24] the luma table's slot {row[4], row[1:0]}
-  // (rows 0-3 and 16-19), [11] colour base[0]; a flat quad's q_col is {8'd0,
+  // and q_tex is 27 bits: [26:24] the luma table's slot (one of eight rows,
+  // Model2.sv), [11] colour base[0]; a flat quad's q_col is {8'd0,
   // RGB565}. The store keeps 17 raw bits of colour, 26 of texture and the
   // slot's top bit beside the vertices -- all bits its M10K had spare -- and
   // the colour is unpacked below for the fill. lut_* writes the tables.
@@ -371,7 +371,9 @@ module m2_raster3d #(
   logic        qo_mipz;   // R828c
   logic [QTW-1:0] qo_texw;   // R867: the store's texture word (and its vertex bit)
   logic [(TEXLUT ? 26 : 24)-1:0] qo_texs;
+  /* verilator lint_off UNUSEDSIGNAL */   // TEXLUT only
   logic           qo_vx;
+  /* verilator lint_on UNUSEDSIGNAL */
   /* verilator lint_off UNUSEDSIGNAL */   // [23:17]: the store hands back CW bits
   logic [23:0]    qo_colw;   // R867: the store's colour field
   /* verilator lint_on UNUSEDSIGNAL */

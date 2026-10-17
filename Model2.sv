@@ -3794,7 +3794,9 @@ localparam int R3D_MIPZ_B = 3;
 // VF2's tables are not Daytona's and R784's model inverted its faces. Main
 // keeps R784's model.
 localparam bit R3D_TEXLUT = M2A;
-wire [2:0] q3d_trow;                       // R867: the luma table's slot, {row[4], row[1:0]}
+/* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
+wire [7:0] q3d_trow;                       // R867: the luma table's row
+/* verilator lint_on UNUSEDSIGNAL */
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -6861,10 +6863,13 @@ m2_ddr3 u_ddr3 (
 // R683: front to back, the combining writer feeding the fill mask.
 // R867: THE RASTERISER'S QUAD, PACKED FOR ITS COLOUR PATH, AND THE SHADOWS OF
 // THE THREE TABLES THAT PATH READS. Each is written where the CPU's own write
-// lands in SDRAM (m2_cpu_bridge's port 1): the luma RAM's rows 0-3 and 16-19
-// (one byte a 16-bit word, R264; VF2 uses rows 0-3, Virtua Cop 2 0, 1 and
-// 16), the 3D palette (palram 0x1000-0x13ff) and the colour table's first 64
-// lumas of each component -- all MAME's renderer reads.
+// lands in SDRAM (m2_cpu_bridge's port 1): eight rows of the luma RAM (one
+// byte a 16-bit word, R264), the 3D palette (palram 0x1000-0x13ff) and the
+// colour table's first 64 lumas of each component -- all MAME's renderer reads.
+// THE EIGHT ROWS ARE THE GAME'S (MAME 0.289, every polygon of 50 attract lists
+// a game): VF2 0-3, Virtua Cop 2 0, 1, 16, Sega Rally 0, 1 -- slots {row[4],
+// row[1:0]}, rows 0-3 and 16-19; Zero Gunner 0-5, 9 and 100 -- its own map.
+// A row outside its game's eight is coloured from the slot it aliases.
 localparam int R3D_QTW = R3D_TEXLUT ? 27 : 24;
 wire [23:0]        r3d_qcol;
 wire [R3D_QTW-1:0] r3d_qtex;
@@ -6875,17 +6880,27 @@ logic [15:0]       r3d_lut_data;
 generate if (R3D_TEXLUT) begin : g_r3d_lut
 	assign r3d_qcol = q3d_tex[0] ? {7'd0, q3d_lum, q3d_col[9:1]}
 	                             : {8'd0, q3d_col[23:19], q3d_col[15:10], q3d_col[7:3]};
-	assign r3d_qtex = {q3d_trow, q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
+	// the luma row's slot, as the polygon names it and as the CPU's write fills it
+	function automatic logic [3:0] lslot(input logic [7:0] r, input logic zg);   // {captured, slot}
+		if (zg)
+			lslot = (r <= 8'd5) ? {1'b1, r[2:0]} : (r == 8'd9) ? 4'b1110 : (r == 8'd100) ? 4'b1111 : {1'b0, r[2:0]};
+		else
+			lslot = {(r[7:5] == 3'd0) && (r[3:2] == 2'd0), r[4], r[1:0]};
+	endfunction
+	/* verilator lint_off UNUSEDSIGNAL */   // q_ls[3]: a polygon's row is used captured or not
+	wire [3:0] q_ls = lslot(q3d_trow, is_zerogun);
+	/* verilator lint_on UNUSEDSIGNAL */
+	assign r3d_qtex = {q_ls[2:0], q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
 	wire [SDR_AW:1] w_luma = cpu_sd_addr - GAME_LUMA;
+	wire [3:0]      w_ls   = lslot(w_luma[15:8], is_zerogun);
 	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
 	wire [SDR_AW:1] w_xlat = cpu_sd_addr - GAME_XLAT3D;
 	wire            sd_wr  = cpu_sd_req && cpu_sd_we && p_ack[1];
 	always_ff @(posedge clk_sys) begin
 		r3d_lut_we   <= 1'b0;
 		r3d_lut_data <= cpu_sd_din;
-		if (sd_wr && (w_luma < SDR_AW'(32'h200) ||                          // rows 0-3
-		              (w_luma >= SDR_AW'(32'h800) && w_luma < SDR_AW'(32'hA00)))) begin   // rows 16-19
-			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd0; r3d_lut_addr <= {3'd0, w_luma[12], w_luma[9:1]};
+		if (sd_wr && w_luma < SDR_AW'(32'h8000) && w_ls[3]) begin             // a captured row
+			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd0; r3d_lut_addr <= {3'd0, w_ls[2:0], w_luma[7:1]};
 		end
 		if (sd_wr && w_pal < SDR_AW'(32'h400)) begin
 			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd1; r3d_lut_addr <= 13'(w_pal[10:1]);

@@ -37169,3 +37169,113 @@ i960_top.sv: 0 errors.
 
 *What the board must show:* Sega Rally and Zero Gunner past the black
 screen (attract, 57.5 / 28.75 fps); VF2 and Virtua Cop 2 unchanged.
+
+**R867 -- "SOME TEXTURES GET A CHECKERBOARD" (Ben, VF2 on s1164 / s1192: a
+character's head): NOT THE CHECKER BIT. R784'S TEXTURED-COLOUR MODEL ASSUMES
+DAYTONA'S LUMA RAM AND COLOUR TABLE, AND VF2'S ARE NEITHER. FIXED ON THE 2A
+BUILD BY COLOURING EVERY TEXEL THROUGH THE GAME'S OWN TABLES (TEXLUT). MAIN
+UNCHANGED -- BUT MAIN'S VIRTUA COP AND DESERT TANK HAVE THE SAME FAULT.**
+
+*Believed (the task, and R784):* either hdr0[15] (MAME's `checker`, the
+stipple) reaches polygons MAME does not flag, or the pattern is sampling
+(nibble order, banks, bilinear, mip). R784 recorded "lumaram rows other than
+0 and 1 (taken as row 0)" as NOT VERIFIED and built the textured colour as
+min(255, A + slope * lum(t) / 32), lum = t/4 for row 0 and 63 - t/4 for row
+1 -- Daytona's two rows -- with the slope read from the colour table at luma
+32, which is exact only for a table that is a pedestal plus a straight line.
+
+*Measured (MAME 0.289 vf2, M2DIFF / M2MIP dumps of attract lists 100-3800;
+tb_m2_raster3d in Model2.sv's m2_raster3d configuration, MAME's lists, MAME's
+curve, every textured pixel MAME drew):*
+  1. THE CHECKER BIT IS INNOCENT. MAME's VF2 lists carry 40 checker polygons
+     in 110 s of attract (4 in some lists, a stage effect), none on a
+     character. geodiff_2a on MAME's walks 1500 / 4600 (the current RTL):
+     texture parameters, the checker bit included, 532 / 767 quads, 0 differ.
+  2. VF2's LUMA RAM: row 0 = floor((i+1)/3) (0..42), row 1 = 49 + i/8 (a
+     bright, nearly flat ramp), rows 2 and 3 = i/2. Its polygons use rows 0-3
+     only (30,623 / 8,399 / 30,032 / 8,311 over 50 lists). Every row-1
+     polygon was drawn with R784's INVERSE ramp: full-contrast and
+     inverted -- Shun Di's white beard black, Akira's dark brows and eyes
+     white, the temple floor white for teal, its walls white for brown.
+  3. VF2's COLOUR TABLE has a second ramp above luma 48 (c5 = 8: 64, 71 ..
+     143 for luma 4..44, then 64, 140, 185, 203 for 48..60). Row-1 polygons
+     always land there (their luma is >= 224, so L = 48..62); 28% of rows
+     2-3 pixels do too. No single slope can follow it.
+  4. THE SAMPLING IS FINE: MAME's own texel and luma per pixel (colour.txt)
+     through R784's colour model give the same error as the whole RTL (f400:
+     row 1 mean 139 / 255 against the RTL's 138, row 0 34 against 45); MAME's
+     formula on the same inputs gives 0.
+  The board's own screenshot (s1150, Shun Di from behind) shows exactly this:
+  his head black with skin-coloured texels through it, the floor white.
+
+*The fix (TEXLUT, M2_2A only -- Model2.sv R3D_TEXLUT = M2A):* m2_span_tex
+colours a textured pixel as model2rd.ipp does,
+    L = min(63, lumaram[row][t >> 1] * luma >> 8)
+    colour = gamma(colortable[ch][palette3d[colorbase].c5[ch]][L])
+from three shadows written where the CPU's writes land in SDRAM (bridge port
+1, Model2.sv): eight luma RAM rows (1 M10K), the 3D palette's 1,024 entries
+(2 M10K) and the colour table at luma 0-63 (3 x 2 M10K). Five stages after
+the retire instead of one (luma read; L; three table reads; v - bias; x K),
+all moving together on the output's handshake; a skipped last texel can free
+its span's parameter set while earlier pixels are still in them, so y and
+the stipple ride by value. The curve is m2_geo_engine's gam(): 0 at or below
+the bias, (v - bias) x K >> 16 clamped (MAME 64 / 87496, Mild 32 / 74941,
+Off identity) -- exact against the GAM_B64/B32 tables by construction.
+m2_geo_engine (TEXLUT) hands a textured polygon's colour base on instead of
+the slope (no palette or table read, no cache entry); textures Off colours
+it flat and clears its textured bit there. The quad carries {luma, colour
+base} in the store's colour field (17 raw bits, RAWCOL), the slot in the
+texture word (TXW 26) and one bit beside the vertices (VX) -- every bit the
+store's M10K already had spare (att 30 of 30, uvt 195 of 195, vtx 105 of
+105): 0 M10K there. The OSD's texture brightness (R239) does not apply.
+THE EIGHT ROWS ARE PER GAME (MAME 0.289, every polygon of 50 attract lists):
+VF2 0-3, Virtua Cop 2 0, 1, 16, Sega Rally 0, 1 -> slots {row[4], row[1:0]}
+(rows 0-3, 16-19); Zero Gunner 0-5, 9, 100 -> its own map (is_zerogun). A
+row outside its game's eight takes the slot it aliases. Zero Gunner's map is
+from its rows only; its pictures are NOT benched.
+
+*Before / after (mean max-channel error of 255 / share over 32):*
+    list                         R784 model        TEXLUT
+    VF2  f2620 Akira close-up    24.22 / 20.20%    1.33 / 0.37%
+    VF2  f100  Shun Di, temple  100.66 / 79.63%    4.02 / 0.77%
+    VF2  f400                   108.74 / 80.83%    3.71 / 1.39%
+    VF2  f520 / f900 / f1000     45.2 / 82.2 / 74.1  3.34 / 5.95 / 4.09
+    VF2  f1480 / f1500 / f3000   79.6 / 58.5 / 53.0  5.83 / 5.76 / 4.99
+    VF2  f3800                   60.58 / 63.72%    4.63 / 1.35%
+    VCop2 v300 / v3200 / v4800   80.8 / 38.0 / 25.2  3.68 / 0.87 / 4.18
+  (what is left is sampling -- bilinear, mip, the quarter-pixel fit.) Draw
+  time +1-2% (f1500 703,451 -> 711,053 core cycles; v4800 1,071,907 ->
+  1,084,390): the five stages are latency, not throughput.
+
+*Main is unchanged:* at TEXLUT 0 the raster bench paints byte-identical
+pixels to 2f38393 on Daytona 2000 / 5000 / 9000 and VF2 400 / 2620 / VCop2
+4800 (PX dumps' md5); test_m2_span_tex (+ftb, +mip), quad_store, raster3d,
+raster_fill, geo_engine, geometry, geo PASS; new test_m2_geo_engine_lut
+(the colour base out, Off flat, 0 colour reads) PASS; lint_top clean on 2A
+and M2_NO_2A; lint_idx flags nothing new; quartus_map --analyze_file 0
+errors on all six files.
+
+*MAIN HAS THE SAME FAULT (recorded, not changed -- a study-level decision,
+it costs main ~9 M10K):* MAME's colour formula on MAME's own texels against
+R784's model, mean / >32: Virtua Cop (vcopa) row 0 17.5 / 25.7%, row 1 (42
+- i/3, not 63 - i/2) 52.8 / 79.6%, ROW 16 (49 + i/8, the model takes it as
+row 0) 164 / 100%; Desert Tank row 11 50.6 / 72.5% (it uses rows 0, 11,
+32-39, all i/3). The 2A games without the fix: Sega Rally row 1 (ascending,
+not inverse) 155.9 / 98.0%, Zero Gunner rows 4 / 9 101 / 108.
+
+*Cost (quartus_map 17.0 of m2_span_tex alone, the core's parameters,
+virtual pins):* 1,796 -> 1,824 ALMs est. (+28), registers 1,610 -> 1,853,
+block bits 256 -> 68,864 (the five shadows, all M10K: 9 blocks), DSP 15 ->
+16. Plus the snoop (~40 registers, three compares) and the engine's branch.
+s1192-era 2A: 539 / 553 M10K -> ~548. NOT FITTED (no fit in this task).
+
+*Benches:* tb_m2_raster3d built -GTEXLUT=1 -CFLAGS -DR3D_TEXLUT with
+M2_R3D_LIST + M2_R3D_REALCOL loads the shadows from the dump's lumaram /
+palram / colorxlat and packs the quad as Model2.sv does; the comparison
+scripts (MAME's frame, per luma row) are session scratch, not committed.
+
+*What the board must show (VF2, Virtua Cop 2, Sega Rally on the 2A core):*
+no checkerboard on heads, beards, brows or eyes; VF2's temple floor teal
+and its walls brown, not white; Lau's belt and ankle bands yellow; VCop2's
+"POLICE" and windshield right. Under the OSD's default Gamma (Off) the
+whole picture is the table's raw values, as flat polygons already are.

@@ -138,7 +138,7 @@ module m2_geometry #(
   // poly_tex[31:24], which q_tex does not carry). Daytona's row 1 is the
   // inverse ramp its decals use; m2_raster3d takes it in q_tex[11].
   output logic        q_tlinv,
-  output logic  [2:0] q_trow,          // R867: the luma table's slot, {row[4], row[1:0]}
+  output logic  [7:0] q_trow,          // R867: the luma table's row (texture header word 1's low byte)
   output logic  [7:0] q_lum,
   output logic        q_mipz,          // R828c: the game's level stays <= -MIPZ_B: no mip
   // R626: each vertex's quarter pixel below q_x/q_y, {fy3,fx3,...,fy0,fx0}.
@@ -988,7 +988,7 @@ module m2_geometry #(
   assign q_u3 = ru[3]; assign q_v3 = rv[3];
   assign q_tex = ctex[23:0];
   assign q_tlinv = (ctex[31:24] == 8'd1);   // R784
-  assign q_trow  = {ctex[28], ctex[25:24]};   // R867
+  assign q_trow  = ctex[31:24];             // R867
   assign q_oz0 = coz[0]; assign q_oz1 = coz[1];      // R334
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 
