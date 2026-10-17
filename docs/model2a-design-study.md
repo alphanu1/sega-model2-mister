@@ -37435,3 +37435,63 @@ one MAME at a time, -video none):*
      script). If a later step were 0 in play, P2's crosshair would vanish
      there -- the board or a played-through MAME game settles it.
   d. The build still fits at +289 estimated (a fit).
+
+**R868 -- M2_PROBE: A TELEMETRY BUILD THAT FITS.** M2_WHY with M2_DEBUG_LITE
+needed 4,192-4,211 LABs of 4,191 (s1194-s1199), so the board could not be
+asked anything. M2_PROBE (Model2.sv g_nodbg, with M2_NO_DEBUG, without
+M2_DEBUG_LITE) is one m2_dbg_stream fed one record every third prof_tick
+(2.46 ms), no 'G': 'C' the i960's IP, 'S' / 'T' / 'U' the 2A sound board's
+records (R862 / R864), and from R871 'Q' the TGP's queue counts, with the
+TGP's pc in 'C' in place of the sequencer and bridge fields. Decoder:
+tools/decode_why.py. s1203 (c4c4306 + M2_PROBE + M2_NO_2A_RALLY): 41,130 ALM,
+539 M10K, setup -0.689 ns on clk_mem and -0.637 ns on clk_sys -- good enough
+to read the board (VF2 at 57.5 fps as on s1201); s1204 did not fit.
+
+**R871 -- VF2 SILENT ON THE BOARD: THE BYTE ENABLES DO NOT REACH THE SDRAM, AND
+THE 2A SOUND BOARD TRUSTED THEM. ITS BYTE WRITES ARE NOW READ-MERGE-WRITE.
+ALSO: VF2'S ATTRACT LOCKUP IS THE TGP NOT ANSWERING.**
+
+*Believed (R859, R864):* the RTL plays VF2 at MAME's level in simulation, so
+the board's silence is a start-up fault (MVOL never written); the sound-RAM
+clear before boot (c3ee7d2) might cure it. s1201 (c3ee7d2): still silent.
+
+*Measured (s1203, M2_PROBE, VF2 attract, 75 s from load):* the 68000 RUNS
+(96 M bus cycles), takes the i960's MIDI (138 bytes), writes the SCSP 37,092
+times and timer A 39,606, and MVOL IS 15 -- the program starts. The output
+peak is 0 in all 7,523 T records. The pre-boot check reads 4,088 OF 4,096
+WORDS WRONG.
+
+*Why 8 right:* the check writes a pattern word-wide, then one byte of each
+word alone, then reads back. If the byte write lands in BOTH lanes (or is
+lost, or the word comes back byte-swapped) the only words still right are
+those whose expected high and low bytes are equal -- for this pattern that is
+exactly 8 even words and no odd one. The word-wide writes land.
+
+*Cause:* R82 found on this board, for the i960, that "the byte enables are
+LOST between source and silicon -- a byte store landed in all four lanes";
+m2_cpu_bridge has done byte stores as read-modify-write since (R729). The 2A
+sound board (R859) wrote the 68000's byte stores with a_be and trusted the
+mask: every simulation (tb_m2_2a_sound's memory, the controller bench, which
+only ever wrote on port 0) honours it. On the board each 68000 byte write to
+sound RAM overwrote its neighbour byte; the SCSP plays only from sound RAM
+(MAME scsp_map), where the program builds its data, so the output is silence.
+Ruled out on the way: the controller with ports 5 and 7 writing (new
+M2_SDRAM_W57=1 in tb_m2_sdram, 13-port 2A configuration: 2,277,631 checks,
+0 fails), the CDC (s_ack drops with s_req), DQM wiring (be[1] -> DQMH),
+the port 5-7 mux, the loader's byte order and the SDRAM map.
+
+*Fix:* m2_2a_sound: a 68000 byte write to RAM is B_RMR (read the line) then
+B_RMW (the byte merged, the whole word written, the SCSP's caches snooped);
+the check's V_TB does the same in two phases. tb_m2_2a_sound's memory now
+writes the whole word whatever be says (as the board; SND_BE_HONOUR=1 for the
+old model) and FAILS on any masked write. Bench: the old RTL on the new
+model reads 4,088 wrong -- THE BOARD'S NUMBER; the new RTL 0 wrong, 0 masked
+writes of 1,772,621, SCSP writes 98.2% in MAME's order, PASS (6 s).
+*What the board must show:* the check 0 wrong, and VF2's sound.
+
+*The lockup (same capture session, s1203):* VF2 froze in attract (Lau's
+close-up, 0 fps). Over 12 s every C record was IP 0x00007dc4 with the TGP
+holding the CPU: 0x7dc0 is a ret, 0x7dc4-0x7dcc three ldq (g11)[g12] -- the
+routine that reads 12 result words from the TGP's output FIFO. The TGP never
+produced them. The sound board kept running. M2_PROBE now carries the TGP's
+pc and its queue counts ('Q') so the next lockup says where the TGP is.
