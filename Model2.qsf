@@ -923,6 +923,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpsqrt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpmisc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fpcvt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fptrans.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_fprem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_top.sv
 
 # The coprocessor. mb86233_pkg declares the types the rest of these use, so

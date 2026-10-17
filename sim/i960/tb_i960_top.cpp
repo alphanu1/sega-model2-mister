@@ -113,6 +113,13 @@ bool loop_mode = false;
 bool no_trans = false;  // R845: +notrans -- the same programs with cmprl for each transcendental
 bool use_fr = false;   // R865: +fr -- an FR=1 build (VC=0); vc_en high; flushreg live, the VC FP forms still trap
 bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
+// R869: +fx -- an F2A=1 build (the 2A core: FR=1, VC=0); vc_en high; cvtzril,
+// cpysre, atanr, sinr, remr and flushreg in the mix, and a quarter of the
+// registers seeded with edge values (zeros, infinities, NaN, subnormal, the
+// extremes, angles) -- the VC-only forms (sqrtrl, the rl transcendentals)
+// still trap there
+bool use_fx = false;
+uint64_t fx_at = 0, fx_sin = 0, fx_rem = 0;   // R869: atanr, sinr, remr retired
 bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
@@ -388,6 +395,18 @@ void trans_adopt() {
   if (!ref.fp_trans) return;
   ++trans_ret;
   uint64_t g, w;
+  if (ref.fp_trans_s >= 0) {
+    // R869: atanr / sinr narrowed into one register: one single ulp, which a
+    // one-ulp libm miss can become at the narrowing
+    const uint32_t gs = dreg(ref.fp_trans_s), ws = ref.rf.r[ref.fp_trans_s];
+    if (gs == ws) return;
+    if ((gs >> 31) != (ws >> 31)) return;
+    const uint32_t mg = gs & 0x7fffffffu, mw = ws & 0x7fffffffu;
+    if (mg != mw + 1 && mw != mg + 1) return;
+    ++trans_ulp;
+    ref.rf.r[ref.fp_trans_s] = gs;
+    return;
+  }
   if (ref.fp_trans_reg >= 0) {
     g = uint64_t(dreg(ref.fp_trans_reg)) | (uint64_t(dreg(ref.fp_trans_reg + 1)) << 32);
     w = uint64_t(ref.rf.r[ref.fp_trans_reg]) | (uint64_t(ref.rf.r[ref.fp_trans_reg + 1]) << 32);
@@ -553,6 +572,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
     if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
     if (!std::strcmp (argv[i], "+fr"))        use_fr = true;  // R865
+    if (!std::strcmp (argv[i], "+fx"))        use_fx = true;  // R869
     if (!std::strcmp (argv[i], "+notrans"))   no_trans = true;  // R845
     if (!std::strcmp (argv[i], "+directed"))  directed  = true;
     if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
@@ -588,7 +608,8 @@ int main(int argc, char **argv) {
     dequeued_total += ref.intr_dequeued;
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
     ref.ref_vc = use_vc;
-    ref.ref_fr = use_fr;
+    ref.ref_fr = use_fr || use_fx;
+    ref.ref_f2a = use_fx;
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -653,6 +674,9 @@ int main(int argc, char **argv) {
         // R845: and the transcendentals sinrl cosrl tanrl atanrl; R844: flushreg
         static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x69cu, 0x69du, 0x69eu, 0x690u, 0x66du };
         uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % 8] : FPOPS[rng() % nfp];
+        // R869: with +fx, a third of the FP mix is the 2A games' forms
+        static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du };
+        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % 7];
         if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
@@ -979,7 +1003,7 @@ int main(int argc, char **argv) {
     // and it only appeared once a program actually left a line asserted.
     irq_state = 0; dut->irq = 0; pend_valid = false; pend2_valid = false;
     dut->rst_n = 0; dut->bus_ack = 0;
-    dut->vc_en = use_vc || use_fr;
+    dut->vc_en = use_vc || use_fr || use_fx;
     for (int i = 0; i < 4; i++) tick();
     // NO LONGER POKED. The module now walks the boot record itself in T_BOOT --
     // mem[0] to SAT, mem[4] to PRCB, mem[12] to the IP -- so it arrives at
@@ -1018,6 +1042,17 @@ int main(int argc, char **argv) {
       // Same discipline as excluding the zero divisor and the overlapping mov.
       const uint32_t e = (v >> 23) & 0xff;
       if (e == 0x00 || e == 0xff) v = (v & 0x807fffffu) | (0x7fu << 23);
+      // R869: +fx -- edge values in a quarter of the registers, every program
+      // (remr's zero divisor and infinite dividend, NaN, a subnormal the
+      // widening flushes, the extremes, multiples and angles)
+      if (use_fx && (rng() % 4) == 0) {
+        static const uint32_t EDGE[] = { 0x00000000u, 0x80000000u, 0x7f800000u, 0xff800000u,
+                                         0x7fc00000u, 0x00000001u, 0x807fffffu, 0x7f7fffffu,
+                                         0xff7fffffu, 0x00800000u, 0x80800000u, 0x3f800000u,
+                                         0xbf800000u, 0x40490fdbu, 0x40c90fdbu, 0x43b40000u,
+                                         0xc3b40000u, 0x47800000u, 0x4b800000u, 0x3fc90fdbu };
+        v = EDGE[rng() % (sizeof EDGE / sizeof EDGE[0])];
+      }
       ref.rf.r[i] = v;
       wreg(i, v);
     }
@@ -1275,7 +1310,8 @@ int main(int argc, char **argv) {
       // test was false exactly when the count said stop.
       const uint32_t acc_before = dut->dbg_acc_cnt;
       // R845: a transcendental runs its microcode, up to ~4,400 cycles
-      const int stall_lim = (use_vc ? 6000 : 400) + 64 * lat_max;
+      // R869: remr up to ~2,100 (doubles in fp0-fp3), atanr / sinr as R845's
+      const int stall_lim = ((use_vc || use_fx) ? 6000 : 400) + 64 * lat_max;
       while (guard++ < stall_lim && !dut->trap && dut->dbg_acc_cnt == acc_before) {
         if (probe)
           std::printf("        ts=%2d req=%d done=%d busy=%d fp_a=%016llx "
@@ -1372,7 +1408,8 @@ int main(int argc, char **argv) {
         { const uint32_t k = (o << 4) | ((iw >> 7) & 0xf);   // R839
           if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
-          else if (k == 0x66d) vcfl++; }
+          else if (k == 0x66d) vcfl++;
+          else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; }
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       if (itrace && (dut->dbg_intr_cnt != intr_before))
         std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
@@ -1534,7 +1571,10 @@ int main(int argc, char **argv) {
     std::printf("  CPI (incl. reset and I-cache misses): %.2f\n",
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu, long-real (R836): %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites, (unsigned long long)rlany);
-  if (use_vc || use_fr) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
+  if (use_vc || use_fr || use_fx) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
+  if (use_fx) std::printf("  R869 forms retired: cpysre %llu, cvtzril %llu, atanr %llu, sinr %llu, remr %llu; one-ulp libm differences taken %llu\n",
+                          (unsigned long long)vccp, (unsigned long long)vccv, (unsigned long long)fx_at,
+                          (unsigned long long)fx_sin, (unsigned long long)fx_rem, (unsigned long long)trans_ulp);
   if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
   if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
   if (use_vc) std::printf("  R845 forms retired: sinrl %llu, cosrl %llu, tanrl %llu, atanrl %llu; one-ulp libm differences taken %llu\n",

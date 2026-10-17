@@ -360,6 +360,18 @@ int main(int argc, char **argv) {
           mem[0x1A00000 + w] = mem[0x12A0000 + w];
           mem[0x12A0000 + w] = 0xffff;
         }
+        // R869 (M2_A2X; harness built with A2X=1): Sega Rally, Virtua Cop 2,
+        // Zero Gunner -- the program from 512 KB (image byte 0x2D40000,
+        // 1.5 MB) and Sega Rally's copro data (byte 0x2EC0000, 4 MB) where
+        // the loader's XTRA2 puts them (words 0x1300000 / 0x13C0000), and
+        // their flat place, where this harness's RAMs are, back to unwritten
+        if (std::getenv("M2_A2X")) {
+          const size_t ext = 0x2D40000u / 2, cop = 0x2EC0000u / 2;
+          for (size_t w = 0; w < 0xC0000; ++w)  mem[0x1300000 + w] = (ext + w < nw) ? mem[ext + w] : 0;
+          for (size_t w = 0; w < 0x200000; ++w) mem[0x13C0000 + w] = (cop + w < nw) ? mem[cop + w] : 0;
+          for (size_t w = ext; w < nw && w < mem.size(); ++w) mem[w] = 0xffff;
+          std::printf("  A2X: program extension at word 0x1300000, copro data at 0x13C0000\n");
+        }
         // and the harness's display list and texture RAM as above
         for (uint32_t i = 0; i < 0x10000u; i++) mem[0x16f0000u + i] = (i & 1) ? 0x0780 : 0x0f0f;
         for (uint32_t i = 0; i < 65536; ++i) mem[0x16d0000 + i] = (i & 1) ? 0x0780 : 0x0f0f;
