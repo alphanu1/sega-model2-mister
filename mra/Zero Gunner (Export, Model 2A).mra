@@ -31,8 +31,19 @@
       vectors through a zeroed table.
 
       THE 315-5881 (MAME's key 042c0d13, ROM_PARAMETER) is not modelled on
-      this core yet (study R862): the game's decryption window at 0x01d90000
-      reads 0.
+      this core (study R862): its decryption window at 0x01d90000 reads 0.
+      The game uses the chip only as a check (study R873): eleven copies of
+      one sequence decrypt 8 bytes, compare them as a double with a table
+      in the program, and on a mismatch add 1 to a counter at 0x513000; the
+      main loop stops the game once the counter passes 10 (the black screen
+      after the first credit). THE ELEVEN PATCHES below turn each check's
+      "be" past the increment into "b" (opcode 0x12 -> 0x08, the same
+      displacement), so the counter stays 0 as with the chip. The code runs
+      from the boot's copy of program 0x40000-0xcebff at 0x540000, so the
+      patches are on the program image the copy is made from. The game's
+      random number generator adds program words to its seed, so its
+      sequence parts from MAME's when it lands on a patched word (as with
+      the 0x700 patch); in MAME the game is otherwise identical (R873).
 
       Index 4, the game ID: 0x12 (R862). Bit 7 would be the 15 kHz CRT flag.
     -->
@@ -110,6 +121,19 @@
 
         <!-- MAME init_zerogun: maincpu 0x700 = 0x08000004 (little-endian) -->
         <patch offset="0x700">04 00 00 08</patch>
+
+        <!-- R873: the 315-5881 checks, "be" -> "b" (run from RAM 0x5xxxxx) -->
+        <patch offset="0x443c8">28 00 00 08</patch>
+        <patch offset="0x446e0">18 00 00 08</patch>
+        <patch offset="0x449bc">18 00 00 08</patch>
+        <patch offset="0x44bac">18 00 00 08</patch>
+        <patch offset="0x44e14">18 00 00 08</patch>
+        <patch offset="0x474dc">18 00 00 08</patch>
+        <patch offset="0x475e8">18 00 00 08</patch>
+        <patch offset="0x477f4">18 00 00 08</patch>
+        <patch offset="0x4cc34">18 00 00 08</patch>
+        <patch offset="0x55cd4">18 00 00 08</patch>
+        <patch offset="0x56204">18 00 00 08</patch>
 
     </rom>
 
