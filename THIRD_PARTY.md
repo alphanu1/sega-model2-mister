@@ -385,17 +385,24 @@ choice is a different question from reproducing what the chip does.
 
 *Headers read 2026-10-16 at MAME 0.289 (study R856).*
 
-Written for this core: `rtl/sound/scsp/m2_scsp.sv`, `m2_scsp_dsp.sv`,
-`m2_scsp_level.sv`, `m2_scsp_cache.sv` (RTL, GPL-3.0-or-later, whose
-arithmetic, tables and order of operations follow MAME's so that MAME's own
-register streams give MAME's own mix), the generated tables
+Written for this core: `rtl/sound/scsp/m2_scsp.sv`, `m2_scsp_regs.sv`,
+`m2_scsp_dsp.sv`, `m2_scsp_level.sv`, `m2_scsp_cache.sv` (RTL,
+GPL-3.0-or-later, whose arithmetic, tables and order of operations follow
+MAME's so that MAME's own register streams give MAME's own mix), the slot
+engine's microcode `rtl/sound/scsp/scsp_ucf.hex`, `scsp_uce.hex` and
+`scsp_uc.svh` (written by this core's assembler, `sim/sound/scsp_uasm.py`,
+study R858), the generated tables
 `rtl/sound/scsp/scsp_*.hex` and `scsp_tables.svh` (MAME's formulas, through
 `sim/sound/scsp_tables_gen.cpp`; `scsp_lfonoise.hex` is MAME's own 256
 `machine().rand()` values from a capture), and `sim/sound/scsp_ref.h`, a
 standalone port of the two files (it keeps their BSD-3 header; changes: the
 device and stream framework removed, RAM a local array, the noise tables
 loaded, the timers counting samples, bench observation points). The Saturn
-core's SCSP (no licence) was not read. The notice the BSD-3 terms require:
+core's SCSP (no licence) was not read. `rtl/sound/m2_2a_sound.sv`, the 2A
+sound board (study R859), takes its 68000 map, its reset (the first 16 bytes
+of the program copied into RAM) and its interrupt wiring from MAME 0.289's
+`model2.cpp` (`model2_snd_map`, `reset_model2_scsp`, `scsp_irq`); the 68000
+is fx68k, above. The notice the BSD-3 terms require:
 
     license:BSD-3-Clause
     copyright-holders:ElSemi, R. Belmont

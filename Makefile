@@ -165,14 +165,14 @@ syn_check:
 lint_idx:
 	@echo "== variable selects past an array's end (R807 class)"
 	@rm -rf obj_idx && verilator --json-only -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE --top-module emu \
-	  -Irtl/sound/jt12 -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
+	  -Irtl/sound/jt12 -Irtl/sound/scsp -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
 	@python3 sim/lint/idxcheck.py obj_idx/Vemu.tree.json obj_idx/Vemu.tree.meta.json
 
 # R839: LINT_DEFS=-DM2_NO_VCOP_GUN (or -DM2_VCOP_IO=0 ...) lints another build of the core (R846: the guns are on by default).
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu $(LINT_DEFS) \
-	  -Irtl/sound/jt12 -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) \
+	  -Irtl/sound/jt12 -Irtl/sound/scsp -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) \
 	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv > .lint_top.raw 2>&1 || true
 	@grep -E "syntax error|Cannot find file containing module" .lint_top.raw \
 	  | grep -vE "sys/|rtl/pll/|sim/lint/" > .lint_top.syn || true
@@ -2294,3 +2294,53 @@ test_m2_scsp_dsp: obj_scsp_dsp$(SCSP_SFX)/Vm2_scsp_dsp
 obj_scsp_dsp$(SCSP_SFX)/Vm2_scsp_dsp: $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_scsp_cache.sv sim/sound/tb_m2_scsp_dsp.cpp sim/sound/scsp_ref.h
 	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY \
 	  $(SCSP_DEFS) --top-module m2_scsp_dsp --Mdir obj_scsp_dsp$(SCSP_SFX) $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_scsp_cache.sv sim/sound/tb_m2_scsp_dsp.cpp
+
+# the 2A sound board (R859): fx68k on a game's real sound program, the SCSP,
+# sound RAM in SDRAM. SND_IMG=build/snd2a/<game> (sim/sound/snd_img.py),
+# SCSP_CAP=build/scsp/<game> (MAME's MIDI, writes, mix), SND_S=<seconds>
+.PHONY: test_m2_2a_sound
+SND2A_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv rtl/sound/fx68k/uaddrPla.sv \
+             rtl/sound/m2_2a_sound.sv $(SCSP_RTL)
+test_m2_2a_sound: obj_snd2a$(SCSP_SFX)/Vm2_2a_sound
+	@echo "== test m2_2a_sound (the 2A sound board on the real sound program, against MAME)"
+	@cp -f rtl/sound/fx68k/microrom.mem rtl/sound/fx68k/nanorom.mem $(SCSP_HEX) obj_snd2a$(SCSP_SFX)/
+	@cd obj_snd2a$(SCSP_SFX) && SND_IMG=$(abspath $(SND_IMG)) SCSP_CAP=$(abspath $(SCSP_CAP)) ./Vm2_2a_sound
+
+obj_snd2a$(SCSP_SFX)/Vm2_2a_sound: $(SND2A_RTL) $(SCSP_DIR)/scsp_uc.svh $(SCSP_HEX) sim/sound/tb_m2_2a_sound.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-DECLFILENAME -Wno-fatal -I$(SCSP_DIR) -Irtl/sound/fx68k \
+	  -CFLAGS "-O2 -std=c++17" -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
+	  -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -Wno-ALWCOMBORDER --no-assert-case \
+	  -Wno-WIDTH -Wno-UNSIGNED -Wno-CMPCONST -Wno-REALCVT -Wno-SELRANGE -Wno-IMPLICIT -Wno-ASCRANGE \
+	  -Wno-SIDEEFFECT -Wno-EOFNEWLINE -Wno-PROCASSINIT -Wno-GENUNNAMED \
+	  -GRAM_BASE=25\'h12C0000 -GROM_BASE=25\'h1260000 -GSMP_BASE=25\'h1A00000 \
+	  $(SCSP_DEFS) --top-module m2_2a_sound --Mdir obj_snd2a$(SCSP_SFX) $(SND2A_RTL) sim/sound/tb_m2_2a_sound.cpp
+
+# R859: THE 2A BOOT WITH SOUND: as test_m2_boot_2a, and the 2A sound board
+# (A2_SOUND: the 68000 on VF2's sound program and the SCSP) on the i8251's far
+# end instead of the silent stand-in, as Model2.sv builds it. Runs inside its
+# object directory (the SCSP's and fx68k's ROMs are read by bare filename), so
+# M2_BOOT_IMAGE must be an absolute path. M2_SND_WAV=<abs path> writes the
+# run's sound as a WAV; M2_SND_LAT sets its SDRAM latency (memory clocks).
+test_m2_boot_2as: obj_boot_2as/Vm2_boot_harness
+	@echo "== test m2_boot 2A with sound (Virtua Fighter 2, the 68000 and the SCSP)"
+	@cp -f rtl/sound/fx68k/microrom.mem rtl/sound/fx68k/nanorom.mem $(SCSP_HEX) obj_boot_2as/
+	@cd obj_boot_2as && M2_A2=1 ./Vm2_boot_harness $(TEST_ARGS)
+
+obj_boot_2as/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+                           rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh \
+                           $(SND2A_RTL) $(SCSP_DIR)/scsp_uc.svh $(SCSP_HEX)
+	$(VBUILD) --top-module m2_boot_harness -Wno-fatal -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_2as -o Vm2_boot_harness \
+	  -I$(SCSP_DIR) -Irtl/sound/fx68k -Wno-VARHIDDEN -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT \
+	  -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -Wno-ALWCOMBORDER --no-assert-case -Wno-WIDTH -Wno-UNSIGNED \
+	  -Wno-CMPCONST -Wno-SELRANGE -Wno-IMPLICIT -Wno-ASCRANGE -Wno-SYNCASYNCNET \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GA2_SOUND=1 -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
+	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) $(SND2A_RTL) \
+	  sim/io/tb_m2_boot.cpp
