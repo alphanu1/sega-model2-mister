@@ -368,6 +368,7 @@ individually:
 | `src/mame/sega/315_5649.cpp` | BSD-3-Clause | Dirk Best | I/O chip |
 | `src/mame/sega/model2.cpp` | BSD-3-Clause (checked at 0.289, R856) | R. Belmont, Olivier Galibert, ElSemi, Angelo Salese, Matthew Daniels | Board, memory map, the sound board's map |
 | `src/mame/sega/model2_v.cpp` | check before use | — | Renderer behaviour |
+| `src/mame/sega/315-5881_crypt.cpp`, `.h` | BSD-3-Clause (header checked at 0.289, R862) | Andreas Naive, Olivier Galibert, David Haywood | Zero Gunner's protection chip: `sim/prot/m2_5881_ref.h` is a standalone copy (bench oracle only, no RTL yet), below |
 
 **MAME is GPL-2.0 as a whole and individual files carry their own SPDX
 headers.** Check the header of every file you read. Do not rely on the
@@ -420,6 +421,17 @@ is fx68k, above. The notice the BSD-3 terms require:
     specific prior written permission. THIS SOFTWARE IS PROVIDED BY THE
     COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
     WARRANTIES ARE DISCLAIMED.
+
+### The 315-5881 reference — MAME 0.289's 315-5881_crypt.cpp (BSD-3-Clause)
+`sim/prot/m2_5881_ref.h` (study R862) is MAME 0.289's
+`src/mame/sega/315-5881_crypt.cpp` made standalone for the bench: its
+functions `do_decrypt` .. `set_subkey` and everything from `fn1_sboxes` to
+the end of the file copied verbatim but for the class name, the device
+framework replaced by a small interface (MAME's `iomap_le` handlers and
+`model2.cpp`'s `crypt_read_callback`). It keeps MAME's header
+(`license:BSD-3-Clause`, `copyright-holders:Andreas Naive, Olivier Galibert,
+David Haywood`). No RTL is derived from it yet; the BSD-3 notice above (the
+SCSP's) applies to it with these holders' names.
 
 ### MiSTer-devel/N64_MiSTer — GPL-3.0, VHDL
 *Verified 2026-08-16*
