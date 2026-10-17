@@ -22,7 +22,7 @@
 //   4 effect R  the same, RPANTABLE
 //   5 FM ring   Enc = (SDIR ? 0 : TL) | 7 << 13 (a slot's write to the ring buffer)
 // recomputed when the engine hands over the slot's words 6, 10 and 11 after
-// a write to one of them; 54 clocks a slot. A word is 15 bits (<= 16,384).
+// a write to one of them; 60 clocks a slot. A word is 15 bits (<= 16,384).
 //
 // Every factor is <= 1.0, so an exponent is kept as its negation N >= 0
 // (value = 1.m x 2^-N) and the word is the mantissa >> (9 + N).
@@ -117,14 +117,16 @@ module m2_scsp_level (
   // (r_m x 2^(24 - N - 9)) >> 24; past a shift of 23 it is 0
   logic [6:0]  n_fin;
   logic [7:0]  sh;
+  logic [1:0]  rd6;                              // ph 6's r_d, for ph 7 (R859: timing)
   always_comb begin
-    n_fin = n_acc - {5'd0, r_d};
+    n_fin = n_acc - {5'd0, rd6};
     sh    = {1'b0, n_fin} + 8'd9;
   end
   wire [14:0] v = prod[38:24];
 
   // ph 0 read a | 1 a in; read b | 2 b in; read c | 3 product a b | 4 round,
-  // times c | 5 product | 6 round, times 2^(24 - shift) | 7 product | 8 write
+  // times c | 5 product | 6 round | 7 times 2^(24 - shift) | 8 product | 9 write
+  // (the shift is ph 7's, from ph 6's rounding registered: R859, timing)
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       run <= 1'b0; w <= 3'd0; ph <= 4'd0;
@@ -136,8 +138,9 @@ module m2_scsp_level (
         4'd1: begin ma <= {1'b1, f_q[22:0]}; n_acc <= {2'd0, f_q[27:23]}; end
         4'd2: begin mb <= {1'b1, f_q[22:0]}; n_acc <= n_acc + {2'd0, f_q[27:23]}; z_acc <= zero_w; end
         4'd4: begin ma <= r_m; mb <= {1'b1, f_q[22:0]}; n_acc <= n_acc - {5'd0, r_d} + {2'd0, f_q[27:23]}; end
-        4'd6: begin ma <= r_m; mb <= (z_acc || sh >= 8'd24) ? 24'd0 : 24'(1) << (5'd24 - sh[4:0]); end
-        4'd8: begin
+        4'd6: begin ma <= r_m; rd6 <= r_d; end
+        4'd7: mb <= (z_acc || sh >= 8'd24) ? 24'd0 : 24'(1) << (5'd24 - sh[4:0]);
+        4'd9: begin
           ph <= 4'd0;
           w  <= w + 3'd1;
           if (w == 3'd5) run <= 1'b0;
@@ -162,7 +165,7 @@ module m2_scsp_level (
   // registers (DISDL / IMXL / EFSDL 0: fSDL = 0)
   (* ramstyle = "M10K" *) logic [14:0] lram [256];
   always_ff @(posedge clk) begin
-    if (run && ph == 4'd8) lram[{s_slot, w}] <= v;
+    if (run && ph == 4'd9) lram[{s_slot, w}] <= v;
     rd_q <= lram[rd_addr];
   end
 

@@ -115,7 +115,7 @@ module m2_scsp #(
   // declarations
   // =====================================================================
   // sequencer
-  logic  [7:0] upc, upc_n, ret_addr, ea_n;
+  logic  [7:0] upc, upc_n, ret_addr;
   logic [UF_W-1:0] uf;                    // F: this clock's microinstruction (reads, flow)
   logic [UE_W-1:0] ue;                    // E: last clock's (execute)
   logic        hold;
@@ -160,6 +160,15 @@ module m2_scsp #(
   logic  [3:0] isel;
   logic  [1:0] egst_l;                    // the slot's envelope state (LATEG)
   logic        hold_r;                    // EGHOLD from the AR row
+  // the envelope's second clock (R859): OP_EG adds in E and is clamped, written
+  // and turned into the EGV table address the clock after, from these
+  logic        eg2, eg2_we, eg2_tadre, eg2_d2r, eg2_lpslnk, eg2_hold;
+  logic [31:0] eg2_sum;
+  logic  [1:0] eg2_pre;
+  logic  [4:0] eg2_dl;
+  logic [25:0] eg2_stq;
+  logic  [7:0] eg2_wa;
+  logic [31:0] eg2_r;
   logic        eg_lin, eg_hold;
   logic  [9:0] eg_lv;
   logic [11:0] frac;
@@ -285,10 +294,16 @@ module m2_scsp #(
     $readmemh("scsp_ucf.hex", ucf);
     $readmemh("scsp_uce.hex", uce);
   end
+  // E's half is read with F's (its data in F) and registered into E, a bubble
+  // in place of it on a hold or a call: E then starts from flops, not from the
+  // block RAM's output (R859, timing)
+  logic [UE_W-1:0] ue_f;
   always_ff @(posedge clk) begin
-    uf <= ucf[upc_n];
-    ue <= uce[ea_n];
+    uf   <= ucf[upc_n];
+    ue_f <= uce[upc_n];
   end
+  logic e_bub;
+  always_ff @(posedge clk) ue <= e_bub ? UE_NOPW : ue_f;
 
   // conditions
   function automatic logic cond(input logic [3:0] c);
@@ -345,8 +360,8 @@ module m2_scsp #(
       default: ;
     endcase
     if (hold) upc_n = upc;
-    ea_n = (hold || call_go) ? UA_NOP : upc;
-    if (boot) begin upc_n = UA_IDLE; ea_n = UA_NOP; end
+    e_bub = hold || call_go || boot;
+    if (boot) upc_n = UA_IDLE;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -377,7 +392,7 @@ module m2_scsp #(
       if (e_fset == 3'(FSET_F2)) f2 <= !borrow;
       if (e_fset == 3'(FSET_F3)) f3 <= scmp;
       if (e_fset == 3'(FSET_F4)) f4 <= scmp;
-      if (e_op == 4'(OP_EG) && egst_n_rel_stop) stop_rel <= 1'b1;
+      if (eg2 && egst_n_rel_stop) stop_rel <= 1'b1;
     end
   end
 
@@ -399,11 +414,12 @@ module m2_scsp #(
   // slot state: eight rows a slot -- CUR, NXT, PH = {pph, aph}, VOL = {~egst
   // at [27:26] (so a cleared row is RELEASE, where MAME's slots start), vol
   // 26}, and the rate rows AR = {hold, ar}, D1R, D2R, RR
-  logic  [7:0] st_ra, st_wa;
+  logic  [7:0] st_ra, st_wa, st_wa2;
   logic        st_we;
+  logic [31:0] st_wd;
   (* ramstyle = "M10K" *) logic [31:0] st [256];
   always_ff @(posedge clk) begin
-    if (st_we) st[st_wa] <= alu_r;
+    if (st_we) st[st_wa2] <= st_wd;
     st_q <= st[st_ra];
   end
 
@@ -505,21 +521,21 @@ module m2_scsp #(
 
   always_comb begin
     logic signed [31:0] v;
-    v = $signed(sum);
-    egst_n = eg_pre; egst_n_rel_stop = 1'b0;
-    case (eg_pre)
+    v = $signed(eg2_sum);
+    egst_n = eg2_pre; egst_n_rel_stop = 1'b0;
+    case (eg2_pre)
       ATT: begin
         if (v >= 32'sh03ff0000) begin
-          if (!lpslnk) egst_n = DC1;
+          if (!eg2_lpslnk) egst_n = DC1;
           v = 32'sh03ff0000;
         end
       end
       DC1: begin
         if (v < 0) v = 0;
-        if (v[25:21] <= eg_dl) egst_n = DC2;
+        if (v[25:21] <= eg2_dl) egst_n = DC2;
       end
       DC2: begin
-        if (d2r_zero) v = $signed({6'd0, st_q[25:0]});
+        if (eg2_d2r) v = $signed({6'd0, eg2_stq});
         else if (v < 0) v = 0;
       end
       default: begin
@@ -528,6 +544,7 @@ module m2_scsp #(
     endcase
     eg_v = v[25:0];
   end
+  assign eg2_r = {4'd0, ~egst_n, eg_v};                     // (the state row keeps ~egst: 0 is RELEASE)
 
   function automatic logic signed [15:0] dac(input logic signed [31:0] s, input logic d18);
     logic signed [31:0] x;
@@ -545,7 +562,7 @@ module m2_scsp #(
       4'(OP_PASSA): alu_r = a_v;
       4'(OP_PASSB): alu_r = b_v;
       4'(OP_ANDN):  alu_r = a_v & ~b_v;
-      4'(OP_EG):    alu_r = {4'd0, ~egst_n, eg_v};                 // (the state row keeps ~egst: 0 is RELEASE)
+      // (OP_EG: the sum; its result is the next clock's, eg2_r)
       4'(OP_RATEIDX): begin
         logic [4:0] r5;
         logic signed [9:0] x;
@@ -582,8 +599,24 @@ module m2_scsp #(
   // predicate (the second, s2, is not)
   wire go_e = pred_ok;
   assign rf_we = e_rdwe && go_e;
-  assign st_we = e_stwe && go_e;
+  wire   eg_go = e_op == 4'(OP_EG) && go_e;
+  assign st_we = (e_stwe && go_e && !eg_go) || eg2_we;    // (the microcode keeps the clock after an EG free)
   assign st_wa = {(e_widx == 2'(IDX_SW)) ? sw_e : slot_e, e_stwrow};
+  assign st_wa2 = eg2_we ? eg2_wa : st_wa;
+  assign st_wd  = eg2_we ? eg2_r : alu_r;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      eg2 <= 1'b0; eg2_we <= 1'b0; eg2_tadre <= 1'b0; eg2_d2r <= 1'b0; eg2_lpslnk <= 1'b0; eg2_hold <= 1'b0;
+      eg2_sum <= '0; eg2_pre <= ATT; eg2_dl <= '0; eg2_stq <= '0; eg2_wa <= '0;
+    end else begin
+      eg2 <= eg_go; eg2_we <= eg_go && e_stwe; eg2_tadre <= eg_go && e_s1 == 4'(S1_TADRE);
+      if (eg_go) begin
+        eg2_sum <= sum; eg2_pre <= eg_pre; eg2_dl <= eg_dl; eg2_d2r <= d2r_zero; eg2_lpslnk <= lpslnk;
+        eg2_stq <= st_q[25:0]; eg2_wa <= st_wa; eg2_hold <= hold_r;
+      end
+    end
+  end
+
   assign st_ra = {idx_f, f_streg ? {1'b1, eg_pre} : f_strow};
 
   // =====================================================================
@@ -648,21 +681,22 @@ module m2_scsp #(
       if (e_fset == 3'(FSET_KBREL)) begin fk <= sqb[11]; fr <= st_q[27:26] == 2'd0; end
       if (go_e) begin
         case (e_s1)
-          4'(S1_TADRP): tadr <= {1'b0, plfos, plfows, alu_r[31:24]};
-          4'(S1_TADRA): tadr <= {1'b1, alfos, alfows, alu_r[15:8]};
-          4'(S1_TADRE): begin
-            egt_a <= alu_r[25:16]; eg_lv <= alu_r[25:16];
-            eg_lin <= eg_pre == ATT; eg_hold <= hold_r;
-          end
+          4'(S1_TADRP): tadr <= {1'b0, plfos, plfows, sum[31:24]};     // (ADDSPLIT: the sum)
+          4'(S1_TADRA): tadr <= {1'b1, alfos, alfows, a_v[15:8]};      // (PASSA)
           4'(S1_LATEG): egst_l <= ~st_q[27:26];
           4'(S1_FETCH1): frac <= st_q[11:0];
-          4'(S1_DBG): begin dbg_slot_valid <= 1'b1; dbg_slot <= slot_e; dbg_slot_smp <= alu_r; end
-          4'(S1_OUTLRAW): out_l_raw <= alu_r;
-          4'(S1_OUTRRAW): out_r_raw <= alu_r;
-          4'(S1_OUTL): out_l <= alu_r[15:0];
-          4'(S1_OUTR): out_r <= alu_r[15:0];
+          // (the captures below are of PASSA microinstructions: the operand)
+          4'(S1_DBG): begin dbg_slot_valid <= 1'b1; dbg_slot <= slot_e; dbg_slot_smp <= a_v; end
+          4'(S1_OUTLRAW): out_l_raw <= a_v;
+          4'(S1_OUTRRAW): out_r_raw <= a_v;
+          4'(S1_OUTL): out_l <= a_v[15:0];
+          4'(S1_OUTR): out_r <= a_v[15:0];
           default: ;
         endcase
+      end
+      if (eg2_tadre) begin                            // the envelope's second clock: EGV's address
+        egt_a <= eg2_r[25:16]; eg_lv <= eg2_r[25:16];
+        eg_lin <= eg2_pre == ATT; eg_hold <= eg2_hold;
       end
       case (e_s2)                                     // (not under the predicate)
         4'(S2_DSPGO): begin dsp_go <= 1'b1; dsp_pend <= 1'b1; end
@@ -708,12 +742,12 @@ module m2_scsp #(
       p1v <= '0; p2v <= '0;
     end else begin
       if (fetch1) begin
-        fa1 <= alu_r[19:0]; p1_ok <= 1'b0; p2_ok <= 1'b0; f2_known <= 1'b0;
+        fa1 <= sum[19:0]; p1_ok <= 1'b0; p2_ok <= 1'b0; f2_known <= 1'b0;   // (ADD: the sum)
         if (ssctl != 2'd0) begin p1v <= '0; p2v <= '0; p1_ok <= 1'b1; p2_ok <= 1'b1; gs <= G_IDLE; end
-        else if (alu_r[19]) begin p1v <= '0; p1_ok <= 1'b1; gs <= G_L2; end   // past 512 KB: MAME reads 0
+        else if (sum[19]) begin p1v <= '0; p1_ok <= 1'b1; gs <= G_L2; end     // past 512 KB: MAME reads 0
         else gs <= G_L1;
       end
-      if (fetch2) begin fa2 <= alu_r[19:0]; f2_known <= 1'b1; end
+      if (fetch2) begin fa2 <= sum[19:0]; f2_known <= 1'b1; end
       case (gs)
         G_L1: gs <= G_W1;
         G_W1: if (lk_hit) begin p1v <= pk; p1_ok <= 1'b1; gs <= G_L2; end else gs <= G_F1;
@@ -813,7 +847,9 @@ module m2_scsp #(
   end
   assign dw_en = op_busy && !op_rd && oc == 3'd0 && o_dsp;
   wire   o_com = o_addr >= 11'h200 && o_addr < 11'h218;
-  assign cw_en = op_busy && !op_rd && oc == 3'd1 && o_com;   // (the old word read at oc 0)
+  logic  o_com_r;                                        // (o_addr is held: a clock later, R859)
+  always_ff @(posedge clk) o_com_r <= o_com;
+  assign cw_en = op_busy && !op_rd && oc == 3'd1 && o_com_r;   // (the old word read at oc 0)
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -890,7 +926,7 @@ module m2_scsp #(
     if (!$value$plusargs("dto=%d", dbg_to)) dbg_to = 32'd0;
   end
   always_ff @(posedge clk) begin
-    upc_e <= ea_n;
+    upc_e <= e_bub ? UA_NOP : upc;
     if (slot_e == dbg_sel && dbg_samples >= dbg_from && dbg_samples < dbg_to && upc_e != UA_NOP)
       $display("n %0d s %0d u %0d op %0d a %h b %h r %h q %h st %h sqa %h sqb %h P %h pred %0d f %0d%0d%0d%0d eg %0d/%0d",
                dbg_samples, slot_e, upc_e, e_op, a_v, b_v, alu_r, q, st_q, sqa, sqb, p_lo, pred_ok,

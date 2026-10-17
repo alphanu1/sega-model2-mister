@@ -33,6 +33,7 @@ localparam int UF_W = 41;
 `define UE_S1 61:58
 `define UE_S2 65:62
 localparam int UE_W = 66;
+localparam logic [65:0] UE_NOPW = 66'h12;
 localparam int IDX_SLOT = 0;
 localparam int IDX_SW = 1;
 localparam int IDX_MSLC = 2;

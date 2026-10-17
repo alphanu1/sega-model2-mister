@@ -28,6 +28,11 @@
 #   flag or latch set by k             : E(k+1), F(k+2)
 #   ring read issued by k              : RING in E(k+1)
 #   STREG row read by k                : RATE in E(k+1)
+# and, for timing (R859), the envelope takes two clocks: an EG at k adds in
+# E(k) and clamps, writes its state row and loads EGV's table address in the
+# clock after -- so k+1 may not write a state row or use Q, and EGV counts
+# from k+1. The captures take the operand or the sum, not the result mux:
+# FETCH1 / FETCH2 / TADRP are ADD / ADD / ADDSPLIT, TADRA and the outputs PASSA.
 import sys, os
 
 F_FIELDS = [('ra', 4), ('rb', 4), ('st', 1), ('strow', 3), ('streg', 1), ('idx', 2),
@@ -257,6 +262,11 @@ def check(name, seq):
             vis = [(j, t) for j, t in tadr if j <= k - 2 and t != 'E']
             if not vis or vis[-1][1] != mi['TBL']:
                 err.append('%d: table %s not there (%s)' % (k, mi['TBL'], vis[-1:]))
+        if k > 0 and seq[k - 1].get('op') == 'EG':
+            if 'stw' in mi: err.append('%d: state write the clock after an EG' % k)
+            if mi.get('a') == 'Q' or mi.get('b') == 'Q' or ('mul' in mi and mi['mul'][0] == 'Q') \
+               or 'op' not in mi:                       # (no op keeps Q: the EG's sum, not its result)
+                err.append('%d: Q the clock after an EG' % k)
         if 'mul' in mi and mi['mul'][1] == 'EGV':
             if not [j for j, t in tadr if t == 'E' and j <= k - 2]: err.append('%d: EGV early' % k)
         # writes
@@ -264,9 +274,18 @@ def check(name, seq):
         if 'stw' in mi: stw[mi['stw']] = k
         if 'mul' in mi: mul.append((k, mi['mul'][2]))
         s1 = mi.get('s1')
-        if s1 in ('TADRP', 'TADRA', 'TADRE'): tadr.append((k, s1[-1]))
+        if s1 in ('TADRP', 'TADRA'): tadr.append((k, s1[-1]))
+        if s1 == 'TADRE': tadr.append((k + 1, 'E'))      # (the envelope's second clock)
     for e in err: print('%s: %s' % (name, e))
     return len(err)
+
+# the captures' operations (the RTL takes the sum or the operand, not the result)
+NEED = dict(FETCH1='ADD', FETCH2='ADD', TADRP='ADDSPLIT', TADRA='PASSA', TADRE='EG', DBG='PASSA',
+            OUTLRAW='PASSA', OUTRRAW='PASSA', OUTL='PASSA', OUTR='PASSA')
+for i, mi in enumerate(rom):
+    s1 = mi.get('s1')
+    if s1 in NEED and mi.get('op') != NEED[s1]:
+        raise SystemExit('microinstruction %d: %s needs op %s' % (i, s1, NEED[s1]))
 
 nerr = sum(check(n, s) for n, s in paths.items())
 nerr += check('head', [mi for _, mi in sample_head()][8:])     # from the effect returns on
@@ -330,6 +349,8 @@ def main():
                 h.write('`define U%s_%s %d:%d\n' % (nm, name.upper(), pos + bits - 1, pos))
                 pos += bits
             h.write('localparam int U%s_W = %d;\n' % (nm, pos))
+        f0, e0 = fields_of(0, rom[0])                   # the bubble's E half, for the RTL's own
+        h.write("localparam logic [%d:0] UE_NOPW = %d'h%x;\n" % (pos - 1, pos, enc(E_FIELDS, e0)) if nm == 'E' else '')
         for tname, tab in (('IDX', IDX), ('FLOW', FLOW), ('C', COND), ('OP', OP), ('A', A), ('B', B),
                            ('PSL', PSL), ('MA', MA), ('MB', MB), ('FSET', FSET), ('LATA', LATA),
                            ('LATB', LATB), ('S1', S1), ('S2', S2), ('ST', ST), ('RI', RI)):

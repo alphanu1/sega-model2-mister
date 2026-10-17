@@ -48,12 +48,18 @@ module m2_scsp_regs #(
   output logic  [4:0] mslc
 );
 
+  // ---- the register, a clock after it settles (R859, timing): an access
+  // reads the old word at its first clock and merges at its second, and a is
+  // held through it, so everything but the old word's read takes this copy
+  logic  [5:1] ar;
+  always_ff @(posedge clk) ar <= a;
+
   // ---- MAME's udata, as written
   (* ramstyle = "MLAB" *) logic [15:0] ud [32];
   logic [15:0] ud_q;
   logic [15:0] mrg;
   always_ff @(posedge clk) begin
-    if (we) ud[a] <= mrg;
+    if (we) ud[ar] <= mrg;
     ud_q <= ud[a];
   end
 
@@ -77,7 +83,7 @@ module m2_scsp_regs #(
   // r16: the word, with what MAME's UpdateRegR and its hardware bits put there
   always_comb begin
     q = ud_q;
-    case (a)
+    case (ar)
       5'h02: q = {ud_q[15:8], mf_head};                          // MIBUF
       5'h04: q = mon;                                            // 0x408
       5'h0c: if (fired[0]) q[7:0] = 8'hff;                       // a timer's callback: count 0xff
@@ -85,7 +91,7 @@ module m2_scsp_regs #(
       5'h0e: if (fired[2]) q[7:0] = 8'hff;
       5'h10: q = {ud_q[15:11], scipd};
       5'h16: q = {5'd0, mcipd};
-      default: if (a >= 5'h18) q = 16'd0;                         // past 0x42f: MAME reads 0
+      default: if (ar >= 5'h18) q = 16'd0;                         // past 0x42f: MAME reads 0
     endcase
   end
   assign mrg = {be[1] ? d[15:8] : q[15:8], be[0] ? d[7:0] : q[7:0]};
@@ -99,12 +105,12 @@ module m2_scsp_regs #(
   logic        chk;
   always_comb begin
     logic [1:0] tw;
-    tw = (a == 5'h0c) ? 2'd0 : (a == 5'h0d) ? 2'd1 : 2'd2;
+    tw = (ar == 5'h0c) ? 2'd0 : (ar == 5'h0d) ? 2'd1 : 2'd2;
     scipd_n = scipd; mcipd_n = mcipd; mw_n = mw; mr_n = mr;
     arm_n = tarm; ex_n = texp; fired_n = fired; due_n = due;
     chk = 1'b0; rep = 3'b000; clr = 3'b000;
     if (we) begin
-      case (a)
+      case (ar)
         5'h02: begin                       // MIBUF: r16 pops it first
           if (mw_n != mr_n) mr_n = mr_n + 5'd1;
           if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
@@ -144,13 +150,13 @@ module m2_scsp_regs #(
   end
 
   // the lines: CheckPendingIRQ sets one level after all of this clock's clears
-  wire  [2:0] lv_ta_n = (we && a == 5'h12) ? {lv_ta[2:1], mrg[6]} : (we && a == 5'h13) ? {lv_ta[2], mrg[6], lv_ta[0]} :
-                        (we && a == 5'h14) ? {mrg[6], lv_ta[1:0]} : lv_ta;
-  wire  [2:0] lv_tb_n = (we && a == 5'h12) ? {lv_tb[2:1], mrg[7]} : (we && a == 5'h13) ? {lv_tb[2], mrg[7], lv_tb[0]} :
-                        (we && a == 5'h14) ? {mrg[7], lv_tb[1:0]} : lv_tb;
-  wire  [2:0] lv_mi_n = (we && a == 5'h12) ? {lv_mi[2:1], mrg[3]} : (we && a == 5'h13) ? {lv_mi[2], mrg[3], lv_mi[0]} :
-                        (we && a == 5'h14) ? {mrg[3], lv_mi[1:0]} : lv_mi;
-  wire  [3:0] eb_n    = (we && a == 5'h0f) ? {mrg[8:6], mrg[3]} : eb;
+  wire  [2:0] lv_ta_n = (we && ar == 5'h12) ? {lv_ta[2:1], mrg[6]} : (we && ar == 5'h13) ? {lv_ta[2], mrg[6], lv_ta[0]} :
+                        (we && ar == 5'h14) ? {mrg[6], lv_ta[1:0]} : lv_ta;
+  wire  [2:0] lv_tb_n = (we && ar == 5'h12) ? {lv_tb[2:1], mrg[7]} : (we && ar == 5'h13) ? {lv_tb[2], mrg[7], lv_tb[0]} :
+                        (we && ar == 5'h14) ? {mrg[7], lv_tb[1:0]} : lv_tb;
+  wire  [2:0] lv_mi_n = (we && ar == 5'h12) ? {lv_mi[2:1], mrg[3]} : (we && ar == 5'h13) ? {lv_mi[2], mrg[3], lv_mi[0]} :
+                        (we && ar == 5'h14) ? {mrg[3], lv_mi[1:0]} : lv_mi;
+  wire  [3:0] eb_n    = (we && ar == 5'h0f) ? {mrg[8:6], mrg[3]} : eb;
   wire  [7:0] dec_ta  = 8'(1) << lv_ta;
   wire  [7:0] dec_tb  = 8'(1) << lv_tb;
   wire  [7:0] dec_mi  = 8'(1) << lv_mi;
@@ -183,9 +189,9 @@ module m2_scsp_regs #(
       tarm <= arm_n; texp <= ex_n; fired <= fired_n; due <= due_n;
       if (tick44) gcnt <= gnext;
       midi_ack <= midi_valid && !midi_ack;
-      if (we && a == 5'h00) begin mvol <= mrg[3:0]; dac18 <= mrg[8]; end
-      if (we && a == 5'h01) begin rbl <= mrg[8:7]; rbp <= mrg[5:0]; end
-      if (we && a == 5'h04) mslc <= mrg[15:11];
+      if (we && ar == 5'h00) begin mvol <= mrg[3:0]; dac18 <= mrg[8]; end
+      if (we && ar == 5'h01) begin rbl <= mrg[8:7]; rbp <= mrg[5:0]; end
+      if (we && ar == 5'h04) mslc <= mrg[15:11];
     end
   end
 
@@ -194,7 +200,7 @@ module m2_scsp_regs #(
   generate if (MIDI_OUT) begin : g_mout
     (* ramstyle = "MLAB" *) logic [7:0] mo_fifo [32];
     logic [4:0] mo_w, mo_wd, mo_r;
-    wire mo_push = we && a == 5'h03;
+    wire mo_push = we && ar == 5'h03;
     wire mo_pop  = mout_valid && mout_ack;
     always_ff @(posedge clk) begin
       if (mo_push) mo_fifo[mo_w] <= mrg[7:0];
