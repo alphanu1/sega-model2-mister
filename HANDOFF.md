@@ -1,5 +1,12 @@
 # Handoff
 
+## 2026-10-17: the ORIGINAL core has the texture colour fault too (main R872)
+
+R867's fault (Daytona's luma model hardwired) is also on main: Virtua Cop's
+row 16 drawn as row 0 (error 164 / 255), its row 1 wrong (53); Desert Tank's
+row 11 off by 51. Recorded on main (0ef6605: HANDOFF + study R872) to be
+fixed there by porting 526ef64 / 47dd93c (~9 M10K, 533 -> ~542 of 553).
+
 ## 2026-10-17 (night): model2a -- VF2's "checkerboard" heads: the textured colour model, fixed (R867)
 
 CAUSE: not the checker bit (MAME's VF2 lists have none on characters;
