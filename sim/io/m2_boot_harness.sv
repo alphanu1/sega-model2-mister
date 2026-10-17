@@ -1214,6 +1214,7 @@ module m2_boot_harness #(
       .word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
       .rdata(a2_io_rdata),
       .in0(cab_in0), .in1(cab_in1), .in2(cab_in2), .sw(8'hFF),
+      .an0(8'hFF), .an1(8'hFF), .an2(8'hFF),   // R862: no analog game in the boot bench
       .lamps(), .dbg_pa(), .dbg_dir()
     );
     // the i8251 at 0x01c80000, as Model2.sv: data in byte 0, status/command
