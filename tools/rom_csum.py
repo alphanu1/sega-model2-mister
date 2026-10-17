@@ -26,7 +26,8 @@
 # --out FILE writes the built image (ROM-derived: keep it outside the tree).
 #
 # Parts are found as MiSTer finds them: by crc first, then by name. Inline
-# parts (<part>02 00</part>) and repeat="N" are expanded (R306, R835).
+# parts (<part>02 00</part>) and repeat="N" are expanded (R306, R835), and
+# <patch offset="N"> bytes are written over the result (R862).
 #
 # --zip NAME.zip adds a zip to the search, repeatable. A MiSTer MRA names the
 # MERGED set it expects on the target ("daytona93.zip"), but a local MAME romset
@@ -140,6 +141,16 @@ def build_image(mra_path, zip_dir, extra=()):
                 out += read(ch) * int(ch.get('repeat', '1'), 0)
             elif ch.tag == 'part':
                 out += inline(ch)
+        # R862: <patch offset="N">hex</patch> -- bytes written over the
+        # assembled image at offset N (MiSTer's mra_loader applies them to
+        # the <rom> it has built, wherever they sit in the element).
+        for ch in rom:
+            if ch.tag == 'patch':
+                off = int(ch.get('offset'), 0)
+                hx = bytes.fromhex(''.join((ch.text or '').split()))
+                if off + len(hx) > len(out):
+                    raise SystemExit(f"patch at 0x{off:X} runs past the image")
+                out[off:off + len(hx)] = hx
     return bytes(out)
 
 def fold(img, start_word, n_words):
