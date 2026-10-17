@@ -302,6 +302,7 @@ int main(int argc, char **argv) {
     expect("ROM readback", v, 0x56781234u);
   }
 
+#ifndef BRIDGE_2A
   // ---- model2o ROM MIRROR at 0x00220000 reads the program ROM's second half --
   {
     const uint32_t wa = 0x00000000u + 0x10000 + ((0x00227cf0u & 0x1ffffu) >> 1);
@@ -310,6 +311,7 @@ int main(int argc, char **argv) {
     access(false, 0x00227cf0u, 0, 0xf, &v);
     expect("model2o ROM mirror", v, 0xf00dcafeu);
   }
+#endif
 
   // ---- board RAM is WRITABLE and does not alias the mirror ----
   {
@@ -657,6 +659,30 @@ int main(int argc, char **argv) {
   // With prog_ext set, program reads at 0x40000-0x7FFFF come from base_progx;
   // clear, or outside that range, from base_prog as before. Distinct lines
   // each, because the data cache tags by CPU address.
+#ifdef BRIDGE_2A
+  // R862: the 2A board (BOARD_2A=1). prog_ext sends 0x80000-0x1FFFFF to
+  // base_progx + the CPU's word (the extension's slot less 0x40000 words);
+  // 0x00000-0x7FFFF, and everything with prog_ext clear, from base_prog.
+  {
+    dut->base_progx = 0xA0000 - 0x40000;
+    auto put32 = [&](uint32_t word, uint32_t v) { sdram[word] = v & 0xffff; sdram[word + 1] = v >> 16; };
+    put32(0xA0000 + (0x00010u >> 1),  0xC0FFEE11u);   // ext, CPU 0x80010
+    put32(0xA0000 + (0x80020u >> 1),  0xC0FFEE12u);   // ext, CPU 0x100020
+    put32(0xA0000 + (0x17FFF8u >> 1), 0xC0FFEE13u);   // ext, CPU 0x1FFFF8 (its last dword)
+    put32(0x00000 + (0x40030u >> 1),  0x5EED0011u);   // slot, CPU 0x40030
+    put32(0x00000 + (0x7FFF0u >> 1),  0x5EED0012u);   // slot, CPU 0x7FFF0 (its last line)
+    put32(0x00000 + (0x80040u >> 1),  0x5EED0013u);   // linear, CPU 0x80040 (prog_ext clear)
+    uint32_t v = 0;
+    dut->prog_ext = 1;
+    access(false, 0x00080010u, 0, 0xf, &v); expect("R862 2A ext on: 0x80010 from the extension", v, 0xC0FFEE11u);
+    access(false, 0x00100020u, 0, 0xf, &v); expect("R862 2A ext on: 0x100020 from the extension", v, 0xC0FFEE12u);
+    access(false, 0x001FFFF8u, 0, 0xf, &v); expect("R862 2A ext on: 0x1FFFF8 from the extension", v, 0xC0FFEE13u);
+    access(false, 0x00040030u, 0, 0xf, &v); expect("R862 2A ext on: 0x40030 from the slot", v, 0x5EED0011u);
+    access(false, 0x0007FFF0u, 0, 0xf, &v); expect("R862 2A ext on: 0x7FFF0 from the slot", v, 0x5EED0012u);
+    dut->prog_ext = 0;
+    access(false, 0x00080040u, 0, 0xf, &v); expect("R862 2A ext off: 0x80040 linear", v, 0x5EED0013u);
+  }
+#else
   {
     dut->base_progx = 0xA0000;
     auto put32 = [&](uint32_t word, uint32_t v) { sdram[word] = v & 0xffff; sdram[word + 1] = v >> 16; };
@@ -670,6 +696,7 @@ int main(int argc, char **argv) {
     dut->prog_ext = 0;
     access(false, 0x00040020u, 0, 0xf, &v); expect("R726 ext off: 0x40020 from base_prog", v, 0x5EED0002u);
   }
+#endif
 
   // ---- R724: INSTRUCTION FETCHES THROUGH THE LINE BUFFER ----
   // Every word of 64 ROM lines, fetched as instructions in a scrambled order
