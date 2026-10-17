@@ -100,7 +100,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_VCOP_GUN
 `define M2_NO_VCOP_GUN
 `endif
+// R859: M2_2A_SOUND, the 2A sound board (its 68000 and the SCSP, m2_2a_sound)
+// on the i8251's far end -- 1 by default; 0 puts R852's silent stand-in back.
+`ifndef M2_2A_SOUND
+`define M2_2A_SOUND 1
+`endif
 `else
+`ifndef M2_2A_SOUND
+`define M2_2A_SOUND 0
+`endif
 `ifndef M2_M1SOUND
 `define M2_M1SOUND 1
 `endif
@@ -359,6 +367,7 @@ localparam bit M2A = 1'b0;
 `endif
 localparam bit M1SOUND = (`M2_M1SOUND != 0);
 localparam bit IOZ80   = (`M2_IOZ80 != 0);
+localparam bit SND2A   = !M1SOUND && (`M2_2A_SOUND != 0);   // R859
 
 wire        forced_scandoubler;
 wire  [1:0] buttons;
@@ -755,6 +764,16 @@ localparam logic [SDR_AW:1] GAME_SND_2A  = SDR_AW'(32'h1260000);   // byte 0x24C
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
 wire        pcm1_req, pcm2_req;
+// R859: the 2A sound board's three SDRAM ports, on 5, 6 and 7 where the Model
+// 1 board's were: the 68000 (program, samples, RAM; writes one word), the
+// SCSP's slot fills (read), the SCSP's DSP (read, writes one word)
+wire              s2a_a_req, s2a_a_we, s2a_b_req, s2a_c_req, s2a_c_we;
+wire [SDR_AW:1]   s2a_a_addr, s2a_b_addr, s2a_c_addr;
+wire [15:0]       s2a_a_din, s2a_c_din;
+wire  [1:0]       s2a_a_be;
+// the 2A sound RAM: 512 KB, in the 2A layout's unloaded hole after the
+// board RAM (GAME_BOARD, 0x12A0000-0x12BFFFF), below GAME_WORK
+localparam logic [SDR_AW:1] GAME_SNDRAM_2A = SDR_AW'(32'h12C0000);   // byte 0x2580000
 // The TGP's two read-only windows: 64K words of sincos/atan/inv/isqrt tables,
 // and 2 M words of copro_data the geometry code walks.
 wire        tgp_tbl_req, tgp_dat_req;
@@ -1064,6 +1083,10 @@ always_comb begin
 	p_we[1]  = cpu_sd_we;
 	p_din[1] = cpu_sd_din;
 	p_be[1]  = cpu_sd_be;
+	if (SND2A) begin   // R859: the 2A sound board writes on 5 (68000) and 7 (DSP)
+		p_we[5] = s2a_a_we;  p_din[5] = s2a_a_din;  p_be[5] = s2a_a_be;
+		p_we[7] = s2a_c_we;  p_din[7] = s2a_c_din;  p_be[7] = 2'b11;
+	end
 	// PORT 1, NOT PORT 0. m2_sdram's blen() is hardcoded per port: ports 1-3
 	// burst FOUR 16-bit words, filling the whole 64-bit p_dout, while ports 0
 	// and 4 return ONE. On port 0 the readback got a correct low half and a
@@ -1269,6 +1292,12 @@ always_comb begin
 	// problem by listening, and two builds were spent on the rate.
 	p_addr[7] = snd_base + PCM_OFFS + SDR_AW'(23'h200000)
 	                     + SDR_AW'({pcm2_addr, 2'b00});
+	// R859: THE 2A SOUND BOARD HAS 5, 6 AND 7 when it is in (no Model 1 board)
+	if (SND2A) begin
+		p_req[5] = s2a_a_req;  p_addr[5] = s2a_a_addr;
+		p_req[6] = s2a_b_req;  p_addr[6] = s2a_b_addr;
+		p_req[7] = s2a_c_req;  p_addr[7] = s2a_c_addr;
+	end
 	// STRAIGHT FROM THE CACHE. cc_req/cc_addr used to come out of m2_char_cdc;
 	// see the note at u_char_cache for why that translator was removed.
 	// R292: THE TEXEL FETCH HAS ITS OWN PORT AGAIN, AND THE PICTURE IS WHY.
@@ -2995,6 +3024,8 @@ wire [31:0] snd_samples;
 wire [15:0] snd_lat, snd_miss, snd_under;
 wire  [7:0] snd_level;
 generate if (M1SOUND) begin : g_m1snd
+assign {s2a_a_req, s2a_a_we, s2a_b_req, s2a_c_req, s2a_c_we} = '0;
+assign {s2a_a_addr, s2a_b_addr, s2a_c_addr, s2a_a_din, s2a_c_din, s2a_a_be} = '0;
 m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1), .YM_STUB(1'b1)) u_sndboard (   // R573; R821: one MultiPCM engine, passed on the board (s1037); R833: YM_STUB 1 = the YM3438 as timers only (Daytona never voices it)
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
@@ -3012,12 +3043,43 @@ m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHA
 	.dbg_pcm_lat(snd_lat), .dbg_pcm_miss(snd_miss),
 	.dbg_pcm_under(snd_under), .dbg_pcm_level(snd_level)
 );
-end else begin : g_2asnd
+end else if (SND2A) begin : g_2asnd
+	// R859: THE MODEL 2A SOUND BOARD. The i8251's TXD is the SCSP's MIDI in
+	// and the SCSP's MIDI out its RXD (m2_sound_link, as the Model 1 board's
+	// serial was); the 68000 runs the game's sound program from SDRAM, and the
+	// SCSP's output comes out of an eight-sample FIFO at 44,100 Hz.
+	// Clock enables from SYS_MHZ: 2 x 11.2896 MHz and 44,100 Hz.
+	m2_2a_sound #(.AW(SDR_AW), .RAM_BASE(GAME_SNDRAM_2A), .ROM_BASE(GAME_SND_2A),
+	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1),
+	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
+	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000)) u_snd2a (
+		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
+		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
+		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
+		.a_req(s2a_a_req), .a_addr(s2a_a_addr), .a_we(s2a_a_we), .a_din(s2a_a_din), .a_be(s2a_a_be),
+		.a_ack(p_ack[5]), .a_dout(p_dout[5]),
+		.b_req(s2a_b_req), .b_addr(s2a_b_addr), .b_ack(p_ack[6]), .b_dout(p_dout[6]),
+		.c_req(s2a_c_req), .c_addr(s2a_c_addr), .c_we(s2a_c_we), .c_din(s2a_c_din),
+		.c_ack(p_ack[7]), .c_dout(p_dout[7]),
+		.snd_l(snd_l), .snd_r(snd_r),
+		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
+		.dbg_under(snd_under), .dbg_scsp_we(), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be()
+	);
+	assign snd_pc[31:24] = 8'd0;
+	assign snd_rom_req = 1'b0; assign snd_rom_addr = '0;
+	assign pcm1_req = 1'b0; assign pcm1_addr = '0;
+	assign pcm2_req = 1'b0; assign pcm2_addr = '0;
+	assign snd_ymw = 16'd0; assign snd_pcmw = 16'd0;
+	assign snd_lat = 16'd0; assign snd_miss = 16'd0;
+	assign snd_level = 8'd0;
+end else begin : g_2astub
 	// R852: THE MODEL 2A SOUND SIDE, SILENT. On the 2A board the i8251's TXD
 	// goes to the SCSP's MIDI in and the SCSP's MIDI out back to its RXD, and
 	// the SCSP's 68000 runs the sound program. Until the SCSP is in, this
 	// answers the i960 on that wire with what the game waits for (see
 	// m2_2a_snd_stub) and makes no sound.
+	assign {s2a_a_req, s2a_a_we, s2a_b_req, s2a_c_req, s2a_c_we} = '0;
+	assign {s2a_a_addr, s2a_b_addr, s2a_c_addr, s2a_a_din, s2a_c_din, s2a_a_be} = '0;
 	m2_2a_snd_stub u_snd_stub (
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),

@@ -890,6 +890,16 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_93c46.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_timers.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_315_5649.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_2a_snd_stub.sv
+# R859: the 2A sound board -- its 68000 is fx68k (above), the SCSP is these;
+# the SCSP's ROMs (scsp_*.hex) are $readmemh'd and its tables `included by
+# bare filename, found on the search path like fx68k's microcode.
+set_global_assignment -name SEARCH_PATH rtl/sound/scsp
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_2a_sound.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp_level.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp_cache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp_dsp.sv
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80s.v
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80_core.v
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80_alu.v
