@@ -160,7 +160,8 @@ module m2_sdram_cdc_load_harness #(
     .c_ack(s_ack[7]), .c_dout(s_dout[7]),
     .snd_l(), .snd_r(),
     .dbg_addr(), .dbg_cycles(), .dbg_samples(), .dbg_under(), .dbg_selftest(selftest),
-    .dbg_mvol(), .dbg_w400(), .dbg_w418(), .dbg_scsp_we(), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be()
+    .dbg_mvol(), .dbg_w400(), .dbg_w418(), .dbg_scsp_we(), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
+    .dbg_sums()                                       // (R882's port; this harness predates it)
   );
   assign s_we[6] = 1'b0; assign s_din[6] = '0;
   assign s_be[6] = 2'b11; assign s_be[7] = 2'b11;   // Model2.sv: p_be[7] = 2'b11

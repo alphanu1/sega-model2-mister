@@ -24,6 +24,8 @@
 // SCSP's slot fills and the SCSP's DSP. The SCSP runs ahead into an output
 // FIFO drained at exactly 44,100 Hz (tick44 counts its timers; the
 // accumulator's top six bits give each timer its write's phase, R883).
+// The 68000's bus cycles take MAME's wait states, and the SDRAM's latency
+// stops its clock instead of adding more (EXACT, R884).
 //
 // THE LOADER STORES A 16-BIT WORD LITTLE END FIRST, so a big-endian program
 // and its samples read byte-swapped (ROM_SWAP, as m2_sound_board's); RAM is
@@ -44,7 +46,8 @@ module m2_2a_sound #(
   parameter bit          FM       = 1'b1,
   parameter bit          MIDI_OUT = 1'b1,
   parameter bit          CHKSUM   = 1'b0,  // R882: sum the program and the four sample ROMs in SDRAM before boot (a probe build)
-  parameter bit          POST_WR  = 1'b1   // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
+  parameter bit          POST_WR  = 1'b1,  // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
+  parameter bit          EXACT    = 1'b1   // R884: the 68000 on MAME's wait states, its clock stopped while SDRAM answers
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -103,18 +106,8 @@ module m2_2a_sound #(
   localparam int PW = $clog2(PHI_DEN) + 1, TW = $clog2(T44_DEN) + 1;   // holds 2 x DEN - 1
   logic [PW-1:0] pacc;
   wire  [PW-1:0] pnx = pacc + PW'(PHI_NUM);
-  logic phase, enPhi1, enPhi2;
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      pacc <= '0; phase <= 1'b0; enPhi1 <= 1'b0; enPhi2 <= 1'b0;
-    end else begin
-      enPhi1 <= 1'b0; enPhi2 <= 1'b0;
-      if (pnx >= PW'(PHI_DEN)) begin
-        pacc <= pnx - PW'(PHI_DEN); phase <= ~phase;
-        if (phase) enPhi2 <= 1'b1; else enPhi1 <= 1'b1;
-      end else pacc <= pnx;
-    end
-  end
+  wire           due = pnx >= PW'(PHI_DEN);   // a 68000 half-clock falls due (2 x 11.2896 MHz)
+  logic phase, enPhi1, enPhi2;                 // (driven below, once the bus is declared)
   logic [TW-1:0] tacc;
   wire  [TW-1:0] tnx = tacc + TW'(T44_NUM);
   logic tick44;
@@ -159,6 +152,50 @@ module m2_2a_sound #(
   wire sel_rom  = addr[23:19] == 5'b01100;                   // 600000-67ffff
   wire sel_smp  = addr[23];                                  // 800000-ffffff
   wire sel_bank = addr[23:1] == 23'h20_0000;                 // 400000
+
+  // ------------------------------------------------- the 68000's clock (R884)
+  // EXACT 0: a half-clock every time one falls due, whatever the bus is doing,
+  // so every clock the 68000 waits for SDRAM is a wait state it executes --
+  // ~2.5 on a RAM read (R884: mean 9.9 half-clocks with AS low, against MAME's
+  // 7), 2-5 on a cache fill, none on a posted write (MAME: one).
+  // EXACT 1: THE 68000 RUNS ON MAME'S BUS TIMING. MAME 0.289's model2_snd gives
+  // RAM and the SCSP before_delay(1) -- one wait state, a bus cycle of five
+  // clocks -- and the ROM and samples none (four). Here each bus cycle has
+  // exactly that many wait states in the 68000's own clocks: DTACK is held off
+  // through the first DTACK sample of a RAM / SCSP cycle (ack_ok), and where
+  // the answer is not there by the sample that must see it, the CLOCK STOPS
+  // (frz) instead of a wait state being inserted -- SDRAM time costs real time,
+  // not 68000 time. Half-clocks fall due at 2 x 11.2896 MHz as before into a
+  // credit (cred); one is issued whenever there is credit, the 68000 is not
+  // stopped, and none was issued the clock before (fx68k: never two enables in
+  // a row), so after a stop it catches up at up to clk / 2 (1.77 x at 80 MHz).
+  // It is never ahead of real time; CRED_MAX half-clocks (~1 sample) is how far
+  // it may fall behind before time is dropped.
+  // fx68k samples DTACK on PHI2: the second PHI2 of a bus cycle after AS
+  // decides a zero-wait cycle, the third a one-wait cycle (fx68k busPhase S4).
+  localparam int CRED_MAX = 511;
+  logic  [9:0] cred;
+  logic  [1:0] ph2n;                       // PHI2s issued since AS fell (saturating)
+  wire         ws1   = sel_ram || sel_scsp;   // MAME: one wait state
+  wire         ack_ok = !EXACT || !ws1 || ph2n >= 2'd2;
+  wire         frz   = EXACT && phase && as && !iack && dtackn && ph2n == (ws1 ? 2'd2 : 2'd1);
+  wire         issue = EXACT ? (cred != 10'd0 && !frz && !enPhi1 && !enPhi2) : due;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      pacc <= '0; phase <= 1'b0; enPhi1 <= 1'b0; enPhi2 <= 1'b0; cred <= '0; ph2n <= '0;
+    end else begin
+      enPhi1 <= 1'b0; enPhi2 <= 1'b0;
+      pacc <= due ? pnx - PW'(PHI_DEN) : pnx;
+      if (issue) begin
+        phase <= ~phase;
+        if (phase) enPhi2 <= 1'b1; else enPhi1 <= 1'b1;
+      end
+      if (due && !issue && cred != 10'(CRED_MAX)) cred <= cred + 10'd1;
+      else if (!due && issue) cred <= cred - 10'd1;
+      if (!as) ph2n <= '0;
+      else if (enPhi2 && ph2n != 2'd3) ph2n <= ph2n + 2'd1;
+    end
+  end
 
   // ------------------------------------------------------- the line cache
   // 128 lines of four words, direct-mapped on the SDRAM word address, for
@@ -392,7 +429,7 @@ module m2_2a_sound #(
             end else if (sel_ram && !rwn) begin       // R877: a word write, posted
               a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11; a_addr <= RAM_BASE + AW'(addr[18:1]); a_din <= oedb;
               wpost <= 1'b1; wpost_a <= addr[18:1];
-              rq <= 16'hffff; if (POST_WR) begin dtackn <= 1'b0; bs <= B_ACK; end else bs <= B_WPW;
+              rq <= 16'hffff; if (POST_WR) begin dtackn <= !ack_ok; bs <= B_ACK; end else bs <= B_WPW;
             end else if (sel_ram) begin
               bs <= B_RAM; a_req <= 1'b1; a_we <= 1'b0; a_be <= 2'b11;
               a_addr <= RAM_BASE + AW'({addr[18:3], 2'b00}); a_din <= oedb;
@@ -412,7 +449,7 @@ module m2_2a_sound #(
         B_RAM: if (a_ack) begin                       // (a read: R877 posts the writes)
           a_req <= 1'b0; a_we <= 1'b0;
           rq <= a_dout[{addr[2:1], 4'd0} +: 16];
-          dtackn <= 1'b0; bs <= B_ACK;
+          dtackn <= !ack_ok; bs <= B_ACK;
         end
         B_RMR: if (a_ack) begin                       // R871: the word, its other byte kept
           a_req <= 1'b0;
@@ -424,12 +461,13 @@ module m2_2a_sound #(
           if (!a_req && !a_ack) begin
             a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11; a_addr <= RAM_BASE + AW'(addr[18:1]);
             wpost <= 1'b1; wpost_a <= addr[18:1];
-            rq <= 16'hffff; if (POST_WR) begin dtackn <= 1'b0; bs <= B_ACK; end else bs <= B_WPW;
+            rq <= 16'hffff; if (POST_WR) begin dtackn <= !ack_ok; bs <= B_ACK; end else bs <= B_WPW;
           end
         end
-        B_WPW: if (a_ack) begin dtackn <= 1'b0; bs <= B_ACK; end   // R877, POST_WR 0: the write's acknowledge first
-        B_SCSP: if (s_ack) begin rq <= s_dout; dtackn <= 1'b0; bs <= B_ACK; end
+        B_WPW: if (a_ack) begin dtackn <= !ack_ok; bs <= B_ACK; end   // R877, POST_WR 0: the write's acknowledge first
+        B_SCSP: if (s_ack) begin rq <= s_dout; dtackn <= !ack_ok; bs <= B_ACK; end
         default: if (!as) begin dtackn <= 1'b1; bs <= B_IDLE; end   // B_ACK
+                 else if (ack_ok) dtackn <= 1'b0;                     // R884: a RAM / SCSP cycle's one wait state
       endcase
     end
   end
