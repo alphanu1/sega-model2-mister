@@ -5443,6 +5443,7 @@ end else begin : g_nodbg
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
 	wire  [15:0] sd_abs = snd_l[15] ? (~snd_l + 16'd1) : snd_l;
+`ifdef M2_PROBE_L
 	// R877: the sound ports' waits (a request is a level held to its acknowledge)
 	logic [9:0]  sl_c5, sl_c6, sl_c7, sl_m5, sl_m6, sl_m7;
 	logic [19:0] sl_w5;
@@ -5463,6 +5464,18 @@ end else begin : g_nodbg
 			sl_slow <= sl_clr ? 16'd0 : ((sl_c6 == 10'd255 || sl_c7 == 10'd255) && !(&sl_slow)) ? sl_slow + 16'd1 : sl_slow;
 		end
 	end
+`else
+	// R880: 'L' left out by default -- R877 found the ports served on the board,
+	// and s1209 / s1210 missed the fit by 1-3 LABs with it; M2_PROBE_L=1 restores it
+	wire  [9:0]  sl_m5 = '0, sl_m6 = '0, sl_m7 = '0;
+	wire [19:0]  sl_w5 = '0;
+	wire [15:0]  sl_slow = '0;
+`endif
+`ifdef M2_PROBE_L
+	localparam logic [2:0] PB_LAST = 3'd5;
+`else
+	localparam logic [2:0] PB_LAST = 3'd4;
+`endif
 	// R880: the MIDI bytes into 16 places; a record slot with any waiting
 	// carries up to four of them instead of its turn (the turn waits a slot)
 	logic  [7:0] mi_q [16];
@@ -5500,7 +5513,7 @@ end else begin : g_nodbg
 			pb_valid <= 1'b0;
 			if (prof_tick) begin
 				pb_div <= (pb_div == 2'd2) ? 2'd0 : pb_div + 2'd1;
-				if (pb_div == 2'd0) begin pb_valid <= 1'b1; if (mi_n == 5'd0) pb_sel <= (pb_sel == 3'd5) ? 3'd0 : pb_sel + 3'd1; end   // R880: an M slot keeps the turn
+				if (pb_div == 2'd0) begin pb_valid <= 1'b1; if (mi_n == 5'd0) pb_sel <= (pb_sel == PB_LAST) ? 3'd0 : pb_sel + 3'd1; end   // R880: an M slot keeps the turn
 			end
 			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
 			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
