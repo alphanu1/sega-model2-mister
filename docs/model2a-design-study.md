@@ -38523,3 +38523,121 @@ from the zip): program dc60fe32, samples 2c87d546 f6039863 33a13138
 346ebe9e -- equal to the same sums computed in Python from vf2.zip
 (epr-17574.30; mpr-17573.31, -17572.32, -17571.36, -17570.37).
 
+
+
+**R883 -- "THE BENCH'S PITCHES KEEP GOING UP AND DOWN" (Ben, listening to the
+VF2 bench clip against MAME's): THE CLIP WAS A 48 MHz RUN WHOSE ENGINE FELL
+BEHIND REAL TIME. SEPARATELY, AT THE BOARD'S 80 MHz, OUR TIMERS RAN 1.3% FAST
+AND THE MUSIC WITH THEM: A TIMER STARTS AT ITS WRITE, NOT AT THE SAMPLE THE
+WRITE LANDS IN (MAME). FIXED, +21 ALMs est.; THE REPLAY BENCHES UNCHANGED.**
+
+*Believed (the task):* the register-visible play state (CA through MSLC, the
+timers' interrupts) runs ahead of the timers by a varying 0-8 samples (the
+output FIFO), so the driver's streaming sees position and time disagree and
+the pitch wavers. The RMS / brightness checks used so far cannot hear pitch.
+
+*Measured (sim/sound/tb_m2_2a_sound, VF2, SND_SHIFT=9, 11.6 s, latency 6-40,
+against MAME 0.289's capture -- regs.bin, out.bin, keyon.txt):*
+  1. THE CLIP BEN HEARD WAS RUN AT 48 MHz (R874's run: 511,764 output values
+     for 11.6 s -- the bench read the output every CLK / 44,100 = 1,088
+     clocks, 44,117.6 a second). At 48 MHz the engine has 1,088 clocks a
+     sample, below its need in VF2's dense passages: 972 output-FIFO
+     underruns, and the playback rate (samples generated per 100 ms of
+     drained time / 4,410) fell to 0.958-0.998 in bursts at 8.6-9.0,
+     10.2-10.5 and 11.2-11.4 s -- up to 4.2% (74 cents) flat for 100 ms at
+     a time, then back to 1.000: the pitches "going up and down". The same
+     run at 80 MHz, the board's clock: 0 underruns, the rate 0.9998-1.0002
+     in every 100 ms; the board reported 0 underruns (R877). So the wobble
+     was the bench's clock, not the RTL and not the board.
+  2. THE PITCH REGISTERS ARE MAME's. Word 8 (OCT / FNS) and word 9 (the LFO)
+     are written with MAME's values in MAME's order (5-11 s: 191 / 191; all
+     85 of 7.5-10.5 s matched by value in order); the driver does no software
+     vibrato. The output's spectral peaks match MAME's window by window
+     (e.g. 444 / 440 Hz, the FFT's 4 Hz bins). Pitch is not where it differs.
+  3. THE TIMERS DO NOT. VF2's driver re-arms timer A in its handler (0x418 =
+     206: 49 samples, prescale 0) and timer B (0x41a = 0x3c0: 504 samples).
+     Write-to-write intervals, 5-11 s: MAME 49.890 / 505.134 samples, ours
+     49.253 / 504.622 -- timer A 1.28% fast. Against MAME's out.bin (best
+     lag per 0.25 s window) the bench drifts +3,600 samples in 6.75 s
+     (+1.2%), and key-ons paired with MAME's drift -0.95%: the whole music
+     ran ~1.2% fast, so no fixed alignment with MAME holds past ~0.3 s.
+  CAUSE: MAME's timers are scheduler timers adjusted from the writing CPU's
+  local time (scsp.cpp UpdateReg 0x18-0x1d: m_timerA->adjust(attotime::
+  from_ticks(512, clock / pris / (255 - count)))), so a timer re-armed by its
+  handler a latency d after the interrupt falls due P + d after the previous
+  expiry (d ~0.9 sample in MAME's capture). Ours counted P drained ticks from
+  the sample the write landed in, so d was dropped: the period was P (P + 1
+  when d crossed a tick). R857's "the timers count output samples ... a
+  fraction of a sample late at most" is right for one period; the fraction
+  is lost on EVERY re-arm, and VF2 re-arms 900 times a second.
+  NOT THE TASK'S HYPOTHESIS: at 80 MHz the FIFO keeps the engine a near-
+  constant 6-7 samples ahead (it refills within ~900 of each sample's 1,814
+  clocks); a constant lead is a latency, not a rate, and cannot change pitch.
+  Ticking the timers on generated samples instead would have tied them to
+  the engine's jitter and left them as fast as before.
+
+*The fix (rtl/sound/scsp/m2_scsp_regs.sv, m2_scsp.sv, m2_2a_sound.sv):* each
+timer keeps its write's phase within the drained sample -- tph, the 44.1 kHz
+accumulator's top six bits (1/49 of a sample at 80 MHz, 1/59 at 48) -- and,
+once its count is due at a tick, fires in the clock the phase reaches it (or
+at the next tick). A write in the tick's own clock counts as on it. `exact`
+= !step_mode: tb_m2_scsp and the random captures apply writes at sample
+boundaries and fire on the tick as before. Area (quartus_map,
+sim/sound/scsp_area_top.sv): 1,922 -> 1,943 ALMs est., +33 ALUT, +21
+registers, no block RAM. (A clock-exact 11-bit phase cost +47 ALMs and gave
+the same timing: timer A 49.944 against 49.931.) tb_m2_2a_sound now reads its
+output once per drained sample on the board's own accumulator.
+
+*Bench, before / after (VF2 SND_SHIFT=9, 11.6 s, 80 MHz, latency 6-40):*
+                                     before (0d18683)   after      MAME
+  timer A interval, samples              49.253         49.931    49.890
+  timer B interval, samples             504.622        505.240   505.134
+  0x418 writes, 5-11 s                    5,372          5,299     5,304
+  key-ons 4.5-11.6 s                        851            850       850
+  drift against MAME (key-ons)           -0.95%         +0.064%
+  output against out.bin, the lag held at the 4.6 s window's (+-2.3 ms),
+  waveform correlation per 0.5 s from 4.6 s:
+    48 MHz (the clip Ben heard)  0.52 0.30 0.04 0.18 0.06 0.11 0.06 0.14 0.12 0.31 0.06 0.11 0.10
+    80 MHz before                0.10 0.10 0.08 0.13 0.07 0.06 0.04 0.06 0.10 0.11 0.09 0.09 0.11
+    80 MHz after                 0.63 0.58 0.53 0.73 0.36 0.46 0.39 0.56 0.11 0.14 0.12 0.09 0.08
+  after, low-passed (< ~150 Hz) / 5 ms RMS envelope, 4.6-8.6 s: 0.79-0.94 /
+  0.74-0.99 (the drum intro 0.94 / 0.99).
+The offset at which the bench meets MAME is -78 samples (-1.8 ms) from
+SND_SHIFT's 9 s, not +225 ms: +225 to +250 ms is an alias at one period of
+the drum loop (~10,300 samples), which 0.5 s windows on the drifting runs
+picked. The music starts with its MIDI, so the 68000's later start (the
+pre-boot check, ~222 ms, R871) does not move it.
+Unchanged: tb_m2_scsp on MAME's VF2 capture, 30 s: 0 samples differ from the
+reference or MAME's mix, 9,421,266 slot-samples, the IPL and the 68000's reads
+0 wrong; the random captures, seeds 2-13 and 20-31: 24 PASS; tb_m2_2a_sound
+VF2 6 s unshifted: PASS, 98.2% of writes in MAME's order, 0 underruns, the
+sound-RAM check 0 wrong; tb_m2_scsp_dsp (file unchanged) VF2's program 10 s
+and 11,350 random programs: 0 wrong. lint_top (2A; M2_NO_2A; M2_NO_DEBUG M2_PROBE=1
+M2_NO_2A_RALLY): clean. lint_idx: two new candidates, late_n[tw] / dph_n[tw],
+the existing tw class (tw is 0, 1 or 2 by construction). quartus_map
+--analyze_file on the three RTL files: 0 errors.
+
+*What is left -- from 8.6 s the bench leaves MAME's music:* there even the
+envelope correlation drops (0.04-0.47). Every pitch write still matches in
+order, but the slot allocation parts from MAME's at 5.84 s (ours slot 19,
+MAME's 20, before and after the fix) after word-0 writes the driver's
+background scan makes when it finds a slot ended, at different times and
+slots; and at 8.54 s MAME rewrites TL on three playing voices (slots 9, 22,
+23) and ours does not. Those decisions read the monitor (0x408: CA, SGC,
+EG), which our engine latches up to 7 samples ahead and our 68000 reads at
+its own pace (its scan writes MSLC 190 K times in 6 s, MAME's 216 K).
+THE LEAD IS NOT IT -- TESTED: the same run with the engine held to one
+sample ahead (o_ready at f_n < 1, a scratch copy of m2_2a_sound, not
+committed) gives a BYTE-IDENTICAL SCSP write stream, times included, and
+the same 20,391,264 68000 bus cycles: nothing the driver reads depends on
+the 6 samples of lead. What is left is the 68000's own pace: its RAM and
+SCSP accesses wait on SDRAM where MAME's take one wait state (R859), so its
+background scan reaches each slot at other moments than MAME's. Free-running
+by design (R821's case); not changed here.
+
+*For the board:* the board runs at 80 MHz with no underruns, so it never had
+the clip's wobble; it did have the 1.3% fast timers (tempo and the driver's
+900 Hz handler), which this fixes. A uniform 1.3% cannot make drums "a tinny
+hiss". The bench now holds MAME's timeline; a board clip at the same moment
+can be compared the same way (per-window lag and correlation against
+out.bin).
