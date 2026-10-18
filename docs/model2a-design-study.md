@@ -38414,3 +38414,14 @@ TGP pc moves; C records no longer stuck at 0x560c38 / 0x857). Sega Rally's
 (it would have counted every lost word; R871's probe never ran on Rally).
 VF2 and Virtua Cop 2 unchanged. If VF2 locks again, the probe's TGP pc is
 the next fact.
+
+*R880 ON THE BOARD (s1213 = 626fd21 + M2_PROBE + M2_NO_2A_RALLY; 41,438 ALM,
+553 / 553 M10K, clk_sys -0.229, clk_mem -0.131): VF2 from load, 100 s, 89 M
+records, 213 MIDI bytes, 0 lost. THE BOARD'S MIDI EQUALS MAME'S BYTE FOR
+BYTE for the first ~150 bytes (the music's setup, the drum channel's
+program and volume, the channel-14 effect note-ons), until the two attract
+runs part (their random sequences). The MIDI lead is closed: the sound board
+gets MAME's input and still plays drums as hiss and loses effects under the
+music. Remaining: the real SDRAM path under load (R877's port-7 word-pair
+anomaly in tb_m2_sdram_load, R881).*
+
