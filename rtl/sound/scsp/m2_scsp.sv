@@ -27,7 +27,8 @@
 // SOUND RAM HAS NO FIXED LATENCY (it is SDRAM), so the engine keeps no real
 // time itself: it makes a sample when the output FIFO outside has room
 // (out_ready), waits on a cache miss, and the FIFO drains at 44,100 Hz. The
-// timers count drained samples (tick44).
+// timers count drained samples (tick44), each from its write's phase within
+// the sample, as MAME's scheduler timers do (R883).
 //
 // THE 68000's ACCESSES are queued and applied in order at a slot boundary,
 // between samples, or while the DSP runs (not to the DSP's registers, then).
@@ -92,6 +93,7 @@ module m2_scsp #(
   output logic signed [31:0] out_l_raw, out_r_raw,   // MAME's smpl / smpr
   output logic signed [15:0] out_l, out_r,           // after the DAC and MVOL
   input  logic        tick44,           // one per sample drained at 44.1 kHz
+  input  logic  [5:0] tph,              // the drained sample's phase, 0 at tick44 (the timers, R883)
 
   // ---- benches
   input  logic        step_mode,        // one sample per step_go
@@ -949,7 +951,7 @@ module m2_scsp #(
   m2_scsp_regs #(.MIDI_OUT(MIDI_OUT)) u_regs (
     .clk(clk), .rst_n(rst_n),
     .a(o_addr[5:1]), .we(cw_en), .d(o_data), .be(o_be), .q(regs_q), .mi_pop(mi_pop), .mon(mon),
-    .tick44(tick44),
+    .tick44(tick44), .exact(!step_mode), .tph(tph),
     .midi_data(midi_data), .midi_valid(midi_valid), .midi_ack(midi_ack),
     .mout_data(mout_data), .mout_valid(mout_valid), .mout_ack(mout_ack),
     .ipl(ipl), .mvol(mvol), .dac18(dac18), .rbl(rbl), .rbp(rbp), .mslc(mslc)

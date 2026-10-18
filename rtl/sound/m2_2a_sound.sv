@@ -22,7 +22,8 @@
 // RAM, one access at a time; the program and samples through a 1 KB line
 // cache, RAM uncached, every RAM write snooped by the SCSP's caches), the
 // SCSP's slot fills and the SCSP's DSP. The SCSP runs ahead into an output
-// FIFO drained at exactly 44,100 Hz (tick44 counts its timers).
+// FIFO drained at exactly 44,100 Hz (tick44 counts its timers; the
+// accumulator's top six bits give each timer its write's phase, R883).
 //
 // THE LOADER STORES A 16-BIT WORD LITTLE END FIRST, so a big-endian program
 // and its samples read byte-swapped (ROM_SWAP, as m2_sound_board's); RAM is
@@ -203,7 +204,7 @@ module m2_2a_sound #(
     .dm_req(dm_req), .dm_we(dm_we), .dm_addr(dm_addr), .dm_wdata(dm_wdata), .dm_ack(c_ack), .dm_data(c_dout),
     .snp(snp), .snp_addr(snp_a),
     .out_ready(o_ready), .out_valid(o_valid), .out_l_raw(), .out_r_raw(), .out_l(o_l), .out_r(o_r),
-    .tick44(tick44), .step_mode(1'b0), .step_go(1'b0), .quiet(),
+    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .step_mode(1'b0), .step_go(1'b0), .quiet(),
     .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss(),
     .dbg_mvol(dbg_mvol)
   );

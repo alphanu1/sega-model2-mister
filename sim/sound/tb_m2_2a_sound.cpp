@@ -219,6 +219,10 @@ int main(int argc, char **argv) {
 	std::vector<double> ours_rms, mame_rms;
 	double acc_l = 0; uint64_t nacc = 0; int16_t last_l = 0; uint64_t last_samples = 0;
 	uint32_t pc_last = 0; uint64_t pc_same = 0;
+	// R883: the output read once per drained sample, on the board's own 44.1 kHz
+	// accumulator (T44_NUM / T44_DEN, 441 / CLK_MHZ x 10000) -- not every
+	// CLK / 44100 clocks rounded, which at 48 MHz read 44,117.6 samples a second
+	uint64_t tacc = 0; const uint64_t T44_DEN = uint64_t(CLK_MHZ) * 10000;
 	while (cyc < end) {
 		double now = cyc / CLK;
 		// MIDI: the next byte once its time has come and the last was taken
@@ -244,7 +248,9 @@ int main(int argc, char **argv) {
 			ramdump = nullptr;
 		}
 		// the output, one value per drained sample
-		if (cyc % uint64_t(CLK / 44100) == 0) {   // (the ports are unsigned in C++: the sign by hand)
+		tacc += 441;
+		if (tacc >= T44_DEN) {   // (the ports are unsigned in C++: the sign by hand)
+			tacc -= T44_DEN;
 			const int16_t l = int16_t(t->snd_l), r = int16_t(t->snd_r);
 			acc_l += double(l) * l; nacc++;
 			if (wav) { int16_t sm[2] = {l, r}; fwrite(sm, 2, 2, wav); nwav++; }

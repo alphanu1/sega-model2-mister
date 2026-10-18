@@ -16,6 +16,19 @@
 // shared counter, each timer holding the count its callback falls due at; this
 // clock's events go in MAME's order: a 68000 write, a MIBUF read, a MIDI
 // byte, the timers, then CheckPendingIRQ.
+//
+// A TIMER STARTS WHEN IT IS WRITTEN, NOT AT THE SAMPLE (R883). MAME's timer is
+// a scheduler timer adjusted from the writing CPU's local time, so it falls
+// due (255 - count) << prescale samples after the write itself, mid-sample.
+// Counting from the sample the write lands in dropped the part of a sample
+// between the tick and the write -- for VF2's driver, which re-arms timer A
+// (49 samples) in its handler ~0.9 sample after the interrupt, that made the
+// timer 1.3% fast and the music with it. So with `exact` each timer keeps
+// the write's phase (tph: the drained sample's progress, in 1/49 to 1/64 of
+// a sample, from the 44.1 kHz accumulator) and, once its count is due, fires
+// when the phase reaches it. The replay benches (step_mode) apply their
+// writes at sample boundaries: exact is 0 there and a timer fires on the
+// tick, as before.
 
 `timescale 1ns/1ps
 
@@ -32,6 +45,8 @@ module m2_scsp_regs #(
   input  logic        mi_pop,            // a read of MIBUF
   input  logic [15:0] mon,               // the 0x408 monitor
   input  logic        tick44,
+  input  logic        exact,             // a timer falls due at its write's phase (R883)
+  input  logic  [5:0] tph,               // the phase within the drained sample (0 at its tick)
   // MIDI
   input  logic  [7:0] midi_data,
   input  logic        midi_valid,
@@ -71,6 +86,8 @@ module m2_scsp_regs #(
   logic [14:0] gcnt;                     // drained samples, mod 2^15
   logic [2:0][14:0] due;                  // when each timer's callback falls due
   logic  [2:0] tarm, texp, fired;
+  logic [2:0][5:0] dph;                   // each timer's write phase (0: on the tick)
+  logic  [2:0] late;                      // the count is due, the phase not yet reached
   (* ramstyle = "MLAB" *) logic [7:0] mfifo [32];
   logic  [7:0] mf_head;
   logic  [4:0] mw, mr;
@@ -105,14 +122,18 @@ module m2_scsp_regs #(
   logic [10:0] scipd_n, scipd_c, mcipd_n;
   logic  [4:0] mw_n, mr_n;
   logic  [2:0] arm_n, ex_n, fired_n, rep, clr;   // clr: {MIDI, timer B / C, timer A}
+  logic  [2:0] late_n;
   logic [2:0][14:0] due_n;
+  logic [2:0][5:0] dph_n;
+  wire   [5:0] wph = (exact && !tick44) ? tph : 6'd0;   // a write in the tick's clock counts as on it
   logic        chk;
   logic  [2:0] wrt;                              // the timer written this clock
   always_comb begin
     logic [1:0] tw;
+    logic [2:0] go;                              // a timer fires this clock
     tw = (ar == 5'h0c) ? 2'd0 : (ar == 5'h0d) ? 2'd1 : 2'd2;
     scipd_n = scipd; mcipd_n = mcipd; mw_n = mw; mr_n = mr;
-    arm_n = tarm; ex_n = texp; fired_n = fired; due_n = due;
+    arm_n = tarm; ex_n = texp; fired_n = fired; due_n = due; late_n = late; dph_n = dph;
     chk = 1'b0; rep = 3'b000; clr = 3'b000; wrt = 3'b000;
     if (we) begin
       case (ar)
@@ -121,8 +142,8 @@ module m2_scsp_regs #(
           if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
         end
         5'h0c, 5'h0d, 5'h0e: begin
-          ex_n[tw] = 1'b0; fired_n[tw] = 1'b0;
-          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; wrt[tw] = 1'b1; end   // MAME re-arms below 255
+          ex_n[tw] = 1'b0; fired_n[tw] = 1'b0; late_n[tw] = 1'b0;
+          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
         end
         5'h0f: chk = 1'b1;                 // SCIEB
         5'h10: scipd_n = mrg[10:0];
@@ -141,12 +162,19 @@ module m2_scsp_regs #(
       if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
     end
     if (midi_valid && !midi_ack) begin mw_n = mw_n + 5'd1; chk = 1'b1; end
-    if (tick44) begin
-      for (int t = 0; t < 3; t++) begin
-        if (arm_n[t] && (wrt[t] ? tone : due[t] == gnext)) begin
-          arm_n[t] = 1'b0; ex_n[t] = 1'b1; fired_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
-          if (t == 0) mcipd_n[6] = 1'b1;
-        end
+    go = 3'b000;
+    for (int t = 0; t < 3; t++) begin
+      // the count due at this tick: now if written on a tick, else once the
+      // phase reaches the write's (a phase past this sample's last clock fires
+      // at the next tick)
+      if (tick44 && arm_n[t] && (wrt[t] ? tone : due[t] == gnext)) begin
+        if (wrt[t] || dph[t] == 6'd0) go[t] = 1'b1; else late_n[t] = 1'b1;
+      end else if (late[t] && !wrt[t] && (tick44 || tph >= dph[t])) begin
+        go[t] = 1'b1; late_n[t] = 1'b0;
+      end
+      if (go[t]) begin
+        arm_n[t] = 1'b0; ex_n[t] = 1'b1; fired_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
+        if (t == 0) mcipd_n[6] = 1'b1;
       end
     end
     if (chk && mw_n != mr_n) scipd_n[3] = 1'b1;
@@ -187,11 +215,11 @@ module m2_scsp_regs #(
     if (!rst_n) begin
       lv_ta <= '0; lv_tb <= '0; lv_mi <= '0; eb <= '0; scipd <= '0; mcipd <= '0; lines <= '0;
       mw <= '0; mr <= '0; midi_ack <= 1'b0; tarm <= '0; texp <= 3'b111;   // MAME init(): TimCnt = 0xffff
-      fired <= '0; due <= '0; gcnt <= '0; mvol <= '0; dac18 <= 1'b0; rbl <= '0; rbp <= '0; mslc <= '0;
+      fired <= '0; due <= '0; gcnt <= '0; mvol <= '0; late <= '0; dph <= '0; dac18 <= 1'b0; rbl <= '0; rbp <= '0; mslc <= '0;
     end else begin
       lv_ta <= lv_ta_n; lv_tb <= lv_tb_n; lv_mi <= lv_mi_n; eb <= eb_n;
       scipd <= scipd_n; mcipd <= mcipd_n; lines <= ln_n[7:1]; mw <= mw_n; mr <= mr_n;
-      tarm <= arm_n; texp <= ex_n; fired <= fired_n; due <= due_n;
+      tarm <= arm_n; texp <= ex_n; fired <= fired_n; due <= due_n; late <= late_n; dph <= dph_n;
       if (tick44) gcnt <= gnext;
       midi_ack <= midi_valid && !midi_ack;
       if (we && ar == 5'h00) begin mvol <= mrg[3:0]; dac18 <= mrg[8]; end
