@@ -105,9 +105,12 @@ int main(int argc, char** argv) {
     printf("  %2d %s  %10.0f        %5ld %5ld %5ld %5ld %6ld\n", p, (p >= 5 && p <= 7) ? "snd" : "   ",
            v.size() / (double(frames) * FRAME / 1e8), q(.5), q(.9), q(.99), q(.999), v.back());
   }
-  // (the shadow check reports ~100-200 "fails" here on port 7 alone, a word pair
-  // swapped, with or without AGE; tb_m2_sdram with M2_SDRAM_W57 and AGE reads 0
-  // fails over 2.15 M checks, so it is this stimulus, NOT EXPLAINED -- R877)
-  printf("  device violations %u, data check (not this bench's job) %ld\n", h.d->violations, h.fails);
-  return h.d->violations ? 1 : 0;
+  // R881: the ~1.5% "word pair shifted" port 7 reads R877 recorded here were
+  // this bench's addresses: bank << 23 set bit 24 of a 24-bit input, which
+  // Verilator does not mask, and the harness packs the ports' addresses into one
+  // vector -- port 6's bit 24 became port 7's bit 0. Harness::issue masks now,
+  // and the shadow check reads 0. tb_m2_sdram_cdc_load is the correctness bench
+  // for these ports through the real crossing.
+  printf("  device violations %u, data check %ld fails of %ld\n", h.d->violations, h.fails, h.checks);
+  return (h.d->violations || h.fails) ? 1 : 0;
 }

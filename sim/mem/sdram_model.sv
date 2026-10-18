@@ -85,7 +85,11 @@ module sdram_model #(
   // Storage is sparse and cannot be pre-filled cheaply, so the default comes
   // from a parameter instead. Left at zero so every existing harness keeps the
   // numbers it was baselined with.
-  parameter logic [DQ_BITS-1:0] DEFAULT_DATA = '0
+  parameter logic [DQ_BITS-1:0] DEFAULT_DATA = '0,
+  // R881: OR A HASH OF THE WORD ADDRESS (the top 16 bits of adr x 0x9E3779B1),
+  // so a word delivered from the wrong address, port or burst slot reads as a
+  // different value instead of as the same zero. 0: DEFAULT_DATA, as before.
+  parameter bit DEFAULT_HASH = 1'b0
 ) (
   input  logic                clk,
   input  logic                cke,
@@ -174,6 +178,13 @@ module sdram_model #(
   // without reshaping anything.
   logic                rd_v   [CL+2];
   logic [DQ_BITS-1:0]  rd_d   [CL+2];
+
+  // R881: what an unwritten word reads as
+  function automatic logic [DQ_BITS-1:0] dflt(input longint ad);
+    logic [31:0] h;
+    h = 32'(ad) * 32'h9E3779B1;
+    dflt = DEFAULT_HASH ? DQ_BITS'(h[31:16]) : DEFAULT_DATA;
+  endfunction
 
   function automatic longint addr_of(input logic [BA_BITS-1:0] b,
                                      input logic [ROW_BITS-1:0] r,
@@ -312,10 +323,10 @@ module sdram_model #(
               // exact off-by-one has cost this project five debugging sessions
               // already and it always looks like broken hardware.
               rd_v[CL-1] <= 1'b1;
-              rd_d[CL-1] <= mem.exists(adr) ? mem[adr] : DEFAULT_DATA;
+              rd_d[CL-1] <= mem.exists(adr) ? mem[adr] : dflt(adr);
               reads_served <= reads_served + 1;
             end else begin
-              cur = mem.exists(adr) ? mem[adr] : DEFAULT_DATA;
+              cur = mem.exists(adr) ? mem[adr] : dflt(adr);
               // DQM is active-high mask: a set bit suppresses that byte.
               if (!dqm[0]) cur[7:0]  = dq_i[7:0];
               if (!dqm[1]) cur[15:8] = dq_i[15:8];

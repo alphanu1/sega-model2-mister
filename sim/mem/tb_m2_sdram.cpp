@@ -64,6 +64,18 @@ static const int NP = TB_NP;   // R275: the texel fetch made eleven; R789: -DTB_
 static const unsigned g_long = std::getenv("M2_SDRAM_LONG") ? unsigned(std::strtoul(std::getenv("M2_SDRAM_LONG"), nullptr, 16)) : 0u;
 static int burst_of(int p) { return ((g_long >> p) & 1) ? 8 : (p == 8 || p == 9) ? 2 : 4; }
 static const bool g_w57 = std::getenv("M2_SDRAM_W57") != nullptr;   // R871
+// R881: EVERY ADDRESS IS MASKED TO THE PORT'S WIDTH BEFORE IT IS DRIVEN. Verilator
+// does not mask a value written into a narrower input from C++, and the harness
+// packs the thirteen 24-bit p*_addr inputs into one p_addr vector: a 25th bit set
+// on port N lands in bit 0 of port N+1's address. tb_m2_sdram_load built its
+// addresses as bank << 23, which sets bit 24 for banks 2 and 3, so port 7 read
+// and wrote at address | 1 whenever port 6 had -- R877's "word pair shifted on
+// port 7", a bench artifact. RTL truncates; so does this, and the shadow sees
+// the address the port saw.
+#ifndef TB_COL_BITS
+#define TB_COL_BITS 9
+#endif
+static const uint32_t g_amask = (1u << (2 + 13 + TB_COL_BITS)) - 1u;
 
 struct Harness {
   Vm2_sdram_harness* d;
@@ -269,6 +281,7 @@ struct Harness {
   }
 
   void issue(int p, uint32_t addr, bool write, uint16_t data, uint8_t be = 3) {
+    addr &= g_amask;   // R881
     int words = write ? 1 : burst_of(p);
     if (words > 1) addr &= ~(uint32_t)(words - 1);   // bursts are aligned
     port[p].busy = true; port[p].addr = addr; port[p].words = words;
@@ -290,6 +303,7 @@ struct Harness {
   }
 
   void issueWrite(uint32_t addr, uint16_t data) {
+    addr &= g_amask;   // R881
     wr_busy = true; wr_addr = addr; wr_data = data;
     d->wr_addr = addr; d->wr_din = data; d->wr_be = 3; d->wr_req = 1;
     wr_req_held = true;
