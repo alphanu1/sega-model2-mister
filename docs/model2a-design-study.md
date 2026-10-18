@@ -38271,3 +38271,146 @@ turn waits one slot), with a running count so a lost record shows. The
 decoder rebuilds the stream (decode_why.py <capture> 80 <out>) for a byte-
 for-byte comparison with MAME's midi.txt.
 
+
+**R876 -- ZERO GUNNER'S LOCKUP IS `rep rpc`: A REGISTER-COUNTED rep READ b0,
+MODEL 1'S FIXED FAULT, NEVER PORTED. AND SEGA RALLY RUNS 1,348 WORDS AHEAD OF
+THE TGP INTO A 128-WORD QUEUE THAT DROPPED THEM: A FULL INPUT FIFO NOW HOLDS
+THE i960. NEITHER EXPLAINS VF2's 0x7dc4. NOT FITTED.**
+
+*The board (s1207 = af10f15 + M2_PROBE, decode_why):* Zero Gunner locks within
+1-2 s of play; for 15 s every C record is i960 IP 0x00560c38, copro_stall,
+TGP pc 0x0857, no unimplemented op, no input or output word dropped.
+
+*What the probe's pc is:* m2_tgp dbg_pc = retire_pc, the last instruction
+RETIRED -- an address in the game's uploaded program (Zero Gunner uploads
+2,856 words, 0xb28; there is no microcode in front of it). A `rep` body
+retires at its own pc each iteration, so 0x857 is the body below.
+
+*What 0x857 is (Zero Gunner's TGP program, dumped by the capture; a Python
+port of MAME's mb86233d.cpp read it):* the dispatcher at 0x04f takes a command
+word's exponent field (the function-port code) and jumps through the table at
+0x055. Codes 0x37 / 0x38 -> 0x84f: `mov rf1, $0x40` (N). Code 0x39 -> 0x851:
+`ldi #0x41, x1; d = $0x40 << 2; mov d, rpc; rep rpc; mov rf1, (bx1+1)` --
+pop 4N words into data RAM. Code 0x3a -> 0x859: the same count, pushed out.
+The i960 at 0x560c38 is in a different routine: `st 0x2b2b` to the function
+port 0x8802b0 (command 0x2b), three argument pushes, then `ld (g6)` x3 -- the
+three results. So the TGP was still popping inside command 0x39 while the
+i960 had moved on and was waiting for command 0x2b's answer: the TGP believed
+it was owed more words than the i960 sent.
+
+*Why (MAME 0.289, mb86233.cpp case 0x0f sub 2):* `u8 r = opcode & 0x8000 ?
+read_reg(opcode) : opcode;` -- read_reg masks the index to opcode & 0x3f,
+0x34 = rpc. mb86233_core loaded the register-file read address for a
+register-sourced rep with 6'd0: b0. R737 says so in as many words ("Model 1's
+deb6642 reads opcode[5:0] there (MAME), not ported (R732)"), and
+tb_mb86233_core's generator pinned the register form to index 0 "because this
+core still reads b0". Model 1's mb86233_core.sv (reference 0b5d04f, current
+with its local repository) has the fix and describes this exact failure: "a
+transfer that runs too many times waits on an input FIFO that will never
+fill". Zero Gunner's b0 is 0 (`ldi #0x0, b0` at 0x043), so every `rep rpc`
+ran 256 times; the first command 0x39 hangs. Only Zero Gunner uses the form:
+`rep <register>` occurs at 0x856 and 0x85e of its program and nowhere in
+VF2's (3,802 words), Sega Rally's (1,665), Daytona's or Desert Tank's.
+
+*Reproduced (MAME 0.289 + sim/tgp/tgp_capture_2a.lua, new: tgp_capture.lua
+with its Daytona inputs off, over mame_m2_2a_play.lua's Zero Gunner session;
+coin at 20 s, window frames 1300-3700 = 41.7 s, play from ~30 s; 4,200,104
+words in, 1,511,470 out, 1,133,471 io reads, 728,897 io writes, no upload in
+the window; the first 0x38 / 0x39 at frame 1769, 6,102 of each in the
+window). tgp_replay TGP_PROG=4096 on af10f15's RTL: FAIL -- "no retire for
+2M cycles at pc 0857 state S_SRC", after 140,748 input pops, 48,586 outputs,
+46,768 io reads, all bit-exact against MAME. The last commands: 0x38 with N
+= 2, 0x39, eight words; MAME took eight and went on to command 0x05, the RTL
+took 28 and waited. Board and bench agree on the pc and on the direction of
+the wait.
+
+*FIX (mb86233_core.sv, Model 1's rule):* rd_addr_q for a register-sourced
+rep (rep group, sub 2, opcode[15]) is opcode[5:0]; rd_hold carries it to
+S_RETIRE as before. No state, no cycle; one more term in a 6-bit mux. The
+replay of the whole window: PASS, bit-exact -- 1,511,470 outputs, 4,200,104
+pops, 1,133,471 io reads and 728,897 writes, 0 mismatches, unimplemented 0;
+52.0 M TGP instructions, 4.04 s of TGP time at 80 MHz in 41.7 s.
+
+*SEGA RALLY -- A DIFFERENT CAUSE, FOUND ON THE WAY (the same capture in a
+race: srallyc, mame_m2_2a_play.lua's rally session, frames 1300-3720).*
+Its TGP is bit-exact over the whole window with the plain replay (706,456
+outputs, 4,240,743 pops, 2,096,663 io reads, 4,755,136 io writes, 452,091
+buffer-RAM reads served from the capture, 0 mismatches). But the i960 runs
+ahead: between two output reads it pushes up to 1,348 words (1,482 runs over
+1,024 words, 3,042 over 128 in 40 s; the first at frame 1516), and MAME's
+input FIFO sits above its 8 words for 2.56 M of the 4.24 M pushes -- its
+generic_fifo HALTS the i960 then (model2.cpp:197, on_fifo_full_post_sync).
+m2_copro never held a write: its queue is 128 and a push into it full was
+dropped (dbg_in_dropped), on R133-era reasoning ("the queue is 128 deep and the
+counter says if it was ever too small"). The TGP spends ~150 clk_sys cycles
+a word in Rally's window; an i960 storing a word every ~20 cycles is 128
+ahead within ~150 words of a 1,000-word run. Every word past that was lost
+and the command stream slipped -- the 3D dropping out and the crash Ben saw
+fit it. The other games never come near: longest run Daytona 28, Desert
+Tank 56, VF2 34, Zero Gunner 38.
+RESULT BENCH (tb_tgp_replay --board-push, new: pushes offered whatever the
+FIFO holds, completing unless m2_copro stalls them, as the board's bridge;
+--gap 40, the i960 0..40 cycles between accesses; frames 1300-1530):
+  * the old m2_copro (the rep fix in): the first word dropped at feed
+    frame 1515 -- the first long run -- after 40,297 bit-exact pops; then
+    3,233 of 43,728 pops, 1,089 of 2,328 outputs wrong, 4,494 words dropped
+    by the cap of 300 M cycles, and the TGP off the end of its program (pc
+    0xe09b). On the board that is a command stream slipping on every long
+    run.
+*FIX (m2_copro.sv):* a FIFO-port or function-port write into a full input
+queue raises `stall` (push_hold) while the TGP runs, and lands on the first
+cycle a slot frees; the bridge already holds a stalled write in S_IOW
+(io_sel re-asserted, one push on completion). A halted or uploading TGP
+keeps the old outcome (it cannot drain). Every original-board game measured
+stays below 128, so the original core never stalls on it.
+  * with it, the same run: PASS, bit-exact (6,019 outputs, 71,433 pops,
+    21,860 io reads, 80,889 io writes), 0 dropped; the i960 held on the full
+    queue 2.35 M cycles (29 ms at 80 MHz over 230 frames).
+  * the whole race window with board-like timing (--board-push --gap 40
+    --jitter 40): PASS, bit-exact (706,456 outputs, 4,240,743 pops,
+    2,096,663 io reads, 4,755,136 io writes), 0 dropped. Zero Gunner's
+    window the same way (--gap 60 --jitter 40): PASS, bit-exact, the hold
+    never fires.
+  * WHAT IT COSTS, AN ESTIMATE: in that run the i960 model sat on the full
+    queue for 470 M of 888 M cycles, and the TGP was busy 11.1 s of TGP time
+    at 80 MHz (CPI 9.0 with the jitter) across 2,420 frames (42 s). The
+    bench's i960 offers a word every ~20 cycles, faster than the board's, so
+    this overstates the hold -- but Sega Rally is TGP-bound on this core
+    where the other games are not, and if it runs below MAME's frame rate on
+    the board the TGP's speed (R771-R778) is the place to look, not this.
+
+*VF2's 0x7dc4 (s1203, minutes of attract) is NEITHER.* VF2's program has no
+register-counted rep, and its longest run ahead is 34 words. Its TGP is
+bit-exact under board-like timing too: tb_tgp_replay --gap 60 --jitter 40
+(new: memory answers lat + 0..40 cycles, seeded) on the three VF2 windows
+(frames 20-760, 700-760, 1500-1531: 83,494 words in at 1500), Sega Rally's
+two boot windows and Zero Gunner's: PASS, bit-exact, 0 dropped. So the
+TGP's own arithmetic, sequencing and memory handshakes under variable
+latency are cleared for the code those windows run. Open, with what settles
+it: the next VF2 lockup on a probe build now reports the TGP's pc; if it is
+the dispatch wait (0x035 region, input empty) the i960 / bridge lost a word
+or a command; if it is in a handler, a capture of that handler's window.
+A candidate not tested: VF2's TGP reads buffer RAM the i960 has just written
+(R852 b); on the board those reads go through m2_sdram port 9 while the
+i960's stores go through the bridge -- a read that overtakes a posted store
+reads stale data, and a stale count can steer a TGP loop.
+
+*Benches:* test_mb86233_core: the rep generator now names b0, b1 or rpc
+(with b0 loaded with a different count) -- on the old core FAIL at trial 0
+("PC ... dut retired 0004 | ref 0005"), fixed: 200 trials PASS (178
+register-form reps), and 12,333 trials / 493,320 retires / 12,225
+register-form reps with 0 divergences (trial 12,334 is a cfxd of 2.5e27,
+where MAME's s32(float) is undefined C -- x86 gives 0x80000000, the RTL
+0x08000000; not a hardware fact, not this change). test_tgp: every unit PASS (fp_mul / fp_add / fp_div, the ALU both builds, AGU, regs and its miter, mem, dec, xfer exhaustive, seq, core, geo_xform and its miter); test_fp_mul_subnorm / test_fp_add_subnorm 0 fails.
+tgp_replay: Daytona race5400 (TGP_PROG 2048) PASS as before (15 output and 5 write differences, all NaN encoding); VF2 1500 PASS, bit-exact, plain and with --board-push --gap 60 --jitter 40 (the input hold never fires: 0 cycles); test_m2_boot (Daytona, the whole core) PASS, 0 words dropped;
+Zero Gunner play PASS (above); Sega Rally race PASS (above).
+lint_top clean (2A, M2_NO_2A, M2_PROBE); lint_idx nothing in the changed
+modules; quartus_map 17.0 --analyze_file m2_copro.sv, mb86233_core.sv: 0
+errors.
+
+*What the board must show:* Zero Gunner plays past its first seconds (the
+TGP pc moves; C records no longer stuck at 0x560c38 / 0x857). Sega Rally's
+3D stays up through a race and the Q record's input-dropped count stays 0
+(it would have counted every lost word; R871's probe never ran on Rally).
+VF2 and Virtua Cop 2 unchanged. If VF2 locks again, the probe's TGP pc is
+the next fact.

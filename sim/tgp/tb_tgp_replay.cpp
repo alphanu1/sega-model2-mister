@@ -49,6 +49,16 @@
 //   --lat/--wlat   table+data-ROM read latency / buffer-RAM write ack (cycles, default 6)
 //   --frames N     replay only the first N frames
 //   --halfword-replicate  feed 16-bit FIFO stores as this core's i960 drives them
+//   --gap N        R876: board-like i960 pacing -- 0..N idle cycles (seeded) before
+//                  each push / pop, so the TGP meets an empty input FIFO mid-command
+//                  as it does on the board (the default feed is infinitely fast)
+//   --jitter N     R876: each table / data-ROM / buffer-RAM access answered after
+//                  lat + 0..N cycles (seeded), the SDRAM's variable latency
+//   --seed N       the seed for --gap / --jitter (default 1)
+//   --max-cyc N    R876: give up after N million cycles (a desynchronised run)
+//   --board-push   R876: offer every push as the board's bridge does, whatever the
+//                  FIFO holds; it completes unless m2_copro raises stall (R876's
+//                  hold -- before it, a push into a full queue was dropped)
 //   --dump-rtl     write the RTL's own outputs + io writes; --vs-rtl compares
 //                  against such a file, for exact regression of a faster RTL
 //                  against this one where MAME and the RTL legitimately differ
@@ -164,6 +174,10 @@ int main(int argc, char **argv) {
   std::string dir = argv[1];
   int lat = 6, wlat = 6, max_frames = 1 << 30, max_mism = 20, profile_n = 25;
   bool quiet = false, strict_nan = false;
+  int gap = 0, jitter = 0;          // R876
+  bool board_push = false;          // R876
+  uint64_t max_cyc = 0;             // R876: --max-cyc N (millions), 0 = none
+  uint32_t seed = 1;
   // --halfword-replicate: feed a 16-bit FIFO store ('H') the way this core's
   // i960 presents it -- i960_lsu drives {2{st_word[15:0]}} and m2_copro takes
   // wdata whole -- instead of MAME's zero-extended word. An experiment switch.
@@ -181,6 +195,11 @@ int main(int argc, char **argv) {
     else if (a == "--quiet") quiet = true;
     else if (a == "--strict-nan") strict_nan = true;
     else if (a == "--halfword-replicate") hw_rep = true;
+    else if (a == "--gap") gap = nxt();
+    else if (a == "--jitter") jitter = nxt();
+    else if (a == "--seed") seed = (uint32_t)nxt();
+    else if (a == "--board-push") board_push = true;
+    else if (a == "--max-cyc") max_cyc = (uint64_t)nxt() * 1000000ull;
     else if (a == "--only" && i + 1 < argc) only = argv[++i];
     else if (a == "--dump-rtl" && i + 1 < argc) dump_rtl = argv[++i];
     else if (a == "--vs-rtl" && i + 1 < argc) vs_rtl = argv[++i];
@@ -234,6 +253,16 @@ split_done:
               exp_out.size(), exp_rd.size(), exp_wr.size());
   std::printf("memory model: table/data-ROM read latency %d cycles, buffer-RAM write ack %d cycles\n",
               lat, wlat);
+  if (gap || jitter)
+    std::printf("board-like timing (R876): i960 gap 0..%d cycles, memory jitter +0..%d cycles, seed %u\n",
+                gap, jitter, seed);
+  // xorshift32: deterministic for a seed, independent of the C library
+  uint32_t rng = seed ? seed : 1;
+  auto rnd = [&](int n) -> int {
+    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+    return n > 0 ? int(rng % uint32_t(n + 1)) : 0;
+  };
+  int gap_left = 0;
 
   // --------------------------------------------------------------- DUT
   Vm2_copro *top = new Vm2_copro;
@@ -371,17 +400,19 @@ split_done:
   uint64_t rep_iter = 0;
   uint64_t last_retire_cyc = cyc;
   bool end_ok = false;
+  uint64_t first_drop_cyc = 0;      // R876
 
   while (true) {
     // ---------------- i960 side: drive this cycle's access
     clear_bus();
     bool feed_xread = false, feed_write = false;
     while (fp < feed.size() && feed[fp].t == 'F') { ++fp; ++feed_frame; }
-    if (fp < feed.size()) {
+    if (gap_left > 0) --gap_left;     // R876: the i960 busy elsewhere
+    else if (fp < feed.size()) {
       const Ev &e = feed[fp];
       if (e.t == 'X') {
         top->sel_fifo = 1; top->we = 0; feed_xread = true;
-      } else if (!R(fin_full)) {
+      } else if (!R(fin_full) || board_push) {   // R876
         feed_write = true;
         top->we = 1; top->wdata = (hw_rep && e.t == 'H') ? ((e.b & 0xffffu) * 0x10001u) : e.b;
         if (e.t == 'N') { top->sel_fn = 1; top->fn_code = (e.a >> 4) & 0xff; }
@@ -422,10 +453,13 @@ split_done:
       if (!top->stall) {
         const uint32_t got = top->rdata;
         if (xi < exp_xpop.size() && got != exp_xpop[xi]) { ++mism_x; report("i960-pop", xi, exp_xpop[xi], got, ""); }
-        ++xi; ++fp;
+        ++xi; ++fp; gap_left = rnd(gap);
       } else { ++feed_x_block; ++f_xblk[cur_frame]; }
     } else if (feed_write) {
-      ++fp;
+      // --board-push: the write is offered whatever the FIFO holds, and it
+      // completes unless m2_copro holds it (stall) -- the board's bridge.
+      if (!(board_push && top->stall)) { ++fp; gap_left = rnd(gap); }
+      else ++feed_full_block;
     }
 
     // TGP input pop
@@ -513,11 +547,11 @@ split_done:
     // the data looked up when it is accepted; the address is held until the
     // acknowledge because the core waits in its _W state.
     if (tbl_left < 0 && top->tbl_req && !top->tbl_ack) {
-      tbl_left = lat - 1;
+      tbl_left = lat - 1 + rnd(jitter);
       top->tbl_rdata = tables[top->tbl_addr & 0xffff];
     }
     if (dat_left < 0 && top->dat_req && !top->dat_ack) {
-      dat_left = lat - 1;
+      dat_left = lat - 1 + rnd(jitter);
       if (top->dat_is_buf) {
         // The i960 owns buffer RAM: the value is MAME's, from the R record.
         ++buf_reads;
@@ -526,7 +560,7 @@ split_done:
         dat_val = cdata[top->dat_addr & 0x1fffff];
       }
     }
-    if (bw_left < 0 && top->bufw_req && !top->bufw_ack) bw_left = wlat - 1;
+    if (bw_left < 0 && top->bufw_req && !top->bufw_ack) bw_left = wlat - 1 + rnd(jitter);
 
     // ---------------- termination
     const bool feed_done = (fp >= feed.size());
@@ -538,6 +572,17 @@ split_done:
     if (feed_done && max_frames < (1 << 30) && CORE(state) == S_SRC && CORE(src_fifo_q)
         && !CORE(fifo_ack) && !R(fin_valid)) {
       end_ok = true;  // truncated window: parked with nothing left to feed
+      break;
+    }
+    // R876: the first word m2_copro drops says where a run went wrong
+    if (top->dbg_in_dropped && !first_drop_cyc) {
+      first_drop_cyc = cyc;
+      std::printf("FIRST DROP: input word lost at cycle %llu, feed frame %u, %zu pops checked\n",
+                  (unsigned long long)cyc, (feed_frame && feed_frame <= NF) ? frame_no[feed_frame - 1] : 0u, pi);
+    }
+    if (max_cyc && cyc - run_start > max_cyc) {
+      std::printf("FAIL: --max-cyc reached at pc %04x, %zu of %zu inputs fed\n",
+                  (unsigned)SEQ(pc), fp, feed.size());
       break;
     }
     if (cyc - last_retire_cyc > 2000000) {
