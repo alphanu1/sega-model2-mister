@@ -33,7 +33,10 @@
 // THE 68000's ACCESSES are queued and applied in order at a slot boundary,
 // between samples, or while the DSP runs (not to the DSP's registers, then).
 // MAME applies them between samples; here a write can land between two slots
-// of a sample -- the one departure, R821's.
+// of a sample -- the one departure, R821's. (R885: replayed through MAME's
+// logic with each access where the engine applied it, a free-running VF2 run
+// is MAME's to the sample.) The 0x408 monitor is latched in the 68000's own
+// time, not the engine's (R885, below).
 //
 // SWITCHES (R856 / R857):
 //   FM         the ring buffer, MDL / MDXSL / MDYSL, STWINH and the 68000's
@@ -94,6 +97,7 @@ module m2_scsp #(
   output logic signed [15:0] out_l, out_r,           // after the DAC and MVOL
   input  logic        tick44,           // one per sample drained at 44.1 kHz
   input  logic  [5:0] tph,              // the drained sample's phase, 0 at tick44 (the timers, R883)
+  input  logic        cpu_tick,         // the 68000's own sample boundary (each 512 of its half-clocks): the 0x408 monitor, R885
 
   // ---- benches
   input  logic        step_mode,        // one sample per step_go
@@ -134,6 +138,9 @@ module m2_scsp #(
   logic        rd_pend;
   logic [11:1] rd_a;
   logic        wq_pop, rd_done;
+  logic        mon_fast, mon_go;                  // R885: a 0x408 read, free-running; answered
+  logic  [4:0] mslc_c, mon_slot;                  // MSLC as the 68000 wrote it; latched at its boundary
+  logic        mon_req, mon_pend, mon_rd;
   logic        op_busy, op_rd;
   logic [11:1] o_addr;
   logic [15:0] o_data;
@@ -293,8 +300,8 @@ module m2_scsp #(
         cpu_ack <= 1'b1;
         wh_v <= 1'b0;
       end
-      if (cpu_req && !cpu_we) begin rd_pend <= 1'b1; rd_a <= cpu_addr; end
-      if (rd_done) begin rd_pend <= 1'b0; cpu_ack <= 1'b1; end
+      if (cpu_req && !cpu_we && !mon_fast) begin rd_pend <= 1'b1; rd_a <= cpu_addr; end
+      if (rd_done || mon_go) begin rd_pend <= 1'b0; cpu_ack <= 1'b1; end
       if (wq_pop) wq_rd <= wq_rd + 2'd1;
       wq_n <= wq_n + {2'd0, wq_push} - {2'd0, wq_pop};
     end
@@ -344,7 +351,8 @@ module m2_scsp #(
   wire dsp_idle = !dsp_busy && !dsp_pend;
   wire op_win   = (f_flow == 3'(FLOW_DISPATCH)) ||
                   (f_flow == 3'(FLOW_WAIT) && (f_bc == 4'(C_GO) || f_bc == 4'(C_DSPIDLE)));
-  wire op_start = op_win && !op_busy && !call_go && op_ok;
+  wire op_start = op_win && !op_busy && !call_go && op_ok && !mon_req;
+  wire mon_start = op_win && !op_busy && !call_go && mon_req;     // R885: the monitor's latch first
   wire stop_now = (!loop_on && ((f3 && f1) || (f4 && f2))) || stop_rel;
   wire [4:0] idx_f = (f_idx == 2'(IDX_SW)) ? sw : (f_idx == 2'(IDX_MSLC)) ? mslc : slot[4:0];
 
@@ -353,7 +361,7 @@ module m2_scsp #(
   always_comb begin
     upc_n = upc + 8'd1; hold = 1'b0;
     if (call_go) upc_n = call_to;
-    else if (op_busy || op_start) hold = 1'b1;
+    else if (op_busy || op_start || mon_start) hold = 1'b1;
     else case (f_flow)
       3'(FLOW_BR):      if (cond(f_bc)) upc_n = f_tgt;
       3'(FLOW_JMP):     upc_n = f_tgt;
@@ -396,7 +404,7 @@ module m2_scsp #(
           if (stop_now && upc != UA_SKIP) active[slot[4:0]] <= 1'b0;
         end
       end
-      if (hold && !op_busy && !op_start && f_flow == 3'(FLOW_DISPATCH) && !slot[5] && !active[slot[4:0]])
+      if (hold && !op_busy && !op_start && !mon_start && f_flow == 3'(FLOW_DISPATCH) && !slot[5] && !active[slot[4:0]])
         slot <= slot + 6'd1;
       // ---- E-stage effects on the sequencer's state
       if (e_s2 == 4'(S2_ICLR)) slot <= 6'd0;
@@ -748,7 +756,8 @@ module m2_scsp #(
           if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
         end
         4'(S2_MON1): mon_ca <= st_q[27:24];
-        4'(S2_MON2): mon <= {5'd0, mon_ca, ~st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
+        4'(S2_MON2): if (step_mode) mon <= {5'd0, mon_ca, ~st_q[27:26], 5'h1f - st_q[25:21]};   // MAME latches it after each update
+        4'(S2_MON3): mon <= {5'd0, mon_ca, ~st_q[27:26], 5'h1f - st_q[25:21]};   // (free-running: at the 68000's boundary, R885)
         default: ;
       endcase
     end
@@ -902,6 +911,8 @@ module m2_scsp #(
     end else begin
       wq_pop <= 1'b0; rd_done <= 1'b0; mi_pop <= 1'b0; call_go <= 1'b0;
       if (lv_req && !lv_busy) lv_req <= 1'b0;
+      if (mon_start) begin call_go <= 1'b1; call_to <= UA_MON; call_sw <= mon_slot; end
+      if (mon_go) cpu_dout <= mon;
       if (op_start) begin
         op_busy <= 1'b1; oc <= '0; op_rd <= wq_n == 3'd0;
         o_addr <= nx_addr; o_data <= wq_h[15:0]; o_be <= wq_h[28:27];
@@ -946,6 +957,39 @@ module m2_scsp #(
   end
 
   // =====================================================================
+  // THE 0x408 MONITOR IN THE 68000's TIME (R885)
+  // =====================================================================
+  // VF2's driver selects a slot (MSLC), waits ~300 of its clocks -- more than
+  // a sample's 256 -- and reads that slot's CA bit to know which half of the
+  // voice's ring is playing, and refills the other. In MAME the monitor is
+  // latched once a sample of the 68000's own time, for the slot MSLC selects
+  // then, so the wait always sees its slot. The free-running engine latched it
+  // at the end of each sample it MADE, and its samples are not evenly spaced
+  // in real time (a slow DSP pass or an SDRAM wait holds one past the next
+  // drain): 11% of VF2's reads saw another slot's (R885). So, free-running:
+  // at each of the 68000's sample boundaries (cpu_tick) the slot MSLC selects
+  // (as the 68000 wrote it, at its bus time) is latched by a microcode call at
+  // the next operation window (a few clocks), and a read of 0x408 waits for
+  // that latch -- the 68000's clock stops meanwhile (m2_2a_sound EXACT), so the
+  // wait is not in its own time. Step mode keeps the per-sample latch.
+  assign mon_fast = !step_mode && cpu_addr == 11'h204;
+  assign mon_go   = mon_rd && !mon_pend;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mslc_c <= '0; mon_slot <= '0; mon_req <= 1'b0; mon_pend <= 1'b0; mon_rd <= 1'b0;
+    end else begin
+      if (cpu_req && cpu_we && cpu_addr == 11'h204 && cpu_be[1]) mslc_c <= cpu_din[15:11];
+      if (cpu_tick && !step_mode) begin mon_slot <= mslc_c; mon_req <= 1'b1; mon_pend <= 1'b1; end
+      else begin
+        if (mon_start) mon_req <= 1'b0;
+        if (e_s2 == 4'(S2_MON3) && !mon_req) mon_pend <= 1'b0;
+      end
+      if (cpu_req && !cpu_we && mon_fast) mon_rd <= 1'b1;
+      else if (mon_go) mon_rd <= 1'b0;
+    end
+  end
+
+  // =====================================================================
   // common registers, timers, interrupts, MIDI
   // =====================================================================
   m2_scsp_regs #(.MIDI_OUT(MIDI_OUT)) u_regs (
@@ -977,8 +1021,47 @@ module m2_scsp #(
   end
 `endif
 
+`ifdef M2_SND_TRACE
+  // R885: what the engine is given and what it makes, in ITS time, for
+  // sim/sound/scsp_split.cpp (the free-running engine replayed through
+  // scsp_ref.h). +sndtrace=<file>. Each 68000 access as the engine applies it,
+  // with the sample it is applied in and where (tr_pos: 0..31 before that
+  // slot, 32 after the slots; +64 inside a slot's microprogram -- only a RAM
+  // write lands there), and every sample made. tr_tick: samples drained.
+  integer      tr_f;
+  string       tr_name;
+  logic [31:0] tr_tick;
+  logic  [6:0] tr_pos, tr_pos_r, tr_rpos;
+  logic [31:0] tr_rn;
+  logic [11:1] tr_ra;
+  wire  [31:0] tr_n = dbg_samples + {31'd0, e_s2 == 4'(S2_OUTV)};   // (OUTV in E: the count moves this clock)
+  initial begin
+    tr_f = 0; tr_tick = '0; tr_pos_r = '0;
+    if ($value$plusargs("sndtrace=%s", tr_name)) tr_f = $fopen(tr_name, "w");
+  end
+  always_comb begin
+    if (upc >= UA_IDLE && upc < UA_DISPATCH) tr_pos = 7'd0;
+    else if (upc == UA_DISPATCH)             tr_pos = slot[5] ? 7'd32 : {2'd0, slot[4:0]};
+    else if (upc < UA_SWEEP)                 tr_pos = 7'd32;
+    else if (upc < UA_SKIP)                  tr_pos = tr_pos_r;        // a call from an op window
+    else                                     tr_pos = {1'b1, slot};
+  end
+  always_ff @(posedge clk) begin
+    if (upc < UA_SWEEP || upc >= UA_SKIP) tr_pos_r <= tr_pos;
+    if (tick44) tr_tick <= tr_tick + 32'd1;
+    if (tr_f != 0) begin
+      if (op_start && wq_n != 3'd0)
+        $fwrite(tr_f, "W %0d %0d %03x %04x %0d %0d\n", tr_n, tr_pos, h_addr, wq_h[15:0], wq_h[28:27], tr_tick);
+      if (op_start && wq_n == 3'd0) begin tr_rn <= tr_n; tr_rpos <= tr_pos; tr_ra <= rd_a; end
+      if (rd_done) $fwrite(tr_f, "R %0d %0d %03x %04x %0d\n", tr_rn, tr_rpos, tr_ra, cpu_dout, tr_tick);
+      if (out_valid) $fwrite(tr_f, "O %0d %0d %0d\n", dbg_samples - 32'd1, out_l_raw, out_r_raw);
+      if (mon_go) $fwrite(tr_f, "Q %0d %0d %04x %0d %0d %0d\n", tr_n, tr_pos, mon, mon_slot, mslc_c, tr_tick);   // 0x408 in the 68000's time
+    end
+  end
+`endif
+
   assign dbg_mvol = mvol;
-  assign quiet = upc == UA_IDLE && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
+  assign quiet =upc == UA_IDLE && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
                  !lv_busy && !lv_req && !dsp_busy;
 
   /* verilator lint_off UNUSEDSIGNAL */

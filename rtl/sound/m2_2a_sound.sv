@@ -197,6 +197,19 @@ module m2_2a_sound #(
     end
   end
 
+  // R885: the 68000's own sample clock -- 512 of its half-clocks (2 x 11.2896
+  // MHz / 44,100), as MAME's SCSP stream advances with the 68000's local time --
+  // for the SCSP's 0x408 monitor (m2_scsp cpu_tick)
+  logic [8:0] hcnt;
+  logic       cpu_tick;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin hcnt <= '0; cpu_tick <= 1'b0; end
+    else begin
+      cpu_tick <= issue && (&hcnt);
+      if (issue) hcnt <= hcnt + 9'd1;
+    end
+  end
+
   // ------------------------------------------------------- the line cache
   // 128 lines of four words, direct-mapped on the SDRAM word address, for
   // the program and the samples (read-only, so never invalidated)
@@ -241,7 +254,7 @@ module m2_2a_sound #(
     .dm_req(dm_req), .dm_we(dm_we), .dm_addr(dm_addr), .dm_wdata(dm_wdata), .dm_ack(c_ack), .dm_data(c_dout),
     .snp(snp), .snp_addr(snp_a),
     .out_ready(o_ready), .out_valid(o_valid), .out_l_raw(), .out_r_raw(), .out_l(o_l), .out_r(o_r),
-    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .step_mode(1'b0), .step_go(1'b0), .quiet(),
+    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .cpu_tick(cpu_tick), .step_mode(1'b0), .step_go(1'b0), .quiet(),
     .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss(),
     .dbg_mvol(dbg_mvol)
   );
@@ -474,6 +487,27 @@ module m2_2a_sound #(
   assign iedb = rq;
 
   // ---------------------------------------------------------------- debug
+`ifdef M2_SND_TRACE
+  // R885: every sound-RAM write as it lands (M: the 68000's port, D: the DSP's),
+  // into the SCSP's trace (m2_scsp, +sndtrace=<file>), in the engine's time
+  always_ff @(posedge clk) if (u_scsp.tr_f != 0) begin
+    if (a_ack && a_we) $fwrite(u_scsp.tr_f, "M %0d %0d %05x %04x\n", u_scsp.tr_n, u_scsp.tr_pos, a_addr - RAM_BASE, a_din);
+    if (c_ack && c_we) $fwrite(u_scsp.tr_f, "D %0d %0d %05x %04x\n", u_scsp.tr_n, u_scsp.tr_pos, c_addr - RAM_BASE, c_din);
+  end
+  // how far the 68000 falls behind real time, and how long its 0x408 reads wait
+  longint tr_clk = 0, tr_cap = 0, tr_cred = 0, tr_monw = 0, tr_monr = 0;
+  int     tr_credmax = 0;
+  always_ff @(posedge clk) if (cpu_go) begin
+    tr_clk <= tr_clk + 1; tr_cred <= tr_cred + longint'(cred);
+    if (cred == 10'(CRED_MAX)) tr_cap <= tr_cap + 1;
+    if (int'(cred) > tr_credmax) tr_credmax <= int'(cred);
+    if (u_scsp.mon_rd) tr_monw <= tr_monw + 1;
+    if (u_scsp.mon_go) tr_monr <= tr_monr + 1;
+  end
+  final $display("M2_SND_TRACE: the 68000 behind real time: mean %0.2f half-clocks, max %0d, at the cap %0d clocks of %0d; 0x408 reads %0d, waiting %0d clocks (mean %0.1f)",
+                 real'(tr_cred) / real'(tr_clk), tr_credmax, tr_cap, tr_clk, tr_monr, tr_monw, tr_monr != 0 ? real'(tr_monw) / real'(tr_monr) : 0.0);
+`endif
+
   logic as_d;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin dbg_addr <= '0; dbg_cycles <= '0; as_d <= 1'b0; dbg_w400 <= '0; dbg_w418 <= '0; end

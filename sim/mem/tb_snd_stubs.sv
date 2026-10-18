@@ -102,6 +102,7 @@ module m2_scsp #(
   output logic signed [15:0] out_l, out_r,
   input  logic        tick44,
   input  logic  [5:0] tph,              // (the timers' phase, R883: unused here)
+  input  logic        cpu_tick,         // (the 68000's sample boundary, R885: unused here)
   input  logic        step_mode,
   input  logic        step_go,
   output logic        quiet,
