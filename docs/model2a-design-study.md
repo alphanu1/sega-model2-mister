@@ -38425,3 +38425,84 @@ gets MAME's input and still plays drums as hiss and loses effects under the
 music. Remaining: the real SDRAM path under load (R877's port-7 word-pair
 anomaly in tb_m2_sdram_load, R881).*
 
+
+**R881 -- R877's PORT-7 "WORD PAIR SHIFTED" IS A BENCH ARTIFACT (VERILATOR
+DOES NOT MASK A C++ INPUT), NOT m2_sdram. THE 2A SDRAM PATH WITH THE REAL
+CROSSING AND THE REAL SOUND BOARD RETURNS EVERY WORD RIGHT: 0 FAILS IN 57 M
+TRANSACTIONS. NO RTL CHANGE.**
+
+*Believed (R877 a):* ~1.5% of tb_m2_sdram_load's port 7 reads came back with
+a word pair shifted (data written at an odd address read at the even one
+below), "most likely this bench reissuing on the cycle after an acknowledge,
+as no m2_sdram_cdc port can" -- recorded, not dismissed, because the DSP
+writes on port 7 on the board and the drums are a hiss there.
+
+*Established:* the bench's addresses were `bank << 23`, which sets bit 24 for
+banks 2 and 3 -- a 25-bit value written into the harness's 24-bit p*_addr
+inputs. Verilator does not mask a value written from C++, and the harness
+packs the thirteen inputs into one vector; the generated code is
+`p_addr[7] = (p7_addr << 8) | (p6_addr >> 16)`, so port 6's bit 24 (bank 2,
+always set) became port 7's bit 0. A watch on every WRITE the controller
+issued showed every port 7 write at address | 1 (issued 9c0008, written
+9c0009). Reads were shifted the same way, so only a write at an odd address
+was visible -- read back one word low, exactly R877's pattern; port 2 (from
+port 1) and port 6 (from port 5) were hit too, unseen against unwritten zeros.
+The reissue explanation was wrong: m2_sdram takes that stimulus correctly.
+Fix (bench): tb_m2_sdram.cpp's Harness masks every address to the port width
+before driving it. tb_m2_sdram_load now reads 0 fails of 2,870,487 checks
+(AGE: 0 of 2,744,998); 60 frames at think 8: 0 of 27,338,942; AGE, think 40:
+0 of 30,446,933. tb_m2_sdram, the four test_m2_sdram13 cases (AGE case
+2,151,281 checks, R877's number), 128 MB and test_m2_sdram_cdc (also at 80 /
+100 MHz, jitter 1.5 ns) unchanged and green.
+
+*The real path, built (tb_m2_sdram_cdc_load, make test_m2_sdram_cdc_load):*
+m2_sdram_cdc (FAST 2, 3, 10, 11, 12) + m2_sdram (2A class, PRI_TOP 3,
+eight-word reads on 2 / 10-12, COL_BITS 10) + the device model, clk_sys 80 and
+clk_mem 100 MHz driven independently (phase, drift, jitter). Ports 5-7 are the
+REAL m2_2a_sound -- bus FSM, line cache, R871's read-merge-write, R877's posted
+writes and snoops, its boot check and clear -- with stand-ins only for the
+68000 (bus cycles from the C++) and the SCSP core (its two SDRAM clients
+copied, around the REAL m2_scsp_cache: the slot fetch's look / fill / look
+again, the DSP's R_LOOK / R_FILL / R_AGAIN and w_pend / w_out / gap). A video
+load on 1-4, 8-12 and the write port (the i960 writing on 1). sdram_model gains
+DEFAULT_HASH (unwritten words read a hash of their address, off by default),
+so a word from the wrong address, port or burst slot cannot pass as zero.
+Checks: every read word on every port at the clock its requester took the
+acknowledge, against the set of values legal for its request-to-acknowledge
+window (exact, from every write's own window -- not a tolerance); the 68000's
+program / sample reads and its own RAM exactly (posted writes and merges seen
+by its later reads); every slot-cache hit and DSP read against memory as it
+stood 32 clk_sys earlier (a lost snoop would leave a line stale); the
+request contract (held unchanged until acknowledged, never dropped early, no
+slow-port acknowledge without a request, one first half per eight-word read,
+200 us watchdog); after a drain the device's READ / WRITE counts equal what
+was asked (nothing lost or doubled); the boot check; device violations.
+Mutations it catches (3 ms runs): s_ack not gated by s_req 71,301 fails; no
+68000 snoop into the slot cache 18; B_LOOK filling without waiting for a
+posted write 24,961; port 7's captured address | 1 (R877's pattern on the real
+path) 3,214.
+
+*Result (each run: the boot check reads 0 wrong; 0 device violations; READs
+and WRITEs served = asked):*
+  run (think clk_mem, clock)            transactions   words checked   68000 checks  fails
+  3 s, think 20, drift +1 ps            21,713,910     113,024,781     1,538,305      0
+  1.5 s, think 8, ratio exact, phase 0  11,025,071      52,830,797       631,935      0
+  1.5 s, think 160, drift -3, jit 400    10,210,797      68,641,321     2,920,512      0
+  1 s, think 40, phase 1250 fixed         7,237,999      41,250,587       666,775      0
+  1 s, think 40, phase 7777 fixed         7,238,940      41,146,443       668,047      0
+In the 3 s run ports 5 / 6 / 7 made 944 K / 931 K / 927 K transactions
+(3.55 M slot lookups, 685 K DSP reads checked). Not run (stopped for time):
+the AGE and POST_WR=0 builds' sweeps, BOOT_FULL, jitter 1.5 ns.
+
+*Analysis, for what simulation cannot show:* a slow port's s_ack is gated by
+s_req and its edge term lasts one slow cycle, so an acknowledge cannot be
+taken for the next request; m2_sdram writes p_dout only for the delivering
+port, and the slow side reads it >= 2 clk_sys after the toggle. The address
+and read-data buses cross unconstrained (asynchronous groups) with ~20-35 ns
+of slack -- routing would have to be grossly long to matter. The one-clk_sys
+low between a posted write's acknowledge and the next request (12.5 ns) is
+always seen by a 10 ns clk_mem.
+
+*So:* the SDRAM path does NOT explain "drums a tinny hiss, effects gone under
+the music". Open as before: the SCSP datapath that fails timing on silicon
+(R874 addendum / R875), and whatever else no bench models.

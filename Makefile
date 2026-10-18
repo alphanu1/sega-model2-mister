@@ -1336,6 +1336,35 @@ obj_cdc/Vm2_sdram_cdc_harness: sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_
 	  sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_cdc.sv rtl/mem/m2_sdram.sv \
 	  sim/mem/sdram_model.sv sim/mem/tb_m2_sdram_cdc.cpp
 
+# R881: the 2A build's SDRAM path -- m2_sdram_cdc in front of m2_sdram, 13 ports,
+# the 2A class -- with the REAL m2_2a_sound on 5, 6, 7 (tb_snd_stubs.sv stands in
+# for the 68000 and the SCSP's two clients, with the real m2_scsp_cache), a video
+# load on the rest, clk_sys and clk_mem independent; every word read is checked
+# against every write. Knobs: see sim/mem/tb_m2_sdram_cdc_load.cpp. The default
+# run is three phase / drift / jitter / load cases; obj_cdc_loada builds AGE in.
+CDL_RTL := sim/mem/m2_sdram_cdc_load_harness.sv sim/mem/tb_snd_stubs.sv rtl/sound/m2_2a_sound.sv \
+           rtl/sound/scsp/m2_scsp_cache.sv rtl/mem/m2_sdram_cdc.sv rtl/mem/m2_sdram.sv sim/mem/sdram_model.sv
+.PHONY: test_m2_sdram_cdc_load
+test_m2_sdram_cdc_load: obj_cdc_load/Vm2_sdram_cdc_load_harness obj_cdc_loada/Vm2_sdram_cdc_load_harness
+	@echo "== m2_sdram_cdc + m2_sdram + the real m2_2a_sound under a video load (R881)"
+	RUN_MS=20 ./obj_cdc_load/Vm2_sdram_cdc_load_harness
+	RUN_MS=20 SEED=2 CDC_DRIFT=0 CDC_PHASE=0 LOAD_THINK=8 ./obj_cdc_load/Vm2_sdram_cdc_load_harness
+	RUN_MS=20 SEED=3 CDC_DRIFT=-3 CDC_JIT=400 LOAD_THINK=160 C68_GAP=2 ./obj_cdc_load/Vm2_sdram_cdc_load_harness
+	@echo "== ... with ports 5, 6, 7 aged into the class (M2_2A_SND_AGE, R877)"
+	RUN_MS=20 SEED=4 LOAD_THINK=8 ./obj_cdc_loada/Vm2_sdram_cdc_load_harness
+
+obj_cdc_load/Vm2_sdram_cdc_load_harness: $(CDL_RTL) sim/mem/tb_m2_sdram_cdc_load.cpp
+	$(VBUILD) --top-module m2_sdram_cdc_load_harness -Wno-PINCONNECTEMPTY -Wno-SYNCASYNCNET \
+	  -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
+	  --Mdir obj_cdc_load -o Vm2_sdram_cdc_load_harness -CFLAGS "-O2" \
+	  $(CDL_RTL) sim/mem/tb_m2_sdram_cdc_load.cpp
+
+obj_cdc_loada/Vm2_sdram_cdc_load_harness: $(CDL_RTL) sim/mem/tb_m2_sdram_cdc_load.cpp
+	$(VBUILD) --top-module m2_sdram_cdc_load_harness -Wno-PINCONNECTEMPTY -Wno-SYNCASYNCNET \
+	  -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -GAGE=13\'b0000011100000 \
+	  --Mdir obj_cdc_loada -o Vm2_sdram_cdc_load_harness -CFLAGS "-O2" \
+	  $(CDL_RTL) sim/mem/tb_m2_sdram_cdc_load.cpp
+
 # ------------------------------------------------- the boot, through the bridge
 #
 # test_i960_rom drives i960_top DIRECTLY with a C++ memory, so every one of the
