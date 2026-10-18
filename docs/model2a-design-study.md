@@ -38641,3 +38641,121 @@ the clip's wobble; it did have the 1.3% fast timers (tempo and the driver's
 hiss". The bench now holds MAME's timeline; a board clip at the same moment
 can be compared the same way (per-window lag and correlation against
 out.bin).
+
+
+**R884 -- "STILL A FAST WOBBLE OR FAST POPPING" (Ben, R883's clip against
+MAME's): NOT THE 68000'S PACE. NO RING IS READ STALE; A ZERO-LATENCY 68000
+AND A MAME-TIMED ONE MATCH MAME NO BETTER THAN TODAY'S. THE 68000 NOW RUNS
+ON MAME'S WAIT STATES, ITS CLOCK STOPPED WHILE SDRAM ANSWERS (EXACT, +18
+ALMs est.). WHAT IS LEFT OF ITS TIMING AGAINST MAME IS THE CPU CORE: fx68k
+TAKES AN INTERRUPT ONE INSTRUCTION LATER THAN MAME'S 68000.**
+
+*Believed (the task):* VF2's driver streams every voice through an 8 KB ring
+"only ~16 samples ahead" of the play position (R874); our 68000 waits on
+SDRAM where MAME's takes one wait state (R859), so in places it falls behind
+and the SCSP plays last lap's data -- a fast wobble or popping, worse with
+more voices. Ben's clip correlates with MAME's ~0.53 in the drum intro.
+
+*Measured (tb_m2_2a_sound, VF2, SND_SHIFT=9, 11.6 s, 80 MHz, latency 6-40
+unless said; an instrumented copy of the bench -- PACE -- reading the
+engine's fetches, the 68000's bus and the sound RAM's writes; MAME 0.289's
+capture, and its debugger on the sound CPU):*
+  1. NO STALE READS. Every slot fetch from a ring checked against the
+     68000's last write to that word: a word read at the start of a new lap
+     not rewritten since its previous lap's read -- 0 of 812,765 (today's
+     RTL), 0 of 807,180 (latency 1), 0 of 797,823 (EXACT, below). At note
+     starts (a voice's first 2,048 samples, a word not written since 4,000
+     samples before its key-on): 172 reads in 2 of 214 voices; MAME's own
+     capture, positions rebuilt from keyon.txt and word 8, 7 of 219 voices.
+  2. THE RING IS A LAP AHEAD, NOT 16 SAMPLES. MAME's 68000 writes each ring
+     word 1 K-4 K samples ahead of the play position (27% of 1.5 M writes)
+     or 4 K-8 K (68%); under 64 samples ahead 0.009%. Ours: 35% / 55%,
+     under 64 0.45% -- more near the pointer, never late (item 1). R874's "16
+     samples" is the first 512 words landing just before a key-on, not the
+     streaming margin; at 22 kHz a lap is 0.37 s of slack.
+  3. PACE DOES NOT MOVE THE MATCH. 10 ms windows against out.bin, each
+     fine-aligned +-3 samples around one lag (Ben's measure), drum intro
+     4.6-6.6 s / 4.6-11.6 s: today 0.573 / 0.234; latency 1 (the 68000 never
+     waits) 0.424 / 0.168; EXACT 0.354 / 0.137. The fixed-lag figure falls
+     with each because each runs at a slightly different tempo (item 5); with
+     the lag followed in 0.25 s steps the three are the same: 0.672 / 0.665
+     / 0.674 in the intro, 0.400 / 0.428 / 0.390 overall.
+  4. THE 68000'S BUS AGAINST MAME'S (half-clocks with AS low; MAME's model2_snd:
+     ROM and samples 5, RAM and SCSP 7 -- before_delay(1) is one clock):
+       today   program hit 5, fill 10.2 (4.6% of 12.2 M fetches); samples
+               hit 5, fill 10.2 (23%); RAM read 9.93; RAM write 5.70 (posted:
+               74% at 5, faster than MAME); byte write 12.2; SCSP read 6.28,
+               write 5.93
+       EXACT   every ROM / sample cycle 5, every RAM / SCSP cycle 7
+  5. WHERE THE 68000 STILL DIFFERS FROM MAME: THE INTERRUPT. Timer A's
+     period is 49 samples plus the handler's latency to its re-arm (R883).
+     MAME (debugger on audiocpu, totalcycles at the handler 601f16 and the
+     re-arm 601f1a, 13.6-16.6 s): 12,770.2 clocks (49.884 samples), latency
+     226.2 (sd 19.3); entry to re-arm always 138 (MOVEM.L of 13 registers,
+     26 one-wait writes). Ours: today 49.931, EXACT 49.967 (12,789 clocks;
+     IRQ to iack 51.4, iack to re-arm 195.9 -- the handler identical, entry
+     to the re-arm write 157 from the first fetch). All of EXACT's 20 clocks
+     are IRQ to handler entry: MAME 75.2 (sd 19.3, nothing past ~175), ours
+     ~93 (sd 40, a tail to 220). fx68k latches the pending interrupt at the
+     START of an instruction (grp1LatchEn & enT3, "interrupt pending on T2")
+     and takes it at that instruction's end; MAME's m68000 decides at the
+     END (m_next_state = m_int_next_state at the IRD load, the last
+     microword). An IRQ that arrives inside VF2's copy loop -- MOVEM.L
+     (A1)+,D0-D7 / MOVEM.L D0-D7,(A2) / ADDA.W #$20,A2, sixteen times (the
+     interrupted PC is there 22% of the time in MAME, 29% in ours) -- waits through
+     the next MOVEM (88 clocks) on fx68k only. NOT CHANGED: fx68k is
+     upstream byte for byte (THIRD_PARTY.md), and which core is the silicon
+     is not established here -- a MAME cycle count is not a hardware fact.
+     Today's RTL sat nearer MAME's tempo (49.931) only because its posted
+     writes were a wait state faster than MAME's and offset part of it.
+
+*Built (rtl/sound/m2_2a_sound.sv EXACT, Model2.sv M2_2A_SND_EXACT, both 1):*
+each bus cycle has exactly MAME's wait states in the 68000's own clocks --
+DTACK held off past the first DTACK sample of a RAM / SCSP cycle (fx68k
+samples DTACK on PHI2: the second after AS decides zero waits, the third
+one) -- and where the answer is not there by the sample that must see it,
+the 68000's CLOCK STOPS instead of a wait state going in. Half-clocks fall
+due at 2 x 11.2896 MHz as before into a credit; one issues when there is
+credit, the 68000 is not stopped and none issued the clock before (fx68k:
+never two enables in a row), so after a stop it catches up at up to clk / 2
+(1.77 x at 80 MHz); never ahead of real time, at most 511 half-clocks (~1
+sample) behind before time is dropped. SDRAM time costs real time, not 68000
+time, so the board's video load stops moving the sound program's timeline
+-- while the catch-up keeps up. EXACT 0 is the clock as before.
+  * Bench (6-40): behind real time mean 0.71 half-clocks, max 67 (3 us),
+    never at the cap. The unshifted 6 s run: PASS, 98.9% of writes in MAME's
+    order (98.2% before), 0 underruns, the check 0 wrong; the matched writes
+    land 82.68 ms after MAME's at the median, 10% / 90% 82.67 / 82.69 ms --
+    before, 102.89 with 64.46 / 104.26: the boot scan's spacing is now
+    MAME's to 20 us, the offset only the later start (R871's check).
+  * R877's heavy trace (render saturated, port 5 mean 77-80 clk): today 14.2
+    M bus cycles, 197 FIFO underruns, 475 stale lap reads (0.053%, the only
+    stale reads seen anywhere), 11 voices with stale starts; EXACT 16.3 M,
+    117, 202 (0.025%), 7 -- better, but there it cannot keep up (at the cap
+    21% of clocks): SDRAM, not the wait-state model, is the limit. The board
+    in VF2's attract sits on the light bench (R877), not this.
+  * Area (quartus_map 17.0, m2_2a_sound alone): 4,827 -> 4,845 ALMs est.,
+    ALUT 6,300 -> 6,342, registers 3,491 -> 3,503, block RAM and MLAB
+    unchanged (323,476 / 5,440 bits).
+  * Unchanged: tb_m2_scsp (no SCSP file changed) VF2 10 s and 30 s PASS;
+    test_m2_sdram_cdc_load, the real crossing with the real board, four
+    cases 0 fails (380 K / 453 K / 160 K / 242 K transactions) -- once its
+    harness had R882's dbg_sums pin: the bench had not built since R882
+    (PINMISSING is fatal under -Wall). lint_top clean (2A; M2_NO_2A;
+    M2_NO_DEBUG M2_PROBE=1 M2_NO_2A_RALLY; M2_2A_SND_EXACT=0); lint_idx the
+    same candidates as before; quartus_map --analyze_file on m2_2a_sound.sv
+    and Model2.sv: 0 errors. The worktree's own bench build gives the
+    instrumented copy's output bit for bit.
+
+*What this predicts for the board:* nothing new to hear from this change --
+the bench says the pace was not the fault and EXACT sounds like today
+(item 3). What it changes is that the board's 68000 now keeps the bench's
+timeline whatever the video does, while its SDRAM answers about as the 6-40
+model does (VF2 attract, R877); under saturation it falls back toward the
+old behaviour, still ahead of it. So a board clip and the bench clip should
+now differ only where the board's SDRAM truly starves the 68000 or the SCSP
+-- the probe's 'L' record says when. The fast wobble / popping Ben hears is
+in neither the rings nor the 68000's speed; left open: the driver's
+decisions that read the SCSP monitor up to 7 samples ahead (R883: slot
+allocation parts from MAME's at 5.84 s, TL rewrites missing at 8.54 s), and
+fx68k's interrupt latch (item 5), a study-level question for Ben.

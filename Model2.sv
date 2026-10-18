@@ -110,11 +110,17 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // board's 68000 runs at the bench's rate (s1207), so the arbiter is left as
 // it was until the probe's 'L' record says the ports wait; 1 turns it on.
 // M2_2A_SND_POST: the 68000's RAM writes posted (m2_2a_sound POST_WR), 1.
+// R884: M2_2A_SND_EXACT, the 68000 on MAME's wait states (ROM 0, RAM and SCSP
+// 1) with its clock stopped, not wait-stated, while SDRAM answers
+// (m2_2a_sound EXACT), 1; 0 is its clock as before R884.
 `ifndef M2_2A_SND_AGE
 `define M2_2A_SND_AGE 0
 `endif
 `ifndef M2_2A_SND_POST
 `define M2_2A_SND_POST 1
+`endif
+`ifndef M2_2A_SND_EXACT
+`define M2_2A_SND_EXACT 1
 `endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
@@ -164,6 +170,9 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `endif
 `ifndef M2_2A_SND_POST
 `define M2_2A_SND_POST 1
+`endif
+`ifndef M2_2A_SND_EXACT
+`define M2_2A_SND_EXACT 1
 `endif
 
 // R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
@@ -3197,7 +3206,8 @@ end else if (SND2A) begin : g_2asnd
 	m2_2a_sound #(.AW(SDR_AW), .RAM_BASE(GAME_SNDRAM_2A), .ROM_BASE(GAME_SND_2A),
 	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1), .CHKSUM(SND_CHKSUM),   // R882
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
-	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0)) u_snd2a (
+	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
+	              .EXACT(`M2_2A_SND_EXACT != 0)) u_snd2a (   // R884
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
