@@ -332,6 +332,9 @@ int main(int argc, char **argv) {
 		}
 		printf("    the 68000 waiting on port 5: %.1f%% of all clocks\n", 100.0 * a_wait / cyc);
 	}
+	// R882: the boot-time sums (CHKSUM builds; zero otherwise)
+	printf("  sound ROM sums (R882): program %08x, samples %08x %08x %08x %08x\n",
+		t->dbg_sums[0], t->dbg_sums[1], t->dbg_sums[2], t->dbg_sums[3], t->dbg_sums[4]);
 	printf("  RAM writes with a byte mask (R871: must be 0 -- the board drops the mask): %llu\n", (unsigned long long)part_writes);
 	bool ok = t->dbg_under == 0 && bad_writes == 0 && part_writes == 0 && t->dbg_cycles > 1000 && (nb == 0 || mtch >= nb * 9 / 10);
 	printf("%s\n", ok ? "PASS" : "FAIL");

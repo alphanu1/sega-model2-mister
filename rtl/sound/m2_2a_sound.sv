@@ -42,6 +42,7 @@ module m2_2a_sound #(
   parameter int unsigned T44_DEN  = 800000,
   parameter bit          FM       = 1'b1,
   parameter bit          MIDI_OUT = 1'b1,
+  parameter bit          CHKSUM   = 1'b0,  // R882: sum the program and the four sample ROMs in SDRAM before boot (a probe build)
   parameter bit          POST_WR  = 1'b1   // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
 ) (
   input  logic        clk,
@@ -89,6 +90,8 @@ module m2_2a_sound #(
   output logic  [3:0] dbg_mvol,          // MVOL as the SCSP holds it
   output logic [15:0] dbg_w400,          // 68000 writes to 0x400-0x401 (MVOL, DAC18, ...)
   output logic [15:0] dbg_w418,          // 68000 writes to 0x418 (timer A)
+  output logic [159:0] dbg_sums,         // R882 (CHKSUM): {samples 6-8 MB, 4-6, 2-4, 0-2 MB, program}, each the
+                                         // 32-bit sum of its words as the 68000 reads them
   output logic        dbg_scsp_we,       // a 68000 write to the SCSP, this clock
   output logic [11:1] dbg_scsp_a,
   output logic [15:0] dbg_scsp_d,
@@ -254,8 +257,15 @@ module m2_2a_sound #(
   // as before.
   logic        wpost;
   logic [18:1] wpost_a;
-  typedef enum logic [3:0] { V_CLR, V_TW, V_TB, V_TR, V_ZR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK,
-                             B_RMR, B_RMW, B_WPW } bst_t;
+  typedef enum logic [4:0] { V_CLR, V_TW, V_TB, V_TR, V_ZR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK,
+                             B_RMR, B_RMW, B_WPW, V_SUM } bst_t;
+  // R882: V_SUM reads the program (256 K words) then the samples (4 M words)
+  // four words at a time and sums each region; sk counts words over both
+  logic [22:0] sk;
+  logic [31:0] sums [5];
+  wire         sk_prog = sk < 23'h40000;
+  wire  [2:0]  sk_reg  = sk_prog ? 3'd0 : 3'd1 + 3'((sk - 23'h40000) >> 20);
+  assign dbg_sums = {sums[4], sums[3], sums[2], sums[1], sums[0]};
   bst_t        bs;
   logic  [2:0] vi;
   logic        tb_ph;                      // V_TB: 0 read the line, 1 write the merged word
@@ -282,7 +292,8 @@ module m2_2a_sound #(
       bs <= V_CLR; vi <= '0; ti <= '0; dbg_selftest <= '0; vclr <= 1'b1; vclr_i <= '0; cpu_go <= 1'b0; dtackn <= 1'b1;
       a_req <= 1'b0; a_we <= 1'b0; a_addr <= '0; a_din <= '0; a_be <= 2'b11; ln_we <= 1'b0; tb_ph <= 1'b0;
       s_req <= 1'b0; snp <= 1'b0; rq <= 16'hffff; vline <= '0; ln_wi <= '0; ln_wt <= '0; snp_a <= '0;
-      wpost <= 1'b0; wpost_a <= '0;
+      wpost <= 1'b0; wpost_a <= '0; sk <= '0;
+      sums[0] <= '0; sums[1] <= '0; sums[2] <= '0; sums[3] <= '0; sums[4] <= '0;
     end else begin
       ln_we <= 1'b0; s_req <= 1'b0; snp <= 1'b0;
       if (wpost && a_ack) begin                       // R877: the posted write has landed
@@ -351,7 +362,22 @@ module m2_2a_sound #(
             a_req <= 1'b0; a_we <= 1'b0;
             vi <= vi + 3'd1;
             if (vi == 3'd3) bs <= V_RD;
-            if (vi == 3'd7) begin bs <= B_IDLE; cpu_go <= 1'b1; end
+            if (vi == 3'd7) begin
+              if (CHKSUM) bs <= V_SUM;
+              else begin bs <= B_IDLE; cpu_go <= 1'b1; end
+            end
+          end
+        end
+        V_SUM: begin                                  // R882
+          if (!a_req && !a_ack) begin
+            a_req <= 1'b1; a_we <= 1'b0;
+            a_addr <= sk_prog ? ROM_BASE + AW'(sk) : SMP_BASE + AW'(sk - 23'h40000);
+          end else if (a_ack) begin
+            a_req <= 1'b0;
+            sums[sk_reg] <= sums[sk_reg] + 32'(swp(a_dout[15:0])) + 32'(swp(a_dout[31:16]))
+                                         + 32'(swp(a_dout[47:32])) + 32'(swp(a_dout[63:48]));
+            sk <= sk + 23'd4;
+            if (sk == 23'h43FFFC) begin bs <= B_IDLE; cpu_go <= 1'b1; end
           end
         end
         B_IDLE: begin

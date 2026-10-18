@@ -38506,3 +38506,20 @@ always seen by a 10 ns clk_mem.
 *So:* the SDRAM path does NOT explain "drums a tinny hiss, effects gone under
 the music". Open as before: the SCSP datapath that fails timing on silicon
 (R874 addendum / R875), and whatever else no bench models.
+
+**R882 -- ARE THE SOUND ROMS IN SDRAM WHAT THE ZIP HOLDS?** Every link of the
+board's sound path is now proven but one: the MIDI equals MAME's (R880), the
+SCSP and the sound program equal MAME's in simulation (R857 / R874), the
+real SDRAM crossing under load reads 0 wrong (R881). Every bench loads the
+sample ROMs straight from the zip; on the board they come through Main's MRA
+loader, m2_rom_loader and the relocation to SDRAM byte 0x3400000 (R852 /
+R862). A wrong or missing 2 MB part would leave the voices whose samples
+live there playing garbage -- VF2's drums as hiss -- and the rest right.
+m2_2a_sound CHKSUM (on with M2_PROBE): before the 68000 starts, V_SUM reads
+the program (256 K words) and the samples (4 M words) through port 5 and
+sums each region's 68000-order words; M2_PROBE's 'R' record (in Q's place,
+R876 having fixed the TGP) carries one region a record. Bench (VF2 images
+from the zip): program dc60fe32, samples 2c87d546 f6039863 33a13138
+346ebe9e -- equal to the same sums computed in Python from vf2.zip
+(epr-17574.30; mpr-17573.31, -17572.32, -17571.36, -17570.37).
+

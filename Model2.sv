@@ -3157,6 +3157,12 @@ wire        snd_scsp_we;   // R862: a 68000 write to the SCSP this clock (2A boa
 // R864: the 2A board's pre-boot sound-RAM check (words wrong), MVOL as the
 // SCSP holds it, and the 68000's writes to 0x400-0x401 and 0x418 (0 otherwise)
 wire [15:0] snd_selftest, snd_w400, snd_w418;
+wire [159:0] snd_sums;   // R882: the sound ROMs' sums in SDRAM (probe builds)
+`ifdef M2_PROBE
+localparam bit SND_CHKSUM = 1'b1;
+`else
+localparam bit SND_CHKSUM = 1'b0;
+`endif
 wire  [3:0] snd_mvol;
 wire  [7:0] snd_level;
 generate if (M1SOUND) begin : g_m1snd
@@ -3181,6 +3187,7 @@ m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHA
 );
 assign snd_scsp_we = 1'b0;   // R862
 assign snd_selftest = 16'd0; assign snd_w400 = 16'd0; assign snd_w418 = 16'd0; assign snd_mvol = 4'd0;   // R864
+	assign snd_sums = '0;   // R882
 end else if (SND2A) begin : g_2asnd
 	// R859: THE MODEL 2A SOUND BOARD. The i8251's TXD is the SCSP's MIDI in
 	// and the SCSP's MIDI out its RXD (m2_sound_link, as the Model 1 board's
@@ -3188,7 +3195,7 @@ end else if (SND2A) begin : g_2asnd
 	// SCSP's output comes out of an eight-sample FIFO at 44,100 Hz.
 	// Clock enables from SYS_MHZ: 2 x 11.2896 MHz and 44,100 Hz.
 	m2_2a_sound #(.AW(SDR_AW), .RAM_BASE(GAME_SNDRAM_2A), .ROM_BASE(GAME_SND_2A),
-	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1),
+	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1), .CHKSUM(SND_CHKSUM),   // R882
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0)) u_snd2a (
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
@@ -3202,7 +3209,8 @@ end else if (SND2A) begin : g_2asnd
 		.snd_l(snd_l), .snd_r(snd_r),
 		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
 		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
-		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418)
+		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418),
+		.dbg_sums(snd_sums)
 	);
 	assign snd_pc[31:24] = 8'd0;
 	assign snd_rom_req = 1'b0; assign snd_rom_addr = '0;
@@ -3232,6 +3240,7 @@ end else begin : g_2astub
 	assign snd_ymw = 16'd0; assign snd_pcmw = 16'd0; assign snd_samples = 32'd0;
 	assign snd_lat = 16'd0; assign snd_miss = 16'd0; assign snd_under = 16'd0; assign snd_scsp_we = 1'b0;
 	assign snd_selftest = 16'd0; assign snd_w400 = 16'd0; assign snd_w418 = 16'd0; assign snd_mvol = 4'd0;   // R864
+	assign snd_sums = '0;   // R882
 	assign snd_level = 8'd0;
 end endgenerate
 
@@ -5421,8 +5430,10 @@ end else begin : g_nodbg
 	//       (R871: s1203's lockup held the i960 at 0x7dc4 on the TGP's output
 	//       and could not say where the TGP was -- the sequencer and bridge
 	//       fields gave their place to its pc)
-	//   'Q' {words the i960 pushed to the TGP | words it popped} |
-	//       {words the TGP pushed out | input words dropped | output words dropped}
+	//   'R' (R882, in Q's place -- the TGP faults are fixed, R876) the sound
+	//       ROMs as they sit in SDRAM, summed by the sound board before boot,
+	//       one region a record in turn: {region 0-4 (program, samples 0-2,
+	//       2-4, 4-6, 6-8 MB)} | {its 32-bit sum of 68000-order words}
 	//   'S' {68000 bus cycles} | {SCSP writes by the 68000 | bytes the i960 sent the sound side}
 	//   'T' {the 68000's last address | bytes the sound side sent the i960}
 	//       | {loudest |left| since the last T | output FIFO underruns}
@@ -5440,6 +5451,7 @@ end else begin : g_nodbg
 	logic [2:0]  pb_sel;
 	logic        pb_valid;
 	logic        mi_take;                     // R880: this slot carries MIDI bytes
+	logic  [2:0] rs_i;                        // R882: the region the next R record carries
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
 	wire  [15:0] sd_abs = snd_l[15] ? (~snd_l + 16'd1) : snd_l;
@@ -5508,7 +5520,7 @@ end else begin : g_nodbg
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
 			pb_div <= '0; pb_sel <= '0; pb_valid <= 1'b0;
-			sd_scw <= '0; sd_rx <= '0; sd_tx <= '0; sd_peak <= '0;
+			sd_scw <= '0; sd_rx <= '0; sd_tx <= '0; sd_peak <= '0; rs_i <= '0;
 		end else begin
 			pb_valid <= 1'b0;
 			if (prof_tick) begin
@@ -5518,6 +5530,7 @@ end else begin : g_nodbg
 			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
 			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
 			if (b_tx_v && b_tx_a) sd_tx  <= sd_tx + 8'd1;
+			if (pb_valid && !mi_take && pb_sel == 3'd4) rs_i <= (rs_i == 3'd4) ? 3'd0 : rs_i + 3'd1;   // R882
 			if (pb_valid && !mi_take && pb_sel == 3'd2) sd_peak <= sd_abs;
 			else if (sd_abs > sd_peak)      sd_peak <= sd_abs;
 		end
@@ -5526,15 +5539,15 @@ end else begin : g_nodbg
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(pb_valid),
 		.a_addr(mi_take ? mi_a : (pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
-		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {copro_in_pushed, copro_out_popped} :
+		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {29'd0, rs_i} :
 		        (pb_sel == 3'd5) ? {2'd0, sl_m5, sl_m6, sl_m7} : cpu_dbg_ip),
 		.a_data(mi_take ? mi_d : (pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
 		        (pb_sel == 3'd3) ? {snd_selftest, 12'd0, snd_mvol} :
-		        (pb_sel == 3'd4) ? {copro_out_pushed[15:0], copro_in_dropped[7:0], copro_out_dropped[7:0]} :
+		        (pb_sel == 3'd4) ? snd_sums[{rs_i, 5'd0} +: 32] :
 		        (pb_sel == 3'd5) ? {sl_w5[19:4], sl_slow} :
 		        {copro_stall, tgp_unimpl, 14'd0, tgp_pc}),
 		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
-		.a_tag(mi_take ? 8'h4D : (pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h51 :
+		.a_tag(mi_take ? 8'h4D : (pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h52 :
 		       (pb_sel == 3'd5) ? 8'h4c : 8'h43),
 		.b_tag(8'h47),   // 'C','S','T','U','Q','L'; 'M' (R880) in any slot
 		.enable(1'b1),

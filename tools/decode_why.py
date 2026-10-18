@@ -155,4 +155,11 @@ if M:
         open(sys.argv[3], "w").write(" ".join("%02x" % x for x in stream) + "\n")
         print("  stream written to", sys.argv[3])
     print("  first 60:", " ".join("%02x" % x for x in stream[:60]))
+# R882: 'R' {region} | {32-bit sum}: the sound ROMs in SDRAM, summed before boot
+R = {}
+for t, a, d in recs:
+    if t == 'R': R[a & 7] = d
+if R:
+    names = ["program", "samples 0-2 MB", "samples 2-4 MB", "samples 4-6 MB", "samples 6-8 MB"]
+    print("SOUND ROMS IN SDRAM (sums of 68000-order words): " + ", ".join("%s %08x" % (names[k], R[k]) for k in sorted(R)))
 
