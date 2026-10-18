@@ -41,7 +41,8 @@ module m2_2a_sound #(
   parameter int unsigned T44_NUM  = 441,         // 44,100 Hz / clk_sys (80 MHz: 441 / 800000)
   parameter int unsigned T44_DEN  = 800000,
   parameter bit          FM       = 1'b1,
-  parameter bit          MIDI_OUT = 1'b1
+  parameter bit          MIDI_OUT = 1'b1,
+  parameter bit          POST_WR  = 1'b1   // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -241,8 +242,20 @@ module m2_2a_sound #(
   // m2_cpu_bridge does since R729. Every simulation honoured the mask; s1203
   // read the check's 4,088 of 4,096 words wrong -- the 8 that matched are
   // exactly those a lost mask leaves right.
+  // R877: A 68000 WRITE TO RAM IS POSTED. MAME gives the RAM one wait state;
+  // here a write waited for its SDRAM acknowledge, and on the board under
+  // video load that is hundreds of clocks (port 5 is outside m2_sdram's
+  // class). VF2's driver writes RAM ~270 K times a second (its rings), so the
+  // 68000 spent its time waiting and the rings fell behind the play position.
+  // Now the write is acknowledged at once and completes behind the 68000
+  // (wpost); the next access that needs port 5 -- RAM, a cache fill -- or the
+  // SCSP waits for it, so every later read and the SCSP see the 68000's
+  // writes in its own order. The snoop goes out when the write has landed,
+  // as before.
+  logic        wpost;
+  logic [18:1] wpost_a;
   typedef enum logic [3:0] { V_CLR, V_TW, V_TB, V_TR, V_ZR, V_RD, V_WR, B_IDLE, B_LOOK, B_FILL, B_RAM, B_SCSP, B_ACK,
-                             B_RMR, B_RMW } bst_t;
+                             B_RMR, B_RMW, B_WPW } bst_t;
   bst_t        bs;
   logic  [2:0] vi;
   logic        tb_ph;                      // V_TB: 0 read the line, 1 write the merged word
@@ -269,8 +282,13 @@ module m2_2a_sound #(
       bs <= V_CLR; vi <= '0; ti <= '0; dbg_selftest <= '0; vclr <= 1'b1; vclr_i <= '0; cpu_go <= 1'b0; dtackn <= 1'b1;
       a_req <= 1'b0; a_we <= 1'b0; a_addr <= '0; a_din <= '0; a_be <= 2'b11; ln_we <= 1'b0; tb_ph <= 1'b0;
       s_req <= 1'b0; snp <= 1'b0; rq <= 16'hffff; vline <= '0; ln_wi <= '0; ln_wt <= '0; snp_a <= '0;
+      wpost <= 1'b0; wpost_a <= '0;
     end else begin
       ln_we <= 1'b0; s_req <= 1'b0; snp <= 1'b0;
+      if (wpost && a_ack) begin                       // R877: the posted write has landed
+        a_req <= 1'b0; a_we <= 1'b0; wpost <= 1'b0;
+        snp <= 1'b1; snp_a <= wpost_a;                // the SCSP's caches see it
+      end
       case (bs)
         V_CLR: begin                                  // the cache's valid bits, cleared
           vclr_i <= vclr_i + 1'b1;
@@ -340,28 +358,33 @@ module m2_2a_sound #(
           dtackn <= 1'b1;
           if (as && ds && !iack) begin
             if (sel_rom || sel_smp) bs <= B_LOOK;     // (the cache reads this clock)
+            else if (sel_ram && (wpost || a_ack)) ;   // R877: a posted write first
             else if (sel_ram && !rwn && (udsn != ldsn)) begin   // R871: a byte write, merged
               bs <= B_RMR; a_req <= 1'b1; a_we <= 1'b0; a_be <= 2'b11;
               a_addr <= RAM_BASE + AW'({addr[18:3], 2'b00});
+            end else if (sel_ram && !rwn) begin       // R877: a word write, posted
+              a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11; a_addr <= RAM_BASE + AW'(addr[18:1]); a_din <= oedb;
+              wpost <= 1'b1; wpost_a <= addr[18:1];
+              rq <= 16'hffff; if (POST_WR) begin dtackn <= 1'b0; bs <= B_ACK; end else bs <= B_WPW;
             end else if (sel_ram) begin
-              bs <= B_RAM; a_req <= 1'b1; a_we <= !rwn; a_be <= 2'b11;
-              a_addr <= RAM_BASE + AW'(rwn ? {addr[18:3], 2'b00} : addr[18:1]); a_din <= oedb;
-            end else if (sel_scsp) begin bs <= B_SCSP; s_req <= 1'b1; end
+              bs <= B_RAM; a_req <= 1'b1; a_we <= 1'b0; a_be <= 2'b11;
+              a_addr <= RAM_BASE + AW'({addr[18:3], 2'b00}); a_din <= oedb;
+            end else if (sel_scsp && wpost) ;         // R877: the SCSP after the 68000's RAM writes
+            else if (sel_scsp) begin bs <= B_SCSP; s_req <= 1'b1; end
             else begin rq <= 16'hffff; dtackn <= 1'b0; bs <= B_ACK; end   // the bank latch, unmapped
           end
         end
         B_LOOK: begin
           if (ln_hit) begin rq <= swp(ln_q[{rom_w[2:1], 4'd0} +: 16]); dtackn <= 1'b0; bs <= B_ACK; end
-          else begin bs <= B_FILL; a_req <= 1'b1; a_we <= 1'b0; a_addr <= {rom_w[AW:3], 2'b00}; end
+          else if (!wpost && !a_ack) begin bs <= B_FILL; a_req <= 1'b1; a_we <= 1'b0; a_addr <= {rom_w[AW:3], 2'b00}; end   // R877
         end
         B_FILL: if (a_ack) begin
           a_req <= 1'b0; ln_we <= 1'b1; ln_wi <= rom_w[CI+2:3]; ln_wt <= rom_w[AW:CI+3];
           rq <= swp(a_dout[{rom_w[2:1], 4'd0} +: 16]); dtackn <= 1'b0; bs <= B_ACK;
         end
-        B_RAM: if (a_ack) begin
+        B_RAM: if (a_ack) begin                       // (a read: R877 posts the writes)
           a_req <= 1'b0; a_we <= 1'b0;
           rq <= a_dout[{addr[2:1], 4'd0} +: 16];
-          if (!rwn) begin snp <= 1'b1; snp_a <= addr[18:1]; end   // the SCSP's caches see it
           dtackn <= 1'b0; bs <= B_ACK;
         end
         B_RMR: if (a_ack) begin                       // R871: the word, its other byte kept
@@ -370,15 +393,14 @@ module m2_2a_sound #(
                         : {oedb[15:8], a_dout[{addr[2:1], 4'd0} +: 8]};
           bs <= B_RMW;
         end
-        B_RMW: begin                                  // and written whole
+        B_RMW: begin                                  // and written whole -- posted (R877)
           if (!a_req && !a_ack) begin
             a_req <= 1'b1; a_we <= 1'b1; a_be <= 2'b11; a_addr <= RAM_BASE + AW'(addr[18:1]);
-          end else if (a_ack) begin
-            a_req <= 1'b0; a_we <= 1'b0;
-            snp <= 1'b1; snp_a <= addr[18:1];         // the SCSP's caches see it
-            dtackn <= 1'b0; bs <= B_ACK;
+            wpost <= 1'b1; wpost_a <= addr[18:1];
+            rq <= 16'hffff; if (POST_WR) begin dtackn <= 1'b0; bs <= B_ACK; end else bs <= B_WPW;
           end
         end
+        B_WPW: if (a_ack) begin dtackn <= 1'b0; bs <= B_ACK; end   // R877, POST_WR 0: the write's acknowledge first
         B_SCSP: if (s_ack) begin rq <= s_dout; dtackn <= 1'b0; bs <= B_ACK; end
         default: if (!as) begin dtackn <= 1'b1; bs <= B_IDLE; end   // B_ACK
       endcase

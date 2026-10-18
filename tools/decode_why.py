@@ -108,6 +108,24 @@ if U:
     print("  68000 writes to 0x400-0x401 (MVOL): %d -> %d   to 0x418 (timer A): %d -> %d" % (U[0][0], U[-1][0], U[0][1], U[-1][1]))
     print("  MVOL as the SCSP holds it: first %d last %d   pre-boot sound-RAM check: %d of 4096 words wrong%s"
           % (U[0][3], U[-1][3], U[-1][2], "" if U[-1][2] == 0 else "  <-- THE SOUND RAM DOES NOT HOLD WHAT IS WRITTEN"))
+# R877: 'L' {2'd0, longest wait port 5 | port 6 | port 7 (10 bits each, clk_sys, saturating at 1023)}
+#           | {clocks / 16 port 5 had a request outstanding | port 6 / 7 requests that waited >= 256}
+# one L record every sixth probe record (~14.8 ms); maxima and counts are since the last L
+L = [((a >> 20) & 0x3ff, (a >> 10) & 0x3ff, a & 0x3ff, d >> 16, d & 0xffff) for t, a, d in recs if t == 'L']
+if L:
+    us = lambda c: c / mhz
+    print("SOUND SDRAM PORTS (%d L records, clk_sys at %.0f MHz; 1023 = saturated):" % (len(L), mhz))
+    for i, nm in ((0, "5 (68000)     "), (1, "6 (slot fills)"), (2, "7 (DSP)       ")):
+        v = [l[i] for l in L]
+        print("  port %s longest wait per record: median %4d p90 %4d max %4d clk (%.2f / %.2f / %.2f us); saturated in %d records" % (
+            nm, med(v), pct(v, .9), max(v), us(med(v)), us(pct(v, .9)), us(max(v)), sum(1 for x in v if x >= 1023)))
+    win = mhz * 1e6 * 0.0148 / 16
+    w5 = [l[3] for l in L]
+    print("  port 5 request outstanding: median %.1f%% p90 %.1f%% max %.1f%% of the time" % (
+        100 * med(w5) / win, 100 * pct(w5, .9) / win, 100 * max(w5) / win))
+    sl = [l[4] for l in L]
+    print("  port 6 / 7 requests that waited >= 256 clk: median %d p90 %d max %d a record (%d in all)" % (med(sl), pct(sl, .9), max(sl), sum(sl)))
+    print("  (R877, tb_m2_sdram_load in clk_sys: a light video load ~20-75; a heavy one ~250-470 before the AGE fix, ~125-200 after)")
 # R868: the M2_PROBE build's 'C' {i960 IP} | {copro_stall, TGP unimplemented, 14'd0, TGP pc} (R871)
 C = [(a, d >> 31, (d >> 30) & 1, d & 0xffff) for t, a, d in recs if t == 'C']
 if C:

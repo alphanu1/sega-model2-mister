@@ -105,6 +105,17 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_SOUND
 `define M2_2A_SOUND 1
 `endif
+// R877: M2_2A_SND_AGE, m2_sdram's AGE escalation for the sound ports 5-7 (aged
+// into the top of the class after 48 clk_mem of waiting). 0 by default: the
+// board's 68000 runs at the bench's rate (s1207), so the arbiter is left as
+// it was until the probe's 'L' record says the ports wait; 1 turns it on.
+// M2_2A_SND_POST: the 68000's RAM writes posted (m2_2a_sound POST_WR), 1.
+`ifndef M2_2A_SND_AGE
+`define M2_2A_SND_AGE 0
+`endif
+`ifndef M2_2A_SND_POST
+`define M2_2A_SND_POST 1
+`endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
 // On by default; VERILOG_MACRO "M2_NO_2A_RALLY=1" (or -DM2_NO_2A_RALLY to
@@ -147,6 +158,12 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_IOZ80
 `define M2_IOZ80 1
 `endif
+`endif
+`ifndef M2_2A_SND_AGE
+`define M2_2A_SND_AGE 0
+`endif
+`ifndef M2_2A_SND_POST
+`define M2_2A_SND_POST 1
 `endif
 
 // R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
@@ -1589,7 +1606,15 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
            // finish is shown twice (a tile overrun, 55-62% of frames on the
            // board, R814 captures) -- and it uses ~558 of a 3,280-cycle line
            // (R283), so its wait is queueing behind 1 and 2, not bandwidth.
-           .PRI(SDR_PRI), .PRI_CAP(2), .PRI_TOP(13'b0_0000_0000_1000)) u_sdram (
+           // R877: the 2A sound board's ports (5 the 68000, 6 the SCSP's slot
+           // fills, 7 its DSP) are AGED into the top of the class after 48
+           // cycles of waiting. Outside the class they waited up to ~580
+           // clk_mem behind a video load (tb_m2_sdram_load), and all three
+           // block on each access: the 68000's ring copies and the SCSP's
+           // samples fell behind 44.1 kHz. Bounded at ~150-220 clk_mem; the
+           // class's order is unchanged while they wait less than that.
+           .PRI(SDR_PRI), .PRI_CAP(2), .PRI_TOP(13'b0_0000_0000_1000),
+           .AGE((M2A && `M2_2A_SND_AGE != 0) ? 13'b0_0000_1110_0000 : 13'd0), .AGE_T(48)) u_sdram (
 	.clk(clk_mem), .rst_n(mem_rst_n), .ready(mem_ready),
 	// CL+2, FIXED, NO OSD OVERRIDE (R411). Only one capture depth can ever be
 	// right -- CL+1 samples the previous word of the burst, CL+3 the next -- so
@@ -3165,7 +3190,7 @@ end else if (SND2A) begin : g_2asnd
 	m2_2a_sound #(.AW(SDR_AW), .RAM_BASE(GAME_SNDRAM_2A), .ROM_BASE(GAME_SND_2A),
 	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1),
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
-	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000)) u_snd2a (
+	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0)) u_snd2a (
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -5402,12 +5427,36 @@ end else begin : g_nodbg
 	//   'T' {the 68000's last address | bytes the sound side sent the i960}
 	//       | {loudest |left| since the last T | output FIFO underruns}
 	//   'U' {68000 writes to 0x400 | to 0x418} | {sound-RAM check's wrong words | 12'd0, MVOL}
+	//   'L' (R877) the 2A sound board's SDRAM ports since the last L, clk_sys:
+	//       {2'd0, longest wait on port 5 (the 68000), 6 (slot fills), 7 (DSP),
+	//       10 bits each, saturating} | {clocks / 16 the 68000's port had a
+	//       request outstanding | port 6 / 7 requests that waited >= 256}
 	logic [1:0]  pb_div;
 	logic [2:0]  pb_sel;
 	logic        pb_valid;
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
 	wire  [15:0] sd_abs = snd_l[15] ? (~snd_l + 16'd1) : snd_l;
+	// R877: the sound ports' waits (a request is a level held to its acknowledge)
+	logic [9:0]  sl_c5, sl_c6, sl_c7, sl_m5, sl_m6, sl_m7;
+	logic [19:0] sl_w5;
+	logic [15:0] sl_slow;
+	wire         sl_l5 = s2a_a_req && !p_ack[5], sl_l6 = s2a_b_req && !p_ack[6], sl_l7 = s2a_c_req && !p_ack[7];
+	wire         sl_clr = pb_valid && pb_sel == 3'd5;
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			sl_c5 <= '0; sl_c6 <= '0; sl_c7 <= '0; sl_m5 <= '0; sl_m6 <= '0; sl_m7 <= '0; sl_w5 <= '0; sl_slow <= '0;
+		end else begin
+			sl_c5 <= !sl_l5 ? 10'd0 : (&sl_c5) ? sl_c5 : sl_c5 + 10'd1;
+			sl_c6 <= !sl_l6 ? 10'd0 : (&sl_c6) ? sl_c6 : sl_c6 + 10'd1;
+			sl_c7 <= !sl_l7 ? 10'd0 : (&sl_c7) ? sl_c7 : sl_c7 + 10'd1;
+			sl_m5 <= sl_clr ? 10'd0 : (sl_c5 > sl_m5) ? sl_c5 : sl_m5;
+			sl_m6 <= sl_clr ? 10'd0 : (sl_c6 > sl_m6) ? sl_c6 : sl_m6;
+			sl_m7 <= sl_clr ? 10'd0 : (sl_c7 > sl_m7) ? sl_c7 : sl_m7;
+			sl_w5 <= sl_clr ? 20'd0 : (sl_l5 && !(&sl_w5)) ? sl_w5 + 20'd1 : sl_w5;
+			sl_slow <= sl_clr ? 16'd0 : ((sl_c6 == 10'd255 || sl_c7 == 10'd255) && !(&sl_slow)) ? sl_slow + 16'd1 : sl_slow;
+		end
+	end
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
 			pb_div <= '0; pb_sel <= '0; pb_valid <= 1'b0;
@@ -5416,7 +5465,7 @@ end else begin : g_nodbg
 			pb_valid <= 1'b0;
 			if (prof_tick) begin
 				pb_div <= (pb_div == 2'd2) ? 2'd0 : pb_div + 2'd1;
-				if (pb_div == 2'd0) begin pb_valid <= 1'b1; pb_sel <= (pb_sel == 3'd4) ? 3'd0 : pb_sel + 3'd1; end
+				if (pb_div == 2'd0) begin pb_valid <= 1'b1; pb_sel <= (pb_sel == 3'd5) ? 3'd0 : pb_sel + 3'd1; end
 			end
 			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
 			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
@@ -5429,14 +5478,17 @@ end else begin : g_nodbg
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(pb_valid),
 		.a_addr((pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
-		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {copro_in_pushed, copro_out_popped} : cpu_dbg_ip),
+		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {copro_in_pushed, copro_out_popped} :
+		        (pb_sel == 3'd5) ? {2'd0, sl_m5, sl_m6, sl_m7} : cpu_dbg_ip),
 		.a_data((pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
 		        (pb_sel == 3'd3) ? {snd_selftest, 12'd0, snd_mvol} :
 		        (pb_sel == 3'd4) ? {copro_out_pushed[15:0], copro_in_dropped[7:0], copro_out_dropped[7:0]} :
+		        (pb_sel == 3'd5) ? {sl_w5[19:4], sl_slow} :
 		        {copro_stall, tgp_unimpl, 14'd0, tgp_pc}),
 		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
-		.a_tag((pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h51 : 8'h43),
-		.b_tag(8'h47),   // 'C','S','T','U','Q'
+		.a_tag((pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h51 :
+		       (pb_sel == 3'd5) ? 8'h4c : 8'h43),
+		.b_tag(8'h47),   // 'C','S','T','U','Q','L'
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);

@@ -586,7 +586,7 @@ obj_m2_sdram/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 # R789: Model2.sv's thirteen ports and its priority class (1, 2, 3, 4, 10, 11, 12;
 # cap 2) -- the texel cache's four miss ports with the glyph fetch's deadline
-test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness obj_m2_sdram13t/Vm2_sdram_harness obj_m2_sdram13p/Vm2_sdram_harness
+test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness obj_m2_sdram13t/Vm2_sdram_harness obj_m2_sdram13p/Vm2_sdram_harness obj_m2_sdram13a/Vm2_sdram_harness
 	@echo "== test m2_sdram, Model2.sv's 13 ports and priority class (R789)"
 	./obj_m2_sdram13/Vm2_sdram_harness
 	@echo "== ... with the four texel miss ports (2, 10, 11, 12) reading eight words (R796)"
@@ -595,6 +595,14 @@ test_m2_sdram13: obj_m2_sdram13/Vm2_sdram_harness obj_m2_sdram13t/Vm2_sdram_harn
 	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13t/Vm2_sdram_harness
 	@echo "== ... and the TGP's ports 8 and 9 in the class, as the 2A build sets it (R854)"
 	M2_SDRAM_LONG=1c04 ./obj_m2_sdram13p/Vm2_sdram_harness
+	@echo "== ... and the sound ports 5, 6, 7 aged into the class after 48 cycles, writing on 5 and 7 (R877)"
+	M2_SDRAM_LONG=1c04 M2_SDRAM_W57=1 ./obj_m2_sdram13a/Vm2_sdram_harness
+
+obj_m2_sdram13a/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1111100011110 -GPRI_TOP=13\'b0000000001000 -GAGE=13\'b0000011100000 -GAGE_T=48 \
+	  --Mdir obj_m2_sdram13a -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 obj_m2_sdram13p/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
@@ -613,6 +621,28 @@ obj_m2_sdram13/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
 	  -GNPP=13 -GPRI=13\'b1110000011110 \
 	  --Mdir obj_m2_sdram13 -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+# R877: the 2A sound board's ports (5, 6, 7) under a synthetic video load --
+# their latency through m2_sdram as the 2A build sets the class (obj_m2_sdram_load)
+# and with 5, 6 and 7 aged into it after 48 cycles (obj_m2_sdram_loads). LOAD_THINK / LOAD_RENDER /
+# LOAD_FRAMES / LOAD_TRACE: see sim/mem/tb_m2_sdram_load.cpp.
+test_m2_sdram_load: obj_m2_sdram_load/Vm2_sdram_harness obj_m2_sdram_loads/Vm2_sdram_harness
+	@echo "== m2_sdram under a video load: the sound ports as the 2A build had them"
+	M2_SDRAM_LONG=1c04 ./obj_m2_sdram_load/Vm2_sdram_harness
+	@echo "== ... and with ports 5, 6, 7 escalated after 48 cycles of waiting (AGE, R877)"
+	M2_SDRAM_LONG=1c04 ./obj_m2_sdram_loads/Vm2_sdram_harness
+
+obj_m2_sdram_load/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp sim/mem/tb_m2_sdram_load.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1111100011110 -GPRI_TOP=13\'b0000000001000 \
+	  --Mdir obj_m2_sdram_load -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram_load.cpp
+
+obj_m2_sdram_loads/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp sim/mem/tb_m2_sdram_load.cpp
+	$(VBUILD) --top-module m2_sdram_harness -CFLAGS "-O2 -I../sim/mem -DTB_NP=13" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -GNPP=13 -GPRI=13\'b1111100011110 -GPRI_TOP=13\'b0000000001000 -GAGE=13\'b0000011100000 -GAGE_T=48 \
+	  --Mdir obj_m2_sdram_loads -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram_load.cpp
 
 # The SAME suite at the 128 MB geometry: 11 column bits, which is the only
 # decomposition reaching 64M words on the connector's 13 address and 2 bank pins.
