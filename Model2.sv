@@ -5749,9 +5749,10 @@ end
 // s1114 failed clk_sys at -1.212 from hps_io's joystick_l_analog_0 across the
 // chip into the steering limiter (steer_lim). The stick moves at USB rates;
 // one 12.5 ns cycle more is nothing. m2_cab_inputs is unchanged.
-logic [15:0] joy_analog_q, joy_ranalog_q;
+logic [15:0] joy_analog_q, joy_ranalog_q, joy_analog_1_q;   // R879: player 2's too
 logic  [7:0] paddle_q;
 always_ff @(posedge clk_sys) begin
+	joy_analog_1_q <= joy_analog_1;
 	joy_analog_q  <= joy_analog;
 	joy_ranalog_q <= joy_ranalog;
 	paddle_q      <= paddle;
@@ -5911,7 +5912,7 @@ end else begin : g_noioboard
 			.clk(clk_sys), .rst_n(cpu_rst_n),
 			.is_srally(is_srally), .is_vcop2(is_vcop2), .is_zerogun(is_zerogun),
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
-			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .paddle(paddle_q),
+			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .joy_analog_1(joy_analog_1_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
 			.st_rsteer(status[54]), .gun_in1(vc_in1),   // R870: the guns' triggers
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),

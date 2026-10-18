@@ -38118,3 +38118,15 @@ no SCSP path among the 40 worst). Ben, 2026-10-18:**
     board's SDRAM ports (5 / 6 / 7, outside the priority class) under the
     board's video load is the leading lead for all three games' sound.
 
+**R879 -- ZERO GUNNER'S (AND VF2'S) STICKS FROM A PAD'S LEFT ANALOGUE STICK.**
+Ben (s1207): Zero Gunner's analogue sticks do nothing. Its controls are
+digital (MAME INPUT_PORTS zerogun: up, down, left, right, two buttons), as
+VF2's are; MiSTer's analogue word reached only Sega Rally's block. Now
+m2_2a_inputs ORs each player's left stick into the directions past a dead
+zone of 48 of 127 (X in 7:0, Y in 15:8, signed), for VF2 and Zero Gunner;
+player 2's stick (joystick_l_analog_1) is registered beside player 1's in
+Model2.sv. Virtua Cop 2 and Sega Rally unchanged. tb_m2_2a_inputs drives
+both sticks at random and folds the same rule into its references:
+20,000,000 cycles, 120,000,000 checks, 0 mismatches; tb_m2_vcop2_guns
+unchanged (223,916 / 0); lint_top clean (2A, M2_NO_2A).
+

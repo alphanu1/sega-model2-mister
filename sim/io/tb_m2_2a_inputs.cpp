@@ -50,8 +50,14 @@ struct Want { int in0, in1, in2, an0, an1, an2; };
 
 static int lo(int bits) { return (~bits) & 0xff; }   // active low byte from "pressed" bits
 
+// R879: a left analogue stick past 48 either way is a direction (VF2, Zero Gunner)
+static uint32_t adir(uint16_t a) {
+  int x = int8_t(a & 0xff), y = int8_t(a >> 8);
+  return (x > 48 ? 1u : 0u) | (x < -48 ? 2u : 0u) | (y > 48 ? 4u : 0u) | (y < -48 ? 8u : 0u);
+}
 static Want want_now(int game) {
   uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
+  if (game == 3) { j0 |= adir(t->joy_analog); j1 |= adir(t->joy_analog_1); }
   Want w;
   if (game == 1) {   // Sega Rally
     w.in0 = lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 8) << 5 | b(j0, 5) << 6);
@@ -98,7 +104,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) if (!std::strncmp(argv[i], "+n=", 3)) N = std::strtoull(argv[i] + 3, nullptr, 10);
   t = new Vtb_m2_2a_inputs_top;
   t->clk = 0; t->rst_n = 0; t->is_srally = 0; t->is_vcop2 = 0; t->is_zerogun = 0;
-  t->joystick_0 = 0; t->joystick_1 = 0; t->joy_analog = 0; t->joy_ranalog = 0; t->paddle = 0;
+  t->joystick_0 = 0; t->joystick_1 = 0; t->joy_analog = 0; t->joy_ranalog = 0; t->joy_analog_1 = 0; t->paddle = 0;
   t->st_pedswap = 0; t->st_ssens = 0; t->st_ssm = 0; t->st_rsteer = 0;
   for (int i = 0; i < 4; ++i) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
   t->rst_n = 1; gear = 0;
@@ -110,6 +116,8 @@ int main(int argc, char **argv) {
     if (rnd(24) == 0) t->joystick_1 ^= 1u << rnd(16);
     if (rnd(2000) == 0) t->joy_analog = uint16_t(rng());
     if (rnd(2000) == 0) t->joy_ranalog = uint16_t(rng());
+    if (rnd(2000) == 0) t->joy_analog_1 = uint16_t(rng());   // R879
+    t->jr0 = t->joystick_0 | adir(t->joy_analog); t->jr1 = t->joystick_1 | adir(t->joy_analog_1);
     if (rnd(3000) == 0) t->paddle = (rnd(3) == 0) ? uint8_t(rng()) : 0;
     if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); }
     if (rnd(500000) == 0) t->rst_n = 0; else if (!t->rst_n && rnd(8) == 0) t->rst_n = 1;

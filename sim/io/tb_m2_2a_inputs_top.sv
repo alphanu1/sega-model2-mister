@@ -19,6 +19,8 @@ module tb_m2_2a_inputs_top (
   input  logic [31:0] joystick_1,
   input  logic [15:0] joy_analog,
   input  logic [15:0] joy_ranalog,
+  input  logic [15:0] joy_analog_1,   // R879
+  input  logic [31:0] jr0, jr1,       // R879: the reference's joysticks, the sticks folded in by the bench
   input  logic  [7:0] paddle,
   input  logic        st_pedswap,
   input  logic  [1:0] st_ssens,
@@ -32,15 +34,17 @@ module tb_m2_2a_inputs_top (
 );
   m2_2a_inputs #(.SYS_MHZ(80), .RALLY(1'b1)) dut (
     .clk, .rst_n, .is_srally, .is_vcop2, .is_zerogun, .joystick_0, .joystick_1,
-    .joy_analog, .joy_ranalog, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
+    .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
     .gun_in1(8'hFF), .in0, .in1, .in2, .an0, .an1, .an2);
 
   // Model2.sv at 9fb631d, g_5649 -- verbatim
   wire [7:0] a2_in0 = ~{2'b00, joystick_1[7], joystick_0[7], joystick_0[10],
                         joystick_0[9], joystick_1[8], joystick_0[8]};
-  wire [7:0] a2_in1 = ~{joystick_0[1], joystick_0[0], joystick_0[3], joystick_0[2],
+  // (R879: the directions from jr0 / jr1 -- the joysticks with the bench's
+  // model of the analogue sticks folded in; otherwise verbatim)
+  wire [7:0] a2_in1 = ~{jr0[1], jr0[0], jr0[3], jr0[2],
                         1'b0, joystick_0[6], joystick_0[5], joystick_0[4]};
-  wire [7:0] a2_in2 = ~{joystick_1[1], joystick_1[0], joystick_1[3], joystick_1[2],
+  wire [7:0] a2_in2 = ~{jr1[1], jr1[0], jr1[3], jr1[2],
                         1'b0, joystick_1[6], joystick_1[5], joystick_1[4]};
   always_ff @(posedge clk) begin
     r_in0 <= a2_in0; r_in1 <= a2_in1; r_in2 <= a2_in2;

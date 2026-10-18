@@ -43,7 +43,7 @@ module tb_m2_vcop2_top (
   m2_2a_inputs #(.SYS_MHZ(80), .RALLY(1'b0), .GUN(1'b1)) inputs (
     .clk, .rst_n, .is_srally(1'b0), .is_vcop2(1'b1), .is_zerogun(1'b0),
     .joystick_0({16'd0, joy0}), .joystick_1({16'd0, joy1}),
-    .joy_analog(16'd0), .joy_ranalog(16'd0), .paddle(8'd0),
+    .joy_analog(16'd0), .joy_ranalog(16'd0), .joy_analog_1(16'd0), .paddle(8'd0),
     .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0),
     .gun_in1(g_in1),
     .in0, .in1, .in2, .an0, .an1, .an2

@@ -66,6 +66,7 @@ module m2_2a_inputs #(
   input  logic [31:0] joystick_1,
   input  logic [15:0] joy_analog,   // left stick (registered by the caller)
   input  logic [15:0] joy_ranalog,  // right stick
+  input  logic [15:0] joy_analog_1, // R879: player 2's left stick (registered by the caller)
   input  logic  [7:0] paddle,
   input  logic        st_pedswap,   // status[28]  Pedals
   input  logic  [1:0] st_ssens,     // status[30:29] Steering
@@ -85,15 +86,27 @@ module m2_2a_inputs #(
   wire [31:0] j0 = joystick_0;
   wire [31:0] j1 = joystick_1;
 
+  // R879: VF2 and Zero Gunner have digital sticks; a pad's left analogue
+  // stick drives them too, past a dead zone of 48 of 127 either way
+  // (MiSTer's analogue word: X in 7:0, Y in 15:8, signed; directions in
+  // joystick 3:0 are up, down, left, right).
+  function automatic logic [3:0] adir(input logic [15:0] a);
+    logic signed [7:0] x, y;
+    x = a[7:0]; y = a[15:8];
+    adir = {y < -8'sd48, y > 8'sd48, x < -8'sd48, x > 8'sd48};
+  endfunction
+  wire [31:0] d0 = {j0[31:4], j0[3:0] | adir(joy_analog)};
+  wire [31:0] d1 = {j1[31:4], j1[3:0] | adir(joy_analog_1)};
+
   // ---- VF2, exactly R852's expressions (Model2.sv at 9fb631d)
   wire [7:0] vf_in0 = ~{2'b00, j1[7], j0[7], j0[10], j0[9], j1[8], j0[8]};
-  wire [7:0] vf_in1 = ~{j0[1], j0[0], j0[3], j0[2], 1'b0, j0[6], j0[5], j0[4]};
-  wire [7:0] vf_in2 = ~{j1[1], j1[0], j1[3], j1[2], 1'b0, j1[6], j1[5], j1[4]};
+  wire [7:0] vf_in1 = ~{d0[1], d0[0], d0[3], d0[2], 1'b0, j0[6], j0[5], j0[4]};
+  wire [7:0] vf_in2 = ~{d1[1], d1[0], d1[3], d1[2], 1'b0, j1[6], j1[5], j1[4]};
 
   // ---- Zero Gunner: the stick, two buttons
   wire [7:0] zg_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
-  wire [7:0] zg_in1 = ~{j0[1], j0[0], j0[3], j0[2], 2'b00, j0[5], j0[4]};
-  wire [7:0] zg_in2 = ~{j1[1], j1[0], j1[3], j1[2], 2'b00, j1[5], j1[4]};
+  wire [7:0] zg_in1 = ~{d0[1], d0[0], d0[3], d0[2], 2'b00, j0[5], j0[4]};
+  wire [7:0] zg_in2 = ~{d1[1], d1[0], d1[3], d1[2], 2'b00, j1[5], j1[4]};
 
   // ---- Virtua Cop 2: the triggers (both on IN1), starts and coins; R870
   // Virtua Cop's button order (m2_vcop_guns' in0 is this same map)
