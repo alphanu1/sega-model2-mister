@@ -38759,3 +38759,173 @@ in neither the rings nor the 68000's speed; left open: the driver's
 decisions that read the SCSP monitor up to 7 samples ahead (R883: slot
 allocation parts from MAME's at 5.84 s, TL rewrites missing at 8.54 s), and
 fx68k's interrupt latch (item 5), a study-level question for Ben.
+
+
+**R885 -- THE DIFFERENTIAL SPLIT: THE FREE-RUNNING SCSP COMPUTES MAME'S
+MIX FROM WHAT IT IS GIVEN (REPLAYED THROUGH scsp_ref.h, EVERY SAMPLE
+ACCOUNTED FOR). WHAT IT WAS GIVEN WAS WRONG BECAUSE OF WHAT IT TOLD THE
+68000: THE 0x408 MONITOR WAS LATCHED IN THE ENGINE'S TIME, AND 11% OF
+VF2's READS SAW ANOTHER SLOT'S CA -- THE DRIVER REFILLED ITS STREAMING
+RINGS EARLY, OVERWRITING DATA NOT YET PLAYED. THE MONITOR NOW LATCHES IN
+THE 68000's OWN TIME, AS MAME's: THE BENCH NOW WRITES MAME's STREAM, AND
+MATCHES MAME 0.725 OVER 4.6-11.6 s (WAS 0.390). -15 ALMs EST., NO BLOCK RAM.**
+
+*Believed (the task):* Ben hears the bench's VF2 clip as "a fast wobble or
+fast popping"; R883 / R884 ruled out the timers, the 68000's pace, stale
+ring reads, the pitch registers, SDRAM, MIDI and the ROMs. tb_m2_scsp is
+bit-exact only in step mode; the free-running engine applies a write at a
+slot boundary, runs ahead into the FIFO, and its register-visible state can
+be ~7 samples ahead. Split it: replay OUR run's accesses through the
+reference at the places the engine applied them. Equal -> the 68000 is fed
+something different; not equal -> the engine departs from MAME.
+
+*Built to split it (sim only; nothing synthesised changes for it):*
+  * M2_SND_TRACE (m2_scsp.sv, m2_2a_sound.sv, `ifdef): +sndtrace=<file>
+    logs, in the ENGINE's time, every 68000 register access as the engine
+    applies it (the sample it lands in, and where: before slot 0..31, after
+    the slots, or inside a slot for a RAM write), every sound-RAM write as it
+    lands (68000 and DSP), every sample made (raw L / R), and the drained
+    sample count. make obj_snd2a_tr/Vm2_2a_sound SCSP_SFX=_tr
+    SCSP_DEFS=-DM2_SND_TRACE.
+  * sim/sound/scsp_split.cpp (make obj_scsp_split/scsp_split): scsp_ref.h
+    (MAME's scsp.cpp, ported) given the trace's accesses at the same sample
+    and slot (scsp_ref.h gained a per-slot hook, nothing else), its mix
+    compared with the engine's sample for sample, and its reads checked.
+    It also counts (a) 0x408 reads whose latch was made for another slot
+    than MSLC selects, and (b) slot reads of a word the 68000 wrote TWICE
+    since the slot last read it -- a later lap of a streamed ring played
+    early. (R884 item 1 checked only the opposite, a word NOT rewritten.)
+  * sim/sound/scsp_cap2tr.py: MAME's own capture in the same format. It
+    replays EQUAL to MAME's out.bin (20.6 s, 0 samples differ) -- the tool
+    and the reference agree with MAME before they judge the RTL.
+
+*Measured -- THE SPLIT (VF2, SND_SHIFT=9, 11.6 s, 80 MHz, latency 6-40,
+0c90017's RTL):*
+  1. THE ENGINE IS THE REFERENCE. 511,566 samples: 68 differ with RAM writes
+     that land inside a slot's microprogram counted after that slot, 124
+     with them counted before -- and NO sample differs under both (the trace
+     cannot tell whether such a write beat the slot's fetch; 432,676 of
+     3,692,473 RAM writes land inside a slot). 398,075 register writes,
+     32,537 slot-register / 0x408 reads 0 wrong. Every access applied before
+     slot 0 instead (MAME's "between samples") differs everywhere by 15-30%
+     RMS -- one-sample shifts of a voice, inaudible, but it shows the split
+     placement is needed to see equality. So the free-running engine, mid-
+     sample writes and run-ahead included, computes MAME's mix from what it
+     is given. R821's departure is not the fault.
+  2. WHAT IT IS GIVEN DIFFERS FROM MAME'S BECAUSE OF THE MONITOR. 3,438 of
+     32,229 0x408 reads (10.67%) returned a latch made for another slot
+     than MSLC selected; 454 of them a different CA bit 7 than the selected
+     slot's own. MAME's: none on the delayed path, by its update rule (b)
+     -- inferred, not counted: the capture keeps no order within a sample.
+  THE CHAIN (sound program disassembled at 602242-60266a):
+     a. The driver's background loop walks 32 voice records. At the end of
+        each it writes MSLC (move.b $16(a0),$408(a5)); in the next it burns
+        ~300 68000 clocks (ten ror.l #8 -- longer than a sample's 256) and
+        tests CA bit 0 (btst #7,$409(a5)): which half of the voice's ring is
+        playing. When it flips, it copies the next 512 bytes of the stream
+        into the other half (sixteen MOVEM.L pairs, 6022e4-6024b2) and counts
+        the stream down ($a(a0) -= 0x200); at the stream's end (6024be, no
+        delay) it clears LPCTL and writes LEA so the voice plays out.
+     b. MAME: sound_stream::update() runs to the CPU's LOCAL time and makes
+        samples up to and including the current one; the monitor is latched
+        at the end of each update that made a sample, for the MSLC then. So
+        a sample boundary of the 68000's own time always falls inside the
+        ~300-clock wait, and the read sees its slot.
+     c. Ours: the monitor was latched by the engine's output microcode at
+        the end of each sample it MADE. The engine makes a sample when the
+        FIFO drains one, but not evenly: a slow DSP pass or SDRAM waits hold
+        a sample past the next drain. Of the stale reads, 2,834 had two
+        drained samples between the MSLC write and the read with the engine
+        still in the same sample (the read waiting at the DSP window).
+     d. A wrong CA bit -> a copy into the half being played -> the voice
+        plays a later block early, or skips one: a discontinuity a block at a
+        time. The stream is used up faster: our 68000 wrote 20-30% more
+        sound RAM than MAME's in 5-8.5 s and ~2x in 8.6-11.6 s (4.6-11.6 s:
+        2,937,152 words, MAME 1,893,845), and 86% of the slot reads of a
+        freshly written word read one written twice (MAME 34% -- the
+        driver's normal pattern; the excess is the fault). The streams end
+        early -- the end-of-stream writes (word 0 low byte 0x11-0x14, word 3
+        LEA) land 150-290 ms before MAME's
+        (slot 2 4.959 / 5.117 s, slot 0 4.989 / 5.173, slot 11 5.100 /
+        5.391) -- and the voices freed early move the driver's slot
+        allocation: R883's "slot 19 for MAME's 20 at 5.84 s" and the missing
+        TL rewrites at 8.54 s are downstream of this, not of the run-ahead.
+     R883's test (the engine held to one sample ahead: byte-identical
+     writes) is consistent: the lead was never the fault; the latch's
+     timing against the 68000's clock was.
+
+*The fix (rtl/sound/scsp/m2_scsp.sv, m2_2a_sound.sv, the microcode):* free-
+running, the monitor is latched in the 68000's time. m2_2a_sound counts
+the 68000's issued half-clocks (512 a sample: 2 x 11.2896 MHz / 44,100) and
+pulses cpu_tick at each wrap. m2_scsp snoops MSLC at the 68000's bus write
+(mslc_c), and at cpu_tick takes that slot and asks for a latch; the engine
+serves it at its next operation window (dispatch between slots, the DSP
+wait, idle -- a few clocks) with a three-word microcode call (UA_MON:
+MON1, MON3, RET; the sweep's call mechanism). A 0x408 read no longer goes
+through the operation queue: it is answered from the latch as soon as no
+latch is pending -- EXACT stops the 68000's clock meanwhile, so the wait
+is real time, not 68000 time. Content: the slot's state where the engine
+is (~7 samples ahead; R883 showed that lead does not matter). Step mode
+(tb_m2_scsp) keeps the per-sample latch and is unchanged.
+
+*Before / after (same bench and window):*
+                                        before (0c90017)  after      MAME
+  replay through scsp_ref.h, 11.6 s       68 / 124 differ*  0 differ   --
+  0x408 reads for another slot            3,438 of 32,229   0 of 68,101  0 (b)
+    with the wrong CA bit                 454               0
+  68000 sound-RAM writes, 4.6-11.6 s      2,937,152         1,893,277  1,893,845
+  slot reads of a fresh word / of a
+    word written twice                    806,462 / 692,794 1,118,769 / 383,837
+                                                                       1,118,638 / 384,533
+  register writes in MAME's order, slot
+    for slot (LCS per 1 s, 4.6..11.6 s)   623 365 435 377   632 549 755 699
+                                          161 223 245       337 465 424
+    (of MAME's)                           635 569 759 699 355 468 432
+  10 ms windows against out.bin, lag followed per 0.25 s (tcorr.py), mean:
+    drum intro 4.6-6.6 s                  0.674             0.856 (median 0.921, >0.9 in 59%)
+    6.6-8.6 s                             0.474             0.630
+    8.6-11.6 s                            0.157             0.707
+    4.6-11.6 s                            0.390             0.725
+  envelope modulation (2 ms RMS), 4.6-8.6 s, power by band, ours / MAME:
+    2-8 Hz                                157 / 134         116 / 134
+    8-20 Hz                               69.4 / 46.4       43.7 / 46.2
+  (* mid-slot RAM writes counted after / before the slot, never both.)
+The 8-20 Hz excess -- half as much again as MAME's envelope modulation -- is
+the measurable "fast wobble"; its strongest lines are now MAME's (4.2, 8.5,
+1.7, 3.2 Hz: the music's beat). The residual against MAME has no periodic
+line of its own before or after (its peaks are the beat): the wrong reads
+came ~65 a second but at irregular moments, so the pops were irregular too.
+Clicks by |2nd difference| > 4000 tell nothing (ours 19 / 18, MAME 28 / 25).
+The writes left unmatched after the fix are pairs 2-9 ms apart in order (8.6-
+10.6 s: 817 of 823 matched, the six are word-5 / key-off writes in swapped
+order). What remains of the sample-level difference is the tempo: the
+followed lag walks from -20 to -251 samples over 7 s (~0.07% slow), R884
+item 5's fx68k interrupt latch, and the 0.25 s tracking itself.
+
+*Unchanged / checked:* tb_m2_scsp (step mode; the microcode grew by three
+words, 119 of 256) VF2 10 s and 30 s: 0 samples differ from the reference
+and MAME's mix, 9,421,266 slot samples 0 wrong, IPL 0 wrong. The traced
+fix run: the 68000 behind real time mean 0.68 half-clocks, max 61, never at
+the cap; 68,101 monitor reads waited 1.0 clock on average. tb_m2_2a_sound
+VF2 6 s unshifted: PASS, 98.9% of writes in MAME's order (as R884), 0
+underruns, the sound-RAM check 0 wrong, the matched writes 82.68 ms after
+MAME's (10% / 90% 82.67 / 82.69).
+lint_top (2A; M2_NO_2A; M2_NO_DEBUG M2_PROBE=1 M2_NO_2A_RALLY): clean.
+lint_idx: the same candidates as R884's. quartus_map --analyze_file on
+m2_scsp.sv and m2_2a_sound.sv: 0 errors. Area (quartus_map 17.0,
+m2_2a_sound alone, R884's script): 4,845 -> 4,830 ALMs est., ALUT 6,342 ->
+6,327, registers 3,503 -> 3,527, block memory 323,476 bits unchanged (the
+microcode ROMs stay 256 words). The trace build changes nothing it watches:
+0c90017 with and without it gives the same WAV to the sample.
+
+*What is left:* the tempo (fx68k's interrupt latch, R884 item 5 -- a
+study-level question for Ben, not changed). Other games' drivers may poll
+the monitor without a wait; they now get MAME's semantics too. The board
+has not heard this: the clip for Ben is
+vf2_compare_BENCH_split.wav (the same 4.6-11.6 s window as R884's).
+*Corrections:* R883's "slot allocation parts at 5.84 s / TL rewrites
+missing at 8.54 s ... the 68000's pace" and R884's "the driver's decisions
+that read the monitor up to 7 samples ahead" -- it was not the lead and not
+the pace: it was WHEN the latch was made against the 68000's clock. R884
+item 1 ("no stale reads") was true and blind to the fault: it counted
+words read without a rewrite, not words rewritten before they were read.

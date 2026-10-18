@@ -2528,6 +2528,14 @@ obj_scsp_dsp$(SCSP_SFX)/Vm2_scsp_dsp: $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_
 	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY \
 	  $(SCSP_DEFS) --top-module m2_scsp_dsp --Mdir obj_scsp_dsp$(SCSP_SFX) $(SCSP_DIR)/m2_scsp_dsp.sv $(SCSP_DIR)/m2_scsp_cache.sv sim/sound/tb_m2_scsp_dsp.cpp
 
+# R885: the free-running SCSP replayed through scsp_ref.h. Build the 2A bench
+# with its trace (make obj_snd2a_tr/Vm2_2a_sound SCSP_SFX=_tr
+# SCSP_DEFS=-DM2_SND_TRACE), run it with +sndtrace=<file>, then
+# obj_scsp_split/scsp_split <file> from rtl/sound/scsp (MAME's noise table).
+obj_scsp_split/scsp_split: sim/sound/scsp_split.cpp sim/sound/scsp_ref.h
+	@mkdir -p obj_scsp_split
+	g++ -O2 -std=c++17 -Wall -Isim/sound sim/sound/scsp_split.cpp -o $@
+
 # the 2A sound board (R859): fx68k on a game's real sound program, the SCSP,
 # sound RAM in SDRAM. SND_IMG=build/snd2a/<game> (sim/sound/snd_img.py),
 # SCSP_CAP=build/scsp/<game> (MAME's MIDI, writes, mix), SND_S=<seconds>

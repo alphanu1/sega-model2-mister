@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
 	if (!regs.f || !rw.f || !fo) { fprintf(stderr, "capture incomplete in %s\n", cap); return 2; }
 
 	t = new Vm2_scsp;
-	t->rst_n = 0; t->step_mode = 1; t->step_go = 0; t->out_ready = 0; t->tick44 = 0;
+	t->rst_n = 0; t->step_mode = 1; t->step_go = 0; t->out_ready = 0; t->tick44 = 0; t->cpu_tick = 0;
 	t->cpu_req = 0; t->midi_valid = 0; t->snp = 0;
 	for (int i = 0; i < 4; i++) tick();
 	t->rst_n = 1;

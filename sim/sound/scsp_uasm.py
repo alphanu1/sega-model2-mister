@@ -60,7 +60,7 @@ LATA = dict(NONE=0, W9=1, W4=2, W5=3, W6=4, W10=5)
 LATB = dict(NONE=0, W0=1, W7=2)
 S1 = dict(NONE=0, FETCH1=1, FETCH2=2, TADRP=3, TADRA=4, TADRE=5, DBG=8,
           RINGX=9, RINGY=10, LATEG=11, OUTLRAW=12, OUTRRAW=13, OUTL=14, OUTR=15)
-S2 = dict(NONE=0, OUTV=1, DSPGO=2, ACTSET=3, SWINC=4, ICLR=5, IINC=6, MON1=7, MON2=8, MIXW=9, RINGW=10)
+S2 = dict(NONE=0, OUTV=1, DSPGO=2, ACTSET=3, SWINC=4, ICLR=5, IINC=6, MON1=7, MON2=8, MIXW=9, RINGW=10, MON3=11)
 ST = dict(CUR=0, NXT=1, PH=2, VOL=3, RAR=4, RD1=5, RD2=6, RRR=7)
 RI = dict(AR=0, D1R=1, D2R=2, RR=3)       # RATEIDX: imm[1:0] picks the rate field
 R = dict(SMPL=0, SMPR=1, STEP=2, S=3, CURA=4, NA=5, CREM=6, NREM=7, SAFM=8, PH=9,
@@ -214,6 +214,16 @@ def word5():
         (None, m(flow='RET')),
     ]
 
+# the 0x408 monitor latched for the 68000 (R885): called from an operation
+# window at the 68000's own sample boundary, for the slot MSLC selected then
+# (sw = that slot); MON3 is MON2 for the free-running engine
+def moncall():
+    return [
+        ('MON', m(idx='SW', st='CUR', s2='MON1')),
+        (None, m(idx='SW', st='VOL', s2='MON3')),
+        (None, m(flow='RET')),
+    ]
+
 # ===================================================================== layout
 rom, labels, fixups = [], {}, []
 def place(label, mi):
@@ -226,6 +236,7 @@ place('NOP', m())                      # address 0: E's bubble
 for lab, mi in sample_head(): place(lab, mi)
 for lab, mi in sweep(): place(lab, mi)
 for lab, mi in word5(): place(lab, mi)
+for lab, mi in moncall(): place(lab, mi)
 place('SKIP', m(flow='SLOTEND'))       # SSCTL 3: MAME returns 0, touching nothing
 pre, midn, midf, alf, tail = slot_prefix(), slot_mid(False), slot_mid(True), slot_alfo(), slot_tail()
 for i, mi in enumerate(pre): place('SLOT' if i == 0 else None, mi)

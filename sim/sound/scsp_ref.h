@@ -557,10 +557,14 @@ public:
 	bool dbg_dsp = false;
 
 	// ---------------------------------------------------------------- one sample (MAME DoMasterSamples, one iteration)
+	// bench hook (R885): called before each slot (0..31) and before the DSP (32),
+	// to apply accesses where a free-running engine applied them
+	void (*slot_hook)(void *, int) = nullptr; void *slot_ctx = nullptr;
 	void sample(s32 &outl, s32 &outr) {
 		s32 smpl = 0, smpr = 0;
 		for (int i = 0; i < 16; i++) mix_add[i] = 0;
 		for (int sl = 0; sl < 32; ++sl) {
+			if (slot_hook) slot_hook(slot_ctx, sl);
 			RBUFDST = RINGBUF + BUFPTR;
 			slot_was_active[sl] = S[sl].active; slot_out[sl] = 0;
 			if (S[sl].active) {
@@ -577,6 +581,7 @@ public:
 			}
 			++BUFPTR; BUFPTR &= 63;
 		}
+		if (slot_hook) slot_hook(slot_ctx, 32);
 		DSP_Step();
 		for (int i = 0; i < 16; ++i) {
 			Slot *slot = S + i;

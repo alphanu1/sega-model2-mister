@@ -265,6 +265,7 @@ int main(int argc, char **argv) {
 			fflush(stdout);
 		}
 	}
+	t->final();   // (the RTL's final blocks: M2_SND_TRACE's summary, R885)
 	// MAME's level, second by second (its mix >> 2, the DAC's 16 bits, MVOL 15)
 	for (size_t s = 0; s + 1 <= mout.size() / 2 / 44100; s++) {
 		double a = 0;
