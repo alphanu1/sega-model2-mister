@@ -17,6 +17,11 @@
 //   SND_S=<seconds, default 10>  LAT_LO / LAT_HI (default 6 / 40)
 //   SND_RAMFILL=<word>  what unwritten sound RAM reads (default 0xffff)
 //   LAT_A_LO / LAT_A_HI the 68000's port alone (R874)
+//   LAT_TRACE=<prefix>  R877: each port's latency from tb_m2_sdram_load's trace
+//     (<prefix>5/6/7.txt, "issue latency" in clk_mem cycles of 100 MHz): a
+//     request at time t takes the latency the arbiter gave the first traced
+//     request at or after t (mod the trace's span), x CLK/100 + LAT_CDC
+//     (default 4) clk_sys for the crossing -- bursty, as the load is
 //   SND_SHIFT=<s> [SND_SHIFT_AFTER=<s>, default 5]  MAME's MIDI and writes from
 //     SND_SHIFT_AFTER moved SND_SHIFT seconds earlier, to reach a late event
 //     in a short run (R874: VF2's music at 4.77 s with SND_SHIFT=9)
@@ -78,19 +83,52 @@ static void wr16(uint32_t w, uint16_t d, int be) {
 struct Port { bool busy = false, was = false; int wait = 0; };
 static Port pa, pb, pc;
 
+// R877: the latency trace (LAT_TRACE) and the ports' demand
+struct Trace { std::vector<std::pair<uint64_t, uint32_t>> v; uint64_t span = 0; };
+static Trace tr[3];
+static int lat_cdc = 4;
+static bool load_trace(const std::string &f, Trace &x) {
+	FILE *fp = fopen(f.c_str(), "r");
+	if (!fp) return false;
+	unsigned long long a; unsigned long b;
+	while (fscanf(fp, "%llu %lu", &a, &b) == 2) x.v.push_back({a, uint32_t(b)});
+	fclose(fp);
+	if (!x.v.empty()) x.span = x.v.back().first + 1;
+	return !x.v.empty();
+}
+static int lat_tr(int k) {   // k: 0 = port 5 (a), 1 = 6 (b), 2 = 7 (c)
+	const Trace &x = tr[k];
+	const uint64_t tm = uint64_t(double(cyc) * 100.0 / CLK_MHZ) % x.span;
+	auto it = std::lower_bound(x.v.begin(), x.v.end(), std::make_pair(tm, uint32_t(0)));
+	if (it == x.v.end()) it = x.v.begin();
+	return int(it->second * CLK_MHZ / 100.0 + 0.999) + lat_cdc;
+}
+static bool use_tr = false;
+struct Dem { uint64_t rd = 0, wr = 0, lat = 0, win = 0, win_max = 0, win_t = 0, lat_max = 0; };
+static Dem dem[3];
+static uint64_t a_wait = 0;   // clocks the 68000's port has a request outstanding
+static void dem_req(int k, bool we, int l) {
+	Dem &d = dem[k];
+	(we ? d.wr : d.rd)++; d.lat += uint64_t(l); if (uint64_t(l) > d.lat_max) d.lat_max = uint64_t(l);
+	const uint64_t w = cyc / uint64_t(CLK / 100);   // 10 ms windows
+	if (w != d.win_t) { d.win_t = w; d.win = 0; }
+	if (++d.win > d.win_max) d.win_max = d.win;
+}
+
 static void tick() {
 	t->clk = 0; t->eval();
 	t->a_ack = 0; t->b_ack = 0; t->c_ack = 0;
-	if (t->a_req && !pa.was && !pa.busy) { pa.busy = true; pa.wait = lat_a(); }
+	if (t->a_req && !pa.was && !pa.busy) { pa.busy = true; pa.wait = use_tr ? lat_tr(0) : lat_a(); dem_req(0, t->a_we, pa.wait); }
+	if (pa.busy) a_wait++;
 	if (pa.busy && --pa.wait <= 0) {
 		pa.busy = false; t->a_ack = 1;
 		if (t->a_we) wr16(t->a_addr, t->a_din, t->a_be); else t->a_dout = rd64(t->a_addr);
 	}
 	pa.was = t->a_req;
-	if (t->b_req && !pb.was && !pb.busy) { pb.busy = true; pb.wait = lat(); }
+	if (t->b_req && !pb.was && !pb.busy) { pb.busy = true; pb.wait = use_tr ? lat_tr(1) : lat(); dem_req(1, false, pb.wait); }
 	if (pb.busy && --pb.wait <= 0) { pb.busy = false; t->b_ack = 1; t->b_dout = rd64(t->b_addr); }
 	pb.was = t->b_req;
-	if (t->c_req && !pc.was && !pc.busy) { pc.busy = true; pc.wait = lat(); }
+	if (t->c_req && !pc.was && !pc.busy) { pc.busy = true; pc.wait = use_tr ? lat_tr(2) : lat(); dem_req(2, t->c_we, pc.wait); }
 	if (pc.busy && --pc.wait <= 0) {
 		pc.busy = false; t->c_ack = 1;
 		if (t->c_we) wr16(t->c_addr, t->c_din, 3); else t->c_dout = rd64(t->c_addr);
@@ -120,6 +158,12 @@ int main(int argc, char **argv) {
 	double secs = getenv("SND_S") ? atof(getenv("SND_S")) : 10.0;
 	if (getenv("LAT_LO")) lat_lo = atoi(getenv("LAT_LO"));
 	if (getenv("LAT_HI")) lat_hi = atoi(getenv("LAT_HI"));
+	if (getenv("LAT_CDC")) lat_cdc = atoi(getenv("LAT_CDC"));
+	if (const char *lt = getenv("LAT_TRACE")) {
+		use_tr = true;
+		for (int k = 0; k < 3; k++)
+			if (!load_trace(std::string(lt) + std::to_string(5 + k) + ".txt", tr[k])) { fprintf(stderr, "no trace %s%d.txt\n", lt, 5 + k); return 2; }
+	}
 	if (getenv("LAT_A_LO")) { lat_a_lo = atoi(getenv("LAT_A_LO")); lat_a_hi = getenv("LAT_A_HI") ? atoi(getenv("LAT_A_HI")) : lat_a_lo; }
 	// SND_SHIFT=<s>: MAME's MIDI bytes and register writes from SND_SHIFT_AFTER
 	// seconds (default 5) moved SND_SHIFT seconds earlier -- to reach a late
@@ -277,6 +321,17 @@ int main(int argc, char **argv) {
 	for (size_t s = 0; s < std::max(ours_rms.size(), mame_rms.size()); s++)
 		printf(" %.0f/%.0f", s < ours_rms.size() ? ours_rms[s] : -1.0, s < mame_rms.size() ? mame_rms[s] : -1.0);
 	printf("\n");
+	{   // R877: what the board asked of each port
+		const double sec = cyc / CLK;
+		static const char *nm[3] = {"5 (68000)", "6 (slot fills)", "7 (DSP)"};
+		printf("  SDRAM demand over %.1f s (%s):\n", sec, use_tr ? "LAT_TRACE" : "random latency");
+		for (int k = 0; k < 3; k++) {
+			const Dem &d = dem[k]; const uint64_t n = d.rd + d.wr;
+			printf("    port %-15s reads %8.0f/s writes %8.0f/s, worst 10 ms %6llu (%.0f/s), latency mean %.1f max %llu clk\n",
+				nm[k], d.rd / sec, d.wr / sec, (unsigned long long)d.win_max, d.win_max * 100.0, n ? double(d.lat) / n : 0.0, (unsigned long long)d.lat_max);
+		}
+		printf("    the 68000 waiting on port 5: %.1f%% of all clocks\n", 100.0 * a_wait / cyc);
+	}
 	printf("  RAM writes with a byte mask (R871: must be 0 -- the board drops the mask): %llu\n", (unsigned long long)part_writes);
 	bool ok = t->dbg_under == 0 && bad_writes == 0 && part_writes == 0 && t->dbg_cycles > 1000 && (nb == 0 || mtch >= nb * 9 / 10);
 	printf("%s\n", ok ? "PASS" : "FAIL");

@@ -106,7 +106,16 @@ module m2_sdram #(
   // R822: PORTS GRANTED FIRST WITHIN THE CLASS. The class grants its lowest
   // set port; a port in PRI_TOP (and in PRI) goes ahead of every other class
   // member. 0 leaves the class exactly as it was.
-  parameter logic [NP-1:0] PRI_TOP = '0
+  parameter logic [NP-1:0] PRI_TOP = '0,
+  // R877: AGE ESCALATION. A port in AGE that has been ready (pending, not in
+  // flight) for AGE_T cycles is taken into the class AND to its top until it
+  // is granted -- a bounded wait for a blocking requester outside the class
+  // (the 2A sound board's 68000, slot fills and DSP) without moving it ahead
+  // of the class the rest of the time. The aged bits are registers, so the
+  // class masks stay register AND register: no logic level is added to the
+  // select. Default none: the controller exactly as it was.
+  parameter logic [NP-1:0] AGE     = '0,
+  parameter int unsigned   AGE_T   = 48
 ) (
   input  logic                 clk,
   input  logic                 rst_n,
@@ -585,11 +594,29 @@ module m2_sdram #(
   // after the existing select and nothing in front of it.
   logic [$clog2(PRI_CAP+1)-1:0] pri_run;          // PRI grants in a row with others waiting
   wire           pri_capped = (pri_run == ($clog2(PRI_CAP+1))'(PRI_CAP));
-  wire [NP-1:0]  pri_ready  = arb_ready & PRI;
-  wire           oth_ready  = |(arb_ready & ~PRI);
+  // R877: the aged ports (registers) widen the class and its top
+  localparam int unsigned AGW = $clog2(AGE_T + 1);
+  logic [NP-1:0]  aged;
+  logic [AGW-1:0] age_cnt [NP];
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      aged <= '0;
+      for (int a = 0; a < NP; a++) age_cnt[a] <= '0;
+    end else begin
+      for (int a = 0; a < NP; a++) begin
+        if (!AGE[a] || !arb_ready[a]) begin
+          age_cnt[a] <= '0; aged[a] <= 1'b0;
+        end else if (age_cnt[a] == AGW'(AGE_T)) aged[a] <= 1'b1;
+        else age_cnt[a] <= age_cnt[a] + 1'b1;
+      end
+    end
+  end
+  wire [NP-1:0]  pri_m      = PRI | (aged & AGE);
+  wire [NP-1:0]  pri_ready  = arb_ready & pri_m;
+  wire           oth_ready  = |(arb_ready & ~pri_m);
   wire [NP-1:0]  low_cls    = pri_ready & (~pri_ready + {{(NP-1){1'b0}}, 1'b1});
   // R822: a PRI_TOP port, if one is ready, before the rest of the class.
-  wire [NP-1:0]  top_ready  = pri_ready & PRI_TOP;
+  wire [NP-1:0]  top_ready  = pri_ready & (PRI_TOP | (aged & AGE));
   wire [NP-1:0]  low_top    = top_ready & (~top_ready + {{(NP-1){1'b0}}, 1'b1});
   wire [NP-1:0]  low_pri    = (|top_ready) ? low_top : low_cls;
   wire           use_pri    = (|pri_ready) && !(oth_ready && pri_capped);

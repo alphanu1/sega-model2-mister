@@ -38094,3 +38094,132 @@ switches; s1205's configuration 39,753 -- not comparable).
 level. If they do not, R874 (b) / (c) stand and the timing failure was not
 the cause -- the failing path was the output DAC, which every voice passes,
 so a fault confined to the effects was never a good fit for it.
+
+**R877 -- "DRUMS A TINNY HISS, EFFECTS GONE UNDER THE MUSIC" (VF2, s1205 /
+s1207) AND ZERO GUNNER SILENT: THE SOUND BOARD IS NOT STARVED OF SDRAM ON THE
+BOARD. THE HYPOTHESIS IS RULED OUT BY THE BOARD'S OWN 68000 RATES AGAINST
+BENCHES AT KNOWN LATENCY. ZERO GUNNER'S CAPTURE IS A HUNG GAME (THE TGP), NOT
+A SOUND FAULT. TOOLS BUILT; TWO DEFENSIVE CHANGES (POSTED 68000 WRITES ON,
+AN ARBITER AGE ESCALATION OFF BY DEFAULT); A PROBE RECORD 'L'.**
+
+*Believed (the task):* ports 5 / 6 / 7 sit outside m2_sdram's class (R639 /
+R702 / R766 / R789 / R854); under video load the 68000 (blocking, its RAM
+uncached) and the SCSP (waits on misses) fall behind -- the rings stale
+(drums -> hiss), effects keyed late, Zero Gunner's 538 underruns. "On VF2 the
+68000 writes the SCSP only ~6-26 K/s during the music where MAME writes ~88
+K/s."
+
+*Measured:*
+  1. THE DEMAND (MAME 0.289's 300 s captures, bus.txt / dspstats.txt, per
+     second): VF2 -- 68000 RAM reads 218 K, RAM writes 270 K (all uncached:
+     each one an SDRAM transaction on port 5), program fetches 1.23 M and
+     sample reads 226 K (through the 1 KB line cache), SCSP 9 K reads / 40 K
+     writes; DSP memory reads 573 K and writes 176 K. Zero Gunner -- RAM 229 K
+     / 354 K, program 1.39 M, samples 267 K, DSP 571 K / 176 K. In the bench
+     (tb_m2_2a_sound's new demand counters, VF2 SND_SHIFT=9, 11.6 s at 80
+     MHz, latency 6-40) the three ports ask, over the run (music from 4.8
+     s): port 5 252 K reads + 290 K writes /s, port 6 30 K reads /s, port 7
+     137 K reads + 168 K writes /s; worst 10 ms windows 3,205 (port 7) and
+     2,609 (port 6) transactions (port 5's, 33,430, is the pre-boot clear).
+     The 68000 waits on port 5 15.6% of all clocks at a mean of 23 clk.
+  2. WHAT m2_sdram GIVES THEM (tb_m2_sdram_load, new: the 2A build's 13
+     ports and class, a synthetic 57.5 Hz frame whose render phase (75%) has
+     every class port re-requesting after a short random think time, the
+     sound ports at the demand above; clk_mem cycles, request to acknowledge;
+     x0.8 + ~4 for clk_sys through m2_sdram_cdc):
+       load                            port 5 p50 / p90 / p99 / max
+       moderate (think 160, 55% busy)       20 /  39 /  88 / 212
+       heavy (think 40, render saturated)   89 / 243 / 330 / 437
+       pathological (think 10)             146 / 385 / 461 / 579
+     Ports 6 and 7 alike. Outside the class a sound request waits for the
+     round-robin slot (one in three grants while the class is busy) to
+     reach it -- up to ~36 transactions.
+  3. THE BENCH AT THOSE LATENCIES (tb_m2_2a_sound LAT_TRACE, new: each
+     request takes the latency the load bench gave a request at the same
+     point of its frame). The 68000's bus cycles a second and SCSP writes a
+     second in the scan before the music and during it:
+       run                         before music       during music
+       bench, latency 6-40         2.12 M / 83 K      1.85-1.90 M / 20-49 K
+       bench, heavy trace          1.47 M / 54 K      (later boot)
+       bench, latency 20-150       1.65 M / 63 K      1.16-1.23 M / 8-19 K, 142 underruns
+       THE BOARD, s1207 VF2        2.17 M / 86 K      1.80-1.99 M / 17-49 K, 0 underruns
+       MAME (its capture, the
+       same stretch, SND_SHIFT)        --              ~35-45 K
+     THE BOARD SITS ON THE LIGHT-LATENCY BENCH, NOT THE LOADED ONE -- before
+     the music it is even a little faster. Its port 5 therefore waits about
+     what the 6-40 model gives (mean ~23 clk_sys) in VF2's attract; ports 6
+     and 7 share the arbiter's treatment. And the drop during the music is
+     not a board symptom: the bench at 6-40 drops the same way, and so does
+     MAME (the task's "88 K/s" is the scan before the music; MAME writes
+     ~35-45 K/s during it). The 0 underruns of s1205 agree.
+  4. ZERO GUNNER (s1207 capture, 1,220 records): the i960's IP is
+     0x00560c38 and the TGP's pc 0x0857 in EVERY record, copro_stall set in
+     every one; no MIDI byte reaches the sound board in the whole capture
+     (324 -> 324) and the underrun count does not move (538 -> 538: they
+     happened before it). The game is hung on the TGP; the sound board, given
+     nothing to play, plays its idle level (peak 290-521). Not a sound fault
+     -- R871's VF2 lockup has a second instance.
+  So the hypothesis is RULED OUT for VF2's attract (the capture Ben listened
+  to) and does not apply to Zero Gunner's capture. VF2's drums / effects
+  stay open: R874 (b) the real i960's MIDI, and anything the bench's MAME
+  MIDI replay cannot reach.
+
+*Built:*
+  a. tb_m2_sdram_load (make test_m2_sdram_load): the latency table above, and
+     LOAD_TRACE writes each sound port's (issue, latency) for b.
+     UNEXPLAINED: its shadow check reports ~1.5% of port 7's reads with a
+     word pair shifted (data written at an odd address read at the even one
+     below), with or without b's AGE, with or without eight-word bursts;
+     tb_m2_sdram's own W57 / AGE suites read 0 fails over 2.15-2.28 M checks.
+     Most likely this bench's stimulus (it reissues on the cycle after an
+     acknowledge, as no m2_sdram_cdc port can), but the DSP writes on port 7
+     on the board, so it is RECORDED, NOT DISMISSED.
+  b. m2_sdram AGE / AGE_T: a port in AGE ready for AGE_T clk_mem cycles is
+     taken into the class and to its top until granted; the aged bits are
+     registers, so the class masks stay register AND register. Heavy load,
+     AGE 5-7 at 48: port 5 p50 / p99 / max 78 / 124 / 156 (from 89 / 330 /
+     437); the cost falls on the texel ports at saturation (port 12 p99 395
+     -> 613). Model2.sv: M2_2A_SND_AGE, OFF by default (the board does not
+     need it, item 3; the arbiter is on clk_mem, which failed by -0.22 to
+     -0.69 ns in s1176-s1203). test_m2_sdram13 gains the AGE case with ports
+     5 and 7 writing: 2,151,281 checks, 0 fails, 0 violations; the four old
+     cases unchanged (AGE 0 is the controller as it was).
+  c. m2_2a_sound POST_WR (Model2.sv M2_2A_SND_POST, ON): a 68000 word write
+     to RAM, and the write half of a byte write's merge, is acknowledged at
+     once and completes behind the 68000; the next RAM access or cache fill
+     and any SCSP access wait for it, the snoop goes out when it lands -- so
+     every later read and the SCSP see the writes in the 68000's order. MAME
+     gives RAM one wait state; ours waited for the SDRAM. On the heavy trace
+     it lifts the 68000's scan rate 1.47 M -> 1.64 M (AGE as well: 1.88 M).
+     POST_WR 0 restores the old acknowledge (B_WPW).
+  d. M2_PROBE 'L' (pb_sel 5; records now turn C S T U Q L, each every ~14.8
+     ms): the longest wait on ports 5, 6, 7 since the last L (clk_sys, 10
+     bits saturating), clocks/16 port 5 had a request outstanding, and the
+     port 6 / 7 requests that waited 256 or more. tools/decode_why.py prints
+     them. A board run settles item 3 directly: waits of ~20-75 clk_sys say
+     the ports are served (expected); ~250+ would revive the hypothesis for
+     that scene, and M2_2A_SND_AGE=1 is the change.
+  e. tb_m2_2a_sound: per-port demand (reads / writes a second, the worst 10
+     ms window, mean / max latency, the 68000's share of time waiting) and
+     LAT_TRACE / LAT_CDC.
+
+*Bench before / after (VF2 SND_SHIFT=9, 11.6 s, 80 MHz; FIFO underruns,
+the 68000's share of clocks waiting on port 5, its bus cycles a second in
+the music):*
+       RTL / latency                  underruns  68000 waits  music rate
+       old, 6-40                          0         15.6%      1.85-1.90 M
+       old, heavy trace                 198         39.1%      1.22-1.28 M
+       POST_WR, heavy trace             135         42.1%      1.37-1.41 M
+       POST_WR + AGE, heavy trace         0         32.2%      1.65-1.68 M
+       POST_WR, 6-40                      0         16.8%      2.01-2.17 M
+  (The SND_SHIFT runs all FAIL the bench's 90% write-order test, the old RTL
+  at 6-40 included -- the shift moves MAME's writes, not ours; the same RTL
+  without the shift, VF2 6 s: PASS, 98.1% of writes in MAME's order, 0
+  underruns, sound-RAM check 0 wrong, 0 masked writes -- R871 / R875's
+  98.2%.) The levels second by second are within a few percent across all
+  five; the bench's level comparison cannot hear drums or effects.
+
+*Not done / open:* Zero Gunner's 538 underruns (before its
+capture -- the SCSP's FM engine against its 1,814-clock budget, R857's max
+1,830, is a candidate that does not need SDRAM at all); Sega Rally silent,
+no capture; the port-7 word-pair anomaly of (a).
