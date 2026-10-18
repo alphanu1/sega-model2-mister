@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-18: s1207 on the board -- what works, what does not (R878)
+
+ON THE BOARD: s1207 (af10f15, M2_PROBE, M2_NO_2A_RALLY; build/Model2A_20261018_s1207_all.rbf,
+a1a7b7d5...). VF2 music like MAME's, drums a hiss, effects lost under music.
+Sega Rally boots, 3D drops out, crashes; no input (its block is out of this
+build); no sound. Zero Gunner boots, attract, locks in play in 1-2 s -- THE
+TGP hangs at its pc 0x0857 (R876, running); no sound, SCSP underruns
+(R877, running). Zero Gunner's analogue sticks need mapping onto its digital
+controls. Merged since s1207: R875 SCSP retiming (4cfc833), R873 Zero
+Gunner patches (MRA only, already on the board).
+
 ## 2026-10-17: VF2 HAS SOUND ON THE BOARD (s1205, R871)
 
 ON THE BOARD: s1205 (f7c5a0d, M2_PROBE telemetry, M2_NO_2A_RALLY;

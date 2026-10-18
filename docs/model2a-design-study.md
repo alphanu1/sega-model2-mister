@@ -38094,3 +38094,27 @@ switches; s1205's configuration 39,753 -- not comparable).
 level. If they do not, R874 (b) / (c) stand and the timing failure was not
 the cause -- the failing path was the output DAC, which every voice passes,
 so a fault confined to the effects was never a good fit for it.
+
+**R878 -- s1207 ON THE BOARD (model2a af10f15 + M2_PROBE + M2_NO_2A_RALLY;
+41,437 ALM, 553 / 553 M10K, clk_sys -0.217 (m2_fb_wcomb), clk_mem -0.027;
+no SCSP path among the 40 worst). Ben, 2026-10-18:**
+  * VF2: the music "may be the same" as MAME's reference (scratch WAV of
+    out.bin); the DRUMS are "a tinny hiss"; SOUND EFFECTS are heard when no
+    music plays and vanish under the music. So R874's timing lead is
+    answered: with the SCSP's paths passing, the fault stands -- not timing.
+  * SEGA RALLY (R869's forms): boots; the 3D drops out and it eventually
+    crashes; play can be entered; no input works (expected: M2_NO_2A_RALLY
+    leaves its cabinet block out of this probe build); no sound.
+  * ZERO GUNNER (R869 forms + R873 patches): boots, plays its attract,
+    eventually crashes; in play it LOCKS within 1-2 s; the analogue sticks
+    do nothing (its controls are digital: the sticks are not mapped onto
+    them -- to do); no sound. Probe over 15 s of the lock: i960 IP
+    0x00560c38 in every record (ROM 0x60c38), the TGP holding it, TGP pc
+    0x0857 in every record, nothing dropped, no unimplemented op: THE TGP
+    HANGS (R876), as VF2's 0x7dc4 attract lock (R871). Sound: the 68000
+    runs, MVOL 15, the check 0 wrong, output peak median 290 / max 521 of
+    32767 in every record, and 538 OUTPUT-FIFO UNDERRUNS -- the SCSP falls
+    behind on the board (its driver uses the FM ring). R877: the sound
+    board's SDRAM ports (5 / 6 / 7, outside the priority class) under the
+    board's video load is the leading lead for all three games' sound.
+
