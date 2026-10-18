@@ -5,6 +5,9 @@
 --   TGPCAP_DIR     output directory (must exist)
 --   TGPCAP_START   first frame at which the snapshot may be taken (default 5200)
 --   TGPCAP_FRAMES  frames to record after the snapshot (default 30)
+--   TGPCAP_INPUTS  "daytona" (default: race.lua's coins and starts) or "none",
+--                  for another game whose inputs another -autoboot script drives
+--                  (R876: Zero Gunner, with sim/io/mame_m2_2a_play.lua)
 --
 -- METHOD. Everything that crosses the TGP's boundary is tapped from power-on,
 -- but only counted until the window opens:
@@ -40,6 +43,7 @@
 local outdir = os.getenv("TGPCAP_DIR") or "."
 local START  = tonumber(os.getenv("TGPCAP_START") or "5200")
 local NFR    = tonumber(os.getenv("TGPCAP_FRAMES") or "30")
+local INPUTS = os.getenv("TGPCAP_INPUTS") or "daytona"
 
 local m    = manager.machine
 local cpu  = m.devices[":maincpu"]
@@ -63,6 +67,7 @@ local capturing = false
 local done      = false
 local cap_frames = 0
 local n_upload  = 0
+n_upload_win    = 0         -- upload words seen while capturing (must stay 0)
 local nin, nout, npop, nxpop = 0, 0, 0, 0
 local queue     = {}        -- pushed words not yet popped (for the pop cross-check)
 local qh, qt    = 0, 0       -- ring of 64K: occupancy never comes close
@@ -116,6 +121,12 @@ end)
 TAP_W = msp:install_write_tap(0x880000, 0x887fff, "tgpcap_w", function(off, data, mask)
   if off >= 0x884000 and (coproctl & 0x80000000) ~= 0 then
     n_upload = n_upload + 1
+    -- A program upload inside the window would make the replay meaningless
+    -- (the bench loads one program at the snapshot): say so loudly.
+    if capturing then
+      n_upload_win = n_upload_win + 1
+      if n_upload_win == 1 then print(string.format("TGPCAP WARNING: program upload inside the window at frame %d", frame)) end
+    end
     return
   end
   local word
@@ -204,11 +215,13 @@ end
 SUB = emu.add_machine_frame_notifier(function()
   frame = frame + 1
   -- inputs: race.lua's sequence (3 coins, then start presses)
-  for _, f in ipairs({3000, 3020, 3040}) do
-    if frame == f then coin:set_value(1) elseif frame == f + 8 then coin:set_value(0) end
-  end
-  for _, f in ipairs({3100, 3500, 3700, 3900, 4300, 4500}) do
-    if frame == f then start:set_value(1) elseif frame == f + 10 then start:set_value(0) end
+  if INPUTS == "daytona" then
+    for _, f in ipairs({3000, 3020, 3040}) do
+      if frame == f then coin:set_value(1) elseif frame == f + 8 then coin:set_value(0) end
+    end
+    for _, f in ipairs({3100, 3500, 3700, 3900, 4300, 4500}) do
+      if frame == f then start:set_value(1) elseif frame == f + 10 then start:set_value(0) end
+    end
   end
   if done then return end
   if not capturing then
@@ -223,8 +236,8 @@ SUB = emu.add_machine_frame_notifier(function()
       ev(EV_FRAME, frame, 1)          -- b = 1: end of window
       flush(); evf:close()
       done = true
-      print(string.format("TGPCAP end at frame %d: in=%d pops=%d out=%d i960pops=%d popmismatch=%d halfword_pushes_since_boot=%d",
-                          frame, nin, npop, nout, nxpop, pop_mismatch, nhalf))
+      print(string.format("TGPCAP end at frame %d: in=%d pops=%d out=%d i960pops=%d popmismatch=%d halfword_pushes_since_boot=%d uploads_in_window=%d",
+                          frame, nin, npop, nout, nxpop, pop_mismatch, nhalf, n_upload_win))
       manager.machine.video:snapshot()
       m:exit()
     else

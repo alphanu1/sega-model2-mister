@@ -769,17 +769,25 @@ int main(int argc, char** argv) {
             break;
           }
           case 8: {
-            // R737: rep, both forms. The register form reads index 0 (b0) on
-            // both sides here -- opcode[5:0] = 0 -- because this core still
-            // reads b0 for every register form (Model 1's deb6642, not
-            // ported); bits 7:6 random so the immediate is visibly ignored.
-            // Counts are kept 1..4 so a trial is not one instruction repeated
-            // 255 times; the ldi before it loads b0.
+            // R737: rep, both forms. R876: the register form names its
+            // count register in opcode[5:0] (MAME: read_reg(opcode), masked
+            // to 0x3f) -- b0, b1 or rpc (0x34, the only one the games use:
+            // Zero Gunner's `rep rpc` at 0x856 / 0x85e). This was pinned to
+            // index 0 while the core read b0 for every register form, which
+            // is the very fault that hung Zero Gunner, so the bench could
+            // not see it. Bits 7:6 random so the immediate is visibly
+            // ignored. Counts are kept 1..4 so a trial is not one
+            // instruction repeated 255 times; the ldi before it loads the
+            // named register, and b0 gets a different count so a core that
+            // reads b0 regardless repeats the wrong number of times.
             bool from_reg = rnd() & 1;
             uint32_t cnt = 1 + (rnd() % 4);
-            if (from_reg && i < 23) prog[i++] = enc_ldi(0x00, cnt);
+            static const uint32_t rep_regs[3] = {0x00, 0x01, 0x34};
+            const uint32_t rr = rep_regs[rnd() % 3];
+            if (from_reg && i < 22 && rr != 0x00) prog[i++] = enc_ldi(0x00, 1 + (cnt % 4));
+            if (from_reg && i < 23) prog[i++] = enc_ldi(rr, cnt);
             w = (0x0fu << 26) | (2u << 17)
-              | (from_reg ? (0x8000u | (rnd() & 0xc0u)) : cnt);
+              | (from_reg ? (0x8000u | (rnd() & 0xc0u) | rr) : cnt);
             break;
           }
           case 9: {

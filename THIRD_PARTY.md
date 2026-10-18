@@ -86,7 +86,11 @@ equivalents; the `mb86233_*` core and the `fp_*` units are the portable part.
 memory stall's select"), ported rather than copied because our copy has
 diverged (R596, R601, R602). Upstream `9705a10` and `b66b10f`'s TGP half are
 already here as our R577. Upstream `deb6642` (a register-sourced `rep` reads the
-wrong register) is NOT yet ported.
+wrong register) was NOT ported then; it is now (study R876, 2026-10-18), by hand
+into our registered read address (`rd_addr_q` takes opcode[5:0] for a
+register-sourced rep), against upstream's rule as it stands at **`0b5d04f`**
+(`mb86233_core.sv`, "REP WITH A REGISTER COUNT MUST DRIVE THE REGISTER-FILE
+ADDRESS"). Zero Gunner's `rep rpc` hung on it.
 
 **Speed is the open problem, not correctness.** 9.83 CPI at 72.17 MHz is
 7.3 M instr/s against the ~16.7 M a 50 MHz MB86234 delivers — 44%. Clocking

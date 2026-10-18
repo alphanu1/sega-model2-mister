@@ -1721,7 +1721,24 @@ tgp_capture:
 	  -skip_gameinfo -cfg_directory cfg -nvram_directory nvram -snapshot_directory snap \
 	  -autoboot_script $(abspath sim/tgp/tgp_capture.lua) | grep TGPCAP
 	gzip -9f $(TGPCAP)/events.bin $(TGPCAP)/cdata.bin
-.PHONY: tgp_replay tgp_replay_baseline tgp_replay_check tgp_capture
+# R876: a 2A game IN PLAY (sim/tgp/tgp_capture_2a.lua over sim/io/mame_m2_2a_play.lua).
+#   make tgp_capture_2a CAP2A_SET=zeroguna CAP2A_GAME=zg TGPCAP=build/tgpcap/zg_play
+#   make tgp_replay TGP_PROG=4096 TGPCAP=build/tgpcap/zg_play
+#     [TEST_ARGS="--gap 60 --jitter 40 --board-push"]   board-like pacing (R876)
+# Defaults: coin at 20 s, window frames 1300-3700 (play from ~30 s). Zero Gunner's
+# window is 4.2 M words in; before R876 the replay hung at pc 0857 after 140,748.
+CAP2A_SET   ?= zeroguna
+CAP2A_GAME  ?= zg
+CAP2A_COIN  ?= 20
+CAP2A_START ?= 1300
+CAP2A_FR    ?= 2400
+tgp_capture_2a:
+	rm -rf $(TGPCAP_RUN) && mkdir -p $(TGPCAP) $(TGPCAP_RUN)
+	TGPCAP_DIR=$(abspath $(TGPCAP)) TGPCAP_START=$(CAP2A_START) TGPCAP_FRAMES=$(CAP2A_FR) TGPCAP_INPUTS=none \
+	  PL_GAME=$(CAP2A_GAME) PL_COIN=$(CAP2A_COIN) PL_TEND=3000 M2_MAME_OUT=$(abspath $(TGPCAP_RUN)) \
+	  tools/m2b-mame.sh $(CAP2A_SET) -skip_gameinfo -autoboot_script $(abspath sim/tgp/tgp_capture_2a.lua) | grep TGPCAP
+	gzip -1f $(TGPCAP)/events.bin $(TGPCAP)/cdata.bin
+.PHONY: tgp_replay tgp_replay_baseline tgp_replay_check tgp_capture tgp_capture_2a
 
 # R774: the ALU as the core builds it (SHORT=1), issued one op at a time.
 obj_mb86233_alu_short/Vmb86233_alu: $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp

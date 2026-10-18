@@ -792,10 +792,25 @@ module mb86233_core #(
   // At most one register is read per instruction, and which one is fixed by
   // the decode: the ld/mov source (u_xfer sets x_src_reg for ld/mov only;
   // agu_r[5:0] in S_SRC is exactly this index) or brul/bsul's register.
-  // Everything else read index 0 (b0) -- including a register-sourced rep,
-  // still: Model 1's deb6642 reads opcode[5:0] there (MAME), not ported
-  // (R732), and that is now the 6'd0 below. Loaded in S_DECODE, held to the
-  // next S_DECODE, so the read mux is driven from a flop in every state.
+  // Everything else read index 0 (b0) -- and a register-sourced rep did too
+  // until R876, which is what hung Zero Gunner (below). Loaded in S_DECODE,
+  // held to the next S_DECODE, so the read mux is driven from a flop in
+  // every state.
+  //
+  // R876: A REGISTER-SOURCED rep NAMES ITS COUNT REGISTER IN opcode[5:0].
+  // MAME, mb86233.cpp case 0x0f sub 2: `u8 r = opcode & 0x8000 ?
+  // read_reg(opcode) : opcode`, and read_reg masks the index to 0x3f. This
+  // read index 0 -- b0 -- for every register form; Model 1 found and fixed
+  // exactly this (its mb86233_core.sv, "REP WITH A REGISTER COUNT MUST DRIVE
+  // THE REGISTER-FILE ADDRESS", 0b5d04f) and R732 left it unported because no
+  // Model 2 program used the form. Zero Gunner's does: commands 0x39 / 0x3a
+  // (handlers 0x851 / 0x859) are `rpc = N << 2; rep rpc; mov rf1, (bx1+1)`
+  // (and the matching push), with N from command 0x37 / 0x38. b0 is 0 there,
+  // so the transfer ran 256 times instead of 4N: the TGP sat at pc 0x857
+  // waiting for input words the i960 never sends while the i960 waited at
+  // 0x560c38 for its next command's results -- the board's lockup, every
+  // record, within seconds of play. Reproduced by the MAME play-window
+  // replay (stuck at 0x857 after 140,748 bit-exact pops) and gone with this.
   //
   // A read has side effects (rf 0x21 pops the input FIFO, an unknown index
   // raises unimplemented), so those are gated by state here -- in exactly the
@@ -813,7 +828,9 @@ module mb86233_core #(
       dst_fifo_q <= 1'b0; ldi_fifo_q <= 1'b0;
     end else if (state == S_DECODE) begin
       rd_addr_q   <= brul_regform ? d_bdata[5:0]
-                   : x_src_reg    ? src_rd_idx : 6'd0;
+                   : x_src_reg    ? src_rd_idx
+                   : (d_repgrp && (d_fsub == 3'd2) && d_repreg) ? d_repimm[5:0]   // R876
+                   : 6'd0;
       src_fifo_q  <= x_src_reg    && (src_rd_idx   == 6'h21);
       brul_fifo_q <= brul_regform && (d_bdata[5:0] == 6'h21);
       dst_fifo_q  <= x_dst_reg    && (d_r2[5:0]    == 6'h22);   // S_DST's write
@@ -834,12 +851,15 @@ module mb86233_core #(
   wire unused_rf_u = rf_fifo_rd_u | rf_fifo_wr_u;
 
   // R737: the one register S_RETIRE reads (brul/bsul's target, or the rep
-  // count from b0), read in S_ALU, which is the state before S_RETIRE for
-  // both: a branch goes S_DECODE -> S_ALU (one cycle, no ALU op) -> S_RETIRE
+  // count from the register opcode[5:0] names, R876), read in S_ALU, which
+  // is the state before S_RETIRE for both: a branch goes S_DECODE -> S_ALU (one cycle, no ALU op) -> S_RETIRE
   // and the rep group waits in S_ALU for its ALU op. Between the last S_ALU
   // cycle and S_RETIRE nothing writes a register this can name: write_reg is
   // idle in S_ALU, the index registers move only in the _W states, a branch
-  // launches no ALU op, and the rep group's ALU writes only D / P, never b0.
+  // launches no ALU op, and the rep group's ALU writes only D / P (a
+  // `rep d` / `rep p` with an ALU op beside it would read the value of the
+  // op's last S_ALU cycle; no program seen uses either -- the games' one
+  // register form is `rep rpc`).
   // So the value is the one S_RETIRE read. next_pc and next_rep now start
   // from this flop instead of the read mux. No cycle is added.
   logic [15:0] rd_hold;

@@ -223,10 +223,12 @@ module m2_copro #(
   // 45,005 ALM of 41,910: 107%, no fit. The same rule is already written down
   // for the i960's arrays and it applies here.
   //
-  // 128 is sixteen times the hardware's own depth and costs about 4 Kbit. The
-  // depth only has to be enough that `dbg_in_dropped` never moves, because
-  // nothing stalls any more: a full queue drops rather than halting the CPU,
-  // and the counter makes that visible.
+  // 128 is sixteen times the hardware's own depth and costs about 4 Kbit.
+  // It was meant to be deep enough that `dbg_in_dropped` never moves, with a
+  // full queue dropping rather than halting the CPU. Sega Rally runs 1,348
+  // words ahead (R876), so a full queue now HOLDS the i960's write, as the
+  // board's FULL line does (see `push_hold`); `dbg_in_dropped` can then move
+  // only for a write to a halted TGP.
   localparam int unsigned FD_IN  = 128;
   // OUTBOUND IS 128 NOW, NOT THE REFERENCE'S 8, AND THE DEPTH IS A DEADLOCK
   // FIX RATHER THAN A GUESS AT THE HARDWARE.
@@ -275,12 +277,24 @@ module m2_copro #(
   // and carries on, and the words that later arrive in `fout` are read as
   // answers to questions asked long after.
   //
-  // WRITES ARE A DIFFERENT MATTER AND STAY UNSTALLED. gen_fifo's push() always
-  // completes; a full FIFO halts the source at a scheduler sync, not inside
-  // the bus cycle. The earlier `stall` on a full push (removed in 41199bf)
-  // froze the board because the coprocessor of that era could not drain the
-  // queue at all (R133, an invented memory map). The queue is 128 deep for
-  // that case and `dbg_in_dropped` says if it was ever too small.
+  // A WRITE INTO A FULL INPUT FIFO IS HELD TOO (R876). gen_fifo's push()
+  // completes into its overflow queue, and at the scheduler sync a FIFO still
+  // full HALTS THE i960 (model2.cpp:197, on_fifo_full_post_sync ->
+  // m_maincpu HALT) until the TGP takes a word: the FIFO's FULL line is the
+  // brake. This module dropped the word instead, on the grounds that "the
+  // queue is 128 deep and `dbg_in_dropped` says if it was ever too small" --
+  // the earlier full-push stall (removed in 41199bf) froze the board only
+  // because the coprocessor of that era could not drain at all (R133, an
+  // invented memory map). It is too small for Sega Rally: in MAME's own
+  // 40 s race (R876) the i960 pushes runs of up to 1,348 words without
+  // reading a result (1,482 runs over 1,024; Daytona's longest is 28, Desert
+  // Tank's 56, VF2's 34, Zero Gunner's 38), and the TGP takes ~150 clk_sys
+  // cycles a word. Every word past 128 was lost and the command stream
+  // desynchronised. Held now, only while the TGP is running (a halted or
+  // uploading TGP cannot drain, and a write there keeps its old outcome);
+  // the push lands, and the bridge completes, on the first cycle a slot is
+  // free. A game that never fills 128 -- every original-board game measured
+  // -- never sees it.
   //
   // The bridge holds the access exactly as it would for a slow bus: io_sel
   // stays asserted, no acknowledge, and the read completes on the first cycle
@@ -306,7 +320,7 @@ module m2_copro #(
   // the coprocessor is halted or taking a microcode upload it cannot answer, so
   // a read completes instead of hanging the machine. Once it is running, the
   // synchronous protocol of R151 applies unchanged.
-  assign stall = fifo_rd && !fout_valid && !halted && !uploading;
+  // (the assign is below the push decode it now reads, R876)
 
   // A read of the FIFO port pops; a write pushes, or uploads.
   wire fifo_rd = sel_fifo && !we;
@@ -318,7 +332,11 @@ module m2_copro #(
   // Both write ports land in the same queue: the FIFO port carries payloads and
   // the function port carries a command whose code is its address (R120). They
   // decode different regions and cannot assert together.
-  wire        fin_push = (fifo_wr && !uploading) || fn_wr;
+  wire        push_req  = (fifo_wr && !uploading) || fn_wr;
+  wire        push_hold = push_req && fin_full && !halted;   // R876: held, not dropped
+  wire        fin_push  = push_req && !push_hold;
+  assign stall = (fifo_rd && !fout_valid && !halted && !uploading)
+               || push_hold;   // R876
   wire [31:0] fin_din  = fn_wr ? fn_word : wdata;
   wire        fout_pop = fifo_rd && fout_valid;
 

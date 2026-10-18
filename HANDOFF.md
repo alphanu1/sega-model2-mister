@@ -1,5 +1,38 @@
 # Handoff
 
+## 2026-10-18: model2a -- Zero Gunner's lockup (rep rpc) and Sega Rally's lost TGP words, fixed (R876)
+
+ZERO GUNNER (s1207: i960 0x560c38, TGP pc 0x857, every record): the TGP
+was inside command 0x39 (`rpc = N << 2; rep rpc; mov rf1, (bx1+1)`, pop 4N
+words) and still waiting while the i960 had moved on to command 0x2b's
+results. A register-counted `rep` read b0 instead of the register named in
+opcode[5:0] (MAME read_reg(opcode & 0x3f)); b0 = 0, so 256 iterations.
+Model 1 fixed exactly this (0b5d04f); R732 never ported it. Reproduced with
+a new 2A play capture (sim/tgp/tgp_capture_2a.lua, `make tgp_capture_2a`):
+41.7 s of MAME play replayed through m2_copro hung at pc 0857 after 140,748
+bit-exact pops; fixed (mb86233_core rd_addr_q = opcode[5:0]) the whole
+window is bit-exact (4.2 M words in, 1.5 M out). Only Zero Gunner's program
+uses `rep <reg>`.
+
+SEGA RALLY (found on the way, same tools, a 40 s race): its TGP is
+bit-exact, but its i960 runs up to 1,348 words ahead of the TGP; MAME halts
+the i960 when the FIFO is full, m2_copro DROPPED every push past its
+128-word queue. Bench with board-style pushes (--board-push --gap 40): old
+copro drops from frame 1515 and desynchronises (TGP off to pc 0xe09b); new
+copro (a push into a full queue stalls the bridge, `push_hold`) bit-exact.
+Every original-board game stays < 128 (Daytona 28, Desert Tank 56), so the
+original core is unchanged in behaviour.
+
+VF2's 0x7dc4 (s1203) is NEITHER: no `rep <reg>` in its program, runs <= 34
+words, and its TGP windows pass under board-like pacing and memory jitter
+(new tb_tgp_replay --gap / --jitter / --seed / --board-push / --max-cyc).
+The next VF2 lockup on a probe build will report the TGP's pc.
+
+NOT FITTED, NOT ON THE BOARD. Branch zg-tgp-hang (from model2a 4cfc833).
+The board should show: Zero Gunner playing past its first seconds; Sega
+Rally's 3D holding through a race, Q record input-dropped 0; VF2 / VCop2
+unchanged.
+
 ## 2026-10-17: VF2 HAS SOUND ON THE BOARD (s1205, R871)
 
 ON THE BOARD: s1205 (f7c5a0d, M2_PROBE telemetry, M2_NO_2A_RALLY;
