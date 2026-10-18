@@ -33,6 +33,8 @@
 # clock after -- so k+1 may not write a state row or use Q, and EGV counts
 # from k+1. The captures take the operand or the sum, not the result mux:
 # FETCH1 / FETCH2 / TADRP are ADD / ADD / ADDSPLIT, TADRA and the outputs PASSA.
+# The DAC takes register port A itself, not the A mux: a DAC is a = RA (R875;
+# P's shift is registered a clock early in the RTL, which no latency here sees).
 import sys, os
 
 F_FIELDS = [('ra', 4), ('rb', 4), ('st', 1), ('strow', 3), ('streg', 1), ('idx', 2),
@@ -286,6 +288,9 @@ for i, mi in enumerate(rom):
     s1 = mi.get('s1')
     if s1 in NEED and mi.get('op') != NEED[s1]:
         raise SystemExit('microinstruction %d: %s needs op %s' % (i, s1, NEED[s1]))
+    # the DAC reads the register file's port A directly, not the A mux (R875)
+    if mi.get('op') == 'DAC' and mi.get('a') != 'RA':
+        raise SystemExit('microinstruction %d: DAC needs a = RA' % i)
 
 nerr = sum(check(n, s) for n, s in paths.items())
 nerr += check('head', [mi for _, mi in sample_head()][8:])     # from the effect returns on

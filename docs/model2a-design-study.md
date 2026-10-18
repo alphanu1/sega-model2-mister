@@ -37983,3 +37983,114 @@ simulation.
 *Cost:* 0 ALM, 0 M10K -- R862's chip (a + b + d) is not needed for Zero
 Gunner. The other 315-5881 sets in MAME (keys 2c2a4a93, 042e2dc1; not 2A
 games) are not assessed.
+
+**R875 -- THE SCSP's FAILING clk_sys PATH (s1205, -0.243 ns) IS THE DAC's
+SATURATION, NOT THE ENVELOPE: P's SHIFT TAKEN A CLOCK EARLY AND THE DAC FED
+FROM THE REGISTER PORT. NO MICROCODE CHANGE; BIT-EXACT; ~+0.8 ns ESTIMATED.**
+
+*Believed (R874's lead (a)):* s1205's only clk_sys failure, -0.243 ns, all
+40 worst paths inside the SCSP from `prod` (and `ue[10]`, the PSL select,
+and the state RAM) to the register file's and state RAM's data inputs -- the
+level / envelope multiply, which would plausibly corrupt only voices held at
+full level (VF2's effects and drums).
+
+*Measured (quartus_sta on s1205's own database, full paths; nothing refit):*
+every path at or below +0.4 ns goes through `dac()` -- OP_DAC's saturation
+compare (x~11, x~7, Equal34). The worst: the DSP block's output register
+prod[41] (tco 0.89 + 0.73 ns) -> the PSL shift mux (FM: prod >>> 17 gives
+a_v[24]) -> the A mux (2 LUTs) -> the DAC's 17-bit sign check (2 LUTs) ->
+the result mux (4 LUTs) -> rfb datain[4]: 9 LUT levels, 11.84 ns, skew
+-0.82 ns. The same compare closes the state-RAM path (st q -> A mux -> DAC
+-> rf, +0.012) and the ue[10] / ue[6] select paths (+0.158 / +0.382). Only
+the output microprogram uses OP_DAC, both times on a = RA (SMPL, SMPR), so
+the path from P to the DAC is one the microcode never takes -- but it is a
+structural path, and it was the one that failed. The same netlist with the
+DAC excluded: prod -> adder -> scmp -> f3 / f4 +0.685, prod -> adder -> rf
++0.757, rfb -> adder -> scmp -> f3 / f4 +0.837, state RAM -> adder -> f4
++0.921, -> rf +0.966. So the effect-path theory of R874 (a) is not
+supported by the timing report: the failing logic is the output DAC, every
+sample, every voice alike (of the 6,000 worst SCSP paths, every engine
+path below +0.685 ns passes through it).
+
+*The microcode (sim/sound/scsp_uasm.py; P from E(k+2)):* of the 17 product
+uses, 15 are at exactly k+2 -- pitch -> plfo multiply (#2 -> #4), plfo
+(#4 -> #6), fm, frac (#11 -> #13, FM #18 -> #20), alfo, eg, the four level
+products l0 / l1 / l2 / l5 back to back, e3 / e4 in each effect return,
+ol / or in the output; only pitch's PASSA (#5) and FM's (k+4, k+5) have
+slack. A register stage on P with no microcode change (option a) is
+impossible; re-scheduling for P at k+3 (option c) costs ~5-6
+microinstructions a slot (23 -> ~29) and one per effect return, ~+25% on
+an engine already peaking past its 1,814-clock budget (VF2 max 2,087,
+R858). Not done.
+
+*The change (option b, retiming; rtl/sound/scsp/m2_scsp.sv):*
+  1. P's shift a clock early: psl_v is now a REGISTER, the shift (S6 / S12
+     / S16 / FM) applied to mul_a x mul_b as it leaves the DSP block, with
+     the select of the microinstruction about to enter E (ue_f[PSL]; a
+     bubble enters as NOP, which reads no P) and PCM16 as E will see it
+     (w0l, or sqb when this clock latches word 0). E starts from flops; the
+     DSP block's output is no longer registered there (prod stays, in
+     logic, for the ring and MIXS slices). MA_PSL feeds mul_a from psl_v.
+  2. OP_DAC takes ra_q, the register file's port A, not the A mux; the
+     assembler now refuses a DAC with a != RA. ROMs unchanged (assembled:
+     identical hex).
+  A sim-only check (`SCSP_CHK`) compares, every clock E is not a bubble,
+  the early shift with the late one and the DAC's operand with A's; a
+  mutant with the select forced fired it 25 M times in 16 s of VF2 (and
+  failed the bench); a mutant without the PCM16 look-ahead does not fire
+  -- no microinstruction reading P follows a word-0 latch, so the
+  look-ahead is exact but never exercised.
+
+*Benches (all with SCSP_CHK: 0 mismatches):*
+  * tb_m2_scsp, MAME's VF2 capture, the first 65 s (2,866,500 samples;
+    drums from the music's start at ~13.8 s, the first SFX at 19.8 s):
+    0 differ from the reference, 0 from MAME's mix, 28,662,188 slot-samples
+    0 wrong, IPL and 68000 reads 0 wrong (14.5 min wall; the full 300 s is
+    ~65 min, past this session's limit -- NOT RUN); also 34 s and the plain
+    (no SCSP_CHK) build 10 s: PASS.
+  * the 40 random captures (FM, PCM16, noise LFO, SSCTL 2 / 3, timers,
+    MIDI; every third at latency 20-400): 40 PASS, 254,766,194
+    slot-samples 0 wrong, 0 differ from the reference or MAME's mix. (A
+    first pass said 40 FAIL with the RTL equal to MAME's mix and the
+    REFERENCE wrong: `make test_m2_scsp` copies SCSP_HEX, which lacks
+    scsp_lfonoise.hex, so the reference ran without MAME's noise table;
+    randrun.sh copies *.hex. A bench-setup trap, not the RTL.)
+  * tb_m2_scsp_dsp 4,000,000 random runs, tb_m2_scsp_level all 393,216
+    words: PASS (files unchanged).
+  * tb_m2_2a_sound VF2 6 s: PASS, as R871 (sound-RAM check 0 wrong, 98.2%
+    of writes in MAME's order, 0 masked writes).
+  * lint_top (2A): clean; lint_idx: nothing new; quartus_map
+    --analyze_file: 0 errors.
+
+*Area (quartus_map, the whole 2A build, default switches):* m2_scsp 2,418
+ALUT (1,211 own), 1,615 registers (749 own), 3 DSP blocks, 273,780 bits;
+s1205's map (M2_PROBE, M2_NO_2A_RALLY): 2,426 (1,217), 1,603 (737), 3,
+273,780. -8 ALUT, +12 registers. Whole design 39,906 ALMs est. (default
+switches; s1205's configuration 39,753 -- not comparable).
+
+*Expected timing -- AN ESTIMATE FROM s1205's NETLIST, NOT A FIT:*
+  * the DAC: rfa q -> saturation (2) -> result mux (4) -> rf / st: 6
+    levels; the same path through the A mux was +1.006 (rfa) and +0.012
+    (st); without the A mux's two levels, ~+1.5-2 ns. The st, prod, ue
+    -> DAC paths no longer exist.
+  * P's users: from a flop instead of the DSP output register through the
+    shift mux: the +0.685 / +0.757 adder paths gain ~1.5-2.5 ns.
+  * the new multiply cycle: DSP input registers -> 27 x 18 multiply
+    (output unregistered) -> one 4:1 LUT -> psl_v: ~6-7.5 ns of 12.5.
+  * so the engine's worst becomes paths this change does not touch:
+    rfb -> B mux -> adder -> scmp -> f3 / f4 at +0.837, state RAM ->
+    adder at +0.92-0.97 -- ~+0.8 ns, subject to the next fit's placement
+    (+-0.3 ns seed to seed is usual at 98%).
+  * STILL NEAR THE LIMIT IN THE SCSP (unchanged here): m2_scsp_dsp, MPRO's
+    q -> MADRS + DEC + ADRS + 1 (three chained adders) -> addr_w <
+    0x40000 -> pk_go -> mul_a at +0.447 (memval +0.637, mul_b +0.659).
+    addr_w holds through a step (k, DEC, ADRS change at ph 4 / FIN), so
+    pk_go's compare could be registered at ph 2 -- a candidate, not done.
+    Outside the SCSP, s1205's next clk_sys path is m2_raster_fill xah ->
+    s1_valid at +0.278, and pll_hdmi fails by -0.184.
+
+*What the board must show:* the next 2A build closes clk_sys (SCSP paths
+>= ~+0.4 ns); then whether VF2's effects and drums come back to MAME's
+level. If they do not, R874 (b) / (c) stand and the timing failure was not
+the cause -- the failing path was the output DAC, which every voice passes,
+so a fault confined to the effects was never a good fit for it.

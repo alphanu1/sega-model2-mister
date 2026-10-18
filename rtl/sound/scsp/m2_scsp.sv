@@ -151,7 +151,7 @@ module m2_scsp #(
   logic signed [26:0] mul_a;
   logic signed [17:0] mul_b;
   logic signed [44:0] prod;
-  logic [31:0] psl_v;
+  logic [31:0] psl_v;                     // P shifted, registered a clock early (R875)
   // flags and latches
   logic        f1, f2, f3, f4, stop_rel, fk, fr;
   logic [15:0] w0l;                       // word 0 of the slot
@@ -470,15 +470,23 @@ module m2_scsp #(
   // the operands
   // =====================================================================
   wire signed [31:0] p_lo = prod[31:0];               // MAME's int product (wraps at 32 bits)
-  always_comb begin
-    case (e_psl)
-      2'(PSL_S6):  psl_v = prod[37:6];
-      2'(PSL_S12): psl_v = 32'(p_lo >>> 12);
-      2'(PSL_S16): psl_v = 32'(p_lo >>> 16);
-      default:     psl_v = 32'(prod >>> 17) & ~{31'd0, !pcm8};    // FM: x 2^(MDL + PCM16) >> 17 (no 32-bit wrap: MAME's
-                                                                  // own steps stay below 2^28)
+  // THE PRODUCT'S SHIFT IS TAKEN A CLOCK EARLY (R875, timing): P, as E reads
+  // it, is the product of the operands held the clock before, so the shift is
+  // applied to that product as it leaves the multiplier and registered (psl_v),
+  // with the select of the microinstruction about to enter E (ue_f; a bubble
+  // takes NOP, which reads no P) and PCM16 as it will be then. E starts from
+  // flops, not from the DSP block's output through the shift mux.
+  function automatic logic [31:0] psl_of(input logic signed [44:0] p, input logic [1:0] sel, input logic p8);
+    logic signed [31:0] lo;
+    lo = p[31:0];
+    case (sel)
+      2'(PSL_S6):  psl_of = p[37:6];
+      2'(PSL_S12): psl_of = 32'(lo >>> 12);
+      2'(PSL_S16): psl_of = 32'(lo >>> 16);
+      default:     psl_of = 32'(p >>> 17) & ~{31'd0, !p8};      // FM: x 2^(MDL + PCM16) >> 17 (no 32-bit wrap: MAME's
+                                                                // own steps stay below 2^28)
     endcase
-  end
+  endfunction
   wire [8:0] lfo_step = scsp_lfostep(lfof);
 
   always_comb begin
@@ -603,7 +611,9 @@ module m2_scsp #(
         if (sbctl[1]) s = {{2{~s[15]}}, ~s[15], s[14:0]};   // (s16)(sample ^ 0x8000)
         alu_r = 32'($signed(s));
       end
-      4'(OP_DAC):   alu_r = 32'(dac($signed(a_v), dac18));
+      // (the DAC's operand is the register file's port A, never the A mux:
+      // the assembler holds every DAC to a = RA -- R875, timing)
+      4'(OP_DAC):   alu_r = 32'(dac($signed(ra_q), dac18));
       default:      alu_r = sum;                          // ADD SUB ADDSGN ADDSPLIT
     endcase
   end
@@ -659,8 +669,26 @@ module m2_scsp #(
         default:      mul_b <= $signed({1'b0, mvol_gain(mvol)});
       endcase
     end
-    prod <= mul_a * mul_b;
   end
+  wire signed [44:0] prod_n = mul_a * mul_b;
+  wire  [1:0] psl_n  = ue_f[`UE_PSL];                                 // the next E's select
+  wire        pcm8_n = (e_latb == 2'(LATB_W0)) ? sqb[4] : w0l[4];     // PCM16 as the next E sees it
+  always_ff @(posedge clk) begin
+    prod  <= prod_n;                                                  // (the ring and MIXS slices)
+    psl_v <= psl_of(prod_n, psl_n, pcm8_n);
+  end
+`ifdef SCSP_CHK
+  // R875's retiming against the design it replaced, every clock E is not a
+  // bubble: the early shift equals the late one, the DAC's operand is A's
+  logic e_bub_r;
+  always_ff @(posedge clk) e_bub_r <= e_bub;
+  always_ff @(posedge clk) if (rst_n && !e_bub_r) begin
+    if (psl_v != psl_of(prod, e_psl, pcm8)) begin
+      $display("SCSP_CHK: psl_v %h, late %h (psl %0d)", psl_v, psl_of(prod, e_psl, pcm8), e_psl); $finish;
+    end
+    if (e_op == 4'(OP_DAC) && a_v != ra_q) begin $display("SCSP_CHK: DAC operand not A"); $finish; end
+  end
+`endif
 
   // =====================================================================
   // E: registers, latches, side effects
@@ -952,7 +980,7 @@ module m2_scsp #(
                  !lv_busy && !lv_req && !dsp_busy;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, LFO_NOISE, prod[44:38], w0l[11], egst_n_rel_stop, ue[`UE_IMM]};
+  wire _unused = &{1'b0, LFO_NOISE, prod[44:32], e_psl, w0l[11], egst_n_rel_stop, ue[`UE_IMM]};
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule
