@@ -38259,3 +38259,15 @@ the music):*
 capture -- the SCSP's FM engine against its 1,814-clock budget, R857's max
 1,830, is a candidate that does not need SDRAM at all); Sega Rally silent,
 no capture; the port-7 word-pair anomaly of (a).
+
+**R880 -- THE PROBE CAPTURES THE i960'S MIDI.** Every bench feeds the sound
+board MAME's MIDI bytes; the board's come from our i960 through the i8251
+and m2_sound_link. VF2's effects are MIDI note-ons from the i960 (channel 14,
+R874) and its music's channels are set up by MIDI, so a difference there
+would explain both symptoms and no bench could show it. M2_PROBE's 'M'
+record: each byte the sound board takes from the link goes into 16 places;
+a record slot with bytes waiting sends up to four instead of its turn (the
+turn waits one slot), with a running count so a lost record shows. The
+decoder rebuilds the stream (decode_why.py <capture> 80 <out>) for a byte-
+for-byte comparison with MAME's midi.txt.
+

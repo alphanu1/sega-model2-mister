@@ -5431,9 +5431,15 @@ end else begin : g_nodbg
 	//       {2'd0, longest wait on port 5 (the 68000), 6 (slot fills), 7 (DSP),
 	//       10 bits each, saturating} | {clocks / 16 the 68000's port had a
 	//       request outstanding | port 6 / 7 requests that waited >= 256}
+	//   'M' (R880) every MIDI byte the sound board takes from the i960's link:
+	//       {bytes sent in M records so far, 24 bits | bytes in this one, 1-4}
+	//       | {the bytes, oldest in 31:24}. A slot with bytes waiting (16
+	//       places) sends them instead of its turn; a gap in the count is a
+	//       record the UART lost
 	logic [1:0]  pb_div;
 	logic [2:0]  pb_sel;
 	logic        pb_valid;
+	logic        mi_take;                     // R880: this slot carries MIDI bytes
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
 	wire  [15:0] sd_abs = snd_l[15] ? (~snd_l + 16'd1) : snd_l;
@@ -5442,7 +5448,7 @@ end else begin : g_nodbg
 	logic [19:0] sl_w5;
 	logic [15:0] sl_slow;
 	wire         sl_l5 = s2a_a_req && !p_ack[5], sl_l6 = s2a_b_req && !p_ack[6], sl_l7 = s2a_c_req && !p_ack[7];
-	wire         sl_clr = pb_valid && pb_sel == 3'd5;
+	wire         sl_clr = pb_valid && !mi_take && pb_sel == 3'd5;
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
 			sl_c5 <= '0; sl_c6 <= '0; sl_c7 <= '0; sl_m5 <= '0; sl_m6 <= '0; sl_m7 <= '0; sl_w5 <= '0; sl_slow <= '0;
@@ -5457,6 +5463,35 @@ end else begin : g_nodbg
 			sl_slow <= sl_clr ? 16'd0 : ((sl_c6 == 10'd255 || sl_c7 == 10'd255) && !(&sl_slow)) ? sl_slow + 16'd1 : sl_slow;
 		end
 	end
+	// R880: the MIDI bytes into 16 places; a record slot with any waiting
+	// carries up to four of them instead of its turn (the turn waits a slot)
+	logic  [7:0] mi_q [16];
+	logic  [3:0] mi_wp, mi_rp;
+	logic  [4:0] mi_n;
+	logic [23:0] mi_cnt;                      // bytes sent in M records so far
+	logic [15:0] mi_lost;
+	logic [31:0] mi_a, mi_d;
+	wire   [2:0] mi_k = (mi_n > 5'd4) ? 3'd4 : mi_n[2:0];
+	wire         mi_push = b_rx_v && b_rx_a;
+	wire         mi_slot = prof_tick && pb_div == 2'd0;
+	always_ff @(posedge clk_sys) if (mi_push && !mi_n[4]) mi_q[mi_wp] <= b_rx_d;
+	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
+		if (!mem_rst_n) begin
+			mi_wp <= '0; mi_rp <= '0; mi_n <= '0; mi_cnt <= '0; mi_lost <= '0; mi_take <= 1'b0; mi_a <= '0; mi_d <= '0;
+		end else begin
+			if (mi_slot) mi_take <= mi_n != 5'd0;
+			if (mi_slot && mi_n != 5'd0) begin
+				mi_a <= {mi_cnt + 24'(mi_k), 5'd0, mi_k};
+				mi_d <= {mi_q[mi_rp], (mi_k > 3'd1) ? mi_q[mi_rp + 4'd1] : 8'd0,
+				         (mi_k > 3'd2) ? mi_q[mi_rp + 4'd2] : 8'd0, (mi_k > 3'd3) ? mi_q[mi_rp + 4'd3] : 8'd0};
+				mi_cnt <= mi_cnt + 24'(mi_k);
+				mi_rp <= mi_rp + 4'(mi_k);
+			end
+			if (mi_push && !mi_n[4]) mi_wp <= mi_wp + 4'd1;
+			if (mi_push && mi_n[4] && !(&mi_lost)) mi_lost <= mi_lost + 16'd1;
+			mi_n <= mi_n + {4'd0, mi_push && !mi_n[4]} - ((mi_slot && mi_n != 5'd0) ? 5'(mi_k) : 5'd0);
+		end
+	end
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
 			pb_div <= '0; pb_sel <= '0; pb_valid <= 1'b0;
@@ -5465,30 +5500,30 @@ end else begin : g_nodbg
 			pb_valid <= 1'b0;
 			if (prof_tick) begin
 				pb_div <= (pb_div == 2'd2) ? 2'd0 : pb_div + 2'd1;
-				if (pb_div == 2'd0) begin pb_valid <= 1'b1; pb_sel <= (pb_sel == 3'd5) ? 3'd0 : pb_sel + 3'd1; end
+				if (pb_div == 2'd0) begin pb_valid <= 1'b1; if (mi_n == 5'd0) pb_sel <= (pb_sel == 3'd5) ? 3'd0 : pb_sel + 3'd1; end   // R880: an M slot keeps the turn
 			end
 			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
 			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
 			if (b_tx_v && b_tx_a) sd_tx  <= sd_tx + 8'd1;
-			if (pb_valid && pb_sel == 3'd2) sd_peak <= sd_abs;
+			if (pb_valid && !mi_take && pb_sel == 3'd2) sd_peak <= sd_abs;
 			else if (sd_abs > sd_peak)      sd_peak <= sd_abs;
 		end
 	end
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(pb_valid),
-		.a_addr((pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
+		.a_addr(mi_take ? mi_a : (pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
 		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {copro_in_pushed, copro_out_popped} :
 		        (pb_sel == 3'd5) ? {2'd0, sl_m5, sl_m6, sl_m7} : cpu_dbg_ip),
-		.a_data((pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
+		.a_data(mi_take ? mi_d : (pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
 		        (pb_sel == 3'd3) ? {snd_selftest, 12'd0, snd_mvol} :
 		        (pb_sel == 3'd4) ? {copro_out_pushed[15:0], copro_in_dropped[7:0], copro_out_dropped[7:0]} :
 		        (pb_sel == 3'd5) ? {sl_w5[19:4], sl_slow} :
 		        {copro_stall, tgp_unimpl, 14'd0, tgp_pc}),
 		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
-		.a_tag((pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h51 :
+		.a_tag(mi_take ? 8'h4D : (pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h51 :
 		       (pb_sel == 3'd5) ? 8'h4c : 8'h43),
-		.b_tag(8'h47),   // 'C','S','T','U','Q','L'
+		.b_tag(8'h47),   // 'C','S','T','U','Q','L'; 'M' (R880) in any slot
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);

@@ -142,3 +142,17 @@ if Q:
     print("TGP queues (%d Q records), first -> last: pushed in %d -> %d, popped out %d -> %d, TGP pushed out %d -> %d, in dropped %d, out dropped %d" % (
         len(Q), Q[0][0], Q[-1][0], Q[0][1], Q[-1][1], Q[0][2], Q[-1][2], Q[-1][3], Q[-1][4]))
     print("  last: TGP has produced %d words the i960 has not taken (mod 64K)" % ((Q[-1][2] - Q[-1][1]) & 0xffff))
+# R880: 'M' every MIDI byte the sound board took: {count so far(24) | n(8)} | {bytes, oldest in 31:24}
+M = [(a >> 8, a & 0xff, d) for t, a, d in recs if t == 'M']
+if M:
+    stream, lost, prev = [], 0, None
+    for cnt, n, d in M:
+        b = [(d >> (24 - 8 * i)) & 0xff for i in range(n)]
+        if prev is not None and cnt - n != prev: lost += (cnt - n - prev) & 0xffffff
+        prev = cnt; stream += b
+    print("MIDI to the sound board (%d M records): %d bytes, %d lost between records" % (len(M), len(stream), lost))
+    if len(sys.argv) > 3:
+        open(sys.argv[3], "w").write(" ".join("%02x" % x for x in stream) + "\n")
+        print("  stream written to", sys.argv[3])
+    print("  first 60:", " ".join("%02x" % x for x in stream[:60]))
+
