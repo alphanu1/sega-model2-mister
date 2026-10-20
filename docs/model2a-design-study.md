@@ -40863,4 +40863,8 @@ exercised where our loader puts these games' texture ROM or where our texel
 fetch reads it: the bench passed a path the board does not take. R905 traces
 the real MRA -> loader -> SDRAM -> texel-fetch path with a bench fed from
 the loaded image.*
+*Same build, Ben: PILOT KIDS BOOTS AND ITS TEXTURES ARE FINE (R900's
+work-RAM clear confirmed); 54.6 fps over 14 s from load, 57.5 once running,
+1 vblank a frame 97% (tools/m2-fps.py). A control for R905: Pilot Kids is a
+16 MB texture set on R897's layout like Dynamite Cop, and textures right.*
 
