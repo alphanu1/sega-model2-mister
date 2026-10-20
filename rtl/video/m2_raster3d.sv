@@ -128,6 +128,9 @@ module m2_raster3d #(
   // slot's top bit beside the vertices -- all bits its M10K had spare -- and
   // the colour is unpacked below for the fill. lut_* writes the tables.
   parameter bit TEXLUT = 1'b0,
+  // R889: the store's sort key width -- 16, the reference's z value; 20 with
+  // m2_geometry's WINKEY ({15 - window, z}: a later window in front).
+  parameter int unsigned KW = 16,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 27 : 24
 ) (
@@ -438,7 +441,7 @@ module m2_raster3d #(
   // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
-                  .FTB(FTB), .FRB(FRB), .MZ(MIP),
+                  .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
                   .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(TEXLUT ? 26 : 24)) u_store (   // R607, R626, R828c, R867
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),

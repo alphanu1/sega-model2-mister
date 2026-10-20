@@ -548,6 +548,13 @@ module m2_quad_store #(
   localparam int unsigned NPASS = KW / RADIX;
   localparam int unsigned NBUCK = 1 << RADIX;
   localparam int unsigned PW    = $clog2(NPASS);
+  // R889: AN ODD NUMBER OF PASSES STARTS IN THE SCRATCH ARRAY. Each pass moves
+  // the order from one index array to the other (`which`), and the replay
+  // reads the bank's own (idx_a0 / idx_a1) -- so with KW 20 (five passes) the
+  // order R_INIT wrote there would be read back sorted on the low sixteen bits
+  // only, the last pass left in idx_b. Started in idx_b, the fifth pass lands
+  // in the bank. An even count (KW 16, 32) is built exactly as before.
+  localparam bit         ODDP  = (NPASS % 2) == 1;
 
   logic [PW-1:0] pass;                // which digit of the key
   logic [IW:0]  ri;
@@ -622,7 +629,7 @@ module m2_quad_store #(
     end else begin
       case (rst_st)
         R_IDLE: if (sort_start) begin
-          pass <= '0; which <= 1'b0; ri <= '0;
+          pass <= '0; which <= ODDP; ri <= '0;   // R889
           rst_st <= R_INIT;
         end
 
@@ -631,8 +638,9 @@ module m2_quad_store #(
         // R607: FRONT TO BACK STARTS IN REVERSE SUBMISSION ORDER, so the stable
         // sort leaves ties last-submitted-first -- MAME's bucket LIFO.
         R_INIT: begin
-          if (wbank) idx_a1[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
-          else       idx_a0[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
+          if (ODDP)       idx_b [ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];   // R889
+          else if (wbank) idx_a1[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
+          else            idx_a0[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
           if (ri + 1 >= wcount) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
           else                       ri <= ri + 1'b1;
         end

@@ -17,7 +17,8 @@ module geodiff_top #(
   parameter int unsigned AW = 25,
   // R852: the walk's CRTC offsets (state.txt "crtc"): Daytona 0 / 128, VF2 0 / 127
   parameter int CRTC_X = 0,
-  parameter int CRTC_Y = 128
+  parameter int CRTC_Y = 128,
+  parameter bit WINKEY = 1'b0   // R889: the window in q_z[19:16], as the 2A core builds it
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -80,6 +81,7 @@ module geodiff_top #(
   logic        mat_we;
   logic [3:0]  mat_idx;
   logic [31:0] mat_data, foc_x, foc_y, obj_oba, obj_obc, obj_tha, obj_tpa;
+  logic [3:0]  obj_win;   // R889
   logic        obj_valid, eng_busy;
   logic        geo_eng_busy;   // what the walker waits on (R709: and the read-ahead)
   logic [31:0] lit_x, lit_y, lit_z;
@@ -114,7 +116,7 @@ module geodiff_top #(
     .dbg_pd_words(), .dbg_pd_cmds(),
     .foc_x(foc_x), .foc_y(foc_y),
     .zadj_e(zadj_e),
-    .win_vp_s(win_vp_s), .win_vp_e(win_vp_e), .win_c0(win_c0), .win_cnt(),
+    .win_vp_s(win_vp_s), .win_vp_e(win_vp_e), .win_c0(win_c0), .win_cnt(), .obj_win(obj_win),   // R889
     .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .dbg_lit_n(lit_n), .dbg_nops(),
     .dbg_walk_flip(), .dbg_walk_fallback(), .push_stall(), .push_busy(),   // R697
@@ -180,11 +182,11 @@ module geodiff_top #(
   assign geo_eng_busy = eng_busy;
 `endif
 
-  m2_geometry #(.MIPZ(1'b1), .MIPZ_B(3)) u_geometry (   // R828c: the flag, as the core builds it
+  m2_geometry #(.MIPZ(1'b1), .MIPZ_B(3), .WINKEY(WINKEY)) u_geometry (   // R828c: the flag, as the core builds it
     .clk(clk), .rst_n(rst_n),
     .start(obj_valid), .oba(obj_oba), .obc(obj_obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
-    .foc_x(foc_x), .foc_y(foc_y),
+    .foc_x(foc_x), .foc_y(foc_y), .obj_win(obj_win),   // R889
     .mem_req(mem_req), .mem_addr(mem_addr),
     .mem_data(eng_data_w), .mem_ack(eng_ack_w),
     .xc(xc), .yc(yc),

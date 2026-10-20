@@ -778,7 +778,7 @@ int main(int argc, char **argv) {
     }
     g_tbase1 = d->tex_base1;
     struct V { double x, y, z, pu, pv; };
-    struct P { int idx; unsigned z, h0, h1, h2, h3, luma; std::vector<V> v; int texlod = 0; uint32_t dotp = 0; bool has_lod = false; };   // R828c: L=, D=
+    struct P { int idx; unsigned z, h0, h1, h2, h3, luma; std::vector<V> v; int texlod = 0; uint32_t dotp = 0; bool has_lod = false; int win = 0; };   // R828c: L=, D=; R889: win
     auto load_polys = [&](const std::string &pdir) {
     std::vector<P> polys;
     { FILE *f = std::fopen((pdir + "/polys.txt").c_str(), "r"); char line[8192];
@@ -787,6 +787,7 @@ int main(int argc, char **argv) {
         if (std::sscanf(q, "P %d z=%u win=%d h=%x,%x,%x,%x luma=%u vp=%d,%d,%d,%d n=%d",
                         &p.idx, &p.z, &win, &p.h0, &p.h1, &p.h2, &p.h3, &luma, &vp[0], &vp[1], &vp[2], &vp[3], &n) != 13) continue;
         p.luma = luma;   // R784
+        p.win = win;     // R889
         q = std::strstr(q, " n="); q = std::strchr(q + 1, ' ');
         for (int i = 0; i < n && q; i++) { V v; if (std::sscanf(q, " %lf,%lf,%lf,%lf,%lf", &v.x, &v.y, &v.z, &v.pu, &v.pv) != 5) break; p.v.push_back(v); q = std::strchr(q + 1, ' '); }
         // R828c: the polygon's texlod and |dotp| (MAME + M2GLOD), when the dump has them
@@ -950,6 +951,11 @@ int main(int argc, char **argv) {
       // exactly its polygon's number (a texel scales it otherwise)
       static const bool NOTEX = std::getenv("M2_R3D_NOTEX") != nullptr;
       d->q_tex = NOTEX ? 0u : (tex & 0xffffff); d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
+#ifdef R3D_TEXLUT
+      // R889: a TEXLUT build takes a flat quad's colour as RGB565 (Model2.sv
+      // packs it so); the index then reads back from the same bits
+      if (!REALCOL && NOTEX) d->q_col = ((uint32_t(p.idx) & 31) << 11) | (((uint32_t(p.idx) >> 5) & 63) << 5);
+#endif
       if (REALCOL) {   // R784: the real colour, and bit 11 as Model2.sv packs it
         d->q_col = eng_col(p);
 #ifdef R3D_TEXLUT
@@ -969,6 +975,10 @@ int main(int argc, char **argv) {
 #endif
       }
       d->q_z = 0x3F800000u | (p.z & 0xffff);
+      // R889: M2_R3D_WINKEY -- the key as m2_geometry WINKEY forms it, {15 - window, z}
+      // (build with -GKW=20); unset, the window is ignored as before
+      static const bool WINKEY = std::getenv("M2_R3D_WINKEY") != nullptr;
+      if (WINKEY) d->q_z = (d->q_z & ~0xf0000u) | (uint32_t(15 - std::min(p.win, 15)) << 16);
       d->q_mipz = mipz_of(p);   // R828c
       if (MIPZ_B >= 0 && p.has_lod) { const int mm = mipz_mame_of(p); ++mipz_polys; mipz_set += d->q_mipz; mipz_mame += mm; mipz_agree += (mm == (int)d->q_mipz); }
       d->q_end = last;
