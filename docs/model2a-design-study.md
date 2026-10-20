@@ -40112,4 +40112,8 @@ unchanged expressions).
 THERE AND UPDATES AS IT SHOULD -- R889's window key confirmed for both (R893).
 Manx TT still runs at half speed: 28.7 fps (tools/m2-fps.py, 2 vblanks a frame
 99%) against MAME's 57.4 fps in the same attract race (R896, running).*
+*Same build, Ben: Sega Rally's slowdowns look the same as before R888's TGP
+speed-ups -- so on the board the TGP was not (or not only) Rally's limiting
+stage; R888's bench gain did not show. Deferred by Ben: getting every game
+working comes first.*
 
