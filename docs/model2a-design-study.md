@@ -38952,4 +38952,9 @@ confirmed on the board), with "a couple of slowdowns" -- the TGP-bound case
 R876 predicted. R888 measures our TGP against the real chip's budget.*
 *Same build, Ben: Zero Gunner's analogue sticks steer, both players (R879
 confirmed on the board).*
+*Same build, Ben: VIRTUA COP 2 WORKS (R870's guns confirmed on the board).
+Open: its ammo display (the bullet textures) is missing, so the player
+cannot see how many bullets are left (R889). The original core's Virtua Cop
+shows the bullets but they never update -- always full; recorded on main
+(R890 there), not fixed on this branch.*
 
