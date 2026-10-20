@@ -6,8 +6,8 @@ ON THE BOARD: s1218 (d4fede8, M2_PROBE, M2_NO_2A_RALLY;
 build/Model2A_20261018_s1218_monitor.rbf, a3a6d34a...). Ben: music, drums
 and popping now right (R885: the SCSP's slot monitor latched in the 68000's
 time). Open: effects (punches, kicks) much quieter than the music (R886,
-running). Fixed and in s1218, not yet confirmed by Ben: Zero Gunner's TGP
-hang (rep rpc, R876), Sega Rally's TGP FIFO overflow (R876), the analogue
+running). CONFIRMED on s1218: Zero Gunner plays in game, no crash or freeze (R869,
+R873, R876). Fixed and in s1218, not yet confirmed: Sega Rally's TGP FIFO overflow (R876), the analogue
 sticks (R879). Room: 98.8% ALM, 553 / 553 M10K -- the probe (~400-500 ALM)
 comes out of a release build; block RAM is the binding resource.
 

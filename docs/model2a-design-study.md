@@ -38938,3 +38938,8 @@ the music, the drums and the popping now right. Open: the effects are much
 quieter than the music ("in a fight you cannot really hear the punches and
 kicks"), R886.*
 
+*ON THE BOARD (s1218, Ben 2026-10-20): ZERO GUNNER PLAYS IN GAME WITH NO
+CRASH OR FREEZE -- R869's forms (cvtzril / cpysre), R876's `rep rpc` fix and
+R873's eleven MRA patches confirmed together. Its sound is there but very
+quiet overall (R886, as Sega Rally's).*
+
