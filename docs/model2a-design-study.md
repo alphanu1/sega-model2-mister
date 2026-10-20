@@ -40469,3 +40469,10 @@ format from what the games write, then per-region minimum access times where
 we are faster than the board. Wait states only slow a CPU: they are not the
 cause of Sega Rally's slowdowns (R888).
 
+*ON THE BOARD (s1247 = model2a 38e66d3, built by accident from the main
+checkout: clk_sys -0.044, clk_mem -0.123, hold +0.239), 2026-10-20: MANX TT
+AT 57.5 fps -- tools/m2-fps.py, 1 vblank per 3D frame 100%, frame 15.0 /
+17.5 / 19.6 ms, in the attract race, after booting to attract by itself
+(R892). R896's render-mode read-back confirmed (was 28.7 fps). Virtua Cop 2
+measured at 57.5 fps on s1240 (1 vblank per frame 100%).*
+
