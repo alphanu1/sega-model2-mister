@@ -38947,4 +38947,7 @@ quiet overall (R886, as Sega Rally's).*
 cabinet block in; 41,079 ALM, 553 / 553 M10K; clk_sys +0.512, clk_mem
 +0.186, clk_i960 +0.926, hold +0.236, HDMI -0.374 report-only): Ben, 2026-10-20:
 SEGA RALLY'S CONTROLS WORK (Daytona's m2_cab_inputs, R862).*
+*Same build, Ben: Sega Rally's 3D holds up through a race (R876's FIFO stall
+confirmed on the board), with "a couple of slowdowns" -- the TGP-bound case
+R876 predicted. R888 measures our TGP against the real chip's budget.*
 
