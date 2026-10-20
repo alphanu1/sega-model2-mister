@@ -61,6 +61,9 @@ module i960_top #(
   // double, narrowed like every r form) and remr (exact fmod, i960_fprem).
   // Builds the sequencer (4 M10K) and i960_fprem; not sqrtrl or the rl
   // transcendentals, which neither game runs. 0 is the core as before.
+  // R887: and tanr (0x68.e, set_rif(tan(t1f))), the sequencer's tan entry as
+  // sinr takes its sin entry -- Manx TT runs it from 55 s (a race).
+
   parameter bit F2A    = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
@@ -776,6 +779,7 @@ module i960_top #(
       case (d_op2)
         4'h0: begin fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanr
         4'hc: begin fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinr
+        4'he: begin fp_is_trans = 1'b1; tr_entry = 2'd2; end   // tanr (R887: Manx TT)
         4'h3: fp_is_rem = 1'b1;                                // remr
         default: ;
       endcase
@@ -1698,7 +1702,7 @@ module i960_top #(
                 fmul_req  <= fp_is_mul;
                 fdiv_req  <= fp_is_div;
                 fsqrt_req <= fp_is_sqrt;
-                tr_start  <= F2A && fp_is_trans;   // R869: atanr, sinr
+                tr_start  <= F2A && fp_is_trans;   // R869: atanr, sinr; R887: tanr
                 frem_req  <= F2A && fp_is_rem;     // R869: remr
                 ts        <= T_FP;
               end else if (md_valid) begin
