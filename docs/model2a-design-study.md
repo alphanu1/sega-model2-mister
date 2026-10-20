@@ -40325,3 +40325,123 @@ baseline is the tip's own map, sm2-builds/sm2-2atip-5a36477 seed s1236):*
     image and then the saved .nvm in document order (its source says so);
     load times (83-99 MB images).
   * The board: each of the six on the 128 MB module.
+
+**R896 -- MANX TT AT 28.7 FPS IS NOT A SLOW STAGE: THE GAME READS THE
+RENDER-MODE REGISTER BACK (MAME's render_mode_r) AND THIS CORE ANSWERED 0, SO
+ITS OWN READ-MODIFY-WRITE PUT IT IN 30 Hz MODE. EVERY STAGE FITS ONE VBLANK
+WITH ROOM. FIXED ON THE 2A BUILD: 0x10000000 READS BACK BITS 14 / 2 / 0.**
+(Coordinator: s1230 runs Manx TT's attract race at 28.7 fps, 99% of frames
+two vblanks; MAME 0.289 57.4 fps on the same race. Find the stage that misses
+the deadline and make it fit.)
+
+*What was believed.* A stage over the 17.39 ms vblank: the TGP (R888 left
+Rally at 0.96x MAME's model), the geometry walk or the draw (Manx TT's
+786-982 polygons, R893), or the i960's frame work (R854/R855: VF2's foreground
+used ~81% of a vblank on the board, Manx TT's is longer).
+
+*Each stage, measured against the 17.39 ms vblank (none is over):*
+  * TGP -- `make tgp_capture_2a CAP2A_SET=manxtt CAP2A_GAME=bike
+    CAP2A_COIN=30,200,330 CAP2A_START=1700 CAP2A_FR=2200` with
+    PL_PRESS=18:test,22:test (the coordinator's MAME window): 2,203 frames,
+    2,366,903 words in, 627,897 out. tb_tgp_replay TGP_PROG=4096 (R888's
+    EARLY_ALU + BUFW_Q 32), --board-push --gap 60 --jitter 40, lat 6: PASS,
+    bit-exact against MAME; 282.3 M cycles, CPI 5.88, 0.938x MAME's model.
+    A frame's TGP work p50 1.78 ms, p90 2.89, p99 3.25, max 5.11; 0 frames
+    over budget, 0 over half. The bench's i960 waits on the output FIFO
+    ~1.5-1.8 ms a race frame (e.g. frame 2959: 2.81 ms busy, 1.77 ms i960
+    wait). Manx TT stores little buffer RAM (1.02 M wait cycles in 282 M).
+  * Walk -- geodiff_ra (the read-ahead, M2GD_LAT 12) built CRTC_Y 128 and
+    WINKEY (R893) on MAME's walks of the race (R893's t3798 at 66 s and
+    t4435 at 77 s): to the last quad 412,577 / 528,704 clk_sys = 5.16 /
+    6.61 ms at 80 MHz (0.30 / 0.38 vblank); 943 / 1,143 quads, 40 / 60
+    objects, 32,778 / 42,186 engine reads.
+  * Draw -- tb_m2_raster3d in the 2A raster configuration (TEXLUT, KW 20,
+    TXLW8, FB_DDR3; M2_R3D_TEXMEM, PXK 0, MIPZ 3, WINKEY) on MAME's race list
+    2000 (R893's d2000): 764,391 cycles = 9.55 ms (0.55 vblank); colour
+    against MAME mean 2.29 / 255 as R893. (R855's VF2 board/bench ratio,
+    ~1.25x, puts the board's draw near 12 ms and the walk near 8 ms.)
+  * The i960's frame work, MAME (traces with loops collapsed, frame marks
+    and the flips; Manx TT's frame loop below): the coined race 38.3-39.1 k
+    instructions from the vblank interrupt's entry (0xB70) to the flip;
+    the attract race 28.6-31.3 k. 14.1 k of either is the vblank
+    handler itself: a CRC-16 over 326 bytes of backup RAM, byte by byte
+    (0x6b9d0), and a 5,804-byte copy of backup RAM to its mirror
+    (0x1d00000 -> 0x1d016ac, 0x7b828) -- every frame. The rest of the frame
+    (MAME's) is the vblank spin.
+  * The i960's frame work, ours -- the whole-core bench below, the attract
+    race (vblanks 1240-1347 after the fix, 108 of 108 flipped; TGP FIFO
+    ~1,034 words a frame):
+    0xB70 to the flip p50 343 k CPU cycles, p90 353 k, max 374 k of the
+    bench's 417 k-cycle vblank (0.82 / 0.85 / 0.90), 28.3 k instructions
+    (MAME 28.6-31.3 k); FP 30.0% of the cycles, T_MEM_W 24.0%, fetch wait
+    15.5%, FRAME 12.8%; the TGP holds ~8.4 k cycles a frame. On the board's
+    clocks the i960 has 695 k cycles a vblank: the bench's 342 k is 0.49 of
+    it, ~0.70 with R854's board/bench factor of 1.42 (measured before
+    R855, so an upper bound). INFERRED for the board; it fits either way.
+
+*Manx TT's frame loop (MAME 0.289 trace, verified):* 0x3ed8 writes the flip
+(0x803008), then 0x3f08 samples bit 2 of 0x98000c with `ldob` and spins at
+0x3f1c-0x3f30 until it changes; 0x3f34 goes on with the next frame. Bit 2 is
+videoctl_r's frame bit: m_framenum bit 0 in 60 Hz render mode, bit 1 in 30
+Hz. A frame done inside its vblank therefore runs at 57.5 fps, and one that
+is not waits a further vblank: two vblanks a frame is either a frame over
+1.0 vblank, or the 30 Hz mode.
+
+*The cause (MAME's taps, the trace, the bench; verified).* Manx TT writes
+render mode 4 at boot (`stos` at 0x37cc) and then CHANGES it by
+read-modify-write -- `ldos 0x10000000 / and 0xfeff / stos` at 0x24f80, and
+the same at 0x6efec / 0x6f014, 0x1a08c and 0x1a40c (MAME's coined session:
+reads at vblanks 1037, 1038, 1893, 2186, 2359; the attract with the motion
+base answered reaches 0x24f80 at vblank 631).
+MAME's render_mode_r returns `(unk << 14) | (mode << 2) | test`, so the
+game writes 4 back (0x104 once, bit 8 dropped by render_mode_w). This
+core's I/O read mux has no case for 0x10000000-0x101fffff and returned 0:
+the first read-modify-write wrote 0, R765's 0x98000c then showed frame bit
+1, and from there the game frames every other vblank -- with its work
+nowhere near a vblank.
+  The whole-core bench (test_m2_boot_2a's harness built A2X with a new
+  MANX_MOTION parameter -- the DX motion base answered as m2_2a_inputs does,
+  R892 -- and the image from rom_csum.py on Manx TT's MRA; M2_FRAMESTAT,
+  M2_WORK_IPS=b70,3eec): vblanks 0-686 identical line for line before and
+  after the fix. From vblank 687 (the first read-modify-write) the old RTL
+  flips every SECOND vblank (687 0, 688 1, 689 0, ...) with the frame's work
+  window (0xB70 to the flip) 58.2-58.7 k CPU cycles of the bench's 417 k
+  (14%); with the fix one flip a vblank: 687-1224 all but one (885), then
+  11 of 15 vblanks without a flip while the race loads (1225-1239; MAME's
+  minute containing its race load has 58 flips in 60 vblanks too), and the
+  attract race from 1240 on every vblank.
+  make target: obj_boot_2ax with BOOT_2AX_G=-GMANX_MOTION=1 (Makefile note).
+  MAME's taps over 4,000 vblanks of each 2A game: render-mode READS -- VF2
+  0, Sega Rally 0, Virtua Cop 2 0, Zero Gunner 0, Manx TT 5. So no released
+  game reads the register and none changes. The original core's Daytona and
+  Virtua Cop (vcopa) read it 0 times too (Virtua Cop writes 0 -- MAME's
+  "30 Hz game" -- and never reads it).
+
+*The fix (Model2.sv, 2A only):* 0x10000000-0x101fffff reads
+`{17'd0, unk, 11'd0, mode, 1'b0, test}` -- MAME's render_mode_r; the write
+keeps bits 0 and 14 beside R765's bit 2 (two flops). The case decodes
+cpu_io_addr[31:21] (the mux's other cases compare bits 23:0, and none of
+them falls in this range's 0x000000-0x1fffff, so nothing else's answer
+moves). M2_NO_2A: io_render_rd is 0, the value that address read before:
+the original core is unchanged by construction. The boot bench's harness
+mirrors it (A2 only).
+
+*Area:* whole-design quartus_map 17.0 (2A, the s1235 project at 5a36477
+with this Model2.sv): 40,083 -> 40,080 ALMs est., registers 47,965 ->
+47,967, block memory bits 4,467,205 both, DSP 90 both.
+
+*Checks:* lint_top clean on 2A, -DM2_NO_2A and -DM2_NO_DEBUG -DM2_PROBE=1
+-DM2_NO_2A_RALLY, no warning on the new names; lint_idx nothing in the
+changed lines; quartus_map --analyze_file Model2.sv 0 errors.
+
+*Not the cause, recorded so it is not chased:* the TGP, the walk and the
+draw (above, all under 0.6 vblank); Manx TT's polygon count. And for Sega
+Rally (whose slowdowns s1230 shows unchanged after R888): Rally never reads
+render mode (0 reads in 4,000 vblanks) and writes 4 once, so this does not
+explain it either; R888's TGP is not its limit on the board. Its i960 frame
+work in the whole-core bench (M2_WORK_IPS on its own frame loop) is the
+next measurement.
+
+*What the board must show:* Manx TT's attract race and a played race at
+57.5 fps (m2-fps: one vblank a frame), the game's own clock running at full
+speed; VF2, Sega Rally, Virtua Cop 2, Zero Gunner unchanged.
