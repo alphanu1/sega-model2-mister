@@ -40475,4 +40475,10 @@ AT 57.5 fps -- tools/m2-fps.py, 1 vblank per 3D frame 100%, frame 15.0 /
 17.5 / 19.6 ms, in the attract race, after booting to attract by itself
 (R892). R896's render-mode read-back confirmed (was 28.7 fps). Virtua Cop 2
 measured at 57.5 fps on s1240 (1 vblank per frame 100%).*
+*Same build, Ben: Manx TT "mostly full speed, a few slowdowns"; Sega Rally
+still has small slowdowns. Both are the occasional heavy frame now, not a
+rate bug. Next to measure (R896's suggestion): the i960's frame work in the
+whole-core bench on Rally's and Manx TT's heaviest frames -- R896 found
+Manx TT's i960 spends 30% of its frame in floating point and 24% waiting on
+data; R888's TGP speed-ups did not move Rally on the board.*
 
