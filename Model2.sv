@@ -2021,7 +2021,18 @@ localparam int unsigned BUF_WORDS = 65536;      // 128 KB as 16-bit words
 // A2: tile RAM and palette equal to MAME's, char RAM 166,432 words 0xFFFF
 // where MAME has 0).
 localparam int unsigned CHR_WORDS = M2A ? 32'h40000 : 0;
-localparam int unsigned BI_W      = M2A ? 19 : 17;
+// R900: AND, FOR THE LARGE LAYOUT'S GAMES (a2_big), WORK RAM (1 MB) AND BOARD
+// RAM (256 KB). Pilot Kids sums 0x500000-0x54ffff at boot and clears it in the
+// same loop; MAME's init_pltkids (and the MRA) skips that clear, because it
+// also wipes the PRCB copy the interrupts vector through -- so the game then
+// runs on RAM as MAME leaves it: zero. On this core it ran on whatever the
+// SDRAM held: the whole-core bench (unwritten 0xFFFF) traps at IP 0xffffffff
+// after 10.8 M instructions, as MAME does with the RAM filled 0xFF; the board
+// stopped on the game's debug overlay. Zeroed, as MAME's RAM is.
+localparam int unsigned WRK_WORDS = M2A ? 32'h80000 : 0;
+localparam int unsigned BRD_WORDS = M2A ? 32'h20000 : 0;
+localparam int unsigned BI_W      = M2A ? 20 : 17;
+logic            a2_big;   // R897 / R900: assigned with the game decodes below
 logic            bi_run, bi_req, bi_done;
 logic [SDR_AW:1] bi_addr;
 logic [15:0]     bi_din;
@@ -2035,7 +2046,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		bi_addr <= '0; bi_din <= 16'd0;
 	end else if (rom_loaded && cal_done && !bi_done) begin
 		if (!bi_req) begin
-			if (M2A && bi_idx >= BI_W'(BUF_WORDS)) begin   // R852: char RAM to zero
+			if (M2A && bi_idx >= BI_W'(BUF_WORDS + CHR_WORDS + WRK_WORDS)) begin   // R900: board RAM to zero
+				bi_addr <= GAME_BOARD + SDR_AW'(bi_idx - BI_W'(BUF_WORDS + CHR_WORDS + WRK_WORDS));
+				bi_din  <= 16'h0000;
+			end else if (M2A && bi_idx >= BI_W'(BUF_WORDS + CHR_WORDS)) begin   // R900: work RAM to zero
+				bi_addr <= GAME_WORK + SDR_AW'(bi_idx - BI_W'(BUF_WORDS + CHR_WORDS));
+				bi_din  <= 16'h0000;
+			end else if (M2A && bi_idx >= BI_W'(BUF_WORDS)) begin   // R852: char RAM to zero
 				bi_addr <= GAME_CHAR + SDR_AW'(bi_idx - BI_W'(BUF_WORDS));
 				bi_din  <= 16'h0000;
 			end else begin
@@ -2045,7 +2062,8 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 			bi_req  <= 1'b1;
 		end else if (wr_ack_bi) begin
 			bi_req <= 1'b0;
-			if (bi_idx == BI_W'(BUF_WORDS + CHR_WORDS - 1)) bi_done <= 1'b1;
+			if (bi_idx == ((M2A && a2_big) ? BI_W'(BUF_WORDS + CHR_WORDS + WRK_WORDS + BRD_WORDS - 1)
+			                                : BI_W'(BUF_WORDS + CHR_WORDS - 1))) bi_done <= 1'b1;
 			else                                            bi_idx  <= bi_idx + 1'b1;
 		end
 	end
@@ -2737,8 +2755,7 @@ always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an;
 // Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
 // from the upper 64 MB, linear in MAME's regions; everything else as before.
 // Quasi-static (the ID is written before the image).
-logic a2_big;
-always_ff @(posedge clk_sys)
+always_ff @(posedge clk_sys)   // (declared with the boot sweep, R900)
 	a2_big <= is_2ax && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
 	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA));
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
@@ -7304,6 +7321,9 @@ m2_ddr3 u_ddr3 (
 // a game): VF2 0-3, Virtua Cop 2 0, 1, 16, Sega Rally 0, 1 -- slots {row[4],
 // row[1:0]}, rows 0-3 and 16-19; Zero Gunner 0-5, 9 and 100 -- its own map.
 // A row outside its game's eight is coloured from the slot it aliases.
+// R900: the large layout's six games use rows none of those maps captures
+// (Dynamite Cop 6/7/76/96/100, Motor Raid 100 -- its old slots read zeros,
+// black) -- each now has eight row ranges of its own (rtl/video/m2_luma_map.sv).
 localparam int R3D_QTW = R3D_TEXLUT ? 27 : 24;
 wire [23:0]        r3d_qcol;
 wire [R3D_QTW-1:0] r3d_qtex;
@@ -7314,19 +7334,16 @@ logic [15:0]       r3d_lut_data;
 generate if (R3D_TEXLUT) begin : g_r3d_lut
 	assign r3d_qcol = q3d_tex[0] ? {7'd0, q3d_lum, q3d_col[9:1]}
 	                             : {8'd0, q3d_col[23:19], q3d_col[15:10], q3d_col[7:3]};
-	// the luma row's slot, as the polygon names it and as the CPU's write fills it
-	function automatic logic [3:0] lslot(input logic [7:0] r, input logic zg);   // {captured, slot}
-		if (zg)
-			lslot = (r <= 8'd5) ? {1'b1, r[2:0]} : (r == 8'd9) ? 4'b1110 : (r == 8'd100) ? 4'b1111 : {1'b0, r[2:0]};
-		else
-			lslot = {(r[7:5] == 3'd0) && (r[3:2] == 2'd0), r[4], r[1:0]};
-	endfunction
+	// the luma row's slot, as the polygon names it and as the CPU's write fills
+	// it: {captured, slot}. R900: the large layout's games by row ranges.
 	/* verilator lint_off UNUSEDSIGNAL */   // q_ls[3]: a polygon's row is used captured or not
-	wire [3:0] q_ls = lslot(q3d_trow, is_zerogun);
+	wire [3:0] q_ls;
 	/* verilator lint_on UNUSEDSIGNAL */
-	assign r3d_qtex = {q_ls[2:0], q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
+	wire [3:0] w_ls;
 	wire [SDR_AW:1] w_luma = cpu_sd_addr - GAME_LUMA;
-	wire [3:0]      w_ls   = lslot(w_luma[15:8], is_zerogun);
+	m2_luma_map u_lmap (.clk(clk_sys), .game_id(game_id[3:0]), .big(a2_big), .zg(is_zerogun),
+	                    .q_row(q3d_trow), .q_ls(q_ls), .w_row(w_luma[15:8]), .w_ls(w_ls));
+	assign r3d_qtex = {q_ls[2:0], q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
 	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
 	wire [SDR_AW:1] w_xlat = cpu_sd_addr - GAME_XLAT3D;
 	wire            sd_wr  = cpu_sd_req && cpu_sd_we && p_ack[1];
