@@ -36,7 +36,7 @@ find, and say which game and where.
 | `Model2A_20261020b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs below | `/media/fat/_Arcade/` |
 
-**SDRAM:** the first four games below run on a 64 MB or 128 MB module; Pilot Kids needs the 128 MB module. Several of
+**SDRAM:** the first four games below run on a 64 MB or 128 MB module; Pilot Kids and Hanguk Pro Yagu 98 need the 128 MB module. Several of
 the games still to come need more than 64 MB of ROM, so **they will need the
 128 MB module**; the table further down says which.
 
@@ -54,9 +54,15 @@ ROM sets: MAME 0.289.
 | Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick; the ammo display counts down and reloads |
 | Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
 | Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
+| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check. **Freezes if you collide with another rider** (being fixed) |
+| Hanguk Pro Yagu 98 | `Hanguk Pro Yagu 98.mra` | `hpyagu98.zip` | `hpyagu98` | Plays. **Needs the 128 MB SDRAM module.** The MRA loads the factory settings MAME ships in the zip; some surfaces' shading may differ slightly from MAME |
 
 ### Known bugs
 
+- **Manx TT freezes when you hit another rider** -- the picture stops, the
+  sound carries on. Avoid contact until it's fixed; restart the core to get
+  out. Its deluxe cabinet's extra sound board isn't emulated, so a few extra
+  sounds are missing, and it has an occasional slowdown in busy scenes.
 - **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
   drops where the geometry processor has the most work. Being looked at.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
@@ -101,10 +107,8 @@ once they have been played.
 
 | Game | ROM zips | MAME set | SDRAM | State |
 |---|---|---|---|---|
-| Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | 128 MB | MRA `Hanguk Pro Yagu 98.mra`, which loads the factory settings MAME ships in the zip (`hpyagu98_nvram`, `hpyagu98_backup`); untested on a board |
 | Sky Target | `skytargt.zip` | `skytargt` | 128 MB | MRA `Sky Target.mra`; untested on a board |
 | Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | 128 MB | MRA `Dynamite Cop (Export, Model 2A).mra`, its 315-5881 checks patched out; untested on a board |
-| Manx TT Superbike (DX/Twin, Revision D) | `manxtt.zip` | `manxtt` | 64 MB | Being tested now |
 | Motor Raid (Twin) | `motoraid.zip` | `motoraid` | 128 MB | MRA `Motor Raid - Twin.mra`; untested on a board. The Twin/DX set (`motoraiddx`) is not supported |
 | Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | 128 MB | MRA `Dead or Alive (Model 2A).mra`, its protection check patched out; untested on a board |
 
