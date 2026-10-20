@@ -39791,3 +39791,63 @@ also a later window at a far z, main would show it only over distant
 scenery -- worth one MAME walk -- but "always full" needs the per-shot
 object address (oba/tha changing per count, as here) to be lost somewhere
 on main's path, which is a different fault.
+
+**R893 -- MANX TT'S TACHOMETER (NO NEEDLE, A BROKEN CHECKER BACKING) IS
+R889'S FAULT: THE HUD IS WINDOW 3 AT z 128, THE ROAD WINDOW 1. FIXED BY
+R889'S WINDOW KEY, NO FURTHER CHANGE. THE "SHEEP IN THIN AIR" IS THE GAME'S
+OWN -- MAME DRAWS IT THE SAME.**
+(Ben, s1221, Manx TT on the 2A core: "the rev needle and checkered
+background keep disappearing behind the road"; two screenshots: the dial
+face drawn, the needle missing, the dark backing a screen door with the road
+through it and pieces gone; at the start on the sea front a sheep standing
+in the air above the road.)
+
+*Believed:* a z-sort fault (precision, ties, a bucket), the checker bit set
+on the wrong polygons, or R867's colour path giving them colour 0; for the
+sheep, ground polygons lost (refusals, clipping, culling) or the sheep
+placed wrong.
+
+*Measured (MAME 0.289 manxtt, sim/io/mame_m2_2a_play.lua bike, Test at 20 s
+and 25 s, coins at 40 s; M2DIFF lists 2000 of a ridden race (~77 s, TIME
+44) and of a run with the throttle never opened (~77 s, the start line,
+the sheep); M2GEO walks at 66 s and 77 s; M2WIN):*
+  1. THREE WINDOWS A RACE LIST, ALL WITH THE SAME VIEWPORT AND CENTRE
+     ((0,128)-(496,512), (248,320)): window 1 the world (786-982 polygons,
+     z buckets 0x109a-0xc68a), window 2 empty, window 3 the HUD (17-101
+     polygons): course map, tachometer backing (h0 0xe0c9 -- the CHECKER
+     bit is set in MAME's own list: the screen door is the game's), needle
+     (two flat quads, h0 0x00c0) and, when the rider waits at the start,
+     the sheep. Window 3's polygons sit at z bucket 0x5000 (z 128); the
+     road, the rider and the near scenery are nearer.
+  2. Before R889 the key was z alone, so everything in window 1 nearer than
+     z 128 hid the HUD: under the dial that is the rider's own bike and the
+     road -- hence "keeps disappearing" (it comes back wherever the scene
+     under the dial is farther, which moves with lean and camera).
+  3. tb_m2_raster3d in the 2A raster configuration (TEXLUT, TXLW8 +
+     R3D_LW8, TEXMEM, PXK 0, MIPZ 3, KW 20 / M2_R3D_WINKEY for R889), every
+     pixel MAME's window-N polygons own against MAME's frame (max channel
+     error / 255, share over 32):
+         list                       window   04bd4fb (z alone)   b379073 (R889)
+         race 2000 (TIME 44)          1      2.27 / 0.5%         2.27 / 0.5%
+                                      3     71.15 / 52.9%        2.57 / 1.8%
+         start line, sheep            1      3.19 / 1.7%         3.19 / 1.7%
+                                      3     75.18 / 39.7%        3.09 / 1.3%
+     The needle and the whole backing are drawn after R889, as MAME draws
+     them (whole-frame textured error 4.80 -> 2.29 and 6.71 -> 3.19);
+     window 1 identical. Draw time +0.4% (821,848 -> 825,023 cycles).
+  4. geodiff on the 77 s walk (built CRTC_Y 128 -- Manx TT's CRTC offset is
+     MAME's 128, not VF2's 127; at 127 every polygon is a pixel off and the
+     comparison misaligns): 1,118 polygons match, sort key 0 differ from
+     MAME's, texture parameters 0 of 1,131, u/v 0 of 1,110; our window
+     nibble 0xE x 1,041 quads, 0xC x 102 -- MAME's windows 1 and 3.
+  5. THE SHEEP IS MAME'S TOO. With the throttle never opened, MAME 0.289's
+     screen at TIME 42 shows the same sheep standing against the sky above
+     the sea-front road -- a window-3 object, drawn over the world by design.
+     Not a fault; nothing to fix.
+  6. Manx TT's polygons use luma rows 0 and 1 only (both lists, 1,886
+     polygons): R867's default slots, so R887's "textured colours may be
+     off" does not apply.
+
+*Board (2A core with R889):* the needle on every race frame, the backing a
+whole screen-door disc over road and rider alike (as MAME), the course map
+whole; the sheep at the start as before.

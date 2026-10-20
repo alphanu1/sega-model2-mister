@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-10-20: Manx TT's tachometer -- R889's window key fixes it; the sheep is the game's (R893)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. No RTL change: study note only, on
+model2a 29abb22. Ben's s1221 (no needle, the checker backing broken by the
+road; a sheep in the air at the start). The HUD is window 3 at z 128, the
+world window 1; before R889 the sort was z alone, so the rider and road
+nearer than 128 hid it. R889 (b379073, merged) keys {15 - window, z}: on
+MAME's lists the HUD's pixels go from 71-75 / 255 mean error to 2.6-3.1,
+window 1 unchanged. The sheep floats in MAME 0.289 as well -- a window-3
+object the game shows when the rider waits at the start. Note: geodiff_2a
+is built CRTC_Y 127 (VF2); Manx TT needs 128 or every polygon misaligns.
+BOARD: Manx TT, needle and the screen-door backing on every race frame.
+
 ## 2026-10-20: the 128 MB dual-chip SDRAM module, and the byte mask on A12:A11 (R891)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch sdram128-2a (worktree), on
