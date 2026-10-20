@@ -1,5 +1,25 @@
 # Handoff
 
+## 2026-10-20: PUSHED -- model2a e2e78a3 (55 commits), main a2caf9b
+
+model2a carries the Model 2A beta release (releases/Model2A_20261020.rbf =
+s1220, e44e4a29...; the VF2, Sega Rally, Virtua Cop 2 and Zero Gunner MRAs;
+README's 2A section marked BETA with its known bugs). main got only notes:
+R872 (textured colour), R890 (Virtua Cop's ammo), and the docs no longer name
+the rules file (the repo's one mention of it stays in .gitignore).
+CONFIRMED ON THE BOARD this session: VF2's sound (R871 byte writes, R885 the
+SCSP slot monitor), Zero Gunner in game (R869, R873, R876), the analogue
+sticks (R879), Sega Rally's controls and 3D (R876), Virtua Cop 2's guns
+(R870). Found and NOT the cause, recorded so it is not chased again: SDRAM
+starvation (R877), the board's MIDI (R880 -- equals MAME's), the ROMs in SDRAM
+(R882 -- sums equal the zip's), the SDRAM crossing (R881 -- the anomaly was a
+bench bug), the 68000's pace (R884), SCSP timing paths (R874/R875).
+OPEN: Sega Rally slowdowns (R888 running); Virtua Cop 2's ammo display
+(R889 running); the 2A games still to come and the input profiles (R887
+running); the effects / Rally / Zero Gunner level equals MAME 0.289's mix
+(R886) -- Ben to judge the +12 dB clip against the arcade; the fx68k
+interrupt-latch difference from MAME (R884, left alone).
+
 ## Releases on this branch (Ben, 2026-10-20)
 
 releases/README.md opens with one table per core (Model 2: Model2.rbf;
