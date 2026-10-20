@@ -9785,7 +9785,7 @@ the walk, the pointer that would have run off polygon RAM, the stage that
 stopped answering -- are all things MAME cannot exhibit because MAME is not a
 pipeline. The Model 1 core in `tools/model1-ref/` is a working coprocessor,
 geometry engine, walker, texture unit and rasterizer on this same device, and
-it is the oracle. `CLAUDE.md` now says so.
+it is the oracle. The project rules now say so.
 
 ---
 
@@ -9917,8 +9917,8 @@ against 1,936, with 07:4, 08:1, 09:2, 0a:2 and 0f:5 matching to the count.
 *THE METHOD IS THE FINDING.* Every previous attempt compared our CODE against
 MAME's CODE and found them to agree -- because they DO agree about what `geo_w`
 computes. What disagreed was what reached the front door. Reading the reference
-cannot show that; only running it and diffing the data can. `CLAUDE.md` already
-says Model 1 is the oracle and MAME a reference; the amendment this adds is that
+cannot show that; only running it and diffing the data can. The project rules
+already say Model 1 is the oracle and MAME a reference; the amendment this adds is that
 a reference is worth far more RUN than READ.
 
 ---
@@ -39031,7 +39031,7 @@ VF2's music, Rally ~-15 dB under VF2) are MAME 0.289's own. The shared
 "path" is real but it is in the games' register values, not in our RTL: every
 voice's direct send is DISDL 3, and only what a driver routes through the DSP
 comes back loud. Changing it would depart from MAME, the reference for what
-the silicon computes (CLAUDE.md), with nothing here to say MAME is wrong --
+the silicon computes (the project rules), with nothing here to say MAME is wrong --
 its SDL table (-36 .. 0 dB, 6 dB steps) and its DSP path are self-consistent
 (one full-scale voice at SDL 7 reaches 16-bit full scale directly or through a
 unity DSP program). NOT CHANGED.
