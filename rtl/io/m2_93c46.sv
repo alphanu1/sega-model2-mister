@@ -37,13 +37,23 @@
 
 `timescale 1ns/1ps
 
-module m2_93c46 (
+module m2_93c46 #(
+  parameter bit LOAD = 1'b0   // R897: a load port (Hanguk Pro Yagu 98's factory image)
+) (
   input  logic clk,
   input  logic rst_n,   // power-on only: the part has no reset pin (MAME resets it never)
   input  logic cs,
   input  logic sk,      // the serial clock
   input  logic di,
-  output logic do_o
+  output logic do_o,
+  // R897 (LOAD): one word per strobe, word ld_a = MAME's .nv bytes 2a, 2a+1
+  // (get_u16le). Taken over the serial side's write for that cycle; the game
+  // is in reset while the MRA loads it.
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        ld_we,
+  input  logic  [5:0] ld_a,
+  input  logic [15:0] ld_d
+  /* verilator lint_on UNUSEDSIGNAL */
 );
 
   (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] ee [64];
@@ -52,8 +62,9 @@ module m2_93c46 (
   logic        we;
   logic  [5:0] wa, ra;
   logic [15:0] wd, q;
+  wire         l_we = LOAD && ld_we;                 // R897
   always_ff @(posedge clk) begin
-    if (we) ee[wa] <= wd;
+    if (we || l_we) ee[l_we ? ld_a : wa] <= l_we ? ld_d : wd;
     q <= ee[ra];
   end
 

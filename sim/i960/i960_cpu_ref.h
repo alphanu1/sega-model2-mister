@@ -546,9 +546,46 @@ struct Cpu {
             IP = ip_next;
             break;
           }
+          // R897 (i960_top F2A, live while vc_en): movre 0x6e.1, MAME's word
+          // for word -- dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2] &
+          // 0xffff, each a uint32_t through a pointer: a register triple at
+          // (n & 0x1e), or fp0-fp3 as the double's two words and then the next
+          // fp register's low word (after fp3, MAME's m_SAT, which follows
+          // m_fp[4]). A literal source above fp3, a literal destination with
+          // bits 23:21 set (MAME's null pointers) and a triple at r30 (m_r[32])
+          // are undefined there: the program ends.
+          if (ref_f2a && k == 0x6e1) {
+            auto fpw = [&](int i, int w) -> uint32_t {            // word w of fp i (i 4: SAT)
+              if (i >= 4) return SAT;
+              uint64_t v; std::memcpy(&v, &fp[i], 8); return uint32_t(v >> (32 * w));
+            };
+            auto fpw_set = [&](int i, int w, uint32_t x) {
+              if (i >= 4) { SAT = x; return; }
+              uint64_t v; std::memcpy(&v, &fp[i], 8);
+              v = (v & ~(0xffffffffull << (32 * w))) | (uint64_t(x) << (32 * w));
+              std::memcpy(&fp[i], &v, 8);
+            };
+            const bool sf = d.src1_lit, df = d.dst_lit;
+            const int si = sf ? int(d.src1) : int(d.src1 & 0x1e), di = df ? int(d.srcdst & 3) : int(d.srcdst & 0x1e);
+            if ((sf && d.src1 >= 4) || (df && (d.srcdst & 0x1c)) || (!sf && si == 30) || (!df && di == 30)) {
+              fp_denorm_operand = true; IP = ip_next; break;
+            }
+            // word j of a triple: register si + j, or fp (si + j / 2) word j % 2
+            auto rdw = [&](bool f, int b, int j) -> uint32_t { return f ? fpw(b + j / 2, j % 2) : rf.r[b + j]; };
+            auto wrw = [&](bool f, int b, int j, uint32_t x) { if (f) fpw_set(b + j / 2, j % 2, x); else rf.r[b + j] = x; };
+            wrw(df, di, 0, rdw(sf, si, 0));
+            wrw(df, di, 1, rdw(sf, si, 1));
+            wrw(df, di, 2, rdw(sf, si, 2) & 0xffffu);
+            // As movrl: exact here, but a subnormal left in fp0-fp3 meets the
+            // units' flush (§8.1) at its next use -- the program ends at the move.
+            if (df && (std::fpclassify(fp[di]) == FP_SUBNORMAL || (di < 3 && std::fpclassify(fp[di + 1]) == FP_SUBNORMAL)))
+              fp_denorm_operand = true;
+            IP = ip_next;
+            break;
+          }
           const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690);
           if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
-              || (ref_vc && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans) {
+              || ((ref_vc || ref_f2a) && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans) {   // R897: sqrtrl under F2A
             const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
             const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
             // movrl copies the pair as MAME does, subnormal or not (the

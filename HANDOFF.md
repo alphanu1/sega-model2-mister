@@ -1,5 +1,52 @@
 # Handoff
 
+## 2026-10-20: the six remaining 2A games -- one large layout on the 128 MB module, movre / sqrtrl, the hpyagu98 EEPROM, six MRAs (R897)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a82730ab7496489a6
+(on model2a 5a36477; never merge into main).
+
+DONE: ONE layout for Sky Target, Pilot Kids, Dynamite Cop, Hanguk Pro Yagu 98,
+Motor Raid and Dead or Alive (Model2.sv a2_big, IDs 0x13-0x16 / 0x18 / 0x1A):
+Sega Rally's image with main_data 32 MB over the 2A texture/polygon slots (the
+bridge needs nothing -- both data windows are already linear), then the
+texture-coordinate ROM (16 MB) and polygons (<= 32 MB), which m2_rom_loader's
+third remap (XTRA3, from MRA 0x32C0000) puts at SDRAM 0x4000000 / 0x5000000.
+The engine carries MAME's 23-bit texture word; R671's packing moved to
+eng_mem_idx. i960: movre (MAME-exact, the fp spill and SAT included) and
+sqrtrl under F2A. m2_93c46 load port (ioctl index 5, M2_2A_EE_LOAD) for
+hpyagu98, whose MRA loads MAME's factory EEPROM / backup images from the zip.
+MRAs: Pilot Kids, Dynamite Cop, Dead or Alive (Model 2A), Motor Raid - Twin,
+Sky Target, Hanguk Pro Yagu 98 -- all PASS tools/mra_vs_mame.py --layout=2a
+(now with the large layout, ERASEFF fills and the R887 patches); the released
+MRAs unchanged and still PASS. tools/mra_2a_big.py writes the layout.
+BENCHES: loader sweep 29,416 / 0 (and the old loader byte-identical, a no-
+remap mutant fails); bridge data windows 777 reads / 0 at AW 26; VF2 and
+Daytona walks byte-identical to model2a's engine; Dynamite Cop and Pilot Kids
+MAME walks through the large mapping match MAME (pltkidsa w7000: 1,932 / 1,934
+polygons, 31,522 polygon reads above 16 MB, 24,546 texture reads with a[22];
+the old mapping 0 match); test_i960_top_fx 3 x 20,000 programs 0 mismatches
+with movre / sqrtrl, six planted faults caught; tb_m2_315_5649 with loads PASS.
+AREA (quartus_map 17.0, whole design, the 2A build, the same qsf; baseline the
+tip's own map, sm2-builds/sm2-2atip-5a36477 s1236): 40,083 -> 40,220 ALMs est.
+(+137), ALUT 57,631 -> 57,876, registers 47,965 -> 47,979, block bits equal
+(4,467,205): no new M10K. i960_top +190 ALUT (movre, sqrtrl), m2_93c46 +22,
+m2_geo_engine +8, m2_rom_loader +1. Not fitted -- the chip was at 98-99%.
+
+FOUND: R887's table had Sky Target's program as 512 KB -- it is 1 MB. R887's
+texture packing fix ({a[22]|a[21]...}) is not needed on a linear slot. MAME's
+movre spills its third word into the next fp register (and after fp3 into
+m_SAT) -- a host-layout artefact the core now reproduces. hpyagu98 does not
+write its own settings: blank EEPROM or backup, either, or only the 4 key
+bytes -> "Error #1" in MAME. A first bridge sweep failed because 0x03xxxxxx
+and 0x06xxxxxx + the same offset are one word (MAME's alias): a bench bug.
+
+TO TEST ON THE BOARD (the 128 MB module; a 64 MB module cannot run any of the
+six): each of the six boots to its attract and plays; Pilot Kids / Dynamite
+Cop past their first credit (the patches); DOA's fights (movre); Motor Raid's
+bikes (sqrtrl) and Sky Target's stick; hpyagu98 past "Error #1", and that a
+saved .nvm survives a reload. Load times: the large images are 83-99 MB. VF2,
+Sega Rally, Virtua Cop 2, Zero Gunner, Manx TT unchanged.
+
 ## 2026-10-20 (paused for credits): where everything stands
 
 BUILDING: s1230-s1232 from 1296e49 (sm2-builds/sm2-2afull-1296e49) -- TGP

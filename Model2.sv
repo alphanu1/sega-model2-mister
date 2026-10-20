@@ -149,6 +149,13 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_MANX_MOTION
 `define M2_2A_MANX_MOTION
 `endif
+// R897: M2_2A_EE_LOAD, the 93C46's load port: an MRA's <rom index="5"> (128
+// bytes, MAME's .nv layout) is written into the EEPROM as it downloads.
+// Hanguk Pro Yagu 98 stops at "Error #1" without its factory image (MAME:
+// hpyagu98_nvram). On by default; "M2_NO_2A_EE_LOAD=1" leaves it out.
+`ifndef M2_NO_2A_EE_LOAD
+`define M2_2A_EE_LOAD
+`endif
 // R865: M2_2A_FPU, the i960's flushreg (i960_top FR: the one VC form without
 // the rest of VC -- no transcendental microcode, no M10K), live for Sega
 // Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally executes it at
@@ -486,6 +493,11 @@ localparam bit VCOP2GUN = 1'b0;
 localparam bit MANXMOT = M2A;                                 // R892
 `else
 localparam bit MANXMOT = 1'b0;
+`endif
+`ifdef M2_2A_EE_LOAD
+localparam bit EELOAD2A = M2A;                                // R897
+`else
+localparam bit EELOAD2A = 1'b0;
 `endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
@@ -913,6 +925,27 @@ localparam logic [26:0]     XTRA2_FROM_2A  = 27'h2D40000;
 localparam logic [SDR_AW:1] GAME_PROGX_2A  = SDR_AW'(32'h1300000);   // byte 0x2600000
 localparam logic [SDR_AW:1] GAME_PROGXB_2A = GAME_PROGX_2A - SDR_AW'(32'h0040000);   // so that + the CPU's word lands in it
 localparam logic [SDR_AW:1] GAME_COPRO_2A  = SDR_AW'(32'h13C0000);   // byte 0x2780000
+// R897: THE LARGE 2A LAYOUT -- Sky Target, Pilot Kids, Dynamite Cop, Hanguk Pro
+// Yagu 98, Motor Raid, Dead or Alive (a2_big below) -- ON THE 128 MB MODULE
+// (R891). Sega Rally's whole image with one change, then two regions more:
+//   MRA 0x0000000  program 512 KB
+//       0x0080000  main_data, 32 MB: MAME's whole 0x02000000 window, ROM_COPY
+//                  mirrors written out. It runs over the 2A texture and
+//                  polygon slots (these games read neither), so the bridge's
+//                  base and both its windows (0x02000000 linear 32 MB,
+//                  0x06000000 = + 16 MB) stand exactly as they are
+//       0x2080000  4 MB of zeros, to the fixed slots
+//       0x2480000  tables, 68000 program, samples, program extension, copro
+//                  data: Sega Rally's layout to 0x32C0000, every slot present
+//       0x32C0000  texture-coordinate ROM: MAME's 16 MB region, linear
+//                  (8 MB sets: their 8 MB, then what MAME's region holds
+//                  above it -- a mirror or the erase value)
+//       0x42C0000  polygons, MAME's region to its last chip (<= 32 MB)
+// The loader's third remap (XTRA3) puts MRA 0x32C0000 and up at byte
+// 0x4000000: textures at byte 0x4000000, polygons at byte 0x5000000.
+localparam logic [26:0]     XTRA3_FROM_2A = 27'h32C0000;
+localparam logic [SDR_AW:1] GAME_TEX_BIG  = SDR_AW'(32'h2000000);   // byte 0x4000000, 16 MB
+localparam logic [SDR_AW:1] GAME_POLY_BIG = SDR_AW'(32'h2800000);   // byte 0x5000000, 32 MB
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -1748,7 +1781,9 @@ wire mem_ready_s = mem_ready_sy[1];
 m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(M2A ? XTRA_FROM_2A : MRA_END_93),
                .XTRA_TO(M2A ? GAME_SAMP_2A[SDR_AW:1] : GAME_POLYX[SDR_AW:1]),
                .XTRA2_FROM(M2A ? XTRA2_FROM_2A : 27'h7FF_FFFF),                  // R862
-               .XTRA2_TO(M2A ? GAME_PROGX_2A[SDR_AW:1] : SDR_AW'(0))) u_loader (   // R725
+               .XTRA2_TO(M2A ? GAME_PROGX_2A[SDR_AW:1] : SDR_AW'(0)),
+               .XTRA3_FROM(M2A ? XTRA3_FROM_2A : 27'h7FF_FFFF),                  // R897
+               .XTRA3_TO(M2A ? GAME_TEX_BIG[SDR_AW:1] : SDR_AW'(0))) u_loader (   // R725
 	.clk(clk_sys), .rst(~mem_rst_n),
 	.mem_ready(mem_ready_s && (!MEMTEST || mt_done0)),   // R571: synchronised -- see below; R891: after the memory test's first pass
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -2697,6 +2732,15 @@ assign a2_rally_menu = RALLY2A & (is_srally | is_2an);   // R887: the analog pro
 // same slot).
 logic a2_copro_rom;
 always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an;
+// R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
+// 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
+// Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
+// from the upper 64 MB, linear in MAME's regions; everything else as before.
+// Quasi-static (the ID is written before the image).
+logic a2_big;
+always_ff @(posedge clk_sys)
+	a2_big <= is_2ax && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
+	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA));
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -3843,19 +3887,28 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIS
 // R222: THE ENGINE READS FOUR MEMORIES, and says which with mem_space: 1 is
 // the texture header, in texture RAM (addr[23]) or the texture ROM, 16-bit
 // words read as dword pairs; 2 the palette mirror; 3 the translation mirror.
-wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TEXRAM : GAME_TEX)
+// R897: the large 2A layout (a2_big) reads the texture-coordinate ROM and the
+// polygons from the upper 64 MB, each linear in MAME's region: the texture
+// dword index whole (22 bits, MAME's 16 MB), the polygon dword index to 23
+// bits (32 MB). Every other game reads its slots exactly as before: R671's
+// packing of the texture ROM, {a[22], a[20:0]} in words -- done here since
+// R897, the engine carrying MAME's own 23-bit word -- and 22 polygon bits.
+wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TEXRAM : (a2_big ? GAME_TEX_BIG : GAME_TEX))
                          : (eng_mem_space == 2'd2) ? GAME_PAL3D
                          : (eng_mem_space == 2'd3) ? GAME_XLAT3D
                          : geo_obj_oba_r[24] ? GAME_PRAM1
-                         : geo_obj_oba_r[23] ? ((!M2A && eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB : GAME_POLY)   // R725; R852: 2A's 12 MB are contiguous
+                         : geo_obj_oba_r[23] ? ((!M2A && eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB
+                                               : a2_big ? GAME_POLY_BIG : GAME_POLY)   // R725; R852: 2A's 12 MB are contiguous; R897
                                              : GAME_PRAM0;
 wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, eng_mem_addr[14:0]}   // 64 K words
-                                                                       : {3'd0, eng_mem_addr[20:0]})  // 4 M words
+                                                                       : {2'd0, a2_big & eng_mem_addr[21],   // R897: 4 M dwords linear
+                                                                          a2_big ? eng_mem_addr[20] : eng_mem_addr[21],
+                                                                          eng_mem_addr[19:0]})   // R671: words {a[22], a[20:1]}
                          : (eng_mem_space == 2'd2) ? {15'd0, eng_mem_addr[8:0]}
                          : (eng_mem_space == 2'd3) ? {10'd0, eng_mem_addr[13:0]}
                          : (geo_obj_oba_r[24] || !geo_obj_oba_r[23])
                          ? {9'd0, eng_mem_addr[14:0]}      // 32K-dword window
-                         : {2'd0, eng_mem_addr[21:0]};
+                         : {1'd0, a2_big & eng_mem_addr[22], eng_mem_addr[21:0]};   // R897: 32 MB for a2_big
 
 // R229: an OSD bit reaches the datapath through three flops, never raw.
 reg pair_off_s0, pair_off_s1, pair_off_s2;
@@ -6194,7 +6247,10 @@ end else begin : g_noioboard
 		);
 		wire [31:0] a2_rdata;
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
-		m2_315_5649 #(.GUN(VCOP2GUN)) u_315_5649 (
+		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words)
+		wire ee_ld_we = EELOAD2A && ioctl_download && ioctl_wr && (ioctl_index[5:0] == 6'd5)
+		             && (ioctl_addr[26:7] == 20'd0);
+		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A)) u_315_5649 (
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
@@ -6202,7 +6258,9 @@ end else begin : g_noioboard
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
 			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
-			.lamps(), .pe(a2_pe), .dbg_pa(), .dbg_dir()
+			.lamps(), .pe(a2_pe),
+			.ee_ld_we(ee_ld_we), .ee_ld_a(ioctl_addr[6:1]), .ee_ld_d(ioctl_dout),   // R897
+			.dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
 		assign iob_dbg   = 32'd0;

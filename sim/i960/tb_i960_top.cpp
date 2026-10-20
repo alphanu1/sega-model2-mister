@@ -120,7 +120,12 @@ bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre
 // still trap there
 bool use_fx = false;
 uint64_t fx_at = 0, fx_sin = 0, fx_rem = 0, fx_tan = 0;   // R869: atanr, sinr, remr retired; R887 tanr
+// R897: movre retired, by {source fp, destination fp}; of them through the SAT
+// (fp3's third word) and with the destination over the source's third word;
+// sqrtrl under F2A
+uint64_t fx_mv[4] = {0, 0, 0, 0}, fx_mvsat = 0, fx_mvalias = 0, fx_sq = 0;
 bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
+bool no_mvre = false; // R897: +nomvre -- the +fx mix without movre and sqrtrl (R887's)
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
 struct Trace { uint64_t t; int ts; int req, valid, busy; uint32_t addr, data, insn, ip; };
@@ -491,6 +496,16 @@ bool compare(uint64_t n) {
     }
   }
 
+  // R897: movre writes the SAT (MAME's m_fp[4]); compared every retire
+  ++checks;
+  if (dut->rootp->i960_top__DOT__sat_reg != ref.SAT) {
+    ok = false;
+    if (fails < MAX_REPORT)
+      std::printf("  MISMATCH retire %llu  SAT got=%08x want=%08x (insn %08x)\n", (unsigned long long)n,
+                  (unsigned)dut->rootp->i960_top__DOT__sat_reg, ref.SAT, exec_insn);
+    ++fails;
+  }
+
   ++checks;
   if (dac() != ref.AC) {
     ok = false;
@@ -570,6 +585,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+bus_probe")) bus_probe = true;
     if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
     if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
+    if (!std::strcmp (argv[i], "+nomvre"))    no_mvre = true; // R897
     if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
     if (!std::strcmp (argv[i], "+fr"))        use_fr = true;  // R865
     if (!std::strcmp (argv[i], "+fx"))        use_fx = true;  // R869
@@ -676,8 +692,10 @@ int main(int argc, char **argv) {
         uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % 8] : FPOPS[rng() % nfp];
         // R869: with +fx, a third of the FP mix is the 2A games' forms
         // R887: and tanr (Manx TT)
-        static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du, 0x68eu };
-        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % 8];
+        // R897: and movre (Dead or Alive), twice, and sqrtrl (Motor Raid)
+        static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du, 0x68eu,
+                                          0x6e1u, 0x6e1u, 0x698u };
+        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % (no_mvre ? 8 : 11)];
         if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
@@ -688,6 +706,18 @@ int main(int argc, char **argv) {
         // R839: cvtzril writes dst and dst + 1, unmasked, never a literal
         // (MAME fatalerrors): dst <= 30, as emul's.
         if (sel == 0x6c3u) insn = (insn & ~0x00f82000u) | ((rng() % 31) << 19);
+        // R897: movre -- a source of fp0-fp3 or an even register to r28, the
+        // same for the destination (MAME's other encodings are null pointers
+        // or m_r[32]); a quarter of them with the destination over the
+        // source's third word (a triple two up, fp k + 1 from fp k).
+        if (sel == 0x6e1u) {
+          const bool sf = rng() & 1, df = rng() & 1;
+          uint32_t s1 = sf ? (rng() % 4) : 2 * (rng() % 15);
+          uint32_t dd = df ? (rng() % 4) : 2 * (rng() % 15);
+          if ((rng() % 4) == 0 && sf == df) dd = sf ? ((s1 < 3) ? s1 + 1 : 0) : ((s1 < 28) ? s1 + 2 : 0);
+          insn = (0x6eu << 24) | (dd << 19) | ((rng() % 32) << 14) | (0x1u << 7) | s1
+               | (sf ? 0x0800u : 0u) | (df ? 0x2000u : 0u) | ((rng() & 1) ? 0x1000u : 0u);
+        }
       } else if (cls == 8) {                           // mov / bit scan / modac
         static const uint8_t B64[] = {0x0,0x1,0x4,0x5};
         const bool use5c = (rng() & 1);
@@ -1410,7 +1440,15 @@ int main(int argc, char **argv) {
           if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
           else if (k == 0x66d) vcfl++;
-          else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; else if (k == 0x68e) fx_tan++; }
+          else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; else if (k == 0x68e) fx_tan++;
+          if (use_fx && k == 0x698) fx_sq++;
+          if (k == 0x6e1) {                                  // R897
+            const bool sf = iw & 0x800, df = iw & 0x2000;
+            const uint32_t s1 = iw & 0x1f, dd = (iw >> 19) & 0x1f;
+            fx_mv[(sf ? 2 : 0) | (df ? 1 : 0)]++;
+            if ((sf && s1 == 3) || (df && dd == 3)) fx_mvsat++;
+            if ((sf && df && dd == s1 + 1) || (!sf && !df && dd == (s1 & 0x1e) + 2)) fx_mvalias++;
+          } }
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       if (itrace && (dut->dbg_intr_cnt != intr_before))
         std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
@@ -1577,6 +1615,10 @@ int main(int argc, char **argv) {
                           (unsigned long long)vccp, (unsigned long long)vccv, (unsigned long long)fx_at,
                           (unsigned long long)fx_sin, (unsigned long long)fx_rem, (unsigned long long)fx_tan,
                           (unsigned long long)trans_ulp);
+  if (use_fx) std::printf("  R897 forms retired: movre r->r %llu, r->fp %llu, fp->r %llu, fp->fp %llu (through the SAT %llu, destination over the third word %llu); sqrtrl %llu\n",
+                          (unsigned long long)fx_mv[0], (unsigned long long)fx_mv[1], (unsigned long long)fx_mv[2],
+                          (unsigned long long)fx_mv[3], (unsigned long long)fx_mvsat, (unsigned long long)fx_mvalias,
+                          (unsigned long long)fx_sq);
   if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
   if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
   if (use_vc) std::printf("  R845 forms retired: sinrl %llu, cosrl %llu, tanrl %llu, atanrl %llu; one-ulp libm differences taken %llu\n",

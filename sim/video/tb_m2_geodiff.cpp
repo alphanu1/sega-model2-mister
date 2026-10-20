@@ -24,12 +24,18 @@
 #include <algorithm>
 
 static Vgeodiff_top *d;
-static std::vector<uint16_t> mem(1u << 25, 0xFFFF);   // unwritten reads 0xFFFF (docs/mister-integration.md)
+static const uint32_t MEMW = 1u << 26;               // R897: 128 MB (was 1 << 25)
+static std::vector<uint16_t> mem(MEMW, 0xFFFF);        // unwritten reads 0xFFFF (docs/mister-integration.md)
 static std::vector<uint32_t> buf;                      // bufferram, dwords
 
 static const uint32_t GAME_BUFFER = 0x16f0000, GAME_PRAM0 = 0x1710000, GAME_PRAM1 = 0x1720000,
                       GAME_PAL3D = 0x1730000, GAME_XLAT3D = 0x1731000, GAME_TEXRAM = 0x1740000,
                       GAME_TEX = 0x0720000, GAME_POLY = 0x0b20000;
+// R897: M2GD_BIG=1 -- the large 2A layout (Model2.sv a2_big): the texture-
+// coordinate ROM and the polygons linear in MAME's regions, in the upper
+// 64 MB, as the large MRAs and the loader's third remap put them.
+static const uint32_t GAME_TEX_BIG = 0x2000000, GAME_POLY_BIG = 0x2800000;
+static bool g_big = false;
 
 static bool load(const std::string &p, std::vector<uint8_t> &v) {
   FILE *f = std::fopen(p.c_str(), "rb"); if (!f) { std::printf("  missing %s\n", p.c_str()); return false; }
@@ -52,16 +58,8 @@ static void put_words(uint32_t base, const std::vector<uint8_t> &v, size_t first
 static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba);
 // Model2.sv's engine port: which memory, and which dword in it.
 static uint32_t eng_read(uint32_t space, uint32_t a, uint32_t oba) {
-  uint32_t base, idx;
-  if (space == 1)      { base = (a & 0x800000) ? GAME_TEXRAM : GAME_TEX; idx = (a & 0x800000) ? (a & 0x7fff) : (a & 0x1fffff); }
-  else if (space == 2) { base = GAME_PAL3D;  idx = a & 0x1ff; }
-  else if (space == 3) { base = GAME_XLAT3D; idx = a & 0x3fff; }
-  else {
-    base = (oba & 0x1000000) ? GAME_PRAM1 : (oba & 0x800000) ? GAME_POLY : GAME_PRAM0;
-    idx  = ((oba & 0x1000000) || !(oba & 0x800000)) ? (a & 0x7fff) : (a & 0x3fffff);
-  }
-  const uint32_t wa = (base + 2 * idx) & ((1u << 25) - 1);
-  return uint32_t(mem[wa]) | (uint32_t(mem[(wa + 1) & ((1u << 25) - 1)]) << 16);
+  const uint32_t wa = eng_wordaddr(space, a, oba);
+  return uint32_t(mem[wa]) | (uint32_t(mem[(wa + 1) & (MEMW - 1)]) << 16);
 }
 
 static long g_memreqs = 0, g_repeat = 0, g_porttrips = 0;   // R696
@@ -69,14 +67,18 @@ static std::map<int, long> g_rd_by;
 static std::set<uint64_t> g_seen;
 static uint32_t eng_wordaddr(uint32_t space, uint32_t a, uint32_t oba) {
   uint32_t base, idx;
-  if (space == 1)      { base = (a & 0x800000) ? GAME_TEXRAM : GAME_TEX; idx = (a & 0x800000) ? (a & 0x7fff) : (a & 0x1fffff); }
+  // R897: the engine's texture address is MAME's word / 2 (a dword index);
+  // R671's packing {a[22], a[20:1]} unless the large layout (M2GD_BIG) reads
+  // MAME's 16 MB linear
+  if (space == 1)      { base = (a & 0x800000) ? GAME_TEXRAM : g_big ? GAME_TEX_BIG : GAME_TEX;
+                         idx = (a & 0x800000) ? (a & 0x7fff) : g_big ? (a & 0x3fffff) : ((((a >> 21) & 1) << 20) | (a & 0xfffff)); }
   else if (space == 2) { base = GAME_PAL3D;  idx = a & 0x1ff; }
   else if (space == 3) { base = GAME_XLAT3D; idx = a & 0x3fff; }
   else {
-    base = (oba & 0x1000000) ? GAME_PRAM1 : (oba & 0x800000) ? GAME_POLY : GAME_PRAM0;
-    idx  = ((oba & 0x1000000) || !(oba & 0x800000)) ? (a & 0x7fff) : (a & 0x3fffff);
+    base = (oba & 0x1000000) ? GAME_PRAM1 : (oba & 0x800000) ? (g_big ? GAME_POLY_BIG : GAME_POLY) : GAME_PRAM0;
+    idx  = ((oba & 0x1000000) || !(oba & 0x800000)) ? (a & 0x7fff) : (a & (g_big ? 0x7fffff : 0x3fffff));
   }
-  return (base + 2 * idx) & ((1u << 25) - 1);
+  return (base + 2 * idx) & (MEMW - 1);
 }
 // R707: M2GD_PC=3/4 -- READ-AHEAD. A stream per memory space (3), or one
 // shared (4), fetches the pairs after the engine's last miss before they are
@@ -131,6 +133,7 @@ static bool g_hang = false;   // R836
 // past 8 MB (dword 0x200000), texture ROM in its second pair (word 0x400000
 // and up in MAME's region, tha/tpa bit 22)
 static long g_poly_hi = 0, g_tex_hi = 0;
+static long g_poly_16m = 0, g_tex_a21 = 0;   // R897: polygon ROM >= 16 MB, texture ROM word a[21] set
 
 static void tick() {
 #ifdef GD_RA
@@ -146,7 +149,7 @@ static void tick() {
     preq_d = d->p_req;
     if (pcnt > 0 && --pcnt == 0) {
       const uint32_t row = pidx & ~511u, hi = row | ((pidx + 1) & 511u);
-      const uint32_t w0 = (2 * pidx) & ((1u << 25) - 1), w1 = (2 * hi) & ((1u << 25) - 1);
+      const uint32_t w0 = (2 * pidx) & (MEMW - 1), w1 = (2 * hi) & (MEMW - 1);
       d->p_dout = (uint64_t(mem[w1 + 1]) << 48) | (uint64_t(mem[w1]) << 32) | (uint64_t(mem[w0 + 1]) << 16) | mem[w0];
       pdone = 1; pcnt = -1;
     }
@@ -200,7 +203,9 @@ static void tick() {
       else { if (!hit) ++g_porttrips; lat_left = hit ? 0 : LAT; }
       ++g_memreqs;
       if (d->mem_space == 0 && (d->obj_oba_r & 0x1800000) == 0x800000 && (d->mem_addr & 0x3fffff) >= 0x200000) ++g_poly_hi;   // R836
-      if (d->mem_space == 1 && !(d->mem_addr & 0x800000) && (d->mem_addr & 0x100000)) ++g_tex_hi;                              // R836
+      if (d->mem_space == 1 && !(d->mem_addr & 0x800000) && (d->mem_addr & 0x200000)) ++g_tex_hi;   // R836; R897: MAME's word now
+      if (d->mem_space == 0 && (d->obj_oba_r & 0x1800000) == 0x800000 && (d->mem_addr & 0x400000)) ++g_poly_16m;   // R897
+      if (d->mem_space == 1 && !(d->mem_addr & 0x800000) && (d->mem_addr & 0x100000)) ++g_tex_a21;                 // R897
       // R696: which memory, which engine state, and whether this exact word was read before in this list
       const int est = d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__st;
       g_rd_by[(d->mem_space << 8) | est]++;
@@ -217,7 +222,7 @@ static void tick() {
     // R709: the geometrizer's write landing drops every stream (the RTL's inval)
     if (std::getenv("M2GD_RAFLUSH")) { ++g_wrflush; for (auto &S : g_ra) { S.act = false; S.q.clear(); S.last = ~0u; } }
   }
-  else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & ((1u << 25) - 1); wr_d = d->sd_wr_din; wr_pend = true; }
+  else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & (MEMW - 1); wr_d = d->sd_wr_din; wr_pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
   if (d->q_valid && d->q_ready) {
     std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x mz=%u\n",
@@ -240,12 +245,23 @@ int main(int argc, char **argv) {
   buf.resize(v.size() / 4); std::memcpy(buf.data(), v.data(), buf.size() * 4);
   if (load(dir + "/pram0.bin", v)) put_dwords(GAME_PRAM0, v, 0x8000);
   if (load(dir + "/pram1.bin", v)) put_dwords(GAME_PRAM1, v, 0x8000);
-  if (load(dir + "/polyrom.bin", v)) put_dwords(GAME_POLY, v, 0x400000);
-  // R671: packed as the MRA packs it -- MAME's 16 MB region holds its two ROM
-  // pairs at words 0 and 0x400000; the board's 8 MB holds them back to back
-  if (load(dir + "/texrom.bin", v)) {
-    put_words(GAME_TEX, v, 0, 0x200000);                     // pair one: words 0..0x1FFFFF
-    put_words(GAME_TEX + 0x200000, v, 0x400000, 0x200000);   // pair two: MAME's word 0x400000 -> packed 0x200000
+  g_big = std::getenv("M2GD_BIG") && std::atoi(std::getenv("M2GD_BIG"));
+  if (g_big) {   // R897: as the large 2A MRA and the loader's third remap put them: MAME's regions, whole
+    if (load(dir + "/polyrom.bin", v)) put_dwords(GAME_POLY_BIG, v, 0x800000);
+    if (load(dir + "/texrom.bin", v)) {
+      put_words(GAME_TEX_BIG, v, 0, 0x800000);
+      // an 8 MB region (Dead or Alive) is mirrored by MAME's mask; the MRA writes it twice
+      if (v.size() == 0x800000) put_words(GAME_TEX_BIG + 0x400000, v, 0, 0x400000);
+    }
+    std::printf("  M2GD_BIG: polygons at word 0x%X, texture ROM at 0x%X (linear)\n", GAME_POLY_BIG, GAME_TEX_BIG);
+  } else {
+    if (load(dir + "/polyrom.bin", v)) put_dwords(GAME_POLY, v, 0x400000);
+    // R671: packed as the MRA packs it -- MAME's 16 MB region holds its two ROM
+    // pairs at words 0 and 0x400000; the board's 8 MB holds them back to back
+    if (load(dir + "/texrom.bin", v)) {
+      put_words(GAME_TEX, v, 0, 0x200000);                     // pair one: words 0..0x1FFFFF
+      put_words(GAME_TEX + 0x200000, v, 0x400000, 0x200000);   // pair two: MAME's word 0x400000 -> packed 0x200000
+    }
   }
   if (load(dir + "/texram.bin", v)) put_words(GAME_TEXRAM, v, 0, 0x10000);
   if (load(dir + "/palram.bin", v)) put_words(GAME_PAL3D, v, 0x1000, 0x400);
@@ -394,6 +410,7 @@ int main(int argc, char **argv) {
   std::printf("  geometry: polys %u objects %u culled %u clip in %u out %u dropped %u nonfinite %u behind %u | quads %ld\n",
     d->polys, d->objects, d->culled, d->clip_in, d->clip_out, d->clip_dropped, d->n_nonfinite, d->behind, nq);
   std::printf("  R836: engine reads of polygon ROM >= 8 MB %ld, of texture ROM pair two %ld%s\n", g_poly_hi, g_tex_hi, g_hang ? " | HANG" : "");
+  std::printf("  R897: engine reads of polygon ROM >= 16 MB %ld, of texture ROM with word bit 21 set %ld\n", g_poly_16m, g_tex_a21);
   delete d;
   return g_hang ? 2 : 0;
 }

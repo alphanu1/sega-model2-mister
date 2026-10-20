@@ -40117,3 +40117,211 @@ speed-ups -- so on the board the TGP was not (or not only) Rally's limiting
 stage; R888's bench gain did not show. Deferred by Ben: getting every game
 working comes first.*
 
+
+**R897 -- THE SIX REMAINING 2A SETS ON THE 128 MB MODULE: ONE LARGE LAYOUT
+(main_data 32 MB IN PLACE OF THE TEXTURE AND POLYGON SLOTS, THOSE TWO
+LINEAR IN THE UPPER 64 MB), A THIRD LOADER REMAP, THE ENGINE CARRYING
+MAME'S 23-BIT TEXTURE WORD; movre AND sqrtrl UNDER F2A; SIX MRAs. NOTHING
+FITTED, NOTHING ON A BOARD.**
+(Ben, through the coordinator: make Sky Target, Pilot Kids, Dynamite Cop,
+Hanguk Pro Yagu 98, Motor Raid and Dead or Alive load and run, one overflow
+scheme, released layouts unmoved, as little logic as possible; MRAs in the
+2A style; benches against MAME. Limits: one MAME, one Verilator build,
+quartus_map only, no board. A partial attempt on branch
+worktree-agent-a5df2de13cf248fc3 (uncommitted: the a2_big decode, the
+engine's 23-bit word, the bench mappings) was read and its approach kept.)
+
+*Believed (R887, R891):* the five large sets need their own layouts with the
+loader's remaps above 64 MB; Sky Target fits 64 MB with a third polygon remap
+and a 1 MB data mask; the 4 MB-chip texture sets need R671's packing changed
+to {a[22] | a[21], a[20:0]}; pltkidsa / dynamcop a 16 MB texture slot.
+
+*THE SCHEME (Model2.sv a2_big: game IDs 0x13 0x14 0x15 0x16 0x18 0x1A; every
+other ID reads exactly what it read before).* Every one of the six uses the
+same image, Sega Rally's whole 0x32C0000-byte layout (R862) with one change,
+and two regions appended:
+  MRA 0x0000000  program 512 KB
+      0x0080000  main_data 32 MB -- MAME's whole 0x02000000 window, ROM_COPY
+                 mirrors written out (Sky Target's 1 MB pair sixteen times,
+                 Motor Raid's eight, DOA's 4 MB twice; Pilot Kids' 8 MB then
+                 zeros). It runs over the 2A texture (8 MB) and polygon
+                 (12 MB) slots, which these games never read, so THE BRIDGE
+                 NEEDS NOTHING: 0x02000000-0x03FFFFFF is already base_data +
+                 a[24:1] and 0x06000000 base_data + 16 MB + a[23:1] (MAME's
+                 main_data + 0x1000000) -- the windows R887 measured
+                 hpyagu98, motoraid and skytargt reading land on their data.
+      0x2080000  4 MB zeros (MAME's region 32-36 MB, unreachable)
+      0x2480000  tables, 68000 program, samples (XTRA), program 512 KB-2 MB
+                 and copro data (XTRA2): Sega Rally's slots, every one present
+      0x32C0000  texture-coordinate ROM, MAME's 16 MB region linear (an 8 MB
+                 region -- DOA -- written twice, as MAME's mask mirrors it;
+                 the 8 MB-loaded 16 MB regions with their fill, 0 or 0xFF)
+      0x42C0000  polygons, MAME's region to its last chip (16-32 MB)
+  m2_rom_loader's THIRD REMAP, XTRA3_FROM / XTRA3_TO (default off; the
+  original core passes all-ones): bytes from 0x32C0000 go to word 0x2000000
+  + (byte - 0x32C0000) / 2 -- the textures at SDRAM byte 0x4000000, the
+  polygons at 0x5000000 (GAME_TEX_BIG, GAME_POLY_BIG). 0x32C0000 has 18 low
+  zero bits, so the subtract is 9 bits and the add one. Released images end
+  at or before 0x32C0000 and never reach it. (The partial attempt used no
+  subtract -- {1, a[25:0]} -- which needs 13.25 MB of padding in every MRA
+  to reach 0x4000000; the subtract saves that download for ~10 LUTs.)
+  The engine port (Model2.sv eng_base / eng_mem_idx): for a2_big the texture
+  ROM base GAME_TEX_BIG with MAME's dword index whole (22 bits, 16 MB), the
+  polygon base GAME_POLY_BIG with 23 bits (32 MB); otherwise R671's packing
+  and 22 polygon bits, as before. m2_geo_engine's th_w / tp_w carry MAME's
+  23-bit word (was R671's packed 22): the packing moved to the top level, so
+  one register file serves both mappings. The only behavioural difference
+  for a released game is a run of header / u/v words carrying out of a[20]:
+  it now reaches a[21], which the packing drops (MAME's region reads its gap
+  there; the old packing read the second pair) -- no list does it (below:
+  the released walks identical).
+  WHY ONE LAYOUT AND NOT R887's TWO: Sky Target (54 MB) would fit 64 MB with
+  a polygon remap and a data mask, but that is two more decodes for one game;
+  on the large layout it costs nothing more. It needs the 128 MB module like
+  the other five. R887's "Sky Target program 0.5 MB" was wrong: its two
+  EPROMs are 512 KB each, interleaved -- 1 MB (the image's 512 KB-2 MB slot
+  has 128 non-zero 4 KB pages of 384).
+  R887's {a[22] | a[21], a[20:0]} packing is NOT needed: on the linear slot
+  a[21] and a[22] are simply address bits, for the 8 MB and 16 MB sets alike.
+
+*BENCHES (Verilator 5.052):*
+  * LOADER: tb_m2_rom_xtra2a (Model2.sv's three remaps) -- the eight fixed
+    bytes, then one byte in every 4 KB of the stream to 0x72C0000 and the
+    words either side of every boundary, against a reference map: 29,416
+    checks, 0 fails, 16,404 bytes in the upper 64 MB. test_m2_rom_xtra2a_old
+    (the loader without XTRA3, the old bench): 13,012 / 0 -- every released
+    byte where it was. test_m2_rom_xtra2a_mut (the X3 bench, no third remap):
+    FAILS, 18,453 of 29,416, as it must.
+  * BRIDGE: test_m2_cpu_bridge_2a now at AW 26 (Model2.sv's SDR_AW since
+    R891) with a sweep of both data windows -- one dword in every 64 KB of
+    0x02000000-0x03FFFFFF and 0x06000000-0x06FFFFFF, the 16 MB line and the
+    window ends: 777 reads, 0 mismatches (928 checks in all). The first cut
+    of the sweep failed on 0x03FFFFF8: it and 0x06FFFFF8 are THE SAME WORD
+    (the alias is MAME's), and the bench had written both -- a bench bug.
+    test_m2_cpu_bridge (the original core) 925 / 0.
+  * RELEASED WALKS UNCHANGED: geodiff_2a on four VF2 walks (sm2-builds/
+    vf2speed w2300 w2700c w3450c w5175c: 349 / 1,576 / 1,474 / 1,593 quads)
+    and geodiff on three Daytona walks (build/geodiff w4000 w2500 w8000):
+    ours.txt BYTE-IDENTICAL to the model2a 5a36477 engine's, logs identical.
+  * THE LARGE MAPPING AGAINST MAME (make geodiff_2abig, M2GD_BIG=1: the
+    texture ROM and polygons laid out as the MRA and XTRA3 put them, read
+    through Model2.sv's arithmetic; MAME 0.289 m2lod dumps, crtc -8 / 90).
+    Dynamite Cop (16 MB textures, 32 MB polygons), and as the CONTROL the
+    same dumps through the old mapping (R671's packing, 22 polygon bits):
+      walk   MAME polys  large mapping                      old mapping
+      1500     171       171 match, u/v 170 / 0 off,        texture params
+                         texture params 174 / 0 differ        19 differ
+      3000     168       165 match (3 off 1-16 px: clip,    0 differ (no
+                         the same in both), 180 / 0           a[21] read)
+      6000     942       940 match, u/v 938 / 0 off,        41 differ
+                         texture params 947 / 0, z 1 off
+                         (the same in both)
+    The engine read texture words with a[21] set 1,248 / 0 / 1,212 times;
+    the old mapping takes those from the other half (the R670 fields wlog,
+    hlog, tx, ty ... of 19 and 41 quads). No Dynamite Cop attract walk read
+    polygon ROM above 16 MB (counted: 0); Pilot Kids' does:
+      pltkidsa w7000 (1,934 MAME polygons): the engine read polygon ROM
+      above 16 MB 31,522 times and texture words with a[22] set 24,546
+      times. Large mapping: 1,932 match (1 off 1-16 px, 1 missing, 8 extra
+      quads -- clip and tiny-cull, R643), u/v of 1,716 textured polygons 0
+      off, sort key 0 of 1,932, texture parameters 0 of 1,938. Old mapping:
+      0 match, 1,931 missing (every polygon from the wrong 16 MB).
+      (pltkidsa w3000, its title: 479 of 480 match in both mappings.)
+
+*THE TWO TRAPS (R887), BUILT UNDER F2A (live for game IDs 0x10-0x1F, as
+tanr; no new switch):*
+  * SQRTRL (Motor Raid): VC's form -- its decode now (vc_on || ta_on), and
+    T_RLLO starts the square root for (VC || F2A).
+  * MOVRE (Dead or Alive), MAME's exactly. MAME copies three uint32_t
+    through pointers: dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2] &
+    0xffff, a pointer being a register triple at (n & 0x1e) or m_fp[k] -- a
+    double's two words and then THE NEXT fp REGISTER'S LOW WORD, and after
+    fp3 m_SAT, the member that follows m_fp[4] in i960.h. DOA's own code
+    (program 0x7704-0x771c, 0x7860-0x7878, 0x7894.., 0x7928..; 16 movre in
+    all): movre fp_k -> r4 then stt r4 to the frame, and ldt then movre r4 ->
+    fp_k, k = 0..3 ascending -- so each restore's spill into fp k+1 is
+    overwritten by the next, fp3's goes to the SAT (DOA's SAT is 0, program
+    word 0, so MAME stores back what it read). Built: the decode (is_rl,
+    fpmisc's move -- raw, as movrl), the third word read on ra2 (movre has
+    no src2) or from fpr[k+1][15:0] / sat_reg[15:0]; a destination over the
+    source's third word (a triple two above, fp k+1 from fp k) takes src[0],
+    as MAME's write-then-read order gives; an fp destination writes fp k and
+    spills into fpr[k+1][31:0] or the SAT in T_FP; a register destination
+    writes its third register in a new state T_TRIP after T_PAIR. The
+    silicon's fp registers are 80-bit and would spill nowhere; this core's
+    are 64-bit doubles as MAME's are, and MAME is the reference.
+  Reference (sim/i960/i960_cpu_ref.h): movre word for word as MAME, the
+  SAT included; sqrtrl for ref_f2a. A literal source above fp3, a literal
+  destination with bits 23:21 set (MAME's null pointers) and a triple at r30
+  (m_r[32]) end the program, as does a subnormal left in fp0-fp3 (movrl's
+  rule: the units flush it at its next use). tb_i960_top now compares the SAT
+  every retire. +fx's mix: movre twice and sqrtrl added (a quarter of the
+  movre with the destination over the third word); +nomvre for R887's mix.
+  test_i960_top_fx, 20,000 programs each, seeds 1 / 2 / 3: 0 mismatches
+  (25.97 M / 26.26 M / 26.08 M checks); movre retired 1,901 / 2,110 / 2,091
+  (r->r, r->fp, fp->r, fp->fp all ~300-660; through the SAT 400 / 463 / 498;
+  destination over the third word 330 / 321 / 398); sqrtrl 913 / 874 / 873.
+  The first run failed once (seed 1, logbnr of fp2): a movre had left a
+  subnormal double in fp2 -- the reference's missing end-of-program rule,
+  not the RTL. PLANTED, each caught on seed 1: the fp spill dropped, the SAT
+  write dropped, the alias ignored, T_TRIP skipped (FAIL, 1 mismatch each);
+  movre's decode removed (MODULE TRAP); sqrtrl's start without F2A (FAIL).
+  test_i960_top, _fr, _vc: PASS, 0 mismatches.
+
+*HANGUK PRO YAGU 98's FACTORY SETTINGS (MAME 0.289, 40 s each, snapshots at
+10 / 20 / 40 s, the NVRAM directory seeded per case):*
+  t0 MAME's defaults (the zip's hpyagu98_nvram / _backup)   attract, batting
+  t1 blank EEPROM (0xFF) and blank backup RAM (0)            "Error #1"
+  t2 MAME's EEPROM, blank backup                             "Error #1"
+  t3 blank EEPROM, MAME's backup                             "Error #1"
+  t4 EEPROM 0xFF but fa e3 a6 29 at bytes 8-11, blank backup "Error #1"
+  (t1-t4 byte-identical frames from 10 s.) The game does NOT write its own.
+  The checks (MAME's disassembly): 0xc34 0x510020 != 0; [0x519ce8] * 5 +
+  0xffe65b0d == 0xd028ceef (the EEPROM's word); backup[0x398] * 3 + 0x3e82
+  == 0xf0c891a2 (0x5042c660); the failure path 0xc78 prints "Error #1" and
+  spins. The same tests run again at 0xce8 and 0xdec, in play, where a
+  failure hangs without a message -- several copies, so patching them out
+  is a search for every copy, and the settings would still be invalid.
+  TAKEN: the images themselves, from the zip, loaded by the MRA -- none of
+  their bytes in the repository. The backup RAM already loads from ioctl
+  index 2 (the .nvm path); the MRA puts <rom index="2"> (hpyagu98_backup)
+  BEFORE its <nvram> element, and Main_MiSTer sends the saved .nvm when it
+  reaches that element (mra_loader.cpp: arcade_nvm_load() on the </nvram>
+  tag, only if the file exists) -- so a saved game replaces the factory
+  image. The EEPROM had no load path: m2_93c46 LOAD (a port that takes the
+  MLAB's write for a cycle; word a = MAME's .nv bytes 2a, 2a+1, get_u16le),
+  m2_315_5649 EE_LOAD, Model2.sv M2_2A_EE_LOAD (on; M2_NO_2A_EE_LOAD=1 off):
+  ioctl index 5, bytes 0-127. The EEPROM is not saved: every load starts
+  from the factory image (as every 2A game's EEPROM starts blank today).
+  Bench: tb_m2_315_5649 built EE_LOAD=1, images loaded at power-on and at
+  half the 2,013 later power-ons (977 images, some partial, with gaps) beside
+  the 2 M random operations against MAME's transcription: 26.4 M reads, 0
+  mismatches. Planted -- EE_LOAD=0 with the loads: FAIL (3,802 mismatches);
+  EE_LOAD=0, +noload (the module as it was): PASS. test_m2_vcop2_guns
+  223,916 / 0, test_m2_2a_inputs PASS (the harnesses tie the port off).
+
+*AREA (quartus_map 17.0, whole design, the 2A build, the same qsf; the
+baseline is the tip's own map, sm2-builds/sm2-2atip-5a36477 seed s1236):*
+     model2a 5a36477   40,083 ALMs est.  57,631 ALUT  47,965 regs  4,467,205 block bits
+     this (R897)       40,220            57,876       47,979       4,467,205
+  +137 ALMs estimated, +245 ALUT, +14 registers, no block bits: i960_top
+  11,456 -> 11,646 ALUT (movre's third word, spill and T_TRIP; sqrtrl),
+  m2_93c46 127 -> 149 (the load port), m2_geo_engine 1,798 -> 1,806 (two
+  pointer bits), m2_rom_loader 159 -> 160; the rest Model2.sv's base muxes
+  and the decode. NOT FITTED: the fit is the open question at 98-99%; if it
+  does not fit, M2_NO_2A_EE_LOAD drops the load port (hpyagu98 then stops at
+  "Error #1"), and movre / sqrtrl are F2A's to move behind a switch.
+  Quartus rewrote Model2.qsf at the end of the map again (R891's lines):
+  reverted.
+
+*VERIFIED / INFERRED:*
+  * VERIFIED in simulation and against MAME: the loader's remaps, the
+    bridge's windows, the large mapping's geometry against MAME walks of two
+    of the six sets, movre / sqrtrl against the reference, the EEPROM load
+    port; every MRA's image against MAME's regions (tools/mra_vs_mame.py).
+  * INFERRED: that the six boot and play on the core (no whole-core run);
+    that the board's 128 MB module is addressed as R891 built it (the
+    M2_MEMTEST build has not run); that Main_MiSTer sends hpyagu98's backup
+    image and then the saved .nvm in document order (its source says so);
+    load times (83-99 MB images).
+  * The board: each of the six on the 128 MB module.

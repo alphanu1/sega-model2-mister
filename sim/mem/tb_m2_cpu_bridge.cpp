@@ -682,6 +682,38 @@ int main(int argc, char **argv) {
     dut->prog_ext = 0;
     access(false, 0x00080040u, 0, 0xf, &v); expect("R862 2A ext off: 0x80040 linear", v, 0x5EED0013u);
   }
+  // R897: THE LARGE 2A LAYOUT'S DATA -- main_data 32 MB linear from
+  // base_data, so 0x02000000-0x03FFFFFF read base_data + (a - 0x02000000) / 2
+  // and the 0x06000000 window base_data + 0x800000 + (a - 0x06000000) / 2
+  // (MAME's main_data + 0x1000000), above the 2A slot's 16 MB included.
+  // One dword in every 64 KB of both windows and the words either side of
+  // 16 MB and of each window's ends -- 1,500+ reads against a reference map.
+  {
+    uint32_t n = 0, bad = 0;
+    auto put32 = [&](uint32_t word, uint32_t v) { sdram[word] = v & 0xffff; sdram[word + 1] = v >> 16; };
+    std::vector<uint32_t> cpu;
+    for (uint32_t o = 0; o < 0x2000000u; o += 0x10000u) cpu.push_back(0x02000000u + o + 0x1238u);
+    for (uint32_t o = 0; o < 0x1000000u; o += 0x10000u) cpu.push_back(0x06000000u + o + 0x2348u);
+    // (0x03000000 + x and 0x06000000 + x name the same word, so the two
+    // windows' fixed points differ)
+    for (uint32_t a : {0x02000000u, 0x02FFFFF8u, 0x03000000u, 0x03000008u, 0x03FFFFF8u,
+                       0x06000010u, 0x06400000u, 0x064DFFF8u, 0x06FFFFF0u}) cpu.push_back(a);
+    for (uint32_t a : cpu) {
+      const uint32_t w = (a < 0x04000000u) ? 0x40000u + ((a - 0x02000000u) >> 1)
+                                           : 0x40000u + 0x800000u + ((a - 0x06000000u) >> 1);
+      put32(w, 0xDA000000u ^ a);
+    }
+    for (uint32_t a : cpu) {
+      uint32_t v = 0;
+      access(false, a, 0, 0xf, &v);
+      ++n;
+      if (v != (0xDA000000u ^ a)) {
+        if (bad++ < 8) std::printf("  R897 data window 0x%08X: got %08x want %08x\n", a, v, 0xDA000000u ^ a);
+      }
+    }
+    expect("R897 large layout: data windows read their linear words (mismatches)", bad, 0u);
+    std::printf("  R897: %u reads across 0x02000000-0x03FFFFFF and 0x06000000-0x06FFFFFF\n", n);
+  }
 #else
   {
     dut->base_progx = 0xA0000;

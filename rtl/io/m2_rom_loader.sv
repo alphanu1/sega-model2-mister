@@ -129,7 +129,16 @@ module m2_rom_loader #(
   // XTRA2_FROM on go to XTRA2_TO instead (the 2A SDRAM hole). Must be above
   // XTRA_FROM. All-ones (the default) leaves the first remap as it was.
   parameter logic [26:0] XTRA2_FROM = 27'h7FF_FFFF,
-  parameter logic [SDR_AW-1:0] XTRA2_TO = '0
+  parameter logic [SDR_AW-1:0] XTRA2_TO = '0,
+  // R897: A THIRD, ABOVE THE SECOND, INTO THE UPPER 64 MB (the 128 MB module,
+  // R891). The large 2A layout appends the texture-coordinate ROM and the
+  // polygons after Sega Rally's whole image; bytes from XTRA3_FROM on go to
+  // XTRA3_TO + (byte - XTRA3_FROM) / 2. Must be above XTRA2_FROM. All-ones
+  // (the default) leaves the second remap as it was. With Model2.sv's values
+  // (0x32C0000, 18 low zero bits; word 0x2000000) the subtract is 9 bits wide
+  // and the add one bit.
+  parameter logic [26:0] XTRA3_FROM = 27'h7FF_FFFF,
+  parameter logic [SDR_AW-1:0] XTRA3_TO = '0
 ) (
   input  logic        clk,
   input  logic        rst,
@@ -257,7 +266,9 @@ module m2_rom_loader #(
   // R725: where this byte's word goes
   wire [26:0]       ld_rel  = ioctl_addr - XTRA_FROM;
   wire [26:0]       ld_rel2 = ioctl_addr - XTRA2_FROM;   // R862
-  wire [SDR_AW-1:0] ld_word = (ioctl_addr >= XTRA2_FROM) ? (XTRA2_TO + SDR_AW'(ld_rel2[26:1]))
+  wire [26:0]       ld_rel3 = ioctl_addr - XTRA3_FROM;   // R897
+  wire [SDR_AW-1:0] ld_word = (ioctl_addr >= XTRA3_FROM) ? (XTRA3_TO + SDR_AW'(ld_rel3[26:1]))
+                            : (ioctl_addr >= XTRA2_FROM) ? (XTRA2_TO + SDR_AW'(ld_rel2[26:1]))
                             : (ioctl_addr >= XTRA_FROM) ? (XTRA_TO + SDR_AW'(ld_rel[26:1]))
                                                         : ioctl_addr[SDR_AW:1];
 

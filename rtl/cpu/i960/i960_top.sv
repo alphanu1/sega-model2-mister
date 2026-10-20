@@ -378,7 +378,8 @@ module i960_top #(
     T_TRAP,
     T_BOOT, T_SYNMOV_RD, T_SYNMOV_WR,
     T_INTR, T_RET7, T_MODPC, T_SYNQ,
-    T_RLLO                                   // R836: a long-real op's low words
+    T_RLLO,                                  // R836: a long-real op's low words
+    T_TRIP                                   // R897: movre's third word to a register
   } tstate_e;
 
   tstate_e ts;
@@ -735,6 +736,7 @@ module i960_top #(
   logic fp_is_cpys, fp_is_cvtl;                  // R839: cpysre, cvtzril
   logic fp_is_trans;                             // R845: sinrl cosrl tanrl atanrl
   logic fp_is_rem;                               // R869: remr
+  logic fp_is_mvre;                              // R897: movre (Dead or Alive)
   /* verilator lint_off UNUSEDSIGNAL */
   logic [1:0] tr_entry;                          // read only when TRB
   /* verilator lint_on UNUSEDSIGNAL */
@@ -747,6 +749,7 @@ module i960_top #(
     fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
     fp_is_trans = 1'b0; tr_entry = 2'd0;
     fp_is_rem = 1'b0;
+    fp_is_mvre = 1'b0;
     fmisc_op = 3'd7;
     is_rl = 1'b0;
     // R845: the transcendentals, long-real pairs in and out (get_1_rifl /
@@ -764,7 +767,17 @@ module i960_top #(
     // "sign" as MAME tests it (src2 >= 0.0, so -0.0 counts as positive and a
     // NaN as negative); cvtzril: get_1_rif (the single-form operand) ->
     // (int64_t) -> set_ri64, the unmasked pair dst, dst+1.
-    if (vc_on && d_op == 8'h69 && d_op2 == 4'h8) begin is_rl = 1'b1; fp_is_sqrt = 1'b1; end
+    // R897: and sqrtrl under F2A (Motor Raid, R887): the same decode.
+    if ((vc_on || ta_on) && d_op == 8'h69 && d_op2 == 4'h8) begin is_rl = 1'b1; fp_is_sqrt = 1'b1; end
+    // R897: movre (Dead or Alive, R887), MAME's: three words from a register
+    // triple or fp0-fp3 (a double's two words, then the next fp register's
+    // low word -- for fp3 the SAT, which follows MAME's m_fp[4]) to a
+    // register triple or fp0-fp3 (the same three places), the third word
+    // masked to 16 bits. The first two are movrl's move; the third is
+    // mvre_w2 (below), written by T_FP (an fp destination) or T_TRIP.
+    if (ta_on && d_op == 8'h6e && d_op2 == 4'h1) begin
+      is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7; fp_is_mvre = 1'b1;
+    end
     if ((vc_on || ta_on) && d_op == 8'h6e && d_op2 == 4'h2) begin
       is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd7; fp_is_cpys = 1'b1;
     end
@@ -836,6 +849,18 @@ module i960_top #(
   // R839: cpysre's sign. MAME: t2f >= 0.0 ? fabs(t1f) : -fabs(t1f).
   wire fp_b_nan  = (fp_b[62:52] == 11'h7ff) && (fp_b[51:0] != 52'd0);
   wire cpys_neg  = fp_b_nan || (fp_b[63] && (fp_b[62:0] != 63'd0));
+  // R897: movre's third word, as MAME computes it (dst[0] = src[0]; dst[1] =
+  // src[1]; dst[2] = src[2] & 0xffff, in that order). src[2] is the triple's
+  // third register (read on ra2), the next fp register's low word, or for
+  // fp3 the SAT; a destination whose first word IS src[2] (a register triple
+  // two above the source, fp k+1 from fp k) has been overwritten with src[0]
+  // by the time it is read.
+  logic [15:0] mvre_w2;                          // to T_TRIP
+  wire  [1:0]  mv_nx    = d_src1[1:0] + 2'd1;
+  wire  [15:0] mv_src2  = d_src1_lit ? ((d_src1[1:0] == 2'd3) ? sat_reg[15:0] : fpr[mv_nx][15:0]) : rd2[15:0];
+  wire         mv_alias = d_src1_lit ? (d_dst_lit && (d_src1[1:0] != 2'd3) && (d_srcdst[1:0] == mv_nx))
+                                     : (!d_dst_lit && (d_srcdst[4:1] == d_src1[4:1] + 4'd1));
+  wire  [15:0] mv_w2    = mv_alias ? fp_a[15:0] : mv_src2;
   // R566: counts an fpmisc instruction's T_FP cycles. It retires when the
   // registered result is ready: after 1 (R566's output register) or, with the
   // unit STAGED (R575), after 2.
@@ -1197,7 +1222,11 @@ module i960_top #(
     // presented in T_EXEC) and holds the high words from T_RLLO through T_FP.
     if (is_rl && (d_fmt == 2'd2)) begin
       if (ts == T_EXEC) begin ra1 = {d_src1[4:1], 1'b0}; ra2 = {d_src2[4:1], 1'b0}; end
-      else if ((ts == T_RLLO) || (ts == T_FP)) begin ra1 = {d_src1[4:1], 1'b1}; ra2 = {d_src2[4:1], 1'b1}; end
+      else if ((ts == T_RLLO) || (ts == T_FP)) begin
+        ra1 = {d_src1[4:1], 1'b1};
+        // R897: movre has no src2; its port reads the source triple's third word
+        ra2 = (F2A && fp_is_mvre) ? {d_src1[4:1] + 4'd1, 1'b0} : {d_src2[4:1], 1'b1};
+      end
     end
   end
 
@@ -1282,6 +1311,7 @@ module i960_top #(
       rl_lo1    <= 32'd0;   // R836
       rl_lo2    <= 32'd0;
       rl_wb     <= 1'b0;
+      mvre_w2   <= 16'd0;   // R897
     end else begin
       // ONE SHOT. Set in T_BOOT's last step and cleared here, so the frame
       // pointer is initialised once rather than held over every register the
@@ -1762,6 +1792,14 @@ module i960_top #(
           we <= 1'b1;
           rl_wb <= 1'b0;
           ip <= ip_next;
+          ts <= (F2A && fp_is_mvre) ? T_TRIP : T_FETCH;   // R897
+        end
+
+        // R897: movre's third word to the triple's third register.
+        T_TRIP: begin
+          wa <= mw_base + 5'd2;
+          wd <= {16'd0, mvre_w2};
+          we <= 1'b1;
           ts <= T_FETCH;
         end
 
@@ -1773,7 +1811,7 @@ module i960_top #(
           fadd_req  <= fp_is_add;
           fmul_req  <= fp_is_mul;
           fdiv_req  <= fp_is_div;
-          fsqrt_req <= VC && fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it; VC = 0 leaves T_RLLO as it was)
+          fsqrt_req <= (VC || F2A) && fp_is_sqrt;   // R839: sqrtrl (no other rl form uses it; VC = F2A = 0 leaves T_RLLO as it was); R897 F2A
           tr_start  <= VC && fp_is_trans;  // R845: the sequencer starts; the operands stay on fp_a / fp_b
           ts        <= T_FP;
         end
@@ -1820,6 +1858,12 @@ module i960_top #(
               // fatalerror in the reference; the single forms never checked
               // it either (set_rif has the same rule) and no game emits it.
               fpr[d_srcdst[1:0]] <= fp_res_wide;
+              // R897: movre's third word over the next fp register's low
+              // word -- or, after fp3, the SAT (MAME's m_fp[4])
+              if (F2A && fp_is_mvre) begin
+                if (d_srcdst[1:0] == 2'd3) sat_reg <= {16'd0, mv_w2};
+                else                       fpr[d_srcdst[1:0] + 2'd1][31:0] <= {16'd0, mv_w2};
+              end
             end else if (is_rl) begin
               // R836: set_rifl -- the pair at (dst & 0x1e), low word now, the
               // high word in T_PAIR.
@@ -1827,6 +1871,7 @@ module i960_top #(
               mw_base <= {d_srcdst[4:1], 1'b0};
               rl_lo1  <= fp_res_wide[63:32];
               rl_wb   <= 1'b1;
+              mvre_w2 <= mv_w2;                    // R897: movre, for T_TRIP
             end else begin
               wa <= d_srcdst; wd <= fp_res_single; we <= 1'b1;
             end
