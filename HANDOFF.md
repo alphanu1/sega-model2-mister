@@ -1,5 +1,15 @@
 # Handoff
 
+## Releases on this branch (Ben, 2026-10-20)
+
+releases/README.md opens with one table per core (Model 2: Model2.rbf;
+Model 2A: Model2A.rbf) -- each game, its MRA, the ROM zips it needs, MAME's
+set and its state -- then the 2A games not yet supported. When the 2A core
+is ready: Model2A_<date>.rbf and the 2A MRAs go into releases/ (this branch
+only, never main), the 2A table loses "(not released yet)" and gains a
+"What to copy" like the Model 2 section. Keep the tables current as games
+come up or their state changes.
+
 ## 2026-10-20: VF2's sound right on the board except the effects' level (R885, R886)
 
 ON THE BOARD: s1218 (d4fede8, M2_PROBE, M2_NO_2A_RALLY;
