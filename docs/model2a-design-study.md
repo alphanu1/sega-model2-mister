@@ -36073,3 +36073,14 @@ M2LOD_OUT is unset -- set it). Quartus rewrites Model2.qsf (files.qip's
 entries and four SDRAM assignments appended) on --analyze_file; run it in a
 copy of the tree, or restore the QSF afterwards.
 
+
+**R905 (main) -- THE SAME BURST-REGION FIX ON THE ORIGINAL MODEL 2 CORE.**
+i960_memmap is shared, and main carried the same range: texture RAM + mirrors
+ended at 0x12600000, so sheet 1's mirror 0x12600000-0x127FFFFF was not a burst
+region and a multi-word store there wrote all its words to its first address.
+The full finding (MAME write tap against the whole-core bench, Dynamite Cop)
+is R905 on branch model2a, where the stripes were seen. Daytona, Desert Tank
+and Virtua Cop show no stripes on the board, so they either do not upload
+through that mirror or not with stq; the range is MAME's
+(model2_tgp_mem: both sheets .mirror(0x200000) with BURST) either way, and
+the core should match it. Not fitted on main at the time of writing.
