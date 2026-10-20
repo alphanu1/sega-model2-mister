@@ -40,8 +40,8 @@ module tb_m2_vcop2_top (
   );
 
   logic [7:0] in0, in1, in2, an0, an1, an2, lamps, dbg_pa, dbg_dir;
-  m2_2a_inputs #(.SYS_MHZ(80), .RALLY(1'b0), .GUN(1'b1)) inputs (
-    .clk, .rst_n, .is_srally(1'b0), .is_vcop2(1'b1), .is_zerogun(1'b0),
+  m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b0), .GUN(1'b1)) inputs (
+    .clk, .rst_n, .game(7'h11),   // R887: Virtua Cop 2's ID, the GUN profile
     .joystick_0({16'd0, joy0}), .joystick_1({16'd0, joy1}),
     .joy_analog(16'd0), .joy_ranalog(16'd0), .joy_analog_1(16'd0), .paddle(8'd0),
     .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0),

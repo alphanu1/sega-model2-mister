@@ -137,6 +137,9 @@
 
     </rom>
 
-    <!-- Player 1 on joystick 1, player 2 on joystick 2, the same buttons. -->
-    <buttons names="Button 1,Button 2,Start,Coin,Test,Service"/>
+    <!-- Player 1 on joystick 1, player 2 on joystick 2, the same buttons.
+         R887: the core's DIGITAL input profile, one fixed order for every
+         such 2A game (B1 B2 B3 Start Coin Test Service); Zero Gunner has
+         two buttons, so the third is "-" (MiSTer skips it when mapping). -->
+    <buttons names="Button 1,Button 2,-,Start,Coin,Test,Service"/>
 </misterromdescription>

@@ -8,60 +8,59 @@
 // Software Foundation, either version 3 of the License, or (at your option)
 // any later version. See LICENSE for the full text.
 //
-// THE MODEL 2A CABINET (study R862): what the 315-5649 reads -- ports B / C /
-// D (IN0, IN1, IN2, active low unless MAME says otherwise) and its analog
-// channels 0-2 -- for each 2A game, from MiSTer's joysticks, sticks and
-// paddle, after MAME 0.289 model2.cpp's INPUT_PORTS. The game is the MRA's
-// game ID (Model2.sv); each MRA's <buttons names> fixes which joystick bit is
-// which button (bit 4 the first name), so the maps below follow the MRAs.
+// THE MODEL 2A CABINET (study R862, R887): what the 315-5649 reads -- ports
+// B / C / D (IN0, IN1, IN2, active low unless MAME says otherwise) and its
+// analog channels 0-2 -- from MiSTer's joysticks, sticks and paddle, after
+// MAME 0.289 model2.cpp's INPUT_PORTS.
 //
-//   VF2 (game 0)  model2crx + vf2. Moved here from Model2.sv (R852) and
-//                 unchanged: tb_m2_2a_inputs compares it bit for bit against
-//                 the expressions as they stood.
-//     J  4 Punch 5 Kick 6 Guard 7 Start 8 Coin 9 Test 10 Service
+// R887: THREE PROFILES, chosen by the MRA's game ID, so that a new game adds
+// an MRA and not mapping logic. Each profile wires MiSTer's joystick bits to
+// the ports in ONE FIXED ORDER; an MRA's <buttons names> follows that order,
+// naming a button the game does not have "-" (MiSTer's mapping skips it, so
+// its bit never sets).
+//
+//   DIGITAL (every ID not below) -- MAME's model2 / model2crx layout:
+//     J  4 B1  5 B2  6 B3  7 Start  8 Coin  9 Test  10 Service
+//        (P2 the same on joystick 1; a pad's left stick ORs into the
+//        directions past a dead zone, R879)
 //     IN0 0 coin1 1 coin2 2 test 3 service 4 start1 5 start2
-//     IN1 0 punch 1 kick 2 guard 3 - 4 down 5 up 6 right 7 left (P1)
-//     IN2 the same for P2 (joystick 1)
-//   Sega Rally (RALLY) srallyc + gears. The analog side is m2_cab_inputs,
-//                 Daytona's block, unchanged (its OSD options: Pedals,
-//                 Steering, Steering smoothing, Right stick): MAME 0.289
-//                 measured (R862) -- the game reads steering 0x20 as 0x00
-//                 and 0xE0 as 0xFF, the accelerator 0x00..0x30 as rest and
-//                 0xC0..0xFF as full, the brake at 0x20 / 0x30 as at 0x00 --
-//                 so its 0x20..0xE0 is full travel here as on Daytona.
-//     J  (Daytona's order) 4 Coin 5 Start 6 Test 7 Service 8 View
-//        9 Hand Brake 10 Accel 11 Brake 12 Gear Up 13 Gear Down
-//     IN0 0 coin1 1 coin2 2 test 3 service 4 - 5 VR (view) 6 start1 7 -
-//     IN1 6:4 the shifter, ACTIVE HIGH: daytona_gearbox_r's {N,1,2,3,4} ->
-//         {0,2,1,6,5}; 3:0 and 7 unused (1)
-//     IN2 the hand brake, MAME's PEDAL3: 0x00 at rest -- a button: 0xFF held
-//     AN0 steering (0x80 centre), AN1 accelerator, AN2 brake
-//   Virtua Cop 2 (vcop2). The guns' POSITION is not here: R870 reads it
-//                 through the 315-5649's serial channel 2 (m2_315_5649 GUN),
-//                 from Virtua Cop's driver m2_vcop_guns (V2). R870: the
-//                 buttons are Virtua Cop's (its MRA's order, so the same
-//                 driver reads them), and with GUN the triggers come from
-//                 the driver (the mouse's button, Reload's shot off-screen).
+//     IN1 0 B1 1 B2 2 B3 3 - 4 down 5 up 6 right 7 left (P1); IN2 P2
+//     VF2 (0x00, Punch / Kick / Guard) is this map bit for bit (R852's
+//     expressions). Zero Gunner (0x12) and Pilot Kids have two buttons:
+//     their MRAs name B3 "-". Hanguk Pro Yagu (vf2's ports), Dynamite Cop
+//     and Dead or Alive use B1-B3 (MAME: Punch Kick Jump / Hold Punch Kick).
+//   ANALOG (0x10 and 0x18-0x1B; behind ANALOG, the M2_2A_RALLY switch) --
+//     Daytona's m2_cab_inputs (steering from the left stick / paddle / d-pad,
+//     pedals from the right stick's Y or two buttons), its four OSD lines:
+//     J  4 Coin 5 Start 6 Test 7 Service 8 View 9 Hand Brake 10 Accel
+//        11 Brake 12 Gear Up 13 Gear Down
+//     IN0 0 coin1 2 test 3 service 5 View (VR) 6 start1 -- every game here
+//     0x10 Sega Rally (srallyc): IN1 6:4 the shifter (daytona_gearbox_r's
+//          {0,2,1,6,5}, ACTIVE HIGH), IN2 the hand brake (0x00 / 0xFF);
+//          AN0 steering, AN1 accelerator, AN2 brake. Unchanged (R862).
+//     0x18 Sky Target (skytargt): IN1 4 Machine Gun (J12) 5 Missile (J13);
+//          AN0 STICKY (the left stick's Y, 0x80 + y), AN1 unbound (0xFF),
+//          AN2 STICKX = the steering REVERSED (PORT_REVERSE: 0xFF - v).
+//     0x19 Manx TT, 0x1A Motor Raid (manxtt port set): IN1 4 Shift Up /
+//          Punch (J12) 5 Shift Down / Kick (J13); AN0 THROTTLE (the
+//          accelerator), AN1 BRAKE, AN2 BANK = the steering reversed.
+//     IN1 / IN2's other bits 1 (unused / unknown, active low).
+//   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
+//     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
 //     IN0 model2's; IN1 0 P1 trigger 1 P2 trigger, rest unused; IN2 0xFF
-//   Zero Gunner (zeroguna). model2crx with IN1 / IN2 0x0c unused.
-//     J  4 Button 1 5 Button 2 6 Start 7 Coin 8 Test 9 Service
-//     IN0 model2's; IN1 0 b1 1 b2 4 down 5 up 6 right 7 left; IN2 P2
-//     SW  SW3, 0xFF (bit 0 low would enable the debug menu)
-// Analog channels the game has none on read 0xFF (MAME's unbound default).
+// Analog channels a profile does not drive read 0xFF (MAME's unbound value).
 
 `timescale 1ns/1ps
 
 module m2_2a_inputs #(
   parameter int unsigned SYS_MHZ = 80,
-  parameter bit          RALLY   = 1'b1,  // Sega Rally's analog block (M2_2A_RALLY)
+  parameter bit          ANALOG  = 1'b1,  // the analog profile's block (M2_2A_RALLY)
   parameter bit          GUN     = 1'b0   // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
-  input  logic        is_srally,    // game ID 0x10
-  input  logic        is_vcop2,     // 0x11
-  input  logic        is_zerogun,   // 0x12
+  input  logic  [6:0] game,         // R887: the MRA's game ID (index 4, bits 6:0)
   input  logic [31:0] joystick_0,
   input  logic [31:0] joystick_1,
   input  logic [15:0] joy_analog,   // left stick (registered by the caller)
@@ -86,10 +85,16 @@ module m2_2a_inputs #(
   wire [31:0] j0 = joystick_0;
   wire [31:0] j1 = joystick_1;
 
-  // R879: VF2 and Zero Gunner have digital sticks; a pad's left analogue
-  // stick drives them too, past a dead zone of 48 of 127 either way
-  // (MiSTer's analogue word: X in 7:0, Y in 15:8, signed; directions in
-  // joystick 3:0 are up, down, left, right).
+  // ---- the profile (quasi-static: the game ID is set once per load)
+  wire p_gun    = (game == 7'h11);
+  wire p_rally  = (game == 7'h10);
+  wire p_an2    = (game[6:2] == 5'b00110);          // 0x18-0x1B
+  wire p_sky    = p_an2 & (game[1:0] == 2'b00);     // 0x18
+  // (Model2.sv shows the analog OSD lines for 0x10 and 0x18-0x1B alike)
+
+  // R879: a pad's left analogue stick drives the digital directions too, past
+  // a dead zone of 48 of 127 either way (MiSTer's analogue word: X in 7:0, Y
+  // in 15:8, signed; directions in joystick 3:0 are up, down, left, right).
   function automatic logic [3:0] adir(input logic [15:0] a);
     logic signed [7:0] x, y;
     x = a[7:0]; y = a[15:8];
@@ -98,25 +103,20 @@ module m2_2a_inputs #(
   wire [31:0] d0 = {j0[31:4], j0[3:0] | adir(joy_analog)};
   wire [31:0] d1 = {j1[31:4], j1[3:0] | adir(joy_analog_1)};
 
-  // ---- VF2, exactly R852's expressions (Model2.sv at 9fb631d)
-  wire [7:0] vf_in0 = ~{2'b00, j1[7], j0[7], j0[10], j0[9], j1[8], j0[8]};
-  wire [7:0] vf_in1 = ~{d0[1], d0[0], d0[3], d0[2], 1'b0, j0[6], j0[5], j0[4]};
-  wire [7:0] vf_in2 = ~{d1[1], d1[0], d1[3], d1[2], 1'b0, j1[6], j1[5], j1[4]};
+  // ---- DIGITAL: exactly R852's VF2 expressions
+  wire [7:0] dg_in0 = ~{2'b00, j1[7], j0[7], j0[10], j0[9], j1[8], j0[8]};
+  wire [7:0] dg_in1 = ~{d0[1], d0[0], d0[3], d0[2], 1'b0, j0[6], j0[5], j0[4]};
+  wire [7:0] dg_in2 = ~{d1[1], d1[0], d1[3], d1[2], 1'b0, j1[6], j1[5], j1[4]};
 
-  // ---- Zero Gunner: the stick, two buttons
-  wire [7:0] zg_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
-  wire [7:0] zg_in1 = ~{d0[1], d0[0], d0[3], d0[2], 2'b00, j0[5], j0[4]};
-  wire [7:0] zg_in2 = ~{d1[1], d1[0], d1[3], d1[2], 2'b00, j1[5], j1[4]};
+  // ---- GUN: Virtua Cop 2 (R870)
+  wire [7:0] gn_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
+  wire [7:0] gn_in1 = GUN ? gun_in1 : ~{6'b000000, j1[4], j0[4]};
 
-  // ---- Virtua Cop 2: the triggers (both on IN1), starts and coins; R870
-  // Virtua Cop's button order (m2_vcop_guns' in0 is this same map)
-  wire [7:0] v2_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
-  wire [7:0] v2_in1 = GUN ? gun_in1 : ~{6'b000000, j1[4], j0[4]};
-
-  // ---- Sega Rally
-  wire [7:0] sr_in0 = ~{1'b0, j0[5], j0[8], 1'b0, j0[7], j0[6], 1'b0, j0[4]};
+  // ---- ANALOG
+  wire [7:0] an_in0 = ~{1'b0, j0[5], j0[8], 1'b0, j0[7], j0[6], 1'b0, j0[4]};
   wire [7:0] cab_in0, cab_in1, cab_steer, cab_accel, cab_brake;
-  generate if (RALLY) begin : g_rally
+  wire [7:0] sky_y;
+  generate if (ANALOG) begin : g_analog
     // Daytona's block: its IN1 carries the shifter at 6:4 (daytona_gearbox_r,
     // Gear Up / Down on J 12 / 13) and its ADC values are 0x20..0xE0.
     m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab (
@@ -126,21 +126,29 @@ module m2_2a_inputs #(
       .st_pedswap(st_pedswap), .st_ssens(st_ssens), .st_ssm(st_ssm), .st_rsteer(st_rsteer),
       .in0(cab_in0), .in1(cab_in1), .steer(cab_steer), .accel(cab_accel), .brake(cab_brake)
     );
-  end else begin : g_norally
+    // Sky Target's Y: the left stick's Y as offset binary, 0x80 + y (MAME's
+    // STICKY 0x00..0xFF, up low -- as MiSTer's Y). No logic: the sign bit
+    // inverted. A stick only (the d-pad steers X through the block's ramp).
+    assign sky_y = {~joy_analog[15], joy_analog[14:8]};
+  end else begin : g_noanalog
     assign cab_in0 = 8'hFF; assign cab_in1 = 8'h8F; assign cab_steer = 8'h80;
-    assign cab_accel = 8'h20; assign cab_brake = 8'h20;
+    assign cab_accel = 8'h20; assign cab_brake = 8'h20; assign sky_y = 8'h80;
   end endgenerate
-  wire [7:0] sr_in1 = {1'b1, cab_in1[6:4], 4'b1111};
-  wire [7:0] sr_in2 = j0[9] ? 8'hFF : 8'h00;
+  wire [7:0] an_in1 = p_rally ? {1'b1, cab_in1[6:4], 4'b1111}
+                              : {2'b11, ~j0[13], ~j0[12], 4'b1111};
+  wire [7:0] an_in2 = (p_rally & j0[9]) ? 8'hFF : p_rally ? 8'h00 : 8'hFF;
+  wire [7:0] steer_rev = ~cab_steer;                  // PORT_REVERSE: 0xFF - v
 
   always_ff @(posedge clk) begin
-    if (is_srally) begin
-      in0 <= sr_in0; in1 <= sr_in1; in2 <= sr_in2;
-      an0 <= cab_steer; an1 <= cab_accel; an2 <= cab_brake;
+    if (p_rally | p_an2) begin
+      in0 <= an_in0; in1 <= an_in1; in2 <= an_in2;
+      an0 <= p_rally ? cab_steer : p_sky ? sky_y : cab_accel;
+      an1 <= p_rally ? cab_accel : p_sky ? 8'hFF : cab_brake;
+      an2 <= p_rally ? cab_brake : steer_rev;
     end else begin
-      in0 <= is_vcop2 ? v2_in0 : is_zerogun ? zg_in0 : vf_in0;
-      in1 <= is_vcop2 ? v2_in1 : is_zerogun ? zg_in1 : vf_in1;
-      in2 <= is_vcop2 ? 8'hFF  : is_zerogun ? zg_in2 : vf_in2;
+      in0 <= p_gun ? gn_in0 : dg_in0;
+      in1 <= p_gun ? gn_in1 : dg_in1;
+      in2 <= p_gun ? 8'hFF  : dg_in2;
       an0 <= 8'hFF; an1 <= 8'hFF; an2 <= 8'hFF;
     end
   end

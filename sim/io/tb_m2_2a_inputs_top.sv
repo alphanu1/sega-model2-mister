@@ -8,13 +8,15 @@
 //     and shifter -- c_in1, c_steer, c_accel, c_brake.
 // tb_m2_2a_inputs.cpp compares VF2 bit for bit and checks Sega Rally, Virtua
 // Cop 2 and Zero Gunner against models written from MAME's INPUT_PORTS.
+// R887: the module now takes the game ID and picks a profile (DIGITAL,
+// ANALOG, GUN); the bench drives IDs, the new games' included.
 
 `timescale 1ns/1ps
 
 module tb_m2_2a_inputs_top (
   input  logic        clk,
   input  logic        rst_n,
-  input  logic        is_srally, is_vcop2, is_zerogun,
+  input  logic  [6:0] game,           // R887: the game ID
   input  logic [31:0] joystick_0,
   input  logic [31:0] joystick_1,
   input  logic [15:0] joy_analog,
@@ -32,8 +34,8 @@ module tb_m2_2a_inputs_top (
   output logic  [7:0] c_in1, output logic [7:0] c_steer,
   output logic  [7:0] c_accel, output logic [7:0] c_brake
 );
-  m2_2a_inputs #(.SYS_MHZ(80), .RALLY(1'b1)) dut (
-    .clk, .rst_n, .is_srally, .is_vcop2, .is_zerogun, .joystick_0, .joystick_1,
+  m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1)) dut (
+    .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
     .gun_in1(8'hFF), .in0, .in1, .in2, .an0, .an1, .an2);
 

@@ -2597,15 +2597,29 @@ wire is_desert = (game_id[6:0] == 7'd2);
 wire is_srally  = M2A && (game_id[6:0] == 7'h10);
 wire is_vcop2   = M2A && (game_id[6:0] == 7'h11);
 wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
+// R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
+// are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
+// ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
+//   0x13 Hanguk Pro Yagu 98 (hpyagu98)  0x14 Dynamite Cop (dynamcop)
+//   0x15 Pilot Kids (pltkidsa)          0x16 Dead or Alive (doaab)
+//   0x18 Sky Target (skytargt)          0x19 Manx TT (manxtt)
+//   0x1A Motor Raid (motoraid)
+// (only those with an MRA are loadable; the others are reserved, R887.)
+wire is_2ax     = M2A && (game_id[6:4] == 3'b001);    // 0x10-0x1F
+wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copro data
 // R726 / R835: program 0x40000-0x7FFFF from GAME_POLYX. R852: the 2A board
 // reads its 512 KB slot linearly; R862: and 0x80000-0x1FFFFF from the
-// extension (GAME_PROGX_2A) for the three games whose program is larger.
-wire prog_ext  = M2A ? (is_srally | is_vcop2 | is_zerogun) : (is_vcop | is_desert);
-assign a2_rally_menu = RALLY2A & is_srally;
+// extension (GAME_PROGX_2A) for the games whose program is larger. R887: for
+// every 2A game past VF2 -- an MRA with a 512 KB program carries the slot as
+// zeros (MAME's region reads 0 there), so the decode needs no list.
+wire prog_ext  = M2A ? is_2ax : (is_vcop | is_desert);
+assign a2_rally_menu = RALLY2A & (is_srally | is_2an);   // R887: the analog profile's lines
 // R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
 // other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
+// R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
+// same slot).
 logic a2_copro_rom;
-always_ff @(posedge clk_sys) a2_copro_rom <= is_srally;
+always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an;
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -2654,7 +2668,7 @@ wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for te
 logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
-                                           | (FPU2A & (is_srally | is_vcop2 | is_zerogun))};
+                                           | (FPU2A & is_2ax)};   // R887: every 2A game past VF2
 i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A)) u_i960 (   // R869: F2A
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
@@ -6031,9 +6045,9 @@ end else begin : g_noioboard
 		// in each MRA's <buttons names> order; VF2's map exactly as it was
 		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
 		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2;
-		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .RALLY(RALLY2A), .GUN(VCOP2GUN)) u_2a_inputs (
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN)) u_2a_inputs (
 			.clk(clk_sys), .rst_n(cpu_rst_n),
-			.is_srally(is_srally), .is_vcop2(is_vcop2), .is_zerogun(is_zerogun),
+			.game(M2A ? game_id[6:0] : 7'd0),   // R887: the profile from the game ID
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
 			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .joy_analog_1(joy_analog_1_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
