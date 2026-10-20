@@ -35814,3 +35814,18 @@ updates (texture RAM written by the i960) not reaching what the renderer
 samples -- a stale cache or copy. The 2A branch's Virtua Cop 2 shows no
 bullets at all (model2a R889); whatever that finds should be checked here.
 
+**R901 -- TO INVESTIGATE: THE i960'S WAIT STATES (0x00E00000).** Ben asked
+whether the core runs the i960 with the board's wait states. It does not: the
+game's writes to the system controller's CPU-control block (0x00E00000 -
+0x00E00037, MAME: ".ram(); // CPU control (wait-states)") are dropped and the
+block reads 0 (m2_cpu_bridge routes 0x00800000-0x00FFFFFF to T_IO; Model2.sv's
+I/O read mux has no case). Our i960's per-access timing comes from its 40 MHz
+clock, 8 KB I-cache and SDRAM latency instead -- faster than the board's 25 MHz
+on cached code and fast registers, slower on SDRAM data misses under load.
+MAME stores the values and ignores them; its notes suspect srallyc's start
+grid depends on the CPU's pace. Future work, in order: the read-back (as MAME,
+a few ALM, cheap insurance against an R896-style read-modify-write), the block's
+format from what the games write, then per-region minimum access times where
+we are faster than the board. Wait states only slow a CPU: they are not the
+cause of Sega Rally's slowdowns (R888).
+

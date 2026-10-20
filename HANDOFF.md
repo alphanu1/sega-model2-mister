@@ -1,5 +1,22 @@
 # Handoff
 
+## FUTURE ENHANCEMENT (investigate): the i960's wait states
+
+The board's system controller has a CPU-control block at 0x00E00000-0x00E00037
+("CPU control (wait-states)" in MAME's map) that each game programs at boot:
+the extra bus cycles per address region. They change only how long each i960
+access takes, not what it computes. MAME maps the block as plain RAM (stored,
+read back, no effect); this core drops the writes and reads 0 (T_IO, no case
+in the I/O read mux). MAME's own notes suspect Sega Rally's starting-grid car
+placement depends on the CPU's exact pace ("may need wait state emulation").
+To investigate, in order: (1) what each game writes there and whether any
+reads it back (a read-back of 0 can steer a game, as R896's render mode did
+for Manx TT) -- a read-back like MAME's is a few ALM; (2) the block's format
+(undocumented); (3) per-region minimum access times on our bus where our
+i960 (40 MHz, 8 KB I-cache) is faster than the board's 25 MHz with its wait
+states -- padding can only slow accesses, so it cannot cure slowdowns, which
+come from SDRAM waits longer than the board's.
+
 ## 2026-10-20: OPEN BUG, TO BE FIXED HERE -- Virtua Cop's ammo display never updates (R890)
 
 Ben, on the Model 2 core: Virtua Cop's bullet display (the HUD's bullet
