@@ -897,6 +897,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_2a_snd_stub.sv
 # bare filename, found on the search path like fx68k's microcode.
 set_global_assignment -name SEARCH_PATH rtl/sound/scsp
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_2a_sound.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_volume.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp_regs.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/scsp/m2_scsp_level.sv

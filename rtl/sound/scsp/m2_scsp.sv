@@ -38,6 +38,11 @@
 // is MAME's to the sample.) The 0x408 monitor is latched in the 68000's own
 // time, not the engine's (R885, below).
 //
+// THE DIRECT BOOST (R894), the one departure from MAME by choice: boost 1 / 2
+// multiplies the slots' direct sends (DISDL / DIPAN, every 2A game's voices
+// at DISDL 3, R886) by 2 / 4 before the DSP's effect return is added; the
+// DAC's clamp is the saturation. 0 is MAME's mix to the sample.
+//
 // SWITCHES (R856 / R857):
 //   FM         the ring buffer, MDL / MDXSL / MDYSL, STWINH and the 68000's
 //              access to 0x600-0x6ff (Zero Gunner's driver has an FM program)
@@ -98,6 +103,7 @@ module m2_scsp #(
   input  logic        tick44,           // one per sample drained at 44.1 kHz
   input  logic  [5:0] tph,              // the drained sample's phase, 0 at tick44 (the timers, R883)
   input  logic        cpu_tick,         // the 68000's own sample boundary (each 512 of its half-clocks): the 0x408 monitor, R885
+  input  logic  [1:0] boost,            // R894: the direct sends x 1 / 2 / 4 (0 = MAME's mix exactly); quasi-static
 
   // ---- benches
   input  logic        step_mode,        // one sample per step_go
@@ -676,7 +682,8 @@ module m2_scsp #(
         3'(MB_EGV):   mul_b <= $signed({5'd0, egv});
         3'(MB_LV):    mul_b <= $signed({3'd0, lv_q});
         3'(MB_FRAC):  mul_b <= $signed({6'd0, frac});
-        default:      mul_b <= $signed({1'b0, mvol_gain(mvol)});
+        3'(MB_MVG):   mul_b <= $signed({1'b0, mvol_gain(mvol)});
+        default:      mul_b <= $signed({8'd0, 10'(10'd64 << boost)});  // MB_BST (R894): with PSL S6, SMPL << boost
       endcase
     end
   end

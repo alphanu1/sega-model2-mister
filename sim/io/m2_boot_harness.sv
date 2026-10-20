@@ -1273,7 +1273,7 @@ module m2_boot_harness #(
         .b_req(snd_b_req), .b_addr(snd_b_addr), .b_ack(snd_b_ack), .b_dout(snd_b_dout),
         .c_req(snd_c_req), .c_addr(snd_c_addr), .c_we(snd_c_we), .c_din(snd_c_din),
         .c_ack(snd_c_ack), .c_dout(snd_c_dout),
-        .snd_l(snd_l), .snd_r(snd_r),
+        .snd_boost(2'd0), .snd_l(snd_l), .snd_r(snd_r),
         .dbg_addr(snd_addr), .dbg_cycles(snd_cycles), .dbg_samples(snd_samples), .dbg_under(snd_under),
         .dbg_scsp_we(snd_wr), .dbg_scsp_a(snd_wa), .dbg_scsp_d(snd_wd), .dbg_scsp_be()
       );

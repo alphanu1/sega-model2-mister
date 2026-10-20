@@ -93,6 +93,9 @@ int main(int argc, char **argv) {
 	if (getenv("LAT_LO")) lat_lo = atoi(getenv("LAT_LO"));
 	if (getenv("LAT_HI")) lat_hi = atoi(getenv("LAT_HI"));
 	if (getenv("SCSP_SEED")) rng_s = strtoul(getenv("SCSP_SEED"), nullptr, 0);
+	// R894: SCSP_BOOST=<0..3> drives the Direct boost; the RTL's raw mix is then
+	// checked against the reference's direct sends x 2^boost plus its effect return
+	const int BOOST = getenv("SCSP_BOOST") ? atoi(getenv("SCSP_BOOST")) : 0;
 
 	static Tables T;
 	if (FILE *h = fopen("scsp_lfonoise.hex", "r")) {
@@ -126,7 +129,7 @@ int main(int argc, char **argv) {
 
 	t = new Vm2_scsp;
 	t->rst_n = 0; t->step_mode = 1; t->step_go = 0; t->out_ready = 0; t->tick44 = 0; t->cpu_tick = 0;
-	t->cpu_req = 0; t->midi_valid = 0; t->snp = 0;
+	t->cpu_req = 0; t->midi_valid = 0; t->snp = 0; t->boost = BOOST & 3;
 	for (int i = 0; i < 4; i++) tick();
 	t->rst_n = 1;
 	for (int i = 0; i < 4; i++) tick();
@@ -208,6 +211,10 @@ int main(int argc, char **argv) {
 		}
 		s32 rl, rr; R.sample(rl, rr);
 		R.tick();
+		if (BOOST) {   // (the direct sum is rl - efx_l; MAME's own mix stays in mo)
+			rl = (s32)((int64_t)(rl - R.efx_l) * (1 << BOOST)) + R.efx_l;
+			rr = (s32)((int64_t)(rr - R.efx_r) * (1 << BOOST)) + R.efx_r;
+		}
 		if (getenv("DREF")) {   // DREF=<slot> DREF_FROM / DREF_TO: the reference's slot, after the sample
 			static int ds = atoi(getenv("DREF"));
 			static uint64_t d0 = getenv("DREF_FROM") ? strtoull(getenv("DREF_FROM"), nullptr, 0) : 0, d1 = getenv("DREF_TO") ? strtoull(getenv("DREF_TO"), nullptr, 0) : ~0ull;
@@ -255,6 +262,7 @@ int main(int argc, char **argv) {
 		       (unsigned long long)ipl_checks, (unsigned long long)ipl_bad, (unsigned long long)ipl_mame, (unsigned long long)rd_mame);
 		bad += rd_bad + mo_bad + ipl_bad;
 	}
+	if (BOOST) printf("  Direct boost %d: the reference is its direct sends x %d plus its effect return\n", BOOST, 1 << BOOST);
 	printf("tb_m2_scsp %s: %llu samples (%.1f s), %llu non-zero; %llu differ from the reference, %llu from MAME's mix (first %lld)\n",
 		cap, (unsigned long long)N, N / 44100.0, (unsigned long long)nz, (unsigned long long)bad, (unsigned long long)bad_mame, (long long)first_bad);
 	printf("  slot samples checked %llu, wrong %llu; engine clocks a sample: mean %.0f, max %llu (budget at 80 MHz: 1,814)\n",

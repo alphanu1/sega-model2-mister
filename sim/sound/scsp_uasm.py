@@ -54,7 +54,7 @@ A = dict(RA=0, Q=1, ST=2, CSH=3, PSL=4, P2=5, RING=6, EFQ=7)
 B = dict(RB=0, IMM=1, Q=2, SA=3, SQ12=4, LFOI=5, RATE=6, P1=7)
 PSL = dict(S6=0, S12=1, S16=2, FM=3)
 MA = dict(RA=0, Q=1, PSL=2, FNSX=3)
-MB = dict(POW2P=0, POW2F=1, TBL4=2, EGV=3, LV=4, FRAC=5, MVG=6)
+MB = dict(POW2P=0, POW2F=1, TBL4=2, EGV=3, LV=4, FRAC=5, MVG=6, BST=7)
 FSET = dict(NONE=0, F1=1, F2=2, F3=3, F4=4, KBREL=5)
 LATA = dict(NONE=0, W9=1, W4=2, W5=3, W6=4, W10=5)
 LATB = dict(NONE=0, W0=1, W7=2)
@@ -161,6 +161,14 @@ def sample_head():
         (None, m(flow='WAIT', bc='DSPIDLE')),
         (None, m(s2='DSPGO')),
         (None, m(s2='ICLR')),
+        # R894: the direct sends' sum (the slots' DISDL / DIPAN, all of SMPL /
+        # SMPR so far) x 1 / 2 / 4 -- the OSD's Direct boost -- before the
+        # effect returns join it; while the DSP runs, so it costs no time.
+        # BST is 64 << boost and PSL S6 takes P[37:6]: Off is SMPL exactly.
+        ('BOOST', m(ra='SMPL', mul=('RA', 'BST', 'bl'))),
+        (None, m(ra='SMPR', mul=('RA', 'BST', 'br'))),
+        (None, m(op='PASSA', a='PSL', psl='S6', P='bl', rd='SMPL')),
+        (None, m(op='PASSA', a='PSL', psl='S6', P='br', rd='SMPR')),
         (None, m(flow='WAIT', bc='DSPIDLE')),
         # the effect returns, i = 0..15 (ef_idx follows i; EFREG[i] two clocks after it moves)
         ('EFF', m(op='PASSA', a='EFQ')),
@@ -304,7 +312,7 @@ for i, mi in enumerate(rom):
         raise SystemExit('microinstruction %d: DAC needs a = RA' % i)
 
 nerr = sum(check(n, s) for n, s in paths.items())
-nerr += check('head', [mi for _, mi in sample_head()][8:])     # from the effect returns on
+nerr += check('head', [mi for _, mi in sample_head()][7:])     # from the boost (R894) on
 nerr += check('sweep', [mi for _, mi in sweep()][6:])
 
 # ===================================================================== encode

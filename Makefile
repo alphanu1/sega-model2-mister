@@ -2575,6 +2575,13 @@ distclean: clean
 SCSP_DIR  := rtl/sound/scsp
 SCSP_VFL  := -Wall -Wno-DECLFILENAME -I$(SCSP_DIR) -Isim/sound -CFLAGS "-O2 -std=c++17 -I$(CURDIR)/sim/sound"
 
+# R894: the 2A build's OSD volume (to 400%, clamped): every input at every code
+.PHONY: test_m2_volume
+test_m2_volume:
+	@echo "== test m2_volume (every 16-bit input x 16 codes: exact, clamped, R829's stage at <= 100%)"
+	@mkdir -p obj_m2_volume && iverilog -g2012 -o obj_m2_volume/tb rtl/sound/m2_volume.sv sim/sound/tb_m2_volume.sv \
+	  && vvp -n obj_m2_volume/tb | grep -v finish
+
 .PHONY: test_m2_scsp_level
 test_m2_scsp_level: obj_scsp_level/Vm2_scsp_level
 	@echo "== test m2_scsp_level (the level word against MAME's 64 K-entry table, every encoding)"

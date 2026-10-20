@@ -82,6 +82,7 @@ module m2_2a_sound #(
   input  logic [63:0] c_dout,
 
   // ---- the sound
+  input  logic  [1:0] snd_boost,         // R894: the SCSP's direct sends x 1 / 2 / 4 (0 = MAME's mix); quasi-static
   output logic signed [15:0] snd_l,
   output logic signed [15:0] snd_r,
 
@@ -254,7 +255,7 @@ module m2_2a_sound #(
     .dm_req(dm_req), .dm_we(dm_we), .dm_addr(dm_addr), .dm_wdata(dm_wdata), .dm_ack(c_ack), .dm_data(c_dout),
     .snp(snp), .snp_addr(snp_a),
     .out_ready(o_ready), .out_valid(o_valid), .out_l_raw(), .out_r_raw(), .out_l(o_l), .out_r(o_r),
-    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .cpu_tick(cpu_tick), .step_mode(1'b0), .step_go(1'b0), .quiet(),
+    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .cpu_tick(cpu_tick), .boost(snd_boost), .step_mode(1'b0), .step_go(1'b0), .quiet(),
     .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss(),
     .dbg_mvol(dbg_mvol)
   );

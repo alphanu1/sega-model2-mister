@@ -371,7 +371,16 @@ localparam CONF_STR = {
 	"O[33:32],Gamma,MAME,Off,Mild;",
 	// R829: Volume, 80% by default (Ben). Index 0 is the default, so the list
 	// runs 80, 90, 100, then wraps through 0..70 -- one press steps 10%.
+`ifdef M2_2A
+	// R894: and 150, 200, 300, 400% in the codes after 70% (every saved
+	// setting keeps its meaning), saturating, never wrapping. Then Direct
+	// boost: the SCSP's direct sends (every 2A voice, at DISDL 3 -- R886)
+	// x2 / x4 before the DSP's return; Off, the default, is MAME's mix.
+	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%,150%,200%,300%,400%;",
+	"O[65:64],Direct boost,Off,+6 dB,+12 dB;",
+`else
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
+`endif
 	// Which half of the right stick's Y is the throttle. Axis polarity is not
 	// standardised across pads, so this is a setting rather than a rebuild.
 `ifndef M2_2A
@@ -3188,6 +3197,15 @@ wire signed [15:0] snd_l, snd_r;
 // clk_sys like every other option here.
 reg  [3:0] vol_s1, vol_s2, vol_s3;
 always_ff @(posedge clk_sys) begin vol_s1 <= status[49:46]; vol_s2 <= vol_s1; vol_s3 <= vol_s2; end
+`ifdef M2_2A
+// R894: THE 2A BUILD GOES ABOVE 100% -- codes 11-14 are 150, 200, 300, 400%
+// (codes 0-10 unchanged), clamped to the 16-bit range, never wrapped; at
+// 100% and below the output is the stage below's bit for bit (m2_volume).
+m2_volume u_vol (.clk(clk_sys), .code(vol_s3), .in_l(snd_l), .in_r(snd_r), .out_l(vol_l), .out_r(vol_r));
+// R894: the OSD's Direct boost into clk_sys like the volume (m2_2a_sound)
+reg  [1:0] boost_s1, boost_s2, snd_boost;
+always_ff @(posedge clk_sys) begin boost_s1 <= status[65:64]; boost_s2 <= boost_s1; snd_boost <= boost_s2; end
+`else
 reg  [8:0] vol_gain;
 always_comb begin
 	case (vol_s3)
@@ -3208,6 +3226,8 @@ end
 (* multstyle = "dsp" *) wire signed [25:0] vol_pl = snd_l * $signed({1'b0, vol_gain});
 (* multstyle = "dsp" *) wire signed [25:0] vol_pr = snd_r * $signed({1'b0, vol_gain});
 always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8]; end
+wire [1:0] snd_boost = 2'd0;
+`endif
 
 // Byte out of the burst: word by [2:1], byte within it by [0].
 // The byte select moved INTO m2_pcm_fetch with the burst, and doing it here as
@@ -3284,7 +3304,7 @@ end else if (SND2A) begin : g_2asnd
 		.b_req(s2a_b_req), .b_addr(s2a_b_addr), .b_ack(p_ack[6]), .b_dout(p_dout[6]),
 		.c_req(s2a_c_req), .c_addr(s2a_c_addr), .c_we(s2a_c_we), .c_din(s2a_c_din),
 		.c_ack(p_ack[7]), .c_dout(p_dout[7]),
-		.snd_l(snd_l), .snd_r(snd_r),
+		.snd_boost(snd_boost), .snd_l(snd_l), .snd_r(snd_r),   // R894
 		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
 		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
 		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418),
