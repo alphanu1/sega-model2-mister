@@ -53,6 +53,7 @@ ROM sets: MAME 0.289.
 | Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays, with wheel, pedals and gears. **Slows down** in busy scenes |
 | Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick. **No ammo display** |
 | Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
+| Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module, and the next 2A core** (not `Model2A_20261020.rbf`). Its protection check is patched out by the MRA |
 
 ### Known bugs
 
@@ -105,7 +106,6 @@ once they have been played.
 | Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | 128 MB | MRA `Hanguk Pro Yagu 98.mra`, which loads the factory settings MAME ships in the zip (`hpyagu98_nvram`, `hpyagu98_backup`); untested on a board |
 | Sky Target | `skytargt.zip` | `skytargt` | 128 MB | MRA `Sky Target.mra`; untested on a board |
 | Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | 128 MB | MRA `Dynamite Cop (Export, Model 2A).mra`, its 315-5881 checks patched out; untested on a board |
-| Pilot Kids (Model 2A) | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | 128 MB | MRA `Pilot Kids (Model 2A).mra`, its 315-5881 check patched out; untested on a board |
 | Manx TT Superbike (DX/Twin, Revision D) | `manxtt.zip` | `manxtt` | 64 MB | Being tested now |
 | Motor Raid (Twin) | `motoraid.zip` | `motoraid` | 128 MB | MRA `Motor Raid - Twin.mra`; untested on a board. The Twin/DX set (`motoraiddx`) is not supported |
 | Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | 128 MB | MRA `Dead or Alive (Model 2A).mra`, its protection check patched out; untested on a board |
