@@ -21,6 +21,13 @@
 //   SPLIT_RAMFILL=<w>  unwritten sound RAM (default 0xffff, as the bench)
 //   SPLIT_OUT=<file>   the reference's mix, int32 L / R a sample
 //   SPLIT_SHOW=<n>     how many differences to print (default 12)
+//   SPLIT_CLS=<file>   per sample, int32 left: the direct sends of the slots whose
+//                      word 9 [15:8] is SPLIT_SFX (default 0x51: VF2's effects), of
+//                      those whose is SPLIT_DRUM (0x53: its drums), of the rest, and
+//                      the effect (DSP) return -- the mix taken apart (R886)
+//   SPLIT_CAP=<dir> [SPLIT_S=<s>]  MAME's capture itself (regs.bin, ramw.bin,
+//                      out.bin) in place of a trace: every access before slot 0
+//                      of its sample (scsp_cap2tr.py's order), out.bin the samples
 //   lfonoise: scsp_lfonoise.hex in the working directory (MAME's noise)
 //
 // Also counted: 0x408 reads whose latch was made for another slot than MSLC
@@ -117,12 +124,24 @@ static void memhook(void *, int k, u32 a) {
 	wsince[w] = 0;
 }
 
+static FILE *fcls = nullptr;
+static unsigned cls_sfx = 0x51, cls_drum = 0x53;
+static void cls_out() {
+	if (!fcls) return;
+	int32_t c[4] = {0, 0, 0, R->efx_l};
+	for (int sl = 0; sl < 32; sl++) {
+		const unsigned h = R->S[sl].data[9] >> 8;
+		c[h == cls_sfx ? 0 : h == cls_drum ? 1 : 2] += R->slot_dl[sl];
+	}
+	fwrite(c, sizeof c, 1, fcls);
+}
+
 static void hook(void *, int pos) {
 	for (const Ev &e : evs) if (place(e) == pos) apply(e);
 }
 
 int main(int argc, char **argv) {
-	if (argc < 2) { fprintf(stderr, "usage: scsp_split <trace>\n"); return 2; }
+	if (argc < 2 && !getenv("SPLIT_CAP")) { fprintf(stderr, "usage: scsp_split <trace>\n"); return 2; }
 	const char *mode = getenv("SPLIT_MODE");
 	whole = mode && !strcmp(mode, "whole");
 	const char *mid = getenv("SPLIT_MID");
@@ -143,9 +162,43 @@ int main(int argc, char **argv) {
 	R->slot_hook = hook;
 	R->mem_hook = memhook;
 
+	if (getenv("SPLIT_CLS")) fcls = fopen(getenv("SPLIT_CLS"), "wb");
+	if (getenv("SPLIT_SFX")) cls_sfx = unsigned(strtoul(getenv("SPLIT_SFX"), nullptr, 0));
+	if (getenv("SPLIT_DRUM")) cls_drum = unsigned(strtoul(getenv("SPLIT_DRUM"), nullptr, 0));
+	FILE *fo = getenv("SPLIT_OUT") ? fopen(getenv("SPLIT_OUT"), "wb") : nullptr;
+	if (const char *cd = getenv("SPLIT_CAP")) {   // MAME's capture, its own order
+		const std::string d = cd;
+		const uint64_t N = uint64_t((getenv("SPLIT_S") ? atof(getenv("SPLIT_S")) : 10.0) * 44100);
+		FILE *fr = fopen((d + "/regs.bin").c_str(), "rb"), *fm = fopen((d + "/ramw.bin").c_str(), "rb"), *fx = fopen((d + "/out.bin").c_str(), "rb");
+		if (!fr || !fm || !fx) { fprintf(stderr, "no capture in %s\n", cd); return 2; }
+		struct RR { uint32_t n; uint16_t off, data, mask, pad; } rr; struct MW { uint32_t n, a, dm; } mw;
+		bool hr = fread(&rr, sizeof rr, 1, fr) == 1, hm = fread(&mw, sizeof mw, 1, fm) == 1;
+		uint64_t bad = 0, nz = 0;
+		for (uint64_t n = 0; n < N; n++) {
+			cur_n = n;
+			for (; hr && rr.n <= n; hr = fread(&rr, sizeof rr, 1, fr) == 1) {
+				if (rr.pad) continue;
+				Ev e{}; e.k = 'W'; e.a = rr.off >> 1; e.d = rr.data; e.be = ((rr.mask & 0xff00) ? 2 : 0) | ((rr.mask & 0xff) ? 1 : 0);
+				apply(e);
+			}
+			for (; hm && mw.n <= n; hm = fread(&mw, sizeof mw, 1, fm) == 1) {
+				Ev e{}; e.k = 'M'; e.a = (mw.a & 0x7fffe) >> 1; e.d = mw.dm & 0xffff; e.m = uint16_t(mw.dm >> 16);
+				apply(e);
+			}
+			s32 rl, rr2; int32_t m[2] = {0, 0};
+			R->sample(rl, rr2); R->tick();
+			cls_out();
+			if (fo) { s32 o[2] = {rl, rr2}; fwrite(o, sizeof o, 1, fo); }
+			if (fread(m, sizeof m, 1, fx) == 1 && (m[0] != rl || m[1] != rr2)) bad++;
+			if (rl || rr2) nz++;
+		}
+		if (fo) fclose(fo);
+		if (fcls) fclose(fcls);
+		printf("scsp_split capture %s: %llu samples, %llu non-zero, %llu differ from out.bin\n", cd, (unsigned long long)N, (unsigned long long)nz, (unsigned long long)bad);
+		return bad ? 1 : 0;
+	}
 	FILE *f = fopen(argv[1], "r");
 	if (!f) { fprintf(stderr, "no trace %s\n", argv[1]); return 2; }
-	FILE *fo = getenv("SPLIT_OUT") ? fopen(getenv("SPLIT_OUT"), "wb") : nullptr;
 	char line[256];
 	uint64_t samples = 0, bad = 0, nz = 0, tag_bad = 0;
 	int64_t first_bad = -1;
@@ -172,6 +225,7 @@ int main(int argc, char **argv) {
 			R->sample(rl, rr);
 			lat_used = R->latched_MSLC;
 			R->tick();
+			cls_out();
 			for (const Ev &e : evs) if (place(e) > 32) apply(e);   // (none: a write inside slot 31 counts at 32)
 			evs.clear();
 			if (fo) { s32 o[2] = {rl, rr}; fwrite(o, sizeof o, 1, fo); }
@@ -207,6 +261,7 @@ int main(int argc, char **argv) {
 		pend.push_back({n, e});
 	}
 	if (fo) fclose(fo);
+	if (fcls) fclose(fcls);
 	printf("scsp_split %s (%s%s): %llu samples (%.2f s), %llu non-zero; %llu differ from the reference (first %lld)\n",
 		argv[1], whole ? "whole: every access before slot 0" : "split: where the engine applied it",
 		whole ? "" : (mid_after ? ", mid-slot RAM writes after the slot" : ", mid-slot RAM writes before the slot"),

@@ -160,6 +160,7 @@ public:
 	u16 mcieb = 0, mcipd = 0;
 	// per-sample observation for the benches
 	s32 slot_out[32]; u8 slot_was_active[32]; s32 last_l = 0, last_r = 0;
+	s32 slot_dl[32], slot_dr[32], efx_l = 0, efx_r = 0;   // this sample's direct sends per slot, the effect return (benches, R886)
 	s32 mix_add[16];   // this sample's DSP sends, per MIXS entry (benches)
 
 	SCSP(const Tables &t, u16 *r) : T(t), ram(r) {
@@ -566,7 +567,7 @@ public:
 		for (int sl = 0; sl < 32; ++sl) {
 			if (slot_hook) slot_hook(slot_ctx, sl);
 			RBUFDST = RINGBUF + BUFPTR;
-			slot_was_active[sl] = S[sl].active; slot_out[sl] = 0;
+			slot_was_active[sl] = S[sl].active; slot_out[sl] = 0; slot_dl[sl] = slot_dr[sl] = 0;
 			if (S[sl].active) {
 				Slot *slot = S + sl;
 				s32 smp = UpdateSlot(slot);
@@ -576,13 +577,15 @@ public:
 				D.MIXS[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
 				mix_add[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
 				Enc = eff_tl | (DIPAN(slot) << 0x8) | (DISDL(slot) << 0xd);
-				smpl += (smp * T.LPANTABLE[Enc]) >> SHIFT;
-				smpr += (smp * T.RPANTABLE[Enc]) >> SHIFT;
+				slot_dl[sl] = (smp * T.LPANTABLE[Enc]) >> SHIFT; slot_dr[sl] = (smp * T.RPANTABLE[Enc]) >> SHIFT;
+				smpl += slot_dl[sl];
+				smpr += slot_dr[sl];
 			}
 			++BUFPTR; BUFPTR &= 63;
 		}
 		if (slot_hook) slot_hook(slot_ctx, 32);
 		DSP_Step();
+		const s32 dir_l = smpl, dir_r = smpr;
 		for (int i = 0; i < 16; ++i) {
 			Slot *slot = S + i;
 			if (EFSDL(slot)) {
@@ -600,6 +603,7 @@ public:
 				smpr += (D.EXTS[i] * T.RPANTABLE[Enc]) >> SHIFT;
 			}
 		}
+		efx_l = smpl - dir_l; efx_r = smpr - dir_r;
 		outl = last_l = smpl; outr = last_r = smpr;
 		// the 0x408 monitor, latched after each update (MAME sound_stream_update)
 		const Slot *m = S + latched_MSLC;
