@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-20: VF2's sound right on the board except the effects' level (R885, R886)
+
+ON THE BOARD: s1218 (d4fede8, M2_PROBE, M2_NO_2A_RALLY;
+build/Model2A_20261018_s1218_monitor.rbf, a3a6d34a...). Ben: music, drums
+and popping now right (R885: the SCSP's slot monitor latched in the 68000's
+time). Open: effects (punches, kicks) much quieter than the music (R886,
+running). Fixed and in s1218, not yet confirmed by Ben: Zero Gunner's TGP
+hang (rep rpc, R876), Sega Rally's TGP FIFO overflow (R876), the analogue
+sticks (R879). Room: 98.8% ALM, 553 / 553 M10K -- the probe (~400-500 ALM)
+comes out of a release build; block RAM is the binding resource.
+
 ## 2026-10-18: s1207 on the board -- what works, what does not (R878)
 
 ON THE BOARD: s1207 (af10f15, M2_PROBE, M2_NO_2A_RALLY; build/Model2A_20261018_s1207_all.rbf,

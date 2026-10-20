@@ -38929,3 +38929,12 @@ that read the monitor up to 7 samples ahead" -- it was not the lead and not
 the pace: it was WHEN the latch was made against the 68000's clock. R884
 item 1 ("no stale reads") was true and blind to the fault: it counted
 words read without a rewrite, not words rewritten before they were read.
+
+*R885 ON THE BOARD (s1218 = d4fede8 + M2_PROBE + M2_NO_2A_RALLY; 41,414 ALM,
+553 / 553 M10K, clk_sys -0.609 / clk_mem -0.258, the failing paths in the
+geometry and m2_span_tex -- none in the sound board): VF2's sound-RAM check
+0 wrong, the five ROM sums right (R882), 0 underruns. Ben: "Seems ok" --
+the music, the drums and the popping now right. Open: the effects are much
+quieter than the music ("in a fight you cannot really hear the punches and
+kicks"), R886.*
+
