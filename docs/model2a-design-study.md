@@ -9781,7 +9781,7 @@ the walk, the pointer that would have run off polygon RAM, the stage that
 stopped answering -- are all things MAME cannot exhibit because MAME is not a
 pipeline. The Model 1 core in `tools/model1-ref/` is a working coprocessor,
 geometry engine, walker, texture unit and rasterizer on this same device, and
-it is the oracle. `CLAUDE.md` now says so.
+it is the oracle. The project rules now say so.
 
 ---
 
@@ -9913,8 +9913,8 @@ against 1,936, with 07:4, 08:1, 09:2, 0a:2 and 0f:5 matching to the count.
 *THE METHOD IS THE FINDING.* Every previous attempt compared our CODE against
 MAME's CODE and found them to agree -- because they DO agree about what `geo_w`
 computes. What disagreed was what reached the front door. Reading the reference
-cannot show that; only running it and diffing the data can. `CLAUDE.md` already
-says Model 1 is the oracle and MAME a reference; the amendment this adds is that
+cannot show that; only running it and diffing the data can. The project rules
+already say Model 1 is the oracle and MAME a reference; the amendment this adds is that
 a reference is worth far more RUN than READ.
 
 ---
