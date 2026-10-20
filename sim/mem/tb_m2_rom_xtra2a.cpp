@@ -1,5 +1,5 @@
 // tb_m2_rom_xtra2a -- R862: m2_rom_loader's two remaps as the 2A core sets
-// them (SDR_AW 25; XTRA 0x2540000 -> word 0x1A00000, the samples; XTRA2
+// them (SDR_AW 26 since R891 -- 25 before; XTRA 0x2540000 -> word 0x1A00000, the samples; XTRA2
 // 0x2D40000 -> word 0x1300000, the extension). Below XTRA a byte lands at its
 // own word; from XTRA at XTRA_TO + (byte - XTRA) / 2; from XTRA2 at XTRA2_TO +
 // (byte - XTRA2) / 2 -- the last byte of Sega Rally's 0x32C0000 image included.

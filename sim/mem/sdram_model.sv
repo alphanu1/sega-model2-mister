@@ -89,7 +89,38 @@ module sdram_model #(
   // R881: OR A HASH OF THE WORD ADDRESS (the top 16 bits of adr x 0x9E3779B1),
   // so a word delivered from the wrong address, port or burst slot reads as a
   // different value instead of as the same zero. 0: DEFAULT_DATA, as before.
-  parameter bit DEFAULT_HASH = 1'b0
+  parameter bit DEFAULT_HASH = 1'b0,
+
+  // R891: THE MiSTer 128 MB MODULE'S WIRING AND THE CHECKS A SECOND CHIP NEEDS.
+  // All default off, so every harness built before them checks what it did.
+  //   DQM_FROM_A  the chip's DQML/DQMH are wired to A11/A12 (the 128 MB
+  //               module), not to the dqm pins -- the write mask is whatever
+  //               A[12:11] carries during the WRITE, and a READ is masked by
+  //               A[12:11] at its own edge (DQM read latency 2, CL 2)
+  //   RD_DQM      DQM masks read data two edges later, as the part does: a
+  //               masked byte comes back as its complement and is a
+  //               violation (V_RD_TRUNC -- read data lost)
+  //   CHECK_RET   a row not restored (ACTIVATE, PRECHARGE, or the REFRESH
+  //               that reaches it through the chip's own row counter) within
+  //               T_RET cycles LOSES ITS DATA -- every word of it reads as
+  //               unwritten afterwards -- and V_DECAY is flagged. 64 ms at
+  //               100 MHz is 6,400,000.
+  //   CHECK_INIT  no ACTIVATE / READ / WRITE unless the last MRS had a
+  //               PRECHARGE-all and two REFRESHes before it and a word of
+  //               BL1, sequential, CL (V_INIT, once). The LAST one: a register
+  //               file powers up as zeros, and cmd 0000 is an MRS -- the
+  //               controller's cmd presents one before its synchronous reset
+  //               lands (in simulation; on the board too, unless the register
+  //               powers up at its reset value -- not established). Harmless
+  //               either way: the bring-up's MRS follows it and is the one
+  //               that counts.
+  //   NAME        a prefix for this chip's messages
+  parameter bit DQM_FROM_A = 1'b0,
+  parameter bit RD_DQM     = 1'b0,
+  parameter bit CHECK_RET  = 1'b0,
+  parameter int unsigned T_RET = 6_400_000,
+  parameter bit CHECK_INIT = 1'b0,
+  parameter string NAME    = ""
 ) (
   input  logic                clk,
   input  logic                cke,
@@ -137,6 +168,9 @@ module sdram_model #(
   localparam int V_TMRD       = 11;
   localparam int V_DQ_FIGHT   = 12;  // both ends driving DQ
   localparam int V_RD_TRUNC   = 13;  // PRECHARGE while read data still in flight
+                                     // (R891: or read data masked by DQM)
+  localparam int V_DECAY      = 14;  // R891: a row lost its data (not restored in T_RET)
+  localparam int V_INIT       = 15;  // R891: access before the bring-up, or a bad MRS word
 
   // Command encoding, {cs_n, ras_n, cas_n, we_n}.
   localparam logic [3:0] C_NOP   = 4'b0111;
@@ -208,9 +242,51 @@ module sdram_model #(
     v_flags[code] = 1'b1;
     if (reported < MAX_REPORT) begin
       reported = reported + 1;
-      $display("SDRAM VIOLATION @%0d [%0d] %s", cyc, code, msg);
+      $display("SDRAM VIOLATION%s @%0d [%0d] %s", NAME, cyc, code, msg);
     end
   endtask
+
+  // R891: RETENTION. A row's charge is restored by ACTIVATE (and held while
+  // open, written back at PRECHARGE) and by the REFRESH that reaches it: the
+  // chip's own counter steps one row (in every bank) per REFRESH. A row with
+  // data whose last restore is more than T_RET ago has decayed: its words are
+  // deleted, so they read as unwritten, as on a part that was not refreshed.
+  localparam int unsigned NROWS = 1 << ROW_BITS;
+  longint ref_t [NROWS];                 // cycle the counter last refreshed row r
+  int unsigned ref_row;                  // the chip's refresh counter
+  longint rst_t [longint];               // {bank,row} -> last ACTIVATE / PRECHARGE
+  bit     has_dat [longint];             // {bank,row} -> holds written data
+  int unsigned decayed_rows;
+  function automatic longint rkey(input int unsigned b, input int unsigned r);
+    rkey = (longint'(b) << ROW_BITS) | longint'(r);
+  endfunction
+  task automatic decay_check(input int unsigned b, input int unsigned r);
+    longint key, last, ad;
+    key = rkey(b, r);
+    if (CHECK_RET && has_dat.exists(key)) begin
+      last = ref_t[r];
+      if (rst_t.exists(key) && rst_t[key] > last) last = rst_t[key];
+      if (cyc - last > longint'(T_RET)) begin
+        flag(V_DECAY, $sformatf("bank %0d row %0d not restored for %0d cycles -- its data is lost",
+                                b, r, cyc - last));
+        for (int unsigned c = 0; c < (1 << COL_BITS); c++) begin
+          ad = addr_of(BA_BITS'(b), ROW_BITS'(r), COL_BITS'(c));
+          if (mem.exists(ad)) mem.delete(ad);
+        end
+        has_dat.delete(key);
+        decayed_rows = decayed_rows + 1;
+      end
+    end
+  endtask
+  // R891: BRING-UP ORDER (CHECK_INIT)
+  logic   ini_pre_seen;
+  int unsigned ini_refs;
+  logic   ini_ok;
+  logic   ini_flagged;
+  string  ini_why;
+  // R891: the mask the chip sees, and its two-edge read-mask pipeline
+  wire  [1:0]          dqm_e = DQM_FROM_A ? a[12:11] : dqm;
+  logic [1:0]          dqm_p1, dqm_p0;
 
   int unsigned bi;
   initial begin
@@ -224,6 +300,10 @@ module sdram_model #(
       rd_due[bi] = -1000;
     end
     for (bi = 0; bi < CL+2; bi = bi + 1) begin rd_v[bi] = 1'b0; rd_d[bi] = '0; end
+    for (bi = 0; bi < NROWS; bi = bi + 1) ref_t[bi] = 0;   // R891
+    ref_row = 0; decayed_rows = 0;
+    ini_pre_seen = 1'b0; ini_refs = 0; ini_ok = 1'b0; ini_flagged = 1'b0; ini_why = "no MRS";
+    dqm_p1 = '0; dqm_p0 = '0;
   end
 
   int unsigned k;
@@ -247,6 +327,16 @@ module sdram_model #(
 
     dq_oe_o <= rd_v[0];
     dq_o    <= rd_d[0];
+    // R891: DQM AT A READ'S OWN EDGE MASKS ITS DATA (read latency 2 at CL 2):
+    // a masked byte is not driven, so it reads as anything -- here its
+    // complement, and it is a violation, because nothing in this controller
+    // means to mask a read.
+    dqm_p1 <= dqm_e;
+    dqm_p0 <= dqm_p1;
+    if (RD_DQM && rd_v[0] && (dqm_p0 != 2'b00)) begin
+      dq_o <= rd_d[0] ^ {{8{dqm_p0[1]}}, {8{dqm_p0[0]}}};
+      flag(V_RD_TRUNC, $sformatf("read data masked by DQM (%b)", dqm_p0));
+    end
 
     // Both ends driving the bus is a controller bug that a tri-state model
     // would hide behind an X. Name it.
@@ -276,9 +366,20 @@ module sdram_model #(
           t_mrs <= cyc;
           initialised <= 1'b1;
           t_ref <= cyc;
+          // R891: the mode word this controller relies on -- burst length 1,
+          // sequential, CAS latency CL, burst writes -- and the bring-up before it
+          ini_ok  = (a[2:0] == 3'b000) && !a[3] && (a[6:4] == 3'(CL)) && !a[9] && (ba == '0)
+                    && ini_pre_seen && (ini_refs >= 2);
+          ini_why = $sformatf("the last MRS (@%0d) had word %04x (BL1, sequential, CL%0d wanted), %0s, %0d REFRESHes",
+                              cyc, a, CL, ini_pre_seen ? "a PRECHARGE-all" : "NO PRECHARGE-all", ini_refs);
         end
 
         C_ACT: begin
+          if (CHECK_INIT && !ini_ok && !ini_flagged) begin
+            flag(V_INIT, {"ACTIVATE before the bring-up: ", ini_why}); ini_flagged = 1'b1;
+          end
+          decay_check(int'(ba), int'(a));        // R891: was it still there?
+          rst_t[rkey(int'(ba), int'(a))] = cyc;
           if (row_open[ba])
             flag(V_ACT_OPEN, $sformatf("ACTIVATE bank %0d with row %0d still open",
                                        ba, open_row[ba]));
@@ -298,6 +399,9 @@ module sdram_model #(
         end
 
         C_READ, C_WRITE: begin
+          if (CHECK_INIT && !ini_ok && !ini_flagged) begin
+            flag(V_INIT, {"READ / WRITE before the bring-up: ", ini_why}); ini_flagged = 1'b1;
+          end
           if (!row_open[ba]) begin
             flag(V_NO_ROW, $sformatf("%s bank %0d with no open row",
                                      (cmd == C_READ) ? "READ" : "WRITE", ba));
@@ -328,9 +432,11 @@ module sdram_model #(
             end else begin
               cur = mem.exists(adr) ? mem[adr] : dflt(adr);
               // DQM is active-high mask: a set bit suppresses that byte.
-              if (!dqm[0]) cur[7:0]  = dq_i[7:0];
-              if (!dqm[1]) cur[15:8] = dq_i[15:8];
+              // R891: dqm_e -- A[12:11] on a module wired that way
+              if (!dqm_e[0]) cur[7:0]  = dq_i[7:0];
+              if (!dqm_e[1]) cur[15:8] = dq_i[15:8];
               mem[adr] = cur;
+              has_dat[rkey(int'(ba), int'(open_row[ba]))] = 1'b1;   // R891
               t_wr[ba] <= cyc;
               writes_served <= writes_served + 1;
             end
@@ -362,10 +468,12 @@ module sdram_model #(
               eff_pre = t_act[ba] + longint'(T_RAS);
             row_open[ba] <= 1'b0;
             t_pre[ba]    <= eff_pre;
+            rst_t[rkey(int'(ba), int'(open_row[ba]))] = cyc;   // R891: written back
           end
         end
 
         C_PRE: begin
+          if (a[10]) begin ini_pre_seen = 1'b1; ini_refs = 0; end   // R891
           for (k = 0; k < BANKS; k = k + 1) begin
             // A10 selects precharge-all over the addressed bank.
             if (a[10] || (BA_BITS'(k) == ba)) begin
@@ -379,6 +487,7 @@ module sdram_model #(
                   flag(V_TWR, $sformatf("tWR: PRECHARGE %0d cycles after WRITE",
                                         cyc - t_wr[k]));
                 t_pre[k] <= cyc;
+                rst_t[rkey(k, int'(open_row[k]))] = cyc;   // R891: written back
               end
               row_open[k] <= 1'b0;
             end
@@ -389,6 +498,11 @@ module sdram_model #(
           for (k = 0; k < BANKS; k = k + 1)
             if (row_open[k]) flag(V_REF_OPEN, $sformatf("REFRESH with bank %0d open", k));
           t_ref <= cyc;
+          // R891: the counter's row, in every bank -- lost already if it waited too long
+          for (k = 0; k < BANKS; k = k + 1) decay_check(k, ref_row);
+          ref_t[ref_row] = cyc;
+          ref_row = (ref_row + 1) % NROWS;
+          if (ini_pre_seen) ini_refs = ini_refs + 1;
         end
 
         default: ; // NOP / deselect
@@ -398,4 +512,90 @@ module sdram_model #(
 
   /* verilator lint_on BLKSEQ */
 
+endmodule
+
+// R891: THE MiSTer 128 MB SDRAM MODULE -- two 64 MB chips (13 rows, 10
+// columns, 4 banks each) on one chip-select line: chip 0 takes cs_n, chip 1
+// its inverse; DQ shared; each chip's DQML/DQMH wired to A11/A12
+// (DQM_FROM_A). CHIPS = 1 is the 64 MB module: one chip on cs_n, and a
+// command with cs_n high -- the controller's chip-1 commands -- is a
+// deselect it ignores. Each chip is a full sdram_model, so every rule is
+// checked per chip; two chips driving DQ at once is a fight.
+module sdram_module #(
+  parameter int unsigned CHIPS    = 2,
+  parameter int unsigned ROW_BITS = 13,
+  parameter int unsigned COL_BITS = 10,
+  parameter int unsigned T_RCD = 2, T_RP = 2, T_RC = 7, T_RAS = 5, T_RRD = 2,
+  parameter int unsigned T_WR = 2, T_MRD = 2, CL = 2,
+  parameter int unsigned T_REFI = 781, REFI_SLACK = 9,
+  parameter logic [15:0] DEFAULT_DATA = '0,
+  parameter bit DEFAULT_HASH = 1'b0,
+  parameter bit DQM_FROM_A = 1'b1,
+  parameter bit RD_DQM     = 1'b1,
+  parameter bit CHECK_RET  = 1'b1,
+  parameter int unsigned T_RET = 6_400_000,
+  parameter bit CHECK_INIT = 1'b1
+) (
+  input  logic                clk, cke, cs_n, ras_n, cas_n, we_n,
+  input  logic [1:0]          ba,
+  input  logic [ROW_BITS-1:0] a,
+  input  logic [1:0]          dqm,
+  input  logic [15:0]         dq_i,
+  input  logic                dq_oe_i,
+  output logic [15:0]         dq_o,
+  output logic                dq_oe_o,
+  output int unsigned         violations,
+  output logic [15:0]         v_flags,
+  output int unsigned         reads_served,
+  output int unsigned         writes_served,
+  output int unsigned         decayed_rows      // R891: rows that lost their data
+);
+  logic [15:0] o0, o1;
+  logic        e0, e1;
+  int unsigned v0, v1, r0, r1, w0, w1;
+  logic [15:0] f0, f1;
+  int unsigned fights;
+  initial fights = 0;
+
+  sdram_model #(.ROW_BITS(ROW_BITS), .COL_BITS(COL_BITS), .T_RCD(T_RCD), .T_RP(T_RP),
+    .T_RC(T_RC), .T_RAS(T_RAS), .T_RRD(T_RRD), .T_WR(T_WR), .T_MRD(T_MRD), .CL(CL),
+    .T_REFI(T_REFI), .REFI_SLACK(REFI_SLACK), .DEFAULT_DATA(DEFAULT_DATA),
+    .DEFAULT_HASH(DEFAULT_HASH), .DQM_FROM_A(DQM_FROM_A), .RD_DQM(RD_DQM),
+    .CHECK_RET(CHECK_RET), .T_RET(T_RET), .CHECK_INIT(CHECK_INIT), .NAME(" chip0")
+  ) chip0 (
+    .clk(clk), .cke(cke), .cs_n(cs_n), .ras_n(ras_n), .cas_n(cas_n), .we_n(we_n),
+    .ba(ba), .a(a), .dqm(dqm), .dq_i(dq_i), .dq_oe_i(dq_oe_i), .dq_o(o0), .dq_oe_o(e0),
+    .violations(v0), .v_flags(f0), .reads_served(r0), .writes_served(w0)
+  );
+
+  generate if (CHIPS > 1) begin : g_chip1
+    sdram_model #(.ROW_BITS(ROW_BITS), .COL_BITS(COL_BITS), .T_RCD(T_RCD), .T_RP(T_RP),
+      .T_RC(T_RC), .T_RAS(T_RAS), .T_RRD(T_RRD), .T_WR(T_WR), .T_MRD(T_MRD), .CL(CL),
+      .T_REFI(T_REFI), .REFI_SLACK(REFI_SLACK), .DEFAULT_DATA(DEFAULT_DATA),
+      .DEFAULT_HASH(DEFAULT_HASH), .DQM_FROM_A(DQM_FROM_A), .RD_DQM(RD_DQM),
+      .CHECK_RET(CHECK_RET), .T_RET(T_RET), .CHECK_INIT(CHECK_INIT), .NAME(" chip1")
+    ) chip1 (
+      .clk(clk), .cke(cke), .cs_n(~cs_n), .ras_n(ras_n), .cas_n(cas_n), .we_n(we_n),
+      .ba(ba), .a(a), .dqm(dqm), .dq_i(dq_i), .dq_oe_i(dq_oe_i), .dq_o(o1), .dq_oe_o(e1),
+      .violations(v1), .v_flags(f1), .reads_served(r1), .writes_served(w1)
+    );
+    assign decayed_rows = chip0.decayed_rows + chip1.decayed_rows;
+  end else begin : g_one
+    assign o1 = '0; assign e1 = 1'b0; assign f1 = '0;
+    assign v1 = 0; assign r1 = 0; assign w1 = 0;
+    assign decayed_rows = chip0.decayed_rows;
+  end endgenerate
+
+  always @(posedge clk)
+    if (e0 && e1) begin
+      fights <= fights + 1;
+      if (fights < 20) $display("SDRAM VIOLATION both chips drive DQ");
+    end
+
+  assign dq_o          = e1 ? o1 : o0;
+  assign dq_oe_o       = e0 | e1;
+  assign violations    = v0 + v1 + fights;
+  assign v_flags       = f0 | f1 | ((fights != 0) ? 16'h1000 : 16'h0000);   // V_DQ_FIGHT
+  assign reads_served  = r0 + r1;
+  assign writes_served = w0 + w1;
 endmodule

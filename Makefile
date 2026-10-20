@@ -406,7 +406,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -674,8 +674,8 @@ test_m2_rom_xtra2a: obj_m2_rom_xtra2a/Vm2_rom_loader
 	@./obj_m2_rom_xtra2a/Vm2_rom_loader $(TEST_ARGS)
 
 obj_m2_rom_xtra2a/Vm2_rom_loader: rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
-	$(VBUILD) --top-module m2_rom_loader -GSDR_AW=25 -GXTRA_FROM=27\'h2540000 -GXTRA_TO=25\'h1A00000 \
-	  -GXTRA2_FROM=27\'h2D40000 -GXTRA2_TO=25\'h1300000 \
+	$(VBUILD) --top-module m2_rom_loader -GSDR_AW=26 -GXTRA_FROM=27\'h2540000 -GXTRA_TO=26\'h1A00000 \
+	  -GXTRA2_FROM=27\'h2D40000 -GXTRA2_TO=26\'h1300000 \
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM --Mdir obj_m2_rom_xtra2a -o Vm2_rom_loader -CFLAGS "-O2" \
 	  rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
 
@@ -1296,6 +1296,72 @@ test_m2_eng_ra: obj_eng_ra/Vm2_eng_ra
 obj_eng_ra/Vm2_eng_ra: rtl/mem/m2_eng_ra.sv sim/mem/tb_m2_eng_ra.cpp
 	$(VBUILD) --top-module m2_eng_ra --Mdir obj_eng_ra -o Vm2_eng_ra -CFLAGS "-O2" \
 	  rtl/mem/m2_eng_ra.sv sim/mem/tb_m2_eng_ra.cpp
+
+# R891: THE MiSTer 128 MB MODULE -- two 64 MB chips on one chip-select line (the
+# second on its inverse), each chip's DQM wired to A11/A12. m2_sdram DUAL=1 (a
+# chip-select bit above the 64 MB address, eight banks of row state, both chips
+# brought up and refreshed) and MASK_ON_A=1 (the byte mask on A12:A11), against
+# sdram_module: per-chip protocol checks, the read mask, the bring-up order,
+# and RETENTION -- a row not restored within T_RET (64 ms at 100 MHz) loses its
+# data. Model2.sv's 13 ports and 2A class, its 2A refresh interval (770), and
+# TB_RET idle cycles (> 2 x T_RET) before a read-back of rows in all 8 banks.
+#   obj_m2_sdram128d     the 128 MB module (both chips)
+#   obj_m2_sdram128d64   the same controller on a 64 MB module (one chip),
+#                        every address below 64 MB -- the four released games
+DUAL_G := -GCOL_BITS=10 -GDUAL=1 -GMASK_ON_A=1 -GMODULE=1 -GT_REFI_C=770 \
+          -GNPP=13 -GPRI=13\'b1111100011110 -GPRI_TOP=13\'b0000000001000
+.PHONY: test_m2_sdram128d
+test_m2_sdram128d: obj_m2_sdram128d/Vm2_sdram_harness obj_m2_sdram128d64/Vm2_sdram_harness
+	@echo "== test m2_sdram on the 128 MB dual-chip module (R891)"
+	./obj_m2_sdram128d/Vm2_sdram_harness
+	@echo "== ... eight-word texel reads, ports 5 and 7 writing bytes (R796, R871)"
+	M2_SDRAM_LONG=1c04 M2_SDRAM_W57=1 ./obj_m2_sdram128d/Vm2_sdram_harness
+	@echo "== the same controller on a 64 MB module, every address below 64 MB (R891)"
+	M2_SDRAM_LONG=1c04 M2_SDRAM_W57=1 ./obj_m2_sdram128d64/Vm2_sdram_harness
+
+obj_m2_sdram128d/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness $(DUAL_G) -GCHIPS=2 \
+	  -CFLAGS "-O2 -I../sim/mem -DTB_NP=13 -DTB_COL_BITS=10 -DTB_DUAL=1 -DTB_RET=14000000" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_m2_sdram128d -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+obj_m2_sdram128d64/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness $(DUAL_G) -GCHIPS=1 \
+	  -CFLAGS "-O2 -I../sim/mem -DTB_NP=13 -DTB_COL_BITS=10 -DTB_DUAL=1 -DTB_LOWER=1 -DTB_RET=14000000" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_m2_sdram128d64 -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+# R891: THE BOARD MEMORY TEST (rtl/mem/m2_memtest.sv, M2_MEMTEST) on port 1 of
+# m2_sdram against sdram_module, where the answer is known -- and against the
+# two faults the board has had, so its report is seen to name them:
+#   obj_mt        the 2A controller on the 128 MB module: every pass clean,
+#                 through three idle waits of 8, 16 and 32 M cycles (> 64 ms)
+#   obj_mt_mask   the byte mask NOT on A12:A11 (R82 / R871): mask errors, all
+#                 sixteen regions, no data errors
+#   obj_mt_alias  a 64 MB controller (no chip select) on the 128 MB module:
+#                 data errors in regions 0-7, each word holding its region+8 twin
+# The first run's records go to obj_mt/records.txt and through decode_why.py.
+MT_RTL := rtl/mem/m2_memtest.sv rtl/mem/m2_sdram.sv sim/mem/sdram_model.sv sim/mem/m2_memtest_harness.sv
+.PHONY: test_m2_memtest
+test_m2_memtest: obj_mt/Vm2_memtest_harness obj_mt_mask/Vm2_memtest_harness obj_mt_alias/Vm2_memtest_harness
+	@echo "== the board memory test on the 128 MB module (R891)"
+	MT_TICK=1000000 MT_OUT=obj_mt/records.txt ./obj_mt/Vm2_memtest_harness
+	python3 tools/decode_why.py obj_mt/records.txt
+	@echo "== ... with the byte mask off A12:A11 (R82): mask errors everywhere"
+	MT_PASSES=1 MT_EXPECT=mask ./obj_mt_mask/Vm2_memtest_harness
+	@echo "== ... with a 64 MB controller on the 128 MB module: the lower half aliased"
+	MT_PASSES=1 MT_EXPECT=alias MT_OUT=obj_mt_alias/records.txt ./obj_mt_alias/Vm2_memtest_harness
+	python3 tools/decode_why.py obj_mt_alias/records.txt
+
+obj_mt/Vm2_memtest_harness: $(MT_RTL) sim/mem/tb_m2_memtest.cpp
+	$(VBUILD) --top-module m2_memtest_harness -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_mt -o Vm2_memtest_harness -CFLAGS "-O2" $(MT_RTL) sim/mem/tb_m2_memtest.cpp
+obj_mt_mask/Vm2_memtest_harness: $(MT_RTL) sim/mem/tb_m2_memtest.cpp
+	$(VBUILD) --top-module m2_memtest_harness -GMASK_ON_A=0 -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_mt_mask -o Vm2_memtest_harness -CFLAGS "-O2" $(MT_RTL) sim/mem/tb_m2_memtest.cpp
+obj_mt_alias/Vm2_memtest_harness: $(MT_RTL) sim/mem/tb_m2_memtest.cpp
+	$(VBUILD) --top-module m2_memtest_harness -GDUAL=0 -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_mt_alias -o Vm2_memtest_harness -CFLAGS "-O2" $(MT_RTL) sim/mem/tb_m2_memtest.cpp
 
 test_m2_wr_arb: obj_wr_arb/Vm2_wr_arb
 	@echo "== test m2_wr_arb (one owner at a time on the shared write port)"

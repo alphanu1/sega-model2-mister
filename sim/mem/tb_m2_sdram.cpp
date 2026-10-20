@@ -75,7 +75,17 @@ static const bool g_w57 = std::getenv("M2_SDRAM_W57") != nullptr;   // R871
 #ifndef TB_COL_BITS
 #define TB_COL_BITS 9
 #endif
-static const uint32_t g_amask = (1u << (2 + 13 + TB_COL_BITS)) - 1u;
+// R891: TB_DUAL=1 -- the controller's chip-select bit above the address (the
+// 128 MB dual-chip module); TB_LOWER=1 keeps every address below it (a 64 MB
+// module behind a DUAL controller); TB_RET=<cycles> runs the retention phase
+// against the model's T_RET (MODULE 1 only).
+#ifndef TB_DUAL
+#define TB_DUAL 0
+#endif
+#ifndef TB_LOWER
+#define TB_LOWER 0
+#endif
+static const uint32_t g_amask = (1u << (2 + 13 + TB_COL_BITS + (TB_DUAL && !TB_LOWER ? 1 : 0))) - 1u;
 
 struct Harness {
   Vm2_sdram_harness* d;
@@ -346,15 +356,17 @@ int main(int argc, char** argv) {
 #define TB_COL_BITS 9
 #endif
   const uint32_t CB = TB_COL_BITS;
-  const uint32_t AWB = 2 + 13 + CB;             // total word-address bits
-  printf("test: geometry %u column bits -> %u MB module\n",
-         CB, (1u << AWB) / (1024u * 1024u) * 2u);
+  // R891: plus the chip bit, unless the bench is held below it (TB_LOWER)
+  const uint32_t CHB = (TB_DUAL && !TB_LOWER) ? 1 : 0;
+  const uint32_t AWB = 2 + 13 + CB + CHB;       // total word-address bits
+  printf("test: geometry %u column bits%s -> %u MB module\n",
+         CB, CHB ? " and a chip-select bit" : "", (1u << AWB) / (1024u * 1024u) * 2u);
   auto pick_addr = [&](std::mt19937& r) -> uint32_t {
-    uint32_t bank = r() & 3;
+    uint32_t bank = r() & ((4u << CHB) - 1u);   // R891: {chip, bank}
     uint32_t row  = r() % 6;                    // few rows, so conflicts happen
     uint32_t col  = r() & ((1u << CB) - 1u);
     // 0-based value bit 0 is address bit 1, so bank sits at AWB-2.
-    return (bank << (AWB - 2)) | (row << CB) | col;
+    return (bank << (AWB - 2 - CHB)) | (row << CB) | col;
   };
 
   printf("test: ROM download writes, then read back through every port\n");
@@ -713,6 +725,91 @@ int main(int argc, char** argv) {
     h.checks++;
   }
 
+  // R891: THE TWO CHIPS ARE TWO MEMORIES. The same word address in each half
+  // gets a different value -- through the write port and through port 0 with
+  // byte writes -- and every one is read back. A chip select that is not
+  // driven, or not decoded, puts both halves in one chip: the second write of
+  // each pair lands on the first and half the reads come back wrong.
+  if (CHB) {
+    printf("test: chip 0 and chip 1 hold different data at the same address (R891)\n");
+    long start_fails = h.fails, start_checks = h.checks;
+    std::mt19937 r3(891u);
+    const uint32_t CHIP = 1u << (AWB - 1);
+    std::vector<uint32_t> lo;
+    for (int i = 0; i < 1024; i++) {
+      // every row bit and column bit in turn, then random
+      uint32_t a = (i < (int)AWB - 1) ? (1u << i) : (r3() & (CHIP - 1u));
+      a &= ~3u;
+      lo.push_back(a);
+      for (int c = 0; c < 2; c++) {
+        uint32_t aa = a | (c ? CHIP : 0u);
+        for (int w = 0; w < 4; w++) {
+          if (w == 1 && (i & 1)) {                     // byte writes on port 0
+            while (h.port[0].busy) h.step();
+            h.issue(0, aa + w, true, (uint16_t)(0x1100 * (c + 1) + i), 3);
+            h.step(); while (h.port[0].busy) h.step();
+            h.issue(0, aa + w, true, (uint16_t)(0xEE00 | (i & 0xff)), (i & 2) ? 1 : 2);
+            h.step(); while (h.port[0].busy) h.step();
+          } else {
+            while (h.wr_busy) h.step();
+            h.issueWrite(aa + w, (uint16_t)(0xC000 ^ (c << 13) ^ (i * 4 + w)));
+            h.step();
+          }
+        }
+      }
+      h.drain();   // two ports write here: nothing to one word may overlap
+    }
+    for (uint32_t a : lo)
+      for (int c = 0; c < 2; c++) {
+        while (h.port[1].busy) h.step();
+        h.issue(1, a | (c ? CHIP : 0u), false, 0);
+        h.step();
+      }
+    h.drain();
+    printf("  %ld checks, %ld fails, %u violations\n", h.checks - start_checks,
+           h.fails - start_fails, h.d->violations);
+  }
+
+#ifdef TB_RET
+  // R891: RETENTION, BOTH CHIPS. Rows in every bank of both chips are written,
+  // then NOTHING touches them for TB_RET cycles -- longer than the model's
+  // T_RET, so only the controller's refresh keeps them -- and they are read
+  // back. A chip the refresh never reaches loses every row (the model deletes
+  // a row's data once it goes unrestored for T_RET), and so does a refresh
+  // interval too long for 8,192 rows: both read back as unwritten.
+  {
+    printf("test: retention across both chips, %ld idle cycles (R891)\n", (long)TB_RET);
+    long start_fails = h.fails, start_checks = h.checks;
+    std::mt19937 r4(64u);
+    std::vector<uint32_t> ra;
+    const uint32_t NBK = 4u << CHB;
+    for (uint32_t b = 0; b < NBK; b++)
+      for (int k = 0; k < 64; k++) {
+        uint32_t row = (k * 127u + b * 1031u) & 8191u;
+        uint32_t col = r4() & ((1u << CB) - 4u);
+        uint32_t a = (b << (AWB - 2 - CHB)) | (row << CB) | col;
+        for (int w = 0; w < 4; w++) {
+          while (h.wr_busy) h.step();
+          h.issueWrite(a + w, (uint16_t)r4());
+          h.step();
+        }
+        ra.push_back(a);
+      }
+    h.drain();
+    unsigned dec0 = h.d->decayed_rows;
+    for (long n = 0; n < (long)TB_RET; n++) h.tick();
+    for (uint32_t a : ra) {
+      while (h.port[1].busy) h.step();
+      h.issue(1, a, false, 0);
+      h.step();
+    }
+    h.drain();
+    printf("  %zu rows, %ld checks, %ld fails, rows decayed %u, violations %u\n", ra.size(),
+           h.checks - start_checks, h.fails - start_fails, h.d->decayed_rows - dec0,
+           h.d->violations);
+  }
+#endif
+
   // ------------------------------------------------------------- telemetry
   printf("test: bandwidth telemetry reports the traffic that actually ran\n");
   {
@@ -766,5 +863,7 @@ int main(int argc, char** argv) {
   printf("m2_sdram: checks=%ld fails=%ld violations=%u tag_faults=%u reads=%u writes=%u\n",
          h.checks, h.fails, h.d->violations, h.d->tag_faults,
          h.d->reads_served, h.d->writes_served);
+  if (h.d->decayed_rows)   // R891: only the module model counts these
+    printf("  rows the device model let decay: %u\n", h.d->decayed_rows);
   return h.fails ? 1 : 0;
 }

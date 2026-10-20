@@ -436,6 +436,21 @@ localparam bit M2A = 1'b1;
 `else
 localparam bit M2A = 1'b0;
 `endif
+// R891: VERILOG_MACRO "M2_MEMTEST=1" (with "M2_PROBE=1"; or -DM2_MEMTEST to
+// lint) adds m2_memtest: at power-up, before any download, it writes 4,096
+// sampled words over the WHOLE SDRAM (sixteen regions: both chips, all banks,
+// every row and column bit high and low, byte-masked writes), reads them back,
+// then re-reads them after idle waits of ~1, 3 and 13 s while nothing is
+// loaded; its results ride the probe's UART as 'B' / 'b' records
+// (tools/decode_why.py). The loader waits for its first pass (a few ms).
+`ifdef M2_MEMTEST
+localparam bit MEMTEST = 1'b1;
+`ifndef M2_PROBE
+initial $error("M2_MEMTEST reports through the M2_PROBE stream: build with M2_PROBE=1 too");
+`endif
+`else
+localparam bit MEMTEST = 1'b0;
+`endif
 localparam bit M1SOUND = (`M2_M1SOUND != 0);
 localparam bit IOZ80   = (`M2_IOZ80 != 0);
 localparam bit SND2A   = !M1SOUND && (`M2_2A_SOUND != 0);   // R859
@@ -516,8 +531,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	// happens, however the ini is set. The OSD's "Save settings" line pulses
 	// it with index 2.
 	.ioctl_upload_req(nv_save_req),
-	.ioctl_upload_index(8'd2)
+	.ioctl_upload_index(8'd2),
+	.sdram_sz(sdram_sz)                  // R891: reported by the memory test (M2_MEMTEST)
 );
+wire [15:0] sdram_sz;   // [15] set, [1:0] 0 none / 1 32 MB / 2 64 MB / 3 128 MB (hps_io)
 
 wire [31:0] joystick_0;
 wire [31:0] joystick_1;     // R839
@@ -731,10 +748,29 @@ wire game_rst_n = pll_locked & ~RESET & ~status[0] & ~buttons[1];
 // comes good at 9, the geometry is the fault and must be MEASURED before it is
 // widened again, not deduced.
 localparam int unsigned SDR_COL  = 10;
-localparam int unsigned SDR_AW   = 2 + 13 + SDR_COL;   // 25 with COL_BITS=10
+// R891: THE 2A BUILD ADDRESSES 128 MB -- THE MiSTer 128 MB MODULE IS TWO 64 MB
+// CHIPS ON ONE CHIP-SELECT LINE, NOT ONE CHIP WITH 2048 COLUMNS. R18/R19's
+// eleventh column bit was the wrong scheme for it (A11 is the module's DQM).
+// m2_sdram DUAL: a 26th word-address bit drives SDRAM_nCS per transaction
+// (lower / upper 64 MB), both chips are brought up and refreshed; MASK_ON_A:
+// the byte mask on A12:A11 in the column phase, with the DQM pins following
+// A12:A11 (below) -- R82 / R871's lost byte enables. Every released game sits
+// below 64 MB with its layout unchanged, and on a 64 MB module the chip-1
+// commands are deselects, so it runs there as before (tb: test_m2_sdram128d).
+// The original core (M2_NO_2A) is untouched: 64 MB, the mask on the DQM pins.
+localparam bit          SDR_DUAL = M2A;
+localparam int unsigned SDR_AW   = (SDR_DUAL ? 1 : 0) + 2 + 13 + SDR_COL;   // 26 on 2A (128 MB), 25 (64 MB)
 
 wire        mem_ready, sd_dq_oe, rom_loaded, ldr_overflow;
 wire [15:0] sd_dq_o;
+wire  [1:0] sdr_dqm;   // R891: m2_sdram's sd_dqm (the DQM pins on the original core)
+// R891: the memory test (M2_MEMTEST) -- port 1 is its until a download begins
+// (the i960, port 1's owner, is in reset until the game is loaded); constant
+// zero without it, so the port, the capture depth and the loader are as before
+wire              mt_own, mt_req, mt_we, mt_done0;
+wire [SDR_AW:1]   mt_addr;
+wire [15:0]       mt_din;
+wire  [1:0]       mt_be;
 wire        ldr_wr_req, ldr_wr_ack;
 wire [SDR_AW:1] ldr_wr_addr;
 wire [15:0] ldr_wr_din;
@@ -1419,6 +1455,9 @@ always_comb begin
 	// bridge issues one 16-bit access at a time, and ports 1-3 burst four.
 	p_req[1]  = cpu_sd_req;
 	p_addr[1] = cpu_sd_addr;
+	if (MEMTEST && mt_own) begin   // R891: the power-up memory test
+		p_req[1] = mt_req; p_addr[1] = mt_addr; p_we[1] = mt_we; p_din[1] = mt_din; p_be[1] = mt_be;
+	end
 end
 
 // T_REFI IS IN CLOCK CYCLES, and this domain is 100 MHz (see rtl/pll/pll.v):
@@ -1586,7 +1625,13 @@ end
 // on each read (one outstanding) behind the whole class. Original core: as
 // before.
 localparam logic [12:0] SDR_PRI = M2A ? 13'b1_1111_0001_1110 : 13'b1_1100_0001_1110;
-m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
+// R891: the 2A's refresh interval is 770, not 781. ref_cnt runs 0..T_REFI, so
+// a refresh comes every T_REFI + 1 cycles: 782 x 8,192 rows is 64.06 ms at 100
+// MHz, past the part's 64 ms -- the retention check of sdram_module flags every
+// row (mutation refi781, R891). 771 x 8,192 is 63.2 ms. The original core keeps
+// 781 (a separate decision; recorded in R891).
+m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(M2A ? 770 : 781),
+           .DUAL(SDR_DUAL), .MASK_ON_A(SDR_DUAL),                          // R891
            // R639: port 3 (the glyph cache -- the tile fetch) joins the class.
            // It is the one reader with a per-scanline deadline: a line it does
            // not finish is the previous line shown again (m2_video Q_RUN), and
@@ -1632,10 +1677,12 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
 	// board that would not calibrate; it is found, and it was the knob that
 	// diagnosed s122. The sweep still runs and still reports its mask over the
 	// UART (R399), it just no longer drives the depth.
-	.rd_lat_sel(!cal_done ? cal_sel : 3'd2),
+	// R891: and CL+2 while the memory test owns port 1 (before the calibration
+	// has run, which waits for a game)
+	.rd_lat_sel((!cal_done && !(MEMTEST && mt_own)) ? cal_sel : 3'd2),
 	.sd_cke(SDRAM_CKE), .sd_cs_n(SDRAM_nCS), .sd_ras_n(SDRAM_nRAS),
 	.sd_cas_n(SDRAM_nCAS), .sd_we_n(SDRAM_nWE), .sd_ba(SDRAM_BA),
-	.sd_a(SDRAM_A), .sd_dqm({SDRAM_DQMH, SDRAM_DQML}),
+	.sd_a(SDRAM_A), .sd_dqm(sdr_dqm),
 	.sd_dq_o(sd_dq_o), .sd_dq_oe(sd_dq_oe), .sd_dq_i(SDRAM_DQ),
 	.wr_req(f_wr_req), .wr_addr(f_wr_addr), .wr_din(f_wr_din),
 	.wr_be(f_wr_be),   .wr_ack(f_wr_ack),
@@ -1649,6 +1696,13 @@ m2_sdram #(.COL_BITS(SDR_COL), .NP(NPORTS), .T_REFI(781),
 );
 
 assign SDRAM_DQ  = sd_dq_oe ? sd_dq_o : 16'bZ;
+// R891: THE DQM PINS FOLLOW A12:A11 on the 2A build, as MiSTer's 128 MB cores
+// drive them (PSX_MiSTer: `{SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11]`): the
+// module's chips take their mask from A11/A12, and a module wired to the DQM
+// pins sees the same mask on them. They differ from m2_sdram's own sd_dqm only
+// at ACTIVATE (row bits), where DQM does nothing at CL 2. The original core:
+// the controller's sd_dqm, as before.
+assign {SDRAM_DQMH, SDRAM_DQML} = SDR_DUAL ? SDRAM_A[12:11] : sdr_dqm;
 // ITS OWN PLL OUTPUT AT 180 DEGREES, not an inversion of the controller clock.
 // pll.v's own note diagnosed the 80 MHz failure as exactly that inversion --
 // "only a half period of skew and no true phase shift" -- and named this as the
@@ -1673,7 +1727,7 @@ m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(M2A ? XTRA_FROM_2A : MRA_END_93),
                .XTRA2_FROM(M2A ? XTRA2_FROM_2A : 27'h7FF_FFFF),                  // R862
                .XTRA2_TO(M2A ? GAME_PROGX_2A[SDR_AW:1] : SDR_AW'(0))) u_loader (   // R725
 	.clk(clk_sys), .rst(~mem_rst_n),
-	.mem_ready(mem_ready_s),   // R571: synchronised -- see below
+	.mem_ready(mem_ready_s && (!MEMTEST || mt_done0)),   // R571: synchronised -- see below; R891: after the memory test's first pass
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
 	.ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
@@ -4722,6 +4776,26 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		prof_tick <= (prof_div == 16'd0);
 	end
 end
+
+// R891: THE POWER-UP MEMORY TEST (M2_MEMTEST, see the switch at the top). Its
+// results are read by the probe's record slots (mt_sel), below.
+wire   [4:0] mt_sel;   // driven by the probe's record slots; 0 in every other build
+wire  [31:0] mt_ra, mt_rd;
+wire   [7:0] mt_passes;
+generate if (MEMTEST) begin : g_memtest
+	m2_memtest #(.AW(SDR_AW)) u_memtest (
+		.clk(clk_sys), .rst_n(mem_rst_n),
+		.go(mem_ready_s), .stop(ioctl_download), .tick(prof_tick),
+		.own(mt_own), .req(mt_req), .we(mt_we), .addr(mt_addr), .din(mt_din), .be(mt_be),
+		.ack(p_ack[1]), .dout(p_dout[1]),
+		.done0(mt_done0), .sel(mt_sel), .sdram_sz(sdram_sz),
+		.r_a(mt_ra), .r_d(mt_rd), .passes(mt_passes)
+	);
+end else begin : g_nomemtest
+	assign {mt_own, mt_req, mt_we, mt_done0} = 4'b0001;
+	assign mt_addr = '0; assign mt_din = '0; assign mt_be = '0;
+	assign mt_ra = '0; assign mt_rd = '0; assign mt_passes = '0;
+end endgenerate
 // PROFILER OFF, DESCRIPTOR READS ON THE PRIORITY CHANNEL.
 //
 // The last capture returned ZERO descriptor reads, which is ambiguous: either
@@ -4946,6 +5020,7 @@ localparam bit SWEEP_EN = 1'b0;
 // cross-scope reference pass.
 logic         sw_take;
 generate if (DEBUG) begin : g_dbg
+assign mt_sel = 5'd0;   // R891: no memory-test records in this stream
 // A WEDGE CATCHER ON THE BOARD (R235). The board draws a few wedges off the
 // cars that no bench configuration reproduces -- 32,000 clipped quads at the
 // desk, with and without the board's port timing modelled, carry none. So the
@@ -5471,10 +5546,21 @@ end else begin : g_nodbg
 	//       | {the bytes, oldest in 31:24}. A slot with bytes waiting (16
 	//       places) sends them instead of its turn; a gap in the count is a
 	//       record the UART lost
+	//   'B' / 'b' (R891, M2_MEMTEST) the power-up memory test: sixteen 'B'
+	//       (one a region) and a 'b' summary in turn, in EVERY slot until a
+	//       game is loaded, then in one slot in sixteen (MIDI first):
+	//       'B' {its pass, region, 3'd0, data errors(9), first bad k} |
+	//           {7'd0, mask errors(9), the first bad word as read}
+	//       'b' {passes, parked, 2'd0, AW(5), hps_io's sdram_sz} | 0
 	logic [1:0]  pb_div;
 	logic [2:0]  pb_sel;
 	logic        pb_valid;
 	logic        mi_take;                     // R880: this slot carries MIDI bytes
+	logic        mt_take;                     // R891: this slot carries a memory-test record
+	logic  [4:0] mt_i;                        // R891: which (0-15 a region, 16 the summary)
+	logic  [3:0] mt_div;                      // R891: one slot in sixteen once a game is in
+	wire         mt_want = MEMTEST && (mt_passes != 8'd0) && (!rom_loaded || mt_div == 4'd0);
+	assign mt_sel = mt_i;
 	logic  [2:0] rs_i;                        // R882: the region the next R record carries
 	logic [15:0] sd_scw, sd_rx, sd_peak;
 	logic  [7:0] sd_tx;
@@ -5527,8 +5613,11 @@ end else begin : g_nodbg
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
 			mi_wp <= '0; mi_rp <= '0; mi_n <= '0; mi_cnt <= '0; mi_lost <= '0; mi_take <= 1'b0; mi_a <= '0; mi_d <= '0;
+			mt_take <= 1'b0; mt_div <= '0;   // R891
 		end else begin
 			if (mi_slot) mi_take <= mi_n != 5'd0;
+			if (mi_slot) mt_take <= (mi_n == 5'd0) && mt_want;   // R891
+			if (mi_slot) mt_div  <= mt_div + 4'd1;
 			if (mi_slot && mi_n != 5'd0) begin
 				mi_a <= {mi_cnt + 24'(mi_k), 5'd0, mi_k};
 				mi_d <= {mi_q[mi_rp], (mi_k > 3'd1) ? mi_q[mi_rp + 4'd1] : 8'd0,
@@ -5543,18 +5632,19 @@ end else begin : g_nodbg
 	end
 	always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		if (!mem_rst_n) begin
-			pb_div <= '0; pb_sel <= '0; pb_valid <= 1'b0;
+			pb_div <= '0; pb_sel <= '0; pb_valid <= 1'b0; mt_i <= '0;
 			sd_scw <= '0; sd_rx <= '0; sd_tx <= '0; sd_peak <= '0; rs_i <= '0;
 		end else begin
 			pb_valid <= 1'b0;
 			if (prof_tick) begin
 				pb_div <= (pb_div == 2'd2) ? 2'd0 : pb_div + 2'd1;
-				if (pb_div == 2'd0) begin pb_valid <= 1'b1; if (mi_n == 5'd0) pb_sel <= (pb_sel == PB_LAST) ? 3'd0 : pb_sel + 3'd1; end   // R880: an M slot keeps the turn
+				if (pb_div == 2'd0) begin pb_valid <= 1'b1; if (mi_n == 5'd0 && !mt_want) pb_sel <= (pb_sel == PB_LAST) ? 3'd0 : pb_sel + 3'd1; end   // R880: an M slot keeps the turn; R891: so does a B
 			end
 			if (snd_scsp_we)      sd_scw <= sd_scw + 16'd1;
 			if (b_rx_v && b_rx_a) sd_rx  <= sd_rx + 16'd1;
 			if (b_tx_v && b_tx_a) sd_tx  <= sd_tx + 8'd1;
-			if (pb_valid && !mi_take && pb_sel == 3'd4) rs_i <= (rs_i == 3'd4) ? 3'd0 : rs_i + 3'd1;   // R882
+			if (pb_valid && !mi_take && !mt_take && pb_sel == 3'd4) rs_i <= (rs_i == 3'd4) ? 3'd0 : rs_i + 3'd1;   // R882
+			if (pb_valid && !mi_take && mt_take) mt_i <= (mt_i == 5'd16) ? 5'd0 : mt_i + 5'd1;   // R891
 			if (pb_valid && !mi_take && pb_sel == 3'd2) sd_peak <= sd_abs;
 			else if (sd_abs > sd_peak)      sd_peak <= sd_abs;
 		end
@@ -5562,22 +5652,23 @@ end else begin : g_nodbg
 	m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
 		.clk(clk_sys), .rst_n(mem_rst_n),
 		.a_valid(pb_valid),
-		.a_addr(mi_take ? mi_a : (pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
+		.a_addr(mi_take ? mi_a : mt_take ? mt_ra : (pb_sel == 3'd1) ? snd_insns : (pb_sel == 3'd2) ? {snd_pc[23:0], sd_tx} :
 		        (pb_sel == 3'd3) ? {snd_w400, snd_w418} : (pb_sel == 3'd4) ? {29'd0, rs_i} :
 		        (pb_sel == 3'd5) ? {2'd0, sl_m5, sl_m6, sl_m7} : cpu_dbg_ip),
-		.a_data(mi_take ? mi_d : (pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
+		.a_data(mi_take ? mi_d : mt_take ? mt_rd : (pb_sel == 3'd1) ? {sd_scw, sd_rx} : (pb_sel == 3'd2) ? {sd_peak, snd_under} :
 		        (pb_sel == 3'd3) ? {snd_selftest, 12'd0, snd_mvol} :
 		        (pb_sel == 3'd4) ? snd_sums[{rs_i, 5'd0} +: 32] :
 		        (pb_sel == 3'd5) ? {sl_w5[19:4], sl_slow} :
 		        {copro_stall, tgp_unimpl, 14'd0, tgp_pc}),
 		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
-		.a_tag(mi_take ? 8'h4D : (pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h52 :
+		.a_tag(mi_take ? 8'h4D : mt_take ? ((mt_i == 5'd16) ? 8'h62 : 8'h42) : (pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h52 :
 		       (pb_sel == 3'd5) ? 8'h4c : 8'h43),
 		.b_tag(8'h47),   // 'C','S','T','U','Q','L'; 'M' (R880) in any slot
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
 `elsif M2_DEBUG_LITE
+	assign mt_sel = 5'd0;   // R891
 	// R637: TELEMETRY LITE -- the one question "why does the game run slow"
 	// needs, in the area the keeper build has left (~230 ALM against the full
 	// stream's ~850, R612). Two channels on m2_dbg_stream's UART:
@@ -5827,6 +5918,7 @@ end else begin : g_nodbg
 `else
 	assign UART_TXD = 1'b1;        // idle high; a floating TX reads as framing errors
 	assign uart_dropped = 32'd0;   // read by the overlay, which is also gone
+	assign mt_sel = 5'd0;          // R891
 `endif
 end endgenerate
 

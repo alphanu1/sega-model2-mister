@@ -9,7 +9,18 @@
 // any later version. See LICENSE for the full text.
 //
 // Single-chip 16-bit SDR SDRAM controller with a per-master round-robin
-// arbiter, for the port map in docs/00-decisions.md D8.
+// arbiter, for the port map in docs/00-decisions.md D8 -- and, with DUAL
+// (R891), the MiSTer 128 MB module's two chips on one chip-select line.
+//
+// THE 128 MB MODULE (R891), from MiSTer-devel/PSX_MiSTer rtl/sdram.sv, a
+// working core for it (GPL-3.0-or-later; the scheme is followed, no code is
+// copied): SDRAM_nCS selects the lower chip and, inverted on the module, the
+// upper (PSX: `SDRAM_nCS = chip`, chip = byte address bit 26); each chip's
+// DQML/DQMH are wired to A11/A12, so the byte mask travels on A[12:11] in the
+// column phase (PSX: `{SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11]`, the CAS word
+// {~be, ...}); both chips are brought up and refreshed (PSX: REFRESH to chip
+// 0, then chip 1, each interval). R18/R19's eleventh column bit put a column
+// bit on A11 -- the module's DQM -- which is why it aliased.
 //
 // PROVENANCE
 //
@@ -67,7 +78,9 @@ module m2_sdram #(
   //
   //    9 -> 8192 x 512  x 4 =  32 MB   (the 32 MB modules)
   //   10 -> 8192 x 1024 x 4 =  64 MB
-  //   11 -> 8192 x 2048 x 4 = 128 MB
+  //   11 -> 8192 x 2048 x 4 = 128 MB   NOT the MiSTer 128 MB module, which
+  //                                    is two 64 MB chips: COL_BITS 10 and
+  //                                    DUAL (R891; R19 measured 11 aliasing)
   //
   // Column bits map to A0..A9 then A11, A12 -- SKIPPING A10, which is the
   // auto-precharge flag. That is why ten column bits taken as [10:1] aliases:
@@ -115,7 +128,27 @@ module m2_sdram #(
   // class masks stay register AND register: no logic level is added to the
   // select. Default none: the controller exactly as it was.
   parameter logic [NP-1:0] AGE     = '0,
-  parameter int unsigned   AGE_T   = 48
+  parameter int unsigned   AGE_T   = 48,
+  // R891: THE MiSTer 128 MB MODULE -- TWO 64 MB CHIPS ON ONE CHIP-SELECT LINE.
+  // The module puts SDRAM_nCS on the first chip and its inverse on the second
+  // (the scheme MiSTer-devel/PSX_MiSTer's rtl/sdram.sv drives: `SDRAM_nCS =
+  // chip`, chip = byte address bit 26). DUAL = 1 adds a top word-address bit
+  // (AW + 1) that drives sd_cs_n per transaction: 0 the lower 64 MB, 1 the
+  // upper. Each chip has its own four banks, so the row state is kept for
+  // eight; both chips are brought up (each step of the bring-up goes to chip
+  // 0, then a cycle later to chip 1) and both are refreshed (precharge-all and
+  // REFRESH to chip 0, then to chip 1, every T_REFI). Below 64 MB nothing
+  // moves: the address decode is the single chip's with a 0 above it, so a
+  // 64 MB module (one chip; the chip-1 commands are deselects to it) runs as
+  // before. 0: the controller exactly as it was.
+  parameter bit            DUAL      = 1'b0,
+  // R891: THE BYTE MASK ON A12:A11 DURING THE COLUMN PHASE. On these modules
+  // the chips' DQML/DQMH are wired to A11/A12, not to the connector's DQM pins
+  // (R82, R871: the board dropped every byte enable). A WRITE carries ~be on
+  // A[12:11], a READ 00; the top level drives the DQM pins from A[12:11] too,
+  // so a module wired either way sees the mask. Needs COL_BITS <= 10 (A11 free
+  // in the column phase). 0: as it was (the mask on sd_dqm only).
+  parameter bit            MASK_ON_A = 1'b0
 ) (
   input  logic                 clk,
   input  logic                 rst_n,
@@ -384,7 +417,16 @@ module m2_sdram #(
   // address pair differing only in bit 10 onto one location, which reads as
   // sporadic data corruption rather than as an address fault.
   // Word-address width implied by the geometry: bank + row + column.
-  localparam int unsigned AW = BA_BITS + ROW_BITS + COL_BITS;
+  // R891: plus the chip bit on a dual-chip module, at the TOP, so the lower
+  // 64 MB decode exactly as the single chip does.
+  localparam int unsigned CHB = DUAL ? 1 : 0;              // chip-select bits
+  localparam int unsigned AW  = CHB + BA_BITS + ROW_BITS + COL_BITS;
+  localparam int unsigned NB  = 4 << CHB;                  // banks with row state
+  localparam int unsigned BW  = 2 + CHB;                   // {chip, bank} index width
+  initial begin
+    if (MASK_ON_A && COL_BITS > 10)
+      $error("m2_sdram: MASK_ON_A needs COL_BITS <= 10 -- A11 carries the mask, not a column bit");
+  end
 
   // Column value placed on the address bus, skipping A10.
   function automatic logic [12:0] col_a(input logic [AW:1] a);
@@ -398,12 +440,19 @@ module m2_sdram #(
   endfunction
 
   logic [3:0]  cmd;
-  assign {sd_cs_n, sd_ras_n, sd_cas_n, sd_we_n} = cmd;
+  // R891: on a dual-chip module the chip select is its own register, set with
+  // each transaction (S_DISPATCH, ahead of its first command) and by each step
+  // of the bring-up and the refresh. A NOP is a NOP or a deselect to both
+  // chips whichever way it points, so it needs no reset.
+  logic        cs_sel;
+  assign {sd_ras_n, sd_cas_n, sd_we_n} = cmd[2:0];
+  assign sd_cs_n = DUAL ? cs_sel : cmd[3];
   assign sd_cke = 1'b1;
 
   typedef enum logic [3:0] {
     S_INIT, S_IDLE, S_SEL, S_DISPATCH, S_MISS, S_PRE_XFER, S_ACT, S_RCD,
-    S_RD, S_WR, S_WRRC, S_PRE_REF, S_REFW
+    S_RD, S_WR, S_WRRC, S_PRE_REF, S_REFW,
+    S_PRE1, S_REF1                       // R891: the second chip's precharge-all and refresh
   } state_t;
   state_t state;
 
@@ -693,17 +742,22 @@ module m2_sdram #(
   // and precharging only the bank actually being reused is what lets the
   // masters coexist, because D8 puts them in different address regions and
   // therefore usually in different banks.
-  logic [3:0]  bank_open;
-  logic [ROW_BITS-1:0] bank_row [4];
+  // R891: NB = 4 banks, or 8 on a dual-chip module -- each chip holds its own
+  // four, so the index is {chip, bank} and a row open on chip 0's bank 1 says
+  // nothing about chip 1's.
+  logic [NB-1:0]  bank_open;
+  logic [ROW_BITS-1:0] bank_row [NB];
   // Cycles still owed to tRAS before that bank's row may be precharged. With
   // auto-precharge the device enforced this internally; taking that back means
   // taking the obligation back with it.
-  logic [3:0]  ras_cnt [4];
+  logic [3:0]  ras_cnt [NB];
 
-  logic [1:0]  tbank;
+  logic [BW-1:0]  tbank;               // {chip, bank} (R891)
   logic [ROW_BITS-1:0] trow;
-  assign tbank = xfer_addr[AW:AW-1];
-  assign trow  = xfer_addr[AW-2:COL_BITS+1];
+  assign tbank = xfer_addr[AW:AW-BW+1];
+  assign trow  = xfer_addr[AW-BW:COL_BITS+1];
+  // R891: the bank pins: the two bits under the chip bit
+  wire  [1:0]  tba  = xfer_addr[AW-CHB:AW-CHB-1];
 
   // A transfer whose bank and row are already open skips PRECHARGE and
   // ACTIVATE. This is the entire reason locality is worth anything: measured
@@ -723,7 +777,7 @@ module m2_sdram #(
   // nothing to leave combinational, and a row hit is the case worth being
   // fast. Only a MISS pays the extra cycle, and a miss is already buying
   // tRP + tRCD, so one cycle is inside the noise.
-  logic [1:0]  dsp_bank;
+  logic [BW-1:0] dsp_bank;
 
   // Refresh needs every bank closed, so it must wait for the longest
   // outstanding tRAS rather than just the one it happens to look at.
@@ -733,13 +787,15 @@ module m2_sdram #(
   // taken out of the refresh decision (s339: ras_cnt -> sd_a, +0.002 ns, the
   // thinnest path on clk_mem). Exact while T_RAS >= 2 (it is 5); T_RAS = 1
   // would load 0 and clear ras_ok, which R410's ras_ok already gets wrong.
-  logic [3:0] ras_ok;    // ras_cnt[b] == 0 (R410; declared here for R603)
+  logic [NB-1:0] ras_ok; // ras_cnt[b] == 0 (R410; declared here for R603)
   logic ras_any;
   assign ras_any = !(&ras_ok);
 
   logic [15:0]              init_cnt;
   // R581: the bring-up steps, decoded one count early (see S_INIT).
   logic                     ini_pre, ini_ref, ini_mrs, ini_rdy;
+  // R891: the same three steps a cycle later, for the second chip
+  logic                     ini_pre_d, ini_ref_d, ini_mrs_d;
   always_ff @(posedge clk) begin
     ini_pre <= (init_cnt == 16'd401);
     ini_ref <= (init_cnt == 16'd361) || (init_cnt == 16'd351) || (init_cnt == 16'd341)
@@ -747,6 +803,9 @@ module m2_sdram #(
             || (init_cnt == 16'd301) || (init_cnt == 16'd291);
     ini_mrs <= (init_cnt == 16'd201);
     ini_rdy <= (init_cnt == 16'd2);
+    ini_pre_d <= DUAL && ini_pre;
+    ini_ref_d <= DUAL && ini_ref;
+    ini_mrs_d <= DUAL && ini_mrs;
   end
   logic [$clog2(T_REFI+1)-1:0] ref_cnt;
   logic                     ref_pend;
@@ -814,7 +873,7 @@ module m2_sdram #(
   // Cycles until this bank's last outstanding read data has landed. A bank may
   // not be precharged while its own read is still returning, but other banks
   // are free — which is the entire point of overlapping.
-  logic [3:0]               rd_bank_cnt [4];
+  logic [3:0]               rd_bank_cnt [NB];
 
   // R409: THE PRECHARGE GUARD, PRECOMPUTED. S_MISS tested
   //   ras_cnt[dsp_bank] == 0 && rd_bank_cnt[dsp_bank] == 0
@@ -841,14 +900,14 @@ module m2_sdram #(
   // moves them. No comparator on the path, and no hazard: the flag clears in
   // the very cycle the counter is loaded, which is what made a registered
   // summary of the counters unsafe.
-  logic [3:0] rd_ok;     // rd_bank_cnt[b] == 0
-  wire [3:0] bank_pre_ok;
+  logic [NB-1:0] rd_ok;  // rd_bank_cnt[b] == 0
+  wire [NB-1:0] bank_pre_ok;
   // Explicit genvar + generate: Quartus 17.0 rejects the inline
   // `for (genvar ...)` form that Verilator accepts, with "syntax error near
   // text: for; expecting endmodule". lint_top passes it, the fitter does not.
   genvar gb;
   generate
-    for (gb = 0; gb < 4; gb = gb + 1) begin : g_bank_pre
+    for (gb = 0; gb < NB; gb = gb + 1) begin : g_bank_pre
       assign bank_pre_ok[gb] = ras_ok[gb] && rd_ok[gb];
     end
   endgenerate
@@ -953,11 +1012,11 @@ module m2_sdram #(
       init_cnt <= 16'(INIT_NOP);
       ref_cnt <= '0; ref_pend <= 1'b0;
       bank_open <= '0;
-      for (int b = 0; b < 4; b++) begin bank_row[b] <= '0; ras_cnt[b] <= '0; end
-      ras_ok <= 4'hF; rd_ok <= 4'hF;   // R410: idle out of reset
+      for (int b = 0; b < NB; b++) begin bank_row[b] <= '0; ras_cnt[b] <= '0; end
+      ras_ok <= '1; rd_ok <= '1;       // R410: idle out of reset
       tag_v <= '0; tag_p <= '0; tag_w <= '0; tag_last <= '0; cap <= '0;
       ack_cnt <= '0; wack_cnt <= '0; inflight <= '0; wr_inflight <= 1'b0;
-      for (int b = 0; b < 4; b++) rd_bank_cnt[b] <= '0;
+      for (int b = 0; b < NB; b++) rd_bank_cnt[b] <= '0;
       p_ack <= '0; wr_ack <= 1'b0; p_dout <= '0;
       dl_v <= 1'b0; dl_p <= '0; dl_data <= '0;   // R557
       dl_lo <= 1'b0; p_lo <= '0;                  // R787
@@ -1000,12 +1059,20 @@ module m2_sdram #(
         // 16-bit compare no longer sits in front of cmd and sd_a (s311:
         // init_cnt -> cmd, -0.060 ns; s312: -> sd_a, -0.574 at 100 MHz).
         // The same step lands on the same count as before.
+        // R891: each step goes to chip 0 (cs_sel 0) and, on a dual-chip
+        // module, a cycle later to chip 1 (the *_d steps) -- the sequence
+        // PSX_MiSTer's sdram.sv runs for the same module. Per chip the spacing
+        // is unchanged: its refreshes ten cycles apart, its MRS 90 after the
+        // last of them and 199 before ready.
         unique case (1'b1)
-          ini_pre: begin cmd <= C_PRE; sd_a <= 13'h400; end
-          ini_ref: cmd <= C_REF;
-          ini_mrs: begin
-            cmd   <= C_MRS;
-            sd_ba <= 2'b00;
+          ini_pre:   begin cmd <= C_PRE; sd_a <= 13'h400; cs_sel <= 1'b0; end
+          ini_pre_d: begin cmd <= C_PRE; sd_a <= 13'h400; cs_sel <= 1'b1; end
+          ini_ref:   begin cmd <= C_REF; cs_sel <= 1'b0; end
+          ini_ref_d: begin cmd <= C_REF; cs_sel <= 1'b1; end
+          ini_mrs, ini_mrs_d: begin
+            cmd    <= C_MRS;
+            cs_sel <= ini_mrs_d;
+            sd_ba  <= 2'b00;
             // CAS LATENCY FROM THE PARAMETER, NOT A LITERAL. This was
             // 13'b000_0_00_010_0_000 -- CL2 hard-coded -- while `CL` was a
             // parameter used for every latency calculation in the file. Two
@@ -1019,7 +1086,7 @@ module m2_sdram #(
       end else begin
         sd_dqm <= 2'b00;
 
-        for (int b = 0; b < 4; b++)
+        for (int b = 0; b < NB; b++)
           if (ras_cnt[b] != 0) begin
             ras_cnt[b] <= ras_cnt[b] - 1'b1;
             if (ras_cnt[b] == 4'd1) ras_ok[b] <= 1'b1;   // R410: 0 next cycle
@@ -1031,7 +1098,7 @@ module m2_sdram #(
           ref_pend <= 1'b1;
         end
 
-        for (int b = 0; b < 4; b++)
+        for (int b = 0; b < NB; b++)
           if (rd_bank_cnt[b] != 0) begin
             rd_bank_cnt[b] <= rd_bank_cnt[b] - 1'b1;
             if (rd_bank_cnt[b] == 4'd1) rd_ok[b] <= 1'b1;   // R410
@@ -1164,9 +1231,10 @@ module m2_sdram #(
             if (ref_pend && !pipe_busy && !ras_any) begin
               cmd       <= C_PRE;
               sd_a      <= 13'h400;             // A10: precharge all
+              cs_sel    <= 1'b0;                // R891: chip 0, then S_PRE1 chip 1
               bank_open <= '0;
               wait_cnt <= 4'(T_RP - 1);
-              state    <= S_PRE_REF;
+              state    <= DUAL ? S_PRE1 : S_PRE_REF;
             end else if (wr_ready) begin
               // THE DEDICATED WRITE PORT, ON ITS ORIGINAL PATH. WIDX is
               // selected here and S_SEL reads wr_addr_p, which is a plain
@@ -1271,6 +1339,11 @@ module m2_sdram #(
             // fast legs settle only `state`, which is a register boundary, so
             // the row comparator reaches a flop and not the command pins.
             dsp_bank <= tbank;
+            // R891: the chip this transaction's commands go to. Nothing of the
+            // previous one is still to be issued here (its last READ or WRITE
+            // went out before S_IDLE), and a chip keeps driving a read burst
+            // already in flight when it is deselected.
+            cs_sel   <= tbank[BW-1];
             if (row_hit)                state <= is_write ? S_WR : S_RD;
             else if (!bank_open[tbank]) state <= S_ACT;
             else                        state <= S_MISS;
@@ -1317,7 +1390,7 @@ module m2_sdram #(
             // it. That is precisely why it stays.
             if (bank_pre_ok[dsp_bank]) begin   // R409/R410: the same test, precomputed
               cmd                 <= C_PRE;
-              sd_ba               <= dsp_bank;
+              sd_ba               <= dsp_bank[1:0];   // R891: the chip is cs_sel's
               sd_a                <= 13'h000;
               bank_open[dsp_bank] <= 1'b0;
               wait_cnt            <= 4'(T_RP - 1);
@@ -1332,8 +1405,8 @@ module m2_sdram #(
 
           S_ACT: begin
             cmd       <= C_ACT;
-            sd_ba     <= xfer_addr[AW:AW-1];
-            sd_a      <= 13'(xfer_addr[AW-2:COL_BITS+1]);
+            sd_ba     <= tba;
+            sd_a      <= 13'(trow);
             bank_row[tbank]  <= trow;
             bank_open[tbank] <= 1'b1;
             ras_cnt[tbank]   <= 4'(T_RAS - 1);
@@ -1349,8 +1422,10 @@ module m2_sdram #(
 
           S_WR: begin
             cmd      <= C_WRITE;
-            sd_ba    <= xfer_addr[AW:AW-1];
+            sd_ba    <= tba;
             sd_a     <= col_a(xfer_addr);   // A10 low inside col_a: keep row open
+            // R891: the mask on A12:A11, where the module's DQM are wired
+            if (MASK_ON_A) sd_a[12:11] <= ~be_r;
             sd_dq_o  <= din_r;
             sd_dq_oe <= 1'b1;
             sd_dqm   <= ~be_r;
@@ -1379,7 +1454,7 @@ module m2_sdram #(
             // One READ per cycle. The last one carries A10, requesting
             // auto-precharge, so the row closes without a separate command.
             cmd        <= C_READ;
-            sd_ba      <= xfer_addr[AW:AW-1];
+            sd_ba      <= tba;
             // A10 low: the row stays open so the next transfer to it can skip
             // PRECHARGE and ACTIVATE entirely. A10 is the auto-precharge bit
             // and the column is nine bits, so A9 is padded explicitly — a
@@ -1449,14 +1524,35 @@ module m2_sdram #(
             end
           end
 
+          // R891: THE SECOND CHIP'S PRECHARGE-ALL, the cycle after the first's.
+          // tRP is counted from here, which is the later of the two.
+          S_PRE1: begin
+            cmd      <= C_PRE;
+            sd_a     <= 13'h400;
+            cs_sel   <= 1'b1;
+            wait_cnt <= 4'(T_RP - 1);
+            state    <= S_PRE_REF;
+          end
+
           S_PRE_REF: begin
             if (wait_cnt == 0) begin
               cmd       <= C_REF;
+              cs_sel    <= 1'b0;               // R891: chip 0, then S_REF1 chip 1
               bank_open <= '0;
               ref_pend  <= 1'b0;
               wait_cnt <= 4'(T_RC - 1);
-              state    <= S_REFW;
+              state    <= DUAL ? S_REF1 : S_REFW;
             end else wait_cnt <= wait_cnt - 1'b1;
+          end
+
+          // R891: THE SECOND CHIP'S REFRESH, the cycle after the first's -- one
+          // row of each chip per T_REFI, so every row of both inside 8192 x
+          // T_REFI. tRC is counted from here, the later of the two.
+          S_REF1: begin
+            cmd      <= C_REF;
+            cs_sel   <= 1'b1;
+            wait_cnt <= 4'(T_RC - 1);
+            state    <= S_REFW;
           end
 
           S_REFW: begin

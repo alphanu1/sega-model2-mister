@@ -162,4 +162,67 @@ for t, a, d in recs:
 if R:
     names = ["program", "samples 0-2 MB", "samples 2-4 MB", "samples 4-6 MB", "samples 6-8 MB"]
     print("SOUND ROMS IN SDRAM (sums of 68000-order words): " + ", ".join("%s %08x" % (names[k], R[k]) for k in sorted(R)))
+# R891: 'B' / 'b' -- the power-up memory test (M2_MEMTEST, rtl/mem/m2_memtest.sv)
+#   'B' {its pass, region, 3'd0, data errors(9), first bad k} | {7'd0, mask errors(9), first bad word}
+#   'b' {passes, parked, 2'd0, AW(5), sdram_sz(16)} | 0  (a pass's totals: the sum of its 'B's)
+Bs = [(a >> 24, (a >> 20) & 15, (a >> 8) & 0x1ff, a & 0xff, (d >> 16) & 0x1ff, d & 0xffff) for t, a, d in recs if t == 'B']
+bs = [(a >> 24, (a >> 23) & 1, (a >> 16) & 0x1f, a & 0xffff) for t, a, d in recs if t == 'b']
+if Bs or bs:
+    AWm = bs[-1][2] if bs else 26
+    OB = AWm - 4
+    def mt_offsets():
+        # each region's 256 sample offsets in visiting order; the LFSR runs on across regions
+        lf = 0x2468ACE1; out = []
+        for r in range(16):
+            row = []
+            for k in range(256):
+                if k == 0: o = 0
+                elif k == 1: o = (1 << OB) - 1
+                elif k < OB + 2: o = 1 << (k - 2)
+                elif k < 2 * OB + 2: o = ((1 << OB) - 1) ^ (1 << (k - OB - 2))
+                else:
+                    o = lf & ((1 << OB) - 1)
+                    lf = ((lf >> 1) ^ 0x80200003) if lf & 1 else (lf >> 1)
+                row.append(o)
+            out.append(row)
+        return out
+    OFF = mt_offsets()
+    rbytes = 1 << (AWm + 1 - 4)                  # bytes a region
+    mt_data = lambda s: ((~s & 0xf) << 12) | (s & 0xfff)
+    last = {}
+    for b in Bs: last[(b[0], b[1])] = b
+    if bs:
+        p, parked, aw, sz = bs[-1]
+        szs = {0: "none", 1: "32 MB", 2: "64 MB", 3: "128 MB"}[sz & 3] if sz & 0x8000 else "not set"
+        print("MEMORY TEST (R891): %d pass(es) complete%s; AW %d = %d MB tested as 16 regions of %d MB; hps_io sdram_sz %04x (%s)" % (
+            p, ", parked (a download began)" if parked else "", aw, (1 << (aw + 1)) >> 20, rbytes >> 20, sz, szs))
+        rows = [last[(p, r)] for r in range(16) if (p, r) in last]
+        if len(rows) == 16:
+            de, me = sum(x[2] for x in rows), sum(x[4] for x in rows)
+            print("  last complete pass (%d): %d data errors, %d mask errors (of 4,096 words, 2,048 of them byte-masked)%s" % (
+                p, de, me, "  -- CLEAN" if de == 0 and me == 0 else ""))
+    for p in sorted(set(k[0] for k in last)):
+        wait = ["none (written, then read)", "~0.84 s idle", "~3.4 s idle"][p - 1] if 1 <= p <= 3 else "~13.4 s idle"
+        rows = [last[(p, r)] for r in range(16) if (p, r) in last]
+        print("  pass %d (wait before it: %s): %d of 16 regions reported, %d data errors, %d mask errors" % (
+            p, wait, len(rows), sum(x[2] for x in rows), sum(x[4] for x in rows)))
+        for (ps, r, de, fk, me, got) in rows:
+            if not de and not me: continue
+            s = (r << 8) | fk
+            word = (r << OB) | OFF[r][fk]
+            want = mt_data(s); exp = want
+            if fk & 3 == 1: exp = (want & 0xff00) | (~want & 0xff)
+            if fk & 3 == 2: exp = (~want & 0xff00) | (want & 0xff)
+            why = ""
+            if (fk & 3) in (1, 2) and got == (~want & 0xffff):
+                why = "  <- the masked byte was written too: BYTE MASK LOST"
+            elif ((~got >> 12) & 0xf) == (got & 0xf) and (got & 0xfff) != s:
+                gr, gk = (got >> 8) & 15, got & 0xff
+                # the pattern's four check bits match one random word in 16, so
+                # one region alone is a hint; the same partner across regions is not
+                why = "  <- reads as sample %d/%d's data: aliased with byte %07x? (1 in 16 by chance)" % (
+                    gr, gk, ((gr << OB) | OFF[gr][gk]) << 1)
+            chip, bank = (r >> 3, (r >> 1) & 3) if AWm == 26 else (0, r >> 2)
+            print("    region %2d (bytes %07x-%07x, chip %d, bank %d): %3d data, %3d mask errors; first k=%d at byte %07x read %04x want %04x%s" % (
+                r, r * rbytes, (r + 1) * rbytes - 1, chip, bank, de, me, fk, word << 1, got, exp, why))
 
