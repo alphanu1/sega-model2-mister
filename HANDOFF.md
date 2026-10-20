@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-10-20: OPEN BUG, TO BE FIXED HERE -- Virtua Cop's ammo display never updates (R890)
+
+Ben, on the Model 2 core: Virtua Cop's bullet display (the HUD's bullet
+textures) always shows full -- it does not update as shots are fired or on
+reload. The game plays. Likely the same path as the 2A branch's Virtua Cop 2,
+whose bullet textures do not appear at all (model2a R889): textures the game
+rewrites at run time (texture RAM written by the i960) -- a cached or
+mirrored copy not refreshed after the CPU's write, or the write not reaching
+what the renderer reads. Check against MAME (the texture RAM writes per shot
+and which polygons sample them) and Model 1's handling; port whatever model2a
+R889 finds if it is the shared path.
+
 ## 2026-10-17: OPEN BUG, TO BE FIXED HERE -- textured colour is Daytona's luma model (R872)
 
 Found on the Model 2A branch (model2a R867, fixed there in 526ef64 / 47dd93c,

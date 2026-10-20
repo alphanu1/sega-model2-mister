@@ -35807,3 +35807,10 @@ the colour table) filled from the CPU's SDRAM writes. ~9 M10K on this core
 (533 / 553 at s1142). Behind a switch; Daytona's frames must stay
 byte-identical with it off and match MAME with it on.
 
+**R890 -- OPEN ON THIS CORE: VIRTUA COP'S AMMO DISPLAY NEVER UPDATES.**
+(Recorded on main, numbered clear of the Model 2A branch's entries.) Ben,
+2026-10-20: the HUD's bullets always look full. Suspected: run-time texture
+updates (texture RAM written by the i960) not reaching what the renderer
+samples -- a stale cache or copy. The 2A branch's Virtua Cop 2 shows no
+bullets at all (model2a R889); whatever that finds should be checked here.
+
