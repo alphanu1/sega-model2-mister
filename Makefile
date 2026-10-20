@@ -1045,6 +1045,19 @@ obj_geodiff_ra/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cp
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
 
+# R899: the read-ahead build with the window in the sort key (q_z[19:16]),
+# as the core builds it for Virtua Cop; geodiff.py compares z[15:0], so the
+# nibble shows only in ours.txt.
+geodiff_wk: obj_geodiff_wk/Vgeodiff_top
+	@./obj_geodiff_wk/Vgeodiff_top $(TEST_ARGS)
+
+obj_geodiff_wk/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/mem/m2_eng_ra.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -GWINKEY=1 -CFLAGS "-O2 -DGD_RA" $(TGPFLAGS) -DGD_RA -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff_wk -o Vgeodiff_top sim/video/geodiff_top.sv rtl/mem/m2_eng_ra.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
 # ...and with B's engine path (R214's pair cache) in the same place, for the
 # baseline the read-ahead is measured against.
 obj_geodiff_pc/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/mem/m2_pair_cache.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \

@@ -1,6 +1,36 @@
 # Handoff
 
-## 2026-10-20: OPEN BUG, TO BE FIXED HERE -- Virtua Cop's ammo display never updates (R890)
+## 2026-10-20: branch vcop-ammo -- Virtua Cop's revolver sorted by window (R899); not built, not on the board
+
+Virtua Cop's ammo display (R890, "always full") is NOT a texture: it is a 3D
+revolver from polygon ROM, one object per round count (the loaded-rounds
+quad's texture position is the count), drawn in the list's WINDOW 5 at z
+bucket 45,635 -- behind the whole scene by z. MAME draws the last window
+first and in front; this core sorted by z alone, so on the bench the
+revolver is never drawn in play (0 of ~2,500 px in 25 sampled lists). The
+walker, read-ahead, texture RAM and texel cache are all right (geodiff: the
+per-count headers come out as MAME's). Fix = the 2A branch's R889 ported:
+the window count in the sort key ({15 - window, z}, KW 20), SELECTED AT RUN
+TIME FOR VIRTUA COP ONLY; Daytona and Desert Tank keep the 16-bit sort in
+the same cycles (bench: pixel hashes and sort timing identical on 11
+Daytona / Desert Tank lists). 0 new M10K, +53 ALM est. (noise). M2_NO_WINKEY
+builds the old core. Study R899 has the numbers.
+
+NOT reproduced: Ben's "shows but always full" -- the bench shows it hidden,
+not frozen. The board settles what he saw. TO CHECK ON THE BOARD (a build of
+this branch): the revolver bottom left in play, a chamber emptying and the
+cylinder turning per shot, full after a reload; Daytona and Desert Tank as
+before. Open decision for Ben: the key for every game (Daytona '93's car
+select has three windows) -- one line, wk_en.
+
+Findings that turned out wrong this session: R890's "run-time texture
+updates" (no texture RAM write in play at all); the lead "stale object
+pointer / polygon data in the walker" (geodiff shows the right object).
+Tooling: the patched MAME writes /tmp/m2lod.txt unless M2LOD_OUT is set;
+quartus_map --analyze_file rewrites Model2.qsf in place (restore it, or run
+in a copy).
+
+## 2026-10-20: (FIXED BY R899 on vcop-ammo) Virtua Cop's ammo display never updates (R890)
 
 Ben, on the Model 2 core: Virtua Cop's bullet display (the HUD's bullet
 textures) always shows full -- it does not update as shots are fired or on

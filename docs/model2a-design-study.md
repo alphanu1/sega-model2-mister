@@ -35814,3 +35814,127 @@ updates (texture RAM written by the i960) not reaching what the renderer
 samples -- a stale cache or copy. The 2A branch's Virtua Cop 2 shows no
 bullets at all (model2a R889); whatever that finds should be checked here.
 
+**R899 -- VIRTUA COP'S AMMO DISPLAY IS A 3D REVOLVER IN A LATER WINDOW, NOT A
+TEXTURE; THIS CORE SORTED BY z ALONE AND HID IT UNDER THE SCENE. FIXED: THE
+WINDOW IS THE TOP OF THE SORT KEY, FOR VIRTUA COP ONLY (the 2A branch's R889,
+ported).** (Ben, Model2_20261016: "the bullets show but do not update when
+you fire -- it always looks full"; R890.)
+
+*Believed (R890, HANDOFF):* run-time texture updates -- the i960 rewriting
+the bullets in texture RAM per shot -- not reaching what the renderer
+samples (a stale texel cache or copy); the lead from model2a R889 was a
+stale object pointer or polygon data in the walker.
+
+*Measured (MAME 0.289 vcopa, build/mame289-mip; a scripted game -- coin 40 s,
+start 41.5 s, a shot at 52 s picks the stage, play from ~54.3 s -- shots,
+write taps on texture RAM, luma, tile / char RAM, palette, buffer RAM, the
+geometrizer and the TGP FIFO; M2GEO walks 1728 / 1843 and 35 more at 1 s
+spacing 55-89 s; M2DIFF frames 1172 / 1287 = walks 1728 / 1843):*
+  1. THE AMMO DISPLAY IS A REVOLVER CYLINDER, bottom left: 13 polygons from
+     POLYGON ROM, ONE OBJECT PER ROUND COUNT -- six rounds oba 0x80e588 /
+     tha 0x5384 / tpa 0x5a47e, five 0x80e65b / 0x53d0 / 0x5a526, three
+     0x80e801 / 0x5468 / 0x5a676 -- under a rotation matrix that turns a
+     chamber a shot. Six side faces (h0 0x4009), six translucent chamber faces
+     (0x6009, texture (0,0) sheet 1: the empty chambers) and ONE translucent
+     quad for the loaded rounds whose texture position IS the count (h1/h2
+     7001/1900 six, 0801/1980 five, 0401/1882 three -- (0,128), (0,192),
+     (64,64)). It is the list's last object group, after its fifth
+     window_data: WINDOW 5, z bucket 45,635. The scene is window 1, z buckets
+     17,040-40,601 (lists 1172, 1287). It also flies in large and full at a
+     stage's start (54.3-54.6 s), still at z 45,185-45,635.
+  2. NOTHING ELSE CHANGES PER SHOT: no texture RAM write in play (the only
+     writes are the stage load, 54.26-54.41 s), no luma, palette or tile write
+     that tracks the shots; the i960 writes no buffer RAM (the list comes from
+     the TGP, fed through the FIFO). Only the list's object addresses and the
+     matrix change.
+  3. OUR WALKER AND GEOMETRY ARE RIGHT. geodiff_ra (the core's walker,
+     read-ahead and geometry) on walks 1728 / 1843: the bullets' quad comes
+     out with tex 0x301113 (five: texy 6, texx 0, sheet 1) and 0x105113
+     (three: texy 2, texx 2) -- MAME's headers -- at key 0xb243 = 45,635.
+     No stale object, pointer, polygon datum or texture.
+  4. THE RASTERISER HIDES IT. tb_m2_raster3d, the core configuration (FTB,
+     PXC, FRB 2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3, TXNS / TXRSP 4,
+     TXK 16, TXLW8, MIP 1, MIPZ 3, PXK 0), MAME's lists: the revolver is NOT
+     DRAWN AT ALL -- the ground (window 1, nearer by z) wins every pixel under
+     it. Drawn alone, the same RTL draws it exactly, five and three rounds.
+     Over the 35 sampled walks (25 with the revolver; MAME's counts six and
+     five, auto-reload on), 0 of its ~2,500 pixels survive in any of them.
+     MAME draws window by window, last first (render_polygons), first write
+     winning, so window 5 is in front of window 1 whatever the z -- R889's
+     finding on Virtua Cop 2, the same mechanism on Virtua Cop.
+
+*So "shows but always full" is NOT reproduced:* on the bench this core never
+shows the revolver in play, full or otherwise. INFERRED, not settled: Ben
+saw it where the scene did not cover the bottom left (a scene, angle or
+moment not sampled here -- the fly-in is full by definition), or saw
+something else as the bullets. The board settles it; nothing found on the
+path (walker, read-ahead, texel cache, texture RAM) holds a stale picture.
+
+*The fix (R889's, ported; on main as the 2A branch has it, plus a run-time
+gate):* m2_geo counts window_data per walk (cur_window = 0 at the walk's
+start, saturating at 15) and latches it with each object (obj_win);
+m2_geometry WINKEY puts {15 - window, z} in q_z[19:0]; m2_raster3d / the
+quad store sort a 20-bit key (KW 20, five radix passes, the first started in
+idx_b so the fifth lands in the bank -- R889's ODDP). SELECTED AT RUN TIME
+FOR VIRTUA COP ONLY (Model2.sv wk_en = is_vcop, registered): for Daytona and
+Desert Tank obj_win is held at 15 (the nibble is 0) and the store's new
+key_hi input low runs the old four passes starting in the bank -- the 16-bit
+sort exactly, in the same cycles. M2_NO_WINKEY builds KW 16 (the old core).
+
+*Evidence:*
+  - Virtua Cop, MAME's lists, window error = mean max-channel error over
+    MAME's pixels of that window (the scene's ~40-48 is R872's luma model,
+    still open):
+        list 1172 (five rounds): revolver 80.4 -> 51.9, scene 47.6 = 47.6
+        list 1287 (three rounds): revolver 92.9 -> 45.3; the window-2
+          overlay (42 flat polygons, z 17,322) 7.0 -> 0.6; scene and
+          window 4 unchanged (39.6, 44.0)
+      The revolver now shows five and three rounds, as MAME (bench crops).
+      Draw +0.5% / +1.3% (646,278 -> 649,461; 715,356 -> 724,894 core
+      cycles): the revolver drawn, and the fifth pass.
+  - geodiff (new geodiff_wk target) on walks 1728 / 1843: our quads
+    identical to the old RTL's but for the window nibble -- 0xE x 1,725 and
+    0xA x 15; 0xE x 791, 0xD x 42, 0xB x 1, 0xA x 15 (MAME's windows 1, 2, 4,
+    5). geodiff_ra with the key off: ours.txt byte-identical to the old RTL.
+  - Daytona and Desert Tank, the KW 20 bench with the key off (the core's
+    state for them) against main's bench: pixel hashes, the sort-ready
+    cycle and the draw's cycle count identical on Daytona f1000, f2000, f2300, f3910, f5000, f7000,
+    f9000, car select (Daytona '93) l3700, l3950, and Desert Tank attract
+    f400 (1,471 polygons) and f1200; Virtua Cop 1172 / 1287 with the key off
+    identical to main too. (A first version without key_hi ran the fifth
+    pass for every game: pixels identical, the sort 22% longer -- ~3,900
+    clk_sys cycles on f1000 -- so key_hi was added.)
+  - test_m2_quad_store, test_m2_raster3d, test_m2_geo, test_m2_geometry,
+    test_m2_geometry_mipz PASS; lint_top clean (and with -DM2_NO_WINKEY);
+    lint_idx the same 147 findings as a2caf9b (line numbers aside);
+    quartus_map --analyze_file 0 errors on m2_geo, m2_geometry,
+    m2_quad_store, m2_raster3d, Model2.sv.
+  - AREA, quartus_map 17.0, whole design:
+        a2caf9b (main)     40,417 ALM est.  57,774 ALUT  49,295 regs  4,379,775 bits  88 DSP
+        this               40,470           57,763       49,310       4,387,967       88
+    The key RAM 2048 x 16 -> 2048 x 20 (+8,192 bits) stays four M10K (the
+    2048 x 5 mode); the quad store's memories are the same twelve: 0 new
+    M10K (533 / 553 unchanged). +53 ALM estimated is at synthesis noise
+    (R848: +-40); the quad store itself +6 ALUT, +2 registers.
+
+*Daytona's car select has three windows (l3700: 3 / 1,351 / 2 polygons in
+windows 1 / 2 / 3)* -- with the key on it would follow MAME there too; it is
+off for Daytona and Desert Tank so they stay exactly as released. Turning it
+on for all games is one line (wk_en) and a decision for Ben.
+
+*Model 2A (model2a R889) shares the cause:* the same z-only key hid Virtua
+Cop 2's revolver (and Manx TT's tachometer needle, R893); there it showed no
+bullets at all, here the report was "always full" -- the same fix.
+
+*What the board must show (Virtua Cop):* the revolver bottom left in play
+over the ground and walls, a chamber emptying and the cylinder turning a
+chamber per shot, full after a reload; the fly-in at each stage's start.
+Daytona and Desert Tank exactly as before.
+
+*Tools:* sim/io/mame_m2_vcop_ammo.lua (the scripted game, write counts per
+frame, M2GEO dumps on time); MAME runs as tools/m2b-mame.sh does, writable dirs and M2LOD_OUT in
+the session's scratch (the patched build writes /tmp/m2lod.txt when
+M2LOD_OUT is unset -- set it). Quartus rewrites Model2.qsf (files.qip's
+entries and four SDRAM assignments appended) on --analyze_file; run it in a
+copy of the tree, or restore the QSF afterwards.
+

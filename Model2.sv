@@ -89,6 +89,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_VCOP_GUN
 `define M2_VCOP_GUN
 `endif
+// R899: M2_NO_WINKEY=1 builds the 16-bit z sort key -- the core before R899
+// exactly (see R3D_WINKEY below).
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -3333,6 +3335,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT)) u_geo (
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
 	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0), .win_cnt(),   // R642
+	.obj_win(geo_obj_win),   // R899
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall), .push_busy(geo_push_busy),   // R697
@@ -3422,6 +3425,7 @@ wire        geo_mat_we;
 wire [3:0]  geo_mat_idx;
 wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
 wire [31:0] geo_obj_tha;
+wire [3:0]  geo_obj_win;   // R899: the object's window (m2_geo), read with R3D_WINKEY
 wire [31:0] geo_obj_tpa;   // R268: where the per-vertex texture coordinates live          // R222
 wire        cpu_col_inval;
 wire  [1:0] eng_mem_space;
@@ -3478,6 +3482,21 @@ wire        q3d_mipz;                       // R828c: the game's level keeps thi
 // level (the game's texlod) is at most -MIPZ_B over all of it.
 localparam bit R3D_MIP = 1'b1;
 localparam int R3D_MIPZ_B = 3;
+// R899 (the 2A branch's R889): THE WINDOW ORDER IN THE SORT KEY. MAME draws
+// the last window opened first and in front of the rest (render_polygons);
+// Virtua Cop's revolver -- its ammo display -- is window 5, at a z behind
+// the whole scene (window 1), so a z-only sort hid it under the scene. The
+// key is {15 - window, z}, 20 bits. Built by default; SELECTED AT RUN TIME
+// FOR VIRTUA COP ONLY: for Daytona and Desert Tank obj_win is held at 15, the
+// nibble is 0 and the order is the 16-bit sort's. M2_NO_WINKEY builds KW 16.
+`ifdef M2_NO_WINKEY
+localparam bit R3D_WINKEY = 1'b0;
+`else
+localparam bit R3D_WINKEY = 1'b1;
+`endif
+logic wk_en;   // quasi-static: game_id is set once per load
+always_ff @(posedge clk_sys) wk_en <= R3D_WINKEY & is_vcop;
+wire [3:0] geo_obj_win_k = wk_en ? geo_obj_win : 4'hF;
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
 wire [31:0] q3d_z;
@@ -3508,11 +3527,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B)) u_geometry (   // R828c
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .WINKEY(R3D_WINKEY)) u_geometry (   // R828c, R899
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
+	.obj_win(geo_obj_win_k),   // R899
 	.mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
 	.mem_data(eng_mem_data_c), .mem_ack(eng_mem_ack_c),  // R214: through the pair cache
 	// THE VIEWPORT, AND THESE ARE NOT PIXELS. a_* are the four frustum planes
@@ -6323,10 +6343,12 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
               .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
-              .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW)) u_raster3d (   // R564: scan on clk_mem
+              .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
+              .KW(R3D_WINKEY ? 20 : 16)) u_raster3d (   // R564: scan on clk_mem; R899
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
+	.key_hi(wk_en),   // R899: the window key's fifth sort pass, Virtua Cop only
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.

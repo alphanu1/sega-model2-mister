@@ -119,7 +119,11 @@ module m2_raster3d #(
   // 0 is level 0 always: every module as before R828.
   parameter bit MIP = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
-  parameter int unsigned TEX_AW = 25
+  parameter int unsigned TEX_AW = 25,
+  // R899 (R889 on the 2A branch): the store's sort key width -- 16, the
+  // reference's z value; 20 with m2_geometry's WINKEY ({15 - window, z}: a
+  // later window in front).
+  parameter int unsigned KW = 16
 ) (
   input  logic        clk,
   // R318: m2_texel runs on this, not on `clk`. A texel miss is ~280 ns of which
@@ -128,6 +132,7 @@ module m2_raster3d #(
   input  logic        clk_mem,
   input  logic        rst_n,
   input  logic        frame_start,          // one pulse at the start of vblank
+  input  logic        key_hi,               // R899: q_z[19:16] in use (KW 20); quasi-static
 
   // ---- quads in, from the geometry stage. Screen space, already projected.
   input  logic        q_valid,
@@ -403,7 +408,7 @@ module m2_raster3d #(
   // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
-                  .FTB(FTB), .FRB(FRB), .MZ(MIP)) u_store (   // R607, R626, R828c
+                  .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW)) u_store (   // R607, R626, R828c, R899
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -415,7 +420,7 @@ module m2_raster3d #(
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
     .in_tex(q_tex), .in_mipz(q_mipz),                                 // R828c
-    .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
+    .sort_start(qs_sort_start), .key_hi(key_hi), .sort_busy(qs_sort_busy),   // R899
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
     .out_ready(qs_out_ready), .out_valid(qs_out_valid),
