@@ -9,11 +9,25 @@
 --   zg     Zero Gunner: button 1 held (fire), button 2 every 5 s, the stick on
 --          a fixed pseudo-random walk
 --   vcop2  Virtua Cop 2: the gun swept and fired, a reload off-screen every 4 s
+--   dig    R887: a digital stick and three buttons (hpyagu98, dynamcop,
+--          pltkidsa, doaab) -- buttons on their own rhythms, a random stick
+--   sky    R887: Sky Target -- the analog stick swept, gun held, missiles, view
+--   bike   R887: Manx TT / Motor Raid -- throttle, lean, brake, shift / punch
 -- Each coin time drops two coins; Start is pressed every 2 s for 100 s after
 -- each (it also takes the continue offers and the menus).
 --
 --   PL_GAME=rally|zg|vcop2  PL_COIN=<s,s,...>  PL_TEND=<s>
 --   [PL_SNAP=<s>] a snapshot every <s> seconds   [PL_LOG=<file>] time, frame, IP
+--   [PL_TAP=<file>] R887: every i960 access to 0x01d80000-0x01d9ffff (the
+--                 315-5881 / 317-0229 window) with time and IP; and a 64 KB
+--                 map of the data ROM the i960 reads (D: 0x02000000-0x03ffffff,
+--                 E: 0x06000000-0x06ffffff, MAME's main_data + 16 MB window);
+--                 the first 200 i8251 data reads (U) and comm-board reads (C)
+--   [PL_PRESS=<s>:test,<s>:svc,...] R887: test (1 s) / service (0.3 s) presses
+--   [PL_PATCH=<off>=<word>,...] R887: program words patched before the boot
+--   [PL_WATCH=<addr>,...] R887: with PL_TAP, those words logged every second
+--   [PL_ZERO=1]   R887: with PL_TAP, every 315-5881 decrypt read (0x01d9000c)
+--                 returns 0 -- what this core's empty window answers
 --   [PL_TEST=<s>] the test switch (held 1 s) at s, then the service button
 --                 every 2 s and the test switch every 9 s (a walk of the menus)
 --
@@ -29,6 +43,13 @@ local T_END = tonumber(os.getenv("PL_TEND") or "420")
 local SNAP = tonumber(os.getenv("PL_SNAP") or "0")
 local T_TEST = tonumber(os.getenv("PL_TEST") or "")
 local log = os.getenv("PL_LOG") and assert(io.open(os.getenv("PL_LOG"), "w"))
+-- R887: PL_PRESS="<s>:test,<s>:svc,..." -- the test switch (1 s) or the
+-- service button (0.3 s) pressed at those times (Manx TT leaves its motion-
+-- slider check only through the test menu, as MAME's notes say)
+local PRESS = {}
+for t_, k_ in string.gmatch(os.getenv("PL_PRESS") or "", "([%d%.]+):(%a+)") do
+  PRESS[#PRESS + 1] = {tonumber(t_), k_, (k_ == "test") and 1.0 or 0.3}
+end
 
 if log then
   for pn, p in pairs(ports) do
@@ -53,13 +74,80 @@ local F = {
   up = fld(":IN1", "P1 Up"), dn = fld(":IN1", "P1 Down"), lt = fld(":IN1", "P1 Left"), rt = fld(":IN1", "P1 Right"),
   x = first(":P1_X"), y = first(":P1_Y"), trig = fld(":IN1", "P1 Trigger") or fld(":IN1", "P1 Button 1"),
 }
+-- R887: the other 2A games' controls, found by bit (their names differ: Punch,
+-- Hold, Machine Gun, Shift Up ...). A field is taken only if it is not unused.
+local function fmask(p, mk)
+  if not ports[p] then return nil end
+  for _, f in pairs(ports[p].fields) do
+    if f.mask == mk and not f.name:find("Unused") and not f.name:find("Unknown") then return f end
+  end
+  return nil
+end
+F.d1, F.d2, F.d3 = fmask(":IN1", 0x01), fmask(":IN1", 0x02), fmask(":IN1", 0x04)
+F.s40 = fmask(":IN0", 0x40)                          -- Sky Target / bikes: start on IN0 bit 6
+F.v20 = fmask(":IN0", 0x20)                          -- Sky Target: View Change
+F.i10, F.i20 = fmask(":IN1", 0x10), fmask(":IN1", 0x20)   -- gun / missile, shift up / down
+F.sx, F.sy = first(":STICKX"), first(":STICKY")
+F.thr, F.bank = first(":THROTTLE"), first(":BANK")
+if GAME == "sky" or GAME == "bike" then F.start = F.s40 end
 if log then
   for k, v in pairs(F) do log:write(string.format("FIELD %s %s\n", k, v and "yes" or "no")) end
   log:flush()
 end
 local seed = 12345
 local function rnd(n) seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed >> 8) % n end
+-- R887: PL_PATCH="<hex offset>=<hex word>,..." writes words into the i960
+-- program region before the boot runs (an MRA's <patch> bytes, as MAME would
+-- see them); PL_WATCH="<hex addr>,..." logs those words once a second ("M")
+if os.getenv("PL_PATCH") then
+  local reg = m.memory.regions[":maincpu"]
+  for o_, w_ in string.gmatch(os.getenv("PL_PATCH"), "(%x+)=(%x+)") do
+    local o, w = tonumber(o_, 16), tonumber(w_, 16)
+    if log then log:write(string.format("PATCH %06x %08x -> %08x\n", o, reg:read_u32(o), w)) end
+    reg:write_u32(o, w)
+  end
+end
+local WATCH = {}
+for a_ in string.gmatch(os.getenv("PL_WATCH") or "", "(%x+)") do WATCH[#WATCH + 1] = tonumber(a_, 16) end
 local step_t, next_snap = -1, 0
+if os.getenv("PL_TAP") then
+  local tl = assert(io.open(os.getenv("PL_TAP"), "w"))
+  local sp = cpu.spaces["program"]
+  local seen = {}
+  local function ip() return cpu.state["ip"].value end
+  PL_TW = sp:install_write_tap(0x01d80000, 0x01d9ffff, "pl_pw", function(o, d, mk)
+    tl:write(string.format("%.6f W %08x %08x %08x ip %08x\n", emu.time(), o, d, mk, ip())); return d
+  end)
+  local ZERO = os.getenv("PL_ZERO") == "1"   -- R887: the 315-5881's decrypt reads answer 0 (this core)
+  PL_TR = sp:install_read_tap(0x01d80000, 0x01d9ffff, "pl_pr", function(o, d, mk)
+    if ZERO and o == 0x01d9000c then d = d & ~mk end
+    tl:write(string.format("%.6f R %08x %08x %08x ip %08x\n", emu.time(), o, d, mk, ip())); return d
+  end)
+  PL_TD = sp:install_read_tap(0x02000000, 0x03ffffff, "pl_dr", function(o, d, mk)
+    local b = (o - 0x02000000) >> 16
+    if not seen[b] then seen[b] = true; tl:write(string.format("%.6f D %08x ip %08x\n", emu.time(), o, ip())) end
+    return d
+  end)
+  PL_TE = sp:install_read_tap(0x06000000, 0x06ffffff, "pl_er", function(o, d, mk)
+    local b = 0x200 + ((o - 0x06000000) >> 16)          -- main_data + 16 MB (MAME's 0x06000000 window)
+    if not seen[b] then seen[b] = true; tl:write(string.format("%.6f E %08x ip %08x\n", emu.time(), o, ip())) end
+    return d
+  end)
+  local nu, nc = 0, 0
+  PL_TU = sp:install_read_tap(0x01c80000, 0x01c80003, "pl_ur", function(o, d, mk)
+    -- the i8251: data (offset 0) reads and the comm board's flag (R887: does a
+    -- game wait on an answer the 2A core's sound side never sends?)
+    if (o & 3) == 0 and (mk & 0xff) ~= 0 and nu < 200 then
+      nu = nu + 1; tl:write(string.format("%.6f U %08x %08x ip %08x\n", emu.time(), o, d, ip()))
+    end
+    return d
+  end)
+  PL_TC = sp:install_read_tap(0x01a00000, 0x01a1ffff, "pl_cr", function(o, d, mk)
+    if nc < 200 then nc = nc + 1; tl:write(string.format("%.6f C %08x %08x ip %08x\n", emu.time(), o, d, ip())) end
+    return d
+  end)
+  PL_TL = tl
+end
 local function pulse(t, at, len) return t >= at and t < at + len end
 PL_F = emu.add_machine_frame_notifier(function()
   local t = emu.time()
@@ -96,7 +184,44 @@ PL_F = emu.add_machine_frame_notifier(function()
       if (t % 4) >= 3.6 then x, y = 0x083, 0x024 end
       set(F.x, x); set(F.y, y)
       set(F.trig, ((t * 4) % 2 < 1) and 1 or 0)
+    elseif GAME == "dig" then
+      -- R887: a digital stick and up to three buttons (Hanguk Pro Yagu,
+      -- Dynamite Cop, Pilot Kids, Dead or Alive): each button pressed on its
+      -- own rhythm, the stick on a pseudo-random walk
+      set(F.d1, ((t * 3) % 2 < 1) and 1 or 0)
+      set(F.d2, ((t * 2.3) % 3 < 1) and 1 or 0)
+      set(F.d3, ((t * 1.7) % 4 < 1) and 1 or 0)
+      local s = math.floor(t * 4)
+      if s ~= step_t then
+        step_t = s
+        local d = rnd(9)
+        set(F.up, (d == 1 or d == 5 or d == 6) and 1 or 0); set(F.dn, (d == 2 or d == 7 or d == 8) and 1 or 0)
+        set(F.lt, (d == 3 or d == 5 or d == 7) and 1 or 0); set(F.rt, (d == 4 or d == 6 or d == 8) and 1 or 0)
+      end
+    elseif GAME == "sky" then
+      -- Sky Target: the stick swept, machine gun held, a missile every 3 s,
+      -- the view changed every 15 s
+      set(F.sx, 0x80 + math.floor(0x70 * math.sin(t * 0.8)))
+      set(F.sy, 0x80 + math.floor(0x60 * math.sin(t * 1.1)))
+      set(F.i10, ((t % 2) < 1.6) and 1 or 0)
+      set(F.i20, ((t % 3) < 0.2) and 1 or 0)
+      set(F.v20, ((t % 15) < 0.2) and 1 or 0)
+    elseif GAME == "bike" then
+      -- Manx TT / Motor Raid: throttle held, the bike leaned side to side,
+      -- brake now and then, shift up / down (Motor Raid: punch / kick)
+      set(F.thr, ((t % 20) < 17) and 0xff or 0x00)
+      set(F.brk, ((t % 20) >= 18) and 0xff or 0x00)
+      set(F.bank, 0x80 + math.floor(0x70 * math.sin(t * 0.6)))
+      set(F.i10, ((t % 5) < 0.2) and 1 or 0)
+      set(F.i20, ((t % 7) < 0.2) and 1 or 0)
     end
+  end
+  if #PRESS > 0 then                            -- R887: scripted test / service presses
+    local te, sv = 0, 0
+    for _, p in ipairs(PRESS) do
+      if pulse(t, p[1], p[3]) then if p[2] == "test" then te = 1 else sv = 1 end end
+    end
+    set(F.test, te); set(F.svc, sv)
   end
   if T_TEST and t >= T_TEST then
     local u = t - T_TEST
@@ -107,11 +232,18 @@ PL_F = emu.add_machine_frame_notifier(function()
     scr:snapshot(string.format("%s_%05.1f.png", GAME, t))
     next_snap = next_snap + SNAP
   end
+  if PL_TL and #WATCH > 0 and math.floor(t) ~= math.floor(t - 1 / 60) then
+    local sp_ = cpu.spaces["program"]
+    local o_ = {}
+    for _, a in ipairs(WATCH) do o_[#o_ + 1] = string.format("%08x=%08x", a, sp_:read_u32(a)) end
+    PL_TL:write(string.format("%.2f M %s\n", t, table.concat(o_, " ")))
+  end
   if log and math.floor(t) ~= math.floor(t - 1 / 60) then
     log:write(string.format("%.2f frame %d ip %08x\n", t, scr:frame_number(), cpu.state["ip"].value)); log:flush()
   end
   if t >= T_END then
     if log then log:close() end
+    if PL_TL then PL_TL:close(); PL_TL = nil end
     m:exit()
   end
 end)

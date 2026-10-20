@@ -119,7 +119,7 @@ bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre
 // extremes, angles) -- the VC-only forms (sqrtrl, the rl transcendentals)
 // still trap there
 bool use_fx = false;
-uint64_t fx_at = 0, fx_sin = 0, fx_rem = 0;   // R869: atanr, sinr, remr retired
+uint64_t fx_at = 0, fx_sin = 0, fx_rem = 0, fx_tan = 0;   // R869: atanr, sinr, remr retired; R887 tanr
 bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
 
@@ -675,8 +675,9 @@ int main(int argc, char **argv) {
         static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x69cu, 0x69du, 0x69eu, 0x690u, 0x66du };
         uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % 8] : FPOPS[rng() % nfp];
         // R869: with +fx, a third of the FP mix is the 2A games' forms
-        static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du };
-        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % 7];
+        // R887: and tanr (Manx TT)
+        static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du, 0x68eu };
+        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % 8];
         if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
@@ -1409,7 +1410,7 @@ int main(int argc, char **argv) {
           if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
           else if (k == 0x66d) vcfl++;
-          else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; }
+          else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; else if (k == 0x68e) fx_tan++; }
         if ((o==0x78||o==0x68||o==0x6c||o==0x67) && (iw&0x2000) && !(iw&0x00e00000)) fpwrites++; }
       if (itrace && (dut->dbg_intr_cnt != intr_before))
         std::printf("  [irq] r%llu DUT TOOK (cnt %u->%u)  dut: imm=%d vec=%02x "
@@ -1572,9 +1573,10 @@ int main(int argc, char **argv) {
                 double(ticks) / double(total_retires));
   std::printf("  FP ops executed: %llu, of which FP-register destination: %llu, long-real (R836): %llu\n", (unsigned long long)fpany, (unsigned long long)fpwrites, (unsigned long long)rlany);
   if (use_vc || use_fr || use_fx) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
-  if (use_fx) std::printf("  R869 forms retired: cpysre %llu, cvtzril %llu, atanr %llu, sinr %llu, remr %llu; one-ulp libm differences taken %llu\n",
+  if (use_fx) std::printf("  R869 forms retired: cpysre %llu, cvtzril %llu, atanr %llu, sinr %llu, remr %llu, tanr %llu (R887); one-ulp libm differences taken %llu\n",
                           (unsigned long long)vccp, (unsigned long long)vccv, (unsigned long long)fx_at,
-                          (unsigned long long)fx_sin, (unsigned long long)fx_rem, (unsigned long long)trans_ulp);
+                          (unsigned long long)fx_sin, (unsigned long long)fx_rem, (unsigned long long)fx_tan,
+                          (unsigned long long)trans_ulp);
   if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
   if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
   if (use_vc) std::printf("  R845 forms retired: sinrl %llu, cosrl %llu, tanrl %llu, atanrl %llu; one-ulp libm differences taken %llu\n",

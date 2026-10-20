@@ -39050,3 +39050,247 @@ or MAME's mix, 9,421,266 slot samples 0 wrong; tb_m2_2a_sound VF2 6 s
 unshifted: PASS, 98.9% of writes in MAME's order, 0 underruns, the check 0
 wrong, 82.68 ms (as R885). No RTL file changed: lint and quartus_map not
 rerun.
+
+**R887 -- THE OTHER SEVEN 2A SETS (hpyagu98, skytargt, dynamcop, pltkidsa,
+manxtt, motoraid, doaab): FIVE NEED MORE ROM THAN THE 64 MB SDRAM HOLDS, SKY
+TARGET NEEDS A LAYOUT EXTENSION, MANX TT RUNS AS IT IS (AN MRA, AND tanr).
+THE INPUT PROFILES. THE 315-5881 AND 317-0229 ARE CHECKS ONLY (PATCHES
+PROVED IN MAME). NOTHING FITTED, NOTHING ON A BOARD.**
+(Ben, through the coordinator: bring these up cheapest first and give MRAs
+to test; input profiles so games do not each add mapping logic; the chip is
+full -- prefer zero-logic answers. Limits: one MAME, one Verilator build,
+quartus_map only, no board, no run over ~15 min.)
+
+*Believed:* each new 2A set is an MRA on R852 / R862's layout plus its
+traps, its protection and its controls -- the four released games' pattern.
+
+*THE FINDING THAT DECIDES MOST OF IT: FIVE OF THE SEVEN DO NOT FIT THE
+SDRAM.* Nobody had counted the new sets' ROM against the 2A layout. From
+MAME 0.289's ROM_STARTs (every chip scanned in 256 KB blocks for blank
+space: all full but motoraid's third polygon pair, 2.5 of 4 MB used):
+
+  set        prog  data          tex (MAME layout)   poly   copro  smp  ROM MB
+  2A slots   0.5+1.5  16         8 {0-4, 8-12 MB}    12     4      8
+  vf2        0.5   16            4+4 split           12     -      8   41
+  manxtt     0.5   12+1 (x4)     4                   12     4      8   43.4
+  skytargt   0.5   16+1 (x16)    8 contiguous        16     4      8   54.3
+  pltkidsa   1     8             16                  32     -      8   65.5
+  hpyagu98   2     32            8 contiguous        16     -      8   66.4
+  motoraid   1     24+1 (x8)     8 contiguous        24*    2      8   68
+  doaab      1     24+4 (x2)     8 contiguous        24     -      8   69.5
+  dynamcop   2     32            16                  32     -      8   90.5
+  ("x n": MAME's ROM_COPY mirrors of the last pair. Add the 68000 program,
+  the TGP tables and ~5.5 MB of the core's RAMs in SDRAM.)
+
+The controller addresses 64 MB (R19: 1,024 columns; an eleventh column bit
+aliases). So MANX TT fits the 2A layout as it stands; SKY TARGET fits 64 MB
+but not the layout; the other FIVE need more than 64 MB of ROM before one
+RAM is placed -- no MRA can load them on this core, whatever their traps.
+Measured on the way (taps on the data windows, 240 s each): hpyagu98,
+motoraid and skytargt read main_data above 16 MB through MAME's 0x06000000
+window (main_data + 0x1000000), which the bridge maps linearly into the
+texture slot today; skytargt reads its 1 MB pair there at mirrored
+addresses (0x0640xxxx-0x064dxxxx).
+
+A SECOND GENERAL FACT, THE TEXTURE-COORDINATE ROM: every set built from 4 MB
+texture chips (skytargt, hpyagu98, motoraid, doaab: 8 MB at MAME 0-8 MB;
+pltkidsa, dynamcop: 16 MB) addresses that ROM's bit 21, which R671's
+packing {a[22], a[20:0]} drops: half their u/v and texture headers would
+read the other half's. INFERRED fix for the 8 MB sets, ~1 LUT in
+m2_geo_engine behind a parameter: {a[22] | a[21], a[20:0]} -- the 2 MB-chip
+games never set a[21] (R671: it "would land in the gap, which nothing
+addresses"), the 4 MB-chip 8 MB games never set a[22] (MAME's region is
+empty there). NOT BUILT: no set that needs it can load yet.
+
+*THE i960 FORMS (R869's method: the form-log MAME, sm2-builds/mame-r869
+m2lod, unchanged; sim/io/i960_formcheck.cpp; 240 s each -- boot, attract,
+three credits, play; sim/io/mame_m2_2a_play.lua's new dig / sky / bike
+sessions):*
+  set        forms  traps on R865's core (FR)     on R869's (FR + F2A)
+  skytargt    158   cvtzril                        none
+  pltkidsa    151   cpysre                         none
+  dynamcop    179   cvtzril                        none
+  hpyagu98    172   cvtzril                        none
+  manxtt      152   cvtzril, atanr, tanr           TANR (0x68.e), 9,082 x,
+                    (test in / out, then a race)   one PC 0x3f60c, from 55 s
+  motoraid    167   cvtzril, sqrtrl                SQRTRL (0x69.8), 20 x, 0x8b998
+  doaab       172   cvtzril, movre                 MOVRE (0x6e.1), 110 K x
+  Every set runs flushreg at boot (FR). Before this, vc_en (FR / F2A live)
+  was game IDs 0x10-0x12 only; now 0x10-0x1F (below).
+  * TANR, BUILT (Manx TT): the single form of R845's sequencer on its tan
+    entry, as R869's sinr takes the sin entry: one decode line in i960_top
+    (F2A, ta_on), the reference (sim/i960/i960_cpu_ref.h: set_rif(tan(t1f)),
+    bounded as sinr), the lockstep mix (+fx: tanr in FXOPS). MAME's own
+    operands, every distinct tuple through the module's microcode
+    (mame_i960_formlog.py, tools/i960_fptrans.py): tanr 6,671 / 6,671
+    equal (src1 -0.8727..0.8727, register in and out), atanr 170,992 /
+    170,992, cvtzril 5,205 / 5,205. test_i960_top_fx seeds 1 / 2 / 3, 20,000
+    programs each: 0 mismatches (tanr retired 1,334 / 1,413 / 1,550; no
+    one-ulp case). Planted: tanr on sin's entry -> FAIL; tanr's decode
+    dropped -> MODULE TRAP. test_i960_top, _fr, _vc PASS. After it Manx TT's
+    152 forms: 0 traps on the 2A core.
+  * SQRTRL (Motor Raid), NOT BUILT: VC's form; under F2A it is two gates
+    (the decode's vc_on test and fsqrt_req's VC), est. ~5 ALM.
+  * MOVRE (Dead or Alive), NOT BUILT, AND ABSENT FROM BOTH CORES: MAME
+    copies three words between a register triple and an fp register as raw
+    memory (its m_fp are doubles, so the third word spills into the next fp
+    register -- a MAME artefact). DOA uses it to save / restore fp0-fp3
+    (0x7704-0x771c out to r4.., 0x7860-0x7878 back); a 64-bit move both
+    ways plus a defined third word would serve a round trip. INFERRED
+    ~10-20 ALM; the silicon's extended-real format is not modelled anywhere.
+
+*PROTECTION (MAME taps on 0x01d80000-0x01d9ffff with the IP; MAME's own
+disassembly of the program; PL_ZERO runs where the 315-5881's decrypt reads
+answer 0, as this core's empty window does; PL_PATCH runs with the patch
+words written into the program region before the boot):*
+  * PILOT KIDS (315-5881): ONE session, at boot (1.99 s): 12 bytes to the
+    chip RAM, subkey 0x7140, 8 bytes decrypted ("98-PILOT") by 0x15750 into
+    0x40(fp) and compared byte by byte (0x51900-0x51970) with the program's
+    own copy at 0x5518c8; on a mismatch 1 -> 0x5092d4. That flag's four
+    readers (0x158b0, 0x6d9c4, 0x6e474, 0x6e848) quietly corrupt the game
+    (zero object entries and play state). Zeroed reads: the game runs but
+    diverges (credits / score differ at every 30 s snapshot). PATCH: program
+    0x51900 3dad0074 (cmpibne) -> 08000080 (b 0x51980), <patch>80 00 00
+    08</patch> -- plus MAME's init_pltkids 0x730 = 08000004. PROOF: zeroed
+    reads + the patch: the flag 0 for all 229 s, and every snapshot
+    (30..240 s) byte-identical to the real-chip run's.
+  * DYNAMITE COP (315-5881): FOUR sessions (4.4, 5.1, 24.7, 108 s), two
+    checkers: 0x66ac0 (subkey 0x7700, "UCHIDA MOMOKA   ", against 0xbc800)
+    and 0x66a00 (subkey 0x1326, 16 binary bytes, against 0xbc7f0); the
+    decrypted buffers (0x513f20 / 0x513f40) have no other reference in the
+    program. A mismatch stores 2 in 0x51f4b4 and calls 0xa3a00 / 0xa3a50.
+    ZEROED READS: MAME HALTS AT 4.36 s ("I960: 0: Unhandled 00") -- the
+    first check's penalty. PATCH: the six compare branches cmpibe -> b, same
+    displacement: 0x66a50 0x66a68 0x66a80 0x66a98 (3aad0010 -> 08000010) and
+    0x66b14 0x66b54 (3aad0038 -> 08000038). PROOF: zeroed reads + the six
+    words: 240 s, all four sessions at the real run's times, 0x51f4b4 0x68
+    throughout, every snapshot byte-identical to the real-chip run's.
+  * DEAD OR ALIVE (317-0229) -- ASSESSED AS ASKED, STOPPED THERE: MAME does
+    not emulate DOA's use either (HACK_MODE_DOA hands back a fixed string).
+    The boot (0x760) probes the chip -- up to 9,999 polls of 0x01d8400c for
+    0xfff0 (MAME's doa_unk_r toggles it) -- then 0x2bd0 uploads 24 + 128
+    words of tables, a source, and reads 48 bytes back into 0x54b390,
+    compared with a string; 1 / 0 -> 0x54fabc (three readers). The chip
+    produces that string and nothing else. Without the chip the probe times
+    out (the flag 0, no hang: the timed-out branch skips the poll-forever
+    routine). PATCH: 0x760 and 0x778 (the two calls) -> 5c801e01 (mov 1,g0),
+    so the flag is 1 and the window is never touched. MAME: 0x54fabc 1 from
+    the first second as with the chip (113 / 114 samples, both runs); frames
+    differ from the real run's (the skipped polls move the boot), which is
+    expected and not an equivalence proof. COST: 0 ALM, 2 MRA words, against
+    a chip (Huffman tree + dictionary decompressor) at ~300-500 ALM -- and
+    DOA also needs movre (above) and does not fit the SDRAM (69.5 MB).
+
+*OTHER HARDWARE:*
+  * MANX TT: MAME runs it on manxttdx -- the 2A board plus a Model 1 sound
+    board listening on the same UART (the DX cabinet's extra sounds). The 2A
+    core has none (R852): those sounds are missing; the game never reads
+    the UART (0 data reads in 240 s) nor the comm board. Every boot stops
+    at "ACTIVE MOTION SLIDER NOW CHECKING SYSTEM" (the DX seat; MAME's own
+    TODO): Test opens the test menu with EXIT selected, Test again and it
+    runs -- with MAME's default EEPROM and with a blank one (the core's 93C46
+    starts blank), both race. Analog: THROTTLE / BRAKE / BANK on channels
+    0-2 (BANK reversed); the game calibrates in its input test.
+  * SKY TARGET: STICKY on channel 0, STICKX (reversed) on channel 2.
+  * MOTOR RAID: reads the comm board (0x01a12xxx; Twin link) -- reads 0
+    here; not waited on in 240 s.
+  * HANGUK PRO YAGU 98: MAME needs handcrafted EEPROM and backup-RAM images
+    (in the zip, hpyagu98_nvram / _backup) or it stops at Error #1; the core
+    can load neither (the EEPROM has no load path; backup RAM only from a
+    saved .nv). MACHINE_NOT_WORKING.
+  * None of the seven uses the drive board.
+
+*THE INPUT PROFILES (rtl/io/m2_2a_inputs.sv).* The module now takes the game
+ID (bits 6:0) instead of three flags and picks the cabinet; each profile
+wires MiSTer's joystick bits onto the 315-5649's ports in ONE FIXED ORDER,
+and an MRA's <buttons names> follows that order (a button a game lacks is
+"-", which Main_MiSTer's mapping skips: input.cpp, joy_bnames == "-").
+REVISED IN THIS ENTRY (Ben): the released games' MRAs do not change, so each
+released order IS a profile's order:
+  * DIGITAL, three buttons (every ID not below): VF2's order -- J 4 B1 5 B2
+    6 B3 7 Start 8 Coin 9 Test 10 Service, R879's sticks. hpyagu98 (vf2's
+    ports), dynamcop (Punch Kick Jump) and doaab (Hold Punch Kick) fit it.
+  * DIGITAL, two buttons (0x12 Zero Gunner, 0x15 Pilot Kids): Zero
+    Gunner's released order -- J 4 B1 5 B2 6 Start 7 Coin 8 Test 9
+    Service; pltkids' ports are zerogun's.
+  * ANALOG (0x10, 0x18-0x1B; M2_2A_RALLY): Daytona's m2_cab_inputs in Sega
+    Rally's order (Coin Start Test Service View HandBrake Accel Brake GearUp
+    GearDown); IN0 the same for all. 0x10 Sega Rally unchanged. 0x18 Sky
+    Target: IN1 0x10 Machine Gun = J 12, 0x20 Missile = J 13; AN0 STICKY =
+    0x80 + the left stick's Y (a sign-bit inversion, no logic); AN1 0xFF;
+    AN2 STICKX = 0xFF - steering. 0x19-0x1B the bikes: IN1 0x10 / 0x20 =
+    J 12 / 13 (Shift Up / Down, Motor Raid's Punch / Kick); AN0 THROTTLE =
+    accelerator, AN1 BRAKE, AN2 BANK = 0xFF - steering. 0xFF - v and not
+    0x100 - v: INFERRED as MAME's reverse; one count, both games calibrate.
+    The OSD's four analog lines show for 0x18-0x1B too.
+  * GUN (0x11, Virtua Cop 2): R870 unchanged.
+  What no MRA can fix: nothing for these seven. A later digital game with a
+  fourth button, or a non-model2 bit, needs a profile widened.
+  A first cut put Zero Gunner into the three-button order with its MRA
+  renamed ("Button 1,Button 2,-,..."); withdrawn on Ben's word (released and
+  working on s1220): its MRA is byte-identical to model2a's.
+  Benches: tb_m2_2a_inputs on game IDs: 20 M cycles, 129.3 M checks, 0 --
+  VF2 bit for bit against R852's expressions, Sega Rally / Virtua Cop 2 /
+  Zero Gunner against cdd58a7's models verbatim (ZG drawn as 0x12 or 0x15),
+  the other digital IDs against MAME's model2 ports, Sky Target and the
+  bikes against INPUT_PORTS skytargt / manxtt beside an unchanged
+  m2_cab_inputs. CDD58A7'S BENCH UNMODIFIED (its top and C++, through a shim
+  mapping its is_* flags to IDs): 120 M checks, 0. A miter of cdd58a7's
+  module against this one (IDs 0x00 / 0x10 / 0x11 / 0x12, GUN 1 and 0): 40 M
+  random cycles each, 0 differing outputs. Eight planted faults caught (Sky
+  X unreversed, throttle / brake swapped, J 12 / 13 swapped, B3 dropped,
+  Sky Y without its offset, Sky AN1 from the brake, Sky's ID off by one, the
+  analog range widened to 0x1C -- the last only at 20 M cycles).
+  test_m2_vcop2_guns 223,916 / 0. lint_top clean (2A; -DM2_NO_2A;
+  -DM2_NO_DEBUG -DM2_PROBE=1 -DM2_NO_2A_RALLY); lint_idx: nothing in the
+  changed files.
+
+*Model2.sv:* game IDs 0x13 hpyagu98, 0x14 dynamcop, 0x15 pltkidsa, 0x16
+doaab, 0x18 skytargt, 0x19 manxtt, 0x1A motoraid (only Manx TT has an MRA).
+The per-game decodes became ranges: prog_ext and vc_en for 0x10-0x1F, the
+copro-data gate and the analog OSD lines for 0x10 and 0x18-0x1B -- the same
+values as before for 0x00-0x12.
+
+*AREA, quartus_map 17.0, whole design, the 2A build, the same qsf:*
+     model2a (cdd58a7 = 22e741a's RTL)   40,027 ALMs est.  57,515 ALUT  47,668 regs
+     this                                39,945            57,446       47,668
+  -82 ALMs estimated, -69 ALUT, registers and block bits equal (4,458,495).
+  m2_2a_inputs 254 -> 288 ALUT (+34: the two new cabinets' channels, the
+  two-button order kept, the ID decode moved in); i960_top 11,584 -> 11,470
+  (tanr is one decode term; the rest is synthesis perturbation); Model2.sv's
+  range decodes the remainder.
+
+*MRA: mra/Manx TT Superbike - DX-Twin (Revision D).mra* (manxtt.zip, ID
+0x19): the 2A layout unchanged, image 0x32C0000 -- the 1 MB data pair
+written four times for MAME's ROM_COPYs (no logic), the program extension
+as zeros, the copro data in R862's slot. tools/mra_vs_mame.py --layout=2a
+PASS, all ten slots. No 15 kHz MRA (Ben).
+
+*COSTS FOR BEN'S DECISIONS (ESTIMATES, not mapped):*
+  1. SKY TARGET (54 MB): ~60-90 ALM, 0 M10K. (a) polygons 12-16 MB: a third
+     loader remap to SDRAM byte 0x3C00000 (free once ST_BASE's test words
+     move into the 768 KB hole at 0x2B80000) and the engine's polygon base
+     for dword >= 3 M (R725's POLYXB pattern) -- ~40-60; (b) data 16-17 MB:
+     the MRA puts the 1 MB pair in the program-extension slot (Sky's
+     program is 512 KB), the bridge's 0x06000000 window then maps there with
+     a 1 MB mask for 0x18 -- ~15-25; (c) the texture packing OR -- ~1.
+  2. THE FIVE LARGE SETS (65.5-90.5 MB): not on 64 MB. Either a 128 MB
+     SDRAM (R19 measured this board's module aliasing an eleventh column
+     bit: whether a dual-chip 128 MB module can be addressed at all is a
+     board question), or one ROM region in DDR3 (polygons or data: a new
+     read path, a DDR3 loader, the latency R35 warned of) -- several hundred
+     ALM; plus per set: pltkidsa / dynamcop a 16 MB texture-coordinate
+     slot; hpyagu98 an EEPROM / backup preload (~20 ALM for an EEPROM load
+     port); motoraid sqrtrl (~5); doaab movre (~10-20).
+  3. The protection is not a cost for any of them: zero-logic patches
+     above (pltkidsa 1 word, dynamcop 6, doaab 2), proved in MAME.
+
+*VERIFIED / INFERRED (and what settles it):*
+  * VERIFIED in MAME 0.289: the forms, the traffic, the patches' effect
+    (pltkidsa, dynamcop byte-identical snapshots; doaab the flag), Manx TT's
+    test in / out and its races, tanr's operands through the module.
+  * INFERRED: Manx TT on the core boots and races (not simulated whole-core;
+    its luma rows are not in R867's capture map -- textured colours may be
+    off; the pedal range 0x20..0xE0 against MAME's 0x00..0xFF is the game's
+    calibration to settle); later stages' forms (240 s each).
+  * The board: Manx TT with the Model2A core built from this branch.
