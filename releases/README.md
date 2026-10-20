@@ -1,6 +1,53 @@
 # Sega Model 2 — releases
 
-## What to copy
+There are two cores: **Model 2** (`Model2.rbf`) for the original Model 2
+board, and **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board. Each game's
+MRA names the core it runs on, so both can sit in `cores/` side by side.
+
+ROMs go in `/media/fat/games/mame/`, named as MAME 0.289 names them. Nothing
+here contains ROM data.
+
+## Model 2 core — `Model2.rbf`
+
+| Game | MRA | ROM zips | MAME set | State |
+|---|---|---|---|---|
+| Daytona USA (Revision A) | `Daytona USA (Revision A).mra` | `daytona.zip`, plus the I/O board ROM `epr-14869c.25` (in `model1io.zip` or a Daytona zip) | `daytona` | Plays |
+| Daytona USA (Deluxe '93) | `Daytona USA (Deluxe 93).mra` | `daytona93.zip`, plus `daytona.zip` with a split set | `daytona93` | Plays |
+| Desert Tank | `Desert Tank.mra` | `desert.zip`, plus `epr-14869c.25` as for Daytona | `desert` | Plays |
+| Virtua Cop (Revision A) | `Virtua Cop (Revision A).mra` | `vcopa.zip` (or `model1io2.zip` for its I/O ROM) | `vcopa` | Plays. The ammo display always shows full (known, to be fixed) |
+
+Each of these also has a `[15kHz CRT]` MRA.
+
+## Model 2A core — `Model2A.rbf` (not released yet)
+
+| Game | MRA | ROM zips | MAME set | State |
+|---|---|---|---|---|
+| Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays. Sound effects sit low under the music, as in MAME |
+| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays. Some slowdowns; quiet sound, as in MAME |
+| Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays with mouse or stick aim. The ammo display is missing (known, being fixed) |
+| Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays. Quiet sound, as in MAME. The MRA patches out the protection check |
+
+There are no `[15kHz CRT]` MRAs for the 2A games yet; making one is a copy of
+the MRA with bit 7 set in the game ID byte (index 4).
+
+### Model 2A games not supported yet
+
+These run on the same board, and are being brought up next. The zips are
+what each will need.
+
+| Game | ROM zips | MAME set | What it needs |
+|---|---|---|---|
+| Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | Its MRA |
+| Sky Target | `skytargt.zip` | `skytargt` | Its MRA and analogue stick |
+| Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | Its MRA; its 315-5881 protection check patched out, as Zero Gunner's |
+| Pilot Kids (Model 2A) | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | As Dynamite Cop |
+| Manx TT Superbike (DX/Twin, Revision D) | `manxtt.zip` | `manxtt` | Its MRA and bike controls |
+| Motor Raid (Twin, Twin/DX) | `motoraid.zip` (and `motoraiddx.zip` for Twin/DX) | `motoraid` | As Manx TT |
+| Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | A second protection chip (317-0229), not yet assessed |
+
+## Model 2 core release notes
+
+### What to copy
 
 | file | where it goes on the SD card |
 |---|---|
@@ -18,7 +65,7 @@ you need one.
 You supply the ROMs. They go in `/media/fat/games/mame/`, named the way the
 MRA expects. Nothing in this folder contains ROM data.
 
-## ROMs
+### ROMs
 
 | zip | for |
 |---|---|
@@ -49,7 +96,7 @@ any backups out of `cores/`.
 **SDRAM:** the core needs a 64 MB or larger module. The 3D is drawn into the
 DE10-Nano's own DDR3, so nothing else is needed for that.
 
-## What works
+### What works
 
 Three games run on one core: **Daytona USA** (Revision A and Deluxe '93),
 **Desert Tank** and **Virtua Cop**.
@@ -72,7 +119,7 @@ its missions with no lock in an 87-minute run. Virtua Cop is playable
 through its stages with light-gun input. It's the newest, so please report
 anything you find.
 
-## New in this release
+### New in this release
 
 - **Desert Tank.** Its own MRA, on the same core. Left stick steers, the
   right stick aims the cannon, and the triggers drive forward and reverse.
@@ -122,7 +169,7 @@ anything you find.
   chips now sharing one engine. That freed space on the FPGA for what comes
   next.
 
-### Earlier releases
+#### Earlier releases
 
 **20261013:** races at full speed, from a faster main CPU (8 KB instruction
 cache and better instruction fetching). Steering wheel support. Split and
@@ -135,7 +182,7 @@ stopped juddering; the car-select tyres came back; ROLLING START scrolls; the
 mini-map and condition panel sit in the right place; no black band above the
 sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 
-## OSD settings
+### OSD settings
 
 | setting | what it does |
 |---|---|
@@ -158,9 +205,9 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
-## Controls
+### Controls
 
-### Daytona USA
+#### Daytona USA
 
 | | |
 |---|---|
@@ -187,7 +234,7 @@ steering feels too light or too heavy, try the `Steering` settings. I'd love
 to hear from wheel owners: this has been built to how MiSTer maps wheels, but
 not yet tried on one.
 
-### Desert Tank
+#### Desert Tank
 
 | | |
 |---|---|
@@ -202,7 +249,7 @@ The MRA renames the buttons, so MiSTer's define-buttons screen asks for these
 names. With `Right stick: Pedals+steer` (a wheel), the wheel steers, the
 pedal axis drives forward or back, and the d-pad aims.
 
-### Virtua Cop
+#### Virtua Cop
 
 | | |
 |---|---|
@@ -222,7 +269,7 @@ its own backup RAM, and a fresh set starts as Japan, as it does in MAME. The
 country is the game's own setting, so change it in its test menu, or use a
 ROM set from another region.
 
-## On a 15 kHz CRT
+### On a 15 kHz CRT
 
 The game's own picture is 24 kHz, which a 15 kHz TV can't show. The core has a
 15 kHz interlaced mode that shows all 384 lines as two fields, at the game's
@@ -247,7 +294,7 @@ on `Full`. It has no effect at 15.1 kHz.
 It's been tested on real CRTs, but more reports are very welcome: which TV,
 how it's connected, and which settings work for you.
 
-## MiSTer's audio filter is switched off
+### MiSTer's audio filter is switched off
 
 This core switches off MiSTer's own audio filter. The game sounds exactly the
 same on HDMI, the 3.5 mm jack and S/PDIF; it's only MiSTer's filter presets
@@ -262,7 +309,7 @@ If you build the core yourself: it's one small, switchable change to the
 framework file `sys/audio_out.sv`, kept as a patch in
 `docs/framework-patches/` with a README explaining it.
 
-## Still to come
+### Still to come
 
 - **Reports from CRT, wheel and light-gun owners** (see above), and from
   anyone running the Deluxe '93 set for long stretches.
@@ -271,7 +318,7 @@ framework file `sys/audio_out.sv`, kept as a patch in
 
 If you find something wrong, please report it.
 
-## Credits
+### Credits
 
 The framework is MiSTer-devel's. The sound board's 68000 is fx68k by Jorge
 Cwik (ijor), and its YM3438 is jt12 by Jose Tejada (jotego). The MultiPCM
