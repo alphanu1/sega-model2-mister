@@ -3495,7 +3495,7 @@ localparam bit R3D_WINKEY = 1'b0;
 localparam bit R3D_WINKEY = 1'b1;
 `endif
 logic wk_en;   // quasi-static: game_id is set once per load
-always_ff @(posedge clk_sys) wk_en <= R3D_WINKEY & is_vcop;
+always_ff @(posedge clk_sys) wk_en <= R3D_WINKEY;   // Ben 2026-10-20: every game, as MAME draws by window
 wire [3:0] geo_obj_win_k = wk_en ? geo_obj_win : 4'hF;
 /* verilator lint_on UNUSEDSIGNAL */
 wire [23:0] q3d_col;
@@ -6348,7 +6348,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
-	.key_hi(wk_en),   // R899: the window key's fifth sort pass, Virtua Cop only
+	.key_hi(wk_en),   // R899: the window key's fifth sort pass, every game
 	// Each bar is a proper filled rectangle traversed around its perimeter:
 	// (x0,y0) top-left, (x0,y2) bottom-left, (x2,y2) bottom-right,
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.
