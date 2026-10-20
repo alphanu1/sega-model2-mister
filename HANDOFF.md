@@ -17,6 +17,31 @@ i960 (40 MHz, 8 KB I-cache) is faster than the board's 25 MHz with its wait
 states -- padding can only slow accesses, so it cannot cure slowdowns, which
 come from SDRAM waits longer than the board's.
 
+## 2026-10-20: branch scan15 -- 15 kHz is retrorepair's scan converter, HDMI kept (R898). NOT BUILT.
+
+Ben: the 15 kHz picture has big borders top and bottom and sync issues;
+retrorepair's guncon-scan15 fixes the size but drops HDMI. Ported to main
+(branch scan15, from a2caf9b; for main first, then main -> model2a):
+  * rtl/video/m2_scan15.sv (retrorepair's, 57faad7): the renderer stays at
+    native 24 kHz; a 16-line ring takes the finished picture and the
+    converter outputs 240 lines a field, 480 a frame, 384 -> 480 by an exact
+    4:5 blend, no frame of delay, fields paired to the game's images.
+  * Changes from theirs: two taps; 16 lines (they had 12, enough for 15.1 kHz
+    only -- 15.7 kHz needs 15 because the read gains 12 rows on the write over
+    a field); D_PX per line count; all three line rates kept (R840); HDMI kept;
+    no light-gun beacon.
+  * The 1:1 15 kHz path is tied off (synthesis removes it). OSD: "15kHz
+    width" (O[55]) removed, the bit RESERVED; "15kHz lines" kept.
+  * Bench: sim/video/run_scan15.sh [mode] [frames] [cad] [ph] -- 15 of 15
+    PASS (three line rates x five image cadences, 140 frames, 16.3 M pixels
+    each, 0 mismatches); 14 lines fails, 15 passes (R898 lists the checks).
+  * quartus_map (whole design, vs s1142's): ALMs needed 40,417 -> 40,537,
+    DSP 88 -> 94, M10K 533 -> 553 of 553 expected (the ring is 20).
+OPEN: the fit (s1142's ratio puts it near 41,580 ALM, where R848 failed by
+5-10 LABs) -- Ben runs it; then a CRT and HDMI at 15 kHz on the board. R872's
+~9 M10K now has no free M10K on main. Model 2A needs 20 M10K and ~120 ALM
+found before this carries there.
+
 ## 2026-10-20: OPEN BUG, TO BE FIXED HERE -- Virtua Cop's ammo display never updates (R890)
 
 Ben, on the Model 2 core: Virtua Cop's bullet display (the HUD's bullet

@@ -142,7 +142,6 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
 | `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
-| `15kHz width` | `Full` (default) or `Narrow`, for a picture that looks squashed at 15.4 or 15.7 kHz — see the CRT section |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
 | `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions |
@@ -225,8 +224,15 @@ ROM set from another region.
 ## On a 15 kHz CRT
 
 The game's own picture is 24 kHz, which a 15 kHz TV can't show. The core has a
-15 kHz interlaced mode that shows all 384 lines as two fields, at the game's
-own speed.
+15 kHz interlaced mode for it, at the game's own speed. The game keeps drawing
+its native 384-line picture, and a scan converter turns that into 480 lines,
+two fields of 240, so the picture fills the screen top to bottom instead of
+sitting between black borders. It adds no delay, and for games that draw every
+other frame (Virtua Cop, Desert Tank) it keeps each picture's two fields
+together so moving things aren't combed. HDMI keeps working alongside it.
+
+The converter is [retrorepair](https://github.com/retrorepair/sega-model2-mister)'s
+design, from their CRT and light-gun work on this core.
 
 The easy way is to **load the `[15kHz CRT]` version** of the game from the
 MiSTer menu. It starts in 15 kHz straight away. With a normal MRA, set
@@ -237,15 +243,14 @@ what most TVs want. A few sets prefer NTSC's line count instead: if yours
 rolls or loses sync, try `262/263` (15.1 kHz), or `268/269` (15.4 kHz) in
 between.
 
-The game runs at 57.5 frames a second, not 60, so a faster line rate means
-more lines in each field, and the picture uses fewer of them. On many sets
-that makes it look shorter at 15.4 and 15.7 kHz than at 15.1. If yours does
-that, set `15kHz width` to `Narrow`: the picture is pulled in from the sides
-by the same amount, so it keeps its shape. If it looks too narrow, leave it
-on `Full`. It has no effect at 15.1 kHz.
+The picture is the same 240 lines a field at every line rate. The game runs at
+57.5 frames a second, not 60, so a faster line rate means more lines in each
+field, and on some sets the picture looks a little shorter at 15.4 and 15.7 kHz
+than at 15.1. The old `15kHz width` setting is gone with the old picture.
 
-It's been tested on real CRTs, but more reports are very welcome: which TV,
-how it's connected, and which settings work for you.
+retrorepair has run the converter on a CRT at 15.1 kHz; the 15.4 and 15.7 kHz
+settings are new with it, so reports are very welcome: which TV, how it's
+connected, and which settings work for you.
 
 ## MiSTer's audio filter is switched off
 
@@ -279,7 +284,7 @@ comes from [meathax](https://github.com/meathax)'s
 [s32](https://github.com/meathax/s32) System 32 project. The I/O board's Z80
 is tv80 by Guy Hutchison, after Daniel Wallner's T80. The TGP and the video
 timing come from the Sega Model 1 core, which solved the same problems first
-on the same hardware.
+on the same hardware. The 15 kHz scan converter is retrorepair's.
 
 Hardware behaviour was checked throughout against MAME, whose Model 2 driver
 is by R. Belmont, Olivier Galibert, ElSemi, Angelo Salese and Matthew

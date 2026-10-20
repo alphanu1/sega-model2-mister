@@ -43,7 +43,7 @@ guns, sits behind a compile-time switch so a later branch can leave it out.
 | **Light guns** | Two players, from an analog stick or a mouse, the way MiSTer delivers USB guns. Crosshairs at 24 and 15 kHz. |
 | **SDRAM** | Thirteen ports, 64 MB, read timing fixed (not calibrated) since it was proven there's only one right setting. |
 | **Speed** | Daytona: 57 of 57.5 frames a second in attract and in a race, 99% of frames on time. Desert Tank and Virtua Cop: 29, which is their own rate (they draw every other frame). |
-| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs at 15.7 (default), 15.4 or 15.1 kHz, with MRAs that start straight in 15 kHz. |
+| **Video** | Native 24 kHz, and 15 kHz interlaced for CRTs at 15.7 (default), 15.4 or 15.1 kHz, with MRAs that start straight in 15 kHz. At 15 kHz the picture fills the screen: retrorepair's scan converter scales the 384 lines to 480 (two fields of 240), with HDMI kept. |
 
 ### What's left
 
@@ -202,6 +202,9 @@ was changed:
   engine.
 - **tv80**, by Guy Hutchison after Daniel Wallner's T80, for the I/O board's
   Z80.
+- **[retrorepair/sega-model2-mister](https://github.com/retrorepair/sega-model2-mister)**
+  (branch `guncon-scan15`, GPL-3.0), the 15 kHz scan converter: the full-height
+  15 kHz picture is retrorepair's design.
 - **[MAME](https://www.mamedev.org/)**, as a reference for what the hardware
   computes. Not linked or distributed.
 
