@@ -35814,3 +35814,123 @@ updates (texture RAM written by the i960) not reaching what the renderer
 samples -- a stale cache or copy. The 2A branch's Virtua Cop 2 shows no
 bullets at all (model2a R889); whatever that finds should be checked here.
 
+**R898 -- 15 kHz IS NOW A SCAN CONVERTER (RETROREPAIR'S), WITH HDMI KEPT AND
+ALL THREE LINE RATES.** (Main, numbered clear of the Model 2A branch.) Ben,
+2026-10-20: "on 15 kHz the implementation we have is flawed -- big black
+borders at the top and bottom and it has sync issues. Retro Repair has looked
+into this and has it working right, at least in size. The only issue is they
+took out HDMI." Needed for Model 2 and 2A.
+
+*Believed (R682, R701, R783, R799, R834, R840):* 15 kHz is the renderer
+retimed -- the same 656-pixel line at a lower pixel clock, 192 of the 384
+lines a field -- and its faults were timing faults to be tuned (vsync place,
+line count, a narrow line for the shape).
+*Now known (retrorepair, guncon-scan15):* the border is not a timing fault.
+A field holds ~240 visible lines at the game's fixed 57.52 Hz and the 1:1
+picture has 192 of them, so a fifth of the height is black whatever the
+timing; only a vertical scale fills it. Their converter (m2_scan15): the
+renderer stays on native 24 kHz timing, a ring of lines takes the finished
+picture, and its own 15 kHz interlaced timing shows 240 lines a field, 480 a
+frame, output row m from source row 4m/5 (an exact 4:5 bilinear blend). Two
+output fields are exactly two native frames (3,476,800 clk_mem either way)
+so it never drifts and adds no frame of delay; a 28.8 Hz game's two images
+are kept in one output frame by watching show_tag. Their build was 262/263
+lines only and had no HDMI (MISTER_DEBUG_NOHDMI) to fit.
+
+*What this port changes, and why:*
+  * HDMI KEPT; the 1:1 path retired instead (vid_il_c = 0 into m2_video,
+    m2_raster3d and the crosshair, so synthesis removes the renderer's own
+    interlace; ce_pix is a constant 16/100). quartus_map: m2_video -99 ALUT,
+    m2_video_timing -32, m2_raster3d -23, its arbiter -10, fb_read -6.
+  * ALL THREE LINE RATES KEPT (R840: most sets take only 15.7 kHz). The
+    converter already carried nl/ml; its output enable is now per line count
+    (547/5300, 537/5300, 861/8692 -- each exactly two native frames per two
+    fields) and "15kHz lines" (O[61:60]) stays. Same 240 lines, 656-pixel
+    line, 64-pixel hsync and 496 visible in every mode; the faster rates get
+    more blank lines and a faster pixel clock.
+  * TWO TAPS. Their four-row read served a vertical filter they built and
+    rejected (tied off); the sharp table weights rows s-1 and s+2 with 0.
+  * THE RING, SIZED BY THE DRIFT. A field reads 384 rows in 240 output lines,
+    the renderer writes them in 384 native lines (41 us each), and those take
+    different times: 15.1 kHz 15.89 ms against 15.74 (the read falls 3.6 rows
+    behind), 15.4 kHz 15.54 (gains 5.0), 15.7 kHz 15.25 (gains 12.0). At 15.7
+    the read must start ~12 rows behind and end just behind, so the ring holds
+    those rows plus the two read and the one being written. A timing model
+    (continuous rates, every read and write) and then the bench give the
+    least ring per mode, two taps: 15.1 kHz 6 lines, 15.4 kHz 8, 15.7 kHz 15
+    (14 places at no D_PX). Their 12 lines and four taps fit 15.1 only (the
+    model reproduces their bench's 85.6 / 86.0 us margins exactly).
+  * D_PX PER MODE (the delay from the native frame's first visible pixel to
+    the first output line), each in the middle of its window: 5840 / 4310 /
+    2490 output pixels at 15.7 / 15.4 / 15.1 kHz. One value cannot serve all
+    three (at 15 lines: 15.7 needs 5430-5840, 15.1 4140 at most).
+  * 24 BITS, NOT 16. 16-bit colour is not exact for this picture: the 3D is
+    RGB565, but the 2D leaves the palette through the game's colour table and
+    the gamma curve (m2_video, m2_palette), any 8 bits a channel. Storing the
+    2D's 5-bit indices and colouring after the ring (17-18 bits) would need a
+    second copy of the table and the curve: rejected as more logic.
+  * 16 LINES, NOT 15. 15 x 512 x 24 bits packed as 20 bits in 512 x 20 blocks
+    plus 4 in 8192 x 1 is 19 M10K, and quartus_map put a 115-ALUT read mux
+    behind it (15:1, 20 bits); 16 lines in one array is 2048 x 5 blocks four
+    deep, 20 M10K and a 28-ALUT mux, and doubles the margin (20 -> 40 us). At
+    99% ALM the logic is the scarcer resource. 15 lines in one array is also
+    20 M10K (2048 x 5 holds 6,144 a slice).
+  * Not taken: the light-gun beacon (GunCon parked), the field-order switch.
+  * READING THE 3D FROM DDR3 instead of storing it: no saving -- the ring
+    holds the mixed picture, and the 2D half alone is 24 bits after gamma; a
+    second scan-out of the framebuffer would add a DDR3 port and buffers.
+
+*OSD:* "Video" (O[42]) unchanged, 15 kHz is now the converted picture;
+"15kHz lines" (O[61:60]) kept; "15kHz width" (R834, O[55]) REMOVED -- it
+lengthened the 1:1 picture's line; the converter has one 656-pixel line in
+every mode (a narrow line there needs its own length, sync and alignment per
+mode -- not built), so the ~4% shorter picture at 15.7 on a fixed-height set
+is back. O[55] is reserved and must not be reused (a saved Narrow would turn
+on whatever took it).
+
+*Checked:* tb_m2_scan15 (ported from theirs; 140 native frames, every line
+count, image cadence 2 in both phases, 3, 1 and none): every output pixel
+against a first-principles blend of one native frame's rows; the two ring
+words of each pixel are the rows asked for; the row fraction steps 4m mod 5;
+hsync 64 px, 496 visible, 656 a line, 240 lines a field; every vsync interval
+exactly one native frame and field 1's picture half a line (328 px) lower;
+the re-alignment a no-op once locked (the pairing lock moves it once, at
+native frame 17, in the phase that needs it); no output frame of two images
+at cadence 2. 15 runs (3 line counts x cadence 2 phase 0 / 2 phase 1 / 3 /
+1 / none), 140 native frames each: all PASS, 16,308,480 pixels a run, 0
+blend, ring or row-step mismatches, 60 vsync intervals a run all exact.
+Margins (written-before-read / read-before-overwritten): 15.7 kHz 40.6 /
+41.4 us, 15.4 kHz 181.3 / 180.3, 15.1 kHz 210.4 / 210.3. At 15 lines (D_PX
+5630) 20.3 / 20.7 us, PASS; at 14 lines it fails at D_PX 5430, 5630 and
+5840 (rows overwritten before they are read). Mutations caught: row s+1 not
+clamped on the last line (2,976 pixels), weights swapped (1,306,464), field 1
+started on row 0's fraction (571,392). lint_top (and -DM2_NO_VCOP_GUN) clean;
+lint_idx has no converter entries; Quartus parses m2_scan15.
+
+*Cost (quartus_map, whole design, against s1142's map of the same RTL):*
+"ALMs needed" 40,417 -> 40,537 (+120); ALUT 57,774 -> 57,879 (+105);
+registers +101; DSP 88 -> 94 (+6: three x3277, three 8 x 5 products); block
+memory bits +196,608 = the ring, 2048 x 5 four deep: 20 M10K, so 533 -> 553
+of 553 expected (the fitter confirms). m2_scan15 is 205 ALUT / 129 registers
+(28 of them the read mux); the retired path gives back ~170 ALUT; the i960
+moved +71 ALUT with no RTL change (synthesis noise -- an earlier map of a
+near-identical converter read +101 ALM in all).
+
+*At risk, not verified:* THE FIT. s1142 placed 41,455 ALM from 40,417 in
+map; the same ratio puts this near 41,580, where R848's s1144-s1146 needed
+4,196-4,201 LABs of 4,191. M10K would be 100%. If it does not fit, the
+levers in order of cost: a seed sweep; RING 15 with the 20 + 4 split (one
+M10K back, ~+87 ALUT -- worse for the fit); dropping 268/269 (~-10 ALUT);
+MISTER_DEBUG_NOHDMI (retrorepair's; Ben has ruled it out). The board and a
+CRT: not seen.
+
+*Consequences:*
+  * R872 (the luma fix, ~9 M10K) can no longer be had from free M10K on main:
+    with the converter main is at 553 / 553. It needs blocks freed elsewhere,
+    or the converter limited to 15.1 / 15.4 kHz (8 lines: 2048 x 5 two deep,
+    10 M10K) -- which R840 argues against.
+  * MODEL 2A (0 M10K spare, ~98-99% ALM) needs the same 20 M10K and ~+120
+    ALM net found there before this can merge in working order; the merge
+    main -> model2a carries the RTL and the OSD unchanged (model2a's Model2.sv
+    has the same 1:1 path, VGA_F1 = vid_field).
+

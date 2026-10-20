@@ -34,7 +34,7 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 // R640: DDRAM is driven by m2_ddr3, beside m2_raster3d below.
 
 assign VGA_SL  = 0;
-assign VGA_F1  = vid_field;   // R682: the interlaced field
+assign VGA_F1  = vid_scan & sc_fld;   // R898: the converter's field at 15 kHz; 0 at 24 kHz (progressive)
 assign VGA_SCALER  = 0;
 assign VGA_DISABLE = 0;
 assign HDMI_FREEZE   = 0;
@@ -95,6 +95,10 @@ localparam CONF_STR = {
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// R682: 15 kHz INTERLACED for a 15 kHz CRT -- 57.52 fields a second (the
 	// game's rate), 15,733 Hz lines, all 384 lines as two fields of 192.
+	// R898: 15 kHz IS NOW THE CONVERTED PICTURE (retrorepair's scan converter,
+	// rtl/video/m2_scan15.sv): the renderer stays on its native 24 kHz timing
+	// and the converter outputs 240 lines a field, 480 a frame, 384 -> 480 by
+	// an exact 4:5 blend -- no borders. The 1:1 picture is retired.
 	// R795: the [15kHz CRT] MRAs force 15 kHz interlaced whatever this says
 	// (a CRT owner cannot see a 24 kHz OSD to set it).
 	// R801: and then this line is hidden (status_menumask[0], the CRT flag)
@@ -117,11 +121,15 @@ localparam CONF_STR = {
 	// saved config -- including the old default's 262/263 -- opens at 15.7;
 	// O[45:44] is retired. A set that needs 15.1 kHz (Ben's JVC, R799) picks
 	// it once.
+	// R898: KEPT with the converter, which outputs every one of the three: the
+	// same 240 visible lines a field, more blank lines (and a faster pixel
+	// clock on the same 656-pixel line) for the faster line rates.
 	"O[61:60],15kHz lines,273/274 (15.7kHz),268/269 (15.4kHz),262/263 (15.1kHz);",
-	// R834: Narrow lengthens the 15.4/15.7 kHz line in the ratio their fields
-	// are longer, so the picture keeps the 15.1 kHz picture's shape on a set
-	// that shows it shorter. No effect at 15.1 kHz or 24 kHz.
-	"O[55],15kHz width,Full,Narrow;",
+	// R834's "15kHz width" (O[55], Full / Narrow) IS REMOVED (R898): it
+	// lengthened the 1:1 picture's line, and the converter has one 656-pixel
+	// line in every mode (a narrow line there would need its own line length,
+	// sync and alignment per mode -- not built). O[55] IS RESERVED -- never
+	// reuse it: a saved config holding Narrow would switch on whatever took it.
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -473,55 +481,60 @@ pll pll
 localparam int unsigned CE_NUM = 16;      // 16 MHz
 localparam int unsigned CE_DEN = 100;     // clk_mem
 // R682: 15 kHz INTERLACED is the same 656-pixel line at 547/5300 of 100 MHz,
-// 10.3208 MHz: 547 lines a frame of two fields at the game's 57.5242 Hz. The
-// ratio is 16/100 native and 547/5,300 interlaced, over one 13-bit accumulator.
+// 10.3208 MHz: 547 lines a frame of two fields at the game's 57.5242 Hz.
+// R783: 262.5-line fields: 525 x 656 pixels a frame in 1,738,400 clk_mem =
+// 861/8692 (9.9057 MHz, 15,100 Hz a line).
+// R834: 268.5-line fields: 537 x 656 a frame = 537/5300 (10.1321 MHz, 15,445 Hz).
+// R898: THESE ARE NOW THE CONVERTER'S OUTPUT PIXEL CLOCKS (ce_out below). The
+// renderer itself always runs at the native 16/100: the 1:1 15 kHz picture,
+// which retimed the whole renderer, is retired, and its interlace path is tied
+// off (vid_il_c) so synthesis removes it. R834's narrow-line clocks are gone
+// with it.
 localparam int unsigned CEI_NUM = 547;
 localparam int unsigned CEI_DEN = 5300;
-// R783: 262.5-line fields, the same 656-pixel line and the same 57.5242 Hz:
-// 525 x 656 pixels a frame in 1,738,400 clk_mem = 861/8692 (9.9057 MHz,
-// 15,100 Hz a line). 8692 needs the accumulator's fourteenth bit.
 localparam int unsigned CEN_NUM = 861;
 localparam int unsigned CEN_DEN = 8692;
+localparam int unsigned CEM_NUM = 537;
+localparam int unsigned CEM_DEN = 5300;
 reg [2:0]  vil_s;                         // the OSD bit, into clk_mem
 wire       vid_il_sel;                    // R795: the OSD bit or the CRT MRA's flag, on clk_sys below
 always @(posedge clk_mem) vil_s <= {vil_s[1:0], vid_il_sel};
-wire       vid_il = vil_s[2];
-// R834: 268.5-line fields at 656 pixels: 537 x 656 a frame = 537/5300
-// (10.1321 MHz, 15,445 Hz a line). With the narrow line (m2_video_timing's
-// HM_TOTAL / HI_TOTAL) the same line rate on 672 and 684 pixels:
-// 537 x 672 = 11277/108650 (10.3792 MHz), 547 x 684 = 93537/869200
-// (10.7613 MHz). 869,200 takes the accumulator to 20 bits.
-localparam int unsigned CEM_NUM  = 537;
-localparam int unsigned CEM_DEN  = 5300;
-localparam int unsigned CEMW_NUM = 11277;
-localparam int unsigned CEMW_DEN = 108650;
-localparam int unsigned CEIW_NUM = 93537;
-localparam int unsigned CEIW_DEN = 869200;
+wire       vid_scan = vil_s[2];           // R898: 15 kHz -- the converter's picture on the pins
+wire       vid_il_c = 1'b0;               // R898: the renderer's own interlace (R682), tied off
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
 reg [2:0]  vml_s;                         // R834: 268.5 lines
-reg [2:0]  vnw_s;                         // R834: the narrow line
 always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[61:60] == 2'd2};   // R840: 2 = 262/263
 always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R834; 0 and 3 = 273/274
-always @(posedge clk_mem) vnw_s <= {vnw_s[1:0], status[55]};              // R834
+// status[55] (R834's narrow line) is reserved, not read (R898).
 wire       vid_nl = vnl_s[2];
 wire       vid_ml = vml_s[2];
-wire       vid_nw = vnw_s[2];
-reg [19:0] ce_acc;
+reg [6:0]  ce_acc;
 reg        ce_pix;
-wire [19:0] ce_num = !vid_il ? 20'(CE_NUM) : vid_nl ? 20'(CEN_NUM)
-                   : vid_ml ? (vid_nw ? 20'(CEMW_NUM) : 20'(CEM_NUM))
-                   :          (vid_nw ? 20'(CEIW_NUM) : 20'(CEI_NUM));
-wire [19:0] ce_den = !vid_il ? 20'(CE_DEN) : vid_nl ? 20'(CEN_DEN)
-                   : vid_ml ? (vid_nw ? 20'(CEMW_DEN) : 20'(CEM_DEN))
-                   :          (vid_nw ? 20'(CEIW_DEN) : 20'(CEI_DEN));
 always @(posedge clk_mem) begin
-	if (ce_acc >= ce_den) ce_acc <= 20'd0;             // a mode change: start clean
-	else if (ce_acc + ce_num >= ce_den) begin
-		ce_acc <= ce_acc + ce_num - ce_den;
+	if (ce_acc + 7'(CE_NUM) >= 7'(CE_DEN)) begin
+		ce_acc <= ce_acc + 7'(CE_NUM) - 7'(CE_DEN);
 		ce_pix <= 1'b1;
 	end else begin
-		ce_acc <= ce_acc + ce_num;
+		ce_acc <= ce_acc + 7'(CE_NUM);
 		ce_pix <= 1'b0;
+	end
+end
+// R898: the converter's output pixel enable, free-running so its phase against
+// ce_pix is fixed for ever: two output fields are exactly two native frames
+// (3,476,800 clk_mem cycles either way) at every line count. retrorepair's
+// guncon-scan15 had 262/263 only; here each line count has its own.
+wire [13:0] ceo_num = vid_nl ? 14'(CEN_NUM) : vid_ml ? 14'(CEM_NUM) : 14'(CEI_NUM);
+wire [13:0] ceo_den = vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);   // 537 and 547 are both over 5300
+reg  [13:0] ceo_acc;                      // 8692 + 861 < 2^14
+reg         ce_out;
+always @(posedge clk_mem) begin
+	if (ceo_acc >= ceo_den) ceo_acc <= 14'd0;           // a mode change: start clean
+	else if (ceo_acc + ceo_num >= ceo_den) begin
+		ceo_acc <= ceo_acc + ceo_num - ceo_den;
+		ce_out  <= 1'b1;
+	end else begin
+		ceo_acc <= ceo_acc + ceo_num;
+		ce_out  <= 1'b0;
 	end
 end
 
@@ -6182,7 +6195,7 @@ wire [9:0] vid_x, vid_y;
 // the previous column for the whole pixel period, as the colour is.
 logic [9:0] vid_x_d;
 always_ff @(posedge clk_mem) if (ce_pix) vid_x_d <= vid_x;
-wire       vid_field;   // R682
+wire       vid_field;   // R682; R898: always 0 (the renderer is progressive), the converter has its own field
 
 // ------------------------------------------------------------ THE 3D LAYER
 //
@@ -6378,7 +6391,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.q_mipz(q3d_mipz),                                                // R828c
 	.q_tag(r826_wtag), .show_tag(r826_stag),   // R826
 	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
-	.scan_il(vid_il), .scan_field(vid_field),               // R682
+	.scan_il(vid_il_c), .scan_field(vid_field),             // R682; R898: tied off
 	.scan_col(r3d_col), .scan_hit(r3d_hit),
 	.dbg_quads(r3d_quads), .dbg_dropped(r3d_dropped), .dbg_tiny(r3d_tiny),
 	.dbg_bands(r3d_bands),
@@ -6474,8 +6487,8 @@ m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
 	.dbg_hscr(vid_hscr), .dbg_vscr(vid_vscr),
 	.dbg_ovr_frame(vid_ovr_frame),
 	.vid_x(vid_x), .vid_y(vid_y),
-	.interlace(vid_il), .ntsc_lines(vid_nl), .vid_field(vid_field),   // R682, R783
-	.mid_lines(vid_ml), .narrow(vid_nw),                                // R834
+	.interlace(vid_il_c), .ntsc_lines(1'b0), .vid_field(vid_field),   // R682, R783; R898: tied off
+	.mid_lines(1'b0), .narrow(1'b0),                                // R834; R898: tied off
 	.dbg_layer_px(vid_layer_px), .dbg_ctrl(vid_ctrl),
 	.dbg_layer_have(vid_layer_have),
 	.scr_flip(r826_flip_tgl), .scr_tag(r826_stag),   // R826
@@ -6609,7 +6622,7 @@ generate if (VCOP_GUN) begin : g_xhair
 	m2_vcop_xhair u_vcop_xhair (
 		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
 		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),
-		.il(vid_il), .vx(vid_x_d), .vy(vid_y),
+		.il(vid_il_c), .vx(vid_x_d), .vy(vid_y),
 		.in_r(mix_r), .in_g(mix_g), .in_b(mix_b),
 		.out_r(mix_r_q), .out_g(mix_g_q), .out_b(mix_b_q)
 	);
@@ -6624,14 +6637,26 @@ assign ov_r = mix_r_q;
 assign ov_g = mix_g_q;
 assign ov_b = mix_b_q;
 
-assign CLK_VIDEO = clk_mem;   // R564: the video runs on the memory clock
-assign CE_PIXEL  = ce_pix;
+// R898: THE 15 kHz PICTURE -- retrorepair's scan converter between the finished
+// native picture and the pins (rtl/video/m2_scan15.sv). At 24 kHz it is idle
+// and the pins carry the native picture exactly as before.
+wire        sc_hs, sc_vs, sc_de, sc_fld;
+wire [23:0] sc_rgb;
+m2_scan15 u_scan15 (
+	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag),
+	.ce_in(ce_pix), .de_in(~(tile_hb | tile_vb)), .vb_in(tile_vb), .rgb_in({ov_r, ov_g, ov_b}),
+	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml),
+	.o_hs(sc_hs), .o_vs(sc_vs), .o_de(sc_de), .o_field(sc_fld), .o_rgb(sc_rgb)
+);
 
-assign VGA_DE = ~(tile_hb | tile_vb);
-assign VGA_HS = tile_hs;
-assign VGA_VS = tile_vs;
-assign VGA_R  = ov_r;
-assign VGA_G  = ov_g;
-assign VGA_B  = ov_b;
+assign CLK_VIDEO = clk_mem;   // R564: the video runs on the memory clock
+assign CE_PIXEL  = vid_scan ? ce_out : ce_pix;
+
+assign VGA_DE = vid_scan ? sc_de : ~(tile_hb | tile_vb);
+assign VGA_HS = vid_scan ? sc_hs : tile_hs;
+assign VGA_VS = vid_scan ? sc_vs : tile_vs;
+assign VGA_R  = vid_scan ? sc_rgb[23:16] : ov_r;
+assign VGA_G  = vid_scan ? sc_rgb[15:8]  : ov_g;
+assign VGA_B  = vid_scan ? sc_rgb[7:0]   : ov_b;
 
 endmodule

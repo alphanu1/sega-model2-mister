@@ -885,6 +885,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_cab_inputs.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_vcop_guns.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_vcop_state.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_vcop_xhair.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_scan15.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_ioz80.sv
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80s.v
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80_core.v
