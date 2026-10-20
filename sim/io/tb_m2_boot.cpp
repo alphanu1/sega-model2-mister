@@ -1627,6 +1627,35 @@ int main(int argc, char **argv) {
           std::fclose(rf);
         }
       }
+      // R905: M2_TEXWLOG=<file> -- every CPU store to texture RAM / luma RAM
+      // (0x12000000-0x1281ffff) as the i960 issues it: address, byte enables,
+      // data, IP, frame; M2_TEXDUMP=<prefix> M2_TEXDUMP_AT=<frame> -- both
+      // texture sheets (as the bridge stores them, one 16-bit word per CPU
+      // dword, little end first: MAME's tex0.bin / tex1.bin layout) at that frame
+      {
+        static FILE *twl = std::getenv("M2_TEXWLOG") ? std::fopen(std::getenv("M2_TEXWLOG"), "w") : nullptr;
+        static bool tw_prev = false;
+        const bool tw_now = d->obs_bus_req && d->obs_bus_ack && d->obs_bus_we
+                         && (uint32_t(d->obs_bus_addr) >= 0x12000000u) && (uint32_t(d->obs_bus_addr) < 0x12820000u);
+        if (twl && tw_now && !tw_prev)
+          std::fprintf(twl, "%08x %x %08x %08x %llu\n", (unsigned)d->obs_bus_addr, (unsigned)d->obs_bus_be,
+                       (unsigned)d->obs_bus_wdata, (unsigned)d->obs_ip, (unsigned long long)g_frames_done);
+        tw_prev = tw_now;
+        static bool td_done = false;
+        if (!td_done && std::getenv("M2_TEXDUMP") && g_frames_done >= std::strtoull(std::getenv("M2_TEXDUMP_AT") ? std::getenv("M2_TEXDUMP_AT") : "700", nullptr, 10)) {
+          td_done = true;
+          for (int s = 0; s < 2; s++) {
+            const std::string pth = std::string(std::getenv("M2_TEXDUMP")) + (s ? "tex1.bin" : "tex0.bin");
+            if (FILE *tf = std::fopen(pth.c_str(), "wb")) {
+              const uint32_t b = s ? 0x17E0000u : 0x1760000u;
+              for (uint32_t w = 0; w < 0x80000; w++) { uint8_t b2[2] = {uint8_t(mem[b + w]), uint8_t(mem[b + w] >> 8)}; std::fwrite(b2, 1, 2, tf); }
+              std::fclose(tf);
+            }
+          }
+          if (twl) std::fflush(twl);
+          std::printf("  R905: texture sheets dumped at frame %llu\n", (unsigned long long)g_frames_done);
+        }
+      }
       static uint64_t guard_frame = 0;
       if (snd_guard && !snd_shadow.empty() && g_frames_done != guard_frame && g_frames_done % 20 == 0) {
         guard_frame = g_frames_done;

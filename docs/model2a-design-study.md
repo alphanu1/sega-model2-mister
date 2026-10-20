@@ -40864,3 +40864,122 @@ fetch reads it: the bench passed a path the board does not take. R905 traces
 the real MRA -> loader -> SDRAM -> texel-fetch path with a bench fed from
 the loaded image.*
 
+
+**R905 -- THE STRIPES ARE NOT THE TEXEL FETCH OR THE LAYOUT: TEXTURE SHEET
+1's MIRROR (0x12600000-0x127FFFFF) WAS NOT A BURST REGION IN i960_memmap,
+SO EVERY stq THE GAME SENT THROUGH IT WROTE ITS FOUR WORDS TO ONE ADDRESS.
+THREE TEXEL WORDS IN FOUR OF SHEET 1 WERE NEVER WRITTEN. ONE CONSTANT
+(rtl/cpu/i960/i960_memmap.sv: 0x12600000 -> 0x12800000). NOT FITTED, NOT
+ON A BOARD.**
+(Ben, s1253 = 71598a2, R900 on the board: Dynamite Cop, Dead or Alive, Sky
+Target "no different" -- regular vertical stripes / bars across walls, a
+ship's hull, floors, a cage; characters' faces and clothes much better;
+Motor Raid's textures the same "trippy" (its long streaks are the 2D layer,
+another run); Pilot Kids fine at 57.5 fps; Hanguk Pro Yagu 98 roughly right.)
+
+*Believed (the task):* the texel fetch reads the texture ROM where the large
+layout does not put it -- a dropped coordinate bit, a pitch, a bank, or the
+data not where the fetch looks; R900's bench rendered from MAME's memory.
+
+*THE PATH, TRACED.* The rasteriser's texels come from texture RAM only
+(MAME's textureram0/1; m2_raster3d tex_base0/1 = GAME_TEXS0/1, words
+0x1760000 / 0x17E0000, the same for every game), and texture RAM is written
+only by the i960 (MAME: tex0_w / tex1_w at 0x12000000 / 0x12400000, each
+.mirror(0x200000) with the BURST flag); no loader remap, no texture ROM and no
+geometry command reaches it. MAME's "textures" region (R897's 0x4000000) is
+the coordinate ROM -- headers and u/v, benched in R897. The large layout's
+loader, MRA and bridge windows are as R897 left them: Dynamite Cop's sheet
+words are contiguous halfwords of main_data (MAME's tex0 at f700: md+0xdb1e80
+...), read through the bridge as every 2A game reads data. R900's bench
+diverged from the board in the texture RAM's CONTENTS, not its address.
+
+*THE CAUSE, MEASURED.*
+  1. MAME 0.289 (mame-r869 m2lod, a write tap on 0x12000000-0x127FFFFF,
+     dynamcop from power-on) against the whole-core bench (tb_m2_boot, A2X,
+     the MRA's image built by tools/rom_csum.py, new hooks M2_TEXWLOG /
+     M2_TEXDUMP): the first 349,568 texture stores are identical in address
+     and data, in order. Store 349,569 is the first at IP 0x6ff90 into
+     0x12600000: MAME writes 0x12600000, 04, 08, 0C; the core writes
+     0x12600000 four times. Over the core's 1.82 M stores, IPs 0x6ff90 and
+     0x6ffa0 (stq) wrote 227,136 runs of FOUR stores to one address in
+     0x12600000-0x127FFFFF, and 489,216 single-address stores in sheet 0's
+     mirror 0x12200000 (burst, correct).
+  2. i960_memmap marked 0x12000000-0x125FFFFF ("texture RAM + mirrors"),
+     which covers sheet 0, its mirror and sheet 1 but NOT sheet 1's mirror.
+     i960_lsu advances a multi-word access's address only in a burst region
+     (MAME: `if (pack.second & BURST) t1 += 4`), so the stq landed its words
+     1-3 on word 0: in each group of four 16-bit texel words (16 texels in a
+     row) the first holds the LAST word's data and the other three keep what
+     was there -- regular vertical bars on every texture in sheet 1.
+  3. Sheet 1 is where these games keep their scenery: Dynamite Cop's f700
+     (the briefing room) draws the people from sheet 0 and walls, floor and
+     desks from sheet 1 -- Ben's "characters better, surfaces striped".
+
+*THE BENCH ON THE REAL PATH.* One MAME run of dynamcop with the tap on sheet
+1 (0x12400000-0x127FFFFF, 3,075,200 stores to the frame dump) and the
+M2DIFF dump of 3D list 700 in the same run. The stores replayed as MAME (and
+the fixed core) handle them reproduce MAME's dumped tex1.bin EXACTLY (0 of
+524,288 words differ); replayed with the old memmap (each stq at 0x6ff94 /
+0x6ffa4 in the mirror onto its first address) 302,210 words differ. That
+frame through tb_m2_raster3d (Model2.sv's 2A raster configuration, R900's
+map, M2_R3D_GAME=0x14):
+     sheet 1 as built (the board)   max-channel error 51.97 / 255, 40.63% of
+                                    MAME's 3D pixels over 32: walls, floor
+                                    and desks in vertical bars of 16 texels,
+                                    the people untouched
+     sheet 1 as MAME (the fix)      4.05 / 255, 0.47% over 32 -- R900's
+                                    number for this frame
+  (picture: r900/runs/bug_f700_dc_bug/side.png in the session scratchpad.)
+
+*THE FIX:* rtl/cpu/i960/i960_memmap.sv, texture RAM's burst range to
+0x12800000 (both sheets and both mirrors, as MAME's map). Nothing else.
+lint_top (2A, -DM2_NO_2A, -DM2_NO_DEBUG -DM2_PROBE=1 -DM2_NO_2A_RALLY)
+clean, lint_idx nothing new, quartus_map 17.0 --analyze_file 0 errors. Area:
+one compare's constant (no map run; a decode of a[31:23] == 0x24 against the
+old two-term range -- at most a LUT either way). No block RAM.
+
+*FOUND ON THE WAY, NOT FIXED HERE: R828c's NO-MIP FLAG ASSUMES DAYTONA'S
+lod AND coef.* R900's bench drove tex_mip_mode 0 (mip-mapping Off); the
+board's OSD default is Sharp (mode 3). MAME's level is log2 z^2 -
+log2(coef[attr >> 27] |dotp| lod) (model2_v.cpp; these games' log RAM is the
+linear form, b[i] = i/256); R828c folded Daytona's lod 128 and coef 1.0 into
+its constant. The large layout's games set their own (MAME walk dumps):
+Dead or Alive lod 1000, coefs 11 / 351; Dynamite Cop and Sky Target 0.5 / 4
+with coefs 1.94-351; Pilot Kids 4; Hanguk Pro Yagu 98 8; Motor Raid 0.25 --
+the flag is up to eleven levels off. Dead or Alive never mips in MAME (100%
+of its pixels at level 0 over 904 lists) and its sheets hold no mip levels;
+at Sharp the core mips it by footprint. tb_m2_raster3d on doaab's list 700
+(M2_R3D_MIPMODE=3; new MAME dumps carry L=/D=):
+     Off (R900's bench)                      6.12 / 255, 1.67% over 32
+     Sharp + R828c's flag (the board)       22.10 / 255, 17.36% over 32 --
+                                            the far floor and the building
+                                            behind go black
+     Sharp + MAME's own level, B 0          6.12 / 255 (identical to Off)
+  Dynamite Cop's list 700: 4.05 all three ways; Motor Raid's 5.45 / 5.93 /
+  5.02. An RTL form (m2_geo streams each texture-parameter entry's coef and
+  the 0x16 lod as twelve log bits; m2_geometry keeps a 32-entry table and,
+  for a2_big, adds both to the flag's |dotp| term, B 0; released games keep
+  R828c bit for bit) was written and linted, then held back: the table is
+  384 more registers on a 98% part and was not mapped. Kept on local branch
+  r905-mipz, one commit on this one. Until it lands, Mip-mapping Off on the OSD is the
+  board's answer for Dead or Alive.
+
+*VERIFIED / INFERRED:*
+  * VERIFIED (MAME 0.289 and simulation): the core's texture store sequence
+    against MAME's, the first divergence and its form; the replay of MAME's
+    own stores reproducing its sheet 1 exactly, and the board's semantics
+    reproducing the stripes on MAME's frame; i960_lsu's address rule for a
+    non-burst region.
+  * INFERRED: that Dead or Alive, Sky Target and Motor Raid stripe for the
+    same reason (Dynamite Cop measured; the per-game survey of stq through
+    0x12600000 follows); that the released games never send a multi-word
+    store through that mirror (the survey), so they are unchanged.
+  * What the board should show: Dynamite Cop's, Dead or Alive's, Sky
+    Target's and Motor Raid's walls, floors, hulls and scenery as MAME's --
+    no vertical bars; characters as now. Dead or Alive's far floor and
+    background may still go dark with Mip-mapping on Sharp (above); Off
+    shows MAME's picture. Pilot Kids, Hanguk Pro Yagu 98, VF2, Sega Rally,
+    Virtua Cop 2, Zero Gunner and Manx TT unchanged.
+  * The same line is in main's i960_memmap (Daytona, Virtua Cop, Desert
+    Tank share MAME's tgp map): it belongs on main too, and flows to model2a
+    from there.

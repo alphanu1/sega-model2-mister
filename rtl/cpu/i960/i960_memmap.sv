@@ -66,7 +66,14 @@ module i960_memmap (
     else if (a >= 32'h0200_0000 && a <  32'h0400_0000)      is_burst = 1'b1; // main data ROM
     else if (a >= 32'h0600_0000 && a <  32'h0700_0000)      is_burst = 1'b1; // extra data ROM
     else if (a >= 32'h1160_0000 && a <  32'h1170_0000)      is_burst = 1'b1; // framebuffer A/B
-    else if (a >= 32'h1200_0000 && a <  32'h1260_0000)      is_burst = 1'b1; // texture RAM + mirrors
+    // R905: TO 0x12800000. Both sheets carry .mirror(0x200000) with the BURST
+    // flag (model2_tgp_mem: 0x12000000-0x121fffff and 0x12400000-0x125fffff),
+    // so sheet 1's mirror 0x12600000-0x127fffff is a burst region too. It
+    // ended at 0x12600000, and a multi-word store there put all its words on
+    // its first address: Dynamite Cop, Dead or Alive, Sky Target and Motor
+    // Raid upload sheet 1 with stq through that mirror -- three texel words
+    // in four never written, the board's vertical stripes.
+    else if (a >= 32'h1200_0000 && a <  32'h1280_0000)      is_burst = 1'b1; // texture RAM + mirrors
     else if (a >= 32'h1280_0000 && a <  32'h1282_0000)      is_burst = 1'b1; // luma RAM
   end
 
