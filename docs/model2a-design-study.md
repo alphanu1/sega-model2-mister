@@ -40445,3 +40445,12 @@ next measurement.
 *What the board must show:* Manx TT's attract race and a played race at
 57.5 fps (m2-fps: one vblank a frame), the game's own clock running at full
 speed; VF2, Sega Rally, Virtua Cop 2, Zero Gunner unchanged.
+
+*ON THE BOARD (s1238 = 5a36477), Ben, 2026-10-20: the Volume options above
+100% and Direct boost work ("Volume option is good") -- R894 confirmed. The
+six new MRAs were tried on this core, which lacks R897's layout, as
+expected they fail: DOA, Pilot Kids black; Hanguk Pro Yagu 98 "Error #1";
+Motor Raid runs seconds then black; Sky Target and Dynamite Cop run their
+attract with bad polygons -- their code and protection patches run, the data
+beyond the old slots is missing. The real test is s1240-s1242 (baadcd5).*
+
