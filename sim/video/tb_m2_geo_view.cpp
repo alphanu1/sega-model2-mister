@@ -14,7 +14,8 @@ static void ck(const char *w, float got, float want) {
 static void tick() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); }
 static int s12(uint32_t v) { v &= 0xfff; return (v & 0x800) ? int(v) - 4096 : int(v); }
 static void window(uint32_t vs, uint32_t ve, uint32_t c0, const char *name) {
-  d->win_vp_s = vs; d->win_vp_e = ve; d->win_c0 = c0; tick(); tick(); tick();
+  d->win_vp_s = vs; d->win_vp_e = ve; d->win_c0 = c0;
+  for (int i = 0; i < 8; i++) tick();   // R907: one shared converter, right within 8 cycles
   const int vx0 = s12(vs >> 16), vy0 = s12(vs), vx1 = s12(ve >> 16), vy1 = s12(ve);
   const int cx = s12(c0 >> 16), cy = s12(c0);
   std::printf("test: %s -- centre (%d,%d), viewport (%d,%d)-(%d,%d)\n", name, cx, cy, vx0, vy0, vx1, vy1);
