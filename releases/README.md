@@ -33,14 +33,14 @@ find, and say which game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261020.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
-| the four 2A MRAs below | `/media/fat/_Arcade/` |
+| `Model2A_20261020b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| the 2A MRAs below | `/media/fat/_Arcade/` |
 
-**SDRAM:** the four games below run on a 64 MB or 128 MB module. Several of
+**SDRAM:** the first four games below run on a 64 MB or 128 MB module; Pilot Kids needs the 128 MB module. Several of
 the games still to come need more than 64 MB of ROM, so **they will need the
 128 MB module**; the table further down says which.
 
-`Model2A_20261020.rbf` has the md5 `e44e4a29bab56e0ad579d93f1b3904d6`. As with
+`Model2A_20261020b.rbf` has the md5 `a141ee704cf746acfea97335b21a7dd3`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -51,16 +51,14 @@ ROM sets: MAME 0.289.
 |---|---|---|---|---|
 | Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays at full speed, with sound |
 | Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays, with wheel, pedals and gears. **Slows down** in busy scenes |
-| Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick. **No ammo display** |
+| Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick; the ammo display counts down and reloads |
 | Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
-| Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module, and the next 2A core** (not `Model2A_20261020.rbf`). Its protection check is patched out by the MRA |
+| Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
 
 ### Known bugs
 
 - **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
   drops where the geometry processor has the most work. Being looked at.
-- **Virtua Cop 2 shows no ammo.** The bullets in the corner aren't drawn, so
-  you can't see how many shots are left. Being fixed.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall, and Virtua Fighter 2's hits sit well under its music.
   That is how MAME 0.289 mixes these games, sample for sample, and the core
@@ -80,7 +78,7 @@ ROM sets: MAME 0.289.
 
 | setting | what it does |
 |---|---|
-| `Volume` | 80% by default. The list rises 80, 90, 100, **150, 200, 300, 400%**, then wraps once to 0% and climbs back through 10–70%. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
+| `Volume` | 80% by default. The list runs 80, 90, 100%, then 0–70%, then **150, 200, 300 and 400%**. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. (The next core puts the list in rising order.) |
 | `Raw Sound Boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
 
 **Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
