@@ -39692,3 +39692,102 @@ loaded, then one slot in sixteen.
   * NOT DONE: no layout uses the upper 64 MB yet -- the five large sets
     (R887) need their layouts and the loader's remaps above 64 MB, after the
     board test.
+
+**R889 -- VIRTUA COP 2'S AMMO DISPLAY: NOT A TEXTURE. THE REVOLVER IS A LATER
+WINDOW THAN THE STREET AND THIS CORE SORTED BY z ALONE, SO THE STREET HID
+IT. FIXED ON THE 2A BUILD: THE WINDOW IS THE TOP OF THE SORT KEY (WINKEY).
+MAIN UNCHANGED.**
+(Ben, s1220: "there are no bullet textures, so you can't see how many
+bullets you have.")
+
+*Believed:* run-time texture RAM writes (the i960 redrawing the bullets per
+shot) not reaching what the renderer samples, or a texture path R867's
+tables do not cover. And R641 (Daytona attract): "ONE window a frame,
+always: window ORDER is not a cause" -- true there, never re-checked for
+another game.
+
+*Measured (MAME 0.289 vcop2, sim/io/mame_m2_vcop2_play.lua with a write tap
+on 0x12000000-0x1281ffff, M2GEO walks at 51.5-54.5 / 58 / 63 / 64.2 s,
+M2DIFF lists 2300 and 2910):*
+  1. THE AMMO DISPLAY IS A 3D REVOLVER CYLINDER, bottom left: 12 or 13
+     polygons from the POLYGON ROM, one object per bullet count (oba
+     0x805af4 six, 0x805d59, 0x80594e ..., 0x805bc7 empty; tha moves with
+     it), drawn after the list's fourth window_data, focal 1200, rotated per
+     shot. Sides h0 0x4009 (64x64, opaque), front face 0x6009 (translucent,
+     the empty chambers), and ONE more translucent quad for the loaded
+     rounds (h 6009,7001,1900,3f40: luma row 1, sheet bit set, texture
+     (0,128)). No direct_data, no texture_data, no 2D layer: nothing the
+     i960 writes per shot except the display list itself. Texture RAM writes
+     happen only at scene loads (the tap: none between shots).
+  2. MAME DRAWS WINDOW BY WINDOW. render_polygons runs `for (window =
+     cur_window; window >= 0; window--)`, z buckets inside each, with the
+     fill map (first write wins): a later window is in FRONT of an earlier
+     one whatever their z. Virtua Cop 2's lists: window 1 the street (z
+     buckets 18,151-46,166), window 2 the crosshair ring (~20,155), window 4
+     the revolver (45,635). By z alone the revolver is behind almost the
+     whole street and the ring behind its near walls.
+  3. THIS CORE'S KEY WAS z ALONE (m2_geometry.sv:1012 `.in_z({16'd0,
+     hzkey})`, m2_quad_store.sv:521 key = in_z[15:0]); m2_geo counted
+     windows (win_cnt, R642) but never per walk and nothing read it.
+     tb_m2_raster3d on MAME's list 2910 (six rounds), core configuration
+     (TEXLUT, LW8, PXK 0, MIPZ 3): the revolver is not drawn at all (the
+     bullets' quad: 989 px, mean error 140.9 / 255; the face 33-40) and the
+     ring's left half is missing. With only windows 2 and 4 in the list both
+     draw: the polygons were hidden, not lost.
+  4. AND A KEY OF 20 BITS NEEDS AN EVEN PASS COUNT. The radix sort moves the
+     order between idx_a* and idx_b each pass and the replay reads idx_a*;
+     at five passes (RADIX 4) the fifth pass's result was left in idx_b and
+     the bench drew exactly what it drew at 16 bits.
+
+*The fix (2A only, Model2.sv R3D_WINKEY = M2A):* m2_geo counts window_data
+per walk (render_frame_start's cur_window = 0, saturating at 15) and
+latches it with each object (obj_win; the walk already waits for the
+geometry to drain before the next object). m2_geometry WINKEY puts
+{15 - window, z} in q_z[19:0]; m2_raster3d KW 20 sorts on it (front to back:
+the last window first, then z, ties LIFO as before). m2_quad_store: with an
+odd pass count (ODDP) R_INIT writes the start order into idx_b and the first
+pass runs b -> a, so the fifth lands in the bank. KW 16 builds exactly as
+before (ODDP 0).
+
+*Before / after (tb_m2_raster3d, the 2A raster configuration, MAME's lists;
+mean max-channel error / 255 over every painted pixel):*
+    list                                   before  after   changed px (closer / further)
+    VCop2 2910 (six rounds)                 8.30    3.67   7,436 (6,589 / 820)
+    VCop2 2300 (four rounds, the water)     5.10    4.21   4,356 (3,174 / 1,142)
+    VF2 attract 400 (windows 1, 5, 6, 7)    7.36    7.37   121 (61 / 58)
+    VF2 attract 2620                        4.20    4.20   2
+    Sega Rally attract 1500 (one window)    7.17    7.17   0
+  The bullets' quad on 2910: 140.9 -> 9.0, the face 33-40 -> 4.7-4.8.
+  Draw time +1.8-2.1% (689,447 -> 703,800 core cycles on 2910: the revolver
+  and the ring are now drawn); the sort one pass more (~2 x quads cycles).
+  What is left on the revolver: a texel-wide fringe at the bullets' quad
+  edge (bilinear at a translucent edge), a few pixels.
+
+*Unchanged:* the original core's raster configuration (TEXLUT 0, KW 16), old
+RTL against new: Daytona 2000 and VCop2 2910 PX dumps byte-identical (md5
+8a696f0a..., cd1b1b69...). geodiff_2a on walk 3625 (now built WINKEY 1):
+our quads identical to the old RTL's but for the window nibble (0xE x 401,
+0xD x 52, 0xB x 13 -- MAME's window counts); the R643 comparison unchanged
+(441 match, z[15:0] as before). test_m2_quad_store, raster3d, geo (all
+three), geometry, geometry_mipz, span_tex PASS. lint_top clean on 2A,
+M2_NO_2A and -DM2_NO_DEBUG -DM2_PROBE=1 -DM2_NO_2A_RALLY; lint_idx
+identical to 61087ad's (line numbers aside); quartus_map --analyze_file 0
+errors on the five files.
+
+*Cost:* quartus_map 17.0 of m2_quad_store alone at the core's parameters:
+the key RAM 2048 x 16 -> 2048 x 20 (+8,192 bits, still four M10K in the
+2048 x 5 mode: 0 new block RAM), 2,853 -> 2,854 registers, ALMs est. 2,275
+-> 2,245 (noise), ALUTs +7. Plus four flops in m2_geo, four in the clipper's
+z. NOT FITTED (no fit in this task).
+
+*What the board must show (Virtua Cop 2, 2A core):* the revolver cylinder
+bottom left in play, its chambers full after a reload and emptying shot by
+shot (the cylinder turning a chamber each shot), over walls and floor alike;
+the crosshair ring whole near walls. VF2, Sega Rally, Zero Gunner as before.
+
+*Main's Virtua Cop ("always full", main R890) -- a note, not checked:* this
+cause hides the revolver; it cannot freeze it. If Virtua Cop's revolver is
+also a later window at a far z, main would show it only over distant
+scenery -- worth one MAME walk -- but "always full" needs the per-shot
+object address (oba/tha changing per count, as here) to be lost somewhere
+on main's path, which is a different fault.

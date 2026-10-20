@@ -3781,6 +3781,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIS
 	// the dot products and the diffuse/ambient scale are still to come.
 	.zadj_e(geo_zadj_e),
 	.win_vp_s(geo_win_vp_s), .win_vp_e(geo_win_vp_e), .win_c0(geo_win_c0), .win_cnt(),   // R642
+	.obj_win(geo_obj_win),   // R889
 	.lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.dbg_lit_n(geo_lit_n), .dbg_nops(geo_nops),
 	.dbg_walk_flip(geo_walk_flip), .dbg_walk_fallback(geo_walk_fb), .push_stall(geo_push_stall), .push_busy(geo_push_busy),   // R697
@@ -3870,6 +3871,7 @@ wire        geo_mat_we;
 wire [3:0]  geo_mat_idx;
 wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
 wire [31:0] geo_obj_tha;
+wire [3:0]  geo_obj_win;   // R889: the object's window (m2_geo), read with R3D_WINKEY
 wire [31:0] geo_obj_tpa;   // R268: where the per-vertex texture coordinates live          // R222
 wire        cpu_col_inval;
 wire  [1:0] eng_mem_space;
@@ -3931,6 +3933,11 @@ localparam int R3D_MIPZ_B = 3;
 // VF2's tables are not Daytona's and R784's model inverted its faces. Main
 // keeps R784's model.
 localparam bit R3D_TEXLUT = M2A;
+// R889: THE WINDOW ORDER IN THE SORT KEY -- MAME draws the last window opened
+// first and in front of the rest (render_polygons); Virtua Cop 2's revolver
+// and crosshair are a later window than the street, at a z behind it. The
+// key is {15 - window, z}, 20 bits, on the 2A build. Main keeps the 16-bit z.
+localparam bit R3D_WINKEY = M2A;
 /* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
 wire [7:0] q3d_trow;                       // R867: the luma table's row
 /* verilator lint_on UNUSEDSIGNAL */
@@ -3964,11 +3971,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT)) u_geometry (   // R828c, R867
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY)) u_geometry (   // R828c, R867, R889
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
+	.obj_win(geo_obj_win),   // R889
 	.mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
 	.mem_data(eng_mem_data_c), .mem_ack(eng_mem_ack_c),  // R214: through the pair cache
 	// THE VIEWPORT, AND THESE ARE NOT PIXELS. a_* are the four frustum planes
@@ -7244,7 +7252,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
-              .TEXLUT(R3D_TEXLUT)) u_raster3d (   // R564: scan on clk_mem; R867
+              .TEXLUT(R3D_TEXLUT),
+              .KW(R3D_WINKEY ? 20 : 16)) u_raster3d (   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),

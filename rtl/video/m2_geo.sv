@@ -165,6 +165,13 @@ module m2_geo #(
   // selects, R641). win_cnt steps once per command, after all six are in.
   output logic [31:0]   win_vp_s, win_vp_e, win_c0,
   output logic  [7:0]   win_cnt,
+  // R889: THE WINDOW AN OBJECT IS DRAWN IN, counted per walk as the
+  // reference's raster->cur_window is (render_frame_start sets 0, each
+  // window_data adds one), saturated at 15 and latched with obj_valid. MAME
+  // renders window by window from the last down to 0, each over everything
+  // after it -- the HUD's later window over the scene whatever the z. Unread
+  // unless the geometry's WINKEY is set.
+  output logic  [3:0]   obj_win,
   output logic [31:0]   lit_x, lit_y, lit_z,
   output logic [15:0]   dbg_lit_n,
   // R255: NOPS DECODED THIS FRAME. A well-formed list holds none; a walk that
@@ -704,6 +711,7 @@ module m2_geo #(
   // carries the selected centre for each object; m2_geo_view is unchanged.
   logic [23:0] win_cen [4];              // {x[27:16], y[11:0]} of each centre
   logic [1:0]  w_csel;                   // this opcode's centre select
+  logic [3:0]  w_win;                    // R889: windows opened so far this walk
   logic        pd_tex;                   // R222: this transfer is texture data
   logic [15:0] pd_n, pd_i;               // dwords to copy, and the one in hand
   logic  [4:0] tp_i;                     // texture_parameters index, wraps at 32
@@ -800,6 +808,7 @@ module m2_geo #(
       for (int k = 0; k < 4; k++) win_cen[k] <= 24'h0F8_140;   // R760
       w_csel <= 2'd0;
       win_cnt  <= 8'd0;
+      w_win <= 4'd0; obj_win <= 4'd0;   // R889
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
@@ -880,6 +889,7 @@ module m2_geo #(
           w_start <= 19'(geo_rp[16:2]);    // R854
           walk_jumped <= 1'b0;             // R638
           w_ops <= 16'd0;
+          w_win <= 4'd0;                   // R889: render_frame_start's cur_window = 0
           wst   <= W_FETCH;
         end
         // FETCH AND WAIT ARE ONE STATE. Asserting the request and then moving on
@@ -1000,6 +1010,7 @@ module m2_geo #(
             if (w_cap == CAP_FOC) dbg_foc_n <= dbg_foc_n + 16'd1;
             if (w_cap == CAP_LIT) dbg_lit_n <= dbg_lit_n + 16'd1;
             if (w_cap == CAP_WIN) win_cnt <= win_cnt + 8'd1;   // R642
+            if (w_cap == CAP_WIN && !(&w_win)) w_win <= w_win + 4'd1;   // R889
             // The object is announced only once its four words are in, and
             // the walk then STOPS until the engine reports the object drawn.
             if (w_cap == CAP_OBJ && !nodraw) begin
@@ -1009,6 +1020,7 @@ module m2_geo #(
               // next object, so the view's few cycles of conversion are done
               // long before this object's first vertex is projected.
               win_c0    <= {4'd0, win_cen[w_csel][23:12], 4'd0, win_cen[w_csel][11:0]};
+              obj_win   <= w_win;          // R889
               eng_seen  <= 1'b0;
               wst       <= W_OBJW;
             end else begin                 // R711: a skipped list's object goes nowhere

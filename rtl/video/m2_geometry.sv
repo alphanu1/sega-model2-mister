@@ -74,7 +74,16 @@ module m2_geometry #(
   // four mantissa bits, in sixteenths of a level. 0: q_mipz is 0, pruned.
   parameter bit MIPZ   = 1'b0,
   parameter int MIPZ_B = 3,
-  parameter bit TEXLUT = 1'b0    // R867: m2_geo_engine's (the textured colour per pixel)
+  parameter bit TEXLUT = 1'b0,   // R867: m2_geo_engine's (the textured colour per pixel)
+  // R889: THE WINDOW ORDER, IN THE SORT KEY. MAME (render_polygons) draws the
+  // list window by window from the last opened down to window 0, and within a
+  // window by z bucket; with its fill map the first pixel written wins, so a
+  // later window is in FRONT of an earlier one whatever their z. Virtua Cop
+  // 2's revolver (window 4, z bucket 45,635) and crosshair (window 2, ~20,155)
+  // sit behind the street (window 1, 18,151-46,166) by z alone. With WINKEY
+  // the key q_z carries {15 - win, z} in [19:0] (the store's KW 20); 0: the
+  // window is ignored, q_z[31:16] stay 0 as before.
+  parameter bit WINKEY = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -93,6 +102,7 @@ module m2_geometry #(
   input  logic [3:0]  mat_idx,
   input  logic [31:0] mat_data,
   input  logic [31:0] foc_x, foc_y,
+  input  logic [3:0]  obj_win,           // R889: m2_geo's, steady for the object (WINKEY)
 
   // ---- the vertex stream, shared sequentially with the walk
   output logic        mem_req,
@@ -1009,7 +1019,7 @@ module m2_geometry #(
     .pj_out_fx(pj_out_fx), .pj_out_fy(pj_out_fy),
     .in_u0(hu[0]), .in_v0(hv[0]), .in_u1(hu[1]), .in_v1(hv[1]),
     .in_u2(hu[2]), .in_v2(hv[2]), .in_u3(hu[3]), .in_v3(hv[3]),
-    .in_col(pcol), .in_z({16'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
+    .in_col(pcol), .in_z({12'd0, WINKEY ? ~obj_win : 4'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
     .in_tex(ptex), .in_lum(plum),                            // R271
     .in_mipz(pmipz), .out_mipz(q_mipz),                      // R828c
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),

@@ -115,6 +115,26 @@ the 3D, BUFW_Q 0 in Model2.sv is the A/B. Not taken, measured: a port 8/9
 pair buffer (<= ~3%), ports 8/9 at the top of the SDRAM class, a deeper
 input FIFO.
 
+## 2026-10-20: model2a -- Virtua Cop 2's missing ammo display: the window order (R889)
+
+CAUSE: the ammo display is a 3D revolver (polygon ROM, one object per
+bullet count) drawn in the list's 4th window at z bucket 45,635. MAME draws
+window by window, last first, so the HUD is in front of the street (window
+1); this core sorted on z alone (m2_geometry in_z {16'd0, hzkey}), so the
+street hid the revolver, and the crosshair ring's near-wall half too. Not a
+texture fault: no texture RAM writes between shots.
+FIX (2A only, R3D_WINKEY = M2A): m2_geo counts windows per walk (obj_win),
+m2_geometry WINKEY keys {15 - window, z} (20 bits), m2_raster3d KW 20;
+m2_quad_store starts an odd pass count in idx_b so the 5th radix pass lands
+in the bank (it did not: the first attempt changed nothing). 0 new M10K
+(the key RAM stays four blocks at 2048 x 5). Bench (MAME's lists through the
+raster RTL): VCop2 2910 mean error 8.30 -> 3.67, 2300 5.10 -> 4.21; VF2 /
+Sega Rally unchanged; main's raster configuration byte-identical. NOT FITTED.
+BOARD: the revolver bottom left with its rounds, emptying per shot.
+Main's Virtua Cop "always full" (R890) is a different fault (this hides,
+it cannot freeze); one MAME walk of vcop would say whether main also hides
+its revolver over near scenery.
+
 ## 2026-10-20: VF2's sound right on the board except the effects' level (R885, R886)
 
 ON THE BOARD: s1218 (d4fede8, M2_PROBE, M2_NO_2A_RALLY;
