@@ -84,7 +84,10 @@ module m2_boot_harness #(
   parameter int unsigned GEO_LIST_WIN    = 0,
   // R896: Manx TT's DX motion base answered on PD (m2_2a_inputs MOTION): 0xCE
   // while PE holds 0x3D, else 0xCD, so the boot passes its slider check
-  parameter bit          MANX_MOTION     = 1'b0
+  parameter bit          MANX_MOTION     = 1'b0,
+  // R904: the i960's wait states (Model2.sv M2_2A_WAITST, there for game ID
+  // 0x10 only): m2_waitst between the CPU and the bridge, enabled
+  parameter bit          WAITST          = 1'b0
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -482,6 +485,9 @@ module m2_boot_harness #(
   logic        bus_req, bus_we, bus_ack;
   logic        bus_ifetch;   // R724
   logic [31:0] bus_addr, bus_wdata, bus_rdata;
+  // R904: the bridge's side of m2_waitst (the CPU's own nets without WAITST)
+  logic        br_req, br_ack;
+  logic [31:0] br_rdata;
   logic  [3:0] bus_be;
   // R852: the A2 board's signals (see g_a2)
   logic [11:0] io_intreq, io_intena;
@@ -707,12 +713,24 @@ module m2_boot_harness #(
 
   wire        geo_push_busy;   // R697: pushed words not yet in buffer RAM; the CPU's buffer stores wait
   wire        geo_push_stall;  // R854: the push queue full, the CPU held (A2 only)
+  generate if (WAITST) begin : g_waitst
+    m2_waitst u_waitst (
+      .clk(clk_cpu), .rst_n(rst_n), .en(1'b1),
+      .c_req(bus_req), .c_we(bus_we), .c_addr(bus_addr), .c_be(bus_be), .c_wdata(bus_wdata),
+      .c_rdata(bus_rdata), .c_ack(bus_ack),
+      .b_req(br_req), .b_rdata(br_rdata), .b_ack(br_ack),
+      .dbg_region(), .dbg_n()
+    );
+  end else begin : g_nowaitst
+    assign br_req = bus_req; assign bus_rdata = br_rdata; assign bus_ack = br_ack;
+  end endgenerate
+
   m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
-    .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
-    .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
+    .bus_req(br_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),   // R904
+    .bus_wdata(bus_wdata), .bus_rdata(br_rdata), .bus_ack(br_ack),
     .clk_mem(clk_m), .rst_n_mem(rst_n),
     // The bases the top level uses for a game image.
     // The top level's own bases for a game image (Model2.sv GAME_*), so the

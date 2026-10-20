@@ -156,6 +156,13 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_EE_LOAD
 `define M2_2A_EE_LOAD
 `endif
+// R904: M2_2A_WAITST, the i960's wait states for Sega Rally (game ID 0x10)
+// alone: m2_waitst between the i960 and the bridge stores the CPU-control
+// block at 0x00e00000 (read back as MAME's RAM) and holds each access to at
+// least 2 + N clk_i960 cycles, N the count the game programmed for its region
+// (the format and the region map are inferred, R904). OFF by default until
+// the expert confirms the format; VERILOG_MACRO "M2_2A_WAITST=1" (or
+// -DM2_2A_WAITST to lint) builds it. Off, the CPU's bus is wired as before.
 // R865: M2_2A_FPU, the i960's flushreg (i960_top FR: the one VC form without
 // the rest of VC -- no transcendental microcode, no M10K), live for Sega
 // Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally executes it at
@@ -2777,6 +2784,11 @@ localparam bit VCOP_GUN = VCOP_IO;
 localparam bit VCOP_GUN = 1'b0;      // the first boot build: guns at rest, Daytona's buttons
 `endif
 localparam bit VCOP_FPU = (`M2_VCOP_FPU != 0);
+`ifdef M2_2A_WAITST
+localparam bit WAITST2A = M2A;   // R904
+`else
+localparam bit WAITST2A = 1'b0;
+`endif
 `ifdef M2_2A_FPU
 localparam bit FPU2A    = M2A && (`M2_2A_FPU != 0);   // R865
 `else
@@ -2818,6 +2830,28 @@ i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A)) u_i960 (   // R869: F2A
 	.dbg_ip(cpu_dbg_ip), .dbg_insn(cpu_dbg_insn), .dbg_ts(cpu_dbg_ts),   // R721
 	.trap(cpu_trap), .trap_op(cpu_trap_op), .halted(cpu_halted)
 );
+
+// R904: THE i960'S WAIT STATES (M2_2A_WAITST, Sega Rally only). The bridge
+// sees the CPU's request through m2_waitst, which answers the CPU-control
+// block itself and holds an access the bridge answers early. Without the
+// switch the two nets are the CPU's own.
+wire        cpu_b_req, cpu_b_ack;
+wire [31:0] cpu_b_rdata;
+generate if (WAITST2A) begin : g_waitst
+	logic [1:0] ws_en_s;   // the game ID into the CPU's clock (quasi-static: set before the CPU runs)
+	always_ff @(posedge clk_i960) ws_en_s <= {ws_en_s[0], is_srally};
+	m2_waitst u_waitst (
+		.clk(clk_i960), .rst_n(cpu_rst_n), .en(ws_en_s[1]),
+		.c_req(cpu_req), .c_we(cpu_we), .c_addr(cpu_addr), .c_be(cpu_be), .c_wdata(cpu_wdata),
+		.c_rdata(cpu_rdata), .c_ack(cpu_ack),
+		.b_req(cpu_b_req), .b_rdata(cpu_b_rdata), .b_ack(cpu_b_ack),
+		.dbg_region(), .dbg_n()
+	);
+end else begin : g_nowaitst
+	assign cpu_b_req = cpu_req;
+	assign cpu_rdata = cpu_b_rdata;
+	assign cpu_ack   = cpu_b_ack;
+end endgenerate
 
 // R532: A CHECKSUM OF THE BOOT CODE'S COPY INTO BOARD RAM.
 //
@@ -2907,8 +2941,8 @@ m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
-	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
-	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
+	.bus_req(cpu_b_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),   // R904: cpu_b_*
+	.bus_wdata(cpu_wdata), .bus_rdata(cpu_b_rdata), .bus_ack(cpu_b_ack),
 
 	.clk_mem(clk_sys), .rst_n_mem(cpu_rst_n),
 	.base_prog(GAME_PROG), .base_data(GAME_DATA), .base_work(GAME_WORK),

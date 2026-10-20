@@ -1,21 +1,40 @@
 # Handoff
 
-## FUTURE ENHANCEMENT (investigate): the i960's wait states
+## 2026-10-20: the i960's wait states for Sega Rally, behind M2_2A_WAITST (off) (R904)
 
-The board's system controller has a CPU-control block at 0x00E00000-0x00E00037
-("CPU control (wait-states)" in MAME's map) that each game programs at boot:
-the extra bus cycles per address region. They change only how long each i960
-access takes, not what it computes. MAME maps the block as plain RAM (stored,
-read back, no effect); this core drops the writes and reads 0 (T_IO, no case
-in the I/O read mux). MAME's own notes suspect Sega Rally's starting-grid car
-placement depends on the CPU's exact pace ("may need wait state emulation").
-To investigate, in order: (1) what each game writes there and whether any
-reads it back (a read-back of 0 can steer a game, as R896's render mode did
-for Manx TT) -- a read-back like MAME's is a few ALM; (2) the block's format
-(undocumented); (3) per-region minimum access times on our bus where our
-i960 (40 MHz, 8 KB I-cache) is faster than the board's 25 MHz with its wait
-states -- padding can only slow accesses, so it cannot cure slowdowns, which
-come from SDRAM waits longer than the board's.
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch r904-waitst (on model2a
+8171809; never merge into main).
+
+MEASURED (MAME 0.289 taps, srallyc 100 s with a race, vf2 / zeroguna / vcop2
+/ manxtt 60 s): every game copies a 14-word table to 0x00E00000-0x00E00037 in
+its first ~10 us, never writes it again and NEVER READS IT (so R901's
+read-back insurance buys nothing for these games). Rally: `10 02 42 02 10 10
+10 10 08 10 10 10 10 10`. The tables of twelve sets are in study R904 (the
+original board's Daytona / Virtua Cop / Desert Tank write the same layout).
+
+INFERRED (not measured; questions for the expert in R904): the values are
+one-hot (every one has a single bit in 5:0; word 2 is 0x42 everywhere) --
+bit n = n waits, so Rally's ROM 4, RAMs 1, the rest 4, word 8 3. Binary
+(the expert's "set 10 = 10 waits") would put 16 waits on most regions and 66
+on work RAM; it is the ONEHOT=0 parameter. Which word governs which address
+is a guess (MAME's map in address order, words 1-3 the three RAMs).
+
+DONE: rtl/io/m2_waitst.sv between i960_top and the bridge on clk_i960, built
+only with VERILOG_MACRO "M2_2A_WAITST=1" and live only for game ID 0x10. It
+answers the block itself (read-back as MAME's RAM) and holds each access to
+a MINIMUM of 2 + N cycles (a burst's next word 1 + N); an earlier answer from
+the bridge is latched, a later one passes untouched. EXTRA=1 (N on top) and
+BURST are parameters. Without the macro the core is model2a's.
+Benches: make test_m2_waitst (three builds) PASS; Rally's whole-core boot
+with WAITST (obj_boot_2ax, -GWAITST=1) reaches the same 0x5a379c loop as
+without, no trap, 2.5% fewer instructions over 78 vblanks, 5-6% fewer in
+the busy ones, first flip one vblank later. lint_top x5, lint_idx,
+analyze_file clean. Area +70 ALMs est., +149 registers, 512 MLAB bits, no
+M10K.
+
+NEXT: Ben asks the expert R904's questions; then (if confirmed) default the
+macro on in the 2A build, fix ONEHOT / the region map as answered, and look
+at Rally's start grid on the board against the arcade.
 
 ## 2026-10-20: the six large-layout games on s1240 -- the luma-row map per game; Pilot Kids' work RAM zeroed (R900)
 

@@ -40677,3 +40677,180 @@ module or lines; quartus_map 17.0 --analyze_file m2_luma_map.sv and Model2.sv
     room, "INSERT COINS!") with no debug block; VF2, Sega Rally, Virtua Cop
     2, Zero Gunner and Manx TT unchanged.
 
+**R904 -- THE i960'S WAIT STATES (R901), FOR SEGA RALLY ONLY, BEHIND A
+SWITCH THAT IS OFF: WHAT EVERY GAME WRITES TO 0x00E00000 (MEASURED), THE
+FORMAT AND REGION MAP (INFERRED), A MINIMUM ACCESS TIME PER REGION
+(m2_waitst, M2_2A_WAITST). NOT FITTED, NOT ON A BOARD.**
+(Ben: emulate the wait states for Sega Rally, game ID 0x10, behind a switch.
+A Sega Rally hardware expert, through Ben: the registers hold EXTRA wait
+cycles -- "if I set 10, the i960 read takes 1 cycle (address) + 10 wait
+cycles + 1 cycle (data) = 12 cycles in total". Ben: count them in our own
+clk_i960 cycles, not in real time -- the clock is already set so the core
+runs at the board's speed.)
+
+*What the games write (MEASURED, MAME 0.289, a write and read tap on
+0x00e00000-0x00e00037 over sim/io/mame_m2_2a_play.lua; srallyc 100 s with a
+coin at 20 s and the scripted race, vf2 / zeroguna / vcop2 / manxtt 60 s
+each):* fourteen dword writes, mask 0xffffffff, one per word in order, in the
+game's first ~10 us (vblank 0; IPs srallyc 0x440, vf2 0xd4, zeroguna 0x5ec,
+vcop2 0x884, manxtt 0x45c) -- a copy loop from a table in the program ROM.
+Never written again; NEVER READ (0 reads in 5,400 vblanks of Rally, 3,000
+of each other game). The tables, found in each program image (the copy's
+lda of the table, verified against the taps for the five games tapped; the
+others statically only), words 0-13:
+
+     srallyc   10 02 42 02 10 10 10 10 08 10 10 10 10 10
+     zeroguna  10 02 42 02 04 04 10 10 20 10 10 10 10 10
+     pltkidsa  10 02 42 02 04 04 10 10 20 10 10 10 10 10
+     doaab     04 02 42 02 04 04 10 10 20 10 10 10 10 10
+     vf2       04 02 42 02 01 02 10 10 20 10 10 10 10 10
+     vcop2     04 02 42 02 01 02 10 10 20 10 10 10 10 10
+     desert    04 02 42 02 01 02 10 10 20 10 10 10 10 10
+     daytona   04 02 42 02 10 10 10 10 08 10 10 10 10 10
+     vcopa     04 02 42 02 10 10 10 10 08 10 10 10 10 10
+     manxtt    04 02 42 02 10 10 10 10 08 10 10 10 10 10
+     skytargt  04 02 42 02 10 10 10 10 08 10 10 10 10 10
+     dynamcop  04 02 42 02 10 10 10 10 08 10 10 10 10 10
+
+(table terminated by 0xffffffff; the original board's Daytona, Virtua Cop
+and Desert Tank program the same block the same way.) Words 1-3 are 02 42 02
+on every game and both boards; words 6, 7 and 9-13 are 0x10 on all; word 0
+is 0x04 or 0x10; words 4, 5 and 8 move together (10 10 / 08, 01 02 / 20,
+04 04 / 20) with the game's generation, not its board.
+
+*The format (INFERRED).* Every value has exactly ONE bit set in bits 5:0
+(0x01, 0x02, 0x04, 0x08, 0x10, 0x20); word 2 adds bit 6 (0x42) on every
+board. Read as binary counts (the expert's description), Rally would run its
+program ROM, eleven other regions and the data ROM at 16 and 8 waits -- 18
+and 10 bus cycles, 720 ns and 400 ns at 25 MHz, for 1990s EPROMs and mask
+ROMs of ~100-150 ns -- and the 1 MB of work RAM the game hammers at 66 (or 2
+with bit 6 a flag). Read as a ONE-HOT tap select (a shift-register wait
+generator: bit n ends the cycle after n waits), the counts are ROM 4 (2 on
+the 256-512 KB programs: 160-240 ns at 25 MHz), the three RAMs 1 (120 ns),
+everything else 4 and word 8 3 or 5 -- plausible for the parts. One-hot is
+the default here; binary is a parameter (ONEHOT=0, bit 6 dropped). Whether
+0x01 is 0 waits or 1, and what bit 6 means, is unknown.
+
+*The region map (INFERRED, nothing measured says which word governs which
+address).* m2_waitst region_of(), MAME's 2A-CRX map in address order, with
+words 1-3 the three RAMs because they are the words every board sets alike:
+  0 program ROM 0x000000-0x1fffff     7 tile / char 0x01000000-0x017fffff
+  1 board RAM   0x200000-0x3fffff     8 data ROM    0x02000000-0x03ffffff, 0x06000000
+  2 work RAM    0x400000-0x7fffff     9 palette     0x01800000-0x019fffff
+  3 buffer RAM  0x900000-0x97ffff    10 comm        0x01a00000-0x01bfffff
+  4 geometrizer 0x800000-0x87ffff    11 I/O, UART, backup 0x01c00000-0x01ffffff
+  5 copro       0x880000-0x8fffff, 0x980000-0xbfffff
+  6 system      0xc00000-0xffffff (CPU control, interrupts, timers)
+ 12 renderer    0x10000000-0x11ffffff  13 texture / luma 0x12000000-0x13ffffff
+For Rally only words 0 (4), 1-3 (1) and 8 (3) differ from the 0x10 (4) of
+the rest, so the map's guesses matter only for which regions get 1 or 3
+waits instead of 4.
+
+*The semantics (DECIDED, R901's "per-region minimum access times").* On the
+board the waits ARE the memory's access time; here the SDRAM behind the
+bridge is, and a miss already takes far longer than 2 + N clk_i960 cycles
+(R888: ~19 clk_sys idle, 25-40 typical). So the default (EXTRA=0) is a
+MINIMUM: an access is never answered before cycle 2 + N of its own; an
+answer the bridge has sooner (a line-buffer word, a data-cache hit, a
+posted write) is latched and the bridge kept off the bus until then, and a
+later answer passes as it was. Our accesses are never faster than the
+board's and never slower than they are now. EXTRA=1 is the other reading
+(N cycles on top of whatever the access takes: the request is shown to the
+bridge from cycle N). BURST=1: an access back to back with the previous one,
+same direction, same 16-byte line (the i-cache's line fill, ldl/ldq) is a
+burst's next word -- 1 + N, the i960KB's one address cycle a burst; a fill
+of four words at N=4 is 6 + 5 + 5 + 5 = 21 cycles, the bus's 1 + 4 x 5.
+Instruction fetches the i-cache answers never reach the bus, as on the chip.
+
+*The implementation.* rtl/io/m2_waitst.sv between i960_top and
+m2_cpu_bridge on clk_i960 (Model2.sv g_waitst, built only with M2_2A_WAITST;
+without it the bridge's nets are the CPU's own, assigned through). `en` is
+is_srally through two flops: for every other game, and for Rally with the
+switch off, every output is its input. With `en` it answers the block itself
+(four byte-lane MLABs, 16 x 8, read back as MAME's RAM; the bridge never
+sees a block access) and decodes each word's count as it is written (14 x 6
+flops, cleared by the CPU's reset; the boot writes them in its first ~100
+instructions); per access it counts cycles from the first shown (`cyc`),
+registers the region's minimum in that first cycle (need_r -- the address
+decode and the 14:1 count mux end at a flop, not in the acknowledge path),
+and acknowledges when the bridge has answered and `cyc` has reached it.
+c_ack is b_ack (or the held flag) AND a compare of two flops. Designed
+against the bridge's registered acknowledge (FAST_ACK 0, what Model2.sv
+builds), whose answer never comes in an access's first cycle.
+
+*Benches.*
+  * make test_m2_waitst (new; three builds -- one-hot MIN, one-hot EXTRA,
+    binary MIN): m2_waitst against a model of the bridge's registered
+    answer (a read's ack `lat` cycles after it takes the request, a write's
+    posted at once and busy `lat` more). en low: b_req, c_ack and c_rdata
+    equal their sources on every cycle of 1,120 accesses. en high: Rally's
+    table written by the CPU and read back with a byte-lane write (word 13
+    byte 2), no block access reaching the bridge. Per region (22 addresses,
+    two per region where the region has two devices, and one outside every
+    region) over lat 1..64, gaps 0..3 and reads and writes: every access
+    exactly max(2 + N, bridge) (a burst's later word max(1 + N, bridge));
+    EXTRA exactly N + bridge; the bridge started exactly once an access;
+    every read's data the bridge's for that address; large counts (one-hot
+    0x20 = 5, binary 0x3f = 63) every region 2 + N. PASS, 0 fails, all
+    three. Rally's cycles a read at the bridge's fastest / at lat 8:
+    program ROM, regions 4-7, 9-13: 6 / 9 (burst words 5 / 9); RAMs 3 / 9
+    (2 / 9); data ROM 5 / 9 (4 / 9); outside 2 / 9.
+  * test_m2_cpu_bridge_2a PASS (928 checks; the bridge is unchanged),
+    test_i960_top PASS (i960_top unchanged; test_i960_rom SKIPs here, no
+    daytona93/ directory).
+  * WHOLE-CORE BOOT, SEGA RALLY (obj_boot_2ax, A2X, the srallyc image from
+    rom_csum.py on the Rally MRA, M2_MAXFRAMES=80, M2_FRAMESTAT; the
+    harness's new WAITST parameter instantiates m2_waitst as Model2.sv does,
+    BOOT_2AX_G=-GWAITST=1 BOOT_2AX_DIR=obj_boot_2ax_ws). Both reach the same
+    loop at 0x5a379c (MAME's at 1-2 s) with no trap, PASS:
+        off  5,782,551 instructions, 78 vblanks, first flip vblank 58, 20 flips
+        on   5,634,543 instructions, 78 vblanks, first flip vblank 59, 19 flips
+    The vblanks of busy boot work run 5-6% fewer instructions (vblank 15:
+    112,918 -> 106,887; the 3D frames from vblank 60: ~109.6 k -> ~103.9 k),
+    the 45 k-instruction waits unchanged (they spin in the i-cache); 2.5%
+    fewer over the run. (The bench's i960 runs at 24 MHz against a 48 MHz
+    SDRAM model -- its vblank is 417 k CPU cycles, the board's 695 k -- so
+    the size of the slow-down on the board is not this number.)
+  * lint_top clean on 2A, -DM2_2A_WAITST, -DM2_NO_2A, -DM2_NO_DEBUG
+    -DM2_PROBE=1 -DM2_NO_2A_RALLY and that with -DM2_2A_WAITST, no warning
+    on the new names; lint_idx (default and with -DM2_2A_WAITST) nothing in
+    m2_waitst or the new lines; quartus_map 17.0 --analyze_file
+    m2_waitst.sv, Model2.sv and Model2.sv with M2_2A_WAITST=1: 0 errors.
+
+*AREA (quartus_map 17.0, whole design, the 2A build; both maps of this
+commit's tree, sm2-builds/r904-map-base and r904-map-ws):*
+     switch off (as model2a 8171809)  40,307 ALMs est.  57,993 ALUT  47,991 registers  4,467,205 block bits  DSP 90
+     M2_2A_WAITST=1                   40,377            58,125       48,140            4,467,205             90
+  +70 ALMs estimated, +132 ALUT, +149 registers, no block bits (no M10K);
+  +512 MLAB bits (the block, 4 x 16 x 8). m2_waitst alone 170 ALUT, 154
+  registers (the 14 counts 84, the held word 32, the last line 28, the
+  counters). Standalone map of the module: 159 ALMs. Switch off, the
+  module is not built: the core is model2a's, by construction.
+
+*What is NOT known, and the questions for the expert (Ben is in contact):*
+  1. Binary count or one-hot? Every value written has one bit set in 5:0;
+     Rally writes 0x10 to word 0 and to nine others, 0x08 to word 8. Is 0x10
+     sixteen waits or four?
+  2. If one-hot: is bit 0 zero waits (bit n = n waits) or one?
+  3. Word 2 is 0x42 on every board: what is bit 6 (burst / page mode for
+     the work RAM? READY from the device?)
+  4. Which word governs which address range? (Our guess above; words 1-3
+     the three RAMs, word 0 the program ROM.) Words 4, 5 and 8 change with
+     the game's generation (10 10 / 08; 01 02 / 20; 04 04 / 20): the TGP /
+     geometrizer interface?
+  5. Read and write the same count? Any recovery or idle cycle between
+     accesses on top?
+  6. Bursts (the i960KB's quad-word reads: i-cache fills, ldq): every data
+     word 1 + N after one address cycle, or N only on the first?
+  7. Where a device has its own READY (the TGP's FIFO full, the
+     geometrizer busy): is the count a minimum before READY is sampled, or
+     a fixed length?
+  8. Do Model 2 (Daytona, Virtua Cop, Desert Tank write the same table
+     layout), 2B and 2C use the same controller and format?
+
+*What the board would show (with the switch on, one RBF):* Sega Rally's
+start grid as the arcade's (MAME's note: "initial enemy car placement seems
+to be slightly incorrect for a few cars, seems to be affected by i960 clock
+speed"); the game a little slower in its busy frames (R896's occasional
+heavy frames could get heavier: wait states only slow a CPU). VF2, Virtua
+Cop 2, Zero Gunner, Manx TT and the rest unchanged (en low).
