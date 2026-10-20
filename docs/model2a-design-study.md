@@ -40854,3 +40854,13 @@ to be slightly incorrect for a few cars, seems to be affected by i960 clock
 speed"); the game a little slower in its busy frames (R896's occasional
 heavy frames could get heavier: wait states only slow a CPU). VF2, Virtua
 Cop 2, Zero Gunner, Manx TT and the rest unchanged (en low).
+
+*R900 ON THE BOARD (s1253 = 71598a2), Ben, 2026-10-20: Dynamite Cop, Dead
+or Alive and Sky Target LOOK NO DIFFERENT -- regular vertical stripes /
+bars across textured surfaces (walls, a ship's hull, floors), characters
+better. R900's bench rendered with MAME's texel memory, so it never
+exercised where our loader puts these games' texture ROM or where our texel
+fetch reads it: the bench passed a path the board does not take. R905 traces
+the real MRA -> loader -> SDRAM -> texel-fetch path with a bench fed from
+the loaded image.*
+
