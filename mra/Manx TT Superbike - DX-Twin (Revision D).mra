@@ -41,12 +41,14 @@
       Hand Brake are "-": the game has neither. MAME: calibrate in the input
       test (press Service, then hold Shift Down while moving the control).
 
-      THE MOTION-SLIDER CHECK: every boot stops at "DANGER! ACTIVE MOTION
-      SLIDER NOW CHECKING SYSTEM" (the DX cabinet's moving seat, which the
-      core does not have; MAME stops there too). Press Test: the test menu
-      opens with EXIT selected; press Test again and the game runs (MAME
-      0.289, with the EEPROM blank as the core starts it and with MAME's
-      default: both race).
+      THE MOTION-SLIDER CHECK (R892): at boot the game shows "DANGER!
+      ACTIVE MOTION SLIDER NOW CHECKING SYSTEM" and talks to the DX
+      cabinet's drive board on the 315-5649's ports E (command) and D
+      (status). The core answers as a working motion base (Model2.sv
+      M2_2A_MANX_MOTION, game ID 0x19), so the screen passes in about a
+      second and the game goes on to its warning screen and attract with
+      no key pressed. Built without it (M2_NO_2A_MANX_MOTION), the screen
+      stays, as in MAME: press Test, then Test again on the menu's EXIT.
 
       Index 4, the game ID: 0x19 (R887). Bit 7 would be the 15 kHz CRT flag.
     -->

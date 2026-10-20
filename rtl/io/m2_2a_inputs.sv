@@ -48,6 +48,16 @@
 //          Punch (J12) 5 Shift Down / Kick (J13); AN0 THROTTLE (the
 //          accelerator), AN1 BRAKE, AN2 BANK = the steering reversed.
 //     IN1 / IN2's other bits 1 (unused / unknown, active low).
+//     R892, MOTION: Manx TT's DX cabinet (0x19 only) -- its Active Motion
+//          Slider's drive board on PE (command, written every frame) and PD
+//          (status, IN2). The boot's check (program 0x5f530; RAM 0x514034
+//          command, 0x514035 status) puts 0x3D on PE and waits for 0xCE, then
+//          sends the bike's centre (0xFF - EEPROM 0x51406f) and waits for
+//          0xCD; anything else and the DANGER screen stays until Test
+//          (MAME, PD 0xFF). A working base is answered here: PD = 0xCE while
+//          PE holds 0x3D, else 0xCD. Nothing else reads PD in a race (the
+//          test menu's "DriveBoard Test" does, and still reports an error).
+//          Off (MOTION 0): IN2 0xFF, the check stops as in MAME.
 //   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
 //     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
@@ -59,7 +69,8 @@
 module m2_2a_inputs #(
   parameter int unsigned SYS_MHZ = 80,
   parameter bit          ANALOG  = 1'b1,  // the analog profile's block (M2_2A_RALLY)
-  parameter bit          GUN     = 1'b0   // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
+  parameter bit          GUN     = 1'b0,  // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
+  parameter bit          MOTION  = 1'b0   // R892: Manx TT's motion base answered on PD (M2_2A_MANX_MOTION)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
@@ -76,6 +87,7 @@ module m2_2a_inputs #(
   input  logic        st_rsteer,    // status[54]  Right stick
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic  [7:0] gun_in1,      // R870 (GUN): m2_vcop_guns in1, the triggers
+  input  logic  [7:0] pe,           // R892 (MOTION): the 315-5649's PE latch
   /* verilator lint_on UNUSEDSIGNAL */
   output logic  [7:0] in0,          // registered, as Model2.sv's were
   output logic  [7:0] in1,
@@ -94,6 +106,7 @@ module m2_2a_inputs #(
   wire p_an2    = (game[6:2] == 5'b00110);          // 0x18-0x1B
   wire p_sky    = p_an2 & (game[1:0] == 2'b00);     // 0x18
   wire p_dig2   = (game == 7'h12) | (game == 7'h15);  // Zero Gunner, Pilot Kids
+  wire p_manx   = MOTION & (game == 7'h19);         // R892: Manx TT's motion base
   // (Model2.sv shows the analog OSD lines for 0x10 and 0x18-0x1B alike)
 
   // R879: a pad's left analogue stick drives the digital directions too, past
@@ -145,7 +158,9 @@ module m2_2a_inputs #(
   end endgenerate
   wire [7:0] an_in1 = p_rally ? {1'b1, cab_in1[6:4], 4'b1111}
                               : {2'b11, ~j0[13], ~j0[12], 4'b1111};
-  wire [7:0] an_in2 = (p_rally & j0[9]) ? 8'hFF : p_rally ? 8'h00 : 8'hFF;
+  wire [7:0] an_in2 = (p_rally & j0[9]) ? 8'hFF : p_rally ? 8'h00
+                    : p_manx ? ((pe == 8'h3D) ? 8'hCE : 8'hCD)   // R892
+                    : 8'hFF;
   wire [7:0] steer_rev = ~cab_steer;                  // PORT_REVERSE: 0xFF - v
 
   always_ff @(posedge clk) begin

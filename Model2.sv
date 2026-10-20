@@ -140,6 +140,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_VCOP2_GUN
 `define M2_2A_VCOP2_GUN
 `endif
+// R892: M2_2A_MANX_MOTION, Manx TT's DX motion base (the Active Motion
+// Slider's drive board) answered on the 315-5649's PD from its PE latch, so
+// the boot's check passes without Test (m2_2a_inputs MOTION; game ID 0x19
+// only). On by default; VERILOG_MACRO "M2_NO_2A_MANX_MOTION=1" (or
+// -DM2_NO_2A_MANX_MOTION to lint) leaves it out -- PD then reads 0xFF and
+// the game waits on its DANGER screen until Test, as in MAME.
+`ifndef M2_NO_2A_MANX_MOTION
+`define M2_2A_MANX_MOTION
+`endif
 // R865: M2_2A_FPU, the i960's flushreg (i960_top FR: the one VC form without
 // the rest of VC -- no transcendental microcode, no M10K), live for Sega
 // Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally executes it at
@@ -472,6 +481,11 @@ localparam bit RALLY2A = 1'b0;
 localparam bit VCOP2GUN = M2A;                                // R870
 `else
 localparam bit VCOP2GUN = 1'b0;
+`endif
+`ifdef M2_2A_MANX_MOTION
+localparam bit MANXMOT = M2A;                                 // R892
+`else
+localparam bit MANXMOT = 1'b0;
 `endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
@@ -6166,13 +6180,15 @@ end else begin : g_noioboard
 		// in each MRA's <buttons names> order; VF2's map exactly as it was
 		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
 		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2;
-		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN)) u_2a_inputs (
+		wire [7:0] a2_pe;   // R892: PE's latch, Manx TT's motion-base command
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT)) u_2a_inputs (
 			.clk(clk_sys), .rst_n(cpu_rst_n),
 			.game(M2A ? game_id[6:0] : 7'd0),   // R887: the profile from the game ID
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
 			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .joy_analog_1(joy_analog_1_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
 			.st_rsteer(status[54]), .gun_in1(vc_in1),   // R870: the guns' triggers
+			.pe(a2_pe),                                  // R892
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2)
 		);
@@ -6186,7 +6202,7 @@ end else begin : g_noioboard
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
 			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
-			.lamps(), .dbg_pa(), .dbg_dir()
+			.lamps(), .pe(a2_pe), .dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
 		assign iob_dbg   = 32'd0;

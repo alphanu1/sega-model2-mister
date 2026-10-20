@@ -44,6 +44,10 @@
 //                 Kick = J 13; IN2 0xFF; AN0 THROTTLE = Daytona's
 //                 accelerator, AN1 BRAKE = its brake, AN2 BANK = 0xFF -
 //                 its steering.
+//     R892  0x19 Manx TT with MOTION: IN2 is the motion base's status --
+//                 0xCE while PE holds 0x3D, else 0xCD (the game's boot check,
+//                 program 0x5f530). 0x1A / 0x1B keep 0xFF. The MOTION 0 build
+//                 (dut_nm) is checked against the same wants with IN2 0xFF.
 
 #include "Vtb_m2_2a_inputs_top.h"
 #include "verilated.h"
@@ -73,20 +77,20 @@ static uint32_t adir(uint16_t a) {
   return (x > 48 ? 1u : 0u) | (x < -48 ? 2u : 0u) | (y > 48 ? 4u : 0u) | (y < -48 ? 8u : 0u);
 }
 // the game index the bench switches between, and the ID it drives
-enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_N };
+enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_N };
 static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner / Pilot Kids", "other digital",
-                                 "Sky Target", "Manx TT / Motor Raid"};
+                                 "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)"};
 static int game_id(int g) {
   static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1f, 0x20, 0x7f};
   switch (g) {
     case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
     case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
-    case G_SKY: return 0x18; case G_BIKE: return 0x19 + rnd(3);
+    case G_SKY: return 0x18; case G_BIKE: return 0x1a + rnd(2); case G_MANX: return 0x19;
     default: return dig[rnd(int(sizeof dig / sizeof dig[0]))];
   }
 }
 static int sky_y(uint16_t la) { return (0x80 + int8_t(la >> 8)) & 0xff; }   // 0x80 + y
-static Want want_now(int game) {
+static Want want_now(int game, bool motion) {
   uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
   if (game == G_ZG || game == G_DIG || game == G_VF2) { j0 |= adir(t->joy_analog); j1 |= adir(t->joy_analog_1); }
   Want w;
@@ -95,10 +99,10 @@ static Want want_now(int game) {
     w.in1 = 0x8f | (gearvalue[gear] << 4);
     w.in2 = b(j0, 9) ? 0xff : 0x00;
     w.an0 = t->c_steer; w.an1 = t->c_accel; w.an2 = t->c_brake;
-  } else if (game == G_SKY || game == G_BIKE) {   // R887: Sky Target, the bikes
+  } else if (game == G_SKY || game == G_BIKE || game == G_MANX) {   // R887: Sky Target, the bikes
     w.in0 = lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 8) << 5 | b(j0, 5) << 6);
     w.in1 = lo(b(j0, 12) << 4 | b(j0, 13) << 5);
-    w.in2 = 0xff;
+    w.in2 = (game == G_MANX && motion) ? (t->pe == 0x3d ? 0xce : 0xcd) : 0xff;   // R892
     w.an2 = 0xff - t->c_steer;
     if (game == G_SKY) { w.an0 = sky_y(t->joy_analog); w.an1 = 0xff; }
     else               { w.an0 = t->c_accel; w.an1 = t->c_brake; }
@@ -133,6 +137,7 @@ static void gear_edge() {
 }
 
 static uint64_t per_game[G_N] = {}, gear_moves = 0, gear_seen[5] = {0, 0, 0, 0, 0};
+static uint64_t manx_ce = 0, manx_cd = 0;   // R892: Manx TT cycles answered 0xCE / 0xCD
 
 static void cmp(const char *n, int game, uint64_t cyc, int got, int want) {
   ++checks;
@@ -147,7 +152,7 @@ int main(int argc, char **argv) {
   t = new Vtb_m2_2a_inputs_top;
   t->clk = 0; t->rst_n = 0; t->game = 0;
   t->joystick_0 = 0; t->joystick_1 = 0; t->joy_analog = 0; t->joy_ranalog = 0; t->joy_analog_1 = 0; t->paddle = 0;
-  t->st_pedswap = 0; t->st_ssens = 0; t->st_ssm = 0; t->st_rsteer = 0;
+  t->st_pedswap = 0; t->st_ssens = 0; t->st_ssm = 0; t->st_rsteer = 0; t->pe = 0xff;
   for (int i = 0; i < 4; ++i) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
   t->rst_n = 1; gear = 0;
   int game = 0;
@@ -161,10 +166,13 @@ int main(int argc, char **argv) {
     t->jr0 = t->joystick_0 | adir(t->joy_analog); t->jr1 = t->joystick_1 | adir(t->joy_analog_1);
     if (rnd(3000) == 0) t->paddle = (rnd(3) == 0) ? uint8_t(rng()) : 0;
     if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); }
+    if (rnd(64) == 0)   // R892: PE, the game's motion command -- 0x3D a third of the time, its neighbours often
+      t->pe = rnd(3) == 0 ? 0x3d : rnd(3) == 0 ? (0x3d ^ (1 << rnd(8))) : uint8_t(rng());
     if (rnd(500000) == 0) t->rst_n = 0; else if (!t->rst_n && rnd(8) == 0) t->rst_n = 1;
     if (!t->rst_n) { gear = 0; gup_d = 0; gdn_d = 0; }   // asynchronous in the RTL
     t->eval();
-    Want w = want_now(game);
+    Want w = want_now(game, true), wn = want_now(game, false);
+    if (game == G_MANX) { if (w.in2 == 0xce) ++manx_ce; else ++manx_cd; }
     int g0 = gear;
     gear_edge();
     if (gear != g0) ++gear_moves;
@@ -184,12 +192,21 @@ int main(int argc, char **argv) {
     cmp("an0", game, c, t->an0, w.an0);
     cmp("an1", game, c, t->an1, w.an1);
     cmp("an2", game, c, t->an2, w.an2);
+    // R892: the build without MOTION
+    cmp("nm in0", game, c, t->n_in0, wn.in0);
+    cmp("nm in1", game, c, t->n_in1, wn.in1);
+    cmp("nm in2", game, c, t->n_in2, wn.in2);
+    cmp("nm an0", game, c, t->n_an0, wn.an0);
+    cmp("nm an1", game, c, t->n_an1, wn.an1);
+    cmp("nm an2", game, c, t->n_an2, wn.an2);
   }
   std::printf("  %llu cycles, %llu checks; per game:", (unsigned long long)N, (unsigned long long)checks);
   for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game[g], g + 1 < G_N ? "," : "\n");
   std::printf("  shifter: %llu moves; Sega Rally cycles in N/1/2/3/4: %llu %llu %llu %llu %llu\n",
               (unsigned long long)gear_moves, (unsigned long long)gear_seen[0], (unsigned long long)gear_seen[1],
               (unsigned long long)gear_seen[2], (unsigned long long)gear_seen[3], (unsigned long long)gear_seen[4]);
+  std::printf("  Manx TT's motion base (R892): %llu cycles answered 0xCE, %llu 0xCD\n",
+              (unsigned long long)manx_ce, (unsigned long long)manx_cd);
   std::printf("  %llu mismatches\n%s\n", (unsigned long long)mism, mism ? "FAIL" : "PASS");
   delete t;
   return mism ? 1 : 0;

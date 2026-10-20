@@ -46,6 +46,40 @@ released games on the normal 2A build (128 MB module, and a 64 MB one if to
 hand). DECISIONS FOR BEN: the original core's T_REFI 781 (past 64 ms) and its
 byte mask (still on the DQM pins only) -- main, separately.
 
+## 2026-10-20: Manx TT's motion-slider screen answered -- boots to attract with no key (R892)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a3d701bd8733035ba
+(on model2a 04bd4fb).
+
+FOUND (MAME 0.289, taps + a traced frame + MAME's disassembly): the DANGER /
+ACTIVE MOTION SLIDER screen is the DX cabinet's drive-board check (program
+0x5f530). The game writes a command to the 315-5649's PORT E (0x3D) and waits
+for PORT D (MAME: IN2, 0xFF) to read 0xCE, sends the bike's centre (0x7F) and
+waits for 0xCD. Its timeout counter is also a frame counter, so it waits
+forever. Not analog inputs (MAME's TODO is wrong about the cause). CABINET
+TYPE = TWIN (EEPROM 0x51405a) skips it, but the factory default is DELUXE and
+the core has no EEPROM preload. Nothing reads port D in a race.
+
+DONE: m2_315_5649 exports PE; m2_2a_inputs MOTION answers IN2 for game ID 0x19
+only -- 0xCE while PE == 0x3D, else 0xCD (Model2.sv M2_2A_MANX_MOTION, on;
+M2_NO_2A_MANX_MOTION leaves it out). +3 ALMs est. (module map), 0 regs.
+MAME proof: boots to attract with no key, races; frame-aligned against the
+Test-workaround run, 121 / 121 snapshots identical once the one counter the
+check reloads (0x5bba00) is equal -- the rest of RAM differs only in stack and
+test-menu leftovers. Benches, lint_top x4, lint_idx, analyze_file: clean.
+Manx TT's MRA: comment only. Motor Raid (0x1A, Twin) has no such check;
+motoraiddx has a different one (not loadable, not covered).
+
+FOUND AND WRONG ON THE WAY: a first proof compared runs whose boots were
+1,258 frames apart -- they differ in the race for that reason alone; and the
+proof script's gate (`GATE and nil or 0`, always 0 in Lua) timed the first
+runs' coins from power-on, which made the Test run look as if it started a
+game without a coin. Both fixed before the numbers above.
+
+TO TEST ON THE BOARD: Manx TT boots past the DANGER screen in about a second
+to its warning screen and attract, no key; coin / start / race as s1221. VF2,
+Sega Rally, Virtua Cop 2, Zero Gunner unchanged.
+
 ## 2026-10-20: the other seven 2A sets assessed; input profiles; Manx TT's MRA (R887)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a1f18fab3fc92cd91
