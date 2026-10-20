@@ -79,7 +79,7 @@ ROM sets: MAME 0.289.
 
 | setting | what it does |
 |---|---|
-| `Volume` | 80% by default. After 70% the list goes on to **150%, 200%, 300% and 400%**. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
+| `Volume` | 80% by default. The list rises 80, 90, 100, **150, 200, 300, 400%**, then wraps once to 0% and climbs back through 10–70%. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
 | `Raw Sound Boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
 
 **Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
