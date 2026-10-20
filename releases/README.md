@@ -31,6 +31,10 @@ find, and say which game and where.
 | `Model2A_20261020.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the four 2A MRAs below | `/media/fat/_Arcade/` |
 
+**SDRAM:** the four games below run on a 64 MB or 128 MB module. Several of
+the games still to come need more than 64 MB of ROM, so **they will need the
+128 MB module**; the table further down says which.
+
 `Model2A_20261020.rbf` has the md5 `e44e4a29bab56e0ad579d93f1b3904d6`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
@@ -66,15 +70,15 @@ the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 These run on the same board, and are being brought up next. The zips are
 what each will need.
 
-| Game | ROM zips | MAME set | What it needs |
-|---|---|---|---|
-| Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | Its MRA |
-| Sky Target | `skytargt.zip` | `skytargt` | Its MRA and analogue stick |
-| Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | Its MRA; its 315-5881 protection check patched out, as Zero Gunner's |
-| Pilot Kids (Model 2A) | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | As Dynamite Cop |
-| Manx TT Superbike (DX/Twin, Revision D) | `manxtt.zip` | `manxtt` | Its MRA and bike controls |
-| Motor Raid (Twin, Twin/DX) | `motoraid.zip` (and `motoraiddx.zip` for Twin/DX) | `motoraid` | As Manx TT |
-| Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | A second protection chip (317-0229), not yet assessed |
+| Game | ROM zips | MAME set | SDRAM | What it needs |
+|---|---|---|---|---|
+| Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | 128 MB | Its MRA, and its factory settings preloaded |
+| Sky Target | `skytargt.zip` | `skytargt` | 64 MB | Its MRA and analogue stick |
+| Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | 128 MB | Its MRA; its 315-5881 protection check patched out, as Zero Gunner's |
+| Pilot Kids (Model 2A) | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | 128 MB | As Dynamite Cop |
+| Manx TT Superbike (DX/Twin, Revision D) | `manxtt.zip` | `manxtt` | 64 MB | Being tested now |
+| Motor Raid (Twin, Twin/DX) | `motoraid.zip` (and `motoraiddx.zip` for Twin/DX) | `motoraid` | 128 MB | Bike controls, one more CPU instruction |
+| Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | 128 MB | One more CPU instruction; its protection check patched out |
 
 ## Model 2 core release notes
 
