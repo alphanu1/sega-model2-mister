@@ -149,6 +149,13 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_MANX_MOTION
 `define M2_2A_MANX_MOTION
 `endif
+// R897: M2_2A_EE_LOAD, the 93C46's load port: an MRA's <rom index="5"> (128
+// bytes, MAME's .nv layout) is written into the EEPROM as it downloads.
+// Hanguk Pro Yagu 98 stops at "Error #1" without its factory image (MAME:
+// hpyagu98_nvram). On by default; "M2_NO_2A_EE_LOAD=1" leaves it out.
+`ifndef M2_NO_2A_EE_LOAD
+`define M2_2A_EE_LOAD
+`endif
 // R865: M2_2A_FPU, the i960's flushreg (i960_top FR: the one VC form without
 // the rest of VC -- no transcendental microcode, no M10K), live for Sega
 // Rally, Virtua Cop 2 and Zero Gunner by game ID. Sega Rally executes it at
@@ -486,6 +493,11 @@ localparam bit VCOP2GUN = 1'b0;
 localparam bit MANXMOT = M2A;                                 // R892
 `else
 localparam bit MANXMOT = 1'b0;
+`endif
+`ifdef M2_2A_EE_LOAD
+localparam bit EELOAD2A = M2A;                                // R897
+`else
+localparam bit EELOAD2A = 1'b0;
 `endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
@@ -6235,7 +6247,10 @@ end else begin : g_noioboard
 		);
 		wire [31:0] a2_rdata;
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
-		m2_315_5649 #(.GUN(VCOP2GUN)) u_315_5649 (
+		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words)
+		wire ee_ld_we = EELOAD2A && ioctl_download && ioctl_wr && (ioctl_index[5:0] == 6'd5)
+		             && (ioctl_addr[26:7] == 20'd0);
+		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A)) u_315_5649 (
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
@@ -6243,7 +6258,9 @@ end else begin : g_noioboard
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
 			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
-			.lamps(), .pe(a2_pe), .dbg_pa(), .dbg_dir()
+			.lamps(), .pe(a2_pe),
+			.ee_ld_we(ee_ld_we), .ee_ld_a(ioctl_addr[6:1]), .ee_ld_d(ioctl_dout),   // R897
+			.dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
 		assign iob_dbg   = 32'd0;

@@ -40207,8 +40207,15 @@ and two regions appended:
                          (the same in both)
     The engine read texture words with a[21] set 1,248 / 0 / 1,212 times;
     the old mapping takes those from the other half (the R670 fields wlog,
-    hlog, tx, ty ... of 19 and 41 quads). No attract walk read polygon ROM
-    above 16 MB (counted: 0) -- see the Pilot Kids walks below.
+    hlog, tx, ty ... of 19 and 41 quads). No Dynamite Cop attract walk read
+    polygon ROM above 16 MB (counted: 0); Pilot Kids' does:
+      pltkidsa w7000 (1,934 MAME polygons): the engine read polygon ROM
+      above 16 MB 31,522 times and texture words with a[22] set 24,546
+      times. Large mapping: 1,932 match (1 off 1-16 px, 1 missing, 8 extra
+      quads -- clip and tiny-cull, R643), u/v of 1,716 textured polygons 0
+      off, sort key 0 of 1,932, texture parameters 0 of 1,938. Old mapping:
+      0 match, 1,931 missing (every polygon from the wrong 16 MB).
+      (pltkidsa w3000, its title: 479 of 480 match in both mappings.)
 
 *THE TWO TRAPS (R887), BUILT UNDER F2A (live for game IDs 0x10-0x1F, as
 tanr; no new switch):*
@@ -40249,3 +40256,35 @@ tanr; no new switch):*
   write dropped, the alias ignored, T_TRIP skipped (FAIL, 1 mismatch each);
   movre's decode removed (MODULE TRAP); sqrtrl's start without F2A (FAIL).
   test_i960_top, _fr, _vc: PASS, 0 mismatches.
+
+*HANGUK PRO YAGU 98's FACTORY SETTINGS (MAME 0.289, 40 s each, snapshots at
+10 / 20 / 40 s, the NVRAM directory seeded per case):*
+  t0 MAME's defaults (the zip's hpyagu98_nvram / _backup)   attract, batting
+  t1 blank EEPROM (0xFF) and blank backup RAM (0)            "Error #1"
+  t2 MAME's EEPROM, blank backup                             "Error #1"
+  t3 blank EEPROM, MAME's backup                             "Error #1"
+  t4 EEPROM 0xFF but fa e3 a6 29 at bytes 8-11, blank backup "Error #1"
+  (t1-t4 byte-identical frames from 10 s.) The game does NOT write its own.
+  The checks (MAME's disassembly): 0xc34 0x510020 != 0; [0x519ce8] * 5 +
+  0xffe65b0d == 0xd028ceef (the EEPROM's word); backup[0x398] * 3 + 0x3e82
+  == 0xf0c891a2 (0x5042c660); the failure path 0xc78 prints "Error #1" and
+  spins. The same tests run again at 0xce8 and 0xdec, in play, where a
+  failure hangs without a message -- several copies, so patching them out
+  is a search for every copy, and the settings would still be invalid.
+  TAKEN: the images themselves, from the zip, loaded by the MRA -- none of
+  their bytes in the repository. The backup RAM already loads from ioctl
+  index 2 (the .nvm path); the MRA puts <rom index="2"> (hpyagu98_backup)
+  BEFORE its <nvram> element, and Main_MiSTer sends the saved .nvm when it
+  reaches that element (mra_loader.cpp: arcade_nvm_load() on the </nvram>
+  tag, only if the file exists) -- so a saved game replaces the factory
+  image. The EEPROM had no load path: m2_93c46 LOAD (a port that takes the
+  MLAB's write for a cycle; word a = MAME's .nv bytes 2a, 2a+1, get_u16le),
+  m2_315_5649 EE_LOAD, Model2.sv M2_2A_EE_LOAD (on; M2_NO_2A_EE_LOAD=1 off):
+  ioctl index 5, bytes 0-127. The EEPROM is not saved: every load starts
+  from the factory image (as every 2A game's EEPROM starts blank today).
+  Bench: tb_m2_315_5649 built EE_LOAD=1, images loaded at power-on and at
+  half the 2,013 later power-ons (977 images, some partial, with gaps) beside
+  the 2 M random operations against MAME's transcription: 26.4 M reads, 0
+  mismatches. Planted -- EE_LOAD=0 with the loads: FAIL (3,802 mismatches);
+  EE_LOAD=0, +noload (the module as it was): PASS. test_m2_vcop2_guns
+  223,916 / 0, test_m2_2a_inputs PASS (the harnesses tie the port off).

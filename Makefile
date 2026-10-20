@@ -2172,7 +2172,7 @@ test_m2_315_5649: obj_m2_5649/Vm2_315_5649
 	@./obj_m2_5649/Vm2_315_5649 $(TEST_ARGS)
 
 obj_m2_5649/Vm2_315_5649: rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
-	$(VBUILD) --top-module m2_315_5649 -Wno-UNUSEDSIGNAL \
+	$(VBUILD) --top-module m2_315_5649 -GEE_LOAD=1 -Wno-UNUSEDSIGNAL \
 	  --Mdir obj_m2_5649 -o Vm2_315_5649 -CFLAGS "-O2" \
 	  rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
 

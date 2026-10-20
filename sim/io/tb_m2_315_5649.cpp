@@ -138,7 +138,9 @@ static void tick() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); ++cyc; }
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t n = 2'000'000; unsigned seed = 1;
+  bool loads = true;   // R897: +noload for a module built without EE_LOAD
   for (int i = 1; i < argc; i++) {
+    if (!std::strcmp(argv[i], "+noload")) loads = false;
     if (!std::strncmp(argv[i], "+n=", 3)) n = std::strtoull(argv[i] + 3, nullptr, 10);
     if (!std::strncmp(argv[i], "+seed=", 6)) seed = unsigned(std::strtoul(argv[i] + 6, nullptr, 10));
   }
@@ -148,10 +150,28 @@ int main(int argc, char **argv) {
   d->clk = 0; d->por_n = 0; d->rst_n = 0; d->sel = 0; d->we = 0; d->word = 0; d->be = 0; d->wdata = 0;
   d->in0 = 0xff; d->in1 = 0xff; d->in2 = 0xff; d->sw = 0xff;
   d->an0 = 0xff; d->an1 = 0xff; d->an2 = 0xff;
+  d->ee_ld_we = 0; d->ee_ld_a = 0; d->ee_ld_d = 0;
   for (int i = 0; i < 4; i++) tick();
   d->por_n = 1; d->rst_n = 1; tick();
 
   uint64_t pors = 0, resets = 0, reads = 0, bad = 0, ee_reads = 0, ee_ones = 0, ee_zeros = 0, cmds = 0, pe_checks = 0;
+  uint64_t ee_loads = 0;
+  // R897: an MRA's EEPROM image through the load port, as Model2.sv drives it
+  // from ioctl index 5 while the game is in reset: 64 words, one a cycle or
+  // with gaps, sometimes a partial image; the reference takes the same words.
+  auto ee_load = [&]() {
+    const int nw = (rng() % 4 == 0) ? int(1 + rng() % 64) : 64;
+    for (int k = 0; k < nw; k++) {
+      const int a = (nw == 64) ? k : int(rng() % 64);
+      const uint16_t w = uint16_t(rng());
+      d->ee_ld_we = 1; d->ee_ld_a = a; d->ee_ld_d = w; tick();
+      d->ee_ld_we = 0;
+      for (int g = int(rng() % 3); g > 0; g--) tick();
+      ref.ee.mem[a] = w;
+    }
+    ++ee_loads;
+  };
+  if (loads) ee_load();
   auto access = [&](bool we, int off, uint8_t data) -> void {
     // optional idle gap, as the i960 bit-bangs slowly
     int gap = 4 + int(rng() % 6);   // the i960 is never closer than this (25 MHz bus, bridge)
@@ -202,6 +222,7 @@ int main(int argc, char **argv) {
       for (int i = 0; i < 300; i++) tick();   // let a WRITEALL / ERASEALL sweep finish (192 cycles)
       d->por_n = 0; d->rst_n = 0; tick(); tick(); d->por_n = 1; d->rst_n = 1; tick();
       ref.power_on(); ++pors;
+      if (loads && (rng() & 1)) ee_load();
       access(true, 8, 0xfe);
       ++ops; continue;
     }
@@ -253,6 +274,7 @@ int main(int argc, char **argv) {
               (unsigned long long)ee_reads, (unsigned long long)ee_ones, (unsigned long long)ee_zeros, (unsigned long long)resets, (unsigned long long)pors,
               (unsigned long long)cyc);
   std::printf("  %llu PE latch checks (R892)\n", (unsigned long long)pe_checks);
+  std::printf("  %llu EEPROM images loaded through the load port (R897)\n", (unsigned long long)ee_loads);
   if (bad) { std::printf("FAIL: %llu mismatches\n", (unsigned long long)bad); return 1; }
   std::printf("PASS\n");
   delete d;
