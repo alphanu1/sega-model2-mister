@@ -40209,3 +40209,43 @@ and two regions appended:
     the old mapping takes those from the other half (the R670 fields wlog,
     hlog, tx, ty ... of 19 and 41 quads). No attract walk read polygon ROM
     above 16 MB (counted: 0) -- see the Pilot Kids walks below.
+
+*THE TWO TRAPS (R887), BUILT UNDER F2A (live for game IDs 0x10-0x1F, as
+tanr; no new switch):*
+  * SQRTRL (Motor Raid): VC's form -- its decode now (vc_on || ta_on), and
+    T_RLLO starts the square root for (VC || F2A).
+  * MOVRE (Dead or Alive), MAME's exactly. MAME copies three uint32_t
+    through pointers: dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2] &
+    0xffff, a pointer being a register triple at (n & 0x1e) or m_fp[k] -- a
+    double's two words and then THE NEXT fp REGISTER'S LOW WORD, and after
+    fp3 m_SAT, the member that follows m_fp[4] in i960.h. DOA's own code
+    (program 0x7704-0x771c, 0x7860-0x7878, 0x7894.., 0x7928..; 16 movre in
+    all): movre fp_k -> r4 then stt r4 to the frame, and ldt then movre r4 ->
+    fp_k, k = 0..3 ascending -- so each restore's spill into fp k+1 is
+    overwritten by the next, fp3's goes to the SAT (DOA's SAT is 0, program
+    word 0, so MAME stores back what it read). Built: the decode (is_rl,
+    fpmisc's move -- raw, as movrl), the third word read on ra2 (movre has
+    no src2) or from fpr[k+1][15:0] / sat_reg[15:0]; a destination over the
+    source's third word (a triple two above, fp k+1 from fp k) takes src[0],
+    as MAME's write-then-read order gives; an fp destination writes fp k and
+    spills into fpr[k+1][31:0] or the SAT in T_FP; a register destination
+    writes its third register in a new state T_TRIP after T_PAIR. The
+    silicon's fp registers are 80-bit and would spill nowhere; this core's
+    are 64-bit doubles as MAME's are, and MAME is the reference.
+  Reference (sim/i960/i960_cpu_ref.h): movre word for word as MAME, the
+  SAT included; sqrtrl for ref_f2a. A literal source above fp3, a literal
+  destination with bits 23:21 set (MAME's null pointers) and a triple at r30
+  (m_r[32]) end the program, as does a subnormal left in fp0-fp3 (movrl's
+  rule: the units flush it at its next use). tb_i960_top now compares the SAT
+  every retire. +fx's mix: movre twice and sqrtrl added (a quarter of the
+  movre with the destination over the third word); +nomvre for R887's mix.
+  test_i960_top_fx, 20,000 programs each, seeds 1 / 2 / 3: 0 mismatches
+  (25.97 M / 26.26 M / 26.08 M checks); movre retired 1,901 / 2,110 / 2,091
+  (r->r, r->fp, fp->r, fp->fp all ~300-660; through the SAT 400 / 463 / 498;
+  destination over the third word 330 / 321 / 398); sqrtrl 913 / 874 / 873.
+  The first run failed once (seed 1, logbnr of fp2): a movre had left a
+  subnormal double in fp2 -- the reference's missing end-of-program rule,
+  not the RTL. PLANTED, each caught on seed 1: the fp spill dropped, the SAT
+  write dropped, the alias ignored, T_TRIP skipped (FAIL, 1 mismatch each);
+  movre's decode removed (MODULE TRAP); sqrtrl's start without F2A (FAIL).
+  test_i960_top, _fr, _vc: PASS, 0 mismatches.
