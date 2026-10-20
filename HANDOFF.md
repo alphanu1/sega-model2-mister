@@ -1,5 +1,35 @@
 # Handoff
 
+## 2026-10-20: the other seven 2A sets assessed; input profiles; Manx TT's MRA (R887)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a1f18fab3fc92cd91
+(rebased on model2a 22e741a).
+
+DONE: rtl/io/m2_2a_inputs.sv takes the game ID and picks a profile --
+DIGITAL three buttons (VF2's order; hpyagu98, dynamcop, doaab), DIGITAL two
+buttons (Zero Gunner's order; 0x12, pltkids 0x15), ANALOG (Sega Rally 0x10,
+Sky Target 0x18, Manx TT 0x19, Motor Raid 0x1A), GUN (Virtua Cop 2). The four
+released MRAs are untouched; cdd58a7's input bench passes unmodified on the
+new module and a miter shows the released IDs bit-identical. tanr added to
+i960_top's F2A (Manx TT). mra/Manx TT Superbike - DX-Twin (Revision D).mra
+(ID 0x19, mra_vs_mame PASS). Whole map 40,027 -> 39,945 ALMs est.
+
+FOUND: five of the seven need more ROM than 64 MB (pltkidsa 65.5, hpyagu98
+66.4, motoraid 68, doaab 69.5, dynamcop 90.5 MB) -- no MRA can load them;
+Sky Target (54 MB) needs a layout extension (~60-90 ALM est.); the 4 MB-chip
+sets also break R671's texture-coordinate packing. Protection is never the
+blocker: Pilot Kids (1 word) and Dynamite Cop (6 words) patches proved in
+MAME (zeroed chip + patch = the real run, snapshot for snapshot); DOA's
+317-0229 is a boot string check (2 words; the flag right in MAME). Motor Raid
+needs sqrtrl under F2A, DOA movre (absent from both cores). Manx TT stops at
+its motion-slider check every boot: Test, Test.
+
+DECISIONS FOR BEN (study R887, costs there): Sky Target's extension; the
+large sets' memory (128 MB SDRAM if the module can be addressed, or DDR3).
+
+TO TEST ON THE BOARD: Manx TT (Test twice past the slider screen); VF2,
+Sega Rally, Virtua Cop 2, Zero Gunner unchanged.
+
 ## 2026-10-20: PUSHED -- model2a e2e78a3 (55 commits), main a2caf9b
 
 model2a carries the Model 2A beta release (releases/Model2A_20261020.rbf =

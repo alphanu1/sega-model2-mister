@@ -41,6 +41,13 @@
       Hand Brake are "-": the game has neither. MAME: calibrate in the input
       test (press Service, then hold Shift Down while moving the control).
 
+      THE MOTION-SLIDER CHECK: every boot stops at "DANGER! ACTIVE MOTION
+      SLIDER NOW CHECKING SYSTEM" (the DX cabinet's moving seat, which the
+      core does not have; MAME stops there too). Press Test: the test menu
+      opens with EXIT selected; press Test again and the game runs (MAME
+      0.289, with the EEPROM blank as the core starts it and with MAME's
+      default: both race).
+
       Index 4, the game ID: 0x19 (R887). Bit 7 would be the 15 kHz CRT flag.
     -->
     <name>Manx TT Superbike - DX/Twin (Revision D)</name>
