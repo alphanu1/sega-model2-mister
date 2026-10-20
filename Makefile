@@ -777,6 +777,21 @@ obj_m2_vf/Vm2_video: $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
 	$(VBUILD) -Wno-fatal --top-module m2_video -CFLAGS "-O2" \
 	  --Mdir obj_m2_vf -o Vm2_video $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
 
+# R907: the translation table as three MLAB arrays, against the one 96-entry
+# array at 2cebd70 (taken from git and renamed m2_video_ref), cycle for cycle.
+test_m2_video_xlat: obj_m2_vxlat/Vm2_video_xlat_miter
+	@echo "== test m2_video xlat (three MLAB arrays against the 96-entry table)"
+	@./obj_m2_vxlat/Vm2_video_xlat_miter $(TEST_ARGS)
+
+obj_m2_vxlat/m2_video_ref.sv:
+	@mkdir -p obj_m2_vxlat
+	git show 2cebd70:rtl/video/m2_video.sv | sed 's/^module m2_video #(/module m2_video_ref #(/' > $@
+
+obj_m2_vxlat/Vm2_video_xlat_miter: $(M2V_RTL) obj_m2_vxlat/m2_video_ref.sv sim/video/m2_video_xlat_miter.sv sim/video/tb_m2_video_xlat.cpp
+	$(VBUILD) -Wno-fatal --top-module m2_video_xlat_miter -CFLAGS "-O2" \
+	  --Mdir obj_m2_vxlat -o Vm2_video_xlat_miter $(M2V_RTL) obj_m2_vxlat/m2_video_ref.sv \
+	  sim/video/m2_video_xlat_miter.sv sim/video/tb_m2_video_xlat.cpp
+
 # R823: tile overruns. The shipped tilemap path (two-bank swap, sibling fill)
 # beside a variant -- LB_RING and/or SIBLING -- through whole frames with the
 # glyph cache and a port-3 latency model: pixel equivalence wherever neither
