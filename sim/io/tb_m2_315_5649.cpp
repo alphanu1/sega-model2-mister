@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 4; i++) tick();
   d->por_n = 1; d->rst_n = 1; tick();
 
-  uint64_t pors = 0, resets = 0, reads = 0, bad = 0, ee_reads = 0, ee_ones = 0, ee_zeros = 0, cmds = 0;
+  uint64_t pors = 0, resets = 0, reads = 0, bad = 0, ee_reads = 0, ee_ones = 0, ee_zeros = 0, cmds = 0, pe_checks = 0;
   auto access = [&](bool we, int off, uint8_t data) -> void {
     // optional idle gap, as the i960 bit-bangs slowly
     int gap = 4 + int(rng() % 6);   // the i960 is never closer than this (25 MHz bus, bridge)
@@ -183,6 +183,9 @@ int main(int argc, char **argv) {
     tick();
     d->sel = 0; d->we = 0;
     d->eval();
+    ++pe_checks;   // R892: the PE latch out (Manx TT's motion-base command)
+    if (d->pe != ref.pv[4] && ++bad <= 20)
+      std::printf("  MISMATCH cyc %llu pe: expected %02x got %02x\n", (unsigned long long)cyc, ref.pv[4], d->pe);
   };
   auto pa = [&](int cs, int clk, int di) {
     uint8_t v = uint8_t(0x01 | (clk << 7) | (cs << 6) | (di << 5) | (rng() & 0x1e));
@@ -249,6 +252,7 @@ int main(int argc, char **argv) {
               (unsigned long long)ops, (unsigned long long)cmds, (unsigned long long)reads,
               (unsigned long long)ee_reads, (unsigned long long)ee_ones, (unsigned long long)ee_zeros, (unsigned long long)resets, (unsigned long long)pors,
               (unsigned long long)cyc);
+  std::printf("  %llu PE latch checks (R892)\n", (unsigned long long)pe_checks);
   if (bad) { std::printf("FAIL: %llu mismatches\n", (unsigned long long)bad); return 1; }
   std::printf("PASS\n");
   delete d;

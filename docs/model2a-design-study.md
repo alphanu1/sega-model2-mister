@@ -39479,3 +39479,145 @@ quartus_map 17.0 --analyze_file mb86233_core, m2_tgp, m2_copro, m2_fifo_m10k:
 0 errors. New tools: sim/tgp/mame_flips_2a.lua (MAME's game rate over a 2A
 play session); tb_tgp_replay's FRAME BUDGET (MAME-model cycles per vblank
 against ours); make TGP_EARLY= / TGP_BUFW= replay builds for an A/B.
+
+**R892 -- MANX TT'S "ACTIVE MOTION SLIDER" SCREEN WAITS FOR THE DX CABINET'S
+DRIVE BOARD ON THE 315-5649'S PORT D. THE CORE NOW ANSWERS AS A WORKING
+BASE (0xCE / 0xCD FROM PORT E, GAME ID 0x19, M2_2A_MANX_MOTION): THE GAME
+BOOTS TO ITS ATTRACT WITH NO KEY. ~3 ALM. PROVED IN MAME 0.289. NOT FITTED,
+NOT ON A BOARD.**
+(Ben, s1221: Manx TT stops at "DANGER! ACTIVE MOTION SLIDER NOW CHECKING
+SYSTEM ... DO NOT TOUCH SLIDE BODY"; Test, Test gets past it but is "a faff
+for users" -- "what is it waiting on?")
+
+*Believed (R887, and MAME's TODO):* "no escape from the active motion slider
+tutorial (needs analog inputs)"; every boot stops there, Test opens the test
+menu, Test again and the game runs. WRONG ABOUT THE CAUSE: no analog channel
+is involved. The game waits for a status byte from the cabinet's drive board.
+
+*Found (MAME 0.289: read / write taps on 0x01c00000-0x01c0003f, the UART and
+the comm board, with the IP; a debugger trace of a frame at 20 s; MAME's
+disassembly of the program, which runs from ROM -- no RAM copy):*
+  1. THE PORTS. Every frame the input routine (program 0x2308, the 2A path;
+     0x21f8 is the 315-5296 one) sets the direction to 0x4e (B, C, D, G in),
+     reads B, C (IN0, IN1), READS PORT D (0x01c00006) INTO RAM 0x514035 and
+     WRITES RAM 0x514034 TO PORT E (0x01c00008); port F the lamps. MAME's
+     manxtt binds port D to IN2 (all unused: 0xFF) and port E to the
+     billboard. Nothing else is touched while the screen is up: no UART read,
+     no comm-board access, no other serial channel; the eight analog
+     channels are read but nothing waits on them.
+  2. THE CHECK, main state 0 (0x5bba08 = 0, the handler at 0x5f530 from the
+     table at 0x15c0), its sub-state in 0x5bba0c:
+       first: if CABINET TYPE (0x51405a) is 1 (TWIN) -> main state 1, no check;
+              if (status & 0xF0) == 0xB0 -> sub-state 3 (an error)
+       0  0x5bba00 = 0x34e, -> 1 (port E holds 0x3D since boot, 0x5f878:
+          0xFF - 0xC2; the commands are sent inverted)
+       1  status == 0xCE: send the bike's centre, 0xFF - EEPROM 0x51406f
+          (factory 0x80, so 0x7F), 0x5bba00 = 0x234, -> 2. Otherwise
+          0x5bba00 -= 1 and -> 3 at 0 -- BUT 0x5bba00 IS ALSO A FRAME COUNTER
+          (+1 a frame elsewhere: 564 -> 1131 over a warning screen), so in 1
+          it never moves (845 / 846 for 17 s in run E2): the screen waits
+          FOREVER, it never times out to an error
+       2  status == 0xCD: -> main state 1 (the warning screen, then the
+          attract, main state 3); otherwise the same never-expiring wait
+       3  "Push TEST BUTTON to EXIT / But Motor Error" and, by the status,
+          one of the strings above the handler (0xB0 Test Setting, 0xB1
+          Motor Encoder, 0xB2 Motor OverCurrent, 0xB3 OverHeat/OverLoad, 0xB4
+          Bank Volume, 0xB5 DriveBoard ROM, 0xB6 DriveBoard RAM, 0xB7
+          Centering, else Not Respond); Test (0x514014 bit 2 / 4) leaves to
+          main state 1
+     With MAME's 0xFF the game sits in sub-state 1. Test sends it through
+     the test menu (main state 12) and out to main state 1 -- the workaround.
+  3. NOTHING ELSE READS THE STATUS in a race or the attract: 0x514035's only
+     readers are this handler and the test menu's DriveBoard Test (0x71f24..,
+     a network check: commands E0-EF expecting ~(1 << n), D2 / D3 expecting
+     0xFF, then the status shown as the board's DIP switches). The game does
+     send motion commands on port E all through the attract and the race
+     (0x3d, 0x3f, 0xee, 0xab, 0xdf ...: R892's st.txt logs).
+  4. WHAT A WORKING BASE RETURNS: no drive-board ROM for this cabinet is
+     dumped (epr-18022 in the zip is the billboard's), so MAME has no model.
+     From the game's own code: 0xCE in answer to the boot command, 0xCD once
+     the centre is sent. INFERRED, the least that satisfies the code: status
+     = 0xCE while port E holds 0x3D, else 0xCD.
+  5. THE SETTING (option b): GAME ASSIGNMENTS' CABINET TYPE is 0x51405a
+     (EEPROM word 5's high byte; the menu's order and 0x70fc4's copies:
+     ADVERTISE SOUND 0x514058, COUNTRY 0x514059, CABINET TYPE 0x51405a
+     DELUXE / TWIN, LINK TYPE 0x51405b, BIKE COLOR 0x51405c ...). The
+     factory default (0x2ec0) is 0 = DELUXE, as is MAME's manxtt_dx_nvran.
+     A blank 93C46 fails the game's test (word 1 must be 0x0038 and word 0
+     the CRC of the next 54 bytes: the test at 0x3230) and the game writes its factory
+     settings (0x2ff0) -- so the core boots DELUXE every time. TWIN skips the
+     check but makes it the other cabinet (the game's Twin mode), and the
+     core can neither preload an EEPROM nor keep one across a power cycle
+     (R887: ~20 ALM for a load port). Not taken.
+  6. MOTOR RAID: motoraid (Twin, 0x1A, R887's set) has no drive-board code
+     (no DRIVEBOARD / slider strings; R887's 240 s sessions boot and race
+     with no key) -- nothing to fix. motoraiddx (no game ID; 68 MB, does not
+     load) has its own check (program 0xc54a8.., "NOW CABINET CHECKING",
+     "DRIVEBOARD INITIALIZE OK", eight error strings) on the same ports with
+     a different protocol, not analysed; R892's answer is gated on 0x19 and
+     does not cover it.
+
+*THE FIX (option a):* m2_315_5649 brings PE's latch out (pe); m2_2a_inputs
+(MOTION, Model2.sv M2_2A_MANX_MOTION, on by default, M2_NO_2A_MANX_MOTION
+leaves it out) answers IN2 for game ID 0x19 only: 0xCE while pe == 0x3D,
+else 0xCD. Every other ID's IN2 is unchanged (the bench below). Before the
+game writes port E (power-on 0xFF) the answer is 0xCD, which sub-state 1
+ignores. A centre setting of 0xC2 (0xFF - 0x3D) would leave the answer at
+0xCE and the check waiting as today -- Test still works.
+
+*PROOF (MAME 0.289, sim/io/mame_m2_manx_motion.lua, sim/io/manx_motion_cmp.py;
+EEPROM blank -- 128 bytes of 0xFF, as the core starts -- unless said; Tg the
+attract's first frame; coins at Tg+10 and Tg+130, two credits, throttle,
+lean, brake and shifts scripted from Tg; 240 s; a hash a second, snapshots
+every 2 s, RAM dumps at 5 / 60 / 120 / 200 / 240 s):*
+  E1  answered from power-on, no coins: passes at 1.13 s (frame 64-66), the
+      warning screen, the attract at 11.0 s and cycling to 150 s. No key.
+  E3  as E1 with MAME's default EEPROM (manxtt_dx_nvran): the same states,
+      3 frames earlier (no factory write at boot), to 150 s; DELUXE either way.
+  E2  MAME as it is (0xFF), no coins: on the DANGER screen until Test at 18
+      s and 22 s, then the same states as E1, 21.87 s later.
+  A   answered from power-on, coins: attract, both credits raced.
+  T   0xFF, Test at 18 s and 22 s (the workaround), coins: the same.
+  A vs T: the main state equal every second, the settings block equal;
+      frames differ (the boots are 1,258 frames apart).
+  A2  answered only from 22.99 s, so the check passes on T's frame (main
+      state 1 at frame 1324, the attract at 1891 in both).
+  A2 vs T: states and settings equal all 241 s; the attract's snapshots
+      identical, the race's not (76 of 121 differ from Tg+28 s, a few
+      pixels to a third of the screen; HUD, time and speed the same).
+      CAUSE: 0x5bba00 -- the check reloads it with 0x234 when it passes,
+      the Test exit leaves it counting (564 against 1133 at frame 1324).
+  TF  as T, 0x5bba00 written 564 in main state 1's first frame.
+  A2 vs TF: 121 / 121 SNAPSHOTS IDENTICAL; buffer RAM equal every second
+      for 241 s; RAM 0x200000-0x23ffff equal; the settings equal; work RAM
+      differs only in 86-113 bytes: the i960's stack and frames
+      (0x5009c8-0x503084), the test switch's edge state (0x513ff4,
+      0x51400e-0x514012), the test menu's working copies (0x5bb671-0x5bb783),
+      0x5bb964 / 0x5bba18, and the status byte itself (0xCD / 0xFF).
+  So the answered boot IS the passed check the code was written for; the
+  Test workaround differs from it in 0x5bba00 and the test menu's leftovers,
+  and through 0x5bba00 in what the race draws.
+
+*Benches:* tb_m2_2a_inputs (MOTION 1 dut and a MOTION 0 dut on the same
+inputs; Manx TT 0x19 split from Motor Raid 0x1A / 0x1B; port E random, 0x3D a
+third of the time and its one-bit neighbours often): 20 M cycles, 246.9 M
+checks, 0 mismatches (917,716 cycles answered 0xCE, 1,812,635 0xCD). Planted:
+CE / CD swapped FAIL; gated on 0x1A FAIL; MOTION ignored FAIL (the MOTION 0
+dut's IN2); port E compared on 6 bits FAIL. tb_m2_315_5649: 2 M operations
+PASS, 83.4 M PE-latch checks. test_m2_vcop2_guns 223,916 / 0. lint_top
+clean (2A; -DM2_NO_2A; -DM2_NO_DEBUG -DM2_PROBE=1 -DM2_NO_2A_RALLY;
+-DM2_NO_2A_MANX_MOTION); lint_idx nothing in the changed files; quartus_map
+17.0 --analyze_file m2_2a_inputs, m2_315_5649, Model2.sv: 0 errors.
+
+*AREA (quartus_map 17.0, m2_2a_inputs alone, ANALOG and GUN on):* MOTION 0
+186 ALMs est. / 308 ALUT / 119 regs; MOTION 1 189 / 312 / 119. +3 ALMs,
+0 registers, 0 M10K. The whole design not mapped.
+
+*The MRA:* comment only (the check is answered; built without
+M2_2A_MANX_MOTION it is Test, Test as before). No released MRA changes.
+
+*What the board must show:* Manx TT: the DANGER screen for about a second,
+the warning screen, the attract -- no key. Coin, start, race as on s1221.
+The test menu's DriveBoard Test still reports a network error (not modelled).
+VF2, Sega Rally, Virtua Cop 2, Zero Gunner: no change (their IN2 is the bench's
+unchanged expressions).

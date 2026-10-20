@@ -1228,7 +1228,7 @@ module m2_boot_harness #(
       .rdata(a2_io_rdata),
       .in0(cab_in0), .in1(cab_in1), .in2(cab_in2), .sw(8'hFF),
       .an0(8'hFF), .an1(8'hFF), .an2(8'hFF),   // R862: no analog game in the boot bench
-      .lamps(), .dbg_pa(), .dbg_dir()
+      .lamps(), .pe(), .dbg_pa(), .dbg_dir()
     );
     // the i8251 at 0x01c80000, as Model2.sv: data in byte 0, status/command
     // in byte 2; the far end is the silent stand-in (31.25 kbaud, 48 MHz)

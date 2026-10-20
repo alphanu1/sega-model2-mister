@@ -39,6 +39,8 @@
 // model2a's callbacks: PA out -> eeprom_w (bit 0 ctrlmode, 5 DI, 6 CS, 7 CLK);
 // PB in -> in0_r (ctrlmode: 0xC0 | DO << 5 | 0x10 | IN0[3:0], else IN0);
 // PC in IN1, PD in IN2, PG in SW; PE out the billboard, PF out the lamps.
+// R892: PE's latch is an output (pe): Manx TT's DX cabinet hangs its motion
+// base on PE (command) and PD (status); m2_2a_inputs answers it.
 //
 // rdata is combinational from registers: the bridge samples io_rdata in the
 // cycle io_sel is high (Model2.sv's coprocessor note). Read side effects (the
@@ -75,6 +77,7 @@ module m2_315_5649 #(
   input  logic  [1:0] gun_off,      // {P2, P1} off-screen
   /* verilator lint_on UNUSEDSIGNAL */
   output logic  [7:0] lamps,        // PF
+  output logic  [7:0] pe,           // R892: PE's latch (Manx TT's motion-base command)
   output logic  [7:0] dbg_pa,
   output logic  [7:0] dbg_dir
 );
@@ -166,6 +169,7 @@ module m2_315_5649 #(
   end
 
   assign lamps   = pv[5];
+  assign pe      = pv[4];
   assign dbg_pa  = pv[0];
   assign dbg_dir = dir;
 
