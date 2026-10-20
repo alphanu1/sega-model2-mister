@@ -17,6 +17,21 @@ i960 (40 MHz, 8 KB I-cache) is faster than the board's 25 MHz with its wait
 states -- padding can only slow accesses, so it cannot cure slowdowns, which
 come from SDRAM waits longer than the board's.
 
+## 2026-10-20: branch main-area -- ~820 ALM back for the release (R907). NOT FITTED.
+
+main-next (2cebd70) stopped fitting: 4,192-4,194 LABs of 4,191 on three
+seeds, and the two that fitted missed clk_sys by -3.4 / -2.1 ns (worst path
+one LUT deep, 10.8 ns of routing: congestion). Branch main-area = main-next
++ two area commits, no behaviour change (quartus_map, ALMs needed):
+  * 4c0117a m2_geo_view: one shared int-to-float, not six. 40,579 -> 40,310.
+    Outputs right within 8 cycles of a window change (was 3); geodiff's pool
+    hash identical on four walks, and still identical at ~390 cycles.
+  * d741e1a xlat table: three MLABs instead of 768 flip-flops (it was never
+    the MLAB R564 said it was). 40,310 -> 39,761. New bench
+    test_m2_video_xlat (old against new, 7.6 M cycles, 0 differences).
+NEXT: fit it (3 seeds); if clk_sys still misses on the poly_uv paths, R907
+lists the register that would fix them. Not on the board.
+
 ## 2026-10-20: branch scan15 -- 15 kHz is retrorepair's scan converter, HDMI kept (R898). NOT BUILT.
 
 Ben: the 15 kHz picture has big borders top and bottom and sync issues;

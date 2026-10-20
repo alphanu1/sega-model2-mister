@@ -36084,3 +36084,72 @@ and Virtua Cop show no stripes on the board, so they either do not upload
 through that mirror or not with stq; the range is MAME's
 (model2_tgp_mem: both sheets .mirror(0x200000) with BURST) either way, and
 the core should match it. Not fitted on main at the time of writing.
+
+**R907 (main) -- AREA FOR THE RELEASE: ~820 ALM BACK, NO BEHAVIOUR CHANGED.**
+main-next (2cebd70: scan15 R898 + Virtua Cop's window key R899 + R905) no
+longer fitted reliably: s1254-s1256 needed 4,192-4,194 LABs of 4,191, and
+s1249/s1250 fitted at 41,463 / 41,910 ALM with clk_sys -3.4 / -2.1 ns. The
+worst clk_sys paths in s1249 (m2_geo_engine xhalf / m2_eng_ra data ->
+poly_uv*, -3.29 ns) are ONE LUT deep with 10.8 ns of interconnect -- the
+fitter's congestion at 100% LABs, not logic depth -- so the lever is
+area, not a register on the path (R848: at 99% the area such fixes add costs
+more than the margin they buy). Decisions rest on section 7 Tier 1 (no
+accuracy loss) and section 5.6 (M10K is spent: 553/553, so nothing here may
+take a block). Measured with quartus_map (17.0, same QSF), whole design,
+"Estimate of Logic utilization (ALMs needed)":
+
+    2cebd70 (main-next)                         40,579
+    + viewport converter shared (4c0117a)       40,310   -269
+    + xlat table in three MLABs (d741e1a)       39,761   -549
+    total                                                 -818
+
+  1. m2_geo_view: SIX int-to-float units in parallel (575 ALUT; 290.6 ALM
+     placed in s1250) for six values that change once an object. One unit now
+     visits the six slots in turn (one subtractor, one sign/magnitude, one
+     encode); each output is rewritten every 6 cycles and right within 8 of
+     its inputs changing (was 3). Values bit for bit the same. 140 ALUT.
+     Verified: test_m2_geo_view PASS (window() now ticks 8, and FAILS at 7 --
+     the bound is tight); geodiff_ra on four MAME walks (w1000, w2300, w5000,
+     w8000; M2GD_POOLHASH, M2GD_STATE): pool hash (every FP operand on every
+     unit, every cycle) and ours.txt identical to 2cebd70's. Margin: the same
+     walks are still identical with the converter slowed to one slot per 64
+     cycles (~390 cycles of latency), and differ only at one per 65,536 --
+     the bench sees the view, and 8 cycles is far inside what the walk allows
+     (R760: the walk waits for the geometry to go idle between objects).
+  2. m2_video's colour translation table was NEVER A RAM. R564 described it
+     as "an MLAB written on clk_sys, read asynchronously on clk_mem", and it
+     was not: one 96-entry array read at three addresses at once, Quartus
+     built it as 768 flip-flops and three 32:1 x 8 read muxes (no RAM-inference
+     message at all; lint_idx flagged it every time as "pre-existing"). Split
+     into one 32 x 8 array per channel (one read port each), tagged MLAB:
+     three dual-clock altdpram LUTRAMs, written on clk_sys, read into the same
+     x_r/x_g/x_b registers on clk_mem; the power-up pal5bit table is honoured
+     (initialised from a MIF, checked: entry 31 = 0xFF). Quartus absorbs
+     pal_data_q[4:0] as the read-address register, so the lookup's latency is
+     unchanged. Addresses 96-127 wrote nothing before (outside the array) and
+     write nothing now. Warning 276023 ("functionality differs") is the
+     cross-clock read-during-write, old or new data -- what R564 already said
+     of it. Cost: three LABs. Verified: new bench test_m2_video_xlat (the
+     2cebd70 m2_video beside the new one, the same hashed tile/glyph/palette
+     data, random table writes 0-127 on a second clock after a frame on the
+     power-up table): 7.6 M cycles, 0 differences in pixel, syncs or palette
+     address; two deliberate faults (channel 3 into blue, one wrong power-up
+     entry) each fail it by over a million cycles. test_m2_video_timing,
+     _ovr and _r826 pass. lint_top clean; lint_idx no longer lists m2_video.
+
+Considered and not done:
+  - poly_uv* path (-3.29 ns): a register after the half select would move
+    the uv writes a cycle; not needed if the area relieves the congestion,
+    and R848 says such registers lose at 99%. Re-measure after the fit.
+  - m2_recip_rom to M10K (~150 ALM, its read is already registered) -- no
+    free M10K; the candidates for freeing two (ioboard DPRAM as TDP, loader
+    FIFO merged) touch paths with board-found bugs behind them (R65, the
+    loader's byte lanes) for one or two blocks each.
+  - i960_top's write-back mux (336:1, ~1,800 ALUT after restructuring) and
+    the FPU units: real area, but CPU semantics; not without the lockstep.
+  - debug counters (dbg_mtx_n, dbg_walk_objs, ...): present in the post-map
+    netlist but marked "dangling" and swept by the fitter (s1250's emu has
+    ~2,300 fewer registers than its map) -- nothing to gain.
+  - sys/ (two OSDs ~930 ALM, pll_hdmi_adj ~436): the framework's; HDMI and
+    the analog output (scan15) both need theirs.
+Map numbers are estimates; the fit decides. Not fitted at the time of writing.
