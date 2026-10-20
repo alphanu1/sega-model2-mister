@@ -899,7 +899,7 @@ module m2_boot_harness #(
     .mtx0(obs_mtx0), .mtx4(obs_mtx4), .mtx8(obs_mtx8), .mtx11(obs_mtx11),
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .eng_busy(geo_eng_busy),
-    .foc_x(geo_foc_x), .foc_y(geo_foc_y),
+    .foc_x(geo_foc_x), .foc_y(geo_foc_y), .obj_win(geo_obj_win),   // R899
     .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z), .dbg_lit_n(),
     .tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient), .dbg_tp_n(),
     .obj_tpa(geo_obj_tpa), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
@@ -930,6 +930,7 @@ module m2_boot_harness #(
   assign geo_eng_busy = eng_busy_raw | eng_ra_busy;
   wire [3:0]  geo_mat_idx;
   wire [31:0] geo_mat_data, geo_foc_x, geo_foc_y, geo_obj_oba, geo_obj_obc;
+  wire [3:0]  geo_obj_win;   // R899
   wire [31:0] geo_obj_tha, geo_obj_tpa;
   wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;   // R222
   wire        geo_tp_we;
@@ -984,7 +985,7 @@ module m2_boot_harness #(
     .start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc),
     .busy(eng_busy_raw),
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
-    .foc_x(geo_foc_x), .foc_y(geo_foc_y),
+    .foc_x(geo_foc_x), .foc_y(geo_foc_y), .obj_win(geo_obj_win),   // R899
     .mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
     .mem_data(eng_mem_data_i), .mem_ack(eng_mem_ack_i),
     .xc(32'h43780000), .yc(32'h43400000),          // 248.0, 192.0

@@ -163,6 +163,12 @@ module m2_quad_store #(
 
   // ---- sort
   input  logic        sort_start,
+  // R899: the key's digits above the low sixteen are in use (Model2.sv: the
+  // window key, Virtua Cop only). Low, an odd pass count (KW 20) sorts the
+  // low four digits only and starts in the bank -- the KW 16 sort exactly,
+  // the same order in the same cycles, for keys whose top digits are 0.
+  // Taken at sort_start; unused with an even pass count.
+  input  logic        key_hi,
   output logic        sort_busy,
 
   // ---- read side, replayed in painter's order. Restartable per band.
@@ -532,6 +538,15 @@ module m2_quad_store #(
   localparam int unsigned NPASS = KW / RADIX;
   localparam int unsigned NBUCK = 1 << RADIX;
   localparam int unsigned PW    = $clog2(NPASS);
+  // R899 (R889 on the 2A branch): AN ODD NUMBER OF PASSES STARTS IN THE
+  // SCRATCH ARRAY. Each pass moves the order from one index array to the
+  // other (`which`), and the replay reads the bank's own (idx_a0 / idx_a1) --
+  // so with KW 20 (five passes) the order R_INIT wrote there would be read
+  // back sorted on the low sixteen bits only, the last pass left in idx_b.
+  // Started in idx_b, the fifth pass lands in the bank. An even count (KW 16,
+  // 32) is built exactly as before.
+  localparam bit         ODDP  = (NPASS % 2) == 1;
+  logic                  odd_q;      // R899: this sort runs the odd pass (ODDP & key_hi)
 
   logic [PW-1:0] pass;                // which digit of the key
   logic [IW:0]  ri;
@@ -593,7 +608,7 @@ module m2_quad_store #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      rst_st <= R_IDLE; pass <= '0; ri <= '0; hi <= '0; acc <= '0;
+      rst_st <= R_IDLE; pass <= '0; ri <= '0; hi <= '0; acc <= '0; odd_q <= 1'b0;
       which <= 1'b0; cur_idx <= '0; cidx_d <= '0;
       s0 <= 1'b0; s1 <= 1'b0; s2 <= 1'b0;
       // NBUCK, not a hardcoded 256. Narrowing the radix left this loop walking
@@ -606,7 +621,7 @@ module m2_quad_store #(
     end else begin
       case (rst_st)
         R_IDLE: if (sort_start) begin
-          pass <= '0; which <= 1'b0; ri <= '0;
+          pass <= '0; which <= ODDP & key_hi; odd_q <= ODDP & key_hi; ri <= '0;   // R899
           rst_st <= R_INIT;
         end
 
@@ -615,8 +630,9 @@ module m2_quad_store #(
         // R607: FRONT TO BACK STARTS IN REVERSE SUBMISSION ORDER, so the stable
         // sort leaves ties last-submitted-first -- MAME's bucket LIFO.
         R_INIT: begin
-          if (wbank) idx_a1[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
-          else       idx_a0[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
+          if (odd_q)      idx_b [ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];   // R899
+          else if (wbank) idx_a1[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
+          else            idx_a0[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
           if (ri + 1 >= wcount) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
           else                       ri <= ri + 1'b1;
         end
@@ -680,7 +696,8 @@ module m2_quad_store #(
 
         R_NEXT: begin
           which <= ~which;
-          if (pass == PW'(NPASS-1)) rst_st <= R_DONE;
+          // R899: with KW 20 and key_hi low, four passes -- the low sixteen bits
+          if (pass == PW'(NPASS-1) || (ODDP && !odd_q && pass == PW'(NPASS-2))) rst_st <= R_DONE;
           else begin
             pass   <= pass + PW'(1);
             hi     <= '0;
