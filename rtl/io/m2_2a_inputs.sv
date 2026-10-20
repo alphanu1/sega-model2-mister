@@ -13,22 +13,25 @@
 // analog channels 0-2 -- from MiSTer's joysticks, sticks and paddle, after
 // MAME 0.289 model2.cpp's INPUT_PORTS.
 //
-// R887: THREE PROFILES, chosen by the MRA's game ID, so that a new game adds
-// an MRA and not mapping logic. Each profile wires MiSTer's joystick bits to
-// the ports in ONE FIXED ORDER; an MRA's <buttons names> follows that order,
-// naming a button the game does not have "-" (MiSTer's mapping skips it, so
-// its bit never sets).
+// R887: PROFILES, chosen by the MRA's game ID, so that a new game adds an
+// MRA and not mapping logic. Each profile wires MiSTer's joystick bits to
+// the ports in ONE FIXED ORDER; an MRA's <buttons names> follows that order.
+// The released games' orders are the profiles' orders, unchanged (Ben: their
+// MRAs do not move); a new game takes whichever fits its INPUT_PORTS.
 //
-//   DIGITAL (every ID not below) -- MAME's model2 / model2crx layout:
+//   DIGITAL, three buttons (every ID not below) -- VF2's order, MAME's
+//     model2 / model2crx ports:
 //     J  4 B1  5 B2  6 B3  7 Start  8 Coin  9 Test  10 Service
 //        (P2 the same on joystick 1; a pad's left stick ORs into the
 //        directions past a dead zone, R879)
 //     IN0 0 coin1 1 coin2 2 test 3 service 4 start1 5 start2
 //     IN1 0 B1 1 B2 2 B3 3 - 4 down 5 up 6 right 7 left (P1); IN2 P2
 //     VF2 (0x00, Punch / Kick / Guard) is this map bit for bit (R852's
-//     expressions). Zero Gunner (0x12) and Pilot Kids have two buttons:
-//     their MRAs name B3 "-". Hanguk Pro Yagu (vf2's ports), Dynamite Cop
-//     and Dead or Alive use B1-B3 (MAME: Punch Kick Jump / Hold Punch Kick).
+//     expressions). Hanguk Pro Yagu (vf2's ports), Dynamite Cop (Punch Kick
+//     Jump) and Dead or Alive (Hold Punch Kick) take it as it is.
+//   DIGITAL, two buttons (0x12 Zero Gunner, 0x15 Pilot Kids) -- Zero
+//     Gunner's order, as released (R862, R879): IN1 / IN2 0x0c unused:
+//     J  4 B1  5 B2  6 Start  7 Coin  8 Test  9 Service
 //   ANALOG (0x10 and 0x18-0x1B; behind ANALOG, the M2_2A_RALLY switch) --
 //     Daytona's m2_cab_inputs (steering from the left stick / paddle / d-pad,
 //     pedals from the right stick's Y or two buttons), its four OSD lines:
@@ -90,6 +93,7 @@ module m2_2a_inputs #(
   wire p_rally  = (game == 7'h10);
   wire p_an2    = (game[6:2] == 5'b00110);          // 0x18-0x1B
   wire p_sky    = p_an2 & (game[1:0] == 2'b00);     // 0x18
+  wire p_dig2   = (game == 7'h12) | (game == 7'h15);  // Zero Gunner, Pilot Kids
   // (Model2.sv shows the analog OSD lines for 0x10 and 0x18-0x1B alike)
 
   // R879: a pad's left analogue stick drives the digital directions too, past
@@ -107,6 +111,11 @@ module m2_2a_inputs #(
   wire [7:0] dg_in0 = ~{2'b00, j1[7], j0[7], j0[10], j0[9], j1[8], j0[8]};
   wire [7:0] dg_in1 = ~{d0[1], d0[0], d0[3], d0[2], 1'b0, j0[6], j0[5], j0[4]};
   wire [7:0] dg_in2 = ~{d1[1], d1[0], d1[3], d1[2], 1'b0, j1[6], j1[5], j1[4]};
+
+  // ---- DIGITAL, two buttons: Zero Gunner's map as released (R862, R879)
+  wire [7:0] d2_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
+  wire [7:0] d2_in1 = ~{d0[1], d0[0], d0[3], d0[2], 2'b00, j0[5], j0[4]};
+  wire [7:0] d2_in2 = ~{d1[1], d1[0], d1[3], d1[2], 2'b00, j1[5], j1[4]};
 
   // ---- GUN: Virtua Cop 2 (R870)
   wire [7:0] gn_in0 = ~{2'b00, j1[6], j0[6], j0[9], j0[8], j1[7], j0[7]};
@@ -146,9 +155,9 @@ module m2_2a_inputs #(
       an1 <= p_rally ? cab_accel : p_sky ? 8'hFF : cab_brake;
       an2 <= p_rally ? cab_brake : steer_rev;
     end else begin
-      in0 <= p_gun ? gn_in0 : dg_in0;
-      in1 <= p_gun ? gn_in1 : dg_in1;
-      in2 <= p_gun ? 8'hFF  : dg_in2;
+      in0 <= p_gun ? gn_in0 : p_dig2 ? d2_in0 : dg_in0;
+      in1 <= p_gun ? gn_in1 : p_dig2 ? d2_in1 : dg_in1;
+      in2 <= p_gun ? 8'hFF  : p_dig2 ? d2_in2 : dg_in2;
       an0 <= 8'hFF; an1 <= 8'hFF; an2 <= 8'hFF;
     end
   end

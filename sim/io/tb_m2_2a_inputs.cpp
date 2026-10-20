@@ -24,17 +24,15 @@
 //                 P2 on joystick 1; GUN 0 here: IN1 from the buttons): IN0 model2's (coins,
 //                 test, service, starts), IN1 0x01 P1 trigger 0x02 P2
 //                 trigger, the rest 1; IN2 0xFF; AN 0xFF.
-//   Zero Gunner   INPUT_PORTS_START(zerogun). R887: the DIGITAL profile's
-//                 fixed order (J 4 B1 5 B2 6 B3 7 Start 8 Coin 9 Test
-//                 10 Service); its MRA names J 6 "-" (MiSTer never maps
-//                 it), so IN1 / IN2 0x04 is MAME's unused 1 on the cabinet.
-//                 Before R887 its own order was J 4 B1 5 B2 6 Start 7 Coin
-//                 8 Test 9 Service: the same ports through the MRA's new
-//                 <buttons>, the reference moved with it.
+//   Zero Gunner   INPUT_PORTS_START(zerogun) (J 4 Button 1 5 Button 2
+//                 6 Start 7 Coin 8 Test 9 Service): IN1 / IN2 model2's with
+//                 0x04 / 0x08 unused (1); AN 0xFF. (R887: also ID 0x15,
+//                 Pilot Kids, whose ports are zerogun's.)
 //   R887, the other IDs:
-//     DIGITAL (0x13-0x16 and any ID not below): model2's ports in the fixed
-//                 order above (VF2's map; MAME's Punch / Kick / Jump, Hold /
-//                 Punch / Kick on B1-B3), P2 on joystick 1; AN 0xFF.
+//     DIGITAL (0x13, 0x14, 0x16 and any ID not listed): model2's ports in
+//                 VF2's order (J 4 B1 5 B2 6 B3 7 Start 8 Coin 9 Test
+//                 10 Service; MAME's Punch / Kick / Jump, Hold / Punch /
+//                 Kick on B1-B3), P2 on joystick 1; AN 0xFF.
 //     0x18 Sky Target  INPUT_PORTS_START(skytargt): IN0 Sega Rally's
 //                 (coin, test, service, 0x20 View Change, 0x40 start); IN1
 //                 0x10 Machine Gun = J 12, 0x20 Missile = J 13, the rest 1;
@@ -76,12 +74,13 @@ static uint32_t adir(uint16_t a) {
 }
 // the game index the bench switches between, and the ID it drives
 enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_N };
-static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner", "other digital",
+static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner / Pilot Kids", "other digital",
                                  "Sky Target", "Manx TT / Motor Raid"};
 static int game_id(int g) {
-  static const int dig[] = {0x13, 0x14, 0x15, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1f, 0x20, 0x7f};
+  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1f, 0x20, 0x7f};
   switch (g) {
-    case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11; case G_ZG: return 0x12;
+    case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
+    case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
     case G_SKY: return 0x18; case G_BIKE: return 0x19 + rnd(3);
     default: return dig[rnd(int(sizeof dig / sizeof dig[0]))];
   }
@@ -103,6 +102,12 @@ static Want want_now(int game) {
     w.an2 = 0xff - t->c_steer;
     if (game == G_SKY) { w.an0 = sky_y(t->joy_analog); w.an1 = 0xff; }
     else               { w.an0 = t->c_accel; w.an1 = t->c_brake; }
+  } else if (game == G_ZG) {   // Zero Gunner (and R887: Pilot Kids, the same order) -- cdd58a7's model, verbatim
+    w.in0 = lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 8) << 2 | b(j0, 9) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5);
+    auto pl = [&](uint32_t j) {   // model2: b1 b2 b3 b4 down up right left
+      return lo(b(j, 4) << 0 | b(j, 5) << 1 | b(j, 2) << 4 | b(j, 3) << 5 | b(j, 0) << 6 | b(j, 1) << 7);
+    };
+    w.in1 = pl(j0); w.in2 = pl(j1); w.an0 = w.an1 = w.an2 = 0xff;
   } else if (game == G_VCOP2) {   // Virtua Cop 2
     w.in0 = lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 8) << 2 | b(j0, 9) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5);
     w.in1 = lo(b(j0, 4) << 0 | b(j1, 4) << 1);
