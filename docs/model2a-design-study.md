@@ -40868,3 +40868,139 @@ work-RAM clear confirmed); 54.6 fps over 14 s from load, 57.5 once running,
 1 vblank a frame 97% (tools/m2-fps.py). A control for R905: Pilot Kids is a
 16 MB texture set on R897's layout like Dynamite Cop, and textures right.*
 
+
+**R906 -- MOTOR RAID'S 2D STREAKS ARE TRUE TILE OVERRUNS: ITS PAIR 2/3 IS TWO
+FULL-SCREEN PICTURES SPLIT AT A COLUMN (WINDOW MODE 2), AND THE FETCH ENGINE
+FETCHED BOTH MAPS ACROSS THE WHOLE LINE. NOT THE R897 LAYOUT, NOT TILE DATA.
+FIX: A COLUMN WHOSE EVERY PIXEL IS MASKED IS NOT FETCHED (m2_tile_fetch
+MASK_SKIP). PIXEL FOR PIXEL THE SAME PICTURE; +28 ALMs (standalone map), NO
+BLOCK RAM. NOT FITTED, NOT ON A BOARD.**
+
+*Fault (board, s1253 = 71598a2, Ben):* Motor Raid (motoraid, 0x1A, R897's
+large layout) "MASSIVE OVERRUNS ON THE 2D" -- the background behind the
+track streaks, long repeated lines, as R639's overrun. The released games do
+not show it.
+
+*Believed (going in), two candidates:* (a) bandwidth -- the glyph fetch
+missing its line (R639 / R823); (b) addressing -- char RAM, tile RAM or the
+scroll / line-scroll words misread on the new layout (GAME_CHAR under R897's
+data, a mirror the bridge does not decode).
+
+*Method (MAME 0.289; sim/video/mame_m2_ovrdump.lua unchanged, a scratch survey
+script with write taps; the R823 bench, extended):*
+  * Survey, 4,200 frames of motoraid's attract: per frame the eight scroll
+    words, the H-scroll tables, the row-mask tables, and write taps on char
+    RAM 0x01080000-0x010fffff, its mirror 0x01180000-, tile RAM
+    0x01000000-0x0101ffff and its mirror 0x01100000- (MAME maps both mirrors;
+    m2_cpu_bridge decodes neither).
+  * 12 bursts of 6 consecutive frames (1400 / 1500 / 1800: the ranking
+    screen over the 3D; 2100-3600: the race views -- sky and clouds behind
+    the stands and track), each tile RAM, palette, char RAM.
+  * Controls: Daytona (4 bursts), VF2 (3), Sega Rally (3), the same way.
+  * tb_m2_video_ovr with r and d now both configurable (m2_video_ovr_top
+    R_LBR / R_HSF / R_SIB, MSK): r = THE SHIPPED TILEMAP (LB_RING 1, the hscr
+    read fixed as SCR_SYNC implies, SIBLING 0), d = the same + MASK_SKIP.
+  * tb_m2_video_frame (LB_RING 1, HSCR_FIX 1) rendering MAME's own tile /
+    char / palette images against MAME's snapshot.
+
+*Now known -- VERIFIED:*
+  1. NOT ADDRESSING. Zero writes to either mirror in 4,200 frames. Char RAM is
+     written in 16 frames of 4,200, all at scene changes (largest 62,160 words
+     at frame 1334, the ranking screen's load), so there is no per-frame
+     invalidation storm on the glyph cache either. GAME_CHAR (byte 0x2D60000)
+     is outside every region R897's MRA and its three remaps write (main_data
+     ends 0x2480000; XTRA2 0x2600000-0x2B80000; samples 0x3400000-; XTRA3
+     0x4000000-), and the char path is the same constants for every game. The
+     2D renders MAME's image correctly (tb_m2_video_frame on f1500 and
+     f2100: the clouds and the ranking text as MAME draws them, where the 3D
+     does not cover them).
+  2. TRUE OVERRUNS, AND HEAVY ONES. Shipped tilemap, native 24 kHz, visible
+     lines late per frame (the ring's count), 6 frames a burst:
+
+     | burst            | L 0 | L 20 | L 30 | L 45  | L 60  | L 90  | 14+U[0,30] | 14+U[0,50] | queue (mean 41) |
+     |------------------|-----|------|------|-------|-------|-------|------------|------------|-----------------|
+     | 1500 ranking     | 0   | 0    | 22.2 | 160.5 | 179.8 | 203.7 | 29.0       | 127.0      | 138.7           |
+     | 2100 race        | 0   | 0    | 0    | 119.0 | 131.0 | 142.5 | 0          | 91.5       | 102.5           |
+     | 3150 race        | 0   | 0    | 0    | 115.7 | 129.3 | 142.3 | --         | --         | --              |
+
+     (1400 / 1800: 24 / 30 at L 30, 92 / 156 at L 45; the other race bursts
+     64.7-100.8 at L 45.) Daytona's four bursts: 0 to L 45, 3-11.8 at L 60.
+     VF2 and Rally: 0 everywhere to L 60. So Motor Raid's 2D is ~3-4x the
+     load of the released games', and it falls over at ~35 cycles of port-3
+     latency where Daytona holds to ~55.
+  3. WHY. tile RAM 0x5006 (pair 2/3's ctrl, the even vscr) is 0x40xx in every
+     dump: WINDOW MODE 2, the horizontal split at x = hscr & 0x1ff (0x1c5 ->
+     453, 0x16d -> 365 ...), tilemap 2 one side, tilemap 3 the other, and
+     both maps are full-screen distinct pictures -- 1,449 and 2,310 distinct
+     tiles in the race views, 2,129 and 1,782 on the ranking screen (plus
+     tilemap 1's 934 there, with 1,316 non-zero row-mask words). m2_tile_fetch
+     masks the far side of a split PER PIXEL AT THE LINE BUFFER but fetched
+     every column of both maps (as it does layer_off's map in mode 1 and
+     row-masked columns -- tb_m2_tile_fetch's test 4 recorded it as "a real
+     inefficiency ... recorded rather than made"). Two maps of distinct
+     glyphs is ~126 columns of mostly-missing fetches a line where ~63 are
+     shown; the 64 KB glyph cache cannot hold ~3,700 distinct tiles (116 KB),
+     so the misses are steady, not R823's 4-line bursts, and the ring has
+     nothing to borrow from.
+
+*THE FIX (rtl/video/m2_tile_fetch.sv MASK_SKIP, through m2_video MASK_SKIP;
+Model2.sv sets it 1 for every game):* F_CHECK registers f_col_masked -- the
+column's first pixel fx and last pixel fx + ~f_off (= fx + f_step - 1; past
+the line's end counts as masked) are all masked by layer_off, OR by the split
+(split_right: last < h; else fx >= h), OR by the row mask at both of the at
+most two 8-pixel mask columns the tile column touches -- and F_CADDR, a cycle
+later, sends such a column straight to F_FULL with no tile-word use and no
+glyph request. The emit side is untouched: it writes those pixels masked from
+sx alone, as before, so the line buffer gets the same masked bits and every
+unmasked pixel the same value. Conservative where sources mix (a column half
+split, half row-masked is still fetched). Not taken: vscr bit 15 (a disabled
+layer goes to the buffer as transparent, not masked, and an opaque pass
+draws transparent pixels -- not provably invisible here).
+
+*Benches:*
+  * Motor Raid, all 12 bursts, shipped vs MASK_SKIP: MASK_SKIP 0 late lines
+    to L 45 on every burst; L 60: 0 on the race views, 0.5 / 21.5 on two
+    ranking bursts; L 90 native: race 0, ranking 126 (shipped 204). All six
+    video modes and the jitter models (sweep / sweep2 on 1500, 2100, 3150):
+    MASK_SKIP 0 at 14+U[0,30], 14+U[0,50], the queue model and 30+U[0,30] in
+    every mode; first late lines at 45+U[0,30] native on the ranking (22).
+  * EQUIVALENCE: MASK_SKIP at L 30 and L 45 against the shipped tilemap at
+    L 0 -- 0 differing lines on all 12 Motor Raid, 4 Daytona, 3 VF2 and 3
+    Rally bursts (every frame compared; in the sweeps, badfr 0 in every mode
+    and latency, and every differing line is a late line). Bad glyphs 0.
+    The synthetic equivalence and mode-change tests: PASS.
+  * Daytona / VF2 / Rally with MASK_SKIP: 0 late lines at every latency to
+    60 (Daytona's 3-11.8 at L 60 gone: its mode-1 pair now fetches one map a
+    line).
+  * make test_m2_tile_fetch: the plain build PASS (12, unchanged); the
+    MASK_SKIP build (tb -DTB_MASK_SKIP) 600 random lines -- layer_off, split
+    at random h either side, random row masks, all three -- against the same
+    DUT unmasked: every pixel's masked bit as MAME's sources give it, every
+    unmasked pixel equal, every visible glyph fetched, no glyph the reference
+    did not fetch, and (one source at a time) exactly the visible glyphs:
+    609 checks, 0 fails; 18,479 fetches, 19,255 skipped. Planted: the last
+    pixel one short (fails 61), the right-hand split test one early (fails 7).
+  * make test_m2_video_ovr TEST_ARGS=+quick (defaults: R823's r and d) PASS,
+    both builds.
+  * lint_top clean on 2A, -DM2_NO_2A, -DM2_NO_DEBUG -DM2_PROBE=1
+    -DM2_NO_2A_RALLY; Verilator -Wall on m2_video (MASK_SKIP 0 and 1): the
+    same 9 warnings as HEAD; lint_idx: nothing new; quartus_map 17.0
+    --analyze_file m2_tile_fetch.sv, m2_video.sv, Model2.sv: 0 errors.
+  * AREA, quartus_map 17.0 standalone m2_tile_fetch: 801 -> 829 ALMs est.,
+    736 -> 815 ALUT, 1,078 -> 1,079 registers, 0 block bits both. No
+    whole-design map (another agent's map held the slot).
+
+*INFERRED (what would settle it):*
+  * The board's port-3 latency under Motor Raid is ~40 or more: the bench
+    puts its race views clean at R823's board model (14+U[0,30]) and at
+    L 30, and only the ranking screen late there, against Ben's "massive" on
+    the race. Its heavier 3D / texel traffic (and R905's texel fault) would
+    do it. A 'G' record (dbg_ovr_frame) on a why build would measure both.
+  * Timing: f_col_masked is fx -> a 3-bit subtract -> a 10-bit add -> 9/10-
+    bit compares and two 64:1 mask selects, into one register (acted on a
+    cycle later), on clk_mem; not fitted.
+
+*What the board should show:* Motor Raid's sky, stands and ranking screen
+without repeated lines; Daytona, VF2, Rally and the rest pixel-identical
+(Daytona's race with less 2D fetch traffic than before, which only frees
+port 3).

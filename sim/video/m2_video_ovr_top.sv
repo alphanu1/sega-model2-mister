@@ -7,6 +7,7 @@
 // shipped configuration (two-bank swap, sibling fill); `d` takes LBR / SIB.
 // Same tile RAM image, same clock, same pixel enable: when neither path
 // overruns in a frame, every visible pixel's palette index must agree.
+// R906: r's configuration is a parameter too (R_LBR / R_HSF / R_SIB).
 `timescale 1ns/1ps
 module m2_video_ovr_top #(
   parameter bit LBR = 1'b1,      // d: m2_video LB_RING
@@ -16,7 +17,14 @@ module m2_video_ovr_top #(
   parameter bit SSY = 1'b0,
   // R826b: d's SCR_STEP / SCR_DEPTH, and its vblank toggle / tile-RAM tag
   parameter bit SST = 1'b0,
-  parameter int SDP = 2
+  parameter int SDP = 2,
+  // R906: d's MASK_SKIP; and r's own LB_RING / HSCR_FIX / SIBLING, so that r
+  // can be the shipped tilemap (LB_RING 1, the hscr read fixed, no sibling)
+  // and d the same with one change. Defaults: r as R823 had it.
+  parameter bit MSK = 1'b0,
+  parameter bit R_LBR = 1'b0,
+  parameter bit R_HSF = 1'b0,
+  parameter bit R_SIB = 1'b1
 ) (
   input  logic        d_flip,
   input  logic  [3:0] d_tag,
@@ -53,7 +61,7 @@ module m2_video_ovr_top #(
   logic [31:0] r_cd, d_cd;
   logic [9:0]  d_hcnt, d_vcnt;
 
-  m2_video u_r (
+  m2_video #(.LB_RING(R_LBR), .HSCR_FIX(R_HSF)) u_r (
     .clk(clk), .ce_pix(ce_pix), .rst_n(rst_n), .tile_mask(14'h3fff),
     .gamma_sel(2'd0), .xlat_clk(clk), .xlat_we(1'b0), .xlat_addr(7'd0), .xlat_din(8'd0),
     .tram_addr(r_tram_addr), .tram_data(r_tram_data),
@@ -65,7 +73,7 @@ module m2_video_ovr_top #(
     .vid_x(hcnt), .vid_y(vcnt), .interlace(interlace), .ntsc_lines(ntsc_lines), .mid_lines(mid_lines), .narrow(narrow), .vid_field(), .scr_flip(1'b0), .scr_tag(4'd0),
     .scr_vtgl(1'b0), .scr_ttag(4'd0)
   );
-  m2_char_cache #(.IDX_BITS(13)) u_rc (
+  m2_char_cache #(.IDX_BITS(13), .SIBLING(R_SIB)) u_rc (
     .clk(clk), .rst_n(rst_n),
     .v_req(r_req), .v_addr(r_ca), .v_ack(r_ack), .v_data(r_cd),
     .m_req(r_m_req), .m_addr(r_m_addr), .m_ack(r_m_ack), .m_data(r_m_data),
@@ -73,7 +81,7 @@ module m2_video_ovr_top #(
     .dbg_hits(), .dbg_misses(), .dbg_fills()
   );
 
-  m2_video #(.LB_RING(LBR), .HSCR_FIX(HSF), .SCR_SYNC(SSY), .SCR_STEP(SST), .SCR_DEPTH(SDP)) u_d (
+  m2_video #(.LB_RING(LBR), .HSCR_FIX(HSF), .SCR_SYNC(SSY), .SCR_STEP(SST), .SCR_DEPTH(SDP), .MASK_SKIP(MSK)) u_d (
     .clk(clk), .ce_pix(ce_pix), .rst_n(rst_n), .tile_mask(14'h3fff),
     .gamma_sel(2'd0), .xlat_clk(clk), .xlat_we(1'b0), .xlat_addr(7'd0), .xlat_din(8'd0),
     .tram_addr(d_tram_addr), .tram_data(d_tram_data),

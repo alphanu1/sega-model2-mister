@@ -120,7 +120,11 @@ module m2_video #(
   // anything else shows tile RAM (the 3D stalled, or no 3D). 0: SCR_SYNC as it
   // was. The same two copies as SCR_SYNC at SCR_DEPTH 2.
   parameter bit          SCR_STEP  = 1'b0,
-  parameter int unsigned SCR_DEPTH = 2     // 2 or 3
+  parameter int unsigned SCR_DEPTH = 2,    // 2 or 3
+  // R906: m2_tile_fetch MASK_SKIP -- a column none of whose pixels can be
+  // drawn (window mode 1's other map, the far side of a mode 2/3 split, the
+  // row mask) is not fetched. 0: unchanged.
+  parameter bit          MASK_SKIP = 1'b0
 ) (
   input  logic        clk,
   input  logic        ce_pix,
@@ -597,7 +601,7 @@ module m2_video #(
   logic        seq_owns_tram;
   assign tram_addr = seq_owns_tram ? seq_tram_addr : f_tram_addr;
 
-  m2_tile_fetch #(.COLUMNS(COLUMNS)) fetch (
+  m2_tile_fetch #(.COLUMNS(COLUMNS), .MASK_SKIP(MASK_SKIP)) fetch (
     .clk(clk), .rst_n(rst_n),
     .start(f_start), .line(cur_line), .layer(cur_layer),
     .hscr(f_hscr_q), .vscr(f_vscr_q), .tile_mask(tile_mask),

@@ -1302,12 +1302,18 @@ obj_ddr3/Vm2_ddr3: rtl/mem/m2_ddr3.sv sim/mem/tb_m2_ddr3.cpp
 	$(VBUILD) --top-module m2_ddr3 -Wno-TIMESCALEMOD --Mdir obj_ddr3 -o Vm2_ddr3 -CFLAGS "-O2" \
 	  rtl/mem/m2_ddr3.sv sim/mem/tb_m2_ddr3.cpp
 
-test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch
+test_m2_tile_fetch: obj_tile_fetch/Vm2_tile_fetch obj_tile_fetch_ms/Vm2_tile_fetch
 	@echo "== test m2_tile_fetch (the 2D tile word and glyph fetch)"
 	@./obj_tile_fetch/Vm2_tile_fetch $(TEST_ARGS)
+	@echo "== ... with MASK_SKIP (R906: masked columns not fetched)"
+	@./obj_tile_fetch_ms/Vm2_tile_fetch $(TEST_ARGS)
 
 obj_tile_fetch/Vm2_tile_fetch: rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_decode.sv sim/video/tb_m2_tile_fetch.cpp
 	$(VBUILD) --top-module m2_tile_fetch -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_tile_fetch -o Vm2_tile_fetch -CFLAGS "-O2" \
+	  rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_decode.sv sim/video/tb_m2_tile_fetch.cpp
+
+obj_tile_fetch_ms/Vm2_tile_fetch: rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_decode.sv sim/video/tb_m2_tile_fetch.cpp
+	$(VBUILD) --top-module m2_tile_fetch -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM -GMASK_SKIP=1 --Mdir obj_tile_fetch_ms -o Vm2_tile_fetch -CFLAGS "-O2 -DTB_MASK_SKIP" \
 	  rtl/video/m2_tile_fetch.sv rtl/video/m2_tile_decode.sv sim/video/tb_m2_tile_fetch.cpp
 
 test_m2_raster_band: obj_raster_band/Vm2_raster_band

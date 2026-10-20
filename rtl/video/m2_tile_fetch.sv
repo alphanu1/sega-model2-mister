@@ -88,7 +88,18 @@
 `timescale 1ns/1ps
 
 module m2_tile_fetch #(
-  parameter int unsigned COLUMNS = 62      // visible 8-pixel columns (496/8)
+  parameter int unsigned COLUMNS = 62,     // visible 8-pixel columns (496/8)
+  // R906: A COLUMN WHOSE EVERY PIXEL IS MASKED IS NOT FETCHED. Every pixel of
+  // it reaches the line buffer with lb_masked set, which the mixer never draws
+  // (hit_cat0 / hit_cat1 both need !masked), so its tile word and glyph are
+  // not needed. Masked by: layer_off (window mode 1's other map), the column
+  // split (modes 2/3: the side of h the layer does not own), or the row mask
+  // on both screen columns the tile column touches. Motor Raid runs pair 2/3
+  // in mode 2 with two full-screen pictures (1,449 and 2,310 distinct tiles):
+  // fetching both maps across the whole line doubles that pair's glyph work
+  // and overran the line budget from ~30 cycles of port-3 latency (R906).
+  // 0: every column fetched, as before.
+  parameter bit          MASK_SKIP = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -358,6 +369,24 @@ module m2_tile_fetch #(
   logic [3:0] f_step;
   assign f_step = 4'd8 - {1'b0, f_off};
 
+  // R906 (MASK_SKIP): is every pixel of the column being fetched masked? The
+  // column is fx .. fx + f_step - 1 (f_last; ~f_off is f_step - 1), at most
+  // eight pixels, so it touches at most two 8-pixel mask columns: its first
+  // and last pixel decide the row mask. Pixels past the line's end are never
+  // written, so they count as masked. The same expressions as px_mask and
+  // px_split below, at two positions; conservative where the sources mix.
+  logic [9:0] f_last;
+  logic       f_last_out, f_col_masked, f_skip_q;
+  assign f_last     = fx + {7'd0, ~f_off};
+  assign f_last_out = (f_last >= 10'(COLUMNS * 8));
+  wire  [9:0] f_lastc = f_last_out ? 10'(COLUMNS * 8 - 1) : f_last;
+  wire        f_mfirst = row_mask[{fx[8:7], ~fx[6:3]}];       // {word, 15 - column}
+  wire        f_mlast  = row_mask[{f_last[8:7], ~f_last[6:3]}];
+  assign f_col_masked = layer_off
+                     || (split_en && (split_right ? (f_lastc < {1'b0, split_x})
+                                                  : (fx >= {1'b0, split_x})))
+                     || (f_mfirst && (f_last_out || f_mlast));
+
   logic consume;
   assign consume = (est == E_WAIT) && f_have;
 
@@ -377,6 +406,7 @@ module m2_tile_fetch #(
       last_tile <= '0;
       tile_valid <= 1'b0;
       char_req <= 1'b0; fetches <= '0;
+      f_skip_q <= 1'b0;
     end else if (start) begin
       tw_nonblank <= 1'b0;
       // Neither retained value survives a scanline. tile_valid especially: a
@@ -401,6 +431,7 @@ module m2_tile_fetch #(
           // actually changed.
           if (tile_valid && (f_tile_addr == last_tile)) fst <= F_CADDR;
           else                                          fst <= F_TILE;
+          f_skip_q <= f_col_masked;   // R906: acted on in F_CADDR, a cycle on at least
         end
 
         F_TILE: begin
@@ -417,7 +448,15 @@ module m2_tile_fetch #(
         // R570: the character address, registered.
         F_CADDR: begin
           f_char_addr_q <= f_char_addr;
-          fst           <= F_CHIT;
+          if (MASK_SKIP && f_skip_q) begin
+            // R906: nothing of this column is drawn. The emit side writes
+            // its pixels masked from sx alone; tw_f / ch_f are left as they
+            // are (their pixels are never shown).
+            f_have <= 1'b1;
+            fst    <= F_FULL;
+          end else begin
+            fst    <= F_CHIT;
+          end
         end
 
         // R572: and the 16-way compare's answer registered before F_CHAR acts
