@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-20 (paused for credits): where everything stands
+
+BUILDING: s1230-s1232 from 1296e49 (sm2-builds/sm2-2afull-1296e49) -- TGP
+speed-ups (R888), window key (R889: VCop2 ammo, Manx TT needle R893), Manx TT
++ input profiles + tanr (R887), 128 MB SDRAM (R891, not yet used by a game).
+NOT in it, merged since: Manx TT's motion-base answer (R892), Volume to 400% +
+Direct boost (R894) -- next build from model2a tip.
+TO TEST on the board with that build: Manx TT (needle, speed), VCop2 revolver,
+Sega Rally slowdowns, VF2 / ZG unchanged.
+STOPPED (Ben out of credits): the six remaining games' layouts and MRAs
+(Sky Target, Pilot Kids, Dynamite Cop, Hanguk Pro Yagu 98, Motor Raid, Dead or
+Alive) -- branch worktree-agent-a5df2de13cf248fc3, partial; the plan is in
+R887 and its prompt; the protection patches are proven (R873, R887). The
+128 MB memory test (M2_MEMTEST) is built only if those games fail on the board.
+
 ## 2026-10-20: Manx TT's tachometer -- R889's window key fixes it; the sheep is the game's (R893)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. No RTL change: study note only, on
