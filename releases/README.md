@@ -18,17 +18,48 @@ here contains ROM data.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-## Model 2A core — `Model2A.rbf` (not released yet)
+## Model 2A core — `Model2A.rbf` — BETA
+
+**This core is a beta.** All four games below boot and play, but there are
+known bugs, and Sega Rally slows down in places. Please report anything you
+find, and say which game and where.
+
+### What to copy
+
+| file | where it goes on the SD card |
+|---|---|
+| `Model2A_20261020.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| the four 2A MRAs below | `/media/fat/_Arcade/` |
+
+`Model2A_20261020.rbf` has the md5 `e44e4a29bab56e0ad579d93f1b3904d6`. As with
+the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
+
+### Games
 
 | Game | MRA | ROM zips | MAME set | State |
 |---|---|---|---|---|
-| Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays. Sound effects sit low under the music, as in MAME |
-| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays. Some slowdowns; quiet sound, as in MAME |
-| Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays with mouse or stick aim. The ammo display is missing (known, being fixed) |
-| Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays. Quiet sound, as in MAME. The MRA patches out the protection check |
+| Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays at full speed, with sound |
+| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays, with wheel, pedals and gears. **Slows down** in busy scenes |
+| Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick. **No ammo display** |
+| Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
 
-There are no `[15kHz CRT]` MRAs for the 2A games yet; making one is a copy of
-the MRA with bit 7 set in the game ID byte (index 4).
+### Known bugs
+
+- **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
+  drops where the geometry processor has the most work. Being looked at.
+- **Virtua Cop 2 shows no ammo.** The bullets in the corner aren't drawn, so
+  you can't see how many shots are left. Being fixed.
+- **Sound effects are quiet under the music** in Virtua Fighter 2, and Sega
+  Rally and Zero Gunner are quiet overall. This is how MAME 0.289 mixes these
+  games, and the core matches MAME. Whether the arcade is louder is still an
+  open question; turn the OSD `Volume` up for now.
+- **Zero Gunner's protection chip isn't emulated.** Its MRA patches out the
+  checks instead, so enemy patterns differ from MAME's (the game's random
+  numbers read its own code), but the game plays through normally.
+- **Virtua Fighter 2 froze in attract** once on an earlier build. It hasn't
+  happened since the geometry processor fixes; if it does, please say where.
+- **No link play** for Sega Rally yet, and no `[15kHz CRT]` MRAs. To make
+  one, copy an MRA and set bit 7 of the game ID byte (index 4).
 
 ### Model 2A games not supported yet
 
