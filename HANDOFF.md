@@ -20,6 +20,42 @@ R898 + Virtua Cop ammo R899, window key for all games) building -- its first
 seeds missed timing badly; the 15 kHz-only build s1243 met timing and is with
 a CRT tester.
 
+## 2026-10-20: the vertical stripes -- texture sheet 1's mirror was not a burst region (R905)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a28246a7d56699f12
+(on model2a 4345647; never merge into main).
+
+FOUND: not the texel fetch, the loader or the large layout. The rasteriser's
+texels come only from texture RAM, which only the i960 writes.
+rtl/cpu/i960/i960_memmap.sv marked 0x12000000-0x125FFFFF as burst and left
+out sheet 1's mirror 0x12600000-0x127FFFFF (MAME: both sheets .mirror(0x200000)
+with BURST). i960_lsu advances a multi-word access only in a burst region, so
+every stq the game sends through that mirror wrote its four words to ONE
+address: three texel words in four of sheet 1 never written -- vertical bars
+16 texels apart on every sheet-1 texture (the scenery), sheet 0 (the people)
+intact. Measured: MAME's texture store trace against the whole-core bench's
+(tb_m2_boot, new M2_TEXWLOG / M2_TEXDUMP) -- identical for 349,568 stores,
+then MAME 0x12600000/04/08/0C against the core's 0x12600000 x4 (IP 0x6ff90,
+stq). MAME's own sheet-1 stores replayed reproduce its tex1.bin exactly;
+replayed with the old map, 302,210 words differ, and Dynamite Cop's list 700
+through tb_m2_raster3d goes from 4.05 to 51.97 / 255 (40.6% of pixels > 32)
+with the board's stripes on walls, floor and desks.
+
+DONE: i960_memmap's texture range to 0x12800000. One constant. lint_top x3,
+lint_idx, analyze_file clean. tb_m2_boot gains M2_TEXWLOG / M2_TEXDUMP.
+
+ALSO FOUND, NOT IN THIS COMMIT: R828c's no-mip flag assumes Daytona's lod 128
+/ coef 1.0; these games set their own (DOA lod 1000). MAME never mips DOA and
+its sheets hold no mips; at the OSD's default Sharp the core mips it -- DOA
+list 700 at 22.10 / 255 against 6.12 with mipping Off or with MAME's own
+level. An RTL form (coef table + lod into the flag, a2_big only) was written
+and linted, held back for area (384 registers, unmapped): local branch
+r905-mipz (one commit on this one). Workaround: Mip-mapping Off.
+
+NEXT: build and put on the board (Dynamite Cop, DOA, Sky Target, Motor Raid
+scenery without bars). The same line is in main's i960_memmap: fix it on
+main too. Decide on the mip flag for the large layout (area first).
+
 ## 2026-10-20: the i960's wait states for Sega Rally, behind M2_2A_WAITST (off) (R904)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch r904-waitst (on model2a
