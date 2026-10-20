@@ -38950,4 +38950,6 @@ SEGA RALLY'S CONTROLS WORK (Daytona's m2_cab_inputs, R862).*
 *Same build, Ben: Sega Rally's 3D holds up through a race (R876's FIFO stall
 confirmed on the board), with "a couple of slowdowns" -- the TGP-bound case
 R876 predicted. R888 measures our TGP against the real chip's budget.*
+*Same build, Ben: Zero Gunner's analogue sticks steer, both players (R879
+confirmed on the board).*
 
