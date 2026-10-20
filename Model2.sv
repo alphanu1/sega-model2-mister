@@ -393,7 +393,7 @@ localparam CONF_STR = {
 	// boost: the SCSP's direct sends (every 2A voice, at DISDL 3 -- R886)
 	// x2 / x4 before the DSP's return; Off, the default, is MAME's mix.
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%,150%,200%,300%,400%;",
-	"O[65:64],Direct boost,Off,+6 dB,+12 dB;",
+	"O[65:64],Sound boost,Off,+6 dB,+12 dB;",
 `else
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
 `endif
@@ -3272,7 +3272,7 @@ always_ff @(posedge clk_sys) begin vol_s1 <= status[49:46]; vol_s2 <= vol_s1; vo
 // (codes 0-10 unchanged), clamped to the 16-bit range, never wrapped; at
 // 100% and below the output is the stage below's bit for bit (m2_volume).
 m2_volume u_vol (.clk(clk_sys), .code(vol_s3), .in_l(snd_l), .in_r(snd_r), .out_l(vol_l), .out_r(vol_r));
-// R894: the OSD's Direct boost into clk_sys like the volume (m2_2a_sound)
+// R894: the OSD's Sound boost (was 'Direct boost') into clk_sys like the volume (m2_2a_sound)
 reg  [1:0] boost_s1, boost_s2, snd_boost;
 always_ff @(posedge clk_sys) begin boost_s1 <= status[65:64]; boost_s2 <= boost_s1; snd_boost <= boost_s2; end
 `else
