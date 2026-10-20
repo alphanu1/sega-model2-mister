@@ -58,6 +58,23 @@ SLOTS_2A_EXT = [
     ("copro_data",       0x2ec0000, 0x400000, "copro_data",       0x000000),
 ]
 IMG_ENDS_2A = (0x2d40000, 0x2ec0000, 0x32c0000)
+# R897: THE LARGE 2A LAYOUT (Model2.sv a2_big; the 128 MB module): Sega
+# Rally's whole image with main_data 32 MB (MAME's 0x02000000 window, over the
+# 2A texture and polygon slots), then the texture-coordinate ROM (MAME's 16 MB
+# region, linear; a smaller region tiled as MAME's mask mirrors it) and the
+# polygons to the image's end. An image longer than 0x32C0000 is checked
+# against these.
+SLOTS_2A_BIG = [
+    ("program",          0x0000000, 0x080000, "maincpu",          0x000000),
+    ("main_data 32M",    0x0080000, 0x2000000, "main_data",       0x000000),
+    ("pad (data 32-36M)", 0x2080000, 0x400000, "main_data",       0x2000000),
+    ("TGP tables",       0x2480000, 0x040000, "copro_tgp_tables", 0x000000),
+    ("68000 program",    0x24c0000, 0x080000, "audiocpu",         0x000000),
+    ("samples",          0x2540000, 0x800000, "samples",          0x000000),
+    ("program 512K-2M",  0x2d40000, 0x180000, "maincpu",          0x080000),
+    ("copro_data",       0x2ec0000, 0x400000, "copro_data",       0x000000),
+]
+TEX_BIG, POLY_BIG = 0x32c0000, 0x42c0000
 ALIAS = {"M1AUDIO_CPU_REGION": "m1audio:sndcpu", "M1AUDIO_MPCM1_REGION": "m1audio:pcm1",
          "M1AUDIO_MPCM2_REGION": "m1audio:pcm2",
          "cpu3": "comms", "cpu4": "comms"}   # daytona names it cpu3, desert / vcopa cpu4
@@ -85,7 +102,8 @@ def build(body, zips):
             size = int(m.group(1), 16)
             tag = m.group(2).strip('"')
             tag = ALIAS.get(tag, tag)
-            regions[tag] = bytearray(size)          # unloaded space reads 0
+            # unloaded space reads 0, or 0xFF in a ROMREGION_ERASEFF region (R897)
+            regions[tag] = bytearray(b"\xff" * size) if "ERASEFF" in line else bytearray(size)
             cur = tag
             continue
         m = re.search(r"(ROM_LOAD32_WORD|ROM_LOAD16_WORD_SWAP|ROM_LOAD)\(\s*\"([^\"]+)\"\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*CRC\(([0-9a-fA-F]+)\)", line)
@@ -139,6 +157,17 @@ CORE_PATCHES = {
         0x446e0, 0x449bc, 0x44bac, 0x44e14, 0x474dc, 0x475e8, 0x477f4,
         0x4cc34, 0x55cd4, 0x56204)],
 }
+# R887 / R897: the large 2A sets' patches, with the word MAME has there (any
+# instruction may be replaced, so the old word is named, not inferred):
+# Pilot Kids' 315-5881 compare (cmpibne -> b), Dynamite Cop's six compare
+# branches (cmpibe -> b, same displacement), Dead or Alive's two calls of the
+# 317-0229 boot check (call -> mov 1,g0).
+CORE_PATCHES_OLD = {
+    "pltkidsa": [(0x51900, 0x08000080, 0x3dad0074)],
+    "dynamcop": [(a, 0x08000010, 0x3aad0010) for a in (0x66a50, 0x66a68, 0x66a80, 0x66a98)]
+              + [(a, 0x08000038, 0x3aad0038) for a in (0x66b14, 0x66b54)],
+    "doaab":    [(0x760, 0x5c801e01, 0x09002430), (0x778, 0x5c801e01, 0x09002458)],
+}
 
 def core_patches(setname, regions):
     out = []
@@ -147,6 +176,14 @@ def core_patches(setname, regions):
         # only the opcode byte may change: be (0x12) -> b (0x08)
         if old != (val & 0x00ffffff) | 0x12000000:
             raise SystemExit(f"core patch at 0x{off:X}: MAME has 0x{old:08X}, not the expected be")
+        regions["maincpu"][off:off + 4] = val.to_bytes(4, "little")
+        out.append((off, old, val))
+    for off, val, want_old in CORE_PATCHES_OLD.get(setname, []):
+        old = int.from_bytes(regions["maincpu"][off:off + 4], "little")
+        if want_old is not None and old != want_old:
+            raise SystemExit(f"core patch at 0x{off:X}: MAME has 0x{old:08X}, not 0x{want_old:08X}")
+        if want_old is None and (old >> 24) != 0x09:   # i960 call (CTRL opcode 0x09)
+            raise SystemExit(f"core patch at 0x{off:X}: MAME has 0x{old:08X}, not a call")
         regions["maincpu"][off:off + 4] = val.to_bytes(4, "little")
         out.append((off, old, val))
     return out
@@ -162,10 +199,28 @@ def main():
     for fn, off, val in init_patches(src, setname, regions):
         print(f"  {fn}: maincpu 0x{off:X} = 0x{val:08X} (applied to MAME's side)")
     for off, old, val in core_patches(setname, regions):
-        print(f"  core patch (R873): maincpu 0x{off:X} 0x{old:08X} -> 0x{val:08X} (applied to MAME's side)")
+        print(f"  core patch (R873, R887): maincpu 0x{off:X} 0x{old:08X} -> 0x{val:08X} (applied to MAME's side)")
     bad = 0
     slots = SLOTS
-    if m2a:
+    big = m2a and len(img) > 0x32c0000
+    if big:
+        slots = list(SLOTS_2A_BIG)
+        tex = bytes(regions.get("textures", b""))
+        tiled = (tex * (0x1000000 // max(len(tex), 1) + 1))[:0x1000000]
+        regions["_tex_tiled"] = tiled
+        slots.append(("textures 16M", TEX_BIG, 0x1000000, "_tex_tiled", 0))
+        poly = bytes(regions.get("polygons", b""))
+        plen = len(img) - POLY_BIG
+        if plen <= 0 or plen > len(poly):
+            print(f"  polygons: image carries 0x{max(plen, 0):X} bytes, MAME's region is 0x{len(poly):X}"); bad += 1
+        else:
+            slots.append(("polygons", POLY_BIG, plen, "polygons", 0))
+            rest = poly[plen:]
+            if rest and len(set(rest)) != 1:
+                print(f"  polygons: MAME's region has data past the image's 0x{plen:X} bytes"); bad += 1
+            elif rest:
+                print(f"  polygons past the image: 0x{len(rest):X} bytes of 0x{rest[0]:02X} in MAME (not loaded)")
+    elif m2a:
         slots = list(SLOTS_2A)
         for s_ in SLOTS_2A_EXT:
             name, io, size, tag, roff = s_
@@ -188,7 +243,7 @@ def main():
             print(f"  {name:18s} 0x{io:07X}  DIFFERS from MAME {tag} at +0x{first:X}"); bad += 1
     if m2a:
         # the 2A core has no sound scan: the 68000 program's base is fixed
-        if len(img) not in IMG_ENDS_2A:
+        if not big and len(img) not in IMG_ENDS_2A:
             print(f"  image size 0x{len(img):X}, expected one of "
                   + ", ".join(f"0x{e:X}" for e in IMG_ENDS_2A)); bad += 1
         print("PASS" if bad == 0 else f"FAIL ({bad})")

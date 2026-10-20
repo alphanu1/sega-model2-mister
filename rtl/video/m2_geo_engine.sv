@@ -321,14 +321,14 @@ module m2_geo_engine #(
   logic        fsel;         // 0 = scaling x, 1 = scaling y
 
   // ---- R222 state
-  logic [21:0] tp_w;         // R268: texture point address, in 16-bit words
+  logic [22:0] tp_w;         // R268: texture point address, in 16-bit words (R897: MAME's 23 bits)
   logic        tp_ram;       // ...in texture RAM (tpa bit 23), else the ROM
   logic  [2:0] uv_i;         // which 16-bit word of the run is in hand
   // R742: uv_i == the run's last word, kept beside uv_i rather than compared
   // in the next-state logic (s794 at 80 MHz: uv_i -> st.E_TH0 -0.701, E_XF).
   logic        uv_last;
   logic        uv_cull;      // the cull decision, held while the run finishes
-  logic [21:0] th_w;         // texture header address, in 16-bit words
+  logic [22:0] th_w;         // texture header address, in 16-bit words (R897: MAME's 23 bits)
   logic        th_ram;       // ...in texture RAM (tha bit 23), else the ROM
   logic        dsel;         // E_DOT: 0 = with the point, 1 = with the light
   logic        dotp_zero;
@@ -506,9 +506,10 @@ module m2_geo_engine #(
     gam = sel[1] ? v : sel[0] ? GAM_B32[{v, 3'd0} +: 8] : GAM_B64[{v, 3'd0} +: 8];
   endfunction
   // A header word's dword address in the texture space: RAM indexes 64 K
-  // words, the ROM 4 M; mem_addr[23] says which.
-  function automatic logic [23:0] th_dw(input logic [21:0] w, input logic ram);
-    th_dw = ram ? {1'b1, 8'd0, w[15:1]} : {3'd0, w[21:1]};
+  // words, the ROM 8 M (R897: MAME's whole 16 MB region; the top level maps
+  // it into each layout's slot); mem_addr[23] says which.
+  function automatic logic [23:0] th_dw(input logic [22:0] w, input logic ram);
+    th_dw = ram ? {1'b1, 8'd0, w[15:1]} : {2'd0, w[22:1]};
   endfunction
   // The translation table word for component c of the palette entry at this
   // luminance: c * 0x2000 + (component5 << 8 | luma >> 2); its dword.
@@ -588,9 +589,9 @@ module m2_geo_engine #(
       for (int k = 0; k < 4; k++) tq[k] <= 3'd0;
       for (int k = 0; k < 2; k++) begin raw_x[k] <= 32'd0; raw_y[k] <= 32'd0; raw_z[k] <= 32'd0; end
       dbg_polys <= 16'd0; dbg_objects <= 16'd0;
-      th_w <= 22'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
+      th_w <= 23'd0; th_ram <= 1'b0; dsel <= 1'b0; dotp_zero <= 1'b0; dotl <= 32'd0;
       poly_dotp <= 12'd0;                                                              // R828c
-      tp_w <= 22'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0; uv_last <= 1'b0;
+      tp_w <= 23'd0; tp_ram <= 1'b0; uv_i <= 3'd0; uv_cull <= 1'b0; uv_last <= 1'b0;
       poly_uv0 <= 32'd0; poly_uv1 <= 32'd0; poly_uv2 <= 32'd0; poly_uv3 <= 32'd0;
       lum <= 32'd0; luma8 <= 8'd0; hdr0 <= 16'd0; cbase <= 10'd0; c555 <= 15'd0; xi <= 2'd0;
       hdr1 <= 16'd0; hdr2 <= 16'd0; poly_tex <= 32'd0;
@@ -630,8 +631,15 @@ module m2_geo_engine #(
           // 0x489EA0 for Daytona's bridge -- from the first: its headers and its
           // u/v from another texture's data. Texture RAM (a[23]) uses a[15:0]
           // and is untouched.
-          th_w   <= {tha[22], tha[20:0]}; th_ram <= tha[23]; dsel <= 1'b0;   // R222; R671
-          tp_w   <= {tpa[22], tpa[20:0]}; tp_ram <= tpa[23];                 // R268; R671
+          // R897: THE PACKING MOVED TO THE TOP LEVEL. The engine carries
+          // MAME's own 23-bit word; Model2.sv's eng_mem_idx packs it as above
+          // ({a[22], a[20:0]}) for the 2 MB-chip layouts and takes it whole
+          // for the large 2A layout's linear 16 MB. The same words for every
+          // game that ran before; only a run carried out of a[20] would now
+          // reach a[21], which the packing drops (MAME's region reads its gap
+          // there, the old packing the second pair; no list does either).
+          th_w   <= tha[22:0]; th_ram <= tha[23]; dsel <= 1'b0;   // R222; R671; R897
+          tp_w   <= tpa[22:0]; tp_ram <= tpa[23];                 // R268; R671; R897
           st     <= E_RD; ret <= E_RD;
         end
 
@@ -813,8 +821,8 @@ module m2_geo_engine #(
                 // every cycle of latency). The two pointers still step exactly
                 // as E_TH3 and E_UV step them, from attr alone, so the list
                 // stays in step (R268's reason for reading them at all).
-                th_w <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
-                tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
+                th_w <= th_w + {{16{attr[16]}}, attr[16:12], 2'b00};
+                tp_w <= tp_w + (attr[0] ? 23'd8 : 23'd6);
                 dstep <= 2'd0; dgot <= 2'd0;
                 cull_q <= 1'b1;                                     // R759: P1(n) is still to focus
                 if (attr[0]) begin fq_slot <= 1'b1; st <= E_FQ; end
@@ -986,7 +994,7 @@ module m2_geo_engine #(
         //      then the address steps by tho * 4, tho the signed attr[16:12].
         F_TH0: if (mem_go) begin
           hdr0  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 22'd1, th_ram); xhalf <= ~th_w[0];
+          xaddr <= th_dw(th_w + 23'd1, th_ram); xhalf <= ~th_w[0];
           fs    <= F_TH1;
         end
         // R271: word 1's low byte is the luma base, word 2 the sheet and the
@@ -994,19 +1002,19 @@ module m2_geo_engine #(
         // each is the previous one's complement.
         F_TH1: if (mem_go) begin
           hdr1  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 22'd2, th_ram); xhalf <= th_w[0];
+          xaddr <= th_dw(th_w + 23'd2, th_ram); xhalf <= th_w[0];
           fs    <= F_TH2;
         end
         F_TH2: if (mem_go) begin
           hdr2  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 22'd3, th_ram); xhalf <= ~th_w[0];
+          xaddr <= th_dw(th_w + 23'd3, th_ram); xhalf <= ~th_w[0];
           fs    <= F_TH3;
         end
         F_TH3: if (mem_go) begin
           cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
           tex_flat <= hdr0[14] && !(TEXLUT && tex_off);   // R867
           h3w     <= xhalf ? mem_data[31:16] : mem_data[15:0];   // R757: cc_idx in E_FW
-          th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
+          th_w    <= th_w + {{16{attr[16]}}, attr[16:12], 2'b00};
           // R268: THE TEXTURE COORDINATES ARE READ FOR EVERY POLYGON, CULLED OR
           // NOT. The reference reads its pairs and advances the pointer at the
           // top of model2_3d_process_polygon, before it decides to cull, so a
@@ -1051,9 +1059,9 @@ module m2_geo_engine #(
         //      is read. The pointer then advances by the words consumed.
         F_UV: if (mem_go) begin
           logic [15:0] w;
-          logic [21:0] nxt;
+          logic [22:0] nxt;
           w   = xhalf ? mem_data[31:16] : mem_data[15:0];
-          nxt = tp_w + 22'(uv_i) + 22'd1;
+          nxt = tp_w + 23'(uv_i) + 23'd1;
           case (uv_i)
             3'd0: poly_uv0[31:16] <= w;
             3'd1: poly_uv0[15:0]  <= w;
@@ -1076,7 +1084,7 @@ module m2_geo_engine #(
             default: poly_uv3[15:0] <= w;
           endcase
           if (uv_last) begin   // R742: uv_i == (attr[0] ? 7 : 5)
-            tp_w <= tp_w + (attr[0] ? 22'd8 : 22'd6);
+            tp_w <= tp_w + (attr[0] ? 23'd8 : 23'd6);
             // UNTEXTURED AND TRANSLUCENT, WHICH IS THE ONE CASE THE REFERENCE
             // DRAWS NOTHING FOR (R231, corrected by R326) -- acted on in E_FW.
             fs <= F_DONE;

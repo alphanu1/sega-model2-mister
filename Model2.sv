@@ -913,6 +913,27 @@ localparam logic [26:0]     XTRA2_FROM_2A  = 27'h2D40000;
 localparam logic [SDR_AW:1] GAME_PROGX_2A  = SDR_AW'(32'h1300000);   // byte 0x2600000
 localparam logic [SDR_AW:1] GAME_PROGXB_2A = GAME_PROGX_2A - SDR_AW'(32'h0040000);   // so that + the CPU's word lands in it
 localparam logic [SDR_AW:1] GAME_COPRO_2A  = SDR_AW'(32'h13C0000);   // byte 0x2780000
+// R897: THE LARGE 2A LAYOUT -- Sky Target, Pilot Kids, Dynamite Cop, Hanguk Pro
+// Yagu 98, Motor Raid, Dead or Alive (a2_big below) -- ON THE 128 MB MODULE
+// (R891). Sega Rally's whole image with one change, then two regions more:
+//   MRA 0x0000000  program 512 KB
+//       0x0080000  main_data, 32 MB: MAME's whole 0x02000000 window, ROM_COPY
+//                  mirrors written out. It runs over the 2A texture and
+//                  polygon slots (these games read neither), so the bridge's
+//                  base and both its windows (0x02000000 linear 32 MB,
+//                  0x06000000 = + 16 MB) stand exactly as they are
+//       0x2080000  4 MB of zeros, to the fixed slots
+//       0x2480000  tables, 68000 program, samples, program extension, copro
+//                  data: Sega Rally's layout to 0x32C0000, every slot present
+//       0x32C0000  texture-coordinate ROM: MAME's 16 MB region, linear
+//                  (8 MB sets: their 8 MB, then what MAME's region holds
+//                  above it -- a mirror or the erase value)
+//       0x42C0000  polygons, MAME's region to its last chip (<= 32 MB)
+// The loader's third remap (XTRA3) puts MRA 0x32C0000 and up at byte
+// 0x4000000: textures at byte 0x4000000, polygons at byte 0x5000000.
+localparam logic [26:0]     XTRA3_FROM_2A = 27'h32C0000;
+localparam logic [SDR_AW:1] GAME_TEX_BIG  = SDR_AW'(32'h2000000);   // byte 0x4000000, 16 MB
+localparam logic [SDR_AW:1] GAME_POLY_BIG = SDR_AW'(32'h2800000);   // byte 0x5000000, 32 MB
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -1748,7 +1769,9 @@ wire mem_ready_s = mem_ready_sy[1];
 m2_rom_loader #(.SDR_AW(SDR_AW), .XTRA_FROM(M2A ? XTRA_FROM_2A : MRA_END_93),
                .XTRA_TO(M2A ? GAME_SAMP_2A[SDR_AW:1] : GAME_POLYX[SDR_AW:1]),
                .XTRA2_FROM(M2A ? XTRA2_FROM_2A : 27'h7FF_FFFF),                  // R862
-               .XTRA2_TO(M2A ? GAME_PROGX_2A[SDR_AW:1] : SDR_AW'(0))) u_loader (   // R725
+               .XTRA2_TO(M2A ? GAME_PROGX_2A[SDR_AW:1] : SDR_AW'(0)),
+               .XTRA3_FROM(M2A ? XTRA3_FROM_2A : 27'h7FF_FFFF),                  // R897
+               .XTRA3_TO(M2A ? GAME_TEX_BIG[SDR_AW:1] : SDR_AW'(0))) u_loader (   // R725
 	.clk(clk_sys), .rst(~mem_rst_n),
 	.mem_ready(mem_ready_s && (!MEMTEST || mt_done0)),   // R571: synchronised -- see below; R891: after the memory test's first pass
 	.ioctl_download(ioctl_download), .ioctl_index(ioctl_index),
@@ -2697,6 +2720,15 @@ assign a2_rally_menu = RALLY2A & (is_srally | is_2an);   // R887: the analog pro
 // same slot).
 logic a2_copro_rom;
 always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an;
+// R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
+// 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
+// Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
+// from the upper 64 MB, linear in MAME's regions; everything else as before.
+// Quasi-static (the ID is written before the image).
+logic a2_big;
+always_ff @(posedge clk_sys)
+	a2_big <= is_2ax && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
+	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA));
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -3843,19 +3875,28 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIS
 // R222: THE ENGINE READS FOUR MEMORIES, and says which with mem_space: 1 is
 // the texture header, in texture RAM (addr[23]) or the texture ROM, 16-bit
 // words read as dword pairs; 2 the palette mirror; 3 the translation mirror.
-wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TEXRAM : GAME_TEX)
+// R897: the large 2A layout (a2_big) reads the texture-coordinate ROM and the
+// polygons from the upper 64 MB, each linear in MAME's region: the texture
+// dword index whole (22 bits, MAME's 16 MB), the polygon dword index to 23
+// bits (32 MB). Every other game reads its slots exactly as before: R671's
+// packing of the texture ROM, {a[22], a[20:0]} in words -- done here since
+// R897, the engine carrying MAME's own 23-bit word -- and 22 polygon bits.
+wire [SDR_AW:1] eng_base = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? GAME_TEXRAM : (a2_big ? GAME_TEX_BIG : GAME_TEX))
                          : (eng_mem_space == 2'd2) ? GAME_PAL3D
                          : (eng_mem_space == 2'd3) ? GAME_XLAT3D
                          : geo_obj_oba_r[24] ? GAME_PRAM1
-                         : geo_obj_oba_r[23] ? ((!M2A && eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB : GAME_POLY)   // R725; R852: 2A's 12 MB are contiguous
+                         : geo_obj_oba_r[23] ? ((!M2A && eng_mem_addr[21:0] >= 22'h340000) ? GAME_POLYXB
+                                               : a2_big ? GAME_POLY_BIG : GAME_POLY)   // R725; R852: 2A's 12 MB are contiguous; R897
                                              : GAME_PRAM0;
 wire [23:0] eng_mem_idx  = (eng_mem_space == 2'd1) ? (eng_mem_addr[23] ? {9'd0, eng_mem_addr[14:0]}   // 64 K words
-                                                                       : {3'd0, eng_mem_addr[20:0]})  // 4 M words
+                                                                       : {2'd0, a2_big & eng_mem_addr[21],   // R897: 4 M dwords linear
+                                                                          a2_big ? eng_mem_addr[20] : eng_mem_addr[21],
+                                                                          eng_mem_addr[19:0]})   // R671: words {a[22], a[20:1]}
                          : (eng_mem_space == 2'd2) ? {15'd0, eng_mem_addr[8:0]}
                          : (eng_mem_space == 2'd3) ? {10'd0, eng_mem_addr[13:0]}
                          : (geo_obj_oba_r[24] || !geo_obj_oba_r[23])
                          ? {9'd0, eng_mem_addr[14:0]}      // 32K-dword window
-                         : {2'd0, eng_mem_addr[21:0]};
+                         : {1'd0, a2_big & eng_mem_addr[22], eng_mem_addr[21:0]};   // R897: 32 MB for a2_big
 
 // R229: an OSD bit reaches the datapath through three flops, never raw.
 reg pair_off_s0, pair_off_s1, pair_off_s2;

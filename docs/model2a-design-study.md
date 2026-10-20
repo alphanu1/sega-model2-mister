@@ -40106,3 +40106,106 @@ the warning screen, the attract -- no key. Coin, start, race as on s1221.
 The test menu's DriveBoard Test still reports a network error (not modelled).
 VF2, Sega Rally, Virtua Cop 2, Zero Gunner: no change (their IN2 is the bench's
 unchanged expressions).
+
+**R897 -- THE SIX REMAINING 2A SETS ON THE 128 MB MODULE: ONE LARGE LAYOUT
+(main_data 32 MB IN PLACE OF THE TEXTURE AND POLYGON SLOTS, THOSE TWO
+LINEAR IN THE UPPER 64 MB), A THIRD LOADER REMAP, THE ENGINE CARRYING
+MAME'S 23-BIT TEXTURE WORD; movre AND sqrtrl UNDER F2A; SIX MRAs. NOTHING
+FITTED, NOTHING ON A BOARD.**
+(Ben, through the coordinator: make Sky Target, Pilot Kids, Dynamite Cop,
+Hanguk Pro Yagu 98, Motor Raid and Dead or Alive load and run, one overflow
+scheme, released layouts unmoved, as little logic as possible; MRAs in the
+2A style; benches against MAME. Limits: one MAME, one Verilator build,
+quartus_map only, no board. A partial attempt on branch
+worktree-agent-a5df2de13cf248fc3 (uncommitted: the a2_big decode, the
+engine's 23-bit word, the bench mappings) was read and its approach kept.)
+
+*Believed (R887, R891):* the five large sets need their own layouts with the
+loader's remaps above 64 MB; Sky Target fits 64 MB with a third polygon remap
+and a 1 MB data mask; the 4 MB-chip texture sets need R671's packing changed
+to {a[22] | a[21], a[20:0]}; pltkidsa / dynamcop a 16 MB texture slot.
+
+*THE SCHEME (Model2.sv a2_big: game IDs 0x13 0x14 0x15 0x16 0x18 0x1A; every
+other ID reads exactly what it read before).* Every one of the six uses the
+same image, Sega Rally's whole 0x32C0000-byte layout (R862) with one change,
+and two regions appended:
+  MRA 0x0000000  program 512 KB
+      0x0080000  main_data 32 MB -- MAME's whole 0x02000000 window, ROM_COPY
+                 mirrors written out (Sky Target's 1 MB pair sixteen times,
+                 Motor Raid's eight, DOA's 4 MB twice; Pilot Kids' 8 MB then
+                 zeros). It runs over the 2A texture (8 MB) and polygon
+                 (12 MB) slots, which these games never read, so THE BRIDGE
+                 NEEDS NOTHING: 0x02000000-0x03FFFFFF is already base_data +
+                 a[24:1] and 0x06000000 base_data + 16 MB + a[23:1] (MAME's
+                 main_data + 0x1000000) -- the windows R887 measured
+                 hpyagu98, motoraid and skytargt reading land on their data.
+      0x2080000  4 MB zeros (MAME's region 32-36 MB, unreachable)
+      0x2480000  tables, 68000 program, samples (XTRA), program 512 KB-2 MB
+                 and copro data (XTRA2): Sega Rally's slots, every one present
+      0x32C0000  texture-coordinate ROM, MAME's 16 MB region linear (an 8 MB
+                 region -- DOA -- written twice, as MAME's mask mirrors it;
+                 the 8 MB-loaded 16 MB regions with their fill, 0 or 0xFF)
+      0x42C0000  polygons, MAME's region to its last chip (16-32 MB)
+  m2_rom_loader's THIRD REMAP, XTRA3_FROM / XTRA3_TO (default off; the
+  original core passes all-ones): bytes from 0x32C0000 go to word 0x2000000
+  + (byte - 0x32C0000) / 2 -- the textures at SDRAM byte 0x4000000, the
+  polygons at 0x5000000 (GAME_TEX_BIG, GAME_POLY_BIG). 0x32C0000 has 18 low
+  zero bits, so the subtract is 9 bits and the add one. Released images end
+  at or before 0x32C0000 and never reach it. (The partial attempt used no
+  subtract -- {1, a[25:0]} -- which needs 13.25 MB of padding in every MRA
+  to reach 0x4000000; the subtract saves that download for ~10 LUTs.)
+  The engine port (Model2.sv eng_base / eng_mem_idx): for a2_big the texture
+  ROM base GAME_TEX_BIG with MAME's dword index whole (22 bits, 16 MB), the
+  polygon base GAME_POLY_BIG with 23 bits (32 MB); otherwise R671's packing
+  and 22 polygon bits, as before. m2_geo_engine's th_w / tp_w carry MAME's
+  23-bit word (was R671's packed 22): the packing moved to the top level, so
+  one register file serves both mappings. The only behavioural difference
+  for a released game is a run of header / u/v words carrying out of a[20]:
+  it now reaches a[21], which the packing drops (MAME's region reads its gap
+  there; the old packing read the second pair) -- no list does it (below:
+  the released walks identical).
+  WHY ONE LAYOUT AND NOT R887's TWO: Sky Target (54 MB) would fit 64 MB with
+  a polygon remap and a data mask, but that is two more decodes for one game;
+  on the large layout it costs nothing more. It needs the 128 MB module like
+  the other five. R887's "Sky Target program 0.5 MB" was wrong: its two
+  EPROMs are 512 KB each, interleaved -- 1 MB (the image's 512 KB-2 MB slot
+  has 128 non-zero 4 KB pages of 384).
+  R887's {a[22] | a[21], a[20:0]} packing is NOT needed: on the linear slot
+  a[21] and a[22] are simply address bits, for the 8 MB and 16 MB sets alike.
+
+*BENCHES (Verilator 5.052):*
+  * LOADER: tb_m2_rom_xtra2a (Model2.sv's three remaps) -- the eight fixed
+    bytes, then one byte in every 4 KB of the stream to 0x72C0000 and the
+    words either side of every boundary, against a reference map: 29,416
+    checks, 0 fails, 16,404 bytes in the upper 64 MB. test_m2_rom_xtra2a_old
+    (the loader without XTRA3, the old bench): 13,012 / 0 -- every released
+    byte where it was. test_m2_rom_xtra2a_mut (the X3 bench, no third remap):
+    FAILS, 18,453 of 29,416, as it must.
+  * BRIDGE: test_m2_cpu_bridge_2a now at AW 26 (Model2.sv's SDR_AW since
+    R891) with a sweep of both data windows -- one dword in every 64 KB of
+    0x02000000-0x03FFFFFF and 0x06000000-0x06FFFFFF, the 16 MB line and the
+    window ends: 777 reads, 0 mismatches (928 checks in all). The first cut
+    of the sweep failed on 0x03FFFFF8: it and 0x06FFFFF8 are THE SAME WORD
+    (the alias is MAME's), and the bench had written both -- a bench bug.
+    test_m2_cpu_bridge (the original core) 925 / 0.
+  * RELEASED WALKS UNCHANGED: geodiff_2a on four VF2 walks (sm2-builds/
+    vf2speed w2300 w2700c w3450c w5175c: 349 / 1,576 / 1,474 / 1,593 quads)
+    and geodiff on three Daytona walks (build/geodiff w4000 w2500 w8000):
+    ours.txt BYTE-IDENTICAL to the model2a 5a36477 engine's, logs identical.
+  * THE LARGE MAPPING AGAINST MAME (make geodiff_2abig, M2GD_BIG=1: the
+    texture ROM and polygons laid out as the MRA and XTRA3 put them, read
+    through Model2.sv's arithmetic; MAME 0.289 m2lod dumps, crtc -8 / 90).
+    Dynamite Cop (16 MB textures, 32 MB polygons), and as the CONTROL the
+    same dumps through the old mapping (R671's packing, 22 polygon bits):
+      walk   MAME polys  large mapping                      old mapping
+      1500     171       171 match, u/v 170 / 0 off,        texture params
+                         texture params 174 / 0 differ        19 differ
+      3000     168       165 match (3 off 1-16 px: clip,    0 differ (no
+                         the same in both), 180 / 0           a[21] read)
+      6000     942       940 match, u/v 938 / 0 off,        41 differ
+                         texture params 947 / 0, z 1 off
+                         (the same in both)
+    The engine read texture words with a[21] set 1,248 / 0 / 1,212 times;
+    the old mapping takes those from the other half (the R670 fields wlog,
+    hlog, tx, ty ... of 19 and 41 quads). No attract walk read polygon ROM
+    above 16 MB (counted: 0) -- see the Pilot Kids walks below.

@@ -18,7 +18,8 @@ module geodiff_top #(
   // R852: the walk's CRTC offsets (state.txt "crtc"): Daytona 0 / 128, VF2 0 / 127
   parameter int CRTC_X = 0,
   parameter int CRTC_Y = 128,
-  parameter bit WINKEY = 1'b0   // R889: the window in q_z[19:16], as the 2A core builds it
+  parameter bit WINKEY = 1'b0,  // R889: the window in q_z[19:16], as the 2A core builds it
+  parameter bit BIG    = 1'b0   // R897: Model2.sv's a2_big (GD_RA only; the C++ model takes M2GD_BIG)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -77,6 +78,8 @@ module geodiff_top #(
   localparam logic [AW:1] GAME_XLAT3D = AW'(32'h1731000);
   localparam logic [AW:1] GAME_TEX    = AW'(32'h0720000);
   localparam logic [AW:1] GAME_POLY   = AW'(32'h0b20000);
+  localparam logic [AW:1] GAME_TEX_BIG  = AW'(32'h2000000);   // R897 (with AW 26)
+  localparam logic [AW:1] GAME_POLY_BIG = AW'(32'h2800000);
 
   logic        mat_we;
   logic [3:0]  mat_idx;
@@ -143,17 +146,18 @@ module geodiff_top #(
   logic [31:0] eng_data_w;
 `ifdef GD_RA
   // Model2.sv's engine port arithmetic, word for word
-  wire [AW:1] eng_base = (mem_space == 2'd1) ? (mem_addr[23] ? GAME_TEXRAM : GAME_TEX)
+  wire [AW:1] eng_base = (mem_space == 2'd1) ? (mem_addr[23] ? GAME_TEXRAM : (BIG ? GAME_TEX_BIG : GAME_TEX))
                        : (mem_space == 2'd2) ? GAME_PAL3D
                        : (mem_space == 2'd3) ? GAME_XLAT3D
                        : obj_oba_r[24] ? GAME_PRAM1
-                       : obj_oba_r[23] ? GAME_POLY
+                       : obj_oba_r[23] ? (BIG ? GAME_POLY_BIG : GAME_POLY)
                                        : GAME_PRAM0;
-  wire [23:0] eng_mem_idx = (mem_space == 2'd1) ? (mem_addr[23] ? {9'd0, mem_addr[14:0]} : {3'd0, mem_addr[20:0]})
+  wire [23:0] eng_mem_idx = (mem_space == 2'd1) ? (mem_addr[23] ? {9'd0, mem_addr[14:0]}
+                                                                : {2'd0, BIG & mem_addr[21], BIG ? mem_addr[20] : mem_addr[21], mem_addr[19:0]})   // R897
                           : (mem_space == 2'd2) ? {15'd0, mem_addr[8:0]}
                           : (mem_space == 2'd3) ? {10'd0, mem_addr[13:0]}
                           : (obj_oba_r[24] || !obj_oba_r[23]) ? {9'd0, mem_addr[14:0]}
-                          : {2'd0, mem_addr[21:0]};
+                          : {1'd0, BIG & mem_addr[22], mem_addr[21:0]};   // R897
   wire [AW:1] eng_wa = eng_base + AW'({eng_mem_idx, 1'b0});
   logic ra_busy;
 `ifdef GD_PC

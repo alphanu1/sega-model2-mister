@@ -675,8 +675,30 @@ test_m2_rom_xtra2a: obj_m2_rom_xtra2a/Vm2_rom_loader
 
 obj_m2_rom_xtra2a/Vm2_rom_loader: rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
 	$(VBUILD) --top-module m2_rom_loader -GSDR_AW=26 -GXTRA_FROM=27\'h2540000 -GXTRA_TO=26\'h1A00000 \
+	  -GXTRA2_FROM=27\'h2D40000 -GXTRA2_TO=26\'h1300000 -GXTRA3_FROM=27\'h32C0000 -GXTRA3_TO=26\'h2000000 \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM --Mdir obj_m2_rom_xtra2a -o Vm2_rom_loader -CFLAGS "-O2 -DTB_X3" \
+	  rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
+
+# R897: the loader as it was before the third remap (XTRA3 at its default), on
+# the bench without TB_X3: every byte of the released images lands where it
+# did. And the planted fault: the TB_X3 bench on that loader must FAIL.
+.PHONY: test_m2_rom_xtra2a_old test_m2_rom_xtra2a_mut
+test_m2_rom_xtra2a_old: obj_m2_rom_xtra2a_old/Vm2_rom_loader
+	@./obj_m2_rom_xtra2a_old/Vm2_rom_loader $(TEST_ARGS)
+
+obj_m2_rom_xtra2a_old/Vm2_rom_loader: rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
+	$(VBUILD) --top-module m2_rom_loader -GSDR_AW=26 -GXTRA_FROM=27\'h2540000 -GXTRA_TO=26\'h1A00000 \
 	  -GXTRA2_FROM=27\'h2D40000 -GXTRA2_TO=26\'h1300000 \
-	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM --Mdir obj_m2_rom_xtra2a -o Vm2_rom_loader -CFLAGS "-O2" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM --Mdir obj_m2_rom_xtra2a_old -o Vm2_rom_loader -CFLAGS "-O2" \
+	  rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
+
+test_m2_rom_xtra2a_mut: obj_m2_rom_xtra2a_mut/Vm2_rom_loader
+	@./obj_m2_rom_xtra2a_mut/Vm2_rom_loader $(TEST_ARGS); test $$? -ne 0 && echo "planted (no third remap): FAILS, as it must"
+
+obj_m2_rom_xtra2a_mut/Vm2_rom_loader: rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
+	$(VBUILD) --top-module m2_rom_loader -GSDR_AW=26 -GXTRA_FROM=27\'h2540000 -GXTRA_TO=26\'h1A00000 \
+	  -GXTRA2_FROM=27\'h2D40000 -GXTRA2_TO=26\'h1300000 \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM --Mdir obj_m2_rom_xtra2a_mut -o Vm2_rom_loader -CFLAGS "-O2 -DTB_X3" \
 	  rtl/io/m2_rom_loader.sv sim/mem/tb_m2_rom_xtra2a.cpp
 
 test_m2_romload: obj_m2_romload/Vm2_romload_harness
@@ -979,7 +1001,7 @@ test_m2_cpu_bridge_2a: obj_m2_bridge_2a/Vm2_cpu_bridge
 	@./obj_m2_bridge_2a/Vm2_cpu_bridge $(TEST_ARGS)
 
 obj_m2_bridge_2a/Vm2_cpu_bridge: rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
-	$(VBUILD) --top-module m2_cpu_bridge -GBUFFERRAM=1 -GCC_EN=1 -GBOARD_2A=1 -CFLAGS "-O2 -DBRIDGE_2A" \
+	$(VBUILD) --top-module m2_cpu_bridge -GBUFFERRAM=1 -GCC_EN=1 -GBOARD_2A=1 -GAW=26 -Wno-WIDTHTRUNC -CFLAGS "-O2 -DBRIDGE_2A" \
 	  --Mdir obj_m2_bridge_2a -o Vm2_cpu_bridge rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
 
 # The bridge against the REAL controller. Both pass their own tests; this is the
@@ -1157,6 +1179,22 @@ obj_geodiff_2a/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cp
     rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
 	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
 	  --Mdir obj_geodiff_2a -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
+	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
+	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
+
+# R897: the large 2A layout's walks (M2GD_BIG=1 at run time: the texture-
+# coordinate ROM and the polygons linear in the upper 64 MB, as the large MRAs
+# load them). The CRTC offsets are the game's (state.txt "crtc"): GD_CX / GD_CY,
+# Dynamite Cop's -8 / 90 by default.
+GD_CX ?= -8
+GD_CY ?= 90
+geodiff_2abig: obj_geodiff_2abig/Vgeodiff_top
+	@M2GD_BIG=1 ./obj_geodiff_2abig/Vgeodiff_top $(TEST_ARGS)
+
+obj_geodiff_2abig/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
+    rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
+	$(VBUILD) --top-module geodiff_top -GCRTC_X=$(GD_CX) -GCRTC_Y=$(GD_CY) -GWINKEY=1 -GAW=26 -GBIG=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	  --Mdir obj_geodiff_2abig -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
 
