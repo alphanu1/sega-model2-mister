@@ -4,10 +4,15 @@ There are two cores: **Model 2** (`Model2.rbf`) for the original Model 2
 board, and **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board. Each game's
 MRA names the core it runs on, so both can sit in `cores/` side by side.
 
-ROMs go in `/media/fat/games/mame/`, named as MAME 0.289 names them. Nothing
-here contains ROM data.
+**The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
+0.289's set of that name (split sets: a clone needs its parent zip too). Sets
+from other MAME versions may have different file names or contents and may
+not load. ROMs go in `/media/fat/games/mame/`. Nothing here contains ROM
+data.
 
 ## Model 2 core — `Model2.rbf`
+
+ROM sets: MAME 0.289.
 
 | Game | MRA | ROM zips | MAME set | State |
 |---|---|---|---|---|
@@ -40,6 +45,8 @@ the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
 
+ROM sets: MAME 0.289.
+
 | Game | MRA | ROM zips | MAME set | State |
 |---|---|---|---|---|
 | Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays at full speed, with sound |
@@ -68,7 +75,7 @@ the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 ### Model 2A games not supported yet
 
 These run on the same board, and are being brought up next. The zips are
-what each will need.
+what each will need, as MAME 0.289 names them.
 
 | Game | ROM zips | MAME set | SDRAM | What it needs |
 |---|---|---|---|---|
@@ -101,6 +108,8 @@ You supply the ROMs. They go in `/media/fat/games/mame/`, named the way the
 MRA expects. Nothing in this folder contains ROM data.
 
 ### ROMs
+
+All sets are MAME 0.289's.
 
 | zip | for |
 |---|---|
