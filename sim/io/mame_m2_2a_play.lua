@@ -13,6 +13,8 @@
 --          pltkidsa, doaab) -- buttons on their own rhythms, a random stick
 --   sky    R887: Sky Target -- the analog stick swept, gun held, missiles, view
 --   bike   R887: Manx TT / Motor Raid -- throttle, lean, brake, shift / punch
+--   chase  R903: Manx TT on an autopilot that rides at the other riders and
+--          brake-checks the ones behind it -- knocks riders down (below)
 -- Each coin time drops two coins; Start is pressed every 2 s for 100 s after
 -- each (it also takes the continue offers and the menus).
 --
@@ -89,7 +91,7 @@ F.v20 = fmask(":IN0", 0x20)                          -- Sky Target: View Change
 F.i10, F.i20 = fmask(":IN1", 0x10), fmask(":IN1", 0x20)   -- gun / missile, shift up / down
 F.sx, F.sy = first(":STICKX"), first(":STICKY")
 F.thr, F.bank = first(":THROTTLE"), first(":BANK")
-if GAME == "sky" or GAME == "bike" then F.start = F.s40 end
+if GAME == "sky" or GAME == "bike" or GAME == "chase" then F.start = F.s40 end
 if log then
   for k, v in pairs(F) do log:write(string.format("FIELD %s %s\n", k, v and "yes" or "no")) end
   log:flush()
@@ -149,6 +151,106 @@ if os.getenv("PL_TAP") then
   PL_TL = tl
 end
 local function pulse(t, at, len) return t >= at and t < at + len end
+
+-- R903: MANX TT RIDDEN AT THE OTHER RIDERS (PL_GAME=chase). The game's own
+-- state, found in MAME 0.289's work RAM (manxtt, verified by the dumps of a
+-- race, not by the program's symbols -- there are none):
+--   0x5bba30 + 52 k  rider k (0 the player, 1-7 the others): x +0, y +4,
+--                    z +8, heading +0x10 (radians; forward = (-sin h, cos h)
+--                    in x / z), speed +0x1c
+--   0x53e3c8 + 28 n  the course line near the riders (x +0, y +4, z +8,
+--                    ~20 apart, ~600 valid), a window the game streams
+--   0x5bbd20         riders down: the other riders' crash state (0x2edc0) adds
+--                    one, its end clears it -- the path R903 was after
+-- An autopilot steers along the course line, and at the nearest rider ahead
+-- whenever one is within reach; throttle flat out; and brakes hard when a
+-- rider is close behind in line, so it runs into us. PL_BANKSIGN (+1, the
+-- default, verified / -1) is which way BANK turns the bike. PL_CHASELOG=<file>
+-- logs, every frame: time, our speed and its drop, the nearest rider, the
+-- target rider and its speed, the steering error and BANK, and 0x5bbd20.
+-- (Seeded as `bike`'s coins and starts; menus ridden upright and unbraked.)
+local CH_SIGN = tonumber(os.getenv("PL_BANKSIGN") or "1")
+local CH_LOG = os.getenv("PL_CHASELOG") and assert(io.open(os.getenv("PL_CHASELOG"), "w"))
+local CH_SP = cpu.spaces["program"]
+local CH_V = nil
+local function rf(a) return string.unpack("<f", string.pack("<I4", CH_SP:read_u32(a))) end
+local function wrap(a) return (a + math.pi) % (2 * math.pi) - math.pi end
+function chase(t)
+  local px, pz, h, v = rf(0x5bba30), rf(0x5bba38), rf(0x5bba40), rf(0x5bba4c)
+  local lc = 0
+  for _, c in ipairs(COINS) do if t >= c then lc = c end end
+  if t - lc < 20 or (px == 0 and pz == 0) then
+    -- the menus: upright, no brake (brake on Start picks TT MODE, no riders)
+    set(F.thr, 0x00); set(F.brk, 0x00); set(F.bank, 0x80); set(F.i10, 0); set(F.i20, 0)
+    return
+  end
+  local fx, fz = -math.sin(h), math.cos(h)
+  -- the course line: the nearest point, then one ~300 ahead
+  local best, bn = 1e30, -1
+  for n = 0, 1200 do
+    local a = 0x53e3c8 + 28 * n
+    local x, z = rf(a), rf(a + 8)
+    if x ~= x or math.abs(x) < 1 or math.abs(x) > 30000 then break end
+    local d = (x - px) ^ 2 + (z - pz) ^ 2
+    if d < best then best, bn = d, n end
+  end
+  local tx, tz = px + fx * 300, pz + fz * 300
+  if bn >= 0 then
+    local k = bn + 15
+    local a = 0x53e3c8 + 28 * k
+    local x = rf(a)
+    if x == x and math.abs(x) >= 1 and math.abs(x) <= 30000 then tx, tz = x, rf(a + 8) end
+  end
+  -- the nearest rider ahead, within 1,500 and inside a 60-degree cone
+  local rk, rd = -1, 1e30
+  for k = 1, 7 do
+    local b = 0x5bba30 + 52 * k
+    local dx, dz = rf(b) - px, rf(b + 8) - pz
+    local fd = dx * fx + dz * fz
+    local ld = math.abs(dx * fz - dz * fx)
+    local d = math.sqrt(dx * dx + dz * dz)
+    if fd > 0 and fd < 1500 and ld < fd * 0.6 + 40 and d < rd then rk, rd = k, d end
+  end
+  if rk > 0 then
+    -- the rider's centre once close; further out a little to one side of it,
+    -- in turn, so the hit comes from behind or from the side
+    local b = 0x5bba30 + 52 * rk
+    local o = (rd > 200) and 12 * math.sin(t * 0.8) or 0
+    tx, tz = rf(b) + o * fz, rf(b + 8) - o * fx
+  end
+  local err = wrap(-math.atan(tx - px, tz - pz) - h)
+  local s = math.max(-0x70, math.min(0x70, math.floor(err * 0x140 * CH_SIGN)))
+  -- the brake check: a rider close behind and in line, and we brake hard, so
+  -- it runs into us at the difference of the two speeds
+  local bc = false
+  for k = 1, 7 do
+    local b = 0x5bba30 + 52 * k
+    local dx, dz = rf(b) - px, rf(b + 8) - pz
+    local fd = dx * fx + dz * fz
+    local ld = math.abs(dx * fz - dz * fx)
+    if fd < 0 and fd > -160 and ld < 25 and rf(b + 0x1c) > v - 5 then bc = true end
+  end
+  if bc then
+    set(F.thr, 0x00); set(F.brk, 0xff); set(F.bank, 0x80)
+  else
+    set(F.thr, 0xff); set(F.brk, 0x00); set(F.bank, 0x80 + s)
+  end
+  set(F.i10, ((t % 3) < 0.2) and 1 or 0); set(F.i20, 0)
+  if CH_LOG then
+    local dv = CH_V and (CH_V - v) or 0
+    -- the nearest rider in any direction
+    local nd = 1e30
+    for k = 1, 7 do
+      local b = 0x5bba30 + 52 * k
+      local d = math.sqrt((rf(b) - px) ^ 2 + (rf(b + 8) - pz) ^ 2)
+      if d < nd then nd = d end
+    end
+    local tv = (rk > 0) and rf(0x5bba30 + 52 * rk + 0x1c) or 0
+    CH_LOG:write(string.format("%.4f v %.2f dv %.2f near %.1f tgt %d tv %.2f err %.3f bank %d c %d\n",
+      t, v, dv, nd, rk, tv, err, 0x80 + s, CH_SP:read_u32(0x5bbd20)))
+  end
+  CH_V = v
+end
 PL_F = emu.add_machine_frame_notifier(function()
   local t = emu.time()
   local playing, coin, start = false, 0, 0
@@ -214,6 +316,8 @@ PL_F = emu.add_machine_frame_notifier(function()
       set(F.bank, 0x80 + math.floor(0x70 * math.sin(t * 0.6)))
       set(F.i10, ((t % 5) < 0.2) and 1 or 0)
       set(F.i20, ((t % 7) < 0.2) and 1 or 0)
+    elseif GAME == "chase" then
+      chase(t)
     end
   end
   if #PRESS > 0 then                            -- R887: scripted test / service presses

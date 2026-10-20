@@ -45,7 +45,7 @@ struct Cpu {
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   bool ref_fr = false;            // R865: i960_top FR with vc_en -- flushreg alone
-  bool ref_f2a = false;           // R869: i960_top F2A with vc_en -- cvtzril, cpysre, atanr, sinr, remr; R887 tanr
+  bool ref_f2a = false;           // R869: i960_top F2A with vc_en -- cvtzril, cpysre, atanr, sinr, remr; R887 tanr; R903 cosr
   // R845: sinrl / cosrl / tanrl / atanrl computed with the host's libm, as
   // MAME does. The module returns the correctly rounded value; libm is not
   // correctly rounded on ~0.2% of arguments, so a one-ulp difference on
@@ -665,15 +665,16 @@ struct Cpu {
           // past the sequencer's exact reduction (|x| > 2^19) ends the
           // program as sinrl's does. fmod is exact on both sides.
           // R887: and tanr, set_rif(tan(t1f)), on the sequencer's tan entry
-          // (Manx TT), bounded as sinr is.
-          const bool f2a_s = ref_f2a && (ks == 0x680 || ks == 0x68c || ks == 0x683 || ks == 0x68e);
+          // (Manx TT), bounded as sinr is. R903: and cosr, set_rif(cos(t1f)),
+          // on the cos entry (Manx TT, a rider knocked down), bounded the same.
+          const bool f2a_s = ref_f2a && (ks == 0x680 || ks == 0x68c || ks == 0x683 || ks == 0x68e || ks == 0x68d);
           if (f2a_s) {
             fres = (ks == 0x680) ? std::atan2(fb, fa) : (ks == 0x68c) ? std::sin(fa)
-                 : (ks == 0x68e) ? std::tan(fa) : std::fmod(fb, fa);
+                 : (ks == 0x68e) ? std::tan(fa) : (ks == 0x68d) ? std::cos(fa) : std::fmod(fb, fa);
             if (ks != 0x683) {
               fp_trans = true;
               if (d.dst_lit) fp_trans_fp = int(d.srcdst & 3); else fp_trans_s = int(d.srcdst);
-              if ((ks == 0x68c || ks == 0x68e) && std::fabs(fa) > 524288.0) fp_denorm_operand = true;
+              if ((ks == 0x68c || ks == 0x68e || ks == 0x68d) && std::fabs(fa) > 524288.0) fp_denorm_operand = true;
               if (fres != 0.0 && std::fabs(fres) < 1e-290) fp_denorm_operand = true;
             }
           }

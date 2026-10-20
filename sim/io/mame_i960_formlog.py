@@ -14,6 +14,7 @@
 #   atanr    R845's microcode run by its own interpreter (tools/i960_fptrans.py)
 #   sinr     on the widened operands, then narrowed (struct '<f', RNE)
 #   tanr     R887: as sinr, the sequencer's tan entry (Manx TT)
+#   cosr     R903: as sinr, the sequencer's cos entry (Manx TT)
 #   cvtzril  the module's cvtzri, sign-extended (exact while |x| < 2^31)
 #   cpysre   |src1| with src2's sign as MAME tests it (src2 >= 0.0)
 #
@@ -104,8 +105,9 @@ def main():
                     r = math.nan
                 want = d2u(r) if m3 else f2u(r)
                 ok = (got == want) or (math.isnan(r) and math.isnan(u2d(got) if m3 else struct.unpack('<f', struct.pack('<I', got))[0]))
-            elif k in (0x680, 0x68c, 0x68e):               # atanr / sinr / tanr (R887) on the sequencer
-                r = trans('atan', x1, x2) if k == 0x680 else trans('sin', x1) if k == 0x68c else trans('tan', x1)
+            elif k in (0x680, 0x68c, 0x68e, 0x68d):        # atanr / sinr / tanr (R887) / cosr (R903) on the sequencer
+                r = (trans('atan', x1, x2) if k == 0x680 else trans('sin', x1) if k == 0x68c
+                     else trans('cos', x1) if k == 0x68d else trans('tan', x1))
                 lo, hi = min(lo, x1), max(hi, x1)
                 want = d2u(r) if m3 else f2u(r)
                 ok = got == want

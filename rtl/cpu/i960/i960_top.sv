@@ -63,6 +63,9 @@ module i960_top #(
   // transcendentals, which neither game runs. 0 is the core as before.
   // R887: and tanr (0x68.e, set_rif(tan(t1f))), the sequencer's tan entry as
   // sinr takes its sin entry -- Manx TT runs it from 55 s (a race).
+  // R903: and cosr (0x68.d, set_rif(cos(t1f))) on the cos entry -- Manx TT
+  // runs it only when another rider is knocked down (the state at 0x2edc0);
+  // without it the i960 traps there and the game freezes mid-race.
 
   parameter bit F2A    = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
@@ -793,6 +796,7 @@ module i960_top #(
         4'h0: begin fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanr
         4'hc: begin fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinr
         4'he: begin fp_is_trans = 1'b1; tr_entry = 2'd2; end   // tanr (R887: Manx TT)
+        4'hd: begin fp_is_trans = 1'b1; tr_entry = 2'd1; end   // cosr (R903: Manx TT)
         4'h3: fp_is_rem = 1'b1;                                // remr
         default: ;
       endcase
@@ -1732,7 +1736,7 @@ module i960_top #(
                 fmul_req  <= fp_is_mul;
                 fdiv_req  <= fp_is_div;
                 fsqrt_req <= fp_is_sqrt;
-                tr_start  <= F2A && fp_is_trans;   // R869: atanr, sinr; R887: tanr
+                tr_start  <= F2A && fp_is_trans;   // R869: atanr, sinr; R887: tanr; R903: cosr
                 frem_req  <= F2A && fp_is_rem;     // R869: remr
                 ts        <= T_FP;
               end else if (md_valid) begin
