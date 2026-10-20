@@ -7536,8 +7536,13 @@ wire cc_rst_n_s  = cc_rst_sync[1];
 // R823: four line banks as a ring, rendering up to two lines ahead -- a
 // layer's burst of glyph misses borrows time from the lines around it.
 // Tile overruns: 0 on 114 MAME frames at the board's latency (was 8 a frame).
+// R906: and a column none of whose pixels can be drawn (window mode 1's other
+// map, the far side of a mode 2/3 split, the row mask) is not fetched. Motor
+// Raid's pair 2/3 is two full-screen pictures split at a column (mode 2);
+// both were fetched across the whole line and overran every line from ~35
+// cycles of port-3 latency. Pixel for pixel the same picture.
 m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
-           .SCR_STEP(R826_STEP), .SCR_DEPTH(R826_DEPTH)) u_tilemap (
+           .SCR_STEP(R826_STEP), .SCR_DEPTH(R826_DEPTH), .MASK_SKIP(1'b1)) u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather

@@ -56,6 +56,38 @@ NEXT: build and put on the board (Dynamite Cop, DOA, Sky Target, Motor Raid
 scenery without bars). The same line is in main's i960_memmap: fix it on
 main too. Decide on the mip flag for the large layout (area first).
 
+## 2026-10-20: Motor Raid's 2D overruns -- masked tile columns no longer fetched (R906)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a5f6de4d2eb82624d
+(on model2a d7b699c; never merge into main).
+
+FOUND: the streaks are true tile overruns, not tile data. Motor Raid runs
+pair 2/3 in window mode 2 (a column split) with two full-screen pictures
+(1,449 + 2,310 distinct tiles; the ranking screen adds tilemap 1 and row
+masks). m2_tile_fetch masked the far side of the split at the line buffer but
+fetched every column of both maps, so the 64 KB glyph cache missed steadily
+and the line budget went at ~35 cycles of port-3 latency (Daytona: ~55).
+Shipped tilemap on MAME bursts: 65-160 late lines a frame at L 45, 127 /
+91.5 at 14+U[0,50]. Ruled out: no writes to the tile / char RAM mirrors
+(0x011xxxxx, which the bridge does not decode) in 4,200 frames; char RAM
+written only at scene changes; GAME_CHAR untouched by R897's layout; the 2D
+renders MAME's images correctly.
+
+DONE: m2_tile_fetch MASK_SKIP (via m2_video, set in Model2.sv): a column
+whose every pixel is masked (layer_off, the far side of a split, the row
+mask) is not fetched; the emit side is unchanged. Motor Raid 0 late lines to
+L 45 in every video mode and under every jitter model; pixel-identical to the
+shipped path on 22 bursts of Motor Raid, Daytona, VF2, Rally. test_m2_tile_fetch
+gains a MASK_SKIP build (600 random lines, 2 planted faults caught);
+m2_video_ovr_top's r path is now configurable. lint_top x3, lint_idx,
+analyze_file clean. +28 ALMs standalone, no block RAM.
+
+INFERRED: the board's port-3 latency under Motor Raid is ~40+ (its race
+views are clean at R823's board model in the bench).
+
+TO TEST ON THE BOARD: Motor Raid's sky / stands / ranking with no repeated
+lines; Daytona, VF2, Rally 2D unchanged.
+
 ## 2026-10-20: the i960's wait states for Sega Rally, behind M2_2A_WAITST (off) (R904)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch r904-waitst (on model2a
