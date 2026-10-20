@@ -36,7 +36,7 @@ find, and say which game and where.
 | `Model2A_20261020b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs below | `/media/fat/_Arcade/` |
 
-**SDRAM:** the first four games below run on a 64 MB or 128 MB module; Pilot Kids and Hanguk Pro Yagu 98 need the 128 MB module. Several of
+**SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx TT run on a 64 MB or 128 MB module; Pilot Kids and Hanguk Pro Yagu 98 need the 128 MB module. Several of
 the games still to come need more than 64 MB of ROM, so **they will need the
 128 MB module**; the table further down says which.
 
