@@ -38943,3 +38943,8 @@ CRASH OR FREEZE -- R869's forms (cvtzril / cpysre), R876's `rep rpc` fix and
 R873's eleven MRA patches confirmed together. Its sound is there but very
 quiet overall (R886, as Sega Rally's).*
 
+*ON THE BOARD (s1220 = 223fe01, the normal build -- no probe, Sega Rally's
+cabinet block in; 41,079 ALM, 553 / 553 M10K; clk_sys +0.512, clk_mem
++0.186, clk_i960 +0.926, hold +0.236, HDMI -0.374 report-only): Ben, 2026-10-20:
+SEGA RALLY'S CONTROLS WORK (Daytona's m2_cab_inputs, R862).*
+
