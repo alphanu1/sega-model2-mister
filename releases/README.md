@@ -60,10 +60,13 @@ ROM sets: MAME 0.289.
   drops where the geometry processor has the most work. Being looked at.
 - **Virtua Cop 2 shows no ammo.** The bullets in the corner aren't drawn, so
   you can't see how many shots are left. Being fixed.
-- **Sound effects are quiet under the music** in Virtua Fighter 2, and Sega
-  Rally and Zero Gunner are quiet overall. This is how MAME 0.289 mixes these
-  games, and the core matches MAME. Whether the arcade is louder is still an
-  open question; turn the OSD `Volume` up for now.
+- **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
+  are quiet overall, and Virtua Fighter 2's hits sit well under its music.
+  That is how MAME 0.289 mixes these games, sample for sample, and the core
+  matches it. (MAME can sound louder because it also runs its own audio
+  effects, a compressor among them, after the sound chip.) Whether the arcade
+  is louder is still an open question. Until then, two OSD settings lift it
+  — see *Sound settings* below.
 - **Zero Gunner's protection chip isn't emulated.** Its MRA patches out the
   checks instead, so enemy patterns differ from MAME's (the game's random
   numbers read its own code), but the game plays through normally.
@@ -71,6 +74,23 @@ ROM sets: MAME 0.289.
   happened since the geometry processor fixes; if it does, please say where.
 - **No link play** for Sega Rally yet, and no `[15kHz CRT]` MRAs. To make
   one, copy an MRA and set bit 7 of the game ID byte (index 4).
+
+### Sound settings
+
+| setting | what it does |
+|---|---|
+| `Volume` | 80% by default. After 70% the list goes on to **150%, 200%, 300% and 400%**. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
+| `Direct boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
+
+**Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
+the music: use `Direct boost`.** For about the same loudness as Virtua
+Fighter 2 at the default 80%:
+
+| game | with `Direct boost` Off | with `Direct boost` +12 dB |
+|---|---|---|
+| Virtua Fighter 2 | `Volume` 80% (its loudest hits reach full scale at about 130%) | `Volume` 40–50% keeps the music where it was, with the hits up about 7 dB |
+| Sega Rally | `Volume` 400% still leaves it a little quieter (its peaks reach only a third of full scale) | `Volume` 150% (no limiting below about 300%) |
+| Zero Gunner | `Volume` 300–400% (no limiting up to 400%) | `Volume` 100% (no limiting below about 180%) |
 
 ### Model 2A games not supported yet
 

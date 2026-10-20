@@ -39851,3 +39851,116 @@ the sheep); M2GEO walks at 66 s and 77 s; M2WIN):*
 *Board (2A core with R889):* the needle on every race frame, the backing a
 whole screen-door disc over road and rider alike (as MAME), the course map
 whole; the sheep at the start as before.
+
+**R894 -- "WAY TOO QUIET, SPEAKERS AT 150% AND STILL BARELY HEAR IT" (Ben,
+2A board): TWO OSD SETTINGS, NOT A CHANGE TO THE MIX. VOLUME GOES TO 150 /
+200 / 300 / 400% (CLAMPED, NEVER WRAPPED); "DIRECT BOOST" OFF / +6 / +12 dB
+MULTIPLIES THE SCSP's DIRECT SENDS BEFORE THE DSP's RETURN JOINS THEM. BOTH
+DEFAULTS ARE R886's MIX: VOLUME 80%, BOOST OFF = MAME's RAW SCSP OUTPUT.**
+(Ben, through the coordinator. The first ask was a +12 dB boost by default;
+then a per-game default with a VF2 trim so its music would not move; then,
+superseding both, "we already have a volume option, why not allow it to go
+up to 150 or 200": Volume past 100%, and Direct boost as a plain switch,
+default Off.)
+
+*Believed:* the core is quiet against MAME as players hear it. R886 showed
+our mix is MAME 0.289's raw SCSP output to 0.1 dB; the capture's own
+cfg/default.cfg lists a Filters / Compressor / Reverb / Equalizer chain that
+MAME 0.289 runs after the mix. How much that chain lifts the level was not
+measured here. Nothing in this entry says MAME's SCSP is wrong -- R886's
+open question (a real board's recording) still stands.
+
+*Built:*
+  1. DIRECT BOOST (m2_scsp, sim/sound/scsp_uasm.py). The direct sends and
+     the effect return ARE separable cheaply: the slots add their direct
+     sends into SMPL / SMPR, then the effect-return loop (EFF) adds EFREG
+     x EFSDL / EFPAN into the same registers. Four microinstructions after
+     DSPGO / ICLR -- while the DSP runs, before the WAIT for it -- multiply
+     SMPL / SMPR by MB_BST = 64 << boost on the existing 27 x 18 multiplier
+     and take P[37:6] (PSL S6), so Off is SMPL x 64 >> 6 = SMPL exactly.
+     The direct sum is bounded well inside the 27-bit multiplier operand
+     (32 slots x 2^20 < 2^26) and x4 inside 32 bits; the DAC's existing
+     clamp (18 bits, then >> 2) is the saturation. Microcode 119 -> 123 of
+     256 words (no new ROM). MB's spare encoding 7 was free.
+  2. VOLUME (rtl/sound/m2_volume.sv, 2A build only). R829's table, codes
+     0-10 unchanged, plus 150 / 200 / 300 / 400% in the unused codes 11-14
+     (15 = the default, 80%), so saved settings keep their meaning; gain to
+     11 bits, a 16 x 12 multiply, the product's [23:8] clamped to
+     [-32768, 32767]. The original core keeps R829's inline stage byte for
+     byte (M2_NO_2A: the old CONF_STR line, the old stage, snd_boost tied 0).
+  3. OSD (2A build): "Volume" gains the four entries after 70%; "Direct
+     boost,Off,+6 dB,+12 dB" at O[65:64] -- status bits never used before
+     (64-120 are free), so any saved config opens with it Off. Not under a
+     menu mask: it applies to every game. Three flops into clk_sys, like
+     the volume, to m2_2a_sound's new snd_boost port.
+
+*Benches (all at the model2a tip + this change):*
+  - tb_m2_scsp, new SCSP_BOOST: Off -- VF2 30 s 0 samples differ from the
+    reference AND from MAME's mix, 9,421,266 slot samples 0 wrong; Sega
+    Rally 30 s the same (0 / 0). Boosted, the reference becomes its direct
+    sends x 2^boost plus its effect return: VF2 30 s x4, Rally 30 s x4,
+    Zero Gunner 10 s x2 -- 0 differ from that, and 715,359 / 555,911 /
+    234,912 of the non-zero samples differ from MAME's mix (the gain, and
+    only the gain).
+  - Engine time unchanged: the four instructions hide under the DSP's run.
+    Zero Gunner 10 s mean 1,095 / max 2,252 clocks a sample, Rally 30 s
+    262 / 767, identical to the model2a tip built and run the same way.
+  - tb_m2_volume (make test_m2_volume, iverilog): every 16-bit input at
+    all 16 codes, both channels -- equal to floor(x g / 256) clamped,
+    never of the wrong sign, codes 0-10 equal to R829's 9-bit stage;
+    147,456 of 1,048,576 clamp, 0 wrong. The same bench against the stage
+    with the clamp removed: 404,132 wrong (it sees a wrap).
+  - tb_m2_2a_sound VF2 6 s, boost Off (new SND_BOOST, default 0): PASS,
+    98.9% of writes in MAME's order, 0 underruns, the RAM check 0 wrong,
+    82.68 ms -- as R885 / R886.
+  - lint_top: 2A, M2_NO_2A, M2_NO_DEBUG, M2_PROBE=1, M2_NO_2A_RALLY, and
+    M2_NO_DEBUG + M2_PROBE=1 + M2_NO_2A_RALLY together: clean. lint_idx:
+    no candidate in a changed line. quartus_map --analyze_file on
+    m2_volume, m2_scsp, m2_2a_sound, Model2.sv: 0 errors (one "constant
+    value overflow" warning, -16'sd32768, fixed to 16'sh8000).
+
+*Area (quartus_map 17.0 of each unit alone, virtual pins; the whole design
+was not mapped -- three fits were running on the machine):*
+    m2_scsp (scsp_area_top, boost a live input)  1,965 -> 1,975 ALMs
+                                                  (+8 ALUT, +1 register)
+    the volume stage (R829 inline -> m2_volume)     44 ->    55 ALMs
+                                                  (+32 ALUT; DSP blocks 2 -> 2)
+    hps_io with the 2A CONF_STR (737 -> 796 bytes)  656 ->   666 ALMs
+    boost synchroniser                             6 registers
+  about +35 ALMs in all; block RAM bits and DSP blocks unchanged.
+
+*Levels (MAME's own captures through scsp_ref.h / scsp_split, left
+channel, in play: VF2 20-80 s, Rally and Zero Gunner 20-120 s; the DAC's
+16-bit output, then the Volume stage):*
+                  boost   RMS     peak     peak hits full scale at
+  VF2             Off     2,681   25,353   129% (p99.9 at 285%)
+                  +6 dB   3,402   30,993   106%
+                  +12 dB  5,014   32,768   100% (the DAC clamps 0.001%)
+  Sega Rally      Off       362    2,712   1,208%
+                  +6 dB     724    5,425   604%
+                  +12 dB  1,448   10,850   302%
+  Zero Gunner     Off       598    4,702   697%
+                  +6 dB   1,097    8,969   365%
+                  +12 dB  2,124   17,825   184%
+  (at 100% Volume; x0.8 at the default 80%.) Samples clipped by the
+  Volume clamp: VF2 Off 0 at 150%, 0.007% at 200%, 0.14% at 300%, 0.73%
+  at 400%; Rally +12 dB 0.003% at 400%, none below; Zero Gunner Off none
+  to 400%, +12 dB 0.025% at 300%.
+  What the boost does to VF2: +12 dB raises its effects +12.0 dB, its
+  music (drums, other voices, DSP return) +5.1 dB, the whole mix +5.4 dB;
+  +6 dB: +6.0 / +1.9 / +2.1 dB. So VF2's music stays where it was at +12
+  dB with Volume ~44% (80% x 10^(-5.1/20)), the hits +6.9 dB against it.
+  Rally and Zero Gunner are all direct (Zero Gunner's return is 221 of
+  598 RMS): +12.0 and +11.0 dB.
+  At the defaults (Volume 80%, boost Off) nothing changes from R886: VF2
+  RMS 2,147, Rally 290, Zero Gunner 479. For VF2's 80% loudness: Zero
+  Gunner needs Volume ~360% (boost Off) or 100% (+12 dB); Rally reaches
+  1,448 at 400% Off (-3.4 dB short) or 2,171 at 150% with +12 dB.
+  THE DEFAULT IS LEFT AT 80% / OFF: raising either would push VF2 into the
+  clamp (its peaks reach full scale at 129%), and Ben's direction was to
+  keep the default and let the player turn it up.
+
+*Not done:* a board run; the whole-design quartus_map and a fit; the
+VF2-fight bench at boost +12 (the replay above already proves the RTL is
+the reference's direct x 4 + return to the sample, and the levels follow
+from the captures).
