@@ -49,6 +49,13 @@ module m2_tgp #(
   parameter int unsigned PROG_WORDS = 2048,
   // R852: subnormal products in the TGP's multiplier (Model 2A)
   parameter bit SUBNORM = 1'b0,
+  // R888: the ALU op starts under its transfer (mb86233_core)
+  parameter bit EARLY_ALU = 1'b0,
+  // R888: POSTED BUFFER-RAM WRITES. 0: a write holds the TGP until both
+  // halves have landed (as before). N (a power of two): it is queued, N + 1
+  // deep, and acknowledged; the queue drains through bufw_* behind the TGP's
+  // back. See wq_busy below for what waits on the queue.
+  parameter int unsigned BUFW_Q = 0,
   // AN EMPTY COMMAND FIFO STALLS THE PROCESSOR. OFF IS THE REFERENCE.
   //
   // gen_fifo.cpp's pop() returns T() on an empty FIFO -- but only AFTER firing
@@ -172,7 +179,10 @@ module m2_tgp #(
   // The bank register itself (R133). If the microcode never writes rf 3 the
   // window is disabled and sel_rom/sel_buf never assert -- which would make
   // the whole banked path dead rather than wrong.
-  output logic [31:0] dbg_bank
+  output logic [31:0] dbg_bank,
+  // R888: a posted buffer-RAM write has not landed yet (BUFW_Q != 0). The
+  // i960's read of an output word waits on it (m2_copro).
+  output logic        wq_busy
 );
 
   // ------------------------------------------------------------ microcode ROM
@@ -274,7 +284,7 @@ module m2_tgp #(
   logic        u_mwe, u_mre;
   logic [7:0]  u_c0, u_c1, u_rep;
 
-  mb86233_core #(.SUBNORM(SUBNORM)) core (
+  mb86233_core #(.SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU)) core (
     .clk(clk), .rst_n(rst_n && sw_done && rel_done),
     .prog_addr(prog_addr), .prog_rdata(prog_rdata),
     .io_addr(io_addr), .io_rd(io_rd), .io_wr(io_wr),
@@ -660,6 +670,12 @@ module m2_tgp #(
   logic wr_hi;        // which half is in flight
   logic wr_pend;      // a request is outstanding on the port
   logic wr_done;      // both halves have landed; hold the ack until io_wr falls
+  logic [31:0] bw_data;   // the word being written, and its address
+  logic [14:0] bw_addr;
+  logic        bw_ack;    // io_ack for a buffer-RAM write
+  logic        buf_rd_ok; // a buffer-RAM read may go out
+
+  generate if (BUFW_Q == 0) begin : g_bufw_direct
   wire  wr_start = io_wr && sel_buf && !wr_done;
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -675,6 +691,80 @@ module m2_tgp #(
       wr_pend <= 1'b1;                                    // raise the next one
     end
   end
+  assign bw_data   = io_wdata;
+  assign bw_addr   = win_adr[14:0];
+  assign bw_ack    = wr_done;
+  assign buf_rd_ok = 1'b1;
+  assign wq_busy   = 1'b0;
+  end else begin : g_bufw_posted
+  // R888: SEGA RALLY SPENT 27% OF ITS TGP TIME HERE. Its program copies
+  // ~1,700 dwords a frame into buffer RAM (pc 0x15b, `mov (data) -> io` under
+  // a rep, ~12 words a call), and each waited for two shared-write-port
+  // transactions: ~60 clk_sys a word in the board-like replay, against one
+  // instruction in MAME. The word is queued instead and the instruction
+  // completes; the queue drains with exactly the handshake above (request,
+  // acknowledge, drop, re-raise -- the halves, and the entries, never closer
+  // than one idle cycle apart), in order, so the i960 and the walker see the
+  // TGP's stores in the order it made them.
+  //
+  // WHAT WAITS ON IT (wq_busy: a word in the queue, its head or in flight):
+  //   * the TGP's own buffer-RAM reads (port 9) that fall inside the span of
+  //     addresses queued since the queue was last empty -- a read must see
+  //     the stores before it, and it goes out on another port. Every queued
+  //     address is inside [wq_lo, wq_hi], so a read outside it cannot alias
+  //     one. Rally's reads mostly follow a 13-word copy and fall outside it
+  //     (4.3% inside the span of the last 33 stores); waiting for the whole
+  //     queue instead cost 163 M cycles in a slow-memory replay;
+  //   * the i960's read of a result word (m2_copro): the i960 learns that a
+  //     command is done from the output FIFO, so every store the TGP made
+  //     before that has landed when the read completes.
+  // Data-ROM reads do not wait: nothing writes the ROM. A reset of the TGP
+  // (halt, upload) drops a word not yet written -- the queue drains in well
+  // under a microsecond, and the i960 halts the TGP only around an upload.
+  logic        enq_done;
+  logic        wq_full, wq_v, wq_held;
+  logic        span_v;           // [wq_lo, wq_hi] holds every queued address
+  logic [14:0] wq_lo, wq_hi;
+  logic [46:0] wq_q;
+  wire         wq_push = io_wr && sel_buf && !enq_done && !wq_full;
+  wire         wq_pop  = wq_v && bufw_ack && wr_pend && wr_hi;
+  m2_fifo_m10k #(.DW(47), .DEPTH(BUFW_Q), .RAMSTYLE("MLAB")) u_wq (
+    .clk(clk), .rst_n(rst_n),
+    .push(wq_push), .din({win_adr[14:0], io_wdata}),
+    .pop(wq_pop), .q(wq_q), .q_valid(wq_v),
+    .full(wq_full), .count(), .held(wq_held), .dropped()
+  );
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wr_hi <= 1'b0; wr_pend <= 1'b0; wr_done <= 1'b0; enq_done <= 1'b0;
+      span_v <= 1'b0; wq_lo <= 15'd0; wq_hi <= 15'd0;
+    end else begin
+      // the span of addresses queued since the queue was last empty
+      if (wq_push) begin
+        span_v <= 1'b1;
+        if (!span_v || win_adr[14:0] < wq_lo) wq_lo <= win_adr[14:0];
+        if (!span_v || win_adr[14:0] > wq_hi) wq_hi <= win_adr[14:0];
+      end else if (!wq_busy) span_v <= 1'b0;
+      // the acknowledge: a flop, as wr_done was -- one cycle after the push
+      enq_done <= (io_wr && sel_buf) && (enq_done || wq_push);
+      wr_done  <= 1'b0;
+      if (!wq_v) begin
+        wr_hi <= 1'b0; wr_pend <= 1'b0;                     // nothing to write
+      end else if (bufw_ack && wr_pend) begin
+        wr_pend <= 1'b0;                                    // drop the request
+        wr_hi   <= !wr_hi;                                  // high half next, or the next word
+      end else if (!wr_pend) begin
+        wr_pend <= 1'b1;                                    // raise the next one
+      end
+    end
+  end
+  assign bw_data   = wq_q[31:0];
+  assign bw_addr   = wq_q[46:32];
+  assign bw_ack    = enq_done;
+  assign wq_busy   = wq_held || wr_pend;
+  assign buf_rd_ok = !wq_busy || !span_v
+                   || (win_adr[14:0] < wq_lo) || (win_adr[14:0] > wq_hi);
+  end endgenerate
   // THE WRITE HALF IS DEFERRED, AND THIS IS A TIMING DECISION, NOT A DESIGN
   // ONE. Port 9 was read-only until R133; giving it a write widened the logic
   // feeding m2_sdram's `cmd` and the 96 MHz domain stopped closing -- four
@@ -688,14 +778,16 @@ module m2_tgp #(
   // no timing at all today. It lands with the geometrizer, and the way to
   // land it is off the arbiter entirely: through the shared write port, as
   // m2_geo already does. Study R133.
-  assign dat_req    = io_rd && (sel_rom || sel_buf);
+  assign dat_req    = io_rd && (sel_rom || (sel_buf && buf_rd_ok));   // R888
   assign dat_we     = 1'b0;      // port 9 stays READ ONLY
   assign bufw_req   = wr_pend;
-  assign bufw_addr  = 19'({3'd0, win_adr[14:0], wr_hi});
-  assign bufw_data  = wr_hi ? io_wdata[31:16] : io_wdata[15:0];
-  assign dat_wdata  = wr_hi ? io_wdata[31:16] : io_wdata[15:0];
+  assign bufw_addr  = 19'({3'd0, bw_addr, wr_hi});
+  assign bufw_data  = wr_hi ? bw_data[31:16] : bw_data[15:0];
+  assign dat_wdata  = wr_hi ? bw_data[31:16] : bw_data[15:0];
   assign dat_is_buf = sel_buf;
-  assign dat_half   = wr_hi;
+  // R888: a read's half is 0 (port 9 reads the pair at an even address); with
+  // posted writes wr_hi can be 1 while a data-ROM read goes out.
+  assign dat_half   = (BUFW_Q == 0) ? wr_hi : 1'b0;
   // index = (base & ~0x7fff) | offset, masked to the ROM's word count.
   // The reference masks each region to its own size: the data ROM by its
   // dword count, bufferram by 0x7fff. 19 bits carries either.
@@ -736,7 +828,7 @@ module m2_tgp #(
                 // a windowed WRITE finishes on the second half only
                 // a write into the window is accepted and dropped, as the ROM
                 // half already is -- see the note on dat_req above
-                : sel_buf ? (io_wr ? wr_done : dat_ack)
+                : sel_buf ? (io_wr ? bw_ack : dat_ack)   // R888
                 // A WRITE TO THE ROM HALF IS DROPPED AND COMPLETES. The
                 // reference only stores when the effective address sets bit 22:
                 // copro_tgp_memory_w does nothing at all for the ROM bank. This

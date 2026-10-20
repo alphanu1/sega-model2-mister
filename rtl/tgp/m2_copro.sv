@@ -56,7 +56,11 @@ module m2_copro #(
   // 4096 for Model 2A's Virtua Fighter 2 (3,802 words uploaded)
   parameter int unsigned PROG_WORDS = 2048,
   // R852: subnormal products (VF2's TGP program relies on them; MAME keeps them)
-  parameter bit SUBNORM = 1'b0
+  parameter bit SUBNORM = 1'b0,
+  // R888: the TGP's ALU op starts under its transfer (mb86233_core)
+  parameter bit EARLY_ALU = 1'b0,
+  // R888: posted buffer-RAM writes, a queue BUFW_Q + 1 deep (m2_tgp); 0 = none
+  parameter int unsigned BUFW_Q = 0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -335,10 +339,13 @@ module m2_copro #(
   wire        push_req  = (fifo_wr && !uploading) || fn_wr;
   wire        push_hold = push_req && fin_full && !halted;   // R876: held, not dropped
   wire        fin_push  = push_req && !push_hold;
-  assign stall = (fifo_rd && !fout_valid && !halted && !uploading)
+  // R888: and a result word waits for the TGP's posted buffer-RAM writes, so
+  // the i960 never reads a result before the stores the TGP made ahead of it.
+  wire        tgp_wq_busy;
+  assign stall = (fifo_rd && (!fout_valid || tgp_wq_busy) && !halted && !uploading)
                || push_hold;   // R876
   wire [31:0] fin_din  = fn_wr ? fn_word : wdata;
-  wire        fout_pop = fifo_rd && fout_valid;
+  wire        fout_pop = fifo_rd && fout_valid && !tgp_wq_busy;   // R888
 
   m2_fifo_m10k #(.DW(32), .DEPTH(FD_IN)) u_fin (
     .clk(clk), .rst_n(rst_n),
@@ -464,7 +471,8 @@ module m2_copro #(
   // the consumer stops draining results. Ours drains synchronously -- see the
   // `stall` line above -- so it cannot; and if it ever does, the signature is
   // everything freezing at once, not the frame-1 hang this replaces.
-  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM)) u_tgp (
+  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU),
+           .BUFW_Q(BUFW_Q)) u_tgp (
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
@@ -492,7 +500,8 @@ module m2_copro #(
     .dbg_io_addr(dbg_tgp_io_addr), .dbg_io_rd(dbg_tgp_io_rd),
     .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
     .dbg_ff_math(dbg_ff_math), .dbg_ff_rom(dbg_ff_rom), .dbg_ff_buf(dbg_ff_buf), .dbg_rd_total(dbg_rd_total),
-    .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank)
+    .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank),
+    .wq_busy(tgp_wq_busy)   // R888
   );
 
   assign dbg_uc_we   = uc_we;

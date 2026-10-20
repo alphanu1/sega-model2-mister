@@ -43,7 +43,11 @@
 `timescale 1ns/1ps
 
 module mb86233_core #(
-  parameter bit SUBNORM = 1'b0   // R852: subnormal products (fp_mul)
+  parameter bit SUBNORM = 1'b0,  // R852: subnormal products (fp_mul)
+  // R888: launch the ALU op of a lab / ld-mov in the first S_SRC cycle, on the
+  // operands S_DECODE snapshots, so its latency runs under the instruction's
+  // memory transfers; see alu_early below. 0 = the ALU waits for S_ALU.
+  parameter bit EARLY_ALU = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -252,6 +256,14 @@ module mb86233_core #(
   logic        clr_a_now, clr_b_now, clr_d_now;
   logic        alu_d_we, alu_p_we;
   logic [31:0] alu_d_val, alu_p_val;
+  // R888: an ALU result is written (D, P, ST) only in S_ALU -- after the
+  // instruction's own transfer, MAME's alu_post order. Before R888 the ALU
+  // only ever answered in S_ALU, so this gate changes nothing there.
+  logic        alu_post_ok;
+  logic        alu_early;      // R888: launch in the first S_SRC cycle
+  logic        dec_d;          // R888: the previous cycle was S_DECODE
+  logic        lab_ov;         // R888: this lab writes A/B while its early op runs
+  logic        lab_res;        // R888: ... and its result has been written
   logic        agu_x0_we, agu_x1_we;
   logic [15:0] agu_x_next;
 
@@ -262,8 +274,8 @@ module mb86233_core #(
     .rf_fifo_wr(rf_fifo_wr_u), .rf_fifo_wdata(rf_fifo_wdata),
     .wr_en(rf_wr_en), .wr_addr(rf_wr_addr), .wr_data(rf_wr_data),
     .wr_unimpl(rf_wr_unimpl),
-    .alu_d_we(alu_d_we), .alu_d(alu_d_val),
-    .alu_p_we(alu_p_we), .alu_p(alu_p_val),
+    .alu_d_we(alu_d_we & alu_post_ok), .alu_d(alu_d_val),   // R888
+    .alu_p_we(alu_p_we & alu_post_ok), .alu_p(alu_p_val),
     .agu_x0_we(agu_x0_we), .agu_x0(agu_x_next),
     .agu_x1_we(agu_x1_we), .agu_x1(agu_x_next),
     .clr_a(clr_a_now), .clr_b(clr_b_now), .clr_d(clr_d_now),
@@ -341,7 +353,7 @@ module mb86233_core #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)              st_hold <= 30'h3800_0003;
-    else if (alu_out_valid)  st_hold <= alu_st_out[29:0];
+    else if (alu_out_valid && alu_post_ok)  st_hold <= alu_st_out[29:0];   // R888
   end
 
   assign st = {seq_zc1, seq_zc0, st_hold};
@@ -651,6 +663,36 @@ module mb86233_core #(
   // instruction actually wrote. Issue exactly one.
   logic alu_launched;
 
+  // R888: THE ALU's LATENCY UNDER THE TRANSFER. alu_pre's operands -- A, B, D,
+  // P -- are the snapshot S_DECODE takes (pre_*), and the op is alu_op_r, both
+  // registered on the edge that enters S_SRC; nothing the instruction does
+  // later can change them. So the op can start in S_SRC's first cycle and run
+  // its five stages while the source and destination accesses take theirs,
+  // instead of starting only in S_ALU. Its result is still written only in
+  // S_ALU (alu_post_ok), after the transfer: MAME's order is alu_pre, the
+  // transfer, alu_post. A result that arrives before the FSM reaches S_ALU --
+  // the transfer waited on io or the input FIFO -- is dropped unwritten and
+  // S_ALU launches the op again from the same snapshot, exactly as before.
+  // Not launched early (S_ALU as before): fdvd (the 29-cycle divider and its
+  // busy handshake), and a ld/mov whose transfer writes D (the write-priority
+  // rule takes the transfer's value at launch, xfer_d_*) or SFT (the shifts
+  // read SFT live at launch; launching after the transfer is today's
+  // behaviour, and R888 keeps it).
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) dec_d <= 1'b0;
+    else        dec_d <= (state == S_DECODE);
+  end
+  // A lab whose op is still in flight when its B read completes writes A and
+  // B first (S_LAB_WA / S_LAB_WB) and takes the result there: the op reads
+  // the pre_* snapshot, not A or B, and writes only D, P and ST.
+  assign alu_post_ok = (state == S_ALU)
+                    || (lab_ov && (state == S_LAB_WA || state == S_LAB_WB));
+  assign alu_early   = EARLY_ALU && dec_d && (state == S_SRC)
+                    && (d_lab || d_ldmov) && !d_noalu
+                    && (alu_op_r != mb86233_pkg::ALU_FDVD)
+                    && !(d_ldmov && x_dst_reg
+                         && (d_r2[5:0] == 6'h19 || d_r2[5:0] == 6'h1f));
+
   logic [31:0] src_val;          // value in flight between source and dest
   logic [31:0] lab_a_val, lab_b_val;
 
@@ -897,8 +939,9 @@ module mb86233_core #(
   // nothing to read in S_ALU goes to it straight from S_DECODE.
   wire ret_dst   = (state == S_DST) && d_ldmov && d_noalu && x_dst_reg && !src_prog;
   wire ret_alu   = (state == S_ALU) && d_ldmov && alu_out_valid;
-  wire ret_labwb = (state == S_LAB_WB);
-  assign ret_now = (state == S_RETIRE) || ret_dst || ret_alu || ret_labwb;
+  wire ret_labwb = (state == S_LAB_WB) && (!lab_ov || lab_res || alu_out_valid);   // R888
+  wire ret_labov = (state == S_ALU) && lab_ov && alu_out_valid;                    // R888
+  assign ret_now = (state == S_RETIRE) || ret_dst || ret_alu || ret_labwb || ret_labov;
   state_e nxt_ret;
   assign nxt_ret = pf_load ? S_DECODE : pf_same ? S_DECODE : S_FETCH;
   wire dec_ret   = !(d_lab | d_ldmov) && !alu_active && !brul_regform
@@ -918,11 +961,19 @@ module mb86233_core #(
       lab_a_val    <= 32'd0;
       lab_b_val    <= 32'd0;
       alu_launched <= 1'b0;
+      lab_ov       <= 1'b0;   // R888
+      lab_res      <= 1'b0;
       ldif_go      <= 1'b0;
       alu_op_r     <= 5'd0;
       fp_post_r    <= 1'b0;
     end else begin
       if (pf_load) ir <= prog_rdata;   // R772/R773: on whichever state retires
+      // R888: an early launch is in flight; a result that lands before S_ALU
+      // is dropped (alu_post_ok) and S_ALU launches the op again.
+      if (alu_early)          alu_launched <= 1'b1;
+      else if (alu_out_valid) alu_launched <= 1'b0;   // taken, or dropped (S_ALU's own below)
+      if (state == S_DECODE) begin lab_ov <= 1'b0; lab_res <= 1'b0; end
+      else if (lab_ov && alu_out_valid && alu_post_ok) lab_res <= 1'b1;
       unique case (state)
         S_FETCH:   state <= S_FETCH_W;
         S_FETCH_W: begin ir <= prog_rdata; state <= S_DECODE; end
@@ -991,7 +1042,11 @@ module mb86233_core #(
             // instruction loaded neither register.
             lab_b_val <= (x_lab_b_sp == mb86233_pkg::EP_IO) ? io_rdata
                                                             : mem_rdata;
-            state     <= skip_alu ? S_LAB_WA : S_ALU;   // R771
+            // R888: an early op still in flight -> A and B now, its result after
+            if (skip_alu)                     state <= S_LAB_WA;   // R771
+            else if (EARLY_ALU && alu_launched) begin
+              state <= S_LAB_WA; lab_ov <= 1'b1;
+            end else                          state <= S_ALU;
           end
         end
 
@@ -1002,7 +1057,7 @@ module mb86233_core #(
         // own arithmetic. One register per cycle: the file has a single write
         // port and the ALU's own writeback to d/p does not use it.
         S_LAB_WA: state <= S_LAB_WB;
-        S_LAB_WB: state <= nxt_ret;   // R773
+        S_LAB_WB: state <= ret_labwb ? nxt_ret : S_ALU;   // R773; R888
 
         S_DST:   state <= !x_dst_reg ? S_DST_W
                         : ret_dst   ? nxt_ret
@@ -1021,7 +1076,8 @@ module mb86233_core #(
           // high during the very cycle div_done fires, and the FSM would never
           // leave this state.
           if (!alu_active || alu_out_valid) begin
-            state        <= d_lab ? S_LAB_WA : ret_alu ? nxt_ret : S_RETIRE;   // R773
+            state        <= ret_labov ? nxt_ret : d_lab ? S_LAB_WA
+                          : ret_alu ? nxt_ret : S_RETIRE;   // R773; R888
             alu_launched <= 1'b0;
           end
         end
@@ -1190,6 +1246,7 @@ module mb86233_core #(
       default: ;
     endcase
     seq_valid = ret_now;   // R773
+    alu_in_valid = alu_in_valid | alu_early;   // R888
   end
 
 endmodule

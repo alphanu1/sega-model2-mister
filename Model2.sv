@@ -4222,7 +4222,8 @@ end
 // clocking alone cannot close that -- but a coprocessor that is slow is a
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
-m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A)) u_copro (   // R852
+m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
+           .BUFW_Q(M2A ? 32 : 0)) u_copro (   // R852, R888
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
