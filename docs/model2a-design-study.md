@@ -40868,3 +40868,116 @@ work-RAM clear confirmed); 54.6 fps over 14 s from load, 57.5 once running,
 1 vblank a frame 97% (tools/m2-fps.py). A control for R905: Pilot Kids is a
 16 MB texture set on R897's layout like Dynamite Cop, and textures right.*
 
+
+**R903 -- MANX TT FREEZES WHEN ANOTHER RIDER IS KNOCKED DOWN: THE RIDER'S
+CRASH STATE RUNS cosr, A FORM THE 2A CORE TRAPS ON. cosr NOW ON THE
+SEQUENCER'S COS ENTRY (i960_top F2A). REPRODUCED AND PROVED IN MAME 0.289; TGP
+BIT-EXACT ACROSS THE CRASH. NOT FITTED, NOT ON A BOARD.**
+(Board, s1247 = model2a 38e66d3, Ben: racing, "I hit another racer and we have
+a crash" -- 0 fps (tools/m2-fps.py), the picture stuck mid-race (8/8, TIME 26,
+lap 0:32.51, 225 km/h, gear 6, the coast road); 57.5 fps before it; THE SOUND
+KEPT PLAYING.)
+
+*Believed (R887):* after tanr, Manx TT's 152 forms trap on nothing in the 2A
+core -- from a 240 s form log whose races never knocked a rider down.
+
+*Found (MAME 0.289, sm2-builds/mame-r869 m2lod -- R869's form log, unchanged;
+the program disassembled by MAME's debugger; work-RAM dumps of a race):*
+  1. THE OTHER RIDERS' STATE MACHINE. Riders 1-7 run the handler 0x2d430
+     (installed at 0x2d414, 0x2ff18, 0x2ffa4). On contact it compares the two
+     riders' speeds (0x2e0d4: |speed(partner) - own| > 15.0, and the other
+     tests that set r9 at 0x2e274 / 0x2e8dc / 0x2e928) and, if no other rider
+     is down (0x5bbd20 == 0), KNOCKS THE RIDER DOWN: 0x2ec64 installs the
+     handler 0x2edc0 and adds one to 0x5bbd20; 0x2fb00 later puts it back
+     on 0x2d430 and clears 0x5bbd20. The crash handler (0x2edc0-0x2f7f0) is
+     the tumble: atanr at 0x2f1f0 / 0x2f304 / 0x2f32c / 0x2f744 / 0x2f774,
+     COSR AT 0x2f398 AND 0x2f3bc, sinr at 0x2f3c0 -- every frame the rider
+     is down. Nothing else in the program reaches those three sites.
+  2. cosr (0x68.d, MAME: set_rif(cos(t1f))) is in no 2A build: R869 put
+     atanr and sinr on R845's sequencer, R887 tanr; cos was the one entry
+     left without a single form. So the first frame a rider is knocked down
+     the 2A i960 traps and halts -- the tilemap HUD and the 3D stop together
+     (0 fps, the frozen TIME), and the sound board, which runs on its own
+     68000, keeps playing whatever it was last told: Ben's freeze exactly.
+  3. REPRODUCED (sim/io/mame_m2_2a_play.lua PL_GAME=chase, new: an autopilot
+     on the game's own rider table -- 0x5bba30 + 52 k, x / y / z, heading at
+     +0x10, speed at +0x1c -- and the course line it streams at 0x53e3c8 + 28 n;
+     it steers along the line and at the nearest rider ahead, flat out, and
+     brakes hard when a rider is close behind in line; menus upright and
+     unbraked; coins at 30 / 150 s, Test at 18 / 22 s for the DANGER screen):
+     at 219.58 s, 7th of 8 at ~222 km/h on the coast road, in among riders
+     5 and 6 (3.8 units apart at 219.509 s), a rider goes down -- 0x5bbd20
+     0 -> 1 at 219.579 s, and the form log's FIRST
+     0x68d (cosr) at pc 0x2f398, 219.5831 s; sinr at 0x2f3c0 the same frame;
+     0x5bbd20 back to 0 at 225.437 s. 674 cosr and 337 sinr in those 5.9 s
+     (two cosr and one sinr a frame). The same session again with the TGP
+     capture on: the same frame, the same times (it is deterministic).
+     sim/io/i960_formcheck.cpp on that log: 155 forms; R887's core (FR +
+     F2A) traps on ONE -- 0x68d at 0x2f398 -- and on none with this fix.
+  4. THE SESSIONS THAT DID NOT FIND IT, and why (so the next one does not
+     repeat them): (a) R887's 240 s and this entry's first 400 s scripted
+     session (flat out, side-to-side leans, brake pulses, a random lean
+     walk; three races) crashed our own rider into walls a dozen times and
+     knocked nobody down -- 0x2f304's atanr never in the log. Falling off
+     is a different path; the freeze needs ANOTHER RIDER down. (b) A brake
+     held while Start is pressed on the course screen picks TT MODE, a time
+     trial with no other riders (the first attempt's first race). (c) The
+     autopilot without the brake check rear-ended riders at a closing speed
+     of 11.5 at most and knocked nobody down in two races; with it, the
+     first session knocked one down (which contact did it is not separated:
+     the log has distances and speeds, not the game's contact partner).
+  5. EVERY cosr OPERAND, CHECKED (mame_i960_formlog.py, the module's own
+     microcode through tools/i960_fptrans.py, narrowed as set_rif): 674 /
+     674 distinct tuples equal to MAME's result; src1 -4.7102 .. 1.5701,
+     register in and out, no specials. In the same log: atanr 254,591 /
+     254,591 (incl. atan2(0, 0) twice, x or y zero 143), tanr 10,331 /
+     10,331, sinr 334 / 334, cvtzril 5,931 / 5,931 -- all equal.
+  6. THE TGP ACROSS THE CRASH (tgp_capture.lua over the chase session,
+     frames 12,502-13,204 = 217.4-229.6 s: 1,679,258 words in, 417,731 out,
+     838,587 io reads, 761,704 io writes; the crash handler's own TGP
+     commands included): tb_tgp_replay TGP_PROG=4096 (the 2A TGP, R888's
+     EARLY_ALU + BUFW_Q 32) -- plain: PASS, bit-exact; --board-push --gap 60
+     --jitter 40: PASS, bit-exact, 0 dropped, 0 store-order faults, frame
+     work p50 3.28 / max 4.92 ms (0.951x MAME's model), 0 frames over budget;
+     slow memory (--lat 24 --wlat 24 --jitter 60 --seed 7): PASS, bit-exact,
+     max 5.92 ms. The unimplemented-opcode flag 0 cycles throughout. The TGP
+     is not the freeze.
+  7. WHAT ELSE IN THE PROGRAM WOULD TRAP (vf2_formscan.py over epr-18822d /
+     18823d / 18824d / 18825d, 154 candidate words, then each read in the
+     disassembly): besides cosr, the words at 0x264d8 (sqrtrl) and 0x27f90
+     (atanrl) are ASCII text; 0x64f40-0x6d970 (tanrl, atanrl, logrl,
+     logbnrl, sinrl, logr, calls) disassemble with impossible operands -- data;
+     0x76fe8-0x774a4 (calls) the same. The one other real code is the C
+     library's float formatting at 0x7c5f0 / 0x7ce00 (cvtzril then cvtilr,
+     after the string "NaNS"), called only from the printf core at 0x7b234 /
+     0x7bf98: never entered in any session here (~29 min of emulated play logged
+     over eight runs). INFERRED unreachable in play; it would trap on cvtilr
+     if the game ever printed a float.
+
+*THE FIX (rtl/cpu/i960/i960_top.sv, F2A, live by ta_on as tanr):* one decode
+line -- 0x68.d starts the sequencer on entry 1 (cos), which the ROM has had
+since R845 (cosrl); operands and result exactly as sinr / tanr (the widened
+single in, narrowed to a register or kept whole in fp0-fp3). Nothing else
+changes; with F2A 0 or vc_en low the line is a constant 0. Reference
+(sim/i960/i960_cpu_ref.h): cosr with set_rif(cos(t1f)) under ref_f2a, bounded
+as sinr / tanr. ESTIMATED area ~1 ALM (R887's tanr: one decode term); not
+mapped.
+
+*Benches:* test_i960_top_fx (+fx; cosr added to the 2A mix, also under
++nomvre) seeds 1 / 2 / 3, 20,000 programs each: 0 mismatches (cosr retired
+916 / 1,011 / 911; no one-ulp case); +nomvre seed 4: 0 mismatches (1,356).
+Planted: cosr on sin's entry -> FAIL (g2 0 for 1.0, retire 25); cosr's decode
+dropped -> MODULE TRAP at the first cosr. test_i960_top, _fr, _vc: PASS.
+lint_top clean (2A; -DM2_NO_2A; -DM2_NO_DEBUG -DM2_PROBE=1 -DM2_NO_2A_RALLY);
+lint_idx: 114 candidates, none in the i960; quartus_map 17.0 --analyze_file
+i960_top.sv: 0 errors.
+
+*What the board must show:* Manx TT raced into the pack -- knock a rider down
+(run into one hard, or brake in front of one) -- and the race goes on: the
+rider tumbles and gets back on, the TIME keeps counting, m2-fps stays at
+57.5. VF2, Sega Rally, Virtua Cop 2, Zero Gunner unchanged (cosr is in none
+of their logs; vc_en's decode is the same). If it ever freezes again on a
+probe build, the 'C' record's i960 IP says which path: a trap holds one IP
+with copro_stall 0 (the M2_PROBE build has no trap bit), the TGP holds the
+IP on a FIFO access with copro_stall 1. Note for such a build: Manx TT needs
+M2_2A_RALLY for its throttle and lean -- M2_NO_2A_RALLY leaves it unridable.
