@@ -4,7 +4,7 @@
 // tb_m2_volume (study R894): m2_volume, every 16-bit input at every code.
 //   * the output is floor(x * gain / 256) clamped to [-32768, 32767] --
 //     never wrapped: its sign is the input's (or it is 0);
-//   * codes 0-10 equal R829's 9-bit stage (the product's [23:8]) bit for bit;
+//   * the 0-100% codes (0-2, 7-14 since the list rises to 400% then wraps) equal R829's 9-bit stage (the product's [23:8]) bit for bit;
 //   * code 15 (never on the menu) is code 0's 80%.
 // iverilog -g2012 -o tb rtl/sound/m2_volume.sv sim/sound/tb_m2_volume.sv && vvp tb
 `timescale 1ns/1ps
@@ -17,10 +17,10 @@ module tb_m2_volume;
 
   function automatic int gain_of(input int c);
     case (c)
-      0: gain_of = 205;  1: gain_of = 230;  2: gain_of = 256;  3: gain_of = 0;
-      4: gain_of = 26;   5: gain_of = 51;   6: gain_of = 77;   7: gain_of = 102;
-      8: gain_of = 128;  9: gain_of = 154;  10: gain_of = 179; 11: gain_of = 384;
-      12: gain_of = 512; 13: gain_of = 768; 14: gain_of = 1024; default: gain_of = 205;
+      0: gain_of = 205;  1: gain_of = 230;  2: gain_of = 256;  3: gain_of = 384;
+      4: gain_of = 512;  5: gain_of = 768;  6: gain_of = 1024; 7: gain_of = 0;
+      8: gain_of = 26;   9: gain_of = 51;   10: gain_of = 77;  11: gain_of = 102;
+      12: gain_of = 128; 13: gain_of = 154; 14: gain_of = 179; default: gain_of = 205;
     endcase
   endfunction
 
@@ -57,7 +57,7 @@ module tb_m2_volume;
           if (bad < 10) $display("code %0d x %0d: right out %0d want %0d", c, x, out_r, want);
           bad++;
         end
-        if (c <= 10) begin
+        if (g <= 256) begin   // the 0-100% codes: R829's stage bit for bit
           old = $signed(16'(x)) * $signed({1'b0, 9'(g)});
           if (out_l != old[23:8]) begin
             if (bad < 10) $display("code %0d x %0d: out %0d, R829's stage %0d", c, x, out_l, $signed(old[23:8]));

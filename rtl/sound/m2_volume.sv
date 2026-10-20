@@ -23,21 +23,23 @@ module m2_volume (
   logic [10:0] gain;
   always_comb begin
     case (code)
+      // Ben 2026-10-20: the list rises from the default to 400% and then wraps
+      // once to 0% (index 0 is MiSTer's default, so it cannot start at 0%)
       4'd0:    gain = 11'd205;    // 80%
       4'd1:    gain = 11'd230;    // 90%
       4'd2:    gain = 11'd256;    // 100%
-      4'd3:    gain = 11'd0;      // 0%
-      4'd4:    gain = 11'd26;     // 10%
-      4'd5:    gain = 11'd51;     // 20%
-      4'd6:    gain = 11'd77;     // 30%
-      4'd7:    gain = 11'd102;    // 40%
-      4'd8:    gain = 11'd128;    // 50%
-      4'd9:    gain = 11'd154;    // 60%
-      4'd10:   gain = 11'd179;    // 70%
-      4'd11:   gain = 11'd384;    // 150%
-      4'd12:   gain = 11'd512;    // 200%
-      4'd13:   gain = 11'd768;    // 300%
-      4'd14:   gain = 11'd1024;   // 400%
+      4'd3:    gain = 11'd384;    // 150%
+      4'd4:    gain = 11'd512;    // 200%
+      4'd5:    gain = 11'd768;    // 300%
+      4'd6:    gain = 11'd1024;   // 400%
+      4'd7:    gain = 11'd0;      // 0%
+      4'd8:    gain = 11'd26;     // 10%
+      4'd9:    gain = 11'd51;     // 20%
+      4'd10:   gain = 11'd77;     // 30%
+      4'd11:   gain = 11'd102;    // 40%
+      4'd12:   gain = 11'd128;    // 50%
+      4'd13:   gain = 11'd154;    // 60%
+      4'd14:   gain = 11'd179;    // 70%
       default: gain = 11'd205;
     endcase
   end

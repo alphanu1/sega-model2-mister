@@ -392,7 +392,7 @@ localparam CONF_STR = {
 	// setting keeps its meaning), saturating, never wrapping. Then Direct
 	// boost: the SCSP's direct sends (every 2A voice, at DISDL 3 -- R886)
 	// x2 / x4 before the DSP's return; Off, the default, is MAME's mix.
-	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%,150%,200%,300%,400%;",
+	"O[49:46],Volume,80%,90%,100%,150%,200%,300%,400%,0%,10%,20%,30%,40%,50%,60%,70%;",
 	"O[65:64],Raw Sound Boost,Off,+6 dB,+12 dB;",
 `else
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
