@@ -81,7 +81,10 @@ module m2_boot_harness #(
   // R854: the i960's i-cache lines (i960_top IC_LINES)
   parameter int unsigned IC_LINES        = 512,
   // R854: m2_geo LIST_WIN (Model2.sv GEO_LIST_WIN: 4096 with 2A, 0 otherwise)
-  parameter int unsigned GEO_LIST_WIN    = 0
+  parameter int unsigned GEO_LIST_WIN    = 0,
+  // R896: Manx TT's DX motion base answered on PD (m2_2a_inputs MOTION): 0xCE
+  // while PE holds 0x3D, else 0xCD, so the boot passes its slider check
+  parameter bit          MANX_MOTION     = 1'b0
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -1145,6 +1148,7 @@ module m2_boot_harness #(
   /* verilator lint_off UNUSEDSIGNAL */
   logic [31:0] io_videoctl;
   logic        io_render_mode;   // R765, as Model2.sv
+  logic        io_render_test, io_render_unk;   // R896, as Model2.sv: render_mode_r reads back (A2)
   logic [31:0] io_framenum;
   /* verilator lint_on UNUSEDSIGNAL */
 
@@ -1174,6 +1178,7 @@ module m2_boot_harness #(
     bak_sel                           ? bak_rdata :
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
     copro_sel                         ? copro_rdata :
+    (A2 && cpu_io_addr[31:21] == 11'h080) ? {17'd0, io_render_unk, 11'd0, io_render_mode, 1'b0, io_render_test} :   // R896
     (cpu_io_addr[23:0] == 24'h98000c) ? {29'd0, (io_render_mode ? io_framenum[0] : io_framenum[1]),
                                          io_videoctl[1:0]} :   // R765
     (cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
@@ -1183,6 +1188,7 @@ module m2_boot_harness #(
   always_ff @(posedge clk_m or negedge rst_n) begin
     if (!rst_n) begin
       io_intreq <= '0; io_intena <= '0; io_videoctl <= '0; io_framenum <= '0; io_render_mode <= 1'b0;
+      io_render_test <= 1'b0; io_render_unk <= 1'b0;   // R896
       a2_irq0_d <= 1'b0; a2_uirq_d <= 1'b0;
     end else begin
       // R852: with A2, Model2.sv's controller: the vblank (the tb's irq[0]
@@ -1198,7 +1204,11 @@ module m2_boot_harness #(
         if (cpu_io_addr[23:0] == 24'he80000) io_intreq   <= io_intreq & cpu_io_wdata[11:0];
         if (cpu_io_addr[23:0] == 24'he80004) io_intena   <= cpu_io_wdata[11:0];
         if (cpu_io_addr[23:0] == 24'h98000c) io_videoctl <= cpu_io_wdata;
-        if (cpu_io_addr[31:21] == 11'h080)   io_render_mode <= cpu_io_wdata[2];   // R765
+        if (cpu_io_addr[31:21] == 11'h080) begin
+          io_render_mode <= cpu_io_wdata[2];   // R765
+          io_render_test <= cpu_io_wdata[0];   // R896
+          io_render_unk  <= cpu_io_wdata[14];
+        end
       end
       if (A2) begin
         for (int t = 0; t < 4; t++)
@@ -1222,14 +1232,15 @@ module m2_boot_harness #(
       .idx(cpu_io_addr[3:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
       .rdata(a2_tmr_rdata), .expire(a2_tmr_expire)
     );
+    wire [7:0] a2_pe;   // R896
     m2_315_5649 u_315_5649 (
       .clk(clk_m), .por_n(rst_n), .rst_n(rst_n),
       .sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
       .word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
       .rdata(a2_io_rdata),
-      .in0(cab_in0), .in1(cab_in1), .in2(cab_in2), .sw(8'hFF),
+      .in0(cab_in0), .in1(cab_in1), .in2(MANX_MOTION ? ((a2_pe == 8'h3D) ? 8'hCE : 8'hCD) : cab_in2), .sw(8'hFF),
       .an0(8'hFF), .an1(8'hFF), .an2(8'hFF),   // R862: no analog game in the boot bench
-      .lamps(), .pe(), .dbg_pa(), .dbg_dir()
+      .lamps(), .pe(a2_pe), .dbg_pa(), .dbg_dir()
     );
     // the i8251 at 0x01c80000, as Model2.sv: data in byte 0, status/command
     // in byte 2; the far end is the silent stand-in (31.25 kbaud, 48 MHz)

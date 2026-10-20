@@ -2761,6 +2761,11 @@ int main(int argc, char **argv) {
                   d->obs_bus_be, d->obs_bus_we ? "wr" : "rd", d->obs_bus_rdata);
       ++n_watch;
     }
+    // R896: every CPU store to the render-mode register (0x10000000-0x101fffff)
+    { static const bool rm = std::getenv("M2_BOOT_RMODE") != nullptr;
+      if (rm && d->obs_bus_ack && !ack_prev && d->obs_bus_we && (d->obs_bus_addr >> 21) == 0x080u)
+        std::printf("    RMODE %08x be=%x wdata %08x (frame %llu)\n", d->obs_bus_addr, d->obs_bus_be,
+                    d->obs_bus_wdata, (unsigned long long)g_frames_done); }
     ack_prev = d->obs_bus_ack;
     if (d->cpu_trap || d->cpu_halt) break;
   }

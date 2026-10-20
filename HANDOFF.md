@@ -1,5 +1,33 @@
 # Handoff
 
+## 2026-10-20: Manx TT at 28.7 fps -- render mode read back as 0, not a slow stage (R896)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a0ddc662335a99446
+(on model2a 5a36477).
+
+FOUND: Manx TT changes render mode by read-modify-write (ldos 0x10000000 /
+and 0xfeff / stos at 0x24f80 and three other places). MAME's render_mode_r
+returns the written bits; this core returned 0, so the game put itself in
+30 Hz mode and 0x98000c showed frame bit 1 -- its frame loop (flip at 0x3eec,
+spin on 0x98000c bit 2 at 0x3f1c) then ran every other vblank. Whole-core
+bench (Manx TT, motion answered): identical to the fix until vblank 687, then
+one flip per two vblanks with the frame's work at 14% of a vblank.
+MEASURED, ALL FIT ONE VBLANK (17.39 ms): TGP p50 1.78 / max 5.11 ms (board-like
+replay, bit-exact, 0.94x MAME's model); walk 5.2-6.6 ms; draw 9.55 ms; i960
+frame work after the fix 0.82 of a BENCH vblank (~0.5-0.7 of the board's).
+
+DONE: Model2.sv (2A only) reads 0x10000000-0x101fffff back as MAME does
+({unk 14, mode 2, test 0}); two flops. Original core unchanged by
+construction. No released game reads the register (MAME taps, 4,000 vblanks:
+VF2, Rally, VCop2, ZG, Daytona, Virtua Cop all 0 reads). Area 40,083 -> 40,080
+ALMs est. Harness: MANX_MOTION, the same read-back, M2_BOOT_RMODE.
+
+NOT THE CAUSE OF RALLY'S SLOWDOWNS: Rally never reads render mode. Next for
+Rally: its i960 frame work in the whole-core bench (M2_WORK_IPS on its loop).
+
+TO TEST ON THE BOARD: Manx TT attract and race at 57.5 fps (m2-fps); VF2,
+Sega Rally, Virtua Cop 2, Zero Gunner unchanged.
+
 ## 2026-10-20 (paused for credits): where everything stands
 
 BUILDING: s1230-s1232 from 1296e49 (sm2-builds/sm2-2afull-1296e49) -- TGP

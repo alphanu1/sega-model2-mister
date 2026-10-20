@@ -1503,6 +1503,10 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
 # program extension and the i960's FR + F2A forms):
 #   M2_A2=1 M2_A2X=1 M2_BOOT_IMAGE=<srallyc.bin> ./obj_boot_2ax/Vm2_boot_harness +insn=<n>
 # BOOT_2AX_G=-GA2X_F2A=0 BOOT_2AX_DIR=<dir> builds R865's core (FR alone) to show the trap.
+# R896: Manx TT -- BOOT_2AX_G=-GMANX_MOTION=1 (its motion base answered, R892) and the
+# image from rom_csum.py on its MRA; M2_FRAMESTAT=<f> M2_WORK_IPS=b70,3eec gives a
+# 'W' line per frame (the vblank handler's entry to the flip), M2_BOOT_RMODE=1 logs
+# the stores to render mode.
 BOOT_2AX_DIR ?= obj_boot_2ax
 BOOT_2AX_G   ?=
 $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
