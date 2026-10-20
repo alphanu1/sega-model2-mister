@@ -80,13 +80,13 @@ ROM sets: MAME 0.289.
 | setting | what it does |
 |---|---|
 | `Volume` | 80% by default. After 70% the list goes on to **150%, 200%, 300% and 400%**. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
-| `Raw sound boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
+| `Raw Sound Boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
 
 **Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
-the music: use `Raw sound boost`.** For about the same loudness as Virtua
+the music: use `Raw Sound Boost`.** For about the same loudness as Virtua
 Fighter 2 at the default 80%:
 
-| game | with `Raw sound boost` Off | with `Raw sound boost` +12 dB |
+| game | with `Raw Sound Boost` Off | with `Raw Sound Boost` +12 dB |
 |---|---|---|
 | Virtua Fighter 2 | `Volume` 80% (its loudest hits reach full scale at about 130%) | `Volume` 40–50% keeps the music where it was, with the hits up about 7 dB |
 | Sega Rally | `Volume` 400% still leaves it a little quieter (its peaks reach only a third of full scale) | `Volume` 150% (no limiting below about 300%) |
