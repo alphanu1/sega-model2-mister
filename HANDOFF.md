@@ -1,5 +1,25 @@
 # Handoff
 
+## 2026-10-20 (later): PUSHED model2a -- the Model 2A beta release Model2A_20261020b
+
+RELEASED (releases/, BETA): Model2A_20261020b.rbf = s1253 (71598a2; clk_sys
+-0.350, clk_mem -0.724, clk_i960 -0.606, hold +0.225 -- run a wider seed
+sweep for the next release), md5 a141ee70... Seven games: VF2, Sega Rally,
+Virtua Cop 2 (ammo display, R889), Zero Gunner, Pilot Kids (R897 + R900,
+128 MB), Manx TT (R892 boot, R896 full speed; collision freeze open), Hanguk
+Pro Yagu 98 (128 MB). Tested on the board this session: 128 MB layout (R891 /
+R897) works -- Pilot Kids and Hanguk run from the upper 64 MB.
+OPEN, being worked: Dynamite Cop, Sky Target, Dead or Alive, Motor Raid
+textures striped (R905 -- R900's luma rows were not it on the board; the
+fault is in the real texel path, Pilot Kids is a working control); Motor
+Raid's 2D overruns (R906); Manx TT's collision freeze (R903); Sega Rally's
+rear-view mirror black (R902); Sega Rally's i960 wait states built, OFF
+(R904, one-hot format inferred). NOT IN THIS RELEASE, merged since: the
+Volume list in rising order (9494d9c). Main: main-next (15 kHz converter
+R898 + Virtua Cop ammo R899, window key for all games) building -- its first
+seeds missed timing badly; the 15 kHz-only build s1243 met timing and is with
+a CRT tester.
+
 ## 2026-10-20: the i960's wait states for Sega Rally, behind M2_2A_WAITST (off) (R904)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch r904-waitst (on model2a
