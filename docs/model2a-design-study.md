@@ -40454,3 +40454,198 @@ Motor Raid runs seconds then black; Sky Target and Dynamite Cop run their
 attract with bad polygons -- their code and protection patches run, the data
 beyond the old slots is missing. The real test is s1240-s1242 (baadcd5).*
 
+**R900 -- THE SIX LARGE-LAYOUT GAMES ON THE BOARD (s1240): "TRIPPY" AND BLACK
+TEXTURES ARE R867's LUMA-ROW MAP, NOT THE LAYOUT. EACH GAME NOW HAS EIGHT ROW
+RANGES OF ITS OWN (THEY USE 6-35 ROWS; EXACT FOR TWO, NEAREST BY CONTENT FOR
+FOUR). PILOT KIDS RUNS ON UNCLEARED WORK RAM (MAME'S PATCH SKIPS THE GAME'S
+OWN CLEAR): THE LARGE LAYOUT'S GAMES NOW START WITH WORK AND BOARD RAM ZEROED,
+AS MAME'S. NOT FITTED, NOT ON A BOARD.**
+(Ben, s1240 = baadcd5: Dynamite Cop, Sky Target and Dead or Alive run with
+right geometry and 2D but "trippy", scrambled texels on every surface --
+DOA's trousers striped, which they are not; Motor Raid "most textures black";
+Hanguk Pro Yagu 98 "seems OK"; Pilot Kids stuck on a black screen with a
+debug block: "0 / S = 0 / M = 0 / E-Rank = 14729 / F-Angle = 24 /
+F-Length =" (value blank). Dead or Alive boots: no boot work.)
+
+*Believed (the task):* either R867's colour path (the eight luma rows a game
+uses, captured on chip) or the texel fetch for R897's layout (the texture
+ROM at SDRAM 0x4000000, the cache tags, banks, 4- vs 8-bit texels); Pilot
+Kids an i960 form, the protection patch, an I/O / EEPROM need or the data
+window.
+
+*THE TEXEL FETCH IS NOT INVOLVED (code; the bench below):* the rasteriser's
+texels come from texture RAM (MAME's textureram0/1, written by the CPU at
+0x12000000 / 0x12400000; Model2.sv GAME_TEXS0 / GAME_TEXS1, two 1 MB sheets
+of 4-bit texels), which R897 did not move. R897's "texture ROM at 0x4000000"
+is MAME's "textures" region -- the texture-COORDINATE ROM the geometry engine
+reads headers and u/v from (R897 benched those parameters against MAME: 0
+differ). The raster bench below uses MAME's texture RAM and polygons: with
+the games' own luma rows its texels come out right on every game, so fetch
+and sampling are not the fault. (Whether the CPU's texture upload on the
+core equals MAME's is not benched here; nothing in R897 touched its path.)
+
+*THE CAUSE, MEASURED (MAME 0.289 m2lod; sim/io/mame_m2_2a_play.lua sessions
+of 160 s -- attract, two credits, play -- with a geometry-walk dump every
+5 s through M2GEO_TRIG; a textured polygon's row = texheader[1] & 0xff):*
+  game          rows  distinct  most used (polygons over 30 walks)
+  dynamcop       17     17      96 7168, 7 6516, 6 5665, 100 2002, 76 1606;
+                                106 and fades 131-144 (<1%)
+  skytargt       35     32      96 21679, 76 7169, 6 6324, 107 1682 ...
+                                (36=86, 42=92, 46=96 equal)
+  motoraid       25     24      100 19435 (=101), 125 2446 ...
+  pltkidsa       24      8      0-100 (17 rows, ALL EQUAL), 249-255
+  doaab           6      6      98 25917, 100 14078, 72, 6, 89, 92
+  hpyagu98       33     33      96 11081, 76 2766, 51 253 ...
+  The luma RAM is written at boot and constant after it (every walk's dump
+  equal), except Motor Raid's row 100, rewritten in a fade.
+  R867's map captures rows 0-3 and 16-19 and colours any other row from the
+  slot {row[4], row[1:0]} aliases. None of the four faulty games uses those
+  rows: Dynamite Cop's 96 / 100 / 76 take row 0's table, 6 / 7 rows 2 / 3;
+  DOA's 98 row 2, 100 row 0; Sky Target's 96 / 76 row 0. Their rows 0-3 /
+  16-19 hold OTHER curves (0, 22, 36, 44 ... or 40, 52, 57 ...), so every
+  texel's luma lands on the wrong ramp: contour bands and posterised noise --
+  the "trippy" look and DOA's "stripes". Motor Raid's rows 0-3 / 16-19 are
+  all ZERO, so its row 100 (nearly every polygon) is black. Hanguk Pro Yagu
+  98's rows 76 / 96 alias row 0, a curve near row 76's: plausible on the
+  board, still 41 / 255 off (below). Pilot Kids' rows 0-100 are all row 0's
+  table, so its main rows were right already.
+
+*THE FIX (rtl/video/m2_luma_map.sv, new; Model2.sv instantiates it in place
+of the inline lslot):* for the large layout's games (a2_big) the eight slots
+are eight RANGES of row numbers per game, s[0] < ... < s[7]: slot k takes
+rows s[k] .. s[k+1]-1 (slot 0 everything below s[1]) and is filled from row
+s[k] alone (the snoop writes only a range's first row). Rows with equal
+contents in one range are exact (Pilot Kids' seventeen, Motor Raid's
+100 / 101); the rest of a range takes its first row's table. The ranges were
+chosen per game by a DP over the survey's rows, minimising the polygon-
+weighted mean |difference| between a row and the table it gets (in luma
+steps of 64), each range's first row being its table:
+  game       starts s[0..7]                      error (luma steps a polygon)
+  hpyagu98   47 51 52 54 76 92 96 100            0.451 (ideal 8 of 33: 0.124)
+  dynamcop   6 7 76 96 100 132 138 142           0.024 (ideal 0.014)
+  pltkidsa   0 249 250 251 252 253 254 255       0     (exact)
+  doaab      6 72 89 92 98 100 254 255           0     (exact)
+  skytargt   6 7 18 22 76 94 96 107              0.460 (ideal 0.224)
+  motoraid   100 115 125 126 131 133 137 151     0.395 (ideal 0.182)
+  ("ideal": any eight tables, every row to its nearest -- a general row map
+  per game, a 256-entry lookup each. Ranges with a free table per range
+  scored 0.376 / 0.296 / 0.364 for Sky Target / Motor Raid / Hanguk Pro Yagu
+  98 but cost 56 more table bits and their registers -- the first cut, +158
+  ALMs est., withdrawn for this one.) Every game outside a2_big keeps R867's
+  function bit for bit (VF2, Virtua Cop 2, Sega Rally, Zero Gunner, Manx TT).
+  MORE ROWS THAN SLOTS (four games): the exact answer is more slots. Each
+  slot is 128 bytes of one M10K (lr_mem 1024 x 8, m2_span_tex); 16 slots is
+  one more M10K and a fourth slot bit in the quad store's texture word, which
+  R867 filled (att 30/30, uvt 195/195) -- a wider store word is more M10K.
+  Sky Target needs 32 tables (~4 M10K). Neither fits 553 / 553; recorded for
+  Ben. What is left is a few rows per game at < 0.5 luma step on average;
+  the worst single rows (Sky Target 101, a descending ramp, 72 polygons in
+  160 s; Hanguk Pro Yagu 98 101 / 103) stay visibly wrong on those polygons.
+
+*PILOT KIDS (MAME 0.289 taps and disassembly; the whole-core bench):*
+  1. THE DEBUG BLOCK IS THE GAME'S OWN. Its strings ("S = %d", "E-Rank =
+     %d", "F-Angle = %d", "F-Length = %1.2f") are at program 0x59110-0x59160,
+     printed by 0x5591c0 (the program runs from a RAM copy: ROM 0x50000-
+     0xfffff at 0x550000), called from the frame routine at 0x558600 when
+     the halfword 0x5092e6 is non-zero. 0x5092e6 is cleared at boot
+     (0x551898) and toggled by an edge of 1P Start (0x509730 bit 8) at
+     0x556f70 / 0x557124 / 0x55741c, each only while 0x5091b0 is non-zero
+     (written at 0x55b370 from 0x50926a). In MAME 0x5091b0, 0x5092e4 and
+     0x5092e6 stay 0 over a coined 90 s with Start every 2 s, and no single
+     one of the 26 input fields sets the flag.
+  2. THE BOOT (0x6d0-0x74c) copies the program to RAM, then runs a loop over
+     work RAM 0x500000-0x54ffff that sums it into 0x5000d0 AND CLEARS it --
+     the store at 0x730 (0x92f55000, st g14,(g5)). MAME's init_pltkids
+     replaces that store with a branch (0x08000004), because the clear also
+     wipes the PRCB copy at 0x500000 the interrupts vector through (R869's
+     Zero Gunner case); the MRA carries the same patch. So the game RUNS ON
+     UNCLEARED RAM, which in MAME is zero and on this core is whatever the
+     SDRAM held.
+  3. MEASURED: MAME with 0x500000-0x54ffff and 0x200000-0x23ffff filled
+     0xFFFFFFFF (written, then a soft reset) stops at once: "I960: ffffffff:
+     Unhandled 00". The whole-core bench (tb_m2_boot A2X on the MRA's image,
+     its unwritten memory 0xFFFF): IP 0xffffffff, TRAPPED / HALTED after
+     10.8 M instructions, 1 palette entry written, black. The same bench with
+     work and board RAM zero (M2_ZERO_WORK=1 M2_ZERO_BOARD=1): 60 M
+     instructions, 628 vblanks, PASS, tile RAM 21,520 words and palette 3,811
+     entries built, the CPU in MAME's attract loop (IP 0x55cf44; MAME's own
+     samples sit at 0x55cf3c-0x55cf4c). The board's debug block is a symptom
+     of the same garbage; which word set 0x5091b0 there is not known (the
+     bench's 0xFFFF RAM traps instead).
+  THE FIX (Model2.sv, the boot sweep that already zeroes char RAM on the 2A
+  board, R852): for a2_big it goes on to zero work RAM (GAME_WORK, 512 K
+  words) and the 2A board RAM (GAME_BOARD, 128 K words) before the CPU
+  leaves reset; every other game's sweep ends where it did. MAME's RAM is
+  zero at start; the board's SRAM would be random, which the unpatched
+  program cleared itself.
+  NOT CHANGED, RECORDED: Zero Gunner's patch (0x700, R869) skips its own
+  clear of 0x500000-0x53ffff the same way, so on this core it too runs on
+  uncleared work RAM; it plays on the board. Released: left alone.
+
+*BENCHES:*
+  * tb_m2_raster3d in Model2.sv's 2A raster configuration (TEXLUT, KW 20,
+    TXLW8, FB_DDR3, MIP; M2_R3D_TEXMEM, PXK 0, MIPZ 3, WINKEY, FRAC, FB) on
+    one MAME 0.289 M2DIFF frame of each game, its shadows written as the
+    snoop writes them (every row through the map, in the CPU's ascending
+    order). The bench takes the map from sim/video/m2_luma_map_ref.h
+    (M2_R3D_GAME=<id>), the reference the RTL is benched against. Max-
+    channel error / 255 over MAME's 3D pixels, share over 32:
+    frame            R867 map (s1240)      R900 map         textured px vs
+                                                            MAME's own path
+    dynamcop f700    36.10 / 54.27%        4.05 / 0.47%     35.07 -> 1.66
+    skytargt f600    59.99 / 61.15%        8.30 / 3.62%     59.93 -> 5.12
+    motoraid f700    34.01 / 32.13%        5.45 / 1.71%     31.76 -> 4.07
+    doaab    f700    16.23 / 13.94%        6.12 / 1.67%     15.40 -> 4.19
+    hpyagu98 f700    40.88 / 39.11%       16.00 / 9.49%     40.92 -> 15.01
+    pltkidsa f700     2.17 / 0.10%         pixel-identical (its rows <= 100)
+    vf2      f1000    6.56 / 1.54%         pixel-identical
+    srallyc  f1500    6.47 / 1.18%         pixel-identical
+  (Hanguk Pro Yagu 98's frame uses 19 rows, several large on screen -- 86,
+  88, 101 -- taking a range's table: what is left there is the map, not the
+  sampling. Before / after pictures by eye: Dynamite Cop's faces, walls and
+  floor lose their contour bands, Sky Target's sea and clouds their speckle,
+  Motor Raid's track and bikes come back from black, DOA's floor and stage
+  match MAME.) Released games: Model2.sv's map is R867's function bit for bit
+  outside a2_big (the module bench below covers all 128 IDs), and the frames
+  above are pixel-identical.
+  * test_m2_luma_map (new): m2_luma_map against m2_luma_map_ref.h for all
+    128 game IDs, every row on both lookups, twice in different orders:
+    131,072 checks, 0 fails. Planted: a start off by one (6 fails), the
+    write's hit dropped (96 fails).
+  * The whole-core Pilot Kids runs above (tb_m2_boot gains M2_BUSLOG,
+    M2_ZERO_WORK, M2_ZERO_BOARD).
+
+*Checks:* lint_top clean on 2A, -DM2_NO_2A and -DM2_NO_DEBUG -DM2_PROBE=1
+-DM2_NO_2A_RALLY, no warning on the new names; lint_idx nothing in the new
+module or lines; quartus_map 17.0 --analyze_file m2_luma_map.sv and Model2.sv
+0 errors.
+
+*AREA (quartus_map 17.0, whole design, the 2A build; baseline the tip
+0a896af's own map, sm2-builds/r900-map-base / r900-map-new):*
+     tip 0a896af   40,246 ALMs est.  47,978 registers  4,467,205 block bits  DSP 90
+     this (R900)   40,315            47,991            4,467,205             90
+  +69 ALMs estimated, +13 registers, no block bits (no M10K). m2_luma_map 117
+  ALUT, 1 register (the range compares, the write's eight equalities, the
+  table as a function of the game ID -- the replaced inline lslot was a few
+  LUTs); the sweep's one more index bit and two more ranges. A first cut
+  with a registered table of bounds and a free tag per range mapped at
+  40,404 (+158, 117 registers in the module) and was withdrawn. Not fitted:
+  s1240 placed at 41,503 / 41,910 ALMs.
+
+*VERIFIED / INFERRED:*
+  * VERIFIED in MAME and simulation: each game's rows and the old map's
+    aliasing (Motor Raid's zero slots); the colour on MAME's frames before
+    and after; the map module against its reference; Pilot Kids' dependence
+    on cleared RAM (MAME and the whole-core bench both trap without it; the
+    bench runs to MAME's attract loop with it).
+  * NOT simulated: Model2.sv's sweep extension itself (no bench builds
+    Model2.sv; it is the char clear's pattern beside it, reviewed). Rows a
+    game uses outside the 160 s sessions (later stages) take their range's
+    table. The board.
+  * What the board should show: Dynamite Cop, Sky Target, Dead or Alive and
+    Hanguk Pro Yagu 98 with smooth texture shading (no contour bands,
+    speckle or stripes; DOA's trousers plain); Motor Raid's bikes and track
+    textured, not black; Pilot Kids past the boot into its attract (the toy
+    room, "INSERT COINS!") with no debug block; VF2, Sega Rally, Virtua Cop
+    2, Zero Gunner and Manx TT unchanged.
+
