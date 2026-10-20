@@ -1757,10 +1757,16 @@ TGP_REPLAY_RTL := $(TGP_CORE) $(TGP)/m2_tgp.sv $(TGP)/m2_fifo_m10k.sv $(TGP)/m2_
 # R852: TGP_PROG=4096 builds the Model 2A TGP (its program RAM for Virtua Fighter 2's
 # 3,802-word program), in its own object directory.
 TGP_PROG   ?= 2048
-TGP_ROBJ   := obj_tgp_replay$(if $(filter 2048,$(TGP_PROG)),,_$(TGP_PROG))
+# R888: the early ALU launch and the posted buffer-RAM write queue, as Model2.sv
+# sets them (the 2A build's TGP: 1 and 32; the original's: 0 and 0). TGP_EARLY /
+# TGP_BUFW other than that build in their own object directory, for an A/B.
+TGP_IS2A   := $(if $(filter 2048,$(TGP_PROG)),,1)
+TGP_EARLY  ?= $(if $(TGP_IS2A),1,0)
+TGP_BUFW   ?= $(if $(TGP_IS2A),32,0)
+TGP_ROBJ   := obj_tgp_replay$(if $(TGP_IS2A),_$(TGP_PROG))$(if $(filter $(TGP_EARLY),$(if $(TGP_IS2A),1,0)),,_e$(TGP_EARLY))$(if $(filter $(TGP_BUFW),$(if $(TGP_IS2A),32,0)),,_q$(TGP_BUFW))
 $(TGP_ROBJ)/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
 	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
-	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) \
+	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) -GEARLY_ALU=$(TGP_EARLY) -GBUFW_Q=$(TGP_BUFW) \
 	  -CFLAGS "-O2 -DTGP_PROG_WORDS=$(TGP_PROG)" -O3 -LDFLAGS "-lz" \
 	  --Mdir $(TGP_ROBJ) -o Vm2_copro sim/tgp/tgp_replay.vlt \
 	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)
@@ -1944,6 +1950,15 @@ obj_mb86233_core/Vmb86233_core: $(TGP_CORE) sim/tgp/tb_mb86233_core.cpp sim/tgp/
 test_mb86233_core: obj_mb86233_core/Vmb86233_core
 	@echo "== test mb86233_core (the ASSEMBLED core: directed + lockstep)"
 	@./obj_mb86233_core/Vmb86233_core
+# R888: the same bench on the core as the 2A build sets it (EARLY_ALU: the ALU op
+# starts under the instruction's transfer)
+obj_mb86233_core_e1/Vmb86233_core: $(TGP_CORE) sim/tgp/tb_mb86233_core.cpp sim/tgp/mb86233_ref.cpp
+	$(VBUILD) --top-module mb86233_core -GEARLY_ALU=1 -CFLAGS "-O2 -I../sim/tgp" $(TGPFLAGS) \
+	  --Mdir obj_mb86233_core_e1 -o Vmb86233_core $(TGP_CORE) \
+	  sim/tgp/tb_mb86233_core.cpp sim/tgp/mb86233_ref.cpp
+test_mb86233_core_early: obj_mb86233_core_e1/Vmb86233_core
+	@echo "== test mb86233_core EARLY_ALU=1 (R888)"
+	@./obj_mb86233_core_e1/Vmb86233_core
 
 # R866: the TGP register file with rf in LUT RAM against the flip-flop one.
 obj_mb86233_regs_miter/Vmb86233_regs_miter: $(TGP_PKG) $(TGP)/mb86233_regs.sv sim/tgp/ref/mb86233_regs_ff.sv \
@@ -1959,7 +1974,7 @@ test_mb86233_regs_miter: obj_mb86233_regs_miter/Vmb86233_regs_miter
 .PHONY: test_tgp
 test_tgp: test_fp_mul test_fp_add test_fp_div test_mb86233_alu test_mb86233_alu_short test_mb86233_agu \
           test_mb86233_regs test_mb86233_regs_miter test_mb86233_mem test_mb86233_dec test_mb86233_xfer \
-          test_mb86233_seq test_mb86233_core test_m2_geo_xform test_m2_geo_xform_miter
+          test_mb86233_seq test_mb86233_core test_mb86233_core_early test_m2_geo_xform test_m2_geo_xform_miter
 
 test_m2_backup: obj_backup/Vm2_backup
 	@echo "== test m2_backup (byte lanes, the 0xFF power-up, the save path)"

@@ -38948,3 +38948,188 @@ cabinet block in; 41,079 ALM, 553 / 553 M10K; clk_sys +0.512, clk_mem
 +0.186, clk_i960 +0.926, hold +0.236, HDMI -0.374 report-only): Ben, 2026-10-20:
 SEGA RALLY'S CONTROLS WORK (Daytona's m2_cab_inputs, R862).*
 
+
+**R888 -- SEGA RALLY'S "COUPLE OF SLOWDOWNS" (s1220) ARE OURS, NOT THE
+ORIGINAL'S: OUR TGP TOOK 1.54x MAME'S TIME FOR RALLY'S WORK, 27% OF IT HELD
+ON BUFFER-RAM WRITES. POSTED WRITES AND AN EARLY ALU LAUNCH BRING IT TO
+0.97x, BIT-EXACT. NOT FITTED.**
+
+*What was believed (R876).* "Sega Rally is TGP-bound on this core": in the
+board-like replay the i960 model sat on the full input FIFO 470 M of 888 M
+cycles, and "if it runs below MAME's frame rate on the board the TGP's speed
+(R771-R778) is the place to look".
+
+*What the real board does -- hints, none of them a hardware fact.*
+  * The clock. MAME 0.289 model2a: `MB86234(config, m_copro_tgp,
+    50_MHz_XTAL)`, and mb86233.h `execute_clocks_to_cycles` = clocks / 3:
+    16.67 M instruction cycles a second. mb86233.cpp charges one cycle an
+    instruction (a stalled one re-runs) and one more for a floating-point
+    ALU op whose result alu_post_2 writes (lab and ld/mov, not the 0x0f
+    group). Model 1's notes read the part the same way (tools/model1-ref
+    docs/00-decisions.md: "three input clocks per instruction cycle ... FP
+    ops take a further cycle"). Sega Retro lists the TGP as "16 MHz, 16
+    MFLOPS" -- the same ~16 M instruction cycles a second. Nothing on this
+    machine (docs/, Model 1's, MAME's) gives the real chip's wait states on
+    its table, data-ROM or buffer-RAM accesses; MAME charges none. So the
+    real TGP's time is taken here as MAME's model of it: ~60 ns an
+    instruction, 120 ns for a written FP op.
+  * Rally's TGP work against that model. tb_tgp_replay now counts MAME's
+    cycles for the very instruction stream the RTL retires (new FRAME
+    BUDGET block). Rally's race window: 119.6 M MAME cycles, 7.17 s over
+    2,420 vblanks (42.1 s); a vblank's TGP work p50 3.12 ms, p90 4.20, max
+    5.05 of 17.39. On MAME's model of the part the TGP has 3.4x headroom in
+    every frame of the race. MAME's own game rate over the same scripted
+    race (sim/tgp/mame_flips_2a.lua, new: the 0x803008 frame-start writes,
+    R637's flips.lua, counted per vblank): 2,419 flips in 2,420 vblanks --
+    57.5 fps, one 2-vblank frame in 42 s.
+  * No report was found of the arcade game slowing down (a web search; not
+    proof either way).
+
+*Ours, measured.* The Rally capture regenerated (make tgp_capture_2a
+CAP2A_SET=srallyc CAP2A_GAME=rally: frames 1300-3720, the same 4,240,743 words
+in / 706,456 out as R876 -- the session is deterministic). tb_tgp_replay
+TGP_PROG=4096 --board-push --gap 40 --jitter 40 (lat 6: a table, ROM or
+buffer-RAM access answered in 6..46 clk_sys), model2a 8751702's RTL: PASS,
+bit-exact; 887.5 M cycles, 98.26 M instructions, CPI 9.03; TGP busy (all but
+the empty-input wait) 11.02 s at 80 MHz = 1.54x MAME's model; a vblank's work
+p50 4.99 ms, p90 6.32, max 7.49. Where it went:
+  * pc 0x15b, `mov (data) -> io` under a rep, buffer-RAM stores ~12 words a
+    call, 4,047,804 of them (1,672 a vblank): 60 cycles each, 243 M = 27.4%
+    of the TGP's time. Each 32-bit store is two 16-bit transactions on the
+    shared write port, and the TGP waited for both (R133's design). MAME: one
+    instruction cycle.
+  * io waits 290 M: buffer-RAM writes 238.0 M, data ROM 23.8 M (950 k
+    reads), tables 17.3 M (694 k), buffer-RAM reads 11.3 M (452 k).
+  * S_ALU 156.7 M (17.7%): an FP op waited its five pipeline stages after
+    the transfer's states, never under them; S_DECODE 11.1% (one a retire).
+  * The SDRAM latency the bench's lat/jitter stands for (tb_m2_sdram_load,
+    the 2A class, ports 8 / 9): idle p50 15 clk_mem; at 49% bus load p50 18,
+    p90 38; at 78-80% p50 44-81, p90 78-184. With the request / acknowledge
+    registers and the CDC that is ~19 clk_sys idle and ~25-40 typical -- R876's
+    6 + 0..40 (mean 26) sits inside it.
+Zero Gunner (gap 60, jitter 40): 1.10x MAME's model; Daytona's race (lat 6,
+infinitely fast i960): 0.93x -- neither stores much buffer RAM. VF2's attract
+(gap 60, jitter 40): 1.49x -- it does (below).
+
+*FIX 1 -- POSTED BUFFER-RAM WRITES (m2_tgp BUFW_Q; Model2.sv: 32 with M2A, 0
+otherwise).* A buffer-RAM store is queued (m2_fifo_m10k, 32 x 47 in MLAB, 33
+deep with its head) and acknowledged a cycle later; the queue drains through
+bufw_* with exactly the old handshake (request, acknowledge, drop, re-raise --
+halves and entries never closer than one idle cycle) and in order, so every
+reader sees the TGP's stores in the order it made them. What waits on it
+(`wq_busy`: a word in the array, the read in flight, the head, or a request
+out): the TGP's own buffer-RAM reads (they go out on port 9 and could
+overtake) that fall inside the span of addresses queued since the queue was
+last empty -- every queued address is inside [wq_lo, wq_hi], so a read outside
+cannot alias one (waiting for the whole queue instead cost 163 M cycles in the
+slow-memory run below); and the i960's read of a result word (m2_copro holds
+the read, `stall`, until the queue is empty) -- the i960 learns that a command is
+done from the output FIFO, so everything the TGP stored before that has
+landed when the read completes. Data-ROM reads do not wait (nothing writes
+the ROM); a read's `dat_half` is now 0 always (wr_hi can be 1 while a ROM
+read goes out). A TGP reset (halt, upload) drops an unwritten word; the queue
+drains in well under a microsecond and the i960 halts the TGP only around an
+upload.
+
+*FIX 2 -- THE ALU UNDER THE TRANSFER (mb86233_core EARLY_ALU; Model2.sv: 1
+with M2A).* alu_pre's operands are the S_DECODE snapshot (pre_a/b/d/p) and
+alu_op_r, both fixed on the edge into S_SRC, so a lab / ld-mov's op starts in
+S_SRC's first cycle and runs its five stages under the source and destination
+accesses. Its result is still written only after the transfer (alu_post_ok:
+S_ALU, MAME's alu_pre / transfer / alu_post order); a result that lands
+before the FSM gets there (the transfer waited on io or the input FIFO) is
+dropped unwritten and S_ALU launches the op again from the same snapshot -- the
+old timing, never worse. A lab whose op is still in flight when its B read
+completes writes A and B first and takes the result in S_LAB_WA / S_LAB_WB
+(the op reads the snapshot, never A or B, and writes only D, P, ST). Not
+launched early: fdvd (the divider's busy handshake), and a ld/mov whose
+transfer writes D (the write-priority rule takes the transfer's value at
+launch) or SFT (the shifts read SFT live; launching after the transfer is
+the old behaviour and is kept). Model 1's core (reference 0b5d04f) has the
+same snapshot and no early launch.
+
+*Measured, the same Rally run (board-like, as above), every result stream
+IDENTICAL to 8751702's (15,678,320 words) and bit-exact against MAME:*
+
+                         cycles     CPI   TGP busy  x MAME   vblank p50 / max   i960 held (full FIFO)
+  8751702                887.5 M   9.03   11.02 s   1.54     4.99 / 7.49 ms     469.8 M
+  + EARLY_ALU only       792.5 M   8.07    9.82 s   1.37     4.47 / 6.63        --
+  + posted writes only   659.4 M   6.71    8.14 s   1.13     3.55 / 5.73        --
+  both (the 2A build)    564.6 M   5.75    6.94 s   0.97     3.03 / 4.87        232.6 M
+
+pc 0x15b: 60 -> 7 cycles a store; buffer-RAM write wait 238.0 M -> 4.4 M; the
+buffer-RAM reads that now wait for the queue 11.3 M -> 14.6 M; S_ALU 156.7 M
+-> 60.7 M. The bench's i960 is held on the full input FIFO half as long.
+(The final RTL, with the read span: 562.7 M cycles, 0.96x, vblank p50 3.02 /
+max 4.83 ms.) With slower memory (--lat 24 --wlat 24 --jitter 60, seed 7:
+24..84 clk_sys an access): 8751702 1,193.1 M cycles, 2.07x MAME, vblank max
+9.92 ms; the 2A build 732.1 M, 1.24x, max 6.16 ms, IDENTICAL. There the
+queue fills (33 pending at most) and the stores' wait is 103 M: the drain,
+not the TGP, sets the pace of the copy loop.
+Zero Gunner's play window (gap 60, jitter 40): 410.2 M -> 359.0 M cycles,
+1.10x -> 0.93x MAME, IDENTICAL (it stores no buffer RAM; all EARLY_ALU).
+Daytona's race on the 2A TGP: 9.73 M -> 8.81 M (lat 6), IDENTICAL. VF2 (a new
+capture, attract frames 1500-1800: 814,468 words in, 272,424 out, 782,648 io
+writes -- VF2 stores buffer RAM heavily too): with the board-like i960 (gap
+60, jitter 40) 189.6 M -> 151.8 M cycles, 1.49x -> 1.04x MAME, vblank p50
+7.64 -> 5.32 ms; with the plain feed (lat 6) 138.6 M -> 110.1 M, 1.14x ->
+0.88x; IDENTICAL both ways. R855's "the TGP hold is now the largest single
+wait" for VF2 is largely this.
+The original core (both parameters 0): Daytona's race cycle-for-cycle as
+before (9,726,730 cycles; 12,287,990 board-like) -- main's games unchanged.
+
+*Area (quartus_map 17.0 of m2_copro alone at the 2A parameters):* 2,992 ALM
+estimated -> 2,999 with EARLY_ALU (+3 registers) -> 3,045 with the queue and
+its span (+146 registers: the head, the read register, the span; the 32 x 47
+array is one MLAB row, 1,504 bits, 3 MLABs). No M10K, no DSP: ~+53 ALM against
+the 2A build's 98%. A fit is still owed: alu_out_valid now reaches ret_now
+through the lab path (as it already did through ret_alu); a store's io_ack is
+a flop, as wr_done was.
+
+*Levers measured and NOT taken:*
+  * A one-pair buffer on ports 8 / 9 (m2_pair_cache's rule; a burst's second
+    dword kept): Rally's hit rates tables 46%, data ROM 35%, buffer RAM 50%
+    (Zero Gunner's tables 29%); direct-mapped caches of 8-64 dwords do worse
+    on the tables (6-8%) except 256 lines (block RAM, none left). After the
+    two fixes table and ROM waits are 41 M of 565 M cycles: at most ~3%.
+  * Ports 8 / 9 at the top of the SDRAM class (PRI_TOP, zero area):
+    tb_m2_sdram_load at 78% load p50 44 -> 40, p90 78 -> 54 clk_mem; at 80%
+    p50 81 -> 44, p90 184 -> 68; the i960's p90 70 -> 90 there. Not taken:
+    the TGP's reads are ~10% of its time now (55.8 M of 564.6 M) and the
+    i960 is the slower half
+    (R813).
+  * A deeper input FIFO: 256 x 32 is the same single M10K (256 x 40) as 128.
+    Not taken: the real board's FIFO is 8 deep (MAME), and the hold it
+    would shorten is half what it was.
+  * The TGP's clock: it is clk_sys, 80 MHz, already 4.8 clk_sys a real
+    instruction cycle; Rally's CPI is now 5.75 with every wait in it.
+
+*What the board must show.* Sega Rally's race without (or with fewer) of
+Ben's slowdowns; nothing else different. A probe build's K record (TGP holds)
+falls for Rally. If the 3D shows anything new (a polygon from stale buffer
+RAM), BUFW_Q 0 in Model2.sv is the one-line A/B. INFERRED, not measured: how
+much of a board frame the i960 lost to the TGP -- the bench's i960 has no
+work of its own, so its 470 M -> 233 M hold is an upper bound on what the
+board gains.
+
+*THE STORE ORDER, CHECKED.* The replay serves a buffer-RAM read from MAME's
+record, so it cannot see a read that overtook a store; tb_tgp_replay now
+tracks every store from its acknowledge to its high half's bufw acknowledge
+and fails on a buffer-RAM read issued to a pending address, an i960 result
+read with any store pending, or stores landing out of order. Every run
+above: 0, 0, 0. Mutants: m2_copro's hold removed -- VF2 slow memory FAIL,
+52,513 result reads with stores pending; buffer-RAM reads never waiting --
+Rally slow memory still clean and cycle-identical to the span rule (732.1 M):
+no captured read ever addresses a pending store (Rally: 440,739 of 452,091
+buffer reads match none of the last 64 stores, the rest 8-63 back). The span
+rule is a guarantee by construction that these captures never exercise.
+
+*Benches:* tb_tgp_replay (Rally, Zero Gunner, Daytona at 2048 and 4096, VF2)
+as above; test_tgp all PASS, incl. the new test_mb86233_core_early (8,000
+lockstep, and 12,000 trials / 480,000 retires 0 diverged); test_fp_mul /
+fp_add SUBNORM 0 fails; lint_top clean (2A, M2_NO_2A, -DM2_NO_DEBUG
+-DM2_PROBE=1 -DM2_NO_2A_RALLY); lint_idx nothing in the changed modules;
+quartus_map 17.0 --analyze_file mb86233_core, m2_tgp, m2_copro, m2_fifo_m10k:
+0 errors. New tools: sim/tgp/mame_flips_2a.lua (MAME's game rate over a 2A
+play session); tb_tgp_replay's FRAME BUDGET (MAME-model cycles per vblank
+against ours); make TGP_EARLY= / TGP_BUFW= replay builds for an A/B.

@@ -388,6 +388,21 @@ split_done:
   // per frame (TGP side, by input index popped)
   std::vector<uint64_t> f_cyc(NF + 1, 0), f_ret(NF + 1, 0), f_empty(NF + 1, 0), f_xblk(NF + 1, 0);
   std::vector<uint64_t> f_out(NF + 1, 0);
+  // R888: MAME's own cost model for the same instruction stream -- one cycle
+  // an instruction (50 MHz / 3), one more for a floating-point ALU op whose
+  // result alu_post_2 writes (lab and ld/mov only). A hint at the real chip's
+  // time, not a hardware fact.
+  std::vector<uint64_t> f_mame(NF + 1, 0), f_iow(NF + 1, 0);
+  uint64_t mame_cyc = 0;
+  // R888: POSTED BUFFER-RAM WRITES, CHECKED FOR ORDER. The bench serves a
+  // buffer-RAM read from MAME's record, so it cannot see a read that overtook
+  // the store before it; this does. A store is pending from its io write's
+  // acknowledge until its high half's bufw acknowledge; a buffer-RAM read
+  // issued to a pending address, or an i960 result read while any store is
+  // pending, is a hazard and fails the run.
+  std::vector<uint32_t> bw_pending;           // queued store addresses, oldest first
+  uint64_t hz_raw = 0, hz_pop = 0, hz_order = 0, bw_peak = 0;
+  uint64_t bw_early = 0;   // stores that landed before their acknowledge (BUFW_Q 0)
   unsigned cur_frame = 0;                 // TGP-side frame (by pops)
   unsigned feed_frame = 0;
   uint64_t popped = 0;
@@ -439,6 +454,7 @@ split_done:
     const bool io_rd = TGP(io_rd), io_wr = TGP(io_wr), io_ack = TGP(io_ack);
     if (s == S_SRC && CORE(src_fifo_q) && !CORE(fifo_ack)) { ++fifo_empty_cyc; ++f_empty[cur_frame]; }
     if ((io_rd || io_wr) && !io_ack) {
+      f_iow[cur_frame]++;
       if (TGP(sel_math)) io_wait_cyc[0]++;
       else if (TGP(sel_rom)) io_wait_cyc[1]++;
       else if (TGP(sel_buf)) io_wait_cyc[io_wr ? 3 : 2]++;
@@ -447,6 +463,16 @@ split_done:
     if (TGP(fifo_out_push) == 0 && TGP(fifo_wr) && R(fout_full)) fout_full_cyc++;
     f_cyc[cur_frame]++;
     if (TGP(dbg_unimplemented)) ++unimpl_cyc;
+    // R888: a store's high half landing retires it, in order (before the
+    // edge: the half select moves on the acknowledge's edge)
+    if (top->bufw_ack && (top->bufw_addr & 1u)) {
+      const uint32_t a = (top->bufw_addr >> 1) & 0x7fffu;
+      if (bw_pending.empty()) ++bw_early;
+      else {
+        if (bw_pending.front() != a) ++hz_order;
+        bw_pending.erase(bw_pending.begin());
+      }
+    }
 
     // i960 pop of an output
     if (feed_xread) {
@@ -454,6 +480,7 @@ split_done:
         const uint32_t got = top->rdata;
         if (xi < exp_xpop.size() && got != exp_xpop[xi]) { ++mism_x; report("i960-pop", xi, exp_xpop[xi], got, ""); }
         ++xi; ++fp; gap_left = rnd(gap);
+        if (!bw_pending.empty()) ++hz_pop;   // R888
       } else { ++feed_x_block; ++f_xblk[cur_frame]; }
     } else if (feed_write) {
       // --board-push: the write is offered whatever the FIFO holds, and it
@@ -500,6 +527,11 @@ split_done:
           else if (exp_wr[wi].b != got) { ++mism_wr; report("io-write-data", wi, exp_wr[wi].b, got, ctx); }
         } else ++extra_wr;
         ++wi;
+        if (TGP(sel_buf) && bw_early) --bw_early;   // R888: it has landed already
+        else if (TGP(sel_buf)) {              // R888: a store is queued
+          bw_pending.push_back(TGP(io_addr) & 0x7fffu);
+          bw_peak = std::max<uint64_t>(bw_peak, bw_pending.size());
+        }
         rtl_stream.push_back('W'); rtl_stream.push_back(tag); rtl_stream.push_back(got);
       }
     }
@@ -507,6 +539,13 @@ split_done:
     // instruction accounting at retire (decode registers still hold it)
     if (CORE(ret_now)) {   // R773: retire is no longer one state
       ++retired; f_ret[cur_frame]++;
+      {
+        const unsigned a5 = CORE(d_alu) & 31;
+        const bool fp2 = (CORE(d_lab) || CORE(d_ldmov)) &&
+                         ((a5 >= 0x05 && a5 <= 0x14 && a5 != 0x0e && a5 != 0x0f && a5 != 0x12));
+        const unsigned mc = fp2 ? 2u : 1u;
+        mame_cyc += mc; f_mame[cur_frame] += mc;
+      }
       const uint64_t c = cyc - ins_start + 1;
       const unsigned ipc = SEQ(pc) & 0xfff;
       pc_cyc[ipc] += c; pc_n[ipc]++;
@@ -551,6 +590,8 @@ split_done:
       top->tbl_rdata = tables[top->tbl_addr & 0xffff];
     }
     if (dat_left < 0 && top->dat_req && !top->dat_ack) {
+      if (top->dat_is_buf)                    // R888: never past a pending store to it
+        for (uint32_t a : bw_pending) if (a == (top->dat_addr & 0x7fffu)) { ++hz_raw; break; }
       dat_left = lat - 1 + rnd(jitter);
       if (top->dat_is_buf) {
         // The i960 owns buffer RAM: the value is MAME's, from the R record.
@@ -615,7 +656,12 @@ split_done:
   std::printf("ldif with condition true (the load MAME performs, mb86233.cpp case 6): %llu\n",
               (unsigned long long)ldif_taken);
   const uint64_t hard = strict_nan ? total_mism : total_mism - mclass_n[MK_NAN];
-  const bool pass = end_ok && counts_ok && hard == 0 && unimpl_cyc == 0;
+  std::printf("buffer-RAM store order (R888): read past a pending store %llu, result read with stores pending %llu, "
+              "stores landing out of order %llu; most stores pending %llu\n",
+              (unsigned long long)hz_raw, (unsigned long long)hz_pop, (unsigned long long)hz_order,
+              (unsigned long long)bw_peak);
+  const bool pass = end_ok && counts_ok && hard == 0 && unimpl_cyc == 0
+                 && hz_raw == 0 && hz_pop == 0 && hz_order == 0;
   std::printf("VERDICT vs MAME: %s\n", !pass ? "FAIL"
               : total_mism == 0 ? "PASS (bit-exact against MAME)"
               : "PASS (bit-exact against MAME except NaN encoding)");
@@ -653,6 +699,37 @@ split_done:
                 (unsigned long long)nin_f, (unsigned long long)f_out[f], (unsigned long long)f_cyc[f],
                 (unsigned long long)f_ret[f], double(f_cyc[f]) / std::max<uint64_t>(f_ret[f], 1),
                 (unsigned long long)f_empty[f], (f_cyc[f] - f_empty[f]) / 80000.0, f_xblk[f] / 80000.0);
+  }
+
+  // R888: THE FRAME BUDGET. Per captured (vblank) frame: our TGP's busy time
+  // (every cycle but the empty-input-FIFO wait) at 80 MHz, and MAME's model of
+  // the same instructions at 50 MHz / 3, against Model 2's 57.5 Hz vblank.
+  {
+    const double BUDGET = 1000.0 / 57.5;
+    std::vector<double> ours, mame, iow;
+    double ours_sum = 0, mame_sum = 0;
+    for (unsigned f = 0; f < NF; ++f) {
+      const double o = (f_cyc[f] - f_empty[f]) / 80000.0, m = f_mame[f] * 3.0 / 50000.0;
+      ours.push_back(o); mame.push_back(m); iow.push_back(f_iow[f] / 80000.0);
+      ours_sum += o; mame_sum += m;
+    }
+    auto pct = [](std::vector<double> v, double q) {
+      if (v.empty()) return 0.0;
+      std::sort(v.begin(), v.end());
+      return v[std::min(v.size() - 1, size_t(q * (v.size() - 1) + 0.5))];
+    };
+    auto over = [&](const std::vector<double> &v, double t) {
+      size_t n = 0; for (double x : v) if (x > t) ++n; return n; };
+    std::printf("\n== FRAME BUDGET (R888; %.2f ms a vblank; busy = all but the empty-input wait)\n", BUDGET);
+    std::printf("  MAME-model cycles %llu (%.3f per instruction): %.1f ms at 50 MHz / 3; ours %.1f ms at 80 MHz -> ours / MAME %.3f\n",
+                (unsigned long long)mame_cyc, double(mame_cyc) / std::max<uint64_t>(retired, 1),
+                mame_sum, ours_sum, mame_sum > 0 ? ours_sum / mame_sum : 0.0);
+    std::printf("  per frame ms        p50     p90     p99     max   frames > budget  > half\n");
+    std::printf("  ours @80 MHz    %7.2f %7.2f %7.2f %7.2f   %6zu          %6zu\n", pct(ours, .5), pct(ours, .9),
+                pct(ours, .99), pct(ours, 1), over(ours, BUDGET), over(ours, BUDGET / 2));
+    std::printf("  MAME 50 MHz/3   %7.2f %7.2f %7.2f %7.2f   %6zu          %6zu\n", pct(mame, .5), pct(mame, .9),
+                pct(mame, .99), pct(mame, 1), over(mame, BUDGET), over(mame, BUDGET / 2));
+    std::printf("  ours io wait    %7.2f %7.2f %7.2f %7.2f\n", pct(iow, .5), pct(iow, .9), pct(iow, .99), pct(iow, 1));
   }
 
   std::printf("\n== CORE FSM STATE HISTOGRAM (cycles)\n");

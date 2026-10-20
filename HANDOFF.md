@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-20: Sega Rally's slowdowns are ours -- the TGP 1.54x MAME's time, now 0.96x (R888, not fitted)
+
+Ben on s1220: Rally's 3D holds through a race "but a couple of slowdowns".
+MAME runs that race at 57.5 fps (one flip a vblank, sim/tgp/mame_flips_2a.lua)
+and its model of the TGP (50 MHz / 3, +1 cycle a written FP op) needs 3.1 ms
+of a 17.4 ms vblank (p50; max 5.1) -- nothing says the original slows down.
+Ours, in the board-like replay of a regenerated Rally capture, took 1.54x
+that: 27% of its time was pc 0x15b storing ~1,700 dwords a frame into buffer
+RAM, each waiting for two shared-write-port transactions, and FP ops waited
+their pipeline after the transfer. Two changes, both 2A-only parameters
+(the original core is cycle-identical): POSTED BUFFER-RAM WRITES (m2_tgp
+BUFW_Q 32, a 33-deep MLAB queue; the i960's result read and any TGP read in
+the queued span wait for it) and THE ALU UNDER THE TRANSFER (mb86233_core
+EARLY_ALU). Rally 887.5 M -> 562.7 M cycles (0.96x MAME), VF2 1.49x -> 1.04x,
+Zero Gunner 1.10x -> 0.93x; every stream IDENTICAL to 8751702's and
+bit-exact against MAME; the replay now checks store order (a mutant without
+the i960 hold fails). ~+53 ALM, 3 MLABs, no M10K. Needs a fit (one
+quartus_fit) and Ben on the board: Rally's race; if anything new shows in
+the 3D, BUFW_Q 0 in Model2.sv is the A/B. Not taken, measured: a port 8/9
+pair buffer (<= ~3%), ports 8/9 at the top of the SDRAM class, a deeper
+input FIFO.
+
 ## 2026-10-20: VF2's sound right on the board except the effects' level (R885, R886)
 
 ON THE BOARD: s1218 (d4fede8, M2_PROBE, M2_NO_2A_RALLY;
