@@ -40106,3 +40106,10 @@ the warning screen, the attract -- no key. Coin, start, race as on s1221.
 The test menu's DriveBoard Test still reports a network error (not modelled).
 VF2, Sega Rally, Virtua Cop 2, Zero Gunner: no change (their IN2 is the bench's
 unchanged expressions).
+
+*ON THE BOARD (s1230 = 1296e49; clk_sys -0.223, clk_mem +0.321), Ben,
+2026-10-20: MANX TT'S REV NEEDLE IS THERE; VIRTUA COP 2'S BULLET OVERLAY IS
+THERE AND UPDATES AS IT SHOULD -- R889's window key confirmed for both (R893).
+Manx TT still runs at half speed: 28.7 fps (tools/m2-fps.py, 2 vblanks a frame
+99%) against MAME's 57.4 fps in the same attract race (R896, running).*
+
