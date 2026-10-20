@@ -41236,3 +41236,98 @@ draws transparent pixels -- not provably invisible here).
 without repeated lines; Daytona, VF2, Rally and the rest pixel-identical
 (Daytona's race with less 2D fetch traffic than before, which only frees
 port 3).
+
+
+**R902 -- SEGA RALLY'S REAR-VIEW MIRROR IS WINDOWS 3 AND 4: A BLACK BACKING
+AT z 512, THEN THE SCENE BEHIND THROUGH A REFLECTED CAMERA IN ITS OWN
+VIEWPORT. EVERY STAGE OF THIS CORE DRAWS IT FROM MAME's LISTS; BLACK IS
+EXACTLY WHAT A z-ONLY SORT DRAWS. THE BOARD'S BLACK IS NOT REPRODUCED IN
+SIMULATION -- NO RTL CHANGE.**
+(Ben, s1240 = baadcd5: "the rear-view mirror is just black -- it should show
+the scene behind the car". Not known whether it ever worked.)
+
+*Believed:* backface culling flipped by a mirrored transform, the wrong
+viewport rectangle, the backing in front in the sort, the near plane, or a
+second camera dropped by the geometry.
+
+*MAME 0.289 srallyc (build/mame289-mip, sim/io/mame_m2_2a_play.lua, coin
+30 s; M2WIN, M2DIFF list 2000, M2GEO walks 3282 / 3457; verified):*
+  1. The mirror is the bumper view's (VR from the near chase view; the far
+     and near chase views have none). A race list there has FOUR windows
+     (747 of 747 lists 1620-2366; the key's 15 is far off):
+       W1 (0,128)-(496,512) centre (248,320): the world, 112-155 objects
+       W2 same viewport: one HUD object (z bucket 0x5000)
+       W3 (126,438)-(370,482) centre (248,460): ONE flat black quad, focal
+          150, z bucket 512 -- the mirror's frame and backing
+       W4 (128,440)-(368,480), same centre: the scene behind, 5-8 objects
+          (terrain from polygon ROM, the cars from slow polygon RAM, count
+          0), 29-96 polygons, z buckets 0x2383-0xf9a0; ONE camera matrix
+          written twice, determinant -1 (a reflection), focal inherited
+          from W3 (150); the list ends with focal 350 for the next frame.
+     Screen rows 30-74 / 32-72 (MAME's 384 - vp_y + yoffs 128).
+  2. MAME draws W4 before W3 (render_polygons, last window first, first
+     write wins), so the scene covers the backing but its 2-px rim. The
+     reverse bit of the object command is parsed and never used; the
+     backface test is dot(normal, point) on transformed vectors, which a
+     reflection does not change (and this core's engine does the same --
+     there is no screen-space winding test anywhere in the path).
+  3. The list is complete at the flip: snapshots of [rp, rp+0x900) at the
+     read-pointer write and at the next vblank (where MAME walks) differ in
+     0 words over 110 lists (flip 14.6 ms before the vblank). Lists are
+     TRIPLE-buffered at dwords 0x0000 / 0x2000 / 0x4000 (Daytona double).
+     The TGP writes only the matrices (opcode included) into the list; the
+     i960 pushes the rest; the TGP's mirror matrices are followed by an
+     output the i960 pops before it flips (rally_play capture, 1,724 of
+     them), so a slow TGP cannot leave the slot unwritten at the walk.
+
+*This core on MAME's lists (all 2A configuration; verified):*
+  - geodiff (CRTC_Y 128, WINKEY) on walks 3282 / 3457: 1,221 / 1,688 of
+    1,224 / 1,695 polygons match (the rest R643's edge-clip cases in W1),
+    sort keys 1 / 4 off (W1), u/v and texture parameters as MAME; the mirror
+    quads are there with window nibble 0xB, the backing 0xC.
+  - tb_m2_raster3d (TEXLUT, KW 20, TXLW8, FB_DDR3, TEXMEM) on list 2000,
+    mean max-channel error over each window's pixels:
+        window      px     key on   key off (z alone)
+        1       179,632     1.44      1.43
+        2            96     2.75    202.83
+        3         1,136     0.00      0.00
+        4         9,600     5.07    158.44  <- black: the backing wins
+  - THE WHOLE PATH, our geometry into our raster: tb_m2_raster3d's new
+    M2_R3D_QUADS mode pushes geodiff's ours.txt as the clipper hands it
+    over, coloured by quad index. The mirror rectangle (240 x 40 = 9,600
+    px) is owned by W4 quads on 9,600 px with the key, by the W3 backing on
+    9,600 px with the nibble cleared, on both walks. Draw 390,357 / 409,888
+    core cycles (0.32-0.34 frame).
+  - Tiny cull (R769/R776): no mirror quad is refused in the fine mode and 3
+    of 50 in the coarse; the lists need 1,143-1,713 slots of 2,048.
+  - The 2D (tb_m2_video_frame on MAME's tile/char/palette at 55 s): the
+    mirror rectangle is all backdrop, category 0 -- nothing over the 3D.
+
+*Our own list (m2_boot_harness A2X, the srallyc image, three coins, start,
+VR twice; scratch tb with an input schedule and buffer dumps; ~2 h of
+simulation):* after the second VR (frame 3,000) our i960 + TGP + push path
+write MAME's structure exactly -- W3 at (126,438)-(370,482) with its one
+object, W4 at (128,440)-(368,480) with 4 objects (200 polygons) and two
+matrices of determinant -1. But every matrix's translation in that run is
+NaN (the main view's too): the harness's analog inputs read 0xFF and its
+sound board is a stub, so its camera is not the board's -- the harness
+shows the mirror's commands are emitted, not that their values are right.
+
+*Daytona (MAME, daytona, race with VR1-VR4 cycled, 125 s):* every window
+is full-screen ((-1,128)-(496,512)); no view draws a mirror window. The
+original core does not share this mechanism (main's key is off for Daytona,
+R899, which would matter only if it did).
+
+*So:* black is exactly the z-only order (W3's backing at z 512 in front of
+all of W4), and on the 2A build the key is on (R3D_WINKEY = M2A, confirmed
+on the board for Manx TT and Virtua Cop 2). Nothing in simulation drops the
+mirror. NOT ESTABLISHED, and the next board build should measure rather
+than guess: per walk, the window count and the number of quads the store
+took with each nibble (0xC and 0xB here: expect 1 and 29-96), on the
+overlay. If 0xB is zero, the W4 objects die before the store (walk,
+engine, clipper -- the camera's values); if it is there, the raster loses
+them (then the draw, not the sort).
+
+*Tools (scratch, ROM-derived output outside the tree):* M2_R3D_QUADS in
+sim/video/tb_m2_raster3d.cpp (committed); list decoders and the harness
+schedule in the R902 scratch folder.
