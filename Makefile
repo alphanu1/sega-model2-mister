@@ -34,7 +34,7 @@ VBUILD  = $(VERILATOR) --cc --exe --build -j 0 $(VFLAGS)
 
 # R852: the parts of the Model 2A board the harness builds with A2=1 (every
 # boot build compiles them; only A2=1 instantiates them).
-BOOT_2A_RTL := rtl/io/m2_timers.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv \
+BOOT_2A_RTL := rtl/io/m2_waitst.sv rtl/io/m2_timers.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv \
                rtl/sound/m2_i8251.sv rtl/sound/m2_sound_link.sv rtl/sound/m2_2a_snd_stub.sv
 
 
@@ -1004,6 +1004,24 @@ obj_m2_bridge_2a/Vm2_cpu_bridge: rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridg
 	$(VBUILD) --top-module m2_cpu_bridge -GBUFFERRAM=1 -GCC_EN=1 -GBOARD_2A=1 -GAW=26 -Wno-WIDTHTRUNC -CFLAGS "-O2 -DBRIDGE_2A" \
 	  --Mdir obj_m2_bridge_2a -o Vm2_cpu_bridge rtl/io/m2_cpu_bridge.sv sim/mem/tb_m2_cpu_bridge.cpp
 
+# R904: the i960's wait states (m2_waitst) against a model of the bridge's
+# registered answer -- the default (one-hot counts, a minimum), EXTRA (N on
+# top) and binary counts.
+.PHONY: test_m2_waitst
+WAITST_CFGS := min_oh extra_oh min_bin
+WAITST_G_min_oh   := -GONEHOT=1 -GEXTRA=0
+WAITST_G_extra_oh := -GONEHOT=1 -GEXTRA=1
+WAITST_G_min_bin  := -GONEHOT=0 -GEXTRA=0
+WAITST_C_min_oh   := -DP_ONEHOT=1 -DP_EXTRA=0
+WAITST_C_extra_oh := -DP_ONEHOT=1 -DP_EXTRA=1
+WAITST_C_min_bin  := -DP_ONEHOT=0 -DP_EXTRA=0
+test_m2_waitst: $(foreach c,$(WAITST_CFGS),obj_waitst_$(c)/Vm2_waitst)
+	@for c in $(WAITST_CFGS); do echo "== test m2_waitst $$c (R904)"; ./obj_waitst_$$c/Vm2_waitst || exit 1; done
+
+obj_waitst_%/Vm2_waitst: rtl/io/m2_waitst.sv sim/io/tb_m2_waitst.cpp
+	$(VBUILD) --top-module m2_waitst $(WAITST_G_$*) -CFLAGS "-O2 $(WAITST_C_$*)" \
+	  --Mdir obj_waitst_$* -o Vm2_waitst rtl/io/m2_waitst.sv sim/io/tb_m2_waitst.cpp
+
 # The bridge against the REAL controller. Both pass their own tests; this is the
 # composition, which is what ships and what had never been tested together.
 test_m2_cpu_sdram: obj_m2_cs/Vm2_cpu_sdram_harness
@@ -1554,6 +1572,8 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
 # image from rom_csum.py on its MRA; M2_FRAMESTAT=<f> M2_WORK_IPS=b70,3eec gives a
 # 'W' line per frame (the vblank handler's entry to the flip), M2_BOOT_RMODE=1 logs
 # the stores to render mode.
+# R904: BOOT_2AX_G=-GWAITST=1 BOOT_2AX_DIR=obj_boot_2ax_ws builds it with m2_waitst live
+# (Model2.sv's M2_2A_WAITST for Sega Rally).
 BOOT_2AX_DIR ?= obj_boot_2ax
 BOOT_2AX_G   ?=
 $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
