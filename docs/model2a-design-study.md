@@ -40288,3 +40288,29 @@ tanr; no new switch):*
   mismatches. Planted -- EE_LOAD=0 with the loads: FAIL (3,802 mismatches);
   EE_LOAD=0, +noload (the module as it was): PASS. test_m2_vcop2_guns
   223,916 / 0, test_m2_2a_inputs PASS (the harnesses tie the port off).
+
+*AREA (quartus_map 17.0, whole design, the 2A build, the same qsf; the
+baseline is the tip's own map, sm2-builds/sm2-2atip-5a36477 seed s1236):*
+     model2a 5a36477   40,083 ALMs est.  57,631 ALUT  47,965 regs  4,467,205 block bits
+     this (R897)       40,220            57,876       47,979       4,467,205
+  +137 ALMs estimated, +245 ALUT, +14 registers, no block bits: i960_top
+  11,456 -> 11,646 ALUT (movre's third word, spill and T_TRIP; sqrtrl),
+  m2_93c46 127 -> 149 (the load port), m2_geo_engine 1,798 -> 1,806 (two
+  pointer bits), m2_rom_loader 159 -> 160; the rest Model2.sv's base muxes
+  and the decode. NOT FITTED: the fit is the open question at 98-99%; if it
+  does not fit, M2_NO_2A_EE_LOAD drops the load port (hpyagu98 then stops at
+  "Error #1"), and movre / sqrtrl are F2A's to move behind a switch.
+  Quartus rewrote Model2.qsf at the end of the map again (R891's lines):
+  reverted.
+
+*VERIFIED / INFERRED:*
+  * VERIFIED in simulation and against MAME: the loader's remaps, the
+    bridge's windows, the large mapping's geometry against MAME walks of two
+    of the six sets, movre / sqrtrl against the reference, the EEPROM load
+    port; every MRA's image against MAME's regions (tools/mra_vs_mame.py).
+  * INFERRED: that the six boot and play on the core (no whole-core run);
+    that the board's 128 MB module is addressed as R891 built it (the
+    M2_MEMTEST build has not run); that Main_MiSTer sends hpyagu98's backup
+    image and then the saved .nvm in document order (its source says so);
+    load times (83-99 MB images).
+  * The board: each of the six on the 128 MB module.

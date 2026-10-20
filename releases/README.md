@@ -94,18 +94,21 @@ Fighter 2 at the default 80%:
 
 ### Model 2A games not supported yet
 
-These run on the same board, and are being brought up next. The zips are
-what each will need, as MAME 0.289 names them.
+These run on the same board and are being brought up next. The zips are
+what each will need, as MAME 0.289 names them. Those with an MRA in `mra/`
+load on a core built from this branch after the 2026-10-20 release (not the
+release above) and are **untested on a board**: they move to the table above
+once they have been played.
 
-| Game | ROM zips | MAME set | SDRAM | What it needs |
+| Game | ROM zips | MAME set | SDRAM | State |
 |---|---|---|---|---|
-| Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | 128 MB | Its MRA, and its factory settings preloaded |
-| Sky Target | `skytargt.zip` | `skytargt` | 64 MB | Its MRA and analogue stick |
-| Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | 128 MB | Its MRA; its 315-5881 protection check patched out, as Zero Gunner's |
-| Pilot Kids (Model 2A) | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | 128 MB | As Dynamite Cop |
+| Hanguk Pro Yagu 98 | `hpyagu98.zip` | `hpyagu98` | 128 MB | MRA `Hanguk Pro Yagu 98.mra`, which loads the factory settings MAME ships in the zip (`hpyagu98_nvram`, `hpyagu98_backup`); untested on a board |
+| Sky Target | `skytargt.zip` | `skytargt` | 128 MB | MRA `Sky Target.mra`; untested on a board |
+| Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | 128 MB | MRA `Dynamite Cop (Export, Model 2A).mra`, its 315-5881 checks patched out; untested on a board |
+| Pilot Kids (Model 2A) | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | 128 MB | MRA `Pilot Kids (Model 2A).mra`, its 315-5881 check patched out; untested on a board |
 | Manx TT Superbike (DX/Twin, Revision D) | `manxtt.zip` | `manxtt` | 64 MB | Being tested now |
-| Motor Raid (Twin, Twin/DX) | `motoraid.zip` (and `motoraiddx.zip` for Twin/DX) | `motoraid` | 128 MB | Bike controls, one more CPU instruction |
-| Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | 128 MB | One more CPU instruction; its protection check patched out |
+| Motor Raid (Twin) | `motoraid.zip` | `motoraid` | 128 MB | MRA `Motor Raid - Twin.mra`; untested on a board. The Twin/DX set (`motoraiddx`) is not supported |
+| Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | 128 MB | MRA `Dead or Alive (Model 2A).mra`, its protection check patched out; untested on a board |
 
 ## Model 2 core release notes
 
