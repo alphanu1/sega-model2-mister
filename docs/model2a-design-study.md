@@ -38958,3 +38958,95 @@ cannot see how many bullets are left (R889). The original core's Virtua Cop
 shows the bullets but they never update -- always full; recorded on main
 (R890 there), not fixed on this branch.*
 
+
+
+**R886 -- "SFX MUCH QUIETER THAN THE MUSIC" (VF2), "SEGA RALLY AND ZERO GUNNER
+QUIET OVERALL, ~20% OF VF2's MUSIC" (Ben, s1218): MAME's OWN BALANCE, TO THE
+DECIBEL. EVERY VOICE OF ALL FOUR 2A GAMES GOES TO THE DIRECT SEND AT DISDL 3
+(-24 dB); VF2's MUSIC IS LOUD ONLY THROUGH THE DSP's RETURN (EFSDL 6-7),
+WHICH VF2's EFFECTS AND ALL OF RALLY DO NOT USE. THE BENCH IS MAME's WITHIN
+0.1 dB. NO RTL CHANGE.**
+
+*Believed (the task):* one path the effects and Rally / Zero Gunner share and
+VF2's music avoids -- the effect send, the DSP's scaling, a TL or DISDL range,
+MVOL, the OSD volume -- attenuated on our side only.
+
+*Measured (MAME 0.289 captures, 300 s each; scsp_split, new SPLIT_CAP mode:
+the capture itself through scsp_ref.h -- equal to out.bin, 0 samples differ --
+with each sample's mix taken apart (SPLIT_CLS): the direct sends of VF2's
+effect voices (word 9 = 0x51xx), of its drums (0x53xx), of the rest, and the
+DSP return; RMS in 16-bit DAC units, left):*
+  1. THE GAMES' LEVELS IN MAME: VF2 ~2,500 (10 s windows 1,700-3,900), Sega
+     Rally 360-440 in play (145-160 in attract), Zero Gunner 440-980, Virtua
+     Cop 2 AC 504 (plus a constant +2,717 DC that the DSP returns all the
+     time). Rally / VF2 = 17% (-15 dB): Ben's "maybe 20%".
+  2. WHERE EACH COMES FROM, 20-120 s (VF2 20-80): VF2 direct 893, DSP return
+     2,095 (the direct path 15% of the power); Rally direct 362, return 0
+     (100%); Zero Gunner direct 519, return 221 (85%); Virtua Cop 2 direct 319,
+     return 2,717 (all of it the DC).
+  3. WHY (keyon.txt, all key-ons): DISDL is 3 on every VF2 and Rally voice
+     (9,967 / 11,319), 3 on 96% of Zero Gunner's (2 and 4 the rest) -- -24 dB,
+     so one full-scale 8-bit voice peaks at ~2,000 directly. VF2's music sends
+     to the DSP (IMXL 2-5 on 28% of key-ons) and its returns come back at
+     EFSDL 6-7 (-6 / 0 dB); its effects are TL 4, ISEL 0, IMXL 0, word 11
+     0x6000 (DISDL 3, no effect send). Rally: IMXL 0 and EFSDL 0 on every
+     key-on, TL mostly 0x2a-0x3c (-16 to -22 dB on top of DISDL 3). The 0x400
+     writes are the same in both (DAC18B 1, MVOL 15) and MAME's 18-bit DAC
+     path has the 16-bit one's scale (put_int_clamp(smpl, 131072) against
+     (smpl >> 2, 32768)); ours (m2_scsp dac()) the same.
+  4. VF2's EFFECTS AGAINST THE REST, IN MAME (47-75 s, a two-player fight,
+     84 channel-14 note-ons): the effect voices' RMS over 0-150 ms after each
+     note-on, median 507, peak 1,826; the rest of the mix over the same
+     windows 2,489, peak 9,260: -12.9 dB. On the whole mix the 50-150 ms
+     after a note-on is -0.1 dB from the 200 ms before (median): in MAME a hit
+     does not rise above the music.
+
+*Ours (tb_m2_2a_sound, 80 MHz, latency 6-40, the trace build; new
+SND_MIDI_DROP=1 drops MAME's MIDI in [SND_SHIFT_AFTER - SND_SHIFT,
+SND_SHIFT_AFTER) as the writes are, so a later game reaches the driver at the
+boot's end: SND_SHIFT=41 SND_SHIFT_AFTER=43 puts VF2's second game -- MIDI
+43.0 s on -- at 2 s, the fight's first hits at 6 s; 10 s, ~15 min wall,
+PASS, 0 underruns). The run's trace through scsp_split: 34 of 441,007 samples
+differ (mid-slot RAM writes, R885's ambiguity; residual 0.000 in every 0.5 s).*
+                                      ours            MAME
+  8 hits, 47-51 s: effects RMS        474 (median)    475
+    rest of the mix                   2,938           2,963
+    effects / rest                    -15.8 dB        -15.9 dB
+    effects peak / rest peak          1,731 / 10,806  1,731 / 10,719
+  over 47-51 s: effects / drums /
+    music / DSP return / total        301/575/763/2,176/2,916   300/580/763/2,178/2,920
+  the DAC output (WAV), 50-150 ms
+    after vs 200 ms before a hit      -0.5 dB         -0.4 dB
+  level 3-10 s (VF2) / 4-10 s (Rally, SND_SHIFT=13 SND_SHIFT_AFTER=16, its
+    attract music from 16.3 s; PASS, 0 underruns)
+                                      3,295 / 240     3,143 / 241  (+0.41 / -0.03 dB)
+The OSD volume (Model2.sv, 80% default) is one gain on both channels after
+the DAC: it changes no balance. Nothing between the DAC and AUDIO_L
+saturates: VF2's p99.9 is 7,000-15,000, no sample of MAME's mix reaches the
+16-bit clamp in 300 s.
+
+*Conclusion:* the board does what MAME does, and so -- given R880's MIDI
+and R885's split -- does the bench: Ben's two ratios (effects ~-13 dB under
+VF2's music, Rally ~-15 dB under VF2) are MAME 0.289's own. The shared
+"path" is real but it is in the games' register values, not in our RTL: every
+voice's direct send is DISDL 3, and only what a driver routes through the DSP
+comes back loud. Changing it would depart from MAME, the reference for what
+the silicon computes (CLAUDE.md), with nothing here to say MAME is wrong --
+its SDL table (-36 .. 0 dB, 6 dB steps) and its DSP path are self-consistent
+(one full-scale voice at SDL 7 reaches 16-bit full scale directly or through a
+unity DSP program). NOT CHANGED.
+*What would settle it (a study-level question for Ben):* a recording of a
+real 2A board -- a VF2 fight (hit against music) or Rally against VF2 at one
+amplifier setting. If the hardware's effects stand ~13 dB higher, the direct
+send (or the DSP input / return scaling) is where MAME is wrong, and one
+constant in the level unit's SDL table or the DSP's MIXS / EFREG scaling would
+move it; the clip vf2_fight_OURS_direct_plus12dB_left_mono.wav (the bench's
+split, direct sends x4) is what that would sound like. Until then, a per-game
+OSD "sound boost" is a gain, not a balance, and fixes only Rally / Zero
+Gunner's overall level.
+*Benches:* scsp_ref.h gained slot_dl / slot_dr / efx_l / efx_r (no change to
+what it computes); tb_m2_scsp VF2 30 s: 0 samples differ from the reference
+or MAME's mix, 9,421,266 slot samples 0 wrong; tb_m2_2a_sound VF2 6 s
+unshifted: PASS, 98.9% of writes in MAME's order, 0 underruns, the check 0
+wrong, 82.68 ms (as R885). No RTL file changed: lint and quartus_map not
+rerun.

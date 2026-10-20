@@ -25,6 +25,9 @@
 //   SND_SHIFT=<s> [SND_SHIFT_AFTER=<s>, default 5]  MAME's MIDI and writes from
 //     SND_SHIFT_AFTER moved SND_SHIFT seconds earlier, to reach a late event
 //     in a short run (R874: VF2's music at 4.77 s with SND_SHIFT=9)
+//   SND_MIDI_DROP=1  MAME's MIDI between SND_SHIFT_AFTER - SND_SHIFT and SND_SHIFT_AFTER
+//     dropped, as its writes are (R886: a later game's MIDI moved to the boot's end
+//     instead of queued behind the dropped stretch)
 #include "Vm2_2a_sound.h"
 #include "verilated.h"
 #include <cstdio>
@@ -180,7 +183,12 @@ int main(int argc, char **argv) {
 	std::vector<std::pair<double, int>> midi;
 	if (FILE *f = fopen((d + "/midi.txt").c_str(), "r")) {
 		unsigned long long n; char dir[8]; unsigned b;
-		while (fscanf(f, "%llu %7s %x", &n, dir, &b) == 3) if (!strcmp(dir, "in")) midi.push_back({shifted(n / 44100.0), int(b)});
+		const bool drop = shift != 0.0 && getenv("SND_MIDI_DROP");
+		while (fscanf(f, "%llu %7s %x", &n, dir, &b) == 3) {
+			const double tm = n / 44100.0;
+			if (drop && tm >= shift_after - shift && tm < shift_after) continue;
+			if (!strcmp(dir, "in")) midi.push_back({shifted(tm), int(b)});
+		}
 		fclose(f);
 	}
 	std::vector<W> mw;
