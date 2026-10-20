@@ -388,6 +388,14 @@ int main(int argc, char **argv) {
         for (size_t w = 0x1600000; w < 0x1610000; ++w) mem[w] = 0xffff;
         std::printf("  VCOP: program 0x40000-0x7FFFF copied to word 0x1880000\n");
       }
+      // R900: M2_ZERO_WORK=1 -- work RAM (the harness's word 0x1600000, 1 MB)
+      // reads 0 until written, as MAME's does and as Model2.sv's boot sweep
+      // makes it for the large layout's games
+      if (std::getenv("M2_ZERO_WORK")) {
+        for (size_t w = 0x1600000; w < 0x1680000; ++w) mem[w] = 0;
+        if (std::getenv("M2_ZERO_BOARD")) for (size_t w = 0x12a0000; w < 0x12c0000; ++w) mem[w] = 0;   // and board RAM
+        std::printf("  R900: work RAM zeroed%s\n", std::getenv("M2_ZERO_BOARD") ? ", board RAM zeroed" : "");
+      }
     } else {
       std::printf("  M2_BOOT_IMAGE set but %s could not be read\n", ip);
     }
@@ -1771,6 +1779,29 @@ int main(int argc, char **argv) {
                      d->obs_bus_we ? "WR" : "RD", (unsigned)d->obs_bus_addr,
                      (unsigned)(d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata));
       }
+    }
+    // R900: M2_BUSLOG=<file> -- every CPU bus access acknowledged in
+    // [M2_BUSLOG_LO, M2_BUSLOG_HI] (hex, default work RAM) -- writes, and reads with M2_BUSLOG_RD -- with
+    // its IP; and every I/O access to the 315-5649 (0x01c00000-0x01c0001f).
+    {
+      static FILE *bl = std::getenv("M2_BUSLOG") ? std::fopen(std::getenv("M2_BUSLOG"), "w") : nullptr;
+      static const uint32_t blo = std::getenv("M2_BUSLOG_LO") ? uint32_t(std::strtoul(std::getenv("M2_BUSLOG_LO"), nullptr, 16)) : 0x500000u;
+      static const uint32_t bhi = std::getenv("M2_BUSLOG_HI") ? uint32_t(std::strtoul(std::getenv("M2_BUSLOG_HI"), nullptr, 16)) : 0x5fffffu;
+      static const bool brd = std::getenv("M2_BUSLOG_RD") != nullptr;   // reads too
+      static uint64_t bl_last = ~0ull;
+      if (bl && d->obs_bus_ack && (brd || d->obs_bus_we) && d->dbg_acc != bl_last && d->obs_bus_addr >= blo && d->obs_bus_addr <= bhi)
+      {
+        bl_last = d->dbg_acc;
+        std::fprintf(bl, "%llu %s %08x %08x be %x ip %08x\n", (unsigned long long)d->dbg_acc, d->obs_bus_we ? "W" : "R",
+                     (unsigned)d->obs_bus_addr, (unsigned)(d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata),
+                     (unsigned)d->obs_bus_be, (unsigned)d->dbg_ip);
+      }
+      static bool io_prev = false;
+      const bool io_now = d->obs_io_sel && ((d->obs_io_addr & 0xffffe0u) == 0xc00000u);
+      if (bl && io_now && !io_prev)
+        std::fprintf(bl, "%llu IO%s %06x be %x wd %08x ip %08x\n", (unsigned long long)d->dbg_acc, d->obs_io_we ? "W" : "R",
+                     (unsigned)d->obs_io_addr, (unsigned)d->obs_io_be, (unsigned)d->obs_io_wdata, (unsigned)d->dbg_ip);
+      io_prev = io_now;
     }
     cpu_prev = c;
     mem_prev = m; vid_prev = v;

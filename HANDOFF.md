@@ -17,6 +17,45 @@ i960 (40 MHz, 8 KB I-cache) is faster than the board's 25 MHz with its wait
 states -- padding can only slow accesses, so it cannot cure slowdowns, which
 come from SDRAM waits longer than the board's.
 
+## 2026-10-20: the six large-layout games on s1240 -- the luma-row map per game; Pilot Kids' work RAM zeroed (R900)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a82f3b76c3e45c589
+(on model2a 0a896af; never merge into main).
+
+FOUND: the "trippy" textures (Dynamite Cop, Sky Target, Dead or Alive) and
+Motor Raid's black ones are R867's luma-row map, not R897's layout. Those
+games colour their texels through luma rows R867 never captures (DC 6/7/76/
+96/100, DOA 98/100, ST 96/76/6, MR 100) and so through rows 0-3 / 16-19,
+which hold other curves -- or, in Motor Raid, zeros. MAME (0.289) surveys,
+160 s each: the games use 6-35 rows (distinct tables: PK 8, DOA 6, DC 17,
+MR 24, HPY 33, ST 32). The texel fetch reads texture RAM, which R897 never
+moved; its "texture ROM at 0x4000000" is the coordinate ROM (benched in R897).
+Pilot Kids runs on uncleared work RAM: MAME's init_pltkids patch (and the MRA)
+skips the game's own clear of 0x500000-0x54ffff, and MAME's RAM is zero; on
+the core it is SDRAM garbage. MAME with that RAM 0xFF and the whole-core bench
+(0xFFFF) both trap at IP 0xffffffff; zeroed, the bench runs to MAME's attract
+loop. The debug block is the game's own (0x5092e6, 1P Start, gated by
+0x5091b0) -- one more symptom.
+
+DONE: rtl/video/m2_luma_map.sv -- for a2_big games eight row RANGES per game
+(each filled from its first row), chosen per game from the surveys; every
+other game keeps R867's function bit for bit. Model2.sv's boot sweep zeroes
+work RAM and the 2A board RAM too for a2_big. Benches: test_m2_luma_map
+(131,072 checks, 0; two planted faults caught); tb_m2_raster3d on MAME frames
+(max-channel error / 255 against MAME's frame): DC 36.1 -> 4.1, ST
+60.0 -> 8.3, MR 34.0 -> 5.5, DOA 16.2 -> 6.1, HPY 40.9 -> 16.0; PK, VF2,
+Sega Rally pixel-identical. tb_m2_boot gains M2_BUSLOG / M2_ZERO_WORK / M2_ZERO_BOARD.
+
+OPEN: four games use more tables than eight slots (approximated by nearest
+content, < 0.5 luma step mean; exact needs more M10K and a wider quad-store
+word -- Ben). Zero Gunner's patch skips its clear the same way (released,
+untouched). Area (quartus_map): 40,246 -> 40,315 ALMs est. (+69), +13
+registers, block bits equal; not fitted (s1240 was 41,503 / 41,910).
+
+TO TEST ON THE BOARD: DC, ST, DOA, HPY smooth shading, no bands or stripes;
+MR textured; PK to its attract with no debug block; VF2, Rally, VCop2, ZG,
+Manx TT unchanged.
+
 ## 2026-10-20: the six remaining 2A games -- one large layout on the 128 MB module, movre / sqrtrl, the hpyagu98 EEPROM, six MRAs (R897)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a82730ab7496489a6
