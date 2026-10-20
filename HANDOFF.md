@@ -1,5 +1,38 @@
 # Handoff
 
+## 2026-10-20: the 128 MB dual-chip SDRAM module, and the byte mask on A12:A11 (R891)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch sdram128-2a (worktree), on
+model2a daca25b.
+
+DONE: m2_sdram DUAL (a chip-select bit above the 64 MB address, eight banks of
+row state, both chips brought up and refreshed) and MASK_ON_A (the byte mask
+on A12:A11 in the column phase) -- PSX_MiSTer's scheme for MiSTer's 128 MB
+module, two 64 MB chips on one inverted chip-select line with DQM on A11/A12.
+Both default off: every existing SDRAM suite's output is identical line for
+line. Model2.sv's 2A build: SDR_AW 26, DUAL and MASK_ON_A on, the DQM pins
+driven from A12:A11, T_REFI 770 (781 is past 64 ms: 782 x 8192 cycles). No
+released game's layout moves; on a 64 MB module the chip-1 commands are
+deselects. sim/mem/sdram_model.sv: sdram_module (two chips, per-chip checks,
+read masking, a bring-up check and RETENTION -- a row not restored within
+64 ms loses its data). make test_m2_sdram128d, test_m2_memtest.
+M2_MEMTEST=1 (with M2_PROBE=1): a power-up test of the whole module, results
+as 'B' / 'b' probe records, tools/decode_why.py prints them per 8 MB region.
+Whole map (2A) 39,945 -> 40,063 ALMs est.; m2_memtest alone 294 ALMs est., one
+MLAB, probe builds only. Quartus rewrote Model2.qsf at the end of the map
+(files.qip's stale m2_testpattern.sv): reverted -- check the qsf after a map.
+
+FOUND (bench, INFERRED for the board until the test runs): R19's eleventh
+column bit put a column bit on A11, the module's DQM -- the bench reproduces
+the aliasing (998,679 failures) AND read data masked by it; R82 / R871's lost
+byte enables are the mask on DQM pins the module does not wire (mask_off:
+518 byte failures, 0 protocol violations, the board's signature).
+
+TO TEST ON THE BOARD: the M2_MEMTEST build, procedure in R891; then the four
+released games on the normal 2A build (128 MB module, and a 64 MB one if to
+hand). DECISIONS FOR BEN: the original core's T_REFI 781 (past 64 ms) and its
+byte mask (still on the DQM pins only) -- main, separately.
+
 ## 2026-10-20: the other seven 2A sets assessed; input profiles; Manx TT's MRA (R887)
 
 NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch worktree-agent-a1f18fab3fc92cd91

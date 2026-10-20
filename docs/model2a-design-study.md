@@ -39479,3 +39479,216 @@ quartus_map 17.0 --analyze_file mb86233_core, m2_tgp, m2_copro, m2_fifo_m10k:
 0 errors. New tools: sim/tgp/mame_flips_2a.lua (MAME's game rate over a 2A
 play session); tb_tgp_replay's FRAME BUDGET (MAME-model cycles per vblank
 against ours); make TGP_EARLY= / TGP_BUFW= replay builds for an A/B.
+
+**R891 -- THE MiSTer 128 MB MODULE IS TWO 64 MB CHIPS ON ONE CHIP-SELECT LINE,
+WITH EACH CHIP'S BYTE MASK ON A11/A12. m2_sdram DRIVES IT (DUAL, MASK_ON_A); THE
+2A BUILD ADDRESSES 128 MB. R19'S ALIASING AND R82 / R871'S LOST BYTE ENABLES ARE
+THE SAME WIRING, REPRODUCED ON THE BENCH. A POWER-UP TEST FOR THE BOARD
+(M2_MEMTEST). NOT FITTED, NOT ON A BOARD.**
+(Ben, through the coordinator: Ben's board has a MiSTer 128 MB module, two
+64 MB chips; extend m2_sdram for it behind a parameter, keep 64 MB working
+for the released games, model the module in the bench, wire the 2A build,
+and a board memory test. Limits: one Verilator build at a time, quartus_map
+only, no fit, no board, no run over ~15 min.)
+
+*Believed (R18, R19, R82, R871, R887):* a 128 MB module on the connector's 13
+address and 2 bank pins must be one chip of 4 x 8192 x 2048 (R18), and R19
+measured that eleventh column bit aliasing -- "64 MB is what this controller
+can address" (R19), "whether a dual-chip 128 MB module can be addressed at all
+is a board question" (R887). Separately, the board drops byte enables (R82:
+a byte store lands in all four lanes; R871: the 2A sound board's 68000 bytes
+smeared), so every byte write is read-modify-write (R729, R871) and source
+and silicon were said to "disagree".
+
+*Now known (from the reference; INFERRED for this board until the test below
+runs):* MiSTer-devel/PSX_MiSTer rtl/sdram.sv, a working core written for
+these modules (GPL-3.0-or-later; read, not copied):
+  * `assign SDRAM_nCS = chip;` with `chip <= addr[26]` -- byte address bit 26,
+    the 64 MB boundary. The module inverts the one chip-select line onto the
+    second chip, so nCS low selects the lower 64 MB and high the upper.
+  * `assign {SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11];` and the CAS word
+    `{cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {~be[1:0], rnw,
+    addr[25:1]}`: each chip's DQM is wired to A11/A12, so the byte mask
+    travels on A[12:11] in the column phase (columns are A0-A9, A10 is
+    auto-precharge).
+  * Start-up runs precharge-all / two refreshes / MRS to chip 0, then to
+    chip 1; each refresh interval issues AUTO REFRESH to chip 0, then chip 1.
+So R19's eleventh column bit drove a column bit on A11 -- the chips' DQM --
+which is why it aliased; and R82 / R871's lost masks are this controller
+putting the mask on the connector's DQM pins, which this module does not use
+as masks. Both are the bench's findings now (mutations r19_col11, mask_off
+below); the board test is what settles them.
+
+*BUILT:*
+  * rtl/mem/m2_sdram.sv, DUAL (default 0): a word-address bit above the 64 MB
+    decode (AW + 1, at the TOP, so the lower 64 MB decode exactly as the one
+    chip did) drives sd_cs_n per transaction (a register, cs_sel, set in
+    S_DISPATCH before a transaction's first command); row state for eight
+    banks ({chip, bank}: bank_open, bank_row, ras_cnt, rd_bank_cnt, ras_ok,
+    rd_ok); the bring-up's precharge-all, eight refreshes and MRS each go to
+    chip 0 and a cycle later to chip 1 (per chip the spacing is unchanged);
+    each refresh is precharge-all chip 0, chip 1 (S_PRE1), tRP, REFRESH chip
+    0, chip 1 (S_REF1), tRC -- one row of each chip per T_REFI. MASK_ON_A
+    (default 0): a WRITE carries ~be on A[12:11] (COL_BITS <= 10 checked at
+    elaboration), a READ 00. A NOP needs no chip select (it is a NOP or a
+    deselect to both chips), so cs_sel has no reset and packs in the pin.
+  * Model2.sv, the 2A build: SDR_AW 26 (SDR_DUAL = M2A), DUAL and MASK_ON_A
+    on, the DQM pins = SDRAM_A[12:11] (PSX's assign; m2_sdram's own sd_dqm
+    differs from A[12:11] only at ACTIVATE, where DQM does nothing at CL 2 --
+    a DQM masks read data two edges later, which is the READ's own data only
+    when the READ itself carries it). Every GAME_* constant keeps its value
+    (no released layout moves; the loader's ioctl_addr[26:1] already covers
+    128 MB). T_REFI 770 on 2A (below). The original core (M2_NO_2A): SDR_AW
+    25, DUAL / MASK_ON_A off, its DQM pins from sd_dqm, T_REFI 781 -- the
+    logic as it was.
+  * A 64 MB MODULE STILL WORKS (bench, below): the controller's chip-1
+    commands are deselects to a single chip, every released game is below
+    64 MB, and a module whose chip takes DQM from the DQM pins sees the same
+    mask there.
+  * sim/mem/sdram_model.sv: DQM_FROM_A (the chip's mask from A[12:11]),
+    RD_DQM (DQM masks read data two edges later; a masked read byte is a
+    violation), CHECK_RET (RETENTION: a row with data not restored by
+    ACTIVATE / PRECHARGE or by the REFRESH its own row counter reaches,
+    within T_RET = 64 ms at 100 MHz, loses its data -- V_DECAY, code 14),
+    CHECK_INIT (no access unless the LAST MRS had a precharge-all, two
+    refreshes and a BL1 / sequential / CL word -- V_INIT, code 15; the last
+    one, because the controller's cmd reads 0000, an MRS, before its
+    synchronous reset lands). All default off: every earlier harness checks
+    what it did. New module sdram_module: CHIPS (2: the 128 MB module, chip
+    1 on ~cs_n; 1: the 64 MB module), each chip a full sdram_model, DQ shared,
+    two chips driving DQ a fight.
+  * m2_sdram_harness: DUAL, MASK_ON_A, MODULE (1: sdram_module), CHIPS,
+    T_REFI_C; the module's chips are 10 column bits whatever the controller
+    says, so a controller that misdrives the chip select or the column
+    aliases here as on the board. tb_m2_sdram.cpp: TB_DUAL / TB_LOWER, pick_addr
+    over {chip, bank}, a chip phase (the same word address in both halves,
+    write port and port 0 byte writes, every row/column bit walked, then
+    read back) and a retention phase (TB_RET idle cycles, then rows in every
+    bank of both chips read back).
+  * rtl/mem/m2_memtest.sv (M2_MEMTEST=1 with M2_PROBE=1): the board test,
+    below.
+
+*BENCH (Verilator 5.052):*
+  * The existing suites, default parameters, OUTPUT IDENTICAL LINE FOR LINE
+    to daca25b (results, latencies, throughput, telemetry): test_m2_sdram
+    (2,111,407 checks), test_m2_sdram13 (five configurations), test_m2_sdram128
+    (1,626,207), test_m2_sdram_cdc (93,651), test_m2_sdram_cdc_load (four
+    runs). test_m2_rom_xtra2a at SDR_AW 26 (Model2.sv's value now) PASS.
+  * make test_m2_sdram128d (13 ports, the 2A class, T_REFI 770, the module
+    with every check on, TB_RET 14,000,000 idle cycles = 2.2 x T_RET):
+      128 MB module             1,896,367 checks, 0 fails, 0 violations;
+                                chip phase 8,192 / 0; retention 512 rows in
+                                all 8 banks, 2,048 / 0, 0 rows decayed
+      + 8-word texel reads,     2,119,444 checks, 0 / 0
+        ports 5 / 7 byte writes
+      64 MB module, < 64 MB     2,108,258 checks, 0 / 0; retention 256 rows,
+                                1,024 / 0
+    DUAL's own cost, against the same harness at DUAL 0 (10 columns): the
+    aggregate stream 0.357 words/cyc both; one port sequential 0.280 against
+    0.281 (the second chip's refresh, 2 cycles in 771).
+  * MUTATIONS, each caught (the 2A dual configuration, ports 5 / 7 writing):
+      no_ref1   chip 1 never refreshed     chip-1 V_REFRESH; retention 1,024
+                                           fails, 256 rows decayed
+      no_pre1   no chip-1 precharge-all    V_REF_OPEN (108,929)
+      no_mrs1   chip 1 never mode-set      V_INIT
+      cs_stuck  chip select not driven     13,982 data fails
+      mask_off  MASK_ON_A 0 (the mask on   518 byte-write fails, ZERO
+                the DQM pins only)         violations -- R82 / R871's board
+                                           signature, now in simulation
+      refi781   T_REFI 781 (Model2.sv's)   retention: 2,048 fails, 2,596 rows
+                                           decayed -- see below
+      r19_col11 COL_BITS 11, no DUAL (R18) 998,679 fails, and READ DATA MASKED
+                                           (839,824 violations): A11 is a
+                                           column bit at the READ, so the
+                                           chips' DQM drop its data -- R19's
+                                           aliasing, reproduced
+  * m2_memtest (make test_m2_memtest; one clock, port 1 of m2_sdram, the
+    module): the 2A controller -- four passes, the last three after 8 M, 16 M
+    and 32 M idle cycles (each > T_RET), all 0 errors, the loader released
+    172,800 cycles after ready; MASK_ON_A 0 -- 2,048 MASK errors, 128 in every
+    region, 0 data; a 64 MB controller on the module -- 368 data errors, 46
+    in each of regions 0-7 (the 46 fixed samples; the random ones differ per
+    region), each reading its region+8 twin's data, which the decoder names;
+    no_ref1 -- pass 1 clean, passes 2-4 2,048 data errors, all 256 in each of
+    regions 8-15 (chip 1) and none in 0-7.
+
+*A FINDING: T_REFI 781 IS PAST THE PART'S 64 ms.* ref_cnt runs 0..T_REFI, so a
+refresh comes every T_REFI + 1 cycles; 782 x 8,192 rows = 6,406,144 cycles,
+64.06 ms at 100 MHz. sdram_module's retention check flags every row
+(refi781). The 2A build takes 770 (771 x 8,192 = 63.2 ms). The original core
+keeps 781 -- harmless in practice at room temperature, out of specification
+all the same -- Ben's decision for main. ALSO FOR MAIN (not changed): its byte
+mask is on the DQM pins only; on this module those masks are lost (main's
+bridge does RMW since R729, so the i960 is safe; any other byte writer is not).
+
+*THE BOARD TEST (M2_MEMTEST, rtl/mem/m2_memtest.sv).* At power-up, before any
+download, on port 1 (the i960's, in reset until a game is loaded): sixteen
+regions of 8 MB ({chip, bank, row MSB}), 256 samples each -- offset 0, all
+ones, every offset bit set alone and clear alone (row and column, high and
+low), then 210 LFSR offsets -- 4,096 words, all WRITTEN BEFORE ANY IS READ,
+each word's data naming its sample ({~s[3:0], s}); one in four has its low
+byte, one in four its high byte, rewritten with a masked write. Read back at
+once (pass 1, CL+2 as the game uses), then -- while nothing is downloaded --
+re-read after ~0.84 s, ~3.4 s and ~13.4 s idle (80 MHz clk_sys; only the
+refresh touches the memory then) and every ~13.4 s after. The loader waits
+for pass 1 (1.7 ms on the bench's single 100 MHz clock; a few ms through the
+crossing); a download parks the test. Results: probe records 'B'
+(a region: data errors, mask errors, the first bad sample and word) and 'b'
+(passes; hps_io's sdram_sz; totals), in every probe slot until a game is
+loaded, then one slot in sixteen.
+  HOW TO RUN: Model2.qsf already sets VERILOG_MACRO "M2_NO_DEBUG=1"; add
+  "M2_PROBE=1" and "M2_MEMTEST=1" (and "M2_NO_2A_RALLY=1" if the probe
+  build needs the room, as s1205 did). Copy the .rbf to
+  /media/fat/_Arcade/cores/ under a name of its own, and load the CORE
+  ALONE, not an MRA: `echo "load_core /media/fat/_Arcade/cores/<rbf>" >
+  /dev/MiSTer_cmd` (a download parks the test after pass 1 -- an MRA load
+  gives pass 1 only). The records repeat until a game is loaded, so the
+  capture may start after the load: `python3 /tmp/uartcap.py 60 /tmp/uart.txt`
+  (tools/uart_capture.py, as board-capture.sh copies it) covers passes 1-5;
+  then `tools/decode_why.py <capture>`.
+  WHAT EACH RESULT MEANS:
+    * every pass 0 / 0: the module is addressed as two chips, every row and
+      column line works on both, the masks reach the chips, and both are
+      refreshed. The 2A build can use 128 MB.
+    * mask errors in every region, no data errors: the mask is not reaching
+      the chips on A12:A11 (or is not this module's wiring) -- R82 again.
+    * data errors in regions 0-7 only, each first bad word reading as a
+      sample of region r+8: the upper chip is not being selected (chip
+      select inversion absent: a single 64 MB chip, or the module wired
+      otherwise); the decoder names the twin byte address.
+    * errors in one half only on passes 2-4, pass 1 clean: that chip is not
+      refreshed (its refresh, or its precharge before it, does not reach it).
+    * a few errors in every region, the words reading as walking samples
+      (k 2-23: offset bit k-2 set alone; k 24-45: bit k-24 clear alone): an
+      address line (a row or column bit) stuck or shorted -- the sample a
+      word reads as names the bit.
+    * sdram_sz in the 'b' record: what MiSTer believes (8003 = 128 MB set);
+      information only -- nothing in the core uses it.
+
+*AREA, quartus_map 17.0, whole design, the 2A build, the same qsf:*
+     daca25b (R887's figures, the same RTL)  39,945 ALMs est.  57,446 ALUT  47,668 regs  4,458,495 block bits
+     this                                    40,063            57,576       47,785       4,459,007
+  +118 ALMs estimated, +130 ALUT, +117 registers -- the four more banks' row
+  state, the chip select, the two states. Block bits +512: the loader FIFO's
+  address one bit wider (512 x 26, two M10K as 512 x 25 was; the 2A sound
+  line tags stay 128 x 16). m2_sdram 1,012 ALUT, 1,791 registers. Not
+  fitted: no new M10K is expected, and only a fit says so.
+  m2_memtest alone (quartus_map 17.0, AW 26, the same part): 294 ALMs est.,
+  268 ALUT, 237 registers, its results in one MLAB (800 bits), 0 M10K --
+  after trimming 351 -> 317 -> 294 (no totals in hardware -- the decoder
+  sums the region records; the walking bit a rotating register, not two
+  barrel shifts by k). Probe builds only; s1209 / s1210 missed the fit by
+  1-3 LABs with 'L' (R880), so M2_NO_2A_RALLY=1 is the first room to take.
+  QUARTUS REWROTE Model2.qsf at the end of the map: it exported files.qip's
+  stale rtl/video/m2_testpattern.sv (no such file) and sys.tcl's fast-register
+  lines into it, and lint_top then failed on the missing file. Reverted; a
+  full map in a working copy leaves the qsf to be checked before a commit.
+
+*VERIFIED / INFERRED:*
+  * VERIFIED in simulation: everything above under *BENCH*.
+  * INFERRED: that this board's module is wired as PSX_MiSTer drives it (the
+    reference is a working core for these modules; R19 and R82 are now both
+    consistent with it). The M2_MEMTEST build settles it.
+  * NOT DONE: no layout uses the upper 64 MB yet -- the five large sets
+    (R887) need their layouts and the loader's remaps above 64 MB, after the
+    board test.

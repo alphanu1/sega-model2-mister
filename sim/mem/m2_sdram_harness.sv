@@ -35,7 +35,21 @@ module m2_sdram_harness #(
   // Set with -GCOL_BITS at build time. 9 = 32 MB module, 11 = 128 MB. The
   // device model follows the same number, so a geometry the controller decodes
   // wrongly shows up as a read mismatch rather than silently aliasing.
-  parameter int unsigned COL_BITS = 9
+  parameter int unsigned COL_BITS = 9,
+  // R891: THE 128 MB DUAL-CHIP MODULE. DUAL and MASK_ON_A are m2_sdram's (a
+  // chip-select bit above the address; the byte mask on A12:A11, and the DQM
+  // pins driven from A12:A11 as Model2.sv drives them). MODULE 0 is the device
+  // model as every earlier build had it; MODULE 1 is sdram_module -- CHIPS
+  // chips on one chip-select line, DQM wired to A11/A12, the read mask, the
+  // retention check (T_RET) and the bring-up check. T_REFI_C is the
+  // controller's refresh interval (Model2.sv: 781, or the 2A's own).
+  parameter bit          DUAL      = 1'b0,
+  parameter bit          MASK_ON_A = 1'b0,
+  parameter int unsigned MODULE    = 0,
+  parameter int unsigned CHIPS     = 2,
+  parameter bit          DQM_A     = 1'b1,   // MODULE 1: the chips' DQM on A11/A12
+  parameter int unsigned T_REFI_C  = 700,
+  parameter int unsigned T_RET     = 6_400_000
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -43,7 +57,7 @@ module m2_sdram_harness #(
 
   // ROM download
   input  logic        wr_req,
-  input  logic [COL_BITS+15:1] wr_addr,
+  input  logic [COL_BITS+15+DUAL:1] wr_addr,
   input  logic [15:0] wr_din,
   input  logic [1:0]  wr_be,
   output logic        wr_ack,
@@ -60,7 +74,7 @@ module m2_sdram_harness #(
                       p5_req, p6_req, p7_req, p8_req, p9_req, p10_req,
                       p11_req, p12_req,                    // R789 (NPP 13)
   input  logic        p0_we,
-  input  logic [COL_BITS+15:1] p0_addr, p1_addr, p2_addr, p3_addr, p4_addr,
+  input  logic [COL_BITS+15+DUAL:1] p0_addr, p1_addr, p2_addr, p3_addr, p4_addr,
                                p5_addr, p6_addr, p7_addr, p8_addr, p9_addr,
                                p10_addr, p11_addr, p12_addr,
   input  logic [15:0] p0_din,
@@ -84,6 +98,7 @@ module m2_sdram_harness #(
   output logic [15:0] v_flags,
   output int unsigned reads_served,
   output int unsigned writes_served,
+  output int unsigned decayed_rows,     // R891: MODULE 1 -- rows that lost their data
 
   // BURSTS MUST NOT INTERLEAVE IN THE TAG PIPELINE. m2_sdram keeps ONE set of
   // capture slots rather than one per port, and that is only sound because the
@@ -115,14 +130,14 @@ module m2_sdram_harness #(
   localparam int unsigned T_RAS = 5;
   localparam int unsigned T_WR  = 2;
   localparam int unsigned CL    = 2;
-  localparam int unsigned T_REFI = 700;
+  localparam int unsigned T_REFI = T_REFI_C;   // R891: a parameter (700 as ever)
   // Long enough to be a real bring-up but short enough that every test does
   // not pay 100 us of NOPs; the sequence exercised is identical.
   localparam int unsigned INIT_NOP = 600;
 
   // R789: thirteen wide; the controller takes the first NP
   logic [12:0]       p_req, p_we, p_ack;
-  logic [12:0][COL_BITS+15:1] p_addr;
+  logic [12:0][COL_BITS+15+DUAL:1] p_addr;
   logic [12:0][15:0] p_din;
   logic [12:0][1:0]  p_be;
   logic [12:0][63:0] p_dout;
@@ -174,7 +189,10 @@ module m2_sdram_harness #(
   assign p11_dout = p_dout[11]; assign p12_dout = p_dout[12];
 
   logic        cke, cs_n, ras_n, cas_n, we_n;
-  logic [1:0]  ba, dqm;
+  logic [1:0]  ba, dqm, dqm_c;
+  // R891: the DQM PINS as Model2.sv drives them -- from A12:A11 with the mask
+  // on A, from the controller's sd_dqm otherwise
+  assign dqm = MASK_ON_A ? a[12:11] : dqm_c;
   logic [12:0] a;
   logic [15:0] dq_c2m, dq_m2c;
   logic        dq_oe_c, dq_oe_m;
@@ -183,7 +201,8 @@ module m2_sdram_harness #(
     .COL_BITS(COL_BITS),
     .NP(NP), .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC), .T_RAS(T_RAS),
     .T_WR(T_WR), .CL(CL), .T_REFI(T_REFI), .INIT_NOP(INIT_NOP), .ACK_HOLD(2),
-    .PRI(PRI[NP-1:0]), .PRI_CAP(PRI_CAP), .PRI_TOP(PRI_TOP[NP-1:0]), .AGE(AGE[NP-1:0]), .AGE_T(AGE_T)                           // R574
+    .PRI(PRI[NP-1:0]), .PRI_CAP(PRI_CAP), .PRI_TOP(PRI_TOP[NP-1:0]), .AGE(AGE[NP-1:0]), .AGE_T(AGE_T),                          // R574
+    .DUAL(DUAL), .MASK_ON_A(MASK_ON_A)                                                                                           // R891
   ) dut (
     .clk(clk), .rst_n(rst_n), .ready(ready),
     // CL+3, what the device MODEL needs, and after the selector range moved
@@ -192,7 +211,7 @@ module m2_sdram_harness #(
     // its job: the model's correct value is not the board's.
     .rd_lat_sel(3'd3),
     .sd_cke(cke), .sd_cs_n(cs_n), .sd_ras_n(ras_n), .sd_cas_n(cas_n),
-    .sd_we_n(we_n), .sd_ba(ba), .sd_a(a), .sd_dqm(dqm),
+    .sd_we_n(we_n), .sd_ba(ba), .sd_a(a), .sd_dqm(dqm_c),
     .sd_dq_o(dq_c2m), .sd_dq_oe(dq_oe_c), .sd_dq_i(dq_m2c),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_din(wr_din), .wr_be(wr_be),
     .wr_ack(wr_ack),
@@ -214,6 +233,7 @@ module m2_sdram_harness #(
   // This is the trap docs/differential-testing.md names: a reference written
   // from the same reading as the implementation catches a slip between the two,
   // never a shared misreading. Geometry can only be settled on hardware.
+  generate if (MODULE == 0) begin : g_dev
   sdram_model #(
     .COL_BITS(COL_BITS),
     .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC), .T_RAS(T_RAS), .T_WR(T_WR),
@@ -226,6 +246,29 @@ module m2_sdram_harness #(
     .violations(violations), .v_flags(v_flags),
     .reads_served(reads_served), .writes_served(writes_served)
   );
+  assign decayed_rows = 0;
+  end else begin : g_mod
+  // R891: THE MODULE, AND IT IS NOT GIVEN THE CONTROLLER'S DUAL. Its chips
+  // are 64 MB parts (10 column bits) whatever the controller believes; the
+  // chip a command reaches is decided by the cs_n line alone, and a
+  // controller that forgot to drive it aliases the upper 64 MB onto the lower
+  // here as it would on the board. The model's refresh limit is the PART's
+  // (781 x 9), not the controller's interval.
+  sdram_module #(
+    .CHIPS(CHIPS), .COL_BITS(10), .DQM_FROM_A(DQM_A),
+    .T_RCD(T_RCD), .T_RP(T_RP), .T_RC(T_RC), .T_RAS(T_RAS), .T_WR(T_WR),
+    .CL(CL), .T_REFI(781), .REFI_SLACK(9), .T_RET(T_RET),
+    .RD_DQM(1'b1), .CHECK_RET(1'b1), .CHECK_INIT(1'b1)
+  ) device (
+    .clk(clk), .cke(cke), .cs_n(cs_n), .ras_n(ras_n), .cas_n(cas_n),
+    .we_n(we_n), .ba(ba), .a(a), .dqm(dqm),
+    .dq_i(dq_c2m), .dq_oe_i(dq_oe_c),
+    .dq_o(dq_m2c), .dq_oe_o(dq_oe_m),
+    .violations(violations), .v_flags(v_flags),
+    .reads_served(reads_served), .writes_served(writes_served),
+    .decayed_rows(decayed_rows)
+  );
+  end endgenerate
 
   // THE SHARED-CAPTURE INVARIANT, WATCHED AT SLOT 0. A burst is "open" from the
   // first word that is not the last, and it must close on a word carrying the
