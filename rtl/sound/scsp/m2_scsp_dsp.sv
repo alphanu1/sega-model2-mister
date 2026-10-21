@@ -33,7 +33,15 @@
 
 `timescale 1ns/1ps
 
-module m2_scsp_dsp (
+module m2_scsp_dsp #(
+  // R914: 0x7c0-0x7ff is NOT MADRS: writes there are dropped and reads give
+  // 0 (Mednafen's SCSP decodes MADRS at 0x780-0x7bf only; MASA names 32).
+  // MAME 0.289 mirrors it onto MADRS (an array-bounds fix of 2014, not a
+  // hardware finding), and every 2A driver writes 32 zero words there right
+  // after its MADRS table -- so in MAME every game's DSP runs with all
+  // MADRS 0. 1 restores MAME's mirror (benches: equal to MAME's mix).
+  parameter bit MADRS_MIRROR = 1'b0
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        go,                 // run one sample's program (when !busy)
@@ -84,13 +92,13 @@ module m2_scsp_dsp (
     end
     mp_q <= mpro[mp_ra];
   end
-  // COEF 64 x 16, MADRS 32 x 16 (0x780 and its mirror 0x7c0)
+  // COEF 64 x 16, MADRS 32 x 16 (0x780; MAME's mirror at 0x7c0 only with MADRS_MIRROR, R914)
   (* ramstyle = "MLAB" *) logic [7:0] coef_h [64];
   (* ramstyle = "MLAB" *) logic [7:0] coef_l [64];
   (* ramstyle = "MLAB" *) logic [7:0] madrs_h [32];
   (* ramstyle = "MLAB" *) logic [7:0] madrs_l [32];
   wire w_coef  = w_en && w_addr >= 11'h380 && w_addr < 11'h3c0;
-  wire w_madrs = w_en && w_addr >= 11'h3c0 && w_addr < 11'h400;
+  wire w_madrs = w_en && w_addr >= 11'h3c0 && w_addr < (MADRS_MIRROR ? 11'h400 : 11'h3e0);
   logic [15:0] coef_q, madrs_q;
   logic  [5:0] co_ra;
   logic  [4:0] ma_ra;
@@ -102,8 +110,11 @@ module m2_scsp_dsp (
     coef_q  <= {coef_h[co_ra], coef_l[co_ra]};
     madrs_q <= {madrs_h[ma_ra], madrs_l[ma_ra]};
   end
-  // the 68000's read (MAME r16): 0x700 COEF, 0x780 / 0x7c0 MADRS, 0x800 MPRO
-  assign r_q = (r_addr < 11'h3c0) ? coef_q : (r_addr < 11'h400) ? madrs_q : mp_q[{r_addr[2:1], 4'd0} +: 16];
+  // the 68000's read: 0x700 COEF, 0x780 MADRS, 0x7c0 0 (MAME: MADRS again,
+  // MADRS_MIRROR), 0x800 MPRO
+  assign r_q = (r_addr < 11'h3c0) ? coef_q :
+               (r_addr < 11'h3e0 || (MADRS_MIRROR && r_addr < 11'h400)) ? madrs_q :
+               (r_addr < 11'h400) ? 16'd0 : mp_q[{r_addr[2:1], 4'd0} +: 16];
 
   // TEMP 128 x 24, MEMS 32 x 24
   (* ramstyle = "M10K" *) logic [23:0] temp [128];
@@ -244,7 +255,9 @@ module m2_scsp_dsp (
   typedef enum logic [2:0] { R_IDLE, R_LOOK, R_FILL, R_AGAIN, R_UNP } rst_t;
   rst_t        rs;
   logic [15:0] r_word;
-  m2_scsp_cache #(.IDX(6)) u_rcache (
+  // R914: 256 lines, not 64 -- the same M10K (a 64-deep array already took
+  // the 256-deep blocks); with real MADRS the taps sit on different lines
+  m2_scsp_cache #(.IDX(8)) u_rcache (
     .clk(clk), .rst_n(rst_n),
     .lk_req(lk_req), .lk_line(lk_line), .lk_hit(lk_hit), .lk_data(lk_data),
     .fill_req(fill_req), .fill_line(r_a[18:3]), .fill_done(fill_done), .fill_data(fill_data),
