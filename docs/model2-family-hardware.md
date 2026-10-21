@@ -27,6 +27,12 @@ that the decision rests on a stated gap and not on a guess. The MB86235
 (2C) is sized by a measured skeleton (R920). The SHARC (2B) is still R919's
 scaled estimate, and says so.
 
+**R924 (branch `model2c` only, never pushed): Ben asked for House of the
+Dead, and a 2C BUILD of the 2A core now exists** -- `M2_2C` in Model2.sv,
+the TGPx4 in `m2_copro`, the 2C map in the bridge and the i960's burst map,
+game ID 0x17. It runs House of the Dead on the board (s1303). The 2C table
+below gives each part's status in that build.
+
 ## Legend
 
 | Status | Meaning |
@@ -194,7 +200,7 @@ already play from their 2A sets.
 | Comm (link) board | As 2A. Power Sled reaches it at 0x01a1xxxx and uses frame offset 0x180. | Power Sled is sold as Slave / Relay / Main sets. | **From branch `link-play`:** `m2_comm` + `m2link`, with Power Sled's offsets. |
 | ROM and SDRAM | Raw ROM 27.6 MB (Virtua Striker) to 90.5 MB (Dynamite Cop 2B). DOA 2B 69.5, Dynamite Baseball '97 66.5, Pilot Kids 65.5, Sonic 62.5 MB. | | ✅ 2A: the 128 MB module and the large layout cover them; each set needs its own layout check (`tools/mra_vs_mame.py`). |
 
-## Model 2C-CRX, `model2c_state`: documented only (Ben, R832)
+## Model 2C-CRX, `model2c_state`: a 2C build on branch `model2c` (R924)
 
 Games (all `MACHINE_NOT_WORKING` in MAME 0.289): Sega Ski Super G
 (`skisuprg`, also unemulated protection), Sega Touring Car Championship
@@ -207,10 +213,10 @@ Over Rev (`overrev2c`), Royal Ascot II (`model2c`), Sega Water Ski
 | Component | What it is (chip, clocks, sizes) | Games / notes | Status |
 |---|---|---|---|
 | Main CPU, RAMs, timers, interrupts | As 2A (256 KB board RAM at 0x200000). | 2C's i960 forms not logged (no ROMs here). | ✅ 2A: as is (same risk as 2B) |
-| Coprocessor | **Fujitsu MB86235 "TGPx4" at 20 MHz.** 64-bit instructions: an ALU operation, a multiply and up to two transfers in one instruction, with delay slots. Program RAM 4 K x 64 (32 KB), uploaded by the i960 as pairs of 32-bit words. Internal data RAMs A and B, 1 K x 32 each. Registers: AA0-7, AB0-7, MA0-7, MB0-7, AR0-7, a 24-entry PR queue, a 4-deep PC stack, repeat and loop counters. ALU ops include FRCP, FRSQ and FLOG. External data: the geometry buffer RAM at 0x400000, the copro data ROM ("TGPx4 program", 8 MB) at 0x800000. FIFOs 8 deep. | Every 2C game. MAME's header says "2x TGPx4"; MAME instantiates one. | **New:** an MB86235 core. Sizing below. **Changed (from 2A's `m2_copro`):** the i960 side carries over with the upload packing two words per instruction and no TGP tables. |
+| Coprocessor | **Fujitsu MB86235 "TGPx4" at 20 MHz.** 64-bit instructions: an ALU operation, a multiply and up to two transfers in one instruction, with delay slots. Program RAM 4 K x 64 (32 KB), uploaded by the i960 as pairs of 32-bit words. Internal data RAMs A and B, 1 K x 32 each. Registers: AA0-7, AB0-7, MA0-7, MB0-7, AR0-7, a 24-entry PR queue, a 4-deep PC stack, repeat and loop counters. ALU ops include FRCP, FRSQ and FLOG. External data: the geometry buffer RAM at 0x400000, the copro data ROM ("TGPx4 program", 8 MB) at 0x800000. FIFOs 8 deep. | Every 2C game. MAME's header says "2x TGPx4"; MAME instantiates one. | ✅ 2C build (R924): `rtl/tgpx4/` (`tgpx4_core`, `m2_tgpx4`) behind `m2_copro` TGPX4: dword-pair upload, a 1 K-line program cache over an SDRAM copy, the external bus to buffer RAM and copro data. In lockstep with MAME's own MB86235 interpreter over a whole House of the Dead capture: 188.8 M words, every one of 8,697,138 outputs equal. Not done: CLRF, FLOG, PDR / DDR outputs. |
 | Copro data ROM | 8 MB region. | | ✅ 2A: SDRAM port 9 slot as is |
 | Geometrizer | As 2B (a second TGPx4; MAME discards the upload and runs the high-level geometrizer). | **Top Skater** uses different geometry code with a second transformation matrix, which MAME's high-level geometrizer doesn't have (model2_v.cpp notes). | ✅ 2A: `m2_geometry` as is, except **New** for Top Skater: the second matrix (size unknown; MAME has no reference for it either). |
-| 3D renderer | As 2B: texture RAM at 0x11000000 / 0x11200000 as plain RAM (2 MB windows), luma RAM at 0x11400000. | | **Changed:** the same bridge decode as 2B; the renderer ✅ 2A as is. |
+| 3D renderer | As 2B: texture RAM at 0x11000000 / 0x11200000 as plain RAM (2 MB windows), luma RAM at 0x11400000. | | ✅ 2C build (R924): the bridge's BOARD_2C decode (texture RAM as 16-bit sheet words, luma a byte per halfword, the upper MB of each window a mirror) and the i960's burst map (i960_memmap C2); the renderer as is. House of the Dead's luma rows in `m2_luma_map`. |
 | 2D tilemap, palette, colour, video timing | As 2A. | | ✅ 2A: as is |
 | Sound UART | Back at 0x01c80000, as 2A. | | ✅ 2A: `m2_i8251` as is |
 | Sound board | SCSP + 68000 as 2A. | | ✅ 2A: `m2_2a_sound` + SCSP as is |
@@ -218,12 +224,12 @@ Over Rev (`overrev2c`), Royal Ascot II (`model2c`), Sega Water Ski
 | Digital Sound Board 2 | Sega's DSB2: 68000 at 8 MHz with 16 MB of MPEG-1 Layer II audio. | Top Skater. | **New:** fx68k from 2A is the CPU; the same MPEG decoder. |
 | I/O controller, EEPROM | 315-5649 and 93C46 as 2A. | | ✅ 2A: as is |
 | Analog controls | Ski Super G: swing and incline. STCC and Over Rev: wheel and pedals. Wave Runner: handle, roll, throttle, pitch. Behind Enemy Lines: two guns as analog X/Y. Water Ski: slide. Top Skater: curving and slide. | | **Changed:** `m2_2a_inputs` profiles; the wheel from `m2_cab_inputs`; the gun aim as for 2B. Small. |
-| Light guns | Serial channel 2 mux, as Virtua Cop 2. | The House of the Dead. | ✅ 2A: R870's guns as is (`M2_2A_VCOP2_GUN`) |
+| Light guns | Serial channel 2 mux, as Virtua Cop 2. | The House of the Dead. | ✅ 2C build (R924): R870's guns with House of the Dead's ranges (`m2_vcop_guns` HD; not benched against MAME's crosshair mapping) |
 | Protection | 315-5881 (Dynamite Cop 2C). Ski Super G: unemulated protection in MAME. | | ⚠️ 2A approach (MRA patches) for Dynamite Cop; Ski Super G's is unknown. |
 | Drive board | STCC's set carries a drive-board ROM; MAME's `stcc` config doesn't add the board. | | **New** if wanted (as the original). |
 | Lamp billboard | Not on 2C (MAME's `model2c` has none). | | — |
 | Comm (link) board | As 2A. | STCC has a link ROM. | **From branch `link-play`:** `m2_comm` + `m2link`. |
-| ROM and SDRAM | Raw ROM 33.6 MB (Over Rev) to 90.5 MB (Water Ski, Dynamite Cop 2C). House of the Dead 84.5, Royal Ascot II 66.6 MB. | | ✅ 2A: the 128 MB module and large layout, set by set. |
+| ROM and SDRAM | Raw ROM 33.6 MB (Over Rev) to 90.5 MB (Water Ski, Dynamite Cop 2C). House of the Dead 84.5, Royal Ascot II 66.6 MB. | | ✅ 2A: the 128 MB module and large layout, set by set. House of the Dead: `mra/The House of the Dead (Revision A).mra` (R924). |
 
 ## Sizing the two new processors
 

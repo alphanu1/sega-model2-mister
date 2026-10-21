@@ -33,7 +33,13 @@
 // burst region as non-burst costs cycles, while treating a FIFO as burst
 // corrupts data.
 
-module i960_memmap (
+module i960_memmap #(
+  // R924: the 2C-CRX map (Model2.sv M2_2C): texture RAM 0x11000000-0x113fffff
+  // and luma RAM 0x11400000-0x1140ffff are BURST in MAME's model2c_crx_mem.
+  // Left out, every stq / stl into 2C texture RAM wrote its words to one
+  // address -- R905's fault again, on the board as banded textures (s1303).
+  parameter bit C2 = 1'b0
+) (
   input  logic [31:0] addr,
   output logic        is_burst
 );
@@ -66,6 +72,7 @@ module i960_memmap (
     else if (a >= 32'h0200_0000 && a <  32'h0400_0000)      is_burst = 1'b1; // main data ROM
     else if (a >= 32'h0600_0000 && a <  32'h0700_0000)      is_burst = 1'b1; // extra data ROM
     else if (a >= 32'h1160_0000 && a <  32'h1170_0000)      is_burst = 1'b1; // framebuffer A/B
+    else if (C2 && a >= 32'h1100_0000 && a < 32'h1141_0000) is_burst = 1'b1; // R924: 2C texture + luma RAM
     // R905: TO 0x12800000. Both sheets carry .mirror(0x200000) with the BURST
     // flag (model2_tgp_mem: 0x12000000-0x121fffff and 0x12400000-0x125fffff),
     // so sheet 1's mirror 0x12600000-0x127fffff is a burst region too. It

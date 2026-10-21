@@ -42906,3 +42906,145 @@ in 14 bytes instead of 8 -- not looked at.
 MRA.** Ben, 2026-10-21, the new MRA (protection routines patched, checksum
 range untouched) against the old one kept as "[OLD - freeze issue 18]" on
 the same core: "the MRA fix works". #18's cause confirmed.
+
+**R924 -- THE HOUSE OF THE DEAD ON A 2C BUILD OF THE 2A CORE (M2_2C): R920's
+TGPx4 WIRED IN m2_copro, RUN IN LOCKSTEP WITH MAME'S OWN MB86235 INTERPRETER
+ON A CAPTURE OF HOTD, EVERY OUTPUT WORD EQUAL; THE 2C MAP IN THE BRIDGE; AN
+MRA; +9 ALM ON THE MAP ESTIMATE. ON BRANCH model2c ONLY, NEVER PUSHED.**
+(Ben: "go for HotD". Branch model2c, after merging model2a fc9160b and then
+0a43a9a. Nothing fitted here; a board build is the coordinator's.)
+
+*What was believed (R920):* the skeleton covers every form a 2C game runs
+except FLOG, and would be ~2,800 ALM with its board logic, inside the TGP's
+2,802; it had never run a 2C program. R919: 2C needs the same bridge changes
+as 2B less the UART move, and a 64-bit upload.
+
+*THE ORACLE, MADE EXACT (MEASURED).* MAME's mb86235ops.cpp (0.289, BSD-3)
+is copied VERBATIM into sim/tgpx4/mame with shim headers (the class, its
+state struct field for field, host callbacks for FIFOs and bus) and
+execute_run's loop body; MAME itself was patched to capture a 2C session
+(sim/tgpx4/mame_mb86235_cap.patch, R924_CAP / R924_TRACE: i960 ctl / upload
+/ pushes / pops, the TGPx4's pops, stalls, pushes, external reads and
+writes, vblanks, the copro_data region, and an FNV hash of the whole
+architectural state after each completed word). HOTD boot + 120 s attract:
+188,786,567 words, 7,631,988 pops, 8,697,138 outputs, 357,958 external
+reads (all data ROM, highest 0x820606; NO buffer-RAM reads; one write, to
+unmapped 0x00002c), 1,051,084 stalled passes. The verbatim interpreter
+replays it (make tgpx4_ref) with 0 differences in 40,000,000 state hashes
+and all 8.7 M outputs -- stalls replayed as MAME does or never ('clean'):
+the same. So MAME's stalled-pass side effects (a transfer's destination
+written with the empty FIFO's 0, eo stepped, outputs pushed) never reach
+HOTD's results: 0 outputs and 0 external reads inside a stalled pass.
+
+*THE RTL AGAINST IT (make tgpx4_replay; m2_copro TGPX4=1, the i960 side
+replayed from the capture, the interpreter stepped once per accepted word
+and the whole state compared):* two faults found and fixed, then
+  1. FMUL's MU / MV / MD are MAME's from the RESULT (MU = |r| < FLT_MIN, so
+     an exact zero sets it; MV = isinf; MD = isnan), not fp_mul's
+     underflow / overflow / invalid. Word 215.
+  2. NaNs: the FP units return one canonical 0x7fc00000; MAME's x86 host
+     returns the expression's first NaN operand quieted (f1 + f2, f2 - f1,
+     f1 * f2, 1 / f; checked with the host compiler), and 0xffc00000 for an
+     invalid op. Word 119,227,540 (pc 0x10a, AA0 7fc00000 vs ffffc000; the
+     NaN comes in from the i960, push #498 = 0xffffc000). nanfix() in
+     tgpx4_core; the shared fp_add / fp_mul are unchanged.
+  The upload's SDRAM copy also raced in the bench (the next dword before
+  the previous one's halves): up_busy now counts the dword in flight.
+  Before the NaN fix the replay ran 120,260,459 words with 5,570,874 of
+  5,570,874 outputs equal (5.56 clk_sys a word, 80 MHz: 14.4 M words/s
+  against MAME's 20 M; HOTD's busiest 1/57.5 s is 39% of 20 M = 7.8 M/s).
+  After it, the whole capture: 188,786,517 words, 8,697,138 of 8,697,138
+  outputs equal, lockstep 0 bad (0d0e523: 5.55 clk / word; f21fa06, the
+  conversion unit pipelined: 5.75).
+  3. TIMING (the first 2C fit, s1303 on 96403a5): clk_sys -3.9 to -4.2 ns,
+     the worst 200 paths all inside tgpx4_cvt (a1 -> negate -> leading
+     zeros -> shift -> round -> f_az in one clock). Pipelined to six clocks
+     (f21fa06): a differential fuzz against the old unit 3,999,995 results /
+     0 differ, the replay above exact. s1312: clk_sys -1.525 (s1313 -2.85,
+     s1311 failed); the rest of the path list is the next step.
+
+*THE 2C BUILD (Model2.sv M2_2C, off by default; C2 = 0 folds every term away
+in the 2A build -- lint_top and lint_idx unchanged):*
+  * m2_copro TGPX4: rtl/tgpx4/m2_tgpx4 (the board logic) in place of m2_tgp
+    (now in generate block g_tgp: tb_tgp_replay and the boot harness follow
+    the path); 13-bit upload counter, dword pairs (MAME copro_fifo_w); the
+    upload does not halt the TGPx4 and the boot does not reset it (MAME's
+    model2c copro_halt is empty, copro_boot clears HALT only).
+  * program memory: a 1 K-line direct-mapped cache (tgpx4_pmem) over a 32 KB
+    SDRAM copy at GAME_X4PROG = byte 0x2080000, inside the large layout's
+    unreachable 4 MB of zeros; the upload writes the copy through the TGP's
+    write port (bufw_is_prog) and the cache refills through port 9
+    (dat_is_prog), one dword at a time, one request in flight, an idle clock
+    between (R133's rule).
+  * external bus: 0x400000-0x7fffff buffer RAM (& 0x7fff), 0x800000-0x9fffff
+    copro data (port 9, the 2A copro-data slot; 20 bits = 4 MB, HOTD's 1 MB
+    loaded), anything else reads 0 and drops writes.
+  * bridge BOARD_2C: texture RAM 0x11000000 / 0x11200000 as plain 32-bit RAM
+    onto the same 16-bit sheet words tex0_w builds on 2A (2 MB windows on a
+    1 MB sheet: the upper MB taken as 2B's mirror, which MAME's renderer
+    could not show either); luma RAM 0x11400000 a byte per halfword (MAME
+    umask16 0x00ff) onto 2A's word-per-entry layout; 0x12000000-0x1281ffff
+    unmapped. copro_status_r at 0x00980014 (all ones until an upload dword;
+    counts since reset).
+  * game ID 0x17 (is_hotd): the large layout (a2_big), copro data on,
+    Virtua Cop 2's guns (m2_2a_inputs profile 0x11, v2_gun) with HOTD's
+    ranges (m2_vcop_guns HD: X 173-596 / 163-596, Y 87-380, by a constant
+    multiply; not benched against MAME's crosshair mapping), luma rows
+    {0, 40, 60, 76, 94, 96, 100, 120} (m2_luma_map; six MAME attract dumps
+    use 0, 40, 76, 94, 96, 100 -- 76 and 100 equal -- and the luma RAM is
+    constant after boot; 60 and 120 are guesses).
+  * Not done: CLRF (the FIFO clear; HOTD runs it once at boot with both
+    FIFOs empty: every push popped, every output read), FLOG, the 33rd FIFO
+    bit, PDR / DDR outputs.
+
+*i960 FORMS:* R869's form log over 300 s of HOTD (attract, coins, play):
+285 variants, 0 trap on the 2A core.
+
+*MRA:* mra/The House of the Dead (Revision A).mra (+ [15kHz CRT], 0x97),
+tools/mra_2a_big.py (the TGP-tables slot zeros), <rbf>Model2C</rbf>,
+0x62C0000 bytes; tools/mra_vs_mame.py --layout=2a PASS.
+
+*AREA (quartus_map 17.0, map only, model2c with model2a fc9160b):*
+  2A:  39,987 ALMs needed, 4,564,464 block bits, 96 DSP, 48,006 regs
+  2C:  39,996 ALMs, 4,542,960 bits, 98 DSP, 47,654 regs
+  2C with M2_NO_2A_RALLY and M2_NO_2A_MANX_MOTION: 39,761 ALMs.
+  m2_copro: 2A 3,924 ALUTs / 2,746 regs / 163,840 bits / 1 DSP; 2C 4,284 /
+  2,508 / 142,336 / 3 (RAM A / B, the 1 K x 67 cache, the two FIFOs). R920's
+  "about the TGP's size" holds: the whole-design estimate moves by +9.
+  Timing of tgpx4_core at 80 MHz: unknown (never fitted).
+
+*THE BOARD (s1303 = 96403a5, Ben): HOUSE OF THE DEAD RUNS.* Warning, intro,
+title, attract; the 3D in the right places (the facade, the courtyard, a
+zombie), the 2D right -- but every texture banded: horizontal light / dark
+rows, the zombie's coat in streaks. CAUSE (found from the coordinator's
+pointer to R905): i960_memmap had no 2C regions, so every stq / stl into
+2C texture RAM (MAME: model2c_crx_mem, 0x11000000-0x113fffff and the luma
+RAM at 0x11400000, both BURST) wrote all its words to one address.
+i960_memmap C2 (through i960_top C2 from Model2.sv's C2): 0x11000000-
+0x1140ffff burst. PROVEN (tb_m2_boot 2C to frame 450, M2_DUMP_OUT's new
+tex0 / tex1 / luma, against MAME 0.289's sheets read through the i960 map at
+frame 450): every word the core wrote equals MAME's -- 375,881 in sheet 0,
+96,826 in sheet 1, 16,384 luma entries, 0 differ. (MAME holds 43,447 /
+8,134 more non-zero sheet words the bench had not reached yet: its boot runs
+~100-200 frames behind MAME's.) test_i960_top 0 mismatches.
+
+*THE WHOLE-CORE BENCH (tb_m2_boot, the 2C harness: A2 A2X C2, AW 26, the
+large layout's XTRA3 and 128 MB, the TGPx4's program copy in the tb's memory
+at Model2.sv's word):* House of the Dead boots to the warning screen (sim
+frame 500), the "1998, 12, 18" intro (1000-1175) and its white flash
+(1200), in MAME's order; char RAM and tile RAM at frame 520 are identical
+to MAME's (every word); the frames are line-doubled from one field (the
+harness's video capture, not a fault). THE HARNESS HAS NO 3D RASTERISER
+(m2_video only), so its frames cannot show the 3D at all -- the black
+behind the text after the flash is expected, and NOT evidence of a fault
+(it was taken for one first). The 3D is checked by the geometry
+differential instead: make geodiff_2abig on MAME's walk 1200 of HOTD (crtc
+-8 / 90, the same as Dynamite Cop's): 250 polygons, 249 textured, 0 u/v
+off by more than 2 quarter-texels, 0 sort keys different, 253 texture
+parameter sets equal; one 5-vertex polygon fanned differently (two quads for
+MAME's one, the same area). The copro stream in the bench: the i960's
+pushes equal MAME's but for 4 of the first 42,464 (two words of one
+command, 0x54da8 / 0xd in MAME, 0 here -- a value the game computes, not
+the coprocessor's); its 'R' / 'P' records proved unusable for the output
+stream (duplicates, zeros: the bus-sampling R232 recorded), so 'O' records
+(m2_copro's own push counter and data) were added.

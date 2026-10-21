@@ -3003,6 +3003,10 @@ int main(int argc, char **argv) {
       put("tile.bin", g_tram, sizeof(g_tram));
       // R924: char RAM (512 KB at the harness's word 0x1690000), little-endian words
       put("char.bin", &mem[0x1690000], 0x40000 * 2);
+      // R924: the texture sheets (1 MB each, words 0x1760000 / 0x17E0000) and the luma table
+      put("tex0.bin", &mem[0x1760000], 0x80000 * 2);
+      put("tex1.bin", &mem[0x17E0000], 0x80000 * 2);
+      put("luma.bin", &mem[0x1860000], 0x8000 * 2);
       put("palette.bin", g_pal, sizeof(g_pal));
       uint16_t xl[24576];
       std::memset(xl, 0, sizeof(xl));

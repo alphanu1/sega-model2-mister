@@ -70,7 +70,9 @@ module i960_top #(
   parameter bit F2A    = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
-  parameter int unsigned IC_LINES = 512
+  parameter int unsigned IC_LINES = 512,
+  // R924: the 2C-CRX memory map's burst regions (i960_memmap C2)
+  parameter bit C2     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -919,7 +921,7 @@ module i960_top #(
   );
 
   logic mm_burst;
-  i960_memmap u_memmap (.addr(ea), .is_burst(mm_burst));
+  i960_memmap #(.C2(C2)) u_memmap (.addr(ea), .is_burst(mm_burst));   // R924
 
   /* verilator lint_off UNUSEDSIGNAL */
   // COMBINATIONAL, asserted during T_EXEC rather than registered into T_MEM_W.

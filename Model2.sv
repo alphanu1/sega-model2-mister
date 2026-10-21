@@ -2877,7 +2877,7 @@ logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
                                            | (FPU2A & is_2ax)};   // R887: every 2A game past VF2
-i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A)) u_i960 (   // R869: F2A
+i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A), .C2(C2)) u_i960 (   // R869: F2A; R924: C2
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
