@@ -42737,3 +42737,8 @@ for as long as it is played; the old MRA freezes 5-20 s into the first
 match every time (a quick check that the right MRA is loaded). The
 test menu's ROM check (if it sums the program) now differs from the chip's
 in 14 bytes instead of 8 -- not looked at.
+
+**R921 (board) -- DEAD OR ALIVE PLAYS THROUGH ITS MATCHES WITH THE NEW
+MRA.** Ben, 2026-10-21, the new MRA (protection routines patched, checksum
+range untouched) against the old one kept as "[OLD - freeze issue 18]" on
+the same core: "the MRA fix works". #18's cause confirmed.
