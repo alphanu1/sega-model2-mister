@@ -687,6 +687,111 @@ int main(int argc, char** argv) {
     d->obc = 32;
   }
 
+  // ---- R915: DAYTONA'S ROAD AT LEVEL 0 (ROADZ, road_en).
+  //
+  // A polygon whose texture is one of the road surfaces gets q_mipz whatever
+  // R828c says. The model below is written from the study's table in MAME's
+  // terms (model2_v.cpp: x = 32 (h2 & 0x3f), y = 32 ((h2 >> 6) & 0x1f), sheet
+  // h2 bit 12, w = 32 << (h0 & 7), h = 32 << ((h0 >> 3) & 7), wrap x h0 bit 6,
+  // textured h0 bit 14), not from m2_geo_engine's packed word, so the packing
+  // is checked too. Each polygon has its own header (attr[16:12] = 1: the
+  // header pointer steps four words a polygon). The headers: every road entry
+  // (both wrap-x values), each with every key bit flipped, untextured, and
+  // random ones. Far geometry, so R828c's own flag is the model's (mostly 0).
+  // Built with -GMIPZ=1 -GROADZ=1 (TB_MIPZ): road_en 1 then 0. The default
+  // build (MIPZ 0, ROADZ 0): q_mipz stays 0 with road_en 1.
+  {
+    auto road = [](uint16_t h0, uint16_t h2) -> int {
+      if (!((h0 >> 14) & 1)) return 0;
+      const int x = 32 * (h2 & 0x3f), y = 32 * ((h2 >> 6) & 0x1f), s = (h2 >> 12) & 1;
+      const int w = 32 << (h0 & 7), h = 32 << ((h0 >> 3) & 7), wx = (h0 >> 6) & 1;
+      struct E { int x, y, s, w, h, wx; };   // wx -1: either
+      static const E T[7] = {{0, 512, 1, 256, 256, -1}, {0, 256, 1, 256, 256, -1}, {0, 512, 0, 256, 256, 0},
+                             {256, 256, 0, 256, 256, 0}, {128, 256, 0, 128, 128, 0}, {0, 256, 0, 128, 128, 1},
+                             {768, 256, 1, 128, 32, 0}};
+      for (const E &e : T) if (x == e.x && y == e.y && s == e.s && w == e.w && h == e.h && (e.wx < 0 || e.wx == wx)) return 1;
+      return 0;
+    };
+    auto hdr = [](int x, int y, int s, int w, int h, int wx, int tex) -> std::pair<uint16_t, uint16_t> {
+      auto code = [](int n) { int c = 0; while ((32 << c) < n) ++c; return c; };
+      const uint16_t h0 = uint16_t((tex << 14) | (wx << 6) | (code(h) << 3) | code(w) | 0x0400);   // 0x0400: an unused bit set, as the game's
+      const uint16_t h2 = uint16_t((s << 12) | ((y / 32) << 6) | (x / 32));
+      return {h0, h2};
+    };
+    std::vector<std::pair<uint16_t, uint16_t>> H;
+    const int T[7][6] = {{0, 512, 1, 256, 256, -1}, {0, 256, 1, 256, 256, -1}, {0, 512, 0, 256, 256, 0},
+                         {256, 256, 0, 256, 256, 0}, {128, 256, 0, 128, 128, 0}, {0, 256, 0, 128, 128, 1},
+                         {768, 256, 1, 128, 32, 0}};
+    for (auto &e : T) {
+      for (int wx = 0; wx < 2; wx++) H.push_back(hdr(e[0], e[1], e[2], e[3], e[4], wx, 1));
+      const int wx = e[5] < 0 ? 0 : e[5];
+      auto b = hdr(e[0], e[1], e[2], e[3], e[4], wx, 1);
+      for (int k = 0; k < 6; k++) H.push_back({uint16_t(b.first ^ (1u << k)), b.second});   // width, height codes
+      for (int k = 0; k < 13; k++) H.push_back({b.first, uint16_t(b.second ^ (1u << k))});  // x, y, sheet
+      H.push_back({uint16_t(b.first & ~0x6000u), b.second});                                 // untextured
+      H.push_back({uint16_t(b.first ^ 0x0080u), b.second});                                 // wrap y: not in the key
+    }
+    uint32_t rs = 0x9e3779b9u;
+    auto rnd = [&]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; };
+    while (H.size() < 250) { const uint32_t r = rnd(); H.push_back({uint16_t((r & 0x9fff) | 0x4000), uint16_t((r >> 16) & 0x1fff)}); }
+    const uint32_t THA = 0x800;
+    for (size_t i = 0; i < H.size(); i++) { thdr[THA + 4 * i] = H[i].first; thdr[THA + 4 * i + 1] = 0; thdr[THA + 4 * i + 2] = H[i].second; thdr[THA + 4 * i + 3] = 0x8c40; }
+    auto lg16t = [](uint32_t j) { static const int L[16] = {0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15}; return L[j & 15]; };
+    auto r828c = [&](float zmax, float dotp) -> int {
+#ifdef TB_MIPZ
+      const uint32_t zb = f2u(zmax), db = f2u(std::fabs(dotp));
+      const uint32_t ez = (zb >> 23) & 0xff, jz = (zb >> 19) & 15, ed = (db >> 23) & 0xff, jd = (db >> 19) & 15;
+      return (2 * (16 * (int)ez + lg16t(jz)) < 16 * (int)ed + lg16t(jd) + 2160 - 16 * 3) ? 1 : 0;
+#else
+      (void)zmax; (void)dotp; (void)lg16t; return 0;
+#endif
+    };
+    for (int pass = 0; pass < 2; pass++) {
+      const int en = pass == 0 ? 1 : 0;
+      d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+      load_identity();
+      d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+      d->tha = THA; d->tpa = 0; d->road_en = en;
+      size_t w = 0;
+      // two pairs of far points; polygon i joins the last pair to its own, alternating, so no quad degenerates
+      const float A[2][3] = {{-20.f, 5.f, 108.f}, {-20.f, -5.f, 110.f}}, B[2][3] = {{20.f, 5.f, 127.2f}, {20.f, -5.f, 109.f}};
+      w = put_v(w, A[0][0], A[0][1], A[0][2]); w = put_v(w, A[1][0], A[1][1], A[1][2]);
+      std::vector<int> want;
+      for (size_t i = 0; i < H.size(); i++) {
+        const float (*Q)[3] = (i & 1) ? A : B;
+        obj[w++] = 0x00021201u;                       // quad, link 2, double-sided, header step +1
+        w = put_v(w, 0.0f, 0.0f, 0.5f);
+        w = put_v(w, Q[0][0], Q[0][1], Q[0][2]);
+        w = put_v(w, Q[1][0], Q[1][1], Q[1][2]);
+        const float zm = 127.2f, dp = 0.5f * Q[0][2];
+        want.push_back(r828c(zm, dp) | (en && road(H[i].first, H[i].second)));
+#ifndef TB_MIPZ
+        want.back() = 0;
+#endif
+      }
+      obj[w++] = 0x00000000u;
+      d->obc = 0x1000;
+      d->start = 1; tick(); d->start = 0;
+      std::vector<int> got;
+      for (long budget = 0; budget < 4000000 && got.size() < H.size(); budget++) { tick(); if (d->q_valid && d->q_ready) got.push_back(d->q_mipz); }
+      for (int i = 0; i < 400; i++) { tick(); if (d->q_valid && d->q_ready) got.push_back(d->q_mipz); }
+      std::printf("test: R915, the road at level 0 (road_en %d, %zu polygons, %zu quads)\n", en, H.size(), got.size());
+      ck("R915: one quad per polygon", (int32_t)got.size(), (int32_t)H.size());
+      long nroad = 0, nset = 0;
+      for (size_t i = 0; i < H.size() && i < got.size(); i++) {
+        if (got[i] != want[i]) { std::printf("  FAIL R915 poly %zu: h0 %04x h2 %04x q_mipz %d want %d\n", i, H[i].first, H[i].second, got[i], want[i]); ++fails; }
+        ++checks; nroad += road(H[i].first, H[i].second); nset += got[i];
+      }
+#ifdef TB_MIPZ
+      if (en) ck("R915: road headers seen", (int32_t)(nroad >= 14), 1);
+#endif
+      std::printf("  road headers %ld, flagged %ld\n", nroad, nset);
+    }
+    d->road_en = 0; d->tha = 0;
+    for (size_t i = 0; i < H.size(); i++) for (int k = 0; k < 4; k++) thdr[THA + 4 * i + k] = 0;
+    d->obc = 32;
+  }
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;

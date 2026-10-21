@@ -96,6 +96,64 @@ NEXT (Ben):
   3. If the board shows tearing (cars jumping), the hand-over in m2link.cpp
      is the place; its rule is in R916.
 
+## 2026-10-21 (afternoon): PUSHED main -- release Model2_20261021b (Daytona's road unmipped)
+
+RELEASED: Model2_20261021b.rbf = s1287 (d962422; every clock met: clk_sys
++0.178, clk_mem +0.185, HDMI +0.124, hold +0.243; 41,063 ALMs, 553/553 M10K),
+md5 672b7003... R915: Daytona's seven road textures never mipped at any OSD
+setting, scenery mipped as before -- Ben on the board: "Daytona now looks
+good". GitHub issue #11 is answered by it (not commented on by us). R913
+(Sharp = MAME's per-pixel level) was REJECTED on the board (s1286) and is not
+merged. OPEN: link play (branch link-play, R916; s1290-92 fitting; Ben tests
+MiSTer + recomp PC).
+
+## 2026-10-21: branch road-nomip -- Daytona's road never mipped (R915). NOT PUSHED, NOT FITTED
+
+R913 (mip-issue11, Sharp = MAME's per-pixel level) was REJECTED on the board
+(s1286, Ben: "it's better as it was before -- at a distance you see the
+correct CHECK mip map which changes to dotted lines. Now this looks wrong. So
+this needs reverting."). mip-issue11 is not merged; main keeps R828c. Lesson
+(study, R913 rejected): a still-frame error number against MAME did not
+predict what Ben sees on the board in motion.
+
+Ben's history, corrected: the shimmer mip-mapping was added to stop was on
+the mountains and distant scenery, never the road; mip-mapping caused the
+road's problems from the start. So R915 takes only the road out.
+
+Branch road-nomip (off main c56c93d; worktree sm2-builds/road-nomip):
+  * 046eebf study: R913's board result.
+  * then: m2_geometry ROADZ + road_en -- a polygon textured with one of seven
+    road surfaces (header: place on the sheet, size, wrap-x where a place is
+    shared) gets R828c's no-mip flag, so the road is at level 0 at Sharp,
+    Medium and Smooth (Off already was). Daytona only (game id 0 -> rd_en),
+    M2_NO_ROADZ builds it out. Desert Tank / Virtua Cop would match 33
+    polygons a frame without the gate -- it is needed.
+  * The table: MAME 0.289 (m2lod + a new per-frame texture dump), races on all
+    three courses + attract of both sets, 32,490 frames: each key is drawn
+    with one texture only, and owner-map overlays show it is road. Place
+    alone is NOT enough -- (0,512) sheet 0 is canyon rock on Beginner and
+    Advanced, Expert's road on Expert (wrap x tells them apart).
+  * Bench (tb_m2_raster3d, main's configuration, 23 Daytona frames on all
+    three courses, every setting): Off identical; on the road the picture IS
+    Off's at every setting; outside the road 2.24 M pixels, 51-56 change
+    (road-quad edges, each equal to Off); the mipped scenery (468-654 k px
+    where main differs from Off) unchanged on 99.99%. Lane line vs MAME at
+    f2225: 11.47 / 12.20 / 14.33 (main Sharp / Medium / Smooth) -> 11.13.
+    Road frame to frame: within 1% of main's on every course (a check).
+  * test_m2_geometry(_mipz, now ROADZ 1) pass with a new R915 test (four
+    mutations caught); test_m2_raster3d passes; lint_top clean, -Wall list
+    identical to main's; lint_idx the same 146 lines; analyze_file 0 errors;
+    quartus_map ALMs needed 39,761 -> 39,763, block bits equal (no M10K).
+  * Wrong turns: Daytona Deluxe '93's coin never registered from the Lua
+    script (attract only for that set); stock MAME 0.289 segfaults on
+    Daytona's Expert course from a race start (geo_polygon_data copies a
+    garbage count off both arrays) -- guarded in the scratch m2lod only. A
+    git stash in a worktree shares the stash list with every worktree: do
+    not stash there.
+NEXT: a fit (main is ~98% ALM; +2 by the map). Ben on the board at Beginner's
+tunnel arch, Sharp and Smooth: the lane line dashed into the distance, the
+mountains as before. Not ported to 2A (no Daytona there).
+
 ## 2026-10-21: PUSHED main -- release Model2_20261021
 
 RELEASED: Model2_20261021.rbf = s1264 (d2e5c1c; clk_sys -0.094, clk_mem

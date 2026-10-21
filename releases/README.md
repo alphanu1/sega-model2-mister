@@ -4,7 +4,7 @@
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261021.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261021b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -41,7 +41,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261021.rbf` has the md5 `44c8e69e194f1555ea73f1ef699bb553`.
+**Check you're running the right file.** `Model2_20261021b.rbf` has the md5 `672b7003d3264906e96f4ab0e925bab2`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -75,6 +75,12 @@ anything you find.
 
 ## New in this release
 
+- **Daytona's road stays sharp in the distance.** With mip-mapping on, the
+  road and its lane lines used to step and fade in bands as they went into
+  the distance (GitHub issue #11). Mip-mapping is there for the mountains and
+  distant scenery, so the road is now always drawn at full detail, at every
+  `Mip-mapping` setting; the scenery is mip-mapped exactly as before.
+  (`Model2_20261021b`; everything below came in `Model2_20261021`.)
 - **A new 15 kHz picture.** The 15 kHz mode now runs the game's 384-line
   picture through a scan converter, so it fills a CRT top to bottom instead of
   sitting between black borders, with no added delay. HDMI keeps working
@@ -117,7 +123,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
-| `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions |
+| `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions. Daytona's road is always drawn at full detail |
 | `Draw method` | `Double Buffered` (default) draws every frame; `Single buffered` draws every other one |
 | `Gamma` | `MAME` (default), `Off` or `Mild`. Affects 2D and 3D together. |
 | `Volume` | 80% by default, in 10% steps; goes from 100% round to 0% |

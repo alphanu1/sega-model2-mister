@@ -74,6 +74,17 @@ module m2_geometry #(
   // four mantissa bits, in sixteenths of a level. 0: q_mipz is 0, pruned.
   parameter bit MIPZ   = 1'b0,
   parameter int MIPZ_B = 3,
+  // R915: DAYTONA'S ROAD, UNMIPPED. A polygon textured with one of the road
+  // surfaces below gets q_mipz (level 0) at every mip setting, so the road and
+  // its lane markings are never mipped; the mountains, walls and everything
+  // else are mipped exactly as before. Matched on the texture's place on its
+  // sheet, its size and (where a place is shared with other content) its
+  // wrap-x bit -- each entry was checked against every polygon MAME drew over
+  // 32,490 frames of both Daytona sets, all three courses, attract and race:
+  // each matches one texture, and that texture is road (study R915). Needs
+  // MIPZ (the flag's path); road_en selects it at run time (Daytona's game
+  // id). 0: pruned, q_mipz is R828c's alone.
+  parameter bit ROADZ  = 1'b0,
   // R899 (R889 on the 2A branch): THE WINDOW ORDER, IN THE SORT KEY. MAME
   // (render_polygons) draws the list window by window from the last opened
   // down to window 0, and within a window by z bucket; with its fill map the
@@ -103,6 +114,7 @@ module m2_geometry #(
   input  logic [31:0] mat_data,
   input  logic [31:0] foc_x, foc_y,
   input  logic [3:0]  obj_win,           // R899: m2_geo's, steady for the object (WINKEY)
+  input  logic        road_en,           // R915: the road at level 0 (ROADZ; quasi-static, the game id)
 
   // ---- the vertex stream, shared sequentially with the walk
   output logic        mem_req,
@@ -661,6 +673,20 @@ module m2_geometry #(
   // |dotp| 0 (or denormal) is MAME's deepest level, so no flag -- and none
   // here either: ld is then 0 and 2 lz < T needs z < 2^-61. No guard needed.
   wire         mz_flag = MIPZ && (mz_a < mz_b);
+  // R915: the road surfaces, on ptex = m2_geo_engine's poly_tex: [23:19] y/32,
+  // [18:13] x/32, [12] sheet, [7] wrap x, [6:4] height code, [3:1] width code
+  // (32 << code), [0] textured. {y, x, sheet} and {height, width} below.
+  function automatic logic road_tex(input logic [11:0] p, input logic wx, input logic [5:0] hw, input logic tx);
+    road_tex = tx && (
+         (p == {5'd16, 6'd0,  1'b1} && hw == 6'o33)           // (0,512) s1 256x256: the road and its lane lines, every course
+      || (p == {5'd8,  6'd0,  1'b1} && hw == 6'o33)           // (0,256) s1 256x256: plain road (start, pits, wide sections)
+      || (p == {5'd16, 6'd0,  1'b0} && hw == 6'o33 && !wx)    // (0,512) s0 256x256: Expert's road (the canyon rock there has wrap x)
+      || (p == {5'd8,  6'd8,  1'b0} && hw == 6'o33 && !wx)    // (256,256) s0 256x256: the road in shadow
+      || (p == {5'd8,  6'd4,  1'b0} && hw == 6'o22 && !wx)    // (128,256) s0 128x128: Expert's tunnel road, the bridge's edge
+      || (p == {5'd8,  6'd0,  1'b0} && hw == 6'o22 &&  wx)    // (0,256) s0 128x128: Expert's bridge and city road
+      || (p == {5'd8,  6'd24, 1'b1} && hw == 6'o02 && !wx));  // (768,256) s1 128x32: tyre marks on the road
+  endfunction
+  wire         rd_flag = MIPZ && ROADZ && road_en && road_tex(ptex[23:12], ptex[7], ptex[6:1], ptex[0]);
   logic        c_bad;                      // R566: the non-finite test, registered
   logic [1:0]  c_zmode;                    // R578
   // R578: THE z PICK AND "BEHIND THE EYE" FROM THE REGISTERED MIN AND MAX. At 70
@@ -742,7 +768,7 @@ module m2_geometry #(
           // R246: the reference sets raster->polygon_z BEFORE it culls, so a
           // culled polygon still decides what a later "old value" reads.
           zprev <= c_zsel;
-          pmipz <= mz_flag;                        // R828c: hzmax is the polygon's, since Q_MM2
+          pmipz <= mz_flag | rd_flag;              // R828c: hzmax is the polygon's, since Q_MM2; R915 the road
           if (c_bad || c_behind) begin      // R578: c_zsel / c_behind are wires on hzmin/hzmax
             if (c_bad) dbg_nonfinite <= dbg_nonfinite + 16'd1;
             else       dbg_behind    <= dbg_behind + 16'd1;

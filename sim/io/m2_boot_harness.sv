@@ -1005,6 +1005,7 @@ module m2_boot_harness #(
     .busy(eng_busy_raw),
     .mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
     .foc_x(geo_foc_x), .foc_y(geo_foc_y), .obj_win(geo_obj_win),   // R899
+    .road_en(1'b0),   // R915: not built here (ROADZ 0)
     .mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
     .mem_data(eng_mem_data_i), .mem_ack(eng_mem_ack_i),
     .xc(32'h43780000), .yc(32'h43400000),          // 248.0, 192.0

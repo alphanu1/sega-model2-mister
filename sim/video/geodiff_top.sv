@@ -184,6 +184,7 @@ module geodiff_top #(
     .start(obj_valid), .oba(obj_oba), .obc(obj_obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
     .foc_x(foc_x), .foc_y(foc_y), .obj_win(obj_win),   // R899
+    .road_en(1'b0),                                    // R915: not built here (ROADZ 0)
     .mem_req(mem_req), .mem_addr(mem_addr),
     .mem_data(eng_data_w), .mem_ack(eng_ack_w),
     .xc(xc), .yc(yc),

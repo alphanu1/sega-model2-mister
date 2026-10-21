@@ -3529,6 +3529,19 @@ wire        q3d_mipz;                       // R828c: the game's level keeps thi
 // level (the game's texlod) is at most -MIPZ_B over all of it.
 localparam bit R3D_MIP = 1'b1;
 localparam int R3D_MIPZ_B = 3;
+// R915: DAYTONA'S ROAD AT LEVEL 0 AT EVERY MIP SETTING (Ben: "stop the mip
+// mapping on the roads"; GitHub #11's lane line). m2_geometry matches the road
+// surfaces' texture headers and sets the polygon's no-mip flag. A board
+// feature (Ben's rule): built by default, M2_NO_ROADZ leaves it out; selected
+// at run time for Daytona only (game id 0, both sets) -- Desert Tank and
+// Virtua Cop see exactly the core they saw before.
+`ifdef M2_NO_ROADZ
+localparam bit R3D_ROADZ = 1'b0;
+`else
+localparam bit R3D_ROADZ = 1'b1;
+`endif
+logic rd_en;   // quasi-static: game_id is set once per load
+always_ff @(posedge clk_sys) rd_en <= R3D_ROADZ && (game_id[6:0] == 7'd0);
 // R899 (the 2A branch's R889): THE WINDOW ORDER IN THE SORT KEY. MAME draws
 // the last window opened first and in front of the rest (render_polygons);
 // Virtua Cop's revolver -- its ammo display -- is window 5, at a z behind
@@ -3574,12 +3587,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .WINKEY(R3D_WINKEY)) u_geometry (   // R828c, R899
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .ROADZ(R3D_ROADZ), .WINKEY(R3D_WINKEY)) u_geometry (   // R828c, R915, R899
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
 	.foc_x(geo_foc_x), .foc_y(geo_foc_y),
 	.obj_win(geo_obj_win_k),   // R899
+	.road_en(rd_en),           // R915
 	.mem_req(eng_mem_req), .mem_addr(eng_mem_addr),
 	.mem_data(eng_mem_data_c), .mem_ack(eng_mem_ack_c),  // R214: through the pair cache
 	// THE VIEWPORT, AND THESE ARE NOT PIXELS. a_* are the four frustum planes

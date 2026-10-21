@@ -1713,7 +1713,7 @@ test_m2_geometry: obj_m2_geometry/Vm2_geometry
 	@echo "== test m2_geometry (object_data -> screen quads, end to end)"
 	@./obj_m2_geometry/Vm2_geometry
 
-# R828c: the same bench with the per-polygon no-mip flag built (MIPZ 1).
+# R828c: the same bench with the per-polygon no-mip flag built (MIPZ 1); R915 the road match (ROADZ 1).
 test_m2_geometry_mipz: obj_m2_geometry_mipz/Vm2_geometry
 	@echo "== test m2_geometry, MIPZ (the game's own level as a no-mip flag, R828c)"
 	@./obj_m2_geometry_mipz/Vm2_geometry
@@ -1721,7 +1721,7 @@ test_m2_geometry_mipz: obj_m2_geometry_mipz/Vm2_geometry
 obj_m2_geometry_mipz/Vm2_geometry: rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv \
     rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv \
     $(GEO_RTL) sim/video/tb_m2_geometry.cpp
-	$(VBUILD) --top-module m2_geometry -GMIPZ=1 -CFLAGS "-O2 -DTB_MIPZ" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	$(VBUILD) --top-module m2_geometry -GMIPZ=1 -GROADZ=1 -CFLAGS "-O2 -DTB_MIPZ" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
 	  --Mdir obj_m2_geometry_mipz -o Vm2_geometry \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) \
