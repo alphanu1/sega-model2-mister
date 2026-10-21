@@ -138,7 +138,9 @@ module m2_scsp #(
   logic [31:0] active;
 
   // the 68000's queue and accesses
-  logic [28:0] wq [4];                    // {be 2, addr 11, data 16}
+  // R909: registers -- Quartus had put these 116 bits in a whole M10K (and
+  // an MLAB cannot give the read-during-write the queue's code has)
+  (* ramstyle = "logic" *) logic [28:0] wq [4];  // {be 2, addr 11, data 16}
   logic  [1:0] wq_rd, wq_wr;
   logic  [2:0] wq_n;
   logic        rd_pend;
@@ -452,7 +454,11 @@ module m2_scsp #(
     st_q <= st[st_ra];
   end
 
-  // the register file: two copies, one per read port
+  // the register file: two copies, one per read port. (R909: NOT MLAB. Its
+  // read address is a field of the microinstruction register uf, an MLAB
+  // takes that register as its own read address, and ucf is left an
+  // asynchronous read: 256 x 41 in logic. With mems below it, quartus_map
+  // +4,429 ALM and +8,396 registers.)
   logic        rf_we;
   (* ramstyle = "M10K" *) logic [31:0] rfa [16];
   (* ramstyle = "M10K" *) logic [31:0] rfb [16];

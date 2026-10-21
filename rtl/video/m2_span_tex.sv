@@ -766,7 +766,8 @@ module m2_span_tex #(
   // order, so the head of this queue is always the answer's owner.
   localparam int unsigned OW = $clog2(TXK) + 1;
   // R553: 16 bits, not 32 -- screen x, and the band takes span_x0[15:0].
-  logic signed [15:0] of_x    [TXK];
+  // R909: MLAB -- 256 bits Quartus had put in a whole M10K
+  (* ramstyle = "MLAB" *) logic signed [15:0] of_x    [TXK];
   logic               of_last [TXK];
   logic               of_p    [TXK];
   logic               of_skip [TXK];   // R607

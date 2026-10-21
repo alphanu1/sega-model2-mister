@@ -107,6 +107,8 @@ module m2_scsp_dsp (
 
   // TEMP 128 x 24, MEMS 32 x 24
   (* ramstyle = "M10K" *) logic [23:0] temp [128];
+  // (R909: mems stays M10K. As an MLAB it takes ins -- mpro's read register,
+  // which IRA comes from -- as its read address, and mpro becomes logic.)
   (* ramstyle = "M10K" *) logic [23:0] mems [32];
   logic  [6:0] t_ra, t_wa;
   logic        t_we, ms_we;
