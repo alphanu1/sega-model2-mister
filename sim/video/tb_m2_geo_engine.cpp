@@ -142,6 +142,9 @@ int main(int argc, char** argv) {
   for (int c = 0; c < 3; c++) for (int i = 0; i < 0x2000; i++)
     xlat[c * 0x2000 + i] = uint16_t(0xA500 | ((((i >> 8) & 0x1f) * 7 + (i & 0x3f) * 3 + c * 11) & 0xff));
   d->col_inval = 0; d->tex_lum = 0; d->gamma_sel = 0;
+#ifdef TB_TEXLUT
+  d->tex_off = 0; d->lut_en = 0;   // R925: every check below runs the TEXLUT build with lut_en low (R784's engine)
+#endif
 
   // ---- build one object: three polygons exercising all three link types
   size_t w = 0;
@@ -310,6 +313,51 @@ int main(int argc, char** argv) {
     ck("translucent bit",  (seen_tex >> 8) & 1, 1);
     thdr[0x100 + 0] = 0x0000;
   }
+#ifdef TB_TEXLUT
+  // ---- R867 / R925: TEXLUT with lut_en -- a textured polygon hands on its
+  // colour base (header word 3 >> 6) for the pixel path; textures Off colours
+  // it as a flat one and clears its textured bit. With lut_en low (every check
+  // above and below, and once more here with Off) the engine is R784's.
+  {
+    thdr[0x100 + 0] = 0x4000;
+    for (int k = 0; k < 3; k++) {
+      const int off = k >= 1, le = k < 2;   // (lut_en, Off): (1, 0), (1, 1), (0, 1)
+      d->tex_off = off; d->lut_en = le;
+      d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+      for (int i = 0; i < 12; i++) {
+        static const float I[12] = {1,0,0, 0,1,0, 0,0,1, 0,0,0};
+        d->mat_we = 1; d->mat_idx = i; d->mat_data = f2u(I[i]); tick();
+      }
+      d->mat_we = 0;
+      d->tp_we = 1; d->tp_idx = 0; d->tp_diffuse = 200; d->tp_ambient = 20; tick(); d->tp_we = 0;
+      d->start = 1; tick(); d->start = 0;
+      uint32_t n = 0, col = 0, lu = 0, tx = 0, miss0 = d->dbg_col_miss;
+      for (int budget = 0; budget < 60000 && (d->busy || budget < 10); budget++) {
+        tick();
+        if (d->poly_valid && d->poly_ready) { if (!n) { col = d->poly_col; lu = d->poly_luma; tx = d->poly_tex; } n++; }
+      }
+      if (k == 0) {
+        std::printf("test: R867 TEXLUT, lut_en: a textured polygon carries its colour base\n");
+        ck("polygons emitted", n, 3);
+        ck("poly_col is header word 3 >> 6", col, 0x155);
+        ck("textured bit", tx & 1, 1);
+        ck("no colour reads", d->dbg_col_miss - miss0, 0);
+      } else if (k == 1) {
+        std::printf("test: R867 TEXLUT, lut_en, textures Off: the flat colour, not textured\n");
+        ck("polygons emitted", n, 3);
+        ck("the flat colour at its luma", col, ref_colour(C555, (int)lu));
+        ck("textured bit clear", tx & 1, 0);
+      } else {
+        std::printf("test: R925 TEXLUT, lut_en low, textures Off: R784's slope, still textured (Model2.sv masks it)\n");
+        ck("polygons emitted", n, 3);
+        ck("R784: textured, the slope", col, tex_colour(C555, (int)lu >> 1, 0));
+        ck("textured bit kept", tx & 1, 1);
+      }
+    }
+    d->tex_off = 0; d->lut_en = 0;
+    thdr[0x100 + 0] = 0x0000;
+  }
+#endif
   // ---- and a TEXTURED OPAQUE header still draws, flat, in its palette colour
   {
     thdr[0x100 + 0] = 0x4000;
