@@ -1,5 +1,33 @@
 # Handoff
 
+## 2026-10-21: PUSHED main and model2a -- release 20261021 of both cores
+
+RELEASED. Model 2: Model2_20261021.rbf = s1264 (main 2cebd70 + R907 area,
+d2e5c1c; clk_sys -0.094, clk_mem +0.463, clk_i960 +1.500, hold +0.194; 40,936
+ALMs), md5 44c8e69e... -- the 15 kHz scan converter (R898; confirmed on CRTs
+by three of Ben's testers, on s1243), Virtua Cop's ammo display (R899, the
+window key for every game; NOT yet confirmed on the board -- Ben released
+before the VC run), the texture burst region (R905), and R907's ~820 ALM back
+(viewport converter shared, colour translation table in MLABs). main-next
+before R907 did not fit (s1254-56 short 1-3 LABs) or missed clk_sys by 2-3 ns
+(s1249/50); after R907 s1260 -1.443, s1263 -0.666, s1264 -0.094, three
+fitter Segment Violations (s1261/62/65). Main fast-forwarded to main-next.
+Model 2A (BETA): Model2A_20261021.rbf = s1259 (model2a 485bd44: R905 texture
+burst region, R903 cosr, volume list rising; clk_sys -0.143, clk_mem +0.356,
+clk_i960 +1.548, hold +0.167), md5 1420ef26... Ben on the board: the stripes
+are gone in Dynamite Cop, Sky Target and Motor Raid; "all others seem fine".
+Eleven games now in the table: + Sky Target, Dynamite Cop, Motor Raid, Dead
+or Alive, and the VF2 [15kHz CRT] MRA (untested on a CRT).
+KNOWN, listed in the README: DOA -- a few scenery textures wrong (floor
+squares, buildings; agent on it, r905-mipz context); Motor Raid's
+high-score 2D streaks (R906, merged 57c4c07, NOT in this rbf); Sega Rally's
+mirror black (R902: not reproduced on any bench -- the next step is a build
+counting window-0xB quads on the overlay); Dynamite Cop's sound reported
+wrong on s1238, never rechecked; Rally / Manx slowdowns.
+BUILDING: the Rally wait-state build (M2_2A_WAITST=1, model2a 0638009 = R906 +
+R902 bench), s1266-68, for Ben to load after it fits.
+R NUMBERS: R907 is main-next's (area). model2a's next free is R908.
+
 ## 2026-10-20 (later): PUSHED model2a -- the Model 2A beta release Model2A_20261020b
 
 RELEASED (releases/, BETA): Model2A_20261020b.rbf = s1253 (71598a2; clk_sys

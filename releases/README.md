@@ -19,28 +19,29 @@ ROM sets: MAME 0.289.
 | Daytona USA (Revision A) | `Daytona USA (Revision A).mra` | `daytona.zip`, plus the I/O board ROM `epr-14869c.25` (in `model1io.zip` or a Daytona zip) | `daytona` | Plays |
 | Daytona USA (Deluxe '93) | `Daytona USA (Deluxe 93).mra` | `daytona93.zip`, plus `daytona.zip` with a split set | `daytona93` | Plays |
 | Desert Tank | `Desert Tank.mra` | `desert.zip`, plus `epr-14869c.25` as for Daytona | `desert` | Plays |
-| Virtua Cop (Revision A) | `Virtua Cop (Revision A).mra` | `vcopa.zip` (or `model1io2.zip` for its I/O ROM) | `vcopa` | Plays. The ammo display always shows full (known, to be fixed) |
+| Virtua Cop (Revision A) | `Virtua Cop (Revision A).mra` | `vcopa.zip` (or `model1io2.zip` for its I/O ROM) | `vcopa` | Plays |
 
 Each of these also has a `[15kHz CRT]` MRA.
 
 ## Model 2A core — `Model2A.rbf` — BETA
 
-**This core is a beta.** All four games below boot and play, but there are
-known bugs, and Sega Rally slows down in places. Please report anything you
+**This core is a beta.** All eleven games below boot and play, but there are
+known bugs, and Sega Rally and Manx TT slow down in places. Please report anything you
 find, and say which game and where.
 
 ### What to copy
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261020b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261021.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs below | `/media/fat/_Arcade/` |
 
-**SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx TT run on a 64 MB or 128 MB module; Pilot Kids and Hanguk Pro Yagu 98 need the 128 MB module. Several of
-the games still to come need more than 64 MB of ROM, so **they will need the
-128 MB module**; the table further down says which.
+**SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
+TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
+Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
+ROM, so **they need the 128 MB module**.
 
-`Model2A_20261020b.rbf` has the md5 `a141ee704cf746acfea97335b21a7dd3`. As with
+`Model2A_20261021.rbf` has the md5 `1420ef26f2a0dd8f4f8dd7b13ecb6b85`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -54,17 +55,29 @@ ROM sets: MAME 0.289.
 | Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick; the ammo display counts down and reloads |
 | Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
 | Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
-| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check. **Freezes if you collide with another rider** (being fixed) |
+| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check. Occasional slowdowns |
 | Hanguk Pro Yagu 98 | `Hanguk Pro Yagu 98.mra` | `hpyagu98.zip` | `hpyagu98` | Plays. **Needs the 128 MB SDRAM module.** The MRA loads the factory settings MAME ships in the zip; some surfaces' shading may differ slightly from MAME |
+| Sky Target | `Sky Target.mra` | `skytargt.zip` | `skytargt` | Plays. **Needs the 128 MB SDRAM module.** Sound not yet checked on a board |
+| Dynamite Cop (Export, Model 2A) | `Dynamite Cop (Export, Model 2A).mra` | `dynamcop.zip` | `dynamcop` | Plays. **Needs the 128 MB SDRAM module.** Its 315-5881 protection checks are patched out by the MRA. See known bugs for its sound |
+| Motor Raid (Twin) | `Motor Raid - Twin.mra` | `motoraid.zip` | `motoraid` | Plays. **Needs the 128 MB SDRAM module.** The high-score screen's 2D has streaks (being fixed). The Twin/DX set (`motoraiddx`) is not supported |
+| Dead or Alive (Model 2A) | `Dead or Alive (Model 2A).mra` | `doaab.zip` and its parent `doa.zip` | `doaab` | Plays. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA. A few scenery textures are wrong (being looked at) |
 
 ### Known bugs
 
-- **Manx TT freezes when you hit another rider** -- the picture stops, the
-  sound carries on. Avoid contact until it's fixed; restart the core to get
-  out. Its deluxe cabinet's extra sound board isn't emulated, so a few extra
-  sounds are missing, and it has an occasional slowdown in busy scenes.
 - **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
   drops where the geometry processor has the most work. Being looked at.
+- **Sega Rally's rear-view mirror is black** in the bumper view. Being
+  looked at.
+- **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
+  cabinet's extra sound board isn't emulated, so a few extra sounds are
+  missing. (The freeze when you hit another rider is fixed in this release.)
+- **Dead or Alive** has a few wrong textures on the scenery: some floor
+  squares and parts of the buildings don't match their neighbours. If
+  `Mip-mapping` is on and textures go black, set it to `Off`.
+- **Motor Raid's high-score screen** has streaks in its 2D layers, where the
+  tile layers run out of time on a line. Fixed in the next build.
+- **Dynamite Cop's sound** was reported wrong on an earlier build and hasn't
+  been checked again since. Reports welcome.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall, and Virtua Fighter 2's hits sit well under its music.
   That is how MAME 0.289 mixes these games, sample for sample, and the core
@@ -77,14 +90,15 @@ ROM sets: MAME 0.289.
   numbers read its own code), but the game plays through normally.
 - **Virtua Fighter 2 froze in attract** once on an earlier build. It hasn't
   happened since the geometry processor fixes; if it does, please say where.
-- **No link play** for Sega Rally yet, and no `[15kHz CRT]` MRAs. To make
+- **No link play** for Sega Rally yet. Virtua Fighter 2 has a `[15kHz CRT]`
+  MRA, not yet tested on a CRT; the other games don't have one yet. To make
   one, copy an MRA and set bit 7 of the game ID byte (index 4).
 
 ### Sound settings
 
 | setting | what it does |
 |---|---|
-| `Volume` | 80% by default. The list runs 80, 90, 100%, then 0–70%, then **150, 200, 300 and 400%**. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. (The next core puts the list in rising order.) |
+| `Volume` | 80% by default. The list runs upward from there: 80, 90, 100, **150, 200, 300, 400%**, then round to 0–70%. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
 | `Raw Sound Boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
 
 **Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
@@ -97,28 +111,13 @@ Fighter 2 at the default 80%:
 | Sega Rally | `Volume` 400% still leaves it a little quieter (its peaks reach only a third of full scale) | `Volume` 150% (no limiting below about 300%) |
 | Zero Gunner | `Volume` 300–400% (no limiting up to 400%) | `Volume` 100% (no limiting below about 180%) |
 
-### Model 2A games not supported yet
-
-These run on the same board and are being brought up next. The zips are
-what each will need, as MAME 0.289 names them. Those with an MRA in `mra/`
-load on a core built from this branch after the 2026-10-20 release (not the
-release above) and are **untested on a board**: they move to the table above
-once they have been played.
-
-| Game | ROM zips | MAME set | SDRAM | State |
-|---|---|---|---|---|
-| Sky Target | `skytargt.zip` | `skytargt` | 128 MB | MRA `Sky Target.mra`; untested on a board |
-| Dynamite Cop (Export) | `dynamcop.zip` | `dynamcop` | 128 MB | MRA `Dynamite Cop (Export, Model 2A).mra`, its 315-5881 checks patched out; untested on a board |
-| Motor Raid (Twin) | `motoraid.zip` | `motoraid` | 128 MB | MRA `Motor Raid - Twin.mra`; untested on a board. The Twin/DX set (`motoraiddx`) is not supported |
-| Dead or Alive (Model 2A) | `doaab.zip` and its parent `doa.zip` | `doaab` | 128 MB | MRA `Dead or Alive (Model 2A).mra`, its protection check patched out; untested on a board |
-
 ## Model 2 core release notes
 
 ### What to copy
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261016.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261021.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -156,7 +155,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261016.rbf` has the md5 `644e28fa0dee02c90d4b2d93c2d99fbd`.
+**Check you're running the right file.** `Model2_20261021.rbf` has the md5 `44c8e69e194f1555ea73f1ef699bb553`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -190,55 +189,27 @@ anything you find.
 
 ### New in this release
 
-- **Desert Tank.** Its own MRA, on the same core. Left stick steers, the
-  right stick aims the cannon, and the triggers drive forward and reverse.
-  See Controls.
-- **Virtua Cop.** Its own I/O board is now built into the core, and the main
-  CPU gained the maths instructions the game needs. Aim with an analog stick
-  or a mouse, so USB light guns that report as either (Sinden, GUN4IR and
-  others) work too. Two players, a crosshair each, and reload by shooting
-  off-screen. See Controls.
-- **Mip-mapping.** Distant textures used to shimmer and crawl as you drove,
-  because they were always read at full size, however far away they were.
-  Now they're read from smaller, pre-filtered versions as they recede, as
-  the arcade board does. `Mip-mapping` in the OSD picks how soon that
-  happens: `Sharp` (default) keeps the most detail, `Smooth` the least
-  shimmer, and `Off` turns it off. Your own car and anything else the
-  game keeps sharp stay at full detail.
-- **Sound now matches the arcade's balance.** Each voice's volume used to be
-  set in coarse steps that left the music about 3.5 dB too loud, which made
-  the speech sound quiet next to it. The GAME OVER speech now comes through
-  as it should. The music also played about 4% too fast; it now runs at the
-  arcade's tempo.
-- **No more doubled scanlines in the 2D.** The tile layers sometimes didn't
-  finish a line in time and repeated the one before. That's gone, at 24 kHz
-  and at 15 kHz.
-- **The background stays with the scene.** The sky and mountains are drawn
-  as 2D, the road and cars as 3D, and the two could show different moments of
-  the game, so in a slide the backdrop jumped against everything else. They're
-  now kept in step.
-- **Volume control** in the OSD, starting at 80%.
-- **Steering smoothing** in the OSD. Daytona swings its camera as hard as you
-  move the steering, so a pad flicked from lock to lock snaps the view in a
-  way a real wheel never could. `Light` or `Wheel` limits how fast the
-  steering can move, so a slide sweeps across instead. Off by default.
-- **Right stick option.** By default the right stick only works the pedals
-  (`Pedals only`). Set `Right stick` to `Pedals+steer` if you use a wheel that
-  MiSTer maps onto the right stick: then left/right steers and up/down still
-  works the pedals. See Controls.
-- **More for CRTs.** 15 kHz now starts at the standard 15.7 kHz, which is
-  what most TVs need, so the `[15kHz CRT]` MRAs should show a picture straight
-  away. Your saved line setting is reset to it once. There's also a new
-  15.4 kHz setting, and a `15kHz width` option for sets that show the picture
-  squashed at 15.4 or 15.7 kHz.
-- **A shorter menu.** Texel step, 3D pacing, Texture brightness and Draw
-  method's "every 3rd frame" are gone. They're fixed at the settings that work
-  best now the core runs at full speed.
-- **Room to grow.** Several parts were made smaller, including both sound
-  chips now sharing one engine. That freed space on the FPGA for what comes
-  next.
+- **A new 15 kHz picture.** The 15 kHz mode now runs the game's 384-line
+  picture through a scan converter, so it fills a CRT top to bottom instead of
+  sitting between black borders, with no added delay. HDMI keeps working
+  alongside it. It's retrorepair's design, and it has been confirmed working
+  on CRTs by three testers. The `15kHz width` setting is gone with the old
+  picture. See the CRT section.
+- **Virtua Cop's ammo display works.** The revolver on screen used to show
+  six bullets whatever you did; it now empties as you fire and fills when you
+  reload.
+- **A texture-memory fix** carried over from the Model 2A work: one of the
+  texture RAM's mirror addresses didn't take four-word writes, so three
+  words in four of a write there were lost. None of the three games here is
+  known to show it, but the core now matches the arcade board.
 
 #### Earlier releases
+
+**20261016:** Desert Tank and Virtua Cop on the same core as Daytona, with
+light-gun and mouse aiming for Virtua Cop. Mip-mapping. Sound at the arcade's
+balance and tempo. No more doubled scanlines in the 2D, and the 2D background
+kept in step with the 3D. Volume control, steering smoothing, and a right-stick
+option for wheels. 15 kHz starting at the standard 15.7 kHz. A shorter menu.
 
 **20261013:** races at full speed, from a faster main CPU (8 KB instruction
 cache and better instruction fetching). Steering wheel support. Split and
@@ -258,7 +229,6 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
 | `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
-| `15kHz width` | `Full` (default) or `Narrow`, for a picture that looks squashed at 15.4 or 15.7 kHz — see the CRT section |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
 | `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions |
@@ -341,8 +311,15 @@ ROM set from another region.
 ### On a 15 kHz CRT
 
 The game's own picture is 24 kHz, which a 15 kHz TV can't show. The core has a
-15 kHz interlaced mode that shows all 384 lines as two fields, at the game's
-own speed.
+15 kHz interlaced mode for it, at the game's own speed. The game keeps drawing
+its native 384-line picture, and a scan converter turns that into 480 lines,
+two fields of 240, so the picture fills the screen top to bottom instead of
+sitting between black borders. It adds no delay, and for games that draw every
+other frame (Virtua Cop, Desert Tank) it keeps each picture's two fields
+together so moving things aren't combed. HDMI keeps working alongside it.
+
+The converter is [retrorepair](https://github.com/retrorepair/sega-model2-mister)'s
+design, from their CRT and light-gun work on this core.
 
 The easy way is to **load the `[15kHz CRT]` version** of the game from the
 MiSTer menu. It starts in 15 kHz straight away. With a normal MRA, set
@@ -353,15 +330,14 @@ what most TVs want. A few sets prefer NTSC's line count instead: if yours
 rolls or loses sync, try `262/263` (15.1 kHz), or `268/269` (15.4 kHz) in
 between.
 
-The game runs at 57.5 frames a second, not 60, so a faster line rate means
-more lines in each field, and the picture uses fewer of them. On many sets
-that makes it look shorter at 15.4 and 15.7 kHz than at 15.1. If yours does
-that, set `15kHz width` to `Narrow`: the picture is pulled in from the sides
-by the same amount, so it keeps its shape. If it looks too narrow, leave it
-on `Full`. It has no effect at 15.1 kHz.
+The picture is the same 240 lines a field at every line rate. The game runs at
+57.5 frames a second, not 60, so a faster line rate means more lines in each
+field, and on some sets the picture looks a little shorter at 15.4 and 15.7 kHz
+than at 15.1. The old `15kHz width` setting is gone with the old picture.
 
-It's been tested on real CRTs, but more reports are very welcome: which TV,
-how it's connected, and which settings work for you.
+Three testers have confirmed the converter working on their CRTs. More
+reports are very welcome: which TV, how it's connected, and which settings
+work for you.
 
 ### MiSTer's audio filter is switched off
 
@@ -395,7 +371,7 @@ comes from [meathax](https://github.com/meathax)'s
 [s32](https://github.com/meathax/s32) System 32 project. The I/O board's Z80
 is tv80 by Guy Hutchison, after Daniel Wallner's T80. The TGP and the video
 timing come from the Sega Model 1 core, which solved the same problems first
-on the same hardware.
+on the same hardware. The 15 kHz scan converter is retrorepair's.
 
 Hardware behaviour was checked throughout against MAME, whose Model 2 driver
 is by R. Belmont, Olivier Galibert, ElSemi, Angelo Salese and Matthew
