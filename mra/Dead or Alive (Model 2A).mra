@@ -31,13 +31,21 @@
       again.
 
       THE 317-0229 (MAME: HACK_MODE_DOA, a fixed string) is not modelled
-      (R887). The boot probes it (0x760) and 0x2bd0 uploads tables and reads
-      48 bytes back, compared with a string; the result is a flag at 0x54fabc
-      (three readers). THE TWO PATCHES turn the two calls (0x760, 0x778) into
-      mov 1,g0 (5c801e01): the flag is 1, as with the chip, and the window is
-      never touched. MAME (R887): 0x54fabc is 1 from the first second, as in
-      the run with MAME's chip; the boot is shorter by the skipped polls, so
-      the frames are not compared.
+      (R887). The boot probes it (0x2b90, called from 0x760) and 0x2bd0
+      (called from 0x778) uploads tables and reads 48 bytes back, compared
+      with a string; the result is a flag at 0x54fabc. THE PATCHES make the
+      two ROUTINES answer as the chip does: mov 1,g0 (5c801e01); ret
+      (0a000000) at 0x2b90 and at 0x2bd0, so the flag is 1 and the window is
+      never touched.
+      R921: NOT THE CALLS. The boot sums the low halfwords of the 30 words at
+      0x730-0x7a4 (0x6e0) against 0x5a61 at 0x87fe0 and keeps the answer at
+      0x54fab0; R887's patches were the calls at 0x760 / 0x778, inside that
+      range (sum 0x4ddb), so 0x54fab0 was 0 and the game's tamper check
+      armed a countdown of 300 + rand % 900 frames at each match's start
+      (0x3724) and, when it ran out, stopped every game task (0x3184): the
+      3D gone, the HUD and K.O. left over the stage's backdrop, the music
+      playing: GitHub #18, reproduced in MAME 0.289 with the old patches
+      (12.56 s into the first match) and gone with these.
 
       THE i960's movre (0x6e.1), which the game uses to save and restore
       fp0-fp3, is built under the 2A core's F2A (study R897).
@@ -150,9 +158,13 @@
             <part name="mpr-19327.22" crc="6a75634c" map="2100"/>
         </interleave>
 
-        <!-- R887: the 317-0229 boot check, call -> mov 1,g0 -->
-        <patch offset="0x760">01 1e 80 5c</patch>
-        <patch offset="0x778">01 1e 80 5c</patch>
+        <!-- R921: the 317-0229 boot check's two routines -> mov 1,g0; ret
+             (R887 patched the calls at 0x760 / 0x778, which the boot's
+             checksum of 0x730-0x7a4 covers) -->
+        <patch offset="0x2b90">01 1e 80 5c</patch>
+        <patch offset="0x2b94">00 00 00 0a</patch>
+        <patch offset="0x2bd0">01 1e 80 5c</patch>
+        <patch offset="0x2bd4">00 00 00 0a</patch>
 
     </rom>
 
