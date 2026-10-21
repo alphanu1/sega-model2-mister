@@ -90,9 +90,15 @@ ROM sets: MAME 0.289.
   numbers read its own code), but the game plays through normally.
 - **Virtua Fighter 2 froze in attract** once on an earlier build. It hasn't
   happened since the geometry processor fixes; if it does, please say where.
-- **No link play** for Sega Rally yet. Virtua Fighter 2 has a `[15kHz CRT]`
-  MRA, not yet tested on a CRT; the other games don't have one yet. To make
-  one, copy an MRA and set bit 7 of the game ID byte (index 4).
+- **No link play** for Sega Rally yet.
+- **15 kHz on a CRT is not yet tested with the 2A games.** In
+  `Model2A_20261021.rbf` it is the older 15 kHz picture (the game's 384 lines
+  one to one, with black borders), and only Virtua Fighter 2 has a
+  `[15kHz CRT]` MRA. The next Model 2A build has the Model 2 core's scan
+  converter (see *On a 15 kHz CRT* below: the same picture, the same
+  `15kHz lines` setting, HDMI kept) and a `[15kHz CRT]` MRA for every game;
+  until then, to make one, copy an MRA and set bit 7 of the game ID byte
+  (index 4).
 
 ### Sound settings
 
