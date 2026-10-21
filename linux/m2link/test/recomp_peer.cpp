@@ -8,7 +8,7 @@
 // every m2link test.
 //
 //   recomp_peer --listen PORT --next HOST:PORT (--master|--slave) [--car N]
-//               [--seconds S] [--framesync] [--spin-us N] [--start-frame N]
+//               [--seconds S] [--framesync] [--spin-us N] [--start-frame N] [--hz F]
 
 #include "runtime/comm_board.h"
 #include "app/link_socket.h"
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     int listen = 0, car = 1, spin_us = 50000, start_frame = 30;
     std::string next;
     bool master = false, framesync = false;
-    double seconds = 10;
+    double seconds = 10, hz = 57.524;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--listen") listen = std::atoi(argv[++i]);
@@ -66,6 +66,7 @@ int main(int argc, char **argv) {
         else if (a == "--framesync") framesync = true;
         else if (a == "--spin-us") spin_us = std::atoi(argv[++i]);
         else if (a == "--start-frame") start_frame = std::atoi(argv[++i]);
+        else if (a == "--hz") hz = std::atof(argv[++i]);
         else {
             std::fprintf(stderr, "recomp_peer: unknown %s\n", a.c_str());
             return 2;
@@ -83,7 +84,7 @@ int main(int argc, char **argv) {
     RecompIO io(ram, board);
     FakeGame game(io, master, car, spin_us);
 
-    const auto period = std::chrono::nanoseconds(int64_t(1e9 / 57.524));
+    const auto period = std::chrono::nanoseconds(int64_t(1e9 / hz));
     auto t = std::chrono::steady_clock::now();
     const auto t_end = t + std::chrono::milliseconds(int64_t(seconds * 1000));
     const char *last = "";
@@ -102,6 +103,7 @@ int main(int argc, char **argv) {
             last = s;
         }
         t += period;
+        if (std::chrono::steady_clock::now() > t + period) t = std::chrono::steady_clock::now(); // held: not owed
         std::this_thread::sleep_until(t);
     }
     game.report(who);

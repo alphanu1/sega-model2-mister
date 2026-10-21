@@ -6,14 +6,14 @@
 #                   (image m2link-armcc:bookworm; see README.md)
 #   make test       the local link tests (test/run_tests.sh)
 #
-# Sources: m2link.cpp and comm_board.cpp (the recomp's CommBoard, adapted);
+# Sources: m2link.cpp and core_board.cpp (the recomp's CommBoard, split with the core);
 # recomp/app/link_socket.cpp is the recomp's TcpLink, verbatim.
 
 CXX      ?= g++
 CXXFLAGS ?= -O2 -g -std=c++17 -Wall -Wextra
 INC      := -I. -Irecomp
-SRC      := m2link.cpp comm_board.cpp recomp/app/link_socket.cpp
-HDR      := comm_board.h recomp/runtime/comm_board.h recomp/app/link_socket.h
+SRC      := m2link.cpp core_board.cpp recomp/app/link_socket.cpp
+HDR      := core_board.h recomp/runtime/comm_board.h recomp/app/link_socket.h
 B        := build
 
 .PHONY: all arm test clean

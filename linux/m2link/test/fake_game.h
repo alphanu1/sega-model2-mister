@@ -104,6 +104,14 @@ public:
         cars_seen_.insert(car);
         if (have_rx_ && fr == last_rx_frame_) ++rx_repeat_;
         else ++rx_ok_;
+        // SKEW: this cabinet's frame less the one whose block it just took.
+        // Cabinets held together keep it within a frame or two; free-running
+        // ones at different rates walk it away.
+        if (linked_frames_ > 60) {
+            const int d = int((frame_ - fr) & 0xfff);
+            if (d < skew_min_) skew_min_ = d;
+            if (d > skew_max_) skew_max_ = d;
+        }
         have_rx_ = true;
         last_rx_frame_ = fr;
         // and the slots further round the ring (0x2380.., ...)
@@ -123,6 +131,7 @@ public:
                     (unsigned long long)flips_, (unsigned long long)no_flip_, (unsigned long long)rx_ok_, (unsigned long long)rx_repeat_,
                     (unsigned long long)rx_torn_, (unsigned long long)rx_none_, (unsigned long long)rx_torn_linkup_);
         for (int c : cars_seen_) std::printf(" %d", c);
+        if (skew_max_ >= 0) std::printf(" skew %d..%d", skew_min_, skew_max_);
         std::printf("\n");
         std::fflush(stdout);
     }
@@ -140,6 +149,6 @@ private:
     uint8_t last_bit_ = 1;
     uint32_t frame_ = 0, last_rx_frame_ = 0;
     uint64_t linked_frames_ = 0, flips_ = 0, no_flip_ = 0, rx_torn_linkup_ = 0, rx_ok_ = 0, rx_repeat_ = 0, rx_torn_ = 0, rx_none_ = 0;
-    int id_ = 0, count_ = 0;
+    int id_ = 0, count_ = 0, skew_min_ = 1 << 20, skew_max_ = -1;
     std::set<int> cars_seen_;
 };
