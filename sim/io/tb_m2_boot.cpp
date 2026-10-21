@@ -247,6 +247,92 @@ static bool     g_pal_seen[8192];
 static uint8_t g_xlat[96];
 static bool    g_xlat_seen[96];
 
+// ------------------------------------------------------------------ R916
+// THE LINK BOARD'S DDR3 (m2_comm through m2_ddr3, LINK_EN=1 builds). A DDRAM
+// model -- BUSY at random, a random read latency -- whose comm page (byte
+// 0x30800000) is a file when M2_LINK_MEM names one, so a running m2link
+// (--mem FILE) is the board's other half. M2_LINK=1 is the OSD's Link board:
+// On. Every access the i960 makes to 0x01a00000-0x01a1ffff is counted, the
+// register ones logged, as the MAME tap in study R916 logged them.
+#include <deque>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unordered_map>
+namespace m2lk {
+constexpr uint32_t kComm = 0x06100000;
+std::unordered_map<uint32_t, uint64_t> ddr;
+uint8_t *page = nullptr;
+struct Rd { uint32_t addr; int left, wait; };
+std::deque<Rd> rq;
+uint32_t wr_addr = 0; int wr_left = 0;
+bool tick_req = false, sel_prev = false;
+uint64_t cn_w = 0, fg_w = 0, fg_r = 0, ram_r = 0, ram_w = 0, logged = 0;
+uint64_t rng = 0x9e3779b97f4a7c15ull;
+uint32_t rnd() { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return uint32_t(rng); }
+uint64_t rd64(uint32_t w) {
+  if (page && w >= kComm && w < kComm + 0xa00) { uint64_t v; std::memcpy(&v, page + size_t(w - kComm) * 8, 8); return v; }
+  auto it = ddr.find(w); return it == ddr.end() ? ~0ull : it->second;
+}
+void wr64(uint32_t w, uint64_t v, uint8_t be) {
+  uint64_t o = rd64(w);
+  for (int i = 0; i < 8; i++) if (be >> i & 1) o = (o & ~(0xffull << (8 * i))) | (v & (0xffull << (8 * i)));
+  if (page && w >= kComm && w < kComm + 0xa00) std::memcpy(page + size_t(w - kComm) * 8, &o, 8);
+  else ddr[w] = o;
+}
+void open_page(const char *path) {
+  const int fd = ::open(path, O_RDWR | O_CREAT, 0644);
+  if (fd < 0 || ::ftruncate(fd, 0x5000) != 0) { std::printf("  M2_LINK_MEM: cannot open %s\n", path); return; }
+  void *p = ::mmap(nullptr, 0x5000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (p == MAP_FAILED) return;
+  page = static_cast<uint8_t *>(p);
+  std::memset(page, 0xff, 0x5000);   // DDR3 at power-on: anything
+}
+// After a clk_mem rising edge: the inputs for the coming cycle.
+template <class D> void tick(D *d, uint64_t frame) {
+  d->comm_tick = tick_req; tick_req = false;
+  const bool busy = (rnd() % 100) < 10;
+  d->DDRAM_BUSY = busy;
+  d->DDRAM_DOUT_READY = 0;
+  if (!rq.empty() && rq.front().wait <= 0) {
+    Rd &r = rq.front();
+    d->DDRAM_DOUT = rd64(r.addr); d->DDRAM_DOUT_READY = 1; r.addr++;
+    if (--r.left == 0) rq.pop_front();
+  }
+  for (auto &r : rq) r.wait--;
+  d->eval();
+  if (!busy && d->DDRAM_WE) {
+    if (wr_left == 0) { wr_addr = d->DDRAM_ADDR; wr_left = d->DDRAM_BURSTCNT ? d->DDRAM_BURSTCNT : 1; }
+    wr64(wr_addr++, d->DDRAM_DIN, d->DDRAM_BE); --wr_left;
+  } else if (!busy && d->DDRAM_RD) {
+    rq.push_back({uint32_t(d->DDRAM_ADDR), d->DDRAM_BURSTCNT ? d->DDRAM_BURSTCNT : 1, 5 + int(rnd() % 25)});
+  }
+  // the i960's accesses to the window (obs_io_addr is the low 24 bits)
+  const bool sel = d->obs_io_sel && (d->obs_io_addr >> 17) == (0x01a00000u >> 17 & 0x7f);
+  if (sel && !sel_prev) {
+    const uint32_t a = d->obs_io_addr & 0xffff;
+    if ((a & ~3u) == 0x4000) {
+      if (d->obs_io_we) {
+        ++((d->obs_io_addr & 2) ? fg_w : cn_w);   // CN is byte 0, FG byte 2 (stob)
+      } else ++fg_r;
+      if (logged < 40 || (d->obs_io_we && logged < 400)) {
+        ++logged;
+        std::printf("    LINK f%llu %s 0x01a%05x %08x\n", (unsigned long long)frame, d->obs_io_we ? "W" : "R",
+                    a | 0x10000 * ((d->obs_io_addr >> 16) & 1), (unsigned)(d->obs_io_we ? d->obs_io_wdata : d->obs_io_rdata));
+      }
+    } else if (a < 0x4000) ++(d->obs_io_we ? ram_w : ram_r);
+  }
+  sel_prev = sel;
+}
+template <class D> void report(D *d) {
+  std::printf("  LINK BOARD: CN writes %llu, FG writes %llu, register reads %llu, RAM reads %llu, writes %llu; "
+              "cn %d zfg %d\n", (unsigned long long)cn_w, (unsigned long long)fg_w, (unsigned long long)fg_r,
+              (unsigned long long)ram_r, (unsigned long long)ram_w, d->comm_cn_o, d->comm_zfg_o);
+  const uint64_t h0 = rd64(kComm), h2 = rd64(kComm + 2), st = rd64(kComm + 0x800);
+  std::printf("  LINK BOARD: shared 0x00-0x07 %016llx, 0x10-0x17 %016llx, status %016llx\n",
+              (unsigned long long)h0, (unsigned long long)h2, (unsigned long long)st);
+}
+} // namespace m2lk
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t max_instr = 3'000'000;
@@ -331,6 +417,13 @@ int main(int argc, char **argv) {
       // R839: Virtua Cop's program second half sits after the '93 image
       // (byte 0x2BE0000); the core's loader moves it to GAME_POLYX, and the
       // harness (VCOP=1) reads it at word 0x1880000.
+      // R916 (R725's layout): Daytona Revision A's polygon ROM past 13 MB is
+      // appended after the '93 image's end; the loader puts it at GAME_POLYX.
+      if (std::getenv("M2_REVA")) {
+        for (size_t w = 0; w < 0x180000 && 0x15F0000 + w < nw; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
+        for (size_t w = 0x1600000; w < 0x1610000; ++w) mem[w] = 0xffff;
+        std::printf("  REVISION A: polygons 13-16 MB copied to word 0x1880000\n");
+      }
       if (std::getenv("M2_VCOP")) {
         for (size_t w = 0; w < 0x20000; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
         // and the harness's work RAM (word 0x1600000, which Model2.sv keeps
@@ -496,6 +589,11 @@ int main(int argc, char **argv) {
   d = new Vm2_boot_harness;
   d->clk_cpu = 0; d->clk_mem = 0; d->clk_vid = 0; d->ce_pix = 0;
   d->sd2_ack = 0; d->sd2_dout = 0; d->rst_n = 0; d->irq = 0;
+  // R916: the link board (LINK_EN=1 builds): M2_LINK=1 fits it, M2_LINK_MEM
+  // shares its page with an m2link --mem.
+  d->link_fitted = std::getenv("M2_LINK") != nullptr; d->comm_tick = 0; d->DDRAM_BUSY = 0; d->DDRAM_DOUT_READY = 0;
+  if (const char *lm = std::getenv("M2_LINK_MEM")) m2lk::open_page(lm);
+  if (d->link_fitted) std::printf("  LINK BOARD fitted (M2_LINK)%s\n", m2lk::page ? ", page shared with m2link" : "");
   d->sd_ack = 0; d->sd_dout = 0;
 
   // The SDRAM: one word per transaction into sd_dout[15:0], acknowledged for two
@@ -1468,7 +1566,7 @@ int main(int argc, char **argv) {
       d->eval();
       if (d->clk_slow_o && !slow_prev) ++mem_edges;   // the stack's own 48 MHz
       slow_prev = d->clk_slow_o;
-    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); d->eval(); tgp_sample(); ++mem_edges; }
+    } else if (m && !mem_prev) { mem_tick(); sd2_tick(); tgp_tick(); geo_tick(); m2lk::tick(d, g_frames_done); d->eval(); tgp_sample(); ++mem_edges; }
     if (d->sd2_req) { g_char_words.insert((uint32_t)d->sd2_addr); ++g_char_fetches; }
     // M2_COPRO_TRACE: log the i960's coprocessor bus cycles in the same shape a
     // Lua memory tap produces from the reference, so the two are diffable. The
@@ -1933,6 +2031,7 @@ int main(int argc, char **argv) {
     if (mem_edges >= next_vbl) {
       next_vbl += VBL; ++vblanks;
       d->irq = 0x1;                       // level, cleared below
+      m2lk::tick_req = true;              // R916: the link board's tick
     } else if (d->irq) {
       static int hold = 0;
       if (++hold > 200) { d->irq = 0; hold = 0; }
@@ -3315,6 +3414,7 @@ int main(int argc, char **argv) {
     }
     std::printf("R650: texture sheets written to %s\n", td);
   }
+  m2lk::report(d);
   std::printf("%s\n", fail ? "FAIL" : "PASS");
   delete d;
   return fail;

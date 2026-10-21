@@ -91,6 +91,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `endif
 // R899: M2_NO_WINKEY=1 builds the 16-bit z sort key -- the core before R899
 // exactly (see R3D_WINKEY below).
+// R916: LINK PLAY -- the communication board (rtl/io/m2_comm.sv: its shared
+// RAM in DDR3, run by the m2link helper on MiSTer's Linux) and its OSD line,
+// shown for Daytona only. On by default; VERILOG_MACRO "M2_NO_LINK=1" (or
+// -DM2_NO_LINK to lint) builds without them -- the core before R916 exactly,
+// CONF_STR included.
+`ifndef M2_NO_LINK
+`define M2_LINK
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -293,6 +301,13 @@ localparam CONF_STR = {
 	// A bar outside the visible area is indistinguishable from a bar that did
 	// not draw. This packs all four well inside any plausible crop, so a side
 	// missing in BOTH layouts is missing for a real reason.
+`ifdef M2_LINK
+	// R916: Off, the default, is the core before R916: the comm window reads
+	// 0 and nothing touches DDR3. On fits the board: the game's LINK ID
+	// (test mode) and the m2link helper (linux/m2link) do the rest. Shown
+	// for Daytona only (menumask bit 2).
+	"h2O[64],Link board,Off,On;",
+`endif
 `ifdef M2_VCOP_GUN
 	// R839: Virtua Cop's guns (shown only for it: menumask bit 1)
 	// R846: O[58] (Gun 1 Stick / Mouse, never in a build) is not reused.
@@ -315,6 +330,7 @@ wire  [1:0] buttons;
 wire [127:0] status;
 wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
 wire         vc_gun;    // R839: Virtua Cop with guns built, declared ahead of hps_io (assigned below)
+wire         link_menu; // R916: Daytona with the link board built, declared ahead of hps_io (assigned below)
 
 wire [10:0] ps2_key;
 
@@ -348,7 +364,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({14'd0, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines
+	.status_menumask({13'd0, link_menu, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines; R916: Link board
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -2394,6 +2410,13 @@ localparam bit VCOP_GUN = 1'b0;      // the first boot build: guns at rest, Dayt
 localparam bit VCOP_FPU = (`M2_VCOP_FPU != 0);
 wire vc_io  = VCOP_IO  & is_vcop;
 assign vc_gun = VCOP_GUN & is_vcop;
+// R916: the link board, compile time (M2_LINK) and then the OSD's switch.
+`ifdef M2_LINK
+localparam bit LINK = 1'b1;
+`else
+localparam bit LINK = 1'b0;
+`endif
+assign link_menu = LINK & (game_id[6:0] == 7'd0);   // Daytona, either set
 assign crt_mra = game_id[7];   // R801
 // R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
 // switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
@@ -2985,6 +3008,16 @@ assign cpu_irq = { |(io_intreq & 12'hc00), |(io_intreq & 12'h3fc),
 assign geo_walk_start = vbl_d && !vbl_dd && !nowalk_s[2] && !r3d_game_hold;
 wire   _unused_wrate  = &{1'b0, wrate_s};
 
+// R916: THE COMMUNICATION BOARD'S WINDOW, 0x01a00000-0x01a1ffff (the RAM, its
+// mirror at 0x01a10000, CN at 0x01a04000 and FG at 0x01a04002). Off (or not
+// built), nothing claims it and it reads 0, as before. m2_comm is below, by
+// the DDR3 master it shares.
+wire        comm_win    = (cpu_io_addr[31:17] == 15'h00D0);
+wire        comm_on;                                   // LINK and the OSD's Link board: On
+wire        comm_rd_sel = comm_on && comm_win;
+wire        comm_stall;
+wire [31:0] comm_rdata;
+
 assign cpu_io_rdata =
 	// geo_r: the game sets these and READS THEM BACK to find where it is.
 	// Returning 0 is the suspected cause of the R129 livelock.
@@ -3008,6 +3041,7 @@ assign cpu_io_rdata =
 	// down, then repeated in RTL.
 	iob_sel                           ? iob_rdata :
 	bak_sel                           ? bak_rdata :
+	comm_rd_sel                       ? comm_rdata :   // R916
 	// THE COPROCESSOR, all three of its registers. The stub that used to sit
 	// here answered 0x980004 with a constant 1 -- "the output FIFO is empty",
 	// which is true of a copro that never starts and a lie about one that has.
@@ -3624,7 +3658,7 @@ wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
 // not for the coprocessor, so a second such peripheral ORs into it.
 // R260: the geometry push port holds the CPU while its queue is full, rather
 // than dropping the dword and leaving a hole in the display list.
-wire        cpu_io_stall   = copro_stall | geo_push_stall;
+wire        cpu_io_stall   = copro_stall | geo_push_stall | comm_stall;   // R916
 wire [31:0] copro_rdata;
 wire        copro_stall;
 wire [31:0] copro_dbg_ctl;
@@ -6330,6 +6364,60 @@ wire [63:0] ddr_din, ddr_dout;
 logic       ddr_go;
 always_ff @(posedge clk_sys or negedge mem_rst_n)
 	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
+
+// R916: THE FRAMEBUFFER AND THE LINK BOARD SHARE THE DDR3 MASTER. m2_raster3d's
+// port (its own writer/reader arbiter inside) is r3_ddr_*; with the link board
+// built, a second m2_ddr3_arb puts the framebuffer on port a and m2_comm on
+// port b. The comm block's accesses are single beats, bar the 2,048-word
+// clear on the game's init command; the arbiter alternates after every
+// transaction, so neither side waits more than one of the other's.
+wire        r3_ddr_req, r3_ddr_we, r3_ddr_ack, r3_ddr_wnext, r3_ddr_wacc, r3_ddr_rvalid;
+wire [24:0] r3_ddr_addr;
+wire [7:0]  r3_ddr_blen, r3_ddr_be;
+wire [63:0] r3_ddr_din, r3_ddr_dout;
+generate if (LINK) begin : g_link
+	wire        c_req, c_we, c_wacc, c_rvalid, c_ack, c_wnext;
+	wire [24:0] c_addr;
+	wire  [7:0] c_blen, c_be;
+	wire [63:0] c_din;
+	// The OSD's switch, into clk_sys through three flops (R229).
+	logic [2:0] link_on_s;
+	always_ff @(posedge clk_sys) link_on_s <= {link_on_s[1:0], status[64]};
+	assign comm_on = link_on_s[2] & link_menu;
+	// The vblank the game takes (its interrupt, R652's hold included) drives
+	// the board's tick, as MAME's screen_vblank and the recomp's vblank_start
+	// do; every video frame is the helper's heartbeat.
+	wire comm_vbl   = vbl_d && !vbl_dd;
+	m2_comm u_comm (
+		.clk(clk_sys), .rst_n(mem_rst_n & ddr_go), .game_rst_n(cpu_rst_n), .fitted(comm_on),
+		.sel(cpu_io_sel && comm_win), .we(cpu_io_we), .addr(cpu_io_addr[15:0]), .be(cpu_io_be),
+		.wdata(cpu_io_wdata), .rdata(comm_rdata), .stall(comm_stall),
+		.tick(comm_vbl && !r3d_game_hold), .frame(comm_vbl),
+		.d_req(c_req), .d_we(c_we), .d_addr(c_addr), .d_blen(c_blen), .d_din(c_din), .d_be(c_be),
+		.d_wacc(c_wacc), .d_rvalid(c_rvalid), .d_ack(c_ack), .d_dout(ddr_dout),
+		.dbg_cn(), .dbg_zfg()
+	);
+	m2_ddr3_arb u_ddr3_link_arb (
+		.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
+		.a_req(r3_ddr_req), .a_we(r3_ddr_we), .a_addr(r3_ddr_addr), .a_blen(r3_ddr_blen),
+		.a_din(r3_ddr_din), .a_be(r3_ddr_be),
+		.a_wnext(r3_ddr_wnext), .a_wacc(r3_ddr_wacc), .a_rvalid(r3_ddr_rvalid), .a_ack(r3_ddr_ack),
+		.b_req(c_req), .b_hold(1'b0), .b_we(c_we), .b_addr(c_addr), .b_blen(c_blen), .b_din(c_din), .b_be(c_be),
+		.b_wnext(c_wnext), .b_wacc(c_wacc), .b_rvalid(c_rvalid), .b_ack(c_ack),
+		.m_req(ddr_req), .m_we(ddr_we), .m_addr(ddr_addr), .m_blen(ddr_blen), .m_din(ddr_din), .m_be(ddr_be),
+		.m_wnext(ddr_wnext), .m_wacc(ddr_wacc), .m_rvalid(ddr_rvalid), .m_ack(ddr_ack), .m_dout(ddr_dout),
+		.dout(r3_ddr_dout),
+		.dbg_a_waits(), .dbg_b_waits(), .dbg_busy(), .dbg_owner()
+	);
+end else begin : g_nolink
+	assign comm_on = 1'b0;
+	assign comm_stall = 1'b0;
+	assign comm_rdata = 32'd0;
+	assign ddr_req = r3_ddr_req; assign ddr_we = r3_ddr_we; assign ddr_addr = r3_ddr_addr;
+	assign ddr_blen = r3_ddr_blen; assign ddr_din = r3_ddr_din; assign ddr_be = r3_ddr_be;
+	assign r3_ddr_wnext = ddr_wnext; assign r3_ddr_wacc = ddr_wacc; assign r3_ddr_rvalid = ddr_rvalid;
+	assign r3_ddr_ack = ddr_ack; assign r3_ddr_dout = ddr_dout;
+end endgenerate
 m2_ddr3 u_ddr3 (
 	.base(fb_base),   // R654
 	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
@@ -6425,9 +6513,9 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.dbg_miss_map(r3d_miss_map), .dbg_miss_lines(r3d_miss_lines),
 	.dbg_seq_a(r3d_seq_a), .dbg_seq_b(r3d_seq_b),   // R536, R547
 	// R640: the framebuffer's DDR3 side
-	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
-	.fb_din(ddr_din), .fb_be(ddr_be),
-	.fb_wnext(ddr_wnext), .fb_wacc(ddr_wacc), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
+	.fb_req(r3_ddr_req), .fb_we(r3_ddr_we), .fb_addr(r3_ddr_addr), .fb_blen(r3_ddr_blen),   // R916: via the link arbiter
+	.fb_din(r3_ddr_din), .fb_be(r3_ddr_be),
+	.fb_wnext(r3_ddr_wnext), .fb_wacc(r3_ddr_wacc), .fb_rvalid(r3_ddr_rvalid), .fb_ack(r3_ddr_ack), .fb_dout(r3_ddr_dout),
 	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels(),
 	.dbg_pipe(r3d_dbg_pipe)   // R719: {pst, cst, fb_busy, fb_complete, 0}
 );

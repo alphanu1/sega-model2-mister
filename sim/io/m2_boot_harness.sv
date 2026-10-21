@@ -59,8 +59,26 @@ module m2_boot_harness #(
   // R839: Virtua Cop (game ID 1) as Model2.sv builds it: the type-2 I/O
   // board (EPR-17181 in M2_IOFW), the i960's VC forms, and the program's
   // second half at word 0x1880000 (tb_m2_boot copies it there under M2_VCOP).
-  parameter bit          VCOP            = 1'b0
+  parameter bit          VCOP            = 1'b0,
+  // R916: the communication board (m2_comm) on its own m2_ddr3, whose DDRAM
+  // pins the bench models. 0 is the bench before R916: the window reads 0.
+  parameter bit          LINK_EN         = 1'b0
 ) (
+  // R916: the link board's switch (the OSD's Link board), its tick (the
+  // vblank the game takes), the DDRAM pins, and what it holds for the report.
+  input  logic        link_fitted,
+  input  logic        comm_tick,
+  input  logic        DDRAM_BUSY,
+  output logic  [7:0] DDRAM_BURSTCNT,
+  output logic [28:0] DDRAM_ADDR,
+  output logic [63:0] DDRAM_DIN,
+  output logic  [7:0] DDRAM_BE,
+  output logic        DDRAM_WE,
+  output logic        DDRAM_RD,
+  input  logic [63:0] DDRAM_DOUT,
+  input  logic        DDRAM_DOUT_READY,
+  output logic        comm_cn_o,
+  output logic        comm_zfg_o,
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
   // The game side then runs at TRUE memory latency, which is the variable the
@@ -670,7 +688,7 @@ module m2_boot_harness #(
 // 32 writes per channel, which proves the ADDRESSES land; it says nothing about
 // the VALUES, and a table whose R and B ramps are wrong renders white as green.
     .io_rdata(cpu_io_rdata), .io_sel(cpu_io_sel), .io_we(cpu_io_we),
-    .io_stall(copro_stall),
+    .io_stall(copro_stall | comm_stall),   // R916
     .buf_wr_stall(geo_push_busy),   // R697: as Model2.sv
     .io_addr(cpu_io_addr), .io_wdata(cpu_io_wdata), .io_be(cpu_io_be),
     .dbg_cpu_reads(), .dbg_cpu_writes(), .dbg_unmapped(),
@@ -1065,6 +1083,43 @@ module m2_boot_harness #(
     (cpu_io_addr[3:0] == 4'hB) ? 8'h4B : (cpu_io_addr[3:0] == 4'hD) ? 8'h4D :
     (cpu_io_addr[3:0] == 4'hE) ? 8'h54 : (cpu_io_addr[3:0] == 4'hF) ? 8'h4B : 8'h00;
 
+  // R916: THE COMMUNICATION BOARD, as Model2.sv wires it (its window, its
+  // stall into the bridge, its read in the mux), on the bench's own DDR3
+  // master -- the framebuffer is not in this harness, so no arbiter.
+  wire        comm_win    = (cpu_io_addr[31:17] == 15'h00D0);
+  wire        comm_rd_sel = LINK_EN && link_fitted && comm_win;
+  wire        comm_stall;
+  wire [31:0] comm_rdata;
+  generate if (LINK_EN) begin : g_link
+    wire        c_req, c_we, c_wacc, c_rvalid, c_ack, c_wnext;
+    wire [24:0] c_addr;
+    wire  [7:0] c_blen, c_be;
+    wire [63:0] c_din, c_dout;
+    m2_comm u_comm (
+      .clk(clk_m), .rst_n(rst_n), .game_rst_n(rst_n & ~cpu_hold), .fitted(link_fitted),
+      .sel(cpu_io_sel && comm_win), .we(cpu_io_we), .addr(cpu_io_addr[15:0]), .be(cpu_io_be),
+      .wdata(cpu_io_wdata), .rdata(comm_rdata), .stall(comm_stall),
+      .tick(comm_tick), .frame(comm_tick),
+      .d_req(c_req), .d_we(c_we), .d_addr(c_addr), .d_blen(c_blen), .d_din(c_din), .d_be(c_be),
+      .d_wacc(c_wacc), .d_rvalid(c_rvalid), .d_ack(c_ack), .d_dout(c_dout),
+      .dbg_cn(comm_cn_o), .dbg_zfg(comm_zfg_o)
+    );
+    m2_ddr3 u_ddr3 (
+      .base(29'h0600_0000), .clk(clk_m), .rst_n(rst_n),
+      .req(c_req), .we(c_we), .addr(c_addr), .blen(c_blen), .din(c_din), .be(c_be),
+      .wnext(c_wnext), .wacc(c_wacc), .rvalid(c_rvalid), .ack(c_ack), .dout(c_dout),
+      .DDRAM_CLK(), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+      .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+      .DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+      .dbg_lat_last(), .dbg_lat_max(), .dbg_inflight_max(), .dbg_stuck_wr(), .dbg_acks()
+    );
+  end else begin : g_nolink
+    assign comm_stall = 1'b0; assign comm_rdata = 32'd0;
+    assign DDRAM_BURSTCNT = 8'd0; assign DDRAM_ADDR = 29'd0; assign DDRAM_DIN = 64'd0;
+    assign DDRAM_BE = 8'd0; assign DDRAM_WE = 1'b0; assign DDRAM_RD = 1'b0;
+    assign comm_cn_o = 1'b0; assign comm_zfg_o = 1'b0;
+  end endgenerate
+
   logic [11:0] io_intreq, io_intena;
   // Only the low bits are read, exactly as in Model2.sv -- videoctl's mode bit
   // and the frame counter's parity. Kept full width so the shapes match the top
@@ -1095,6 +1150,7 @@ module m2_boot_harness #(
     (cpu_io_addr[23:0] == 24'h803008) ? geo_rp_o :
     iob_sel                           ? iob_rdata :
     bak_sel                           ? bak_rdata :
+    comm_rd_sel                       ? comm_rdata :   // R916
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
     copro_sel                         ? copro_rdata :
     (cpu_io_addr[23:0] == 24'h98000c) ? {29'd0, (io_render_mode ? io_framenum[0] : io_framenum[1]),

@@ -893,6 +893,7 @@ set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80_alu.v
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80_mcode.v
 set_global_assignment -name VERILOG_FILE rtl/cpu/tv80/tv80_reg.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_backup.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/io/m2_comm.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_dec.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_alu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cpu/i960/i960_regs.sv
