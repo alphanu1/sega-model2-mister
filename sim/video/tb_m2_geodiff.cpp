@@ -277,6 +277,27 @@ int main(int argc, char **argv) {
   d->rd_ack = 0; d->mem_ack = 0; d->sd_wr_ack = 0;
   for (int i = 0; i < 8; i++) tick();
   d->rst_n = 1; for (int i = 0; i < 8; i++) tick();
+  // R912: M2GD_PRESET=1 -- the coefficient table and the lod as MAME held them
+  // at the walk's start (state.txt's "coef" and "lod"), in m2_geometry's table
+  // and m2_geo's lod_l, as twelve log bits (f[30:19], m2_geo's capture). Most
+  // games write op 0x06 / 0x16 once, not every walk: on the board the table
+  // holds what earlier walks wrote; a one-walk replay starts with it empty.
+  if (std::getenv("M2GD_PRESET")) {
+    FILE *f = std::fopen((dir + "/state.txt").c_str(), "r"); char line[1024]; int nc = 0; unsigned lod = 0;
+    while (f && std::fgets(line, sizeof line, f)) {
+      unsigned w; char *p = line;
+      if (std::sscanf(line, "walk %*d start %*x mode %*x lod %x", &w) == 1) lod = w;
+      if (std::strncmp(line, "coef", 4) == 0) {
+        p += 4; int k = 0, n = 0;
+        while (k < 32 && std::sscanf(p, " %x%n", &w, &n) == 1) { d->rootp->geodiff_top__DOT__u_geometry__DOT__ct[k++] = (w >> 19) & 0xfff; p += n; }
+        nc = k;
+      }
+    }
+    if (f) std::fclose(f);
+    d->rootp->geodiff_top__DOT__u_geo__DOT__lod_l = (lod >> 19) & 0xfff;
+    tick();
+    std::printf("  M2GD_PRESET: %d coefficients, lod %08x\n", nc, lod);
+  }
 
   // The game's flip: the read pointer is a BYTE address.
   d->wdata = start * 4; d->wr_setrp = 1; tick(); d->wr_setrp = 0;   // one pulse: a held write re-arms the flip

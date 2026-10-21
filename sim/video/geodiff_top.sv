@@ -19,7 +19,8 @@ module geodiff_top #(
   parameter int CRTC_X = 0,
   parameter int CRTC_Y = 128,
   parameter bit WINKEY = 1'b0,  // R889: the window in q_z[19:16], as the 2A core builds it
-  parameter bit BIG    = 1'b0   // R897: Model2.sv's a2_big (GD_RA only; the C++ model takes M2GD_BIG)
+  parameter bit BIG    = 1'b0,  // R897: Model2.sv's a2_big (GD_RA only; the C++ model takes M2GD_BIG)
+  parameter bit MZX    = BIG    // R912: m2_geometry's mz_exact (Model2.sv: every 2A game; R905 / R911: a2_big)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -201,7 +202,7 @@ module geodiff_top #(
     .a_bottom(a_bottom), .a_top(a_top),
     .tha(obj_tha), .tpa(obj_tpa), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .tc_we(tc_we), .tc_l(tc_l), .lod_l(tc_lod), .mz_exact(BIG),   // R905
+    .tc_we(tc_we), .tc_l(tc_l), .lod_l(tc_lod), .mz_exact(MZX),   // R905, R912
     .col_inval(1'b0), .tex_lum(2'd2), .gamma_sel(2'd2), .tex_off(1'b0), .mem_space(mem_space), .dbg_col_miss(),
     .q_valid(q_valid), .q_ready(q_ready),
     .q_x0(q_x0), .q_y0(q_y0), .q_x1(q_x1), .q_y1(q_y1),

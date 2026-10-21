@@ -1,5 +1,45 @@
 # Handoff
 
+## 2026-10-21: mip-mapping game by game -- every 2A game takes MAME's own level (R912)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch m2a-mip-r912 (on model2a
+9d4d262; worktree sm2-builds/m2a-mip-r912; never merge into main).
+
+FOUND: MAME really mips -- trilinear between the sheet's levels
+(model2rd.ipp 303-324), the level from texlod = 128 log2(coef[attr >> 27]
+|dotp| lod). Over 419 s of attract + play per set (MAME 0.289, new M2LOD
+counters), the share of drawn 3D pixels with any level-1+ content: VF2
+13.9%, Rally 6.4, Virtua Cop 2 0.33, Zero Gunner 67.8, Manx TT 4.1, Pilot
+Kids 3.9, Hanguk 3.0, Dynamite Cop 9.4, Dead or Alive 0.05, Sky Target 24.5,
+Motor Raid 14.4; Daytona 14.2, Deluxe '93 11.3, Desert Tank 11.1 (and 25%
+microtexture, in neither core), Virtua Cop 21.1. So "not used in MAME" is
+only DOA (done, R911) and nearly Virtua Cop 2. What was wrong is R828c's
+flag on the five non-large 2A games: it folds in Daytona's lod 128 / coef
+1.0, and VF2 (lod 3200), Manx (65536, coefs to 2^21), VCop 2 (coef 100), ZG
+(lod 4) are nowhere near. Per-polygon agreement with MAME's level (geodiff,
+the RTL): VF2 68 -> 98%, Rally 31 -> 99, VCop 2 7 -> 99, ZG 71 -> 100, Manx 5
+-> 99.8.
+
+DONE: Model2.sv mz_exact = M2A (was a2_big). Bench error at Sharp before ->
+after: VF2 8.26 -> 6.69, Rally 5.65 -> 4.69, VCop 2 7.10 -> 5.47, ZG 4.26 ->
+4.19, Manx 7.00 -> 5.92 (Medium / Smooth likewise; every set equal or
+better at every setting). geodiff gained M2GD_PRESET (coef table + lod from
+state.txt: VF2 and VCop 2 write their tables only at boot) and geodiff_top
+MZX. test_m2_geometry_mipz gains VF2's and Manx's lods. Area: whole map
+40,427 -> 40,456 ALMs (noise; m2_geometry -15 ALUTs), registers / M10K /
+DSP equal.
+
+MAIN NOT CHANGED: Daytona / Desert / VCop use lod 128, coef 1.0, so main's
+R828c flag is MAME's level with the deliberate B = 3 (anti-shimmer). MAME
+mips all four. Numbers for Ben in R912 (Deluxe '93 Sharp 13.31 vs 10.58
+with MAME's rule, Off 10.60). Ben decides.
+
+NEXT: build; on the board VF2 / Rally / VCop 2 / ZG / Manx at Sharp should
+look like Off where MAME does not mip. If VF2 or VCop 2 still mip as
+before, the boot-time table writes were missed (an empty entry never
+flags).
+R NUMBERS: model2a's next free is R913.
+
 ## 2026-10-21: PUSHED main and model2a -- release 20261021 of both cores
 
 RELEASED. Model 2: Model2_20261021.rbf = s1264 (main 2cebd70 + R907 area,

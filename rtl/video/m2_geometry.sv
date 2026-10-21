@@ -83,7 +83,9 @@ module m2_geometry #(
   // MAME's: log2 z^2 - log2(coef[attr >> 27] |dotp| lod), and the polygon is
   // drawn at level 0 when that is at most -MIPZ_BX at its far end. 0: exactly
   // where MAME draws the whole polygon at level 0 (Dead or Alive never mips
-  // in MAME, and its sheets hold no mip levels: R905).
+  // in MAME, and its sheets hold no mip levels: R905). R912: every 2A game
+  // sets its own (VF2 lod 3200, Manx TT 65536, Virtua Cop 2 every coef 100
+  // ...), so Model2.sv ties mz_exact to the 2A build, not the large layout.
   parameter int MIPZ_BX = 0,
   parameter bit TEXLUT = 1'b0,   // R867: m2_geo_engine's (the textured colour per pixel)
   // R889: THE WINDOW ORDER, IN THE SORT KEY. MAME (render_polygons) draws the
