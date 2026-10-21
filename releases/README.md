@@ -75,7 +75,7 @@ anything you find.
 
 ## New in this release
 
-- **Link play for Daytona USA.** Race other cabinets over your network:
+- **Link play for Daytona USA (experimental).** Race other cabinets over your network:
   MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
   link board is switched on in the OSD (`Link board`, Daytona only, Off by
   default), and a small helper program on the MiSTer's Linux carries the
@@ -141,7 +141,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
-| `Link board` | Daytona USA only: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
+| `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
 ## Controls
@@ -208,7 +208,12 @@ its own backup RAM, and a fresh set starts as Japan, as it does in MAME. The
 country is the game's own setting, so change it in its test menu, or use a
 ROM set from another region.
 
-## Link play: Daytona USA, cabinet against cabinet
+## Link play: Daytona USA, cabinet against cabinet (EXPERIMENTAL)
+
+> **Experimental.** Link play is new and has only been tested on a few
+> setups so far (a MiSTer linked to the PC recompilation). Expect rough
+> edges, and please report what works and what doesn't: your network, how
+> many cabinets, MiSTer or PC, and whether frame sync was on.
 
 Daytona USA (Revision A, the 1994 set) can race other cabinets over your
 network, wired or Wi-Fi, like linked arcade machines: two MiSTers, or a
