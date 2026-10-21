@@ -175,6 +175,10 @@ third_party/            outside cores, each recorded in THIRD_PARTY.md
 - **`docs/model2a-design-study.md`** is the main one: what fits, what's been
   checked against what, what has a licence, and, in §10, every finding that
   turned out to be wrong, what was believed and how it was corrected.
+- `docs/model2-family-hardware.md`: every part of the four Model 2 boards
+  (original, 2A-CRX, 2B-CRX, 2C-CRX), which core has it, what the later
+  boards could take from the earlier ones, and what 2B and 2C would still
+  need.
 - `docs/milestones.md`: the order of work.
 - `docs/differential-testing.md`: the method and its limits.
 - `docs/io-board.md`, `docs/rom-layout.md`, `docs/mister-integration.md`.

@@ -33007,6 +33007,11 @@ lines; mame -listdevices). MAME's MACHINE_NOT_WORKING flags describe MAME's
 emulation, not the hardware. Board identity is MAME's; a real board may
 differ in details MAME does not model (notably the 2A/2B/2C "CRX" video
 boards, which MAME renders with the original Model 2's code).
+REVIEWED (R919, 2026-10-21): docs/model2-family-hardware.md has every board's
+parts in tables with their status in both cores; R919 lists ten corrections
+to this entry (common RAMs, the sound UART, Manx TT's config, the geometrizer
+on 2B / 2C, their memory maps, the game lists, the billboard, the drive
+board, ROM sizes). Read it before relying on the lists below.
 
 COMMON TO EVERY BOARD: i960KB at 25 MHz, the System 24 tilemap, the
 geometrizer / 3D renderer (as MAME models it), timers, video timing,
@@ -42290,3 +42295,133 @@ Model2A_20261020b on has the key. R910's window probe (branch m2a-win-probe)
 was not needed and was never fitted with a margin: it missed by 44-59 LABs
 (s1281-s1283) and is parked.
 
+
+**R919 -- THE MODEL 2 FAMILY REVIEWED AGAIN, PART BY PART, AGAINST BOTH CORES:
+docs/model2-family-hardware.md. R832 CORRECTED IN TEN PLACES; 2B AND 2C EACH
+NEED ONE NEW PROCESSOR, NOT TWO; THE 2C GAP IS ~600-2,100 ALM, THE 2B GAP
+~2,600-8,600. DOCUMENT ONLY, NO RTL.** (Ben: "Hardware of all models, review
+again. Add a column in the tables with a green tick for done, otherwise add
+what can be taken from the previous variants." Then: for 2B and 2C, what the
+work done covers and what remains.)
+
+*Method.* MAME 0.289's source (sm2-builds/mame-r869): model2.cpp machine
+configs, memory maps and GAME() lines, model2_v.cpp, the devices (m2comm,
+model1io, model1io2, 315_5649, 315-5881_crypt, 315-5838_317-0229_comp,
+segabill, dsbz80, dsb2, shared/segam1audio) and the CPU cores (mb86233,
+mb86235, sharc). The implementation by `git grep` / `git show` on main
+(b0c1790) and model2a (8e40e35), nothing checked out over the open tree;
+module sizes from s1248's fitter report (a 2A build). Every row of the
+document names the module and the R entry, or what to take from where.
+
+*Believed (R832), and what changed -- VERIFIED from the source unless marked:*
+  1. COMMON PARTS. R832 listed the i960, tilemap, renderer, timers, video
+     timing and comms as common. Also common, and missing there: 1 MB of work
+     RAM at 0x00500000, the 128 KB geometry buffer RAM at 0x00900000, the
+     16 KB battery-backed backup SRAM at 0x01d00000 (NVRAM, powers up 0xFF),
+     the interrupt controller, the palette / colour tables. R832's "128 KB
+     work RAM at 0x200000" (original) and "256 KB work RAM" (2A) are the BOARD
+     RAM beside it.
+  2. THE SOUND UART. Every board has the uPD71051 (i8251) the i960 talks to
+     its sound board through: 0x01c80000 on the original, 2A and 2C;
+     0x009c0000 on 2B (one byte per dword).
+  3. THE ORIGINAL I/O BOARD also carries a 315-5338A and its own 93C45 EEPROM
+     (model1io.cpp, 837-8950-01; Z80 at 32 / 8 MHz). Virtua Cop's type-2
+     board (837-11130 + 837-11131) adds an FPGA for the guns, 4 KB backup RAM
+     and a diagnostic LCD.
+  4. MANX TT'S MODEL 1 SOUND BOARD. R832: "manxttdx also carries a Model 1
+     sound board". MAME's `manxttdx` CONFIG holds both `manxtt` (Revision D,
+     the parent, "defaults to DX mode") and `manxttdx`; only manxttc and
+     Motor Raid use `manxtt`. So the set the 2A beta plays is, in MAME, the
+     board WITH the extra sound board -- the release notes' "a few extra
+     sounds are missing".
+  5. THE GEOMETRIZER ON 2B AND 2C. R832 (cont.): "MAME uses a high-level C
+     version of the geometrizer for original and 2A games". It uses it for
+     EVERY board: geo_prg_w on 2B / 2C counts the uploaded geometrizer words
+     and drops them, and model2_v.cpp's plan to run the real DSP for 2B / 2C
+     is not done in 0.289. So "2x SHARC" / "2x TGPx4" is one coprocessor
+     running the game's code plus a geometrizer m2_geometry already covers to
+     MAME's degree. R832's "each a large new CPU core" stands, as ONE core per
+     board. Exception, from model2_v.cpp's notes: Top Skater's geometry code
+     has a second transformation matrix MAME's HLE lacks.
+  6. 2B AND 2C MEMORY MAPS. Not in R832: texture RAM at 0x11000000 (sheet 0)
+     and 0x11200000 (sheet 1) as plain 32-bit RAM (2B maps 1 MB twice, 2C
+     2 MB) instead of 2A's 16-bits-per-dword windows at 0x12000000 /
+     0x12400000 (tex0_w); luma RAM at 0x11400000 with umask16 0x00ff instead
+     of 0x12800000 umask32 0x000000ff; copro status at 0x00980014 (Sonic the
+     Fighters); 2B's SHARC IOP at 0x008c0000 and bank register 0x00980020;
+     2B's FIFOs 16 deep with empty / full on the SHARC's FLAG0 / FLAG1 (8 on
+     the TGP and TGPx4). The SHARC boots from the host: 16-bit words by
+     external DMA. The TGPx4's program is 4 K x 64, uploaded as word pairs.
+  7. GAME LISTS. 2B is missing INDY 500 (its own `indy500` config, three
+     sets), Over Rev Model 2B (indy500 config) and Dynamite Cop / Deka 2
+     Model 2B (model2b_5881). 2C is missing Sega Touring Car Championship
+     (`stcc`, four sets, with the Z80 Digital Sound Board: MPEG-1 Layer II,
+     8 MB) and Dynamite Cop USA Model 2C (model2c_5881); Top Skater carries
+     the 68000 DSB2 (16 MB MPEG). The original's list omits the turbo hacks
+     daytonat / daytonata (daytona config, not working).
+  8. THE BILLBOARD is on 2A and 2B only: MAME's model2c has no SEGA_BILLBOARD.
+     It is the Versus City board 837-11854 (Z80 at 8 MHz, 315-5338A, four
+     7-segment digits).
+  9. THE DRIVE BOARD. R832 has it on Daytona and Sega Rally (right). Not in
+     R832: MAME runs its Z80 but leaves the motor output unconnected
+     (driveio_port_w: "TODO: hook up"), so there is no reference for force
+     feedback. Rail Chase 2 has its own Z80 + CXD1095 drive I/O board
+     (837-11694), answered only far enough to pass its checks.
+ 10. "ROMs FIT" (R832: vf2 47.2 MB) held for VF2 only. Raw ROM by MAME's
+     ROM_STARTs: 2A 26.5 (Air Walkers) to 90.5 MB (Dynamite Cop) -- six of
+     the eleven beta games need the 128 MB module (R887, R891, R897); 2B 27.6
+     to 90.5; 2C 33.6 to 90.5 (House of the Dead 84.5, Water Ski 90.5).
+  Also recorded, not a correction: in MAME 0.289 every 2C set is
+  MACHINE_NOT_WORKING, and on 2B only Virtua Striker, Gunblade NY, Rail
+  Chase 2, DOA 2B, Zero Gunner 2B and Pilot Kids 2B are not. Why was not
+  checked (R832's warning about the flag applies: five 2A sets MAME flags
+  play on the 2A core).
+
+*Implementation findings on the way (VERIFIED by reading the branches):*
+  * The 2A core's 93C46 is never saved: m2_93c46's header says persistence
+    "is not here yet", and the OSD save (upload index 2) is the backup SRAM
+    alone. INFERRED: GitHub #15 (Sega Rally doesn't save its settings) is
+    this. Not checked on a board.
+  * Main's textured colour is still Daytona's fixed luma model (R872 open);
+    the fix is 2A's m2_luma_map + TEXLUT (R867 / R900), ~9 M10K, against
+    main's 553 / 553. GitHub #10's "inaccurate colors" fits it.
+  * MAME 0.289's own TODO lists the Virtua Cop 2 stage-select tilemap
+    priority fault -- the same screen as GitHub #16.
+  * Neither core has the comm board; branch link-play (R916) has it for
+    Daytona, not merged. Neither has the drive boards, the billboard, the
+    lamps, or microtexture (Desert Tank, R912).
+
+*THE 2B / 2C GAP (INFERRED estimates -- nothing written or mapped).* The 2A
+core (s1278): 41,389 / 41,910 ALM (521 free), 547 / 553 M10K (6 free). The
+TGP board it would give up (s1248: m2_copro with m2_tgp): 2,867 ALM, 24
+M10K, 1 DSP; its MB86233 core 2,413 ALM. Scaled from that by each ISA's
+breadth (MAME interpreter lines as a rough proxy: MB86233 1,231, MB86235
+~1,840, SHARC ~6,300):
+  * MB86235 (2C): ~4,000-5,500 ALM; program 4 K x 64 (~26-32 M10K) + RAM A /
+    B 2 x 1 K x 32 (~8): ~34-40 M10K. Net +1,100-2,600 ALM, +10-16 M10K:
+    over by ~600-2,100 ALM and ~4-10 M10K. R909's reserve (char cache 12,
+    span_q 7 M10K) covers the blocks; the ALM needs R818's texel levers or
+    the 15 kHz ring. At 20 MHz it has 4 clk_sys per instruction. Reusable:
+    fp_add / fp_mul (SUBNORM), fp_div, m2_fifo_m10k, m2_copro's i960 side,
+    m2_geo_rsqrt / m2_recip_rom for FRCP / FRSQ, the tgp_replay harness. New:
+    decoder, sequencer (delay slots, 4-deep PC stack, repeat), address units,
+    register files, the PR queue. Section 5.4.1 says nothing about the
+    MB86235; it is not the MB86233.
+  * ADSP-21062 (2B): ~6,000-12,000 ALM; its 2 Mbit RAM is 205 M10K and must
+    go to SDRAM / DDR3 behind caches (R859's pattern); 32 M instructions/s
+    with two data accesses each is 2.5 clk_sys per instruction, a pipelined
+    design. Net +3,100-9,100 ALM: over by ~2,600-8,600. Only the no-HDMI
+    build (R818 item 8, -3,861) is a lever that size, and it is not a release.
+  * Oracles: MAME's SHARC (BSD-3, Ville Linde; also Konami Hornet / NWK-TR)
+    is mature; MAME's MB86235 (BSD-3) has open TODOs (illegal delay slots,
+    FIFO hookups in the opcodes) and computes FRCP / FRSQ / FLOG with host
+    maths. No open-source FPGA SHARC or MB86235 was found (web search,
+    2026-10-21; absence of evidence). Model 1's reference has neither.
+  * NOT MEASURABLE HERE: no 2B or 2C ROM is in ~/roms/Model2, so the SHARC's
+    upload size, the 2B / 2C i960 FPU forms (R869's method) and whether the
+    HLE geometrizer is enough per game are unknown. They are the first item
+    of each board's remaining-work list in the document.
+
+*Decision unchanged:* 2B and 2C stay documented only (Ben, R832). The
+document's last section lists the remaining work for 2B, 2C, the original
+core and the 2A core, in order, with sizes and the games each would bring.

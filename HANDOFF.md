@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-21: the Model 2 family reviewed again (R919) -- branch family-hw, DOCUMENT ONLY, NOT PUSHED
+
+New: docs/model2-family-hardware.md. One table per board (original, 2A, 2B,
+2C) giving each part's chip, clocks and sizes from MAME 0.289, and its status:
+done (which core, which module), done with an open issue, or what to take
+from main, 2A, Model 1 or the link-play branch, or what's new. Linked from
+the README and from R832. R919 records ten corrections to R832. The main
+ones: the geometrizer is MAME's high-level code on EVERY board (2B and 2C
+uploads are dropped), so 2B and 2C each need ONE new processor; the 2B/2C
+memory map changes (texture and luma RAM at 0x11000000 / 0x11400000, the
+UART at 0x009c0000 on 2B); the 2B/2C game lists (INDY 500, Over Rev 2B,
+STCC and the Dynamite Cop 2B/2C sets were missing); and Manx TT Rev D is in
+MAME's config with the second sound board.
+Findings: the 2A core's 93C46 is never saved, only loaded (inferred cause of
+GitHub #15, not checked); main's textured colour is still R872 (GitHub #10;
+the 2A fix is ~9 M10K, main at 553/553). Estimates (INFERRED, nothing
+mapped): an MB86235 core is ~4,000-5,500 ALM and ~34-40 M10K, which leaves a
+2C core over by ~600-2,100 ALM; a SHARC is ~6,000-12,000 ALM with its 2 Mbit
+RAM off chip, over by ~2,600-8,600. No 2B or 2C ROM is on this machine, so
+upload sizes and i960 forms are unmeasured. Ben's decision (documented only)
+is unchanged. Next free R numbers: R920 on (R917/R918 reserved elsewhere).
+
 ## 2026-10-21: user reports on Model2A_20261021b -- NOTED, NOT BEING WORKED (Ben: "just note them")
 
 1. Sega Rally Championship won't save its NVRAM settings.
