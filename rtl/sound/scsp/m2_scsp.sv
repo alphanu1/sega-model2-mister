@@ -58,7 +58,8 @@
 module m2_scsp #(
   parameter bit FM        = 1'b1,
   parameter bit MIDI_OUT  = 1'b1,
-  parameter bit LFO_NOISE = 1'b1
+  parameter bit LFO_NOISE = 1'b1,
+  parameter bit MADRS_MIRROR = 1'b0   // R914: m2_scsp_dsp; 1 = MAME's 0x7c0 mirror (benches)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -875,7 +876,7 @@ module m2_scsp #(
 
   assign mix_we  = e_s2 == 4'(S2_MIXW);
   assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
-  m2_scsp_dsp u_dsp (
+  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR)) u_dsp (
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
     .rbl(rbl), .rbp(rbp),

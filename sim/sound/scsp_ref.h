@@ -24,6 +24,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <iterator>
@@ -393,6 +394,10 @@ public:
 		default: break;
 		}
 	}
+	// R914: 0x7c0-0x7ff. MAME 0.289 mirrors it onto MADRS; the SCSP does not
+	// (Mednafen: writes dropped, reads 0), and the RTL follows the SCSP.
+	// SCSP_MIRROR=1 gives MAME's mirror (the replay then equals MAME's mix).
+	bool madrs_mirror = getenv("SCSP_MIRROR") != nullptr;
 	void w16(u32 addr, u16 val) {
 		addr &= 0xffff;
 		if (addr < 0x400) { int slot = addr / 0x20; addr &= 0x1f; S[slot].data[addr >> 1] = val; UpdateSlotReg(slot, addr & 0x1f); }
@@ -401,7 +406,7 @@ public:
 		else {
 			if (addr < 0x780) D.COEF[(addr - 0x700) / 2] = val;
 			else if (addr < 0x7c0) D.MADRS[(addr - 0x780) / 2] = val;
-			else if (addr < 0x800) D.MADRS[(addr - 0x7c0) / 2] = val;
+			else if (addr < 0x800) { if (madrs_mirror) D.MADRS[(addr - 0x7c0) / 2] = val; }   // R914
 			else if (addr < 0xC00) { D.MPRO[(addr - 0x800) / 2] = val; if (addr == 0xBF0) DSP_Start(); }
 		}
 	}
@@ -412,7 +417,7 @@ public:
 		if (addr < 0x700) return RINGBUF[(addr - 0x600) / 2];
 		if (addr < 0x780) return D.COEF[(addr - 0x700) / 2];
 		if (addr < 0x7c0) return D.MADRS[(addr - 0x780) / 2];
-		if (addr < 0x800) return D.MADRS[(addr - 0x7c0) / 2];
+		if (addr < 0x800) return madrs_mirror ? D.MADRS[(addr - 0x7c0) / 2] : 0;   // R914
 		if (addr < 0xC00) return D.MPRO[(addr - 0x800) / 2];
 		return 0;
 	}
