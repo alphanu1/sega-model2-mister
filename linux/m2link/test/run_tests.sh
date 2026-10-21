@@ -158,6 +158,13 @@ recomp r20 $b 127.0.0.1:$a slave 2 --hz 60 $S
 echo "== for comparison, link_framesync 0, the recomp slave at 60 Hz: the skew walks"
 info m20 r20
 
+# Both at the arcade's rate (the core's video timing; the recomp on its own
+# pacer, recomp/app/pacing.cpp): held, the skew does not move at all.
+a=$((port++)); b=$((port++))
+FS=1 mister m19 $a 127.0.0.1:$b master 1 --hz 57.5244 $S
+recomp r19 $b 127.0.0.1:$a slave 2 --framesync $S
+run "link_framesync 1 both ends, both at 57.52 Hz: MiSTer master, recomp slave" m19 1 2 0 r19 2 2 0
+
 a=$((port++)); b=$((port++))
 FS=1 mister m21 $a 127.0.0.1:$b master 1 $S
 recomp r21 $b 127.0.0.1:$a slave 2 --hz 60 --framesync $S

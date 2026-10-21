@@ -36701,3 +36701,48 @@ a garbage count runs the copy off both arrays; the address now wraps in the
 32K-word RAM and the read stops at buffer RAM's end); race.lua (the inputs);
 agg.py / k2.py / cand.py / gal.py / ovl.py / setovl.py (the texture survey),
 cmp.py / scen.py / err.py / sbs.py (the bench comparisons).
+
+**R916 (addendum 3) -- link_framesync HOLDS THE CABINETS AS THE RECOMP DOES;
+THE "12 FRAMES" WAS THE MEASURE, NOT THE LINK.** Ben: the recomp runs at
+57.5 fps like the arcade and the MiSTer, so test that, and explain the
+constant 12-frame gap.
+  * THE 12 WAS A BENCH ARTIFACT. The fake game put each cabinet's own frame
+    counter in its block, counted from when its process started; the
+    processes start seconds apart, so "own frame - sender's frame" carried
+    that start difference -- a constant that means nothing. The block now
+    carries the LINKED frame count (both start at link-up), so the skew is
+    how many frames apart two cabinets run, plus the frame the data takes to
+    cross. In a ring of two the cabinets' skews add up to the round trip.
+  * THE RECOMP'S PACING, used now by the bench's recomp end: its own
+    app::Pacer (src/app/pacing.cpp, verbatim in linux/m2link/recomp/app,
+    b33baeb), Clock mode, the default -- each pass of the main loop, paced
+    by the display (60 Hz here), runs the frames the wall clock owes at
+    kArcadeFrameHz = 16 MHz / 656 / 424 = 57.5244, at most four frames'
+    worth. The MiSTer end at 57.5244 (the core's video timing, the same
+    numbers).
+  * 120 s each (test/run_framesync_long.sh), skew min..max after the first
+    60 linked frames, ~6,640 linked frames a cabinet, torn 0 everywhere:
+        recomp + recomp, 0               master 1..2   slave 1..1
+        recomp + recomp, 1 (reference)   master 3..3   slave 0..0
+        MiSTer master + recomp, 0        master 1..2   slave 1..2  (175/198 spins gave up)
+        MiSTer master + recomp, 1        master 2..2   slave 1..1
+        MiSTer + MiSTer, 1               master 1..1   slave 2..2
+        three, MiSTer/recomp/MiSTer, 1   2..2 / 2..2 / 0..0
+        recomp master + MiSTer, 1        master 2..2   slave 1..1
+        MiSTer + recomp 0.2% fast, 0     master -12..3 slave 1..15 (walks)
+        MiSTer + recomp 0.2% fast, 1     master 2..2   slave 1..1  (6,640 / 6,641 linked frames)
+    With link_framesync 1 the skew does not move by a single frame in two
+    minutes, ours or the recomp's: the cabinets are LOCKED, a fixed phase
+    apart -- the round trip is 3 frames in every pair (2 + 1, 1 + 2, 3 + 0),
+    so the two run within a frame or two of each other, the rest being the
+    frame the data takes to cross. Where the phase lands is set at link-up
+    (which cabinet saw "linked" first, where each was in its frame); the
+    recomp's own pair sits 3 + 0, ours 2 + 1. With 0 at equal rates on one
+    PC the skew wanders a frame and the spins give up more often; with a
+    clock 0.2% apart it walks (13 frames in 2 minutes) and 1 stops it.
+  * So framesync holds the cabinets together exactly as the recomp's does;
+    nothing to fix. It cannot pull two cabinets to the same frame number --
+    neither does the recomp's: linktimer only makes each frame wait for the
+    master's token, it never re-aligns the phase.
+  * run_tests.sh gains the equal-rate case (MiSTer master + recomp slave,
+    both 57.52, framesync 1: skew spread 0): 19 passed.

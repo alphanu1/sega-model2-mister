@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-21 (late): link-play -- framesync measured at 57.52 Hz on both ends (R916 addendum 3)
+
+The constant "12-frame gap" was the bench's measure (each process's own
+frame counter, from different start times), not the link. Measured with
+linked frame counts and the recomp's own pacer (recomp/app/pacing.cpp): with
+link_framesync 1 every pair -- ours and recomp+recomp -- holds a fixed phase
+over 2 minutes (skew min = max; round trip 3 frames), a 0.2%-fast recomp is
+held to the MiSTer's pace; with 0 it walks. Same behaviour as the recomp; no
+change to the core or m2link. test/run_framesync_long.sh repeats it.
+
 ## 2026-10-21 (evening): branch link-play -- the hand-over in the core, link_framesync working (R916 addendum 2). NOT FITTED, NOT PUSHED.
 
 Board run s1290 (1c2adf4): linked, but m2link's hand-over held the master to

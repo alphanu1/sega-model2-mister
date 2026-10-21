@@ -9,9 +9,12 @@
 //
 //   recomp_peer --listen PORT --next HOST:PORT (--master|--slave) [--car N]
 //               [--seconds S] [--framesync] [--spin-us N] [--start-frame N] [--hz F]
+//               [--display-hz F]   (the app's Clock pacing: passes at the display's
+//               rate, frames owed at --hz, 57.5244 by default)
 
 #include "runtime/comm_board.h"
 #include "app/link_socket.h"
+#include "app/pacing.h"
 #include "fake_game.h"
 
 #include <chrono>
@@ -54,7 +57,7 @@ int main(int argc, char **argv) {
     int listen = 0, car = 1, spin_us = 50000, start_frame = 30;
     std::string next;
     bool master = false, framesync = false;
-    double seconds = 10, hz = 57.524;
+    double seconds = 10, hz = app::kArcadeFrameHz, display_hz = 60;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--listen") listen = std::atoi(argv[++i]);
@@ -67,6 +70,7 @@ int main(int argc, char **argv) {
         else if (a == "--spin-us") spin_us = std::atoi(argv[++i]);
         else if (a == "--start-frame") start_frame = std::atoi(argv[++i]);
         else if (a == "--hz") hz = std::atof(argv[++i]);
+        else if (a == "--display-hz") display_hz = std::atof(argv[++i]);
         else {
             std::fprintf(stderr, "recomp_peer: unknown %s\n", a.c_str());
             return 2;
@@ -84,26 +88,40 @@ int main(int argc, char **argv) {
     RecompIO io(ram, board);
     FakeGame game(io, master, car, spin_us);
 
-    const auto period = std::chrono::nanoseconds(int64_t(1e9 / hz));
-    auto t = std::chrono::steady_clock::now();
+    // THE RECOMP'S OWN PACING (src/app/pacing.cpp, verbatim in recomp/app):
+    // Clock mode, the default -- each pass of the main loop, paced by the
+    // display's vsync (display_hz), runs the game frames the wall clock owes
+    // at game_hz, at most four frames' worth; a frame held in comm_tick or
+    // fg_r (link_framesync) is owed back, as in the app.
+    using SC = std::chrono::steady_clock;
+    auto ns = [] { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(SC::now().time_since_epoch()).count()); };
+    app::Pacing pacing;
+    pacing.game_hz = hz;
+    app::Pacer pacer;
+    pacer.set(pacing, ns());
+    const auto pass = std::chrono::nanoseconds(int64_t(1e9 / display_hz));
+    auto t = SC::now();
     const auto t_end = t + std::chrono::milliseconds(int64_t(seconds * 1000));
     const char *last = "";
     char who[32];
     std::snprintf(who, sizeof who, "recomp:%d", listen);
-    for (int f = 0; std::chrono::steady_clock::now() < t_end; f++) {
-        if (f == start_frame) game.start();
-        board.vblank(); // M2Board::vblank_start
-        game.frame();
-        const char *s = state(board);
-        if (std::strcmp(s, last)) {
-            std::printf("%s: %s", who, s);
-            if (board.link() == rt::CommBoard::Link::Up) std::printf(" cabinet %d of %d", board.id(), board.count());
-            std::printf(" (frame %d)\n", f);
-            std::fflush(stdout);
-            last = s;
+    int f = 0;
+    while (SC::now() < t_end) {
+        for (int n = pacer.frames(ns()); n > 0; --n, ++f) {
+            if (f == start_frame) game.start();
+            board.vblank(); // M2Board::vblank_start
+            game.frame();
+            const char *s = state(board);
+            if (std::strcmp(s, last)) {
+                std::printf("%s: %s", who, s);
+                if (board.link() == rt::CommBoard::Link::Up) std::printf(" cabinet %d of %d", board.id(), board.count());
+                std::printf(" (frame %d)\n", f);
+                std::fflush(stdout);
+                last = s;
+            }
         }
-        t += period;
-        if (std::chrono::steady_clock::now() > t + period) t = std::chrono::steady_clock::now(); // held: not owed
+        t += pass;
+        if (SC::now() > t + pass) t = SC::now();
         std::this_thread::sleep_until(t);
     }
     game.report(who);

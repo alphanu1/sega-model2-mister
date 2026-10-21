@@ -24,9 +24,9 @@ $(B)/x86/m2link: $(SRC) $(HDR)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $(SRC)
 
 # The recomp's own code, verbatim, as the far end of every test.
-$(B)/x86/recomp_peer: test/recomp_peer.cpp test/fake_game.h recomp/runtime/comm_board.cpp recomp/app/link_socket.cpp $(HDR)
+$(B)/x86/recomp_peer: test/recomp_peer.cpp test/fake_game.h recomp/runtime/comm_board.cpp recomp/app/link_socket.cpp recomp/app/pacing.cpp recomp/app/pacing.h $(HDR)
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INC) -o $@ test/recomp_peer.cpp recomp/runtime/comm_board.cpp recomp/app/link_socket.cpp
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ test/recomp_peer.cpp recomp/runtime/comm_board.cpp recomp/app/link_socket.cpp recomp/app/pacing.cpp
 
 $(B)/x86/core_model: test/core_model.cpp test/fake_game.h
 	@mkdir -p $(@D)
