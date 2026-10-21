@@ -43048,3 +43048,15 @@ command, 0x54da8 / 0xd in MAME, 0 here -- a value the game computes, not
 the coprocessor's); its 'R' / 'P' records proved unusable for the output
 stream (duplicates, zeros: the bus-sampling R232 recorded), so 'O' records
 (m2_copro's own push counter and data) were added.
+
+*TIMING, s1312 (f21fa06): clk_sys -1.525; quartus_sta on its database:* 334
+of the worst 400 endpoints negative, all of the worst in tgpx4_core: ir ->
+the ARx mux -> the AGU (two cascaded adders, a mode mux) -> wx_ext_start ->
+eow -> acc -> rpc / pc / ir / nx_ir / st / delay_slot (-1.525); ir -> AGU ->
+ext_addr (-1.431); ir -> mv_val (-1.008); aop_q -> fp_add's operand mux
+(-0.514); ir -> AR / RAM A, B address (-0.45 / -0.6). ca6d61b: the word end
+no longer waits on the AGU's sum (an A-bus memory destination -- internal or
+external by its address -- ends its word in a later state: ~600 such words
+in HOTD's 1 G); the AGU's address one three-input add (arx + y + d, the
+addends by a shallow mux; fuzzed against the old AGU, 5,000,000 inputs, 0
+differ); fp_add's operands registered in S_DEC. Not yet fitted.

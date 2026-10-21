@@ -1,5 +1,35 @@
 # Handoff
 
+## 2026-10-21/22: House of the Dead on a 2C build (M2_2C) -- branch model2c, R924. NOT PUSHED
+
+Branch model2c only (never pushed, never merged into main / model2a; model2a
+merged in at 9253fed and 96403a5 = model2a 0a43a9a). Build: Model2.qsf +
+VERILOG_MACRO "M2_2C=1" (optional "M2_NO_2A_RALLY=1",
+"M2_NO_2A_MANX_MOTION=1"); MRA mra/The House of the Dead (Revision A).mra,
+game ID 0x17 (CRT 0x97), <rbf>Model2C</rbf>, the 128 MB module.
+WHAT IT IS: rtl/tgpx4 (R920's MB86235, now run) behind m2_copro TGPX4 (1 K-line
+program cache over an SDRAM copy at byte 0x2080000), the bridge's 2C texture /
+luma decode (BOARD_2C), the i960's 2C burst map (i960_memmap C2), copro
+status 0x980014, HOTD's guns (m2_vcop_guns HD) and luma rows.
+VERIFIED: MAME's own MB86235 interpreter (sim/tgpx4/mame, verbatim) against a
+MAME capture of HOTD (sim/tgpx4/mame_mb86235_cap.patch, built in mame-r869's
+m2lod): exact over 188.8 M words; the RTL in lockstep with it
+(make tgpx4_replay): 8,697,138 / 8,697,138 outputs equal, 0 bad. Faults found
+that way: FMUL's MU/MV/MD from the result; x86 NaN propagation. i960 forms:
+0 traps (300 s). Geometry: geodiff_2abig on HOTD's walk 1200, 249 textured
+polygons equal. 2C boot bench (make obj_boot_2c/Vm2_boot_harness, M2_C2=1):
+warning screen, intro, char / tile RAM equal to MAME's; texture sheets and
+luma equal to MAME's in every written word with the burst fix. The boot
+harness has NO 3D rasteriser -- its frames never show 3D (taken for a fault
+first; it is not).
+BOARD: s1303 (96403a5) runs HOTD, 3D in place, textures banded -> 79cb0ec
+(burst map). s1312 (f21fa06, cvt pipelined): clk_sys -1.525 -> ca6d61b (AGU
+off the word-end path, adder operands registered), NOT YET FITTED.
+OPEN: timing (ir -> mv_val, AR / RAM address paths may remain); luma rows
+60 / 120 guessed; gun ranges not benched against MAME; CLRF, FLOG not done;
+MAME's 2C texture RAM maps 2 MB per sheet, ours mirrors the upper MB.
+Next free R numbers: R925 on (R921-R923 elsewhere).
+
 ## 2026-10-21: the MB86235 (2C) measured -- branch model2c, R920. NOT PUSHED, NOT WIRED
 
 Branch model2c (off model2a c7278f2; never merges into main or model2a,
