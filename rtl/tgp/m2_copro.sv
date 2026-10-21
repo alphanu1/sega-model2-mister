@@ -176,7 +176,21 @@ module m2_copro #(
   output logic [15:0] dbg_ff_math, dbg_ff_rom, dbg_ff_buf, dbg_rd_total,
   output logic        dbg_tgp_fifo_rd,
   output logic        dbg_tgp_fifo_wr,
-  output logic [31:0] dbg_tgp_bank
+  output logic [31:0] dbg_tgp_bank,
+  // R923: FOR THE BOARD PROBE (M2_PROBE_TGP) -- the state of both FIFOs and
+  // the TGP's handshakes, and every word that crosses the i960's side.
+  //   dbg_fifo: 31 halted 30 uploading 29 fin_valid 28 fin_full 27 fout_valid
+  //             26 fout_full 25 push_hold 24 wq_busy 23 fifo_rd 22 fifo_wr
+  //             21 fn_wr 20 stall 19:16 0  15:8 words in fin  7:0 in fout
+  //   dbg_xfer: one cycle per completed i960 transfer -- kind 0 a FIFO-port
+  //             push, 1 a function-port push, 2 a pop, 3 a copro_ctl1 write
+  //             -- with the word (the pushed word as the TGP will see it)
+  output logic [31:0] dbg_fifo,
+  output logic [31:0] dbg_tgp_hs,
+  output logic [15:0] dbg_tgp_out_refused,
+  output logic        dbg_xfer,
+  output logic  [1:0] dbg_xfer_kind,
+  output logic [31:0] dbg_xfer_data
 );
 
   // ------------------------------------------------------------ control
@@ -501,8 +515,18 @@ module m2_copro #(
     .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
     .dbg_ff_math(dbg_ff_math), .dbg_ff_rom(dbg_ff_rom), .dbg_ff_buf(dbg_ff_buf), .dbg_rd_total(dbg_rd_total),
     .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank),
-    .wq_busy(tgp_wq_busy)   // R888
+    .wq_busy(tgp_wq_busy),   // R888
+    .dbg_hs(dbg_tgp_hs), .dbg_out_refused(dbg_tgp_out_refused)   // R923
   );
+
+  // R923: the probe's view (see the ports)
+  assign dbg_fifo = {halted, uploading, fin_valid, fin_full, fout_valid, fout_full,
+                     push_hold, tgp_wq_busy, fifo_rd, fifo_wr, fn_wr, stall, 4'd0,
+                     fin_count[7:0], fout_count[7:0]};
+  assign dbg_xfer      = fin_push || fout_pop || ctl_wr;
+  assign dbg_xfer_kind = fout_pop ? 2'd2 : ctl_wr ? 2'd3 : fn_wr ? 2'd1 : 2'd0;
+  assign dbg_xfer_data = fout_pop ? fout_q : fin_din;
+  wire   _unused_r923   = &{1'b0, fin_count[15:8], fout_count[15:8]};   // 129 at most
 
   assign dbg_uc_we   = uc_we;
   assign dbg_uc_addr = uc_addr;

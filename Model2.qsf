@@ -869,6 +869,7 @@ set_global_assignment -name VERILOG_FILE rtl/sound/jt12/jt12_timers.v
 set_global_assignment -name VERILOG_FILE rtl/sound/jt12/jt12_top.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_uart_tx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_dbg_stream.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/dbg/m2_tgp_probe.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_port.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_cdc_pulse.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_handshake_cdc.sv

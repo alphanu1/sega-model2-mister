@@ -107,7 +107,11 @@ module mb86233_core #(
   output logic [7:0]  dbg_c1,
   output logic [7:0]  dbg_rep,
   // AS_RF 3, the coprocessor's memory bank. Study R133.
-  output logic [31:0] bank_reg
+  output logic [31:0] bank_reg,
+  // R923: the sequencer's state, for the board probe's handshake record (a
+  // TGP that never answers is parked in one of these, and the state names
+  // what it waits on: S_SRC on the input FIFO, S_SRC_W / S_DST_W on io)
+  output logic [3:0]  dbg_state
 );
 
   // ==================================================================
@@ -479,6 +483,7 @@ module mb86233_core #(
   } state_e;
 
   state_e state;
+  assign dbg_state = state;   // R923
 
   // R601: AND THE FIFO STROBES THEMSELVES. fifo_ack answers fifo_rd, and
   // u_mem's ext_rd was decoded from the live address, so R596 still left

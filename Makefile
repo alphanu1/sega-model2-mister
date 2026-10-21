@@ -2070,6 +2070,27 @@ tgp_capture_2a:
 	gzip -1f $(TGPCAP)/events.bin $(TGPCAP)/cdata.bin
 .PHONY: tgp_replay tgp_replay_baseline tgp_replay_check tgp_capture tgp_capture_2a
 
+# R923: the TGP hang probe (rtl/dbg/m2_tgp_probe.sv, M2_PROBE_TGP) through its own
+# UART: a fast UART (DIVISOR 8) and FREEZE_BIT 12; the frozen ring checked entry by
+# entry against the transfers before the hang, every state record against its
+# inputs; then tools/decode_tgp.py reads the capture.
+obj_tgp_probe/Vm2_tgp_probe: rtl/dbg/m2_uart_tx.sv rtl/dbg/m2_dbg_stream.sv rtl/dbg/m2_tgp_probe.sv sim/dbg/tb_m2_tgp_probe.cpp
+	$(VBUILD) --top-module m2_tgp_probe -GDIVISOR=8 -GBUDGET_CYC=100 -GFREEZE_BIT=12 -CFLAGS -O2 \
+	  --Mdir obj_tgp_probe -o Vm2_tgp_probe $(abspath $^)
+test_m2_tgp_probe: obj_tgp_probe/Vm2_tgp_probe
+	./obj_tgp_probe/Vm2_tgp_probe obj_tgp_probe/tgp_probe.uart
+	python3 tools/decode_tgp.py obj_tgp_probe/tgp_probe.uart | tail -14
+.PHONY: test_m2_tgp_probe
+# R923: m2_fifo_m10k against a reference queue under random traffic, at the
+# copro FIFOs' depth (128) and the posted-write queue's (32, MLAB).
+obj_fifo_fuzz_%/Vm2_fifo_m10k: rtl/tgp/m2_fifo_m10k.sv sim/tgp/tb_m2_fifo_fuzz.cpp
+	$(VBUILD) --top-module m2_fifo_m10k -GDEPTH=$* -CFLAGS "-O2 -DFIFO_DEPTH=$*" \
+	  --Mdir obj_fifo_fuzz_$* -o Vm2_fifo_m10k $(abspath $^)
+test_m2_fifo_fuzz: obj_fifo_fuzz_128/Vm2_fifo_m10k obj_fifo_fuzz_32/Vm2_fifo_m10k
+	./obj_fifo_fuzz_128/Vm2_fifo_m10k $(or $(FUZZ_N),20000000) 1
+	./obj_fifo_fuzz_32/Vm2_fifo_m10k $(or $(FUZZ_N),20000000) 2
+.PHONY: test_m2_fifo_fuzz
+
 # R774: the ALU as the core builds it (SHORT=1), issued one op at a time.
 obj_mb86233_alu_short/Vmb86233_alu: $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp
 	$(VBUILD) --top-module mb86233_alu -GSHORT=1 -CFLAGS "-O2 -I../sim/tgp -DALU_SHORT" $(TGPFLAGS) \

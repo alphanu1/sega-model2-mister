@@ -416,6 +416,7 @@ split_done:
   uint64_t last_retire_cyc = cyc;
   bool end_ok = false;
   uint64_t first_drop_cyc = 0;      // R876
+  uint64_t xfer_ok = 0, xfer_bad = 0;   // R923: the probe's tap
 
   while (true) {
     // ---------------- i960 side: drive this cycle's access
@@ -472,6 +473,23 @@ split_done:
         if (bw_pending.front() != a) ++hz_order;
         bw_pending.erase(bw_pending.begin());
       }
+    }
+
+    // R923: the probe's transfer tap (m2_copro dbg_xfer) must name exactly the
+    // transfers that complete this cycle, with their kind and word
+    {
+      bool done = false; unsigned kind = 0; uint32_t w = 0;
+      if (feed_xread && !top->stall) { done = true; kind = 2; w = top->rdata; }
+      else if (feed_write && !top->stall) {
+        done = true; kind = top->sel_fn ? 1 : 0;
+        w = top->sel_fn ? ((top->wdata & 0x800fffffu) | (uint32_t(top->fn_code) << 23)) : top->wdata;
+      }
+      if (done != bool(top->dbg_xfer) || (done && (top->dbg_xfer_kind != kind || top->dbg_xfer_data != w))) {
+        if (xfer_bad < 5) std::printf("XFER TAP: cycle %llu done %d kind %u %08x | tap %d kind %u %08x\n",
+                                      (unsigned long long)cyc, done, kind, w, top->dbg_xfer,
+                                      top->dbg_xfer_kind, top->dbg_xfer_data);
+        ++xfer_bad;
+      } else if (done) ++xfer_ok;
     }
 
     // i960 pop of an output
@@ -660,8 +678,11 @@ split_done:
               "stores landing out of order %llu; most stores pending %llu\n",
               (unsigned long long)hz_raw, (unsigned long long)hz_pop, (unsigned long long)hz_order,
               (unsigned long long)bw_peak);
+  std::printf("probe tap (R923): %llu transfers named, %llu wrong; TGP outputs lost on a full FIFO %u\n",
+              (unsigned long long)xfer_ok, (unsigned long long)xfer_bad, (unsigned)top->dbg_tgp_out_refused);
   const bool pass = end_ok && counts_ok && hard == 0 && unimpl_cyc == 0
-                 && hz_raw == 0 && hz_pop == 0 && hz_order == 0;
+                 && hz_raw == 0 && hz_pop == 0 && hz_order == 0
+                 && xfer_bad == 0 && top->dbg_tgp_out_refused == 0;   // R923
   std::printf("VERDICT vs MAME: %s\n", !pass ? "FAIL"
               : total_mism == 0 ? "PASS (bit-exact against MAME)"
               : "PASS (bit-exact against MAME except NaN encoding)");
