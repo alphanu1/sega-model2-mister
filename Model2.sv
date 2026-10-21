@@ -16,6 +16,15 @@
 // the framework hand us a picture, and are the sync parameters right on a real
 // display. Those are cheap to answer now and expensive to answer later.
 
+// R925 (the 2A branch's R909): NO REGISTER CHAIN IN THE CORE BECOMES A BLOCK
+// RAM. Quartus's shift-register recognition (default Auto) turns short
+// register chains into altshift_taps in M10K: on main (s1287) the status
+// synchronizers (texoff_s.., 1 block), the TGP ALU's float pipeline (3) and
+// the geometry pool's fp_add exponent (1) -- five M10K for ~420 bits on a
+// device whose blocks are the binding resource (study 5.6), and the colour
+// path's lp2..lp4 stages would be a sixth. As registers they are what the RTL
+// says they are. The framework (sys/) keeps the default.
+(* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *)
 module emu
 (
 	`include "sys/emu_ports.vh"

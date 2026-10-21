@@ -220,7 +220,10 @@ module m2_geo_clip (
   // whatever the stack kept.
   // R684: M10K (5 blocks), not MLAB: its read is registered already, and the
   // 8 LABs it held are logic the fitter is short of (R683, s638-s640).
-  (* ramstyle = "M10K" *) logic [162:0] sk_mem [NSTK*4];
+  // R925 (the 2A branch's R909): BACK TO MLAB -- 3,260 bits in five whole
+  // M10K, and M10K is what main runs out of (553 / 553 with the 15 kHz ring;
+  // the textured colour path needs nine).
+  (* ramstyle = "MLAB" *) logic [162:0] sk_mem [NSTK*4];
   logic [162:0]       sk_rd;
   logic [2:0]         pcnt;                     // the pop's vertex counter, 0..4
   // The read address: vertex 0 of the top level in K_POP, vertex pcnt after.
