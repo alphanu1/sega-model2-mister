@@ -1,5 +1,33 @@
 # Handoff
 
+## 2026-10-21 (night): branch m2a-forms-r921 -- DOA's first-match "crash" is its tamper check; MRA fix (R921). NOT PUSHED, NO RTL CHANGE
+
+GitHub #18 (DOA freezes 5-20 s into the first match, 3D gone, HUD and music
+left): NOT a missing i960 form. R887's MRA patches (call -> mov 1,g0 at
+0x760 / 0x778) sit inside the boot's checksum of 0x730-0x7a4 (0x6e0, against
+0x5a61 at 0x87fe0); the sum fails, 0x54fab0 = 0, and at each match start the
+game arms a 300 + rand%900-frame countdown (0x3724) that stops every task at
+zero (0x3184). Reproduced in MAME 0.289 with the old words: frozen 12.56 s into
+the first match, K.O. over full health bars, the sunset backdrop -- the
+user's photo. FIX: both DOA MRAs patch the chip's ROUTINES instead (mov
+1,g0; ret at 0x2b90 and 0x2bd0); the checksum passes. MAME, the same 400 s session with the new
+words: 0x54fab0 = 1 throughout, the countdown never armed, matches to K.O. /
+TIME UP / WINNER / next opponent / continue.
+Core check (tb_m2_boot A2X): old MRA -> 0x54fab0 = 0 at boot, new -> 1.
+The released core needs no rebuild: copying the two MRAs into releases/
+fixes #18 on s1278 (not done here -- Ben's release call).
+CENSUS: R869's form log now logs every operand variant (m bits, fp0-3 vs
+literal, register alignment, MEM mode/scale); i960_formcheck steps each in
+the 2A core, VF2's (vc_en low) and main's. All eleven 2A games, 280-700 s
+each (DOA x2 into many matches, VF2 fights + ~700 s of attract): 0 forms and
+0 variants trap. DOA's ROM statically: only printf's float path (cvtilr)
+could trap, never entered. VF2 #17: no form; the open candidate stays R871's
+TGP-wait lockup at 0x7dc4 (probe build reports the TGP pc).
+WRONG TURN, KEEP: SIGINT does not stop a headless m2lod run; it ran to
+PL_TEND anyway. Many m2lod at once on this box run at ~0.07x each (each
+uses ~2.2 cores); four at a time is the useful limit.
+Next free R numbers: R922 on (R920 on a local branch).
+
 ## 2026-10-21: the Model 2 family reviewed again (R919) -- branch family-hw, DOCUMENT ONLY, NOT PUSHED
 
 New: docs/model2-family-hardware.md. One table per board (original, 2A, 2B,
