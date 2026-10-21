@@ -887,6 +887,22 @@ int main(int argc, char **argv) {
       const int32_t fl = (int32_t(((iv >> 7) & 0xff)) - 127) * 256 + t[iv & 127];
       return ((-p.texlod + fl) >> 7) <= -MIPZ_B ? 1 : 0;
     };
+    // R915: M2_R3D_ROAD=1 -- Daytona's road at level 0: a polygon whose
+    // texture is one of the road surfaces (m2_geometry ROADZ's table, in
+    // MAME's terms) gets the no-mip flag whatever R828c says.
+    static const bool ROAD = std::getenv("M2_R3D_ROAD") != nullptr;
+    static long road_quads = 0;
+    auto road_of = [&](const P &p) -> int {
+      const unsigned h0 = p.h0, h2 = p.h2;
+      if (!((h0 >> 14) & 1)) return 0;
+      const int x = 32 * (h2 & 0x3f), y = 32 * ((h2 >> 6) & 0x1f), s = (h2 >> 12) & 1;
+      const int w = 32 << (h0 & 7), h = 32 << ((h0 >> 3) & 7), wx = (h0 >> 6) & 1;
+      static const int T[7][6] = {{0, 512, 1, 256, 256, -1}, {0, 256, 1, 256, 256, -1}, {0, 512, 0, 256, 256, 0},
+                                  {256, 256, 0, 256, 256, 0}, {128, 256, 0, 128, 128, 0}, {0, 256, 0, 128, 128, 1},
+                                  {768, 256, 1, 128, 32, 0}};
+      for (const auto &e : T) if (x == e[0] && y == e[1] && s == e[2] && w == e[3] && h == e[4] && (e[5] < 0 || e[5] == wx)) return 1;
+      return 0;
+    };
     auto push_quad = [&](const P &p, int a, int b, int c, int e, bool last) {
       const int ix[4] = {a, b, c, e};
       int32_t X[4], Y[4]; uint16_t OZ[4]; uint32_t U[4], Vv[4];
@@ -952,7 +968,8 @@ int main(int argc, char **argv) {
       static const bool WINKEY = std::getenv("M2_R3D_WINKEY") != nullptr;
       if (WINKEY) d->q_z = (d->q_z & ~0xf0000u) | (uint32_t(15 - std::min(p.win, 15)) << 16);
       d->key_hi = WINKEY;   // R899: the fifth pass only with the key in use, as Model2.sv's wk_en
-      d->q_mipz = mipz_of(p);   // R828c
+      d->q_mipz = mipz_of(p) | (ROAD ? road_of(p) : 0);   // R828c, R915
+      if (ROAD) road_quads += road_of(p);
       if (MIPZ_B >= 0 && p.has_lod) { const int mm = mipz_mame_of(p); ++mipz_polys; mipz_set += d->q_mipz; mipz_mame += mm; mipz_agree += (mm == (int)d->q_mipz); }
       d->q_end = last;
       if (hold_next) {   // R810: held across the swap, taken on the first edge that sees q_ready
@@ -1025,6 +1042,7 @@ int main(int argc, char **argv) {
     push_all(polys);
     std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
     if (MIPZ_B >= 0) std::printf("  R828c MIPZ B=%d: %ld quads with a lod, flag set %ld (MAME's own level says %ld), agree %ld\n", MIPZ_B, mipz_polys, mipz_set, mipz_mame, mipz_agree);
+    if (ROAD) std::printf("  R915 ROAD: %ld quads are the road (level 0)\n", road_quads);
     // R657: M2_R3D_DUMPA -- THE FRAME DRAWN WHILE THE NEXT LIST IS COLLECTED.
     // On the board every frame is drawn while the walker fills the store's
     // other bank and the sort reorders it; a frozen frame (the walk off) is the

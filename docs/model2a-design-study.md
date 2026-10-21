@@ -36178,3 +36178,154 @@ Medium / Smooth / Off as released). GitHub #11 is taken up by R915 instead.
 judges right on the board, in motion, at a distance. R913's metric said it
 was closer to MAME on every frame and every game; the board said it looked
 wrong. A mip change is judged on the board, not by a single-frame error.
+
+**R915 (main) -- DAYTONA'S ROAD IS NEVER MIPPED. A POLYGON TEXTURED WITH ONE
+OF SEVEN ROAD SURFACES (MATCHED ON ITS TEXTURE HEADER: PLACE ON THE SHEET,
+SIZE, AND WRAP-X WHERE A PLACE IS SHARED) GETS R828c's NO-MIP FLAG -- LEVEL 0
+AT SHARP, MEDIUM AND SMOOTH. EVERYTHING ELSE -- THE MOUNTAINS, WALLS, DISTANT
+SCENERY -- IS MIPPED EXACTLY AS ON MAIN. DAYTONA ONLY (GAME ID), BEHIND
+M2_NO_ROADZ. NO M10K. NOT FITTED, NOT ON A BOARD.**
+
+(Section: §10, R828 / R828a / R828c and R913 above. Authority: Ben's
+request ("Can we stop the mip mapping on the roads?", and the road unaffected
+at Medium and Smooth as well as Sharp); MAME 0.289 for which texture each
+polygon carries; Model 1 has no mip. Branch road-nomip off main c56c93d.)
+
+*Believed:* the road was the reason mip-mapping exists here (R828's shimmer),
+so unmipping it would bring shimmer back. *Corrected by Ben (2026-10-21):*
+the shimmer mip-mapping was added to stop was on the mountains and distant
+scenery, never the road; mip-mapping caused problems on the road from the
+start, which is why R828a/b/c and R913 kept reworking it. So the road is
+taken out and the scenery left exactly as it is.
+
+*Measured -- WHICH TEXTURES ARE THE ROAD (MAME 0.289 m2lod with a per-frame
+texture dump, M2TEX: each polygon that owns drawn pixels, its four header
+words and pixel count, owner maps and thumbnails every 100th frame, the
+sheets whenever they change; scratch build only). Daytona Revision A: a race
+on each course (a Lua autoboot: coin, start, the wheel held to pick the
+course, the pedal down; view buttons pressed at 60 / 120 / 180 s), 260 s
+each, plus 900 s of attract (all three courses); Deluxe '93: 900 s of attract
+(all three courses -- its coin did not register from the script, so no race).
+Every fourth rendered frame: 32,490 frames (~130,000 rendered).*
+  1. The texture at a given place on a sheet is NOT the same on every
+     course: the sheets reload per course, and (0,512) sheet 0 is the canyon
+     rock on Beginner and Advanced but Expert's three-lane road. Place alone
+     is not a discriminator.
+  2. With the wrap-x bit (header word 0 bit 6, which the core already
+     carries in poly_tex[7]) added to the key, each of the seven keys below
+     is drawn with exactly ONE texture content (the region's hash in the live
+     sheet) over all 32,490 frames, both sets, all courses, attract and race:
+       key (w x h at (x,y) sheet, wrap x)       content    drawn px     frames   what it is (owner-map overlays)
+       256x256 (0,512) s1, either               570184fd   1,683.9 M    40,090   the road and its lane lines, every course
+       256x256 (0,256) s1, either               b240092f      79.9 M     9,312   plain road (start, pits, wide sections, bridge)
+       256x256 (0,512) s0, wrap x 0             062fe782       5.3 M       159   Expert's three-lane city road (rock has wrap x 1)
+       256x256 (256,256) s0, wrap x 0           b2975bab      24.6 M     1,439   the road in shadow (bridge / tunnel shade)
+       128x128 (128,256) s0, wrap x 0           a6e09e7c      37.7 M     6,406   Expert's tunnel road; the bridge road's edge
+       128x128 (0,256) s0, wrap x 1             47e13919      37.6 M     2,287   Expert's bridge and city road
+       128x32  (768,256) s1, wrap x 0           e8136cb1      37.4 M    18,616   tyre marks on the road (translucent decals)
+     (frames counted per key, so a frame is counted once per key it shows.)
+     The main road key alone is 30-38% of all textured pixels drawn.
+  3. Looked at, not taken: the tunnel walls (256x128 (256,256) s1 -- road-like
+     asphalt texture, but walls), the kerb strip (32x256 (448,512) s0, which
+     also covers a wall face), concrete tiles, rock. Left as they are (mipped).
+  4. Desert Tank and Virtua Cop use the same places for other things: 33 of
+     their polygons on the R912 bench frames (f7030, f4205) match the table.
+     So the match is gated by the game id, not just built in.
+
+*THE CHANGE:*
+  * m2_geometry ROADZ (default 0) and input road_en: road_tex() on the
+    polygon's poly_tex ({y/32, x/32, sheet} 12 bits, {height, width code} 6,
+    wrap x, textured) against the seven entries; the result ORs into pmipz in
+    Q_CHK beside R828c's mz_flag. m2_raster_fill already sends a flagged
+    quad's spans at K_NONE (level 0) in every mode, so nothing downstream
+    changes. Needs MIPZ (the flag's path).
+  * Model2.sv: R3D_ROADZ = 1 (M2_NO_ROADZ builds it out, Ben's board-feature
+    rule); rd_en registered on clk_sys = R3D_ROADZ && game_id[6:0] == 0
+    (both Daytona sets), so Desert Tank (2) and Virtua Cop (1) are the
+    release's core. The harnesses (geodiff_top, m2_boot_harness) tie road_en
+    0.
+
+*Verified:*
+  * test_m2_geometry_mipz (now -GROADZ=1): 250 polygons with their own
+    headers (every entry with both wrap-x values, each with every key bit
+    flipped, untextured, wrap y flipped, random), far geometry: q_mipz =
+    R828c's model OR the road table (written in MAME's header terms, not from
+    poly_tex, so the packing is checked) -- road_en 1: 25 road, 25 flagged;
+    road_en 0: 0 flagged; 947 checks, 0 fails. Mutations, each caught: the
+    wrap-x condition dropped from (0,512) s0 (1 fail), wrap x read from bit 8
+    (8), road_en ignored (25), the tyre marks' size wrong (3).
+    test_m2_geometry (MIPZ 0, ROADZ 0): q_mipz 0 everywhere, 940 checks.
+  * BENCH, tb_m2_raster3d in main's Model2.sv configuration (R913's), main
+    c56c93d against this (M2_R3D_ROAD=1), at every setting, 23 Daytona
+    frames: Beginner attract f2225-2230 (the issue's stretch), f2000
+    (in-car), f2350; Advanced race f3700-3705 (the canyon); Expert race
+    f3300-3305 (the bridge), f5800 (city); Deluxe '93 f15647; Daytona f19298:
+      - Off: pixel-identical (px hash) on all 23.
+      - Sharp / Medium / Smooth: 101,253 / 153,958 / 205,344 pixels change in
+        all; every one equals Off's pixel at that place but three (beg2350,
+        on the road under a translucent: the road below changed).
+      - On the road (MAME's road pixels, 2 px in from the edge) the new
+        picture IS Off's on every frame at every setting (0 pixels differ).
+      - Outside the road (2 px margin): 2,244,663 3D pixels; 51 / 55 / 56
+        change (0.0023%), each equal to Off's -- the core paints road there
+        where MAME's owner map has a sliver or a neighbour. The MIPPED
+        SCENERY -- pixels outside the road where main's setting differs from
+        Off, i.e. the mountains, walls and distance actually mipped: 468,378 /
+        596,203 / 654,438 px, unchanged on 99.989 / 99.991 / 99.991% (the
+        rest are those 51-56 edge pixels). The scenery is mipped as on main.
+      - Desert Tank f7030 and Virtua Cop f4205: road_en is 0 for them, so the
+        core is main's by construction (the geometry bench's road_en 0 pass).
+  * Road against MAME (mean max-channel error /255 after the Off run's
+    per-channel colour fit, R913's measure; lane = road pixels whose MAME
+    texel is >= 0xA0): every setting now gives Off's road. f2225 road 7.06 /
+    7.42 / 8.15 (main Sharp / Medium / Smooth) -> 6.89; lane line 11.47 /
+    12.20 / 14.33 -> 11.13 (more than 32 off: 2.7 / 4.3 / 8.2% -> 2.0%).
+    Advanced f3700 road 7.55 / 7.96 / 8.51 -> 7.44, lane 4.60 / 5.39 / 6.19
+    -> 4.50; Expert f3300 road 8.82 / 9.31 / 9.75 -> 8.56, lane 4.60 / 5.16 /
+    5.77 -> 4.22; Deluxe '93 f15647 road 8.84 / 11.52 / 15.02 -> 8.16. On two
+    Advanced frames main's Sharp was 0.01-0.03 closer (within noise).
+  * Road frame to frame (a check, not a warning: mean max-channel |change|
+    /255 a frame at each screen pixel that is road in both frames, raw
+    colours, five steps each): Beginner f2225-30 MAME 6.68, main 9.63 /
+    9.68 / 9.69 (Sharp / Medium / Smooth), Off 9.62, new 9.62 at every
+    setting; Advanced f3700-05 MAME 8.92, main 11.78 / 11.76 / 11.79, new
+    11.79; Expert f3300-05 MAME 11.78, main 15.55 / 15.58 / 15.67, new 15.68.
+    The new road changes frame to frame as main's does, within 1% (the
+    camera's motion dominates; the bench's colour model is ~1.3-1.45x MAME's
+    on every setting alike, R913).
+  * Side by side (MAME | main Sharp | new Sharp, the distant road zoomed x3):
+    on main the far left lane line blurs into a solid smear; on the new
+    branch it stays dashed, as MAME draws it; the canyon walls, grass and
+    bridge are the same picture.
+  * lint_top clean; the whole-design -Wall warning list identical to main's
+    (1,069 lines); lint_idx the same 146 lines as c56c93d; quartus_map 17.0
+    --analyze_file m2_geometry.sv and Model2.sv: 0 errors (the 4 warnings
+    are main's: m2_cab_inputs / m2_raster_fill constant overflow, pll.qip).
+    test_m2_raster3d passes.
+  * AREA, quartus_map 17.0, whole design, c56c93d (R913's base run) -> this:
+    ALMs needed 39,761 -> 39,763 (+2); registers 48,503 -> 48,506;
+    combinational ALUT 56,639 -> 56,622 (synthesis noise either way); block
+    memory bits 4,584,572 = 4,584,572 (no M10K); DSP 94 = 94. m2_geometry
+    7,572 -> 7,570 ALUT, 8,390 = 8,390 registers: seven compares on bits the
+    polygon already holds, one OR into the flag that exists.
+
+*Inferred (each says what settles it):*
+  a. On the board the road and its lane lines look as they do at Off, at
+     every setting, while the mountains and distance mip as before. Settles
+     it: Ben on the issue's stretch (Beginner, the tunnel arch), Sharp and
+     Smooth.
+  b. Coverage: the seven keys hold every road surface over 32,490 frames;
+     scenes not in the runs (the ending, name entry, other views) could show
+     a road texture not listed, which would simply stay mipped as on main.
+  c. The table is Daytona's data, fixed in its ROMs; the two sets agree.
+
+*Not verified:* any fit; the board; a Deluxe '93 race (its attract covers all
+three courses); the 2A branch (not touched: it has no Daytona).
+
+Tools (scratch, ROM-derived output not committed): m2lod's M2TEX dump and
+M2TEX_FAST (per-pixel stats off, ~10x faster), a guard in geo_polygon_data
+(stock MAME 0.289 segfaults on Daytona's Expert course from a race start --
+a garbage count runs the copy off both arrays; the address now wraps in the
+32K-word RAM and the read stops at buffer RAM's end); race.lua (the inputs);
+agg.py / k2.py / cand.py / gal.py / ovl.py / setovl.py (the texture survey),
+cmp.py / scen.py / err.py / sbs.py (the bench comparisons).
