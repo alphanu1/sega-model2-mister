@@ -47,8 +47,8 @@
 //   FM         the ring buffer, MDL / MDXSL / MDYSL, STWINH and the 68000's
 //              access to 0x600-0x6ff (Zero Gunner's driver has an FM program)
 //   MIDI_OUT   MOBUF to the i960 (Zero Gunner's driver writes it)
-//   LFO_NOISE  (kept for the parameter list: the noise wave is baked into
-//              scsp_lfo.hex with the others; MAME's own 256 values)
+//   LFO_NOISE  (kept for the parameter list: the noise wave is always built,
+//              MAME's own 256 values, scsp_lfonoise.svh -- R909)
 // NOT BUILT (unreachable in all four drivers, R857): reverse and ping-pong
 // loops (LPCTL 2 / 3 play as 1), noise samples (SSCTL 1 gives 0), SDIR, DMA.
 // The main-CPU interrupt (MCIEB / MCIPD) is stored, not wired, as on Model 2.
@@ -465,18 +465,16 @@ module m2_scsp #(
   // =====================================================================
   // tables
   // =====================================================================
-  // the LFOs, waves baked in: [0, 8K) PSCALES by {PLFOS, PLFOWS, phase >> 8},
-  // [8K, 16K) ASCALES by {ALFOS, ALFOWS, phase >> 8}
-  (* ramstyle = "M10K" *) logic [8:0] lfo_rom [16384];
+  // the LFOs: tbl_q is the scale at tadr = {0, PLFOS, PLFOWS, phase >> 8} or
+  // {1, ALFOS, ALFOWS, phase >> 8}, a clock after (m2_scsp_lfo, R909)
+  m2_scsp_lfo u_lfo (.clk(clk), .tadr(tadr), .tbl_q(tbl_q));
   (* ramstyle = "M10K" *) logic [12:0] eg_rom [1024];
   (* ramstyle = "M10K" *) logic [26:0] rate_rom [128];
   initial begin
-    $readmemh("scsp_lfo.hex", lfo_rom);
     $readmemh("scsp_eg.hex", eg_rom);
     $readmemh("scsp_rate.hex", rate_rom);
   end
   always_ff @(posedge clk) begin
-    tbl_q  <= lfo_rom[tadr];
     egt_q  <= eg_rom[egt_a];
     rate_q <= rate_rom[{eg_pre != ATT, st_q[5:0]}];    // the row read last clock (STREG)
     hold_r <= st_q[6];
@@ -1074,5 +1072,68 @@ module m2_scsp #(
   /* verilator lint_off UNUSEDSIGNAL */
   wire _unused = &{1'b0, LFO_NOISE, prod[44:32], e_psl, w0l[11], egst_n_rel_stop, ue[`UE_IMM]};
   /* verilator lint_on UNUSEDSIGNAL */
+
+endmodule
+
+
+// =====================================================================
+// THE LFO TABLE (R909). tbl_q = the old 16,384 x 9 ROM at tadr, one clock
+// later, exactly: R858 baked the four waves into it ({sel, LFOS, LFOWS,
+// phase >> 8}, 18 M10K as the fitter built it); the waves are MAME's
+// formulas and one 256-entry noise table, so they are logic here and only
+// the two scale tables are ROM, 4,096 x 9 (scsp_lfoscale.hex):
+//   pitch      PSCALES read flat at LFOS * 256 + wave + 128 (0 .. 256: the
+//              noise wave's 128 - 0 is the next row's first, and past
+//              PSCALES[7] it is ASCALES[0][0], where [2K, 4K) begins --
+//              MAME's pointer reads it so)
+//   amplitude  ASCALES[LFOS][wave] at 2K + LFOS * 256 + wave
+// tadr is a register that feeds nothing else, so the waves sit between it
+// and the block's address register and the latency is unchanged.
+// tb_m2_scsp_lfo checks every tadr against the old ROM.
+// =====================================================================
+module m2_scsp_lfo (
+  input  logic        clk,
+  input  logic [13:0] tadr,
+  output logic  [8:0] tbl_q
+);
+`include "scsp_lfonoise.svh"
+
+  wire       sel = tadr[13];
+  wire [2:0] lfs = tadr[12:10];
+  wire [1:0] lws = tadr[9:8];
+  wire [7:0] i   = tadr[7:0];
+
+  logic [8:0]  w;      // pitch: MAME's wave + 128 (0 .. 256); amplitude: the wave
+  logic [11:0] a;
+  always_comb begin
+    if (!sel) begin
+      case (lws)                                       // PLFO_SAW / SQR / TRI / NOI + 128
+        2'd0:    w = {1'b0, ~i[7], i[6:0]};            // i < 128 ? i : i - 256
+        2'd1:    w = i[7] ? 9'd0 : 9'd255;             // i < 128 ? 127 : -128
+        2'd2:    case (i[7:6])                         // 2i, 255 - 2i, 256 - 2i, 2i - 511
+                   2'd0:    w = {2'b01, i[5:0], 1'b0};
+                   2'd1:    w = {2'b01, ~i[5:0], 1'b1};
+                   2'd2:    w = 9'd128 - {2'b00, i[5:0], 1'b0};
+                   default: w = {2'b00, i[5:0], 1'b1};
+                 endcase
+        default: w = 9'd256 - {1'b0, scsp_lfonoise(i)};   // 128 - rand
+      endcase
+      a = {1'b0, lfs, 8'd0} + {3'd0, w};
+    end else begin
+      case (lws)                                       // ALFO_SAW / SQR / TRI / NOI
+        2'd0:    w = {1'b0, ~i};                       // 255 - i
+        2'd1:    w = i[7] ? 9'd0 : 9'd255;
+        2'd2:    w = i[7] ? {1'b0, i[6:0], 1'b0} : {1'b0, ~{i[6:0], 1'b0}};   // 2i - 256 : 255 - 2i
+        default: w = {1'b0, scsp_lfonoise(i)};
+      endcase
+      a = {1'b1, lfs, w[7:0]};
+    end
+  end
+
+  // 2048 deep a slice: 2 x 2 blocks of 2048 x 5 (a 9-bit 2:1 mux after),
+  // where the unconstrained fitter takes 4096 x 2 x 5
+  (* ramstyle = "M10K", max_depth = 2048 *) logic [8:0] lfo_rom [4096];
+  initial $readmemh("scsp_lfoscale.hex", lfo_rom);
+  always_ff @(posedge clk) tbl_q <= lfo_rom[a];
 
 endmodule

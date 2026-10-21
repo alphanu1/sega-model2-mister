@@ -2700,8 +2700,23 @@ obj_scsp_level/Vm2_scsp_level: $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/scsp_lvl
 	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) --top-module m2_scsp_level --Mdir obj_scsp_level \
 	  $(SCSP_DIR)/m2_scsp_level.sv sim/sound/tb_m2_scsp_level.cpp
 
+.PHONY: test_m2_scsp_lfo
+# R909: the LFO table (waves in logic, scales in a 4,096 x 9 ROM) against the
+# 16,384 x 9 ROM it replaced, every address and +n= random clocks
+test_m2_scsp_lfo: obj_scsp_lfo/Vm2_scsp_lfo
+	@echo "== test m2_scsp_lfo (R909: every tadr against f7437e2's 16,384-word LFO ROM)"
+	@cp -f $(SCSP_DIR)/scsp_lfoscale.hex $(SCSP_DIR)/scsp_lfonoise.hex obj_scsp_lfo/ && cd obj_scsp_lfo && ./Vm2_scsp_lfo $(TEST_ARGS)
+
+obj_scsp_lfo/ref.hex:
+	@mkdir -p obj_scsp_lfo
+	git show f7437e2:rtl/sound/scsp/scsp_lfo.hex > $@
+
+obj_scsp_lfo/Vm2_scsp_lfo: $(SCSP_DIR)/m2_scsp.sv $(SCSP_DIR)/scsp_lfonoise.svh obj_scsp_lfo/ref.hex sim/sound/tb_m2_scsp_lfo.cpp sim/sound/scsp_ref.h
+	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) -Wno-fatal -Wno-UNUSEDSIGNAL --top-module m2_scsp_lfo --Mdir obj_scsp_lfo \
+	  $(SCSP_DIR)/m2_scsp.sv sim/sound/tb_m2_scsp_lfo.cpp
+
 SCSP_RTL := $(SCSP_DIR)/m2_scsp.sv $(SCSP_DIR)/m2_scsp_regs.sv $(SCSP_DIR)/m2_scsp_level.sv $(SCSP_DIR)/m2_scsp_cache.sv $(SCSP_DIR)/m2_scsp_dsp.sv
-SCSP_HEX := $(SCSP_DIR)/scsp_lvl.hex $(SCSP_DIR)/scsp_eg.hex $(SCSP_DIR)/scsp_lfo.hex $(SCSP_DIR)/scsp_rate.hex $(SCSP_DIR)/scsp_ucf.hex $(SCSP_DIR)/scsp_uce.hex
+SCSP_HEX := $(SCSP_DIR)/scsp_lvl.hex $(SCSP_DIR)/scsp_eg.hex $(SCSP_DIR)/scsp_lfoscale.hex $(SCSP_DIR)/scsp_rate.hex $(SCSP_DIR)/scsp_ucf.hex $(SCSP_DIR)/scsp_uce.hex
 
 .PHONY: test_m2_scsp
 # SCSP_CAP=build/scsp/<game> (a p16 capture); SCSP_N samples (default 441,000 = 10 s)
@@ -2713,7 +2728,7 @@ test_m2_scsp: obj_scsp_top$(SCSP_SFX)/Vm2_scsp
 	@echo "== test m2_scsp (MAME's own register stream replayed, sample for sample)"
 	@cp -f $(SCSP_HEX) obj_scsp_top$(SCSP_SFX)/ && cd obj_scsp_top$(SCSP_SFX) && SCSP_CAP=$(abspath $(SCSP_CAP)) ./Vm2_scsp
 
-obj_scsp_top$(SCSP_SFX)/Vm2_scsp: $(SCSP_RTL) $(SCSP_DIR)/scsp_tables.svh $(SCSP_DIR)/scsp_uc.svh $(SCSP_HEX) sim/sound/tb_m2_scsp.cpp sim/sound/scsp_ref.h
+obj_scsp_top$(SCSP_SFX)/Vm2_scsp: $(SCSP_RTL) $(SCSP_DIR)/scsp_tables.svh $(SCSP_DIR)/scsp_lfonoise.svh $(SCSP_DIR)/scsp_uc.svh $(SCSP_HEX) sim/sound/tb_m2_scsp.cpp sim/sound/scsp_ref.h
 	$(VERILATOR) --cc --exe --build -j 0 $(SCSP_VFL) -Wno-fatal -Wno-UNUSEDSIGNAL -Wno-PINCONNECTEMPTY \
 	  $(SCSP_DEFS) --top-module m2_scsp --Mdir obj_scsp_top$(SCSP_SFX) $(SCSP_RTL) sim/sound/tb_m2_scsp.cpp
 
