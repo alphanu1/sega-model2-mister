@@ -42,28 +42,37 @@ module tgpx4_agu (
   assign msel  = isb ? modr[10:8] : modr[14:12];
   assign ymask = 9'h1ff >> (3'd7 - msel);
 
+  // R924: THE EFFECTIVE ADDRESS AS ONE THREE-INPUT ADD, arx + y + d, its two
+  // addends chosen by the mode (a shallow mux) -- not a case over separate
+  // adders and a result mux. s1312's worst clk_sys paths ran ir -> ARx mux ->
+  // two cascaded adders -> the mode mux -> the word-end decision.
+  logic [13:0] ysel, dsel;
   always_comb begin
-    ea       = arx;
+    ysel = 14'd0; dsel = 14'd0;
+    case (mode)
+      4'h4, 4'h5, 4'h6, 4'h7: ysel = ary;
+      4'h8: ysel = isb ? {7'd0, ary[6:0]} : {7'd0, ary[13:7]};
+      4'h9: ysel = isb ? {7'd0, ary[13:7]} : {7'd0, ary[6:0]};
+      4'hb: ysel = ary;
+      4'hd, 4'he, 4'hf: ysel = {5'd0, ary[8:0] & ymask};
+      default: ysel = 14'd0;
+    endcase
+    if (mode == 4'ha || mode == 4'hb) dsel = disp;
+  end
+  assign ea = arx + ysel + dsel;
+
+  always_comb begin
     ar_we    = 1'b0;
     ar_sel_y = 1'b0;
     ar_wval  = arx;
     case (mode)
-      4'h0: ea = arx;
-      4'h1: begin ea = arx; ar_we = 1'b1; ar_wval = arx + 14'd1; end
-      4'h2: begin ea = arx; ar_we = 1'b1; ar_wval = arx - 14'd1; end
-      4'h3: begin ea = arx; ar_we = 1'b1; ar_wval = arx + disp;  end
-      4'h4: ea = arx + ary;
-      4'h5: begin ea = arx + ary; ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary + 14'd1; end
-      4'h6: begin ea = arx + ary; ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary - 14'd1; end
-      4'h7: begin ea = arx + ary; ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary + disp;  end
-      4'h8: ea = arx + (isb ? {7'd0, ary[6:0]} : {7'd0, ary[13:7]});
-      4'h9: ea = arx + (isb ? {7'd0, ary[13:7]} : {7'd0, ary[6:0]});
-      4'ha: ea = arx + disp;
-      4'hb: ea = arx + ary + disp;
-      4'hd: begin ea = arx + {5'd0, ary[8:0] & ymask}; ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary + 14'd1; end
-      4'he: begin ea = arx + {5'd0, ary[8:0] & ymask}; ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary - 14'd1; end
-      4'hf: begin ea = arx + {5'd0, ary[8:0] & ymask}; ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary + disp;  end
-      default: ea = arx;
+      4'h1: begin ar_we = 1'b1; ar_wval = arx + 14'd1; end
+      4'h2: begin ar_we = 1'b1; ar_wval = arx - 14'd1; end
+      4'h3: begin ar_we = 1'b1; ar_wval = arx + disp;  end
+      4'h5, 4'hd: begin ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary + 14'd1; end
+      4'h6, 4'he: begin ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary - 14'd1; end
+      4'h7, 4'hf: begin ar_we = 1'b1; ar_sel_y = 1'b1; ar_wval = ary + disp;  end
+      default: ;
     endcase
   end
 

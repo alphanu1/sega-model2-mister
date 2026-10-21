@@ -558,9 +558,19 @@ module tgpx4_core #(
 
   assign add_go  = alu_go && a_fadd;
   // FSUB / FCMP: f2 - f1;  FABC: |f2| - |f1|
-  assign add_a   = (aop_q[1] || aop_q == 5'h04) ? (aop_q == 5'h06 ? {1'b0, opb[30:0]} : opb) : opa;
-  assign add_b   = (aop_q[1] || aop_q == 5'h04) ? (aop_q == 5'h06 ? {1'b0, opa[30:0]} : opa) : opb;
-  assign add_sub = aop_q[1] || (aop_q == 5'h04);
+  // R924: the adder's operands REGISTERED in S_DEC (swapped for FSUB / FCMP,
+  // made absolute for FABC there) -- the mux from aop_q into fp_add's first
+  // stage was on s1312's clk_sys list (aop_q -> sA_small, -0.514 ns)
+  logic [31:0] add_aq, add_bq;
+  logic        add_subq;
+  assign add_a   = add_aq;
+  assign add_b   = add_bq;
+  assign add_sub = add_subq;
+  logic [31:0] opb_n;
+  assign opb_n = !alu_src2 ? 32'd0 :
+                 (ai2[4:3] == 2'd2) ? pr_rd :
+                 (ai2[4:3] == 2'd3) ? cst(ai2[2:0], !aop[4]) : rf_rd[1];
+  wire dec_swap = aop[1] || (aop == 5'h04);
   assign cv_go   = alu_go && a_cvt;
   assign sq_go   = alu_go && a_frsq;
 
@@ -713,12 +723,12 @@ module tgpx4_core #(
   assign ar_bt = {2'b00, g_ary};
 
   // ---------------------------------------------------------------- word end
-  logic dec_stall, wx_ext_start, eow, acc;
+  logic dec_stall, eow, acc;
   logic [63:0] acc_word;
   logic alu_arr, mul_arr;
   assign dec_stall    = (needs_fi && !fi_valid) || (needs_fo && fo_full);
-  assign wx_ext_start = (dk[wm] == K_MEM && !dbus[wm] && !dmask[wm] && g_ea[13:10] != 4'd0) ||
-                        (dk[wm] == K_EXT);
+  logic wx_maybe_ext;
+  assign wx_maybe_ext = (dk[wm] == K_MEM && !dbus[wm] && !dmask[wm]) || (dk[wm] == K_EXT);
   assign alu_arr = add_v | cv_v | div_v | (alu_go & (a_int | a_flog));
   assign mul_arr = fmul_v | imul_v;
   always_comb begin
@@ -730,7 +740,12 @@ module tgpx4_core #(
               // never a control word (it always has an ALU or multiply op,
               // so its delay slot / REP is in place before the next word is
               // taken), and never a write to ST (the take reads ST's RP)
-              eow = (ext_req ? ext_ack : !wx_ext_start) && !(s == S_WXA && dk[1] != K_NONE) &&
+              // R924: !wx_ext_start (the AGU's sum) became a decode-only test: an A-bus memory
+              // destination (internal or external by its address, the AGU's
+              // sum) ends the word in a later state instead. That took the
+              // AGU off s1312's worst path (ir -> AGU -> eow -> acc -> rpc,
+              // -1.525 ns); HOTD writes the A bus ~600 times in 1 G words.
+              eow = (ext_req ? ext_ack : !wx_maybe_ext) && !(s == S_WXA && dk[1] != K_NONE) &&
                     !alu_pend && !mul_pend && !(dk[wm] == K_REG && wc == 6'h15);
       S_WA:   eow = !mul_pend;
       S_FIN:  eow = 1'b1;
@@ -791,6 +806,7 @@ module tgpx4_core #(
       for (k = 0; k < 4; k++) pcs[k] <= 12'd0;
       for (k = 0; k < 8; k++) ar[k] <= 14'd0;
       opa <= 32'd0; opb <= 32'd0; opm1 <= 32'd0; opm2 <= 32'd0;
+      add_aq <= 32'd0; add_bq <= 32'd0; add_subq <= 1'b0;
       alu_go <= 1'b0; mul_go <= 1'b0; aop_q <= 5'd0; imm5_q <= 5'd0;
       alu_pend <= 1'b0; alu_done <= 1'b0; mul_pend <= 1'b0; mul_done <= 1'b0;
       alu_r <= 32'd0; mul_r <= 32'd0; alu_wr <= 1'b0;
@@ -875,9 +891,10 @@ module tgpx4_core #(
           end else begin
             // ALU / multiplier operands
             opa  <= rf_rd[0];
-            opb  <= !alu_src2 ? 32'd0 :
-                    (ai2[4:3] == 2'd2) ? pr_rd :
-                    (ai2[4:3] == 2'd3) ? cst(ai2[2:0], !aop[4]) : rf_rd[1];
+            opb  <= opb_n;
+            add_aq   <= dec_swap ? ((aop == 5'h06) ? {1'b0, opb_n[30:0]} : opb_n) : rf_rd[0];
+            add_bq   <= dec_swap ? ((aop == 5'h06) ? {1'b0, rf_rd[0][30:0]} : rf_rd[0]) : opb_n;
+            add_subq <= dec_swap;
             opm1 <= rf_rd[2];
             opm2 <= (m2s[4:3] == 2'd2) ? pr_rd :
                     (m2s[4:3] == 2'd3) ? cst(m2s[2:0], isfmul) : rf_rd[3];
