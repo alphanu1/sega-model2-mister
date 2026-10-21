@@ -209,13 +209,27 @@ carries the link; the core just needs its link board switched on.
 
 **Once, on each MiSTer:**
 
-1. Copy `m2link` to `/media/fat/linux/` and `m2link.sh` to `/media/fat/Scripts/`.
-2. Copy `m2link.ini` to `/media/fat/linux/` and set the two lines in it (below).
+1. Copy `m2link` and `m2link.ini` to `/media/fat/linux/`, and set the two
+   lines in `m2link.ini` (below).
+2. Choose how `m2link` runs (see *Two ways to run m2link* below).
 3. Load Daytona USA (Revision A), open the OSD and set **Link board** to **On**.
 4. Test mode (F2, or your mapped Test button) > **GAME SYSTEM**: set **LINK ID**
    to **MASTER** on one cabinet and **SLAVE** on all the others, and give each
    cabinet a different **CAR NUMBER**. Exit test mode (that's saved).
-5. Run `m2link` from the MiSTer menu: **Scripts > m2link**. Run it again to stop it.
+
+**Two ways to run m2link.** Pick one.
+
+* **At boot (recommended): the OSD switch is all you touch.** Add this line
+  to `/media/fat/linux/user-startup.sh` and reboot once:
+
+      /media/fat/linux/m2link -c /media/fat/linux/m2link.ini > /tmp/m2link.log 2>&1 &
+
+  `m2link` then waits quietly in the background. It links when Daytona is
+  loaded with **Link board** On, drops the link when you switch it Off or load
+  another core, and never touches anything while another core is running.
+* **From the Scripts menu, when you want it.** Copy `m2link.sh` to
+  `/media/fat/Scripts/` and run **Scripts > m2link** before a linked race.
+  Run it again to stop it.
 
 **`/media/fat/linux/m2link.ini`** holds only the network. The names and
 defaults are the recomp's (its launcher's Game tab, saved in its `launcher.ini`):
@@ -250,13 +264,6 @@ doing in `/tmp/m2link.log`: `waiting: next cabinet ... not reached yet` (that
 cabinet isn't listening, or a firewall is in the way), `linked: cabinet 1 of
 2`, or `lost` (a cabinet went away: reset the game on every cabinet to link
 again).
-
-**Start it at boot instead:** add this line to `/media/fat/linux/user-startup.sh`:
-
-    /media/fat/linux/m2link -c /media/fat/linux/m2link.ini > /tmp/m2link.log 2>&1 &
-
-It does nothing until Daytona is loaded with Link board On, and stops touching
-anything as soon as another core is.
 
 **Not linking?** A cabinet set to TWIN in test mode with nobody to link to
 waits at NETWORK CHECKING for ever — the factory setting does this, with or
