@@ -1,0 +1,289 @@
+R920: MAME 0.289 TGPx4 (MB86235) census (Sega Model 2 core for MiSTer FPGA,
+study R920). For the Model 2C coprocessor's sizing skeleton (rtl/tgpx4): every
+distinct instruction FORM the TGPx4 executes (ALU op and its second-source
+kind, multiply kind, each transfer's source / destination / AGU mode, control
+op and target mode) with its first PC and count; histograms of ALU / multiply
+ops, AGU modes, transfer codes, control ops and conditions; the external and
+A-bus-over-0x400 transfer counts; the program size each boot uploads; the
+busy fraction per 1/57.5 s on MAME's model (one instruction a cycle at 20 MHz,
+a model and not a hardware fact); and the miss rate of a direct-mapped 1 K /
+2 K line program cache on the real fetch stream. R920_OUT=<file> turns it on
+(the file is opened when a TGPx4 first runs; a non-2C set writes none) and it
+is written at exit. Run by sim/tgp/mame_m2c_census.sh.
+Apply in a MAME 0.289 tree: patch -p1 < mame_mb86235_census.patch, then
+make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
+(BSD-3-Clause, the licence of the files it changes); a tool, not the core.
+
+diff --git a/src/devices/cpu/mb86235/mb86235.cpp b/src/devices/cpu/mb86235/mb86235.cpp
+index bd9614ee..593b7986 100644
+--- a/src/devices/cpu/mb86235/mb86235.cpp
++++ b/src/devices/cpu/mb86235/mb86235.cpp
+@@ -47,6 +47,208 @@ void mb86235_device::internal_bbus(address_map &map)
+ 
+ 
+ 
++
++// ---- R920: TGPx4 CENSUS (Model 2C). R920_OUT=<file> turns it on; without it
++// MAME runs as before. For the sizing skeleton in the Sega Model 2 MiSTer
++// core (rtl/tgpx4): which instruction forms, ALU / multiplier ops, AGU modes,
++// transfer codes and control ops the game executes, how busy the part is per
++// 1/57.5 s on MAME's model (one instruction a cycle at 20 MHz -- a model, not
++// a hardware fact), the program size uploaded, and how a direct-mapped 1 K /
++// 2 K line program cache would hit on the real fetch stream. Written at exit.
++#include <cstdio>
++#include <cstdlib>
++#include <map>
++#include <string>
++#include <vector>
++#include <algorithm>
++extern uint64_t r920_abus_ext_rd, r920_abus_ext_wr;   // mb86235ops.cpp counts, defined below
++namespace {
++struct r920_form { uint64_t n; uint32_t pc; std::string d; };
++struct r920_census {
++	bool tried = false; FILE *f = nullptr;
++	uint64_t n = 0, stalls = 0, extra = 0;
++	uint64_t type[8] = {}, aop[2][32] = {}, mul[2][2] = {};  // [alu1/alu2][op]
++	uint64_t agu[2][16] = {};                             // [A/B bus][mode]
++	uint64_t xsrc[128] = {}, xdst[128] = {};               // transfer codes, 0x40+ = memory
++	uint64_t ext_rd = 0, ext_wr = 0, imm = 0;
++	uint64_t ctl[32][8] = {}, cond[64] = {};
++	uint64_t src2[2][4] = {}, prmode[2][8] = {}, pr_both = 0;
++	uint64_t pc_hits[4096] = {};
++	uint32_t tag1[1024] = {}, tag2[2048] = {}; bool v1[1024] = {}, v2[2048] = {};
++	uint64_t miss1 = 0, miss2 = 0;
++	int64_t bucket = -1; uint64_t bcyc = 0; std::vector<uint64_t> busy;
++	std::map<uint64_t, r920_form> forms;
++	std::vector<std::pair<double, unsigned>> uploads;
++	bool on() { if (!tried) { tried = true; const char *o = getenv("R920_OUT"); if (o) f = fopen(o, "w"); } return f != nullptr; }
++	~r920_census() { if (f) { dump(); fclose(f); } }
++	void dump();
++};
++r920_census g_r920;
++
++const char *r920_code(int c)   // a transfer code, mb86235ops.cpp get/set_transfer_reg
++{
++	static char b[16];
++	static const char *spc[8] = { "EB", "EBU", "EBL", "EO", "SP", "ST", "MOD", "LPC" };
++	static const char *m6[8]  = { "PR", "FI", "FO0", "FO1", "PDR", "DDR", "PRP", "PWP" };
++	switch ((c >> 3) & 7) {
++	case 0: snprintf(b, sizeof b, "MA%d", c & 7); break;
++	case 1: snprintf(b, sizeof b, "AA%d", c & 7); break;
++	case 2: snprintf(b, sizeof b, "%s", spc[c & 7]); break;
++	case 3: snprintf(b, sizeof b, "AR%d", c & 7); break;
++	case 4: snprintf(b, sizeof b, "MB%d", c & 7); break;
++	case 5: snprintf(b, sizeof b, "AB%d", c & 7); break;
++	case 6: snprintf(b, sizeof b, "%s", m6[c & 7]); break;
++	default: snprintf(b, sizeof b, "?%02x", c); break;
++	}
++	return b;
++}
++const char *r920_mem(int c) { return (c & 0x20) ? "memB" : "memA"; }
++
++void r920_census::dump()
++{
++	fprintf(f, "# R920 TGPx4 census. MAME's model: one instruction a cycle at 20 MHz.\n");
++	fprintf(f, "TOTAL executed %llu  fifo-stall replays %llu  extra branch cycles %llu\n",
++		(unsigned long long)n, (unsigned long long)stalls, (unsigned long long)extra);
++	for (auto &u : uploads) fprintf(f, "UPLOAD t=%.3f %u dwords = %u words\n", u.first, u.second, u.second / 2);
++	unsigned hi = 0, used = 0; for (int i = 0; i < 4096; i++) if (pc_hits[i]) { used++; hi = i; }
++	fprintf(f, "PC distinct %u  highest 0x%03x\n", used, hi);
++	fprintf(f, "PCACHE direct-mapped, one word a line: 1K lines %llu misses (%.4f%%), 2K lines %llu misses (%.4f%%)\n",
++		(unsigned long long)miss1, n ? 100.0 * miss1 / n : 0.0, (unsigned long long)miss2, n ? 100.0 * miss2 / n : 0.0);
++	if (bucket >= 0) busy.push_back(bcyc);
++	if (!busy.empty()) {
++		std::vector<uint64_t> s(busy); std::sort(s.begin(), s.end());
++		const double per = 20.0e6 / 57.5;
++		fprintf(f, "BUSY per 1/57.5 s of %.0f cycles (slices with any work): %zu  p50 %.3f  p90 %.3f  p99 %.3f  max %.3f\n", per, s.size(),
++			s[s.size() / 2] / per, s[s.size() * 9 / 10] / per, s[s.size() * 99 / 100] / per, s.back() / per);
++	}
++	for (int i = 0; i < 8; i++) if (type[i]) fprintf(f, "TYPE %d %llu\n", i, (unsigned long long)type[i]);
++	static const char *an[32] = { "FADD","FADDZ","FSUB","FSUBZ","FCMP","FABS","FABC","NOP","FEA","FES","FRCP","FRSQ","FLOG","CIF","CFI","CFIB",
++		"ADD","ADDZ","SUB","SUBZ","CMP","ABS","ATR","ATRZ","AND","OR","XOR","NOT","LSR","LSL","ASR","ASL" };
++	for (int k = 0; k < 2; k++) for (int i = 0; i < 32; i++) if (aop[k][i]) fprintf(f, "ALU %s %-5s %llu\n", k ? "alu2" : "alu1", an[i], (unsigned long long)aop[k][i]);
++	for (int k = 0; k < 2; k++) for (int i = 0; i < 2; i++) if (mul[k][i]) fprintf(f, "MUL %s %s %llu\n", k ? "alu2" : "alu1", i ? "FMUL" : "MUL", (unsigned long long)mul[k][i]);
++	static const char *sn[4] = { "AA/MA", "AB/MB", "PR", "const" };
++	for (int k = 0; k < 2; k++) for (int i = 0; i < 4; i++) if (src2[k][i]) fprintf(f, "SRC2 %s %s %llu\n", k ? "mul" : "alu", sn[i], (unsigned long long)src2[k][i]);
++	for (int k = 0; k < 2; k++) for (int i = 0; i < 8; i++) if (prmode[k][i]) fprintf(f, "PRMODE %s %d %llu\n", k ? "mul" : "alu", i, (unsigned long long)prmode[k][i]);
++	fprintf(f, "PR_BOTH %llu\n", (unsigned long long)pr_both);
++	for (int b = 0; b < 2; b++) for (int i = 0; i < 16; i++) if (agu[b][i]) fprintf(f, "AGU %c mode %x %llu\n", b ? 'B' : 'A', i, (unsigned long long)agu[b][i]);
++	for (int i = 0; i < 128; i++) if (xsrc[i]) fprintf(f, "XSRC %s %llu\n", (i & 0x40) ? r920_mem(i) : r920_code(i), (unsigned long long)xsrc[i]);
++	for (int i = 0; i < 128; i++) if (xdst[i]) fprintf(f, "XDST %s %llu\n", (i & 0x40) ? r920_mem(i) : r920_code(i), (unsigned long long)xdst[i]);
++	fprintf(f, "XEXT read %llu write %llu  IMM %llu\n", (unsigned long long)ext_rd, (unsigned long long)ext_wr, (unsigned long long)imm);
++	fprintf(f, "ABUS_EXT (A-bus address >= 0x400, via EB) read %llu write %llu\n", (unsigned long long)r920_abus_ext_rd, (unsigned long long)r920_abus_ext_wr);
++	static const char *cn[32] = { "NOP","REP","SETL","CLRF","PUSH","POP","?06","?07","SETM","SETMCBSA","SETMCBSB","SETMRF","SETMRDY","SETMWAIT","?0e","?0f",
++		"DBcc","DBNcc","DJMP","DBLP","DBBC","DBBS","?16","?17","DCcc","DCNcc","DCALL","DRET","?1c","?1d","?1e","?1f" };
++	for (int i = 0; i < 32; i++) for (int m = 0; m < 8; m++) if (ctl[i][m]) fprintf(f, "CTL %-8s dstmode %d %llu\n", cn[i], m, (unsigned long long)ctl[i][m]);
++	for (int i = 0; i < 64; i++) if (cond[i]) fprintf(f, "COND %d %llu\n", i, (unsigned long long)cond[i]);
++	std::vector<const std::pair<const uint64_t, r920_form> *> v;
++	for (auto &e : forms) v.push_back(&e);
++	std::sort(v.begin(), v.end(), [](auto *a, auto *b) { return a->second.n > b->second.n; });
++	fprintf(f, "FORMS %zu (count, first pc, form)\n", v.size());
++	for (auto *e : v) fprintf(f, "FORM %12llu 0x%03x %s\n", (unsigned long long)e->second.n, e->second.pc, e->second.d.c_str());
++	fprintf(f, "PCHIST (pc count, executed words only)\n");
++	for (int i = 0; i < 4096; i++) if (pc_hits[i]) fprintf(f, "PC 0x%03x %llu\n", i, (unsigned long long)pc_hits[i]);
++}
++
++// one executed word: its form, by MAME's own field extraction (mb86235ops.cpp)
++void r920_count(uint64_t op, uint32_t pc, double t, int extra)
++{
++	r920_census &c = g_r920;
++	const int top = (op >> 61) & 7;
++	c.n++; c.extra += extra; c.type[top]++;
++	c.pc_hits[pc & 0xfff]++;
++	{ uint32_t i = pc & 0x3ff; if (!c.v1[i] || c.tag1[i] != pc) { c.miss1++; c.v1[i] = true; c.tag1[i] = pc; } }
++	{ uint32_t i = pc & 0x7ff; if (!c.v2[i] || c.tag2[i] != pc) { c.miss2++; c.v2[i] = true; c.tag2[i] = pc; } }
++	int64_t b = int64_t(t * 57.5);
++	if (b != c.bucket) { if (c.bucket >= 0) c.busy.push_back(c.bcyc); c.bucket = b; c.bcyc = 0; }
++	c.bcyc += 1 + extra;
++
++	std::string d; char tmp[96];
++	uint64_t key = uint64_t(top) << 61;
++	const bool is_imm = (top == 7);
++	const bool alu1 = BIT(op, 63);
++	const int aop = (op >> 56) & 0x1f, ai2 = (op >> 47) & 0x1f;
++	if (!is_imm) {
++		const bool alu_on = !alu1 || BIT(op, 41), mul_on = !alu1 || !BIT(op, 41);
++		if (alu_on) {
++			c.aop[alu1 ? 0 : 1][aop]++;
++			const bool src2 = !(((aop & 0x1c) == 0x1c) || ((aop & 0x1e) == 0x16) || ((aop & 0x0f) == 0x05) || ((aop & 0x18) == 0x08));
++			const int k = src2 ? (ai2 >> 3) : 0;
++			if (src2) { c.src2[0][k]++; if (k == 2) c.prmode[0][ai2 & 7]++; }
++			key |= uint64_t(1 | (aop << 1) | (k << 6)) << 40;
++			snprintf(tmp, sizeof tmp, "alu:%02x/%s ", aop, src2 ? (k == 2 ? "pr" : k == 3 ? "c" : "r") : "-"); d += tmp;
++		}
++		if (mul_on) {
++			const bool isf = alu1 ? (aop != 0) : BIT(op, 41);
++			const int m2 = alu1 ? ai2 : int((op >> 32) & 0x1f);
++			c.mul[alu1 ? 0 : 1][isf ? 1 : 0]++;
++			c.src2[1][m2 >> 3]++; if ((m2 >> 3) == 2) c.prmode[1][m2 & 7]++;
++			if (!alu1 && ((ai2 >> 3) == 2) && ((m2 >> 3) == 2)) c.pr_both++;
++			key |= uint64_t(1 | (isf << 1) | ((m2 >> 3) << 2)) << 32;
++			snprintf(tmp, sizeof tmp, "mul:%s/%s ", isf ? "f" : "i", (m2 >> 3) == 2 ? "pr" : (m2 >> 3) == 3 ? "c" : "r"); d += tmp;
++		}
++	}
++	auto xs = [&](int code) { c.xsrc[code & 0x7f]++; };
++	auto xd = [&](int code) { c.xdst[code & 0x7f]++; };
++	uint64_t xk = 0;
++	switch (top) {
++	case 0: { const int sd = (op >> 25) & 3, md = op & 0xf;
++		const int as = (op >> 20) & 0x1f, bs = 0x20 | ((op >> 10) & 0xf);
++		xk = 0x100 | (sd << 4) | md;
++		if (sd == 2)      { c.agu[0][md]++; c.agu[1][md]++; xs(0x40); xs(0x60); xd(as); xd(bs); }
++		else if (sd == 1) { c.agu[0][md]++; c.agu[1][md]++; xs(as); xs(bs); xd(0x40); xd(0x60); }
++		else              { xs(as); xs(bs); xd(as); xd(bs); }
++		snprintf(tmp, sizeof tmp, "x2a sd%d m%x", sd, md); d += tmp; break; }
++	case 1: case 5: {
++		const bool t1 = (top == 1);
++		const bool ext = t1 ? BIT(op, 26) : BIT(op, 38), dir = t1 ? BIT(op, 25) : BIT(op, 37);
++		const int rr = t1 ? int((op >> 12) & 0x7f) : int((op >> 24) & 0x7f);
++		const int sr = t1 ? int((op >> 19) & 0x7f) : int((op >> 31) & 0x7f);
++		const int md = op & 0xf;
++		std::string rs = (rr & 0x40) ? r920_mem(rr) : r920_code(rr);
++		if (ext) {
++			if (rr & 0x40) c.agu[(rr >> 5) & 1][md]++;
++			if (dir) { c.ext_rd++; xd(rr); snprintf(tmp, sizeof tmp, "x1 ext->%s m%x", rs.c_str(), (rr & 0x40) ? md : 0); }
++			else     { c.ext_wr++; xs(rr); snprintf(tmp, sizeof tmp, "x1 %s->ext m%x", rs.c_str(), (rr & 0x40) ? md : 0); }
++			xk = 0x10000 | (uint64_t(dir) << 15) | (uint64_t(rr & 0x40 ? (0x40 | (rr & 0x20)) : rr) << 4) | ((rr & 0x40) ? md : 0);
++		} else {
++			std::string ss = (sr == 0x58) ? "imm" : (sr & 0x40) ? r920_mem(sr) : r920_code(sr);
++			if (sr == 0x58) c.imm++; else { xs(sr); if (sr & 0x40) c.agu[(sr >> 5) & 1][md]++; }
++			xd(rr); if (rr & 0x40) c.agu[(rr >> 5) & 1][md]++;
++			snprintf(tmp, sizeof tmp, "x1 %s->%s m%x", ss.c_str(), rs.c_str(), ((sr | rr) & 0x40) && sr != 0x58 ? md : 0);
++			const int sk = (sr == 0x58) ? 0x7f : (sr & 0x40) ? (0x40 | (sr & 0x20)) : sr;
++			const int dk = (rr & 0x40) ? (0x40 | (rr & 0x20)) : rr;
++			xk = 0x20000 | (uint64_t(sk) << 11) | (uint64_t(dk) << 4) | ((((sr | rr) & 0x40) && sr != 0x58) ? md : 0);
++		}
++		d += (t1 ? "" : "t5 "); d += tmp; break; }
++	case 4: { const int sa = (op >> 38) & 3, sb = (op >> 18) & 3, ma = (op >> 20) & 0xf, mb = op & 0xf;
++		if (sa) c.agu[0][ma]++; if (sb) c.agu[1][mb]++;
++		xs(sa == 2 ? 0x40 : int((op >> 33) & 0x1f)); xd(sa == 1 ? 0x40 : int((op >> 28) & 0x1f));
++		xs(sb == 2 ? 0x60 : 0x20 | int((op >> 13) & 0x1f)); xd(sb == 1 ? 0x60 : 0x20 | int((op >> 8) & 0x1f));
++		xk = 0x40000 | (sa << 2) | sb | ((sa ? ma : 0) << 4) | ((sb ? mb : 0) << 8);
++		snprintf(tmp, sizeof tmp, "x2b sda%d m%x sdb%d m%x", sa, sa ? ma : 0, sb, sb ? mb : 0); d += tmp; break; }
++	case 7: { const int dr = (op >> 19) & 0x7f; c.imm++; xd(dr); if (dr & 0x40) c.agu[(dr >> 5) & 1][op & 0xf]++;
++		xk = 0x80000 | (uint64_t((dr & 0x40) ? (0x40 | (dr & 0x20)) : 0) << 4) | ((dr & 0x40) ? (op & 0xf) : 0);
++		snprintf(tmp, sizeof tmp, "imm->%s m%x", (dr & 0x40) ? r920_mem(dr) : "reg", (dr & 0x40) ? int(op & 0xf) : 0); d += tmp; break; }
++	default: { const int cop = (op >> 22) & 0x1f, ef1 = (op >> 16) & 0x3f, dm = (op >> 13) & 7;
++		c.ctl[cop][dm]++;
++		if (cop == 0x10 || cop == 0x11 || cop == 0x18 || cop == 0x19) c.cond[ef1]++;
++		const bool tgt = (cop >= 0x10 && cop != 0x13 && cop != 0x14 && cop != 0x15 && cop != 0x1b);
++		xk = 0x100000 | (cop << 4) | (tgt ? dm : 0) | (tgt && BIT(op, 12) ? 8 : 0);
++		snprintf(tmp, sizeof tmp, "ctl:%02x dm%d rel%d", cop, tgt ? dm : 0, tgt ? int(BIT(op, 12)) : 0); d += tmp;
++		if (cop == 0x04 || cop == 0x05) { snprintf(tmp, sizeof tmp, " %s", r920_code((op >> 6) & 0x3f)); d += tmp; }
++		break; }
++	}
++	key ^= xk;
++	auto it = c.forms.find(key);
++	if (it == c.forms.end()) c.forms.emplace(key, r920_form{ 1, pc, d });
++	else it->second.n++;
++}
++} // anonymous namespace
++
++uint64_t r920_abus_ext_rd = 0, r920_abus_ext_wr = 0;
++
++// model2.cpp, model2c_state::copro_boot
++void r920_upload(unsigned dwords, double t) { if (g_r920.on()) g_r920.uploads.emplace_back(t, dwords); }
++
+ /* Execute cycles */
+ void mb86235_device::execute_run()
+ {
+@@ -74,10 +276,16 @@ void mb86235_device::execute_run()
+ 			handle_single_step_execution();
+ 
+ 		m_core->cur_fifo_state.has_stalled = false;
++		const int r920_ic = m_core->icount;
+ 
+ 		execute_op(opcode);
+ 
+ 		m_core->icount--;
++		if (g_r920.on())
++		{
++			if (m_core->cur_fifo_state.has_stalled) g_r920.stalls++;
++			else r920_count(opcode, curpc, machine().time().as_double(), r920_ic - m_core->icount - 1);
++		}
+ 	}
+ 
+ #endif
+diff --git a/src/devices/cpu/mb86235/mb86235ops.cpp b/src/devices/cpu/mb86235/mb86235ops.cpp
+index cbc308b1..5e51619c 100644
+--- a/src/devices/cpu/mb86235/mb86235ops.cpp
++++ b/src/devices/cpu/mb86235/mb86235ops.cpp
+@@ -181,10 +181,12 @@ inline uint32_t mb86235_device::decode_ea(uint8_t mode, uint8_t rx, uint8_t ry,
+ 	return 0;
+ }
+ 
++extern uint64_t r920_abus_ext_rd, r920_abus_ext_wr;   // R920 census, mb86235.cpp
++
+ inline uint32_t mb86235_device::read_abus(uint32_t addr)
+ {
+ 	if ((addr & 0x3fff) >= 0x400)
+-		return m_external.read_dword((addr & 0x3fff) + (m_core->eb & 0xffc000));
++		return r920_abus_ext_rd++, m_external.read_dword((addr & 0x3fff) + (m_core->eb & 0xffc000));
+ 	else
+ 		return m_dataa.read_dword(addr & 0x3ff);
+ }
+@@ -197,7 +199,7 @@ inline uint32_t mb86235_device::read_bbus(uint32_t addr)
+ inline void mb86235_device::write_abus(uint32_t addr, uint32_t data)
+ {
+ 	if ((addr & 0x3fff) >= 0x400)
+-		m_external.write_dword((addr & 0x3fff) + (m_core->eb & 0xffc000), data);
++		r920_abus_ext_wr++, m_external.write_dword((addr & 0x3fff) + (m_core->eb & 0xffc000), data);
+ 	else
+ 		m_dataa.write_dword(addr & 0x3ff, data);
+ }
+diff --git a/src/mame/sega/model2.cpp b/src/mame/sega/model2.cpp
+index 899828e6..7083dfe3 100644
+--- a/src/mame/sega/model2.cpp
++++ b/src/mame/sega/model2.cpp
+@@ -697,8 +697,11 @@ void model2c_state::copro_halt()
+ {
+ }
+ 
++void r920_upload(unsigned dwords, double t);   // R920 census, mb86235.cpp
++
+ void model2c_state::copro_boot()
+ {
++	r920_upload(m_coprocnt, machine().time().as_double());
+ 	m_copro_tgpx4->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
+ }
+ 
