@@ -1,5 +1,14 @@
 # Handoff
 
+## 2026-10-21: user reports on Model2A_20261021b -- NOTED, NOT BEING WORKED (Ben: "just note them")
+
+1. Sega Rally Championship won't save its NVRAM settings.
+2. Virtua Cop 2: a layering fault with the text on the level-selection screen.
+3. Virtua Fighter 2 crashes, apparently at random.
+4. Dead or Alive crashes going into the first match.
+Also open from Ben's board: Dead or Alive's constant low bass rumble (an
+agent is investigating; R914 reserved). Next free R numbers: R917 on.
+
 ## 2026-10-21 (afternoon): PUSHED model2a -- the 2A beta Model2A_20261021b
 
 RELEASED (releases/, BETA): Model2A_20261021b.rbf = s1278 (eb5a700; clk_sys

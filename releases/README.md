@@ -87,6 +87,13 @@ ROM sets: MAME 0.289.
 - **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
   cabinet's extra sound board isn't emulated, so a few extra sounds are
   missing.
+- **Sega Rally doesn't save its settings** (NVRAM). Reported by users; not
+  looked at yet.
+- **Virtua Cop 2's level-selection screen** has some of its text drawn in the
+  wrong layer. Reported by users; not looked at yet.
+- **Virtua Fighter 2 can crash** at random, and **Dead or Alive can crash**
+  going into the first match. Reported by users; not looked at yet. If it
+  happens to you, please say where.
 - **Dead or Alive has a constant low bass rumble**, even when nothing else
   is playing. Being looked at.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
