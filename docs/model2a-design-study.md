@@ -41104,7 +41104,7 @@ at Sharp the core mips it by footprint. tb_m2_raster3d on doaab's list 700
   R828c bit for bit) was written and linted, then held back: the table is
   384 more registers on a 98% part and was not mapped. Kept on local branch
   r905-mipz, one commit on this one. Until it lands, Mip-mapping Off on the OSD is the
-  board's answer for Dead or Alive.
+  board's answer for Dead or Alive. (Landed as R911, its table in an MLAB.)
 
 *VERIFIED / INFERRED:*
   * VERIFIED (MAME 0.289 and simulation): the core's texture store sequence
@@ -41960,3 +41960,135 @@ four LUT levels, tadr -> block address) and its 9-bit mux on tbl_q, at
 clk_sys 80 MHz; the rest removes block-RAM paths or adds MLAB ones. The
 fitter's packing of the remaining RAMs can move the count a few blocks
 either way: one seed confirms it.
+
+**R911 -- DEAD OR ALIVE'S "WRONG TEXTURES ON SCENERY" (s1259) ARE THE
+CORE'S MIP LEVELS, WHICH MAME NEVER DRAWS FOR THIS GAME: R828c's NO-MIP FLAG
+ASSUMED DAYTONA'S lod AND coef. THE FLAG NOW TAKES THE GAME'S OWN
+(coef_table[attr >> 27] AND THE 0x16 lod) FOR THE LARGE LAYOUT'S GAMES --
+R905's HELD-BACK RTL (r905-mipz), ITS TABLE ONE MLAB INSTEAD OF 384
+FLIP-FLOPS. NOT FITTED, NOT ON A BOARD.**
+(Ben, s1259 = 485bd44, R905 on the board: Dynamite Cop, Sky Target and Motor
+Raid's stripes gone, "all others seem fine"; Dead or Alive "still has a
+couple of wrong textures on scenery" -- the courtyard stage's flagstone
+floor with square patches unlike their neighbours (darker, blurred blobs,
+another picture), the same on the buildings; the characters right. The OSD's
+Mip-mapping setting for the picture is not known.)
+
+*Believed (the task):* a texture-RAM write path R905 did not cover (another
+mirror, another store width, a non-burst region), sheet selection, the mip
+level, the luma / format path, or the large layout.
+
+*THE WRITE PATH IS NOT IT (MAME 0.289 m2lod, a write tap on 0x12000000-
+0x1281FFFF, doaab from power-on, 110 s of attract, 2,218,333 stores):* every
+texture store Dead or Alive makes is an stq (IPs 0x7559c / 0x755ac, mask
+0xffffffff) through the two sheets' MIRRORS -- 0x122/0x123 (sheet 0,
+982,016) and 0x126/0x127 (sheet 1, 1,218,909) -- plus one luma clear at
+0x132c (16,384, frame 59). Uploads at frames 1019-1200 and again at every
+stage change (2100-6600). Both mirrors are burst regions since R905, which
+is what the game needs; nothing else writes texture RAM. THE CORE'S OWN
+(tb_m2_boot A2X, this model2a's RTL, the MRA's image from rom_csum.py,
+M2_TEXWLOG / M2_TEXDUMP): its first 671,623 texture and luma stores -- the
+luma clear and the whole first upload, bench frames 136-1300 -- equal MAME's
+in order, word and data (0 differ), and its sheets at bench frame 1500 equal
+MAME's stores replayed to the same point on every word MAME wrote (262,144
+of sheet 0, 393,216 of sheet 1: 0 differ). The rest -- 262,144 words of sheet
+0 and 131,072 of sheet 1 -- the game never writes; the bench reads them
+0xFFFF, MAME 0, the board whatever its SDRAM held. With Mip-mapping Off the
+board's texels are MAME's.
+
+*THE MIP LEVEL IS IT (tb_m2_raster3d, Model2.sv's 2A raster configuration,
+M2_R3D_GAME=0x16, on MAME's frame of Ben's scene -- the gate courtyard,
+Jann Lee and Lei Fang, m2lod frame 1780, ~46 s into the attract; MAME
+draws 100.0% of Dead or Alive's pixels at level 0 over 2,916 frames, its
+lod 1000 and coefs 11 / 351 putting every polygon several levels under 0):*
+     OSD Mip-mapping          max-channel error / 255, MAME's 3D pixels > 32
+     Off                      6.65    2.49%
+     Sharp (the default)     21.23   17.01%   R828c flag set on 1341 of 1660 quads
+     Medium                  33.44   26.40%
+     Smooth                  41.13   32.14%
+     Sharp + this flag        6.65    2.49%   (flag set 1651 = MAME's own level, agree 1660)
+     Smooth + this flag       6.65    2.49%
+  The pixels that move are where Ben sees them: the band of floor behind
+  the fighters, the red lattice strip beyond it and the buildings' roofs
+  and fronts. With MAME's texture RAM those levels read zero words (black,
+  as R905 saw on list 700); on the board they read whatever the SDRAM under
+  the unwritten parts of the sheets holds -- texel words of other pictures,
+  never cleared (MAME's start is zero) -- hence "different textures, blurred
+  blobs" rather than black. Shown: the same Sharp run with the frame's
+  unwritten sheet words (293,573 of sheet 0's 512 K, 218,000 of sheet 1's)
+  filled from another game's sheets (Dynamite Cop's f700, as stale SDRAM
+  would be) -- 19.53 / 16.62%, and the band behind the fighters turns dark
+  with pale blotches and the lattice strip dark and streaked: Ben's
+  picture. Level L reads sheet texsheet[L & 1] at
+  ((x - 2048) >> L, (y - 1024) >> L) (model2rd.ipp): Dead or Alive's sheets
+  hold no mip copies there. THE BOARD'S SYMPTOM IS SHARP, MEDIUM OR SMOOTH
+  (Sharp is the default and the least affected); with Off the core already
+  draws MAME's picture (6.65, the same as the fix).
+
+*THE FIX (R905's held-back commit 4f08e67, reworked):* m2_geo streams each
+texture-parameter entry's distance coefficient (the second word, MAME's
+coef_table[index]) and the 0x16 lod operand as twelve log bits (exponent and
+four mantissa bits); m2_geometry keeps the 32 coefs and, with mz_exact
+(Model2.sv: a2_big), forms the flag as 2 log z_far + 4176 < log |dotp| + log
+coef[attr >> 27] + log lod + 2160 in sixteenths of a level -- MAME's own
+level <= 0 over the whole polygon (MIPZ_BX 0). Daytona's coef 1.0 and lod 128
+sum to R828c's constant, so the rules agree there; without mz_exact the flag
+is R828c's bit for bit (VF2, Rally, Virtua Cop 2, Zero Gunner, Manx TT).
+THE CHANGE FROM 4f08e67: the table is `(* ramstyle = "MLAB" *)`, one write
+port and an asynchronous read on the polygon's attr[31:27] latched with the
+polygon (m2_xf_mat's pattern) -- one MLAB, 384 bits, instead of 384
+registers. Polygons whose MAME level is > 0 keep the core's own footprint
+rule (R828) under the OSD setting.
+
+*Benches:*
+  * test_m2_geometry_mipz gains R911: the table written through tc_we /
+    tp_idx, four lods (1000 Dead or Alive, 128 Daytona, 0.25 Motor Raid, 8
+    Hanguk Pro Yagu 98), 300 polygons each on random coef entries (some 0):
+    every flag equal to the sixteenths model (1,200 / 1,200), equal to MAME's
+    exact level on 1,199; Dead or Alive's table and lod flag all 81
+    polygons in its range. Planted: the table read on attr[26:22] (279
+    fails), the lod dropped (455 fails). R828c's 384 checks unchanged; PASS.
+    test_m2_geometry PASS (mz_exact 0).
+  * geodiff_2abig (m2_geo + m2_geometry RTL, BIG=1) on MAME walk 2781 of the
+    same scene: 1,785 of 1,796 quads flagged; the 11 not are zero-area slivers
+    (edge-on, |dotp| ~0 -- MAME's level there is > 0 too: 12 of 1,787
+    polygons). Geometry, texture parameters and sort keys as before.
+  * The large layout's other games, Sharp with R828c's flag -> with this one
+    (Off for reference; MAME's frames, tb_m2_raster3d):
+      dynamcop f700   4.05 -> 4.04   (Off 4.05)
+      motoraid f700   5.93 -> 5.02   (Off 5.45)
+      skytargt f400   7.67 -> 7.53   (Off 8.64)
+      pltkidsa f700   2.17 -> 2.16   (Off 2.17)
+      hpyagu98 f700  14.10 -> 7.37   (Off 7.38)
+    Every game equal or better; Hanguk Pro Yagu 98 (lod 8) was being mipped
+    as wrongly as Dead or Alive (R828c's flag set on 0 of 361 quads, MAME
+    says 330).
+
+*Checks:* lint_top clean (2A); lint_idx nothing in the new lines (m2_geo's
+mtx[w_ci] entries are the old ones, renumbered); quartus_map 17.0
+--analyze_file m2_geometry.sv, m2_geo.sv, Model2.sv: 0 errors.
+
+*AREA (quartus_map 17.0, standalone, base = model2a 0638009):*
+     m2_geometry (MIPZ, TEXLUT, WINKEY)  6,357 -> 6,391 ALMs est.  8,268 -> 8,299 registers
+                                         MLAB bits 3,008 -> 3,392 (ct: one 32 x 12 MLAB)
+     m2_geo (AW 26, LIST_WIN 4096)         916 ->   926 ALMs est.  1,467 -> 1,492 registers
+  About +44 ALMs, +56 registers, one MLAB, no M10K, no DSP. (4f08e67's
+  flip-flop table would have been 384 registers and a 32:1 x 12 mux.) Not
+  a whole-design map (three fits were running).
+
+*VERIFIED / INFERRED:*
+  * VERIFIED (MAME 0.289 and simulation): every texture store the game makes
+    and its form, and the core's first upload against it, store for store
+    and word for word; MAME never mips the game; the board's symptom reproduced at
+    Sharp / Medium / Smooth and gone with the flag; the RTL flag against its
+    model and MAME's level; the other large-layout games' frames.
+  * INFERRED: that Ben's picture was at a mip setting other than Off (the
+    picture's dark, blurred floor band and the strip beyond it are where the
+    bench's Sharp run moves; at Off nothing there differs from MAME); what
+    the board's unwritten sheet words hold (stale SDRAM).
+  * What the board should show, at any Mip-mapping setting: Dead or Alive's
+    floors, lattice strips and buildings as MAME's -- every polygon at level
+    0, as Off shows now; Hanguk Pro Yagu 98's distant scenery sharper (it
+    too was mipped where MAME does not); Dynamite Cop, Sky Target, Motor Raid
+    and Pilot Kids as now or closer. VF2, Sega Rally, Virtua Cop 2, Zero
+    Gunner and Manx TT unchanged (mz_exact 0).

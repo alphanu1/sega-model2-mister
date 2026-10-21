@@ -687,6 +687,114 @@ int main(int argc, char** argv) {
     d->obc = 32;
   }
 
+#ifdef TB_MIPZ
+  // ---- R911: THE SAME FLAG FROM THE GAME'S OWN coef AND lod (mz_exact, the
+  // large 2A layout's games). MAME's texlod is 128 log2(coef_table[attr >> 27]
+  // * |dotp| * lod); Daytona's coef 1.0 and lod 128 are what R828c's constant
+  // folds in, Dead or Alive sets lod 1000 and coefs 11 / 351 (MAME 0.289's
+  // walk state) and never mips. The table is written as m2_geo streams it
+  // (tc_we on tp_idx, the coef's exponent and four mantissa bits), lod_l is
+  // geo_lod's operand the same way. Each polygon takes a random entry through
+  // attr[31:27]; the flag against the model in sixteenths (bit for bit) at
+  // MIPZ_BX 0, and MAME's own (exact logs) counted beside it. Four lods, the
+  // table rewritten for each; entries left 0 (a coef of 0 is MAME's deepest
+  // level: never flagged).
+  {
+    auto lg16t = [](uint32_t j) { static const int T[16] = {0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15}; return T[j & 15]; };
+    auto l16 = [&](float x) { const uint32_t b = f2u(std::fabs(x)); return 16 * (int)((b >> 23) & 0xff) + lg16t((b >> 19) & 15); };
+    auto model = [&](float zmax, float dotp, float coef, float lod) -> int {
+      return (2 * l16(zmax) + 4176 < l16(dotp) + l16(coef) + l16(lod) + 2160) ? 1 : 0;
+    };
+    auto mame = [&](float zmax, float dotp, float coef, float lod) -> int {
+      static const uint8_t t[128] = {0,2,5,8,11,14,16,19,22,25,27,30,33,35,38,40,43,46,48,51,53,56,58,61,63,65,68,70,73,75,77,80,
+        82,84,87,89,91,93,96,98,100,102,104,106,109,111,113,115,117,119,121,123,125,127,129,132,134,136,138,140,141,143,145,147,
+        149,151,153,155,157,159,161,162,164,166,168,170,172,173,175,177,179,181,182,184,186,188,189,191,193,194,196,198,200,201,203,205,
+        206,208,209,211,213,214,216,218,219,221,222,224,225,227,229,230,232,233,235,236,238,239,241,242,244,245,247,248,250,251,253,254};
+      const uint32_t cb = f2u(coef * std::fabs(dotp) * lod) >> 8;
+      const int texlod = int((cb >> 8) & 0x7f80) - 0x3f80 + (int)std::lround(128.0 * std::log2(1.0 + (cb & 0x7fff) / 32768.0));
+      const uint32_t iv = f2u(zmax) >> 16;
+      const int fl = (int((iv >> 7) & 0xff) - 127) * 256 + t[iv & 127];
+      return ((-texlod + fl) >> 7) <= 0 ? 1 : 0;
+    };
+    const float lods[4] = {1000.0f, 128.0f, 0.25f, 8.0f};   // Dead or Alive, Daytona, Motor Raid, Hanguk Pro Yagu 98
+    uint32_t rs = 0x13579bdfu;
+    auto rnd = [&]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; };
+    auto ru = [&]() { return (rnd() & 0xffffff) / 16777216.0f; };
+    long tot = 0, tset = 0, tmame = 0, doa_n = 0, doa_set = 0;
+    for (int li = 0; li < 4; li++) {
+      const float lod = lods[li];
+      float coef[32];
+      for (int k = 0; k < 32; k++) coef[k] = (k % 8 == 7) ? 0.0f : std::exp2(-3.0f + 12.0f * ru());
+      if (li == 0) { for (int k = 0; k < 32; k++) coef[k] = (k % 10 == 0) ? 351.0f : 11.0f; coef[31] = 0.0f; }   // DOA's table
+      d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
+      d->mz_exact = 1;
+      d->lod_l = (f2u(lod) >> 19) & 0xfff;
+      for (int k = 0; k < 32; k++) { d->tp_idx = k; d->tc_l = (f2u(coef[k]) >> 19) & 0xfff; d->tc_we = 1; tick(); }
+      d->tc_we = 0; d->tp_idx = 0; tick();
+      load_identity();
+      d->foc_x = f2u(1.0f); d->foc_y = f2u(1.0f);
+      struct XP { float p0[3], p1[3], n[3], q0[3], q1[3]; int ci; };
+      std::vector<XP> xs;
+      for (int i = 0; i < 300; i++) {
+        XP m{}; m.ci = rnd() & 31;
+        const float zc = std::exp2(-2.0f + 13.0f * ru());
+        float *pts[4] = {m.p0, m.p1, m.q0, m.q1};
+        for (int k = 0; k < 4; k++) { const float z = zc * std::exp2(2.0f * ru() - 1.0f); pts[k][2] = z; pts[k][0] = (ru() - 0.5f) * z; pts[k][1] = (ru() - 0.5f) * z; }
+        const int ax = rnd() % 3; m.n[ax] = std::exp2((float)((int)(rnd() % 13) - 6)) * ((rnd() & 1) ? -1.0f : 1.0f);
+        xs.push_back(m);
+      }
+      size_t w = 0;
+      std::vector<int> want, wm; std::vector<float> zmx, dps;
+      for (size_t i = 0; i < xs.size(); i++) {
+        XP &m = xs[i];
+        if (i > 0) { std::memcpy(m.p0, xs[i - 1].q0, 12); std::memcpy(m.p1, xs[i - 1].q1, 12); }
+        if (i == 0) { w = put_v(w, m.p0[0], m.p0[1], m.p0[2]); w = put_v(w, m.p1[0], m.p1[1], m.p1[2]); }
+        obj[w++] = 0x00020201u | (uint32_t(m.ci) << 27);   // quad, link 2, double-sided, coef_table[ci]
+        w = put_v(w, m.n[0], m.n[1], m.n[2]);
+        w = put_v(w, m.q0[0], m.q0[1], m.q0[2]);
+        w = put_v(w, m.q1[0], m.q1[1], m.q1[2]);
+        const float zm = std::max(std::max(m.p0[2], m.p1[2]), std::max(m.q0[2], m.q1[2]));
+        const float dp = m.n[0] * m.q0[0] + m.n[1] * m.q0[1] + m.n[2] * m.q0[2];
+        zmx.push_back(zm); dps.push_back(dp);
+        want.push_back(coef[m.ci] == 0.0f ? 0 : model(zm, dp, coef[m.ci], lod));
+        wm.push_back(coef[m.ci] == 0.0f ? 0 : mame(zm, dp, coef[m.ci], lod));
+      }
+      obj[w++] = 0x00000000u;
+      d->obc = 0x1000;
+      d->start = 1; tick(); d->start = 0;
+      std::vector<int> got;
+      for (long budget = 0; budget < 4000000 && got.size() < xs.size(); budget++) {
+        tick();
+        if (d->q_valid && d->q_ready) got.push_back(d->q_mipz);
+      }
+      for (int i = 0; i < 400; i++) { tick(); if (d->q_valid && d->q_ready) got.push_back(d->q_mipz); }
+      ck("R911: one quad per polygon", (int32_t)got.size(), (int32_t)xs.size());
+      long set = 0, am = 0;
+      for (size_t i = 0; i < xs.size() && i < got.size(); i++) {
+        if (got[i] != want[i]) {
+          std::printf("  FAIL R911 lod %g poly %zu: coef[%d] %g zmax %g |dotp| %g q_mipz %d want %d\n", lod, i, xs[i].ci, coef[xs[i].ci], zmx[i], std::fabs(dps[i]), got[i], want[i]);
+          ++fails;
+        }
+        ++checks; set += got[i]; am += (got[i] == wm[i]);
+        if (li == 0 && coef[xs[i].ci] != 0.0f && zmx[i] < 2048.0f && std::fabs(dps[i]) >= zmx[i] / 2) { ++doa_n; doa_set += got[i]; }
+      }
+      std::printf("test: R911 lod %g: flagged %ld of %zu; equal to MAME's own (exact logs) on %ld\n", lod, set, got.size(), am);
+      tot += got.size(); tset += set; tmame += am;
+      d->mz_exact = 0;
+    }
+    ck("R911: some flagged", (int32_t)(tset > 100), 1);
+    ck("R911: and some not", (int32_t)(tset < tot - 100), 1);
+    // Dead or Alive's table and lod: a polygon nearer than 2048 whose |dotp| is at
+    // least half its far z (the stages' range: walk 2781 has z ~1200, |dotp| ~1200)
+    // is at level <= log2 z - 12.4 < 0 everywhere -- MAME never mips it -- and the
+    // flag must say so; and the flag must agree with MAME's exact level on 98%
+    std::printf("  Dead or Alive's coefs and lod: %ld of %ld such polygons flagged\n", doa_set, doa_n);
+    ck("R911: Dead or Alive's polygons all flagged", (int32_t)(doa_set == doa_n && doa_n > 5), 1);
+    ck("R911: equal to MAME's own level on 98%", (int32_t)(tmame * 50 >= tot * 49), 1);
+    d->obc = 32;
+  }
+#endif
+
   std::printf("m2_geometry: checks=%ld fails=%ld\n", checks, fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete d;

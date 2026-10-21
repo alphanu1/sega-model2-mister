@@ -3957,6 +3957,7 @@ m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIS
 	// luminance stage that reads it is the next piece.
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx),
 	.tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
+	.tc_we(geo_tc_we), .tc_l(geo_tc_l), .lod_l(geo_lod_l),   // R905
 	.dbg_tp_n(geo_tp_n),
 	.obj_tpa(geo_obj_tpa), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
 	.obj_valid(geo_obj_valid),
@@ -4055,6 +4056,8 @@ wire        geo_obj_valid, eng_busy;
 wire [15:0] geo_mtx_n, geo_foc_n, geo_pd_words, geo_pd_cmds, geo_lit_n;
 wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;
 wire        geo_tp_we;
+wire        geo_tc_we;            // R905: coef_table entries and geo_lod, log bits
+wire [11:0] geo_tc_l, geo_lod_l;
 wire  [4:0] geo_tp_idx;
 wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 wire [15:0] geo_tp_n;
@@ -4171,6 +4174,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
+	.tc_we(geo_tc_we), .tc_l(geo_tc_l), .lod_l(geo_lod_l), .mz_exact(a2_big),   // R905
 	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .gamma_sel(gam_s2), .tex_off(texoff_s[2]), .mem_space(eng_mem_space), .dbg_col_miss(),   // R867
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
