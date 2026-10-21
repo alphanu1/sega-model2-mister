@@ -4083,6 +4083,14 @@ wire        q3d_mipz;                       // R828c: the game's level keeps thi
 // R828: mip-mapping in the rasteriser, and R828c's per-polygon flag in the
 // geometry with it. MIPZ_B: a polygon is drawn at level 0 when MAME's own
 // level (the game's texlod) is at most -MIPZ_B over all of it.
+// R912: ON THE 2A BOARD THE FLAG IS MAME'S OWN LEVEL FOR EVERY GAME
+// (mz_exact = M2A): the game's coefficient table and op 0x16 lod, as R911
+// took them for the large layout alone. VF2 (lod 3200, coefs 0.0007..1),
+// Manx TT (65536, 1..2^21), Zero Gunner (4, 0.97..175), Sega Rally (200,
+// 1.0) and Virtua Cop 2 (128, every coef 100) are not Daytona's lod 128 /
+// coef 1.0, so R828c's constant mipped polygons MAME draws at level 0 and
+// drew others at 0 that MAME mips (MAME 0.289 walks, R912). Daytona, Desert
+// Tank and Virtua Cop (the M2_NO_2A build) keep R828c and MIPZ_B 3.
 localparam bit R3D_MIP = 1'b1;
 localparam int R3D_MIPZ_B = 3;
 // R867: the textured colour per pixel through the game's own luma RAM, 3D
@@ -4152,7 +4160,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(
 	// walker; the colour data through the engine's own port, by space.
 	.tha(geo_obj_tha), .tpa(geo_obj_tpa), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
 	.tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
-	.tc_we(geo_tc_we), .tc_l(geo_tc_l), .lod_l(geo_lod_l), .mz_exact(a2_big),   // R905
+	.tc_we(geo_tc_we), .tc_l(geo_tc_l), .lod_l(geo_lod_l), .mz_exact(M2A),   // R905; R912: every 2A game
 	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .gamma_sel(gam_s2), .tex_off(texoff_s[2]), .mem_space(eng_mem_space), .dbg_col_miss(),   // R867
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),

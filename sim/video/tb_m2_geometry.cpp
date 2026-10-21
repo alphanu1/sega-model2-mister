@@ -698,7 +698,10 @@ int main(int argc, char** argv) {
   // attr[31:27]; the flag against the model in sixteenths (bit for bit) at
   // MIPZ_BX 0, and MAME's own (exact logs) counted beside it. Four lods, the
   // table rewritten for each; entries left 0 (a coef of 0 is MAME's deepest
-  // level: never flagged).
+  // level: never flagged). R912: and the two farthest from Daytona's that
+  // MAME 0.289's walks show, now that every 2A game takes this rule -- VF2's
+  // lod 3200 with coefs 2^(-k/3) (1.0 down to 0.0008) and Manx TT's 65536
+  // with 2^k (1 .. 2^21, the rest 0): the logs' ends.
   {
     auto lg16t = [](uint32_t j) { static const int T[16] = {0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15}; return T[j & 15]; };
     auto l16 = [&](float x) { const uint32_t b = f2u(std::fabs(x)); return 16 * (int)((b >> 23) & 0xff) + lg16t((b >> 19) & 15); };
@@ -716,16 +719,18 @@ int main(int argc, char** argv) {
       const int fl = (int((iv >> 7) & 0xff) - 127) * 256 + t[iv & 127];
       return ((-texlod + fl) >> 7) <= 0 ? 1 : 0;
     };
-    const float lods[4] = {1000.0f, 128.0f, 0.25f, 8.0f};   // Dead or Alive, Daytona, Motor Raid, Hanguk Pro Yagu 98
+    const float lods[6] = {1000.0f, 128.0f, 0.25f, 8.0f, 3200.0f, 65536.0f};   // Dead or Alive, Daytona, Motor Raid, Hanguk Pro Yagu 98; R912: VF2, Manx TT
     uint32_t rs = 0x13579bdfu;
     auto rnd = [&]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; };
     auto ru = [&]() { return (rnd() & 0xffffff) / 16777216.0f; };
     long tot = 0, tset = 0, tmame = 0, doa_n = 0, doa_set = 0;
-    for (int li = 0; li < 4; li++) {
+    for (int li = 0; li < 6; li++) {
       const float lod = lods[li];
       float coef[32];
       for (int k = 0; k < 32; k++) coef[k] = (k % 8 == 7) ? 0.0f : std::exp2(-3.0f + 12.0f * ru());
       if (li == 0) { for (int k = 0; k < 32; k++) coef[k] = (k % 10 == 0) ? 351.0f : 11.0f; coef[31] = 0.0f; }   // DOA's table
+      if (li == 4) for (int k = 0; k < 32; k++) coef[k] = std::exp2(-k / 3.0f);               // R912: VF2's table
+      if (li == 5) for (int k = 0; k < 32; k++) coef[k] = (k < 22) ? std::exp2((float)k) : 0.0f;   // R912: Manx TT's
       d->rst_n = 0; for (int i = 0; i < 4; i++) tick(); d->rst_n = 1; tick();
       d->mz_exact = 1;
       d->lod_l = (f2u(lod) >> 19) & 0xfff;

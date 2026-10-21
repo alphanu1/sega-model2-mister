@@ -1190,12 +1190,14 @@ obj_geodiff/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp r
 # R852: the same for a Virtua Fighter 2 walk (its CRTC y offset is 127).
 # R889: and the window in the sort key (q_z[19:16]) as the 2A core builds it;
 # geodiff.py compares z[15:0], so the nibble shows only in ours.txt.
+# R912: and the no-mip flag from the game's coef / lod (mz_exact, every 2A
+# game); M2GD_PRESET=1 loads the walk's table and lod first (state.txt).
 geodiff_2a: obj_geodiff_2a/Vgeodiff_top
 	@./obj_geodiff_2a/Vgeodiff_top $(TEST_ARGS)
 
 obj_geodiff_2a/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
     rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
-	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
 	  --Mdir obj_geodiff_2a -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
