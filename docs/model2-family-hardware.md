@@ -23,9 +23,9 @@ may differ from a real PCB in details MAME leaves out.
 **Ben's decision (2026-10-13, R832) still stands: Model 2B-CRX and 2C-CRX
 are documented only, not implemented.** Their tables below say what the
 existing work already covers, what would change, and what would be new, so
-that the decision rests on a stated gap and not on a guess. The sizes for
-the two new processors are estimates (nothing has been written or mapped),
-and they say so.
+that the decision rests on a stated gap and not on a guess. The MB86235
+(2C) is sized by a measured skeleton (R920). The SHARC (2B) is still R919's
+scaled estimate, and says so.
 
 ## Legend
 
@@ -244,7 +244,9 @@ Over Rev (`overrev2c`), Royal Ascot II (`model2c`), Sega Water Ski
   (`m2_fifo_m10k.sv`), the i960-side board interface (`m2_copro.sv`), the
   reciprocal and inverse-square-root units from the geometry
   (`m2_geo_rsqrt.sv`, `m2_recip_rom.sv`) for FRCP / FRSQ, and the TGP's
-  replay and lockstep harness pattern (`tgp_replay`). The decoder, the
+  replay and lockstep harness pattern (`tgp_replay`). (R920's skeleton
+  takes FRCP / FRSQ through `fp_div` and a new square root instead, which
+  give MAME's bits; the geometry's approximations would not.) The decoder, the
   sequencer (delay slots, PC stack, repeat), the address units and the
   register files are new. For the SHARC only the float units and the board
   interface carry over.
@@ -260,44 +262,218 @@ Over Rev (`overrev2c`), Royal Ascot II (`model2c`), Sega Water Ski
 
 ### The numbers
 
-The 2A core today (s1278): 41,389 / 41,910 ALM (**521 free**), 547 / 553
-M10K (**6 free**). The TGP board it would give up (`m2_copro` with
-`m2_tgp`, s1248): **2,867 ALM, 24 M10K, 1 DSP**, of which the MB86233 core
-is 2,413 ALM.
+**The MB86235 (2C) was re-sized in R920 by a measured skeleton. The SHARC
+(2B) was not re-sized: its row below is still R919's scaled estimate.**
 
-The processor estimates below are **inferred, not measured**: nothing has
-been written or mapped. They scale this core's MB86233 by the breadth of
-each instruction set, using MAME's interpreter size as a rough proxy
-(MB86233: 1,231 lines; MB86235: ~1,840; SHARC: ~6,300 across `sharc.cpp`,
-`sharcops.hxx`, `compute.hxx`, `sharcdma.hxx`, `sharcinternal.ipp`).
+#### The budget: what a 2C core gets by giving up the TGP
 
-| | MB86235 TGPx4 (2C) | ADSP-21062 SHARC (2B) |
+The 2A core (s1278, the 2A beta's fit): 41,389 / 41,910 ALM (521 free),
+547 / 553 M10K (6 free), 96 / 112 DSP (16 free). A 2C core keeps the i960
+side of the coprocessor board (`m2_copro`: its 36 ALM, the two FIFOs at
+1 M10K each) and replaces the processor behind it. On s1278 that processor,
+`m2_tgp` (the MB86233 core plus its board logic and R888's posted-write
+queue), is **2,802 ALM, 19 M10K (16 program, 3 data RAM), 1 DSP**. (R919's
+2,867 ALM and 24 M10K were `m2_copro` as a whole on s1248, before R909 took
+the TGP's shift-register RAMs out.)
+
+| | ALM | M10K | DSP |
+|---|---|---|---|
+| Freed by the TGP | 2,802 | 19 | 1 |
+| Free on s1278 | 521 | 6 | 16 |
+| **Budget for the TGPx4 and its board logic** | **2,802 at today's fill; 3,323 with the device full** | **25** | **17** |
+| More if needed: the copro FIFOs (8 deep) to MLAB | ~ -20 | +2 | |
+| More if needed: R909's reserve (char cache at `max_depth` 2048, `span_q` to MLAB) | | +19 | |
+
+The like-for-like figure (2,802) is the one to design to: s1278 is 99% full
+and closed timing with a seed sweep, so a replacement no larger than the TGP
+leaves the fill unchanged. Nothing else large on the 2A core is unused by
+2C. The light-gun logic (`m2_vcop_guns` / `_state` / `_xhair`, 233 ALM) is
+needed by The House of the Dead, but as a per-game parameter it can be off
+in a build for the other games. 2C has no billboard, and the 2A core has
+none either.
+
+#### The design: one instruction at a time, its parts in sequence
+
+The chip issues a 64-bit word per 20 MHz clock: an ALU op, a multiply and
+up to two transfers. `clk_sys` is 80 MHz, and the 2A games' TGP used at most
+~30% of its frame on MAME's model of the part (R888: Sega Rally max 5.05 of
+17.39 ms; R896: Manx TT max 5.11 ms). So nothing is duplicated for speed.
+`rtl/tgpx4/tgpx4_core.sv` runs each word's parts one after another, in
+MAME's order (transfer sources, ALU and multiplier operands, ALU, multiplier,
+transfer destinations), through one of each unit:
+
+- **One FP adder and one FP multiplier**: the 2A TGP's own `fp_add` / `fp_mul`
+  (`rtl/tgp`, with R852's SUBNORM, which matches MAME's host floats). The
+  MB86235 is IEEE single precision in MAME (`u2f` / `f2u`), with no extended
+  format, so they fit as they are. FRCP is `fp_div`'s 1 / x. FRSQ is MAME's
+  `1.0F / sqrtf(f)`: a new single-precision square root (`tgpx4_fsqrt`,
+  one bit a clock) followed by the same divide. Two correctly rounded
+  operations, so for normal inputs the result is MAME's bits.
+- **One shifter** (`tgpx4_cvt`, 33 bits) for CIF / CFI / CFIB and the four
+  integer shifts; a left shift is the bit-reversed right shift. One adder
+  for integer ADD / SUB / CMP. A 32 x 32 integer multiply in two DSPs.
+- **Register files in MLAB**: AA / AB / MA / MB as one 32 x 32 array with four
+  read copies (one per ALU / multiplier operand) and one write port; the
+  24-deep PR queue in one more. AR0-7 and the special registers are in
+  flip-flops, read through one shared AGU (`tgpx4_agu`, MAME's 15 modes),
+  one special-register multiplexer and three AR ports.
+- **Data RAMs A and B**, 1 K x 32 each, in M10K, one read and one write port
+  each. The write ports are driven in the clock that decides them, so the
+  next word reads what the last one wrote.
+- **Program memory** (`tgpx4_pmem`), in one of three sizes: all 4 K x 64 on
+  chip, or a direct-mapped cache of 1 K or 2 K lines over a copy of the
+  program in SDRAM. The upload writes both the line and the copy, so the
+  cache never needs a flush. Tag and valid bit ride in the spare bits of the
+  line.
+- **Prefetch**: the next word is fetched in S_DEC. Its address is always known
+  there, because a branch takes effect one word later, after its delay slot.
+
+**Measured, quartus_map 17.0 on the skeleton alone** (`make tgpx4_map
+TGPX4_PLINES=<n>`, the spike template, 5CSEBA6; map only, no fit):
+
+| Program memory | ALM (map estimate) | registers | block bits | M10K (Cyclone V shapes) | DSP |
+|---|---|---|---|---|---|
+| 1 K-line cache | 3,062 | 1,899 | 134,144 | 15 (A 4, B 4, cache 1 K x 67 = 7) | 3 |
+| 2 K-line cache | 3,063 | 1,899 | 200,704 | 22 (cache 2 K x 66 = 14) | 3 |
+| all on chip | 3,004 | 1,871 | 327,680 | 40 (program 4 K x 64 = 32) | 3 |
+
+By entity (1 K cache, map ALUTs): `fp_add` 599, `fp_mul` 689, `fp_div` 148,
+`tgpx4_fsqrt` 190, `tgpx4_cvt` 586, `tgpx4_agu` 133, the cache control 98,
+and the core's own sequencer, decode, transfer engine and registers 1,706
+(1,056 registers). MLAB: 160 memory ALUTs (five 32 x 32 arrays).
+
+**From map estimate to fitted ALM.** The 2A's `m2_tgp`, mapped the same way
+with its 2A parameters, reads 3,598 ALM against 2,802 fitted on s1278: a
+factor of 0.78. Applied here, the skeleton is **~2,390 ALM fitted** (1 K
+cache), ±10% for the factor's uncertainty.
+
+**M10K counts are by shape, not fitted.** 1 K x 32 fits 4 blocks at 1 K x 10
+and 4 K x 64 fits 32 at 4 K x 2. The fitter has taken worse shapes before
+(R909: 8192 x 1 slices), and `max_depth` pins the shape if it does.
+
+**What the skeleton covers.** It covers every instruction type (0, 1, 4, 5,
+7 and the control types 2 / 6), MAME's field decode for each, every ALU op
+except FLOG, both multiplies, the PR queue with its step modes, all 15 AGU
+modes, every transfer code (registers, special registers, AR, PR, FIFO in /
+out, PDR / DDR, PRP / PWP), external transfers with EB / EO and the A-bus
+window over 0x400, REP / SETL / DBLP, the conditional / relative /
+register / memory branch targets with their delay slot, the 4-deep PC
+stack, PUSH / POP, CLRF and the SETM forms, and MAME's FIFO stall (a word
+waits before doing anything if it reads an empty FI or writes a full FO).
+
+**How it was checked.** The skeleton lints clean (Verilator 5.052,
+`make lint_tgpx4`, the unused-signal class waived). The new arithmetic is
+fuzzed against host floats: `tgpx4_fsqrt` 0 / 59,532 wrong against
+`sqrtf`, and `tgpx4_cvt` 0 / 239,939 against `(float)int`, `int(f)`, the
+CFIB rule and the shifts. A planted fault (dropping the sticky bit) is
+caught 18,399 times. A second planted fault (rounding ties to nearest even)
+is not caught, and cannot be: a square root never falls exactly on a
+rounding tie. A hand-assembled program runs end to end in both
+program-memory forms, with every output right (FADD, FRSQ through
+sqrt + divide, a RAM A round trip with post-increment, FMUL, CIF, REP of an
+integer add, PR queue write / step / read). **It has not been run against
+MAME on a real 2C program.** No 2C ROM is on this machine.
+
+**Throughput, measured** (Verilator, REP loops of one form, `clk_sys`
+80 MHz). On MAME's model, the chip does 20 M words a second:
+
+| Form | clocks per word | M words / s |
 |---|---|---|
-| Instruction rate needed | 20 M instructions/s; at `clk_sys` 80 MHz that is 4 clocks each | 32 M/s with two data accesses; 2.5 clocks each at 80 MHz, so a pipelined design (the M2-F problem, larger) |
-| Logic | ~4,000-5,500 ALM (1.5-2x the MB86233: a parallel ALU and multiplier per instruction, two internal RAM ports, a PR queue) | ~6,000-12,000 ALM (2.5-5x: a 40-bit float ALU, a multiplier with 80-bit accumulators and a barrel shifter working in parallel, two address generators with circular and bit-reverse addressing, 32 address registers each plus alternates, 16 x 40-bit registers plus alternates, a 30-deep PC stack, a 6-deep loop stack, host boot and DMA) |
-| On-chip memory | Program 4 K x 64 = 256 Kbit (~26-32 M10K), RAM A and B 2 x 1 K x 32 (~8 M10K), FIFOs in MLAB: **~34-40 M10K** | 2 Mbit = **205 M10K** if on chip, which is impossible. It would have to live in SDRAM or DDR3 behind caches (as the 2A sound board's RAM does, R859), with the uploaded program held on chip (its size is unknown: MAME logs it as "Boot copro, %d dwords", but no 2B ROM is on this machine). |
-| Net against the TGP | **+1,100 to +2,600 ALM, +10 to +16 M10K** | **+3,100 to +9,100 ALM**, M10K depending on the caches |
-| Against the 2A core's free room | Over by ~600-2,100 ALM and ~4-10 M10K | Over by ~2,600-8,600 ALM |
+| transfer only | 3 | 26.7 |
+| integer op + register transfer | 5 | 16.0 |
+| FADD + register transfer | 7 | 11.4 |
+| FADD + FMUL + one or two transfers (the geometry word) | 8 | 10.0 |
+| FRCP / FRSQ + register transfer (iterative divide; square root then divide) | 32 / 59 | 2.5 / 1.4 |
 
-**What would have to go.** Nothing large on the 2A core is unused by these
-boards: they keep the i960, the renderer, the tilemap, the SCSP board, the
-315-5649, and the gun and wheel inputs. The measured levers are:
+An external access (data ROM, buffer RAM) or a cache miss adds an SDRAM
+round trip: ~19 clocks idle, 25-40 typical (R888). On the FP-heavy word the
+skeleton runs at half the chip's rate. That covers a 2C game that uses its
+TGPx4 the way the 2A games use their TGP (at most ~30% of a frame on MAME's
+model) by about 1.7x. Whether 2C games do is what the census's BUSY line
+measures.
 
-- R909's reserve: the char cache's data at `max_depth` 2048 (12 M10K, with a
-  mux on `clk_mem`), `span_q` to MLAB (7 M10K). This covers the TGPx4's M10K.
-- R818: the texel speed features (two slots + eight credits: −230 ALM
-  estimated, the draw 22-35% slower on the worst lists).
-- The 15 kHz scan converter (R908 needed 20 M10K for its ring; its ALM is
-  not measured separately). This would drop 15 kHz output for that core.
-- R818 item 8: an analog-only build without HDMI is −3,861 ALM estimated.
-  It's not acceptable for a release, but it's the only single lever that
-  size.
+#### What the rest adds (bounded)
 
-So a 2C core is about one lever short in ALM (the texel features or the 15 kHz
-ring, plus finding the rest), which is a real project but not an impossible
-one. A 2B core is short by roughly a whole subsystem, and the SHARC's
-memory has to leave the chip. This is the measured form of R832's caveat,
-and it supports Ben's decision rather than changing it.
+| Item | Bound | Source of the bound |
+|---|---|---|
+| The board logic: SDRAM port 9 for the data ROM and the program copy's refill, buffer-RAM writes in 16-bit halves through R888's posted queue, the program copy's writes | ≤ 378 ALM | `m2_tgp`'s own logic (324) + its queue (54) on s1278, which does the same jobs plus the MB86233's table port |
+| `m2_copro`: pack the i960's word pairs into 64-bit program words | ~20-40 ALM | one 32-bit holding register and a counter bit |
+| FLOG, only if the census finds it | ~100-200 ALM, 0-1 M10K | a sequence on the shared fp_mul / fp_add with a mantissa table |
+| Overlap, only if the census's BUSY line says 8 clocks a word is too slow: the next word's operand reads under this word's FP latency | ~100-250 ALM | a second operand set and a check of 2 destinations against 4-6 sources; 8 clocks a word goes to ~5 |
+
+#### The result
+
+| Chip | Microarchitecture | Skeleton, measured (map) | Expected total, fitted | Budget after removing the TGP | Fits? |
+|---|---|---|---|---|---|
+| MB86235 TGPx4 (2C), 1 K-line program cache | One word at a time on shared units; MLAB register files; one AGU, one shifter, one adder; prefetch | 3,062 ALM, 15 M10K, 3 DSP | **~2,800 ALM** (2,390 + ≤378 + ~30), **15 M10K**, 3 DSP; ~2,900-3,250 with FLOG and overlap | 2,802 ALM at today's fill (3,323 full), 25 M10K, 17 DSP | **Yes.** About equal to the TGP in ALM, so the fill stays at s1278's 99%. 10 M10K spare. FLOG plus overlap would go over the like-for-like figure by up to ~450 ALM, still inside the device. |
+| same, 2 K-line cache | as above | 3,063 ALM, 22 M10K | ~2,800 ALM, 22 M10K | as above | Yes, 3 M10K spare |
+| same, whole program on chip | as above, no cache | 3,004 ALM, 40 M10K | ~2,750 ALM, 40 M10K | as above | ALM yes. M10K only with R909's 19-block reserve (4 spare) |
+| ADSP-21062 SHARC (2B) | **not re-sized in R920** | — | R919's scaled estimate: ~6,000-12,000 ALM, its 2 Mbit RAM off chip | 2,802 / 3,323 ALM | No, on R919's estimate |
+
+R919 believed the MB86235 would take ~4,000-5,500 ALM and ~34-40 M10K, and
+leave a 2C core ~600-2,100 ALM over. Measured, it takes about what the TGP
+it replaces takes, and 15 M10K with a 1 K-line cache. **Ben's decision
+(R832) is unchanged by this. 2C remains documented only, and nothing here is
+wired into `Model2.sv`.** But the size of the processor is no longer the
+reason.
+
+#### Open risks
+
+- **No 2C program has been run.** The skeleton follows MAME's interpreter,
+  and every 2C set is `MACHINE_NOT_WORKING` in MAME 0.289, so the oracle may
+  itself be wrong for these games. Model 1 has no MB86235 to check it
+  against.
+- **Throughput.** The skeleton runs at half the chip's rate on the geometry
+  word. Nothing has measured a 2C game's load: the census's BUSY line will.
+  The overlap lever is bounded above.
+- **The program cache.** A 1 K-line cache over a program of up to 4 K words
+  (VF2 uploads 3,802 words to its TGP, R852) misses when the working set
+  spills. Each miss costs an SDRAM round trip. The census models 1 K and 2 K
+  direct-mapped caches on the real fetch stream (PCACHE line). If they
+  thrash, the 2 K cache (22 M10K) or the whole program on chip (40, with
+  R909's reserve) are the fall-backs, and they are measured above.
+- **FP edges.** `fp_div` flushes subnormal results, so FRCP of |x| > 2^126
+  differs from MAME's host float. FRSQ of a subnormal or negative input
+  follows x86, unchecked. **FLOG**: MAME computes `log(f) / 0.301030F`,
+  which is ln x / log10 2, not log2 x. Either MAME or the chip is odd; the
+  census says whether any game runs it. **FEA / FES**: MAME keeps only the
+  exponent field and drops the mantissa (`src1 &= 0x7f800000`). The skeleton
+  copies it, and the census says whether it matters.
+- **MAME has no pipeline model for this chip.** A result is visible to the
+  next word. The real part may have data hazards that its programs avoid or
+  rely on. The skeleton follows MAME.
+- **The 2C i960 forms** (R869's method) and **Top Skater's second geometry
+  matrix** are unchanged open items.
+
+#### The census (ready, needs the ROMs)
+
+`sim/tgp/mame_mb86235_census.patch` (applied and built in the scratch MAME
+0.289 tree `sm2-builds/mame-r869`, binary `m2lod`) logs, per game:
+
+- every distinct instruction form with its first PC and count;
+- the ALU / multiply ops, second-source kinds and PR modes, AGU modes,
+  transfer codes, external and A-bus-over-0x400 transfers, and control ops
+  and conditions;
+- the uploaded program size;
+- a direct-mapped 1 K / 2 K program cache's misses on the real fetch stream;
+- the busy fraction per 1/57.5 s on MAME's model.
+
+`sim/tgp/mame_m2c_census.sh` runs it set by set with
+`sim/io/mame_m2_2a_play.lua`. The play mode per set is a first guess:
+rally for STCC and Over Rev, vcop2 for House of the Dead, and coin / start /
+buttons only for the rest. The census code was checked in a harness on
+known words, and the script on a 2A set (no census, correctly) and on a
+missing 2C set (fails cleanly).
+
+**The ROM sets it needs** (MAME 0.289 names, all `model2c_state`):
+
+- **Parents:** `stcc`, `hotd`, `bel`, `waverunr`, `skisuprg`, `segawski`,
+  `topskatr`, `overrev`, `rascot2`.
+- **`dynamcopc`**, whose parent `dynamcop` is already here.
+- **Clones:** `stccb`, `stcca`, `stcco`, `hotdo`, `hotdp`, `topskatru`,
+  `topskatruo`, `topskatrj`.
+
+The parents are the minimum, plus the BIOS / device zips MAME asks for.
 
 ## Remaining work
 
@@ -332,9 +508,11 @@ Dynamite Cop (already playable from their 2A sets).
    geometrizer is enough for each game (Top Skater is known not to be).
 2. **The bridge and board changes:** as 2B's item 2, without the UART move
    and with the 64-bit upload packing. Small.
-3. **The MB86235**, against MAME's interpreter (a weaker oracle):
-   ~4,000-5,500 ALM, ~34-40 M10K, reusing the TGP's float units, FIFO and
-   board interface. Needs ~600-2,100 ALM and ~4-10 M10K found on the 2A core.
+3. **The MB86235**, from R920's skeleton (`rtl/tgpx4`, branch `model2c`),
+   against MAME's interpreter (a weaker oracle): ~2,800 ALM fitted with its
+   board logic and 15 M10K with a 1 K-line program cache, within the TGP's
+   own 2,802 ALM / 19 M10K. Run the census first (`sim/tgp/mame_m2c_census.sh`)
+   to fix the forms, the cache size, FLOG and the throughput lever.
 4. **Inputs:** House of the Dead's guns as is (R870); wheels; Ski Super G,
    Wave Runner, Water Ski and Top Skater profiles; Behind Enemy Lines'
    analog guns. Small each.

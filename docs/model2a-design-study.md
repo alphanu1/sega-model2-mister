@@ -42425,3 +42425,104 @@ breadth (MAME interpreter lines as a rough proxy: MB86233 1,231, MB86235
 *Decision unchanged:* 2B and 2C stay documented only (Ben, R832). The
 document's last section lists the remaining work for 2B, 2C, the original
 core and the 2A core, in order, with sizes and the games each would bring.
+
+**R920 -- THE MB86235 (2C) MEASURED, NOT SCALED: A SKELETON THAT RUNS ONE WORD
+AT A TIME ON SHARED UNITS MAPS AT 3,062 ALM (~2,390 FITTED BY THE m2_tgp
+FACTOR), 15 M10K WITH A 1 K-LINE PROGRAM CACHE, 3 DSP. WITH ITS BOARD LOGIC
+~2,800 ALM AGAINST THE TGP'S OWN 2,802: A 2C CORE FITS IN THE ROOM THE TGP
+LEAVES. NOT WIRED, NOT RUN ON A 2C PROGRAM; THE SHARC NOT RE-SIZED.**
+(Ben, on R919's estimates: "I argue we can do better." Branch model2c, off
+model2a c7278f2; this branch never merges into main or model2a.)
+
+*What was believed (R919, scaled by MAME interpreter size, nothing mapped):*
+MB86235 ~4,000-5,500 ALM and ~34-40 M10K (program 4 K x 64 on chip ~26-32,
+RAM A / B ~8); net +1,100-2,600 ALM and +10-16 M10K over the TGP it replaces,
+leaving a 2C core ~600-2,100 ALM and ~4-10 M10K over. R919's budget quoted
+m2_copro on s1248 (2,867 ALM, 24 M10K); the processor that goes is m2_tgp,
+and on s1278 (the 2A beta) it is 2,802 ALM, 19 M10K, 1 DSP (R909 took the
+TGP's three shift-register RAMs out between the two).
+
+*What is now known (MEASURED unless marked):*
+  1. THE BUDGET. 2,802 ALM like-for-like (s1278 is 99% full and closed with
+     a seed sweep; a replacement no larger keeps that fill), 3,323 with the
+     device full; 25 M10K (19 + 6 free), 27 with the copro FIFOs in MLAB, 44
+     with R909's 19-block reserve; 17 DSP. Nothing else large on the 2A core
+     is unused by 2C; the gun logic (233 ALM) is HOTD's and can be a
+     per-game parameter.
+  2. THE DESIGN (rtl/tgpx4, branch model2c, not in Model2.sv). One word at a
+     time, its parts in MAME's order through one of each unit: the 2A TGP's
+     fp_add / fp_mul (SUBNORM) and fp_div, a new single-precision square root
+     (FRSQ = 1 / sqrtf, MAME's bits for normal inputs), one 33-bit shifter
+     for CIF / CFI / CFIB and the integer shifts, one integer adder, a DSP
+     integer multiply; AA / AB / MA / MB as a 32 x 32 MLAB array with four
+     read copies and one write port, PR in MLAB, AR and special registers in
+     flip-flops through one AGU and one special-register mux; RAM A / B 1 K x
+     32 in M10K; the program 4 K x 64 on chip or a direct-mapped 1 K / 2 K
+     line cache over an SDRAM copy (upload writes both: no flush). The
+     MB86235 is IEEE single in MAME (u2f / f2u, no extended format), so the
+     TGP's FP units are reused unchanged.
+  3. quartus_map 17.0 (make tgpx4_map, spike template, map only): 1 K cache
+     3,062 ALM / 1,899 regs / 134,144 bits / 3 DSP; 2 K cache 3,063 / 200,704
+     bits; all on chip 3,004 / 327,680 bits. M10K by Cyclone V shape (not
+     fitted): 15 / 22 / 40. CALIBRATION: m2_tgp mapped the same way with its
+     2A parameters reads 3,598 against 2,802 fitted on s1278 -- x0.78, so the
+     skeleton is ~2,390 fitted (+-10%). Board logic bounded by m2_tgp's own
+     324 + its posted queue 54 = 378; the pair packing in m2_copro ~20-40.
+     Expected ~2,800 ALM, 15 M10K, 3 DSP. FLOG (if any game runs it) ~100-200
+     ALM; the overlap lever below ~100-250 ALM.
+  4. THROUGHPUT (Verilator, REP loops, clk_sys 80 MHz): transfer 3 clocks;
+     integer op + transfer 5; FADD + transfer 7; FADD + FMUL + one or two
+     transfers 8 (10 M words/s, half the chip's 20 M on MAME's model); FRCP
+     32, FRSQ 59. INFERRED: a 2C game using its TGPx4 as the 2A games use
+     their TGP (<= ~30% of a frame on MAME's model, R888 / R896) is covered
+     ~1.7x; overlapping the next word's operand reads with the FP latency
+     would take the geometry word to ~5.
+  5. CHECKED: lint clean (Verilator 5.052, unused-signal class waived);
+     tgpx4_fsqrt 0 / 59,532 against sqrtf, tgpx4_cvt 0 / 239,939 against
+     (float)int, int(f), CFIB and the shifts; a planted sticky-bit fault
+     caught 18,399 times; a hand-assembled program right end to end in both
+     program-memory forms. NOT CHECKED: any real 2C program (no 2C ROM here).
+
+*Wrong turns on the way, each measured:*
+  * The register file's four copies, written inside a generate loop in the
+    core, were NOT inferred as RAM by quartus_map 17.0: 1,024 flip-flops and
+    four 32:1 read muxes, 4,452 ALM. As a module of their own (tgpx4_rf)
+    they went to MLAB: 3,462.
+  * The conversion unit's shifter was written {fill x32, x} >> n -- a 64-bit
+    shifter. As a 33-bit arithmetic shift, with the four integer shifts
+    moved onto it, one special-register mux instead of two, three AR ports
+    instead of seven and compact flag storage: 3,127, then 3,062 with the
+    rest below.
+  * The first throughput was 6 clocks a transfer and 10 an FP word. A fetch
+    issued at S_DEC (its address is always known there: a branch takes
+    effect after its delay slot), the result states skipped when unused and
+    a result counted in the clock it arrives brought them to 3 and 8 -- and
+    broke the smoke test: the next word now read the register file in the
+    clock the last word's REGISTERED write was still going in. The RF, PR
+    and RAM write ports are now driven in the clock that decides them.
+  * The PR queue's write used pwp after it had already stepped (a real bug,
+    found reading the code; the smoke test now writes, steps and reads PR).
+  * A planted fault in the square root's tie rounding is NOT caught by the
+    fuzz, and cannot be: a square root never falls exactly on a tie.
+
+*MAME findings for the census to settle (VERIFIED in the source, effect on
+games unknown):* FLOG is log(f) / 0.301030F (ln x / log10 2), not log2 x.
+FEA / FES keep only the exponent field (`src1 &= 0x7f800000`). MAME's
+MB86235 has no pipeline model (a result is visible to the next word), and
+every 2C set is MACHINE_NOT_WORKING, so the oracle is weak; Model 1 has no
+MB86235 (tools/model1-ref 0b5d04f = its origin).
+
+*The census (tool, ready; needs the ROMs):* sim/tgp/mame_mb86235_census.patch
+(applied and built in sm2-builds/mame-r869) logs every instruction form and
+its count, op / AGU-mode / transfer-code / control histograms, external and
+A-bus-over-0x400 transfers, the upload size, a 1 K / 2 K direct-mapped
+program cache's misses on the real fetch stream, and the busy fraction per
+1/57.5 s on MAME's model; sim/tgp/mame_m2c_census.sh runs it per set with
+sim/io/mame_m2_2a_play.lua (play modes unverified on 2C). Checked in a
+harness on known words. ROM sets: stcc, hotd, bel, waverunr, skisuprg,
+segawski, topskatr, overrev, rascot2, dynamcopc (parent dynamcop is here);
+clones stccb, stcca, stcco, hotdo, hotdp, topskatru, topskatruo, topskatrj.
+
+*The SHARC (2B) was not re-sized here;* R919's estimate stands for it.
+*Decision unchanged:* 2C stays documented only (Ben, R832) until Ben says
+otherwise; the processor's size is no longer the reason it cannot fit.

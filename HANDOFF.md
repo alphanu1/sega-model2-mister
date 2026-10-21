@@ -1,5 +1,38 @@
 # Handoff
 
+## 2026-10-21: the MB86235 (2C) measured -- branch model2c, R920. NOT PUSHED, NOT WIRED
+
+Branch model2c (off model2a c7278f2; never merges into main or model2a,
+fixes flow model2a -> model2c). rtl/tgpx4 is a SIZING SKELETON of the TGPx4,
+not in Model2.sv: one word at a time on shared units (the TGP's fp_add /
+fp_mul / fp_div, a new square root, one shifter, MLAB register files, one
+AGU), program on chip or a 1 K / 2 K-line cache over SDRAM.
+quartus_map 17.0 (`make tgpx4_map TGPX4_PLINES=1024|2048|4096`): 3,062 /
+3,063 / 3,004 ALM map estimate, 15 / 22 / 40 M10K by shape, 3 DSP. m2_tgp
+mapped the same way reads 3,598 vs 2,802 fitted (x0.78), so ~2,390 fitted;
+with board logic (<= 378, m2_tgp's own) ~2,800 against the TGP's 2,802 ALM
+/ 19 M10K. Budget after removing the TGP: 2,802 ALM like-for-like (3,323
+full), 25 M10K, 17 DSP. Fits. R919's 4,000-5,500 ALM / 34-40 M10K was wrong.
+Throughput (Verilator): transfer 3 clk, FADD + FMUL + transfer 8 clk (half
+the chip's 20 M words/s); FRCP 32, FRSQ 59.
+Checked: lint clean; fsqrt / cvt fuzzed exact vs host floats; a hand
+program right end to end. NOT run on any 2C program (no 2C ROM here).
+Findings and wrong turns (all in R920): the RF copies in a generate loop
+were NOT inferred as MLAB (4,452 ALM; a module of their own fixed it); a
+64-bit shifter by accident; prefetching exposed stale RF reads because the
+write ports were registered (now driven combinationally); a PR write used
+the already-stepped pwp. MAME's FLOG is ln x / log10 2, not log2; FEA/FES
+drop the mantissa; MAME's MB86235 has no pipeline model and every 2C set is
+NOT WORKING -- a weak oracle.
+NEXT (needs Ben's ROMs): the census -- sim/tgp/mame_mb86235_census.patch is
+applied and built in sm2-builds/mame-r869 (m2lod); run
+`sim/tgp/mame_m2c_census.sh` with stcc hotd bel waverunr skisuprg segawski
+topskatr overrev rascot2 dynamcopc (+ clones stccb stcca stcco hotdo hotdp
+topskatru topskatruo topskatrj). It decides the forms kept, FLOG, the cache
+size (PCACHE line) and whether the overlap lever is needed (BUSY line).
+The SHARC (2B) was not re-sized. Ben's R832 decision is unchanged.
+Next free R numbers: R921 on.
+
 ## 2026-10-21: the Model 2 family reviewed again (R919) -- branch family-hw, DOCUMENT ONLY, NOT PUSHED
 
 New: docs/model2-family-hardware.md. One table per board (original, 2A, 2B,
