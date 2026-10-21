@@ -4,7 +4,7 @@
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261021b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261021c.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -41,7 +41,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261021b.rbf` has the md5 `672b7003d3264906e96f4ab0e925bab2`.
+**Check you're running the right file.** `Model2_20261021c.rbf` has the md5 `56015110c6d80ee1f9d19788dcc1ac45`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -75,6 +75,13 @@ anything you find.
 
 ## New in this release
 
+- **Link play for Daytona USA.** Race other cabinets over your network:
+  MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
+  link board is switched on in the OSD (`Link board`, Daytona only, Off by
+  default), and a small helper program on the MiSTer's Linux carries the
+  link. Master, slave and car number are the game's own test-menu settings.
+  Optional frame sync keeps every cabinet on the master's frame. See *Link
+  play* below for the setup. (`Model2_20261021c`.)
 - **Daytona's road stays sharp in the distance.** With mip-mapping on, the
   road and its lane lines used to step and fade in bands as they went into
   the distance (GitHub issue #11). Mip-mapping is there for the mountains and
@@ -134,6 +141,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
+| `Link board` | Daytona USA only: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
 ## Controls
@@ -201,9 +209,6 @@ country is the game's own setting, so change it in its test menu, or use a
 ROM set from another region.
 
 ## Link play: Daytona USA, cabinet against cabinet
-
-<!-- DRAFT for the release that carries link play (study R916). Not in the
-20261021 core. -->
 
 Daytona USA (Revision A, the 1994 set) can race other cabinets over your
 network, wired or Wi-Fi, like linked arcade machines: two MiSTers, or a

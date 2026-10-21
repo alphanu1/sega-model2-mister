@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-21 (night): main -- release Model2_20261021c (link play), NOT PUSHED
+
+Model2_20261021c.rbf = s1300 (link-play 1ce2d5d: main 6e291cc + R916),
+md5 56015110... Board: Daytona linked to the recomp with framesync on at
+full frame rate (Ben). releases/ has the core, helpers/m2link/ (m2link
+adccae3c, m2link.ini with a placeholder IP and link_framesync = 0,
+m2link.sh) and the README's link-play section (setup, master first,
+CANCELLED recovery, the log, framesync). main fast-forwarded locally to it.
+Ben: do not push to upstream yet. model2a's releases/ copy of the Model 2
+section still shows Model2_20261021b -- refresh it when this is pushed.
+
 ## 2026-10-21 (late): link-play -- framesync measured at 57.52 Hz on both ends (R916 addendum 3)
 
 The constant "12-frame gap" was the bench's measure (each process's own

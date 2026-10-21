@@ -36746,3 +36746,12 @@ constant 12-frame gap.
     master's token, it never re-aligns the phase.
   * run_tests.sh gains the equal-rate case (MiSTer master + recomp slave,
     both 57.52, framesync 1: skew spread 0): 19 passed.
+
+**R916 (board, 2) -- LINK PLAY ON THE BOARD WITH THE IN-CORE HAND-OVER:
+FULL FRAME RATE, AND FRAMESYNC WORKS.** s1300 (link-play 1ce2d5d on main
+6e291cc: clk_sys +0.425, clk_mem +0.420, clk_i960 +1.737, hold +0.209;
+41,120 ALMs, 553/553 M10K), m2link adccae3c, MiSTer master against the recomp
+on Ben's PC with link_framesync = 1 at both ends: Ben, "Daytona link play
+with sync on works at full frame". Framesync stays 0 by default (Ben).
+Released locally as Model2_20261021c; not pushed until Ben says.
+
