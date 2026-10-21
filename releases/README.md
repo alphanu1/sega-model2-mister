@@ -386,6 +386,7 @@ or more of either. They speak the same protocol, so any mix works.
 The MiSTer's network is on its Linux side, so a small program, `m2link`,
 carries the link; the core just needs its link board switched on. Everything
 is in `helpers/m2link/` here, ready to copy — nothing to build.
+The same instructions are in `helpers/m2link/README.md`, next to the files.
 
 | file in `helpers/m2link/` | where it goes on the SD card |
 |---|---|
