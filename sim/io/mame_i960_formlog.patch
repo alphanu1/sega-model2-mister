@@ -10,21 +10,17 @@ and sim/io/mame_i960_formlog.py; sim/io/mame_m2_2a_play.lua plays the game.
 Apply in a MAME 0.289 tree: patch -p1 < mame_i960_formlog.patch, then e.g.
 make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
 (BSD-3-Clause, i960.cpp's own licence); it is a tool, not part of the core.
+R921: and every operand VARIANT (VAR / VCOUNT lines): the form with its m1 m2 m3
+s1 s2 bits, the FP operand fields where an m bit is set (fp0-fp3 or a literal),
+the multi-word ops' register alignment, MEM's mode and scale, COBR's m1 / t / s2
+-- each with its first PC, word and time; sim/io/i960_formcheck.cpp steps the
+reference on each. Existing readers ignore the new lines.
 
---- a/src/devices/cpu/i960/i960.h
-+++ b/src/devices/cpu/i960/i960.h
-@@ -174,6 +174,8 @@
- 	void test(uint32_t opcode, int mask);
- 	double round_to_int(double val);
- 	void execute_op(uint32_t opcode);
-+	void r869_pre(uint32_t opcode, uint32_t &key, uint64_t &a, uint64_t &b);
-+	void r869_post(uint32_t opcode, uint32_t key, uint64_t a, uint64_t b);
- 	void execute_burst_stall_op(uint32_t opcode);
- 	void take_interrupt(int vector, int lvl);
- 	void check_immediate_irqs();
+diff --git a/src/devices/cpu/i960/i960.cpp b/src/devices/cpu/i960/i960.cpp
+index f16d750d..04dd312f 100644
 --- a/src/devices/cpu/i960/i960.cpp
 +++ b/src/devices/cpu/i960/i960.cpp
-@@ -2203,6 +2203,85 @@
+@@ -2203,6 +2203,120 @@ void i960_cpu_device::execute_op(uint32_t opcode)
  
  }
  
@@ -44,6 +40,7 @@ make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
 +	std::unordered_set<uint64_t> pcs;                  // (form, pc) of interest seen
 +	std::unordered_set<std::string> vals;              // distinct operand tuples
 +	std::map<uint32_t, uint64_t> nval;
++	std::map<uint32_t, r869_key_info> vars;           // R921: variant (masked word) -> first
 +	bool open() {
 +		if (!tried) { tried = true; const char *o = getenv("R869_OUT"); if (o) f = fopen(o, "w"); }
 +		return f != nullptr;
@@ -52,11 +49,37 @@ make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
 +		if (!f) return;
 +		for (auto &k : keys) fprintf(f, "COUNT %04x pc %08x t %.4f n %llu\n", k.first, k.second.pc, k.second.t, (unsigned long long)k.second.n);
 +		for (auto &k : nval) fprintf(f, "NVAL %04x %llu\n", k.first, (unsigned long long)k.second);
++		for (auto &k : vars) fprintf(f, "VCOUNT %08x pc %08x t %.4f n %llu\n", k.first, k.second.pc, k.second.t, (unsigned long long)k.second.n);
 +		fclose(f);
 +	}
 +};
 +r869_log g_r869;
 +inline uint64_t r869_d2u(double d) { uint64_t v; memcpy(&v, &d, 8); return v; }
++// R921: the operand variant of a word -- the form plus its operand kinds:
++// REG m1 m2 m3 s1 s2, and for the FP ops the operand field itself where its m
++// bit is set (fp0-fp3 or a literal 0.0 / 1.0 / other), and the register
++// pair / triple / quad alignment of the multi-word ops; MEM's mode and scale
++// (and the alignment of ldl..stq); COBR's m1 / t / s2; CTRL's t.
++inline uint32_t r869_vmask(uint32_t w) {
++	const uint32_t op = w >> 24;
++	if (op >= 0x58 && op < 0x80) {
++		uint32_t v = w & 0xff003fe0u;
++		const bool fp = (op >= 0x67 && op <= 0x6e) || op == 0x78 || op == 0x79;
++		const bool multi = op == 0x5d || op == 0x5e || op == 0x5f || op == 0x67 || op == 0x69 || op == 0x6c
++		                || op == 0x6d || op == 0x6e || op == 0x79;
++		if (fp && (w & 0x0800)) v |= w & 0x1f; else if (multi) v |= w & 0x3;
++		if (fp && (w & 0x1000)) v |= w & (0x1fu << 14); else if (multi) v |= w & (0x3u << 14);
++		if (fp && (w & 0x2000)) v |= w & (0x1fu << 19); else if (multi) v |= w & (0x3u << 19);
++		return v;
++	}
++	if (op >= 0x80) {
++		uint32_t v = (w & 0x1000) ? (w & 0xff003fe0u) : (w & 0xff003000u);
++		if (op == 0x98 || op == 0x9a || op == 0xa0 || op == 0xa2 || op == 0xb0 || op == 0xb2) v |= w & (0x3u << 19);
++		return v;
++	}
++	if (op >= 0x20 && op < 0x40) return w & 0xff002003u;
++	return w & 0xff000003u;
++}
 +// REG forms MAME runs that i960_top lacks (sim/io/vf2_formscan.py RTL_LACKS)
 +inline bool r869_interest(uint32_t k) {
 +	switch (k) {
@@ -82,6 +105,14 @@ make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
 +		g_r869.keys[key] = { m_PIP, t, 1 };
 +		fprintf(g_r869.f, "FIRST %04x pc %08x insn %08x t %.4f\n", key, m_PIP, opcode, t); fflush(g_r869.f);
 +	} else it->second.n++;
++	{
++		const uint32_t vk = r869_vmask(opcode);
++		auto vt = g_r869.vars.find(vk);
++		if (vt == g_r869.vars.end()) {
++			g_r869.vars[vk] = { m_PIP, t, 1 };
++			fprintf(g_r869.f, "VAR %08x key %04x pc %08x insn %08x t %.4f\n", vk, key, m_PIP, opcode, t); fflush(g_r869.f);
++		} else vt->second.n++;
++	}
 +	a = b = 0;
 +	if (r869_interest(key)) {
 +		const uint64_t pk = (uint64_t(key) << 32) | m_PIP;
@@ -110,7 +141,7 @@ make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
  void i960_cpu_device::execute_run()
  {
  	uint32_t opcode;
-@@ -2222,7 +2301,12 @@
+@@ -2222,7 +2336,12 @@ void i960_cpu_device::execute_run()
  
  		if(m_stall_state.burst_mode == true)
  			execute_burst_stall_op(opcode);
@@ -124,3 +155,16 @@ make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. The patch is MAME code
  			execute_op(opcode);
  	}
  }
+diff --git a/src/devices/cpu/i960/i960.h b/src/devices/cpu/i960/i960.h
+index 4200f98a..912af819 100644
+--- a/src/devices/cpu/i960/i960.h
++++ b/src/devices/cpu/i960/i960.h
+@@ -174,6 +174,8 @@ private:
+ 	void test(uint32_t opcode, int mask);
+ 	double round_to_int(double val);
+ 	void execute_op(uint32_t opcode);
++	void r869_pre(uint32_t opcode, uint32_t &key, uint64_t &a, uint64_t &b);
++	void r869_post(uint32_t opcode, uint32_t key, uint64_t a, uint64_t b);
+ 	void execute_burst_stall_op(uint32_t opcode);
+ 	void take_interrupt(int vector, int lvl);
+ 	void check_immediate_irqs();
