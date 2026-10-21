@@ -87,6 +87,8 @@ ROM sets: MAME 0.289.
 - **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
   cabinet's extra sound board isn't emulated, so a few extra sounds are
   missing.
+- **Dead or Alive has a constant low bass rumble**, even when nothing else
+  is playing. Being looked at.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall, and Virtua Fighter 2's hits sit well under its music.
   That is how MAME 0.289 mixes these games, sample for sample, and the core
