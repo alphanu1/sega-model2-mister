@@ -437,6 +437,35 @@ framework replaced by a small interface (MAME's `iomap_le` handlers and
 David Haywood`). No RTL is derived from it yet; the BSD-3 notice above (the
 SCSP's) applies to it with these holders' names.
 
+### retrorepair/sega-model2-mister — GPL-3.0 (the 15 kHz scan converter)
+*Verified 2026-10-20 · branch `guncon-scan15` @ **`d5c5ba2`**; the converter as of **`57faad7`***
+
+Retrorepair's working copy of this repository, for GunCon 2 / CRT work. Their
+15 kHz "Filled" picture is what this core's 15 kHz mode now is (R898): the
+renderer stays on its native 24 kHz timing and a scan converter between the
+finished picture and the pins outputs its own 15 kHz interlaced timing with
+240 lines a field, 384 -> 480 by an exact 4:5 blend, no frame of delay, and
+the output frames paired to the game's images for games that draw every
+second frame. It is their design and their finding that the 1:1 picture's
+borders could only be fixed by a vertical scale.
+
+Licence: the repository reports `GPL-3.0` (`gh api repos/retrorepair/
+sega-model2-mister --jq .license.spdx_id`); `m2_scan15.sv` and its bench
+carry `SPDX-License-Identifier: GPL-3.0-or-later`. Same licence as this
+project.
+
+Taken (commits `146c252`, `3796af4`, `91b9095`, `a91d77f`, `57faad7` for the
+module and bench; `c581df7` for retiring the 1:1 picture and its options):
+
+| ours | theirs | changed |
+|---|---|---|
+| `rtl/video/m2_scan15.sv` | `rtl/video/m2_scan15.sv` | Two taps instead of four (their vertical filter is tied off in their build); ring 16 lines (was 12) and the alignment delay `D_PX` per line count, so 273/274 (15.7 kHz) and 268/269 (15.4 kHz) work as well as their 262/263; the ring address not a register of its own; the light-gun beacon and the field-order switch not ported. |
+| `sim/video/tb_m2_scan15.sv`, `run_scan15.sh` | same paths | Two taps; every line count; exact vsync intervals, the half-line field offset, line period and 240 lines a field enforced in PASS; the re-alignment checked to be a no-op once locked; the design's parameter values reported. |
+| `Model2.sv` | their `Model2.sv` diff | The converter and its output enable as theirs, but the enable per line count and the `15kHz lines` option kept (R840); HDMI kept (they set `MISTER_DEBUG_NOHDMI` to fit); no `joystick_3` beacon request. |
+
+Not taken: the beacon (`joystick_3` bit 0 white fields), `docs/guncon2/`, the
+`MISTER_DEBUG_NOHDMI` build setting, their release files.
+
 ### MiSTer-devel/N64_MiSTer — GPL-3.0, VHDL
 *Verified 2026-08-16*
 

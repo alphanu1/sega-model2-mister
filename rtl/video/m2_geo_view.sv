@@ -28,6 +28,16 @@
 //
 // The window changes at most once a list and the geometry is idle between
 // objects, so the conversion takes two registered stages and no hurry.
+//
+// R907: AND SO ONE CONVERTER, NOT SIX. The six values took six integer-to-
+// float units in parallel (575 ALUT, 290 ALM placed in s1250) to answer in 3
+// cycles something that changes once an object. One unit now visits the six
+// slots in turn: an output is rewritten every 6 cycles and is right at most
+// 8 cycles after its inputs change (up to 6 to reach its slot, then 2). The
+// first use of any of them is a projection or a clip test after the object's
+// first vertex has been fetched and transformed -- tens of cycles at the
+// least -- and geodiff's pool hash (every FP operand, every cycle) is
+// unchanged by the swap. The values are bit for bit the same.
 
 `timescale 1ns/1ps
 
@@ -98,50 +108,67 @@ module m2_geo_view #(
   wire _unused = &{1'b0, win_vp_s[31:28], win_vp_s[15:12], win_vp_e[31:28],
                    win_vp_e[15:12], win_c0[31:28], win_c0[15:12]};
 
-  // Stage 1: the six integers.
-  logic signed [15:0] ixc, iyc, il, ir, it, ib;
+  // R907: the slot in turn, 0..5 = xc, yc, a_left, a_right, a_bottom, a_top.
+  logic [2:0] sl;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) sl <= 3'd0;
+    else        sl <= (sl == 3'd5) ? 3'd0 : sl + 3'd1;
+  end
+
+  // Stage 1: the slot's integer, one subtractor (iv = p - q) for all six:
+  //   xc = CRTC_X + cx          = cx - (-CRTC_X)
+  //   yc = 384 - cy + CRTC_Y    = (384 + CRTC_Y) - cy
+  //   -left = vx0 - cx   right = vx1 - cx   top = vy1 - cy   -bottom = vy0 - cy
+  // (R740: a_left and a_top stored negated). 16-bit wrap as before.
+  // R852 with R907: LIVE takes the offsets from crtc_x / crtc_y in the same
+  // two forms -- cx - (-crtc_x), (384 + crtc_y) - cy -- equal to the
+  // per-value adders before R907 modulo 2^16, as the constants are.
+  localparam logic signed [15:0] XN = 16'(0 - CRTC_X);      // -CRTC_X
+  localparam logic signed [15:0] YP = 16'(384 + CRTC_Y);    // 384 + CRTC_Y
+  wire  signed [15:0] xn = LIVE ? 16'sd0 - crtc_x  : XN;
+  wire  signed [15:0] yp = LIVE ? 16'sd384 + crtc_y : YP;
+  logic signed [15:0] p, q;
+  always_comb begin
+    case (sl)
+      3'd0:    begin p = cx;                        q = xn;  end
+      3'd1:    begin p = yp;                        q = cy;  end
+      3'd2:    begin p = vx0;                       q = cx;  end
+      3'd3:    begin p = vx1;                       q = cx;  end
+      3'd4:    begin p = vy1;                       q = cy;  end
+      default: begin p = vy0;                       q = cy;  end
+    endcase
+  end
+
+  logic signed [15:0] iv;
+  logic         [2:0] t1, t2;
+  logic        [16:0] sm;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      ixc <= 16'sd248; iyc <= 16'sd192;
-      il  <= -16'sd248; ir  <= 16'sd248; it <= 16'sd192; ib <= -16'sd192;   // R740: negated
+      iv <= 16'sd0; t1 <= 3'd7; sm <= 17'd0; t2 <= 3'd7;   // 7: no slot
     end else begin
-      ixc <= (LIVE ? crtc_x : 16'(CRTC_X)) + cx;
-      iyc <= 16'sd384 - cy + (LIVE ? crtc_y : 16'(CRTC_Y));
-      il  <= vx0 - cx;   // R740: stored negated (a_left = -left)
-      ir  <= vx1 - cx;
-      it  <= vy1 - cy;
-      ib  <= vy0 - cy;   // R740: stored negated (a_top = -bottom)
+      iv <= p - q;            t1 <= sl;
+      sm <= i2f_sm(iv);       t2 <= t1;    // R740: stage 1b, sign and magnitude
     end
   end
 
-  // R740: stage 1b, sign and magnitude.
-  logic [16:0] sm_xc, sm_yc, sm_l, sm_r, sm_b, sm_t;
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      sm_xc <= {1'b0, 16'd248}; sm_yc <= {1'b0, 16'd192};
-      sm_l  <= {1'b1, 16'd248}; sm_r  <= {1'b0, 16'd248};
-      sm_b  <= {1'b0, 16'd192}; sm_t  <= {1'b1, 16'd192};
-    end else begin
-      sm_xc <= i2f_sm(ixc); sm_yc <= i2f_sm(iyc);
-      sm_l  <= i2f_sm(il);  sm_r  <= i2f_sm(ir);
-      sm_b  <= i2f_sm(it);  sm_t  <= i2f_sm(ib);
-    end
-  end
-
-  // Stage 2: to float. Reset to R174's constants, which the power-up window
-  // (m2_geo's reset words) also produces.
+  // Stage 2: to float, into the slot's own register. Reset to R174's
+  // constants, which the power-up window (m2_geo's reset words) also produces.
+  wire [31:0] fv = i2f_pk(sm);
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       xc <= 32'h4378_0000; yc <= 32'h4340_0000;             // 248, 192
       a_left <= 32'hC378_0000; a_right <= 32'h4378_0000;    // -248, +248
       a_bottom <= 32'h4340_0000; a_top <= 32'hC340_0000;    // +192, -192
     end else begin
-      xc       <= i2f_pk(sm_xc);   // R740: = i2f(ixc), a stage on
-      yc       <= i2f_pk(sm_yc);
-      a_left   <= i2f_pk(sm_l);    // = i2f(-left)
-      a_right  <= i2f_pk(sm_r);
-      a_bottom <= i2f_pk(sm_b);
-      a_top    <= i2f_pk(sm_t);    // = i2f(-bottom)
+      case (t2)
+        3'd0: xc       <= fv;
+        3'd1: yc       <= fv;
+        3'd2: a_left   <= fv;   // = i2f(-left)
+        3'd3: a_right  <= fv;
+        3'd4: a_bottom <= fv;
+        3'd5: a_top    <= fv;   // = i2f(-bottom)
+        default: ;
+      endcase
     end
   end
 

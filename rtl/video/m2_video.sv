@@ -1343,14 +1343,29 @@ module m2_video #(
   // on hardware, and loading it can only make the colours more correct.
   //
   // Layout: {channel, value}, channel 0 = R, 1 = G, 2 = B.
-  logic [7:0] xlat_tbl [96];
+  //
+  // R907: ONE 32-ENTRY ARRAY PER CHANNEL, TAGGED MLAB. As a single 96-entry
+  // array read at three addresses at once it was never a RAM at all: the map
+  // put it in 768 flip-flops with three 32:1 read muxes, while R564's notes
+  // (and this comment's own history) took it for an MLAB. One array per read
+  // port is the shape an MLAB can be: written on xlat_clk, read on clk into
+  // the same registers as before. Addresses 96-127 (channel 3) were outside
+  // the old array and wrote nothing; they write nothing here either.
+  (* ramstyle = "MLAB" *) logic [7:0] xlat_r [32];
+  (* ramstyle = "MLAB" *) logic [7:0] xlat_g [32];
+  (* ramstyle = "MLAB" *) logic [7:0] xlat_b [32];
   initial begin
-    for (int c = 0; c < 3; c++)
-      for (int i = 0; i < 32; i++)
-        xlat_tbl[c*32 + i] = {i[4:0], i[4:2]};      // pal5bit
+    for (int i = 0; i < 32; i++) begin
+      xlat_r[i] = {i[4:0], i[4:2]};      // pal5bit
+      xlat_g[i] = {i[4:0], i[4:2]};
+      xlat_b[i] = {i[4:0], i[4:2]};
+    end
   end
-  always_ff @(posedge xlat_clk)
-    if (xlat_we) xlat_tbl[xlat_addr] <= xlat_din;
+  always_ff @(posedge xlat_clk) begin
+    if (xlat_we && xlat_addr[6:5] == 2'd0) xlat_r[xlat_addr[4:0]] <= xlat_din;
+    if (xlat_we && xlat_addr[6:5] == 2'd1) xlat_g[xlat_addr[4:0]] <= xlat_din;
+    if (xlat_we && xlat_addr[6:5] == 2'd2) xlat_b[xlat_addr[4:0]] <= xlat_din;
+  end
 
   logic [4:0] x_r5, x_g5, x_b5;
   logic [7:0] x_r, x_g, x_b;
@@ -1358,9 +1373,9 @@ module m2_video #(
   // -> xlat -> gamma -> pb_q, -0.278 ns at 100 MHz). See vid_r below for where
   // the cycle comes from.
   always_ff @(posedge clk) begin
-    x_r <= xlat_tbl[{2'd0, x_r5}];
-    x_g <= xlat_tbl[{2'd1, x_g5}];
-    x_b <= xlat_tbl[{2'd2, x_b5}];
+    x_r <= xlat_r[x_r5];
+    x_g <= xlat_g[x_g5];
+    x_b <= xlat_b[x_b5];
   end
 
   logic [7:0] pr, pg, pb;

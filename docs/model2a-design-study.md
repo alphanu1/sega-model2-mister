@@ -35792,6 +35792,31 @@ ANSWERS, AND THE TGP REGISTER BENCH.**
     and rf_fifo_wr (0x22 writes): 3,000,000 checks, 0 failures. No RTL
     change. All three games run on the board, as they did.
 
+**R872 -- OPEN ON THIS CORE: TEXTURED COLOUR IS DAYTONA'S LUMA MODEL, AND
+VIRTUA COP AND DESERT TANK ARE WRONG.** (Recorded on main from the Model 2A
+branch's R867; numbered clear of that branch's entries.)
+*Believed (R784):* textured colour can be taken from a fixed model of the
+luma RAM -- row 0 a ramp (i/2), row 1 its inverse (63 - i/2), any other row
+as row 0 -- and a colour table that is a straight line, read once at luma 32.
+That is Daytona's data, and Daytona is right with it.
+*Found (model2a R867, tb_m2_raster3d on MAME's own display lists):* the luma
+rows and the colour table are the GAME's data. Virtua Cop draws row 16 as row
+0 here (mean error 164 / 255, every pixel over 32) and its row 1 is 42 - i/3
+(error 53); Desert Tank's row 11 is off by 51. On the 2A games the same model
+inverted VF2's row-1 polygons outright (the "checkerboard" on heads).
+*Fix (to be ported):* model2a 526ef64 / 47dd93c -- per texel, MAME's
+L = min(63, lumaram[row][t >> 1] * luma >> 8), then the colour table and the
+output curve, from on-chip copies (the luma rows a game uses, the 3D palette,
+the colour table) filled from the CPU's SDRAM writes. ~9 M10K on this core
+(533 / 553 at s1142). Behind a switch; Daytona's frames must stay
+byte-identical with it off and match MAME with it on.
+
+**R890 -- OPEN ON THIS CORE: VIRTUA COP'S AMMO DISPLAY NEVER UPDATES.**
+(Recorded on main, numbered clear of the Model 2A branch's entries.) Ben,
+2026-10-20: the HUD's bullets always look full. Suspected: run-time texture
+updates (texture RAM written by the i960) not reaching what the renderer
+samples -- a stale cache or copy. The 2A branch's Virtua Cop 2 shows no
+bullets at all (model2a R889); whatever that finds should be checked here.
 ---
 
 ## MODEL 2A-CRX (branch model2a)
@@ -41331,3 +41356,328 @@ them (then the draw, not the sort).
 *Tools (scratch, ROM-derived output outside the tree):* M2_R3D_QUADS in
 sim/video/tb_m2_raster3d.cpp (committed); list decoders and the harness
 schedule in the R902 scratch folder.
+
+**R898 -- 15 kHz IS NOW A SCAN CONVERTER (RETROREPAIR'S), WITH HDMI KEPT AND
+ALL THREE LINE RATES.** (Main, numbered clear of the Model 2A branch.) Ben,
+2026-10-20: "on 15 kHz the implementation we have is flawed -- big black
+borders at the top and bottom and it has sync issues. Retro Repair has looked
+into this and has it working right, at least in size. The only issue is they
+took out HDMI." Needed for Model 2 and 2A.
+
+*Believed (R682, R701, R783, R799, R834, R840):* 15 kHz is the renderer
+retimed -- the same 656-pixel line at a lower pixel clock, 192 of the 384
+lines a field -- and its faults were timing faults to be tuned (vsync place,
+line count, a narrow line for the shape).
+*Now known (retrorepair, guncon-scan15):* the border is not a timing fault.
+A field holds ~240 visible lines at the game's fixed 57.52 Hz and the 1:1
+picture has 192 of them, so a fifth of the height is black whatever the
+timing; only a vertical scale fills it. Their converter (m2_scan15): the
+renderer stays on native 24 kHz timing, a ring of lines takes the finished
+picture, and its own 15 kHz interlaced timing shows 240 lines a field, 480 a
+frame, output row m from source row 4m/5 (an exact 4:5 bilinear blend). Two
+output fields are exactly two native frames (3,476,800 clk_mem either way)
+so it never drifts and adds no frame of delay; a 28.8 Hz game's two images
+are kept in one output frame by watching show_tag. Their build was 262/263
+lines only and had no HDMI (MISTER_DEBUG_NOHDMI) to fit.
+
+*What this port changes, and why:*
+  * HDMI KEPT; the 1:1 path retired instead (vid_il_c = 0 into m2_video,
+    m2_raster3d and the crosshair, so synthesis removes the renderer's own
+    interlace; ce_pix is a constant 16/100). quartus_map: m2_video -99 ALUT,
+    m2_video_timing -32, m2_raster3d -23, its arbiter -10, fb_read -6.
+  * ALL THREE LINE RATES KEPT (R840: most sets take only 15.7 kHz). The
+    converter already carried nl/ml; its output enable is now per line count
+    (547/5300, 537/5300, 861/8692 -- each exactly two native frames per two
+    fields) and "15kHz lines" (O[61:60]) stays. Same 240 lines, 656-pixel
+    line, 64-pixel hsync and 496 visible in every mode; the faster rates get
+    more blank lines and a faster pixel clock.
+  * TWO TAPS. Their four-row read served a vertical filter they built and
+    rejected (tied off); the sharp table weights rows s-1 and s+2 with 0.
+  * THE RING, SIZED BY THE DRIFT. A field reads 384 rows in 240 output lines,
+    the renderer writes them in 384 native lines (41 us each), and those take
+    different times: 15.1 kHz 15.89 ms against 15.74 (the read falls 3.6 rows
+    behind), 15.4 kHz 15.54 (gains 5.0), 15.7 kHz 15.25 (gains 12.0). At 15.7
+    the read must start ~12 rows behind and end just behind, so the ring holds
+    those rows plus the two read and the one being written. A timing model
+    (continuous rates, every read and write) and then the bench give the
+    least ring per mode, two taps: 15.1 kHz 6 lines, 15.4 kHz 8, 15.7 kHz 15
+    (14 places at no D_PX). Their 12 lines and four taps fit 15.1 only (the
+    model reproduces their bench's 85.6 / 86.0 us margins exactly).
+  * D_PX PER MODE (the delay from the native frame's first visible pixel to
+    the first output line), each in the middle of its window: 5840 / 4310 /
+    2490 output pixels at 15.7 / 15.4 / 15.1 kHz. One value cannot serve all
+    three (at 15 lines: 15.7 needs 5430-5840, 15.1 4140 at most).
+  * 24 BITS, NOT 16. 16-bit colour is not exact for this picture: the 3D is
+    RGB565, but the 2D leaves the palette through the game's colour table and
+    the gamma curve (m2_video, m2_palette), any 8 bits a channel. Storing the
+    2D's 5-bit indices and colouring after the ring (17-18 bits) would need a
+    second copy of the table and the curve: rejected as more logic.
+  * 16 LINES, NOT 15. 15 x 512 x 24 bits packed as 20 bits in 512 x 20 blocks
+    plus 4 in 8192 x 1 is 19 M10K, and quartus_map put a 115-ALUT read mux
+    behind it (15:1, 20 bits); 16 lines in one array is 2048 x 5 blocks four
+    deep, 20 M10K and a 28-ALUT mux, and doubles the margin (20 -> 40 us). At
+    99% ALM the logic is the scarcer resource. 15 lines in one array is also
+    20 M10K (2048 x 5 holds 6,144 a slice).
+  * Not taken: the light-gun beacon (GunCon parked), the field-order switch.
+  * READING THE 3D FROM DDR3 instead of storing it: no saving -- the ring
+    holds the mixed picture, and the 2D half alone is 24 bits after gamma; a
+    second scan-out of the framebuffer would add a DDR3 port and buffers.
+
+*OSD:* "Video" (O[42]) unchanged, 15 kHz is now the converted picture;
+"15kHz lines" (O[61:60]) kept; "15kHz width" (R834, O[55]) REMOVED -- it
+lengthened the 1:1 picture's line; the converter has one 656-pixel line in
+every mode (a narrow line there needs its own length, sync and alignment per
+mode -- not built), so the ~4% shorter picture at 15.7 on a fixed-height set
+is back. O[55] is reserved and must not be reused (a saved Narrow would turn
+on whatever took it).
+
+*Checked:* tb_m2_scan15 (ported from theirs; 140 native frames, every line
+count, image cadence 2 in both phases, 3, 1 and none): every output pixel
+against a first-principles blend of one native frame's rows; the two ring
+words of each pixel are the rows asked for; the row fraction steps 4m mod 5;
+hsync 64 px, 496 visible, 656 a line, 240 lines a field; every vsync interval
+exactly one native frame and field 1's picture half a line (328 px) lower;
+the re-alignment a no-op once locked (the pairing lock moves it once, at
+native frame 17, in the phase that needs it); no output frame of two images
+at cadence 2. 15 runs (3 line counts x cadence 2 phase 0 / 2 phase 1 / 3 /
+1 / none), 140 native frames each: all PASS, 16,308,480 pixels a run, 0
+blend, ring or row-step mismatches, 60 vsync intervals a run all exact.
+Margins (written-before-read / read-before-overwritten): 15.7 kHz 40.6 /
+41.4 us, 15.4 kHz 181.3 / 180.3, 15.1 kHz 210.4 / 210.3. At 15 lines (D_PX
+5630) 20.3 / 20.7 us, PASS; at 14 lines it fails at D_PX 5430, 5630 and
+5840 (rows overwritten before they are read). Mutations caught: row s+1 not
+clamped on the last line (2,976 pixels), weights swapped (1,306,464), field 1
+started on row 0's fraction (571,392). lint_top (and -DM2_NO_VCOP_GUN) clean;
+lint_idx has no converter entries; Quartus parses m2_scan15.
+
+*Cost (quartus_map, whole design, against s1142's map of the same RTL):*
+"ALMs needed" 40,417 -> 40,537 (+120); ALUT 57,774 -> 57,879 (+105);
+registers +101; DSP 88 -> 94 (+6: three x3277, three 8 x 5 products); block
+memory bits +196,608 = the ring, 2048 x 5 four deep: 20 M10K, so 533 -> 553
+of 553 expected (the fitter confirms). m2_scan15 is 205 ALUT / 129 registers
+(28 of them the read mux); the retired path gives back ~170 ALUT; the i960
+moved +71 ALUT with no RTL change (synthesis noise -- an earlier map of a
+near-identical converter read +101 ALM in all).
+
+*At risk, not verified:* THE FIT. s1142 placed 41,455 ALM from 40,417 in
+map; the same ratio puts this near 41,580, where R848's s1144-s1146 needed
+4,196-4,201 LABs of 4,191. M10K would be 100%. If it does not fit, the
+levers in order of cost: a seed sweep; RING 15 with the 20 + 4 split (one
+M10K back, ~+87 ALUT -- worse for the fit); dropping 268/269 (~-10 ALUT);
+MISTER_DEBUG_NOHDMI (retrorepair's; Ben has ruled it out). The board and a
+CRT: not seen.
+
+*Consequences:*
+  * R872 (the luma fix, ~9 M10K) can no longer be had from free M10K on main:
+    with the converter main is at 553 / 553. It needs blocks freed elsewhere,
+    or the converter limited to 15.1 / 15.4 kHz (8 lines: 2048 x 5 two deep,
+    10 M10K) -- which R840 argues against.
+  * MODEL 2A (0 M10K spare, ~98-99% ALM) needs the same 20 M10K and ~+120
+    ALM net found there before this can merge in working order; the merge
+    main -> model2a carries the RTL and the OSD unchanged (model2a's Model2.sv
+    has the same 1:1 path, VGA_F1 = vid_field).
+
+**R899 -- VIRTUA COP'S AMMO DISPLAY IS A 3D REVOLVER IN A LATER WINDOW, NOT A
+TEXTURE; THIS CORE SORTED BY z ALONE AND HID IT UNDER THE SCENE. FIXED: THE
+WINDOW IS THE TOP OF THE SORT KEY, FOR VIRTUA COP ONLY (the 2A branch's R889,
+ported).** (Ben, Model2_20261016: "the bullets show but do not update when
+you fire -- it always looks full"; R890.)
+
+*Believed (R890, HANDOFF):* run-time texture updates -- the i960 rewriting
+the bullets in texture RAM per shot -- not reaching what the renderer
+samples (a stale texel cache or copy); the lead from model2a R889 was a
+stale object pointer or polygon data in the walker.
+
+*Measured (MAME 0.289 vcopa, build/mame289-mip; a scripted game -- coin 40 s,
+start 41.5 s, a shot at 52 s picks the stage, play from ~54.3 s -- shots,
+write taps on texture RAM, luma, tile / char RAM, palette, buffer RAM, the
+geometrizer and the TGP FIFO; M2GEO walks 1728 / 1843 and 35 more at 1 s
+spacing 55-89 s; M2DIFF frames 1172 / 1287 = walks 1728 / 1843):*
+  1. THE AMMO DISPLAY IS A REVOLVER CYLINDER, bottom left: 13 polygons from
+     POLYGON ROM, ONE OBJECT PER ROUND COUNT -- six rounds oba 0x80e588 /
+     tha 0x5384 / tpa 0x5a47e, five 0x80e65b / 0x53d0 / 0x5a526, three
+     0x80e801 / 0x5468 / 0x5a676 -- under a rotation matrix that turns a
+     chamber a shot. Six side faces (h0 0x4009), six translucent chamber faces
+     (0x6009, texture (0,0) sheet 1: the empty chambers) and ONE translucent
+     quad for the loaded rounds whose texture position IS the count (h1/h2
+     7001/1900 six, 0801/1980 five, 0401/1882 three -- (0,128), (0,192),
+     (64,64)). It is the list's last object group, after its fifth
+     window_data: WINDOW 5, z bucket 45,635. The scene is window 1, z buckets
+     17,040-40,601 (lists 1172, 1287). It also flies in large and full at a
+     stage's start (54.3-54.6 s), still at z 45,185-45,635.
+  2. NOTHING ELSE CHANGES PER SHOT: no texture RAM write in play (the only
+     writes are the stage load, 54.26-54.41 s), no luma, palette or tile write
+     that tracks the shots; the i960 writes no buffer RAM (the list comes from
+     the TGP, fed through the FIFO). Only the list's object addresses and the
+     matrix change.
+  3. OUR WALKER AND GEOMETRY ARE RIGHT. geodiff_ra (the core's walker,
+     read-ahead and geometry) on walks 1728 / 1843: the bullets' quad comes
+     out with tex 0x301113 (five: texy 6, texx 0, sheet 1) and 0x105113
+     (three: texy 2, texx 2) -- MAME's headers -- at key 0xb243 = 45,635.
+     No stale object, pointer, polygon datum or texture.
+  4. THE RASTERISER HIDES IT. tb_m2_raster3d, the core configuration (FTB,
+     PXC, FRB 2, M2COV, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3, TXNS / TXRSP 4,
+     TXK 16, TXLW8, MIP 1, MIPZ 3, PXK 0), MAME's lists: the revolver is NOT
+     DRAWN AT ALL -- the ground (window 1, nearer by z) wins every pixel under
+     it. Drawn alone, the same RTL draws it exactly, five and three rounds.
+     Over the 35 sampled walks (25 with the revolver; MAME's counts six and
+     five, auto-reload on), 0 of its ~2,500 pixels survive in any of them.
+     MAME draws window by window, last first (render_polygons), first write
+     winning, so window 5 is in front of window 1 whatever the z -- R889's
+     finding on Virtua Cop 2, the same mechanism on Virtua Cop.
+
+*So "shows but always full" is NOT reproduced:* on the bench this core never
+shows the revolver in play, full or otherwise. INFERRED, not settled: Ben
+saw it where the scene did not cover the bottom left (a scene, angle or
+moment not sampled here -- the fly-in is full by definition), or saw
+something else as the bullets. The board settles it; nothing found on the
+path (walker, read-ahead, texel cache, texture RAM) holds a stale picture.
+
+*The fix (R889's, ported; on main as the 2A branch has it, plus a run-time
+gate):* m2_geo counts window_data per walk (cur_window = 0 at the walk's
+start, saturating at 15) and latches it with each object (obj_win);
+m2_geometry WINKEY puts {15 - window, z} in q_z[19:0]; m2_raster3d / the
+quad store sort a 20-bit key (KW 20, five radix passes, the first started in
+idx_b so the fifth lands in the bank -- R889's ODDP). SELECTED AT RUN TIME
+FOR VIRTUA COP ONLY (Model2.sv wk_en = is_vcop, registered): for Daytona and
+Desert Tank obj_win is held at 15 (the nibble is 0) and the store's new
+key_hi input low runs the old four passes starting in the bank -- the 16-bit
+sort exactly, in the same cycles. M2_NO_WINKEY builds KW 16 (the old core).
+
+*Evidence:*
+  - Virtua Cop, MAME's lists, window error = mean max-channel error over
+    MAME's pixels of that window (the scene's ~40-48 is R872's luma model,
+    still open):
+        list 1172 (five rounds): revolver 80.4 -> 51.9, scene 47.6 = 47.6
+        list 1287 (three rounds): revolver 92.9 -> 45.3; the window-2
+          overlay (42 flat polygons, z 17,322) 7.0 -> 0.6; scene and
+          window 4 unchanged (39.6, 44.0)
+      The revolver now shows five and three rounds, as MAME (bench crops).
+      Draw +0.5% / +1.3% (646,278 -> 649,461; 715,356 -> 724,894 core
+      cycles): the revolver drawn, and the fifth pass.
+  - geodiff (new geodiff_wk target) on walks 1728 / 1843: our quads
+    identical to the old RTL's but for the window nibble -- 0xE x 1,725 and
+    0xA x 15; 0xE x 791, 0xD x 42, 0xB x 1, 0xA x 15 (MAME's windows 1, 2, 4,
+    5). geodiff_ra with the key off: ours.txt byte-identical to the old RTL.
+  - Daytona and Desert Tank, the KW 20 bench with the key off (the core's
+    state for them) against main's bench: pixel hashes, the sort-ready
+    cycle and the draw's cycle count identical on Daytona f1000, f2000, f2300, f3910, f5000, f7000,
+    f9000, car select (Daytona '93) l3700, l3950, and Desert Tank attract
+    f400 (1,471 polygons) and f1200; Virtua Cop 1172 / 1287 with the key off
+    identical to main too. (A first version without key_hi ran the fifth
+    pass for every game: pixels identical, the sort 22% longer -- ~3,900
+    clk_sys cycles on f1000 -- so key_hi was added.)
+  - test_m2_quad_store, test_m2_raster3d, test_m2_geo, test_m2_geometry,
+    test_m2_geometry_mipz PASS; lint_top clean (and with -DM2_NO_WINKEY);
+    lint_idx the same 147 findings as a2caf9b (line numbers aside);
+    quartus_map --analyze_file 0 errors on m2_geo, m2_geometry,
+    m2_quad_store, m2_raster3d, Model2.sv.
+  - AREA, quartus_map 17.0, whole design:
+        a2caf9b (main)     40,417 ALM est.  57,774 ALUT  49,295 regs  4,379,775 bits  88 DSP
+        this               40,470           57,763       49,310       4,387,967       88
+    The key RAM 2048 x 16 -> 2048 x 20 (+8,192 bits) stays four M10K (the
+    2048 x 5 mode); the quad store's memories are the same twelve: 0 new
+    M10K (533 / 553 unchanged). +53 ALM estimated is at synthesis noise
+    (R848: +-40); the quad store itself +6 ALUT, +2 registers.
+
+*Daytona's car select has three windows (l3700: 3 / 1,351 / 2 polygons in
+windows 1 / 2 / 3)* -- with the key on it would follow MAME there too; it is
+off for Daytona and Desert Tank so they stay exactly as released. Turning it
+on for all games is one line (wk_en) and a decision for Ben.
+
+*Model 2A (model2a R889) shares the cause:* the same z-only key hid Virtua
+Cop 2's revolver (and Manx TT's tachometer needle, R893); there it showed no
+bullets at all, here the report was "always full" -- the same fix.
+
+*What the board must show (Virtua Cop):* the revolver bottom left in play
+over the ground and walls, a chamber emptying and the cylinder turning a
+chamber per shot, full after a reload; the fly-in at each stage's start.
+Daytona and Desert Tank exactly as before.
+
+*Tools:* sim/io/mame_m2_vcop_ammo.lua (the scripted game, write counts per
+frame, M2GEO dumps on time); MAME runs as tools/m2b-mame.sh does, writable dirs and M2LOD_OUT in
+the session's scratch (the patched build writes /tmp/m2lod.txt when
+M2LOD_OUT is unset -- set it). Quartus rewrites Model2.qsf (files.qip's
+entries and four SDRAM assignments appended) on --analyze_file; run it in a
+copy of the tree, or restore the QSF afterwards.
+
+
+**R905 (main) -- THE SAME BURST-REGION FIX ON THE ORIGINAL MODEL 2 CORE.**
+i960_memmap is shared, and main carried the same range: texture RAM + mirrors
+ended at 0x12600000, so sheet 1's mirror 0x12600000-0x127FFFFF was not a burst
+region and a multi-word store there wrote all its words to its first address.
+The full finding (MAME write tap against the whole-core bench, Dynamite Cop)
+is R905 on branch model2a, where the stripes were seen. Daytona, Desert Tank
+and Virtua Cop show no stripes on the board, so they either do not upload
+through that mirror or not with stq; the range is MAME's
+(model2_tgp_mem: both sheets .mirror(0x200000) with BURST) either way, and
+the core should match it. Not fitted on main at the time of writing.
+
+**R907 (main) -- AREA FOR THE RELEASE: ~820 ALM BACK, NO BEHAVIOUR CHANGED.**
+main-next (2cebd70: scan15 R898 + Virtua Cop's window key R899 + R905) no
+longer fitted reliably: s1254-s1256 needed 4,192-4,194 LABs of 4,191, and
+s1249/s1250 fitted at 41,463 / 41,910 ALM with clk_sys -3.4 / -2.1 ns. The
+worst clk_sys paths in s1249 (m2_geo_engine xhalf / m2_eng_ra data ->
+poly_uv*, -3.29 ns) are ONE LUT deep with 10.8 ns of interconnect -- the
+fitter's congestion at 100% LABs, not logic depth -- so the lever is
+area, not a register on the path (R848: at 99% the area such fixes add costs
+more than the margin they buy). Decisions rest on section 7 Tier 1 (no
+accuracy loss) and section 5.6 (M10K is spent: 553/553, so nothing here may
+take a block). Measured with quartus_map (17.0, same QSF), whole design,
+"Estimate of Logic utilization (ALMs needed)":
+
+    2cebd70 (main-next)                         40,579
+    + viewport converter shared (4c0117a)       40,310   -269
+    + xlat table in three MLABs (d741e1a)       39,761   -549
+    total                                                 -818
+
+  1. m2_geo_view: SIX int-to-float units in parallel (575 ALUT; 290.6 ALM
+     placed in s1250) for six values that change once an object. One unit now
+     visits the six slots in turn (one subtractor, one sign/magnitude, one
+     encode); each output is rewritten every 6 cycles and right within 8 of
+     its inputs changing (was 3). Values bit for bit the same. 140 ALUT.
+     Verified: test_m2_geo_view PASS (window() now ticks 8, and FAILS at 7 --
+     the bound is tight); geodiff_ra on four MAME walks (w1000, w2300, w5000,
+     w8000; M2GD_POOLHASH, M2GD_STATE): pool hash (every FP operand on every
+     unit, every cycle) and ours.txt identical to 2cebd70's. Margin: the same
+     walks are still identical with the converter slowed to one slot per 64
+     cycles (~390 cycles of latency), and differ only at one per 65,536 --
+     the bench sees the view, and 8 cycles is far inside what the walk allows
+     (R760: the walk waits for the geometry to go idle between objects).
+  2. m2_video's colour translation table was NEVER A RAM. R564 described it
+     as "an MLAB written on clk_sys, read asynchronously on clk_mem", and it
+     was not: one 96-entry array read at three addresses at once, Quartus
+     built it as 768 flip-flops and three 32:1 x 8 read muxes (no RAM-inference
+     message at all; lint_idx flagged it every time as "pre-existing"). Split
+     into one 32 x 8 array per channel (one read port each), tagged MLAB:
+     three dual-clock altdpram LUTRAMs, written on clk_sys, read into the same
+     x_r/x_g/x_b registers on clk_mem; the power-up pal5bit table is honoured
+     (initialised from a MIF, checked: entry 31 = 0xFF). Quartus absorbs
+     pal_data_q[4:0] as the read-address register, so the lookup's latency is
+     unchanged. Addresses 96-127 wrote nothing before (outside the array) and
+     write nothing now. Warning 276023 ("functionality differs") is the
+     cross-clock read-during-write, old or new data -- what R564 already said
+     of it. Cost: three LABs. Verified: new bench test_m2_video_xlat (the
+     2cebd70 m2_video beside the new one, the same hashed tile/glyph/palette
+     data, random table writes 0-127 on a second clock after a frame on the
+     power-up table): 7.6 M cycles, 0 differences in pixel, syncs or palette
+     address; two deliberate faults (channel 3 into blue, one wrong power-up
+     entry) each fail it by over a million cycles. test_m2_video_timing,
+     _ovr and _r826 pass. lint_top clean; lint_idx no longer lists m2_video.
+
+Considered and not done:
+  - poly_uv* path (-3.29 ns): a register after the half select would move
+    the uv writes a cycle; not needed if the area relieves the congestion,
+    and R848 says such registers lose at 99%. Re-measure after the fit.
+  - m2_recip_rom to M10K (~150 ALM, its read is already registered) -- no
+    free M10K; the candidates for freeing two (ioboard DPRAM as TDP, loader
+    FIFO merged) touch paths with board-found bugs behind them (R65, the
+    loader's byte lanes) for one or two blocks each.
+  - i960_top's write-back mux (336:1, ~1,800 ALUT after restructuring) and
+    the FPU units: real area, but CPU semantics; not without the lockstep.
+  - debug counters (dbg_mtx_n, dbg_walk_objs, ...): present in the post-map
+    netlist but marked "dangling" and swept by the fitter (s1250's emu has
+    ~2,300 fewer registers than its map) -- nothing to gain.
+  - sys/ (two OSDs ~930 ALM, pll_hdmi_adj ~436): the framework's; HDMI and
+    the analog output (scan15) both need theirs.
+Map numbers are estimates; the fit decides. Not fitted at the time of writing.

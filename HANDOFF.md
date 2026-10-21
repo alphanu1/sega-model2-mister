@@ -793,6 +793,140 @@ board differences are study R832 (MODEL 2A-CRX): same i960 and TGP; SCSP
 315-5649 I/O controller read by the i960 directly (and a 93C46 EEPROM)
 replaces the I/O board's Z80 and dual-port RAM; 256 KB work RAM, no program
 mirror. Bring-up ROM: to be decided (see the R-entry that starts this branch).
+## 2026-10-21: PUSHED main -- release Model2_20261021
+
+RELEASED: Model2_20261021.rbf = s1264 (d2e5c1c; clk_sys -0.094, clk_mem
++0.463, clk_i960 +1.500, hold +0.194; 40,936 ALMs, 553/553 M10K), md5
+44c8e69e... Contents: the 15 kHz scan converter (R898, retrorepair's design;
+confirmed on CRTs by three testers on s1243), Virtua Cop's ammo display (R899;
+confirmed on the board on s1264 by Ben after the push), the texture burst region (R905), and
+R907's area savings. Before R907 main-next did not fit (s1254-56, short by
+1-3 LABs) or missed clk_sys by 2-3 ns (s1249/50); after it s1260 -1.443,
+s1263 -0.666, s1264 -0.094. The worst clk_sys paths move seed to seed
+(geo_clip -> fp_pool, fp_add -> geo_clip, pair cache -> m2_geo): routing, not
+depth. If a later change pushes it over again, R907 lists what was rejected
+and why (recip ROM to M10K, i960 write-back mux).
+
+## FUTURE ENHANCEMENT (investigate): the i960's wait states
+
+The board's system controller has a CPU-control block at 0x00E00000-0x00E00037
+("CPU control (wait-states)" in MAME's map) that each game programs at boot:
+the extra bus cycles per address region. They change only how long each i960
+access takes, not what it computes. MAME maps the block as plain RAM (stored,
+read back, no effect); this core drops the writes and reads 0 (T_IO, no case
+in the I/O read mux). MAME's own notes suspect Sega Rally's starting-grid car
+placement depends on the CPU's exact pace ("may need wait state emulation").
+To investigate, in order: (1) what each game writes there and whether any
+reads it back (a read-back of 0 can steer a game, as R896's render mode did
+for Manx TT) -- a read-back like MAME's is a few ALM; (2) the block's format
+(undocumented); (3) per-region minimum access times on our bus where our
+i960 (40 MHz, 8 KB I-cache) is faster than the board's 25 MHz with its wait
+states -- padding can only slow accesses, so it cannot cure slowdowns, which
+come from SDRAM waits longer than the board's.
+
+## 2026-10-20: branch main-area -- ~820 ALM back for the release (R907). NOT FITTED.
+
+main-next (2cebd70) stopped fitting: 4,192-4,194 LABs of 4,191 on three
+seeds, and the two that fitted missed clk_sys by -3.4 / -2.1 ns (worst path
+one LUT deep, 10.8 ns of routing: congestion). Branch main-area = main-next
++ two area commits, no behaviour change (quartus_map, ALMs needed):
+  * 4c0117a m2_geo_view: one shared int-to-float, not six. 40,579 -> 40,310.
+    Outputs right within 8 cycles of a window change (was 3); geodiff's pool
+    hash identical on four walks, and still identical at ~390 cycles.
+  * d741e1a xlat table: three MLABs instead of 768 flip-flops (it was never
+    the MLAB R564 said it was). 40,310 -> 39,761. New bench
+    test_m2_video_xlat (old against new, 7.6 M cycles, 0 differences).
+NEXT: fit it (3 seeds); if clk_sys still misses on the poly_uv paths, R907
+lists the register that would fix them. Not on the board.
+
+## 2026-10-20: branch scan15 -- 15 kHz is retrorepair's scan converter, HDMI kept (R898). NOT BUILT.
+
+Ben: the 15 kHz picture has big borders top and bottom and sync issues;
+retrorepair's guncon-scan15 fixes the size but drops HDMI. Ported to main
+(branch scan15, from a2caf9b; for main first, then main -> model2a):
+  * rtl/video/m2_scan15.sv (retrorepair's, 57faad7): the renderer stays at
+    native 24 kHz; a 16-line ring takes the finished picture and the
+    converter outputs 240 lines a field, 480 a frame, 384 -> 480 by an exact
+    4:5 blend, no frame of delay, fields paired to the game's images.
+  * Changes from theirs: two taps; 16 lines (they had 12, enough for 15.1 kHz
+    only -- 15.7 kHz needs 15 because the read gains 12 rows on the write over
+    a field); D_PX per line count; all three line rates kept (R840); HDMI kept;
+    no light-gun beacon.
+  * The 1:1 15 kHz path is tied off (synthesis removes it). OSD: "15kHz
+    width" (O[55]) removed, the bit RESERVED; "15kHz lines" kept.
+  * Bench: sim/video/run_scan15.sh [mode] [frames] [cad] [ph] -- 15 of 15
+    PASS (three line rates x five image cadences, 140 frames, 16.3 M pixels
+    each, 0 mismatches); 14 lines fails, 15 passes (R898 lists the checks).
+  * quartus_map (whole design, vs s1142's): ALMs needed 40,417 -> 40,537,
+    DSP 88 -> 94, M10K 533 -> 553 of 553 expected (the ring is 20).
+OPEN: the fit (s1142's ratio puts it near 41,580 ALM, where R848 failed by
+5-10 LABs) -- Ben runs it; then a CRT and HDMI at 15 kHz on the board. R872's
+~9 M10K now has no free M10K on main. Model 2A needs 20 M10K and ~120 ALM
+found before this carries there.
+
+## 2026-10-20: OPEN BUG, TO BE FIXED HERE -- Virtua Cop's ammo display never updates (R890)
+
+## 2026-10-20: branch vcop-ammo -- Virtua Cop's revolver sorted by window (R899); not built, not on the board
+
+Virtua Cop's ammo display (R890, "always full") is NOT a texture: it is a 3D
+revolver from polygon ROM, one object per round count (the loaded-rounds
+quad's texture position is the count), drawn in the list's WINDOW 5 at z
+bucket 45,635 -- behind the whole scene by z. MAME draws the last window
+first and in front; this core sorted by z alone, so on the bench the
+revolver is never drawn in play (0 of ~2,500 px in 25 sampled lists). The
+walker, read-ahead, texture RAM and texel cache are all right (geodiff: the
+per-count headers come out as MAME's). Fix = the 2A branch's R889 ported:
+the window count in the sort key ({15 - window, z}, KW 20), SELECTED AT RUN
+TIME FOR VIRTUA COP ONLY; Daytona and Desert Tank keep the 16-bit sort in
+the same cycles (bench: pixel hashes and sort timing identical on 11
+Daytona / Desert Tank lists). 0 new M10K, +53 ALM est. (noise). M2_NO_WINKEY
+builds the old core. Study R899 has the numbers.
+
+NOT reproduced: Ben's "shows but always full" -- the bench shows it hidden,
+not frozen. The board settles what he saw. TO CHECK ON THE BOARD (a build of
+this branch): the revolver bottom left in play, a chamber emptying and the
+cylinder turning per shot, full after a reload; Daytona and Desert Tank as
+before. Open decision for Ben: the key for every game (Daytona '93's car
+select has three windows) -- one line, wk_en.
+
+Findings that turned out wrong this session: R890's "run-time texture
+updates" (no texture RAM write in play at all); the lead "stale object
+pointer / polygon data in the walker" (geodiff shows the right object).
+Tooling: the patched MAME writes /tmp/m2lod.txt unless M2LOD_OUT is set;
+quartus_map --analyze_file rewrites Model2.qsf in place (restore it, or run
+in a copy).
+
+## 2026-10-20: (FIXED BY R899 on vcop-ammo) Virtua Cop's ammo display never updates (R890)
+
+Ben, on the Model 2 core: Virtua Cop's bullet display (the HUD's bullet
+textures) always shows full -- it does not update as shots are fired or on
+reload. The game plays. Likely the same path as the 2A branch's Virtua Cop 2,
+whose bullet textures do not appear at all (model2a R889): textures the game
+rewrites at run time (texture RAM written by the i960) -- a cached or
+mirrored copy not refreshed after the CPU's write, or the write not reaching
+what the renderer reads. Check against MAME (the texture RAM writes per shot
+and which polygons sample them) and Model 1's handling; port whatever model2a
+R889 finds if it is the shared path.
+
+## 2026-10-17: OPEN BUG, TO BE FIXED HERE -- textured colour is Daytona's luma model (R872)
+
+Found on the Model 2A branch (model2a R867, fixed there in 526ef64 / 47dd93c,
+merged 8877d15) and PRESENT ON THIS CORE: m2_span_tex (tlum / tfin) and
+m2_geo_engine's tslope hardwire Daytona's luma RAM (row 0 = i/2, row 1 =
+63 - i/2, every other row as row 0) and a straight colour table read once at
+luma 32. Measured against MAME's own lists through tb_m2_raster3d:
+  * Virtua Cop: luma row 16 drawn as row 0 -- mean error 164 / 255, every
+    pixel of those polygons over 32; its row 1 is 42 - i/3, not Daytona's
+    ramp (error 53).
+  * Desert Tank: row 11 off by 51.
+  * Daytona: correct (the model was written from it).
+THE FIX is model2a's: each texel coloured as MAME does (lumaram[row][t>>1] *
+luma >> 8, the colour table, the output curve), with on-chip copies of the
+luma rows each game uses, the 3D palette and the colour table, filled from
+the CPU's SDRAM writes. Cost there: ~9 M10K (this core is at 533 / 553),
+~+30 ALM, +1 DSP. Port it behind its own switch, with the luma rows per game
+taken from MAME's data (Virtua Cop: 0, 1, 16; Desert Tank: include 11), and
+prove Daytona's frames unchanged.
 
 ## 2026-10-16: RELEASE Model2_20261016 (s1142) -- Daytona, Desert Tank, Virtua Cop
 
