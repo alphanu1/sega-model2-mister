@@ -26,14 +26,32 @@ Each of these also has a `[15kHz CRT]` MRA.
 ## Model 2A core — `Model2A.rbf` — BETA
 
 **This core is a beta.** All eleven games below boot and play, but there are
-known bugs, and Sega Rally and Manx TT slow down in places. Please report anything you
-find, and say which game and where.
+known bugs, and some games still slow down in places, mainly Sega Rally and
+Manx TT. Please report anything you find, and say which game and where.
+
+### New in this build (`Model2A_20261021b`)
+
+- **15 kHz for every game.** The Model 2 core's new scan converter
+  (retrorepair's design) is now in the 2A core too, with HDMI kept, and every
+  2A game has a `[15kHz CRT]` MRA. Not yet tested on a CRT with the 2A games:
+  reports very welcome. See *On a 15 kHz CRT* below.
+- **Dead or Alive's floors and buildings are fixed.** The core was
+  mip-mapping a game MAME never mip-maps, and read pictures from parts of
+  texture memory the game never fills.
+- **Mip-mapping matches MAME's choice in every 2A game.** The core used to
+  decide when to mip-map with Daytona's settings; each game now uses its own,
+  as MAME does. With `Mip-mapping` on `Sharp`, distant scenery in Virtua
+  Fighter 2, Sega Rally, Virtua Cop 2, Manx TT and the rest is closer to MAME,
+  and Hanguk Pro Yagu 98's is sharper.
+- **Motor Raid's high-score screen** no longer has streaks in its 2D.
+- **Sega Rally's mirror:** the black mirror some of you saw was the first
+  beta (`Model2A_20261020`). It has worked since `Model2A_20261020b`.
 
 ### What to copy
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261021.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261021b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs below | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -41,7 +59,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261021.rbf` has the md5 `1420ef26f2a0dd8f4f8dd7b13ecb6b85`. As with
+`Model2A_20261021b.rbf` has the md5 `fe714caeb09266ebb32a297b78693f00`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -57,10 +75,10 @@ ROM sets: MAME 0.289.
 | Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
 | Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check. Occasional slowdowns |
 | Hanguk Pro Yagu 98 | `Hanguk Pro Yagu 98.mra` | `hpyagu98.zip` | `hpyagu98` | Plays. **Needs the 128 MB SDRAM module.** The MRA loads the factory settings MAME ships in the zip; some surfaces' shading may differ slightly from MAME |
-| Sky Target | `Sky Target.mra` | `skytargt.zip` | `skytargt` | Plays. **Needs the 128 MB SDRAM module.** Sound not yet checked on a board |
-| Dynamite Cop (Export, Model 2A) | `Dynamite Cop (Export, Model 2A).mra` | `dynamcop.zip` | `dynamcop` | Plays. **Needs the 128 MB SDRAM module.** Its 315-5881 protection checks are patched out by the MRA. See known bugs for its sound |
-| Motor Raid (Twin) | `Motor Raid - Twin.mra` | `motoraid.zip` | `motoraid` | Plays. **Needs the 128 MB SDRAM module.** The high-score screen's 2D has streaks (being fixed). The Twin/DX set (`motoraiddx`) is not supported |
-| Dead or Alive (Model 2A) | `Dead or Alive (Model 2A).mra` | `doaab.zip` and its parent `doa.zip` | `doaab` | Plays. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA. A few scenery textures are wrong (being looked at) |
+| Sky Target | `Sky Target.mra` | `skytargt.zip` | `skytargt` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Cop (Export, Model 2A) | `Dynamite Cop (Export, Model 2A).mra` | `dynamcop.zip` | `dynamcop` | Plays. **Needs the 128 MB SDRAM module.** Its 315-5881 protection checks are patched out by the MRA |
+| Motor Raid (Twin) | `Motor Raid - Twin.mra` | `motoraid.zip` | `motoraid` | Plays. **Needs the 128 MB SDRAM module.** The Twin/DX set (`motoraiddx`) is not supported |
+| Dead or Alive (Model 2A) | `Dead or Alive (Model 2A).mra` | `doaab.zip` and its parent `doa.zip` | `doaab` | Plays. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
 
 ### Known bugs
 
@@ -68,14 +86,7 @@ ROM sets: MAME 0.289.
   drops where the geometry processor has the most work. Being looked at.
 - **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
   cabinet's extra sound board isn't emulated, so a few extra sounds are
-  missing. (The freeze when you hit another rider is fixed in this release.)
-- **Dead or Alive** has a few wrong textures on the scenery: some floor
-  squares and parts of the buildings don't match their neighbours. If
-  `Mip-mapping` is on and textures go black, set it to `Off`.
-- **Motor Raid's high-score screen** has streaks in its 2D layers, where the
-  tile layers run out of time on a line. Fixed in the next build.
-- **Dynamite Cop's sound** was reported wrong on an earlier build and hasn't
-  been checked again since. Reports welcome.
+  missing.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall, and Virtua Fighter 2's hits sit well under its music.
   That is how MAME 0.289 mixes these games, sample for sample, and the core
@@ -89,14 +100,10 @@ ROM sets: MAME 0.289.
 - **Virtua Fighter 2 froze in attract** once on an earlier build. It hasn't
   happened since the geometry processor fixes; if it does, please say where.
 - **No link play** for Sega Rally yet.
-- **15 kHz on a CRT is not yet tested with the 2A games.** In
-  `Model2A_20261021.rbf` it is the older 15 kHz picture (the game's 384 lines
-  one to one, with black borders), and only Virtua Fighter 2 has a
-  `[15kHz CRT]` MRA. The next Model 2A build has the Model 2 core's scan
-  converter (see *On a 15 kHz CRT* below: the same picture, the same
-  `15kHz lines` setting, HDMI kept) and a `[15kHz CRT]` MRA for every game;
-  until then, to make one, copy an MRA and set bit 7 of the game ID byte
-  (index 4).
+- **15 kHz on a CRT is not yet tested with the 2A games.** It's the same
+  converter as the Model 2 core's, which testers have confirmed on their
+  CRTs. Load a game's `[15kHz CRT]` MRA, or set `Video` to `15kHz
+  interlaced`.
 
 ### Sound settings
 

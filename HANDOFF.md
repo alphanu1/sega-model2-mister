@@ -1,5 +1,24 @@
 # Handoff
 
+## 2026-10-21 (afternoon): PUSHED model2a -- the 2A beta Model2A_20261021b
+
+RELEASED (releases/, BETA): Model2A_20261021b.rbf = s1278 (eb5a700; clk_sys
+-0.328, clk_mem +0.256, clk_i960 +1.684, hold +0.180; 41,389 ALMs, 547/553
+M10K), md5 fe714cae... Ben on the board: "all games on this build are good".
+In it: the 15 kHz scan converter merged from main (R908; untested on a CRT
+with 2A -- users will report), a [15kHz CRT] MRA for every 2A game, R907's
+area, R909's 27 M10K back (LFO factored, shift-register inference off in
+emu, three small arrays to MLAB), DOA's mip fix (R911), MAME's mip rule for
+every 2A game (R912), Motor Raid's 2D (R906). Sega Rally's black mirror
+(user report) bisected on the board: s1221 black, s1238 fine -- R889's
+window key, the user ran the first beta (R902 closed). Wait states (R904)
+parked by Ben; the R910 window probe parked (did not fit).
+OPEN: Daytona mip fix for GitHub issue #11 on branch mip-issue11 (R913:
+Sharp = MAME's per-pixel level, Medium = old Sharp, Smooth = old Medium;
+s1284-86 fitting) -- Ben tests, then main; its 2A port needs two more bits in
+the 2A quad store's texture word (R913 lists the options). Slowdowns (Rally,
+Manx TT) remain.
+
 ## 2026-10-21: m2a-scan15 -- 27 M10K back for the 15 kHz ring (R909). NOT PUSHED, NOT FITTED
 
 R908's blocker, answered without changing anything the 2A core computes:
