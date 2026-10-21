@@ -123,9 +123,12 @@ fit-*.blocks
 fit-*.summary
 
 # ---- releases/ IS PUBLISHED ----
-# One dated .rbf, the MRA and a README, in the layout MiSTer expects. These
+# One dated .rbf, the MRAs, the link-play helper (helpers/) and a README, in
+# the layout MiSTer expects. These
 # negations MUST STAY LAST: gitignore takes the last matching rule, and the
 # blanket `*.rbf` above (Quartus output) would otherwise swallow the release --
 # `git add releases/` succeeds and stages nothing.
 !/releases/
 !/releases/*.rbf
+!/releases/helpers/
+!/releases/helpers/**
