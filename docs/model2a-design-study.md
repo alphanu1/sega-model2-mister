@@ -42676,3 +42676,133 @@ file, analyze_file 0 errors, test_m2_video_ovr PASS.
 shows the 3D, MAME the back tile): no screen found has it. Whether the
 board's ranking really shows the icons: INFERRED from the layout, check it
 on the board.
+
+
+**R921 -- DEAD OR ALIVE'S "CRASH" IN THE FIRST MATCH (GitHub #18) IS THE
+GAME'S OWN TAMPER CHECK, TRIPPED BY R887'S MRA PATCHES: THE TWO PATCHED CALLS
+SIT INSIDE A BOOT CHECKSUM. NO i960 FORM IS MISSING IN ANY 2A GAME, VF2
+INCLUDED (A NEW CENSUS BY OPERAND VARIANT). THE FIX IS TWO MRAs: THE CHIP'S
+ROUTINES PATCHED INSTEAD OF THEIR CALLS. NO RTL CHANGED. REPRODUCED AND FIXED
+IN MAME 0.289; THE CORE'S BOOT CHECKED IN tb_m2_boot. NOT ON A BOARD.**
+(GitHub #18, Model2A_20261021b = s1278: "crashes going into the first match
+... a few seconds after. Fighters will disappear, music keeps playing" -- the
+photo: round 1, Kasumi vs Zack, 23"68 / 00'06"31, the HUD drawn, the whole
+3D area Zack's red-orange sunset backdrop. GitHub #17: Virtua Fighter 2
+"crashes randomly", attract included.)
+
+*Believed (Ben):* "a missing FP function again" -- an i960 form the core traps
+on, as Manx TT's cosr (R903).
+
+*THE CENSUS (R869's form log, extended -- sim/io/mame_i960_formlog.patch now
+also logs every operand VARIANT: the form with its m1 m2 m3 s1 s2 bits, the
+FP operand field itself where its m bit is set (fp0-fp3 or which literal),
+the multi-word ops' register alignment, MEM's mode and scale, COBR's m1 / t /
+s2; sim/io/i960_formcheck.cpp steps the reference on every variant's first
+word in the 2A core (FR + F2A, vc_en high), in VF2's (vc_en low: none of FR /
+VC / F2A live) and in main's. MAME 0.289 m2lod, headless, the play scripts):*
+  set       session                                        forms  variants  traps
+  doaab     694 s + 681 s (two runs, coins every ~170 s,
+            dig; many matches)                             172    371       0
+  vf2       700 s, coins 60/180/300/420/600, fights; and
+            ~700 s of attract alone                        229    300       0 (vc_en low)
+  srallyc   327 s, rally                                   150    438       0
+  vcop2     308 s                                          202    256       0
+  zeroguna  384 s                                          153    315       0
+  pltkidsa  416 s, dig                                     153    286       0
+  manxtt    450 s, bike (never left the motion check:
+            R903's chase session holds the race forms)     111    152       0
+  hpyagu98  441 s, dig                                     172    372       0
+  skytargt  450 s, sky                                     160    349       0
+  dynamcop  281 s, dig                                     180    299       0
+  motoraid  438 s, bike                                    170    327       0
+  Every PC every set executes is below 0x200000 except Sega Rally's, Zero
+  Gunner's and Pilot Kids' RAM copies (R866), which the log sees anyway. The
+  operand tuples R869 checks (the module's result against MAME's, every
+  distinct one): atanr 28,065, remr 13,694, sinr 1, cvtzril 36,412, cpysre
+  21,227 (Rally); cvtzril 853,523 (Motor Raid), 14,366 (hpyagu98), 2,233
+  (DOA) ...; cpysre 11,717 (ZG), 756 (PK) -- 0 differ anywhere. (Pilot Kids
+  runs sqrtrl, 582 tuples, under F2A since R897.)
+  STATIC, DEAD OR ALIVE (sim/io/vf2_formscan.py over epr-19310 / 19311, then
+  each hit read in MAME's disassembly of the whole 1 MB): the only real code
+  among the 190 candidates is the C library's float formatting (cvtilr at
+  0x8770c-0x87df4, after "inf" / "infinity" / "NaNQ" / "NaNS", called only
+  by printf's %e/%f/%g at 0x87004) -- never entered in any session; the rest
+  (calls, logr, logrl, logbnrl, atanrl, tanrl, sinrl, scalerl) is data.
+  So no missing form explains #18 or #17.
+
+*FOUND -- DEAD OR ALIVE (MAME 0.289; MAME's disassembly):*
+  1. REPRODUCED. doaab with R887's two MRA words written into the program
+     before the boot (sim/io/mame_m2_2a_play.lua PL_PATCH=760=5c801e01,
+     778=5c801e01): the first match (Zack vs Zack) starts at ~40 s; at
+     12.56 s into it (52 s) the 3D is gone, the stage's sunset backdrop
+     fills the screen behind the HUD, K.O. is shown over two near-full
+     health bars, the timer stops at 17"43 / 00'12"56, and the main loop
+     sits in the vblank wait at 0x29c0 for the rest of the 200 s session.
+     The same session three times: the same frame (deterministic). Without
+     the patches (MAME's chip) the same inputs play the round to TIME UP
+     and on, in every run here (~1,375 s of sessions, two runs).
+  2. THE CHECK. Right after the stack is set up the boot calls 0x6e0: the
+     sum of the low halfwords of the 30 words at 0x730-0x7a4, & 0xffff,
+     against the halfword at 0x87fe0 (0x5a61); 1 if equal -> 0x54fab0
+     (0x6c8). R887's patches replaced the calls at 0x760 and 0x778 -- in
+     that range: the sum is 0x4ddb, so 0x54fab0 = 0. At each match's start
+     (0x370c) a zero 0x54fab0 (or 0x54fabc) arms 0x54f3b0 = 300 + rand % 900
+     frames (0x3724-0x3738: 5-20 s); the match loop counts it down (0x3150)
+     and at zero (0x3184) stops tasks 1 2 3 8 9 10 12 13 and spins at
+     0x31c4. MAME's watch (PL_WATCH): 0x54fab0 0 from the boot, 0x54f3b0
+     armed at 34 s with 0x40b+ and run down to the freeze at 52 s. The user's
+     6.31 s and this 12.56 s are two draws of the same countdown.
+  3. Why R887 did not see it: its MAME check of the patch was 0x54fabc
+     (1, as with the chip) over ~114 s; the frames were not compared (the
+     skipped polls move the boot) and no session ran a match for 20 s.
+     Pilot Kids', Dynamite Cop's and Zero Gunner's patches were each proved
+     by snapshot equality with the real-chip run (R887 / R873); Dead or
+     Alive's was the one without that proof.
+  4. The picture: the core's 3D and 2D are separate; with every task but the
+     HUD's stopped, the backdrop tilemap and the HUD stay -- the photo. Not
+     the renderer, not the TGP, not the i960.
+
+*THE FIX (MRA only; both Dead or Alive MRAs; tools/mra_vs_mame.py's patch
+list):* the same answer from the chip's two ROUTINES instead of their calls --
+mov 1,g0 (5c801e01); ret (0a000000) at 0x2b90 (the probe) and at 0x2bd0 (the
+upload / read-back / compare). The checksummed range is MAME's again (sum
+0x5a61), 0x54fabc is still 1, the window is still never touched. Nothing else
+in the program reads 0x2b90-0x2bd7 or the 48-byte buffer 0x54b390 the
+routine fills (a read tap on 0x54b380-0x54b3cf, 80 s: only the compare
+itself, 0x2dec); 0x87fe0 has one reader (0x710).
+  * MAME, the new words (PL_PATCH=2b90=5c801e01,2b94=0a000000,2bd0=5c801e01,
+    2bd4=0a000000), the same 400 s session (coins at 30 / 150 / 270 s, the same
+    inputs): 0x54fab0 = 1 and 0x54fabc = 1 in all 382 one-second samples
+    from 7 s, 0x54f3b0 never armed; the matches play out -- rounds won by
+    K.O. and by TIME UP, a WINNER and a REPLAY, the next opponent (Lei
+    Fang's stage), YOU LOSE and the continue offers, the title again; the
+    main loop never sits in 0x29c0 for two samples running.
+  * THE CORE (tb_m2_boot A2X, this branch's RTL = model2a c7278f2, the image
+    from tools/rom_csum.py on each MRA, M2_STATE_ADDR): with the old MRA the
+    boot writes 0x54fab0 = 0 (ip 0x6c8, frame 11); with the new MRA 1.
+    0x54fabc = 1 with both (ip 0x784, frame 136): the core runs the
+    patched routines as MAME does.
+  * No RTL changed: the 2A core, the original core, area, M10K and timing
+    are s1278's. The released core takes the new MRA as it is.
+
+*VIRTUA FIGHTER 2 (#17):* no missing form (above: 228 forms, 299 variants
+over ~1,400 s, 0 traps with vc_en low) and no MRA patch. The open candidate is
+R871's lockup -- attract, the i960 at 0x7dc4 waiting on the TGP's output
+FIFO, the TGP never answering (s1203); R876's fixes did not cover it (VF2
+has no register-counted rep). The probe build reports the TGP's pc on the
+next one. Not worked further here.
+
+*Tools (committed):* sim/io/mame_i960_formlog.patch (VAR / VCOUNT lines);
+sim/io/i960_formcheck.cpp (the variant table, the VF2 column).
+
+*What the board should show:* Dead or Alive with the new MRA, on the
+released core: matches play to their end -- rounds won by K.O. or TIME UP --
+for as long as it is played; the old MRA freezes 5-20 s into the first
+match every time (a quick check that the right MRA is loaded). The
+test menu's ROM check (if it sums the program) now differs from the chip's
+in 14 bytes instead of 8 -- not looked at.
+
+**R921 (board) -- DEAD OR ALIVE PLAYS THROUGH ITS MATCHES WITH THE NEW
+MRA.** Ben, 2026-10-21, the new MRA (protection routines patched, checksum
+range untouched) against the old one kept as "[OLD - freeze issue 18]" on
+the same core: "the MRA fix works". #18's cause confirmed.

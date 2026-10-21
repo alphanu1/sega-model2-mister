@@ -160,13 +160,15 @@ CORE_PATCHES = {
 # R887 / R897: the large 2A sets' patches, with the word MAME has there (any
 # instruction may be replaced, so the old word is named, not inferred):
 # Pilot Kids' 315-5881 compare (cmpibne -> b), Dynamite Cop's six compare
-# branches (cmpibe -> b, same displacement), Dead or Alive's two calls of the
-# 317-0229 boot check (call -> mov 1,g0).
+# branches (cmpibe -> b, same displacement), Dead or Alive's two routines of
+# the 317-0229 boot check (R921: mov 1,g0; ret at 0x2b90 and 0x2bd0 -- not the
+# calls at 0x760 / 0x778, which the boot's checksum of 0x730-0x7a4 covers).
 CORE_PATCHES_OLD = {
     "pltkidsa": [(0x51900, 0x08000080, 0x3dad0074)],
     "dynamcop": [(a, 0x08000010, 0x3aad0010) for a in (0x66a50, 0x66a68, 0x66a80, 0x66a98)]
               + [(a, 0x08000038, 0x3aad0038) for a in (0x66b14, 0x66b54)],
-    "doaab":    [(0x760, 0x5c801e01, 0x09002430), (0x778, 0x5c801e01, 0x09002458)],
+    "doaab":    [(0x2b90, 0x5c801e01, 0x8ca83000), (0x2b94, 0x0a000000, 0x0000270f),
+                 (0x2bd0, 0x5c801e01, 0x88a41000), (0x2bd4, 0x0a000000, 0x8aa03000)],
 }
 
 def core_patches(setname, regions):

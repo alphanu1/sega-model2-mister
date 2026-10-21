@@ -29,7 +29,22 @@ Each of these also has a `[15kHz CRT]` MRA.
 known bugs, and some games still slow down in places, mainly Sega Rally and
 Manx TT. Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261021b`)
+### New in this build (`Model2A_20261021c`)
+
+- **Dead or Alive no longer freezes in a match.** The MRA's protection patch
+  tripped the game's own boot checksum, and the game then stopped itself 5-20
+  seconds into a match (3D gone, HUD and music still going). The new MRAs
+  patch the protection chip's routines instead. **Download the new Dead or
+  Alive MRAs** (normal and `[15kHz CRT]`): the fix is in them.
+- **Dead or Alive's constant bass drone is gone.** The sound chip's effects
+  processor was running with all its delay taps at zero, which turned DOA's
+  reverb into a low drone. MAME does the same (its default 20 Hz filter hides
+  it); the core now leaves the taps alone, as the chip does. Every game's
+  reverb is affected: **Virtua Fighter 2 is about 9 dB quieter by default**,
+  with its hits and effects clearer against the music (turn `Volume` up to
+  taste), and Virtua Cop 2 loses a small constant offset.
+
+### Earlier in `Model2A_20261021b`
 
 - **15 kHz for every game.** The Model 2 core's new scan converter
   (retrorepair's design) is now in the 2A core too, with HDMI kept, and every
@@ -51,7 +66,7 @@ Manx TT. Please report anything you find, and say which game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261021b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261021c.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs below | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -59,7 +74,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261021b.rbf` has the md5 `fe714caeb09266ebb32a297b78693f00`. As with
+`Model2A_20261021c.rbf` has the md5 `7f15c5329bb6616ee2f17b5ec5678792`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -91,23 +106,17 @@ ROM sets: MAME 0.289.
   looked at yet.
 - **Virtua Cop 2's level-selection screen** has some of its text drawn in the
   wrong layer. Reported by users; not looked at yet.
-- **Virtua Fighter 2 can crash** at random, and **Dead or Alive can crash**
-  going into the first match. Reported by users; not looked at yet. If it
-  happens to you, please say where.
-- **Dead or Alive has a constant low bass rumble**, even when nothing else
-  is playing. Being looked at.
+- **Virtua Fighter 2 can crash** at random, in attract or in a fight.
+  Being looked at; if it happens to you, please say where.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
-  are quiet overall, and Virtua Fighter 2's hits sit well under its music.
-  That is how MAME 0.289 mixes these games, sample for sample, and the core
-  matches it. (MAME can sound louder because it also runs its own audio
+  are quiet overall. That is how MAME 0.289 mixes these games, and apart from
+  the effects processor fix above the core matches it sample for sample. (MAME can sound louder because it also runs its own audio
   effects, a compressor among them, after the sound chip.) Whether the arcade
   is louder is still an open question. Until then, two OSD settings lift it
   — see *Sound settings* below.
 - **Zero Gunner's protection chip isn't emulated.** Its MRA patches out the
   checks instead, so enemy patterns differ from MAME's (the game's random
   numbers read its own code), but the game plays through normally.
-- **Virtua Fighter 2 froze in attract** once on an earlier build. It hasn't
-  happened since the geometry processor fixes; if it does, please say where.
 - **No link play** for Sega Rally yet.
 - **15 kHz on a CRT is not yet tested with the 2A games.** It's the same
   converter as the Model 2 core's, which testers have confirmed on their
@@ -119,7 +128,7 @@ ROM sets: MAME 0.289.
 | setting | what it does |
 |---|---|
 | `Volume` | 80% by default. The list runs upward from there: 80, 90, 100, **150, 200, 300, 400%**, then round to 0–70%. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
-| `Raw Sound Boost` | `Off` (default: exactly MAME's mix), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Virtua Fighter 2's music mostly comes back through that return, so its hits come up against the music (+12 dB: hits +12 dB, music about +5 dB). Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. |
+| `Raw Sound Boost` | `Off` (default), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. (The level table below was measured before this build's effects processor fix, which made Virtua Fighter 2 about 9 dB quieter: give it more `Volume` than the table says.) |
 
 **Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
 the music: use `Raw Sound Boost`.** For about the same loudness as Virtua
