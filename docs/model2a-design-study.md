@@ -41823,3 +41823,140 @@ levers, a study-level decision, cheapest first (estimates, unmeasured):
   2. RING 8 (15.1 and 15.4 kHz only): 10 M10K back, but R840 found most
      sets take only 15.7 kHz.
 A fit of this merge is still worth one seed to confirm the count.
+
+**R909 -- 27 M10K BACK ON THE 2A CORE, NOTHING IT COMPUTES CHANGED: THE
+SCSP's LFO TABLE FACTORED (18 -> 4), NO SHIFT-REGISTER RAMs IN THE CORE (6),
+THREE SMALL ARRAYS OUT OF M10K (7). ~573 -> ~546 OF 553 BLOCKS. NOT FITTED.**
+(Branch m2a-scan15, on R908's merge f7437e2. Section 5.6 governs: M10K, not
+ALM, binds this core once the 15 kHz ring is in. Ben's rule: every 2A fix
+survives; the converter keeps its 16 lines, R840.)
+
+*How it was counted.* The fitter's own per-RAM "M10K blocks" column, from the
+last 2A fit with this RAM set (s1267, 553 / 553; s1240 has the same 4,467,189
+bits), is the price of each array as the fitter really builds it -- which is
+not the best shape: it takes 16,384 x 9 as 8192 x 1 slices (18 blocks, not
+16) and 8192 x 64 as 64. Those columns sum to 569 on s1267, 16 above the 553
+physical blocks, because the fitter packs some RAMs into shared blocks (15
+shared locations: uce/ucf, lbe/lbo, uvt/vtx, ln_d/ln_t, the loader FIFOs);
+none of the arrays below is among them, so each block here is a physical
+block. The converter costs 20 (main's s1264). So the merge needs 573, and:
+
+    array (2A build)                          s1267 blocks   now
+    m2_scsp lfo_rom 16,384 x 9                       18       4 (4,096 x 9, max_depth 2048)
+    mb86233_alu pop..pxd shift taps 3 x 115           3       0 (registers)
+    emu status synchronizers 3 x 15 (texoff_s..)      1       0 (registers)
+    m2_fp_pool fp_add p_exp.. 3 x 12                   1       0 (registers)
+    m2_span_tex lp2..lp4 4 x 43 (+3 MLAB cells)        1       0 (registers)
+    m2_scsp wq 4 x 29                                  1       0 (registers, ramstyle logic)
+    m2_span_tex of_x 16 x 16                           1       0 (one MLAB)
+    m2_geo_clip sk_mem 20 x 163                        5       0 (nine MLABs)
+                                                      31       4   -> 27 freed, ~546 / 553
+
+The map's own per-RAM estimate (each array at its best shape, from the RAM
+summary) reads 564 -> 538, -26: it prices the old LFO ROM at 16 and the
+lp2..lp4 taps at 2.
+
+*quartus_map 17.0, the whole 2A design, each commit (ALMs needed / ALUT /
+registers / block bits):*
+
+    f7437e2 (R908 merge)      39,716  57,025  47,171  4,663,810
+    365b088 LFO               39,718  57,022  47,170  4,553,218
+    968ddd7 no shift taps     39,896  57,067  47,775  4,552,608
+    4457cb2 small arrays      40,062  57,150  47,947  4,548,976
+                                +346    +125    +776   -114,834
+
+Still 371 ALM below model2a 75ee3a2 (40,433): R907 paid for it. (The map's
+ALM figure is an estimate; the LFO alone read +42 in a run without
+max_depth, +2 with it.)
+
+*1. The LFO table (365b088).* R858 baked the four LFO waves into one ROM,
+{sel, LFOS, LFOWS, phase >> 8} -> 9 bits, 16,384 words. The waves are MAME's
+formulas (saw, square, triangle) and one 256-entry noise table, and the
+table factors exactly into them and the two scale tables: entry =
+PSCALES-flat[LFOS * 256 + wave + 128] for pitch -- read flat, as MAME's
+pointer reads it, so the noise wave's 128 - 0 = 256 is the next row's first
+and past PSCALES[7] is ASCALES[0][0] -- and ASCALES[LFOS][wave] for
+amplitude. So m2_scsp_lfo (in m2_scsp.sv) computes the wave in logic from
+tadr and reads a 4,096 x 9 ROM (scsp_lfoscale.hex, PSCALES then ASCALES);
+the noise is a case function (scsp_lfonoise.svh). tadr is a register that
+feeds nothing else, so the logic sits between it and the block's address
+register and tbl_q keeps its latency. scsp_tables_gen.cpp writes both files
+(with MAME's tables.bin, from the Rally capture: every other output it
+writes is byte-identical to the committed files, and so was its old
+scsp_lfo.hex, before the change); scsp_lfo.hex is gone. max_depth 2048
+(MAXIMUM_DEPTH in the map's parameters) makes it two by two 2048 x 5 blocks
+and a 9-bit 2:1 mux on tbl_q, where the fitter left free takes no-mux
+shapes -- 4096 x 2 x 5, five, as it took 8192 x 1 slices for the old ROM.
+  * test_m2_scsp_lfo (new): the module against f7437e2's scsp_lfo.hex (from
+    git), every tadr in order then 4,000,000 random, each standing at one
+    edge: 4,016,384 clocks, 0 fails; the old ROM against MAME's tables
+    computed in the bench (scsp_ref.h, MAME's noise): 0 of 16,384 differ.
+    The 16,384 words are the module's whole function. Planted faults, each
+    caught: the pitch carry dropped (only the noise's zero reaches it) 3,410
+    fails; one triangle quarter off by one 33,890; amplitude noise indexed
+    by ~i 853,962; pitch square's low value 1 not 0 125,496; a second
+    output register 7,493,238.
+  * tb_m2_scsp before (f7437e2) and after, the same 19 runs: VF2 30 s, Zero
+    Gunner 10 s, Virtua Cop 2 10 s, and 16 of R885's random captures (FM,
+    PCM16, the noise LFO, every third at latency 20-400) -- 9,261,000
+    samples, 117,064,614 slot-samples, 0 wrong, 0 differ from the reference
+    or MAME's mix, and all 19 logs byte-identical before and after. Rally's
+    2 s (R908's snd.sh: tb_m2_scsp, _dsp, _2a_sound) identical apart from
+    the build lines.
+
+*2. No shift-register RAMs in the core (968ddd7).* Quartus's shift-register
+recognition (default Auto) had made altshift_taps M10K of four groups of
+short register chains, merged across modules: the status synchronizers in
+Model2.sv with m2_cab_inputs' (texoff_s, mip_s*, vol_s*, boost_s*, rsteer_s
+...: 3 x 15, a synchronizer in block RAM), the TGP ALU's result pipeline with
+its fp_add / fp_mul flags (3 x 115, 3 blocks), the geometry pool's fp_add
+exponent / fp_mul flags (3 x 12) and m2_span_tex's lp2..lp4 stage (4 x 43).
+`(* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *)` on
+module emu turns it off for the whole core (quartus_map: all four gone, 598
+bits; sys/'s five stay, the framework keeps the default). An attribute: the
+RTL and every simulation are untouched; the netlist holds the registers the
+RTL describes. +178 ALM, +605 registers.
+
+*3. Three small arrays (4457cb2).* of_x (16 x 16) MLAB, one LAB; wq (4 x
+29, read asynchronously) ramstyle "logic" -- as MLAB Quartus uninfers it
+anyway ("unsupported read-during-write"); sk_mem back to MLAB, which R332
+had and R684 reversed for LABs when M10K was free -- on the 2A core with
+the ring it is not. Attributes only; Quartus's uninferred-RAM list grows by
+wq alone (a ramstyle "logic" note).
+
+*REJECTED, MEASURED:*
+  * rfa / rfb (the SCSP's 16 x 32 register file copies) and the DSP's mems
+    (32 x 24) to MLAB, ~2 LABs a block, looked like the next cheapest. It
+    took quartus_map from 39,881 to 44,310 ALM and +8,396 registers: an
+    MLAB takes its read-address register into itself, rfa's is a field of
+    uf (ucf's read register) and mems' is IRA in ins (mpro's), and ucf
+    (256 x 41) and mpro (128 x 64) were "uninferred due to asynchronous
+    read logic" -- both into logic. Both arrays stay M10K, with a comment
+    saying why. A ramstyle change is NOT local: check the map's uninferred
+    list for arrays you did not touch.
+  * m2_char_cache's cdata (8192 x 64 at 64 blocks, 52 at 2048 x 5) by
+    max_depth 2048: 12 blocks for a 64-bit 4:1 mux, but it is on clk_mem
+    (100 MHz), which s1268 missed by 0.048 ns. Kept in reserve.
+  * the TGP program store (4096 x 32, 16 -> 14 at max_depth 2048): a 2:1
+    mux on the copro's fetch, clk_sys, which no 2A seed has met cleanly.
+  * span_q (32 x 260, 7 blocks) to MLAB: 13 LABs; R684's reason (LABs) is
+    the one that still holds. Not needed.
+  * the ring at 8 lines (R908's lever 2): not needed, and R840.
+
+*Benches, before (f7437e2, a worktree of it) and after (4457cb2), as R908
+ran them:* geodiff_2a VF2 walks 2300 / 5175 and the CRTC_Y 128 build on
+Rally walks 3282 / 3457: logs identical (pool hashes f99eacff.., bd0c35fc..,
+0d545bd7.., 1afb7f0f..; 349 / 1,593 / 1,245 / 1,725 quads); the 2A raster
+bench on Rally list 2000 (MAME's polygons and both walks' quads), Dynamite
+Cop and Motor Raid frame 700: every PX line identical (190,464 x 4,
+176,399), the rest of each log identical but for its path; the whole-core A2X Rally boot,
+120 frames: the per-frame accounting (118 lines) and the run log identical,
+and all 12 PPMs; the 20 unit benches: the same PASS lines, logs
+identical apart from build output. lint_top clean (2A, -DM2_NO_2A,
+-DM2_2A_WAITST=1); lint_idx: the same candidates as f7437e2.
+
+*Timing exposure, not measured until a fit:* the LFO's wave logic (about
+four LUT levels, tadr -> block address) and its 9-bit mux on tbl_q, at
+clk_sys 80 MHz; the rest removes block-RAM paths or adds MLAB ones. The
+fitter's packing of the remaining RAMs can move the count a few blocks
+either way: one seed confirms it.

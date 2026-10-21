@@ -1,5 +1,35 @@
 # Handoff
 
+## 2026-10-21: m2a-scan15 -- 27 M10K back for the 15 kHz ring (R909). NOT PUSHED, NOT FITTED
+
+R908's blocker, answered without changing anything the 2A core computes:
+~573 -> ~546 of 553 M10K, counted per array from s1267's fitter RAM summary
+(none of the freed arrays shared a block). Three commits:
+  * 365b088 the SCSP's LFO ROM factored: waves in logic (MAME's formulas +
+    the 256-entry noise as a case function), scales in a 4,096 x 9 ROM,
+    max_depth 2048 -- 18 -> 4. test_m2_scsp_lfo: every tadr + 4 M random
+    against f7437e2's 16,384-word ROM, 0 fails, five planted faults caught;
+    19 tb_m2_scsp runs (VF2 30 s, ZG, VC2, 16 random captures), logs
+    byte-identical before/after.
+  * 968ddd7 AUTO_SHIFT_REGISTER_RECOGNITION OFF on module emu: four
+    altshift_taps groups (synchronizers, TGP ALU pipe, pool fp_add, span_tex
+    lp2..4) back to registers -- 6.
+  * 4457cb2 sk_mem (clipper stack) back to MLAB (R684 reversed: M10K is
+    now the short one), of_x MLAB, the SCSP write queue registers -- 7.
+quartus_map 39,716 -> 40,062 ALMs (+346; still -371 against model2a),
+block bits -114,834, registers +776. All R908 benches before/after
+identical (geodiff pool hashes, raster PX lines, Rally boot frame stats and
+PPMs, 20 units, sound); lint_top x3 clean, lint_idx unchanged.
+WRONG TURN, KEEP: rfa/rfb and the DSP's mems as MLAB cost +4,429 ALM --
+the MLAB took ucf's and mpro's read registers and both went to logic.
+Check the map's uninferred-RAM list after any ramstyle change.
+IN RESERVE if the fit is still short: char cache cdata max_depth 2048 (12
+blocks, a mux on clk_mem), TGP program store (2), span_q to MLAB (7).
+NEXT: one seed of 4457cb2 to confirm the count and see clk_sys with the
+LFO's wave logic on tadr -> block address. model2a 9d4d262 (R911) still to
+be merged in (the coordinator's; no file here overlaps it but Model2.sv's
+header).
+
 ## 2026-10-21: branch m2a-scan15 -- main merged into the 2A core (R908). NOT PUSHED, NOT BUILT
 
 m2a-scan15 = model2a 75ee3a2 + main c56c93d, model2a as the baseline in every
