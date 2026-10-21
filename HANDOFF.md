@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-10-21 (late): PUSHED model2a -- the 2A beta Model2A_20261021d
+
+RELEASED: Model2A_20261021d.rbf = s1298 (5b8a001 = Model2A_20261021c +
+R922's tile mixer; clk_sys +0.139, clk_mem +0.459, clk_i960 +0.828, hold
++0.243, HDMI -1.059 report-only; 41,244 ALMs, 547/553 M10K), md5 293df5f3...
+R922: a front pair's category-0 pixel hides a back pair's category-1 pixel --
+VCop2's SHOOT TO SELECT over the city (GitHub #16, closed; MAME's own TODO);
+Zero Gunner's SCORE RANKING helicopter icons should appear (inferred, not
+seen on an arcade board -- Ben's board check of ZG pending). The mixer is
+shared with main, whose games' frames are unchanged (R922's survey); not yet
+in a main release. #18 closed (DOA MRA, R921).
+
 ## 2026-10-21: branch vc2-layer -- Virtua Cop 2's stage-select text (GitHub #16, R922). NOT PUSHED, NOT FITTED
 
 Cause: our tile mixer is MAME's screen_update order (each tilemap's
