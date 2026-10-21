@@ -42610,4 +42610,5 @@ build reports the FIFO's underruns, R877). Nothing to bisect: every
 
 **R914 (board) -- DEAD OR ALIVE's DRONE IS GONE.** s1293 (doa-rumble 4f6bd44
 on Model2A_20261021b, md5 7f15c532...): Ben, "DOA sound is good". VF2's
--8.9 dB and Virtua Cop 2's level not yet judged on the board.
+-8.9 dB mix: Ben, "VF is good"; Virtua Cop 2: "also good". R914
+stands for every 2A game.
