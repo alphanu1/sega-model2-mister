@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-21 (afternoon): PUSHED main -- release Model2_20261021b (Daytona's road unmipped)
+
+RELEASED: Model2_20261021b.rbf = s1287 (d962422; every clock met: clk_sys
++0.178, clk_mem +0.185, HDMI +0.124, hold +0.243; 41,063 ALMs, 553/553 M10K),
+md5 672b7003... R915: Daytona's seven road textures never mipped at any OSD
+setting, scenery mipped as before -- Ben on the board: "Daytona now looks
+good". GitHub issue #11 is answered by it (not commented on by us). R913
+(Sharp = MAME's per-pixel level) was REJECTED on the board (s1286) and is not
+merged. OPEN: link play (branch link-play, R916; s1290-92 fitting; Ben tests
+MiSTer + recomp PC).
+
 ## 2026-10-21: branch road-nomip -- Daytona's road never mipped (R915). NOT PUSHED, NOT FITTED
 
 R913 (mip-issue11, Sharp = MAME's per-pixel level) was REJECTED on the board
