@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-21 (evening): branch doa-rumble -- DOA's bass rumble is the DSP with every MADRS 0 (R914). NOT PUSHED, NOT FITTED
+
+Ben (s1278): "DOA seems to have a constant bass rumble ... even when no
+other sound". Captured doaab in MAME 0.289 + p16 (150 s, attract then a
+coin) and replayed it: the rumble is IN MAME TOO and in our RTL bit for bit
+(tb_m2_scsp 0 differ from MAME on f4d6b53 and on pre-R909 75ee3a2 -- R909 is
+not involved; every 2A build has it). In attract silence the mix is the
+DSP's EFREG 0 alone: a 21.5 / 43 / 87 / 173 / 217 Hz drone, -24 dBFS on the
+board's path, on a DC climbing to 85% of full scale. Cause: MAME mirrors
+SCSP 0x7C0-0x7FF onto MADRS (a 2014 array-bounds fix, 0caa890cca, not a
+hardware finding); every 2A driver writes its MADRS table then 32 zeros at
+0x7C0 -- so every game's DSP ran with all MADRS 0 and DOA's reverb
+self-oscillates. Mednafen's SCSP drops those writes (reads 0); before 2014
+MAME effectively did too. FIX: m2_scsp_dsp MADRS_MIRROR param, default 0
+(old behaviour = 1; scsp_ref.h follows SCSP_MIRROR=1 in the environment),
+and the DSP's read cache 64 -> 256 lines (same three M10K, quartus_map of
+scsp_area_top) -- with real MADRS each tap is its own line, and at 64 lines
+Virtua Cop 2 underran 120 times in 40 s on tb_m2_2a_sound (0 with the old
+RTL, 0 with 256 lines). Side effects, deliberate: VF2's mix -8.9 dB (its
+"music through the return", R886, was the collapsed reverb -- effects now
+clearer), Virtua Cop 2's constant DC gone, Rally unchanged, ZG ~unchanged.
+Ruled out with numbers: sound-RAM contents (0xFFFF fill: 0 samples differ;
+m2_2a_sound zeroes it anyway), the large layout / MRA, R909.
+Benches: tb_m2_scsp 30 s DOA/VF2/VC2/ZG/Rally 0 differ from the reference
+(MADRS_MIRROR=1 + SCSP_MIRROR=1: 0 from MAME's mix too); tb_m2_scsp_dsp
+random x2 latencies + 4 games 0 wrong; tb_m2_2a_sound VC2 40 s / VF2 6 s /
+DOA 20 s PASS, 0 underruns; lint_top 2A + M2_NO_2A clean, lint_idx nothing
+in changed files, analyze_file 0 errors. Engine time VC2 mean 995 -> 1,114
+(max 2,117) clocks a sample, budget 1,814.
+TRIED, NOT TAKEN: DSP reads overlapping a pending write (no gain on VC2,
+adds a hazard the random bench catches only rarely); a 16-sample FIFO (not
+needed; same MLABs -- the lever if the board ever underruns).
+WRONG TURN, KEEP: bench runs sharing an obj dir `cp -f *.hex` over each
+other's ROMs -> silent slots, "18,754 wrong". One directory per run.
+Clips for Ben: sm2-builds/doa-rumble/build/scsp/clips/*.wav (MAME mirror vs
+R914, DOA 8-30 s and VF2 20-50 s). NEXT: a fit of this branch; on the board
+DOA's attract gaps silent, VF2 quieter overall with clearer hits.
+
 ## 2026-10-21 (afternoon): PUSHED model2a -- the 2A beta Model2A_20261021b
 
 RELEASED (releases/, BETA): Model2A_20261021b.rbf = s1278 (eb5a700; clk_sys

@@ -42290,3 +42290,185 @@ Model2A_20261020b on has the key. R910's window probe (branch m2a-win-probe)
 was not needed and was never fitted with a margin: it missed by 44-59 LABs
 (s1281-s1283) and is parked.
 
+
+**R914 -- DEAD OR ALIVE'S "CONSTANT BASS RUMBLE, THERE EVEN WHEN NO OTHER
+SOUND" (Ben, s1278) IS THE SCSP DSP RUNNING WITH EVERY MADRS = 0: MAME 0.289
+MIRRORS 0x7C0-0x7FF ONTO MADRS, EVERY 2A SOUND DRIVER WRITES 32 ZERO WORDS
+THERE RIGHT AFTER ITS MADRS TABLE, AND OUR RTL COPIED THE MIRROR. DOA's
+REVERB THEN SELF-OSCILLATES: A 21.5 / 43 / 87 / 173 / 217 Hz DRONE AT
+-24 dBFS ON THE BOARD IN SILENCE, ON A DC THAT CLIMBS TO 85% OF FULL SCALE.
+THE MIRROR IS GONE (writes there dropped, reads 0, as Mednafen's SCSP);
+MAME's IS A PARAMETER FOR THE BENCHES; THE DSP's CACHE GOES 64 -> 256 LINES
+(SAME M10K) SO VIRTUA COP 2's REAL REVERB KEEPS UP. NOT R909, NOT THE LARGE LAYOUT, NOT
+SOUND-RAM CONTENTS. NOT FITTED.**
+
+*Believed (the task):* something of ours, not MAME's -- R909's factored LFO
+(never run on DOA), the large layout's sound-ROM mapping, or unwritten
+sound RAM (0xFFFF on the board, 0 in MAME) feeding the DSP's ring.
+
+*Measured (MAME 0.289 + p16, doaab, 150 s: attract to 90 s, a coin at 90 s;
+sm2-builds/doa-rumble/build/scsp/doaab; replayed through scsp_ref.h -- 0 of
+6,615,361 samples differ from MAME's out.bin -- with the mix taken apart into
+the direct sends, per slot, and the DSP's EFREG; left channel, mix units,
+DAC = >> 2):*
+  1. THE RUMBLE IS IN MAME TOO, AND IN OUR RTL BIT FOR BIT. In 13-16 s of
+     the attract no slot sounds (direct sends 0.4 RMS) and the mix is the
+     DSP's EFREG 0 alone: a mean of +73,262 and 10,828 RMS of AC, all below
+     300 Hz (bands 0-20 / 20-50 / 50-150 / 150-300 Hz: 1,239 / 5,667 /
+     5,105 / 7,404; lines at 21.5, 43, 87.5, 173.5, 217 Hz -- 21.5 Hz =
+     44,100 / 2,048). The DC on EFREG 0 climbs from 15,224 (3 s) to ~28,000
+     (60 s on) of the register's +-32,768; the mix's mean from 46,701 to
+     ~111,000 of the DAC's 131,072, where 0.13% of in-play samples clip.
+     Through the board's path (DAC, Volume 80%, MiSTer's DC blocker): 2,154
+     RMS 16-bit in that silence, -23.6 dBFS -- louder than the music's
+     direct sends. MAME's listener hears less of it: its default Filters
+     effect is a 20 Hz high-pass (emu/audio_effects/filter.cpp, fh 20),
+     MiSTer's DC blocker a one-pole ~7 Hz one.
+  2. NOT OURS ALONE: tb_m2_scsp on the DOA capture, model2a f4d6b53 (R909
+     in): the whole 150 s, 0 differ from the reference and from MAME's mix
+     (81,797,765 slot samples, 1,563,235 reads 0 wrong); pre-R909 75ee3a2:
+     20 s, 0 / 0. R909 is not involved, and
+     every 2A build (s1253 .. s1278) has the rumble.
+  3. NOT SOUND-RAM CONTENTS: the reference with sound RAM filled 0xFFFF
+     before the first write (the board's unwritten SDRAM): 0 samples differ
+     over 150 s, with the mirror and without it (DOA 40 s, VF2 and Virtua
+     Cop 2 60 s without it). The drivers write their rings before the DSP
+     reads them -- and m2_2a_sound zeroes all 256 K words before the 68000
+     starts (V_ZR) anyway.
+  4. NOT THE LARGE LAYOUT: DOA's MRA places epr-19328 at 0x24C0000 and
+     mpr-19329..19332 at 0x2540000 (moved by XTRA to byte 0x3400000), as
+     VF2's (R882's sums); the sound RAM (byte 0x2580000) sits in the hole no
+     layout loads; the large layout's extra regions start at MRA 0x32C0000.
+  5. THE CAUSE. The DSP program (dsp.txt, START at n 143,499: 58 steps,
+     RBP 0x38, RBL 32 K words) is a reverb: 12 memory reads and 4 writes at
+     MADRS 1..12, comb / all-pass loops of gain 0.87-0.9998. At its START
+     all 32 MADRS read 0. regs.bin: the 68000 writes COEF 0x700-0x77E, the
+     MADRS table 0x780-0x7BE (0x0000 0x3007 0x2bff 0x52c0 0x33c0 0x43dc
+     0x55e3 0x3e16 0x3ce1 0x3ce4 0x4c96 0x4bba 0x4b6f, 0 ...), then 32 zero
+     words 0x7C0-0x7FE, then MPRO. MAME's scsp.cpp maps 0x7C0-0x7FF onto
+     MADRS again ("MADRS is mirrored twice"), so the zeros overwrite the
+     table; m2_scsp_dsp did the same (w_madrs to 0x400). Every tap then
+     reads and writes the same ring word (DEC alone): the loops close on
+     themselves and the program becomes an oscillator with a DC integrator.
+     THE OTHER 2A DRIVERS DO THE SAME: VF2 (writes 0x7C0-0x7FF 64 times,
+     after its table), Virtua Cop 2 (32), Zero Gunner (864, its 0x7C2 zero
+     later than its 0x782 = 0x2ffe), Sega Rally (128; it runs no DSP
+     program). All five games' DSPs run with MADRS 0 in MAME and in s1278.
+  6. THE MIRROR IS MAME's GUESS, NOT THE SILICON'S. It came in with MAME
+     0caa890cca (R. Belmont, 2014-02-26, "Array bounds patrol (nw)"): MADRS
+     was u16[32] written for 0x780-0x7FF, so 0x7C0-0x7FF ran past it into
+     the struct's next field (MPRO, which the driver then rewrites) -- the
+     table survived. The bounds fix chose a mirror; nothing says it was
+     measured. Mednafen's SCSP (ss/scsp.inc; read for the fact, no code
+     taken) decodes MADRS at 0x780-0x7BF only: writes to 0x7C0-0x7FF fall
+     through and are dropped, reads give 0. MASA is 5 bits, so 32 MADRS
+     are all a program can name (not checked here: what the Saturn manual
+     says of 0x7C0). And a mirror would make Sega's own
+     driver -- shipped on every 2A board -- erase its own reverb table.
+     REFERENCE ORDER (the project rules): Model 1 has no SCSP; MAME wins for what
+     the silicon computes, but this line is a 2014 bounds fix, not a model
+     of the silicon, and two independent facts contradict it. This entry
+     departs from MAME on that one decode and says so.
+  7. WITHOUT THE MIRROR (the reference, NOMIRROR), DOA's DSP is a reverb:
+     13-16 s silent (8 RMS, mean -3); in play EFREG 0 mean ~0, 200-450 RMS.
+     Levels, 16-bit at 100% Volume, in play (the DAC clamp, left):
+                       direct  MAME-mirror: return(mean / AC)  out   R914: return  out
+       DOA 20-140 s     4,371     108,881 / 9,917         2,804      16 / 1,467  1,151
+       VF2 20-80 s      3,567        -290 / 8,375         2,678    -156 / 1,518    957
+       Virtua Cop 2     1,275      10,867 /   175           357      -9 /   240    359
+       Zero Gunner      2,074          15 /   885           598      71 /   973    606
+       Sega Rally         --  (no DSP program: identical)
+     (direct / return in mix units, out = the DAC's 16-bit RMS.) VF2's
+     "music loud through the return" (R886) was the collapsed reverb: its
+     return falls from 2.3x its direct sends to 0.43x, the whole mix -8.9 dB,
+     and its effects come up against the music. Virtua Cop 2's constant DC
+     (R886's +2,717) is gone. R886's "Rally / VF2 = 17%" becomes 38%.
+     Clips (mono, ROM-derived, git-ignored): build/scsp/clips/
+     doa_8-30s_{MAME_mirror,R914}.wav, vf2_20-50s_{MAME_mirror,R914}.wav.
+
+*The change (rtl/sound/scsp/m2_scsp_dsp.sv, m2_scsp.sv, sim/sound/scsp_ref.h):*
+  1. m2_scsp_dsp parameter MADRS_MIRROR (default 0; m2_scsp passes it down):
+     w_madrs only for 0x780-0x7BF; the 68000's read of 0x7C0-0x7FF gives 0
+     (Zero Gunner reads it -- CLR's read cycle -- and only ever writes 0
+     there). MADRS_MIRROR = 1 is the old RTL. scsp_ref.h: madrs_mirror, from
+     SCSP_MIRROR in the environment (default off), so every replay tool
+     keeps MAME's mirror one variable away.
+  2. THE DSP's READ CACHE 64 -> 256 LINES (u_rcache IDX 6 -> 8), because
+     item 1 alone made Virtua Cop 2 underrun on the board bench (below).
+     With every MADRS 0 all of a program's taps read one ring line and hit;
+     with real MADRS each tap is its own line, and 64 direct-mapped lines
+     miss 44.6% of VC2's DSP reads (scsp_replay's cache model, 30 s: 10.1
+     line fetches a sample; 128 lines 27.2%, 256 lines 18.5% = 4.2; with
+     the mirror 1.1%). M10K UNCHANGED: quartus_map 17.0 of scsp_area_top
+     (virtual pins) puts the 64 x 64 data array and the two 64 x 11 tag
+     arrays in the same three 256-deep M10K blocks it now fills 256 x 64 /
+     2 x 256 x 9 (the slot cache's exact shape); block bits 163,072 ->
+     178,560, registers 1,720 -> 1,718.
+
+*Benches (final RTL = items 1 + 2; "R914a" = item 1 alone):*
+  * tb_m2_scsp, against the reference without the mirror, 30 s each, 0
+    differ, every slot sample and read right: DOA (6,327,212 slot samples,
+    178,054 reads), VF2 (9,421,266), Virtua Cop 2 (11,337,498), Zero Gunner
+    (26,041,897), Sega Rally (5,019,653; 0 from MAME's mix too -- no DSP
+    program). From MAME's mix: DOA 1,304,910, VF2 761,197, VC2 1,304,627,
+    ZG 1,114,511 samples differ (the return).
+    ENGINE TIME (step mode, latency 6-40, clocks a sample, mean / max;
+    budget 1,814 at 80 MHz):
+                      MAME mirror     R914a          final (256 lines)
+      DOA             706 / 1,466     717 / 1,490    671 / 1,463
+      VF2             883 / 1,567     878 / 1,626    849 / 1,577
+      Virtua Cop 2    995 / 1,947   1,222 / 2,291  1,114 / 2,117
+      Zero Gunner   1,358 / 2,252   1,375 / 2,252  1,369 / 2,225
+  * the same with -GMADRS_MIRROR=1 and SCSP_MIRROR=1 (the old behaviour):
+    DOA, VF2, VC2, ZG, Rally 30 s: 0 differ from the reference AND from
+    MAME's mix -- the parameter restores the old RTL exactly.
+    tb_m2_scsp, pre-R909 RTL (75ee3a2) on DOA 20 s: 0 / 0 (item 2 above).
+  * tb_m2_scsp_dsp (final): 500 random programs at latency 6-40 and at
+    1-400 (1,000,000 runs each), VF2 / VC2 / ZG / DOA 30 s: 0 EFREG values
+    wrong, 0 RAM words wrong, every run.
+  * tb_m2_2a_sound (fx68k on the game's sound program, the SCSP, three SDRAM
+    ports at random latency 6-40, 80 MHz free-running):
+      Virtua Cop 2 40 s   MAME mirror (f4d6b53, 27 s)  0 underruns, PASS
+                          R914a                        120 underruns (from
+                            21.7 s: 3, 22.8 s: 33, 25.5 s: 61), FAIL
+                          final                        0 underruns, PASS,
+                            97.4% of writes in MAME's order (R914a 97.6%)
+      VF2 6 s             final  PASS, 0 underruns, 98.9% in MAME's order,
+                            82.68 ms (as R885 / R894)
+      DOA 20 s            R914a  PASS, 0 underruns, 97.3% in MAME's order,
+                            82.6 ms, 0 stray RAM writes; its WAV 13-16 s
+                            mean -0.7, RMS 2.0 -- the silence is silent
+                            (MAME there: ~73,000 / 4 DC plus the drone);
+                            9-12 s (music) RMS 1,144
+                          final  PASS, 0 underruns, 97.5% in MAME's order,
+                            82.59 ms, 0 stray writes; WAV 13-16 s mean -0.7,
+                            RMS 2.1; 9-12 s RMS 1,141
+  * lint_top (2A; M2_NO_2A): clean. lint_idx: no candidate in a changed
+    file. quartus_map --analyze_file (17.0) on m2_scsp_dsp.sv, m2_scsp.sv:
+    0 errors.
+
+*TRIED AND NOT TAKEN (measured):*
+  * Letting a DSP read step overlap a pending write to another line (stall
+    only on the write's own line, a second write, or a read in flight):
+    tb_m2_scsp_dsp clean, and the hazard is real -- with the same-line
+    check removed, 500 random programs at latency 1-400 give 1 EFREG and 1
+    RAM word wrong (the game captures never hit it). Gain: DOA 671 -> 634,
+    VF2 849 -> 812, ZG 1,369 -> 1,336, VIRTUA COP 2 1,114 -> 1,114 (none --
+    its cost is read misses, not writes). Not worth the hazard.
+  * A 16-sample output FIFO (m2_2a_sound, 8 before; the engine then runs up
+    to 15 samples ahead): VC2 40 s and VF2 6 s / 11.6 s (SND_SHIFT=9)
+    benches identical to the 8-sample FIFO's -- not needed once the cache
+    is 256 lines. The lever if a board shows underruns: same MLABs.
+  * FIRST BENCH ATTEMPT WRONG, KEPT: eight tb_m2_scsp runs started in two
+    shared object directories, each `cp -f *.hex` into it while another was
+    loading its ROMs: those runs got truncated tables, every slot silent,
+    "18,754 wrong" from DOA's first key-on (9.57 s). Each run now copies the
+    binary and ROMs into its own directory (sm2-builds/doa-rumble/
+    build/scsp/r914run.sh, git-ignored).
+
+*On the board (to do, after a fit):* DOA's attract between tunes silent (was
+a low drone), no climbing DC; VF2 ~9 dB quieter overall with its punches
+and kicks clearer against the music (Volume up to taste); Virtua Cop 2 /
+Zero Gunner levels about as before, VC2 without underrun clicks (the probe
+build reports the FIFO's underruns, R877). Nothing to bisect: every
+2A build has the rumble.
