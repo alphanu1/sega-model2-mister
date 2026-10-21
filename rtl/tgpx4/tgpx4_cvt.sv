@@ -9,8 +9,7 @@
 // any later version. See LICENSE for the full text.
 //
 // MB86235 conversions AND shifts on ONE 32-bit right barrel shifter, MAME
-// 0.289 decode_aluop 0x0d-0x0f and 0x1c-0x1f. Two clocks (operand register,
-// result register). A left shift is the right shift of the bit-reversed
+// 0.289 decode_aluop 0x0d-0x0f and 0x1c-0x1f. Six clocks (R924, below). A left shift is the right shift of the bit-reversed
 // value, reversed back -- two 32-bit 2:1 muxes instead of a second shifter.
 // The core runs one ALU op at a time, so nothing else wants the shifter.
 //
@@ -57,95 +56,152 @@ module tgpx4_cvt (
     for (int i = 0; i < 32; i++) rev32[i] = x[31 - i];
   endfunction
 
-  // ------------------------------------------------------------ operands
-  logic is_cif, is_fcv, is_left;
-  assign is_cif  = (op1 == 5'h0d);
-  assign is_fcv  = (op1 == 5'h0e) || (op1 == 5'h0f);
-  assign is_left = is_cif || (op1 == 5'h1d) || (op1 == 5'h1f);
+  // R924: PIPELINED, SIX CLOCKS IN TO OUT (was two). The first fit of the 2C
+  // build (s1303, 80 MHz) missed clk_sys by -3.9 to -4.2 ns, its worst 200
+  // paths all a1 -> f_az through one clock of negate, leading-zero count,
+  // shift, round and compare. Now one of those a clock:
+  //   s1 operands   s2 |a|   s3 leading zeros, the shifter's inputs
+  //   s4 the shift  s5 round / negate / clamp   s6 the flags, the result
+  // A shift (LSR / LSL, ~5% of House of the Dead's words) costs four clocks
+  // more; CFI / CIF are 0.03% of them.
 
-  // CIF: |v|, normalised left by its leading zeros
-  logic        is_neg;
-  logic [31:0] mag;
-  logic [4:0]  lz;
-  assign is_neg = a1[31];
-  assign mag    = is_neg ? (~a1 + 32'd1) : a1;
-  always_comb begin
-    lz = 5'd0;
-    for (int i = 0; i < 32; i++) if (mag[i]) lz = 5'd31 - i[4:0];
+  // ------------------------------------------------------------ s2: |a|
+  logic        v2, neg2;
+  logic [4:0]  op2, sh2;
+  logic [31:0] a2, mag2;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      v2 <= 1'b0; neg2 <= 1'b0; op2 <= 5'd0; sh2 <= 5'd0; a2 <= 32'd0; mag2 <= 32'd0;
+    end else begin
+      v2 <= v1; op2 <= op1; sh2 <= sh1; a2 <= a1;
+      neg2 <= a1[31];
+      mag2 <= a1[31] ? (~a1 + 32'd1) : a1;
+    end
   end
 
-  // CFI / CFIB: the significand at the top, right by 158 - exponent
-  logic [7:0]  fe;
-  logic        big, tiny;
-  logic [7:0]  famt;
-  assign fe   = a1[30:23];
-  assign big  = (fe >= 8'd158);
-  assign tiny = (fe <  8'd127);
-  assign famt = 8'd158 - fe;
+  // ------------------------------------------------------------ s3: shifter inputs
+  logic is_cif2, is_fcv2, is_left2;
+  assign is_cif2  = (op2 == 5'h0d);
+  assign is_fcv2  = (op2 == 5'h0e) || (op2 == 5'h0f);
+  assign is_left2 = is_cif2 || (op2 == 5'h1d) || (op2 == 5'h1f);
 
-  logic [31:0] sh_in, sh_out, sh_res;
-  logic [32:0] sh_wide;
+  // CIF: |v|, normalised left by its leading zeros
+  logic [4:0]  lz;
+  always_comb begin
+    lz = 5'd0;
+    for (int i = 0; i < 32; i++) if (mag2[i]) lz = 5'd31 - i[4:0];
+  end
+  // CFI / CFIB: the significand at the top, right by 158 - exponent
+  logic [7:0]  famt;
+  assign famt = 8'd158 - a2[30:23];
+
+  logic [31:0] sh_in;
   logic [4:0]  sh_amt;
   logic        sh_fill;
   always_comb begin
-    if (is_cif)      begin sh_in = rev32(mag);               sh_amt = lz;         sh_fill = 1'b0;  end
-    else if (is_fcv) begin sh_in = {1'b1, a1[22:0], 8'd0};   sh_amt = famt[4:0];  sh_fill = 1'b0;  end
-    else if (is_left)begin sh_in = rev32(a1);                sh_amt = sh1;        sh_fill = 1'b0;  end
-    else             begin sh_in = a1;                       sh_amt = sh1;        sh_fill = (op1 == 5'h1e) & a1[31]; end
+    if (is_cif2)      begin sh_in = rev32(mag2);              sh_amt = lz;         sh_fill = 1'b0;  end
+    else if (is_fcv2) begin sh_in = {1'b1, a2[22:0], 8'd0};   sh_amt = famt[4:0];  sh_fill = 1'b0;  end
+    else if (is_left2)begin sh_in = rev32(a2);                sh_amt = sh2;        sh_fill = 1'b0;  end
+    else              begin sh_in = a2;                       sh_amt = sh2;        sh_fill = (op2 == 5'h1e) & a2[31]; end
   end
-  // the one shifter
-  assign sh_wide = $signed({sh_fill, sh_in}) >>> sh_amt;   // 33 bits: the fill bit rides on top
-  assign sh_out  = sh_wide[31:0];
-  assign sh_res = is_left ? rev32(sh_out) : sh_out;
 
-  // ------------------------------------------------------------ CIF rounding
+  logic        v3, neg3, big3, tiny3, left3, fill3;
+  logic [4:0]  op3, lz3, amt3;
+  logic [31:0] a3, in3;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      v3 <= 1'b0; neg3 <= 1'b0; big3 <= 1'b0; tiny3 <= 1'b0; left3 <= 1'b0; fill3 <= 1'b0;
+      op3 <= 5'd0; lz3 <= 5'd0; amt3 <= 5'd0; a3 <= 32'd0; in3 <= 32'd0;
+    end else begin
+      v3 <= v2; neg3 <= neg2; op3 <= op2; lz3 <= lz; a3 <= a2;
+      big3 <= (a2[30:23] >= 8'd158); tiny3 <= (a2[30:23] < 8'd127);
+      left3 <= is_left2; fill3 <= sh_fill; amt3 <= sh_amt; in3 <= sh_in;
+    end
+  end
+
+  // ------------------------------------------------------------ s4: the one shifter
+  logic [32:0] sh_wide;
+  assign sh_wide = $signed({fill3, in3}) >>> amt3;   // 33 bits: the fill bit rides on top
+
+  logic        v4, neg4, big4, tiny4, zero4, lowz4;
+  logic [4:0]  op4, lz4;
+  logic [31:0] res4;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      v4 <= 1'b0; neg4 <= 1'b0; big4 <= 1'b0; tiny4 <= 1'b0; zero4 <= 1'b0; lowz4 <= 1'b0;
+      op4 <= 5'd0; lz4 <= 5'd0; res4 <= 32'd0;
+    end else begin
+      v4 <= v3; neg4 <= neg3; big4 <= big3; tiny4 <= tiny3; op4 <= op3; lz4 <= lz3;
+      zero4 <= (a3 == 32'd0);
+      lowz4 <= (a3[30:0] == 31'd0);
+      res4  <= left3 ? rev32(sh_wide[31:0]) : sh_wide[31:0];
+    end
+  end
+
+  // ------------------------------------------------------------ s5: round, negate, clamp
+  // CIF rounding
   logic        g, st, up;
   logic [24:0] m_r;
   logic [7:0]  e_cif;
-  assign g     = sh_res[7];
-  assign st    = |sh_res[6:0];
-  assign up    = g & (st | sh_res[8]);
-  assign m_r   = {1'b0, sh_res[31:8]} + {24'd0, up};
-  assign e_cif = 8'd158 - {3'd0, lz} + {7'd0, m_r[24]};
+  assign g     = res4[7];
+  assign st    = |res4[6:0];
+  assign up    = g & (st | res4[8]);
+  assign m_r   = {1'b0, res4[31:8]} + {24'd0, up};
+  assign e_cif = 8'd158 - {3'd0, lz4} + {7'd0, m_r[24]};
 
   logic [31:0] cif_res;
-  assign cif_res = (a1 == 32'd0) ? 32'd0
-                 : {is_neg, e_cif, (m_r[24] ? m_r[23:1] : m_r[22:0])};
+  assign cif_res = zero4 ? 32'd0
+                 : {neg4, e_cif, (m_r[24] ? m_r[23:1] : m_r[22:0])};
 
-  // ------------------------------------------------------------ CFI / CFIB
+  // CFI / CFIB (neg4 is the float's sign here)
   logic [31:0] tr;
-  assign tr = tiny ? 32'd0 : sh_res;
+  assign tr = tiny4 ? 32'd0 : res4;
 
   logic [31:0] cfi_res;
-  assign cfi_res = big ? 32'h80000000 : (a1[31] ? (~tr + 32'd1) : tr);
+  assign cfi_res = big4 ? 32'h80000000 : (neg4 ? (~tr + 32'd1) : tr);
 
   logic        b_neg, b_ov;
   logic [31:0] cfib_res;
-  assign b_neg    = a1[31] && (a1[30:0] != 31'd0);
-  assign b_ov     = !b_neg && (big || tr > 32'd255);
+  assign b_neg    = neg4 && !lowz4;   // a negative, non-zero float
+  assign b_ov     = !b_neg && (big4 || tr > 32'd255);
   assign cfib_res = b_neg ? 32'd0 : (b_ov ? 32'd255 : tr);
 
   logic [31:0] r;
   always_comb begin
-    case (op1)
+    case (op4)
       5'h0d:   r = cif_res;
       5'h0e:   r = cfi_res;
       5'h0f:   r = cfib_res;
-      default: r = sh_res;
+      default: r = res4;
     endcase
   end
 
+  logic        v5, cifz5, cifn5, au5, av5;
+  logic [4:0]  op5;
+  logic [31:0] r5;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      v5 <= 1'b0; cifz5 <= 1'b0; cifn5 <= 1'b0; au5 <= 1'b0; av5 <= 1'b0; op5 <= 5'd0; r5 <= 32'd0;
+    end else begin
+      v5 <= v4; op5 <= op4; r5 <= r;
+      cifz5 <= zero4; cifn5 <= neg4;
+      au5 <= (op4 == 5'h0f) && b_neg;
+      av5 <= (op4 == 5'h0f) && b_ov;
+    end
+  end
+
+  // ------------------------------------------------------------ s6: flags, out
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       out_valid <= 1'b0; result <= 32'd0;
       f_an <= 1'b0; f_az <= 1'b0; f_au <= 1'b0; f_av <= 1'b0;
     end else begin
-      out_valid <= v1;
-      result    <= r;
-      f_an      <= (op1 == 5'h0d) ? is_neg : (op1 == 5'h0f) ? 1'b0 : r[31];
-      f_az      <= (op1 == 5'h0d) ? (a1 == 32'd0) : (r == 32'd0);
-      f_au      <= (op1 == 5'h0f) && b_neg;
-      f_av      <= (op1 == 5'h0f) && b_ov;
+      out_valid <= v5;
+      result    <= r5;
+      f_an      <= (op5 == 5'h0d) ? cifn5 : (op5 == 5'h0f) ? 1'b0 : r5[31];
+      f_az      <= (op5 == 5'h0d) ? cifz5 : (r5 == 32'd0);
+      f_au      <= au5;
+      f_av      <= av5;
     end
   end
 

@@ -1780,6 +1780,20 @@ int main(int argc, char **argv) {
         pop_prev = pn;
       }
     }
+    // R924: 'O' RECORDS -- every word the coprocessor PUSHED into its output
+    // FIFO, from m2_copro's dbg_out_pushed / dbg_out_data (registered together,
+    // at most one a cycle, sampled every cycle). This is the stream a R924_CAP
+    // capture's 'O' / 'X' events hold; the 'R' and 'P' records above sample the
+    // i960's bus and are not exact (duplicates, zeros).
+    if (g_copro_trace && g_frames_done >= copro_from) {
+      static uint32_t opush_prev = 0;
+      const uint32_t on = (uint32_t)d->obs_out_pushed;
+      if (on != opush_prev) {
+        std::fprintf(g_copro_trace, "O %llu %u %08x\n", (unsigned long long)g_frames_done, on - opush_prev,
+                     (unsigned)d->obs_out_data);
+        opush_prev = on;
+      }
+    }
     // THE STATE BYTE THE BOARD'S TOP-LEVEL LOOP TESTS. The loop at 0x1240 reads
     // 0x0053e5f4 every frame and leaves for 0x228f00 when it changes; the board
     // has never left it. The bench reaches the 3D, so it can say what writes
@@ -2987,6 +3001,8 @@ int main(int argc, char **argv) {
                  std::printf("    wrote %s (%zu bytes)\n", q.c_str(), n); }
       };
       put("tile.bin", g_tram, sizeof(g_tram));
+      // R924: char RAM (512 KB at the harness's word 0x1690000), little-endian words
+      put("char.bin", &mem[0x1690000], 0x40000 * 2);
       put("palette.bin", g_pal, sizeof(g_pal));
       uint16_t xl[24576];
       std::memset(xl, 0, sizeof(xl));

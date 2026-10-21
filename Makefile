@@ -1636,13 +1636,14 @@ $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cp
 #   M2_A2=1 M2_A2X=1 M2_C2=1 M2_BOOT_IMAGE=<hotd.bin> ./obj_boot_2c/Vm2_boot_harness +insn=<n>
 # (the image from tools/rom_csum.py on the hotd MRA with --out).
 BOOT_2C_PLINES ?= 1024
-obj_boot_2c/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
+BOOT_2C_DIR    ?= obj_boot_2c
+$(BOOT_2C_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/tgpx4/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
-	  -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_2c -o Vm2_boot_harness \
+	  -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir $(BOOT_2C_DIR) -o Vm2_boot_harness \
 	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GA2X=1 -GC2=1 -GAW=26 -GX4_PLINES=$(BOOT_2C_PLINES) \
 	  -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
