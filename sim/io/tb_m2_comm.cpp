@@ -46,8 +46,10 @@ namespace {
 Vm2_comm_harness *d;
 std::mt19937 rng;
 long checks = 0, fails = 0;
+const char *last_ck = "";
 void ck(const char *what, uint64_t got, uint64_t want) {
     ++checks;
+    last_ck = what;
     if (got != want) {
         if (++fails < 40) std::printf("  FAIL %-52s got %llx want %llx\n", what, (unsigned long long)got, (unsigned long long)want);
     }
@@ -64,7 +66,7 @@ long fill_beats_after_status = 0;
 bool status_seen_since_cn = false;
 
 uint64_t rd64(uint32_t w) {
-    if (file_page && w >= kComm && w < kComm + 0xa00) {
+    if (file_page && w >= kComm && w < kComm + 0x1600) {
         uint64_t v;
         std::memcpy(&v, const_cast<uint8_t *>(file_page) + size_t(w - kComm) * 8, 8);
         return v;
@@ -76,7 +78,7 @@ void wr64(uint32_t w, uint64_t v, uint8_t be) {
     uint64_t old = rd64(w);
     for (int i = 0; i < 8; i++)
         if (be >> i & 1) old = (old & ~(0xffull << (8 * i))) | (v & (0xffull << (8 * i)));
-    if (file_page && w >= kComm && w < kComm + 0xa00) std::memcpy(const_cast<uint8_t *>(file_page) + size_t(w - kComm) * 8, &old, 8);
+    if (file_page && w >= kComm && w < kComm + 0x1600) std::memcpy(const_cast<uint8_t *>(file_page) + size_t(w - kComm) * 8, &old, 8);
     else mem[w] = old;
 }
 
@@ -111,7 +113,7 @@ void ddram_take() {
             wr_addr = d->DDRAM_ADDR;
             wr_left = d->DDRAM_BURSTCNT ? d->DDRAM_BURSTCNT : 1;
         }
-        const bool comm = wr_addr >= kComm && wr_addr < kComm + 0x802;
+        const bool comm = wr_addr >= kComm && wr_addr < kComm + 0x9b8;   // RAM, status, mailbox, snapshots
         const bool fb = wr_addr >= kFbLo && wr_addr < kFbHi;
         if (!comm && !fb) ++comm_writes_outside;
         wr64(wr_addr, d->DDRAM_DIN, d->DDRAM_BE);
@@ -225,7 +227,7 @@ uint32_t access(bool we, uint32_t byte_addr, uint8_t be, uint32_t wdata) {
             return r;
         }
         if (++n > 2000000) {
-            std::printf("  FAIL: access to %x stalled for ever\n", byte_addr);
+            std::printf("  FAIL: access to %x stalled for ever (after \"%s\")\n", byte_addr, last_ck);
             ++fails;
             d->sel = 0;
             return 0xdeadbeef;
@@ -297,7 +299,7 @@ void run_config(int seed) {
     bool all0 = true;
     for (uint32_t w = 0; w < 0x802; w++) all0 &= (w == 0x800) || rd64(kComm + w) == 0;
     ck("power-on: 16 KB + mailbox clear", all0, 1);
-    ck("power-on: status magic", status_word() >> 40, 0x4B4C01);
+    ck("power-on: status magic and version", status_word() >> 48, 0x4C02);
 
     Unplugged up;
     std::vector<uint8_t> oram(0x4000, 0);
@@ -364,98 +366,189 @@ void run_config(int seed) {
     ck("FG=1: fg_r", (access(false, 0x4000, 0x4, 0) >> 16) & 0xff, oracle.fg_r());
     ck("FG=1: cn_r", access(false, 0x4000, 0x1, 0) & 0xff, oracle.cn_r());
 
-    // zfg from m2link's mailbox: bit 7 of FG falls, within the refresh gap.
-    wr64(kComm + 0x801, 1, 0xff);
+    // ================= THE HAND-OVER (R916 addendum 2) =================
+    // m2link's side, done here directly on the DDRAM model: a block into a
+    // bank, an offer in the mailbox.
+    int zfg = 0;                                  // what FG bit 7 should say: ~zfg
+    auto fgval = [&]() { return (access(false, 0x4000, 0x4, 0) >> 16) & 0xff; };
+    auto want_fg = [&](int fgb) { return uint32_t(fgb | (zfg ? 0 : 0x80) | 0x7e); };
+    auto mbox = [&](uint8_t seq, int bank, int flip, int tok, int linked, int fsync, int ttog) {
+        wr64(kComm + 0x801, uint64_t(seq) | uint64_t(bank) << 8 | uint64_t(flip) << 9 | uint64_t(tok) << 10 |
+             uint64_t(linked) << 11 | uint64_t(fsync) << 12 | uint64_t(ttog) << 13, 0xff);
+    };
+    auto put_block = [&](int bank, uint32_t tag) {
+        for (uint32_t w = 0x438; w < 0x5f8; w++)
+            wr64(kComm + (bank ? 0x1000u : 0u) + w, (uint64_t(tag | (w * 2 + 1)) << 32) | (tag | w * 2), 0xff);
+    };
+    auto rx_is = [&](uint32_t tag) {   // the game's view of 0x21c0-0x2fbf, through the CPU port
+        bool ok = true;
+        for (uint32_t a = 0x21c0; a < 0x2fc0; a += 4 * 37) ok &= access(false, a, 0xf, 0) == (tag | (a >> 2));
+        return ok;
+    };
+    auto put_tx = [&](uint32_t tag) {
+        for (uint32_t a = 0x2000; a < 0x21c0; a += 4) access(true, a, 0xf, tag | a);
+    };
+    auto snap_is = [&](uint32_t word, uint32_t tag) {
+        bool ok = true;
+        for (uint32_t i = 0; i < 56; i++) {
+            const uint64_t v = rd64(kComm + word + i);
+            const uint32_t a = 0x2000 + i * 8;
+            ok &= uint32_t(v) == (tag | a) && uint32_t(v >> 32) == (tag | (a + 4));
+        }
+        return ok;
+    };
+    auto st = [&](int lo, int bits) { return (status_word() >> lo) & ((1ull << bits) - 1); };
+    auto pulse_tick = [&]() { d->tick = 1; d->frame = 1; cycle(); };
+    uint8_t seq = uint8_t(st(8, 8));
+    const int fgb = 1;                      // FG = 1 from above (the master)
+
+    // 1. An offer, not linked (no zfg_delay): an FG read takes it -- the
+    // flip is in the very read that takes it; the slots now come from bank 1;
+    // the game's block was copied to the take snapshot first.
+    put_tx(0x10000000);
+    put_block(1, 0x11000000);
+    mbox(++seq, 1, 1, 0, 0, 0, 0);
+    zfg ^= 1;
     long n = 0;
     uint32_t fgv = 0;
-    do {
-        fgv = (access(false, 0x4000, 0x4, 0) >> 16) & 0xff;
-        idle(int(rng() % 20));
-    } while (fgv != 0x7f && ++n < 20000);
-    ck("mailbox zfg=1: FG reads 0x7f (fg 1, ~zfg 0)", fgv, 0x7f);
-    ck("  ... within ~1,024 cycles of reads", n < 400, 1);
+    const long c0 = t_cycle;
+    do fgv = fgval(); while (fgv != want_fg(fgb) && ++n < 200000);
+    ck("offer: an FG read takes it and returns the flip", fgv, want_fg(fgb));
+    ck("  ... within the refresh pace + one copy (< 30,000 cycles here)", t_cycle - c0 < 30000, 1);
+    ck("  ... once: the next reads say the same", fgval() == want_fg(fgb) && fgval() == want_fg(fgb), 1);
     settle();
-    ck("status: the zfg the core now returns (bit 26) is 1", (status_word() >> 26) & 1, 1);
-    wr64(kComm + 0x801, 0, 0xff);
-    n = 0;
-    do {
-        fgv = (access(false, 0x4000, 0x4, 0) >> 16) & 0xff;
-    } while (fgv != 0xff && ++n < 20000);
-    ck("mailbox zfg=0: FG back to 0xff", fgv, 0xff);
-    settle();
-    ck("status: and back to 0", (status_word() >> 26) & 1, 0);
+    ck("status: taken = the offer", st(8, 8), seq);
+    ck("status: rx bank 1, taken at an FG read (bit 38 = 0)", st(35, 1) << 1 | st(38, 1), 2);
+    ck("the game reads the slots from bank 1", rx_is(0x11000000), 1);
+    ck("take snapshot = the game's block at the take", snap_is(0x980, 0x10000000), 1);
+    ck("the game's own block is not banked", access(false, 0x2000, 0xf, 0), 0x10002000);
 
-    // STATUS WORD: vblanks, heartbeats, FG reads, CN writes.
+    // 2. Two frames in one offer: the recomp's loop flips twice -- no flip
+    // seen -- and the slots are the newest's.
+    put_block(0, 0x12000000);
+    mbox(++seq, 0, 0, 0, 0, 0, 0);
+    for (int i = 0; i < 200 && st(8, 8) != seq; i++) { (void)fgval(); idle(20); settle(); }
+    ck("even offer: taken", st(8, 8), seq);
+    ck("  ... zfg unchanged", fgval(), want_fg(fgb));
+    ck("  ... slots from bank 0, the newest", rx_is(0x12000000), 1);
+
+    // 3. A vblank takes the offer that is there (after reading the mailbox
+    // fresh) and copies the game's block to the tick snapshot.
+    put_tx(0x13000000);
+    put_block(1, 0x14000000);
+    mbox(++seq, 1, 1, 0, 0, 0, 0);
+    const uint64_t t0 = st(0, 8);
+    pulse_tick();
     settle();
-    const uint64_t s0 = status_word();
-    for (int i = 0; i < 5; i++) {
-        d->tick = 1;
+    zfg ^= 1;
+    ck("vblank: one tick event", st(0, 8), (t0 + 1) & 0xff);
+    ck("vblank: took the offer, at the tick (bit 38), taken-at-tick", st(8, 8) | st(38, 1) << 8 | st(16, 8) << 9,
+       uint64_t(seq) | 1 << 8 | uint64_t(seq) << 9);
+    ck("vblank: zfg flipped", fgval(), want_fg(fgb));
+    ck("vblank: tick snapshot = the block at the vblank", snap_is(0x900, 0x13000000), 1);
+    ck("vblank: slots from bank 1", rx_is(0x14000000), 1);
+
+    // 4. Not linked, both sockets up: zfg flips every vblank (comm_tick's
+    // zfg ^= 1), with nothing offered.
+    mbox(seq, 1, 1, 0, 0, 0, 1);
+    pulse_tick(); settle(); zfg ^= 1;
+    ck("waiting for the link: vblank flips zfg", fgval(), want_fg(fgb));
+    pulse_tick(); settle(); zfg ^= 1;
+    ck("  ... and again", fgval(), want_fg(fgb));
+
+    // 5. Linked: a vblank sets zfg_delay 2 -- the next two FG reads take
+    // nothing, however long the offer has been there; the third does.
+    mbox(seq, 1, 0, 0, 1, 0, 0);
+    pulse_tick(); settle();
+    put_block(0, 0x15000000);
+    mbox(++seq, 0, 1, 0, 1, 0, 0);
+    idle(3000);
+    (void)fgval(); idle(3000);
+    (void)fgval(); idle(3000); settle();
+    ck("zfg_delay: two FG reads after a vblank take nothing", st(8, 8), uint8_t(seq - 1));
+    zfg ^= 1;
+    n = 0;
+    do fgv = fgval(); while (fgv != want_fg(fgb) && ++n < 200000);
+    ck("  ... the third does", fgv, want_fg(fgb));
+    settle();
+    ck("  ... status", st(8, 8), seq);
+
+    // 6. LINK_FRAMESYNC. Linked with framesync: a vblank sets linktimer;
+    // past zfg_delay an FG read is HELD until a vsync token is taken.
+    mbox(seq, 0, 0, 0, 1, 1, 0);
+    pulse_tick(); settle();
+    ck("framesync: the vblank sets the wait (bit 36)", st(36, 1), 1);
+    (void)fgval(); (void)fgval();             // zfg_delay
+    auto begin_fg = [&]() { d->sel = 1; d->we = 0; d->addr = 0x4000; d->be = 0x4; d->wdata = 0; };
+    auto run_until_done = [&](long max) {     // the access already presented; step until it completes
+        for (long i = 0; i < max; i++) {
+            const Pre p = step();
+            if (!p.stall) { d->sel = 0; return i; }
+        }
+        return -1L;
+    };
+    begin_fg();
+    ck("framesync: the third FG read is held", run_until_done(50000), uint64_t(-1L));
+    mbox(++seq, 0, 0, 1, 1, 1, 0);           // a vsync token, no data
+    const long held = run_until_done(400000);
+    ck("  ... and let go when the token is taken", held >= 0, 1);
+    settle();
+    ck("  ... status: the wait off, the token's offer taken", st(36, 1) | st(8, 8) << 1, uint64_t(seq) << 1);
+    ck("  ... no flip for a token", fgval(), want_fg(fgb));
+
+    // A vblank that finds the wait still on is HELD (comm_tick's wait): no
+    // tick event, and the next FG read waits for the token, which releases
+    // the vblank first -- the game sees it all at once.
+    pulse_tick(); settle();                   // sets the wait
+    (void)fgval(); (void)fgval();
+    const uint64_t te = st(0, 8);
+    pulse_tick(); settle();                   // the wait is still on: held
+    ck("framesync: a vblank in the wait is held (bit 37), no event", st(37, 1) | (st(0, 8) == te) << 1, 3);
+    begin_fg();
+    ck("  ... the FG read waits for it (even with zfg_delay)", run_until_done(50000), uint64_t(-1L));
+    mbox(++seq, 0, 0, 1, 1, 1, 0);
+    ck("  ... the token releases it", run_until_done(400000) >= 0, 1);
+    settle();
+    ck("  ... then the held vblank: one event, the wait on again", (st(0, 8) == ((te + 1) & 0xff)) | st(36, 1) << 1, 3);
+
+    // The wait gives up after TMO_FRAMES video frames: a dead link cannot
+    // freeze the core. (The read the held vblank came out on was the first
+    // of its zfg_delay, as the recomp's first read after comm_tick is.)
+    (void)fgval();
+    begin_fg();
+    ck("framesync: held", run_until_done(5000), uint64_t(-1L));
+    long gave = -1;
+    for (int f = 0; f < 60 && gave < 0; f++) {
         d->frame = 1;
-        cycle();
-        idle(500);
+        gave = run_until_done(2000);
     }
-    for (int i = 0; i < 7; i++) access(false, 0x4002, 0x4, 0);
-    settle();
-    const uint64_t s1 = status_word();
-    ck("status: 5 vblanks", uint8_t(s1 - s0), 5);
-    ck("status: 5 heartbeats", uint8_t((s1 >> 32) - (s0 >> 32)), 5);
-    ck("status: 7 FG reads", uint8_t((s1 >> 8) - (s0 >> 8)), 7);
-    ck("status: cn 1, fg 1", (s1 >> 24) & 3, 3);
+    ck("  ... let go after ~48 frames of no token", gave >= 0, 1);
+    d->sel = 0;
 
-    // THE RESET COMMAND: cn = fg = 0, and zfg 0 whatever the mailbox says --
-    // from a zfg of 1 that the core has already taken in.
-    wr64(kComm + 0x801, 1, 0xff);
-    n = 0;
-    do fgv = (access(false, 0x4000, 0x4, 0) >> 16) & 0xff;
-    while (fgv != 0x7f && ++n < 20000);
-    ck("zfg 1 taken in before the reset command", fgv, 0x7f);
-    idle(5000); // any refresh still owed has landed: only the command can clear it
+    // 7. The reset command ends it all: zfg, the wait, the held vblank.
+    pulse_tick(); settle();
     access(true, 0x4000, 0x1, 0);
-    oracle.cn_w(0);
-    ck("CN=0: cn_r", access(false, 0x4000, 0x1, 0) & 0xff, oracle.cn_r());
-    idle(3000);
-    ck("CN=0: fg_r (fg 0, zfg 0 despite the mailbox)", (access(false, 0x4000, 0x4, 0) >> 16) & 0xff, oracle.fg_r());
     settle();
-    const uint64_t s2 = status_word();
-    ck("status: one more CN write", uint8_t((s2 >> 16) - (s1 >> 16)), 1);
-    ck("status: cn 0, fg 0", (s2 >> 24) & 3, 0);
-    ck("CN=0 leaves the RAM alone", access(false, 0x14, 0xf, 0), 0x000001c0);
-    wr64(kComm + 0x801, 0, 0xff);
-
-    // ONE DWORD WITH BOTH: cn_w then fg_w (recomp dev_write order).
-    access(true, 0x4000, 0x5, 0x00010001);
-    oracle.cn_w(1);
-    oracle.fg_w(1);
-    ck("CN+FG in one dword: regs", access(false, 0x4000, 0x5, 0), uint32_t(oracle.cn_r()) | uint32_t(oracle.fg_r()) << 16);
-    access(true, 0x4000, 0x5, 0x00010000); // cn_w(0) then fg_w(1)
-    oracle.cn_w(0);
-    oracle.fg_w(1);
-    ck("CN=0,FG=1 in one dword: regs", access(false, 0x4000, 0x5, 0), uint32_t(oracle.cn_r()) | uint32_t(oracle.fg_r()) << 16);
-
-    // A REFRESH IN FLIGHT WHEN THE RESET COMMAND LANDS: what it brings back
-    // must not undo the command.
-    access(true, 0x4000, 0x5, 0x00010001);
-    wr64(kComm + 0x801, 1, 0xff);
-    idle(5000);
-    (void)access(false, 0x4000, 0x4, 0); // starts a refresh (the gap has run out)
-    access(true, 0x4000, 0x1, 0);        // and the command lands while it is out
-    idle(3000);
-    ck("reset command during a refresh: zfg 0", (access(false, 0x4000, 0x4, 0) >> 16) & 0xff, 0xfe);
+    zfg = 0;
+    ck("CN=0: wait, held vblank off", st(36, 2), 0);
+    ck("CN=0: FG", fgval(), 0xfe);
+    mbox(seq, 0, 0, 0, 0, 0, 0);
+    access(true, 0x4000, 0x5, 0x00010001);    // CN 1 again, FG 1
+    settle();
+    ck("init: rx bank 0 again", st(35, 1), 0);
 
     // THE GAME'S RESET (device_reset): cn = fg = zfg = 0; the RAM kept.
-    access(true, 0x4000, 0x5, 0x00010001);
-    n = 0;
-    do fgv = (access(false, 0x4000, 0x4, 0) >> 16) & 0xff;
-    while (fgv != 0x7f && ++n < 20000);
-    idle(5000);
+    mbox(seq, 0, 0, 0, 0, 0, 1);              // flip at every vblank
+    pulse_tick(); settle();
+    ck("before the game reset: zfg 1", fgval(), 0x7f);
     access(true, 0x100, 0xf, 0xcafef00d);
     d->game_rst_n = 0;
     idle(4);
     d->game_rst_n = 1;
     idle(4); // the block takes it through two flops
-    ck("game reset: cn 0, fg 0", access(false, 0x4000, 0x5, 0), 0x00fe00fe);
+    ck("game reset: cn 0, fg 0, zfg 0", access(false, 0x4000, 0x5, 0), 0x00fe00fe);
     ck("game reset keeps the RAM", access(false, 0x100, 0xf, 0), 0xcafef00d);
-    wr64(kComm + 0x801, 0, 0xff);
+    mbox(seq, 0, 0, 0, 0, 0, 0);
 
     // PORT A, the framebuffer's stand-in, was bursting throughout.
     settle();
@@ -468,10 +561,10 @@ void run_config(int seed) {
     pa.on = false;
     settle();
     mem.clear();
-    long st = 0;
+    long stalls = 0;
     for (int i = 0; i < 500; i++) {
         access(rng() & 1, rng() % 0x4010, 0xf, rng());
-        st += stall_cycles_last;
+        stalls += stall_cycles_last;
     }
     for (int i = 0; i < 3; i++) {
         d->tick = 1;
@@ -480,7 +573,7 @@ void run_config(int seed) {
         idle(100);
     }
     settle();
-    ck("off: never stalls", st, 0);
+    ck("off: never stalls", stalls, 0);
     ck("off: no DDR3 writes at all", mem.size(), 0);
     ck("off: no status (m2link stays idle)", status_word(), ~0ull);
 }
@@ -497,11 +590,11 @@ struct RtlIO : GameIO {
 
 int integration(const char *path, double seconds, long vblank, bool master, int car, int spin_us) {
     const int fd = ::open(path, O_RDWR | O_CREAT, 0644);
-    if (fd < 0 || ::ftruncate(fd, 0x5000) != 0) return 1;
-    void *p = ::mmap(nullptr, 0x5000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (fd < 0 || ::ftruncate(fd, 0xb000) != 0) return 1;
+    void *p = ::mmap(nullptr, 0xb000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (p == MAP_FAILED) return 1;
     file_page = static_cast<volatile uint8_t *>(p);
-    for (int i = 0; i < 0x5000; i++) file_page[i] = 0xff; // DDR3 at power-on: anything
+    for (int i = 0; i < 0xb000; i++) file_page[i] = 0xff; // DDR3 at power-on: anything
     busy_pct = 20;
     lat_max = 30;
     reset_all(true);

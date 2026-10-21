@@ -267,28 +267,35 @@ std::deque<Rd> rq;
 uint32_t wr_addr = 0; int wr_left = 0;
 bool tick_req = false, sel_prev = false;
 uint64_t cn_w = 0, fg_w = 0, fg_r = 0, ram_r = 0, ram_w = 0, logged = 0;
+uint64_t held_cyc = 0, held_max = 0, held_run = 0, vbls = 0, tick_evts = 0; uint8_t last_te = 0;
 uint64_t rng = 0x9e3779b97f4a7c15ull;
 uint32_t rnd() { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return uint32_t(rng); }
 uint64_t rd64(uint32_t w) {
-  if (page && w >= kComm && w < kComm + 0xa00) { uint64_t v; std::memcpy(&v, page + size_t(w - kComm) * 8, 8); return v; }
+  if (page && w >= kComm && w < kComm + 0x1600) { uint64_t v; std::memcpy(&v, page + size_t(w - kComm) * 8, 8); return v; }
   auto it = ddr.find(w); return it == ddr.end() ? ~0ull : it->second;
 }
 void wr64(uint32_t w, uint64_t v, uint8_t be) {
   uint64_t o = rd64(w);
   for (int i = 0; i < 8; i++) if (be >> i & 1) o = (o & ~(0xffull << (8 * i))) | (v & (0xffull << (8 * i)));
-  if (page && w >= kComm && w < kComm + 0xa00) std::memcpy(page + size_t(w - kComm) * 8, &o, 8);
+  if (page && w >= kComm && w < kComm + 0x1600) std::memcpy(page + size_t(w - kComm) * 8, &o, 8);
   else ddr[w] = o;
 }
 void open_page(const char *path) {
   const int fd = ::open(path, O_RDWR | O_CREAT, 0644);
-  if (fd < 0 || ::ftruncate(fd, 0x5000) != 0) { std::printf("  M2_LINK_MEM: cannot open %s\n", path); return; }
-  void *p = ::mmap(nullptr, 0x5000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (fd < 0 || ::ftruncate(fd, 0xb000) != 0) { std::printf("  M2_LINK_MEM: cannot open %s\n", path); return; }
+  void *p = ::mmap(nullptr, 0xb000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (p == MAP_FAILED) return;
   page = static_cast<uint8_t *>(p);
-  std::memset(page, 0xff, 0x5000);   // DDR3 at power-on: anything
+  std::memset(page, 0xff, 0xb000);   // DDR3 at power-on: anything
 }
 // After a clk_mem rising edge: the inputs for the coming cycle.
 template <class D> void tick(D *d, uint64_t frame) {
+  if (tick_req) {   // per vblank: the core's tick events since the last (8-bit count)
+    ++vbls;
+    const uint8_t te = uint8_t(rd64(kComm + 0x800));
+    if (rd64(kComm + 0x800) >> 48 == 0x4C02) { tick_evts += uint8_t(te - last_te); last_te = te; }
+  }
+  if (d->comm_stall_o) { ++held_cyc; if (++held_run > held_max) held_max = held_run; } else held_run = 0;
   d->comm_tick = tick_req; tick_req = false;
   const bool busy = (rnd() % 100) < 10;
   d->DDRAM_BUSY = busy;
@@ -327,6 +334,8 @@ template <class D> void report(D *d) {
   std::printf("  LINK BOARD: CN writes %llu, FG writes %llu, register reads %llu, RAM reads %llu, writes %llu; "
               "cn %d zfg %d\n", (unsigned long long)cn_w, (unsigned long long)fg_w, (unsigned long long)fg_r,
               (unsigned long long)ram_r, (unsigned long long)ram_w, d->comm_cn_o, d->comm_zfg_o);
+  std::printf("  LINK BOARD: %llu vblanks, %llu processed by the board; the i960 held %llu cycles in all, longest %llu\n",
+              (unsigned long long)vbls, (unsigned long long)tick_evts, (unsigned long long)held_cyc, (unsigned long long)held_max);
   const uint64_t h0 = rd64(kComm), h2 = rd64(kComm + 2), st = rd64(kComm + 0x800);
   std::printf("  LINK BOARD: shared 0x00-0x07 %016llx, 0x10-0x17 %016llx, status %016llx\n",
               (unsigned long long)h0, (unsigned long long)h2, (unsigned long long)st);

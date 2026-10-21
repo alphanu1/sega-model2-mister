@@ -79,6 +79,7 @@ module m2_boot_harness #(
   input  logic        DDRAM_DOUT_READY,
   output logic        comm_cn_o,
   output logic        comm_zfg_o,
+  output logic        comm_stall_o,   // the i960 held by the board (a take's copy, framesync's wait)
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
   // The game side then runs at TRUE memory latency, which is the variable the
@@ -1090,6 +1091,7 @@ module m2_boot_harness #(
   wire        comm_rd_sel = LINK_EN && link_fitted && comm_win;
   wire        comm_stall;
   wire [31:0] comm_rdata;
+  assign comm_stall_o = comm_stall;
   generate if (LINK_EN) begin : g_link
     wire        c_req, c_we, c_wacc, c_rvalid, c_ack, c_wnext;
     wire [24:0] c_addr;
