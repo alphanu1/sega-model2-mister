@@ -42612,3 +42612,67 @@ build reports the FIFO's underruns, R877). Nothing to bisect: every
 on Model2A_20261021b, md5 7f15c532...): Ben, "DOA sound is good". VF2's
 -8.9 dB mix: Ben, "VF is good"; Virtua Cop 2: "also good". R914
 stands for every 2A game.
+
+**R922 -- VIRTUA COP 2'S "SHOOT TO SELECT" BEHIND THE CITY (GitHub #16) IS
+MAME'S TILEMAP ORDER, AND MAME'S OWN TODO SAYS SO. A FRONT CATEGORY-0
+PIXEL NOW HIDES A BACK CATEGORY-1 PIXEL.** 2026-10-21, branch vc2-layer.
+
+*What was believed.* m2_tile_mixer (and Model 1's m1_tile_mixer, which it
+copies) is model2_v.cpp's screen_update: every tilemap's category-1 tiles
+over the 3D over every category-0 tile, i.e. front to back tm0.cat1,
+tm1.cat1, tm2.cat1, tm3.cat1, [3D], tm0.cat0 ... (R213). So the order of
+the two tilemap PAIRS (0/1 over 2/3) reverses wherever the back pair's tile
+has the category bit and the front pair's does not.
+
+*What is now known (VERIFIED in MAME 0.289 and our RTL; the board rule is
+INFERRED).* Stage select, vcop2 frame 2520 (coin 2300, start 2500), all
+scroll and window registers 0: SHOOT TO SELECT and the red arrows are
+tilemap 0 category 0; the city map is tilemap 2, every tile category 1
+(17,580 opaque pixels); the BEGINNER / MEDIUM / EXPERT boxes are the 3D.
+The text overlaps the city in 2,637 pixels, none of them under a 3D pixel.
+MAME draws the city over the text -- exactly the user's photo -- and MAME's
+model2.cpp TODO names it: "vcop2: stage select has tilemap priority issue,
+tilemap B (city model) has priority bit set, yet it should appear
+underneath tilemap A ('shoot to select') which does not". Our core before
+the change = MAME pixel for pixel (frame bench + MAME's 3D buffer, Model2.sv's
+mix: 0 of 190,464 differ). A second screen settles which rule: Zero Gunner's
+SCORE RANKING (zeroguna, frames 8880-9210 of the survey run) is a
+full-screen tilemap-2 category-1 background with GUNSHIP / COBRA / APACHE
+helicopter icons on tilemap 0 category 0, one per rank in the empty gap
+between the rank number and the name -- never visible in MAME (6,411
+pixels). No strict layer order can put the text over the city, the city
+over the 3D and the 3D over category-0 text; the order that fits both
+screens and every other is the one a tile chip with a single output would
+give: the 2D layers resolve in their own order (pair 0/1 over pair 2/3),
+and the WINNING pixel's category decides it against the 3D. Model 1's RTL
+has MAME's rule too, so it does not answer this; no Model 1 screen tested
+there has the case.
+
+*The fix.* m2_tile_mixer: `front_cat0 = hit_cat0[0] || hit_cat0[1]` (a
+non-transparent category-0 pixel of tilemap 0 or 1) suppresses hit_cat1[2]
+and hit_cat1[3]; the pixel falls to the category-0 chain, so vid_cat1 is 0
+and a 3D pixel there still wins (Model2.sv unchanged). Shared by both cores
+(main's file is identical).
+
+*How it was established -- and what else moves (nothing).* A survey Lua
+(tile RAM every 20 frames, char RAM when written; coin at 1500, start and
+fire pulsed, pedals held) over 6,000 frames of all 15 sets with MRAs
+(daytona, daytona93, desert, vcopa, vcop2, srallyc, vf2, zeroguna,
+manxtt, dynamcop, doaab, motoraid, pltkidsa, skytargt, hpyagu98) and
+14,000 frames (every 30) of the eight that use tilemap-2/3 category-1
+tiles (vcop2, dynamcop, hpyagu98, zeroguna, vf2, doaab, skytargt, vcopa),
+with a Python System 24 decoder (window modes and line scroll; checked
+against MAME's snapshots: 0 pixels differ on the two frames composed):
+the case occurs in exactly two screens -- the vcop2 stage select and the
+Zero Gunner ranking. RTL, tb_m2_video_frame (now also writes vid_cat1 as
+<out>.cat) on old and new mixer over 79 dumped frames (five from each set,
+1200-6000, plus four of the two screens): 75 frames identical in RGB and
+vid_cat1; the four others change in exactly the overlap pixels (2,637 /
+6,411 / 6,411 / 657), no pixel outside it. Area: the mixer standalone 31 -> 31 ALMs, 46 ->
+47 ALUTs. lint_top 2A and M2_NO_2A clean, lint_idx nothing in the changed
+file, analyze_file 0 errors, test_m2_video_ovr PASS.
+
+*Not settled.* The rule where the overlap also has a 3D pixel (this change
+shows the 3D, MAME the back tile): no screen found has it. Whether the
+board's ranking really shows the icons: INFERRED from the layout, check it
+on the board.

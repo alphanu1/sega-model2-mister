@@ -58,6 +58,7 @@ static bool load_u16(const std::string &path, std::vector<uint16_t> &out) {
 // sim/video/tb_m2_video_timing.cpp.
 static const int W = 496, H = 384;
 static std::vector<uint8_t> fb;
+static std::vector<uint8_t> catm;   // vid_cat1 per pixel: the tile is over the 3D (Model2.sv's mix)
 
 // Deterministic, so a failure is reproducible rather than a story about one run.
 static uint32_t g_rnd_s = 12345;
@@ -127,6 +128,7 @@ int main(int argc, char **argv) {
   dut->tram_data = 0; dut->char_data = 0; dut->char_ack = 0; dut->pal_data = 0;
 
   fb.assign(size_t(W) * H * 3, 0);
+  catm.assign(size_t(W) * H, 0);
 
   // The tram and palette reads are REGISTERED in Model2.sv — one cycle of
   // latency, not combinational. Reproduced here, because a renderer that works
@@ -231,6 +233,7 @@ int main(int argc, char **argv) {
     if (!hb && !vb && frame == frames && y >= 0 && y < H && x < W) {
       const size_t o = (size_t(y) * W + x) * 3;
       fb[o+0] = dut->vid_r; fb[o+1] = dut->vid_g; fb[o+2] = dut->vid_b;
+      catm[size_t(y) * W + x] = dut->vid_cat1;
     }
     if (!hb && !vb) ++x;
     hb_p = hb; vb_p = vb;
@@ -251,6 +254,11 @@ int main(int argc, char **argv) {
     const std::string p2 = out + ".raw";
     FILE *g = std::fopen(p2.c_str(), "wb");
     if (g) { std::fwrite(fb.data(), 1, fb.size(), g); std::fclose(g); }
+    // R922: vid_cat1 per pixel (1 = this tile pixel stays over a 3D pixel), so
+    // a frame can be composed against a 3D image exactly as Model2.sv does it.
+    const std::string p3 = out + ".cat";
+    FILE *h = std::fopen(p3.c_str(), "wb");
+    if (h) { std::fwrite(catm.data(), 1, catm.size(), h); std::fclose(h); }
   }
 
   // A frame that is entirely one colour is the failure this harness exists to

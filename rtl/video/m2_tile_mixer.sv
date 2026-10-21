@@ -44,6 +44,27 @@
 //   tm0.cat1, tm1.cat1, tm2.cat1, tm3.cat1, [3D], tm0.cat0, tm1.cat0,
 //   tm2.cat0, tm3.cat0
 //
+// R922: A FRONT PAIR'S CATEGORY-0 PIXEL HIDES A BACK PAIR'S CATEGORY-1 PIXEL
+//
+// MAME's order above puts tilemaps 2/3's category-1 tiles over EVERYTHING of
+// tilemaps 0/1 except their own category-1 tiles. Two screens show that is not
+// the board: Virtua Cop 2's stage select (GitHub #16, and MAME's own TODO --
+// "tilemap B (city model) has priority bit set, yet it should appear
+// underneath tilemap A ('shoot to select')"), where the city map is tilemap 2
+// category 1 and SHOOT TO SELECT is tilemap 0 category 0; and Zero Gunner's
+// SCORE RANKING, whose full-screen background is tilemap 2 category 1 and
+// whose helicopter icons (GUNSHIP / COBRA / APACHE, one per rank, in the gap
+// between the rank and the name) are tilemap 0 category 0 -- never visible in
+// MAME. So the 2D layers resolve in their own order first, and the category
+// of the pixel that wins decides it against the 3D: a non-transparent
+// category-0 pixel of tilemap 0 or 1 suppresses tilemaps 2/3's category-1
+// hits, falls to the category-0 chain, and so sits under a 3D pixel exactly
+// as before. Nothing else moves: in 14 games' attract and first play (MAME
+// 0.289, tile RAM every 20-30 frames) those two screens are the only frames
+// where a front category-0 pixel lies on a back category-1 pixel. Tilemaps
+// 0 and 1 (and 2 and 3) never overlap -- the row mask or the window gives
+// each 8-pixel column to one of the pair -- so the pair is the unit.
+//
 // OPACITY
 //
 // Layers 6 and 4 — tilemaps 3 and 2, category 0 — are drawn with
@@ -103,13 +124,18 @@ module m2_tile_mixer (
     end
   end
 
+  // R922: tilemap 0 or 1 shows a non-transparent category-0 pixel here
+  // (hit_cat0 of 0 and 1 already requires !transparent).
+  logic front_cat0;
+  assign front_cat0 = hit_cat0[0] || hit_cat0[1];
+
   always_comb begin
     // Front to back. The first hit wins, which is the same result as painting
     // back to front and letting later writes overwrite earlier ones.
     if      (hit_cat1[0]) begin pixel = pal_index[0]; source = 4'd0; end
     else if (hit_cat1[1]) begin pixel = pal_index[1]; source = 4'd1; end
-    else if (hit_cat1[2]) begin pixel = pal_index[2]; source = 4'd2; end
-    else if (hit_cat1[3]) begin pixel = pal_index[3]; source = 4'd3; end
+    else if (hit_cat1[2] && !front_cat0) begin pixel = pal_index[2]; source = 4'd2; end
+    else if (hit_cat1[3] && !front_cat0) begin pixel = pal_index[3]; source = 4'd3; end
     else if (poly_valid)  begin pixel = poly_index;   source = 4'd8; end
     else if (hit_cat0[0]) begin pixel = pal_index[0]; source = 4'd4; end
     else if (hit_cat0[1]) begin pixel = pal_index[1]; source = 4'd5; end

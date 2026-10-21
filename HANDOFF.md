@@ -1,5 +1,28 @@
 # Handoff
 
+## 2026-10-21: branch vc2-layer -- Virtua Cop 2's stage-select text (GitHub #16, R922). NOT PUSHED, NOT FITTED
+
+Cause: our tile mixer is MAME's screen_update order (each tilemap's
+category-1 tiles over the 3D over every category-0 tile). On the stage
+select the city map is tilemap 2 with every tile category 1 and SHOOT TO
+SELECT is tilemap 0 category 0, so the city covers the text -- in MAME too
+(its model2.cpp TODO names this exact screen). Core before = MAME pixel for
+pixel. Fix (m2_tile_mixer, both cores): a non-transparent category-0 pixel
+of tilemap 0/1 suppresses tilemaps 2/3's category-1 hits; the winning 2D
+pixel's category decides it against the 3D, so 3D still covers the text
+where both exist. Second screen found by the survey: Zero Gunner's SCORE
+RANKING, whose helicopter icons (tilemap 0 cat 0 on a tilemap 2 cat 1
+background) now show in the gap between rank and name.
+Evidence: survey of all 15 MRA sets (6,000 frames; 14,000 for the eight
+using tilemap 2/3 category 1): only those two screens have the case. RTL
+frame bench old vs new on 79 MAME dumps: 75 identical (RGB and vid_cat1),
+the other four differ in exactly the overlap pixels. Mixer 31 -> 31 ALMs
+(+1 ALUT). lint_top 2A / M2_NO_2A clean, lint_idx clean, analyze_file 0
+errors, test_m2_video_ovr PASS. tb_m2_video_frame also writes <out>.cat.
+NEXT: a fit; on the board, VC2 stage select (text over the city, blinking)
+and ZG's ranking (icons beside the names) -- the ZG icons are inferred
+from the layout, not seen on an arcade board. Next free R numbers: R923 on.
+
 ## 2026-10-21: the Model 2 family reviewed again (R919) -- branch family-hw, DOCUMENT ONLY, NOT PUSHED
 
 New: docs/model2-family-hardware.md. One table per board (original, 2A, 2B,
