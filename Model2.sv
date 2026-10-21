@@ -16,6 +16,15 @@
 // the framework hand us a picture, and are the sync parameters right on a real
 // display. Those are cheap to answer now and expensive to answer later.
 
+// R909: NO REGISTER CHAIN IN THE CORE BECOMES A BLOCK RAM. Quartus's shift-
+// register recognition (default Auto) had turned four groups of short chains
+// into altshift_taps in M10K: the status synchronizers (3 deep, 45 bits, 1
+// block), the TGP ALU's and the geometry pool's float pipelines (3 deep, 115
+// bits, 3 blocks; 36 bits, 1 block) and m2_span_tex's lp2..lp4 stages (4
+// deep, 43 bits, 1 block) -- six M10K for 598 bits on a device whose blocks
+// are the binding resource (study 5.6). As registers they are what the RTL
+// says they are. The framework (sys/) keeps the default.
+(* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *)
 module emu
 (
 	`include "sys/emu_ports.vh"
