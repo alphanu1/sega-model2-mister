@@ -43181,3 +43181,153 @@ THE 2A SLOWDOWNS.** s1328 (model2a bd6fa2e: R927's 8-frame register ring and
     are good".
 R926's AI detail test MRA moved to sim/io/test-mra/ (a diagnostic, never a
 release file).
+
+**R923 -- VIRTUA FIGHTER 2 "CRASHES AT RANDOM" (GitHub #17): NO DEADLOCK IN
+THE TGP / COPRO HANDSHAKE THAT SIMULATION CAN REACH. VF2's TGP IS BIT-EXACT
+AGAINST MAME OVER A NEW 60 s CAPTURE WITH FIGHTS AND UNDER EVERY BOARD-LIKE
+TIMING TRIED (LATENCY, JITTER AND i960 PACING TO 30x R876's); NO FIFO WORD IS
+LOST OR DUPLICATED; s1278's FAILING clk_sys PATHS ARE NOT IN THE TGP. A PROBE
+BUILD (M2_PROBE_TGP) THAT NAMES WHAT EACH SIDE WAITS ON AT THE HANG, AND HOLDS
+THE LAST 256 i960 TRANSFERS BEFORE IT. NO BEHAVIOUR CHANGED. NOT FITTED.**
+(GitHub #17, Model2A_20261021b = s1278, users: VF2 "crashes at random ...
+even in the attract mode. Sometimes as soon as the match starts, sometimes in
+round one, or after a second fight, after a credit is inserted". The symptom
+-- freeze, reset, garbage -- is not stated.)
+
+*Believed (R871, R876, R921):* the one recorded VF2 lockup (s1203, before
+R876 and R888) held the i960 at 0x7dc4 -- three ldq from the TGP's output
+FIFO -- with the TGP never answering; the probe of the day could not say where
+the TGP was. R876 cleared VF2's TGP under board-like timing on three windows
+(attract only); R921 cleared every i960 form. Open: a handshake deadlock the
+replays do not reach, a lost or duplicated FIFO word, a marginal timing path,
+or a TGP divergence on data the captures never held.
+
+*THE HUNT (simulation; Model 1's TGP board read first):*
+  1. VF2 attract window (build/tgpcap/vf2_1500, frames 1500-1800: 814,468 words
+     in, 272,424 out) through tb_tgp_replay, 16 runs: --board-push with
+     --gap 60 --jitter 40 at seeds 2-9; --gap 0 --jitter 0 at --lat 1 and
+     --lat 0; plain --lat 1; --gap 600 --jitter 400; --gap 3 --jitter 400
+     --lat 1 --wlat 200; --gap 1 --jitter 1000; --gap 2000 --jitter 10;
+     --gap 20 --jitter 5 --wlat 400 (posted buffer-RAM writes slower than the
+     TGP: the queue full and the i960's result reads held on it). ALL PASS,
+     bit-exact, 0 dropped, 0 store-order hazards.
+  2. A NEW CAPTURE WITH FIGHTS (sim/io/mame_m2_vf2_play.lua chaining
+     sim/tgp/tgp_capture.lua: coins 60 / 180 / 300 s, frames 3700-7301 =
+     61.7-121.7 s: the credit, character select, round one of two matches --
+     MAME snapshots at 90 s and 120 s show Pai vs Lau in round 1; 9,742,311
+     words in, 3,380,307 out; no upload in the window). Plain --lat 6;
+     --board-push --gap 0 --lat 1; --gap 60 --jitter 40 at seeds 1, 2 and 7;
+     --gap 600 --jitter 60: PASS, bit-exact (245.5 M TGP instructions;
+     1,318 M cycles plain, 1,833 M board-like). --gap 3 --jitter 400 --lat 1
+     --wlat 200 was still running at the hand-off (its attract-window twin
+     passed). The i960 model never sat on a full input FIFO (VF2's runs
+     stay far under 128 words, as R876).
+  3. The other 2A TGP programs on this RTL: Zero Gunner's play and Sega
+     Rally's race windows (board-push, R876's settings), and a NEW Virtua
+     Cop 2 window (make tgp_capture_2a CAP2A_SET=vcop2 CAP2A_GAME=vcop2,
+     frames 1300-2500: 1,556,551 in, 439,627 out; --board-push --gap 60
+     --jitter 40): PASS (VC2: 8 outputs differ in NaN encoding only, as
+     Daytona's). Daytona race5400 on the original core's TGP: PASS as R876
+     (15 / 5 NaN encoding) and IDENTICAL to the stored RTL baseline.
+  4. tb_m2_fifo_fuzz (new): m2_fifo_m10k -- the queue behind both copro FIFOs
+     and the TGP's posted writes -- against a reference queue every cycle,
+     20 M cycles each at DEPTH 128 and 32, in phases that fill it and sit
+     full, drain it and sit empty, push into it full while the head is
+     popped (1.8 M such cycles) and pop the last word as it lands: 0
+     failures. Three planted faults (write while full, a second read in
+     flight, full one late) each FAIL by thousands; a fourth is equivalent.
+  5. The i960 side, read rather than simulated: m2_cpu_bridge holds an I/O
+     access in S_IOW with io_sel re-asserted while io_stall, and completes it
+     in the cycle stall falls, sampling a combinational copro_rdata --
+     exactly one push or pop per access (no registered read on the path, so
+     no stale word). MAME's VF2 writes copro_ctl1 twice (the boot's upload)
+     and reads fifo_control once in 260 s with fights: no re-upload, no
+     polling -- the replay's push / blocking-pop i960 is the game's
+     protocol. MAME's i960 defers interrupts during a burst-stalled ldq, as
+     ours (it is blocked in the bus cycle), so 0x7dc4's wait cannot need an
+     IRQ handler's words.
+  6. ALIASES, ruled out for VF2: Model2.sv decodes the copro ports from
+     cpu_io_addr[23:0] only, so any T_IO access at 0x1X88xxxx or above
+     would push into the TGP's FIFO. A MAME tap on every i960 access at or
+     above 0x10000000 (230 s, attract and fights): VF2 writes only
+     0x10000000 (once), the texture mirrors 0x122-0x127xxxxx and luma
+     0x128xxxxx -- all decoded to SDRAM before T_IO; no read at all.
+  7. MODEL 1 (tools/model1-ref 0b5d04f, current with its local repository):
+     m1_tgp's fifo_ack for a write is `!fifo_out_full || pushed` -- a full
+     output FIFO stalls its TGP (MAME halts it). Ours acknowledges and drops
+     (R146-era: the board froze at 0x1166C when the i960 stopped draining),
+     with 129 places against MAME's 8; nothing counted it (`fifo_out_push`
+     is gated, so u_fout's `dropped` cannot move). Kept -- VF2's protocol
+     never has more than a command's results outstanding -- but now counted
+     (m2_tgp dbg_out_refused) and the replay FAILS on any: 0 in every run.
+  8. TIMING. quartus_sta on a copy of s1278's database (80 MHz clk_sys,
+     slow corner): the failing clk_sys endpoints are gp_outr -> PhaseInc
+     (-0.328), -> shadowmask_data (-0.210), -> vs_line (-0.070): hps_io's
+     GPO into the video / scan-converter configuration. The worst TGP path
+     is mb86233_core state.S_DST -> maddr_q[15] at +0.484; none of the 60
+     worst paths ends in m2_copro's FIFOs, the bridge's I/O state or the
+     SDRAM crossings' slow side. A marginal-path hang in the copro is not
+     what STA shows for s1278 (it cannot see the asynchronous crossings,
+     which are false-pathed; m2_sdram_cdc's toggles are synchronised).
+
+*What would tell a deadlock from a timing fault on the board:* a logic
+deadlock is reproducible in state -- the same TGP pc and sequencer state, a
+consistent pair of FIFO counts (the i960 waiting on an empty output FIFO and
+the TGP in S_SRC on an empty input FIFO: the two disagree on a command's
+length) -- and the ring shows a normal command stream up to the hang. A
+corrupted crossing or path shows as an inconsistent state: a req with no
+ack for ever (tbl / dat / bufw), the TGP's popped count ahead of the i960's
+pushed count, fin_valid with a zero count, or a command code in the ring
+that the program never dispatches. A livelock moves the TGP's retire count.
+
+*THE PROBE (M2_PROBE_TGP, rtl/dbg/m2_tgp_probe.sv; decoder
+tools/decode_tgp.py).* VERILOG_MACRO "M2_PROBE=1" and "M2_PROBE_TGP=1" (with
+M2_NO_DEBUG as every probe build; add "M2_NO_2A_RALLY=1" for the area below).
+The sound and memory-test records give their place (SND_CHKSUM off); M2_PROBE's
+stream, slot rate (2.46 ms) and UART. A state record and a ring record in
+turn: C (i960 IP | copro_stall, unimplemented, frozen, TGP pc), h (m2_copro
+dbg_fifo: halted, uploading, both FIFOs' flags and counts, the i960's access
+| m2_tgp dbg_hs: the sequencer's state and every req / ack), j (pushed /
+popped counts both ways), p / x (the last words each way; output words lost on
+a full FIFO; input words dropped), i (TGP io address, retires, program word),
+a (the i960's I/O access, trap / halted, the TGP's bank, the longest
+copro_stall), and r -- THE LAST 256 i960 TRANSFERS (push, function-port
+command, pop, copro_ctl1), with a 6-bit vblank count, in one M10K, which
+FREEZES once copro_stall has held 2^23 cycles (105 ms). New debug ports, all
+open in the release build: mb86233_core dbg_state, m2_tgp dbg_hs /
+dbg_out_refused, m2_copro dbg_fifo / dbg_tgp_hs / dbg_tgp_out_refused /
+dbg_xfer*.
+  * tb_m2_tgp_probe (make test_m2_tgp_probe): the module through its own
+    UART (DIVISOR 8, FREEZE_BIT 12): 700 transfers with short stalls, the
+    hang, 300 transfers after it; the frozen ring checked entry by entry
+    (index, kind, word, vblank), every state record against its inputs:
+    PASS. Three planted faults FAIL (write after the freeze, a skipped
+    read index, a shifted index in the record). decode_tgp.py reads the
+    bench's capture.
+  * tb_tgp_replay now checks m2_copro's transfer tap against every transfer
+    it makes (kind and word) and fails on a TGP output lost on a full FIFO:
+    VF2 attract 1,086,892 transfers named, 0 wrong; VC2 1,996,178; Daytona
+    231,565.
+
+*AREA (quartus_map 17.0, whole design, ALMs needed):*
+     model2a 7207198, release macros                  39,987   4,564,464 bits
+     this branch, release macros                      39,987   4,564,464 (identical: the ports prune)
+     + M2_PROBE + M2_PROBE_TGP                        40,455   4,574,704 (+468; +1 M10K, the ring)
+     + M2_PROBE + M2_PROBE_TGP + M2_NO_2A_RALLY       40,313   4,574,704 (+326)
+  (s1278, eb5a700, mapped 39,948 and fitted 41,389 ALM, 547 / 553 M10K.)
+  The probe module is 511 ALUT / 212 registers, 434 / 134 of it the stream's
+  hex formatter (as every M2_PROBE build).
+
+*Checks:* lint_top clean on 2A, -DM2_NO_2A, -DM2_NO_DEBUG -DM2_PROBE=1, and
+the same with -DM2_PROBE_TGP=1 (with and without -DM2_NO_2A_RALLY); lint_idx
+(default and probe): nothing in the changed code; quartus_map --analyze_file
+mb86233_core, m2_tgp, m2_copro, m2_tgp_probe, Model2.sv: 0 errors.
+
+*What the board must show (VF2 on the probe build, the UART captured):* if
+it hangs, decode_tgp.py's verdict and the frozen ring. A "deadlock by count"
+verdict with a sane ring: replay the ring's command in MAME (the last
+function-port codes and operands) and look for a TGP divergence on that
+data. A req without an ack: the memory path. No copro_stall at the freeze:
+not the TGP at all -- the C records' IP says where the i960 is. Not settled
+here: whether #17's "crash" is the TGP at all (no report says freeze or
+reset), and the users' SDRAM modules.
