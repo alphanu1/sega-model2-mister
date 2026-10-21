@@ -89,6 +89,8 @@ module geodiff_top #(
   logic        geo_eng_busy;   // what the walker waits on (R709: and the read-ahead)
   logic [31:0] lit_x, lit_y, lit_z;
   logic        tp_we;
+  logic        tc_we;            // R905
+  logic [11:0] tc_l, tc_lod;
   logic [4:0]  tp_idx;
   logic [7:0]  tp_diffuse, tp_ambient, zadj_e;
   logic [31:0] win_vp_s, win_vp_e, win_c0;
@@ -127,6 +129,7 @@ module geodiff_top #(
     .dbg_overtake(),
     .tp_we(tp_we), .tp_idx(tp_idx),
     .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
+    .tc_we(tc_we), .tc_l(tc_l), .lod_l(tc_lod),   // R905
     .dbg_tp_n(tp_n),
     .obj_tpa(obj_tpa), .obj_tha(obj_tha), .obj_oba(obj_oba), .obj_obc(obj_obc),
     .obj_valid(obj_valid),
@@ -198,6 +201,7 @@ module geodiff_top #(
     .a_bottom(a_bottom), .a_top(a_top),
     .tha(obj_tha), .tpa(obj_tpa), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
+    .tc_we(tc_we), .tc_l(tc_l), .lod_l(tc_lod), .mz_exact(BIG),   // R905
     .col_inval(1'b0), .tex_lum(2'd2), .gamma_sel(2'd2), .tex_off(1'b0), .mem_space(mem_space), .dbg_col_miss(),
     .q_valid(q_valid), .q_ready(q_ready),
     .q_x0(q_x0), .q_y0(q_y0), .q_x1(q_x1), .q_y1(q_y1),

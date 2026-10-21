@@ -997,6 +997,7 @@ module m2_boot_harness #(
     .foc_x(geo_foc_x), .foc_y(geo_foc_y), .obj_win(geo_obj_win),   // R889
     .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z), .dbg_lit_n(),
     .tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient), .dbg_tp_n(),
+    .tc_we(geo_tc_we), .tc_l(geo_tc_l), .lod_l(geo_tc_lod),   // R905
     .obj_tpa(geo_obj_tpa), .obj_tha(geo_obj_tha), .obj_oba(geo_obj_oba), .obj_obc(geo_obj_obc),
     .obj_valid(geo_obj_valid),
     .dbg_mtx_n(geo_mtx_n), .dbg_foc_n(geo_foc_n),
@@ -1029,6 +1030,8 @@ module m2_boot_harness #(
   wire [31:0] geo_obj_tha, geo_obj_tpa;
   wire [31:0] geo_lit_x, geo_lit_y, geo_lit_z;   // R222
   wire        geo_tp_we;
+  wire        geo_tc_we;            // R905
+  wire [11:0] geo_tc_l, geo_tc_lod;
   wire  [4:0] geo_tp_idx;
   wire  [7:0] geo_tp_diffuse, geo_tp_ambient;
 
@@ -1088,6 +1091,7 @@ module m2_boot_harness #(
     .a_bottom(32'h43400000), .a_top(32'hC3400000), // +192, -192
     .tha(geo_obj_tha), .lit_x(geo_lit_x), .lit_y(geo_lit_y), .lit_z(geo_lit_z),
     .tp_we(geo_tp_we), .tp_idx(geo_tp_idx), .tp_diffuse(geo_tp_diffuse), .tp_ambient(geo_tp_ambient),
+    .tc_we(geo_tc_we), .tc_l(geo_tc_l), .lod_l(geo_tc_lod), .mz_exact(1'b0),   // R905
     .col_inval(oc_col_inval), .tex_lum(2'd0), .mem_space(eng_mem_space), .dbg_col_miss(),
     .q_valid(eng_q_valid), .q_ready(1'b1),
     .q_x0(eng_q_x0), .q_y0(eng_q_y0), .q_x1(eng_q_x1), .q_y1(eng_q_y1),

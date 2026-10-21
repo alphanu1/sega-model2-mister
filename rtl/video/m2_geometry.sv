@@ -74,6 +74,17 @@ module m2_geometry #(
   // four mantissa bits, in sixteenths of a level. 0: q_mipz is 0, pruned.
   parameter bit MIPZ   = 1'b0,
   parameter int MIPZ_B = 3,
+  // R905: THE GAME'S OWN coef AND lod, FOR THE GAMES THAT SET THEM (mz_exact).
+  // Daytona's lod is 128 and every coef 1.0, which the rule above folds into
+  // its constant; the large 2A layout's games set their own -- Dead or Alive
+  // lod 1000 with coefs 11 / 351, Dynamite Cop 0.5 with 1.94..351, Sky Target
+  // and Pilot Kids 4, Hanguk Pro Yagu 98 8, Motor Raid 0.25 (MAME 0.289 walk
+  // dumps) -- up to eleven levels from the constant. With mz_exact the level is
+  // MAME's: log2 z^2 - log2(coef[attr >> 27] |dotp| lod), and the polygon is
+  // drawn at level 0 when that is at most -MIPZ_BX at its far end. 0: exactly
+  // where MAME draws the whole polygon at level 0 (Dead or Alive never mips
+  // in MAME, and its sheets hold no mip levels: R905).
+  parameter int MIPZ_BX = 0,
   parameter bit TEXLUT = 1'b0,   // R867: m2_geo_engine's (the textured colour per pixel)
   // R889: THE WINDOW ORDER, IN THE SORT KEY. MAME (render_polygons) draws the
   // list window by window from the last opened down to window 0, and within a
@@ -124,6 +135,10 @@ module m2_geometry #(
   input  logic        tp_we,
   input  logic [4:0]  tp_idx,
   input  logic [7:0]  tp_diffuse, tp_ambient,
+  input  logic        tc_we,             // R905: coef_table[tp_idx], log bits (m2_geo)
+  input  logic [11:0] tc_l,
+  input  logic [11:0] lod_l,             // R905: geo_lod's operand, the same bits
+  input  logic        mz_exact,          // R905: the no-mip flag from the game's coef and lod
   input  logic        col_inval,
   input  logic [1:0]  tex_lum,           // R239
   input  logic [1:0]  gamma_sel,         // R630
@@ -662,7 +677,28 @@ module m2_geometry #(
   wire  [14:0] mz_b = {2'b00, mz_ld} + MZ_T;
   // |dotp| 0 (or denormal) is MAME's deepest level, so no flag -- and none
   // here either: ld is then 0 and 2 lz < T needs z < 2^-61. No guard needed.
-  wire         mz_flag = MIPZ && (mz_a < mz_b);
+  // R905: with mz_exact, ld + log coef + log lod against the same z term.
+  // Daytona's coef 1.0 (2032) and lod 128 (2144) sum to the 4176 the old
+  // constant held, so the two rules agree there. The right side is registered
+  // a cycle before Q_CHK (mz_rx), so the flag's compare is the same width and
+  // depth as before; without mz_exact it is the old right side exactly.
+  // coef_table, log bits: ONE MLAB (32 x 12 of its 32 x 20), one write port,
+  // an asynchronous read on the polygon's attr[31:27] latched into pcoef with
+  // the polygon -- not 384 flip-flops (the held-back cut). Never cleared:
+  // MAME's starts at 0, and a game writes every entry it uses before it draws.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [11:0] ct [0:31];
+  wire  [11:0] ct_q = ct[poly_attr[31:27]];
+  logic [11:0] pcoef;
+  logic [14:0] mz_rx;
+  wire  [12:0] mz_lc  = {1'b0, pcoef[11:4], 4'd0} + {9'd0, lg16(pcoef[3:0])};
+  wire  [12:0] mz_ll  = {1'b0, lod_l[11:4], 4'd0} + {9'd0, lg16(lod_l[3:0])};
+  localparam logic [14:0] MZ_TX = 15'(2160 - 16 * MIPZ_BX);
+  always_ff @(posedge clk) if (tc_we) ct[tp_idx] <= tc_l;
+  always_ff @(posedge clk) begin
+    mz_rx <= mz_exact ? ({2'b00, mz_ld} + {2'b00, mz_lc} + {2'b00, mz_ll} + MZ_TX) : mz_b;
+  end
+  wire  [14:0] mz_ax   = mz_a + (mz_exact ? 15'd4176 : 15'd0);
+  wire         mz_flag = MIPZ && (mz_ax < mz_rx);
   logic        c_bad;                      // R566: the non-finite test, registered
   logic [1:0]  c_zmode;                    // R578
   // R578: THE z PICK AND "BEHIND THE EYE" FROM THE REGISTERED MIN AND MAX. At 70
@@ -680,6 +716,7 @@ module m2_geometry #(
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
       ptex <= 32'd0; plum <= 8'd0; pdotp <= 12'd0; pmipz <= 1'b0;   // R828c
+      pcoef <= 12'd0;                                              // R905
       c_bad <= 1'b0; c_zmode <= 2'd0;
       zprev <= 32'h5011B5EA; hzkey <= 16'd0; hzpre <= '0;   // 1e10, as render_frame_start sets it
       dbg_nonfinite <= 16'd0; dbg_behind <= 16'd0; pj_wait <= 10'd0; dbg_pj_lost <= 16'd0;
@@ -725,6 +762,7 @@ module m2_geometry #(
           pcol  <= poly_col;                       // R222
           ptex  <= poly_tex; plum <= dbg_lum;      // R271: the lighting luminance
           pdotp <= poly_dotp;                      // R828c
+          pcoef <= ct_q;                           // R905: coef_table[attr >> 27]
           c_bad    <= poly_bad;
           c_zmode  <= poly_zmode;          // R578: picked in Q_CHK, from hzmin/hzmax
           qst      <= Q_MM;                // R589
