@@ -1,5 +1,21 @@
 # Handoff
 
+## 2026-10-21 (evening): PUSHED model2a -- the 2A beta Model2A_20261021c
+
+RELEASED (releases/, BETA): Model2A_20261021c.rbf = s1293 (doa-rumble
+4f6bd44 = f4d6b53 + R914; clk_sys -0.117, clk_mem +0.351, clk_i960 +0.957,
+hold +0.190; 41,296 ALMs, 547/553 M10K), md5 7f15c532... Same RTL as the
+model2a tip. New: R914 (SCSP 0x7C0-0x7FF is not MADRS: DOA's drone gone; VF2
+about 9 dB quieter, VC2's offset gone -- Ben: DOA, VF and VCop all good on
+the board) and R921's DOA MRAs (protection routines patched, the checksummed
+calls untouched: #18 fixed, confirmed on the board; posted on #18). Users
+must download the new DOA MRAs.
+OPEN: #17 VF2 random crash (agent on it: the R871 TGP lockup suspected, no
+missing i960 form per R921's census); #16 VCop2 text behind the 3D (agent on
+it); #15 Rally NVRAM (cause: the 93C46 EEPROM is never saved; plan posted on
+the issue, not started); link play (branch link-play, in-core hand-over,
+being finished); 2C TGPx4 study on the LOCAL branch model2c (never push).
+
 ## 2026-10-21 (night): branch m2a-forms-r921 -- DOA's first-match "crash" is its tamper check; MRA fix (R921). NOT PUSHED, NO RTL CHANGE
 
 GitHub #18 (DOA freezes 5-20 s into the first match, 3D gone, HUD and music
