@@ -28,6 +28,38 @@ BUILDING: the Rally wait-state build (M2_2A_WAITST=1, model2a 0638009 = R906 +
 R902 bench), s1266-68, for Ben to load after it fits.
 R NUMBERS: R907 is main-next's (area). model2a's next free is R908.
 
+## 2026-10-21: Dead or Alive's scenery textures -- the core's mip levels (R911)
+
+NOT PUSHED, NOT FITTED, NOT ON A BOARD. Branch doa-tex (on model2a 0638009;
+worktree sm2-builds/doa-tex; never merge into main).
+
+FOUND: not a texture write path. Every texture store DOA makes is an stq
+through the sheets' mirrors (0x122/0x123, 0x126/0x127), both burst regions
+since R905 (MAME tap, 2.2 M stores over 110 s); the whole-core bench's
+first 671,623 stores and its sheets after the first upload equal MAME's (0
+differ). MAME draws 100% of DOA's
+pixels at mip level 0 (lod 1000, coefs 11 / 351); R828c's no-mip flag
+assumes Daytona's lod 128 / coef 1.0, so at Sharp / Medium / Smooth the core
+mips the far floor, the lattice strip and the buildings, reading sheet words
+DOA never wrote (black in MAME's memory, stale SDRAM on the board -- Ben's
+"other textures"). Ben's scene (gate courtyard, MAME frame 1780) through
+tb_m2_raster3d: Off 6.65 / 255, Sharp 21.23, Medium 33.44, Smooth 41.13;
+Sharp with the new flag 6.65. So Ben's picture was NOT at Off; Off is the
+workaround on s1259.
+
+DONE: R905's held-back r905-mipz (4f08e67) taken, its 32-entry coef table
+made one MLAB (async read, m2_xf_mat's pattern) instead of 384 flops. For
+a2_big the flag is MAME's own level <= 0 from coef[attr >> 27], |dotp| and
+the 0x16 lod; other games keep R828c bit for bit. Also better at Sharp for
+Hanguk Pro Yagu 98 (14.10 -> 7.37) and Motor Raid (5.93 -> 5.02); DC, Sky
+Target, Pilot Kids equal. test_m2_geometry_mipz gains R911 (1,200 flags
+against the model, planted faults caught), lint_top, lint_idx,
+analyze_file clean. Area (standalone maps): ~+44 ALMs, +56 registers, one
+MLAB, no M10K.
+
+NEXT: build it; on the board DOA at Sharp (the default) should look as at
+Off. Check Hanguk Pro Yagu 98's distant scenery too.
+
 ## 2026-10-20 (later): PUSHED model2a -- the Model 2A beta release Model2A_20261020b
 
 RELEASED (releases/, BETA): Model2A_20261020b.rbf = s1253 (71598a2; clk_sys

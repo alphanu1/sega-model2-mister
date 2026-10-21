@@ -215,6 +215,14 @@ module m2_geo #(
   // 32 entries and both fields are 8-bit. Streaming it keeps the table where it
   // is used rather than routing 32 entries out of the walker.
   output logic          tp_we,
+  // R905: and each entry's distance coefficient (the second word, which MAME
+  // keeps as coef_table[index] for the texture LOD), as its IEEE exponent and
+  // top four mantissa bits, one cycle after tp_we on the same tp_idx; and the
+  // LOD command's (0x16) operand, the same twelve bits. m2_geometry's no-mip
+  // flag takes both for the large layout's games (R905).
+  output logic          tc_we,
+  output logic  [11:0]  tc_l,
+  output logic  [11:0]  lod_l,
   output logic  [4:0]   tp_idx,
   output logic  [7:0]   tp_diffuse,
   output logic  [7:0]   tp_ambient,
@@ -719,7 +727,8 @@ module m2_geo #(
   logic [15:0] nops_f;                   // R255: nops decoded in the frame being walked
   localparam logic [2:0] CAP_MTX = 3'd1, CAP_FOC = 3'd2, CAP_OBJ = 3'd3,
                          CAP_TRA = 3'd4, CAP_LIT = 3'd5, CAP_ZAD = 3'd6,   // R246
-                         CAP_WIN = 3'd7;                                   // R642
+                         CAP_WIN = 3'd7,                                   // R642
+                         CAP_LOD = 3'd0;                                   // R905
 
   assign mtx0 = mtx[0]; assign mtx4 = mtx[4]; assign mtx8 = mtx[8]; assign mtx11 = mtx[11];
 
@@ -750,11 +759,13 @@ module m2_geo #(
   wire is_zad = (w_op == 5'h08) || (w_op == 5'h18);
   wire is_tp  = (w_op == 5'h06);                     // texture_parameters
   wire is_win = (w_op == 5'h03) || (w_op == 5'h13);  // R642: window_data
+  wire is_lod = (w_op == 5'h16);                     // R905: geo_lod, one operand
   wire [3:0] cap_last = (w_cap == CAP_MTX) ? 4'd11
                       : (w_cap == CAP_FOC) ? 4'd1
                       : (w_cap == CAP_TRA) ? 4'd2
                       : (w_cap == CAP_LIT) ? 4'd2
                       : (w_cap == CAP_ZAD) ? 4'd0
+                      : (w_cap == CAP_LOD) ? 4'd0      // R905
                       : (w_cap == CAP_WIN) ? 4'd5      // R642: six words
                                            : 4'd3;
 
@@ -811,10 +822,12 @@ module m2_geo #(
       w_win <= 4'd0; obj_win <= 4'd0;   // R889
       tp_i <= 5'd0; tp_n <= 16'd0; tp_c <= 16'd0; dbg_tp_n <= 16'd0;
       tp_we <= 1'b0; tp_idx <= 5'd0; tp_diffuse <= 8'd0; tp_ambient <= 8'd0;
+      tc_we <= 1'b0; tc_l <= 12'd0; lod_l <= 12'h860;   // R905: 128.0, the old rule's lod
       obj_tpa <= 32'd0; obj_tha <= 32'd0; obj_oba <= 32'd0; obj_obc <= 32'd0;
       for (int k = 0; k < 12; k++) mtx[k] <= 32'd0;
     end else begin
       obj_valid <= 1'b0;
+      tc_we     <= 1'b0;   // R905: one cycle
       // Remember the vblank; clear it when the walk actually starts.
       if (frame_start && (flip_seen || setrp_q)) vbl_after_flip <= 1'b1;   // R826
       if (frame_start) begin frame_pend <= 1'b1; drain_wait <= 10'd0;
@@ -954,7 +967,7 @@ module m2_geo #(
             // operand before it.
             if (!is_cnt3) w_ip <= w_ip + 19'd1;
             wst  <= W_CNT;
-          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit || is_zad || is_win) begin
+          end else if (is_mtx || is_foc || is_obj || is_tra || is_lit || is_zad || is_win || is_lod) begin
             // READ THESE OPERANDS RATHER THAN STEPPING OVER THEM. They carry
             // the transform's state -- the matrix, its translation row, the
             // projection, and the object's address and count. Everything else
@@ -962,7 +975,7 @@ module m2_geo #(
             // was only counting.
             w_cap <= is_mtx ? CAP_MTX : is_foc ? CAP_FOC
                    : is_tra ? CAP_TRA : is_lit ? CAP_LIT
-                   : is_zad ? CAP_ZAD : is_win ? CAP_WIN : CAP_OBJ;
+                   : is_zad ? CAP_ZAD : is_win ? CAP_WIN : is_lod ? CAP_LOD : CAP_OBJ;   // R905
             w_ci  <= 4'd0;
             wst   <= W_OPRD;
           end else if (oplen(w_op) == 16'hffff) begin
@@ -989,6 +1002,7 @@ module m2_geo #(
                      endcase
             CAP_FOC: if (w_ci == 4'd0) foc_x <= rd_data; else foc_y <= rd_data;
             CAP_ZAD: zadj_e <= rd_data[30:23];        // R246
+            CAP_LOD: lod_l  <= rd_data[30:19];        // R905
             CAP_WIN: case (w_ci)                      // R642; R760: all four centres
                        4'd0: win_vp_s <= rd_data;
                        4'd1: win_vp_e <= rd_data;
@@ -1092,11 +1106,15 @@ module m2_geo #(
           wst        <= W_TPC;
         end
 
-        // The coefficient word, consumed and discarded -- it is only read by
-        // the specular parser.
+        // The coefficient word. R905: NOT the specular parser's -- MAME keeps
+        // it as coef_table[index], and every polygon's texture LOD is
+        // coef_table[attr >> 27] * |dotp| * lod. Streamed out as its log's
+        // twelve bits for m2_geometry's no-mip flag.
         W_TPC: begin
           tp_we <= 1'b0;
           if (rd_go) begin
+            tc_we <= 1'b1;                  // R905: tp_idx still names this entry
+            tc_l  <= rd_data[30:19];
             w_ip <= w_ip + 19'd1;
             tp_i <= tp_i + 5'd1;            // wraps at 32, as `& 0x1f` does
             if (tp_c == tp_n - 16'd1) wst <= W_FETCH;
