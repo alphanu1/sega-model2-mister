@@ -2374,6 +2374,32 @@ obj_fx68k/Vfx68k_harness: sim/sound/fx68k_harness.sv sim/sound/tb_fx68k.cpp $(FX
 # differs between versions. Re-run map, not just fit — a fit-only rerun reuses
 # the previous netlist and reports success for a setting that breaks the build.
 
+# ------------------------------------------------------------ TGPx4 (R920)
+# The Model 2C coprocessor's SIZING SKELETON (rtl/tgpx4, not in Model2.sv).
+# Map only: an ALM estimate, M10K and DSP from the real device and tool.
+# TGPX4_PLINES = program memory lines: 4096 all on chip, 1024 / 2048 a cache.
+.PHONY: lint_tgpx4 tgpx4_map
+TGPX4_RTL := rtl/tgpx4/tgpx4_agu.sv rtl/tgpx4/tgpx4_rf.sv rtl/tgpx4/tgpx4_fsqrt.sv rtl/tgpx4/tgpx4_cvt.sv \
+             rtl/tgpx4/tgpx4_pmem.sv rtl/tgpx4/tgpx4_core.sv \
+             rtl/tgp/fp_add.sv rtl/tgp/fp_mul.sv rtl/tgp/fp_div.sv
+TGPX4_PLINES ?= 1024
+lint_tgpx4:
+	$(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
+	  -GPLINES=$(TGPX4_PLINES) --top-module tgpx4_core $(TGPX4_RTL)
+
+tgpx4_map: lint_tgpx4
+	@d=build/quartus/tgpx4_$(TGPX4_PLINES); mkdir -p $$d; \
+	  srcs=""; for f in $(TGPX4_RTL); do \
+	    srcs="$$srcs\nset_global_assignment -name SYSTEMVERILOG_FILE ../../../$$f"; done; \
+	  sed -e 's/@MODULE@/tgpx4_core/g' -e "s|@SRCS@|$$srcs|" quartus/spike.qsf.in > $$d/tgpx4_core.qsf; \
+	  echo 'set_parameter -name PLINES $(TGPX4_PLINES)' >> $$d/tgpx4_core.qsf; \
+	  cp quartus/spike.sdc $$d/spike.sdc; \
+	  echo 'PROJECT_REVISION = "tgpx4_core"' > $$d/tgpx4_core.qpf; \
+	  cd $$d && $(QUARTUS)/quartus_map tgpx4_core > map.log 2>&1 \
+	    || { echo "quartus_map FAILED -- see $$d/map.log"; grep -m5 "^Error" map.log; exit 1; }; \
+	  grep -E "Logic utilization|ALMs needed|Total registers|Total block memory bits|Total RAM Blocks|Total DSP|M10K blocks" \
+	    output_files/tgpx4_core.map.summary output_files/tgpx4_core.map.rpt | sort -u | head -20
+
 .PHONY: quartus quartus_all quartus_report quartus_paths
 MOD  ?= i960_alu
 QDIR := build/quartus/$(MOD)
