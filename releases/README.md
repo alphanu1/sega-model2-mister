@@ -111,8 +111,9 @@ ROM sets: MAME 0.289.
 - **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
   cabinet's extra sound board isn't emulated, so a few extra sounds are
   missing.
-- **Sega Rally doesn't save its settings** (NVRAM). Reported by users; not
-  looked at yet.
+- **Sega Rally doesn't save its settings** (NVRAM). The core saves the
+  backup RAM but not the game's EEPROM, where Rally keeps its settings. Fix
+  planned (GitHub #15).
 - **Virtua Fighter 2 can crash** at random, in attract or in a fight.
   Being looked at; if it happens to you, please say where.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
