@@ -6,8 +6,7 @@ RELEASED: Model2_20261021.rbf = s1264 (d2e5c1c; clk_sys -0.094, clk_mem
 +0.463, clk_i960 +1.500, hold +0.194; 40,936 ALMs, 553/553 M10K), md5
 44c8e69e... Contents: the 15 kHz scan converter (R898, retrorepair's design;
 confirmed on CRTs by three testers on s1243), Virtua Cop's ammo display (R899;
-not yet confirmed on the board -- Ben released before the VC run, so the
-first report on it comes from users), the texture burst region (R905), and
+confirmed on the board on s1264 by Ben after the push), the texture burst region (R905), and
 R907's area savings. Before R907 main-next did not fit (s1254-56, short by
 1-3 LABs) or missed clk_sys by 2-3 ns (s1249/50); after it s1260 -1.443,
 s1263 -0.666, s1264 -0.094. The worst clk_sys paths move seed to seed
