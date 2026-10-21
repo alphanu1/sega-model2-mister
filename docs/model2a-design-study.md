@@ -42092,3 +42092,181 @@ mtx[w_ci] entries are the old ones, renumbered); quartus_map 17.0
     too was mipped where MAME does not); Dynamite Cop, Sky Target, Motor Raid
     and Pilot Kids as now or closer. VF2, Sega Rally, Virtua Cop 2, Zero
     Gunner and Manx TT unchanged (mz_exact 0).
+
+**R912 -- MIP-MAPPING, GAME BY GAME (Ben: "check mip mapping on other games.
+If not used in MAME remove it in our cores"). MAME DOES MIP: A REAL
+TRILINEAR SAMPLE OF THE LEVELS IN THE SHEETS, AND EVERY GAME BUT DEAD OR
+ALIVE (AND, NEARLY, VIRTUA COP 2) USES IT. WHAT IS WRONG IS WHERE THE CORE
+MIPS: R828c's NO-MIP FLAG FOLDS IN DAYTONA'S lod 128 / coef 1.0, AND NO 2A
+GAME BUT RALLY IS CLOSE TO THAT. THE 2A CORE NOW TAKES R911's RULE (MAME's
+OWN LEVEL, FROM THE GAME'S coef TABLE AND lod) FOR EVERY GAME, NOT ONLY THE
+LARGE LAYOUT. THE ORIGINAL CORE (main) IS MEASURED, NOT CHANGED. NOT
+FITTED, NOT ON A BOARD.**
+
+(Section: §10, R828 / R828c / R911. Authority: MAME 0.289 for what the
+level is and how it is sampled; Model 1 has no mip.)
+
+*Believed (the task):* MAME may compute a level and not sample it; several
+games may never mip in MAME, as Dead or Alive does (R911), and the core
+should then not mip them at any OSD setting.
+
+*HOW MAME USES THE LEVEL (0.289, unmodified source):*
+  * model2_v.cpp: geo_texture_parameters (op 0x06) keeps each entry's second
+    word as coef_table[index]; geo_lod (op 0x16) sets geo->lod; each
+    textured polygon pushes distance = coef_table[attr >> 27] * |dotp| *
+    geo->lod (lines 1105-1108, the same in the other three polygon parsers);
+    model2_3d_process_triangle turns it into object.texlod = ((cb[10] >> 8)
+    & 0x7f80) - 0x3f80 + log_ram[cb[10] & 0x7fff] (429-430), i.e. 128
+    log2(coef |dotp| lod).
+  * model2rd.ipp draw_scanline_tex, per pixel (303-324): mml = -texlod +
+    fast_log2(z) (256 log2 z); level = clamp(mml >> 7, 0, max_level), max_level
+    = 30 - clz(min(w, h)) (268, down to 2x2); fetch_bilinear_texel at that
+    level, which reads sheet texsheet[L & 1] at ((x - 2048) >> L, (y - 1024)
+    >> L), u, v >> L (132-138); and when mml > 0 and level < max_level it
+    fetches level + 1 too and LERPs by (mml & 127) << 1 -- TRILINEAR. When
+    mml < 0 and the polygon has a microtexture it blends that instead (up to
+    ~50%). So a polygon with 0 < mml < 128 is "level 0" by MAME's integer
+    but already up to 254/256 level 1.
+  * The core (R828) does not do this: its level is the quad's edge
+    footprint (nearest level, no blend), sharper or blurrier per the OSD,
+    and R828c's flag forces level 0 where MAME's level, computed with
+    Daytona's lod and coef, is at most -3 over the whole polygon.
+
+*MEASURED (MAME 0.289 m2lod, R912 counters on the M2LOD line: per drawn
+textured pixel, any level-1+ content (mml > 0 and a level to blend), its
+weight (level >= 1 whole, else (mml & 127) / 128), the microtexture
+blend, and per polygon. Each set 419 s from power-on: attract, two coins
+at 90 s, start, scripted play (sim/io/mame_m2_2a_play.lua, VF2 / Virtua
+Cop play scripts; Manx TT with PL_PRESS=18:test,22:test), second credit at
+250 s; 9,377-23,371 rendered frames a set):*
+     set          px with L1+ content  weighted   L>=1 px   polys w/ L1+   microtex
+     vf2               13.89%            9.01%     5.25%      49.6%          0
+     srallyc            6.38             4.37      2.76       41.4           0
+     vcop2              0.33             0.22      0.13        2.0           0
+     zeroguna          67.78            53.61     39.55       83.1           0
+     manxtt             4.07             2.71      1.77       18.2           0
+     pltkidsa           3.93             1.81      0.67       20.6           0
+     hpyagu98           2.96             2.20      1.55       12.6           0
+     dynamcop           9.43             7.58      5.99       11.1           0.15%
+     doaab              0.05             0.01      0.00        0.1           0
+     skytargt          24.45            18.80     13.80       84.7           0
+     motoraid          14.38            10.37      6.64       45.3           0
+     daytona           14.24            10.23      6.84       65.7           0
+     daytona93         11.33             8.04      5.33       57.0           0
+     desert            11.07             6.85      3.81       40.2          24.97%
+     vcopa             21.05            14.35      9.69       23.3           0
+  So only Dead or Alive (0.05%) and, nearly, Virtua Cop 2 (0.33%) are
+  "not used in MAME". Desert Tank's microtexture (25% of its pixels) is
+  not in either core -- noted, not touched.
+
+*THE GAMES' lod AND coef (state at a gameplay walk, MAME's geo state):*
+VF2 lod 3200, coefs 0.0007..1; Rally 200, 1.0; Virtua Cop 2 128, every
+coef 100; Zero Gunner 4, 0.97..175; Manx TT 65536, 1..2^21; Pilot Kids 4,
+3.9..701; Hanguk 8, 1.9..5612; Dynamite Cop 0.5, 1.9..351; DOA 1000,
+11..351; Sky Target 4, 1.9..351; Motor Raid 0.25, 2.4..5015; Daytona,
+Deluxe '93, Desert Tank, Virtua Cop 128, 1.0. Ops 0x06 / 0x16 per frame
+(150 s sessions): VF2 and Virtua Cop 2 write the table ONLY BEFORE THE
+FIRST 3D FRAME (2,048 / 1,984 entry writes) and the lod every frame;
+Daytona the table at boot, the lod in 699 of 7,485 frames; every other 2A
+game both every frame.
+
+*THE CORE'S DECISION AGAINST MAME'S (geodiff: MAME's walk at each set's
+bench frame through m2_geo + m2_geometry, the 2A RTL; q_mipz against
+MAME's level <= 0 at the polygon's far vertex, mipz_gd.py's alignment.
+NEW: tb_m2_geodiff M2GD_PRESET=1 puts state.txt's coef table and lod into
+the RTL first -- VF2 / Virtua Cop 2 write them only at boot, so a one-walk
+replay otherwise starts with an empty table (VF2's walk without it: 0
+flags, 33.48%); geodiff_top MZX selects mz_exact, and make geodiff_2a now
+builds MZX 1, as the 2A core):*
+     set (aligned polys)   R828c (mz_exact 0)   MAME's own (mz_exact 1)
+     vf2        (684)          67.84%               97.95%
+     srallyc   (1146)          31.24                99.30
+     vcop2      (799)           6.76                99.00
+     zeroguna   (916)          71.29               100.00
+     manxtt     (866)           4.62                99.77
+     pltkidsa   (595)            --                 99.83   (large layout:
+     hpyagu98   (591)            --                 99.83    already R911)
+     dynamcop   (819)            --                 99.76
+     doaab      (343)            --                100.00
+     skytargt   (698)            --                 99.28
+     motoraid  (1274)            --                 98.67
+  Every disagreement after is at MAME's level 0/1 boundary (the sixteenths
+  log against fast_log2). Before: Manx TT flagged 5 of the 831 polygons
+  MAME keeps at level 0, Virtua Cop 2 5 of 750, Rally 2 of 790; VF2 flagged
+  120 polygons MAME mips and missed 100 it does not.
+
+*PICTURE (tb_m2_raster3d, Model2.sv's 2A raster configuration, MAME's
+gameplay frame per set -- the frame at the 90th percentile of the run's
+L1+ share; mean max-channel error / 255 over MAME's 3D pixels; before =
+R828c's flag, after = this; bx1 = MIPZ_BX 1, the stricter "no level-1
+content at all" threshold, for comparison):*
+     set                 Off   | Sharp before/after/bx1 | Medium               | Smooth
+     vf2      f14883     6.57  |  8.26 / 6.69 / 7.37    | 10.36 / 8.36 / 9.34  | 12.01 / 9.79 / 10.94
+     srallyc  f18023     4.90  |  5.65 / 4.69 / 4.88    |  6.17 / 4.64 / 4.86  |  6.41 / 4.63 / 4.92
+     vcop2    f16160     5.48  |  7.10 / 5.47 / 5.49    |  8.16 / 5.47 / 5.51  |  9.13 / 5.47 / 5.51
+     zeroguna f8498      6.73  |  4.26 / 4.19 / 4.12    |  3.93 / 3.86 / 3.80  |  3.84 / 3.77 / 3.72
+     manxtt   f10424     5.95  |  7.00 / 5.92 / 5.96    |  7.39 / 5.92 / 5.97  |  7.65 / 5.92 / 5.98
+   large layout (after = R911, unchanged here; before = R828c, pre-R911):
+     pltkidsa f16272     2.75  |  2.82 / 2.72 / 2.80    |  2.92 / 2.74 / 2.85  |  3.05 / 2.78 / 2.97
+     hpyagu98 f9032      7.79  |  9.89 / 7.39 / 7.39    | 11.03 / 7.37 / 7.40  | 12.20 / 7.36 / 7.39
+     dynamcop f8613     14.62  | 14.47 / 8.86 / 11.89   | 15.68 / 8.76 / 12.45 | 15.98 / 8.70 / 12.61
+     doaab    f11612     8.23  | 44.49 / 8.23 / 9.07    | 50.27 / 8.23 / 9.07  | 54.04 / 8.23 / 9.07
+     skytargt f400 (R911) 8.64 |  7.67 / 7.53 / 7.71    |  8.16 / 7.88 / 8.19  |  8.62 / 8.27 / 8.64
+     motoraid f14531     9.40  | 10.58 / 8.44 / 8.68    | 12.08 / 8.92 / 9.41  | 13.12 / 9.32 / 9.99
+  Every 2A set is equal or better at every setting; VF2's Medium / Smooth
+  remain worse than Off because where MAME does mip, the core's footprint
+  level is deeper than MAME's blend (R828's 2-6 levels). MIPZ_BX stays 0:
+  bx1 is better only in Zero Gunner (by 0.07). (Sky Target's own f4634
+  dump is 77 / 255 off at every setting, Off included -- the bench does not
+  reproduce that frame; R911's f400 is used.)
+
+*THE CHANGE:* Model2.sv `.mz_exact(M2A)` (was a2_big): on the 2A build every
+game's flag is MAME's own level; the M2_NO_2A build is R828c as before.
+m2_geometry is untouched (its comment notes R912). The table and lod were
+already streamed for every game (m2_geo's capture is layout-independent).
+
+*Checks:* test_m2_geometry_mipz gains VF2's lod 3200 with coefs 2^(-k/3)
+and Manx TT's 65536 with 2^k (the logs' ends): 2,254 checks, 0 fails, every
+flag equal to the sixteenths model, MAME's exact level on 299 / 300 and
+300 / 300. test_m2_geometry PASS. lint_top clean (2A and -DM2_NO_2A);
+lint_idx the same 115 lines as 9d4d262; quartus_map 17.0 --analyze_file
+Model2.sv, m2_geometry.sv: 0 errors (the 4 warnings are 9d4d262's).
+
+*AREA (quartus_map 17.0, whole design, 2A, base model2a 9d4d262):* ALMs
+needed 40,427 -> 40,456 (+29, map noise: m2_geometry 7,466 -> 7,451
+combinational ALUTs, m2_geo 743 -> 745), registers 48,048 = 48,048, block
+bits 4,467,205 =, DSP 90 =. The mux on mz_exact folds to the constant.
+
+*THE ORIGINAL CORE (main, NOT CHANGED -- for Ben):* the same measurements
+with main's RTL (c56c93d; tb_m2_raster3d at main's raster configuration,
+geodiff with main's m2_geometry). Its lod / coef are Daytona's for all four
+games, so R828c's flag IS MAME's level, offset by B = 3 by design (R828c:
+mip polygons MAME holds at -3 < level <= 0, to cut shimmer). Against MAME's
+level <= 0: Daytona 49.69%, Deluxe '93 58.65, Desert Tank 77.86, Virtua Cop
+44.03% of polygons agree (98.9-99.8% against its own B = 3). Picture
+(main bench; its colour model is far from MAME's on Desert Tank and
+Virtua Cop, so their absolute numbers mean little; Off / Sharp R828c / Sharp
+with MAME's rule): Daytona 15.93 / 17.31 / 16.28, Deluxe '93 10.60 / 13.31 /
+10.58, Desert 58.27 / 57.88 / 57.81, Virtua Cop 62.92 / 63.04 / 62.83
+(after a per-channel brightness fit: Daytona 17.22 / 18.66 / 17.61,
+Deluxe '93 7.45 / 10.35 / 7.43, Desert 21.45 / 21.18 / 21.03, Virtua Cop
+31.07 / 32.79 / 31.04). MAME mips all four (11-21% of pixels), so the
+instruction's "remove" does not apply to them; what main does past MAME is
+R828c's deliberate B = 3, which a still-frame error against MAME cannot
+judge (it is a shimmer measure, R828 / R828c).
+
+*VERIFIED / INFERRED:*
+  * VERIFIED (MAME 0.289 source and runs, simulation): how MAME samples
+    levels; each game's share; each game's lod / coef and when they are
+    written; the RTL flag against MAME's level per polygon on a walk of
+    every 2A game; the picture at every OSD setting on one gameplay frame
+    each.
+  * INFERRED: that the board's MLAB holds VF2's and Virtua Cop 2's tables
+    from their boot-time writes (the core walks those lists; a missed write
+    leaves an entry 0, which never flags -- the old over-mipping, not a new
+    fault). Settles it: VF2 / Virtua Cop 2 on the board at Sharp, distant
+    scenery as at Off.
+  * What the board should show: VF2, Sega Rally, Virtua Cop 2, Zero Gunner
+    and Manx TT at Sharp / Medium / Smooth closer to Off where MAME does not
+    mip (Virtua Cop 2 and Manx TT nearly everywhere); the large-layout games
+    as R911.
