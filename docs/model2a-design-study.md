@@ -43217,10 +43217,9 @@ or a TGP divergence on data the captures never held.
      MAME snapshots at 90 s and 120 s show Pai vs Lau in round 1; 9,742,311
      words in, 3,380,307 out; no upload in the window). Plain --lat 6;
      --board-push --gap 0 --lat 1; --gap 60 --jitter 40 at seeds 1, 2 and 7;
-     --gap 600 --jitter 60: PASS, bit-exact (245.5 M TGP instructions;
-     1,318 M cycles plain, 1,833 M board-like). --gap 3 --jitter 400 --lat 1
-     --wlat 200 was still running at the hand-off (its attract-window twin
-     passed). The i960 model never sat on a full input FIFO (VF2's runs
+     --gap 600 --jitter 60; --gap 3 --jitter 400 --lat 1 --wlat 200: PASS,
+     bit-exact (245.5 M TGP instructions; 1,318 M cycles plain, 1,833 M
+     board-like, 8,720 M -- CPI 35.5 -- with the slowest memory). The i960 model never sat on a full input FIFO (VF2's runs
      stay far under 128 words, as R876).
   3. The other 2A TGP programs on this RTL: Zero Gunner's play and Sega
      Rally's race windows (board-push, R876's settings), and a NEW Virtua
