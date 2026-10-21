@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-21 (night): main's releases/ tidied -- both cores, all MRAs in mra/, 2A out of beta (NOT PUSHED)
+
+releases/ on main now holds: Model2_20261021c.rbf (link play), Model2A_20261021d.rbf
+(copied from model2a e1aa8a0's releases, byte-identical, md5 293df5f3...), mra/ with
+all 30 MRAs (8 Model 2 + 22 Model 2A, each with its [15kHz CRT] twin; the 2A ones
+copied from model2a's releases/), helpers/m2link/, and one README for both
+cores (Ben: 2A "out of beta now", only a few bugs remain). model2a is NOT
+merged into main -- only its release files were copied. model2a's own
+releases/ is unchanged. Not pushed (Ben).
+
 ## 2026-10-21 (night): main -- release Model2_20261021c (link play), NOT PUSHED
 
 Model2_20261021c.rbf = s1300 (link-play 1ce2d5d: main 6e291cc + R916),
