@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-10-21 (night): PUSHED main c0604b5 -- link play (experimental) and the combined release folder
+
+main on GitHub now carries Model2_20261021c (Daytona link play, experimental,
+framesync off by default; board-tested against the recomp at full frame rate
+with framesync on), Model2A_20261021d copied in, every MRA under releases/mra/,
+helpers/m2link/, and one README for both cores with 2A out of beta. model2a
+pushed to 1526562 (hardware doc: Rally link play noted, not started); its own
+releases/ still carries Model2_20261021b -- main is now the place to get both
+cores. model2c is local only and was not pushed.
+OPEN: VCop clouds (#10) build fitting (branch vcop-luma, R925); VF2 hang probe
+built in RTL, its fit on hold (Ben); Rally NVRAM (#15) planned; HOTD/2C local.
+
 ## 2026-10-21 (night): main's releases/ tidied -- both cores, all MRAs in mra/, 2A out of beta (NOT PUSHED)
 
 releases/ on main now holds: Model2_20261021c.rbf (link play), Model2A_20261021d.rbf
