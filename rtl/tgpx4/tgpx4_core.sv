@@ -565,6 +565,12 @@ module tgpx4_core #(
   assign sq_go   = alu_go && a_frsq;
 
   logic frsq_pend;
+  // R924: x86's NaNs for FRCP (1 / f) and FRSQ (1 / sqrtf(f): sqrtf of a
+  // negative is the default NaN, of a NaN that NaN quieted)
+  logic [31:0] div_n;
+  assign div_n = f_nan(opa) ? (opa | 32'h0040_0000)
+               : (frsq_pend && opa[31] && opa[30:0] != 31'd0) ? 32'hffc0_0000
+               : nanfix(div_r, 32'd0, 32'd0);
   assign div_go = (alu_go && a_frcp) || sq_v;
   assign div_b  = sq_v ? sq_r : opa;
 
@@ -614,6 +620,8 @@ module tgpx4_core #(
   logic        fm_n, fm_z, fm_d, fm_v, fm_u;
 
   assign fmul_go = mul_go && isfmul;
+  logic [31:0] fmul_n;
+  assign fmul_n = nanfix(fmul_r, opm1, opm2);                  // R924
 
   function automatic logic f_neg(input logic [31:0] f);
     f_neg = f[31] && (f[30:0] != 31'd0) && !(f[30:23] == 8'hff && f[22:0] != 23'd0);
@@ -621,11 +629,28 @@ module tgpx4_core #(
   function automatic logic f_zero(input logic [31:0] f);
     f_zero = (f[30:0] == 31'd0);
   endfunction
+  // R924: NaNs AS MAME'S HOST (x86 SSE) MAKES THEM, so the bits match MAME's
+  // run, not just the class: a NaN operand comes back quieted, the
+  // expression's first operand first (f1 + f2, f2 - f1, f1 * f2, 1 / f); an
+  // invalid operation with no NaN in gives the default NaN 0xffc00000. Found
+  // by the HOTD replay at word 119,227,540 (pc 0x10a: rtl 7fc00000, MAME
+  // ffffc000) -- the FP units give one canonical NaN.
+  function automatic logic f_nan(input logic [31:0] f);
+    f_nan = (f[30:23] == 8'hff) && (f[22:0] != 23'd0);
+  endfunction
+  function automatic logic [31:0] nanfix(input logic [31:0] r, input logic [31:0] x, input logic [31:0] y);
+    if      (f_nan(x)) nanfix = x | 32'h0040_0000;
+    else if (f_nan(y)) nanfix = y | 32'h0040_0000;
+    else if (f_nan(r)) nanfix = 32'hffc0_0000;
+    else               nanfix = r;
+  endfunction
 
   logic        add_zc;
   logic [31:0] add_d;
-  assign add_zc = aop_q[0] && !aop_q[2] && f_neg(add_r);     // FADDZ / FSUBZ clamp
-  assign add_d  = add_zc ? 32'd0 : add_r;
+  logic [31:0] add_n;
+  assign add_n  = nanfix(add_r, add_a, add_b);                 // R924
+  assign add_zc = aop_q[0] && !aop_q[2] && f_neg(add_n);     // FADDZ / FSUBZ clamp
+  assign add_d  = add_zc ? 32'd0 : add_n;
 
   // ======================================================== moves in flight
   logic [31:0] mv_val [0:1];
@@ -810,20 +835,20 @@ module tgpx4_core #(
         fa_an <= cv_an; fa_az <= cv_az; fa_au <= cv_au; fa_av <= cv_av;
       end
       if (div_v) begin
-        alu_done <= 1'b1; alu_r <= div_r; alu_wr <= 1'b1;
-        fa_upd <= 1'b1; fa_zcu <= 1'b0; fa_an <= f_neg(div_r); fa_az <= f_zero(div_r);
+        alu_done <= 1'b1; alu_r <= div_n; alu_wr <= 1'b1;
+        fa_upd <= 1'b1; fa_zcu <= 1'b0; fa_an <= f_neg(div_n); fa_az <= f_zero(div_n);
         fa_x <= frsq_pend ? (f_zero(opa) || f_neg(opa)) : f_zero(opa);
         frsq_pend <= 1'b0;
       end
       if (sq_go) frsq_pend <= 1'b1;
       if (fmul_v) begin
-        mul_done <= 1'b1; mul_r <= fmul_r;
+        mul_done <= 1'b1; mul_r <= fmul_n;
         // MAME decode_mulop: MD = isnan, MV = isinf, MU = |res| < FLT_MIN --
         // so an exact zero sets MU too (R924), from the result, not the unit's flags
-        fm_n <= f_neg(fmul_r); fm_z <= f_zero(fmul_r);
-        fm_d <= (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] != 23'd0);
-        fm_v <= (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] == 23'd0);
-        fm_u <= (fmul_r[30:23] == 8'h00);
+        fm_n <= f_neg(fmul_n); fm_z <= f_zero(fmul_n);
+        fm_d <= f_nan(fmul_n);
+        fm_v <= (fmul_n[30:23] == 8'hff) && (fmul_n[22:0] == 23'd0);
+        fm_u <= (fmul_n[30:23] == 8'h00);
       end
       if (imul_v) begin
         mul_done <= 1'b1; mul_r <= imul_r;
