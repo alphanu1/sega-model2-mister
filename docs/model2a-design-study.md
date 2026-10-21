@@ -36403,3 +36403,125 @@ block is one frame of another cabinet's race data mixed from two frames
 at the game's own FG read, as the board does, so the hand-over costs no
 vblanks. Ben to judge torn-block glitches in a linked race first.
 
+
+**R916 (addendum 2) -- THE HAND-OVER IS IN THE CORE NOW, AND link_framesync
+WORKS ON A MiSTer.** Ben: "let's try it" (keep the master at full speed and
+the blocks whole), then: make link_framesync=1 actually hold a MiSTer, as an
+option players set at both ends -- the default stays 0, as on the recomp.
+"Out of sync" on the board (--no-hold) is dropped as a fault: Ben, the
+cabinets drift apart with link_framesync off and the recomp does the same.
+(The bench shows why: with it off, nothing ties one cabinet's frame clock to
+another's; the game's own wait for the flip, if it gives up within a frame,
+does not either -- a 60 Hz cabinet against 57.52 walks 15 -> 31 frames of
+skew in 7 s below.)
+
+*THE RULE, from the recomp's comm_board.cpp.* The board acts only inside the
+game: comm_tick() at vblank_start and read_fg() at each FG read, except the
+two after a vblank (zfg_delay = 2, set only when linked). A frame there is
+stored, zfg flips, and a slave answers at once with its block as it stands
+-- so the game can never see a half-written slot, nor send a half-written
+block. link_framesync is linktimer: set to 1 at the end of each linked
+comm_tick, cleared by a 0xfc taken in; while it is 1, comm_tick (at vblank)
+and read_fg (past zfg_delay) wait, 3 s at most, then the link is lost.
+
+*THE SPLIT.* m2link receives; the core decides when the game sees it.
+  * The rx area 0x21c0-0x2fbf has a second bank in DDR3 (byte 0x30808000+);
+    the game reads the one `rxbank` names. m2link writes a received block
+    into the other bank, then OFFERS it in the mailbox: sequence, bank, flip
+    parity (frames carried), whether a 0xfc came with it, plus linked,
+    link_framesync and "flip every vblank" (comm_tick's zfg ^= 1 while
+    waiting with both sockets up).
+  * The core TAKES an offer at a vblank (after reading the mailbox fresh) or
+    at an FG read past zfg_delay: first the game's own block (0x2000-0x21bf,
+    56 words) is copied to a snapshot buffer (tick 0x30804800 / take
+    0x30804c00) with the i960's comm accesses held, then bank, zfg and the
+    taken count change in one cycle. The FG read that takes it returns the
+    new zfg. Status bit 38 says which snapshot belongs to the offer.
+  * m2link, seeing it taken, does what the recomp's loop did after storing
+    each frame: a slave answers with [id] + the snapshot + that frame's
+    slots; tokens are passed on unless master. At each vblank the master
+    sends [id] + the tick snapshot + the slots of the offer taken at that
+    vblank (status [23:16]), then 0xfc. Frames that arrive while an offer is
+    out wait and go in the next offer together.
+  * link_framesync: a vblank, linked, sets fs_wait; a taken offer with a
+    token clears it. While set, an FG read past zfg_delay is held
+    (io_stall) and a vblank that finds it set is held (bit 37) -- the
+    game's next FG read waits until the token comes, then the vblank is
+    processed and the read completes. Only the i960 waits; video, audio and
+    the rest run. The core gives up after 48 video frames (~0.8 s) so a dead
+    peer cannot freeze it; m2link loses the link after the recomp's 3 s.
+  * Differences from the recomp, by construction: the core's zfg toggle for
+    a vblank happens at that vblank but m2link's numbering work for it a
+    poll (~0.1 ms) later; cn_w(1)'s own comm_tick does not toggle zfg; a
+    held vblank merges later vblanks (video runs on, so the board sees one
+    interrupt for them, where the recomp's emulated time stops).
+  * The old hand-over in m2link (--hold) and FG-read counting are gone;
+    --hold / --no-hold are accepted and ignored.
+
+*AREA.* quartus_map 17.0, whole design, main's configuration: 40,032 ALMs
+needed (main c56c93d 39,761: +271; the first version mapped 40,056 -- map
+estimates move by tens either way); m2_comm 216 ALUT / 281 FF (was 137 /
+198), the arbiter 167 ALUT; block memory bits unchanged (4,584,575), so no
+new M10K.
+
+*EVIDENCE.*
+  1. tb_m2_comm, the RTL through the real arbiter and DDR3 master, BUSY
+     0-90% x latency 1-120: 9,623 checks, 0 failed. Registers, RAM and the
+     init command against the recomp's CommBoard as before; then: an FG
+     read takes an offer and returns the flip in that read, once; slots from
+     the new bank; the take snapshot = the block at the take; two frames in
+     one offer = no flip, newest slots; a vblank takes the offer there and
+     fills the tick snapshot; zfg flips every vblank while waiting; linked,
+     the two FG reads after a vblank take nothing and the third does;
+     framesync holds the third read until a token, holds a vblank that
+     finds the wait set and releases both on the token, gives up after ~48
+     frames; CN=0 and the game's reset clear it all; Off unchanged.
+     Mutations caught: the vblank not held, zfg_delay ignored, no snapshot
+     on a take, zfg_delay not set.
+  2. linux/m2link/test/run_tests.sh, 12 s each, 18 passed, 0 failed, x86 and
+     the ARM binary under qemu-arm: MiSTer/recomp master/slave both ways,
+     MiSTer+MiSTer, three-cabinet rings both ways, every page access at
+     0.5 us and 2 us (the board's DDR3 round trip is ~0.3-0.6 us) -- 0 torn,
+     0-1 late (a flip without a new frame) in ~427 linked frames, the
+     master's game flipping on ~every frame. link_framesync: a recomp slave
+     paced at 60 Hz against the MiSTer master's 57.52, both ends 1: skew
+     constant (12..12) where with 0 it walks (15..31); recomp master at
+     60 Hz + MiSTer slave; MiSTer+MiSTer; a three-ring with a recomp
+     slave; 2 us accesses -- all held within a frame, 0 torn. One 0.8 s
+     give-up seen at link-up in two of the framesync runs (a 60 Hz MiSTer
+     master), not after.
+  3. RTL + m2link + recomp_peer (tb_m2_comm +mem, the bench's page shared
+     with a running m2link): RTL master 910 linked frames, 909 flips, 0
+     torn, 1 late; RTL slave 1,013 linked, 1,013 flips, 0 torn, 0 late.
+  4. The whole core (boot bench, the real i960 through the real bridge,
+     Revision A, 70 M instructions, 1,023 video frames, CN on at frame 231),
+     m2link as master:
+     * link_framesync 0, recomp_peer slave: linked 1 of 2 / 2 of 2; every
+       vblank after CN processed by the board (792 of 792); the i960 held
+       3.79 M cycles in all, at most 1,630 at a time (34 us at the bench's
+       48 MHz -- one snapshot copy); 2,268 register reads in the run where
+       the first design's took 1,998,041: the game now finds its flip at
+       the first or second FG read instead of spinning.
+     * link_framesync 1 at both ends, the far end m2link + core_model (the
+       recomp's 3 s give-up cannot wait for a frame that takes a second to
+       simulate, so the C++ core, with the timeouts stretched): 792 of 792
+       vblanks processed, longest hold 4,625 cycles; the slave, real-time
+       at 57.5 Hz, took 562 linked frames while the simulated master made
+       ~560 -- held a frame at a time to the master, 1,064 s of its run
+       spent waiting for it, as link_framesync means.
+  5. lint_top clean with and without M2_NO_LINK; quartus_map --analyze_file
+     clean on m2_comm.sv.
+
+*NOT TESTED.* On a board: everything in this addendum (the caller fits).
+Expected there: the master at one vblank a frame with link_framesync 0 (the
+holds are tens of us a frame); with 1, every cabinet at the slowest's pace.
+The give-up of 0.8 s seen once at link-up in two bench runs. A real Daytona
+at both ends past NETWORK CHECKING with link_framesync 1.
+
+*BOARD TEST PLAN.* releases/helpers/m2link/ (m2link md5 in the README) on
+the MiSTer; the recomp on the PC. (1) link_framesync 0 both ends, MiSTer
+master: "linked: cabinet 1 of 2", the MiSTer's 3D at 1 vblank a frame, a
+race with no jumping cars. (2) Swap roles. (3) link_framesync 1 both ends
+(recomp: Frame sync ticked): the two stay together over a whole race;
+quit the recomp mid-race: the MiSTer's game freezes for under a second at
+a time, then m2link says lost after 3 s. (4) Link board Off: main's core.

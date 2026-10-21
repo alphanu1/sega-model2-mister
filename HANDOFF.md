@@ -1,5 +1,30 @@
 # Handoff
 
+## 2026-10-21 (evening): branch link-play -- the hand-over in the core, link_framesync working (R916 addendum 2). NOT FITTED, NOT PUSHED.
+
+Board run s1290 (1c2adf4): linked, but m2link's hand-over held the master to
+every third vblank; --no-hold ran at full speed and drifted (Ben: normal with
+framesync off, the recomp does the same). Now:
+  * rtl/io/m2_comm.sv: the core takes each received frame at the game's
+    vblank or at an FG read past zfg_delay, as the recomp's comm_tick /
+    read_fg: snapshot of the game's block, then bank swap (the rx area has
+    two banks in DDR3) and zfg flip in one cycle. link_framesync = the
+    recomp's linktimer: FG reads past zfg_delay and a vblank that finds it
+    set are held until the master's 0xfc is taken; 48-frame give-up.
+  * linux/m2link: core_board.{h,cpp} (the recomp's CommBoard split, see
+    THIRD_PARTY) offers frames, answers / forwards once taken, sends the
+    master's frame from the tick snapshot. No hold logic; --hold ignored.
+  * Area: 40,032 ALMs needed (main 39,761), no new M10K.
+  * Benches: test_m2_comm 9,623 checks 0 failed; run_tests.sh 18/18 (x86 and
+    ARM under qemu): 0 torn blocks at 0.5 and 2 us accesses, framesync holds
+    a 60 Hz cabinet to the master's 57.52 (skew constant; 0 walks 15->31);
+    whole core: every vblank processed, holds <= 34 us (framesync 0).
+  * releases/helpers/m2link/: m2link (ARM, static), m2link.ini (placeholder
+    192.168.1.XXX, link_framesync = 0), m2link.sh; README link-play section
+    rewritten for that folder, md5, start order (master first), CANCELLED.
+NEXT: Ben tests the new m2link + a fit on the board (study R916 addendum 2,
+board test plan). Do not push before that.
+
 ## 2026-10-21: branch link-play (off main c56c93d) -- LINK PLAY FOR DAYTONA, COMPATIBLE WITH THE RECOMP (R916). NOT FITTED, NOT ON A BOARD, NOT PUSHED.
 
 Ben: link play for Daytona USA on the MiSTer core, compatible with his
