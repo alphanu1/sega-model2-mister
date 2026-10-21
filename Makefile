@@ -1263,6 +1263,21 @@ obj_geoview/Vm2_geo_view: rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
 	$(VBUILD) --top-module m2_geo_view -Wno-TIMESCALEMOD --Mdir obj_geoview -o Vm2_geo_view -CFLAGS "-O2" \
 	  rtl/video/m2_geo_view.sv sim/video/tb_m2_geo_view.cpp
 
+# R908: R907's shared converter against the 2A branch's own m2_geo_view before
+# it (75ee3a2, taken from git and renamed m2_geo_view_ref), both LIVE as the 2A
+# core builds them: every output equal from the 8th cycle of each input hold.
+test_m2_geo_view_live: obj_geoview_live/Vm2_geo_view_live_miter
+	@echo "== test m2_geo_view LIVE (R907 against the 2A module before it)"
+	@./obj_geoview_live/Vm2_geo_view_live_miter $(TEST_ARGS)
+
+obj_geoview_live/m2_geo_view_ref.sv:
+	@mkdir -p obj_geoview_live
+	git show 75ee3a2:rtl/video/m2_geo_view.sv | sed 's/^module m2_geo_view #(/module m2_geo_view_ref #(/' > $@
+
+obj_geoview_live/Vm2_geo_view_live_miter: rtl/video/m2_geo_view.sv obj_geoview_live/m2_geo_view_ref.sv sim/video/m2_geo_view_live_miter.sv sim/video/tb_m2_geo_view_live.cpp
+	$(VBUILD) --top-module m2_geo_view_live_miter -Wno-TIMESCALEMOD --Mdir obj_geoview_live -o Vm2_geo_view_live_miter -CFLAGS "-O2" \
+	  rtl/video/m2_geo_view.sv obj_geoview_live/m2_geo_view_ref.sv sim/video/m2_geo_view_live_miter.sv sim/video/tb_m2_geo_view_live.cpp
+
 test_m2_fb_read: obj_fbr/Vm2_fb_read
 	@echo "== test m2_fb_read (the framebuffer, a line at a time)"
 	@./obj_fbr/Vm2_fb_read $(TEST_ARGS)
