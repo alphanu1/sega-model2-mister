@@ -4,7 +4,7 @@
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261016.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261021.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -40,7 +40,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261016.rbf` has the md5 `644e28fa0dee02c90d4b2d93c2d99fbd`.
+**Check you're running the right file.** `Model2_20261021.rbf` has the md5 `44c8e69e194f1555ea73f1ef699bb553`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -74,55 +74,27 @@ anything you find.
 
 ## New in this release
 
-- **Desert Tank.** Its own MRA, on the same core. Left stick steers, the
-  right stick aims the cannon, and the triggers drive forward and reverse.
-  See Controls.
-- **Virtua Cop.** Its own I/O board is now built into the core, and the main
-  CPU gained the maths instructions the game needs. Aim with an analog stick
-  or a mouse, so USB light guns that report as either (Sinden, GUN4IR and
-  others) work too. Two players, a crosshair each, and reload by shooting
-  off-screen. See Controls.
-- **Mip-mapping.** Distant textures used to shimmer and crawl as you drove,
-  because they were always read at full size, however far away they were.
-  Now they're read from smaller, pre-filtered versions as they recede, as
-  the arcade board does. `Mip-mapping` in the OSD picks how soon that
-  happens: `Sharp` (default) keeps the most detail, `Smooth` the least
-  shimmer, and `Off` turns it off. Your own car and anything else the
-  game keeps sharp stay at full detail.
-- **Sound now matches the arcade's balance.** Each voice's volume used to be
-  set in coarse steps that left the music about 3.5 dB too loud, which made
-  the speech sound quiet next to it. The GAME OVER speech now comes through
-  as it should. The music also played about 4% too fast; it now runs at the
-  arcade's tempo.
-- **No more doubled scanlines in the 2D.** The tile layers sometimes didn't
-  finish a line in time and repeated the one before. That's gone, at 24 kHz
-  and at 15 kHz.
-- **The background stays with the scene.** The sky and mountains are drawn
-  as 2D, the road and cars as 3D, and the two could show different moments of
-  the game, so in a slide the backdrop jumped against everything else. They're
-  now kept in step.
-- **Volume control** in the OSD, starting at 80%.
-- **Steering smoothing** in the OSD. Daytona swings its camera as hard as you
-  move the steering, so a pad flicked from lock to lock snaps the view in a
-  way a real wheel never could. `Light` or `Wheel` limits how fast the
-  steering can move, so a slide sweeps across instead. Off by default.
-- **Right stick option.** By default the right stick only works the pedals
-  (`Pedals only`). Set `Right stick` to `Pedals+steer` if you use a wheel that
-  MiSTer maps onto the right stick: then left/right steers and up/down still
-  works the pedals. See Controls.
-- **More for CRTs.** 15 kHz now starts at the standard 15.7 kHz, which is
-  what most TVs need, so the `[15kHz CRT]` MRAs should show a picture straight
-  away. Your saved line setting is reset to it once. There's also a new
-  15.4 kHz setting, and a `15kHz width` option for sets that show the picture
-  squashed at 15.4 or 15.7 kHz.
-- **A shorter menu.** Texel step, 3D pacing, Texture brightness and Draw
-  method's "every 3rd frame" are gone. They're fixed at the settings that work
-  best now the core runs at full speed.
-- **Room to grow.** Several parts were made smaller, including both sound
-  chips now sharing one engine. That freed space on the FPGA for what comes
-  next.
+- **A new 15 kHz picture.** The 15 kHz mode now runs the game's 384-line
+  picture through a scan converter, so it fills a CRT top to bottom instead of
+  sitting between black borders, with no added delay. HDMI keeps working
+  alongside it. It's retrorepair's design, and it has been confirmed working
+  on CRTs by three testers. The `15kHz width` setting is gone with the old
+  picture. See the CRT section.
+- **Virtua Cop's ammo display works.** The revolver on screen used to show
+  six bullets whatever you did; it now empties as you fire and fills when you
+  reload.
+- **A texture-memory fix** carried over from the Model 2A work: one of the
+  texture RAM's mirror addresses didn't take four-word writes, so three
+  words in four of a write there were lost. None of the three games here is
+  known to show it, but the core now matches the arcade board.
 
 ### Earlier releases
+
+**20261016:** Desert Tank and Virtua Cop on the same core as Daytona, with
+light-gun and mouse aiming for Virtua Cop. Mip-mapping. Sound at the arcade's
+balance and tempo. No more doubled scanlines in the 2D, and the 2D background
+kept in step with the 3D. Volume control, steering smoothing, and a right-stick
+option for wheels. 15 kHz starting at the standard 15.7 kHz. A shorter menu.
 
 **20261013:** races at full speed, from a faster main CPU (8 KB instruction
 cache and better instruction fetching). Steering wheel support. Split and
@@ -248,9 +220,9 @@ The picture is the same 240 lines a field at every line rate. The game runs at
 field, and on some sets the picture looks a little shorter at 15.4 and 15.7 kHz
 than at 15.1. The old `15kHz width` setting is gone with the old picture.
 
-retrorepair has run the converter on a CRT at 15.1 kHz; the 15.4 and 15.7 kHz
-settings are new with it, so reports are very welcome: which TV, how it's
-connected, and which settings work for you.
+Three testers have confirmed the converter working on their CRTs. More
+reports are very welcome: which TV, how it's connected, and which settings
+work for you.
 
 ## MiSTer's audio filter is switched off
 
