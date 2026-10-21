@@ -6,8 +6,8 @@ RELEASED. Model 2: Model2_20261021.rbf = s1264 (main 2cebd70 + R907 area,
 d2e5c1c; clk_sys -0.094, clk_mem +0.463, clk_i960 +1.500, hold +0.194; 40,936
 ALMs), md5 44c8e69e... -- the 15 kHz scan converter (R898; confirmed on CRTs
 by three of Ben's testers, on s1243), Virtua Cop's ammo display (R899, the
-window key for every game; NOT yet confirmed on the board -- Ben released
-before the VC run), the texture burst region (R905), and R907's ~820 ALM back
+window key for every game; confirmed on the board on s1264 by Ben after
+the push), the texture burst region (R905), and R907's ~820 ALM back
 (viewport converter shared, colour translation table in MLABs). main-next
 before R907 did not fit (s1254-56 short 1-3 LABs) or missed clk_sys by 2-3 ns
 (s1249/50); after R907 s1260 -1.443, s1263 -0.666, s1264 -0.094, three
