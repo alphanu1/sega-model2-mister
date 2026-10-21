@@ -1630,6 +1630,28 @@ $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cp
 	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
 	  sim/io/tb_m2_boot.cpp
 
+# R924: THE 2C BOOT (The House of the Dead): the 2A harness with A2X and C2 --
+# m2_copro's TGPx4 (program cache of BOOT_2C_PLINES lines), the bridge's 2C map,
+# AW 26 and the large layout (tb_m2_boot M2_C2: XTRA3, the 128 MB array):
+#   M2_A2=1 M2_A2X=1 M2_C2=1 M2_BOOT_IMAGE=<hotd.bin> ./obj_boot_2c/Vm2_boot_harness +insn=<n>
+# (the image from tools/rom_csum.py on the hotd MRA with --out).
+BOOT_2C_PLINES ?= 1024
+obj_boot_2c/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+                           rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/tgpx4/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_2c -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GA2X=1 -GC2=1 -GAW=26 -GX4_PLINES=$(BOOT_2C_PLINES) \
+	  -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
+	  $(filter-out rtl/tgpx4/tgpx4_rf.sv,$(wildcard rtl/tgpx4/*.sv)) rtl/tgpx4/tgpx4_rf.sv \
+	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
+	  sim/io/tb_m2_boot.cpp
+
 # R844: the same boot as Virtua Cop (game ID 1): VCOP=1, the vcopa image from
 # tools/rom_csum.py --out in M2_BOOT_IMAGE, M2_VCOP=1, EPR-17181 in M2_IOFW,
 # and M2_ROMPATH at a directory whose daytona93/ holds only the two program
@@ -2399,6 +2421,29 @@ tgpx4_map: lint_tgpx4
 	    || { echo "quartus_map FAILED -- see $$d/map.log"; grep -m5 "^Error" map.log; exit 1; }; \
 	  grep -E "Logic utilization|ALMs needed|Total registers|Total block memory bits|Total RAM Blocks|Total DSP|M10K blocks" \
 	    output_files/tgpx4_core.map.summary output_files/tgpx4_core.map.rpt | sort -u | head -20
+
+# ------------------------------------------------- TGPx4 replay (R924)
+# The 2C coprocessor against a MAME 0.289 capture (sim/tgpx4/mame_mb86235_cap.patch,
+# R924_CAP=<dir> R924_TRACE=<n> on m2lod): tgpx4_ref checks MAME's own interpreter
+# (sim/tgpx4/mame, verbatim) against the capture; tgpx4_replay runs m2_copro built
+# as the 2C board (TGPX4=1) with that interpreter in lockstep and every output word
+# checked against MAME's. TGPX4CAP = the capture directory (ROM-derived, outside git).
+TGPX4CAP    ?= build/r924cap/hotd_boot
+TGPX4_ROBJ  := obj_tgpx4_replay_$(TGPX4_PLINES)
+TGPX4_REF   := sim/tgpx4/mame/mb86235ops.cpp
+.PHONY: tgpx4_ref tgpx4_replay
+obj_tgpx4_ref/ref_replay: sim/tgpx4/ref_replay.cpp sim/tgpx4/cap.h $(wildcard sim/tgpx4/mame/*)
+	mkdir -p obj_tgpx4_ref && g++ -O2 -std=c++17 -Isim/tgpx4 -Isim/tgpx4/mame -o $@ sim/tgpx4/ref_replay.cpp $(TGPX4_REF) -lz
+tgpx4_ref: obj_tgpx4_ref/ref_replay
+	./obj_tgpx4_ref/ref_replay $(TGPX4CAP) $(TEST_ARGS)
+$(TGPX4_ROBJ)/Vm2_copro: $(TGPX4_RTL) rtl/tgpx4/m2_tgpx4.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/tgpx4/*.sv) sim/tgpx4/tb_tgpx4_replay.cpp sim/tgpx4/cap.h $(wildcard sim/tgpx4/mame/*)
+	@mkdir -p $(TGPX4_ROBJ) && verilator --cc --exe --build -j 0 -Wno-fatal -Wno-lint -Wno-style --public-flat-rw --top-module m2_copro \
+	  -GTGPX4=1 -GX4_PLINES=$(TGPX4_PLINES) -CFLAGS "-O2 -std=c++17 -I$(abspath sim/tgpx4) -I$(abspath sim/tgpx4/mame)" -O3 -LDFLAGS "-lz" \
+	  --Mdir $(TGPX4_ROBJ) -o Vm2_copro $(wildcard rtl/tgp/*.sv) $(wildcard rtl/tgpx4/*.sv) \
+	  $(abspath sim/tgpx4/tb_tgpx4_replay.cpp) $(abspath $(TGPX4_REF)) > $(TGPX4_ROBJ)/build.log 2>&1 \
+	  || { tail -30 $(TGPX4_ROBJ)/build.log; exit 1; }
+tgpx4_replay: $(TGPX4_ROBJ)/Vm2_copro
+	./$(TGPX4_ROBJ)/Vm2_copro $(TGPX4CAP) $(TEST_ARGS)
 
 .PHONY: quartus quartus_all quartus_report quartus_paths
 MOD  ?= i960_alu

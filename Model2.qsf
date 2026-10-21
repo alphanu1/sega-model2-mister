@@ -947,6 +947,14 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/mb86233_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_tgp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_copro.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgp/m2_fifo_m10k.sv
+# R924: the 2C board's TGPx4 (elaborated only in an M2_2C build: m2_copro TGPX4)
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_agu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_rf.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_fsqrt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_cvt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_pmem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/m2_tgpx4.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo.sv
 # The geometry pipeline. m2_geometry ties these together; the arithmetic stages
 # are Model 1's, pinned in THIRD_PARTY.md, and m2_geo_engine/m2_geo_screen are

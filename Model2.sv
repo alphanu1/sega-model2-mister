@@ -186,6 +186,20 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_FPU
 `define M2_2A_FPU 1
 `endif
+// R924: M2_2C, THE MODEL 2C-CRX BOARD ON THE 2A CORE (branch model2c only): the
+// MB86235 TGPx4 (rtl/tgpx4, m2_copro TGPX4) in place of the TGP, its program
+// uploaded as dword pairs and held in a line cache over an SDRAM copy
+// (M2_2C_PLINES lines: 1024 by default, 4096 = all on chip), 2C's texture RAM
+// (0x11000000 / 0x11200000, plain 32-bit) and luma RAM (0x11400000, a byte per
+// halfword) in the bridge, the 2A texture / luma windows unmapped, and the copro
+// status register at 0x00980014. OFF by default: VERILOG_MACRO "M2_2C=1" (or
+// -DM2_2C to lint) builds it. A 2C build runs 2C games only (game ID 0x17, The
+// House of the Dead); the 2A games need the TGP it leaves out.
+`ifdef M2_2C
+`ifndef M2_2C_PLINES
+`define M2_2C_PLINES 1024
+`endif
+`endif
 `else
 `ifndef M2_2A_SOUND
 `define M2_2A_SOUND 0
@@ -484,6 +498,14 @@ localparam CONF_STR = {
 localparam bit M2A = 1'b1;
 `else
 localparam bit M2A = 1'b0;
+`endif
+// R924: the 2C board (M2_2C, above); C2_PLINES its program cache's lines
+`ifdef M2_2C
+localparam bit          C2        = M2A;
+localparam int unsigned C2_PLINES = `M2_2C_PLINES;
+`else
+localparam bit          C2        = 1'b0;
+localparam int unsigned C2_PLINES = 1024;
 `endif
 // R891: VERILOG_MACRO "M2_MEMTEST=1" (with "M2_PROBE=1"; or -DM2_MEMTEST to
 // lint) adds m2_memtest: at power-up, before any download, it writes 4,096
@@ -975,6 +997,11 @@ localparam logic [SDR_AW:1] GAME_COPRO_2A  = SDR_AW'(32'h13C0000);   // byte 0x2
 localparam logic [26:0]     XTRA3_FROM_2A = 27'h32C0000;
 localparam logic [SDR_AW:1] GAME_TEX_BIG  = SDR_AW'(32'h2000000);   // byte 0x4000000, 16 MB
 localparam logic [SDR_AW:1] GAME_POLY_BIG = SDR_AW'(32'h2800000);   // byte 0x5000000, 32 MB
+// R924: THE TGPx4'S PROGRAM COPY (2C), 32 KB: the cache's refills read it, the
+// upload writes it. In the large layout's 4 MB of zeros at MRA 0x2080000 (MAME's
+// main_data 32-36 MB, which no game can reach); the MRA's zeros are overwritten
+// by the upload, which always comes before the TGPx4 is booted.
+localparam logic [SDR_AW:1] GAME_X4PROG   = SDR_AW'(32'h1040000);   // byte 0x2080000
 
 wire        snd_rom_req;
 wire [17:1] snd_rom_addr;
@@ -993,6 +1020,7 @@ localparam logic [SDR_AW:1] GAME_SNDRAM_2A = SDR_AW'(32'h12C0000);   // byte 0x2
 // and 2 M words of copro_data the geometry code walks.
 wire        tgp_tbl_req, tgp_dat_req;
 wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
+wire        tgp_dat_is_prog, tgp_bufw_is_prog;   // R924: the TGPx4's program copy (2C)
 // The geometrizer walks its display list once a frame, on the same vblank
 // edge the frame counter uses. The reference gates it on videocontrol bit 0
 // or an even frame; that gate is not modelled yet, so it walks every frame.
@@ -1251,6 +1279,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 
 logic       tgp_bufw_req_r;
+logic       tgp_bufw_is_prog_r;   // R924
 logic [18:0] tgp_bufw_addr_r;
 logic [15:0] tgp_bufw_data_r;
 logic       tgp_bufw_ack_r;
@@ -1492,7 +1521,8 @@ always_comb begin
 	// waits; the walk has a whole frame and can take its turn.
 	// PORT 9 IS THE COPROCESSOR'S ALONE (R167). The walker moved to port 4.
 	p_req[9]  = tgp_dat_req_r;
-	p_addr[9] = (tgp_dat_is_buf_r ? GAME_BUFFER : (M2A ? GAME_COPRO_2A : GAME_COPRO))   // R862
+	p_addr[9] = ((C2 && tgp_dat_is_prog_r) ? GAME_X4PROG   // R924: the TGPx4's program copy
+	          : tgp_dat_is_buf_r ? GAME_BUFFER : (M2A ? GAME_COPRO_2A : GAME_COPRO))   // R862
 	          + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
 	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
 	// which keeps p_we/p_din out of the arbiter's command decode.
@@ -1597,7 +1627,7 @@ logic [15:0]       wa_own_din  [5];
 assign wa_own_req     = {ldr_wr_req, geo_sd_busy & geo_sd_req, tgp_bufw_req_r, st_run & st_req, bi_run & bi_req};
 assign wa_own_addr[0] = bi_addr;
 assign wa_own_addr[1] = st_addr;
-assign wa_own_addr[2] = GAME_BUFFER + SDR_AW'(tgp_bufw_addr_r);
+assign wa_own_addr[2] = ((C2 && tgp_bufw_is_prog_r) ? GAME_X4PROG : GAME_BUFFER) + SDR_AW'(tgp_bufw_addr_r);   // R924
 assign wa_own_addr[3] = geo_sd_addr;
 assign wa_own_addr[4] = ldr_wr_addr;
 assign wa_own_din[0]  = bi_din;
@@ -2756,6 +2786,11 @@ wire is_desert = (game_id[6:0] == 7'd2);
 wire is_srally  = M2A && (game_id[6:0] == 7'h10);
 wire is_vcop2   = M2A && (game_id[6:0] == 7'h11);
 wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
+// R924: THE 2C GAMES (M2_2C builds only; C2 is 0 in every other build, so these
+// fold away): 0x17 The House of the Dead (hotd, Revision A) -- the large layout
+// (a2_big: 32 MB main_data, 16 MB textures, 32 MB polygons), its 1 MB of copro
+// data in the 2A copro-data slot, Virtua Cop 2's guns on serial channel 2.
+wire is_hotd    = C2 && (game_id[6:0] == 7'h17);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
 // are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
 // ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
@@ -2778,7 +2813,7 @@ assign a2_rally_menu = RALLY2A & (is_srally | is_2an);   // R887: the analog pro
 // R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
 // same slot).
 logic a2_copro_rom;
-always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an;
+always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd;   // R924
 // R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
 // 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
 // Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
@@ -2786,7 +2821,8 @@ always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an;
 // Quasi-static (the ID is written before the image).
 always_ff @(posedge clk_sys)   // (declared with the boot sweep, R900)
 	a2_big <= is_2ax && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
-	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA));
+	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA)
+	                  || is_hotd);   // R924
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -2959,7 +2995,7 @@ wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
 m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
-                  , .AW(SDR_AW), .BOARD_2A(M2A), .DCACHE_EN(1'b1)) u_cpu_bridge (   // R852
+                  , .AW(SDR_AW), .BOARD_2A(M2A), .BOARD_2C(C2), .DCACHE_EN(1'b1)) u_cpu_bridge (   // R852; R924
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -3603,6 +3639,10 @@ assign cpu_io_rdata =
 	// reads the ID. It is here because it is known-wrong and costs four LUTs,
 	// not because anything is waiting on it.
 	(cpu_io_addr[23:4] == 20'h98003) ? tgpid :
+	// R924: 2C's copro_status_r, 0x00980014: all ones until the first program
+	// dword has been uploaded, then 0 (MAME: m_coprocnt == 0 -- which a second
+	// upload's start would zero again; this counts since reset)
+	(C2 && cpu_io_addr[23:0] == 24'h980014) ? ((copro_prog_words == 16'd0) ? 32'hFFFF_FFFF : 32'd0) :
 	// R765: MAME's videoctl_r exactly -- the frame bit ALWAYS in bit 2, frame
 	// bit 0 in 60 Hz render mode and bit 1 in 30 Hz. This was keyed on
 	// videocontrol bit 0 and put frame bit 1 in bit 3 when it was clear; Daytona
@@ -4338,6 +4378,7 @@ end
 logic [15:0] tgp_tbl_addr_r;
 logic [19:0] tgp_dat_addr_r;
 logic        tgp_dat_we_r, tgp_dat_is_buf_r, tgp_dat_half_r;
+logic        tgp_dat_is_prog_r;   // R924
 logic [15:0] tgp_dat_wdata_r;
 always_ff @(posedge clk_sys) begin
 	tgp_tbl_ack_r   <= p_ack[8];
@@ -4366,7 +4407,8 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_ack_r   <= p_ack[9] & tgp_dat_req_r;
 	// R852: 2A has no copro data ROM (MAME ROMREGION_ERASE00): those reads are 0.
 	// R862: except Sega Rally's, whose 4 MB are at GAME_COPRO_2A.
-	tgp_dat_rdata_r <= (M2A && !a2_copro_rom && !tgp_dat_is_buf_r) ? 32'd0 : p_dout[9][31:0];   // R862
+	tgp_dat_rdata_r <= (M2A && !a2_copro_rom && !tgp_dat_is_buf_r && !(C2 && tgp_dat_is_prog_r)) ? 32'd0
+	                 : p_dout[9][31:0];   // R862; R924: the program copy is never zeroed
 	tgp_tbl_req_r   <= tgp_tbl_req;
 	tgp_tbl_addr_r  <= tgp_tbl_addr;
 	tgp_dat_req_r   <= tgp_dat_req;
@@ -4374,6 +4416,7 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_we_r    <= tgp_dat_we;
 	tgp_dat_wdata_r <= tgp_dat_wdata;
 	tgp_dat_is_buf_r<= tgp_dat_is_buf;
+	tgp_dat_is_prog_r <= C2 & tgp_dat_is_prog;   // R924
 	tgp_dat_half_r  <= tgp_dat_half;
 	geo_rd_req_r    <= gc_req;          // R214: the walker's misses only
 	geo_rd_addr_r   <= geo_rd_addr;
@@ -4393,6 +4436,7 @@ always_ff @(posedge clk_sys) begin
 	// touches" and "the CPU reads a buffer the copro shares".
 	tgp_bufw_req_r  <= tgp_bufw_req & COPRO_BUFW;
 	tgp_bufw_addr_r <= tgp_bufw_addr;
+	tgp_bufw_is_prog_r <= C2 & tgp_bufw_is_prog;   // R924
 	tgp_bufw_data_r <= tgp_bufw_data;
 	tgp_bufw_ack_r  <= wr_ack_tgp;
 	// Each reader retires on the acknowledge ONLY when it was the one asking.
@@ -4473,7 +4517,7 @@ end
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
 m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
-           .BUFW_Q(M2A ? 32 : 0)) u_copro (   // R852, R888
+           .BUFW_Q(M2A ? 32 : 0), .TGPX4(C2), .X4_PLINES(C2_PLINES)) u_copro (   // R852, R888; R924
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
@@ -4496,6 +4540,7 @@ m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
 	.tbl_rdata(tgp_tbl_rdata_r), .tbl_ack(tgp_tbl_ack_r),
 	.dat_req(tgp_dat_req), .dat_addr(tgp_dat_addr),
 	.dat_we(tgp_dat_we), .dat_wdata(tgp_dat_wdata), .dat_is_buf(tgp_dat_is_buf),
+	.dat_is_prog(tgp_dat_is_prog), .bufw_is_prog(tgp_bufw_is_prog),   // R924
 	.dat_half(tgp_dat_half),
 	.bufw_req(tgp_bufw_req), .bufw_addr(tgp_bufw_addr), .bufw_data(tgp_bufw_data),
 	.bufw_ack(tgp_bufw_ack_r),
@@ -4686,7 +4731,7 @@ wire  [1:0] vc_con;
 // R870: the same driver for Virtua Cop 2 on the 2A build (VCOP2GUN; V2 sets
 // its ranges and its in-play words). The two never share a build: VCOP_GUN
 // needs the I/O board's Z80, which the 2A build leaves out.
-assign v2_gun = VCOP2GUN & is_vcop2;
+assign v2_gun = VCOP2GUN & (is_vcop2 | is_hotd);   // R924: and The House of the Dead's
 generate if (VCOP_GUN || VCOP2GUN) begin : g_vcgun
 	// R846: aim from the sticks (absolute; USB guns arrive so) or the mouse
 	// (relative, one gun); the mouse's buttons are a trigger / reload for the
@@ -4700,7 +4745,7 @@ generate if (VCOP_GUN || VCOP2GUN) begin : g_vcgun
 		.bus_addr(cpu_addr), .bus_wdata(cpu_wdata), .bus_be(cpu_be),
 		.play(vc_play)
 	);
-	m2_vcop_guns #(.V2(VCOP2GUN)) u_vcop_guns (
+	m2_vcop_guns #(.V2(VCOP2GUN), .HD(C2)) u_vcop_guns (   // R924: HD, House of the Dead's ranges
 		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun | v2_gun), .play(vc_play),
 		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
 		.ana0(joy_analog), .ana1(joy_analog_1),
@@ -6337,7 +6382,7 @@ end else begin : g_noioboard
 		wire [7:0] a2_pe;   // R892: PE's latch, Manx TT's motion-base command
 		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT)) u_2a_inputs (
 			.clk(clk_sys), .rst_n(cpu_rst_n),
-			.game(M2A ? game_id[6:0] : 7'd0),   // R887: the profile from the game ID
+			.game(M2A ? (is_hotd ? 7'h11 : game_id[6:0]) : 7'd0),   // R887: the profile from the game ID; R924: HOTD is Virtua Cop 2's
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
 			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .joy_analog_1(joy_analog_1_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),

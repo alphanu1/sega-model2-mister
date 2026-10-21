@@ -87,7 +87,13 @@ module m2_boot_harness #(
   parameter bit          MANX_MOTION     = 1'b0,
   // R904: the i960's wait states (Model2.sv M2_2A_WAITST, there for game ID
   // 0x10 only): m2_waitst between the CPU and the bridge, enabled
-  parameter bit          WAITST          = 1'b0
+  parameter bit          WAITST          = 1'b0,
+  // R924: the Model 2C board as Model2.sv builds it with M2_2C (with A2, A2X and
+  // AW 26): m2_copro's TGPx4 (TGPX4, its program cache of X4_PLINES lines over
+  // the SDRAM copy the tb keeps at word 0x1040000), the bridge's 2C texture /
+  // luma map, the copro status register; tb_m2_boot under M2_C2=1
+  parameter bit          C2              = 1'b0,
+  parameter int unsigned X4_PLINES       = 1024
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -359,6 +365,7 @@ module m2_boot_harness #(
   // a property of this harness rather than a result about the core.
   // One-cycle pulse, with the address and data held beside it.
   output logic        obs_bufw_wr,
+  output logic        obs_bufw_prog,   // R924: the write is to the TGPx4's program copy
   output logic [18:0] obs_bufw_waddr,
   output logic [15:0] obs_bufw_wdata,
   // The assembled mailbox, as Model2.sv's `tgp_mbox` does it on hardware:
@@ -423,6 +430,7 @@ module m2_boot_harness #(
   // display list, and the loop count at 0x47C, out of BUFFER RAM, so it was
   // handed ROM bytes and looped on a garbage count.
   output logic        tgp_dat_is_buf,
+  output logic        tgp_dat_is_prog,   // R924: the TGPx4's program copy (C2)
   input  logic [31:0] tgp_dat_rdata,
   input  logic        tgp_dat_ack,
   // Telemetry. `retires` moving is the whole question; `unimpl` is the one
@@ -725,7 +733,7 @@ module m2_boot_harness #(
     assign br_req = bus_req; assign bus_rdata = br_rdata; assign bus_ack = br_ack;
   end endgenerate
 
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BOARD_2C(C2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (   // R924
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
@@ -827,12 +835,13 @@ module m2_boot_harness #(
   wire        cop_bufw_req;
   wire [18:0] cop_bufw_addr;
   wire [15:0] cop_bufw_data;
+  wire        cop_bufw_prog;   // R924
   logic       cop_bufw_req_d;
   always_ff @(posedge clk_m or negedge rst_n) begin
     if (!rst_n) begin
       obs_bufw_count <= 32'd0; obs_bufw_last <= 32'hEEEEEEEE;
       obs_bufw_7ffc  <= 32'd0; cop_bufw_req_d <= 1'b0;
-      obs_bufw_wr    <= 1'b0;  obs_bufw_waddr <= 19'd0; obs_bufw_wdata <= 16'd0;
+      obs_bufw_wr    <= 1'b0;  obs_bufw_waddr <= 19'd0; obs_bufw_wdata <= 16'd0; obs_bufw_prog <= 1'b0;
       // NOT ZERO AT RESET. The game writes 0xFFFFFFFF and waits for zero, so a
       // mailbox that powers up at zero is indistinguishable from one the
       // coprocessor has cleared. 0xEEEEEEEE is "never written".
@@ -846,6 +855,7 @@ module m2_boot_harness #(
         obs_bufw_wr    <= 1'b1;
         obs_bufw_waddr <= cop_bufw_addr;
         obs_bufw_wdata <= cop_bufw_data;
+        obs_bufw_prog  <= cop_bufw_prog;   // R924
         if (cop_bufw_addr[18:1] == 18'h07FFC) obs_bufw_7ffc <= obs_bufw_7ffc + 32'd1;
         if (cop_bufw_addr == 19'h0FFF8) obs_mbox[15:0]  <= cop_bufw_data;
         if (cop_bufw_addr == 19'h0FFF9) obs_mbox[31:16] <= cop_bufw_data;
@@ -853,7 +863,8 @@ module m2_boot_harness #(
     end
   end
 
-  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0)) u_copro (   // R888: as Model2.sv
+  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0),
+             .TGPX4(C2), .X4_PLINES(X4_PLINES)) u_copro (   // R888: as Model2.sv; R924
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),
@@ -867,6 +878,7 @@ module m2_boot_harness #(
     // (R133). This harness models neither region, so the write side is
     // observed and dropped -- the reads it does model are unaffected.
     .dat_we(), .dat_wdata(), .dat_is_buf(tgp_dat_is_buf), .dat_half(),
+    .dat_is_prog(tgp_dat_is_prog), .bufw_is_prog(cop_bufw_prog),   // R924
     // Buffer-RAM writes leave on their own port; this harness models neither
     // bufferram nor the shared write port, so the request is acked at once.
     .bufw_req(cop_bufw_req), .bufw_addr(cop_bufw_addr), .bufw_data(cop_bufw_data), .bufw_ack(1'b1),
@@ -1117,10 +1129,8 @@ module m2_boot_harness #(
   assign tpw_idx     = geo_tp_idx;
   assign tpw_diffuse = geo_tp_diffuse;
   assign tpw_ambient = geo_tp_ambient;
-  assign tgp_rom_rd  = u_copro.u_tgp.dat_req & u_copro.u_tgp.sel_rom & ~u_copro.u_tgp.dat_we;
   assign lit_x_o = geo_lit_x; assign lit_y_o = geo_lit_y; assign lit_z_o = geo_lit_z;
   assign nrm_x_o = u_geometry.nrm_x; assign nrm_y_o = u_geometry.nrm_y; assign nrm_z_o = u_geometry.nrm_z;
-  assign tgp_rom_adr = u_copro.u_tgp.win_adr;
   assign obs_v0x = u_geometry.u_engine.v0x; assign obs_v0y = u_geometry.u_engine.v0y; assign obs_v0z = u_geometry.u_engine.v0z;
   assign obs_v1x = u_geometry.u_engine.v1x; assign obs_v1y = u_geometry.u_engine.v1y; assign obs_v1z = u_geometry.u_engine.v1z;
   assign obs_v2x = u_geometry.u_engine.v2x; assign obs_v2y = u_geometry.u_engine.v2y; assign obs_v2z = u_geometry.u_engine.v2z;
@@ -1134,16 +1144,29 @@ module m2_boot_harness #(
   assign obs_w_granted = u_geometry.w_granted;
   assign obs_pj_hit = (u_geometry.qst == 2'd1) && u_geometry.skip_here;
   assign obs_k_granted = u_geometry.k_granted;
-  assign obs_tgp_retire = u_copro.u_tgp.core.retire;
-  assign obs_tgp_rpc    = u_copro.u_tgp.core.retire_pc;
-  assign obs_tgpx_a     = u_copro.u_tgp.core.u_regs.reg_a;
-  assign obs_tgpx_d     = u_copro.u_tgp.core.u_regs.reg_d;
-  assign obs_tgp_ram69  = u_copro.u_tgp.core.u_mem.ram0[8'h69];
-  assign obs_tgp_ram6a  = u_copro.u_tgp.core.u_mem.ram0[8'h6a];
   assign obs_xf_valid = u_geometry.u_engine.xf_in_valid & u_geometry.u_engine.xf_translate;
   assign obs_xf_x = u_geometry.u_engine.xf_in_x; assign obs_xf_y = u_geometry.u_engine.xf_in_y; assign obs_xf_z = u_geometry.u_engine.xf_in_z;
   assign obs_mtx = u_geo.mtx;
 
+
+  // R924: the TGP's own probes, through m2_copro's generate scope (g_tgp since
+  // R924); with the TGPx4 (C2) the retire / pc of tgpx4_core, the rest zero
+  generate if (!C2) begin : g_tgp_obs
+    assign tgp_rom_rd  = u_copro.g_tgp.u_tgp.dat_req & u_copro.g_tgp.u_tgp.sel_rom & ~u_copro.g_tgp.u_tgp.dat_we;
+    assign tgp_rom_adr = u_copro.g_tgp.u_tgp.win_adr;
+    assign obs_tgp_retire = u_copro.g_tgp.u_tgp.core.retire;
+    assign obs_tgp_rpc    = u_copro.g_tgp.u_tgp.core.retire_pc;
+    assign obs_tgpx_a     = u_copro.g_tgp.u_tgp.core.u_regs.reg_a;
+    assign obs_tgpx_d     = u_copro.g_tgp.u_tgp.core.u_regs.reg_d;
+    assign obs_tgp_ram69  = u_copro.g_tgp.u_tgp.core.u_mem.ram0[8'h69];
+    assign obs_tgp_ram6a  = u_copro.g_tgp.u_tgp.core.u_mem.ram0[8'h6a];
+  end else begin : g_x4_obs
+    assign tgp_rom_rd = 1'b0; assign tgp_rom_adr = '0;
+    assign obs_tgp_retire = u_copro.g_tgpx4.u_x4.u_core.dbg_retire;
+    assign obs_tgp_rpc    = 16'(u_copro.g_tgpx4.u_x4.u_core.ir_pc);
+    assign obs_tgpx_a = 32'd0; assign obs_tgpx_d = 32'd0;
+    assign obs_tgp_ram69 = 32'd0; assign obs_tgp_ram6a = 32'd0;
+  end endgenerate
 
   m2_backup u_backup (
     .clk(clk_m), .sel(bak_sel), .we(cpu_io_we),
@@ -1200,6 +1223,7 @@ module m2_boot_harness #(
     bak_sel                           ? bak_rdata :
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
     copro_sel                         ? copro_rdata :
+    (C2 && cpu_io_addr[23:0] == 24'h980014) ? ((obs_copro_prog == 16'd0) ? 32'hFFFF_FFFF : 32'd0) :   // R924, as Model2.sv
     (A2 && cpu_io_addr[31:21] == 11'h080) ? {17'd0, io_render_unk, 11'd0, io_render_mode, 1'b0, io_render_test} :   // R896
     (cpu_io_addr[23:0] == 24'h98000c) ? {29'd0, (io_render_mode ? io_framenum[0] : io_framenum[1]),
                                          io_videoctl[1:0]} :   // R765

@@ -126,6 +126,7 @@ module tgpx4_core #(
   logic [63:0] nx_ir;          // the next word, fetched during this one
   logic        nx_v, pf_sent;
   logic [11:0] pc, delay_pc;
+  logic [11:0] ir_pc;          // R924: the address of the word in ir (benches)
   logic        delay_slot;
   logic [31:0] st;
   logic [15:0] rpc, lpc;
@@ -759,7 +760,7 @@ module tgpx4_core #(
   integer k;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      s <= S_HALT; ir <= 64'd0; nx_ir <= 64'd0; nx_v <= 1'b0; pf_sent <= 1'b0; pc <= 12'd0; delay_pc <= 12'd0; delay_slot <= 1'b0;
+      s <= S_HALT; ir <= 64'd0; ir_pc <= 12'd0; nx_ir <= 64'd0; nx_v <= 1'b0; pf_sent <= 1'b0; pc <= 12'd0; delay_pc <= 12'd0; delay_slot <= 1'b0;
       st <= 32'd0; rpc <= 16'd0; lpc <= 16'd0; eb <= 24'd0; eo <= 24'd0; sp <= 10'd0;
       modr <= 16'd0; pdr <= 32'd0; ddr <= 32'd0; prp <= 5'd0; pwp <= 5'd0; pcp <= 2'd0;
       for (k = 0; k < 4; k++) pcs[k] <= 12'd0;
@@ -817,7 +818,12 @@ module tgpx4_core #(
       if (sq_go) frsq_pend <= 1'b1;
       if (fmul_v) begin
         mul_done <= 1'b1; mul_r <= fmul_r;
-        fm_n <= f_neg(fmul_r); fm_z <= f_zero(fmul_r); fm_d <= fmul_inv; fm_v <= fmul_ov; fm_u <= fmul_un;
+        // MAME decode_mulop: MD = isnan, MV = isinf, MU = |res| < FLT_MIN --
+        // so an exact zero sets MU too (R924), from the result, not the unit's flags
+        fm_n <= f_neg(fmul_r); fm_z <= f_zero(fmul_r);
+        fm_d <= (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] != 23'd0);
+        fm_v <= (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] == 23'd0);
+        fm_u <= (fmul_r[30:23] == 8'h00);
       end
       if (imul_v) begin
         mul_done <= 1'b1; mul_r <= imul_r;
@@ -1063,7 +1069,7 @@ module tgpx4_core #(
       if (acc) begin
         // MAME execute_run: the PC steps (or the delay slot / repeat
         // applies) as the word is taken, before it executes
-        ir <= acc_word;
+        ir <= acc_word; ir_pc <= pc;
         nx_v <= 1'b0; pf_sent <= 1'b0;
         dbg_retire <= 1'b1;
         if (delay_slot) begin

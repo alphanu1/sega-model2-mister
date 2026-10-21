@@ -43,6 +43,10 @@ static Vm2_boot_harness *d;
 // 25-bit word address space, 64 MB. Unwritten reads 0xFFFF, per the standing
 // rule in docs/mister-integration.md — never zero.
 static std::vector<uint16_t> mem;
+// R924: the SDRAM word mask -- 32 M words (64 MB), or 64 M (128 MB) for the
+// large 2A layout the 2C bench (M2_C2) loads
+static uint32_t g_mm = 0x1ffffffu;
+static bool g_c2 = false;    // R924: the 2C board (harness built with C2=1, AW=26)
 // R852: the Model 2A bench (M2_A2=1; harness built with A2=1): the 2A image
 // layout's word bases, Model2.sv's GAME_* with M2A. Daytona's otherwise.
 static bool     g_a2      = false;
@@ -278,6 +282,13 @@ int main(int argc, char **argv) {
 
   g_a2 = std::getenv("M2_A2") != nullptr;
   if (g_a2) { G_TEX = 0x0840000u; G_POLY = 0x0c40000u; BUF_BASE = 0x16f0000u; }
+  // R924: THE 2C BENCH (M2_C2=1, with M2_A2 and M2_A2X; harness C2=1, AW=26):
+  // the large 2A layout (R897) on 128 MB -- the texture-coordinate ROM at word
+  // 0x2000000 and the polygons at 0x2800000 (the loader's XTRA3), read linear
+  // with MAME's dword index (Model2.sv eng_base / eng_mem_idx under a2_big);
+  // the copro data at 0x13C0000 (XTRA2); the TGPx4's program copy at 0x1040000.
+  g_c2 = std::getenv("M2_C2") != nullptr;
+  if (g_c2) { g_mm = 0x3ffffffu; G_TEX = 0x2000000u; G_POLY = 0x2800000u; }
   const char *rp = std::getenv("M2_ROMPATH");
   const std::string dir = std::string(rp ? rp :
       (std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/roms/Model2"))
@@ -293,7 +304,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  mem.assign(size_t(1) << 25, 0xffff);
+  mem.assign(size_t(1) << (g_c2 ? 26 : 25), 0xffff);
   // R247: THE DISPLAY-LIST RAM COMES UP WITH THE REFERENCE'S PATTERN, as
   // model2.cpp's reset sets it -- 0x07800F0F in every dword of the 128 KB.
   // Model2.sv now sweeps it at boot; the bench has no boot sweep, so it starts
@@ -349,6 +360,15 @@ int main(int argc, char **argv) {
       std::printf("  FULL IMAGE: %zu bytes (%.2f MB), %zu words from %s\n",
                   full.size(), double(full.size())/1048576.0, nw, ip);
       mem_words = nw;
+      // R924: the large layout's third remap (XTRA3): image bytes from 0x32C0000
+      // go to byte 0x4000000 (textures 16 MB, then polygons), and their flat
+      // place back to unwritten. Copied from the top down (the target is above).
+      if (g_c2 && nw > 0x1960000u) {
+        const size_t src = 0x1960000u, dst = 0x2000000u, n = nw - src;
+        for (size_t k = n; k-- > 0; ) if (dst + k < mem.size()) mem[dst + k] = mem[src + k];
+        for (size_t k = 0; k < n && src + k < dst; ++k) mem[src + k] = 0xffff;
+        std::printf("  C2: XTRA3 -- %zu words from 0x1960000 to 0x2000000\n", n);
+      }
       // R839: Virtua Cop's program second half sits after the '93 image
       // (byte 0x2BE0000); the core's loader moves it to GAME_POLYX, and the
       // harness (VCOP=1) reads it at word 0x1880000.
@@ -369,7 +389,7 @@ int main(int argc, char **argv) {
           const size_t ext = 0x2D40000u / 2, cop = 0x2EC0000u / 2;
           for (size_t w = 0; w < 0xC0000; ++w)  mem[0x1300000 + w] = (ext + w < nw) ? mem[ext + w] : 0;
           for (size_t w = 0; w < 0x200000; ++w) mem[0x13C0000 + w] = (cop + w < nw) ? mem[cop + w] : 0;
-          for (size_t w = ext; w < nw && w < mem.size(); ++w) mem[w] = 0xffff;
+          for (size_t w = ext; w < nw && w < mem.size() && !(g_c2 && w >= 0x1960000u); ++w) mem[w] = 0xffff;   // R924: not the XTRA3 slots
           std::printf("  A2X: program extension at word 0x1300000, copro data at 0x13C0000\n");
         }
         // and the harness's display list and texture RAM as above
@@ -627,11 +647,11 @@ int main(int argc, char **argv) {
         if (off > cpu_buf_hi) cpu_buf_hi = off;
       }
       if (d->sd_we) {
-        const uint16_t old = mem[pend_addr & 0x1ffffff];
+        const uint16_t old = mem[pend_addr & g_mm];
         uint16_t v = d->sd_din;
         if (!(d->sd_be & 1)) v = uint16_t((v & 0xff00) | (old & 0x00ff));
         if (!(d->sd_be & 2)) v = uint16_t((v & 0x00ff) | (old & 0xff00));
-        mem[pend_addr & 0x1ffffff] = v;
+        mem[pend_addr & g_mm] = v;
       }
     } else if (busy && --lat <= 0) {
       // FOUR WORDS, not one. m2_sdram bursts four and packs them into the
@@ -640,10 +660,10 @@ int main(int argc, char **argv) {
       // word made every fetch's upper half read zero, and the boot executed
       // one instruction and trapped.
       {
-        const uint32_t a = pend_addr & 0x1ffffff;
+        const uint32_t a = pend_addr & g_mm;
         uint64_t v = 0;
         for (int w = 0; w < 4; ++w)
-          v |= uint64_t(mem[(a + w) & 0x1ffffff]) << (16 * w);
+          v |= uint64_t(mem[(a + w) & g_mm]) << (16 * w);
         d->sd_dout = v;
       }
       ack_left = 2; busy = false;
@@ -662,8 +682,8 @@ int main(int argc, char **argv) {
   auto sd2_tick = [&]() {
     d->sd2_ack = 0;
     if (sd2_left < 0 && d->sd2_req) {
-      const uint32_t a = d->sd2_addr & 0x1ffffff;
-      sd2_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      const uint32_t a = d->sd2_addr & g_mm;
+      sd2_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
       sd2_left = sd2_lat;
     } else if (sd2_left > 0) {
       --sd2_left;
@@ -695,10 +715,10 @@ int main(int argc, char **argv) {
     if (req && !p.req_d && p.cnt < 0 && !p.done) { p.cnt = pair_lat; p.idx = pidx; }
     p.req_d = req;
     if (p.cnt > 0 && --p.cnt == 0) {
-      const uint32_t w  = (p.idx * 2u) & 0x1ffffffu;
+      const uint32_t w  = (p.idx * 2u) & g_mm;
       const uint32_t w2 = (w & ~1023u) | ((w + 2u) & 1023u);
-      const uint64_t lo = uint32_t(mem[w]) | (uint32_t(mem[(w + 1u) & 0x1ffffffu]) << 16);
-      const uint64_t hi = uint32_t(mem[w2]) | (uint32_t(mem[(w2 + 1u) & 0x1ffffffu]) << 16);
+      const uint64_t lo = uint32_t(mem[w]) | (uint32_t(mem[(w + 1u) & g_mm]) << 16);
+      const uint64_t hi = uint32_t(mem[w2]) | (uint32_t(mem[(w2 + 1u) & g_mm]) << 16);
       p.dout = lo | (hi << 32); p.done = 1; p.cnt = -1;
     }
     if (!req) p.done = 0;
@@ -713,7 +733,7 @@ int main(int argc, char **argv) {
   const int snd_lat = std::getenv("M2_SND_LAT") ? std::atoi(std::getenv("M2_SND_LAT")) : 12;
   auto snd_rd4 = [&](uint32_t a) {
     uint64_t v = 0;
-    for (int w = 0; w < 4; ++w) v |= uint64_t(mem[(a + w) & 0x1ffffff]) << (16 * w);
+    for (int w = 0; w < 4; ++w) v |= uint64_t(mem[(a + w) & g_mm]) << (16 * w);
     return v;
   };
   // M2_SND_GUARD=1: a shadow of the sound RAM that only the sound board writes,
@@ -727,7 +747,7 @@ int main(int argc, char **argv) {
       if (be & 2) y = uint16_t((y & 0x00ff) | (v & 0xff00));
       if (be & 1) y = uint16_t((y & 0xff00) | (v & 0x00ff));
     }
-    uint16_t &x = mem[a & 0x1ffffff];
+    uint16_t &x = mem[a & g_mm];
     if (be & 2) x = uint16_t((x & 0x00ff) | (v & 0xff00));
     if (be & 1) x = uint16_t((x & 0xff00) | (v & 0x00ff));
   };
@@ -795,7 +815,7 @@ int main(int argc, char **argv) {
                                      "W_TFIFO","W_DDSKIP","W_DDATTR","W_OPRD","W_OBJW",
                                      "W_PDA","W_PDR","W_PDW"};
         const char *nm = WN[st];
-        const uint32_t aa = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
+        const uint32_t aa = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & g_mm;
         std::fprintf(g_pdlog, "%-8s ip=%05x word %07x = %08x\n",
                     nm, (unsigned)d->geo_rd_addr, aa,
                     (unsigned)(uint32_t(mem[aa]) | (uint32_t(mem[(aa+1)&0x1ffffff]) << 16)));
@@ -819,8 +839,8 @@ int main(int argc, char **argv) {
         d->geo_rd_ack = gl_ack_r; d->geo_rd_data = gl_data;
         int f_ack = 0;
         if (gl_cnt > 0 && --gl_cnt == 0) {
-          const uint32_t a = (0x16f0000u + (gl_addr << 1)) & 0x1ffffff;
-          gl_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+          const uint32_t a = (0x16f0000u + (gl_addr << 1)) & g_mm;
+          gl_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
           f_ack = 1; gl_cnt = -1;
         }
         if (!gl_req_r) gl_done = 0; else if (f_ack) gl_done = 1;
@@ -842,8 +862,8 @@ int main(int argc, char **argv) {
           ++gt_n;
         }
       } else {
-        const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & 0x1ffffff;
-        d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+        const uint32_t a = (0x16f0000u + (uint32_t(d->geo_rd_addr) << 1)) & g_mm;
+        d->geo_rd_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
         d->geo_rd_ack  = 1;
       }
     } else {
@@ -1025,7 +1045,7 @@ int main(int argc, char **argv) {
         const uint32_t off = (uint32_t)((y2 / 2) * 512 + (x2 / 2));
         const uint32_t addr = (sheet ? 0x17e0000u : 0x1760000u) + off;
         ++g_tex_fetch;
-        const uint16_t w = mem[addr & 0x1ffffff];
+        const uint16_t w = mem[addr & g_mm];
         if (w != 0xffff) ++g_tex_real;
         if (g_tex_show < 8 && i == 0) {
           std::printf("    TEXEL probe: sheet %d  %dx%d at (%d,%d)  uv(%d,%d) -> word %07x = %04x%s\n",
@@ -1063,14 +1083,14 @@ int main(int argc, char **argv) {
           // colour-table read out of polygon memory, so the one model that
           // represents the BOARD was the one giving the wrong colours.
           if      (el_space == 1)       { if (el_addr & 0x800000u) { base = 0x1740000u; off = el_addr & 0x7fffu; }
-                                          else                    { base = G_TEX; off = el_addr & 0x1fffffu; } }
+                                          else                    { base = G_TEX; off = el_addr & (g_c2 ? 0x3fffffu : 0x1fffffu); } }
           else if (el_space == 2)       { base = 0x1730000u; off = el_addr & 0x1ffu;    }
           else if (el_space == 3)       { base = 0x1731000u; off = el_addr & 0x3fffu;   }
           else if (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
-          else if (el_oba & (1u << 23)) { base = G_POLY; off = el_addr & 0x3fffffu; }
+          else if (el_oba & (1u << 23)) { base = G_POLY; off = el_addr & (g_c2 ? 0x7fffffu : 0x3fffffu); }
           else                          { base = 0x1710000u; off = el_addr & 0x7fffu;   }
-          const uint32_t a = (base + off * 2u) & 0x1ffffff;
-          el_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+          const uint32_t a = (base + off * 2u) & g_mm;
+          el_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
           f_ack = 1; el_cnt = -1;
         }
         if (!el_req_r) el_done = 0; else if (f_ack) el_done = 1;
@@ -1108,14 +1128,14 @@ int main(int argc, char **argv) {
       const unsigned space = d->eng_mem_space;          // R222
       uint32_t base, off;
       if      (space == 1)       { if (idx & 0x800000u) { base = 0x1740000u; off = idx & 0x7fffu; }
-                                   else                 { base = G_TEX; off = idx & 0x1fffffu; } }
+                                   else                 { base = G_TEX; off = idx & (g_c2 ? 0x3fffffu : 0x1fffffu); } }
       else if (space == 2)       { base = 0x1730000u; off = idx & 0x1ffu;    }
       else if (space == 3)       { base = 0x1731000u; off = idx & 0x3fffu;   }
       else if (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }
-      else if (oba & (1u << 23)) { base = G_POLY; off = idx & 0x3fffffu; }
+      else if (oba & (1u << 23)) { base = G_POLY; off = idx & (g_c2 ? 0x7fffffu : 0x3fffffu); }
       else                       { base = 0x1710000u; off = idx & 0x7fffu;   }
-      const uint32_t a = (base + (off << 1)) & 0x1ffffff;
-      d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & 0x1ffffff]) << 16);
+      const uint32_t a = (base + (off << 1)) & g_mm;
+      d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
       d->eng_mem_ack  = 1;
       // Only the reads that return something other than unwritten memory: the
       // first dozen reads happen before polygon RAM is filled and say nothing.
@@ -1148,7 +1168,7 @@ int main(int argc, char **argv) {
       req_p = d->eng_mem_req;
     }
     if (d->geo_sd_req) {
-      const uint32_t a = uint32_t(d->geo_sd_addr) & 0x1ffffff;
+      const uint32_t a = uint32_t(d->geo_sd_addr) & g_mm;
       mem[a] = d->geo_sd_din;
       g_geo_writes.insert(a);
       d->geo_sd_ack = 1;
@@ -1184,8 +1204,8 @@ int main(int argc, char **argv) {
                     ? std::atoi(std::getenv("M2_TGP_LAT")) : 6;
   uint64_t tbl_reads = 0, dat_reads = 0;
   auto rd32 = [&](uint32_t w) -> uint32_t {
-    return uint32_t(mem[w & 0x1ffffff])
-         | (uint32_t(mem[(w + 1) & 0x1ffffff]) << 16);
+    return uint32_t(mem[w & g_mm])
+         | (uint32_t(mem[(w + 1) & g_mm]) << 16);
   };
   // WHAT THE TGP IS DOING, sampled every clk_mem edge after it settles.
   //
@@ -1298,7 +1318,7 @@ int main(int argc, char **argv) {
       lc_prev_pc = pc;
     }
     if (d->obs_bufw_wr) {
-      const uint32_t w = BUF_BASE + uint32_t(d->obs_bufw_waddr);
+      const uint32_t w = (d->obs_bufw_prog ? 0x1040000u : BUF_BASE) + uint32_t(d->obs_bufw_waddr);   // R924
       if (w < mem.size()) { mem[w] = uint16_t(d->obs_bufw_wdata); ++bufw_applied; }
       // THE WHOLE MAILBOX BLOCK, not just 0x7FFC. 0x4BC writes the result count
       // to dword 0x7FFD and the CPU reads two result dwords at 0x91FFF4 and
@@ -1461,9 +1481,10 @@ int main(int argc, char **argv) {
       // Serving buffer-RAM reads out of the data ROM gave the TGP a garbage
       // display-list count at 0x47C, so it never terminated the loop at
       // 0x481-0x4B5 and never reached the mailbox clear at 0x4C4.
-      dat_data = rd32((d->tgp_dat_is_buf ? BUF_BASE : COPRO_BASE)
+      dat_data = rd32((d->tgp_dat_is_prog ? 0x1040000u                       // R924: the TGPx4's program copy
+                       : d->tgp_dat_is_buf ? BUF_BASE : g_c2 ? 0x13C0000u : COPRO_BASE)   // R924: 2C's copro data
                       + (uint32_t(d->tgp_dat_addr) << 1));
-      if (g_a2 && !d->tgp_dat_is_buf) dat_data = 0;   // R852: no copro data ROM on 2A (as Model2.sv)
+      if (g_a2 && !g_c2 && !d->tgp_dat_is_buf) dat_data = 0;   // R852: no copro data ROM on 2A (as Model2.sv)
       // WHERE THE COUNT COMES FROM. 0x47C is `mov (x0+1)(e), $0x4a`; MAME's x0
       // there is ~0x1088/0x11B1, small dword offsets into buffer RAM.
       // EVERY read, with the pc, rather than filtering on 0x47C: the pc probe
@@ -2399,7 +2420,7 @@ int main(int argc, char **argv) {
       const uint32_t A = d->obs_bus_addr;
       if (A >= 0x02000000u && A < 0x04000000u) {
         const uint32_t word = 0x20000u + ((A - 0x02000000u) >> 1);
-        const uint16_t want = mem[word & 0x1ffffff];
+        const uint16_t want = mem[word & g_mm];
         const uint16_t got  = (A & 2) ? uint16_t(d->obs_bus_rdata >> 16)
                                       : uint16_t(d->obs_bus_rdata);
         ++ldos_n;
@@ -3642,7 +3663,7 @@ int main(int argc, char **argv) {
       const uint32_t rp_dw = (d->geo_rp_o & 0x1ffff) >> 2;
       std::printf("    LIST from rp (dword %u):\n", rp_dw);
       for (uint32_t i = 0; i < 24; i++) {
-        const uint32_t a = (0x16f0000u + ((rp_dw + i) << 1)) & 0x1ffffff;
+        const uint32_t a = (0x16f0000u + ((rp_dw + i) << 1)) & g_mm;
         const uint32_t w = uint32_t(mem[a]) | (uint32_t(mem[a + 1]) << 16);
         const uint32_t op = (w >> 23) & 0x1f;
         std::printf("      [%4u] %08x   op=%02x%s\n", rp_dw + i, w, op,

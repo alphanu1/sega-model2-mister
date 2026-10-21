@@ -60,7 +60,15 @@ module m2_copro #(
   // R888: the TGP's ALU op starts under its transfer (mb86233_core)
   parameter bit EARLY_ALU = 1'b0,
   // R888: posted buffer-RAM writes, a queue BUFW_Q + 1 deep (m2_tgp); 0 = none
-  parameter int unsigned BUFW_Q = 0
+  parameter int unsigned BUFW_Q = 0,
+  // R924: THE 2C BOARD -- an MB86235 TGPx4 (rtl/tgpx4/m2_tgpx4) in place of the
+  // TGP, its program uploaded as dword pairs (8,192 dwords), and the TGP's
+  // upload-halt left out (MAME's model2c_state::copro_halt is empty and its
+  // copro_boot clears HALT without a reset). X4_PLINES: 4096 = the program on
+  // chip, 1024 / 2048 = a line cache over the SDRAM copy (dat_is_prog /
+  // bufw_is_prog name that region to the top level). 0 = the TGP, unchanged.
+  parameter bit          TGPX4     = 1'b0,
+  parameter int unsigned X4_PLINES = 1024
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -109,10 +117,12 @@ module m2_copro #(
   output logic        dat_we,
   output logic [15:0] dat_wdata,
   output logic        dat_is_buf,
+  output logic        dat_is_prog,  // R924: the TGPx4's program copy (TGPX4 only; 0 otherwise)
   output logic        dat_half,
   output logic        bufw_req,
   output logic [18:0] bufw_addr,
   output logic [15:0] bufw_data,
+  output logic        bufw_is_prog, // R924: as dat_is_prog
   input  logic        bufw_ack,
   input  logic [31:0] dat_rdata,
   input  logic        dat_ack,
@@ -180,9 +190,11 @@ module m2_copro #(
 );
 
   // ------------------------------------------------------------ control
+  localparam int unsigned CW = TGPX4 ? 13 : 12;   // R924: 8,192 dwords on 2C
   logic [31:0] coproctl;
-  logic [11:0] coprocnt;
+  logic [CW-1:0] coprocnt;
   logic        halted;
+  logic        x4_up_busy;   // R924: the TGPx4's program-copy writes are behind
 
   wire ctl_wr   = sel_ctl && we;
   wire bit31_ch = ctl_wr && ((wdata ^ coproctl) & 32'h8000_0000) != 32'd0;
@@ -338,12 +350,14 @@ module m2_copro #(
   // decode different regions and cannot assert together.
   wire        push_req  = (fifo_wr && !uploading) || fn_wr;
   wire        push_hold = push_req && fin_full && !halted;   // R876: held, not dropped
+  // R924: an upload dword waits for the previous one's SDRAM copy (2C only)
+  wire        up_hold   = TGPX4 && fifo_wr && uploading && x4_up_busy;
   wire        fin_push  = push_req && !push_hold;
   // R888: and a result word waits for the TGP's posted buffer-RAM writes, so
   // the i960 never reads a result before the stores the TGP made ahead of it.
   wire        tgp_wq_busy;
   assign stall = (fifo_rd && (!fout_valid || tgp_wq_busy) && !halted && !uploading)
-               || push_hold;   // R876
+               || push_hold || up_hold;   // R876, R924
   wire [31:0] fin_din  = fn_wr ? fn_word : wdata;
   wire        fout_pop = fifo_rd && fout_valid && !tgp_wq_busy;   // R888
 
@@ -363,7 +377,7 @@ module m2_copro #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      coproctl <= 32'd0; coprocnt <= 12'd0; halted <= 1'b1;
+      coproctl <= 32'd0; coprocnt <= '0; halted <= 1'b1;
       uc_we <= 1'b0; uc_addr <= 12'd0; uc_data <= 32'd0;
       dbg_prog_words <= 16'd0; dbg_in_pushed <= 16'd0; dbg_out_popped <= 16'd0;
       dbg_fctl_reads <= 32'd0;
@@ -377,8 +391,8 @@ module m2_copro #(
         coproctl <= wdata;
         if (bit31_ch) begin
           if (wdata[31]) begin           // start upload
-            coprocnt <= 12'd0;
-            halted   <= 1'b1;
+            coprocnt <= '0;
+            if (!TGPX4) halted <= 1'b1;  // R924: 2C's copro_halt does nothing
           end else begin                 // boot
             halted   <= 1'b0;
           end
@@ -387,11 +401,11 @@ module m2_copro #(
 
       // ---- the FIFO write port, which is also the upload port
       if (fifo_wr) begin
-        if (uploading) begin
+        if (uploading && !up_hold) begin
           uc_we   <= 1'b1;
           uc_addr <= coprocnt[11:0];
           uc_data <= wdata;
-          coprocnt <= coprocnt + 12'd1;
+          coprocnt <= coprocnt + 1'b1;
           if (!(&dbg_prog_words)) dbg_prog_words <= dbg_prog_words + 16'd1;
         end else if (!fin_full) begin
           // u_fin takes the word; this is only the count.
@@ -471,38 +485,82 @@ module m2_copro #(
   // the consumer stops draining results. Ours drains synchronously -- see the
   // `stall` line above -- so it cannot; and if it ever does, the signature is
   // everything freezing at once, not the frame-1 hang this replaces.
-  m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU),
-           .BUFW_Q(BUFW_Q)) u_tgp (
-    .clk(clk), .rst_n(rst_n & ~halted),
-    .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
-    .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
-    // The RAM window is not traced yet -- see the header. Acknowledged
-    // immediately with zero so the TGP cannot hang on it, and the request is
-    // brought out so a design that starts depending on it is visible.
-    .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
-    .ram_rdata(32'd0), .ram_ack(ram_req_w),
-    .fifo_in_data(fin_q), .fifo_in_valid(fin_valid),
-    .fifo_in_pop(tgp_in_pop),
-    .fifo_out_data(tgp_out_data), .fifo_out_push(tgp_out_push),
-    .fifo_out_full(fout_full),
-    .tbl_req(tbl_req), .tbl_addr(tbl_addr),
-    .tbl_rdata(tbl_rdata), .tbl_ack(tbl_ack),
-    .dat_req(dat_req), .dat_addr(dat_addr),
-    .dat_we(dat_we), .dat_wdata(dat_wdata), .dat_is_buf(dat_is_buf),
-    .dat_half(dat_half),
-    .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data),
-    .bufw_ack(bufw_ack),
-    .dat_rdata(dat_rdata), .dat_ack(dat_ack),
-    .dbg_retires(dbg_tgp_retires), .dbg_pc(dbg_tgp_pc), .dbg_op(dbg_tgp_op),
-    .dbg_fifo_hold(dbg_tgp_hold), .dbg_wr_n(dbg_tgp_wr_n), .dbg_wr_addr(dbg_tgp_wr_addr), .dbg_wr_data(dbg_tgp_wr_data),
-    .dbg_st(dbg_tgp_st), .dbg_a(dbg_tgp_a), .dbg_b(dbg_tgp_b), .dbg_d(dbg_tgp_d),
-    .dbg_unimplemented(dbg_tgp_unimpl),
-    .dbg_io_addr(dbg_tgp_io_addr), .dbg_io_rd(dbg_tgp_io_rd),
-    .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
-    .dbg_ff_math(dbg_ff_math), .dbg_ff_rom(dbg_ff_rom), .dbg_ff_buf(dbg_ff_buf), .dbg_rd_total(dbg_rd_total),
-    .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank),
-    .wq_busy(tgp_wq_busy)   // R888
-  );
+  generate if (!TGPX4) begin : g_tgp
+    m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU),
+             .BUFW_Q(BUFW_Q)) u_tgp (
+      .clk(clk), .rst_n(rst_n & ~halted),
+      .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
+      .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
+      // The RAM window is not traced yet -- see the header. Acknowledged
+      // immediately with zero so the TGP cannot hang on it, and the request is
+      // brought out so a design that starts depending on it is visible.
+      .ram_req(ram_req_w), .ram_we(), .ram_addr(), .ram_wdata(),
+      .ram_rdata(32'd0), .ram_ack(ram_req_w),
+      .fifo_in_data(fin_q), .fifo_in_valid(fin_valid),
+      .fifo_in_pop(tgp_in_pop),
+      .fifo_out_data(tgp_out_data), .fifo_out_push(tgp_out_push),
+      .fifo_out_full(fout_full),
+      .tbl_req(tbl_req), .tbl_addr(tbl_addr),
+      .tbl_rdata(tbl_rdata), .tbl_ack(tbl_ack),
+      .dat_req(dat_req), .dat_addr(dat_addr),
+      .dat_we(dat_we), .dat_wdata(dat_wdata), .dat_is_buf(dat_is_buf),
+      .dat_half(dat_half),
+      .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data),
+      .bufw_ack(bufw_ack),
+      .dat_rdata(dat_rdata), .dat_ack(dat_ack),
+      .dbg_retires(dbg_tgp_retires), .dbg_pc(dbg_tgp_pc), .dbg_op(dbg_tgp_op),
+      .dbg_fifo_hold(dbg_tgp_hold), .dbg_wr_n(dbg_tgp_wr_n), .dbg_wr_addr(dbg_tgp_wr_addr), .dbg_wr_data(dbg_tgp_wr_data),
+      .dbg_st(dbg_tgp_st), .dbg_a(dbg_tgp_a), .dbg_b(dbg_tgp_b), .dbg_d(dbg_tgp_d),
+      .dbg_unimplemented(dbg_tgp_unimpl),
+      .dbg_io_addr(dbg_tgp_io_addr), .dbg_io_rd(dbg_tgp_io_rd),
+      .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
+      .dbg_ff_math(dbg_ff_math), .dbg_ff_rom(dbg_ff_rom), .dbg_ff_buf(dbg_ff_buf), .dbg_rd_total(dbg_rd_total),
+      .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank),
+      .wq_busy(tgp_wq_busy)   // R888
+    );
+    assign dat_is_prog = 1'b0;
+    assign bufw_is_prog = 1'b0;
+    assign x4_up_busy = 1'b0;
+  end else begin : g_tgpx4
+    // R924: the MB86235. `uc_we` is the upload dword (coprocnt was its index);
+    // it runs from the first boot, and an upload does not stop it (MAME).
+    logic [12:0] x4_up_idx;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) x4_up_idx <= 13'd0;
+      else if (fifo_wr && uploading && !up_hold) x4_up_idx <= 13'(coprocnt);
+    logic [11:0] x4_pc;
+    logic        x4_retire;
+    m2_tgpx4 #(.PLINES(X4_PLINES), .SUBNORM(1'b1)) u_x4 (
+      .clk(clk), .rst_n(rst_n), .run(!halted),
+      .up_we(uc_we), .up_idx(x4_up_idx), .up_data(uc_data), .up_busy(x4_up_busy),
+      .fi_data(fin_q), .fi_valid(fin_valid), .fi_full(fin_full), .fi_pop(tgp_in_pop),
+      .fo_data(tgp_out_data), .fo_push(tgp_out_push), .fo_full(fout_full), .fo_empty(fout_empty),
+      .dat_req(dat_req), .dat_addr(dat_addr), .dat_is_buf(dat_is_buf), .dat_is_prog(dat_is_prog),
+      .dat_rdata(dat_rdata), .dat_ack(dat_ack),
+      .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data), .bufw_is_prog(bufw_is_prog),
+      .bufw_ack(bufw_ack),
+      .dbg_pc(x4_pc), .dbg_retire(x4_retire), .dbg_pdr(dbg_tgp_op), .dbg_bad(dbg_tgp_unimpl)
+    );
+    // what the TGP's debug ports carried, as far as the TGPx4 has them
+    assign ram_req_w = 1'b0;
+    assign tbl_req = 1'b0; assign tbl_addr = 16'd0;
+    assign dat_we = 1'b0; assign dat_wdata = 16'd0; assign dat_half = 1'b0;
+    assign tgp_wq_busy = 1'b0;
+    logic [15:0] x4_ret;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) x4_ret <= 16'd0; else if (x4_retire) x4_ret <= x4_ret + 16'd1;
+    assign dbg_tgp_retires = x4_ret;
+    assign dbg_tgp_pc = {4'd0, x4_pc};
+    assign dbg_tgp_hold = 32'd0; assign dbg_tgp_wr_n = 32'd0; assign dbg_tgp_wr_addr = 17'd0;
+    assign dbg_tgp_wr_data = 32'd0; assign dbg_tgp_st = 32'd0; assign dbg_tgp_a = 32'd0;
+    assign dbg_tgp_b = 32'd0; assign dbg_tgp_d = 32'd0;
+    assign dbg_tgp_io_addr = 16'd0; assign dbg_tgp_io_rd = 1'b0; assign dbg_tgp_io_wr = 1'b0;
+    assign dbg_tgp_io_ack = 1'b0;
+    assign dbg_ff_math = 16'd0; assign dbg_ff_rom = 16'd0; assign dbg_ff_buf = 16'd0; assign dbg_rd_total = 16'd0;
+    assign dbg_tgp_fifo_rd = tgp_in_pop; assign dbg_tgp_fifo_wr = tgp_out_push; assign dbg_tgp_bank = 32'd0;
+    logic unused_x4;
+    assign unused_x4 = ^tbl_rdata ^ tbl_ack;
+  end endgenerate
 
   assign dbg_uc_we   = uc_we;
   assign dbg_uc_addr = uc_addr;

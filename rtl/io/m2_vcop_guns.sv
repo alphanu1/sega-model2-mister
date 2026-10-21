@@ -94,7 +94,14 @@
 
 module m2_vcop_guns #(
   parameter int unsigned TICK_LOG2 = 17,    // reload tick: 2^17 clk_sys = 1.64 ms at 80 MHz
-  parameter bit          V2        = 1'b0   // R870: Virtua Cop 2's ranges
+  parameter bit          V2        = 1'b0,  // R870: Virtua Cop 2's ranges
+  // R924: The House of the Dead's ranges instead (the 2C build, where no
+  // Virtua Cop 2 runs; with V2): MAME 0.289 INPUT_PORTS_START(hotd)
+  //   P1_X 173..596  P1_Y 87..380  P2_X 163..596  P2_Y 87..380
+  //   rest 0x180 / 0x0e9 / 0x17b / 0x0e9; off-screen int(span * 0.05f): X 21, Y 14
+  // v = min + (px * round(span * 65536 / 496)) >> 16 (y: / 384) -- within one
+  // unit of MAME's crosshair mapping, which is all a light gun can tell.
+  parameter bit          HD        = 1'b0
 ) (
   input  logic        clk,            // clk_sys
   input  logic        rst_n,
@@ -245,11 +252,26 @@ module m2_vcop_guns #(
     k = {2'b00, p != 9'd0} + {2'b00, p >= 9'd193};
     return 10'h027 + {1'b0, p} + {7'd0, k};
   endfunction
+  // R924: House of the Dead's (HD): a constant multiply and a shift
+  /* verilator lint_off UNUSEDSIGNAL */
+  function automatic logic [9:0] uh(input logic [8:0] p, input logic [9:0] lo, input logic [15:0] k);
+    logic [24:0] m;
+    m = {16'd0, p} * {9'd0, k};
+    return lo + {1'b0, m[24:16]};
+  endfunction
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [1:0] fire_q;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      p1x <= P1X0; p1y <= 10'h0e6; p2x <= P2X0; p2y <= P2Y0;   // MAME's rest positions
+      p1x <= HD ? 10'h180 : P1X0; p1y <= HD ? 10'h0e9 : 10'h0e6;   // MAME's rest positions
+      p2x <= HD ? 10'h17b : P2X0; p2y <= HD ? 10'h0e9 : P2Y0;
       fire_q <= 2'b00;
+    end else if (HD) begin
+      p1x <= hold1 ? 10'd173 : uh(s1x, 10'd173, 16'd55894);
+      p1y <= hold1 ? 10'd87  : uh(s1y, 10'd87,  16'd50006);
+      p2x <= hold2 ? 10'd163 : uh(s2x, 10'd163, 16'd57215);
+      p2y <= hold2 ? 10'd87  : uh(s2y, 10'd87,  16'd50006);
+      fire_q <= {fire2, fire1};
     end else begin
       p1x <= hold1 ? X1LO : ux(s1x, X1LO);
       p1y <= hold1 ? 10'h024 : uy1(s1y);
@@ -265,8 +287,10 @@ module m2_vcop_guns #(
   // ------------------------------------------------------ stage D: off-screen, the ports
   // MAME's 5% border, from the coordinates as the board hands them over
   // (V2: lightgun_offscreen_r's, the same rule on Virtua Cop 2's ranges)
-  wire o1 = (p1x <= O1XL) || (p1x >= 10'h25e) || (p1y <= 10'h037) || (p1y >= 10'h196);
-  wire o2 = (p2x <= O2XL) || (p2x >= 10'h25b) || (p2y <= O2YL) || (p2y >= 10'h196);
+  wire o1 = HD ? ((p1x <= 10'd194) || (p1x >= 10'd575) || (p1y <= 10'd101) || (p1y >= 10'd366))   // R924
+               : ((p1x <= O1XL) || (p1x >= 10'h25e) || (p1y <= 10'h037) || (p1y >= 10'h196));
+  wire o2 = HD ? ((p2x <= 10'd184) || (p2x >= 10'd575) || (p2y <= 10'd101) || (p2y >= 10'd366))
+               : ((p2x <= O2XL) || (p2x >= 10'h25b) || (p2y <= O2YL) || (p2y >= 10'h196));
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       off <= 2'b00; c_on <= 2'b00; in0 <= 8'hFF; in1 <= 8'hFF;

@@ -13,7 +13,7 @@
 //     Sega Rally 0, 1 -> slots {row[4], row[1:0]}, rows 0-3 and 16-19 captured;
 //     Zero Gunner (zg) 0-5, 9, 100. A row outside the eight takes the slot it
 //     aliases.
-//   R900 (big: the large layout's six games; MAME 0.289's rows over 160 s of
+//   R900 (big: the large layout's six games, and R924's House of the Dead; MAME 0.289's rows over 160 s of
 //     attract and play): eight RANGES of row numbers a game, s[0] < ... < s[7].
 //     Slot k holds the rows from s[k] up to s[k+1] - 1 (slot 0 every row below
 //     s[1]) and is filled from row s[k] alone; the other rows of a range share
@@ -48,6 +48,11 @@ module m2_luma_map (
       4'h6: starts = {8'd255, 8'd254, 8'd100, 8'd98, 8'd92, 8'd89, 8'd72, 8'd6};     // Dead or Alive
       4'h8: starts = {8'd107, 8'd96, 8'd94, 8'd76, 8'd22, 8'd18, 8'd7, 8'd6};       // Sky Target
       4'hA: starts = {8'd151, 8'd137, 8'd133, 8'd131, 8'd126, 8'd125, 8'd115, 8'd100}; // Motor Raid
+      // R924: The House of the Dead (2C, 0x17): MAME 0.289's attract, six
+      // dumps over 3D frames 300-2000 use rows 0, 40, 76, 94, 96, 100 (76 and
+      // 100 equal); the luma RAM is constant after boot. 60 and 120 are
+      // guesses for play (rows with content no attract polygon names).
+      4'h7: starts = {8'd120, 8'd100, 8'd96, 8'd94, 8'd76, 8'd60, 8'd40, 8'd0};
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction

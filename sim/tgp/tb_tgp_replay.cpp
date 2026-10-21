@@ -79,7 +79,7 @@
 #include <sstream>
 
 #define R(x) (top->rootp->m2_copro__DOT__##x)
-#define TGP(x) R(u_tgp__DOT__##x)
+#define TGP(x) R(g_tgp__DOT__u_tgp__DOT__##x)   // R924: m2_copro wraps the TGP in g_tgp
 #define CORE(x) TGP(core__DOT__##x)
 #define SEQ(x) CORE(u_seq__DOT__##x)
 #define REGS(x) CORE(u_regs__DOT__##x)

@@ -68,6 +68,10 @@ module m2_cpu_bridge #(
   parameter bit BUFFER_NOCACHE   = 1'b1,   // buffer-RAM lines are never retained
   parameter int unsigned AW = 25,        // SDRAM word address width
   parameter bit          BOARD_2A = 0,   // 0 = model2o, 1 = 2A-CRX
+  // R924: 1 = 2C-CRX (with BOARD_2A): texture RAM at 0x11000000 / 0x11200000 as
+  // plain 32-bit RAM, the luma RAM at 0x11400000 a byte per halfword, and the
+  // 2A windows at 0x12000000-0x1281ffff unmapped (MAME model2c_crx_mem)
+  parameter bit          BOARD_2C = 0,
   // R576: 1 when clk_cpu is NOT an exact /2 of clk_mem (the i960 at 35.3 MHz
   // against a 60 MHz core): R460's two synchroniser flops each way, as the
   // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
@@ -777,6 +781,24 @@ module m2_cpu_bridge #(
       sd_word = base_pal3d + AW'(ra[10:1]);
     end else if (r_addr >= 32'h0180_0000 && r_addr < 32'h0180_4000) begin
       tgt = T_PAL;
+    end else if (BOARD_2C && r_addr >= 32'h1100_0000 && r_addr < 32'h1140_0000) begin
+      // R924: 2C's texture RAM, PLAIN 32-BIT RAM (no tex0_w): sheet 0 at
+      // 0x11000000, sheet 1 at 0x11200000, each a 2 MB window on a 1 MB sheet.
+      // A dword at byte offset b is the sheet's 16-bit words b/2 and b/2 + 1 --
+      // the halfword layout tex0_w builds on 2A, so the renderer is unchanged.
+      // MAME 0.289 maps each window as 2 MB of RAM (2B: 1 MB and a mirror); its
+      // renderer reads only the first 1 MB (2048 x 1024 texels at 4 bits), so
+      // the upper MB is taken as the mirror 2B's map has -- the same board.
+      tgt = T_SDRAM; tex_region = 1'b1;
+      sd_word = (r_addr[21] ? base_texs1 : base_texs0) + AW'(ra[19:1]);
+    end else if (BOARD_2C && r_addr >= 32'h1140_0000 && r_addr < 32'h1141_0000) begin
+      // R924: 2C's luma RAM, umask16 0x00ff: MAME's byte n at 0x11400000 + 2n,
+      // so a halfword is one entry -- our 16-bit word n, as on 2A (umask32
+      // 0x000000ff, a dword an entry). A 32-bit store is two entries.
+      tgt = T_SDRAM;
+      sd_word = base_luma + AW'(ra[15:1]);
+    end else if (BOARD_2C && r_addr >= 32'h1200_0000 && r_addr < 32'h1282_0000) begin
+      tgt = T_NONE;                                         // R924: not on 2C
     end else if (r_addr >= 32'h1200_0000 && r_addr < 32'h1240_0000) begin
       // R264: texture sheet 0, and its mirror at +0x200000. The reference's
       // tex0_w takes `offset` as a DWORD index and stores data[15:0] at
