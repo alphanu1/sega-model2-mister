@@ -185,7 +185,10 @@ void usage() {
                  "  --seconds N stop after N seconds (tests)\n"
                  "  --alive-ms N the core is gone after N ms without a video frame (default 500;\n"
                  "              tests against a simulated core, whose frames are slow)\n"
-                 "  --no-hold   (tests) skip the hand-over, to show what it prevents\n");
+                 "  --hold      wait for the game to take each frame before the next (the\n"
+                 "              hand-over; off by default: on the board it held the\n"
+                 "              master to every third vblank, R916)\n"
+                 "  --no-hold   no hand-over (the default)\n");
 }
 
 } // namespace
@@ -195,7 +198,7 @@ int main(int argc, char **argv) {
     const char *mem_path = nullptr;
     uint64_t phys = kPhysBase;
     double seconds = 0;
-    bool no_hold = false;
+    bool no_hold = true;  // R916: the hand-over off by default (Ben, on the board: much faster)
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "-c" && i + 1 < argc) ini = argv[++i];
@@ -203,7 +206,8 @@ int main(int argc, char **argv) {
         else if (a == "--mem" && i + 1 < argc) mem_path = argv[++i];
         else if (a == "--phys" && i + 1 < argc) phys = std::strtoull(argv[++i], nullptr, 0);
         else if (a == "--seconds" && i + 1 < argc) seconds = std::atof(argv[++i]);
-        else if (a == "--no-hold") no_hold = true; // tests: show what the hand-over prevents
+        else if (a == "--no-hold") no_hold = true;
+        else if (a == "--hold") no_hold = false;   // the hand-over: no torn blocks, but slow on the board
         else if (a == "--alive-ms" && i + 1 < argc) g_alive_ms = std::atoi(argv[++i]); // tests: a simulated core's slow frames
         else {
             usage();

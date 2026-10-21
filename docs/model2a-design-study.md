@@ -36386,3 +36386,20 @@ spend zfg_delay); then zfg to the mailbox. Polls every 100 us when idle.
   * daytona93, the 2A games with a link (Sega Rally: 837-11525, same
     protocol per MAME) and Power Sled's 0x180 offset: the block takes
     FRAME_OFFSET as a parameter; not wired.
+
+**R916 (board) -- THE HAND-OVER HELD THE MASTER TO EVERY THIRD VBLANK; IT IS
+OFF BY DEFAULT NOW.** First board run (s1290, MiSTer master, the recomp on
+this PC as slave, 2026-10-21): linked, "cabinet 1 of 2", no drops in 3
+minutes, but the MiSTer's 3D at 2-4 vblanks a frame, 3 most (55-70%), about
+19 fps; ~17 zfg flips a second. With m2link --no-hold, the same 3 minutes:
+1 vblank a frame on 18 of 24 samples at 100% and the rest at 96-99% -- full
+speed. So the hand-over's two-vblank timeout, not DDR3 (Ben's other
+suspect: the comm RAM behind the framebuffer's arbiter), set the pace.
+m2link now runs without the hand-over by default; --hold restores it.
+COST, not yet seen on the board: the bench's 2 us-access case tears most
+blocks without the hand-over (m17: 298 of 310 torn, m18: 45 of 310). A torn
+block is one frame of another cabinet's race data mixed from two frames
+(a car's position off for a frame). The right fix is in the core: flip zfg
+at the game's own FG read, as the board does, so the hand-over costs no
+vblanks. Ben to judge torn-block glitches in a linked race first.
+

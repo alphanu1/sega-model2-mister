@@ -32,9 +32,9 @@ mister() {
   "$B/core_model" --mem "$W/$n.mem" --$role --car "$car" --seconds "$SECS" "$@" > "$W/$n.core" 2>&1 &
   if [[ "${ARM:-0}" == 1 ]]; then
     docker run --rm --network host -u "$(id -u):$(id -g)" -v "$W:$W" -v "$PWD:/src" -w /src m2link-armcc:bookworm \
-      qemu-arm build/arm/m2link -c "$W/$n.ini" --mem "$W/$n.mem" --seconds "$((SECS + 2))" ${LINKARGS:-} > "$W/$n.log" 2>&1 &
+      qemu-arm build/arm/m2link -c "$W/$n.ini" --mem "$W/$n.mem" --seconds "$((SECS + 2))" ${LINKARGS:---hold} > "$W/$n.log" 2>&1 &
   else
-    "$B/m2link" -c "$W/$n.ini" --mem "$W/$n.mem" --seconds "$((SECS + 1))" ${LINKARGS:-} > "$W/$n.log" 2>&1 &
+    "$B/m2link" -c "$W/$n.ini" --mem "$W/$n.mem" --seconds "$((SECS + 1))" ${LINKARGS:---hold} > "$W/$n.log" 2>&1 &
   fi
 }
 # recomp NAME LISTEN NEXT ROLE CAR [extra]
