@@ -110,7 +110,7 @@ Daytona Rev A, Deluxe '93, Desert Tank and Virtua Cop (Rev A).
 | I/O board, type 2 | Model 1 I/O board "advanced" 837-11130 + 837-11131: Z80, 315-5338A, an FPGA for the guns, MSM6253, 93C46, 4 KB backup RAM, diagnostic LCD. ROM EPR-17181. | Virtua Cop: two light guns. | ⚠️ main: `m2_ioz80` type 2 (R839), guns `m2_vcop_guns`, `m2_vcop_state`, crosshairs `m2_vcop_xhair` (R846, R849, R850), behind `M2_VCOP_*`. GitHub #13 open (the I/O board's flash output). CRT light guns documented, not built (R841). |
 | Drive / force-feedback board | SJ25-0207-01 (838-10646 for Daytona): Z80 at 4 MHz, two 315-5296, MSM6253, 8 KB RAM, EPR-16488A. Driven from the I/O board. | Daytona only. MAME runs its Z80 but leaves its motor output unconnected, so MAME has no reference for the force feedback. | **New:** neither core has it (the I/O board's PE reads 0xFF, "absent"). Games run without it. A path to a MiSTer wheel's force feedback has not been looked at. |
 | Lamps, coin counters | Output latch on the I/O board: start, view (VR1-4), leader lamps, coin counters. Desert Tank: cannon and machine-gun motors. | | — not routed anywhere (MiSTer has no lamp output). Optional. |
-| Comm (link) board | 837-10537: Z80, NEC uPD72103 HDLC controller, 5 x 8 KB SRAM, EPR-16726, 16 KB shared with the i960 at 0x01a00000 plus CN/FG registers. | Daytona's link play. | **From branch `link-play`:** `rtl/io/m2_comm.sv` (the shared RAM in DDR3) + the `linux/m2link` helper, compatible with the Daytona recomp (R863, R916). Built and checked on the desk, not yet on a board, not merged. |
+| Comm (link) board | 837-10537: Z80, NEC uPD72103 HDLC controller, 5 x 8 KB SRAM, EPR-16726, 16 KB shared with the i960 at 0x01a00000 plus CN/FG registers. | Daytona's link play. | ⚠️ main (experimental, `Model2_20261021c`, not pushed yet): `rtl/io/m2_comm.sv` (the shared RAM in DDR3) + the `m2link` helper, compatible with the Daytona recomp; on the board linked to the recomp at full frame rate with framesync on (R916). |
 | Protection | None on Sega's sets. `daytonam` has a PIC simulated at 0x00240000; `daytonagtx` banks a protection ROM over 0x02c00000. | Both are fan hacks, `MACHINE_NOT_WORKING` in MAME. | **New:** two small read decoders plus MRAs (no size measured). Not planned. |
 | ROM and SDRAM | Raw ROM: Daytona 45.8 MB, Desert Tank 28.6 MB, Virtua Cop 23.8 MB. | | ✅ main: 64 MB module, `m2_rom_loader` and the MRAs |
 
@@ -375,7 +375,22 @@ Championship, Sega Ski Super G, Wave Runner, Behind Enemy Lines, Over Rev
   drive-board protocol (R892). **The other 2A clones** (vf2a/b/o, Rally's
   other revisions, manxttc, doaa/doaae, dyndeka2, zerogunaj): MRAs with a
   layout check each, not done.
-- **Link play for Sega Rally:** from `link-play` (R916).
+- **Link play for Sega Rally** (noted 2026-10-21, not started; Ben: "I was
+  just checking"). Expected to carry over: Rally's 837-11525 board has
+  Daytona's parts and EPR-16726, so the same comm-board RTL, `m2link` helper
+  and INI apply. Open, in order:
+  1. Rally's own settings in MAME 0.289: frame size (shared 0x12-0x13),
+     frame offset (Daytona 0x1c0, Power Sled 0x180), where it maps the board
+     (R863: Rally reads 0x01a14000 once and writes it twice), and the
+     Twin/DX link default in its test menu.
+  2. A partner cabinet to test against, since there is no Rally recomp:
+     MAME 0.289 built with M2COMM_SIMULATION links over TCP, and the recomp's
+     comm code descends from it -- first confirm MAME's wire format against
+     the recomp's (Daytona, MAME against m2link on the desk), then run MAME's
+     srallyc as the other cabinet. Two MiSTers also work.
+  3. Room on the 2A core: Daytona's link board cost ~270 ALMs and no M10K;
+     2A sits at 98-99% ALM, so it needs room found first (R907/R909's
+     levers).
 - **The protection chips themselves** (315-5881: ~300-400 ALM, 1 M10K,
   R862), only if the patches prove insufficient. Zero Gunner's enemy
   patterns are the one visible difference.
