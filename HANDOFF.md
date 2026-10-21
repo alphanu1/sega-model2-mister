@@ -1,5 +1,28 @@
 # Handoff
 
+## 2026-10-21: branch m2a-scan15 -- main merged into the 2A core (R908). NOT PUSHED, NOT BUILT
+
+m2a-scan15 = model2a 75ee3a2 + main c56c93d, model2a as the baseline in every
+file (Ben's rule): from main ONLY the 15 kHz scan converter (R898) and R907's
+area (shared viewport converter, colour translation table in MLABs). R899
+(main's window key) NOT taken -- the 2A core keeps R889's code byte for byte,
+and the original core built from this branch has no window key (model2a's
+build of it, not main's release). Every 2A bench run before and after with
+identical output: geodiff on two VF2 and two Rally walks (pool hashes equal),
+the 2A raster bench on Rally list 2000 / Dynamite Cop / Motor Raid frames,
+a new LIVE miter for R907's viewport with R852's offsets (27 M compares, 0
+fails), the xlat miter against 75ee3a2's m2_video, 20 unit benches, sound,
+and the whole-core Rally boot. Ten new [15kHz CRT] MRAs (every 2A game);
+releases/README's 2A 15 kHz bullet rewritten for the next build.
+quartus_map: 40,433 -> 39,716 ALMs (-717).
+
+BLOCKER: THE RING NEEDS 20 M10K AND THE 2A CORE IS AT 553 / 553. Counted from
+the map, the merge needs ~573: a fit should fail on RAM blocks. Not fixed (the
+merge takes nothing but R898 and R907). R908 lists the levers: small arrays
+to MLAB from the 717 ALM (~21 blocks for ~560 ALM), or the ring at 8 lines
+(15.1 / 15.4 kHz only, 10 blocks). Ben decides. One fit to confirm the count
+is still worth it.
+
 ## 2026-10-21: PUSHED main and model2a -- release 20261021 of both cores
 
 RELEASED. Model 2: Model2_20261021.rbf = s1264 (main 2cebd70 + R907 area,

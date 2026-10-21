@@ -41681,3 +41681,145 @@ Considered and not done:
   - sys/ (two OSDs ~930 ALM, pll_hdmi_adj ~436): the framework's; HDMI and
     the analog output (scan15) both need theirs.
 Map numbers are estimates; the fit decides. Not fitted at the time of writing.
+
+**R908 -- MAIN (c56c93d) MERGED INTO MODEL 2A: THE 15 kHz SCAN CONVERTER
+(R898) AND R907's AREA, AND NOTHING ELSE OF MAIN's RTL. THE 2A RTL IS
+UNCHANGED WHERE IT DIFFERED. THE CONVERTER'S RING NEEDS 20 M10K, AND THE 2A
+CORE HAS NONE: AS MERGED IT WILL NOT FIT (~573 of 553 BLOCKS).**
+(Branch m2a-scan15, from model2a 75ee3a2. Ben's rule for the merge: model2a
+is the baseline in every file; from main only R898 and R907; every 2A fix
+survives. Sections 5.6 (M10K) and 7 Tier 1 govern.)
+
+*What was taken, file by file* (`git diff model2a -- rtl/ Model2.sv sys/`):
+  * rtl/video/m2_scan15.sv: new, byte-identical to main's.
+  * Model2.sv: model2a's file with R898's own diff (458991e) applied, its
+    nine hunks and nothing else: VGA_F1 from the converter's field; the
+    CONF_STR notes and the `15kHz width` line (O[55]) removed, O[55]
+    reserved; the output pixel enable per line count (ceo_*), the
+    renderer's ce_pix fixed at 16/100; the 1:1 interlace tied off (vid_il_c
+    into m2_raster3d, m2_video and the crosshair, which on 2A is Virtua Cop's
+    and Virtua Cop 2's, g_xhair); u_scan15 and the VGA mux. sys/ untouched.
+  * rtl/video/m2_video.sv: R907's colour translation table in three MLABs
+    (d741e1a), beside model2a's R906 MASK_SKIP, which it does not touch.
+  * rtl/video/m2_geo_view.sv: R907's one shared int-to-float (4c0117a), with
+    model2a's R852 LIVE offsets folded into its two constant slots:
+    q = LIVE ? -crtc_x : -CRTC_X, p = LIVE ? 384 + crtc_y : 384 + CRTC_Y.
+    The old adders were crtc_x + cx and 384 - cy + crtc_y; the new forms are
+    cx - (-crtc_x) and (384 + crtc_y) - cy, equal modulo 2^16 as R907's
+    constants are. Output latency 3 -> 8 cycles, R907's argument (the
+    offsets change at a game's sync-register write, the window once an
+    object).
+  * NOT taken: R899 (main's window key for every game, a port of this
+    branch's R889 with a `key_hi` sort-pass switch). m2_geo, m2_geometry,
+    m2_quad_store, m2_raster3d, m2_boot_harness, geodiff_top and
+    tb_m2_raster3d are model2a's byte for byte, so the 2A core keeps R889
+    exactly (KW 20, five passes, R3D_WINKEY = M2A). CONSEQUENCE: the original
+    Model 2 core built FROM THIS BRANCH (M2_NO_2A) has no window key -- it is
+    model2a's build of that core, not main's release, which has R899.
+    Main's geodiff_wk Makefile target (R899) dropped with it;
+    sim/io/mame_m2_vcop_ammo.lua (a MAME script, no RTL) came in.
+  * R905 (main): main's i960_memmap fix is model2a's d099ccf; the file is
+    model2a's, unchanged.
+  * Docs: study and HANDOFF keep both sides' entries; THIRD_PARTY.md gains
+    retrorepair's; releases/README.md is model2a's, its 2A 15 kHz bullet
+    rewritten for the build after this merge.
+
+*The converter on the 2A core's timing:* the 2A games run the same native
+picture -- m2_video_timing is the same file and parameters (656 x 424 at
+16/100 of clk_mem, 496 x 384 visible, 57.52 Hz); R852's CRTC offsets move
+only the 3D's projection. So R898's exact rationals hold unchanged. Most 2A
+games draw every frame (image cadence 1), Rally and Manx slow to 2-3 in
+places: tb_m2_scan15 PASS at all three line counts with cadence 1 and 2
+(margins 40.6 / 181 / 210 us at 15.7 / 15.4 / 15.1 kHz), and at cadence 3
+and 4 (15.7 kHz).
+
+*MRAs:* a [15kHz CRT] MRA for each of the ten other 2A games (game ID bit 7:
+0x90 Rally, 0x91 VC2, 0x92 Zero Gunner, 0x93 Hanguk, 0x94 Dynamite Cop,
+0x95 Pilot Kids, 0x96 DOA, 0x98 Sky Target, 0x99 Manx TT, 0x9A Motor Raid).
+Every 2A decode of game_id reads [6:0], [6:4], [6:2] or [3:0] (is_srally,
+is_vcop2, is_zerogun, is_2ax, is_2an, a2_big, the R887 profile, the R900
+luma map), so bit 7 changes nothing but the video (vid_il_r, crt_mra's menu
+mask). Not tried on a CRT.
+
+*Proof that 2A is unchanged (before = 75ee3a2, after = this merge, the same
+benches and inputs, outputs compared):*
+  * geodiff_2a (CRTC_Y 127, WINKEY) on VF2 walks 2300 and 5175, and a
+    CRTC_Y 128 build on R902's Rally walks 3282 and 3457: ours.txt identical
+    (349 / 1,593 / 1,245 / 1,725 quads), the pool hash (every FP operand,
+    every cycle) identical (f99eacff.., bd0c35fc.., 0d545bd7.., 1afb7f0f..)
+    over the same cycle counts. geodiff builds m2_geo_view with LIVE 0, so:
+  * test_m2_geo_view_live (new, sim/video/m2_geo_view_live_miter.sv): the
+    merged m2_geo_view against 75ee3a2's, both LIVE as the 2A core builds
+    them, random and extreme window words (junk in the unused bits) and CRTC
+    offsets (-32768..32767), each held 8-60 cycles: 1,000,000 holds,
+    26,995,352 compares from the 8th cycle on, 0 fails. Planted faults (383
+    for 384, crtc_y for crtc_x, LIVE ignored for x): 539,988 / 526,068 /
+    511,815 fails of 539,988.
+  * test_m2_video_xlat, rebased for this branch: the reference is 75ee3a2's
+    m2_video (with R906), both MASK_SKIP 1 as the 2A core builds them:
+    7,598,080 cycles, 71,214 table writes, 0 fails; a planted fault (blue
+    channel's writes dropped) 3,785,114 fails.
+  * tb_m2_raster3d in the 2A configuration (TEXLUT, KW 20, TXLW8, FB_DDR3,
+    TEXMEM; R902's build) on R902's Rally list 2000 (MAME's polygons, and
+    our geometry's quads from walks 3282 and 3457), R905's Dynamite Cop
+    frame 700 and Motor Raid frame 700: every PX line identical (190,464 x
+    4, 176,399), the rest of each log identical. (The raster's RTL is
+    byte-identical to model2a's; this confirms the bench sees the same.)
+  * Unit benches, PASS before and after with identical logs: test_m2_geo_view,
+    test_m2_tile_fetch (both builds, R906), test_m2_waitst (R904, 1,874,129
+    cycles), test_m2_raster3d, test_m2_quad_store, test_m2_luma_map (R900),
+    test_m2_video_ovr +quick, test_m2_scsp_level, test_m2_2a_inputs,
+    test_m2_315_5649, test_m2_rom_xtra2a (R897), test_m2_cpu_bridge_2a,
+    test_m2_vcop2_guns, test_m2_sdram128 / 128d (R891), test_i960_top_fr /
+    _fx (F2A forms), test_m2_video_timing, test_m2_vcop_xhair.
+  * Sound, Sega Rally's MAME capture, 2 s: test_m2_scsp (88,200 samples, 0
+    differ), test_m2_scsp_dsp, test_m2_2a_sound (88,206 samples): PASS,
+    identical logs -- but those 2 s are silent, so this shows only that
+    nothing moved; rtl/sound is byte-identical to model2a's.
+  * Whole core: the A2X boot harness (i960, TGP, walk, geometry, raster,
+    m2_video with the new xlat table) on Sega Rally's image, 120 frames:
+    the per-frame accounting (118 lines: instructions, flips, TGP, walks)
+    and the whole run log identical, every 10th frame's picture identical
+    (12 PPMs). Weak on the picture -- 2 s in, Rally's screen is still two
+    colours -- strong on the machine: the same instruction counts and flips
+    frame for frame.
+  * lint_top clean on the 2A build, -DM2_NO_2A and -DM2_2A_WAITST=1;
+    lint_idx: the only change is xlat_tbl's candidate gone (R907's arrays are
+    32 deep on 5-bit indexes) and the shorter CONF_STR; quartus_map 17.0
+    --analyze_file Model2.sv, m2_scan15.sv, m2_video.sv, m2_geo_view.sv: 0
+    errors.
+  * Not changed by the merge, so not re-benched beyond the above: R897's
+    loader remap and R891's 128 MB SDRAM (rtl/mem, rtl/io: identical), R894's
+    volume and Raw Sound Boost (Model2.sv's audio is model2a's), R896's
+    render-mode read-back, R904's wait states (behind M2_2A_WAITST, linted).
+
+*Area (quartus_map 17.0, whole design, same QSF, "ALMs needed"):*
+
+                        ALMs     ALUT    regs   block bits   DSP
+    75ee3a2 (model2a)  40,433  58,122  47,988   4,467,205    90
+    this merge         39,716  57,025  47,171   4,663,810    96
+                         -717  -1,097    -817    +196,605    +6
+
+  m2_geo_view 604 -> 190 ALUT, m2_video 2,334 -> 1,466 ALUT, m2_scan15 207
+  ALUT / 129 registers / 196,608 bits / 6 DSP. On main R907 was -818 and the
+  converter +120; here the net is -717.
+
+*THE BLOCKER, M10K.* The 2A core fitted at 553 / 553 RAM blocks (s1240,
+4,467,189 bits). The ring is 16 lines x 512 x 24 = 2048 x 5 blocks four deep,
+20 M10K, which R898 itself said the 2A core would need found before this
+could work. A per-RAM count from the map's RAM summary (each array's best
+M10K shape) gives 544 before and 564 after; it reads ~9 below the fitter's
+553 on the same netlist, so the merged design needs ~573: the fitter will
+refuse it. NOT FIXED HERE (Ben's rule: nothing but R898 and R907). The
+levers, a study-level decision, cheapest first (estimates, unmeasured):
+  1. Small arrays that occupy a whole M10K each, into MLAB, paid from the
+     717 ALM above: m2_geo_clip's 20 x 163 (5 blocks, 3,260 bits),
+     m2_raster3d's span queue 32 x 260 (7 blocks, 8,320 bits), and the 2A
+     sound board's small arrays (128 x 1, two 16 x 32, two 64 x 11, 32 x 24,
+     128 x 16, 128 x 24, the 128 x 27 ROM: 9 blocks, ~16 kbit). An MLAB is
+     32 x 20 in one LAB (10 ALM): 9 + 13 + 34 LABs, ~560 ALM for 21 blocks
+     -- most of what R907 gave back; a better-packed candidate list is the
+     first thing to look for.
+  2. RING 8 (15.1 and 15.4 kHz only): 10 M10K back, but R840 found most
+     sets take only 15.7 kHz.
+A fit of this merge is still worth one seed to confirm the count.
