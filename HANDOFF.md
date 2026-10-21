@@ -1,5 +1,76 @@
 # Handoff
 
+## 2026-10-21: branch link-play (off main c56c93d) -- LINK PLAY FOR DAYTONA, COMPATIBLE WITH THE RECOMP (R916). NOT FITTED, NOT ON A BOARD, NOT PUSHED.
+
+Ben: link play for Daytona USA on the MiSTer core, compatible with his
+recomp (github.com/alphanu1/daytona-arcade-recomp). Study R916 has the
+protocol, the design and every measurement; in short:
+
+  * RTL: rtl/io/m2_comm.sv -- the comm board's 16 KB shared RAM in DDR3 at
+    byte 0x30800000, CN/FG as flip-flops, the init command's clear and
+    header done in the FPGA, zfg from a mailbox word, a status word for the
+    helper. Second m2_ddr3_arb in front of m2_ddr3 (framebuffer a, comm b).
+    OSD "Link board: Off/On" (O[64], Daytona only), Off = main exactly.
+    `M2_NO_LINK=1` builds without it.
+  * Helper: linux/m2link -- the recomp's CommBoard (4 small changes) and
+    TcpLink (verbatim) on /dev/mem; INI /media/fat/linux/m2link.ini with the
+    recomp's keys and defaults (link_port 15112, link_next, link_framesync);
+    Scripts/m2link.sh to start/stop; `make arm` builds the static ARMv7
+    binary in a Debian container (image m2link-armcc:bookworm, created on
+    this PC for it: g++-arm-linux-gnueabihf + qemu-user).
+  * Area: quartus_map 39,761 -> 40,056 ALMs needed (+295), no new RAM.
+
+FINDINGS (all in R916):
+  * The recomp numbers cabinets AGAINST the ring: the master's next is N of
+    N. Checked on three recomp cabinets.
+  * The game spins on FG for the zfg flip every linked frame (MAME: ~150
+    reads a frame on the master, ~3,000 on the slave), so FG reads are
+    answered from a copy refreshed at most every 12.8 us.
+  * A board running BESIDE the game (not inside its reads, as the recomp's
+    and MAME's do) tears blocks: 730 of 814 at the RTL end before m2link's
+    hand-over rule, 0 after. One torn block can still happen in the first 3
+    linked frames.
+  * Factory Revision A (TWIN MASTER) waits at NETWORK CHECKING with or
+    without the board (MAME, reads zeroed); LINK ID SINGLE never touches it.
+  * Test-menu EEPROM: byte 0x0b LINK ID (1 master, 2 slave, 0 single), 0x0c
+    car number - 1.
+  * daytona93 at factory settings never touches the window.
+  * The recomp's m2run as a slave left at NETWORK CHECKING ~52,000 frames
+    (our master not up yet, its connection opening and closing) stopped with
+    "no recompiled code at 00000000: add it to the seeds" -- a path the
+    recomp's seeds lack; for the recomp, not this core.
+  * The whole core (boot bench, real i960, Revision A) with m2link and the
+    recomp's board as slave: linked 1 of 2 / 2 of 2, the game's RAM says so
+    (01 02 01 02), and the game spins on FG and reads its slots as MAME's
+    master does; NETWORK CHECKING stays, the far end being a fake game.
+  * Mistakes on the way: a 500 ms liveness timeout flaps against a simulated
+    core (--alive-ms for tests); `pkill -f` killed its own shell again (use
+    PIDs).
+
+NEXT (Ben):
+  1. Fit (the caller schedules fits). At 40,056 est. it is below the 40,579
+     that failed in R907; the second arbiter's muxes sit on the DDR3 path at
+     80 MHz -- watch clk_sys.
+  2. Board test plan (MiSTer + recomp PC on one LAN), in R916's terms:
+     a. Copy build/arm/m2link to /media/fat/linux/, m2link.ini (edit
+        link_next) to /media/fat/linux/, m2link.sh to /media/fat/Scripts/.
+     b. Load Daytona USA (Revision A), OSD Link board On, test mode: LINK ID
+        SLAVE, CAR NUMBER 2. Run Scripts > m2link. `cat /tmp/m2link.log`
+        over ssh: "the core is here", then "on (... set LINK ID ...)" until
+        the game starts the board, then "waiting: ...".
+     c. PC: recomp launcher, Link to other cabinets, port 15112, next
+        <MiSTer IP>:15112; test mode LINK ID MASTER, car 1. Reset.
+     d. Expect "linked: cabinet 2 of 2" in the log, 通信システム on both,
+        a race with POSITION /2, the other car visible on each screen.
+     e. Swap roles (MiSTer MASTER car 1, PC SLAVE car 2): "1 of 2".
+     f. Two MiSTers (and a PC for three): each link_next the next round.
+     g. Quit the recomp mid-race: m2link says "lost", the game its own way.
+     h. Link board Off: the core is main's (game as before, no DDR3 traffic).
+     i. Load another core with m2link running: "the core has stopped
+        answering ... link closed" within 0.5 s, and that core unaffected.
+  3. If the board shows tearing (cars jumping), the hand-over in m2link.cpp
+     is the place; its rule is in R916.
+
 ## 2026-10-21: PUSHED main -- release Model2_20261021
 
 RELEASED: Model2_20261021.rbf = s1264 (d2e5c1c; clk_sys -0.094, clk_mem

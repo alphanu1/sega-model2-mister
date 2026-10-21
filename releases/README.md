@@ -193,6 +193,76 @@ its own backup RAM, and a fresh set starts as Japan, as it does in MAME. The
 country is the game's own setting, so change it in its test menu, or use a
 ROM set from another region.
 
+## Link play: Daytona USA, cabinet against cabinet
+
+<!-- DRAFT for the release that carries link play (study R916). Not in the
+20261021 core. -->
+
+Daytona USA (Revision A, the 1994 set) can race other cabinets over your
+network, wired or Wi-Fi, like linked arcade machines: two MiSTers, or a
+MiSTer and a PC running the
+[Daytona USA recompilation](https://github.com/alphanu1/daytona-arcade-recomp),
+or more of either. They speak the same protocol, so any mix works.
+
+The MiSTer's network is on its Linux side, so a small program, `m2link`,
+carries the link; the core just needs its link board switched on.
+
+**Once, on each MiSTer:**
+
+1. Copy `m2link` to `/media/fat/linux/` and `m2link.sh` to `/media/fat/Scripts/`.
+2. Copy `m2link.ini` to `/media/fat/linux/` and set the two lines in it (below).
+3. Load Daytona USA (Revision A), open the OSD and set **Link board** to **On**.
+4. Test mode (F2, or your mapped Test button) > **GAME SYSTEM**: set **LINK ID**
+   to **MASTER** on one cabinet and **SLAVE** on all the others, and give each
+   cabinet a different **CAR NUMBER**. Exit test mode (that's saved).
+5. Run `m2link` from the MiSTer menu: **Scripts > m2link**. Run it again to stop it.
+
+**`/media/fat/linux/m2link.ini`** holds only the network. The names and
+defaults are the recomp's (its launcher's Game tab, saved in its `launcher.ini`):
+
+    link_port = 15112
+    link_next = 192.168.1.20:15112
+
+* `link_port`: this cabinet listens here for the cabinet before it in the
+  ring. 15112 is fine unless something else uses it.
+* `link_next`: the IP address and `link_port` of the next cabinet. The
+  cabinets form a ring; with two, each one's next is the other. Use an IP
+  address, not a name.
+* `link_framesync`: leave it out, or 0. (Advanced; a MiSTer can't hold its
+  game to another cabinet's frame, so it changes nothing here.)
+
+Master, slave and car number are never in this file: like the arcade and the
+recomp, the game decides them from its own settings (step 4).
+
+**Example: a MiSTer and a PC.** MiSTer at 192.168.1.62, PC at 192.168.1.20.
+
+* MiSTer `m2link.ini`: `link_port = 15112`, `link_next = 192.168.1.20:15112`.
+* PC (recomp launcher, Game tab): **Link to other cabinets** ticked, **This
+  cabinet's port** 15112, **Next cabinet** `192.168.1.62:15112`.
+* One of them MASTER in test mode, the other SLAVE, different car numbers.
+
+Three or more: each cabinet's `link_next` is the next one round the circle,
+and the last one's is the first.
+
+**What you'll see.** The game says **NETWORK CHECKING** until every cabinet is
+there, then the linked attract (通信システム). `m2link` reports what it is
+doing in `/tmp/m2link.log`: `waiting: next cabinet ... not reached yet` (that
+cabinet isn't listening, or a firewall is in the way), `linked: cabinet 1 of
+2`, or `lost` (a cabinet went away: reset the game on every cabinet to link
+again).
+
+**Start it at boot instead:** add this line to `/media/fat/linux/user-startup.sh`:
+
+    /media/fat/linux/m2link -c /media/fat/linux/m2link.ini > /tmp/m2link.log 2>&1 &
+
+It does nothing until Daytona is loaded with Link board On, and stops touching
+anything as soon as another core is.
+
+**Not linking?** A cabinet set to TWIN in test mode with nobody to link to
+waits at NETWORK CHECKING for ever — the factory setting does this, with or
+without the link board. For one player, set LINK ID to SINGLE. Link board Off
+in the OSD is exactly the core without link play.
+
 ## On a 15 kHz CRT
 
 The game's own picture is 24 kHz, which a 15 kHz TV can't show. The core has a

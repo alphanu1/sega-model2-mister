@@ -36153,3 +36153,236 @@ Considered and not done:
   - sys/ (two OSDs ~930 ALM, pll_hdmi_adj ~436): the framework's; HDMI and
     the analog output (scan15) both need theirs.
 Map numbers are estimates; the fit decides. Not fitted at the time of writing.
+
+**R916 (main) -- LINK PLAY FOR DAYTONA USA REVISION A, COMPATIBLE WITH THE
+RECOMP: THE COMM BOARD IN DDR3 (rtl/io/m2_comm.sv) AND A LINUX HELPER
+(linux/m2link). BUILT AND CHECKED ON THE DESK; NOT YET ON A BOARD.** Ben:
+"link play for Daytona ... it needs to be compatible with the recomp". The
+shape is R863's addendum (an entry on the model2a branch's copy of this
+study, not merged here): the board's shared RAM in DDR3, its registers
+beside the CPU, a userspace helper on MiSTer's Linux running the protocol
+and the sockets, no kernel change. Decisions rest on section 5.6 (M10K is
+spent: 553/553, so the 16 KB cannot be on chip) and section 7 Tier 1.
+
+*THE REFERENCE IS THE RECOMP* (Ben, mid-task: "drop MAME as the reference
+for link play"). github.com/alphanu1/daytona-arcade-recomp at b33baeb,
+BSD-3-Clause (gh: BSD-3-Clause; LICENSE "Ben Templeman and contributors"):
+src/runtime/comm_board.{h,cpp} (unchanged since e52a63c; itself MAME's
+m2comm in M2COMM_SIMULATION mode, BSD-3, Ariane Fugmann) and
+src/app/link_socket.{h,cpp}. Copied verbatim to linux/m2link/recomp/. MAME
+0.289 was used only to watch the game's side (a Lua tap), which is the same
+program on every host.
+
+*THE PROTOCOL, AS THE RECOMP HAS IT.*
+  * Topology: a TCP ring. Each cabinet LISTENS on link_port for the cabinet
+    before it and CONNECTS to link_next (host:port) for the one after; two
+    cabinets are each other's next. Listen socket AF_INET6 dual-stack
+    (IPV6_V6ONLY 0) falling back to AF_INET, SO_REUSEADDR, backlog 1; the
+    outgoing socket TCP_NODELAY, connected non-blocking and retried every
+    0.5 s (2 s after a name lookup fails); reads non-blocking; a frame's
+    send blocking with a 2 s SO_SNDTIMEO -- a stall that long, or either
+    socket closing, loses the link (no reconnect: reset the game).
+  * Keys and defaults (src/app/config): link (0/1), link_port 15112,
+    link_next 127.0.0.1:15113, link_framesync 0.
+  * Wire: raw frames, no header, no length. A frame is frame_size + 1 bytes,
+    frame_size = shared[0x13]<<8 | shared[0x12] = 0x0e00 on Daytona, so
+    3,585 bytes. Byte 0 is the type: 0xff the numbering token, 0xfe the
+    count token, 0xfc the vsync token, 0..count a data frame from that
+    cabinet id. A data frame's 0xe00 bytes are the sender's shared
+    0x2000-0x2dff; the receiver stores them at 0x2000 + frame offset
+    (0x21c0, shared[0x14..0x15] = 0x01c0) -- a shift register of 0x1c0-byte
+    slots, so in a ring of N each cabinet sees the one before it at 0x21c0,
+    the one before that at 0x2380, and so on.
+  * Roles from the game, never from config: master if fg == 1 or shared[1]
+    == 1; slave if fg == 0 and shared[1] == 2; relay if fg == 0 and shared[1]
+    == 0. Daytona (EPR-16726) uses FG: test mode > GAME SYSTEM > LINK ID
+    (MASTER / SLAVE / SINGLE; factory MASTER, car 1, TWIN cabinet).
+  * Start: cn_w(1) (the init command) clears 16 KB, writes shared[1] = 2,
+    frame size and offset, and comm_tick() then writes shared[0] = 0,
+    shared[2] = shared[3] = 0xff. Every vblank (comm_tick) while not linked
+    and both sockets are up, zfg flips. The master counts 0xe8 (232) of its
+    vblanks, then sends 0xff (byte 1 = 1) every vblank until it comes back
+    round; each slave adds one to byte 1 and passes it on; back at the
+    master byte 1 is the count. The master then sends 0xfe (id = count,
+    count); each slave takes byte 1 as its id, subtracts one and passes it
+    on -- SO IDS RUN AGAINST THE RING: the master's next is cabinet N of N,
+    the one after it N-1 (checked against the recomp's own code: three
+    recomp cabinets number themselves 1, 3, 2 in ring order). Linked:
+    shared[0] = 1, [2] = id, [3] = count.
+  * Each frame, linked: on every received data frame, store it and flip zfg;
+    a slave answers with its own data frame (type = its id) at once, a relay
+    passes the frame on. The master, each vblank, sends its own data frame
+    and then 0xfc; slaves pass 0xfc on. Frames are taken in at vblank and on
+    each FG read (read_fg), except the two FG reads after a vblank
+    (zfg_delay). link_framesync 1 makes a cabinet wait (3 s limit) for the
+    0xfc each frame; off by default, and nothing on the wire depends on it.
+  * Lost: shared[0] = 0xff.
+
+*WHAT THE GAME DOES WITH IT* (MAME 0.289 m2lod, Lua tap on
+0x01a00000-0x01a1ffff; the game uses the 0x01a10000 mirror):
+  * Factory settings (TWIN, MASTER): frame 173 CN 0, FG 0; 174 read CN
+    (0xfe), CN 1, FG 1; then FG read twice a frame, shared[3] once, 112
+    dwords written to 0x2000-0x21bf every frame; screen NETWORK CHECKING /
+    THIS IS MASTER CONTROLLER. With every read of the window zeroed (no
+    board -- this core before R916): the same screen. So fitting the board
+    changes nothing for a cabinet that was not going to link.
+  * LINK ID SINGLE: the game reads FG once a frame (0xfe) and nothing else;
+    never writes CN. Attract as normal.
+  * Two linked (master + slave car 2, MAME's own sockets): both in the
+    linked attract by frame 1500. Per linked frame: 65 dwords written to
+    0x2000-0x21bf, 231 read from 0x21c0-0x2dff, 33 from 0x2e00-0x2fbf,
+    shared[0] read; all within ~70 us of vblank. FG polled ~150 times a
+    frame on the master and ~3,000 on the slave: THE GAME SPINS ON FG UNTIL
+    zfg FLIPS. FG reads 0xff/0x7f on the master, 0xfe/0x7e on the slave.
+  * daytona93, factory settings: no access to the window at all in 40 s.
+    The recomp documents link play for Revision A only (its Vita build
+    rejects 1993); not explored further here.
+  * Test-menu EEPROM bytes (recomp byte order): 0x0b LINK ID (1 MASTER, 2
+    SLAVE, 0 SINGLE), 0x0c CAR NUMBER - 1.
+
+*THE CORE (rtl/io/m2_comm.sv, ~130 ALUT + 195 FF; Model2.sv `M2_LINK`).*
+  * The 16 KB RAM in DDR3 at byte 0x30800000 (8 MB above the framebuffer,
+    which ends below 0x30200000), reached through a second m2_ddr3_arb in
+    front of m2_ddr3: the framebuffer (m2_raster3d's port) on a, the comm
+    block on b. Every CPU access to the RAM is one DDR3 beat; writes are
+    posted, reads stall the bridge (io_stall) until the data is back.
+  * The init command is done IN THE FPGA: a CN=1 write clears the 16 KB
+    (16 bursts of 128 words) with the header -- 00 02 ff ff at 0x00, 00 0e
+    c0 01 at 0x12 -- and the CPU's next RAM access waits for it. Done by the
+    helper a frame later it would wipe what the game wrote since. Power-on
+    clears it too (and the two words after it), as MAME's m_shared{} and
+    "unwritten memory is not zero" require.
+  * CN and FG are flip-flops: cn_r = cn | 0xfe, fg_r = fg | ~zfg << 7 |
+    0x7e, answered at once. cn_w(0) clears cn, fg, zfg; the game's reset
+    clears the three (device_reset). One dword write does cn_w then fg_w.
+  * zfg comes from the helper's mailbox word (0x30804008 bit 0), read on an
+    FG read once the copy is 1,024 cycles (12.8 us) old: the spin above
+    would otherwise make every one of its reads a DDR3 round trip.
+  * A STATUS WORD at 0x30804000, written when a field changes: [7:0] game
+    vblanks (the interrupt the game takes, R652's hold included -- MAME's
+    screen_vblank / the recomp's vblank_start), [15:8] FG reads, [23:16] CN
+    writes (published only after the clear), [24] cn, [25] fg, [26] the zfg
+    FG now returns, [39:32] video frames (a heartbeat), [47:40] version 1,
+    [63:48] "LK". FG-read-only changes wait the same 12.8 us.
+  * OSD "Link board: Off / On" (O[64], Daytona only: menumask bit 2). Off,
+    the default, is the core before R916: the window reads 0, no stall, no
+    DDR3 traffic but the power-on clear, no status word.
+    VERILOG_MACRO "M2_NO_LINK=1" removes the block, the arbiter and the OSD
+    line.
+
+*THE HELPER (linux/m2link, C++17, static ARMv7 binary 564 KB).* The recomp's
+CommBoard with four changes (namespace; volatile shared RAM moved a word at
+a time; no RAM set-up on cn_w(1) -- the core did it; zfg() exported) and the
+recomp's TcpLink verbatim. It maps the page through /dev/mem (O_SYNC,
+uncached), and each pass: CN-write count changed -> cn_w(cn), fg_w(fg); fg
+changed -> fg_w; each new vblank -> vblank(); FG reads -> fg_r() (up to 3, to
+spend zfg_delay); then zfg to the mailbox. Polls every 100 us when idle.
+  * THE HAND-OVER (found by the tests below, not foreseen): the recomp's
+    board runs inside the game's own vblank and FG reads, so it can never
+    write a slot the game is reading or send a block the game is writing.
+    Beside the game it can. So after publishing a zfg flip the helper waits
+    until the status word shows the core returning it, and then until the
+    game has read FG twice more (the read that saw the flip, then one back
+    at its poll); two vblanks without that also release it. Ticks and reads
+    wait, they are not dropped.
+  * The core is "here" when the status word has its magic AND its heartbeat
+    moved within 500 ms; otherwise the helper writes nothing (another core
+    may own that DDR3) and closes the sockets, so the other cabinets see
+    the link go.
+  * /media/fat/linux/m2link.ini: link_port, link_next, link_framesync --
+    the recomp's names, meanings and defaults; anything else is reported
+    and ignored; bad values reported and the default kept; the parsed
+    settings logged. Scripts/m2link.sh starts / stops it; a line in
+    linux/user-startup.sh starts it at boot (it idles until the core).
+
+*EVIDENCE.*
+  1. tb_m2_comm (make test_m2_comm, in `make test`): m2_comm through the real
+     m2_ddr3_arb and m2_ddr3 to a DDRAM model (unwritten reads all ones),
+     framebuffer-like bursts on port a throughout, BUSY 0/30/90% x latency
+     1/40/120: 9,428 checks, 0 failed. The oracle is the recomp's CommBoard
+     itself: after random byte/half/word traffic and the init command, all
+     16 KB read back through the CPU port equal the recomp's shared RAM;
+     cn_r/fg_r after every register operation equal the recomp's. Also:
+     the clear lands after a write in flight, the next access waits for it
+     (> 2,048 beats), the status counts and its ordering, zfg via the
+     mailbox, the reset command and the game's reset (with a refresh in
+     flight), Off (no stall, no write, no status), port a's bursts whole.
+     Mutations caught: header at the wrong beat, FG write lane, the stall
+     rule, zfg not cleared by CN=0, the refresh's cn gate, game reset not
+     clearing zfg (that one was a real fault, fixed). One guard (zfg &
+     cn) was redundant with the clear and is gone.
+  2. linux/m2link/test/run_tests.sh, 12 s each, localhost: m2link + a C++
+     model of the core's page (test/core_model.cpp, the same contract) and a
+     fake Daytona (test/fake_game.h, MAME's access pattern: spin on FG, read
+     the slots on a flip, write the 0x1c0-byte block with a pattern that
+     names car and frame) against recomp_peer (the recomp's CommBoard and
+     TcpLink verbatim, fake game, 57.5 Hz): MiSTer master + recomp slave,
+     recomp master + MiSTer slave, MiSTer + MiSTer, three cabinets each way,
+     three recomp cabinets (the reference's own numbering), a recomp peer
+     with link_framesync=1, all accesses slowed to 2 us (MiSTer + MiSTer and
+     MiSTer + recomp), and the core vanishing (the recomp cabinet reports
+     the link lost): 10 passed. ~427 linked frames each, every cabinet
+     numbered as the recomp numbers itself, whole blocks every flipped
+     frame, 0 torn. With the hand-over off (--no-hold) and 2 us accesses:
+     404 and 175 of ~427 blocks torn. Remaining: 0-1 torn block in the
+     first 3 linked frames (the game writes its block every frame before
+     it knows it is linked; nothing can hand that over), counted apart.
+     The same suite with build/arm/m2link (the MiSTer binary) under
+     qemu-arm: all passed.
+  3. The recomp's real game: m2run (Revision A, build-daytona, run from a
+     copy) as slave car 2 (EEPROM from its own test mode, scripted) against
+     m2link + core model as master: "link: up, cabinet 2 of 2" at the m2run
+     end, "linked: cabinet 1 of 2" at ours; the game stays at NETWORK
+     CHECKING because the fake master sends patterns, not Daytona's data.
+  4. RTL + helper + recomp: tb_m2_comm +mem=FILE (the bench's comm page is a
+     file m2link maps) as master with the fake game, recomp_peer slave:
+     linked 1 of 2 / 2 of 2. Before the hand-over: 730 of 814 blocks torn at
+     the RTL end; after: 0 at the RTL end (the RTL ran at 4-8 MHz, so its
+     frames were slow and the recomp end saw a few torn when the fake
+     game's 4 ms spin gave up; the spin is now unbounded as the real one).
+  5. The whole core: obj_boot_link (the boot bench, LINK_EN=1, the real
+     i960 through the real bridge, Revision A image, M2_LINK=1), 36 M
+     instructions: frame 230 CN 0, FG 0; frame 231 CN 1, FG 1 (master) --
+     MAME's sequence -- then FG polled, shared[3] read once, 112 dwords to
+     0x2000 every frame (28,784 over the run: MAME's 112 a frame); final
+     shared 00 02 ff ff / 00 0e c0 01, status cn 1 fg 1. LINKED: the same
+     bench with its comm page shared with m2link (M2_LINK_MEM, --alive-ms
+     60000 -- a simulated frame takes ~1 s) and recomp_peer as slave car 2,
+     70 M instructions, 977 frames: m2link "linked: cabinet 1 of 2", the
+     recomp's board "linked cabinet 2 of 2"; the game's own shared RAM at
+     the end 01 02 01 02 (linked, id 1 of 2); then the game spun on FG --
+     1,998,041 register reads -- and read its slots (19,109 RAM reads), as
+     MAME's linked master does. It stays at NETWORK CHECKING: the far end
+     sends the fake game's patterns, not Daytona's. The bench without the
+     board (obj_boot, LINK_EN=0, daytona93, 20 M): PASS, no access counted.
+     Not done: the recomp's m2run as the far end of the whole-core bench --
+     m2run runs unpaced (~250-900 frames/s) against a bench at ~1 frame/s;
+     tried, it sat at NETWORK CHECKING for ~52,000 frames while the bench
+     booted and then stopped with "no recompiled code at 00000000: add it
+     to the seeds" (a path its seeds lack; for the recomp).
+  6. Area, quartus_map 17.0, whole design, main's configuration, both maps
+     on this PC the same afternoon: c56c93d 39,761 ALMs needed (= R907's)
+     -> 40,056 with the link board (+295); combinational ALUTs 56,639 ->
+     57,069; registers 48,499 -> 48,737; block memory bits +3 (the OSD
+     switch's three-flop synchroniser merged by Quartus into an existing
+     altshift_taps of synchronisers, 3x13 -> 3x14; no new RAM, so M10K stays
+     553). m2_comm 137 ALUT / 198 FF, the arbiter 145 ALUT / 3 FF; the rest
+     is Model2.sv glue and hps_io's longer CONF_STR. An earlier map, before
+     the game-reset synchroniser and status bit 26, read 40,011.
+
+*NOT TESTED / OPEN.*
+  * Nothing on a board. Unknown there: /dev/mem at 0x30800000 under the
+    MiSTer kernel (Main_MiSTer maps the same region for its own use, so
+    expected to work); the f2h port's ordering against the helper's
+    uncached writes (fences are in); the extra arbiter's timing at 80 MHz
+    (a fit decides); whether the 12.8 us zfg pace or the helper's ~100 us
+    poll is short enough for the real game's spin (MAME's master spun up to
+    1.7 ms waiting; a LAN round trip is ~0.3-1 ms).
+  * A real Daytona at BOTH ends over this path, past NETWORK CHECKING,
+    needs real time: a MiSTer and a PC.
+  * link_framesync=1 cannot hold a MiSTer game; accepted for the file's
+    sake. Names (not IPs) in link_next: glibc's static getaddrinfo may not
+    resolve them on MiSTer -- use an IP address.
+  * daytona93, the 2A games with a link (Sega Rally: 837-11525, same
+    protocol per MAME) and Power Sled's 0x180 offset: the block takes
+    FRAME_OFFSET as a parameter; not wired.

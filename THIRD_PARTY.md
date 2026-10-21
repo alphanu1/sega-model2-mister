@@ -367,6 +367,7 @@ individually:
 | `src/mame/sega/segaic24.cpp` | BSD-3-Clause | — | S24TILE tilemap |
 | `src/mame/sega/315_5649.cpp` | BSD-3-Clause | Dirk Best | I/O chip |
 | `src/mame/sega/model2.cpp`, `model2_v.cpp` | check before use | — | Board, memory map, renderer behaviour |
+| `src/mame/sega/m2comm.{cpp,h}` | BSD-3-Clause | Ariane Fugmann | Link play: the protocol, through the Daytona recomp's transplant of it (its entry below); 0.289 read to compare, not copied |
 
 **MAME is GPL-2.0 as a whole and individual files carry their own SPDX
 headers.** Check the header of every file you read. Do not rely on the
@@ -408,6 +409,27 @@ module and bench; `c581df7` for retiring the 1:1 picture and its options):
 
 Not taken: the beacon (`joystick_3` bit 0 white fields), `docs/guncon2/`, the
 `MISTER_DEBUG_NOHDMI` build setting, their release files.
+
+### alphanu1/daytona-arcade-recomp — BSD-3-Clause (link play)
+*Verified 2026-10-21 · pinned at **`b33baeb`** (the four files unchanged since `e52a63c`), copied from the local working copy's git objects, not its working tree*
+
+Ben's static recompilation of Daytona USA, and **the reference for link play**
+(study R916): a MiSTer running this core must link with it. Licence: the
+repository reports `BSD-3-Clause` (`gh api repos/alphanu1/daytona-arcade-recomp
+--jq .license.spdx_id`), LICENSE "Copyright (c) 2026, Ben Templeman and
+contributors"; `comm_board.{h,cpp}` carry `license:BSD-3-Clause,
+copyright-holders:Ariane Fugmann` (they descend from MAME's `m2comm`, in the MAME table above).
+BSD-3 is GPL-compatible; the notices are kept and `recomp/LICENSE` ships beside
+the copies. This is user-space Linux code for the helper, not RTL.
+
+| ours | theirs | changed |
+|---|---|---|
+| `linux/m2link/recomp/runtime/comm_board.{h,cpp}`, `recomp/app/link_socket.{h,cpp}`, `recomp/test_comm_board.cpp`, `recomp/LICENSE` | `src/runtime/comm_board.{h,cpp}`, `src/app/link_socket.{h,cpp}`, `tests/test_comm_board.cpp`, `LICENSE` | **Nothing** -- verbatim. m2link links `link_socket.cpp` as it is; the tests use `comm_board.cpp` as the far end and as the RTL bench's oracle. |
+| `linux/m2link/comm_board.{h,cpp}` | `src/runtime/comm_board.{h,cpp}` | Namespace `m2link`; the shared RAM `volatile` (it is the core's DDR3, through `/dev/mem`) and whole frames moved a 32-bit word at a time (same bytes, same places); `cn_w(1)` does not set the RAM up when `core_init` (the FPGA has done it); `zfg()` added. `diff recomp/runtime/comm_board.cpp comm_board.cpp` shows exactly these. |
+
+Not taken: the app's launcher, config file code and status line (m2link has
+its own INI reader with the same key names and defaults, and the same status
+wording).
 
 ### MiSTer-devel/N64_MiSTer — GPL-3.0, VHDL
 *Verified 2026-08-16*
