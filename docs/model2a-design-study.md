@@ -36153,3 +36153,28 @@ Considered and not done:
   - sys/ (two OSDs ~930 ALM, pll_hdmi_adj ~436): the framework's; HDMI and
     the analog output (scan15) both need theirs.
 Map numbers are estimates; the fit decides. Not fitted at the time of writing.
+
+**R913 (REJECTED ON THE BOARD) -- MAME'S PER-PIXEL LEVEL AT SHARP LOOKED
+WRONG. MAIN KEEPS R828c (B = 3). BRANCH mip-issue11 IS NOT MERGED.**
+
+(R913's full text lives on branch mip-issue11, 0b24b16 + cd93e25; this is
+its result, recorded where main can see it.)
+
+*What it changed:* Sharp became MAME's own level pixel by pixel (the game's
+per-polygon level term folded into each polygon's 1/z exponent, a half-level
+remainder in the quad store's last two bits); Medium became the release's
+Sharp and Smooth the release's Medium; the release's Smooth was dropped.
+Against MAME 0.289's still frames it was the closest of every setting,
+closer than Off (Daytona f2225 15.70 Off / 17.04 release Sharp -> 15.46).
+
+*The board (build s1286, Ben, 2026-10-21), verbatim:* "it's better as it was
+before -- at a distance you see the correct CHECK mip map which changes to
+dotted lines. Now this looks wrong. So this needs reverting."
+
+*So:* main stays at R828 / R828c exactly as released (MIPZ_B = 3; OSD Sharp /
+Medium / Smooth / Off as released). GitHub #11 is taken up by R915 instead.
+
+*Lesson:* a still-frame error number against MAME did not predict what Ben
+judges right on the board, in motion, at a distance. R913's metric said it
+was closer to MAME on every frame and every game; the board said it looked
+wrong. A mip change is judged on the board, not by a single-frame error.
