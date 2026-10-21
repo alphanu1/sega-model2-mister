@@ -42270,3 +42270,23 @@ judge (it is a shimmer measure, R828 / R828c).
     and Manx TT at Sharp / Medium / Smooth closer to Off where MAME does not
     mip (Virtua Cop 2 and Manx TT nearly everywhere); the large-layout games
     as R911.
+
+**R902 (closed) -- SEGA RALLY'S BLACK MIRROR WAS THE FIRST 2A BETA, BEFORE
+R889's WINDOW KEY. CONFIRMED ON THE BOARD BY BISECTION, 2026-10-21.**
+The report came from a user, not from Ben's board. Ben, Sega Rally in the
+bumper view, one build at a time (Model2A.rbf swapped, md5 checked each time):
+     s1278 (eb5a700, current)          mirror works
+     s1259 (485bd44, beta 20261021)    works
+     s1253 (71598a2, beta 20261020b)   works
+     s1240 (baadcd5)                   works
+     s1238 (14:54 on 10-20, after R889 at 12:54)   works
+     s1221 (12:23 on 10-20, before R889)           BLACK
+The first public 2A beta, Model2A_20261020 (= s1220, md5 e44e4a29..., 10:45
+on 10-20), predates R889 too, so it is the build the user ran. This is
+exactly R902's bench finding: with polygons sorted by z alone, window 3's
+black backing quad (z 512) owns all 9,600 pixels of the mirror; with R889's
+{15 - window, z} key, window 4's scene draws over it. Every release from
+Model2A_20261020b on has the key. R910's window probe (branch m2a-win-probe)
+was not needed and was never fitted with a margin: it missed by 44-59 LABs
+(s1281-s1283) and is parked.
+

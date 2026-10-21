@@ -66,8 +66,6 @@ ROM sets: MAME 0.289.
 
 - **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
   drops where the geometry processor has the most work. Being looked at.
-- **Sega Rally's rear-view mirror is black** in the bumper view. Being
-  looked at.
 - **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
   cabinet's extra sound board isn't emulated, so a few extra sounds are
   missing. (The freeze when you hit another rider is fixed in this release.)
