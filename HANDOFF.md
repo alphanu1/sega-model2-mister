@@ -32,6 +32,41 @@ topskatru topskatruo topskatrj). It decides the forms kept, FLOG, the cache
 size (PCACHE line) and whether the overlap lever is needed (BUSY line).
 The SHARC (2B) was not re-sized. Ben's R832 decision is unchanged.
 Next free R numbers: R921 on.
+## 2026-10-21 (late): PUSHED model2a -- the 2A beta Model2A_20261021d
+
+RELEASED: Model2A_20261021d.rbf = s1298 (5b8a001 = Model2A_20261021c +
+R922's tile mixer; clk_sys +0.139, clk_mem +0.459, clk_i960 +0.828, hold
++0.243, HDMI -1.059 report-only; 41,244 ALMs, 547/553 M10K), md5 293df5f3...
+R922: a front pair's category-0 pixel hides a back pair's category-1 pixel --
+VCop2's SHOOT TO SELECT over the city (GitHub #16, closed; MAME's own TODO);
+Zero Gunner's SCORE RANKING helicopter icons should appear (inferred, not
+seen on an arcade board -- Ben's board check of ZG pending). The mixer is
+shared with main, whose games' frames are unchanged (R922's survey); not yet
+in a main release. #18 closed (DOA MRA, R921).
+
+## 2026-10-21: branch vc2-layer -- Virtua Cop 2's stage-select text (GitHub #16, R922). NOT PUSHED, NOT FITTED
+
+Cause: our tile mixer is MAME's screen_update order (each tilemap's
+category-1 tiles over the 3D over every category-0 tile). On the stage
+select the city map is tilemap 2 with every tile category 1 and SHOOT TO
+SELECT is tilemap 0 category 0, so the city covers the text -- in MAME too
+(its model2.cpp TODO names this exact screen). Core before = MAME pixel for
+pixel. Fix (m2_tile_mixer, both cores): a non-transparent category-0 pixel
+of tilemap 0/1 suppresses tilemaps 2/3's category-1 hits; the winning 2D
+pixel's category decides it against the 3D, so 3D still covers the text
+where both exist. Second screen found by the survey: Zero Gunner's SCORE
+RANKING, whose helicopter icons (tilemap 0 cat 0 on a tilemap 2 cat 1
+background) now show in the gap between rank and name.
+Evidence: survey of all 15 MRA sets (6,000 frames; 14,000 for the eight
+using tilemap 2/3 category 1): only those two screens have the case. RTL
+frame bench old vs new on 79 MAME dumps: 75 identical (RGB and vid_cat1),
+the other four differ in exactly the overlap pixels. Mixer 31 -> 31 ALMs
+(+1 ALUT). lint_top 2A / M2_NO_2A clean, lint_idx clean, analyze_file 0
+errors, test_m2_video_ovr PASS. tb_m2_video_frame also writes <out>.cat.
+NEXT: a fit; on the board, VC2 stage select (text over the city, blinking)
+and ZG's ranking (icons beside the names) -- the ZG icons are inferred
+from the layout, not seen on an arcade board. Next free R numbers: R923 on.
+
 ## 2026-10-21 (evening): PUSHED model2a -- the 2A beta Model2A_20261021c
 
 RELEASED (releases/, BETA): Model2A_20261021c.rbf = s1293 (doa-rumble

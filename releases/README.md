@@ -29,7 +29,16 @@ Each of these also has a `[15kHz CRT]` MRA.
 known bugs, and some games still slow down in places, mainly Sega Rally and
 Manx TT. Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261021c`)
+### New in this build (`Model2A_20261021d`)
+
+- **Virtua Cop 2's stage select shows SHOOT TO SELECT properly.** The city
+  map behind it is a 2D layer set to go over the 3D, and it was being drawn
+  over the text in front of it (MAME does the same). The 2D layers now settle
+  their own order first, so the text sits over the city. The same fix should
+  bring back the helicopter icons beside each name on Zero Gunner's SCORE
+  RANKING screen, which MAME never shows.
+
+### Earlier in `Model2A_20261021c`
 
 - **Dead or Alive no longer freezes in a match.** The MRA's protection patch
   tripped the game's own boot checksum, and the game then stopped itself 5-20
@@ -66,7 +75,7 @@ Manx TT. Please report anything you find, and say which game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261021c.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261021d.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs below | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -74,7 +83,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261021c.rbf` has the md5 `7f15c5329bb6616ee2f17b5ec5678792`. As with
+`Model2A_20261021d.rbf` has the md5 `293df5f3b618b93c49597ff306dd0ed3`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -102,10 +111,9 @@ ROM sets: MAME 0.289.
 - **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
   cabinet's extra sound board isn't emulated, so a few extra sounds are
   missing.
-- **Sega Rally doesn't save its settings** (NVRAM). Reported by users; not
-  looked at yet.
-- **Virtua Cop 2's level-selection screen** has some of its text drawn in the
-  wrong layer. Reported by users; not looked at yet.
+- **Sega Rally doesn't save its settings** (NVRAM). The core saves the
+  backup RAM but not the game's EEPROM, where Rally keeps its settings. Fix
+  planned (GitHub #15).
 - **Virtua Fighter 2 can crash** at random, in attract or in a fight.
   Being looked at; if it happens to you, please say where.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
