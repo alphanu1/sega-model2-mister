@@ -873,7 +873,7 @@ module m2_boot_harness #(
     end
   end
 
-  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0)) u_copro (   // R888: as Model2.sv
+  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0), .OUT_STALL(A2)) u_copro (   // R888, R931: as Model2.sv
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),

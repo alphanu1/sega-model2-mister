@@ -60,7 +60,9 @@ module m2_copro #(
   // R888: the TGP's ALU op starts under its transfer (mb86233_core)
   parameter bit EARLY_ALU = 1'b0,
   // R888: posted buffer-RAM writes, a queue BUFW_Q + 1 deep (m2_tgp); 0 = none
-  parameter int unsigned BUFW_Q = 0
+  parameter int unsigned BUFW_Q = 0,
+  // R931: a full output FIFO holds the TGP (m2_tgp OUT_STALL); 0 drops (R146)
+  parameter bit OUT_STALL = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -486,7 +488,7 @@ module m2_copro #(
   // `stall` line above -- so it cannot; and if it ever does, the signature is
   // everything freezing at once, not the frame-1 hang this replaces.
   m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU),
-           .BUFW_Q(BUFW_Q)) u_tgp (
+           .BUFW_Q(BUFW_Q), .OUT_STALL(OUT_STALL)) u_tgp (
     .clk(clk), .rst_n(rst_n & ~halted),
     .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
     .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),

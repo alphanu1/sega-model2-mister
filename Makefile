@@ -2028,10 +2028,12 @@ TGP_PROG   ?= 2048
 TGP_IS2A   := $(if $(filter 2048,$(TGP_PROG)),,1)
 TGP_EARLY  ?= $(if $(TGP_IS2A),1,0)
 TGP_BUFW   ?= $(if $(TGP_IS2A),32,0)
-TGP_ROBJ   := obj_tgp_replay$(if $(TGP_IS2A),_$(TGP_PROG))$(if $(filter $(TGP_EARLY),$(if $(TGP_IS2A),1,0)),,_e$(TGP_EARLY))$(if $(filter $(TGP_BUFW),$(if $(TGP_IS2A),32,0)),,_q$(TGP_BUFW))
+# R931: a full output FIFO holds the TGP on 2A (m2_tgp OUT_STALL); TGP_OSTALL=0 / 1 for an A/B
+TGP_OSTALL ?= $(if $(TGP_IS2A),1,0)
+TGP_ROBJ   := obj_tgp_replay$(if $(TGP_IS2A),_$(TGP_PROG))$(if $(filter $(TGP_EARLY),$(if $(TGP_IS2A),1,0)),,_e$(TGP_EARLY))$(if $(filter $(TGP_BUFW),$(if $(TGP_IS2A),32,0)),,_q$(TGP_BUFW))$(if $(filter $(TGP_OSTALL),$(if $(TGP_IS2A),1,0)),,_s$(TGP_OSTALL))
 $(TGP_ROBJ)/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
 	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
-	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) -GEARLY_ALU=$(TGP_EARLY) -GBUFW_Q=$(TGP_BUFW) \
+	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) -GEARLY_ALU=$(TGP_EARLY) -GBUFW_Q=$(TGP_BUFW) -GOUT_STALL=$(TGP_OSTALL) \
 	  -CFLAGS "-O2 -DTGP_PROG_WORDS=$(TGP_PROG)" -O3 -LDFLAGS "-lz" \
 	  --Mdir $(TGP_ROBJ) -o Vm2_copro sim/tgp/tgp_replay.vlt \
 	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)

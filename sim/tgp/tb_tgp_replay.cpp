@@ -59,6 +59,8 @@
 //   --board-push   R876: offer every push as the board's bridge does, whatever the
 //                  FIFO holds; it completes unless m2_copro raises stall (R876's
 //                  hold -- before it, a push into a full queue was dropped)
+//   --xstall P:N[,P:N..]  R931: the i960 stops N cycles before its pop #P (an
+//                  interrupt, a held bus) -- the TGP runs on into the output FIFO
 //   --dump-rtl     write the RTL's own outputs + io writes; --vs-rtl compares
 //                  against such a file, for exact regression of a faster RTL
 //                  against this one where MAME and the RTL legitimately differ
@@ -175,6 +177,7 @@ int main(int argc, char **argv) {
   int lat = 6, wlat = 6, max_frames = 1 << 30, max_mism = 20, profile_n = 25;
   bool quiet = false, strict_nan = false;
   int gap = 0, jitter = 0;          // R876
+  std::map<uint64_t, uint64_t> xstall;   // R931: i960 pop index -> cycles the i960 stops before it
   bool board_push = false;          // R876
   uint64_t max_cyc = 0;             // R876: --max-cyc N (millions), 0 = none
   uint32_t seed = 1;
@@ -200,6 +203,15 @@ int main(int argc, char **argv) {
     else if (a == "--seed") seed = (uint32_t)nxt();
     else if (a == "--board-push") board_push = true;
     else if (a == "--max-cyc") max_cyc = (uint64_t)nxt() * 1000000ull;
+    else if (a == "--xstall" && i + 1 < argc) {   // R931: --xstall <pop>:<cycles>[,<pop>:<cycles>...]
+      std::string v = argv[++i];
+      for (size_t q = 0; q < v.size();) {
+        size_t c = v.find(',', q); if (c == std::string::npos) c = v.size();
+        const std::string t = v.substr(q, c - q); const size_t k = t.find(':');
+        if (k != std::string::npos) xstall[std::stoull(t.substr(0, k))] = std::stoull(t.substr(k + 1));
+        q = c + 1;
+      }
+    }
     else if (a == "--only" && i + 1 < argc) only = argv[++i];
     else if (a == "--dump-rtl" && i + 1 < argc) dump_rtl = argv[++i];
     else if (a == "--vs-rtl" && i + 1 < argc) vs_rtl = argv[++i];
@@ -417,12 +429,20 @@ split_done:
   bool end_ok = false;
   uint64_t first_drop_cyc = 0;      // R876
   uint64_t xfer_ok = 0, xfer_bad = 0;   // R923: the probe's tap
+  uint64_t xstall_done = 0;              // R931
+  unsigned fout_peak = 0;                // R931: the output FIFO's deepest
 
   while (true) {
     // ---------------- i960 side: drive this cycle's access
     clear_bus();
     bool feed_xread = false, feed_write = false;
     while (fp < feed.size() && feed[fp].t == 'F') { ++fp; ++feed_frame; }
+    // R931: --xstall -- the i960 stops for N cycles before pop #i (an
+    // interrupt, a held bus), whatever the TGP is doing
+    if (gap_left == 0 && fp < feed.size() && feed[fp].t == 'X' && !xstall.empty()) {
+      auto xs = xstall.find(xi);
+      if (xs != xstall.end()) { gap_left = int(xs->second); xstall.erase(xs); ++xstall_done; }
+    }
     if (gap_left > 0) --gap_left;     // R876: the i960 busy elsewhere
     else if (fp < feed.size()) {
       const Ev &e = feed[fp];
@@ -462,6 +482,7 @@ split_done:
     }
     if ((s == S_SRC_W || s == S_LABB_W || s == S_DST_W) && CORE(mem_stall)) datamem_wait_cyc++;
     if (TGP(fifo_out_push) == 0 && TGP(fifo_wr) && R(fout_full)) fout_full_cyc++;
+    if (unsigned(R(fout_count)) > fout_peak) fout_peak = R(fout_count);   // R931
     f_cyc[cur_frame]++;
     if (TGP(dbg_unimplemented)) ++unimpl_cyc;
     // R888: a store's high half landing retires it, in order (before the
@@ -678,6 +699,8 @@ split_done:
               "stores landing out of order %llu; most stores pending %llu\n",
               (unsigned long long)hz_raw, (unsigned long long)hz_pop, (unsigned long long)hz_order,
               (unsigned long long)bw_peak);
+  std::printf("output FIFO (R931): peak %u words (it holds 129); i960 stops (--xstall) taken %llu\n", fout_peak,
+              (unsigned long long)xstall_done);
   std::printf("probe tap (R923): %llu transfers named, %llu wrong; TGP outputs lost on a full FIFO %u\n",
               (unsigned long long)xfer_ok, (unsigned long long)xfer_bad, (unsigned)top->dbg_tgp_out_refused);
   const bool pass = end_ok && counts_ok && hard == 0 && unimpl_cyc == 0

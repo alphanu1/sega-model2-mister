@@ -56,6 +56,15 @@ module m2_tgp #(
   // deep, and acknowledged; the queue drains through bufw_* behind the TGP's
   // back. See wq_busy below for what waits on the queue.
   parameter int unsigned BUFW_Q = 0,
+  // R931: A FULL RESULT FIFO HOLDS THE TGP (1) INSTEAD OF DROPPING ITS PUSH
+  // (0, the original board's core since R146). MAME halts the TGP on a full
+  // output FIFO (model2.cpp: m_copro_fifo_out's full callback) and Model 1's
+  // m1_tgp holds its push; nothing is ever lost. Virtua Fighter 2's commands
+  // return up to 190 words, read as they come: an i960 held for long enough
+  // (an interrupt, a slow bus, R888's hold of a result read behind the TGP's
+  // posted stores) let the TGP run 129 ahead, the words past 128 were dropped,
+  // and the i960 waited for ever at its result read (#17; R871's 0x7dc4).
+  parameter bit OUT_STALL = 1'b0,
   // AN EMPTY COMMAND FIFO STALLS THE PROCESSOR. OFF IS THE REFERENCE.
   //
   // gen_fifo.cpp's pop() returns T() on an empty FIFO -- but only AFTER firing
@@ -300,7 +309,7 @@ module m2_tgp #(
   logic [7:0]  u_c0, u_c1, u_rep;
 
   logic [3:0] core_state;    // R923: the probe's view of the sequencer
-  mb86233_core #(.SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU)) core (
+  mb86233_core #(.SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU), .OUT_HOLD(OUT_STALL)) core (   // R931
     .clk(clk), .rst_n(rst_n && sw_done && rel_done),
     .prog_addr(prog_addr), .prog_rdata(prog_rdata),
     .io_addr(io_addr), .io_rd(io_rd), .io_wr(io_wr),
@@ -444,8 +453,15 @@ module m2_tgp #(
   // Dropping rather than growing: an M10K queue cannot grow, and `dropped` is
   // already counted. The words lost here are the idle handler's zeros from
   // 00b8, which no consumer wants. The INBOUND direction keeps its interlock.
+  //
+  // R931: THE 2A CORE HOLDS INSTEAD (OUT_STALL), as MAME and Model 1 do --
+  // m1_tgp's `fifo_wr ? (!fifo_out_full || pushed)`. Every 2A game reads its
+  // results within nine words of the TGP in MAME (VF2, Sega Rally, Virtua Cop
+  // 2, Zero Gunner captures), so no 2A program leaves a word unread for the
+  // hold to wait on; VF2 has commands of 83-190 results, longer than the
+  // 128-word FIFO, which a dropped push turned into a lost result.
   assign fifo_ack = fifo_rd ? (EMPTY_FIFO_READS_ZERO || fifo_in_valid || popped)
-                  : fifo_wr ? 1'b1
+                  : fifo_wr ? (!OUT_STALL || !fifo_out_full || pushed)
                   : 1'b0;
 
   // ------------------------------------------------------------- IO space
@@ -889,7 +905,7 @@ module m2_tgp #(
                    sel_math, buf_rd_ok, wr_hi, 3'd0, dbg_unimplemented};
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) dbg_out_refused <= 16'd0;
-    else if (fifo_wr && fifo_out_full && !pushed && !(&dbg_out_refused))
+    else if (!OUT_STALL && fifo_wr && fifo_out_full && !pushed && !(&dbg_out_refused))   // R931: a loss, not a hold
       dbg_out_refused <= dbg_out_refused + 16'd1;
   end
 
