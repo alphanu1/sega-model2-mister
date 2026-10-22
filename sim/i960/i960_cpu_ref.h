@@ -583,6 +583,23 @@ struct Cpu {
             IP = ip_next;
             break;
           }
+          // R930: cvtilr 0x67.5 (i960_top VC or F2A, live while vc_en): MAME's
+          // set_rifl((double)(int32_t)get_1_ri) -- the integer src1 (register
+          // or literal), the exact double to fp0-fp3 or the pair at (dst & 0x1e).
+          if ((ref_vc || ref_f2a) && k == 0x675) {
+            const double r = double(int32_t(s1));
+            if (d.dst_lit) {
+              if (d.srcdst & 0x1c) { trapped = true; trap_op = d.op; break; }   // set_rifl: fatalerror
+              fp[d.srcdst & 3] = r;
+            } else {
+              uint64_t v; std::memcpy(&v, &r, 8);
+              rf.r[d.srcdst & 0x1e]       = uint32_t(v);
+              rf.r[(d.srcdst & 0x1e) + 1] = uint32_t(v >> 32);
+              fp_sdest = int(d.srcdst & 0x1e); fp_rl = true;
+            }
+            IP = ip_next;
+            break;
+          }
           const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690);
           if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
               || ((ref_vc || ref_f2a) && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans) {   // R897: sqrtrl under F2A

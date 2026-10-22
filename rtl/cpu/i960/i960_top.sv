@@ -761,6 +761,7 @@ module i960_top #(
   logic fp_is_trans;                             // R845: sinrl cosrl tanrl atanrl
   logic fp_is_rem;                               // R869: remr
   logic fp_is_mvre;                              // R897: movre (Dead or Alive)
+  logic fp_is_cvtil;                             // R930: cvtilr (Over Rev)
   /* verilator lint_off UNUSEDSIGNAL */
   logic [1:0] tr_entry;                          // read only when TRB
   /* verilator lint_on UNUSEDSIGNAL */
@@ -774,6 +775,7 @@ module i960_top #(
     fp_is_trans = 1'b0; tr_entry = 2'd0;
     fp_is_rem = 1'b0;
     fp_is_mvre = 1'b0;
+    fp_is_cvtil = 1'b0;
     fmisc_op = 3'd7;
     is_rl = 1'b0;
     // R845: the transcendentals, long-real pairs in and out (get_1_rifl /
@@ -807,6 +809,15 @@ module i960_top #(
     end
     if ((vc_on || ta_on) && d_op == 8'h6c && d_op2 == 4'h3) begin
       fp_is_misc = 1'b1; fmisc_op = 3'd4; fp_is_cvtl = 1'b1;
+    end
+    // R930: cvtilr (0x67.5), MAME's set_rifl((double)(int32_t)get_1_ri):
+    // cvtir's conversion (exact) with set_rifl's destination -- fp0-fp3 as
+    // cvtir's, or the pair at (dst & 0x1e). Over Rev runs it in a race's speed
+    // contest (pc 0x56701c, fp0 / fp1 destinations); this trapped, and the
+    // i960 stopped there with the sound still playing (Ben's board, s1325).
+    // Not is_rl: its operand is the integer register src1, not a pair.
+    if ((vc_on || ta_on) && d_op == 8'h67 && d_op2 == 4'h5) begin
+      fp_is_misc = 1'b1; fmisc_op = 3'd2; fp_is_cvtil = 1'b1;
     end
     // R869: the single forms MAME computes on the widened double --
     // set_rif(atan2(t2f, t1f)), set_rif(sin(t1f)), set_rif(fmod(t2f, t1f)):
@@ -1917,7 +1928,7 @@ module i960_top #(
                 if (d_srcdst[1:0] == 2'd3) sat_reg <= {16'd0, mv_w2};
                 else                       fpr[d_srcdst[1:0] + 2'd1][31:0] <= {16'd0, mv_w2};
               end
-            end else if (is_rl) begin
+            end else if (is_rl || fp_is_cvtil) begin   // R930: cvtilr's pair too
               // R836: set_rifl -- the pair at (dst & 0x1e), low word now, the
               // high word in T_PAIR.
               wa <= {d_srcdst[4:1], 1'b0}; wd <= fp_res_wide[31:0]; we <= 1'b1;
@@ -1928,7 +1939,7 @@ module i960_top #(
             end else begin
               wa <= d_srcdst; wd <= fp_res_single; we <= 1'b1;
             end
-            if ((is_rl && !fp_writes_cc && !d_dst_lit) || fp_is_cvtl) ts <= T_PAIR;   // R836: ip moves there
+            if (((is_rl || fp_is_cvtil) && !fp_writes_cc && !d_dst_lit) || fp_is_cvtl) ts <= T_PAIR;   // R836: ip moves there; R930 cvtilr
             else begin
               ip <= ip_next;
               ts <= T_FETCH;

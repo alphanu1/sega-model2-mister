@@ -119,6 +119,7 @@ bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre
 // extremes, angles) -- the VC-only forms (sqrtrl, the rl transcendentals)
 // still trap there
 bool use_fx = false;
+uint64_t fx_cvil = 0;   // R930: cvtilr retired
 uint64_t fx_at = 0, fx_sin = 0, fx_rem = 0, fx_tan = 0, fx_cos = 0;   // R869: atanr, sinr, remr retired; R887 tanr; R903 cosr
 // R897: movre retired, by {source fp, destination fp}; of them through the SAT
 // (fp3's third word) and with the destination over the source's third word;
@@ -695,8 +696,8 @@ int main(int argc, char **argv) {
         // R897: and movre (Dead or Alive), twice, and sqrtrl (Motor Raid)
         // R903: and cosr (Manx TT), in the +nomvre mix too
         static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du, 0x68eu,
-                                          0x68du, 0x6e1u, 0x6e1u, 0x698u };
-        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % (no_mvre ? 9 : 12)];
+                                          0x68du, 0x675u, 0x6e1u, 0x6e1u, 0x698u };   // R930: cvtilr (Over Rev)
+        if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % (no_mvre ? 10 : 13)];
         if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
@@ -1441,6 +1442,7 @@ int main(int argc, char **argv) {
           if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
           else if (k == 0x66d) vcfl++;
+          else if (k == 0x675) fx_cvil++;   // R930
           else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; else if (k == 0x68e) fx_tan++; else if (k == 0x68d) fx_cos++;
           if (use_fx && k == 0x698) fx_sq++;
           if (k == 0x6e1) {                                  // R897
@@ -1616,6 +1618,7 @@ int main(int argc, char **argv) {
                           (unsigned long long)vccp, (unsigned long long)vccv, (unsigned long long)fx_at,
                           (unsigned long long)fx_sin, (unsigned long long)fx_rem, (unsigned long long)fx_tan, (unsigned long long)fx_cos,
                           (unsigned long long)trans_ulp);
+  if (use_fx) std::printf("  R930 forms retired: cvtilr %llu\n", (unsigned long long)fx_cvil);
   if (use_fx) std::printf("  R897 forms retired: movre r->r %llu, r->fp %llu, fp->r %llu, fp->fp %llu (through the SAT %llu, destination over the third word %llu); sqrtrl %llu\n",
                           (unsigned long long)fx_mv[0], (unsigned long long)fx_mv[1], (unsigned long long)fx_mv[2],
                           (unsigned long long)fx_mv[3], (unsigned long long)fx_mvsat, (unsigned long long)fx_mvalias,
