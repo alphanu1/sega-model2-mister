@@ -1457,9 +1457,14 @@ obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv r
 	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv rtl/video/m2_fb_wcomb.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv sim/video/tb_m2_raster3d.cpp
 
 # R900: the luma-row map (the large layout's games' row ranges) against its reference.
-test_m2_luma_map: obj_luma_map/Vm2_luma_map
+test_m2_luma_map: obj_luma_map/Vm2_luma_map obj_luma_map_2c/Vm2_luma_map
 	@echo "== test m2_luma_map (R900: every game ID, every row)"
 	@./obj_luma_map/Vm2_luma_map $(TEST_ARGS)
+	@echo "== test m2_luma_map 2C (R931: LSB 5, Over Rev's table)"
+	@./obj_luma_map_2c/Vm2_luma_map $(TEST_ARGS)
+obj_luma_map_2c/Vm2_luma_map: rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp sim/video/m2_luma_map_ref.h
+	$(VBUILD) --top-module m2_luma_map -GLSB=5 -GOREV=1 --Mdir obj_luma_map_2c -o Vm2_luma_map -CFLAGS "-O2 -DLMAP_2C -I$(abspath sim/video)" \
+	  rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp
 
 obj_luma_map/Vm2_luma_map: rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp sim/video/m2_luma_map_ref.h
 	$(VBUILD) --top-module m2_luma_map --Mdir obj_luma_map -o Vm2_luma_map -CFLAGS "-O2 -I$(abspath sim/video)" \

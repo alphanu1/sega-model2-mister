@@ -131,8 +131,12 @@ module m2_raster3d #(
   // R889: the store's sort key width -- 16, the reference's z value; 20 with
   // m2_geometry's WINKEY ({15 - window, z}: a later window in front).
   parameter int unsigned KW = 16,
+  // R931: the luma slot's bits (TEXLUT): 3 -- eight rows, q_tex[26:24] -- or 5
+  // (the 2C build: 32 rows, q_tex[28:24]); the store keeps the two low ones in
+  // its texture word and the rest (LSB - 2) beside the vertices.
+  parameter int unsigned LSB = 3,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
-  parameter int unsigned QTW = TEXLUT ? 27 : 24
+  parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
   input  logic        clk,
   // R318: m2_texel runs on this, not on `clk`. A texel miss is ~280 ns of which
@@ -375,7 +379,7 @@ module m2_raster3d #(
   logic [QTW-1:0] qo_texw;   // R867: the store's texture word (and its vertex bit)
   logic [(TEXLUT ? 26 : 24)-1:0] qo_texs;
   /* verilator lint_off UNUSEDSIGNAL */   // TEXLUT only
-  logic           qo_vx;
+  logic [LSB-3:0] qo_vx;   // R931: LSB - 2 bits
   /* verilator lint_on UNUSEDSIGNAL */
   /* verilator lint_off UNUSEDSIGNAL */   // [23:17]: the store hands back CW bits
   logic [23:0]    qo_colw;   // R867: the store's colour field
@@ -385,7 +389,7 @@ module m2_raster3d #(
   generate if (TEXLUT) begin : g_qcol
     assign qo_texw = {qo_vx, qo_texs};
     assign qo_tex = qo_texw[23:0];
-    assign qo_col = qo_texw[0] ? {3'd0, qo_texw[26:24], qo_colw[16:0], qo_texw[11]}
+    assign qo_col = qo_texw[0] ? 24'({qo_texw[24 +: LSB], qo_colw[16:0], qo_texw[11]})   // R931: the slot at [17+LSB:18]
                                : {qo_colw[15:11], 3'b000, qo_colw[10:5], 2'b00, qo_colw[4:0], 3'b000};
   end else begin : g_qcol0
     assign qo_texw = qo_texs;
@@ -442,7 +446,7 @@ module m2_raster3d #(
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
-                  .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(TEXLUT ? 26 : 24)) u_store (   // R607, R626, R828c, R867
+                  .RAWCOL(TEXLUT), .VX(TEXLUT), .VXN(LSB - 2), .CW(TEXLUT ? 17 : 16), .TXW(TEXLUT ? 26 : 24)) u_store (   // R607, R626, R828c, R867
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -454,7 +458,7 @@ module m2_raster3d #(
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
     .in_tex(q_tex[(TEXLUT ? 26 : 24)-1:0]), .in_mipz(q_mipz),        // R828c
-    .in_vx(TEXLUT ? q_tex[QTW-1] : 1'b0), .out_vx(qo_vx),            // R867
+    .in_vx(TEXLUT ? q_tex[QTW-1 -: LSB-2] : '0), .out_vx(qo_vx),      // R867; R931
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
@@ -693,7 +697,7 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT)) u_spantex (   // R633, R791, R828, R867
+                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .LSB(LSB)) u_spantex (   // R633, R791, R828, R867
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784

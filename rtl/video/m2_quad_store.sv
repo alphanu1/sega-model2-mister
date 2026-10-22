@@ -95,6 +95,9 @@ module m2_quad_store #(
   // R867: one more bit a quad (in_vx / out_vx), stored with the vertices: 104
   // bits fill 21 M10K in the 2048x5 mode with one to spare. 0: not stored.
   parameter bit          VX     = 1'b0,
+  // R931: and how many: VXN bits (the 2C build's luma slot has two more; 105
+  // + 2 = 107 bits take a 22nd M10K a bank)
+  parameter int unsigned VXN    = 1,
   parameter int unsigned KW     = 16,      // R246: the reference's 16-bit z value, not a float
   // R216: A QUAD UNDER TINY PIXELS IN BOTH DIMENSIONS IS NOT STORED. The
   // title's busiest frames carry ~4,200 quads against 2,048 held and the
@@ -167,7 +170,7 @@ module m2_quad_store #(
   input  logic [15:0]    in_frac,                           // R626: {fy3,fx3..fy0,fx0}
   input  logic [TXW-1:0] in_tex,
   /* verilator lint_off UNUSEDSIGNAL */
-  input  logic        in_vx,             // R867: VX only
+  input  logic [VXN-1:0] in_vx,          // R867: VX only; R931 VXN wide
   /* verilator lint_on UNUSEDSIGNAL */
   input  logic           in_mipz,                           // R828c (MZ)
 
@@ -198,7 +201,7 @@ module m2_quad_store #(
   output logic [OZW-1:0] out_oz0, out_oz1, out_oz2, out_oz3,   // R334
   output logic [15:0]    out_frac,                             // R626
   output logic [TXW-1:0] out_tex,
-  output logic        out_vx,            // R867: VX only, else 0
+  output logic [VXN-1:0] out_vx,         // R867: VX only, else 0; R931 VXN wide
   output logic           out_mipz,                          // R828c (MZ)
 
   output logic [15:0] dbg_count,
@@ -245,7 +248,7 @@ module m2_quad_store #(
   // word fills three 40-bit slices instead of eight mismatched ones. It also
   // turns four reads into one in the replay path.
   localparam int unsigned VW = 4 * 2 * XW;      // four vertices, {y,x} each
-  localparam int unsigned VWX = VW + (VX ? 1 : 0);   // R867: and in_vx
+  localparam int unsigned VWX = VW + (VX ? VXN : 0);   // R867: and in_vx (R931: VXN bits)
   (* ramstyle = "M10K" *) logic [VWX-1:0] vtx_0 [NQ], vtx_1 [NQ];
   // A BAND RANGE, NOT A MASK (R213): {hi, lo} in BW bits each. With 48 bands
   // a mask was 48 bits an entry; a range is 12, and the replay test is two
@@ -769,7 +772,7 @@ module m2_quad_store #(
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
   logic [VWX-1:0] vtx_r;
-  assign out_vx = VX ? vtx_r[VWX-1] : 1'b0;   // R867
+  assign out_vx = VX ? vtx_r[VWX-1 -: VXN] : '0;   // R867; R931
   logic [UW-1:0] uvt_r;
   wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
