@@ -177,19 +177,27 @@ module m2_2a_inputs #(
   // its centre 0x80 the same way (+-0x60 -> +-0x7F). ONE multiply, taken by
   // the three channels in turn (a channel every third clock: the block's
   // values move far slower) -- three in parallel mapped +155 ALUTs.
-  logic [1:0] or_ch;
+  // R934: TWO STAGES. The block's outputs are combinational from the stick
+  // (pedal_an's adders), and stick -> clamp -> multiply -> or_str in one clock
+  // was the worst clk_sys path of every 2C seed (-0.52 to -1.91 ns). The
+  // clamped value is registered with its channel; the multiply is the next
+  // clock. One clock more of latency on a value the game reads per frame.
+  logic [1:0] or_ch, or_cq;
   logic [7:0] or_str, or_acc, or_brk;
+  logic [7:0] or_dq;
+  logic       or_uq;
   wire  [7:0] or_a   = (or_ch == 2'd0) ? cab_steer : (or_ch == 2'd1) ? cab_accel : cab_brake;
   wire        or_up  = (or_a >= 8'h80);
   wire  [7:0] or_d   = (or_ch != 2'd0) ? ((or_a < 8'h20) ? 8'd0 : (or_a > 8'hE0) ? 8'hC0 : or_a - 8'h20)
                      : or_up ? ((or_a > 8'hE0) ? 8'h60 : or_a - 8'h80)
                              : ((or_a < 8'h20) ? 8'h60 : 8'h80 - or_a);
-  wire [13:0] or_p   = {or_d, 6'd0} + {2'd0, or_d, 4'd0} + {4'd0, or_d, 2'd0} + {6'd0, or_d};
+  wire [13:0] or_p   = {or_dq, 6'd0} + {2'd0, or_dq, 4'd0} + {4'd0, or_dq, 2'd0} + {6'd0, or_dq};
   wire  [7:0] or_m   = or_p[13:6];                    // d * 85 / 64
   always_ff @(posedge clk) begin
     or_ch <= (or_ch == 2'd2) ? 2'd0 : or_ch + 2'd1;
-    case (or_ch)
-      2'd0:    or_str <= or_up ? 8'h80 + or_m : 8'h80 - or_m;
+    or_cq <= or_ch; or_dq <= or_d; or_uq <= or_up;
+    case (or_cq)
+      2'd0:    or_str <= or_uq ? 8'h80 + or_m : 8'h80 - or_m;
       2'd1:    or_acc <= ~or_m;                       // PORT_REVERSE
       default: or_brk <= ~or_m;
     endcase
