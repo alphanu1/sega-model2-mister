@@ -43804,3 +43804,13 @@ so not a texture / translucency question first but the pieces' geometry
 leaves CLRF, FLOG and PDR / DDR untested -- or the i960's side). It is one model or
 texture, not shadows in general. Not looked at; compare with MAME's hotd frames
 (shadow polygons' texture / translucency) before guessing.
+*BOARD (2026-10-22, Ben, s1350):* HOUSE OF THE DEAD LOCKED UP -- picture
+frozen with the 2D and 3D on screen, music still playing (VF2's symptom
+before R931). Not diagnosed. Candidates, none tested: (1) s1350 misses
+clk_sys by 1.176 ns -- a test build, and a timing failure can hang at
+random (branch m2c-timing, R934, is closing it); (2) a copro deadlock: the
+TGPx4 stalls its decode on fo_full (tgpx4_core dec_stall) rather than
+dropping a word, so R931's lost-result path is not this one as such, but
+model2c does not have R931 (909251d) or the R923 TGP probe (e745eb9) yet,
+and the probe reads the MB86233 only; (3) anything else. First step: a
+clean-timing 2C seed; if it hangs again, a TGPx4 version of the probe.
