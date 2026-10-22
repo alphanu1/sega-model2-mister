@@ -44088,3 +44088,16 @@ are the fill's walk_end -> s1_cr / s1_cl / s1_col (-0.126 .. -0.001) and
 oz_emax (-0.005) -- shared with 2A, placement. Closest 2C seed yet;
 assembled as Model2C_20261022_s1356.rbf (md5 aee4446c...). Round 3
 (s1358-s1360) fitting.
+*BOARD (2026-10-22, Ben, s1356 -- clk_sys -0.126, so not timing):* HOUSE
+OF THE DEAD LOCKS UP IN EXACTLY THE SAME PLACE as on s1350: the outdoor
+section after the courtyard, a creature leaping at the player in front of
+the stone wall / gate, iron railings to the left (Ben's grab, session
+image 18). Picture frozen, music on. DETERMINISTIC, so a geometry or CPU
+fault, not timing -- and in the same outdoor section as the mansion
+shadow's sliding pieces (above), which suggests one TGPx4 fault behind
+both. The R935 agent (branch hotd-shadow) was asked to run its MAME
+capture on to this point. Board probe: branch-free build tree
+sm2-builds/m2c-probe (model2c 9e9a453 + M2_2C, M2_PROBE, M2_PROBE_TGP,
+M2_NO_2A_RALLY, M2_NO_2A_MANX_MOTION) -- the R923 probe already carries
+the TGPx4's pc (dbg_tgp_pc) and its unimplemented-op flag (dbg_bad) and
+both FIFOs and the transfer ring; seeds s1361-s1363 queued.
