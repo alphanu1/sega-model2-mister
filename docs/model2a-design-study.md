@@ -44105,3 +44105,6 @@ both FIFOs and the transfer ring; seeds s1361-s1363 queued.
 the lockup still happens at the same place. So it is not the texture path
 (span_tex, texel fetch, luma, mip): what is left is the i960, the TGPx4,
 the copro FIFOs / buffer RAM and the geometry walk.
+*CORRECTION (Ben, 2026-10-22):* HOUSE OF THE DEAD'S 15 kHz WORKS -- the
+black screen with a row of dots above was a user mistake, not the core.
+The "15 kHz MRA shows no picture" entry is withdrawn; nothing to fix.
