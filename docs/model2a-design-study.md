@@ -43330,3 +43330,11 @@ data. A req without an ack: the memory path. No copro_stall at the freeze:
 not the TGP at all -- the C records' IP says where the i960 is. Not settled
 here: whether #17's "crash" is the TGP at all (no report says freeze or
 reset), and the users' SDRAM modules.
+
+**R931 (board) -- VF2's FREEZE IS GONE WITH THE TGP HOLDING ON A FULL OUTPUT
+FIFO.** s1340 (vf2-skip 909251d: the R931 fix on model2a 35210cb), Ben,
+2026-10-22: Pai's backflip skipped with Start repeatedly (the board capture's
+trigger, ~1 in 10 before) -- "I have not been able to get a crash"; every 2A
+game runs. GitHub #17's cause, as captured on the board (s1336): a 190-word
+TGP command, 129-word output FIFO, 18 words dropped, the i960 waiting at
+0x7dcc for the rest.
