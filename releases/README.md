@@ -210,7 +210,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `ae5c3e3de1419bf2a2b0073812fec8cb`.
+**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `eaa65eae56f7222fa6a1925ebecf99d0`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
