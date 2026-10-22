@@ -136,6 +136,19 @@ static long g_poly_hi = 0, g_tex_hi = 0;
 static long g_poly_16m = 0, g_tex_a21 = 0;   // R897: polygon ROM >= 16 MB, texture ROM word a[21] set
 
 static void tick() {
+  // R935: M2GD_QSTALL=<max> -- the quad store refusing (q_ready low) for
+  // stretches of 1..max cycles at random, as the board's store does while the
+  // previous list is still being drawn. Unset: always ready.
+  {
+    static const long QS = std::getenv("M2GD_QSTALL") ? std::atol(std::getenv("M2GD_QSTALL")) : 0;
+    static long qs_left = 0; static uint32_t qs_rng = 12345u;
+    if (QS > 0) {
+      qs_rng = qs_rng * 1103515245u + 12345u;
+      if (qs_left > 0) --qs_left;
+      else if (((qs_rng >> 16) & 63) == 0) qs_left = 1 + long((qs_rng >> 8) % uint32_t(QS));
+      d->q_ready = qs_left > 0 ? 0 : 1;
+    }
+  }
 #ifdef GD_RA
   // R709: the RTL read-ahead's port, answered as m2_sdram_x2 does: a request
   // taken on its rising edge, the pair {idx, idx+1} (wrapping inside its
@@ -223,7 +236,10 @@ static void tick() {
     if (std::getenv("M2GD_RAFLUSH")) { ++g_wrflush; for (auto &S : g_ra) { S.act = false; S.q.clear(); S.last = ~0u; } }
   }
   else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & (MEMW - 1); wr_d = d->sd_wr_din; wr_pend = true; }
-  d->clk = 0; d->eval(); d->clk = 1; d->eval();
+  d->clk = 0; d->eval();
+  // R935: a quad is taken at the edge where q_valid and q_ready both stand,
+  // so it is logged before that edge (with q_ready always 1 this is the list
+  // the old after-edge log wrote)
   if (d->q_valid && d->q_ready) {
     std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x mz=%u\n",
       nq++, (int16_t)d->q_x0, (int16_t)d->q_y0, (int16_t)d->q_x1, (int16_t)d->q_y1,
@@ -233,6 +249,7 @@ static void tick() {
       (unsigned)d->q_tex, (unsigned)d->q_col, (unsigned)d->q_z, (unsigned)d->q_lum,
       (unsigned)d->q_oz0, (unsigned)d->q_oz1, (unsigned)d->q_oz2, (unsigned)d->q_oz3, (unsigned)d->q_mipz);   // R828c
   }
+  d->clk = 1; d->eval();
 }
 
 int main(int argc, char **argv) {
