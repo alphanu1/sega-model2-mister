@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-22 (evening): board on s1350 (648ecb9) -- Over Rev's road good; HOTD's rectangle shadows. NOT PUSHED
+
+Ben on s1350 (test build, clk_sys -1.176): Over Rev's road looks good (R932
+confirmed). Over Rev race: 4-5 slowdowns, two lasting a few seconds -- OK
+for a 2C beta, noted as current performance, investigate later. HOTD: full
+speed, plays well; some shadows are plain rectangles (open, compare MAME).
+In flight: branch stcc (Sega Touring Car Championship, R933) and branch
+m2c-timing (2C clk_sys closure, R934). Ben: three 2C games with clean timing
+= a 2C beta (HOTD, Over Rev, STCC). model2c stays local until Ben says.
+
 ## 2026-10-22 (later): Over Rev's road texture -- branch model2c, R932. NOT PUSHED
 
 BUILD TO FIT: model2c HEAD (M2_2C=1, M2_NO_2A_MANX_MOTION=1). Board s1337

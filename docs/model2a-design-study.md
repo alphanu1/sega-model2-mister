@@ -43787,3 +43787,13 @@ off MAME before and after -- not the luma map (row 7 is a representative);
 not chased. The fit is MAME's courses and attract with the default car;
 other cars' rows were only in R928's car-select walks. House of the Dead
 keeps its eight ranges (it could take a table the same way).
+*BOARD (2026-10-22, Ben, s1350 = m2c-road 648ecb9, clk_sys -1.176 so a test
+build only):* Over Rev's road "looks good" -- the R932 fix confirmed on the
+board. Over Rev's race showed 4-5 slowdowns, two of them lasting a few
+seconds: Ben accepts it as the 2C beta's current performance, to be
+investigated later (not measured with tools/m2-fps.py yet; R930's frame
+overrun was cured by R927's i960 speed-up, so this is a different load).
+House of the Dead on the same build: full speed, plays well, but some
+shadows draw as plain rectangles, out of place (Ben's grab: plain dark
+quads on the ground). Not looked at; compare with MAME's hotd frames
+(shadow polygons' texture / translucency) before guessing.
