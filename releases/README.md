@@ -48,6 +48,12 @@ below). Please report anything you find, and say which game and where.
   into the air (GitHub #19); it also caused both games' slowdowns. The CPU
   now keeps eight sets of registers on chip and has a small data cache, so
   races hold the full 57.5 frames a second and the opponents stay solid.
+- **Virtua Fighter 2 no longer freezes.** The freeze (3D stopped, music
+  still playing; GitHub #17) came from the geometry processor's result
+  queue: some of VF2's commands return more words than the queue holds, and
+  the extra words were dropped, leaving the main CPU waiting for them
+  forever. Skipping a win pose with Start made it most likely. The geometry
+  processor now waits for room instead of dropping a word.
 
 ### Earlier in `Model2A_20261021d`
 
@@ -103,7 +109,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261022.rbf` has the md5 `82a33299c52e4083b1d9574b69a4beb7`. As with
+`Model2A_20261022.rbf` has the md5 `c778c70ad8ca799ba3d1c3845567f9a4`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -130,9 +136,8 @@ ROM sets: MAME 0.289.
   extra sounds are missing.
 - **Sega Rally doesn't save its settings** (NVRAM). The core saves the
   backup RAM but not the game's EEPROM, where Rally keeps its settings. Fix
-  planned (GitHub #15).
-- **Virtua Fighter 2 can crash** at random, in attract or in a fight.
-  Being looked at; if it happens to you, please say where.
+  planned (GitHub #15). Manx TT's service menu settings aren't kept either
+  (GitHub #21).
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall. That is how MAME 0.289 mixes these games, and apart from
   the effects processor fix above the core matches it sample for sample. (MAME can sound louder because it also runs its own audio
@@ -256,7 +261,8 @@ anything you find.
   see where it's aimed (GitHub #13). The core didn't show it before. A new
   `Gun flash` setting: `Arcade` (default, the game's flash) or `Off` (no
   flash at all, for Sinden, mouse or stick players). Not yet tested with a
-  GunCon 2: reports very welcome.
+  GunCon 2: reports very welcome. (Virtua Cop 2, on the Model 2A core,
+  already shows its flash: it needs no setting.)
 - **Link play for Daytona USA (experimental).** Race other cabinets over your network:
   MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
   link board is switched on in the OSD (`Link board`, Daytona only, Off by
