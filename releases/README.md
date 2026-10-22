@@ -36,10 +36,20 @@ Each of these also has a `[15kHz CRT]` MRA.
 ## Model 2A core — `Model2A.rbf`
 
 All eleven games below boot and play. A few known bugs remain (listed
-below), and some games still slow down in places, mainly Sega Rally and
-Manx TT. Please report anything you find, and say which game and where.
+below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261021d`)
+### New in this build (`Model2A_20261022`)
+
+- **Sega Rally and Manx TT run at full speed, and Rally's opponents behave.**
+  The main CPU was too slow in the races: every function call saved and
+  restored its registers through memory, and Sega Rally reacts to running
+  short of time by switching its nearest opponents to a simpler model. That
+  made them blink, let you drive through them, and now and then launched one
+  into the air (GitHub #19); it also caused both games' slowdowns. The CPU
+  now keeps eight sets of registers on chip and has a small data cache, so
+  races hold the full 57.5 frames a second and the opponents stay solid.
+
+### Earlier in `Model2A_20261021d`
 
 - **Virtua Cop 2's stage select shows SHOOT TO SELECT properly.** The city
   map behind it is a 2D layer set to go over the 3D, and it was being drawn
@@ -85,7 +95,7 @@ Manx TT. Please report anything you find, and say which game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261021d.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261022.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -93,7 +103,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261021d.rbf` has the md5 `293df5f3b618b93c49597ff306dd0ed3`. As with
+`Model2A_20261022.rbf` has the md5 `82a33299c52e4083b1d9574b69a4beb7`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -103,11 +113,11 @@ ROM sets: MAME 0.289.
 | Game | MRA | ROM zips | MAME set | State |
 |---|---|---|---|---|
 | Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays at full speed, with sound |
-| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays, with wheel, pedals and gears. **Slows down** in busy scenes |
+| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays at full speed, with wheel, pedals and gears |
 | Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick; the ammo display counts down and reloads |
 | Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
 | Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
-| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check. Occasional slowdowns |
+| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check |
 | Hanguk Pro Yagu 98 | `Hanguk Pro Yagu 98.mra` | `hpyagu98.zip` | `hpyagu98` | Plays. **Needs the 128 MB SDRAM module.** The MRA loads the factory settings MAME ships in the zip; some surfaces' shading may differ slightly from MAME |
 | Sky Target | `Sky Target.mra` | `skytargt.zip` | `skytargt` | Plays. **Needs the 128 MB SDRAM module.** |
 | Dynamite Cop (Export, Model 2A) | `Dynamite Cop (Export, Model 2A).mra` | `dynamcop.zip` | `dynamcop` | Plays. **Needs the 128 MB SDRAM module.** Its 315-5881 protection checks are patched out by the MRA |
@@ -116,11 +126,8 @@ ROM sets: MAME 0.289.
 
 ### Known bugs
 
-- **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
-  drops where the geometry processor has the most work. Being looked at.
-- **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
-  cabinet's extra sound board isn't emulated, so a few extra sounds are
-  missing.
+- **Manx TT**'s deluxe cabinet's extra sound board isn't emulated, so a few
+  extra sounds are missing.
 - **Sega Rally doesn't save its settings** (NVRAM). The core saves the
   backup RAM but not the game's EEPROM, where Rally keeps its settings. Fix
   planned (GitHub #15).

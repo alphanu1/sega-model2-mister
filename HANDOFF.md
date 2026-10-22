@@ -1,5 +1,14 @@
 # Handoff
 
+## 2026-10-22: main -- Model2A_20261022 prepared in releases/ LOCALLY (Ben: no push yet)
+
+Model2A_20261022.rbf = s1328 (model2a bd6fa2e, R927: 8-frame register ring +
+1 KB i960 data cache), md5 82a33299... Board: Sega Rally and Manx TT races at
+99-100% of frames on time, Rally's opponents solid (#19), every 2A game good
+(Ben). README: 2A "New in this build", Rally/Manx slowdowns and #19 off the
+known bugs. With Model2_20261022 (VCop/Desert Tank colours) this is the next
+push, when Ben says. #10 and #19 to be closed then.
+
 ## 2026-10-22: main -- release Model2_20261022 prepared LOCALLY (Ben: no push yet)
 
 Model2_20261022.rbf = s1316 (vcop-luma 4c25718 = main d7182e9 + R925; clk_sys
