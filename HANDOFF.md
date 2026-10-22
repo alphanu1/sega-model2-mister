@@ -1,5 +1,54 @@
 # Handoff
 
+## 2026-10-22: branch gun-flash -- Virtua Cop's gun flash (GitHub #13), R929. NOT FITTED, NOT ON A BOARD, NOT PUSHED
+
+Off local main 158048e, worktree sm2-builds/gun-flash. Study R929 has it all.
+FOUND (MAME 0.289, sim/io/mame_m2_gunflash.lua):
+  * The flash is the GAME's, not the I/O board's: on a shot its vblank
+    handler (0x58400) writes tilemaps 0/1's window table (tile RAM words
+    0x6000-0x65FF) all ones, so tilemap 1 -- held full of a category-1 white
+    tile -- covers the whole screen, over the 3D, for one frame; then four
+    vblanks of zeros. MAME draws it: one 255/255/255 frame per shot. No
+    register, palette or I/O-board output moves. Virtua Cop 2 does the same.
+  * The game takes the aim during that white frame / at the vblank ending it
+    (gun moved by its start: used; a frame later: not) -- 35-52 ms after the
+    pull, the length of retrorepair's "dark" window.
+  * Our renderer draws the flash: tb_m2_gunflash with the module built OUT
+    (the core as it was) whites exactly the frame after the request, over
+    the 3D. "Black" NOT REPRODUCED; INFERRED to be the GunCon's reading of a
+    single white field (their own notes: it needs several fields of light
+    after darkness). A 240 fps phone video of the CRT during a shot settles
+    it.
+  * R844's unexplained 0x5861c zero writes = this flash's countdown running
+    from unwritten work RAM in the harness. The VC boot harness still never
+    shows the WARNING screen (black at 8.3 s), so no whole-core shot.
+BUILT (rtl/video/m2_gun_flash.sv; OSD "Gun flash", O[66:65], Virtua Cop only;
+M2_NO_VCOP_FLASH=1 builds it out):
+  * Arcade (default): the frame the game asks for is white at the output,
+    whole (never torn), independent of the tile path.
+  * CRT gun: white from the frame after ANY pull, the pull held back from the
+    game 3 frames, white through the game's own flash frame (~6 frames); for
+    the GunCon 2. +52 ms trigger latency in this mode only. Untested with a gun.
+  * Off: no white; the game's own flash is taken out too (the renderer reads
+    the table as zero while it stands). For Sinden / mouse.
+EVIDENCE: GF_DUMP=<dump> make test_m2_gunflash, 23 checks PASS (dump: the
+lua's GF_DUMP=3337 of the scripted game; kept out of the tree); 4 planted
+faults caught. lint_top clean (default, -DM2_NO_VCOP_FLASH, -DM2_NO_VCOP_GUN),
+-Wall list unchanged but the CONF_STR/status lines, lint_idx unchanged,
+quartus_map --analyze_file 0 errors. Area: quartus_map 40,351 in / 40,399 out
+(noise; the module 45 ALUT / 45 regs; no M10K, no DSP).
+Also: tb_m2_boot gained M2_INSCHED (cabinet inputs by vblank), a MASKW log
+and M2_FRAME_FLASH; the harness's IN1 is a port now (0x8F unless scheduled).
+WRONG TURNS: (1) took the issue's "I/O board flash" and "black frame" as
+given and hunted the I/O board and a black 3D first -- both measured absent;
+(2) ran the whole-core VC harness for 16 min before checking R844 says it
+never reaches the WARNING screen -- it still does not; (3) MAME's Lua has no
+screen vpos(); the beam position came from the IRQ timing instead.
+NEXT: Ben fits it; on the board with Gun flash Arcade one white frame per shot
+(and Off none), Daytona / Desert Tank unchanged; a CRT + GunCon 2 tries Arcade
+then CRT gun (see R929's board list). Port to model2a for Virtua Cop 2 after.
+releases/README.md's OSD table needs the "Gun flash" line at the next release.
+
 ## 2026-10-22: main -- release Model2_20261022 prepared LOCALLY (Ben: no push yet)
 
 Model2_20261022.rbf = s1316 (vcop-luma 4c25718 = main d7182e9 + R925; clk_sys
