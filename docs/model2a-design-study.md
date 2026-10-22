@@ -44422,3 +44422,12 @@ vblank as Over Rev's did (R930) -- not measured; the pedals' calibration is
 the game's default (MAME's indy500 ports), not checked on a wheel; lamps
 (PF) not driven; no link. The other sets (stccb, stcca, stcco) need only
 MRAs (same ROM layout) but were not run.
+*FIT (2026-10-23):* d723284 (R935 logrl): s1361 clk_sys -0.494 / clk_mem
+-0.008; s1362 -0.117 / +0.041, i960 +0.356, hold +0.255 -- assembled
+(Model2C_20261023_s1362_logrl.rbf, md5 5c471461...); s1363 STA crash.
+9660969 (+ R933 STCC): s1364 fitter crash (DYN), s1365 clk_sys -1.227 /
+clk_mem +0.605 / i960 +1.110 -- assembled as the three-game test build
+(md5 32634ef0...), s1366 -2.816. s1365 / s1366's failing paths are all
+shared logic (geometry project / clip / xform, the raster's fb_clear_req
+fan-out, tile RAM from the bridge) -- none in R933's new logic (the FIFO
+clear, p_stcc, luma 4'hD): placement spread. Round s1367-s1369 fitting.
