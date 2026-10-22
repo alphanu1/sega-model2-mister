@@ -56,6 +56,15 @@ module m2_tgp #(
   // deep, and acknowledged; the queue drains through bufw_* behind the TGP's
   // back. See wq_busy below for what waits on the queue.
   parameter int unsigned BUFW_Q = 0,
+  // R931: A FULL RESULT FIFO HOLDS THE TGP (1) INSTEAD OF DROPPING ITS PUSH
+  // (0, the original board's core since R146). MAME halts the TGP on a full
+  // output FIFO (model2.cpp: m_copro_fifo_out's full callback) and Model 1's
+  // m1_tgp holds its push; nothing is ever lost. Virtua Fighter 2's commands
+  // return up to 190 words, read as they come: an i960 held for long enough
+  // (an interrupt, a slow bus, R888's hold of a result read behind the TGP's
+  // posted stores) let the TGP run 129 ahead, the words past 128 were dropped,
+  // and the i960 waited for ever at its result read (#17; R871's 0x7dc4).
+  parameter bit OUT_STALL = 1'b0,
   // AN EMPTY COMMAND FIFO STALLS THE PROCESSOR. OFF IS THE REFERENCE.
   //
   // gen_fifo.cpp's pop() returns T() on an empty FIFO -- but only AFTER firing
@@ -182,7 +191,22 @@ module m2_tgp #(
   output logic [31:0] dbg_bank,
   // R888: a posted buffer-RAM write has not landed yet (BUFW_Q != 0). The
   // i960's read of an output word waits on it (m2_copro).
-  output logic        wq_busy
+  output logic        wq_busy,
+  // R923: EVERY HANDSHAKE THE TGP CAN WAIT ON, in one word, for the board
+  // probe (M2_PROBE_TGP). A TGP that never answers is parked on exactly one
+  // of these; the state and the req / ack pairs say which. Plain wires: a
+  // design that leaves the port open loses them in synthesis.
+  //   31 core out of reset   30:27 mb86233_core state   26 io_rd 25 io_wr
+  //   24 io_ack  23 tbl_req 22 tbl_ack 21 dat_req 20 dat_ack
+  //   19 bufw_req 18 bufw_ack 17 wq_busy 16 a posted write acknowledged
+  //   15 fifo_rd 14 fifo_wr 13 fifo_ack 12 popped 11 pushed
+  //   10 input FIFO has a word  9 output FIFO full  8 sel_buf 7 sel_rom
+  //   6 sel_math 5 buf_rd_ok 4 wr_hi 3:1 0  0 unimplemented op
+  output logic [31:0] dbg_hs,
+  // R923: TGP output words dropped because the output FIFO was full (the
+  // push is acknowledged and lost -- see fifo_ack). Cycles, saturating; it
+  // must read 0. u_fout's own `dropped` cannot see these (the push is gated).
+  output logic [15:0] dbg_out_refused
 );
 
   // ------------------------------------------------------------ microcode ROM
@@ -284,7 +308,8 @@ module m2_tgp #(
   logic        u_mwe, u_mre;
   logic [7:0]  u_c0, u_c1, u_rep;
 
-  mb86233_core #(.SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU)) core (
+  logic [3:0] core_state;    // R923: the probe's view of the sequencer
+  mb86233_core #(.SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU), .OUT_HOLD(OUT_STALL)) core (   // R931
     .clk(clk), .rst_n(rst_n && sw_done && rel_done),
     .prog_addr(prog_addr), .prog_rdata(prog_rdata),
     .io_addr(io_addr), .io_rd(io_rd), .io_wr(io_wr),
@@ -302,7 +327,8 @@ module m2_tgp #(
     .dbg_m(u_m), .dbg_mem_addr(u_maddr), .dbg_mem_wdata(u_mwdata),
     .dbg_mem_we(u_mwe), .dbg_mem_re(u_mre), .dbg_mem_rdata(u_mrdata),
     .dbg_c0(u_c0), .dbg_c1(u_c1), .dbg_rep(u_rep),
-    .bank_reg(bank_reg)
+    .bank_reg(bank_reg),
+    .dbg_state(core_state)   // R923
   );
 
   // ------------------------------------------------------- data-space FIFOs
@@ -427,8 +453,15 @@ module m2_tgp #(
   // Dropping rather than growing: an M10K queue cannot grow, and `dropped` is
   // already counted. The words lost here are the idle handler's zeros from
   // 00b8, which no consumer wants. The INBOUND direction keeps its interlock.
+  //
+  // R931: THE 2A CORE HOLDS INSTEAD (OUT_STALL), as MAME and Model 1 do --
+  // m1_tgp's `fifo_wr ? (!fifo_out_full || pushed)`. Every 2A game reads its
+  // results within nine words of the TGP in MAME (VF2, Sega Rally, Virtua Cop
+  // 2, Zero Gunner captures), so no 2A program leaves a word unread for the
+  // hold to wait on; VF2 has commands of 83-190 results, longer than the
+  // 128-word FIFO, which a dropped push turned into a lost result.
   assign fifo_ack = fifo_rd ? (EMPTY_FIFO_READS_ZERO || fifo_in_valid || popped)
-                  : fifo_wr ? 1'b1
+                  : fifo_wr ? (!OUT_STALL || !fifo_out_full || pushed)
                   : 1'b0;
 
   // ------------------------------------------------------------- IO space
@@ -862,6 +895,19 @@ module m2_tgp #(
   end
   assign dbg_fifo_rd = fifo_rd;
   assign dbg_fifo_wr = fifo_wr;
+
+  // R923: the probe's handshake word and the output-FIFO drop count
+  assign dbg_hs = {sw_done && rel_done, core_state, io_rd, io_wr, io_ack,
+                   tbl_req, tbl_ack, dat_req, dat_ack,
+                   bufw_req, bufw_ack, wq_busy, bw_ack,
+                   fifo_rd, fifo_wr, fifo_ack, popped, pushed,
+                   fifo_in_valid, fifo_out_full, sel_buf, sel_rom,
+                   sel_math, buf_rd_ok, wr_hi, 3'd0, dbg_unimplemented};
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) dbg_out_refused <= 16'd0;
+    else if (!OUT_STALL && fifo_wr && fifo_out_full && !pushed && !(&dbg_out_refused))   // R931: a loss, not a hold
+      dbg_out_refused <= dbg_out_refused + 16'd1;
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

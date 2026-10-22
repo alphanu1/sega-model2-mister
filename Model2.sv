@@ -3501,7 +3501,11 @@ wire        snd_scsp_we;   // R862: a 68000 write to the SCSP this clock (2A boa
 wire [15:0] snd_selftest, snd_w400, snd_w418;
 wire [159:0] snd_sums;   // R882: the sound ROMs' sums in SDRAM (probe builds)
 `ifdef M2_PROBE
+`ifndef M2_PROBE_TGP   // R923: the TGP probe streams no sound records
 localparam bit SND_CHKSUM = 1'b1;
+`else
+localparam bit SND_CHKSUM = 1'b0;
+`endif
 `else
 localparam bit SND_CHKSUM = 1'b0;
 `endif
@@ -4365,6 +4369,15 @@ wire [31:0] copro_fctl_reads;
 // the 128-deep queue is losing commands the game believes it sent.
 wire [31:0] copro_out_data, copro_out_pushed, copro_in_dropped, copro_out_dropped;
 wire        copro_ram_req;
+// R923: the TGP hang probe (M2_PROBE_TGP): both FIFOs, the TGP's handshakes,
+// and every word the i960 moves across the copro's FIFO ports
+wire [31:0] copro_in_popped, copro_pop_data, copro_push_data;
+wire [31:0] copro_fifo, tgp_hs, copro_xfer_data;
+wire [15:0] tgp_out_refused;
+wire        copro_xfer;
+wire  [1:0] copro_xfer_kind;
+wire        _unused_r923 = &{1'b0, copro_in_popped, copro_fifo, tgp_hs, tgp_out_refused,
+                             copro_xfer, copro_xfer_kind, copro_xfer_data, copro_pop_data, copro_push_data};
 wire [15:0] tgp_retires, tgp_pc;
 wire  [7:0] r3d_dbg_pipe;   // R719: the renderer's producer and consumer states, for telemetry
 // WHY THE TGP STOPPED. It halts at pc 0x0481 after exactly 21,325 retires,
@@ -4584,7 +4597,7 @@ end
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
 m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
-           .BUFW_Q(M2A ? 32 : 0), .TGPX4(C2), .X4_PLINES(C2_PLINES)) u_copro (   // R852, R888; R924
+           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES)) u_copro (   // R852, R888; R924, R931
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
@@ -4615,7 +4628,7 @@ m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
 	.dbg_ctl(copro_dbg_ctl), .dbg_prog_words(copro_prog_words),
 	.dbg_in_pushed(copro_in_pushed), .dbg_out_popped(copro_out_popped),
 	.dbg_fctl_reads(copro_fctl_reads),
-	.dbg_in_popped(), .dbg_pop_data(), .dbg_push_data(),
+	.dbg_in_popped(copro_in_popped), .dbg_pop_data(copro_pop_data), .dbg_push_data(copro_push_data),   // R923
 	.dbg_out_data(copro_out_data), .dbg_out_pushed(copro_out_pushed),
 	.dbg_in_dropped(copro_in_dropped), .dbg_out_dropped(copro_out_dropped),
 	.dbg_ram_req(copro_ram_req),
@@ -4625,7 +4638,10 @@ m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
 	.dbg_tgp_io_addr(tgp_io_addr), .dbg_tgp_io_rd(tgp_io_rd),
 	.dbg_tgp_io_wr(tgp_io_wr), .dbg_tgp_io_ack(tgp_io_ack), .dbg_ff_math(tgp_ff_math), .dbg_ff_rom(tgp_ff_rom), .dbg_ff_buf(tgp_ff_buf), .dbg_rd_total(tgp_rd_total),
 	.dbg_tgp_fifo_rd(tgp_fifo_rd), .dbg_tgp_fifo_wr(tgp_fifo_wr), .dbg_tgp_bank(tgp_bank),
-	.dbg_tgp_unimpl(tgp_unimpl)
+	.dbg_tgp_unimpl(tgp_unimpl),
+	// R923: the TGP hang probe's view (M2_PROBE_TGP); open, and pruned, otherwise
+	.dbg_fifo(copro_fifo), .dbg_tgp_hs(tgp_hs), .dbg_tgp_out_refused(tgp_out_refused),
+	.dbg_xfer(copro_xfer), .dbg_xfer_kind(copro_xfer_kind), .dbg_xfer_data(copro_xfer_data)
 );
 
 // ------------------------------------------------------------- I/O BOARD
@@ -5829,6 +5845,29 @@ m2_dbg_stream #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(
 );
 end else begin : g_nodbg
 `ifdef M2_PROBE
+`ifdef M2_PROBE_TGP
+	// R923: THE TGP HANG PROBE (GitHub #17, VF2 "crashes at random"; R871's
+	// s1203 lockup). VERILOG_MACRO "M2_PROBE=1" and "M2_PROBE_TGP=1": the
+	// sound and memory-test records give their place to the coprocessor's
+	// state, both FIFOs, every handshake the TGP can wait on and a ring of
+	// the last 256 i960 transfers, frozen at the hang. Records and their
+	// layout: rtl/dbg/m2_tgp_probe.sv. Decoder: tools/decode_tgp.py.
+	assign mt_sel = 5'd0;
+	m2_tgp_probe #(.DIVISOR((SYS_MHZ * 1_000_000 + 57_600) / 115_200), .BUDGET_CYC(200_000)) u_dbg_lite (
+		.clk(clk_sys), .rst_n(mem_rst_n), .prof_tick(prof_tick), .vbl_edge(vbl_d && !vbl_dd),
+		.cpu_ip(cpu_dbg_ip), .cpu_trap(cpu_trap), .cpu_halted(cpu_halted),
+		.cpu_io_sel(cpu_io_sel), .cpu_io_we(cpu_io_we), .cpu_io_addr(cpu_io_addr[23:0]),
+		.copro_stall(copro_stall), .tgp_unimpl(tgp_unimpl), .tgp_pc(tgp_pc),
+		.copro_fifo(copro_fifo), .tgp_hs(tgp_hs),
+		.in_pushed(copro_in_pushed), .in_popped(copro_in_popped[15:0]),
+		.out_pushed(copro_out_pushed[15:0]), .out_popped(copro_out_popped),
+		.push_data(copro_push_data), .pop_data(copro_pop_data), .out_data(copro_out_data),
+		.out_refused(tgp_out_refused), .in_dropped(copro_in_dropped[15:0]),
+		.tgp_io_addr(tgp_io_addr), .tgp_retires(tgp_retires), .tgp_op(tgp_op), .tgp_bank(tgp_bank[23:16]),
+		.xfer(copro_xfer), .xfer_kind(copro_xfer_kind), .xfer_data(copro_xfer_data),
+		.tx(UART_TXD), .dbg_dropped(uart_dropped), .frozen()
+	);
+`else
 	// R868: THE PROBE -- the smallest stream that answers "where does the i960
 	// stop" and "does the sound board start", for a build with no room for
 	// M2_WHY (s1194-s1199: 4,192-4,211 LABs of 4,191). VERILOG_MACRO
@@ -5976,6 +6015,7 @@ end else begin : g_nodbg
 		.enable(1'b1),
 		.tx(UART_TXD), .dbg_dropped(uart_dropped)
 	);
+`endif   // M2_PROBE_TGP
 `elsif M2_DEBUG_LITE
 	assign mt_sel = 5'd0;   // R891
 	// R637: TELEMETRY LITE -- the one question "why does the game run slow"

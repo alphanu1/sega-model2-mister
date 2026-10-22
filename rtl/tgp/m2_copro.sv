@@ -68,7 +68,9 @@ module m2_copro #(
   // chip, 1024 / 2048 = a line cache over the SDRAM copy (dat_is_prog /
   // bufw_is_prog name that region to the top level). 0 = the TGP, unchanged.
   parameter bit          TGPX4     = 1'b0,
-  parameter int unsigned X4_PLINES = 1024
+  parameter int unsigned X4_PLINES = 1024,
+  // R931: a full output FIFO holds the TGP (m2_tgp OUT_STALL); 0 drops (R146)
+  parameter bit OUT_STALL = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -186,7 +188,21 @@ module m2_copro #(
   output logic [15:0] dbg_ff_math, dbg_ff_rom, dbg_ff_buf, dbg_rd_total,
   output logic        dbg_tgp_fifo_rd,
   output logic        dbg_tgp_fifo_wr,
-  output logic [31:0] dbg_tgp_bank
+  output logic [31:0] dbg_tgp_bank,
+  // R923: FOR THE BOARD PROBE (M2_PROBE_TGP) -- the state of both FIFOs and
+  // the TGP's handshakes, and every word that crosses the i960's side.
+  //   dbg_fifo: 31 halted 30 uploading 29 fin_valid 28 fin_full 27 fout_valid
+  //             26 fout_full 25 push_hold 24 wq_busy 23 fifo_rd 22 fifo_wr
+  //             21 fn_wr 20 stall 19:16 0  15:8 words in fin  7:0 in fout
+  //   dbg_xfer: one cycle per completed i960 transfer -- kind 0 a FIFO-port
+  //             push, 1 a function-port push, 2 a pop, 3 a copro_ctl1 write
+  //             -- with the word (the pushed word as the TGP will see it)
+  output logic [31:0] dbg_fifo,
+  output logic [31:0] dbg_tgp_hs,
+  output logic [15:0] dbg_tgp_out_refused,
+  output logic        dbg_xfer,
+  output logic  [1:0] dbg_xfer_kind,
+  output logic [31:0] dbg_xfer_data
 );
 
   // ------------------------------------------------------------ control
@@ -487,7 +503,7 @@ module m2_copro #(
   // everything freezing at once, not the frame-1 hang this replaces.
   generate if (!TGPX4) begin : g_tgp
     m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU),
-             .BUFW_Q(BUFW_Q)) u_tgp (
+             .BUFW_Q(BUFW_Q), .OUT_STALL(OUT_STALL)) u_tgp (
       .clk(clk), .rst_n(rst_n & ~halted),
       .dbg_ucode_ram_csum(), .dbg_ucode_ram_ok(),
       .ucode_clk(clk), .ucode_we(uc_we), .ucode_addr(uc_addr), .ucode_data(uc_data),
@@ -516,7 +532,8 @@ module m2_copro #(
       .dbg_io_wr(dbg_tgp_io_wr), .dbg_io_ack(dbg_tgp_io_ack),
       .dbg_ff_math(dbg_ff_math), .dbg_ff_rom(dbg_ff_rom), .dbg_ff_buf(dbg_ff_buf), .dbg_rd_total(dbg_rd_total),
       .dbg_fifo_rd(dbg_tgp_fifo_rd), .dbg_fifo_wr(dbg_tgp_fifo_wr), .dbg_bank(dbg_tgp_bank),
-      .wq_busy(tgp_wq_busy)   // R888
+      .wq_busy(tgp_wq_busy),   // R888
+      .dbg_hs(dbg_tgp_hs), .dbg_out_refused(dbg_tgp_out_refused)   // R923
     );
     assign dat_is_prog = 1'b0;
     assign bufw_is_prog = 1'b0;
@@ -546,6 +563,7 @@ module m2_copro #(
     assign tbl_req = 1'b0; assign tbl_addr = 16'd0;
     assign dat_we = 1'b0; assign dat_wdata = 16'd0; assign dat_half = 1'b0;
     assign tgp_wq_busy = 1'b0;
+    assign dbg_tgp_hs = 32'd0; assign dbg_tgp_out_refused = 16'd0;   // R923's probe reads the TGP only
     logic [15:0] x4_ret;
     always_ff @(posedge clk or negedge rst_n)
       if (!rst_n) x4_ret <= 16'd0; else if (x4_retire) x4_ret <= x4_ret + 16'd1;
@@ -561,6 +579,15 @@ module m2_copro #(
     logic unused_x4;
     assign unused_x4 = ^tbl_rdata ^ tbl_ack;
   end endgenerate
+
+  // R923: the probe's view (see the ports)
+  assign dbg_fifo = {halted, uploading, fin_valid, fin_full, fout_valid, fout_full,
+                     push_hold, tgp_wq_busy, fifo_rd, fifo_wr, fn_wr, stall, 4'd0,
+                     fin_count[7:0], fout_count[7:0]};
+  assign dbg_xfer      = fin_push || fout_pop || ctl_wr;
+  assign dbg_xfer_kind = fout_pop ? 2'd2 : ctl_wr ? 2'd3 : fn_wr ? 2'd1 : 2'd0;
+  assign dbg_xfer_data = fout_pop ? fout_q : fin_din;
+  wire   _unused_r923   = &{1'b0, fin_count[15:8], fout_count[15:8]};   // 129 at most
 
   assign dbg_uc_we   = uc_we;
   assign dbg_uc_addr = uc_addr;

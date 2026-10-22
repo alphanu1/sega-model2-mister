@@ -884,8 +884,8 @@ module m2_boot_harness #(
     end
   end
 
-  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0),
-             .TGPX4(C2), .X4_PLINES(X4_PLINES)) u_copro (   // R888: as Model2.sv; R924
+  m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0), .OUT_STALL(A2),
+             .TGPX4(C2), .X4_PLINES(X4_PLINES)) u_copro (   // R888: as Model2.sv; R924, R931
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),
