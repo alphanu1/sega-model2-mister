@@ -210,7 +210,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `7142fd52d64902fe8ed5012ced4efda3`.
+**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `ae5c3e3de1419bf2a2b0073812fec8cb`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -251,6 +251,13 @@ anything you find.
   Daytona's tables; it now uses each game's own tables, as the arcade board
   does. Desert Tank's sand and tanks take MAME's tones too. Daytona is
   unchanged. (`Model2_20261022`.)
+- **Gun flash for CRT light guns (Virtua Cop).** On each shot the game flashes
+  the screen white for a frame, so a CRT light gun such as the GunCon 2 can
+  see where it's aimed (GitHub #13). A new `Gun flash` setting: `Arcade`
+  (default, the game's own flash), `CRT gun` (a longer flash, with the
+  trigger held back three frames so the gun has time to read the screen; for
+  a GunCon 2) or `Off` (no flash at all, for Sinden, mouse or stick players).
+  Not yet tested with a GunCon 2: reports very welcome.
 - **Link play for Daytona USA (experimental).** Race other cabinets over your network:
   MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
   link board is switched on in the OSD (`Link board`, Daytona only, Off by
@@ -317,6 +324,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
+| `Gun flash` | Virtua Cop only: `Arcade` (default), `CRT gun` or `Off` — the white flash on a shot, for CRT light guns |
 | `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
