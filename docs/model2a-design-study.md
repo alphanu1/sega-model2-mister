@@ -43787,3 +43787,95 @@ off MAME before and after -- not the luma map (row 7 is a representative);
 not chased. The fit is MAME's courses and attract with the default car;
 other cars' rows were only in R928's car-select walks. House of the Dead
 keeps its eight ranges (it could take a table the same way).
+
+**R934 -- THE 2C BUILD'S TIMING: FOUR SEEDS, ONE TABLE. THE WORST clk_sys
+PATH OF EVERY 2C SEED WAS OVER REV'S PEDAL SCALING (R928), THEN THE TGPx4'S
+DECODE FROM ir (R924); BOTH ARE NOW REGISTERED. R932'S FOUR-M10K LUMA READ
+TOOK ONE SEED. 2A NETLIST UNCHANGED (MAP FIGURES IDENTICAL). NOT FITTED.
+ON BRANCH m2c-timing (OFF model2c 648ecb9), LOCAL ONLY.**
+(Goal: the 2C build -- Model2.qsf + M2_2C=1, M2_NO_2A_MANX_MOTION=1 -- has
+never closed. clk_sys 80 MHz fails, clk_mem 100 MHz is marginal; the 2A
+release build with the same RTL minus M2_2C closes, s1346 +0.122 / +0.110.)
+
+*METHOD:* quartus_sta 17.0 on the four 2C seeds' own databases (read only):
+report_timing -setup -to_clock, -pairs_only, every pair under +0.2 ns, then
+grouped by destination register (bit index dropped) across the seeds. The
+same on 2A s1346 for comparison (paths under +0.6 ns).
+
+*THE TABLE (worst slack per seed, ns: s1337 / s1338 = model2c 1acf830,
+s1350 / s1351 = 648ecb9):*
+  m2_2a_inputs or_str / or_acc / or_brk   -1.245 / -1.905 / -1.176 / -1.602
+      (joy_ranalog_q -> m2_cab_inputs' pedal adders -> the channel mux ->
+      clamp -> the x85/64 adds -> or_*: 12.9 ns of data in one clock; the
+      worst clk_sys path of all four seeds -- each seed's reported slack IS
+      this path)
+  TGPx4 s.S_WAIT                          -0.195 / -0.849 / -0.372 / -0.420
+  TGPx4 ext_addr                          -0.550 / -0.567 / -0.134 / -0.568
+  TGPx4 fa_az                             -0.452 / -0.622 / -0.391 / -0.303
+  TGPx4 mv_val                            -0.449 / -0.536 / -0.742 /  ok
+  TGPx4 ar[]                              -0.320 / -0.176 /  ok    / -0.857
+  TGPx4 S_FETCH, S_HALT, rpc, ext_wdata, fa_an, S_WXB: -0.04 to -0.67, 2-4 seeds
+      (all but fa_* begin at ir: ir -> the ARx / ARy select (arx[agu_mi],
+      the transfer decode by top / t1_ext / state) took 4.3 ns before the AR
+      mux, the AGU adder and the internal / external test; fa_* begin at
+      add_bq: nanfix's f_nan(b) -> f_neg -> the FADDZ clamp -> f_zero)
+  raster u_fbw vlo / vhi (fb_wcomb)        ok    / -1.438 /  ok    / -0.795
+  raster span_tex lp2_L (R932 lr_mem)      ok    /  ok    /  ok    / -1.283
+  raster quad store uvt / vtx M10K we      ok    /  ok    /  ok    / -1.219
+  raster u_fill qv, span_tex sh_m, texel_x2 s_cr: -0.4 to -1.0, 1-2 seeds
+  geometry E_DONE / E_NORM, fx68k nanoAddr, SCSP st: -0.2 to -0.9, 2-3 seeds
+  clk_mem: ascal i_vdivr -0.353 (s1337), sdram rr_mask -0.001 (s1350): the
+      framework scaler and the controller, not 2C logic
+In 2A s1346 the shared ones (geometry E_DONE +0.544, fx68k +0.551, fill
+oz_emax +0.441, wcomb ist +0.507) are inside +0.6: they fail in 2C because
+the device is fuller (41,482 ALM fitted, 549 / 553 M10K), not because they
+changed. The 2C-only paths are the ones that fail in every seed.
+
+*THE FIXES (each exact, each 2C-only):*
+  * m2_2a_inputs (OREV): the clamped value, its channel and its sign are
+    registered; the multiply and the add are the next clock. One clock more
+    on a value the game reads once a frame (test_m2_2a_inputs's 6-deep
+    window covers it).
+  * tgpx4_core: the transfer decode (sk / dk / sc / dc / buses / masks / AGU
+    fields / imm / eo / single_two) is a function xdec(word), registered as
+    xd beside ir from acc_word at acc -- the only place ir loads -- so xd ==
+    xdec(ir) every clock; a Verilator-only check stops the bench if not.
+    ir -> g_rx is now a state-selected 2:1 of registered fields.
+  * tgpx4_core: the FP operands' NaN tests are registered a clock after the
+    operands load (fp_add / fp_mul take four clocks; the operands hold until
+    the word ends), and the result flags come from the unit's result and
+    those bits: f_neg(nanfix(r,a,b)) = !nan_a & !nan_b & f_neg(r), likewise
+    f_zero; FADDZ's clamp folded (fa_an = neg & !zop, fa_az = zc | zero);
+    fm_d / fm_v / fm_u the same way.
+  * m2_span_tex, LSB > 3 only: the product's top byte registered (lp2_P) and
+    the clamp to 63 moved after it into the colour tables' read address.
+    The same L every clock; LSB 3 keeps lp2_L.
+  NOT TOUCHED: fb_wcomb, the quad store's write, u_fill, geometry, fx68k --
+  shared with 2A, which closes; each failed in one or two 2C seeds only.
+
+*VERIFIED:* make tgpx4_replay (m2_copro TGPX4=1 in lockstep with MAME's
+MB86235 interpreter), HOTD boot capture, 648ecb9 vs this branch: both
+1,085,266,905 cycles, 188,786,517 words, 8,697,138 / 8,697,138 outputs
+equal, 0 bad -- the same cycle count to the clock. Over Rev's race capture
+(R930 cap1): 1,143,259,352 cycles, 200,845,508 words, 8,251,088 / 8,251,088
+equal, 0 bad -- R930's own figures exactly. PLANTED (xd loaded from nx_ir):
+the xd == xdec(ir) check stops the replay at the first word. test_m2_2a_inputs:
+0 mismatches over 20 M cycles (Over Rev 5,498,514 channel checks).
+tb_m2_raster3d built with Model2.sv's raster parameters (TEXLUT, FB_DDR3,
+WCOMB, TWO_CLOCKS, KW 20; M2_R3D_FB, FBPRE 8, REALCOL, PXDUMP), old RTL vs
+new: LSB 5 on R932's two Over Rev frames (d1, d2) and LSB 3 on d1 -- every
+painted pixel identical (153,536 / 153,600 / 153,536 PX lines, 0 differ).
+test_m2_span_tex, test_m2_luma_map (2A and 2C) PASS. lint_top 2A and
+M2_2C clean; lint_idx's candidate list for M2_2C identical before and after.
+(The FB-mode bench's colour-vs-MAME figure, 57-86 of 255, is not R932's
+5.5: this configuration is not the one R932 measured with. It was used for
+A/B identity only.)
+
+*AREA (quartus_map 17.0):* 2C (M2_2C + M2_NO_2A_MANX_MOTION) 40,078 ->
+40,128 ALMs needed (+50), registers 48,100 -> 48,237, block bits 4,583,920
+and DSP 102 unchanged. 2A (no M2_2C) 648ecb9 vs this branch: 39,953 /
+39,953 ALMs, 48,097 / 48,097 registers, 4,572,656 bits, 96 DSP -- identical.
+*NOT KNOWN:* whether it closes. No fit was run here; the next seeds decide.
+If the raster / shared paths remain, they are the next list -- the quad
+store's write enable (64 M10K sinks off q_take) and fb_wcomb's c_fits ->
+c_wr -> vlo are the two with the most negative single-seed slack.
