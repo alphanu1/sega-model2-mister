@@ -44062,3 +44062,12 @@ and DSP 102 unchanged. 2A (no M2_2C) 648ecb9 vs this branch: 39,953 /
 If the raster / shared paths remain, they are the next list -- the quad
 store's write enable (64 M10K sinks off q_take) and fb_wcomb's c_fits ->
 c_wr -> vlo are the two with the most negative single-seed slack.
+*FIT (2026-10-22, model2c 47a2168 = R934 + the model2a merge):* s1352 no fit
+(170143), s1354 fitter segfault (tool flake), s1353 fitted: clk_sys -1.096,
+clk_mem -0.238, i960 +0.994, hold +0.220; 41,377 ALM, 549 / 553 M10K.
+EVERY R934 TARGET IS GONE from s1353's failing list (pedal path, span_tex
+lp2_L, TGPx4 ir / NaN paths). What fails now is spread and placement-made:
+hps_io io_dout <- byte_cnt -1.096 and uio stick_idx -0.608 (the framework,
+which closes in every 2A seed), texel_x2 -0.668, the geometry pool's adder
+-0.473, SCSP -0.376 / -0.212, the quad store's uvt write ports -0.08..-0.18.
+No 2C logic among them: the next step is more seeds (s1355-s1357), not RTL.
