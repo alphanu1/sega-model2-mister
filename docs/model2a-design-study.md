@@ -43060,3 +43060,163 @@ external by its address -- ends its word in a later state: ~600 such words
 in HOTD's 1 G); the AGU's address one three-input add (arx + y + d, the
 addends by a shallow mux; fuzzed against the old AGU, 5,000,000 inputs, 0
 differ); fp_add's operands registered in S_DEC. Not yet fitted.
+
+**R928 -- OVER REV (2C, overrev REVISION A) ON THE 2C BUILD: THE TGPx4 IN
+LOCKSTEP WITH MAME OVER A WHOLE CAPTURE, EVERY OUTPUT EQUAL; FOUR THINGS HOUSE
+OF THE DEAD NEVER ASKED FOR -- THE LONG-REAL TRANSCENDENTALS, THE TEXTURE
+SHEETS' UPPER MEGABYTE, THE COMM BOARD'S FG BIT AND NINETY-FIVE LUMA ROWS. ON
+BRANCH model2c ONLY, NEVER PUSHED.**
+(The coordinator: "bring up Over Rev". MAME 0.289 set overrev, "Over Rev
+(Model 2C, Revision A)", Jaleco 1997 -- not the 2B sets overrevb /
+overrevba. Nothing fitted here; a board build is the coordinator's.)
+
+*What was believed:* R924's 2C build runs a 2C game once its MRA, game ID and
+controls exist; Over Rev is indy500-shaped (STEER / ACCEL / BRAKE) and the
+census script's 'rally' play mode is a first guess for it (R920).
+
+*MAME (model2.cpp 0.289):* overrev2c = model2c + the 315-5649's analog
+channels 0-2 (STEER, ACCEL, BRAKE) and PF as lamps; NO drive board (the 2B
+sets' indy500 config has drive_board_w on PE, the 2C one does not), the
+M2COMM board as every 2C set. Ports: indy500's (IN0 0x40 start, 0x30 unused;
+IN1 0x01 View 1, 0x02 View 2, 0x10 Shift Up, 0x20 Shift Down; IN2 unused)
+with ACCEL and BRAKE PORT_REVERSE ("with no NVRAM game expects the invert
+mode"). ROMs: program 1 MB (region 2 MB), main_data 16 MB (region 32 MB),
+polygons 4 MB (region 8 MB), textures 4 MB, copro_data EMPTY (the TGPx4's
+program is uploaded by the i960), 68000 512 KB, samples 8 MB, the comms
+program. MAME runs it: network check, attract, mode / course / car / gear
+select, a race (snapshots, 150 s session).
+
+*CENSUS (MAME 0.289 m2lod, sim/tgp/mame_m2c_census.sh's new 'orev' play
+mode -- coin at 40 s, start, accelerator held, wheel swept, shift and view on
+their own rhythms -- 150 s: attract and a race):*
+  * TGPx4: 125,102,318 words; upload one 8,192-dword program (4,096 words);
+    614 distinct PCs, highest 0x6e5; a 1 K-line cache misses 0.82% (2 K:
+    0.0005%); busy per 1/57.5 s on MAME's 20 MHz model p50 0.036, p90 0.138,
+    max 0.227 (at the RTL's 5.68 clk / word, 80 MHz: ~32% of a frame at the
+    worst). 172 forms. New against HOTD: PDR as a destination (5.5 M writes),
+    DDR once, SETM once, CLRF once (at boot), LSL, ALU2 ADD, CIF 768. NO FLOG.
+    External bus: 0 reads, 1 write (copro_data is empty; MAME reads 0).
+  * i960 (R869's form log, 150 s, 168 forms / 458 variants): atanrl, sinrl
+    and cosrl from 12.3 s (15,928 / 31,856 / 31,856 executions in the run) --
+    TRAP on the 2A core (F2A has the single forms only; VC has the long ones);
+    every other form and variant runs there.
+
+*THE REPLAY (sim/tgpx4/mame_mb86235_cap.patch on the same 150 s session):*
+make tgpx4_ref: MAME's verbatim interpreter, 125,102,318 words, all
+7,803,294 pops, 4,695,293 outputs, the 1 external write, 125.1 M state
+hashes -- 0 bad. make tgpx4_replay (the RTL, lockstep): 125,102,315 words,
+711,191,796 clocks (5.68 clk / word), i960 events 11,411,217 / 11,411,217,
+outputs 4,695,293 / 4,695,293 equal, lockstep 0 bad. No TGPx4 change was
+needed: PDR, DDR, SETM, CLRF and the rest are already MAME's.
+
+*WHAT OVER REV NEEDED (the RTL):*
+  1. i960 VC IN THE 2C BUILD (Model2.sv `.VC(VCOP_FPU || C2)`; the harness
+     the same): the long-real transcendentals' decode on F2A's sequencer.
+     sim/io/i960_formcheck.cpp has a 2C column (FR + VC + F2A): 0 of 168
+     forms and 0 of 458 variants trap there.
+  2. THE TEXTURE SHEETS' UPPER MEGABYTE (m2_cpu_bridge BOARD_2C): MAME 0.289,
+     a write / read tap on 0x11000000-0x1140ffff over 120 s: the game
+     uploads ALL 2 MB of each window at boot -- sheet 0 lower MB 2.572 s,
+     upper MB 2.641 s, sheet 1 lower 2.711 s, upper 2.780-2.899 s (262,148
+     writes each upper MB, 237 K / 216 K non-zero) -- then reloads parts of
+     the lower MBs at 8.4 s and 43 s; it never reads texture RAM. MAME's
+     renderer (get_texel) reaches dword 262,143 at most: the lower MB only.
+     R924 took the upper MB as 2B's mirror, so the upper MB's data landed on
+     the lower MB's texels, after them. Now: writes with address bit 20 set
+     in 0x11000000-0x113fffff are dropped (T_NONE). WRONG IN R924, KEEP:
+     "the upper MB taken as 2B's mirror, which MAME's renderer could not show
+     either" -- true of the display, not of the stores; House of the Dead
+     never writes there, Over Rev does.
+  3. THE COMM BOARD (Model2.sv comm_*, Over Rev's ID only): MAME's m2comm
+     runs the comm Z80 (EPR-18643) with no partner. CN (0x01a04000) reads
+     0xFE | cn; FG (0x01a04002) reads 0x7E | fg | ~zfg << 7, zfg the Z80's
+     flag. MAME's tap (every access to 0x01a00000-0x01a1ffff, 10 s): CN and
+     FG written 0 (3.04 s), CN read (0xFE), CN written 1, FG read 0x7E,
+     0x7E, then 0xFE 52 ms after CN = 1 (pc 0x0020d97c), ONE share-RAM byte
+     written (0x01a10000), nothing else and no share-RAM read. The boot's
+     "Check network board" waits for FG bit 7 LOW (the Z80 alive), "Link
+     check." for it HIGH again, then ">> STAND ALONE" (MAME: within the
+     second). Modelled: zfg = 1 from CN's 0 -> 1 until the third vblank after
+     it, else 0; no share RAM (two flops and a two-bit count, not 16 KB).
+     WRONG TURNS, KEEP: the window reading 0 (as before) passes the board
+     check and sits on "Link check." forever (the 2C bench, frames 600-906);
+     a constant 0xFE (MAME's value with zfg 0) stops at "Check network
+     board." instead (bench 2, frames 575-650). The answer is the handshake,
+     not a value.
+  4. THE CABINET (m2_2a_inputs OREV, Model2.sv .OREV(C2), 0x1C only):
+     MAME's ports above in the MRA's order (Coin, Start, Test, Service,
+     View 1, View 2, Accel, Brake, Shift Up, Shift Down -- Sega Rally's
+     positions); the analog block's 0x20..0xE0 widened to MAME's 0x00..0xFF
+     ((v - 0x20) x 85 / 64; the steering about 0x80 the same), the pedals
+     reversed (rest 0xFF): one multiply taken by the three channels in turn
+     (three in parallel mapped +155 ALUTs, shared +91). tb_m2_2a_inputs: a third DUT with OREV, checked
+     against MAME's ports (the channels within 1.5 of the exact line of one
+     of the last six samples; both ends reached; a planted un-reversed
+     accelerator fails); the OREV-0 builds still read 0x1C as digital: 20 M
+     cycles, 0 mismatches. The constant multiply folded in a Quartus 17.0
+     scratch map: 22 outputs on 11 constants, all as computed. Needs the
+     analog block: a build with M2_NO_2A_RALLY has no steering for it.
+  5. LUMA ROWS (m2_luma_map 4'hC; Model2.sv .big(a2_big | is_orev)): MAME's
+     39 walk dumps over 160 s (attract, menus, a race): 98 rows used (0-51,
+     128-195), 95 distinct contents; rows 128+ are rewritten per course.
+     R900's DP over the dumps (each dump's own contents): starts
+     0 10 14 22 129 139 176 178, polygon-weighted mean |diff| 2.0 of the
+     game's 0..63 luma (R867's fixed map: 8.3); 14% of polygons on rows
+     more than 4 off (row 51 the worst, 25). Sixteen slots would give 1.1
+     (one more M10K and a fourth slot bit in the quad store, R900's note).
+     test_m2_luma_map: the reference gains c2 (0x17, 0x1C), 262,144 checks,
+     0 fails; a planted start fails.
+  Unchanged from R924: the TGPx4, the 2C map otherwise, the copro status,
+  mz_exact (every 2A-core game).
+
+*GAME ID 0x1C* -- not 0x18: 0x18-0x1B are the 2A analog games' IDs whose
+decodes (is_2an, the analog profile, a2_big's list, Manx's motion) are live
+in a 2C build too. 0x1C-0x1F were free on every branch's MRAs. vc_en and the
+program extension follow 0x10-0x1F as before.
+
+*MRA:* mra/Over Rev (Model 2C, Revision A).mra (+ [15kHz CRT], 0x9C),
+<rbf>Model2C</rbf>, SEGA RALLY'S 2A LAYOUT (0x2EC0000 bytes, ends before the
+copro-data slot: MAME's is empty) -- no 128 MB module. The TGPx4's program
+copy (GAME_X4PROG, byte 0x2080000) lands in the polygon slot's last 4 MB,
+which MAME's 8 MB polygon region cannot address. tools/mra_vs_mame.py
+--layout=2a: PASS (program, main_data, textures, polygons, tables, 68000,
+samples, extension).
+
+*THE WHOLE-CORE BENCH (tb_m2_boot, the 2C harness, new M2_C2_STD=1: a 2C
+game in the 2A layout; M2_OREV=1: the comm answer; unwritten memory 0xFFFF,
+work RAM NOT zeroed -- the game clears it itself at 0x6d0):*
+  Over Rev boots in MAME's order: black, "CHECKING NETWORK NOW /
+  Communication board reset." (frame 475; MAME's 5 s), "Check network board
+  ... OK? / Start network program. / Link check. >> STAND ALONE." (600-650;
+  MAME 6 s), black, "INSERT COIN(S)" (900), the attract's OverRev logo over
+  the (absent: the harness has no rasteriser) 3D (1150-1300), ~280 frames
+  behind MAME as HOTD's bench ran. The boot clears work RAM itself (0x6d0)
+  and copies its program to RAM (0x800) on 0xFFFF memory: the large
+  layout's work-RAM sweep (R900) is not needed. At frame 1300 (M2_DUMP_OUT)
+  against MAME 0.289's sheets read through the i960 map at video frames 900,
+  1000, 1100 and 1250: texture sheet 0 416,934 written words, sheet 1
+  429,165, luma 32,768 entries -- 0 differ, and no MAME non-zero word left
+  unwritten. (MAME's frame 600 differs: a load lands after it.) Under R924's
+  mirror the upper MB would have stood in ~351 K / ~104 K of the lower MBs'
+  words (MAME's own dumps: boot-time lower MB unchanged by frame 900 and
+  unequal to the upper MB).
+
+*GEOMETRY (make geodiff_2abig's binary with M2GD_BIG=0 -- Sega Rally's
+addressing, crtc -8 / 90, mz_exact; M2GD_PRESET):* a race walk (MAME walk
+5596): 972 / 972 polygons equal, 789 textured, 0 u/v off, 0 sort keys
+differ, 972 texture parameter sets equal. Attract walk 1488: 1,020 match,
+2 extra slivers of ours at the screen's left edge, 1 sort key; race walk
+7287: 1,609 match, 3 off by 1-16 px and 3 extra at the edges -- the
+clipper's near-edge class R924 saw on HOTD's 5-vertex polygon.
+
+*AREA (quartus_map 17.0, map only, M2_2C, 4436e57 against this):*
+  4436e57: 39,971 ALMs needed, 47,959 registers, 4,542,960 block bits, 102 DSP
+  R928:    40,079 ALMs needed, 47,987 registers, 4,542,960 block bits, 102 DSP
+  +108 ALMs estimated, no block bits, no DSP. By entity (ALUTs): m2_2a_inputs
+  +91, m2_cab_inputs +14, m2_luma_map +10, the i960's FP units +32 (VC's
+  decode; i960_top itself moves by map noise). s1324 fitted 41,144 / 41,910.
+
+*NOT DONE / OPEN:* the luma map's residual (above; 16 slots are the fix);
+View 2 is optional in MAME (only when the cabinet type is not "normal
+(2in1)"); the pedals' calibration is the game's default (MAME's note), not
+checked on a real wheel; Over Rev's lamps (PF) are not driven; no link play.

@@ -1,5 +1,39 @@
 # Handoff
 
+## 2026-10-22: Over Rev (2C, overrev Rev A) on the 2C build -- branch model2c, R928. NOT PUSHED
+
+Branch model2c only (never pushed, never merged). Build: Model2.qsf +
+VERILOG_MACRO "M2_2C=1" (optional "M2_NO_2A_MANX_MOTION=1"; NOT
+"M2_NO_2A_RALLY" -- Over Rev's wheel and pedals are that block). MRA
+mra/Over Rev (Model 2C, Revision A).mra (+ [15kHz CRT], 0x9C), game ID 0x1C,
+<rbf>Model2C</rbf>, Sega Rally's 2A layout (0x2EC0000 bytes, no 128 MB
+module needed). The same build runs HOTD (0x17) as before.
+VERIFIED: TGPx4 census (150 s, attract + a race; new 'orev' play mode):
+125.1 M words, 4,096-word program, 0.82% 1 K-line misses, busy max 0.227 of
+MAME's 20 MHz (~32% of a frame at 5.68 clk/word), no FLOG; PDR / DDR / SETM /
+CLRF used. Capture + replay: MAME's interpreter 0 bad over 125.1 M words;
+the RTL in lockstep, 4,695,293 / 4,695,293 outputs equal, 0 bad -- no TGPx4
+change. i960 forms: atanrl / sinrl / cosrl trap on the 2A core -> VC on in a
+2C build; formcheck's new 2C column: 0 traps (168 forms, 458 variants).
+Geometry: a race walk 972 / 972 polygons equal (u/v, z, texture params).
+CHANGES: i960 VC with C2; bridge drops the upper MB of 2C texture windows
+(Over Rev writes all 2 MB per sheet at boot; MAME's renderer reads the lower
+MB; R924's mirror let it overwrite the lower); the comm board's CN / FG
+handshake for Over Rev (link check -> STAND ALONE); m2_2a_inputs OREV
+profile (indy500 ports, pedals reversed, 0x20-0xE0 widened to 0x00-0xFF by
+one shared x85/64); luma ranges for 0x1C (0 10 14 22 129 139 176 178; mean
+|diff| 2.0 of 63, 98 rows / 95 contents -- 16 slots would give 1.1).
+Bench (tb_m2_boot 2C, new M2_C2_STD=1 M2_OREV=1, 0xFFFF memory): network
+check -> STAND ALONE -> INSERT COIN -> attract logo, MAME's order; texture
+sheets and luma at frame 1300 equal MAME's (frames 900-1250) in every word.
+WRONG TURNS: comm window 0 -> stuck on "Link check."; constant 0xFE -> stuck
+on "Check network board." -- it is a handshake (FG bit 7 low, then high).
+AREA (quartus_map, M2_2C): 39,971 -> 40,079 ALMs (+108), M10K bits and DSP
+unchanged. s1324 fitted 41,144 / 41,910.
+OPEN: luma residual (16 slots); pedals' calibration unchecked on a wheel;
+lamps; no link; View 2 optional per cabinet type.
+Next free R numbers: R929 on (R925-R927 elsewhere).
+
 ## 2026-10-21/22: House of the Dead on a 2C build (M2_2C) -- branch model2c, R924. NOT PUSHED
 
 Branch model2c only (never pushed, never merged into main / model2a; model2a
