@@ -304,7 +304,7 @@ module m2_geo #(
   logic        q_held;   // R747: a pushed word anywhere in the queue
 
   m2_fifo_m10k #(.DW(52), .DEPTH(DEPTH)) u_pushq (
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk), .rst_n(rst_n), .clr(1'b0),
     .push(push_fire), .din({geo_wp, wdata}),
     .pop(q_pop), .q(q_data), .q_valid(q_valid),
     .full(q_full), .count(q_count), .dropped(dbg_dropped),

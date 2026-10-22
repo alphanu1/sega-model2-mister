@@ -58,6 +58,10 @@ module m2_fifo_m10k #(
 ) (
   input  logic          clk,
   input  logic          rst_n,
+  // R933: EMPTY IT NOW (the TGPx4's CLRF; every other instance ties it 0):
+  // the head, the read in flight and the array's words are all forgotten, a
+  // push in the same clock with them. The array itself is not touched.
+  input  logic          clr,
 
   input  logic          push,
   input  logic [DW-1:0] din,
@@ -135,6 +139,11 @@ module m2_fifo_m10k #(
       if (rd_pending) begin
         q       <= rdq;
         q_valid <= 1'b1;
+      end
+
+      // ---- R933: a clear wins over everything above
+      if (clr) begin
+        wp <= '0; rp <= '0; mem_cnt <= '0; q_valid <= 1'b0; rd_pending <= 1'b0;
       end
     end
   end

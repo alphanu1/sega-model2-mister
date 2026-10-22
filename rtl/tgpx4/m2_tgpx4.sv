@@ -56,6 +56,8 @@ module m2_tgpx4 #(
   input  logic        fi_valid,
   input  logic        fi_full,
   output logic        fi_pop,
+  output logic        fi_clr,       // R933: CLRF, m2_copro's FIFOs emptied (a clock, registered)
+  output logic        fo_clr,
   output logic [31:0] fo_data,
   output logic        fo_push,
   input  logic        fo_full,
@@ -96,8 +98,8 @@ module m2_tgpx4 #(
     .clk(clk), .rst_n(rst_n), .run(run),
     .prog_we(prog_we), .prog_addr(prog_addr), .prog_data(prog_data),
     .pf_req(pf_req), .pf_addr(pf_addr), .pf_data(pf_data), .pf_ack(pf_ack),
-    .fi_data(fi_data), .fi_valid(fi_valid), .fi_full(fi_full), .fi_pop(fi_pop), .fi_clr(),
-    .fo_data(fo_data), .fo_push(fo_push), .fo_full(fo_full), .fo_empty(fo_empty), .fo_clr(),
+    .fi_data(fi_data), .fi_valid(fi_valid), .fi_full(fi_full), .fi_pop(fi_pop), .fi_clr(fi_clr),
+    .fo_data(fo_data), .fo_push(fo_push), .fo_full(fo_full), .fo_empty(fo_empty), .fo_clr(fo_clr),
     .ext_req(ext_req), .ext_we(ext_we), .ext_addr(ext_addr), .ext_wdata(ext_wdata),
     .ext_rdata(ext_rdata), .ext_ack(ext_ack),
     .dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_pdr(dbg_pdr), .dbg_bad(dbg_bad)

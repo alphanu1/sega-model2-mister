@@ -195,6 +195,7 @@ module m2_copro #(
   logic [CW-1:0] coprocnt;
   logic        halted;
   logic        x4_up_busy;   // R924: the TGPx4's program-copy writes are behind
+  logic        x4_fi_clr, x4_fo_clr;   // R933: the TGPx4's CLRF empties the FIFOs (MAME clear())
 
   wire ctl_wr   = sel_ctl && we;
   wire bit31_ch = ctl_wr && ((wdata ^ coproctl) & 32'h8000_0000) != 32'd0;
@@ -362,14 +363,14 @@ module m2_copro #(
   wire        fout_pop = fifo_rd && fout_valid && !tgp_wq_busy;   // R888
 
   m2_fifo_m10k #(.DW(32), .DEPTH(FD_IN)) u_fin (
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk), .rst_n(rst_n), .clr(x4_fi_clr),   // R933: the TGPx4's CLRF (0 on the TGP)
     .push(fin_push), .din(fin_din),
     .pop(tgp_in_pop), .q(fin_q), .q_valid(fin_valid),
     .full(fin_full), .count(fin_count), .dropped(dbg_in_dropped), .held()
   );
 
   m2_fifo_m10k #(.DW(32), .DEPTH(FD_OUT)) u_fout (
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk), .rst_n(rst_n), .clr(x4_fo_clr),
     .push(tgp_out_push), .din(tgp_out_data),
     .pop(fout_pop), .q(fout_q), .q_valid(fout_valid),
     .full(fout_full), .count(fout_count), .dropped(dbg_out_dropped), .held()
@@ -521,6 +522,7 @@ module m2_copro #(
     assign dat_is_prog = 1'b0;
     assign bufw_is_prog = 1'b0;
     assign x4_up_busy = 1'b0;
+    assign x4_fi_clr = 1'b0; assign x4_fo_clr = 1'b0;   // R933
   end else begin : g_tgpx4
     // R924: the MB86235. `uc_we` is the upload dword (coprocnt was its index);
     // it runs from the first boot, and an upload does not stop it (MAME).
@@ -535,6 +537,7 @@ module m2_copro #(
       .up_we(uc_we), .up_idx(x4_up_idx), .up_data(uc_data), .up_busy(x4_up_busy),
       .fi_data(fin_q), .fi_valid(fin_valid), .fi_full(fin_full), .fi_pop(tgp_in_pop),
       .fo_data(tgp_out_data), .fo_push(tgp_out_push), .fo_full(fout_full), .fo_empty(fout_empty),
+      .fi_clr(x4_fi_clr), .fo_clr(x4_fo_clr),   // R933: CLRF
       .dat_req(dat_req), .dat_addr(dat_addr), .dat_is_buf(dat_is_buf), .dat_is_prog(dat_is_prog),
       .dat_rdata(dat_rdata), .dat_ack(dat_ack),
       .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data), .bufw_is_prog(bufw_is_prog),

@@ -576,7 +576,7 @@ module m2_raster3d #(
   // block RAM -- is gone (538 of 553 used at s637), and these 13 MLAB LABs are
   // what R683's fill mask needs: s638-s640 were 23-28 LABs short.
   m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("M10K")) u_span_q (
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk), .rst_n(rst_n), .clr(1'b0),
     .push(fl_span_valid && sq_in_rdy), .din(sq_din),
     .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
     .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped), .held()
