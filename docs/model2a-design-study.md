@@ -43596,6 +43596,162 @@ THE 2A SLOWDOWNS.** s1328 (model2a bd6fa2e: R927's 8-frame register ring and
 R926's AI detail test MRA moved to sim/io/test-mra/ (a diagnostic, never a
 release file).
 
+**R923 -- VIRTUA FIGHTER 2 "CRASHES AT RANDOM" (GitHub #17): NO DEADLOCK IN
+THE TGP / COPRO HANDSHAKE THAT SIMULATION CAN REACH. VF2's TGP IS BIT-EXACT
+AGAINST MAME OVER A NEW 60 s CAPTURE WITH FIGHTS AND UNDER EVERY BOARD-LIKE
+TIMING TRIED (LATENCY, JITTER AND i960 PACING TO 30x R876's); NO FIFO WORD IS
+LOST OR DUPLICATED; s1278's FAILING clk_sys PATHS ARE NOT IN THE TGP. A PROBE
+BUILD (M2_PROBE_TGP) THAT NAMES WHAT EACH SIDE WAITS ON AT THE HANG, AND HOLDS
+THE LAST 256 i960 TRANSFERS BEFORE IT. NO BEHAVIOUR CHANGED. NOT FITTED.**
+(GitHub #17, Model2A_20261021b = s1278, users: VF2 "crashes at random ...
+even in the attract mode. Sometimes as soon as the match starts, sometimes in
+round one, or after a second fight, after a credit is inserted". The symptom
+-- freeze, reset, garbage -- is not stated.)
+
+*Believed (R871, R876, R921):* the one recorded VF2 lockup (s1203, before
+R876 and R888) held the i960 at 0x7dc4 -- three ldq from the TGP's output
+FIFO -- with the TGP never answering; the probe of the day could not say where
+the TGP was. R876 cleared VF2's TGP under board-like timing on three windows
+(attract only); R921 cleared every i960 form. Open: a handshake deadlock the
+replays do not reach, a lost or duplicated FIFO word, a marginal timing path,
+or a TGP divergence on data the captures never held.
+
+*THE HUNT (simulation; Model 1's TGP board read first):*
+  1. VF2 attract window (build/tgpcap/vf2_1500, frames 1500-1800: 814,468 words
+     in, 272,424 out) through tb_tgp_replay, 16 runs: --board-push with
+     --gap 60 --jitter 40 at seeds 2-9; --gap 0 --jitter 0 at --lat 1 and
+     --lat 0; plain --lat 1; --gap 600 --jitter 400; --gap 3 --jitter 400
+     --lat 1 --wlat 200; --gap 1 --jitter 1000; --gap 2000 --jitter 10;
+     --gap 20 --jitter 5 --wlat 400 (posted buffer-RAM writes slower than the
+     TGP: the queue full and the i960's result reads held on it). ALL PASS,
+     bit-exact, 0 dropped, 0 store-order hazards.
+  2. A NEW CAPTURE WITH FIGHTS (sim/io/mame_m2_vf2_play.lua chaining
+     sim/tgp/tgp_capture.lua: coins 60 / 180 / 300 s, frames 3700-7301 =
+     61.7-121.7 s: the credit, character select, round one of two matches --
+     MAME snapshots at 90 s and 120 s show Pai vs Lau in round 1; 9,742,311
+     words in, 3,380,307 out; no upload in the window). Plain --lat 6;
+     --board-push --gap 0 --lat 1; --gap 60 --jitter 40 at seeds 1, 2 and 7;
+     --gap 600 --jitter 60; --gap 3 --jitter 400 --lat 1 --wlat 200: PASS,
+     bit-exact (245.5 M TGP instructions; 1,318 M cycles plain, 1,833 M
+     board-like, 8,720 M -- CPI 35.5 -- with the slowest memory). The i960 model never sat on a full input FIFO (VF2's runs
+     stay far under 128 words, as R876).
+  3. The other 2A TGP programs on this RTL: Zero Gunner's play and Sega
+     Rally's race windows (board-push, R876's settings), and a NEW Virtua
+     Cop 2 window (make tgp_capture_2a CAP2A_SET=vcop2 CAP2A_GAME=vcop2,
+     frames 1300-2500: 1,556,551 in, 439,627 out; --board-push --gap 60
+     --jitter 40): PASS (VC2: 8 outputs differ in NaN encoding only, as
+     Daytona's). Daytona race5400 on the original core's TGP: PASS as R876
+     (15 / 5 NaN encoding) and IDENTICAL to the stored RTL baseline.
+  4. tb_m2_fifo_fuzz (new): m2_fifo_m10k -- the queue behind both copro FIFOs
+     and the TGP's posted writes -- against a reference queue every cycle,
+     20 M cycles each at DEPTH 128 and 32, in phases that fill it and sit
+     full, drain it and sit empty, push into it full while the head is
+     popped (1.8 M such cycles) and pop the last word as it lands: 0
+     failures. Three planted faults (write while full, a second read in
+     flight, full one late) each FAIL by thousands; a fourth is equivalent.
+  5. The i960 side, read rather than simulated: m2_cpu_bridge holds an I/O
+     access in S_IOW with io_sel re-asserted while io_stall, and completes it
+     in the cycle stall falls, sampling a combinational copro_rdata --
+     exactly one push or pop per access (no registered read on the path, so
+     no stale word). MAME's VF2 writes copro_ctl1 twice (the boot's upload)
+     and reads fifo_control once in 260 s with fights: no re-upload, no
+     polling -- the replay's push / blocking-pop i960 is the game's
+     protocol. MAME's i960 defers interrupts during a burst-stalled ldq, as
+     ours (it is blocked in the bus cycle), so 0x7dc4's wait cannot need an
+     IRQ handler's words.
+  6. ALIASES, ruled out for VF2: Model2.sv decodes the copro ports from
+     cpu_io_addr[23:0] only, so any T_IO access at 0x1X88xxxx or above
+     would push into the TGP's FIFO. A MAME tap on every i960 access at or
+     above 0x10000000 (230 s, attract and fights): VF2 writes only
+     0x10000000 (once), the texture mirrors 0x122-0x127xxxxx and luma
+     0x128xxxxx -- all decoded to SDRAM before T_IO; no read at all.
+  7. MODEL 1 (tools/model1-ref 0b5d04f, current with its local repository):
+     m1_tgp's fifo_ack for a write is `!fifo_out_full || pushed` -- a full
+     output FIFO stalls its TGP (MAME halts it). Ours acknowledges and drops
+     (R146-era: the board froze at 0x1166C when the i960 stopped draining),
+     with 129 places against MAME's 8; nothing counted it (`fifo_out_push`
+     is gated, so u_fout's `dropped` cannot move). Kept -- VF2's protocol
+     never has more than a command's results outstanding -- but now counted
+     (m2_tgp dbg_out_refused) and the replay FAILS on any: 0 in every run.
+  8. TIMING. quartus_sta on a copy of s1278's database (80 MHz clk_sys,
+     slow corner): the failing clk_sys endpoints are gp_outr -> PhaseInc
+     (-0.328), -> shadowmask_data (-0.210), -> vs_line (-0.070): hps_io's
+     GPO into the video / scan-converter configuration. The worst TGP path
+     is mb86233_core state.S_DST -> maddr_q[15] at +0.484; none of the 60
+     worst paths ends in m2_copro's FIFOs, the bridge's I/O state or the
+     SDRAM crossings' slow side. A marginal-path hang in the copro is not
+     what STA shows for s1278 (it cannot see the asynchronous crossings,
+     which are false-pathed; m2_sdram_cdc's toggles are synchronised).
+
+*What would tell a deadlock from a timing fault on the board:* a logic
+deadlock is reproducible in state -- the same TGP pc and sequencer state, a
+consistent pair of FIFO counts (the i960 waiting on an empty output FIFO and
+the TGP in S_SRC on an empty input FIFO: the two disagree on a command's
+length) -- and the ring shows a normal command stream up to the hang. A
+corrupted crossing or path shows as an inconsistent state: a req with no
+ack for ever (tbl / dat / bufw), the TGP's popped count ahead of the i960's
+pushed count, fin_valid with a zero count, or a command code in the ring
+that the program never dispatches. A livelock moves the TGP's retire count.
+
+*THE PROBE (M2_PROBE_TGP, rtl/dbg/m2_tgp_probe.sv; decoder
+tools/decode_tgp.py).* VERILOG_MACRO "M2_PROBE=1" and "M2_PROBE_TGP=1" (with
+M2_NO_DEBUG as every probe build; add "M2_NO_2A_RALLY=1" for the area below).
+The sound and memory-test records give their place (SND_CHKSUM off); M2_PROBE's
+stream, slot rate (2.46 ms) and UART. A state record and a ring record in
+turn: C (i960 IP | copro_stall, unimplemented, frozen, TGP pc), h (m2_copro
+dbg_fifo: halted, uploading, both FIFOs' flags and counts, the i960's access
+| m2_tgp dbg_hs: the sequencer's state and every req / ack), j (pushed /
+popped counts both ways), p / x (the last words each way; output words lost on
+a full FIFO; input words dropped), i (TGP io address, retires, program word),
+a (the i960's I/O access, trap / halted, the TGP's bank, the longest
+copro_stall), and r -- THE LAST 256 i960 TRANSFERS (push, function-port
+command, pop, copro_ctl1), with a 6-bit vblank count, in one M10K, which
+FREEZES once copro_stall has held 2^23 cycles (105 ms). New debug ports, all
+open in the release build: mb86233_core dbg_state, m2_tgp dbg_hs /
+dbg_out_refused, m2_copro dbg_fifo / dbg_tgp_hs / dbg_tgp_out_refused /
+dbg_xfer*.
+  * tb_m2_tgp_probe (make test_m2_tgp_probe): the module through its own
+    UART (DIVISOR 8, FREEZE_BIT 12): 700 transfers with short stalls, the
+    hang, 300 transfers after it; the frozen ring checked entry by entry
+    (index, kind, word, vblank), every state record against its inputs:
+    PASS. Three planted faults FAIL (write after the freeze, a skipped
+    read index, a shifted index in the record). decode_tgp.py reads the
+    bench's capture.
+  * tb_tgp_replay now checks m2_copro's transfer tap against every transfer
+    it makes (kind and word) and fails on a TGP output lost on a full FIFO:
+    VF2 attract 1,086,892 transfers named, 0 wrong; VC2 1,996,178; Daytona
+    231,565.
+
+*AREA (quartus_map 17.0, whole design, ALMs needed):*
+     model2a 7207198, release macros                  39,987   4,564,464 bits
+     this branch, release macros                      39,987   4,564,464 (identical: the ports prune)
+     + M2_PROBE + M2_PROBE_TGP                        40,455   4,574,704 (+468; +1 M10K, the ring)
+     + M2_PROBE + M2_PROBE_TGP + M2_NO_2A_RALLY       40,313   4,574,704 (+326)
+  (s1278, eb5a700, mapped 39,948 and fitted 41,389 ALM, 547 / 553 M10K.)
+  The probe module is 511 ALUT / 212 registers, 434 / 134 of it the stream's
+  hex formatter (as every M2_PROBE build).
+
+*Checks:* lint_top clean on 2A, -DM2_NO_2A, -DM2_NO_DEBUG -DM2_PROBE=1, and
+the same with -DM2_PROBE_TGP=1 (with and without -DM2_NO_2A_RALLY); lint_idx
+(default and probe): nothing in the changed code; quartus_map --analyze_file
+mb86233_core, m2_tgp, m2_copro, m2_tgp_probe, Model2.sv: 0 errors.
+
+*What the board must show (VF2 on the probe build, the UART captured):* if
+it hangs, decode_tgp.py's verdict and the frozen ring. A "deadlock by count"
+verdict with a sane ring: replay the ring's command in MAME (the last
+function-port codes and operands) and look for a TGP divergence on that
+data. A req without an ack: the memory path. No copro_stall at the freeze:
+not the TGP at all -- the C records' IP says where the i960 is. Not settled
+here: whether #17's "crash" is the TGP at all (no report says freeze or
+reset), and the users' SDRAM modules.
+
+**R931 (board) -- VF2's FREEZE IS GONE WITH THE TGP HOLDING ON A FULL OUTPUT
+FIFO.** s1340 (vf2-skip 909251d: the R931 fix on model2a 35210cb), Ben,
+2026-10-22: Pai's backflip skipped with Start repeatedly (the board capture's
+trigger, ~1 in 10 before) -- "I have not been able to get a crash"; every 2A
+game runs. GitHub #17's cause, as captured on the board (s1336): a 190-word
+TGP command, 129-word output FIFO, 18 words dropped, the i960 waiting at
+0x7dcc for the rest.
 **R930 -- OVER REV FROZE AT THE SPEED CONTEST BECAUSE THE i960 TRAPPED ON
 cvtilr (0x67.5), A FORM NO GAME HAD RUN; IMPLEMENTED (MAME'S set_rifl OF AN
 EXACT int32 -> double). THE RACE IS 57.5 fps IN MAME (A FLIP EVERY VBLANK,
@@ -43814,3 +43970,95 @@ dropping a word, so R931's lost-result path is not this one as such, but
 model2c does not have R931 (909251d) or the R923 TGP probe (e745eb9) yet,
 and the probe reads the MB86233 only; (3) anything else. First step: a
 clean-timing 2C seed; if it hangs again, a TGPx4 version of the probe.
+
+**R934 -- THE 2C BUILD'S TIMING: FOUR SEEDS, ONE TABLE. THE WORST clk_sys
+PATH OF EVERY 2C SEED WAS OVER REV'S PEDAL SCALING (R928), THEN THE TGPx4'S
+DECODE FROM ir (R924); BOTH ARE NOW REGISTERED. R932'S FOUR-M10K LUMA READ
+TOOK ONE SEED. 2A NETLIST UNCHANGED (MAP FIGURES IDENTICAL). NOT FITTED.
+ON BRANCH m2c-timing (OFF model2c 648ecb9), LOCAL ONLY.**
+(Goal: the 2C build -- Model2.qsf + M2_2C=1, M2_NO_2A_MANX_MOTION=1 -- has
+never closed. clk_sys 80 MHz fails, clk_mem 100 MHz is marginal; the 2A
+release build with the same RTL minus M2_2C closes, s1346 +0.122 / +0.110.)
+
+*METHOD:* quartus_sta 17.0 on the four 2C seeds' own databases (read only):
+report_timing -setup -to_clock, -pairs_only, every pair under +0.2 ns, then
+grouped by destination register (bit index dropped) across the seeds. The
+same on 2A s1346 for comparison (paths under +0.6 ns).
+
+*THE TABLE (worst slack per seed, ns: s1337 / s1338 = model2c 1acf830,
+s1350 / s1351 = 648ecb9):*
+  m2_2a_inputs or_str / or_acc / or_brk   -1.245 / -1.905 / -1.176 / -1.602
+      (joy_ranalog_q -> m2_cab_inputs' pedal adders -> the channel mux ->
+      clamp -> the x85/64 adds -> or_*: 12.9 ns of data in one clock; the
+      worst clk_sys path of all four seeds -- each seed's reported slack IS
+      this path)
+  TGPx4 s.S_WAIT                          -0.195 / -0.849 / -0.372 / -0.420
+  TGPx4 ext_addr                          -0.550 / -0.567 / -0.134 / -0.568
+  TGPx4 fa_az                             -0.452 / -0.622 / -0.391 / -0.303
+  TGPx4 mv_val                            -0.449 / -0.536 / -0.742 /  ok
+  TGPx4 ar[]                              -0.320 / -0.176 /  ok    / -0.857
+  TGPx4 S_FETCH, S_HALT, rpc, ext_wdata, fa_an, S_WXB: -0.04 to -0.67, 2-4 seeds
+      (all but fa_* begin at ir: ir -> the ARx / ARy select (arx[agu_mi],
+      the transfer decode by top / t1_ext / state) took 4.3 ns before the AR
+      mux, the AGU adder and the internal / external test; fa_* begin at
+      add_bq: nanfix's f_nan(b) -> f_neg -> the FADDZ clamp -> f_zero)
+  raster u_fbw vlo / vhi (fb_wcomb)        ok    / -1.438 /  ok    / -0.795
+  raster span_tex lp2_L (R932 lr_mem)      ok    /  ok    /  ok    / -1.283
+  raster quad store uvt / vtx M10K we      ok    /  ok    /  ok    / -1.219
+  raster u_fill qv, span_tex sh_m, texel_x2 s_cr: -0.4 to -1.0, 1-2 seeds
+  geometry E_DONE / E_NORM, fx68k nanoAddr, SCSP st: -0.2 to -0.9, 2-3 seeds
+  clk_mem: ascal i_vdivr -0.353 (s1337), sdram rr_mask -0.001 (s1350): the
+      framework scaler and the controller, not 2C logic
+In 2A s1346 the shared ones (geometry E_DONE +0.544, fx68k +0.551, fill
+oz_emax +0.441, wcomb ist +0.507) are inside +0.6: they fail in 2C because
+the device is fuller (41,482 ALM fitted, 549 / 553 M10K), not because they
+changed. The 2C-only paths are the ones that fail in every seed.
+
+*THE FIXES (each exact, each 2C-only):*
+  * m2_2a_inputs (OREV): the clamped value, its channel and its sign are
+    registered; the multiply and the add are the next clock. One clock more
+    on a value the game reads once a frame (test_m2_2a_inputs's 6-deep
+    window covers it).
+  * tgpx4_core: the transfer decode (sk / dk / sc / dc / buses / masks / AGU
+    fields / imm / eo / single_two) is a function xdec(word), registered as
+    xd beside ir from acc_word at acc -- the only place ir loads -- so xd ==
+    xdec(ir) every clock; a Verilator-only check stops the bench if not.
+    ir -> g_rx is now a state-selected 2:1 of registered fields.
+  * tgpx4_core: the FP operands' NaN tests are registered a clock after the
+    operands load (fp_add / fp_mul take four clocks; the operands hold until
+    the word ends), and the result flags come from the unit's result and
+    those bits: f_neg(nanfix(r,a,b)) = !nan_a & !nan_b & f_neg(r), likewise
+    f_zero; FADDZ's clamp folded (fa_an = neg & !zop, fa_az = zc | zero);
+    fm_d / fm_v / fm_u the same way.
+  * m2_span_tex, LSB > 3 only: the product's top byte registered (lp2_P) and
+    the clamp to 63 moved after it into the colour tables' read address.
+    The same L every clock; LSB 3 keeps lp2_L.
+  NOT TOUCHED: fb_wcomb, the quad store's write, u_fill, geometry, fx68k --
+  shared with 2A, which closes; each failed in one or two 2C seeds only.
+
+*VERIFIED:* make tgpx4_replay (m2_copro TGPX4=1 in lockstep with MAME's
+MB86235 interpreter), HOTD boot capture, 648ecb9 vs this branch: both
+1,085,266,905 cycles, 188,786,517 words, 8,697,138 / 8,697,138 outputs
+equal, 0 bad -- the same cycle count to the clock. Over Rev's race capture
+(R930 cap1): 1,143,259,352 cycles, 200,845,508 words, 8,251,088 / 8,251,088
+equal, 0 bad -- R930's own figures exactly. PLANTED (xd loaded from nx_ir):
+the xd == xdec(ir) check stops the replay at the first word. test_m2_2a_inputs:
+0 mismatches over 20 M cycles (Over Rev 5,498,514 channel checks).
+tb_m2_raster3d built with Model2.sv's raster parameters (TEXLUT, FB_DDR3,
+WCOMB, TWO_CLOCKS, KW 20; M2_R3D_FB, FBPRE 8, REALCOL, PXDUMP), old RTL vs
+new: LSB 5 on R932's two Over Rev frames (d1, d2) and LSB 3 on d1 -- every
+painted pixel identical (153,536 / 153,600 / 153,536 PX lines, 0 differ).
+test_m2_span_tex, test_m2_luma_map (2A and 2C) PASS. lint_top 2A and
+M2_2C clean; lint_idx's candidate list for M2_2C identical before and after.
+(The FB-mode bench's colour-vs-MAME figure, 57-86 of 255, is not R932's
+5.5: this configuration is not the one R932 measured with. It was used for
+A/B identity only.)
+
+*AREA (quartus_map 17.0):* 2C (M2_2C + M2_NO_2A_MANX_MOTION) 40,078 ->
+40,128 ALMs needed (+50), registers 48,100 -> 48,237, block bits 4,583,920
+and DSP 102 unchanged. 2A (no M2_2C) 648ecb9 vs this branch: 39,953 /
+39,953 ALMs, 48,097 / 48,097 registers, 4,572,656 bits, 96 DSP -- identical.
+*NOT KNOWN:* whether it closes. No fit was run here; the next seeds decide.
+If the raster / shared paths remain, they are the next list -- the quad
+store's write enable (64 M10K sinks off q_take) and fb_wcomb's c_fits ->
+c_wr -> vlo are the two with the most negative single-seed slack.

@@ -47,7 +47,13 @@ module mb86233_core #(
   // R888: launch the ALU op of a lab / ld-mov in the first S_SRC cycle, on the
   // operands S_DECODE snapshots, so its latency runs under the instruction's
   // memory transfers; see alu_early below. 0 = the ALU waits for S_ALU.
-  parameter bit EARLY_ALU = 1'b0
+  parameter bit EARLY_ALU = 1'b0,
+  // R931: a register-form write of the output FIFO (rf 0x22: a ld / mov in
+  // S_DST, an ldi in S_RETIRE) waits for fifo_ack as the memory form (0x400,
+  // mem_stall) always has, so a full FIFO holds the instruction rather than
+  // losing its word. MAME's rf space writes m_copro_fifo_out, which halts the
+  // TGP when it is full. 0: the write completes whatever the ack (R146).
+  parameter bit OUT_HOLD = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -107,7 +113,11 @@ module mb86233_core #(
   output logic [7:0]  dbg_c1,
   output logic [7:0]  dbg_rep,
   // AS_RF 3, the coprocessor's memory bank. Study R133.
-  output logic [31:0] bank_reg
+  output logic [31:0] bank_reg,
+  // R923: the sequencer's state, for the board probe's handshake record (a
+  // TGP that never answers is parked in one of these, and the state names
+  // what it waits on: S_SRC on the input FIFO, S_SRC_W / S_DST_W on io)
+  output logic [3:0]  dbg_state
 );
 
   // ==================================================================
@@ -479,6 +489,7 @@ module mb86233_core #(
   } state_e;
 
   state_e state;
+  assign dbg_state = state;   // R923
 
   // R601: AND THE FIFO STROBES THEMSELVES. fifo_ack answers fifo_rd, and
   // u_mem's ext_rd was decoded from the live address, so R596 still left
@@ -887,6 +898,9 @@ module mb86233_core #(
                       | ((state == S_ALU) & brul_fifo_q);
   assign rf_fifo_wr_c = ((state == S_DST) & dst_fifo_q)
                       | ((state == S_RETIRE) & ldi_fifo_q);
+  // R931: held in S_DST / S_RETIRE until the word is taken (m2_tgp's
+  // fifo_ack for a write: not full, or pushed -- flops only)
+  wire rf_out_hold = OUT_HOLD && rf_fifo_wr_c && !fifo_ack;
   assign rf_rd_unimpl = rf_rd_unimpl_u
                       & (((state == S_SRC) & x_src_reg)
                        | ((state == S_RETIRE) & brul_regform));
@@ -937,11 +951,12 @@ module mb86233_core #(
   // group and the branches keep S_RETIRE, which is where their writes and the
   // sequencer's branch inputs are -- but a branch, ldi, lipl or stm with
   // nothing to read in S_ALU goes to it straight from S_DECODE.
-  wire ret_dst   = (state == S_DST) && d_ldmov && d_noalu && x_dst_reg && !src_prog;
+  wire ret_dst   = (state == S_DST) && d_ldmov && d_noalu && x_dst_reg && !src_prog
+                 && !rf_out_hold;   // R931
   wire ret_alu   = (state == S_ALU) && d_ldmov && alu_out_valid;
   wire ret_labwb = (state == S_LAB_WB) && (!lab_ov || lab_res || alu_out_valid);   // R888
   wire ret_labov = (state == S_ALU) && lab_ov && alu_out_valid;                    // R888
-  assign ret_now = (state == S_RETIRE) || ret_dst || ret_alu || ret_labwb || ret_labov;
+  assign ret_now = ((state == S_RETIRE) && !rf_out_hold) || ret_dst || ret_alu || ret_labwb || ret_labov;   // R931
   state_e nxt_ret;
   assign nxt_ret = pf_load ? S_DECODE : pf_same ? S_DECODE : S_FETCH;
   wire dec_ret   = !(d_lab | d_ldmov) && !alu_active && !brul_regform
@@ -1060,6 +1075,7 @@ module mb86233_core #(
         S_LAB_WB: state <= ret_labwb ? nxt_ret : S_ALU;   // R773; R888
 
         S_DST:   state <= !x_dst_reg ? S_DST_W
+                        : rf_out_hold ? S_DST   // R931
                         : ret_dst   ? nxt_ret
                         : skip_alu  ? S_RETIRE : S_ALU;   // R771, R773
         S_DST_W: begin
@@ -1093,7 +1109,7 @@ module mb86233_core #(
           // stm/stmh: bit 0 selects floating point, bits 2:1 the cfxd rounding
           // mode. Only sub-op 5 is implemented in MAME; the rest log.
           if (d_stm && d_stmsub == 3'd5) reg_m <= d_stmm;
-          state <= nxt_ret;   // R772
+          if (!rf_out_hold) state <= nxt_ret;   // R772; R931
         end
 
         default: state <= S_FETCH;

@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-22 (night): the 2C build's timing -- branch m2c-timing (off model2c 648ecb9), R934. LOCAL ONLY, NOT FITTED
+
+BUILD TO FIT: m2c-timing HEAD with Model2.qsf + VERILOG_MACRO "M2_2C=1" and
+"M2_NO_2A_MANX_MOTION=1" (as model2c). No fit was run in this task.
+FOUND (quartus_sta on s1337 / s1338 / s1350 / s1351's own databases, every
+clk_sys pair under +0.2 ns grouped by destination): the worst path of all
+four seeds is Over Rev's pedal scaling (m2_2a_inputs or_*, -1.18 to -1.91:
+stick -> m2_cab_inputs' combinational pedal adders -> clamp -> x85/64 in one
+clock); then the TGPx4 from ir (S_WAIT / ext_addr / ar / mv_val / rpc,
+-0.13 to -0.87, every seed: the transfer decode + ARx select was 4.3 ns
+before the AGU) and from add_bq (fa_az / fa_an, nanfix -> clamp -> flags).
+Seed-dependent, one or two seeds: fb_wcomb vlo (-1.44), R932's lr_mem ->
+lp2_L (-1.28, s1351), the quad store's M10K write enable (-1.22, s1351),
+u_fill qv (-1.03), geometry E_DONE / fx68k / SCSP (-0.2 to -0.9; shared
+with 2A, which has them at +0.4 to +0.6). clk_mem's two are ascal and the
+SDRAM controller, not 2C logic.
+CHANGED (all exact): e1f4a31 OREV scaling over two clocks; d80bf02 span_tex
+LSB > 3: product registered, clamp after it; a4ea0da TGPx4 transfer decode
+registered beside ir (xd == xdec(ir), checked in Verilator) and the FP
+operands' NaN tests registered a clock early, flags from the unit's result.
+NOT CHANGED: fb_wcomb, quad store, fill, geometry, fx68k (2A shares them).
+VERIFIED: tgpx4_replay HOTD boot, old vs new: 1,085,266,905 cycles,
+188,786,517 words, 8,697,138 / 8,697,138 outputs equal, 0 bad -- the same
+cycle count to the clock; planted (xd from nx_ir) stops at once. Over Rev
+race (R930 cap1): 1,143,259,352 cycles, 8,251,088 outputs equal = R930.
+test_m2_2a_inputs 0 mismatches (20 M cycles); tb_m2_raster3d in Model2.sv's
+raster parameters, TEXLUT, FB mode, PXDUMP, old vs new RTL: LSB 5 on two
+Over Rev MAME frames and LSB 3 on one -- every painted pixel identical
+(153,536 / 153,600 / 153,536). test_m2_span_tex, test_m2_luma_map (both)
+PASS. lint_top 2A and M2_2C clean; lint_idx candidates for M2_2C identical
+before / after.
+AREA (quartus_map 17.0): 2C 40,078 -> 40,128 ALMs (+50), registers 48,100
+-> 48,237, bits / DSP unchanged. 2A (no M2_2C): 39,953 ALMs, 48,097 regs,
+4,572,656 bits, 96 DSP before and after -- identical, so 2A is not affected.
+NEXT: fit seeds. If it still fails, the list above minus the fixed ones is
+the next work -- the quad store's write enable and fb_wcomb's c_fits -> vlo
+first (both shared with 2A: gate any change on LSB / C2 or prove 2A equal).
+Next free R numbers: R935 on (R933 = STCC bring-up, in parallel).
 ## 2026-10-22 (evening): board on s1350 (648ecb9) -- Over Rev's road good; HOTD's rectangle shadows. NOT PUSHED
 
 Ben on s1350 (test build, clk_sys -1.176): Over Rev's road looks good (R932
@@ -151,6 +189,25 @@ topskatru topskatruo topskatrj). It decides the forms kept, FLOG, the cache
 size (PCACHE line) and whether the overlap lever is needed (BUSY line).
 The SHARC (2B) was not re-sized. Ben's R832 decision is unchanged.
 Next free R numbers: R921 on.
+## 2026-10-22: model2a pushed (with main) -- Model2_20261022 and Model2A_20261022 released
+
+releases/: Model2_20261022.rbf = s1343 (VCop/Desert Tank colours R925, Gun
+flash Arcade/Off R929, link play), md5 eaa65eae..., clk_sys +0.428, clk_mem
++0.038, i960 +1.265, hold +0.242. Model2A_20261022.rbf = s1346 (model2a
+909251d: R927 i960 ring + data cache, R931 TGP holds on a full output FIFO),
+md5 c778c70a..., clk_sys +0.122, clk_mem +0.110, i960 +1.080, hold +0.245;
+HDMI report-only. Same RTL as s1340, which Ben ran on the board (VF2's
+backflip skip many times, every 2A game). s1344/s1347 failed timing, s1341
+segfaulted in the fitter (tool flake). This branch's releases/ is now the same
+folder as main's (mra/, helpers/). GitHub: #10, #17, #19 closed with comments; #13 (gun flash) left open
+for a GunCon 2 owner to confirm -- Virtua Cop 2 flashes natively.
+OPEN: #15 Rally EEPROM in the NVRAM file (planned, not started); #20 Daytona
+core volume does nothing (new, not looked at); #21 Manx TT -- settings not
+saved, bike sound missing on Deluxe, repeating voice on Twin (new, not looked
+at). Zero Gunner froze once in attract on s1340 and never again in long runs;
+the VF2 agent showed the R931 hold cannot engage in ZG (FIFO peaks 1-12 of
+129). If it recurs: fit 39ed188 (vf2-probe-fix, probe + fix) and decode the
+UART with tools/decode_tgp.py.
 
 ## 2026-10-22: branch i960-speed -- the 2A i960's speed for Sega Rally's AI budget (R927). NOT PUSHED, NOT FITTED
 
@@ -276,6 +333,37 @@ missing i960 form per R921's census); #16 VCop2 text behind the 3D (agent on
 it); #15 Rally NVRAM (cause: the 93C46 EEPROM is never saved; plan posted on
 the issue, not started); link play (branch link-play, in-core hand-over,
 being finished); 2C TGPx4 study on the LOCAL branch model2c (never push).
+## 2026-10-21 (late): branch vf2-tgp-hang -- VF2 #17: no TGP deadlock found in simulation; the TGP hang probe (R923). NOT PUSHED, NOT FITTED
+
+GitHub #17 (VF2 "crashes at random", attract and fights, s1278). HUNTED in
+simulation, not reproduced: VF2's TGP replays bit-exact against MAME on the
+attract window under 16 timing settings (gap to 2000, jitter to 1000, buffer
+write ack to 400 cycles) and on a NEW 60 s capture with fights
+(build/tgpcap/vf2_fight, 9.7 M words in; plain and board-like, 7 runs); ZG,
+Rally, a new VC2 capture and Daytona still pass; m2_fifo_m10k fuzzed 40 M
+cycles against a model (new tb_m2_fifo_fuzz), 0 failures. Ruled out by
+reading / measuring: the bridge's I/O hold (one push or pop per access),
+VF2 re-uploading or polling (MAME: never), IRQs during the ldq wait,
+address aliases onto the copro ports (VF2 touches nothing >= 0x10000000 but
+textures / luma / 0x10000000), and timing: s1278's failing clk_sys paths are
+hps_io gp_outr -> scan-converter config (-0.328); the worst TGP path is
++0.484 (quartus_sta on a copy of its db).
+FOUND ON THE WAY, KEPT: a TGP output into a full output FIFO is acknowledged
+and dropped (Model 1 stalls; ours drops since R146) and nothing counted it;
+now counted (m2_tgp dbg_out_refused) and the replay fails on any -- 0 in
+every run.
+BUILT: M2_PROBE_TGP (rtl/dbg/m2_tgp_probe.sv, tools/decode_tgp.py): C / h /
+j / p / x / i / a state records (both FIFOs, every TGP req / ack, the
+sequencer state, counts, last words, the i960's access) and a 256-entry ring
+of the i960's transfers that freezes after 105 ms of copro_stall. Release
+build area unchanged (39,987 both); probe 40,455, probe + M2_NO_2A_RALLY
+40,313 (+1 M10K). Benches: test_m2_tgp_probe (UART end to end, frozen ring
+checked), the replay now checks the probe's transfer tap.
+NEXT: a fit of this branch with VERILOG_MACRO M2_NO_DEBUG=1, M2_PROBE=1,
+M2_PROBE_TGP=1, M2_NO_2A_RALLY=1; VF2 left in attract (and played) with the
+UART captured; `python3 tools/decode_tgp.py <capture>` -- the verdict names
+which wait it is. Ask the #17 users whether "crash" is a freeze or a reset,
+and their SDRAM module.
 
 ## 2026-10-21 (night): branch m2a-forms-r921 -- DOA's first-match "crash" is its tamper check; MRA fix (R921). NOT PUSHED, NO RTL CHANGE
 

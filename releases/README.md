@@ -4,6 +4,16 @@ There are two cores: **Model 2** (`Model2.rbf`) for the original Model 2
 board, and **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board. Each game's
 MRA names the core it runs on, so both can sit in `cores/` side by side.
 
+| in this folder | what it is |
+|---|---|
+| `Model2_*.rbf` | the Model 2 core |
+| `Model2A_*.rbf` | the Model 2A core |
+| `mra/` | every MRA for both cores, including the `[15kHz CRT]` versions |
+| `helpers/m2link/` | only for Daytona link play (experimental) -- see the Model 2 notes |
+
+Copy the MRAs you want from `mra/` to `/media/fat/_Arcade/` (or any folder
+under it).
+
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
 from other MAME versions may have different file names or contents and may
@@ -23,13 +33,29 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-## Model 2A core — `Model2A.rbf` — BETA
+## Model 2A core — `Model2A.rbf`
 
-**This core is a beta.** All eleven games below boot and play, but there are
-known bugs, and some games still slow down in places, mainly Sega Rally and
-Manx TT. Please report anything you find, and say which game and where.
+All eleven games below boot and play. A few known bugs remain (listed
+below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261021d`)
+### New in this build (`Model2A_20261022`)
+
+- **Sega Rally and Manx TT run at full speed, and Rally's opponents behave.**
+  The main CPU was too slow in the races: every function call saved and
+  restored its registers through memory, and Sega Rally reacts to running
+  short of time by switching its nearest opponents to a simpler model. That
+  made them blink, let you drive through them, and now and then launched one
+  into the air (GitHub #19); it also caused both games' slowdowns. The CPU
+  now keeps eight sets of registers on chip and has a small data cache, so
+  races hold the full 57.5 frames a second and the opponents stay solid.
+- **Virtua Fighter 2 no longer freezes.** The freeze (3D stopped, music
+  still playing; GitHub #17) came from the geometry processor's result
+  queue: some of VF2's commands return more words than the queue holds, and
+  the extra words were dropped, leaving the main CPU waiting for them
+  forever. Skipping a win pose with Start made it most likely. The geometry
+  processor now waits for room instead of dropping a word.
+
+### Earlier in `Model2A_20261021d`
 
 - **Virtua Cop 2's stage select shows SHOOT TO SELECT properly.** The city
   map behind it is a 2D layer set to go over the 3D, and it was being drawn
@@ -75,15 +101,15 @@ Manx TT. Please report anything you find, and say which game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261021d.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
-| the 2A MRAs below | `/media/fat/_Arcade/` |
+| `Model2A_20261022.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
 TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261021d.rbf` has the md5 `293df5f3b618b93c49597ff306dd0ed3`. As with
+`Model2A_20261022.rbf` has the md5 `c778c70ad8ca799ba3d1c3845567f9a4`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -93,11 +119,11 @@ ROM sets: MAME 0.289.
 | Game | MRA | ROM zips | MAME set | State |
 |---|---|---|---|---|
 | Virtua Fighter 2 (Version 2.1) | `Virtua Fighter 2 (Version 2.1).mra` | `vf2.zip` | `vf2` | Plays at full speed, with sound |
-| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays, with wheel, pedals and gears. **Slows down** in busy scenes |
+| Sega Rally Championship (Twin/DX, Revision C) | `Sega Rally Championship - Twin-DX (Revision C).mra` | `srallyc.zip` | `srallyc` | Plays at full speed, with wheel, pedals and gears |
 | Virtua Cop 2 | `Virtua Cop 2.mra` | `vcop2.zip` | `vcop2` | Plays, aiming with a mouse or stick; the ammo display counts down and reloads |
 | Zero Gunner (Export, Model 2A) | `Zero Gunner (Export, Model 2A).mra` | `zeroguna.zip` and its parent `zerogun.zip` | `zeroguna` | Plays, on the d-pad or either analogue stick |
 | Pilot Kids (Model 2A) | `Pilot Kids (Model 2A).mra` | `pltkidsa.zip` and its parent `pltkids.zip` | `pltkidsa` | Plays at full speed. **Needs the 128 MB SDRAM module.** Its protection check is patched out by the MRA |
-| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check. Occasional slowdowns |
+| Manx TT Superbike (DX/Twin, Revision D) | `Manx TT Superbike - DX-Twin (Revision D).mra` | `manxtt.zip` | `manxtt` | Plays at full speed, with bike controls; boots straight past the motion-seat check |
 | Hanguk Pro Yagu 98 | `Hanguk Pro Yagu 98.mra` | `hpyagu98.zip` | `hpyagu98` | Plays. **Needs the 128 MB SDRAM module.** The MRA loads the factory settings MAME ships in the zip; some surfaces' shading may differ slightly from MAME |
 | Sky Target | `Sky Target.mra` | `skytargt.zip` | `skytargt` | Plays. **Needs the 128 MB SDRAM module.** |
 | Dynamite Cop (Export, Model 2A) | `Dynamite Cop (Export, Model 2A).mra` | `dynamcop.zip` | `dynamcop` | Plays. **Needs the 128 MB SDRAM module.** Its 315-5881 protection checks are patched out by the MRA |
@@ -106,16 +132,12 @@ ROM sets: MAME 0.289.
 
 ### Known bugs
 
-- **Sega Rally slows down** in some scenes. The 3D holds, but the frame rate
-  drops where the geometry processor has the most work. Being looked at.
-- **Manx TT** has an occasional slowdown in busy scenes. Its deluxe
-  cabinet's extra sound board isn't emulated, so a few extra sounds are
-  missing.
+- **Manx TT**'s deluxe cabinet's extra sound board isn't emulated, so a few
+  extra sounds are missing.
 - **Sega Rally doesn't save its settings** (NVRAM). The core saves the
   backup RAM but not the game's EEPROM, where Rally keeps its settings. Fix
-  planned (GitHub #15).
-- **Virtua Fighter 2 can crash** at random, in attract or in a fight.
-  Being looked at; if it happens to you, please say where.
+  planned (GitHub #15). Manx TT's service menu settings aren't kept either
+  (GitHub #21).
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall. That is how MAME 0.289 mixes these games, and apart from
   the effects processor fix above the core matches it sample for sample. (MAME can sound louder because it also runs its own audio
@@ -154,12 +176,13 @@ Fighter 2 at the default 80%:
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261021b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
-| `Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
-| `Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
-| `Desert Tank.mra` | `/media/fat/_Arcade/` |
-| `Virtua Cop (Revision A).mra` | `/media/fat/_Arcade/` |
-| the four `[15kHz CRT]` versions of those | `/media/fat/_Arcade/` — each starts in 15 kHz, for a CRT |
+| `Model2_20261022.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
+| `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
+| `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
+| `mra/Virtua Cop (Revision A).mra` | `/media/fat/_Arcade/` |
+| the four `[15kHz CRT]` versions of those, also in `mra/` | `/media/fat/_Arcade/` — each starts in 15 kHz, for a CRT |
+| `helpers/m2link/` | only for link play — see *Link play* below |
 
 There's only ever one core here, and it runs all three games: the MRA you
 pick tells it which. Older builds are in this repository's git history if
@@ -192,7 +215,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261021b.rbf` has the md5 `672b7003d3264906e96f4ab0e925bab2`.
+**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `eaa65eae56f7222fa6a1925ebecf99d0`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -226,6 +249,27 @@ anything you find.
 
 ### New in this release
 
+- **Virtua Cop's colours are fixed: white clouds, grey concrete.** The clouds
+  over the wharf came out black with white edges, the ground light blue, and
+  the bars above and below the picture grey (GitHub #10). The core shaded
+  Virtua Cop's and Desert Tank's textures with a brightness model built from
+  Daytona's tables; it now uses each game's own tables, as the arcade board
+  does. Desert Tank's sand and tanks take MAME's tones too. Daytona is
+  unchanged. (`Model2_20261022`.)
+- **Gun flash for CRT light guns (Virtua Cop).** On each shot the game flashes
+  the screen white for a frame, so a CRT light gun such as the GunCon 2 can
+  see where it's aimed (GitHub #13). The core didn't show it before. A new
+  `Gun flash` setting: `Arcade` (default, the game's flash) or `Off` (no
+  flash at all, for Sinden, mouse or stick players). Not yet tested with a
+  GunCon 2: reports very welcome. (Virtua Cop 2, on the Model 2A core,
+  already shows its flash: it needs no setting.)
+- **Link play for Daytona USA (experimental).** Race other cabinets over your network:
+  MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
+  link board is switched on in the OSD (`Link board`, Daytona only, Off by
+  default), and a small helper program on the MiSTer's Linux carries the
+  link. Master, slave and car number are the game's own test-menu settings.
+  Optional frame sync keeps every cabinet on the master's frame. See *Link
+  play* below for the setup. (`Model2_20261021c`.)
 - **Daytona's road stays sharp in the distance.** With mip-mapping on, the
   road and its lane lines used to step and fade in bands as they went into
   the distance (GitHub issue #11). Mip-mapping is there for the mountains and
@@ -285,6 +329,8 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
+| `Gun flash` | Virtua Cop only: `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
+| `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
 ### Controls
@@ -350,6 +396,118 @@ The attract's tutorial text is in Japanese: Virtua Cop keeps its country in
 its own backup RAM, and a fresh set starts as Japan, as it does in MAME. The
 country is the game's own setting, so change it in its test menu, or use a
 ROM set from another region.
+
+### Link play: Daytona USA, cabinet against cabinet (EXPERIMENTAL)
+
+> **Experimental.** Link play is new and has only been tested on a few
+> setups so far (a MiSTer linked to the PC recompilation). Expect rough
+> edges, and please report what works and what doesn't: your network, how
+> many cabinets, MiSTer or PC, and whether frame sync was on.
+
+Daytona USA (Revision A, the 1994 set) can race other cabinets over your
+network, wired or Wi-Fi, like linked arcade machines: two MiSTers, or a
+MiSTer and a PC running the
+[Daytona USA recompilation](https://github.com/alphanu1/daytona-arcade-recomp),
+or more of either. They speak the same protocol, so any mix works.
+
+The MiSTer's network is on its Linux side, so a small program, `m2link`,
+carries the link; the core just needs its link board switched on. Everything
+is in `helpers/m2link/` here, ready to copy — nothing to build.
+The same instructions are in `helpers/m2link/README.md`, next to the files.
+
+| file in `helpers/m2link/` | where it goes on the SD card |
+|---|---|
+| `m2link` (the program) | `/media/fat/linux/m2link` |
+| `m2link.ini` (its settings) | `/media/fat/linux/m2link.ini` |
+| `m2link.sh` (start / stop) | `/media/fat/Scripts/m2link.sh` (only if you run it from the Scripts menu) |
+
+`m2link` md5: `adccae3cf26e070dcd205f2045003d01`
+
+**Setting up each MiSTer:**
+
+1. Copy the files as in the table above.
+2. Edit `/media/fat/linux/m2link.ini`. Two lines matter:
+
+       link_port = 15112
+       link_next = 192.168.1.XXX:15112
+
+   * `link_port`: this cabinet listens here for the cabinet before it in the
+     ring. Leave it at 15112 unless something else uses that port.
+   * `link_next`: replace `192.168.1.XXX` with the IP address of the **next**
+     cabinet, and give that cabinet's `link_port`. The cabinets form a ring:
+     with two, each one's next is the other. Use an IP address, not a name.
+
+   The names and defaults are the recomp's (its launcher's Game tab), so a
+   MiSTer and a PC set up the same way.
+3. Choose how `m2link` runs. Either:
+   * **from the Scripts menu**: **Scripts > m2link** starts it; running it
+     again stops it. Do this before a linked race; or
+   * **at every boot**: add this line to `/media/fat/linux/user-startup.sh`
+     and reboot once:
+
+         /media/fat/linux/m2link -c /media/fat/linux/m2link.ini > /tmp/m2link.log 2>&1 &
+
+     `m2link` then waits quietly. It links when Daytona is loaded with Link
+     board On, drops the link when you switch it Off or load another core,
+     and never touches anything while another core is running.
+4. Load **Daytona USA (Revision A)**, open the OSD and set **Link board** to **On**.
+5. Test mode (F2, or your mapped Test button) > **GAME SYSTEM**: set **LINK ID**
+   to **MASTER** on one cabinet and **SLAVE** on all the others, and give each
+   cabinet a different **CAR NUMBER**. Exit test mode (that's saved).
+
+Master, slave and car number are never in the INI: like the arcade and the
+recomp, the game decides them from its own settings (step 5).
+
+**Starting a linked race:**
+
+1. **Start the MASTER cabinet first**: load Daytona on it (and start `m2link`
+   on it, if it is a MiSTer that doesn't start it at boot).
+2. **Then start each SLAVE**, the same way.
+3. Each says **NETWORK CHECKING** until every cabinet is there, then the
+   linked attract (通信システム). Insert coins and race.
+
+**If a cabinet drops out, or shows CANCELLED:** bring the **master** back up
+first (reset Daytona on it, and restart `m2link` on it if you stopped it),
+**then** reset each slave. A link that is lost does not come back by itself.
+
+**Reading `/tmp/m2link.log`** (over ssh, or `cat` from a terminal) tells you
+what `m2link` is doing:
+
+* `waiting for the Model 2 core with Link board On in its OSD` — load
+  Daytona, Link board On.
+* `on (the game has not started the link: set LINK ID in test mode)` — LINK
+  ID is SINGLE: set MASTER or SLAVE.
+* `waiting: next cabinet ... not reached yet` — that cabinet isn't up, its
+  `link_port` is different, or a firewall is in the way. `... no cabinet has
+  connected to port ...` — the cabinet *before* this one hasn't reached it.
+* `link_next is still the example's placeholder` — step 2.
+* `linked: cabinet 1 of 2` — working.
+* `lost (reset the game to try again)` — see above.
+
+**Keeping the cabinets in step: `link_framesync`.** By default (0, as on the
+recomp) each cabinet runs at its own pace and takes the others' cars as they
+come; over a long race the cabinets slowly drift apart, exactly as the recomp
+does. Set `link_framesync = 1` on **every** cabinet — in each MiSTer's
+`m2link.ini`, and on each PC by ticking **Frame sync (every cabinet waits for
+the master)** in the recomp's Game tab — and every cabinet waits each frame
+for the master, so they stay together. A MiSTer then holds its game for the
+moment it waits (picture and sound carry on).
+
+**Example: a MiSTer and a PC.** MiSTer at 192.168.1.62, PC at 192.168.1.20.
+
+* MiSTer `m2link.ini`: `link_port = 15112`, `link_next = 192.168.1.20:15112`.
+* PC (recomp launcher, Game tab): **Link to other cabinets** ticked, **This
+  cabinet's port** 15112, **Next cabinet** `192.168.1.62:15112`.
+* One of them MASTER in test mode, the other SLAVE, different car numbers.
+  Start the master first.
+
+Three or more: each cabinet's `link_next` is the next one round the circle,
+and the last one's is the first.
+
+**Not linking at all?** A cabinet set to TWIN in test mode with nobody to link
+to waits at NETWORK CHECKING for ever — the factory setting does this, with or
+without the link board. For one player, set LINK ID to SINGLE. Link board Off
+in the OSD is exactly the core without link play.
 
 ### On a 15 kHz CRT
 

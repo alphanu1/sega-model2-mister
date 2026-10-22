@@ -2059,10 +2059,12 @@ TGP_PROG   ?= 2048
 TGP_IS2A   := $(if $(filter 2048,$(TGP_PROG)),,1)
 TGP_EARLY  ?= $(if $(TGP_IS2A),1,0)
 TGP_BUFW   ?= $(if $(TGP_IS2A),32,0)
-TGP_ROBJ   := obj_tgp_replay$(if $(TGP_IS2A),_$(TGP_PROG))$(if $(filter $(TGP_EARLY),$(if $(TGP_IS2A),1,0)),,_e$(TGP_EARLY))$(if $(filter $(TGP_BUFW),$(if $(TGP_IS2A),32,0)),,_q$(TGP_BUFW))
+# R931: a full output FIFO holds the TGP on 2A (m2_tgp OUT_STALL); TGP_OSTALL=0 / 1 for an A/B
+TGP_OSTALL ?= $(if $(TGP_IS2A),1,0)
+TGP_ROBJ   := obj_tgp_replay$(if $(TGP_IS2A),_$(TGP_PROG))$(if $(filter $(TGP_EARLY),$(if $(TGP_IS2A),1,0)),,_e$(TGP_EARLY))$(if $(filter $(TGP_BUFW),$(if $(TGP_IS2A),32,0)),,_q$(TGP_BUFW))$(if $(filter $(TGP_OSTALL),$(if $(TGP_IS2A),1,0)),,_s$(TGP_OSTALL))
 $(TGP_ROBJ)/Vm2_copro: $(TGP_REPLAY_RTL) sim/tgp/tb_tgp_replay.cpp sim/tgp/tgp_replay.vlt
 	verilator --cc --exe --build -j 0 -Wall $(TGPFLAGS) --timing -Wno-WIDTHTRUNC --top-module m2_copro \
-	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) -GEARLY_ALU=$(TGP_EARLY) -GBUFW_Q=$(TGP_BUFW) \
+	  -GPROG_WORDS=$(TGP_PROG) -GSUBNORM=$(if $(filter 2048,$(TGP_PROG)),0,1) -GEARLY_ALU=$(TGP_EARLY) -GBUFW_Q=$(TGP_BUFW) -GOUT_STALL=$(TGP_OSTALL) \
 	  -CFLAGS "-O2 -DTGP_PROG_WORDS=$(TGP_PROG)" -O3 -LDFLAGS "-lz" \
 	  --Mdir $(TGP_ROBJ) -o Vm2_copro sim/tgp/tgp_replay.vlt \
 	  $(TGP_REPLAY_RTL) $(abspath sim/tgp/tb_tgp_replay.cpp)
@@ -2100,6 +2102,27 @@ tgp_capture_2a:
 	  tools/m2b-mame.sh $(CAP2A_SET) -skip_gameinfo -autoboot_script $(abspath sim/tgp/tgp_capture_2a.lua) | grep TGPCAP
 	gzip -1f $(TGPCAP)/events.bin $(TGPCAP)/cdata.bin
 .PHONY: tgp_replay tgp_replay_baseline tgp_replay_check tgp_capture tgp_capture_2a
+
+# R923: the TGP hang probe (rtl/dbg/m2_tgp_probe.sv, M2_PROBE_TGP) through its own
+# UART: a fast UART (DIVISOR 8) and FREEZE_BIT 12; the frozen ring checked entry by
+# entry against the transfers before the hang, every state record against its
+# inputs; then tools/decode_tgp.py reads the capture.
+obj_tgp_probe/Vm2_tgp_probe: rtl/dbg/m2_uart_tx.sv rtl/dbg/m2_dbg_stream.sv rtl/dbg/m2_tgp_probe.sv sim/dbg/tb_m2_tgp_probe.cpp
+	$(VBUILD) --top-module m2_tgp_probe -GDIVISOR=8 -GBUDGET_CYC=100 -GFREEZE_BIT=12 -CFLAGS -O2 \
+	  --Mdir obj_tgp_probe -o Vm2_tgp_probe $(abspath $^)
+test_m2_tgp_probe: obj_tgp_probe/Vm2_tgp_probe
+	./obj_tgp_probe/Vm2_tgp_probe obj_tgp_probe/tgp_probe.uart
+	python3 tools/decode_tgp.py obj_tgp_probe/tgp_probe.uart | tail -14
+.PHONY: test_m2_tgp_probe
+# R923: m2_fifo_m10k against a reference queue under random traffic, at the
+# copro FIFOs' depth (128) and the posted-write queue's (32, MLAB).
+obj_fifo_fuzz_%/Vm2_fifo_m10k: rtl/tgp/m2_fifo_m10k.sv sim/tgp/tb_m2_fifo_fuzz.cpp
+	$(VBUILD) --top-module m2_fifo_m10k -GDEPTH=$* -CFLAGS "-O2 -DFIFO_DEPTH=$*" \
+	  --Mdir obj_fifo_fuzz_$* -o Vm2_fifo_m10k $(abspath $^)
+test_m2_fifo_fuzz: obj_fifo_fuzz_128/Vm2_fifo_m10k obj_fifo_fuzz_32/Vm2_fifo_m10k
+	./obj_fifo_fuzz_128/Vm2_fifo_m10k $(or $(FUZZ_N),20000000) 1
+	./obj_fifo_fuzz_32/Vm2_fifo_m10k $(or $(FUZZ_N),20000000) 2
+.PHONY: test_m2_fifo_fuzz
 
 # R774: the ALU as the core builds it (SHORT=1), issued one op at a time.
 obj_mb86233_alu_short/Vmb86233_alu: $(TGP_PKG) $(TGP_FP) $(TGP)/mb86233_alu.sv sim/tgp/tb_mb86233_alu.cpp
