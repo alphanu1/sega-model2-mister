@@ -24,9 +24,10 @@
 #
 #   tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
 #   tools/i960_fptrans.py --log --rom rtl/cpu/i960/i960_fptrans_rom_log.svh
-#       (R935: the 2C build's program -- the same four plus logrl, a 10-bit
-#       program counter and the LDE / LDM loads; without --log the 2A ROM is
-#       generated exactly as before)
+#       (R935: the 2C build's program -- the same four plus logrl, its
+#       Horner steps through one subroutine (HSTEP) so it fits the same 512
+#       words, and the LDE / LDM loads; without --log the 2A ROM is generated
+#       exactly as before)
 #   tools/i960_fptrans.py --check N   (needs mpmath: the error against the
 #       correctly rounded value and agreement with this host's libm)
 #   tools/i960_fptrans.py --listing
@@ -260,6 +261,14 @@ def build(log=False):
         for i in range(nd - 2, ndd - 1, -1):
             p.mul('U', 'U', 'ZH'); p.add('U', 'U', '%s%dH' % (prefix, i))
         p.mov('UL', 'ZERO')
+        if log:
+            # R935: the same operations through HSTEP, (U, UL) = z (U, UL) + (QS, QSL),
+            # so the 2C program fits the 512 words with logrl
+            for i in range(ndd - 1, -1, -1):
+                p.mov('QS', '%s%dH' % (prefix, i)); p.mov('QSL', '%s%dL' % (prefix, i)); p.call('HSTEP')
+            p.mov('QS', 'ONE'); p.mov('QSL', 'ZERO'); p.call('HSTEP')
+            p.mov(out_h, 'U'); p.mov(out_l, 'UL')
+            return
         # double-double part
         for i in range(ndd - 1, -1, -1):
             p.mov('AH', 'ZH'); p.mov('AL', 'ZL'); p.mov('BH', 'U'); p.mov('BL', 'UL')
@@ -274,6 +283,15 @@ def build(log=False):
         p.mov('AH', 'DH'); p.mov('AL', 'DL'); p.mov('BH', 'ONE'); p.mov('BL', 'ZERO')
         p.call('DDADD')
         p.mov(out_h, 'DH'); p.mov(out_l, 'DL')
+
+    if log:
+        p.label('HSTEP')     # R935: one double-double Horner step (DDMUL, DDADD as horner's)
+        p.mov('AH', 'ZH'); p.mov('AL', 'ZL'); p.mov('BH', 'U'); p.mov('BL', 'UL')
+        p.call('DDMUL')
+        p.mov('AH', 'DH'); p.mov('AL', 'DL'); p.mov('BH', 'QS'); p.mov('BL', 'QSL')
+        p.call('DDADD')
+        p.mov('U', 'DH'); p.mov('UL', 'DL')
+        p.ret()
 
     # the kernels are subroutines (the return stack is four deep)
     p.label('KZSQ')          # (ZH, ZL) = r^2
@@ -628,7 +646,7 @@ ENTRY_ORDER = ['sin', 'cos', 'tan', 'atan']
 
 def rom_svh(p, words, addr, names, path, log=False):
     # R935: the 2C program (--log) as ucode_log / uconst_log, ten address bits
-    sfx, aw = ('_log', 10) if log else ('', 9)
+    sfx, aw = ('_log', 9) if log else ('', 9)
     order = ENTRY_ORDER + (['log'] if log else [])
     with open(path, 'w') as f:
         f.write('// SPDX-License-Identifier: GPL-3.0-or-later\n')
@@ -651,7 +669,7 @@ def main():
     log = '--log' in a
     p = build(log)
     words, addr, names = assemble(p)
-    assert len(words) <= (1024 if log else 512), len(words)
+    assert len(words) <= 512, len(words)
     if '--rom' in a:
         rom_svh(p, words, addr, names, a[a.index('--rom') + 1], log)
         print('%d words, %d registers (%d constants)' % (len(words), len(names), len(p.consts)))

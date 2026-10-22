@@ -44,12 +44,13 @@
 // The units see A on their .a port and B on .b: a - b, a / b, as the i960's
 // src2 - src1 and src2 / src1 are wired.
 
-// R935: LOG -- the 2C build's program (i960_fptrans_rom_log.svh): the same
-// four plus logrl (entry 4: y * log2 x, House of the Dead from its stone-wall
-// section), a 10-bit program counter for its 563 words, and two loads that
-// take x apart for it: LDE (op 11) d = x's unbiased exponent as a double --
-// the adder's (MAGIC + e - 1023) - MAGIC, exact -- and LDM (op 12) d = x's
-// mantissa in [1, 2). LOG = 0 is R845's sequencer exactly (the 2A builds).
+// R935: LOG -- the 2C build's program (i960_fptrans_rom_log.svh, 465 words):
+// the same four (their Horner steps through one subroutine, the same
+// operations) plus logrl (entry 4: y * log2 x, House of the Dead from its
+// stone-wall section), and two loads that take x apart for it: LDE (op 11)
+// d = x's unbiased exponent as a double -- the adder's (MAGIC + e - 1023) -
+// MAGIC, exact -- and LDM (op 12) d = x's mantissa in [1, 2). LOG = 0 is
+// R845's sequencer and ROM exactly (the 2A builds).
 module i960_fptrans #(
   parameter bit LOG = 1'b0
 ) (
@@ -72,7 +73,7 @@ module i960_fptrans #(
 
   `include "i960_fptrans_rom.svh"
   `include "i960_fptrans_rom_log.svh"
-  localparam int UW = LOG ? 10 : 9;     // R935: program counter width
+  localparam int UW = 9;               // program counter width (both programs fit 512 words)
 
   // ------------------------------------------------------------ storage
   (* ramstyle = "M10K" *) logic [63:0] rf [128];
@@ -90,9 +91,9 @@ module i960_fptrans #(
   logic [UW-1:0] upc;
   logic [31:0] uw;
   generate if (LOG) begin : g_rom_log
-    always_ff @(posedge clk) uw <= ucode_log(10'(upc));
+    always_ff @(posedge clk) uw <= ucode_log(upc);
   end else begin : g_rom
-    always_ff @(posedge clk) uw <= ucode(9'(upc));
+    always_ff @(posedge clk) uw <= ucode(upc);
   end endgenerate
 
   // ------------------------------------------------------------ decode
@@ -104,7 +105,7 @@ module i960_fptrans #(
   wire [1:0] f_mb = uw[4:3];
   wire [2:0] f_c  = uw[27:25];
   wire       f_i  = uw[24];
-  wire [UW-1:0] f_t = uw[UW-1:0];        // BR / JMP / CALL target (bit 9 free in each form)
+  wire [UW-1:0] f_t = uw[UW-1:0];
 
   function automatic logic [63:0] modv(input logic [63:0] v, input logic [1:0] m);
     case (m)
