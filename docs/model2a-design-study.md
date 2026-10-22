@@ -43168,3 +43168,16 @@ equal or better everywhere. VF2, Manx TT, Virtua Cop 2, Zero Gunner, DOA and
 the large-layout games unchanged in behaviour (the i960 is only faster). A
 probe of [0x20aac0] on the overlay (R926's suggestion) would give the
 board's rows and settle how far it is from MAME's.
+
+**R926 / R927 (board) -- THE i960 SPEED-UP CURES SEGA RALLY's OPPONENTS AND
+THE 2A SLOWDOWNS.** s1328 (model2a bd6fa2e: R927's 8-frame register ring and
+1 KB i960 data cache; clk_sys -0.033, clk_mem +0.017, clk_i960 +1.502, hold
++0.232; 41,360 ALMs, 548/553 M10K), Ben on the board, 2026-10-22:
+  * Sega Rally race, 90 s measured: 99-100% of 3D frames in one vblank;
+    "all good, I did not feel a single slowdown"; the opponents stay solid
+    (GitHub #19's blinking, clipping and launches gone);
+  * Manx TT race, 90 s: 100% in 8 of 9 windows, one 2-vblank frame;
+  * VF2, Virtua Cop 2, Zero Gunner, Dead or Alive and the rest: "all games
+    are good".
+R926's AI detail test MRA moved to sim/io/test-mra/ (a diagnostic, never a
+release file).
