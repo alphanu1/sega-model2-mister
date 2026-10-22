@@ -1,5 +1,13 @@
 # Handoff
 
+## 2026-10-22 (night): documented, not started -- R936
+
+Ben asked for both to be documented only: (1) Gun flash Arcade / Off for
+Virtua Cop 2 (2A) and House of the Dead (2C) -- port m2_gun_flash (VCop 2
+uses the same window-table flash; HOTD unchecked); (2) a Virtua Cop 57.5
+fps hack -- not a 60 Hz switch (R256's half-built lists, double-speed
+logic); needs a game-code patch, MAME experiment first. See study R936.
+
 ## 2026-10-22: main pushed -- Model2_20261022 and Model2A_20261022 released
 
 releases/: Model2_20261022.rbf = s1343 (VCop/Desert Tank colours R925, Gun

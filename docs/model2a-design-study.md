@@ -37129,3 +37129,38 @@ mode (white at the output on the game's request) shows the flash on the board
 it. Ben: "we should not need the long CRT flash" -- the OSD is now Gun flash
 Arcade / Off (O[66]; the module's CRT-gun path is left unselectable). Why the
 tile-path flash is lost on the board is not yet known.
+
+**R936 (main; planned, NOT STARTED) -- TWO REQUESTS FROM BEN, DOCUMENTED
+ONLY (2026-10-22).** Ben: "lets just document them". Nothing built.
+
+*(1) GUN FLASH OFF FOR THE OTHER GUN GAMES (IR / Sinden / mouse players).*
+Wanted: the same OSD line as Virtua Cop's (R929, O[66]) -- `Gun flash`
+Arcade (default, the game's flash) / Off -- for Virtua Cop 2 (2A core) and
+The House of the Dead (2C build). What is known: R929 found Virtua Cop 2
+writes the same tilemap 0/1 window table (tile RAM word 0x6000 = 0xFFFF)
+for its flash, so m2_gun_flash's request detector and its Off path (the
+renderer's reads of that table return zero while the request stands)
+should port to model2a as they are, en = v2_gun, triggers tied off (no CRT
+gun mode). NOT known: whether House of the Dead flashes the same way --
+check in MAME 0.289 (sim/io/mame_m2_gunflash.lua's method) before enabling
+it on the 2C build. Cost: small (one module, a 16-bit mux on the tile-RAM
+read), but the 2A core is at ~99% ALM, so it needs a fit. m2_gun_flash is
+on main only today (not merged to model2a); this rides the next main ->
+model2a merge.
+
+*(2) VIRTUA COP AT 57.5 fps (an OSD hack, off by default).* Virtua Cop
+runs in the video board's 30 Hz mode (render_mode bit 2 = 0; model2.cpp
+lists skytargt, desert, vstriker and vcop), so its 3D updates every other
+vblank (28.75 fps). Forcing 60 Hz in the core is NOT the hack:
+  - the display list is built across two frames in 30 Hz mode, and the
+    walk runs on alternate frames as the reference does (R256) -- walking
+    every frame reads a half-built list, which is R256's scenery dropout;
+  - if the game's loop did run every vblank, its per-frame logic (enemy
+    movement, timers) would most likely run at double speed.
+A real hack is a GAME CODE patch (an MRA patch, as R872-era DOA's
+protection patch) that sets 60 Hz mode and halves the logic's per-frame
+step, or runs the logic every other vblank while the 3D list is rebuilt
+every vblank. First step: a MAME experiment -- vcopa with render_mode
+forced to 60 Hz (a Lua write tap), watching game speed and the picture --
+then find the frame loop in the program. Desert Tank and Sky Target are the
+same 30 Hz family; whatever is learned applies to them.
