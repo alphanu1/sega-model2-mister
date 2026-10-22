@@ -37157,8 +37157,8 @@ vblank (28.75 fps). Forcing 60 Hz in the core is NOT the hack:
     every frame reads a half-built list, which is R256's scenery dropout;
   - if the game's loop did run every vblank, its per-frame logic (enemy
     movement, timers) would most likely run at double speed.
-A real hack is a GAME CODE patch (an MRA patch, as R872-era DOA's
-protection patch) that sets 60 Hz mode and halves the logic's per-frame
+A real hack is a GAME CODE patch (an MRA patch, as Dead or Alive's
+MRA patches its protection routines) that sets 60 Hz mode and halves the logic's per-frame
 step, or runs the logic every other vblank while the 3D list is rebuilt
 every vblank. First step: a MAME experiment -- vcopa with render_mode
 forced to 60 Hz (a Lua write tap), watching game speed and the picture --
