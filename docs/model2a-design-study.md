@@ -43769,8 +43769,8 @@ checks each, 0 fails; PLANTED (row 0's entry changed in the reference): 4
 fails. tb_m2_raster3d in Model2.sv's raster configuration with TEXLUT
 (M2_R3D_LIST + REALCOL, new M2_R3D_C2) on MAME M2DIFF frames:
   Ariake, 3D frame 3570:  colour vs MAME mean 25.70 -> 5.46 of 255, > 32:
-      34.6% -> 3.5% of 187,818 textured pixels (the road row 171: 53.2 ->
-      ~ the rest)
+      34.6% -> 3.5% of 187,818 textured pixels; the road, row 171 (53,979
+      px): 53.2 -> 0.67, row 174: 107.7 -> 4.7
   Hakone, 3D frame 4346 (not one of the fit's dumps): 40.37 -> 10.45, > 32:
       48.2% -> 6.2%
   The same RTL at LSB 3 against the old RTL (HOTD's ranges on the Ariake
