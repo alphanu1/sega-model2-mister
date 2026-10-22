@@ -96,6 +96,8 @@ module m2_boot_harness #(
   // Cabinet switches, active low, MAME's IN0 order: bit2 is the TEST switch
   // (MAME calls it Service Mode) and FB is that switch held.
   input  logic  [7:0] cab_in0,
+  // IN1 (R929): Daytona's 0x8F unless the testbench schedules another (M2_INSCHED)
+  input  logic  [7:0] cab_in1,
   // DO THE TWO SIDES ACTUALLY COLLIDE? Testable rather than assertable: count
   // cycles where the game is inside the block window AND the Z80 is writing it.
   // Zero collisions would mean the BUSY fix addresses nothing.
@@ -728,7 +730,7 @@ module m2_boot_harness #(
     .type2(VCOP),
     .gun_p1x(10'h17c), .gun_p1y(10'h0e6), .gun_p2x(10'h179), .gun_p2y(10'h0e8), .gun_off(2'b00),
     .fw_we(fw_we), .fw_addr(fw_addr), .fw_data(fw_data),
-    .in0(cab_in0), .in1(8'h8f), .in2(8'hff), .dp_busy(dp_busy_s),
+    .in0(cab_in0), .in1(cab_in1), .in2(8'hff), .dp_busy(dp_busy_s),
     // The board's own DIP banks. Daytona defines all 24 bits PORT_DIPUNUSED
     // with the default equal to the mask, so each bank reads 0xFF.
     .dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),

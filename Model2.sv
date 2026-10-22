@@ -98,6 +98,16 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_VCOP_GUN
 `define M2_VCOP_GUN
 `endif
+// R929: M2_VCOP_FLASH: Virtua Cop's gun flash as whole white frames, and its
+// OSD line (Gun flash: Arcade / CRT gun / Off; rtl/video/m2_gun_flash.sv).
+// Needs the guns. VERILOG_MACRO "M2_NO_VCOP_FLASH=1" (or -DM2_NO_VCOP_FLASH
+// to lint) builds without it -- the core before R929 exactly, CONF_STR
+// included.
+`ifndef M2_NO_VCOP_FLASH
+`ifdef M2_VCOP_GUN
+`define M2_VCOP_FLASH
+`endif
+`endif
 // R899: M2_NO_WINKEY=1 builds the 16-bit z sort key -- the core before R899
 // exactly (see R3D_WINKEY below).
 // R916: LINK PLAY -- the communication board (rtl/io/m2_comm.sv: its shared
@@ -323,6 +333,13 @@ localparam CONF_STR = {
 	"h1O[57:56],Crosshair,Small,Large,Off;",
 	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
 	"h1O[59],Gun reload,Shoot off-screen,Auto;",
+`ifdef M2_VCOP_FLASH
+	// R929: the game's flash after a shot as whole white frames (Arcade); also
+	// white from the trigger, the pull held back from the game three frames,
+	// through the game's flash (CRT gun: a GunCon on a CRT needs several fields
+	// of light before its aim is good); or none at all (Off: Sinden / mouse).
+	"h1O[66:65],Gun flash,Arcade,CRT gun,Off;",
+`endif
 `endif
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
@@ -2009,7 +2026,15 @@ wire [11:0] pal_addr;
 // clocked block would make the read TWO cycles and shift the whole picture by a
 // pixel column -- a memory change quietly becoming a rendering change, which is
 // exactly what a packing fix must not do. Continuous, so the depth is identical.
+`ifdef M2_VCOP_FLASH
+// R929: Gun flash Off -- the renderer reads tilemaps 0/1's window table as zero
+// while the game's flash request stands (m2_gun_flash's kill, registered on
+// tram_addr as the memory registers its output).
+wire        gf_kill;
+wire [15:0] tram_data = gf_kill ? 16'h0000 : tram_q_vid;
+`else
 wire [15:0] tram_data = tram_q_vid;
+`endif
 wire [15:0] pal_data  = pal_q_vid;
 always_ff @(posedge clk_mem) begin   // R564: the video's read port is clk_mem's
 	// WHAT THE RENDERER ACTUALLY GETS OUT.
@@ -4133,6 +4158,14 @@ wire  [7:0] iob_pa;       // PA latch; bit 0 selects the DIP banks
 wire [15:0] iob_seccnt;   // times the firmware has selected them
 // R839: Virtua Cop's guns and buttons (VCOP_GUN), into the type-2 board.
 wire  [7:0] vc_in0, vc_in1;
+// R929: the triggers as the game gets them -- held back in Gun flash "CRT
+// gun" while the screen is white (m2_gun_flash), vc_in1's otherwise.
+`ifdef M2_VCOP_FLASH
+wire  [1:0] gf_trig_n;
+wire  [7:0] vc_in1_g = {vc_in1[7:2], gf_trig_n};
+`else
+wire  [7:0] vc_in1_g = vc_in1;
+`endif
 wire  [9:0] vc_p1x, vc_p1y, vc_p2x, vc_p2y;
 wire  [1:0] vc_off;
 wire  [8:0] vc_c1x, vc_c1y, vc_c2x, vc_c2y;
@@ -4182,7 +4215,7 @@ m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ),   // 4 MHz exactly, on clk_sys (R57
 	.fw_we(fw_we_q),       // R593: registered, see fw_we_q
 	.fw_addr(fw_addr_q),
 	.fw_data(fw_data_q),
-	.in0(vc_gun ? vc_in0 : iob_in0), .in1(vc_gun ? vc_in1 : iob_in1), .in2(8'hFF), .dp_busy(dp_busy),   // R839: the guns' buttons for Virtua Cop
+	.in0(vc_gun ? vc_in0 : iob_in0), .in1(vc_gun ? vc_in1_g : iob_in1), .in2(8'hFF), .dp_busy(dp_busy),   // R839: the guns' buttons for Virtua Cop
 	// The I/O BOARD's three DIP banks, not the game's. Daytona defines all 24
 	// bits PORT_DIPUNUSED_DIPLOC with the default equal to the mask, so every
 	// bank reads 0xFF -- and 0xFF is what the firmware must see when it selects
@@ -6635,6 +6668,28 @@ wire [7:0] mix_r  = (r3d_hit && !tile_cat1) ? r3d_r8 : tile_r;
 wire [7:0] mix_g  = (r3d_hit && !tile_cat1) ? r3d_g8 : tile_g;
 wire [7:0] mix_b  = (r3d_hit && !tile_cat1) ? r3d_b8 : tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
+// R929: VIRTUA COP'S GUN FLASH (GitHub #13). The game asks for one white frame
+// after a shot by writing tilemaps 0/1's window table all ones (word 0x6000
+// first); m2_gun_flash turns that into whole white frames at the output, and
+// for the OSD's CRT gun also from the trigger, or takes it out (Off). See
+// rtl/video/m2_gun_flash.sv and study R929.
+`ifdef M2_VCOP_FLASH
+wire       gf_white;
+m2_gun_flash u_gun_flash (   // gf_trig_n is declared with the guns (it feeds the I/O board)
+	.clk_sys(clk_sys), .rst_sys_n(cpu_rst_n), .en(vc_gun), .mode(status[66:65]),
+	.cpu_tram_we(cpu_tram_we), .cpu_tram_addr(cpu_oc_addr), .cpu_tram_din(cpu_oc_din),
+	.trig_n(vc_in1[1:0]), .trig_game_n(gf_trig_n),
+	.clk(clk_mem), .rst_n(mem_rst_n), .vb(tile_vb), .tram_addr(tram_addr),
+	.kill(gf_kill), .white(gf_white)
+);
+wire [7:0] gf_r = gf_white ? 8'hFF : mix_r;
+wire [7:0] gf_g = gf_white ? 8'hFF : mix_g;
+wire [7:0] gf_b = gf_white ? 8'hFF : mix_b;
+`else
+wire [7:0] gf_r = mix_r;
+wire [7:0] gf_g = mix_g;
+wire [7:0] gf_b = mix_b;
+`endif
 
 // THE VIDEO DOMAIN'S RESET, ASYNC ASSERT AND SYNCHRONOUS RELEASE.
 //
@@ -6835,14 +6890,14 @@ generate if (VCOP_GUN) begin : g_xhair
 		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
 		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),
 		.il(vid_il_c), .vx(vid_x_d), .vy(vid_y),
-		.in_r(mix_r), .in_g(mix_g), .in_b(mix_b),
+		.in_r(gf_r), .in_g(gf_g), .in_b(gf_b),   // R929: after the gun flash
 		.out_r(mix_r_q), .out_g(mix_g_q), .out_b(mix_b_q)
 	);
 end else begin : g_noxhair
 	always_ff @(posedge clk_mem) begin
-		mix_r_q <= mix_r;
-		mix_g_q <= mix_g;
-		mix_b_q <= mix_b;
+		mix_r_q <= gf_r;   // R929: after the gun flash
+		mix_g_q <= gf_g;
+		mix_b_q <= gf_b;
 	end
 end endgenerate
 assign ov_r = mix_r_q;

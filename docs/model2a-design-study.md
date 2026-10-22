@@ -36947,3 +36947,174 @@ vcl/survey.sh (an M2TEX session per set), mdiff.sh (an M2DIFF frame from the
 same session), build.sh / run.sh / jobs.sh (the bench in main's
 configuration; CF=-DR3D_TEXLUT -GTEXLUT=1 for this), py/summ.py, rowerr.py,
 sbs.py, mkmap.sh.
+
+**R929 (main) -- VIRTUA COP'S GUN FLASH (GITHUB #13) IS THE GAME'S, DRAWN
+WITH THE TILEMAP WINDOW TABLE, NOT THE I/O BOARD'S -- AND THIS CORE'S
+RENDERER DRAWS IT. ADDED: THE FLASH AS WHOLE WHITE FRAMES (OSD "Gun flash":
+Arcade / CRT gun / Off, M2_NO_VCOP_FLASH builds it out).**
+
+*Reported (retrorepair, #13; their docs/guncon2/README.md on branch
+guncon-scan15, bb48d9d):* "the Virtua Cop I/O board in this core is not
+generating a flash ... on a real CRT the picture goes black for a frame after
+a shot". Their evidence is the GunCon 2's own reports (a GUNDBG build of
+their Main_MiSTer): after every shot the gun reads X = 1 (no light) for 35-52
+ms, then the picture again, the first lit report with a junk Y (5); "51 of 52
+shots saw the gun's spot go dark". They supposed the cabinet's gun board
+supplied the flash.
+
+*Believed here:* R899 2 -- "no luma, palette or tile write that tracks the
+shots". WRONG for one table: the window table is rewritten on every shot.
+
+*Measured (MAME 0.289 vcopa, build mame-r869; sim/io/mame_m2_gunflash.lua,
+coin 40 s, start 41.5 s, shots 52 / 58 / 60 / 62 s; per frame write counts,
+every register / table / DPRAM write in a window round each shot, the I/O
+board Z80's 315-5338A and 0x8100 writes, a snapshot a frame):*
+  1. THE FLASH IS ONE WHOLE WHITE FRAME AFTER EACH SHOT: f3338 and f3453 are
+     (255, 255, 255) on all 190,464 pixels; the frames either side are the
+     scene (means 121.7 / 76.4 / 60.5, 120.5 / 74.6 / 59.2).
+  2. HOW: the vblank handler (IRQ bit 0, acked at 0x784; the routine runs
+     0.04 ms after the IRQ) calls 0x58400, which on an accepted shot (mode
+     0x5016d4 = 2 or 7, the player in play, the shot flag 0x501528 set, the
+     countdown at work RAM 0x5B1E50 at 0) does 384 stl of 0xFFFFFFFF from
+     0x0100C000 (ip 0x584a8) -- tile RAM words 0x6000-0x65FF, tilemaps 0/1's
+     window table, all ones -- sets the countdown to 4, and at each of the
+     next four vblanks writes the table back to zero (0x5852c) and counts
+     down. With the table all ones every 8-pixel column draws tilemap 1
+     instead of tilemap 0 (segaic24 draw_rect, `if (win) m = ~m`), and the
+     game keeps tilemap 1 full of 0x8283 (filled at the stage start, 0x2f03c):
+     category 1, so in front of the 3D; glyph 0x283 is all pen 4; palette
+     0x054 = 0xFFFF; the colour table's entry 31 is 0xFF on all three
+     channels. The countdown is cleared by the boot's RAM clear (0x23d0 at
+     0.63 s, 0x267c at 2.27 s).
+  3. NOTHING ELSE MOVES. No write to the video control (0x98000c), render
+     mode (0x10000000), sync / ABSEL (0x0102xxxx-0x0107xxxx), zclip or CPU
+     control in any window; the palette's only per-frame writes are 16
+     entries at 0x330 (unrelated); the I/O board's PD (lamps / recoil) stays
+     0, its "FPGA" at 0x8100 is only read after the upload, the i960's DPRAM
+     writes to the board are the same every frame. With the table writes
+     forced to 0 (GF_NOFLASH) the frame under the flash is the ordinary scene
+     -- the 3D is not blanked. MAME draws all of this; it is not a flash MAME
+     leaves out.
+  4. THE TABLE'S OTHER USE: a white band over rows 172-199 at a stage's start
+     (0x59d8c / 0x59d98 write 0xFFFFFFFF to 0x0100C560-0x0100C63F, 0x59cc0
+     clears it). It never writes row 0. The i960 never reads the table (300 s:
+     attract, a game with a shot every 0.7 s, the test menu).
+  5. WHEN THE GAME TAKES THE AIM (the gun moved at A or B by time, one shot at
+     58.0 s, the frames after compared): moved by the start of the white
+     frame -> the shot is B's; moved at the start of the next frame -> A's.
+     So the aim is taken during the white frame or at the vblank that closes
+     it -- where the cabinet's gun board has latched the light it saw. The
+     pull reaches the game ~33 ms before the request (pressed at the frame
+     start 58.012, request at the vblank 58.0452, white 58.0468-58.0632): from
+     a pull to the aim being taken is 35-52 ms by the pull's phase -- the
+     length of retrorepair's dark window.
+  6. VIRTUA COP 2 (vcop2, 2A-CRX) does the same (0x19f08 all ones, 0x19f98
+     the countdown; 7 shots, 7 white frames). House of the Dead (2C) has the
+     same table written by 0x18650 in its attract; play was not reached by
+     script (start not taken), not measured.
+  7. Model 1 (tools/model1-ref 0b5d04f, = its local main): no light-gun game
+     and no flash of any kind -- nothing to start from.
+
+*This core -- NOT REPRODUCED:* tb_m2_gunflash, FLASH = 0 (the core before
+R929: m2_video with the core's parameters LB_RING / SCR_SYNC / SCR_STEP,
+character latency 8, tile RAM registered as the M10K is, a stand-in 3D under
+the category-1 tiles, the output register), MAME's tile / char / palette /
+colour-table state of f3337, the game's request played into tile RAM as the
+game does it (1,536 words, from 0x6000 up, 400 cycles into the vblank; the
+countdown's four zero runs after): frame 5 is white on 190,464 of 190,464
+pixels, over the 3D, and every other frame is identical to the run with no
+request. tb_m2_video_frame on MAME's own f3338 state: white at character
+latency 1, 6 and 12 (jitter 4). The renderer draws the game's flash; it does
+not show black. The whole-core boot harness (obj_boot_vc, with an input
+schedule added, M2_INSCHED) still shows black at 8.3 s, R844's open WARNING
+fault, so a shot could not be run through the whole core. Found on the way:
+R844's unexplained 0x5861c zero writes are this countdown running from
+unwritten work RAM (0xFFFF...) until the game's RAM clear (in the harness,
+frames 2-100).
+
+*INFERRED, NOT SETTLED -- the black is the gun's, not the picture's:* the
+dark window retrorepair measured is the time from a pull to the end of the
+game's one white frame (5), and their own beacon notes say the gun needs
+several fields of light after darkness before its reports are good. A single
+white field read as no light fits both. What settles it: a 240 fps phone
+video of the CRT (or an HDMI capture) during shots with Gun flash Arcade --
+one white frame per shot means the picture is right; black means something on
+the board this bench does not model.
+
+*Added (rtl/video/m2_gun_flash.sv, Model2.sv; VCOP_GUN and game ID 1 only):*
+the request is the CPU writing 0xFFFF to word 0x6000 (row 0 -- the stage band
+never touches it), tracked on clk_sys, crossed to clk_mem, acted on at the
+start of a frame (the native vblank's falling edge), so the picture changes
+only between whole frames. OSD "Gun flash" (O[66:65], shown for Virtua Cop):
+  * Arcade (default): every frame that starts while the request stands is
+    white at the output, over everything (at most 4 in a row). On time this is
+    exactly the frame the game's own tilemap flash already whites; a late
+    handler (writes landing mid-frame) gives the game's torn flash plus the
+    whole next frame.
+  * CRT gun: for a gun that reads the CRT itself (the GunCon 2 through
+    Main_MiSTer), which goes blind on a dark spot -- Main then reports it off
+    the screen, a reload -- and needs several fields of light before its
+    reports are good. On ANY pull (a gun on a dark spot reads as off the
+    screen): white from the next frame start; the pull HELD BACK from the game
+    for 3 white frames, then given to it pressed for 3 frames (longer if
+    still held); white kept until the game's own flash frame has been shown
+    (its request seen after the release, then gone) -- the frame after which
+    it takes the aim, by then from a gun with ~5 fields of light behind it.
+    At most 8 white frames (a pull the game does not answer: the attract, a
+    real reload). A second player's pull joins the sequence. Costs 3 frames
+    (52 ms) of trigger latency, in this mode only. Untested with a gun.
+  * Off: no white at all; the game's own flash is taken out too -- while the
+    request stands, and to the frame start after it goes, the renderer's reads
+    of words 0x6000-0x67FF return 0 (a registered kill on tile RAM's read
+    data). Tile RAM keeps what the game wrote; the game never reads it.
+M2_NO_VCOP_FLASH=1 (VERILOG_MACRO) builds without it: the core before R929,
+CONF_STR included.
+
+*Evidence:* sim/video/run_gunflash.sh (GF_DUMP=<dir> make test_m2_gunflash),
+23 checks PASS: before R929 the request in the vblank whites frame 5 only, and
+a late one tears frames 5 / 6; with the module and no request every frame is
+the old core's in every mode; Arcade on time = the old core frame for frame,
+late = the old frame 5 + frame 6 white; with the bench answering a pull as
+the game does (+game: the request in the vblank after the frame after the
+press is seen), Arcade and Off give the game the pull at once (frame 2, line
+300) and Arcade whites the game's flash frame 4 only; CRT gun gives it at the
+start of frame 6 (three white frames held), releases it at the start of frame
+9, and whites frames 3-8 (8 the game's flash frame); a pull the game does not
+answer whites 3-10 (8 frames); Off leaves every frame the no-request picture
+(on time, late, a pull answered or not); the stage band is drawn exactly as
+before in every mode. Planted faults, each caught: the frame start taken on
+the vblank's rising edge (Arcade on time and CRT gun gain a frame); the
+request taken from any write to the table (the stage band whites whole
+frames, every mode); the pull released after one frame instead of three (the
+press at frame 4, the white 3-6); the white not waiting for the game's flash
+(frames 3-10 instead of 3-8). Not caught, and not a fault here: the kill one
+cycle early -- the sequencer holds the table's address two cycles, so either
+alignment reads right; kept registered, as the RAM is. lint_top clean (default, -DM2_NO_VCOP_FLASH, -DM2_NO_VCOP_GUN);
+the -Wall list the same 1,076 lines with the flash built in or out (status's
+unused bits and the CONF_STR literal's width move); lint_idx the same
+findings; quartus_map --analyze_file 0 errors on m2_gun_flash.sv and
+Model2.sv. AREA, quartus_map 17.0, whole design, this tree with the flash
+built in and out (M2_NO_VCOP_FLASH=1):
+
+    build            ALMs needed  ALUT    registers  block bits  DSP
+    flash out          40,399     57,267   49,759    4,670,992   98
+    flash in           40,351     57,225   49,808    4,670,992   98
+
+"Out" is R925's 40,399 for main exactly. m2_gun_flash itself is 45 ALUT and
+45 registers; the rest is the output's 24-bit mux, the kill's 16 ANDs and the
+trigger mux. No block memory, no DSP. The -48 ALM is synthesis noise (R848:
++-40; R925 saw ~200 of i960 map noise): expect ~+50-90 placed, at 98-99%
+(s1316 placed 41,401) -- the fit decides.
+
+*What the board must show (Virtua Cop, Gun flash Arcade):* one white frame
+after every shot in play; none in the attract or on a reload; the
+stage-start band as before. Off: no white at all. CRT gun: ~6 white frames
+per pull (8 in the attract), the shot taking effect 3 frames after the pull,
+and with the GunCon 2 on a CRT the shot landing where the gun points on a
+dark part of the scene. Daytona and Desert Tank exactly as before (the module
+is held off for them).
+
+*Next:* if CRT gun is not enough, take retrorepair's beacon request
+(joystick_3 bit 0 from their patched Main, which holds the trigger and the
+aim itself) as one more source of white. Virtua Cop 2 on the 2A core needs
+the same module (the same table; its triggers come through the 315-5649).

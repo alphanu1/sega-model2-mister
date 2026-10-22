@@ -220,6 +220,7 @@ static FILE *g_pdlog = nullptr;  // M2_PDLOG: the walker's reads, state by state
 static std::map<uint32_t,uint64_t> ip_hist;
 static uint64_t ip_samp = 0;
 static const char *g_seq_dir = nullptr;
+static uint64_t g_mask_ff_frame = ~0ull;   // R929: the frame a window-mask flash was written in
 // CHARACTER WORKING SET. Glyph pixels are the one part of the 2D path still
 // fetched from SDRAM; everything else (tilemap, palette, colour table) is
 // on-chip. If the set of words the renderer actually touches is small enough,
@@ -1506,6 +1507,7 @@ int main(int argc, char **argv) {
     unsigned c = 0xff;
     if (const char *cv = std::getenv("M2_IN0")) c = std::strtoul(cv, nullptr, 16);
     d->cab_in0 = c;
+    d->cab_in1 = 0x8f;
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
   int slow_prev = 0;
@@ -1547,7 +1549,28 @@ int main(int argc, char **argv) {
         // session's wrong conclusions came from reading a single frame that
         // happened to be captured mid-draw.
         static const uint64_t seq_from = std::getenv("M2_FRAME_FROM") ? std::strtoull(std::getenv("M2_FRAME_FROM"), nullptr, 10) : 0;
-        if (g_seq_dir && (g_frames_done % g_seq_every) == 0 && d->dbg_acc >= seq_from) {
+        // R929: M2_FRAME_VFROM / M2_FRAME_VTO -- every frame in that window as
+        // well (frame numbers), whatever M2_FRAME_EVERY says outside it.
+        static const uint64_t vfrom = std::getenv("M2_FRAME_VFROM") ? std::strtoull(std::getenv("M2_FRAME_VFROM"), nullptr, 10) : ~0ull;
+        static const uint64_t vto   = std::getenv("M2_FRAME_VTO") ? std::strtoull(std::getenv("M2_FRAME_VTO"), nullptr, 10) : 0;
+        // and M2_FRAME_FLASH: the frame before a window-mask flash, its own and
+        // the four after it, wherever it lands.
+        static const bool fl_dump = std::getenv("M2_FRAME_FLASH") != nullptr;
+        static std::vector<uint8_t> prev_frame;
+        const bool in_flash = fl_dump && g_mask_ff_frame != ~0ull
+                           && g_frames_done >= g_mask_ff_frame && g_frames_done <= g_mask_ff_frame + 4;
+        if (g_seq_dir && in_flash && g_frames_done == g_mask_ff_frame && !prev_frame.empty()) {
+          char path[512];
+          std::snprintf(path, sizeof path, "%s/f%05llu.ppm", g_seq_dir, (unsigned long long)(g_frames_done - 1));
+          if (FILE *sf = std::fopen(path, "wb")) {
+            std::fprintf(sf, "P6\n%d %d\n255\n", FW, FH);
+            std::fwrite(prev_frame.data(), 1, prev_frame.size(), sf);
+            std::fclose(sf);
+          }
+        }
+        if (fl_dump) prev_frame = g_frame;
+        const bool in_vwin = (g_frames_done >= vfrom && g_frames_done <= vto) || in_flash;
+        if (g_seq_dir && (in_vwin || (g_frames_done % g_seq_every) == 0) && d->dbg_acc >= seq_from) {
           char path[512];
           std::snprintf(path, sizeof path, "%s/f%05llu.ppm", g_seq_dir,
                         (unsigned long long)g_frames_done);
@@ -2039,6 +2062,30 @@ int main(int argc, char **argv) {
     }
     if (mem_edges >= next_vbl) {
       next_vbl += VBL; ++vblanks;
+      // R929: M2_INSCHED="vbl:in0:in1;..." (hex in0 / in1) -- cabinet inputs by
+      // the bench's vblank count (coin, start, a trigger pull), applied in order.
+      {
+        struct Ins { uint64_t v; unsigned i0, i1; };
+        static std::vector<Ins> sched;
+        static size_t si = 0;
+        static bool parsed = false;
+        if (!parsed) {
+          parsed = true;
+          if (const char *is = std::getenv("M2_INSCHED")) {
+            unsigned long long v; unsigned a, b; int n = 0;
+            while (std::sscanf(is, "%llu:%x:%x%n", &v, &a, &b, &n) == 3) {
+              sched.push_back({v, a, b}); is += n; if (*is == ';') ++is; else break;
+            }
+            std::printf("  INPUT SCHEDULE: %zu entries\n", sched.size());
+          }
+        }
+        while (si < sched.size() && sched[si].v <= vblanks) {
+          d->cab_in0 = sched[si].i0; d->cab_in1 = sched[si].i1;
+          std::printf("    INPUT v%llu in0=%02x in1=%02x f%llu\n", (unsigned long long)vblanks,
+                      sched[si].i0, sched[si].i1, (unsigned long long)g_frames_done);
+          ++si;
+        }
+      }
       d->irq = 0x1;                       // level, cleared below
       m2lk::tick_req = true;              // R916: the link board's tick
     } else if (d->irq) {
@@ -2432,6 +2479,23 @@ int main(int argc, char **argv) {
         for (int k = 0; k < 12; k++) std::printf("%g%s", F(d->obs_mtx[k]), k < 11 ? " " : "]\n");
       }
       xv_prev = d->obs_xf_valid;
+    }
+    // R929: THE TILEMAP 0/1 WINDOW MASK (tile RAM words 0x6000-0x67ff, CPU
+    // 0x0100c000-0x0100cfff) -- Virtua Cop's gun flash writes it all ones for
+    // one vblank after a shot. One line per frame that wrote it: count, the
+    // first and last value, and the IP.
+    if (d->obs_bus_ack && !ack_prev && d->obs_bus_we) {
+      const uint32_t ma = d->obs_bus_addr;
+      static uint64_t mk_f = ~0ull; static unsigned mk_n = 0; static uint32_t mk_v0 = 0, mk_v1 = 0;
+      if (ma >= 0x0100c000u && ma < 0x0100d000u) {
+        if (mk_f != g_frames_done) {
+          if (mk_n) std::printf("    MASKW f%llu n=%u first=%08x last=%08x\n", (unsigned long long)mk_f, mk_n, mk_v0, mk_v1);
+          mk_f = g_frames_done; mk_n = 0; mk_v0 = uint32_t(d->obs_bus_wdata);
+          std::printf("    MASKW start f%llu %08x=%08x pc=%08x\n", (unsigned long long)g_frames_done, ma, (unsigned)d->obs_bus_wdata, (unsigned)d->dbg_ip);
+          if (uint32_t(d->obs_bus_wdata) == 0xffffffffu) g_mask_ff_frame = g_frames_done;
+        }
+        ++mk_n; mk_v1 = uint32_t(d->obs_bus_wdata);
+      }
     }
     // THE MAILBOX QUERY, as the CPU sees it: the arm (write to 0x91fff0) and
     // the answers (reads of 0x91fff4/0x91fff8), to compare with the reference.

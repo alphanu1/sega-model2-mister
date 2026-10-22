@@ -399,8 +399,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_comm test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_lut0 test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_geo_engine_lut test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_gunflash test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
+test: test_m2_comm test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_lut0 test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_geo_engine_lut test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_gunflash test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -776,6 +776,25 @@ M2V_RTL := rtl/video/m2_video_timing.sv rtl/video/m2_tile_decode.sv \
 obj_m2_vf/Vm2_video: $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
 	$(VBUILD) -Wno-fatal --top-module m2_video -CFLAGS "-O2" \
 	  --Mdir obj_m2_vf -o Vm2_video $(M2V_RTL) sim/video/tb_m2_video_frame.cpp
+
+# R929: Virtua Cop's gun flash through the picture path (m2_video with the
+# core's parameters, the kill on tile RAM, a stand-in 3D, m2_gun_flash, the
+# output register), frame by frame, against the same path without the module
+# (FLASH = 0, the core before R929). Needs a MAME dump of Virtua Cop in play
+# (sim/io/mame_m2_gunflash.lua GF_DUMP): GF_DUMP=<dir> make test_m2_gunflash.
+GF_DUMP ?=
+test_m2_gunflash: obj_m2_gf1/Vtb_m2_gunflash_top obj_m2_gf0/Vtb_m2_gunflash_top
+	@echo "== test m2_gun_flash (R929: the game's flash, Arcade / CRT gun / Off)"
+	@if [ -n "$(GF_DUMP)" ]; then sim/video/run_gunflash.sh "$(GF_DUMP)"; \
+	 else echo "SKIP (set GF_DUMP to a dump from sim/io/mame_m2_gunflash.lua)"; fi
+
+M2GF_SRC := $(M2V_RTL) rtl/video/m2_gun_flash.sv sim/video/tb_m2_gunflash_top.sv sim/video/tb_m2_gunflash.cpp
+obj_m2_gf1/Vtb_m2_gunflash_top: $(M2GF_SRC)
+	$(VBUILD) -Wno-fatal --top-module tb_m2_gunflash_top -GFLASH=1 -CFLAGS "-O2" \
+	  --Mdir obj_m2_gf1 -o Vtb_m2_gunflash_top $(M2GF_SRC)
+obj_m2_gf0/Vtb_m2_gunflash_top: $(M2GF_SRC)
+	$(VBUILD) -Wno-fatal --top-module tb_m2_gunflash_top -GFLASH=0 -CFLAGS "-O2" \
+	  --Mdir obj_m2_gf0 -o Vtb_m2_gunflash_top $(M2GF_SRC)
 
 # R907: the translation table as three MLAB arrays, against the one 96-entry
 # array at 2cebd70 (taken from git and renamed m2_video_ref), cycle for cycle.
