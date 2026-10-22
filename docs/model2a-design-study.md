@@ -44071,3 +44071,13 @@ hps_io io_dout <- byte_cnt -1.096 and uio stick_idx -0.608 (the framework,
 which closes in every 2A seed), texel_x2 -0.668, the geometry pool's adder
 -0.473, SCSP -0.376 / -0.212, the quad store's uvt write ports -0.08..-0.18.
 No 2C logic among them: the next step is more seeds (s1355-s1357), not RTL.
+*BOARD (2026-10-22, Ben, s1350, a 15 kHz CRT):* HOUSE OF THE DEAD's
+[15kHz CRT] MRA gives NO PICTURE -- a black screen with one horizontal row
+of dots across the middle. Not diagnosed. Checked at the desk: the MRA is
+right (game ID 0x97 = 0x17 with bit 7, as Over Rev's 0x9C and VF2's 0x80),
+every game decode in Model2.sv masks bit 7 (game_id[6:0]), and m2_scan15 is
+built unconditionally in the 2C build. A Discord tester ran the 2A games'
+[15kHz CRT] MRAs on a CRT (Sky Target, Pilot Kids...), so 15 kHz works on
+the 2A core. Asked of Ben: Over Rev's [15kHz CRT] MRA on the same CRT
+(2C-wide or HOTD only?), and HOTD's normal MRA with Video = 15kHz
+interlaced (MRA flag or the converter?).
