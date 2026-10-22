@@ -1,5 +1,21 @@
 # Handoff
 
+## 2026-10-22 (later): Over Rev's road texture -- branch model2c, R931. NOT PUSHED
+
+BUILD TO FIT: model2c HEAD (M2_2C=1, M2_NO_2A_MANX_MOTION=1). Board s1337
+(1acf830): Over Rev full speed, no crash past the speed contest; HOTD 96-100%.
+ROAD: light grey with coarse dark streaks vs MAME's dark smooth asphalt =
+the luma row. R928's eight ranges were fitted to Tsukuba only; rows 128+ are
+rewritten per course and Ariake's road rows (171, 174: luma 23-35) fell in
+row 139's range (7-63). Fix: 2C build holds 32 luma rows (m2_span_tex
+4096 x 8, quad store +2 slot bits beside the vertices) and maps Over Rev's
+rows by a 256-entry table (k-medoids over 86 MAME walks, all four courses):
+per-pixel luma error 2.71 -> 0.16 of 63. Bench (tb_m2_raster3d TEXLUT on MAME
+frames): Ariake colour error 25.7 -> 5.5 of 255, Hakone (outside the fit)
+40.4 -> 10.5. 2A build bit-identical (LSB 3). Map: 40,103 ALMs (+116),
++5 M10K expected (~549 / 553).
+Next free R numbers: R932 on.
+
 ## 2026-10-22: Over Rev's speed-contest freeze and the 30 Hz race -- branch model2c, R930. NOT PUSHED
 
 Branch model2c only (never pushed). BUILD TO FIT: model2c HEAD, Model2.qsf +

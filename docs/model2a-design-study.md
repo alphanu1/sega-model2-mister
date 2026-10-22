@@ -43710,3 +43710,80 @@ M2_2C=1 M2_NO_2A_MANX_MOTION=1) 0 errors; lint_idx nothing new.
 HOTD 2C bench not re-run with the ring (the i960 lockstep suites with the
 ring and the cache pass; HOTD's TGPx4 replay does not involve the i960);
 mame_m2_2a_play.lua's 'orev' pedals left as they were (R928's census stands).
+
+**R931 -- OVER REV'S LIGHT, STREAKED ROAD IS THE LUMA ROW: R928'S EIGHT
+RANGES PUT THE ARIAKE ROAD (ROW 174, LUMA 23-32) ON ROW 139'S TABLE (7-63).
+THE 2C BUILD NOW HOLDS 32 LUMA ROWS AND MAPS OVER REV'S 256 ROWS BY A TABLE
+(A k-MEDOIDS FIT OVER ALL FOUR COURSES): BENCH COLOUR ERROR 25.7 -> 5.5 OF
+255 ON AN ARIAKE FRAME, 40.4 -> 10.5 ON A HAKONE FRAME OUTSIDE THE FIT. +5
+M10K, +116 ALM (MAP). ON BRANCH model2c ONLY, NEVER PUSHED.**
+(Coordinator, from Ben's board on s1337 = model2c 1acf830: Over Rev at full
+speed and past the speed contest -- R930's cvtilr and R927's ring confirmed
+-- and House of the Dead 96-100% of frames in one vblank; but the road much
+lighter grey than MAME's, with coarse dark streaks, the far road busy.
+Suspects named: the luma rows, the mip rule, the upper-MB drop, the filter.)
+
+*What was believed (R928):* eight row ranges fitted by R900's DP over 39
+walks (attract, menus, one Tsukuba time-attack race), polygon-COUNT
+weighted: mean |diff| 2.0 of 63, "14% of polygons more than 4 off".
+
+*NOW KNOWN (MEASURED):* rows 128+ are rewritten per course and the census
+race was Tsukuba only. New MAME 0.289 walk dumps (M2GEO_TRIG from a wrapper
+over sim/io/mame_m2_orev_race.lua; R930's script, its OR_SEQ steering the
+Time Attack course select: Ariake, Tsukuba, Hakone, Shibuya, a right pulse
+each) -- Challenge Cup round 1 (Ariake) 4 walks, a time-attack race on each
+course 12 walks each, plus R928's 39: 86 dumps, 123 rows drawn. Weighted by
+SCREEN AREA (pixels, not polygons -- the road is few polygons and most of
+the screen), per-pixel mean |luma error| against each dump's own row:
+  R928's ranges (0 10 14 22 129 139 176 178)   2.71  (Ariake 6.3, Shibuya
+      4.5, Hakone 3.6, Tsukuba 1.2); 25.9% of drawn pixels on a row > 4 off
+  8 ranges refitted by area                    1.71
+  16 ranges refitted                           0.97
+  8 slots, any row to any slot (k-medoids)     1.05  (6.2% > 4)
+  16 slots, k-medoids                          0.48  (2.2% > 4)
+  32 slots, k-medoids                          0.16  (0.6% > 4; worst
+      course mean 0.24, worst dump 0.74)
+In an Ariake race frame (walk 4833) the road is row 171 / 174 (11-22% of
+the textured area): row 174 = 23..32 and 171 = 27..35 then 51 -- MAME's dark,
+smooth asphalt -- both in row 139's range (7..63, a full ramp): lighter and
+four times the contrast, Ben's picture exactly (the bench reproduces it,
+below). Suspects (b)-(d) are not it: the mip flag agrees with MAME on every
+quad of the frame (R905 MIPZX 3: 1,036 / 1,036); the bench serves MAME's own
+texture RAM, so the sheets are not in play (R928 proved them equal); the
+filter is unchanged and the corrected frame matches.
+
+*THE FIX (Model2.sv R3D_LSB = C2 ? 5 : 3):*
+  * m2_luma_map LSB / OREV: Over Rev on the 2C build maps each row through a
+    256-entry table (orev_tab: {representative, slot[4:0]}); a slot is filled
+    from its representative row, so a course's rewrite of that row refills
+    it. Every other game keeps R867 / R900's maps, zero-extended.
+  * m2_span_tex: 2^LSB rows of 128 on chip (4096 x 8: four M10K on 2C, one on
+    2A); m2_raster3d LSB: q_tex carries the slot at [23+LSB:24], the quad
+    store keeps the two low bits in its texture word and LSB - 2 beside the
+    vertices (m2_quad_store VXN: 107 bits a bank, 22 M10K instead of 21).
+  * The table is the 32-medoid fit; rows nobody drew go to the nearest
+    representative by unweighted content. m2_luma_map_ref.h holds the same
+    256 entries as a byte array (generated separately from the fit's output).
+*VERIFIED:* test_m2_luma_map at LSB 3 (2A) and LSB 5 OREV (2C): 262,144
+checks each, 0 fails; PLANTED (row 0's entry changed in the reference): 4
+fails. tb_m2_raster3d in Model2.sv's raster configuration with TEXLUT
+(M2_R3D_LIST + REALCOL, new M2_R3D_C2) on MAME M2DIFF frames:
+  Ariake, 3D frame 3570:  colour vs MAME mean 25.70 -> 5.46 of 255, > 32:
+      34.6% -> 3.5% of 187,818 textured pixels (the road row 171: 53.2 ->
+      ~ the rest)
+  Hakone, 3D frame 4346 (not one of the fit's dumps): 40.37 -> 10.45, > 32:
+      48.2% -> 6.2%
+  The same RTL at LSB 3 against the old RTL (HOTD's ranges on the Ariake
+  frame): all 190,464 painted pixels identical. test_m2_quad_store,
+  test_m2_span_tex (+ ftb, mip), test_m2_raster3d PASS; lint 2A and M2_2C
+  clean, no width warnings on the changed signals; quartus_map
+  --analyze_file on the four modules and Model2.sv (2A and M2_2C) 0 errors.
+*AREA (quartus_map 17.0, M2_2C + M2_NO_2A_MANX_MOTION, a08890a):* 40,103
+ALMs needed (R930 39,987: +116), 48,100 registers, 4,583,920 block bits
+(+32,768: lr_mem 4096 x 8, vtx 107 bits), 102 DSP. M10K +5 expected (lr_mem
+1 -> 4, vtx 21 -> 22 a bank): s1337 fitted 544 / 553, so ~549.
+*LEFT / OPEN:* rows 7 / 9 / 44 (the cars' small lamps, ~1,400 px) are far
+off MAME before and after -- not the luma map (row 7 is a representative);
+not chased. The fit is MAME's courses and attract with the default car;
+other cars' rows were only in R928's car-select walks. House of the Dead
+keeps its eight ranges (it could take a table the same way).
