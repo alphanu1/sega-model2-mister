@@ -1,5 +1,42 @@
 # Handoff
 
+## 2026-10-22 (evening): Sega Touring Car Championship on the 2C build -- branch stcc, R933. NOT PUSHED
+
+Branch stcc (off model2c 648ecb9, model2c 47a2168 merged in; local only,
+never pushed, never merged into main / model2a). BUILD TO FIT: stcc HEAD,
+Model2.qsf + VERILOG_MACRO "M2_2C=1" and "M2_NO_2A_MANX_MOTION=1" (as
+model2c). NOT FITTED.
+MRA: mra/Sega Touring Car Championship (newer).mra (+ [15kHz CRT], 0x9D),
+game ID 0x1D, <rbf>Model2C</rbf>, the large layout (0x52C0000 bytes): NEEDS
+THE 128 MB MODULE. MAME 0.289's GAME title for stcc is "(newer)".
+MAME PLAYS IT (MACHINE_NOT_WORKING is the 2C family's flag): attract,
+Select Car, Enter Your Name, Qualifying, round 1 at Country Circuit.
+WHAT IT NEEDED: (1) 0x1D -> a2_big, copro data from SDRAM, the wheel OSD
+lines; (2) m2_2a_inputs: Over Rev's profile with the pedals NOT reversed
+(indy500's ports); (3) luma rows 0 and 1 only (182 MAME walks) -> ranges
+{0..7}, exact; (4) THE TGPx4's CLRF: decoded since R920, never wired --
+STCC pushes 0x1a before the TGPx4 clears its FIFOs, MAME drops it, ours
+kept it and ran every command one late (the lockstep stopped at word
+15,901). m2_fifo_m10k gained `clr` (tied 0 elsewhere); m2_tgpx4 passes
+fi_clr / fo_clr to m2_copro's FIFOs.
+NOT NEEDED: the comm board (CN / FG written 0 once, one share-RAM byte
+polled that nobody writes: 0 in MAME and here); a drive board (MAME has
+none); the DSB (one way from the UART).
+EVIDENCE: MAME's interpreter on the 240 s capture 551,151,243 words, 0 bad;
+the RTL in lockstep 4,470,256 / 4,470,256 outputs, 0 bad (6.72 clk / word); Over Rev / HOTD captures on the new RTL
+8,251,088 / 8,251,088 (Over Rev) and 8,697,138 / 8,697,138 (HOTD) outputs, 0 bad; i960 149 forms / 350 variants, 0 trap (2C); geometry walks
+874/874, 1,435/1,435, 1,348/1,348; whole-core bench to the attract, sheets
+and luma equal to MAME's in every written word; raster frame colour mean
+8.94 of 255. 2A build: quartus_map identical in all 600 entity rows.
+Map (M2_2C, merged): 40,086 ALMs (model2c 47a2168 the same day 40,128 --
+noise), M10K bits / DSP unchanged.
+ON THE BOARD: no music (DSB not modelled); the TGPx4 is the busiest of the
+2C games so far -- a race may overrun a vblank (Over Rev's R930 class), not
+measured; pedals not checked on a wheel.
+DATA (ROM-derived, outside git): sm2-builds/stcc-data (census, capture,
+walk dumps, benches, MAME texture dumps), sm2-builds/stcc-map-* (maps).
+Next free R numbers: R937 on (R934 m2c-timing, R935 HOTD shadows, R936 main).
+
 ## 2026-10-22 (night): the 2C build's timing -- branch m2c-timing (off model2c 648ecb9), R934. LOCAL ONLY, NOT FITTED
 
 BUILD TO FIT: m2c-timing HEAD with Model2.qsf + VERILOG_MACRO "M2_2C=1" and
