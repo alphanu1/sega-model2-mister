@@ -70,7 +70,22 @@ module i960_top #(
   parameter bit F2A    = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
-  parameter int unsigned IC_LINES = 512
+  parameter int unsigned IC_LINES = 512,
+  // R927: THE LOCAL-REGISTER CACHE AS THE CHIP KEEPS IT (i960_regs RING): a
+  // ring of RC_FRAMES saved frames that writes a frame to memory only when a
+  // call finds it full, instead of MAME's rule (every frame deeper than four
+  // goes out on its call and comes back on its return). 0 is MAME's rule and
+  // its memory stream exactly, as the lockstep benches compare it.
+  parameter bit          RC_RING  = 1'b0,
+  parameter int unsigned RC_FRAMES = 4,
+  // R927: i960_dcache, a data cache on this side of the bridge for board and
+  // work RAM, DC_LINES x 16 B (0: none, the bus as before). DC_2A: the 2A
+  // board's map (board RAM 0x200000-0x23ffff; 0 caches 0x200000-0x21ffff, the
+  // original board's RAM below its ROM mirror).
+  parameter int unsigned DC_LINES = 0,
+  parameter bit          DC_2A    = 1'b1,
+  parameter bit          DC_TEST  = 1'b0,   // i960_dcache TEST_ALL: the lockstep bench's low memory
+  parameter bit          DC_LANES = 1'b1    // i960_dcache LANES
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -146,6 +161,10 @@ module i960_top #(
 );
 
   // ------------------------------------------------------------ architectural
+
+  // R927: the bus as the masters see it -- the bridge's, or i960_dcache's
+  logic        c_req, c_ack;
+  logic [31:0] c_rdata;
 
   // ARCHITECTURAL STATE THE INTERRUPT PATH CONSUMES, with MAME's reset values
   // (i960.cpp device_reset). These are registers now; what is NOT yet done is
@@ -474,7 +493,7 @@ module i960_top #(
   logic        rf_mem_req, rf_mem_we;
   logic [31:0] rf_mem_addr, rf_mem_wdata;
 
-  i960_regs u_regs (
+  i960_regs #(.CACHE_FRAMES(RC_FRAMES), .RING(RC_RING)) u_regs (   // R927
     .clk(clk), .rst_n(rst_n),
     .ra1(ra1), .ra2(ra2), .rd1(rd1), .rd2(rd2),
     .wa(wa), .wd(wd), .we(we),
@@ -492,7 +511,7 @@ module i960_top #(
     .dbg_rip(dbg_rip), .dbg_pfp(dbg_pfp),
     .dbg_rcache_pos(dbg_rcache_pos), .dbg_to_memory(dbg_to_memory),
     .mem_req(rf_mem_req), .mem_we(rf_mem_we), .mem_addr(rf_mem_addr),
-    .mem_wdata(rf_mem_wdata), .mem_rdata(bus_rdata), .mem_ack(rf_mem_ack)
+    .mem_wdata(rf_mem_wdata), .mem_rdata(c_rdata), .mem_ack(rf_mem_ack)
   );
 
   assign dbg_rf_req  = rf_mem_req;
@@ -913,7 +932,7 @@ module i960_top #(
     .op(d_op), .is_load(ls_load), .is_store(ls_store), .no_mem(ls_nomem),
     .size(ls_size), .sign_ext(ls_sext), .n_words(ls_nwords),
     .reg_mask(ls_regmask), .valid(ls_valid),
-    .addr_lo(ea[1:0]), .rd_data(bus_rdata), .ld_result(ls_ldres),
+    .addr_lo(ea[1:0]), .rd_data(c_rdata), .ld_result(ls_ldres),
     .st_value(rd1), .st_data(ls_stdata), .st_be(ls_stbe),
     .unaligned(ls_unaligned)
   );
@@ -956,7 +975,7 @@ module i960_top #(
     .word_idx(lsu_widx), .st_word(rd1), .ld_word(lsu_ldword), .ld_we(lsu_ldwe),
     .bus_req(lsu_breq), .bus_we(lsu_bwe), .bus_addr(lsu_baddr),
     .bus_be(lsu_bbe), .bus_wdata(lsu_bwdata),
-    .bus_rdata(bus_rdata), .bus_ack(lsu_back)
+    .bus_rdata(c_rdata), .bus_ack(lsu_back)
   );
 
   // ---------------------------------------------------------------- I-cache
@@ -981,7 +1000,7 @@ module i960_top #(
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),
     .bus_req(ic_breq), .bus_addr(ic_baddr),
-    .bus_rdata(bus_rdata), .bus_ack(ic_back)
+    .bus_rdata(c_rdata), .bus_ack(ic_back)
   );
 
   // Low two bits unused: the I-cache port is [31:2] because instructions are
@@ -1057,8 +1076,8 @@ module i960_top #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n)                 grant_q <= G_NONE;
-    else if (grant_q == G_NONE) grant_q <= bus_ack ? G_NONE : sel_next;
-    else if (bus_ack)           grant_q <= G_NONE;
+    else if (grant_q == G_NONE) grant_q <= c_ack ? G_NONE : sel_next;
+    else if (c_ack)             grant_q <= G_NONE;
   end
 
   // A locked grant wins; otherwise this cycle's pick, so a transaction can
@@ -1067,7 +1086,7 @@ module i960_top #(
   assign bus_ifetch = (gsel == G_IC);   // R724: the bridge serves these a line at a time
 
   always_comb begin
-    bus_req   = 1'b0;
+    c_req     = 1'b0;
     bus_we    = 1'b0;
     bus_addr  = 32'd0;
     bus_be    = 4'b1111;
@@ -1078,22 +1097,50 @@ module i960_top #(
     boot_ack   = 1'b0;
 
     if (gsel == G_BOOT) begin
-      bus_req = 1'b1; bus_we = aux_we; bus_addr = boot_addr; bus_be = 4'b1111;
+      c_req = 1'b1; bus_we = aux_we; bus_addr = boot_addr; bus_be = 4'b1111;
       bus_wdata = aux_wdata;
-      boot_ack = bus_ack;
+      boot_ack = c_ack;
     end else if (gsel == G_RF) begin
-      bus_req = 1'b1; bus_we = rf_mem_we; bus_addr = rf_mem_addr;
+      c_req = 1'b1; bus_we = rf_mem_we; bus_addr = rf_mem_addr;
       bus_wdata = rf_mem_wdata; bus_be = 4'b1111;
-      rf_mem_ack = bus_ack;
+      rf_mem_ack = c_ack;
     end else if (gsel == G_LSU) begin
-      bus_req = 1'b1; bus_we = lsu_bwe; bus_addr = lsu_baddr;
+      c_req = 1'b1; bus_we = lsu_bwe; bus_addr = lsu_baddr;
       bus_wdata = lsu_bwdata; bus_be = lsu_bbe;
-      lsu_back = bus_ack;
+      lsu_back = c_ack;
     end else if (gsel == G_IC) begin
-      bus_req = 1'b1; bus_we = 1'b0; bus_addr = ic_baddr; bus_be = 4'b1111;
-      ic_back = bus_ack;
+      c_req = 1'b1; bus_we = 1'b0; bus_addr = ic_baddr; bus_be = 4'b1111;
+      ic_back = c_ack;
     end
   end
+
+  // R927: THE CPU-SIDE DATA CACHE (i960_dcache). The arbiter's transaction
+  // goes to the bridge unless the cache takes it; the masters see the
+  // bridge's answers or the cache's, one at a time (c_ack / c_rdata).
+  generate if (DC_LINES != 0) begin : g_dc
+    logic        dc_take, dc_ack;
+    logic [31:0] dc_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [31:0] dc_hits, dc_miss;
+    /* verilator lint_on UNUSEDSIGNAL */
+    i960_dcache #(.LINES(DC_LINES), .BOARD_2A(DC_2A), .TEST_ALL(DC_TEST), .LANES(DC_LANES)) u_dcache (
+      .clk(clk), .rst_n(rst_n),
+      .req(c_req), .rd_ok((gsel == G_LSU) || (gsel == G_RF)),
+      .we(bus_we), .addr(bus_addr), .be(bus_be), .wdata(bus_wdata),
+      .ack_x(bus_ack), .rdata_x(bus_rdata),
+      .take(dc_take), .ack(dc_ack), .rdata(dc_rdata),
+      .dbg_hits(dc_hits), .dbg_miss(dc_miss)
+    );
+    // Off the bridge in the cycle it is taken AND the cycle it is answered:
+    // the master holds its request until it sees the acknowledge.
+    assign bus_req = c_req && !dc_take && !dc_ack;
+    assign c_ack   = bus_ack || dc_ack;
+    assign c_rdata = dc_ack ? dc_rdata : bus_rdata;
+  end else begin : g_nodc
+    assign bus_req = c_req;
+    assign c_ack   = bus_ack;
+    assign c_rdata = bus_rdata;
+  end endgenerate
 
   // -------------------------------------------------- multi-word reg writes
   //
@@ -1376,16 +1423,16 @@ module i960_top #(
         // asked for anything, so no other master can be mid-transaction.
         T_BOOT: if (boot_ack) begin
           case (boot_step)
-            2'd0: begin sat_reg  <= bus_rdata; boot_addr <= 32'd4;
+            2'd0: begin sat_reg  <= c_rdata; boot_addr <= 32'd4;
                         boot_step <= 2'd1; end
-            2'd1: begin prcb_reg <= bus_rdata; boot_addr <= 32'd12;
+            2'd1: begin prcb_reg <= c_rdata; boot_addr <= 32'd12;
                         boot_step <= 2'd2; end
             2'd2: begin
               // mem[12] is the initial IP. The prefetch slot is left invalid, so
               // the first fetch goes to this address rather than to whatever the
               // front end had speculated from the reset value of 0.
-              ip       <= bus_rdata;
-              pf_ip    <= bus_rdata;
+              ip       <= c_rdata;
+              pf_ip    <= c_rdata;
               pf_valid <= 1'b0;
               pf_armed <= 1'b0;
               // A FOURTH READ: the initial frame pointer, at PRCB+24.
@@ -1407,7 +1454,7 @@ module i960_top #(
               boot_step <= 2'd3;
             end
             default: begin
-              boot_fp    <= bus_rdata;
+              boot_fp    <= c_rdata;
               boot_fp_we <= 1'b1;
               boot_req   <= 1'b0;
               ts         <= T_FETCH;
@@ -1422,13 +1469,13 @@ module i960_top #(
         end else if (boot_ack) begin
           if (syn_dst == 32'hff00_0004) begin
             // The interrupt control register, not memory.
-            icr_reg  <= bus_rdata;
+            icr_reg  <= c_rdata;
             boot_req <= 1'b0;
             ac       <= {ac[31:3], 3'd2};
             ip       <= ip_next;
             ts       <= T_FETCH;
           end else begin
-            aux_wdata <= bus_rdata;
+            aux_wdata <= c_rdata;
             boot_addr <= syn_dst;
             aux_we    <= 1'b1;
             boot_req  <= 1'b0;
@@ -1953,10 +2000,10 @@ module i960_top #(
         end else if (boot_ack) begin
           boot_req <= 1'b0;
           if (intr_step == 4'd0) begin
-            ret7_pc   <= bus_rdata;
+            ret7_pc   <= c_rdata;
             intr_step <= 4'd1;
           end else begin
-            ret7_ac <= bus_rdata;
+            ret7_ac <= c_rdata;
             ret7    <= 1'b1;
             rf_ret  <= 1'b1;
             ts      <= T_FRAME;
@@ -1974,10 +2021,10 @@ module i960_top #(
             end else if (boot_ack) begin
               boot_req <= 1'b0;
               case (synq_step[1:0])
-                2'd0:    iac_msg <= bus_rdata[31:24];
-                2'd1:    iac1    <= bus_rdata;
-                2'd2:    iac2    <= bus_rdata;
-                default: iac3    <= bus_rdata;
+                2'd0:    iac_msg <= c_rdata[31:24];
+                2'd1:    iac1    <= c_rdata;
+                2'd2:    iac2    <= c_rdata;
+                default: iac3    <= c_rdata;
               endcase
               synq_step <= synq_step + 4'd1;
             end
@@ -2032,7 +2079,7 @@ module i960_top #(
           boot_req  <= 1'b1;
         end else if (boot_ack) begin
           boot_req <= 1'b0;
-          if (!synq_step[0]) scratch <= bus_rdata;
+          if (!synq_step[0]) scratch <= c_rdata;
           if (synq_step == 4'd7) begin
             aux_we <= 1'b0;
             ac     <= {ac[31:3], 3'd2};
@@ -2083,10 +2130,10 @@ module i960_top #(
           end else if (boot_ack) begin
             boot_req <= 1'b0;
             case (intr_step)
-              4'd0: begin it_base <= bus_rdata; intr_step <= 4'd1; end
-              4'd1: begin scratch <= bus_rdata; intr_step <= 4'd2; end
+              4'd0: begin it_base <= c_rdata; intr_step <= 4'd1; end
+              4'd1: begin scratch <= c_rdata; intr_step <= 4'd2; end
               4'd2: begin                       intr_step <= 4'd3; end
-              4'd3: begin scratch <= bus_rdata; intr_step <= 4'd4; end
+              4'd3: begin scratch <= c_rdata; intr_step <= 4'd4; end
               default: begin aux_we <= 1'b0; ts <= T_FETCH; end
             endcase
           end
@@ -2110,9 +2157,9 @@ module i960_top #(
             end else if (boot_ack) begin
               boot_req <= 1'b0;
               case (intr_step)
-                4'd0: it_base <= bus_rdata;
-                4'd1: int_sp  <= bus_rdata;
-                default: irqv <= bus_rdata;
+                4'd0: it_base <= c_rdata;
+                4'd1: int_sp  <= c_rdata;
+                default: irqv <= c_rdata;
               endcase
               intr_step <= intr_step + 4'd1;
             end
@@ -2176,8 +2223,8 @@ module i960_top #(
               boot_addr <= (intr_step == 4'd0) ? (prcb_reg + 32'd20) : it_base;
             end else if (boot_ack) begin
               boot_req <= 1'b0;
-              if (intr_step == 4'd0) begin it_base  <= bus_rdata; intr_step <= 4'd1; end
-              else                   begin pend_pri <= bus_rdata; intr_step <= 4'd2; end
+              if (intr_step == 4'd0) begin it_base  <= c_rdata; intr_step <= 4'd1; end
+              else                   begin pend_pri <= c_rdata; intr_step <= 4'd2; end
             end
 
             4'd2: if (!have_lvl) ts <= T_FETCH;      // nothing eligible
@@ -2189,7 +2236,7 @@ module i960_top #(
               boot_req  <= 1'b1;
             end else if (boot_ack) begin
               boot_req  <= 1'b0;
-              vword     <= bus_rdata;
+              vword     <= c_rdata;
               intr_step <= 4'd4;
             end
 

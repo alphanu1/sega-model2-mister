@@ -72,8 +72,9 @@ void tick() {
 
 // Run until the module is idle again, or fail loudly.
 bool settle(const char *what) {
-  const int LIMIT = 400;          // an order of magnitude past the worst case:
+  const int LIMIT = 4000;         // an order of magnitude past the worst case:
                                   // flushreg is 4 frames x 16 words = 64 acks
+                                  // (R927's ring of 8: 128)
   for (int i = 0; i < LIMIT; i++) {
     tick();
     if (!dut->busy) return true;
@@ -207,6 +208,7 @@ void reset() {
   // out of RAM into flip-flops). So seed both sides identically instead.
   for (int i = 0; i < 32; i++) wr_reg(i, 0x10000000u + i * 0x40u);
   ref.rcache_pos = 0;
+  ref.ring_head = -1; ref.ring_n = 0;   // R927: the ring, empty as the module's reset leaves it
   ref.mem.clear(); ref.stream.clear();
   dut_mem.clear(); dut_stream.clear();
   stream_cursor_reset();
@@ -230,19 +232,21 @@ int main(int argc, char **argv) {
   // ---- directed: drive depth past the cache and back, which is where the
   // spill and fill paths live and where a depth-off-by-one hides.
   reset();
-  for (int d = 0; d < 8; d++) {
+  // R927: to 20, past the ring of 8 as well as MAME's four
+  for (int d = 0; d < 20; d++) {
     do_call(0x1000 + d * 0x10, 0x2000 + d * 0x10, 0, 0);
     if (!compare("deep call")) break;
   }
-  for (int d = 0; d < 8; d++) {
+  for (int d = 0; d < 20; d++) {
     do_ret();
     if (!compare("deep ret")) break;
   }
-  std::printf("  directed deep call/ret : depth 0..8 and back\n");
+  std::printf("  directed deep call/ret : depth 0..20 and back (%s)\n",
+              ref.ring ? "the chip's ring" : "MAME's rule");
 
   // ---- directed: flushreg at every depth, then a ret, which is the
   // negative-rcache_pos case do_ret_0 has a special branch for.
-  for (int d = 0; d <= 5; d++) {
+  for (int d = 0; d <= 12; d++) {
     reset();
     for (int k = 0; k < d; k++) do_call(0x3000 + k, 0x4000 + k, 0, 0);
     do_flush();
@@ -250,7 +254,7 @@ int main(int argc, char **argv) {
     do_ret();
     compare("ret after flushreg");
   }
-  std::printf("  directed flushreg      : depths 0..5, each followed by ret\n");
+  std::printf("  directed flushreg      : depths 0..12, each followed by ret\n");
 
   // ---- directed: interrupt-type call, which overrides SP.
   reset();

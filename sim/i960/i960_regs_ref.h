@@ -37,6 +37,22 @@ struct Regs {
   uint32_t rcache_frame_addr[RCACHE_SIZE]{};
   int32_t  rcache_pos = 0;
 
+  // R927: THE CHIP'S RING (i960_regs RING = 1), not MAME's depth rule. ring =
+  // the number of saved frames it holds (0: MAME's rule above). A call that
+  // finds it full writes the OLDEST frame to that frame's own address first;
+  // a return takes the newest frame, or reads memory when it is empty;
+  // flushreg writes them all, oldest first. Only the 64-byte save areas see
+  // a difference, which the architecture leaves undefined until flushreg.
+  // Set once, before the first operation (I960_RING in the benches).
+#ifdef I960_RING
+  int      ring = I960_RING;
+#else
+  int      ring = 0;
+#endif
+  uint32_t ring_r[8][16]{};
+  uint32_t ring_a[8]{};
+  int      ring_head = -1, ring_n = 0;
+
   std::map<uint32_t, uint32_t> mem;
   std::vector<MemOp>           stream;   // ordered, writes and reads
 
@@ -79,7 +95,17 @@ struct Regs {
   void call(uint32_t ret_ip, uint32_t target, int type, uint32_t stack) {
     r[RIP] = ret_ip;
 
-    if (rcache_pos >= RCACHE_SIZE) {
+    if (ring) {
+      if (ring_n == ring) {
+        const int o = (ring_head + 1) % ring;
+        for (int i = 0; i < 16; i++) write(ring_a[o] + i * 4, ring_r[o][i]);
+        --ring_n;
+      }
+      ring_head = (ring_head + 1) % ring;
+      for (int i = 0; i < 16; i++) ring_r[ring_head][i] = r[i];
+      ring_a[ring_head] = r[FP] & ~0x3fu;
+      ++ring_n;
+    } else if (rcache_pos >= RCACHE_SIZE) {
       const uint32_t f = r[FP] & ~0x3fu;
       for (int i = 0; i < 16; i++) write(f + i * 4, r[i]);
     } else {
@@ -129,7 +155,16 @@ struct Regs {
     r[FP] = r[PFP] & ~0x3fu;
     rcache_pos--;
 
-    if (rcache_pos >= RCACHE_SIZE || rcache_pos < 0) {
+    if (ring) {
+      if (rcache_pos < 0) rcache_pos = 0;
+      if (ring_n > 0) {
+        for (int i = 0; i < 16; i++) r[i] = ring_r[ring_head][i];
+        ring_head = (ring_head - 1 + ring) % ring;
+        --ring_n;
+      } else {
+        for (int i = 0; i < 16; i++) r[i] = read(r[FP] + 4 * i);
+      }
+    } else if (rcache_pos >= RCACHE_SIZE || rcache_pos < 0) {
       for (int i = 0; i < 16; i++) r[i] = read(r[FP] + 4 * i);
       if (rcache_pos < 0) rcache_pos = 0;
     } else {
@@ -139,6 +174,14 @@ struct Regs {
   }
 
   void flushreg() {
+    if (ring) {
+      for (int k = ring_n - 1; k >= 0; k--) {
+        const int t = (ring_head - k + ring) % ring;
+        for (int i = 0; i < 16; i++) write(ring_a[t] + i * 4, ring_r[t][i]);
+      }
+      ring_n = 0; rcache_pos = 0;
+      return;
+    }
     if (rcache_pos > RCACHE_SIZE) rcache_pos = RCACHE_SIZE;
     for (int32_t t = 0; t < rcache_pos; t++)
       for (int i = 0; i < 16; i++)

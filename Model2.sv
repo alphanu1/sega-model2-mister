@@ -186,6 +186,19 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_FPU
 `define M2_2A_FPU 1
 `endif
+// R927: THE i960'S SPEED IN SEGA RALLY'S FRAME START (R926: the game's AI
+// detail budget). M2_2A_I960_RING: the local-register cache as the chip keeps
+// it, a ring of eight frames that goes to memory only when a call finds it
+// full (i960_top RC_RING; MAME's rule sends every frame deeper than four to
+// memory and back). M2_2A_I960_DC: a 1 KB data cache on the CPU's side of the
+// bridge for board and work RAM (i960_dcache, one M10K), a hit in 2 CPU cycles
+// instead of the crossing's 5-7. Both on by default; "=0" leaves either out.
+`ifndef M2_2A_I960_RING
+`define M2_2A_I960_RING 1
+`endif
+`ifndef M2_2A_I960_DC
+`define M2_2A_I960_DC 1
+`endif
 `else
 `ifndef M2_2A_SOUND
 `define M2_2A_SOUND 0
@@ -2841,7 +2854,21 @@ logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
                                            | (FPU2A & is_2ax)};   // R887: every 2A game past VF2
-i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A)) u_i960 (   // R869: F2A
+// R927: the register ring and the CPU-side data cache (2A only; the original
+// board's core keeps MAME's rule and the bus as it was)
+`ifdef M2_2A_I960_RING
+localparam bit I960_RING = M2A && (`M2_2A_I960_RING != 0);
+`else
+localparam bit I960_RING = 1'b0;
+`endif
+`ifdef M2_2A_I960_DC
+localparam int unsigned I960_DC = (M2A && (`M2_2A_I960_DC != 0)) ? 64 : 0;
+`else
+localparam int unsigned I960_DC = 0;
+`endif
+i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A),   // R869: F2A
+           .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4),
+           .DC_LINES(I960_DC), .DC_2A(M2A), .DC_LANES(1'b0)) u_i960 (   // R927
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
