@@ -44101,3 +44101,7 @@ sm2-builds/m2c-probe (model2c 9e9a453 + M2_2C, M2_PROBE, M2_PROBE_TGP,
 M2_NO_2A_RALLY, M2_NO_2A_MANX_MOTION) -- the R923 probe already carries
 the TGPx4's pc (dbg_tgp_pc) and its unimplemented-op flag (dbg_bad) and
 both FIFOs and the transfer ring; seeds s1361-s1363 queued.
+*Ben, s1356:* with Textures OFF, Texture filter POINT and Mip-mapping OFF
+the lockup still happens at the same place. So it is not the texture path
+(span_tex, texel fetch, luma, mip): what is left is the i960, the TGPx4,
+the copro FIFOs / buffer RAM and the geometry walk.
