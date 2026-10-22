@@ -1,5 +1,25 @@
 # Handoff
 
+## 2026-10-22: main pushed -- Model2_20261022 and Model2A_20261022 released
+
+releases/: Model2_20261022.rbf = s1343 (VCop/Desert Tank colours R925, Gun
+flash Arcade/Off R929, link play), md5 eaa65eae..., clk_sys +0.428, clk_mem
++0.038, i960 +1.265, hold +0.242. Model2A_20261022.rbf = s1346 (model2a
+909251d: R927 i960 ring + data cache, R931 TGP holds on a full output FIFO),
+md5 c778c70a..., clk_sys +0.122, clk_mem +0.110, i960 +1.080, hold +0.245;
+HDMI report-only. Same RTL as s1340, which Ben ran on the board (VF2's
+backflip skip many times, every 2A game). s1344/s1347 failed timing, s1341
+segfaulted in the fitter (tool flake). model2a's releases/ carries the same
+folder. GitHub: #10, #17, #19 closed with comments; #13 (gun flash) left open
+for a GunCon 2 owner to confirm -- Virtua Cop 2 flashes natively.
+OPEN: #15 Rally EEPROM in the NVRAM file (planned, not started); #20 Daytona
+core volume does nothing (new, not looked at); #21 Manx TT -- settings not
+saved, bike sound missing on Deluxe, repeating voice on Twin (new, not looked
+at). Zero Gunner froze once in attract on s1340 and never again in long runs;
+the VF2 agent showed the R931 hold cannot engage in ZG (FIFO peaks 1-12 of
+129). If it recurs: fit 39ed188 (vf2-probe-fix, probe + fix) and decode the
+UART with tools/decode_tgp.py.
+
 ## 2026-10-22: main -- Model2A_20261022 prepared in releases/ LOCALLY (Ben: no push yet)
 
 Model2A_20261022.rbf = s1328 (model2a bd6fa2e, R927: 8-frame register ring +
