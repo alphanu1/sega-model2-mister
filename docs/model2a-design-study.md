@@ -44062,3 +44062,123 @@ and DSP 102 unchanged. 2A (no M2_2C) 648ecb9 vs this branch: 39,953 /
 If the raster / shared paths remain, they are the next list -- the quad
 store's write enable (64 M10K sinks off q_take) and fb_wcomb's c_fits ->
 c_wr -> vlo are the two with the most negative single-seed slack.
+
+**R935 -- HOUSE OF THE DEAD ON THE 2C BUILD: THE STONE-WALL LOCKUP IS THE
+i960 TRAPPING ON logrl (FIXED: logrl ON R845'S SEQUENCER, 2C ONLY, 2A
+NETLIST IDENTICAL); THE COURTYARD'S "RECTANGLE" SHADOWS ARE MAME'S OWN
+DRAWING, AND NO BENCH REPRODUCES THEIR SLIDING. ON BRANCH hotd-shadow (OFF
+model2c 47a2168), LOCAL ONLY, NOT FITTED.**
+(Ben, s1350 = 648ecb9: in the courtyard in front of the mansion "the
+mansion's shadow" is plain dark rectangles that "move like several shadows
+sliding at different speeds and meeting up". Then s1356 = 47a2168, clean
+timing: the game freezes -- 2D and 3D still, music on -- at the same place
+every time, the stone wall / gate after the courtyard with a creature
+leaping; also once on s1350; also with textures off, point filter, mips off.)
+
+*THE INSTRUMENT: HOTD PLAYED IN MAME.* The R924 captures were attract and a
+play that died in the front yard: neither reaches the courtyard. The attract
+demos (five loops checked, 720 s) never show it either. New:
+sim/io/mame_m2_hotd_play.lua -- coins and start on a timer (every lost life
+continued) and the gun forced through the 315-5649 mux read to seeded random
+points, a reload shot every seventh. Seed 1 on the nvram one attract run
+leaves: chapter 1 from 26 s, the courtyard 41-50 s, the stone wall 67-74 s,
+the fountain ~80 s, the bridge ~100 s. MAME is deterministic under it (the
+3D list numbers repeat to the frame across runs), so dump runs (M2GEO_TRIG
+walks, M2DIFF frames, R924_CAP) land on the same frames.
+
+*THE LOCKUP (MEASURED).* R869's form log over 240 s of that play, through
+formcheck (its 2C column = Model2.sv's 2C i960): 178 forms, 332 variants,
+ONE trap -- 0x69.2 logrl (set_rifl(t2f * log2(t1f))), first at pc 0x0006a15c,
+68.67 s: the stone wall (snapshots 67-74 s). 165 executions in 240 s; a
+second operand form at pc 0x1c890 from 117.8 s (src2 an fp operand index 12,
+which MAME's get_2_rifl reads as 0.0 -- the module's fp_lit agrees). The
+i960 traps, halts, the 3D and 2D stop with it, the sound board plays on:
+R930's cvtilr freeze on Over Rev again. Not the TGPx4: (a) MAME's
+interpreter replays the 240 s capture (R924_CAP, 551,191,404 words,
+24,813,957 outputs) with 0 bad; (b) the RTL in lockstep over the courtyard
+capture (50 s, 86,301,426 words, 4,060,823 outputs) 0 bad, no dbg_bad (no
+CLRF / FLOG / PDR / DDR reached); (c) the i960 never polls fifo_control
+(0x980004) or the copro status in play -- every result is an ldq of four pops
+(0x14144-0x14164), so nothing in the copro path waits on a result that does
+not come. WHAT THE PROBE SHOULD SHOW on s1356: i960 halted, trap = 1,
+trap_op = 0x69, IP 0x0006a15c; the TGPx4 idle, dbg_bad 0.
+
+*THE FIX (rtl/cpu/i960, i960_top C2 / i960_fptrans LOG):* logrl as microcode
+on R845's sequencer (tools/i960_fptrans.py --log, i960_fptrans_rom_log.svh,
+465 of 512 words, 127 of 128 registers). x = 2^e m by two new loads that are
+wiring on the adder's operand -- LDE: (MAGIC + e - 1023) - MAGIC, exact;
+LDM: m in [1, 2) -- m > 1.5 halved (e + 1); log2 m = (2 / ln 2) atanh((m - 1)
+/ (m + 1)), |f| <= 0.2 = atan's range, so atanh runs ATAN's own 14-term
+series on z = -f^2 (KATAN); double-double throughout, e added last, rounded
+once, then one multiply by y as the host rounds t2f * log2(t1f). +-0 -> -inf,
+x < 0 -> NaN, +inf -> +inf, NaN -> NaN (subnormal x is the units' recorded
+flush). The Horner steps of all five go through one subroutine (HSTEP) in
+this program so it fits 512 words: the same operations, so sinrl ... atanrl
+are bit-identical to the 2A program (40,000 / 40,000), 4% more cycles.
+With C2 = 0 the decode and LDE / LDM fold away and i960_fptrans is R845's.
+*VERIFIED:* log2 correctly rounded on 6,000 / 6,000 arguments (0-4096, near
+1, every exponent; reference: decimal at 60 digits); differs from the host's
+log2 (MAME's) on 1 of 6,000, where glibc is not correctly rounded; y log2 x
+equals the host's product on 2,000 / 2,000; the specials as the host.
+test_i960_fptrans (2A program, 20,000 vectors) and test_i960_fptrans_log
+(25,000, 5,000 logrl, mean 3,376 / max 3,605 cycles) bit-exact against the
+interpreter; PLANTED (LDE's bias 1022): 2,578 mismatches. test_i960_top_c2
+(new: VC + FR + F2A + C2, +c2 puts logrl in the mix): 2 x 20,000 programs,
+1,878 logrl retired, 0 mismatches; the C2 = 0 build with +c2: FAIL (module
+trap at the first logrl). test_i960_top / _vc / _fx / _fr / _ring / _dc PASS.
+formcheck after: 2C traps on 0 of 178 forms and 0 of 332 variants.
+lint_top 2A and M2_2C: no warning added (whole raw log diffed against
+47a2168); lint_idx identical. *AREA (quartus_map 17.0):* 2A every entity
+identical to 47a2168 -- 39,955 ALMs, 48,098 registers, 4,572,656 bits, 96 DSP.
+2C (M2_2C + M2_NO_2A_MANX_MOTION) 40,094 -> 40,120 ALMs (+26), registers
+48,237, bits 4,583,920 and DSP 102 unchanged (no M10K: the program still
+fits the 512-word ROM; a first 563-word version went to logic at +466).
+
+*THE SHADOW: WHAT MAME DRAWS (MEASURED).* The courtyard's shadows (the
+buildings' and the mansion's, on the paving) are not a shadow effect: they
+are polygons of the scenery's ground objects (polygon ROM 0x93a872, 0x93b054,
+0x93b9f5, 0x959d81 ...), the same paving texture (header 1a04 / 1a0c) with a
+darker colour base (h3 0x8f00 / 0x8b00, colour bases 0x23c / 0x22c, against
+the lit paving's 0x91c0 = 0x247), straight-edged. MAME draws them as plain
+dark quads with hard edges too. Characters' shadows are separate (the
+flattened bodies, untextured header 00c0).
+*THE CORE ON MAME'S LISTS (MEASURED):* geodiff_2abig on twelve courtyard
+walks 41.5-49 s (1,876 polygons at most): every ground polygon matches; per
+walk 1-66 polygons "off" or missing / extra, all distant sub-pixel slivers
+and fan splits (R924's class); texture coordinates 0 off; texture parameters
+0 differ. NEW M2GD_QSTALL (the quad store refusing at random, 1-50 and
+1-5,000 cycles at a time, as the board's store does while a draw is in
+flight -- the bench's quad log moved to the edge that takes the quad): the
+same 1,883 quads, byte for byte. tb_m2_raster3d in the 2C raster parameters
+(TEXLUT, LSB 5, game 0x17) on M2DIFF frames 1440 and 1555: the dark pieces
+where MAME has them (scratch image shadow_compare.png), colour vs MAME mean
+16.7 / 17.2 of 255. The TGPx4: all 2,152 non-zero matrix words of a
+courtyard list are TGPx4 outputs of the frame before (the i960 copies
+twelve popped words per object, 0x14120), and the RTL is exact over the
+courtyard (above). The i960's ring (R927, 8 frames, not MAME's depth rule):
+NEW sim/io/mame_i960_ring.patch models the ring beside MAME's rule and logs
+every load / store into a save area the ring would still hold -- 75 s of
+play through the courtyard, ring 8 and ring 4: 1,856,215 calls, 14,283
+flushreg, 0 hazards. A slow i960 (R926's M2_I960_CLK, 10 MHz) does not make
+HOTD mix frames as Sega Rally does: NEW sim/video/m2_scenery_check.py (each
+scenery piece placed against the first by its own matrix, R^T (t_i - t_ref),
+over many walks) gives a spread <= 0.001 units on 24 walks at 10 MHz and 12
+at MAME's speed (|p| 136-1,067).
+*NOT REPRODUCED:* the sliding. Every bench that can be given MAME's state
+draws the courtyard as MAME does. What none of them has is the board's own
+display list under the board's timing (the core's i960 producing it while
+the walk and the draw run late).
+*FOUND ON THE WAY, NOT FIXED (a 2A-shared setting):* HOTD's courtyard lists
+are 4,555-4,642 dwords (0x0000 / 0x4000, double-buffered, MAME 0.289); R854's
+GEO_LIST_WIN is 4,096, so if a walk is still running when the game starts
+the next list in the same buffer (16 ms after the vblank: setwp, MAME), the
+words past 4,096 are not held and the walk can read the next list's words
+there. In these lists that tail is effects (blood drops, smoke, MISS SHOT,
+bullet streaks), not scenery, so it is not the shadow. 8,192 would cover HOTD
+(lists 16,384 dwords apart) and equal VF2's spacing; Over Rev's and STCC's
+spacings were not measured.
+*OPEN:* the whole-core bench (tb_m2_boot 2C, board clocks, ring + data
+cache, new M2_LISTDUMP: the list as the walk read it) on HOTD's attract to
+check the core's own lists with m2_scenery_check.py was started, not
+finished in this entry. A board session that would settle it: the courtyard
+with Frame skip / buffering changed, and a short 60 fps video.
