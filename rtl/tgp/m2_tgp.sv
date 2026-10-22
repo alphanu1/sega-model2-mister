@@ -762,7 +762,7 @@ module m2_tgp #(
   wire         wq_push = io_wr && sel_buf && !enq_done && !wq_full;
   wire         wq_pop  = wq_v && bufw_ack && wr_pend && wr_hi;
   m2_fifo_m10k #(.DW(47), .DEPTH(BUFW_Q), .RAMSTYLE("MLAB")) u_wq (
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk), .rst_n(rst_n), .clr(1'b0),
     .push(wq_push), .din({win_adr[14:0], io_wdata}),
     .pop(wq_pop), .q(wq_q), .q_valid(wq_v),
     .full(wq_full), .count(), .held(wq_held), .dropped()

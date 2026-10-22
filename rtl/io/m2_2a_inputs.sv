@@ -66,6 +66,10 @@
 //          0x20..0xE0 widened to MAME's 0x00..0xFF (x 85/64 about the rest
 //          point), the pedals reversed (rest 0xFF, floored 0x00): the game's
 //          default with no NVRAM (MAME's note).
+//     R933, SEGA TOURING CAR CHAMPIONSHIP (0x1D, 2C builds: OREV): MAME's
+//          indy500 ports -- Over Rev's above WITHOUT PORT_REVERSE: the pedals
+//          rest at 0x00 and floor at 0xFF (MAME 0.289's stcc reaches its
+//          race with the raw port at 0xFF). View 1 / View 2 are zoom in / out.
 //   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
 //     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
@@ -79,7 +83,7 @@ module m2_2a_inputs #(
   parameter bit          ANALOG  = 1'b1,  // the analog profile's block (M2_2A_RALLY)
   parameter bit          GUN     = 1'b0,  // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
   parameter bit          MOTION  = 1'b0,  // R892: Manx TT's motion base answered on PD (M2_2A_MANX_MOTION)
-  parameter bit          OREV    = 1'b0   // R928: Over Rev's profile (0x1C; 2C builds)
+  parameter bit          OREV    = 1'b0   // R928: Over Rev's profile (0x1C; 2C builds); R933: and STCC's (0x1D)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
@@ -117,6 +121,7 @@ module m2_2a_inputs #(
   wire p_dig2   = (game == 7'h12) | (game == 7'h15);  // Zero Gunner, Pilot Kids
   wire p_manx   = MOTION & (game == 7'h19);         // R892: Manx TT's motion base
   wire p_orev   = OREV & ANALOG & (game == 7'h1C);  // R928: Over Rev (2C)
+  wire p_stcc   = OREV & ANALOG & (game == 7'h1D);  // R933: STCC (2C): Over Rev's, pedals not reversed
   // (Model2.sv shows the analog OSD lines for 0x10 and 0x18-0x1B alike)
 
   // R879: a pad's left analogue stick drives the digital directions too, past
@@ -198,15 +203,15 @@ module m2_2a_inputs #(
     or_cq <= or_ch; or_dq <= or_d; or_uq <= or_up;
     case (or_cq)
       2'd0:    or_str <= or_uq ? 8'h80 + or_m : 8'h80 - or_m;
-      2'd1:    or_acc <= ~or_m;                       // PORT_REVERSE
-      default: or_brk <= ~or_m;
+      2'd1:    or_acc <= p_stcc ? or_m : ~or_m;       // PORT_REVERSE (Over Rev only; R933)
+      default: or_brk <= p_stcc ? or_m : ~or_m;
     endcase
   end
   wire [7:0] or_in0 = {an_in0[7:6], 1'b1, an_in0[4:0]};           // bit 5 unused
   wire [7:0] or_in1 = {2'b11, ~j0[13], ~j0[12], 2'b11, ~j0[9], ~j0[8]};
 
   always_ff @(posedge clk) begin
-    if (p_orev) begin                                 // R928
+    if (p_orev | p_stcc) begin                        // R928; R933
       in0 <= or_in0; in1 <= or_in1; in2 <= 8'hFF;
       an0 <= or_str; an1 <= or_acc; an2 <= or_brk;
     end else if (p_rally | p_an2) begin

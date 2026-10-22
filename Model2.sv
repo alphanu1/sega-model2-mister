@@ -2809,6 +2809,13 @@ wire is_hotd    = C2 && (game_id[6:0] == 7'h17);
 // (m2_2a_inputs OREV), its luma rows. 0x18-0x1B are skipped: their 2A analog
 // decodes (is_2an, the analog profile, a2_big) are live in this build too.
 wire is_orev    = C2 && (game_id[6:0] == 7'h1C);
+// R933: 0x1D Sega Touring Car Championship (stcc, the parent "newer" set) --
+// the large layout (a2_big: its 16 MB textures and 16 MB polygons, as House
+// of the Dead's), its 4 MB of copro data (the TGPx4's external ROM) in the
+// 2A copro-data slot, indy500's steering / pedals / shifter (m2_2a_inputs
+// OREV, the pedals not reversed). Its comm board needs no answer: it writes
+// CN / FG 0 once and polls one share-RAM byte nobody writes (0 in MAME too).
+wire is_stcc    = C2 && (game_id[6:0] == 7'h1D);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
 // are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
 // ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
@@ -2825,13 +2832,13 @@ wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copr
 // every 2A game past VF2 -- an MRA with a 512 KB program carries the slot as
 // zeros (MAME's region reads 0 there), so the decode needs no list.
 wire prog_ext  = M2A ? is_2ax : (is_vcop | is_desert);
-assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev);   // R887: the analog profile's lines; R928
+assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev | is_stcc);   // R887: the analog profile's lines; R928; R933
 // R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
 // other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
 // R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
 // same slot).
 logic a2_copro_rom;
-always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd;   // R924
+always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_stcc;   // R924; R933
 // R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
 // 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
 // Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
@@ -2840,7 +2847,7 @@ always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd;   // 
 always_ff @(posedge clk_sys)   // (declared with the boot sweep, R900)
 	a2_big <= is_2ax && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
 	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA)
-	                  || is_hotd);   // R924
+	                  || is_hotd || is_stcc);   // R924; R933
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see

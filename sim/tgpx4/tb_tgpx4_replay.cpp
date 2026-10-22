@@ -28,8 +28,19 @@
 // 0..--jitter, seeded): the data ROM from cdata.bin, buffer RAM from a model
 // (MAME's power-on 0x07800f0f), the program copy from what the upload wrote.
 //
+// R933: THE FRAMES. MAME's i960 makes its FIFO pushes over time, and the
+// TGPx4's CLRF (which empties both FIFOs, now wired) throws away whatever is
+// queued at that moment -- so presenting every i960 event as fast as the bus
+// takes it can queue a push MAME made a frame later in front of the clear
+// (STCC pushes 0x1a at boot and 0x23 ten seconds later; the clear falls
+// between). Each capture vblank (F) before an i960 event is therefore passed
+// only once the TGPx4 has sat waiting on an empty input FIFO for --idle
+// clocks (the frame's work done), or after a frame's worth of clocks
+// (--frame, 80 MHz / 57.5 = 1,391,304). --no-frames presents events as before.
+//
 //   Vm2_copro <capdir> [--lat N] [--jitter N] [--seed N] [--max-words N]
 //             [--max-cyc M] [--ram-every N] [--no-lockstep] [--quiet]
+//             [--no-frames] [--idle N] [--frame N]
 #include "Vm2_copro.h"
 #include "Vm2_copro___024root.h"
 #include "verilated.h"
@@ -52,6 +63,7 @@ int main(int argc, char **argv)
   int lat = 6, jitter = 0; unsigned seed = 1;
   uint64_t max_words = UINT64_MAX, max_cyc = UINT64_MAX, ram_every = 4096;
   bool lockstep = true, quiet = false;
+  bool frames_on = true; uint64_t idle_need = 64, frame_cyc = 1391304;   // R933
   for (int i = 2; i < argc; i++) {
     std::string a = argv[i];
     auto nx = [&]() { return (i + 1 < argc) ? strtoull(argv[++i], nullptr, 0) : 0ull; };
@@ -63,6 +75,9 @@ int main(int argc, char **argv)
     else if (a == "--ram-every") ram_every = nx();
     else if (a == "--no-lockstep") lockstep = false;
     else if (a == "--quiet") quiet = true;
+    else if (a == "--no-frames") frames_on = false;      // R933
+    else if (a == "--idle") idle_need = nx();
+    else if (a == "--frame") frame_cyc = nx();
   }
   Capture cap;
   if (!cap.load(dir, 0)) return 2;
@@ -133,7 +148,17 @@ int main(int argc, char **argv)
 
   // ---- the i960's events
   std::vector<const CapEv *> cpu;
-  for (auto &e : cap.ev) if (e.t == 'C' || e.t == 'U' || e.t == 'I' || e.t == 'N' || e.t == 'X') cpu.push_back(&e);
+  std::vector<uint32_t> fbefore;   // R933: capture vblanks before each i960 event
+  std::vector<uint8_t> postboot;   //        and whether it came after the boot
+  { uint32_t nf = 0; size_t i = 0;
+    for (auto &e : cap.ev) {
+      if (e.t == 'F') nf++;
+      if (e.t == 'C' || e.t == 'U' || e.t == 'I' || e.t == 'N' || e.t == 'X') {
+        cpu.push_back(&e); fbefore.push_back(nf); postboot.push_back(i > cap.boot_ev);
+      }
+      i++;
+    } }
+  uint32_t fdone = 0; uint64_t idle_run = 0, fstart = 0, gate_cyc = 0, fpassed_idle = 0, fpassed_cap = 0;
   size_t ie = 0;
   uint64_t xs = 0, xbad = 0, words = 0, lbad = 0, frames = 0;
   bool active = false;
@@ -188,8 +213,18 @@ int main(int argc, char **argv)
   const CapEv *cur = nullptr;
   bool done = false;
   while (!done) {
+    // R933: pass the capture's vblanks before the next i960 access
+    const bool waiting_in = C(needs_fi) && !C(fi_valid);
+    idle_run = waiting_in ? idle_run + 1 : 0;
+    bool gated = false;
+    if (frames_on && !pend && ie < cpu.size() && postboot[ie] && fbefore[ie] > fdone) {
+      if (idle_run >= idle_need) { fdone++; fpassed_idle++; fstart = cyc; idle_run = 0; }
+      else if (cyc - fstart >= frame_cyc) { fdone++; fpassed_cap++; fstart = cyc; }
+      gated = fbefore[ie] > fdone;
+      if (gated) gate_cyc++;
+    } else if (!frames_on || (ie < cpu.size() && !postboot[ie])) { fdone = fbefore[ie]; fstart = cyc; }
     // present the next i960 access
-    if (!pend && ie < cpu.size()) {
+    if (!pend && !gated && ie < cpu.size()) {
       cur = cpu[ie];
       top->sel_ctl = (cur->t == 'C');
       top->sel_fifo = (cur->t == 'U' || cur->t == 'I' || cur->t == 'X');
@@ -231,12 +266,22 @@ int main(int argc, char **argv)
       last_pc[lp++ & 15] = C(ir_pc);
     }
     if (ie >= cpu.size() && !pend) done = true;
+    // R933: a wedge is a result, not a wait -- no word for 50 M clocks ends the run
+    static uint64_t last_words = 0, last_move = 0;
+    if (words != last_words || !active) { last_words = words; last_move = cyc; }
+    else if (cyc - last_move > 50000000ull) {
+      printf("WEDGED: no word retired in 50 M clocks (word %" PRIu64 ", pc %03x, i960 event %zu/%zu '%c', input waiting %d, frames %u/%u)\n",
+             words, C(ir_pc), ie, cpu.size(), ie < cpu.size() ? cpu[ie]->t : '-', int(waiting_in), fdone, ie < fbefore.size() ? fbefore[ie] : 0u);
+      lbad++; done = true;
+    }
     if (words >= max_words || cyc >= max_cyc) done = true;
     if (!quiet && (cyc % 50000000) == 0) printf("  cyc %" PRIu64 "M words %" PRIu64 " i960 events %zu/%zu X %" PRIu64 " bad %" PRIu64 "\n",
                                                cyc / 1000000, words, ie, cpu.size(), xs, xbad);
     if (C(dbg_bad) && !frames) { printf("RTL dbg_bad raised at word %" PRIu64 ", pc %03x\n", words, C(ir_pc)); frames = 1; }
   }
   size_t nx = 0; for (auto *e : cpu) if (e->t == 'X') nx++;
+  if (frames_on) printf("FRAMES (R933): %u vblanks passed, %" PRIu64 " with the TGPx4 idle, %" PRIu64 " at the frame cap; %" PRIu64 " clocks held for them (%.2f clk/word without)\n",
+                        fdone, fpassed_idle, fpassed_cap, gate_cyc, words ? double(cyc - gate_cyc) / words : 0.0);
   printf("RESULT: %" PRIu64 " cycles, %" PRIu64 " words (%.2f clk/word), i960 events %zu/%zu, outputs %" PRIu64 "/%zu checked, %" PRIu64 " differ (%.4f%% match), lockstep %s %" PRIu64 " bad\n",
          cyc, words, words ? double(cyc) / words : 0.0, ie, cpu.size(), xs, nx, xbad, xs ? 100.0 * (xs - xbad) / xs : 0.0,
          lockstep ? "on" : "off", lbad);

@@ -60,6 +60,10 @@
 //                 (v - 0x20) * 255 / 192, steering 0x80 + (v - 0x80) * 127 / 96),
 //                 the pedals then reversed (0xFF - x, PORT_REVERSE). The OREV 0
 //                 builds (dut, dut_nm) must still read 0x1C as a digital ID.
+//     R933  0x1D Sega Touring Car Championship (OREV, 2C builds; dut_or):
+//                 INPUT_PORTS_START(indy500) -- Over Rev's above with the
+//                 pedals NOT reversed ((v - 0x20) * 255 / 192: released 0x00).
+//                 The OREV 0 builds read 0x1D as a digital ID too.
 
 #include "Vtb_m2_2a_inputs_top.h"
 #include "verilated.h"
@@ -89,21 +93,24 @@ static uint32_t adir(uint16_t a) {
   return (x > 48 ? 1u : 0u) | (x < -48 ? 2u : 0u) | (y > 48 ? 4u : 0u) | (y < -48 ? 8u : 0u);
 }
 // the game index the bench switches between, and the ID it drives
-enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_N };
+enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_STCC, G_N };
 static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner / Pilot Kids", "other digital",
-                                 "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)", "Over Rev (0x1C)"};
+                                 "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)", "Over Rev (0x1C)",
+                                 "STCC (0x1D)"};
 static int game_id(int g) {
-  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1f, 0x20, 0x7f};
+  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x7f};
   switch (g) {
     case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
     case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
     case G_SKY: return 0x18; case G_BIKE: return 0x1a + rnd(2); case G_MANX: return 0x19;
     case G_OREV: return 0x1c;
+    case G_STCC: return 0x1d;   // R933
     default: return dig[rnd(int(sizeof dig / sizeof dig[0]))];
   }
 }
 // R928: Over Rev's channels, the exact lines the RTL approximates
 static double orev_ped(int v) { v = v < 0x20 ? 0x20 : v > 0xe0 ? 0xe0 : v; return 255.0 - (v - 0x20) * 255.0 / 192.0; }
+static double stcc_ped(int v) { return 255.0 - orev_ped(v); }   // R933: indy500's, not reversed
 static double orev_str(int v) { v = v < 0x20 ? 0x20 : v > 0xe0 ? 0xe0 : v; return 0x80 + (v - 0x80) * 127.0 / 96.0; }
 static Want want_orev() {
   uint32_t j0 = t->joystick_0;
@@ -113,7 +120,7 @@ static Want want_orev() {
   w.in2 = 0xff; w.an0 = w.an1 = w.an2 = -1;   // the channels: near() below
   return w;
 }
-static uint64_t orev_near = 0, orev_ends[4] = {0, 0, 0, 0};
+static uint64_t orev_near = 0, orev_ends[4] = {0, 0, 0, 0}, stcc_ends[4] = {0, 0, 0, 0};
 // R928: the RTL takes the three channels in turn through one multiply, so an
 // output may lag its input by up to 5 clocks: accept the line of any of the
 // last 6 input samples (h[0] the newest)
@@ -127,7 +134,7 @@ static void near(const char *n, uint64_t cyc, int got, const double *h) {
 static int sky_y(uint16_t la) { return (0x80 + int8_t(la >> 8)) & 0xff; }   // 0x80 + y
 static Want want_now(int game, bool motion) {
   uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
-  if (game == G_OREV) game = G_DIG;   // R928: an OREV 0 build reads 0x1C as digital
+  if (game == G_OREV || game == G_STCC) game = G_DIG;   // R928 / R933: an OREV 0 build reads 0x1C / 0x1D as digital
   if (game == G_ZG || game == G_DIG || game == G_VF2) { j0 |= adir(t->joy_analog); j1 |= adir(t->joy_analog_1); }
   Want w;
   if (game == G_RALLY) {   // Sega Rally
@@ -193,7 +200,9 @@ int main(int argc, char **argv) {
   t->rst_n = 1; gear = 0;
   int game = 0;
   for (uint64_t c = 0; c < N; ++c) {
-    if (rnd(100000) == 0) { game = rnd(G_N); t->game = game_id(game); }   // the MRA changes the game (quasi-static)
+    static uint64_t since = 0;   // R933: clocks since the ID changed (the channels settle in three)
+    ++since;
+    if (rnd(100000) == 0) { game = rnd(G_N); if (t->game != game_id(game)) since = 0; t->game = game_id(game); }   // the MRA changes the game (quasi-static)
     if (rnd(24) == 0) t->joystick_0 ^= 1u << rnd(16);
     if (rnd(24) == 0) t->joystick_1 ^= 1u << rnd(16);
     if (rnd(2000) == 0) t->joy_analog = uint16_t(rng());
@@ -209,9 +218,10 @@ int main(int argc, char **argv) {
     t->eval();
     Want w = want_now(game, true), wn = want_now(game, false);
     Want o = want_orev();   // R928: before the edge, as the others (the outputs are registered)
-    static double hs[6], ha[6], hb[6];
-    for (int k = 5; k > 0; --k) { hs[k] = hs[k - 1]; ha[k] = ha[k - 1]; hb[k] = hb[k - 1]; }
+    static double hs[6], ha[6], hb[6], sa[6], sb[6];
+    for (int k = 5; k > 0; --k) { hs[k] = hs[k - 1]; ha[k] = ha[k - 1]; hb[k] = hb[k - 1]; sa[k] = sa[k - 1]; sb[k] = sb[k - 1]; }
     hs[0] = orev_str(t->c_steer); ha[0] = orev_ped(t->c_accel); hb[0] = orev_ped(t->c_brake);
+    sa[0] = stcc_ped(t->c_accel); sb[0] = stcc_ped(t->c_brake);   // R933
     if (game == G_MANX) { if (w.in2 == 0xce) ++manx_ce; else ++manx_cd; }
     int g0 = gear;
     gear_edge();
@@ -240,17 +250,21 @@ int main(int argc, char **argv) {
     cmp("nm an1", game, c, t->n_an1, wn.an1);
     cmp("nm an2", game, c, t->n_an2, wn.an2);
     // R928: the OREV build -- Over Rev on 0x1C, every other ID as dut
-    if (t->game == 0x1c) {   // G_OREV, or G_DIG's draw of 0x1C
+    if (t->game == 0x1c || t->game == 0x1d) {   // G_OREV / G_STCC, or G_DIG's draw of 0x1C / 0x1D
+      const bool st = (t->game == 0x1d);          // R933: STCC, the pedals not reversed
       cmp("or in0", game, c, t->o_in0, o.in0);
       cmp("or in1", game, c, t->o_in1, o.in1);
       cmp("or in2", game, c, t->o_in2, o.in2);
-      near("or an0", c, t->o_an0, hs);
-      near("or an1", c, t->o_an1, ha);
-      near("or an2", c, t->o_an2, hb);
-      if (t->o_an1 == 0x00) ++orev_ends[0];
-      if (t->o_an1 == 0xff) ++orev_ends[1];
-      if (t->o_an0 <= 0x01) ++orev_ends[2];
-      if (t->o_an0 == 0xff) ++orev_ends[3];
+      if (since > 6) {   // R933: a pedal registered under 0x1C's sense may stand for three clocks after 0x1D
+        near("or an0", c, t->o_an0, hs);
+        near(st ? "st an1" : "or an1", c, t->o_an1, st ? sa : ha);
+        near(st ? "st an2" : "or an2", c, t->o_an2, st ? sb : hb);
+      }
+      uint64_t *e = st ? stcc_ends : orev_ends;
+      if (t->o_an1 == 0x00) ++e[0];
+      if (t->o_an1 == 0xff) ++e[1];
+      if (t->o_an0 <= 0x01) ++e[2];
+      if (t->o_an0 == 0xff) ++e[3];
     } else {
       cmp("or in0", game, c, t->o_in0, w.in0);
       cmp("or in1", game, c, t->o_in1, w.in1);
@@ -270,6 +284,9 @@ int main(int argc, char **argv) {
   std::printf("  Over Rev (R928): %llu channel checks; accel 0x00 %llu / 0xFF %llu cycles, steering <= 0x01 %llu / 0xFF %llu\n",
               (unsigned long long)orev_near, (unsigned long long)orev_ends[0], (unsigned long long)orev_ends[1],
               (unsigned long long)orev_ends[2], (unsigned long long)orev_ends[3]);
+  std::printf("  STCC (R933): accel 0x00 %llu / 0xFF %llu cycles, steering <= 0x01 %llu / 0xFF %llu\n",
+              (unsigned long long)stcc_ends[0], (unsigned long long)stcc_ends[1],
+              (unsigned long long)stcc_ends[2], (unsigned long long)stcc_ends[3]);
   std::printf("  %llu mismatches\n%s\n", (unsigned long long)mism, mism ? "FAIL" : "PASS");
   delete t;
   return mism ? 1 : 0;

@@ -44234,3 +44234,191 @@ cache, new M2_LISTDUMP: the list as the walk read it) on HOTD's attract to
 check the core's own lists with m2_scenery_check.py was started, not
 finished in this entry. A board session that would settle it: the courtyard
 with Frame skip / buffering changed, and a short 60 fps video.
+
+**R933 -- SEGA TOURING CAR CHAMPIONSHIP (2C, stcc, THE PARENT "NEWER" SET) ON
+THE 2C BUILD: GAME ID 0x1D, THE LARGE LAYOUT, OVER REV'S INPUTS WITH THE
+PEDALS THE OTHER WAY UP, LUMA ROWS 0 AND 1 -- AND THE TGPx4's CLRF, WHICH THE
+RTL DECODED BUT NEVER WIRED: STCC PUSHES ITS FIRST WORD BEFORE THE CLEAR, SO
+WITHOUT IT EVERY WORD AFTER IS ONE LATE AGAINST MAME. ON BRANCH stcc (OFF
+model2c 648ecb9, model2c 47a2168 merged in -- R931, R923, R934) ONLY, NEVER
+PUSHED.**
+(Coordinator: "bring up STCC", the third 2C game for a 2C beta. MAME 0.289
+set stcc, GAME line "Sega Touring Car Championship (newer)", Sega 1996, the
+parent of stccb / stcca / stcco. Nothing fitted here; a fit is queued by the
+coordinator.)
+
+*What was believed:* R920's census guessed the 'rally' play mode for STCC;
+the family document listed its DSB (MPEG music), drive-board ROM and link
+ROM as open questions; R924 / R928 said CLRF "already MAME's" (R928) or "not
+done" (R924's list) -- both from captures where the FIFOs were empty at the
+clear.
+
+*MAME (model2.cpp 0.289):* stcc = model2c + the 315-5649's analog channels
+0-2 (STEER, ACCEL, BRAKE; indy500's INPUT_PORTS: NO PORT_REVERSE, the pedals
+rest at 0x00) + the DSB (DSBZ80, fed by the i960's UART txd: one way) + PF
+lamps; NO drive board in the config although the set carries epr-18261.
+ROMs: program 1 MB, main_data 8 MB + 1 MB mirrored to 16 MB, copro_data
+4 MB (the TGPx4's external ROM, which Over Rev's set lacks), polygons 8 MB
++ 1 MB mirrored to 16 MB, textures 4 MB (mirrored) + 1 MB (mirrored) = 16 MB,
+68000 128 KB, samples 8 MB, DSB 128 KB + 8 MB MPEG, comm 128 KB. Raw 44.4 MB
+(26 files). MACHINE_NOT_WORKING is the 2C family's flag, not this game's: MAME
+plays it -- warning, title, attract, coin, Select Car (8 s), Enter Your Name,
+Qualifying (40 s), TIME'S UP, Next Starting Grid, Country Circuit round 1, a
+race with seven opponents (run1 snapshots, 150 s; the race session 240 s).
+
+*THE CENSUS (MAME 0.289 m2lod, new sim/io/mame_m2_stcc_race.lua over R930's
+race driver: coin at 30 s, start through the menus, the accelerator floored
+from 58 s -- raw 0xFF, no PORT_REVERSE -- view / shift / brake / steering
+pulses; 240 s, qualifying and round 1):*
+  * TGPx4: 551,151,243 words (4.4x Over Rev's rate); one upload of 8,192
+    dwords (4,096 words) at 0.148 s; 1,990 distinct PCs, highest 0xa65; a
+    1 K-line direct-mapped program cache misses 1.20% (2 K: 0.17%; Over Rev
+    0.82%); busy per 1/57.5 s on MAME's 20 MHz model p50 0.119, p90 0.335,
+    p99 0.369, max 0.420 (Over Rev max 0.227); 710 forms. NO FLOG. CLRF once
+    (pc 0x125, ef1 = 3: both FIFOs), SETM once, PDR 19.5 M writes, DDR once.
+    External bus: 30,067,370 reads, all copro data ROM 0x800000-0x86bf23
+    (1.7 MB of the 4 MB; inside port 9's 20 bits), and 17,485,790 writes to
+    buffer RAM 0x400a75-0x407453 (House of the Dead and Over Rev: none) +
+    the one write to 0x00002c every 2C game makes.
+  * i960 (R869's form log, formcheck): 149 forms / 350 variants, 0 trap on
+    the 2C column (2A-new 0; VF2's vc_en-low column 7, main 2 -- not run).
+  * COMM BOARD (tap on 0x01a00000-0x01a1ffff): CN and FG written 0 once at
+    11.15 s, never CN = 1 (so no Over Rev handshake); the game writes share
+    RAM 0x01a12000-0x01a121ff every frame and polls one byte, 0x01a121c4,
+    every frame (4,413 reads) that nothing writes -- 0 in MAME. The core
+    reads this window as 0 for every game but Over Rev: the same answer.
+    Nothing to model.
+  * 315-5649: reads of IN0 (392,658), IN1 / IN2, SW and the ADC; writes to
+    PA (the EEPROM), PE / PF (lamps; no drive board reads anything back) and
+    the ADC control (0x4e / 0x4f) -- Over Rev's pattern.
+  * LUMA: 182 walk dumps (sim/video/luma_fit.py over a 300 s attract session
+    and the race session): textured polygons on rows 0 and 1 ONLY.
+  * SDRAM: the large layout (textures and polygons 16 MB each, linear; copro
+    data in the 2A slot): image 0x52C0000 = 82.75 MB, the 128 MB module, as
+    House of the Dead. (A 64 MB layout looks possible -- Sega Rally's std
+    layout holds STCC's main data and, through R671's packing, its textures,
+    but its polygon slot's last 4 MB, where STCC's 8-12 MB polygons go, is
+    the TGPx4's program copy (GAME_X4PROG); moving the copy into the unused
+    TGP-tables slot would free it. Not done: it touches HOTD and Over Rev.)
+
+*WHAT STCC NEEDED (the RTL, all behind M2_2C):*
+  1. GAME ID 0x1D (is_stcc): a2_big (the large layout), a2_copro_rom (its
+     copro data from SDRAM), a2_rally_menu (the wheel / pedal OSD lines).
+  2. INPUTS (m2_2a_inputs, p_stcc under OREV): Over Rev's profile -- the MRA
+     order, the 0x20..0xE0 -> 0x00..0xFF widening, R934's two-stage multiply
+     (the merge's one conflict) -- with the pedals NOT reversed. tb_m2_2a_inputs: a G_STCC game (0x1D) checked against the
+     exact line of indy500's ports, 20 M cycles, 0 mismatches; 0x1D read as
+     digital by the OREV-0 builds; PLANTED (STCC's accelerator reversed):
+     3,093,083 mismatches, FAIL (on the merged tree). The bench settles six clocks after an ID change between 0x1C and
+     0x1D (one multiply shared by three channels: a pedal registered under
+     the other game's sense stands for up to three clocks).
+  3. LUMA (m2_luma_map 4'hD, OREV only so the 2A build's function is
+     unchanged): rows {0..7} as ranges -- rows 0 and 1 each their own slot,
+     exact. test_m2_luma_map 2A and 2C: 262,144 checks each, 0 fails;
+     PLANTED (the reference's 0x1D starts shifted): 30 fails.
+  4. CLRF (m2_fifo_m10k gains `clr`, tied 0 at the four other instances;
+     m2_tgpx4 passes tgpx4_core's fi_clr / fo_clr, which it decoded since
+     R920 and left unconnected, to m2_copro's two FIFOs). FOUND BY THE
+     LOCKSTEP: the first replay stopped at word 15,901 (pc 0x00b, FI ->
+     AA0: RTL 0x1a, MAME 0x23). The capture: copro_ctl1 boot, i960 push
+     0x1a, the TGPx4's external write to 0x2c, then a pop of an EMPTY FIFO
+     -- MAME's CLRF at pc 0x125 had thrown the 0x1a away; the next push,
+     0x23, is MAME's first pop. Our FIFO kept the 0x1a, so the TGPx4 ran
+     every command one behind MAME's. A clear wins over a push in its clock.
+     WRONG IN R924 / R928, KEEP: "CLRF ... already MAME's" -- the core
+     decoded it and nothing listened; House of the Dead and Over Rev clear
+     two empty FIFOs, so their replays could not see it.
+     BOARD TIMING: the TGPx4 reaches CLRF ~15,900 words after its boot
+     (252 K clocks in the bench, ~3 ms at 80 MHz, cold cache); MAME's first
+     push after the clear comes 10 vblanks after boot in House of the Dead
+     and Over Rev (~170 ms) and 638 in STCC (~11 s, the warning screen). So
+     on the board the clear meets the same FIFO contents as in MAME: STCC's
+     boot-time 0x1a (pushed with the boot) and nothing for the other two.
+     Not a candidate for House of the Dead's s1350 lock-up (its FIFOs are
+     empty at the clear in MAME and, by that margin, on the board).
+  5. THE REPLAY BENCH (tb_tgpx4_replay) FED THE i960's EVENTS AS FAST AS THE
+     BUS TOOK THEM, so with the clear wired every capture -- STCC's, Over
+     Rev's, House of the Dead's -- queued its next pushes ahead of the CLRF
+     and lost them: all three sat at word ~15,900 with the TGPx4 waiting on
+     an empty FIFO and the i960 waiting on its output, for an hour of wall
+     clock before anyone looked (WRONG TURN, KEEP: a long silent replay is
+     not a running one). Now the capture's vblanks (F) gate the i960's
+     post-boot events: a vblank passes when the TGPx4 has waited 64 clocks
+     on an empty input FIFO (its frame's work done) or after 1,391,304
+     clocks (80 MHz / 57.5); --no-frames is the old behaviour. And a run
+     with no word retired in 50 M clocks stops and prints WEDGED.
+
+*VERIFIED:*
+  * make tgpx4_ref (MAME's verbatim interpreter) on the STCC capture:
+    551,151,243 words, 1,888,435 stall passes, pops 17,985,382 / 17,985,382,
+    outputs 4,470,256 / 4,470,256, external 47,553,161 / 47,553,161, every
+    state hash equal -- 0 bad.
+  * make tgpx4_replay (the RTL in lockstep, the merged tree): 551,151,227
+    words (the capture's last 16 come after its last i960 event), i960
+    events 20,575,398 / 20,575,398, outputs 4,470,256 / 4,470,256 equal,
+    lockstep 0 bad; 3,705,193,683 clocks, 6.72 clk / word (Over Rev 5.70:
+    STCC's 1.2% program-cache misses and its 17.5 M buffer-RAM writes, two
+    16-bit halves each); 13,806 vblanks passed, 13,798 with the TGPx4 idle,
+    1,198,568 clocks held for them. Before the CLRF fix: stopped at word
+    15,901 (above).
+  * The same RTL and bench on R930's Over Rev capture: 200,845,508 words,
+    8,251,088 / 8,251,088 outputs equal, lockstep 0 bad, 5.70 clk / word
+    (R930: 5.69; 8,629 vblanks passed, 8,500 of them with the TGPx4 idle);
+    on R924's House of the Dead capture: 188,786,517 words, 8,697,138 /
+    8,697,138 outputs, 0 bad, 5.75 clk / word. Both on the merged tree.
+  * GEOMETRY (geodiff_2abig built for STCC's CRTC 0 / 128, M2GD_BIG,
+    M2GD_PRESET; race walks): 7911 -- 874 / 874 polygons match, 2 extra
+    edge slivers of ours, 869 textured 0 u/v off, 1 sort key; 12801 --
+    1,435 / 1,435, 1,173 textured 0 u/v off, 0 sort keys; 10068 -- 1,348 /
+    1,348, 1 u/v and 1 sort key (an edge sliver). The clipper's near-edge
+    class R924 / R928 saw. Engine reads past 16 MB of polygon ROM: 0.
+  * THE WHOLE-CORE BENCH (tb_m2_boot, the 2C harness with Model2.sv's i960:
+    -GRC_RING=1 -GRC_FRAMES=8 -GDC_LINES=64; M2_A2 M2_A2X M2_C2, the MRA's
+    image, 0xFFFF memory, the pedals at rest by M2_INSCHED): warning (frames
+    25-625), title with INSERT COIN(S) / CREDIT 0/1 (775-1000, MAME 14 s =
+    frame ~805), the attract with its URL banner (1050-1400), 801,560
+    polygons through the geometry (745,808 textured). Texture sheets and
+    luma at frame 1400 against MAME 0.289's (new sim/io/mame_m2_texdump.lua,
+    through the i960's map at video frames 1250-1500, constant over them):
+    sheet 0 282,975 written words, sheet 1 405,957, luma 256 entries (rows
+    0 and 1) -- 0 differ, and every MAME word the core did not write is
+    MAME's own 0xFFFF. The same bench WITHOUT the CLRF fix also reaches
+    the attract (boot1): the stale word does not hang the boot; what it does
+    to the race's 3D was not measured (the harness has no rasteriser).
+  * RASTER (tb_m2_raster3d in Model2.sv's raster configuration, TEXLUT, LSB
+    5, M2_R3D_LIST + REALCOL on MAME's 3D frame 6500 -- round 1, the race):
+    colour vs MAME mean 8.94 of 255, > 32 6.27% of 184,323 textured pixels;
+    with row 1 drawn from row 0's table (what 0x1D got before the luma entry)
+    9.26 / 6.23%. The luma rows barely matter for STCC (rows 0 and 1 are
+    close); the residual is the filter / mip class of R932's Hakone frame
+    (10.45).
+  * 2A BUILD UNCHANGED (quartus_map 17.0, plain Model2.qsf): 648ecb9 against
+    the branch before the merge 39,953 ALMs, 48,097 registers, 4,572,656
+    block bits, 96 DSP both; model2c 47a2168 against the merged branch
+    39,985 / 48,098 / 4,572,656 / 96 both -- and in each pair all 600 rows
+    of the per-entity table identical.
+  * lint_top 2A and M2_2C clean; lint_idx (now taking LINT_DEFS) 2A and
+    M2_2C identical to model2c 47a2168's lists.
+
+*AREA (quartus_map 17.0, M2_2C + M2_NO_2A_MANX_MOTION, each base mapped the
+same day):* before the merge 648ecb9 40,078 -> 40,080 ALMs needed; after it
+model2c 47a2168 40,128 -> stcc 40,086 (-42: map noise), 48,237 -> 48,238
+registers, 4,583,920 block bits and 102 DSP unchanged. By entity (ALUTs,
+merged): m2_copro +8 (the FIFOs' clear +4, tgpx4_core +5), m2_luma_map +8,
+m2_2a_inputs -8 (noise). (R932 gave 40,103 for a08890a; the same tree maps
+to 40,078 today -- map-to-map noise of tens of ALMs.)
+
+*MRA:* mra/Sega Touring Car Championship (newer).mra (+ [15kHz CRT], 0x9D),
+<rbf>Model2C</rbf>, tools/mra_2a_big.py's large layout, 0x52C0000 bytes;
+tools/mra_vs_mame.py --layout=2a PASS (program, main_data 32 MB, pad, tables,
+68000, samples, program extension, copro_data, textures 16 MB, polygons).
+Not loaded: the DSB (no MPEG decoder), the comm and drive-board programs.
+
+*WILL SHOW ON THE BOARD / OPEN:* NO MUSIC (the DSB; the SCSP's effects and
+engine sounds play); the 128 MB module; the TGPx4 is busier than for any 2C
+game so far (MAME max 0.42 of 20 MHz a frame = ~146 K words; at the replay's
+6.72 clk / word, 80 MHz, ~0.71 of a frame) and the race may overrun a
+vblank as Over Rev's did (R930) -- not measured; the pedals' calibration is
+the game's default (MAME's indy500 ports), not checked on a wheel; lamps
+(PF) not driven; no link. The other sets (stccb, stcca, stcco) need only
+MRAs (same ROM layout) but were not run.

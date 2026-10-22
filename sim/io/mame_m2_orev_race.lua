@@ -14,7 +14,8 @@
 -- mode has them the other way round: its accelerator is pressed 2 s in 20.)
 --
 --   OR_SEQ="t:ctl=val;..."  replaces the timeline (ctl: coin start acc brk str
---                           up dn v1; acc / brk / str are port values)
+--                           up dn v1; acc / brk / str are port values); a
+--                           wrapper may set the global OR_SEQ_DEFAULT (R933)
 --   OR_SNAP="t0,t1,dt"      snapshots   OR_TEND=<s> (default 150)
 --   OR_TAPLOG=<file>        render mode reads / writes (0x10000000), the
 --                           flips (0x803008), videoctl reads, copro status
@@ -31,7 +32,7 @@ local function fmask(p, mk)
 end
 local F = { coin = fmask(":IN0", 0x01), start = fmask(":IN0", 0x40), acc = first(":ACCEL"), brk = first(":BRAKE"),
   str = first(":STEER"), up = fmask(":IN1", 0x10), dn = fmask(":IN1", 0x20), v1 = fmask(":IN1", 0x01) }
-local SEQ = os.getenv("OR_SEQ") or ("1:brk=255;40:coin=1;40.2:coin=0;40.6:coin=1;40.8:coin=0;43.5:start=1;43.7:start=0;"
+local SEQ = os.getenv("OR_SEQ") or OR_SEQ_DEFAULT or ("1:brk=255;40:coin=1;40.2:coin=0;40.6:coin=1;40.8:coin=0;43.5:start=1;43.7:start=0;"
   .. "47:acc=255;47.3:acc=0;51:acc=255;51.3:acc=0;55:str=60;55.5:str=128;56:acc=255;56.3:acc=0")
 local EV = {}
 for t_, c_, v_ in string.gmatch(SEQ, "([%d%.]+):(%a+%d?)=(%d+)") do EV[#EV + 1] = {tonumber(t_), c_, tonumber(v_)} end
