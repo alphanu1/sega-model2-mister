@@ -12,9 +12,9 @@ static inline bool m2_luma_big(int game, bool c2 = false) {
   const int n = game & 15;
   return n == 3 || n == 4 || n == 5 || n == 6 || n == 8 || n == 10 || (c2 && (n == 7 || n == 12));
 }
-// R931: Over Rev on the 2C build (32 slots): a table, row -> {representative,
+// R932: Over Rev on the 2C build (32 slots): a table, row -> {representative,
 // slot[4:0]} -- the k-medoids fit over MAME 0.289's walks of all four courses
-// (study R931). The RTL holds the same 256 entries (m2_luma_map orev_tab).
+// (study R932). The RTL holds the same 256 entries (m2_luma_map orev_tab).
 static const unsigned char m2_orev_lmap[256] = {   // {rep, slot[4:0]}
   0x20, 0x21, 0x02, 0x22, 0x02, 0x08, 0x02, 0x23, 0x0b, 0x04, 0x24, 0x04, 0x07, 0x03, 0x01, 0x01,
   0x01, 0x01, 0x25, 0x05, 0x08, 0x09, 0x06, 0x06, 0x26, 0x08, 0x0f, 0x0f, 0x0b, 0x0d, 0x00, 0x0e,

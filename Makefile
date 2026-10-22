@@ -1460,7 +1460,7 @@ obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv r
 test_m2_luma_map: obj_luma_map/Vm2_luma_map obj_luma_map_2c/Vm2_luma_map
 	@echo "== test m2_luma_map (R900: every game ID, every row)"
 	@./obj_luma_map/Vm2_luma_map $(TEST_ARGS)
-	@echo "== test m2_luma_map 2C (R931: LSB 5, Over Rev's table)"
+	@echo "== test m2_luma_map 2C (R932: LSB 5, Over Rev's table)"
 	@./obj_luma_map_2c/Vm2_luma_map $(TEST_ARGS)
 obj_luma_map_2c/Vm2_luma_map: rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp sim/video/m2_luma_map_ref.h
 	$(VBUILD) --top-module m2_luma_map -GLSB=5 -GOREV=1 --Mdir obj_luma_map_2c -o Vm2_luma_map -CFLAGS "-O2 -DLMAP_2C -I$(abspath sim/video)" \

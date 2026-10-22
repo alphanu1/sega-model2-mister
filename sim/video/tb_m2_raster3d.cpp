@@ -90,8 +90,8 @@ static int lslot_tb(int r) {
     if (const char *g = std::getenv("M2_R3D_GAME")) g_game = int(std::strtol(g, nullptr, 16));
     if (const char *l = std::getenv("M2_R3D_LROWS")) { const char *q = l; while (*q && nl < 8) { lrows[nl++] = std::atoi(q); q = std::strchr(q, ','); if (!q) break; ++q; } }
   }
-  if (nl) { for (int k = 0; k < nl; k++) if (lrows[k] == r) return 32 | k; return 0; }   // R931: {captured bit 5, slot}
-  static const bool c2 = std::getenv("M2_R3D_C2") != nullptr;   // R931: as a 2C build maps it
+  if (nl) { for (int k = 0; k < nl; k++) if (lrows[k] == r) return 32 | k; return 0; }   // R932: {captured bit 5, slot}
+  static const bool c2 = std::getenv("M2_R3D_C2") != nullptr;   // R932: as a 2C build maps it
   return m2_luma_map_ref(g_game, r, c2);
 }
 // R669: M2_R3D_TEXSWAP=<core cycle> -- A TEXTURE UPLOAD, as the game makes at a
@@ -839,7 +839,7 @@ int main(int argc, char **argv) {
       auto lw = [&](int sel, int a, int v) { d->lut_we = 1; d->lut_sel = sel; d->lut_addr = a; d->lut_data = v; tick(); };
       // R900: every row the snoop would capture, in the CPU's ascending order,
       // into the slot Model2.sv's map gives it (M2_R3D_GAME / M2_R3D_LROWS)
-      for (int r = 0; r < 256; r++) { const int ls = lslot_tb(r); if (ls & 32) for (int i = 0; i < 128; i++) lw(0, ((ls & 31) << 7) | i, lram[r * 128 + i]); }   // R931
+      for (int r = 0; r < 256; r++) { const int ls = lslot_tb(r); if (ls & 32) for (int i = 0; i < 128; i++) lw(0, ((ls & 31) << 7) | i, lram[r * 128 + i]); }   // R932
       for (int i = 0; i < 1024; i++) lw(1, i, pal[0x1000 + i] & 0x7fff);
       for (int ch = 0; ch < 3; ch++) for (int c5 = 0; c5 < 32; c5++) for (int l = 0; l < 64; l++)
         lw(2, (ch << 11) | (c5 << 6) | l, xl[ch * 0x2000 + (c5 << 8) + l] & 0xff);
@@ -991,7 +991,7 @@ int main(int argc, char **argv) {
         { const uint32_t cb = (p.h3 >> 6) & 0x3ff, c = d->q_col;
           if (!NOTEX && (tex & 1)) {
             d->q_col = ((p.luma & 0xff) << 9) | (cb >> 1);
-            d->q_tex = (uint32_t(lslot_tb(int(p.h1 & 0xff)) & 31) << 24) | (tex & 0xfff7ffu) | ((cb & 1u) << 11);   // R900; R931: up to five slot bits
+            d->q_tex = (uint32_t(lslot_tb(int(p.h1 & 0xff)) & 31) << 24) | (tex & 0xfff7ffu) | ((cb & 1u) << 11);   // R900; R932: up to five slot bits
           } else {
             d->q_col = (((c >> 19) & 31) << 11) | (((c >> 10) & 63) << 5) | ((c >> 3) & 31);
             d->q_tex = NOTEX ? 0u : (tex & 0xfff7ffu);

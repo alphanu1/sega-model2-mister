@@ -22,12 +22,12 @@
 //     rows below 249 are one table), the nearest by content otherwise
 //     (Dynamite Cop has 17 distinct rows, Sky Target 32, Motor Raid 24, Hanguk
 //     Pro Yagu 98 33: more tables than slots -- study R900).
-//   R931 (LSB 5, the 2C build: 32 slots; orev): Over Rev by a TABLE, not
+//   R932 (LSB 5, the 2C build: 32 slots; orev): Over Rev by a TABLE, not
 //     ranges -- each of the 256 rows names its slot, and each slot is filled
 //     from one representative row (bit 5 of the entry). R928's eight ranges
 //     put the Ariake road (row 174: 23-32) and its neighbours (171) on row
 //     139's table (7-63): a light, high-contrast road (Ben's board, s1337).
-//     The table is a k-medoids fit (sim session, R931) over MAME 0.289's walk
+//     The table is a k-medoids fit (sim session, R932) over MAME 0.289's walk
 //     dumps of all four courses, Challenge Cup round 1 and the attract: per-
 //     pixel mean |luma error| 0.16 of 63 (R928's ranges: 2.71; 26% of drawn
 //     pixels on a row more than 4 off, now 0.6%).
@@ -35,20 +35,20 @@
 // q_ls / w_ls are {captured, slot[LSB-1:0]}; the range and fixed maps give
 // eight slots, zero-extended when LSB > 3.
 module m2_luma_map #(
-  parameter int unsigned LSB  = 3,      // R931: slot bits (3 the 2A build, 5 the 2C build)
-  parameter bit          OREV = 1'b0    // R931: Over Rev's table (needs LSB 5)
+  parameter int unsigned LSB  = 3,      // R932: slot bits (3 the 2A build, 5 the 2C build)
+  parameter bit          OREV = 1'b0    // R932: Over Rev's table (needs LSB 5)
 ) (
   input  logic           clk,
   input  logic [3:0]     game_id,   // its low four bits (the table is used only with big)
   input  logic           big,       // the large layout's games (Model2.sv a2_big)
   input  logic           zg,        // Zero Gunner (R867's own map)
-  input  logic           orev,      // R931: Over Rev (Model2.sv is_orev; used with OREV)
+  input  logic           orev,      // R932: Over Rev (Model2.sv is_orev; used with OREV)
   input  logic [7:0]     q_row,
   output logic [LSB:0]   q_ls,
   input  logic [7:0]     w_row,
   output logic [LSB:0]   w_ls
 );
-  // R931: Over Rev, row -> {representative, slot[4:0]}, six bits a row
+  // R932: Over Rev, row -> {representative, slot[4:0]}, six bits a row
   function automatic logic [5:0] orev_tab(input logic [7:0] r);
     case (r)
       8'd30, 8'd36, 8'd128: orev_tab = 6'h00;
@@ -150,7 +150,7 @@ module m2_luma_map #(
   endfunction
 
   logic       lr_on;
-  /* verilator lint_off UNUSEDSIGNAL */   // R931: read only with OREV
+  /* verilator lint_off UNUSEDSIGNAL */   // R932: read only with OREV
   logic       or_on;
   /* verilator lint_on UNUSEDSIGNAL */
   always_ff @(posedge clk) begin lr_on <= big; or_on <= OREV && orev; end

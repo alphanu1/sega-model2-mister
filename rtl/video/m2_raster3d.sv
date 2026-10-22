@@ -131,7 +131,7 @@ module m2_raster3d #(
   // R889: the store's sort key width -- 16, the reference's z value; 20 with
   // m2_geometry's WINKEY ({15 - window, z}: a later window in front).
   parameter int unsigned KW = 16,
-  // R931: the luma slot's bits (TEXLUT): 3 -- eight rows, q_tex[26:24] -- or 5
+  // R932: the luma slot's bits (TEXLUT): 3 -- eight rows, q_tex[26:24] -- or 5
   // (the 2C build: 32 rows, q_tex[28:24]); the store keeps the two low ones in
   // its texture word and the rest (LSB - 2) beside the vertices.
   parameter int unsigned LSB = 3,
@@ -379,7 +379,7 @@ module m2_raster3d #(
   logic [QTW-1:0] qo_texw;   // R867: the store's texture word (and its vertex bit)
   logic [(TEXLUT ? 26 : 24)-1:0] qo_texs;
   /* verilator lint_off UNUSEDSIGNAL */   // TEXLUT only
-  logic [LSB-3:0] qo_vx;   // R931: LSB - 2 bits
+  logic [LSB-3:0] qo_vx;   // R932: LSB - 2 bits
   /* verilator lint_on UNUSEDSIGNAL */
   /* verilator lint_off UNUSEDSIGNAL */   // [23:17]: the store hands back CW bits
   logic [23:0]    qo_colw;   // R867: the store's colour field
@@ -389,7 +389,7 @@ module m2_raster3d #(
   generate if (TEXLUT) begin : g_qcol
     assign qo_texw = {qo_vx, qo_texs};
     assign qo_tex = qo_texw[23:0];
-    assign qo_col = qo_texw[0] ? 24'({qo_texw[24 +: LSB], qo_colw[16:0], qo_texw[11]})   // R931: the slot at [17+LSB:18]
+    assign qo_col = qo_texw[0] ? 24'({qo_texw[24 +: LSB], qo_colw[16:0], qo_texw[11]})   // R932: the slot at [17+LSB:18]
                                : {qo_colw[15:11], 3'b000, qo_colw[10:5], 2'b00, qo_colw[4:0], 3'b000};
   end else begin : g_qcol0
     assign qo_texw = qo_texs;
@@ -458,7 +458,7 @@ module m2_raster3d #(
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
     .in_tex(q_tex[(TEXLUT ? 26 : 24)-1:0]), .in_mipz(q_mipz),        // R828c
-    .in_vx(TEXLUT ? q_tex[QTW-1 -: LSB-2] : '0), .out_vx(qo_vx),      // R867; R931
+    .in_vx(TEXLUT ? q_tex[QTW-1 -: LSB-2] : '0), .out_vx(qo_vx),      // R867; R932
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),

@@ -4,7 +4,7 @@
 // R900: m2_luma_map against its reference (m2_luma_map_ref.h) -- every game ID
 // (7 bits), every row on both lookups, and the game ID changed under it.
 // R928: and as a 2C build drives it (c2: 0x17 and 0x1C take ranges).
-// R931: built twice -- LSB 3 (the 2A build) and, with -DLMAP_2C, LSB 5 and
+// R932: built twice -- LSB 3 (the 2A build) and, with -DLMAP_2C, LSB 5 and
 // OREV (the 2C build: Over Rev's table); the reference's {captured, slot}.
 #include "Vm2_luma_map.h"
 #include "verilated.h"
@@ -22,10 +22,10 @@ int main(int argc, char **argv) {
 #ifdef LMAP_2C
       const bool c2 = pass >= 2;                              // R928: passes 2-3 as a 2C build
 #else
-      const bool c2 = false;                                  // R931: the 2A build has no C2
+      const bool c2 = false;                                  // R932: the 2A build has no C2
 #endif
       d->game_id = g & 15; d->big = m2_luma_big(g, c2); d->zg = (g == 0x12);
-      d->orev = c2 && (g == 0x1C);                            // R931: Model2.sv is_orev
+      d->orev = c2 && (g == 0x1C);                            // R932: Model2.sv is_orev
       tick(); tick();
       for (int r = 0; r < 256; r++) {
         const int w = (r * 37 + 11) & 255;

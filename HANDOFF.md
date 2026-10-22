@@ -1,6 +1,6 @@
 # Handoff
 
-## 2026-10-22 (later): Over Rev's road texture -- branch model2c, R931. NOT PUSHED
+## 2026-10-22 (later): Over Rev's road texture -- branch model2c, R932. NOT PUSHED
 
 BUILD TO FIT: model2c HEAD (M2_2C=1, M2_NO_2A_MANX_MOTION=1). Board s1337
 (1acf830): Over Rev full speed, no crash past the speed contest; HOTD 96-100%.
@@ -41,7 +41,7 @@ bench at board clocks driven into the race (fs.txt flip_at per vblank).
 WRONG TURNS: MAME's set_value(0xff) on the pedal is "released" (the raw port,
 no PORT_REVERSE) -- the census 'orev' mode has its pedals inverted; a MAME
 save state of the 2C machine reloads frozen (do not use them for 2C).
-Next free R numbers: R931 on.
+Next free R numbers: R933 on.
 
 ## 2026-10-22: Over Rev (2C, overrev Rev A) on the 2C build -- branch model2c, R928. NOT PUSHED
 

@@ -113,7 +113,7 @@ module m2_span_tex #(
   // colour table, luma 0-63). Five
   // stages between the retire and the output instead of one (study R867).
   parameter bit          TEXLUT = 1'b0,
-  // R931: the luma slot's bits -- in_col[17+LSB:18], 2^LSB rows on chip (3:
+  // R932: the luma slot's bits -- in_col[17+LSB:18], 2^LSB rows on chip (3:
   // eight, one M10K; 5 on the 2C build: 32, four M10K)
   parameter int unsigned LSB    = 3,
   parameter int unsigned SCR_W  = 496,
@@ -1266,13 +1266,13 @@ module m2_span_tex #(
   // path that failed in the engine, so the subtract has its own stage.)
   // All five stages move together whenever the output can (lp_adv).
   generate if (TEXLUT) begin : g_lut
-    (* ramstyle = "M10K" *) logic [7:0]  lr_mem  [128 << LSB];   // luma RAM rows (slots): eight, or 32 (R931)
+    (* ramstyle = "M10K" *) logic [7:0]  lr_mem  [128 << LSB];   // luma RAM rows (slots): eight, or 32 (R932)
     (* ramstyle = "M10K" *) logic [14:0] pal_mem [1024];   // palram 0x1000-0x13ff
     (* ramstyle = "M10K" *) logic [7:0]  xr_mem  [2048];   // colorxlat, luma 0-63
     (* ramstyle = "M10K" *) logic [7:0]  xg_mem  [2048];
     (* ramstyle = "M10K" *) logic [7:0]  xb_mem  [2048];
     always_ff @(posedge clk) begin
-      if (lut_we && lut_sel == 2'd0) lr_mem [lut_addr[LSB+6:0]] <= lut_data[7:0];   // R931
+      if (lut_we && lut_sel == 2'd0) lr_mem [lut_addr[LSB+6:0]] <= lut_data[7:0];   // R932
       if (lut_we && lut_sel == 2'd1) pal_mem[lut_addr[9:0]] <= lut_data[14:0];
       if (lut_we && lut_sel == 2'd2 && lut_addr[12:11] == 2'd0) xr_mem[lut_addr[10:0]] <= lut_data[7:0];
       if (lut_we && lut_sel == 2'd2 && lut_addr[12:11] == 2'd1) xg_mem[lut_addr[10:0]] <= lut_data[7:0];
@@ -1294,7 +1294,7 @@ module m2_span_tex #(
     logic [7:0]  xq [3];
     always_ff @(posedge clk) begin   // registered reads, enabled with their stage
       if (emit_go) begin
-        lr_q  <= lr_mem [{rt_col[18 +: LSB], rt_idx}];   // R931
+        lr_q  <= lr_mem [{rt_col[18 +: LSB], rt_idx}];   // R932
         pal_q <= pal_mem[rt_col[9:0]];
       end
       if (lp_adv) begin

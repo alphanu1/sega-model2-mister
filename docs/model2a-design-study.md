@@ -43711,7 +43711,7 @@ HOTD 2C bench not re-run with the ring (the i960 lockstep suites with the
 ring and the cache pass; HOTD's TGPx4 replay does not involve the i960);
 mame_m2_2a_play.lua's 'orev' pedals left as they were (R928's census stands).
 
-**R931 -- OVER REV'S LIGHT, STREAKED ROAD IS THE LUMA ROW: R928'S EIGHT
+**R932 -- OVER REV'S LIGHT, STREAKED ROAD IS THE LUMA ROW: R928'S EIGHT
 RANGES PUT THE ARIAKE ROAD (ROW 174, LUMA 23-32) ON ROW 139'S TABLE (7-63).
 THE 2C BUILD NOW HOLDS 32 LUMA ROWS AND MAPS OVER REV'S 256 ROWS BY A TABLE
 (A k-MEDOIDS FIT OVER ALL FOUR COURSES): BENCH COLOUR ERROR 25.7 -> 5.5 OF

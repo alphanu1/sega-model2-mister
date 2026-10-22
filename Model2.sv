@@ -7504,7 +7504,7 @@ m2_ddr3 u_ddr3 (
 // R900: the large layout's six games use rows none of those maps captures
 // (Dynamite Cop 6/7/76/96/100, Motor Raid 100 -- its old slots read zeros,
 // black) -- each now has eight row ranges of its own (rtl/video/m2_luma_map.sv).
-// R931: the luma table's slot bits -- 3 (eight slots, one M10K) on the 2A
+// R932: the luma table's slot bits -- 3 (eight slots, one M10K) on the 2A
 // build, 5 (32 slots: two more slot bits in the quad store, four M10K) on the
 // 2C build, for Over Rev's table (m2_luma_map OREV)
 localparam int R3D_LSB = C2 ? 5 : 3;
@@ -7526,7 +7526,7 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 	wire [R3D_LSB:0] w_ls;
 	wire [SDR_AW:1] w_luma = cpu_sd_addr - GAME_LUMA;
 	m2_luma_map #(.LSB(R3D_LSB), .OREV(C2)) u_lmap (.clk(clk_sys), .game_id(game_id[3:0]), .big(a2_big | is_orev), .zg(is_zerogun),   // R928: Over Rev's ranges
-	                    .orev(is_orev),                                                                                   // R931: its table
+	                    .orev(is_orev),                                                                                   // R932: its table
 	                    .q_row(q3d_trow), .q_ls(q_ls), .w_row(w_luma[15:8]), .w_ls(w_ls));
 	assign r3d_qtex = {q_ls[R3D_LSB-1:0], q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
 	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
@@ -7536,7 +7536,7 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 		r3d_lut_we   <= 1'b0;
 		r3d_lut_data <= cpu_sd_din;
 		if (sd_wr && w_luma < SDR_AW'(32'h8000) && w_ls[R3D_LSB]) begin       // a captured row
-			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd0; r3d_lut_addr <= 13'({w_ls[R3D_LSB-1:0], w_luma[7:1]});   // R931
+			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd0; r3d_lut_addr <= 13'({w_ls[R3D_LSB-1:0], w_luma[7:1]});   // R932
 		end
 		if (sd_wr && w_pal < SDR_AW'(32'h400)) begin
 			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd1; r3d_lut_addr <= 13'(w_pal[10:1]);
@@ -7564,7 +7564,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
-              .TEXLUT(R3D_TEXLUT), .LSB(R3D_LSB),   // R931
+              .TEXLUT(R3D_TEXLUT), .LSB(R3D_LSB),   // R932
               .KW(R3D_WINKEY ? 20 : 16)) u_raster3d (   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
