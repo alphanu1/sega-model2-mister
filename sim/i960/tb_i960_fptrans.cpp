@@ -31,7 +31,8 @@ int main(int argc, char **argv) {
   unsigned e; unsigned long long x, y, want;
   long n = 0, bad = 0; unsigned long long cyc = 0, maxc[5] = {}, sumc[5] = {}, cnt[5] = {};   // R935: [4] logrl
   while (std::fscanf(f, "%u %llx %llx %llx", &e, &x, &y, &want) == 4) {
-    d->entry = e; d->x = x; d->y = y; d->start = 1; tick(); d->start = 0;
+    d->entry = e & 3; d->lg = (e == 4);   // R935: 4 = logrl
+    d->x = x; d->y = y; d->start = 1; tick(); d->start = 0;
     unsigned long long c = 1;
     while (!d->fin) { tick(); if (++c > 200000) { std::printf("HANG at vector %ld\nFAIL\n", n); return 1; } }
     const uint64_t got = d->res;
