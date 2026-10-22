@@ -23,6 +23,10 @@
 # sequencer: tb_i960_fptrans compares the two word for word.
 #
 #   tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
+#   tools/i960_fptrans.py --log --rom rtl/cpu/i960/i960_fptrans_rom_log.svh
+#       (R935: the 2C build's program -- the same four plus logrl, a 10-bit
+#       program counter and the LDE / LDM loads; without --log the 2A ROM is
+#       generated exactly as before)
 #   tools/i960_fptrans.py --check N   (needs mpmath: the error against the
 #       correctly rounded value and agreement with this host's libm)
 #   tools/i960_fptrans.py --listing
@@ -30,7 +34,12 @@ import math, struct, sys, random
 
 # --------------------------------------------------------------- the machine
 OPS = {'ADD': 0, 'SUB': 1, 'MUL': 2, 'DIV': 3, 'BR': 4, 'JMP': 5, 'CALL': 6,
-       'RET': 7, 'LDX': 8, 'LDY': 9, 'END': 10}
+       'RET': 7, 'LDX': 8, 'LDY': 9, 'END': 10, 'LDE': 11, 'LDM': 12}
+# R935 (--log only): LDE d = the exponent of x, unbiased, as a double -- the
+# adder's MAGIC + (e - 1023) - MAGIC, exact; LDM d = x's mantissa as a double
+# in [1, 2) (sign clear, exponent 0x3ff). Both are wiring on the operand the
+# adder takes; x must be normal (the program branches away the rest first).
+MAGIC_U = 0x4338000000000000
 CONDS = {'NEG': 0, 'ZERO': 1, 'NAN': 2, 'INF': 3, 'BIT0': 4, 'BIT1': 5}
 MOD = {'': 0, '-': 1, '|': 2, '-|': 3}       # none, negate, abs, -abs
 NREG = 128
@@ -116,6 +125,8 @@ class Prog:
     def ldx(self, d): self.temp(d); self.emit('LDX', d=d)
     def ldy(self, d): self.temp(d); self.emit('LDY', d=d)
     def end(self, a): self.emit('END', a=a)
+    def lde(self, d): self.temp(d); self.emit('LDE', d=d)
+    def ldm(self, d): self.temp(d); self.emit('LDM', d=d)
 
 
 def split_mod(s):
@@ -129,7 +140,7 @@ def split_mod(s):
 # Subroutines take their operands in fixed registers and return in DH, DL.
 #   DDMUL  (AH,AL) x (BH,BL)      DDADD  (AH,AL) + (BH,BL)
 #   DDDIV  (AH,AL) / (BH,BL)
-def build():
+def build(log=False):
     p = Prog()
     p.const('ZERO', 0.0)
     p.const('ONE', 1.0)
@@ -142,6 +153,8 @@ def build():
     p.entry('cos'); p.jmp('COS')
     p.entry('tan'); p.jmp('TAN')
     p.entry('atan'); p.jmp('ATAN')
+    if log:
+        p.entry('log'); p.jmp('LOG')
 
     # ---- TWO_PROD: (P, E) = A * B exactly, A in AH, B in BH (Dekker)
     p.label('TWOPROD')
@@ -419,7 +432,10 @@ def build():
     # z = t'^2; poly; a = t' * (1 + z P) + offset
     p.mov('AH', 'TH'); p.mov('AL', 'TL'); p.mov('BH', 'TH'); p.mov('BL', 'TL')
     p.call('DDMUL'); p.mov('ZH', 'DH'); p.mov('ZL', 'DL')
-    horner('A', A, 4, 'KH', 'KL', True)
+    if log:
+        p.call('KATAN')           # R935: the series is shared with logrl's atanh
+    else:
+        horner('A', A, 4, 'KH', 'KL', True)
     p.mov('AH', 'KH'); p.mov('AL', 'KL'); p.mov('BH', 'TH'); p.mov('BL', 'TL')
     p.call('DDMUL')
     p.mov('AH', 'DH'); p.mov('AL', 'DL'); p.mov('BH', 'OH'); p.mov('BL', 'OL')
@@ -456,7 +472,66 @@ def build():
     p.ret()
     p.label('ATNAN')
     p.add('Y', 'X', 'YY'); p.end('Y')
+    if log:
+        build_log(p, horner)
     return p
+
+
+def build_log(p, horner):
+    """R935: logrl -- MAME's set_rifl(t2f * log2(t1f)): Y (src2) times the
+    correctly rounded log2 of X (src1). x = 2^e m, m in [1, 2) by LDE / LDM;
+    m > 1.5 is halved (e + 1), so m is in [0.75, 1.5]; log2 m = (2 / ln 2)
+    atanh f, f = (m - 1) / (m + 1), |f| <= 0.2 -- atan's range, so atanh f
+    = f (1 + z (A0 + z (A1 + ...))) with z = -f^2 runs ATAN's own series
+    (KATAN). Everything in double-double, e added last, rounded once; then
+    one multiply by Y, rounded as the host rounds t2f * log2(t1f)."""
+    from fractions import Fraction
+    from decimal import Decimal, getcontext
+    getcontext().prec = 80
+    l2 = Fraction(2) / Fraction(Decimal(2).ln())          # 2 / ln 2
+    hi = float(l2); lo = float(l2 - Fraction(hi))
+    p.const('L2EH', hi); p.const('L2EL', lo)
+    p.label('KATAN')
+    horner('A', [None] * 14, 4, 'KH', 'KL', True)
+    p.ret()
+    # registers: the 128 are nearly all taken, so e lives in QN and m in FN
+    # (REDUCE's, never live here); the threshold 1.5 is 2m - 3 on the units
+    p.label('LOG')
+    p.ldx('X'); p.ldy('YY')
+    p.br('NAN', 'X', 'LG_NAN')
+    p.br('ZERO', 'X', 'LG_ZERO')
+    p.br('NEG', 'X', 'LG_NEG')
+    p.br('INF', 'X', 'LG_MUL')                # log2(+inf) = +inf: X itself
+    p.lde('QN'); p.ldm('FN')
+    p.mul('T0', 'FN', 'TWO'); p.sub('T0', 'T0', 'FOUR'); p.add('T0', 'T0', 'ONE')   # 2m - 3, exact
+    p.br('NEG', 'T0', 'LG_R')
+    p.br('ZERO', 'T0', 'LG_R')
+    p.div('FN', 'FN', 'TWO'); p.add('QN', 'QN', 'ONE')
+    p.label('LG_R')
+    # f = (m - 1) / (m + 1): m - 1 exact (Sterbenz); m + 1 as a two_sum
+    p.sub('NU', 'FN', 'ONE')
+    p.add('S', 'FN', 'ONE'); p.sub('T0', 'S', 'FN'); p.sub('T1', 'S', 'T0')
+    p.sub('T1', 'FN', 'T1'); p.sub('T0', 'ONE', 'T0'); p.add('DE', 'T1', 'T0')
+    p.mov('AH', 'NU'); p.mov('AL', 'ZERO'); p.mov('BH', 'S'); p.mov('BL', 'DE')
+    p.call('DDDIV'); p.mov('TH', 'DH'); p.mov('TL', 'DL')
+    p.mov('AH', 'TH'); p.mov('AL', 'TL'); p.mov('BH', 'TH'); p.mov('BL', 'TL')
+    p.call('DDMUL'); p.mov('ZH', '-DH'); p.mov('ZL', '-DL')
+    p.call('KATAN')
+    p.mov('AH', 'KH'); p.mov('AL', 'KL'); p.mov('BH', 'TH'); p.mov('BL', 'TL')
+    p.call('DDMUL')
+    p.mov('AH', 'DH'); p.mov('AL', 'DL'); p.mov('BH', 'L2EH'); p.mov('BL', 'L2EL')
+    p.call('DDMUL')
+    p.mov('AH', 'DH'); p.mov('AL', 'DL'); p.mov('BH', 'QN'); p.mov('BL', 'ZERO')
+    p.call('DDADD')
+    p.mov('X', 'DH')
+    p.label('LG_MUL')
+    p.mul('Y', 'YY', 'X'); p.end('Y')
+    p.label('LG_ZERO')                        # log2(+-0) = -inf
+    p.div('X', '-ONE', 'ZERO'); p.jmp('LG_MUL')
+    p.label('LG_NEG')                         # log2(x < 0) = NaN
+    p.div('X', 'ONE', 'ZERO'); p.sub('X', 'X', 'X'); p.jmp('LG_MUL')
+    p.label('LG_NAN')
+    p.add('X', 'X', 'X'); p.jmp('LG_MUL')
 
 
 # --------------------------------------------------------------- assembler
@@ -467,7 +542,7 @@ def assemble(p):
     words = []
     for op, f in p.code:
         w = OPS[op] << 28
-        if op in ('ADD', 'SUB', 'MUL', 'DIV', 'END', 'LDX', 'LDY'):
+        if op in ('ADD', 'SUB', 'MUL', 'DIV', 'END', 'LDX', 'LDY', 'LDE', 'LDM'):
             d = f.get('d', 'SINK')
             if op == 'END':
                 d = 'ZERO'      # never written: END only reads
@@ -504,13 +579,16 @@ def run(p, words, addr, names, entry, x, y=0.0, trace=None):
         assert steps < 20000
         op = w >> 28
         pc1 = pc + 1
-        if op in (0, 1, 2, 3, 8, 9, 10):
+        if op in (0, 1, 2, 3, 8, 9, 10, 11, 12):
             d, a, b = (w >> 21) & 127, (w >> 14) & 127, (w >> 7) & 127
             ma, mb = (w >> 5) & 3, (w >> 3) & 3
-            va = x if op == 8 else y if op == 9 else R[a]
-            vb = 0.0 if op in (8, 9) else R[b]
-            va = modv(va, ma) if op not in (8, 9) else va
-            vb = modv(vb, mb) if op not in (8, 9) else vb
+            xu = d2u(x)
+            va = x if op == 8 else y if op == 9 \
+                else u2d(MAGIC_U + ((((xu >> 52) & 0x7ff) - 1023) & 0xffffffffffffffff)) if op == 11 \
+                else u2d((0x3ff << 52) | (xu & ((1 << 52) - 1))) if op == 12 else R[a]
+            vb = u2d(MAGIC_U) if op == 11 else 0.0 if op in (8, 9, 12) else R[b]
+            va = modv(va, ma) if op not in (8, 9, 11, 12) else va
+            vb = modv(vb, mb) if op not in (8, 9, 11, 12) else vb
             nm = ['ADD', 'SUB', 'MUL', 'DIV'][op] if op < 4 else 'SUB'
             r = fop(nm, va, vb)
             nops += 1
@@ -548,49 +626,74 @@ def modv(v, m):
 ENTRY_ORDER = ['sin', 'cos', 'tan', 'atan']
 
 
-def rom_svh(p, words, addr, names, path):
+def rom_svh(p, words, addr, names, path, log=False):
+    # R935: the 2C program (--log) as ucode_log / uconst_log, ten address bits
+    sfx, aw = ('_log', 10) if log else ('', 9)
+    order = ENTRY_ORDER + (['log'] if log else [])
     with open(path, 'w') as f:
         f.write('// SPDX-License-Identifier: GPL-3.0-or-later\n')
         f.write('// Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1\n')
         f.write('// GENERATED by tools/i960_fptrans.py -- do not edit. R845.\n')
         f.write('// %d microinstructions, %d registers (%d constants).\n' % (len(words), len(names), len(p.consts)))
-        f.write('// Entries: %s\n' % ', '.join('%s %d' % (e, p.entries[e]) for e in ENTRY_ORDER))
-        f.write('function automatic logic [31:0] ucode(input logic [8:0] a);\n  case (a)\n')
+        f.write('// Entries: %s\n' % ', '.join('%s %d' % (e, p.entries[e]) for e in order))
+        f.write('function automatic logic [31:0] ucode%s(input logic [%d:0] a);\n  case (a)\n' % (sfx, aw - 1))
         for i, w in enumerate(words):
-            f.write("    9'd%d: ucode = 32'h%08x;\n" % (i, w))
-        f.write("    default: ucode = 32'h%08x;\n  endcase\nendfunction\n" % (OPS['END'] << 28))
-        f.write('function automatic logic [63:0] uconst(input logic [6:0] a);\n  case (a)\n')
+            f.write("    %d'd%d: ucode%s = 32'h%08x;\n" % (aw, i, sfx, w))
+        f.write("    default: ucode%s = 32'h%08x;\n  endcase\nendfunction\n" % (sfx, OPS['END'] << 28))
+        f.write('function automatic logic [63:0] uconst%s(input logic [6:0] a);\n  case (a)\n' % sfx)
         for n, v in p.consts.items():
-            f.write("    7'd%d: uconst = 64'h%016x;   // %s %r\n" % (addr[n], d2u(v), n, v))
-        f.write("    default: uconst = 64'h0;\n  endcase\nendfunction\n")
+            f.write("    7'd%d: uconst%s = 64'h%016x;   // %s %r\n" % (addr[n], sfx, d2u(v), n, v))
+        f.write("    default: uconst%s = 64'h0;\n  endcase\nendfunction\n" % sfx)
 
 
 def main():
-    p = build()
-    words, addr, names = assemble(p)
-    assert len(words) <= 512, len(words)
     a = sys.argv[1:]
+    log = '--log' in a
+    p = build(log)
+    words, addr, names = assemble(p)
+    assert len(words) <= (1024 if log else 512), len(words)
     if '--rom' in a:
-        rom_svh(p, words, addr, names, a[a.index('--rom') + 1])
+        rom_svh(p, words, addr, names, a[a.index('--rom') + 1], log)
         print('%d words, %d registers (%d constants)' % (len(words), len(names), len(p.consts)))
     if '--listing' in a:
         inv = {v: k for k, v in p.labels.items()}
         for i, (op, f) in enumerate(p.code):
             print('%3d %-8s %-5s %s' % (i, inv.get(i, ''), op, f))
     if '--check' in a:
-        check(p, words, addr, names, int(a[a.index('--check') + 1]))
+        if log:
+            check_log(p, words, addr, names, int(a[a.index('--check') + 1]))
+        else:
+            check(p, words, addr, names, int(a[a.index('--check') + 1]))
     if '--vec' in a:
-        vectors(p, words, addr, names, a[a.index('--vec') + 1], int(a[a.index('--vec') + 2]))
+        vectors(p, words, addr, names, a[a.index('--vec') + 1], int(a[a.index('--vec') + 2]), log)
 
 
-def vectors(p, words, addr, names, path, n):
+def log_operand(k):
+    """R935: logrl's x: HOTD's range first, then the whole exponent range
+    and the specials."""
+    if k < 0.5:
+        return random.uniform(0.0, 4096.0)
+    if k < 0.6:
+        return 1.0 + random.uniform(-1, 1) * 2.0 ** random.randint(-60, -1)
+    if k < 0.9:
+        return random.uniform(1, 2) * 2.0 ** random.randint(-1022, 1023)
+    return random.choice([0.0, -0.0, 1.0, 2.0, 0.5, 1.5, 0.75, -1.0, -3e10, math.inf, -math.inf, math.nan,
+                          2.0 ** -1022, 1.7976931348623157e308, 1e-310])
+
+
+def vectors(p, words, addr, names, path, n, log=False):
     """Test vectors for the RTL bench: entry, x, y, expected (hex)."""
     random.seed(7)
+    order = ENTRY_ORDER + (['log'] if log else [])
     with open(path, 'w') as f:
         for i in range(n):
-            e = ENTRY_ORDER[i % 4]
+            e = order[i % len(order)]
             k = random.random()
-            if e == 'atan':
+            if e == 'log':
+                x = log_operand(k)
+                y = random.choice([1.0, random.uniform(-100, 100), 0.0, -0.0, math.inf,
+                                   random.uniform(-1, 1) * 2.0 ** random.randint(-1000, 1000)])
+            elif e == 'atan':
                 x = random.uniform(-40, 40) if k < 0.7 else random.choice([0.0, -0.0, 1.0, -3.0, math.inf]) \
                     if k < 0.8 else random.uniform(-1, 1) * 2.0 ** random.randint(-1000, 1000)
                 y = random.uniform(-40, 40) if k < 0.7 else random.choice([0.0, -0.0, 2.0]) \
@@ -600,7 +703,50 @@ def vectors(p, words, addr, names, path, n):
                     else random.choice([0.0, -0.0, 1e-300, math.pi, -math.pi / 2])
                 y = 0.0
             r, _ = run(p, words, addr, names, e, x, y)
-            f.write('%d %016x %016x %016x\n' % (ENTRY_ORDER.index(e), d2u(x), d2u(y), d2u(r)))
+            f.write('%d %016x %016x %016x\n' % (order.index(e), d2u(x), d2u(y), d2u(r)))
+
+
+def cr_log2(x):
+    """The correctly rounded log2 of a positive normal double (decimal at 60
+    digits, then the nearest double by exact rationals)."""
+    from decimal import Decimal, getcontext
+    from fractions import Fraction
+    getcontext().prec = 60
+    v = Fraction(Decimal(x).ln() / Decimal(2).ln())
+    h = float(v)
+    # float(Fraction) rounds to nearest even exactly
+    return h
+
+
+def check_log(p, words, addr, names, n):
+    """R935: log2 against the correctly rounded value and the host's libm
+    (MAME's log2), then y * log2(x) against the host's product."""
+    random.seed(5)
+    for name, gen in [('[0, 4096)', lambda: random.uniform(1e-3, 4096.0)),
+                      ('near 1', lambda: 1.0 + random.uniform(-1, 1) * 2.0 ** random.randint(-50, -1)),
+                      ('all exponents', lambda: random.uniform(1, 2) * 2.0 ** random.randint(-1022, 1023))]:
+        notcr = nolibm = libmcr = 0
+        maxops = 0
+        for _ in range(n):
+            x = gen()
+            r, nops = run(p, words, addr, names, 'log', x, 1.0)
+            maxops = max(maxops, nops)
+            c = cr_log2(x); h = math.log2(x)
+            notcr += r != c; nolibm += r != h; libmcr += h != c
+        print('log2 %-14s not correctly rounded %d / %d   differs from host libm %d   (libm itself not CR %d)  max ops %d'
+              % (name, notcr, n, nolibm, libmcr, maxops))
+    bad = 0
+    for _ in range(n):
+        x = random.uniform(1e-3, 4096.0); y = random.uniform(-100, 100)
+        r, _ = run(p, words, addr, names, 'log', x, y)
+        bad += r != y * math.log2(x)
+    print('y * log2(x): %d / %d differ from the host (MAME: t2f * log2(t1f))' % (bad, n))
+    for x, y in [(0.0, 1.0), (-0.0, 2.0), (-1.0, 1.0), (math.inf, 1.0), (math.inf, 0.0), (0.0, 0.0),
+                 (math.nan, 1.0), (1.0, 5.0), (2.0 ** -1022, 1.0), (1.7976931348623157e308, -1.0)]:
+        r, _ = run(p, words, addr, names, 'log', x, y)
+        try: h = y * math.log2(x)
+        except ValueError: h = y * -math.inf if x == 0 else math.nan
+        print('  x %-24r y %-5r  -> %-24r host %r' % (x, y, r, h))
 
 
 def check(p, words, addr, names, n):

@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
   auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
   d->rst_n = 0; d->start = 0; tick(); tick(); d->rst_n = 1; tick();
   unsigned e; unsigned long long x, y, want;
-  long n = 0, bad = 0; unsigned long long cyc = 0, maxc[4] = {0, 0, 0, 0}, sumc[4] = {0, 0, 0, 0}, cnt[4] = {0, 0, 0, 0};
+  long n = 0, bad = 0; unsigned long long cyc = 0, maxc[5] = {}, sumc[5] = {}, cnt[5] = {};   // R935: [4] logrl
   while (std::fscanf(f, "%u %llx %llx %llx", &e, &x, &y, &want) == 4) {
     d->entry = e; d->x = x; d->y = y; d->start = 1; tick(); d->start = 0;
     unsigned long long c = 1;
@@ -42,11 +42,11 @@ int main(int argc, char **argv) {
                                 n, e, x, y, (unsigned long long)got, want);
       ++bad;
     }
-    cyc += c; if (c > maxc[e & 3]) maxc[e & 3] = c; sumc[e & 3] += c; cnt[e & 3]++;
+    cyc += c; { const unsigned k = e > 4 ? 0 : e; if (c > maxc[k]) maxc[k] = c; sumc[k] += c; cnt[k]++; }
     ++n;
   }
-  static const char *nm[4] = {"sin", "cos", "tan", "atan"};
-  for (int i = 0; i < 4; i++)
+  static const char *nm[5] = {"sin", "cos", "tan", "atan", "log"};
+  for (int i = 0; i < 5; i++)
     if (cnt[i]) std::printf("  %-4s %llu vectors, cycles mean %llu max %llu\n", nm[i], cnt[i], sumc[i] / cnt[i], maxc[i]);
   std::printf("  %ld vectors, %ld mismatches\n", n, bad);
   std::printf(bad || !n ? "FAIL\n" : "PASS\n");

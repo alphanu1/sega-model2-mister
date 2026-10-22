@@ -38,6 +38,7 @@ uint64_t vcsq = 0, vccp = 0, vccv = 0;          // R839: sqrtrl, cpysre, cvtzril
 uint64_t vcfl = 0;                                // R844: flushreg retired
 uint64_t syn_unal_stops = 0;                      // R844: programs ended at a synmov to 0xff000005..7
 uint64_t vctr[4] = {0, 0, 0, 0};                  // R845: sinrl cosrl tanrl atanrl retired
+uint64_t c2_log = 0;                              // R935: logrl retired (+c2)
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 int lat_max = 0, lat_wait = 0;                // +lat=N, see tick()
@@ -112,6 +113,7 @@ uint64_t gate_arms = 0;
 bool loop_mode = false;
 bool no_trans = false;  // R845: +notrans -- the same programs with cmprl for each transcendental
 bool use_fr = false;   // R865: +fr -- an FR=1 build (VC=0); vc_en high; flushreg live, the VC FP forms still trap
+bool use_c2 = false;   // R935: +c2 -- a C2 build (with +vc +fx): logrl in the mix
 bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
 // R869: +fx -- an F2A=1 build (the 2A core: FR=1, VC=0); vc_en high; cvtzril,
 // cpysre, atanr, sinr, remr and flushreg in the mix, and a quarter of the
@@ -588,6 +590,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
     if (!std::strcmp (argv[i], "+nomvre"))    no_mvre = true; // R897
     if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
+    if (!std::strcmp (argv[i], "+c2"))        use_c2 = true;  // R935
     if (!std::strcmp (argv[i], "+fr"))        use_fr = true;  // R865
     if (!std::strcmp (argv[i], "+fx"))        use_fx = true;  // R869
     if (!std::strcmp (argv[i], "+notrans"))   no_trans = true;  // R845
@@ -627,6 +630,7 @@ int main(int argc, char **argv) {
     ref.ref_vc = use_vc;
     ref.ref_fr = use_fr || use_fx;
     ref.ref_f2a = use_fx;
+    ref.ref_c2 = use_c2;   // R935
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -689,8 +693,9 @@ int main(int argc, char **argv) {
         const size_t nfp = (sizeof FPOPS / sizeof FPOPS[0]) - (no_rl ? 6 : 0);
         // R839: with +vc, a quarter of the FP mix is sqrtrl / cpysre / cvtzril
         // R845: and the transcendentals sinrl cosrl tanrl atanrl; R844: flushreg
-        static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x69cu, 0x69du, 0x69eu, 0x690u, 0x66du };
-        uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % 8] : FPOPS[rng() % nfp];
+        // R935: and logrl with +c2 (House of the Dead), twice in the table
+        static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x69cu, 0x69du, 0x69eu, 0x690u, 0x66du, 0x692u, 0x692u };
+        uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % (use_c2 ? 10 : 8)] : FPOPS[rng() % nfp];
         // R869: with +fx, a third of the FP mix is the 2A games' forms
         // R887: and tanr (Manx TT)
         // R897: and movre (Dead or Alive), twice, and sqrtrl (Motor Raid)
@@ -1442,6 +1447,7 @@ int main(int argc, char **argv) {
           if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
           else if (k == 0x66d) vcfl++;
+          else if (k == 0x692) c2_log++;   // R935
           else if (k == 0x675) fx_cvil++;   // R930
           else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; else if (k == 0x68e) fx_tan++; else if (k == 0x68d) fx_cos++;
           if (use_fx && k == 0x698) fx_sq++;
@@ -1629,6 +1635,7 @@ int main(int argc, char **argv) {
                           (unsigned long long)vctr[0], (unsigned long long)vctr[1], (unsigned long long)vctr[2],
                           (unsigned long long)vctr[3], (unsigned long long)trans_ulp);
   std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
+  if (use_c2) std::printf("  R935 logrl retired: %llu\n", (unsigned long long)c2_log);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
               ", %llu: self-modifying code, %llu: IP left the program"
               "  (all recorded deviations)\n",

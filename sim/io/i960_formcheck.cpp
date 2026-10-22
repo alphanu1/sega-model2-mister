@@ -25,7 +25,8 @@
 // in the FIRST table.
 //
 // R928: and the 2C build (FR, F2A and VC together: Model2.sv's VC is on with
-// C2, for Over Rev's atanrl / sinrl / cosrl) -- the "2C" column.
+// C2, for Over Rev's atanrl / sinrl / cosrl) -- the "2C" column. R935: and
+// C2 itself (logrl, House of the Dead).
 //
 //   g++ -O1 -std=c++17 -I sim/i960 sim/io/i960_formcheck.cpp -o formcheck
 //   formcheck <forms.txt>     prints every form; TRAP lines are what halts
@@ -36,9 +37,9 @@
 #include <string>
 #include "i960_cpu_ref.h"
 
-static bool traps(uint32_t key, uint32_t insn, bool fr, bool vc, bool f2a) {
+static bool traps(uint32_t key, uint32_t insn, bool fr, bool vc, bool f2a, bool c2 = false) {
   i960ref::Cpu c;
-  c.ref_fr = fr; c.ref_vc = vc; c.ref_f2a = f2a;
+  c.ref_fr = fr; c.ref_vc = vc; c.ref_f2a = f2a; c.ref_c2 = c2;   // R935: c2, logrl
   for (int i = 0; i < 32; i++) c.rf.r[i] = 0x3000u + 0x40u * uint32_t(i);
   c.rf.r[i960ref::Regs::FP] = 0x8000u;
   c.rf.r[i960ref::Regs::PFP] = 0x7000u | ((key >> 0) & 7u);   // ret keys carry the frame type
@@ -77,7 +78,7 @@ int main(int argc, char **argv) {
     const bool o = traps(k, e.insn, true, false, false);
     const bool nw = traps(k, e.insn, true, false, true);
     const bool m = traps(k, e.insn, false, true, false);
-    const bool c2 = traps(k, e.insn, true, true, true);   // R928
+    const bool c2 = traps(k, e.insn, true, true, true, true);   // R928; R935 C2
     old_traps += o; new_traps += nw; main_traps += m; c2_traps += c2;
     std::printf("%s %04x insn %08x first pc %08x t %9.4f n %12llu  2A-old %s  2A-new %s  main %s  2C %s\n",
                 (o || nw || c2) ? "TRAP" : "    ", k, e.insn, e.pc, e.t, e.n,
@@ -92,7 +93,7 @@ int main(int argc, char **argv) {
     const bool a = traps(k, e.insn, true, false, true);
     const bool f = traps(k, e.insn, false, false, false);
     const bool m = traps(k, e.insn, false, true, false);
-    const bool c2 = traps(k, e.insn, true, true, true);   // R928
+    const bool c2 = traps(k, e.insn, true, true, true, true);   // R928; R935 C2
     v2a += a; vvf2 += f; vmain += m; vc2 += c2;
     std::printf("%s VAR %08x key %04x insn %08x first pc %08x t %9.4f n %12llu  2A %s  vf2 %s  main %s  2C %s\n",
                 (a || c2) ? "VTRAP" : (f ? "vtrap" : "     "), v, k, e.insn, e.pc, e.t, e.n,

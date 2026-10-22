@@ -673,7 +673,7 @@ module i960_top #(
   wire  [63:0] u_a     = tr_on ? tr_opa : fp_b;
   wire  [63:0] u_b     = tr_on ? tr_opb : fp_a;
   generate if (TRB) begin : g_trans
-    i960_fptrans u_trans (
+    i960_fptrans #(.LOG(C2)) u_trans (   // R935: LOG, logrl on the 2C build
       .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry),
       .x(fp_a), .y(fp_b),
       .act(tr_act), .opa(tr_opa), .opb(tr_opb),
@@ -763,7 +763,7 @@ module i960_top #(
   logic fp_is_mvre;                              // R897: movre (Dead or Alive)
   logic fp_is_cvtil;                             // R930: cvtilr (Over Rev)
   /* verilator lint_off UNUSEDSIGNAL */
-  logic [1:0] tr_entry;                          // read only when TRB
+  logic [2:0] tr_entry;                          // read only when TRB; R935: 4 logrl (C2)
   /* verilator lint_on UNUSEDSIGNAL */
   wire  vc_on = VC && RL && vc_en;
   wire  fr_on = (VC || FR) && vc_en;               // R865: flushreg's dispatch
@@ -772,7 +772,7 @@ module i960_top #(
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
     fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
-    fp_is_trans = 1'b0; tr_entry = 2'd0;
+    fp_is_trans = 1'b0; tr_entry = 3'd0;
     fp_is_rem = 1'b0;
     fp_is_mvre = 1'b0;
     fp_is_cvtil = 1'b0;
@@ -782,10 +782,14 @@ module i960_top #(
     // get_2_rifl / set_rifl): atanrl is atan2(src2, src1).
     if (vc_on && d_op == 8'h69) begin
       case (d_op2)
-        4'hc: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinrl
-        4'hd: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd1; end   // cosrl
-        4'he: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd2; end   // tanrl
-        4'h0: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanrl
+        4'hc: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 3'd0; end   // sinrl
+        4'hd: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 3'd1; end   // cosrl
+        4'he: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 3'd2; end   // tanrl
+        4'h0: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 3'd3; end   // atanrl
+        // R935: logrl, set_rifl(t2f * log2(t1f)) -- the 2C build only (House
+        // of the Dead, from its stone-wall section; trapped before, and the
+        // trap stopped the game)
+        4'h2: if (C2) begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 3'd4; end
         default: ;
       endcase
     end
@@ -825,10 +829,10 @@ module i960_top #(
     // register destination) or kept whole (fp0-fp3) as every r form's.
     if (ta_on && d_op == 8'h68) begin
       case (d_op2)
-        4'h0: begin fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanr
-        4'hc: begin fp_is_trans = 1'b1; tr_entry = 2'd0; end   // sinr
-        4'he: begin fp_is_trans = 1'b1; tr_entry = 2'd2; end   // tanr (R887: Manx TT)
-        4'hd: begin fp_is_trans = 1'b1; tr_entry = 2'd1; end   // cosr (R903: Manx TT)
+        4'h0: begin fp_is_trans = 1'b1; tr_entry = 3'd3; end   // atanr
+        4'hc: begin fp_is_trans = 1'b1; tr_entry = 3'd0; end   // sinr
+        4'he: begin fp_is_trans = 1'b1; tr_entry = 3'd2; end   // tanr (R887: Manx TT)
+        4'hd: begin fp_is_trans = 1'b1; tr_entry = 3'd1; end   // cosr (R903: Manx TT)
         4'h3: fp_is_rem = 1'b1;                                // remr
         default: ;
       endcase

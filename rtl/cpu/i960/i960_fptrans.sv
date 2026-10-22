@@ -44,11 +44,19 @@
 // The units see A on their .a port and B on .b: a - b, a / b, as the i960's
 // src2 - src1 and src2 / src1 are wired.
 
-module i960_fptrans (
+// R935: LOG -- the 2C build's program (i960_fptrans_rom_log.svh): the same
+// four plus logrl (entry 4: y * log2 x, House of the Dead from its stone-wall
+// section), a 10-bit program counter for its 563 words, and two loads that
+// take x apart for it: LDE (op 11) d = x's unbiased exponent as a double --
+// the adder's (MAGIC + e - 1023) - MAGIC, exact -- and LDM (op 12) d = x's
+// mantissa in [1, 2). LOG = 0 is R845's sequencer exactly (the 2A builds).
+module i960_fptrans #(
+  parameter bit LOG = 1'b0
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        start,        // one cycle; entry and x / y valid from here
-  input  logic  [1:0] entry,        // 0 sin, 1 cos, 2 tan, 3 atan (y = src2, x = src1)
+  input  logic  [2:0] entry,        // 0 sin, 1 cos, 2 tan, 3 atan (y = src2, x = src1); 4 log (LOG)
   input  logic [63:0] x,
   input  logic [63:0] y,
   output logic        act,          // the units' operands are opa / opb
@@ -63,10 +71,12 @@ module i960_fptrans (
 );
 
   `include "i960_fptrans_rom.svh"
+  `include "i960_fptrans_rom_log.svh"
+  localparam int UW = LOG ? 10 : 9;     // R935: program counter width
 
   // ------------------------------------------------------------ storage
   (* ramstyle = "M10K" *) logic [63:0] rf [128];
-  initial for (int i = 0; i < 128; i++) rf[i] = uconst(7'(i));
+  initial for (int i = 0; i < 128; i++) rf[i] = LOG ? uconst_log(7'(i)) : uconst(7'(i));
 
   logic [6:0]  raddr;
   logic [63:0] q;
@@ -77,9 +87,13 @@ module i960_fptrans (
     q <= rf[raddr];
   end
 
-  logic [8:0]  upc;
+  logic [UW-1:0] upc;
   logic [31:0] uw;
-  always_ff @(posedge clk) uw <= ucode(upc);
+  generate if (LOG) begin : g_rom_log
+    always_ff @(posedge clk) uw <= ucode_log(10'(upc));
+  end else begin : g_rom
+    always_ff @(posedge clk) uw <= ucode(9'(upc));
+  end endgenerate
 
   // ------------------------------------------------------------ decode
   wire [3:0] op   = uw[31:28];
@@ -90,7 +104,7 @@ module i960_fptrans (
   wire [1:0] f_mb = uw[4:3];
   wire [2:0] f_c  = uw[27:25];
   wire       f_i  = uw[24];
-  wire [8:0] f_t  = uw[8:0];
+  wire [UW-1:0] f_t = uw[UW-1:0];        // BR / JMP / CALL target (bit 9 free in each form)
 
   function automatic logic [63:0] modv(input logic [63:0] v, input logic [1:0] m);
     case (m)
@@ -119,7 +133,12 @@ module i960_fptrans (
   // ------------------------------------------------------------ sequencer
   typedef enum logic [3:0] {S_IDLE, S_FETCH, S_DEC, S_RA, S_RB, S_ISSUE, S_WAIT, S_BR, S_END} st_t;
   st_t st;
-  logic [8:0] ras [4];
+  logic [UW-1:0] ras [4];
+  // R935: LDE's operand, MAGIC + (e - 1023) as a two's-complement add on the
+  // low bits (MAGIC's low 51 are zero, so this IS the double MAGIC + e - 1023)
+  wire  [11:0] x_eu  = {1'b0, x[62:52]} - 12'd1023;
+  wire  [63:0] x_lde = 64'h4338_0000_0000_0000 + {{52{x_eu[11]}}, x_eu};
+  wire  [63:0] x_ldm = {1'b0, 11'h3ff, x[51:0]};
   logic [1:0] sp;
   logic [1:0] unit;          // 0 add, 1 sub, 2 mul, 3 div
 
@@ -127,27 +146,34 @@ module i960_fptrans (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= S_IDLE; upc <= 9'd0; sp <= 2'd0; unit <= 2'd0;
+      st <= S_IDLE; upc <= '0; sp <= 2'd0; unit <= 2'd0;
       opa <= 64'd0; opb <= 64'd0;
       add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0;
       we <= 1'b0; waddr <= 7'd0; fin <= 1'b0; act <= 1'b0;
-      for (int i = 0; i < 4; i++) ras[i] <= 9'd0;
+      for (int i = 0; i < 4; i++) ras[i] <= '0;
     end else begin
       add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0;
       we <= 1'b0; fin <= 1'b0;
       case (st)
         S_IDLE: if (start) begin
-          upc <= {7'd0, entry}; sp <= 2'd0; act <= 1'b1; st <= S_FETCH;
+          upc <= LOG ? UW'(entry) : UW'(entry[1:0]); sp <= 2'd0; act <= 1'b1; st <= S_FETCH;
         end
         S_FETCH: st <= S_DEC;                     // uw <= ucode(upc) this edge
         S_DEC: begin
           case (op)
             4'd4: st <= S_BR;                     // q <- register a next edge
             4'd5: begin upc <= f_t; st <= S_FETCH; end
-            4'd6: begin ras[sp] <= upc + 9'd1; sp <= sp + 2'd1; upc <= f_t; st <= S_FETCH; end
+            4'd6: begin ras[sp] <= upc + UW'(1); sp <= sp + 2'd1; upc <= f_t; st <= S_FETCH; end
             4'd7: begin upc <= ras[sp - 2'd1]; sp <= sp - 2'd1; st <= S_FETCH; end
             4'd8, 4'd9: begin
               opa <= (op == 4'd8) ? x : y; opb <= 64'd0; unit <= 2'd1; st <= S_ISSUE;
+            end
+            4'd11, 4'd12: if (LOG) begin   // R935: LDE / LDM
+              opa <= (op == 4'd11) ? x_lde : x_ldm;
+              opb <= (op == 4'd11) ? 64'h4338_0000_0000_0000 : 64'd0;
+              unit <= 2'd1; st <= S_ISSUE;
+            end else begin
+              unit <= 2'd1; st <= S_RA;      // never in the 2A program: as default
             end
             default: begin
               unit <= (op == 4'd0) ? 2'd0 : (op == 4'd2) ? 2'd2 : (op == 4'd3) ? 2'd3 : 2'd1;
@@ -158,7 +184,7 @@ module i960_fptrans (
         S_RA: begin opa <= modv(q, f_ma); st <= S_RB; end
         S_RB: begin opb <= (op == 4'd10) ? 64'd0 : modv(q, f_mb); st <= S_ISSUE; end
         S_BR: begin
-          upc <= (cond ^ f_i) ? f_t : upc + 9'd1;
+          upc <= (cond ^ f_i) ? f_t : upc + UW'(1);
           st  <= S_FETCH;
         end
         S_ISSUE: begin
@@ -174,7 +200,7 @@ module i960_fptrans (
             fin <= 1'b1; st <= S_END;
           end else begin
             we <= 1'b1; waddr <= f_d;
-            upc <= upc + 9'd1; st <= S_FETCH;
+            upc <= upc + UW'(1); st <= S_FETCH;
           end
         end
         S_END: begin act <= 1'b0; st <= S_IDLE; end

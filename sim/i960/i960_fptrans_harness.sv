@@ -7,11 +7,13 @@
 // tools/i960_fptrans.py --vec, whose interpreter is the reference.
 
 
-module i960_fptrans_harness (
+module i960_fptrans_harness #(
+  parameter bit LOG = 1'b0   // R935: the 2C program (logrl)
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        start,
-  input  logic  [1:0] entry,
+  input  logic  [2:0] entry,
   input  logic [63:0] x,
   input  logic [63:0] y,
   output logic [63:0] res,
@@ -25,7 +27,7 @@ module i960_fptrans_harness (
   logic        div_busy;
   /* verilator lint_on UNUSEDSIGNAL */
 
-  i960_fptrans u_tr (
+  i960_fptrans #(.LOG(LOG)) u_tr (
     .clk(clk), .rst_n(rst_n), .start(start), .entry(entry), .x(x), .y(y),
     .act(act), .opa(opa), .opb(opb),
     .add_req(add_req), .mul_req(mul_req), .div_req(div_req), .sub(sub),
