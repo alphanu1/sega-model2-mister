@@ -6,11 +6,12 @@
 // 0x1A; Zero Gunner 0x12), written from MAME's own rows, not from the RTL.
 #pragma once
 // R924 / R928: c2 -- a 2C build (Model2.sv C2), where 0x17 (The House of the
-// Dead, a2_big) and 0x1C (Over Rev, is_orev) take ranges too
+// Dead, a2_big) and 0x1C (Over Rev, is_orev) take ranges too; R933: and 0x1D
+// (STCC, a2_big)
 static inline bool m2_luma_big(int game, bool c2 = false) {
   if (((game >> 4) & 7) != 1) return false;
   const int n = game & 15;
-  return n == 3 || n == 4 || n == 5 || n == 6 || n == 8 || n == 10 || (c2 && (n == 7 || n == 12));
+  return n == 3 || n == 4 || n == 5 || n == 6 || n == 8 || n == 10 || (c2 && (n == 7 || n == 12 || n == 13));
 }
 // R932: Over Rev on the 2C build (32 slots): a table, row -> {representative,
 // slot[4:0]} -- the k-medoids fit over MAME 0.289's walks of all four courses
@@ -50,6 +51,7 @@ static inline int m2_luma_map_ref(int game, int r, bool c2 = false) {
     {0x1A, {100, 115, 125, 126, 131, 133, 137, 151}},  // Motor Raid
     {0x17, {0, 40, 60, 76, 94, 96, 100, 120}},       // R924: The House of the Dead (2C)
     {0x1C, {0, 10, 14, 22, 129, 139, 176, 178}},     // R928: Over Rev (2C)
+    {0x1D, {0, 1, 2, 3, 4, 5, 6, 7}},                // R933: STCC (2C): rows 0 and 1 drawn
   };
   if (m2_luma_big(game, c2))
     for (const T &e : tab) if ((e.id & 15) == (game & 15)) {

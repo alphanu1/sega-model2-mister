@@ -145,6 +145,11 @@ module m2_luma_map #(
       // the game's 0..63 luma (16 slots would give 1.1); 14% of polygons on
       // rows more than 4 off (row 51 the worst, 25).
       4'hC: starts = {8'd178, 8'd176, 8'd139, 8'd129, 8'd22, 8'd14, 8'd10, 8'd0};
+      // R933: Sega Touring Car Championship (2C, 0x1D; the large layout, so
+      // big): MAME 0.289's walk dumps over attract, qualifying and a race draw
+      // textured polygons on rows 0 and 1 only -- each its own slot, exact.
+      // OREV (the 2C build) only: the 2A build's logic is unchanged.
+      4'hD: starts = OREV ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction
