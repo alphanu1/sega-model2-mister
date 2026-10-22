@@ -43595,3 +43595,118 @@ THE 2A SLOWDOWNS.** s1328 (model2a bd6fa2e: R927's 8-frame register ring and
     are good".
 R926's AI detail test MRA moved to sim/io/test-mra/ (a diagnostic, never a
 release file).
+
+**R930 -- OVER REV FROZE AT THE SPEED CONTEST BECAUSE THE i960 TRAPPED ON
+cvtilr (0x67.5), A FORM NO GAME HAD RUN; IMPLEMENTED (MAME'S set_rifl OF AN
+EXACT int32 -> double). THE RACE IS 57.5 fps IN MAME (A FLIP EVERY VBLANK,
+RENDER MODE WRITTEN 4 ONCE AND NEVER READ), SO OUR 28.7 fps IS AN OVERRUN, NOT
+R896'S MODE. MODEL2A 35210cb (R927'S RING AND DATA CACHE) MERGED, ON IN THE 2C
+BUILD. ON BRANCH model2c ONLY, NEVER PUSHED.**
+(Coordinator, from Ben's board on s1325 = model2c 766802b, M2_2C + M2_NO_2A_
+MANX_MOTION: attract and menus full speed; the race exactly two vblanks a
+frame from the start; ~21.8 s into lap 1 of the first race -- the container
+port, "SPEED CONTEST / RECORD SPEED / YOUR SPEED" on screen -- the whole
+picture froze with the sound playing on.)
+
+*What was believed (R928):* 0 of 168 forms / 458 variants trap on the 2C
+build -- from a 150 s session whose race (the census's 'orev' mode) was a
+time-attack run at Tsukuba that crashed and ran the wrong way, and never met
+a speed contest.
+
+*THE RACE IN MAME (sim/io/mame_m2_orev_race.lua, new; MAME 0.289 m2lod):*
+coin at 40 s, the accelerator tapped through Mode Select (Challenge Cup: no
+course select, round 1 is the bay course -- the Rainbow Bridge, Big Sight,
+then the container port), Car Select and Gear Select (AT), then held with the
+wheel straight. The car scrapes the walls but gets round; GO at ~69.5 s; the
+SPEED CONTEST box ("YOUR SPEED 152.31 km/h") at ~34 s of race time (Ben's
+cleaner line reached it at 21.8 s), session time 103.4 s. Deterministic: two
+sessions put the first cvtilr at the same 103.3554 s.
+  MAME's PEDALS, A WRONG TURN WORTH KEEPING: a Lua set_value on an analog
+  field is the raw PORT value (ioport.cpp analog_field::read returns
+  m_adjoverride before PORT_REVERSE is applied), so 0x00 is the pedal floored
+  and 0xff released. A first run with 0xff "held" sat at 0 km/h behind the
+  rolling start. mame_m2_2a_play.lua's 'orev' mode (R928) has them inverted
+  -- its accelerator is pressed 2 s in 20 -- which is why R928's race was slow
+  and short; its census is still valid for what it ran.
+
+*THE FREEZE (MAME's form log, R869_OUT, 150 s through the race; formcheck):*
+172 forms / 477 variants; ONE form traps on the 2C column (and on every
+build): 0x675 cvtilr -- insn 0x67083290 (g0 -> fp1) at pc 0x0056701c, first
+at 103.3554 s, and 0x67003294 (g4 -> fp0) at 0x567704; 3,408 executions, all
+in the speed contest's moment (V samples: 0.0, 83.0, 8.0, ... -- the speed's
+digits being formatted). i960_top's T_TRAP sets halted: the i960 stops, the
+68000 sound board runs on -- Ben's picture exactly. Nothing else differs:
+TGPx4 census over the same session 200,845,511 words, the SAME 172 forms as
+R928's (no FLOG; CLRF / SETM once at boot), program 4,096 words; copro status
+(0x980014) read 0 times; the FIFO traffic per frame steady through the
+contest (~1,085 pushes, ~1,515 pops, ~770 i960 reads of an empty output FIFO
+-- the i960 waits on the TGPx4 synchronously, as before).
+*THE FIX (i960_top, (vc_on || ta_on), so every 2A game past VF2 and the 2C
+build):* fp_is_cvtil -- fpmisc's OP_CVTIR on src1 (get_1_ri: the integer
+register, NOT is_rl's even pair) with set_rifl's destination: fp0-fp3 as
+cvtir's, or the pair at (dst & 0x1e) through T_PAIR as the long-real ops.
+The reference (i960_cpu_ref.h) the same; tb_i960_top's +fx mix gains it.
+  test_i960_top_fx, _ring (8 and 4), _dc (64 lines, 16 in lanes), _vc,
+  _fr, plain: every run 0 mismatches (cvtilr retired 9-141 times a run);
+  PLANTED: the decode disabled, test_i960_top_fx fails ("MODULE TRAP at IP
+  0x134 insn 67330a93: the reference executes it", 1 mismatch). formcheck on
+  the session: 2C 0 traps of 172 forms / 477 variants (2A-new 3: VF2's).
+  TGPx4 capture of the same 200 s (R924_CAP): make tgpx4_ref 200,845,511
+  words, every pop / output / state hash equal, 0 bad; make tgpx4_replay
+  (the RTL, lockstep) 200,845,508 words, 1,143,259,352 clocks (5.69 clk /
+  word), i960 events 19,311,206 / 19,311,206, outputs 8,251,088 / 8,251,088
+  equal, 0 bad.
+
+*30 Hz (MAME taps, OR_TAPLOG):* Over Rev writes render mode 0x4004 ONCE
+(2.42 s, ip 0x11edc: bit 2, the 60 Hz mode) and never reads 0x10000000 --
+R896's read-back (present in the 2C build: M2A) is not in play. Flips
+(0x803008) per video frame: attract 1,713 in 1,725 frames, menus 1,036 /
+1,036, race 1,726 / 1,726 (70-100 s) and 2,013 / 2,013 (100-135 s) -- one
+flip every vblank; the i960 spins on 0x98000c ~24,500 reads a race frame
+(attract ~25,800: the same work in MAME's model, which is not a hardware
+fact). So the arcade race is 57.5 fps and ours at 28.7 is a frame that does
+not finish inside a vblank. Where: the 2C whole-core bench of R928 (no board
+clocks, no ring) already ran the attract's 3D at a flip every OTHER vblank
+(49-50 of 100, frames 1000-1300), the i960 busy through both: a no-flip
+vblank (1296) retired 22 k instructions in 417 k cycles -- T_MEM_W 107 k,
+T_FRAME 100 k (register spills, R927's subject), T_FP 97 k.
+  THE BUDGET ON THE BOARD'S CLOCKS (new BOOT_2C_G; obj_boot_2c_base:
+  -GTMR_BOARD=1, obj_boot_2c_ring: + -GRC_RING=1 -GRC_FRAMES=8 -GDC_LINES=64,
+  i.e. Model2.sv's 2C build after the merge; M2_BOARDCLK=1, M2_C2_STD,
+  M2_OREV, M2_INSCHED build/r930/bench/orev_sched.txt; 695 k CPU cycles a
+  vblank): through the boot both flip every vblank as the board did; the
+  attract's 3D (base frames 800-1260, ring 700-1250 -- the ring's boot runs
+  ~100 frames ahead, so like scenes are ~100 apart) flips every vblank in
+  both, the flip (the frame's work done) at
+    base: p50 0.68-0.79 of the vblank, p90 0.76-0.92, max 0.94; T_FRAME
+          (spills) 16-21% of all cycles, T_MEM_W 24-29%, T_FP 14-21%
+    ring: p50 0.49-0.72, p90 0.58-0.74, max 0.74; T_FRAME gone from the
+          top five; the copro holding the i960 6-12% of cycles in both.
+  So on s1325 (no ring) the attract's frame already used up to ~94% of a
+  vblank -- Ben's "full speed with some slowdowns" -- and a race (MAME: the
+  same work as the attract to within a few %, plus seven AI cars on our
+  side's timing) that goes past 1.0 runs every other vblank, as measured.
+  The ring and data cache take ~0.2 vblank off the attract's frame (~-27%).
+  INFERRED, NOT YET MEASURED IN A RACE: both benches run on into the race on
+  the schedule (coin 1400, start / accelerator taps, then held; a bench
+  frame ~4.4 s, so the race from ~frame 3100 and the speed contest ~5000,
+  hours away at the time of writing) -- fs.txt / seq/ in
+  build/r930/bench/{base,ring}; analyse with flip_at / flips per vblank.
+
+*THE MERGE (model2a 35210cb -> model2c, b32b513):* R927's ring and data
+cache are gated on M2A, which the 2C build has, so both are ON in it with no
+further change; the conflicts were the parameter lists (i960_top C2 + RC_* /
+DC_*, the harness's C2 / X4_PLINES + TMR_BOARD / RC_* / DC_*), Model2.sv's
+macro block and i960_top instance, and tb_m2_boot's data-ROM base (R926's
+0x13C0000 for the 2A games with M2_A2X, R924 / R928's program copy and 2C
+std-layout zeros, both kept). Lint 2A and M2_2C clean; quartus_map
+--analyze_file on i960_top / i960_dcache / i960_regs / Model2.sv (also with
+M2_2C=1 M2_NO_2A_MANX_MOTION=1) 0 errors; lint_idx nothing new.
+*AREA (quartus_map 17.0, map only, M2_2C + M2_NO_2A_MANX_MOTION, 8066e02):*
+39,987 ALMs needed (R928 40,079), 48,084 registers, 4,551,152 block bits
+(+8,192: the data cache's M10K), 102 DSP. i960_dcache present in the map.
+
+*NOT DONE / OPEN:* the race's frame budget measured (above, running); the
+HOTD 2C bench not re-run with the ring (the i960 lockstep suites with the
+ring and the cache pass; HOTD's TGPx4 replay does not involve the i960);
+mame_m2_2a_play.lua's 'orev' pedals left as they were (R928's census stands).

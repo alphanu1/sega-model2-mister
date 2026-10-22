@@ -1,5 +1,32 @@
 # Handoff
 
+## 2026-10-22: Over Rev's speed-contest freeze and the 30 Hz race -- branch model2c, R930. NOT PUSHED
+
+Branch model2c only (never pushed). BUILD TO FIT: model2c HEAD, Model2.qsf +
+VERILOG_MACRO "M2_2C=1" and "M2_NO_2A_MANX_MOTION=1" (NOT M2_NO_2A_RALLY).
+FREEZE: MAME (new sim/io/mame_m2_orev_race.lua: Challenge Cup round 1, the
+pedals as RAW port values -- 0x00 floored) reaches the SPEED CONTEST at
+103.4 s; the i960 form log there has cvtilr (0x67.5, pc 0x56701c, fp0 / fp1
+destinations, 3,408 runs, the speed's digits) -- trapped on every build, so
+the i960 halted with the sound running on. Fixed in i960_top (cvtir's
+conversion, set_rifl's destination; live with VC or F2A) and the reference;
+tb_i960_top +fx mixes it: fx / ring / ring4 / dc / dc16 / vc / fr / plain all
+0 mismatches; planted (decode off) fails. formcheck on the 150 s session: 2C
+0 traps. TGPx4 capture of the same session: ref and RTL lockstep exact over
+200.8 M words, 8.25 M outputs; the same 172 forms as R928 (no FLOG).
+30 Hz: NOT a mode. MAME flips every vblank in the race; Over Rev writes
+render mode 0x4004 once and never reads it. Ours overruns: the 2C bench at
+board clocks has the attract's frame at p50 0.68-0.79 / max 0.94 of a vblank
+without the ring, 0.49-0.72 / 0.74 with it.
+MERGED model2a 35210cb (R927 ring + 1 KB data cache) -> both ON in the 2C
+build (gated on M2A). Map: 39,987 ALMs, 4,551,152 bits, 102 DSP.
+RUNNING (not finished at hand-off): build/r930/bench/{base,ring} -- the 2C
+bench at board clocks driven into the race (fs.txt flip_at per vblank).
+WRONG TURNS: MAME's set_value(0xff) on the pedal is "released" (the raw port,
+no PORT_REVERSE) -- the census 'orev' mode has its pedals inverted; a MAME
+save state of the 2C machine reloads frozen (do not use them for 2C).
+Next free R numbers: R931 on.
+
 ## 2026-10-22: Over Rev (2C, overrev Rev A) on the 2C build -- branch model2c, R928. NOT PUSHED
 
 Branch model2c only (never pushed, never merged). Build: Model2.qsf +
