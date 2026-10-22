@@ -1696,6 +1696,10 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
 # (the AI cars each vblank; sim/io/rally_ai_check.py), +insn=<large>; the data ROM is
 # now read at word 0x13C0000 (it answered 0 before, R902's NaN). ~3 s a frame, the
 # race from frame ~1200.
+# R927: the i960's cycles by cause -- M2_FRAMESTAT=<f> M2_WORK_IPS=5a0490,5bade8 writes a
+# 'P' line per window (sim/io/i960_prof.py <f> [from [to]]); M2_BOARDCLK=1 with
+# BOOT_2AX_G=-GTMR_BOARD=1 runs at the board's clock ratios (80 / 32 / 40 MHz);
+# -GRC_RING=1 -GRC_FRAMES=8 -GDC_LINES=64 builds the i960 as Model2.sv's 2A does.
 BOOT_2AX_DIR ?= obj_boot_2ax
 BOOT_2AX_G   ?=
 $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \

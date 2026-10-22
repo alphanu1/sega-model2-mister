@@ -42955,3 +42955,216 @@ blinking and stay solid to collide with, no car on its side or in the air;
 the frame rate near them may drop. (2) For the real fix, a probe of the
 game's own measure: [0x20aac0] each frame on the overlay (row = (m / 10000 -
 21) >> 1) gives the board's rows directly.
+
+
+**R927 -- THE 2A i960's SPEED IN SEGA RALLY'S FRAME START (R926's AI
+BUDGET): WHERE ITS CYCLES GO, MEASURED; THE REGISTER CACHE AS THE CHIP KEEPS
+IT (A RING OF EIGHT FRAMES, NOT MAME'S DEPTH RULE) TAKES 30% OF THE WINDOW
+OUT AND A 1 KB DATA CACHE ON THE CPU'S SIDE ANOTHER 3%. ON THE BOARD'S CLOCK
+RATIOS THE RACE START MOVES FROM ROWS 0-3 TO 3-8; ROW 8 EVERYWHERE NEEDS THE
+MEMORY PATH ITSELF. BOTH CHANGES 2A-ONLY, SWITCHED, ON. NOT FITTED, NOT ON A
+BOARD.** 2026-10-22, branch i960-speed (model2a 1526562 + rally-ai 7558f98).
+
+*Believed (R926):* the frame start's time splits ~31% register spills and
+fills on call / return, ~30% data waits, ~28% instruction fetch "from the
+work-RAM copy, which R728's code cache (program ROM only) does not cover".
+
+*THE INSTRUMENT (sim only).* tb_m2_boot M2_FRAMESTAT now writes a 'P' line
+after each M2_WORK_IPS window: bus cycles and transactions by master (load /
+store unit, register-frame spill / fill, instruction fetch, the interrupt
+path) and region (program ROM, board RAM, work RAM, buffer RAM, I/O, data ROM,
+other); calls, returns, the depth at each call, and the frame traffic MAME's
+rule and the chip's ring would make at 4 / 6 / 8 / 12 / 16 / 32 frames; the
+i-cache's requests and fills by region; models of a CPU-side data cache (1-8
+KB, line or word allocation, direct and 2-way) and of the i-cache (8 / 16 /
+32 KB direct, 2-way, 4-way). sim/io/i960_prof.py sums them. M2_BOARDCLK=1
+(with the harness's TMR_BOARD) runs the bench at the BOARD's ratios -- clk_mem
+80 : clk_vid 32 : clk_cpu 40 MHz, the vblank and the 2A timers to match --
+where the plain bench is a 24 MHz i960 against a 25 MHz timer (R926: its rows
+are not the board's). Harness parameters RC_RING / RC_FRAMES / DC_LINES /
+DC_LANES build the changes below. (A window opened by the vblank IRQ and not
+closed before the next one is now reset, not accumulated.)
+
+*THE BREAKDOWN (MEASURED, the whole-core bench as R926 ran it -- srallyc,
+MAME's inputs, the autopilot from frame 2070, LAT 6; window 0x5a0490 ->
+0x5bade8, vblanks 1207-1347, 109 windows):* 276 k cycles a window for 26.9 k
+instructions, CPI 10.27:
+    T_MEM_W 3.27 CPI (31.8%)   T_FRAME 2.88 (28.0%)   T_FETCH + T_EXEC 2.00
+    T_FETCH_W 0.96 (9.4%)      T_FETCH2_W 0.84 (8.2%)  FP + MULDIV 0.25
+  * CALL / RETURN: 250 calls a window, 98% of them at depth >= 4 (5: 69%,
+    6: 19%): under MAME's rule 97.6% of calls spill and every matching
+    return fills -- 487 frame transfers of 16 words a window. A spill word
+    costs 10.4 cycles (two 16-bit SDRAM writes through the bridge each), a
+    fill word 7.0 (the spill's own writes invalidated those lines in the
+    bridge's data cache, so every fill misses it): ~280 cycles a call /
+    return pair, 24.6% of the window in bus time. The chip's ring at the same
+    depths (modelled on the same call stream): 4 frames 9 transfers a window,
+    8 frames 0.02.
+  * DATA (load / store unit): board RAM reads 7.4 cycles each (3.1 k a
+    window), work RAM reads 7.6 (2.1 k), I/O reads 38.8 (0.26 k: the TGP's
+    output FIFO holding the read), I/O writes 3.2 (3.0 k: the FIFO pushes,
+    posted), board RAM writes 3.9, "other" (0x1xxxxxxx tile / palette /
+    backup) 5.0-5.1. A dcache hit is ~5 CPU cycles of crossing (R729's
+    toggle across, S_DCK, the toggle back, the registered answer); a store is
+    posted in 3 but the next access waits for its two SDRAM words.
+  * FETCH: CORRECTION TO R926 -- the i-cache in i960_top (8 KB, 512 x 16 B,
+    R815) caches EVERY fetch address, work RAM included; R728's bridge code
+    cache (program ROM only) is a different block and has been off since
+    R733. Rally's race code misses it on 4.7% of requests (1.7 k fills a
+    window, ~25 cycles each through the bridge's line buffer: 15.5% of the
+    window). The rest of T_FETCH_W / T_FETCH2_W is the front end's own shape:
+    a taken branch costs two cycles of T_FETCH_W on a hit, and a two-word
+    instruction (MEMB with a displacement, ~a quarter of Rally's) two of
+    T_FETCH2_W.
+
+*THE REAL CHIP (what is documented, what is inferred).* MAME's i960 charges
+fixed cycles (call 9, ret 7, ld 4, st 2, ldl 5, ldq 7, stq 5) and models no
+cache, no wait state and no spill cost; its register cache is 4 saved frames
+by depth since the last flushreg (I960_RCACHE_SIZE). The i960KB's own (Intel's
+KA/KB documentation, from memory -- NOT re-checked in this session): a
+512-byte on-chip instruction cache, four on-chip local register sets, and the
+architecture's rule that a frame is written to its save area only when a call
+finds the register cache full and read back only when a return finds it gone
+-- the save area is undefined until flushreg. The board's work RAM (R904,
+inferred one-hot reading of Rally's wait-state table): 1 wait, 3 bus cycles
+an access at 25 MHz (120 ns), a burst's later words 2. So on the chip a
+spill of 16 words is four quad bursts, ~36 cycles at 25 MHz (1.4 us), and
+the ring makes it rare; this core paid ~166 cycles at 40 MHz (4.2 us) for
+every call at depth >= 4.
+
+*THE CHANGES (R927, 2A only).*
+  1. i960_regs RING = 1, CACHE_FRAMES = 8 (i960_top RC_RING / RC_FRAMES;
+     Model2.sv M2_2A_I960_RING, default 1): eight saved frames in a ring; a
+     call that finds it full writes the OLDEST frame to its own address
+     (through the flush path) and takes its slot; a return takes the newest,
+     or reads memory when the ring is empty; flushreg writes all of them,
+     oldest first. 8 frames because the MLAB is 32 rows deep anyway (4 frames
+     used 16 of them): the array is the same 7 MLABs. The frame addresses are
+     now [31:6] (a frame is 64-byte aligned), a concatenation instead of an
+     adder, which more than pays for the ring's control. RING = 0 is MAME's
+     rule exactly (every MAME-mode bench below unchanged).
+     WHY THIS IS ALLOWED: only the 16-word register save areas see a
+     difference, and those are undefined until flushreg on the chip itself;
+     software cannot depend on MAME's stream without depending on something
+     the silicon does not do. Checked in the games that switch contexts: VF2's
+     background coroutine (0x4add0-0x4aeac, MAME's dasm) saves g1-g14 and
+     r3-r15 with ordinary stores and returns normally; Sega Rally and Zero
+     Gunner flushreg once at boot (R865).
+  2. i960_dcache (i960_top DC_LINES = 64, DC_LANES = 0; M2_2A_I960_DC,
+     default 1): 1 KB, direct-mapped, 16-byte lines with a valid bit a word,
+     ONE WORD ALLOCATED PER MISS (no line fill: the bus sees what it saw
+     before, less the hits), board RAM 0x200000-0x23ffff and work RAM
+     0x500000-0x5fffff only, write-through; a full-word write that lands in a
+     held line updates it, a partial write drops its word (one 32-bit array,
+     one M10K -- byte lanes would be four). Hits are answered the cycle after
+     the request and kept off the bridge; every CPU write to those regions,
+     from any master (loads / stores, frame spills, the interrupt path's
+     saves), passes it. Coherent for the reason the bridge's own data cache
+     is: board and work RAM are written by the CPU alone once it runs, and
+     the R900 RAM sweeps run with the CPU in reset (the valid bits sweep at
+     reset). Buffer RAM and everything else is never cached.
+
+*THE GAIN (bench, LAT 6, vblanks 1207-1347):* CPI 10.27 -> 7.16 with the
+ring (T_FRAME 2.88 -> 0.15) -> 6.97 with the data cache too (T_MEM_W 3.08
+-> 2.87); a window of the same instructions 32% shorter. The data cache's
+model said 3.5% (word allocation, 1 KB: 29% of the reads; 4 KB 31%; line
+allocation would hit ~60% but needs a line port from the bridge -- below).
+The game's own measure with the ring (M2_BUSLOG, every race frame to 2,599,
+autopilot from 2070; this bench's clocks): read p50 8.9 -> 5.1 ms after the
+vblank; row 8 in 141 -> 519 of 1,390 frames, rows 0-2 770 -> 129 (MAME 0.289 with the same inputs, a
+budget write tap: row 8 in 1,329, rows 5-7 in the start's 61, read p50
+2.7 ms). Near opponents' mode changes (rally_ai_check modes, to frame 2500):
+slot 1 160 -> 77, slot 2 148 -> 56 (MAME 3 / 59). AI steps unexplained by
+velocity: 0 in every run.
+At the BOARD's clocks (M2_BOARDCLK, the i960 at 40 MHz against the 25 MHz
+timer; vblanks 1200-1490, the start and the first opponents, 291 frames in
+all six runs; MAME on the same frames: row 8 in 225, rows 5-7 in 66, read
+p50 3.8 ms):
+                         CPI     read p50 / p90    rows
+  LAT 6  before          10.40   6.25 / 8.56 ms    2-6 (row 8: 0)
+         ring             7.44   4.41 / 6.70       4-8 (row 8: 126)
+         ring + dcache    7.18   4.27 / 6.52       5-8 (row 8: 181)
+  LAT 12 before          12.59   7.64 / 10.46      0-3 in 173, 5 in 118
+         ring             8.51   5.00 / 7.86       3-8 (row 8: 118)
+         ring + dcache    8.18   4.76 / 7.60       3-8 (row 8: 122)
+LAT 12 (an SDRAM answer in 12 clk_sys cycles, nearer the board's CDC and
+controller than 6) is the only bench that reproduces R926's inferred board
+rows 0-2 for the released core, so it is the best guess at the board: the
+start moves from rows 0-3 to 3-5 and a frame in 2.4 reaches row 8, against
+MAME's 3 in 4. INFERRED for the board, which is not measured.
+
+*VF2 AND MANX TT (bench, LAT 6; R854's / R896's windows):*
+                                 before     ring      ring + data cache
+  VF2 3D attract, vblanks 1170-1347, foreground 0x10fc8 -> 0x4bcd4:
+    p50 window, CPU cycles       368.9 k    352.3 k   343.8 k  (-6.8%)
+    CPI                          10.33      9.85      9.63
+    background a vblank (instr.) 41.7 k     45.5 k    49.6 k
+    flips                        178/178    178/178   178/178
+  Manx TT attract race, vblanks 1240-1398, 0xb70 -> 0x3eec (to the flip):
+    p50 window, CPU cycles       345.0 k    304.6 k   295.5 k  (-14.4%)
+    CPI                          11.86      10.48     10.14
+    flips / vblanks              157/158    158/158   158/158
+  (Both already fit a bench vblank; R854's board/bench factor puts VF2's
+  foreground over one on the board, which this narrows and does not close.)
+
+*THE OPTIONS, RANKED (cycles off Rally's window per area; the ring's window,
+~220 k cycles, as the base):*
+  1. The ring (done): -30% for ~0 ALM (i960_regs 1,023 -> 951 ALUTs, +85
+     registers), 0 M10K.
+  2. A 2-way 8 KB i-cache (modelled: misses 4.46% -> 2.79% of requests,
+     the same as 16 KB 2-way; 16 KB direct 4.01%, 32 KB direct 1.99%): ~-7%,
+     0 M10K, but the tag word grows past an MLAB's 20 bits (16 -> 32 MLABs,
+     ~+160 ALM-equivalent) plus the way logic, inside i960_icache's R812 /
+     R817 machinery. NOT DONE -- the best remaining ratio if ALMs allow.
+  3. Fills from the bridge's line in one step (export the CPU-side `lb` with
+     its acknowledge): words 2-4 of an i-cache fill and a data cache with
+     LINE allocation (1 KB ~60% hit instead of 29%). ~-4% (i-fetch) + ~-3%
+     (data) for a bridge port (the bridge is shared with main) and the fill
+     sequencing. NOT DONE.
+  4. The data cache as built: -3% for 1 M10K + ~86 ALUTs + 2 MLABs. Done.
+  5. The two-word instructions' displacement from a second i-cache read port
+     (the data array as true dual port, same 8 M10K): ~-7% est., a change to
+     the front end that R812 / R817 show is easy to get wrong. NOT DONE.
+  6. A CPU-side store buffer (stores retire in a cycle, loads that hit the
+     data cache pass them): ~-5% est., ordering logic. NOT DONE.
+  7. The i960 on clk_sys behind a clock enable (no crossing at all: R729's
+     ~5-cycle toll gone from every access): the largest (most of T_MEM_W
+     and the fill time), a multicycle timing-closure project. NOT DONE.
+  Area for the two done: whole-design quartus_map 17.0 (2A): ALMs needed
+  40,047 -> 40,091 (+44), registers 48,006 -> 48,100, block bits 4,564,464
+  -> 4,572,656 (+one M10K: 547 -> 548 of 553 at s1298's fit); i960_top
+  11,708 -> 11,705 ALUTs; inference checked in the map report (rcache 32 x
+  128 MLAB, the dcache's tags 64 x 15 MLAB, its data 256 x 32 M10K).
+
+*Checks:* test_i960_regs (MAME rule, directed depths to 20 and flushreg at
+0-12) and test_i960_regs_ring (ring of 8 and of 4 against the reference's
+new ring, I960_RING) PASS, three ring mutants killed; test_i960_regs_miter
+PASS; whole-CPU lockstep test_i960_top / _irq / _lat / _fx / _vc / _fr PASS
+(MAME rule), test_i960_top_ring (the F2A lockstep, the interrupt soak, latency
+7 and 40, ring of 8 and of 4, against the reference's ring) PASS;
+test_i960_dcache (transparency against a flat memory with another master
+rewriting buffer RAM, latency 0..4 and 0..40, both array forms) PASS, six
+mutants killed (one survived the lockstep and is why the unit bench exists);
+test_i960_top_dc (the lockstep with every address below 0x800000 cached,
+DC_TEST) PASS, three mutants killed; test_i960_icache PASS. lint_top clean on
+2A and -DM2_NO_2A; lint_idx nothing in the i960; quartus_map --analyze_file
+0 errors on i960_regs, i960_dcache, i960_top, Model2.sv. The whole-core race
+against MAME (rally_ai_check align, MAME 0.289's APLOG with the same
+inputs, regenerated: AP_FROM=20.31 reproduces R926's insched_e8 line for
+line): slots 4-7, the far opponents, are MAME's states throughout in every
+run (bench to frame 2,520: 849-952 states each); the near ones leave MAME's
+sequence where their row first differs from MAME's -- and that is later now:
+at the board clock with latency 12, slot 1 (nearest at the start) leaves at
+frame 1197 before, 1680 with the ring, and is still on MAME's sequence where
+the ring + data cache run stopped (341 states, frame ~1490). AI steps the
+velocity does not explain: 0 in every run (MAME 0).
+The original core (M2_NO_2A) builds with RC_RING = 0 and DC_LINES = 0: its
+i960 is the MAME-rule one, unchanged.
+
+*What the board should show:* Sega Rally, first course, the start and
+catching the first opponent: fewer blinking / clipped opponents than
+Model2A_20261021d (not none -- see the board-clock rows); the frame rate
+equal or better everywhere. VF2, Manx TT, Virtua Cop 2, Zero Gunner, DOA and
+the large-layout games unchanged in behaviour (the i960 is only faster). A
+probe of [0x20aac0] on the overlay (R926's suggestion) would give the
+board's rows and settle how far it is from MAME's.

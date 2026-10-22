@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-22: branch i960-speed -- the 2A i960's speed for Sega Rally's AI budget (R927). NOT PUSHED, NOT FITTED
+
+WHAT: two 2A-only i960 changes, each behind a Model2.sv macro, both on:
+M2_2A_I960_RING -- the local-register cache as the chip keeps it, a ring of 8
+saved frames that goes to memory only when a call finds it full (i960_regs
+RING; MAME's rule sent every frame deeper than four out and back: 97.6% of
+Rally's race calls); M2_2A_I960_DC -- i960_dcache, 1 KB on the CPU's side of
+the bridge for board / work RAM (one M10K), hits in 2 cycles, word allocation,
+write-through. The original core (M2_NO_2A) keeps MAME's rule and the old bus.
+MEASURED (whole-core bench, Rally's window 0x5a0490 -> 0x5bade8): CPI 10.27
+-> 7.16 (ring) -> 6.97 (+ data cache), window -32%. Board clock ratios
+(M2_BOARDCLK), race start (vblanks 1200-1490): with SDRAM latency 12 (the
+bench setting that reproduces R926's inferred board rows 0-2) rows 0-3 ->
+3-8, row 8 in 0 -> 122 of 291 frames (MAME 225), the timer read p50 7.6 ->
+4.8 ms (MAME 3.8); with latency 6 rows 2-6 -> 5-8, row 8 in 181.
+VF2 foreground -6.8%, Manx TT race frame -14.4%, flips unchanged (bench).
+ROW 8 EVERYWHERE IS NOT REACHED: what is left is the bridge crossing on every
+access (~5 cycles a hit), i-cache misses (4.7%, ~25 cycles each) and the
+front end's 2-cycle taken branch / two-word instruction. Ranked next steps in
+R927 (2-way i-cache ~-7% for ~+160 ALM; a bridge line port; the i960 on
+clk_sys behind an enable -- the big one).
+CORRECTION TO R926: the 8 KB i-cache in i960_top caches work-RAM code too;
+R728's program-ROM-only cache is the bridge's, off since R733.
+RISK TO CHECK ON THE BOARD: the ring changes only the 16-word register save
+areas' memory contents (undefined until flushreg on the chip); VF2's
+coroutine was checked (explicit stores, normal ret), the other 2A games were
+not -- a game reading its own save area without flushreg would misbehave
+with RING and not without. "M2_2A_I960_RING=0" / "M2_2A_I960_DC=0" isolate.
+CHECKS: i960 suites all PASS (MAME-rule lockstep unchanged; new ring and
+data-cache lockstep / unit benches with mutants); lint_top 2A and M2_NO_2A
+clean; lint_idx clean in i960; analyze_file 0 errors; quartus_map 17.0 2A:
+40,047 -> 40,091 ALMs needed, +94 registers, +1 M10K (548/553 expected).
+TOOLS: tb_m2_boot 'P' lines + sim/io/i960_prof.py (CPI by cause, cache
+models), M2_BOARDCLK / TMR_BOARD, harness RC_* / DC_* parameters (defaults
+off: the bench is still R926's core unless -G'd). Data:
+sm2-builds/r927-data (bench logs, MAME budget tap, ROM-derived images).
+Next free R numbers: R928 on (R920 / R924 on local branches).
+
 ## 2026-10-22: branch rally-ai -- Sega Rally's glitching opponents (GitHub #19, R926). NOT PUSHED, NO RTL CHANGE
 
 CAUSE (MAME-verified mechanism; the board's numbers NOT measured): the game
