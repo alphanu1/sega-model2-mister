@@ -44108,3 +44108,9 @@ the copro FIFOs / buffer RAM and the geometry walk.
 *CORRECTION (Ben, 2026-10-22):* HOUSE OF THE DEAD'S 15 kHz WORKS -- the
 black screen with a row of dots above was a user mistake, not the core.
 The "15 kHz MRA shows no picture" entry is withdrawn; nothing to fix.
+*FIT, round 3 (47a2168):* s1358 clk_sys -0.257 / clk_mem -0.158; s1359
+-0.324 / -0.299; s1360 -0.596 / -0.259; i960 +0.76..+1.72, hold +0.24.
+Nine seeds of this RTL: none clean, s1356 (-0.126) the best. Sweeping
+stops here: the next 2C RTL (R935's logrl, House of the Dead's lockup)
+changes the netlist anyway, so the clean-seed hunt moves to that commit.
+The m2c-probe build was cancelled before it started (R935 found the cause).
