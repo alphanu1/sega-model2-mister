@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-22 (late night): House of the Dead on 2C -- branch hotd-shadow (off model2c 47a2168), R935. LOCAL ONLY, NOT FITTED
+
+BUILD TO FIT: hotd-shadow HEAD with Model2.qsf + "M2_2C=1", "M2_NO_2A_MANX_MOTION=1".
+LOCKUP AT THE STONE WALL (s1356, s1350): the 2C i960 trapped on logrl (0x69.2,
+y * log2 x), first executed at pc 0x0006a15c, 68.67 s of the scripted MAME play
+= the wall with the leaping creature. Only trap in 240 s (178 forms, 332
+variants, formcheck 2C). Not the TGPx4 (MAME interpreter 551 M words 0 bad;
+RTL lockstep over the courtyard 86.3 M words, 4.06 M outputs equal; no
+CLRF / FLOG / PDR / DDR; the i960 never polls the FIFO status). Probe on the
+old build should show: i960 halted, trap 1, trap_op 0x69, IP 0x0006a15c.
+FIX (01c0425 + 54fa939 + c8e9af1): logrl as microcode on R845's sequencer,
+2C only (i960_fptrans LOG, i960_fptrans_rom_log.svh, 465 / 512 words): LDE /
+LDM loads, the atan series reused as atanh, double-double, correctly rounded
+(6,000 / 6,000; MAME's glibc differs on 1, not CR there). Benches: fptrans
+2A 20,000 and LOG 25,000 vectors exact, planted fault caught; new
+test_i960_top_c2 2 x 20,000 programs, 1,878 logrl, 0 mismatches; forced
+off fails; all i960 suites pass. lint 2A / 2C no new warning; lint_idx same.
+quartus_map: 2A identical entity by entity (39,955 ALM); 2C +26 ALM, no
+M10K / DSP / register change.
+SHADOW (s1350): MAME draws the courtyard's shadows as hard-edged dark
+polygons too -- ground pieces with a darker colour base (0x8f00 / 0x8b00),
+not an effect. On MAME's lists the core's geometry (12 walks) and raster
+(two frames) draw them as MAME, also with the quad store stalling at random;
+the TGPx4 is exact; the i960 ring has 0 hazards (MAME with the ring
+modelled); a 10 MHz i960 in MAME keeps the scenery together. The SLIDING IS
+NOT REPRODUCED. Image: scratchpad hotd_shadow/shadow_compare.png (not in git).
+Side finding, not fixed: GEO_LIST_WIN 4,096 < HOTD's 4,6 K-dword lists, so a
+late walk's tail (effects only here) is not held; 8,192 would fit HOTD.
+TOOLS: sim/io/mame_m2_hotd_play.lua (scripted player), sim/io/mame_i960_ring.patch,
+sim/video/m2_scenery_check.py, tb_m2_boot M2_LISTDUMP, tb_m2_geodiff M2GD_QSTALL.
+Captures (ROM-derived, git-ignored): build/r935cap/court (50 s), build/r935cap/long (240 s).
+STILL RUNNING when written: tgpx4_replay over build/r935cap/long (log
+build/r935cap/long_replay.log); tb_m2_boot 2C attract with list dumps
+(build/r935boot, to frame 5300) -- then run m2_scenery_check.py on build/r935boot/lists/t*.
+NEXT: fit; Ben: play past the stone wall; the courtyard shadow with the buffering /
+frame-skip OSD changed, and a short video of it.
+Next free R numbers: R936 on.
+
 ## 2026-10-22 (night): the 2C build's timing -- branch m2c-timing (off model2c 648ecb9), R934. LOCAL ONLY, NOT FITTED
 
 BUILD TO FIT: m2c-timing HEAD with Model2.qsf + VERILOG_MACRO "M2_2C=1" and

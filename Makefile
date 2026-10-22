@@ -867,6 +867,17 @@ obj_i960_fptrans/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fpt
                                         sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 	$(VBUILD) --top-module i960_fptrans_harness -CFLAGS "-O2" --Mdir obj_i960_fptrans -o Vi960_fptrans_harness \
 	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
+# R935: the 2C build's program (LOG: logrl, House of the Dead), 25,000 vectors
+# -- every fifth one logrl, the other four as above.
+.PHONY: test_i960_fptrans_log
+test_i960_fptrans_log: obj_i960_fptrans_log/Vi960_fptrans_harness
+	@echo "== test i960_fptrans LOG (the 2C program: + logrl, R935)"
+	@python3 -I tools/i960_fptrans.py --log --vec obj_i960_fptrans_log/vec.txt 25000
+	@./obj_i960_fptrans_log/Vi960_fptrans_harness +vec=obj_i960_fptrans_log/vec.txt
+obj_i960_fptrans_log/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
+                                        sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
+	$(VBUILD) --top-module i960_fptrans_harness -GLOG=1 -CFLAGS "-O2" --Mdir obj_i960_fptrans_log -o Vi960_fptrans_harness \
+	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 # The ROM is generated: tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
 
 # R839: the same lockstep on a VC=1 build with vc_en high (+vc): sqrtrl,
@@ -878,6 +889,16 @@ test_i960_top_vc: obj_i960_top_vc/Vi960_top
 obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
 	  --Mdir obj_i960_top_vc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R935: the 2C build's i960 (C2=1 with VC, FR, F2A: Model2.sv's M2_2C) -- the
+# VC and F2A mixes and logrl. Forced off: +c2 on obj_i960_top_vc (C2=0) must FAIL.
+.PHONY: test_i960_top_c2
+test_i960_top_c2: obj_i960_top_c2/Vi960_top
+	@echo "== test i960_top C2 (the 2C build: + logrl, R935)"
+	./obj_i960_top_c2/Vi960_top +vc +fx +c2 $(TEST_ARGS)
+obj_i960_top_c2/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 -GFR=1 -GF2A=1 -GC2=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
+	  --Mdir obj_i960_top_c2 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # R865: flushreg alone (FR=1, VC=0) with vc_en high (+fr): the 2A games' form
 .PHONY: test_i960_top_fr

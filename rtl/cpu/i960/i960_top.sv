@@ -673,8 +673,8 @@ module i960_top #(
   wire  [63:0] u_a     = tr_on ? tr_opa : fp_b;
   wire  [63:0] u_b     = tr_on ? tr_opb : fp_a;
   generate if (TRB) begin : g_trans
-    i960_fptrans u_trans (
-      .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry),
+    i960_fptrans #(.LOG(C2)) u_trans (   // R935: LOG, logrl on the 2C build
+      .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry), .lg(tr_log),
       .x(fp_a), .y(fp_b),
       .act(tr_act), .opa(tr_opa), .opb(tr_opb),
       .add_req(tr_add_req), .mul_req(tr_mul_req), .div_req(tr_div_req), .sub(tr_sub),
@@ -764,6 +764,7 @@ module i960_top #(
   logic fp_is_cvtil;                             // R930: cvtilr (Over Rev)
   /* verilator lint_off UNUSEDSIGNAL */
   logic [1:0] tr_entry;                          // read only when TRB
+  logic       tr_log;                            // R935: logrl (C2 only)
   /* verilator lint_on UNUSEDSIGNAL */
   wire  vc_on = VC && RL && vc_en;
   wire  fr_on = (VC || FR) && vc_en;               // R865: flushreg's dispatch
@@ -772,7 +773,7 @@ module i960_top #(
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
     fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
-    fp_is_trans = 1'b0; tr_entry = 2'd0;
+    fp_is_trans = 1'b0; tr_entry = 2'd0; tr_log = 1'b0;
     fp_is_rem = 1'b0;
     fp_is_mvre = 1'b0;
     fp_is_cvtil = 1'b0;
@@ -788,6 +789,12 @@ module i960_top #(
         4'h0: begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_entry = 2'd3; end   // atanrl
         default: ;
       endcase
+    end
+    // R935: logrl, set_rifl(t2f * log2(t1f)) -- the 2C build only (House of
+    // the Dead, from its stone-wall section: the trap stopped the game). The
+    // sequencer's entry 4 (i960_fptrans LOG); C2 = 0 folds this away.
+    if (C2 && vc_on && d_op == 8'h69 && d_op2 == 4'h2) begin
+      is_rl = 1'b1; fp_is_trans = 1'b1; tr_log = 1'b1;
     end
     // R839: get_1_rifl -> sqrt -> set_rifl; cpysre: |src1| with src2's
     // "sign" as MAME tests it (src2 >= 0.0, so -0.0 counts as positive and a

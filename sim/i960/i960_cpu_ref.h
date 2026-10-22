@@ -45,6 +45,7 @@ struct Cpu {
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   bool ref_fr = false;            // R865: i960_top FR with vc_en -- flushreg alone
+  bool ref_c2 = false;            // R935: i960_top C2 (with VC, vc_en) -- logrl
   bool ref_f2a = false;           // R869: i960_top F2A with vc_en -- cvtzril, cpysre, atanr, sinr, remr; R887 tanr; R903 cosr
   // R845: sinrl / cosrl / tanrl / atanrl computed with the host's libm, as
   // MAME does. The module returns the correctly rounded value; libm is not
@@ -600,7 +601,8 @@ struct Cpu {
             IP = ip_next;
             break;
           }
-          const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690);
+          // R935: and logrl (0x69.2, set_rifl(t2f * log2(t1f))) on the 2C build
+          const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690 || (ref_c2 && k == 0x692));
           if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
               || ((ref_vc || ref_f2a) && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans) {   // R897: sqrtrl under F2A
             const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
@@ -634,6 +636,7 @@ struct Cpu {
                              : (k == 0x79c) ? fb * fa : (k == 0x79b) ? fb / fa
                              : (k == 0x69c) ? std::sin(fa) : (k == 0x69d) ? std::cos(fa)
                              : (k == 0x69e) ? std::tan(fa) : (k == 0x690) ? std::atan2(fb, fa)
+                             : (k == 0x692) ? fb * std::log2(fa)
                              : (k == 0x698) ? std::sqrt(fa)
                              : (k == 0x6e2) ? ((fb >= 0.0) ? std::fabs(fa) : -std::fabs(fa))
                              : fa;
