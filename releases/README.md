@@ -253,11 +253,10 @@ anything you find.
   unchanged. (`Model2_20261022`.)
 - **Gun flash for CRT light guns (Virtua Cop).** On each shot the game flashes
   the screen white for a frame, so a CRT light gun such as the GunCon 2 can
-  see where it's aimed (GitHub #13). A new `Gun flash` setting: `Arcade`
-  (default, the game's own flash), `CRT gun` (a longer flash, with the
-  trigger held back three frames so the gun has time to read the screen; for
-  a GunCon 2) or `Off` (no flash at all, for Sinden, mouse or stick players).
-  Not yet tested with a GunCon 2: reports very welcome.
+  see where it's aimed (GitHub #13). The core didn't show it before. A new
+  `Gun flash` setting: `Arcade` (default, the game's flash) or `Off` (no
+  flash at all, for Sinden, mouse or stick players). Not yet tested with a
+  GunCon 2: reports very welcome.
 - **Link play for Daytona USA (experimental).** Race other cabinets over your network:
   MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
   link board is switched on in the OSD (`Link board`, Daytona only, Off by
@@ -324,7 +323,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
-| `Gun flash` | Virtua Cop only: `Arcade` (default), `CRT gun` or `Off` — the white flash on a shot, for CRT light guns |
+| `Gun flash` | Virtua Cop only: `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
 | `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 

@@ -99,7 +99,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `define M2_VCOP_GUN
 `endif
 // R929: M2_VCOP_FLASH: Virtua Cop's gun flash as whole white frames, and its
-// OSD line (Gun flash: Arcade / CRT gun / Off; rtl/video/m2_gun_flash.sv).
+// OSD line (Gun flash: Arcade / Off; rtl/video/m2_gun_flash.sv -- its CRT gun
+// mode is left unselectable: Ben, "we should not need the long CRT flash").
 // Needs the guns. VERILOG_MACRO "M2_NO_VCOP_FLASH=1" (or -DM2_NO_VCOP_FLASH
 // to lint) builds without it -- the core before R929 exactly, CONF_STR
 // included.
@@ -338,7 +339,7 @@ localparam CONF_STR = {
 	// white from the trigger, the pull held back from the game three frames,
 	// through the game's flash (CRT gun: a GunCon on a CRT needs several fields
 	// of light before its aim is good); or none at all (Off: Sinden / mouse).
-	"h1O[66:65],Gun flash,Arcade,CRT gun,Off;",
+	"h1O[66],Gun flash,Arcade,Off;",
 `endif
 `endif
 	"R[0],Reset and close OSD;",
@@ -6676,7 +6677,7 @@ wire       tile_hs, tile_vs, tile_hb, tile_vb;
 `ifdef M2_VCOP_FLASH
 wire       gf_white;
 m2_gun_flash u_gun_flash (   // gf_trig_n is declared with the guns (it feeds the I/O board)
-	.clk_sys(clk_sys), .rst_sys_n(cpu_rst_n), .en(vc_gun), .mode(status[66:65]),
+	.clk_sys(clk_sys), .rst_sys_n(cpu_rst_n), .en(vc_gun), .mode({status[66], 1'b0}),   // Ben: no CRT gun mode -- Arcade or Off
 	.cpu_tram_we(cpu_tram_we), .cpu_tram_addr(cpu_oc_addr), .cpu_tram_din(cpu_oc_din),
 	.trig_n(vc_in1[1:0]), .trig_game_n(gf_trig_n),
 	.clk(clk_mem), .rst_n(mem_rst_n), .vb(tile_vb), .tram_addr(tram_addr),

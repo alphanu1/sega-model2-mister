@@ -37118,3 +37118,14 @@ is held off for them).
 (joystick_3 bit 0 from their patched Main, which holds the trigger and the
 aim itself) as one more source of white. Virtua Cop 2 on the 2A core needs
 the same module (the same table; its triggers come through the 315-5649).
+
+**R929 (board) -- THE WHITE FLASH IS NEEDED IN THE CORE; THE CRT GUN MODE IS
+DROPPED.** Ben, 2026-10-22: Virtua Cop on the earlier main builds did NOT
+flash on a shot on the board (as GitHub #13 said), although R929's bench of
+m2_video drew the game's own white frame from MAME's state -- so the board's
+tile path loses it somewhere the bench does not model; m2_gun_flash's Arcade
+mode (white at the output on the game's request) shows the flash on the board
+(s1332). House of the Dead (2C, game's own flash) flashes on its core without
+it. Ben: "we should not need the long CRT flash" -- the OSD is now Gun flash
+Arcade / Off (O[66]; the module's CRT-gun path is left unselectable). Why the
+tile-path flash is lost on the board is not yet known.
