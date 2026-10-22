@@ -6,7 +6,8 @@ Ben on s1350 (test build, clk_sys -1.176): Over Rev's road looks good (R932
 confirmed). Over Rev race: 4-5 slowdowns, two lasting a few seconds -- OK
 for a 2C beta, noted as current performance, investigate later. HOTD: full
 speed, plays well; some shadows are plain rectangles, only in the outside courtyard scene
-(the mansion's shadow, Ben; other shadows fine; open, compare MAME).
+(the mansion's shadow, Ben: its pieces slide at different speeds and meet
+up -- geometry, not texture; other shadows fine; open, compare MAME).
 In flight: branch stcc (Sega Touring Car Championship, R933) and branch
 m2c-timing (2C clk_sys closure, R934). Ben: three 2C games with clean timing
 = a 2C beta (HOTD, Over Rev, STCC). model2c stays local until Ben says.

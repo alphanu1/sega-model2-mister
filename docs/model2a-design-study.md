@@ -43797,6 +43797,10 @@ House of the Dead on the same build: full speed, plays well, but some
 shadows draw as plain rectangles, out of place (Ben's grab: plain dark
 quads on the ground). Only in that outside scene (the courtyard in the
 grab) -- Ben: the other shadows look right, and this one looks like the
-MANSION'S shadow cast on the courtyard, so it is one model or
+MANSION'S shadow cast on the courtyard, and IT MOVES WRONGLY: like
+several shadows sliding at different speeds and then meeting up (Ben) --
+so not a texture / translucency question first but the pieces' geometry
+(the shadow's projection per part: TGPx4 results -- note R924's lockstep
+leaves CLRF, FLOG and PDR / DDR untested -- or the i960's side). It is one model or
 texture, not shadows in general. Not looked at; compare with MAME's hotd frames
 (shadow polygons' texture / translucency) before guessing.
