@@ -78,6 +78,19 @@ static int TPL = 400;
 // sheets, 16-bit words, word i = the i-th halfword of MAME's u32 array).
 static std::vector<uint32_t> g_tex[2];
 static uint32_t g_tbase1 = 0;
+// R925: Model2.sv's luma-row map (g_r3d_lut lslot), mirrored: {captured,
+// slot[2:0]} -- rows 0-3 and 16-19 captured, any other row the slot it
+// aliases. M2_R3D_LROWS=<r0,..,r7> overrides it with a list (slot = position;
+// a row not listed takes slot 0).
+static int lslot_tb(int r) {
+  static bool init = false; static int lrows[8]; static int nl = 0;
+  if (!init) {
+    init = true;
+    if (const char *l = std::getenv("M2_R3D_LROWS")) { const char *q = l; while (*q && nl < 8) { lrows[nl++] = std::atoi(q); q = std::strchr(q, ','); if (!q) break; ++q; } }
+  }
+  if (nl) { for (int k = 0; k < nl; k++) if (lrows[k] == r) return 8 | k; return 0; }
+  return ((((r >> 5) & 7) == 0 && ((r >> 2) & 3) == 0) ? 8 : 0) | (((r >> 4) & 1) << 2) | (r & 3);
+}
 // R669: M2_R3D_TEXSWAP=<core cycle> -- A TEXTURE UPLOAD, as the game makes at a
 // scene change (MAME: ~420 K words of sheet 0 at once). From that cycle, over
 // M2_R3D_TEXSWAPLEN cycles, each word of both sheets changes from A (MAME's) to
@@ -169,6 +182,9 @@ int main(int argc, char **argv) {
   // R828b: the mip rule in a MIP build (0 Off, 1 Smooth, 2 Medium, 3 Sharp);
   // 0 unless M2_R3D_MIPMODE says, so a MIP build with no setting draws level 0
   d->tex_mip_mode = std::getenv("M2_R3D_MIPMODE") ? std::atoi(std::getenv("M2_R3D_MIPMODE")) : 0;
+#ifdef R3D_TEXLUT
+  d->lut_en = std::getenv("M2_R3D_LUT") ? 1 : 0;   // R925: Model2.sv's lut_en (Virtua Cop, Desert Tank)
+#endif
   d->fb_test = 0;   // R653: set by M2_R3D_FBTEST below
   d->fb_pace = std::getenv("M2_R3D_PACE") ? std::atoi(std::getenv("M2_R3D_PACE")) : 0;   // R656
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;
@@ -817,6 +833,20 @@ int main(int argc, char **argv) {
 #ifndef R784_OLD
       d->tex_gamma = GSEL;
 #endif
+#ifdef R3D_TEXLUT
+      // R925 (R867): the colour path's shadows, written as Model2.sv's snoop
+      // writes them -- every row it would capture, in the CPU's ascending
+      // order, into its slot; the 3D palette; the colour table at luma 0-63.
+      // M2_R3D_LUT=1 is lut_en (Virtua Cop, Desert Tank); unset, Daytona's.
+      auto lw = [&](int sel, int a, int v) { d->lut_we = 1; d->lut_sel = sel; d->lut_addr = a; d->lut_data = v; tick(); };
+      for (int r = 0; r < 256; r++) { const int ls = lslot_tb(r); if (ls & 8) for (int i = 0; i < 128; i++) lw(0, ((ls & 7) << 7) | i, lram[r * 128 + i]); }
+      for (int i = 0; i < 1024; i++) lw(1, i, pal[0x1000 + i] & 0x7fff);
+      for (int ch = 0; ch < 3; ch++) for (int c5 = 0; c5 < 32; c5++) for (int l = 0; l < 64; l++)
+        lw(2, (ch << 11) | (c5 << 6) | l, xl[ch * 0x2000 + (c5 << 8) + l] & 0xff);
+      d->lut_we = 0;
+      std::printf("  R925 TEXLUT: luma rows%s, 3D palette and colour table written; lut_en %d\n",
+                  std::getenv("M2_R3D_LROWS") ? " (M2_R3D_LROWS)" : " 0-3, 16-19", (int)d->lut_en);
+#endif
     }
     // m2_geo_engine's gam(): sel 0 MAME (bias 64), 1 Mild (bias 32), 2/3 Off
     auto gam_rtl = [](int v, int sel) -> int {
@@ -958,7 +988,21 @@ int main(int argc, char **argv) {
       d->q_tex = NOTEX ? 0u : (tex & 0xffffff); d->q_col = ((uint32_t(p.idx) & 31) << 19) | (((uint32_t(p.idx) >> 5) & 63) << 10); d->q_moire = (tex >> 11) & 1;   // R623
       if (REALCOL) {   // R784: the real colour, and bit 11 as Model2.sv packs it
         d->q_col = eng_col(p);
-#ifndef R784_OLD
+#ifdef R3D_TEXLUT
+        // R925: as Model2.sv packs it. lut_en: a textured quad carries {luma,
+        // colour base} and the row's slot. A flat one, and every quad without
+        // lut_en, RGB565 (the store's RAWCOL keeps 17 raw bits).
+        { const uint32_t cb = (p.h3 >> 6) & 0x3ff, c = d->q_col;
+          if (d->lut_en && !NOTEX && (tex & 1)) {
+            d->q_col = ((p.luma & 0xff) << 9) | (cb >> 1);
+            d->q_tex = (uint32_t(lslot_tb(int(p.h1 & 0xff)) & 7) << 24) | (tex & 0xfff7ffu) | ((cb & 1u) << 11);
+          } else {
+            d->q_col = (((c >> 19) & 31) << 11) | (((c >> 10) & 63) << 5) | ((c >> 3) & 31);
+            d->q_tex = NOTEX ? 0u : d->lut_en ? (tex & 0xfff7ffu)
+                                             : ((tex & 0xfff7ffu) | (((p.h1 & 0xff) == 1) ? 0x800u : 0u));
+          }
+        }
+#elif !defined(R784_OLD)
         if (!NOTEX) d->q_tex = (tex & 0xfff7ffu) | (((p.h1 & 0xff) == 1) ? 0x800u : 0u);
 #endif
       }

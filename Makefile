@@ -400,7 +400,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_comm test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_comm test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_lut0 test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_geo_engine_lut test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -1467,6 +1467,17 @@ obj_spantex_mip/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.
 	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP) -DTB_MIP" \
 	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 
+# R925: the TEXLUT build with lut_en low (Daytona's state on main) must be
+# R784's unit exactly -- the same checks as test_m2_span_tex, lut_en tied 0.
+test_m2_span_tex_lut0: obj_spantex_lut0/Vm2_span_tex
+	@echo "== test m2_span_tex, TEXLUT build with lut_en low (R925)"
+	@./obj_spantex_lut0/Vm2_span_tex
+obj_spantex_lut0/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
+	  -GPIXSTEP=$(PIXSTEP) -GTEXLUT=1 --Mdir obj_spantex_lut0 -o Vm2_span_tex \
+	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP)" \
+	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+
 test_m2_handshake_cdc: obj_hscdc/Vm2_handshake_cdc
 	@echo "== test m2_handshake_cdc (protocol only -- see the header on what a bench cannot prove)"
 	@./obj_hscdc/Vm2_handshake_cdc $(TEST_ARGS)
@@ -1681,6 +1692,17 @@ obj_m2_geo_engine/Vm2_geo_engine_top: rtl/video/m2_geo_engine.sv rtl/video/m2_ge
 test_m2_geo_engine: obj_m2_geo_engine/Vm2_geo_engine_top
 	@echo "== test m2_geo_engine (object_data -> quads: vertex order, links, rope)"
 	@./obj_m2_geo_engine/Vm2_geo_engine_top
+
+# R867 / R925: the engine's TEXLUT build -- every check with lut_en low (R784's
+# engine, Daytona's), then a textured polygon's colour base with it high
+test_m2_geo_engine_lut: obj_m2_geo_engine_lut/Vm2_geo_engine_top
+	@echo "== test m2_geo_engine TEXLUT (R925: lut_en low as R784; high, the colour base for the pixel path)"
+	@./obj_m2_geo_engine_lut/Vm2_geo_engine_top
+obj_m2_geo_engine_lut/Vm2_geo_engine_top: rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv $(GEO_RTL) sim/video/geo_engine_top.sv sim/video/tb_m2_geo_engine.cpp
+	$(VBUILD) --top-module m2_geo_engine_top -GTEXLUT=1 -CFLAGS "-O2 -DTB_TEXLUT" $(TGPFLAGS) -Irtl/tgp -Irtl/video \
+	  --Mdir obj_m2_geo_engine_lut -o Vm2_geo_engine_top sim/video/geo_engine_top.sv \
+	  rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv $(GEO_RTL) \
+	  sim/video/tb_m2_geo_engine.cpp
 
 # The clipper has its own top: it drives m2_geo_project as well as the pool.
 obj_m2_geo_clip/Vtb_clip_top: rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_clip_top.sv sim/video/tb_m2_geo_clip.cpp

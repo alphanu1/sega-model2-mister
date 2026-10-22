@@ -192,7 +192,7 @@ module geodiff_top #(
     .a_bottom(a_bottom), .a_top(a_top),
     .tha(obj_tha), .tpa(obj_tpa), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .col_inval(1'b0), .tex_lum(2'd2), .gamma_sel(2'd2), .mem_space(mem_space), .dbg_col_miss(),
+    .col_inval(1'b0), .tex_lum(2'd2), .gamma_sel(2'd2), .tex_off(1'b0), .lut_en(1'b0), .mem_space(mem_space), .dbg_col_miss(),
     .q_valid(q_valid), .q_ready(q_ready),
     .q_x0(q_x0), .q_y0(q_y0), .q_x1(q_x1), .q_y1(q_y1),
     .q_x2(q_x2), .q_y2(q_y2), .q_x3(q_x3), .q_y3(q_y3),
@@ -200,7 +200,7 @@ module geodiff_top #(
     .q_u0(q_u0), .q_v0(q_v0), .q_u1(q_u1), .q_v1(q_v1),
     .q_u2(q_u2), .q_v2(q_v2), .q_u3(q_u3), .q_v3(q_v3),
     .q_tex(q_tex), .q_lum(q_lum),
-    .q_tlinv(),   // R784
+    .q_tlinv(), .q_trow(),   // R784, R867
     .q_mipz(q_mipz),   // R828c
     .q_frac(q_frac),
     .q_col(q_col), .q_z(q_z),

@@ -22,6 +22,46 @@ cores (Ben: 2A "out of beta now", only a few bugs remain). model2a is NOT
 merged into main -- only its release files were copied. model2a's own
 releases/ is unchanged. Not pushed (Ben).
 
+## 2026-10-21 (night, 2): branch vcop-luma -- Virtua Cop's black clouds (GitHub #10 item 3), R925. NOT PUSHED, NOT FITTED
+
+On main d7182e9 (link play), worktree sm2-builds/vcop-luma:
+  * e0d30fa  R909's levers on main, nothing computed changes: AUTO_SHIFT_
+    REGISTER_RECOGNITION OFF on emu (the TGP ALU's 3 x 115 chain, the
+    synchronizers, the pool's fp_add exponent: 5 M10K), the clipper's
+    sk_mem and span_tex's of_x to MLAB (6). 11 M10K freed.
+  * 48b7d74  the 2A branch's TEXLUT (R867 / R900) on main, SELECTED AT RUN
+    TIME: lut_en = is_vcop || is_desert (Model2.sv); Daytona keeps R784's
+    path cycle for cycle. 9 M10K. M2_NO_TEXLUT builds it out.
+  * study R925, this note.
+CAUSE: the clouds are textured polygons on luma row 16 (49 + i/8; L 48-62,
+where Virtua Cop's colour table has a second region). R784's model is
+Daytona's tables and takes row 16 as row 0 (t/4): black bodies, white edges
+-- the bench paints the board's photo. The same fault washes Virtua Cop's
+ground light blue and Desert Tank's whole picture (rows 0, 11, 30-40, i/3).
+EVIDENCE (tb_m2_raster3d, main's configuration, MAME 0.289 dumps): Daytona
+lut_en 0: pixel hash + draw cycles identical on nine frames (Sharp and mip
+Off). Virtua Cop f4205 63.04 -> 5.92 / 255 (the clouds 167.8 -> 8.0), four
+more frames 36-63 -> 0.2-6.2; Desert Tank three frames 48-69 -> 5.7-13.2 at
+Sharp (3.5-9.6 at mip Off). Pixel-identical to the 2A branch's RTL on f4205.
+Side by side: the session scratchpad's issue10/issue10_vcop_clouds_sbs.png.
+AREA: quartus_map "ALMs needed" 39,964 (d7182e9) -> 40,134 (levers) ->
+40,399 (+435; the same RTL on 6e291cc mapped +222 -- the difference is i960
+map noise); M10K 553 -> 551 expected by s1287's fitter shapes; placed ALM
+estimated 41,290-41,570 (s1300: 41,120) -- AT RISK, the fit decides.
+FOUND, NOT CHANGED: Daytona is not exact under R784 either (lut_en forced
+on, Sharp: f2000 21.5 -> 5.5, f5000 24.1 -> 5.0); a one-line decision for
+Ben, judged on the board.
+WRONG TURNS: (1) a text replace put a comment in the middle of a line and
+commented out lp2_x / lp2_x1 -- the first lut_en run painted 384 pixels;
+the 2A RTL on the same frame found it. (2) The bench's job runner shifted
+one argument too many and dropped M2_R3D_MIPMODE: the first round ran at mip
+Off -- valid as the Off setting, re-run at Sharp. (3) main moved under the
+branch (R916, d7182e9) mid-task; rebased, the Makefile's test list merged by
+hand.
+NEXT: a fit (seed sweep -- 98% ALM); Ben on the board: Virtua Cop's wharf
+clouds white, the ground grey, the bars above and below the 3D black; Desert
+Tank's colours; Daytona exactly as Model2_20261021c.
+
 ## 2026-10-21 (night): main -- release Model2_20261021c (link play), NOT PUSHED
 
 Model2_20261021c.rbf = s1300 (link-play 1ce2d5d: main 6e291cc + R916),

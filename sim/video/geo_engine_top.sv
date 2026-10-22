@@ -5,7 +5,7 @@
 // Testing the sequencer with private arithmetic would prove something the real
 // thing does not do -- see rtl/video/m2_fp_pool.sv.
 `timescale 1ns/1ps
-module m2_geo_engine_top (
+module m2_geo_engine_top #(parameter bit TEXLUT = 1'b0) (   // R867
   input  logic clk, rst_n, start,
   input  logic [31:0] oba, obc,
   output logic busy,
@@ -25,6 +25,8 @@ module m2_geo_engine_top (
   input  logic col_inval,
   input  logic [1:0] tex_lum,
   input  logic [1:0] gamma_sel,        // R784: was tied to 0 (MAME's curve)
+  input  logic       tex_off,          // R867: TEXLUT only
+  input  logic       lut_en,           // R925: TEXLUT only
   output logic [1:0] mem_space,
   output logic [23:0] poly_col, output logic [1:0] poly_zmode, output logic [7:0] poly_luma, output logic [15:0] dbg_col_miss,
   input  logic [31:0] tpa, output logic [31:0] poly_uv0, poly_uv1, poly_uv2, poly_uv3,
@@ -40,7 +42,7 @@ module m2_geo_engine_top (
   logic        fadd_req, fadd_gnt, fadd_rsp;
   logic [31:0] fadd_a, fadd_b;
 
-  m2_geo_engine u_eng (
+  m2_geo_engine #(.TEXLUT(TEXLUT)) u_eng (   // R867
     .clk(clk), .rst_n(rst_n), .start(start), .oba(oba), .obc(obc), .busy(busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
     .foc_x(foc_x), .foc_y(foc_y),
@@ -59,7 +61,7 @@ module m2_geo_engine_top (
     .poly_attr(poly_attr), .nrm_x(nrm_x), .nrm_y(nrm_y), .nrm_z(nrm_z), .dbg_polys(dbg_polys), .dbg_objects(dbg_objects), .dbg_capped(dbg_capped), .dbg_culled(dbg_culled), .dbg_st(), .poly_prev_link(), .poly_chain_ok(),
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
-    .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .mem_space(mem_space),
+    .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .tex_off(tex_off), .lut_en(lut_en), .mem_space(mem_space),
     .poly_col(poly_col), .poly_zmode(poly_zmode), .poly_luma(poly_luma), .dbg_col_miss(dbg_col_miss),
     .tpa(tpa), .poly_uv0(poly_uv0), .poly_uv1(poly_uv1), .poly_uv2(poly_uv2), .poly_uv3(poly_uv3),
     .poly_tex(poly_tex), .poly_dotp()   // R828c: checked end to end by test_m2_geometry_mipz

@@ -36755,3 +36755,195 @@ on Ben's PC with link_framesync = 1 at both ends: Ben, "Daytona link play
 with sync on works at full frame". Framesync stays 0 by default (Ben).
 Released locally as Model2_20261021c; not pushed until Ben says.
 
+
+**R925 (main) -- VIRTUA COP'S BLACK CLOUDS (GITHUB #10, ITEM 3) ARE R872:
+THE CLOUDS ARE LUMA ROW 16, WHICH R784'S MODEL COLOURS AS DAYTONA'S ROW 0.
+FIXED BY THE 2A BRANCH'S TEXLUT ON MAIN, SELECTED AT RUN TIME FOR VIRTUA COP
+AND DESERT TANK; DAYTONA BIT FOR BIT AS RELEASED. ITS NINE M10K COME FROM
+R909'S LEVERS (ELEVEN FREED, NOTHING COMPUTED CHANGES): 553 -> 551 OF 553 BY
+THE FITTER'S SHAPES. NOT FITTED, NOT ON A BOARD.**
+
+(Sections: this one's R872 (the fault, recorded open), the 2A branch's R867 /
+R900 (the fix) and R909 (the M10K levers); 5.6 (M10K binds this core) and 7
+Tier 1 (no accuracy loss). Authority: MAME 0.289 model2rd.ipp
+draw_scanline_tex for what the pixel is -- a question of what the silicon
+computes; Model 1 (tools/model1-ref 0b5d04f, up to date) colours untextured
+polygons only, through color_xlat per polygon, and has no texel luma path to
+follow. Branch vcop-luma, rebased on main d7182e9 (R916 link play).)
+
+*The report (Ben's photo, the first stage's attract, the wharf):* blue sky,
+the clouds' bodies black and dark grey with white only at their edges; they
+should be white.
+
+*Believed:* R872 already named the cause for Virtua Cop's row 16 (164 / 255
+mean error) without saying what the row draws; the alternatives were
+translucency, a palette, or the colour translation table R907 moved to MLAB.
+
+*Measured (MAME 0.289 vcopa, M2DIFF frame 4205 of R912's session -- the
+wharf, clouds and all -- through tb_m2_raster3d in main's Model2.sv
+configuration: FTB, FB_DDR3 + wcomb, SPLIT_TRI, PXC, FRB 2, M2COV, TXLATE 3,
+TXNS / TXRSP 4, TXK 16, TXLW8, MIP 1 at Sharp, MIPZ 3, KW 20 with the window
+key, PXK 0, MAME's curve):*
+  1. THE CLOUDS ARE SIX TEXTURED, TRANSLUCENT POLYGONS (header 0x6011 /
+     0x0010 / 0x1e02-0x1f02 / 0x2480, luma 255) ON LUMA ROW 16. Virtua Cop
+     draws three rows in all (M2TEX survey: 420 s of attract and scripted
+     play, every 4th list: rows 0, 1 and 16, nothing else); its row 16 is
+     49 + i/8, a bright flat ramp, so L = 48..62 -- and its colour table
+     above luma 48 is a second region (232 for components 0-16, other values
+     above) that R784's straight line read at luma 32 cannot reach. R784
+     takes row 16 as row 0 (t/4): every cloud texel lands low on the line --
+     black bodies, white only where t is high, at the edges. The bench
+     paints exactly the board's picture.
+  2. NOT TRANSLUCENCY, NOT A PALETTE, NOT R907's TABLE: the same RTL with
+     MAME's own colour per pixel (the TEXLUT path below) paints MAME's
+     clouds; R907's table is the 2D layer's.
+  3. THE SAME FAULT COLOURS THE REST OF THE SCENE: the ground came out a
+     washed light blue (row 0 is i/3 on Virtua Cop, not Daytona's i/2), and
+     the black window-5 bars a grey. By the bench's colour measure (each
+     textured pixel against MAME's colour from MAME's own per-pixel luma,
+     max-channel error / 255, share over 32): f4205 row 0 56.1 / 82.6%, row 1
+     47.3 / 68.3%, row 16 167.8 / 100%.
+  4. DESERT TANK HAS THE SAME FAULT: rows 0, 11, 30-40 (survey as above),
+     all one table -- rows 0-65 but row 7 are i/3 -- coloured as row 0's i/2.
+  5. The luma RAM is written at boot and constant after it: lumaram.bin
+     identical in five Virtua Cop dumps (f1200-f6500) and three Desert Tank
+     ones (f2500-f11000).
+
+*THE FIX (the 2A branch's R867 / R900 TEXLUT, ported; m2_span_tex,
+m2_raster3d, m2_quad_store, m2_geo_engine, m2_geometry, Model2.sv):* per
+texel, MAME's
+    L = min(63, lumaram[row][t >> 1] * luma >> 8)
+    colour = gamma(colorxlat[ch][palette3d[base].c5[ch]][L])
+from three on-chip shadows written where the CPU's writes land in SDRAM
+(bridge port 1): eight luma rows (1 M10K), the 3D palette (2) and the colour
+table at luma 0-63 (3 x 2). Five stages after the retire, all moving on the
+output's handshake. The rows: slots {row[4], row[1:0]} (rows 0-3 and 16-19
+captured, any other row the slot it aliases) -- R867's map, exact for both
+games: Virtua Cop's 0, 1, 16 are captured rows, and every Desert Tank row
+used has the contents of the row it aliases (checked in all three dumps).
+  WHAT IS NEW ON MAIN -- A RUN-TIME SELECT. The 2A build has TEXLUT for every
+game; main must keep Daytona as released, so lut_en (Model2.sv, registered,
+= R3D_TEXLUT && (is_vcop || is_desert)) chooses per game:
+  * m2_span_tex: with lut_en low the five stages never fill (lp2_v gated),
+    and the output mux, in_ready, the emit's handshake (e_rdy), the done
+    count and wait_why are TEXLUT 0's expressions -- R784's unit cycle for
+    cycle.
+  * m2_geo_engine: the colour base (no palette or table read) and its
+    textures-Off handling only with lut_en; otherwise R784's slope.
+  * Model2.sv packs the quad by lut_en: TEXLUT's {luma, base} and slot, or
+    the slope as 565 with the row-1 flag in q_tex[11] and the slot bits 0
+    (the store's RAWCOL keeps 17 raw bits; 565 -> 888 on the way out as it
+    did). The store is TEXLUT's width for every game: att 29 -> 30, uvt 193
+    -> 195, vtx 104 -> 105 bits.
+  * M2_NO_TEXLUT builds TEXLUT 0 (the core before this, Ben's board-feature
+    rule).
+
+*THE M10K (Section 5.6: main was 553 / 553 at s1287 and s1300).* Priced by
+s1287's fitter RAM summary (each block below in a location of its own, none
+shared); s1300 (d7182e9) maps the same RAM set (its texoff_s chain one bit
+wider):
+    freed                                         s1287 blocks   now
+    emu AUTO_SHIFT_REGISTER_RECOGNITION OFF:
+      mb86233_alu pop.. 3 x 115 (the TGP ALU)            3       0 (registers)
+      emu texoff_s.. 3 x 13 (synchronizers)               1       0 (registers)
+      m2_fp_pool fp_add p_exp 3 x 12                      1       0 (registers)
+    m2_geo_clip sk_mem 20 x 163 -> MLAB                   5       0
+    m2_span_tex of_x 16 x 16 -> MLAB                      1       0
+                                                         11
+    spent: lr_mem 1024 x 8 (1), pal_mem 1024 x 15 (2), xr/xg/xb 2048 x 8
+    (2 each): 9. The lp2..lp4 stages would be a sixth shift-register block
+    without the attribute; with it they are registers. The store's wider
+    words stay in their blocks: att 30 bits is still six 2048 x 5; uvt 195 +
+    vtx 105 = 300 bits = 60 blocks a bank, as the 2A fit s1298 places them
+    (38 + 19 + 3 shared, 60 -- s1287 has 60 for 297 bits); cc_mem 256 x 33 ->
+    256 x 38 (the base's low bits now reach the quad; still one 256 x 40).
+    Expected 553 - 11 + 9 = 551 of 553. The fit confirms or corrects it.
+
+*quartus_map 17.0, whole design ("ALMs needed" / combinational ALUT /
+registers / block bits / DSP):*
+    d7182e9 (main, s1300's map)   39,964  56,947  48,825  4,584,575  94
+    + the levers (e0d30fa)        40,134  56,942  49,367  4,580,624  94
+    + TEXLUT (48b7d74)            40,399  57,267  49,759  4,670,992  98
+  The same RTL on 6e291cc (before R916) mapped 39,763 -> 39,985 (+222 for
+  both); on d7182e9 +435. The difference is the map's own noise: of the
+  TEXLUT step's +325 ALUT, i960_fpadd moved +92 and i960_top +43 with no
+  RTL change (R907 saw the i960 move +71 the same way); the change's own
+  are span_tex +42, the engine +25, the geometry's other +37, the top's
+  snoop and packing +61, store / fill / raster3d +30. The levers' +170 is
+  registers (+542: the TGP ALU's chain 341, the clipper's MLAB read 176) and
+  ten LABs of MLAB. DSP +4 (the luma product and the three curve products).
+  The same nine uninferred RAMs as main and no new warning (line numbers
+  aside); every RAM above inferred as described (lr / pal / xr / xg / xb
+  M10K, sk_mem and of_x MLAB, the shift taps gone).
+  PLACEMENT, AT RISK: s1300 placed 41,120 ALM from 39,964 in map; the same
+  ratio gives ~41,290 (the 6e291cc pair) to ~41,570 (the d7182e9 pair) --
+  the top of that is where R907's seeds needed 4,192-4,194 LABs of 4,191.
+  A seed sweep decides (the 6e291cc pair says the change itself is ~+220).
+  If no seed fits: the clipper's sk_mem back in M10K gives ~90 ALM but takes
+  5 of the 2 spare blocks, so it needs 3 found elsewhere first (m2_pcm_rate's
+  four 16 x 16 fl / fr, 2 shared blocks, to MLAB at ~40 ALM; m2_texel_cdc's
+  q_tex 16 x 144, 2 blocks, at ~80) -- each a trade of ALM for M10K, measured
+  by a fit, not by this map.
+
+*Verified (tb_m2_raster3d, main's configuration -- mip-mapping at the
+OSD's default Sharp, MIPZ 3, the window key, R915's road for Daytona; base =
+main's RTL, new = this, both from the same dumps; the Daytona and lut_en-0
+runs repeated at mip Off with the same verdicts):*
+  * DAYTONA, lut_en 0 (its state): pixel hash AND draw cycles identical on
+    nine frames -- Daytona f2000, f5000, f7000, f9000, f19298, Advanced
+    f3700 (R915's), Deluxe '93 f15647, car select l3700, l3950.
+  * Virtua Cop and Desert Tank with lut_en 0: identical to main (f1200,
+    f3000, f4205; Desert f2500, f7030) -- the select is the old core.
+  * WITH lut_en (colour measure as above, mean / share over 32; Sharp):
+        frame                         main              R925
+        Virtua Cop f4205 (the wharf)  63.04 / 83.4%     5.92 / 3.2%
+          row 16 (the clouds)        167.8 / 100%       8.0 / 5.2%
+        Virtua Cop f1200 (wharf)      62.82 / 92.3%     2.19 / 1.3%
+        Virtua Cop f3000              53.73 / 80.3%     3.43 / 0.7%
+        Virtua Cop f4300              57.19 / 82.9%     6.19 / 3.2%
+        Virtua Cop f6500              35.56 / 46.9%     0.17 / 0.0%
+        Virtua Cop f4205, Gamma Mild  63.05 / 80.4%     5.30 / 2.8%
+        Virtua Cop f4205, Gamma Off   63.30 / 76.8%     5.02 / 2.3%
+        Desert Tank f2500             47.94 / 68.2%     5.72 / 1.1%
+        Desert Tank f7030             62.97 / 86.5%     7.77 / 3.1%
+        Desert Tank f11000            68.63 / 96.7%    13.20 / 5.0%
+    (at mip Off: Virtua Cop 1.54-3.64, Desert Tank 3.54-9.62 -- the rest
+    at Sharp is the mip level, not the colour.)
+    f4205 with lut_en is pixel-identical to the 2A branch's own RTL
+    (model2a, TEXLUT) on the same frame. What is left is sampling (row 1 is
+    mostly the revolver: 28 / 255 at its chamber edges, its picture MAME's
+    by eye). Draw time +0.2% to +1.4% (f4205 893,404 -> 905,976 core cycles):
+    the five stages are latency.
+  * Side by side (MAME | main | R925, f4205): the clouds white with grey
+    shading as MAME's; the ground grey, not light blue; the bars black.
+  * test_m2_geo_engine_lut (new; the engine at TEXLUT 1: every old check
+    with lut_en low, then the colour base, Off, and lut_en low with Off):
+    80 checks, 0 fails; mutations caught -- lut_en dropped from the colour
+    base's branch (6 fails), from the Off gate on tex_flat (1), from the Off
+    gate on the textured bit (1). test_m2_span_tex_lut0 (new; the unit at
+    TEXLUT 1, lut_en 0, the TEXLUT 0 bench): 7,214 checks, 0 fails; e_rdy
+    taken from TEXLUT instead of lut_en fails it (8).
+    test_m2_geo_engine, _span_tex, _span_tex_ftb, _span_tex_mip,
+    _quad_store, _raster3d, _raster_fill_mip, _geo, _geometry,
+    _geometry_mipz PASS. lint_top clean (and -DM2_NO_TEXLUT); the -Wall list
+    the same 1,076 lines as main's but one moved (q3d_col[18:16] unused at
+    the top instead of in the store's 565); lint_idx the same 146 findings.
+
+*Measured, not changed -- DAYTONA IS NOT EXACT UNDER R784 EITHER.* The same
+measure, Daytona with lut_en forced on (Sharp): f2000 21.52 / 16.2% -> 5.48 /
+3.3%, f5000 24.09 / 14.5% -> 4.99 / 3.8% (at mip Off 20.25 -> 4.01, 23.98 ->
+2.52); by eye R784's darks are darker, more contrast on the trees and road
+than MAME. Daytona is kept as released (Ben on R915's build: "Daytona now
+looks good"); turning it on is the one line lut_en, a decision for Ben,
+judged on the board (R913's lesson), not by this number.
+
+*What the board must show (Virtua Cop):* the wharf's clouds white with grey
+shading, the ground grey concrete, the black bars above and below the 3D
+black; stages 2 and 3 likewise. Desert Tank: the sand and tank in MAME's
+tones (no washed-out ramp). Daytona exactly as Model2_20261021c.
+
+*Tools (scratch, not committed; ROM-derived output not committed):*
+vcl/survey.sh (an M2TEX session per set), mdiff.sh (an M2DIFF frame from the
+same session), build.sh / run.sh / jobs.sh (the bench in main's
+configuration; CF=-DR3D_TEXLUT -GTEXLUT=1 for this), py/summ.py, rowerr.py,
+sbs.py, mkmap.sh.

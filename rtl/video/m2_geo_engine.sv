@@ -65,7 +65,16 @@ module m2_geo_engine #(
   // 4096 is well past any real Model 2 object and costs 8 ms in the worst case.
   // dbg_capped counts objects that hit it, so this is a number on the debug
   // stream rather than a silent truncation.
-  parameter int MAX_POLYS = 4096
+  parameter int MAX_POLYS = 4096,
+  // R867: TEXLUT -- a textured polygon's colour is coloured per pixel from the
+  // game's tables (m2_span_tex TEXLUT), so the engine hands on what that
+  // needs instead of R784's slope: poly_col = {14'd0, colour base} (header
+  // word 3 >> 6), with poly_luma and poly_tex[25:24] (the luma table's row)
+  // beside it. No palette or table read, no cache entry. tex_off (the OSD's
+  // textures Off) colours a textured polygon as a flat one instead.
+  // R925: chosen at run time by lut_en (main: Virtua Cop and Desert Tank);
+  // with it low the engine is R784's exactly.
+  parameter bit TEXLUT = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -132,6 +141,8 @@ module m2_geo_engine #(
   // a build per guess is the wrong instrument. The board decides.
   input  logic [1:0]  tex_lum,
   input  logic [1:0]  gamma_sel,           // R630: 0 MAME, 1 mild, 2/3 off (m2_palette's)
+  input  logic        tex_off,             // R867: TEXLUT only -- textures Off on the OSD
+  input  logic        lut_en,              // R925: TEXLUT only -- the table path for this game (quasi-static)
   // Which memory the read is for: 0 polygon memory (as ever), 1 texture
   // (mem_addr[23]: texture RAM rather than ROM), 2 the palette mirror, 3 the
   // translation table mirror. All dword-addressed; the top level owns the bases.
@@ -855,6 +866,10 @@ module m2_geo_engine #(
             dbg_culled <= dbg_culled + 16'd1;
             emitted_last <= 1'b0;
             st <= E_LINK;
+          end else if (TEXLUT && lut_en && tex_flat) begin   // R925: lut_en
+            // R867: the pixel path reads the palette and the tables itself
+            poly_col <= {14'd0, cbase};
+            st <= E_EMIT;
           end else st <= E_CC;
         end
 
@@ -992,7 +1007,7 @@ module m2_geo_engine #(
         end
         F_TH3: if (mem_go) begin
           cbase   <= xhalf ? mem_data[31:22] : mem_data[15:6];
-          tex_flat <= hdr0[14];
+          tex_flat <= hdr0[14] && !(TEXLUT && lut_en && tex_off);   // R867, R925
           h3w     <= xhalf ? mem_data[31:16] : mem_data[15:0];   // R757: cc_idx in E_FW
           th_w    <= th_w + {{15{attr[16]}}, attr[16:12], 2'b00};
           // R268: THE TEXTURE COORDINATES ARE READ FOR EVERY POLYGON, CULLED OR
@@ -1027,7 +1042,7 @@ module m2_geo_engine #(
           // this word has to grow; do not quietly drop them a second time.
           poly_tex <= {hdr1[7:0], hdr2[10:6], hdr2[5:0], hdr2[12], hdr0[15],
                        hdr0[9], hdr0[8], hdr0[13], hdr0[6],
-                       hdr0[5:3], hdr0[2:0], hdr0[14]};
+                       hdr0[5:3], hdr0[2:0], hdr0[14] && !(TEXLUT && lut_en && tex_off)};   // R867, R925
           uv_i    <= 3'd0;
           uv_last <= 1'b0;   // R742: the last word is 5 or 7, never 0
           xaddr   <= th_dw(tp_w, tp_ram); xhalf <= tp_w[0]; xspace <= 2'd1;
