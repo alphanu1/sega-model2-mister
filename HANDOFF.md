@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-10-22: main -- release Model2_20261022 prepared LOCALLY (Ben: no push yet)
+
+Model2_20261022.rbf = s1316 (vcop-luma 4c25718 = main d7182e9 + R925; clk_sys
++0.308, clk_mem +0.127, clk_i960 +1.827, hold +0.246; 41,401 ALMs, 551/553 M10K),
+md5 7142fd52... Ben on the board: Virtua Cop's clouds "look good", Desert Tank
+"still looks good", Daytona unchanged. Merged into local main (465cad0) and
+releases/ updated. GitHub #10 to be closed when this is pushed. NOT PUSHED.
+Also tested tonight (local only): HOTD s1324 on model2c ca6d61b -- textures
+right, in-game playable, possible slowdowns; Rally AI test MRA (R926) --
+opponents stayed visible, slowdowns near cars.
+
 ## 2026-10-21 (night): PUSHED main c0604b5 -- link play (experimental) and the combined release folder
 
 main on GitHub now carries Model2_20261021c (Daytona link play, experimental,

@@ -164,7 +164,7 @@ Fighter 2 at the default 80%:
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261021c.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261022.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -203,7 +203,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261021c.rbf` has the md5 `56015110c6d80ee1f9d19788dcc1ac45`.
+**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `7142fd52d64902fe8ed5012ced4efda3`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -237,6 +237,13 @@ anything you find.
 
 ### New in this release
 
+- **Virtua Cop's colours are fixed: white clouds, grey concrete.** The clouds
+  over the wharf came out black with white edges, the ground light blue, and
+  the bars above and below the picture grey (GitHub #10). The core shaded
+  Virtua Cop's and Desert Tank's textures with a brightness model built from
+  Daytona's tables; it now uses each game's own tables, as the arcade board
+  does. Desert Tank's sand and tanks take MAME's tones too. Daytona is
+  unchanged. (`Model2_20261022`.)
 - **Link play for Daytona USA (experimental).** Race other cabinets over your network:
   MiSTers, or PCs running the Daytona USA recompilation, in any mix. The
   link board is switched on in the OSD (`Link board`, Daytona only, Off by
