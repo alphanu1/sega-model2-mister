@@ -263,130 +263,139 @@ module tgpx4_core #(
   localparam logic [2:0] K_NONE = 3'd0, K_REG = 3'd1, K_MEM = 3'd2,
                          K_EXT = 3'd3, K_IMM = 3'd4;
 
-  logic [2:0]  sk [0:1], dk [0:1];          // source / destination kind
-  logic [5:0]  sc [0:1], dc [0:1];          // register codes (transfer map)
-  logic        sbus [0:1], dbus [0:1];      // 1 = B bus RAM
-  logic        smask [0:1], dmask [0:1];    // address & 0x3ff (internal only)
-  logic [3:0]  amode [0:1];                 // AGU fields, per move
-  logic [2:0]  arx [0:1], ary [0:1];
-  logic [13:0] adisp [0:1];
-  logic [31:0] imm;
-  logic        eo_upd;
-  logic [5:0]  eo_disp;
+  // R934: THE TRANSFER DECODE IS REGISTERED. It is a function of the word
+  // alone, so it is computed from the word as it is taken (acc_word, at acc)
+  // and held beside ir: xd == xdec(ir) at every clock (checked in Verilator,
+  // below). Decoded from ir, it sat at the head of every worst TGPx4 path of
+  // the 2C seeds -- ir -> the ARx select (4.3 ns) -> AR -> AGU -> the
+  // internal / external test -> state, ext_addr, ar, rpc (to -0.87 ns).
+  typedef struct packed {
+    logic [1:0][2:0]  sk, dk;                 // source / destination kind
+    logic [1:0][5:0]  sc, dc;                 // register codes (transfer map)
+    logic [1:0]       sbus, dbus;             // 1 = B bus RAM
+    logic [1:0]       smask, dmask;           // address & 0x3ff (internal only)
+    logic [1:0][3:0]  amode;                  // AGU fields, per move
+    logic [1:0][2:0]  arx, ary;
+    logic [1:0][13:0] adisp;
+    logic [31:0]      imm;
+    logic             eo_upd;
+    logic [5:0]       eo_disp;
+    logic             single_two;             // single transfer: destination uses fields [1]
+  } xdec_t;
 
-  logic [4:0] cop;
-  logic [5:0] ef1;
-  logic [15:0] ef2;
-  assign cop = ir[26:22];
-  assign ef1 = ir[21:16];
-  assign ef2 = ir[15:0];
-
-  logic        t1_ext, t1_dir;
-  logic [6:0]  t1_rr, t1_sr7;
-  assign t1_ext = (top == 3'd1) ? ir[26] : ir[38];
-  assign t1_dir = (top == 3'd1) ? ir[25] : ir[37];
-  assign t1_rr  = (top == 3'd1) ? ir[18:12] : ir[30:24];
-  assign t1_sr7 = (top == 3'd1) ? ir[25:19] : ir[37:31];
-
-  always_comb begin
+  function automatic xdec_t xdec(input logic [63:0] w);
+    logic [2:0]  t;
+    logic [4:0]  c;
+    logic [15:0] e2;
+    logic        t1_ext, t1_dir;
+    logic [6:0]  t1_rr, t1_sr7;
+    xdec_t       d;
+    t  = w[63:61];
+    c  = w[26:22];
+    e2 = w[15:0];
+    t1_ext = (t == 3'd1) ? w[26] : w[38];
+    t1_dir = (t == 3'd1) ? w[25] : w[37];
+    t1_rr  = (t == 3'd1) ? w[18:12] : w[30:24];
+    t1_sr7 = (t == 3'd1) ? w[25:19] : w[37:31];
     for (int m = 0; m < 2; m++) begin
-      sk[m] = K_NONE; dk[m] = K_NONE; sc[m] = 6'd0; dc[m] = 6'd0;
-      sbus[m] = 1'b0; dbus[m] = 1'b0; smask[m] = 1'b0; dmask[m] = 1'b0;
-      amode[m] = ir[3:0]; arx[m] = 3'd0; ary[m] = ir[6:4]; adisp[m] = 14'd0;
+      d.sk[m] = K_NONE; d.dk[m] = K_NONE; d.sc[m] = 6'd0; d.dc[m] = 6'd0;
+      d.sbus[m] = 1'b0; d.dbus[m] = 1'b0; d.smask[m] = 1'b0; d.dmask[m] = 1'b0;
+      d.amode[m] = w[3:0]; d.arx[m] = 3'd0; d.ary[m] = w[6:4]; d.adisp[m] = 14'd0;
     end
-    imm = 32'd0; eo_upd = 1'b0; eo_disp = 6'd0;
-    case (top)
+    d.imm = 32'd0; d.eo_upd = 1'b0; d.eo_disp = 6'd0;
+    d.single_two = (t == 3'd1 || t == 3'd5) && !t1_ext;
+    case (t)
       3'd0: begin                                   // double transfer type 1
         // A
-        sc[0] = {1'b0, ir[24:20]}; dc[0] = {1'b0, ir[24:20]};
-        arx[0] = ir[19:17]; ary[0] = ir[16:14];
+        d.sc[0] = {1'b0, w[24:20]}; d.dc[0] = {1'b0, w[24:20]};
+        d.arx[0] = w[19:17]; d.ary[0] = w[16:14];
         // B
-        sc[1] = {2'b10, ir[13:10]}; dc[1] = {2'b10, ir[13:10]};
-        arx[1] = ir[9:7]; ary[1] = ir[6:4]; sbus[1] = 1'b1; dbus[1] = 1'b1;
-        case (ir[26:25])
-          2'd0: begin sk[0] = K_REG; dk[0] = K_REG; sk[1] = K_REG; dk[1] = K_REG; end
-          2'd1: begin sk[0] = K_REG; dk[0] = K_MEM; sk[1] = K_REG; dk[1] = K_MEM; end
-          2'd2: begin sk[0] = K_MEM; dk[0] = K_REG; sk[1] = K_MEM; dk[1] = K_REG; end
+        d.sc[1] = {2'b10, w[13:10]}; d.dc[1] = {2'b10, w[13:10]};
+        d.arx[1] = w[9:7]; d.ary[1] = w[6:4]; d.sbus[1] = 1'b1; d.dbus[1] = 1'b1;
+        case (w[26:25])
+          2'd0: begin d.sk[0] = K_REG; d.dk[0] = K_REG; d.sk[1] = K_REG; d.dk[1] = K_REG; end
+          2'd1: begin d.sk[0] = K_REG; d.dk[0] = K_MEM; d.sk[1] = K_REG; d.dk[1] = K_MEM; end
+          2'd2: begin d.sk[0] = K_MEM; d.dk[0] = K_REG; d.sk[1] = K_MEM; d.dk[1] = K_REG; end
           default: ;
         endcase
       end
       3'd1, 3'd5: begin                             // single transfer types 1 / 2
-        adisp[0] = (top == 3'd1) ? {9'd0, ir[11:7]} : ir[20:7];
+        d.adisp[0] = (t == 3'd1) ? {9'd0, w[11:7]} : w[20:7];
         if (t1_ext) begin
-          eo_upd  = 1'b1;
-          eo_disp = (top == 3'd1) ? ir[24:19] : ir[36:31];
-          arx[0]  = t1_rr[2:0];
+          d.eo_upd  = 1'b1;
+          d.eo_disp = (t == 3'd1) ? w[24:19] : w[36:31];
+          d.arx[0]  = t1_rr[2:0];
           if (t1_dir) begin                            // external -> internal
-            sk[0] = K_EXT;
-            dk[0] = t1_rr[6] ? K_MEM : K_REG; dc[0] = t1_rr[5:0];
-            dbus[0] = t1_rr[5]; dmask[0] = 1'b1;
+            d.sk[0] = K_EXT;
+            d.dk[0] = t1_rr[6] ? K_MEM : K_REG; d.dc[0] = t1_rr[5:0];
+            d.dbus[0] = t1_rr[5]; d.dmask[0] = 1'b1;
           end else begin                            // internal -> external
-            sk[0] = t1_rr[6] ? K_MEM : K_REG; sc[0] = t1_rr[5:0];
-            sbus[0] = t1_rr[5]; smask[0] = 1'b1;
-            dk[0] = K_EXT;
+            d.sk[0] = t1_rr[6] ? K_MEM : K_REG; d.sc[0] = t1_rr[5:0];
+            d.sbus[0] = t1_rr[5]; d.smask[0] = 1'b1;
+            d.dk[0] = K_EXT;
           end
         end else begin
           if (t1_sr7 == 7'h58) begin
-            sk[0] = K_IMM;
-            imm   = (top == 3'd1) ? {20'd0, ir[11:0]} : {8'd0, ir[23:0]};
+            d.sk[0] = K_IMM;
+            d.imm   = (t == 3'd1) ? {20'd0, w[11:0]} : {8'd0, w[23:0]};
           end else begin
-            sk[0] = t1_sr7[6] ? K_MEM : K_REG; sc[0] = t1_sr7[5:0]; sbus[0] = t1_sr7[5];
+            d.sk[0] = t1_sr7[6] ? K_MEM : K_REG; d.sc[0] = t1_sr7[5:0]; d.sbus[0] = t1_sr7[5];
           end
-          dk[0] = t1_rr[6] ? K_MEM : K_REG; dc[0] = t1_rr[5:0]; dbus[0] = t1_rr[5];
+          d.dk[0] = t1_rr[6] ? K_MEM : K_REG; d.dc[0] = t1_rr[5:0]; d.dbus[0] = t1_rr[5];
           // source and destination each take an address from the same
           // fields with their own ARx: the AGU runs twice, source first
-          arx[0] = t1_sr7[2:0]; arx[1] = t1_rr[2:0];
-          amode[1] = ir[3:0]; ary[1] = ir[6:4]; adisp[1] = adisp[0];
+          d.arx[0] = t1_sr7[2:0]; d.arx[1] = t1_rr[2:0];
+          d.amode[1] = w[3:0]; d.ary[1] = w[6:4]; d.adisp[1] = d.adisp[0];
         end
       end
       3'd4: begin                                   // double transfer type 2
-        amode[0] = ir[23:20]; arx[0] = ir[32:30]; ary[0] = ir[29:27];
-        adisp[0] = {11'd0, ir[26:24]};
-        amode[1] = ir[3:0];   arx[1] = ir[12:10]; ary[1] = ir[9:7];
-        adisp[1] = {11'd0, ir[6:4]};
-        sbus[1] = 1'b1; dbus[1] = 1'b1;
-        sc[0] = {1'b0, ir[37:33]}; dc[0] = {1'b0, ir[32:28]};
-        sc[1] = {1'b1, ir[17:13]}; dc[1] = {1'b1, ir[12:8]};
-        case (ir[39:38])
-          2'd0: begin sk[0] = K_REG; dk[0] = K_REG; end
-          2'd1: begin sk[0] = K_REG; dk[0] = K_MEM; end
-          2'd2: begin sk[0] = K_MEM; dk[0] = K_REG; end
+        d.amode[0] = w[23:20]; d.arx[0] = w[32:30]; d.ary[0] = w[29:27];
+        d.adisp[0] = {11'd0, w[26:24]};
+        d.amode[1] = w[3:0];   d.arx[1] = w[12:10]; d.ary[1] = w[9:7];
+        d.adisp[1] = {11'd0, w[6:4]};
+        d.sbus[1] = 1'b1; d.dbus[1] = 1'b1;
+        d.sc[0] = {1'b0, w[37:33]}; d.dc[0] = {1'b0, w[32:28]};
+        d.sc[1] = {1'b1, w[17:13]}; d.dc[1] = {1'b1, w[12:8]};
+        case (w[39:38])
+          2'd0: begin d.sk[0] = K_REG; d.dk[0] = K_REG; end
+          2'd1: begin d.sk[0] = K_REG; d.dk[0] = K_MEM; end
+          2'd2: begin d.sk[0] = K_MEM; d.dk[0] = K_REG; end
           default: ;
         endcase
-        case (ir[19:18])
-          2'd0: begin sk[1] = K_REG; dk[1] = K_REG; end
-          2'd1: begin sk[1] = K_REG; dk[1] = K_MEM; end
-          2'd2: begin sk[1] = K_MEM; dk[1] = K_REG; end
+        case (w[19:18])
+          2'd0: begin d.sk[1] = K_REG; d.dk[1] = K_REG; end
+          2'd1: begin d.sk[1] = K_REG; d.dk[1] = K_MEM; end
+          2'd2: begin d.sk[1] = K_MEM; d.dk[1] = K_REG; end
           default: ;
         endcase
       end
       3'd7: begin                                   // immediate
-        sk[0] = K_IMM; imm = ir[58:27];
-        dk[0] = ir[25] ? K_MEM : K_REG; dc[0] = ir[24:19]; dbus[0] = ir[24];
-        arx[0] = ir[21:19]; adisp[0] = {2'd0, ir[18:7]};
+        d.sk[0] = K_IMM; d.imm = w[58:27];
+        d.dk[0] = w[25] ? K_MEM : K_REG; d.dc[0] = w[24:19]; d.dbus[0] = w[24];
+        d.arx[0] = w[21:19]; d.adisp[0] = {2'd0, w[18:7]};
       end
       3'd2, 3'd6: begin                             // control
-        case (cop)
+        case (c)
           5'h04: begin                              // PUSH: B[--SP] = reg
-            sk[0] = K_REG; sc[0] = ef2[11:6];
+            d.sk[0] = K_REG; d.sc[0] = e2[11:6];
           end
           5'h05: begin                              // POP: reg = B[SP++], after the ALU
-            sk[0] = K_MEM; sbus[0] = 1'b1;
-            dk[0] = K_REG; dc[0] = ef2[11:6];
+            d.sk[0] = K_MEM; d.sbus[0] = 1'b1;
+            d.dk[0] = K_REG; d.dc[0] = e2[11:6];
           end
           default: ;
         endcase
         // control words take ARs through the AGU's ports: ARx = the target
-        // register (ir[8:6]), ARy = the tested / counted one (ir[15:13])
-        arx[0] = ir[8:6]; ary[0] = ir[15:13];
-        case (cop)
+        // register (w[8:6]), ARy = the tested / counted one (w[15:13])
+        d.arx[0] = w[8:6]; d.ary[0] = w[15:13];
+        case (c)
           5'h10, 5'h11, 5'h12, 5'h18, 5'h19, 5'h1a: begin
             // the jump target, do_control_dst
-            case (ir[15:13])
-              3'd2: begin sk[0] = K_REG; sc[0] = {ir[11] ? 3'b101 : 3'b001, ir[8:6]}; end
-              3'd3: begin sk[0] = K_REG; sc[0] = {ir[11] ? 3'b100 : 3'b000, ir[8:6]}; end
-              3'd4, 3'd6: begin sk[0] = K_MEM; sbus[0] = 1'b0; end
-              3'd5, 3'd7: begin sk[0] = K_MEM; sbus[0] = 1'b1; smask[0] = 1'b1; end
+            case (w[15:13])
+              3'd2: begin d.sk[0] = K_REG; d.sc[0] = {w[11] ? 3'b101 : 3'b001, w[8:6]}; end
+              3'd3: begin d.sk[0] = K_REG; d.sc[0] = {w[11] ? 3'b100 : 3'b000, w[8:6]}; end
+              3'd4, 3'd6: begin d.sk[0] = K_MEM; d.sbus[0] = 1'b0; end
+              3'd5, 3'd7: begin d.sk[0] = K_MEM; d.sbus[0] = 1'b1; d.smask[0] = 1'b1; end
               default: ;                            // immediate / ARx: no fetch
             endcase
           end
@@ -395,7 +404,26 @@ module tgpx4_core #(
       end
       default: ;
     endcase
-  end
+    xdec = d;
+  endfunction
+
+  xdec_t xd;
+  wire [1:0][2:0]  sk = xd.sk, dk = xd.dk;
+  wire [1:0][5:0]  sc = xd.sc, dc = xd.dc;
+  wire [1:0]       sbus = xd.sbus, dbus = xd.dbus, smask = xd.smask, dmask = xd.dmask;
+  wire [1:0][3:0]  amode = xd.amode;
+  wire [1:0][2:0]  arx = xd.arx, ary = xd.ary;
+  wire [1:0][13:0] adisp = xd.adisp;
+  wire [31:0]      imm = xd.imm;
+  wire             eo_upd = xd.eo_upd;
+  wire [5:0]       eo_disp = xd.eo_disp;
+
+  logic [4:0] cop;
+  logic [5:0] ef1;
+  logic [15:0] ef2;
+  assign cop = ir[26:22];
+  assign ef1 = ir[21:16];
+  assign ef2 = ir[15:0];
 
   // ======================================================== AGU (one)
   logic        agu_m;         // which move's fields
@@ -406,7 +434,7 @@ module tgpx4_core #(
   logic [2:0]  g_rx, g_ry;
   logic        single_two;    // single transfer: destination uses fields [1]
 
-  assign single_two = (top == 3'd1 || top == 3'd5) && !(top == 3'd1 ? ir[26] : ir[38]);
+  assign single_two = xd.single_two;
 
   logic agu_mi;
   assign agu_mi = (agu_dst && single_two) ? 1'b1 : agu_m;
@@ -631,7 +659,10 @@ module tgpx4_core #(
 
   assign fmul_go = mul_go && isfmul;
   logic [31:0] fmul_n;
-  assign fmul_n = nanfix(fmul_r, opm1, opm2);                  // R924
+  assign fmul_n = m1nan ? (opm1 | 32'h0040_0000) : m2nan ? (opm2 | 32'h0040_0000)
+                : f_nan(fmul_r) ? 32'hffc0_0000 : fmul_r;    // nanfix(fmul_r, opm1, opm2), R924 / R934
+  logic fm_opnan;
+  assign fm_opnan = m1nan || m2nan;
 
   function automatic logic f_neg(input logic [31:0] f);
     f_neg = f[31] && (f[30:0] != 31'd0) && !(f[30:23] == 8'hff && f[22:0] != 23'd0);
@@ -655,12 +686,29 @@ module tgpx4_core #(
     else               nanfix = r;
   endfunction
 
-  logic        add_zc;
+  // R934: THE OPERANDS' NaN TESTS ARE REGISTERED, a clock after the operands
+  // load (S_DEC; opm2 also S_PR2) -- the units take four clocks and the
+  // operands hold until the word ends, so the flags are settled long before
+  // a result. The flags of the result are taken from the unit's result and
+  // those two bits, not by testing nanfix()'s output: add_bq -> nanfix ->
+  // f_neg -> the clamp -> f_zero -> fa_az was on all four 2C seeds' lists.
+  // Exactly nanfix(): a NaN operand makes a NaN, which is neither negative
+  // nor zero; a NaN result is neither either.
+  logic add_anan, add_bnan, m1nan, m2nan;
+  always_ff @(posedge clk) begin
+    add_anan <= f_nan(add_aq); add_bnan <= f_nan(add_bq);
+    m1nan    <= f_nan(opm1);   m2nan    <= f_nan(opm2);
+  end
+  logic        add_zc, add_zop, add_rneg, add_rzero;
   logic [31:0] add_d;
   logic [31:0] add_n;
-  assign add_n  = nanfix(add_r, add_a, add_b);                 // R924
-  assign add_zc = aop_q[0] && !aop_q[2] && f_neg(add_n);     // FADDZ / FSUBZ clamp
-  assign add_d  = add_zc ? 32'd0 : add_n;
+  assign add_n     = add_anan ? (add_a | 32'h0040_0000) : add_bnan ? (add_b | 32'h0040_0000)
+                   : f_nan(add_r) ? 32'hffc0_0000 : add_r;   // nanfix(add_r, add_a, add_b), R924
+  assign add_rneg  = !add_anan && !add_bnan && f_neg(add_r);      // f_neg(add_n)
+  assign add_rzero = !add_anan && !add_bnan && f_zero(add_r);     // f_zero(add_n)
+  assign add_zop   = aop_q[0] && !aop_q[2];
+  assign add_zc    = add_zop && add_rneg;                    // FADDZ / FSUBZ clamp
+  assign add_d     = add_zc ? 32'd0 : add_n;
 
   // ======================================================== moves in flight
   logic [31:0] mv_val [0:1];
@@ -800,7 +848,7 @@ module tgpx4_core #(
   integer k;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      s <= S_HALT; ir <= 64'd0; ir_pc <= 12'd0; nx_ir <= 64'd0; nx_v <= 1'b0; pf_sent <= 1'b0; pc <= 12'd0; delay_pc <= 12'd0; delay_slot <= 1'b0;
+      s <= S_HALT; ir <= 64'd0; xd <= xdec(64'd0); ir_pc <= 12'd0; nx_ir <= 64'd0; nx_v <= 1'b0; pf_sent <= 1'b0; pc <= 12'd0; delay_pc <= 12'd0; delay_slot <= 1'b0;
       st <= 32'd0; rpc <= 16'd0; lpc <= 16'd0; eb <= 24'd0; eo <= 24'd0; sp <= 10'd0;
       modr <= 16'd0; pdr <= 32'd0; ddr <= 32'd0; prp <= 5'd0; pwp <= 5'd0; pcp <= 2'd0;
       for (k = 0; k < 4; k++) pcs[k] <= 12'd0;
@@ -842,7 +890,7 @@ module tgpx4_core #(
       end
       if (add_v) begin
         alu_done <= 1'b1; alu_r <= add_d; alu_wr <= !aop_q[2];
-        fa_upd <= 1'b1; fa_an <= f_neg(add_d); fa_az <= f_zero(add_d);
+        fa_upd <= 1'b1; fa_an <= add_rneg && !add_zop; fa_az <= add_zc || add_rzero;   // R934: f_neg / f_zero(add_d)
         fa_zcu <= aop_q[0] && !aop_q[2]; fa_zc <= add_zc;
       end
       if (cv_v) begin
@@ -861,10 +909,11 @@ module tgpx4_core #(
         mul_done <= 1'b1; mul_r <= fmul_n;
         // MAME decode_mulop: MD = isnan, MV = isinf, MU = |res| < FLT_MIN --
         // so an exact zero sets MU too (R924), from the result, not the unit's flags
-        fm_n <= f_neg(fmul_n); fm_z <= f_zero(fmul_n);
-        fm_d <= f_nan(fmul_n);
-        fm_v <= (fmul_n[30:23] == 8'hff) && (fmul_n[22:0] == 23'd0);
-        fm_u <= (fmul_n[30:23] == 8'h00);
+        // R934: of fmul_n, from fmul_r and the operands' NaN bits
+        fm_n <= !fm_opnan && f_neg(fmul_r); fm_z <= !fm_opnan && f_zero(fmul_r);
+        fm_d <= fm_opnan || f_nan(fmul_r);
+        fm_v <= !fm_opnan && (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] == 23'd0);
+        fm_u <= !fm_opnan && (fmul_r[30:23] == 8'h00);
       end
       if (imul_v) begin
         mul_done <= 1'b1; mul_r <= imul_r;
@@ -1111,7 +1160,7 @@ module tgpx4_core #(
       if (acc) begin
         // MAME execute_run: the PC steps (or the delay slot / repeat
         // applies) as the word is taken, before it executes
-        ir <= acc_word; ir_pc <= pc;
+        ir <= acc_word; xd <= xdec(acc_word); ir_pc <= pc;   // R934: xd with ir
         nx_v <= 1'b0; pf_sent <= 1'b0;
         dbg_retire <= 1'b1;
         if (delay_slot) begin
@@ -1128,6 +1177,17 @@ module tgpx4_core #(
       end
     end
   end
+
+`ifdef VERILATOR
+  // R934: the registered decode is the decode of ir, every clock
+  /* verilator lint_off SYNCASYNCNET */
+  always_ff @(posedge clk)
+    if (rst_n && xd != xdec(ir)) begin
+      $display("tgpx4_core: xd != xdec(ir) at pc %03x", ir_pc);
+      $stop;
+    end
+  /* verilator lint_on SYNCASYNCNET */
+`endif
 
   assign dbg_pc  = pc;
   assign dbg_pdr = pdr;

@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-22 (night): the 2C build's timing -- branch m2c-timing (off model2c 648ecb9), R934. LOCAL ONLY, NOT FITTED
+
+BUILD TO FIT: m2c-timing HEAD with Model2.qsf + VERILOG_MACRO "M2_2C=1" and
+"M2_NO_2A_MANX_MOTION=1" (as model2c). No fit was run in this task.
+FOUND (quartus_sta on s1337 / s1338 / s1350 / s1351's own databases, every
+clk_sys pair under +0.2 ns grouped by destination): the worst path of all
+four seeds is Over Rev's pedal scaling (m2_2a_inputs or_*, -1.18 to -1.91:
+stick -> m2_cab_inputs' combinational pedal adders -> clamp -> x85/64 in one
+clock); then the TGPx4 from ir (S_WAIT / ext_addr / ar / mv_val / rpc,
+-0.13 to -0.87, every seed: the transfer decode + ARx select was 4.3 ns
+before the AGU) and from add_bq (fa_az / fa_an, nanfix -> clamp -> flags).
+Seed-dependent, one or two seeds: fb_wcomb vlo (-1.44), R932's lr_mem ->
+lp2_L (-1.28, s1351), the quad store's M10K write enable (-1.22, s1351),
+u_fill qv (-1.03), geometry E_DONE / fx68k / SCSP (-0.2 to -0.9; shared
+with 2A, which has them at +0.4 to +0.6). clk_mem's two are ascal and the
+SDRAM controller, not 2C logic.
+CHANGED (all exact): e1f4a31 OREV scaling over two clocks; d80bf02 span_tex
+LSB > 3: product registered, clamp after it; a4ea0da TGPx4 transfer decode
+registered beside ir (xd == xdec(ir), checked in Verilator) and the FP
+operands' NaN tests registered a clock early, flags from the unit's result.
+NOT CHANGED: fb_wcomb, quad store, fill, geometry, fx68k (2A shares them).
+VERIFIED: tgpx4_replay HOTD boot, old vs new: 1,085,266,905 cycles,
+188,786,517 words, 8,697,138 / 8,697,138 outputs equal, 0 bad -- the same
+cycle count to the clock; planted (xd from nx_ir) stops at once. Over Rev
+race (R930 cap1): 1,143,259,352 cycles, 8,251,088 outputs equal = R930.
+test_m2_2a_inputs 0 mismatches (20 M cycles); tb_m2_raster3d in Model2.sv's
+raster parameters, TEXLUT, FB mode, PXDUMP, old vs new RTL: LSB 5 on two
+Over Rev MAME frames and LSB 3 on one -- every painted pixel identical
+(153,536 / 153,600 / 153,536). test_m2_span_tex, test_m2_luma_map (both)
+PASS. lint_top 2A and M2_2C clean; lint_idx candidates for M2_2C identical
+before / after.
+AREA (quartus_map 17.0): 2C 40,078 -> 40,128 ALMs (+50), registers 48,100
+-> 48,237, bits / DSP unchanged. 2A (no M2_2C): 39,953 ALMs, 48,097 regs,
+4,572,656 bits, 96 DSP before and after -- identical, so 2A is not affected.
+NEXT: fit seeds. If it still fails, the list above minus the fixed ones is
+the next work -- the quad store's write enable and fb_wcomb's c_fits -> vlo
+first (both shared with 2A: gate any change on LSB / C2 or prove 2A equal).
+Next free R numbers: R935 on (R933 = STCC bring-up, in parallel).
 ## 2026-10-22 (evening): board on s1350 (648ecb9) -- Over Rev's road good; HOTD's rectangle shadows. NOT PUSHED
 
 Ben on s1350 (test build, clk_sys -1.176): Over Rev's road looks good (R932

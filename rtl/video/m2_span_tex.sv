@@ -1288,6 +1288,13 @@ module m2_span_tex #(
     logic [7:0]         lp3b_d [3];
     logic [5:0]         lp2_L;
     logic [14:0]        lp2_c;
+    // R934: with 32 rows (LSB 5, the 2C build) lr_mem is four M10K, and
+    // M10K -> multiply -> clamp -> lp2_L failed on s1351 (-1.28 ns). There
+    // the product's top byte is registered as it comes (the DSP's own output
+    // register can take it) and the clamp moves after it, into the colour
+    // tables' read address. The same L every clock; LSB 3 (2A) keeps lp2_L.
+    logic [7:0]         lp2_P;
+    wire  [5:0]         lp2_Lr = (LSB > 3) ? ((lp2_P > 8'd63) ? 6'd63 : lp2_P[5:0]) : lp2_L;
     logic [1:0]         g_sel;
     logic [7:0]  lr_q;
     logic [14:0] pal_q;
@@ -1298,9 +1305,9 @@ module m2_span_tex #(
         pal_q <= pal_mem[rt_col[9:0]];
       end
       if (lp_adv) begin
-        xq[0] <= xr_mem[{lp2_c[4:0],   lp2_L}];
-        xq[1] <= xg_mem[{lp2_c[9:5],   lp2_L}];
-        xq[2] <= xb_mem[{lp2_c[14:10], lp2_L}];
+        xq[0] <= xr_mem[{lp2_c[4:0],   lp2_Lr}];   // R934: lp2_Lr
+        xq[1] <= xg_mem[{lp2_c[9:5],   lp2_Lr}];
+        xq[2] <= xb_mem[{lp2_c[14:10], lp2_Lr}];
       end
     end
 
@@ -1313,7 +1320,7 @@ module m2_span_tex #(
       if (!rst_n) begin
         e_pl <= 8'd0; g_sel <= 2'd0;
         lp2_v <= 1'b0; lp2_last <= 1'b0; lp2_moire <= 1'b0; lp2_x <= '0; lp2_x1 <= '0; lp2_y <= '0;
-        lp2_L <= 6'd0; lp2_c <= 15'd0;
+        lp2_L <= 6'd0; lp2_P <= 8'd0; lp2_c <= 15'd0;
         lp3_v <= 1'b0; lp3_last <= 1'b0; lp3_moire <= 1'b0; lp3_x <= '0; lp3_x1 <= '0; lp3_y <= '0;
         lp3b_v <= 1'b0; lp3b_last <= 1'b0; lp3b_moire <= 1'b0; lp3b_x <= '0; lp3b_x1 <= '0; lp3b_y <= '0;
         for (int k = 0; k < 3; k++) lp3b_d[k] <= 8'd0;
@@ -1326,6 +1333,7 @@ module m2_span_tex #(
           lp2_v <= e_valid; lp2_last <= e_last; lp2_x <= e_x; lp2_x1 <= e_x1;
           lp2_y <= y_p[e_p]; lp2_moire <= moire_p[e_p];
           lp2_L <= (lpr[15:8] > 8'd63) ? 6'd63 : lpr[13:8];
+          lp2_P <= lpr[15:8];                         // R934
           lp2_c <= pal_q;
           lp3_v <= lp2_v; lp3_last <= lp2_last; lp3_x <= lp2_x; lp3_x1 <= lp2_x1;
           lp3_y <= lp2_y; lp3_moire <= lp2_moire;
