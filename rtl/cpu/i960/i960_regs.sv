@@ -93,7 +93,21 @@
 // docs/p1-i960-spike.md §2.2.
 
 module i960_regs #(
-  parameter int unsigned CACHE_FRAMES = 4    // I960_RCACHE_SIZE. Do not change.
+  // I960_RCACHE_SIZE. Do not change with RING = 0: MAME's rule and its
+  // memory stream, which the lockstep benches compare.
+  parameter int unsigned CACHE_FRAMES = 4,
+  // R927: THE CHIP'S RING, NOT MAME'S DEPTH RULE. 0: MAME's do_call / do_ret_0
+  // (the frames at depth 0-3 since the last flushreg live in the cache, EVERY
+  // deeper one goes to memory on its call and comes back on its return). 1:
+  // the i960's own local-register cache -- CACHE_FRAMES saved frames in a
+  // ring; a call that finds it full writes the OLDEST out to its own frame
+  // first, a return that finds it empty reads the frame from memory, flushreg
+  // writes every cached frame. Code at a steady depth then never touches
+  // memory for its frames, however deep it runs. The difference is visible
+  // only in the 64-byte register save areas, which the architecture leaves
+  // undefined until flushreg (MAME's own stream is one implementation's).
+  // CACHE_FRAMES a power of two, at most 8 (one MLAB deep).
+  parameter bit          RING         = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -218,6 +232,8 @@ module i960_regs #(
     endcase
   endfunction
 
+  localparam int unsigned SW = $clog2(CACHE_FRAMES);   // R927: slot bits (2 for 4)
+
   // Four saved frames, four words per row. MLAB rather than M10K — see header.
   // Dedicated ports: one write, one registered read, each with its own address.
   // Reading the array inside the control FSM is what defeated inference.
@@ -230,11 +246,13 @@ module i960_regs #(
   // fitter report started printing M10K; it had been extracting and discarding
   // that column since the first measurement.
   (* ramstyle = "logic" *)
-  logic [31:0] rcache_frame_addr [0:CACHE_FRAMES-1];
+  // R927: [31:6] -- a frame is 64-byte aligned (FP & ~0x3f), so its words'
+  // addresses are a concatenation, not a sum.
+  logic [31:6] rcache_frame_addr [0:CACHE_FRAMES-1];
 
   logic            rc_we;
-  logic [3:0]      rc_waddr;
-  logic [3:0]      rc_raddr;
+  logic [SW+1:0]   rc_waddr;
+  logic [SW+1:0]   rc_raddr;
   logic [W*32-1:0] rc_wdata;
   logic [W*32-1:0] rc_q;
 
@@ -314,7 +332,12 @@ module i960_regs #(
 
   state_e      state;
   logic [3:0]  idx;          // word index within a frame, 0..15
-  logic [2:0]  fl_frame;     // frame being flushed
+  logic [SW:0] fl_frame;     // frame being flushed
+  // R927 (RING): the ring's newest frame, how many it holds, a spill that a
+  // call makes before its save (fl_call), and the frames a flushreg has left
+  logic [SW-1:0] r_head;
+  logic [SW:0]   r_n, fl_left;
+  logic          fl_call;
   logic [31:0] spill_base;
   logic        to_memory;    // this save/load uses memory rather than the cache
 
@@ -322,16 +345,16 @@ module i960_regs #(
   // the frame is actually in the cache, and `to_memory` already records when it
   // is not. Deriving it from a wide signed value left 29 bits unread, which the
   // lint correctly flagged as a field extracted and then forgotten.
-  logic [1:0]  slot;
+  logic [SW-1:0] slot;
 
   // Flattened cache index. ROWS is a power of two, so frame*ROWS + row is a
   // concatenation rather than a multiply.
-  logic [3:0]  rc_wr_idx;
-  logic [3:0]  rc_fl_idx;
+  logic [SW+1:0] rc_wr_idx;
+  logic [SW+1:0] rc_fl_idx;
   logic [1:0]  fl_word;      // word within the row being flushed
   assign rc_wr_idx = {slot, idx[3:2]};
   assign bk_rar    = {1'b0, idx[3:2]};
-  assign rc_fl_idx = {fl_frame[1:0], idx[3:2]};
+  assign rc_fl_idx = {fl_frame[SW-1:0], idx[3:2]};
 
   // Memory port drive. Combinational from state so the array block above stays
   // a plain inferrable template with nothing conditional inside it.
@@ -394,7 +417,11 @@ module i960_regs #(
       state         <= S_IDLE;
       rcache_pos    <= 32'sd0;
       idx           <= 4'd0;
-      fl_frame      <= 3'd0;
+      fl_frame      <= '0;
+      r_head        <= '1;     // R927: the first frame lands in slot 0
+      r_n           <= '0;
+      fl_left       <= '0;
+      fl_call       <= 1'b0;
       fl_word       <= 2'd0;
       mem_req       <= 1'b0;
       mem_we        <= 1'b0;
@@ -402,7 +429,7 @@ module i960_regs #(
       ret_unsupported <= 1'b0;
       to_memory     <= 1'b0;
       spill_base    <= 32'd0;
-      slot          <= 2'd0;
+      slot          <= '0;
       // The register arrays are deliberately NOT cleared here. Clearing an
       // array in reset forces it out of RAM into flip-flops — measured on this
       // toolchain, docs/mister-integration.md. Architectural registers are
@@ -440,11 +467,21 @@ module i960_regs #(
             // do_call step 1: RIP takes the return address BEFORE the save, so
             // the saved frame carries it.
             r_rip      <= call_ip;
-            slot       <= rcache_pos[1:0];
-            to_memory  <= (rcache_pos >= $signed(CACHE_FRAMES));
             spill_base <= fp_masked;
             idx        <= 4'd0;
-            state      <= S_CALL_SAVE;
+            if (RING) begin
+              // R927: into the slot after the newest; a full ring writes
+              // that slot's frame (the oldest) out first
+              slot      <= r_head + 1'b1;
+              to_memory <= 1'b0;
+              fl_frame  <= {1'b0, r_head + 1'b1};
+              fl_call   <= (r_n == (SW+1)'(CACHE_FRAMES));
+              state     <= (r_n == (SW+1)'(CACHE_FRAMES)) ? S_FLUSH_RD : S_CALL_SAVE;
+            end else begin
+              slot       <= rcache_pos[SW-1:0];
+              to_memory  <= (rcache_pos >= $signed(CACHE_FRAMES));
+              state      <= S_CALL_SAVE;
+            end
           end else if (op_ret && (r_pfp[2:0] != 3'd0)
                                 && (r_pfp[2:0] != 3'd7)) begin
             ret_unsupported <= 1'b1;
@@ -453,9 +490,16 @@ module i960_regs #(
             // decides where the frame comes from.
             g_fp       <= r_pfp & 32'hffff_ffc0;
             spill_base <= r_pfp & 32'hffff_ffc0;
-            slot       <= 2'((rcache_pos - 32'sd1));
-            to_memory  <= ((rcache_pos - 32'sd1) >= $signed(CACHE_FRAMES)) ||
-                          ((rcache_pos - 32'sd1) <  32'sd0);
+            if (RING) begin
+              // R927: the newest cached frame, or memory when the ring is empty
+              slot      <= r_head;
+              to_memory <= (r_n == '0);
+              if (r_n != '0) begin r_head <= r_head - 1'b1; r_n <= r_n - 1'b1; end
+            end else begin
+              slot       <= SW'((rcache_pos - 32'sd1));
+              to_memory  <= ((rcache_pos - 32'sd1) >= $signed(CACHE_FRAMES)) ||
+                            ((rcache_pos - 32'sd1) <  32'sd0);
+            end
             rcache_pos <= (rcache_pos - 32'sd1 < 32'sd0) ? 32'sd0
                                                         : rcache_pos - 32'sd1;
             idx        <= 4'd0;
@@ -463,10 +507,19 @@ module i960_regs #(
           end else if (op_flushreg) begin
             // flushreg clamps the depth to the cache size first, then writes
             // every cached frame out and resets the depth to zero.
-            fl_frame <= 3'd0;
             idx      <= 4'd0;
-            state    <= (rcache_pos > 32'sd0) ? S_FLUSH_RD : S_IDLE;
-            if (rcache_pos <= 32'sd0) rcache_pos <= 32'sd0;
+            if (RING) begin
+              // R927: every cached frame, oldest first
+              fl_frame <= {1'b0, r_head - SW'(r_n) + 1'b1};
+              fl_left  <= r_n;
+              fl_call  <= 1'b0;
+              state    <= (r_n != '0) ? S_FLUSH_RD : S_IDLE;
+              rcache_pos <= 32'sd0;
+            end else begin
+              fl_frame <= '0;
+              state    <= (rcache_pos > 32'sd0) ? S_FLUSH_RD : S_IDLE;
+              if (rcache_pos <= 32'sd0) rcache_pos <= 32'sd0;
+            end
           end
         end
 
@@ -487,7 +540,7 @@ module i960_regs #(
             // Into the cache, four words per cycle.
             // rc_we / rc_waddr / rc_wdata are driven above; nothing to do here
             // but record the frame address and advance.
-            rcache_frame_addr[slot] <= spill_base;
+            rcache_frame_addr[slot] <= spill_base[31:6];
             if (idx[3:2] == 2'd3) state <= S_CALL_FIN;
             else                  idx   <= idx + 4'd4;
           end
@@ -498,6 +551,10 @@ module i960_regs #(
           // the caller's values, which is what the reference does and what the
           // header explains at length.
           rcache_pos    <= rcache_pos + 32'sd1;
+          if (RING) begin
+            r_head <= slot;
+            if (r_n != (SW+1)'(CACHE_FRAMES)) r_n <= r_n + 1'b1;
+          end
           r_pfp         <= (g_fp & 32'hffff_fff8) | {29'd0, call_type};
           g_fp          <= ((call_type == 3'd7 ? call_stack : r_sp) + 32'd63)
                            & 32'hffff_ffc0;
@@ -554,19 +611,31 @@ module i960_regs #(
         S_FLUSH_WR: begin
           mem_req   <= 1'b1;
           mem_we    <= 1'b1;
-          mem_addr  <= rcache_frame_addr[fl_frame[1:0]] + {26'd0, idx[3:2], fl_word, 2'b00};
+          mem_addr  <= {rcache_frame_addr[fl_frame[SW-1:0]], idx[3:2], fl_word, 2'b00};
           mem_wdata <= rc_q[{fl_word, 5'd0} +: 32];
           if (mem_ack) begin
             mem_req <= 1'b0;
             if (fl_word == 2'd3) begin
               if (idx[3:2] == 2'd3) begin
                 idx <= 4'd0;
-                if ($signed({29'd0, fl_frame}) + 32'sd1 >= rcache_pos ||
-                    fl_frame == 3'(CACHE_FRAMES - 1)) begin
+                if (RING && fl_call) begin
+                  // R927: the oldest frame is out; its slot takes the call's
+                  fl_call <= 1'b0;
+                  state   <= S_CALL_SAVE;
+                end else if (RING) begin
+                  fl_frame <= {1'b0, fl_frame[SW-1:0] + 1'b1};
+                  fl_left  <= fl_left - 1'b1;
+                  if (fl_left == (SW+1)'(1)) begin
+                    r_n   <= '0;
+                    state <= S_IDLE;
+                  end else
+                    state <= S_FLUSH_RD;
+                end else if ($signed({{(31-SW){1'b0}}, fl_frame}) + 32'sd1 >= rcache_pos ||
+                    fl_frame == (SW+1)'(CACHE_FRAMES - 1)) begin
                   rcache_pos <= 32'sd0;
                   state      <= S_IDLE;
                 end else begin
-                  fl_frame <= fl_frame + 3'd1;
+                  fl_frame <= fl_frame + 1'b1;
                   state    <= S_FLUSH_RD;
                 end
               end else begin

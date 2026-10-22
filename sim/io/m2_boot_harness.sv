@@ -93,7 +93,16 @@ module m2_boot_harness #(
   // the SDRAM copy the tb keeps at word 0x1040000), the bridge's 2C texture /
   // luma map, the copro status register; tb_m2_boot under M2_C2=1
   parameter bit          C2              = 1'b0,
-  parameter int unsigned X4_PLINES       = 1024
+  parameter int unsigned X4_PLINES       = 1024,
+  // R927: the board's clock ratios (tb_m2_boot M2_BOARDCLK=1): the 2A
+  // timers count 25 MHz from an 80 MHz clk_mem (5/16) instead of from 48
+  parameter bit          TMR_BOARD       = 1'b0,
+  // R927: the i960's register ring (i960_top RC_RING / RC_FRAMES)
+  parameter bit          RC_RING         = 1'b0,
+  parameter int unsigned RC_FRAMES       = 4,
+  // R927: the i960's CPU-side data cache (i960_top DC_LINES; 0 none)
+  parameter int unsigned DC_LINES        = 0,
+  parameter bit          DC_LANES        = 1'b0
 ) (
   // REAL_MEM=1 replaces the C++ SDRAM with the genuine stack -- m2_sdram_x2 +
   // m2_sdram + sdram_model, lifted whole from sim/mem/m2_sdram_x2_harness.sv.
@@ -114,6 +123,9 @@ module m2_boot_harness #(
   input  logic  [7:0] cab_in0,
   input  logic  [7:0] cab_in1,        // R852: A2's IN1 / IN2 (players 1 and 2)
   input  logic  [7:0] cab_in2,
+  input  logic  [7:0] cab_an0,        // R926: the 315-5649's analog channels 0-2
+  input  logic  [7:0] cab_an1,        //   (Sega Rally: steering, accelerator, brake)
+  input  logic  [7:0] cab_an2,
   output logic [31:0] a2_snd_bytes,   // R852: bytes the i960 sent the sound side
   output logic [31:0] a2_snd_sig,
   output logic  [7:0] a2_snd_last,    // R859: the last byte the i960 sent
@@ -401,6 +413,13 @@ module m2_boot_harness #(
   // WHY the prefetch misses, which needs different fixes depending on the
   // answer: a wrong prediction is a branch and is unavoidable, whereas a right
   // prediction whose data has not arrived is a scheduling problem and is fixable.
+  // R927: the i960's bus master and frame operations, for the CPI split
+  output logic  [2:0] obs_gsel,
+  output logic        obs_rf_call, obs_rf_ret, obs_rf_flush,
+  output logic        obs_ic_req,
+  output logic [31:0] obs_fetch_addr,
+  output logic  [1:0] obs_ic_state,
+  output logic [31:0] obs_ic_fill,
   output logic        obs_pf_valid,
   output logic        obs_pf_armed,
   output logic        obs_pf_match,   // pf_ip == ip: the prediction was right
@@ -642,7 +661,8 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top #(.VC(VCOP || C2), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES), .C2(C2)) u_cpu (   // R924: C2   // R869: FR, F2A; R928: VC with C2 (Model2.sv)
+  i960_top #(.VC(VCOP || C2), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES), .C2(C2),   // R924: C2; R869: FR, F2A; R928: VC with C2 (Model2.sv)
+             .RC_RING(RC_RING), .RC_FRAMES(RC_FRAMES), .DC_LINES(DC_LINES), .DC_2A(A2), .DC_LANES(DC_LANES)) u_cpu (   // R927: RC_*
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP | A2X),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
@@ -1293,7 +1313,7 @@ module m2_boot_harness #(
                     io_intreq[1], io_intreq[0] };
   generate if (A2) begin : g_a2
     // the timers count real time: 25 MHz of the tb's 48 MHz memory clock
-    m2_timers #(.TICK_NUM(25), .TICK_DEN(48)) u_timers (
+    m2_timers #(.TICK_NUM(TMR_BOARD ? 5 : 25), .TICK_DEN(TMR_BOARD ? 16 : 48)) u_timers (   // R927
       .clk(clk_m), .rst_n(rst_n),
       .sel(cpu_io_sel && (cpu_io_addr[23:4] == 20'hf0000)), .we(cpu_io_we),
       .idx(cpu_io_addr[3:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
@@ -1306,7 +1326,7 @@ module m2_boot_harness #(
       .word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
       .rdata(a2_io_rdata),
       .in0(cab_in0), .in1(cab_in1), .in2(MANX_MOTION ? ((a2_pe == 8'h3D) ? 8'hCE : 8'hCD) : cab_in2), .sw(8'hFF),
-      .an0(8'hFF), .an1(8'hFF), .an2(8'hFF),   // R862: no analog game in the boot bench
+      .an0(cab_an0), .an1(cab_an1), .an2(cab_an2),   // R926 (0xFF unless M2_INSCHED sets them)
       .lamps(), .pe(a2_pe), .ee_ld_we(1'b0), .ee_ld_a(6'd0), .ee_ld_d(16'd0),   // R896, R897
       .dbg_pa(), .dbg_dir()
     );
@@ -1401,5 +1421,13 @@ assign obs_xlat_din  = oc_xlat_din;
   assign obs_ic_valid = u_cpu.ic_valid;
   assign obs_pf_ip    = u_cpu.pf_ip;
   assign obs_ip       = u_cpu.ip;
+  assign obs_gsel       = u_cpu.gsel;          // R927
+  assign obs_rf_call    = u_cpu.rf_call;
+  assign obs_rf_ret     = u_cpu.rf_ret;
+  assign obs_rf_flush   = u_cpu.rf_flush;
+  assign obs_ic_req     = u_cpu.ic_req;
+  assign obs_fetch_addr = u_cpu.fetch_addr;
+  assign obs_ic_state   = u_cpu.u_icache.state;
+  assign obs_ic_fill    = u_cpu.u_icache.fill_base;
 
 endmodule

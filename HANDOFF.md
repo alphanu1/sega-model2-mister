@@ -96,6 +96,81 @@ topskatru topskatruo topskatrj). It decides the forms kept, FLOG, the cache
 size (PCACHE line) and whether the overlap lever is needed (BUSY line).
 The SHARC (2B) was not re-sized. Ben's R832 decision is unchanged.
 Next free R numbers: R921 on.
+
+## 2026-10-22: branch i960-speed -- the 2A i960's speed for Sega Rally's AI budget (R927). NOT PUSHED, NOT FITTED
+
+WHAT: two 2A-only i960 changes, each behind a Model2.sv macro, both on:
+M2_2A_I960_RING -- the local-register cache as the chip keeps it, a ring of 8
+saved frames that goes to memory only when a call finds it full (i960_regs
+RING; MAME's rule sent every frame deeper than four out and back: 97.6% of
+Rally's race calls); M2_2A_I960_DC -- i960_dcache, 1 KB on the CPU's side of
+the bridge for board / work RAM (one M10K), hits in 2 cycles, word allocation,
+write-through. The original core (M2_NO_2A) keeps MAME's rule and the old bus.
+MEASURED (whole-core bench, Rally's window 0x5a0490 -> 0x5bade8): CPI 10.27
+-> 7.16 (ring) -> 6.97 (+ data cache), window -32%. Board clock ratios
+(M2_BOARDCLK), race start (vblanks 1200-1490): with SDRAM latency 12 (the
+bench setting that reproduces R926's inferred board rows 0-2) rows 0-3 ->
+3-8, row 8 in 0 -> 122 of 291 frames (MAME 225), the timer read p50 7.6 ->
+4.8 ms (MAME 3.8); with latency 6 rows 2-6 -> 5-8, row 8 in 181.
+VF2 foreground -6.8%, Manx TT race frame -14.4%, flips unchanged (bench).
+ROW 8 EVERYWHERE IS NOT REACHED: what is left is the bridge crossing on every
+access (~5 cycles a hit), i-cache misses (4.7%, ~25 cycles each) and the
+front end's 2-cycle taken branch / two-word instruction. Ranked next steps in
+R927 (2-way i-cache ~-7% for ~+160 ALM; a bridge line port; the i960 on
+clk_sys behind an enable -- the big one).
+CORRECTION TO R926: the 8 KB i-cache in i960_top caches work-RAM code too;
+R728's program-ROM-only cache is the bridge's, off since R733.
+RISK TO CHECK ON THE BOARD: the ring changes only the 16-word register save
+areas' memory contents (undefined until flushreg on the chip); VF2's
+coroutine was checked (explicit stores, normal ret), the other 2A games were
+not -- a game reading its own save area without flushreg would misbehave
+with RING and not without. "M2_2A_I960_RING=0" / "M2_2A_I960_DC=0" isolate.
+CHECKS: i960 suites all PASS (MAME-rule lockstep unchanged; new ring and
+data-cache lockstep / unit benches with mutants); lint_top 2A and M2_NO_2A
+clean; lint_idx clean in i960; analyze_file 0 errors; quartus_map 17.0 2A:
+40,047 -> 40,091 ALMs needed, +94 registers, +1 M10K (548/553 expected).
+TOOLS: tb_m2_boot 'P' lines + sim/io/i960_prof.py (CPI by cause, cache
+models), M2_BOARDCLK / TMR_BOARD, harness RC_* / DC_* parameters (defaults
+off: the bench is still R926's core unless -G'd). Data:
+sm2-builds/r927-data (bench logs, MAME budget tap, ROM-derived images).
+Next free R numbers: R928 on (R920 / R924 on local branches).
+
+## 2026-10-22: branch rally-ai -- Sega Rally's glitching opponents (GitHub #19, R926). NOT PUSHED, NO RTL CHANGE
+
+CAUSE (MAME-verified mechanism; the board's numbers NOT measured): the game
+sets each frame's AI-car detail from the time left after its first piece of
+work -- the vblank IRQ loads timer 2 with 15.5 ms, 0x5bade0 reads it back,
+(m / 10000 - 21) >> 1 picks a row of 0x5bb200 (row 8: 3 / 2 / 2 cars at the
+three near details; rows 0-2: none), and a car without a slot drops from its
+physics to the course line. MAME reads at ~2.1 ms: row 8 in every race frame.
+A slower i960 lowers the row; the cars nearest the player then flip between
+physics and the line frame to frame (MAME at 10 MHz shows it): blinking, no
+collision, sideways one frame, launched on the way back. The whole-core bench
+(the race now runs in it) gets rows 0-2 in half its race frames; its
+IRQ-to-read window is CPI 11.4 (T_FRAME 31%, memory waits 30%, fetch ~28%).
+NOT a wrong value: the TGP replay of the near-opponent window is bit-exact
+(plain and board-push), the i960 census of that session finds 0 traps and 0
+differing tuples, and the bench's far opponents match MAME bit for bit.
+WRONG TURNS, KEEP: uninitialised RAM (work / buffer / backup filled 0xFF:
+no change; board RAM 0x2139d8 is read unwritten and sets bit 7 of every AI
+car's flags on the bench and maybe the board -- harmless, every mode change
+lands on the same frame); i960 clock alone in MAME 14-40 MHz (no glitch); the
+bench's player NaN (below).
+FIXED IN THE BENCH: tb_m2_boot read every 2A data-ROM word as 0, so Rally's
+course lookups failed -- R902's "translations NaN" was that, not the inputs.
+New: M2_INSCHED, M2_RALLY_AP, M2_CARLOG, M2_BUSLOG frame field, harness
+cab_an0-2; sim/io/mame_m2_rally_ap.lua (catches the first opponent at ~37 s),
+sim/io/rally_ai_check.py, sim/io/mame_m2_clock.patch (M2_I960_CLK /
+M2_TGP_CLK in m2lod).
+BOARD CHECK (no build needed): mra/"... [AI detail test].mra" patches ROM
+0x1c334 so the row is always 8 (MAME's). Released core, first course, catch
+the first opponent and drive the helicopter straight: the opponents should
+stay solid and upright; near-opponent frames may slow (MAME at 7 MHz: 55.5 ->
+45.3 fps). Not for release. THE REAL FIX is i960 speed in Rally's race code
+(register-cache spills, data latency, fetch from the work-RAM copy) -- not
+attempted; a probe of [0x20aac0] on the overlay would give the board's rows.
+Next free R numbers: R927 on (R920 / R924 on local branches).
+
 ## 2026-10-21 (late): PUSHED model2a -- the 2A beta Model2A_20261021d
 
 RELEASED: Model2A_20261021d.rbf = s1298 (5b8a001 = Model2A_20261021c +

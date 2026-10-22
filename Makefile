@@ -70,7 +70,7 @@ FPC_RTL  := $(I960)/i960_fpcvt.sv
 TOP_RTL  := $(DEC_RTL) $(ALU_RTL) $(REG_RTL) $(AGU_RTL) $(LST_RTL) \
             $(LSU_RTL) $(MAP_RTL) $(ICA_RTL) $(MDV_RTL) \
             $(FPM_RTL) $(FPA_RTL) $(FPD_RTL) $(FPS_RTL) $(FPX_RTL) $(FPC_RTL) \
-            $(I960)/i960_fptrans.sv $(I960)/i960_fprem.sv $(I960)/i960_top.sv
+            $(I960)/i960_fptrans.sv $(I960)/i960_fprem.sv $(I960)/i960_dcache.sv $(I960)/i960_top.sv
 
 TEST_ARGS := $(if $(RANDOM),+random=$(RANDOM),) $(if $(SEED),+seed=$(SEED),)
 
@@ -405,8 +405,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -439,6 +439,22 @@ test_i960_regs: obj_i960_regs/Vi960_regs
 obj_i960_regs/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
 	$(VBUILD) --top-module i960_regs -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_regs -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
+
+# R927: the chip's ring of eight frames (RING=1, CACHE_FRAMES=8) against the
+# reference's ring (I960_RING=8), and the ring of four
+test_i960_regs_ring: obj_i960_regs_ring/Vi960_regs obj_i960_regs_ring4/Vi960_regs
+	@echo "== test i960_regs (R927 ring of 8)"
+	./obj_i960_regs_ring/Vi960_regs $(TEST_ARGS)
+	@echo "== test i960_regs (R927 ring of 4)"
+	./obj_i960_regs_ring4/Vi960_regs $(TEST_ARGS)
+
+obj_i960_regs_ring/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_regs -GRING=1 -GCACHE_FRAMES=8 -CFLAGS "-O2 -I../$(TB) -DI960_RING=8" \
+	  --Mdir obj_i960_regs_ring -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
+
+obj_i960_regs_ring4/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_regs -GRING=1 -GCACHE_FRAMES=4 -CFLAGS "-O2 -I../$(TB) -DI960_RING=4" \
+	  --Mdir obj_i960_regs_ring4 -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
 
 # R866: the LUT-RAM register file against the flip-flop one it replaced
 # (sim/i960/ref/i960_regs_ff.sv, c3ee7d2), every output on every cycle.
@@ -882,6 +898,67 @@ test_i960_top_fx: obj_i960_top_fx/Vi960_top
 obj_i960_top_fx/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top -GFR=1 -GF2A=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
 	  --Mdir obj_i960_top_fx -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R927: the 2A core's i960 with the chip's register ring (RC_RING=1,
+# RC_FRAMES=8) against the reference's ring (I960_RING=8): the F2A lockstep,
+# the interrupt soak and the latency sweep.
+.PHONY: test_i960_top_ring
+test_i960_top_ring: obj_i960_top_ring/Vi960_top obj_i960_top_ring4/Vi960_top
+	@echo "== test i960_top RING (the chip's register ring of 8, R927)"
+	./obj_i960_top_ring/Vi960_top +fx $(TEST_ARGS)
+	./obj_i960_top_ring/Vi960_top +fx +steps=400 +seed=7 +strictcov
+	./obj_i960_top_ring/Vi960_top +fx +noirq +lat=7 +seed=3 +random=3000
+	./obj_i960_top_ring/Vi960_top +fx +noirq +loops +steps=400 +lat=40 +random=300
+	@echo "== test i960_top RING4 (a ring of 4: the full ring's write-out, often)"
+	./obj_i960_top_ring4/Vi960_top +fx +steps=400 +seed=7 +strictcov
+	./obj_i960_top_ring4/Vi960_top +fx +noirq +lat=7 +seed=3 +random=3000
+obj_i960_top_ring4/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_top -GFR=1 -GF2A=1 -GRC_RING=1 -GRC_FRAMES=4 --public-flat-rw \
+	  -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_RING=4" \
+	  --Mdir obj_i960_top_ring4 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+obj_i960_top_ring/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_top -GFR=1 -GF2A=1 -GRC_RING=1 -GRC_FRAMES=8 --public-flat-rw \
+	  -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_RING=8" \
+	  --Mdir obj_i960_top_ring -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R927: i960_dcache alone against a flat memory (transparency), byte lanes
+# (4 KB) and the one-array form (1 KB and 256 B), bus latency 0..4 and 0..40.
+.PHONY: test_i960_dcache
+test_i960_dcache: obj_i960_dc_l/Vi960_dcache obj_i960_dc_w/Vi960_dcache obj_i960_dc_w16/Vi960_dcache
+	@echo "== test i960_dcache (R927)"
+	./obj_i960_dc_l/Vi960_dcache $(TEST_ARGS)
+	./obj_i960_dc_l/Vi960_dcache +lat=40 +ops=50000 +seed=3
+	./obj_i960_dc_w/Vi960_dcache $(TEST_ARGS)
+	./obj_i960_dc_w/Vi960_dcache +lat=40 +ops=50000 +seed=3
+	./obj_i960_dc_w16/Vi960_dcache +lat=0 +seed=5
+obj_i960_dc_l/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
+	$(VBUILD) --top-module i960_dcache -GLINES=256 -GLANES=1 -CFLAGS "-O2" --Mdir obj_i960_dc_l -o Vi960_dcache $^
+obj_i960_dc_w/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
+	$(VBUILD) --top-module i960_dcache -GLINES=64 -GLANES=0 -CFLAGS "-O2" --Mdir obj_i960_dc_w -o Vi960_dcache $^
+obj_i960_dc_w16/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
+	$(VBUILD) --top-module i960_dcache -GLINES=16 -GLANES=0 -CFLAGS "-O2" --Mdir obj_i960_dc_w16 -o Vi960_dcache $^
+
+# R927: and with i960_dcache in front of the bus (DC_TEST: every address below
+# 0x800000 cached, so the bench's low memory goes through it), 64 lines in one
+# array as Model2.sv builds it, and 16 in byte lanes, over the ring of 8.
+.PHONY: test_i960_top_dc
+test_i960_top_dc: obj_i960_top_dc/Vi960_top obj_i960_top_dc16/Vi960_top
+	@echo "== test i960_top DC (the CPU-side data cache, R927)"
+	./obj_i960_top_dc/Vi960_top +fx $(TEST_ARGS)
+	./obj_i960_top_dc/Vi960_top +fx +steps=400 +seed=7 +strictcov
+	./obj_i960_top_dc/Vi960_top +fx +noirq +lat=7 +seed=3 +random=3000
+	./obj_i960_top_dc/Vi960_top +fx +noirq +loops +steps=400 +lat=40 +random=300
+	@echo "== test i960_top DC16 (16 lines in byte lanes)"
+	./obj_i960_top_dc16/Vi960_top +fx +steps=400 +seed=7 +strictcov
+	./obj_i960_top_dc16/Vi960_top +fx +noirq +lat=3 +random=3000
+obj_i960_top_dc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_top -GFR=1 -GF2A=1 -GRC_RING=1 -GRC_FRAMES=8 -GDC_LINES=64 -GDC_TEST=1 -GDC_LANES=0 --public-flat-rw \
+	  -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_RING=8" \
+	  --Mdir obj_i960_top_dc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+obj_i960_top_dc16/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_top -GFR=1 -GF2A=1 -GRC_RING=1 -GRC_FRAMES=8 -GDC_LINES=16 -GDC_TEST=1 -GDC_LANES=1 --public-flat-rw \
+	  -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_RING=8" \
+	  --Mdir obj_i960_top_dc16 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # Render a whole frame out of m2_video, from the tile/char/palette images our
 # own i960 built. Skips when they are absent.
@@ -1614,6 +1691,15 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
 # the stores to render mode.
 # R904: BOOT_2AX_G=-GWAITST=1 BOOT_2AX_DIR=obj_boot_2ax_ws builds it with m2_waitst live
 # (Model2.sv's M2_2A_WAITST for Sega Rally).
+# R926: Sega Rally into a race -- M2_INSCHED=<file> (MAME's port values by frame,
+# sim/io/mame_m2_rally_ap.lua INREC), M2_RALLY_AP=<frame> (the autopilot), M2_CARLOG=<file>
+# (the AI cars each vblank; sim/io/rally_ai_check.py), +insn=<large>; the data ROM is
+# now read at word 0x13C0000 (it answered 0 before, R902's NaN). ~3 s a frame, the
+# race from frame ~1200.
+# R927: the i960's cycles by cause -- M2_FRAMESTAT=<f> M2_WORK_IPS=5a0490,5bade8 writes a
+# 'P' line per window (sim/io/i960_prof.py <f> [from [to]]); M2_BOARDCLK=1 with
+# BOOT_2AX_G=-GTMR_BOARD=1 runs at the board's clock ratios (80 / 32 / 40 MHz);
+# -GRC_RING=1 -GRC_FRAMES=8 -GDC_LINES=64 builds the i960 as Model2.sv's 2A does.
 BOOT_2AX_DIR ?= obj_boot_2ax
 BOOT_2AX_G   ?=
 $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \

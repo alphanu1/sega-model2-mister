@@ -1486,10 +1486,17 @@ int main(int argc, char **argv) {
       // Serving buffer-RAM reads out of the data ROM gave the TGP a garbage
       // display-list count at 0x47C, so it never terminated the loop at
       // 0x481-0x4B5 and never reached the mailbox clear at 0x4C4.
+      // R926: SEGA RALLY HAS ONE (R862: MAME's copro_data, 4 MB, which the
+      // 2A image puts at word 0x13C0000 and Model2.sv reads at GAME_COPRO_2A).
+      // This bench answered every 2A data-ROM read 0, so the TGP's course
+      // lookups returned nothing and Rally's car heights were NaN from the
+      // start grid (R902's "every translation NaN" was this, not the inputs).
+      static const bool a2x_cd = std::getenv("M2_A2X") != nullptr;
       dat_data = rd32((d->tgp_dat_is_prog ? 0x1040000u                       // R924: the TGPx4's program copy
-                       : d->tgp_dat_is_buf ? BUF_BASE : g_c2 ? 0x13C0000u : COPRO_BASE)   // R924: 2C's copro data
+                       : d->tgp_dat_is_buf ? BUF_BASE : (g_a2 || g_c2) ? 0x13C0000u : COPRO_BASE)   // R924: 2C's copro data
                       + (uint32_t(d->tgp_dat_addr) << 1));
-      if (g_a2 && !g_big && !d->tgp_dat_is_buf && !(g_c2 && d->tgp_dat_is_prog)) dat_data = 0;   // R928: a 2C std-layout game too   // R852: no copro data ROM on 2A (as Model2.sv)
+      // R852: VF2's 2A board has no copro data ROM; R928: nor a 2C std-layout game
+      if (g_a2 && !g_big && !a2x_cd && !d->tgp_dat_is_buf && !(g_c2 && d->tgp_dat_is_prog)) dat_data = 0;
       // WHERE THE COUNT COMES FROM. 0x47C is `mov (x0+1)(e), $0x4a`; MAME's x0
       // there is ~0x1088/0x11B1, small dword offsets into buffer RAM.
       // EVERY read, with the pc, rather than filtering on 0x47C: the pc probe
@@ -1561,11 +1568,43 @@ int main(int argc, char **argv) {
     if (d->orev) std::printf("  R928: Over Rev's comm board (CN 0xFE | cn; FG bit 7 low three vblanks after CN = 1)\n");
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
+  d->cab_an0 = 0xff; d->cab_an1 = 0xff; d->cab_an2 = 0xff;   // R926: as before unless scheduled
+  // R926: M2_INSCHED=<file> -- the cabinet's inputs by frame (vblank count),
+  // one line each: "<frame> <in0> <in1> <in2> <an0> <an1> <an2>" (hex values;
+  // the first frame any line names). The line in force from that vblank on.
+  // A MAME session's own port values (IN0, IN1, IN2, STEER, ACCEL, BRAKE for
+  // Sega Rally) replayed frame for frame.
+  struct InSched { uint64_t f; unsigned v[6]; };
+  static std::vector<InSched> g_insched;
+  static size_t g_insched_i = 0;
+  if (const char *isf = std::getenv("M2_INSCHED")) {
+    if (FILE *f = std::fopen(isf, "r")) {
+      char ln[256];
+      while (std::fgets(ln, sizeof ln, f)) {
+        InSched e{};
+        unsigned long long fr;
+        if (std::sscanf(ln, "%llu %x %x %x %x %x %x", &fr, &e.v[0], &e.v[1], &e.v[2], &e.v[3], &e.v[4], &e.v[5]) == 7) {
+          e.f = fr; g_insched.push_back(e);
+        }
+      }
+      std::fclose(f);
+      std::printf("  R926: input schedule %s, %zu lines\n", isf, g_insched.size());
+    }
+  }
+  // R926: M2_CARLOG=<file> -- Sega Rally's object table (work RAM 0x500000,
+  // stride 0x100, 16 slots) at every vblank, as the MAME autopilot logs it:
+  // "T <t> <frame> P <x> <y> <z> <handler>", then per AI car (handler
+  // 0x5cacf0) "A <slot> <segment> <pos x y z> <vel x y z> <heading x y z> <+0x10>".
+  static FILE *g_carlog = std::getenv("M2_CARLOG") ? std::fopen(std::getenv("M2_CARLOG"), "w") : nullptr;
   int slow_prev = 0;
   int cpu_prev = 0;
   auto base_step = [&]() {
     const int m = int((base_t / 2) & 1);
-    const int v = int((base_t / 3) & 1);
+    // R927: M2_BOARDCLK=1 -- the board's ratios, clk_mem 80 : clk_vid 32 :
+    // clk_cpu 40 (half-periods 2 / 5 / 4 base steps), the vblank and the 2A
+    // timers (harness TMR_BOARD) to match
+    static const bool board_clk = std::getenv("M2_BOARDCLK") != nullptr;
+    const int v = int((base_t / (board_clk ? 5 : 3)) & 1);
     const int c = int((base_t / 4) & 1);
     // FRAME CAPTURE, on the falling edge of ce_pix so the pixel is settled.
     // This is the picture the renderer produces WHILE the CPU is running, which
@@ -1583,6 +1622,95 @@ int main(int argc, char **argv) {
       if (d->vid_hb && !g_hb_p) { g_px = 0; if (!d->vid_vb) ++g_py; }
       if (d->vid_vb && !g_vb_p) {
         ++g_frames_done;
+        // R926: the input schedule and the car log (see M2_INSCHED / M2_CARLOG)
+        while (g_insched_i < g_insched.size() && g_insched[g_insched_i].f <= g_frames_done) {
+          const InSched &e = g_insched[g_insched_i++];
+          d->cab_in0 = e.v[0]; d->cab_in1 = e.v[1]; d->cab_in2 = e.v[2];
+          d->cab_an0 = e.v[3]; d->cab_an1 = e.v[4]; d->cab_an2 = e.v[5];
+        }
+        // R926: M2_RALLY_AP=<frame> -- from that vblank, Sega Rally driven by
+        // an autopilot that follows the AI cars' own trails (the object table
+        // above: player +0x14 position, +0x2c velocity a frame; AI cars'
+        // positions recorded as they go), as the MAME session's Lua does:
+        // steering (an0) toward the trail point 25 units ahead, accelerator
+        // (an1) held, brake (an2) when far off line and fast, the gear (IN1
+        // bits 6:4, MAME's daytona_gearbox_r codes) by speed. Coin and start
+        // still come from M2_INSCHED.
+        static const long long ap_from = std::getenv("M2_RALLY_AP") ? std::atoll(std::getenv("M2_RALLY_AP")) : -1;
+        if (ap_from >= 0 && (long long)g_frames_done >= ap_from) {
+          auto rd = [&](uint32_t a) -> uint32_t {
+            const uint32_t w = 0x1600000u + ((a - 0x500000u) >> 1);
+            return uint32_t(mem[w]) | (uint32_t(mem[w + 1]) << 16);
+          };
+          auto rf = [&](uint32_t a) { const uint32_t u = rd(a); float x; std::memcpy(&x, &u, 4); return double(x); };
+          static std::map<int, std::vector<std::pair<double, double>>> trail;
+          static std::map<int, std::pair<double, double>> lastp;
+          static double head = 0;
+          for (int k = 1; k < 16; ++k) {
+            const uint32_t b = 0x500000u + 0x100u * k;
+            if (rd(b + 4) != 0x5cacf0u) continue;
+            const double x = rf(b + 0x14), z = rf(b + 0x1c);
+            if (!(x == x) || !(z == z)) continue;
+            auto &tr = trail[k];
+            auto lp = lastp.find(k);
+            if (lp != lastp.end() && (x - lp->second.first) * (x - lp->second.first) + (z - lp->second.second) * (z - lp->second.second) > 400) tr.clear();
+            if (tr.empty() || (x - tr.back().first) * (x - tr.back().first) + (z - tr.back().second) * (z - tr.back().second) > 4) tr.push_back({x, z});
+            lastp[k] = {x, z};
+          }
+          if (rd(0x500004) == 0x5d3f40u) {
+            const double px = rf(0x500014), pz = rf(0x50001c), vx = rf(0x50002c), vz = rf(0x500034);
+            const double spd = std::sqrt(vx * vx + vz * vz);
+            if (spd > 0.03) head = std::atan2(vx, vz);
+            double best = 1e30; const std::vector<std::pair<double, double>> *bt = nullptr; size_t bi = 0;
+            for (auto &kv : trail)
+              for (size_t i = 0; i + 1 < kv.second.size(); ++i) {
+                const double dd = (kv.second[i].first - px) * (kv.second[i].first - px) + (kv.second[i].second - pz) * (kv.second[i].second - pz);
+                if (dd < best) { best = dd; bt = &kv.second; bi = i; }
+              }
+            const double kmh = spd * 60 * 3.6;
+            auto ahead = [&](double dist, double &ax, double &az) {
+              ax = px + 30 * std::sin(head); az = pz + 30 * std::cos(head);
+              if (!bt) return;
+              double acc = 0; size_t i = bi;
+              while (i + 1 < bt->size() && acc < dist) {
+                acc += std::hypot((*bt)[i + 1].first - (*bt)[i].first, (*bt)[i + 1].second - (*bt)[i].second); ++i;
+              }
+              ax = (*bt)[i].first; az = (*bt)[i].second;
+            };
+            auto wrapa = [](double a) { while (a > M_PI) a -= 2 * M_PI; while (a < -M_PI) a += 2 * M_PI; return a; };
+            double tx, tz, fx, fz;
+            ahead(15 + 0.1 * kmh, tx, tz);        // steer at this point
+            ahead(40 + 0.3 * kmh, fx, fz);        // and lift for the bend beyond it
+            const double err = wrapa(std::atan2(tx - px, tz - pz) - head);
+            const double ferr = std::fabs(wrapa(std::atan2(fx - px, fz - pz) - head));
+            int st = int(std::floor(err * 300));
+            st = st < -0x7f ? -0x7f : st > 0x7f ? 0x7f : st;
+            const bool brk = std::fabs(err) > 0.5 && kmh > 90;
+            const bool lift = ferr > 0.4 && kmh > 170;
+            const int g = kmh < 55 ? 2 : kmh < 95 ? 1 : kmh < 140 ? 6 : 5;   // gears 1-4
+            d->cab_an0 = 0x80 + st; d->cab_an1 = (brk || lift) ? 0 : 0xff; d->cab_an2 = brk ? 0xff : 0;
+            d->cab_in1 = 0x8f | (g << 4);
+          }
+        }
+        if (g_carlog) {
+          auto wr32 = [&](uint32_t a) -> uint32_t {      // work RAM dword, harness word 0x1600000
+            const uint32_t w = 0x1600000u + ((a - 0x500000u) >> 1);
+            return uint32_t(mem[w]) | (uint32_t(mem[w + 1]) << 16);
+          };
+          auto fl = [](uint32_t u) { float x; std::memcpy(&x, &u, 4); return double(x); };
+          std::fprintf(g_carlog, "T %.4f %llu P %.3f %.3f %.3f %08x\n", double(g_frames_done) / 57.5,
+                       (unsigned long long)g_frames_done, fl(wr32(0x500014)), fl(wr32(0x500018)),
+                       fl(wr32(0x50001c)), wr32(0x500004));
+          for (uint32_t k = 1; k < 16; ++k) {
+            const uint32_t b = 0x500000u + 0x100u * k;
+            if (wr32(b + 4) != 0x5cacf0u) continue;
+            std::fprintf(g_carlog, "A %u %u %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n", k,
+                         wr32(b + 0x88) & 0xffff, wr32(b + 0x14), wr32(b + 0x18), wr32(b + 0x1c),
+                         wr32(b + 0x2c), wr32(b + 0x30), wr32(b + 0x34),
+                         wr32(b + 0x9c), wr32(b + 0xa0), wr32(b + 0xa4), wr32(b + 0x10));
+          }
+          std::fflush(g_carlog);
+        }
         // R248: one line per frame that drew anything, with its lighting.
         if (g_fr_log && g_fr_poly) {
           std::fprintf(g_fr_log, "f%llu polys=%ld luma_mean=%.1f zero=%ld (%.0f%%) lp=%04x light=(%08x,%08x,%08x)\n",
@@ -1863,9 +1991,9 @@ int main(int argc, char **argv) {
       if (bl && d->obs_bus_ack && (brd || d->obs_bus_we) && d->dbg_acc != bl_last && d->obs_bus_addr >= blo && d->obs_bus_addr <= bhi)
       {
         bl_last = d->dbg_acc;
-        std::fprintf(bl, "%llu %s %08x %08x be %x ip %08x\n", (unsigned long long)d->dbg_acc, d->obs_bus_we ? "W" : "R",
+        std::fprintf(bl, "%llu %s %08x %08x be %x ip %08x f%llu\n", (unsigned long long)d->dbg_acc, d->obs_bus_we ? "W" : "R",
                      (unsigned)d->obs_bus_addr, (unsigned)(d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata),
-                     (unsigned)d->obs_bus_be, (unsigned)d->dbg_ip);
+                     (unsigned)d->obs_bus_be, (unsigned)d->dbg_ip, (unsigned long long)g_frames_done);   // R926: and the frame
       }
       static bool io_prev = false;
       const bool io_now = d->obs_io_sel && ((d->obs_io_addr & 0xffffe0u) == 0xc00000u);
@@ -2036,7 +2164,7 @@ int main(int argc, char **argv) {
   std::map<uint32_t,uint64_t> pc_hist;
 
   // V-blank at 57.52 Hz against a 48 MHz mem clock.
-  const uint64_t VBL = uint64_t(48e6 / 57.52);
+  const uint64_t VBL = uint64_t((std::getenv("M2_BOARDCLK") ? 80e6 : 48e6) / 57.52);   // R927
   uint64_t next_vbl = VBL, vblanks = 0;
   uint64_t first_win_rd = 0;
   FILE *out = outfile ? std::fopen(outfile, "wb") : nullptr;
@@ -2219,6 +2347,165 @@ int main(int argc, char **argv) {
       ++retired;
       pc_acc_prev = d->dbg_acc;
     }
+    // R927: THE i960'S CYCLES IN THE M2_WORK_IPS WINDOW, BY CAUSE -- one 'P'
+    // line after each 'W' line (sim/io/i960_prof.py reads them):
+    //   bus <master><region><r|w> <transactions> <cycles>   every bus cycle,
+    //       by master (b aux, f frame spill/fill, l load/store, i fetch) and
+    //       region (r program ROM, B board RAM, w work RAM, u buffer RAM,
+    //       o I/O, d data ROM, x other)
+    //   ret / call / spill / fill counts, the depth at each call, and the
+    //   frame cache modelled at other depths: MAME's (frames deeper than N
+    //   always go to memory) and the chip's own (a ring of N: the oldest
+    //   frame goes out only when a call finds it full)
+    //   ic <region> <requests> <fills>, ins <region> <retired>
+    static auto region_of = [](uint32_t a) -> int {
+      if (a < 0x200000u) return 0;
+      if (a < 0x240000u) return 1;
+      if (a >= 0x500000u && a < 0x600000u) return 2;
+      if (a >= 0x900000u && a < 0x980000u) return 3;
+      if (a >= 0x800000u && a < 0x1000000u) return 4;
+      if (a >= 0x2000000u && a < 0x4000000u) return 5;
+      return 6;
+    };
+    struct Prof {
+      uint64_t bus_n[5][7][2] = {}, bus_c[5][7][2] = {};
+      uint64_t calls = 0, rets = 0, flushes = 0, spills = 0, fills = 0, depth[34] = {};
+      uint64_t mame_sf[6] = {}, ring_sf[6] = {};
+      uint64_t ic_req[7] = {}, ic_fill[7] = {}, ins[7] = {};
+      // a CPU-side data cache modelled over the board / work RAM reads
+      // (load-store unit and frame fills): direct-mapped, 16-byte lines,
+      // 1 / 2 / 4 / 8 KB, written through and updated on a write hit
+      uint64_t l1_rd = 0, l1_hit[4] = {}, l1_hitcyc[4] = {}, l1_rdcyc = 0, l1_wr = 0;
+      uint64_t l1w_hit[4] = {}, l1w_hitcyc[4] = {};   // the same, a WORD allocated per miss (no line fill)
+      // set-associative models (LRU, 16-byte lines): the i-cache on every
+      // fetch request (DM 8 / 16 / 32 KB, 2-way 8 / 16 KB, 4-way 8 KB) and
+      // the data cache with line fills (2-way 4 / 8 KB)
+      uint64_t icm_req = 0, icm_miss[6] = {}, dcm_hit[2] = {};
+    };
+    struct CacheM {
+      int sets = 0, ways = 0; std::vector<uint32_t> tag; std::vector<uint8_t> age;
+      void init(int kb, int w) { ways = w; sets = kb * 1024 / 16 / w; tag.assign(size_t(sets) * w, 0); age.assign(size_t(sets) * w, 0); }
+      bool access(uint32_t line) {   // true on a hit; a miss allocates (LRU)
+        const size_t b = size_t(line % uint32_t(sets)) * ways;
+        int hw = -1, vict = 0;
+        for (int k = 0; k < ways; ++k) if (tag[b + k] == line + 1) hw = k;
+        const bool hit = hw >= 0;
+        if (!hit) { for (int k = 0; k < ways; ++k) if (age[b + k] > age[b + vict]) vict = k; hw = vict; tag[b + hw] = line + 1; }
+        for (int k = 0; k < ways; ++k) if (age[b + k] < 255) ++age[b + k];
+        age[b + hw] = 0;
+        return hit;
+      }
+    };
+    static Prof pw;
+    static const int NS[6] = {4, 6, 8, 12, 16, 32};
+    static int64_t ring_pos[6] = {}, ring_n[6] = {};   // MAME depth / ring occupancy (persist across windows)
+    static int ic_st_p = 0; static uint32_t pacc_p = 0;
+    static std::vector<uint32_t> l1tag[4];   // line address + 1, 0 = empty
+    static CacheM icm[6], dcm[2];
+    static bool cm_init = false;
+    if (!cm_init) { cm_init = true;
+      icm[0].init(8, 1); icm[1].init(16, 1); icm[2].init(32, 1); icm[3].init(8, 2); icm[4].init(16, 2); icm[5].init(8, 4);
+      dcm[0].init(4, 2); dcm[1].init(8, 2); }
+    static std::vector<uint32_t> l1wtag[4];  // word-allocate: line + 1, and its valid words
+    static std::vector<uint8_t>  l1wv[4];
+    static uint64_t txn_cyc = 0;
+    static auto l1_access = [&](bool in_w) {   // at an acknowledged data access
+      const int g = d->obs_gsel & 7;
+      if (g != 2 && g != 3) return;
+      const uint32_t a = d->obs_bus_addr;
+      const int r = region_of(a);
+      if (r != 1 && r != 2) return;
+      if (l1tag[0].empty()) for (int k = 0; k < 4; ++k) { l1tag[k].assign(64u << k, 0); l1wtag[k].assign(64u << k, 0); l1wv[k].assign(64u << k, 0); }
+      const uint32_t line = a >> 4;
+      const uint8_t wb = uint8_t(1u << ((a >> 2) & 3));
+      if (d->obs_bus_we) {
+        if (in_w) ++pw.l1_wr;
+        return;                                 // write-through, the line kept up to date
+      }
+      for (int k = 0; k < 4; ++k) {
+        const uint32_t ix = line & ((64u << k) - 1);
+        if (l1wtag[k][ix] == line + 1 && (l1wv[k][ix] & wb)) { if (in_w) { ++pw.l1w_hit[k]; pw.l1w_hitcyc[k] += txn_cyc; } }
+        else if (l1wtag[k][ix] == line + 1) l1wv[k][ix] |= wb;
+        else { l1wtag[k][ix] = line + 1; l1wv[k][ix] = wb; }
+      }
+      if (in_w) { ++pw.l1_rd; pw.l1_rdcyc += txn_cyc; }
+      for (int k = 0; k < 2; ++k) if (dcm[k].access(line) && in_w) ++pw.dcm_hit[k];
+      for (int k = 0; k < 4; ++k) {
+        uint32_t &t = l1tag[k][line & ((64u << k) - 1)];
+        if (t == line + 1) { if (in_w) { ++pw.l1_hit[k]; pw.l1_hitcyc[k] += txn_cyc; } }
+        else t = line + 1;
+      }
+    };
+    static auto prof_cycle = [&]() {
+      const int g = d->obs_gsel & 7;
+      if (d->obs_bus_req && g >= 1 && g <= 4) {
+        const int r = region_of(d->obs_bus_addr), w = d->obs_bus_we ? 1 : 0;
+        ++pw.bus_c[g][r][w];
+        if (d->obs_bus_ack) ++pw.bus_n[g][r][w];
+      }
+      if (d->obs_rf_call) {
+        ++pw.calls; const int dp = int(d->dbg_rcache_pos); ++pw.depth[dp < 0 ? 0 : dp > 32 ? 33 : dp];
+        if (dp >= 4) ++pw.spills;
+      }
+      if (d->obs_rf_ret) { ++pw.rets; if (int(d->dbg_rcache_pos) - 1 >= 4 || int(d->dbg_rcache_pos) - 1 < 0) ++pw.fills; }
+      if (d->obs_rf_flush) ++pw.flushes;
+      if (d->obs_ic_req) ++pw.ic_req[region_of(d->obs_fetch_addr)];
+      if (d->obs_ic_state == 1 && ic_st_p != 1) ++pw.ic_fill[region_of(d->obs_ic_fill)];
+      ic_st_p = d->obs_ic_state;
+      if (d->dbg_acc != pacc_p) { ++pw.ins[region_of(d->dbg_ip)]; pacc_p = d->dbg_acc; }
+    };
+    // the frame models run on every call / return, in or out of the window,
+    // so their state is the game's; only the window's counts are kept
+    static auto prof_frames = [&](bool in_w) {
+      for (int k = 0; k < 6; ++k) {
+        const int64_t N = NS[k];
+        uint64_t m = 0, rr = 0;
+        if (d->obs_rf_call) {
+          if (ring_pos[k] >= N) ++m;
+          ++ring_pos[k];
+          if (ring_n[k] >= N) ++rr; else ++ring_n[k];
+        }
+        if (d->obs_rf_ret) {
+          --ring_pos[k];
+          if (ring_pos[k] >= N || ring_pos[k] < 0) ++m;
+          if (ring_pos[k] < 0) ring_pos[k] = 0;
+          if (ring_n[k] > 0) --ring_n[k]; else ++rr;
+        }
+        if (d->obs_rf_flush) { m += uint64_t(std::min<int64_t>(ring_pos[k], N)); ring_pos[k] = 0;
+                               rr += uint64_t(ring_n[k]); ring_n[k] = 0; }
+        if (in_w) { pw.mame_sf[k] += m; pw.ring_sf[k] += rr; }
+      }
+    };
+    static auto prof_dump = [&](FILE *f, uint64_t vb) {
+      static const char MC[5] = {'-', 'b', 'f', 'l', 'i'}, RC[7] = {'r', 'B', 'w', 'u', 'o', 'd', 'x'};
+      std::fprintf(f, "P v %llu", (unsigned long long)vb);
+      for (int g = 1; g <= 4; ++g) for (int r = 0; r < 7; ++r) for (int w = 0; w < 2; ++w)
+        if (pw.bus_c[g][r][w]) std::fprintf(f, " bus %c%c%c %llu %llu", MC[g], RC[r], w ? 'w' : 'r',
+                                            (unsigned long long)pw.bus_n[g][r][w], (unsigned long long)pw.bus_c[g][r][w]);
+      std::fprintf(f, " calls %llu rets %llu flush %llu spill %llu fill %llu depth", (unsigned long long)pw.calls,
+                   (unsigned long long)pw.rets, (unsigned long long)pw.flushes, (unsigned long long)pw.spills,
+                   (unsigned long long)pw.fills);
+      for (int k = 0; k < 34; ++k) std::fprintf(f, " %llu", (unsigned long long)pw.depth[k]);
+      std::fprintf(f, " mame");
+      for (int k = 0; k < 6; ++k) std::fprintf(f, " %d:%llu", NS[k], (unsigned long long)pw.mame_sf[k]);
+      std::fprintf(f, " ring");
+      for (int k = 0; k < 6; ++k) std::fprintf(f, " %d:%llu", NS[k], (unsigned long long)pw.ring_sf[k]);
+      for (int r = 0; r < 7; ++r) if (pw.ic_req[r] || pw.ic_fill[r])
+        std::fprintf(f, " ic %c %llu %llu", RC[r], (unsigned long long)pw.ic_req[r], (unsigned long long)pw.ic_fill[r]);
+      for (int r = 0; r < 7; ++r) if (pw.ins[r]) std::fprintf(f, " ins %c %llu", RC[r], (unsigned long long)pw.ins[r]);
+      std::fprintf(f, " l1 %llu %llu %llu", (unsigned long long)pw.l1_rd, (unsigned long long)pw.l1_rdcyc,
+                   (unsigned long long)pw.l1_wr);
+      for (int k = 0; k < 4; ++k) std::fprintf(f, " %d:%llu:%llu", 1 << k, (unsigned long long)pw.l1_hit[k],
+                                               (unsigned long long)pw.l1_hitcyc[k]);
+      std::fprintf(f, " icm %llu", (unsigned long long)pw.icm_req);
+      for (int k = 0; k < 6; ++k) std::fprintf(f, " %llu", (unsigned long long)pw.icm_miss[k]);
+      std::fprintf(f, " dcm %llu %llu", (unsigned long long)pw.dcm_hit[0], (unsigned long long)pw.dcm_hit[1]);
+      std::fprintf(f, " l1w");
+      for (int k = 0; k < 4; ++k) std::fprintf(f, " %d:%llu:%llu", 1 << k, (unsigned long long)pw.l1w_hit[k],
+                                               (unsigned long long)pw.l1w_hitcyc[k]);
+      std::fprintf(f, "\n");
+      pw = Prof();
+    };
     // R854: PER-FRAME ACCOUNTING (M2_FRAMESTAT=<file>), one line a vblank:
     // instructions retired, and of them the FOREGROUND -- a game that runs a
     // background coroutine in its idle time (VF2: resumed at M2_BG_RESUME,
@@ -2263,6 +2550,14 @@ int main(int argc, char **argv) {
           ++f_ts[d->obs_ts & 31];
           if (d->obs_copro_stall) ++f_cst;
           if (w_on) { ++w_ts[d->obs_ts & 31]; if (d->obs_copro_stall) ++w_cst; if (d->obs_push_stall) ++w_io; }
+          if (w_on) prof_cycle();
+          prof_frames(w_on);
+          if (d->obs_bus_req && (d->obs_gsel & 7)) ++txn_cyc;
+          if (d->obs_bus_ack) { l1_access(w_on); txn_cyc = 0; }
+          if (d->obs_ic_req) {
+            if (w_on) ++pw.icm_req;
+            for (int k = 0; k < 6; ++k) if (!icm[k].access(d->obs_fetch_addr >> 4) && w_on) ++pw.icm_miss[k];
+          }
         }
         cp = d->clk_cpu;
         // the bridge's io_sel is a clk_mem pulse: sampled every clk_mem cycle
@@ -2293,7 +2588,8 @@ int main(int argc, char **argv) {
             if (!w_init) { w_init = true;
               if (const char *wi = std::getenv("M2_WORK_IPS")) std::sscanf(wi, "%x,%x", &w_s, &w_e); }
             ++w_ins;
-            if (ip == w_s) { w_on = true; w_cyc0 = f_cyc_abs; w_ins0 = w_ins; w_cst = w_io = 0; for (auto &x : w_ts) x = 0; }
+            if (ip == w_s) { w_on = true; w_cyc0 = f_cyc_abs; w_ins0 = w_ins; w_cst = w_io = 0; for (auto &x : w_ts) x = 0;
+                             pw = Prof(); }   // R927: a window that never closed is not counted
             else if (ip == w_e && w_on) {
               w_on = false;
               std::fprintf(fsf, "W v %llu cyc %llu ins %llu cst %llu gst %llu ts", (unsigned long long)vblanks,
@@ -2301,6 +2597,7 @@ int main(int argc, char **argv) {
                            (unsigned long long)w_cst, (unsigned long long)w_io);
               for (int k = 0; k < 23; ++k) std::fprintf(fsf, " %llu", (unsigned long long)w_ts[k]);
               std::fprintf(fsf, "\n");
+              prof_dump(fsf, vblanks);
             }
           }
           acc_p = d->dbg_acc;
