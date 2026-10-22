@@ -15,7 +15,9 @@
 # and the per-frame busy fraction against the skeleton's measured throughput.
 #
 # The play mode per set is a first guess, NOT CHECKED on any 2C set:
-#   rally  STCC and Over Rev (indy500-style STEER / ACCEL / BRAKE ports)
+#   rally  STCC (indy500-style STEER / ACCEL / BRAKE ports)
+#   orev   Over Rev (R928: indy500's ports, its pedals reversed, shift up /
+#          down and View 1 on IN1)
 #   vcop2  The House of the Dead (its ports include Virtua Cop 2's)
 #   dig    everything else -- coin / start / buttons only, so the analog
 #          games (Wave Runner, Ski Super G, Water Ski, Top Skater, Behind
@@ -39,7 +41,8 @@ SETS_ALL="stcc hotd bel waverunr skisuprg segawski topskatr overrev rascot2 dyna
 
 mode_of() {
   case "$1" in
-    stcc*|overrev) echo rally ;;
+    stcc*)         echo rally ;;
+    overrev)       echo orev ;;    # R928
     hotd*)         echo vcop2 ;;
     *)             echo dig ;;
   esac

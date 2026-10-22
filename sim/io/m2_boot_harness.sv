@@ -110,6 +110,7 @@ module m2_boot_harness #(
   input  logic        cpu_hold,
   // Cabinet switches, active low, MAME's IN0 order: bit2 is the TEST switch
   // (MAME calls it Service Mode) and FB is that switch held.
+  input  logic        orev,           // R928: Over Rev's comm-board answer (Model2.sv is_orev; tb M2_OREV)
   input  logic  [7:0] cab_in0,
   input  logic  [7:0] cab_in1,        // R852: A2's IN1 / IN2 (players 1 and 2)
   input  logic  [7:0] cab_in2,
@@ -641,7 +642,7 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top #(.VC(VCOP), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES), .C2(C2)) u_cpu (   // R924: C2   // R869: FR, F2A
+  i960_top #(.VC(VCOP || C2), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES), .C2(C2)) u_cpu (   // R924: C2   // R869: FR, F2A; R928: VC with C2 (Model2.sv)
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP | A2X),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
@@ -1221,6 +1222,7 @@ module m2_boot_harness #(
     (A2 && iob_sel)                   ? ((cpu_io_addr[11:5] == 7'd0) ? a2_io_rdata : 32'd0) :
     iob_sel                           ? iob_rdata :
     bak_sel                           ? bak_rdata :
+    comm_sel                          ? {8'h00, ~comm_zfg, 6'h3F, comm_fg, 8'h00, 7'h7F, comm_cn} :   // R928, as Model2.sv
     (cpu_io_addr[23:4] == 20'h98003)  ? {4{tgpid_b}} :
     copro_sel                         ? copro_rdata :
     (C2 && cpu_io_addr[23:0] == 24'h980014) ? ((obs_copro_prog == 16'd0) ? 32'hFFFF_FFFF : 32'd0) :   // R924, as Model2.sv
@@ -1230,6 +1232,25 @@ module m2_boot_harness #(
     (cpu_io_addr[23:0] == 24'he80000) ? {20'd0, io_intreq} :
     (cpu_io_addr[23:0] == 24'he80004) ? {20'd0, io_intena} :
     32'd0;
+
+  // R928: Over Rev's comm board as MAME sees it with no link (Model2.sv comm_*)
+  logic       comm_cn, comm_fg, comm_zfg, comm_irq0_d;
+  logic [1:0] comm_vb;
+  wire  comm_sel = orev && cpu_io_sel && (cpu_io_addr[23:17] == 7'h50) && (cpu_io_addr[15:2] == 14'h1000);
+  always_ff @(posedge clk_m or negedge rst_n)
+    if (!rst_n) begin comm_cn <= 1'b0; comm_fg <= 1'b0; comm_zfg <= 1'b0; comm_vb <= 2'd0; comm_irq0_d <= 1'b0; end
+    else begin
+      comm_irq0_d <= irq[0];
+      if (comm_sel && cpu_io_we && cpu_io_be[0]) begin
+        comm_cn <= cpu_io_wdata[0];
+        if (cpu_io_wdata[0] && !comm_cn) begin comm_zfg <= 1'b1; comm_vb <= 2'd0; end
+        if (!cpu_io_wdata[0]) comm_zfg <= 1'b0;
+      end else if (comm_zfg && irq[0] && !comm_irq0_d) begin
+        comm_vb <= comm_vb + 2'd1;
+        if (comm_vb == 2'd2) comm_zfg <= 1'b0;
+      end
+      if (comm_sel && cpu_io_we && cpu_io_be[2]) comm_fg <= cpu_io_wdata[16];
+    end
 
   always_ff @(posedge clk_m or negedge rst_n) begin
     if (!rst_n) begin

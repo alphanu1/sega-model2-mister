@@ -24,6 +24,9 @@
 // implemented for one operand kind and trapped on another shows here and not
 // in the FIRST table.
 //
+// R928: and the 2C build (FR, F2A and VC together: Model2.sv's VC is on with
+// C2, for Over Rev's atanrl / sinrl / cosrl) -- the "2C" column.
+//
 //   g++ -O1 -std=c++17 -I sim/i960 sim/io/i960_formcheck.cpp -o formcheck
 //   formcheck <forms.txt>     prints every form; TRAP lines are what halts
 #include <cstdio>
@@ -68,32 +71,34 @@ int main(int argc, char **argv) {
     }
   }
   std::fclose(f);
-  int old_traps = 0, new_traps = 0, main_traps = 0;
+  int old_traps = 0, new_traps = 0, main_traps = 0, c2_traps = 0;
   for (auto &kv : keys) {
     const uint32_t k = kv.first; const E &e = kv.second;
     const bool o = traps(k, e.insn, true, false, false);
     const bool nw = traps(k, e.insn, true, false, true);
     const bool m = traps(k, e.insn, false, true, false);
-    old_traps += o; new_traps += nw; main_traps += m;
-    std::printf("%s %04x insn %08x first pc %08x t %9.4f n %12llu  2A-old %s  2A-new %s  main %s\n",
-                (o || nw) ? "TRAP" : "    ", k, e.insn, e.pc, e.t, e.n,
-                o ? "TRAP" : "ok  ", nw ? "TRAP" : "ok  ", m ? "TRAP" : "ok  ");
+    const bool c2 = traps(k, e.insn, true, true, true);   // R928
+    old_traps += o; new_traps += nw; main_traps += m; c2_traps += c2;
+    std::printf("%s %04x insn %08x first pc %08x t %9.4f n %12llu  2A-old %s  2A-new %s  main %s  2C %s\n",
+                (o || nw || c2) ? "TRAP" : "    ", k, e.insn, e.pc, e.t, e.n,
+                o ? "TRAP" : "ok  ", nw ? "TRAP" : "ok  ", m ? "TRAP" : "ok  ", c2 ? "TRAP" : "ok  ");
   }
-  std::printf("%zu forms: 2A-old traps on %d, 2A-new on %d, main on %d\n", keys.size(), old_traps, new_traps, main_traps);
+  std::printf("%zu forms: 2A-old traps on %d, 2A-new on %d, main on %d, 2C on %d\n", keys.size(), old_traps, new_traps, main_traps, c2_traps);
   // R921: the variants. 2A = FR + F2A with vc_en high (every 2A game past
   // VF2); vf2 = the same core with vc_en low (nothing of FR / VC / F2A live).
-  int v2a = 0, vvf2 = 0, vmain = 0;
+  int v2a = 0, vvf2 = 0, vmain = 0, vc2 = 0;
   for (auto &kv : vars) {
     const uint32_t v = kv.first; const E &e = kv.second; const uint32_t k = var_key[v];
     const bool a = traps(k, e.insn, true, false, true);
     const bool f = traps(k, e.insn, false, false, false);
     const bool m = traps(k, e.insn, false, true, false);
-    v2a += a; vvf2 += f; vmain += m;
-    std::printf("%s VAR %08x key %04x insn %08x first pc %08x t %9.4f n %12llu  2A %s  vf2 %s  main %s\n",
-                a ? "VTRAP" : (f ? "vtrap" : "     "), v, k, e.insn, e.pc, e.t, e.n,
-                a ? "TRAP" : "ok  ", f ? "TRAP" : "ok  ", m ? "TRAP" : "ok  ");
+    const bool c2 = traps(k, e.insn, true, true, true);   // R928
+    v2a += a; vvf2 += f; vmain += m; vc2 += c2;
+    std::printf("%s VAR %08x key %04x insn %08x first pc %08x t %9.4f n %12llu  2A %s  vf2 %s  main %s  2C %s\n",
+                (a || c2) ? "VTRAP" : (f ? "vtrap" : "     "), v, k, e.insn, e.pc, e.t, e.n,
+                a ? "TRAP" : "ok  ", f ? "TRAP" : "ok  ", m ? "TRAP" : "ok  ", c2 ? "TRAP" : "ok  ");
   }
   if (!vars.empty())
-    std::printf("%zu variants: 2A traps on %d, vf2 (vc_en low) on %d, main on %d\n", vars.size(), v2a, vvf2, vmain);
+    std::printf("%zu variants: 2A traps on %d, vf2 (vc_en low) on %d, main on %d, 2C on %d\n", vars.size(), v2a, vvf2, vmain, vc2);
   return 0;
 }

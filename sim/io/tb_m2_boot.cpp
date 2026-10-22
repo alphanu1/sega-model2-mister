@@ -47,6 +47,7 @@ static std::vector<uint16_t> mem;
 // large 2A layout the 2C bench (M2_C2) loads
 static uint32_t g_mm = 0x1ffffffu;
 static bool g_c2 = false;    // R924: the 2C board (harness built with C2=1, AW=26)
+static bool g_big = false;   // R928: and the large layout (HOTD); M2_C2_STD=1 is Sega Rally's (Over Rev)
 // R852: the Model 2A bench (M2_A2=1; harness built with A2=1): the 2A image
 // layout's word bases, Model2.sv's GAME_* with M2A. Daytona's otherwise.
 static bool     g_a2      = false;
@@ -288,7 +289,11 @@ int main(int argc, char **argv) {
   // with MAME's dword index (Model2.sv eng_base / eng_mem_idx under a2_big);
   // the copro data at 0x13C0000 (XTRA2); the TGPx4's program copy at 0x1040000.
   g_c2 = std::getenv("M2_C2") != nullptr;
-  if (g_c2) { g_mm = 0x3ffffffu; G_TEX = 0x2000000u; G_POLY = 0x2800000u; }
+  // R928: M2_C2_STD=1 -- a 2C game in the 2A layout (Over Rev, Model2.sv
+  // is_orev: a2_big 0): the 2A bases, no XTRA3, no copro data reads
+  g_big = g_c2 && !std::getenv("M2_C2_STD");
+  if (g_c2) g_mm = 0x3ffffffu;
+  if (g_big) { G_TEX = 0x2000000u; G_POLY = 0x2800000u; }
   const char *rp = std::getenv("M2_ROMPATH");
   const std::string dir = std::string(rp ? rp :
       (std::string(std::getenv("HOME") ? std::getenv("HOME") : ".") + "/roms/Model2"))
@@ -363,7 +368,7 @@ int main(int argc, char **argv) {
       // R924: the large layout's third remap (XTRA3): image bytes from 0x32C0000
       // go to byte 0x4000000 (textures 16 MB, then polygons), and their flat
       // place back to unwritten. Copied from the top down (the target is above).
-      if (g_c2 && nw > 0x1960000u) {
+      if (g_big && nw > 0x1960000u) {
         const size_t src = 0x1960000u, dst = 0x2000000u, n = nw - src;
         for (size_t k = n; k-- > 0; ) if (dst + k < mem.size()) mem[dst + k] = mem[src + k];
         for (size_t k = 0; k < n && src + k < dst; ++k) mem[src + k] = 0xffff;
@@ -389,7 +394,7 @@ int main(int argc, char **argv) {
           const size_t ext = 0x2D40000u / 2, cop = 0x2EC0000u / 2;
           for (size_t w = 0; w < 0xC0000; ++w)  mem[0x1300000 + w] = (ext + w < nw) ? mem[ext + w] : 0;
           for (size_t w = 0; w < 0x200000; ++w) mem[0x13C0000 + w] = (cop + w < nw) ? mem[cop + w] : 0;
-          for (size_t w = ext; w < nw && w < mem.size() && !(g_c2 && w >= 0x1960000u); ++w) mem[w] = 0xffff;   // R924: not the XTRA3 slots
+          for (size_t w = ext; w < nw && w < mem.size() && !(g_big && w >= 0x1960000u); ++w) mem[w] = 0xffff;   // R924: not the XTRA3 slots
           std::printf("  A2X: program extension at word 0x1300000, copro data at 0x13C0000\n");
         }
         // and the harness's display list and texture RAM as above
@@ -1083,11 +1088,11 @@ int main(int argc, char **argv) {
           // colour-table read out of polygon memory, so the one model that
           // represents the BOARD was the one giving the wrong colours.
           if      (el_space == 1)       { if (el_addr & 0x800000u) { base = 0x1740000u; off = el_addr & 0x7fffu; }
-                                          else                    { base = G_TEX; off = el_addr & (g_c2 ? 0x3fffffu : 0x1fffffu); } }
+                                          else                    { base = G_TEX; off = el_addr & (g_big ? 0x3fffffu : 0x1fffffu); } }
           else if (el_space == 2)       { base = 0x1730000u; off = el_addr & 0x1ffu;    }
           else if (el_space == 3)       { base = 0x1731000u; off = el_addr & 0x3fffu;   }
           else if (el_oba & (1u << 24)) { base = 0x1720000u; off = el_addr & 0x7fffu;   }
-          else if (el_oba & (1u << 23)) { base = G_POLY; off = el_addr & (g_c2 ? 0x7fffffu : 0x3fffffu); }
+          else if (el_oba & (1u << 23)) { base = G_POLY; off = el_addr & (g_big ? 0x7fffffu : 0x3fffffu); }
           else                          { base = 0x1710000u; off = el_addr & 0x7fffu;   }
           const uint32_t a = (base + off * 2u) & g_mm;
           el_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
@@ -1128,11 +1133,11 @@ int main(int argc, char **argv) {
       const unsigned space = d->eng_mem_space;          // R222
       uint32_t base, off;
       if      (space == 1)       { if (idx & 0x800000u) { base = 0x1740000u; off = idx & 0x7fffu; }
-                                   else                 { base = G_TEX; off = idx & (g_c2 ? 0x3fffffu : 0x1fffffu); } }
+                                   else                 { base = G_TEX; off = idx & (g_big ? 0x3fffffu : 0x1fffffu); } }
       else if (space == 2)       { base = 0x1730000u; off = idx & 0x1ffu;    }
       else if (space == 3)       { base = 0x1731000u; off = idx & 0x3fffu;   }
       else if (oba & (1u << 24)) { base = 0x1720000u; off = idx & 0x7fffu;   }
-      else if (oba & (1u << 23)) { base = G_POLY; off = idx & (g_c2 ? 0x7fffffu : 0x3fffffu); }
+      else if (oba & (1u << 23)) { base = G_POLY; off = idx & (g_big ? 0x7fffffu : 0x3fffffu); }
       else                       { base = 0x1710000u; off = idx & 0x7fffu;   }
       const uint32_t a = (base + (off << 1)) & g_mm;
       d->eng_mem_data = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16);
@@ -1484,7 +1489,7 @@ int main(int argc, char **argv) {
       dat_data = rd32((d->tgp_dat_is_prog ? 0x1040000u                       // R924: the TGPx4's program copy
                        : d->tgp_dat_is_buf ? BUF_BASE : g_c2 ? 0x13C0000u : COPRO_BASE)   // R924: 2C's copro data
                       + (uint32_t(d->tgp_dat_addr) << 1));
-      if (g_a2 && !g_c2 && !d->tgp_dat_is_buf) dat_data = 0;   // R852: no copro data ROM on 2A (as Model2.sv)
+      if (g_a2 && !g_big && !d->tgp_dat_is_buf && !(g_c2 && d->tgp_dat_is_prog)) dat_data = 0;   // R928: a 2C std-layout game too   // R852: no copro data ROM on 2A (as Model2.sv)
       // WHERE THE COUNT COMES FROM. 0x47C is `mov (x0+1)(e), $0x4a`; MAME's x0
       // there is ~0x1088/0x11B1, small dword offsets into buffer RAM.
       // EVERY read, with the pc, rather than filtering on 0x47C: the pc probe
@@ -1552,6 +1557,8 @@ int main(int argc, char **argv) {
     if (const char *cv = std::getenv("M2_IN0")) c = std::strtoul(cv, nullptr, 16);
     d->cab_in0 = c;
     d->cab_in1 = 0xff; d->cab_in2 = 0xff;   // R852: A2's players, nothing pressed
+    d->orev = std::getenv("M2_OREV") ? 1 : 0;   // R928: Over Rev (game ID 0x1C): its comm-board answer
+    if (d->orev) std::printf("  R928: Over Rev's comm board (CN 0xFE | cn; FG bit 7 low three vblanks after CN = 1)\n");
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
   int slow_prev = 0;

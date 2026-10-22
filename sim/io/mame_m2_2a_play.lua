@@ -13,6 +13,9 @@
 --          pltkidsa, doaab) -- buttons on their own rhythms, a random stick
 --   sky    R887: Sky Target -- the analog stick swept, gun held, missiles, view
 --   bike   R887: Manx TT / Motor Raid -- throttle, lean, brake, shift / punch
+--   orev   R928: Over Rev (2C; indy500's ports) -- accelerator held, the wheel
+--          swept, brake now and then, shift up / down (IN1 0x10 / 0x20) and
+--          View 1 (IN1 0x01) on their own rhythms; start on IN0 bit 6
 --   chase  R903: Manx TT on an autopilot that rides at the other riders and
 --          brake-checks the ones behind it -- knocks riders down (below)
 -- Each coin time drops two coins; Start is pressed every 2 s for 100 s after
@@ -91,7 +94,7 @@ F.v20 = fmask(":IN0", 0x20)                          -- Sky Target: View Change
 F.i10, F.i20 = fmask(":IN1", 0x10), fmask(":IN1", 0x20)   -- gun / missile, shift up / down
 F.sx, F.sy = first(":STICKX"), first(":STICKY")
 F.thr, F.bank = first(":THROTTLE"), first(":BANK")
-if GAME == "sky" or GAME == "bike" or GAME == "chase" then F.start = F.s40 end
+if GAME == "sky" or GAME == "bike" or GAME == "chase" or GAME == "orev" then F.start = F.s40 end
 if log then
   for k, v in pairs(F) do log:write(string.format("FIELD %s %s\n", k, v and "yes" or "no")) end
   log:flush()
@@ -270,6 +273,15 @@ PL_F = emu.add_machine_frame_notifier(function()
       local g = math.floor(t / 7) % 4             -- a gear every 7 s: 1 2 3 4
       set(F.g1, g == 0 and 1 or 0); set(F.g2, g == 1 and 1 or 0)
       set(F.g3, g == 2 and 1 or 0); set(F.g4, g == 3 and 1 or 0)
+    elseif GAME == "orev" then
+      -- R928: Over Rev -- MAME's ACCEL / BRAKE are PORT_REVERSE; the value set
+      -- here is the field's (0xff = floored), the port reads it inverted
+      set(F.acc, ((t % 20) < 18) and 0xff or 0x00)
+      set(F.brk, ((t % 20) >= 18.5) and 0xff or 0x00)
+      set(F.str, 0x80 + math.floor(0x60 * math.sin(t * 0.7)))
+      set(F.i10, ((t % 7) < 0.2) and 1 or 0)
+      set(F.i20, ((t % 23) < 0.2) and 1 or 0)
+      set(F.d1, ((t % 13) < 0.2) and 1 or 0)
     elseif GAME == "zg" then
       set(F.b1, 1)
       set(F.b2, ((t % 5) < 0.3) and 1 or 0)
