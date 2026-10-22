@@ -15,7 +15,8 @@
 # and the per-frame busy fraction against the skeleton's measured throughput.
 #
 # The play mode per set is a first guess, NOT CHECKED on any 2C set:
-#   rally  STCC (indy500-style STEER / ACCEL / BRAKE ports)
+#   rally  STCC (indy500-style STEER / ACCEL / BRAKE ports; R933: its census
+#          session is sim/io/mame_m2_stcc_race.lua -- qualifying and a race)
 #   orev   Over Rev (R928: indy500's ports, its pedals reversed, shift up /
 #          down and View 1 on IN1)
 #   vcop2  The House of the Dead (its ports include Virtua Cop 2's)
