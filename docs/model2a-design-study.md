@@ -44081,3 +44081,10 @@ built unconditionally in the 2C build. A Discord tester ran the 2A games'
 the 2A core. Asked of Ben: Over Rev's [15kHz CRT] MRA on the same CRT
 (2C-wide or HOTD only?), and HOTD's normal MRA with Video = 15kHz
 interlaced (MRA flag or the converter?).
+*FIT, round 2 (47a2168):* s1355 clk_sys -0.801, clk_mem +0.418, i960
++0.208; s1356 clk_sys -0.126, clk_mem +0.261, i960 +1.365, hold +0.150
+(41,397 ALM, 549 / 553); s1357 no fit. s1356's only failing clk_sys paths
+are the fill's walk_end -> s1_cr / s1_cl / s1_col (-0.126 .. -0.001) and
+oz_emax (-0.005) -- shared with 2A, placement. Closest 2C seed yet;
+assembled as Model2C_20261022_s1356.rbf (md5 aee4446c...). Round 3
+(s1358-s1360) fitting.
