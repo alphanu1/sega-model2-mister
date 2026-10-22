@@ -1,0 +1,26 @@
+R926: MAME 0.289 with the i960's and the TGP's clocks set from the environment
+(Sega Model 2 core for MiSTer FPGA, study R926). M2_I960_CLK=<Hz> (MAME: 25 MHz)
+and M2_TGP_CLK=<Hz> (MAME: 50 MHz, a third of it an instruction) are applied in
+machine_start; without them MAME runs as before. What it showed: Sega Rally
+picks each frame's AI-car detail from the time left after its first piece of
+work (timer 2 at 0x5bade8), so a slower i960 demotes the cars nearest the
+player -- at 10 MHz the third car flickers between the course line and its
+physics frame to frame, as in the whole-core bench.
+Apply in a MAME 0.289 tree: patch -p1 < mame_m2_clock.patch, then e.g.
+make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp (17 s incremental). The
+patch is MAME code (BSD-3-Clause, model2.cpp's own licence); a tool, not part
+of the core.
+
+diff --git a/src/mame/sega/model2.cpp b/src/mame/sega/model2.cpp
+index 899828e6..2c45399d 100644
+--- a/src/mame/sega/model2.cpp
++++ b/src/mame/sega/model2.cpp
+@@ -158,6 +158,8 @@ TIMER_CALLBACK_MEMBER(model2_state::irq_mask_delayed_update)
+ 
+ void model2_state::machine_start()
+ {
++	if (const char *ck = getenv("M2_I960_CLK")) { m_maincpu->set_unscaled_clock(strtoul(ck, nullptr, 0)); osd_printf_info("R926: i960 clock %u\n", unsigned(m_maincpu->unscaled_clock())); }
++	if (const char *ck = getenv("M2_TGP_CLK")) { if (device_t *t = subdevice("copro_tgp")) t->set_unscaled_clock(strtoul(ck, nullptr, 0)); }
+ 	// initialize custom debugger pool, @see machine/model2.cpp
+ 	debug_init();
+ 

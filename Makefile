@@ -1614,6 +1614,11 @@ obj_boot_2a/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(
 # the stores to render mode.
 # R904: BOOT_2AX_G=-GWAITST=1 BOOT_2AX_DIR=obj_boot_2ax_ws builds it with m2_waitst live
 # (Model2.sv's M2_2A_WAITST for Sega Rally).
+# R926: Sega Rally into a race -- M2_INSCHED=<file> (MAME's port values by frame,
+# sim/io/mame_m2_rally_ap.lua INREC), M2_RALLY_AP=<frame> (the autopilot), M2_CARLOG=<file>
+# (the AI cars each vblank; sim/io/rally_ai_check.py), +insn=<large>; the data ROM is
+# now read at word 0x13C0000 (it answered 0 before, R902's NaN). ~3 s a frame, the
+# race from frame ~1200.
 BOOT_2AX_DIR ?= obj_boot_2ax
 BOOT_2AX_G   ?=
 $(BOOT_2AX_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) \

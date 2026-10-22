@@ -107,6 +107,9 @@ module m2_boot_harness #(
   input  logic  [7:0] cab_in0,
   input  logic  [7:0] cab_in1,        // R852: A2's IN1 / IN2 (players 1 and 2)
   input  logic  [7:0] cab_in2,
+  input  logic  [7:0] cab_an0,        // R926: the 315-5649's analog channels 0-2
+  input  logic  [7:0] cab_an1,        //   (Sega Rally: steering, accelerator, brake)
+  input  logic  [7:0] cab_an2,
   output logic [31:0] a2_snd_bytes,   // R852: bytes the i960 sent the sound side
   output logic [31:0] a2_snd_sig,
   output logic  [7:0] a2_snd_last,    // R859: the last byte the i960 sent
@@ -1261,7 +1264,7 @@ module m2_boot_harness #(
       .word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
       .rdata(a2_io_rdata),
       .in0(cab_in0), .in1(cab_in1), .in2(MANX_MOTION ? ((a2_pe == 8'h3D) ? 8'hCE : 8'hCD) : cab_in2), .sw(8'hFF),
-      .an0(8'hFF), .an1(8'hFF), .an2(8'hFF),   // R862: no analog game in the boot bench
+      .an0(cab_an0), .an1(cab_an1), .an2(cab_an2),   // R926 (0xFF unless M2_INSCHED sets them)
       .lamps(), .pe(a2_pe), .ee_ld_we(1'b0), .ee_ld_a(6'd0), .ee_ld_d(16'd0),   // R896, R897
       .dbg_pa(), .dbg_dir()
     );

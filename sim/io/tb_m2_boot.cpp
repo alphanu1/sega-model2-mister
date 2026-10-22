@@ -1461,9 +1461,15 @@ int main(int argc, char **argv) {
       // Serving buffer-RAM reads out of the data ROM gave the TGP a garbage
       // display-list count at 0x47C, so it never terminated the loop at
       // 0x481-0x4B5 and never reached the mailbox clear at 0x4C4.
-      dat_data = rd32((d->tgp_dat_is_buf ? BUF_BASE : COPRO_BASE)
+      // R926: SEGA RALLY HAS ONE (R862: MAME's copro_data, 4 MB, which the
+      // 2A image puts at word 0x13C0000 and Model2.sv reads at GAME_COPRO_2A).
+      // This bench answered every 2A data-ROM read 0, so the TGP's course
+      // lookups returned nothing and Rally's car heights were NaN from the
+      // start grid (R902's "every translation NaN" was this, not the inputs).
+      static const bool a2x_cd = std::getenv("M2_A2X") != nullptr;
+      dat_data = rd32((d->tgp_dat_is_buf ? BUF_BASE : (g_a2 ? 0x13C0000u : COPRO_BASE))
                       + (uint32_t(d->tgp_dat_addr) << 1));
-      if (g_a2 && !d->tgp_dat_is_buf) dat_data = 0;   // R852: no copro data ROM on 2A (as Model2.sv)
+      if (g_a2 && !a2x_cd && !d->tgp_dat_is_buf) dat_data = 0;   // R852: VF2's 2A board has no copro data ROM
       // WHERE THE COUNT COMES FROM. 0x47C is `mov (x0+1)(e), $0x4a`; MAME's x0
       // there is ~0x1088/0x11B1, small dword offsets into buffer RAM.
       // EVERY read, with the pc, rather than filtering on 0x47C: the pc probe
@@ -1533,6 +1539,34 @@ int main(int argc, char **argv) {
     d->cab_in1 = 0xff; d->cab_in2 = 0xff;   // R852: A2's players, nothing pressed
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
+  d->cab_an0 = 0xff; d->cab_an1 = 0xff; d->cab_an2 = 0xff;   // R926: as before unless scheduled
+  // R926: M2_INSCHED=<file> -- the cabinet's inputs by frame (vblank count),
+  // one line each: "<frame> <in0> <in1> <in2> <an0> <an1> <an2>" (hex values;
+  // the first frame any line names). The line in force from that vblank on.
+  // A MAME session's own port values (IN0, IN1, IN2, STEER, ACCEL, BRAKE for
+  // Sega Rally) replayed frame for frame.
+  struct InSched { uint64_t f; unsigned v[6]; };
+  static std::vector<InSched> g_insched;
+  static size_t g_insched_i = 0;
+  if (const char *isf = std::getenv("M2_INSCHED")) {
+    if (FILE *f = std::fopen(isf, "r")) {
+      char ln[256];
+      while (std::fgets(ln, sizeof ln, f)) {
+        InSched e{};
+        unsigned long long fr;
+        if (std::sscanf(ln, "%llu %x %x %x %x %x %x", &fr, &e.v[0], &e.v[1], &e.v[2], &e.v[3], &e.v[4], &e.v[5]) == 7) {
+          e.f = fr; g_insched.push_back(e);
+        }
+      }
+      std::fclose(f);
+      std::printf("  R926: input schedule %s, %zu lines\n", isf, g_insched.size());
+    }
+  }
+  // R926: M2_CARLOG=<file> -- Sega Rally's object table (work RAM 0x500000,
+  // stride 0x100, 16 slots) at every vblank, as the MAME autopilot logs it:
+  // "T <t> <frame> P <x> <y> <z> <handler>", then per AI car (handler
+  // 0x5cacf0) "A <slot> <segment> <pos x y z> <vel x y z> <heading x y z> <+0x10>".
+  static FILE *g_carlog = std::getenv("M2_CARLOG") ? std::fopen(std::getenv("M2_CARLOG"), "w") : nullptr;
   int slow_prev = 0;
   int cpu_prev = 0;
   auto base_step = [&]() {
@@ -1555,6 +1589,95 @@ int main(int argc, char **argv) {
       if (d->vid_hb && !g_hb_p) { g_px = 0; if (!d->vid_vb) ++g_py; }
       if (d->vid_vb && !g_vb_p) {
         ++g_frames_done;
+        // R926: the input schedule and the car log (see M2_INSCHED / M2_CARLOG)
+        while (g_insched_i < g_insched.size() && g_insched[g_insched_i].f <= g_frames_done) {
+          const InSched &e = g_insched[g_insched_i++];
+          d->cab_in0 = e.v[0]; d->cab_in1 = e.v[1]; d->cab_in2 = e.v[2];
+          d->cab_an0 = e.v[3]; d->cab_an1 = e.v[4]; d->cab_an2 = e.v[5];
+        }
+        // R926: M2_RALLY_AP=<frame> -- from that vblank, Sega Rally driven by
+        // an autopilot that follows the AI cars' own trails (the object table
+        // above: player +0x14 position, +0x2c velocity a frame; AI cars'
+        // positions recorded as they go), as the MAME session's Lua does:
+        // steering (an0) toward the trail point 25 units ahead, accelerator
+        // (an1) held, brake (an2) when far off line and fast, the gear (IN1
+        // bits 6:4, MAME's daytona_gearbox_r codes) by speed. Coin and start
+        // still come from M2_INSCHED.
+        static const long long ap_from = std::getenv("M2_RALLY_AP") ? std::atoll(std::getenv("M2_RALLY_AP")) : -1;
+        if (ap_from >= 0 && (long long)g_frames_done >= ap_from) {
+          auto rd = [&](uint32_t a) -> uint32_t {
+            const uint32_t w = 0x1600000u + ((a - 0x500000u) >> 1);
+            return uint32_t(mem[w]) | (uint32_t(mem[w + 1]) << 16);
+          };
+          auto rf = [&](uint32_t a) { const uint32_t u = rd(a); float x; std::memcpy(&x, &u, 4); return double(x); };
+          static std::map<int, std::vector<std::pair<double, double>>> trail;
+          static std::map<int, std::pair<double, double>> lastp;
+          static double head = 0;
+          for (int k = 1; k < 16; ++k) {
+            const uint32_t b = 0x500000u + 0x100u * k;
+            if (rd(b + 4) != 0x5cacf0u) continue;
+            const double x = rf(b + 0x14), z = rf(b + 0x1c);
+            if (!(x == x) || !(z == z)) continue;
+            auto &tr = trail[k];
+            auto lp = lastp.find(k);
+            if (lp != lastp.end() && (x - lp->second.first) * (x - lp->second.first) + (z - lp->second.second) * (z - lp->second.second) > 400) tr.clear();
+            if (tr.empty() || (x - tr.back().first) * (x - tr.back().first) + (z - tr.back().second) * (z - tr.back().second) > 4) tr.push_back({x, z});
+            lastp[k] = {x, z};
+          }
+          if (rd(0x500004) == 0x5d3f40u) {
+            const double px = rf(0x500014), pz = rf(0x50001c), vx = rf(0x50002c), vz = rf(0x500034);
+            const double spd = std::sqrt(vx * vx + vz * vz);
+            if (spd > 0.03) head = std::atan2(vx, vz);
+            double best = 1e30; const std::vector<std::pair<double, double>> *bt = nullptr; size_t bi = 0;
+            for (auto &kv : trail)
+              for (size_t i = 0; i + 1 < kv.second.size(); ++i) {
+                const double dd = (kv.second[i].first - px) * (kv.second[i].first - px) + (kv.second[i].second - pz) * (kv.second[i].second - pz);
+                if (dd < best) { best = dd; bt = &kv.second; bi = i; }
+              }
+            const double kmh = spd * 60 * 3.6;
+            auto ahead = [&](double dist, double &ax, double &az) {
+              ax = px + 30 * std::sin(head); az = pz + 30 * std::cos(head);
+              if (!bt) return;
+              double acc = 0; size_t i = bi;
+              while (i + 1 < bt->size() && acc < dist) {
+                acc += std::hypot((*bt)[i + 1].first - (*bt)[i].first, (*bt)[i + 1].second - (*bt)[i].second); ++i;
+              }
+              ax = (*bt)[i].first; az = (*bt)[i].second;
+            };
+            auto wrapa = [](double a) { while (a > M_PI) a -= 2 * M_PI; while (a < -M_PI) a += 2 * M_PI; return a; };
+            double tx, tz, fx, fz;
+            ahead(15 + 0.1 * kmh, tx, tz);        // steer at this point
+            ahead(40 + 0.3 * kmh, fx, fz);        // and lift for the bend beyond it
+            const double err = wrapa(std::atan2(tx - px, tz - pz) - head);
+            const double ferr = std::fabs(wrapa(std::atan2(fx - px, fz - pz) - head));
+            int st = int(std::floor(err * 300));
+            st = st < -0x7f ? -0x7f : st > 0x7f ? 0x7f : st;
+            const bool brk = std::fabs(err) > 0.5 && kmh > 90;
+            const bool lift = ferr > 0.4 && kmh > 170;
+            const int g = kmh < 55 ? 2 : kmh < 95 ? 1 : kmh < 140 ? 6 : 5;   // gears 1-4
+            d->cab_an0 = 0x80 + st; d->cab_an1 = (brk || lift) ? 0 : 0xff; d->cab_an2 = brk ? 0xff : 0;
+            d->cab_in1 = 0x8f | (g << 4);
+          }
+        }
+        if (g_carlog) {
+          auto wr32 = [&](uint32_t a) -> uint32_t {      // work RAM dword, harness word 0x1600000
+            const uint32_t w = 0x1600000u + ((a - 0x500000u) >> 1);
+            return uint32_t(mem[w]) | (uint32_t(mem[w + 1]) << 16);
+          };
+          auto fl = [](uint32_t u) { float x; std::memcpy(&x, &u, 4); return double(x); };
+          std::fprintf(g_carlog, "T %.4f %llu P %.3f %.3f %.3f %08x\n", double(g_frames_done) / 57.5,
+                       (unsigned long long)g_frames_done, fl(wr32(0x500014)), fl(wr32(0x500018)),
+                       fl(wr32(0x50001c)), wr32(0x500004));
+          for (uint32_t k = 1; k < 16; ++k) {
+            const uint32_t b = 0x500000u + 0x100u * k;
+            if (wr32(b + 4) != 0x5cacf0u) continue;
+            std::fprintf(g_carlog, "A %u %u %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x\n", k,
+                         wr32(b + 0x88) & 0xffff, wr32(b + 0x14), wr32(b + 0x18), wr32(b + 0x1c),
+                         wr32(b + 0x2c), wr32(b + 0x30), wr32(b + 0x34),
+                         wr32(b + 0x9c), wr32(b + 0xa0), wr32(b + 0xa4), wr32(b + 0x10));
+          }
+          std::fflush(g_carlog);
+        }
         // R248: one line per frame that drew anything, with its lighting.
         if (g_fr_log && g_fr_poly) {
           std::fprintf(g_fr_log, "f%llu polys=%ld luma_mean=%.1f zero=%ld (%.0f%%) lp=%04x light=(%08x,%08x,%08x)\n",
@@ -1821,9 +1944,9 @@ int main(int argc, char **argv) {
       if (bl && d->obs_bus_ack && (brd || d->obs_bus_we) && d->dbg_acc != bl_last && d->obs_bus_addr >= blo && d->obs_bus_addr <= bhi)
       {
         bl_last = d->dbg_acc;
-        std::fprintf(bl, "%llu %s %08x %08x be %x ip %08x\n", (unsigned long long)d->dbg_acc, d->obs_bus_we ? "W" : "R",
+        std::fprintf(bl, "%llu %s %08x %08x be %x ip %08x f%llu\n", (unsigned long long)d->dbg_acc, d->obs_bus_we ? "W" : "R",
                      (unsigned)d->obs_bus_addr, (unsigned)(d->obs_bus_we ? d->obs_bus_wdata : d->obs_bus_rdata),
-                     (unsigned)d->obs_bus_be, (unsigned)d->dbg_ip);
+                     (unsigned)d->obs_bus_be, (unsigned)d->dbg_ip, (unsigned long long)g_frames_done);   // R926: and the frame
       }
       static bool io_prev = false;
       const bool io_now = d->obs_io_sel && ((d->obs_io_addr & 0xffffe0u) == 0xc00000u);

@@ -1,5 +1,41 @@
 # Handoff
 
+## 2026-10-22: branch rally-ai -- Sega Rally's glitching opponents (GitHub #19, R926). NOT PUSHED, NO RTL CHANGE
+
+CAUSE (MAME-verified mechanism; the board's numbers NOT measured): the game
+sets each frame's AI-car detail from the time left after its first piece of
+work -- the vblank IRQ loads timer 2 with 15.5 ms, 0x5bade0 reads it back,
+(m / 10000 - 21) >> 1 picks a row of 0x5bb200 (row 8: 3 / 2 / 2 cars at the
+three near details; rows 0-2: none), and a car without a slot drops from its
+physics to the course line. MAME reads at ~2.1 ms: row 8 in every race frame.
+A slower i960 lowers the row; the cars nearest the player then flip between
+physics and the line frame to frame (MAME at 10 MHz shows it): blinking, no
+collision, sideways one frame, launched on the way back. The whole-core bench
+(the race now runs in it) gets rows 0-2 in half its race frames; its
+IRQ-to-read window is CPI 11.4 (T_FRAME 31%, memory waits 30%, fetch ~28%).
+NOT a wrong value: the TGP replay of the near-opponent window is bit-exact
+(plain and board-push), the i960 census of that session finds 0 traps and 0
+differing tuples, and the bench's far opponents match MAME bit for bit.
+WRONG TURNS, KEEP: uninitialised RAM (work / buffer / backup filled 0xFF:
+no change; board RAM 0x2139d8 is read unwritten and sets bit 7 of every AI
+car's flags on the bench and maybe the board -- harmless, every mode change
+lands on the same frame); i960 clock alone in MAME 14-40 MHz (no glitch); the
+bench's player NaN (below).
+FIXED IN THE BENCH: tb_m2_boot read every 2A data-ROM word as 0, so Rally's
+course lookups failed -- R902's "translations NaN" was that, not the inputs.
+New: M2_INSCHED, M2_RALLY_AP, M2_CARLOG, M2_BUSLOG frame field, harness
+cab_an0-2; sim/io/mame_m2_rally_ap.lua (catches the first opponent at ~37 s),
+sim/io/rally_ai_check.py, sim/io/mame_m2_clock.patch (M2_I960_CLK /
+M2_TGP_CLK in m2lod).
+BOARD CHECK (no build needed): mra/"... [AI detail test].mra" patches ROM
+0x1c334 so the row is always 8 (MAME's). Released core, first course, catch
+the first opponent and drive the helicopter straight: the opponents should
+stay solid and upright; near-opponent frames may slow (MAME at 7 MHz: 55.5 ->
+45.3 fps). Not for release. THE REAL FIX is i960 speed in Rally's race code
+(register-cache spills, data latency, fetch from the work-RAM copy) -- not
+attempted; a probe of [0x20aac0] on the overlay would give the board's rows.
+Next free R numbers: R927 on (R920 / R924 on local branches).
+
 ## 2026-10-21 (late): PUSHED model2a -- the 2A beta Model2A_20261021d
 
 RELEASED: Model2A_20261021d.rbf = s1298 (5b8a001 = Model2A_20261021c +

@@ -42806,3 +42806,152 @@ in 14 bytes instead of 8 -- not looked at.
 MRA.** Ben, 2026-10-21, the new MRA (protection routines patched, checksum
 range untouched) against the old one kept as "[OLD - freeze issue 18]" on
 the same core: "the MRA fix works". #18's cause confirmed.
+
+
+**R926 -- SEGA RALLY'S BLINKING, CLIPPING, SIDEWAYS AND FLYING OPPONENTS
+(GitHub #19) ARE THE GAME'S OWN DETAIL BUDGET: EACH FRAME IT TIMES ITS FIRST
+PIECE OF WORK AGAINST THE VBLANK AND, IF IT RAN LATE, DROPS THE CARS NEAREST
+THE PLAYER FROM THEIR PHYSICS TO THE COURSE LINE. THIS CORE'S i960 RUNS THAT
+CODE SEVERAL TIMES SLOWER THAN MAME'S, SO THE BUDGET FALLS AND THE CARS
+FLICKER BETWEEN THE TWO. THE i960 AND THE TGP COMPUTE IT BIT FOR BIT. NO RTL
+CHANGED; A TEST MRA FORCES THE BUDGET FOR A BOARD CHECK; THE BENCH'S R902 NaN
+WAS ITS OWN DATA ROM.** 2026-10-22, branch rally-ai (from model2a 1526562).
+(GitHub #19, mike911ok, Model2A_20261021d and earlier: "AI opponent glitches.
+1- Cars blink. While they are blinking they can be clipped (no collision
+detection) and will sometimes show the car sideways like it had crashed for a
+few frames, but the next frame the car is straight. Can be spotted as soon as
+you catch the first opponent in the first track. 2- Cars actually fly
+upwards." Photos: a purple opponent rolled on its side beside the player at
+222 km/h, 0'21"98; two cars upside down high over the track.)
+
+*Believed:* a value the game computes for the opponents comes out wrong on
+this core -- an i960 FP form or operand edge case, the TGP (R876 / R888 / R923),
+the buffer RAM's posted writes, the data ROM -- or uninitialised RAM.
+
+*THE GAME'S MECHANISM (MAME 0.289's disassembly of the work-RAM code,
+0x580000-0x5effff, and write / read taps; VERIFIED in MAME):*
+  1. The object table at 0x500000, stride 0x100: +4 the handler (0x5cacf0 an
+     opponent, 0x5d3f40 the player), +0x10 flags (bits 31:16 the wheels'
+     state: 0000 while the car runs on the course line, 2222 / 3333 / 4343
+     with its physics), +0x14 x y z, +0x2c velocity a frame, +0x88 the course
+     segment, +0x8c its render record, +0x9c the heading. The handler's mode
+     (+0xe8) follows the record's byte 0x51 bits 7:6.
+  2. 0x5bb320 (ROM 0x1c320) fills byte 0x51 for each car each frame: a
+     detail by distance (< 50, < 100, < 200, beyond) granted only while the
+     frame's row of a table at 0x5bb200 has a slot left -- row 8 allows 3 / 2
+     / 2 cars the three nearest details, row 7 2 / 1 / 1, rows 3-5 one car
+     the nearest, rows 0-2 none. The row is (m / 10000 - 21) >> 1, clamped 0-8,
+     from m = [0x20aac0].
+  3. m is TIME: the vblank interrupt (0x5a0490) loads timer 2 with 0x5e9ac
+     (15.5 ms at 25 MHz); at 0x5bade0, after the frame's first work, the game
+     reads it back (ldl 0xf00008), adds 90,000, and subtracts 400,000 if a
+     vblank has already come ([0x202000] no longer 1). Row 8 needs the read
+     within 4.3 ms of the interrupt; the nearest car keeps its physics
+     only within 8.3 ms.
+  4. MAME at 25 MHz (five frames sampled at 36 s): the read 2.06-2.14 ms
+     after the interrupt (112-136 TGP
+     result reads before it, ~1,050 after; the frame's work done at
+     6.7-7.4 ms); m 376,523-434,083 -- ROW 8 IN ALL 1,852 RACE FRAMES, rows
+     5-7 in 89 frames of the start's fly-over. MAME's own TODO ("srallyc:
+     initial enemy car placement seems to be slightly incorrect for a few
+     cars, seems to be affected by i960 clock speed") is this budget.
+  5. MAME with the i960's clock set (new sim/io/mame_m2_clock.patch,
+     M2_I960_CLK), the same scripted race: 14 and 25 MHz row 8 throughout
+     (16-40 MHz: no unexplained step either); 10 MHz
+     rows 6-8, and the third car (180 units ahead) flips 0000 / 2222 with the
+     row frame by frame (34 changes against 9); 8 MHz rows 0-8; 7 MHz rows
+     3-8. The cars' modes follow the row exactly, a frame late.
+  So a slow frame start demotes the nearest opponents for that frame, and
+  the demotion lightens the next frame, which promotes them again: a car that
+  alternates between its physics (collision with the player, its own body
+  attitude and height) and the course line (no collision, the line's
+  attitude) -- blinking, clipped, sideways one frame and straight the next,
+  and launched when it comes back into physics from a stale state.
+
+*WHAT THIS CORE COMPUTES (all VERIFIED, nothing differs):*
+  * A scripted race that catches the opponents (new sim/io/mame_m2_rally_ap.lua:
+    an autopilot that follows the AI cars' own trails; PL_COIN=8: the first
+    opponent within 15 units at 36.8 s, within 3 at 41.8 s). MAME: 21,861 AI
+    steps, none the velocity does not explain (> 2 units); the same at i960
+    16 / 25 / 33 / 40 MHz and TGP 12.5 / 25 / 100 MHz.
+  * The TGP: that session's near-car window captured (frames 2033-2767,
+    1,502,835 words in, 511,377 out, 1,343,136 io reads) and replayed through
+    m2_copro (TGP_PROG 4096, R888's posted writes and early ALU), plain and
+    --board-push --gap 60 --jitter 40: BIT-EXACT both, 0 dropped.
+  * The i960's forms in that session (R921's census, m2lod): 148 forms, 431
+    variants, 0 trap on the 2A core; atanr 16,261 / remr 1,066 / sinr 1 /
+    cvtzril 8,180 / cpysre 6,350 distinct tuples, 0 differ from MAME. New
+    against R921's Rally session: cvtir g0,fp1 at 0x5e2db4 / 0x5e2e1c (a
+    random angle) and cmprl fp1,fp0 at 0x5da0e4 (the automatic gearbox).
+  * Uninitialised RAM: work RAM, buffer RAM and backup RAM filled 0xFFFFFFFF
+    before the boot -- work RAM identical to the plain run at every 5 s for
+    100 s (the game clears it). One byte the game reads unwritten: 0x2139d8
+    (board RAM; the AI car creation ORs it << 7 into +0x10; MAME 0, the
+    bench 0xFF, the board whatever the SDRAM held -- Rally is not a2_big, so
+    R900's sweep does not clear board RAM). Set to 1 in MAME: the flags
+    carry bit 7 and nothing else moves (92 near-car frames pixel-identical,
+    every mode change on the same frame). Recorded, not the cause.
+  * THE WHOLE CORE (tb_m2_boot A2X, the srallyc image; new: M2_INSCHED,
+    MAME's own port values frame by frame; M2_RALLY_AP, the autopilot in
+    C++; M2_CARLOG, the AI log in the Lua's format): every state of the
+    three opponents furthest from the player is one of MAME's, bit for bit
+    (slots 5-7, ~1,280 states each, the 1,300 race frames the bench ran); the cars
+    nearer the player leave MAME's sequence where their mode changes -- the
+    third car at frame 2189 at the very state MAME's 10 MHz run leaves it.
+    The bench's budget (M2_BUSLOG on 0x20aac0, with the frame now): m
+    213,993-370,531 in the race, rows 0-2 in 263 of 552 frames, 3-7 in 284,
+    8 in 5 (MAME: 8 in all). Its interrupt-to-read window (M2_FRAMESTAT,
+    M2_WORK_IPS=5a0490,5bade8): 251,255 i960 cycles for 21,969 instructions,
+    CPI 11.4 (MAME's 2.1 ms is ~52 k cycles at 25 MHz: CPI ~2.4); T_FRAME
+    30.7% (call / return, the register cache's spills and fills), T_MEM_W
+    29.9%, instruction fetch waits ~28% (Rally runs from its work-RAM copy,
+    which R728's code cache, program ROM only, does not cover), the TGP's
+    hold 3.4%. The bench's clocks are not the board's (24 MHz i960, a
+    6-cycle memory, 417 k i960 cycles a vblank against the board's 40 MHz
+    and 695 k), so its rows are not the board's; the board's are NOT
+    MEASURED. Inferred from R888 / R897 / R901 (Rally's "small slowdowns"
+    on every 2A build, unexplained by the TGP) and from the report itself:
+    the board's frame start is slow enough, near opponents, for rows 0-2.
+
+*THE BENCH'S OWN FAULT, FIXED (sim only):* tb_m2_boot answered every 2A
+data-ROM read 0 (R852: "no copro data ROM on 2A"), which R862's Rally
+broke: the TGP's course lookups found nothing and the player's height was
+NaN from the grid. R902's "every matrix's translation NaN ... the analog
+inputs read 0xFF and its sound board is a stub" was this; with the ROM at
+word 0x13C0000 (Model2.sv's GAME_COPRO_2A) the grid matches MAME's and the
+race runs. The harness also gains the 315-5649's analog channels (cab_an0-2).
+
+*NOT A FIX, A BOARD CHECK:* "Sega Rally Championship - Twin-DX (Revision C)
+[AI detail test].mra" -- one word, ROM 0x1c334 (work RAM 0x5bb334) cmpible
+0,g0 -> b +0x10, so the row is always 8, as MAME's is in every race frame.
+MAME 0.289 with it: a 440 s session plays normally (three races, game over,
+attract); at 25 MHz the far opponents' states are the plain run's, the grid
+cars settle differently during the fly-over (MAME's plain run uses rows 5-7
+there); at 10 MHz the cars' mode changes drop to the 25 MHz pattern (slots
+1-4: 3 / 8 / 9 / 12 against 102 / 19 / 34 / 4). Its cost is frame rate where
+the CPU is short: 57.5 -> 57.0 fps at 10 MHz, 55.5 -> 45.3 at 7 MHz (the
+budget was the game's way of keeping its rate). Not for release: on the
+board it would show whether the opponents stop blinking (the mechanism
+confirmed there) and how much slower the near-opponent frames get.
+
+*THE FIX THE GAME ASKS FOR:* the i960 as fast as the board in Rally's race
+code -- MAME's ~2.1 ms from the vblank to the read, the board's 4.3 ms
+at most. Where this core loses it (the bench's split, above): the register
+cache's memory spills and fills on deep call chains (MAME and the chip
+keep four frames on chip, as this core does; the cost is ours, 16 words
+through the bridge each way), data waits, and instruction fetch from the
+work-RAM copy. Each is an area and timing change (Model2A_20261021d:
+41,244 ALMs, 547 / 553 M10K) and needs the board to judge; not attempted.
+
+*Tools (committed):* sim/io/mame_m2_rally_ap.lua (the autopilot, APLOG,
+INREC); sim/io/rally_ai_check.py (glitch / align / modes / budget);
+sim/io/mame_m2_clock.patch; tb_m2_boot M2_INSCHED, M2_RALLY_AP, M2_CARLOG,
+the 2A data ROM, M2_BUSLOG's frame; m2_boot_harness cab_an0-2.
+
+*What the board should show:* (1) on the released core, the test MRA against
+the normal one, the first course, catching the first opponent (~20 s) and
+the helicopter straight: with the test MRA the opponents should stop
+blinking and stay solid to collide with, no car on its side or in the air;
+the frame rate near them may drop. (2) For the real fix, a probe of the
+game's own measure: [0x20aac0] each frame on the overlay (row = (m / 10000 -
+21) >> 1) gives the board's rows directly.
