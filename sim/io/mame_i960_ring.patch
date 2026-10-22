@@ -1,0 +1,192 @@
+R935: MAME 0.289's i960 with the chip's register ring modelled BESIDE its own
+rule (Sega Model 2 core for MiSTer FPGA, study R935). R935_RING=<n> keeps the n
+newest saved frames as the chip / the core's RING build do (a frame's save
+area written only when a call finds the ring full, read back only when a return
+finds it empty, flushreg writes all) and logs every program load or store that
+touches a save area the modelled ring still holds -- where the core's RING
+build would read or write memory MAME has already made current. MAME's own
+execution is unchanged. R935_OUT=<file>: FIRST lines as they happen, totals
+and per-PC counts at exit. What it showed: The House of the Dead, 75 s of play
+through the courtyard, ring 8 and ring 4: 1,856,215 calls, 14,283 flushreg,
+0 hazards.
+Apply after sim/io/mame_i960_formlog.patch: patch -p1 < mame_i960_ring.patch,
+then make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp. MAME code
+(BSD-3-Clause, i960.cpp's own licence); a tool, not part of the core.
+
+--- a/src/devices/cpu/i960/i960.h
++++ b/src/devices/cpu/i960/i960.h
+@@ -182,6 +182,7 @@
+ 	void check_pending_irqs();
+ 	void do_call(uint32_t adr, int type, uint32_t stack);
+ 	void do_ret_0();
++	void r935_access(uint32_t addr, int size, bool wr);   // R935: the register ring's hazards
+ 	void do_ret();
+ };
+ 
+--- a/src/devices/cpu/i960/i960.cpp
++++ b/src/devices/cpu/i960/i960.cpp
+@@ -52,8 +52,63 @@
+ }
+ 
+ 
++// ---- R935: THE REGISTER RING'S HAZARDS (Sega Model 2 MiSTer core). R935_RING=<n>
++// models a chip-style local-register cache of the n newest saved frames (a
++// frame's save area is written only when a call finds the ring full, read back
++// only when a return finds it empty; flushreg writes all) BESIDE MAME's own
++// rule, which is unchanged, and logs every program load or store that touches
++// a save area the modelled ring still holds: there the core's RING build reads
++// or writes memory MAME has already made current. cat 0: MAME has spilled
++// that frame (a true divergence); cat 1: MAME's own 4-frame cache holds it too.
++// R935_OUT=<file>: first hits as they happen, totals at exit.
++#include <deque>
++#include <map>
++#include <tuple>
++namespace {
++struct r935_ring_t {
++	bool tried = false; int n = 0; FILE *f = nullptr;
++	std::deque<uint32_t> ring;
++	std::map<std::tuple<uint32_t, int, int>, uint64_t> hits;
++	uint64_t calls = 0, rets = 0, spills = 0, flushes = 0, maxd = 0;
++	bool on() {
++		if (!tried) { tried = true; const char *e = getenv("R935_RING");
++			if (e) { n = atoi(e); const char *o = getenv("R935_OUT"); f = fopen(o ? o : "/tmp/r935_ring.txt", "w"); } }
++		return n > 0 && f;
++	}
++	~r935_ring_t() {
++		if (!f) return;
++		fprintf(f, "TOTAL calls %llu rets %llu spills %llu flushreg %llu\n", (unsigned long long)calls, (unsigned long long)rets,
++			(unsigned long long)spills, (unsigned long long)flushes);
++		for (auto &h : hits) fprintf(f, "PC %08x %s cat %d n %llu\n", std::get<0>(h.first), std::get<1>(h.first) ? "W" : "R",
++			std::get<2>(h.first), (unsigned long long)h.second);
++		fclose(f);
++	}
++};
++r935_ring_t &r935() { static r935_ring_t r; return r; }
++}
++
++void i960_cpu_device::r935_access(uint32_t addr, int size, bool wr)
++{
++	auto &R = r935();
++	if (!R.on() || R.ring.empty()) return;
++	for (size_t k = 0; k < R.ring.size(); k++) {
++		const uint32_t fb = R.ring[k];
++		if (addr < fb + 64 && addr + uint32_t(size) > fb) {
++			int cat = 0;
++			for (int j = 0; j < std::min(m_rcache_pos, int(I960_RCACHE_SIZE)); j++) if (m_rcache_frame_addr[j] == fb) cat = 1;
++			auto key = std::make_tuple(m_PIP, wr ? 1 : 0, cat);
++			if (R.hits[key]++ == 0)
++				fprintf(R.f, "FIRST %.4f pc %08x %s addr %08x frame %08x ring pos %d of %d cat %d fp %08x\n",
++					machine().time().as_double(), m_PIP, wr ? "W" : "R", addr, fb, int(R.ring.size() - 1 - k), int(R.ring.size()), cat, m_r[I960_FP]);
++			fflush(R.f);
++			return;
++		}
++	}
++}
++
+ uint32_t i960_cpu_device::i960_read_dword_unaligned(uint32_t address)
+ {
++	r935_access(address, 4, false);
+ 	if (!DWORD_ALIGNED(address))
+ 		return m_program.read_byte(address) | m_program.read_byte(address+1)<<8 | m_program.read_byte(address+2)<<16 | m_program.read_byte(address+3)<<24;
+ 	else
+@@ -62,6 +117,7 @@
+ 
+ std::pair<uint32_t, uint16_t> i960_cpu_device::i960_read_dword_unaligned_flags(uint32_t address)
+ {
++	r935_access(address, 4, false);
+ 	if (!DWORD_ALIGNED(address)) {
+ 		auto v = m_program.read_byte_flags(address);
+ 		return std::pair<uint32_t, uint16_t>(v.first | m_program.read_byte(address+1)<<8 | m_program.read_byte(address+2)<<16 | m_program.read_byte(address+3)<<24, v.second);
+@@ -71,6 +127,7 @@
+ 
+ uint16_t i960_cpu_device::i960_read_word_unaligned(uint32_t address)
+ {
++	r935_access(address, 2, false);
+ 	if (!WORD_ALIGNED(address))
+ 		return m_program.read_byte(address) | m_program.read_byte(address+1)<<8;
+ 	else
+@@ -79,6 +136,7 @@
+ 
+ void i960_cpu_device::i960_write_dword_unaligned(uint32_t address, uint32_t data)
+ {
++	r935_access(address, 4, true);
+ 	if (!DWORD_ALIGNED(address))
+ 	{
+ 		m_program.write_byte(address, data & 0xff);
+@@ -94,6 +152,7 @@
+ 
+ uint16_t i960_cpu_device::i960_write_dword_unaligned_flags(uint32_t address, uint32_t data)
+ {
++	r935_access(address, 4, true);
+ 	if (!DWORD_ALIGNED(address))
+ 	{
+ 		uint16_t flags = m_program.write_byte_flags(address, data & 0xff);
+@@ -110,6 +169,7 @@
+ 
+ void i960_cpu_device::i960_write_word_unaligned(uint32_t address, uint16_t data)
+ {
++	r935_access(address, 2, true);
+ 	if (!WORD_ALIGNED(address))
+ 	{
+ 		m_program.write_byte(address, data & 0xff);
+@@ -585,6 +645,8 @@
+ 
+ 	// set the new RIP
+ 	m_r[I960_RIP] = m_IP;
++	{ auto &R = r935(); if (R.on()) { R.calls++; R.ring.push_back(m_r[I960_FP] & ~0x3f);
++		if (int(R.ring.size()) > R.n) { R.ring.pop_front(); R.spills++; } } }
+ //  osd_printf_debug("CALL (type %d): FP %x, %x => %x, stack %x, rcache_pos %d\n", type, m_r[I960_FP], m_r[I960_RIP], adr, stack, m_rcache_pos);
+ 
+ 	// are we out of cache entries?
+@@ -621,6 +683,7 @@
+ //  int type = m_r[I960_PFP] & 7;
+ 
+ 	m_r[I960_FP] = m_r[I960_PFP] & ~0x3f;
++	{ auto &R = r935(); if (R.on()) { R.rets++; if (!R.ring.empty()) R.ring.pop_back(); } }
+ 
+ 	m_rcache_pos--;
+ 
+@@ -1539,6 +1602,7 @@
+ 				break;
+ 
+ 			case 0xd: // flushreg
++				{ auto &R = r935(); if (R.on()) { R.flushes++; R.ring.clear(); } }
+ 				if (m_rcache_pos > 4)
+ 				{
+ 					m_rcache_pos = 4;
+@@ -2001,7 +2065,7 @@
+ 
+ 		case 0x80: { // ldob
+ 			m_icount -= 4;
+-			u8 v = m_program.read_byte(get_ea(opcode));
++			const u32 r935_ea = get_ea(opcode); u8 v = m_program.read_byte(r935_ea); r935_access(r935_ea, 1, false);
+ 			if(!m_stalled)
+ 				m_r[(opcode>>19)&0x1f] = v;
+ 			break;
+@@ -2009,7 +2073,7 @@
+ 
+ 		case 0x82: // stob
+ 			m_icount -= 2;
+-			m_program.write_byte(get_ea(opcode), m_r[(opcode>>19)&0x1f]);
++			{ const u32 r935_ea = get_ea(opcode); m_program.write_byte(r935_ea, m_r[(opcode>>19)&0x1f]); r935_access(r935_ea, 1, true); }
+ 			break;
+ 
+ 		case 0x84: // bx
+@@ -2173,7 +2237,7 @@
+ 
+ 		case 0xc0: { // ldib
+ 			m_icount -= 4;
+-			s8 v = m_program.read_byte(get_ea(opcode));
++			const u32 r935_ea = get_ea(opcode); s8 v = m_program.read_byte(r935_ea); r935_access(r935_ea, 1, false);
+ 			if(!m_stalled)
+ 				m_r[(opcode>>19)&0x1f] = v;
+ 			break;
+@@ -2181,7 +2245,7 @@
+ 
+ 		case 0xc2: // stib
+ 			m_icount -= 2;
+-			m_program.write_byte(get_ea(opcode), m_r[(opcode>>19)&0x1f]);
++			{ const u32 r935_ea = get_ea(opcode); m_program.write_byte(r935_ea, m_r[(opcode>>19)&0x1f]); r935_access(r935_ea, 1, true); }
+ 			break;
+ 
+ 		case 0xc8: { // ldis

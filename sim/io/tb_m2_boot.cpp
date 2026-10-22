@@ -874,6 +874,49 @@ int main(int argc, char **argv) {
     } else {
       static int *dummy = nullptr; (void)dummy;
     }
+    // R935: M2_LISTDUMP=<dir> -- THE LIST AS THE WALK READ IT. Every word the
+    // walker is acknowledged is kept at its dword; at the walk's end, from
+    // video frame M2_LISTDUMP_FROM, every M2_LISTDUMP_EVERY-th walk is written
+    // as <dir>/t<n>/bufferram.bin (words never read: buffer RAM as it then is)
+    // and state.txt ("walk n start s"), the layout of MAME's M2GEO dumps, so
+    // sim/video/m2_listdec.py and the scenery-position check read both alike.
+    {
+      static const char *ld = std::getenv("M2_LISTDUMP");
+      static const uint64_t ld_from = std::getenv("M2_LISTDUMP_FROM") ? std::strtoull(std::getenv("M2_LISTDUMP_FROM"), nullptr, 10) : 0;
+      static const long ld_every = std::getenv("M2_LISTDUMP_EVERY") ? std::atol(std::getenv("M2_LISTDUMP_EVERY")) : 1;
+      static std::vector<uint32_t> walked; static std::vector<uint8_t> got;
+      static unsigned ld_st = 0; static uint32_t ld_start = 0; static long ld_n = 0;
+      if (ld) {
+        if (walked.empty()) { walked.assign(0x8000, 0); got.assign(0x8000, 0); }
+        const unsigned wst = d->geo_state & 15;
+        if (ld_st == 0 && wst != 0) { ld_start = uint32_t(d->geo_w_ip) & 0x7fff; std::fill(got.begin(), got.end(), 0); }
+        if (wst != 0 && d->geo_rd_req && d->geo_rd_ack) {
+          const uint32_t a = uint32_t(d->geo_rd_addr) & 0x7fff;
+          walked[a] = d->geo_rd_data; got[a] = 1;
+        }
+        if (ld_st != 0 && wst == 0) {
+          ++ld_n;
+          if (g_frames_done >= ld_from && (ld_n % ld_every) == 0) {
+            const std::string dir = std::string(ld) + "/t" + std::to_string(ld_n);
+            if (std::system(("mkdir -p " + dir).c_str()) == 0) {
+              if (FILE *bf = std::fopen((dir + "/bufferram.bin").c_str(), "wb")) {
+                for (uint32_t i = 0; i < 0x8000u; i++) {
+                  uint32_t v = walked[i];
+                  if (!got[i]) { const uint32_t a = (0x16f0000u + (i << 1)) & g_mm; v = uint32_t(mem[a]) | (uint32_t(mem[(a + 1) & g_mm]) << 16); }
+                  std::fwrite(&v, 4, 1, bf);
+                }
+                std::fclose(bf);
+              }
+              if (FILE *sf = std::fopen((dir + "/state.txt").c_str(), "w")) {
+                std::fprintf(sf, "walk %ld start %05x frame %llu\n", ld_n, (unsigned)ld_start, (unsigned long long)g_frames_done);
+                std::fclose(sf);
+              }
+            }
+          }
+        }
+        ld_st = wst;
+      }
+    }
     // The geometry engine reads objects: polygon ROM if oba bit 23, otherwise
     // one of the two polygon RAMs. Same decode as Model2.sv's.
     d->eng_mem_ack = 0;
