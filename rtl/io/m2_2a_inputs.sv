@@ -58,6 +58,14 @@
 //          PE holds 0x3D, else 0xCD. Nothing else reads PD in a race (the
 //          test menu's "DriveBoard Test" does, and still reports an error).
 //          Off (MOTION 0): IN2 0xFF, the check stops as in MAME.
+//     R928, OVER REV (0x1C, 2C builds: OREV): MAME's overrev ports (indy500's
+//          with the pedals PORT_REVERSE): IN0 6 start1 and coin / test /
+//          service as the block's (bit 5 unused, 1); IN1 0 View 1 (J8) 1
+//          View 2 (J9) 4 Shift Up (J12) 5 Shift Down (J13), the rest 1;
+//          IN2 0xFF. AN0 STEER, AN1 ACCEL, AN2 BRAKE, each the block's
+//          0x20..0xE0 widened to MAME's 0x00..0xFF (x 85/64 about the rest
+//          point), the pedals reversed (rest 0xFF, floored 0x00): the game's
+//          default with no NVRAM (MAME's note).
 //   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
 //     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
@@ -70,7 +78,8 @@ module m2_2a_inputs #(
   parameter int unsigned SYS_MHZ = 80,
   parameter bit          ANALOG  = 1'b1,  // the analog profile's block (M2_2A_RALLY)
   parameter bit          GUN     = 1'b0,  // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
-  parameter bit          MOTION  = 1'b0   // R892: Manx TT's motion base answered on PD (M2_2A_MANX_MOTION)
+  parameter bit          MOTION  = 1'b0,  // R892: Manx TT's motion base answered on PD (M2_2A_MANX_MOTION)
+  parameter bit          OREV    = 1'b0   // R928: Over Rev's profile (0x1C; 2C builds)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
@@ -107,6 +116,7 @@ module m2_2a_inputs #(
   wire p_sky    = p_an2 & (game[1:0] == 2'b00);     // 0x18
   wire p_dig2   = (game == 7'h12) | (game == 7'h15);  // Zero Gunner, Pilot Kids
   wire p_manx   = MOTION & (game == 7'h19);         // R892: Manx TT's motion base
+  wire p_orev   = OREV & ANALOG & (game == 7'h1C);  // R928: Over Rev (2C)
   // (Model2.sv shows the analog OSD lines for 0x10 and 0x18-0x1B alike)
 
   // R879: a pad's left analogue stick drives the digital directions too, past
@@ -162,9 +172,36 @@ module m2_2a_inputs #(
                     : p_manx ? ((pe == 8'h3D) ? 8'hCE : 8'hCD)   // R892
                     : 8'hFF;
   wire [7:0] steer_rev = ~cab_steer;                  // PORT_REVERSE: 0xFF - v
+  // R928: Over Rev -- the block's 0x20..0xE0 onto 0x00..0xFF: (v - 0x20) * 85 / 64
+  // (0xC0 -> 0xFF exactly; a constant multiply, floor), the steering about
+  // its centre 0x80 the same way (+-0x60 -> +-0x7F). ONE multiply, taken by
+  // the three channels in turn (a channel every third clock: the block's
+  // values move far slower) -- three in parallel mapped +155 ALUTs.
+  logic [1:0] or_ch;
+  logic [7:0] or_str, or_acc, or_brk;
+  wire  [7:0] or_a   = (or_ch == 2'd0) ? cab_steer : (or_ch == 2'd1) ? cab_accel : cab_brake;
+  wire        or_up  = (or_a >= 8'h80);
+  wire  [7:0] or_d   = (or_ch != 2'd0) ? ((or_a < 8'h20) ? 8'd0 : (or_a > 8'hE0) ? 8'hC0 : or_a - 8'h20)
+                     : or_up ? ((or_a > 8'hE0) ? 8'h60 : or_a - 8'h80)
+                             : ((or_a < 8'h20) ? 8'h60 : 8'h80 - or_a);
+  wire [13:0] or_p   = {or_d, 6'd0} + {2'd0, or_d, 4'd0} + {4'd0, or_d, 2'd0} + {6'd0, or_d};
+  wire  [7:0] or_m   = or_p[13:6];                    // d * 85 / 64
+  always_ff @(posedge clk) begin
+    or_ch <= (or_ch == 2'd2) ? 2'd0 : or_ch + 2'd1;
+    case (or_ch)
+      2'd0:    or_str <= or_up ? 8'h80 + or_m : 8'h80 - or_m;
+      2'd1:    or_acc <= ~or_m;                       // PORT_REVERSE
+      default: or_brk <= ~or_m;
+    endcase
+  end
+  wire [7:0] or_in0 = {an_in0[7:6], 1'b1, an_in0[4:0]};           // bit 5 unused
+  wire [7:0] or_in1 = {2'b11, ~j0[13], ~j0[12], 2'b11, ~j0[9], ~j0[8]};
 
   always_ff @(posedge clk) begin
-    if (p_rally | p_an2) begin
+    if (p_orev) begin                                 // R928
+      in0 <= or_in0; in1 <= or_in1; in2 <= 8'hFF;
+      an0 <= or_str; an1 <= or_acc; an2 <= or_brk;
+    end else if (p_rally | p_an2) begin
       in0 <= an_in0; in1 <= an_in1; in2 <= an_in2;
       an0 <= p_rally ? cab_steer : p_sky ? sky_y : cab_accel;
       an1 <= p_rally ? cab_accel : p_sky ? 8'hFF : cab_brake;

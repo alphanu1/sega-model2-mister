@@ -48,6 +48,18 @@
 //                 0xCE while PE holds 0x3D, else 0xCD (the game's boot check,
 //                 program 0x5f530). 0x1A / 0x1B keep 0xFF. The MOTION 0 build
 //                 (dut_nm) is checked against the same wants with IN2 0xFF.
+//     R928  0x1C Over Rev (OREV, 2C builds; dut_or): INPUT_PORTS_START(overrev)
+//                 with its MRA's buttons (J 4 Coin 5 Start 6 Test 7 Service
+//                 8 View 1 9 View 2 10 Accel 11 Brake 12 Shift Up 13 Shift
+//                 Down): IN0 0x01 COIN1 0x04 TEST 0x08 SERVICE 0x40 START1,
+//                 the rest 1; IN1 0x01 View 1 0x02 View 2 0x10 Shift Up 0x20
+//                 Shift Down, the rest 1; IN2 0xFF; AN0 STEER, AN1 ACCEL, AN2
+//                 BRAKE: Daytona's block's 0x20..0xE0 on MAME's full 0x00..0xFF
+//                 -- checked as within 1.5 of the exact line (of any of the
+//                 last 6 samples: one multiply serves the three in turn) (pedals
+//                 (v - 0x20) * 255 / 192, steering 0x80 + (v - 0x80) * 127 / 96),
+//                 the pedals then reversed (0xFF - x, PORT_REVERSE). The OREV 0
+//                 builds (dut, dut_nm) must still read 0x1C as a digital ID.
 
 #include "Vtb_m2_2a_inputs_top.h"
 #include "verilated.h"
@@ -77,21 +89,45 @@ static uint32_t adir(uint16_t a) {
   return (x > 48 ? 1u : 0u) | (x < -48 ? 2u : 0u) | (y > 48 ? 4u : 0u) | (y < -48 ? 8u : 0u);
 }
 // the game index the bench switches between, and the ID it drives
-enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_N };
+enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_N };
 static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner / Pilot Kids", "other digital",
-                                 "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)"};
+                                 "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)", "Over Rev (0x1C)"};
 static int game_id(int g) {
   static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1f, 0x20, 0x7f};
   switch (g) {
     case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
     case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
     case G_SKY: return 0x18; case G_BIKE: return 0x1a + rnd(2); case G_MANX: return 0x19;
+    case G_OREV: return 0x1c;
     default: return dig[rnd(int(sizeof dig / sizeof dig[0]))];
   }
+}
+// R928: Over Rev's channels, the exact lines the RTL approximates
+static double orev_ped(int v) { v = v < 0x20 ? 0x20 : v > 0xe0 ? 0xe0 : v; return 255.0 - (v - 0x20) * 255.0 / 192.0; }
+static double orev_str(int v) { v = v < 0x20 ? 0x20 : v > 0xe0 ? 0xe0 : v; return 0x80 + (v - 0x80) * 127.0 / 96.0; }
+static Want want_orev() {
+  uint32_t j0 = t->joystick_0;
+  Want w;
+  w.in0 = lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 5) << 6);
+  w.in1 = lo(b(j0, 8) << 0 | b(j0, 9) << 1 | b(j0, 12) << 4 | b(j0, 13) << 5);
+  w.in2 = 0xff; w.an0 = w.an1 = w.an2 = -1;   // the channels: near() below
+  return w;
+}
+static uint64_t orev_near = 0, orev_ends[4] = {0, 0, 0, 0};
+// R928: the RTL takes the three channels in turn through one multiply, so an
+// output may lag its input by up to 5 clocks: accept the line of any of the
+// last 6 input samples (h[0] the newest)
+static void near(const char *n, uint64_t cyc, int got, const double *h) {
+  ++checks; ++orev_near;
+  bool ok = false; double want = h[0];
+  for (int k = 0; k < 6; ++k) if (got - h[k] <= 1.5 && h[k] - got <= 1.5) ok = true;
+  if (!ok && mism++ < 25)
+    std::printf("  MISMATCH Over Rev cyc %llu %s: dut %02x want %.2f\n", (unsigned long long)cyc, n, got, want);
 }
 static int sky_y(uint16_t la) { return (0x80 + int8_t(la >> 8)) & 0xff; }   // 0x80 + y
 static Want want_now(int game, bool motion) {
   uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
+  if (game == G_OREV) game = G_DIG;   // R928: an OREV 0 build reads 0x1C as digital
   if (game == G_ZG || game == G_DIG || game == G_VF2) { j0 |= adir(t->joy_analog); j1 |= adir(t->joy_analog_1); }
   Want w;
   if (game == G_RALLY) {   // Sega Rally
@@ -172,6 +208,10 @@ int main(int argc, char **argv) {
     if (!t->rst_n) { gear = 0; gup_d = 0; gdn_d = 0; }   // asynchronous in the RTL
     t->eval();
     Want w = want_now(game, true), wn = want_now(game, false);
+    Want o = want_orev();   // R928: before the edge, as the others (the outputs are registered)
+    static double hs[6], ha[6], hb[6];
+    for (int k = 5; k > 0; --k) { hs[k] = hs[k - 1]; ha[k] = ha[k - 1]; hb[k] = hb[k - 1]; }
+    hs[0] = orev_str(t->c_steer); ha[0] = orev_ped(t->c_accel); hb[0] = orev_ped(t->c_brake);
     if (game == G_MANX) { if (w.in2 == 0xce) ++manx_ce; else ++manx_cd; }
     int g0 = gear;
     gear_edge();
@@ -199,6 +239,26 @@ int main(int argc, char **argv) {
     cmp("nm an0", game, c, t->n_an0, wn.an0);
     cmp("nm an1", game, c, t->n_an1, wn.an1);
     cmp("nm an2", game, c, t->n_an2, wn.an2);
+    // R928: the OREV build -- Over Rev on 0x1C, every other ID as dut
+    if (t->game == 0x1c) {   // G_OREV, or G_DIG's draw of 0x1C
+      cmp("or in0", game, c, t->o_in0, o.in0);
+      cmp("or in1", game, c, t->o_in1, o.in1);
+      cmp("or in2", game, c, t->o_in2, o.in2);
+      near("or an0", c, t->o_an0, hs);
+      near("or an1", c, t->o_an1, ha);
+      near("or an2", c, t->o_an2, hb);
+      if (t->o_an1 == 0x00) ++orev_ends[0];
+      if (t->o_an1 == 0xff) ++orev_ends[1];
+      if (t->o_an0 <= 0x01) ++orev_ends[2];
+      if (t->o_an0 == 0xff) ++orev_ends[3];
+    } else {
+      cmp("or in0", game, c, t->o_in0, w.in0);
+      cmp("or in1", game, c, t->o_in1, w.in1);
+      cmp("or in2", game, c, t->o_in2, w.in2);
+      cmp("or an0", game, c, t->o_an0, w.an0);
+      cmp("or an1", game, c, t->o_an1, w.an1);
+      cmp("or an2", game, c, t->o_an2, w.an2);
+    }
   }
   std::printf("  %llu cycles, %llu checks; per game:", (unsigned long long)N, (unsigned long long)checks);
   for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game[g], g + 1 < G_N ? "," : "\n");
@@ -207,6 +267,9 @@ int main(int argc, char **argv) {
               (unsigned long long)gear_seen[2], (unsigned long long)gear_seen[3], (unsigned long long)gear_seen[4]);
   std::printf("  Manx TT's motion base (R892): %llu cycles answered 0xCE, %llu 0xCD\n",
               (unsigned long long)manx_ce, (unsigned long long)manx_cd);
+  std::printf("  Over Rev (R928): %llu channel checks; accel 0x00 %llu / 0xFF %llu cycles, steering <= 0x01 %llu / 0xFF %llu\n",
+              (unsigned long long)orev_near, (unsigned long long)orev_ends[0], (unsigned long long)orev_ends[1],
+              (unsigned long long)orev_ends[2], (unsigned long long)orev_ends[3]);
   std::printf("  %llu mismatches\n%s\n", (unsigned long long)mism, mism ? "FAIL" : "PASS");
   delete t;
   return mism ? 1 : 0;

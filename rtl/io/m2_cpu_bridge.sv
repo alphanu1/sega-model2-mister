@@ -781,6 +781,15 @@ module m2_cpu_bridge #(
       sd_word = base_pal3d + AW'(ra[10:1]);
     end else if (r_addr >= 32'h0180_0000 && r_addr < 32'h0180_4000) begin
       tgt = T_PAL;
+    end else if (BOARD_2C && r_addr >= 32'h1100_0000 && r_addr < 32'h1140_0000 && r_addr[20]) begin
+      // R928: THE UPPER MB OF EACH 2 MB WINDOW IS DROPPED, NOT MIRRORED. Over
+      // Rev uploads all 2 MB of both sheets at boot (MAME 0.289: 0x11000000-
+      // 0x110fffff, then 0x11100000-0x111fffff, then sheet 1 the same, 2.57-
+      // 2.90 s; 237 K / 216 K non-zero words in the upper halves) and never
+      // reads them back. MAME's renderer reads only the lower 1 MB, so the
+      // upper MB is invisible there; R924's mirror put it over the lower MB's
+      // texels. The House of the Dead never writes it (R924's sheet compare).
+      tgt = T_NONE;
     end else if (BOARD_2C && r_addr >= 32'h1100_0000 && r_addr < 32'h1140_0000) begin
       // R924: 2C's texture RAM, PLAIN 32-BIT RAM (no tex0_w): sheet 0 at
       // 0x11000000, sheet 1 at 0x11200000, each a 2 MB window on a 1 MB sheet.
@@ -788,7 +797,7 @@ module m2_cpu_bridge #(
       // the halfword layout tex0_w builds on 2A, so the renderer is unchanged.
       // MAME 0.289 maps each window as 2 MB of RAM (2B: 1 MB and a mirror); its
       // renderer reads only the first 1 MB (2048 x 1024 texels at 4 bits), so
-      // the upper MB is taken as the mirror 2B's map has -- the same board.
+      // the upper MB was taken as the mirror 2B's map has (R928: dropped, above).
       tgt = T_SDRAM; tex_region = 1'b1;
       sd_word = (r_addr[21] ? base_texs1 : base_texs0) + AW'(ra[19:1]);
     end else if (BOARD_2C && r_addr >= 32'h1140_0000 && r_addr < 32'h1141_0000) begin

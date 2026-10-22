@@ -13,7 +13,8 @@
 //     Sega Rally 0, 1 -> slots {row[4], row[1:0]}, rows 0-3 and 16-19 captured;
 //     Zero Gunner (zg) 0-5, 9, 100. A row outside the eight takes the slot it
 //     aliases.
-//   R900 (big: the large layout's six games, and R924's House of the Dead; MAME 0.289's rows over 160 s of
+//   R900 (big: the large layout's six games, R924's House of the Dead and R928's
+//     Over Rev; MAME 0.289's rows over 160 s of
 //     attract and play): eight RANGES of row numbers a game, s[0] < ... < s[7].
 //     Slot k holds the rows from s[k] up to s[k+1] - 1 (slot 0 every row below
 //     s[1]) and is filled from row s[k] alone; the other rows of a range share
@@ -53,6 +54,14 @@ module m2_luma_map (
       // 100 equal); the luma RAM is constant after boot. 60 and 120 are
       // guesses for play (rows with content no attract polygon names).
       4'h7: starts = {8'd120, 8'd100, 8'd96, 8'd94, 8'd76, 8'd60, 8'd40, 8'd0};
+      // R928: Over Rev (2C, 0x1C; Sega Rally's layout, so Model2.sv passes
+      // big for it): MAME 0.289's 39 walk dumps over 160 s (attract, menus,
+      // a race) use 98 rows of 0-51 and 128-195 with 95 distinct contents;
+      // rows 128+ are rewritten per course (the snoop refills a slot when its
+      // first row is written). R900's DP: polygon-weighted mean |diff| 2.0 of
+      // the game's 0..63 luma (16 slots would give 1.1); 14% of polygons on
+      // rows more than 4 off (row 51 the worst, 25).
+      4'hC: starts = {8'd178, 8'd176, 8'd139, 8'd129, 8'd22, 8'd14, 8'd10, 8'd0};
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction

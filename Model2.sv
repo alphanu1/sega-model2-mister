@@ -2791,6 +2791,11 @@ wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
 // (a2_big: 32 MB main_data, 16 MB textures, 32 MB polygons), its 1 MB of copro
 // data in the 2A copro-data slot, Virtua Cop 2's guns on serial channel 2.
 wire is_hotd    = C2 && (game_id[6:0] == 7'h17);
+// R928: 0x1C Over Rev (overrev, Revision A) -- Sega Rally's 2A layout (no
+// copro data: MAME's region is empty), indy500's steering / pedals / shifter
+// (m2_2a_inputs OREV), its luma rows. 0x18-0x1B are skipped: their 2A analog
+// decodes (is_2an, the analog profile, a2_big) are live in this build too.
+wire is_orev    = C2 && (game_id[6:0] == 7'h1C);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
 // are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
 // ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
@@ -2807,7 +2812,7 @@ wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copr
 // every 2A game past VF2 -- an MRA with a 512 KB program carries the slot as
 // zeros (MAME's region reads 0 there), so the decode needs no list.
 wire prog_ext  = M2A ? is_2ax : (is_vcop | is_desert);
-assign a2_rally_menu = RALLY2A & (is_srally | is_2an);   // R887: the analog profile's lines
+assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev);   // R887: the analog profile's lines; R928
 // R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
 // other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
 // R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
@@ -2877,7 +2882,10 @@ logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
                                            | (FPU2A & is_2ax)};   // R887: every 2A game past VF2
-i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A), .C2(C2)) u_i960 (   // R869: F2A; R924: C2
+// R928: a 2C build has VC's long-real transcendentals too -- Over Rev runs
+// atanrl, sinrl and cosrl from 12.3 s (MAME's form log), which F2A leaves out;
+// the sequencer is F2A's, so VC adds their decode. vc_en as before (0x10-0x1F).
+i960_top #(.VC(VCOP_FPU || C2), .FR(FPU2A), .F2A(FPU2A), .C2(C2)) u_i960 (   // R869: F2A; R924: C2
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
@@ -3067,6 +3075,37 @@ generate if (M2A) begin : g_timers
 end else begin : g_notimers
 	assign tmr_expire = 4'd0; assign tmr_rdata = 32'd0;
 end endgenerate
+
+// R928: OVER REV'S COMM BOARD, AS MAME 0.289 SEES IT WITH NO LINK (m2comm with
+// its comm Z80 running EPR-18643 and no partner): CN at 0x01a04000 reads
+// 0xFE | cn; FG at 0x01a04002 reads 0x7E | fg | ~zfg << 7, zfg the Z80's flag.
+// MAME's tap (every access to 0x01a00000-0x01a1ffff, 10 s): CN and FG written
+// 0, CN read (0xFE), CN written 1, FG read 0x7E, 0x7E, then 0xFE 52 ms after
+// CN = 1, one share-RAM byte written, nothing else. The boot's "Check network
+// board" waits for FG bit 7 low (the Z80 alive) and "Link check." for it high
+// again, then prints ">> STAND ALONE". Modelled: zfg is 1 from CN's 0 -> 1
+// until the third vblank after it (~52 ms, MAME's), else 0. This core read the
+// window as 0: "Link check." forever (the 2C bench, frames 600-906); a constant
+// 0xFE stopped at "Check network board." instead. The 16 KB share RAM is not
+// kept (one byte written, none read). Over Rev's ID only (is_orev): every other
+// game reads this window as before.
+logic       comm_cn, comm_fg, comm_zfg;
+logic [1:0] comm_vb;
+wire  comm_sel = is_orev && cpu_io_sel && (cpu_io_addr[23:17] == 7'h50) && (cpu_io_addr[15:2] == 14'h1000);
+always_ff @(posedge clk_sys or negedge cpu_rst_n)
+	if (!cpu_rst_n) begin comm_cn <= 1'b0; comm_fg <= 1'b0; comm_zfg <= 1'b0; comm_vb <= 2'd0; end
+	else begin
+		if (comm_sel && cpu_io_we && cpu_io_be[0]) begin
+			comm_cn <= cpu_io_wdata[0];
+			if (cpu_io_wdata[0] && !comm_cn) begin comm_zfg <= 1'b1; comm_vb <= 2'd0; end
+			if (!cpu_io_wdata[0]) comm_zfg <= 1'b0;
+		end else if (comm_zfg && vbl_d && !vbl_dd) begin
+			comm_vb <= comm_vb + 2'd1;
+			if (comm_vb == 2'd2) comm_zfg <= 1'b0;
+		end
+		if (comm_sel && cpu_io_we && cpu_io_be[2]) comm_fg <= cpu_io_wdata[16];
+	end
+wire [31:0] comm_rdata = {8'h00, ~comm_zfg, 6'h3F, comm_fg, 8'h00, 7'h7F, comm_cn};
 
 // V-blank into bit 0, the same line MAME's screen_vblank sets. irq_update()
 // folds the twelve request bits onto the i960's four lines.
@@ -3621,6 +3660,7 @@ assign cpu_io_rdata =
 	// down, then repeated in RTL.
 	iob_sel                           ? iob_rdata :
 	bak_sel                           ? bak_rdata :
+	comm_sel                          ? comm_rdata :   // R928
 	// THE COPROCESSOR, all three of its registers. The stub that used to sit
 	// here answered 0x980004 with a constant 1 -- "the output FIFO is empty",
 	// which is true of a copro that never starts and a lie about one that has.
@@ -6380,7 +6420,7 @@ end else begin : g_noioboard
 		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
 		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2;
 		wire [7:0] a2_pe;   // R892: PE's latch, Manx TT's motion-base command
-		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT)) u_2a_inputs (
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT), .OREV(C2)) u_2a_inputs (   // R928: OREV
 			.clk(clk_sys), .rst_n(cpu_rst_n),
 			.game(M2A ? (is_hotd ? 7'h11 : game_id[6:0]) : 7'd0),   // R887: the profile from the game ID; R924: HOTD is Virtua Cop 2's
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
@@ -7454,7 +7494,7 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 	/* verilator lint_on UNUSEDSIGNAL */
 	wire [3:0] w_ls;
 	wire [SDR_AW:1] w_luma = cpu_sd_addr - GAME_LUMA;
-	m2_luma_map u_lmap (.clk(clk_sys), .game_id(game_id[3:0]), .big(a2_big), .zg(is_zerogun),
+	m2_luma_map u_lmap (.clk(clk_sys), .game_id(game_id[3:0]), .big(a2_big | is_orev), .zg(is_zerogun),   // R928: Over Rev's ranges
 	                    .q_row(q3d_trow), .q_ls(q_ls), .w_row(w_luma[15:8]), .w_ls(w_ls));
 	assign r3d_qtex = {q_ls[2:0], q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};
 	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
