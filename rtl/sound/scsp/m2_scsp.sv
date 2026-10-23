@@ -59,7 +59,16 @@ module m2_scsp #(
   parameter bit FM        = 1'b1,
   parameter bit MIDI_OUT  = 1'b1,
   parameter bit LFO_NOISE = 1'b1,
-  parameter bit MADRS_MIRROR = 1'b0   // R914: m2_scsp_dsp; 1 = MAME's 0x7c0 mirror (benches)
+  parameter bit MADRS_MIRROR = 1'b0,  // R914: m2_scsp_dsp; 1 = MAME's 0x7c0 mirror (benches)
+  // R946: OVERLAP -- the effects DSP's run for sample n alongside the slots of
+  // sample n+1 (the microcode's overlapped head, m2_scsp_dsp's two MIXS
+  // banks): a sample costs max(slots, DSP) clocks instead of their sum, and
+  // the output is MAME's stream one sample later. 0 is the engine as before,
+  // clock for clock.
+  parameter bit OVERLAP = 1'b0,
+  // R946: WPOST -- m2_scsp_dsp's ring writes posted (an eight-entry queue);
+  // with OVERLAP unless set apart (benches)
+  parameter bit WPOST = OVERLAP
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -115,13 +124,18 @@ module m2_scsp #(
   output logic signed [31:0] dbg_slot_smp,
   output logic [31:0] dbg_samples,
   output logic [31:0] dbg_miss,
-  output logic  [3:0] dbg_mvol           // MVOL as the common registers hold it (telemetry, R864)
+  output logic  [3:0] dbg_mvol,          // MVOL as the common registers hold it (telemetry, R864)
+  output logic  [1:0] dbg_ov              // R946 benches: {the slots parked at the DSP's wait, the DSP busy}
 );
 
 `include "scsp_tables.svh"
   /* verilator lint_off UNUSEDPARAM */
 `include "scsp_uc.svh"
   /* verilator lint_on UNUSEDPARAM */
+  // R946: where a sample starts, and where the slots return to
+  localparam logic [7:0] UA_IDLE_X     = OVERLAP ? UA_IDLEO : UA_IDLE;
+  localparam logic [7:0] UA_DISPATCH_X = OVERLAP ? UA_DISPATCHO : UA_DISPATCH;
+  localparam logic [7:0] UA_BOOT_X     = OVERLAP ? UA_BOOTO : UA_IDLE;
 
   localparam logic [1:0] ATT = 2'd0, DC1 = 2'd1, DC2 = 2'd2, REL = 2'd3;
 
@@ -205,7 +219,7 @@ module m2_scsp #(
   logic [15:0] ring_q;
   logic  [6:0] ring_ra;
   // the DSP and the level words
-  logic        dsp_go, dsp_done, dsp_busy, dsp_pend;
+  logic        dsp_go, dsp_done, dsp_busy, dsp_pend, dsp_mrg;
   logic        mix_we;
   logic [19:0] mix_val;
   logic signed [15:0] ef_q;
@@ -221,6 +235,12 @@ module m2_scsp #(
   // common registers, timers, interrupts, MIDI (m2_scsp_regs)
   logic  [3:0] mvol;
   logic        dac18;
+  // R946 OVERLAP: the output's MVOL / DAC18 as they were at the DSPGO that
+  // ended its sample (the 68000's writes for the next one come before it)
+  logic  [3:0] mvol_o;
+  logic        dac18_o;
+  wire   [3:0] mvol_x  = OVERLAP ? mvol_o : mvol;
+  wire         dac18_x = OVERLAP ? dac18_o : dac18;
   logic  [1:0] rbl;
   logic  [5:0] rbp;
   logic  [4:0] mslc;
@@ -283,7 +303,12 @@ module m2_scsp #(
   wire         op_ready = ((wq_n != 3'd0) || rd_pend) && !wq_pop && !rd_done;
   wire  [11:1] nx_addr  = (wq_n != 3'd0) ? h_addr : rd_a;
   wire         head_dsp = nx_addr >= 11'h380 && nx_addr < 11'h600;
-  wire         op_ok    = op_ready && !(head_dsp && dsp_busy);
+  // (R946 OVERLAP: the run goes on under the next sample's slots and op
+  // windows, so a DSP op also waits out a go not yet taken -- DSPGO comes last
+  // in the overlapped head, straight before an op window -- and RBL / RBP
+  // (0x402), which the run reads, waits for the run as the DSP's own do)
+  wire         head_dsx = head_dsp || (OVERLAP && nx_addr == 11'h201);
+  wire         op_ok    = op_ready && !(head_dsx && (dsp_busy || (OVERLAP && dsp_pend)));
   wire         o_ring   = FM && o_addr >= 11'h300 && o_addr < 11'h380;   // 0x600-0x6ff
   wire         o_dsp    = o_addr >= 11'h380 && o_addr < 11'h600;
 
@@ -345,8 +370,8 @@ module m2_scsp #(
       4'(C_LOOP1):   cond = loop_on && f1;
       4'(C_LOOP2):   cond = loop_on && f2;
       4'(C_FMMOD):   cond = FM && fm_mod;
-      4'(C_MVOL15):  cond = mvol == 4'hf;
-      4'(C_NMVOL15): cond = mvol != 4'hf;
+      4'(C_MVOL15):  cond = mvol_x == 4'hf;
+      4'(C_NMVOL15): cond = mvol_x != 4'hf;
       4'(C_START):   cond = fk && fr;
       4'(C_NKB):     cond = !fk;
       4'(C_MORESW):  cond = sw != 5'd31;
@@ -375,7 +400,7 @@ module m2_scsp #(
       3'(FLOW_BR):      if (cond(f_bc)) upc_n = f_tgt;
       3'(FLOW_JMP):     upc_n = f_tgt;
       3'(FLOW_RET):     upc_n = ret_addr;
-      3'(FLOW_SLOTEND): upc_n = UA_DISPATCH;
+      3'(FLOW_SLOTEND): upc_n = UA_DISPATCH_X;
       3'(FLOW_DISPATCH): begin
         if (slot[5]) ;                                   // all slots done
         else if (active[slot[4:0]]) upc_n = UA_SLOT;
@@ -383,7 +408,9 @@ module m2_scsp #(
       end
       3'(FLOW_WAIT): begin
         case (f_bc)
-          4'(C_GO):      hold = !(go_ok && dsp_idle && !op_ready);
+          // (R946 OVERLAP: the run before goes on under the next sample's slots;
+          // a DSP op still waits for it -- op_ok -- so the queue keeps MAME's order)
+          4'(C_GO):      hold = OVERLAP ? !(go_ok && !op_ready && !dsp_mrg) : !(go_ok && dsp_idle && !op_ready);
           4'(C_DSPIDLE): hold = !dsp_idle;
           4'(C_FETCHED): hold = !(p1_ok && p2_ok);
           default:       hold = 1'b0;
@@ -393,12 +420,12 @@ module m2_scsp #(
     endcase
     if (hold) upc_n = upc;
     e_bub = hold || call_go || boot;
-    if (boot) upc_n = UA_IDLE;
+    if (boot) upc_n = UA_BOOT_X;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      upc <= UA_IDLE; ret_addr <= UA_IDLE; slot <= 6'd32; sw <= '0; slot_e <= '0; sw_e <= '0;
+      upc <= UA_BOOT_X; ret_addr <= UA_IDLE_X; slot <= 6'd32; sw <= '0; slot_e <= '0; sw_e <= '0;
       active <= '0; f1 <= 1'b0; f2 <= 1'b0; f3 <= 1'b0; f4 <= 1'b0; stop_rel <= 1'b0;
     end else begin
       upc <= upc_n;
@@ -634,7 +661,7 @@ module m2_scsp #(
       end
       // (the DAC's operand is the register file's port A, never the A mux:
       // the assembler holds every DAC to a = RA -- R875, timing)
-      4'(OP_DAC):   alu_r = 32'(dac($signed(ra_q), dac18));
+      4'(OP_DAC):   alu_r = 32'(dac($signed(ra_q), dac18_x));
       default:      alu_r = sum;                          // ADD SUB ADDSGN ADDSPLIT
     endcase
   end
@@ -687,7 +714,7 @@ module m2_scsp #(
         3'(MB_EGV):   mul_b <= $signed({5'd0, egv});
         3'(MB_LV):    mul_b <= $signed({3'd0, lv_q});
         3'(MB_FRAC):  mul_b <= $signed({6'd0, frac});
-        3'(MB_MVG):   mul_b <= $signed({1'b0, mvol_gain(mvol)});
+        3'(MB_MVG):   mul_b <= $signed({1'b0, mvol_gain(mvol_x)});
         default:      mul_b <= $signed({8'd0, 10'(10'd64 << boost)});  // MB_BST (R894): with PSL S6, SMPL << boost
       endcase
     end
@@ -721,7 +748,7 @@ module m2_scsp #(
       stwinh <= 1'b0; isel <= '0; egst_l <= REL; eg_lin <= 1'b0; eg_hold <= 1'b0; eg_lv <= '0;
       tadr <= '0; egt_a <= '0; frac <= '0; fk <= 1'b0; fr <= 1'b0;
       dsp_go <= 1'b0; dsp_pend <= 1'b0; out_valid <= 1'b0; dbg_slot_valid <= 1'b0;
-      dbg_samples <= '0; par <= 1'b0; mon <= '0; mon_ca <= '0;
+      dbg_samples <= '0; par <= 1'b0; mon <= '0; mon_ca <= '0; mvol_o <= '0; dac18_o <= 1'b0;
       out_l_raw <= '0; out_r_raw <= '0; out_l <= '0; out_r <= '0; dbg_slot <= '0; dbg_slot_smp <= '0;
     end else begin
       dsp_go <= 1'b0; out_valid <= 1'b0; dbg_slot_valid <= 1'b0;
@@ -762,7 +789,7 @@ module m2_scsp #(
         eg_lin <= eg2_pre == ATT; eg_hold <= eg2_hold;
       end
       case (e_s2)                                     // (not under the predicate)
-        4'(S2_DSPGO): begin dsp_go <= 1'b1; dsp_pend <= 1'b1; end
+        4'(S2_DSPGO): begin dsp_go <= 1'b1; dsp_pend <= 1'b1; mvol_o <= mvol; dac18_o <= dac18; end   // (R946)
         4'(S2_OUTV): begin
           out_valid <= 1'b1; par <= ~par;
           if (!(&dbg_samples)) dbg_samples <= dbg_samples + 32'd1;
@@ -833,7 +860,7 @@ module m2_scsp #(
     .fill_req(fill_req), .fill_line(fill_line), .fill_done(fill_done), .fill_data(fill_data),
     .m_req(sm_req), .m_line(sm_line), .m_ack(sm_ack), .m_data(sm_data),
     .snp(snp), .snp_line(snp_addr[18:3]), .snp2(dsp_wr_done), .snp2_line(dsp_wr_addr[18:3]),
-    .dbg_fills(dbg_miss)
+    .dbg_fills(dbg_miss), .sn2_busy()
   );
 
   // =====================================================================
@@ -868,19 +895,24 @@ module m2_scsp #(
   // the level words, the DSP
   // =====================================================================
   assign lv_raddr = {idx_f, f_lw};
-  m2_scsp_level u_level (
+  // (R946 OVERLAP: the effect returns of sample n-1 come after the 68000's
+  // writes for sample n -- the level unit keeps the effect words as they were
+  // at the DSPGO that ended sample n-1, as the output keeps MVOL / DAC18)
+  m2_scsp_level #(.SHADOW(OVERLAP)) u_level (
     .clk(clk), .rst_n(rst_n),
     .req(lv_req), .req_slot(o_slot), .req_w6({7'd0, w6l}), .req_w10(sqb), .req_w11(sqa),
-    .busy(lv_busy), .rd_addr(lv_raddr), .rd_q(lv_q)
+    .busy(lv_busy), .rd_addr(lv_raddr), .rd_q(lv_q),
+    .sh_clr(OVERLAP && e_s2 == 4'(S2_DSPGO))
   );
 
   assign mix_we  = e_s2 == 4'(S2_MIXW);
   assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
-  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR)) u_dsp (
+  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST)) u_dsp (
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
     .rbl(rbl), .rbp(rbp),
     .mix_sel(isel), .mix_we(mix_we), .mix_val(mix_val),
+    .mix_idle(f_flow == 3'(FLOW_WAIT) && (f_bc == 4'(C_GO) || f_bc == 4'(C_DSPIDLE))), .mrg(dsp_mrg),   // R946
     .ef_idx(slot[3:0]), .ef_q(ef_q),
     .w_en(dw_en), .w_addr(o_addr), .w_data(o_data), .w_be(o_be), .r_addr(o_addr), .r_q(dsp_rq),
     .m_req(dm_req), .m_we(dm_we), .m_addr(dm_addr), .m_wdata(dm_wdata),
@@ -1054,6 +1086,9 @@ module m2_scsp #(
   always_comb begin
     if (upc >= UA_IDLE && upc < UA_DISPATCH) tr_pos = 7'd0;
     else if (upc == UA_DISPATCH)             tr_pos = slot[5] ? 7'd32 : {2'd0, slot[4:0]};
+    else if (upc >= UA_BOOTO && upc < UA_DISPATCHO) tr_pos = 7'd0;           // R946's overlapped head
+    else if (upc == UA_DISPATCHO)            tr_pos = slot[5] ? 7'd32 : {2'd0, slot[4:0]};
+    else if (upc > UA_DISPATCHO)             tr_pos = 7'd32;
     else if (upc < UA_SWEEP)                 tr_pos = 7'd32;
     else if (upc < UA_SKIP)                  tr_pos = tr_pos_r;        // a call from an op window
     else                                     tr_pos = {1'b1, slot};
@@ -1073,8 +1108,9 @@ module m2_scsp #(
 `endif
 
   assign dbg_mvol = mvol;
-  assign quiet =upc == UA_IDLE && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
-                 !lv_busy && !lv_req && !dsp_busy;
+  assign dbg_ov   = {f_flow == 3'(FLOW_WAIT) && f_bc == 4'(C_DSPIDLE), dsp_busy};
+  assign quiet =upc == UA_IDLE_X && !op_busy && !call_go && !op_ready && !wq_pop && !rd_done &&
+                 !lv_busy && !lv_req && !(OVERLAP ? dsp_mrg : dsp_busy);   // (R946: the run goes on into the next sample)
 
   /* verilator lint_off UNUSEDSIGNAL */
   wire _unused = &{1'b0, LFO_NOISE, prod[44:32], e_psl, w0l[11], egst_n_rel_stop, ue[`UE_IMM]};

@@ -47,7 +47,8 @@ module m2_2a_sound #(
   parameter bit          MIDI_OUT = 1'b1,
   parameter bit          CHKSUM   = 1'b0,  // R882: sum the program and the four sample ROMs in SDRAM before boot (a probe build)
   parameter bit          POST_WR  = 1'b1,  // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
-  parameter bit          EXACT    = 1'b1   // R884: the 68000 on MAME's wait states, its clock stopped while SDRAM answers
+  parameter bit          EXACT    = 1'b1,  // R884: the 68000 on MAME's wait states, its clock stopped while SDRAM answers
+  parameter bit          OVERLAP  = 1'b0   // R946: the SCSP's DSP run alongside the next sample's slots (m2_scsp OVERLAP)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -245,7 +246,7 @@ module m2_2a_sound #(
   logic        sm_req, dm_req, dm_we;
   logic [15:0] sm_line, dm_wdata;
   logic [18:1] dm_addr;
-  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT)) u_scsp (
+  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT), .OVERLAP(OVERLAP)) u_scsp (
     .clk(clk), .rst_n(rst_n),
     .cpu_req(s_req), .cpu_we(!rwn), .cpu_addr(addr[11:1]), .cpu_din(oedb), .cpu_be({!udsn, !ldsn}),
     .cpu_ack(s_ack), .cpu_dout(s_dout), .ipl(ipl),
@@ -257,7 +258,7 @@ module m2_2a_sound #(
     .out_ready(o_ready), .out_valid(o_valid), .out_l_raw(), .out_r_raw(), .out_l(o_l), .out_r(o_r),
     .tick44(tick44), .tph(tacc[TW-2 -: 6]), .cpu_tick(cpu_tick), .boost(snd_boost), .step_mode(1'b0), .step_go(1'b0), .quiet(),
     .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss(),
-    .dbg_mvol(dbg_mvol)
+    .dbg_mvol(dbg_mvol), .dbg_ov()
   );
   assign b_req  = sm_req;
   assign b_addr = RAM_BASE + AW'({sm_line, 2'b00});

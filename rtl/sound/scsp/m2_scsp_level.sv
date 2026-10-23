@@ -29,7 +29,14 @@
 
 `timescale 1ns/1ps
 
-module m2_scsp_level (
+module m2_scsp_level #(
+  // R946: SHADOW (m2_scsp OVERLAP) -- the effect words (3 / 4) of slots 0-15
+  // as they were at the last sh_clr, for an overlapped engine whose effect
+  // returns for sample n-1 come after the 68000's writes for sample n: the
+  // first recompute of a slot after sh_clr keeps its old pair, and reads of
+  // words 3 / 4 give the kept pair until the next sh_clr
+  parameter bit SHADOW = 1'b0
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        req,           // taken when !busy
@@ -40,7 +47,8 @@ module m2_scsp_level (
   output logic        busy,
   // the engine's read port: {slot, word}, registered (one clock)
   input  logic  [7:0] rd_addr,
-  output logic [14:0] rd_q
+  output logic [14:0] rd_q,
+  input  logic        sh_clr         // R946 SHADOW: the pairs as they are now become the ones read
 );
 
   logic  [4:0] s_slot;
@@ -163,14 +171,50 @@ module m2_scsp_level (
 
   // the level RAM, a word per row; power-up 0 = MAME's level for all-zero
   // registers (DISDL / IMXL / EFSDL 0: fSDL = 0)
+  //
+  // R946 SHADOW: words 3 / 4 of slots 0-15 in two banks, rows 3 / 4 and the
+  // unused rows 6 / 7. A recompute writes the bank not read (sh_live) and
+  // marks the slot; sh_clr turns every marked slot whose recompute is through
+  // to its new bank. A slot mid-recompute at sh_clr turns at the next one.
   (* ramstyle = "M10K" *) logic [14:0] lram [256];
-  always_ff @(posedge clk) begin
-    if (run && ph == 4'd9) lram[{s_slot, w}] <= v;
-    rd_q <= lram[rd_addr];
+  logic [14:0] lram_q;
+  logic [15:0] sh_live, sh_dirty;
+  logic  [7:0] w_row, r_row;
+  always_comb begin
+    w_row = {s_slot, w};
+    r_row = rd_addr;
+    // (the other bank of word 3 is row 7, of word 4 row 6)
+    if (SHADOW && !s_slot[4] && (w == 3'd3 || w == 3'd4) && !sh_live[s_slot[3:0]])
+      w_row[2:0] = (w == 3'd3) ? 3'd7 : 3'd6;
+    if (SHADOW && !rd_addr[7] && (rd_addr[2:0] == 3'd3 || rd_addr[2:0] == 3'd4) && sh_live[rd_addr[6:3]])
+      r_row[2:0] = (rd_addr[2:0] == 3'd3) ? 3'd7 : 3'd6;
   end
+  always_ff @(posedge clk) begin
+    if (run && ph == 4'd9) lram[w_row] <= v;
+    lram_q <= lram[r_row];
+  end
+  generate if (SHADOW) begin : g_sh
+    wire take = !run && req && !req_slot[4];
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin sh_live <= '0; sh_dirty <= '0; end
+      else begin
+        if (sh_clr) begin
+          logic [15:0] busy_s, turn;
+          busy_s = (run && !s_slot[4]) ? 16'(1) << s_slot[3:0] : 16'd0;
+          turn = sh_dirty & ~busy_s;
+          sh_live  <= sh_live ^ turn;
+          sh_dirty <= sh_dirty & ~turn;
+        end
+        if (take) sh_dirty[req_slot[3:0]] <= 1'b1;
+      end
+    end
+  end else begin : g_nosh
+    assign sh_live = '0; assign sh_dirty = '0;
+  end endgenerate
+  assign rd_q = lram_q;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, req_w6[15:9], req_w10[15:3]};
+  wire _unused = &{1'b0, req_w6[15:9], req_w10[15:3], sh_clr, sh_dirty};
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule

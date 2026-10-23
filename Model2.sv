@@ -143,6 +143,21 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_SND_EXACT
 `define M2_2A_SND_EXACT 1
 `endif
+// R946: M2_2A_SND_OVL, the SCSP's effects DSP run for sample n alongside the
+// slots of sample n+1 (m2_scsp OVERLAP): a sample costs the longer of the two,
+// not their sum. ON IN THE 2C BUILD: House of the Dead's DSP program (112
+// steps, ~23 ring reads and 10 writes a sample, each to SDRAM) plus the
+// tutorial's slot traffic runs the engine past its 1,814 clocks a sample at
+// light port latency (6-40 clk_sys) -- the output FIFO underruns in the
+// attract's tutorial screen, the board's symptom. The 2A build keeps 0.
+`ifdef M2_2C
+`ifndef M2_2A_SND_OVL
+`define M2_2A_SND_OVL 1
+`endif
+`endif
+`ifndef M2_2A_SND_OVL
+`define M2_2A_SND_OVL 0
+`endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
 // On by default; VERILOG_MACRO "M2_NO_2A_RALLY=1" (or -DM2_NO_2A_RALLY to
@@ -253,6 +268,9 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `endif
 `ifndef M2_2A_SND_EXACT
 `define M2_2A_SND_EXACT 1
+`endif
+`ifndef M2_2A_SND_OVL
+`define M2_2A_SND_OVL 0
 `endif
 
 // R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
@@ -3587,7 +3605,7 @@ end else if (SND2A) begin : g_2asnd
 	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1), .CHKSUM(SND_CHKSUM),   // R882
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
-	              .EXACT(`M2_2A_SND_EXACT != 0)) u_snd2a (   // R884
+	              .EXACT(`M2_2A_SND_EXACT != 0), .OVERLAP(`M2_2A_SND_OVL != 0)) u_snd2a (   // R884, R946
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
