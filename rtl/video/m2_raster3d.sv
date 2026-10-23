@@ -118,6 +118,10 @@ module m2_raster3d #(
   // the sheets (m2_texel_bl). Nearest level, the existing bilinear, no blend.
   // 0 is level 0 always: every module as before R828.
   parameter bit MIP = 1'b0,
+  // R944: m2_raster_fill's DIL -- each walked edge of a FLAT quad moved out by
+  // (1 + |dx/dy|) / 8 px, so a T-junction on a quarter-pixel vertex leaves no
+  // gap. Needs M2COV.
+  parameter bit DIL = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25,
   // R867: THE TEXTURED COLOUR THROUGH THE GAME'S TABLES (m2_span_tex TEXLUT).
@@ -638,7 +642,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP)) u_fill (   // R828   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .DIL(DIL)) u_fill (   // R944   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13

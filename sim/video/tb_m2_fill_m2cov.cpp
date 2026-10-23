@@ -10,6 +10,15 @@
 // directed cases first -- the frame-1000 pair whose shared, nearly horizontal
 // edge gave a whole row to the wrong polygon -- then random convex quads and
 // triangles (a triangle is a quad with a repeated vertex, as the clipper emits).
+//
+// R944: built with -GDIL=1 -DTB_DIL, the rule with each edge moved outward by
+// (1 + |dx/dy|) / 8 px, clamped to the edge's own x extent +/- 1/8, and a
+// T-JUNCTION test: one quad above a long edge, two below it sharing a vertex
+// that lies ON the edge in floats, every vertex rounded to quarters as the
+// geometry rounds them; a pixel the exact-float picture covers that none of
+// the three does, with both neighbours across it covered, is a crack. With
+// DIL there must be none; without it (the default build) the count is
+// printed, and is not zero -- the failure the test exists to catch.
 #include "Vm2_raster_fill.h"
 #include "verilated.h"
 #include "Vm2_raster_fill___024root.h"
@@ -34,6 +43,7 @@ static int mround(double v) { double ip = std::floor(v); return int(ip) + ((v - 
 // where 16.16 slope steps and MAME's floats may land either side of 1/2
 static std::map<int, int> g_tie;   // row -> bit0 left tie, bit1 right tie
 static const double TIEW = std::getenv("TIEW") ? atof(std::getenv("TIEW")) : 1e-3;
+static long g_cracks = 0, g_tj = 0;   // R944
 static std::map<int, std::pair<int,int>> ref(const int xq[4], const int yq[4], int vx1, int vx2, int vy1, int vy2) {
   std::map<int, std::pair<int,int>> out; g_tie.clear();
   double x[4], y[4], ymin = 1e9, ymax = -1e9;
@@ -42,6 +52,8 @@ static std::map<int, std::pair<int,int>> ref(const int xq[4], const int yq[4], i
     if (r < vy1 || r > vy2) continue;
     const double c = r + 0.5;
     double lo = 1e9, hi = -1e9; bool any = false;
+    double lo0 = 1e9, hi0 = -1e9, slo = 0, shi = 0;   // R944: the undilated ends and slopes, which pick the edges
+    (void)lo0; (void)hi0; (void)slo; (void)shi;
     for (int i = 0; i < 4; i++) {
       const int j = (i + 1) & 3;
       const double ya = y[i], yb = y[j];
@@ -49,7 +61,19 @@ static std::map<int, std::pair<int,int>> ref(const int xq[4], const int yq[4], i
       const double t0 = std::min(ya, yb), t1 = std::max(ya, yb);
       if (!(c >= t0 && c < t1)) continue;
       const double xc = x[i] + (c - ya) * (x[j] - x[i]) / (yb - ya);
+#ifdef TB_DIL
+      // R944: the edge moved out, within its own extent +/- 1/8. Which edge is
+      // the left one at a shared x (the top vertex's row) goes by the slope,
+      // as the fill's swapf decides it: the smaller dx/dy is the left edge.
+      const double sl = (x[j] - x[i]) / (yb - ya);
+      const double dg = (1.0 + std::fabs(sl)) / 8.0;
+      const double el = std::min(x[i], x[j]) - 0.125, eh = std::max(x[i], x[j]) + 0.125;
+      if (!any || xc < lo0 || (xc == lo0 && sl < slo)) { lo0 = xc; slo = sl; lo = std::max(xc - dg, el); }
+      if (!any || xc > hi0 || (xc == hi0 && sl > shi)) { hi0 = xc; shi = sl; hi = std::min(xc + dg, eh); }
+      any = true;
+#else
       lo = std::min(lo, xc); hi = std::max(hi, xc); any = true;
+#endif
     }
     if (!any) continue;
     auto tie = [](double v) { const double f = v - std::floor(v); return std::fabs(f - 0.5) < TIEW; };
@@ -179,7 +203,72 @@ int main(int argc, char **argv) {
     char nm[32]; std::snprintf(nm, sizeof nm, "random %d", n);
     check(nm, x, y, false);
   }
-  std::printf("m2_raster_fill M2COV: checks=%ld fails=%ld (rows differing only at an exact half-pixel tie: %ld)\n%s\n", checks, fails, g_ties, fails ? "FAIL" : "PASS");
+  // R944: T-junctions. A long edge P0-P1, a point M on it (floats); quad A
+  // above it (P0, P1 and two points above), quads B1 (P0, M, below) and B2
+  // (M, P1, below) under it. Vertices rounded to the nearest quarter, half
+  // away from zero, as m2_geometry rounds them. The exact-float picture
+  // (MAME's rule) of the three has no crack along the edge (M is on it).
+  {
+    std::printf("test: T-junctions (one edge above, two below)\n");
+    const int NT = std::getenv("M2_TJ_N") ? atoi(std::getenv("M2_TJ_N")) : 2000;
+    std::mt19937 rt(11);
+    auto q4 = [](double c) { const long a = long(std::trunc(8.0 * std::fabs(c))); const int m = int((a + 1) >> 1); return c < 0 ? -m : m; };
+    const int H = 384, W = 496;
+    std::vector<uint8_t> ex(H * W), core(H * W);
+    auto exact = [&](const double *x, const double *y, int n) {
+      double ymin = 1e9, ymax = -1e9; for (int i = 0; i < n; i++) { ymin = std::min(ymin, y[i]); ymax = std::max(ymax, y[i]); }
+      for (int r = std::max(mround(ymin), 0); r < std::min(mround(ymax), H); r++) {
+        const double c = r + 0.5; double lo = 1e9, hi = -1e9; bool any = false;
+        for (int i = 0; i < n; i++) { const int j = (i + 1) % n; if (y[i] == y[j]) continue;
+          if (!(c >= std::min(y[i], y[j]) && c < std::max(y[i], y[j]))) continue;
+          const double xc = x[i] + (c - y[i]) * (x[j] - x[i]) / (y[j] - y[i]); lo = std::min(lo, xc); hi = std::max(hi, xc); any = true; }
+        if (!any) continue;
+        for (int px = std::max(mround(lo), 0); px < std::min(mround(hi), W); px++) ex[r * W + px] = 1;
+      }
+    };
+    for (int t = 0; t < NT; t++) {
+      std::fill(ex.begin(), ex.end(), 0); std::fill(core.begin(), core.end(), 0);
+      // the edge: shallow (most of them, as the shadow's) or steep
+      const double ang = (rt() % 2 == 0) ? ((int(rt() % 600) - 300) / 300.0 * 0.12) : ((int(rt() % 3000) - 1500) / 1500.0 * 1.4);
+      const double L = 80 + rt() % 300, cx = 150 + rt() % 200, cy = 100 + rt() % 180;
+      const double ux = std::cos(ang), uy = std::sin(ang), nx = -uy, ny = ux;   // n points "below"
+      const double P0x = cx - ux * L / 2 + (rt() % 1000) / 1000.0, P0y = cy - uy * L / 2 + (rt() % 1000) / 1000.0;
+      const double P1x = P0x + ux * L, P1y = P0y + uy * L;
+      const double f = 0.2 + (rt() % 600) / 1000.0, Mx = P0x + (P1x - P0x) * f, My = P0y + (P1y - P0y) * f;
+      const double ha = 6 + rt() % 40, hb = 6 + rt() % 40;
+      const double A[8] = {P0x, P0y, P1x, P1y, P1x - nx * ha, P1y - ny * ha, P0x - nx * ha, P0y - ny * ha};
+      const double B1[8] = {P0x, P0y, P0x + nx * hb, P0y + ny * hb, Mx + nx * hb, My + ny * hb, Mx, My};
+      const double B2[8] = {Mx, My, Mx + nx * hb, My + ny * hb, P1x + nx * hb, P1y + ny * hb, P1x, P1y};
+      for (const double *Q : {A, B1, B2}) {
+        double ex4[4], ey4[4]; int xq[4], yq[4];
+        for (int i = 0; i < 4; i++) { ex4[i] = Q[2 * i]; ey4[i] = Q[2 * i + 1]; xq[i] = q4(ex4[i]); yq[i] = q4(ey4[i]); }
+        exact(ex4, ey4, 4);
+        auto got = run(xq, yq);
+        for (auto &g : got) if (g.first >= 0 && g.first < H) for (int px = std::max(g.second.first, 0); px <= std::min(g.second.second, W - 1); px++) core[g.first * W + px] = 1;
+      }
+      ++g_tj;
+      for (int r = 1; r < H - 1; r++) for (int px = 1; px < W - 1; px++) {
+        const int k = r * W + px;
+        if (ex[k] && !core[k] && ((core[k - 1] && core[k + 1]) || (core[k - W] && core[k + W]))) {
+          if (g_cracks < 6) std::printf("  crack (%d,%d), T-junction %d: edge (%.3f,%.3f)-(%.3f,%.3f) M (%.3f,%.3f)\n", px, r, t, P0x, P0y, P1x, P1y, Mx, My);
+          ++g_cracks;
+        }
+      }
+    }
+#ifdef TB_DIL
+    if (g_cracks) ++fails;
+    std::printf("  %ld T-junctions, %ld crack pixels (DIL: must be 0)\n", g_tj, g_cracks);
+#else
+    std::printf("  %ld T-junctions, %ld crack pixels (no DIL: the cracks R944 closes; not a failure here)\n", g_tj, g_cracks);
+#endif
+  }
+  std::printf("m2_raster_fill M2COV%s: checks=%ld fails=%ld (rows differing only at an exact half-pixel tie: %ld)\n%s\n",
+#ifdef TB_DIL
+              " DIL",
+#else
+              "",
+#endif
+              checks, fails, g_ties, fails ? "FAIL" : "PASS");
   delete d;
   return fails ? 1 : 0;
 }
