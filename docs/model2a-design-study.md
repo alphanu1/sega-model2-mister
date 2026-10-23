@@ -43380,3 +43380,10 @@ few). What each game did with the wrong values was not traced: a board look
 at Virtua Cop's 2D (and on 2A VF2, Zero Gunner) before release. Open
 question worth re-asking with this in: R929's "why the tile-path flash is
 lost on the board".
+*BOARD (Ben, 2026-10-23, s1386 = model2a + R937, clk_mem -0.004):* Manx
+TT's leaderboard no longer flickers (its broken thin strokes are texture
+minification -- the panel is 3D -- not R937; the coloured dots at its grid
+crossings are the R938 seams). ZERO GUNNER "looks better -- some 2D was
+missing before", so R937 restored 2D the game builds from read-backs. (Its
+ranking-screen helicopter icons were already there before R937 -- they came
+with R922, Model2A_20261021d.)
