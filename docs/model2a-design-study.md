@@ -45218,3 +45218,12 @@ its EEPROM switched to USA; the checksum at 0x08 is not a plain sum).
 waits, 'T' underruns, 'R' sums, 'C' i960 IP) in Japan mode -- the MIDI that
 plays #111, and whether the board's ports wait as the heavy trace does;
 (2) Ben's USA-mode replay; (3) the same session on a clean seed.
+*BOARD (Ben, s1423 = e516b53, AGE on):* THE SOUND FAULT IS STILL THERE --
+"a huge wobble and clipping", and it is in ATTRACT: the tutorial screen that
+shows losing a life. So R943's AGE fix, proven only in the bench, does not
+cure the board case (cf. the reproduce-before-fit rule). Attract makes it
+repeatable without play. Next: a probe build (model2c c9cb8e0 + M2_PROBE,
+M2_PROBE_L, M2_NO_2A_RALLY; tree sm2-builds/m2c-sndprobe, seeds s1424-s1426)
+to measure on the board, at that attract moment, the sound ports' SDRAM
+waits ('L'), the 68000's bus cycles ('S'), output underruns and the loudest
+sample ('T') -- before any more theory.
