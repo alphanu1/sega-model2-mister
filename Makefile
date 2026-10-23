@@ -405,8 +405,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_nv_save test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_nv_save test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -2423,12 +2423,28 @@ obj_m2_2a_inputs/Vtb_m2_2a_inputs_top: rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inpu
 	  --Mdir obj_m2_2a_inputs -o Vtb_m2_2a_inputs_top -CFLAGS "-O2" \
 	  rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv sim/io/tb_m2_2a_inputs_top.sv sim/io/tb_m2_2a_inputs.cpp
 
+# R945: the NVRAM file end to end -- Main_MiSTer's SPI words through the real
+# sys/hps_io.sv, m2_nv_port, m2_backup and the 315-5649's 93C46: the game's
+# settings saved, a power cycle with the file, without it, with an earlier
+# core's 16 KB file, a damaged tag, an old MRA size. TEST_ARGS=+spacing=3 is
+# the negative control (inside the pipeline: must FAIL).
+test_m2_nv_save: obj_m2_nv_save/Vtb_m2_nv_save_top
+	@echo "== test m2_nv_save (R945: the EEPROM in the NVRAM file, through hps_io)"
+	@./obj_m2_nv_save/Vtb_m2_nv_save_top $(TEST_ARGS)
+
+obj_m2_nv_save/Vtb_m2_nv_save_top: sim/io/tb_m2_nv_save_top.sv sim/io/tb_m2_nv_save.cpp rtl/io/m2_nv_port.sv \
+                                   rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sys/hps_io.sv
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE -Wno-MULTIDRIVEN --timing \
+	  --top-module tb_m2_nv_save_top -Isys --Mdir obj_m2_nv_save -o Vtb_m2_nv_save_top -CFLAGS "-O2" \
+	  sim/io/tb_m2_nv_save_top.sv rtl/io/m2_nv_port.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+	  rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sys/hps_io.sv sim/io/tb_m2_nv_save.cpp
+
 test_m2_315_5649: obj_m2_5649/Vm2_315_5649
-	@echo "== test m2_315_5649 (the 2A I/O and its 93C46 against MAME's)"
+	@echo "== test m2_315_5649 (the 2A I/O and its 93C46 against MAME's; R945 the save port)"
 	@./obj_m2_5649/Vm2_315_5649 $(TEST_ARGS)
 
 obj_m2_5649/Vm2_315_5649: rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
-	$(VBUILD) --top-module m2_315_5649 -GEE_LOAD=1 -Wno-UNUSEDSIGNAL \
+	$(VBUILD) --top-module m2_315_5649 -GEE_LOAD=1 -GEE_SAVE=1 -Wno-UNUSEDSIGNAL \
 	  --Mdir obj_m2_5649 -o Vm2_315_5649 -CFLAGS "-O2" \
 	  rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
 

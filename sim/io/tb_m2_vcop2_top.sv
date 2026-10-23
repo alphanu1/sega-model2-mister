@@ -49,15 +49,17 @@ module tb_m2_vcop2_top (
     .in0, .in1, .in2, .an0, .an1, .an2
   );
 
+  wire [15:0] ee_dump_q;   // R945: unused here
   m2_315_5649 #(.GUN(1'b1)) io (
     .clk, .por_n, .rst_n, .sel, .we, .word, .be, .wdata, .rdata,
     .in0, .in1, .in2, .sw(8'hFF), .an0, .an1, .an2,
     .gun_p1x(p1x), .gun_p1y(p1y), .gun_p2x(p2x), .gun_p2y(p2y), .gun_off(goff),
     .lamps(lamps), .pe(pe_q), .ee_ld_we(1'b0), .ee_ld_a(6'd0), .ee_ld_d(16'd0),   // R897
+    .ee_dump_a(6'd0), .ee_dump_q(ee_dump_q),                                   // R945
     .dbg_pa(dbg_pa), .dbg_dir(dbg_dir)
   );
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, g_in0, lamps, dbg_pa, dbg_dir, pe_q};
+  wire _unused = &{1'b0, g_in0, lamps, dbg_pa, dbg_dir, pe_q, ee_dump_q};
   /* verilator lint_on UNUSEDSIGNAL */
 endmodule

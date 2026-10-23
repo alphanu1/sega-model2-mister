@@ -32,13 +32,17 @@
 //
 // The array is one write port and one registered read in a reset-free block
 // (R716's lesson in m2_ioz80: a combinationally read array becomes ~1,000
-// flip-flops). It powers up erased, as an unsaved MAME eeprom does. Persistence
-// across power cycles is not here yet (the NVRAM path is the backup RAM's).
+// flip-flops). It powers up erased, as an unsaved MAME eeprom does.
+// R945 (DUMP): persistence rides the MRA's <nvram> file. A second registered
+// read (dump_a -> dump_q one cycle later) lets the OSD's save read the array
+// while the game runs; Quartus gives it its own copy of the MLAB (one write
+// port, two read ports). The saved words come back through the load port.
 
 `timescale 1ns/1ps
 
 module m2_93c46 #(
-  parameter bit LOAD = 1'b0   // R897: a load port (Hanguk Pro Yagu 98's factory image)
+  parameter bit LOAD = 1'b0,  // R897: a load port (Hanguk Pro Yagu 98's factory image)
+  parameter bit DUMP = 1'b0   // R945: a read port for the NVRAM save
 ) (
   input  logic clk,
   input  logic rst_n,   // power-on only: the part has no reset pin (MAME resets it never)
@@ -52,8 +56,12 @@ module m2_93c46 #(
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic        ld_we,
   input  logic  [5:0] ld_a,
-  input  logic [15:0] ld_d
+  input  logic [15:0] ld_d,
+  // R945 (DUMP): word dump_a, registered (dump_q follows by one cycle).
+  // Without DUMP, 0xFFFF.
+  input  logic  [5:0] dump_a,
   /* verilator lint_on UNUSEDSIGNAL */
+  output logic [15:0] dump_q
 );
 
   (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] ee [64];
@@ -67,6 +75,13 @@ module m2_93c46 #(
     if (we || l_we) ee[l_we ? ld_a : wa] <= l_we ? ld_d : wd;
     q <= ee[ra];
   end
+
+  // R945: the save's read port, the same array (a second MLAB copy).
+  generate if (DUMP) begin : g_dump
+    always_ff @(posedge clk) dump_q <= ee[dump_a];
+  end else begin : g_nodump
+    assign dump_q = 16'hffff;
+  end endgenerate
 
   typedef enum logic [2:0] { S_RESET, S_START, S_CMD, S_READ, S_DATA, S_DONE } st_t;
   st_t         st;

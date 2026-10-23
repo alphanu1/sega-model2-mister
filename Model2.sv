@@ -177,6 +177,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_EE_LOAD
 `define M2_2A_EE_LOAD
 `endif
+// R945: M2_2A_EE_SAVE, the 93C46 in the NVRAM file: the MRA's <nvram index="2"
+// size="16520"> carries the backup RAM, an 8-byte tag and the EEPROM's 128
+// bytes (rtl/io/m2_nv_port.sv), so the game's settings (Sega Rally, Manx TT,
+// every 2A / 2C game that keeps them in its EEPROM) survive a power cycle. A
+// file without the tag (16 KB, an earlier core's) leaves the EEPROM as the MRA
+// loads it. On by default; "M2_NO_2A_EE_SAVE=1" leaves it out.
+`ifndef M2_NO_2A_EE_SAVE
+`define M2_2A_EE_SAVE
+`endif
 // R904: M2_2A_WAITST, the i960's wait states for Sega Rally (game ID 0x10)
 // alone: m2_waitst between the i960 and the bridge stores the CPU-control
 // block at 0x00e00000 (read back as MAME's RAM) and holds each access to at
@@ -576,6 +585,11 @@ localparam bit MANXMOT = 1'b0;
 localparam bit EELOAD2A = M2A;                                // R897
 `else
 localparam bit EELOAD2A = 1'b0;
+`endif
+`ifdef M2_2A_EE_SAVE
+localparam bit EESAVE2A = M2A;                                // R945
+`else
+localparam bit EESAVE2A = 1'b0;
 `endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
@@ -4767,33 +4781,36 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	else if (fw_dl && ioctl_wr) fw_seen <= 1'b1;
 end
 
-wire nv_sel = (ioctl_index[5:0] == 6'd2);
-logic [2:0] nv_save_sync;
-always_ff @(posedge clk_sys) nv_save_sync <= {nv_save_sync[1:0], status[17]};
-wire nv_save_req = nv_save_sync[1] & ~nv_save_sync[2];
-wire nv_we  = ioctl_download && nv_sel && ioctl_wr;
-// REGISTERED BOTH WAYS. Driven combinationally, hps_io's ioctl_upload fed
-// the debug-port address mux whose data fed ioctl_din straight back into
-// hps_io, and Quartus 17.0's fitter timing engine CRASHED on the apparent
-// cycle -- Internal Error, sta_scc.cpp:1041, reproduced on a clean db. The
-// HPS polls over SPI, so a cycle of latency on each side is free.
-logic [15:0] nv_din_r;
-logic [11:0] nv_word_r;
-always_ff @(posedge clk_sys) begin
-	// Upload owns the port; otherwise page 1 / Probe 6 selects word 4
-	// (the coin-mode dword) and everything else watches word 5.
-	nv_word_r <= (ioctl_upload && nv_sel)          ? ioctl_addr[13:2] :
-	             12'd5;   // R411: was gated on status[18], which is gone
-	nv_din_r  <= ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
-end
-assign ioctl_din = nv_din_r;
+// R945: the NVRAM file's path (load, save, the save request, and the index-5
+// EEPROM image) is rtl/io/m2_nv_port.sv, benched through the real hps_io
+// (sim/io/tb_m2_nv_save.cpp). With EESAVE2A the file is the backup RAM, a tag
+// and the 93C46; its header has the layout and why the tag comes first.
+wire        nv_save_req;
+wire        nv_we;
+wire [11:0] nv_word, nv_word_r;
+wire  [3:0] nv_be;
+wire [31:0] nv_wdata;
+wire        ee_ld_we;
+wire  [5:0] ee_ld_a, ee_dump_a;
+wire [15:0] ee_ld_d, ee_dump_q;
+m2_nv_port #(.LOAD(EELOAD2A), .SAVE(EESAVE2A)) u_nv_port (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.save_btn(status[17]), .save_req(nv_save_req),
+	.ioctl_download(ioctl_download), .ioctl_upload(ioctl_upload), .ioctl_wr(ioctl_wr),
+	.ioctl_index(ioctl_index), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
+	.ioctl_din(ioctl_din),
+	.bak_we(nv_we), .bak_word(nv_word), .bak_be(nv_be), .bak_wdata(nv_wdata),
+	.bak_rword(nv_word_r), .bak_q(bak_dbg_q),
+	.ee_ld_we(ee_ld_we), .ee_ld_a(ee_ld_a), .ee_ld_d(ee_ld_d),
+	.ee_dump_a(ee_dump_a), .ee_dump_q(ee_dump_q)
+);
 
 m2_backup u_backup (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.hps_we(nv_we),
-	.hps_word(ioctl_addr[13:2]),
-	.hps_be(ioctl_addr[1] ? 4'b1100 : 4'b0011),
-	.hps_wdata({ioctl_dout, ioctl_dout}),
+	.hps_word(nv_word),
+	.hps_be(nv_be),
+	.hps_wdata(nv_wdata),
 	.sel(bak_sel),
 	.we(cpu_io_we),
 	.word(cpu_io_addr[13:2]),
@@ -6510,6 +6527,7 @@ m2_ioboard #(
 	.win_busy(dp_busy),
 	.dbg_word4(iob_word4)
 );
+assign ee_dump_q = 16'hffff;   // R945: no 93C46 on this board's map
 end else begin : g_noioboard
 	assign dp_busy = 1'b0; assign zio_rdata = 8'hFF;
 	assign iob_win_rd = 16'd0; assign iob_flag_rd = 16'd0; assign iob_seen = 16'd0;
@@ -6536,10 +6554,9 @@ end else begin : g_noioboard
 		);
 		wire [31:0] a2_rdata;
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
-		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words)
-		wire ee_ld_we = EELOAD2A && ioctl_download && ioctl_wr && (ioctl_index[5:0] == 6'd5)
-		             && (ioctl_addr[26:7] == 20'd0);
-		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A)) u_315_5649 (
+		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words);
+		// R945: and the NVRAM file's EEPROM, both through u_nv_port
+		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A | EESAVE2A), .EE_SAVE(EESAVE2A)) u_315_5649 (
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
@@ -6548,13 +6565,15 @@ end else begin : g_noioboard
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
 			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
 			.lamps(), .pe(a2_pe),
-			.ee_ld_we(ee_ld_we), .ee_ld_a(ioctl_addr[6:1]), .ee_ld_d(ioctl_dout),   // R897
+			.ee_ld_we(ee_ld_we), .ee_ld_a(ee_ld_a), .ee_ld_d(ee_ld_d),   // R897
+			.ee_dump_a(ee_dump_a), .ee_dump_q(ee_dump_q),                 // R945
 			.dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
 		assign iob_dbg   = 32'd0;
 	end else begin : g_noio
 		assign iob_rdata = 32'd0; assign iob_dbg = 32'd0;
+		assign ee_dump_q = 16'hffff;
 	end
 end endgenerate
 
