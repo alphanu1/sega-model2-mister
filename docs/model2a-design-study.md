@@ -43939,3 +43939,129 @@ the game is mid-way through writing its settings can catch half of them, as
 the backup RAM always could. Manx TT could load MAME's manxtt_dx_nvran on
 index 5 (not done: the game builds its own). 2B is not built. The 2C HOTD CRT
 MRA has "--" inside its comment (not valid XML; Main accepts it, untouched).
+**R944 -- SEGA RALLY'S CAR-SHADOW DOTS ARE T-JUNCTION CRACKS: QUARTER-PIXEL
+VERTICES ON ONE QUAD'S LONG EDGE AND THREE QUADS' SHORT ONES. REPRODUCED IN
+THE BENCH THROUGH THE CORE'S OWN PATH, THEN CLOSED BY MOVING EACH EDGE OF A
+FLAT QUAD OUT BY (1 + |dx/dy|) / 8 PX (m2_raster_fill DIL). Branch
+rally-crack (off bridge-r937-2a 5ffd438), not pushed, not fitted.**
+(Board, s1415: Rally attract, the CHAMPIONSHIP TOP 16 screen over the
+Celica's rear: two rows of evenly spaced single-pixel holes in the black
+shadow along two long, shallow lines -- R938's board verdict. Measured on
+Ben's grab: one hole per scanline, ~39 px apart on the upper row, ~27 px on
+the lower. GitHub #26's line while racing is the same shadow.)
+
+*What was believed (R938):* the shadow is "a mesh sharing exact vertices,
+and the fill covers it without a gap" -- not reproduced, because none of
+R938's frames had this shadow at this angle. And R938's whole-path test
+counted a pixel as a hole only where the core's geometry was worse than
+MAME's vertices through the SAME fill, so a crack the fill makes on both
+was invisible to it by construction.
+
+*NOW KNOWN (MEASURED; MAME 0.289 m2lod dumps of srallyc, ROM-derived
+scratch outside the tree):*
+  * THE SCENE. A 200 s attract survey (thumbnails every 30 3D frames, no
+    inputs) puts the Top 16 rear close-up at 3D frames ~7230-7330. Dumped
+    frames 7290, 7292 .. 7300 (M2DIFF) and, by a file trigger on every walk
+    while the frame count was 7294-7300, walks 8894-8899; frame F's list is
+    walk F + 1598 here (matched by vertex values -- R938's "walk = 2 x
+    frame" does not hold this far in). Frame 7300 in the bench is Ben's
+    picture within a few frames of camera.
+  * REPRODUCED, BOTH WAYS, IN Model2.sv's 2A RASTER CONFIGURATION
+    (tb_m2_raster3d: PIXSTEP 4, FB, FRB 2, M2COV, SPLIT_TRI, TEXLUT, KW 20
+    with M2_R3D_WINKEY=1, UVSH, TEXMEM for the textured picture). Holes =
+    pixels MAME gives to the shadow (its flat black polygons, h 00c0 ..
+    0000) that the core paints with something else while both neighbours
+    across are shadow:
+      MAME's post-clip vertices, frames 7290..7300:  6 17 19 22 25 22
+      the core's geometry (geodiff, CRTC_Y 128, WINKEY, MZX, UVSH) on
+      walks 8894..8899, its quads through the same raster bench:
+                                                     22 14 25 20 22 17
+      MAME's own frames:                             0
+    On the matched pairs (7296/8894, 7298/8896, 7300/8898) the two lists
+    are the same pixels: the geometry is not involved. The rows lie where
+    the board's do: y 259-266 every ~40 px and y 290-304 every ~28 px.
+  * THE TWO EDGES (frame 7300, MAME floats). Polygon 0's lower edge
+    (422.24,259.98)-(103.75,268.36), 38 px a row; on the other side of it
+    polygons 9, 10, 11, whose upper edges split it at (252.61,264.44) and
+    (287.93,263.51). Polygon 4's upper edge (80.48,306.08)-(496,290.89),
+    27 px a row; polygons 9-11's lower edges split it at (278.57,298.84)
+    and (324.76,297.15). The split points are on the long edges to 0.001 px
+    in floats -- T-junctions -- and MAME, filling floats, has no gap. The
+    geometry rounds every vertex to the nearest quarter, independently: a
+    split point and the long edge's ends each move up to 1/8 px in x and
+    in y, so the two sides of the edge part by up to (1 + |dx/dy|) / 4 px
+    in a row -- several pixels on a 38-px-a-row edge, once a row, where the
+    edge crosses the row centre. A Python model of R658's rule on the
+    quarter vertices gives the bench's 22 holes of frame 7300 exactly.
+  * NOT the fill's edge rule: both sides walk R658's rule on the same edge
+    direction; the two "edges" are different lines. More vertex precision
+    shrinks it but does not close it (model, frame 7300: 1/8 px 9 holes,
+    1/16 5, 1/64 1) and costs the store's width (M10K, 550 of 553).
+  * MODEL 1 (the oracle for shared edges): m1_raster_fill covers
+    [floor(xl), floor(xr)] -- both ends inclusive, a pixel of overlap on
+    every shared edge, never a gap. Model 2's R658 rule (MAME poly.h) is
+    exactly abutting, which is watertight only on exact vertices.
+
+*THE FIX (m2_raster_fill, parameter DIL; Model2.sv sets it, every build):*
+R658's rule with each walked edge of a FLAT quad moved outward by
+(1 + |dx/dy|) / 8 px -- half the widest gap quarter vertices can open, so
+the two sides together close any T-junction -- and each edge's x clamped to
+its own vertices' extent +/- 1/8 (without it a shallow edge moved out runs
+past its end vertex: 18-91 whisker pixels a frame, modelled). The move is
+made once per reloaded edge, in the rounding copy (xah / xbh) only, in a new
+state S_FS_DIL (code 9, unused S_DIVBW); the clamp is applied as a span
+leaves stage 1, off R739's emit path, and a span it empties is dropped.
+The overlap on a true shared edge is at most 1/4 px across it, where the
+quad drawn later wins. TEXTURED QUADS ARE NOT MOVED: m2_span_tex walks a
+span's texel groups from its first pixel, so a textured span start moved out
+by a pixel re-phases every group of the span -- measured with textured quads
+included: Rally attract 960, 38,863 pixels changed for ~2,000 that change
+polygon, whole-frame error vs MAME 9.148 -> 9.294; VF2 3480 6.137 ->
+6.356. Rejected; textured T-junctions keep R658's edges (open, below).
+*VERIFIED:*
+  * The reproduction: holes 0 on all six frames and all six walks (one
+    flagged pixel on walk 8895, (405,259), is the car's quad 178, sorted
+    between the shadow quads, correctly in front).
+  * Textured pictures (REALCOL + TEXMEM), against the old RTL: Virtua
+    Fighter 2 600 / 3480 / tower 3360, Sky Target 1080, Virtua Cop 1500 --
+    pixel hashes UNCHANGED (no flat polygons). Rally and Daytona (Daytona,
+    Virtua Cop in main's configuration, TEXLUT 0, KW 16): only flat
+    polygons' edges move, each outline 1/8 px out, so a few pixels MAME
+    gives to what is behind now take the flat polygon (whole-frame error
+    vs MAME, pixels changed):
+      Rally 960     9.148 ->  9.157   24      Rally 7290   6.940 -> 7.067  305
+      Rally 1050    8.216 ->  8.250   97      Rally 7296   7.055 -> 7.128  291
+      Rally 1500   11.603 -> 11.695  193      Rally 7300   6.848 -> 6.951  291
+      Rally 2040   19.035 -> 19.049   50      Daytona 2000 12.655 -> 12.656  24
+      Rally race 3720 14.905 -> 15.028 184    Daytona 5000 11.829 -> 11.857  89
+                                              Daytona 9000 12.085 -> 12.211 417
+    Shadow holes on R938's Rally frames: 1500 1 -> 0, race 3720 1 -> 0.
+  * New test_m2_fill_dil (in `make test`): the R658 bench (tb_m2_fill_m2cov)
+    with the moved, clamped edges in its C rule, and a T-junction test (a
+    quad above a long edge, two below it sharing a point ON it, every
+    vertex rounded as the geometry rounds): 200,007 random quads 0 fails;
+    20,000 T-junctions 0 crack pixels. The same test without DIL counts
+    8,652 crack pixels in 2,000 junctions. test_m2_fill_m2cov (R658's bench,
+    never in the Makefile until now): 0 fails on the old RTL and this one
+    with R658's 0.01 px tie window -- the source's default 1e-3 had drifted
+    and gave 269 one-pixel tie rows on the OLD RTL too.
+    test_m2_raster_fill (152,373), _mip, test_m2_raster3d,
+    test_m2_quad_store, test_m2_span_tex (+ftb, mip, gc), test_m2_raster_band,
+    test_m2_texel_bl4 PASS. DIL 0 is bit-identical to the old RTL (six
+    frames). lint_top clean on 2A and M2_NO_2A; lint_idx the same 114
+    findings; -Wall on the fill (DIL 0 and 1) no warnings. Quartus 17.0
+    constant-fold check of the new arithmetic (tiny module, stuck pins):
+    extent bounds and the move computed as intended.
+*AREA (quartus_map 17.0, 2A, full design, 5ffd438 -> this):* ALMs needed
+40,163 -> 40,310 (+147); combinational ALUTs 57,293 -> 57,611; registers
+48,255 -> 48,417; block memory bits 4,580,912 (=); DSP 96 (=); M10K
+unchanged; m2_raster_fill 5,101 -> 5,551 ALUTs, 3,972 -> 4,135 registers.
+Main (M2_NO_2A, same RTL): 39,162 -> 39,504 ALMs (+342; the fill +532 ALUTs,
++166 registers, as on 2A -- the rest is the estimate's packing); block bits
+4,572,432 (=). (A first version with the extent clamp on the emit path and
+the extents in registers: 2A +289.)
+*LEFT / OPEN:* textured T-junctions still crack (the same geometry with a
+texture); closing them needs m2_span_tex's groups anchored independently of
+the span's first pixel. Sky Target's flickering 1-px sky lines (R938's open
+board case) are textured panels and may be that class -- not checked. Not
+on the board: the fit and Ben's eyes decide, the Top 16 screen first.

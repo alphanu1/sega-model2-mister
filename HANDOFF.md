@@ -64,6 +64,28 @@ bridge-r937-2a (42e43c9), board-checked on s1386 (R937) and s1404 pending
 for R940/R938, still hunting a clean seed (s1403-s1405, s1412-s1414 none
 clean; best s1404 -0.086 / -0.138; s1415-s1417 fitting). Fallback: s1394
 (R937 + R939 only) is clean.
+STCC music (DSB MPEG); Rally shadow line (#26: reproduced and fixed in the
+bench, branch rally-crack, R944 -- needs a fit and a board look).
+
+## 2026-10-23: branch rally-crack (off bridge-r937-2a 5ffd438, not pushed, not fitted) -- R944
+
+Rally's car-shadow dots (Top 16 attract screen, s1415; GitHub #26) REPRODUCED
+in the bench before any RTL change, through the core's own geometry (geodiff
+2A on MAME walks 8894-8899) and through MAME's vertices (frames 7290-7300):
+6-25 hole pixels a frame in two rows, ~40 and ~28 px apart, where the board
+shows them; MAME 0. Cause: T-junctions -- one shadow quad's long shallow edge,
+three quads on the other side splitting it -- with every vertex rounded to a
+quarter pixel independently, so the two sides part by up to (1 + |dx/dy|)/4
+px a row. Not the fill's edge rule. Fix: m2_raster_fill DIL (Model2.sv, every
+build) moves each edge of a FLAT quad out by (1 + |dx/dy|)/8, clamped to the
+edge's own extent; textured quads untouched (moving them re-phases the texel
+groups -- measured worse, rejected). Same reproduction: 0 holes. VF2, Sky
+Target, VCop pictures unchanged (hash); Rally / Daytona: flat outlines 1/8 px
+fatter (24-417 px a frame). New test_m2_fill_dil (200k quads, 20k
+T-junctions, 0 cracks). quartus_map 2A +147 ALM (40,310), main +342
+(39,504), 0 M10K. Ready for
+a fit; board check on the Top 16 screen and a race (#26). Open: textured
+T-junctions (maybe Sky Target's sky lines).
 
 ## 2026-10-23: model2a pushed -- release folder only (Model2_20261023)
 

@@ -138,7 +138,25 @@ module m2_raster_fill #(
   // right. K = max - (max - min) * w, w = 0 (R828 exactly), 1/4 or 1/2: a
   // weighted mean of the logs, which leaves a face-on quad (max ~ min) where
   // R828 put it and pulls an oblique one towards its minor axis.
-  parameter bit MIP = 1'b0
+  parameter bit MIP = 1'b0,
+  // R944: EVERY WALKED EDGE MOVED OUTWARD BY (1 + |dx/dy|) / 8 PIXEL, clamped
+  // to the edge's own x extent +/- 1/8. The vertices are quarter pixels, so a
+  // T-junction vertex -- one lying on its neighbour's long edge (Sega Rally's
+  // car shadow: one quad's edge, three quads on the other side of it) -- is up
+  // to 1/8 off that edge in x and in y, and the two sides of the edge part by
+  // up to (1 + |dx/dy|) / 4 pixel in a row: on a shallow edge (40 px a row)
+  // several pixels, once a row, the board's two dotted lines. Moving each
+  // edge out by half that closes any such gap; the overlap it makes with a
+  // true shared edge is at most 1/4 px across the edge, where the polygon
+  // drawn later wins. Model 1's fill never leaves a gap either -- its spans
+  // are [floor(xl), floor(xr)], a whole pixel of overlap. Needs M2COV. 0: the
+  // edges exactly as R658 walks them.
+  // FLAT QUADS ONLY. m2_span_tex walks a span's texel groups from its first
+  // pixel, so a textured span start moved out by a pixel re-phases every
+  // group of the span (measured: Rally attract 960, 38,863 pixels change for
+  // ~2,000 that change polygon, and the frame's error vs MAME goes up). A
+  // textured quad keeps R658's edges exactly.
+  parameter bit DIL = 1'b0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -237,7 +255,7 @@ module m2_raster_fill #(
   localparam logic [4:0] S_DIVA     = 5'd6;
   localparam logic [4:0] S_DIVAW    = 5'd7;
   localparam logic [4:0] S_OFF      = 5'd8;    // R658: a reloaded edge to its first row's centre
-  localparam logic [4:0] S_DIVBW    = 5'd9;
+  localparam logic [4:0] S_FS_DIL   = 5'd9;    // R944: the segment's edges moved out (DIL); was S_DIVBW, unused
   localparam logic [4:0] S_DECIDE   = 5'd10;
   localparam logic [4:0] S_FS_ENTER = 5'd11;
   localparam logic [4:0] S_FS_MULA  = 5'd12;
@@ -335,6 +353,17 @@ module m2_raster_fill #(
   // uv_at's multiply -- that adder cost s566-s568 4 ns on clk_sys.
   logic signed [31:0] xah, xbh;
   logic signed [31:0] sla, slb;   // 16.16 per scanline
+  // R944 (DIL): each edge's outward move (1 + |slope|) / 8 in 16.16; which
+  // of its two vertices has the lesser x (lo_*: the one it starts from); the
+  // span clamps its x extent +/- 1/8 makes -- lb_* bounds the edge's
+  // round(x) as a LEFT end, ub_* its round(x) - 1 as a RIGHT one, applied as
+  // a span leaves stage 1 (off the emit path, R739's) -- and fr_*: the edge
+  // was reloaded and has not been moved out yet.
+  logic signed [31:0] dga, dgb;
+  logic               lo_a, lo_b;
+  logic signed [15:0] lb_a, ub_a, lb_b, ub_b;
+  logic               fr_a, fr_b;
+  logic signed [15:0] em_lb, em_ub;   // the row's left end's lb, right end's ub
   logic signed [15:0] cury, limy;
   logic               need_a, need_b;
 
@@ -822,6 +851,13 @@ module m2_raster_fill #(
   // so the gradients the plane uses are still this span's quad's.
   logic               s1_valid, s1_moire;
   logic signed [15:0] s1_y, s1_cl, s1_cr;
+  logic signed [15:0] s1_lb, s1_ub;   // R944: the extent clamps (DIL), applied stage 1 -> output
+  // R944: a span leaving stage 1, cut to its edges' extents +/- 1/8 (DIL; the
+  // whisker a shallow edge moved out would put past its end vertex). A flat
+  // quad's span only -- the plane below is evaluated at s1_cl, which a
+  // textured span (never clamped) keeps.
+  wire  signed [15:0] s1_x0 = (DIL && (s1_cl < s1_lb)) ? s1_lb : s1_cl;
+  wire  signed [15:0] s1_x1 = (DIL && (s1_cr > s1_ub)) ? s1_ub : s1_cr;
   logic [23:0]        s1_col;
   wire                s1_adv  = s1_valid && (!span_valid || span_ready);
   wire                s1_free = !s1_valid || s1_adv;
@@ -1084,7 +1120,11 @@ module m2_raster_fill #(
       emit_cl = sab ? cla : clb;
       emit_cr = sab ? crb : cra;
       emit_ok = sab ? (cla <= crb) : (clb <= cra);
+      em_lb   = sab ? lb_a : lb_b;   // R944: the extent clamps, by the same sort
+      em_ub   = sab ? ub_b : ub_a;
     end else begin
+      em_lb   = 16'sh8000;
+      em_ub   = 16'sh7FFF;
       emit_xl = 16'(emit_l >>> 16);
       emit_xr = 16'(emit_r >>> 16);
       emit_cl = (emit_xl < view_x1) ? view_x1 : emit_xl;
@@ -1150,6 +1190,11 @@ module m2_raster_fill #(
       xb         <= 32'sd0;
       xah        <= 32'sh7FFF;
       xbh        <= 32'sh7FFF;
+      dga        <= 32'sd0;   // R944
+      dgb        <= 32'sd0;
+      lo_a       <= 1'b0;    lo_b  <= 1'b0;
+      lb_a       <= 16'sd0;  ub_a  <= 16'sd0;  lb_b  <= 16'sd0;  ub_b  <= 16'sd0;
+      fr_a       <= 1'b0;    fr_b  <= 1'b0;
       sla        <= 32'sd0;
       slb        <= 32'sd0;
       cury       <= 16'sd0;
@@ -1227,10 +1272,10 @@ module m2_raster_fill #(
       if (span_valid && span_ready) span_valid <= 1'b0;
       // R715: stage 1 to the output, the plane evaluated from registers
       if (s1_adv) begin
-        span_valid <= 1'b1;
+        span_valid <= !DIL || (s1_x0 <= s1_x1);   // R944: a span the clamps empty is dropped
         span_y     <= s1_y;
-        span_x0    <= s1_cl;
-        span_x1    <= s1_cr;
+        span_x0    <= s1_x0;
+        span_x1    <= s1_x1;
         span_col   <= s1_col;
         span_moire <= s1_moire;
         span_u     <= emit_u;
@@ -1631,6 +1676,8 @@ module m2_raster_fill #(
             s1_y       <= cury;
             s1_cl      <= emit_cl;
             s1_cr      <= emit_cr;
+            s1_lb      <= em_lb;   // R944
+            s1_ub      <= em_ub;
             s1_col     <= col;
             s1_moire   <= moire;
             quad_done <= 1'b1;
@@ -1653,8 +1700,8 @@ module m2_raster_fill #(
         // Reloading x from the vertex rather than keeping the walked value is
         // what snaps an edge back onto the polygon at each vertex event.
         S_LOADX: begin
-          if (need_a) begin xa <= px[ps1[1:0]]; xah <= px[ps1[1:0]] + 32'sh7FFF; end
-          if (need_b) begin xb <= px[ps2[1:0]]; xbh <= px[ps2[1:0]] + 32'sh7FFF; end
+          if (need_a) begin xa <= px[ps1[1:0]]; xah <= px[ps1[1:0]] + 32'sh7FFF; fr_a <= 1'b1; end   // R944: fr
+          if (need_b) begin xb <= px[ps2[1:0]]; xbh <= px[ps2[1:0]] + 32'sh7FFF; fr_b <= 1'b1; end
           state <= S_DIVA;
         end
 
@@ -1664,14 +1711,18 @@ module m2_raster_fill #(
         S_DIVA: begin
           if (div_ready && !div_start && divb_ready && !divb_start) begin
             if (need_a) begin
-              div_num   <= M2COV ? ((xa - px[ps1m1[1:0]]) <<< 2) : (xa - px[ps1m1[1:0]]);   // R658: den in quarters
+              automatic logic signed [31:0] dxa = xa - px[ps1m1[1:0]];
+              div_num   <= M2COV ? (dxa <<< 2) : dxa;   // R658: den in quarters
               div_den   <= 32'(cury - ya_next);
               div_start <= 1'b1;
+              lo_a      <= dxa[31];   // R944: xa = px[ps1] now -- the start vertex is the lesser x
             end
             if (need_b) begin
-              divb_num   <= M2COV ? ((xb - px[ps2p1[1:0]]) <<< 2) : (xb - px[ps2p1[1:0]]);
+              automatic logic signed [31:0] dxb = xb - px[ps2p1[1:0]];
+              divb_num   <= M2COV ? (dxb <<< 2) : dxb;
               divb_den   <= 32'(cury - yb_next);
               divb_start <= 1'b1;
+              lo_b       <= dxb[31];   // R944
             end
             got_a <= !need_a;
             got_b <= !need_b;
@@ -1696,6 +1747,37 @@ module m2_raster_fill #(
           automatic logic signed [31:0] db = ((d[1] ? (slb <<< 1) : 32'sd0) + (d[0] ? slb : 32'sd0)) >>> 2;
           if (need_a) begin xa <= xa + da; xah <= xah + da; end
           if (need_b) begin xb <= xb + db; xbh <= xbh + db; end
+          // R944: a reloaded edge's outward move, (1 + |slope|) / 8 -- |slope|
+          // as the ones' complement, one LSB short, and the 1 LSB back on top --
+          // and its span clamps: the extent +/- 1/8 rounded as the span ends
+          // are, round(lo - 1/8) = (lo + 1) >> 2 in quarters for a left end,
+          // round(hi + 1/8) - 1 = (hi - 2) >> 2 for a right one's last pixel
+          // (ps1 / ps2 have not moved since S_DIVA: px[] is still its two
+          // vertices). A textured quad is not moved, and not clamped.
+          if (need_a) begin
+            automatic logic signed [17:0] qs  = px[ps1[1:0]][31:14];   // its two vertices, in quarters
+            automatic logic signed [17:0] qe  = px[ps1m1[1:0]][31:14];
+            automatic logic signed [17:0] lo1 = (lo_a ? qs : qe) + 18'sd1;
+            automatic logic signed [17:0] hi2 = (lo_a ? qe : qs) - 18'sd2;
+            automatic logic signed [15:0] elo = lo1[17:2];   // R662: slices, no signed'() around a sum
+            automatic logic signed [15:0] ehi = hi2[17:2];
+            automatic logic [31:0]        ab  = sla ^ {32{sla[31]}};
+            dga  <= $signed({3'b000, ab[31:3]} + 32'h0000_2001);
+            lb_a <= tex_r[0] ? 16'sh8000 : elo;
+            ub_a <= tex_r[0] ? 16'sh7FFF : ehi;
+          end
+          if (need_b) begin
+            automatic logic signed [17:0] qs  = px[ps2[1:0]][31:14];   // its two vertices, in quarters
+            automatic logic signed [17:0] qe  = px[ps2p1[1:0]][31:14];
+            automatic logic signed [17:0] lo1 = (lo_b ? qs : qe) + 18'sd1;
+            automatic logic signed [17:0] hi2 = (lo_b ? qe : qs) - 18'sd2;
+            automatic logic signed [15:0] elo = lo1[17:2];   // R662: slices, no signed'() around a sum
+            automatic logic signed [15:0] ehi = hi2[17:2];
+            automatic logic [31:0]        ab  = slb ^ {32{slb[31]}};
+            dgb  <= $signed({3'b000, ab[31:3]} + 32'h0000_2001);
+            lb_b <= tex_r[0] ? 16'sh8000 : elo;
+            ub_b <= tex_r[0] ? 16'sh7FFF : ehi;
+          end
           state <= S_DECIDE;
         end
 
@@ -1799,7 +1881,20 @@ module m2_raster_fill #(
         S_FS_SWAP: begin
           swapf     <= (xa > xb) || ((xa == xb) && (sla > slb));
           emit_mode <= EM_WALK;
-          state     <= S_FS_WALK;
+          state     <= (DIL && M2COV && !tex_r[0]) ? S_FS_DIL : S_FS_WALK;   // R944: flat quads
+        end
+
+        // R944: A RELOADED EDGE MOVED OUT, once: the left one (a unless swapf)
+        // by -dg, the right one by +dg, in the rounding copies only -- xa / xb
+        // stay exact, and every later write to xah / xbh is the same delta as
+        // xa / xb's, so the move holds until the edge is reloaded. The side is
+        // this segment's; a convex quad's edges never change sides.
+        S_FS_DIL: begin
+          if (fr_a) xah <= swapf ? (xah + dga) : (xah - dga);
+          if (fr_b) xbh <= swapf ? (xbh - dgb) : (xbh + dgb);
+          fr_a  <= 1'b0;
+          fr_b  <= 1'b0;
+          state <= S_FS_WALK;
         end
 
         S_FS_WALK: begin
@@ -1814,6 +1909,8 @@ module m2_raster_fill #(
             s1_y       <= walk_y;
             s1_cl      <= emit_cl;
             s1_cr      <= emit_cr;
+            s1_lb      <= em_lb;   // R944
+            s1_ub      <= em_ub;
             s1_col     <= col;
             s1_moire   <= moire;
             xa     <= xa + sla;
@@ -1849,6 +1946,8 @@ module m2_raster_fill #(
             s1_y       <= cury;
             s1_cl      <= emit_cl;
             s1_cr      <= emit_cr;
+            s1_lb      <= em_lb;   // R944
+            s1_ub      <= em_ub;
             s1_col     <= col;
             s1_moire   <= moire;
             state <= S_DONE;
