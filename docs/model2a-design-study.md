@@ -43946,3 +43946,42 @@ texture); closing them needs m2_span_tex's groups anchored independently of
 the span's first pixel. Sky Target's flickering 1-px sky lines (R938's open
 board case) are textured panels and may be that class -- not checked. Not
 on the board: the fit and Ben's eyes decide, the Top 16 screen first.
+
+**R944, SMALLER (the same pixels, half the area).** The first version spent
++147 ALMs (2A map): the move held in two 32-bit registers (dga / dgb) with
+their own |slope| adders, two clamps per edge in registers (lb / ub) formed
+in S_OFF, a per-row select of them beside the emit sort, two more registers
+carrying them through stage 1, and a separate add for the move. Now:
+  * the move has no register and no adder of its own: S_FS_DIL feeds the
+    walk's adder (xah_nx = xah + sla in S_FS_WALK) with the move's operands,
+    xah + (t or ~t) + (C or 1 - C), t = sl >>> 3, C = 1/8 + 2^-16 -- the
+    same value as before bit for bit (|sl| >> 3 by ones' complement);
+  * the clamps are two registers per SEGMENT (lbq: the left edge's least
+    vertex x - 1/8, ubq: the right edge's greatest + 1/8, chosen by swapf
+    and a one-bit "which vertex is lesser" per edge taken from S_DIVA's
+    existing subtract), formed in S_FS_DIL, which waits for stage 1 to
+    empty so a span keeps its own segment's clamps; the output stage reads
+    them directly. Nothing in the emit path (R739) changed.
+Measured (module alone, map): the move ~34 ALMs, the clamp ~109 -- the clamp
+is still needed (without it 18-91 whisker pixels a frame) and a per-quad
+bounding-box clamp instead leaves 1-17 of them (modelled), so it stays per
+edge. 11-bit compares and dropping the empty-span test saved < 20 ALMs and
+were not taken (the clamp CAN empty a span: x = 10.0, round(x - 1/8) = 10,
+round(x + 1/8) - 1 = 9).
+*VERIFIED, against ce523c1:* pixel-identical on all 6 frames (MAME
+vertices) and all 6 walks (core geometry) of the reproduction -- 0 holes --
+and on all 16 textured frames (Rally 960 / 1050 / 1500 / 2040 / race 3720 /
+7290 / 7296 / 7300, VF2 600 / 3480 / 3360, Sky Target 1080, Daytona 2000 /
+5000 / 9000, Virtua Cop 1500); test_m2_fill_dil 200,007 quads 0 fails with
+the same 45,343 tie rows, 20,000 T-junctions 0 cracks; test_m2_fill_m2cov,
+test_m2_raster_fill (152,373), _mip, test_m2_raster3d, test_m2_quad_store,
+test_m2_span_tex (+gc), test_m2_raster_band PASS; lint_top clean (2A,
+M2_NO_2A); lint_idx the same 114; Quartus 17.0 constant-fold of the move
+(16 +/- 5.1875 for a 40.5 px/row slope either sign and side) as intended.
+*AREA (quartus_map 17.0, 2A, full design, against 5ffd438):* ALMs needed
+40,163 -> 40,240 (+77; was +147); ALUTs 57,293 -> 57,477 (+184; was +318);
+registers 48,255 -> 48,296 (+41; was +162); m2_raster_fill 5,101 -> 5,410
+ALUTs, 3,972 -> 4,013 registers; block bits, DSP, M10K unchanged.
+*TIMING NOTE:* the walk's adder now has a 2:1 operand select (the state
+decode) in front of it on the xah -> xah loop; the emit path from xah is
+unchanged. The fit's report on clk_sys is the check.
