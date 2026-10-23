@@ -103,8 +103,20 @@ static void step() {
     if (dut->col_inval) { ++g_colinv; g_colinv_tk = long(tk); }
     if (dut->buf_inval) { ++g_bufinv; g_bufinv_tk = long(tk); }   // R749
     // On-chip arrays: REGISTERED reads, as M10K is.
-    dut->oc_tram_q = tram[dut->oc_addr & 0x7fff];
-    dut->oc_pal_q  = pal[dut->oc_addr & 0x1fff];
+    //
+    // R937: AND NOW ACTUALLY REGISTERED. This set oc_tram_q = tram[oc_addr]
+    // from the address the bridge presents in THIS cycle, just before the edge
+    // that captures it -- an asynchronous read. M10K's a_q <= mem[a_addr]
+    // answers at the edge after the address, so the bridge, capturing at that
+    // same edge, sees the word for the address of the cycle BEFORE. The bridge
+    // presents its low word in S_IDLE with `half` still 1 from the previous
+    // access, and only a model one cycle slow can see what that costs: STCC's
+    // title read every aligned tile halfword from the word after it.
+    static uint16_t tram_q_r = 0, pal_q_r = 0;
+    dut->oc_tram_q = tram_q_r;
+    dut->oc_pal_q  = pal_q_r;
+    tram_q_r = tram[dut->oc_addr & 0x7fff];
+    pal_q_r  = pal[dut->oc_addr & 0x1fff];
     if (dut->oc_tram_we) tram[dut->oc_addr & 0x7fff] = dut->oc_din;
     if (dut->oc_pal_we)  pal[dut->oc_addr & 0x1fff]  = dut->oc_din;
     if (dut->oc_xlat_we) xlat[dut->oc_xlat_addr % 96] = dut->oc_xlat_din;
@@ -334,6 +346,70 @@ int main(int argc, char **argv) {
     expect("palette word 4", pal[4], 0x0044);
     access(false, 0x01800008u, 0, 0xf, &v);
     expect("palette readback", v, 0x00330044u);
+  }
+
+  // ---- R937: STCC's title loop, a halfword read-modify-write of tile RAM ----
+  //
+  // `ldos (g6),g4 / xor 0x8000 / stos g4,(g6) / g6 += 2` over its tilemap
+  // (0x779a0). Every access is the one after another on-chip access, so the
+  // read's low word is presented in S_IDLE with whatever `half` the last
+  // access left. The core's aligned reads took the word after: tile n got
+  // tile n+1, and the logo came out with every 8-pixel column doubled.
+  // Both orders, both arrays, and the 32-bit read after a halfword write.
+  {
+    for (int i = 0; i < 16; ++i) { tram[0x100 + i] = uint16_t(0x0e00 + i); pal[0x100 + i] = uint16_t(0x2100 + i); }
+    for (int arr = 0; arr < 2; ++arr) {
+      const uint32_t base = arr ? 0x01800200u : 0x01000200u;
+      std::vector<uint16_t> &m = arr ? pal : tram;
+      const uint16_t v0 = arr ? 0x2100 : 0x0e00;
+      for (int i = 0; i < 16; ++i) {
+        const uint32_t a = base + uint32_t(i) * 2;
+        const uint8_t  be = (a & 2) ? 0xc : 0x3;
+        uint32_t v = 0;
+        access(false, a, 0, be, &v);
+        const uint16_t h = (a & 2) ? uint16_t(v >> 16) : uint16_t(v);
+        char nm[64];
+        std::snprintf(nm, sizeof nm, "%s RMW ldos +%u", arr ? "palette" : "tile RAM", unsigned(i * 2));
+        expect(nm, h, uint16_t(v0 + i));
+        const uint16_t w = uint16_t(h ^ 0x8000);
+        access(true, a, (uint32_t(w) << 16) | w, be, nullptr);
+      }
+      for (int i = 0; i < 16; ++i) {
+        char nm[64];
+        std::snprintf(nm, sizeof nm, "%s RMW word %d", arr ? "palette" : "tile RAM", i);
+        expect(nm, m[0x100 + i], uint16_t((v0 + i) ^ 0x8000));
+      }
+      // a 32-bit read straight after a halfword write and after a 32-bit read
+      uint32_t v = 0;
+      access(true, base + 2, 0x12341234u, 0xc, nullptr);
+      access(false, base, 0, 0xf, &v);
+      expect(arr ? "palette ld after stos" : "tile RAM ld after stos", v, 0x12340000u | uint16_t((v0) ^ 0x8000));
+      access(false, base + 4, 0, 0xf, &v);
+      expect(arr ? "palette ld after ld" : "tile RAM ld after ld", v,
+             (uint32_t(uint16_t((v0 + 3) ^ 0x8000)) << 16) | uint16_t((v0 + 2) ^ 0x8000));
+    }
+    // STCC's RANKINGS: a column copy between tilemaps (0x13774), `ldos (g7)` /
+    // `stos g4,(g5)`, both pointers stepping a map row (0x80 bytes). Every
+    // read follows an on-chip write; the old bridge copied each cell's right
+    // neighbour, priority bit and all (Ben's s1373 grab: "22nnd", the 3D
+    // showing through in strips).
+    for (int col = 0; col < 2; ++col)
+      for (int r = 0; r < 8; ++r) tram[0x1280 + r * 64 + col] = uint16_t(0x4100 + r * 2 + col + (col ? 0x8000 : 0));
+    for (int col = 0; col < 2; ++col)
+      for (int r = 0; r < 8; ++r) {
+        uint32_t v = 0;
+        const uint32_t src = 0x01002500u + uint32_t(r) * 0x80 + uint32_t(col) * 2;
+        const uint32_t dst = 0x01004500u + uint32_t(r) * 0x80 + uint32_t(col) * 2;
+        access(false, src, 0, (src & 2) ? 0xc : 0x3, &v);
+        const uint16_t h = (src & 2) ? uint16_t(v >> 16) : uint16_t(v);
+        access(true, dst, (uint32_t(h) << 16) | h, (dst & 2) ? 0xc : 0x3, nullptr);
+      }
+    for (int col = 0; col < 2; ++col)
+      for (int r = 0; r < 8; ++r) {
+        char nm[64];
+        std::snprintf(nm, sizeof nm, "tile RAM column copy r%d c%d", r, col);
+        expect(nm, tram[0x2280 + r * 64 + col], tram[0x1280 + r * 64 + col]);
+      }
   }
 
   // ---- char RAM lands in SDRAM at its own base ----
