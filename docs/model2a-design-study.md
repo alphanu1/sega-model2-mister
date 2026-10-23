@@ -43812,3 +43812,10 @@ LESSON (Ben: "a flawed half a day -- build hours on unproven fixes"): no
 render fix goes to a fit again until the bench reproduces the BOARD'S
 symptom pixel for pixel (same scene, the core's own geometry path), and
 the fix removes it there.
+*CORRECTION:* R938's suggested board test ("OSD texel step 1") was wrong --
+the OSD texel step was taken out of the menu by R831 and is tied to 1
+(pxk_s1 <= 0); 1 is the only good setting (Ben). R938 acted on a different,
+fixed setting: m2_raster3d's PIXSTEP(4) (R626: bilinear planes stepped per
+four pixels). DECISION (Ben): keep R937-R940 in the code -- "kind of better"
+-- but s1415 is NOT a release: the renderer fixes beyond R940 are not
+release-worthy. Model2A_20261022 stays the 2A release.
