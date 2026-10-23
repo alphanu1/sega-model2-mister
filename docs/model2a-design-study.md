@@ -44445,3 +44445,10 @@ session image 19; scratchpad stcc_title/). Not played in-game yet. Same
 family as HOTD's sliding shadow pieces? First suspect: R935's side finding
 (GEO_LIST_WIN 4,096 dwords against lists longer than that -- a walk can read
 two frames' lists past dword 4,096). Investigation on branch stcc-title.
+*BOARD (Ben, s1373):* STCC's RANKINGS screen breaks the same way -- the 2D
+text cut into horizontal strips at different x offsets, with the 3D race
+behind showing through where the 2D is shifted (scratchpad stcc_title/
+ben_rankings_s1373.png). With the title, this points first at the 2D
+TILEMAP's per-line effects (line / row scroll, per-line window) being read
+wrongly on these screens, not at the 3D list; GEO_LIST_WIN kept as the
+second suspect. Passed to the stcc-title investigation.
