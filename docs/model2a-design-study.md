@@ -44431,3 +44431,9 @@ clk_mem +0.605 / i960 +1.110 -- assembled as the three-game test build
 shared logic (geometry project / clip / xform, the raster's fb_clear_req
 fan-out, tile RAM from the bridge) -- none in R933's new logic (the FIFO
 clear, p_stcc, luma 4'hD): placement spread. Round s1367-s1369 fitting.
+*FIT (2026-10-23 overnight, 9660969 = HOTD logrl + STCC + Over Rev):*
+s1370 clk_sys -0.343; s1371 TDC internal error; s1372 -1.038; s1373 CLEAN:
+clk_sys +0.059, clk_mem +0.011, i960 +1.411, hold +0.162, HDMI -0.685
+(report-only), 41,356 ALM, 549 / 553 M10K -- THE FIRST CLEAN 2C SEED,
+assembled as Model2C_20261023_s1373.rbf; s1374 -0.138 / -0.088; s1375
+-1.155. Fifteen seeds of the 2C build since R934 for one clean one.
