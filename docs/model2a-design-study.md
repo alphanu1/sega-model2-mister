@@ -45354,3 +45354,10 @@ test_m2_vcop2_guns PASS here; lint_top clean with -DM2_2C=1
 -DM2_NO_2A_MANX_MOTION=1 and on the default 2A build. The 2C build was not
 mapped (the 2A figure above: +57 ALMs, +1,024 MLAB bits, no M10K). The 2C
 MRAs (House of the Dead, Over Rev, STCC) are 16520 with the 2A ones.
+*Ben:* the sound fault was first found by the beta tester on s1373 -- clean
+timing on every clock, before R937 and R943 -- so it is not a timing miss.
+The attract tutorial (3D paused, light load) shows it; heavy scenes are
+fine: starvation is unlikely. Next hypothesis (R946, branch hotd-dsp): the
+SCSP DSP -- R914's MADRS change makes the core's DSP differ from MAME by
+design, and HOTD may be the first game whose reverb uses those taps / whose
+DSP ring sits where the core's sound RAM aliases differently.
