@@ -44986,3 +44986,59 @@ needing > 7/8 of the store -- Rally's busy lists) drops far quads under 4 px:
 on Rally 960 it adds 40 see-through pixels, all on the distant cars and
 horizon tree tops (M2_R3D_COARSE=1 now forces it in tb_m2_raster3d) -- the
 documented trade, not a seam.
+
+**R941 (model2c) -- R940'S u/v SHIFT AND R938'S CUT-SHORT GROUP MERGED INTO
+THE 2C BUILD BESIDE R932'S 32 LUMA SLOTS: uvs IN THE STORE'S TEXTURE WORD,
+THE SLOT'S UPPER BITS STILL BESIDE THE VERTICES. 2A RASTER PIXELS IDENTICAL
+TO bridge-r937-2a; 2C +2 M10K (549 -> 551 / 553 EXPECTED). LOCAL ONLY.**
+(Branch m2c-render, off model2c 865a5b4: merge dcop-sea a43bcb1, then seams
+9aff67e.)
+
+*THE CONFLICT:* R932 and R940 both widened the quad store's packing.
+R932: q_tex is 24 + LSB bits; the store keeps the slot's two low bits in its
+texture word (TXW 26) and LSB - 2 bits beside the vertices (VXN). R940: the
+texture word is STW = STB + 2 with {uvs, texture}, and in_vx one bit.
+*RESOLVED (m2_raster3d):* both parameters (LSB, UVSH). TXW = STW, so the
+texture word is {uvs, slot[1:0], texture} as R940 left it. VXN = LSB - 2,
+and in_vx = q_tex[QTW-1 -: LSB-2] as R932 left it. qo_texw = {qo_vx,
+qo_texs[STB-1:0]}. u_spantex takes both. Model2.sv: .LSB(R3D_LSB) and
+.UVSH(R3D_UVSH) together. m2_span_tex's parameter list: both. Nothing
+else conflicted. The span queue needs no change, because R932's slot rides
+in the 24-bit colour field (in_col[17+LSB:18]), so the queue is R940's on
+both builds (278 bits in RTL; 262 survive synthesis, 7 M10K).
+*BANK WIDTHS (2C):* uvt 104 + 26 + 2 + 64 + 1 = 197 bits (R940's 2A figure:
+TXW is 26 + 2 on both builds), 39 -> 40 M10K a bank; vtx 107 bits, 22 a
+bank, unchanged. So +2 M10K on 2C as on 2A.
+*VERIFIED:*
+  * tb_m2_raster3d in the 2A raster configuration (UVSH 1, M2_R3D_UVSH,
+    WINKEY, TEXMEM, REALCOL), bridge-r937-2a (42e43c9) vs this branch:
+    Dynamite Cop f100 (mip off and on), VF2 600 (mip off and on), VF2 3480,
+    Rally 960, Sky Target 1080 -- every pixel hash equal.
+  * 2C (LSB 5, M2_R3D_C2), model2c 865a5b4 -> this branch, colour vs MAME
+    mean of 255, pixels changed:
+      Over Rev Ariake 3570   8.05 -> 7.27   15,233 px (R938 9,138, R940 6,141:
+                                             14 quads shifted)
+      Over Rev Hakone 4346  16.62 -> 16.36   6,314 px (all R938)
+      STCC 6500              7.44 -> 7.13    6,053 px (all R938)
+    (The bench's FB configuration, not R932's 5.46 / 10.45 one.) This
+    branch with uvs held at 0 equals model2c + R938's span_tex patch alone,
+    pixel for pixel (Ariake, STCC). s = 1 forced on every quad (UVSHMIN 1)
+    costs 7.27 -> 7.32 on Ariake, whose road sits in slots 24 and 26.
+    A uvs bit landing on the slot bits would wreck that road; it does not.
+  * test_m2_span_tex (+ftb, mip, gc at PIXSTEP 2/4/8), test_m2_raster3d,
+    test_m2_raster_fill (+mip), test_m2_quad_store, test_m2_geometry,
+    test_m2_geo, test_m2_luma_map (2A and 2C) PASS. lint_top 2A and M2_2C
+    clean; -Wall on the five renderer files 73 warnings before and after
+    (both builds); lint_idx 2A 114 / 2C 97 findings, identical to 865a5b4
+    apart from line numbers.
+*AREA (quartus_map 17.0, M2_2C + M2_NO_2A_MANX_MOTION; 865a5b4 = s1397's
+map -> this):* ALMs needed 40,141 -> 40,183 (+42). Combinational ALUTs
+57,453 -> 57,537. Registers 48,244 -> 48,397. Block bits 4,583,920 ->
+4,592,176 (+8,256: uvt 2 x 2048 x 195 -> 197, span queue 32 x 260 -> 262).
+DSP 102 is unchanged. M10K 549 (s1397's fit) -> 551 / 553 expected. Not
+fitted. R934 recorded the store's uvt write ports at -0.08..-0.18 on 2C
+seeds, and a 40th block a bank is one more sink on that enable. Watch it
+in the fit.
+*Correction to R940's text:* its comment "the span queue 278 of its 280"
+is the RTL width; the "32 x 262" in its AREA line is what synthesis keeps.
+Both are right.
