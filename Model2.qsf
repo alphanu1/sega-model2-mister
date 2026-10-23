@@ -1006,7 +1006,3 @@ set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[3]"
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[4]"
 
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_testpattern.sv
-set_instance_assignment -name FAST_INPUT_REGISTER ON -to SDRAM_DQ[*]
-set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to SDRAM_*
-set_instance_assignment -name FAST_OUTPUT_ENABLE_REGISTER ON -to SDRAM_DQ[*]
