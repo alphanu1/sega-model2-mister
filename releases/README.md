@@ -176,7 +176,7 @@ Fighter 2 at the default 80%:
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261023.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261023b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -215,7 +215,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261023.rbf` has the md5 `78dfbb2153d2fa921c33b410043297b6`.
+**Check you're running the right file.** `Model2_20261023b.rbf` has the md5 `152243678f698d14d33c8e43f295e516`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -249,6 +249,16 @@ anything you find.
 
 ### New in this release
 
+- **15 kHz: Virtua Cop and Desert Tank no longer upset picky CRTs.** These
+  two games draw a new picture every second frame, and when they slipped a
+  frame the 15 kHz converter jumped its line timing to catch up, which some
+  CRTs saw as a short loss of sync (GitHub #24). The line timing now never
+  moves. New OSD option `15kHz pairing` (`Auto` / `Off`) for TVs that are
+  still unhappy. Every other game's 15 kHz picture is exactly as before.
+- **Cleaner texture edges.** The last few pixels of a polygon's line could
+  take their colour from just outside the polygon, which showed as stray
+  dots and thin lines where textures meet. They now sample inside it.
+  (`Model2_20261023b`.)
 - **Virtua Cop's 2D reads are right.** When the game read its tilemaps or
   its 2D palette back, the core returned the word next to the one asked for
   (and a 32-bit read came back with its halves swapped). Writes were always
@@ -322,6 +332,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
 | `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
+| `15kHz pairing` | `Auto` (default) or `Off`. Only Virtua Cop and Desert Tank (they draw a new picture every second frame) are affected. `Auto` keeps both fields of a frame from the same picture; if your CRT still loses sync briefly in those two games, choose `Off` — on a CRT it costs nothing |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
 | `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions. Daytona's road is always drawn at full detail |
