@@ -43794,3 +43794,21 @@ the white flash.
 request detector and Off path to model2a for Virtua Cop 2 (same window-
 table flash) and, once House of the Dead's flash is checked in MAME, to the
 2C build. Both (1) and (2) go in one later build.
+
+*BOARD VERDICT (Ben, 2026-10-23, s1415 = 42e43c9, R937 + R939 + R940 +
+R938):* R940 WORKS -- Dynamite Cop's sea is normal. R938 DID NOT FIX ANY
+BOARD CASE: Sky Target's sky lines are still there (narrower, now
+flickering); VF2's green pixel above the conifer is still there ("maybe a
+bit better, can't call it fixed"); Sega Rally's car shadow (attract,
+Championship Top 16 screen, Ben's grab session image 28) shows TWO ROWS of
+evenly spaced single-pixel holes along two long, shallow shared edges
+inside the black shadow -- road colour through them. That is a COVERAGE
+crack (a fill edge-rule / edge-stepping disagreement between the two
+polygons sharing the edge), not a texel fault: the shadow is untextured.
+R938's bench said "0 holes" because it ran MAME's lists and a few chosen
+frames, none with this shadow at this angle; it never reproduced a board
+case before a fit. Manx TT, Virtua Cop 2, Zero Gunner fine.
+LESSON (Ben: "a flawed half a day -- build hours on unproven fixes"): no
+render fix goes to a fit again until the bench reproduces the BOARD'S
+symptom pixel for pixel (same scene, the core's own geometry path), and
+the fix removes it there.
