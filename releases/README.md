@@ -332,7 +332,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
 | `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
-| `15kHz pairing` | `Auto` (default) or `Off`. Only Virtua Cop and Desert Tank (they draw a new picture every second frame) are affected. `Auto` keeps both fields of a frame from the same picture; if your CRT still loses sync briefly in those two games, choose `Off` -- on a CRT it costs nothing |
+| `15kHz pairing` | `Auto` (default) or `Off`. Only Virtua Cop and Desert Tank (they draw a new picture every second frame) are affected. `Auto` keeps both fields of a frame from the same picture; if your CRT still loses sync briefly in those two games, choose `Off` — on a CRT it costs nothing |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
 | `Mip-mapping` | `Sharp` (default), `Medium`, `Smooth` or `Off` — how soon distant textures switch to their smaller versions. Daytona's road is always drawn at full detail |

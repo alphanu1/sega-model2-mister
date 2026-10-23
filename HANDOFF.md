@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-23 (evening): main pushed -- Model2_20261023b (R939, R938)
+
+releases/Model2_20261023b.rbf = s1407 (main + R937 + R939 + R938; branch
+scan15-pair 680eb7b, merged here), md5 15224367..., clk_sys +0.202, clk_mem
++0.094, i960 +1.198, hold +0.200, 41,400 ALM, 551/553 M10K. Board (Ben):
+Daytona good, Virtua Cop good, Gun flash Off works. R939: 15 kHz pairing
+re-pairs by swapping field labels, never moving the line timing (OSD
+"15kHz pairing" Auto/Off, O[67]); 60 Hz output bit-identical. R938: a
+cut-short texel group sampled at its first pixel. #24's tester has the
+clean s1402 (R939 only) build; #24 stays open until they confirm. Not in
+this core: R940 (main keeps the u/v clamp; two spare store bits would take
+it at no M10K cost). model2a's release folder carries the same Model2 rbf;
+the 2A build with R937-R940 (branch bridge-r937-2a) is still hunting a
+clean seed (best s1404 -0.086 / -0.138).
+
 ## TODO -- the next feature build (Ben, 2026-10-23; after the current R937-R941 round)
 
 1. WHEEL MAPPING (GitHub #12). An "Analog control" choice like Jotego's OutRun
