@@ -37190,3 +37190,23 @@ few). What each game did with the wrong values was not traced: a board look
 at Virtua Cop's 2D (and on 2A VF2, Zero Gunner) before release. Open
 question worth re-asking with this in: R929's "why the tile-path flash is
 lost on the board".
+
+**R938 (main, from model2a) -- THE SPAN TEXEL WALK SAMPLED A CUT-SHORT GROUP
+PAST THE SPAN'S END; NOW AT ITS FIRST PIXEL. m2_span_tex as on model2a
+(branch seams, ec20fce; the full entry is model2a's R938).** At texel step 4
+a span's last group (1-3 px) and a span shorter than a group were sampled
+1.5 px in -- up to 1.5 px outside the polygon, u/v extrapolated past the
+texture's edge: Sky Target's dark vertical lines at its sky panels' joints
+and VF2's detached green pixel above a conifer, on the 2A core. Coverage was
+measured watertight (the seams are texels, not gaps). Here, in main's raster
+configuration (TEXLUT, lut_en per game), MAME 0.289 frames through
+tb_m2_raster3d (REALCOL + TEXMEM), mean max-channel error vs MAME over
+textured pixels, before -> after:
+    Daytona f2000 / f5000 / f9000   12.24 / 15.27 / 11.85 -> 12.02 / 14.70 / 11.40
+    (wrong texels, > 64, in the last 3 px of a polygon's run:
+     3,161 / 3,819 / 3,827 -> 2,901 / 3,269 / 3,245)
+    Virtua Cop 1500                  6.93 -> 6.81 (487 -> 464)
+test_m2_span_tex, _ftb, _lut0, _mip, the new _gc (PIXSTEP 2 and 4),
+test_m2_raster3d, test_m2_raster_fill PASS; lint_top clean. quartus_map 17.0
+(main, full design): 40,361 -> 40,381 ALMs needed (+20), registers 49,780 ->
+49,781, block bits 4,670,992 (=), DSP 98 (=).
