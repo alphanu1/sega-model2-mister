@@ -43387,3 +43387,9 @@ crossings are the R938 seams). ZERO GUNNER "looks better -- some 2D was
 missing before", so R937 restored 2D the game builds from read-backs. (Its
 ranking-screen helicopter icons were already there before R937 -- they came
 with R922, Model2A_20261021d.)
+*BOARD (Ben, s1386, continued):* Hanguk Pro Yagu 98, Pilot Kids, Motor Raid,
+Virtua Cop 2 and Sky Target all "look good"; VF2 good (the sky / hill dots
+of #27 are in VF2's 2D layer, consistent with R937; the green pixel ~4
+native pixels above a conifer's tip that Ben caught on the Lau stage is 3D,
+not the filter -- R938). Sky Target's title backdrop shows faint darker
+vertical lines through its 3D sky, present before R937 too (R938).
