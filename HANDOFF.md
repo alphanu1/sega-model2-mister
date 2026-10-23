@@ -1,5 +1,33 @@
 # Handoff
 
+## TODO -- the next feature build (Ben, 2026-10-23; after the current R937-R941 round)
+
+1. WHEEL MAPPING (GitHub #12). An "Analog control" choice like Jotego's OutRun
+   core. Today: O[28] Pedals Normal/Swapped, O[54] Right stick Pedals only /
+   Pedals+steer (R816/R831). Add:
+   - Analog Wheel A (older wheels, the cathoderayblog guide): left X steers;
+     left Y accelerator, centre = released, full up (0..-127) = pressed; right
+     Y brake the same way.
+   - Analog Wheel B (newer direct-drive pedals, e.g. Logitech RS50, as MiSTer
+     Main reports them): left X steers; accelerator on left Y over the WHOLE
+     axis, up (-127) = released, down (+127) = pressed; brake on right X over
+     the whole axis, left = released, right = pressed.
+   For every wheel game: Daytona, Desert Tank? (main); Sega Rally, Manx TT,
+   Motor Raid, Sky Target's stick excepted (2A); Over Rev, STCC (2C).
+   Find a free status bit on all three branches; m2_cab_inputs is shared.
+2. SINDEN BORDER (R942 (1)). OSD "Sinden border: Off (default) / On" for the
+   gun games, white frame in the gun-flash white path before m2_scan15,
+   ~30-60 ALM, 0 M10K. A Sinden owner to confirm before it is announced.
+3. GUN FLASH OFF ON 2A / 2C (R936 (1), R942 (2)). Port m2_gun_flash's Off
+   path to Virtua Cop 2 (2A); House of the Dead (2C) once its flash is
+   checked in MAME. Default Arcade.
+
+Backlog, not in that build: Rally NVRAM / EEPROM (#15); Manx TT settings,
+Deluxe/Twin sounds, Twin voice (#21) and its leaderboard text minification;
+Daytona volume (#20); Motor Raid slowdown (#25); Virtua Cop 57.5 fps hack
+(R936 (2)); Over Rev race slowdowns; HOTD courtyard shadow sliding (R935);
+STCC music (DSB MPEG); Rally shadow line (#26, not reproduced -- retest).
+
 ## 2026-10-23: STCC's broken title logo and rankings -- branch stcc-title (off model2c 586173a), R937. LOCAL ONLY, NOT FITTED
 ## 2026-10-23: branch scan15-pair (off main 0aa5905, not pushed, not fitted) -- R939, GitHub #24
 
