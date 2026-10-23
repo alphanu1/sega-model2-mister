@@ -43338,3 +43338,100 @@ trigger, ~1 in 10 before) -- "I have not been able to get a crash"; every 2A
 game runs. GitHub #17's cause, as captured on the board (s1336): a 190-word
 TGP command, 129-word output FIFO, 18 words dropped, the i960 waiting at
 0x7dcc for the rest.
+
+**R940 -- DYNAMITE COP'S "HORIZONTAL LIGHT LINES" ON THE DARK SEA ARE THE CORE,
+NOT THE GAME: THE SEA IS ONE POLYGON 2,890 TEXELS ACROSS, AND R609 STILL
+CLAMPED A QUAD WIDER THAN 2,048. NOW SUCH A QUAD IS SHIFTED DOWN BY 2^s
+(s = 1..2) AND SHIFTED BACK AFTER THE DIVIDE (UVSH, 2A BUILD). +2 M10K; ALM
+AT MAP NOISE (-10).** (Ben, s1386 = model2a + R937: in the attract's cruise-ship
+shot the dark sea beside the hull shows regular thin horizontal light lines,
+spaced wider toward the bottom; the open sea further out is normal sparkly
+water; Mip-mapping Off the same.)
+
+*What MAME draws (0.289, sm2-builds/mame-r869, dynamcop attract, 3D frames
+90 and 100 dumped with M2DIFF):* normal water everywhere beside the ship --
+no lines. So it is the core.
+
+*What was believed (R609):* moving the four vertices by a multiple of twice
+the texture's size fixes every polygon that fits 2,048 texels; "only a
+polygon that itself spans more than 2,048 texels still clamps", taken as
+rare.
+
+*NOW KNOWN (MEASURED):* the sea is ONE polygon (texture 128 x 128, header
+40d2) over the whole screen, five vertices after MAME's clip, u up to
+23,128 and v up to 22,028 raw (2,890 x 2,753 texels): 66,102 of the frame's
+188,460 3D pixels at frame 90, 75,782 at frame 100. Through this core's own
+geometry (geodiff_2abig on the walk that follows frame 100, walk 699) it
+comes out as two quads -- 918 (the left and bottom) and 919 (the right
+triangle) -- whose u, v after R609's move reach 10,644 quarter-texels; the
+clamp put three of 918's four corners at u = 8,191, so across the near-left
+sea u hardly moves and each row reads one texel column of a dark texture:
+horizontal light lines on black. 919 keeps one clamped corner of three and
+still looks like water -- Ben's picture exactly (the whole path rendered
+textured from our quads: the clamp reproduces his lines, the fix draws
+water). Two other quads in the frame clamp (header 60c0, 107 px).
+Model 1 has no texture mapping, so the oracle for this is MAME
+(model2rd.ipp reads u as float * 256 and only ever (u >> 8) & (w - 1)).
+
+*THE FIX (a study-level choice, R609 / §5 budget):* widening u, v to 15
+bits through the store, the fill and the span walk would cost +16 bits a
+quad in the store (195 -> 211 bits a bank: +8 M10K, past the 2A core's 548
+/ 553) and two more bits in every u/z path (span_u no longer fits 32
+bits). Instead, per quad: m2_geometry UVSH registers the eight differences
+after the move (15 bits) and shifts the quad -- u and v together -- right
+by the least s in 0..2 that fits 13 bits (truncated: a rounding adder a
+coordinate is 16 adders), handing s over as q_uvs; m2_raster3d stores it
+beside the texture word (197 bits a bank, one M10K a bank more) and carries
+it through the fill (span_uvs, latched with the quad) and the span queue
+(262 of its 280 bits, no block more) to m2_span_tex, whose un-normalising
+shift is one shift less s ((pu >> 16) >> (2 + sr - s); with s = 0 exactly
+the old two shifts); m2_raster_fill adds 4s quarter levels to the quad's
+mip bias (lq of a value 2^s larger is exactly 4s more). A quad that fits
+has s = 0 and is drawn bit for bit as before. One geometry stage more
+(c_age 4 -> 5). Model2.sv R3D_UVSH = M2A: main keeps the clamp (its store
+has two spare bits there -- 193 of 195 -- so it could take this at no M10K
+if wanted).
+*VERIFIED:*
+  * tb_m2_raster3d in the 2A raster configuration (TEXLUT, KW 20, window
+    key, REALCOL, game 0x14) on MAME's frame 100: colour vs MAME mean 15.77
+    -> 12.81 (>32: 10.47% -> 8.10%); the sea polygon alone 15.31 -> 8.22;
+    its texel coordinates against MAME's own (owners.txt tu/tv, every
+    fetch): more than 8 texels off 92.3% -> 3.4%, mean u 18.5 -> 1.6, v
+    30.2 -> 1.3 texels. Frame 90 the same way: 14.45 -> 11.55; sea
+    85.7% -> 3.0% of fetches > 8 texels off. With mip-mapping on (MIPMODE 3,
+    MIPZX 0) frame 100: 12.56 -> 10.26.
+  * s forced on EVERY quad of frame 100 (bench M2_R3D_UVSHMIN, ~1,100
+    polygons), mip on: s = 1 moves the level of 59 of 55,307 fetches and
+    the colour error 13.33 -> 13.36; s = 2: 207 levels, 13.93. The shift and
+    the mip compensation are right over a whole frame, at both shifts, and
+    cost a quad that fits almost nothing even if it were shifted.
+  * NOTHING ELSE MOVES. The same RTL with UVSH 0: frame 90's pixel hash
+    equal to the old RTL's (568c370cef941f38); Daytona frame 2000 in the
+    main configuration (TEXLUT 0, KW 16) equal (f5eb78853a18b2ef). UVSH 1
+    on games with no quad past 2,048 texels: VF2 frames 600 and 3480, Sega
+    Rally 960, Daytona 2000 -- pixel hashes equal to the old RTL's, mip off
+    and (VF2, Rally) mip on. Sky Target frame 1080 changes: ten horizon-
+    strip quads (header 40db) are exactly 8,192 quarter-texels wide, one
+    past the clamp, and now shift by one; 2,844 px differ, the strip's error
+    vs MAME 35.23 -> 34.96, the frame's 12.23 -> 12.26. Not R938's sky lines
+    (those are in the sky above, not this strip).
+  * test_m2_geometry, test_m2_geo, test_m2_quad_store, test_m2_raster3d,
+    test_m2_span_tex (+ftb, mip), test_m2_raster_fill (+mip),
+    test_m2_raster_band PASS; lint_top clean on 2A and M2_NO_2A, -Wall
+    warnings for the five files unchanged (one unused q_uvs on M2_NO_2A,
+    waived); lint_idx: the same 114 findings as before; quartus_map
+    --analyze_file on the four modules and Model2.sv: 0 errors.
+*AREA (quartus_map 17.0, whole design, 2A, cc9510d -> this):* ALMs needed
+40,120 -> 40,110 (-10, noise); combinational ALUTs 57,178 -> 57,190;
+registers 48,097 -> 48,250; block memory bits 4,572,656 -> 4,580,912 (+8,256: the two
+store banks 2048 x 197, the span queue 32 x 262); DSP 96 unchanged; no new
+"uninferred" RAM. M10K: 548 -> 550 of 553 expected (the store's two banks
+go from 39 to 40 blocks; the fitter confirms).
+*BENCH NOTE:* a 2A-configuration tb_m2_raster3d run needs M2_R3D_WINKEY=1
+beside -GKW=20, or polygons of a later window sort by z alone -- Sky Target
+frame 1080 then shows its horizon strip covered by the sea (a bench
+artefact, not the core).
+*LEFT / OPEN:* the hull's window rows look brighter and more aliased in the
+bench than in MAME, before and after (MAME blends two levels; this core
+takes the nearest) -- not part of Ben's report, not chased. On the board:
+the sea beside the ship should be water like the open sea.

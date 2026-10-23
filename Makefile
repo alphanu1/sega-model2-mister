@@ -1291,7 +1291,7 @@ geodiff_2a: obj_geodiff_2a/Vgeodiff_top
 
 obj_geodiff_2a/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
     rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
-	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -GUVSH=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
 	  --Mdir obj_geodiff_2a -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
@@ -1307,7 +1307,7 @@ geodiff_2abig: obj_geodiff_2abig/Vgeodiff_top
 
 obj_geodiff_2abig/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
     rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
-	$(VBUILD) --top-module geodiff_top -GCRTC_X=$(GD_CX) -GCRTC_Y=$(GD_CY) -GWINKEY=1 -GAW=26 -GBIG=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	$(VBUILD) --top-module geodiff_top -GCRTC_X=$(GD_CX) -GCRTC_Y=$(GD_CY) -GWINKEY=1 -GAW=26 -GBIG=1 -GUVSH=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
 	  --Mdir obj_geodiff_2abig -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
