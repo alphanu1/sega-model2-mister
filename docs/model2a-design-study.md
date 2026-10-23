@@ -43338,3 +43338,45 @@ trigger, ~1 in 10 before) -- "I have not been able to get a crash"; every 2A
 game runs. GitHub #17's cause, as captured on the board (s1336): a 190-word
 TGP command, 129-word output FIFO, 18 words dropped, the i960 waiting at
 0x7dcc for the rest.
+*(2) VIRTUA COP AT 57.5 fps (an OSD hack, off by default).* Virtua Cop
+runs in the video board's 30 Hz mode (render_mode bit 2 = 0; model2.cpp
+lists skytargt, desert, vstriker and vcop), so its 3D updates every other
+vblank (28.75 fps). Forcing 60 Hz in the core is NOT the hack:
+  - the display list is built across two frames in 30 Hz mode, and the
+    walk runs on alternate frames as the reference does (R256) -- walking
+    every frame reads a half-built list, which is R256's scenery dropout;
+  - if the game's loop did run every vblank, its per-frame logic (enemy
+    movement, timers) would most likely run at double speed.
+A real hack is a GAME CODE patch (an MRA patch, as Dead or Alive's
+MRA patches its protection routines) that sets 60 Hz mode and halves the logic's per-frame
+step, or runs the logic every other vblank while the 3D list is rebuilt
+every vblank. First step: a MAME experiment -- vcopa with render_mode
+forced to 60 Hz (a Lua write tap), watching game speed and the picture --
+then find the frame loop in the program. Desert Tank and Sky Target are the
+same 30 Hz family; whatever is learned applies to them.
+
+**R937 (main, from model2c) -- THE BRIDGE READ TILE RAM AND THE PALETTE ONE
+WORD LATE, ON EVERY CORE.** Found on branch stcc-title (model2c) from
+Sega Touring Car Championship's title and rankings, whose loops read tile
+RAM back (ldos / xor / stos over every tile at 0x779a0; a column copy at
+0x13774) and drew each 8-pixel column twice. m2_cpu_bridge presented an
+on-chip read's low word with `half` still set from the previous access
+(cleared in S_IDLE, a cycle late for the M10K's one-cycle read), so an
+aligned halfword read of tile RAM or the palette returned the NEXT word and
+a 32-bit read came back halves swapped; a read at +2 was right by accident.
+Writes never saw it. The unit bench missed it because its RAM model
+answered in the same cycle. Fix (cherry-picked as is): `half` cleared when
+an access completes, a read moves to the high word when accepted, reads
+fetch the whole dword. Bench: 1,009 / 1,009 checks here (the old bridge
+fails the corrected bench with 46 mismatches). On model2c the whole-core
+bench then matched MAME's tile RAM in all 32,768 words and the frame on
+0 / 190,464 pixels (30,766 before).
+WHO IT TOUCHES (MAME 0.289, 120 s attract, reads of tile RAM / the 2D
+palette -- every one wrong before): on this core VIRTUA COP (tile and
+palette); Daytona reads none; Desert Tank not measured. On 2A: Zero Gunner
+(~23,000), VF2 (~19,000, scroll registers read back), Pilot Kids, Hanguk
+Pro Yagu 98 (the whole palette), Motor Raid, Sky Target and Virtua Cop 2 (a
+few). What each game did with the wrong values was not traced: a board look
+at Virtua Cop's 2D (and on 2A VF2, Zero Gunner) before release. Open
+question worth re-asking with this in: R929's "why the tile-path flash is
+lost on the board".
