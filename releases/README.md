@@ -253,9 +253,7 @@ anything you find.
   its 2D palette back, the core returned the word next to the one asked for
   (and a 32-bit read came back with its halves swapped). Writes were always
   right, so most of the picture was too, but anything the game worked out
-  from a read-back was off. Found on the Model 2C core, where Sega Touring
-  Car Championship's title flips every tile with a read and a write; the
-  same fix is in all three cores. Daytona never reads them back, so it is
+  from a read-back was off. Daytona never reads them back, so it is
   unchanged. (`Model2_20261023`.)
 - **Virtua Cop's colours are fixed: white clouds, grey concrete.** The clouds
   over the wharf came out black with white edges, the ground light blue, and
