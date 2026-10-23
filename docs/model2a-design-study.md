@@ -43536,3 +43536,6 @@ line, the vpr_s synchroniser, .pair_en on the instance).
 *Ben (s1386):* Sega Rally good. Its car-shadow white line (#26) looks like a
 TEXTURE seam (an edge texel where textured polygons meet), the same kind as
 Sky Target's sky lines -- passed to R938.
+*Ben (s1386):* Dead or Alive and Dynamite Cop good. The 2A board pass for
+R937 is complete: every game checked, none worse, Zero Gunner and Manx TT
+better. The release waits only on a clean seed (with R939 carried in).
