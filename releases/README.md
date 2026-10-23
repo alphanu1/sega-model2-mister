@@ -176,7 +176,7 @@ Fighter 2 at the default 80%:
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261022.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261023.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -215,7 +215,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261022.rbf` has the md5 `eaa65eae56f7222fa6a1925ebecf99d0`.
+**Check you're running the right file.** `Model2_20261023.rbf` has the md5 `78dfbb2153d2fa921c33b410043297b6`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -249,6 +249,14 @@ anything you find.
 
 ### New in this release
 
+- **Virtua Cop's 2D reads are right.** When the game read its tilemaps or
+  its 2D palette back, the core returned the word next to the one asked for
+  (and a 32-bit read came back with its halves swapped). Writes were always
+  right, so most of the picture was too, but anything the game worked out
+  from a read-back was off. Found on the Model 2C core, where Sega Touring
+  Car Championship's title flips every tile with a read and a write; the
+  same fix is in all three cores. Daytona never reads them back, so it is
+  unchanged. (`Model2_20261023`.)
 - **Virtua Cop's colours are fixed: white clouds, grey concrete.** The clouds
   over the wharf came out black with white edges, the ground light blue, and
   the bars above and below the picture grey (GitHub #10). The core shaded
