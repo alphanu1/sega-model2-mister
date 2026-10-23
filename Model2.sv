@@ -122,6 +122,18 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // R884: M2_2A_SND_EXACT, the 68000 on MAME's wait states (ROM 0, RAM and SCSP
 // 1) with its clock stopped, not wait-stated, while SDRAM answers
 // (m2_2a_sound EXACT), 1; 0 is its clock as before R884.
+// R943: ON IN THE 2C BUILD. House of the Dead's sound board asks the SDRAM
+// for about twice VF2's traffic (port 7: 20.7 DSP reads and 8.6 writes a
+// sample; the 68000 at 85% of its bus), and it falls behind at a mean port
+// latency VF2 rides through: 25-150 clk_sys gives 10% fewer samples than real
+// time and a saturated underrun count, 15-90 none. Under the heavy load
+// bench's latencies the sound ports wait p50 / p99 90 / 319 clk_mem without
+// AGE and 79 / 123 with it. The 2A build keeps 0 (its netlist unchanged).
+`ifdef M2_2C
+`ifndef M2_2A_SND_AGE
+`define M2_2A_SND_AGE 1
+`endif
+`endif
 `ifndef M2_2A_SND_AGE
 `define M2_2A_SND_AGE 0
 `endif

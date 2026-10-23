@@ -1521,19 +1521,28 @@ obj_eng_ra/Vm2_eng_ra: rtl/mem/m2_eng_ra.sv sim/mem/tb_m2_eng_ra.cpp
 DUAL_G := -GCOL_BITS=10 -GDUAL=1 -GMASK_ON_A=1 -GMODULE=1 -GT_REFI_C=770 \
           -GNPP=13 -GPRI=13\'b1111100011110 -GPRI_TOP=13\'b0000000001000
 .PHONY: test_m2_sdram128d
-test_m2_sdram128d: obj_m2_sdram128d/Vm2_sdram_harness obj_m2_sdram128d64/Vm2_sdram_harness
+test_m2_sdram128d: obj_m2_sdram128d/Vm2_sdram_harness obj_m2_sdram128d64/Vm2_sdram_harness obj_m2_sdram128da/Vm2_sdram_harness
 	@echo "== test m2_sdram on the 128 MB dual-chip module (R891)"
 	./obj_m2_sdram128d/Vm2_sdram_harness
 	@echo "== ... eight-word texel reads, ports 5 and 7 writing bytes (R796, R871)"
 	M2_SDRAM_LONG=1c04 M2_SDRAM_W57=1 ./obj_m2_sdram128d/Vm2_sdram_harness
 	@echo "== the same controller on a 64 MB module, every address below 64 MB (R891)"
 	M2_SDRAM_LONG=1c04 M2_SDRAM_W57=1 ./obj_m2_sdram128d64/Vm2_sdram_harness
+	@echo "== the 128 MB module with ports 5, 6, 7 aged into the class, as the 2C build sets it (R943)"
+	M2_SDRAM_LONG=1c04 M2_SDRAM_W57=1 ./obj_m2_sdram128da/Vm2_sdram_harness
 
 obj_m2_sdram128d/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness $(DUAL_G) -GCHIPS=2 \
 	  -CFLAGS "-O2 -I../sim/mem -DTB_NP=13 -DTB_COL_BITS=10 -DTB_DUAL=1 -DTB_RET=14000000" \
 	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
 	  --Mdir obj_m2_sdram128d -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+
+# R943: the 2C build turns M2_2A_SND_AGE on -- the AGE escalation on the module it runs on
+obj_m2_sdram128da/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
+	$(VBUILD) --top-module m2_sdram_harness $(DUAL_G) -GCHIPS=2 -GAGE=13\'b0000011100000 -GAGE_T=48 \
+	  -CFLAGS "-O2 -I../sim/mem -DTB_NP=13 -DTB_COL_BITS=10 -DTB_DUAL=1 -DTB_RET=14000000" \
+	  -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  --Mdir obj_m2_sdram128da -o Vm2_sdram_harness $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 
 obj_m2_sdram128d64/Vm2_sdram_harness: $(SDR_RTL) sim/mem/tb_m2_sdram.cpp
 	$(VBUILD) --top-module m2_sdram_harness $(DUAL_G) -GCHIPS=1 \

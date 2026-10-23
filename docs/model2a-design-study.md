@@ -45083,3 +45083,138 @@ same way -- they may be genuine Japanese-mode lines. FIT e516b53 (AGE on
 2C): s1421 clk_mem -0.859; s1422 -0.315; s1423 clk_mem -0.013, clk_sys
 +0.086, i960 +0.969, hold +0.247 -- loaded on the board as the AGE test
 build (Model2C_20261023_s1423_age.rbf, md5 b7feac8a...).
+
+**R943 -- HOUSE OF THE DEAD'S SOUND ON THE 2C BUILD (s1377): THE MRA, THE
+SDRAM MAP AND THE SCSP ARE RIGHT; THE SOUND BOARD FALLS BEHIND REAL TIME
+UNDER SDRAM LOAD (HOTD ASKS ABOUT TWICE VF2's TRAFFIC), WHICH M2_2A_SND_AGE
+FIXES IN THE BENCH -- NOW ON IN THE 2C BUILD. THE "HELLO DADDY" VOICE IS A
+REAL SAMPLE (#111) THAT MAME NEVER PLAYS; WHAT KEYS IT ON THE BOARD IS NOT
+FOUND HERE. ON BRANCH hotd-sound (OFF model2c aeac0d9), LOCAL ONLY, NOT
+FITTED.**
+(Ben, s1377 = a0459fd, House of the Dead, JAPAN country setting: a
+countdown as a high-pitched hiss; a voice "3, 2, 1" and a child's "hello
+daddy" where they should not be; later, music that wobbles and cuts out for
+a second, voices grinding and crackling, coming and going after a long run.
+His recording HelloDaddy.mp4: a continue at 0-9 s, a broadband hiss with
+steady lines from 9 to 87 s, the picture frozen from 41 s, digital silence
+41-44 s, the countdown and the child's voice at 87-94 s. A user reports
+random voices in Manx TT (2A core) in Japan mode only.)
+
+*Ruled out (measured):*
+  1. THE MRAs. hotd, overrev and stcc: program and sample ROMs, order, size
+     and offsets equal MAME 0.289's ROM_START (hotd mpr-19721 at 0, mpr-19722
+     at 4 MB, 8 MB; stcc's 128 KB program padded with zeros as MAME's region
+     is). 8 MB is linear in MAME (model2snd_ctrl banks only above 8 MB) and
+     in m2_2a_sound (SMP_BASE + addr[22:1]). Expected R882 sums for the
+     probe's 'R' record (method checked on VF2: dc60fe32 ... as R882):
+     hotd program c70b7d5a, samples b6038d11 6d524f46 26aedc68 ab988565.
+  2. AN SDRAM OVERLAP. Every writer's reach on the 2C build: the 68000 and
+     the DSP stay in sound RAM (RAM_BASE + 18 bits, byte 0x2580000-
+     0x25FFFFF); the TGPx4's buffer / program-copy writes are 19 bits from
+     byte 0x2DE0000 / 0x2080000 (and its bus masks buffer RAM to 32 KB);
+     bi_ / st_ / geo / loader as on 2A; nothing reaches sound RAM, the
+     68000 program (0x24C0000) or the samples (0x3400000-0x3BFFFFF). The
+     "boot scanner" snd_base is the Model 1 sound board's (M1SOUND), idle
+     on 2A / 2C.
+  3. THE SCSP. MAME 0.289 + p16 on hotd (its default nvram is COUNTRY
+     JAPAN -- the warning screen says so), 150 s (attract, a coin, play, two
+     continues, game over); tb_m2_scsp replays it at latency 6-40: 6,615,000
+     samples, 0 differ from scsp_ref.h, 44,659,709 slot samples, 1,239,144
+     reads and the IPL every sample right. The reference differs from MAME's
+     mix from sample 1,206,650 (27.4 s) only through R914's MADRS decode:
+     per-slot capture (M2SCSP_SLOT_FROM/TO) -- every slot equal, EFREG[1]
+     -38 / -39 at the first difference; HOTD writes 32 zero words to
+     0x7C0-0x7FE after its MADRS table like every 2A driver. No new feature:
+     PCM8 only, loops 0 / 1, no LFO / FM / noise; KRS and positive octaves
+     (already exact); DSP fields the 2A games' subset.
+  4. THE BOARD ON MAME's MIDI. tb_m2_2a_sound (fx68k on epr-19720, the SCSP,
+     random latency 6-40), 20 s: 0 underruns, 80.0% of MAME's SCSP writes in
+     order (the 68000's 11 M MSLC writes in 150 s are polled), levels as
+     MAME's. A 35 s run with a sample-ROM page log: every 4 KB page the core's
+     68000 read MAME's 68000 also read (MAME: a read tap on 0x800000-0xffffff).
+  5. AN i960 TRAP. R869's form log over 420 s of mame_m2_hotd_play.lua
+     (chapter 1, the mansion, the boss, continues): formcheck 2C 0 of 179
+     forms, 0 of 343 variants.
+
+*THE CHILD'S VOICE IS SAMPLE #111.* The driver's sample table (header
+0x608000 -> 0x60afde: 0x15f entries of {start, length | loop << 31, loop
+start}, 68000 addresses): #111 = sample ROM 0x2DD90C, 0x53B2 bytes, ~22 kHz
+-- the board's 91.0-91.9 s against every one of the 351 samples at four
+rates: #111 0.59 (spectral correlation), the next 0.25; against the raw ROM
+0.72 at 0x2DE000. #113 after it is a looped tone. MAME's 68000 never reads
+pages 0x2D2-0x2E9 in 150 s (pages log) nor in 420 s of play with continues
+(the same tap on mame_m2_hotd_play.lua) -- in MAME's own Japan mode. The
+board's "3, 2, 1" did not match one table sample clearly (0.4-0.7 against
+many: the background music); it is the same voice pattern at both of the
+recording's continues. MAME's continue (73-80 s) has none: the stage music
+and the countdown ticks. So the board's 68000 was told to play something
+MAME's never is, with the same ROM and an SCSP that is exact -- the command
+came from the board's i960, or the board's sound RAM / 68000 state differs.
+The probe's 'M' record (R880) captures every MIDI byte the board's i960
+sends; a Japan-mode HOTD session against MAME's midi.txt settles which.
+
+*THE TIME- AND LOAD-DEPENDENT FAULTS: THE BOARD STARVES (MEASURED IN THE
+BENCH).* HOTD is the heaviest sound board yet: the 68000 2.37 M bus cycles a
+second in MAME (VF2 ~2.0 M; 85% of a 68000's bus), the DSP 20.7 reads and
+8.6 writes a sample (one SDRAM word write each), port 7 ~650 K
+transactions a second (R877's VF2 ~305 K). SCSP engine clocks a sample
+(tb_m2_scsp, budget 1,814 at 80 MHz): latency 6-40 mean 1,159 / max 2,333
+(150 s); 10-80 1,433 / 2,560; 20-150 2,055 / 3,826 (38.5 s). The whole
+board, 20 s: 15-90 0 underruns; 25-150 789,120 samples in 20 s (882,000 due:
+10.5% slow), the FIFO empty 65,535+ times (saturated), the 68000 waiting 59%
+of all clocks, its writes 581 ms behind MAME's. R877's arbiter has the sound
+ports OUTSIDE the class: tb_m2_sdram_load with HOTD's demand (LOAD_T5 140,
+T6 4000, T7 100), heavy load (think 40): port 5 p50 / p90 / p99 / max 90 /
+236 / 319 / 487 clk_mem, port 7 67 / 240 / 337 / 438; with AGE (5-7 aged
+into the class after 48) 79 / 103 / 123 / 164 and 72 / 103 / 131 / 197.
+The board bench on those traces (LAT_TRACE), 16 s:
+                       samples (705,600 due)  underruns  68000 cycles  writes late
+  heavy, AGE off        596,486 (84.5%)        65,535+    32.9 M        448 ms
+  heavy, AGE on         705,606                0          40.2 M        256 ms
+So under a heavy video load the SCSP runs ~15% slow (pitch and tempo drop:
+the wobble), the output holds its last sample on every underrun (the
+cut-outs, crackle), and the 68000 -- whose music streams refill 4 KB ring
+halves keyed off CA's bit (0x601a22-0x601b28, 512 bytes a pass, eight a
+half) -- falls a half behind and the slots replay stale ring data (grinding,
+fragments of earlier sounds). It comes and goes with the scene load, as
+Ben hears it. VF2's lighter board survived the same arbiter (R877: s1207's
+68000 rate sat on the light bench).
+
+*THE CHANGE:* Model2.sv -- M2_2A_SND_AGE defaults to 1 under M2_2C (the
+existing R877 escalation, never enabled until now); the 2A default stays 0.
+2A preprocessed source (verilator -E -P, the 2A build): identical to
+aeac0d9's; 2C: the one line .AGE((M2A && 1 != 0) ...). test_m2_sdram128d
+gains the 128 MB module with AGE (the 2C build's module): 2,017,037 checks,
+0 fails, 0 violations, retention across both chips 0 decayed;
+test_m2_sdram13's AGE case 2,151,281 checks, 0 fails (R877's figure).
+lint_top 2A and M2_2C (+ M2_NO_2A_MANX_MOTION): clean. NOT FITTED. RISK:
+the arbiter is on clk_mem; s1377's failing clk_mem paths ARE the arbiter
+(m2_sdram inflight[4] -> rr_mask[10] / [9] / [6], -0.039 .. -0.013 ns),
+and AGE adds to that cone. R877 measured the cost: the texel ports'
+p99 at saturation (port 12 395 -> 613 clk_mem).
+NOT RUN: test_m2_sdram_cdc_load -- its harness no longer builds since
+m2_2a_sound gained `boost` (R894: PINNOTFOUND), a stale bench, not changed
+here.
+
+*THE FROZEN PICTURE (41 s): NOT A TRAP; s1377 IS NOT A CLEAN SEED.*
+quartus_sta 17.0 on a copy of s1377's database: clk_sys -0.244 ns, all four
+failing paths in the geometry's clipper -- m2_geo_clip kst.K_CLIP ->
+kst.K_IDLE (-0.244) / K_POPR (-0.172), m2_geo_project step / sst.S_A0 ->
+kst.K_IDLE (-0.067 / -0.057); clk_mem -0.039 (the arbiter, above). A state
+register that misses setup can leave the clipper in no state, and a stuck
+clipper stops the geometry while the i960 and the sound board run on --
+the recording exactly (the game went on to a game over behind a still
+picture). A candidate, not shown: s1373 (clean) is the build to repeat the
+session on. R935's GEO_LIST_WIN (4,096) against HOTD's 4,555-4,642-dword
+lists is the other open geometry item.
+
+*REGION:* HOTD's COUNTRY (JAPAN / USA / EXPORT, i960 program 0xa91e0) is a
+test-menu setting held in the EEPROM; MAME's default nvram boots JAPAN, so
+every MAME figure above is Japan mode, and Japan mode in MAME plays no #111.
+What Japan mode sends that Export does not was not measured (MAME would need
+its EEPROM switched to USA; the checksum at 0x08 is not a plain sum).
+
+*OPEN:* (1) a 2C probe build (M2_PROBE + M2_PROBE_L: 'M' MIDI, 'L' port
+waits, 'T' underruns, 'R' sums, 'C' i960 IP) in Japan mode -- the MIDI that
+plays #111, and whether the board's ports wait as the heavy trace does;
+(2) Ben's USA-mode replay; (3) the same session on a clean seed.
