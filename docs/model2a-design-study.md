@@ -43773,3 +43773,24 @@ needing > 7/8 of the store -- Rally's busy lists) drops far quads under 4 px:
 on Rally 960 it adds 40 see-through pixels, all on the distant cars and
 horizon tree tops (M2_R3D_COARSE=1 now forces it in tb_m2_raster3d) -- the
 documented trade, not a seam.
+
+**R942 (planned, NOT STARTED, 2026-10-23) -- A SINDEN BORDER, AND GUN FLASH
+OFF ON 2A AND 2C, FOR NON-CRT GUN USERS.** Ben: a build for later.
+*(1) Sinden border.* A Sinden finds the screen by a white border round the
+picture; on MiSTer the core must draw it (nothing does today, so a Sinden
+only aims through the core's mouse / analogue-stick paths with nothing to
+track). Plan: OSD "Sinden border: Off (default) / On" (optionally Thin /
+Thick), shown only for the gun games (Virtua Cop, Virtua Cop 2, House of
+the Dead), in the shared output path: a pixel within N of any edge of the
+native 496 x 384 picture forced white -- one more condition on the gun
+flash's white mux (m2_gun_flash's gf_white path), before m2_scan15 so HDMI
+and 15 kHz both get it. Drawn over the picture's edge, not shrinking it.
+Estimate ~30-60 ALM (four compares on the output counters, ~20 more if the
+counters are not at hand there, ~10 for a thickness choice), 0 M10K. Needs
+a Sinden owner's confirmation before it is announced. Correction to the
+#13 wording: Gun flash Off does not make a Sinden work -- it only removes
+the white flash.
+*(2) Gun flash Off on 2A / 2C* -- R936 (1) stands: port m2_gun_flash's
+request detector and Off path to model2a for Virtua Cop 2 (same window-
+table flash) and, once House of the Dead's flash is checked in MAME, to the
+2C build. Both (1) and (2) go in one later build.
