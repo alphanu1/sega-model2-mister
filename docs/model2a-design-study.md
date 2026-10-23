@@ -44437,3 +44437,11 @@ clk_sys +0.059, clk_mem +0.011, i960 +1.411, hold +0.162, HDMI -0.685
 (report-only), 41,356 ALM, 549 / 553 M10K -- THE FIRST CLEAN 2C SEED,
 assembled as Model2C_20261023_s1373.rbf; s1374 -0.138 / -0.088; s1375
 -1.155. Fifteen seeds of the 2C build since R934 for one clean one.
+*BOARD (2026-10-23, Ben, s1373):* STCC RUNS THROUGH ITS ATTRACT, everything
+right except the TITLE: its intro animation plays correctly, then when it
+finishes the logo "breaks" -- horizontal strips of SEGA / Touring Car /
+Championship at different x offsets, doubled and smeared (Ben's grab,
+session image 19; scratchpad stcc_title/). Not played in-game yet. Same
+family as HOTD's sliding shadow pieces? First suspect: R935's side finding
+(GEO_LIST_WIN 4,096 dwords against lists longer than that -- a walk can read
+two frames' lists past dword 4,096). Investigation on branch stcc-title.
