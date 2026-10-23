@@ -27,6 +27,43 @@ Deluxe/Twin sounds, Twin voice (#21) and its leaderboard text minification;
 Daytona volume (#20); Motor Raid slowdown (#25); Virtua Cop 57.5 fps hack
 (R936 (2)); Over Rev race slowdowns; HOTD courtyard shadow sliding (R935);
 STCC music (DSB MPEG); Rally shadow line (#26, not reproduced -- retest).
+## 2026-10-23 (night): branch ee-save -- the 93C46 EEPROM in the NVRAM file (R945, #15 / #21). NOT PUSHED, NOT FITTED
+
+Every 2A / 2B / 2C game keeps its test-menu settings in the 93C46 (MAME
+0.289); the 2A core never saved it, so Sega Rally (#15), Manx TT (#21) and,
+on 2C, House of the Dead lost them at power-off. Now index 2 is backup RAM
+(16 KB) + "M2EEPROM" + the 64 EEPROM words (MAME .nv layout): 16520 bytes,
+rtl/io/m2_nv_port.sv (the NVRAM path, moved out of Model2.sv), m2_93c46 DUMP
+(a second read port, a second 64 x 16 MLAB), M2_2A_EE_SAVE on by default.
+Every Model2A MRA (mra/ and releases/mra/) is now size 16520.
+  * Why the tag: Main zero-pads a short .nvm to the MRA's size and sends all
+    of it, so an old 16 KB file would load zeros over the MRA's EEPROM
+    (Hanguk Pro Yagu 98: Error #1). Without the tag the EEPROM is left alone.
+  * Main allows ONE <nvram> per MRA -- a second index was not an option.
+  * The OLD core's backup write was unbounded: a 16520 MRA on a pre-R945
+    Model2A rbf wraps 136 bytes onto backup words 0-33. The releases/mra
+    commit (879a65a) must ship with an R945 rbf, not before.
+  * Daytona / Desert Tank / Virtua Cop: settings are in backup RAM (already
+    saved); the I/O board's 93C45 is the firmware's own. main: MRAs only.
+Bench test_m2_nv_save (Main's SPI words through the real hps_io): save,
+power cycle with the file / none / 16 KB file / damaged tag / old MRA size,
+240 rounds PASS, +spacing=3 and five mutations FAIL as they must.
+Commits to fit: 2A ee-save 028aaa0 (RTL) + d3eb8d6 (mra/); 2C ee-save-2c
+a3cc53a + 2827848; main ee-save-main 47c654d (release MRAs only, no RTL).
+Board check: change a setting in Sega Rally's test menu, OSD "Save settings",
+power off / on: it holds; delete the .nvm: factory settings.
+quartus_map 17.0 (2A): +57 ALMs needed (40,039 -> 40,096), +1,024 MLAB bits,
+M10K and DSP unchanged.
+
+## 2026-10-23 (evening): model2a pushed -- release folder only (Model2_20261023b)
+
+releases/ mirrors main's: Model2_20261023b (s1407, R939 + R938) in place of
+Model2_20261023; Model2A_20261022 unchanged. model2a's code is unchanged in
+this push: the 2A build with R937 + R939 + R940 + R938 is on branch
+bridge-r937-2a (42e43c9), board-checked on s1386 (R937) and s1404 pending
+for R940/R938, still hunting a clean seed (s1403-s1405, s1412-s1414 none
+clean; best s1404 -0.086 / -0.138; s1415-s1417 fitting). Fallback: s1394
+(R937 + R939 only) is clean.
 
 ## 2026-10-23: model2a pushed -- release folder only (Model2_20261023)
 

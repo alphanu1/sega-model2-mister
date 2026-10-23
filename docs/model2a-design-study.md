@@ -43819,3 +43819,123 @@ fixed setting: m2_raster3d's PIXSTEP(4) (R626: bilinear planes stepped per
 four pixels). DECISION (Ben): keep R937-R940 in the code -- "kind of better"
 -- but s1415 is NOT a release: the renderer fixes beyond R940 are not
 release-worthy. Model2A_20261022 stays the 2A release.
+
+**R945 -- THE 93C46 IN THE NVRAM FILE: THE GAMES' SETTINGS SURVIVE A POWER
+CYCLE (GitHub #15 Sega Rally, #21 Manx TT; House of the Dead on 2C). Benched,
+NOT FITTED, NOT ON A BOARD.**
+
+*Believed:* R919 (implementation findings): "The 2A core's 93C46 is never
+saved ... INFERRED: GitHub #15 is this." m2_93c46's header: persistence "not
+here yet". Hanguk Pro Yagu 98's MRA: "The EEPROM is not saved". The plan:
+append the EEPROM to the backup RAM's <nvram> region (16 KB + 128 B = 16512)
+-- MiSTer sends the .nvm after the ROMs, so a saved file overrides the MRA's
+default, and with no file the default stays.
+
+*Which games (VERIFIED, MAME 0.289 model2.cpp):* EEPROM_93C46_16BIT "eeprom"
+is in model2a (l.2716), model2b (2854) and model2c (2995): every 2A, 2B and 2C
+set keeps its settings there (eeprom_w / in0_r on the 315-5649's port A / B).
+So all eleven 2A MRAs (VF2, Sega Rally, Virtua Cop 2, Sky Target, Manx TT,
+Motor Raid, DOA, Zero Gunner, Dynamite Cop, Pilot Kids, Hanguk Pro Yagu 98)
+and the three 2C ones (House of the Dead, Over Rev, STCC). MAME ships a default
+image for hpyagu98 (hpyagu98_nvram, already MRA index 5, R897), manxtt
+(manxtt_dx_nvran) and manxttc; only hpyagu98's is loaded -- Manx TT boots
+blank, fails its CRC test and writes its factory settings (R892 item 5), and
+now keeps whatever the test menu sets after that.
+The original board (model2o: Daytona, Desert Tank, Virtua Cop) has no 93C46
+on the main board; its settings are the backup RAM ("backup1"), already in the
+.nvm. Its I/O board's 93C45 (model1io.cpp) is the I/O firmware's own: MAME's
+daytona93 nvram from three separate sessions here (~/.m2-mame-play, ~/roms,
+nvram/) has three different backup1 files and one identical ioboard_eeprom
+("SEGA" and the firmware's defaults, written to a virgin part at boot).
+INFERRED: nothing a Daytona test menu sets lives there (not tested by changing
+one in MAME). main is unchanged; m2_ioz80's EEPROM stays volatile.
+
+*Main_MiSTer, what it actually does (VERIFIED, mra_loader.cpp / file_io.cpp
+at 915ca33, 2026-08-29):*
+  1. ONE <nvram> per MRA: nvram_idx and nvram_size are single statics, a
+     second element replaces the first. A second index is not possible; the
+     EEPROM has to be in index 2's region.
+  2. arcade_nvm_load runs when the parser closes the <nvram> element -- after
+     the <rom>s before it, before those after it (every Model 2 MRA has it
+     before index 0, so the game is in reset). Only if the file opens; then it
+     allocates the MRA's size, memsets it to ZERO, reads min(file, size) over
+     it and sends ALL of it. A 16 KB file under a 16512 MRA arrives as 16 KB
+     and 128 zero bytes: the plan's layout would load 64 zero words over the
+     MRA's default (Hanguk Pro Yagu 98: "Error #1", R897), and a plain-sum
+     checksum passes on zeros. So the tail starts with a tag and the core
+     takes the EEPROM only after it.
+  3. arcade_nvm_save runs on the OSD's close only when UIO_CHK_UPLOAD (0x3C)
+     answers -- the core's ioctl_upload_req, the "Save settings (NVRAM)" line.
+     Unchanged: the user saves as for backup RAM today.
+  4. THE OLD CORE'S BACKUP WRITE WAS UNBOUNDED (hps_word = ioctl_addr[13:2]):
+     a longer file wraps onto backup words 0-33. Shown in the bench (the
+     "nobound" mutation: backup word 0 reads 00000000 after a zero-padded 16 KB
+     file). A 16520 MRA must never run on a pre-R945 Model2A rbf -- the MRAs
+     and the rbf ship together.
+
+*The design (rtl/io/m2_nv_port.sv, Model2.sv M2_2A_EE_SAVE, on by default):*
+  index 2, 16520 bytes:
+    0x0000-0x3fff  backup RAM, as before
+    0x4000-0x4007  "M2EEPROM" (4 words, all must match, in order)
+    0x4008-0x4087  the 93C46, word n = bytes 2n / 2n+1 (MAME's .nv, as index 5)
+  The tag comes first so the words go straight into the EEPROM's load port as
+  they arrive (a tag after them would need a 64-word staging copy). No tag, a
+  damaged tag or a 16 KB file: the EEPROM stays as the MRA and power-on left
+  it. The save reads the EEPROM through a second registered read port on
+  m2_93c46 (DUMP), a second 64 x 16 MLAB copy, while the game runs. Every load
+  write is registered (R593's pattern); the backup write is bounded to
+  0x0000-0x3fff. The NVRAM path moved out of Model2.sv into m2_nv_port so the
+  bench runs the code that is built; the save request (status[17]) and the
+  upload pipeline (3 cycles, address to ioctl_din) are as they were.
+  MRAs: every Model2A / Model2C <nvram> 16384 -> 16520 (mra/, releases/mra/);
+  the Model2 (original) MRAs stay 16384.
+
+*Bench (test_m2_nv_save, new):* Main's SPI words (FIO_FILE_INDEX / TX / TX_DAT,
+UIO_CHK_UPLOAD; the zero-padded buffer of arcade_nvm_load) through the real
+sys/hps_io.sv, m2_nv_port, m2_backup and the 315-5649's 93C46; the i960 side
+bit-bangs the EEPROM as eeprom_w / in0_r and reads all 64 words back
+serially (the game's own view). Each round, with a random default image
+(index 5) or none, 1-64 random settings, random backup RAM words and an SPI
+strobe spacing log-uniform 4-400 clk_sys a word:
+  boot 1  no .nvm -> the MRA's default; settings written; OSD save: the
+          16520-byte file checked byte for byte (backup, tag, 64 words)
+  boot 2  that file -> the saved settings and backup RAM; saving again gives
+          the identical file
+  boot 3  no file -> the default        boot 4  a 16 KB file -> the default,
+  boot 5  one tag bit flipped -> the default         the file's backup RAM
+  boot 6  the file under a 16384 MRA -> the default
+240 rounds (seed 7): 1,440 simulated power-ons, 107,520 EEPROM words read
+back serially, 7.9 MB uploaded, 1.01 billion simulated clk_sys cycles, a few minutes on
+this PC: PASS. 24 rounds is the make default. Controls: +spacing=3 (inside
+the 3-cycle upload pipeline) FAILS (110 mismatches); five mutations of
+m2_nv_port each FAIL -- no tag check (boots 4, 5), no tail write (boot 2), the
+backup write unbounded (backup word 0 overwritten), the dump address off by
+four words (the saved file), the tag's first-word restart removed (boot 5).
+test_m2_315_5649 now also reads all 64 words through the dump port and
+compares them with the MAME-transcribed reference: 75,818 dumps, 4.85 million
+words over its 2 million random accesses (one module, one instance): PASS.
+test_m2_vcop2_guns PASS (its harness and m2_boot_harness tie the new port).
+
+*Checks:* lint_top clean on 2A (default), -DM2_NO_2A, and on model2c's
+-DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1; lint_idx: the same 113 candidates before
+and after, none in the changed code; quartus_map --analyze_file m2_nv_port,
+m2_93c46, m2_315_5649: 0 errors.
+
+*AREA (quartus_map 17.0, 2A, release macros, whole design):*
+  (ee-save 028aaa0 against model2a 65f10ac, mapped side by side here)
+                       ALMs needed  regs    block bits  MLAB bits  M10K RAMs
+     model2a 65f10ac   40,039       48,093  4,572,656   47,068     86
+     ee-save           40,096       48,145  4,572,656   48,092     86
+     difference        +57          +52     0           +1,024     0
+  m2_nv_port 63 ALUT / 67 registers (Model2.sv's own share fell 699 -> 656
+  ALUT: the old path moved into it); m2_93c46 146 -> 163 ALUT, 106 -> 128
+  registers, and its array is two 64 x 16 MLABs (ee_rtl_0 / ee_rtl_1, both
+  "MLAB, Simple Dual Port"), not flip-flops. No M10K, no DSP.
+
+*Not done / open:* not fitted, not on a board. The board check: change a
+setting in Sega Rally's or Manx TT's test menu, Save settings, power off and
+on -- the setting holds; delete the .nvm -- the factory settings. A save while
+the game is mid-way through writing its settings can catch half of them, as
+the backup RAM always could. Manx TT could load MAME's manxtt_dx_nvran on
+index 5 (not done: the game builds its own). 2B is not built. The 2C HOTD CRT
+MRA has "--" inside its comment (not valid XML; Main accepts it, untouched).
