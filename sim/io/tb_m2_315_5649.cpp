@@ -12,7 +12,10 @@
 // of every offset is compared. The EEPROM is driven mostly with well-formed
 // commands (READ with streaming, WRITE, ERASE, LOCK/UNLOCK, WRITEALL,
 // ERASEALL) and sometimes with noise, so out-of-protocol edges are compared
-// too. Usage: Vm2_315_5649 [+n=<accesses>] [+seed=<s>]
+// too. R945: the save's read port (EE_SAVE, ee_dump_a / ee_dump_q) is read
+// for all 64 words now and then -- while port A is mid-command too -- and
+// compared with the reference's array. Usage: Vm2_315_5649 [+n=<accesses>]
+// [+seed=<s>] [+noload] [+nodump]
 
 #include "Vm2_315_5649.h"
 #include "verilated.h"
@@ -139,8 +142,10 @@ int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t n = 2'000'000; unsigned seed = 1;
   bool loads = true;   // R897: +noload for a module built without EE_LOAD
+  bool dumps = true;   // R945: +nodump for a module built without EE_SAVE
   for (int i = 1; i < argc; i++) {
     if (!std::strcmp(argv[i], "+noload")) loads = false;
+    if (!std::strcmp(argv[i], "+nodump")) dumps = false;
     if (!std::strncmp(argv[i], "+n=", 3)) n = std::strtoull(argv[i] + 3, nullptr, 10);
     if (!std::strncmp(argv[i], "+seed=", 6)) seed = unsigned(std::strtoul(argv[i] + 6, nullptr, 10));
   }
@@ -150,12 +155,26 @@ int main(int argc, char **argv) {
   d->clk = 0; d->por_n = 0; d->rst_n = 0; d->sel = 0; d->we = 0; d->word = 0; d->be = 0; d->wdata = 0;
   d->in0 = 0xff; d->in1 = 0xff; d->in2 = 0xff; d->sw = 0xff;
   d->an0 = 0xff; d->an1 = 0xff; d->an2 = 0xff;
-  d->ee_ld_we = 0; d->ee_ld_a = 0; d->ee_ld_d = 0;
+  d->ee_ld_we = 0; d->ee_ld_a = 0; d->ee_ld_d = 0; d->ee_dump_a = 0;
   for (int i = 0; i < 4; i++) tick();
   d->por_n = 1; d->rst_n = 1; tick();
 
   uint64_t pors = 0, resets = 0, reads = 0, bad = 0, ee_reads = 0, ee_ones = 0, ee_zeros = 0, cmds = 0, pe_checks = 0;
-  uint64_t ee_loads = 0;
+  uint64_t ee_loads = 0, dump_words = 0, dump_sets = 0;
+  // R945: every word through the dump port, against the reference. The
+  // address goes in, one edge registers the word. Called with no sweep
+  // (WRITEALL / ERASEALL, 192 cycles) running: the reference's are instant.
+  auto dump_all = [&]() {
+    for (int k = 0; k < 64; k++) {
+      const int a = (k * 37 + int(dump_sets)) & 63;   // scattered order
+      d->ee_dump_a = a; tick();
+      ++dump_words;
+      if (d->ee_dump_q != ref.ee.mem[a] && ++bad <= 20)
+        std::printf("  MISMATCH cyc %llu dump word %d: expected %04x got %04x\n",
+                    (unsigned long long)cyc, a, ref.ee.mem[a], d->ee_dump_q);
+    }
+    ++dump_sets;
+  };
   // R897: an MRA's EEPROM image through the load port, as Model2.sv drives it
   // from ioctl index 5 while the game is in reset: 64 words, one a cycle or
   // with gaps, sometimes a partial image; the reference takes the same words.
@@ -172,6 +191,7 @@ int main(int argc, char **argv) {
     ++ee_loads;
   };
   if (loads) ee_load();
+  if (dumps) dump_all();
   auto access = [&](bool we, int off, uint8_t data) -> void {
     // optional idle gap, as the i960 bit-bangs slowly
     int gap = 4 + int(rng() % 6);   // the i960 is never closer than this (25 MHz bus, bridge)
@@ -223,6 +243,7 @@ int main(int argc, char **argv) {
       d->por_n = 0; d->rst_n = 0; tick(); tick(); d->por_n = 1; d->rst_n = 1; tick();
       ref.power_on(); ++pors;
       if (loads && (rng() & 1)) ee_load();
+      if (dumps) dump_all();
       access(true, 8, 0xfe);
       ++ops; continue;
     }
@@ -230,6 +251,11 @@ int main(int argc, char **argv) {
       d->rst_n = 0; tick(); tick(); d->rst_n = 1; tick();
       ref.reset(); ++resets;
       if (rng() & 1) access(true, 8, 0xfe);
+      ++ops; continue;
+    }
+    if (dumps && r < 40) {   // R945: a save, between two port-A accesses
+      for (int i = 0; i < 200; i++) tick();
+      dump_all();
       ++ops; continue;
     }
     r = r / 10;
@@ -275,6 +301,8 @@ int main(int argc, char **argv) {
               (unsigned long long)cyc);
   std::printf("  %llu PE latch checks (R892)\n", (unsigned long long)pe_checks);
   std::printf("  %llu EEPROM images loaded through the load port (R897)\n", (unsigned long long)ee_loads);
+  std::printf("  %llu EEPROM dumps, %llu words compared through the save port (R945)\n",
+              (unsigned long long)dump_sets, (unsigned long long)dump_words);
   if (bad) { std::printf("FAIL: %llu mismatches\n", (unsigned long long)bad); return 1; }
   std::printf("PASS\n");
   delete d;
