@@ -45063,3 +45063,12 @@ the white flash.
 request detector and Off path to model2a for Virtua Cop 2 (same window-
 table flash) and, once House of the Dead's flash is checked in MAME, to the
 2C build. Both (1) and (2) go in one later build.
+*BOARD (Ben, 2026-10-23, s1377 = a0459fd):* HOUSE OF THE DEAD'S SOUND IS
+WRONG -- a countdown comes out as a high-pitched hiss and a random voice
+("hello daddy" or similar) plays where it should not. Earlier 2C reports
+("plays well") never checked sound specifically. Suspects: the MRA's sound
+ROM layout / SDRAM placement for the large layout, the SCSP's sample
+addressing or banking with more sample ROM than the 2A games. Branch
+hotd-sound (R943). FIT 643ce34 (R940 + R938 on 2C): s1409 clk_sys -0.723,
+s1410 -0.304 (i960 -0.445), s1411 -0.808 with hold -0.097 -- none clean,
+549 / 553 M10K (not 551 -- the fitter packed the store tighter).
