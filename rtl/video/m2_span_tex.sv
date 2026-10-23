@@ -116,6 +116,9 @@ module m2_span_tex #(
   // R932: the luma slot's bits -- in_col[17+LSB:18], 2^LSB rows on chip (3:
   // eight, one M10K; 5 on the 2C build: 32, four M10K)
   parameter int unsigned LSB    = 3,
+  // R940: in_uvs is honoured (m2_geometry UVSH): the un-normalising shift is
+  // one shift less s. 0: in_uvs is ignored and the divide is as before.
+  parameter bit          UVSH   = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -155,6 +158,9 @@ module m2_span_tex #(
   input  logic signed [23:0] in_doozdx,
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
+  // R940: the span's quad was stored with u and v >> in_uvs (m2_geometry
+  // UVSH); the divided coordinate is shifted back up by as much. 0: as before.
+  input  logic [1:0]         in_uvs,
   // R828: the span's mip bias (m2_raster_fill span_mipk), quarter levels with
   // the constant folded in; -512 = no level (the quad had no usable edge)
   /* verilator lint_off UNUSEDSIGNAL */
@@ -254,6 +260,7 @@ module m2_span_tex #(
   // R828: each span's mip bias and deepest level, latched with it
   logic signed [9:0]  mipk_p [2];
   logic [2:0]         mipl_p [2];
+  logic [1:0]         uvs_p [2];   // R940
   // R476: u_r/v_r/ooz_r are gone -- the issue pointer walks the span and the
   // gradients are all the consumer needs.
   logic signed [31:0] du_r, dv_r;
@@ -880,6 +887,14 @@ module m2_span_tex #(
   // (always at least 18) plus the level: 0..15
   logic         [2:0] d1_L, d2_L, d3_L, d4a_L, d4_L;
   logic         [3:0] d4a_sr;
+  // R940: the span's uvs beside the level, d1 .. d3; d4a_ur is the
+  // un-normalising shift past a fixed 16, less it: 2 + d4a_sr - s with MIP
+  // (0..17), d4a_sh - 16 - s without (0..10). One shift, so nothing below the
+  // binary point is lost first; with s = 0 it is exactly the shift below.
+  logic         [1:0] d1_S, d2_S, d3_S;
+  logic         [4:0] d4a_ur;
+  wire          [3:0] d3_sr = ((d3_e < 6'd23) ? 4'd0 : 4'(d3_e - 6'd23)) + 4'(d3_L);   // d4a_sr's next value
+  wire          [4:0] d3_sh = (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);               // d4a_sh's next value
   /* verilator lint_off UNUSEDSIGNAL */
   wire signed  [10:0] mp_l4 = 11'(mipk_p[sh_p[1]]) - 11'({1'b0, d1a_e, d1a_m[22:21], 1'b0});
   /* verilator lint_on UNUSEDSIGNAL */
@@ -942,6 +957,7 @@ module m2_span_tex #(
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       d1_L <= '0; d2_L <= '0; d3_L <= '0; d4a_L <= '0; d4_L <= '0; d4a_sr <= '0;   // R828
+      d1_S <= '0; d2_S <= '0; d3_S <= '0; d4a_ur <= '0;                            // R940
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
@@ -1039,6 +1055,7 @@ module m2_span_tex #(
                                : (d0_o << (6'd23 - d0_e));
       d1_e <= d1a_e; d1_m <= d1a_m; d1_r <= rcp_tab[d1a_m[22:16]];
       d1_L <= mp_L;  d2_L <= d1_L;  d3_L <= d2_L;  d4a_L <= d3_L;  d4_L <= d4a_L;   // R828
+      d1_S <= uvs_p[sh_p[1]];  d2_S <= d1_S;  d3_S <= d2_S;                        // R940
       // stage 2: the Newton residual
       d2_nd <= 32'((((64'd1 <<< 48) - (64'(d1_m) * 64'(d1_r))) >> 24));
       d2_e  <= d1_e; d2_r <= d1_r;
@@ -1065,13 +1082,23 @@ module m2_span_tex #(
       d4a_pv <= 64'(v_h5) * 64'(d3_r1);
       // R791: u/z is times 2^18 now, not 2^16 -- two more, so the answer is
       // still 16.16 quarter-texels. 18..26, inside the five bits.
-      d4a_sh <= (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);
-      d4a_sr <= ((d3_e < 6'd23) ? 4'd0 : 4'(d3_e - 6'd23)) + 4'(d3_L);   // R828
+      d4a_sh <= d3_sh;
+      d4a_sr <= d3_sr;   // R828
+      // R940: never negative -- s is at most 2, the MIP shift at least 18 and
+      // the other at least 18
+      d4a_ur <= MIP ? 5'(5'd2 + 5'(d3_sr) - 5'(d3_S)) : 5'(d3_sh - 5'd16 - 5'(d3_S));
 
       // stage 4b: the un-normalise and the clamp, on the registered product.
       // R828: with MIP the same shift as 18 and then the rest, plus the level
-      d4_u <= MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
-      d4_v <= MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
+      // R940: with UVSH 16 and then d4a_ur, which is the same as below
+      // whenever the span's uvs is 0
+      if (UVSH) begin
+        d4_u <= sat32((d4a_pu >> 16) >> d4a_ur);
+        d4_v <= sat32((d4a_pv >> 16) >> d4a_ur);
+      end else begin
+        d4_u <= MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
+        d4_v <= MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
+      end
       u_h1 <= dv_u;  v_h1 <= dv_v;
       u_h2 <= u_h1;  v_h2 <= v_h1;
       u_h3 <= u_h2;  v_h3 <= v_h2;
@@ -1090,6 +1117,7 @@ module m2_span_tex #(
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
         mipk_p[k] <= '0; mipl_p[k] <= '0;   // R828
+        uvs_p[k] <= '0;                     // R940
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
@@ -1156,6 +1184,7 @@ module m2_span_tex #(
           // 32 << c): translucent (in_tex[8]) c, opaque c + 1, at most 7.
           mipk_p[slot]  <= in_mipk;
           mipl_p[slot]  <= mip_deepest(in_tex[3:1], in_tex[6:4], in_tex[8]);
+          uvs_p[slot]   <= in_uvs;   // R940
           du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
           dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;

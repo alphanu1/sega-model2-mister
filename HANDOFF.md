@@ -321,6 +321,18 @@ topskatru topskatruo topskatrj). It decides the forms kept, FLOG, the cache
 size (PCACHE line) and whether the overlap lever is needed (BUSY line).
 The SHARC (2B) was not re-sized. Ben's R832 decision is unchanged.
 Next free R numbers: R921 on.
+## 2026-10-23: model2a pushed -- release folder only (Model2_20261023)
+
+releases/ mirrors main's: Model2_20261023.rbf (s1381, R937 bridge read fix,
+md5 78dfbb21...) in place of Model2_20261022; Model2A_20261022 unchanged.
+model2a's own code is unchanged in this push. R937 for 2A is on branch
+bridge-r937-2a (model2a + the bridge fix e63a27c + study a712188): lint
+clean, bridge bench 1,009 / 1,009; no clean seed yet (s1382 STA crash,
+s1383 -1.028, s1384 -0.238; s1385-s1387 fitting). It changes the 2A games
+that read tile RAM / the palette (Zero Gunner, VF2, Pilot Kids, Hanguk Pro
+Yagu 98, Motor Raid, Sky Target, Virtua Cop 2): board check before it goes
+into Model2A_*.
+
 ## 2026-10-22: model2a pushed (with main) -- Model2_20261022 and Model2A_20261022 released
 
 releases/: Model2_20261022.rbf = s1343 (VCop/Desert Tank colours R925, Gun

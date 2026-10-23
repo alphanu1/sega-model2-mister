@@ -4230,6 +4230,7 @@ wire [7:0] q3d_lum;                       // R271: the polygon's luma (R867: the
 wire [23:0] q3d_tex;
 wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
 wire        q3d_mipz;                       // R828c: the game's level keeps this polygon at 0
+wire [1:0]  q3d_uvs;                        // R940: q3d_u*/v* are the true >> q3d_uvs (R3D_UVSH)
 // R828: mip-mapping in the rasteriser, and R828c's per-polygon flag in the
 // geometry with it. MIPZ_B: a polygon is drawn at level 0 when MAME's own
 // level (the game's texlod) is at most -MIPZ_B over all of it.
@@ -4253,6 +4254,11 @@ localparam bit R3D_TEXLUT = M2A;
 // and crosshair are a later window than the street, at a z behind it. The
 // key is {15 - window, z}, 20 bits, on the 2A build. Main keeps the 16-bit z.
 localparam bit R3D_WINKEY = M2A;
+// R940: A QUAD MORE THAN 2,048 TEXELS ACROSS IS SCALED DOWN BY 2^s, NOT
+// CLAMPED (m2_geometry UVSH): Dynamite Cop's sea is one polygon 2,890
+// texels wide and was drawn as horizontal lines. On the 2A build (one M10K
+// a store bank more there); main keeps the clamp.
+localparam bit R3D_UVSH = M2A;
 /* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
 wire [7:0] q3d_trow;                       // R867: the luma table's row
 /* verilator lint_on UNUSEDSIGNAL */
@@ -4286,7 +4292,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY)) u_geometry (   // R828c, R867, R889
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH)) u_geometry (   // R828c, R867, R889, R940
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -4327,6 +4333,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(
 	// simply never driven. That is what this line said for one build, and the
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
+	.q_uvs(q3d_uvs),                                                  // R940
 	.q_tlinv(q3d_tlinv),                                              // R784
 	.q_trow(q3d_trow),                                                // R867
 	.q_mipz(q3d_mipz),                                                // R828c
@@ -7622,7 +7629,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
               .TEXLUT(R3D_TEXLUT), .LSB(R3D_LSB),   // R932
-              .KW(R3D_WINKEY ? 20 : 16)) u_raster3d (   // R564: scan on clk_mem; R867; R889
+              .KW(R3D_WINKEY ? 20 : 16),
+              .UVSH(R3D_UVSH)) u_raster3d (   // R940   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -7679,6 +7687,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
 	.q_mipz(q3d_mipz),                                                // R828c
+	.q_uvs(q3d_uvs),                                                  // R940
 	.q_tag(r826_wtag), .show_tag(r826_stag),   // R826
 	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il_c), .scan_field(vid_field),             // R682; R898: tied off

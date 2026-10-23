@@ -96,7 +96,10 @@ module m2_geometry #(
   // sit behind the street (window 1, 18,151-46,166) by z alone. With WINKEY
   // the key q_z carries {15 - win, z} in [19:0] (the store's KW 20); 0: the
   // window is ignored, q_z[31:16] stay 0 as before.
-  parameter bit WINKEY = 1'b0
+  parameter bit WINKEY = 1'b0,
+  // R940: a quad whose u or v extent passes 2,048 texels is shifted down by
+  // 2^q_uvs instead of clamped (see the stage at ru/rv). 0: clamped as before.
+  parameter bit UVSH = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -160,6 +163,7 @@ module m2_geometry #(
   output logic [15:0] q_oz0, q_oz1, q_oz2, q_oz3,   // R334: 1/z, minifloat
   output logic [12:0] q_u0, q_v0, q_u1, q_v1,
   output logic [12:0] q_u2, q_v2, q_u3, q_v3,
+  output logic  [1:0] q_uvs,           // R940: u and v above are true >> q_uvs (UVSH)
   output logic [23:0] q_tex,           // R271: the polygon's texture state
   // R784: the polygon's luma table is row 1 (texture header word 1's low byte,
   // poly_tex[31:24], which q_tex does not carry). Daytona's row 1 is the
@@ -1019,17 +1023,59 @@ module m2_geometry #(
       wu_dd[k] <= rnd8(wu_d[k]);  wv_dd[k] <= rnd8(wv_d[k]);
     end
   end
-  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
-    ru[k] <= sat13(wu_dd[k] - uoff_r);
-    rv[k] <= sat13(wv_dd[k] - voff_r);
-  end
+  // R940: A QUAD WIDER THAN 2,048 TEXELS IS SCALED, NOT CLAMPED (UVSH).
+  // R609's move leaves a quad whose own extent passes 8,191 quarter-texels
+  // clamped, and Dynamite Cop's sea is one: a single polygon over the whole
+  // screen, 128 x 128 texels repeated over 2,890 x 2,753 (MAME frame 90 of
+  // the attract, u up to 11,564 quarter-texels after the move). Its far
+  // vertices saturated, u stood still across the near-left sea and every row
+  // read one texel column: horizontal light lines on black (Ben, s1386).
+  // With UVSH the differences are registered (15 bits, never negative: the
+  // minimum is the truncated quarter, R791), and the whole quad -- u and v
+  // alike -- is shifted right by the least s in 0..2 that brings every one
+  // into 13 bits; q_uvs carries s. m2_span_tex shifts the divided coordinate
+  // back up and m2_raster_fill adds s levels to the quad's mip bias, so the
+  // texel and the level are what an unclamped coordinate gives, to 2^s
+  // quarter-texels at the corners. A quad that fits takes s = 0 and comes out
+  // exactly as before. Truncated, not rounded: rounding is an adder a
+  // coordinate (16 of them), and the bias is under 2^s quarter-texels on a
+  // quad more than 2,048 texels long. One stage more (c_age to 5).
+  // 0: the clamp, as before, and q_uvs is 0.
+  logic [1:0] uvs_r;
+  generate if (UVSH) begin : g_uvsh
+    logic [14:0] du_r [4], dv_r [4];
+    always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
+      du_r[k] <= wu_dd[k] - uoff_r;
+      dv_r[k] <= wv_dd[k] - voff_r;
+    end
+    wire b14 = du_r[0][14] | du_r[1][14] | du_r[2][14] | du_r[3][14]
+             | dv_r[0][14] | dv_r[1][14] | dv_r[2][14] | dv_r[3][14];
+    wire b13 = du_r[0][13] | du_r[1][13] | du_r[2][13] | du_r[3][13]
+             | dv_r[0][13] | dv_r[1][13] | dv_r[2][13] | dv_r[3][13];
+    always_ff @(posedge clk) begin
+      uvs_r <= b14 ? 2'd2 : b13 ? 2'd1 : 2'd0;
+      for (int k = 0; k < 4; k++) begin
+        ru[k] <= b14 ? du_r[k][14:2] : b13 ? du_r[k][13:1] : du_r[k][12:0];
+        rv[k] <= b14 ? dv_r[k][14:2] : b13 ? dv_r[k][13:1] : dv_r[k][12:0];
+      end
+    end
+  end else begin : g_clamp
+    always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin
+      ru[k] <= sat13(wu_dd[k] - uoff_r);
+      rv[k] <= sat13(wv_dd[k] - voff_r);
+    end
+    assign uvs_r = 2'd0;
+  end endgenerate
+  assign q_uvs = uvs_r;
   // R614: two register stages (wu/wv, then ru/rv); R718: three (the minimum),
   // so the quad is shown once it has been held three cycles. R739: four.
+  // R940: five with UVSH.
+  localparam logic [2:0] C_AGE = UVSH ? 3'd5 : 3'd4;
   always_ff @(posedge clk or negedge rst_n)
     if (!rst_n)                  c_age <= 3'd0;
     else if (!c_valid || c_ready) c_age <= 3'd0;   // gone, or taken this cycle
-    else if (c_age != 3'd4)       c_age <= c_age + 3'd1;
-  assign c_seen = (c_age == 3'd4);   // R739: four stages now
+    else if (c_age != C_AGE)      c_age <= c_age + 3'd1;
+  assign c_seen = (c_age == C_AGE);   // R739: four stages now; R940: five with UVSH
   assign q_valid = c_valid && c_seen;
   assign c_ready = q_ready && c_seen;
   assign q_u0 = ru[0]; assign q_v0 = rv[0];

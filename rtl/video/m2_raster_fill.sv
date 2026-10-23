@@ -163,6 +163,10 @@ module m2_raster_fill #(
   input  logic [15:0]        in_oz0, in_oz1, in_oz2, in_oz3,
   input  logic [15:0]        in_frac,          // R626: {fy3,fx3..fy0,fx0}
   input  logic [23:0]        in_tex,
+  // R940: the quad's u and v are the true ones >> in_uvs (m2_geometry UVSH);
+  // carried beside span_tex to m2_span_tex, and s levels added to the mip
+  // bias below. 0 for every quad that fits 13 bits.
+  input  logic [1:0]         in_uvs,
   // R828a: the mip rule, run time (OSD, quasi-static, on clk): 0 no level
   // (span_mipk -512, level 0 everywhere), 1 the largest edge K (R828), 2 max -
   // (max - min) / 4, 3 max - (max - min) / 2. Unused without MIP.
@@ -204,6 +208,7 @@ module m2_raster_fill #(
   output logic signed [31:0] span_ooz,
   output logic signed [23:0] span_doozdx,
   output logic [23:0]        span_tex,
+  output logic [1:0]         span_uvs,       // R940: in_uvs, latched with the quad
   output logic               span_tex_en,
   output logic signed [9:0]  span_mipk,      // R828: the quad's mip bias (MIP)
 
@@ -417,6 +422,7 @@ module m2_raster_fill #(
   logic               pf_c;              // the third fit's second divide is back
   logic [23:0]        tex_r;
   logic               mz_r;      // R828c: in_mipz, latched with the quad
+  logic [1:0]         uvs_r;     // R940: in_uvs, latched with the quad
   logic               tex_ok;            // the fit succeeded and the poly is textured
   // SIXTEEN-BIT GRADIENTS, 8.8 TEXELS PER PIXEL (R286). Thirty-two bits of
   // gradient buys nothing a picture can show: the steepest useful slope is a
@@ -1174,7 +1180,7 @@ module m2_raster_fill #(
       got_b      <= 1'b0;
       span_u <= '0; span_v <= '0; base_u <= '0; base_v <= '0; span_ooz <= '0;
       pf_a <= 1'b0; pf_b <= 1'b0;
-      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; mz_r <= 1'b0; pf_ph <= 2'd0; det_first_abs <= '0;
+      tex_ok <= 1'b0; pf_second <= 1'b0; tex_r <= '0; mz_r <= 1'b0; uvs_r <= 2'd0; pf_ph <= 2'd0; det_first_abs <= '0;
       dw_2 <= 1'b0;   // R847
       det_r <= '0; den_sh <= 6'd0; nxu <= '0; nyu <= '0; nxv <= '0; nyv <= '0;
       q_num_a <= '0; q_num_b <= '0; q_z_a <= '0; q_z_b <= '0;
@@ -1537,6 +1543,7 @@ module m2_raster_fill #(
             oz_i    <= 2'd0;
             tex_r     <= in_tex;
             mz_r      <= in_mipz;                // R828c
+            uvs_r     <= in_uvs;                 // R940
             tex_ok    <= 1'b0;
             pf_second <= 1'b0;
             pf_ph     <= 2'd0;                // R674
@@ -1864,6 +1871,7 @@ module m2_raster_fill #(
   assign span_dvdx   = dvdx;
   assign span_doozdx = dodx;                               // R337
   assign span_tex    = tex_r;
+  assign span_uvs    = uvs_r;                              // R940
   assign span_tex_en = tex_ok;
 
   // ------------------------------------------------------------ R828: the mip bias
@@ -1989,10 +1997,13 @@ module m2_raster_fill #(
       // with K held back 16 cycles more; 24 fails). A quad is not accepted while a
       // span is held (R544), so k_o cannot change under one.
       // R828c: and a quad the game keeps at level 0 (mz_r) is no level too.
+      // R940: plus s levels (4s quarters) for a quad stored >> s: every
+      // edge's |du|, |dv| is 2^s too small, and lq of a value 2^s times
+      // larger is exactly 4s more (the spread k_d is unchanged).
       k_o <= ((mip_mode == 2'd0) || (k_r == K_NONE) || mz_r) ? K_NONE
-           : (mip_mode == 2'd3) ? k_r - (k_d >>> 1)
-           : (mip_mode == 2'd2) ? k_r - (k_d >>> 2)
-           :                      k_r;
+           : ((mip_mode == 2'd3) ? k_r - (k_d >>> 1)
+           :  (mip_mode == 2'd2) ? k_r - (k_d >>> 2)
+           :                       k_r) + 10'({uvs_r, 2'b00});
     end
   end
   assign span_mipk = MIP ? k_o : 10'sd0;
