@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-23: main pushed -- Model2_20261023 (R937, the bridge's read fix)
+
+releases/Model2_20261023.rbf = s1381 (main + R937, branch bridge-r937),
+md5 78dfbb21..., clk_sys +0.186, clk_mem +0.736, i960 +1.117, hold +0.220,
+41,432 ALM, 551/553 M10K (s1379 also clean: +0.120 / +0.206). R937: the CPU
+bridge read tile RAM / the 2D palette one word late (aligned halfword reads
+got the next word, 32-bit reads swapped halves) -- found from STCC on
+model2c. On this core it changes Virtua Cop (reads tile RAM and palette);
+Daytona reads neither. Board (Ben, s1381): Virtua Cop's 2D "looking good",
+28.4 fps (95% of frames at its 2 vblanks -- the 30 Hz game), dips only on
+the 2D options screen. model2a's and model2c's release folders carry the
+same Model2 rbf. The 2A build with R937 (branch bridge-r937-2a) has no clean
+seed yet (s1383 -1.028, s1384 -0.238; s1385-s1387 fitting) and is not in
+any release; model2a's code is unchanged in this push.
+
 ## 2026-10-22 (night): documented, not started -- R936
 
 Ben asked for both to be documented only: (1) Gun flash Arcade / Off for
