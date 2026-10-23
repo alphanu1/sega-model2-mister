@@ -36,7 +36,10 @@
 // Both enables are exact rationals of one clock, so once the output counters
 // are aligned to a native frame they stay aligned; the alignment is repeated
 // every second frame (a no-op once it holds). Each field shows ONE native
-// frame, read D_PX output pixels behind the frame's first visible pixel.
+// frame: an even frame's read D_PX output pixels behind the frame's first
+// visible pixel, an odd frame's D_PX + HT/2 (field 1) or D_PX - HT/2 (field 0,
+// when the pairing has swapped the fields, R939). The output's lines never
+// move once locked.
 //
 // THE RING, AND WHY 16 LINES (R898)
 //
@@ -71,6 +74,12 @@
 //   * RING 16 (was 12), and D_PX per line count, so 15.7 and 15.4 kHz work
 //     (R840: most sets take only 15.7). retrorepair's build had 262/263 only.
 //   * The beacon (light gun) and the field-order switch are not ported.
+//   * PAIRING SWAPS FIELD LABELS, NOT THE OUTPUT'S PHASE (R939). Theirs re-aligned
+//     the output to the other native frame, which moved the line timing half a
+//     line in one step: a 15 kHz CRT tore the top of the picture at every swap,
+//     and Virtua Cop's cadence slips often enough for ~27 a minute (GitHub #24).
+//     Now a swap repeats one field label instead; the lines never move. And an
+//     input, pair_en (OSD "15kHz pairing"), turns swapping off.
 //
 // GEOMETRY (as the 1:1 mode had it): 656-pixel line, 496 visible, hsync
 // 520..584 (64 pixels); fields of N0 and N0-1 lines, field 1's vsync half a
@@ -89,12 +98,14 @@ module m2_scan15 #(
   // each in the middle of its window (the bench's margins both ways): at RING 16, 273/274 works from 5430 to 6260
   parameter int unsigned DPX_I = 5840,  // 273/274
   parameter int unsigned DPX_M = 4310,  // 268/269
-  parameter int unsigned DPX_N = 2490   // 262/263
+  parameter int unsigned DPX_N = 2490,  // 262/263
+  parameter int unsigned PAIR_N = 8     // wrong-frame image changes running before the fields are swapped (1..8)
 ) (
   input  logic        clk,             // the video clock (clk_mem)
   input  logic        rst_n,
   input  logic        en,              // converter selected
   input  logic  [3:0] img_tag,         // names the image on show (the renderer's show_tag); asynchronous, changes in vertical blank
+  input  logic        pair_en,         // swap the fields to a 2-frame image cadence (R939); 0 keeps the pairing as it is
 
   // the native picture, sampled on ce_in
   input  logic        ce_in,
@@ -136,17 +147,32 @@ module m2_scan15 #(
   logic        vb_d, de_d;
   logic [8:0]  wx;
   logic [3:0]  wslot;                  // ring slot of the line being written
-  logic        par;
-  logic        fs_even;                // a native frame has just started, and it is the first of the two a frame of output spans
+  logic        par;                    // 1: the next native frame is an even one (E), 0: odd (O); never re-phased (R939)
+  logic        fs_even;                // an even native frame has just started: the output is re-aligned to it
 
-  // PAIRING (retrorepair). Two output fields are two native frames, an (even, odd) pair whose parity is whatever it was at
-  // start. A game that shows a new image every second frame (Virtua Cop, Desert Tank: 28.8 Hz) has every output frame made
-  // of two DIFFERENT images if the pair straddles the change, and everything that moves is combed. So watch the image
-  // change: if for eight changes running each fell on an odd frame, declare that frame the even one (once; a cadence that
-  // changes by a frame now and then never gets eight in a row, and is left alone). The tag changes in the vertical blank,
-  // 1.6 ms before the frame start it is compared at, so one register is synchroniser enough.
+  // PAIRING (retrorepair; R939). Two output fields are two native frames, an even and an odd one (E, O). A game that shows
+  // a new image every second frame (Virtua Cop, Desert Tank: 28.8 Hz) has every output frame made of two DIFFERENT images
+  // if its images change on the frame that field 1 shows, and everything that moves is combed by a deinterlacer that
+  // weaves field 0 then field 1 (the HDMI scaler does). So watch the image change: if for PAIR_N changes running each
+  // fell on the frame field 1 shows, swap the fields -- `s`: 0 = the E frames are field 0, 1 = the O frames are.
+  //
+  // retrorepair re-paired by re-aligning the output to the other native frame: the output counters reloaded, the line
+  // timing moved half a line in one step (a native frame is N0 - 1/2 lines). A CRT's line oscillator loses lock at that,
+  // and the top of the picture tears for a few lines (GitHub #24, a 15 kHz CRT, Virtua Cop and Desert Tank only: their
+  // cadence slips a frame now and then, and every slip re-paired). Now nothing ever moves the output's lines: a swap
+  // only changes which field is which, one field repeated (field 0 twice, or field 1 twice) and its vsync half a line
+  // off -- the field after it is half a line shorter or longer than the 1/2-line-offset fields around it. The O field
+  // then starts one line earlier (field 0, D_PX - HT/2 behind its frame) or later (field 1, D_PX + HT/2) than a fixed E
+  // field (D_PX); all three are inside the ring's window at every line count (the bench measures the margins).
+  //
+  // The swap is made at an O frame's start (the O field has not started; its label is set at the E field's start, and
+  // the vsync before the next E field is placed for the E field's new label). A change seen on an E frame waits a frame.
+  // The tag changes in the vertical blank, 1.6 ms before the frame start it is compared at, so one register is
+  // synchroniser enough.
   logic [3:0]  tg_s, tg_p;
-  logic [2:0]  bad;
+  logic [2:0]  bad;                    // wrong-frame changes running
+  logic        s;                      // the pairing: which native frame is field 0
+  logic        flip;                   // a swap decided on an E frame, made at the next frame start (an O frame)
   always_ff @(posedge clk) tg_s <= img_tag;
 
   wire         fs_now  = vb_d && !vb_in;                   // the vertical blank ended on this sample
@@ -158,9 +184,14 @@ module m2_scan15 #(
   assign wa_w = {ws_n, wx_n};
   assign wd_w = rgb_in;
 
+  wire         chg     = tg_s != tg_p;
+  wire         good    = par ^ s;                          // this frame is field 0's: E with s = 0, O with s = 1
+  wire         trip    = chg && !good && (bad == 3'(PAIR_N - 1));
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       vb_d <= 1'b1; de_d <= 1'b0; wx <= '0; wslot <= '0; par <= 1'b0; fs_even <= 1'b0; tg_p <= '0; bad <= '0;
+      s <= 1'b0; flip <= 1'b0;
     end else begin
       fs_even <= 1'b0;
       if (ce_in) begin
@@ -168,19 +199,15 @@ module m2_scan15 #(
         de_d <= de_in;
         wslot <= ws_n;
         if (fs_now) begin
-          tg_p <= tg_s;
-          if (tg_s != tg_p) begin
-            if (par) bad <= 3'd0;      // the image changed on an even frame, as it should
-            else     bad <= bad + 3'd1;
-          end
-          if (tg_s != tg_p && !par && bad == 3'd7) begin
-            par     <= 1'b0;           // this odd frame is the even one from now on; the next is odd
-            fs_even <= 1'b1;
-            bad     <= 3'd0;
-          end else begin
-            par     <= ~par;
-            fs_even <= par;            // par was 1: this frame is the even one
-          end
+          tg_p    <= tg_s;
+          par     <= ~par;
+          fs_even <= par;              // par was 1: this frame is an even one
+          if (chg) bad <= (good || trip) ? 3'd0 : bad + 3'd1;
+          // a swap is made at an O frame's start: this one if the evidence completed on it, else the next
+          if (!par && (flip || (trip && pair_en))) begin
+            s    <= ~s;
+            flip <= 1'b0;
+          end else if (par && trip && pair_en) flip <= 1'b1;
         end
         wx <= de_in ? wx_n + 9'd1 : 9'd0;
       end
@@ -188,27 +215,32 @@ module m2_scan15 #(
   end
 
   // ------------------------------------------------------------ output timing
+  // `field` is the label of the field being counted (0: rows 0, 2, 4.., N0 lines; 1: rows 1, 3.., N0 - 1 lines),
+  // `nxt` the label of the one after it, `ise` that this one shows an E frame. Labels alternate but at a swap (R939),
+  // where one repeats: E's label is s and O's ~s, each taken at the start of the field before it.
   logic [9:0] hcnt, vcnt;
-  logic       field;
+  logic       field, nxt, ise, s_e;
 
   wire [9:0] n0  = nl ? 10'd263 : ml ? 10'd269 : 10'd274;
   wire [9:0] vt  = field ? n0 - 10'd1 : n0;
-  wire [9:0] vss = nl ? 10'd247 : ml ? 10'd250 : 10'd253;   // field 0's vsync start (3 lines)
+  wire [9:0] vss = nl ? 10'd247 : ml ? 10'd250 : 10'd253;   // field 0's vsync start (3 lines), before a field 1
   wire [9:0] vse = vss + 10'd3;
 
-  // The align loads the counters the free-running output holds D_PX pixels before field 0's first line: DL lines before
-  // the end of field 1 (N0 - 1 lines), DL * HT - D_PX pixels into that line.
+  // The align loads the counters the free-running output holds D_PX pixels before an E field's first line: DL lines
+  // before the end of the O field (N0 - 1 lines if it is field 1, N0 if field 0), DL * HT - D_PX pixels into that line.
   localparam int unsigned DL_I = (DPX_I + HT - 1) / HT;
   localparam int unsigned DL_M = (DPX_M + HT - 1) / HT;
   localparam int unsigned DL_N = (DPX_N + HT - 1) / HT;
   wire [9:0] v_ld = nl ? 10'(262 - DL_N) : ml ? 10'(268 - DL_M) : 10'(273 - DL_I);
   wire [9:0] h_ld = nl ? 10'(DL_N * HT - DPX_N) : ml ? 10'(DL_M * HT - DPX_M) : 10'(DL_I * HT - DPX_I);
 
+  // The vsync is placed for the field after it: 1/2 line nearer that field's first line when it is field 0. A field 1
+  // (one line shorter) holds its vsync a line earlier. Alternating labels give field 0's at vss and field 1's at
+  // vss - 1/2, as before; a repeated label puts it on a whole line (two 1s) or a half line (two 0s).
   wire        hs_c  = (hcnt >= 10'(HSS)) && (hcnt < 10'(HSE));
   wire [19:0] vpos  = {vcnt, hcnt};
-  wire        vs_i0 = (vcnt >= vss) && (vcnt < vse);
-  wire        vs_i1 = (vpos >= {vss - 10'd1, 10'(HT >> 1)}) && (vpos < {vse - 10'd1, 10'(HT >> 1)});
-  wire        vs_c  = field ? vs_i1 : vs_i0;
+  wire [9:0]  vs_h  = nxt ? 10'd0 : 10'(HT >> 1);
+  wire        vs_c  = (vpos >= {vss - 10'(field), vs_h}) && (vpos < {vse - 10'(field), vs_h});
   wire        de_c  = (hcnt < 10'(W)) && (vcnt < 10'(VIS));
 
   // The line on show is frame row m = 2 * vcnt + field: source rows s = floor(4m/5) and s + 1, fraction r = 4m mod 5.
@@ -228,19 +260,25 @@ module m2_scan15 #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      hcnt <= '0; vcnt <= '0; field <= 1'b0; p <= '0; r_c <= '0;
+      hcnt <= '0; vcnt <= '0; field <= 1'b0; nxt <= 1'b1; ise <= 1'b1; s_e <= 1'b0; p <= '0; r_c <= '0;
     end else if (align) begin
-      field <= 1'b1;
-      vcnt  <= v_ld;
+      // in the O field: its label was taken at the last E frame's start (s_e); the E field's is s
+      field <= ~s_e;
+      nxt   <= s;
+      ise   <= 1'b0;
+      s_e   <= s;
+      vcnt  <= v_ld + 10'(s_e);
       hcnt  <= h_ld;
     end else if (ce_out) begin
       if (hcnt == 10'(HT - 1)) begin
         hcnt <= '0;
         if (vcnt == vt - 10'd1) begin
           vcnt  <= '0;
-          field <= ~field;
+          field <= nxt;
+          nxt   <= ise ? s : ~s;          // after an O field comes E (label s), after an E field O (~s)
+          ise   <= ~ise;
           p     <= '0;
-          r_c   <= field ? 3'd0 : 3'd4;   // the field about to start: field 1 starts on frame row 1 (4 mod 5)
+          r_c   <= nxt ? 3'd4 : 3'd0;     // the field about to start: field 1 starts on frame row 1 (4 mod 5)
         end else begin
           vcnt <= vcnt + 10'd1;
           if (vcnt < 10'(VIS) - 10'd1) begin

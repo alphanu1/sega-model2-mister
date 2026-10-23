@@ -460,9 +460,9 @@ module and bench; `c581df7` for retiring the 1:1 picture and its options):
 
 | ours | theirs | changed |
 |---|---|---|
-| `rtl/video/m2_scan15.sv` | `rtl/video/m2_scan15.sv` | Two taps instead of four (their vertical filter is tied off in their build); ring 16 lines (was 12) and the alignment delay `D_PX` per line count, so 273/274 (15.7 kHz) and 268/269 (15.4 kHz) work as well as their 262/263; the ring address not a register of its own; the light-gun beacon and the field-order switch not ported. |
-| `sim/video/tb_m2_scan15.sv`, `run_scan15.sh` | same paths | Two taps; every line count; exact vsync intervals, the half-line field offset, line period and 240 lines a field enforced in PASS; the re-alignment checked to be a no-op once locked; the design's parameter values reported. |
-| `Model2.sv` | their `Model2.sv` diff | The converter and its output enable as theirs, but the enable per line count and the `15kHz lines` option kept (R840); HDMI kept (they set `MISTER_DEBUG_NOHDMI` to fit); no `joystick_3` beacon request. |
+| `rtl/video/m2_scan15.sv` | `rtl/video/m2_scan15.sv` | Two taps instead of four (their vertical filter is tied off in their build); ring 16 lines (was 12) and the alignment delay `D_PX` per line count, so 273/274 (15.7 kHz) and 268/269 (15.4 kHz) work as well as their 262/263; the ring address not a register of its own; the light-gun beacon and the field-order switch not ported. R939: the pairing swaps the field labels (one field repeated) instead of re-aligning the output, which moved the line timing half a line at every re-pair; a `pair_en` input. |
+| `sim/video/tb_m2_scan15.sv`, `run_scan15.sh` | same paths | Two taps; every line count; exact vsync intervals, the half-line field offset, line period and 240 lines a field enforced in PASS; the re-alignment checked to be a no-op once locked; the design's parameter values reported. R939: a slipping image cadence (an LCG), the output's lines checked never to move, vsync intervals off a native frame only at a repeated field label, an output hash. |
+| `Model2.sv` | their `Model2.sv` diff | The converter and its output enable as theirs, but the enable per line count and the `15kHz lines` option kept (R840); HDMI kept (they set `MISTER_DEBUG_NOHDMI` to fit); no `joystick_3` beacon request. R939: `15kHz pairing` (O[67]) drives `pair_en`. |
 
 Not taken: the beacon (`joystick_3` bit 0 white fields), `docs/guncon2/`, the
 `MISTER_DEBUG_NOHDMI` build setting, their release files.

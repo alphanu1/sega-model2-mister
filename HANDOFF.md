@@ -1,6 +1,24 @@
 # Handoff
 
 ## 2026-10-23: STCC's broken title logo and rankings -- branch stcc-title (off model2c 586173a), R937. LOCAL ONLY, NOT FITTED
+## 2026-10-23: branch scan15-pair (off main 0aa5905, not pushed, not fitted) -- R939, GitHub #24
+
+15 kHz sync loss in Virtua Cop / Desert Tank on a picky CRT. Cause: the
+converter's pairing re-aligned the output to the other native frame, a
+half-line step in the line timing (one 984-px line at 15.7 / 15.1 kHz, 328 px
+at 15.4) a few lines above the picture; Virtua Cop's cadence slips (2-3% of
+images odd-length) re-pair ~27 times a minute. 60 Hz games never re-pair.
+Fix: the pairing swaps field labels (one field repeated, one vsync interval
+half a line off) and the lines never move; OSD "15kHz pairing" Auto / Off
+(O[67], free on main / model2a / model2c). Bench: 60 Hz output bit-identical
+(hash) at all line counts; slipping cadence 0 line faults; ring margin at
+15.7 kHz now 8.9 us on the swapped field (bench sees the edge 100 px below
+D_PX). quartus_map +4 ALM, 0 M10K. Ben's hold-the-flip variant modelled and
+not built (a slip persists, so holding only the late image leaves ~48%
+combed). To carry: m2_scan15.sv + bench + the three Model2.sv hunks. Needs a
+fit and the tester's CRT (Auto, and Off if Auto still glitches).
+
+## 2026-10-23: main pushed -- Model2_20261023 (R937, the bridge's read fix)
 
 BUILD TO FIT: stcc-title HEAD, Model2.qsf + "M2_2C=1", "M2_NO_2A_MANX_MOTION=1"
 (as model2c). THE FIX IS SHARED LOGIC (m2_cpu_bridge): the 2A build changes too.
