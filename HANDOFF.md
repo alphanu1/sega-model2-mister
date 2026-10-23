@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-23 (evening): model2a pushed -- release folder only (Model2_20261023b)
+
+releases/ mirrors main's: Model2_20261023b (s1407, R939 + R938) in place of
+Model2_20261023; Model2A_20261022 unchanged. model2a's code is unchanged in
+this push: the 2A build with R937 + R939 + R940 + R938 is on branch
+bridge-r937-2a (42e43c9), board-checked on s1386 (R937) and s1404 pending
+for R940/R938, still hunting a clean seed (s1403-s1405, s1412-s1414 none
+clean; best s1404 -0.086 / -0.138; s1415-s1417 fitting). Fallback: s1394
+(R937 + R939 only) is clean.
+
 ## 2026-10-23: model2a pushed -- release folder only (Model2_20261023)
 
 releases/ mirrors main's: Model2_20261023.rbf (s1381, R937 bridge read fix,
