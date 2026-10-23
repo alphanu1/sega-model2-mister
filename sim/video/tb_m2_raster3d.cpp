@@ -974,6 +974,11 @@ int main(int argc, char **argv) {
                          | (((h2 >> 12) & 1) << 12) | ((h2 & 0x3f) << 13) | (((h2 >> 6) & 0x1f) << 19);
       (void)h1;
       if (!hold_next) { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+      // R938: M2_R3D_COARSE -- the store's tiny test in its COARSE mode (R769/R776), as
+      // the board runs it after a list that needed more than 7/8 of the store: a
+      // single list here always starts fine. Set before every quad (a clear resets it).
+      static const bool COARSE = std::getenv("M2_R3D_COARSE") != nullptr;
+      if (COARSE) d->rootp->m2_raster3d__DOT__u_store__DOT__fine = 0;
       d->q_valid = 1;
       d->q_x0 = X[0]; d->q_y0 = Y[0]; d->q_x1 = X[1]; d->q_y1 = Y[1];
       d->q_x2 = X[2]; d->q_y2 = Y[2]; d->q_x3 = X[3]; d->q_y3 = Y[3];
