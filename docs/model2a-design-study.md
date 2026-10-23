@@ -45072,3 +45072,14 @@ addressing or banking with more sample ROM than the 2A games. Branch
 hotd-sound (R943). FIT 643ce34 (R940 + R938 on 2C): s1409 clk_sys -0.723,
 s1410 -0.304 (i960 -0.445), s1411 -0.808 with hold -0.097 -- none clean,
 549 / 553 M10K (not 551 -- the fitter packed the store tighter).
+*CORRECTION (Ben, 2026-10-23, verified against real hardware):* the "3, 2,
+1" and the child's "hello daddy" are CORRECT -- House of the Dead plays them
+in chapter 2 on the arcade board. They are not a fault; R943's "MAME never
+plays #111" only means the MAME sessions never reached that point. The
+remaining HOTD sound faults are the wobble / cut-outs / crackle / grinding
+(the starvation R943 fixes with AGE) and the hiss after a continue. The
+Manx TT "random voices in Japan mode" report (#21) should be checked the
+same way -- they may be genuine Japanese-mode lines. FIT e516b53 (AGE on
+2C): s1421 clk_mem -0.859; s1422 -0.315; s1423 clk_mem -0.013, clk_sys
++0.086, i960 +0.969, hold +0.247 -- loaded on the board as the AGE test
+build (Model2C_20261023_s1423_age.rbf, md5 b7feac8a...).
