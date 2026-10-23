@@ -83,7 +83,9 @@ groups -- measured worse, rejected). Same reproduction: 0 holes. VF2, Sky
 Target, VCop pictures unchanged (hash); Rally / Daytona: flat outlines 1/8 px
 fatter (24-417 px a frame). New test_m2_fill_dil (200k quads, 20k
 T-junctions, 0 cracks). quartus_map 2A +147 ALM (40,310), main +342
-(39,504), 0 M10K. Ready for
+(39,504), 0 M10K. SMALLER (second commit, same pixels everywhere): 2A +77
+ALM (40,240), +41 registers -- the move on the walk's adder, clamps per
+segment. The running s1433-s1435 fit is the first version. Ready for
 a fit; board check on the Top 16 screen and a race (#26). Open: textured
 T-junctions (maybe Sky Target's sky lines).
 
