@@ -43636,3 +43636,140 @@ artefact, not the core).
 bench than in MAME, before and after (MAME blends two levels; this core
 takes the nearest) -- not part of Ben's report, not chased. On the board:
 the sea beside the ship should be water like the open sea.
+
+**R938 -- THE "SEAMS" (GitHub #26 / #27, Sky Target's sky lines) ARE NOT
+COVERAGE GAPS: A SPAN'S CUT-SHORT LAST TEXEL GROUP WAS SAMPLED UP TO 1.5 PX
+PAST THE SPAN'S END. Fixed in m2_span_tex (all three cores), +35 ALM (map).**
+(Reports, mike911ok on Model2A_20261022: #26 Sega Rally -- a thin white line
+across the car's shadow while racing, a row of white dots across the attract's
+sky; #27 VF2 -- dots in the sky near the distant hills on stage 1, a white
+dotted line where the floor meets the wall on Jacky vs Sarah's stage. Ben on
+s1386 (model2a + R937): VF2's towered stage shows a single green pixel ~4 px
+ABOVE a conifer's tip, flickering, unchanged by the filter and mip settings;
+Sky Target's title sky has darker 1-px vertical lines at ~0.21 and ~0.60 of
+the width; Rally's shadow line looks like a texture seam to him.)
+
+*What was believed:* polygon seams -- a fill rule, vertex snapping or
+clipper T-junction leaving pixels that neither polygon of a shared edge
+covers ("polygon alignment").
+
+*NOW KNOWN (MEASURED, MAME 0.289 m2lod dumps; tb_m2_raster3d in Model2.sv's
+2A raster configuration; ROM-derived scratch outside the tree):*
+  * COVERAGE IS WATERTIGHT. (a) MAME's own post-clip polygons through this
+    core's fill (NOTEX, owner = polygon): pixels where the core shows a
+    polygon behind every polygon MAME shows in the 3x3 around it -- Rally
+    attract frames 960 / 1500 / 2040: 10 / 47 / 5, VF2 600 / 3480: 8 / 16,
+    all in tiny far objects (the distant cars). (b) The whole path -- this
+    core's geometry (geodiff_2a, CRTC_Y 128 for Rally) on MAME's walks, then
+    this fill -- against MAME's polygons through the same fill: Rally walks
+    1920 and 3000, VF2 walk 1200: 0 pixels where the core's depth is behind
+    the MAME-vertex picture's 3x3; every vertex MAME shares bitwise between
+    polygons (1,074 / 1,672 / 811 on screen) lands on ONE quarter-pixel
+    position in all of the core's quads (0 disagreements); of MAME's
+    clipper-made near-coincident pairs (< 0.02 px, 125 / 82 / 58), one lands
+    a quarter apart. The fill rule (R658's MAME poly.h rule on quarter-pixel
+    vertices) shares edges exactly: both polygons walk a shared edge from the
+    same top vertex with the same slope.
+  * VF2's SKY AND DISTANT HILLS ARE THE 2D LAYER: MAME's 3D buffer covers
+    39% of rows 0-47 and 46% of rows 48-95 over 154 attract frames (Rally:
+    100% everywhere -- its sky is 3D, polygons at z ~62,000). So #27's sky
+    dots are not 3D seams unless they are the tree-tip dot below.
+  * THE CAUSE. Texel step 4 (the OSD's default, pxk 2) gives a group of four
+    pixels one texel, sampled at the group's centre (R616, (2^pxk - 1)/2 px
+    in). A span's last group is cut short at x1 -- 1 to 3 pixels -- and a span
+    shorter than a group is all one cut-short group; both were still sampled
+    1.5 px in: up to 1.5 px PAST the span's last pixel, outside the polygon,
+    where u/v are extrapolated beyond the polygon's own range.
+    Sky Target (MAME frame 1080): sky panels 17 and 14 meet at x ~110; panel
+    17's u at the joint is 2047/8 = 255.875 of a 256-texel, wrapping texture.
+    Row 70: the group at x 109 (pixels 109-110, the span's end) was sampled
+    at x 110.5+: u 255.78 (fetch 65480/256) where MAME's exact u at 109 is
+    255.03 and at 110 255.66 -- the bilinear tap past 255.5 is texel 0 of the
+    wrapped edge, darker: a dashed dark column at every panel joint. MAME
+    shows the joint faintly (its own bilinear wraps there too, by less); the
+    same bench at texel step 1 (pxk 0) matches MAME's picture.
+    VF2 towered stage (scripted play, MAME frame 3360): the conifer's top is
+    a translucent billboard; its narrow apex rows end in cut-short groups
+    sampled past the end into the leaves' texels -- three detached green
+    pixels at (272,19), (281,23), (282,23), 3-5 px above the visible tip,
+    where MAME paints no 3D at all: Ben's dot, reproduced.
+  * NOT THE FILTER, NOT MIP: Point sampling takes the nearest of the same
+    taps, so the extrapolated coordinate picks the wrong texel there too
+    (Ben's filter/mip test agrees). The texel step IS the knob: on the
+    released core, OSD texel step 1 should remove both (an A/B for the board
+    without a build).
+
+*THE FIX (m2_span_tex, GC builds -- PXC 1, every core):* a cut-short group
+is sampled at its FIRST pixel, without the centre offset -- inside the span,
+never further from any of its pixels than R616's centre is from a whole
+group's. A span shorter than a group loads without the offset (ld_short); the
+issue pointer steps to a cut-short last group by the group step less the
+span's offset (iss_half; the offsets gc_ur/gc_vr/gc_or latched with the
+span). Whole groups are unchanged. (A first version stepped the last group by
+half a group -- 0.5 px left of its first pixel; it removed the seam but its
+interior error was larger, so it was replaced before commit.)
+
+*VERIFIED:* new test_m2_span_tex_gc (MIP + GC build, R828's coordinate test
+with each group's sample point -- cut-short and short spans included -- and
+a check that every sample lies inside its span): PIXSTEP 2 / 4 / 8 PASS; the
+old RTL fails it (planted: u, level and texture-word mismatches).
+test_m2_span_tex, _ftb, _mip, test_m2_raster3d, test_m2_raster_fill(_mip),
+test_m2_quad_store, test_m2_texel_bl4 PASS. lint_top (2A and -DM2_NO_2A)
+clean; lint_idx: nothing in m2_span_tex; lint_m2_span_tex: no warnings on
+the changed lines.
+Frame differential, textured (REALCOL + TEXMEM), mean max-channel error vs
+MAME over textured pixels, before -> after; wrong texels (> 64 of 255) in
+the last 3 px of each polygon run in a row:
+    Sky Target 1080     14.60 -> 14.33   3,006 -> 2,831   (the column: gone)
+    Rally 960 (attract)  7.87 -> 7.68      712 -> 552
+    Rally 1500           10.53 -> 10.30   2,208 -> 2,038
+    Rally 2040           18.09 -> 17.83  12,164 -> 11,832
+    Rally race 3720      13.97 -> 13.65   4,786 -> 4,455
+    VF2 600              11.82 -> 11.61     478 -> 403
+    VF2 3480              7.44 -> 7.14      248 -> 194
+    VF2 tower 1680/2400/3360  13.35/11.83/11.96 -> 12.99/11.45/11.52;
+                         3D pixels detached from MAME's 3D (> 2 px): 3/2/4
+                         -> 0/0/1 (the 1 at the screen's right edge, x 495)
+  main's configuration (TEXLUT, lut_en per game; the same span_tex hunks):
+    Daytona f2000/f5000/f9000 12.24/15.27/11.85 -> 12.02/14.70/11.40;
+                         run-end wrong texels 3,161/3,819/3,827 ->
+                         2,901/3,269/3,245
+    Virtua Cop 1500       6.93 -> 6.81      487 -> 464
+  WITH THE WINDOW KEY (M2_R3D_WINKEY=1, as the 2A core sorts -- without it a
+  later window sorts by z alone, and Sky Target 1080's horizon strip hides
+  behind the sea, a bench artefact; that strip's quads are R940's u/v-clamp
+  case, not this one): Sky Target 1080 11.30 -> 10.99, run-end wrong texels
+  1,912 -> 1,679, the column gone as without it; VF2 tower 3360 and Rally
+  960 unchanged by the key (11.96 -> 11.52, detached dots 4 -> 1; 7.87 ->
+  7.68).
+  Every frame improves; pixels changed far from a polygon's edge (spans that
+  end at a SPLIT_TRI diagonal or a fan split) improve or hold on all but
+  Daytona f2000 (2,130 px, 21.98 -> 23.25; the frame as a whole improves).
+*A BENCH FAULT FOUND ON THE WAY (open):* with the bench's default texel
+memory (no M2_R3D_TEXMEM) at TXNS 4 / TXLW8, the SAME fetch (coordinate and
+texture word) got a different answer in two runs (Daytona f2000 row 362: 119
+vs 17), which looked like a 50-px dark streak on the road; with TEXMEM
+(R668's port model) both runs answer identically. Every number above is
+TEXMEM. Not chased: whether the default model mis-serves four ports or the
+cache has a history-dependent fault only that timing reaches.
+*AREA (quartus_map 17.0, 2A, full design):* 40,039 -> 40,074 ALMs needed
+(+35), registers 48,097 -> 48,099, block bits 4,572,656 (=), DSP 96 (=).
+Main's full design (branch seams-main, the same hunks): 40,361 -> 40,381
+(+20), registers +1, block bits and DSP unchanged. 2C (model2c): the patch
+applies (offset 3 lines); not built.
+*NOT REPRODUCED AT THE DESK (no frame of the reporter's scene):* Rally's
+shadow line -- the attract and race shadows (MAME lists 1500 / 3720) are
+FLAT polygons (texheader[0] 0x00c0: no texture), a mesh sharing exact
+vertices, and the fill covers it without a gap; a flat polygon cannot take a
+texel seam, so if the line is the fix's class the reporter's car (Celica)
+shadow must be textured, else it is something these frames do not show.
+Rally's sky dots -- no row of dots in MAME or the core on attract 960 /
+1050 / 1500 / 2040; the fix cuts wrong texels at sky-panel span ends on 960
+(120 -> 69). VF2's floor/wall line -- Sarah's stage not captured; a
+textured floor meeting a wall at a texture's edge is the fix's class.
+Manx TT's grid-corner dots -- not looked at. All four: the board decides.
+*ALSO MEASURED:* the store's coarse tiny test (R769/R776, after a list
+needing > 7/8 of the store -- Rally's busy lists) drops far quads under 4 px:
+on Rally 960 it adds 40 see-through pixels, all on the distant cars and
+horizon tree tops (M2_R3D_COARSE=1 now forces it in tb_m2_raster3d) -- the
+documented trade, not a seam.
