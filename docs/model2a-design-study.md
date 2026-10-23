@@ -43533,3 +43533,6 @@ the cause is not the pairing.
 *Carrying to model2a / model2c:* m2_scan15.sv is identical on all three
 branches; the change is the file, its bench, and three Model2.sv hunks (OSD
 line, the vpr_s synchroniser, .pair_en on the instance).
+*Ben (s1386):* Sega Rally good. Its car-shadow white line (#26) looks like a
+TEXTURE seam (an edge texel where textured polygons meet), the same kind as
+Sky Target's sky lines -- passed to R938.
