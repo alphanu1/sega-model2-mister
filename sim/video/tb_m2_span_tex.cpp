@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1; tick();
 
-#ifndef TB_FTB   // R813: the FTB build runs only the cull's test (every other test's rows are outside its band)
+#if !defined(TB_FTB) && !defined(TB_GC)   // R813: the FTB build runs only the cull's test (every other test's rows are outside its band); R938: the GC build only the coordinate test below
   // 1. A FLAT SPAN, IN ONE CYCLE.
   {
     got.clear();
@@ -920,7 +920,7 @@ int main(int argc, char **argv) {
     ck("R784: nibble F, row 1: luma 3", lum_of(0xff, true), 3);
   }
 
-#else
+#elif defined(TB_FTB)
   // 6. R813: THE SPAN CULL (FTB). The mask says which pixels of the band are
   //    painted; a textured span all of whose pixels are painted is taken and
   //    dropped without a walk, and only while it has to wait (it stands two
@@ -1086,8 +1086,20 @@ int main(int argc, char **argv) {
       const int ml = ((q.tex >> 8) & 1u) ? mc : std::min(mc + 1, 7);
       const bool cls = long(&q - &sp[0]) >= n_class0;
       for (int j = 0; j < g && k < issued.size(); ++j, ++k) {
-        const int64_t O = q.O + ((q.DO << 8) * STEP) * j;
-        const int64_t Vj = q.V + ((q.G << (UVS - 8)) * STEP) * j;
+        int64_t O = q.O + ((q.DO << 8) * STEP) * j;
+        int64_t Vj = q.V + ((q.G << (UVS - 8)) * STEP) * j;
+#ifdef TB_GC
+        // R938: GC -- each group sampled (STEP-1)/2 pixels in (R616), but a
+        // cut-short group (a span shorter than a group, a span's last group)
+        // at its first pixel: never past the span's end
+        {
+          const bool part = (q.x0 + STEP * j + STEP - 1) > q.x1;
+          if (!part) { O += q.DO * (STEP - 1) * 128; Vj += (q.G * (STEP - 1)) << (UVS - 9); }
+          // and the sample point is inside the span: its x, in pixels from x0
+          const double sx = part ? double(STEP * j) : STEP * j + (STEP - 1) / 2.0;
+          if (sx > double(q.x1 - q.x0)) { if (bad_q++ < 5) std::printf("  FAIL sample point %.1f past the span's last pixel %d\n", sx, q.x1 - q.x0); }
+        }
+#endif
         const int L4 = q.K - 2 * lq(uint32_t(O));
         const int L = (L4 < 0) ? 0 : std::min(L4 >> 2, ml);
         const Iss &is = issued[k];
