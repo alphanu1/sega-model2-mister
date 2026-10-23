@@ -871,7 +871,22 @@ module m2_cpu_bridge #(
   wire half_be = r_addr[1] ? (|r_be[3:2]) : (|r_be[1:0]);
   wire hi_be   = ~r_addr[1] & (|r_be[3:2]);
 
-  assign oc_addr      = r_addr[15:1] + {14'd0, half};
+  // R937: `half` IS CLEARED WHEN AN ACCESS COMPLETES, NOT WHEN THE NEXT ONE
+  // STARTS. The low word of a read is presented in S_IDLE -- the cycle the
+  // request is taken -- and the M10K answers at the edge after it, which S_LO
+  // captures. Clearing `half` on that same edge, as S_IDLE does, is a cycle
+  // late: the array was handed r_addr[15:1] + 1 from the S_HI the last access
+  // ended in (every on-chip access, every write but an upper-half store).
+  // So an aligned halfword read of tile RAM or the palette returned the word
+  // after it and a 32-bit read came back halves swapped; a read at +2 landed
+  // right by accident. STCC's title toggles bit 15 of every tile with an
+  // ldos / xor / stos loop and drew each 8-pixel column twice. Writes never
+  // saw it: their enable is registered into S_LO, after `half` is 0.
+  // A READ fetches the whole dword -- {r_addr[15:2], 0} captured in S_LO into
+  // [15:0], then +1 into [31:16] in S_HI -- and the CPU takes the half it asked
+  // for by its own addr[1]. A write keeps r_addr[15:1]: an upper-half store
+  // writes its one word in S_LO.
+  assign oc_addr      = (r_we ? r_addr[15:1] : {r_addr[15:2], 1'b0}) + {14'd0, half};
   assign oc_din       = half ? r_wdata[31:16] : r_wdata[15:0];
   // THE COLOUR-TRANSLATION TABLE IS STRIDED, NOT PACKED.
   //
@@ -1094,12 +1109,17 @@ module m2_cpu_bridge #(
           req_seen <= req_mem;
           if (r_we) dbg_cpu_writes <= dbg_cpu_writes + 32'd1;
           else      dbg_cpu_reads  <= dbg_cpu_reads  + 32'd1;
-          half <= 1'b0;
+          // R937: an on-chip READ moves to the high word on this edge. The low
+          // word is being presented now (`half` was cleared at the last
+          // completion) and S_LO captures it; S_LO must present the high one
+          // for S_HI to capture. A write keeps the low word through S_LO --
+          // its enable lands there -- and moves to the high word in S_LO.
+          half <= !r_we && ((tgt == T_TRAM) || (tgt == T_PAL));
           l_ok <= 1'b0;   // R724
           case (tgt)
             T_SDRAM: begin
               if (r_we && is_rom) begin
-                ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729 st <= S_IDLE;   // R729: complete    // .rom().nopw()
+                ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937 st <= S_IDLE;   // R729: complete    // .rom().nopw()
               end else if (!r_we && DCACHE_EN) begin
                 // ASK THE CACHE FIRST. The arrays were addressed with dc_idx
                 // combinationally this cycle, so S_DCK can compare next cycle.
@@ -1224,7 +1244,7 @@ module m2_cpu_bridge #(
             default: begin
               dbg_unmapped <= dbg_unmapped + 32'd1;
               r_rdata      <= 32'd0;
-              ack_mem      <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+              ack_mem      <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937
               st           <= S_IDLE;   // R729: complete
             end
           endcase
@@ -1243,7 +1263,7 @@ module m2_cpu_bridge #(
             io_we  <= r_we;
           end else begin
             r_rdata <= io_rdata;
-            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937
             st      <= S_IDLE;   // R729: complete
           end
         end
@@ -1305,7 +1325,7 @@ module m2_cpu_bridge #(
           // So an upper-half write is complete after its one real word. Reads
           // are unchanged: the cache-bypass read path still fetches both.
           if (r_we && (r_addr[1] || half_only)) begin
-            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937
             st      <= S_IDLE;   // R729: complete
           end else begin
             half    <= 1'b1;
@@ -1328,7 +1348,7 @@ module m2_cpu_bridge #(
             end
           end else begin
             r_rdata[31:16] <= (tgt == T_TRAM) ? oc_tram_q : oc_pal_q;
-            ack_mem        <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            ack_mem        <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937
             st             <= S_IDLE;   // R729: complete
           end
         end
@@ -1346,7 +1366,7 @@ module m2_cpu_bridge #(
           end else if (dc_hit) begin
             r_rdata <= r_addr[2] ? dc_q[63:32] : dc_q[31:0];
             if (lmode) begin l_data[127:64] <= dc_q; l_ok <= 1'b1; end   // R724
-            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937
             dbg_dc_hits <= dbg_dc_hits + 32'd1;
             st      <= S_IDLE;   // R729: complete
           end else begin
@@ -1444,7 +1464,7 @@ module m2_cpu_bridge #(
             st    <= S_DCN;
           end else begin
             if (lmode) l_ok <= 1'b1;   // R724: both halves are in
-            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0;   // R729
+            ack_mem <= ~ack_mem; rmw_done <= 1'b0; lhalf <= 1'b0; half <= 1'b0;   // R729; R937
             st      <= S_IDLE;   // R729: complete
           end
         end

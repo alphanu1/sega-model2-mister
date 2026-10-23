@@ -2930,6 +2930,27 @@ int main(int argc, char **argv) {
       g_tram[d->obs_oc_addr]      = d->obs_oc_din;
       g_tram_seen[d->obs_oc_addr] = true;
     }
+    // R937: M2_TRAMLOG=<file> -- every tile RAM write from video frame
+    // M2_TRAMLOG_FROM on, both as the i960 issued it (B: the bus cycle into
+    // 0x01000000-0x0101ffff, byte enables, data, ip) and as it landed (T: the
+    // tile RAM word and value), for a write-by-write diff against a MAME tap.
+    {
+      static FILE *tl = nullptr; static bool tl_init = false; static uint64_t tl_from = 0;
+      if (!tl_init) {
+        tl_init = true;
+        if (const char *p = std::getenv("M2_TRAMLOG")) tl = std::fopen(p, "w");
+        if (const char *p = std::getenv("M2_TRAMLOG_FROM")) tl_from = std::strtoull(p, nullptr, 10);
+      }
+      if (tl && g_frames_done >= tl_from) {
+        if (d->obs_bus_ack && !ack_prev && d->obs_bus_we && (d->obs_bus_addr & 0xFFFE0000u) == 0x01000000u)
+          std::fprintf(tl, "B %llu %08x %x %08x ip %08x\n", (unsigned long long)g_frames_done,
+                       (unsigned)d->obs_bus_addr, (unsigned)d->obs_bus_be, (unsigned)d->obs_bus_wdata,
+                       (unsigned)d->dbg_ip);
+        if (d->obs_tram_we && d->obs_oc_addr < 32768)
+          std::fprintf(tl, "T %llu %04x %04x\n", (unsigned long long)g_frames_done,
+                       (unsigned)d->obs_oc_addr, (unsigned)d->obs_oc_din);
+      }
+    }
     // THE BUS AROUND THE STORE THAT DESTROYS THE WHITE. IP 00002784 writes
     // whatever its source holds; if the source reads zero, the loop copies zero
     // faithfully and the fault is upstream of the palette entirely.

@@ -1,5 +1,45 @@
 # Handoff
 
+## 2026-10-23: STCC's broken title logo and rankings -- branch stcc-title (off model2c 586173a), R937. LOCAL ONLY, NOT FITTED
+
+BUILD TO FIT: stcc-title HEAD, Model2.qsf + "M2_2C=1", "M2_NO_2A_MANX_MOTION=1"
+(as model2c). THE FIX IS SHARED LOGIC (m2_cpu_bridge): the 2A build changes too.
+CAUSE: the CPU bridge read tile RAM and the 2D palette one word late. The low
+word of a read is presented in S_IDLE and `half` was only cleared on the edge
+leaving it, so the registered M10K got word + 1: aligned halfword reads returned
+the next word, 32-bit reads came back halves swapped (reads at +2 right by
+accident). STCC's title runs ldos / xor 0x8000 / stos over its full-screen
+tilemap (0x779a0) and its rankings copy tilemap columns with ldos / stos
+(0x13774): every even cell took its neighbour -- the doubled 8-pixel strips.
+The credits screen reads nothing, hence fine. NOT the 3D list (the title has no
+polygons), NOT GEO_LIST_WIN, NOT line scroll (no per-line table in use).
+FIX: `half` cleared at completion; an on-chip read moves to the high word at
+accept; reads address the dword. tb_m2_cpu_bridge's on-chip model was an
+asynchronous read labelled registered -- now registered, which is why no bench
+saw this before.
+EVIDENCE: whole-core bench (2C ring + data cache) fixed to frame 800: tile RAM =
+MAME in all 32,768 words, char RAM and palette equal; m2_video on the core's
+state vs on MAME's: 0 of 190,464 pixels differ (before: 30,766). Bridge bench
+1,009 / 1,012 checks pass, base bridge 46 mismatches. lint_top / lint_idx 2A
+and 2C identical to the base. TGPx4 RTL untouched. Rankings not run in the bench
+(~4.4 h); its loop is covered in the bridge bench.
+2A EFFECT (MAME read census, 120 s attract): Zero Gunner, VF2, Virtua Cop, Pilot
+Kids, Hanguk Pro Yagu, HOTD, Motor Raid, Sky Target read tile RAM / the 2D
+palette (row masks, scroll registers, palette); all those reads were wrong and
+now match MAME. Daytona, DOA, Dynamite Cop, Manx TT, Over Rev, Sega Rally read
+none. Picture effect per game not checked -- worth a board look.
+AREA (quartus_map 17.0, same day vs 586173a): 2A 39,985 -> 39,983 ALMs, bridge
++8 ALUTs; 2C 40,073 -> 40,165 (noise: registers identical everywhere, the move
+is in untouched entities), bridge +1 ALUT. No M10K / DSP change.
+HOTD's courtyard shadow (R935): not explained -- 3D polygons; HOTD's only 2D
+read is a 1,024-word row-mask block (now read right).
+TOOLS: tb_m2_boot M2_TRAMLOG / M2_TRAMLOG_FROM (tile writes as issued and as
+landed). Data (ROM-derived, git-ignored): sm2-builds/stcc-data/title,
+sm2-builds/stcc-data/rdcensus.
+OPEN: the harness's 2D overruns (saturated); Ben's "some tile overruns" on other
+attract screens (where?).
+Next free R numbers: R938 on.
+
 ## 2026-10-22 (evening): Sega Touring Car Championship on the 2C build -- branch stcc, R933. NOT PUSHED
 
 Branch stcc (off model2c 648ecb9, model2c 47a2168 merged in; local only,

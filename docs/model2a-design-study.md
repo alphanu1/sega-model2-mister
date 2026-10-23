@@ -44452,3 +44452,138 @@ ben_rankings_s1373.png). With the title, this points first at the 2D
 TILEMAP's per-line effects (line / row scroll, per-line window) being read
 wrongly on these screens, not at the 3D list; GEO_LIST_WIN kept as the
 second suspect. Passed to the stcc-title investigation.
+
+**R937 -- STCC'S BROKEN TITLE LOGO AND RANKINGS ARE THE CPU BRIDGE READING
+TILE RAM ONE WORD LATE: A HALFWORD READ OF TILE RAM OR THE 2D PALETTE AT A
+DWORD-ALIGNED ADDRESS RETURNED THE WORD AFTER IT, A 32-BIT READ CAME BACK
+HALVES SWAPPED. NOT THE 3D LIST, NOT GEO_LIST_WIN, NOT LINE SCROLL. A SHARED
+BUG (2A AND 2C): FIXED IN m2_cpu_bridge. ON BRANCH stcc-title (OFF model2c
+586173a), LOCAL ONLY, NOT FITTED.**
+(Ben, s1373: after the title's intro animation the logo breaks into doubled,
+offset strips -- "Tourrinng"; then the RANKINGS screen the same way, the
+3D race showing through the 2D in strips; the "Special Thanks" credits
+screen correct.)
+
+*What was believed:* R935's side finding -- GEO_LIST_WIN (4,096 dwords)
+shorter than a list, a late walk reading two frames -- was the first suspect;
+then (coordinator, on the rankings grab) per-line scroll / window tables read
+from the wrong place. R933 recorded the whole-core bench reaching "title with
+INSERT COIN(S) / CREDIT 0/1 (775-1000)" -- WRONG TURN, KEEP: its frames show
+the broken logo; it was judged from thumbnails.
+
+*MAME (0.289, stcc, attract, new tile / char taps):* the title is ALL 2D.
+The walks of the title (t720-t936) carry no polygon (geopolys.txt 0 bytes);
+tilemap 2 is one full-screen picture -- 62 x 48 = 2,976 tiles, codes 0x0e00
+up, glyphs uploaded to char RAM 0x01089000-0x010a927c in frames 701-703 and
+not touched again. Every scroll register reads 0 and no per-line table is in
+use (hscr bit 15 clear on all four layers, frames 600-950). Frame 703 writes
+the map twice with 16-bit stores: 0x774b0 (stos, codes 0x0e00...), then
+0x779a0, a read-modify-write that sets the priority bit of every cell:
+`ldos (g6),g4 / xor 0x8000 / stos g4,(g6) / g6 += 2`. The rankings use
+another tile read, 0x13774: a column copy between tilemaps (`ldos (g7)` /
+`stos g4,(g5)`, both stepping a map row, 0x80 bytes). The credits screen
+reads nothing. So the two broken screens are exactly the two that READ
+tile RAM; the good one does not.
+
+*THE CORE (whole-core bench, tb_m2_boot 2C ring + data cache, as R933):*
+reproduces it -- every title frame from 775. At frame 880 char RAM equals
+MAME's (0 of 524,288 bytes differ) and so does the palette (8,192 / 8,192);
+tilemap 2 differs in 1,088 of 4,096 words, and each one holds its right-hand
+neighbour (0x2002 = 0x8e03, MAME 0x8e02). m2_video given MAME's own tile /
+char / palette draws the logo right (tb_m2_video_frame), so not the renderer.
+NEW tb_m2_boot M2_TRAMLOG (every tile write as the bus issued it and as it
+landed): the bridge lands 22,336 / 22,336 writes exactly as issued, byte
+enables right (3 / c) -- but the i960's second pass writes 0x8e03 to
+0x01004004: its `ldos` there READ 0x0e03, the word at 0x01004006.
+
+*THE CAUSE (rtl/io/m2_cpu_bridge.sv):* tile RAM and the palette are M10K
+with a registered read (m2_tdp_ram2c, a_q <= mem[a_addr]); the bridge
+presents a read's low word in S_IDLE -- the cycle the request is taken --
+and captures it in S_LO, the high word in S_HI. oc_addr = r_addr[15:1] +
+half, and `half` was cleared on the edge that LEAVES S_IDLE, so in the cycle
+that matters it still held the 1 the previous access left in S_HI (every
+on-chip read, every write but an upper-half store, SDRAM accesses through
+S_HI). The array was handed word + 1: an aligned halfword read returned the
+next word, a 32-bit read [15:0] = word + 1 and [31:16] = word (swapped), and
+a read at +2 came out right only because word + 1 then landed in the half
+the CPU takes. STCC's RMW loop reads each aligned cell straight after a
+store, so every even cell took its neighbour's code (the 8-pixel doubling)
+and every odd one kept its own. Writes never saw it: their enable is
+registered into S_LO, after `half` is 0.
+WHY NO BENCH SAW IT: tb_m2_cpu_bridge's on-chip model set oc_tram_q =
+tram[oc_addr] from the address of the SAME cycle, just before the capturing
+edge -- an asynchronous read, labelled "REGISTERED reads, as M10K is". Its
+32-bit readback check passed on the faulty bridge; with a real one-cycle
+model it fails.
+
+*THE FIX:* `half` cleared at every completion (the seven R729 completion
+sites); at the accept edge an on-chip READ moves to the high word (half <=
+!r_we && T_TRAM / T_PAL), and a read addresses the dword, {r_addr[15:2], 0}
+then +1, the CPU picking its half by addr[1] as for SDRAM. Writes keep
+r_addr[15:1] + half. Same file for 2A and 2C; nothing behind M2_2C.
+
+*VERIFIED:*
+  * tb_m2_cpu_bridge with the model made registered, plus STCC's two loops
+    (RMW over tile RAM and the palette, both alignments; the column copy;
+    32-bit reads after a halfword write and after a read): fixed 1,009 /
+    1,009 checks (BOARD_2A build 1,012 / 1,012); the base bridge on the same
+    bench 46 mismatches -- word 0 = 0x8e01, ld after stos 0x8e011234, as the
+    whole-core bench. test_m2_cpu_sdram, test_m2_315_5649 PASS.
+  * Whole-core bench, fixed, to frame 800: tile RAM equal to MAME's in all
+    32,768 words (map 0 against MAME frames 750 / 800 / 850; at 900 90 words
+    of INSERT COIN(S) are the other blink phase), char RAM and palette
+    equal. m2_video on the core's own frame-800 state against m2_video on
+    MAME's frame-800 state: 0 of 190,464 pixels differ (before the fix
+    30,766). The harness's own frames still show line overruns (its counter
+    saturates at 65,535 in both runs) -- the harness's char path, not this.
+  * Rankings: not run in the bench (MAME shows it at ~136 s, ~7,900 frames,
+    ~4.4 h of bench); its loop is the column-copy check above.
+  * TGPx4: no TGPx4 / copro RTL changed and its replay does not contain the
+    bridge -- lockstep unchanged by construction.
+  * lint_top 2A and M2_2C: the whole raw warning list identical to 586173a's
+    (same 11 errors, all sys/hps_io.sv); lint_idx 2A and M2_2C identical.
+
+*THE 2A BUILD CHANGES, AND IT SHOULD:* the same bridge serves every game.
+MAME 0.289, 120 s of attract each, reads of tile RAM (0x01000000-0x0101ffff,
+0x01100000-0x0111ffff) and the 2D palette (0x01800000-0x01803fff less the
+mirrored 3D palette 0x01802000-0x018027ff, which goes to SDRAM):
+  Zero Gunner   tile 23,268 aligned + 96 upper halfword (0x568658 / 0x568b24
+                / 0x568b68, tile words 0x6160-0x62dc: the row-mask table)
+  VF2           tile 12,144 aligned + 6,879 upper (0x11114 / 0x1111c /
+                0x24648: the scroll registers 0x5004-0x5006)
+  Virtua Cop    tile 7,705 aligned (0x5814..: the scroll registers);
+                palette 1,064 + 1,064 (0x4be0, 0x64f4, 0x6528)
+  Pilot Kids    tile 2,006 aligned + 3,602 upper (the scroll registers)
+  Hanguk Pro Yagu 98  tile 3,008 + 3,008 (0x502a8.., words 0x6ca0-0x6dde);
+                palette 2,048 32-bit (0x1a690.., the whole 2D palette)
+  House of the Dead  tile 1,024 32-bit (0x185d4, words 0x6400-0x65fe)
+  Motor Raid    tile 658 32-bit (0x21c504, words 0x6000-0x6522)
+  Sky Target 10 + 10; Virtua Cop 2 4 (and 31,744 of the 3D palette, SDRAM)
+  none: Daytona (both), DOA, Dynamite Cop, Manx TT, Over Rev, Sega Rally.
+  (Desert Tank: MAME wants the model1io ROM, not run.)
+Every one of those aligned / 32-bit reads was wrong on the old bridge and
+is now MAME's word. What each game did with the wrong value was not traced
+(row masks, scroll registers read back, palette fades), so "improved" here
+means "now reads what MAME reads", not a picture checked per game.
+
+*AREA (quartus_map 17.0, fixed and 586173a mapped the same day):* 2A
+39,985 -> 39,983 ALMs needed, 48,098 registers, 4,572,656 block bits, 96 DSP
+both; m2_cpu_bridge 870 -> 878 ALUTs, 565 registers. 2C (M2_2C +
+M2_NO_2A_MANX_MOTION) 40,073 -> 40,165, 48,238 registers, 4,583,920 bits,
+102 DSP both; m2_cpu_bridge 931 -> 932 ALUTs. Every entity's register count
+identical; the 2C ALM move is in untouched entities (i960_fpadd +76 ALUTs,
+fx68k +18): map noise. No M10K change.
+
+*THE 3D LIST (R935's suspect), MEASURED BECAUSE IT WAS ASKED:* STCC's lists
+alternate 0x0000 / 0x4000; the i960's part ends at the jump at 0x0a75
+(title) or 0x0b3e (race) -- at most 2,879 dwords in the 20 s measured --
+then the walk jumps to 0x1000 and 0x3000, which the TGPx4 writes into
+buffer RAM directly (R933: 0x400a75-0x407453). So GEO_LIST_WIN's 4,096
+covers everything STCC pushes; the TGPx4's direct writes are not held by
+any window (they never were). Not this bug, and not measured further.
+HOUSE OF THE DEAD'S COURTYARD SHADOW (R935): not explained by this. Its
+pieces are 3D polygons; HOTD's only 2D read is the row-mask block above.
+
+*OPEN:* the bench harness's 2D line overruns (65,535, saturated); Ben's
+"some tile overruns" on other attract screens (location not given). A board
+check of VF2 / Zero Gunner / Virtua Cop 2D after this lands.
