@@ -1,6 +1,47 @@
 # Handoff
 
 ## 2026-10-22: model2a pushed (with main) -- Model2_20261022 and Model2A_20261022 released
+## 2026-10-23: branch scan15-pair (off main 0aa5905, not pushed, not fitted) -- R939, GitHub #24
+
+15 kHz sync loss in Virtua Cop / Desert Tank on a picky CRT. Cause: the
+converter's pairing re-aligned the output to the other native frame, a
+half-line step in the line timing (one 984-px line at 15.7 / 15.1 kHz, 328 px
+at 15.4) a few lines above the picture; Virtua Cop's cadence slips (2-3% of
+images odd-length) re-pair ~27 times a minute. 60 Hz games never re-pair.
+Fix: the pairing swaps field labels (one field repeated, one vsync interval
+half a line off) and the lines never move; OSD "15kHz pairing" Auto / Off
+(O[67], free on main / model2a / model2c). Bench: 60 Hz output bit-identical
+(hash) at all line counts; slipping cadence 0 line faults; ring margin at
+15.7 kHz now 8.9 us on the swapped field (bench sees the edge 100 px below
+D_PX). quartus_map +4 ALM, 0 M10K. Ben's hold-the-flip variant modelled and
+not built (a slip persists, so holding only the late image leaves ~48%
+combed). To carry: m2_scan15.sv + bench + the three Model2.sv hunks. Needs a
+fit and the tester's CRT (Auto, and Off if Auto still glitches).
+
+## 2026-10-23: main pushed -- Model2_20261023 (R937, the bridge's read fix)
+
+releases/Model2_20261023.rbf = s1381 (main + R937, branch bridge-r937),
+md5 78dfbb21..., clk_sys +0.186, clk_mem +0.736, i960 +1.117, hold +0.220,
+41,432 ALM, 551/553 M10K (s1379 also clean: +0.120 / +0.206). R937: the CPU
+bridge read tile RAM / the 2D palette one word late (aligned halfword reads
+got the next word, 32-bit reads swapped halves) -- found from STCC on
+model2c. On this core it changes Virtua Cop (reads tile RAM and palette);
+Daytona reads neither. Board (Ben, s1381): Virtua Cop's 2D "looking good",
+28.4 fps (95% of frames at its 2 vblanks -- the 30 Hz game), dips only on
+the 2D options screen. model2a's and model2c's release folders carry the
+same Model2 rbf. The 2A build with R937 (branch bridge-r937-2a) has no clean
+seed yet (s1383 -1.028, s1384 -0.238; s1385-s1387 fitting) and is not in
+any release; model2a's code is unchanged in this push.
+
+## 2026-10-22 (night): documented, not started -- R936
+
+Ben asked for both to be documented only: (1) Gun flash Arcade / Off for
+Virtua Cop 2 (2A) and House of the Dead (2C) -- port m2_gun_flash (VCop 2
+uses the same window-table flash; HOTD unchecked); (2) a Virtua Cop 57.5
+fps hack -- not a 60 Hz switch (R256's half-built lists, double-speed
+logic); needs a game-code patch, MAME experiment first. See study R936.
+
+## 2026-10-22: main pushed -- Model2_20261022 and Model2A_20261022 released
 
 releases/: Model2_20261022.rbf = s1343 (VCop/Desert Tank colours R925, Gun
 flash Arcade/Off R929, link play), md5 eaa65eae..., clk_sys +0.428, clk_mem

@@ -43393,3 +43393,143 @@ of #27 are in VF2's 2D layer, consistent with R937; the green pixel ~4
 native pixels above a conifer's tip that Ben caught on the Lau stage is 3D,
 not the filter -- R938). Sky Target's title backdrop shows faint darker
 vertical lines through its 3D sky, present before R937 too (R938).
+
+**R939 (main) -- 15 kHz: THE CONVERTER'S PAIRING MOVED THE LINE TIMING HALF A
+LINE AT EVERY RE-PAIR, ~27 TIMES A MINUTE IN VIRTUA COP. NOW IT SWAPS THE
+FIELD LABELS AND THE LINES NEVER MOVE; "15kHz pairing" (Auto / Off) ADDED.**
+(GitHub #24, madstalker80, a 15 kHz CRT at 15.4 kHz: on the [15kHz CRT] MRAs
+Virtua Cop and Desert Tank "lose sync for a short time", often, all through
+the game; a top band of torn, displaced lines; every other game fine. The set
+is picky: at 15.7 kHz the OSD is wrong, at 15.1 the top third loses sync.)
+
+*Believed (R898, the converter's header):* pairing locks once -- "a cadence
+that changes by a frame now and then never gets eight in a row, and is left
+alone" -- and the re-alignment that makes it "moves the output once, by a
+field". The bench drove only a steady two-frame cadence, so it saw one move,
+early, and skipped its timing checks around it.
+
+*Now known (tb_m2_scan15, before / after, every line count):*
+  1. WHAT A RE-PAIR DID. It reloaded the output counters as if the odd native
+     frame were the even one. A native frame is N0 - 1/2 output lines
+     (273.5 / 268.5 / 262.5), so the reload stepped the line timing by HALF A
+     LINE: one line of 984 px (1.5 lines) at 15.7 and 15.1 kHz, 328 px (0.5)
+     at 15.4 kHz, against 656. The vsync intervals did NOT change (every one
+     still exactly one native frame) -- the fault is horizontal: the CRT's
+     line oscillator re-locks, and the step falls DL lines (4-9) before the
+     first visible line, so the re-lock tears the top of the picture. That
+     is the capture.
+  2. HOW OFTEN. After a re-pair the cadence must slip again before the next
+     one, and Virtua Cop's does: on the board (s1381) 95% of 3D frames at 2
+     vblanks, 2% at 3 -- every odd-length image flips the parity, and the
+     next eight images on the new parity re-pair. A frame-level model of the
+     pairing logic (sim/video/scan15_pair_model.py, the bench's LCG), checked against
+     the RTL bench run for run (9, 5 and 15 re-pairs in 1,200 native frames
+     on three seeds -- the model's counts exactly):
+         2 frames 96%, 3 2%, 4 2%       26.5 half-line steps a minute
+         2 frames 95%, 3 2%, 1 3%       46.8 (catch-up frames flip it too)
+         steady 2                        0 after the first lock
+     60 Hz games change image every frame, so a "good" change resets the
+     count and they never re-pair: why only Virtua Cop and Desert Tank.
+  3. THERE IS NO ORACLE. The board's own output is 24 kHz; Model 1 has no
+     15 kHz path (VGA_F1 = 0). The requirement is Ben's: stable sync on a
+     picky CRT first, least combing second, no added latency.
+
+*What pairing is for:* a CRT draws fields one after another and does not
+weave them; an image shown in (field 0, field 1) or (field 1, field 0) looks
+the same on it. Pairing matters to a deinterlacer that weaves field 0 then
+field 1 -- MiSTer's scaler does (ascal ends a frame after field 1,
+i_endframe on i_flm) -- and a capture device or flat panel.
+
+*The fix (option a, chosen):* the output's line grid is fixed at the first
+lock and never moves. Fields still start D_PX after an even native frame
+and D_PX +- HT/2 after an odd one; what a re-pair changes is which LABEL
+(field 0 = even rows, its vsync half a line nearer; field 1) each native
+frame carries -- `s` in m2_scan15. A swap repeats one label (two field 0s or
+two field 1s), so ONE vsync interval is half a line short or long (273 or
+274 lines for 273.5) -- the same event as a console switching 240p / 480i --
+and the odd frame's field moves a whole line (D_PX - HT/2 when it is field
+0). The swap is made at an odd frame's start, before the odd field begins
+and before the vsync that places the next even field; evidence completed on
+an even frame waits one frame. The align (every second native frame) loads
+the label state as well (field = ~s_e, nxt = s), so it stays a no-op.
+PAIR_N stays 8 (retrorepair's): fewer changes running re-pair sooner but
+more often, for no sync gain.
+OSD "15kHz pairing" Auto / Off, O[67] (free on main, model2a, model2c: main
+has O[64] / O[66], the others O[65:64]); Auto = 0, so saved configs open as
+before. Off never swaps: the output timing then never changes at all.
+
+*Options weighed (model, 60 min, 96/2/2 cadence; "combed" = output frames of
+two images, i.e. what a weaving deinterlacer shows):*
+                                  line jumps/min  1/2-line vsync steps/min  combed
+  retrorepair's re-align              26.5             0                    11.7%
+  field swap, PAIR_N 8 (Auto)          0              26.5                  13.2%
+  field swap, PAIR_N 4                 0              30.6                   7.4%
+  field swap, PAIR_N 16                0              19.8                  21.7%
+  swap at most every 10 s / 30 s       0              5.4 / 1.9          41.7 / 46.9%
+  pairing Off                          0               0                    48.3%
+(b) A gradual slew of the line phase instead of a step (half a line over a
+few hundred lines, the line rate ~0.15% off meanwhile) is feasible in the
+ring's window at 15.7 kHz (+-410 px) but buys nothing: the swap above needs
+no change of line phase at all -- the odd field moves a whole line instead --
+so a slew would only add a line-rate excursion a picky set could see. (c)
+Rate limits trade combing for fewer vsync steps almost one for one -- at 10 s
+apart the pairing is barely better than Off; not taken. (d) Taken as the
+Off switch: for a set that minds even a half-line vsync step, Off costs a
+CRT nothing.
+BEN'S VARIANT -- hold the renderer's flip a frame so the image starts on the
+even frame -- was weighed and NOT built. In steady running a slip PERSISTS:
+after a 3-frame image every following on-time image lands on the odd frame.
+Holding only the late image (Ben's limit: no latency in steady running, at
+most one frame, only on a frame the game delivered late) leaves every image
+after it mis-paired: 17-34 holds a minute and 46-50% combed, the same as Off.
+Keeping the pairing that way needs every image held until the next slip --
++17.4 ms on about half the images -- which the limit rules out. Beside the
+swap it would save at most the one combed frame per slip (~1%), for a change
+to m2_raster3d's publish (clk_sys, shared with 2A/2C), the frame parity
+crossed from clk_mem, and a held image dropped when a one-frame catch-up
+arrives behind it (0.5 a minute on the catch-up mix). (Nothing else waits on
+the publish: the walk waits on the swap, fb_busy clears on fb_complete.)
+
+*Checked (tb_m2_scan15, extended: a slipping cadence from an LCG, the line
+period checked through every event, vsync intervals measured in pixels
+against N0 - 1/2 lines, label repeats, an output hash from reset):*
+  * 60 Hz and every cadence that never re-pairs is BIT-IDENTICAL: the output
+    hash old = new for cadence none / 1 / 3 / 2 in the locked phase, at all
+    three line counts (626eb962... 273/274, 4e435dce... 268/269, 9700b83c...
+    262/263; 12 pairs, 140 native frames, 24.9 M output samples each).
+    Pairing Off with the other phase gives the same hash too.
+  * Cadence 2, the phase that needs the swap, all three line counts: PASS --
+    0 line period faults, 0 re-alignments that move the output, one vsync
+    interval half a line short followed by the repeated label, 0 output
+    frames of two images after it, 16.3 M pixels against the blend, 0 ring
+    mismatches. Retrorepair's RTL on the same run: one 984-px line.
+  * Slipping cadence, 1,200 native frames (20.8 s), 142.5 M pixels a run, all
+    PASS: 273/274, 268/269, 262/263 seed 1 -- 9 swaps, 9 vsync intervals
+    +-1/2 line (5 short, 4 long), each followed by its repeated label, 0 line
+    faults, 13.3% combed; seed 2 -- 5 swaps, 4.5%; catch-up mix -- 15, 24.7%;
+    Off -- 0 events, 43.6% / 63.8%. Retrorepair's RTL on the same inputs: 9 /
+    5 / 9 half-line line steps (984 px at 15.7 and 15.1 kHz, 328 px at 15.4),
+    11.0% / 3.6% combed.
+  * Ring margins (written-before-read / read-before-overwritten): the odd
+    field at D_PX - HT/2 is the new tight case -- 15.7 kHz 8.9 / 41.4 us (was
+    40.6 / 41.4), 15.4 kHz 148.9 / 180.3, 15.1 kHz 177.3 / 210.3. The bench
+    sees the edge: at D_PX_I 5740 the swapped phase fails (1,525 ring
+    mismatches), 5780 passes at 3.1 us. D_PX is NOT re-centred (6009 would
+    give ~24 us both ways) because that would move every game's output phase
+    and break bit-identity for 60 Hz; the margin is exact (both enables are
+    rationals of clk_mem), not a tolerance.
+  * lint_top clean on main, and on model2a's and model2c's Model2.sv with this
+    converter and the same three Model2.sv hunks (patch applies; offsets
+    only); lint_idx: no converter entries (104 findings, none new).
+  * quartus_map 17.0, whole design, 0aa5905 -> this: ALMs needed 40,361 ->
+    40,365 (+4); ALUT 57,224 -> 57,227; registers 49,776 -> 49,786; block
+    memory bits 4,670,992 unchanged (no M10K); DSP 98 unchanged. m2_scan15
+    207 -> 215 ALUT, 129 -> 134 registers.
+
+*Not verified:* a CRT. Whether this set minds the one half-line vsync step a
+swap makes is for the tester; Off removes it. If the tear persists with Off,
+the cause is not the pairing.
+
+*Carrying to model2a / model2c:* m2_scan15.sv is identical on all three
+branches; the change is the file, its bench, and three Model2.sv hunks (OSD
+line, the vpr_s synchroniser, .pair_en on the instance).

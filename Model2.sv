@@ -284,6 +284,13 @@ localparam CONF_STR = {
 	// line in every mode (a narrow line there would need its own line length,
 	// sync and alignment per mode -- not built). O[55] IS RESERVED -- never
 	// reuse it: a saved config holding Narrow would switch on whatever took it.
+	// R939: the converter's field pairing for 30 Hz games (Virtua Cop, Desert
+	// Tank). Auto swaps the fields when the game's images change on field 1's
+	// frame (a deinterlacer then combs); each swap repeats one field, its vsync
+	// half a line off. Off never swaps: the timing never changes at all, and a
+	// CRT shows no difference (it does not weave fields). O[67]: free on main,
+	// model2a and model2c (main has O[64] and O[66], the others O[65:64]).
+	"O[67],15kHz pairing,Auto,Off;",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -741,6 +748,9 @@ always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R83
 // status[55] (R834's narrow line) is reserved, not read (R898).
 wire       vid_nl = vnl_s[2];
 wire       vid_ml = vml_s[2];
+reg [2:0]  vpr_s;                         // R939: 15kHz pairing (0 = Auto), into clk_mem
+always @(posedge clk_mem) vpr_s <= {vpr_s[1:0], ~status[67]};
+wire       vid_pair = vpr_s[2];
 reg [6:0]  ce_acc;
 reg        ce_pix;
 always @(posedge clk_mem) begin
@@ -7831,7 +7841,7 @@ assign ov_b = mix_b_q;
 wire        sc_hs, sc_vs, sc_de, sc_fld;
 wire [23:0] sc_rgb;
 m2_scan15 u_scan15 (
-	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag),
+	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag), .pair_en(vid_pair),   // R939
 	.ce_in(ce_pix), .de_in(~(tile_hb | tile_vb)), .vb_in(tile_vb), .rgb_in({ov_r, ov_g, ov_b}),
 	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml),
 	.o_hs(sc_hs), .o_vs(sc_vs), .o_de(sc_de), .o_field(sc_fld), .o_rgb(sc_rgb)
