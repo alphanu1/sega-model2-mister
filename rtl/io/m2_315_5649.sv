@@ -50,7 +50,8 @@
 
 module m2_315_5649 #(
   parameter bit GUN = 1'b0,         // R870: Virtua Cop 2's guns on serial channel 2
-  parameter bit EE_LOAD = 1'b0      // R897: the EEPROM's load port (m2_93c46 LOAD)
+  parameter bit EE_LOAD = 1'b0,     // R897: the EEPROM's load port (m2_93c46 LOAD)
+  parameter bit EE_SAVE = 1'b0      // R945: the EEPROM's read port for the NVRAM save (m2_93c46 DUMP)
 ) (
   input  logic        clk,
   // MAME's machine reset: direction, mode and ctrlmode (R862: not the
@@ -82,6 +83,8 @@ module m2_315_5649 #(
   input  logic        ee_ld_we,     // R897 (EE_LOAD): an EEPROM word from the MRA
   input  logic  [5:0] ee_ld_a,
   input  logic [15:0] ee_ld_d,
+  input  logic  [5:0] ee_dump_a,    // R945 (EE_SAVE): an EEPROM word for the save,
+  output logic [15:0] ee_dump_q,    // one cycle later (0xFFFF without EE_SAVE)
   output logic  [7:0] dbg_pa,
   output logic  [7:0] dbg_dir
 );
@@ -94,10 +97,11 @@ module m2_315_5649 #(
   // ------------------------------------------------------------ the EEPROM
   logic ctrlmode;   // model2_state::m_ctrlmode: PA bit 0, cleared by machine_reset
   wire ee_do;
-  m2_93c46 #(.LOAD(EE_LOAD)) u_ee (
+  m2_93c46 #(.LOAD(EE_LOAD), .DUMP(EE_SAVE)) u_ee (
     .clk(clk), .rst_n(por_n),
     .cs(pv[0][6]), .sk(pv[0][7]), .di(pv[0][5]), .do_o(ee_do),
-    .ld_we(ee_ld_we), .ld_a(ee_ld_a), .ld_d(ee_ld_d)   // R897
+    .ld_we(ee_ld_we), .ld_a(ee_ld_a), .ld_d(ee_ld_d),   // R897
+    .dump_a(ee_dump_a), .dump_q(ee_dump_q)              // R945
   );
   wire [7:0] pb_in = ctrlmode ? {2'b11, ee_do, 1'b1, in0[3:0]} : in0;
 
