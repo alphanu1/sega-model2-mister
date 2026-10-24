@@ -45846,3 +45846,176 @@ can stay on). The OSD line O[31] becomes "Auto, Point": 0 (the old
 but Sky Target (game ID 0x18), where it is point; 1 forces point everywhere,
 as before. Model2.sv: texpt_game (one compare on the game ID) ORed into the
 filter's synchroniser. Nothing else changes; the main core is untouched.
+
+**R952 -- MORE ROOM BY MAKING THINGS SMALLER, NOTHING SWITCHED OFF: PARALLEL
+CONVERTERS TIME-SHARED WHERE THE SCHEDULE HAS IDLE CYCLES, EXCLUSIVE
+OPERATORS MERGED, ONE ARITHMETIC IDENTITY. quartus_map 17.0: 2A 40,225 ->
+38,718 ALMs needed (-1,507), 2C 40,133 -> 38,774 / 38,842 (-1,359 / -1,291,
+two maps of the same logic). M10K 2A -1 (R948's cache merge), 2C =; one MLAB
+more on both. Every change checked old against new, cycle for cycle.
+BRANCHES room2-2a (off bridge-r937-2a 77a4689) AND room2-2c (off room-2c
+c9ee859), LOCAL, NOT FITTED.**
+
+*Believed (R948's helpers, measured again here):* a register removed is room
+gained. *Found:* registers alone buy ~0 ALMs on this part -- pipeline copies
+already share ALMs with logic (the TGP ALU's 160-register lane: standalone fit
+1,788 -> 1,787 ALMs). The ALMs follow the LUTs. And Quartus already merges
+two copies of the SAME expression (the engine's pointer steps written twice:
+an identical netlist; the divider's two negates: -1 ALUT) and some exclusive
+operators inside one register's mux. What it cannot see is a SCHEDULE: N
+converters run in one cycle whose results are read on N different cycles, or
+in a state that comes cycles later. That is where the room was.
+
+*Method:* every RTL change measured by quartus_map 17.0 on the full design
+(2A: Model2.qsf; 2C: + M2_2C=1, M2_NO_2A_MANX_MOTION=1, M2_RECIP_LOGIC=1),
+and, because untouched units swing +-70..90 ALUTs between maps (i960_fpadd,
+unchanged RTL: 1,032 / 1,075 / 1,106 / 1,123), by a standalone map + FIT of
+the changed module at the core's parameters (virtual pins, the project's
+synthesis settings). Timing: near-critical registers (within 0.6 ns) dumped
+from copies of s1446 / s1447 (2A) and s1449 / s1462 (2C) with quartus_sta;
+nothing on that list was given logic. Identity: NEW sim/miter/miter.py builds
+an old-against-new miter -- the module (and changed submodules, renamed) twice
+from the same inputs, every output compared on every cycle -- run under the
+module's existing benches (sim/miter/fill.sh, sim/miter/geo.sh).
+
+*TAKEN -- geometry and fill (this session):*
+  1. m2_geometry / m2_geo_clip: THE u/v CONVERSIONS SHARED. The quad
+     projector ran eight u2f (16-bit integer to float) in Q_IDLE's cycle;
+     the clipper reads them only on clip_in_valid, eight cycles later at the
+     earliest (Q_MM, Q_MM2, Q_CHK, four granted Q_ISS, an answer). Now the
+     pairs are latched raw (puv) and two u2f convert a vertex a cycle
+     (puv -> uvsel -> hu/hv, done four cycles after the take). And the eight
+     f2uvw that ran on the clipper's output EVERY cycle (cu -> wu) are gone:
+     the clipper keeps qwu / qwv = f2uvw(qu / qv) beside qu / qv, written
+     wherever they are -- K_IDLE from the raw pairs (f2uvw(u2f(n)) = n for
+     every 16-bit n), K_POPR through two f2uvw on the stack word. wu reads
+     it. m2_geometry own 2,327 -> 1,537 ALUTs, m2_geo_clip 1,398 -> 1,545,
+     +294 registers; standalone fit 6,617 -> 6,284 ALMs; 2A map -301.
+     TIMING: s1449's poly_uv3 -> hu[3][15] (0.669 ns) is gone (hu now from
+     local registers); cu -> f2uvw -> wu (R614's path) is now cwu -> wu.
+  2. m2_raster_fill: ONE NORMALISER FOR THE PLANE FIT'S SIX NUMERATORS.
+     S_PF_NRM negated six numerators at once, counted twelve halves, joined
+     six. They are read one a state (R742: wait 3, wait 4, Q1, Q1W, Q2, Q2W);
+     one pipeline (select, magnitude, halves, join) started on S_PF_N's
+     second cycle finishes each the cycle before it is read (nxu_z exactly
+     when it was). Fill 5,626 -> 5,247 ALUTs, 4,119 -> 3,969 ALMs (fit).
+  3. m2_geo_project: one mag8 for both coordinates -- x's in S_A1 while the
+     adder returns y (sx_f landed), y's in S_RND, a 2:1 select in front.
+     Projector 473 -> 376 ALUTs (fitted 386 -> 321 ALMs). A first version
+     ran mag8 on the adder's result as each landed: -122 ALUTs, but the new
+     path fp_add|result -> mx_r became the standalone worst (2.43 ns at
+     12.5) next to s1462's project sst -> clip kst (0.199 ns) -- not taken.
+  4. m2_geo_engine: the texture header's three word addresses (th_w + 1 /
+     + 2 / + 3 in F_TH0..2) from one adder: engine -42 ALUTs.
+  5. m2_raster_fill: one adder per edge accumulator. xa / xb took three sums
+     in three states (S_OFF, S_FS_MULA / MULB, S_FS_WALK), xah / xbh two
+     outside the walk's own (S_OFF, MULA); now one each, the operand picked
+     by the state. xbh -> s1_valid (0.525 ns, s1446) is the emit path, not
+     touched; xah / xbh's D mux loses a source. Fill 5,247 -> 5,112 ALUTs,
+     3,969 -> 3,856 ALMs.
+  6. m2_raster_fill: each plane's two corner products summed once: base_u =
+     A - (bp_ux << k) - (bp_uy << k) + D is A - ((bp_ux + bp_uy) << k) + D in
+     32 bits, and bp_ux + bp_uy = 32'(dudx * x + dudy * y). One subtract
+     fewer per plane, 82 registers fewer, DSPs unchanged (38). Fill 5,112 ->
+     5,027 ALUTs, 3,856 -> 3,814 ALMs.
+*TAKEN -- i960 (helper, all rtl/cpu/i960), 2A total -662 / 2C -431 alone:*
+  R948 (3) ported to 2A; fpmisc: logbnr shares cvtir's int-to-double
+  normaliser, the scale path (op 6, never issued: scaler uses the multiplier)
+  out by a SCALE parameter (1 by default, the unit bench tests it), the half
+  test one bit, roundr's two renormalise shifts one; regs: the saved frames'
+  addresses (208 registers) in one 8 x 26 MLAB, written and read on different
+  cycles, the callee's frame sum once; ALU: one right shifter (fill bit
+  chosen), one left, one compare for the four condition codes; i960_top: the
+  interrupt walk's five FP-16/-12/-8 adders one, prcb + 24 and vector - 8
+  once, synmovq's two address adders one; I-cache, spill address, LSU burst
+  step as slices / once; integer and FP divide: the step's compare from its
+  subtract. fpmisc 1,612 -> 1,131, ALU 835 -> 707, regs 952 -> 890 ALUTs
+  (557 -> 349 registers). The half test's index is kept in range (a 64-bit
+  copy) so lint_idx stays clean.
+*TAKEN -- sound / copro (helper):* R948 (2) ported to 2A (the sound line
+  cache's {valid, tag} one M10K: -1); fp_mul SUBNORM one 48-bit left shifter
+  (the TGP's and TGPx4's: 690 -> 566 ALUTs; the geometry pool's fp_mul is
+  SUBNORM 0, its netlist unchanged); TGP ALU one adder for ADDD / SUBD, one
+  shifter for the four shifts (bit-reversal for the lefts, as tgpx4_cvt
+  does), the bit-op results on the integer lane (846 -> 762 ALUTs, 739 ->
+  579 registers); 2C tgpx4_cvt's 32-bit operand copy as two flags (0 ALMs,
+  -29 registers).
+
+*AREA, quartus_map 17.0 (ALMs needed / ALUTs / registers / block bits):*
+    2A  77a4689                   40,225  57,457  48,346  4,580,912
+    2A  + geometry (1)            39,924  56,848  48,641
+    2A  + (2)-(5)                 39,575  56,201  48,478
+    2A  + i960, sound, TGP        38,767  55,055  48,010
+    2A  room2-2a (+ (6))          38,718  54,909  47,929  4,580,912  (-1,507)
+    2C  c9ee859                   40,133  57,455  48,520  4,592,176
+    2C  + (1)-(5)                 39,613  56,384  48,654
+    2C  + i960, fp_mul, cvt       38,828  55,186  48,316
+    2C  room2-2c (+ (6))          38,774  55,129  48,233  4,592,176  (-1,359)
+    2C  the same + the lint fix   38,842  55,195  48,233  (i960_fpadd, untouched, +88)
+  DSP 96 / 102 unchanged. RAM summary: 2A the sound cache 128x1 + 128x16 ->
+  128x17 (one M10K fewer, expected 549 of 553); both + one MLAB (i960 regs).
+
+*TRIED, NOT TAKEN:*
+  * m2_geo_clip, cs 8 / 9's operand as one vertex-and-axis select: clipper
+    -31 ALUTs, m2_fp_pool +86 (the pool's flattened operand mux lost its
+    folding): +46 total. Reverted.
+  * The engine's pointer steps (E_DOTA's cull and F_TH3 / F_UV) formed once:
+    netlist identical. The fill dividers' S_FIN negate shared: -1 / -2.
+    The determinant as one DSP sum (ax*by - bx*ay): +28 (the subtract stays
+    in logic). All reverted.
+  * i960_fpadd's sticky bit as a mask (~-90 ALUTs, likely faster): the path
+    into u_fpadd|s1_sum has 0.503 ns on one seed -- under the 0.5 rule, left.
+  * fp_add SUBNORM normalise with a sentinel (-31 ALMs): s1446's sC_shifted
+    at 0.79 ns and the standalone path 1.2 ns longer -- left.
+  * tgpx4_core repeated sums, m2_tgpx4's low dwords from up_lo / f_lo, the
+    cfx fraction test as a mask: 0 or worse. Reverted.
+*FOUND, NOT TOUCHED (unsafe or not identical):*
+  * m2_geo_engine's colour-cache valid flags (256 registers, a 256:1 read and
+    256 enables, ~350 ALUTs): the flash clear (col_inval) keeps them out of
+    RAM; an epoch tag in cc_mem's spare M10K bits would be free but wraps --
+    not identical after 2^k clears.
+  * m2_quad_store's bank select into uvt_r / vtx_r (302 bits, ~1,200 LEs in
+    the mux report): vtx_r -0.056 / uvt -0.185 ns on s1447 / s1446; one
+    4096-deep array would drop the M10K mode from 2048 x 5 to 4096 x 2.
+  * m2_geo_clip's stack push, 8:1 x 160 bits (800 LEs): inherent to naming
+    a child's vertex from the quad or the temporaries.
+  * m2_geometry's quad-out u / v lanes (rounding, offset, shift, 8 each):
+    C_AGE gives five cycles, a serial walk needs more -- a timing change.
+  * The fill's base_* adders and bh_* sums in fewer adders: needs S_PF_B
+    longer (tex_ok later). Debug counters: Quartus prunes those with no
+    reader (m2_geo's dbg_mtx_n / dbg_walk_objs survive the fit -- 32
+    registers, two incrementers; not chased).
+
+*VERIFIED (each change against its parent; the totals on the merged trees):*
+  * Fill miter (m2_raster_fill + m2_raster_div, 21 outputs, every cycle)
+    under tb_m2_raster_fill (152,373 checks), _mip (1,989,828), m2cov, dil:
+    109,964,114 cycles (2C, no DIL: 107,610,021), 0 differ. A planted fault
+    (nxo_z's bit 0) differs on 31.5 M cycles -- and the benches' own checks
+    still PASS on it: the miter, not the bench, is the proof.
+  * Geometry miter (m2_geometry + clip + project + engine, 50 outputs):
+    tb_m2_geometry, _mipz and seven MAME walks through geodiff (VF2 w2300 /
+    w5175c / w3450c / w2700c as geodiff_2a with M2GD_PRESET's table in both
+    copies; Daytona w1000 / w5000 / w9000): 7.2 M cycles, 0 differ, 2A and
+    2C. tb_clip_top now asserts out_wu / out_wv == f2uvw(out_u / out_v) on
+    every cycle: 3,280,961 cycles 0 (a planted fault: 2,481,321).
+  * geodiff ours.txt with each quad's take cycle (new M2GD_QCYC=1) and the
+    pool hash: 8,721 quads, every line and hash identical to the parent's,
+    on both merged trees.
+  * Logs byte-identical to the parents' (run output): test_m2_raster_fill,
+    _mip, test_m2_fill_m2cov, _dil, test_m2_raster3d (487 lines),
+    test_m2_quad_store, test_m2_span_tex, test_m2_texel_bl4, test_m2_geo_*,
+    test_geo, test_i960_top, _fx, _c2, test_i960_fpmisc, test_tgp.
+  * Helpers' evidence (their branches room2-i960-2a/-2c, room2-snd-2a/-2c):
+    i960 lockstep top / irq / lat / vc / fr / fx / ring / dc (+ c2,
+    fptrans_log on 2C) byte-identical; fpmisc and ALU old-vs-new 20 M / 52 M
+    vectors 0 (mutants caught); fp_mul 30 M pairs per SUBNORM, mb86233_alu
+    10 M cycles per SHORT, tgpx4_cvt 20 M: 0; TGP replays vf2_skip /
+    vc2_play / zg_attract identical (2.6 M / 3.2 M / 11.4 M words); 2C TGPx4
+    HOTD boot 8,697,138 of 8,697,138 outputs; DOA 20 s sound log and WAV
+    byte-identical (R948 (2) on 2A).
+  * lint_top clean on 2A and 2C (-DM2_2C -DM2_NO_2A_MANX_MOTION); lint_idx
+    2A 113 -> 111 (two mb86233_alu pbit findings gone with pbit), 2C 113.
+*LEFT:* the fits (Ben) -- clk_sys on 2C near the projector / clipper states
+(s1462: project sst -> clip kst 0.199 ns: the projector's state now also
+selects mag8's input; the clipper's kst gains qwu's enables), and the M10K
+count in the fitter's RAM summary.
