@@ -315,6 +315,13 @@ module i960_regs #(
   localparam int unsigned R_RIP = 2;
   localparam int unsigned G_FP  = 15;
 
+  // R952: the callee's frame, (SP or the interrupt stack + 63) & ~63 -- FP's
+  // and SP's S_CALL_FIN values (glb[G_FP], loc[R_SP]) each wrote the same sum
+  // out in full. (2A's other half of this change, the saved frames' addresses
+  // in an MLAB, is for R927's eight-frame ring, which this file does not have.)
+  wire  [31:0] new_fp = ((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
+                        & 32'hffff_ffc0;
+
   logic [31:0] fp_masked;
   assign fp_masked = glb[G_FP] & 32'hffff_ffc0;   // FP & ~0x3f
 
@@ -425,10 +432,8 @@ module i960_regs #(
           // header explains at length.
           rcache_pos    <= rcache_pos + 32'sd1;
           loc[R_PFP]    <= (glb[G_FP] & 32'hffff_fff8) | {29'd0, call_type};
-          glb[G_FP]     <= ((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
-                           & 32'hffff_ffc0;
-          loc[R_SP]     <= (((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
-                           & 32'hffff_ffc0) + 32'd64;
+          glb[G_FP]     <= new_fp;            // R952: the sum formed once
+          loc[R_SP]     <= new_fp + 32'd64;
           next_ip       <= call_target;
           next_ip_valid <= 1'b1;
           state         <= S_IDLE;
