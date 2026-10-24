@@ -44797,3 +44797,12 @@ cracks (R944's target) return with it Off. main and model2c never had R944.
 test_m2_raster_fill_mip 1,989,828 / 0; test_m2_raster3d, quad_store,
 span_tex_uvcl PASS. LEFT: a narrower rule that fills only real gaps (any
 widening overlaps), measured before it is offered.
+  R957, SHADOWS: Ben asked for the black-only rule to test (R955's agent
+measured it as a parameter DILK, not committed: Rally shadow frame 7300 holes
+DIL 0 22 / DIL 1 0 / black-only 0; Lancia frame 4940 no white dots, 156 px
+change against DIL 0, all black flat trim overlapping by the same 1/8 px,
+error vs MAME 2.980 -> 3.031 against DIL 1's 3.303). Built as the switch's
+middle setting: "O[69:68],Seam fill,Off,Shadows,All" (3 reads as Off);
+dil_on is 2 bits, and the fill latches dil_q = All || (Shadows && the quad's
+colour is 0) with the quad -- one 24-bit zero compare, no new state.
+test_m2_fill_dil (All) 3,007 / 0, raster_fill_mip and raster3d PASS.

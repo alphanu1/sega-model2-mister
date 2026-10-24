@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
   d = new Vm2_raster_fill;
   d->rst_n = 0; d->in_valid = 0; d->span_ready = 1;
 #ifdef TB_DIL
-  d->dil_on = 1;   // R957: the OSD's Seam fill On (the R944 rule under test)
+  d->dil_on = 2;   // R957: the OSD's Seam fill All (the R944 rule under test)
 #endif
   d->view_x1 = 0; d->view_x2 = 495; d->view_y1 = 0; d->view_y2 = 383;
   for (int i = 0; i < 10; i++) tick();

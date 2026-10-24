@@ -211,8 +211,9 @@ module m2_raster3d #(
   // 0 off, 1 R828's largest edge K, 2 and 3 a quarter and a half of the way
   // to the smallest. Unused without MIP.
   input  logic [1:0]      tex_mip_mode,
-  // R957: the OSD's "Seam fill" (DIL on flat quads), on clk, quasi-static.
-  input  logic            dil_on,
+  // R957: the OSD's "Seam fill" (DIL on flat quads), on clk, quasi-static:
+  // 0 Off, 1 black flat quads only (Shadows), 2 all flat quads.
+  input  logic [1:0]      dil_on,
   // R784: the OSD's output curve on clk (m2_geo_engine's encoding), for the
   // pedestal m2_span_tex adds to a textured pixel. q_tex[11] carries "luma
   // table row 1" from here on: the checker bit that sat there is taken from

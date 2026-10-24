@@ -197,9 +197,12 @@ module m2_raster_fill #(
   // (max - min) / 4, 3 max - (max - min) / 2. Unused without MIP.
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic [1:0]         mip_mode,
-  // R957: the OSD's "Seam fill" switch for DIL (quasi-static, on clk; taken
-  // per quad, at S_IDLE). 0 leaves every flat quad's edges where they are.
-  input  logic               dil_on,
+  // R957: the OSD's "Seam fill" for DIL (quasi-static, on clk; taken per
+  // quad, at S_IDLE). 0 Off: every flat quad's edges stay where they are.
+  // 1 Shadows: only flat quads whose colour is 0 (black -- the cars' shadows,
+  // h 00c0,..,0000) are dilated, so the white body panels no longer paint
+  // over the livery decals beside them. 2 All: R944 as it was.
+  input  logic [1:0]         dil_on,
   // R828c: the geometry's no-mip flag for this quad (m2_geometry q_mipz):
   // the game's own level is at most -MIPZ_B all over the polygon, so its
   // spans carry no level (K_NONE), as Off does. Unused without MIP.
@@ -1627,7 +1630,7 @@ module m2_raster_fill #(
       case (state)
         S_IDLE: begin
           if (in_valid && pf_st == S_IDLE && !span_valid && !s1_valid) begin   // R544: see in_ready; R715
-            dil_q <= dil_on;                         // R957
+            dil_q <= dil_on[1] || (dil_on[0] && in_col == 24'd0);   // R957
             sx[0] <= in_x0; sy[0] <= in_y0;
             sx[1] <= in_x1; sy[1] <= in_y1;
             sx[2] <= in_x2; sy[2] <= in_y2;
