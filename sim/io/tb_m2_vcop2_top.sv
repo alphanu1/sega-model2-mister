@@ -44,7 +44,7 @@ module tb_m2_vcop2_top (
     .clk, .rst_n, .game(7'h11),   // R887: Virtua Cop 2's ID, the GUN profile
     .joystick_0({16'd0, joy0}), .joystick_1({16'd0, joy1}),
     .joy_analog(16'd0), .joy_ranalog(16'd0), .joy_analog_1(16'd0), .paddle(8'd0),
-    .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0),
+    .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0), .st_wheel(2'd0),
     .gun_in1(g_in1), .pe(8'hFF),
     .in0, .in1, .in2, .an0, .an1, .an2
   );

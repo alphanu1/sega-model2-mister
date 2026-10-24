@@ -517,6 +517,10 @@ localparam CONF_STR = {
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
 	"O[54],Right stick,Pedals only,Pedals+steer;",      // R831: Pedals+steer = R816 (a wheel): X steers, Y still the pedals
+	// R958: GitHub #12, Jotego's OutRun style. Standard is everything above;
+	// Wheel A: left X steers, left Y up = accelerator, right Y up = brake;
+	// Wheel B: left X steers, left Y (whole axis) accelerator, right X brake.
+	"O[71:70],Analog control,Standard,Wheel A,Wheel B;",
 `elsif M2_2A_RALLY
 	// R862: the same four, the same bits, shown only for Sega Rally
 	// (status_menumask bit 2).
@@ -524,6 +528,7 @@ localparam CONF_STR = {
 	"h2O[30:29],Steering,3/4,Full,5/4,Half;",
 	"h2O[51:50],Steering smoothing,Off,Light,Wheel;",
 	"h2O[54],Right stick,Pedals only,Pedals+steer;",
+	"h2O[71:70],Analog control,Standard,Wheel A,Wheel B;",   // R958 (Sky Target ignores it)
 `endif
 	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
 	// each quad's level moves from its footprint's major axis (R828, the
@@ -6443,7 +6448,7 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.joystick_0(joystick_0), .joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q),
 	.paddle(paddle_q),
 	.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
-	.st_rsteer(status[54]),
+	.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
 end else begin : g_nocab
@@ -6595,7 +6600,8 @@ end else begin : g_noioboard
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
 			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .joy_analog_1(joy_analog_1_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
-			.st_rsteer(status[54]), .gun_in1(vc_in1),   // R870: the guns' triggers
+			.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
+			.gun_in1(vc_in1),                            // R870: the guns' triggers
 			.pe(a2_pe),                                  // R892
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2)
