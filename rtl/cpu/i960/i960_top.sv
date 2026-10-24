@@ -749,7 +749,8 @@ module i960_top #(
   // R575: STAGED -- a register inside the unit after the round add, so the
   // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
   localparam bit FPMISC_STAGED = 1'b1;
-  i960_fpmisc #(.STAGED(FPMISC_STAGED)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
+  // R952: SCALE 0 -- fmisc_op is never 6 (scaler is the multiply by pow2).
+  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
                         .a(fp_a), .b(fp_b), .ai(src1_val),
                         .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
 
