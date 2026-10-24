@@ -106,17 +106,39 @@ module i960_alu (
   logic [4:0]  rot;
   logic [31:0] rot_res;
   assign rot     = src1[4:0];
-  assign rot_res = (rot == 5'd0) ? src2 : ((src2 << rot) | (src2 >> (6'd32 - {1'b0, rot})));
+
+  // R952: ONE RIGHT SHIFTER AND ONE LEFT SHIFTER. shro (logical), shri and
+  // shrdi (arithmetic) and the rotate's right half each had a 32-bit barrel of
+  // their own, and the rotate's left half another beside shlo's. A right
+  // shift with its fill bit chosen (src2's sign for shri / shrdi, 0 for the
+  // rest) is all three; the rotate's right half is it by 32 - rot (rot 1..31,
+  // the only amounts it is used at), and its left half is shlo's shift (rot
+  // and sh are both src1[4:0]). Only one op2 is decoded in a cycle.
+  logic        sr_fill;
+  logic [4:0]  sr_amt;
+  logic [31:0] sr_out, sl_out;
+  assign sr_fill = ((op2 == 4'ha) || (op2 == 4'hb)) && src2[31];
+  assign sr_amt  = (op2 == 4'hd) ? (5'd0 - rot) : sh;
+  /* verilator lint_off WIDTHTRUNC */
+  assign sr_out  = 32'($signed({sr_fill, src2}) >>> sr_amt);
+  /* verilator lint_on WIDTHTRUNC */
+  assign sl_out  = src2 << sh;
+  assign rot_res = (rot == 5'd0) ? src2 : (sl_out | sr_out);
 
   // Condition codes. Order matters: the reference passes (t1, t2), so cmpo
   // compares src1 against src2 and not the other way round.
   logic [2:0] cc_u, cc_s, ccon_u, ccon_s;
-  assign cc_u   = (src1 <  src2)             ? 3'b100 :
-                  (src1 == src2)             ? 3'b010 : 3'b001;
-  assign cc_s   = ($signed(src1) <  src2_s)  ? 3'b100 :
-                  (src1 == src2)             ? 3'b010 : 3'b001;
-  assign ccon_u = (src1 <= src2)             ? 3'b010 : 3'b001;
-  assign ccon_s = ($signed(src1) <= src2_s)  ? 3'b010 : 3'b001;
+  // R952: one magnitude compare and one equality for all four: the signed
+  // less-than is the unsigned one unless the signs differ (then src1 is less
+  // exactly when it is the negative one), and <= is < or ==.
+  logic lt_u, lt_s, eq;
+  assign lt_u   = src1 < src2;
+  assign lt_s   = (src1[31] != src2[31]) ? src1[31] : lt_u;
+  assign eq     = (src1 == src2);
+  assign cc_u   = lt_u ? 3'b100 : eq ? 3'b010 : 3'b001;
+  assign cc_s   = lt_s ? 3'b100 : eq ? 3'b010 : 3'b001;
+  assign ccon_u = (lt_u || eq) ? 3'b010 : 3'b001;
+  assign ccon_s = (lt_s || eq) ? 3'b010 : 3'b001;
 
   // scanbyte sets equal if any byte lane matches.
   logic scanbyte_hit;
@@ -252,19 +274,19 @@ module i960_alu (
           // inventing overflow here would diverge from the only oracle there is.
           4'h0, 4'h1: result = add_res[31:0];          // addo, addi
           4'h2, 4'h3: result = add_res[31:0];          // subo, subi
-          4'h8: result = sh_ge32 ? 32'd0 : (src2 >> sh);           // shro
+          4'h8: result = sh_ge32 ? 32'd0 : sr_out;                 // shro (R952: sr_out, fill 0)
           4'ha: begin                                              // shrdi
             if (sh_ge32)                 result = 32'd0;
             else if (src2_s < 0)
-              result = shrdi_lost ? ($signed(src2_s >>> sh) + 32'sd1)
-                                  :  $signed(src2_s >>> sh);
-            else                         result = src2 >> sh;
+              result = shrdi_lost ? (sr_out + 32'd1)            // R952: sr_out, src2's sign
+                                  :  sr_out;
+            else                         result = sr_out;
           end
           4'hb: result = sh_ge32 ? (src2_s < 0 ? 32'hffff_ffff : 32'd0)
-                                 : $signed(src2_s >>> sh);         // shri
+                                 : sr_out;                         // shri (R952)
           // shli is shlo in the reference: "missing overflow", with a note that
           // later models preserve sign on overflow. The KB is not a later model.
-          4'hc, 4'he: result = sh_ge32 ? 32'd0 : (src2 << sh);      // shlo, shli
+          4'hc, 4'he: result = sh_ge32 ? 32'd0 : sl_out;            // shlo, shli (R952)
           4'hd: result = rot_res;                                   // rotate
           default: begin result_we = 1'b0; valid = 1'b0; end
         endcase
