@@ -174,10 +174,9 @@ Fighter 2 at the default 80%:
 
 ## Model 2C core — `Model2C.rbf` (BETA)
 
-<!-- STAGED (local): the 2C MRAs in mra/ are the 16520-byte save layout (R945,
-     settings saved). They need a Model2C core built with R945 -- the next 2C
-     core. Do not release them with Model2C_20261023 (s1373, no R945). -->
-
+<!-- STAGED (local): Model2C_20261024 = s1462 (room-2c a80ab4b + M2_RECIP_LOGIC=1),
+     clk_mem -0.067 ns -- not a clean seed; replace with a clean one before
+     any release. -->
 The first Model 2C core: three games. The 2C board replaces the 2A's
 geometry chip with Sega's TGPx4 (Fujitsu MB86235), rebuilt here from
 scratch and checked against MAME output for output. It's a beta: please
@@ -187,11 +186,15 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261023.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261024.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261023.rbf` has the md5 `55823f75492f079488dfd468f6aea10a`. Keep
+`Model2C_20261024.rbf` has the md5 `9d0df5d40ee3a2b9a59c93de2bca597a`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
+
+**The game's settings now save.** Change them in the test menu, then use the
+OSD's "Save settings (NVRAM)". Use the MRAs from this folder: older 2C MRAs
+don't save the settings.
 
 ### Games
 
@@ -205,8 +208,17 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
+### Fixed in this build
+
+- **House of the Dead's sound no longer wobbles, crackles or clips** on the
+  attract's tutorial screen and similar busy moments (the sound chip was
+  running out of time on each sample).
+- **Test-menu settings are saved** for all three games.
+
 ### Known bugs
 
+- **House of the Dead**: in chapter 2 the music is too loud against the gun
+  shots, with a high, tinny sound. Being looked at.
 - **Sega Touring Car Championship has no music.** Its music board plays
   MPEG audio, which the core doesn't have yet. Engine sounds and effects
   play. Races may slow down, and the pedals haven't been checked on a real
