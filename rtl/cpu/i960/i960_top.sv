@@ -932,6 +932,21 @@ module i960_top #(
   wire [31:0] prcb_p20 = prcb_reg + 32'd20;
   wire [31:0] it_vec4  = it_base + {27'd0, cur_vec[7:5], 2'b00} + 32'd4;
   wire [31:0] it_lvl4  = it_base + {27'd0, cur_lvl[4:2], 2'b00} + 32'd4;
+  // R952: the rest of the interrupt walk's sums, each once. prcb + 24 (the
+  // boot and the take); vector - 8 (the take's table index and the word it
+  // saves); and the three words under the interrupt frame -- FP - 16 / - 12
+  // (T_RET7's two reads, the take's first two writes) and FP - 8 (its third),
+  // five adders that are one: -16 + 4k is 0xfffffff0 | 4k for k = 0..2.
+  wire [31:0] prcb_p24 = prcb_reg + 32'd24;
+  wire [31:0] cv_m8    = {24'd0, cur_vec} - 32'd8;
+  wire  [1:0] fs_k     = (ts == T_RET7) ? {1'b0, intr_step != 4'd0}     // 0: -16, else -12
+                                        : (intr_step[1:0] - 2'd1);      // steps 5 / 6 / 7: -16 / -12 / -8
+  wire [31:0] fp_slot  = cur_fp + {28'hfff_ffff, fs_k, 2'b00};
+  // R952: synmovq's word address, one adder for its two walks -- the IAC
+  // message's four reads (synq_iac: syn_src + step * 4) and the copy's
+  // alternating read / write (syn_src or syn_dst + (step / 2) * 4).
+  wire [31:0] synq_a   = (synq_iac ? syn_src : (synq_step[0] ? syn_dst : syn_src))
+                       + {28'd0, (synq_iac ? synq_step[1:0] : synq_step[2:1]), 2'b00};
 
   i960_agu u_agu (
     .insn(insn[13:0]), .abase_val(rd2), .index_val(rd1),
@@ -1482,7 +1497,7 @@ module i960_top #(
               // and the spill wrote to 0x100 -- program ROM, where writes are
               // discarded -- so the fill read ROM back and the closing `ret`
               // took its return address from it and branched to zero.
-              boot_addr <= prcb_reg + 32'd24;
+              boot_addr <= prcb_p24;   // R952: prcb_reg + 24, named once
               boot_step <= 2'd3;
             end
             default: begin
@@ -2027,7 +2042,7 @@ module i960_top #(
         // into T_FRAME.
         T_RET7: if (!boot_req) begin
           aux_we    <= 1'b0;
-          boot_addr <= (intr_step == 4'd0) ? (cur_fp - 32'd16) : (cur_fp - 32'd12);
+          boot_addr <= fp_slot;   // R952: FP - 16 at step 0, else FP - 12
           boot_req  <= 1'b1;
         end else if (boot_ack) begin
           boot_req <= 1'b0;
@@ -2048,7 +2063,7 @@ module i960_top #(
             // Four reads of the IAC message.
             4'd0, 4'd1, 4'd2, 4'd3: if (!boot_req) begin
               aux_we    <= 1'b0;
-              boot_addr <= syn_src + {28'd0, synq_step[1:0], 2'b00};
+              boot_addr <= synq_a;   // R952: syn_src + step * 4 (synq_iac)
               boot_req  <= 1'b1;
             end else if (boot_ack) begin
               boot_req <= 1'b0;
@@ -2105,8 +2120,7 @@ module i960_top #(
           // Memory to memory, four dwords. Even steps read the source, odd
           // steps write the destination; synq_step[2:1] is the word index.
           aux_we    <= synq_step[0];
-          boot_addr <= (synq_step[0] ? syn_dst : syn_src)
-                     + {28'd0, synq_step[2:1], 2'b00};
+          boot_addr <= synq_a;   // R952: (dst or src) + (step / 2) * 4
           aux_wdata <= scratch;
           boot_req  <= 1'b1;
         end else if (boot_ack) begin
@@ -2175,14 +2189,13 @@ module i960_top #(
               boot_req <= 1'b1;
               case (intr_step)
                 4'd0: boot_addr <= prcb_p20;
-                4'd1: boot_addr <= prcb_reg + 32'd24;
+                4'd1: boot_addr <= prcb_p24;   // R952
                 // int_tab + 36 + (vector-8)*4. MAME does not guard vector < 8,
                 // and the wrap is reproduced rather than corrected: vectors
                 // below 8 are reserved on the part, so the address it forms is
                 // undefined either way and inventing a guard here would make
                 // this disagree with the oracle for no gain.
-                default: boot_addr <= it_base + 32'd36
-                                    + ((({24'd0, cur_vec}) - 32'd8) << 2);
+                default: boot_addr <= it_base + 32'd36 + (cv_m8 << 2);   // R952: cv_m8
               endcase
             end else if (boot_ack) begin
               boot_req <= 1'b0;
@@ -2218,10 +2231,10 @@ module i960_top #(
               aux_we   <= 1'b1;
               boot_req <= 1'b1;
               case (intr_step)
-                4'd5: begin boot_addr <= cur_fp - 32'd16; aux_wdata <= pc_reg; end
-                4'd6: begin boot_addr <= cur_fp - 32'd12; aux_wdata <= ac; end
-                default: begin boot_addr <= cur_fp - 32'd8;
-                               aux_wdata <= {24'd0, cur_vec} - 32'd8; end
+                4'd5: begin boot_addr <= fp_slot; aux_wdata <= pc_reg; end   // R952: FP - 16
+                4'd6: begin boot_addr <= fp_slot; aux_wdata <= ac; end       // FP - 12
+                default: begin boot_addr <= fp_slot;                          // FP - 8
+                               aux_wdata <= cv_m8; end
               endcase
             end else if (boot_ack) begin
               boot_req  <= 1'b0;
