@@ -155,17 +155,30 @@ module fp_mul #(
   // result below 2^-126 is the product shifted by s1_exp itself -- left, or
   // right with the lost bits kept as a sticky bit 0 -- with exponent 0: the
   // normalised product shifted right by 1 - exponent comes to exactly that.
-  wire [47:0] p_lz   = s1_prod << s1_lz;
+  //
+  // R952: ONE LEFT SHIFTER, NOT TWO. The leading-zero shift (by s1_lz) and a
+  // subnormal's left shift (by s1_lsh) were separate 48-bit shifters; they
+  // share one, its amount picked by the registered s1_xle0. Below 2^-126 by
+  // s1_xle0 it is s1_lsh, as before. Otherwise it is s1_lz -- the old p_lz,
+  // and p_nsh with it -- and the other way into a subnormal, s1_xeq1 with
+  // p_nsh, means s1_exp == s1_lz (explz = exp + 1 - lz = 1; lz <= 46, a
+  // significand has at most 23 leading zeros), where the old p_left
+  // (exp > 0, lsh = exp) and p_rgt (exp = lz = 0, a shift by nothing) were
+  // both this same product. Every result identical (R952: the old unit
+  // beside this one, 30 M random operand pairs per SUBNORM setting). p_nsh
+  // stays the one bit of the s1_lz shift it always was (a 48:1 select, not
+  // a shifter), so the path into s2_exp is the length it was.
+  wire [47:0] p_sh   = s1_prod << (s1_xle0 ? s1_lsh : s1_lz);
+  wire [47:0] p_lz   = s1_prod << s1_lz;   // bit 47 alone is used
   wire        p_nsh  = !p_lz[47];
   wire        p_den  = SUBNORM && (s1_xle0 || (s1_xeq1 && p_nsh));
-  wire [47:0] p_left = s1_prod << s1_lsh;
   wire [47:0] p_rgt  = (s1_rsh >= 6'd48) ? {47'd0, |s1_prod}
                      : ((s1_prod >> s1_rsh[5:0])
                         | {47'd0, |(s1_prod & ~(48'hFFFF_FFFF_FFFF << s1_rsh[5:0]))});
   assign norm_shift = s1_prod[47];
   assign norm_prod  = !SUBNORM ? (norm_shift ? s1_prod : (s1_prod << 1))
-                    : p_den    ? (s1_epos ? p_left : p_rgt)
-                    : (p_nsh ? (p_lz << 1) : p_lz);
+                    : (s1_xle0 && !s1_epos) ? p_rgt
+                    : (p_nsh && !p_den) ? (p_sh << 1) : p_sh;
   assign norm_exp   = !SUBNORM ? (s1_exp + (norm_shift ? 11'sd1 : 11'sd0))
                     : p_den    ? 11'sd0
                     : (s1_explz - (p_nsh ? 11'sd1 : 11'sd0));
