@@ -735,7 +735,19 @@ module m2_raster_fill #(
   function automatic logic [31:0] pf_abs(input logic signed [31:0] n);
     pf_abs = n[31] ? (~n + 32'd1) : n;
   endfunction
-  logic [31:0] a_nxu, a_nyu, a_nxv, a_nyv, a_nxo, a_nyo;   // R584
+  // R952: ONE NORMALISER FOR THE SIX NUMERATORS, A NUMERATOR A CYCLE (the
+  // magnitude, the halves' counts and the join, R584 / R735's stages, in a
+  // pipeline that S_PF_N's second cycle starts -- nxu..nyo landed the cycle
+  // before and hold until the next fit). Each count is joined exactly when
+  // the six-wide version joined it or earlier: nxu_z on NRM's wait 2 (as
+  // before), nyu_z on 3, nxv_z on 4, nyv_z on Q1, nxo_z on Q1W, nyo_z on Q2
+  // -- each the cycle before nz_c first takes it (R742's schedule: wait 3,
+  // wait 4, Q1, Q1W, Q2, Q2W), and nz_c reads no count before that.
+  logic [2:0]  nz_k;                       // the numerator entering, 0..5
+  logic        nz_run, nz_vs, nz_va, nz_vc;
+  logic [2:0]  nz_ks, nz_ka, nz_kc;
+  logic [31:0] nz_sel, nz_abs;
+  logic [4:0]  nz_h, nz_l;
   // R735: AND THE COUNT IN TWO HALVES. clz32 was one cycle (s784 at 80 MHz:
   // a_nyu -> nyu_z -0.737, a_nyo -> nyo_z). Each 16-bit half is counted on
   // nrm_wait 1 and the two combined on 2; the first reader is the state's
@@ -749,7 +761,6 @@ module m2_raster_fill #(
     end
   endfunction
   // {top half's count, bottom half's count}, each 0..16
-  logic [4:0] h_nxu, l_nxu, h_nyu, l_nyu, h_nxv, l_nxv, h_nyv, l_nyv, h_nxo, l_nxo, h_nyo, l_nyo;
   function automatic logic [5:0] clz_join(input logic [4:0] h, input logic [4:0] l);
     clz_join = (h == 5'd16) ? 6'(6'd16 + 6'(l)) : 6'(h);
   endfunction
@@ -1159,6 +1170,20 @@ module m2_raster_fill #(
   //   NRM (wait 0-3) loads nxu for NRM's last cycle; NRM's last loads nyu for
   //   Q1; Q1 -> nxv; Q1W -> nyv; Q2 -> nxo; Q2W -> nyo (Q3 presents nothing).
   // The counts are joined on nrm_wait 2 (R735), so wait 3's load has them.
+  // R952: the shared normaliser's datapath -- select, magnitude, halves
+  always_ff @(posedge clk) begin
+    nz_ks <= nz_k;
+    case (nz_k)
+      3'd0:    nz_sel <= nxu;
+      3'd1:    nz_sel <= nyu;
+      3'd2:    nz_sel <= nxv;
+      3'd3:    nz_sel <= nyv;
+      3'd4:    nz_sel <= nxo;
+      default: nz_sel <= nyo;
+    endcase
+    nz_ka  <= nz_ks;  nz_abs <= pf_abs(nz_sel);
+    nz_kc  <= nz_ka;  nz_h   <= clz16(nz_abs[31:16]);  nz_l <= clz16(nz_abs[15:0]);
+  end
   logic signed [31:0] nn_c;
   logic [5:0]         nz_c;
   always_comb begin
@@ -1264,10 +1289,27 @@ module m2_raster_fill #(
         sx[i] <= 16'sd0;
         sy[i] <= 16'sd0;
       end
+      nz_k <= 3'd0; nz_run <= 1'b0; nz_vs <= 1'b0; nz_va <= 1'b0; nz_vc <= 1'b0;   // R952
     end else begin
       div_start  <= 1'b0;
       divb_start <= 1'b0;
       quad_done  <= 1'b0;
+      // R952: the shared normaliser's walk and its joined counts
+      if ((pf_st == S_PF_N) && (pfn_wait == 2'd1)) begin
+        nz_k <= 3'd0; nz_run <= 1'b1;                     // nxu..nyo landed last cycle
+      end else if (nz_run) begin
+        nz_k <= nz_k + 3'd1;
+        if (nz_k == 3'd5) nz_run <= 1'b0;
+      end
+      nz_vs <= nz_run; nz_va <= nz_vs; nz_vc <= nz_va;
+      if (nz_vc) case (nz_kc)
+        3'd0:    nxu_z <= clz_join(nz_h, nz_l);
+        3'd1:    nyu_z <= clz_join(nz_h, nz_l);
+        3'd2:    nxv_z <= clz_join(nz_h, nz_l);
+        3'd3:    nyv_z <= clz_join(nz_h, nz_l);
+        3'd4:    nxo_z <= clz_join(nz_h, nz_l);   // R441
+        default: nyo_z <= clz_join(nz_h, nz_l);
+      endcase
       sc_r      <= pf_gshift(mul_q_r, net_r, zbig_r);   // R594: every cycle
       sc_s      <= pf_sat(sc_r);                         // R727: every cycle
       line_case <= 1'b0;
@@ -1439,24 +1481,7 @@ module m2_raster_fill #(
           // registered on the first cycle and counted on the second; the
           // first reader is the third cycle's mul_n, so no cycle is added and
           // the counts are the same numbers.
-          if (nrm_wait == 3'd0) begin
-            a_nxu <= pf_abs(nxu); a_nyu <= pf_abs(nyu);
-            a_nxv <= pf_abs(nxv); a_nyv <= pf_abs(nyv);
-            a_nxo <= pf_abs(nxo); a_nyo <= pf_abs(nyo);
-          end
-          if (nrm_wait == 3'd1) begin   // R735: the halves
-            h_nxu <= clz16(a_nxu[31:16]); l_nxu <= clz16(a_nxu[15:0]);
-            h_nyu <= clz16(a_nyu[31:16]); l_nyu <= clz16(a_nyu[15:0]);
-            h_nxv <= clz16(a_nxv[31:16]); l_nxv <= clz16(a_nxv[15:0]);
-            h_nyv <= clz16(a_nyv[31:16]); l_nyv <= clz16(a_nyv[15:0]);
-            h_nxo <= clz16(a_nxo[31:16]); l_nxo <= clz16(a_nxo[15:0]);
-            h_nyo <= clz16(a_nyo[31:16]); l_nyo <= clz16(a_nyo[15:0]);
-          end
-          if (nrm_wait == 3'd2) begin   // R735: joined -- clz32's numbers
-            nxu_z <= clz_join(h_nxu, l_nxu); nyu_z <= clz_join(h_nyu, l_nyu);
-            nxv_z <= clz_join(h_nxv, l_nxv); nyv_z <= clz_join(h_nyv, l_nyv);
-            nxo_z <= clz_join(h_nxo, l_nxo); nyo_z <= clz_join(h_nyo, l_nyo);   // R441
-          end
+          // R952: the counts come from the shared normaliser (below the case).
         end else begin
           nrm_wait <= 3'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
