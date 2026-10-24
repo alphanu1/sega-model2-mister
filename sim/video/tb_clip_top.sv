@@ -80,6 +80,35 @@ module tb_clip_top (
     .out_z(pj_out_z), .out_invz(), .out_behind(pj_behind)   // R331
   );
 
+  // R952: the clipper keeps f2uvw of its coordinates beside them (out_wu /
+  // out_wv, m2_geometry's eighths); checked against the function on every
+  // cycle, on every quad this bench drives through (the pops included).
+  function automatic logic [15:0] f2uvw(input logic [31:0] f);
+    logic [7:0]  e;
+    logic [23:0] m;
+    begin
+      e = f[30:23];
+      m = {1'b1, f[22:0]};
+      if (f[31] || e < 8'd127)      f2uvw = 16'd0;
+      else if (e >= 8'd127 + 8'd16) f2uvw = 16'hffff;
+      else                          f2uvw = 16'(m >> (5'(8'd23 - (e - 8'd127))));
+    end
+  endfunction
+  logic [15:0] out_wu [4], out_wv [4];
+  int unsigned wchk, wbad;
+  initial begin wchk = 0; wbad = 0; end
+  always @(posedge clk) begin
+    wchk <= wchk + 1;
+    if (out_wu[0] != f2uvw(out_u0) || out_wv[0] != f2uvw(out_v0) ||
+        out_wu[1] != f2uvw(out_u1) || out_wv[1] != f2uvw(out_v1) ||
+        out_wu[2] != f2uvw(out_u2) || out_wv[2] != f2uvw(out_v2) ||
+        out_wu[3] != f2uvw(out_u3) || out_wv[3] != f2uvw(out_v3)) begin
+      wbad <= wbad + 1;
+      if (wbad < 5) $display("R952 FAIL: out_wu/out_wv != f2uvw(out_u/out_v) at %0t", $time);
+    end
+  end
+  final $display("R952: out_wu / out_wv against f2uvw(out_u / out_v): %0d cycles, %0d differ", wchk, wbad);
+
   m2_geo_clip u_clip (
     // R334: 1/z per vertex. The bench does not exercise the perspective
     // path, so the inputs are zero and the outputs are not observed.
@@ -98,6 +127,8 @@ module tb_clip_top (
     .in_frac(16'd0), .out_frac(), .pj_out_fx(pj_out_fx), .pj_out_fy(pj_out_fy),   // R626
     .in_u0(in_u0), .in_v0(in_v0), .in_u1(in_u1), .in_v1(in_v1),
     .in_u2(in_u2), .in_v2(in_v2), .in_u3(in_u3), .in_v3(in_v3),
+    .in_wu0(f2uvw(in_u0)), .in_wv0(f2uvw(in_v0)), .in_wu1(f2uvw(in_u1)), .in_wv1(f2uvw(in_v1)),   // R952
+    .in_wu2(f2uvw(in_u2)), .in_wv2(f2uvw(in_v2)), .in_wu3(f2uvw(in_u3)), .in_wv3(f2uvw(in_v3)),
     .in_col(24'h334455), .in_z(32'h40000000), .in_moire(1'b0),
     .in_tex(32'd0), .in_lum(8'd0), .in_mipz(1'b0),
     .mul_req(mul_req[1]), .mul_a(mul_a[1]), .mul_b(mul_b[1]),
@@ -116,6 +147,8 @@ module tb_clip_top (
     .out_sx2(out_sx2), .out_sy2(out_sy2), .out_sx3(out_sx3), .out_sy3(out_sy3),
     .out_u0(out_u0), .out_v0(out_v0), .out_u1(out_u1), .out_v1(out_v1),
     .out_u2(out_u2), .out_v2(out_v2), .out_u3(out_u3), .out_v3(out_v3),
+    .out_wu0(out_wu[0]), .out_wv0(out_wv[0]), .out_wu1(out_wu[1]), .out_wv1(out_wv[1]),   // R952
+    .out_wu2(out_wu[2]), .out_wv2(out_wv[2]), .out_wu3(out_wu[3]), .out_wv3(out_wv[3]),
     .out_col(), .out_z(), .out_moire(), .out_tex(), .out_lum(), .out_mipz(),
     .dbg_in(dbg_in), .dbg_out(dbg_out), .dbg_dropped(dbg_dropped)
   );
