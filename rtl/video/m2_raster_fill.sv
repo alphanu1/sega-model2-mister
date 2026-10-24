@@ -139,8 +139,8 @@ module m2_raster_fill #(
   // weighted mean of the logs, which leaves a face-on quad (max ~ min) where
   // R828 put it and pulls an oblique one towards its minor axis.
   parameter bit MIP = 1'b0,
-  // R948: the reciprocal table in M10K (m2_recip_rom M10K, two blocks, data
-  // two cycles after the address; the dividers wait for it). 0: its LUT form.
+  // R948: the reciprocal table in M10K (m2_recip_rom M10K, two blocks, the
+  // same timing). 0: its LUT form.
   parameter bit RECIP_M10K = 1'b0
 ) (
   input  logic               clk,
@@ -905,7 +905,7 @@ module m2_raster_fill #(
     .b_addr(rom_b_addr), .b_data(rom_b_data)
   );
 
-  m2_raster_div #(.ROM_LAT(RECIP_M10K ? 2 : 1)) u_div (   // R948
+  m2_raster_div u_div (
     .clk       (clk),
     .rst_n     (rst_n),
     .rom_addr  (rom_a_addr),
@@ -919,7 +919,7 @@ module m2_raster_fill #(
     .div0      (div0_unused)
   );
 
-  m2_raster_div #(.ROM_LAT(RECIP_M10K ? 2 : 1)) u_divb (   // R948
+  m2_raster_div u_divb (
     .clk       (clk),
     .rst_n     (rst_n),
     .rom_addr  (rom_b_addr),

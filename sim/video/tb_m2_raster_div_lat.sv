@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1
 //
-// R948: m2_raster_div on m2_recip_rom's two forms -- the LUT copies (one cycle,
-// ROM_LAT 1) and the M10K table (two cycles, ROM_LAT 2) -- side by side, the
-// same operands to both, every quotient and div0 compared. Every denominator
-// -600..600 (the table's 1..255 both signs, the restoring path past it, zero)
-// against edge and random numerators, then random 32-bit pairs; each pair is
-// started on both units at once and both must answer.
+// R948: m2_raster_div on m2_recip_rom's two forms -- the LUT copies and the
+// M10K table -- side by side, the same operands to both: every cycle's ready,
+// out_valid, quotient and div0 compared (the forms are cycle-identical).
+// Every denominator -600..600 (the table's 1..255 both signs, the restoring
+// path past it, zero) against edge and random numerators, then random 32-bit
+// pairs; port A and port B of the table each carry a pair of dividers.
 `timescale 1ns/1ps
 module tb_m2_raster_div_lat;
   logic clk = 1'b0, rst_n = 1'b0;
@@ -20,15 +20,24 @@ module tb_m2_raster_div_lat;
   logic r1, r2, v1, v2, z1, z2, vb1, vb2, rb1, rb2, zb1, zb2;
   logic signed [31:0] q1, q2, qb1, qb2;
   // port A and port B each carry a divider, as in m2_raster_fill
-  m2_raster_div #(.ROM_LAT(1)) u_d1  (.clk(clk), .rst_n(rst_n), .rom_addr(aa1), .rom_data(da1), .in_valid(go), .num(num), .den(den),
+  m2_raster_div u_d1  (.clk(clk), .rst_n(rst_n), .rom_addr(aa1), .rom_data(da1), .in_valid(go), .num(num), .den(den),
                                       .ready(r1), .out_valid(v1), .quo(q1), .div0(z1));
-  m2_raster_div #(.ROM_LAT(2)) u_d2  (.clk(clk), .rst_n(rst_n), .rom_addr(aa2), .rom_data(da2), .in_valid(go), .num(num), .den(den),
+  m2_raster_div u_d2  (.clk(clk), .rst_n(rst_n), .rom_addr(aa2), .rom_data(da2), .in_valid(go), .num(num), .den(den),
                                       .ready(r2), .out_valid(v2), .quo(q2), .div0(z2));
-  m2_raster_div #(.ROM_LAT(1)) u_db1 (.clk(clk), .rst_n(rst_n), .rom_addr(ab1), .rom_data(db1), .in_valid(go), .num(-num), .den(den),
+  m2_raster_div u_db1 (.clk(clk), .rst_n(rst_n), .rom_addr(ab1), .rom_data(db1), .in_valid(go), .num(-num), .den(den),
                                       .ready(rb1), .out_valid(vb1), .quo(qb1), .div0(zb1));
-  m2_raster_div #(.ROM_LAT(2)) u_db2 (.clk(clk), .rst_n(rst_n), .rom_addr(ab2), .rom_data(db2), .in_valid(go), .num(-num), .den(den),
+  m2_raster_div u_db2 (.clk(clk), .rst_n(rst_n), .rom_addr(ab2), .rom_data(db2), .in_valid(go), .num(-num), .den(den),
                                       .ready(rb2), .out_valid(vb2), .quo(qb2), .div0(zb2));
-  int n = 0, bad = 0, slow = 0;
+  int n = 0, bad = 0, cyc = 0;
+  // cycle by cycle: the two forms must agree on every output, every clock
+  always @(posedge clk) if (rst_n) begin
+    #2;
+    if (r1 !== r2 || v1 !== v2 || rb1 !== rb2 || vb1 !== vb2
+        || (v1 && (q1 !== q2 || z1 !== z2)) || (vb1 && (qb1 !== qb2 || zb1 !== zb2))) begin
+      cyc++;
+      if (cyc < 10) $display("CYCLE DIFF t=%0t r %b%b v %b%b rb %b%b vb %b%b", $time, r1, r2, v1, v2, rb1, rb2, vb1, vb2);
+    end
+  end
   logic signed [31:0] g1, g2, gb1, gb2;
   logic gz1, gz2, gzb1, gzb2;
   task automatic one(input logic signed [31:0] a, input logic signed [31:0] d);
@@ -61,8 +70,8 @@ module tb_m2_raster_div_lat;
       for (int k = 0; k < 8; k++) one($random, d);
     end
     for (int k = 0; k < 200000; k++) one($random, (k & 1) ? ($random % 300) : $random);
-    $display("tb_m2_raster_div_lat: %0d divides x 2 ports, %0d differ", n, bad);
-    if (bad == 0) $display("PASS"); else $display("FAIL");
+    $display("tb_m2_raster_div_lat: %0d divides x 2 ports, %0d results differ, %0d cycles differ", n, bad, cyc);
+    if (bad == 0 && cyc == 0) $display("PASS"); else $display("FAIL");
     $finish;
   end
 endmodule

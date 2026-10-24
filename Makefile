@@ -1262,7 +1262,7 @@ obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_raster_fill.cpp
 
 # R948: m2_raster_div on the reciprocal table's two forms (m2_recip_rom M10K
-# 0 / 1, ROM_LAT 1 / 2) side by side: every quotient and div0 the same
+# 0 / 1) side by side: every output the same, every cycle
 .PHONY: test_m2_raster_div_lat
 test_m2_raster_div_lat:
 	@echo "== test m2_raster_div, the LUT table against the M10K one (R948)"
