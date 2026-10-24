@@ -1014,3 +1014,6 @@ set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[1]"
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[3]"
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[4]"
+
+set_global_assignment -name VERILOG_MACRO "M2_2C=1"
+set_global_assignment -name VERILOG_MACRO "M2_NO_2A_MANX_MOTION=1"
