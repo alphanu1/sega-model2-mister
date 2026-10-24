@@ -182,7 +182,10 @@ module i960_fpmisc #(
   // fraction's top bit, fa_w[fbits-1] -- one bit select, where it was a 56-bit
   // shift and a 56-bit compare.
   logic half_up;
-  assign half_up = (fbits != 6'd0) && fa_w[fbits - 6'd1];
+  // (indexed in a 64-bit copy: at fbits 0 the index wraps to 63, which the
+  // guard masks -- in range, so lint_idx has nothing to report)
+  wire [63:0] fa_w64 = {8'd0, fa_w};
+  assign half_up = (fbits != 6'd0) && fa_w64[fbits - 6'd1];
 
   logic inc;
   // cvtzri truncates REGARDLESS of the mode field — the z is "toward zero" and
