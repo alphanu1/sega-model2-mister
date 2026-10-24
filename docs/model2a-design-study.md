@@ -44123,3 +44123,7 @@ R944 WORKS -- Sega Rally's car-shadow holes are gone. Still there: a straight
 line of single white pixels across Rally's textured sky in the attract's
 canyon start (#26 item 2) -- the textured version of the same T-junction
 crack? Branch rally-sky (R951), reproduce first at the board's settings.
+*Ben, s1447:* everything else on 2A as before, and the new additions work
+(R937 bridge, R939 pairing, R940 sea, R944 shadow, R945 save). Remaining
+for the 2A release: a clean seed carrying these plus R950 (Auto filter),
+R948's shrinking and the sound mix fix (R949); the sky dots (R951) open.
