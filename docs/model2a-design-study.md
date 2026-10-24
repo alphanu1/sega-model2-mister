@@ -45564,3 +45564,59 @@ the tutorial (70-86 s after the attract starts):*
   of >= 256 waits, the 68000's bus cycles well down, underruns following the
   3D load rather than the tutorial.
   a DSP value fault: no underruns, the loudest sample at or near full scale.
+
+**R947 -- R946 MADE SMALL FOR THE 2C BUILD (~41,400 / 41,910 ALM): THE OVERLAP
+ALONE, WPOST OFF, TWO TRIMS -- +117 ALMs ON THE 2C MAP INSTEAD OF +385, THE
+SAME OUTPUT AND 0 UNDERRUNS IN THE TUTORIAL AT 6-40 AND 15-90. BRANCH
+hotd-dsp, LOCAL ONLY, NOT FITTED.**
+
+*Each half measured alone (tb_m2_scsp, HOTD attract 95 s, engine clocks a
+sample in the tutorial 81-84 s / underruns of the 8-deep FIFO model; and
+free-running, SCSP_FREE):*
+                          6-40                          15-90
+    as built (R914)       1,772-1,922 / 12,020 (free 12,396)   2,364-2,557 / 357,141 (free 297,275)
+    WPOST alone           1,610-1,759 / 90                     --
+    OVERLAP alone         1,016-1,047 / 0 (free 0)             1,464-1,471 / 0 (free 0)
+    both (R946)             909-1,018 / 0 (free 0)             1,163-1,230 / 0 (free 0)
+  WPOST alone does not clear the tutorial (90 underruns, 3-11% margin). The
+  OVERLAP alone does, with 42% margin at 6-40 and 19% at 15-90: the engine
+  becomes the DSP's run (flat ~1,000 / ~1,460 clocks whatever the scene), not
+  the slots. Where WPOST still earns its keep is beyond the board's measured
+  band: at 25-150 the overlap alone sits at ~2,005 (over budget even in
+  silence; as built 2,036 in silence), both together at ~1,700 (103
+  underruns). WPOST stays in the RTL as a bench parameter, OFF in every
+  build. A shallower queue was not tried: no queue is needed.
+
+*Trims to the overlap (same function):* (1) m2_scsp_dsp: one adder for both
+MIXS banks' sends and the abort merge (was three); (2) m2_scsp_level: the
+effect-row banks turn at sh_clr, or when a recompute in progress finishes
+(one pending bit), instead of per slot excepting the busy one -- in step mode
+the unit is idle at DSPGO, so the turn is the same.
+
+*AREA, quartus_map 17.0:*
+                                        SCSP alone (scsp_area_top)   2C build (M2_2C, M2_NO_2A_MANX_MOTION)
+                                        ALMs    registers            ALMs needed   registers
+    model2c 5c2caca                     2,071   1,718                40,162        48,475
+    R946 (OVERLAP + WPOST, ad692e1)     2,393   2,093                40,547        48,850   (+385)
+    WPOST alone                         2,282   2,027                --
+    OVERLAP alone, before the trims     2,177   1,784                --
+    R947: OVERLAP alone, trimmed        2,146   1,785                40,279        48,542   (+117)
+    R947 with ABORT_MERGE = 0           2,153*  --                   40,251        48,535   (+89)
+  (* measured before the trims.) M10K unchanged everywhere (21 in the SCSP;
+  block bits 4,592,176 on the 2C map). ABORT_MERGE (new, m2_scsp /
+  m2_scsp_dsp, default 1): 0 drops the merge after a run that IRA > 0x31
+  abandons -- 28 ALMs -- and changes nothing a game plays: no program in the
+  HOTD, DOA, VF2, VC2 or Zero Gunner captures has such a step, and HOTD 330 s
+  and the five 2A captures give 0 differ with it off. Left at 1 (MAME's MIXS
+  for every program); not wired to a macro.
+
+*Exactness (R947 RTL, OVERLAP alone):* tb_m2_scsp 0 differ -- HOTD 95 s at
+6-40, 15-90 and 1-400 (34 s), HOTD 330 s (990 mean / 1,450 max, 0 underruns
+over the three passes of the tutorial); DOA, VF2, Virtua Cop 2, Zero Gunner,
+Sega Rally 30 s each (engine mean / max 515 / 965, 631 / 1,011, 856 / 1,297,
+846 / 1,501, 231 / 735). tb_m2_scsp_dsp: 500 random programs at 6-40 and at
+1-400, 0 wrong. OVERLAP off: HOTD 34 s engine clocks identical to model2c's
+sample for sample (the 2A microcode words byte-identical, as R946).
+lint_top clean, 2A and 2C.
+
+*Probe expectations:* as R946.

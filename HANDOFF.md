@@ -1,5 +1,21 @@
 # Handoff
 
+## 2026-10-24: hotd-dsp -- R946 made small (R947). NOT PUSHED, NOT FITTED
+
+The 2C build is full (~41,400 / 41,910 ALM), so the fix is now the OVERLAP
+alone: WPOST (posted ring writes) OFF in every build, kept as a bench
+parameter. Measured alone, WPOST does not clear the tutorial (90 underruns at
+6-40); the overlap does: tutorial 1,016-1,047 clocks at 6-40 (42% margin),
+1,464-1,471 at 15-90 (19%), 0 underruns step and free-running at both. Two
+trims (one MIXS adder; the level-row banks turn on a pending bit). quartus_map
+17.0, 2C build: model2c 40,162 ALMs needed -> R946 40,547 (+385) -> R947
+40,279 (+117); ABORT_MERGE = 0 (new parameter, default 1) would make it 40,251
+(+89) with every game's output unchanged. M10K unchanged. 0 differ: HOTD 95 s
+(6-40, 15-90, 1-400), 330 s; DOA, VF2, VC2, ZG, Rally 30 s. Beyond the board's
+band (25-150) only both halves together hold (~1,700 vs ~2,005).
+BUILD TO FIT: hotd-dsp HEAD with Model2.qsf + "M2_2C=1",
+"M2_NO_2A_MANX_MOTION=1" (M2_2A_SND_OVL defaults to 1 under M2_2C).
+
 ## 2026-10-23 (late night): branch hotd-dsp (off model2c 5c2caca, LOCAL) -- House of the Dead's tutorial-screen wobble / clipping (R946). NOT PUSHED, NOT FITTED
 
 REPRODUCED in the bench: the SCSP engine runs past its 1,814 clocks a sample in
