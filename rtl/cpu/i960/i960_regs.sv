@@ -345,7 +345,9 @@ module i960_regs #(
   logic [SW-1:0] r_head;
   logic [SW:0]   r_n, fl_left;
   logic          fl_call;
-  logic [31:0] spill_base;
+  // R952: [31:6] -- both writes mask the low six bits (FP & ~0x3f, PFP & ~0x3f),
+  // so a word's address in the frame is a concatenation, not a sum.
+  logic [31:6] spill_base;
   logic        to_memory;    // this save/load uses memory rather than the cache
 
   // Cache slot index. Two bits, not a wide counter: it is only meaningful when
@@ -357,7 +359,7 @@ module i960_regs #(
   // R952: rcache_frame_addr's write port (the array is declared above).
   always_ff @(posedge clk)
     if ((state == S_CALL_SAVE) && !to_memory)
-      rcache_frame_addr[slot] <= spill_base[31:6];
+      rcache_frame_addr[slot] <= spill_base;
 
   // Flattened cache index. ROWS is a power of two, so frame*ROWS + row is a
   // concatenation rather than a multiply.
@@ -422,8 +424,7 @@ module i960_regs #(
   wire  [31:0] new_fp = ((call_type == 3'd7 ? call_stack : r_sp) + 32'd63)
                         & 32'hffff_ffc0;
 
-  logic [31:0] fp_masked;
-  assign fp_masked = g_fp & 32'hffff_ffc0;   // FP & ~0x3f
+  // (fp_masked, FP & ~0x3f: R952, now g_fp[31:6] into the [31:6] spill_base)
 
   assign cur_fp       = g_fp;
   assign cur_sp       = r_sp;
@@ -445,7 +446,7 @@ module i960_regs #(
       next_ip_valid <= 1'b0;
       ret_unsupported <= 1'b0;
       to_memory     <= 1'b0;
-      spill_base    <= 32'd0;
+      spill_base    <= '0;
       slot          <= '0;
       // The register arrays are deliberately NOT cleared here. Clearing an
       // array in reset forces it out of RAM into flip-flops — measured on this
@@ -484,7 +485,7 @@ module i960_regs #(
             // do_call step 1: RIP takes the return address BEFORE the save, so
             // the saved frame carries it.
             r_rip      <= call_ip;
-            spill_base <= fp_masked;
+            spill_base <= g_fp[31:6];   // FP & ~0x3f
             idx        <= 4'd0;
             if (RING) begin
               // R927: into the slot after the newest; a full ring writes
@@ -506,7 +507,7 @@ module i960_regs #(
             // do_ret_0 step 1: FP <- PFP & ~0x3f, then the depth decrements and
             // decides where the frame comes from.
             g_fp       <= r_pfp & 32'hffff_ffc0;
-            spill_base <= r_pfp & 32'hffff_ffc0;
+            spill_base <= r_pfp[31:6];
             if (RING) begin
               // R927: the newest cached frame, or memory when the ring is empty
               slot      <= r_head;
@@ -546,7 +547,7 @@ module i960_regs #(
             // Too deep for the cache: 16 dwords out to FP & ~0x3f.
             mem_req   <= 1'b1;
             mem_we    <= 1'b1;
-            mem_addr  <= spill_base + {26'd0, idx, 2'b00};
+            mem_addr  <= {spill_base, idx, 2'b00};
             mem_wdata <= pick({1'b0, idx}, bk_qr, r_pfp, r_sp, r_rip, g_fp);
             if (mem_ack) begin
               mem_req <= 1'b0;
@@ -585,7 +586,7 @@ module i960_regs #(
           if (to_memory) begin
             mem_req  <= 1'b1;
             mem_we   <= 1'b0;
-            mem_addr <= spill_base + {26'd0, idx, 2'b00};
+            mem_addr <= {spill_base, idx, 2'b00};
             if (mem_ack) begin
               mem_req  <= 1'b0;
               case (idx)                     // R866: the banks take it too
