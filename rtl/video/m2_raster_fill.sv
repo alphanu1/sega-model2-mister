@@ -698,7 +698,10 @@ module m2_raster_fill #(
   logic [1:0]         oz_w;
   logic [15:0]        oz_n;
   logic [12:0]        oz_u, oz_v;   // the raw u, v: 13 bits
-  logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
+  // R952: each plane's two corner products as one sum (bp_u = bp_ux + bp_uy
+  // mod 2^32): base_* subtracted them one at a time, and in 32 bits the two
+  // shifted subtracts are one -- (x << k) + (y << k) is (x + y) << k mod 2^32.
+  logic signed [31:0] bp_u, bp_v, bp_o;
   logic signed [31:0] bh_u, bh_v, bh_o;   // R616: half a pixel of each plane, both axes
   logic [UW-1:0]      bq_u, bq_v;   // R791
   logic [15:0]        bq_o;
@@ -1572,9 +1575,9 @@ module m2_raster_fill #(
           // R566: the six products and the corner, registered.
           // R626: at the vertex's quarter-pixel position when FRB (the <<< 8
           // below becomes <<< 6 -- the product is four times as large)
-          bp_ux <= 32'(dudx * p4(sx[fa], sf[fa][1:0]));  bp_uy <= 32'(dudy * p4(sy[fa], sf[fa][3:2]));
-          bp_vx <= 32'(dvdx * p4(sx[fa], sf[fa][1:0]));  bp_vy <= 32'(dvdy * p4(sy[fa], sf[fa][3:2]));
-          bp_ox <= 32'(dodx * p4(sx[fa], sf[fa][1:0]));  bp_oy <= 32'(dody * p4(sy[fa], sf[fa][3:2]));
+          bp_u <= 32'(dudx * p4(sx[fa], sf[fa][1:0]) + dudy * p4(sy[fa], sf[fa][3:2]));   // R952
+          bp_v <= 32'(dvdx * p4(sx[fa], sf[fa][1:0]) + dvdy * p4(sy[fa], sf[fa][3:2]));
+          bp_o <= 32'(dodx * p4(sx[fa], sf[fa][1:0]) + dody * p4(sy[fa], sf[fa][3:2]));
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
           // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
           // R791: u/v at UVS fraction bits, so half a gradient is << UVS - 9
@@ -1589,11 +1592,11 @@ module m2_raster_fill #(
           b_prod <= 1'b0;
           // R791: at UVS fraction bits, not 16 -- the products' shift is two
           // (UZF - 2) less, and (13 + UZF) + UVS = 31 bits, always in range.
-          base_u <= (32'(bq_u) <<< UVS) - (bp_ux <<< BPS_UV) - (bp_uy <<< BPS_UV) + bh_u;   // R616, R626
-          base_v <= (32'(bq_v) <<< UVS) - (bp_vx <<< BPS_UV) - (bp_vy <<< BPS_UV) + bh_v;
+          base_u <= (32'(bq_u) <<< UVS) - (bp_u <<< BPS_UV) + bh_u;   // R616, R626; R952
+          base_v <= (32'(bq_v) <<< UVS) - (bp_v <<< BPS_UV) + bh_v;
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
-          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< BPS) - (bp_oy <<< BPS) + bh_o;
+          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_o <<< BPS) + bh_o;   // R952
           tex_ok <= 1'b1;
           pf_st  <= S_IDLE;
         end
