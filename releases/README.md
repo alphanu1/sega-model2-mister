@@ -14,11 +14,21 @@ MRA names the core it runs on, so both can sit in `cores/` side by side.
 Copy the MRAs you want from `mra/` to `/media/fat/_Arcade/` (or any folder
 under it).
 
-## Where these cores follow the real board, not MAME
+## Not a MAME port: the Model 2 hardware, rebuilt in the FPGA
 
-MAME is what these cores are checked against, but in a few places the arcade
-board does something MAME doesn't. Where that is confirmed, the cores follow
-the board:
+These cores are not MAME running on a MiSTer. Each one is the arcade board
+itself, rebuilt as hardware in the FPGA: the Intel i960 main CPU, the Fujitsu
+TGP geometry processor, the 3D renderer and its texture filtering, the 2D
+tilemap and video chips, the sound boards (a 68000 with Sega's MultiPCM chips
+on Model 2, a 68000 with Sega's SCSP on Model 2A), and the I/O boards. They
+all run side by side as real circuits, at the arcade's own 57.5 frames a
+second, with no emulation layer in between. The analogue output is the board's
+native 24 kHz picture, or 15 kHz for a CRT with no frame of delay; HDMI works
+alongside; and the light-gun flash is there for CRT guns.
+
+MAME is the yardstick: every part is checked against MAME's output, often
+instruction for instruction and sample for sample. But where the real
+board does something MAME doesn't, the cores follow the board:
 
 - **Dead or Alive's bass drone is gone (Model 2A).** MAME runs the sound
   chip's effects processor with its delay taps at zero, which turns Dead or
