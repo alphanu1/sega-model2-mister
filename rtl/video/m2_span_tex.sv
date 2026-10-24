@@ -113,6 +113,12 @@ module m2_span_tex #(
   // colour table, luma 0-63). Five
   // stages between the retire and the output instead of one (study R867).
   parameter bit          TEXLUT = 1'b0,
+  // R940: in_uvs is honoured (m2_geometry UVSH): the un-normalising shift is
+  // one shift less s. 0: in_uvs is ignored and the divide is as before.
+  parameter bit          UVSH   = 1'b0,
+  // R951: each fetch's level-0 coordinate clamped into its quad's texel box
+  // (m2_raster_fill UVCL). 0: as before.
+  parameter bit          UVCL   = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -152,11 +158,24 @@ module m2_span_tex #(
   input  logic signed [23:0] in_doozdx,
   input  logic [23:0]        in_tex,
   input  logic               in_tex_en,
+  // R940: the span's quad was stored with u and v >> in_uvs (m2_geometry
+  // UVSH); the divided coordinate is shifted back up by as much. 0: as before.
+  input  logic [1:0]         in_uvs,
   // R828: the span's mip bias (m2_raster_fill span_mipk), quarter levels with
   // the constant folded in; -512 = no level (the quad had no usable edge)
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic signed [9:0]  in_mipk,
   /* verilator lint_on UNUSEDSIGNAL */
+  // R951: the span's quad's texel box {off, u lo, u hm, v lo, v hm} (11-bit
+  // whole texels) is a word of m2_raster3d's box queue: in_ubi says which,
+  // valid with every textured span (the queue keeps a quad's word until the
+  // next quad's first span has gone, and the word before that unwritten while
+  // a slot may still name it). The clamp reads it back at the coordinate's
+  // stage -- ub_ra out, ub_rd in, an MLAB's asynchronous read -- so a slot
+  // carries 5 bits, not 45.
+  input  logic [4:0]         in_ubi,
+  output logic [4:0]         ub_ra,
+  input  logic [44:0]        ub_rd,
 
   // ---- span out, to the band buffers
   // R310: A SPAN IS STILL INSIDE THIS UNIT. With a FIFO in front, the quad
@@ -251,6 +270,8 @@ module m2_span_tex #(
   // R828: each span's mip bias and deepest level, latched with it
   logic signed [9:0]  mipk_p [2];
   logic [2:0]         mipl_p [2];
+  logic [1:0]         uvs_p [2];   // R940
+  logic [4:0]         ubi_p [2];   // R951: the span's quad's box, as a word of the box queue
   // R476: u_r/v_r/ooz_r are gone -- the issue pointer walks the span and the
   // gradients are all the consumer needs.
   logic signed [31:0] du_r, dv_r;
@@ -877,6 +898,14 @@ module m2_span_tex #(
   // (always at least 18) plus the level: 0..15
   logic         [2:0] d1_L, d2_L, d3_L, d4a_L, d4_L;
   logic         [3:0] d4a_sr;
+  // R940: the span's uvs beside the level, d1 .. d3; d4a_ur is the
+  // un-normalising shift past a fixed 16, less it: 2 + d4a_sr - s with MIP
+  // (0..17), d4a_sh - 16 - s without (0..10). One shift, so nothing below the
+  // binary point is lost first; with s = 0 it is exactly the shift below.
+  logic         [1:0] d1_S, d2_S, d3_S;
+  logic         [4:0] d4a_ur;
+  wire          [3:0] d3_sr = ((d3_e < 6'd23) ? 4'd0 : 4'(d3_e - 6'd23)) + 4'(d3_L);   // d4a_sr's next value
+  wire          [4:0] d3_sh = (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);               // d4a_sh's next value
   /* verilator lint_off UNUSEDSIGNAL */
   wire signed  [10:0] mp_l4 = 11'(mipk_p[sh_p[1]]) - 11'({1'b0, d1a_e, d1a_m[22:21], 1'b0});
   /* verilator lint_on UNUSEDSIGNAL */
@@ -909,8 +938,45 @@ module m2_span_tex #(
   assign tx_tex = MIP ? {3'd0, mt_fv, mt_fu, d4_L, mt_t[23:13], mt_t[12] ^ d4_L[0], mt_t[11:0]}
                       : {8'd0, tex_p[res_p]};
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
-  assign tx_u   = to_tx(d4_u);
-  assign tx_v   = to_tx(d4_v);
+  // R951: AND KEPT INSIDE THE QUAD'S OWN TEXELS. Every pixel the fill covers
+  // is inside the quad, so in exact arithmetic its u and v lie in the box of
+  // the corners'; the plane fit's quantisation puts a pixel a hair inside an
+  // edge a few 1/256 texel outside it, where the bilinear's other row or
+  // column (point sampling: the nearest) is a texel the polygon never shows
+  // -- Rally's white sky dots, the band's texel 127 over its transparent 128.
+  // A coordinate in the texel just under the box's floor, or exactly on it,
+  // goes to floor + 1/256 (the alpha test then sees what an exact one a hair
+  // inside sees: under half); one in the texel just over its top (ceil, whole
+  // texels) to top - 1/256. ONLY THE NEAR MISS: a coordinate further out is a
+  // fit gone wrong, not a rounding (a saturated divide at a quad's far edge),
+  // and moved to the box's edge it paints a texel of the polygon's where MAME
+  // shows what is behind -- it is left as it was (two subtracts and small
+  // compares, no magnitude compare across the coordinate). Level 0 only: a
+  // level's box would need the bounds shifted per group, and the dots are all
+  // on near, magnified polygons (the 2A no-mip quads: VF2's conifers too).
+  // Whole texels: a box edge the game draws is a whole texel; a clipped
+  // corner's fraction only loosens it. TIMING: ub_ra -> m2_raster3d's MLAB
+  // (an asynchronous read) -> the two subtracts -> the select -> m2_texel_x2's
+  // request registers, on clk_sys -- the fit's report is the check.
+  function automatic logic [19:0] uv_cl(input logic [19:0] t, input logic [10:0] lo, input logic [10:0] hm);
+    logic [12:0] ti, dl, dh;      // 13 bits: a difference never wraps onto 0 or 1
+    begin
+      ti = 13'(t[19:8]);
+      dl = 13'(lo) - ti;          // 1: t in the texel under lo; 0: in lo's
+      dh = ti - 13'(hm);          // 1: t in the texel over hm
+      if ((dl == 13'd1) || ((dl == 13'd0) && (t[7:0] == 8'd0)))
+        uv_cl = {1'b0, lo, 8'h01};
+      else if (dh == 13'd1)
+        uv_cl = {1'b0, hm, 8'hFF};
+      else
+        uv_cl = t;
+    end
+  endfunction
+  assign ub_ra = ubi_p[res_p];
+  wire [44:0] ub_r  = ub_rd;
+  wire        ub_on = UVCL && !ub_r[44] && (!MIP || (d4_L == 3'd0));
+  assign tx_u   = ub_on ? uv_cl(to_tx(d4_u), ub_r[43:33], ub_r[32:22]) : to_tx(d4_u);
+  assign tx_v   = ub_on ? uv_cl(to_tx(d4_v), ub_r[21:11], ub_r[10:0])  : to_tx(d4_v);
   assign tx_req = cons_take && !res_skip && !res_reuse;   // R607, R633
   // R615: THE 3D FRAME DIFFERENTIAL'S PROBE -- every real fetch, with the
   // pixel group and texture it is for. Read by tb_m2_raster3d through
@@ -939,6 +1005,7 @@ module m2_span_tex #(
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
       d1_L <= '0; d2_L <= '0; d3_L <= '0; d4a_L <= '0; d4_L <= '0; d4a_sr <= '0;   // R828
+      d1_S <= '0; d2_S <= '0; d3_S <= '0; d4a_ur <= '0;                            // R940
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
       u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
@@ -1036,6 +1103,7 @@ module m2_span_tex #(
                                : (d0_o << (6'd23 - d0_e));
       d1_e <= d1a_e; d1_m <= d1a_m; d1_r <= rcp_tab[d1a_m[22:16]];
       d1_L <= mp_L;  d2_L <= d1_L;  d3_L <= d2_L;  d4a_L <= d3_L;  d4_L <= d4a_L;   // R828
+      d1_S <= uvs_p[sh_p[1]];  d2_S <= d1_S;  d3_S <= d2_S;                        // R940
       // stage 2: the Newton residual
       d2_nd <= 32'((((64'd1 <<< 48) - (64'(d1_m) * 64'(d1_r))) >> 24));
       d2_e  <= d1_e; d2_r <= d1_r;
@@ -1062,13 +1130,23 @@ module m2_span_tex #(
       d4a_pv <= 64'(v_h5) * 64'(d3_r1);
       // R791: u/z is times 2^18 now, not 2^16 -- two more, so the answer is
       // still 16.16 quarter-texels. 18..26, inside the five bits.
-      d4a_sh <= (d3_e < 6'd23) ? 5'd18 : 5'(d3_e - 6'd5);
-      d4a_sr <= ((d3_e < 6'd23) ? 4'd0 : 4'(d3_e - 6'd23)) + 4'(d3_L);   // R828
+      d4a_sh <= d3_sh;
+      d4a_sr <= d3_sr;   // R828
+      // R940: never negative -- s is at most 2, the MIP shift at least 18 and
+      // the other at least 18
+      d4a_ur <= MIP ? 5'(5'd2 + 5'(d3_sr) - 5'(d3_S)) : 5'(d3_sh - 5'd16 - 5'(d3_S));
 
       // stage 4b: the un-normalise and the clamp, on the registered product.
       // R828: with MIP the same shift as 18 and then the rest, plus the level
-      d4_u <= MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
-      d4_v <= MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
+      // R940: with UVSH 16 and then d4a_ur, which is the same as below
+      // whenever the span's uvs is 0
+      if (UVSH) begin
+        d4_u <= sat32((d4a_pu >> 16) >> d4a_ur);
+        d4_v <= sat32((d4a_pv >> 16) >> d4a_ur);
+      end else begin
+        d4_u <= MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
+        d4_v <= MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
+      end
       u_h1 <= dv_u;  v_h1 <= dv_v;
       u_h2 <= u_h1;  v_h2 <= v_h1;
       u_h3 <= u_h2;  v_h3 <= v_h2;
@@ -1087,6 +1165,8 @@ module m2_span_tex #(
         y_p[k] <= '0; x1_p[k] <= '0; col_p[k] <= '0; k_p[k] <= '0;
         moire_p[k] <= 1'b0; tex_p[k] <= '0;
         mipk_p[k] <= '0; mipl_p[k] <= '0;   // R828
+        uvs_p[k] <= '0;                     // R940
+        ubi_p[k] <= '0;                     // R951
       end
       sp_iss <= 1'b0; sp_out <= 1'b0; sp_n <= 2'd0; e_last <= 1'b0;   // R490
       rt_p <= 1'b0; e_p <= 1'b0; rt_skip <= 1'b0;                     // R490, R607
@@ -1153,6 +1233,8 @@ module m2_span_tex #(
           // 32 << c): translucent (in_tex[8]) c, opaque c + 1, at most 7.
           mipk_p[slot]  <= in_mipk;
           mipl_p[slot]  <= mip_deepest(in_tex[3:1], in_tex[6:4], in_tex[8]);
+          uvs_p[slot]   <= in_uvs;   // R940
+          ubi_p[slot]   <= in_ubi;  // R951
           du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
           dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;

@@ -131,6 +131,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_SND_EXACT
 `define M2_2A_SND_EXACT 1
 `endif
+// R949: M2_2A_SND_LERP, the sound board's 44.1 kHz output moved along a straight
+// line between samples (m2_snd_lerp) so that the framework's 48 kHz sampling --
+// its IIR filter is off for room (R788) -- reads the line, not the step. As a
+// step, every bright sound aliases into 4-16 kHz (a 4 kHz tone carries spurs at
+// -16 dB; House of the Dead's FM voice 8.5 dB below itself): the "tinny" sound.
+`ifndef M2_2A_SND_LERP
+`define M2_2A_SND_LERP 1
+`endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
 // On by default; VERILOG_MACRO "M2_NO_2A_RALLY=1" (or -DM2_NO_2A_RALLY to
@@ -164,6 +172,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // hpyagu98_nvram). On by default; "M2_NO_2A_EE_LOAD=1" leaves it out.
 `ifndef M2_NO_2A_EE_LOAD
 `define M2_2A_EE_LOAD
+`endif
+// R945: M2_2A_EE_SAVE, the 93C46 in the NVRAM file: the MRA's <nvram index="2"
+// size="16520"> carries the backup RAM, an 8-byte tag and the EEPROM's 128
+// bytes (rtl/io/m2_nv_port.sv), so the game's settings (Sega Rally, Manx TT,
+// every 2A / 2C game that keeps them in its EEPROM) survive a power cycle. A
+// file without the tag (16 KB, an earlier core's) leaves the EEPROM as the MRA
+// loads it. On by default; "M2_NO_2A_EE_SAVE=1" leaves it out.
+`ifndef M2_NO_2A_EE_SAVE
+`define M2_2A_EE_SAVE
 `endif
 // R904: M2_2A_WAITST, the i960's wait states for Sega Rally (game ID 0x10)
 // alone: m2_waitst between the i960 and the bridge stores the CPU-control
@@ -218,6 +235,9 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `endif
 `ifndef M2_2A_SND_EXACT
 `define M2_2A_SND_EXACT 1
+`endif
+`ifndef M2_2A_SND_LERP
+`define M2_2A_SND_LERP 0
 `endif
 
 // R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
@@ -284,6 +304,13 @@ localparam CONF_STR = {
 	// line in every mode (a narrow line there would need its own line length,
 	// sync and alignment per mode -- not built). O[55] IS RESERVED -- never
 	// reuse it: a saved config holding Narrow would switch on whatever took it.
+	// R939: the converter's field pairing for 30 Hz games (Virtua Cop, Desert
+	// Tank). Auto swaps the fields when the game's images change on field 1's
+	// frame (a deinterlacer then combs); each swap repeats one field, its vsync
+	// half a line off. Off never swaps: the timing never changes at all, and a
+	// CRT shows no difference (it does not weave fields). O[67]: free on main,
+	// model2a and model2c (main has O[64] and O[66], the others O[65:64]).
+	"O[67],15kHz pairing,Auto,Off;",
 	"-;",
 	// The read capture phase is an OSD option rather than a constant because the
 	// Model 1 core found its board returned every burst shifted right by one
@@ -385,7 +412,11 @@ localparam CONF_STR = {
 	"O[27],Textures,On,Off;",
 	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
 	// nearest of the same four texels -- this core's picture before R620.
-	"O[31],Texture filter,Bilinear,Point;",
+	// R950: "Auto" (status[31] = 0, the old "Bilinear", so saved configs land on
+	// it) is Bilinear except where a game's own look needs point sampling:
+	// Sky Target (its sky panels' joints show lines under the bilinear filter;
+	// the arcade shows none -- Ben, on the board, 2026-10-24).
+	"O[31],Texture filter,Auto,Point;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
@@ -535,6 +566,11 @@ localparam bit MANXMOT = 1'b0;
 localparam bit EELOAD2A = M2A;                                // R897
 `else
 localparam bit EELOAD2A = 1'b0;
+`endif
+`ifdef M2_2A_EE_SAVE
+localparam bit EESAVE2A = M2A;                                // R945
+`else
+localparam bit EESAVE2A = 1'b0;
 `endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
@@ -741,6 +777,9 @@ always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R83
 // status[55] (R834's narrow line) is reserved, not read (R898).
 wire       vid_nl = vnl_s[2];
 wire       vid_ml = vml_s[2];
+reg [2:0]  vpr_s;                         // R939: 15kHz pairing (0 = Auto), into clk_mem
+always @(posedge clk_mem) vpr_s <= {vpr_s[1:0], ~status[67]};
+wire       vid_pair = vpr_s[2];
 reg [6:0]  ce_acc;
 reg        ce_pix;
 always @(posedge clk_mem) begin
@@ -1049,7 +1088,8 @@ wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd0 :
 always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
-always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
+wire       texpt_game;   // R950: this game defaults to point sampling (assigned with the game decode)
+always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31] | texpt_game};
 // R650: the texel step, into clk_sys where m2_span_tex runs (three flops,
 // R229). Quasi-static, and each span latches it whole.
 reg [1:0] pxk_s1, pxk_s2, pxk_s3;
@@ -2767,6 +2807,7 @@ wire is_desert = (game_id[6:0] == 7'd2);
 //   0x11 Virtua Cop 2 (vcop2)               program 2 MB, two triggers
 //   0x12 Zero Gunner (zeroguna)             program 1 MB, two sticks
 wire is_srally  = M2A && (game_id[6:0] == 7'h10);
+assign texpt_game = M2A && (game_id[6:0] == 7'h18);   // R950: Sky Target -- Texture filter "Auto" is point here
 wire is_vcop2   = M2A && (game_id[6:0] == 7'h11);
 wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
@@ -3469,7 +3510,8 @@ end else if (SND2A) begin : g_2asnd
 	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1), .CHKSUM(SND_CHKSUM),   // R882
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
-	              .EXACT(`M2_2A_SND_EXACT != 0)) u_snd2a (   // R884
+	              .EXACT(`M2_2A_SND_EXACT != 0),
+	              .LERP(`M2_2A_SND_LERP != 0)) u_snd2a (   // R884, R949
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -4133,6 +4175,7 @@ wire [7:0] q3d_lum;                       // R271: the polygon's luma (R867: the
 wire [23:0] q3d_tex;
 wire        q3d_tlinv;                      // R784: the polygon's luma table is row 1 (inverse)
 wire        q3d_mipz;                       // R828c: the game's level keeps this polygon at 0
+wire [1:0]  q3d_uvs;                        // R940: q3d_u*/v* are the true >> q3d_uvs (R3D_UVSH)
 // R828: mip-mapping in the rasteriser, and R828c's per-polygon flag in the
 // geometry with it. MIPZ_B: a polygon is drawn at level 0 when MAME's own
 // level (the game's texlod) is at most -MIPZ_B over all of it.
@@ -4156,6 +4199,11 @@ localparam bit R3D_TEXLUT = M2A;
 // and crosshair are a later window than the street, at a z behind it. The
 // key is {15 - window, z}, 20 bits, on the 2A build. Main keeps the 16-bit z.
 localparam bit R3D_WINKEY = M2A;
+// R940: A QUAD MORE THAN 2,048 TEXELS ACROSS IS SCALED DOWN BY 2^s, NOT
+// CLAMPED (m2_geometry UVSH): Dynamite Cop's sea is one polygon 2,890
+// texels wide and was drawn as horizontal lines. On the 2A build (one M10K
+// a store bank more there); main keeps the clamp.
+localparam bit R3D_UVSH = M2A;
 /* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
 wire [7:0] q3d_trow;                       // R867: the luma table's row
 /* verilator lint_on UNUSEDSIGNAL */
@@ -4189,7 +4237,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY)) u_geometry (   // R828c, R867, R889
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH)) u_geometry (   // R828c, R867, R889, R940
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -4230,6 +4278,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(
 	// simply never driven. That is what this line said for one build, and the
 	// board drew ZERO textured pixels because of it.
 	.q_tex(q3d_tex), .q_lum(q3d_lum),                                 // R271
+	.q_uvs(q3d_uvs),                                                  // R940
 	.q_tlinv(q3d_tlinv),                                              // R784
 	.q_trow(q3d_trow),                                                // R867
 	.q_mipz(q3d_mipz),                                                // R828c
@@ -4646,33 +4695,36 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	else if (fw_dl && ioctl_wr) fw_seen <= 1'b1;
 end
 
-wire nv_sel = (ioctl_index[5:0] == 6'd2);
-logic [2:0] nv_save_sync;
-always_ff @(posedge clk_sys) nv_save_sync <= {nv_save_sync[1:0], status[17]};
-wire nv_save_req = nv_save_sync[1] & ~nv_save_sync[2];
-wire nv_we  = ioctl_download && nv_sel && ioctl_wr;
-// REGISTERED BOTH WAYS. Driven combinationally, hps_io's ioctl_upload fed
-// the debug-port address mux whose data fed ioctl_din straight back into
-// hps_io, and Quartus 17.0's fitter timing engine CRASHED on the apparent
-// cycle -- Internal Error, sta_scc.cpp:1041, reproduced on a clean db. The
-// HPS polls over SPI, so a cycle of latency on each side is free.
-logic [15:0] nv_din_r;
-logic [11:0] nv_word_r;
-always_ff @(posedge clk_sys) begin
-	// Upload owns the port; otherwise page 1 / Probe 6 selects word 4
-	// (the coin-mode dword) and everything else watches word 5.
-	nv_word_r <= (ioctl_upload && nv_sel)          ? ioctl_addr[13:2] :
-	             12'd5;   // R411: was gated on status[18], which is gone
-	nv_din_r  <= ioctl_addr[1] ? bak_dbg_q[31:16] : bak_dbg_q[15:0];
-end
-assign ioctl_din = nv_din_r;
+// R945: the NVRAM file's path (load, save, the save request, and the index-5
+// EEPROM image) is rtl/io/m2_nv_port.sv, benched through the real hps_io
+// (sim/io/tb_m2_nv_save.cpp). With EESAVE2A the file is the backup RAM, a tag
+// and the 93C46; its header has the layout and why the tag comes first.
+wire        nv_save_req;
+wire        nv_we;
+wire [11:0] nv_word, nv_word_r;
+wire  [3:0] nv_be;
+wire [31:0] nv_wdata;
+wire        ee_ld_we;
+wire  [5:0] ee_ld_a, ee_dump_a;
+wire [15:0] ee_ld_d, ee_dump_q;
+m2_nv_port #(.LOAD(EELOAD2A), .SAVE(EESAVE2A)) u_nv_port (
+	.clk(clk_sys), .rst_n(mem_rst_n),
+	.save_btn(status[17]), .save_req(nv_save_req),
+	.ioctl_download(ioctl_download), .ioctl_upload(ioctl_upload), .ioctl_wr(ioctl_wr),
+	.ioctl_index(ioctl_index), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout),
+	.ioctl_din(ioctl_din),
+	.bak_we(nv_we), .bak_word(nv_word), .bak_be(nv_be), .bak_wdata(nv_wdata),
+	.bak_rword(nv_word_r), .bak_q(bak_dbg_q),
+	.ee_ld_we(ee_ld_we), .ee_ld_a(ee_ld_a), .ee_ld_d(ee_ld_d),
+	.ee_dump_a(ee_dump_a), .ee_dump_q(ee_dump_q)
+);
 
 m2_backup u_backup (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.hps_we(nv_we),
-	.hps_word(ioctl_addr[13:2]),
-	.hps_be(ioctl_addr[1] ? 4'b1100 : 4'b0011),
-	.hps_wdata({ioctl_dout, ioctl_dout}),
+	.hps_word(nv_word),
+	.hps_be(nv_be),
+	.hps_wdata(nv_wdata),
 	.sel(bak_sel),
 	.we(cpu_io_we),
 	.word(cpu_io_addr[13:2]),
@@ -6389,6 +6441,7 @@ m2_ioboard #(
 	.win_busy(dp_busy),
 	.dbg_word4(iob_word4)
 );
+assign ee_dump_q = 16'hffff;   // R945: no 93C46 on this board's map
 end else begin : g_noioboard
 	assign dp_busy = 1'b0; assign zio_rdata = 8'hFF;
 	assign iob_win_rd = 16'd0; assign iob_flag_rd = 16'd0; assign iob_seen = 16'd0;
@@ -6415,10 +6468,9 @@ end else begin : g_noioboard
 		);
 		wire [31:0] a2_rdata;
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
-		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words)
-		wire ee_ld_we = EELOAD2A && ioctl_download && ioctl_wr && (ioctl_index[5:0] == 6'd5)
-		             && (ioctl_addr[26:7] == 20'd0);
-		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A)) u_315_5649 (
+		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words);
+		// R945: and the NVRAM file's EEPROM, both through u_nv_port
+		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A | EESAVE2A), .EE_SAVE(EESAVE2A)) u_315_5649 (
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
@@ -6427,13 +6479,15 @@ end else begin : g_noioboard
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
 			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
 			.lamps(), .pe(a2_pe),
-			.ee_ld_we(ee_ld_we), .ee_ld_a(ioctl_addr[6:1]), .ee_ld_d(ioctl_dout),   // R897
+			.ee_ld_we(ee_ld_we), .ee_ld_a(ee_ld_a), .ee_ld_d(ee_ld_d),   // R897
+			.ee_dump_a(ee_dump_a), .ee_dump_q(ee_dump_q),                 // R945
 			.dbg_pa(), .dbg_dir()
 		);
 		assign iob_rdata = (cpu_io_addr[11:5] == 7'd0) ? a2_rdata : 32'd0;
 		assign iob_dbg   = 32'd0;
 	end else begin : g_noio
 		assign iob_rdata = 32'd0; assign iob_dbg = 32'd0;
+		assign ee_dump_q = 16'hffff;
 	end
 end endgenerate
 
@@ -7506,6 +7560,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .FB_WCOMB(1'b1),   // R661: the combining writer (room from R664)
               .SPLIT_TRI(1'b1),  // R677: textured quads as two triangles
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658/R662; R673: re-tested on top of R671 (s583's test had the texture ROM bug)
+              .DIL(1'b1),   // R944: edges moved out 1/8 px across -- no T-junction cracks (Rally's car shadow)
+              .UVCL(1'b1),  // R951: each level-0 fetch kept inside its quad's own texels (Rally's sky dots)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
@@ -7515,7 +7571,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
               .TEXLUT(R3D_TEXLUT),
-              .KW(R3D_WINKEY ? 20 : 16)) u_raster3d (   // R564: scan on clk_mem; R867; R889
+              .KW(R3D_WINKEY ? 20 : 16),
+              .UVSH(R3D_UVSH)) u_raster3d (   // R940   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -7572,6 +7629,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// fed a constant 0, so every checker polygon came out solid.
 	.q_moire(q3d_tex[11]), .q_end(q3d_end),
 	.q_mipz(q3d_mipz),                                                // R828c
+	.q_uvs(q3d_uvs),                                                  // R940
 	.q_tag(r826_wtag), .show_tag(r826_stag),   // R826
 	.scan_clk(clk_mem), .scan_x(vid_x_d), .scan_y(vid_y),   // R564: the video's clock; R779: x one pixel behind
 	.scan_il(vid_il_c), .scan_field(vid_field),             // R682; R898: tied off
@@ -7831,7 +7889,7 @@ assign ov_b = mix_b_q;
 wire        sc_hs, sc_vs, sc_de, sc_fld;
 wire [23:0] sc_rgb;
 m2_scan15 u_scan15 (
-	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag),
+	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag), .pair_en(vid_pair),   // R939
 	.ce_in(ce_pix), .de_in(~(tile_hb | tile_vb)), .vb_in(tile_vb), .rgb_in({ov_r, ov_g, ov_b}),
 	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml),
 	.o_hs(sc_hs), .o_vs(sc_vs), .o_de(sc_de), .o_field(sc_fld), .o_rgb(sc_rgb)

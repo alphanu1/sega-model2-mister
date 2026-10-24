@@ -965,12 +965,33 @@ int main(int argc, char **argv) {
                          | (((h2 >> 12) & 1) << 12) | ((h2 & 0x3f) << 13) | (((h2 >> 6) & 0x1f) << 19);
       (void)h1;
       if (!hold_next) { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+      // R938: M2_R3D_COARSE -- the store's tiny test in its COARSE mode (R769/R776), as
+      // the board runs it after a list that needed more than 7/8 of the store: a
+      // single list here always starts fine. Set before every quad (a clear resets it).
+      static const bool COARSE = std::getenv("M2_R3D_COARSE") != nullptr;
+      if (COARSE) d->rootp->m2_raster3d__DOT__u_store__DOT__fine = 0;
       d->q_valid = 1;
       d->q_x0 = X[0]; d->q_y0 = Y[0]; d->q_x1 = X[1]; d->q_y1 = Y[1];
       d->q_x2 = X[2]; d->q_y2 = Y[2]; d->q_x3 = X[3]; d->q_y3 = Y[3];
       d->q_oz0 = OZ[0]; d->q_oz1 = OZ[1]; d->q_oz2 = OZ[2]; d->q_oz3 = OZ[3];
       d->q_u0 = sat13(U[0] - um); d->q_v0 = sat13(Vv[0] - vm); d->q_u1 = sat13(U[1] - um); d->q_v1 = sat13(Vv[1] - vm);
       d->q_u2 = sat13(U[2] - um); d->q_v2 = sat13(Vv[2] - vm); d->q_u3 = sat13(U[3] - um); d->q_v3 = sat13(Vv[3] - vm);
+      // R940: M2_R3D_UVSH -- m2_geometry UVSH (build with -GUVSH=1): the quad
+      // shifted down by the least s in 0..2 that fits every difference in 13
+      // bits, truncated, and s handed over as q_uvs
+      static const bool UVSHE = std::getenv("M2_R3D_UVSH") != nullptr;
+      if (UVSHE) {
+        uint32_t du[4], dv[4], orr = 0;
+        for (int k = 0; k < 4; k++) { du[k] = (U[k] - um) & 0x7fff; dv[k] = (Vv[k] - vm) & 0x7fff; orr |= du[k] | dv[k]; }
+        // M2_R3D_UVSHMIN=<s>: at least s on every quad -- what the shift costs a quad that fits
+        static const unsigned SHMIN = std::getenv("M2_R3D_UVSHMIN") ? unsigned(std::atoi(std::getenv("M2_R3D_UVSHMIN"))) : 0u;
+        const unsigned sh = std::max(SHMIN, (orr & 0x4000) ? 2u : (orr & 0x2000) ? 1u : 0u);
+        d->q_u0 = du[0] >> sh; d->q_v0 = dv[0] >> sh; d->q_u1 = du[1] >> sh; d->q_v1 = dv[1] >> sh;
+        d->q_u2 = du[2] >> sh; d->q_v2 = dv[2] >> sh; d->q_u3 = du[3] >> sh; d->q_v3 = dv[3] >> sh;
+        d->q_uvs = sh;
+        static long nsh[3] = {0, 0, 0}; ++nsh[sh];
+        if (sh > SHMIN) std::printf("  R940 UVSH: polygon %d quad shifted by %u (%ld / %ld / %ld at 0 / 1 / 2)\n", p.idx, sh, nsh[0], nsh[1], nsh[2]);
+      }
       // colour = MAME's index, in the bits that survive RGB565: idx[4:0] in R[7:3], idx[10:5] in G[7:2]
       d->q_frac = frac;   // R626
       // R658: M2_R3D_NOTEX -- every polygon flat, so every pixel's colour is
@@ -1090,6 +1111,7 @@ int main(int argc, char **argv) {
               &n, &x[0], &y[0], &x[1], &y[1], &x[2], &y[2], &x[3], &y[3], &frac, &u[0], &v[0], &u[1], &v[1], &u[2], &v[2], &u[3], &v[3],
               &tex, &col, &z, &lum, &oz[0], &oz[1], &oz[2], &oz[3], &mz) != 27) { std::printf("  bad quad line %zu\n", i); continue; }
         { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+        if (std::getenv("M2_R3D_COARSE")) d->rootp->m2_raster3d__DOT__u_store__DOT__fine = 0;   // R938
         d->q_valid = 1;
         d->q_x0 = x[0]; d->q_y0 = y[0]; d->q_x1 = x[1]; d->q_y1 = y[1]; d->q_x2 = x[2]; d->q_y2 = y[2]; d->q_x3 = x[3]; d->q_y3 = y[3];
         d->q_oz0 = oz[0]; d->q_oz1 = oz[1]; d->q_oz2 = oz[2]; d->q_oz3 = oz[3];
@@ -1097,8 +1119,41 @@ int main(int argc, char **argv) {
         d->q_frac = frac; d->q_tex = 0; d->q_moire = (tex >> 11) & 1;
 #ifdef R3D_TEXLUT
         d->q_col = ((uint32_t(n) & 31) << 11) | (((uint32_t(n) >> 5) & 63) << 5);   // RGB565 in, as Model2.sv packs a flat quad
+        // R951: M2_R3D_QUADSTEX in the 2A configuration -- the quads textured as
+        // Model2.sv packs them for TEXLUT (r3d_qcol / r3d_qtex): a textured quad
+        // {luma, colour base[9:1]} and {slot, tex[23:12], base[0], tex[10:0]}, the
+        // slot from trow= (geodiff's q_trow); a flat quad RGB565 from its colour
+        static const bool QTEX2A = std::getenv("M2_R3D_QUADSTEX") != nullptr;
+        if (QTEX2A) {
+          unsigned uvs = 0; if (const char *us = std::strstr(L[i].c_str(), " uvs=")) uvs = unsigned(std::atoi(us + 5));
+          int trow = 0; if (const char *ts = std::strstr(L[i].c_str(), " trow=")) trow = std::atoi(ts + 6);
+          d->q_u0 = u[0]; d->q_v0 = v[0]; d->q_u1 = u[1]; d->q_v1 = v[1]; d->q_u2 = u[2]; d->q_v2 = v[2]; d->q_u3 = u[3]; d->q_v3 = v[3];
+          d->q_uvs = uvs;
+          if (tex & 1) {
+            d->q_col = ((lum & 0xff) << 9) | ((col >> 1) & 0x1ff);
+            d->q_tex = (uint32_t(lslot_tb(trow) & 7) << 24) | (tex & 0xfff7ffu) | ((col & 1u) << 11);
+          } else {
+            d->q_col = (((col >> 19) & 31) << 11) | (((col >> 10) & 63) << 5) | ((col >> 3) & 31);
+            d->q_tex = tex & 0xfff7ffu;
+          }
+        }
 #else
         d->q_col = ((uint32_t(n) & 31) << 19) | (((uint32_t(n) >> 5) & 63) << 10);  // RGB888 in, cut to 565 by the store
+        // R940: M2_R3D_QUADSTEX -- the quads TEXTURED, as the geometry gave them
+        // (u, v, texture word, its RGB colour, and uvs= when the line has it;
+        // a main-configuration build, TEXLUT 0): the picture our whole path makes
+        static const bool QTEX = std::getenv("M2_R3D_QUADSTEX") != nullptr;
+        if (QTEX) {
+          unsigned uvs = 0; if (const char *us = std::strstr(L[i].c_str(), " uvs=")) uvs = unsigned(std::atoi(us + 5));
+          d->q_u0 = u[0]; d->q_v0 = v[0]; d->q_u1 = u[1]; d->q_v1 = v[1]; d->q_u2 = u[2]; d->q_v2 = v[2]; d->q_u3 = u[3]; d->q_v3 = v[3];
+          d->q_tex = tex & 0xffffff; d->q_col = col; d->q_uvs = uvs;
+          // M2_R3D_QUADSCLAMP: the same quads as the clamp would have stored them (uvs 0, u << uvs saturated)
+          if (std::getenv("M2_R3D_QUADSCLAMP")) {
+            auto c = [&](unsigned x) { const unsigned w = x << uvs; return w > 8191 ? 8191u : w; };
+            d->q_u0 = c(u[0]); d->q_v0 = c(v[0]); d->q_u1 = c(u[1]); d->q_v1 = c(v[1]);
+            d->q_u2 = c(u[2]); d->q_v2 = c(v[2]); d->q_u3 = c(u[3]); d->q_v3 = c(v[3]); d->q_uvs = 0;
+          }
+        }
 #endif
         d->q_z = 0x3F800000u | (z & 0xfffffu);   // the window nibble q_z[19:16] kept: build -GKW=20 to sort on it
         d->q_mipz = mz;

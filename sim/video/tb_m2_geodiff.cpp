@@ -224,14 +224,20 @@ static void tick() {
   }
   else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & (MEMW - 1); wr_d = d->sd_wr_din; wr_pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
+  // R952: M2GD_QCYC=1 -- each quad's line starts with the cycle it was taken,
+  // so two builds with the same ours.txt hand over the same quads on the same
+  // cycles (cycle identity of the geometry's output, not just its values).
+  static const bool qcyc = std::getenv("M2GD_QCYC") != nullptr;
+  static long g_cyc = 0; ++g_cyc;
   if (d->q_valid && d->q_ready) {
-    std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x mz=%u\n",
+    if (qcyc) std::fprintf(fo, "@%ld ", g_cyc);
+    std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x mz=%u uvs=%u trow=%u\n",
       nq++, (int16_t)d->q_x0, (int16_t)d->q_y0, (int16_t)d->q_x1, (int16_t)d->q_y1,
       (int16_t)d->q_x2, (int16_t)d->q_y2, (int16_t)d->q_x3, (int16_t)d->q_y3, (unsigned)d->q_frac,
       (unsigned)d->q_u0, (unsigned)d->q_v0, (unsigned)d->q_u1, (unsigned)d->q_v1,
       (unsigned)d->q_u2, (unsigned)d->q_v2, (unsigned)d->q_u3, (unsigned)d->q_v3,
       (unsigned)d->q_tex, (unsigned)d->q_col, (unsigned)d->q_z, (unsigned)d->q_lum,
-      (unsigned)d->q_oz0, (unsigned)d->q_oz1, (unsigned)d->q_oz2, (unsigned)d->q_oz3, (unsigned)d->q_mipz);   // R828c
+      (unsigned)d->q_oz0, (unsigned)d->q_oz1, (unsigned)d->q_oz2, (unsigned)d->q_oz3, (unsigned)d->q_mipz, (unsigned)d->q_uvs, (unsigned)d->q_trow);   // R828c, R940, R951
   }
 }
 

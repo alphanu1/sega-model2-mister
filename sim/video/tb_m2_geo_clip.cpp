@@ -323,6 +323,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    d->final();   // R952: tb_clip_top's out_wu / out_wv count
     printf("m2_geo_clip: checks=%ld fails=%ld\n", checks, fails);
     return fails ? 1 : 0;
 }

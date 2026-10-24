@@ -1283,6 +1283,7 @@ module m2_boot_harness #(
       .in0(cab_in0), .in1(cab_in1), .in2(MANX_MOTION ? ((a2_pe == 8'h3D) ? 8'hCE : 8'hCD) : cab_in2), .sw(8'hFF),
       .an0(cab_an0), .an1(cab_an1), .an2(cab_an2),   // R926 (0xFF unless M2_INSCHED sets them)
       .lamps(), .pe(a2_pe), .ee_ld_we(1'b0), .ee_ld_a(6'd0), .ee_ld_d(16'd0),   // R896, R897
+      .ee_dump_a(6'd0), .ee_dump_q(),                                          // R945
       .dbg_pa(), .dbg_dir()
     );
     // the i8251 at 0x01c80000, as Model2.sv: data in byte 0, status/command

@@ -118,6 +118,16 @@ module m2_raster3d #(
   // the sheets (m2_texel_bl). Nearest level, the existing bilinear, no blend.
   // 0 is level 0 always: every module as before R828.
   parameter bit MIP = 1'b0,
+  // R944: m2_raster_fill's DIL -- each walked edge of a FLAT quad moved out by
+  // (1 + |dx/dy|) / 8 px, so a T-junction on a quarter-pixel vertex leaves no
+  // gap. Needs M2COV.
+  parameter bit DIL = 1'b0,
+  // R951: each textured fetch's level-0 u, v clamped into its quad's own
+  // texel box (m2_raster_fill / m2_span_tex UVCL) -- Sega Rally's sky dots.
+  // The box rides beside the span queue in an MLAB queue of its own, one
+  // entry per textured quad; its head is the box of the quad whose spans are
+  // leaving, popped when the next textured quad's first span reaches the head.
+  parameter bit UVCL = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25,
   // R867: THE TEXTURED COLOUR THROUGH THE GAME'S TABLES (m2_span_tex TEXLUT).
@@ -131,6 +141,12 @@ module m2_raster3d #(
   // R889: the store's sort key width -- 16, the reference's z value; 20 with
   // m2_geometry's WINKEY ({15 - window, z}: a later window in front).
   parameter int unsigned KW = 16,
+  // R940: q_uvs is stored with the quad (two bits beside the texture word)
+  // and carried through the fill and the span queue to m2_span_tex, which
+  // shifts the divided coordinate up by it (m2_geometry UVSH). On the 2A
+  // store that is 197 bits a bank against 195: one M10K a bank more; the
+  // span queue 278 of its 280. 0: q_uvs is ignored, nothing is stored.
+  parameter bit UVSH = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 27 : 24
 ) (
@@ -158,6 +174,9 @@ module m2_raster3d #(
   input  logic [12:0] q_u0, q_v0, q_u1, q_v1,
   input  logic [12:0] q_u2, q_v2, q_u3, q_v3,
   input  logic [QTW-1:0] q_tex,
+  /* verilator lint_off UNUSEDSIGNAL */   // UVSH only
+  input  logic [1:0]  q_uvs,                // R940: q_u*/q_v* are the true >> q_uvs (UVSH)
+  /* verilator lint_on UNUSEDSIGNAL */
   // R828c: the geometry's no-mip flag (m2_geometry q_mipz): the game's own
   // level stays well under 0 over the whole polygon, so it is drawn at level
   // 0. Stored with the quad (one bit, no M10K) and given to the fill. MIP only.
@@ -373,7 +392,19 @@ module m2_raster3d #(
   logic [23:0] qo_tex;
   logic        qo_mipz;   // R828c
   logic [QTW-1:0] qo_texw;   // R867: the store's texture word (and its vertex bit)
-  logic [(TEXLUT ? 26 : 24)-1:0] qo_texs;
+  // R940: the store's texture word, {uvs, texture} with UVSH
+  localparam int unsigned STB = TEXLUT ? 26 : 24;
+  localparam int unsigned STW = STB + (UVSH ? 2 : 0);
+  logic [STW-1:0] qo_texs;
+  logic [STW-1:0] qs_tex;
+  logic [1:0]     qo_uvs;
+  generate if (UVSH) begin : g_uvs
+    assign qs_tex = {q_uvs, q_tex[STB-1:0]};
+    assign qo_uvs = qo_texs[STW-1 -: 2];
+  end else begin : g_uvs0
+    assign qs_tex = q_tex[STB-1:0];
+    assign qo_uvs = 2'd0;
+  end endgenerate
   /* verilator lint_off UNUSEDSIGNAL */   // TEXLUT only
   logic           qo_vx;
   /* verilator lint_on UNUSEDSIGNAL */
@@ -383,12 +414,12 @@ module m2_raster3d #(
   // R867: back to the 24-bit colour the fill and the span carry. Flat: 565 ->
   // 888 as the store did. Textured (TEXLUT): {4'd0, row, luma, colour base}.
   generate if (TEXLUT) begin : g_qcol
-    assign qo_texw = {qo_vx, qo_texs};
+    assign qo_texw = {qo_vx, qo_texs[STB-1:0]};
     assign qo_tex = qo_texw[23:0];
     assign qo_col = qo_texw[0] ? {3'd0, qo_texw[26:24], qo_colw[16:0], qo_texw[11]}
                                : {qo_colw[15:11], 3'b000, qo_colw[10:5], 2'b00, qo_colw[4:0], 3'b000};
   end else begin : g_qcol0
-    assign qo_texw = qo_texs;
+    assign qo_texw = qo_texs[STB-1:0];
     assign qo_tex = qo_texw[23:0];
     assign qo_col = qo_colw;
   end endgenerate
@@ -442,7 +473,7 @@ module m2_raster3d #(
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
-                  .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(TEXLUT ? 26 : 24)) u_store (   // R607, R626, R828c, R867
+                  .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(STW)) u_store (   // R940: STW   // R607, R626, R828c, R867
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .in_valid(q_take),
@@ -453,7 +484,7 @@ module m2_raster3d #(
     .in_frac(q_frac), .out_frac(qo_frac),                             // R626
     .in_u0(q_u0), .in_v0(q_v0), .in_u1(q_u1), .in_v1(q_v1),
     .in_u2(q_u2), .in_v2(q_v2), .in_u3(q_u3), .in_v3(q_v3),
-    .in_tex(q_tex[(TEXLUT ? 26 : 24)-1:0]), .in_mipz(q_mipz),        // R828c
+    .in_tex(qs_tex), .in_mipz(q_mipz),                                // R828c, R940
     .in_vx(TEXLUT ? q_tex[QTW-1] : 1'b0), .out_vx(qo_vx),            // R867
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
@@ -499,8 +530,11 @@ module m2_raster3d #(
   logic signed [31:0] fl_span_u, fl_span_v;
   logic signed [23:0] fl_span_dudx, fl_span_dvdx;   // R286: 8.8; R618: 16.8
   logic [23:0] fl_span_tex;
+  logic [1:0]  fl_span_uvs;   // R940
   logic        fl_span_tex_en;
   logic signed [9:0] fl_span_mipk;   // R828
+  logic [44:0] fl_span_ub;      // R951: the quad's texel box
+  logic        fl_span_nq;      // R951: the quad's first span
 
   // R310: A SPAN FIFO, BECAUSE THE TEXEL FETCH BLOCKS EVERY SPAN BEHIND IT.
   //
@@ -535,15 +569,56 @@ module m2_raster3d #(
   // M10K -- which is the only reason it is affordable at 553/553 blocks.
   // R828: + 10 with MIP, the quad's mip bias -- 276 of the 280 bits seven
   // M10K hold at 32 x 40, so no block more
-  localparam int unsigned SQ_DW = MIP ? 276 : 266;   // R618: three gradients 16 -> 24 bits
+  localparam int unsigned SQ_B  = MIP ? 276 : 266;   // R618: three gradients 16 -> 24 bits
+  localparam int unsigned SQ_DW = SQ_B + (UVSH ? 2 : 0) + (UVCL ? 1 : 0);   // R940: + uvs, 278 of the 280 bits; R951: + nq, 279
   logic [SQ_DW-1:0] sq_din, sq_q;
   logic             sq_in_rdy, sq_qv, sq_rdy, sq_busy, sq_full;
   logic [15:0]      sq_cnt16;
   logic [31:0]      sq_dropped;   // must stay zero: a dropped span is a hole
 
+  // R951: the quad's texel box, queued beside the spans one entry per textured
+  // quad (pushed with its first span). THE HEAD IS THE BOX OF THE QUAD NOW
+  // LEAVING: it is not popped when its quad's first span goes, but when the
+  // NEXT textured quad's first span (sq_nq) stands at the span queue's head
+  // with the head already taken (ub_used). m2_span_tex keeps only the word's
+  // index per slot and reads the box back at its clamp (ub_ra / ub_rd), so
+  // the word before the head may still be read: the queue holds 31, never
+  // overwriting it. 32 x 45 in an MLAB read asynchronously; the span queue
+  // holds 33 spans and the head is one more quad, so a full queue holds the
+  // fill back.
+  wire               sq_nq   = UVCL && sq_q[SQ_DW-1];
+  logic [4:0]        ub_head, ub_ra;
+  logic [44:0]       ub_rd;
+  logic              ub_qv, ub_used, ub_full;
+  wire               sq_qve  = sq_qv && (!sq_nq || (ub_qv && !ub_used));
+  generate if (UVCL) begin : g_ubq
+    (* ramstyle = "MLAB, no_rw_check" *) logic [44:0] ub_mem [32];   // never cleared in reset; never read where it is being written
+    logic [5:0] ub_wp, ub_rp;
+    wire [5:0] ub_n    = ub_wp - ub_rp;
+    wire       ub_push = fl_span_valid && fl_span_ready && fl_span_nq;
+    wire       ub_pop  = sq_qv && sq_nq && ub_qv && ub_used;
+    always_ff @(posedge clk) if (ub_push) ub_mem[ub_wp[4:0]] <= fl_span_ub;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) begin
+        ub_wp <= '0; ub_rp <= '0; ub_used <= 1'b0;
+      end else begin
+        if (ub_push) ub_wp <= ub_wp + 6'd1;
+        if (ub_pop) begin
+          ub_rp <= ub_rp + 6'd1; ub_used <= 1'b0;
+        end else if (sq_qve && sq_rdy && sq_nq) ub_used <= 1'b1;
+      end
+    assign ub_head = ub_rp[4:0];
+    assign ub_rd   = ub_mem[ub_ra];
+    assign ub_qv   = (ub_n != 6'd0);
+    assign ub_full = (ub_n >= 6'd31);
+  end else begin : g_noubq
+    assign ub_head = 5'd0; assign ub_rd = 45'd0;
+    assign ub_qv = 1'b0; assign ub_used = 1'b0; assign ub_full = 1'b0;
+  end endgenerate
+
   // Backpressure, NOT a drop: m2_fifo_m10k's `full` retires the TGP's pushes
   // silently, and a silently dropped span is a hole in the picture.
-  assign fl_span_ready = sq_in_rdy;
+  assign fl_span_ready = sq_in_rdy && !(fl_span_nq && ub_full);   // R951: and room for its box
 
   wire [265:0] sq_din0 = { fl_span_y, fl_span_x0, fl_span_x1,
                     fl_span_ooz, fl_span_doozdx,                   // R337
@@ -553,7 +628,13 @@ module m2_raster3d #(
                     fl_span_moire, fl_span_tex_en };
   // R828: the bias above the rest, so every other field keeps its slice
   // (without MIP the cast drops it again)
-  assign sq_din = SQ_DW'({fl_span_mipk, sq_din0});
+  wire [SQ_B-1:0] sq_dinb = SQ_B'({fl_span_mipk, sq_din0});
+  // R940: uvs above (dropped without UVSH); R951: nq on top (dropped without UVCL)
+  /* verilator lint_off UNUSEDSIGNAL */   // the top bits without UVSH
+  wire [SQ_B+1:0] sq_dinu = {fl_span_uvs, sq_dinb};
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire [SQ_DW-1:0] sq_dinv = UVSH ? SQ_DW'(sq_dinu) : SQ_DW'(sq_dinb);
+  assign sq_din = UVCL ? (sq_dinv | (SQ_DW'(fl_span_nq) << (SQ_DW - 1))) : sq_dinv;
 
   // R313: BACK TO BLOCK MEMORY, to trade ALM for M10K. The register queue
   // (R312) is the better part -- no bubble -- but it costs ~484 ALM, and ALM is
@@ -573,8 +654,8 @@ module m2_raster3d #(
   // what R683's fill mask needs: s638-s640 were 23-28 LABs short.
   m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("M10K")) u_span_q (
     .clk(clk), .rst_n(rst_n),
-    .push(fl_span_valid && sq_in_rdy), .din(sq_din),
-    .pop(sq_qv && sq_rdy), .q(sq_q), .q_valid(sq_qv),
+    .push(fl_span_valid && fl_span_ready), .din(sq_din),   // R951: ready, not the queue's alone
+    .pop(sq_qve && sq_rdy), .q(sq_q), .q_valid(sq_qv),
     .full(sq_full), .count(sq_cnt16), .dropped(sq_dropped), .held()
   );
   assign sq_in_rdy = !sq_full;
@@ -598,7 +679,8 @@ module m2_raster3d #(
   wire        [23:0] sq_tex  = sq_q[25:2];
   wire               sq_moire  = sq_q[1];
   wire               sq_tex_en = sq_q[0];
-  wire signed [9:0]  sq_mipk = MIP ? sq_q[SQ_DW-1 -: 10] : 10'sd0;   // R828
+  wire signed [9:0]  sq_mipk = MIP ? sq_q[SQ_B-1 -: 10] : 10'sd0;   // R828
+  wire        [1:0]  sq_uvs  = UVSH ? sq_q[(UVSH ? SQ_B + 1 : SQ_DW - 1) -: 2] : 2'd0;   // R940 (R951: no longer the top)
   // R275: the textured span, expanded a pixel at a time. tx_* is the span as
   // the band buffers see it -- identical in shape, one pixel wide when the
   // polygon wears a texture.
@@ -613,7 +695,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP)) u_fill (   // R828   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .DIL(DIL), .UVCL(UVCL)) u_fill (   // R951   // R944   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
@@ -628,6 +710,7 @@ module m2_raster3d #(
     .in_oz0(qo_oz0), .in_oz1(sp_oz1), .in_oz2(sp_oz2), .in_oz3(sp_oz3),  // R337
     .in_frac(sp_frac),                                                    // R626
     .in_tex(qo_tex),
+    .in_uvs(qo_uvs),                                 // R940
     .mip_mode(tex_mip_mode),                         // R828a
     .in_mipz(qo_mipz),                               // R828c
     .view_x1(16'sd0), .view_x2(16'(SCR_W) - 16'sd1),
@@ -639,7 +722,9 @@ module m2_raster3d #(
     .span_dudx(fl_span_dudx), .span_dvdx(fl_span_dvdx),
     .span_ooz(fl_span_ooz), .span_doozdx(fl_span_doozdx),     // R337
     .span_tex(fl_span_tex), .span_tex_en(fl_span_tex_en),
+    .span_uvs(fl_span_uvs),                                    // R940
     .span_mipk(fl_span_mipk),                                  // R828
+    .span_ub(fl_span_ub), .span_nq(fl_span_nq),                // R951
     .quad_done(fl_quad_done), .line_case(fl_line_case),
     .dbg_hot(dbg_fill_hot), .dbg_hotcyc(dbg_fill_hotcyc)   // R436
   );
@@ -693,14 +778,14 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT)) u_spantex (   // R633, R791, R828, R867
+                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .UVSH(UVSH), .UVCL(UVCL)) u_spantex (   // R951   // R940   // R633, R791, R828, R867
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784
     .lut_we(lut_we), .lut_sel(lut_sel), .lut_addr(lut_addr), .lut_data(lut_data),   // R867
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
     .mk_band_y0(mk_y0),
-    .in_valid(sq_qv), .in_ready(sq_rdy), .busy(spantex_busy),
+    .in_valid(sq_qve), .in_ready(sq_rdy), .busy(spantex_busy),   // R951: and its box
     // m2_span_tex still carries these as 32; the fill and the queue are what
     // this change narrows.
     .in_y(32'(sq_y)), .in_x0(32'(sq_x0)), .in_x1(32'(sq_x1)),
@@ -709,7 +794,9 @@ module m2_raster3d #(
     .in_dudx(sq_dudx), .in_dvdx(sq_dvdx),
     .in_ooz(sq_ooz), .in_doozdx(sq_doozdx),                   // R337
     .in_tex(sq_tex), .in_tex_en(sq_tex_en),
+    .in_uvs(sq_uvs),                                          // R940
     .in_mipk(sq_mipk),                                        // R828
+    .in_ubi(ub_head), .ub_ra(ub_ra), .ub_rd(ub_rd),          // R951
     .out_valid(tx_span_valid), .out_ready(tx_span_ready),
     .out_y(tx_span_y), .out_x0(tx_span_x0), .out_x1(tx_span_x1),
     .out_col(tx_span_col), .out_moire(tx_span_moire),

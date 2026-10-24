@@ -38,7 +38,13 @@ module i960_fpmisc #(
   // it; the shift, overflow, leading-zero count, renormalise and the result
   // select after. Results then appear one clk after the operands. 0 is the
   // combinational unit exactly as it was, and clk is unused.
-  parameter bit STAGED = 1'b0
+  parameter bit STAGED = 1'b0,
+  // R952: SCALE 0 leaves out the scale path (op 6). i960_top never issues it:
+  // scaler goes through the multiplier by a power of two (its pow2), so the
+  // exponent add, its clamps and the stage's 64-bit r2_scaled were logic no
+  // instruction reached. Op 6 then reads as op 7 (a). 1 is the unit as it was
+  // (the unit bench tests it).
+  parameter bit SCALE  = 1'b1
 ) (
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic        clk,          // R575: used only when STAGED
@@ -116,8 +122,18 @@ module i960_fpmisc #(
   //
   // Exact: a 32-bit integer always fits a 53-bit significand.
 
+  // R952: ONE NORMALISER FOR cvtir AND logbnr. logb is an int-to-double of
+  // the unbiased exponent, which had its own copy of this whole block (the
+  // magnitude, a 32-bit leading-zero count, the 52-bit shift); one op is
+  // issued at a time, so the operand is chosen first and the block built once.
+  // r2_nd below holds whichever of the two results the op wants.
+  logic [31:0] logb_i;
+  logic [31:0] n_in;
+  assign logb_i = 32'(eu);
+  assign n_in   = (op == OP_LOGB) ? logb_i : ai;
+
   logic [31:0] imag;
-  assign imag = ai[31] ? (~ai + 32'd1) : ai;
+  assign imag = n_in[31] ? (~n_in + 32'd1) : n_in;
 
   logic [5:0] ilz;
   always_comb begin
@@ -134,7 +150,7 @@ module i960_fpmisc #(
   assign i2d_exp = 13'sd1023 + 13'sd31 - $signed({7'd0, ilz});
 
   logic [63:0] i2d;
-  assign i2d = (ai == 32'd0) ? 64'd0 : {ai[31], i2d_exp[10:0], i2d_man};
+  assign i2d = (n_in == 32'd0) ? 64'd0 : {n_in[31], i2d_exp[10:0], i2d_man};
 
   // ------------------------------------------- double -> integral value
   //
@@ -161,9 +177,15 @@ module i960_fpmisc #(
   assign frac_part = fa_w & frac_mask;
   assign int_part  = fa_w & ~frac_mask;
 
-  // Half of the fractional field, for round-half-away-from-zero.
-  logic [55:0] half;
-  assign half = (fbits == 6'd0) ? 56'd0 : (56'd1 << (fbits - 6'd1));
+  // Half of the fractional field, for round-half-away-from-zero. R952: the
+  // test frac_part >= half (half = 2^(fbits-1), frac_part < 2^fbits) is the
+  // fraction's top bit, fa_w[fbits-1] -- one bit select, where it was a 56-bit
+  // shift and a 56-bit compare.
+  logic half_up;
+  // (indexed in a 64-bit copy: at fbits 0 the index wraps to 63, which the
+  // guard masks -- in range, so lint_idx has nothing to report)
+  wire [63:0] fa_w64 = {8'd0, fa_w};
+  assign half_up = (fbits != 6'd0) && fa_w64[fbits - 6'd1];
 
   logic inc;
   // cvtzri truncates REGARDLESS of the mode field — the z is "toward zero" and
@@ -173,7 +195,7 @@ module i960_fpmisc #(
 
   always_comb begin
     case (eff_rmode)
-      2'd0:    inc = (frac_part >= half) && (fbits != 6'd0);  // half away from 0
+      2'd0:    inc = half_up;                                 // half away from 0
       2'd1:    inc = sa && (frac_part != 56'd0);              // floor
       2'd2:    inc = !sa && (frac_part != 56'd0);             // ceil
       default: inc = 1'b0;                                    // truncate
@@ -193,7 +215,7 @@ module i960_fpmisc #(
   logic [5:0]         r2_fbits;
   logic signed [12:0] r2_eu;
   logic               r2_sa, r2_a_nan, r2_a_inf, r2_inc;
-  logic [63:0]        r2_a, r2_i2d, r2_scaled, r2_logb_d;
+  logic [63:0]        r2_a, r2_nd, r2_scaled;   // R952: r2_nd, cvtir's or logb's
   logic [2:0]         r2_op;
   logic [63:0]        scaled, logb_d;       // declared here, computed below
   generate
@@ -201,14 +223,14 @@ module i960_fpmisc #(
       always_ff @(posedge clk) begin
         r2_rounded <= rounded; r2_fbits <= fbits; r2_eu <= eu;
         r2_sa <= sa; r2_a_nan <= a_nan; r2_a_inf <= a_inf; r2_inc <= inc;
-        r2_a <= a; r2_i2d <= i2d; r2_scaled <= scaled; r2_logb_d <= logb_d;
+        r2_a <= a; r2_nd <= (op == OP_LOGB) ? logb_d : i2d; r2_scaled <= SCALE ? scaled : 64'd0;
         r2_op <= op; cc <= cc_c;
       end
     end else begin : g_comb
       always_comb begin
         r2_rounded = rounded; r2_fbits = fbits; r2_eu = eu;
         r2_sa = sa; r2_a_nan = a_nan; r2_a_inf = a_inf; r2_inc = inc;
-        r2_a = a; r2_i2d = i2d; r2_scaled = scaled; r2_logb_d = logb_d;
+        r2_a = a; r2_nd = (op == OP_LOGB) ? logb_d : i2d; r2_scaled = SCALE ? scaled : 64'd0;
         r2_op = op; cc = cc_c;
       end
     end
@@ -264,9 +286,16 @@ module i960_fpmisc #(
   /* verilator lint_on UNUSEDSIGNAL */
   assign rexp = $signed({7'd0, rlz}) + r2_eu - 13'sd52 + 13'sd1023;
 
+  // R952: ONE SHIFT. The leading one moved to bit 56 and the 52 bits under
+  // it taken, which is both of the old cases at once: rlz >= 52 shifted right
+  // by rlz - 52 (dropping low bits), below it left by 52 - rlz (zero fill).
+  // rlz = 57 (a zero) never reaches rman: round_d takes its own branch.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [56:0] rnorm;
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [51:0] rman;
-  assign rman = (rlz >= 6'd52) ? 52'(r2_rounded >> (rlz - 6'd52))
-                               : 52'(r2_rounded << (6'd52 - rlz));
+  assign rnorm = r2_rounded << (6'd56 - rlz);
+  assign rman  = rnorm[55:4];
 
   logic [63:0] round_d;
   always_comb begin
@@ -300,36 +329,20 @@ module i960_fpmisc #(
   //
   // logb returns the unbiased exponent as a double: an int-to-double of eu.
 
-  logic [31:0]        logb_i;
-  logic signed [12:0] eu_l;
-  assign eu_l   = eu;
-  assign logb_i = 32'(eu_l);
-
-  logic [31:0] lmag;
-  logic [5:0]  llz;
-  assign lmag = logb_i[31] ? (~logb_i + 32'd1) : logb_i;
-  always_comb begin
-    llz = 6'd32;
-    for (int i = 0; i < 32; i++)
-      if (lmag[i]) llz = 6'(31 - i);
-  end
-
+  // R952: the conversion itself is i2d above, with n_in = logb_i on this op
+  // (its zero case, logb_i == 0, is i2d's).
   assign logb_d = a_zero ? {1'b1, 11'h7ff, 52'd0}                 // logb(0) = -inf
                 : a_inf  ? {1'b0, 11'h7ff, 52'd0}
                 : a_nan  ? a
-                : (logb_i == 32'd0) ? 64'd0
-                : {logb_i[31],
-                   11'(13'sd1023 + 13'sd31 - $signed({7'd0, llz})),
-                   52'(({20'd0, lmag} << llz) << 21)};
+                : i2d;
 
   // ------------------------------------------------------------- select
 
   always_comb begin
     case (r2_op)
-      OP_LOGB:            y = r2_logb_d;
-      OP_CVTIR:           y = r2_i2d;
+      OP_LOGB, OP_CVTIR:  y = r2_nd;   // R952
       OP_ROUND:           y = round_d;
-      OP_SCALE:           y = r2_scaled;
+      OP_SCALE:           y = SCALE ? r2_scaled : r2_a;   // R952
       OP_CMP, OP_MOV,
       OP_CVTRI, OP_CVTZRI: y = r2_a;   // cmp and the int converts produce yi/cc
       default:            y = r2_a;

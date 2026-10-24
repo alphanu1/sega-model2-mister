@@ -108,8 +108,15 @@ static long take_without_ack = 0;
 // cycle's texel inputs. in_ready depends on tx_rdy through ld_over, so a
 // test that samples it before tick() reads last cycle's (R494's trap again).
 static bool last_in_taken = false;
+#ifdef TB_UVCL
+// R951: m2_raster3d's box queue, as the unit reads it back: a word per quad
+static uint64_t g_ubmem[32];
+#endif
 static void tick(bool stall = false) {
   ++ticks_done;
+#ifdef TB_UVCL
+  d->eval(); d->ub_rd = g_ubmem[d->ub_ra & 31u];   // the asynchronous read
+#endif
   d->out_ready = stall ? 0 : 1;
   // The texel fetch answers in one cycle.
   // R479: A TEXEL THAT CAN MISS. Answering every fetch in one cycle is what
@@ -166,12 +173,18 @@ int main(int argc, char **argv) {
   // R828: no mip level unless a test asks for one (-512: the quad had no edge),
   // so with MIP built every other test must see the walk exactly as before
   d->in_mipk = 0x200;
+#ifdef TB_UVCL
+  // R951: every other test's spans carry the widest box, every span a quad's first
+  const uint64_t UB_ALL = uint64_t(1) << 44;   // the box's "off" bit
+  for (auto &w : g_ubmem) w = UB_ALL;   // word 0 serves every other test
+  d->in_ubi = 0;
+#endif
   // R650: the step is a run-time input now; drive it to the value under test
   d->pxk = (STEP == 8) ? 3 : (STEP == 4) ? 2 : (STEP == 2) ? 1 : 0;
   for (int i = 0; i < 4; ++i) tick();
   d->rst_n = 1; tick();
 
-#ifndef TB_FTB   // R813: the FTB build runs only the cull's test (every other test's rows are outside its band)
+#if !defined(TB_FTB) && !defined(TB_GC)   // R813: the FTB build runs only the cull's test (every other test's rows are outside its band); R938: the GC build only the coordinate test below
   // 1. A FLAT SPAN, IN ONE CYCLE.
   {
     got.clear();
@@ -920,7 +933,7 @@ int main(int argc, char **argv) {
     ck("R784: nibble F, row 1: luma 3", lum_of(0xff, true), 3);
   }
 
-#else
+#elif defined(TB_FTB)
   // 6. R813: THE SPAN CULL (FTB). The mask says which pixels of the band are
   //    painted; a textured span all of whose pixels are painted is taken and
   //    dropped without a walk, and only while it has to wait (it stands two
@@ -1008,7 +1021,7 @@ int main(int argc, char **argv) {
     const long NS = std::getenv("M2_MIP_N") ? atol(std::getenv("M2_MIP_N")) : 3000;
     const int UVS = 18 - TB_UZF;
     auto lq = [](uint32_t v) { int m = 31 - __builtin_clz(v); int f = m >= 2 ? int((v >> (m - 2)) & 3) : int((v << (2 - m)) & 3); return 4 * m + f; };
-    struct M { int x0, x1, K; int64_t V, G, O, DO; uint32_t tex; };
+    struct M { int x0, x1, K; int64_t V, G, O, DO; uint32_t tex; uint32_t lu, hu, lv, hv; bool off; int qi; };
     std::vector<M> sp;
     long want_n = 0;
     for (long i = 0; i < NS; ++i) {
@@ -1058,6 +1071,32 @@ int main(int argc, char **argv) {
       sp.push_back(q);
       want_n += (q.x1 - q.x0) / STEP + 1;
     }
+#ifdef TB_UVCL
+    // R951: THE QUAD'S TEXEL BOX. Spans come in "quads" of one to three, each
+    // span carrying its quad's box (m2_raster3d holds its box queue's head on
+    // it); back to back, so the next quad's box arrives while the last span's
+    // groups are still in the divide -- each group must use its own span's.
+    // Each box is drawn around the quad's first span's starting texel, the
+    // floor one texel either side of it and the top 0..2 texels above, so the
+    // walk crosses both edges by a near miss and by more; one in eight is off.
+    {
+      uint32_t lu = 0, hu = 0, lv = 0, hv = 0; bool off = false; int left = 0, qn = 0;
+      for (M &q : sp) {
+        if (left == 0) {
+          left = 1 + int(roll(3));
+          const int64_t tu = ((q.V << 29) / q.O) >> 18, tv = (((q.V + 12345) << 29) / q.O) >> 18;   // whole texels
+          auto lo = [&](int64_t t) { const int64_t a = t + int64_t(roll(3)) - 1; return uint32_t(std::max<int64_t>(0, std::min<int64_t>(a, 2047))); };
+          lu = lo(tu); hu = std::min<uint32_t>(2047u, lu + uint32_t(roll(3)));
+          lv = lo(tv); hv = std::min<uint32_t>(2047u, lv + uint32_t(roll(3)));
+          off = roll(8) == 0;
+          ++qn;
+        }
+        --left;
+        q.lu = lu; q.hu = hu; q.lv = lv; q.hv = hv; q.off = off; q.qi = 1 + (qn % 31);   // words 1..31, round and round
+      }
+    }
+    long n_clu = 0, n_chu = 0, bad_v = 0;
+#endif
     issued.clear(); issued_u.clear(); rec_issue = true; got.clear(); force_texel = 0x8;
     size_t next = 0;
     for (long guard = 0; guard < 400 * NS + 10000; ++guard) {
@@ -1068,6 +1107,12 @@ int main(int argc, char **argv) {
         d->in_u = uint32_t(q.V); d->in_v = uint32_t(q.V + 12345); d->in_dudx = uint32_t(q.G) & 0xffffffu; d->in_dvdx = uint32_t(q.G) & 0xffffffu;
         d->in_ooz = uint32_t(q.O); d->in_doozdx = uint32_t(q.DO) & 0xffffffu;
         d->in_tex = q.tex; d->in_tex_en = 1; d->in_mipk = uint32_t(q.K) & 0x3ffu;
+#ifdef TB_UVCL
+        // the quad's word is written as its first span is offered (the queue's
+        // push); the words of the one or two quads still in flight are older
+        g_ubmem[q.qi] = (uint64_t(q.off) << 44) | (uint64_t(q.lu) << 33) | (uint64_t(q.hu) << 22) | (uint64_t(q.lv) << 11) | uint64_t(q.hv);
+        d->in_ubi = uint32_t(q.qi);
+#endif
       } else d->in_valid = 0;
       d->out_ready = 1; d->eval();
       tick();
@@ -1075,6 +1120,9 @@ int main(int argc, char **argv) {
       if (next >= sp.size() && long(issued.size()) >= want_n && !d->busy) break;
     }
     d->in_valid = 0; d->in_mipk = 0x200; rec_issue = false; force_texel = -1;
+#ifdef TB_UVCL
+    d->in_ubi = 0;
+#endif
     ck("R828: one fetch per group", long(issued.size()), want_n);
     long bad_l = 0, bad_u = 0, bad_t = 0, bad_q = 0, n = 0, lv[8] = {0};
     long cls_n = 0, cls_capped = 0, cls_bad = 0;   // R828b
@@ -1086,8 +1134,20 @@ int main(int argc, char **argv) {
       const int ml = ((q.tex >> 8) & 1u) ? mc : std::min(mc + 1, 7);
       const bool cls = long(&q - &sp[0]) >= n_class0;
       for (int j = 0; j < g && k < issued.size(); ++j, ++k) {
-        const int64_t O = q.O + ((q.DO << 8) * STEP) * j;
-        const int64_t Vj = q.V + ((q.G << (UVS - 8)) * STEP) * j;
+        int64_t O = q.O + ((q.DO << 8) * STEP) * j;
+        int64_t Vj = q.V + ((q.G << (UVS - 8)) * STEP) * j;
+#ifdef TB_GC
+        // R938: GC -- each group sampled (STEP-1)/2 pixels in (R616), but a
+        // cut-short group (a span shorter than a group, a span's last group)
+        // at its first pixel: never past the span's end
+        {
+          const bool part = (q.x0 + STEP * j + STEP - 1) > q.x1;
+          if (!part) { O += q.DO * (STEP - 1) * 128; Vj += (q.G * (STEP - 1)) << (UVS - 9); }
+          // and the sample point is inside the span: its x, in pixels from x0
+          const double sx = part ? double(STEP * j) : STEP * j + (STEP - 1) / 2.0;
+          if (sx > double(q.x1 - q.x0)) { if (bad_q++ < 5) std::printf("  FAIL sample point %.1f past the span's last pixel %d\n", sx, q.x1 - q.x0); }
+        }
+#endif
         const int L4 = q.K - 2 * lq(uint32_t(O));
         const int L = (L4 < 0) ? 0 : std::min(L4 >> 2, ml);
         const Iss &is = issued[k];
@@ -1115,13 +1175,42 @@ int main(int argc, char **argv) {
         const uint64_t q0 = pu >> (sh + L);
         const uint32_t want = (q0 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q0 >> 10) & 0xfffff);
         const uint32_t mask = (1u << (20 - L)) - 1;
+#ifdef TB_UVCL
+        // R951: at level 0, in the texel under the box's floor (or on it) ->
+        // floor + 1/256; in the texel over its top (hm, whole texels) -> hm +
+        // 255/256; inside, or further out, untouched
+        auto clamp = [&](uint32_t t, uint32_t lo, uint32_t hm, long *nl, long *nh) -> uint32_t {
+          if (L != 0 || q.off) return t;
+          // the near miss only: the texel just under the floor (or exactly on it), the texel just over the top
+          if ((t >> 8) + 1 == lo || ((t >> 8) == lo && (t & 0xff) == 0)) { if (nl) ++*nl; return (lo << 8) | 1u; }
+          if ((t >> 8) == hm + 1) { if (nh) ++*nh; return (hm << 8) | 0xffu; }
+          return t;
+        };
+        const uint32_t want_c = clamp(want, q.lu, q.hu, &n_clu, &n_chu);
+        if (((is.u ^ want_c) & mask) != 0) { if (bad_u++ < 5) std::printf("  FAIL u at L%d: got %05x want %05x (box %x..%x)\n", L, is.u, want_c, q.lu, q.hu); }
+        {   // v: the same divide of V + 12345, clamped into the v box
+          const uint64_t pv = uint64_t(Vj + 12345) * r1;
+          const uint64_t q1 = pv >> (sh + L);
+          const uint32_t wv = (q1 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q1 >> 10) & 0xfffff);
+          const uint32_t wvc = clamp(wv, q.lv, q.hv, nullptr, nullptr);
+          if (((is.v ^ wvc) & mask) != 0) { if (bad_v++ < 5) std::printf("  FAIL v at L%d: got %05x want %05x (box %x..%x)\n", L, is.v, wvc, q.lv, q.hv); }
+        }
+        // and the mirror decision is made on the clamped coordinate (the word check below uses is.u)
+#else
         if (((is.u ^ want) & mask) != 0) { if (bad_u++ < 5) std::printf("  FAIL u at L%d: got %05x want %05x\n", L, is.u, want); }
+#endif
         // and the divide is still the quotient, to its 2f tolerance scaled
         // (where the divide normalises: 1/z at 2^23 or more)
         const int64_t ex = (((Vj << 29) / O) >> 10) >> L;
         if (O >= (int64_t(1) << 23) && std::llabs((int64_t(want) & mask) - (ex & mask)) > 2 + (ex >> 12)) { if (bad_q++ < 5) std::printf("  FAIL quotient at L%d: %05x vs exact %05llx (O %llx V %llx)\n", L, want, (long long)ex, (long long)O, (long long)Vj); }
       }
     }
+#ifdef TB_UVCL
+    std::printf("  R951: u clamped up %ld, down %ld\n", n_clu, n_chu);
+    ck("R951: every fetch's v, clamped into its quad's box at level 0", bad_v, 0);
+    ck("R951: the floor clamp fired", n_clu > 50, 1);
+    ck("R951: the top clamp fired", n_chu > 50, 1);
+#endif
     ck("R828: every fetch's level", bad_l, 0);
     ck("R828: every fetch's coordinate, at its level", bad_u, 0);
     ck("R828: every fetch's texture word", bad_t, 0);

@@ -163,6 +163,7 @@ public:
 	s32 slot_out[32]; u8 slot_was_active[32]; s32 last_l = 0, last_r = 0;
 	s32 slot_dl[32], slot_dr[32], efx_l = 0, efx_r = 0;   // this sample's direct sends per slot, the effect return (benches, R886)
 	s32 mix_add[16];   // this sample's DSP sends, per MIXS entry (benches)
+	u32 mixs_mask = 0xffffffffu;   // benches (R949): the slots that feed MIXS (all, as MAME; scsp_mixcat masks)
 
 	SCSP(const Tables &t, u16 *r) : T(t), ram(r) {
 		memset(udata, 0, sizeof(udata)); memset(RINGBUF, 0, sizeof(RINGBUF));
@@ -579,7 +580,7 @@ public:
 				slot_out[sl] = smp;
 				u16 eff_tl = SDIR(slot) ? 0 : TL(slot);
 				u16 Enc = eff_tl | (IMXL(slot) << 0xd);
-				D.MIXS[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
+				if ((mixs_mask >> sl) & 1) D.MIXS[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
 				mix_add[ISEL(slot)] += (smp * T.LPANTABLE[Enc]) >> (SHIFT - 2);
 				Enc = eff_tl | (DIPAN(slot) << 0x8) | (DISDL(slot) << 0xd);
 				slot_dl[sl] = (smp * T.LPANTABLE[Enc]) >> SHIFT; slot_dr[sl] = (smp * T.RPANTABLE[Enc]) >> SHIFT;

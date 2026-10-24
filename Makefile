@@ -405,8 +405,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state test_m2_nv_save
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_span_tex_uvcl test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_vcop_xhair test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_m2_nv_save test_m2_fill_dil
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -1249,6 +1249,28 @@ obj_raster_fill_mip/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_ra
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM -GMIP=1 --Mdir obj_raster_fill_mip -o Vm2_raster_fill -CFLAGS "-O2 -DTB_MIP" \
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_raster_fill.cpp
 
+# R658: Model 2's coverage (FRB 2, M2COV) against MAME's rule; R944: and the
+# T-junction cracks it leaves on quarter-pixel vertices (counted, not failed)
+# TIEW 0.01: a row one pixel off where the exact edge is within 0.01 px of a
+# half pixel is a rounding tie (R658's window; 16.16 slopes and floats differ)
+test_m2_fill_m2cov: obj_fill_m2cov/Vm2_raster_fill
+	@echo "== test m2_raster_fill M2COV (R658) against MAME's rule"
+	@TIEW=0.01 ./obj_fill_m2cov/Vm2_raster_fill $(TEST_ARGS)
+
+obj_fill_m2cov/Vm2_raster_fill: $(RFILL_RTL) sim/video/tb_m2_fill_m2cov.cpp
+	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM -GFRB=2 -GM2COV=1 --public-flat-rw --Mdir obj_fill_m2cov -o Vm2_raster_fill -CFLAGS "-O2" \
+	  $(RFILL_RTL) sim/video/tb_m2_fill_m2cov.cpp
+
+# R944: the same with DIL (Model2.sv's fill): the rule with each edge moved
+# out by (1 + |dx/dy|) / 8, and no T-junction crack
+test_m2_fill_dil: obj_fill_dil/Vm2_raster_fill
+	@echo "== test m2_raster_fill M2COV + DIL (R944): no T-junction cracks"
+	@TIEW=0.01 ./obj_fill_dil/Vm2_raster_fill $(TEST_ARGS)
+
+obj_fill_dil/Vm2_raster_fill: $(RFILL_RTL) sim/video/tb_m2_fill_m2cov.cpp
+	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM -GFRB=2 -GM2COV=1 -GDIL=1 --public-flat-rw --Mdir obj_fill_dil -o Vm2_raster_fill -CFLAGS "-O2 -DTB_DIL" \
+	  $(RFILL_RTL) sim/video/tb_m2_fill_m2cov.cpp
+
 # m2_texel_cdc (R561): the texel queue across unrelated clocks. Default 100/60;
 # M2_TXC_TF/TS/PH/JIT set the periods, phase and jitter.
 test_m2_texel_cdc: obj_texel_cdc/Vm2_texel_cdc
@@ -1291,7 +1313,7 @@ geodiff_2a: obj_geodiff_2a/Vgeodiff_top
 
 obj_geodiff_2a/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
     rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
-	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	$(VBUILD) --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -GUVSH=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
 	  --Mdir obj_geodiff_2a -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
@@ -1307,7 +1329,7 @@ geodiff_2abig: obj_geodiff_2abig/Vgeodiff_top
 
 obj_geodiff_2abig/Vgeodiff_top: sim/video/geodiff_top.sv sim/video/tb_m2_geodiff.cpp rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv \
     rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL)
-	$(VBUILD) --top-module geodiff_top -GCRTC_X=$(GD_CX) -GCRTC_Y=$(GD_CY) -GWINKEY=1 -GAW=26 -GBIG=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
+	$(VBUILD) --top-module geodiff_top -GCRTC_X=$(GD_CX) -GCRTC_Y=$(GD_CY) -GWINKEY=1 -GAW=26 -GBIG=1 -GUVSH=1 -CFLAGS "-O2" $(TGPFLAGS) -Wno-WIDTHTRUNC -Irtl/tgp -Irtl/video --public-flat-rw \
 	  --Mdir obj_geodiff_2abig -o Vgeodiff_top sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv \
 	  rtl/video/m2_geometry.sv rtl/video/m2_geo_engine.sv rtl/video/m2_geo_xform.sv \
 	  rtl/video/m2_geo_clip.sv rtl/video/m2_geo_project.sv $(GEO_RTL) sim/video/tb_m2_geodiff.cpp
@@ -1592,7 +1614,7 @@ obj_cdc/Vm2_sdram_cdc_harness: sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_
 # load on the rest, clk_sys and clk_mem independent; every word read is checked
 # against every write. Knobs: see sim/mem/tb_m2_sdram_cdc_load.cpp. The default
 # run is three phase / drift / jitter / load cases; obj_cdc_loada builds AGE in.
-CDL_RTL := sim/mem/m2_sdram_cdc_load_harness.sv sim/mem/tb_snd_stubs.sv rtl/sound/m2_2a_sound.sv \
+CDL_RTL := sim/mem/m2_sdram_cdc_load_harness.sv sim/mem/tb_snd_stubs.sv rtl/sound/m2_2a_sound.sv rtl/sound/m2_snd_lerp.sv \
            rtl/sound/scsp/m2_scsp_cache.sv rtl/mem/m2_sdram_cdc.sv rtl/mem/m2_sdram.sv sim/mem/sdram_model.sv
 .PHONY: test_m2_sdram_cdc_load
 test_m2_sdram_cdc_load: obj_cdc_load/Vm2_sdram_cdc_load_harness obj_cdc_loada/Vm2_sdram_cdc_load_harness
@@ -1864,6 +1886,33 @@ obj_spantex_mip/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
 	  -GPIXSTEP=$(PIXSTEP) -GMIP=1 --Mdir obj_spantex_mip -o Vm2_span_tex \
 	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP) -DTB_MIP" \
+	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+
+# R938: GC (the group-centre sample, as m2_raster3d builds it with PXC) -- the
+# coordinate test with every group's sample point, a cut-short last group's
+# and a short span's included, against the reference walk
+test_m2_span_tex_gc: obj_spantex_gc/Vm2_span_tex
+	@echo "== test m2_span_tex, GC (R616 / R938)"
+	@./obj_spantex_gc/Vm2_span_tex
+
+obj_spantex_gc/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
+	  -GPIXSTEP=$(PIXSTEP) -GMIP=1 -GGC=1 --Mdir obj_spantex_gc -o Vm2_span_tex \
+	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP) -DTB_MIP -DTB_GC" \
+	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+
+# R951: UVCL -- the MIP coordinate test with every span's quad texel box,
+# read back by index as m2_raster3d's box queue serves it; at level 0 the
+# fetch must be the coordinate with a near miss clamped into the box, at every
+# other level (and for a box marked off) untouched
+test_m2_span_tex_uvcl: obj_spantex_uvcl/Vm2_span_tex
+	@echo "== test m2_span_tex, UVCL (R951)"
+	@./obj_spantex_uvcl/Vm2_span_tex
+
+obj_spantex_uvcl/Vm2_span_tex: rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_span_tex \
+	  -GPIXSTEP=$(PIXSTEP) -GMIP=1 -GUVCL=1 --Mdir obj_spantex_uvcl -o Vm2_span_tex \
+	  -CFLAGS "-O2 -DTB_PIXSTEP=$(PIXSTEP) -DTB_MIP -DTB_UVCL" \
 	  rtl/video/m2_span_tex.sv sim/video/tb_m2_span_tex.cpp
 
 test_m2_handshake_cdc: obj_hscdc/Vm2_handshake_cdc
@@ -2349,12 +2398,28 @@ obj_m2_2a_inputs/Vtb_m2_2a_inputs_top: rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inpu
 	  --Mdir obj_m2_2a_inputs -o Vtb_m2_2a_inputs_top -CFLAGS "-O2" \
 	  rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv sim/io/tb_m2_2a_inputs_top.sv sim/io/tb_m2_2a_inputs.cpp
 
+# R945: the NVRAM file end to end -- Main_MiSTer's SPI words through the real
+# sys/hps_io.sv, m2_nv_port, m2_backup and the 315-5649's 93C46: the game's
+# settings saved, a power cycle with the file, without it, with an earlier
+# core's 16 KB file, a damaged tag, an old MRA size. TEST_ARGS=+spacing=3 is
+# the negative control (inside the pipeline: must FAIL).
+test_m2_nv_save: obj_m2_nv_save/Vtb_m2_nv_save_top
+	@echo "== test m2_nv_save (R945: the EEPROM in the NVRAM file, through hps_io)"
+	@./obj_m2_nv_save/Vtb_m2_nv_save_top $(TEST_ARGS)
+
+obj_m2_nv_save/Vtb_m2_nv_save_top: sim/io/tb_m2_nv_save_top.sv sim/io/tb_m2_nv_save.cpp rtl/io/m2_nv_port.sv \
+                                   rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sys/hps_io.sv
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE -Wno-MULTIDRIVEN --timing \
+	  --top-module tb_m2_nv_save_top -Isys --Mdir obj_m2_nv_save -o Vtb_m2_nv_save_top -CFLAGS "-O2" \
+	  sim/io/tb_m2_nv_save_top.sv rtl/io/m2_nv_port.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+	  rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sys/hps_io.sv sim/io/tb_m2_nv_save.cpp
+
 test_m2_315_5649: obj_m2_5649/Vm2_315_5649
-	@echo "== test m2_315_5649 (the 2A I/O and its 93C46 against MAME's)"
+	@echo "== test m2_315_5649 (the 2A I/O and its 93C46 against MAME's; R945 the save port)"
 	@./obj_m2_5649/Vm2_315_5649 $(TEST_ARGS)
 
 obj_m2_5649/Vm2_315_5649: rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
-	$(VBUILD) --top-module m2_315_5649 -GEE_LOAD=1 -Wno-UNUSEDSIGNAL \
+	$(VBUILD) --top-module m2_315_5649 -GEE_LOAD=1 -GEE_SAVE=1 -Wno-UNUSEDSIGNAL \
 	  --Mdir obj_m2_5649 -o Vm2_315_5649 -CFLAGS "-O2" \
 	  rtl/io/m2_315_5649.sv rtl/io/m2_93c46.sv sim/io/tb_m2_315_5649.cpp
 
@@ -2861,6 +2926,22 @@ obj_scsp_split/scsp_split: sim/sound/scsp_split.cpp sim/sound/scsp_ref.h
 	@mkdir -p obj_scsp_split
 	g++ -O2 -std=c++17 -Wall -Isim/sound sim/sound/scsp_split.cpp -o $@
 
+# R949: the output interpolator, read as sys/audio_out.sv reads AUDIO_L at
+# 48 kHz (LERP_IN=<int16 mono 44.1 kHz raw> LERP_OUT=<48 kHz raw> optional)
+.PHONY: test_m2_snd_lerp
+test_m2_snd_lerp: obj_snd_lerp/Vm2_snd_lerp
+	@echo "== test m2_snd_lerp (in range, no torn reads at the framework's 48 kHz)"
+	@obj_snd_lerp/Vm2_snd_lerp
+
+obj_snd_lerp/Vm2_snd_lerp: rtl/sound/m2_snd_lerp.sv sim/sound/tb_m2_snd_lerp.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-DECLFILENAME -CFLAGS "-O2" --top-module m2_snd_lerp --Mdir obj_snd_lerp \
+	  rtl/sound/m2_snd_lerp.sv sim/sound/tb_m2_snd_lerp.cpp
+
+# R949: the mix by category, MAME's MADRS mirror against R914 (scsp_mixcat <capture> <s> <noise.hex> [t0 t1])
+obj_scsp_mixcat/scsp_mixcat: sim/sound/scsp_mixcat.cpp sim/sound/scsp_ref.h
+	@mkdir -p obj_scsp_mixcat
+	g++ -O2 -std=c++17 -Isim/sound sim/sound/scsp_mixcat.cpp -o $@
+
 # the 2A sound board (R859): fx68k on a game's real sound program, the SCSP,
 # sound RAM in SDRAM. SND_IMG=build/snd2a/<game> (sim/sound/snd_img.py),
 # SCSP_CAP=build/scsp/<game> (MAME's MIDI, writes, mix), SND_S=<seconds>
@@ -2868,7 +2949,7 @@ obj_scsp_split/scsp_split: sim/sound/scsp_split.cpp sim/sound/scsp_ref.h
 # the board's clock in MHz (the boot harness runs it at 48)
 SND2A_MHZ ?= 80
 SND2A_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv rtl/sound/fx68k/uaddrPla.sv \
-             rtl/sound/m2_2a_sound.sv $(SCSP_RTL)
+             rtl/sound/m2_2a_sound.sv rtl/sound/m2_snd_lerp.sv $(SCSP_RTL)
 test_m2_2a_sound: obj_snd2a$(SCSP_SFX)/Vm2_2a_sound
 	@echo "== test m2_2a_sound (the 2A sound board on the real sound program, against MAME)"
 	@cp -f rtl/sound/fx68k/microrom.mem rtl/sound/fx68k/nanorom.mem $(SCSP_HEX) obj_snd2a$(SCSP_SFX)/

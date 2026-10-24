@@ -1,5 +1,145 @@
 # Handoff
 
+## 2026-10-24 (evening): int-2a / int-2c -- the finished work merged for fitting (R952 integrated). LOCAL, NOT PUSHED, NOT FITTED
+
+  * int-2a (worktree sm2-builds/int-2a) = room2-2a 514c411 + R951 (rally-sky
+    32ca36a, 3110ef9) + R949 (hotd-mix 4cdb9c1, LERP only: the 2A line has no
+    OVERLAP). Builds from Model2.qsf as it is. quartus_map 38,918 ALMs needed
+    (room2-2a 38,718), DSP 99.
+  * int-2c (worktree sm2-builds/int-2c) = room2-2c f19e275 + R951 (the 2C
+    patch, no DIL) + R951 study + R949 + the reciprocal table's LUT form as
+    the default (M2_RECIP_M10K=1 for the M10K one; M2_RECIP_LOGIC not needed
+    any more) + "M2_2C=1" / "M2_NO_2A_MANX_MOTION=1" committed in its qsf.
+    quartus_map 38,935 ALMs needed (room2-2c 38,774), DSP 105.
+  * M2_2A_SND_LERP is 1 in both builds (the map's parameter settings say
+    LERP 1); UVCL 1 on the raster.
+  * Evidence (study R952, INTEGRATED): lint_top clean, lint_idx 111 / 113;
+    make test PASS both; fill miter with UVCL 0 against room2: 0 differing
+    in 109,964,114 / 107,610,021 cycles; Rally walks 4074-4082 15 -> 0 sky
+    dots in the integrated tree; Dynamite Cop 20 s LERP 0 identical to the
+    parents, LERP 1 PASS with the interpolated values in the output.
+  * Merge notes: m2_raster_fill's R951 block landed unchanged on room2's
+    restructured fill (S_OZ untouched by room2); conflicts were parameter
+    lists, the geodiff printf (QCYC + trow), the sound define blocks and the
+    docs (R949 placed before R950, R951 before R952).
+  * NEXT: fit both (Ben). Watch clk_sys at the UVCL clamp (MLAB read ->
+    m2_texel_x2 request) and R952's 2C projector / clipper paths.
+
+## 2026-10-24: room2-2a / room2-2c -- more ALM room by making things smaller (R952). LOCAL, NOT PUSHED, NOT FITTED
+
+quartus_map 17.0, ALMs needed: 2A 40,225 -> 38,718 (-1,507; branch room2-2a
+off bridge-r937-2a 77a4689, which now also carries R948's cache merge and
+i960 sums); 2C 40,133 -> 38,774..38,842 (-1,359..-1,291, two maps of the
+same logic; branch room2-2c off room-2c c9ee859; build with "M2_2C=1",
+"M2_NO_2A_MANX_MOTION=1", "M2_RECIP_LOGIC=1" as before). Nothing switched
+off; every change old-against-new identical, cycle for cycle. M10K: 2A -1
+(expected 549 of 553), 2C unchanged; one MLAB more (i960 regs).
+  * Geometry: the eight u2f two, a vertex a cycle; the eight per-cycle f2uvw
+    gone (the clipper keeps f2uvw of its coordinates); the projector's two
+    mag8 one; the engine's header adders one. Fill: one normaliser for the
+    six numerators; one adder per edge accumulator; each plane's two corner
+    products summed once.
+  * i960 (fpmisc, regs MLAB, ALU shifters, interrupt sums, dividers), fp_mul
+    SUBNORM, TGP ALU, tgpx4_cvt -- helper branches room2-i960-2a/-2c and
+    room2-snd-2a/-2c, cherry-picked.
+  * NEW: sim/miter/miter.py (old-against-new miter generator), fill.sh,
+    geo.sh; tb_clip_top asserts the clipper's new copy; geodiff M2GD_QCYC=1.
+  * FIT CHECKS: clk_sys near the projector / clipper states on 2C (s1462's
+    project sst -> clip kst had 0.199 ns), and the M10K count.
+  * Not taken (see R952): clipper operand select (+46), fpadd sticky mask
+    (0.503 ns path), fp_add sentinel (timing), the colour cache's 256 valid
+    flags (flash clear), the store's bank mux (near-critical).
+
+## 2026-10-24 (afternoon): hotd-mix (off hotd-dsp fb539c4, LOCAL) -- the sound path audited (R949). NOT PUSHED, NOT FITTED
+
+Ben: HOTD chapter 2 "music far too loud over the shots, tinny clipping";
+Dynamite Cop (2A, defaults) "box break makes you jump"; "it's the SOUND PATH".
+  * TINNY = THE OUTPUT PATH, every game, since R788 took the framework's IIR
+    filter out: audio_out samples the core's 44.1 kHz staircase at 48 kHz
+    unsmoothed, so bright sounds alias into 4-16 kHz (4 kHz tone: spurs at
+    -16 dB; HOTD's FM voice, sample 0x028C0, half its energy at 16-24 kHz,
+    aliases to 8.5 dB below itself -- it plays from the chapter-1 boss on).
+    FIX: rtl/sound/m2_snd_lerp.sv (linear interpolation, updated every 64
+    clocks), M2_2A_SND_LERP default 1 (2A and 2C). FM voice 8.5 -> 15.9 dB,
+    the rest 24.9 -> 40.4 dB; 123 ALM / 190 regs / 3 DSP alone (quartus_map).
+    Bench make test_m2_snd_lerp PASS; tb_m2_2a_sound with LERP PASS.
+  * LEVELS NOT REPRODUCED for HOTD. Whole board (fx68k + SCSP + sound RAM on
+    MAME's MIDI): Dcop 0-40 s = R914 reference +0.09 dB, HOTD 0-40 s +0.05 dB,
+    key-ons identical to MAME's. Core vs MAME per category (scsp_mixcat):
+    HOTD ch2 0.0-0.7 dB; Dcop effects +2.1 / +2.6 (R914's real reverb), its
+    music +0.1; VF2 / DOA music down (R914, accepted). Boost, Volume clamp,
+    output stage ruled out. srg320's Saturn SCSP (reference only, NO LICENCE
+    FILE, nothing copied): same scales everywhere, same float format, and
+    MADRS decoded at 0x780-0x7BF only -- confirms R914. EG key scaling differs
+    (OCT weight), measured <= 0.1 dB.
+  * RTL: tb_m2_scsp OVERLAP on, all 719 s of the new chapter-2 capture: 0
+    differ; Dcop (2A) 179 s 0 differ, engine max 2,038 clocks, free-running 0
+    underruns.
+  * Captures (git-ignored): build/scsp/ch2 (hotd play to chapter 2, 720 s),
+    build/scsp/dcop (180 s); clips build/scsp/clips/*.wav (MAME vs core);
+    build/board/ (whole-board WAVs, traces).
+  * NEXT: fit with LERP (both builds); ask Ben's Volume / Raw Sound Boost /
+    audio-filter preset (sys aud_mix_top's vol_boost waveshaper is still
+    live with the IIR gone); a board recording of HOTD ch2 vs the clips; the
+    'M' MIDI probe if the board still differs.
+  * Wrong turns: first numbers fed MAME's register writes (not the core's
+    68000) -- Ben was right to ask; the whole-board run then agreed anyway.
+
+## TODO -- the next feature build (Ben, 2026-10-23; after the current R937-R941 round)
+
+1. WHEEL MAPPING (GitHub #12). An "Analog control" choice like Jotego's OutRun
+   core. Today: O[28] Pedals Normal/Swapped, O[54] Right stick Pedals only /
+   Pedals+steer (R816/R831). Add:
+   - Analog Wheel A (older wheels, the cathoderayblog guide): left X steers;
+     left Y accelerator, centre = released, full up (0..-127) = pressed; right
+     Y brake the same way.
+   - Analog Wheel B (newer direct-drive pedals, e.g. Logitech RS50, as MiSTer
+     Main reports them): left X steers; accelerator on left Y over the WHOLE
+     axis, up (-127) = released, down (+127) = pressed; brake on right X over
+     the whole axis, left = released, right = pressed.
+   For every wheel game: Daytona, Desert Tank? (main); Sega Rally, Manx TT,
+   Motor Raid, Sky Target's stick excepted (2A); Over Rev, STCC (2C).
+   Find a free status bit on all three branches; m2_cab_inputs is shared.
+2. SINDEN BORDER (R942 (1)). OSD "Sinden border: Off (default) / On" for the
+   gun games, white frame in the gun-flash white path before m2_scan15,
+   ~30-60 ALM, 0 M10K. A Sinden owner to confirm before it is announced.
+3. GUN FLASH OFF ON 2A / 2C (R936 (1), R942 (2)). Port m2_gun_flash's Off
+   path to Virtua Cop 2 (2A); House of the Dead (2C) once its flash is
+   checked in MAME. Default Arcade.
+
+Backlog, not in that build: Rally NVRAM / EEPROM (#15); Manx TT settings,
+Deluxe/Twin sounds, Twin voice (#21) and its leaderboard text minification;
+Daytona volume (#20); Motor Raid slowdown (#25); Virtua Cop 57.5 fps hack
+(R936 (2)); Over Rev race slowdowns; HOTD courtyard shadow sliding (R935);
+STCC music (DSB MPEG); Rally shadow line (#26, not reproduced -- retest).
+## 2026-10-23 (night): branch ee-save -- the 93C46 EEPROM in the NVRAM file (R945, #15 / #21). NOT PUSHED, NOT FITTED
+
+Every 2A / 2B / 2C game keeps its test-menu settings in the 93C46 (MAME
+0.289); the 2A core never saved it, so Sega Rally (#15), Manx TT (#21) and,
+on 2C, House of the Dead lost them at power-off. Now index 2 is backup RAM
+(16 KB) + "M2EEPROM" + the 64 EEPROM words (MAME .nv layout): 16520 bytes,
+rtl/io/m2_nv_port.sv (the NVRAM path, moved out of Model2.sv), m2_93c46 DUMP
+(a second read port, a second 64 x 16 MLAB), M2_2A_EE_SAVE on by default.
+Every Model2A MRA (mra/ and releases/mra/) is now size 16520.
+  * Why the tag: Main zero-pads a short .nvm to the MRA's size and sends all
+    of it, so an old 16 KB file would load zeros over the MRA's EEPROM
+    (Hanguk Pro Yagu 98: Error #1). Without the tag the EEPROM is left alone.
+  * Main allows ONE <nvram> per MRA -- a second index was not an option.
+  * The OLD core's backup write was unbounded: a 16520 MRA on a pre-R945
+    Model2A rbf wraps 136 bytes onto backup words 0-33. The releases/mra
+    commit (879a65a) must ship with an R945 rbf, not before.
+  * Daytona / Desert Tank / Virtua Cop: settings are in backup RAM (already
+    saved); the I/O board's 93C45 is the firmware's own. main: MRAs only.
+Bench test_m2_nv_save (Main's SPI words through the real hps_io): save,
+power cycle with the file / none / 16 KB file / damaged tag / old MRA size,
+240 rounds PASS, +spacing=3 and five mutations FAIL as they must.
+Commits to fit: 2A ee-save 028aaa0 (RTL) + d3eb8d6 (mra/); 2C ee-save-2c
+a3cc53a + 2827848; main ee-save-main 47c654d (release MRAs only, no RTL).
+Board check: change a setting in Sega Rally's test menu, OSD "Save settings",
+power off / on: it holds; delete the .nvm: factory settings.
+quartus_map 17.0 (2A): +57 ALMs needed (40,039 -> 40,096), +1,024 MLAB bits,
+M10K and DSP unchanged.
+
 ## 2026-10-23 (evening): model2a pushed -- release folder only (Model2_20261023b)
 
 releases/ mirrors main's: Model2_20261023b (s1407, R939 + R938) in place of
@@ -9,6 +149,30 @@ bridge-r937-2a (42e43c9), board-checked on s1386 (R937) and s1404 pending
 for R940/R938, still hunting a clean seed (s1403-s1405, s1412-s1414 none
 clean; best s1404 -0.086 / -0.138; s1415-s1417 fitting). Fallback: s1394
 (R937 + R939 only) is clean.
+STCC music (DSB MPEG); Rally shadow line (#26: reproduced and fixed in the
+bench, branch rally-crack, R944 -- needs a fit and a board look).
+
+## 2026-10-23: branch rally-crack (off bridge-r937-2a 5ffd438, not pushed, not fitted) -- R944
+
+Rally's car-shadow dots (Top 16 attract screen, s1415; GitHub #26) REPRODUCED
+in the bench before any RTL change, through the core's own geometry (geodiff
+2A on MAME walks 8894-8899) and through MAME's vertices (frames 7290-7300):
+6-25 hole pixels a frame in two rows, ~40 and ~28 px apart, where the board
+shows them; MAME 0. Cause: T-junctions -- one shadow quad's long shallow edge,
+three quads on the other side splitting it -- with every vertex rounded to a
+quarter pixel independently, so the two sides part by up to (1 + |dx/dy|)/4
+px a row. Not the fill's edge rule. Fix: m2_raster_fill DIL (Model2.sv, every
+build) moves each edge of a FLAT quad out by (1 + |dx/dy|)/8, clamped to the
+edge's own extent; textured quads untouched (moving them re-phases the texel
+groups -- measured worse, rejected). Same reproduction: 0 holes. VF2, Sky
+Target, VCop pictures unchanged (hash); Rally / Daytona: flat outlines 1/8 px
+fatter (24-417 px a frame). New test_m2_fill_dil (200k quads, 20k
+T-junctions, 0 cracks). quartus_map 2A +147 ALM (40,310), main +342
+(39,504), 0 M10K. SMALLER (second commit, same pixels everywhere): 2A +77
+ALM (40,240), +41 registers -- the move on the walk's adder, clamps per
+segment. The running s1433-s1435 fit is the first version. Ready for
+a fit; board check on the Top 16 screen and a race (#26). Open: textured
+T-junctions (maybe Sky Target's sky lines).
 
 ## 2026-10-23: model2a pushed -- release folder only (Model2_20261023)
 
@@ -23,6 +187,47 @@ Yagu 98, Motor Raid, Sky Target, Virtua Cop 2): board check before it goes
 into Model2A_*.
 
 ## 2026-10-22: model2a pushed (with main) -- Model2_20261022 and Model2A_20261022 released
+## 2026-10-23: branch scan15-pair (off main 0aa5905, not pushed, not fitted) -- R939, GitHub #24
+
+15 kHz sync loss in Virtua Cop / Desert Tank on a picky CRT. Cause: the
+converter's pairing re-aligned the output to the other native frame, a
+half-line step in the line timing (one 984-px line at 15.7 / 15.1 kHz, 328 px
+at 15.4) a few lines above the picture; Virtua Cop's cadence slips (2-3% of
+images odd-length) re-pair ~27 times a minute. 60 Hz games never re-pair.
+Fix: the pairing swaps field labels (one field repeated, one vsync interval
+half a line off) and the lines never move; OSD "15kHz pairing" Auto / Off
+(O[67], free on main / model2a / model2c). Bench: 60 Hz output bit-identical
+(hash) at all line counts; slipping cadence 0 line faults; ring margin at
+15.7 kHz now 8.9 us on the swapped field (bench sees the edge 100 px below
+D_PX). quartus_map +4 ALM, 0 M10K. Ben's hold-the-flip variant modelled and
+not built (a slip persists, so holding only the late image leaves ~48%
+combed). To carry: m2_scan15.sv + bench + the three Model2.sv hunks. Needs a
+fit and the tester's CRT (Auto, and Off if Auto still glitches).
+
+## 2026-10-23: main pushed -- Model2_20261023 (R937, the bridge's read fix)
+
+releases/Model2_20261023.rbf = s1381 (main + R937, branch bridge-r937),
+md5 78dfbb21..., clk_sys +0.186, clk_mem +0.736, i960 +1.117, hold +0.220,
+41,432 ALM, 551/553 M10K (s1379 also clean: +0.120 / +0.206). R937: the CPU
+bridge read tile RAM / the 2D palette one word late (aligned halfword reads
+got the next word, 32-bit reads swapped halves) -- found from STCC on
+model2c. On this core it changes Virtua Cop (reads tile RAM and palette);
+Daytona reads neither. Board (Ben, s1381): Virtua Cop's 2D "looking good",
+28.4 fps (95% of frames at its 2 vblanks -- the 30 Hz game), dips only on
+the 2D options screen. model2a's and model2c's release folders carry the
+same Model2 rbf. The 2A build with R937 (branch bridge-r937-2a) has no clean
+seed yet (s1383 -1.028, s1384 -0.238; s1385-s1387 fitting) and is not in
+any release; model2a's code is unchanged in this push.
+
+## 2026-10-22 (night): documented, not started -- R936
+
+Ben asked for both to be documented only: (1) Gun flash Arcade / Off for
+Virtua Cop 2 (2A) and House of the Dead (2C) -- port m2_gun_flash (VCop 2
+uses the same window-table flash; HOTD unchecked); (2) a Virtua Cop 57.5
+fps hack -- not a 60 Hz switch (R256's half-built lists, double-speed
+logic); needs a game-code patch, MAME experiment first. See study R936.
+
+## 2026-10-22: main pushed -- Model2_20261022 and Model2A_20261022 released
 
 releases/: Model2_20261022.rbf = s1343 (VCop/Desert Tank colours R925, Gun
 flash Arcade/Off R929, link play), md5 eaa65eae..., clk_sys +0.428, clk_mem

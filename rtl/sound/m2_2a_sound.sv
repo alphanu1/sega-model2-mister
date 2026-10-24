@@ -47,7 +47,8 @@ module m2_2a_sound #(
   parameter bit          MIDI_OUT = 1'b1,
   parameter bit          CHKSUM   = 1'b0,  // R882: sum the program and the four sample ROMs in SDRAM before boot (a probe build)
   parameter bit          POST_WR  = 1'b1,  // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
-  parameter bit          EXACT    = 1'b1   // R884: the 68000 on MAME's wait states, its clock stopped while SDRAM answers
+  parameter bit          EXACT    = 1'b1,  // R884: the 68000 on MAME's wait states, its clock stopped while SDRAM answers
+  parameter bit          LERP     = 1'b0   // R949: the output linearly interpolated between samples (m2_snd_lerp)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -217,8 +218,12 @@ module m2_2a_sound #(
   localparam int CI = 7;
   wire [AW:1] rom_w = sel_rom ? ROM_BASE + AW'(addr[18:1]) : SMP_BASE + AW'(addr[22:1]);
   (* ramstyle = "M10K" *) logic [63:0] ln_d [1 << CI];
-  (* ramstyle = "M10K" *) logic [AW-3-CI:0] ln_t [1 << CI];
-  (* ramstyle = "M10K" *) logic ln_v [1 << CI];
+  // R948: the tag and its valid bit in ONE array, {valid, tag} -- they share
+  // the read address, and the valid bit alone (128 x 1) held a whole M10K.
+  // The clear (vclr, only in V_CLR after reset) writes {0, ln_wt} over a
+  // line; the fill (ln_we, only from B_FILL) writes {1, ln_wt}: the two never
+  // meet, and a line whose valid bit is 0 never hits whatever its tag holds.
+  (* ramstyle = "M10K" *) logic [AW-2-CI:0] ln_vt [1 << CI];
   logic [63:0] ln_q;
   logic [AW-3-CI:0] lt_q;
   logic        lv_q, ln_we;
@@ -227,11 +232,10 @@ module m2_2a_sound #(
   logic        vclr;                      // clearing the valid bits after reset
   logic [CI-1:0] vclr_i;
   always_ff @(posedge clk) begin
-    if (ln_we) begin ln_d[ln_wi] <= a_dout; ln_t[ln_wi] <= ln_wt; end
-    if (ln_we || vclr) ln_v[vclr ? vclr_i : ln_wi] <= !vclr;
+    if (ln_we) ln_d[ln_wi] <= a_dout;
+    if (ln_we || vclr) ln_vt[vclr ? vclr_i : ln_wi] <= {!vclr, ln_wt};   // R948
     ln_q <= ln_d[rom_w[CI+2:3]];
-    lt_q <= ln_t[rom_w[CI+2:3]];
-    lv_q <= ln_v[rom_w[CI+2:3]];
+    {lv_q, lt_q} <= ln_vt[rom_w[CI+2:3]];
   end
   wire ln_hit = lv_q && lt_q == rom_w[AW:CI+3];
 
@@ -267,21 +271,27 @@ module m2_2a_sound #(
   assign c_din  = dm_wdata;
 
   // ---- the output FIFO: 8 samples, drained at 44,100 Hz
+  logic signed [15:0] q_l, q_r;   // the drained sample (m2_snd_lerp makes snd_l / snd_r of it, R949)
   (* ramstyle = "MLAB" *) logic [31:0] fifo [8];
   logic  [2:0] f_w, f_r;
   logic  [3:0] f_n;
   assign o_ready = f_n < 4'd7;
   always_ff @(posedge clk) if (o_valid) fifo[f_w] <= {o_l, o_r};
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin f_w <= '0; f_r <= '0; f_n <= '0; snd_l <= '0; snd_r <= '0; dbg_under <= '0; end
+    if (!rst_n) begin f_w <= '0; f_r <= '0; f_n <= '0; q_l <= '0; q_r <= '0; dbg_under <= '0; end
     else begin
       if (o_valid) f_w <= f_w + 3'd1;
       if (tick44 && f_n != 4'd0) begin
-        {snd_l, snd_r} <= fifo[f_r]; f_r <= f_r + 3'd1;
+        {q_l, q_r} <= fifo[f_r]; f_r <= f_r + 3'd1;
       end else if (tick44 && !(&dbg_under)) dbg_under <= dbg_under + 16'd1;
       f_n <= f_n + {3'd0, o_valid} - {3'd0, tick44 && f_n != 4'd0};
     end
   end
+
+  // R949: the 44.1 kHz steps, linearly interpolated for the framework's 48 kHz
+  // sampling (its IIR filter is off, R788); LERP = 0: the steps, as before
+  m2_snd_lerp #(.LERP(LERP), .T44_DEN(T44_DEN), .TW(TW)) u_lerp (
+    .clk(clk), .rst_n(rst_n), .tick(tick44), .tacc(tacc), .in_l(q_l), .in_r(q_r), .out_l(snd_l), .out_r(snd_r));
 
   // ---------------------------------------------------------------- the bus
   // V_*: before the 68000 runs -- the cache's valid bits cleared (V_CLR); the

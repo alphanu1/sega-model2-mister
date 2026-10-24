@@ -345,6 +345,23 @@ module mb86233_alu #(
   logic [4:0] shamt;
   assign shamt = sft[4:0];
 
+  // R952: ONE ADDER AND ONE SHIFTER for the integer ops, as tgpx4_cvt does
+  // for the 2C board. ADDD / SUBD were two 32-bit adders (d + a, d - a): one,
+  // d + (a or ~a) + carry. LSRD, LSLD / ASLD and ASRD were three barrel
+  // shifters: one arithmetic right shift of {fill, d} -- fill = d[31] for
+  // ASRD, else 0 -- with d bit-reversed in and out for the left shifts
+  // (a left shift is the reversed right shift of the reversed word). The
+  // results are the same bit for bit; 120 LUTs fewer (quartus_map).
+  function automatic logic [31:0] rev32(input logic [31:0] x);
+    for (int i = 0; i < 32; i++) rev32[i] = x[31 - i];
+  endfunction
+  wire        i_sub  = (op == mb86233_pkg::ALU_SUBD);
+  wire [31:0] i_sum  = reg_d + (i_sub ? ~reg_a : reg_a) + {31'd0, i_sub};
+  wire        i_left = (op == mb86233_pkg::ALU_LSLD) || (op == mb86233_pkg::ALU_ASLD);
+  wire        i_fill = (op == mb86233_pkg::ALU_ASRD) && reg_d[31];
+  wire [32:0] i_shw  = $signed({i_fill, i_left ? rev32(reg_d) : reg_d}) >>> shamt;
+  wire [31:0] i_sh   = i_left ? rev32(i_shw[31:0]) : i_shw[31:0];
+
   logic [31:0] int_result;
   always_comb begin
     unique case (op)
@@ -352,30 +369,24 @@ module mb86233_alu #(
       mb86233_pkg::ALU_ORAD: int_result = reg_d | reg_a;
       mb86233_pkg::ALU_EORD: int_result = reg_d ^ reg_a;
       mb86233_pkg::ALU_NOTD: int_result = ~reg_d;
-      mb86233_pkg::ALU_ADDD: int_result = reg_d + reg_a;
-      mb86233_pkg::ALU_SUBD: int_result = reg_d - reg_a;
-      mb86233_pkg::ALU_LSRD: int_result = reg_d >> shamt;
+      mb86233_pkg::ALU_ADDD: int_result = i_sum;    // reg_d + reg_a
+      mb86233_pkg::ALU_SUBD: int_result = i_sum;    // reg_d - reg_a
+      mb86233_pkg::ALU_LSRD: int_result = i_sh;     // reg_d >> shamt
       // asld and lsld are the same operation on the bit pattern. MAME keeps
       // them as separate cases computing identical expressions; so do we.
-      mb86233_pkg::ALU_LSLD: int_result = reg_d << shamt;
-      mb86233_pkg::ALU_ASLD: int_result = reg_d << shamt;
-      mb86233_pkg::ALU_ASRD: int_result = 32'($signed(reg_d) >>> shamt);
+      mb86233_pkg::ALU_LSLD: int_result = i_sh;     // reg_d << shamt
+      mb86233_pkg::ALU_ASLD: int_result = i_sh;     // reg_d << shamt
+      mb86233_pkg::ALU_ASRD: int_result = i_sh;     // reg_d >>> shamt
       mb86233_pkg::ALU_CXFD: int_result = 32'd0;      // R588: finished at stage 2
       mb86233_pkg::ALU_CFXD: int_result = 32'd0;      // R731: finished at stage 2
-      default:  int_result = 32'd0;
-    endcase
-  end
-
-  // Results that need no arithmetic unit at all.
-  logic [31:0] bit_result;
-  always_comb begin
-    unique case (op)
-      mb86233_pkg::ALU_FABD: bit_result = reg_d & 32'h7fffffff;
+      // Results that need no arithmetic unit at all (R952: the bit ops, in the
+      // same case -- their own lane, pbit, is gone; see pint below).
+      mb86233_pkg::ALU_FABD: int_result = reg_d & 32'h7fffffff;
       // fned leaves +0 alone rather than producing -0: MAME writes
       // `m_d ? m_d ^ 0x80000000 : 0`, so the test is on the whole word.
-      mb86233_pkg::ALU_FNED: bit_result = (reg_d != 32'd0) ? (reg_d ^ 32'h80000000) : 32'd0;
-      mb86233_pkg::ALU_FSPD: bit_result = reg_p;
-      default:  bit_result = 32'd0;
+      mb86233_pkg::ALU_FNED: int_result = (reg_d != 32'd0) ? (reg_d ^ 32'h80000000) : 32'd0;
+      mb86233_pkg::ALU_FSPD: int_result = reg_p;
+      default:  int_result = 32'd0;
     endcase
   end
 
@@ -411,7 +422,11 @@ module mb86233_alu #(
   logic        psh1;                 // R774: stage 1 holds a short op
   logic [4:0]  pop  [1:ALU_LAT];
   logic [31:0] pint [1:ALU_LAT];
-  logic [31:0] pbit [1:ALU_LAT];
+  // R952: pbit WAS A SECOND 32-bit lane beside pint, for the bit ops' result
+  // (FABD, FNED, FSPD). r1 read it only for SRC_BIT ops and pint only for
+  // SRC_INT ops, and the two op sets are disjoint, so one lane carries both
+  // (int_result computes the bit ops too) and r1 reads it for either --
+  // 160 registers fewer, every result the same.
   logic [31:0] pst  [1:ALU_LAT];
   logic        pxv  [1:ALU_LAT];
   logic [31:0] pxd  [1:ALU_LAT];
@@ -430,7 +445,7 @@ module mb86233_alu #(
     end else begin
       psh1  <= is_short;
       pv[1] <= in_valid;   pop[1]  <= op;
-      pint[1] <= int_result; pbit[1] <= bit_result;
+      pint[1] <= int_result;
       pst[1] <= st_in;     psrc[1] <= r1_src;
       pxv[1] <= xfer_d_valid; pxd[1] <= xfer_d_data;
       for (pi = 2; pi <= ALU_LAT; pi = pi + 1) begin
@@ -440,7 +455,6 @@ module mb86233_alu #(
         if      (pi == 2 && pop[1] == mb86233_pkg::ALU_CXFD) pint[pi] <= cxf_result;
         else if (pi == 2 && pop[1] == mb86233_pkg::ALU_CFXD) pint[pi] <= cfx_result;
         else                                                 pint[pi] <= pint[pi-1];
-        pbit[pi] <= pbit[pi-1];
         pst[pi]  <= pst[pi-1];  psrc[pi] <= psrc[pi-1];
         pxv[pi]  <= pxv[pi-1];  pxd[pi]  <= pxd[pi-1];
       end
@@ -452,7 +466,6 @@ module mb86233_alu #(
           pv[ALU_LAT]   <= 1'b1;            pop[ALU_LAT]  <= pop[1];
           pint[ALU_LAT] <= (pop[1] == mb86233_pkg::ALU_CXFD) ? cxf_result
                          : (pop[1] == mb86233_pkg::ALU_CFXD) ? cfx_result : pint[1];
-          pbit[ALU_LAT] <= pbit[1];
           pst[ALU_LAT]  <= pst[1];          psrc[ALU_LAT] <= psrc[1];
           pxv[ALU_LAT]  <= pxv[1];          pxd[ALU_LAT]  <= pxd[1];
         end
@@ -464,11 +477,11 @@ module mb86233_alu #(
   // the rest of the module did not have to move.
   logic        s2_valid, s2_xv;
   logic [4:0]  s2_op;
-  logic [31:0] s2_int, s2_bit, s2_st, s2_xd;
+  logic [31:0] s2_int, s2_st, s2_xd;
   r1_src_e     s2_src;
 
   assign s2_valid = pv[ALU_LAT];   assign s2_op  = pop[ALU_LAT];
-  assign s2_int   = pint[ALU_LAT]; assign s2_bit = pbit[ALU_LAT];
+  assign s2_int   = pint[ALU_LAT];
   assign s2_st    = pst[ALU_LAT];  assign s2_src = psrc[ALU_LAT];
   assign s2_xv    = pxv[ALU_LAT];  assign s2_xd  = pxd[ALU_LAT];
 
@@ -480,7 +493,7 @@ module mb86233_alu #(
   always_comb begin
     unique case (s2_src)
       SRC_ADD:  r1 = add_result;
-      SRC_BIT:  r1 = s2_bit;
+      SRC_BIT:  r1 = s2_int;          // R952: the one lane
       SRC_INT:  r1 = s2_int;
       SRC_NONE: r1 = 32'd0;
     endcase
