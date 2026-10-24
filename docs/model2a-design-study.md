@@ -45621,6 +45621,12 @@ lint_top clean, 2A and 2C.
 
 *Probe expectations:* as R946.
 
+*BOARD (Ben, 2026-10-24, s1449 = b0f75a0, clk_sys -0.179 in the frame-buffer
+write path only):* THE ATTRACT TUTORIAL IS GOOD -- the wobble / clipping /
+fuzz are gone: R946/R947's overlap fix is confirmed on the board. NEW: in
+some areas the music ("FM") is far too loud and drowns out the sound
+effects. Not yet compared with MAME or the arcade; open.
+
 **R948 -- ROOM FOR TODAY'S FIXES BY MAKING THINGS SMALLER, NOTHING SWITCHED
 OFF: THE FILL'S RECIPROCAL TABLE IN M10K ON THE SAME CYCLE, PAID FOR BY A
 MERGED SOUND-CACHE ARRAY; THE i960'S REPEATED SUMS FORMED ONCE.
@@ -45836,6 +45842,234 @@ unchanged. The fit's report on clk_sys is the check.
 SAVE WORKS (R945) -- Sega Rally's test-menu settings survive a reload. Fits
 are PAUSED (Ben) until the sound mix-balance fix (R949, branch hotd-mix) is
 in: the next 2A / 2C seed hunts carry it.
+
+**R949 -- THE SOUND PATH AUDITED AGAINST MAME AND AGAINST THE SATURN CORE's
+SCSP, THROUGH THE CORE: (1) THE "TINNY" SOUND IS THE OUTPUT PATH -- SINCE R788
+TOOK THE FRAMEWORK's IIR FILTER OUT, THE 44.1 kHz STAIRCASE IS SAMPLED AT
+48 kHz UNSMOOTHED AND EVERY BRIGHT SOUND ALIASES INTO 4-16 kHz (HOUSE OF THE
+DEAD's FM VOICE 8.5 dB BELOW ITSELF); FIXED BY m2_snd_lerp (LINEAR
+INTERPOLATION, +123 ALM / 3 DSP ALONE, M2_2A_SND_LERP, ON IN 2A AND 2C).
+(2) THE LEVELS: THE CORE's 68000 + SCSP + SOUND RAM ON MAME's MIDI IS MAME's
+MIX PLUS R914's REVERB TO 0.1 dB, KEY-ON FOR KEY-ON; THE SATURN SCSP AGREES
+WITH R914 AND WITH EVERY SCALE IN OUR MIX. HOUSE OF THE DEAD's "MUSIC FAR TOO
+LOUD OVER THE SHOTS" IS NOT REPRODUCED (CORE = MAME +0.0-0.7 dB PER CATEGORY IN
+CHAPTER 2); DYNAMITE COP's EFFECTS ARE +2.1 / +2.6 dB OVER MAME's (R914 -- A
+REAL REVERB WHERE MAME's COLLAPSES), NOT THE "JUMP OUT OF YOUR SEAT" BEN
+HEARS. BRANCH hotd-mix (OFF hotd-dsp fb539c4), LOCAL ONLY, NOT FITTED.**
+(Ben, s1449 = b0f75a0 on 2C: in chapter 2 the music -- "the FM" -- is far too
+loud, the gun barely heard, and a high-pitched tinny clipping starts there,
+louder chapter by chapter; on builds before R947 too. On 2A, Volume and Raw
+Sound Boost at their defaults, Dynamite Cop's box break is loud enough to
+make you jump. "Each game has a different issue, so it is the SOUND PATH --
+review srg320's SCSP and see where we were wrong.")
+
+*Believed (the task):* something of ours between the slots and the speaker --
+R914's reverb return (louder than MAME's, which zeroes the taps), the send /
+return scaling, the output stage, Raw Sound Boost (lifts the direct sends,
+not the return), the Volume clamp, or R947's level shadow (dropped: the fault
+predates it); then, from Ben, the core's own 68000 (the benches had fed
+MAME's register writes), and the SCSP against srg320's.
+
+*The captures (MAME 0.289 + p16, sm2-builds/mame-r943 m2lod, git-ignored):*
+build/scsp/ch2 -- hotd, default nvram (JAPAN), sim/io/mame_m2_hotd_play.lua
+seed 1, 720 s: chapter 1 to ~340 s, the chapter-1 boss 340-505 s, CHAPTER 2
+from ~510 s (snapshots every 5 s); build/scsp/dcop -- dynamcop,
+sim/sound/mame_m2_2a_snd.lua, coins at 30 / 100 s, 180 s; hotd-dsp's att1
+(330 s attract), R943's cap1 (150 s), and R885-R914's 2A captures (VF2, Virtua
+Cop 2, Sega Rally, Zero Gunner 300 s; DOA 150 s). MAME's mirror replayed
+through scsp_ref.h equals out.bin in every one (ch2: 31.7 M samples, dcop:
+7.9 M, 0 differ).
+
+*1. THE LEVELS, SCSP ALONE (sim/sound/scsp_mixcat.cpp, new): each capture with
+MAME's mirror and with R914's decode (= the RTL), and for each IMXL value the
+pair again with only those slots feeding MIXS (scsp_ref.h's new mixs_mask,
+all-ones by default: no other bench changes), so a category is its direct
+sends plus the return it alone makes. Left, DAC 16-bit units, DC-blocked
+(~3.5 Hz). Whole mix, MAME -> core (boost Off):*
+    House of the Dead  attract 20-330 s     443 ->   451   +0.2 dB
+                       chapter 1 40-500 s   709 ->   716   +0.1
+                       CHAPTER 2 510-719 s  682 ->   685   +0.0
+    Dynamite Cop       20-179 s             587 ->   671   +1.2
+    Virtua Fighter 2   20-300 s           2,588 -> 1,017   -8.1  (R914)
+    Dead or Alive      20-150 s           2,000 -> 1,144   -4.9  (R914: the drone)
+    Virtua Cop 2       20-300 s             348 ->   349   +0.0
+    Zero Gunner        20-300 s             659 ->   670   +0.2
+    Sega Rally         20-300 s             366 ->   366    0.0  (no DSP program)
+  By category (MAME -> core, dB; labels from routing and timing):
+    HOTD ch. 2   IMXL 0 (the gun, dry effects) 0.0; 3 0.0; 5 (music, the FM
+                 voice) +0.3; 6 +0.7.   HOTD ch. 1: 0.0 / +0.7 / +0.1 / +0.2 / +0.7
+    Dynamite Cop IMXL 1 (music) +0.1; IMXL 5 (effects) +2.1; IMXL 6 (effects)
+                 +2.6 (95th-percentile 50 ms windows +2.0 / +2.5); in quiet
+                 moments after an effect the real reverb's tail is there and
+                 MAME's is not (+10 to +20 dB in those 50 ms windows)
+    VF2          IMXL 0 (effects) 0.0; IMXL 1..6 (music) -3.2 ... -16.9
+    DOA          IMXL 0 0.0, 4 0.0, 5 -5.8, 6 -10.5, 7 -8.0
+    VC2 every category within +0.1; Zero Gunner within +0.6
+  The one departure from MAME's mix is R914, its sign the game's DSP program's:
+  where MAME's collapsed taps make a resonator (VF2, DOA) MAME's music is the
+  louder; where they make a short echo (HOTD, VC2, ZG, Dynamite Cop) the real
+  taps give more return.
+  HOTD's shots (150 ms after each shot key-on, gun / rest, median): chapter 1
+  MAME -1.6, core -2.8; chapter 2 MAME -2.2, core -4.2 dB (+6 dB boost -1.8,
+  +12 dB -0.5). In MAME's own chapter 2 the shots sit ~2 dB under the rest.
+
+*2. THROUGH THE CORE (Ben: "has it actually been run through the core?"):*
+tb_m2_2a_sound -- fx68k on the game's sound program, the SCSP, sound RAM in
+SDRAM at random latency 6-40, MAME's MIDI at MAME's times, free-running at
+80 MHz, the trace build (M2_SND_TRACE); 2A config for Dynamite Cop (OVERLAP
+0), 2C for HOTD (OVERLAP 1). Its output WAV against scsp_ref.h with R914 on
+MAME's writes ("ref") and against MAME, second by second; the key-ons the
+core's 68000 makes (sound number, TL, DISDL, IMXL, EFSDL) against MAME's:
+    Dynamite Cop 0-40 s (attract demo 10-30 s, play from 30 s):
+      board - ref +0.09 dB (each second within -0.9 / +1.8; peaks alike),
+      ref - MAME +1.68 dB; 99.5% of MAME's SCSP writes in MAME's order; 405 /
+      405 key-ons, mean TL / DISDL / IMXL per 5 s identical; 0 underruns
+    House of the Dead 0-40 s (attract, play from 26 s with the shots):
+      board - ref +0.05 dB, ref - MAME +0.04 dB; 285 / 285 key-ons identical
+  So the core's 68000 drives the SCSP as MAME's does, and the whole sound board
+  is MAME's mix plus R914's reverb. Not run: HOTD chapter 2 through the whole
+  board (~510 s from boot, ~6 h of bench at this machine's load).
+
+*3. THE RTL ON THE NEW CAPTURES:* tb_m2_scsp, OVERLAP on (2C), latency 6-40,
+ALL of ch2 (718.8 s): 0 of 31,700,000 samples differ from the reference,
+491,876,955 slot samples (the FM voice's 69.7 M among them) and 9,602,156 reads
+right, engine mean 960 / max 1,500 clocks. Dynamite Cop (2A config, never
+benched before), 179 s: 0 of 7,890,000 differ, 77,805,340 slot samples right;
+engine mean 1,298 / max 2,038 clocks (over the 1,814 budget at the peak, the
+2A games' highest yet; VC2's 2,117 gave 0 underruns); free-running
+(SCSP_FREE, the board's FIFO) 179 s: 0 underruns.
+
+*4. THE SCSP AGAINST srg320's (MiSTer-devel/Saturn_MiSTer c072434,
+rtl/Saturn/SCSP/SCSP.sv + SCSP_pkg.sv, read-only clone sm2-builds/saturn-ref;
+NO LICENCE FILE in that repository -- used as a reference only, nothing
+copied, nothing in THIRD_PARTY.md):*
+  same as ours and MAME's (no level difference):
+    * TL: 10-bit attenuation, TL << 2 on the EG level, 6 dB per 64 steps --
+      MAME's 0.375 dB a TL step.
+    * DISDL / EFSDL / IMXL: an arithmetic shift by ~SDL (0, -6 ... -36 dB, 0 =
+      off) -- MAME's SDL table. The pan: -3 dB a step, the far side 0 dB.
+    * The direct sum: each slot's 16-bit send at 1x in an 18-bit accumulator;
+      the effect returns (EFREG x EFSDL / EFPAN for slots 0-15) added to it.
+    * MIXS: {slot level, 4'h0} >>> ~IMXL summed in 20 bits; the DSP's INPUTS
+      MIXS << 4 (24 bits) -- MAME's (x16 then << 4).
+    * EFREG = SHFT[23:8], written (not accumulated -- MAME's "+=" after a
+      clear is the same here: every program in these captures writes each
+      EWA once a sample).
+    * The DSP's multiply (24 x 13 >> 12), shifter saturation (SHFT 0 / 1),
+      ring addressing (MADRS + DEC + NXADR, masked by RBL, + RBP << 12), and
+      its float format: DSPItoF / DSPFtoI against scsp_ref.h's PACK / UNPACK,
+      all 2^24 values and all 65,536 words -- 0 differ (scratch fl.cpp).
+    * MEMORY ACCESS ON ODD STEPS ONLY: every program here has MRD / MWT on odd
+      steps only (none on even), so MAME's rule changes nothing.
+    * MADRS IS DECODED AT 0x780-0x7BF ONLY (MADRS_SEL = REG_A[11:6] == 011110)
+      -- 0x7C0-0x7FF is not a mirror: R914's decode, independently. The
+      Saturn core is the second working implementation (after Mednafen) to
+      say MAME's mirror is wrong; R914 stands.
+  different:
+    * EG key scaling: srg320 adds clamp(KRS + OCT, 0, 15) to the 5-bit rate;
+      MAME adds OCT + 2 KRS + FNS[9] to the 6-bit one, so a negative octave
+      slows MAME's (and our) envelopes (OCT -2: 1.2x, -3: 1.5x longer decays)
+      where srg320's do not. Measured in scsp_ref.h (scratch option):
+      HOTD chapter 2 every category within 0.1 dB, Dynamite Cop 0.0 dB. Not
+      a level cause; not changed (MAME's formula is the one the reference
+      order trusts for what the chip computes).
+    * DAC18B: srg320's 16-bit output is the sum << 2 saturated when DAC18B is
+      set (MVolCalc), MAME's and ours the sum (the 18-bit DAC's scale). The
+      Model 2 drivers set DAC18B (0x400 = 0x0F0F); a uniform 12 dB with
+      clipping, no balance change, and nothing on a Saturn exercises it.
+      Not taken.
+    * FM depth (MDCalc): the same offset as MAME's for MDL 13 within the
+      sample (both s/4 samples for X = Y = s); srg320 wraps the offset at
+      2,048 samples. No level change.
+  Which comparison found what: srg320's MADRS decode confirmed R914; nothing
+  in srg320's mix arithmetic differs from ours. The fault this entry fixes
+  (5.) was found by following the output past the SCSP into sys/, not by the
+  SCSP comparison.
+
+*5. THE TINNY SOUND: THE OUTPUT PATH, ALL GAMES, SINCE R788.* sys/audio_out.sv
+samples AUDIO_L / AUDIO_R in its own clock at 48 kHz (sample_ce); its IIR
+filter, which low-passes the core's output at a high rate before that, is
+not built here (R788, MISTER_DISABLE_AUDIO_FILTER, for 430 ALM). So each 48 kHz
+tick takes the 44.1 kHz staircase as it stands: content at f also comes out
+at f + 3.9 kHz, and everything above ~16 kHz folds into 4-16 kHz,
+inharmonically. MAME resamples properly and the arcade has an analog
+reconstruction filter; neither shows this. Measured (pure tones through the
+hold-and-48 kHz model): 500 Hz spurs at -34 dB, 2 kHz -22, 4 kHz -16, 8 kHz
+-9 dB. On the games (R914 reference audio):
+    aliasing products below the signal      as built   linear interpolation
+    HOTD chapter 2, whole mix                23.2 dB     32.8 dB
+    HOTD chapter 2, the FM voice alone        8.5 dB     15.9 dB
+    HOTD chapter 2, everything else          24.9 dB     40.4 dB
+    Dynamite Cop 30-38 s                     28.5 dB     40.6 dB
+  HOTD's FM voice (sample 0x028C0: PCM16, MDL 13 with MDXSL = MDYSL = 0, a
+  triangle pitch LFO) has half its energy at 16-24 kHz (spectral centroid
+  10 kHz); as built, 8-12 kHz comes out +9.7 dB and 12-16 kHz +11.1 dB over
+  the ideal -- the high-pitched tinny layer, and it plays through the
+  chapter-1 boss and all of chapter 2 (1,580 slot-seconds in ch2 against 50
+  in the whole attract): Ben's "starts in chapter 2". It does not change
+  loudness: A-weighted, 50 ms windows above the median, as built vs ideal
+  +0.00 dB median, +0.08 dB max (Dynamite Cop and HOTD alike).
+  THE FIX (rtl/sound/m2_snd_lerp.sv, new; in m2_2a_sound behind LERP;
+  Model2.sv M2_2A_SND_LERP, default 1 on 2A and 2C): the output moves along
+  the line from the previous sample to the current one, one sample late,
+  re-evaluated every 64 clocks (1.25 MHz) and held between, so audio_out's
+  two-flop equality check takes it cleanly; the phase is the clocks since the
+  sample changed x round(2^19 x 441 / T44_DEN) >> 11 (80 MHz: x 289 >> 11).
+  tb_m2_snd_lerp (sim/sound, new): the module at 80 MHz on the drain's
+  441 / 800,000 accumulator, read as audio_out reads it (two flops at
+  24.576 MHz, taken when equal, 48 kHz): full-scale steps and a sweep, 3 s --
+  0 of 239,992,744 outputs outside their bracketing samples, 0 reads of a
+  value the RTL never held; HOTD's FM voice and the rest (20 s each) through
+  the RTL, band energy vs ideal (dB of the ideal total):
+                     FM voice: ideal  as built  LERP   | the rest: ideal  as built  LERP
+      4-8 kHz              -28.4    -22.5   -28.8   |          -17.7    -17.8   -18.2
+      8-12 kHz             -31.8    -22.1   -32.9   |          -25.6    -25.3   -26.9
+      12-16 kHz            -31.0    -19.9   -32.6   |          -29.9    -29.6   -32.7
+  (the bench model's numbers to the 0.1 dB). tb_m2_2a_sound with LERP on,
+  Dynamite Cop 6 s: PASS, 99.5% of writes in order, levels second by second
+  (0-5 s) as without it. AREA (quartus_map 17.0, the module alone, virtual pins): 123
+  ALMs, 190 registers, 3 DSP blocks (one a channel for the line, one for the
+  phase's constant). lint_top clean, 2A and 2C (M2_2C, M2_NO_2A_MANX_MOTION);
+  lint_idx: no candidate in a changed line (m2_2a_sound's two, line 437's
+  sums, predate this). The 2C build was at 40,279 ALMs
+  (R947) of 41,910. Restoring the framework filter instead would cost ~430.
+
+*6. RULED OUT (measured):* the output stage (0x400 = 0x0F0F, MVOL 15,
+DAC18B; EFREG never at +-32,000 and the DAC never clamping in any capture,
+MAME's or R914's); Raw Sound Boost (it does the opposite of both complaints:
+x4 on the direct sends lifts HOTD's dry gun +12 dB and its music +5.2 dB,
+Dynamite Cop's music +10.1 dB and its effects +1.3 / +0.1 dB); the Volume
+clamp (m2_volume: chapter 2 clips 0 samples with boost Off at any Volume to
+400%; only +12 dB with 300% / 400% clips, 0.17% / 0.89%); MAME's own chain
+(0.289: 20 Hz high-pass, compressor and reverb off, EQ flat); a sample-ROM
+region used only in chapter 2 (the ring refills read both chips from the
+attract on); a framework "boost" (aud_mix_top's waveshaper is driven by the
+HPS's filter settings, vol_boost; with a filter preset that sets it, it
+would compress and distort -- not measured: which preset Ben runs is not
+known).
+
+*CONCLUSION:* REPRODUCED: the tinny sound, yes, in the output path, and fixed
+in the bench. The levels: NOT REPRODUCED. Through the core on MAME's MIDI the
+board is MAME's mix plus R914's reverb -- HOTD chapter 2 within 0.7 dB a
+category, Dynamite Cop's effects +2-3 dB (louder tails), VF2 / DOA's music
+down -- and the Saturn SCSP agrees with every one of our scales and with
+R914's decode. What the board does that the bench does not is upstream (the
+MIDI the board's i960 actually sends -- the 'M' probe record against
+midi.txt), the framework (the preset's vol_boost) or the arcade itself (MAME
+has the shots ~2 dB under HOTD's chapter-2 music). Whether Dynamite Cop's
++2-3 dB is the arcade's is the R914 question, now answered by two
+implementations that run real hardware's games: the taps are real. NOT
+CHANGED.
+
+*CLIPS (ROM-derived, git-ignored, build/scsp/clips/):*
+hotd_ch2_510-590s_{MAME,CORE_R914}.wav, dcop_20-179s_{MAME,CORE_R914}.wav
+(stereo 44.1 kHz, the DAC's 16 bits, 100%, boost Off) and build/board/
+dcop_core.wav (the whole board, 40 s): what MAME and the core compute from
+the same input, for a board recording to be held against.
+
+*NOT DONE:* no fit, no board. HOTD chapter 2 through the whole board. The
+'M' MIDI probe on the board. Ben's Volume, Raw Sound Boost and audio-filter
+preset for the sessions.
 
 **R950 -- TEXTURE FILTER "AUTO": SKY TARGET DEFAULTS TO POINT SAMPLING.**
 Sky Target's title sky shows thin darker lines at its sky-panel joints with

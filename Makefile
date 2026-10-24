@@ -1637,7 +1637,7 @@ obj_cdc/Vm2_sdram_cdc_harness: sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_
 # load on the rest, clk_sys and clk_mem independent; every word read is checked
 # against every write. Knobs: see sim/mem/tb_m2_sdram_cdc_load.cpp. The default
 # run is three phase / drift / jitter / load cases; obj_cdc_loada builds AGE in.
-CDL_RTL := sim/mem/m2_sdram_cdc_load_harness.sv sim/mem/tb_snd_stubs.sv rtl/sound/m2_2a_sound.sv \
+CDL_RTL := sim/mem/m2_sdram_cdc_load_harness.sv sim/mem/tb_snd_stubs.sv rtl/sound/m2_2a_sound.sv rtl/sound/m2_snd_lerp.sv \
            rtl/sound/scsp/m2_scsp_cache.sv rtl/mem/m2_sdram_cdc.sv rtl/mem/m2_sdram.sv sim/mem/sdram_model.sv
 .PHONY: test_m2_sdram_cdc_load
 test_m2_sdram_cdc_load: obj_cdc_load/Vm2_sdram_cdc_load_harness obj_cdc_loada/Vm2_sdram_cdc_load_harness
@@ -3024,6 +3024,22 @@ obj_scsp_split/scsp_split: sim/sound/scsp_split.cpp sim/sound/scsp_ref.h
 	@mkdir -p obj_scsp_split
 	g++ -O2 -std=c++17 -Wall -Isim/sound sim/sound/scsp_split.cpp -o $@
 
+# R949: the output interpolator, read as sys/audio_out.sv reads AUDIO_L at
+# 48 kHz (LERP_IN=<int16 mono 44.1 kHz raw> LERP_OUT=<48 kHz raw> optional)
+.PHONY: test_m2_snd_lerp
+test_m2_snd_lerp: obj_snd_lerp/Vm2_snd_lerp
+	@echo "== test m2_snd_lerp (in range, no torn reads at the framework's 48 kHz)"
+	@obj_snd_lerp/Vm2_snd_lerp
+
+obj_snd_lerp/Vm2_snd_lerp: rtl/sound/m2_snd_lerp.sv sim/sound/tb_m2_snd_lerp.cpp
+	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-DECLFILENAME -CFLAGS "-O2" --top-module m2_snd_lerp --Mdir obj_snd_lerp \
+	  rtl/sound/m2_snd_lerp.sv sim/sound/tb_m2_snd_lerp.cpp
+
+# R949: the mix by category, MAME's MADRS mirror against R914 (scsp_mixcat <capture> <s> <noise.hex> [t0 t1])
+obj_scsp_mixcat/scsp_mixcat: sim/sound/scsp_mixcat.cpp sim/sound/scsp_ref.h
+	@mkdir -p obj_scsp_mixcat
+	g++ -O2 -std=c++17 -Isim/sound sim/sound/scsp_mixcat.cpp -o $@
+
 # the 2A sound board (R859): fx68k on a game's real sound program, the SCSP,
 # sound RAM in SDRAM. SND_IMG=build/snd2a/<game> (sim/sound/snd_img.py),
 # SCSP_CAP=build/scsp/<game> (MAME's MIDI, writes, mix), SND_S=<seconds>
@@ -3031,7 +3047,7 @@ obj_scsp_split/scsp_split: sim/sound/scsp_split.cpp sim/sound/scsp_ref.h
 # the board's clock in MHz (the boot harness runs it at 48)
 SND2A_MHZ ?= 80
 SND2A_RTL := rtl/sound/fx68k/fx68k.sv rtl/sound/fx68k/fx68kAlu.sv rtl/sound/fx68k/uaddrPla.sv \
-             rtl/sound/m2_2a_sound.sv $(SCSP_RTL)
+             rtl/sound/m2_2a_sound.sv rtl/sound/m2_snd_lerp.sv $(SCSP_RTL)
 test_m2_2a_sound: obj_snd2a$(SCSP_SFX)/Vm2_2a_sound
 	@echo "== test m2_2a_sound (the 2A sound board on the real sound program, against MAME)"
 	@cp -f rtl/sound/fx68k/microrom.mem rtl/sound/fx68k/nanorom.mem $(SCSP_HEX) obj_snd2a$(SCSP_SFX)/
