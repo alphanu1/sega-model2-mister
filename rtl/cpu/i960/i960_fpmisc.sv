@@ -177,9 +177,12 @@ module i960_fpmisc #(
   assign frac_part = fa_w & frac_mask;
   assign int_part  = fa_w & ~frac_mask;
 
-  // Half of the fractional field, for round-half-away-from-zero.
-  logic [55:0] half;
-  assign half = (fbits == 6'd0) ? 56'd0 : (56'd1 << (fbits - 6'd1));
+  // Half of the fractional field, for round-half-away-from-zero. R952: the
+  // test frac_part >= half (half = 2^(fbits-1), frac_part < 2^fbits) is the
+  // fraction's top bit, fa_w[fbits-1] -- one bit select, where it was a 56-bit
+  // shift and a 56-bit compare.
+  logic half_up;
+  assign half_up = (fbits != 6'd0) && fa_w[fbits - 6'd1];
 
   logic inc;
   // cvtzri truncates REGARDLESS of the mode field — the z is "toward zero" and
@@ -189,7 +192,7 @@ module i960_fpmisc #(
 
   always_comb begin
     case (eff_rmode)
-      2'd0:    inc = (frac_part >= half) && (fbits != 6'd0);  // half away from 0
+      2'd0:    inc = half_up;                                 // half away from 0
       2'd1:    inc = sa && (frac_part != 56'd0);              // floor
       2'd2:    inc = !sa && (frac_part != 56'd0);             // ceil
       default: inc = 1'b0;                                    // truncate
@@ -280,9 +283,16 @@ module i960_fpmisc #(
   /* verilator lint_on UNUSEDSIGNAL */
   assign rexp = $signed({7'd0, rlz}) + r2_eu - 13'sd52 + 13'sd1023;
 
+  // R952: ONE SHIFT. The leading one moved to bit 56 and the 52 bits under
+  // it taken, which is both of the old cases at once: rlz >= 52 shifted right
+  // by rlz - 52 (dropping low bits), below it left by 52 - rlz (zero fill).
+  // rlz = 57 (a zero) never reaches rman: round_d takes its own branch.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [56:0] rnorm;
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [51:0] rman;
-  assign rman = (rlz >= 6'd52) ? 52'(r2_rounded >> (rlz - 6'd52))
-                               : 52'(r2_rounded << (6'd52 - rlz));
+  assign rnorm = r2_rounded << (6'd56 - rlz);
+  assign rman  = rnorm[55:4];
 
   logic [63:0] round_d;
   always_comb begin
