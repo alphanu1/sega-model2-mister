@@ -4323,11 +4323,15 @@ localparam bit R3D_UVSH = M2A;
 // R948: the fill's reciprocal table (m2_recip_rom) in two M10K instead of
 // ~280 ALUTs of logic, on the 2A board (and so the 2C build). The block it
 // costs is paid by m2_2a_sound's line cache (its valid bit merged into the tag
-// array: one M10K fewer). VERILOG_MACRO "M2_RECIP_LOGIC=1" puts the LUT copies back.
-`ifdef M2_RECIP_LOGIC
-localparam bit R3D_RECIP_M10K = 1'b0;
-`else
+// array: one M10K fewer).
+// R952: THE LUT FORM IS THE DEFAULT AGAIN. The M10K table hurt timing; the
+// fits s1457-s1462 ran with "M2_RECIP_LOGIC=1" (the LUT form) and timed
+// better. VERILOG_MACRO "M2_RECIP_M10K=1" puts the two blocks back;
+// "M2_RECIP_LOGIC=1" is now the default and changes nothing.
+`ifdef M2_RECIP_M10K
 localparam bit R3D_RECIP_M10K = M2A;
+`else
+localparam bit R3D_RECIP_M10K = 1'b0;
 `endif
 /* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
 wire [7:0] q3d_trow;                       // R867: the luma table's row
