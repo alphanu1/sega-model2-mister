@@ -2834,34 +2834,9 @@ wire [7:0]  cpu_trap_op;
 // sees exactly the core it always did.
 localparam logic [15:0] GAMEID_INDEX = 16'd4;
 logic [7:0] game_id;
-// R948: THE 2C BUILD KNOWS ONLY ITS THREE GAMES (C2_IDS). It runs 0x17, 0x1C
-// and 0x1D and nothing else (the 2A games need the TGP it leaves out), so the
-// ID is held as which of the three it is, two bits, and read back as that
-// game's byte: every decode of a 2A game's ID (Sega Rally's, Zero Gunner's,
-// the analog profile's 0x18-0x1B, the luma rows of the large-layout games,
-// ...) folds to 0 at synthesis, while the three games see exactly the byte
-// their MRA sends. Any other byte reads as 0x17; bit 7, the CRT flag, as sent.
-// VERILOG_MACRO "M2_2C_ALL_IDS=1" keeps the full byte (the decode as before).
-`ifdef M2_2C_ALL_IDS
-localparam bit C2_IDS = 1'b0;
-`else
-localparam bit C2_IDS = C2;
-`endif
-generate if (C2_IDS) begin : g_c2_id
-	logic       gid_crt;
-	logic [1:0] gid_sel;   // 0 The House of the Dead (and any other byte), 1 Over Rev, 2 STCC
-	always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as below
-		if (!mem_rst_n) begin gid_crt <= 1'b0; gid_sel <= 2'd0; end
-		else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) begin
-			gid_crt <= ioctl_dout[7];
-			gid_sel <= (ioctl_dout[6:0] == 7'h1C) ? 2'd1 : (ioctl_dout[6:0] == 7'h1D) ? 2'd2 : 2'd0;
-		end
-	assign game_id = {gid_crt, (gid_sel == 2'd1) ? 7'h1C : (gid_sel == 2'd2) ? 7'h1D : 7'h17};
-end else begin : g_id
-	always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
-		if (!mem_rst_n) game_id <= 8'd0;
-		else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
-end endgenerate
+always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
+	if (!mem_rst_n) game_id <= 8'd0;
+	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
 // R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);
