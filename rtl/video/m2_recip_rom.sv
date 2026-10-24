@@ -15,7 +15,12 @@
 `timescale 1ns/1ps
 
 module m2_recip_rom #(
-  parameter int unsigned TN = 256
+  parameter int unsigned TN = 256,
+  // R948: 1 = the table in M10K, one true-dual-port ROM (256 x 32: two
+  // blocks), its output registered -- data TWO cycles after the address, and
+  // m2_raster_div waits the extra cycle (its ROM_LAT). 0 = the two LUT copies
+  // below, one cycle. The same table either way.
+  parameter bit          M10K = 1'b0
 ) (
   input  logic        clk,
   input  logic [$clog2(TN)-1:0] a_addr,
@@ -47,18 +52,39 @@ module m2_recip_rom #(
   // failed again at 556 M10K of 553 with the table as two altsyncrams.
   // "logic" builds it out of LUTs (and the fitter's own RAM-to-MLAB pass may
   // take it from there), which is what this design has spare.
-  (* romstyle = "logic" *) logic [31:0] recip_a [TN];
-  (* romstyle = "logic" *) logic [31:0] recip_b [TN];
-  // ceil(2^32/d). Entry 0 is never read - a zero denominator is trapped by the
-  // divider - and entry 1 would be 2^32, which the divider special-cases.
-  initial begin
-    for (int d = 1; d < int'(TN); d++) begin
-      recip_a[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
-      recip_b[d] = recip_a[d];
+  // R948: THE M10K FORM. 280 ALUTs of logic for two blocks, on a design whose
+  // ALMs ran out before its M10K did (the 2A / 2C builds: 550 / 549 of 553
+  // before R948). Both reads are registered twice -- the address into the
+  // block, the data into its output register -- so nothing is added to the
+  // path into the divider's multiply (S_MUL) that the LUT copies did not have.
+  generate if (M10K) begin : g_m10k
+    (* romstyle = "M10K" *) logic [31:0] recip [TN];
+    initial begin
+      for (int d = 1; d < int'(TN); d++) begin   // m2_recip_rom's idiom (R444): begin / end, longint'
+        recip[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
+      end
     end
-  end
-  always_ff @(posedge clk) begin
-    a_data <= recip_a[a_addr];
-    b_data <= recip_b[b_addr];
-  end
+    logic [31:0] a_q, b_q;
+    always_ff @(posedge clk) begin
+      a_q <= recip[a_addr];
+      b_q <= recip[b_addr];
+      a_data <= a_q;
+      b_data <= b_q;
+    end
+  end else begin : g_logic
+    (* romstyle = "logic" *) logic [31:0] recip_a [TN];
+    (* romstyle = "logic" *) logic [31:0] recip_b [TN];
+    // ceil(2^32/d). Entry 0 is never read - a zero denominator is trapped by the
+    // divider - and entry 1 would be 2^32, which the divider special-cases.
+    initial begin
+      for (int d = 1; d < int'(TN); d++) begin
+        recip_a[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
+        recip_b[d] = recip_a[d];
+      end
+    end
+    always_ff @(posedge clk) begin
+      a_data <= recip_a[a_addr];
+      b_data <= recip_b[b_addr];
+    end
+  end endgenerate
 endmodule

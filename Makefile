@@ -1261,6 +1261,16 @@ obj_raster_fill/Vm2_raster_fill: rtl/video/m2_raster_fill.sv rtl/video/m2_raster
 	$(VBUILD) --top-module m2_raster_fill -Wno-UNUSEDSIGNAL -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD -Wno-UNUSEDPARAM --Mdir obj_raster_fill -o Vm2_raster_fill -CFLAGS "-O2" \
 	  rtl/video/m2_raster_fill.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv sim/video/tb_m2_raster_fill.cpp
 
+# R948: m2_raster_div on the reciprocal table's two forms (m2_recip_rom M10K
+# 0 / 1, ROM_LAT 1 / 2) side by side: every quotient and div0 the same
+.PHONY: test_m2_raster_div_lat
+test_m2_raster_div_lat:
+	@echo "== test m2_raster_div, the LUT table against the M10K one (R948)"
+	@rm -rf obj_div_lat && $(VERILATOR) --binary --timing -j 0 -Wno-fatal -Wno-WIDTH -Wno-TIMESCALEMOD \
+	  --top-module tb_m2_raster_div_lat --Mdir obj_div_lat \
+	  sim/video/tb_m2_raster_div_lat.sv rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv >/dev/null
+	@./obj_div_lat/Vtb_m2_raster_div_lat | grep -v "^- \|finish"
+
 # R828: the fill with MIP -- every test above, then the quad's mip bias
 test_m2_raster_fill_mip: obj_raster_fill_mip/Vm2_raster_fill
 	@echo "== test m2_raster_fill, MIP (R828)"

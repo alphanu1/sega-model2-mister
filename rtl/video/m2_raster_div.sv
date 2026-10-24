@@ -73,7 +73,11 @@ module m2_raster_div #(
   //
   // Only |den| >= TN falls back to the restoring divider, so the unit stays
   // correct for every input the way it always was.
-  parameter bit FAST = 1'b1
+  parameter bit FAST = 1'b1,
+  // R948: the table's read latency in cycles -- 1 for m2_recip_rom's LUT
+  // copies, 2 for its M10K form (M10K = 1), and S_MUL waits the extra one.
+  // The quotient is the same either way; a fast divide takes a cycle more.
+  parameter int unsigned ROM_LAT = 1
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -148,6 +152,7 @@ module m2_raster_div #(
   logic [31:0] q;
   logic        neg;      // quotient sign: operands differed
   logic [4:0]  cnt;      // 16 steps, not 32
+  logic        mw;       // R948: S_MUL's first cycle of two (ROM_LAT 2)
 
   // One restoring step: bring down the next TWO dividend bits and subtract the
   // largest of d, 2d, 3d that fits. 34 bits because rem*4 + 3 can exceed 32.
@@ -192,6 +197,7 @@ module m2_raster_div #(
       q         <= 32'd0;
       neg       <= 1'b0;
       cnt       <= 6'd0;
+      mw        <= 1'b0;
       quo       <= 32'sd0;
       out_valid <= 1'b0;
       div0      <= 1'b0;
@@ -228,8 +234,12 @@ module m2_raster_div #(
         // q_est = (n * recip) >> 32. 18 x 32 bits; Quartus builds it from
         // DSP blocks, which this design has spare.
         S_MUL: begin
-          q_fast <= mul_hi;
-          state  <= S_COR;
+          if (ROM_LAT > 1 && !mw) mw <= 1'b1;   // R948: the M10K table's data is a cycle later
+          else begin
+            mw     <= 1'b0;
+            q_fast <= mul_hi;
+            state  <= S_COR;
+          end
         end
 
         // The single downward correction. q_est is floor(n/d) or one more, so

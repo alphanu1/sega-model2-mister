@@ -143,6 +143,8 @@ module m2_raster3d #(
   // R941: with LSB the uvs bits stay in the texture word (STW = STB + 2) and
   // the slot's upper LSB - 2 bits stay beside the vertices.
   parameter bit UVSH = 1'b0,
+  // R948: m2_raster_fill's reciprocal table in M10K (two blocks) instead of LUTs
+  parameter bit RECIP_M10K = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -644,7 +646,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP)) u_fill (   // R828   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .RECIP_M10K(RECIP_M10K)) u_fill (   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13

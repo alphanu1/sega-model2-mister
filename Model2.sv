@@ -4327,6 +4327,15 @@ localparam bit R3D_WINKEY = M2A;
 // texels wide and was drawn as horizontal lines. On the 2A build (one M10K
 // a store bank more there); main keeps the clamp.
 localparam bit R3D_UVSH = M2A;
+// R948: the fill's reciprocal table (m2_recip_rom) in two M10K instead of
+// ~280 ALUTs of logic, on the 2A board (and so the 2C build). The block it
+// costs is paid by m2_2a_sound's line cache (its valid bit merged into the tag
+// array: one M10K fewer). VERILOG_MACRO "M2_RECIP_LOGIC=1" puts the LUT copies back.
+`ifdef M2_RECIP_LOGIC
+localparam bit R3D_RECIP_M10K = 1'b0;
+`else
+localparam bit R3D_RECIP_M10K = M2A;
+`endif
 /* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
 wire [7:0] q3d_trow;                       // R867: the luma table's row
 /* verilator lint_on UNUSEDSIGNAL */
@@ -7703,6 +7712,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
               .TEXLUT(R3D_TEXLUT), .LSB(R3D_LSB),   // R932
               .KW(R3D_WINKEY ? 20 : 16),
+              .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH)) u_raster3d (   // R940   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
