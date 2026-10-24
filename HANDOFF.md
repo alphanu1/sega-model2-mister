@@ -1,5 +1,28 @@
 # Handoff
 
+## 2026-10-24 (late): Model2A_20261024b released -- Seam fill (R957), Rally's car dots gone
+
+  * The R944 regression: Model2A_20261024 put dotted white lines along every
+    Sega Rally car's panels (Ben, board; absent in 20261022 and MAME). Board
+    bisect: old release clean, s1447 (R944+R940) dotted, room-only (R952, DIL 0,
+    UVSH 0) clean; bench (MAME srallyc frame 4940): DIL 0 pixel-identical to the
+    old RTL, UVSH/UVCL change nothing. Cause: the cars are flat white panels with
+    textured decals over them; R944's widened flat edges paint over the decals.
+    Lesson: any dilation overlaps a neighbour -- R944 was believed gap-only.
+  * Fix: OSD "O[69:68],Seam fill,Off,Black only,On", default Off (old drawing);
+    Black only dilates only flat quads of colour 0 (the shadows): Rally 7300
+    shadow holes 0, Lancia no white dots (156 px of black trim change). Ben
+    tested all three on the board (s1479). Temporary -- a gap-only fill is owed.
+  * Model2A_20261024b = s1483 (dilk-2a 509f505, fast-forwarded into model2a),
+    md5 3bab755f6e5032da6fc65188bac70d0b: clk_sys +0.128, clk_mem +0.040, i960
+    +1.140, HDMI +0.109, hold +0.234; 39,358 ALMs. s1478-s1482 missed (worst
+    paths: the SCSP DSP microprogram M10K read on clk_sys, m2_sdram arbitration
+    on clk_mem -- a timing agent is on them, R959).
+  * In flight: room-main (R952 + R951 + interpolator on Model 2, R956) fitting
+    s1484-s1486 for a board test before it merges to main; wheel mapping #12 on
+    all three cores (R958); tree pixels (R955, NEGZ); span cull for VCop2's
+    train (#29, R954, branch vc2-slow) held until after this release.
+
 ## 2026-10-24 (night): Model2A_20261024 released (main + model2a); model2c published with the Model2C_20261024 beta
 
   * Model2A_20261024 = s1468 (int-2a b4250d8, merged into model2a 1b1d110),
