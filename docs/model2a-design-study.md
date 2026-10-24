@@ -45620,3 +45620,130 @@ sample for sample (the 2A microcode words byte-identical, as R946).
 lint_top clean, 2A and 2C.
 
 *Probe expectations:* as R946.
+
+**R948 -- ROOM FOR TODAY'S FIXES BY MAKING THINGS SMALLER, NOTHING SWITCHED
+OFF: THE FILL'S RECIPROCAL TABLE IN M10K ON THE SAME CYCLE, PAID FOR BY A
+MERGED SOUND-CACHE ARRAY; THE i960'S REPEATED SUMS FORMED ONCE.
+quartus_map 17.0: 2A 40,317 -> 40,070 ALMs needed (-247), 2C 40,307 ->
+39,943 (-364). M10K +1 on both (expected 2A 551, 2C 550 of 553). Every
+change cycle-identical. BRANCHES room-2a (off bridge-r937-2a 8fa6643) AND
+room-2c (off hotd-dsp b0f75a0), LOCAL, NOT FITTED.**
+
+*Believed:* the 2C build carries 2A-game hardware it never uses, and that is
+where the room is. *Found:* almost none is left -- no m2_tgp, Model 1 sound,
+I/O-board Z80, debug stream or wait-state block on the 2C map, no protection
+logic in RTL, Manx's motion already off; what remains is reached through the
+game ID (profiles in m2_2a_inputs, luma rows in m2_luma_map, a2_big's list).
+Narrowing the 2C ID to its three games measured -139 ALMs, and was built and
+then REVERTED (Ben: nothing switched off, even 2C-only logic -- make things
+smaller instead). The one large movable block was not game logic at all.
+
+*Per-entity, quartus_map 17.0 "Resource Utilization by Entity" (combinational
+ALUTs / registers; the map gives ALMs only for the whole design):*
+                              2A (8fa6643)        2C (b0f75a0)
+    ALMs needed (total)       40,317              40,307
+    i960_top                  11,701 / 4,384      11,722 / 4,384
+    m2_raster3d               11,636 / 11,197     11,321 / 11,172
+      m2_raster_fill           5,434 / 4,014       5,101 / 3,971
+      m2_quad_store            1,884 / 2,832       1,893 / 2,842
+      m2_texel_bl              1,801 / 1,352       1,801 / 1,352
+      m2_span_tex              1,330 / 1,684       1,329 / 1,692
+    m2_geometry                7,588 / 8,395       7,467 / 8,395
+    m2_2a_sound (fx68k, SCSP)  5,914 / 3,427       6,054 / 3,493
+    m2_copro (TGP / TGPx4)     3,918 / 2,746       4,224 / 2,948
+    ascal (framework)          2,468 / 4,035       2,483 / 4,035
+    m2_video (tilemap)         1,475 / 1,851       1,467 / 1,851
+    m2_sdram                   1,011 / 1,790         987 / 1,733
+    m2_cpu_bridge                877 / 565           931 / 565
+    osd x2, pll_hdmi_adj       ~2,380 / ~1,660     the same
+    hps_io                       817 / 868           834 / 868
+
+*TAKEN (each identical cycle for cycle):*
+  1. m2_recip_rom in M10K (both builds; Model2.sv R3D_RECIP_M10K = M2A;
+     VERILOG_MACRO "M2_RECIP_LOGIC=1" puts the LUT copies back). The fill's
+     256 x 32 table ceil(2^32/d) was two LUT copies (romstyle "logic", 280
+     ALUTs + 64 registers); it is now one true-dual-port ROM, two M10K, MIF
+     generated (checked in the map's RAM summary). The block registers the
+     address where the LUT form registered the data, so the data lands on the
+     same cycle and m2_raster_div is untouched. m2_recip_rom 280 / 64 -> 0 /
+     0; m2_raster_fill 5,434 -> 5,162 ALUTs (2A). 2A -229, 2C -328 with (2).
+     TIMING: the data now comes from the block's output, not a flip-flop. On
+     s1439 (2A, fitted) the path a_data / b_data -> q_fast (S_MUL's 32 x 32
+     multiply) had 3.45 ns of slack at 80 MHz and the address path into the
+     table 2.07-2.45 ns (quartus_sta on a copy); the M10K's clock-to-out
+     takes part of the first, the second gets shorter (no table logic). The
+     fit's clk_sys report is the check.
+     A first version registered the block's output too (data two cycles
+     late, the dividers waiting a cycle more in S_MUL): the quotients were
+     identical but a fast divide one cycle longer, so it was not taken.
+  2. m2_2a_sound's line cache: ln_t (128 x 15) and ln_v (128 x 1 -- a whole
+     M10K for 128 bits) are one array {valid, tag}: the same read address;
+     the clear (vclr, only in V_CLR after reset) and the fill (ln_we, only
+     from B_FILL) never meet, and a line whose valid bit is 0 never hits
+     whatever tag the clear wrote. -1 M10K, ALMs unchanged; pays for (1)'s
+     second block.
+  3. i960_top: ip_next + d_disp (8 places: b, bal, bno, b<cc>, faultno, bbc /
+     bbs, cmpob<cc>, the call target), ip + 4 (3), ip + 8 (4, one the AGU's
+     port), prcb + 20 (3) and the interrupt table's two vector addresses
+     (2 each) as one named wire each -- the same expressions; synthesis had
+     built the branch copies as separate adders. i960_top own logic 4,251
+     -> 4,192 ALUTs (2A), 4,223 -> 4,175 (2C); totals -18 / -36 (noise +-30).
+*TRIED, NOT TAKEN:*
+  * The 2C ID narrowing above (-139): reverted, it switches logic off.
+  * The same narrowing on the 2A build (eleven IDs, four bits): +45, noise.
+  * 2C M2_NO_2A_EE_LOAD: 0. 2C M2_2A_FPU=0: -288, but STCC runs atanr
+    (0x68.0, 40,466 times, pc 0x5dc7c) -- formcheck with a 2C-without-F2A
+    column (fr 0, vc 1, f2a 0, c2 1) traps on it. remr / movre alone on a
+    switch: i960_top -135 ALUTs, -72 registers, total +6 (noise); no 2C form
+    log runs either (HOTD 420 s, r924, r935 long; Over Rev snap1, cap1, val;
+    STCC cen), but a log is a sample of play. All switch-offs; reverted.
+  * R945's second EEPROM read port (one 64 x 16 MLAB pair, ~20 ALMs): q is
+    used only on two cycles (ld_wait[1], WRITEALL's phase 2), so the dump
+    could borrow the port on the others -- but a borrowed cycle delays
+    dump_q by one, and at the upload's minimum strobe spacing (4 clk_sys,
+    tb_m2_nv_save) that is not provably the same. Left.
+  * R940's extra geometry stage: its own map was -10 (noise); the stage
+    sets the pipeline's latency (C_AGE 5), so it cannot go without a timing
+    change. R944's clamp: the S_FS_DIL vertex reads share the px[ps1 / ps2 /
+    ps1m1 / ps2p1] muxes S_DIVA already has; choosing the edge first would
+    add two muxes, not remove any. R947's overlap: already trimmed (R947).
+*NOT MOVABLE (checked):* the i960 I-cache tags (512 x 20 MLAB, ~160 ALMs)
+need the MLAB's asynchronous read (R552); the SCSP's rfa / rfb and mems stay
+M10K (R909); the large register arrays left are 4-entry vertex sets read in
+parallel (geo_clip, geometry), not RAMs.
+
+*VERIFIED:*
+  * tb_m2_raster_div_lat (new; make test_m2_raster_div_lat): m2_raster_div on
+    the LUT table and on the M10K one side by side, both ports, every cycle's
+    ready / out_valid / quotient / div0 compared: every denominator -600..600
+    against edge and random numerators and 200,000 random pairs -- 218,015
+    divides x 2, 0 results and 0 cycles differ. A mutant table (bit 0 of
+    port A flipped) differs 5,522 times.
+  * test_m2_raster_fill (152,373 checks), _mip (1,989,828), test_m2_fill_m2cov
+    (3,007), test_m2_fill_dil, test_m2_raster3d (40): 0 fails, and with
+    RECIP_M10K 1 each log is byte-identical to the parent's (spans
+    31,831,634, empty 22,206, ties 628 -- the stall generator shares the
+    quad generator's mt19937, so any cycle difference would show) -- on the
+    2A tree; on the 2C tree (no m2cov / dil targets there) test_m2_raster_fill,
+    _mip and test_m2_raster3d the same, byte-identical to b0f75a0's.
+  * tb_m2_2a_sound, Dead or Alive's sound program against its MAME capture,
+    20 s at 6-40, before and after (2): the whole log identical (216 lines:
+    68000 cycles, SCSP writes 1,269,973, MAME-order LCS 97.5%, port traffic)
+    and the 20 s WAV byte-identical; PASS. (This capture's level column does
+    not track MAME's in either run -- a bench property, the same before and
+    after.) tb_m2_scsp not rerun: m2_scsp is unchanged.
+  * i960 lockstep (3): test_i960_top, _irq, _lat, _vc, _fr, _fx, _ring, _dc
+    (2A tree) and _c2 (2C tree): 0 mismatches, PASS. lint_i960_top clean.
+  * lint_top clean: 2A, M2_NO_2A, 2C (M2_2C, M2_NO_2A_MANX_MOTION).
+*AREA, quartus_map 17.0 (ALMs needed / ALUTs / registers / block bits):*
+    2A  8fa6643                40,317  57,608  48,347  4,580,912
+    2A  + (1) (2)              40,088  57,271  48,283  4,589,104   (-229)
+    2A  room-2a (1) (2) (3)    40,070  57,246  48,283  4,589,104   (-247)
+    2C  b0f75a0                40,307  57,763  48,520  4,592,176
+    2C  + (1) (2)              39,979  57,315  48,458  4,600,368   (-328)
+    2C  room-2c (1) (2) (3)    39,943  57,254  48,457  4,600,368   (-364)
+  M10K: the map gives bits, not blocks: +2 (the ROM) -1 (the merge)
+  expected, 2A 550 -> 551, 2C 549 -> 550 of 553. The fitter's RAM summary is
+  the check. (The 2A / 2C map totals carry +-30 ALMs of synthesis noise
+  between runs of the same RTL's neighbours: 2C b0f75a0 mapped 40,307 here
+  and its parent 3704373 40,279 in s1442.)

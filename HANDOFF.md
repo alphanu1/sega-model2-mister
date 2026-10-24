@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-24: room-2a / room-2c -- ALM room by making things smaller (R948). LOCAL, NOT PUSHED, NOT FITTED
+
+quartus_map 17.0, ALMs needed: 2A 40,317 -> 40,070 (-247, branch room-2a off
+bridge-r937-2a 8fa6643); 2C 40,307 -> 39,943 (-364, branch room-2c off
+hotd-dsp b0f75a0; build with "M2_2C=1", "M2_NO_2A_MANX_MOTION=1" as before).
+Nothing switched off; every change cycle-identical.
+  * m2_recip_rom in two M10K, read on the LUT table's cycle (280 ALUTs + 64
+    registers -> 0; M2_RECIP_LOGIC=1 puts the LUT copies back). Paid for by
+    m2_2a_sound's line cache ({valid, tag} one array: -1 M10K). M10K
+    expected 2A 551, 2C 550 of 553 -- check the fit's RAM summary, and
+    clk_sys through m2_raster_div (the ROM's data now leaves an M10K; the
+    path had 3.45 ns slack on s1439).
+  * i960_top: repeated sums (branch target, ip + 4 / + 8, interrupt table
+    addresses) formed once: -48 / -59 ALUTs.
+  * Built and reverted (switch-offs): 2C game-ID narrowing (-139); 2C F2A
+    off (-288, unsafe: STCC runs atanr); remr / movre off (noise).
+  * Benches: tb_m2_raster_div_lat (new, cycle-exact) 0 differ; fill / mip /
+    m2cov / dil / raster3d logs byte-identical to the parents' with the M10K
+    table; tb_m2_2a_sound DOA 20 s log and WAV identical; i960 lockstep
+    top / irq / lat / vc / fr / fx / ring / dc / c2 PASS; lint_top 2A,
+    M2_NO_2A, 2C.
+
 ## 2026-10-24: hotd-dsp -- R946 made small (R947). NOT PUSHED, NOT FITTED
 
 The 2C build is full (~41,400 / 41,910 ALM), so the fix is now the OVERLAP
