@@ -45361,3 +45361,11 @@ fine: starvation is unlikely. Next hypothesis (R946, branch hotd-dsp): the
 SCSP DSP -- R914's MADRS change makes the core's DSP differ from MAME by
 design, and HOTD may be the first game whose reverb uses those taps / whose
 DSP ring sits where the core's sound RAM aliases differently.
+*R946 (branch hotd-dsp): REPRODUCED in the SCSP bench -- the engine runs out
+of time per sample on the tutorial (HOTD's 112-step reverb ~1,000 clocks +
+the attract's heaviest slot traffic ~900, against 1,814): 700-2,500
+underruns/s at every tutorial pass, ~0 elsewhere, none on 2A games. Fix
+M2_2A_SND_OVL (DSP overlapped with the next sample's slots + a posted ring
+write queue), 2C only, sample-exact, +312 ALM -- being shrunk before any
+fit. The sound probe (s1436-s1438, cut to place) fitted with clk_mem -3.4 /
+clk_sys -3.1 ns: too far off timing to trust a measurement, not used.
