@@ -1,5 +1,37 @@
 # Handoff
 
+## 2026-10-24 (night): Model2A_20261024 released (main + model2a); model2c published with the Model2C_20261024 beta
+
+  * Model2A_20261024 = s1468 (int-2a b4250d8, merged into model2a 1b1d110),
+    md5 9edfa2b2c5114eb0d96d6456391ee647. clk_sys +0.205, clk_mem +0.176,
+    i960 +1.305, hold +0.176 (HDMI -0.140, report-only); 39,167 / 41,910
+    ALMs (93%), 550 / 553 M10K. s1466 / s1467 missed (clk_sys -0.543).
+  * Model2C_20261024 = s1471 (int-2c b3ee18f, merged into model2c 9b97755),
+    md5 f6a672fde023a08c4f45c8b042756a3d. clk_sys +0.242, clk_mem +0.075,
+    i960 +1.346, hold +0.240 (HDMI -0.102); 39,248 ALMs (94%), 549 M10K.
+    s1469 just missed (-0.023 / -0.002); s1470 a Quartus STA internal error.
+  * model2c is PUSHED now (Ben, 2026-10-24: "publish 2c branch for beta
+    testing"). Its releases/ = main's files + the 2C rbf and MRAs + a 2C
+    section in the README. It still never merges; fixes flow model2a -> model2c.
+  * Release folders: main and model2a identical; the 2A MRAs are 16520
+    (R945), the Model 2 ones 16384. The wrong "Cleaner texture edges" line
+    (R938 does nothing at texel step 1) is gone from the Model 2 notes.
+  * Board report on s1468 (Ben): Rally sky dots gone, shadows good; VF2 much
+    better, the tree dot still shows (less); ZG, Manx, Sky Target (Auto),
+    VCop 2, Motor Raid, Hanguk good; sound much better overall (the mix
+    balance still open). NEW: a stray green pixel near trees (Rally, VF2 Lau,
+    Pilot Kids' window tree) and seams showing the 2D background (VF2 Jacky /
+    Sarah, DOA) -- an agent is on both (R955). 15 kHz untested by Ben.
+  * Board report on s1471 (Ben): HOTD's tinny layer gone ("you can actually
+    hear the FM samples now"), but the music still far too loud against the
+    shots (Raw Sound Boost helps); STCC good, no music; Over Rev good, a row
+    of dark blue dots in the sky along one line (likely the R951 family).
+  * Open: the sound mix (R953, board-mix f207c69: board vs MAME music -5.8 dB,
+    dry hits -11 dB, Dynamite Cop's box break +2 dB; bench does not
+    reproduce; next: the Sound Test recorded on the board + Ben's audio
+    settings); Virtua Cop 2's slowdown (#29, agent running, R954).
+  * After Ben signs off: port R951 and R952's shared parts to main (Model 2).
+
 ## 2026-10-24 (evening): int-2a / int-2c -- the finished work merged for fitting (R952 integrated). LOCAL, NOT PUSHED, NOT FITTED
 
   * int-2a (worktree sm2-builds/int-2a) = room2-2a 514c411 + R951 (rally-sky
