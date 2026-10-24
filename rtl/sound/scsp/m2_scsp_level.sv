@@ -175,7 +175,8 @@ module m2_scsp_level #(
   // R946 SHADOW: words 3 / 4 of slots 0-15 in two banks, rows 3 / 4 and the
   // unused rows 6 / 7. A recompute writes the bank not read (sh_live) and
   // marks the slot; sh_clr turns every marked slot whose recompute is through
-  // to its new bank. A slot mid-recompute at sh_clr turns at the next one.
+  // to its new bank -- at once, or, if a recompute is under way, when it is
+  // through (never mid-slot; in the benches' step mode the unit is idle then).
   (* ramstyle = "M10K" *) logic [14:0] lram [256];
   logic [14:0] lram_q;
   logic [15:0] sh_live, sh_dirty;
@@ -195,17 +196,14 @@ module m2_scsp_level #(
   end
   generate if (SHADOW) begin : g_sh
     wire take = !run && req && !req_slot[4];
+    logic sh_pend;
     always_ff @(posedge clk or negedge rst_n) begin
-      if (!rst_n) begin sh_live <= '0; sh_dirty <= '0; end
+      if (!rst_n) begin sh_live <= '0; sh_dirty <= '0; sh_pend <= 1'b0; end
       else begin
-        if (sh_clr) begin
-          logic [15:0] busy_s, turn;
-          busy_s = (run && !s_slot[4]) ? 16'(1) << s_slot[3:0] : 16'd0;
-          turn = sh_dirty & ~busy_s;
-          sh_live  <= sh_live ^ turn;
-          sh_dirty <= sh_dirty & ~turn;
-        end
-        if (take) sh_dirty[req_slot[3:0]] <= 1'b1;
+        if ((sh_clr || sh_pend) && !run) begin
+          sh_live <= sh_live ^ sh_dirty; sh_dirty <= '0; sh_pend <= 1'b0;
+        end else if (sh_clr) sh_pend <= 1'b1;
+        if (take) sh_dirty[req_slot[3:0]] <= 1'b1;   // (after a turn the same clock: it is the next one's)
       end
     end
   end else begin : g_nosh

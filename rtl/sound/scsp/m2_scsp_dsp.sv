@@ -50,6 +50,10 @@ module m2_scsp_dsp #(
   // the other bank meanwhile added into its own once the slots are parked
   // (mix_idle), before the next go.
   parameter bit OVERLAP = 1'b0,
+  // R947: ABORT_MERGE -- with OVERLAP, an abandoned run's merge (above). 0
+  // leaves it out (~28 ALMs on the 2C build): MIXS is then MAME's except
+  // after a run that IRA > 0x31 abandons, which no game's program does
+  parameter bit ABORT_MERGE = 1'b1,
   // R946: WPOST -- the ring writes posted into an eight-entry queue instead
   // of holding the next memory step until each one lands. A write enters the
   // queue (and its line leaves the cache) once its step's read is in; the
@@ -258,15 +262,17 @@ module m2_scsp_dsp #(
       ra_a = mg_on ? mg_i[4:1] : (dst == D_RUN && !rbank) ? IRA[3:0] : mix_sel;
       ra_b = mg_on ? mg_i[4:1] : (dst == D_RUN &&  rbank) ? IRA[3:0] : mix_sel;
     end
+    // one adder: a send onto the slots' bank, or a merge's two banks
+    wire [19:0] s_sum = ((wbank && !mg_on) ? q_b : q_a) + (mg_on ? q_b : mix_val);
     always_ff @(posedge clk) begin
       q_a <= mixs[ra_a];
       q_b <= mixs_b[ra_b];
       if (dst == D_CLRM && (stopped || !rbank)) mixs[clr_i] <= 20'd0;
-      else if (mg_wr) mixs[mg_i[4:1]] <= rbank ? 20'd0 : q_a + q_b;
-      else if (mix_we && !wbank) mixs[mix_sel] <= q_a + mix_val;
+      else if (mg_wr) mixs[mg_i[4:1]] <= rbank ? 20'd0 : s_sum;
+      else if (mix_we && !wbank) mixs[mix_sel] <= s_sum;
       if (dst == D_CLRM && (stopped || rbank)) mixs_b[clr_i] <= 20'd0;
-      else if (mg_wr) mixs_b[mg_i[4:1]] <= rbank ? q_a + q_b : 20'd0;
-      else if (mix_we && wbank) mixs_b[mix_sel] <= q_b + mix_val;
+      else if (mg_wr) mixs_b[mg_i[4:1]] <= rbank ? s_sum : 20'd0;
+      else if (mix_we && wbank) mixs_b[mix_sel] <= s_sum;
     end
     assign mx_run = rbank ? q_b : q_a;
     assign mx_q = '0;
@@ -509,7 +515,7 @@ module m2_scsp_dsp #(
         D_RUN: begin
           case (ph)
             3'd2: begin
-              if (abort) begin dst <= D_IDLE; done <= 1'b1; if (OVERLAP) mg_need <= 1'b1; end   // MAME returns: no DEC, MIXS kept
+              if (abort) begin dst <= D_IDLE; done <= 1'b1; if (OVERLAP && ABORT_MERGE) mg_need <= 1'b1; end   // MAME returns: no DEC, MIXS kept
               else if (!stall) ph <= 3'd3;
             end
             3'd3: begin

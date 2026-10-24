@@ -150,6 +150,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // tutorial's slot traffic runs the engine past its 1,814 clocks a sample at
 // light port latency (6-40 clk_sys) -- the output FIFO underruns in the
 // attract's tutorial screen, the board's symptom. The 2A build keeps 0.
+// R947: the overlap alone (WPOST, the posted ring writes, off: ~200 ALMs for
+// margin the overlap already gives) -- +117 ALMs on the 2C build's map.
 `ifdef M2_2C
 `ifndef M2_2A_SND_OVL
 `define M2_2A_SND_OVL 1

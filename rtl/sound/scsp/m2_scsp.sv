@@ -66,9 +66,13 @@ module m2_scsp #(
   // the output is MAME's stream one sample later. 0 is the engine as before,
   // clock for clock.
   parameter bit OVERLAP = 1'b0,
-  // R946: WPOST -- m2_scsp_dsp's ring writes posted (an eight-entry queue);
-  // with OVERLAP unless set apart (benches)
-  parameter bit WPOST = OVERLAP
+  // R946: WPOST -- m2_scsp_dsp's ring writes posted (an eight-entry queue).
+  // OFF in every build: OVERLAP alone takes House of the Dead's tutorial to
+  // ~1,050 clocks a sample at 6-40, and WPOST costs ~200 ALMs (R946); kept
+  // for the benches
+  parameter bit WPOST = 1'b0,
+  // R947: m2_scsp_dsp ABORT_MERGE (with OVERLAP)
+  parameter bit ABORT_MERGE = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -907,7 +911,7 @@ module m2_scsp #(
 
   assign mix_we  = e_s2 == 4'(S2_MIXW);
   assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
-  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST)) u_dsp (
+  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST), .ABORT_MERGE(ABORT_MERGE)) u_dsp (
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
     .rbl(rbl), .rbp(rbp),
