@@ -1120,6 +1120,24 @@ int main(int argc, char **argv) {
         d->q_frac = frac; d->q_tex = 0; d->q_moire = (tex >> 11) & 1;
 #ifdef R3D_TEXLUT
         d->q_col = ((uint32_t(n) & 31) << 11) | (((uint32_t(n) >> 5) & 63) << 5);   // RGB565 in, as Model2.sv packs a flat quad
+        // R951: M2_R3D_QUADSTEX in the 2A configuration -- the quads textured as
+        // Model2.sv packs them for TEXLUT (r3d_qcol / r3d_qtex): a textured quad
+        // {luma, colour base[9:1]} and {slot, tex[23:12], base[0], tex[10:0]}, the
+        // slot from trow= (geodiff's q_trow); a flat quad RGB565 from its colour
+        static const bool QTEX2A = std::getenv("M2_R3D_QUADSTEX") != nullptr;
+        if (QTEX2A) {
+          unsigned uvs = 0; if (const char *us = std::strstr(L[i].c_str(), " uvs=")) uvs = unsigned(std::atoi(us + 5));
+          int trow = 0; if (const char *ts = std::strstr(L[i].c_str(), " trow=")) trow = std::atoi(ts + 6);
+          d->q_u0 = u[0]; d->q_v0 = v[0]; d->q_u1 = u[1]; d->q_v1 = v[1]; d->q_u2 = u[2]; d->q_v2 = v[2]; d->q_u3 = u[3]; d->q_v3 = v[3];
+          d->q_uvs = uvs;
+          if (tex & 1) {
+            d->q_col = ((lum & 0xff) << 9) | ((col >> 1) & 0x1ff);
+            d->q_tex = (uint32_t(lslot_tb(trow) & 7) << 24) | (tex & 0xfff7ffu) | ((col & 1u) << 11);
+          } else {
+            d->q_col = (((col >> 19) & 31) << 11) | (((col >> 10) & 63) << 5) | ((col >> 3) & 31);
+            d->q_tex = tex & 0xfff7ffu;
+          }
+        }
 #else
         d->q_col = ((uint32_t(n) & 31) << 19) | (((uint32_t(n) >> 5) & 63) << 10);  // RGB888 in, cut to 565 by the store
         // R940: M2_R3D_QUADSTEX -- the quads TEXTURED, as the geometry gave them

@@ -330,6 +330,9 @@ module m2_geo_engine #(
   logic        uv_cull;      // the cull decision, held while the run finishes
   logic [22:0] th_w;         // texture header address, in 16-bit words (R897: MAME's 23 bits)
   logic        th_ram;       // ...in texture RAM (tha bit 23), else the ROM
+  // R952: the header's next word, th_w + 1 / + 2 / + 3 in F_TH0 / 1 / 2 --
+  // one adder on the state's offset, not three
+  wire  [22:0] th_nx = th_w + ((fs == F_TH0) ? 23'd1 : (fs == F_TH1) ? 23'd2 : 23'd3);
   logic        dsel;         // E_DOT: 0 = with the point, 1 = with the light
   logic        dotp_zero;
   logic [31:0] dotl;
@@ -994,7 +997,7 @@ module m2_geo_engine #(
         //      then the address steps by tho * 4, tho the signed attr[16:12].
         F_TH0: if (mem_go) begin
           hdr0  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 23'd1, th_ram); xhalf <= ~th_w[0];
+          xaddr <= th_dw(th_nx, th_ram); xhalf <= ~th_w[0];   // R952: th_w + 1
           fs    <= F_TH1;
         end
         // R271: word 1's low byte is the luma base, word 2 the sheet and the
@@ -1002,12 +1005,12 @@ module m2_geo_engine #(
         // each is the previous one's complement.
         F_TH1: if (mem_go) begin
           hdr1  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 23'd2, th_ram); xhalf <= th_w[0];
+          xaddr <= th_dw(th_nx, th_ram); xhalf <= th_w[0];    // R952: th_w + 2
           fs    <= F_TH2;
         end
         F_TH2: if (mem_go) begin
           hdr2  <= xhalf ? mem_data[31:16] : mem_data[15:0];
-          xaddr <= th_dw(th_w + 23'd3, th_ram); xhalf <= ~th_w[0];
+          xaddr <= th_dw(th_nx, th_ram); xhalf <= ~th_w[0];   // R952: th_w + 3
           fs    <= F_TH3;
         end
         F_TH3: if (mem_go) begin

@@ -81,6 +81,10 @@ static bool run_one(SCSP &R, uint64_t n, uint16_t *rram) {
 	runs++;
 	// writes still in flight land before the compare
 	for (int i = 0; i < 3 * lat_hi + 40; i++) tick();   // a read and the write behind it may still be in flight
+	// (R946 WPOST: up to eight queued writes go on after done, and the last
+	// step's own write waits for its read -- until the port has been quiet for
+	// 32 clocks, longer than a read's last steps to its write's push)
+	for (int idle = 0, i = 0; idle < 32; i++) { tick(); idle = (!t->m_req && !busy_p) ? idle + 1 : 0; if (i > 40 * lat_hi + 2000) { printf("FAIL: port never quiet (n %llu)\n", (unsigned long long)n); exit(1); } }
 	bool ok = true;
 	for (int i = 0; i < 16; i++) {
 		t->ef_idx = i; tick(); tick();
@@ -105,6 +109,7 @@ int main(int argc, char **argv) {
 	static uint16_t rram[0x40000];
 	t = new Vm2_scsp_dsp;
 	t->rst_n = 0; t->go = 0; t->mix_we = 0; t->w_en = 0; t->snp = 0; t->rbl = 0; t->rbp = 0;
+	t->mix_idle = 1;   // R946 (OVERLAP builds): no slots here, a merge may run at once
 	tick(); tick(); t->rst_n = 1; tick();
 
 	if (getenv("DSP_RANDOM")) {

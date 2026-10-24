@@ -17,15 +17,33 @@
 //   SCSP_FROM=<n>   compare from sample n (default 0)
 //   LAT_LO / LAT_HI the memory latency (default 6 / 40)
 //   SCSP_SEED       the latency draw's seed
+//   SCSP_ECDUMP=<file>  each sample's engine clocks, u16 (R946)
+//   SCSP_FREE=1     R946: free-running, as m2_2a_sound runs it -- an output FIFO
+//                   (7 ahead, out_ready = fewer than 7) drained at 44,100 Hz
+//                   of 80 MHz (tick44 / tph / cpu_tick as the board makes
+//                   them), MAME's writes, RAM writes and MIDI applied when as
+//                   many samples have drained as MAME had made; reads skipped,
+//                   nothing compared. Prints the underruns (the FIFO found
+//                   empty at a drain) and the RTL's mix RMS second by second.
+//   SCSP_OVL=1      R946: the RTL is built OVERLAP (SCSP_DEFS=-GOVERLAP=1): its
+//                   sample n is compared with the reference's n - 1, and the
+//                   engine clocks are the free-running machine's -- the slots
+//                   and the DSP run for the sample before, whichever is longer,
+//                   plus the returns and the output (the bench's own time
+//                   between samples, where the run goes on for free, removed)
 //
 // A record with pad = 1 is a read (scsp_randcap's): the RTL's answer is
 // checked against the reference's r16. Bytes the RTL sends on MIDI out are
 // checked against the low bytes of the reference's 0x406 after each write.
 // The noise LFO is MAME's (scsp_lfonoise.hex, beside the binary).
 #include "Vm2_scsp.h"
+#ifdef SCSP_TB_DBG
+#include "Vm2_scsp___024root.h"
+#endif
 #include "verilated.h"
 #include "scsp_ref.h"
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -48,6 +66,14 @@ struct Port { bool busy = false; int wait = 0; bool was = false; };
 static Port sm, dm;
 static std::deque<int> mout_got;
 static uint64_t sm_reqs = 0, dm_rd = 0, dm_wr = 0;
+// R946: the DSP's runs (dbg_ov[0]) and where the slots park at its wait (dbg_ov[1])
+static uint64_t ov_run0 = 0, ov_runlen = 0, ov_park0 = 0, ov_park1 = 0;
+static bool ov_busy = false, ov_parked = false;
+// R946 SCSP_FREE: the board's drain and FIFO
+static bool fr_on = false;
+static uint64_t fr_tacc = 0, fr_drained = 0, fr_n = 0, fr_under_tot = 0;
+static std::vector<uint64_t> fr_under, fr_cnt;
+static std::vector<double> fr_sq;
 
 static uint64_t line_of(uint32_t widx) {
 	widx &= ~3u; uint64_t v = 0;
@@ -56,7 +82,15 @@ static uint64_t line_of(uint32_t widx) {
 }
 
 static void tick() {
-	t->clk = 0; t->eval();
+	t->clk = 0;
+	bool fr_tk = false;
+	if (fr_on) {   // R946: this clock's drain (T44 441 / 800,000 at 80 MHz), as m2_2a_sound
+		fr_tacc += 441;
+		if (fr_tacc >= 800000) { fr_tacc -= 800000; fr_tk = true; }
+		t->tick44 = fr_tk; t->cpu_tick = fr_tk; t->tph = uint8_t((fr_tacc * 64) / 800000) & 63;
+		t->out_ready = fr_n < 7;
+	}
+	t->eval();
 	// ports, sampled on the falling half so the rising edge sees the answer
 	t->sm_ack = 0; t->dm_ack = 0;
 	if (t->sm_req && !sm.was && !sm.busy) { sm.busy = true; sm.wait = lat(); sm_reqs++; }
@@ -73,6 +107,22 @@ static void tick() {
 	t->mout_ack = t->mout_valid;
 	if (t->mout_valid) mout_got.push_back(t->mout_data);
 	t->eval();
+	{	// R946
+		bool b = t->dbg_ov & 1, pk = (t->dbg_ov >> 1) & 1;
+		if (b && !ov_busy) ov_run0 = cyc;
+		if (!b && ov_busy) ov_runlen = cyc - ov_run0;
+		if (pk && !ov_parked && !ov_park0) ov_park0 = cyc;
+		if (pk) ov_park1 = cyc + 1;
+		ov_busy = b; ov_parked = pk;
+	}
+	if (fr_on) {   // R946: the FIFO as the edge sees it
+		bool v = t->out_valid;
+		size_t sec = size_t(fr_drained / 44100);
+		if (fr_under.size() <= sec) { fr_under.resize(sec + 1, 0); fr_cnt.resize(sec + 1, 0); fr_sq.resize(sec + 1, 0.0); }
+		if (v) { double x = double((int32_t)t->out_l_raw); fr_sq[sec] += x * x; fr_cnt[sec]++; }
+		if (fr_tk) { if (fr_n) fr_n--; else { fr_under[sec]++; fr_under_tot++; } fr_drained++; }
+		if (v) fr_n++;
+	}
 	t->clk = 1; t->eval();
 	cyc++;
 }
@@ -96,6 +146,7 @@ int main(int argc, char **argv) {
 	// R894: SCSP_BOOST=<0..3> drives the Direct boost; the RTL's raw mix is then
 	// checked against the reference's direct sends x 2^boost plus its effect return
 	const int BOOST = getenv("SCSP_BOOST") ? atoi(getenv("SCSP_BOOST")) : 0;
+	const bool OVL = getenv("SCSP_OVL") != nullptr;   // R946
 
 	static Tables T;
 	if (FILE *h = fopen("scsp_lfonoise.hex", "r")) {
@@ -133,6 +184,42 @@ int main(int argc, char **argv) {
 	for (int i = 0; i < 4; i++) tick();
 	t->rst_n = 1;
 	for (int i = 0; i < 4; i++) tick();
+
+	if (getenv("SCSP_FREE")) {   // R946: free-running, the board's FIFO
+		t->step_mode = 0; fr_on = true;
+		uint64_t last_rep = 0;
+		while (fr_drained < N) {
+			while (mi_ok && mi_n <= fr_drained) {
+				t->midi_data = mi_b; t->midi_valid = 1;
+				int g = 0; do { tick(); if (++g > 100000) { printf("FAIL: MIDI byte not taken\n"); return 1; } } while (!t->midi_ack);
+				t->midi_valid = 0; tick();
+				mi_ok = next_midi();
+			}
+			while (regs.ok && regs.cur.n <= fr_drained) {
+				if (regs.cur.pad != 1) {
+					t->cpu_addr = (regs.cur.off >> 1) & 0x7ff;
+					t->cpu_din = regs.cur.data; t->cpu_we = 1;
+					t->cpu_be = ((regs.cur.mask & 0xff00) ? 2 : 0) | ((regs.cur.mask & 0x00ff) ? 1 : 0);
+					t->cpu_req = 1; tick(); t->cpu_req = 0;
+					int g = 0; while (!t->cpu_ack) { tick(); if (++g > 2000000) { printf("FAIL: write not acked\n"); return 1; } }
+				}
+				regs.next();
+			}
+			while (rw.ok && rw.cur.n <= fr_drained) {
+				uint32_t a = (rw.cur.a & 0x7fffe) >> 1; uint16_t dv = rw.cur.dm & 0xffff, m = rw.cur.dm >> 16;
+				ram[a] = (ram[a] & ~m) | (dv & m);
+				t->snp = 1; t->snp_addr = a; tick(); t->snp = 0; tick(); tick();
+				rw.next();
+			}
+			tick();
+			if (fr_drained >= last_rep + 441000) { last_rep = fr_drained; printf("  .. %.0f s, %llu underruns\n", fr_drained / 44100.0, (unsigned long long)fr_under_tot); fflush(stdout); }
+		}
+		printf("tb_m2_scsp FREE %s: %.1f s drained, %llu underruns; latency %d..%d\n  underruns / mix RMS by second:", cap, fr_drained / 44100.0,
+		       (unsigned long long)fr_under_tot, lat_lo, lat_hi);
+		for (size_t i = 0; i < fr_under.size(); i++) printf(" %zu:%llu/%.0f", i, (unsigned long long)fr_under[i], fr_cnt[i] ? sqrt(fr_sq[i] / fr_cnt[i]) : 0.0);
+		printf("\n");
+		return 0;
+	}
 
 	uint64_t bad = 0, bad_mame = 0, slot_bad = 0, slot_checks = 0, nz = 0, rd_checks = 0, rd_bad = 0, mo_bad = 0;
 	std::deque<int> mout_want;
@@ -223,6 +310,7 @@ int main(int argc, char **argv) {
 				printf("ref n %llu slot %d act %d eg %d vol %x cur %08x r0 %04x out %d ar %x d1r %x d2r %x rr %x dl %x w4 %04x w5 %04x w8 %04x w9 %04x ring %04x pph %04x/%x aph %04x/%x\n", (unsigned long long)n, ds, q.active, int(q.EG.state), q.EG.volume, q.cur_addr, q.data[0], R.slot_out[ds], q.EG.AR, q.EG.D1R, q.EG.D2R, q.EG.RR, q.EG.DL, q.data[4], q.data[5], q.data[8], q.data[9], uint16_t(R.RINGBUF[(32 * n + ds) & 63]), q.PLFO.phase, q.PLFO.phase_step, q.ALFO.phase, q.ALFO.phase_step);
 		}
 		// the RTL's
+		ov_park0 = 0;
 		t->step_go = 1; tick(); t->step_go = 0;
 		uint64_t c0 = cyc;
 		g = 0;
@@ -235,12 +323,39 @@ int main(int argc, char **argv) {
 				}
 			}
 			tick();
-			if (++g > 5000000) { printf("FAIL: no sample (n %llu)\n", (unsigned long long)n); return 1; }
+			if (++g > 5000000) {
+				printf("FAIL: no sample (n %llu)\n", (unsigned long long)n);
+#ifdef SCSP_TB_DBG
+				auto *r = t->rootp;
+				printf("  upc %d dsp dst %d busy %d pend %d mg_need %d mg_on %d stopped %d go_p %d mv_pend %d w_pend %d w_out %d wq_n %d rs %d ph %d k %d op_ready %d\n",
+				       r->m2_scsp__DOT__upc, r->m2_scsp__DOT__u_dsp__DOT__dst, r->m2_scsp__DOT__dsp_busy, r->m2_scsp__DOT__dsp_pend,
+				       r->m2_scsp__DOT__u_dsp__DOT__mg_need, r->m2_scsp__DOT__u_dsp__DOT__mg_on, r->m2_scsp__DOT__u_dsp__DOT__stopped,
+				       r->m2_scsp__DOT__u_dsp__DOT__go_p, r->m2_scsp__DOT__u_dsp__DOT__mv_pend, r->m2_scsp__DOT__u_dsp__DOT__w_pend,
+				       r->m2_scsp__DOT__u_dsp__DOT__w_out, r->m2_scsp__DOT__u_dsp__DOT__wq_n, r->m2_scsp__DOT__u_dsp__DOT__rs,
+				       r->m2_scsp__DOT__u_dsp__DOT__ph, r->m2_scsp__DOT__u_dsp__DOT__k, r->m2_scsp__DOT__op_ready);
+#endif
+				return 1;
+			}
 		}
 		uint64_t ec = cyc - c0;
+		if (OVL && ov_park0) {   // R946: max(slots, the run before) + returns and output + boost / go
+			uint64_t sl = ov_park0 - c0, tl = cyc - ov_park1;
+			ec = std::max<uint64_t>(sl, ov_runlen + 2) + tl + 5;
+		}
 		eng_cyc += ec; if (ec > eng_max) eng_max = ec;
 		hist[std::min<uint64_t>(63, ec / 64)]++;
+		{	// SCSP_ECDUMP=<file>: each sample's engine clocks (u16), for a window's mean against the budget
+			static FILE *ecf = getenv("SCSP_ECDUMP") ? fopen(getenv("SCSP_ECDUMP"), "wb") : nullptr;
+			if (ecf) { uint16_t e16 = uint16_t(std::min<uint64_t>(ec, 65535)); fwrite(&e16, 2, 1, ecf); }
+		}
 		int32_t ol = (int32_t)t->out_l_raw, orr = (int32_t)t->out_r_raw;
+		if (OVL) {   // R946: the RTL's sample n is the reference's n - 1
+			static s32 pl = 0, pr = 0, pm0 = 0, pm1 = 0;
+			s32 cl = rl, cr = rr, c0m = mo[0], c1m = mo[1];
+			rl = pl; rr = pr; mo[0] = pm0; mo[1] = pm1;
+			pl = cl; pr = cr; pm0 = c0m; pm1 = c1m;
+			if (n == 0) { ol = rl; orr = rr; mo[0] = ol; mo[1] = orr; }
+		}
 		t->tick44 = 1; tick(); t->tick44 = 0;
 		if (rl || rr) nz++;
 		if (n >= FROM && (ol != rl || orr != rr)) {

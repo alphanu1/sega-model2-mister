@@ -64,7 +64,7 @@ S2 = dict(NONE=0, OUTV=1, DSPGO=2, ACTSET=3, SWINC=4, ICLR=5, IINC=6, MON1=7, MO
 ST = dict(CUR=0, NXT=1, PH=2, VOL=3, RAR=4, RD1=5, RD2=6, RRR=7)
 RI = dict(AR=0, D1R=1, D2R=2, RR=3)       # RATEIDX: imm[1:0] picks the rate field
 R = dict(SMPL=0, SMPR=1, STEP=2, S=3, CURA=4, NA=5, CREM=6, NREM=7, SAFM=8, PH=9,
-         T0=10, T1=11, T2=12)
+         T0=10, T1=11, T2=12, PVL=13, PVR=14)
 
 def m(**kw):
     """one microinstruction; 'mul' is (ma, mb, name), 'P' / 'TBL' name what a P / table use expects"""
@@ -191,6 +191,49 @@ def sample_head():
         (None, m(s2='OUTV', flow='JMP', tgt='IDLE')),
     ]
 
+# R946: THE OVERLAPPED SAMPLE (m2_scsp OVERLAP). The DSP's run for sample n
+# goes on while the slots make sample n+1, so a sample costs the longer of the
+# two, not their sum. A sample's direct sends (after the boost) wait in PVL /
+# PVR; once the slots of the next sample are done and the run is over, its
+# effect returns join them and it goes out -- the stream is MAME's, one
+# sample later. C_GO does not wait for the DSP here (m2_scsp); everything
+# else -- the op windows, the monitor, the output's order -- is the head's.
+def sample_head_ov():
+    return [
+        ('BOOTO', m(op='PASSB', b='IMM', imm=0, rd='PVL')),
+        (None, m(op='PASSB', b='IMM', imm=0, rd='PVR')),
+        ('IDLEO', m(flow='WAIT', bc='GO')),
+        (None, m(op='PASSB', b='IMM', imm=0, rd='SMPL', s2='ICLR')),
+        (None, m(op='PASSB', b='IMM', imm=0, rd='SMPR')),
+        ('DISPATCHO', m(flow='DISPATCH')),
+        (None, m(s2='ICLR')),
+        (None, m(flow='WAIT', bc='DSPIDLE')),           # the run for the sample before
+        (None, m()),
+        ('EFFO', m(op='PASSA', a='EFQ')),
+        (None, m(lw=3, mul=('Q', 'LV', 'e3'))),
+        (None, m(lw=4, mul=('Q', 'LV', 'e4'), s2='IINC')),
+        (None, m(rb='PVL', op='ADD', a='PSL', psl='S12', P='e3', b='RB', rd='PVL')),
+        (None, m(rb='PVR', op='ADD', a='PSL', psl='S12', P='e4', b='RB', rd='PVR',
+                 flow='BR', bc='MOREI', tgt='EFFO')),
+        (None, m(ra='PVL', op='PASSA', a='RA', s1='OUTLRAW')),
+        (None, m(ra='PVR', op='PASSA', a='RA', s1='OUTRRAW')),
+        (None, m(ra='PVL', op='DAC', a='RA', rd='T0')),
+        (None, m(ra='PVR', op='DAC', a='RA', rd='T1', mul=('Q', 'MVG', 'ol'))),
+        (None, m(mul=('Q', 'MVG', 'or'), idx='MSLC', st='CUR', s2='MON1')),
+        (None, m(op='PASSA', a='PSL', psl='S16', P='ol', pred='NMVOL15', s1='OUTL', idx='MSLC', st='VOL',
+                 s2='MON2')),
+        (None, m(op='PASSA', a='PSL', psl='S16', P='or', pred='NMVOL15', s1='OUTR')),
+        (None, m(ra='T0', op='PASSA', a='RA', pred='MVOL15', s1='OUTL')),
+        (None, m(ra='T1', op='PASSA', a='RA', pred='MVOL15', s1='OUTR')),
+        (None, m(s2='OUTV')),
+        # this sample's direct sends, boosted (R894), wait for its run
+        ('BOOSTO', m(ra='SMPL', mul=('RA', 'BST', 'bl'))),
+        (None, m(ra='SMPR', mul=('RA', 'BST', 'br'))),
+        (None, m(op='PASSA', a='PSL', psl='S6', P='bl', rd='PVL')),
+        (None, m(op='PASSA', a='PSL', psl='S6', P='br', rd='PVR')),
+        (None, m(s2='DSPGO', flow='JMP', tgt='IDLEO')),
+    ]
+
 # KEYONEX: MAME's sweep -- every keyed slot in RELEASE starts, every unkeyed
 # one is released (sw = 0..31; the call sets sw = 0)
 def sweep():
@@ -257,6 +300,10 @@ paths = {
     'slot': pre + midn + tail, 'slot+alfo': pre + midn + alf + tail,
     'fm': pre + midf + tail, 'fm+alfo': pre + midf + alf + tail,
 }
+# R946: the overlapped head after everything else, so the words before it --
+# all the non-overlapped engine runs -- are unchanged
+n_base = len(rom)
+for lab, mi in sample_head_ov(): place(lab, mi)
 if len(rom) > 256: raise SystemExit('microcode too long: %d' % len(rom))
 
 # ===================================================================== the checker
@@ -313,6 +360,7 @@ for i, mi in enumerate(rom):
 
 nerr = sum(check(n, s) for n, s in paths.items())
 nerr += check('head', [mi for _, mi in sample_head()][7:])     # from the boost (R894) on
+nerr += check('head_ov', [mi for _, mi in sample_head_ov()][8:])   # R946: from the returns on
 nerr += check('sweep', [mi for _, mi in sweep()][6:])
 
 # ===================================================================== encode
@@ -382,8 +430,8 @@ def main():
                 h.write('localparam int %s_%s = %d;\n' % (tname, k, v))
         for k, v in sorted(labels.items(), key=lambda x: x[1]):
             h.write('localparam logic [7:0] UA_%s = 8\'d%d;\n' % (k, v))
-    print('microcode: %d of 256 words; F %d bits, E %d bits; slot %d / %d / %d / %d microinstructions'
-          % (len(rom), fw, ew, len(paths['slot']), len(paths['slot+alfo']), len(paths['fm']),
+    print('microcode: %d of 256 words (%d before the overlapped head, R946); F %d bits, E %d bits; slot %d / %d / %d / %d microinstructions'
+          % (len(rom), n_base, fw, ew, len(paths['slot']), len(paths['slot+alfo']), len(paths['fm']),
              len(paths['fm+alfo'])))
 
 if __name__ == '__main__':

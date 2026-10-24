@@ -15,7 +15,11 @@
 `timescale 1ns/1ps
 
 module m2_recip_rom #(
-  parameter int unsigned TN = 256
+  parameter int unsigned TN = 256,
+  // R948: 1 = the table in M10K, one true-dual-port ROM (256 x 32: two
+  // blocks); 0 = the two LUT copies below. The same table and the same
+  // timing either way: data one cycle after the address.
+  parameter bit          M10K = 1'b0
 ) (
   input  logic        clk,
   input  logic [$clog2(TN)-1:0] a_addr,
@@ -47,18 +51,38 @@ module m2_recip_rom #(
   // failed again at 556 M10K of 553 with the table as two altsyncrams.
   // "logic" builds it out of LUTs (and the fitter's own RAM-to-MLAB pass may
   // take it from there), which is what this design has spare.
-  (* romstyle = "logic" *) logic [31:0] recip_a [TN];
-  (* romstyle = "logic" *) logic [31:0] recip_b [TN];
-  // ceil(2^32/d). Entry 0 is never read - a zero denominator is trapped by the
-  // divider - and entry 1 would be 2^32, which the divider special-cases.
-  initial begin
-    for (int d = 1; d < int'(TN); d++) begin
-      recip_a[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
-      recip_b[d] = recip_a[d];
+  // R948: THE M10K FORM. 280 ALUTs of logic for two blocks, on a design whose
+  // ALMs ran out before its M10K did. The block registers the address where
+  // the LUT form registered the data, so the data arrives on the same cycle
+  // and the dividers are untouched. The data now comes from the block's
+  // output, not a flip-flop: the path into S_MUL's multiply had 3.45 ns of
+  // slack at 80 MHz on s1439 (from a_data / b_data to q_fast); the block's
+  // clock-to-out takes part of it. The fit's clk_sys report is the check.
+  generate if (M10K) begin : g_m10k
+    (* romstyle = "M10K" *) logic [31:0] recip [TN];
+    initial begin
+      for (int d = 1; d < int'(TN); d++) begin   // m2_recip_rom's idiom (R444): begin / end, longint'
+        recip[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
+      end
     end
-  end
-  always_ff @(posedge clk) begin
-    a_data <= recip_a[a_addr];
-    b_data <= recip_b[b_addr];
-  end
+    always_ff @(posedge clk) begin
+      a_data <= recip[a_addr];
+      b_data <= recip[b_addr];
+    end
+  end else begin : g_logic
+    (* romstyle = "logic" *) logic [31:0] recip_a [TN];
+    (* romstyle = "logic" *) logic [31:0] recip_b [TN];
+    // ceil(2^32/d). Entry 0 is never read - a zero denominator is trapped by the
+    // divider - and entry 1 would be 2^32, which the divider special-cases.
+    initial begin
+      for (int d = 1; d < int'(TN); d++) begin
+        recip_a[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
+        recip_b[d] = recip_a[d];
+      end
+    end
+    always_ff @(posedge clk) begin
+      a_data <= recip_a[a_addr];
+      b_data <= recip_b[b_addr];
+    end
+  end endgenerate
 endmodule

@@ -40,7 +40,8 @@ module m2_scsp_cache #(
   input  logic [15:0] snp_line,
   input  logic        snp2,
   input  logic [15:0] snp2_line,
-  output logic [31:0] dbg_fills
+  output logic [31:0] dbg_fills,
+  output logic        sn2_busy             // R946: a snp2 not yet through (its invalidation not written)
 );
 
   localparam int unsigned TW = 16 - IDX;    // tag bits
@@ -81,6 +82,7 @@ module m2_scsp_cache #(
   wire         pick = sn_pend[0] ? 1'b0 : 1'b1;            // the source to read next
   wire         want = sn_pend[0] || sn_pend[1];
 
+  assign sn2_busy = sn_pend[1] || (sn_cmp && sn_who);
   always_ff @(posedge clk) if (land) dram[f_line[IDX-1:0]] <= m_data;
   assign fill_done = land;                 // the line, as it arrives
   assign fill_data = m_data;

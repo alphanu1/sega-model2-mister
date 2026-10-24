@@ -66,7 +66,8 @@ endmodule
 module m2_scsp #(
   parameter bit FM        = 1'b1,
   parameter bit MIDI_OUT  = 1'b1,
-  parameter bit LFO_NOISE = 1'b1
+  parameter bit LFO_NOISE = 1'b1,
+  parameter bit OVERLAP   = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -111,7 +112,8 @@ module m2_scsp #(
   output logic signed [31:0] dbg_slot_smp,
   output logic [31:0] dbg_samples,
   output logic [31:0] dbg_miss,
-  output logic  [3:0] dbg_mvol
+  output logic  [3:0] dbg_mvol,
+  output logic  [1:0] dbg_ov
 );
   import "DPI-C" function void c6_step(input bit rst, output bit go, output int line);
   import "DPI-C" function void c6_hit(input int line, input longint data);
@@ -131,7 +133,7 @@ module m2_scsp #(
   assign midi_ack = 1'b0; assign mout_data = 8'd0; assign mout_valid = 1'b0;
   assign out_valid = 1'b0; assign out_l_raw = '0; assign out_r_raw = '0; assign out_l = '0; assign out_r = '0;
   assign quiet = 1'b1; assign dbg_slot_valid = 1'b0; assign dbg_slot = '0; assign dbg_slot_smp = '0;
-  assign dbg_samples = '0; assign dbg_mvol = '0;
+  assign dbg_samples = '0; assign dbg_mvol = '0; assign dbg_ov = '0;
 
   // ---- the DSP's write, for the slot cache's second snoop (m2_scsp: dsp_wr_done / dsp_wr_addr)
   logic        wr_done;

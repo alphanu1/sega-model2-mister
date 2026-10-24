@@ -1,5 +1,162 @@
 # Handoff
 
+## 2026-10-24 (evening): int-2a / int-2c -- the finished work merged for fitting (R952 integrated). LOCAL, NOT PUSHED, NOT FITTED
+
+  * int-2a (worktree sm2-builds/int-2a) = room2-2a 514c411 + R951 (rally-sky
+    32ca36a, 3110ef9) + R949 (hotd-mix 4cdb9c1, LERP only: the 2A line has no
+    OVERLAP). Builds from Model2.qsf as it is. quartus_map 38,918 ALMs needed
+    (room2-2a 38,718), DSP 99.
+  * int-2c (worktree sm2-builds/int-2c) = room2-2c f19e275 + R951 (the 2C
+    patch, no DIL) + R951 study + R949 + the reciprocal table's LUT form as
+    the default (M2_RECIP_M10K=1 for the M10K one; M2_RECIP_LOGIC not needed
+    any more) + "M2_2C=1" / "M2_NO_2A_MANX_MOTION=1" committed in its qsf.
+    quartus_map 38,935 ALMs needed (room2-2c 38,774), DSP 105.
+  * M2_2A_SND_LERP is 1 in both builds (the map's parameter settings say
+    LERP 1); UVCL 1 on the raster.
+  * Evidence (study R952, INTEGRATED): lint_top clean, lint_idx 111 / 113;
+    make test PASS both; fill miter with UVCL 0 against room2: 0 differing
+    in 109,964,114 / 107,610,021 cycles; Rally walks 4074-4082 15 -> 0 sky
+    dots in the integrated tree; Dynamite Cop 20 s LERP 0 identical to the
+    parents, LERP 1 PASS with the interpolated values in the output.
+  * Merge notes: m2_raster_fill's R951 block landed unchanged on room2's
+    restructured fill (S_OZ untouched by room2); conflicts were parameter
+    lists, the geodiff printf (QCYC + trow), the sound define blocks and the
+    docs (R949 placed before R950, R951 before R952).
+  * NEXT: fit both (Ben). Watch clk_sys at the UVCL clamp (MLAB read ->
+    m2_texel_x2 request) and R952's 2C projector / clipper paths.
+
+## 2026-10-24: room2-2a / room2-2c -- more ALM room by making things smaller (R952). LOCAL, NOT PUSHED, NOT FITTED
+
+quartus_map 17.0, ALMs needed: 2A 40,225 -> 38,718 (-1,507; branch room2-2a
+off bridge-r937-2a 77a4689, which now also carries R948's cache merge and
+i960 sums); 2C 40,133 -> 38,774..38,842 (-1,359..-1,291, two maps of the
+same logic; branch room2-2c off room-2c c9ee859; build with "M2_2C=1",
+"M2_NO_2A_MANX_MOTION=1", "M2_RECIP_LOGIC=1" as before). Nothing switched
+off; every change old-against-new identical, cycle for cycle. M10K: 2A -1
+(expected 549 of 553), 2C unchanged; one MLAB more (i960 regs).
+  * Geometry: the eight u2f two, a vertex a cycle; the eight per-cycle f2uvw
+    gone (the clipper keeps f2uvw of its coordinates); the projector's two
+    mag8 one; the engine's header adders one. Fill: one normaliser for the
+    six numerators; one adder per edge accumulator; each plane's two corner
+    products summed once.
+  * i960 (fpmisc, regs MLAB, ALU shifters, interrupt sums, dividers), fp_mul
+    SUBNORM, TGP ALU, tgpx4_cvt -- helper branches room2-i960-2a/-2c and
+    room2-snd-2a/-2c, cherry-picked.
+  * NEW: sim/miter/miter.py (old-against-new miter generator), fill.sh,
+    geo.sh; tb_clip_top asserts the clipper's new copy; geodiff M2GD_QCYC=1.
+  * FIT CHECKS: clk_sys near the projector / clipper states on 2C (s1462's
+    project sst -> clip kst had 0.199 ns), and the M10K count.
+  * Not taken (see R952): clipper operand select (+46), fpadd sticky mask
+    (0.503 ns path), fp_add sentinel (timing), the colour cache's 256 valid
+    flags (flash clear), the store's bank mux (near-critical).
+
+## 2026-10-24: room-2a / room-2c -- ALM room by making things smaller (R948). LOCAL, NOT PUSHED, NOT FITTED
+
+quartus_map 17.0, ALMs needed: 2A 40,317 -> 40,070 (-247, branch room-2a off
+bridge-r937-2a 8fa6643); 2C 40,307 -> 39,943 (-364, branch room-2c off
+hotd-dsp b0f75a0; build with "M2_2C=1", "M2_NO_2A_MANX_MOTION=1" as before).
+Nothing switched off; every change cycle-identical.
+  * m2_recip_rom in two M10K, read on the LUT table's cycle (280 ALUTs + 64
+    registers -> 0; M2_RECIP_LOGIC=1 puts the LUT copies back). Paid for by
+    m2_2a_sound's line cache ({valid, tag} one array: -1 M10K). M10K
+    expected 2A 551, 2C 550 of 553 -- check the fit's RAM summary, and
+    clk_sys through m2_raster_div (the ROM's data now leaves an M10K; the
+    path had 3.45 ns slack on s1439).
+  * i960_top: repeated sums (branch target, ip + 4 / + 8, interrupt table
+    addresses) formed once: -48 / -59 ALUTs.
+  * Built and reverted (switch-offs): 2C game-ID narrowing (-139); 2C F2A
+    off (-288, unsafe: STCC runs atanr); remr / movre off (noise).
+  * Benches: tb_m2_raster_div_lat (new, cycle-exact) 0 differ; fill / mip /
+    m2cov / dil / raster3d logs byte-identical to the parents' with the M10K
+    table; tb_m2_2a_sound DOA 20 s log and WAV identical; i960 lockstep
+    top / irq / lat / vc / fr / fx / ring / dc / c2 PASS; lint_top 2A,
+    M2_NO_2A, 2C.
+
+## 2026-10-24 (afternoon): hotd-mix (off hotd-dsp fb539c4, LOCAL) -- the sound path audited (R949). NOT PUSHED, NOT FITTED
+
+Ben: HOTD chapter 2 "music far too loud over the shots, tinny clipping";
+Dynamite Cop (2A, defaults) "box break makes you jump"; "it's the SOUND PATH".
+  * TINNY = THE OUTPUT PATH, every game, since R788 took the framework's IIR
+    filter out: audio_out samples the core's 44.1 kHz staircase at 48 kHz
+    unsmoothed, so bright sounds alias into 4-16 kHz (4 kHz tone: spurs at
+    -16 dB; HOTD's FM voice, sample 0x028C0, half its energy at 16-24 kHz,
+    aliases to 8.5 dB below itself -- it plays from the chapter-1 boss on).
+    FIX: rtl/sound/m2_snd_lerp.sv (linear interpolation, updated every 64
+    clocks), M2_2A_SND_LERP default 1 (2A and 2C). FM voice 8.5 -> 15.9 dB,
+    the rest 24.9 -> 40.4 dB; 123 ALM / 190 regs / 3 DSP alone (quartus_map).
+    Bench make test_m2_snd_lerp PASS; tb_m2_2a_sound with LERP PASS.
+  * LEVELS NOT REPRODUCED for HOTD. Whole board (fx68k + SCSP + sound RAM on
+    MAME's MIDI): Dcop 0-40 s = R914 reference +0.09 dB, HOTD 0-40 s +0.05 dB,
+    key-ons identical to MAME's. Core vs MAME per category (scsp_mixcat):
+    HOTD ch2 0.0-0.7 dB; Dcop effects +2.1 / +2.6 (R914's real reverb), its
+    music +0.1; VF2 / DOA music down (R914, accepted). Boost, Volume clamp,
+    output stage ruled out. srg320's Saturn SCSP (reference only, NO LICENCE
+    FILE, nothing copied): same scales everywhere, same float format, and
+    MADRS decoded at 0x780-0x7BF only -- confirms R914. EG key scaling differs
+    (OCT weight), measured <= 0.1 dB.
+  * RTL: tb_m2_scsp OVERLAP on, all 719 s of the new chapter-2 capture: 0
+    differ; Dcop (2A) 179 s 0 differ, engine max 2,038 clocks, free-running 0
+    underruns.
+  * Captures (git-ignored): build/scsp/ch2 (hotd play to chapter 2, 720 s),
+    build/scsp/dcop (180 s); clips build/scsp/clips/*.wav (MAME vs core);
+    build/board/ (whole-board WAVs, traces).
+  * NEXT: fit with LERP (both builds); ask Ben's Volume / Raw Sound Boost /
+    audio-filter preset (sys aud_mix_top's vol_boost waveshaper is still
+    live with the IIR gone); a board recording of HOTD ch2 vs the clips; the
+    'M' MIDI probe if the board still differs.
+  * Wrong turns: first numbers fed MAME's register writes (not the core's
+    68000) -- Ben was right to ask; the whole-board run then agreed anyway.
+
+## 2026-10-24: hotd-dsp -- R946 made small (R947). NOT PUSHED, NOT FITTED
+
+The 2C build is full (~41,400 / 41,910 ALM), so the fix is now the OVERLAP
+alone: WPOST (posted ring writes) OFF in every build, kept as a bench
+parameter. Measured alone, WPOST does not clear the tutorial (90 underruns at
+6-40); the overlap does: tutorial 1,016-1,047 clocks at 6-40 (42% margin),
+1,464-1,471 at 15-90 (19%), 0 underruns step and free-running at both. Two
+trims (one MIXS adder; the level-row banks turn on a pending bit). quartus_map
+17.0, 2C build: model2c 40,162 ALMs needed -> R946 40,547 (+385) -> R947
+40,279 (+117); ABORT_MERGE = 0 (new parameter, default 1) would make it 40,251
+(+89) with every game's output unchanged. M10K unchanged. 0 differ: HOTD 95 s
+(6-40, 15-90, 1-400), 330 s; DOA, VF2, VC2, ZG, Rally 30 s. Beyond the board's
+band (25-150) only both halves together hold (~1,700 vs ~2,005).
+BUILD TO FIT: hotd-dsp HEAD with Model2.qsf + "M2_2C=1",
+"M2_NO_2A_MANX_MOTION=1" (M2_2A_SND_OVL defaults to 1 under M2_2C).
+
+## 2026-10-23 (late night): branch hotd-dsp (off model2c 5c2caca, LOCAL) -- House of the Dead's tutorial-screen wobble / clipping (R946). NOT PUSHED, NOT FITTED
+
+REPRODUCED in the bench: the SCSP engine runs past its 1,814 clocks a sample in
+the attract's tutorial at LIGHT port latency (6-40 clk_sys, VF2's measured board
+band): HOTD's 112-step DSP program waits on ~14 SDRAM transactions a sample
+(R914's real taps make 4.25 of them cache misses; MAME's mirror 0.5) and the
+tutorial's slot traffic is the heaviest in the attract. FIFO model: 12,020
+underruns in 95 s, 1,500-2,600 a second at 81-85 s; 2A games 0. Free-running
+SCSP bench (new SCSP_FREE, the board's 7-ahead FIFO): 12,396 underruns, 712-
+2,528 a second at 81-85 s (MAME's mirror 671). The DSP's
+values are fine (reference = RTL, no growth, no clamping, 0 clipped samples in
+330 s); the ring (0x70000-0x7FFFF) overlaps nothing; R914 stands.
+  * Fix: M2_2A_SND_OVL (2C only): the DSP run for sample n under sample n+1's
+    slots (microcode head appended; MIXS two banks; effect level rows and MVOL
+    latched at DSPGO; output one sample late) + WPOST (ring writes posted, an
+    8-entry queue). HOTD tutorial 1,881-1,922 -> 979-1,018 clocks, 0 underruns
+    (step model and free-running, 6-40 and 15-90; 25-150: 1,408,967 -> 103). 0 differ from the reference (HOTD 95 s, DOA, VF2, VC2, ZG,
+    Rally 30 s). 2A off: engine clocks identical to model2c's.
+  * Area (scsp_area_top): +312 ALMs, +374 regs, +1 MLAB, M10K unchanged (21).
+  * Commits efd38fe (RTL + benches), then the bench / study commit after it.
+    The whole board (tb_m2_2a_sound) with SND_SHIFT did NOT bring the
+    tutorial's sound (dropped MIDI) -- unusable; unshifted it needs ~3.5 h. Capture: build/scsp/att1 (git-ignored,
+    MAME attract 330 s). Scratch FIFO model: scratchpad dsp/fifo.py.
+  * Probe expectation (s1424-s1426): 'T' underruns climbing in the tutorial
+    with 'L' waits in the light band and 'S' ~2.4 M/s = this cause; 'L' 250+
+    and >=256 counts = starvation; loudest sample near full scale with no
+    underruns = a DSP value fault.
+  * Not done: fit; board; chapter 2 itself not captured (the later-stage
+    attract demo at 302 s+ is the nearest); 2A OVERLAP left off (VC2 margin).
+  * Wrong turns kept in R946: WPOST without the queued-line check (stale
+    hits), the write-beats-its-snoop race at latency 1-400, a lost go with the
+    0xBF0 write (VF2 hang), returns using the next sample's EFSDL, a +631-ALM
+    register shadow, the queue inferred as AUTO RAM.
+
 ## 2026-10-23 (night): branch ee-save-2c (off model2c, LOCAL) -- the 93C46 EEPROM in the NVRAM file (R945, #15 / #21). NOT PUSHED, NOT FITTED
 
 Every 2A / 2B / 2C game keeps its test-menu settings in the 93C46 (MAME

@@ -45369,3 +45369,1147 @@ M2_2A_SND_OVL (DSP overlapped with the next sample's slots + a posted ring
 write queue), 2C only, sample-exact, +312 ALM -- being shrunk before any
 fit. The sound probe (s1436-s1438, cut to place) fitted with clk_mem -3.4 /
 clk_sys -3.1 ns: too far off timing to trust a measurement, not used.
+
+**R946 -- HOUSE OF THE DEAD'S "HUGE WOBBLE AND CLIPPING" IN THE ATTRACT'S
+TUTORIAL SCREEN (s1423 with AGE; first heard on s1373, clean timing) IS THE
+SCSP ENGINE RUNNING PAST ITS 1,814 CLOCKS A SAMPLE AT LIGHT PORT LATENCY. THE
+GAME'S DSP PROGRAM (112 STEPS; 23 RING READS AND 10 RING WRITES A SAMPLE, THE
+STEPS WAITING ON EACH SDRAM TRANSACTION) TAKES ~1,000 CLOCKS IN SILENCE, AND
+THE TUTORIAL'S SLOT TRAFFIC -- THE HEAVIEST IN THE ATTRACT -- ADDS ~900: THE
+OUTPUT FIFO UNDERRUNS THERE AND NOWHERE MUCH ELSE, WHATEVER THE 3D LOAD. NOT
+THE DSP's ARITHMETIC, NOT THE RING'S PLACE, NOT R914's VALUES, NOT SDRAM
+STARVATION. REPRODUCED IN THE BENCH. FIXED IN THE BENCH: THE DSP's RUN FOR
+SAMPLE n GOES ON UNDER THE SLOTS OF SAMPLE n+1 AND ITS RING WRITES ARE POSTED
+(M2_2A_SND_OVL, ON IN THE 2C BUILD ONLY; 2A UNCHANGED CLOCK FOR CLOCK). BRANCH
+hotd-dsp (OFF model2c 5c2caca), LOCAL ONLY, NOT FITTED.**
+
+*Believed (the task):* the SCSP's DSP. R943 found the core bit-exact against
+MAME except through R914's MADRS decode (the core keeps the delay taps, MAME
+zeroes them); HOTD might be the first game whose reverb leans on them -- a DSP
+that grows or feeds back, a ring that lands on sample or program data in
+sound RAM (fine at first, worse later), or an R914 that is right for DOA only.
+A light-load screen being bad argued against R943's starvation.
+
+*The capture (new, MAME 0.289 + p16, m2lod, hotd, default nvram = JAPAN,
+attract only, no coin, 330 s, a snap every 5 s; sm2-builds/hotd-dsp/build/
+scsp/att1, git-ignored):* the attract cycles every ~105 s: intro 15-50 s, the
+demo 50-70 s, THE TUTORIAL (life marks, "lose them all and the game is over",
+then reloading) 70-86 s -- again at 175-190 s and 280-295 s -- and from 302 s
+a later stage's demo with its own DSP program.
+
+*Ruled out (measured):*
+  1. THE DSP's VALUES. scsp_ref.h (= the RTL, R943) replayed with R914's
+     decode and with MAME's mirror, 330 s: the tutorial's mix RMS 2,045-2,122
+     (mirror 1,957-2,028), peak 23,916 of the DAC's +-131,071, 0 clamped
+     samples in 330 s either way. R914's return differs from the mirror's by
+     550-640 RMS (~-12 dB under the mix, a reverb), flat from 30 s to 330 s:
+     no growth, no feedback, no clipping. tb_m2_scsp (latency 6-40, the RTL
+     against the reference, 95 s): 0 samples differ, 46,525,259 slot samples
+     right.
+  2. THE RING. RBP 0x38, RBL 32 K words: bytes 0x70000-0x7FFFF of the 512 KB
+     sound RAM, in MAME as in the core (RAM_BASE + 18 bits). The 68000 writes
+     there only five zero-clears at program loads; no slot ever reads at or
+     above 0x70000 (the highest slot page 0x6F000); the 68000's streams use
+     0x3A000-0x6FFFF. MAME's own DSP writes the whole ring too (min 0x70000,
+     max 0x7FFFE). No alias, no overlap.
+  3. R914 FOR HOTD. The driver writes a 29-tap table (0x0877-0x4776, inside
+     the 32 K ring) and then 32 zero words to 0x7C0, as every 2A driver; with
+     the taps the program is an ordinary reverb (item 1). R914 stands. What it
+     changes for HOTD is TIME: real taps sit on different ring lines, so the
+     DSP's read cache misses 4.25 times a sample (MAME's mirror: 0.50) -- 23.0
+     reads and 10.0 writes a sample either way.
+  4. The tutorial uses no LFO, FM or noise (PCM8, loops 0 / 1). The later
+     stage's demo (302 s on) has a PCM16 slot with FM (MDL only) and a
+     triangle pitch LFO -- not in the tutorial; the bench checks it bit-exact
+     where it plays (see the full run below).
+
+*THE CAUSE (tb_m2_scsp, new SCSP_ECDUMP: each sample's engine clocks; a
+model of the board's 8-sample output FIFO drained every 1,814 clocks, the
+engine starting a sample when there is room -- scratch fifo.py):*
+  engine clocks a sample, second by second (latency 6-40 clk_sys, the band
+  R877 found VF2's board in):
+                      silence  demo 58 s  tutorial 70  81    82    83    84 s
+    R914 (the core)    1,036    1,662       1,736  1,772 1,881 1,889 1,922
+    MAME's mirror        921    1,547       1,621  1,657 1,766 1,774 1,807
+  FIFO underruns (8 deep): R914 12,020 in 95 s -- first at 54 s (the demo,
+  25-500 a second), then the tutorial 81-85 s: 554 / 1,591 / 1,494 / 2,570 /
+  1,955 a second (up to 6% of samples); the mirror 731 (max 209 a second).
+  At 15-90: R914 357,141 (from 30 s on), the mirror 129,881; at 25-150 even
+  silence is over budget (2,036). THE 2A GAMES AT 6-40, 30 s each: DOA 671
+  mean / 1,463 max, VF2 849 / 1,577, Virtua Cop 2 1,114 / 2,117, Zero Gunner
+  1,369 / 2,225 -- 0 underruns each (Ben: all four sound right on the board).
+  Slot line fills a sample (the reference's cache model): the tutorial 3.0-
+  6.0, the attract's demo 2-3, chapter 1 play (R943's capture) 0.3-2.6. The
+  tutorial is the heaviest sound in the game's attract, and that -- not the
+  picture -- is what runs the engine over. The engine is serial: slots, then
+  the DSP's 112 steps, each memory step waiting for the SDRAM (a write holds
+  the next memory step until it lands, a miss until its line does), so its
+  time is ~(compute) + ~14 transactions x latency. AGE (R943) shortens the
+  arbiter's tail under load; it does nothing for this floor.
+  FREE-RUNNING (tb_m2_scsp's new SCSP_FREE: the engine as m2_2a_sound runs
+  it -- out_ready while fewer than 7 wait, a drain every 1,814.06 clocks with
+  tick44 / tph / cpu_tick as the board makes them, MAME's writes, RAM writes
+  and MIDI applied as samples drain; nothing compared), 95 s:
+                         6-40 underruns   15-90
+    R914 (as built)      12,396           297,275
+    MAME's mirror           671           117,625
+    R914, second by second at 6-40: 0 to 53 s; 108 at 54 s, then 0-521 a
+    second through the demo and the tutorial's start; 81-85 s 712 / 1,743 /
+    2,092 / 2,528 / 1,295; 0 after (86-95 s). The RTL's mix there is the
+    scene's (RMS 1,800-2,600, as MAME's), so the scene did play. The step-
+    mode model above (12,020) was right.
+  THE WHOLE 330 s (step model, 6-40): 35,319 underruns, the same burst at
+  every pass of the tutorial -- 81-85 s, 188-191 s (1,704-2,321 a second),
+  293-296 s (1,408-2,453) -- and a scatter of 0-500 a second in the demos
+  before it; the later stage's demo (302 s on) runs 1,036-1,253 clocks and
+  does not underrun. So the attract starts clean and goes bad ~80 s in, every
+  ~105 s after: Ben's "fine at first, appeared later".
+  WHAT THE BOARD HEARS: ~4-6% too few samples in the tutorial -- pitch and
+  tempo sag with the scene's sound (the wobble), each underrun holds the last
+  sample (flat tops: the "clipping", crackle), and the 68000, on drained-
+  sample timers, streams in real time into rings the slots now play late
+  (fuzz, wrong echoes). R943's starvation is the same symptom from the other
+  end; s1373's clean timing and the light-load screen both fit this.
+
+*THE FIX (M2_2A_SND_OVL; m2_scsp OVERLAP / WPOST, m2_scsp_dsp, m2_scsp_level,
+m2_scsp_cache, scsp_uasm.py's overlapped head):*
+  1. OVERLAP. The microcode's new head (after all old words: the 123 words
+     the 2A engine runs are byte-identical) issues DSPGO for sample n last and
+     goes straight on to sample n+1's slots; after them it waits for that run,
+     adds its effect returns to sample n's direct sends (held in PVL / PVR,
+     after the boost) and outputs sample n. A sample costs max(slots, DSP)
+     + the returns, not their sum; the stream is MAME's one sample later.
+     To keep MAME's mix exact: MIXS is two banks (the slots fill one while a
+     run reads the other; a stopped DSP takes no bank; an abandoned run's
+     sends are merged once the slots are parked); the effect words (level
+     words 3 / 4 of slots 0-15) and MVOL / DAC18 are read as they were at the
+     DSPGO that ended the sample (two banks of level rows, the unused rows 6
+     / 7; registers latched at DSPGO), since the 68000's writes for sample n+1
+     land before sample n's returns; a DSP op -- and 0x402 (RBL / RBP) --
+     waits for a run and for a go not yet taken.
+  2. WPOST. The ring writes go into an eight-entry queue (a shift register)
+     once their step's read is in; a fill waits for the queue to empty; a
+     read of a line with a queued write -- or of the last write's line while
+     its snoop is still on its way -- is a miss. Reads still see every earlier
+     write and no later one. The port time stays; the steps no longer wait.
+  Off (2A): every R946 path is a generate / parameter branch; the engine
+  clocks of DOA, VF2, Virtua Cop 2, Zero Gunner (30 s each) and HOTD (34 s)
+  are identical sample for sample to model2c's (DOA, VC2, HOTD rerun on the
+  final RTL).
+
+*Benches (final RTL):*
+  * tb_m2_scsp, HOTD attract, 95 s, both on (SCSP_OVL=1): 0 differ from the
+    reference (shifted a sample), 46,525,259 slot samples right; engine clocks
+    a sample, latency 6-40:
+                      silence  demo 58 s  tutorial 70  81    82    83    84 s  mean / max
+    R914, as built     1,036    1,662       1,736  1,772 1,881 1,889 1,922  1,324 / 2,437
+    OVERLAP only       1,003    1,009       1,014  1,016 1,028 1,035 1,047  1,001 / 1,450
+    WPOST only           874    1,500       1,573  1,610 1,719 1,727 1,759  1,163 / 2,258
+    both (2C)            841      877         894    909   979   987 1,018    849 / 1,443
+    FIFO underruns: 12,020 -> 0 (OVERLAP only 0, WPOST only 90). Free-
+    running (SCSP_FREE), 95 s: 0 at 6-40 and 0 at 15-90 (as built: 12,396
+    and 297,275). At 15-90:
+    both 1,124 mean / 2,115 max, tutorial 1,163-1,230, 0 underruns (was
+    357,141). At 25-150: 1,689 mean / 2,934 max, flat ~1,700 (the DSP's run,
+    no longer the scene), 103 underruns (was 1,408,967; the mirror 594,691).
+    The same run at latency 1-400 (34 s): 0 differ. The whole 330 s capture
+    (6-40; the later stage's demo with its own DSP program, the PCM16 slot
+    with FM and a pitch LFO): 0 differ, 164,918,992 slot samples right,
+    847 mean / 1,445 max, 0 underruns (as built: 1,320 / 2,445, 35,319).
+  * The 2A captures with OVERLAP on (30 s each, 6-40), 0 differ every one:
+    DOA 671 -> 477 mean (1,463 -> 982 max), VF2 849 -> 590 (1,577 -> 999),
+    Virtua Cop 2 1,114 -> 709 (2,117 -> 1,294), Zero Gunner 1,369 -> 826
+    (2,225 -> 1,501), Sega Rally 262 -> 231 (no DSP program).
+  * tb_m2_scsp_dsp, 500 random programs (memory on any step, aborts), 0 EFREG
+    and 0 RAM words wrong in every case: both on at 6-40 and at 1-400; WPOST
+    alone, OVERLAP alone and neither at 1-400; both on at 1-400 with seeds 2,
+    4 and 6 (150 programs each). The bench now waits for the port to be quiet
+    for 32 clocks before it compares RAM (the queue, and the last step's write
+    waiting on its read, run on after done).
+  * BUGS THE BENCHES CAUGHT ON THE WAY (kept): (a) WPOST without the queued-
+    line check: 500 random programs at 6-40 gave 216,559 EFREG wrong -- a
+    write's invalidation is not instant, a following read hit the stale line;
+    (b) at latency 1-400, a write can land before its own invalidation is
+    through the cache's snoop path: the last-write-line check; (c) OVERLAP
+    dropped a go that came with the 68000's 0xBF0 write (VF2 hung at sample
+    17,727): DSP ops now wait out a pending go, and such a go is latched;
+    (d) the first OVERLAP compared sample n-1's returns with the EFSDL the
+    68000 wrote for sample n (VF2 1 sample wrong at 18,180): the level-row
+    banks; (e) a register-array shadow for (d) cost +631 ALMs -- replaced by
+    the unused level rows; (f) the queue as an indexed array was inferred as
+    an AUTO RAM (could land in M10K): now a shift register.
+
+*TRIED AND NOT USABLE (kept):* the whole board (tb_m2_2a_sound, fx68k on
+epr-19720) reaches 86 s of attract only in ~3.5 hours, so it was run with
+SND_SHIFT=39.7 SND_SHIFT_AFTER=48.7 SND_MIDI_DROP=1 (MAME's MIDI from 48.7 s
+moved 39.7 s earlier, 9-48.7 s dropped) to bring the tutorial to 30-45 s.
+It did not bring the tutorial's sound: with the attract's earlier MIDI gone
+the 68000 played almost nothing (port 6: 772 slot fills a second, against
+the tutorial's 130-260 K; its level 0 for most of 20-46 s), so its "FIFO
+found empty 0 times" says nothing either way. A shifted replay is no
+substitute when the scene's sound depends on what was started before it.
+
+*AREA (quartus_map 17.0, sim/sound/scsp_area_top.sv, virtual pins):*
+                          ALMs needed  registers  MLAB bits  block bits  M10K RAMs
+    model2c 5c2caca          2,071       1,718      5,184     178,560     21
+    hotd-dsp, OVERLAP 0      2,074       1,718      5,184     178,560     21
+    hotd-dsp, OVERLAP 1      2,383       2,092      5,504     178,560     21
+  (+312 ALMs, +374 registers, one 16 x 20 MLAB -- MIXS's second bank; the
+  same 21 M10K RAMs. The 2C build is at 549 / 553 M10K: unchanged.)
+
+*Checks:* lint_top clean on 2A and on -DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1;
+lint_idx (2C): no candidate in a changed file.
+
+*NOT DONE:* not fitted, not on a board. Chapter 2 itself is not in a capture
+(MAME's play scripts never reach it); the later-stage attract demo (302 s
+on) is the nearest. Whether to turn OVERLAP on for 2A: Virtua Cop 2 sits at
+2,117 max / 1,114 mean on the board's band today (0 underruns) -- a margin,
+not a fault; 2A stays off until Ben asks.
+
+*THE BOARD PROBE (s1424-s1426, M2_PROBE + M2_PROBE_L), what it should show in
+the tutorial (70-86 s after the attract starts):*
+  this cause: 'T' -- the underrun count climbs in the tutorial (and a little
+  in the demo before it), ~100-250 per T record there, ~0 elsewhere (it is a
+  saturating 16-bit total: read the steps, and it stops at 65,535); the
+  loudest |left| stays far from full scale (the "clipping" is held samples,
+  not overflow); 'L' -- the sound ports' longest waits in the light band
+  (tens to ~150 clk_sys), port 6 / 7 waits >= 256 ~0; 'S' -- the 68000 near
+  MAME's ~2.4 M bus cycles a second (its timers count drained samples).
+  starvation (R943): 'L' longest waits 250+ (saturating 1,023) with a count
+  of >= 256 waits, the 68000's bus cycles well down, underruns following the
+  3D load rather than the tutorial.
+  a DSP value fault: no underruns, the loudest sample at or near full scale.
+
+**R947 -- R946 MADE SMALL FOR THE 2C BUILD (~41,400 / 41,910 ALM): THE OVERLAP
+ALONE, WPOST OFF, TWO TRIMS -- +117 ALMs ON THE 2C MAP INSTEAD OF +385, THE
+SAME OUTPUT AND 0 UNDERRUNS IN THE TUTORIAL AT 6-40 AND 15-90. BRANCH
+hotd-dsp, LOCAL ONLY, NOT FITTED.**
+
+*Each half measured alone (tb_m2_scsp, HOTD attract 95 s, engine clocks a
+sample in the tutorial 81-84 s / underruns of the 8-deep FIFO model; and
+free-running, SCSP_FREE):*
+                          6-40                          15-90
+    as built (R914)       1,772-1,922 / 12,020 (free 12,396)   2,364-2,557 / 357,141 (free 297,275)
+    WPOST alone           1,610-1,759 / 90                     --
+    OVERLAP alone         1,016-1,047 / 0 (free 0)             1,464-1,471 / 0 (free 0)
+    both (R946)             909-1,018 / 0 (free 0)             1,163-1,230 / 0 (free 0)
+  WPOST alone does not clear the tutorial (90 underruns, 3-11% margin). The
+  OVERLAP alone does, with 42% margin at 6-40 and 19% at 15-90: the engine
+  becomes the DSP's run (flat ~1,000 / ~1,460 clocks whatever the scene), not
+  the slots. Where WPOST still earns its keep is beyond the board's measured
+  band: at 25-150 the overlap alone sits at ~2,005 (over budget even in
+  silence; as built 2,036 in silence), both together at ~1,700 (103
+  underruns). WPOST stays in the RTL as a bench parameter, OFF in every
+  build. A shallower queue was not tried: no queue is needed.
+
+*Trims to the overlap (same function):* (1) m2_scsp_dsp: one adder for both
+MIXS banks' sends and the abort merge (was three); (2) m2_scsp_level: the
+effect-row banks turn at sh_clr, or when a recompute in progress finishes
+(one pending bit), instead of per slot excepting the busy one -- in step mode
+the unit is idle at DSPGO, so the turn is the same.
+
+*AREA, quartus_map 17.0:*
+                                        SCSP alone (scsp_area_top)   2C build (M2_2C, M2_NO_2A_MANX_MOTION)
+                                        ALMs    registers            ALMs needed   registers
+    model2c 5c2caca                     2,071   1,718                40,162        48,475
+    R946 (OVERLAP + WPOST, ad692e1)     2,393   2,093                40,547        48,850   (+385)
+    WPOST alone                         2,282   2,027                --
+    OVERLAP alone, before the trims     2,177   1,784                --
+    R947: OVERLAP alone, trimmed        2,146   1,785                40,279        48,542   (+117)
+    R947 with ABORT_MERGE = 0           2,153*  --                   40,251        48,535   (+89)
+  (* measured before the trims.) M10K unchanged everywhere (21 in the SCSP;
+  block bits 4,592,176 on the 2C map). ABORT_MERGE (new, m2_scsp /
+  m2_scsp_dsp, default 1): 0 drops the merge after a run that IRA > 0x31
+  abandons -- 28 ALMs -- and changes nothing a game plays: no program in the
+  HOTD, DOA, VF2, VC2 or Zero Gunner captures has such a step, and HOTD 330 s
+  and the five 2A captures give 0 differ with it off. Left at 1 (MAME's MIXS
+  for every program); not wired to a macro.
+
+*Exactness (R947 RTL, OVERLAP alone):* tb_m2_scsp 0 differ -- HOTD 95 s at
+6-40, 15-90 and 1-400 (34 s), HOTD 330 s (990 mean / 1,450 max, 0 underruns
+over the three passes of the tutorial); DOA, VF2, Virtua Cop 2, Zero Gunner,
+Sega Rally 30 s each (engine mean / max 515 / 965, 631 / 1,011, 856 / 1,297,
+846 / 1,501, 231 / 735). tb_m2_scsp_dsp: 500 random programs at 6-40 and at
+1-400, 0 wrong. OVERLAP off: HOTD 34 s engine clocks identical to model2c's
+sample for sample (the 2A microcode words byte-identical, as R946).
+lint_top clean, 2A and 2C.
+
+*Probe expectations:* as R946.
+
+*BOARD (Ben, 2026-10-24, s1449 = b0f75a0, clk_sys -0.179 in the frame-buffer
+write path only):* THE ATTRACT TUTORIAL IS GOOD -- the wobble / clipping /
+fuzz are gone: R946/R947's overlap fix is confirmed on the board. NEW: in
+some areas the music ("FM") is far too loud and drowns out the sound
+effects. Not yet compared with MAME or the arcade; open.
+
+**R948 -- ROOM FOR TODAY'S FIXES BY MAKING THINGS SMALLER, NOTHING SWITCHED
+OFF: THE FILL'S RECIPROCAL TABLE IN M10K ON THE SAME CYCLE, PAID FOR BY A
+MERGED SOUND-CACHE ARRAY; THE i960'S REPEATED SUMS FORMED ONCE.
+quartus_map 17.0: 2A 40,317 -> 40,070 ALMs needed (-247), 2C 40,307 ->
+39,943 (-364). M10K +1 on both (expected 2A 551, 2C 550 of 553). Every
+change cycle-identical. BRANCHES room-2a (off bridge-r937-2a 8fa6643) AND
+room-2c (off hotd-dsp b0f75a0), LOCAL, NOT FITTED.**
+
+*Believed:* the 2C build carries 2A-game hardware it never uses, and that is
+where the room is. *Found:* almost none is left -- no m2_tgp, Model 1 sound,
+I/O-board Z80, debug stream or wait-state block on the 2C map, no protection
+logic in RTL, Manx's motion already off; what remains is reached through the
+game ID (profiles in m2_2a_inputs, luma rows in m2_luma_map, a2_big's list).
+Narrowing the 2C ID to its three games measured -139 ALMs, and was built and
+then REVERTED (Ben: nothing switched off, even 2C-only logic -- make things
+smaller instead). The one large movable block was not game logic at all.
+
+*Per-entity, quartus_map 17.0 "Resource Utilization by Entity" (combinational
+ALUTs / registers; the map gives ALMs only for the whole design):*
+                              2A (8fa6643)        2C (b0f75a0)
+    ALMs needed (total)       40,317              40,307
+    i960_top                  11,701 / 4,384      11,722 / 4,384
+    m2_raster3d               11,636 / 11,197     11,321 / 11,172
+      m2_raster_fill           5,434 / 4,014       5,101 / 3,971
+      m2_quad_store            1,884 / 2,832       1,893 / 2,842
+      m2_texel_bl              1,801 / 1,352       1,801 / 1,352
+      m2_span_tex              1,330 / 1,684       1,329 / 1,692
+    m2_geometry                7,588 / 8,395       7,467 / 8,395
+    m2_2a_sound (fx68k, SCSP)  5,914 / 3,427       6,054 / 3,493
+    m2_copro (TGP / TGPx4)     3,918 / 2,746       4,224 / 2,948
+    ascal (framework)          2,468 / 4,035       2,483 / 4,035
+    m2_video (tilemap)         1,475 / 1,851       1,467 / 1,851
+    m2_sdram                   1,011 / 1,790         987 / 1,733
+    m2_cpu_bridge                877 / 565           931 / 565
+    osd x2, pll_hdmi_adj       ~2,380 / ~1,660     the same
+    hps_io                       817 / 868           834 / 868
+
+*TAKEN (each identical cycle for cycle):*
+  1. m2_recip_rom in M10K (both builds; Model2.sv R3D_RECIP_M10K = M2A;
+     VERILOG_MACRO "M2_RECIP_LOGIC=1" puts the LUT copies back). The fill's
+     256 x 32 table ceil(2^32/d) was two LUT copies (romstyle "logic", 280
+     ALUTs + 64 registers); it is now one true-dual-port ROM, two M10K, MIF
+     generated (checked in the map's RAM summary). The block registers the
+     address where the LUT form registered the data, so the data lands on the
+     same cycle and m2_raster_div is untouched. m2_recip_rom 280 / 64 -> 0 /
+     0; m2_raster_fill 5,434 -> 5,162 ALUTs (2A). 2A -229, 2C -328 with (2).
+     TIMING: the data now comes from the block's output, not a flip-flop. On
+     s1439 (2A, fitted) the path a_data / b_data -> q_fast (S_MUL's 32 x 32
+     multiply) had 3.45 ns of slack at 80 MHz and the address path into the
+     table 2.07-2.45 ns (quartus_sta on a copy); the M10K's clock-to-out
+     takes part of the first, the second gets shorter (no table logic). The
+     fit's clk_sys report is the check.
+     A first version registered the block's output too (data two cycles
+     late, the dividers waiting a cycle more in S_MUL): the quotients were
+     identical but a fast divide one cycle longer, so it was not taken.
+  2. m2_2a_sound's line cache: ln_t (128 x 15) and ln_v (128 x 1 -- a whole
+     M10K for 128 bits) are one array {valid, tag}: the same read address;
+     the clear (vclr, only in V_CLR after reset) and the fill (ln_we, only
+     from B_FILL) never meet, and a line whose valid bit is 0 never hits
+     whatever tag the clear wrote. -1 M10K, ALMs unchanged; pays for (1)'s
+     second block.
+  3. i960_top: ip_next + d_disp (8 places: b, bal, bno, b<cc>, faultno, bbc /
+     bbs, cmpob<cc>, the call target), ip + 4 (3), ip + 8 (4, one the AGU's
+     port), prcb + 20 (3) and the interrupt table's two vector addresses
+     (2 each) as one named wire each -- the same expressions; synthesis had
+     built the branch copies as separate adders. i960_top own logic 4,251
+     -> 4,192 ALUTs (2A), 4,223 -> 4,175 (2C); totals -18 / -36 (noise +-30).
+*TRIED, NOT TAKEN:*
+  * The 2C ID narrowing above (-139): reverted, it switches logic off.
+  * The same narrowing on the 2A build (eleven IDs, four bits): +45, noise.
+  * 2C M2_NO_2A_EE_LOAD: 0. 2C M2_2A_FPU=0: -288, but STCC runs atanr
+    (0x68.0, 40,466 times, pc 0x5dc7c) -- formcheck with a 2C-without-F2A
+    column (fr 0, vc 1, f2a 0, c2 1) traps on it. remr / movre alone on a
+    switch: i960_top -135 ALUTs, -72 registers, total +6 (noise); no 2C form
+    log runs either (HOTD 420 s, r924, r935 long; Over Rev snap1, cap1, val;
+    STCC cen), but a log is a sample of play. All switch-offs; reverted.
+  * R945's second EEPROM read port (one 64 x 16 MLAB pair, ~20 ALMs): q is
+    used only on two cycles (ld_wait[1], WRITEALL's phase 2), so the dump
+    could borrow the port on the others -- but a borrowed cycle delays
+    dump_q by one, and at the upload's minimum strobe spacing (4 clk_sys,
+    tb_m2_nv_save) that is not provably the same. Left.
+  * R940's extra geometry stage: its own map was -10 (noise); the stage
+    sets the pipeline's latency (C_AGE 5), so it cannot go without a timing
+    change. R944's clamp: the S_FS_DIL vertex reads share the px[ps1 / ps2 /
+    ps1m1 / ps2p1] muxes S_DIVA already has; choosing the edge first would
+    add two muxes, not remove any. R947's overlap: already trimmed (R947).
+*NOT MOVABLE (checked):* the i960 I-cache tags (512 x 20 MLAB, ~160 ALMs)
+need the MLAB's asynchronous read (R552); the SCSP's rfa / rfb and mems stay
+M10K (R909); the large register arrays left are 4-entry vertex sets read in
+parallel (geo_clip, geometry), not RAMs.
+
+*VERIFIED:*
+  * tb_m2_raster_div_lat (new; make test_m2_raster_div_lat): m2_raster_div on
+    the LUT table and on the M10K one side by side, both ports, every cycle's
+    ready / out_valid / quotient / div0 compared: every denominator -600..600
+    against edge and random numerators and 200,000 random pairs -- 218,015
+    divides x 2, 0 results and 0 cycles differ. A mutant table (bit 0 of
+    port A flipped) differs 5,522 times.
+  * test_m2_raster_fill (152,373 checks), _mip (1,989,828), test_m2_fill_m2cov
+    (3,007), test_m2_fill_dil, test_m2_raster3d (40): 0 fails, and with
+    RECIP_M10K 1 each log is byte-identical to the parent's (spans
+    31,831,634, empty 22,206, ties 628 -- the stall generator shares the
+    quad generator's mt19937, so any cycle difference would show) -- on the
+    2A tree; on the 2C tree (no m2cov / dil targets there) test_m2_raster_fill,
+    _mip and test_m2_raster3d the same, byte-identical to b0f75a0's.
+  * tb_m2_2a_sound, Dead or Alive's sound program against its MAME capture,
+    20 s at 6-40, before and after (2): the whole log identical (216 lines:
+    68000 cycles, SCSP writes 1,269,973, MAME-order LCS 97.5%, port traffic)
+    and the 20 s WAV byte-identical; PASS. (This capture's level column does
+    not track MAME's in either run -- a bench property, the same before and
+    after.) tb_m2_scsp not rerun: m2_scsp is unchanged.
+  * i960 lockstep (3): test_i960_top, _irq, _lat, _vc, _fr, _fx, _ring, _dc
+    (2A tree) and _c2 (2C tree): 0 mismatches, PASS. lint_i960_top clean.
+  * lint_top clean: 2A, M2_NO_2A, 2C (M2_2C, M2_NO_2A_MANX_MOTION).
+*AREA, quartus_map 17.0 (ALMs needed / ALUTs / registers / block bits):*
+    2A  8fa6643                40,317  57,608  48,347  4,580,912
+    2A  + (1) (2)              40,088  57,271  48,283  4,589,104   (-229)
+    2A  room-2a (1) (2) (3)    40,070  57,246  48,283  4,589,104   (-247)
+    2C  b0f75a0                40,307  57,763  48,520  4,592,176
+    2C  + (1) (2)              39,979  57,315  48,458  4,600,368   (-328)
+    2C  room-2c (1) (2) (3)    39,943  57,254  48,457  4,600,368   (-364)
+  M10K: the map gives bits, not blocks: +2 (the ROM) -1 (the merge)
+  expected, 2A 550 -> 551, 2C 549 -> 550 of 553. The fitter's RAM summary is
+  the check. (The 2A / 2C map totals carry +-30 ALMs of synthesis noise
+  between runs of the same RTL's neighbours: 2C b0f75a0 mapped 40,307 here
+  and its parent 3704373 40,279 in s1442.)
+  * The reproduction: holes 0 on all six frames and all six walks (one
+    flagged pixel on walk 8895, (405,259), is the car's quad 178, sorted
+    between the shadow quads, correctly in front).
+  * Textured pictures (REALCOL + TEXMEM), against the old RTL: Virtua
+    Fighter 2 600 / 3480 / tower 3360, Sky Target 1080, Virtua Cop 1500 --
+    pixel hashes UNCHANGED (no flat polygons). Rally and Daytona (Daytona,
+    Virtua Cop in main's configuration, TEXLUT 0, KW 16): only flat
+    polygons' edges move, each outline 1/8 px out, so a few pixels MAME
+    gives to what is behind now take the flat polygon (whole-frame error
+    vs MAME, pixels changed):
+      Rally 960     9.148 ->  9.157   24      Rally 7290   6.940 -> 7.067  305
+      Rally 1050    8.216 ->  8.250   97      Rally 7296   7.055 -> 7.128  291
+      Rally 1500   11.603 -> 11.695  193      Rally 7300   6.848 -> 6.951  291
+      Rally 2040   19.035 -> 19.049   50      Daytona 2000 12.655 -> 12.656  24
+      Rally race 3720 14.905 -> 15.028 184    Daytona 5000 11.829 -> 11.857  89
+                                              Daytona 9000 12.085 -> 12.211 417
+    Shadow holes on R938's Rally frames: 1500 1 -> 0, race 3720 1 -> 0.
+  * New test_m2_fill_dil (in `make test`): the R658 bench (tb_m2_fill_m2cov)
+    with the moved, clamped edges in its C rule, and a T-junction test (a
+    quad above a long edge, two below it sharing a point ON it, every
+    vertex rounded as the geometry rounds): 200,007 random quads 0 fails;
+    20,000 T-junctions 0 crack pixels. The same test without DIL counts
+    8,652 crack pixels in 2,000 junctions. test_m2_fill_m2cov (R658's bench,
+    never in the Makefile until now): 0 fails on the old RTL and this one
+    with R658's 0.01 px tie window -- the source's default 1e-3 had drifted
+    and gave 269 one-pixel tie rows on the OLD RTL too.
+    test_m2_raster_fill (152,373), _mip, test_m2_raster3d,
+    test_m2_quad_store, test_m2_span_tex (+ftb, mip, gc), test_m2_raster_band,
+    test_m2_texel_bl4 PASS. DIL 0 is bit-identical to the old RTL (six
+    frames). lint_top clean on 2A and M2_NO_2A; lint_idx the same 114
+    findings; -Wall on the fill (DIL 0 and 1) no warnings. Quartus 17.0
+    constant-fold check of the new arithmetic (tiny module, stuck pins):
+    extent bounds and the move computed as intended.
+*AREA (quartus_map 17.0, 2A, full design, 5ffd438 -> this):* ALMs needed
+40,163 -> 40,310 (+147); combinational ALUTs 57,293 -> 57,611; registers
+48,255 -> 48,417; block memory bits 4,580,912 (=); DSP 96 (=); M10K
+unchanged; m2_raster_fill 5,101 -> 5,551 ALUTs, 3,972 -> 4,135 registers.
+Main (M2_NO_2A, same RTL): 39,162 -> 39,504 ALMs (+342; the fill +532 ALUTs,
++166 registers, as on 2A -- the rest is the estimate's packing); block bits
+4,572,432 (=). (A first version with the extent clamp on the emit path and
+the extents in registers: 2A +289.)
+*LEFT / OPEN:* textured T-junctions still crack (the same geometry with a
+texture); closing them needs m2_span_tex's groups anchored independently of
+the span's first pixel. Sky Target's flickering 1-px sky lines (R938's open
+board case) are textured panels and may be that class -- not checked. Not
+on the board: the fit and Ben's eyes decide, the Top 16 screen first.
+
+**R944, SMALLER (the same pixels, half the area).** The first version spent
++147 ALMs (2A map): the move held in two 32-bit registers (dga / dgb) with
+their own |slope| adders, two clamps per edge in registers (lb / ub) formed
+in S_OFF, a per-row select of them beside the emit sort, two more registers
+carrying them through stage 1, and a separate add for the move. Now:
+  * the move has no register and no adder of its own: S_FS_DIL feeds the
+    walk's adder (xah_nx = xah + sla in S_FS_WALK) with the move's operands,
+    xah + (t or ~t) + (C or 1 - C), t = sl >>> 3, C = 1/8 + 2^-16 -- the
+    same value as before bit for bit (|sl| >> 3 by ones' complement);
+  * the clamps are two registers per SEGMENT (lbq: the left edge's least
+    vertex x - 1/8, ubq: the right edge's greatest + 1/8, chosen by swapf
+    and a one-bit "which vertex is lesser" per edge taken from S_DIVA's
+    existing subtract), formed in S_FS_DIL, which waits for stage 1 to
+    empty so a span keeps its own segment's clamps; the output stage reads
+    them directly. Nothing in the emit path (R739) changed.
+Measured (module alone, map): the move ~34 ALMs, the clamp ~109 -- the clamp
+is still needed (without it 18-91 whisker pixels a frame) and a per-quad
+bounding-box clamp instead leaves 1-17 of them (modelled), so it stays per
+edge. 11-bit compares and dropping the empty-span test saved < 20 ALMs and
+were not taken (the clamp CAN empty a span: x = 10.0, round(x - 1/8) = 10,
+round(x + 1/8) - 1 = 9).
+*VERIFIED, against ce523c1:* pixel-identical on all 6 frames (MAME
+vertices) and all 6 walks (core geometry) of the reproduction -- 0 holes --
+and on all 16 textured frames (Rally 960 / 1050 / 1500 / 2040 / race 3720 /
+7290 / 7296 / 7300, VF2 600 / 3480 / 3360, Sky Target 1080, Daytona 2000 /
+5000 / 9000, Virtua Cop 1500); test_m2_fill_dil 200,007 quads 0 fails with
+the same 45,343 tie rows, 20,000 T-junctions 0 cracks; test_m2_fill_m2cov,
+test_m2_raster_fill (152,373), _mip, test_m2_raster3d, test_m2_quad_store,
+test_m2_span_tex (+gc), test_m2_raster_band PASS; lint_top clean (2A,
+M2_NO_2A); lint_idx the same 114; Quartus 17.0 constant-fold of the move
+(16 +/- 5.1875 for a 40.5 px/row slope either sign and side) as intended.
+*AREA (quartus_map 17.0, 2A, full design, against 5ffd438):* ALMs needed
+40,163 -> 40,240 (+77; was +147); ALUTs 57,293 -> 57,477 (+184; was +318);
+registers 48,255 -> 48,296 (+41; was +162); m2_raster_fill 5,101 -> 5,410
+ALUTs, 3,972 -> 4,013 registers; block bits, DSP, M10K unchanged.
+*TIMING NOTE:* the walk's adder now has a 2:1 operand select (the state
+decode) in front of it on the xah -> xah loop; the emit path from xah is
+unchanged. The fit's report on clk_sys is the check.
+*BOARD (Ben, 2026-10-24, s1428 + the 16520-byte 2A MRAs):* THE 2A SETTINGS
+SAVE WORKS (R945) -- Sega Rally's test-menu settings survive a reload. Fits
+are PAUSED (Ben) until the sound mix-balance fix (R949, branch hotd-mix) is
+in: the next 2A / 2C seed hunts carry it.
+
+**R949 -- THE SOUND PATH AUDITED AGAINST MAME AND AGAINST THE SATURN CORE's
+SCSP, THROUGH THE CORE: (1) THE "TINNY" SOUND IS THE OUTPUT PATH -- SINCE R788
+TOOK THE FRAMEWORK's IIR FILTER OUT, THE 44.1 kHz STAIRCASE IS SAMPLED AT
+48 kHz UNSMOOTHED AND EVERY BRIGHT SOUND ALIASES INTO 4-16 kHz (HOUSE OF THE
+DEAD's FM VOICE 8.5 dB BELOW ITSELF); FIXED BY m2_snd_lerp (LINEAR
+INTERPOLATION, +123 ALM / 3 DSP ALONE, M2_2A_SND_LERP, ON IN 2A AND 2C).
+(2) THE LEVELS: THE CORE's 68000 + SCSP + SOUND RAM ON MAME's MIDI IS MAME's
+MIX PLUS R914's REVERB TO 0.1 dB, KEY-ON FOR KEY-ON; THE SATURN SCSP AGREES
+WITH R914 AND WITH EVERY SCALE IN OUR MIX. HOUSE OF THE DEAD's "MUSIC FAR TOO
+LOUD OVER THE SHOTS" IS NOT REPRODUCED (CORE = MAME +0.0-0.7 dB PER CATEGORY IN
+CHAPTER 2); DYNAMITE COP's EFFECTS ARE +2.1 / +2.6 dB OVER MAME's (R914 -- A
+REAL REVERB WHERE MAME's COLLAPSES), NOT THE "JUMP OUT OF YOUR SEAT" BEN
+HEARS. BRANCH hotd-mix (OFF hotd-dsp fb539c4), LOCAL ONLY, NOT FITTED.**
+(Ben, s1449 = b0f75a0 on 2C: in chapter 2 the music -- "the FM" -- is far too
+loud, the gun barely heard, and a high-pitched tinny clipping starts there,
+louder chapter by chapter; on builds before R947 too. On 2A, Volume and Raw
+Sound Boost at their defaults, Dynamite Cop's box break is loud enough to
+make you jump. "Each game has a different issue, so it is the SOUND PATH --
+review srg320's SCSP and see where we were wrong.")
+
+*Believed (the task):* something of ours between the slots and the speaker --
+R914's reverb return (louder than MAME's, which zeroes the taps), the send /
+return scaling, the output stage, Raw Sound Boost (lifts the direct sends,
+not the return), the Volume clamp, or R947's level shadow (dropped: the fault
+predates it); then, from Ben, the core's own 68000 (the benches had fed
+MAME's register writes), and the SCSP against srg320's.
+
+*The captures (MAME 0.289 + p16, sm2-builds/mame-r943 m2lod, git-ignored):*
+build/scsp/ch2 -- hotd, default nvram (JAPAN), sim/io/mame_m2_hotd_play.lua
+seed 1, 720 s: chapter 1 to ~340 s, the chapter-1 boss 340-505 s, CHAPTER 2
+from ~510 s (snapshots every 5 s); build/scsp/dcop -- dynamcop,
+sim/sound/mame_m2_2a_snd.lua, coins at 30 / 100 s, 180 s; hotd-dsp's att1
+(330 s attract), R943's cap1 (150 s), and R885-R914's 2A captures (VF2, Virtua
+Cop 2, Sega Rally, Zero Gunner 300 s; DOA 150 s). MAME's mirror replayed
+through scsp_ref.h equals out.bin in every one (ch2: 31.7 M samples, dcop:
+7.9 M, 0 differ).
+
+*1. THE LEVELS, SCSP ALONE (sim/sound/scsp_mixcat.cpp, new): each capture with
+MAME's mirror and with R914's decode (= the RTL), and for each IMXL value the
+pair again with only those slots feeding MIXS (scsp_ref.h's new mixs_mask,
+all-ones by default: no other bench changes), so a category is its direct
+sends plus the return it alone makes. Left, DAC 16-bit units, DC-blocked
+(~3.5 Hz). Whole mix, MAME -> core (boost Off):*
+    House of the Dead  attract 20-330 s     443 ->   451   +0.2 dB
+                       chapter 1 40-500 s   709 ->   716   +0.1
+                       CHAPTER 2 510-719 s  682 ->   685   +0.0
+    Dynamite Cop       20-179 s             587 ->   671   +1.2
+    Virtua Fighter 2   20-300 s           2,588 -> 1,017   -8.1  (R914)
+    Dead or Alive      20-150 s           2,000 -> 1,144   -4.9  (R914: the drone)
+    Virtua Cop 2       20-300 s             348 ->   349   +0.0
+    Zero Gunner        20-300 s             659 ->   670   +0.2
+    Sega Rally         20-300 s             366 ->   366    0.0  (no DSP program)
+  By category (MAME -> core, dB; labels from routing and timing):
+    HOTD ch. 2   IMXL 0 (the gun, dry effects) 0.0; 3 0.0; 5 (music, the FM
+                 voice) +0.3; 6 +0.7.   HOTD ch. 1: 0.0 / +0.7 / +0.1 / +0.2 / +0.7
+    Dynamite Cop IMXL 1 (music) +0.1; IMXL 5 (effects) +2.1; IMXL 6 (effects)
+                 +2.6 (95th-percentile 50 ms windows +2.0 / +2.5); in quiet
+                 moments after an effect the real reverb's tail is there and
+                 MAME's is not (+10 to +20 dB in those 50 ms windows)
+    VF2          IMXL 0 (effects) 0.0; IMXL 1..6 (music) -3.2 ... -16.9
+    DOA          IMXL 0 0.0, 4 0.0, 5 -5.8, 6 -10.5, 7 -8.0
+    VC2 every category within +0.1; Zero Gunner within +0.6
+  The one departure from MAME's mix is R914, its sign the game's DSP program's:
+  where MAME's collapsed taps make a resonator (VF2, DOA) MAME's music is the
+  louder; where they make a short echo (HOTD, VC2, ZG, Dynamite Cop) the real
+  taps give more return.
+  HOTD's shots (150 ms after each shot key-on, gun / rest, median): chapter 1
+  MAME -1.6, core -2.8; chapter 2 MAME -2.2, core -4.2 dB (+6 dB boost -1.8,
+  +12 dB -0.5). In MAME's own chapter 2 the shots sit ~2 dB under the rest.
+
+*2. THROUGH THE CORE (Ben: "has it actually been run through the core?"):*
+tb_m2_2a_sound -- fx68k on the game's sound program, the SCSP, sound RAM in
+SDRAM at random latency 6-40, MAME's MIDI at MAME's times, free-running at
+80 MHz, the trace build (M2_SND_TRACE); 2A config for Dynamite Cop (OVERLAP
+0), 2C for HOTD (OVERLAP 1). Its output WAV against scsp_ref.h with R914 on
+MAME's writes ("ref") and against MAME, second by second; the key-ons the
+core's 68000 makes (sound number, TL, DISDL, IMXL, EFSDL) against MAME's:
+    Dynamite Cop 0-40 s (attract demo 10-30 s, play from 30 s):
+      board - ref +0.09 dB (each second within -0.9 / +1.8; peaks alike),
+      ref - MAME +1.68 dB; 99.5% of MAME's SCSP writes in MAME's order; 405 /
+      405 key-ons, mean TL / DISDL / IMXL per 5 s identical; 0 underruns
+    House of the Dead 0-40 s (attract, play from 26 s with the shots):
+      board - ref +0.05 dB, ref - MAME +0.04 dB; 285 / 285 key-ons identical
+  So the core's 68000 drives the SCSP as MAME's does, and the whole sound board
+  is MAME's mix plus R914's reverb. Not run: HOTD chapter 2 through the whole
+  board (~510 s from boot, ~6 h of bench at this machine's load).
+
+*3. THE RTL ON THE NEW CAPTURES:* tb_m2_scsp, OVERLAP on (2C), latency 6-40,
+ALL of ch2 (718.8 s): 0 of 31,700,000 samples differ from the reference,
+491,876,955 slot samples (the FM voice's 69.7 M among them) and 9,602,156 reads
+right, engine mean 960 / max 1,500 clocks. Dynamite Cop (2A config, never
+benched before), 179 s: 0 of 7,890,000 differ, 77,805,340 slot samples right;
+engine mean 1,298 / max 2,038 clocks (over the 1,814 budget at the peak, the
+2A games' highest yet; VC2's 2,117 gave 0 underruns); free-running
+(SCSP_FREE, the board's FIFO) 179 s: 0 underruns.
+
+*4. THE SCSP AGAINST srg320's (MiSTer-devel/Saturn_MiSTer c072434,
+rtl/Saturn/SCSP/SCSP.sv + SCSP_pkg.sv, read-only clone sm2-builds/saturn-ref;
+NO LICENCE FILE in that repository -- used as a reference only, nothing
+copied, nothing in THIRD_PARTY.md):*
+  same as ours and MAME's (no level difference):
+    * TL: 10-bit attenuation, TL << 2 on the EG level, 6 dB per 64 steps --
+      MAME's 0.375 dB a TL step.
+    * DISDL / EFSDL / IMXL: an arithmetic shift by ~SDL (0, -6 ... -36 dB, 0 =
+      off) -- MAME's SDL table. The pan: -3 dB a step, the far side 0 dB.
+    * The direct sum: each slot's 16-bit send at 1x in an 18-bit accumulator;
+      the effect returns (EFREG x EFSDL / EFPAN for slots 0-15) added to it.
+    * MIXS: {slot level, 4'h0} >>> ~IMXL summed in 20 bits; the DSP's INPUTS
+      MIXS << 4 (24 bits) -- MAME's (x16 then << 4).
+    * EFREG = SHFT[23:8], written (not accumulated -- MAME's "+=" after a
+      clear is the same here: every program in these captures writes each
+      EWA once a sample).
+    * The DSP's multiply (24 x 13 >> 12), shifter saturation (SHFT 0 / 1),
+      ring addressing (MADRS + DEC + NXADR, masked by RBL, + RBP << 12), and
+      its float format: DSPItoF / DSPFtoI against scsp_ref.h's PACK / UNPACK,
+      all 2^24 values and all 65,536 words -- 0 differ (scratch fl.cpp).
+    * MEMORY ACCESS ON ODD STEPS ONLY: every program here has MRD / MWT on odd
+      steps only (none on even), so MAME's rule changes nothing.
+    * MADRS IS DECODED AT 0x780-0x7BF ONLY (MADRS_SEL = REG_A[11:6] == 011110)
+      -- 0x7C0-0x7FF is not a mirror: R914's decode, independently. The
+      Saturn core is the second working implementation (after Mednafen) to
+      say MAME's mirror is wrong; R914 stands.
+  different:
+    * EG key scaling: srg320 adds clamp(KRS + OCT, 0, 15) to the 5-bit rate;
+      MAME adds OCT + 2 KRS + FNS[9] to the 6-bit one, so a negative octave
+      slows MAME's (and our) envelopes (OCT -2: 1.2x, -3: 1.5x longer decays)
+      where srg320's do not. Measured in scsp_ref.h (scratch option):
+      HOTD chapter 2 every category within 0.1 dB, Dynamite Cop 0.0 dB. Not
+      a level cause; not changed (MAME's formula is the one the reference
+      order trusts for what the chip computes).
+    * DAC18B: srg320's 16-bit output is the sum << 2 saturated when DAC18B is
+      set (MVolCalc), MAME's and ours the sum (the 18-bit DAC's scale). The
+      Model 2 drivers set DAC18B (0x400 = 0x0F0F); a uniform 12 dB with
+      clipping, no balance change, and nothing on a Saturn exercises it.
+      Not taken.
+    * FM depth (MDCalc): the same offset as MAME's for MDL 13 within the
+      sample (both s/4 samples for X = Y = s); srg320 wraps the offset at
+      2,048 samples. No level change.
+  Which comparison found what: srg320's MADRS decode confirmed R914; nothing
+  in srg320's mix arithmetic differs from ours. The fault this entry fixes
+  (5.) was found by following the output past the SCSP into sys/, not by the
+  SCSP comparison.
+
+*5. THE TINNY SOUND: THE OUTPUT PATH, ALL GAMES, SINCE R788.* sys/audio_out.sv
+samples AUDIO_L / AUDIO_R in its own clock at 48 kHz (sample_ce); its IIR
+filter, which low-passes the core's output at a high rate before that, is
+not built here (R788, MISTER_DISABLE_AUDIO_FILTER, for 430 ALM). So each 48 kHz
+tick takes the 44.1 kHz staircase as it stands: content at f also comes out
+at f + 3.9 kHz, and everything above ~16 kHz folds into 4-16 kHz,
+inharmonically. MAME resamples properly and the arcade has an analog
+reconstruction filter; neither shows this. Measured (pure tones through the
+hold-and-48 kHz model): 500 Hz spurs at -34 dB, 2 kHz -22, 4 kHz -16, 8 kHz
+-9 dB. On the games (R914 reference audio):
+    aliasing products below the signal      as built   linear interpolation
+    HOTD chapter 2, whole mix                23.2 dB     32.8 dB
+    HOTD chapter 2, the FM voice alone        8.5 dB     15.9 dB
+    HOTD chapter 2, everything else          24.9 dB     40.4 dB
+    Dynamite Cop 30-38 s                     28.5 dB     40.6 dB
+  HOTD's FM voice (sample 0x028C0: PCM16, MDL 13 with MDXSL = MDYSL = 0, a
+  triangle pitch LFO) has half its energy at 16-24 kHz (spectral centroid
+  10 kHz); as built, 8-12 kHz comes out +9.7 dB and 12-16 kHz +11.1 dB over
+  the ideal -- the high-pitched tinny layer, and it plays through the
+  chapter-1 boss and all of chapter 2 (1,580 slot-seconds in ch2 against 50
+  in the whole attract): Ben's "starts in chapter 2". It does not change
+  loudness: A-weighted, 50 ms windows above the median, as built vs ideal
+  +0.00 dB median, +0.08 dB max (Dynamite Cop and HOTD alike).
+  THE FIX (rtl/sound/m2_snd_lerp.sv, new; in m2_2a_sound behind LERP;
+  Model2.sv M2_2A_SND_LERP, default 1 on 2A and 2C): the output moves along
+  the line from the previous sample to the current one, one sample late,
+  re-evaluated every 64 clocks (1.25 MHz) and held between, so audio_out's
+  two-flop equality check takes it cleanly; the phase is the clocks since the
+  sample changed x round(2^19 x 441 / T44_DEN) >> 11 (80 MHz: x 289 >> 11).
+  tb_m2_snd_lerp (sim/sound, new): the module at 80 MHz on the drain's
+  441 / 800,000 accumulator, read as audio_out reads it (two flops at
+  24.576 MHz, taken when equal, 48 kHz): full-scale steps and a sweep, 3 s --
+  0 of 239,992,744 outputs outside their bracketing samples, 0 reads of a
+  value the RTL never held; HOTD's FM voice and the rest (20 s each) through
+  the RTL, band energy vs ideal (dB of the ideal total):
+                     FM voice: ideal  as built  LERP   | the rest: ideal  as built  LERP
+      4-8 kHz              -28.4    -22.5   -28.8   |          -17.7    -17.8   -18.2
+      8-12 kHz             -31.8    -22.1   -32.9   |          -25.6    -25.3   -26.9
+      12-16 kHz            -31.0    -19.9   -32.6   |          -29.9    -29.6   -32.7
+  (the bench model's numbers to the 0.1 dB). tb_m2_2a_sound with LERP on,
+  Dynamite Cop 6 s: PASS, 99.5% of writes in order, levels second by second
+  (0-5 s) as without it. AREA (quartus_map 17.0, the module alone, virtual pins): 123
+  ALMs, 190 registers, 3 DSP blocks (one a channel for the line, one for the
+  phase's constant). lint_top clean, 2A and 2C (M2_2C, M2_NO_2A_MANX_MOTION);
+  lint_idx: no candidate in a changed line (m2_2a_sound's two, line 437's
+  sums, predate this). The 2C build was at 40,279 ALMs
+  (R947) of 41,910. Restoring the framework filter instead would cost ~430.
+
+*6. RULED OUT (measured):* the output stage (0x400 = 0x0F0F, MVOL 15,
+DAC18B; EFREG never at +-32,000 and the DAC never clamping in any capture,
+MAME's or R914's); Raw Sound Boost (it does the opposite of both complaints:
+x4 on the direct sends lifts HOTD's dry gun +12 dB and its music +5.2 dB,
+Dynamite Cop's music +10.1 dB and its effects +1.3 / +0.1 dB); the Volume
+clamp (m2_volume: chapter 2 clips 0 samples with boost Off at any Volume to
+400%; only +12 dB with 300% / 400% clips, 0.17% / 0.89%); MAME's own chain
+(0.289: 20 Hz high-pass, compressor and reverb off, EQ flat); a sample-ROM
+region used only in chapter 2 (the ring refills read both chips from the
+attract on); a framework "boost" (aud_mix_top's waveshaper is driven by the
+HPS's filter settings, vol_boost; with a filter preset that sets it, it
+would compress and distort -- not measured: which preset Ben runs is not
+known).
+
+*CONCLUSION:* REPRODUCED: the tinny sound, yes, in the output path, and fixed
+in the bench. The levels: NOT REPRODUCED. Through the core on MAME's MIDI the
+board is MAME's mix plus R914's reverb -- HOTD chapter 2 within 0.7 dB a
+category, Dynamite Cop's effects +2-3 dB (louder tails), VF2 / DOA's music
+down -- and the Saturn SCSP agrees with every one of our scales and with
+R914's decode. What the board does that the bench does not is upstream (the
+MIDI the board's i960 actually sends -- the 'M' probe record against
+midi.txt), the framework (the preset's vol_boost) or the arcade itself (MAME
+has the shots ~2 dB under HOTD's chapter-2 music). Whether Dynamite Cop's
++2-3 dB is the arcade's is the R914 question, now answered by two
+implementations that run real hardware's games: the taps are real. NOT
+CHANGED.
+
+*CLIPS (ROM-derived, git-ignored, build/scsp/clips/):*
+hotd_ch2_510-590s_{MAME,CORE_R914}.wav, dcop_20-179s_{MAME,CORE_R914}.wav
+(stereo 44.1 kHz, the DAC's 16 bits, 100%, boost Off) and build/board/
+dcop_core.wav (the whole board, 40 s): what MAME and the core compute from
+the same input, for a board recording to be held against.
+
+*NOT DONE:* no fit, no board. HOTD chapter 2 through the whole board. The
+'M' MIDI probe on the board. Ben's Volume, Raw Sound Boost and audio-filter
+preset for the sessions.
+
+**R950 -- TEXTURE FILTER "AUTO": SKY TARGET DEFAULTS TO POINT SAMPLING.**
+Sky Target's title sky shows thin darker lines at its sky-panel joints with
+the bilinear filter (MAME draws them too, R947); the arcade shows none, and
+on the board Ben found Texture filter = Point alone removes them (mip-mapping
+can stay on). The OSD line O[31] becomes "Auto, Point": 0 (the old
+"Bilinear", so every saved config lands on Auto) is bilinear on every game
+but Sky Target (game ID 0x18), where it is point; 1 forces point everywhere,
+as before. Model2.sv: texpt_game (one compare on the game ID) ORed into the
+filter's synchroniser. Nothing else changes; the main core is untouched.
+*BOARD (Ben, 2026-10-24, s1447 = 8fa6643 + R944 small + R945, R938 out):*
+R944 WORKS -- Sega Rally's car-shadow holes are gone. Still there: a straight
+line of single white pixels across Rally's textured sky in the attract's
+canyon start (#26 item 2) -- the textured version of the same T-junction
+crack? Branch rally-sky (R951), reproduce first at the board's settings.
+
+**R951 -- SEGA RALLY'S SKY DOTS ARE NOT A T-JUNCTION: THE DISTANT-MOUNTAIN
+BAND'S TOP EDGE SAMPLES A HAIR OUTSIDE ITS OWN TEXELS, AND THE ROW ABOVE IT IN
+THE TEXTURE IS OPAQUE WHITE. REPRODUCED AT THE BOARD'S SETTINGS (BOTH FILTER
+MODES), CLOSED BY CLAMPING A NEAR MISS BACK INTO THE QUAD'S OWN TEXEL BOX
+(UVCL). Branch rally-sky (off bridge-r937-2a a13c623), not pushed, not fitted.**
+(Board, s1447: Sega Rally's attract, the canyon start -- "PUSH START BUTTON",
+the leading car between grassy walls -- a straight, nearly horizontal line of
+single white pixels across the sky, a few tens of pixels apart; GitHub #26
+item 2. Ben: it shows with Texture filter Point too.)
+
+*What was believed:* R944's crack (a T-junction along a long shallow shared
+edge, one hole per row) on TEXTURED polygons, which R944 left out; R947 had
+shown a moved textured span start costs nothing at the board's texel step 1,
+so extending R944's DIL to textured quads looked cheap. R938's "Rally sky dots
+not reproduced (attract 960 / 1050 / 1500 / 2040)" was at texel step 4 and on
+the desert stage, not this scene. (Ben, later: Rally's sky there is a 2D
+layer -- checked below: it is not.)
+
+*NOW KNOWN (MEASURED; MAME 0.289 m2lod dumps of srallyc, ROM-derived scratch
+outside the tree; the bench in the board's settings -- benchbd: texel step 1,
+mip Sharp, the 2A no-mip flag, KW 20 + WINKEY, UVSH, TEXMEM):*
+  * THE SCENE. A 150 s attract survey puts the canyon start at 3D frames
+    ~2660-2780 (the second stage's start, Toyota leading). Ben's grab is
+    frames ~2716-2724. Dumped: M2DIFF frames 2716 / 2718-2726 and, by the
+    file trigger, walks 4074-4082 (frame F = walk F + 1356 here, matched by
+    the picture against MAME's: walk 4080 / frame 2724, mean error 6.28).
+  * THE SKY IS 3D IN THIS SCENE. MAME's 3D owner map covers 100% of rows
+    0-120 on every survey frame 2640-2780: a textured sky quad pair at z
+    ~62,800, and in front of it the distant mountains, one textured band
+    quad (MAME polygon 421 on frame 2724, h 6013,0001,1aac,3500, z 56,779)
+    whose texture is transparent above the mountains.
+  * REPRODUCED, THROUGH THE CORE'S OWN PATH. The core's geometry (geodiff
+    2A: CRTC_Y 128, WINKEY, MZX, UVSH, and now TEXLUT, as Model2.sv builds
+    it) on walks 4074-4082, its quads textured in the 2A packing (new: the
+    bench's M2_R3D_QUADSTEX in a TEXLUT build, geodiff's trow=), through the
+    raster bench at the board's settings: 15 single white (224,236,208)
+    pixels in 9 frames, 0-4 a frame, on ONE straight line y 47-54, x 190-349,
+    25 px apart -- e.g. walk 4076 (269,50) (294,51) (319,52) (344,53); Ben's
+    grab: ~(245,42) (322,45) (348,46) native. Point sampling: the SAME 15.
+    MAME's own frames (2716, 2718-2722, 2724): 1 such pixel in 7 frames
+    ((257,50), frame 2724). MAME's polygons through the same bench: 0.
+  * IT IS NOT A HOLE. Coverage (owner colours, MAME's walk polygons vs the
+    core's quads, R938's zhole): 0 unpainted pixels and 0 depth holes on
+    every walk; the core paints the full 190,464 pixels.
+  * THE CAUSE. The band's top edge is a long shallow line (core quad 418 on
+    walk 4076: (0,39.75) to (357.25,54.0), 0.04 px a pixel) along which v is
+    exactly texel 128 -- the band uses rows 128-255 of a 256-high texture,
+    rows 0-127 hold something else, opaque white at row 127. Once a scanline
+    the edge passes within ~0.01 px of a pixel centre; there exact v is
+    128.005 or so, and the core's v came out 127.98 (fetch log: 32764 and
+    32766 of 32768 /256-texel units). Measured along that edge, the core's v
+    is low by 2.1-6.6 /256 texel (mean 4.4) on walk 4076 and -0.2 +- 0.75 on
+    walk 4080 (no dots there): the plane fit's quantisation, per quad and
+    per frame (R338's 0.02-0.59 texel; MAME's polygons through the same
+    raster: +1.2 +- 1.4, no dots). Under 128.0 the bilinear (m2_texel_bl,
+    MAME's rule) gives row 127 over half the weight, the alpha test (alpha
+    >= 1/2) passes, and the pixel is row 127's white; point sampling takes
+    the nearest row, 127, the same way. MAME has exactly the same rule and
+    the same knife edge -- its floats are just ~5x less often on the wrong
+    side of it.
+  * R944'S DIL ON TEXTURED QUADS MAKES IT WORSE: built and measured (both
+    `!tex_r[0]` gates off, the plane at the clamped start): every frame a
+    dashed white line, 26-34 px, three-pixel dashes at every crossing --
+    edges moved out by 1/8 px cover more pixels whose v is under 128. A
+    textured T-junction fix would need to keep the samples inside anyway.
+
+*THE FIX (UVCL; m2_raster_fill, m2_raster3d, m2_span_tex; Model2.sv sets it,
+every build):* every pixel the fill covers lies inside its quad, so in exact
+arithmetic its u and v lie inside the box of the quad's corners. The fill
+takes that box per textured quad -- floor of the least u, v and ceil of the
+greatest less one, whole texels at level 0, one vertex a cycle beside S_OZ's
+normaliser from the raw u, v it already reads (four running compares; a quad
+stored >> uvs, R940, gets no box). The box goes beside the span queue: one
+45-bit word per textured quad in a 32 x 45 MLAB read asynchronously (no
+output register), pushed with the quad's first span (a spare bit of the span
+queue, 278 -> 279 of 280); its head stays the quad now leaving until the next
+quad's first span reaches the queue's head, and a full queue (31 words: the
+word before the head may still be read) holds the fill back. m2_span_tex keeps
+a 5-bit word index per span slot and reads the box back at the divided
+coordinate's stage; at level 0 it clamps ONLY A NEAR MISS: a coordinate in the
+texel just under the floor, or exactly on it, becomes floor + 1/256; one in the
+texel just over the top becomes top - 1/256. The alpha test then sees what an
+exact coordinate a hair inside sees (under half), and point sampling the
+polygon's own texel. Further out is left alone: a first version clamped every
+out-of-box coordinate and, where a divide had saturated at a quad's far edge
+(VF2 frame 1304, a conifer quad at (385,188)), it painted a tree texel where
+MAME shows the stone behind. Level > 0 is not clamped (the box would need the
+bounds shifted per group); every dot measured is at level 0.
+*VERIFIED:*
+  * The reproduction, at the board's settings, walks 4074-4082: white dots
+    15 -> 0 bilinear, 15 -> 0 point; pixels changed per frame 6-18
+    (bilinear), 17-63 (point); the dots' pixels now carry the sky
+    behind. The same counts from every version built on the way.
+  * Frames on MAME's polygons, board's settings (Sky Target point-sampled as
+    R950's Auto makes it, and bilinear; Daytona and Virtua Cop in main's
+    configuration, TEXLUT 0, KW 16): mean max-channel error vs MAME over the
+    frame, old -> new, and the pixels that change (their error old -> new):
+      Rally 960     7.175 -> 7.174   3 (7.0 -> 3.7)
+      Rally 1050    6.280 -> 6.280   4 (16.5 -> 8.2)
+      Rally 1500    7.054 -> 7.054   6 (13.3 -> 8.2)
+      Rally 2040    8.368 -> 8.368   4 (3.5 -> 18.2)
+      Rally 3720    7.192 -> 7.193   3 (11.0 -> 35.7)
+      Rally 7290    3.697 -> 3.694   5 (103.4 -> 3.8)
+      Rally 7296    3.675 -> 3.673   5 (53.2 -> 5.8)
+      Rally 7300    3.621 -> 3.621   2 (133.5 -> 117.5)
+      Rally 2724    7.557 -> 7.556  18 (17.7 -> 10.8)
+      VF2 600 / 1680 / 1304               unchanged, 0 px
+      VF2 3480      6.623 -> 6.623   1 (11.0 -> 37.0)
+      VF2 2400      7.607 -> 7.607   1 (40.0 -> 48.0)
+      VF2 3360      8.143 -> 8.143   5 (24.2 -> 31.8)
+      Sky Target 1080 point 10.646 -> 10.643  8 (99.5 -> 26.0)
+      Sky Target 1080 bilinear            unchanged, 0 px
+      Dynamite Cop 90 unchanged; 100  13.039, 1 px (24.0 -> 24.0)
+      Daytona 2000  10.502 -> 10.502  1 (14 -> 14); 5000 unchanged;
+              9000  8.481 -> 8.480   2 (89.5 -> 11.0)
+      Virtua Cop 1500  41.573 -> 41.573  10 (12.3 -> 9.5)
+    (Virtua Cop's 41.6 is this bench's colour path on that dump in main's
+    configuration, the same before and after -- not chased.) No frame worse
+    by more than 0.001; the few pixels that move away from MAME are near
+    misses MAME itself takes on the other side of the same knife edge.
+    Isolated 3D pixels per frame unchanged on every frame. R944's
+    reproduction frames 7296 / 7300 untextured (its hole measure, NOTEX):
+    pixel hashes identical.
+    The clamp's firings (fetch logs, old vs new, frames where the two runs'
+    fetch orders align): Rally 960 102 at the floor, 0 at the top; Sky
+    Target 1080 6 at the floor, 12 at the top (its panel joints, R938/R947/
+    R950: the top side matters there).
+  * VF2, Lau's stage (sim/io/mame_m2_2a_play.lua PL_GAME=dig, Akira vs Lau
+    from frame ~120; frames 1296-1304, 2696-2704, 4096-4104 by the trigger,
+    28 walks through the core's geometry, bilinear and point): 2 pixels
+    change in all 56 pictures (both bilinear, one inside a conifer's screen
+    box); the core's isolated painted pixels inside the conifers' boxes
+    (their leaf fringe) are the same before and after on every walk.
+  * Unit: new test_m2_span_tex_uvcl (in `make test`): R828's MIP coordinate
+    test with a box per "quad" of one to three back-to-back spans, the box
+    read back by index as the queue serves it, one in eight off; at level 0
+    every fetch must be the reference coordinate clamped by the near-miss
+    rule (u and v), at other levels untouched; 476 / 695 clamps up / down,
+    PASS. Planted: a slot reading the newest slot's word, or a box bit
+    flipped -- FAIL. test_m2_span_tex (+ftb, mip), test_m2_raster_fill
+    (152,373), _mip, test_m2_fill_dil, test_m2_fill_m2cov, test_m2_raster3d,
+    test_m2_quad_store, test_m2_raster_band, test_m2_texel_bl4 PASS.
+    test_m2_span_tex_gc FAILS ON THE BASE TOO (R938's test, left behind when
+    8fa6643 backed R938 out of m2_span_tex; not in `make test`).
+  * UVCL 0 is bit-identical to the old RTL (pixel hashes: Rally 960 and
+    7300, VF2 3480, Sky Target 1080 point).
+  * lint_top clean, 2A and M2_NO_2A; lint_idx the same 113 findings as the
+    base; -Wall on the three modules: nothing new beyond the empty-pin style
+    the span queue already has. 2C (model2c a42daa4, a scratch worktree): the
+    patch applies with two hand edits (2C has no DIL, so the parameter lists
+    differ) and lint_top is clean.
+*AREA (quartus_map 17.0, full design, a13c623 -> this):*
+  2A: ALMs needed 40,225 -> 40,412 (+187); registers 48,350 -> 48,410 (+60);
+  block memory bits +32 (the span queue's bit); one 32 x 45 MLAB (3 LABs);
+  m2_raster3d's subtree 11,620 -> 11,872 ALUTs (fill +92, span_tex +142,
+  m2_raster3d +26). Main: 39,335 -> 39,472 (+137). The map's estimate moves
+  +-50 between runs of the same RTL (unrelated modules -- m2_geometry, the
+  i960 -- shifted by 40-120 ALUTs between these maps). Earlier versions,
+  for the record: m2_fifo_m10k for the box queue (two registered words) and
+  45-bit boxes per slot +173-197; boxes per slot and an async-read queue
+  +250 (the MLAB first failed to infer -- read-during-write -- and built 1,440
+  registers until marked no_rw_check).
+*CHEAPER, NOT TAKEN:* clamping only the floor side (the side the fetch logs
+show firing ~10x more often: Rally 960 102 floor / 0 top; but Sky Target's
+point-sampled panel joints are top-side clamps, 12 of 18) saves roughly the
+top compare and its max tracking. The box queue in the span queue's M10K
+instead of an MLAB saves the MLAB's 3 LABs at 2 M10K.
+*VF2'S CONIFER DOT (Ben's board evidence: textures off shows each conifer as
+a flat quad and a small two-faced tip; the dot sits ~5.5 px above the visible
+canopy, inside the tree's own geometry):* NOT REPRODUCED. Every conifer
+in these 28 walks is two crossed textured planes, each split at the trunk
+into two quads (u 0..228 texels down the tree, v a 64-texel window per half:
+textures off, four colours -- the "flat quad" and the "tip" of Ben's grab are
+the two planes, the second's top a few pixels higher), all at level 0 (the
+2A no-mip flag), the trees 90-180 px tall as in Ben's grab. The mechanism
+above fits his dot exactly -- a pixel on a quad's top edge, above the visible
+canopy, taking the texel beyond the polygon's u range -- and R951 covers that
+class at level 0; but no such pixel appears in the core's pictures of these
+frames, so whether his dot is this needs his camera, or the board with R951.
+Also seen: the core's VF2 quads from geodiff come out with luma 0 (the bench
+pictures are black; the walk captures no texture parameters, "tp 0") --
+coverage and transparency are unaffected, colour is; not chased.
+*NOT ON THE BOARD:* the fit and Ben's eyes decide. Timing: the clamp adds an
+MLAB read, two 13-bit subtracts and a 3:1 select between d4 and m2_texel_x2's
+request registers on clk_sys; the fit's report is the check.
+
+**R952 -- MORE ROOM BY MAKING THINGS SMALLER, NOTHING SWITCHED OFF: PARALLEL
+CONVERTERS TIME-SHARED WHERE THE SCHEDULE HAS IDLE CYCLES, EXCLUSIVE
+OPERATORS MERGED, ONE ARITHMETIC IDENTITY. quartus_map 17.0: 2A 40,225 ->
+38,718 ALMs needed (-1,507), 2C 40,133 -> 38,774 / 38,842 (-1,359 / -1,291,
+two maps of the same logic). M10K 2A -1 (R948's cache merge), 2C =; one MLAB
+more on both. Every change checked old against new, cycle for cycle.
+BRANCHES room2-2a (off bridge-r937-2a 77a4689) AND room2-2c (off room-2c
+c9ee859), LOCAL, NOT FITTED.**
+
+*Believed (R948's helpers, measured again here):* a register removed is room
+gained. *Found:* registers alone buy ~0 ALMs on this part -- pipeline copies
+already share ALMs with logic (the TGP ALU's 160-register lane: standalone fit
+1,788 -> 1,787 ALMs). The ALMs follow the LUTs. And Quartus already merges
+two copies of the SAME expression (the engine's pointer steps written twice:
+an identical netlist; the divider's two negates: -1 ALUT) and some exclusive
+operators inside one register's mux. What it cannot see is a SCHEDULE: N
+converters run in one cycle whose results are read on N different cycles, or
+in a state that comes cycles later. That is where the room was.
+
+*Method:* every RTL change measured by quartus_map 17.0 on the full design
+(2A: Model2.qsf; 2C: + M2_2C=1, M2_NO_2A_MANX_MOTION=1, M2_RECIP_LOGIC=1),
+and, because untouched units swing +-70..90 ALUTs between maps (i960_fpadd,
+unchanged RTL: 1,032 / 1,075 / 1,106 / 1,123), by a standalone map + FIT of
+the changed module at the core's parameters (virtual pins, the project's
+synthesis settings). Timing: near-critical registers (within 0.6 ns) dumped
+from copies of s1446 / s1447 (2A) and s1449 / s1462 (2C) with quartus_sta;
+nothing on that list was given logic. Identity: NEW sim/miter/miter.py builds
+an old-against-new miter -- the module (and changed submodules, renamed) twice
+from the same inputs, every output compared on every cycle -- run under the
+module's existing benches (sim/miter/fill.sh, sim/miter/geo.sh).
+
+*TAKEN -- geometry and fill (this session):*
+  1. m2_geometry / m2_geo_clip: THE u/v CONVERSIONS SHARED. The quad
+     projector ran eight u2f (16-bit integer to float) in Q_IDLE's cycle;
+     the clipper reads them only on clip_in_valid, eight cycles later at the
+     earliest (Q_MM, Q_MM2, Q_CHK, four granted Q_ISS, an answer). Now the
+     pairs are latched raw (puv) and two u2f convert a vertex a cycle
+     (puv -> uvsel -> hu/hv, done four cycles after the take). And the eight
+     f2uvw that ran on the clipper's output EVERY cycle (cu -> wu) are gone:
+     the clipper keeps qwu / qwv = f2uvw(qu / qv) beside qu / qv, written
+     wherever they are -- K_IDLE from the raw pairs (f2uvw(u2f(n)) = n for
+     every 16-bit n), K_POPR through two f2uvw on the stack word. wu reads
+     it. m2_geometry own 2,327 -> 1,537 ALUTs, m2_geo_clip 1,398 -> 1,545,
+     +294 registers; standalone fit 6,617 -> 6,284 ALMs; 2A map -301.
+     TIMING: s1449's poly_uv3 -> hu[3][15] (0.669 ns) is gone (hu now from
+     local registers); cu -> f2uvw -> wu (R614's path) is now cwu -> wu.
+  2. m2_raster_fill: ONE NORMALISER FOR THE PLANE FIT'S SIX NUMERATORS.
+     S_PF_NRM negated six numerators at once, counted twelve halves, joined
+     six. They are read one a state (R742: wait 3, wait 4, Q1, Q1W, Q2, Q2W);
+     one pipeline (select, magnitude, halves, join) started on S_PF_N's
+     second cycle finishes each the cycle before it is read (nxu_z exactly
+     when it was). Fill 5,626 -> 5,247 ALUTs, 4,119 -> 3,969 ALMs (fit).
+  3. m2_geo_project: one mag8 for both coordinates -- x's in S_A1 while the
+     adder returns y (sx_f landed), y's in S_RND, a 2:1 select in front.
+     Projector 473 -> 376 ALUTs (fitted 386 -> 321 ALMs). A first version
+     ran mag8 on the adder's result as each landed: -122 ALUTs, but the new
+     path fp_add|result -> mx_r became the standalone worst (2.43 ns at
+     12.5) next to s1462's project sst -> clip kst (0.199 ns) -- not taken.
+  4. m2_geo_engine: the texture header's three word addresses (th_w + 1 /
+     + 2 / + 3 in F_TH0..2) from one adder: engine -42 ALUTs.
+  5. m2_raster_fill: one adder per edge accumulator. xa / xb took three sums
+     in three states (S_OFF, S_FS_MULA / MULB, S_FS_WALK), xah / xbh two
+     outside the walk's own (S_OFF, MULA); now one each, the operand picked
+     by the state. xbh -> s1_valid (0.525 ns, s1446) is the emit path, not
+     touched; xah / xbh's D mux loses a source. Fill 5,247 -> 5,112 ALUTs,
+     3,969 -> 3,856 ALMs.
+  6. m2_raster_fill: each plane's two corner products summed once: base_u =
+     A - (bp_ux << k) - (bp_uy << k) + D is A - ((bp_ux + bp_uy) << k) + D in
+     32 bits, and bp_ux + bp_uy = 32'(dudx * x + dudy * y). One subtract
+     fewer per plane, 82 registers fewer, DSPs unchanged (38). Fill 5,112 ->
+     5,027 ALUTs, 3,856 -> 3,814 ALMs.
+*TAKEN -- i960 (helper, all rtl/cpu/i960), 2A total -662 / 2C -431 alone:*
+  R948 (3) ported to 2A; fpmisc: logbnr shares cvtir's int-to-double
+  normaliser, the scale path (op 6, never issued: scaler uses the multiplier)
+  out by a SCALE parameter (1 by default, the unit bench tests it), the half
+  test one bit, roundr's two renormalise shifts one; regs: the saved frames'
+  addresses (208 registers) in one 8 x 26 MLAB, written and read on different
+  cycles, the callee's frame sum once; ALU: one right shifter (fill bit
+  chosen), one left, one compare for the four condition codes; i960_top: the
+  interrupt walk's five FP-16/-12/-8 adders one, prcb + 24 and vector - 8
+  once, synmovq's two address adders one; I-cache, spill address, LSU burst
+  step as slices / once; integer and FP divide: the step's compare from its
+  subtract. fpmisc 1,612 -> 1,131, ALU 835 -> 707, regs 952 -> 890 ALUTs
+  (557 -> 349 registers). The half test's index is kept in range (a 64-bit
+  copy) so lint_idx stays clean.
+*TAKEN -- sound / copro (helper):* R948 (2) ported to 2A (the sound line
+  cache's {valid, tag} one M10K: -1); fp_mul SUBNORM one 48-bit left shifter
+  (the TGP's and TGPx4's: 690 -> 566 ALUTs; the geometry pool's fp_mul is
+  SUBNORM 0, its netlist unchanged); TGP ALU one adder for ADDD / SUBD, one
+  shifter for the four shifts (bit-reversal for the lefts, as tgpx4_cvt
+  does), the bit-op results on the integer lane (846 -> 762 ALUTs, 739 ->
+  579 registers); 2C tgpx4_cvt's 32-bit operand copy as two flags (0 ALMs,
+  -29 registers).
+
+*AREA, quartus_map 17.0 (ALMs needed / ALUTs / registers / block bits):*
+    2A  77a4689                   40,225  57,457  48,346  4,580,912
+    2A  + geometry (1)            39,924  56,848  48,641
+    2A  + (2)-(5)                 39,575  56,201  48,478
+    2A  + i960, sound, TGP        38,767  55,055  48,010
+    2A  room2-2a (+ (6))          38,718  54,909  47,929  4,580,912  (-1,507)
+    2C  c9ee859                   40,133  57,455  48,520  4,592,176
+    2C  + (1)-(5)                 39,613  56,384  48,654
+    2C  + i960, fp_mul, cvt       38,828  55,186  48,316
+    2C  room2-2c (+ (6))          38,774  55,129  48,233  4,592,176  (-1,359)
+    2C  the same + the lint fix   38,842  55,195  48,233  (i960_fpadd, untouched, +88)
+  DSP 96 / 102 unchanged. RAM summary: 2A the sound cache 128x1 + 128x16 ->
+  128x17 (one M10K fewer, expected 549 of 553); both + one MLAB (i960 regs).
+
+*TRIED, NOT TAKEN:*
+  * m2_geo_clip, cs 8 / 9's operand as one vertex-and-axis select: clipper
+    -31 ALUTs, m2_fp_pool +86 (the pool's flattened operand mux lost its
+    folding): +46 total. Reverted.
+  * The engine's pointer steps (E_DOTA's cull and F_TH3 / F_UV) formed once:
+    netlist identical. The fill dividers' S_FIN negate shared: -1 / -2.
+    The determinant as one DSP sum (ax*by - bx*ay): +28 (the subtract stays
+    in logic). All reverted.
+  * i960_fpadd's sticky bit as a mask (~-90 ALUTs, likely faster): the path
+    into u_fpadd|s1_sum has 0.503 ns on one seed -- under the 0.5 rule, left.
+  * fp_add SUBNORM normalise with a sentinel (-31 ALMs): s1446's sC_shifted
+    at 0.79 ns and the standalone path 1.2 ns longer -- left.
+  * tgpx4_core repeated sums, m2_tgpx4's low dwords from up_lo / f_lo, the
+    cfx fraction test as a mask: 0 or worse. Reverted.
+*FOUND, NOT TOUCHED (unsafe or not identical):*
+  * m2_geo_engine's colour-cache valid flags (256 registers, a 256:1 read and
+    256 enables, ~350 ALUTs): the flash clear (col_inval) keeps them out of
+    RAM; an epoch tag in cc_mem's spare M10K bits would be free but wraps --
+    not identical after 2^k clears.
+  * m2_quad_store's bank select into uvt_r / vtx_r (302 bits, ~1,200 LEs in
+    the mux report): vtx_r -0.056 / uvt -0.185 ns on s1447 / s1446; one
+    4096-deep array would drop the M10K mode from 2048 x 5 to 4096 x 2.
+  * m2_geo_clip's stack push, 8:1 x 160 bits (800 LEs): inherent to naming
+    a child's vertex from the quad or the temporaries.
+  * m2_geometry's quad-out u / v lanes (rounding, offset, shift, 8 each):
+    C_AGE gives five cycles, a serial walk needs more -- a timing change.
+  * The fill's base_* adders and bh_* sums in fewer adders: needs S_PF_B
+    longer (tex_ok later). Debug counters: Quartus prunes those with no
+    reader (m2_geo's dbg_mtx_n / dbg_walk_objs survive the fit -- 32
+    registers, two incrementers; not chased).
+
+*VERIFIED (each change against its parent; the totals on the merged trees):*
+  * Fill miter (m2_raster_fill + m2_raster_div, 21 outputs, every cycle)
+    under tb_m2_raster_fill (152,373 checks), _mip (1,989,828), m2cov, dil:
+    109,964,114 cycles (2C, no DIL: 107,610,021), 0 differ. A planted fault
+    (nxo_z's bit 0) differs on 31.5 M cycles -- and the benches' own checks
+    still PASS on it: the miter, not the bench, is the proof.
+  * Geometry miter (m2_geometry + clip + project + engine, 50 outputs):
+    tb_m2_geometry, _mipz and seven MAME walks through geodiff (VF2 w2300 /
+    w5175c / w3450c / w2700c as geodiff_2a with M2GD_PRESET's table in both
+    copies; Daytona w1000 / w5000 / w9000): 7.2 M cycles, 0 differ, 2A and
+    2C. tb_clip_top now asserts out_wu / out_wv == f2uvw(out_u / out_v) on
+    every cycle: 3,280,961 cycles 0 (a planted fault: 2,481,321).
+  * geodiff ours.txt with each quad's take cycle (new M2GD_QCYC=1) and the
+    pool hash: 8,721 quads, every line and hash identical to the parent's,
+    on both merged trees.
+  * Logs byte-identical to the parents' (run output): test_m2_raster_fill,
+    _mip, test_m2_fill_m2cov, _dil, test_m2_raster3d (487 lines),
+    test_m2_quad_store, test_m2_span_tex, test_m2_texel_bl4, test_m2_geo_*,
+    test_geo, test_i960_top, _fx, _c2, test_i960_fpmisc, test_tgp.
+  * Helpers' evidence (their branches room2-i960-2a/-2c, room2-snd-2a/-2c):
+    i960 lockstep top / irq / lat / vc / fr / fx / ring / dc (+ c2,
+    fptrans_log on 2C) byte-identical; fpmisc and ALU old-vs-new 20 M / 52 M
+    vectors 0 (mutants caught); fp_mul 30 M pairs per SUBNORM, mb86233_alu
+    10 M cycles per SHORT, tgpx4_cvt 20 M: 0; TGP replays vf2_skip /
+    vc2_play / zg_attract identical (2.6 M / 3.2 M / 11.4 M words); 2C TGPx4
+    HOTD boot 8,697,138 of 8,697,138 outputs; DOA 20 s sound log and WAV
+    byte-identical (R948 (2) on 2A).
+  * lint_top clean on 2A and 2C (-DM2_2C -DM2_NO_2A_MANX_MOTION); lint_idx
+    2A 113 -> 111 (two mb86233_alu pbit findings gone with pbit), 2C 113.
+*LEFT:* the fits (Ben) -- clk_sys on 2C near the projector / clipper states
+(s1462: project sst -> clip kst 0.199 ns: the projector's state now also
+selects mag8's input; the clipper's kst gains qwu's enables), and the M10K
+count in the fitter's RAM summary.
+
+**R952, INTEGRATED: R951 (the texel box clamp) AND R949 (the output
+interpolator) MERGED ONTO room2-2a / room2-2c, THE RECIPROCAL TABLE IN LOGIC
+BY DEFAULT. BRANCHES int-2a (off room2-2a 514c411) AND int-2c (off room2-2c
+f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
+38,718 -> 38,918 (+200), 2C 38,774 -> 38,935 (+161); registers 48,180 /
+48,515; block memory bits 4,580,944 / 4,592,208; DSP 99 / 105.**
+  * Merged by hand. R951's fill block sits beside S_OZ's normaliser, which
+    room2's fill restructure (one normaliser for the six numerators, one
+    adder per edge, the corner products summed once) did not touch: S_OZ is
+    the same text in both, and the R951 hunks land unchanged (2A: the same
+    added and removed lines as rally-sky's 32ca36a; 2C: rally-sky's adapted
+    patch for the tree with no DIL, its parameter lists merged with R948's
+    RECIP_M10K and its comments made the same as 2A's). R949 on the 2A line
+    takes only LERP: the 2A line has no R946 OVERLAP port or define, so
+    m2_2a_sound's parameter list and Model2.sv's instance carry EXACT and
+    LERP, and M2_2A_SND_LERP defaults to 1 inside `ifdef M2_2A (so 2A and
+    2C), 0 in the main build. The geodiff bench keeps R952's M2GD_QCYC and
+    gains R951's trow=.
+  * The reciprocal table: room2-2a never carried R948 (1) (m2_recip_rom is
+    LUTs there). room2-2c did, with "M2_RECIP_LOGIC=1" in the fits' qsf to
+    undo it (s1457-s1462 timed better without the M10K table). int-2c
+    flips the default in Model2.sv: the LUT form unless "M2_RECIP_M10K=1";
+    "M2_RECIP_LOGIC=1" is no longer needed. The map shows m2_recip_rom as
+    280 / 276 ALUTs and no RAM on both builds.
+  * int-2c's Model2.qsf carries "M2_2C=1" and "M2_NO_2A_MANX_MOTION=1"
+    (committed, the room-2c builds' patch), so the worktree builds 2C as
+    checked out. quartus_map rewrites Model2.qsf (+5 lines: m2_testpattern
+    and SDRAM FAST_* assignments); restored from git after each map.
+  * Where the +200 / +161 goes: m2_snd_lerp 97 ALUTs, 190 registers, 3 DSP
+    (LERP = 1 in the map's parameter settings, both builds); R951's box
+    queue (g_ubq.ub_mem, an MLAB) and the clamp.
+*VERIFIED:*
+  * lint_top clean (2A defaults; 2C -DM2_2C -DM2_NO_2A_MANX_MOTION).
+    lint_idx 2A 111, 2C 113 -- the parents' counts, none in the new code.
+  * make test PASS on both (85 targets, test_m2_span_tex_uvcl checks=7225
+    fails=0); test_m2_snd_lerp PASS on both.
+  * Fill miter (sim/miter/fill.sh) with UVCL at its default 0, room2's fill
+    against the integrated one: 2A 109,964,114 cycles, 2C 107,610,021, 0
+    with an output differing -- the same totals as R952's. With UVCL off the
+    merged fill is room2's, cycle for cycle; UVCL on changes the picture by
+    design, so the miter cannot speak for it.
+  * Rally's sky dots, the integrated 2A tree: its geometry (geodiff 2A,
+    TEXLUT) on walks 4074-4082 gives ours.txt byte-identical to rally-sky's;
+    the raster bench at the board's settings (benchbd) shows 15 dots with
+    UVCL 0 and 0 with UVCL 1, bilinear and point alike; walk 4076's pixels
+    identical to rally-sky's in all four runs.
+  * Sound, tb_m2_2a_sound on Dynamite Cop 20 s (2C with OVERLAP 1, as its
+    build): LERP 0 log and WAV byte-identical to the parents'; LERP 1 PASS,
+    every sample within its two step samples, 416,028 (2A) / 416,568 (2C)
+    of 881,998 strictly between them -- the interpolator is in the path.
+*LEFT:* the fits (Ben); the timing checks R951 and R952 name (the clamp's
+MLAB read into m2_texel_x2's request registers; 2C near the projector /
+clipper states).

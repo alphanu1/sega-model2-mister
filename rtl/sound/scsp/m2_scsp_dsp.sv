@@ -40,7 +40,27 @@ module m2_scsp_dsp #(
   // hardware finding), and every 2A driver writes 32 zero words there right
   // after its MADRS table -- so in MAME every game's DSP runs with all
   // MADRS 0. 1 restores MAME's mirror (benches: equal to MAME's mix).
-  parameter bit MADRS_MIRROR = 1'b0
+  parameter bit MADRS_MIRROR = 1'b0,
+  // R946: OVERLAP -- the run for sample n while the slots make sample n+1
+  // (m2_scsp OVERLAP). MIXS becomes two banks: the slots add their sends to
+  // one while a run reads the other, and a go hands the run the slots' bank
+  // and the slots the other (cleared after the run before). MAME's MIXS
+  // stays exact: a stopped DSP takes no bank (the sends keep adding up),
+  // and an abandoned run (IRA > 0x31, MIXS kept) has the sends that went to
+  // the other bank meanwhile added into its own once the slots are parked
+  // (mix_idle), before the next go.
+  parameter bit OVERLAP = 1'b0,
+  // R947: ABORT_MERGE -- with OVERLAP, an abandoned run's merge (above). 0
+  // leaves it out (~28 ALMs on the 2C build): MIXS is then MAME's except
+  // after a run that IRA > 0x31 abandons, which no game's program does
+  parameter bit ABORT_MERGE = 1'b1,
+  // R946: WPOST -- the ring writes posted into an eight-entry queue instead
+  // of holding the next memory step until each one lands. A write enters the
+  // queue (and its line leaves the cache) once its step's read is in; the
+  // queue goes out in order, and a cache fill waits until it is empty -- so a
+  // read still sees every earlier write and no later one, as before. The port
+  // time stays (one SDRAM transaction a write) but runs under the steps.
+  parameter bit WPOST = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -53,6 +73,8 @@ module m2_scsp_dsp #(
   input  logic  [3:0] mix_sel,
   input  logic        mix_we,
   input  logic [19:0] mix_val,
+  input  logic        mix_idle,           // R946 OVERLAP: no slot is sending (the engine is parked)
+  output logic        mrg,                // R946 OVERLAP: an abandoned run's banks being merged
   // EFREG for the effect returns (registered read)
   input  logic  [3:0] ef_idx,
   output logic signed [15:0] ef_q,
@@ -130,6 +152,11 @@ module m2_scsp_dsp #(
   (* ramstyle = "MLAB" *) logic [15:0] efreg [16];
   logic  [3:0] mx_ra, ef_ra, clr_i;
   logic [19:0] mx_q;
+  // R946 OVERLAP: bank A is mixs, bank B mixs_b; wbank the slots', rbank the run's
+  logic        wbank, rbank, mg_need, mg_on;
+  logic  [4:0] mg_i;
+  logic  [3:0] ra_a, ra_b;
+  logic [19:0] q_a, q_b;
   logic [15:0] ef_rq;
   logic        ef_we;
 
@@ -161,6 +188,14 @@ module m2_scsp_dsp #(
   logic        abort, mem_now, stall;
   logic [31:0] addr_w;
   logic        wr_snp;
+  // R946 WPOST: the queue
+  // a shift register, the head at 0 (registers: every entry is compared,
+  // wq_hit; an indexed read would be inferred as a RAM)
+  logic [18:1] wq_a [8];
+  logic [15:0] wq_d [8];
+  logic  [3:0] wq_n;
+  logic [18:1] wr_a_r, wsn_a;
+  wire         wq_push = WPOST && w_pend && !pk_take && !mv_pend && wq_n != 4'd8;
 
   // one multiplier: X x Y, PACK, UNPACK
   logic signed [24:0] mul_a;
@@ -201,14 +236,47 @@ module m2_scsp_dsp #(
     if (ms_we) mems[IWA]  <= memval[23:0];
     t_q   <= temp[t_ra];
     ms_q  <= mems[IRA[4:0]];
-    mx_q  <= mixs[mx_ra];
     ef_rq <= efreg[ef_ra];
-    if (dst == D_CLRM) mixs[clr_i] <= 20'd0;
-    else if (mix_we) mixs[mix_sel] <= mx_q + mix_val;
     if (dst == D_CLRE) efreg[clr_i] <= 16'd0;
     else if (ef_we) efreg[EWA] <= ef_rq + shifted[23:8];
   end
   assign ef_q  = ef_rq;
+
+  // MIXS: the slots' sends (read-modify-write: mix_sel a clock before mix_we)
+  wire [19:0] mx_run;                                 // MIXS[IRA] for a run
+  wire        mg_wr = mg_on && mg_i[0];               // R946: a merge write (odd clocks)
+  generate if (!OVERLAP) begin : g_mix1
+    always_ff @(posedge clk) begin
+      mx_q <= mixs[mx_ra];
+      if (dst == D_CLRM) mixs[clr_i] <= 20'd0;
+      else if (mix_we) mixs[mix_sel] <= mx_q + mix_val;
+    end
+    assign mx_run = mx_q;
+    assign q_a = '0; assign q_b = '0; assign ra_a = '0; assign ra_b = '0;
+  end else begin : g_mix2
+    // R946: two banks. The run reads rbank at IRA; the slots read-modify-write
+    // wbank; the clear after a run is rbank's (both after reset); a merge
+    // reads both at mg_i[4:1] and writes the sum into rbank, 0 into the other.
+    (* ramstyle = "MLAB" *) logic [19:0] mixs_b [16];
+    always_comb begin
+      ra_a = mg_on ? mg_i[4:1] : (dst == D_RUN && !rbank) ? IRA[3:0] : mix_sel;
+      ra_b = mg_on ? mg_i[4:1] : (dst == D_RUN &&  rbank) ? IRA[3:0] : mix_sel;
+    end
+    // one adder: a send onto the slots' bank, or a merge's two banks
+    wire [19:0] s_sum = ((wbank && !mg_on) ? q_b : q_a) + (mg_on ? q_b : mix_val);
+    always_ff @(posedge clk) begin
+      q_a <= mixs[ra_a];
+      q_b <= mixs_b[ra_b];
+      if (dst == D_CLRM && (stopped || !rbank)) mixs[clr_i] <= 20'd0;
+      else if (mg_wr) mixs[mg_i[4:1]] <= rbank ? 20'd0 : s_sum;
+      else if (mix_we && !wbank) mixs[mix_sel] <= s_sum;
+      if (dst == D_CLRM && (stopped || rbank)) mixs_b[clr_i] <= 20'd0;
+      else if (mg_wr) mixs_b[mg_i[4:1]] <= rbank ? s_sum : 20'd0;
+      else if (mix_we && wbank) mixs_b[mix_sel] <= s_sum;
+    end
+    assign mx_run = rbank ? q_b : q_a;
+    assign mx_q = '0;
+  end endgenerate
 
   // ------------------------------------------------------------------ a step
   always_comb begin
@@ -216,7 +284,7 @@ module m2_scsp_dsp #(
     logic signed [31:0] acc2;
     abort = 1'b0;
     if (IRA <= 6'h1f)      inputs = {ms_q[23], ms_q};
-    else if (IRA <= 6'h2f) inputs = {mx_q[19], mx_q, 4'd0};
+    else if (IRA <= 6'h2f) inputs = {mx_run[19], mx_run, 4'd0};
     else if (IRA <= 6'h31) inputs = 25'd0;            // EXTS: no external input on Model 2
     else begin inputs = 25'd0; abort = 1'b1; end
     if (IWT && IRA == {1'b0, IWA}) inputs = memval;
@@ -248,6 +316,7 @@ module m2_scsp_dsp #(
   // ------------------------------------------------------------------ memory
   logic        lk_req, lk_hit, fill_req, fill_done;
   logic [15:0] lk_line, c_mline;
+  logic        c_sn2b;
   logic [63:0] lk_data, fill_data;
   logic        c_mreq;
   logic [18:1] r_a;
@@ -261,16 +330,46 @@ module m2_scsp_dsp #(
     .clk(clk), .rst_n(rst_n),
     .lk_req(lk_req), .lk_line(lk_line), .lk_hit(lk_hit), .lk_data(lk_data),
     .fill_req(fill_req), .fill_line(r_a[18:3]), .fill_done(fill_done), .fill_data(fill_data),
-    .m_req(c_mreq), .m_line(c_mline), .m_ack(m_ack && !w_out), .m_data(m_data),
-    .snp(snp), .snp_line(snp_addr[18:3]), .snp2(wr_snp), .snp2_line(w_a[18:3]),
-    .dbg_fills()
+    .m_req(c_mreq), .m_line(c_mline), .m_ack(m_ack && !w_out), .m_data(m_data),   // (WPOST: c_mreq waits for the queue, below)
+    .snp(snp), .snp_line(snp_addr[18:3]), .snp2(wr_snp), .snp2_line(WPOST ? wsn_a[18:3] : w_a[18:3]),
+    .dbg_fills(), .sn2_busy(c_sn2b)
   );
+  // a read of a line with a write still queued is a miss whatever the cache
+  // says (its invalidation may not be through the cache's snoop yet): the
+  // fill waits for the queue, so it brings the written word. So is a read of
+  // the last queued write's line while that write's snoop was still on its
+  // way when the lookup read the tag (the write may already have landed --
+  // at a short latency it can beat its own invalidation)
+  logic        wq_hit, lk_sb_r;
+  always_ff @(posedge clk) if (lk_req) lk_sb_r <= wr_snp || c_sn2b;
   always_comb begin
-    m_we = w_out; m_wdata = w_d;
-    m_addr = w_out ? w_a : {c_mline, 2'b00};
-    m_req = !gap && (w_out || c_mreq);
+    wq_hit = WPOST && lk_sb_r && wsn_a[18:3] == r_a[18:3];
+    for (int i = 0; i < 8; i++)
+      if (WPOST && 4'(i) < wq_n && wq_a[i][18:3] == r_a[18:3]) wq_hit = 1'b1;
   end
-  assign wr_addr = w_a;
+  always_comb begin
+    if (WPOST) begin                                  // R946: the queue's head, then a fill once it is empty
+      m_we = w_out; m_wdata = wq_d[0];
+      m_addr = w_out ? wq_a[0] : {c_mline, 2'b00};
+      m_req = !gap && (w_out || (c_mreq && wq_n == 4'd0));
+    end else begin
+      m_we = w_out; m_wdata = w_d;
+      m_addr = w_out ? w_a : {c_mline, 2'b00};
+      m_req = !gap && (w_out || c_mreq);
+    end
+  end
+  assign wr_addr = WPOST ? wr_a_r : w_a;
+  always_ff @(posedge clk) begin                      // R946 WPOST: the queue's storage
+    if (WPOST && w_out && m_ack) begin                 // the head has landed: the rest move up
+      wr_a_r <= wq_a[0];
+      for (int i = 0; i < 7; i++) begin wq_a[i] <= wq_a[i + 1]; wq_d[i] <= wq_d[i + 1]; end
+    end
+    if (wq_push) begin                                // (behind the last, after a pop's move)
+      wq_a[3'(wq_n - {3'd0, w_out && m_ack})] <= w_a;
+      wq_d[3'(wq_n - {3'd0, w_out && m_ack})] <= w_d;
+      wsn_a <= w_a;
+    end
+  end
 
   // UNPACK's operand: {sign, ~sign (or sign past exponent 11), mantissa << 11}
   wire  [3:0] up_e  = r_word[14:11];
@@ -332,14 +431,38 @@ module m2_scsp_dsp #(
       up_take <= 1'b0; up_take2 <= 1'b0;
       sc_wait <= 1'b0; scan_i <= 7'd0; frc <= '0; yreg <= '0; adrs <= '0; memval <= '0;
       w_a <= '0; w_d <= '0; r_a <= '0; r_nofl <= 1'b0; r_word <= '0; pk_s <= 1'b0;
+      wbank <= 1'b0; rbank <= 1'b0; mg_need <= 1'b0; mg_on <= 1'b0; mg_i <= '0;
+      wq_n <= '0;
     end else begin
       done <= 1'b0; wr_done <= 1'b0; wr_snp <= 1'b0;
       gap <= m_req && m_ack;
       if (go && dst != D_IDLE) go_p <= 1'b1;
+      if (OVERLAP && go && dst == D_IDLE && w_en && w_addr == 11'h5f8) go_p <= 1'b1;   // R946: a go with the scan's start runs after it
+      // R946 OVERLAP: a go that will run hands the run the slots' bank (a
+      // stopped DSP's go takes none: MAME's MIXS keeps adding up)
+      if (OVERLAP && go && (!stopped || (dst == D_IDLE && w_en && w_addr == 11'h5f8))) begin
+        rbank <= wbank; wbank <= !wbank;
+      end
+      // R946 OVERLAP: an abandoned run keeps MIXS; the sends since went to the
+      // other bank -- added into the run's once the slots are parked, and the
+      // slots go back to it
+      if (OVERLAP && mg_need && !mg_on && mix_idle && dst == D_IDLE) begin mg_on <= 1'b1; mg_i <= '0; end
+      if (mg_on) begin
+        mg_i <= mg_i + 5'd1;
+        if (mg_i == 5'd31) begin mg_on <= 1'b0; mg_need <= 1'b0; wbank <= rbank; end
+      end
 
 
       // a write goes out once no read is in flight: MAME reads before it
       // writes in a step that does both, so the read (and its fill) go first
+      if (WPOST) begin
+        // R946: into the queue once its step's read is in (its line out of the
+        // cache now, before any later read looks); out on the port in order
+        if (wq_push) begin w_pend <= 1'b0; wr_snp <= 1'b1; end
+        if (w_out && m_ack) begin w_out <= 1'b0; wr_done <= 1'b1; end
+        else if (!w_out && !gap && wq_n != 4'd0) w_out <= 1'b1;
+        wq_n <= wq_n + {3'd0, wq_push} - {3'd0, w_out && m_ack};
+      end else
       if (w_out && m_ack) begin w_out <= 1'b0; w_pend <= 1'b0; wr_done <= 1'b1; end
       else if (w_pend && !pk_take && !w_out && !mv_pend && !gap) begin
         // out on the port, and its line invalidated now -- after this step's read
@@ -354,7 +477,7 @@ module m2_scsp_dsp #(
       up_take <= up_go; up_take2 <= up_take;
       case (rs)
         R_LOOK: begin
-          if (lk_hit) begin
+          if (lk_hit && !wq_hit) begin
             r_word <= lk_data[{r_a[2:1], 4'b0} +: 16];
             if (r_nofl) begin memval <= {1'b0, lk_data[{r_a[2:1], 4'b0} +: 16], 8'd0}; mv_pend <= 1'b0; rs <= R_IDLE; end
             else rs <= R_UNP;
@@ -392,7 +515,7 @@ module m2_scsp_dsp #(
         D_RUN: begin
           case (ph)
             3'd2: begin
-              if (abort) begin dst <= D_IDLE; done <= 1'b1; end   // MAME returns: no DEC, MIXS kept
+              if (abort) begin dst <= D_IDLE; done <= 1'b1; if (OVERLAP && ABORT_MERGE) mg_need <= 1'b1; end   // MAME returns: no DEC, MIXS kept
               else if (!stall) ph <= 3'd3;
             end
             3'd3: begin
@@ -440,10 +563,12 @@ module m2_scsp_dsp #(
       endcase
     end
   end
-  assign busy = dst != D_IDLE;
+  assign busy = dst != D_IDLE || mg_need;
+  assign mrg  = mg_need;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, ins[56:55], ins[28], ins[15], c_mline[15:15], fill_data, addr_w[31:18], prod[37:35]};
+  wire _unused = &{1'b0, ins[56:55], ins[28], ins[15], c_mline[15:15], fill_data, addr_w[31:18], prod[37:35],
+                    wsn_a[2:1], mg_wr, q_a, q_b, ra_a, ra_b, mx_q, mx_ra};   // (R946: the side a build leaves out)
   /* verilator lint_on UNUSEDSIGNAL */
 
 endmodule

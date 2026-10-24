@@ -129,11 +129,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // time and a saturated underrun count, 15-90 none. Under the heavy load
 // bench's latencies the sound ports wait p50 / p99 90 / 319 clk_mem without
 // AGE and 79 / 123 with it. The 2A build keeps 0 (its netlist unchanged).
-`ifdef M2_2C
-`ifndef M2_2A_SND_AGE
-`define M2_2A_SND_AGE 1
-`endif
-`endif
+// R947: AGE OFF again on 2C -- it did not help on the board (the fault was
+// the SCSP's time per sample, R946), and the 2C build needs the room.
 `ifndef M2_2A_SND_AGE
 `define M2_2A_SND_AGE 0
 `endif
@@ -142,6 +139,31 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `endif
 `ifndef M2_2A_SND_EXACT
 `define M2_2A_SND_EXACT 1
+`endif
+// R946: M2_2A_SND_OVL, the SCSP's effects DSP run for sample n alongside the
+// slots of sample n+1 (m2_scsp OVERLAP): a sample costs the longer of the two,
+// not their sum. ON IN THE 2C BUILD: House of the Dead's DSP program (112
+// steps, ~23 ring reads and 10 writes a sample, each to SDRAM) plus the
+// tutorial's slot traffic runs the engine past its 1,814 clocks a sample at
+// light port latency (6-40 clk_sys) -- the output FIFO underruns in the
+// attract's tutorial screen, the board's symptom. The 2A build keeps 0.
+// R947: the overlap alone (WPOST, the posted ring writes, off: ~200 ALMs for
+// margin the overlap already gives) -- +117 ALMs on the 2C build's map.
+`ifdef M2_2C
+`ifndef M2_2A_SND_OVL
+`define M2_2A_SND_OVL 1
+`endif
+`endif
+`ifndef M2_2A_SND_OVL
+`define M2_2A_SND_OVL 0
+`endif
+// R949: M2_2A_SND_LERP, the sound board's 44.1 kHz output moved along a straight
+// line between samples (m2_snd_lerp) so that the framework's 48 kHz sampling --
+// its IIR filter is off for room (R788) -- reads the line, not the step. As a
+// step, every bright sound aliases into 4-16 kHz (a 4 kHz tone carries spurs at
+// -16 dB; House of the Dead's FM voice 8.5 dB below itself): the "tinny" sound.
+`ifndef M2_2A_SND_LERP
+`define M2_2A_SND_LERP 1
 `endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
@@ -253,6 +275,12 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `endif
 `ifndef M2_2A_SND_EXACT
 `define M2_2A_SND_EXACT 1
+`endif
+`ifndef M2_2A_SND_OVL
+`define M2_2A_SND_OVL 0
+`endif
+`ifndef M2_2A_SND_LERP
+`define M2_2A_SND_LERP 0
 `endif
 
 // R839: VIRTUA COP'S HARDWARE SWITCHES, compile time (Ben: off-able for the
@@ -427,7 +455,11 @@ localparam CONF_STR = {
 	"O[27],Textures,On,Off;",
 	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
 	// nearest of the same four texels -- this core's picture before R620.
-	"O[31],Texture filter,Bilinear,Point;",
+	// R950: "Auto" (status[31] = 0, the old "Bilinear", so saved configs land on
+	// it) is Bilinear except where a game's own look needs point sampling:
+	// Sky Target (its sky panels' joints show lines under the bilinear filter;
+	// the arcade shows none -- Ben, on the board, 2026-10-24).
+	"O[31],Texture filter,Auto,Point;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
@@ -1113,7 +1145,8 @@ wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd0 :
 always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
-always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
+wire       texpt_game;   // R950: this game defaults to point sampling (assigned with the game decode)
+always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31] | texpt_game};
 // R650: the texel step, into clk_sys where m2_span_tex runs (three flops,
 // R229). Quasi-static, and each span latches it whole.
 reg [1:0] pxk_s1, pxk_s2, pxk_s3;
@@ -2833,6 +2866,7 @@ wire is_desert = (game_id[6:0] == 7'd2);
 //   0x11 Virtua Cop 2 (vcop2)               program 2 MB, two triggers
 //   0x12 Zero Gunner (zeroguna)             program 1 MB, two sticks
 wire is_srally  = M2A && (game_id[6:0] == 7'h10);
+assign texpt_game = M2A && (game_id[6:0] == 7'h18);   // R950: Sky Target -- Texture filter "Auto" is point here
 wire is_vcop2   = M2A && (game_id[6:0] == 7'h11);
 wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
 // R924: THE 2C GAMES (M2_2C builds only; C2 is 0 in every other build, so these
@@ -3587,7 +3621,8 @@ end else if (SND2A) begin : g_2asnd
 	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1), .CHKSUM(SND_CHKSUM),   // R882
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
-	              .EXACT(`M2_2A_SND_EXACT != 0)) u_snd2a (   // R884
+	              .EXACT(`M2_2A_SND_EXACT != 0), .OVERLAP(`M2_2A_SND_OVL != 0),
+	              .LERP(`M2_2A_SND_LERP != 0)) u_snd2a (   // R884, R946, R949
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -4285,6 +4320,19 @@ localparam bit R3D_WINKEY = M2A;
 // texels wide and was drawn as horizontal lines. On the 2A build (one M10K
 // a store bank more there); main keeps the clamp.
 localparam bit R3D_UVSH = M2A;
+// R948: the fill's reciprocal table (m2_recip_rom) in two M10K instead of
+// ~280 ALUTs of logic, on the 2A board (and so the 2C build). The block it
+// costs is paid by m2_2a_sound's line cache (its valid bit merged into the tag
+// array: one M10K fewer).
+// R952: THE LUT FORM IS THE DEFAULT AGAIN. The M10K table hurt timing; the
+// fits s1457-s1462 ran with "M2_RECIP_LOGIC=1" (the LUT form) and timed
+// better. VERILOG_MACRO "M2_RECIP_M10K=1" puts the two blocks back;
+// "M2_RECIP_LOGIC=1" is now the default and changes nothing.
+`ifdef M2_RECIP_M10K
+localparam bit R3D_RECIP_M10K = M2A;
+`else
+localparam bit R3D_RECIP_M10K = 1'b0;
+`endif
 /* verilator lint_off UNUSEDSIGNAL */   // read only with R3D_TEXLUT
 wire [7:0] q3d_trow;                       // R867: the luma table's row
 /* verilator lint_on UNUSEDSIGNAL */
@@ -7656,11 +7704,13 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)
               .TXLW8(1'b1), // R787/R796: 128-bit texel lines, eight-word reads on all four miss ports
               .TXREUSE(1'b0),   // R633: every other group while late -- REJECTED by eye (R634)
+              .UVCL(1'b1),  // R951: each level-0 fetch kept inside its quad's own texels (Rally's sky dots)
               .MIP(R3D_MIP),    // R828: mip levels from each quad's edge footprint (R828c: with the geometry's flag)
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
               .TEXLUT(R3D_TEXLUT), .LSB(R3D_LSB),   // R932
               .KW(R3D_WINKEY ? 20 : 16),
+              .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH)) u_raster3d (   // R940   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),

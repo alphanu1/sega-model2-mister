@@ -660,6 +660,18 @@ module m2_geometry #(
   endfunction
 
   logic [31:0] hu [4], hv [4];
+  // R952: THE EIGHT u2f AS TWO, A VERTEX A CYCLE. The pairs are latched raw
+  // with the polygon (puv) and converted one vertex a cycle, a stage apart
+  // (puv -> uvsel -> hu / hv): hu / hv are final four cycles after Q_IDLE
+  // takes the polygon, and the clipper reads them only on clip_in_valid,
+  // which Q_WAIT raises no earlier than the eighth cycle (Q_MM, Q_MM2,
+  // Q_CHK, four Q_ISS grants, an answer). A polygon refused in Q_CHK and the
+  // next one taken restart the walk. The raw pairs are also the clipper's
+  // in_wu / in_wv: f2uvw(u2f(n)) is n for every 16-bit n.
+  logic [31:0] puv [4];
+  logic [31:0] uvsel;
+  logic [1:0]  uvk, uvsel_i;
+  logic        uvrun, uvsel_v;
   logic [31:0] ptex;  logic [7:0] plum;
   // R828c: the polygon's |dotp| (latched with it) and its no-mip flag, set in
   // Q_CHK from hzmax and handed to the clipper with the texture state.
@@ -720,7 +732,8 @@ module m2_geometry #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
-      for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; end
+      for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; puv[k] <= 32'd0; end
+      uvsel <= 32'd0; uvk <= 2'd0; uvsel_i <= 2'd0; uvrun <= 1'b0; uvsel_v <= 1'b0;   // R952
       ptex <= 32'd0; plum <= 8'd0; pdotp <= 12'd0; pmipz <= 1'b0;   // R828c
       pcoef <= 12'd0;                                              // R905
       c_bad <= 1'b0; c_zmode <= 2'd0;
@@ -736,6 +749,18 @@ module m2_geometry #(
       end
     end else begin
       pj_wait <= (qst == Q_WAIT) ? (pj_wait + 10'd1) : 10'd0;
+      // R952: the conversion walk (below Q_IDLE's take, which restarts it)
+      uvsel   <= puv[uvk];
+      uvsel_i <= uvk;
+      uvsel_v <= uvrun;
+      if (uvrun) begin
+        uvk <= uvk + 2'd1;
+        if (uvk == 2'd3) uvrun <= 1'b0;
+      end
+      if (uvsel_v) begin
+        hu[uvsel_i] <= u2f(uvsel[15:0]);
+        hv[uvsel_i] <= u2f(uvsel[31:16]);
+      end
       case (qst)
         // A refused polygon is still ACCEPTED from the engine -- poly_ready is
         // high here -- it simply goes no further. Refusing to accept it would
@@ -760,11 +785,11 @@ module m2_geometry #(
           hx[1] <= v1x; hy[1] <= v1y; hz[1] <= v1z;
           hx[2] <= v2x; hy[2] <= v2y; hz[2] <= v2z;
           hx[3] <= v3x; hy[3] <= v3y; hz[3] <= v3z;
-          // R268 hands them over as {v, u}, v in the high half.
-          hu[0] <= u2f(poly_uv0[15:0]); hv[0] <= u2f(poly_uv0[31:16]);
-          hu[1] <= u2f(poly_uv1[15:0]); hv[1] <= u2f(poly_uv1[31:16]);
-          hu[2] <= u2f(poly_uv2[15:0]); hv[2] <= u2f(poly_uv2[31:16]);
-          hu[3] <= u2f(poly_uv3[15:0]); hv[3] <= u2f(poly_uv3[31:16]);
+          // R268 hands them over as {v, u}, v in the high half. R952:
+          // latched raw, converted by the walk above.
+          puv[0] <= poly_uv0; puv[1] <= poly_uv1;
+          puv[2] <= poly_uv2; puv[3] <= poly_uv3;
+          uvk <= 2'd0; uvrun <= 1'b1;
           pcol  <= poly_col;                       // R222
           ptex  <= poly_tex; plum <= dbg_lum;      // R271: the lighting luminance
           pdotp <= poly_dotp;                      // R828c
@@ -945,6 +970,8 @@ module m2_geometry #(
   // the copy stage two registers on rounds it, (x + 1) >> 1, which is
   // round-half-up of f/2. The minimum below reads the truncated quarter,
   // which is never above the rounded one, so the subtract cannot go negative.
+  // R952: applied in m2_geo_clip now (its copy, out_wu / out_wv), kept beside
+  // the clipper's coordinates instead of run on them here every cycle.
   function automatic logic [15:0] f2uvw(input logic [31:0] f);
     logic [7:0]  e;
     logic [23:0] m;
@@ -973,7 +1000,10 @@ module m2_geometry #(
   // R614: the conversion is its own stage -- s368 still had clipper -> ru/rv
   // at -0.796 with conversion, minimum, subtract and clamp in one cycle.
   logic [15:0] wu [4], wv [4];   // R791: eighths
-  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= f2uvw(cu[k]); wv[k] <= f2uvw(cv[k]); end
+  // R952: f2uvw(cu / cv) as the clipper keeps it (out_wu / out_wv), not eight
+  // converters here on every cycle -- the same value on every cycle.
+  logic [15:0] cwu [4], cwv [4];
+  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= cwu[k]; wv[k] <= cwv[k]; end
   wire  [15:0] uper = (16'd256 << ctex[3:1]) - 16'd1;   // 2 x width, quarter-texels, less one
   wire  [15:0] vper = (16'd256 << ctex[6:4]) - 16'd1;
   // R739: the minimum in two rounds a stage apart -- the pairs registered
@@ -1105,6 +1135,8 @@ module m2_geometry #(
     .pj_out_fx(pj_out_fx), .pj_out_fy(pj_out_fy),
     .in_u0(hu[0]), .in_v0(hv[0]), .in_u1(hu[1]), .in_v1(hv[1]),
     .in_u2(hu[2]), .in_v2(hv[2]), .in_u3(hu[3]), .in_v3(hv[3]),
+    .in_wu0(puv[0][15:0]), .in_wv0(puv[0][31:16]), .in_wu1(puv[1][15:0]), .in_wv1(puv[1][31:16]),   // R952
+    .in_wu2(puv[2][15:0]), .in_wv2(puv[2][31:16]), .in_wu3(puv[3][15:0]), .in_wv3(puv[3][31:16]),
     .in_col(pcol), .in_z({12'd0, WINKEY ? ~obj_win : 4'd0, hzkey}), .in_moire(1'b0),   // R246: the reference's 16-bit z value
     .in_tex(ptex), .in_lum(plum),                            // R271
     .in_mipz(pmipz), .out_mipz(q_mipz),                      // R828c
@@ -1123,6 +1155,8 @@ module m2_geometry #(
     .out_sx2(q_x2), .out_sy2(q_y2), .out_sx3(q_x3), .out_sy3(q_y3),
     .out_u0(cu[0]), .out_v0(cv[0]), .out_u1(cu[1]), .out_v1(cv[1]),
     .out_u2(cu[2]), .out_v2(cv[2]), .out_u3(cu[3]), .out_v3(cv[3]),
+    .out_wu0(cwu[0]), .out_wv0(cwv[0]), .out_wu1(cwu[1]), .out_wv1(cwv[1]),   // R952
+    .out_wu2(cwu[2]), .out_wv2(cwv[2]), .out_wu3(cwu[3]), .out_wv3(cwv[3]),
     .out_tex(ctex), .out_lum(q_lum),
     .out_col(q_col), .out_z(q_z), .out_moire(),
     .dbg_in(dbg_clip_in), .dbg_out(dbg_clip_out), .dbg_dropped(dbg_clip_dropped)
