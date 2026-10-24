@@ -197,6 +197,9 @@ module m2_raster_fill #(
   // (max - min) / 4, 3 max - (max - min) / 2. Unused without MIP.
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic [1:0]         mip_mode,
+  // R957: the OSD's "Seam fill" switch for DIL (quasi-static, on clk; taken
+  // per quad, at S_IDLE). 0 leaves every flat quad's edges where they are.
+  input  logic               dil_on,
   // R828c: the geometry's no-mip flag for this quad (m2_geometry q_mipz):
   // the game's own level is at most -MIPZ_B all over the polygon, so its
   // spans carry no level (K_NONE), as Off does. Unused without MIP.
@@ -379,7 +382,9 @@ module m2_raster_fill #(
   logic signed [15:0] lbq, ubq;
   // R944: ONE ADDER PER EDGE for the row step and the move: xah + sla in
   // S_FS_WALK, xah + (t or ~t) + (C or 1 - C) in S_FS_DIL (a ternary add)
-  wire                dil_st = DIL && (state == S_FS_DIL);
+  logic               dil_q;    // R957: dil_on, taken with the quad
+  wire                dil_e  = DIL && dil_q;
+  wire                dil_st = dil_e && (state == S_FS_DIL);
   wire  signed [31:0] dta = sla >>> 3, dtb = slb >>> 3;
   wire  signed [31:0] xah_nx = xah + (!dil_st ? sla : ((swapf == sla[31]) ? ~dta : dta))
                                    + (!dil_st ? 32'sd0 : (swapf ? 32'sh0000_2001 : 32'shFFFF_E000));
@@ -891,7 +896,7 @@ module m2_raster_fill #(
   // quad's span only -- the plane below is evaluated at s1_cl, which a
   // textured span (never clamped) keeps. lbq / ubq change only while stage 1
   // is empty (S_FS_DIL waits), so they are always the span's own segment's.
-  wire                s1_dc = DIL && !tex_r[0];
+  wire                s1_dc = dil_e && !tex_r[0];
   wire  signed [15:0] s1_x0 = (s1_dc && (s1_cl < lbq)) ? lbq : s1_cl;
   wire  signed [15:0] s1_x1 = (s1_dc && (s1_cr > ubq)) ? ubq : s1_cr;
   logic [23:0]        s1_col;
@@ -1242,6 +1247,7 @@ module m2_raster_fill #(
     if (!rst_n) begin
       state      <= S_IDLE;
       pf_st      <= S_IDLE;   // R544
+      dil_q      <= 1'b0;     // R957
       ps1        <= 3'd0;
       ps2        <= 3'd0;
       xa         <= 32'sd0;
@@ -1345,7 +1351,7 @@ module m2_raster_fill #(
       if (span_valid && span_ready) span_valid <= 1'b0;
       // R715: stage 1 to the output, the plane evaluated from registers
       if (s1_adv) begin
-        span_valid <= !DIL || (s1_x0 <= s1_x1);   // R944: a span the clamps empty is dropped
+        span_valid <= !dil_e || (s1_x0 <= s1_x1);   // R944: a span the clamps empty is dropped
         span_y     <= s1_y;
         span_x0    <= s1_x0;
         span_x1    <= s1_x1;
@@ -1621,6 +1627,7 @@ module m2_raster_fill #(
       case (state)
         S_IDLE: begin
           if (in_valid && pf_st == S_IDLE && !span_valid && !s1_valid) begin   // R544: see in_ready; R715
+            dil_q <= dil_on;                         // R957
             sx[0] <= in_x0; sy[0] <= in_y0;
             sx[1] <= in_x1; sy[1] <= in_y1;
             sx[2] <= in_x2; sy[2] <= in_y2;
@@ -1901,7 +1908,7 @@ module m2_raster_fill #(
         S_FS_SWAP: begin
           swapf     <= (xa > xb) || ((xa == xb) && (sla > slb));
           emit_mode <= EM_WALK;
-          state     <= (DIL && M2COV && !tex_r[0]) ? S_FS_DIL : S_FS_WALK;   // R944: flat quads
+          state     <= (dil_e && M2COV && !tex_r[0]) ? S_FS_DIL : S_FS_WALK;   // R944: flat quads
         end
 
         // R944: A RELOADED EDGE MOVED OUT, once: the left one (a unless swapf)

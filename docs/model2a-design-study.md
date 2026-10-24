@@ -44768,3 +44768,32 @@ f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
 *LEFT:* the fits (Ben); the timing checks R951 and R952 name (the clamp's
 MLAB read into m2_texel_x2's request registers; 2C near the projector /
 clipper states).
+
+**R957 -- R944'S EDGE DILATION BEHIND AN OSD SWITCH, "SEAM FILL", OFF BY
+DEFAULT: EVERY CAR IN SEGA RALLY GOT WHITE DOTS FROM IT.** Ben, on the board,
+2026-10-24, on the released Model2A_20261024 (s1468): dotted white lines along
+the polygon edges of the player's Lancia (and every car), absent on
+Model2A_20261022 and in MAME. Board bisect: s1447 (R944 + R940, no R951, no
+R952) has them; the room-only build (R952, DIL 0, UVSH 0) does not. Bench
+(R955's agent, MAME srallyc 3D frame 4940, 252 polygons at the board's
+settings): int-2a 605 isolated wrong pixels, 309 pure white; DIL 0 408 and
+pixel-identical to the 20261022 RTL; UVSH 0 and UVCL 0 change nothing. The
+cause: the cars' bodies are FLAT white panels with the livery as textured
+decals drawn over them in painter's order; R944 moves each flat edge out by
+(1+|dx/dy|)/8 px, so a white panel's widened edge paints over the decal of
+the panel beside it, one pixel where the moved band crosses a row centre.
+Any dilation overlaps a neighbour, so R944 cannot keep the shadow fix and
+be free of this in general; MAME's polygons abut exactly. What was believed
+(R944: a flat-quad-only dilation is safe because it only closes gaps) was
+wrong: it also overlaps.
+  Fix: the DIL hardware stays (parameter DIL 1 on 2A), gated per quad by a
+run-time input dil_on, latched at S_IDLE with the quad (the stages behind it
+are empty then): dil_e = DIL && dil_q replaces DIL in the four places it
+selects (S_FS_DIL, s1_dc, the empty-span drop, the walk entry). OSD
+"O[68],Seam fill,Off,On" (a bit never used, so saved configs open Off),
+three flops into clk_sys. Off is the DIL 0 fill exactly. Rally's car-shadow
+cracks (R944's target) return with it Off. main and model2c never had R944.
+  Checks: lint_top clean; test_m2_fill_dil (dil_on 1) checks 3,007 fails 0;
+test_m2_raster_fill_mip 1,989,828 / 0; test_m2_raster3d, quad_store,
+span_tex_uvcl PASS. LEFT: a narrower rule that fills only real gaps (any
+widening overlaps), measured before it is offered.

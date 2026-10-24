@@ -417,6 +417,12 @@ localparam CONF_STR = {
 	// Sky Target (its sky panels' joints show lines under the bilinear filter;
 	// the arcade shows none -- Ben, on the board, 2026-10-24).
 	"O[31],Texture filter,Auto,Point;",
+	// R957: R944'S EDGE DILATION, OFF BY DEFAULT. It closes the hairline cracks
+	// in Sega Rally's car shadow, but every car's plain white body panels,
+	// widened, paint over the livery decals beside them (white dots along the
+	// panel edges; MAME has none). Off is the old picture exactly. A new bit
+	// (68), so a saved config opens Off.
+	"O[68],Seam fill,Off,On;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
@@ -1100,6 +1106,10 @@ always_ff @(posedge clk_sys) begin pxk_s1 <= 2'b00; pxk_s2 <= pxk_s1; pxk_s3 <= 
 reg [1:0] mip_s1, mip_s2, mip_s3;
 always_ff @(posedge clk_sys) begin mip_s1 <= status[53:52]; mip_s2 <= mip_s1; mip_s3 <= mip_s2; end
 wire [1:0] mip_mode = 2'd3 - mip_s3;
+// R957: the OSD's Seam fill, into clk_sys where m2_raster_fill runs (three
+// flops). Quasi-static; the fill takes it per quad.
+reg dil_s1, dil_s2, dil_s3;
+always_ff @(posedge clk_sys) begin dil_s1 <= status[68]; dil_s2 <= dil_s1; dil_s3 <= dil_s2; end
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
@@ -7604,6 +7614,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.tex_bilinear(!texpt_s[2]),   // R620
 	.tex_pxk(pxk_s3),             // R650: the OSD's texel step
 	.tex_mip_mode(mip_mode),      // R828a: the OSD's mip rule
+	.dil_on(dil_s3),              // R957: the OSD's Seam fill
 	.tex_gamma(gam_s2),           // R784: the curve, for a textured pixel's pedestal
 	.list_hold(r3d_list_hold),    // R652
 	.fb_test(fb_test), .dbg_tp_bad(tp_bad), .dbg_tp_rows(tp_rows), .dbg_tp_first(tp_first),   // R653
