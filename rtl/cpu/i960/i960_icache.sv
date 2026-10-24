@@ -151,7 +151,11 @@ module i960_icache #(
   wire              fill_last = ER ? (fill_cnt == 2'd3) : (fill_word == 2'd3);
   logic [IDX_W-1:0] fill_idx;
   logic [TAG_W-1:0] fill_tag;
-  logic [31:0]      fill_base;
+  // R952: the line's base address IS {fill_tag, fill_idx, 0} -- every write of
+  // the three (the miss, the redirect, the sweep's pending request, reset)
+  // took them from the same address -- so it is that concatenation, not a
+  // 28-bit register of its own beside them.
+  wire  [31:0]      fill_base = {fill_tag, fill_idx, 4'd0};
 
   assign busy = (state != S_IDLE);
 
@@ -229,9 +233,11 @@ module i960_icache #(
   // stale: the only line written during a fill is fill_idx's, invalidated when
   // the fill began, so a target on it was never a hit.
   logic             redir_hit;
-  logic [IDX_W-1:0] redir_idx;
-  logic [TAG_W-1:0] redir_tag;
   logic [31:2]      redir_addr;
+  // R952: slices of redir_addr, which was written with them (the same addr)
+  // every time -- 28 registers that only ever held a copy.
+  wire  [IDX_W-1:0] redir_idx = redir_addr[IDX_W+3:4];
+  wire  [TAG_W-1:0] redir_tag = redir_addr[31:IDX_W+4];
   // A deferred redirect still in force this cycle. The newest request wins:
   // one for the line being filled, or a hit answered under the fill, makes a
   // redirect still waiting for its acknowledge stale. Without this a requester
@@ -286,11 +292,8 @@ module i960_icache #(
       byp_sel   <= 1'b0;
       fill_idx  <= '0;
       fill_tag  <= '0;
-      fill_base <= 32'd0;
       redir_q    <= 1'b0;
       redir_hit  <= 1'b0;
-      redir_idx  <= '0;
-      redir_tag  <= '0;
       redir_addr <= '0;
       fill_wanted <= 1'b1;
       sweep_idx  <= '0;
@@ -321,7 +324,6 @@ module i960_icache #(
               fill_tag  <= tag;
               fill_word <= ER ? addr[3:2] : 2'd0;
               fill_cnt  <= 2'd0;
-              fill_base <= {addr[31:4], 4'd0};
               fill_wanted <= 1'b1;
               // Invalidate BEFORE filling. cvalid is only set on completion,
               // but the data array is written word by word during the fill, so
@@ -424,8 +426,6 @@ module i960_icache #(
             redir_q     <= 1'b0;
             fill_idx    <= redir_now ? idx  : redir_idx;
             fill_tag    <= redir_now ? tag  : redir_tag;
-            fill_base   <= redir_now ? {addr[31:4], 4'd0}
-                                     : {redir_addr[31:4], 4'd0};
             fill_word   <= !ER ? 2'd0 : redir_now ? addr[3:2] : redir_addr[3:2];
             fill_cnt    <= 2'd0;
             fill_wanted <= 1'b1;
@@ -436,9 +436,7 @@ module i960_icache #(
             // address still until it is answered.
             redir_q    <= 1'b1;
             redir_hit  <= hit;          // R550
-            redir_idx  <= idx;
-            redir_tag  <= tag;
-            redir_addr <= addr;
+            redir_addr <= addr;   // R952: redir_idx / redir_tag are its slices
           end else if (bus_ack) begin
             fill_cnt <= fill_cnt + 2'd1;
             if (er_ans) begin
@@ -474,7 +472,6 @@ module i960_icache #(
             fill_tag    <= tag;
             fill_word   <= ER ? addr[3:2] : 2'd0;
             fill_cnt    <= 2'd0;
-            fill_base   <= {addr[31:4], 4'd0};
             fill_wanted <= 1'b1;
             state       <= S_FILL;   // R768: invalidated by inv_idle
           end else begin
@@ -498,7 +495,6 @@ module i960_icache #(
               fill_tag   <= req ? tag : sw_addr[31:IDX_W+4];
               fill_word  <= !ER ? 2'd0 : req ? addr[3:2] : sw_addr[3:2];
               fill_cnt   <= 2'd0;
-              fill_base  <= req ? {addr[31:4], 4'd0} : {sw_addr[31:4], 4'd0};
               sw_pend    <= 1'b0;
               fill_wanted <= 1'b1;
               state      <= S_FILL;
