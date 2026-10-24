@@ -921,9 +921,20 @@ module i960_top #(
   logic        agu_needs_disp, agu_valid;
   /* verilator lint_on UNUSEDSIGNAL */
 
+  // R948: EACH SUM ONCE. The sequencer below wrote ip_next + d_disp in eight
+  // places, ip + 4 / ip + 8 in seven, and the interrupt walk its table
+  // addresses twice each; spelled out per branch, synthesis built them as
+  // separate adders. These are the same expressions, named once.
+  wire [31:0] ip_br    = ip_next + d_disp;                                 // a taken branch
+  wire [31:0] ip_p4    = ip + 32'd4;
+  wire [31:0] ip_p8    = ip + 32'd8;
+  wire [31:0] prcb_p20 = prcb_reg + 32'd20;
+  wire [31:0] it_vec4  = it_base + {27'd0, cur_vec[7:5], 2'b00} + 32'd4;
+  wire [31:0] it_lvl4  = it_base + {27'd0, cur_lvl[4:2], 2'b00} + 32'd4;
+
   i960_agu u_agu (
     .insn(insn[13:0]), .abase_val(rd2), .index_val(rd1),
-    .disp_word(disp_word), .ip_after_disp(ip + 32'd8),
+    .disp_word(disp_word), .ip_after_disp(ip_p8),
     .ea(ea), .needs_disp(agu_needs_disp), .valid(agu_valid)
   );
 
@@ -935,7 +946,7 @@ module i960_top #(
   // `ip_next + disp`, with no register dependency at all.
   logic [31:0] call_tgt;
   logic [31:0] alu_or_ea;
-  assign alu_or_ea = (d_fmt == 2'd3) ? ea : (ip_next + d_disp);   // call target
+  assign alu_or_ea = (d_fmt == 2'd3) ? ea : ip_br;   // call target
 
   // ------------------------------------------------------------- load/store
 
@@ -1564,18 +1575,18 @@ module i960_top #(
               trap_op <= f_op;
               ts      <= T_TRAP;
             end else if (f_len2) begin
-              fetch_addr <= ip + 32'd4;
+              fetch_addr <= ip_p4;
               ic_req     <= 1'b1;
-              ip_next    <= ip + 32'd8;
+              ip_next    <= ip_p8;
               ts         <= T_FETCH2_W;
             end else begin
               // Predict sequential and start the next fetch NOW, overlapping it
               // with execute. Eight-byte forms take the branch above and use
               // the cache port for their displacement word instead.
-              fetch_addr <= ip + 32'd4;
+              fetch_addr <= ip_p4;
               ic_req     <= 1'b1;
-              ip_next    <= ip + 32'd4;
-              pf_ip      <= ip + 32'd4;
+              ip_next    <= ip_p4;
+              pf_ip      <= ip_p4;
               pf_issued  <= 1'b1;
               ts         <= T_EXEC;
             end
@@ -1608,9 +1619,9 @@ module i960_top #(
           // goes out on fetch_addr like every other, so R812's ic_ok check
           // covers it; a taken bx/callx simply misses pf_ip == ip.
           if (PF2W) begin
-            fetch_addr <= ip + 32'd8;
+            fetch_addr <= ip_p8;
             ic_req     <= 1'b1;
-            pf_ip      <= ip + 32'd8;
+            pf_ip      <= ip_p8;
             pf_issued  <= 1'b1;
           end
         end
@@ -1624,7 +1635,7 @@ module i960_top #(
                 // not ip + disp. Both this module and its reference model had
                 // `ip + d_disp` and agreed with each other, which is exactly
                 // why lockstep could not see it.
-                8'h08: begin ip <= ip_next + d_disp; ts <= T_FETCH; end   // b
+                8'h08: begin ip <= ip_br; ts <= T_FETCH; end   // b
                 8'h09: begin rf_call <= 1'b1; call_tgt <= alu_or_ea;
                              ts <= T_FRAME; end                          // call
                 8'h0a: begin                                              // ret
@@ -1640,7 +1651,7 @@ module i960_top #(
                 end
                 8'h0b: begin                                              // bal
                   wa <= 5'd30; wd <= ip_next; we <= 1'b1;
-                  ip <= ip_next + d_disp; ts <= T_FETCH;
+                  ip <= ip_br; ts <= T_FETCH;
                 end
                 default: begin
                   if (d_op == 8'h10) begin                                // bno
@@ -1652,18 +1663,18 @@ module i960_top #(
                     // 0x84e0 is `chkbit; bno`, and every object took the fall-
                     // through; that is the divergence from the reference after
                     // the first matrix readback. Like faultno, no IP mask.
-                    ip <= (~|ac[2:0]) ? (ip_next + d_disp) : ip_next;
+                    ip <= (~|ac[2:0]) ? ip_br : ip_next;
                     ts <= T_FETCH;
                   end else if (d_op[7:3] == 5'b00010) begin                // b<cc>
                     // bxx masks the IP after a taken branch; plain b does not.
                     ip <= (|(ac[2:0] & d_op[2:0]))
-                            ? ((ip_next + d_disp) & 32'hffff_fffc) : ip_next;
+                            ? (ip_br & 32'hffff_fffc) : ip_next;
                     ts <= T_FETCH;
                   end else if (d_op == 8'h18) begin                       // faultno
                     // The reference makes this a conditional BRANCH, not a
                     // fault: `if(!(m_AC & 7)) m_IP += get_disp(opcode);`.
                     // Note it does not mask the IP, unlike bxx.
-                    ip <= (~|ac[2:0]) ? (ip_next + d_disp) : ip_next;
+                    ip <= (~|ac[2:0]) ? ip_br : ip_next;
                     ts <= T_FETCH;
                   end else if (d_op[7:3] == 5'b00011) begin                // fault<cc>
                     // fxx() reaches fatalerror when the condition holds:
@@ -1701,7 +1712,7 @@ module i960_top #(
                 // in the reference and is reproduced rather than tidied.
                 if (ci2_val[ci1_val[4:0]] == (d_op == 8'h37)) begin
                   ac <= {ac[31:3], 3'b010};
-                  ip <= ip_next + d_disp;
+                  ip <= ip_br;
                 end else begin
                   ac <= {ac[31:3], 3'b000};
                   ip <= ip_next;
@@ -1711,7 +1722,7 @@ module i960_top #(
                 // that compare — not on whatever AC happened to hold. Missing
                 // this was the first defect whole-CPU lockstep found.
                 ac <= alu_ac;
-                ip <= (|(alu_ac[2:0] & d_op[2:0])) ? ((ip_next + d_disp) & 32'hffff_fffc)
+                ip <= (|(alu_ac[2:0] & d_op[2:0])) ? (ip_br & 32'hffff_fffc)
                                                    : ip_next;
               end else begin
                 trap_op <= d_op;
@@ -2135,16 +2146,14 @@ module i960_top #(
           M_Q: if (!boot_req) begin
             boot_req <= 1'b1;
             case (intr_step)
-              4'd0: begin aux_we <= 1'b0; boot_addr <= prcb_reg + 32'd20; end
+              4'd0: begin aux_we <= 1'b0; boot_addr <= prcb_p20; end
               4'd1: begin aux_we <= 1'b0; boot_addr <= it_base; end
               4'd2: begin aux_we <= 1'b1; boot_addr <= it_base;
                           aux_wdata <= scratch | (32'd1 << cur_vec[7:3]); end
               4'd3: begin aux_we <= 1'b0;
-                          boot_addr <= it_base + {27'd0, cur_vec[7:5], 2'b00}
-                                               + 32'd4; end
+                          boot_addr <= it_vec4; end
               default: begin aux_we <= 1'b1;
-                          boot_addr <= it_base + {27'd0, cur_vec[7:5], 2'b00}
-                                               + 32'd4;
+                          boot_addr <= it_vec4;
                           aux_wdata <= scratch | (32'd1 << cur_vec[4:0]); end
             endcase
           end else if (boot_ack) begin
@@ -2164,7 +2173,7 @@ module i960_top #(
               aux_we   <= 1'b0;
               boot_req <= 1'b1;
               case (intr_step)
-                4'd0: boot_addr <= prcb_reg + 32'd20;
+                4'd0: boot_addr <= prcb_p20;
                 4'd1: boot_addr <= prcb_reg + 32'd24;
                 // int_tab + 36 + (vector-8)*4. MAME does not guard vector < 8,
                 // and the wrap is reproduced rather than corrected: vectors
@@ -2240,7 +2249,7 @@ module i960_top #(
             4'd0, 4'd1: if (!boot_req) begin
               aux_we    <= 1'b0;
               boot_req  <= 1'b1;
-              boot_addr <= (intr_step == 4'd0) ? (prcb_reg + 32'd20) : it_base;
+              boot_addr <= (intr_step == 4'd0) ? prcb_p20 : it_base;
             end else if (boot_ack) begin
               boot_req <= 1'b0;
               if (intr_step == 4'd0) begin it_base  <= c_rdata; intr_step <= 4'd1; end
@@ -2252,7 +2261,7 @@ module i960_top #(
 
             4'd3: if (!boot_req) begin
               aux_we    <= 1'b0;
-              boot_addr <= it_base + {27'd0, cur_lvl[4:2], 2'b00} + 32'd4;
+              boot_addr <= it_lvl4;
               boot_req  <= 1'b1;
             end else if (boot_ack) begin
               boot_req  <= 1'b0;
@@ -2274,7 +2283,7 @@ module i960_top #(
 
             4'd5: if (!boot_req) begin
               aux_we    <= 1'b1;
-              boot_addr <= it_base + {27'd0, cur_lvl[4:2], 2'b00} + 32'd4;
+              boot_addr <= it_lvl4;
               aux_wdata <= vword & ~(32'd1 << take_idx);
               boot_req  <= 1'b1;
             end else if (boot_ack) begin
