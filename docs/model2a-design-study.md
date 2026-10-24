@@ -44104,3 +44104,7 @@ ALUTs, 3,972 -> 4,013 registers; block bits, DSP, M10K unchanged.
 *TIMING NOTE:* the walk's adder now has a 2:1 operand select (the state
 decode) in front of it on the xah -> xah loop; the emit path from xah is
 unchanged. The fit's report on clk_sys is the check.
+*BOARD (Ben, 2026-10-24, s1428 + the 16520-byte 2A MRAs):* THE 2A SETTINGS
+SAVE WORKS (R945) -- Sega Rally's test-menu settings survive a reload. Fits
+are PAUSED (Ben) until the sound mix-balance fix (R949, branch hotd-mix) is
+in: the next 2A / 2C seed hunts carry it.
