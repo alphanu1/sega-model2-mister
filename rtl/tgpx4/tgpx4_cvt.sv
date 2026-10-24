@@ -107,13 +107,17 @@ module tgpx4_cvt (
 
   logic        v3, neg3, big3, tiny3, left3, fill3;
   logic [4:0]  op3, lz3, amt3;
-  logic [31:0] a3, in3;
+  logic [31:0] in3;
+  // R952: a3 was a 32-bit copy of a2 kept only for stage 4's two zero tests;
+  // the tests are made here and carried as two bits (reset 1, as a3 == 0).
+  logic        zero3, lowz3;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       v3 <= 1'b0; neg3 <= 1'b0; big3 <= 1'b0; tiny3 <= 1'b0; left3 <= 1'b0; fill3 <= 1'b0;
-      op3 <= 5'd0; lz3 <= 5'd0; amt3 <= 5'd0; a3 <= 32'd0; in3 <= 32'd0;
+      op3 <= 5'd0; lz3 <= 5'd0; amt3 <= 5'd0; zero3 <= 1'b1; lowz3 <= 1'b1; in3 <= 32'd0;
     end else begin
-      v3 <= v2; neg3 <= neg2; op3 <= op2; lz3 <= lz; a3 <= a2;
+      v3 <= v2; neg3 <= neg2; op3 <= op2; lz3 <= lz;
+      zero3 <= (a2 == 32'd0); lowz3 <= (a2[30:0] == 31'd0);
       big3 <= (a2[30:23] >= 8'd158); tiny3 <= (a2[30:23] < 8'd127);
       left3 <= is_left2; fill3 <= sh_fill; amt3 <= sh_amt; in3 <= sh_in;
     end
@@ -132,8 +136,8 @@ module tgpx4_cvt (
       op4 <= 5'd0; lz4 <= 5'd0; res4 <= 32'd0;
     end else begin
       v4 <= v3; neg4 <= neg3; big4 <= big3; tiny4 <= tiny3; op4 <= op3; lz4 <= lz3;
-      zero4 <= (a3 == 32'd0);
-      lowz4 <= (a3[30:0] == 31'd0);
+      zero4 <= zero3;
+      lowz4 <= lowz3;
       res4  <= left3 ? rev32(sh_wide[31:0]) : sh_wide[31:0];
     end
   end
