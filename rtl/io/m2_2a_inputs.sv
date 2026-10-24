@@ -48,6 +48,9 @@
 //          Punch (J12) 5 Shift Down / Kick (J13); AN0 THROTTLE (the
 //          accelerator), AN1 BRAKE, AN2 BANK = the steering reversed.
 //     IN1 / IN2's other bits 1 (unused / unknown, active low).
+//     R958: "Analog control" (st_wheel, Wheel A / B) is the block's, so it
+//          reaches every analog game through cab_steer / accel / brake --
+//          except Sky Target, a flight stick, which always sees Standard.
 //     R892, MOTION: Manx TT's DX cabinet (0x19 only) -- its Active Motion
 //          Slider's drive board on PE (command, written every frame) and PD
 //          (status, IN2). The boot's check (program 0x5f530; RAM 0x514034
@@ -85,6 +88,7 @@ module m2_2a_inputs #(
   input  logic  [1:0] st_ssens,     // status[30:29] Steering
   input  logic  [1:0] st_ssm,       // status[51:50] Steering smoothing
   input  logic        st_rsteer,    // status[54]  Right stick
+  input  logic  [1:0] st_wheel,     // status[71:70] Analog control (R958)
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic  [7:0] gun_in1,      // R870 (GUN): m2_vcop_guns in1, the triggers
   input  logic  [7:0] pe,           // R892 (MOTION): the 315-5649's PE latch
@@ -146,6 +150,7 @@ module m2_2a_inputs #(
       .joystick_0(joystick_0), .joy_analog(joy_analog), .joy_ranalog(joy_ranalog),
       .paddle(paddle),
       .st_pedswap(st_pedswap), .st_ssens(st_ssens), .st_ssm(st_ssm), .st_rsteer(st_rsteer),
+      .st_wheel(p_sky ? 2'd0 : st_wheel),   // R958: Sky Target's stick keeps Standard
       .in0(cab_in0), .in1(cab_in1), .steer(cab_steer), .accel(cab_accel), .brake(cab_brake)
     );
     // Sky Target's Y: the left stick's Y as offset binary, 0x80 + y (MAME's

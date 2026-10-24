@@ -14,6 +14,8 @@
 // it clear this is Daytona's block exactly as before -- tb_m2_cab_inputs runs
 // it beside sim/io/m2_cab_inputs_ref.sv (the block as it stood in Model2.sv at
 // 0f3cbc4) and compares every output on every cycle.
+// R958: st_wheel (status[71:70], "Analog control") adds two wheel layouts,
+// GitHub #12; Standard (0, the default) is the block as before, bit for bit.
 
 `timescale 1ns/1ps
 
@@ -31,6 +33,7 @@ module m2_cab_inputs #(
   input  logic  [1:0] st_ssens,     // status[30:29] Steering
   input  logic  [1:0] st_ssm,       // status[51:50] Steering smoothing
   input  logic        st_rsteer,    // status[54]  Right stick
+  input  logic  [1:0] st_wheel,     // status[71:70] Analog control (R958): 0 Standard, 1 Wheel A, 2 Wheel B
   output logic  [7:0] in0,          // the I/O board's IN0 / IN1, active low
   output logic  [7:0] in1,
   output logic  [7:0] steer,        // its ADC channels 0..2 (Desert Tank:
@@ -129,7 +132,20 @@ wire              use_l = (ax_l > 8'sd12) || (ax_l < -8'sd12);
 reg  [2:0]        rsteer_s;
 always_ff @(posedge clk) rsteer_s <= {rsteer_s[1:0], st_rsteer};
 wire              use_r = rsteer_s[2] && ((ax_r > 8'sd12) || (ax_r < -8'sd12));
-wire signed [7:0] ax    = use_l ? ax_l : ax_r;
+// R958: ANALOG CONTROL, Wheel A / Wheel B (GitHub #12). The wheel is the
+// left stick's X, always, with no dead zone (a wheel's first degrees are
+// steering, not noise), and the right stick never steers (Wheel B's brake
+// is on its X). The d-pad still steers while its left or right is held.
+// Standard (0, and the unused 3) is everything above, unchanged.
+reg  [2:0]        wheel0_s, wheel1_s;
+always_ff @(posedge clk) begin
+	wheel0_s <= {wheel0_s[1:0], st_wheel[0]};
+	wheel1_s <= {wheel1_s[1:0], st_wheel[1]};
+end
+wire              whl_a = wheel0_s[2] & ~wheel1_s[2];    // 1: Wheel A
+wire              whl_b = wheel1_s[2] & ~wheel0_s[2];    // 2: Wheel B
+wire              whl   = whl_a | whl_b;
+wire signed [7:0] ax    = (use_l || whl) ? ax_l : ax_r;
 
 // STEERING SENSITIVITY, because three quarters is a choice and not a law.
 //
@@ -178,7 +194,8 @@ always_ff @(posedge clk or negedge rst_n) begin
 		end
 	end
 end
-wire use_stick = use_l || use_r;   // R816
+wire use_stick = whl ? !(joystick_0[1] || joystick_0[0])   // R958: the wheel unless the d-pad steers
+                    : (use_l || use_r);                    // R816
 wire [7:0] steer_raw = |paddle ? paddle
                  : use_stick ? steer_an
                  : steer_dig;
@@ -257,8 +274,49 @@ wire              pedal_up  = st_pedswap ? ~pedal_ax[7] : pedal_ax[7];
 // every second, 60 s of play). So Daytona's 0x20..0xe0 is full travel there.
 wire        [7:0] accel_an  = pedal_up ? pedal_an : 8'h20;
 wire        [7:0] brake_an  = pedal_up ? 8'h20    : pedal_an;
-wire        [7:0] dy_accel  = joystick_0[10] ? 8'he0 : accel_an;   // Daytona's, as before
-wire        [7:0] dy_brake  = joystick_0[11] ? 8'he0 : brake_an;
+
+// R958: THE WHEEL LAYOUTS' PEDALS, one axis each (GitHub #12, the request's
+// own description of what MiSTer Main reports):
+//   Wheel A (older wheels; the cathoderayblog guide) -- accelerator on the
+//     left stick's Y, brake on the right stick's Y: centre released, full up
+//     (0 .. -127) fully pressed; the lower half reads released.
+//   Wheel B (direct-drive pedal sets, e.g. Logitech RS50) -- the whole axis:
+//     accelerator on the left stick's Y, -127 (up) released .. +127 (down)
+//     fully pressed; brake on the right stick's X, -127 (left) released ..
+//     +127 (right) fully pressed. (v + 127) / 2 is the seven-bit magnitude,
+//     -128 reading as released.
+// Both feed the magnitude through the right-stick pedals' 3/2 scaling (0x20
+// at rest, 0xde at full), so a pedal reaches what a pad's stick does.
+// "Pedals: Swapped" exchanges the two pedals; the Accel / Brake buttons
+// still give full travel. Registered: the stick's value moves at USB rates,
+// and this keeps the new arithmetic off the paths R842 / R934 timed.
+function automatic logic [6:0] whl_up(input logic [7:0] v);   // Wheel A: up half
+	return (v == 8'h80) ? 7'd127 : v[7] ? (~v[6:0] + 7'd1) : 7'd0;
+endfunction
+/* verilator lint_off UNUSEDSIGNAL */
+function automatic logic [6:0] whl_full(input logic [7:0] v);  // Wheel B: whole axis
+	logic [7:0] u;                      // (u[0]: the half step dropped)
+	u = v + 8'd127;                     // -127 -> 0, +127 -> 254; -128 wraps to 255
+	return (v == 8'h80) ? 7'd0 : u[7:1];
+endfunction
+/* verilator lint_on UNUSEDSIGNAL */
+function automatic logic [7:0] whl_an(input logic [6:0] m);    // pedal_an's scaling
+	logic [8:0] s;
+	s = {2'd0, m} + {3'd0, m[6:1]};
+	return (s >= 9'd192) ? 8'he0 : (8'h20 + s[7:0]);
+endfunction
+wire        [6:0] whl_acc_c = whl_b ? whl_full(joy_analog[15:8])  : whl_up(joy_analog[15:8]);
+wire        [6:0] whl_brk_c = whl_b ? whl_full(joy_ranalog[7:0])  : whl_up(joy_ranalog[15:8]);
+reg         [6:0] whl_acc_m, whl_brk_m;     // after "Pedals"
+reg         [7:0] whl_acc_an, whl_brk_an;
+always_ff @(posedge clk) begin
+	whl_acc_m  <= st_pedswap ? whl_brk_c : whl_acc_c;
+	whl_brk_m  <= st_pedswap ? whl_acc_c : whl_brk_c;
+	whl_acc_an <= whl_an(st_pedswap ? whl_brk_c : whl_acc_c);
+	whl_brk_an <= whl_an(st_pedswap ? whl_acc_c : whl_brk_c);
+end
+wire        [7:0] dy_accel  = joystick_0[10] ? 8'he0 : whl ? whl_acc_an : accel_an;   // Daytona's, as before
+wire        [7:0] dy_brake  = joystick_0[11] ? 8'he0 : whl ? whl_brk_an : brake_an;
 
 // ------------------------------------------------- R837: Desert Tank's ADC
 //
@@ -280,12 +338,18 @@ wire        [7:0] dy_brake  = joystick_0[11] ? 8'he0 : brake_an;
 // pedals) keeps that meaning here: Y drives, its sign choosing the lever,
 // and the cannon is the d-pad's. "Pedals: Swapped" flips the right stick's
 // Y in both modes. VR4 still flips the lever, as a cabinet's would be.
-wire              dt_wheel  = rsteer_s[2];
+// R958: Wheel A / B are a wheel too: the accelerator pedal drives forward
+// and the brake pedal in reverse, whichever is pressed further (past the
+// same dead zone), the lever following; the cannon is the d-pad's.
+wire              dt_wheel  = rsteer_s[2] || whl;
 wire              dt_fwd_b  = joystick_0[10];
 wire              dt_rev_b  = joystick_0[11];
-wire              dt_ped_on = dt_wheel && (pedal_mag > 7'd12);
-wire              dt_go_rev = dt_rev_b || (!dt_fwd_b && dt_ped_on && !pedal_up);
-wire              dt_go_fwd = !dt_rev_b && (dt_fwd_b || (dt_ped_on && pedal_up));
+wire              dt_wfwd   = (whl_acc_m >= whl_brk_m);
+wire        [6:0] dt_mag    = whl ? (dt_wfwd ? whl_acc_m : whl_brk_m) : pedal_mag;
+wire              dt_up     = whl ? dt_wfwd : pedal_up;
+wire              dt_ped_on = dt_wheel && (dt_mag > 7'd12);
+wire              dt_go_rev = dt_rev_b || (!dt_fwd_b && dt_ped_on && !dt_up);
+wire              dt_go_fwd = !dt_rev_b && (dt_fwd_b || (dt_ped_on && dt_up));
 logic             dt_shf_d;
 always_ff @(posedge clk or negedge rst_n) begin
 	if (!rst_n) begin
@@ -300,7 +364,9 @@ end
 // The drive pedal: a button is a full press; a wheel's pedal is analogue,
 // Daytona's scaling, and held at rest inside the dead zone so the tank stands.
 wire        [7:0] dt_accel  = (dt_fwd_b || dt_rev_b) ? 8'he0
-                            : dt_ped_on ? pedal_an : 8'h20;
+                            : !dt_ped_on ? 8'h20
+                            : !whl ? pedal_an
+                            : dt_wfwd ? whl_acc_an : whl_brk_an;   // R958
 
 // The turret. Three quarters of the stick is exactly +-96 about 0x80, the
 // steering's arithmetic; -128 negated is +128, which ten bits hold.
