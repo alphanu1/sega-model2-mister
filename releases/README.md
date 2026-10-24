@@ -16,6 +16,24 @@ the core it runs on, so all three can sit in `cores/` side by side.
 Copy the MRAs you want from `mra/` to `/media/fat/_Arcade/` (or any folder
 under it).
 
+## Where these cores follow the real board, not MAME
+
+MAME is what these cores are checked against, but in a few places the arcade
+board does something MAME doesn't. Where that is confirmed, the cores follow
+the board:
+
+- **Dead or Alive's bass drone is gone (Model 2A).** MAME runs the sound
+  chip's effects processor with its delay taps at zero, which turns Dead or
+  Alive's reverb into a constant low drone (MAME's own 20 Hz filter hides it).
+  The core keeps the taps as the chip does: no drone, and Virtua Fighter 2's
+  hits come through clearer against the music.
+- **Virtua Cop 2's stage select shows SHOOT TO SELECT (Model 2A).** MAME
+  draws the city map, a 2D layer set to go over the 3D, on top of the text in
+  front of it. The board settles the 2D layers' own order first, so the text
+  sits over the city, and so does the core.
+- **Zero Gunner's SCORE RANKING shows the helicopter icons beside each name
+  (Model 2A)**, from the same 2D layer fix. MAME never draws them.
+
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
 from other MAME versions may have different file names or contents and may
