@@ -129,11 +129,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // time and a saturated underrun count, 15-90 none. Under the heavy load
 // bench's latencies the sound ports wait p50 / p99 90 / 319 clk_mem without
 // AGE and 79 / 123 with it. The 2A build keeps 0 (its netlist unchanged).
-`ifdef M2_2C
-`ifndef M2_2A_SND_AGE
-`define M2_2A_SND_AGE 1
-`endif
-`endif
+// R947: AGE OFF again on 2C -- it did not help on the board (the fault was
+// the SCSP's time per sample, R946), and the 2C build needs the room.
 `ifndef M2_2A_SND_AGE
 `define M2_2A_SND_AGE 0
 `endif

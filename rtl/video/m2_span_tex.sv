@@ -264,7 +264,6 @@ module m2_span_tex #(
   // R476: u_r/v_r/ooz_r are gone -- the issue pointer walks the span and the
   // gradients are all the consumer needs.
   logic signed [31:0] du_r, dv_r;
-  logic signed [31:0] gc_ur, gc_vr, gc_or;   // R938: the span's centre offset, for a cut-short last group
   // R339: 1/z walks the span exactly as u and v do.
   logic signed [31:0] doz_r;
   // R539: uq_r/vq_r are gone -- the fetch takes d4_u/d4_v with its issue.
@@ -586,10 +585,6 @@ module m2_span_tex #(
   logic               iss_run;      // still issuing groups for this span
   logic [3:0]         iss_step;     // R650: the issuing span's step, 1-8
   wire                iss_last  = (iss_x + 17'(iss_step) - 17'sd1) >= 17'(x1_p[sp_iss]);
-  // R938: the NEXT group is the span's last and has fewer than iss_step pixels
-  // (sampled at its first pixel: the step less the span's centre offset)
-  wire                iss_half  = GC && !iss_last
-                               && ((iss_x + 17'(iss_step) + 17'(iss_step) - 17'sd1) > 17'(x1_p[sp_iss]));
 
   wire signed [31:0] dv_o    = iss_ooz;
   wire signed [31:0] dv_u    = iss_u;
@@ -838,25 +833,9 @@ module m2_span_tex #(
   wire ld_span   = ld_cold || ld_over;
   // R616: (PIXSTEP-1)/2 pixels of each gradient, 16.16 (gradients are 8.8).
   // R650: x (2^pxk - 1) as a shift and a subtract.
-  // R938: NEVER PAST THE SPAN'S END. A group sampled at its centre reaches
-  // (2^pxk - 1)/2 pixels in, and a span's LAST group is cut short at x1: one
-  // of 1 to 3 pixels (texel step 4) was sampled 1.5 pixels in all the same,
-  // up to 1.5 pixels OUTSIDE the polygon. The coordinate there is extrapolated
-  // past the polygon's own u/v range, and where a texture meets its
-  // neighbour at its edge (a sky panel's u at 255.875 of 256) it wraps to the
-  // opposite edge: Sky Target's dark vertical lines through the sky, a 1-px
-  // column at every panel joint, every other row (study R938; MAME's frame
-  // and this core at texel step 1 have none). So a cut-short group -- a span
-  // shorter than a group, or a span's last group -- is sampled at its FIRST
-  // pixel, without the centre offset: inside the span, and no further from
-  // any of its pixels than R616's centre is from a whole group's.
-  wire               ld_short = GC && ((17'(in_x0) + 17'(4'd1 << pxk) - 17'sd1) > 17'(in_x1));
-  wire signed [31:0] gcr_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< (UVS - 9)) : 32'sd0;   // R791
-  wire signed [31:0] gcr_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< (UVS - 9)) : 32'sd0;
-  wire signed [31:0] gcr_do = GC ? (((32'(in_doozdx) <<< pxk) - 32'(in_doozdx)) <<< 7) : 32'sd0;
-  wire signed [31:0] gc_du = ld_short ? 32'sd0 : gcr_du;
-  wire signed [31:0] gc_dv = ld_short ? 32'sd0 : gcr_dv;
-  wire signed [31:0] gc_do = ld_short ? 32'sd0 : gcr_do;
+  wire signed [31:0] gc_du = GC ? (((32'(in_dudx)   <<< pxk) - 32'(in_dudx))   <<< (UVS - 9)) : 32'sd0;   // R791
+  wire signed [31:0] gc_dv = GC ? (((32'(in_dvdx)   <<< pxk) - 32'(in_dvdx))   <<< (UVS - 9)) : 32'sd0;
+  wire signed [31:0] gc_do = GC ? (((32'(in_doozdx) <<< pxk) - 32'(in_doozdx)) <<< 7) : 32'sd0;
   // R478: the retire slot only has to be free by the NEXT edge, not this one.
   // Requiring !rt_valid outright cost a whole cycle a group (2.36 -> 3.36):
   // the emit that frees it happens on the same edge the fetch would start.
@@ -1036,10 +1015,9 @@ module m2_span_tex #(
       end else if (iss_run) begin
         // R650: du_r/dv_r/doz_r are the per-GROUP steps, shifted by the
         // span's pxk as they were loaded, so this add has nothing in front
-        // R938: the next group cut short at x1 -- at its first pixel
-        iss_u   <= iss_u   + du_r  - (iss_half ? gc_ur : 32'sd0);
-        iss_v   <= iss_v   + dv_r  - (iss_half ? gc_vr : 32'sd0);
-        iss_ooz <= iss_ooz + doz_r - (iss_half ? gc_or : 32'sd0);
+        iss_u   <= iss_u   + du_r;
+        iss_v   <= iss_v   + dv_r;
+        iss_ooz <= iss_ooz + doz_r;
         iss_x   <= iss_x   + 17'(iss_step);
         if (iss_last) iss_run <= 1'b0;
       end
@@ -1146,7 +1124,6 @@ module m2_span_tex #(
       rt_col <= '0; rt_k <= 2'd0; rt_x1 <= '0;                        // R731
       lf_v <= 1'b0; lf_p <= 1'b0; lf_xn <= '0; lt_texel <= 9'd0;      // R633
       du_r <= '0; dv_r <= '0;
-      gc_ur <= '0; gc_vr <= '0; gc_or <= '0;   // R938
       doz_r <= '0;
       // R433
       e_valid <= 1'b0; e_x <= '0; e_x1 <= '0;
@@ -1211,9 +1188,6 @@ module m2_span_tex #(
           du_r          <= (32'(in_dudx)   <<< (UVS - 8)) <<< pxk;   // R650: a group's step; R791
           dv_r          <= (32'(in_dvdx)   <<< (UVS - 8)) <<< pxk;
           doz_r         <= (32'(in_doozdx) <<< 8) <<< pxk;
-          gc_ur         <= gcr_du;   // R938
-          gc_vr         <= gcr_dv;
-          gc_or         <= gcr_do;
           k_p[slot]     <= pxk;
           sp_iss        <= slot;
         end
