@@ -345,6 +345,23 @@ module mb86233_alu #(
   logic [4:0] shamt;
   assign shamt = sft[4:0];
 
+  // R952: ONE ADDER AND ONE SHIFTER for the integer ops, as tgpx4_cvt does
+  // for the 2C board. ADDD / SUBD were two 32-bit adders (d + a, d - a): one,
+  // d + (a or ~a) + carry. LSRD, LSLD / ASLD and ASRD were three barrel
+  // shifters: one arithmetic right shift of {fill, d} -- fill = d[31] for
+  // ASRD, else 0 -- with d bit-reversed in and out for the left shifts
+  // (a left shift is the reversed right shift of the reversed word). The
+  // results are the same bit for bit; 120 LUTs fewer (quartus_map).
+  function automatic logic [31:0] rev32(input logic [31:0] x);
+    for (int i = 0; i < 32; i++) rev32[i] = x[31 - i];
+  endfunction
+  wire        i_sub  = (op == mb86233_pkg::ALU_SUBD);
+  wire [31:0] i_sum  = reg_d + (i_sub ? ~reg_a : reg_a) + {31'd0, i_sub};
+  wire        i_left = (op == mb86233_pkg::ALU_LSLD) || (op == mb86233_pkg::ALU_ASLD);
+  wire        i_fill = (op == mb86233_pkg::ALU_ASRD) && reg_d[31];
+  wire [32:0] i_shw  = $signed({i_fill, i_left ? rev32(reg_d) : reg_d}) >>> shamt;
+  wire [31:0] i_sh   = i_left ? rev32(i_shw[31:0]) : i_shw[31:0];
+
   logic [31:0] int_result;
   always_comb begin
     unique case (op)
@@ -352,14 +369,14 @@ module mb86233_alu #(
       mb86233_pkg::ALU_ORAD: int_result = reg_d | reg_a;
       mb86233_pkg::ALU_EORD: int_result = reg_d ^ reg_a;
       mb86233_pkg::ALU_NOTD: int_result = ~reg_d;
-      mb86233_pkg::ALU_ADDD: int_result = reg_d + reg_a;
-      mb86233_pkg::ALU_SUBD: int_result = reg_d - reg_a;
-      mb86233_pkg::ALU_LSRD: int_result = reg_d >> shamt;
+      mb86233_pkg::ALU_ADDD: int_result = i_sum;    // reg_d + reg_a
+      mb86233_pkg::ALU_SUBD: int_result = i_sum;    // reg_d - reg_a
+      mb86233_pkg::ALU_LSRD: int_result = i_sh;     // reg_d >> shamt
       // asld and lsld are the same operation on the bit pattern. MAME keeps
       // them as separate cases computing identical expressions; so do we.
-      mb86233_pkg::ALU_LSLD: int_result = reg_d << shamt;
-      mb86233_pkg::ALU_ASLD: int_result = reg_d << shamt;
-      mb86233_pkg::ALU_ASRD: int_result = 32'($signed(reg_d) >>> shamt);
+      mb86233_pkg::ALU_LSLD: int_result = i_sh;     // reg_d << shamt
+      mb86233_pkg::ALU_ASLD: int_result = i_sh;     // reg_d << shamt
+      mb86233_pkg::ALU_ASRD: int_result = i_sh;     // reg_d >>> shamt
       mb86233_pkg::ALU_CXFD: int_result = 32'd0;      // R588: finished at stage 2
       mb86233_pkg::ALU_CFXD: int_result = 32'd0;      // R731: finished at stage 2
       // Results that need no arithmetic unit at all (R952: the bit ops, in the
