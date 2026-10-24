@@ -64,7 +64,28 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261024`)
+### New in this build (`Model2A_20261024b`)
+
+- **Sega Rally's cars no longer have white dots along their panels.** The
+  shadow crack fix in `Model2A_20261024` widened plain-coloured polygons
+  slightly to close hairline gaps. The cars' bodies are plain white panels
+  with the livery drawn over them as decals, and the widened panels painted
+  over the decals' edges. MAME draws no dots there.
+- **New OSD setting `Seam fill`: `Off` / `Black only` / `On`.**
+  - `Off` (default): polygons are drawn as before `Model2A_20261024`. The
+    cars are clean; Sega Rally's car shadows can show thin cracks.
+  - `Black only`: the crack fix only on black polygons, which is what the
+    shadows are. Solid shadows, clean cars; black trim (window frames,
+    sills) can be widened by a fraction of a pixel.
+  - `On`: the crack fix on every plain polygon, as in `Model2A_20261024`,
+    dots included.
+
+  The setting applies to every 2A game: with `Black only` or `On`, any game
+  that draws plain polygons next to textured ones can show stray edge
+  pixels. **This is a temporary fix**: a proper one, which fills only the
+  real gaps, is being worked on.
+
+### Earlier in `Model2A_20261024`
 
 **Download the new 2A MRAs too** (normal and `[15kHz CRT]`): the settings
 fix below needs them, and the old MRAs don't work with this core's save file.
@@ -74,7 +95,8 @@ fix below needs them, and the old MRAs don't work with this core's save file.
   and other games keep their test-menu settings. Both now go in the save
   file.
 - **Sega Rally: the white dots in the sky and the seams in the car shadows
-  are gone** (GitHub #26). The dots were the mountains' top edge picking up
+  are gone** (GitHub #26). (The shadow fix is now the `Seam fill` setting,
+  off by default: see `Model2A_20261024b` above.) The dots were the mountains' top edge picking up
   the row of texture just above it; the shadow seams were hairline cracks
   between polygons.
 - **Text and 2D no longer flicker or pick up wrong values.** When a game
@@ -161,7 +183,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261024.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261024b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -169,7 +191,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261024.rbf` has the md5 `9edfa2b2c5114eb0d96d6456391ee647`. As with
+`Model2A_20261024b.rbf` has the md5 `3bab755f6e5032da6fc65188bac70d0b`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
