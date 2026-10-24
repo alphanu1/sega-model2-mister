@@ -803,6 +803,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_multipcm_dual.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_ym_timers.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_pcm_fetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_pcm_rate.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_snd_lerp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_tdp_ram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_tdp_ram2c.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_sound_board.sv

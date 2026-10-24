@@ -33,6 +33,7 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static Vm2_sndboard_harness *d;
 
@@ -343,6 +344,15 @@ int main(int argc, char **argv) {
   auto foldh = [&](uint64_t &h, uint32_t v) {
     for (int k = 0; k < 4; ++k) { h ^= (v >> (8 * k)) & 0xff; h *= 1099511628211ULL; }
   };
+  // R956: M2_SND_LERPCHK=1 (a -GLERP=1 build): the board's output must lie,
+  // every cycle, between the steps it interpolates -- the last three samples
+  // the drain has taken (the line runs one sample late, and its phase is
+  // re-taken 64 clocks after a tick). M2_SND_STEPRAW=<file>: the steps
+  // (left, int16) one a drain tick, for the 48 kHz spectrum check.
+  const bool lerpchk = std::getenv("M2_SND_LERPCHK") != nullptr;
+  FILE *stepraw = std::getenv("M2_SND_STEPRAW") ? std::fopen(std::getenv("M2_SND_STEPRAW"), "wb") : nullptr;
+  int16_t sh_l[3] = {0, 0, 0}, sh_r[3] = {0, 0, 0}; long st_n = 0, lerp_checks = 0, lerp_out = 0, lerp_moved = 0;
+  int tick_d = 0;
   long ym_reads = 0, ym_rd_val[256] = {0};
   long ym_nz = 0, ym_nz_first = -1, ym_nz_last = -1; int ym_nz_pk = 0;
   int prev_ym_rd = 0;
@@ -375,6 +385,27 @@ int main(int argc, char **argv) {
     foldh(pcm_hash, (uint32_t(uint16_t(d->obs_p2_raw_l)) << 16) | uint16_t(d->obs_p2_raw_r));
     foldh(pcm_hash, (uint32_t(d->obs_p1_stb) << 1) | d->obs_p2_stb);
     foldh(mix_hash, (uint32_t(uint16_t(d->snd_l)) << 16) | uint16_t(d->snd_r));
+    if (lerpchk || stepraw) {
+      // the cycle after the tick: the new step is on obs_st
+      if (tick_d) {
+        sh_l[0] = sh_l[1]; sh_l[1] = sh_l[2]; sh_l[2] = int16_t(d->obs_st_l);
+        sh_r[0] = sh_r[1]; sh_r[1] = sh_r[2]; sh_r[2] = int16_t(d->obs_st_r);
+        ++st_n;
+        if (stepraw) { int16_t v = int16_t(d->obs_st_l); std::fwrite(&v, 2, 1, stepraw); }
+      }
+      tick_d = d->obs_tick;
+      if (lerpchk && st_n >= 3) {
+        const int o[2] = {int16_t(d->snd_l), int16_t(d->snd_r)};
+        const int16_t *h[2] = {sh_l, sh_r};
+        for (int ch = 0; ch < 2; ++ch) {
+          const int lo = std::min<int>(h[ch][0], std::min<int>(h[ch][1], h[ch][2]));
+          const int hi = std::max<int>(h[ch][0], std::max<int>(h[ch][1], h[ch][2]));
+          ++lerp_checks;
+          if (o[ch] < lo || o[ch] > hi) { if (lerp_out < 5) std::printf("  LERP out %d outside [%d, %d] at cycle %ld\n", o[ch], lo, hi, c); ++lerp_out; }
+          if (o[ch] != h[ch][1] && o[ch] != h[ch][2]) ++lerp_moved;   // strictly on a line, not a step value
+        }
+      }
+    }
     if (d->obs_ym_l || d->obs_ym_r) {
       ++ym_nz; if (ym_nz_first < 0) ym_nz_first = c; ym_nz_last = c;
       int a = std::abs(int(int16_t(d->obs_ym_l))), b = std::abs(int(int16_t(d->obs_ym_r)));
@@ -553,6 +584,12 @@ int main(int argc, char **argv) {
   int fails = 0;
 
   if (wavpath) wav_write(wavpath, wav, 44100);
+  if (stepraw) std::fclose(stepraw);
+  if (lerpchk) {
+    std::printf("  R956 LERP: %ld drain samples, %ld output checks, %ld outside the bracketing steps, %ld not a step value\n",
+                st_n, lerp_checks, lerp_out, lerp_moved);
+    if (lerp_out) { std::printf("  FAIL the interpolator left its bracket\n"); ++fails; }
+  }
   if (dump1) std::fclose(dump1);
   if (dump2) std::fclose(dump2);
   std::printf("  sample cache: %ld reads, %ld wrong\n", cache_reads, cache_bad);

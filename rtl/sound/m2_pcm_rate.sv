@@ -80,6 +80,7 @@ module m2_pcm_rate #(
 
   output logic signed [15:0] o_l,
   output logic signed [15:0] o_r,
+  output logic        o_tick,           // R956: o_l / o_r take the next sample on this edge (the drain)
 
   output logic [15:0] dbg_underruns,
   output logic  [7:0] dbg_level
@@ -118,6 +119,7 @@ module m2_pcm_rate #(
   // ---- the drain, at exactly 44,643 Hz
   logic [31:0] oacc;
   wire         pop_tick = (oacc + 32'(OUT_NUM) >= 32'(OUT_DEN));
+  assign       o_tick   = pop_tick;   // R956: for m2_snd_lerp
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
