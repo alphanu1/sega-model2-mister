@@ -174,6 +174,10 @@ Fighter 2 at the default 80%:
 
 ## Model 2C core — `Model2C.rbf` (BETA)
 
+<!-- STAGED (local): the 2C MRAs in mra/ are the 16520-byte save layout (R945,
+     settings saved). They need a Model2C core built with R945 -- the next 2C
+     core. Do not release them with Model2C_20261023 (s1373, no R945). -->
+
 The first Model 2C core: three games. The 2C board replaces the 2A's
 geometry chip with Sega's TGPx4 (Fujitsu MB86235), rebuilt here from
 scratch and checked against MAME output for output. It's a beta: please
