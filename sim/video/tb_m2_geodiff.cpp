@@ -219,7 +219,13 @@ static void tick() {
   }
   else if (d->sd_wr_req) { wr_a = d->sd_wr_addr & ((1u << 25) - 1); wr_d = d->sd_wr_din; wr_pend = true; }
   d->clk = 0; d->eval(); d->clk = 1; d->eval();
+  // R952: M2GD_QCYC=1 -- each quad's line starts with the cycle it was taken,
+  // so two builds with the same ours.txt hand over the same quads on the same
+  // cycles (cycle identity of the geometry's output, not just its values).
+  static const bool qcyc = std::getenv("M2GD_QCYC") != nullptr;
+  static long g_cyc = 0; ++g_cyc;
   if (d->q_valid && d->q_ready) {
+    if (qcyc) std::fprintf(fo, "@%ld ", g_cyc);
     std::fprintf(fo, "Q %ld %d,%d %d,%d %d,%d %d,%d frac=%04x uv=%u,%u %u,%u %u,%u %u,%u tex=%06x col=%06x z=%08x lum=%u oz=%04x,%04x,%04x,%04x mz=%u\n",
       nq++, (int16_t)d->q_x0, (int16_t)d->q_y0, (int16_t)d->q_x1, (int16_t)d->q_y1,
       (int16_t)d->q_x2, (int16_t)d->q_y2, (int16_t)d->q_x3, (int16_t)d->q_y3, (unsigned)d->q_frac,
