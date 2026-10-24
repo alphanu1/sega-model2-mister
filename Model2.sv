@@ -316,6 +316,10 @@ localparam CONF_STR = {
 	"O[30:29],Steering,3/4,Full,5/4,Half;",
 	"O[51:50],Steering smoothing,Off,Light,Wheel;",   // R830
 	"O[54],Right stick,Pedals only,Pedals+steer;",      // R831: Pedals+steer = R816 (a wheel): X steers, Y still the pedals
+	// R958: GitHub #12, Jotego's OutRun style. Standard is everything above;
+	// Wheel A: left X steers, left Y up = accelerator, right Y up = brake;
+	// Wheel B: left X steers, left Y (whole axis) accelerator, right X brake.
+	"O[71:70],Analog control,Standard,Wheel A,Wheel B;",
 	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
 	// each quad's level moves from its footprint's major axis (R828, the
 	// mountains right, the near road blurry) towards the minor: Sharp half
@@ -5328,7 +5332,7 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.joystick_0(joystick_0), .joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q),
 	.paddle(paddle_q),
 	.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
-	.st_rsteer(status[54]),
+	.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
 

@@ -314,6 +314,13 @@ its missions with no lock in an 87-minute run. Virtua Cop is playable
 through its stages with light-gun input. It's the newest, so please report
 anything you find.
 
+### Coming in the next build (not released yet)
+
+- **`Analog control` for wheels** (GitHub #12): `Wheel A` and `Wheel B`
+  layouts beside today's (`Standard`, still the default) for Daytona USA
+  and Desert Tank, for wheels whose pedals MiSTer reports on their own
+  axes. See *Analog control* under Controls.
+
 ### New in this release
 
 - **15 kHz: Virtua Cop and Desert Tank no longer upset picky CRTs.** These
@@ -406,6 +413,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Steering` | how much stick gives full lock: `3/4` (default), `Full`, `5/4` or `Half` |
 | `Steering smoothing` | `Off` (default), `Light` or `Wheel` — see above |
 | `Right stick` | `Pedals only` (default), or `Pedals+steer`: left/right steers as well, for a wheel |
+| `Analog control` | `Standard` (default: the controls described here), `Wheel A` or `Wheel B`, for a wheel with its own pedal axes — see *Analog control* under Controls. Not released yet: in the next build |
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
@@ -442,6 +450,25 @@ steering feels too light or too heavy, try the `Steering` settings. I'd love
 to hear from wheel owners: this has been built to how MiSTer maps wheels, but
 not yet tried on one.
 
+**Analog control: Wheel A / Wheel B** (next build, not released yet; GitHub
+#12). Many wheels show up with the wheel on the *left* stick and each pedal
+on its own axis, as Jotego's OutRun core expects. Pick the layout that
+matches yours:
+
+| | steering | accelerator | brake |
+|---|---|---|---|
+| `Wheel A` — most older wheels (the cathoderayblog setup guide) | left stick left/right | left stick **up**: centre is released, fully up is fully pressed | right stick **up**, the same way |
+| `Wheel B` — newer pedal sets such as the Logitech RS50's | left stick left/right | left stick up/down over its **whole** travel: fully up is released, fully down is fully pressed | right stick left/right over its whole travel: fully left is released, fully right is fully pressed |
+
+In both, the steering has no dead zone and the right stick never steers
+(`Right stick` doesn't apply); `Steering` and `Steering smoothing` work as
+before; `Pedals: Swapped` exchanges the two pedals; the `Accel` and `Brake`
+buttons still press fully; the d-pad steers while you hold it. Don't use
+`Wheel B` on a pad: with no pedals connected it reads half accelerator and
+half brake. These follow how the wheel's owner says MiSTer reports these
+wheels; they haven't been tried on one here yet, so please report how they
+behave.
+
 #### Desert Tank
 
 | | |
@@ -455,7 +482,9 @@ not yet tried on one.
 
 The MRA renames the buttons, so MiSTer's define-buttons screen asks for these
 names. With `Right stick: Pedals+steer` (a wheel), the wheel steers, the
-pedal axis drives forward or back, and the d-pad aims.
+pedal axis drives forward or back, and the d-pad aims. With `Analog control:
+Wheel A` or `Wheel B`, the accelerator pedal drives forward and the brake
+pedal backwards (whichever is pressed further), and the d-pad aims.
 
 #### Virtua Cop
 
