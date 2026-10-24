@@ -401,7 +401,11 @@ localparam CONF_STR = {
 	"O[27],Textures,On,Off;",
 	// R620: BILINEAR, WITH AN OFF SWITCH, for the same reason. Point is the
 	// nearest of the same four texels -- this core's picture before R620.
-	"O[31],Texture filter,Bilinear,Point;",
+	// R950: "Auto" (status[31] = 0, the old "Bilinear", so saved configs land on
+	// it) is Bilinear except where a game's own look needs point sampling:
+	// Sky Target (its sky panels' joints show lines under the bilinear filter;
+	// the arcade shows none -- Ben, on the board, 2026-10-24).
+	"O[31],Texture filter,Auto,Point;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
@@ -1073,7 +1077,8 @@ wire [1:0] gam_menu = (status[33:32] == 2'd0) ? 2'd0 :
 always_ff @(posedge clk_mem) begin gam_m1 <= gam_menu; gam_m2 <= gam_m1; end
 always_ff @(posedge clk_sys) begin gam_s1 <= gam_menu; gam_s2 <= gam_s1; end
 reg [2:0] texpt_s;   // R620: the filter switch, on clk_mem where the texel cache runs
-always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31]};
+wire       texpt_game;   // R950: this game defaults to point sampling (assigned with the game decode)
+always_ff @(posedge clk_mem) texpt_s <= {texpt_s[1:0], status[31] | texpt_game};
 // R650: the texel step, into clk_sys where m2_span_tex runs (three flops,
 // R229). Quasi-static, and each span latches it whole.
 reg [1:0] pxk_s1, pxk_s2, pxk_s3;
@@ -2791,6 +2796,7 @@ wire is_desert = (game_id[6:0] == 7'd2);
 //   0x11 Virtua Cop 2 (vcop2)               program 2 MB, two triggers
 //   0x12 Zero Gunner (zeroguna)             program 1 MB, two sticks
 wire is_srally  = M2A && (game_id[6:0] == 7'h10);
+assign texpt_game = M2A && (game_id[6:0] == 7'h18);   // R950: Sky Target -- Texture filter "Auto" is point here
 wire is_vcop2   = M2A && (game_id[6:0] == 7'h11);
 wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F

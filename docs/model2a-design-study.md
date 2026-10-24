@@ -44108,3 +44108,13 @@ unchanged. The fit's report on clk_sys is the check.
 SAVE WORKS (R945) -- Sega Rally's test-menu settings survive a reload. Fits
 are PAUSED (Ben) until the sound mix-balance fix (R949, branch hotd-mix) is
 in: the next 2A / 2C seed hunts carry it.
+
+**R950 -- TEXTURE FILTER "AUTO": SKY TARGET DEFAULTS TO POINT SAMPLING.**
+Sky Target's title sky shows thin darker lines at its sky-panel joints with
+the bilinear filter (MAME draws them too, R947); the arcade shows none, and
+on the board Ben found Texture filter = Point alone removes them (mip-mapping
+can stay on). The OSD line O[31] becomes "Auto, Point": 0 (the old
+"Bilinear", so every saved config lands on Auto) is bilinear on every game
+but Sky Target (game ID 0x18), where it is point; 1 forces point everywhere,
+as before. Model2.sv: texpt_game (one compare on the game ID) ORed into the
+filter's synchroniser. Nothing else changes; the main core is untouched.
