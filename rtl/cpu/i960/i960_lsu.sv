@@ -186,6 +186,9 @@ module i960_lsu (
   logic [31:0] byte_addr;
   assign byte_addr = cur_addr + {30'd0, bidx};
 
+  // R952: a burst's next word, one adder for S_XFER and S_NEXT's two copies.
+  wire [31:0] cur_addr_p4 = cur_addr + 32'd4;
+
   // Named intermediates for the lane selects. Quartus 17.0 rejects indexing the
   // result of a part-select:
   //   Error (10768): range must be the final index in the indexed name
@@ -316,7 +319,7 @@ module i960_lsu (
                 state <= S_IDLE;
               end else begin
                 widx <= widx + 3'd1;
-                if (burst_q) cur_addr <= cur_addr + 32'd4;
+                if (burst_q) cur_addr <= cur_addr_p4;   // R952
                 state <= store_q ? S_OPD : S_XFER;
               end
             end
@@ -350,7 +353,7 @@ module i960_lsu (
           end else begin
             widx <= widx + 3'd1;
             // THE non-obvious line. Only a burst region advances.
-            if (burst_q) cur_addr <= cur_addr + 32'd4;
+            if (burst_q) cur_addr <= cur_addr_p4;   // R952
             state <= store_q ? S_OPD : S_XFER;
           end
         end
