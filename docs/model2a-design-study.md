@@ -45354,3 +45354,213 @@ test_m2_vcop2_guns PASS here; lint_top clean with -DM2_2C=1
 -DM2_NO_2A_MANX_MOTION=1 and on the default 2A build. The 2C build was not
 mapped (the 2A figure above: +57 ALMs, +1,024 MLAB bits, no M10K). The 2C
 MRAs (House of the Dead, Over Rev, STCC) are 16520 with the 2A ones.
+
+**R946 -- HOUSE OF THE DEAD'S "HUGE WOBBLE AND CLIPPING" IN THE ATTRACT'S
+TUTORIAL SCREEN (s1423 with AGE; first heard on s1373, clean timing) IS THE
+SCSP ENGINE RUNNING PAST ITS 1,814 CLOCKS A SAMPLE AT LIGHT PORT LATENCY. THE
+GAME'S DSP PROGRAM (112 STEPS; 23 RING READS AND 10 RING WRITES A SAMPLE, THE
+STEPS WAITING ON EACH SDRAM TRANSACTION) TAKES ~1,000 CLOCKS IN SILENCE, AND
+THE TUTORIAL'S SLOT TRAFFIC -- THE HEAVIEST IN THE ATTRACT -- ADDS ~900: THE
+OUTPUT FIFO UNDERRUNS THERE AND NOWHERE MUCH ELSE, WHATEVER THE 3D LOAD. NOT
+THE DSP's ARITHMETIC, NOT THE RING'S PLACE, NOT R914's VALUES, NOT SDRAM
+STARVATION. REPRODUCED IN THE BENCH. FIXED IN THE BENCH: THE DSP's RUN FOR
+SAMPLE n GOES ON UNDER THE SLOTS OF SAMPLE n+1 AND ITS RING WRITES ARE POSTED
+(M2_2A_SND_OVL, ON IN THE 2C BUILD ONLY; 2A UNCHANGED CLOCK FOR CLOCK). BRANCH
+hotd-dsp (OFF model2c 5c2caca), LOCAL ONLY, NOT FITTED.**
+
+*Believed (the task):* the SCSP's DSP. R943 found the core bit-exact against
+MAME except through R914's MADRS decode (the core keeps the delay taps, MAME
+zeroes them); HOTD might be the first game whose reverb leans on them -- a DSP
+that grows or feeds back, a ring that lands on sample or program data in
+sound RAM (fine at first, worse later), or an R914 that is right for DOA only.
+A light-load screen being bad argued against R943's starvation.
+
+*The capture (new, MAME 0.289 + p16, m2lod, hotd, default nvram = JAPAN,
+attract only, no coin, 330 s, a snap every 5 s; sm2-builds/hotd-dsp/build/
+scsp/att1, git-ignored):* the attract cycles every ~105 s: intro 15-50 s, the
+demo 50-70 s, THE TUTORIAL (life marks, "lose them all and the game is over",
+then reloading) 70-86 s -- again at 175-190 s and 280-295 s -- and from 302 s
+a later stage's demo with its own DSP program.
+
+*Ruled out (measured):*
+  1. THE DSP's VALUES. scsp_ref.h (= the RTL, R943) replayed with R914's
+     decode and with MAME's mirror, 330 s: the tutorial's mix RMS 2,045-2,122
+     (mirror 1,957-2,028), peak 23,916 of the DAC's +-131,071, 0 clamped
+     samples in 330 s either way. R914's return differs from the mirror's by
+     550-640 RMS (~-12 dB under the mix, a reverb), flat from 30 s to 330 s:
+     no growth, no feedback, no clipping. tb_m2_scsp (latency 6-40, the RTL
+     against the reference, 95 s): 0 samples differ, 46,525,259 slot samples
+     right.
+  2. THE RING. RBP 0x38, RBL 32 K words: bytes 0x70000-0x7FFFF of the 512 KB
+     sound RAM, in MAME as in the core (RAM_BASE + 18 bits). The 68000 writes
+     there only five zero-clears at program loads; no slot ever reads at or
+     above 0x70000 (the highest slot page 0x6F000); the 68000's streams use
+     0x3A000-0x6FFFF. MAME's own DSP writes the whole ring too (min 0x70000,
+     max 0x7FFFE). No alias, no overlap.
+  3. R914 FOR HOTD. The driver writes a 29-tap table (0x0877-0x4776, inside
+     the 32 K ring) and then 32 zero words to 0x7C0, as every 2A driver; with
+     the taps the program is an ordinary reverb (item 1). R914 stands. What it
+     changes for HOTD is TIME: real taps sit on different ring lines, so the
+     DSP's read cache misses 4.25 times a sample (MAME's mirror: 0.50) -- 23.0
+     reads and 10.0 writes a sample either way.
+  4. The tutorial uses no LFO, FM or noise (PCM8, loops 0 / 1). The later
+     stage's demo (302 s on) has a PCM16 slot with FM (MDL only) and a
+     triangle pitch LFO -- not in the tutorial; the bench checks it bit-exact
+     where it plays (see the full run below).
+
+*THE CAUSE (tb_m2_scsp, new SCSP_ECDUMP: each sample's engine clocks; a
+model of the board's 8-sample output FIFO drained every 1,814 clocks, the
+engine starting a sample when there is room -- scratch fifo.py):*
+  engine clocks a sample, second by second (latency 6-40 clk_sys, the band
+  R877 found VF2's board in):
+                      silence  demo 58 s  tutorial 70  81    82    83    84 s
+    R914 (the core)    1,036    1,662       1,736  1,772 1,881 1,889 1,922
+    MAME's mirror        921    1,547       1,621  1,657 1,766 1,774 1,807
+  FIFO underruns (8 deep): R914 12,020 in 95 s -- first at 54 s (the demo,
+  25-500 a second), then the tutorial 81-85 s: 554 / 1,591 / 1,494 / 2,570 /
+  1,955 a second (up to 6% of samples); the mirror 731 (max 209 a second).
+  At 15-90: R914 357,141 (from 30 s on), the mirror 129,881; at 25-150 even
+  silence is over budget (2,036). THE 2A GAMES AT 6-40, 30 s each: DOA 671
+  mean / 1,463 max, VF2 849 / 1,577, Virtua Cop 2 1,114 / 2,117, Zero Gunner
+  1,369 / 2,225 -- 0 underruns each (Ben: all four sound right on the board).
+  Slot line fills a sample (the reference's cache model): the tutorial 3.0-
+  6.0, the attract's demo 2-3, chapter 1 play (R943's capture) 0.3-2.6. The
+  tutorial is the heaviest sound in the game's attract, and that -- not the
+  picture -- is what runs the engine over. The engine is serial: slots, then
+  the DSP's 112 steps, each memory step waiting for the SDRAM (a write holds
+  the next memory step until it lands, a miss until its line does), so its
+  time is ~(compute) + ~14 transactions x latency. AGE (R943) shortens the
+  arbiter's tail under load; it does nothing for this floor.
+  FREE-RUNNING (tb_m2_scsp's new SCSP_FREE: the engine as m2_2a_sound runs
+  it -- out_ready while fewer than 7 wait, a drain every 1,814.06 clocks with
+  tick44 / tph / cpu_tick as the board makes them, MAME's writes, RAM writes
+  and MIDI applied as samples drain; nothing compared), 95 s:
+                         6-40 underruns   15-90
+    R914 (as built)      12,396           297,275
+    MAME's mirror           671           117,625
+    R914, second by second at 6-40: 0 to 53 s; 108 at 54 s, then 0-521 a
+    second through the demo and the tutorial's start; 81-85 s 712 / 1,743 /
+    2,092 / 2,528 / 1,295; 0 after (86-95 s). The RTL's mix there is the
+    scene's (RMS 1,800-2,600, as MAME's), so the scene did play. The step-
+    mode model above (12,020) was right.
+  THE WHOLE 330 s (step model, 6-40): 35,319 underruns, the same burst at
+  every pass of the tutorial -- 81-85 s, 188-191 s (1,704-2,321 a second),
+  293-296 s (1,408-2,453) -- and a scatter of 0-500 a second in the demos
+  before it; the later stage's demo (302 s on) runs 1,036-1,253 clocks and
+  does not underrun. So the attract starts clean and goes bad ~80 s in, every
+  ~105 s after: Ben's "fine at first, appeared later".
+  WHAT THE BOARD HEARS: ~4-6% too few samples in the tutorial -- pitch and
+  tempo sag with the scene's sound (the wobble), each underrun holds the last
+  sample (flat tops: the "clipping", crackle), and the 68000, on drained-
+  sample timers, streams in real time into rings the slots now play late
+  (fuzz, wrong echoes). R943's starvation is the same symptom from the other
+  end; s1373's clean timing and the light-load screen both fit this.
+
+*THE FIX (M2_2A_SND_OVL; m2_scsp OVERLAP / WPOST, m2_scsp_dsp, m2_scsp_level,
+m2_scsp_cache, scsp_uasm.py's overlapped head):*
+  1. OVERLAP. The microcode's new head (after all old words: the 123 words
+     the 2A engine runs are byte-identical) issues DSPGO for sample n last and
+     goes straight on to sample n+1's slots; after them it waits for that run,
+     adds its effect returns to sample n's direct sends (held in PVL / PVR,
+     after the boost) and outputs sample n. A sample costs max(slots, DSP)
+     + the returns, not their sum; the stream is MAME's one sample later.
+     To keep MAME's mix exact: MIXS is two banks (the slots fill one while a
+     run reads the other; a stopped DSP takes no bank; an abandoned run's
+     sends are merged once the slots are parked); the effect words (level
+     words 3 / 4 of slots 0-15) and MVOL / DAC18 are read as they were at the
+     DSPGO that ended the sample (two banks of level rows, the unused rows 6
+     / 7; registers latched at DSPGO), since the 68000's writes for sample n+1
+     land before sample n's returns; a DSP op -- and 0x402 (RBL / RBP) --
+     waits for a run and for a go not yet taken.
+  2. WPOST. The ring writes go into an eight-entry queue (a shift register)
+     once their step's read is in; a fill waits for the queue to empty; a
+     read of a line with a queued write -- or of the last write's line while
+     its snoop is still on its way -- is a miss. Reads still see every earlier
+     write and no later one. The port time stays; the steps no longer wait.
+  Off (2A): every R946 path is a generate / parameter branch; the engine
+  clocks of DOA, VF2, Virtua Cop 2, Zero Gunner (30 s each) and HOTD (34 s)
+  are identical sample for sample to model2c's (DOA, VC2, HOTD rerun on the
+  final RTL).
+
+*Benches (final RTL):*
+  * tb_m2_scsp, HOTD attract, 95 s, both on (SCSP_OVL=1): 0 differ from the
+    reference (shifted a sample), 46,525,259 slot samples right; engine clocks
+    a sample, latency 6-40:
+                      silence  demo 58 s  tutorial 70  81    82    83    84 s  mean / max
+    R914, as built     1,036    1,662       1,736  1,772 1,881 1,889 1,922  1,324 / 2,437
+    OVERLAP only       1,003    1,009       1,014  1,016 1,028 1,035 1,047  1,001 / 1,450
+    WPOST only           874    1,500       1,573  1,610 1,719 1,727 1,759  1,163 / 2,258
+    both (2C)            841      877         894    909   979   987 1,018    849 / 1,443
+    FIFO underruns: 12,020 -> 0 (OVERLAP only 0, WPOST only 90). Free-
+    running (SCSP_FREE), 95 s: 0 at 6-40 and 0 at 15-90 (as built: 12,396
+    and 297,275). At 15-90:
+    both 1,124 mean / 2,115 max, tutorial 1,163-1,230, 0 underruns (was
+    357,141). At 25-150: 1,689 mean / 2,934 max, flat ~1,700 (the DSP's run,
+    no longer the scene), 103 underruns (was 1,408,967; the mirror 594,691).
+    The same run at latency 1-400 (34 s): 0 differ. The whole 330 s capture
+    (6-40; the later stage's demo with its own DSP program, the PCM16 slot
+    with FM and a pitch LFO): 0 differ, 164,918,992 slot samples right,
+    847 mean / 1,445 max, 0 underruns (as built: 1,320 / 2,445, 35,319).
+  * The 2A captures with OVERLAP on (30 s each, 6-40), 0 differ every one:
+    DOA 671 -> 477 mean (1,463 -> 982 max), VF2 849 -> 590 (1,577 -> 999),
+    Virtua Cop 2 1,114 -> 709 (2,117 -> 1,294), Zero Gunner 1,369 -> 826
+    (2,225 -> 1,501), Sega Rally 262 -> 231 (no DSP program).
+  * tb_m2_scsp_dsp, 500 random programs (memory on any step, aborts), 0 EFREG
+    and 0 RAM words wrong in every case: both on at 6-40 and at 1-400; WPOST
+    alone, OVERLAP alone and neither at 1-400; both on at 1-400 with seeds 2,
+    4 and 6 (150 programs each). The bench now waits for the port to be quiet
+    for 32 clocks before it compares RAM (the queue, and the last step's write
+    waiting on its read, run on after done).
+  * BUGS THE BENCHES CAUGHT ON THE WAY (kept): (a) WPOST without the queued-
+    line check: 500 random programs at 6-40 gave 216,559 EFREG wrong -- a
+    write's invalidation is not instant, a following read hit the stale line;
+    (b) at latency 1-400, a write can land before its own invalidation is
+    through the cache's snoop path: the last-write-line check; (c) OVERLAP
+    dropped a go that came with the 68000's 0xBF0 write (VF2 hung at sample
+    17,727): DSP ops now wait out a pending go, and such a go is latched;
+    (d) the first OVERLAP compared sample n-1's returns with the EFSDL the
+    68000 wrote for sample n (VF2 1 sample wrong at 18,180): the level-row
+    banks; (e) a register-array shadow for (d) cost +631 ALMs -- replaced by
+    the unused level rows; (f) the queue as an indexed array was inferred as
+    an AUTO RAM (could land in M10K): now a shift register.
+
+*TRIED AND NOT USABLE (kept):* the whole board (tb_m2_2a_sound, fx68k on
+epr-19720) reaches 86 s of attract only in ~3.5 hours, so it was run with
+SND_SHIFT=39.7 SND_SHIFT_AFTER=48.7 SND_MIDI_DROP=1 (MAME's MIDI from 48.7 s
+moved 39.7 s earlier, 9-48.7 s dropped) to bring the tutorial to 30-45 s.
+It did not bring the tutorial's sound: with the attract's earlier MIDI gone
+the 68000 played almost nothing (port 6: 772 slot fills a second, against
+the tutorial's 130-260 K; its level 0 for most of 20-46 s), so its "FIFO
+found empty 0 times" says nothing either way. A shifted replay is no
+substitute when the scene's sound depends on what was started before it.
+
+*AREA (quartus_map 17.0, sim/sound/scsp_area_top.sv, virtual pins):*
+                          ALMs needed  registers  MLAB bits  block bits  M10K RAMs
+    model2c 5c2caca          2,071       1,718      5,184     178,560     21
+    hotd-dsp, OVERLAP 0      2,074       1,718      5,184     178,560     21
+    hotd-dsp, OVERLAP 1      2,383       2,092      5,504     178,560     21
+  (+312 ALMs, +374 registers, one 16 x 20 MLAB -- MIXS's second bank; the
+  same 21 M10K RAMs. The 2C build is at 549 / 553 M10K: unchanged.)
+
+*Checks:* lint_top clean on 2A and on -DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1;
+lint_idx (2C): no candidate in a changed file.
+
+*NOT DONE:* not fitted, not on a board. Chapter 2 itself is not in a capture
+(MAME's play scripts never reach it); the later-stage attract demo (302 s
+on) is the nearest. Whether to turn OVERLAP on for 2A: Virtua Cop 2 sits at
+2,117 max / 1,114 mean on the board's band today (0 underruns) -- a margin,
+not a fault; 2A stays off until Ben asks.
+
+*THE BOARD PROBE (s1424-s1426, M2_PROBE + M2_PROBE_L), what it should show in
+the tutorial (70-86 s after the attract starts):*
+  this cause: 'T' -- the underrun count climbs in the tutorial (and a little
+  in the demo before it), ~100-250 per T record there, ~0 elsewhere (it is a
+  saturating 16-bit total: read the steps, and it stops at 65,535); the
+  loudest |left| stays far from full scale (the "clipping" is held samples,
+  not overflow); 'L' -- the sound ports' longest waits in the light band
+  (tens to ~150 clk_sys), port 6 / 7 waits >= 256 ~0; 'S' -- the 68000 near
+  MAME's ~2.4 M bus cycles a second (its timers count drained samples).
+  starvation (R943): 'L' longest waits 250+ (saturating 1,023) with a count
+  of >= 256 waits, the 68000's bus cycles well down, underruns following the
+  3D load rather than the tutorial.
+  a DSP value fault: no underruns, the loudest sample at or near full scale.

@@ -1,5 +1,39 @@
 # Handoff
 
+## 2026-10-23 (late night): branch hotd-dsp (off model2c 5c2caca, LOCAL) -- House of the Dead's tutorial-screen wobble / clipping (R946). NOT PUSHED, NOT FITTED
+
+REPRODUCED in the bench: the SCSP engine runs past its 1,814 clocks a sample in
+the attract's tutorial at LIGHT port latency (6-40 clk_sys, VF2's measured board
+band): HOTD's 112-step DSP program waits on ~14 SDRAM transactions a sample
+(R914's real taps make 4.25 of them cache misses; MAME's mirror 0.5) and the
+tutorial's slot traffic is the heaviest in the attract. FIFO model: 12,020
+underruns in 95 s, 1,500-2,600 a second at 81-85 s; 2A games 0. Free-running
+SCSP bench (new SCSP_FREE, the board's 7-ahead FIFO): 12,396 underruns, 712-
+2,528 a second at 81-85 s (MAME's mirror 671). The DSP's
+values are fine (reference = RTL, no growth, no clamping, 0 clipped samples in
+330 s); the ring (0x70000-0x7FFFF) overlaps nothing; R914 stands.
+  * Fix: M2_2A_SND_OVL (2C only): the DSP run for sample n under sample n+1's
+    slots (microcode head appended; MIXS two banks; effect level rows and MVOL
+    latched at DSPGO; output one sample late) + WPOST (ring writes posted, an
+    8-entry queue). HOTD tutorial 1,881-1,922 -> 979-1,018 clocks, 0 underruns
+    (step model and free-running, 6-40 and 15-90; 25-150: 1,408,967 -> 103). 0 differ from the reference (HOTD 95 s, DOA, VF2, VC2, ZG,
+    Rally 30 s). 2A off: engine clocks identical to model2c's.
+  * Area (scsp_area_top): +312 ALMs, +374 regs, +1 MLAB, M10K unchanged (21).
+  * Commits efd38fe (RTL + benches), then the bench / study commit after it.
+    The whole board (tb_m2_2a_sound) with SND_SHIFT did NOT bring the
+    tutorial's sound (dropped MIDI) -- unusable; unshifted it needs ~3.5 h. Capture: build/scsp/att1 (git-ignored,
+    MAME attract 330 s). Scratch FIFO model: scratchpad dsp/fifo.py.
+  * Probe expectation (s1424-s1426): 'T' underruns climbing in the tutorial
+    with 'L' waits in the light band and 'S' ~2.4 M/s = this cause; 'L' 250+
+    and >=256 counts = starvation; loudest sample near full scale with no
+    underruns = a DSP value fault.
+  * Not done: fit; board; chapter 2 itself not captured (the later-stage
+    attract demo at 302 s+ is the nearest); 2A OVERLAP left off (VC2 margin).
+  * Wrong turns kept in R946: WPOST without the queued-line check (stale
+    hits), the write-beats-its-snoop race at latency 1-400, a lost go with the
+    0xBF0 write (VF2 hang), returns using the next sample's EFSDL, a +631-ALM
+    register shadow, the queue inferred as AUTO RAM.
+
 ## 2026-10-23 (night): branch ee-save-2c (off model2c, LOCAL) -- the 93C46 EEPROM in the NVRAM file (R945, #15 / #21). NOT PUSHED, NOT FITTED
 
 Every 2A / 2B / 2C game keeps its test-menu settings in the 93C46 (MAME
