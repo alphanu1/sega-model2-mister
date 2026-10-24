@@ -960,6 +960,18 @@ module m2_raster_fill #(
   // screen: on the board, streaks across the picture. S_FS_MULA and
   // S_FS_MULB each take two cycles now (mul_w), twice per clipped segment.
   logic signed [31:0] mul_pr;
+  // R952: ONE ADDER A REGISTER FOR THE EDGE ACCUMULATORS' STEPS. xa / xb
+  // took three sums in three states (S_OFF's quarter-row move, S_FS_MULA /
+  // MULB's skip, S_FS_WALK's slope) and xah / xbh two outside the walk's
+  // own adder; each register now has one, its operand picked by
+  // the state -- the same sum in each state, and no state writes two.
+  wire  [1:0]         off_d  = 2'((rq(cury) <<< 2) + 16'sd2 - cury);   // S_OFF's quarter rows
+  wire  signed [31:0] off_da = ((off_d[1] ? (sla <<< 1) : 32'sd0) + (off_d[0] ? sla : 32'sd0)) >>> 2;
+  wire  signed [31:0] off_db = ((off_d[1] ? (slb <<< 1) : 32'sd0) + (off_d[0] ? slb : 32'sd0)) >>> 2;
+  wire  signed [31:0] xa_sum = xa + ((state == S_OFF) ? off_da : (state == S_FS_MULA) ? mul_pr : sla);
+  wire  signed [31:0] xb_sum = xb + ((state == S_OFF) ? off_db : (state == S_FS_MULB) ? mul_pr : slb);
+  wire  signed [31:0] xah_mv = xah + ((state == S_OFF) ? off_da : mul_pr);
+  wire  signed [31:0] xbh_mv = xbh + ((state == S_OFF) ? off_db : mul_pr);
   logic [1:0]         mul_w;   // R740: three cycles a multiply, not two
   // R740: AND THE MULTIPLY IN TWO HALVES. A 17 x 32 product is two DSPs and
   // an adder in one cycle (s788 at 80 MHz: mul_sl -> mul_pr -0.745). The
@@ -1719,11 +1731,8 @@ module m2_raster_fill #(
         // quarters below -- 0 to 3 -- so it moves by slope * d / 4. The other
         // edge is already at that row's centre: it was walked there.
         S_OFF: begin
-          automatic logic [1:0] d = 2'((rq(cury) <<< 2) + 16'sd2 - cury);
-          automatic logic signed [31:0] da = ((d[1] ? (sla <<< 1) : 32'sd0) + (d[0] ? sla : 32'sd0)) >>> 2;
-          automatic logic signed [31:0] db = ((d[1] ? (slb <<< 1) : 32'sd0) + (d[0] ? slb : 32'sd0)) >>> 2;
-          if (need_a) begin xa <= xa + da; xah <= xah + da; end
-          if (need_b) begin xb <= xb + db; xbh <= xbh + db; end
+          if (need_a) begin xa <= xa_sum; xah <= xah_mv; end   // R952: + off_da
+          if (need_b) begin xb <= xb_sum; xbh <= xbh_mv; end   //        + off_db
           state <= S_DECIDE;
         end
 
@@ -1802,8 +1811,8 @@ module m2_raster_fill #(
           mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
           mul_w  <= 2'd2;
         end else begin
-          xa     <= xa + mul_pr;
-          xah    <= xah + mul_pr;
+          xa     <= xa_sum;   // R952: + mul_pr
+          xah    <= xah_mv;
           mul_sl <= slb;
           mul_w  <= 2'd0;
           state  <= S_FS_MULB;
@@ -1817,8 +1826,8 @@ module m2_raster_fill #(
           mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
           mul_w  <= 2'd2;
         end else begin
-          xb    <= xb + mul_pr;
-          xbh   <= xbh + mul_pr;
+          xb    <= xb_sum;    // R952: + mul_pr
+          xbh   <= xbh_mv;
           mul_w <= 2'd0;
           state <= skip_only ? S_FS_END : S_FS_SWAP;
         end
@@ -1844,8 +1853,8 @@ module m2_raster_fill #(
             s1_cr      <= emit_cr;
             s1_col     <= col;
             s1_moire   <= moire;
-            xa     <= xa + sla;
-            xb     <= xb + slb;
+            xa     <= xa_sum;   // R952: + sla
+            xb     <= xb_sum;   //        + slb
             xah    <= xah + sla;
             xbh    <= xbh + slb;
             walk_y <= walk_y + 16'sd1;
