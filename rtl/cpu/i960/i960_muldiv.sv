@@ -155,6 +155,10 @@ module i960_muldiv (
   logic [32:0] shifted;
   /* verilator lint_on UNUSEDSIGNAL */
   assign shifted = {rem_acc[31:0], quot[63]};
+  // R952: the restoring step's compare is the subtract's borrow -- one carry
+  // chain where there were two (shifted >= divisor_ext, then the difference).
+  logic [33:0] dsub;
+  assign dsub = {1'b0, shifted} - {1'b0, divisor_ext};
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -228,8 +232,8 @@ module i960_muldiv (
             divisor_ext <= {1'b0, dsr_mag};
             bitcnt <= 7'd1;
           end else if (bitcnt <= (is_e_q ? 7'd64 : 7'd32)) begin
-            if (shifted >= divisor_ext) begin
-              rem_acc <= shifted - divisor_ext;
+            if (!dsub[33]) begin                 // R952: shifted >= divisor_ext
+              rem_acc <= dsub[32:0];
               quot    <= {quot[62:0], 1'b1};
             end else begin
               rem_acc <= shifted;
