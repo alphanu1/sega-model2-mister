@@ -45846,6 +45846,197 @@ can stay on). The OSD line O[31] becomes "Auto, Point": 0 (the old
 but Sky Target (game ID 0x18), where it is point; 1 forces point everywhere,
 as before. Model2.sv: texpt_game (one compare on the game ID) ORed into the
 filter's synchroniser. Nothing else changes; the main core is untouched.
+*BOARD (Ben, 2026-10-24, s1447 = 8fa6643 + R944 small + R945, R938 out):*
+R944 WORKS -- Sega Rally's car-shadow holes are gone. Still there: a straight
+line of single white pixels across Rally's textured sky in the attract's
+canyon start (#26 item 2) -- the textured version of the same T-junction
+crack? Branch rally-sky (R951), reproduce first at the board's settings.
+
+**R951 -- SEGA RALLY'S SKY DOTS ARE NOT A T-JUNCTION: THE DISTANT-MOUNTAIN
+BAND'S TOP EDGE SAMPLES A HAIR OUTSIDE ITS OWN TEXELS, AND THE ROW ABOVE IT IN
+THE TEXTURE IS OPAQUE WHITE. REPRODUCED AT THE BOARD'S SETTINGS (BOTH FILTER
+MODES), CLOSED BY CLAMPING A NEAR MISS BACK INTO THE QUAD'S OWN TEXEL BOX
+(UVCL). Branch rally-sky (off bridge-r937-2a a13c623), not pushed, not fitted.**
+(Board, s1447: Sega Rally's attract, the canyon start -- "PUSH START BUTTON",
+the leading car between grassy walls -- a straight, nearly horizontal line of
+single white pixels across the sky, a few tens of pixels apart; GitHub #26
+item 2. Ben: it shows with Texture filter Point too.)
+
+*What was believed:* R944's crack (a T-junction along a long shallow shared
+edge, one hole per row) on TEXTURED polygons, which R944 left out; R947 had
+shown a moved textured span start costs nothing at the board's texel step 1,
+so extending R944's DIL to textured quads looked cheap. R938's "Rally sky dots
+not reproduced (attract 960 / 1050 / 1500 / 2040)" was at texel step 4 and on
+the desert stage, not this scene. (Ben, later: Rally's sky there is a 2D
+layer -- checked below: it is not.)
+
+*NOW KNOWN (MEASURED; MAME 0.289 m2lod dumps of srallyc, ROM-derived scratch
+outside the tree; the bench in the board's settings -- benchbd: texel step 1,
+mip Sharp, the 2A no-mip flag, KW 20 + WINKEY, UVSH, TEXMEM):*
+  * THE SCENE. A 150 s attract survey puts the canyon start at 3D frames
+    ~2660-2780 (the second stage's start, Toyota leading). Ben's grab is
+    frames ~2716-2724. Dumped: M2DIFF frames 2716 / 2718-2726 and, by the
+    file trigger, walks 4074-4082 (frame F = walk F + 1356 here, matched by
+    the picture against MAME's: walk 4080 / frame 2724, mean error 6.28).
+  * THE SKY IS 3D IN THIS SCENE. MAME's 3D owner map covers 100% of rows
+    0-120 on every survey frame 2640-2780: a textured sky quad pair at z
+    ~62,800, and in front of it the distant mountains, one textured band
+    quad (MAME polygon 421 on frame 2724, h 6013,0001,1aac,3500, z 56,779)
+    whose texture is transparent above the mountains.
+  * REPRODUCED, THROUGH THE CORE'S OWN PATH. The core's geometry (geodiff
+    2A: CRTC_Y 128, WINKEY, MZX, UVSH, and now TEXLUT, as Model2.sv builds
+    it) on walks 4074-4082, its quads textured in the 2A packing (new: the
+    bench's M2_R3D_QUADSTEX in a TEXLUT build, geodiff's trow=), through the
+    raster bench at the board's settings: 15 single white (224,236,208)
+    pixels in 9 frames, 0-4 a frame, on ONE straight line y 47-54, x 190-349,
+    25 px apart -- e.g. walk 4076 (269,50) (294,51) (319,52) (344,53); Ben's
+    grab: ~(245,42) (322,45) (348,46) native. Point sampling: the SAME 15.
+    MAME's own frames (2716, 2718-2722, 2724): 1 such pixel in 7 frames
+    ((257,50), frame 2724). MAME's polygons through the same bench: 0.
+  * IT IS NOT A HOLE. Coverage (owner colours, MAME's walk polygons vs the
+    core's quads, R938's zhole): 0 unpainted pixels and 0 depth holes on
+    every walk; the core paints the full 190,464 pixels.
+  * THE CAUSE. The band's top edge is a long shallow line (core quad 418 on
+    walk 4076: (0,39.75) to (357.25,54.0), 0.04 px a pixel) along which v is
+    exactly texel 128 -- the band uses rows 128-255 of a 256-high texture,
+    rows 0-127 hold something else, opaque white at row 127. Once a scanline
+    the edge passes within ~0.01 px of a pixel centre; there exact v is
+    128.005 or so, and the core's v came out 127.98 (fetch log: 32764 and
+    32766 of 32768 /256-texel units). Measured along that edge, the core's v
+    is low by 2.1-6.6 /256 texel (mean 4.4) on walk 4076 and -0.2 +- 0.75 on
+    walk 4080 (no dots there): the plane fit's quantisation, per quad and
+    per frame (R338's 0.02-0.59 texel; MAME's polygons through the same
+    raster: +1.2 +- 1.4, no dots). Under 128.0 the bilinear (m2_texel_bl,
+    MAME's rule) gives row 127 over half the weight, the alpha test (alpha
+    >= 1/2) passes, and the pixel is row 127's white; point sampling takes
+    the nearest row, 127, the same way. MAME has exactly the same rule and
+    the same knife edge -- its floats are just ~5x less often on the wrong
+    side of it.
+  * R944'S DIL ON TEXTURED QUADS MAKES IT WORSE: built and measured (both
+    `!tex_r[0]` gates off, the plane at the clamped start): every frame a
+    dashed white line, 26-34 px, three-pixel dashes at every crossing --
+    edges moved out by 1/8 px cover more pixels whose v is under 128. A
+    textured T-junction fix would need to keep the samples inside anyway.
+
+*THE FIX (UVCL; m2_raster_fill, m2_raster3d, m2_span_tex; Model2.sv sets it,
+every build):* every pixel the fill covers lies inside its quad, so in exact
+arithmetic its u and v lie inside the box of the quad's corners. The fill
+takes that box per textured quad -- floor of the least u, v and ceil of the
+greatest less one, whole texels at level 0, one vertex a cycle beside S_OZ's
+normaliser from the raw u, v it already reads (four running compares; a quad
+stored >> uvs, R940, gets no box). The box goes beside the span queue: one
+45-bit word per textured quad in a 32 x 45 MLAB read asynchronously (no
+output register), pushed with the quad's first span (a spare bit of the span
+queue, 278 -> 279 of 280); its head stays the quad now leaving until the next
+quad's first span reaches the queue's head, and a full queue (31 words: the
+word before the head may still be read) holds the fill back. m2_span_tex keeps
+a 5-bit word index per span slot and reads the box back at the divided
+coordinate's stage; at level 0 it clamps ONLY A NEAR MISS: a coordinate in the
+texel just under the floor, or exactly on it, becomes floor + 1/256; one in the
+texel just over the top becomes top - 1/256. The alpha test then sees what an
+exact coordinate a hair inside sees (under half), and point sampling the
+polygon's own texel. Further out is left alone: a first version clamped every
+out-of-box coordinate and, where a divide had saturated at a quad's far edge
+(VF2 frame 1304, a conifer quad at (385,188)), it painted a tree texel where
+MAME shows the stone behind. Level > 0 is not clamped (the box would need the
+bounds shifted per group); every dot measured is at level 0.
+*VERIFIED:*
+  * The reproduction, at the board's settings, walks 4074-4082: white dots
+    15 -> 0 bilinear, 15 -> 0 point; pixels changed per frame 6-18
+    (bilinear), 17-63 (point); the dots' pixels now carry the sky
+    behind. The same counts from every version built on the way.
+  * Frames on MAME's polygons, board's settings (Sky Target point-sampled as
+    R950's Auto makes it, and bilinear; Daytona and Virtua Cop in main's
+    configuration, TEXLUT 0, KW 16): mean max-channel error vs MAME over the
+    frame, old -> new, and the pixels that change (their error old -> new):
+      Rally 960     7.175 -> 7.174   3 (7.0 -> 3.7)
+      Rally 1050    6.280 -> 6.280   4 (16.5 -> 8.2)
+      Rally 1500    7.054 -> 7.054   6 (13.3 -> 8.2)
+      Rally 2040    8.368 -> 8.368   4 (3.5 -> 18.2)
+      Rally 3720    7.192 -> 7.193   3 (11.0 -> 35.7)
+      Rally 7290    3.697 -> 3.694   5 (103.4 -> 3.8)
+      Rally 7296    3.675 -> 3.673   5 (53.2 -> 5.8)
+      Rally 7300    3.621 -> 3.621   2 (133.5 -> 117.5)
+      Rally 2724    7.557 -> 7.556  18 (17.7 -> 10.8)
+      VF2 600 / 1680 / 1304               unchanged, 0 px
+      VF2 3480      6.623 -> 6.623   1 (11.0 -> 37.0)
+      VF2 2400      7.607 -> 7.607   1 (40.0 -> 48.0)
+      VF2 3360      8.143 -> 8.143   5 (24.2 -> 31.8)
+      Sky Target 1080 point 10.646 -> 10.643  8 (99.5 -> 26.0)
+      Sky Target 1080 bilinear            unchanged, 0 px
+      Dynamite Cop 90 unchanged; 100  13.039, 1 px (24.0 -> 24.0)
+      Daytona 2000  10.502 -> 10.502  1 (14 -> 14); 5000 unchanged;
+              9000  8.481 -> 8.480   2 (89.5 -> 11.0)
+      Virtua Cop 1500  41.573 -> 41.573  10 (12.3 -> 9.5)
+    (Virtua Cop's 41.6 is this bench's colour path on that dump in main's
+    configuration, the same before and after -- not chased.) No frame worse
+    by more than 0.001; the few pixels that move away from MAME are near
+    misses MAME itself takes on the other side of the same knife edge.
+    Isolated 3D pixels per frame unchanged on every frame. R944's
+    reproduction frames 7296 / 7300 untextured (its hole measure, NOTEX):
+    pixel hashes identical.
+    The clamp's firings (fetch logs, old vs new, frames where the two runs'
+    fetch orders align): Rally 960 102 at the floor, 0 at the top; Sky
+    Target 1080 6 at the floor, 12 at the top (its panel joints, R938/R947/
+    R950: the top side matters there).
+  * VF2, Lau's stage (sim/io/mame_m2_2a_play.lua PL_GAME=dig, Akira vs Lau
+    from frame ~120; frames 1296-1304, 2696-2704, 4096-4104 by the trigger,
+    28 walks through the core's geometry, bilinear and point): 2 pixels
+    change in all 56 pictures (both bilinear, one inside a conifer's screen
+    box); the core's isolated painted pixels inside the conifers' boxes
+    (their leaf fringe) are the same before and after on every walk.
+  * Unit: new test_m2_span_tex_uvcl (in `make test`): R828's MIP coordinate
+    test with a box per "quad" of one to three back-to-back spans, the box
+    read back by index as the queue serves it, one in eight off; at level 0
+    every fetch must be the reference coordinate clamped by the near-miss
+    rule (u and v), at other levels untouched; 476 / 695 clamps up / down,
+    PASS. Planted: a slot reading the newest slot's word, or a box bit
+    flipped -- FAIL. test_m2_span_tex (+ftb, mip), test_m2_raster_fill
+    (152,373), _mip, test_m2_fill_dil, test_m2_fill_m2cov, test_m2_raster3d,
+    test_m2_quad_store, test_m2_raster_band, test_m2_texel_bl4 PASS.
+    test_m2_span_tex_gc FAILS ON THE BASE TOO (R938's test, left behind when
+    8fa6643 backed R938 out of m2_span_tex; not in `make test`).
+  * UVCL 0 is bit-identical to the old RTL (pixel hashes: Rally 960 and
+    7300, VF2 3480, Sky Target 1080 point).
+  * lint_top clean, 2A and M2_NO_2A; lint_idx the same 113 findings as the
+    base; -Wall on the three modules: nothing new beyond the empty-pin style
+    the span queue already has. 2C (model2c a42daa4, a scratch worktree): the
+    patch applies with two hand edits (2C has no DIL, so the parameter lists
+    differ) and lint_top is clean.
+*AREA (quartus_map 17.0, full design, a13c623 -> this):*
+  2A: ALMs needed 40,225 -> 40,412 (+187); registers 48,350 -> 48,410 (+60);
+  block memory bits +32 (the span queue's bit); one 32 x 45 MLAB (3 LABs);
+  m2_raster3d's subtree 11,620 -> 11,872 ALUTs (fill +92, span_tex +142,
+  m2_raster3d +26). Main: 39,335 -> 39,472 (+137). The map's estimate moves
+  +-50 between runs of the same RTL (unrelated modules -- m2_geometry, the
+  i960 -- shifted by 40-120 ALUTs between these maps). Earlier versions,
+  for the record: m2_fifo_m10k for the box queue (two registered words) and
+  45-bit boxes per slot +173-197; boxes per slot and an async-read queue
+  +250 (the MLAB first failed to infer -- read-during-write -- and built 1,440
+  registers until marked no_rw_check).
+*CHEAPER, NOT TAKEN:* clamping only the floor side (the side the fetch logs
+show firing ~10x more often: Rally 960 102 floor / 0 top; but Sky Target's
+point-sampled panel joints are top-side clamps, 12 of 18) saves roughly the
+top compare and its max tracking. The box queue in the span queue's M10K
+instead of an MLAB saves the MLAB's 3 LABs at 2 M10K.
+*VF2'S CONIFER DOT (Ben's board evidence: textures off shows each conifer as
+a flat quad and a small two-faced tip; the dot sits ~5.5 px above the visible
+canopy, inside the tree's own geometry):* NOT REPRODUCED. Every conifer
+in these 28 walks is two crossed textured planes, each split at the trunk
+into two quads (u 0..228 texels down the tree, v a 64-texel window per half:
+textures off, four colours -- the "flat quad" and the "tip" of Ben's grab are
+the two planes, the second's top a few pixels higher), all at level 0 (the
+2A no-mip flag), the trees 90-180 px tall as in Ben's grab. The mechanism
+above fits his dot exactly -- a pixel on a quad's top edge, above the visible
+canopy, taking the texel beyond the polygon's u range -- and R951 covers that
+class at level 0; but no such pixel appears in the core's pictures of these
+frames, so whether his dot is this needs his camera, or the board with R951.
+Also seen: the core's VF2 quads from geodiff come out with luma 0 (the bench
+pictures are black; the walk captures no texture parameters, "tp 0") --
+coverage and transparency are unaffected, colour is; not chased.
+*NOT ON THE BOARD:* the fit and Ben's eyes decide. Timing: the clamp adds an
+MLAB read, two 13-bit subtracts and a 3:1 select between d4 and m2_texel_x2's
+request registers on clk_sys; the fit's report is the check.
 
 **R952 -- MORE ROOM BY MAKING THINGS SMALLER, NOTHING SWITCHED OFF: PARALLEL
 CONVERTERS TIME-SHARED WHERE THE SCHEDULE HAS IDLE CYCLES, EXCLUSIVE
