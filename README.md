@@ -22,13 +22,22 @@ It's still a beta, and the list of what's left is below.
 **To play it, go to [`releases/`](releases/).** That has the core, the MRAs,
 and a README covering the ROMs you need, the settings and the controls.
 
-**Only the original Model 2.** The later boards (Model 2A-CRX, 2B-CRX and
-2C-CRX) use different hardware: new sound, new I/O and, for 2B and 2C, a
-different geometry processor. 2A would need its own branch with those parts
-swapped in; 2B and 2C are documented in the design study but not planned.
-Everything added here for one game, like Virtua Cop's I/O board and its
-guns, sits behind a compile-time switch so a later branch can leave it out.
-`mra/` also has a 2D tilemap test pattern.
+**Two cores: Model 2 and Model 2A.** The releases folder has both: the
+original Model 2 core above, and a Model 2A-CRX core (developed on the
+`model2a` branch) running eleven 2A games, among them Virtua Fighter 2, Sega
+Rally, Virtua Cop 2, Manx TT, Zero Gunner and Dead or Alive. Everything added
+for one game, like Virtua Cop's I/O board and its guns, sits behind a
+compile-time switch so each board's build carries only what its games need.
+
+## Not just a MAME port
+
+MAME has been the main reference for these cores: every part is checked
+against it, often instruction for instruction and sample for sample. But the
+cores are the arcade board rebuilt as hardware in the FPGA (the Intel i960
+main CPU, the Fujitsu TGP geometry processor, the 3D renderer, the 2D video
+chips, the sound boards and the I/O boards), and where the real board behaves
+differently from MAME, fixes have been added to get as close to the real
+hardware as possible. The [release notes](releases/README.md) list them.
 
 ## Where it stands
 
