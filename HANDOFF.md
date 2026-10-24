@@ -22,6 +22,37 @@
     s1484-s1486 for a board test before it merges to main; wheel mapping #12 on
     all three cores (R958); tree pixels (R955, NEGZ); span cull for VCop2's
     train (#29, R954, branch vc2-slow) held until after this release.
+## 2026-10-24 (late): branch room-main -- R952, R951 and the output interpolator on the Model 2 core (R956)
+
+Branch room-main (off main b6484e4), worktree sm2-builds/room-main, LOCAL,
+not pushed, NOT FITTED. Picked from room2-2a / rally-sky / int-2a onto
+main's own files, conflicts read and resolved by hand (study R956).
+  * R952 (the room): geometry u/v conversions, the fill's normaliser / edge
+    adders / corner products, the projector's mag8, the engine's header
+    adder, every i960 change but the regs MLAB (it is for R927's ring; main
+    keeps four frames in logic), the TGP ALU. Not here: fp_mul SUBNORM (main
+    has none), the 2A sound cache, 2C's cvt.
+  * R951 (UVCL on in Model2.sv): no DIL, no R940 on main, so the box is
+    never "off" and the span queue goes 276 -> 277 bits.
+  * R949's m2_snd_lerp on the Model 2 sound board, on by default
+    (M2_SND_LERP=0 builds without it): stepped by the MultiPCM drain's
+    44,643 Hz tick; the module takes the rate as T44_NUM / T44_DEN now.
+  * quartus_map 17.0: 40,372 -> 38,944 (R952) -> 39,080 (R951) -> 39,113 ALMs
+    (interpolator; DSP 98 -> 101).
+  * Evidence: fill miter 107,610,021 cycles and geometry miter 6,530,255
+    (seven Daytona walks) 0 differ; i960 lockstep and ROM, TGP and video unit
+    logs identical to main's; R951 on 12 MAME frames at main's settings
+    (UVCL 0 pixel-identical; Daytona 9000's two pixels 89.5 -> 11.0, f7000's
+    five 155.4 -> 1.8, Desert Tank unchanged, Virtua Cop 0-6 px, one pixel
+    in all twelve farther from MAME); Daytona sound bench LERP 0
+    byte-identical, LERP 1 0 of 640 M outputs outside its steps, aliasing
+    15.2 -> 28.5 dB below the signal; make test 72 PASS; lint_top clean,
+    lint_idx 104 -> 102.
+  * Bench notes: sim/miter/geo.sh builds the MIPZ bench without -GROADZ=1,
+    so on main its own R915 check fails (the miter still 0) -- pass ROADZ.
+    The fill miter needs the old copy's ports trimmed when the new fill has
+    R951's outputs (done in a scratch runner, room-main-logs/miter/fillm.sh).
+  * Next: Ben fits it; then the board (Daytona, Desert Tank, Virtua Cop).
 
 ## 2026-10-24 (night): Model2A_20261024 released (main + model2a); model2c published with the Model2C_20261024 beta
 

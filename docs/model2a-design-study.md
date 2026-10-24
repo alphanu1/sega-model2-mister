@@ -37369,3 +37369,171 @@ test_m2_span_tex, _ftb, _lut0, _mip, the new _gc (PIXSTEP 2 and 4),
 test_m2_raster3d, test_m2_raster_fill PASS; lint_top clean. quartus_map 17.0
 (main, full design): 40,361 -> 40,381 ALMs needed (+20), registers 49,780 ->
 49,781, block bits 4,670,992 (=), DSP 98 (=).
+
+**R956 (main, from model2a) -- R952'S ROOM, R951'S TEXEL BOX AND R949'S
+OUTPUT INTERPOLATOR ON THE MODEL 2 CORE. quartus_map 17.0, ALMs needed:
+40,372 -> 38,944 with R952 (-1,428), 39,080 with R951 (+136), 39,113 with the
+interpolator (+33; 3 DSP, 98 -> 101). Branch room-main (off main b6484e4),
+LOCAL, NOT PUSHED, NOT FITTED.** Ben signed off R951 and R952 on the 2A board
+(Model2A_20261024, s1468); this carries them to Daytona, Desert Tank and
+Virtua Cop. main never takes a model2a merge, so each commit was picked onto
+main's own files and every conflict resolved by reading both sides (none by
+keeping both). The full entries are model2a's R949, R951 and R952.
+
+*R952 -- WHAT APPLIED (main's file the same as 2A's, or the same logic):*
+  * m2_geometry / m2_geo_clip: the u/v conversions shared (two u2f a vertex a
+    cycle, f2uvw kept beside the clipper's coordinates). main's projector
+    walk is 2A's (Q_MM, Q_MM2, Q_CHK, four Q_ISS, Q_WAIT), so the "final four
+    cycles after the take, read eight or more after" argument holds as is.
+    The one conflict was the clipper instance's in_col line (R899's comment).
+  * m2_raster_fill: the one plane-fit normaliser, the corner products summed
+    once -- clean. One adder per edge accumulator: xa / xb take all three
+    sums from xa_sum / xb_sum as on 2A; xah / xbh take S_OFF's and the skip's
+    from xah_mv / xbh_mv, and the walk keeps main's own xah + sla (2A routes
+    that one through R944's xah_nx, shared with DIL -- main has no DIL). The
+    same adder count as 2A's.
+  * m2_geo_project: one mag8 -- main's file is 2A's.
+  * m2_geo_engine: the header's word addresses from one adder, at main's
+    22-bit th_w (R897's 23 bits are 2A's).
+  * i960 (main has no R927 ring, no data cache, no F2A forms; fpmisc, ALU,
+    I-cache, LSU, both dividers are byte-for-byte 2A's): R948 (3)'s repeated
+    sums in i960_top, fpmisc's shared normaliser / scale parameter / half
+    test / renormalise, the ALU's shifters and compare, the interrupt walk's
+    and synmovq's sums, the I-cache slices, the LSU's burst step, the divide
+    compares -- all applied, i960_top and i960_regs by hand where main's text
+    differs. i960_regs: the callee's frame sum once (on main's glb / loc
+    arrays), and spill_base as [31:6] with the word address a concatenation;
+    main's rcache_frame_addr (4 x 32, in logic) goes to [31:6] with it and
+    the flush address becomes a concatenation too -- the form R927 gave 2A.
+  * TGP ALU (mb86233_alu): the bit-op results on the integer lane, one
+    adder for ADDD / SUBD, one shifter for the four shifts -- main's file
+    differs from 2A's only by the SUBNORM parameter.
+  * The miters (sim/miter/miter.py, fill.sh, geo.sh) and tb_clip_top's
+    out_wu / out_wv assertion; geodiff's M2GD_QCYC.
+*R952 -- WHAT DID NOT APPLY, AND WHY:*
+  * i960 regs' saved-frame addresses in an MLAB: written for R927's
+    eight-frame ring (208 registers, an eight-way read). main keeps four
+    frames, pinned to logic on purpose (see the comment there: an
+    altsyncram once took an M10K for 128 bits); the read is a 4:1 mux, one
+    LUT a bit, which an MLAB's LAB would not beat.
+  * fp_mul SUBNORM's shared left shifter: main's fp_mul has no SUBNORM (R852
+    is the 2A board's, for VF2).
+  * R948 (2), the 2A sound line cache; 2C's tgpx4_cvt: not in this core.
+
+*R951 ON MAIN (UVCL, Model2.sv sets it):* the fill's box, the 32 x 45 MLAB
+box queue in m2_raster3d and m2_span_tex's near-miss clamp, as on 2A, with
+two adaptations: no DIL parameter (R944 is 2A's), and no R940 (UVSH), so a
+box is never "off" (2A marks a quad stored >> uvs) and the span queue grows
+276 -> 277 bits (2A: 278 -> 279), inside the seven M10K's 280. The bench
+pieces that feed the core's own geometry into the raster bench in the 2A
+packing (geodiff trow=, M2_R3D_QUADSTEX for TEXLUT) are not ported: main's
+tb_m2_raster3d has no M2_R3D_QUADS (R902) to carry them. test_m2_span_tex_uvcl
+is in `make test`.
+
+*R949 ON THE MODEL 2 SOUND BOARD (M2_SND_LERP, default 1):* the same cause
+as 2A's -- R788 builds the framework without its IIR filter, so
+sys/audio_out.sv picks AUDIO_L / R at 48 kHz off a staircase. main's
+staircase is the MultiPCM drain's: m2_pcm_rate drains each chip's buffer at
+exactly 44,643 Hz (OUT_NUM / OUT_DEN = 44,643 / 80,000,000 at SYS_MHZ 80,
+1,792.0 clocks a sample); both rate stages share that accumulator and the
+YM3438 is the timer-only stand-in (YM_STUB 1, audio 0), so m2_sound_board's
+saturated mix changes only the clock after the drain's tick. m2_snd_lerp now
+takes the drain's rate as T44_NUM / T44_DEN (2A: 441 / 800,000, unchanged:
+PER 1,814, the phase cs x 289 >> 11; main: PER 1,793, cs x 293 >> 11, 255
+from the 1,783rd clock of 1,792 -- the line reaches its end 0.5% early, then
+holds); its tick is m2_pcm_rate's pop_tick (new output o_tick). It sits at the
+board's output, before the OSD Volume. With LERP 0 the board's output is the
+saturated mix as before. (With jt12 voiced, YM_STUB 0, its own steps would
+be picked up at the drain's ticks -- not a build anyone runs.)
+
+*VERIFIED:*
+  * R952, old against new (sim/miter, main-base b6484e4 against the R952
+    commits alone, every output every cycle, one bench at a time): the fill
+    (m2_raster_fill + m2_raster_div, 20 outputs -- main has no span_uvs)
+    under tb_m2_raster_fill 52,211,088 cycles (152,373 checks), _mip
+    54,784,527 (1,989,828), m2cov 614,406: 107,610,021 cycles, 0 differ --
+    R952's 2C total exactly (2C has no DIL either). The geometry
+    (m2_geometry + clip + project + engine, 49 outputs) under
+    tb_m2_geometry and _mipz (683,914 each; the MIPZ bench needs -GROADZ=1
+    as the Makefile and Model2.sv build it -- geo.sh leaves it out and the
+    bench's own R915 check fails without it, the miter 0 either way) and
+    seven Daytona MAME walks through geodiff in main's build (WINKEY 1:
+    w1000 / w2300 / w5000 / w7900 / w9000, r5701, r6601; no Desert Tank or
+    Virtua Cop walk exists): 6,530,255 cycles, 0 differ.
+  * The fill again, main-base against the whole branch with UVCL at its
+    default 0 (span_ub / span_nq / UVCL left out of the old copy): the same
+    107,610,021 cycles, 0 differ.
+  * Logs, base against R952 (run output after the first "== " line):
+    test_i960_top, _irq, _lat, _vc, _fptrans, _fpmisc, _alu, _alu_carrybug,
+    _regs, _lsu, _icache, _icache_r817, _muldiv, _fpdiv, test_i960_rom (real
+    Daytona program ROM, 200,000 instructions), test_m2_geo, _geometry,
+    _geometry_mipz, _geo_engine, _engine_lut, _raster_fill, _fill_mip,
+    _raster3d, _quad_store, _span_tex, _texel_bl4: identical. test_tgp
+    (fp units, mb86233_alu SHORT 0 and 1 at 2,170,388 checks each, agu,
+    regs, mem, dec, xfer, seq, the assembled core): identical but for the
+    build lines' paths; test_geo and test_m2_geo_clip: identical plus the
+    new line "R952: out_wu / out_wv against f2uvw(out_u / out_v): 3,280,961
+    cycles, 0 differ".
+  * R951 at main's settings: tb_m2_raster3d built as Model2.sv builds it
+    (MIP 1, KW 20, TEXLUT 1; MIPMODE 3, MIPZ 3, WINKEY; Daytona ROAD, lut_en
+    for Desert Tank and Virtua Cop; REALCOL + TEXMEM), MAME 0.289 frames.
+    UVCL 0: every pixel identical to main-base on all 12 frames. UVCL 1,
+    mean max-channel error vs MAME over the frame and the changed pixels:
+      Daytona f2000 (miplod)   23.703 -> 23.703   0
+      Daytona f5000            26.228 -> 26.228   1 (22.0 -> 17.0)
+      Daytona f7000            23.634 -> 23.625   5 (155.4 -> 1.8; 4 closer, 1 the same)
+      Daytona f9000            21.698 -> 21.698   0
+      Daytona f9000 (R951's)    8.264 ->  8.263   2 (89.5 -> 11.0)
+      Desert Tank f2500 / f11000                  0 / 0
+      Virtua Cop f1200          3.026 ->  3.026   2 (6.5 -> 5.0)
+      Virtua Cop f3000          6.213 ->  6.213   1 (5.0 -> 4.0)
+      Virtua Cop f4300          7.880 ->  7.880   1 (5.0 -> 6.0, the one farther)
+      Virtua Cop f6500                            0
+      Virtua Cop 1500 (R938's)  4.798 ->  4.798   6 (5.5 -> 4.2)
+    R951's main-configuration figure (Daytona 9000, 89.5 -> 11.0) was taken
+    on the 2A tree with DIL on; here it is main's own RTL, the same two
+    pixels. Isolated 3D pixels per frame unchanged on all 12 (two frames 1,
+    the rest 0, before and after).
+  * Sound, the board bench (tb_m2_sndboard: fx68k on Daytona's sound ROM,
+    both MultiPCMs, the built-in link, main's configuration PCM_SHARED 1,
+    YM_STUB 1, TICK_DEN 80, 320 M clocks = 4.0 s): LERP 0's whole log,
+    output hash included, byte-identical to main-base's. LERP 1: the cpu and
+    pcm hashes identical (the 68000 and the chips untouched), the board's
+    output against its own steps on every clock, both channels: 0 of
+    639,989,250 outside the three latest drain samples, 590,004,308 of them
+    not a step value (the line is in the path); 0 underruns.
+  * tb_m2_snd_lerp (the module read as sys/audio_out.sv reads it: two flops
+    at 24.576 MHz, taken when equal, 48 kHz): 2A's drain 0 of 239,992,744
+    outside (R949's number), main's drain (44,643 / 80,000,000) 0 of
+    237,073,675; no torn read on either. Both in `make test`.
+  * The 48 kHz images, main's drain, through the RTL (LERP 0 vs 1). Pure
+    tones at 20,000, all spurs 30 Hz-20 kHz below the tone: 500 Hz -34.0 ->
+    -54.9 dB, 2 kHz -21.9 -> -46.9, 4 kHz -15.9 -> -37.3, 8 kHz -9.7 ->
+    -25.0 (LERP 0's match R949's model: -34 / -22 / -16 / -9). Daytona's
+    4.0 s of the board bench's own output (its steps) through the RTL at 48
+    kHz, R949's measure (the error against the ideal reconstruction through
+    the same hold, aligned in time): aliasing products 15.2 dB below the
+    signal as built, 28.5 dB with the line.
+  * make test PASS (72 targets; test_m2_span_tex_uvcl checks=7225 fails=0 --
+    main runs it at PIXSTEP 2); lint_top clean on main's defaults; lint_idx
+    104 -> 102 (mb86233_alu's two pbit findings gone with pbit; nothing new
+    from R951 or the interpolator); quartus_map's analyze_file 0 errors on
+    every changed module.
+*AREA (quartus_map 17.0, the full design, Model2.qsf as committed):*
+    ALMs needed / registers / block memory bits / DSP
+    main-base b6484e4              40,372  49,791  4,670,992   98
+    + R952                         38,944  49,581  4,670,992   98   (-1,428)
+    + R951 (M2_SND_LERP=0)         39,080  49,631  4,671,024   98   (+136)
+    + the interpolator (room-main) 39,113  49,821  4,671,024  101   (+33)
+  ALUTs (the map's hierarchy, base -> R952): i960_top's subtree 12,113 ->
+  11,055 (fpmisc 1,590 -> 1,138, ALU 803 -> 726, regs 1,862 -> 1,828 -- 2A's
+  regs saving was the MLAB, not ported), mb86233_alu 1,645 -> 1,559,
+  m2_geometry's subtree 7,597 -> 6,726, the fill 5,156 -> 4,638, the
+  projector 443 -> 348. R951: span_tex +130, m2_raster3d's subtree +102. The
+  interpolator: 98 ALUTs, 190 registers, 3 DSP (R949's 2A figure 123 ALMs
+  alone); the map's +33 is inside its +-50..90 noise. Block bits +32: the
+  span queue's bit.
+
+*LEFT:* the fit (Ben) and the board: Daytona, Desert Tank, Virtua Cop. The
+timing checks R951 and R952 name (the clamp's MLAB read into m2_texel_x2's
+request registers; the projector / clipper states).

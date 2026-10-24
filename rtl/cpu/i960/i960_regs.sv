@@ -183,7 +183,9 @@ module i960_regs #(
   // fitter report started printing M10K; it had been extracting and discarding
   // that column since the first measurement.
   (* ramstyle = "logic" *)
-  logic [31:0] rcache_frame_addr [0:CACHE_FRAMES-1];
+  // R952 (main): [31:6], as 2A's R927 has it -- spill_base is [31:6] now, a
+  // frame being 64-byte aligned, so its words' addresses are a concatenation.
+  logic [31:6] rcache_frame_addr [0:CACHE_FRAMES-1];
 
   logic            rc_we;
   logic [3:0]      rc_waddr;
@@ -268,7 +270,9 @@ module i960_regs #(
   state_e      state;
   logic [3:0]  idx;          // word index within a frame, 0..15
   logic [2:0]  fl_frame;     // frame being flushed
-  logic [31:0] spill_base;
+  // R952: [31:6] -- both writes mask the low six bits (FP & ~0x3f, PFP & ~0x3f),
+  // so a word's address in the frame is a concatenation, not a sum.
+  logic [31:6] spill_base;
   logic        to_memory;    // this save/load uses memory rather than the cache
 
   // Cache slot index. Two bits, not a wide counter: it is only meaningful when
@@ -315,8 +319,14 @@ module i960_regs #(
   localparam int unsigned R_RIP = 2;
   localparam int unsigned G_FP  = 15;
 
-  logic [31:0] fp_masked;
-  assign fp_masked = glb[G_FP] & 32'hffff_ffc0;   // FP & ~0x3f
+  // R952: the callee's frame, (SP or the interrupt stack + 63) & ~63 -- FP's
+  // and SP's S_CALL_FIN values (glb[G_FP], loc[R_SP]) each wrote the same sum
+  // out in full. (2A's other half of this change, the saved frames' addresses
+  // in an MLAB, is for R927's eight-frame ring, which this file does not have.)
+  wire  [31:0] new_fp = ((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
+                        & 32'hffff_ffc0;
+
+  // (fp_masked, FP & ~0x3f: R952, now glb[G_FP][31:6] into the [31:6] spill_base)
 
   assign cur_fp       = glb[G_FP];
   assign cur_sp       = loc[R_SP];
@@ -334,7 +344,7 @@ module i960_regs #(
       next_ip_valid <= 1'b0;
       ret_unsupported <= 1'b0;
       to_memory     <= 1'b0;
-      spill_base    <= 32'd0;
+      spill_base    <= '0;
       slot          <= 2'd0;
       // The register arrays are deliberately NOT cleared here. Clearing an
       // array in reset forces it out of RAM into flip-flops — measured on this
@@ -368,7 +378,7 @@ module i960_regs #(
             loc[R_RIP] <= call_ip;
             slot       <= rcache_pos[1:0];
             to_memory  <= (rcache_pos >= $signed(CACHE_FRAMES));
-            spill_base <= fp_masked;
+            spill_base <= glb[G_FP][31:6];   // FP & ~0x3f
             idx        <= 4'd0;
             state      <= S_CALL_SAVE;
           end else if (op_ret && (loc[R_PFP][2:0] != 3'd0)
@@ -378,7 +388,7 @@ module i960_regs #(
             // do_ret_0 step 1: FP <- PFP & ~0x3f, then the depth decrements and
             // decides where the frame comes from.
             glb[G_FP]  <= loc[R_PFP] & 32'hffff_ffc0;
-            spill_base <= loc[R_PFP] & 32'hffff_ffc0;
+            spill_base <= loc[R_PFP][31:6];
             slot       <= 2'((rcache_pos - 32'sd1));
             to_memory  <= ((rcache_pos - 32'sd1) >= $signed(CACHE_FRAMES)) ||
                           ((rcache_pos - 32'sd1) <  32'sd0);
@@ -402,7 +412,7 @@ module i960_regs #(
             // Too deep for the cache: 16 dwords out to FP & ~0x3f.
             mem_req   <= 1'b1;
             mem_we    <= 1'b1;
-            mem_addr  <= spill_base + {26'd0, idx, 2'b00};
+            mem_addr  <= {spill_base, idx, 2'b00};
             mem_wdata <= loc[idx];
             if (mem_ack) begin
               mem_req <= 1'b0;
@@ -425,10 +435,8 @@ module i960_regs #(
           // header explains at length.
           rcache_pos    <= rcache_pos + 32'sd1;
           loc[R_PFP]    <= (glb[G_FP] & 32'hffff_fff8) | {29'd0, call_type};
-          glb[G_FP]     <= ((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
-                           & 32'hffff_ffc0;
-          loc[R_SP]     <= (((call_type == 3'd7 ? call_stack : loc[R_SP]) + 32'd63)
-                           & 32'hffff_ffc0) + 32'd64;
+          glb[G_FP]     <= new_fp;            // R952: the sum formed once
+          loc[R_SP]     <= new_fp + 32'd64;
           next_ip       <= call_target;
           next_ip_valid <= 1'b1;
           state         <= S_IDLE;
@@ -439,7 +447,7 @@ module i960_regs #(
           if (to_memory) begin
             mem_req  <= 1'b1;
             mem_we   <= 1'b0;
-            mem_addr <= spill_base + {26'd0, idx, 2'b00};
+            mem_addr <= {spill_base, idx, 2'b00};
             if (mem_ack) begin
               mem_req  <= 1'b0;
               loc[idx] <= mem_rdata;
@@ -475,7 +483,7 @@ module i960_regs #(
         S_FLUSH_WR: begin
           mem_req   <= 1'b1;
           mem_we    <= 1'b1;
-          mem_addr  <= rcache_frame_addr[fl_frame[1:0]] + {26'd0, idx[3:2], fl_word, 2'b00};
+          mem_addr  <= {rcache_frame_addr[fl_frame[1:0]], idx[3:2], fl_word, 2'b00};   // R952
           mem_wdata <= rc_q[{fl_word, 5'd0} +: 32];
           if (mem_ack) begin
             mem_req <= 1'b0;

@@ -62,7 +62,12 @@ module m2_sound_board #(
   // keys the YM with a non-zero level.
   parameter bit YM_STUB = 1'b0,
   parameter int unsigned TICK_NUM = 20,     // 2 x 10 MHz: one enable per phase
-  parameter int unsigned TICK_DEN = 50      // clk_sys
+  parameter int unsigned TICK_DEN = 50,     // clk_sys
+  // R956 (R949's interpolator, on the Model 2 board): the 44,643 Hz output
+  // moved along the straight line between samples (m2_snd_lerp), so the
+  // framework's 48 kHz pickup -- its IIR filter off for room (R788) -- reads
+  // the line, not the step. Needs PCM_RATE (the drain's tick); 0: the steps.
+  parameter bit          LERP     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -645,21 +650,30 @@ module m2_sound_board #(
           : (v < -19'sd32768) ? 16'sh8000
                               : v[15:0];
   endfunction
-  assign snd_l = sat16(mix_l);
-  assign snd_r = sat16(mix_r);
+  // R956: the steps change only on the drain's tick (both rate stages share
+  // its accumulator, and the YM stand-in's audio is 0), so the mix is a
+  // 44,643 Hz staircase. m2_snd_lerp draws the line between its steps, one
+  // sample late. (With jt12 voiced, YM_STUB 0, its own steps would be picked
+  // up at the drain's ticks.)
+  wire signed [15:0] st_l = sat16(mix_l);
+  wire signed [15:0] st_r = sat16(mix_r);
+  wire               p_tick;
+  m2_snd_lerp #(.LERP(LERP && PCM_RATE), .T44_NUM(44643), .T44_DEN(TICK_DEN * 1_000_000)) u_lerp (
+    .clk(clk), .rst_n(rst_n), .tick(p_tick), .tacc(21'd0),
+    .in_l(st_l), .in_r(st_r), .out_l(snd_l), .out_r(snd_r));
 
   // R573: the MultiPCM rate from TICK_DEN, not the 50 MHz defaults (R227).
   m2_pcm_rate #(.BYPASS(!PCM_RATE), .CE_DEN(TICK_DEN), .OUT_DEN(TICK_DEN * 1_000_000)) u_rate1 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm1),
     .s_valid(p1_stb), .s_l(p1_raw_l), .s_r(p1_raw_r),
-    .o_l(p1_l), .o_r(p1_r),
+    .o_l(p1_l), .o_r(p1_r), .o_tick(p_tick),   // R956
     .dbg_underruns(dbg_pcm_under), .dbg_level(dbg_pcm_level)
   );
 
   m2_pcm_rate #(.BYPASS(!PCM_RATE), .CE_DEN(TICK_DEN), .OUT_DEN(TICK_DEN * 1_000_000)) u_rate2 (
     .clk(clk), .rst_n(rst_n), .ce(ce_pcm2),
     .s_valid(p2_stb), .s_l(p2_raw_l), .s_r(p2_raw_r),
-    .o_l(p2_l), .o_r(p2_r),
+    .o_l(p2_l), .o_r(p2_r), .o_tick(),
     .dbg_underruns(), .dbg_level()
   );
 

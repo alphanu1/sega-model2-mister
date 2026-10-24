@@ -16,7 +16,8 @@ module m2_sndboard_harness #(
   parameter bit YM_STUB    = 1'b0,        // R833
   // R738: the core clock in MHz, as Model2.sv passes SYS_MHZ. 50 keeps every
   // existing figure; 80 runs the enables at the ratios the board gets at 80.
-  parameter int unsigned TICK_DEN = 50
+  parameter int unsigned TICK_DEN = 50,
+  parameter bit LERP = 1'b0               // R956: m2_snd_lerp on the board's output
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -86,10 +87,13 @@ module m2_sndboard_harness #(
   // to produce the same values on the same cycles (tb's output hash).
   output logic signed [15:0] obs_ym_r, obs_p1_r, obs_p2_r,
   output logic signed [15:0] obs_p1_raw_l, obs_p1_raw_r, obs_p2_raw_l, obs_p2_raw_r,
-  output logic        obs_p1_stb, obs_p2_stb
+  output logic        obs_p1_stb, obs_p2_stb,
+  // R956: the drain's tick and the board's output before the interpolator
+  output logic        obs_tick,
+  output logic signed [15:0] obs_st_l, obs_st_r
 );
 
-  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE), .PCM_SHARED(PCM_SHARED), .YM_STUB(YM_STUB), .TICK_DEN(TICK_DEN)) u_board (
+  m2_sound_board #(.PCM_CACHE(PCM_CACHE), .PCM_RATE(PCM_RATE), .PCM_SHARED(PCM_SHARED), .YM_STUB(YM_STUB), .TICK_DEN(TICK_DEN), .LERP(LERP)) u_board (
     .clk(clk), .rst_n(rst_n),
     .rx_data(rx_data), .rx_valid(rx_valid), .rx_ack(rx_ack),
     .tx_data(tx_data), .tx_valid(tx_valid), .tx_ack(tx_ack),
@@ -118,6 +122,9 @@ module m2_sndboard_harness #(
   assign obs_p2_raw_l = u_board.p2_raw_l;
   assign obs_p2_raw_r = u_board.p2_raw_r;
   assign obs_p1_stb   = u_board.p1_stb;
+  assign obs_tick     = u_board.p_tick;   // R956
+  assign obs_st_l     = u_board.st_l;
+  assign obs_st_r     = u_board.st_r;
   assign obs_p2_stb   = u_board.p2_stb;
 
   // R821: the shared engine's slot is the top five bits of its {slot, chip}.

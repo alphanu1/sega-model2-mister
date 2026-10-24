@@ -156,6 +156,9 @@ module m2_geo_project (
   // shift and a negate, so a second instance is cheaper than the state it would
   // take to reuse the first, and muxing one between sx_f and sy_f is how the
   // first version of this module ended up never assigning out_sy at all.
+  // R952: the shift (mag8) is one instance after all, x's in S_A1's wait for
+  // y and y's in S_RND, each written into its own register; the increment
+  // and the negate stay two.
   // R756: ROUNDED TO THE NEAREST QUARTER, NOT TRUNCATED. R626 truncated the
   // pixel and the quarter separately toward zero, and gave a negative x no
   // quarter at all. The clipper makes the same left-edge point more than once,
@@ -181,7 +184,15 @@ module m2_geo_project (
     else if (e >= 10'sd23)              mag8 = 32'(m) << (e[4:0] - 5'd23);
     else                                mag8 = 32'(m) >> (5'd23 - e[4:0]);
   endfunction
-  logic [31:0] mx_r, my_r;          // trunc(8|x|), registered in S_RND
+  logic [31:0] mx_r, my_r;          // trunc(8|x|): R952, x's in S_A1's wait, y's in S_RND
+  // R952: ONE mag8, sx_f's while S_A1 waits for y (sx_f landed, n_got 1),
+  // sy_f's in S_RND -- from the registers S_RND shifted before, one 2:1
+  // select in front. mx_r is written on every cycle of the wait (at least
+  // one: y lands no earlier than the cycle after x) and my_r in S_RND, so
+  // S_OUT reads the values S_RND used to form; nothing else reads them.
+  wire  [31:0] m8_in = (sst == S_RND) ? sy_f : sx_f;
+  wire  [31:0] m8    = mag8(m8_in);
+  wire         m8_bad = (m8_in[30:23] == 8'hff) || ($signed({2'b0, m8_in[30:23]}) - 10'sd124 > 10'sd30);
   logic        sgx_r, sgy_r;        // signs
   logic        qx_bad, qy_bad;      // NaN, infinity, or past 2^30 quarters
   wire  [31:0] kx = (mx_r + 32'd1) >> 1, ky = (my_r + 32'd1) >> 1;
@@ -297,6 +308,9 @@ module m2_geo_project (
 
         S_A0, S_A1: begin
           if (step < 3'd2 && add_gnt) step <= step + 3'd1;
+          if ((sst == S_A1) && (n_got == 2'd1)) begin   // R952: x's, from sx_f
+            mx_r <= m8; sgx_r <= sx_f[31]; qx_bad <= m8_bad;
+          end
           if (add_out_valid) begin
             if (n_got == 2'd0) begin
               if (sst == S_A0) sxx <= add_result; else sx_f <= add_result;
@@ -315,10 +329,7 @@ module m2_geo_project (
         // R756: the rounding's own cycle -- an increment and a negate behind
         // the converter's shifter, at 80 MHz.
         S_RND: begin
-          mx_r <= mag8(sx_f); sgx_r <= sx_f[31];
-          my_r <= mag8(sy_f); sgy_r <= sy_f[31];
-          qx_bad <= (sx_f[30:23] == 8'hff) || ($signed({2'b0, sx_f[30:23]}) - 10'sd124 > 10'sd30);
-          qy_bad <= (sy_f[30:23] == 8'hff) || ($signed({2'b0, sy_f[30:23]}) - 10'sd124 > 10'sd30);
+          my_r <= m8; sgy_r <= sy_f[31]; qy_bad <= m8_bad;   // R952: y's (mx_r in S_A1)
           sst  <= S_OUT;
         end
 

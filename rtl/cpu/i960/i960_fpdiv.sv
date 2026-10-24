@@ -73,7 +73,13 @@ module i960_fpdiv (
   /* verilator lint_off UNUSEDSIGNAL */
   logic [53:0] rem_sub;
   /* verilator lint_on UNUSEDSIGNAL */
-  assign rem_sub = rem - {1'b0, dsr};
+  // R952: the compare is the same subtract's borrow (one 55-bit carry chain,
+  // where rem >= dsr built a second): rem_ge is rem >= {0, dsr} exactly.
+  logic [54:0] rem_d;
+  logic        rem_ge;
+  assign rem_d   = {1'b0, rem} - {2'b0, dsr};
+  assign rem_ge  = !rem_d[54];
+  assign rem_sub = rem_d[53:0];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -102,7 +108,7 @@ module i960_fpdiv (
         S_DIV: begin
           // One restoring step per cycle. 56 bits gives the 53-bit mantissa
           // plus guard and round, with the final remainder as sticky.
-          if (rem >= {1'b0, dsr}) begin
+          if (rem_ge) begin                         // R952: rem >= {0, dsr}
             rem  <= {rem_sub[52:0], 1'b0};
             quot <= {quot[54:0], 1'b1};
           end else begin

@@ -119,6 +119,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_LINK
 `define M2_LINK
 `endif
+// R956: M2_SND_LERP, the sound board's 44,643 Hz output moved along a straight
+// line between samples (m2_snd_lerp, R949's) so that the framework's 48 kHz
+// sampling -- its IIR filter is off for room (R788) -- reads the line, not the
+// step: as a step, bright sounds alias into 4-16 kHz. On by default;
+// VERILOG_MACRO "M2_SND_LERP=0" builds the steps, the core before R956.
+`ifndef M2_SND_LERP
+`define M2_SND_LERP 1
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -2953,7 +2961,8 @@ always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8];
 // cache the chip cannot produce samples that fast, so the buffer runs dry.
 // The cache alone leaves the rate short and the period uneven. Together they
 // hold 100% with no underruns at every latency from 40 to 600 cycles.
-m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1), .YM_STUB(1'b1)) u_sndboard (   // R573; R821: one MultiPCM engine, passed on the board (s1037); R833: YM_STUB 1 = the YM3438 as timers only (Daytona never voices it)
+m2_sound_board #(.PCM_CACHE(1'b1), .PCM_RATE(1'b1), .TICK_DEN(SYS_MHZ), .PCM_SHARED(1'b1), .YM_STUB(1'b1),
+                 .LERP(`M2_SND_LERP != 0)) u_sndboard (   // R956   // R573; R821: one MultiPCM engine, passed on the board (s1037); R833: YM_STUB 1 = the YM3438 as timers only (Daytona never voices it)
 	.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done & snd_found),
 	.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 	.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -6579,6 +6588,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .FB_WCOMB(1'b1),   // R661: the combining writer (room from R664)
               .SPLIT_TRI(1'b1),  // R677: textured quads as two triangles
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658/R662; R673: re-tested on top of R671 (s583's test had the texture ROM bug)
+              .UVCL(1'b1),  // R951: each level-0 fetch kept inside its quad's own texels (Rally's sky dots)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)

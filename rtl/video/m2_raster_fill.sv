@@ -138,7 +138,14 @@ module m2_raster_fill #(
   // right. K = max - (max - min) * w, w = 0 (R828 exactly), 1/4 or 1/2: a
   // weighted mean of the logs, which leaves a face-on quad (max ~ min) where
   // R828 put it and pulls an oblique one towards its minor axis.
-  parameter bit MIP = 1'b0
+  parameter bit MIP = 1'b0,
+  // R951: THE QUAD'S OWN TEXEL BOX, for m2_span_tex's clamp. A textured
+  // quad's u and v ranges -- the least and greatest of its four corners, in
+  // whole texels (11 bits: the corners are 11.2), the least rounded down and
+  // the greatest up and then less one, so the clamp's top is {hm, 0xFF} --
+  // taken one vertex a cycle beside S_OZ's normaliser from the raw u, v it
+  // already reads. Out with the quad's first span (span_nq). 0: no box.
+  parameter bit UVCL = 1'b0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -206,6 +213,13 @@ module m2_raster_fill #(
   output logic [23:0]        span_tex,
   output logic               span_tex_en,
   output logic signed [9:0]  span_mipk,      // R828: the quad's mip bias (MIP)
+  // R951: the quad's texel box {off, u lo, u hm, v lo, v hm} (UVCL; 11-bit
+  // whole texels; "off" is for 2A's quads stored >> uvs (R940), which this
+  // build does not have: always 0 here) and "this is a textured quad's first span" -- the box is the
+  // quad's register, not latched per span, like span_tex: a quad is not
+  // accepted while a span is held
+  output logic [44:0]        span_ub,
+  output logic               span_nq,
 
   // One cycle. Note quad_done can land in the same cycle as the quad's last
   // span, and in_ready can rise with that span still in flight — the next quad
@@ -656,7 +670,10 @@ module m2_raster_fill #(
   logic [1:0]         oz_w;
   logic [15:0]        oz_n;
   logic [12:0]        oz_u, oz_v;   // the raw u, v: 13 bits
-  logic signed [31:0] bp_ux, bp_uy, bp_vx, bp_vy, bp_ox, bp_oy;
+  // R952: each plane's two corner products as one sum (bp_u = bp_ux + bp_uy
+  // mod 2^32): base_* subtracted them one at a time, and in 32 bits the two
+  // shifted subtracts are one -- (x << k) + (y << k) is (x + y) << k mod 2^32.
+  logic signed [31:0] bp_u, bp_v, bp_o;
   logic signed [31:0] bh_u, bh_v, bh_o;   // R616: half a pixel of each plane, both axes
   logic [UW-1:0]      bq_u, bq_v;   // R791
   logic [15:0]        bq_o;
@@ -693,7 +710,19 @@ module m2_raster_fill #(
   function automatic logic [31:0] pf_abs(input logic signed [31:0] n);
     pf_abs = n[31] ? (~n + 32'd1) : n;
   endfunction
-  logic [31:0] a_nxu, a_nyu, a_nxv, a_nyv, a_nxo, a_nyo;   // R584
+  // R952: ONE NORMALISER FOR THE SIX NUMERATORS, A NUMERATOR A CYCLE (the
+  // magnitude, the halves' counts and the join, R584 / R735's stages, in a
+  // pipeline that S_PF_N's second cycle starts -- nxu..nyo landed the cycle
+  // before and hold until the next fit). Each count is joined exactly when
+  // the six-wide version joined it or earlier: nxu_z on NRM's wait 2 (as
+  // before), nyu_z on 3, nxv_z on 4, nyv_z on Q1, nxo_z on Q1W, nyo_z on Q2
+  // -- each the cycle before nz_c first takes it (R742's schedule: wait 3,
+  // wait 4, Q1, Q1W, Q2, Q2W), and nz_c reads no count before that.
+  logic [2:0]  nz_k;                       // the numerator entering, 0..5
+  logic        nz_run, nz_vs, nz_va, nz_vc;
+  logic [2:0]  nz_ks, nz_ka, nz_kc;
+  logic [31:0] nz_sel, nz_abs;
+  logic [4:0]  nz_h, nz_l;
   // R735: AND THE COUNT IN TWO HALVES. clz32 was one cycle (s784 at 80 MHz:
   // a_nyu -> nyu_z -0.737, a_nyo -> nyo_z). Each 16-bit half is counted on
   // nrm_wait 1 and the two combined on 2; the first reader is the state's
@@ -707,7 +736,6 @@ module m2_raster_fill #(
     end
   endfunction
   // {top half's count, bottom half's count}, each 0..16
-  logic [4:0] h_nxu, l_nxu, h_nyu, l_nyu, h_nxv, l_nxv, h_nyv, l_nyv, h_nxo, l_nxo, h_nyo, l_nyo;
   function automatic logic [5:0] clz_join(input logic [4:0] h, input logic [4:0] l);
     clz_join = (h == 5'd16) ? 6'(6'd16 + 6'(l)) : 6'(h);
   endfunction
@@ -940,6 +968,19 @@ module m2_raster_fill #(
   // screen: on the board, streaks across the picture. S_FS_MULA and
   // S_FS_MULB each take two cycles now (mul_w), twice per clipped segment.
   logic signed [31:0] mul_pr;
+  // R952: ONE ADDER A REGISTER FOR THE EDGE ACCUMULATORS' STEPS. xa / xb
+  // took three sums in three states (S_OFF's quarter-row move, S_FS_MULA /
+  // MULB's skip, S_FS_WALK's slope) and xah / xbh two outside the walk's
+  // own adder (xah + sla, left where it is); each register now has one, its
+  // operand picked by the state -- the same sum in each state, and no state
+  // writes two.
+  wire  [1:0]         off_d  = 2'((rq(cury) <<< 2) + 16'sd2 - cury);   // S_OFF's quarter rows
+  wire  signed [31:0] off_da = ((off_d[1] ? (sla <<< 1) : 32'sd0) + (off_d[0] ? sla : 32'sd0)) >>> 2;
+  wire  signed [31:0] off_db = ((off_d[1] ? (slb <<< 1) : 32'sd0) + (off_d[0] ? slb : 32'sd0)) >>> 2;
+  wire  signed [31:0] xa_sum = xa + ((state == S_OFF) ? off_da : (state == S_FS_MULA) ? mul_pr : sla);
+  wire  signed [31:0] xb_sum = xb + ((state == S_OFF) ? off_db : (state == S_FS_MULB) ? mul_pr : slb);
+  wire  signed [31:0] xah_mv = xah + ((state == S_OFF) ? off_da : mul_pr);
+  wire  signed [31:0] xbh_mv = xbh + ((state == S_OFF) ? off_db : mul_pr);
   logic [1:0]         mul_w;   // R740: three cycles a multiply, not two
   // R740: AND THE MULTIPLY IN TWO HALVES. A 17 x 32 product is two DSPs and
   // an adder in one cycle (s788 at 80 MHz: mul_sl -> mul_pr -0.745). The
@@ -1109,6 +1150,20 @@ module m2_raster_fill #(
   //   NRM (wait 0-3) loads nxu for NRM's last cycle; NRM's last loads nyu for
   //   Q1; Q1 -> nxv; Q1W -> nyv; Q2 -> nxo; Q2W -> nyo (Q3 presents nothing).
   // The counts are joined on nrm_wait 2 (R735), so wait 3's load has them.
+  // R952: the shared normaliser's datapath -- select, magnitude, halves
+  always_ff @(posedge clk) begin
+    nz_ks <= nz_k;
+    case (nz_k)
+      3'd0:    nz_sel <= nxu;
+      3'd1:    nz_sel <= nyu;
+      3'd2:    nz_sel <= nxv;
+      3'd3:    nz_sel <= nyv;
+      3'd4:    nz_sel <= nxo;
+      default: nz_sel <= nyo;
+    endcase
+    nz_ka  <= nz_ks;  nz_abs <= pf_abs(nz_sel);
+    nz_kc  <= nz_ka;  nz_h   <= clz16(nz_abs[31:16]);  nz_l <= clz16(nz_abs[15:0]);
+  end
   logic signed [31:0] nn_c;
   logic [5:0]         nz_c;
   always_comb begin
@@ -1211,10 +1266,27 @@ module m2_raster_fill #(
         sx[i] <= 16'sd0;
         sy[i] <= 16'sd0;
       end
+      nz_k <= 3'd0; nz_run <= 1'b0; nz_vs <= 1'b0; nz_va <= 1'b0; nz_vc <= 1'b0;   // R952
     end else begin
       div_start  <= 1'b0;
       divb_start <= 1'b0;
       quad_done  <= 1'b0;
+      // R952: the shared normaliser's walk and its joined counts
+      if ((pf_st == S_PF_N) && (pfn_wait == 2'd1)) begin
+        nz_k <= 3'd0; nz_run <= 1'b1;                     // nxu..nyo landed last cycle
+      end else if (nz_run) begin
+        nz_k <= nz_k + 3'd1;
+        if (nz_k == 3'd5) nz_run <= 1'b0;
+      end
+      nz_vs <= nz_run; nz_va <= nz_vs; nz_vc <= nz_va;
+      if (nz_vc) case (nz_kc)
+        3'd0:    nxu_z <= clz_join(nz_h, nz_l);
+        3'd1:    nyu_z <= clz_join(nz_h, nz_l);
+        3'd2:    nxv_z <= clz_join(nz_h, nz_l);
+        3'd3:    nyv_z <= clz_join(nz_h, nz_l);
+        3'd4:    nxo_z <= clz_join(nz_h, nz_l);   // R441
+        default: nyo_z <= clz_join(nz_h, nz_l);
+      endcase
       sc_r      <= pf_gshift(mul_q_r, net_r, zbig_r);   // R594: every cycle
       sc_s      <= pf_sat(sc_r);                         // R727: every cycle
       line_case <= 1'b0;
@@ -1386,24 +1458,7 @@ module m2_raster_fill #(
           // registered on the first cycle and counted on the second; the
           // first reader is the third cycle's mul_n, so no cycle is added and
           // the counts are the same numbers.
-          if (nrm_wait == 3'd0) begin
-            a_nxu <= pf_abs(nxu); a_nyu <= pf_abs(nyu);
-            a_nxv <= pf_abs(nxv); a_nyv <= pf_abs(nyv);
-            a_nxo <= pf_abs(nxo); a_nyo <= pf_abs(nyo);
-          end
-          if (nrm_wait == 3'd1) begin   // R735: the halves
-            h_nxu <= clz16(a_nxu[31:16]); l_nxu <= clz16(a_nxu[15:0]);
-            h_nyu <= clz16(a_nyu[31:16]); l_nyu <= clz16(a_nyu[15:0]);
-            h_nxv <= clz16(a_nxv[31:16]); l_nxv <= clz16(a_nxv[15:0]);
-            h_nyv <= clz16(a_nyv[31:16]); l_nyv <= clz16(a_nyv[15:0]);
-            h_nxo <= clz16(a_nxo[31:16]); l_nxo <= clz16(a_nxo[15:0]);
-            h_nyo <= clz16(a_nyo[31:16]); l_nyo <= clz16(a_nyo[15:0]);
-          end
-          if (nrm_wait == 3'd2) begin   // R735: joined -- clz32's numbers
-            nxu_z <= clz_join(h_nxu, l_nxu); nyu_z <= clz_join(h_nyu, l_nyu);
-            nxv_z <= clz_join(h_nxv, l_nxv); nyv_z <= clz_join(h_nyv, l_nyv);
-            nxo_z <= clz_join(h_nxo, l_nxo); nyo_z <= clz_join(h_nyo, l_nyo);   // R441
-          end
+          // R952: the counts come from the shared normaliser (below the case).
         end else begin
           nrm_wait <= 3'd0;
           mul_n <= mul_n_c;   // R457/R458: registered count, one shared shifter
@@ -1482,9 +1537,9 @@ module m2_raster_fill #(
           // R566: the six products and the corner, registered.
           // R626: at the vertex's quarter-pixel position when FRB (the <<< 8
           // below becomes <<< 6 -- the product is four times as large)
-          bp_ux <= 32'(dudx * p4(sx[fa], sf[fa][1:0]));  bp_uy <= 32'(dudy * p4(sy[fa], sf[fa][3:2]));
-          bp_vx <= 32'(dvdx * p4(sx[fa], sf[fa][1:0]));  bp_vy <= 32'(dvdy * p4(sy[fa], sf[fa][3:2]));
-          bp_ox <= 32'(dodx * p4(sx[fa], sf[fa][1:0]));  bp_oy <= 32'(dody * p4(sy[fa], sf[fa][3:2]));
+          bp_u <= 32'(dudx * p4(sx[fa], sf[fa][1:0]) + dudy * p4(sy[fa], sf[fa][3:2]));   // R952
+          bp_v <= 32'(dvdx * p4(sx[fa], sf[fa][1:0]) + dvdy * p4(sy[fa], sf[fa][3:2]));
+          bp_o <= 32'(dodx * p4(sx[fa], sf[fa][1:0]) + dody * p4(sy[fa], sf[fa][3:2]));
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
           // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
           // R791: u/v at UVS fraction bits, so half a gradient is << UVS - 9
@@ -1499,11 +1554,11 @@ module m2_raster_fill #(
           b_prod <= 1'b0;
           // R791: at UVS fraction bits, not 16 -- the products' shift is two
           // (UZF - 2) less, and (13 + UZF) + UVS = 31 bits, always in range.
-          base_u <= (32'(bq_u) <<< UVS) - (bp_ux <<< BPS_UV) - (bp_uy <<< BPS_UV) + bh_u;   // R616, R626
-          base_v <= (32'(bq_v) <<< UVS) - (bp_vx <<< BPS_UV) - (bp_vy <<< BPS_UV) + bh_v;
+          base_u <= (32'(bq_u) <<< UVS) - (bp_u <<< BPS_UV) + bh_u;   // R616, R626; R952
+          base_v <= (32'(bq_v) <<< UVS) - (bp_v <<< BPS_UV) + bh_v;
           // R337: 1/z's own plane. qoz is 15 bits, so it shifts up by 16 the
           // same way, and the span walk divides by what this yields.
-          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_ox <<< BPS) - (bp_oy <<< BPS) + bh_o;
+          base_o <= 32'({16'd0, bq_o} <<< 16) - (bp_o <<< BPS) + bh_o;   // R952
           tex_ok <= 1'b1;
           pf_st  <= S_IDLE;
         end
@@ -1684,11 +1739,8 @@ module m2_raster_fill #(
         // quarters below -- 0 to 3 -- so it moves by slope * d / 4. The other
         // edge is already at that row's centre: it was walked there.
         S_OFF: begin
-          automatic logic [1:0] d = 2'((rq(cury) <<< 2) + 16'sd2 - cury);
-          automatic logic signed [31:0] da = ((d[1] ? (sla <<< 1) : 32'sd0) + (d[0] ? sla : 32'sd0)) >>> 2;
-          automatic logic signed [31:0] db = ((d[1] ? (slb <<< 1) : 32'sd0) + (d[0] ? slb : 32'sd0)) >>> 2;
-          if (need_a) begin xa <= xa + da; xah <= xah + da; end
-          if (need_b) begin xb <= xb + db; xbh <= xbh + db; end
+          if (need_a) begin xa <= xa_sum; xah <= xah_mv; end   // R952: + off_da
+          if (need_b) begin xb <= xb_sum; xbh <= xbh_mv; end   //        + off_db
           state <= S_DECIDE;
         end
 
@@ -1767,8 +1819,8 @@ module m2_raster_fill #(
           mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
           mul_w  <= 2'd2;
         end else begin
-          xa     <= xa + mul_pr;
-          xah    <= xah + mul_pr;
+          xa     <= xa_sum;   // R952: + mul_pr
+          xah    <= xah_mv;
           mul_sl <= slb;
           mul_w  <= 2'd0;
           state  <= S_FS_MULB;
@@ -1782,8 +1834,8 @@ module m2_raster_fill #(
           mul_pr <= mul_plo[31:0] + {mul_phi[15:0], 16'd0};
           mul_w  <= 2'd2;
         end else begin
-          xb    <= xb + mul_pr;
-          xbh   <= xbh + mul_pr;
+          xb    <= xb_sum;    // R952: + mul_pr
+          xbh   <= xbh_mv;
           mul_w <= 2'd0;
           state <= skip_only ? S_FS_END : S_FS_SWAP;
         end
@@ -1809,8 +1861,8 @@ module m2_raster_fill #(
             s1_cr      <= emit_cr;
             s1_col     <= col;
             s1_moire   <= moire;
-            xa     <= xa + sla;
-            xb     <= xb + slb;
+            xa     <= xa_sum;   // R952: + sla
+            xb     <= xb_sum;   //        + slb
             xah    <= xah + sla;
             xbh    <= xbh + slb;
             walk_y <= walk_y + 16'sd1;
@@ -1996,6 +2048,51 @@ module m2_raster_fill #(
     end
   end
   assign span_mipk = MIP ? k_o : 10'sd0;
+
+  // ------------------------------------------------------------ R951: the texel box
+  // Sega Rally's sky dots: a pixel a hair inside the distant-mountain band's
+  // top edge, where v is exactly the band's least (texel 128), took v a few
+  // 1/256 texel UNDER it from the plane fit's quantisation; the bilinear's
+  // other row there is texel 127 -- opaque white, outside the polygon's own
+  // texture -- and it won the alpha test. One pixel per scanline crossing of
+  // a shallow edge: the board's straight dotted line. Every pixel the fill
+  // covers lies inside the quad, so in exact arithmetic its u and v lie in
+  // the corners' box; m2_span_tex clamps a near miss back into it.
+  // Stage two of S_OZ holds vertex oz_w's raw u, v (as R828's edge walk
+  // reads them).
+  logic [10:0] ub_ulo, ub_vlo;                   // running min, whole texels (the floor of the min is the min of the floors)
+  logic [12:0] ub_uhi, ub_vhi;                   // running max, 11.2
+  logic [10:0] ub_uhm, ub_vhm;                   // ceil(max) less one
+  logic        ub_fin, nq_r;
+  wire         ub_s2 = UVCL && (pf_st == S_OZ) && !oz_pre && oz_w_v;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      ub_ulo <= '0; ub_uhi <= '0; ub_vlo <= '0; ub_vhi <= '0;
+      ub_uhm <= '0; ub_vhm <= '0; ub_fin <= 1'b0; nq_r <= 1'b0;
+    end else begin
+      if (ub_s2) begin
+        if (oz_w == 2'd0 || oz_u[12:2] < ub_ulo) ub_ulo <= oz_u[12:2];
+        if (oz_w == 2'd0 || oz_u > ub_uhi) ub_uhi <= oz_u;
+        if (oz_w == 2'd0 || oz_v[12:2] < ub_vlo) ub_vlo <= oz_v[12:2];
+        if (oz_w == 2'd0 || oz_v > ub_vhi) ub_vhi <= oz_v;
+      end
+      // one cycle after the last corner; the first span is ~18 cycles later.
+      // (A box on one texel line -- u the same at every corner, ceil = floor --
+      // gets hm = floor - 1: its exact coordinate is on the line, where the
+      // bilinear is half and half either way, so either side's clamp is as good.)
+      ub_fin <= ub_s2 && (oz_w == 2'd3);
+      if (ub_fin) begin
+        // ceil(max) - 1 = floor(max) - (max a whole texel)
+        ub_uhm <= ub_uhi[12:2] - 11'(ub_uhi[1:0] == 2'd0);
+        ub_vhm <= ub_vhi[12:2] - 11'(ub_vhi[1:0] == 2'd0);
+      end
+      // a textured quad's first span carries the box; a quad with no span sends nothing
+      if (UVCL && in_valid && in_ready) nq_r <= in_tex[0];
+      else if (span_valid && span_ready) nq_r <= 1'b0;
+    end
+  end
+  assign span_ub = UVCL ? {1'b0, ub_ulo, ub_uhm, ub_vlo, ub_vhm} : 45'd0;   // (2A: off = uvs_r != 0, R940)
+  assign span_nq = UVCL && nq_r;
 
   // R544: AND NOT WHILE THE LAST SPAN IS STILL WAITING. span_tex_en and the
   // three gradients below are NOT latched with a span -- they are this quad's

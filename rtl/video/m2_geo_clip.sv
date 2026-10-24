@@ -124,6 +124,13 @@ module m2_geo_clip (
   // not the texture slides the picture across every polygon it touches.
   input  logic [31:0] in_u0, in_v0, in_u1, in_v1,
   input  logic [31:0] in_u2, in_v2, in_u3, in_v3,
+  // R952: THE SAME COORDINATES AS THE STORE'S EIGHTHS, f2uvw(in_u*) -- which
+  // for m2_geometry's integers (in_u = u2f(n)) is n itself, so the caller
+  // hands them over raw. Kept beside qu / qv and written wherever they are,
+  // so out_wu* == f2uvw(out_u*) on every cycle: two converters (the pop's)
+  // in place of the eight m2_geometry ran on out_u* every cycle.
+  input  logic [15:0] in_wu0, in_wv0, in_wu1, in_wv1,
+  input  logic [15:0] in_wu2, in_wv2, in_wu3, in_wv3,
   // THE ATTRIBUTES RIDE WITH THE QUAD, and they have to be latched here.
   // The walker moves on as soon as this module accepts, so by the time a
   // clipped quad is emitted - hundreds of cycles later - the walker's colour
@@ -180,6 +187,8 @@ module m2_geo_clip (
   output logic        out_moire,
   output logic [31:0] out_u0, out_v0, out_u1, out_v1,
   output logic [31:0] out_u2, out_v2, out_u3, out_v3,
+  output logic [15:0] out_wu0, out_wv0, out_wu1, out_wv1,   // R952: f2uvw(out_u*)
+  output logic [15:0] out_wu2, out_wv2, out_wu3, out_wv3,
   output logic [31:0] out_tex,
   output logic  [7:0] out_lum,
   output logic        out_mipz,    // R828c
@@ -198,6 +207,7 @@ module m2_geo_clip (
   // whole point of not having a pool.
   logic [31:0]        qx [4], qy [4], qz [4];
   logic [31:0]        qu [4], qv [4];             // R270
+  logic [15:0]        qwu [4], qwv [4];           // R952: f2uvw(qu), f2uvw(qv), always
   logic signed [15:0] qsx [4], qsy [4];   // filled at emit, not carried
   logic [2:0]         lvl;
   logic [3:0]         is_out;
@@ -425,6 +435,25 @@ module m2_geo_clip (
   assign out_u1 = qu[1]; assign out_v1 = qv[1];
   assign out_u2 = qu[2]; assign out_v2 = qv[2];
   assign out_u3 = qu[3]; assign out_v3 = qv[3];
+  assign out_wu0 = qwu[0]; assign out_wv0 = qwv[0];   // R952
+  assign out_wu1 = qwu[1]; assign out_wv1 = qwv[1];
+  assign out_wu2 = qwu[2]; assign out_wv2 = qwv[2];
+  assign out_wu3 = qwu[3]; assign out_wv3 = qwv[3];
+
+  // R952: m2_geometry's f2uvw (R609 / R643 / R791), moved here unchanged: an
+  // IEEE single to floor(f) as a 16-bit integer, 0 for a negative or one under
+  // 1.0, 0xffff from 65,536 up.
+  function automatic logic [15:0] f2uvw(input logic [31:0] f);
+    logic [7:0]  e;
+    logic [23:0] m;
+    begin
+      e = f[30:23];
+      m = {1'b1, f[22:0]};
+      if (f[31] || e < 8'd127)      f2uvw = 16'd0;
+      else if (e >= 8'd127 + 8'd16) f2uvw = 16'hffff;
+      else                          f2uvw = 16'(m >> (5'(8'd23 - (e - 8'd127))));
+    end
+  endfunction
 
   // ---------------------------------------------------------------- sequencer
   integer si, sv;
@@ -443,6 +472,7 @@ module m2_geo_clip (
         ipx[si] <= '0; ipy[si] <= '0; ioz[si] <= 16'd0; ipf[si] <= 4'd0; qsf[si] <= 4'd0;
         tx[si] <= '0; ty[si] <= '0; tz[si] <= '0;
         qu[si] <= '0; qv[si] <= '0; tu[si] <= '0; tv[si] <= '0;
+        qwu[si] <= 16'd0; qwv[si] <= 16'd0;   // R952: f2uvw(0) is 0
       end
       for (si = 0; si < NSTK; si = si + 1) begin
         sk_lvl[si] <= '0;
@@ -456,6 +486,8 @@ module m2_geo_clip (
           qx[3] <= in_x3; qy[3] <= in_y3; qz[3] <= in_z3;
           qu[0] <= in_u0; qv[0] <= in_v0; qu[1] <= in_u1; qv[1] <= in_v1;
           qu[2] <= in_u2; qv[2] <= in_v2; qu[3] <= in_u3; qv[3] <= in_v3;
+          qwu[0] <= in_wu0; qwv[0] <= in_wv0; qwu[1] <= in_wu1; qwv[1] <= in_wv1;   // R952
+          qwu[2] <= in_wu2; qwv[2] <= in_wv2; qwu[3] <= in_wu3; qwv[3] <= in_wv3;
           ipx[0] <= in_sx0; ipy[0] <= in_sy0; ipx[1] <= in_sx1; ipy[1] <= in_sy1;
           ipx[2] <= in_sx2; ipy[2] <= in_sy2; ipx[3] <= in_sx3; ipy[3] <= in_sy3;
           ipf[0] <= in_frac[3:0]; ipf[1] <= in_frac[7:4];
@@ -485,6 +517,8 @@ module m2_geo_clip (
           qz[pcnt[1:0] - 2'd1]  <= sk_rd[95:64];
           qu[pcnt[1:0] - 2'd1]  <= sk_rd[127:96];
           qv[pcnt[1:0] - 2'd1]  <= sk_rd[159:128];
+          qwu[pcnt[1:0] - 2'd1] <= f2uvw(sk_rd[127:96]);    // R952
+          qwv[pcnt[1:0] - 2'd1] <= f2uvw(sk_rd[159:128]);
           qid[pcnt[1:0] - 2'd1] <= sk_rd[161:160];
           qpx[pcnt[1:0] - 2'd1] <= sk_rd[162];
           if (pcnt == 3'd4) begin
