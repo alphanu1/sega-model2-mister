@@ -46444,3 +46444,57 @@ module's existing benches (sim/miter/fill.sh, sim/miter/geo.sh).
 (s1462: project sst -> clip kst 0.199 ns: the projector's state now also
 selects mag8's input; the clipper's kst gains qwu's enables), and the M10K
 count in the fitter's RAM summary.
+
+**R952, INTEGRATED: R951 (the texel box clamp) AND R949 (the output
+interpolator) MERGED ONTO room2-2a / room2-2c, THE RECIPROCAL TABLE IN LOGIC
+BY DEFAULT. BRANCHES int-2a (off room2-2a 514c411) AND int-2c (off room2-2c
+f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
+38,718 -> 38,918 (+200), 2C 38,774 -> 38,935 (+161); registers 48,180 /
+48,515; block memory bits 4,580,944 / 4,592,208; DSP 99 / 105.**
+  * Merged by hand. R951's fill block sits beside S_OZ's normaliser, which
+    room2's fill restructure (one normaliser for the six numerators, one
+    adder per edge, the corner products summed once) did not touch: S_OZ is
+    the same text in both, and the R951 hunks land unchanged (2A: the same
+    added and removed lines as rally-sky's 32ca36a; 2C: rally-sky's adapted
+    patch for the tree with no DIL, its parameter lists merged with R948's
+    RECIP_M10K and its comments made the same as 2A's). R949 on the 2A line
+    takes only LERP: the 2A line has no R946 OVERLAP port or define, so
+    m2_2a_sound's parameter list and Model2.sv's instance carry EXACT and
+    LERP, and M2_2A_SND_LERP defaults to 1 inside `ifdef M2_2A (so 2A and
+    2C), 0 in the main build. The geodiff bench keeps R952's M2GD_QCYC and
+    gains R951's trow=.
+  * The reciprocal table: room2-2a never carried R948 (1) (m2_recip_rom is
+    LUTs there). room2-2c did, with "M2_RECIP_LOGIC=1" in the fits' qsf to
+    undo it (s1457-s1462 timed better without the M10K table). int-2c
+    flips the default in Model2.sv: the LUT form unless "M2_RECIP_M10K=1";
+    "M2_RECIP_LOGIC=1" is no longer needed. The map shows m2_recip_rom as
+    280 / 276 ALUTs and no RAM on both builds.
+  * int-2c's Model2.qsf carries "M2_2C=1" and "M2_NO_2A_MANX_MOTION=1"
+    (committed, the room-2c builds' patch), so the worktree builds 2C as
+    checked out. quartus_map rewrites Model2.qsf (+5 lines: m2_testpattern
+    and SDRAM FAST_* assignments); restored from git after each map.
+  * Where the +200 / +161 goes: m2_snd_lerp 97 ALUTs, 190 registers, 3 DSP
+    (LERP = 1 in the map's parameter settings, both builds); R951's box
+    queue (g_ubq.ub_mem, an MLAB) and the clamp.
+*VERIFIED:*
+  * lint_top clean (2A defaults; 2C -DM2_2C -DM2_NO_2A_MANX_MOTION).
+    lint_idx 2A 111, 2C 113 -- the parents' counts, none in the new code.
+  * make test PASS on both (85 targets, test_m2_span_tex_uvcl checks=7225
+    fails=0); test_m2_snd_lerp PASS on both.
+  * Fill miter (sim/miter/fill.sh) with UVCL at its default 0, room2's fill
+    against the integrated one: 2A 109,964,114 cycles, 2C 107,610,021, 0
+    with an output differing -- the same totals as R952's. With UVCL off the
+    merged fill is room2's, cycle for cycle; UVCL on changes the picture by
+    design, so the miter cannot speak for it.
+  * Rally's sky dots, the integrated 2A tree: its geometry (geodiff 2A,
+    TEXLUT) on walks 4074-4082 gives ours.txt byte-identical to rally-sky's;
+    the raster bench at the board's settings (benchbd) shows 15 dots with
+    UVCL 0 and 0 with UVCL 1, bilinear and point alike; walk 4076's pixels
+    identical to rally-sky's in all four runs.
+  * Sound, tb_m2_2a_sound on Dynamite Cop 20 s (2C with OVERLAP 1, as its
+    build): LERP 0 log and WAV byte-identical to the parents'; LERP 1 PASS,
+    every sample within its two step samples, 416,028 (2A) / 416,568 (2C)
+    of 881,998 strictly between them -- the interpolator is in the path.
+*LEFT:* the fits (Ben); the timing checks R951 and R952 name (the clamp's
+MLAB read into m2_texel_x2's request registers; 2C near the projector /
+clipper states).

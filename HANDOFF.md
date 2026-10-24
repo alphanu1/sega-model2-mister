@@ -1,5 +1,30 @@
 # Handoff
 
+## 2026-10-24 (evening): int-2a / int-2c -- the finished work merged for fitting (R952 integrated). LOCAL, NOT PUSHED, NOT FITTED
+
+  * int-2a (worktree sm2-builds/int-2a) = room2-2a 514c411 + R951 (rally-sky
+    32ca36a, 3110ef9) + R949 (hotd-mix 4cdb9c1, LERP only: the 2A line has no
+    OVERLAP). Builds from Model2.qsf as it is. quartus_map 38,918 ALMs needed
+    (room2-2a 38,718), DSP 99.
+  * int-2c (worktree sm2-builds/int-2c) = room2-2c f19e275 + R951 (the 2C
+    patch, no DIL) + R951 study + R949 + the reciprocal table's LUT form as
+    the default (M2_RECIP_M10K=1 for the M10K one; M2_RECIP_LOGIC not needed
+    any more) + "M2_2C=1" / "M2_NO_2A_MANX_MOTION=1" committed in its qsf.
+    quartus_map 38,935 ALMs needed (room2-2c 38,774), DSP 105.
+  * M2_2A_SND_LERP is 1 in both builds (the map's parameter settings say
+    LERP 1); UVCL 1 on the raster.
+  * Evidence (study R952, INTEGRATED): lint_top clean, lint_idx 111 / 113;
+    make test PASS both; fill miter with UVCL 0 against room2: 0 differing
+    in 109,964,114 / 107,610,021 cycles; Rally walks 4074-4082 15 -> 0 sky
+    dots in the integrated tree; Dynamite Cop 20 s LERP 0 identical to the
+    parents, LERP 1 PASS with the interpolated values in the output.
+  * Merge notes: m2_raster_fill's R951 block landed unchanged on room2's
+    restructured fill (S_OZ untouched by room2); conflicts were parameter
+    lists, the geodiff printf (QCYC + trow), the sound define blocks and the
+    docs (R949 placed before R950, R951 before R952).
+  * NEXT: fit both (Ben). Watch clk_sys at the UVCL clamp (MLAB read ->
+    m2_texel_x2 request) and R952's 2C projector / clipper paths.
+
 ## 2026-10-24: room2-2a / room2-2c -- more ALM room by making things smaller (R952). LOCAL, NOT PUSHED, NOT FITTED
 
 quartus_map 17.0, ALMs needed: 2A 40,225 -> 38,718 (-1,507; branch room2-2a
