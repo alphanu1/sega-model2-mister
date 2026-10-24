@@ -44118,3 +44118,8 @@ can stay on). The OSD line O[31] becomes "Auto, Point": 0 (the old
 but Sky Target (game ID 0x18), where it is point; 1 forces point everywhere,
 as before. Model2.sv: texpt_game (one compare on the game ID) ORed into the
 filter's synchroniser. Nothing else changes; the main core is untouched.
+*BOARD (Ben, 2026-10-24, s1447 = 8fa6643 + R944 small + R945, R938 out):*
+R944 WORKS -- Sega Rally's car-shadow holes are gone. Still there: a straight
+line of single white pixels across Rally's textured sky in the attract's
+canyon start (#26 item 2) -- the textured version of the same T-junction
+crack? Branch rally-sky (R951), reproduce first at the board's settings.
