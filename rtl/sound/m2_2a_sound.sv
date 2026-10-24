@@ -218,8 +218,12 @@ module m2_2a_sound #(
   localparam int CI = 7;
   wire [AW:1] rom_w = sel_rom ? ROM_BASE + AW'(addr[18:1]) : SMP_BASE + AW'(addr[22:1]);
   (* ramstyle = "M10K" *) logic [63:0] ln_d [1 << CI];
-  (* ramstyle = "M10K" *) logic [AW-3-CI:0] ln_t [1 << CI];
-  (* ramstyle = "M10K" *) logic ln_v [1 << CI];
+  // R948: the tag and its valid bit in ONE array, {valid, tag} -- they share
+  // the read address, and the valid bit alone (128 x 1) held a whole M10K.
+  // The clear (vclr, only in V_CLR after reset) writes {0, ln_wt} over a
+  // line; the fill (ln_we, only from B_FILL) writes {1, ln_wt}: the two never
+  // meet, and a line whose valid bit is 0 never hits whatever its tag holds.
+  (* ramstyle = "M10K" *) logic [AW-2-CI:0] ln_vt [1 << CI];
   logic [63:0] ln_q;
   logic [AW-3-CI:0] lt_q;
   logic        lv_q, ln_we;
@@ -228,11 +232,10 @@ module m2_2a_sound #(
   logic        vclr;                      // clearing the valid bits after reset
   logic [CI-1:0] vclr_i;
   always_ff @(posedge clk) begin
-    if (ln_we) begin ln_d[ln_wi] <= a_dout; ln_t[ln_wi] <= ln_wt; end
-    if (ln_we || vclr) ln_v[vclr ? vclr_i : ln_wi] <= !vclr;
+    if (ln_we) ln_d[ln_wi] <= a_dout;
+    if (ln_we || vclr) ln_vt[vclr ? vclr_i : ln_wi] <= {!vclr, ln_wt};   // R948
     ln_q <= ln_d[rom_w[CI+2:3]];
-    lt_q <= ln_t[rom_w[CI+2:3]];
-    lv_q <= ln_v[rom_w[CI+2:3]];
+    {lv_q, lt_q} <= ln_vt[rom_w[CI+2:3]];
   end
   wire ln_hit = lv_q && lt_q == rom_w[AW:CI+3];
 
