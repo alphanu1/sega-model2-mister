@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # R952: AN OLD-AGAINST-NEW MITER FOR "SMALLER, IDENTICAL" CHANGES.
 #
-#   sim/miter/miter.py <module> <old.sv> <new.sv> <outdir>
+#   sim/miter/miter.py <module> <old.sv> <new.sv> <outdir> [<sub> <old_sub.sv> <new_sub.sv>]...
 #
 # Writes <outdir>/<module>_old.sv and <module>_new.sv (the two sources with the
 # module renamed) and <outdir>/<module>_miter.sv: a module called <module>,
@@ -13,11 +13,16 @@
 # --top-module <module> in place of the module's source: the bench then runs
 # unchanged and every cycle of it is a check that the change is invisible.
 #
+# Submodules that changed too are named after the outdir: each is renamed
+# <sub>_old / <sub>_new in its own copy and in every instantiation inside the
+# old / new copies, so the two hierarchies share nothing that differs.
+#
 # The port list must be ANSI style, one or more names per input/output line
 # (this repository's style); parameters are passed through by name.
 import re, sys, os
 
 mod, old_p, new_p, out = sys.argv[1:5]
+subs = [sys.argv[i:i+3] for i in range(5, len(sys.argv), 3)]
 os.makedirs(out, exist_ok=True)
 
 def strip_comments(t):
@@ -74,8 +79,15 @@ for line in strip_comments(ports).split('\n'):
     names = [x.strip() for x in body.split(',') if x.strip()]
     (ins if mm.group(1) == 'input' else outs).extend(names)
 
-open(f'{out}/{mod}_old.sv', 'w').write(rename(old_p, '_old'))
-open(f'{out}/{mod}_new.sv', 'w').write(rename(new_p, '_new'))
+def subren(t, suffix):
+    for sn, _, _ in subs:
+        t = re.sub(r'\b' + re.escape(sn) + r'\b', sn + suffix, t)
+    return t
+open(f'{out}/{mod}_old.sv', 'w').write(subren(rename(old_p, '_old'), '_old'))
+open(f'{out}/{mod}_new.sv', 'w').write(subren(rename(new_p, '_new'), '_new'))
+for sn, so, snew in subs:
+    open(f'{out}/{sn}_old.sv', 'w').write(subren(open(so).read(), '_old'))
+    open(f'{out}/{sn}_new.sv', 'w').write(subren(open(snew).read(), '_new'))
 
 pp = ', '.join(f'.{n}({n})' for n in pnames)
 w = []
