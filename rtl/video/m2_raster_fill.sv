@@ -156,7 +156,14 @@ module m2_raster_fill #(
   // group of the span (measured: Rally attract 960, 38,863 pixels change for
   // ~2,000 that change polygon, and the frame's error vs MAME goes up). A
   // textured quad keeps R658's edges exactly.
-  parameter bit DIL = 1'b0
+  parameter bit DIL = 1'b0,
+  // R951: THE QUAD'S OWN TEXEL BOX, for m2_span_tex's clamp. A textured
+  // quad's u and v ranges -- the least and greatest of its four corners, in
+  // whole texels (11 bits: the corners are 11.2), the least rounded down and
+  // the greatest up and then less one, so the clamp's top is {hm, 0xFF} --
+  // taken one vertex a cycle beside S_OZ's normaliser from the raw u, v it
+  // already reads. Out with the quad's first span (span_nq). 0: no box.
+  parameter bit UVCL = 1'b0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -229,6 +236,13 @@ module m2_raster_fill #(
   output logic [1:0]         span_uvs,       // R940: in_uvs, latched with the quad
   output logic               span_tex_en,
   output logic signed [9:0]  span_mipk,      // R828: the quad's mip bias (MIP)
+  // R951: the quad's texel box {off, u lo, u hm, v lo, v hm} (UVCL; 11-bit
+  // whole texels; off for a quad stored >> uvs, whose corners are not in
+  // texels) and "this is a textured quad's first span" -- the box is the
+  // quad's register, not latched per span, like span_tex: a quad is not
+  // accepted while a span is held
+  output logic [44:0]        span_ub,
+  output logic               span_nq,
 
   // One cycle. Note quad_done can land in the same cycle as the quad's last
   // span, and in_ready can rise with that span still in flight — the next quad
@@ -2125,6 +2139,51 @@ module m2_raster_fill #(
     end
   end
   assign span_mipk = MIP ? k_o : 10'sd0;
+
+  // ------------------------------------------------------------ R951: the texel box
+  // Sega Rally's sky dots: a pixel a hair inside the distant-mountain band's
+  // top edge, where v is exactly the band's least (texel 128), took v a few
+  // 1/256 texel UNDER it from the plane fit's quantisation; the bilinear's
+  // other row there is texel 127 -- opaque white, outside the polygon's own
+  // texture -- and it won the alpha test. One pixel per scanline crossing of
+  // a shallow edge: the board's straight dotted line. Every pixel the fill
+  // covers lies inside the quad, so in exact arithmetic its u and v lie in
+  // the corners' box; m2_span_tex clamps a near miss back into it.
+  // Stage two of S_OZ holds vertex oz_w's raw u, v (as R828's edge walk
+  // reads them).
+  logic [10:0] ub_ulo, ub_vlo;                   // running min, whole texels (the floor of the min is the min of the floors)
+  logic [12:0] ub_uhi, ub_vhi;                   // running max, 11.2
+  logic [10:0] ub_uhm, ub_vhm;                   // ceil(max) less one
+  logic        ub_fin, nq_r;
+  wire         ub_s2 = UVCL && (pf_st == S_OZ) && !oz_pre && oz_w_v;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      ub_ulo <= '0; ub_uhi <= '0; ub_vlo <= '0; ub_vhi <= '0;
+      ub_uhm <= '0; ub_vhm <= '0; ub_fin <= 1'b0; nq_r <= 1'b0;
+    end else begin
+      if (ub_s2) begin
+        if (oz_w == 2'd0 || oz_u[12:2] < ub_ulo) ub_ulo <= oz_u[12:2];
+        if (oz_w == 2'd0 || oz_u > ub_uhi) ub_uhi <= oz_u;
+        if (oz_w == 2'd0 || oz_v[12:2] < ub_vlo) ub_vlo <= oz_v[12:2];
+        if (oz_w == 2'd0 || oz_v > ub_vhi) ub_vhi <= oz_v;
+      end
+      // one cycle after the last corner; the first span is ~18 cycles later.
+      // (A box on one texel line -- u the same at every corner, ceil = floor --
+      // gets hm = floor - 1: its exact coordinate is on the line, where the
+      // bilinear is half and half either way, so either side's clamp is as good.)
+      ub_fin <= ub_s2 && (oz_w == 2'd3);
+      if (ub_fin) begin
+        // ceil(max) - 1 = floor(max) - (max a whole texel)
+        ub_uhm <= ub_uhi[12:2] - 11'(ub_uhi[1:0] == 2'd0);
+        ub_vhm <= ub_vhi[12:2] - 11'(ub_vhi[1:0] == 2'd0);
+      end
+      // a textured quad's first span carries the box; a quad with no span sends nothing
+      if (UVCL && in_valid && in_ready) nq_r <= in_tex[0];
+      else if (span_valid && span_ready) nq_r <= 1'b0;
+    end
+  end
+  assign span_ub = UVCL ? {uvs_r != 2'd0, ub_ulo, ub_uhm, ub_vlo, ub_vhm} : 45'd0;
+  assign span_nq = UVCL && nq_r;
 
   // R544: AND NOT WHILE THE LAST SPAN IS STILL WAITING. span_tex_en and the
   // three gradients below are NOT latched with a span -- they are this quad's
