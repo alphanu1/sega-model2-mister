@@ -25,6 +25,41 @@ off; every change old-against-new identical, cycle for cycle. M10K: 2A -1
     (0.503 ns path), fp_add sentinel (timing), the colour cache's 256 valid
     flags (flash clear), the store's bank mux (near-critical).
 
+## 2026-10-24 (afternoon): hotd-mix (off hotd-dsp fb539c4, LOCAL) -- the sound path audited (R949). NOT PUSHED, NOT FITTED
+
+Ben: HOTD chapter 2 "music far too loud over the shots, tinny clipping";
+Dynamite Cop (2A, defaults) "box break makes you jump"; "it's the SOUND PATH".
+  * TINNY = THE OUTPUT PATH, every game, since R788 took the framework's IIR
+    filter out: audio_out samples the core's 44.1 kHz staircase at 48 kHz
+    unsmoothed, so bright sounds alias into 4-16 kHz (4 kHz tone: spurs at
+    -16 dB; HOTD's FM voice, sample 0x028C0, half its energy at 16-24 kHz,
+    aliases to 8.5 dB below itself -- it plays from the chapter-1 boss on).
+    FIX: rtl/sound/m2_snd_lerp.sv (linear interpolation, updated every 64
+    clocks), M2_2A_SND_LERP default 1 (2A and 2C). FM voice 8.5 -> 15.9 dB,
+    the rest 24.9 -> 40.4 dB; 123 ALM / 190 regs / 3 DSP alone (quartus_map).
+    Bench make test_m2_snd_lerp PASS; tb_m2_2a_sound with LERP PASS.
+  * LEVELS NOT REPRODUCED for HOTD. Whole board (fx68k + SCSP + sound RAM on
+    MAME's MIDI): Dcop 0-40 s = R914 reference +0.09 dB, HOTD 0-40 s +0.05 dB,
+    key-ons identical to MAME's. Core vs MAME per category (scsp_mixcat):
+    HOTD ch2 0.0-0.7 dB; Dcop effects +2.1 / +2.6 (R914's real reverb), its
+    music +0.1; VF2 / DOA music down (R914, accepted). Boost, Volume clamp,
+    output stage ruled out. srg320's Saturn SCSP (reference only, NO LICENCE
+    FILE, nothing copied): same scales everywhere, same float format, and
+    MADRS decoded at 0x780-0x7BF only -- confirms R914. EG key scaling differs
+    (OCT weight), measured <= 0.1 dB.
+  * RTL: tb_m2_scsp OVERLAP on, all 719 s of the new chapter-2 capture: 0
+    differ; Dcop (2A) 179 s 0 differ, engine max 2,038 clocks, free-running 0
+    underruns.
+  * Captures (git-ignored): build/scsp/ch2 (hotd play to chapter 2, 720 s),
+    build/scsp/dcop (180 s); clips build/scsp/clips/*.wav (MAME vs core);
+    build/board/ (whole-board WAVs, traces).
+  * NEXT: fit with LERP (both builds); ask Ben's Volume / Raw Sound Boost /
+    audio-filter preset (sys aud_mix_top's vol_boost waveshaper is still
+    live with the IIR gone); a board recording of HOTD ch2 vs the clips; the
+    'M' MIDI probe if the board still differs.
+  * Wrong turns: first numbers fed MAME's register writes (not the core's
+    68000) -- Ben was right to ask; the whole-board run then agreed anyway.
+
 ## TODO -- the next feature build (Ben, 2026-10-23; after the current R937-R941 round)
 
 1. WHEEL MAPPING (GitHub #12). An "Analog control" choice like Jotego's OutRun
