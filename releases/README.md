@@ -35,6 +35,10 @@ hardware as possible:
   sits over the city, and so does the core.
 - **Zero Gunner's SCORE RANKING shows the helicopter icons beside each name
   (Model 2A)**, from the same 2D layer fix. MAME never draws them.
+- **Sky Target's sky has no lines between its panels (Model 2A).** MAME's
+  bilinear filtering draws thin lines where the sky's panels meet; the board
+  doesn't. With `Texture filter` on `Auto` (the default), the core draws Sky
+  Target with point sampling, and the lines are gone.
 
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
@@ -60,7 +64,41 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261022`)
+### New in this build (`Model2A_20261024`)
+
+**Download the new 2A MRAs too** (normal and `[15kHz CRT]`): the settings
+fix below needs them, and the old MRAs don't work with this core's save file.
+
+- **Settings are saved, Sega Rally's among them** (GitHub #15). The core
+  saved the backup RAM but not the board's small EEPROM, where Sega Rally
+  and other games keep their test-menu settings. Both now go in the save
+  file.
+- **Sega Rally: the white dots in the sky and the seams in the car shadows
+  are gone** (GitHub #26). The dots were the mountains' top edge picking up
+  the row of texture just above it; the shadow seams were hairline cracks
+  between polygons.
+- **Text and 2D no longer flicker or pick up wrong values.** When a game
+  read its 2D tile memory or palette back, the core returned the word next
+  to the one asked for. Fixes the Manx TT leaderboard flicker (GitHub #21)
+  and 2D read-backs in Virtua Fighter 2, Zero Gunner and Virtua Cop 2.
+- **Dynamite Cop's sea** is drawn properly: very wide sea polygons were
+  being clamped instead of scaled.
+- **Cleaner sound.** The sound chip runs at 44.1 kHz and MiSTer's audio
+  output at 48 kHz; the core now smooths between samples instead of
+  repeating them, which removes the tinny, fizzy edge in every game.
+- **`Texture filter` is now `Auto` / `Point`** (was `Bilinear` / `Point`).
+  `Auto` is bilinear for every game except Sky Target, which the board draws
+  without the lines between its sky panels (see *Not just a MAME port*
+  above). A saved `Bilinear` opens as `Auto`, a saved `Point` stays `Point`.
+- **15 kHz pairing** (`Auto` / `Off`), as in the Model 2 core: games that
+  draw every other frame no longer jump their line timing when they slip a
+  frame.
+- **More room in the FPGA.** Parts of the chip that did the same job side
+  by side now share one copy, checked clock for clock against the old
+  design: about 1,500 logic blocks freed with nothing removed, which also
+  makes clean builds easier.
+
+### Earlier in `Model2A_20261022`
 
 - **Sega Rally and Manx TT run at full speed, and Rally's opponents behave.**
   The main CPU was too slow in the races: every function call saved and
@@ -123,7 +161,7 @@ below). Please report anything you find, and say which game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261022.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261024.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -131,7 +169,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261022.rbf` has the md5 `c778c70ad8ca799ba3d1c3845567f9a4`. As with
+`Model2A_20261024.rbf` has the md5 `9edfa2b2c5114eb0d96d6456391ee647`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -156,10 +194,17 @@ ROM sets: MAME 0.289.
 
 - **Manx TT**'s deluxe cabinet's extra sound board isn't emulated, so a few
   extra sounds are missing.
-- **Sega Rally doesn't save its settings** (NVRAM). The core saves the
-  backup RAM but not the game's EEPROM, where Rally keeps its settings. Fix
-  planned (GitHub #15). Manx TT's service menu settings aren't kept either
-  (GitHub #21).
+- **A stray green pixel near some trees** (Sega Rally, Virtua Fighter 2's
+  Lau stage, Pilot Kids' window tree): much rarer than before, being worked
+  on.
+- **Thin seams between some polygons show the background through them**
+  (Virtua Fighter 2's Jacky and Sarah stages, Dead or Alive). Being worked on.
+- **Sound balance:** in Dynamite Cop the environment sounds (breaking boxes)
+  are too loud against the shots and music, and Virtua Fighter 2's effects
+  are low. Being investigated against MAME and the board.
+- **Slowdown:** Virtua Cop 2 slows down when many enemies appear (the
+  expert stage's train, GitHub #29), and Motor Raid a little in busy moments
+  (GitHub #25). Being investigated.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall. That is how MAME 0.289 mixes these games, and apart from
   the effects processor fix above the core matches it sample for sample. (MAME can sound louder because it also runs its own audio
@@ -277,10 +322,6 @@ anything you find.
   CRTs saw as a short loss of sync (GitHub #24). The line timing now never
   moves. New OSD option `15kHz pairing` (`Auto` / `Off`) for TVs that are
   still unhappy. Every other game's 15 kHz picture is exactly as before.
-- **Cleaner texture edges.** The last few pixels of a polygon's line could
-  take their colour from just outside the polygon, which showed as stray
-  dots and thin lines where textures meet. They now sample inside it.
-  (`Model2_20261023b`.)
 - **Virtua Cop's 2D reads are right.** When the game read its tilemaps or
   its 2D palette back, the core returned the word next to the one asked for
   (and a 32-bit read came back with its halves swapped). Writes were always
