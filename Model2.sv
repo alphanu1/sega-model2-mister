@@ -421,11 +421,11 @@ localparam CONF_STR = {
 	// in Sega Rally's car shadow, but every car's plain white body panels,
 	// widened, paint over the livery decals beside them (white dots along the
 	// panel edges; MAME has none). Off is the old picture exactly. A new bit
-	// (68), so a saved config opens Off. Shadows: only black flat quads (the
+	// (68), so a saved config opens Off. Black only: only black flat quads (the
 	// cars' shadows) are dilated -- the shadow's cracks stay closed and the
 	// white panels are left alone; black trim overlaps its neighbours by the
-	// same 1/8 px (R957). All: R944 as it was.
-	"O[69:68],Seam fill,Off,Shadows,All;",
+	// same 1/8 px (R957). On: R944 as it was.
+	"O[69:68],Seam fill,Off,Black only,On;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D

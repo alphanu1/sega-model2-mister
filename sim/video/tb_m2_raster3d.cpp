@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
   // R828b: the mip rule in a MIP build (0 Off, 1 Smooth, 2 Medium, 3 Sharp);
   // 0 unless M2_R3D_MIPMODE says, so a MIP build with no setting draws level 0
   d->tex_mip_mode = std::getenv("M2_R3D_MIPMODE") ? std::atoi(std::getenv("M2_R3D_MIPMODE")) : 0;
-  d->dil_on = std::getenv("M2_R3D_DILON") ? std::atoi(std::getenv("M2_R3D_DILON")) : 2;   // R957: Seam fill 0 Off, 1 Shadows, 2 All (only with DIL)
+  d->dil_on = std::getenv("M2_R3D_DILON") ? std::atoi(std::getenv("M2_R3D_DILON")) : 2;   // R957: Seam fill 0 Off, 1 Black only, 2 On (only with DIL)
   d->fb_test = 0;   // R653: set by M2_R3D_FBTEST below
   d->fb_pace = std::getenv("M2_R3D_PACE") ? std::atoi(std::getenv("M2_R3D_PACE")) : 0;   // R656
   d->tex_base0 = 0x1760000; d->tex_base1 = 0x17E0000;

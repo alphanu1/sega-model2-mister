@@ -199,9 +199,9 @@ module m2_raster_fill #(
   input  logic [1:0]         mip_mode,
   // R957: the OSD's "Seam fill" for DIL (quasi-static, on clk; taken per
   // quad, at S_IDLE). 0 Off: every flat quad's edges stay where they are.
-  // 1 Shadows: only flat quads whose colour is 0 (black -- the cars' shadows,
+  // 1 Black only: only flat quads whose colour is 0 (black -- the cars' shadows,
   // h 00c0,..,0000) are dilated, so the white body panels no longer paint
-  // over the livery decals beside them. 2 All: R944 as it was.
+  // over the livery decals beside them. 2 On: R944 as it was.
   input  logic [1:0]         dil_on,
   // R828c: the geometry's no-mip flag for this quad (m2_geometry q_mipz):
   // the game's own level is at most -MIPZ_B all over the polygon, so its

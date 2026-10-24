@@ -129,3 +129,4 @@ fit-*.summary
 # `git add releases/` succeeds and stages nothing.
 !/releases/
 !/releases/*.rbf
+sweep.log

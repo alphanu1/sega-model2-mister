@@ -44803,6 +44803,6 @@ DIL 0 22 / DIL 1 0 / black-only 0; Lancia frame 4940 no white dots, 156 px
 change against DIL 0, all black flat trim overlapping by the same 1/8 px,
 error vs MAME 2.980 -> 3.031 against DIL 1's 3.303). Built as the switch's
 middle setting: "O[69:68],Seam fill,Off,Shadows,All" (3 reads as Off);
-dil_on is 2 bits, and the fill latches dil_q = All || (Shadows && the quad's
+dil_on is 2 bits, and the fill latches dil_q = On || (Black only && the quad's
 colour is 0) with the quad -- one 24-bit zero compare, no new state.
-test_m2_fill_dil (All) 3,007 / 0, raster_fill_mip and raster3d PASS.
+test_m2_fill_dil (On) 3,007 / 0, raster_fill_mip and raster3d PASS.
