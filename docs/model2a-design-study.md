@@ -45747,3 +45747,102 @@ parallel (geo_clip, geometry), not RAMs.
   the check. (The 2A / 2C map totals carry +-30 ALMs of synthesis noise
   between runs of the same RTL's neighbours: 2C b0f75a0 mapped 40,307 here
   and its parent 3704373 40,279 in s1442.)
+  * The reproduction: holes 0 on all six frames and all six walks (one
+    flagged pixel on walk 8895, (405,259), is the car's quad 178, sorted
+    between the shadow quads, correctly in front).
+  * Textured pictures (REALCOL + TEXMEM), against the old RTL: Virtua
+    Fighter 2 600 / 3480 / tower 3360, Sky Target 1080, Virtua Cop 1500 --
+    pixel hashes UNCHANGED (no flat polygons). Rally and Daytona (Daytona,
+    Virtua Cop in main's configuration, TEXLUT 0, KW 16): only flat
+    polygons' edges move, each outline 1/8 px out, so a few pixels MAME
+    gives to what is behind now take the flat polygon (whole-frame error
+    vs MAME, pixels changed):
+      Rally 960     9.148 ->  9.157   24      Rally 7290   6.940 -> 7.067  305
+      Rally 1050    8.216 ->  8.250   97      Rally 7296   7.055 -> 7.128  291
+      Rally 1500   11.603 -> 11.695  193      Rally 7300   6.848 -> 6.951  291
+      Rally 2040   19.035 -> 19.049   50      Daytona 2000 12.655 -> 12.656  24
+      Rally race 3720 14.905 -> 15.028 184    Daytona 5000 11.829 -> 11.857  89
+                                              Daytona 9000 12.085 -> 12.211 417
+    Shadow holes on R938's Rally frames: 1500 1 -> 0, race 3720 1 -> 0.
+  * New test_m2_fill_dil (in `make test`): the R658 bench (tb_m2_fill_m2cov)
+    with the moved, clamped edges in its C rule, and a T-junction test (a
+    quad above a long edge, two below it sharing a point ON it, every
+    vertex rounded as the geometry rounds): 200,007 random quads 0 fails;
+    20,000 T-junctions 0 crack pixels. The same test without DIL counts
+    8,652 crack pixels in 2,000 junctions. test_m2_fill_m2cov (R658's bench,
+    never in the Makefile until now): 0 fails on the old RTL and this one
+    with R658's 0.01 px tie window -- the source's default 1e-3 had drifted
+    and gave 269 one-pixel tie rows on the OLD RTL too.
+    test_m2_raster_fill (152,373), _mip, test_m2_raster3d,
+    test_m2_quad_store, test_m2_span_tex (+ftb, mip, gc), test_m2_raster_band,
+    test_m2_texel_bl4 PASS. DIL 0 is bit-identical to the old RTL (six
+    frames). lint_top clean on 2A and M2_NO_2A; lint_idx the same 114
+    findings; -Wall on the fill (DIL 0 and 1) no warnings. Quartus 17.0
+    constant-fold check of the new arithmetic (tiny module, stuck pins):
+    extent bounds and the move computed as intended.
+*AREA (quartus_map 17.0, 2A, full design, 5ffd438 -> this):* ALMs needed
+40,163 -> 40,310 (+147); combinational ALUTs 57,293 -> 57,611; registers
+48,255 -> 48,417; block memory bits 4,580,912 (=); DSP 96 (=); M10K
+unchanged; m2_raster_fill 5,101 -> 5,551 ALUTs, 3,972 -> 4,135 registers.
+Main (M2_NO_2A, same RTL): 39,162 -> 39,504 ALMs (+342; the fill +532 ALUTs,
++166 registers, as on 2A -- the rest is the estimate's packing); block bits
+4,572,432 (=). (A first version with the extent clamp on the emit path and
+the extents in registers: 2A +289.)
+*LEFT / OPEN:* textured T-junctions still crack (the same geometry with a
+texture); closing them needs m2_span_tex's groups anchored independently of
+the span's first pixel. Sky Target's flickering 1-px sky lines (R938's open
+board case) are textured panels and may be that class -- not checked. Not
+on the board: the fit and Ben's eyes decide, the Top 16 screen first.
+
+**R944, SMALLER (the same pixels, half the area).** The first version spent
++147 ALMs (2A map): the move held in two 32-bit registers (dga / dgb) with
+their own |slope| adders, two clamps per edge in registers (lb / ub) formed
+in S_OFF, a per-row select of them beside the emit sort, two more registers
+carrying them through stage 1, and a separate add for the move. Now:
+  * the move has no register and no adder of its own: S_FS_DIL feeds the
+    walk's adder (xah_nx = xah + sla in S_FS_WALK) with the move's operands,
+    xah + (t or ~t) + (C or 1 - C), t = sl >>> 3, C = 1/8 + 2^-16 -- the
+    same value as before bit for bit (|sl| >> 3 by ones' complement);
+  * the clamps are two registers per SEGMENT (lbq: the left edge's least
+    vertex x - 1/8, ubq: the right edge's greatest + 1/8, chosen by swapf
+    and a one-bit "which vertex is lesser" per edge taken from S_DIVA's
+    existing subtract), formed in S_FS_DIL, which waits for stage 1 to
+    empty so a span keeps its own segment's clamps; the output stage reads
+    them directly. Nothing in the emit path (R739) changed.
+Measured (module alone, map): the move ~34 ALMs, the clamp ~109 -- the clamp
+is still needed (without it 18-91 whisker pixels a frame) and a per-quad
+bounding-box clamp instead leaves 1-17 of them (modelled), so it stays per
+edge. 11-bit compares and dropping the empty-span test saved < 20 ALMs and
+were not taken (the clamp CAN empty a span: x = 10.0, round(x - 1/8) = 10,
+round(x + 1/8) - 1 = 9).
+*VERIFIED, against ce523c1:* pixel-identical on all 6 frames (MAME
+vertices) and all 6 walks (core geometry) of the reproduction -- 0 holes --
+and on all 16 textured frames (Rally 960 / 1050 / 1500 / 2040 / race 3720 /
+7290 / 7296 / 7300, VF2 600 / 3480 / 3360, Sky Target 1080, Daytona 2000 /
+5000 / 9000, Virtua Cop 1500); test_m2_fill_dil 200,007 quads 0 fails with
+the same 45,343 tie rows, 20,000 T-junctions 0 cracks; test_m2_fill_m2cov,
+test_m2_raster_fill (152,373), _mip, test_m2_raster3d, test_m2_quad_store,
+test_m2_span_tex (+gc), test_m2_raster_band PASS; lint_top clean (2A,
+M2_NO_2A); lint_idx the same 114; Quartus 17.0 constant-fold of the move
+(16 +/- 5.1875 for a 40.5 px/row slope either sign and side) as intended.
+*AREA (quartus_map 17.0, 2A, full design, against 5ffd438):* ALMs needed
+40,163 -> 40,240 (+77; was +147); ALUTs 57,293 -> 57,477 (+184; was +318);
+registers 48,255 -> 48,296 (+41; was +162); m2_raster_fill 5,101 -> 5,410
+ALUTs, 3,972 -> 4,013 registers; block bits, DSP, M10K unchanged.
+*TIMING NOTE:* the walk's adder now has a 2:1 operand select (the state
+decode) in front of it on the xah -> xah loop; the emit path from xah is
+unchanged. The fit's report on clk_sys is the check.
+*BOARD (Ben, 2026-10-24, s1428 + the 16520-byte 2A MRAs):* THE 2A SETTINGS
+SAVE WORKS (R945) -- Sega Rally's test-menu settings survive a reload. Fits
+are PAUSED (Ben) until the sound mix-balance fix (R949, branch hotd-mix) is
+in: the next 2A / 2C seed hunts carry it.
+
+**R950 -- TEXTURE FILTER "AUTO": SKY TARGET DEFAULTS TO POINT SAMPLING.**
+Sky Target's title sky shows thin darker lines at its sky-panel joints with
+the bilinear filter (MAME draws them too, R947); the arcade shows none, and
+on the board Ben found Texture filter = Point alone removes them (mip-mapping
+can stay on). The OSD line O[31] becomes "Auto, Point": 0 (the old
+"Bilinear", so every saved config lands on Auto) is bilinear on every game
+but Sky Target (game ID 0x18), where it is point; 1 forces point everywhere,
+as before. Model2.sv: texpt_game (one compare on the game ID) ORed into the
+filter's synchroniser. Nothing else changes; the main core is untouched.
