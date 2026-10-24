@@ -1,5 +1,30 @@
 # Handoff
 
+## 2026-10-24: room2-2a / room2-2c -- more ALM room by making things smaller (R952). LOCAL, NOT PUSHED, NOT FITTED
+
+quartus_map 17.0, ALMs needed: 2A 40,225 -> 38,718 (-1,507; branch room2-2a
+off bridge-r937-2a 77a4689, which now also carries R948's cache merge and
+i960 sums); 2C 40,133 -> 38,774..38,842 (-1,359..-1,291, two maps of the
+same logic; branch room2-2c off room-2c c9ee859; build with "M2_2C=1",
+"M2_NO_2A_MANX_MOTION=1", "M2_RECIP_LOGIC=1" as before). Nothing switched
+off; every change old-against-new identical, cycle for cycle. M10K: 2A -1
+(expected 549 of 553), 2C unchanged; one MLAB more (i960 regs).
+  * Geometry: the eight u2f two, a vertex a cycle; the eight per-cycle f2uvw
+    gone (the clipper keeps f2uvw of its coordinates); the projector's two
+    mag8 one; the engine's header adders one. Fill: one normaliser for the
+    six numerators; one adder per edge accumulator; each plane's two corner
+    products summed once.
+  * i960 (fpmisc, regs MLAB, ALU shifters, interrupt sums, dividers), fp_mul
+    SUBNORM, TGP ALU, tgpx4_cvt -- helper branches room2-i960-2a/-2c and
+    room2-snd-2a/-2c, cherry-picked.
+  * NEW: sim/miter/miter.py (old-against-new miter generator), fill.sh,
+    geo.sh; tb_clip_top asserts the clipper's new copy; geodiff M2GD_QCYC=1.
+  * FIT CHECKS: clk_sys near the projector / clipper states on 2C (s1462's
+    project sst -> clip kst had 0.199 ns), and the M10K count.
+  * Not taken (see R952): clipper operand select (+46), fpadd sticky mask
+    (0.503 ns path), fp_add sentinel (timing), the colour cache's 256 valid
+    flags (flash clear), the store's bank mux (near-critical).
+
 ## TODO -- the next feature build (Ben, 2026-10-23; after the current R937-R941 round)
 
 1. WHEEL MAPPING (GitHub #12). An "Analog control" choice like Jotego's OutRun
