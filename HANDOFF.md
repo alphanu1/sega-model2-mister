@@ -1,5 +1,26 @@
 # Handoff
 
+## 2026-10-25: Model2_20261025 released -- R952 / R951 / the interpolator on the Model 2 core (R956)
+
+  * room-main merged into main (8b247f8): the room savings (40,372 -> 38,944
+    ALMs needed, miter-identical), R951's texel box clamp (Daytona's edge
+    pixels), m2_snd_lerp at the MultiPCM drain's 44,643 Hz. Ben tested s1486 on
+    the board (Daytona, Desert Tank, Virtua Cop; VCop 28.4 fps, its own rate).
+  * Model2_20261025 = s1492, md5 9d181aec9309718fbac8270b07f15c23: clk_sys
+    +0.133, clk_mem +0.098, i960 +2.384, hold +0.224 (HDMI -0.250, report-only);
+    39,119 ALMs. s1484-s1491 missed: the worst clk_sys paths are m2_geo_clip
+    cs -> m2_fp_pool mul_b_q (R952's clipper change, flagged in R952) -- the
+    timing agent (R959) has it.
+  * README notes: Virtua Cop 2 gun calibration (reset defaults in its test
+    menu) on main/model2a; HOTD's (GUN DEFAULT ADJUSTMENT) on model2c.
+  * Next, waiting to be fitted / tested: span cull for VCop 2's train (spcull-2a
+    2dc6da5, R954, s1493-s1495 queued); the gun fixes -- HOTD mapping + the
+    2-px off-screen edge (hotd-gun 166c497, R960), VCop 1 / VCop 2 edge
+    (gun-edge-main b193a32, gun-edge-2a e211f2f, R961; MAME's 5% border was
+    the cause -- for the "Not just a MAME port" list when it ships); wheel
+    mapping #12 (wheel-main 0f51e76, wheel-2a 16de076, wheel-2c eaa8b45, R958);
+    VCop 2 ranking text loss (agent, R962); tree pixels (R955).
+
 ## 2026-10-24 (late): Model2A_20261024b released -- Seam fill (R957), Rally's car dots gone
 
   * The R944 regression: Model2A_20261024 put dotted white lines along every
