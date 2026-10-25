@@ -74,6 +74,39 @@ main's own files, conflicts read and resolved by hand (study R956).
     The fill miter needs the old copy's ports trimmed when the new fill has
     R951's outputs (done in a scratch runner, room-main-logs/miter/fillm.sh).
   * Next: Ben fits it; then the board (Daytona, Desert Tank, Virtua Cop).
+## 2026-10-24: wheel-main (off main) -- Analog control: Wheel A / Wheel B (R958, GitHub #12). LOCAL, NOT PUSHED, NOT FITTED
+
+  * OSD "Analog control: Standard / Wheel A / Wheel B" on O[71:70] -- free on
+    main, model2a, model2c, dilk-2a (Seam fill O[69:68]) and every local
+    branch; Standard (0, and 3) is today's behaviour, so saved configs open
+    unchanged. The same change is on wheel-2a (off dilk-2a) and wheel-2c (off model2c) -- carry them together.
+  * Wheel A: left X steers, left Y up = accelerator (centre released), right
+    Y up = brake. Wheel B: left X steers, left Y whole axis = accelerator (-127
+    released .. +127 pressed), right X whole axis = brake. Both: no steering
+    dead zone, right stick never steers, Steering / Steering smoothing apply,
+    Pedals: Swapped exchanges the pedals, buttons press fully, d-pad steers
+    while held. Pedal scale = the right-stick pedals' (0x20 .. 0xDE).
+  * All in rtl/io/m2_cab_inputs.sv (identical on the three branches), +
+    m2_2a_inputs (2A / 2C: st_wheel through, Sky Target forced Standard),
+    + Model2.sv (CONF_STR line, h2 on 2A / 2C, and the two instantiations).
+    Desert Tank: the further-pressed pedal drives (accelerator forward,
+    brake reverse, sets the lever). Manx TT / Motor Raid: wheel = bank,
+    accelerator = throttle, brake = brake. Over Rev / STCC through R928's
+    widening.
+  * Evidence: tb_m2_cab_inputs PASS (Standard vs the 0f3cbc4 block 30 M / 0;
+    wheel modes random 145.7 M checks / 0; every axis swept -128..+127 in
+    each mode, 50,202 / 0; Standard + 3 swept against the reference 327,680
+    / 0; two mutations caught); tb_m2_2a_inputs PASS on 2A / 2C (Sky Target
+    checked against a Standard block; dropping its exception = 711,768
+    mismatches); test_m2_315_5649, test_m2_vcop2_guns PASS; make test PASS (80 benches);
+    lint_top clean; lint_idx unchanged but for hps_io's CONF_STR width;
+    Quartus 17 analyze_file clean, the new functions constant-folded right.
+  * Releases README: OSD row, Controls "Analog control" table, Desert Tank
+    line, a "Coming in the next build" note. Not fitted: ~40 flops and a
+    little logic, plus ~50 bytes of CONF_STR (2A's passes 1 KB).
+  * Open: not tried on a wheel; Wheel B's axis ranges are the reporter's
+    account of MiSTer Main (RS50), not measured. Wheel B on a pad reads half
+    pedal (README warns).
 
 ## 2026-10-24 (night): Model2A_20261024 released (main + model2a); model2c published with the Model2C_20261024 beta
 
