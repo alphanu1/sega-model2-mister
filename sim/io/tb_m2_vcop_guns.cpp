@@ -8,7 +8,9 @@
 //     inside MAME's range and on the SAME pixel by the game's own rule
 //     (floor((v - min) * dim / span), measured from its GUN MARK CHECK
 //     screen, R846) -- every pixel 0..495 / 0..383 checked, not sampled;
-//     the off-screen bit is MAME model1io2 fpga_r's 5% border exactly.
+//     R961: the off-screen bit is the crosshair's pixel within 2 of an edge
+//     (x 0-1 / 494-495, y 0-1 / 382-383), not MAME model1io2 fpga_r's 5%
+//     border (X 24, Y 19 units), which put 19-24 px of every edge out of play.
 //  2. THE MOUSE: 200,000 random packets (deltas to +-255, both signs) in
 //     every OSD mode against a model that accumulates and clamps; the gun the
 //     mouse does not aim stays on its stick.
@@ -17,6 +19,7 @@
 //  4. RELOAD: random presses; the trigger it pulls is never seen while the
 //     gun is on the screen (the property the cabinet's "shoot off-screen"
 //     needs), it does arrive, and the gun leaves the corner afterwards.
+//     The mouse's every pixel: the off bit and c_on by the same rule.
 //  5. player 2 not in play (R849): no P2 crosshair; P1's always (R850). 6. en low: none.
 #include "Vm2_vcop_guns.h"
 #include "verilated.h"
@@ -35,8 +38,16 @@ static void tick(int n = 1) {
 
 struct Rng { int lo, hi; };
 static const Rng P1X{0x083, 0x276}, P1Y{0x024, 0x1a9}, P2X{0x080, 0x273}, P2Y{0x027, 0x1a9};
-static int border(const Rng& r) { return int((r.hi - r.lo) * 0.05f); }   // MAME: int(span * 0.05f)
-static bool offr(int v, const Rng& r) { return v <= r.lo + border(r) || v >= r.hi - border(r); }
+// R961: off the screen = within 2 px of an edge
+static bool offp(int x, int y) { return x <= 1 || x >= 494 || y <= 1 || y >= 382; }
+static long n_off = 0, n_on = 0;
+static void check_off(const char* what, int a, int b) {
+  bool o1 = offp(d->c1x, d->c1y), o2 = offp(d->c2x, d->c2y);
+  n_off += o1 + o2; n_on += !o1 + !o2;
+  CHECK(d->off == unsigned(o1 | (o2 << 1)), "%s %d %d: off %d want %d (P1 px %d,%d P2 px %d,%d)", what, a, b, d->off, o1 | (o2 << 1),
+        d->c1x, d->c1y, d->c2x, d->c2y);
+  CHECK(d->c_on == unsigned((!o1) | ((!o2) << 1)), "%s %d %d: c_on %d", what, a, b, d->c_on);
+}
 // the game's aim pixel for a coordinate (its GUN MARK CHECK, = MAME's crosshair pixel)
 static int game_px(int v, const Rng& r, int dim) { return (v - r.lo) * dim / (r.hi - r.lo); }
 
@@ -71,9 +82,7 @@ int main(int argc, char** argv) {
         CHECK(game_px(q[k], *r[k], dims[k]) == pxs[k], "a=%d b=%d axis %d: unit %03x is game pixel %d, crosshair %d",
               a, b, k, q[k], game_px(q[k], *r[k], dims[k]), pxs[k]);
       }
-      bool o1 = offr(q[0], P1X) || offr(q[1], P1Y), o2 = offr(q[2], P2X) || offr(q[3], P2Y);
-      CHECK(d->off == unsigned(o1 | (o2 << 1)), "a=%d b=%d off %d want %d", a, b, d->off, o1 | (o2 << 1));
-      CHECK(d->c_on == unsigned((!o1) | ((!o2) << 1)), "a=%d b=%d c_on %d", a, b, d->c_on);
+      check_off("stick", a, b);
     }
   }
   // every pixel, not only those the stick reaches: the unit chosen for a pixel
@@ -81,6 +90,20 @@ int main(int argc, char** argv) {
   // -- checked through the mouse below; here the stick's edges:
   set_ana(0, -127, -127); set_ana(1, 127, 127); tick(8);
   CHECK((d->off & 3) == 3, "a calibrated gun at the edge (+-127) must read off-screen (off=%d)", d->off);
+  // every edge alone: +-127 (and -128) on one axis is off, +-126 is on
+  for (int e : {-128, -127, 127}) for (int ax = 0; ax < 2; ax++) {
+    set_ana(0, ax ? 0 : e, ax ? e : 0); set_ana(1, ax ? 0 : e, ax ? e : 0); tick(8);
+    CHECK(d->off == 3, "stick %d on axis %d: off %d, want 3 (px %d,%d)", e, ax, d->off, d->c1x, d->c1y);
+  }
+  for (int e : {-126, 126}) for (int ax = 0; ax < 2; ax++) {
+    set_ana(0, ax ? 0 : e, ax ? e : 0); set_ana(1, ax ? 0 : e, ax ? e : 0); tick(8);
+    CHECK(d->off == 0, "stick %d on axis %d: off %d, want 0 (px %d,%d)", e, ax, d->off, d->c1x, d->c1y);
+  }
+  // the edge units the game sees on the screen (MAME: each one is a shot)
+  set_ana(0, -126, -126); set_ana(1, -126, -126); tick(8);
+  printf("stick -126: px (%d,%d) units P1 %03x,%03x P2 %03x,%03x off %d\n", d->c1x, d->c1y, d->p1x, d->p1y, d->p2x, d->p2y, d->off);
+  set_ana(0, 126, 126); set_ana(1, 126, 126); tick(8);
+  printf("stick +126: px (%d,%d) units P1 %03x,%03x P2 %03x,%03x off %d\n", d->c1x, d->c1y, d->p1x, d->p1y, d->p2x, d->p2y, d->off);
   set_ana(0, 0, 0); set_ana(1, 0, 0); tick(8);
   CHECK(d->off == 0 && d->p1x == 0x17d && d->p1y == 0x0e7, "centre: off=%d p1 %03x,%03x", d->off, d->p1x, d->p1y);
 
@@ -111,6 +134,7 @@ int main(int argc, char** argv) {
         CHECK(game_px(ux, rx, 496) == mx && game_px(uy, ry, 384) == my && ux >= rx.lo && ux <= rx.hi && uy >= ry.lo && uy <= ry.hi,
               "mouse pixel (%d,%d) -> units %03x,%03x -> game pixel (%d,%d)", mx, my, ux, uy, game_px(ux, rx, 496), game_px(uy, ry, 384));
       }
+      check_off("mouse", sel, i);
     }
   }
   // every pixel through the mouse: walk x 0..495 and y 0..383 one step at a time
@@ -134,7 +158,52 @@ int main(int argc, char** argv) {
         CHECK(cx == mx && cy == my, "walk sel %d: at (%d,%d) want (%d,%d)", sel, cx, cy, mx, my);
         CHECK(game_px(ux, rx, 496) == mx && game_px(uy, ry, 384) == my,
               "walk sel %d pixel (%d,%d): units %03x,%03x are game pixel (%d,%d)", sel, mx, my, ux, uy, game_px(ux, rx, 496), game_px(uy, ry, 384));
+        check_off("walk", mx, my);
       }
+    }
+  }
+  // R961: the off-screen edge through the mouse, across the middle of the
+  // screen both ways (every pixel), and ten screens past each edge
+  for (int sel : {1, 3}) {
+    d->mouse_sel = sel;
+    auto send = [&](int dx, int dy) {        // dy > 0 moves up
+      tg ^= 1;
+      d->ps2_mouse = (uint32_t(tg) << 24) | (uint32_t(dy & 0xff) << 16) | (uint32_t(dx & 0xff) << 8)
+                   | ((dy < 0) << 5) | ((dx < 0) << 4) | 0x08;
+      tick(8);
+    };
+    for (int k = 0; k < 4; k++) send(-255, 0);
+    for (int k = 0; k < 4; k++) send(0, 255);        // (0, 0)
+    send(0, -192);                                    // (0, 192)
+    for (int x = 0; x <= 495; x++) {
+      if (x) send(1, 0);
+      int cx = (sel == 1) ? d->c1x : d->c2x, cy = (sel == 1) ? d->c1y : d->c2y;
+      CHECK(cx == x && cy == 192, "edge walk x: at (%d,%d) want (%d,192)", cx, cy, x);
+      int o = (d->off >> (sel == 1 ? 0 : 1)) & 1;
+      CHECK(o == (x <= 1 || x >= 494), "edge walk x sel %d px %d: off %d", sel, x, o);
+      check_off("edge walk x", sel, x);
+    }
+    for (int k = 0; k < 2; k++) send(-124, 0);       // (247, 192)
+    send(1, 0);                                       // (248, 192)
+    send(0, 192);                                     // (248, 0)
+    for (int y = 0; y <= 383; y++) {
+      if (y) send(0, -1);
+      int cx = (sel == 1) ? d->c1x : d->c2x, cy = (sel == 1) ? d->c1y : d->c2y;
+      CHECK(cx == 248 && cy == y, "edge walk y: at (%d,%d) want (248,%d)", cx, cy, y);
+      int o = (d->off >> (sel == 1 ? 0 : 1)) & 1;
+      CHECK(o == (y <= 1 || y >= 382), "edge walk y sel %d px %d: off %d", sel, y, o);
+      check_off("edge walk y", sel, y);
+    }
+    const int ed[4][2] = {{255, 0}, {-255, 0}, {0, 255}, {0, -255}};
+    for (auto& e : ed) {
+      for (int k = 0; k < 4; k++) send(-e[0], -e[1]);   // back across
+      for (int k = 0; k < 2; k++) send(e[0] ? (e[0] > 0 ? -1 : 1) : 0, 0);
+      send(0, 0);
+      for (int k = 0; k < 20; k++) send(e[0], e[1]);   // ten screens past the edge
+      int o = (d->off >> (sel == 1 ? 0 : 1)) & 1;
+      CHECK(o == 1, "mouse past edge (%d,%d) sel %d: off %d (px %d,%d)", e[0], e[1], sel, o,
+            sel == 1 ? d->c1x : d->c2x, sel == 1 ? d->c1y : d->c2y);
+      check_off("mouse past edge", e[0], e[1]);
     }
   }
 
@@ -204,6 +273,7 @@ int main(int argc, char** argv) {
   d->en = 0; tick(8);
   CHECK(d->c_on == 0, "en low: c_on %d", d->c_on);
 
+  printf("off-screen rule (R961): %ld gun samples off, %ld on\n", n_off, n_on);
   printf("tb_m2_vcop_guns: %ld checks, %ld failures\n", checks, fails);
   printf(fails ? "FAIL\n" : "PASS\n");
   delete d;

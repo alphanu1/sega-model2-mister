@@ -8,7 +8,9 @@
 
 `timescale 1ns/1ps
 
-module tb_m2_vcop2_top (
+module tb_m2_vcop2_top #(
+  parameter bit HD = 1'b0   // R960: The House of the Dead's units (test_m2_hotd_guns)
+) (
   input  logic        clk,
   input  logic        por_n,
   input  logic        rst_n,
@@ -31,7 +33,7 @@ module tb_m2_vcop2_top (
   output logic  [1:0] goff
 );
   logic [7:0] g_in0, g_in1;
-  m2_vcop_guns #(.TICK_LOG2(6), .V2(1'b1)) guns (
+  m2_vcop_guns #(.TICK_LOG2(6), .V2(1'b1), .HD(HD)) guns (
     .clk, .rst_n, .en(1'b1), .play,
     .joy0, .joy1, .ana0, .ana1, .ps2_mouse, .mouse_sel,
     .in0(g_in0), .in1(g_in1),

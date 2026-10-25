@@ -44806,3 +44806,72 @@ middle setting: "O[69:68],Seam fill,Off,Shadows,All" (3 reads as Off);
 dil_on is 2 bits, and the fill latches dil_q = On || (Black only && the quad's
 colour is 0) with the quad -- one 24-bit zero compare, no new state.
 test_m2_fill_dil (On) 3,007 / 0, raster_fill_mip and raster3d PASS.
+
+**R961 -- VIRTUA COP'S OFF-SCREEN BORDER: 2 PX AT EACH EDGE, NOT MAME'S 5%
+(R960'S RULE), AND VIRTUA COP 2'S THE SAME ON THE 2A BUILD. BRANCHES
+gun-edge-main (OFF main) AND gun-edge-2a (OFF model2a), NOT FITTED.**
+
+*2A (gun-edge-2a):* R960 (branch hotd-gun, off model2c; its entry is there)
+found on the board that MAME's lightgun_offscreen_r border -- int(span *
+0.05f), X 24 / Y 19 units = 24 / 19 px on Virtua Cop 2's ranges -- hides the
+crosshair and turns the trigger into a reload 19-24 px short of every edge,
+and changed Virtua Cop 2 and HOTD to the 2-px rule below. This branch
+carries that rule to the 2A build's Virtua Cop 2 (M2_2A_VCOP2_GUN, V2 = 1)
+with hotd-gun's module (plus the Virtua Cop change below): its HD (House of the Dead) mapping comes along as a parameter that
+is off here (Model2.sv leaves HD = 0: every HD term is a constant), and
+test_m2_hotd_guns comes with it. Virtua Cop 2's units are unchanged.
+
+*What was believed (R846):* the off-screen bit is MAME model1io2 fpga_r's
+rule -- any coordinate within int(span * 0.05) of its range's end: X 24
+units, Y 19 (P1_X <= 0x09b or >= 0x25e, P1_Y <= 0x037 or >= 0x196; P2 the
+same on its ranges). The core maps a pixel ~1:1 to a unit, so that is 24 px
+at each side and 19 px top / bottom where the crosshair is hidden (c_on)
+and the trigger reloads: nothing near an edge can be shot. R960 (branch
+hotd-gun) found the same on the board for HOTD and Virtua Cop 2 and fixed
+those; Virtua Cop was left as it was.
+
+*Does the game itself reject coordinates near the edge? No* (MAME 0.289,
+vcopa, fresh NVRAM -- its default calibration, MAME's ranges; the I/O
+board's FPGA reads forced through a Z80 read tap, sim/io/mame_m2_vcop_edge.lua;
+the revolver counted in snapshots every 0.25 s): in play, three shots at
+P1 (0x086, 0x0e6) -- the core's unit for x pixel 2 -- with the off bit
+clear: 6 -> 3 rounds; one shot at (0x083, 0x024) with the bit set: reloaded
+to 6; two at (0x273, 0x0e6) (x pixel 493): 6 -> 4; one at (0x17c, 0x027) (y
+pixel 2): 3; one at (0x17c, 0x1a6) (y pixel 381): 2. Every on-screen edge
+value is a shot; the reload is the off bit alone, as R960 found for HOTD.
+
+*The fix (m2_vcop_guns):* off-screen = a reload, or the crosshair pixel
+within 2 of an edge (x <= 1 or >= 494, y <= 1 or >= 382 on the 496 x 384
+screen) -- edge_q, now for every game; the 5% compares and their constants
+(O1XL / O2XL / O2YL) are gone. The units are unchanged. Game units at the
+edge: P1 x px 0-1 = 0x083-0x085, px 2 = 0x086 (on), px 493 = 0x273 (on), px
+494-495 = 0x274-0x275 (off); P1 y px 2 = 0x027, px 381 = 0x1a6 (on); P2 x px
+2 = 0x083, 493 = 0x270; P2 y px 2 = 0x02a, 381 = 0x1a6. A MiSTer-calibrated
+gun or stick at +-127 lands on pixel 1 / 494 (x) and 1 / 382 (y): off, so
+shooting off the screen reloads; +-126 is on (3 / 492, 3 / 381). The mouse
+clamps to 0..495 / 0..383: its every edge reloads. Kept at 2 px, not wider
+(Ben): a USB light gun reports absolute positions, so a wider zone would
+reload a gun aimed at a target near the edge. The file is now hotd-gun's
+m2_vcop_guns.sv (R960, its V2 / HD parameters off here) with this one
+change; main and model2a carry the same file, and hotd-gun needs only this
+change to match.
+
+*Proof (2A):* test_m2_vcop2_guns (hotd-gun's bench: the off byte through
+the 315-5649 and c_on by the 2-px rule, units as before) 223,916 checks, 0
+failures; test_m2_hotd_guns 191,757, 0 failures (mark within 0.542 px);
+test_m2_vcop_guns and test_m2_vcop_xhair as below. lint_top clean (the 2A
+default build); quartus_map --analyze_file 0 errors.
+*Proof (both):* tb_m2_vcop_guns, extended: the off bit and c_on against the 2-px
+rule at every stick sample (each value of each axis against the edges and
+centre), every one of the 200,000 random mouse packets, the mouse's every
+pixel walk, a walk across the middle of the screen both ways for both guns
+(off exactly at x 0-1 / 494-495, y 0-1 / 382-383), ten screens past each
+edge with the mouse, each axis alone at -128 / -127 / +127 (off) and +-126
+(on); units, buttons and reload checked as before. 828,113 checks, 0
+failures (main's old module: 20,512 failures, all the off bit / c_on;
+its units pass the same checks). test_m2_vcop_xhair PASS. lint_top clean;
+verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
+17.0 --analyze_file 0 errors.
+
+*LEFT:* the fit and the board (Ben). Virtua Cop 2's in-game reload at the
+2-px edge is benched in the core, not run in MAME (as R960).
