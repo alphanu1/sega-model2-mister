@@ -46513,3 +46513,81 @@ f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
 *LEFT:* the fits (Ben); the timing checks R951 and R952 name (the clamp's
 MLAB read into m2_texel_x2's request registers; 2C near the projector /
 clipper states).
+
+**R960 -- THE HOUSE OF THE DEAD'S GUN: THE GAME'S MARK IS NOT MAME'S
+CROSSHAIR, AND MAME'S 5% OFF-SCREEN BORDER COST 18-25 PX AT EVERY EDGE
+(HOTD AND VIRTUA COP 2). BRANCH hotd-gun (OFF model2c), NOT FITTED.**
+
+*What was believed (R924):* HOTD's guns are Virtua Cop 2's driver on MAME
+0.289 INPUT_PORTS_START(hotd)'s ranges (P1_X 173-596, P2_X 163-596, Y
+87-380), each screen pixel mapped linearly onto the range as MAME's
+PORT_CROSSHAIR does -- "not benched against MAME's crosshair mapping". The
+off-screen bit was MAME's lightgun_offscreen_r, int(span * 0.05f) of the
+range at either end, for HOTD and (R870) Virtua Cop 2.
+
+*The board (Ben, Model2C_20261024, HOTD test menu GUN MARK CHECK, a 1080p
+capture; the screen shows the default calibration AD1/AD2 XMIN 173 / 163,
+YMIN 87, XMAX 596, YMAX 380):* the core's crosshair at pixel (38.6, 28.4),
+fed (205, 108), the game's own mark at (64.8, 55.8): +26 / +27 px; crosshair
+(451.2, 334.2), fed (557, 342), mark (420.9, 310.8): -30 / -23 px; centre
+within ~3 px (the hand moving). Running the test menu's gun adjustment on the
+board removed the offset (Ben) -- a calibration matched to the core's
+mapping. The crosshair is never seen within ~25 px of a side or ~18 px of
+the top / bottom (x 31.7-458.5, y 26.7-363.0 over 231 frames; absent in 29
+of them): c_on hides it where the 5% border calls the gun off-screen, and
+there a trigger is a reload, so nothing can be shot near an edge. Virtua Cop
+2 the same travel (Ben); its shots do land on its crosshair.
+
+*MAME, fresh NVRAM (sim/io/mame_m2_hotd_marks.lua, hotd_marks.py; mame
+0.289; gun forced through the channel-2 mux, 289 marks swept over and past
+the calibrated ranges):* the game draws the calibrated min / max on pixels
+x 31.89 / 461.63 and y 33.42 / 351.16 -- the gun adjustment's targets, inset
+from the edges -- linearly between them for both guns (rms 0.5 px, max 1.2
+px) and on past them (units below min / above max draw to the screen's edge:
+P1_X 148 -> 6 px, 622 -> 488 px). So MAME's own crosshair (min / max on 0 /
+496) is off by the same 32 px; the core inherited it. The game has no range
+test of its own: in play, six shots at units (146, 60) -- below the
+calibrated minimum, 4 px from the corner -- with the off bit clear empty the
+magazine 6 -> 0 (fired, not reloads). Its reload is the off bit alone.
+MAME ships no HOTD NVRAM; the board's fresh calibration is the game's own
+default, the same as MAME's.
+
+*The fix (m2_vcop_guns):*
+  * HD: v = (px * K + C) >> 16 with the game's mapping inverted: P1_X K
+    64508 C 9313331 (142..629 over 0..495), P2_X 66033 / 8609339 (131..630),
+    Y 60433 / 3714722 (56..409 over 0..383). A reload holds pixel (0, 0)'s
+    units.
+  * V2 and HD: off-screen = a reload, or the crosshair pixel within 2 of an
+    edge (x <= 1 or >= 494, y <= 1 or >= 382). A MiSTer-calibrated gun at
+    +-127 lands on 1 / 494 (x) and 1 / 382 (y): off, so shooting off the
+    screen still reloads; +-126 is on (3 / 492, 3 / 381). The mouse clamps to
+    0..495 / 0..383, so its edges reload too. Virtua Cop 2's units are
+    unchanged.
+  * Virtua Cop (V2 = 0, main) is unchanged: every term is still a parameter
+    constant (tb_m2_vcop_guns 417,527 checks pass unchanged). It HAS the same
+    short travel (model1io2's 5% border: X 24 units = 24 px, Y 19 = 19 px);
+    the same edge rule would fix it, not done here.
+
+*Proof:* test_m2_hotd_guns (new: tb_m2_vcop2_top with HD, -DHOTD; every
+stick value against the edges and centre, every pixel walked by the mouse
+for both guns, 40,000 random packets a mode, ten screens past each edge,
+buttons, reload through the 315-5649, the mux): every unit the one whose
+game mark is nearest the crosshair (or within 0.02 px of it), worst 0.542 px;
+191,757 checks, 0 failures. test_m2_vcop2_guns: Virtua Cop 2's units
+checked as before, the off byte and c_on by the 2-px rule; 223,916 checks, 0
+failures. Closed loop in MAME: the core's units for crosshair pixels at the
+centre, the four corners and edges 4 px in, and two interior points put
+HOTD's P1 mark at (248, 192) for (248, 192), (4.0, 4.0) for (4, 4), (491.0,
+379.5) for (491, 379), (100, 300) for (100, 300), (399, 61) for (400, 60) --
+within 1 px everywhere (was up to 32). lint_top clean with -DM2_2C
+-DM2_NO_2A_MANX_MOTION, -DM2_2A and the Model 2 build; quartus_map 17.0
+--analyze_file on m2_vcop_guns.sv 0 errors.
+
+*For the board:* a gun calibrated with the old core (Ben's) is now wrong by
+the inverse amount -- restore it with TEST MENU -> GUN SETTING -> PLAYER1 /
+PLAYER2 GUN DEFAULT ADJUSTMENT (173 / 163, 87, 596, 380), or clear the
+backup data. A fresh install needs no calibration.
+
+*NOT DONE:* no fit, no board. Virtua Cop 2's in-game reload near an edge
+under the 2-px rule is benched in the core, not run in MAME. Virtua Cop 1's
+border (main) left as it was.
