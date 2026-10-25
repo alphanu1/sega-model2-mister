@@ -29,6 +29,14 @@
 //  5. THE MUX: every value 8..255 reads the off-screen byte; a machine reset
 //     keeps the mux, power-on clears it to 0 (MAME: set at construction).
 //  6. PLAYER 2's crosshair only in play; player 1's always (R850).
+//
+// R960: THE OFF-SCREEN BIT is the crosshair's pixel within 2 of an edge (x
+// 0-1 / 494-495, y 0-1 / 382-383) or a reload, not MAME's 5% border, which
+// put 18-25 px of every edge out of play. -DHOTD (test_m2_hotd_guns, the top
+// with HD): The House of the Dead's units, against the game's OWN mark (its
+// GUN MARK CHECK at the default calibration, measured in MAME 0.289 and on the
+// board, R960): calibrated min / max on pixels x 31.89 / 461.63, y 33.42 /
+// 351.16; every unit must be the one whose mark is nearest the crosshair.
 #include "Vtb_m2_vcop2_top.h"
 #include "verilated.h"
 #include <cstdio>
@@ -44,14 +52,31 @@ static void tick(int n = 1) {
 #define CHECK(c, ...) do { checks++; if (!(c)) { if (fails++ < 25) { printf("FAIL: " __VA_ARGS__); printf("\n"); } } } while (0)
 
 struct Rng { int lo, hi; };
+// R960: off the screen = within 2 px of an edge
+static bool offp(int x, int y) { return x <= 1 || x >= 494 || y <= 1 || y >= 382; }
+#ifdef HOTD
+#include <cmath>
+// the game's calibration (INPUT_PORTS_START(hotd), its defaults) and where its
+// mark lands: gpx(v) = T0 + (v - lo) * (T1 - T0) / (hi - lo)
+struct Cal { int lo, hi; double t0, t1; };
+static const Cal C1X{173, 596, 31.89, 461.63}, C2X{163, 596, 31.89, 461.63}, CY{87, 380, 33.42, 351.16};
+static double gpx(int v, const Cal& c) { return c.t0 + double(v - c.lo) * (c.t1 - c.t0) / double(c.hi - c.lo); }
+static int near_unit(int px, const Cal& c) {               // the unit whose mark is nearest pixel px
+  int best = 0; double bd = 1e9;
+  for (int v = 0; v < 1024; v++) { double e = std::fabs(gpx(v, c) - px); if (e < bd - 1e-9) { bd = e; best = v; } }
+  return best;
+}
+static const Rng P1X{near_unit(0, C1X), near_unit(495, C1X)}, P1Y{near_unit(0, CY), near_unit(383, CY)},
+                 P2X{near_unit(0, C2X), near_unit(495, C2X)}, P2Y{near_unit(0, CY), near_unit(383, CY)};
+static const Cal* CAL[4] = {&C1X, &CY, &C2X, &CY};
+#else
 static const Rng P1X{137, 630}, P1Y{36, 425}, P2X{134, 627}, P2Y{36, 425};   // INPUT_PORTS_START(vcop2)
-static int border(const Rng& r) { return int(float(r.hi - r.lo) * 0.05f); }  // lightgun_offscreen_r
-static bool offr(int v, const Rng& r) { return v <= r.lo + border(r) || v >= r.hi - border(r); }
 static int mame_px(int v, const Rng& r, int dim) { return (v - r.lo) * dim / (r.hi - r.lo); }
 static int want_unit(int px, const Rng& r, int dim) {      // smallest unit on pixel px or the next
   for (int v = r.lo; v <= r.hi; v++) if (mame_px(v, r, dim) >= px) return v;
   return r.hi;
 }
+#endif
 
 // ---- the i960's side
 static void bus_write(int word, int be, uint32_t data) {
@@ -81,6 +106,7 @@ static void set_ana(int p, int x, int y) {
 }
 
 // the units, the off-screen byte and c_on for the pixels the core aims at
+static double mark_err = 0;   // HOTD: the largest |game mark - crosshair| seen, px
 static void check_aim(const char* what, int a, int b) {
   Gun g = read_guns();
   int px[4] = {d->c1x, d->c1y, d->c2x, d->c2y};
@@ -90,14 +116,23 @@ static void check_aim(const char* what, int a, int b) {
   CHECK(g.hi_ok, "%s %d %d: a high byte above 3", what, a, b);
   for (int k = 0; k < 4; k++) {
     CHECK(q[k] >= r[k]->lo && q[k] <= r[k]->hi, "%s %d %d axis %d: %d outside %d..%d", what, a, b, k, q[k], r[k]->lo, r[k]->hi);
+#ifdef HOTD
+    (void)dims;
+    int w = near_unit(px[k], *CAL[k]);
+    // the nearest, or within 0.02 px of it (a tie under the 16-bit fixed point)
+    CHECK(std::fabs(gpx(q[k], *CAL[k]) - px[k]) <= std::fabs(gpx(w, *CAL[k]) - px[k]) + 0.02,
+          "%s %d %d axis %d: pixel %d read %d want %d (game mark %.2f)", what, a, b, k, px[k], q[k], w, gpx(q[k], *CAL[k]));
+    if (std::fabs(gpx(q[k], *CAL[k]) - px[k]) > mark_err) mark_err = std::fabs(gpx(q[k], *CAL[k]) - px[k]);
+#else
     int w = want_unit(px[k], *r[k], dims[k]);
     CHECK(q[k] == w, "%s %d %d axis %d: pixel %d read %d want %d (MAME pixel %d)", what, a, b, k, px[k], q[k], w,
           mame_px(q[k], *r[k], dims[k]));
     int mp = mame_px(q[k], *r[k], dims[k]);
     CHECK(mp == px[k] || (k % 2 == 0 && mp == px[k] + 1 && (px[k] == 165 || px[k] == 330 || px[k] == 495)),
           "%s %d %d axis %d: MAME draws %d for the core's %d", what, a, b, k, mp, px[k]);
+#endif
   }
-  bool o1 = offr(g.p1x, P1X) || offr(g.p1y, P1Y), o2 = offr(g.p2x, P2X) || offr(g.p2y, P2Y);
+  bool o1 = offp(px[0], px[1]), o2 = offp(px[2], px[3]);
   CHECK(g.off == (0xfc | o1 | (o2 << 1)), "%s %d %d: off byte %02x want %02x", what, a, b, g.off, 0xfc | o1 | (o2 << 1));
   CHECK(d->c_on == unsigned((!o1) | ((!o2) << 1)), "%s %d %d: c_on %d (o1 %d o2 %d)", what, a, b, d->c_on, o1, o2);
 }
@@ -121,7 +156,11 @@ int main(int argc, char** argv) {
   {
     Gun g = read_guns();   // sticks at 0: the centre of the screen
     printf("centre stick: P1 (%d,%d) P2 (%d,%d) off %02x\n", g.p1x, g.p1y, g.p2x, g.p2y, g.off);
+#ifdef HOTD
+    CHECK(g.p1x == near_unit(248, C1X) && g.p1y == near_unit(192, CY) && g.p2x == near_unit(248, C2X) && g.p2y == near_unit(192, CY) && g.off == 0xfc,
+#else
     CHECK(g.p1x == 384 && g.p1y == 231 && g.p2x == 381 && g.p2y == 231 && g.off == 0xfc,
+#endif
           "centre: P1 (%d,%d) P2 (%d,%d) off %02x", g.p1x, g.p1y, g.p2x, g.p2y, g.off);
   }
   // ---------------------------------------------------------- 1. the stick
@@ -170,8 +209,13 @@ int main(int argc, char** argv) {
     }
     // ten screens past each edge, 255 a packet
     struct { int dx, dy; int ux1, uy1, ux2, uy2; const char* n; } edge[4] = {
+#ifdef HOTD
+      {255, 0, P1X.hi, -1, P2X.hi, -1, "right"}, {-255, 0, P1X.lo, -1, P2X.lo, -1, "left"},
+      {0, 255, -1, P1Y.lo, -1, P2Y.lo, "top"}, {0, -255, -1, P1Y.hi, -1, P2Y.hi, "bottom"}};
+#else
       {255, 0, 630, -1, 627, -1, "right"}, {-255, 0, 137, -1, 134, -1, "left"},
       {0, 255, -1, 36, -1, 36, "top"}, {0, -255, -1, 424, -1, 424, "bottom"}};
+#endif
     // (the bottom line, 383, is unit 424: 425 is MAME's pixel 384, below the
     // screen -- Virtua Cop's Y the same; the right column, 495, has no unit of
     // its own and takes 630 / 627, the next pixel's)
@@ -255,6 +299,11 @@ int main(int argc, char** argv) {
     CHECK(d->c_on == unsigned(1 | (pl & 2)), "play %d: c_on %d (R850: P1 always)", pl, d->c_on);
   }
 
+#ifdef HOTD
+  printf("HOTD: units P1_X %d..%d P2_X %d..%d Y %d..%d over the screen; game mark within %.3f px of the crosshair everywhere\n",
+         P1X.lo, P1X.hi, P2X.lo, P2X.hi, P1Y.lo, P1Y.hi, mark_err);
+  CHECK(mark_err <= 0.55, "HOTD: game mark %.3f px from the crosshair", mark_err);
+#endif
   printf("tb_m2_vcop2_guns: %ld checks, %ld failures\n", checks, fails);
   printf(fails ? "FAIL\n" : "PASS\n");
   delete d;
