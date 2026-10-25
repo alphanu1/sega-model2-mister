@@ -44976,8 +44976,10 @@ against MAME's own):*
     edge in its own maths (fetch_bilinear_texel's !wrap clamp takes column
     w-1 for any raw u in [-0.5, 0)) but s32() truncates toward zero and its
     floats stay on the right side: on R955's MAME Lau frame 1304 there is no
-    dot above any tip (zoomed), and 0 pixels anywhere draw from a texel
-    outside their polygon's box. MAME does not show the VF2 dot.
+    dot above any tip (zoomed), and none of its detached green pixels takes
+    its point texel from outside its polygon's box (60 replayed temple-stage
+    frames: 0-1 pixels a frame drawn only by a texel outside the box, none
+    at a far edge). MAME does not show the VF2 dot.
   * The two do not share a mechanism: the VF2 dot is the core's own coordinate
     fault (and R951's / R955's family: a texel from outside the polygon); the
     Pilot Kids specks are drawn the same way by MAME and the core from texels
