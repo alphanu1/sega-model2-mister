@@ -1102,7 +1102,8 @@ int main(int argc, char **argv) {
     // whole path past MAME's projection); colour = the quad's index, untextured,
     // so the PX dump says which quad -- and which window -- owns each pixel.
     // M2_R3D_LIST still names the dump directory (its texture images load).
-    if (const char *qf = std::getenv("M2_R3D_QUADS")) {
+    long qwait_max = 0, qwait_sum = 0;   // R962: cycles a quad waited on q_ready
+    auto push_qfile = [&](const char *qf) {
       FILE *f = std::fopen(qf, "r"); char ln[1024]; std::vector<std::string> L;
       while (f && std::fgets(ln, sizeof ln, f)) if (ln[0] == 'Q') L.push_back(ln);
       if (f) std::fclose(f);
@@ -1111,7 +1112,8 @@ int main(int argc, char **argv) {
         if (std::sscanf(L[i].c_str(), "Q %d %d,%d %d,%d %d,%d %d,%d frac=%x uv=%u,%u %u,%u %u,%u %u,%u tex=%x col=%x z=%x lum=%u oz=%x,%x,%x,%x mz=%u",
               &n, &x[0], &y[0], &x[1], &y[1], &x[2], &y[2], &x[3], &y[3], &frac, &u[0], &v[0], &u[1], &v[1], &u[2], &v[2], &u[3], &v[3],
               &tex, &col, &z, &lum, &oz[0], &oz[1], &oz[2], &oz[3], &mz) != 27) { std::printf("  bad quad line %zu\n", i); continue; }
-        { int g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 200000) tick(); }
+        { long g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 20000000L) tick();   // R962: a stall lasts a draw
+          qwait_sum += g; if (g > qwait_max) qwait_max = g; }
         if (std::getenv("M2_R3D_COARSE")) d->rootp->m2_raster3d__DOT__u_store__DOT__fine = 0;   // R938
         d->q_valid = 1;
         d->q_x0 = x[0]; d->q_y0 = y[0]; d->q_x1 = x[1]; d->q_y1 = y[1]; d->q_x2 = x[2]; d->q_y2 = y[2]; d->q_x3 = x[3]; d->q_y3 = y[3];
@@ -1119,7 +1121,7 @@ int main(int argc, char **argv) {
         d->q_u0 = 0; d->q_v0 = 0; d->q_u1 = 0; d->q_v1 = 0; d->q_u2 = 0; d->q_v2 = 0; d->q_u3 = 0; d->q_v3 = 0;
         d->q_frac = frac; d->q_tex = 0; d->q_moire = (tex >> 11) & 1;
 #ifdef R3D_TEXLUT
-        d->q_col = ((uint32_t(n) & 31) << 11) | (((uint32_t(n) >> 5) & 63) << 5);   // RGB565 in, as Model2.sv packs a flat quad
+        d->q_col = ((uint32_t(n) & 31) << 11) | (((uint32_t(n) >> 5) & 63) << 5) | ((uint32_t(n) >> 11) & 31);   // RGB565 in, as Model2.sv packs a flat quad (R962: index bits 11+ in blue)
         // R951: M2_R3D_QUADSTEX in the 2A configuration -- the quads textured as
         // Model2.sv packs them for TEXLUT (r3d_qcol / r3d_qtex): a textured quad
         // {luma, colour base[9:1]} and {slot, tex[23:12], base[0], tex[10:0]}, the
@@ -1163,6 +1165,24 @@ int main(int argc, char **argv) {
         tick(); ++nq;
         d->q_valid = 0; d->q_end = 0;
       }
+    };
+    // R962: M2_R3D_QUADS2=<ours.txt> -- list A, swapped in and drawing while
+    // the main list (M2_R3D_QUADS) is collected at once behind it: the
+    // collection reaches A's spill long before A's draw is whole, so the
+    // store's hold (in_stall) is what keeps it off A's quads. With
+    // M2_R3D_DUMPA the frame shown is A's, for comparison with A alone.
+    if (const char *qa = std::getenv("M2_R3D_QUADS2")) {
+      push_qfile(qa);
+      { long g = 0; while (d->rootp->m2_raster3d__DOT__pst != 3 && g++ < 2000000) tick(); }
+      std::printf("  R962 list A collected: %u quads (pst %d)\n", (unsigned)d->rootp->m2_raster3d__DOT__u_store__DOT__count[d->rootp->m2_raster3d__DOT__bank],
+                  (int)d->rootp->m2_raster3d__DOT__pst);
+      d->frame_start = 1; tick(); d->frame_start = 0;   // the swap: A draws from here
+      g_draws.clear(); qwait_max = qwait_sum = 0;
+    }
+    if (const char *qf = std::getenv("M2_R3D_QUADS")) {
+      push_qfile(qf);
+      std::printf("  R962 q_ready waits: longest %ld cycles, total %ld; fb_complete %d\n", qwait_max, qwait_sum,
+                  (int)d->rootp->m2_raster3d__DOT__fb_complete);
     } else
     push_all(polys);
     std::printf("  R615: %ld quads pushed, %ld REFUSED by the store (lost)\n", nq, nq_refused);
@@ -1173,7 +1193,7 @@ int main(int argc, char **argv) {
     // one drawn with nothing collected alongside, and it is always clean. This
     // dumps the frame that SHOWS list A -- drawn while B was pushed and sorted
     // above -- to compare with a clean draw of A alone.
-    if (std::getenv("M2_R3D_LIST2") && std::getenv("M2_R3D_DUMPA")) {
+    if ((std::getenv("M2_R3D_LIST2") || std::getenv("M2_R3D_QUADS2")) && std::getenv("M2_R3D_DUMPA")) {   // R962: QUADS2
       const int s0 = d->rootp->m2_raster3d__DOT__fb_show;
       int k = 0;
       for (; k < 16 && d->rootp->m2_raster3d__DOT__fb_show == s0; k++) video_frame(false, &hits);

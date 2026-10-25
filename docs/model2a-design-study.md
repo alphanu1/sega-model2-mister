@@ -44806,3 +44806,105 @@ middle setting: "O[69:68],Seam fill,Off,Shadows,All" (3 reads as Off);
 dil_on is 2 bits, and the fill latches dil_q = On || (Black only && the quad's
 colour is 0) with the quad -- one 24-bit zero compare, no new state.
 test_m2_fill_dil (On) 3,007 / 0, raster_fill_mip and raster3d PASS.
+
+**R962 -- VIRTUA COP 2's RANKING LOSES RANK 5's SCORE BECAUSE THE LIST IS
+2,246 QUADS AND THE STORE HOLDS 2,048: THE STORE REFUSES THE LAST 198, WHICH
+ARE EXACTLY "80000". NOT 2D, NOT DRAW TIME. A LIST NOW SPILLS UP TO 512
+QUADS INTO THE OTHER BANK'S TOP WHILE THAT BANK'S LIST IS DRAWN WHOLE (2A
+ONLY, +1 M10K). NOT FITTED, NOT ON A BOARD.** Branch vc2-rank (off model2a
+0328845), 2026-10-25.
+(Ben, board, Model2A_20261024b: the attract RANKING table; ranks 1-4 whole,
+rank 5 "TOK" drawn but its score only one partial glyph at the far right.)
+
+*What was believed.* R954 saw VCop2's train list at 1,964 of the store's
+2,048 and called an overflow possible but unmeasured. The store's answer to
+overflow since R233 / R769 / R776 is the tiny-quad threshold ("small is far,
+so this drops the right things first") and otherwise refusing the excess --
+the LAST quads submitted. Ben asked whether the ranking was a 2D layer or a
+2D overrun (R906).
+
+*NOW KNOWN (MEASURED; MAME 0.289 m2lod, vcop2 attract, ROM-derived scratch
+outside the tree):*
+  * WHERE. A 150 s attract survey (snapshot a second) puts the ranking at
+    76-90 s; screen frames 4508 on show the table (MAME draws it whole within
+    four frames -- the board's "fills from the bottom" is not in MAME's
+    picture). Walks dumped by the file trigger: walk = screen frame + 2;
+    M2DIFF 3D frame 3880 = screen ~4574.
+  * 3D, NOT 2D. The yellow names and digits are window 13 of the 3D list:
+    1,351 quads, every one at z value 0x7600, submitted AFTER the scene
+    behind them (window 14, the two cops in the car, 897 quads). The
+    RANKING banner, the RANK / NAME / SCORE labels, the badges and INSERT
+    COIN(S) are the 2D layer (absent from MAME's 3D owner map).
+  * THE COUNT. MAME renders 2,219 polygons on the ranking frames (1,038 on
+    the car scene just before). This core's geometry (geodiff 2A: CRTC_Y
+    127, WINKEY, MZX, UVSH, TEXLUT, M2GD_LAT 12) on walks 4510-4602: 2,243-
+    2,249 quads (culled 932, clip in 2,484). Walk time 1,313,880 clk_sys =
+    16.4 ms (bench).
+  * WHAT IS LOST. Through the raster bench at the board's settings (benchbd,
+    2A raster build), walk 4576: "quads 2048 dropped 198". Quads 2048-2247
+    all lie at x 321-449, y 295-331 -- rank 5's score -- and the bench's
+    picture is Ben's grab: "80000" gone but a sliver of its last 0. MAME's
+    own 2,219 polygons through the same bench (textured): dropped 188, the
+    same hole; colour error vs MAME mean 3.55, > 32 on 1.88% of pixels.
+  * Not tiny: 10 of the 2,246 are under 4 px both ways, 9 have zero area. No
+    threshold can make room; the list needs the slots.
+
+*THE CHANGE (m2_quad_store NX, m2_raster3d QNX; Model2.sv .QNX(M2A ? 512 :
+0); FB_DDR3 only).* The two banks are 4,096 slots, and with the framebuffer
+the bank on display is dead once its draw is whole (fb_complete). A list now
+numbers its quads by POSITION; positions 2,048.. live in the OTHER bank,
+counted down from its top. The index arrays hold SLOT CODES {s, address}
+(s: the other bank), so the replay's RAM-to-RAM path gains no arithmetic,
+only a bank select. The sorted order is two-ended the same way; the sort's
+scratch for positions past 2,048 is the other bank's index array from the
+bottom (NX <= NQ/2 keeps the two apart). Only the spilled keys need new
+storage: key_x, 512 x 20.
+  * When the other list is not yet drawn whole, the collecting list stops
+    below that list's spill (2,048 - its excess) and is HELD (q_ready low,
+    registered two quads early), not refused; the hold ends at its
+    fb_complete. Only a swap lowers ofree, and a swap ends the collection.
+  * Past 2,560 the excess is refused as before.
+  * NX = 0 is the store as it was (the Model 2 build: lint -DM2_NO_2A clean).
+
+*CHECKS (benches, all at the board's run-time settings):*
+  * Walk 4576 (owner colours): before dropped 198, the score gone; after
+    2,246 stored, "80000" whole. PIXEL- AND CYCLE-IDENTICAL to the old store
+    rebuilt with NQ 4,096 (PX md5 c66bc8cc..., draw 633,586 cycles both).
+    MAME's polygons textured: 2,236 stored, colour error 3.55 -> 1.53 mean,
+    > 32 1.88% -> 0.56%; the picture matches MAME's.
+  * The hold: list A (2,246, spilled 198) swapped in, list B (the same
+    shifted 7 px) collected at once behind it: B held once for 616,933
+    cycles (A's draw), 0 refused; B's picture equals B drawn alone; A's
+    shown frame equals A drawn alone (PX md5).
+  * An order of magnitude past: a 4,496-quad list alone stores 2,560,
+    refuses 1,932; behind a spilled list it is held, then the same; A intact.
+  * NX 0 and lists under 2,048 with NX 512: identical to the old RTL (PX md5
+    and draw cycles: walk 4576 at NX 0, car scene walk 4462 at NX 512).
+  * test_m2_quad_store (also at NX 512, ofree 0), test_m2_raster3d PASS;
+    lint_top clean (2A and -DM2_NO_2A); lint_idx 112 lines, as before.
+  * quartus_map 17.0 of m2_quad_store alone at the 2A parameters: old 2,252
+    ALMs needed; NX 512 2,208; NX 0 2,104 (noise of the map's estimate,
+    not a saving to bank). RAMs: as before plus key_x (512 x 20, one M10K);
+    the index arrays at 12 bits stay three 2048x5 blocks each. 550 -> 551
+    of 553 M10K expected.
+  * FOUND ON THE WAY: written as one `x <= sel ? ramA[a] : ramB[b]` with a
+    select that depends on the address, Quartus left the index and att
+    arrays as flip-flops ("uninferred due to asynchronous read logic",
+    60,818 / 84,933 ALMs standalone). Each array is now read into its own
+    register and selected after. Verilator cannot see this; only the map.
+
+*COST IN TIME.* The ranking draws in ~1.10 M cycles textured (bench) and the
+walk reaches quad 1,850 (where a list behind a spilled one is held) at
+971,645 cycles; a hold of up to ~0.13 M cycles (~1.6 ms) on such frames,
+INFERRED. The walk is already 1.13 vblanks on the board (x1.2), two vblanks a
+list with or without it. Lists under 1,850 never wait.
+
+*Virtua Cop 1 (#28, Model 2 core):* "heavy slowdown and the boss head
+missing" in the truck scene is this signature (a heavy list losing its
+last-submitted quads) -- NOT MEASURED; the Model 2 core has the same 2,048
+store and FB_DDR3, so QNX would apply there unchanged if a MAME count of
+that scene shows > 2,048.
+
+*LEFT:* the fit (clk_sys: the store's new select muxes after the index and
+att reads, and the write-side two_end on the collection address); the board
+(the ranking whole, the train unchanged).
