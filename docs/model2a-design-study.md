@@ -45070,6 +45070,107 @@ block memory bits 4,580,944 and DSP 99 unchanged.
 *LEFT:* the fit and Ben's eyes (VF2 Lau, Rally's trees, Pilot Kids' window);
 the 2C tree (int-2c) has the same m2_span_tex lines and takes the patch as is.
 
+**R958 -- "ANALOG CONTROL": TWO WHEEL LAYOUTS (WHEEL A / WHEEL B) BESIDE THE
+PAD'S, FOR EVERY DRIVING AND RIDING GAME ON ALL THREE CORES (GitHub #12).**
+
+(Section: §10. Authority: the request itself -- a wheel owner's description of
+what MiSTer Main reports for two kinds of wheel, after Jotego's OutRun core's
+"Analog control" option. No MAME question: the game-side values are the
+existing ADC ranges, 0x20..0xE0 (R835/R837, R862/R887, R928/R933). Model 1
+has no wheel layout to follow.)
+
+*What was there.* R816 / R831: the pedals share the right stick's Y (split by
+sign, O[28] "Pedals" swaps the halves), steering is the paddle, else the left
+stick's X past a dead zone of +-12, else (O[54] "Right stick: Pedals+steer")
+the right stick's X past the same dead zone, else the d-pad's ramp. That fits
+a wheel only if MiSTer maps it onto the right stick. The reporter's wheels
+(the cathoderayblog guide's setup; and newer direct-drive pedal sets such as
+the Logitech RS50) put the wheel on the left stick's X and each pedal on its
+own axis, so neither pedal worked.
+
+*What is added.* O[71:70] "Analog control: Standard / Wheel A / Wheel B".
+O[71:70] is free on main, model2a, model2c, dilk-2a / dil-off-2a (Seam fill,
+O[69:68] / O[68]) and every other local branch (searched: no O[] or status[]
+use above 69 bar hps_io's own status words and O[122:121]); 0 is today's
+behaviour, so a saved config opens on Standard, and 3 (unreachable from the
+OSD) reads as Standard. All of it is in m2_cab_inputs, the one block every
+analog game goes through (main's Daytona / Desert Tank directly; the 2A / 2C
+games through m2_2a_inputs' cab_steer / accel / brake), so it lands once:
+  steering   Wheel A and B: the left stick's X, always, with NO dead zone (a
+             wheel's first degrees are steering, not noise); the right stick
+             never steers (Wheel B's brake is its X; "Right stick" is
+             ignored); the paddle still comes first; the d-pad steers while
+             its left / right is held. "Steering" (O[30:29]) and "Steering
+             smoothing" (O[51:50]) apply unchanged -- same scale, same
+             limiter downstream.
+  Wheel A    accelerator = the left stick's Y, brake = the right stick's Y,
+             each centre released .. full up (-127) fully pressed; the lower
+             half reads released.
+  Wheel B    accelerator = the left stick's Y over the whole axis, -127 (up)
+             released .. +127 (down) fully pressed; brake = the right
+             stick's X, -127 (left) released .. +127 (right) fully pressed.
+             Seven-bit pedal = (v + 127) / 2; -128 reads released.
+  both       a pedal p (0..127) reads 0x20 + p + p/2: the right-stick pedals'
+             own 3/2 scaling (0x20 released, 0xDE full -- the same top a pad
+             reaches today; the 0xE0 rail is the buttons'). "Pedals: Swapped"
+             exchanges the two pedals. The Accel / Brake buttons still give
+             0xE0. The pedal values are registered once (one clk_sys) so the
+             new arithmetic is off the stick -> ADC paths R842 / R934 timed.
+Per game:
+  Daytona USA (both sets), Sega Rally: steering / accelerator / brake as
+             above, nothing else.
+  Desert Tank (R837's one drive pedal and the lever): Wheel A / B count as a
+             wheel, as "Pedals+steer" does -- the further-pressed pedal past
+             the dead zone (12) drives, the accelerator forward and the
+             brake in reverse, setting the lever; the cannon is the
+             d-pad's. Its pedals ARE the cabinet's (HANDLE + ACCEL; the
+             third channel is the turret).
+  Manx TT, Motor Raid (manxtt ports: THROTTLE, BRAKE, BANK): the wheel banks
+             the bike (AN2 = 0xFF - steering, as before), the accelerator
+             pedal is the throttle grip and the brake pedal the brake lever.
+             No special case: the profile already takes the block's three
+             values in those roles.
+  Sky Target (0x18): a flight stick. m2_2a_inputs hands the block Standard
+             for it whatever the OSD says (p_sky), so its STICKX / STICKY are
+             byte for byte as before.
+  Over Rev, STCC (2C, R928 / R933): the block's values through the existing
+             0x20..0xE0 -> 0x00..0xFF widening and Over Rev's PORT_REVERSE.
+             Virtua Cop / VC2 / HOTD (guns) and the digital games: untouched.
+
+*Verified.* tb_m2_cab_inputs (all three branches, identical): Part A, the
+DUT at Standard against the 0f3cbc4 block, 30,000,000 checks, 0
+mismatches; Part B (Desert Tank, R837 model) 320,000,000 / 0; Part D,
+random inputs with Analog control random (Standard / 3 against the 0f3cbc4
+block, Wheel A / B against a model written from the request), 145,662,741
+checks / 0 (5.35 M Wheel A and 5.22 M Wheel B Daytona cycles, 10.8 M
+wheel-model steering checks, 3,980 Desert Tank lever sets to reverse);
+Part E, every axis swept -128..+127 in each wheel mode x Pedals Normal /
+Swapped x every Steering, 50,202 checks / 0, including the request's
+endpoints (released 0x20, full 0xDE, full lock 0x21 / 0xE0 -- -127 gives
+0x21 at 3/4 exactly as Standard does), monotonic pedals, the unused axes
+inert, buttons, d-pad and paddle precedence; Standard and 3 swept over every
+axis x 16 OSD combinations against the 0f3cbc4 block, 327,680 checks, 0
+differences (the default unchanged byte for byte); smoothing (Wheel) on the
+wheel's X slews 10 counts in 10 steps and settles at 0xE0; Desert Tank's
+pedals in A and B. Two mutations (Wheel B's brake read from the right Y; the
+mode decode leaking into Standard) each FAIL it. tb_m2_2a_inputs (2A, 2C):
+Analog control random, every analog profile against the block with the same
+setting, Sky Target against a second block held at Standard; 0 mismatches
+(removing the Sky Target exception: 711,768 mismatches). Quartus 17.0
+analyze_file clean on both RTL files; the new functions constant-folded by
+quartus_map to the bench's values (up(-128) 127, full(-127) 0, full(+127)
+127, full(0) 63, an(127) 0xDE). lint_top clean (2C: -DM2_2C
+-DM2_NO_2A_MANX_MOTION); lint_idx unchanged but for hps_io's CONF_STR
+width (2A's CONF_STR now passes 1,024 bytes, so byte_cnt is a bit wider).
+Not fitted; not on a wheel.
+
+*Open.* Whether MiSTer Main reports the RS50-class pedals exactly as the
+request says (whole axis, -127 released) is the reporter's account, not
+measured here; if a pedal set rests at +127 instead, "Pedals: Swapped" does
+not help (it exchanges pedals, not directions) and a Wheel C would be the
+fix. Wheel B with a pad and no pedals reads half accelerator and half
+brake -- it is for pedal sets only (README says so).
+
 **R959 -- THE PATHS THAT FAIL SEEDS, SHORTENED WITHOUT CHANGING A CYCLE:
 THE SCSP DSP's MICROWORD AND RING ADDRESS, THE SDRAM GRANT'S REGISTERS, THE
 GEOMETRY POOL's ARBITER. EACH PROVEN IDENTICAL (A MITER, OR YOSYS).** Ben:
@@ -45362,3 +45463,91 @@ that scene shows > 2,048.
 *LEFT:* the fit (clk_sys: the store's new select muxes after the index and
 att reads, and the write-side two_end on the collection address); the board
 (the ranking whole, the train unchanged).
+
+**R963 -- A FRAMEBUFFER GRAB FROM THE BOARD (READ-ONLY), AND THE TREE PIXELS
+SPLIT IN TWO: VF2'S CONIFER DOT IS R955'S FAR-EDGE CLASS (NEGZ, NOT YET IN A
+RELEASE); PILOT KIDS' WINDOW SPECKS ARE THE GAME'S OWN SPARSE TEXELS UNDER
+MAME'S ALPHA TEST, WHICH NO THRESHOLD CHANGE REMOVES.** Branch wheel-2a
+(tools only; no RTL change), not fitted.
+(Board, Model2A_20261024b = s1483, which does NOT carry R955's NEGZ: a green
+dot ~4-8 px above a VF2 conifer's tip on Lau's stage, flickering; a green
+pixel a few px from Pilot Kids' window tree; strays near Rally's trees. Ben
+later: stock MAME 0.289 pltkidsa shows the Pilot Kids specks too, and real
+Model 2A hardware shows none of them, "one bug shared by MAME and the core".)
+
+*The tool.* tools/m2-fbgrab.py runs on the MiSTer and only reads /dev/mem
+(O_RDONLY, PROT_READ): both buffers at 0x30000000 / +1 MB (Model2.sv fb_base
+0x06000000 words), 384 lines of 512 32-bit words, {7'd0, painted, RGB888}.
+Nothing the HPS can read says which buffer is on show, so it is inferred:
+a buffer that changes between two copies is being drawn and the other is on
+screen (m2_raster3d fb_draw / fb_show); with neither changing, the last to
+change is the newest frame. A copy is kept only if a second copy read
+straight after it is identical; a burst (-n N) keeps each distinct complete
+frame once, so a flickering pixel shows as a frame with it next to one
+without. -r y0:y1 narrows the lines when a full copy is too slow for a
+60 fps game. tools/m2-fb2png.py decodes exactly as the scanout shows
+(R[23:19] G[15:10] B[7:3] widened as Model2.sv r3d_r8/g8/b8; unpainted in
+a key colour), plus the painted mask, frame-to-frame diffs and word dumps
+(--px). The raster bench writes the same files (M2_R3D_FBRAW). VERIFIED:
+Pilot Kids frame 9000 (MAME's polygons, board settings): the converted
+buffer against the bench's scanout, 160,075 painted pixels, 0 painted-flag
+and 0 colour mismatches; the grab logic run against a file (--mem) with the
+buffers planted in it, both buffers and a 20-line burst returned exact.
+NOT run on the board (Ben runs it).
+
+*The tree pixels, measured (MAME 0.289 m2lod M2MIP dumps -- every textured
+pixel's 1/z, u/z, v/z, level and texel -- replayed through a transcription
+of model2rd.ipp's fetch_bilinear_texel<true> and the mip blend: 12,388
+translucent textured pixels of Pilot Kids frame 9000, 0 colour mismatches
+against MAME's own):*
+  * PILOT KIDS: every detached green pixel of the window tree (texture
+    448,192 in sheet 0, 128 x 128, wrap on both axes) in frames 8995-9004
+    takes ALL its opaque texels from inside the polygon's own texel box. None
+    comes from a wrap, a clamp, a mirror or a far edge. They are texels the
+    texture holds: 9 opaque texels with no opaque 8-neighbour, e.g. (92,25)
+    = 5 drawn at (110,76)-(110,77) of frame 9000 with ONE of its four taps
+    opaque (alpha 0.67 >= 1/2), and dozens with one or two. MAME's 4bpp
+    nibble order is the right one (of the 24 orders of a 16-bit word's four
+    texels, MAME's gives the smoothest texture and the fewest lone texels: 9,
+    the next 12). Under ANY of four alpha rules -- MAME's (>= 1/2), > 3/4,
+    two or more of the four taps opaque, all four opaque -- the tree layer of
+    frames 8996 / 9000 / 9003 keeps 0-8 pixels with no painted neighbour
+    (all four: 4-8, more than MAME's 2-6, because eroding a sparse fringe
+    leaves new fragments). A stricter test is not "the hardware rule that
+    removes them"; it removes nothing reliably and erodes 1-14% of the tree.
+    If real hardware draws none, the difference is elsewhere (its filter, or
+    the texture's luma on a CRT) and needs a real-hardware picture of the
+    same moment to find -- not settled here.
+  * VF2: THE DOT IS WHERE THE PLANE'S TOP EDGE IS. The conifer planes
+    (h0 6013 / 6293, 256 x 128, wrap off) run u 0 to 228.6 from the top;
+    the canopy's tip is at u ~22 (texture rows 54-72) and the trunk is in
+    columns 240-255, rows 56-71 -- i.e. ON THE TREE'S AXIS. On MAME's Lau
+    frames (R955's 1304 / 2704 / 4104) the u = 0 edge lies 8-19 px above the
+    tip on screen (8-12 px for the distant trees). A top-edge pixel whose u
+    goes a hair negative takes column 255 at its v -- the trunk when v is
+    56-71, so the dot lands centred above the tip, green because the texture
+    is luma on a green polygon, and flickers because u's sign there is a
+    knife edge. That is R955's fault (a negative u/z saturated to 4095.996),
+    fixed by NEGZ on branch tree-px -- not in 20261024b. MAME has the same
+    edge in its own maths (fetch_bilinear_texel's !wrap clamp takes column
+    w-1 for any raw u in [-0.5, 0)) but s32() truncates toward zero and its
+    floats stay on the right side: on R955's MAME Lau frame 1304 there is no
+    dot above any tip (zoomed), and none of its detached green pixels takes
+    its point texel from outside its polygon's box (60 replayed temple-stage
+    frames: 0-1 pixels a frame drawn only by a texel outside the box, none
+    at a far edge). MAME does not show the VF2 dot.
+  * The two do not share a mechanism: the VF2 dot is the core's own coordinate
+    fault (and R951's / R955's family: a texel from outside the polygon); the
+    Pilot Kids specks are drawn the same way by MAME and the core from texels
+    inside the polygon.
+*How established:* MAME pltkidsa frames 8995-9004 (M2MIP, r943 build) and
+vf2 (R955's M2DIFF dumps, r869 build -- attract runs are not repeatable:
+r943 and a second r869 run both landed on the temple stage, frames
+1200-1399 with no conifer). Scripts in the scratchpad (tp2/mipan.py,
+rules2.py, m2det.py); data in sm2-builds/tree-px2-data.
+*Left:* fit NEGZ (tree-px) and look again at VF2 Lau and Rally with it --
+then use m2-fbgrab.py on the board with the dot on screen: a grab says
+whether the pixel is in the 3D layer, its exact colour, and with the bench
+which polygon and texel painted it. For Pilot Kids, a real-hardware picture
+of the window tree is the only thing that can say what the hardware does
+with a lone opaque texel.

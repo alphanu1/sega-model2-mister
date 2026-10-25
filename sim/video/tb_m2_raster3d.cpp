@@ -1220,6 +1220,26 @@ int main(int argc, char **argv) {
     g_rec = !FBM;   // R650: with the framebuffer the draw above was recorded
     px_dump = std::getenv("M2_R3D_PXDUMP") != nullptr;
     video_frame(true, &hits);            // the frame that displays it
+    // R963: M2_R3D_FBRAW=<prefix> -- both framebuffers as the board holds them
+    // in DDR3 (what tools/m2-fbgrab.py saves there): 384 lines of 512 32-bit
+    // little-endian words, the even pixel in a 64-bit word's low half. A word
+    // never written is 0xFFFFFFFF, as the DDR3 model reads it. <prefix>_b0.raw,
+    // <prefix>_b1.raw; the buffer on show is printed.
+    if (FBM && std::getenv("M2_R3D_FBRAW")) {
+      const std::string pre = std::getenv("M2_R3D_FBRAW");
+      for (int b = 0; b < 2; b++) {
+        FILE *fr = std::fopen((pre + "_b" + std::to_string(b) + ".raw").c_str(), "wb");
+        for (uint32_t a = uint32_t(b) << 17; fr && a < (uint32_t(b) << 17) + 384u * 256u; a++) {
+          const uint64_t w = g_ddr.count(a) ? g_ddr[a] : ~0ull;
+          unsigned char by[8];
+          for (int k = 0; k < 8; k++) by[k] = (unsigned char)(w >> (8 * k));
+          std::fwrite(by, 1, 8, fr);
+        }
+        if (fr) std::fclose(fr);
+      }
+      std::printf("  R963 FBRAW: %s_b0.raw %s_b1.raw, show %d\n", pre.c_str(), pre.c_str(),
+                  (int)d->rootp->m2_raster3d__DOT__fb_show);
+    }
     if (std::getenv("M2_R3D_IL")) video_frame(true, &hits);   // R682: and its other field
     px_dump = false;
     if (FBM) std::printf("  R640 FB state: complete %d shown_ok %d show %d draw %d busy %d fill_band %d cst %d pixels %u clear_req %d clear_busy %d dvalid %d pst %d\n",

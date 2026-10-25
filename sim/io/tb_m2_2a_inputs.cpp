@@ -104,7 +104,7 @@ static Want want_now(int game, bool motion) {
     w.in1 = lo(b(j0, 12) << 4 | b(j0, 13) << 5);
     w.in2 = (game == G_MANX && motion) ? (t->pe == 0x3d ? 0xce : 0xcd) : 0xff;   // R892
     w.an2 = 0xff - t->c_steer;
-    if (game == G_SKY) { w.an0 = sky_y(t->joy_analog); w.an1 = 0xff; }
+    if (game == G_SKY) { w.an0 = sky_y(t->joy_analog); w.an1 = 0xff; w.an2 = 0xff - t->c0_steer; }   // R958: Standard always
     else               { w.an0 = t->c_accel; w.an1 = t->c_brake; }
   } else if (game == G_ZG) {   // Zero Gunner (and R887: Pilot Kids, the same order) -- cdd58a7's model, verbatim
     w.in0 = lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 8) << 2 | b(j0, 9) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5);
@@ -138,6 +138,7 @@ static void gear_edge() {
 
 static uint64_t per_game[G_N] = {}, gear_moves = 0, gear_seen[5] = {0, 0, 0, 0, 0};
 static uint64_t manx_ce = 0, manx_cd = 0;   // R892: Manx TT cycles answered 0xCE / 0xCD
+static uint64_t per_game_wheel[G_N] = {}, sky_wdiff = 0, sky_skip = 0;   // R958
 
 static void cmp(const char *n, int game, uint64_t cyc, int got, int want) {
   ++checks;
@@ -152,12 +153,24 @@ int main(int argc, char **argv) {
   t = new Vtb_m2_2a_inputs_top;
   t->clk = 0; t->rst_n = 0; t->game = 0;
   t->joystick_0 = 0; t->joystick_1 = 0; t->joy_analog = 0; t->joy_ranalog = 0; t->joy_analog_1 = 0; t->paddle = 0;
-  t->st_pedswap = 0; t->st_ssens = 0; t->st_ssm = 0; t->st_rsteer = 0; t->pe = 0xff;
+  t->st_pedswap = 0; t->st_ssens = 0; t->st_ssm = 0; t->st_rsteer = 0; t->st_wheel = 0; t->pe = 0xff;
   for (int i = 0; i < 4; ++i) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
   t->rst_n = 1; gear = 0;
   int game = 0;
   for (uint64_t c = 0; c < N; ++c) {
-    if (rnd(100000) == 0) { game = rnd(G_N); t->game = game_id(game); }   // the MRA changes the game (quasi-static)
+    static int sky_sw = 0;       // R958: clocks left in a switch to or from Sky Target
+    if (sky_sw) --sky_sw;
+    if (rnd(100000) == 0) {
+      int g2 = rnd(G_N);
+      // R958: Sky Target forces Standard inside the block, so a switch to or
+      // from it changes the block's mode under it: the steering limiter's
+      // history differs from the bench's reference block's. A real switch is
+      // an MRA load, which holds the game in reset while the mode settles --
+      // the bench holds it 8 clocks and skips the analog channels for them.
+      if ((g2 == G_SKY) != (game == G_SKY)) sky_sw = 8;
+      game = g2;
+      t->game = game_id(game);   // the MRA changes the game (quasi-static)
+    }
     if (rnd(24) == 0) t->joystick_0 ^= 1u << rnd(16);
     if (rnd(24) == 0) t->joystick_1 ^= 1u << rnd(16);
     if (rnd(2000) == 0) t->joy_analog = uint16_t(rng());
@@ -165,10 +178,11 @@ int main(int argc, char **argv) {
     if (rnd(2000) == 0) t->joy_analog_1 = uint16_t(rng());   // R879
     t->jr0 = t->joystick_0 | adir(t->joy_analog); t->jr1 = t->joystick_1 | adir(t->joy_analog_1);
     if (rnd(3000) == 0) t->paddle = (rnd(3) == 0) ? uint8_t(rng()) : 0;
-    if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); }
+    if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); t->st_wheel = rnd(4); }
     if (rnd(64) == 0)   // R892: PE, the game's motion command -- 0x3D a third of the time, its neighbours often
       t->pe = rnd(3) == 0 ? 0x3d : rnd(3) == 0 ? (0x3d ^ (1 << rnd(8))) : uint8_t(rng());
     if (rnd(500000) == 0) t->rst_n = 0; else if (!t->rst_n && rnd(8) == 0) t->rst_n = 1;
+    if (sky_sw) t->rst_n = 0;   // R958
     if (!t->rst_n) { gear = 0; gup_d = 0; gdn_d = 0; }   // asynchronous in the RTL
     t->eval();
     Want w = want_now(game, true), wn = want_now(game, false);
@@ -178,6 +192,8 @@ int main(int argc, char **argv) {
     if (gear != g0) ++gear_moves;
     t->clk = 1; t->eval(); t->clk = 0; t->eval();
     ++per_game[game];
+    if (t->st_wheel == 1 || t->st_wheel == 2) ++per_game_wheel[game];   // R958
+    if (game == G_SKY && t->st_wheel && t->c_steer != t->c0_steer) ++sky_wdiff;
     if (game == G_RALLY) ++gear_seen[g0];
     if (game == G_VF2) {
       cmp("in0", game, c, t->in0, t->r_in0);
@@ -189,6 +205,8 @@ int main(int argc, char **argv) {
       cmp("in1", game, c, t->in1, w.in1);
       cmp("in2", game, c, t->in2, w.in2);
     }
+    if (sky_sw && (w.an0 != t->an0 || w.an1 != t->an1 || w.an2 != t->an2)) ++sky_skip;   // R958: the switch's reset
+    if (sky_sw) { w.an0 = t->an0; w.an1 = t->an1; w.an2 = t->an2; wn.an0 = t->n_an0; wn.an1 = t->n_an1; wn.an2 = t->n_an2; }
     cmp("an0", game, c, t->an0, w.an0);
     cmp("an1", game, c, t->an1, w.an1);
     cmp("an2", game, c, t->an2, w.an2);
@@ -207,6 +225,11 @@ int main(int argc, char **argv) {
               (unsigned long long)gear_seen[2], (unsigned long long)gear_seen[3], (unsigned long long)gear_seen[4]);
   std::printf("  Manx TT's motion base (R892): %llu cycles answered 0xCE, %llu 0xCD\n",
               (unsigned long long)manx_ce, (unsigned long long)manx_cd);
+  std::printf("  R958 Analog control Wheel A / B cycles per game:");
+  for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game_wheel[g], g + 1 < G_N ? "," : "\n");
+  std::printf("  Sky Target in a wheel mode: %llu cycles where the wheel-mode block's steering differs and Sky Target kept Standard's\n",
+              (unsigned long long)sky_wdiff);
+  std::printf("  (%llu clocks skipped in the sync after a switch to or from Sky Target)\n", (unsigned long long)sky_skip);
   std::printf("  %llu mismatches\n%s\n", (unsigned long long)mism, mism ? "FAIL" : "PASS");
   delete t;
   return mism ? 1 : 0;

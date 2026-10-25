@@ -12,6 +12,8 @@
 // ANALOG, GUN); the bench drives IDs, the new games' included.
 // R892: MOTION (Manx TT's motion base on PD from PE) -- dut has it, dut_nm
 // (MOTION 0) is the build without it; both are checked.
+// R958: st_wheel (Analog control) on every copy; cab0 is the block at
+// Standard, Sky Target's reference.
 
 `timescale 1ns/1ps
 
@@ -30,6 +32,7 @@ module tb_m2_2a_inputs_top (
   input  logic  [1:0] st_ssens,
   input  logic  [1:0] st_ssm,
   input  logic        st_rsteer,
+  input  logic  [1:0] st_wheel,       // R958: Analog control
   input  logic  [7:0] pe,             // R892: the 315-5649's PE latch
   output logic  [7:0] n_in0, output logic [7:0] n_in1, output logic [7:0] n_in2,   // R892: MOTION 0
   output logic  [7:0] n_an0, output logic [7:0] n_an1, output logic [7:0] n_an2,
@@ -37,15 +40,16 @@ module tb_m2_2a_inputs_top (
   output logic  [7:0] an0, output logic [7:0] an1, output logic [7:0] an2,
   output logic  [7:0] r_in0, output logic [7:0] r_in1, output logic [7:0] r_in2,
   output logic  [7:0] c_in1, output logic [7:0] c_steer,
-  output logic  [7:0] c_accel, output logic [7:0] c_brake
+  output logic  [7:0] c_accel, output logic [7:0] c_brake,
+  output logic  [7:0] c0_steer        // R958: the block at Standard (Sky Target's)
 );
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1)) dut (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
-    .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
+    .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel,
     .gun_in1(8'hFF), .pe, .in0, .in1, .in2, .an0, .an1, .an2);
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b0)) dut_nm (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
-    .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
+    .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel,
     .gun_in1(8'hFF), .pe, .in0(n_in0), .in1(n_in1), .in2(n_in2), .an0(n_an0), .an1(n_an1), .an2(n_an2));
 
   // Model2.sv at 9fb631d, g_5649 -- verbatim
@@ -64,6 +68,12 @@ module tb_m2_2a_inputs_top (
   wire [7:0] c_in0;
   m2_cab_inputs #(.SYS_MHZ(80)) cab (
     .clk, .rst_n, .is_desert(1'b0), .joystick_0, .joy_analog, .joy_ranalog, .paddle,
-    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer,
+    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel,
     .in0(c_in0), .in1(c_in1), .steer(c_steer), .accel(c_accel), .brake(c_brake));
+  // R958: the same block at Analog control Standard -- what Sky Target must see
+  wire [7:0] c0_in0, c0_in1, c0_accel, c0_brake;
+  m2_cab_inputs #(.SYS_MHZ(80)) cab0 (
+    .clk, .rst_n, .is_desert(1'b0), .joystick_0, .joy_analog, .joy_ranalog, .paddle,
+    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel(2'd0),
+    .in0(c0_in0), .in1(c0_in1), .steer(c0_steer), .accel(c0_accel), .brake(c0_brake));
 endmodule
