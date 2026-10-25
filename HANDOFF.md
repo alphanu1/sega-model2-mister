@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-25: combo-2a (off model2a 289f7ea) -- R954 / R955 / R958 / R959 / R960-R962 / R963 merged for fitting. LOCAL, NOT PUSHED, NOT FITTED
+
+  * Worktree sm2-builds/combo-2a, branch combo-2a. Merged: timing-2a
+    (R959), spcull-2a (R954), negz-2a (R955), vc2-rank (R962), gun-edge-2a
+    (R960/R961), wheel-2a (R958, R963). Study: "R954-R963, INTEGRATED".
+  * One RTL conflict: m2_raster3d u_spantex's parameter list (SPCULL and NEGZ
+    on the same line) -- both kept. Makefile test list: NEGZ and HOTD benches
+    both in. Docs keep both sides, R-entries in order after R957.
+  * lint_top clean (2A, M2_NO_2A); lint_idx 108 (model2a 111); analyze_file 0
+    errors; make test exit 0; DSP miter 0 differing; sdram_eq / pool_eq
+    PROVEN. quartus_map: 38,977 ALMs needed, 4,601,424 bits (+1 M10K, key_x:
+    551 / 553 expected), 99 DSP.
+  * Next: Ben fits; then the board (VCop 2 train speed and ranking score,
+    VF2 tree dots, gun edges, wheel modes, and every other 2A game unchanged).
+
 ## 2026-10-25: Model2_20261025 released -- R952 / R951 / the interpolator on the Model 2 core (R956)
 
   * room-main merged into main (8b247f8): the room savings (40,372 -> 38,944

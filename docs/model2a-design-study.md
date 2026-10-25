@@ -45551,3 +45551,37 @@ whether the pixel is in the 3D layer, its exact colour, and with the bench
 which polygon and texel painted it. For Pilot Kids, a real-hardware picture
 of the window tree is the only thing that can say what the hardware does
 with a lone opaque texel.
+
+**R954-R963, INTEGRATED: combo-2a (2026-10-25), off model2a 289f7ea, for
+fitting.** Six finished branches merged by hand: timing-2a (R959: SCSP DSP
+microword / ring address, m2_sdram grant registers, m2_fp_pool one-hot
+winners), spcull-2a (R954: SPCULL on for 2A), negz-2a (R955: NEGZ, a
+negative u/z is 0), vc2-rank (R962: quad store spill, QNX 512 on 2A),
+gun-edge-2a (R960 / R961: Virtua Cop / Virtua Cop 2 gun off-screen at the
+last 2 px, m2_vcop_guns shared) and wheel-2a (R958: Analog control Wheel A /
+B on O[71:70]; R963: the framebuffer grab tools). One RTL conflict:
+m2_raster3d's u_spantex parameter list, where SPCULL and NEGZ were both
+added to the same line -- both kept. Seam fill O[69:68] and Analog control
+O[71:70] do not overlap. The R959 files are byte-identical to timing-2a's,
+so its proofs carry over; rerun here anyway.
+  * lint_top clean (2A and -DM2_NO_2A); lint_idx 108 lines against model2a's
+    111 (the three m2_sdram selects R959 removed; otherwise only hps_io's
+    CONF_STR width); Quartus 17.0 analyze_file 0 errors on Model2.sv and the
+    nine changed RTL files.
+  * make test exit 0 (87 benches). test_m2_span_tex_negz 7,226 / 0,
+    test_m2_span_tex_ftb 17 / 0, test_m2_quad_store 23 / 0 (and at NX 512,
+    ofree 0, 23 / 0), test_m2_raster3d 40 / 0, test_m2_vcop2_guns 223,916 /
+    0, test_m2_vcop_guns 828,113 / 0, test_m2_hotd_guns 191,757 / 0,
+    test_m2_cab_inputs PASS (wheel sweep 50,202 / 0, Standard against
+    0f3cbc4 327,680 / 0), test_m2_2a_inputs 246,859,179 checks / 0,
+    test_m2_fill_dil 3,007 / 0.
+  * SCSP DSP miter (old = model2a): DSP_RANDOM 100, 112,663,419 cycles, 0
+    differing, invariants 0. sdram_eq 2a PROVEN (2,493 cells), pool_eq NC 4
+    PROVEN (2,554 cells).
+  * quartus_map 17.0: 38,977 ALMs needed (s1483 38,986), 48,078 registers,
+    4,601,424 block memory bits (s1483 4,580,944: key_x 512 x 20, +10,240,
+    one M10K; the five idx arrays 11 -> 12 bits, still three 2048 x 5 blocks
+    each, +10,240 bits, no block), 99 DSP. Expected 551 / 553 M10K. Every
+    quad store array inferred as M10K.
+  * Not checked in the combined tree: the board, and timing (R959's paths and
+    R962's new muxes on clk_sys are unfitted together).
