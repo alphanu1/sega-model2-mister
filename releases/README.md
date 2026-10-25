@@ -214,6 +214,9 @@ ROM sets: MAME 0.289.
 
 ### Known bugs
 
+- **Virtua Cop 2: shots don't land on the crosshair?** Reset the game's
+  settings to their defaults in its test menu, then save (OSD, Save
+  settings). That fixes the gun calibration.
 - **Manx TT**'s deluxe cabinet's extra sound board isn't emulated, so a few
   extra sounds are missing.
 - **A stray green pixel near some trees** (Sega Rally, Virtua Fighter 2's
@@ -265,7 +268,7 @@ Fighter 2 at the default 80%:
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261023b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261025.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -304,7 +307,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261023b.rbf` has the md5 `152243678f698d14d33c8e43f295e516`.
+**Check you're running the right file.** `Model2_20261025.rbf` has the md5 `9d181aec9309718fbac8270b07f15c23`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -338,6 +341,16 @@ anything you find.
 
 ### New in this release
 
+- **Cleaner sound.** The sound board runs at about 44.6 kHz and MiSTer's
+  audio output at 48 kHz; the core now smooths between samples instead of
+  repeating them, which removes the tinny, fizzy edge. (`Model2_20261025`.)
+- **Cleaner texture edges in Daytona.** A polygon's edge pixels could pick
+  up a texel from just outside its own texture; they are now kept inside it.
+  (`Model2_20261025`.)
+- **More room in the FPGA.** Parts of the chip that did the same job side
+  by side now share one copy, checked clock for clock against the old
+  design: about 1,400 logic blocks freed, nothing removed or changed in how
+  the games run. (`Model2_20261025`.)
 - **15 kHz: Virtua Cop and Desert Tank no longer upset picky CRTs.** These
   two games draw a new picture every second frame, and when they slipped a
   frame the 15 kHz converter jumped its line timing to catch up, which some
