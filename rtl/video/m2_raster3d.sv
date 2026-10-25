@@ -152,6 +152,11 @@ module m2_raster3d #(
   // store that is 197 bits a bank against 195: one M10K a bank more; the
   // span queue 278 of its 280. 0: q_uvs is ignored, nothing is stored.
   parameter bit UVSH = 1'b0,
+  // R962: the quad store's spill (m2_quad_store NX): a list may run NQX
+  // quads past a bank into the other bank's top while that bank's list is
+  // drawn whole. FB_DDR3 only (the band path replays the other bank every
+  // frame). 0: 2,048 a list, as before.
+  parameter int unsigned QNX = 0,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 27 : 24
 ) (
@@ -457,7 +462,9 @@ module m2_raster3d #(
   // poly_list_index before the walk's first polygon). One cycle later the
   // clear is done and the quad lands in slot 0.
   logic swap_d;   // the store's clear (below)
-  assign q_ready = (pst == P_COLLECT) && !swap_d;
+  // R962: and not while the store holds the list at the spill's edge.
+  logic qs_stall, qs_ofree;
+  assign q_ready = (pst == P_COLLECT) && !swap_d && !qs_stall;
   wire   q_take  = q_valid && q_ready;
 
   // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
@@ -481,9 +488,11 @@ module m2_raster3d #(
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
-                  .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(STW)) u_store (   // R940: STW   // R607, R626, R828c, R867
+                  .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(STW),
+                  .NX(FB_DDR3 ? QNX : 0)) u_store (   // R962   // R940: STW   // R607, R626, R828c, R867
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
+    .ofree(qs_ofree), .in_stall(qs_stall),   // R962
     .in_valid(q_take),
     .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
     .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
@@ -960,6 +969,10 @@ module m2_raster3d #(
   logic fb_draw, fb_show, fb_shown_ok, fb_complete, fb_busy;
   wire swap = frame_start && (pst == P_READY) && !(FB_DDR3 && fb_busy);
   assign list_hold = FB_DDR3 && (pst == P_READY) && fb_busy && !fb_test;   // R652; R653
+  // R962: the replay bank's list is done with -- none yet, drawn whole, or
+  // the self-test drawing nothing. Only a swap lowers it, and the swap ends
+  // the collection that could have spilled.
+  assign qs_ofree = !dvalid || fb_complete || fb_test;
   logic tp_done;   // R653: the self-test generator's frame is whole
   logic [2:0] tp_show_fid;   // R656: the frame number of the frame on show
   always_ff @(posedge clk or negedge rst_n) begin
