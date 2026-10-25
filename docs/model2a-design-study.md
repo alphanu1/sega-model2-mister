@@ -44907,3 +44907,89 @@ measured here; if a pedal set rests at +127 instead, "Pedals: Swapped" does
 not help (it exchanges pedals, not directions) and a Wheel C would be the
 fix. Wheel B with a pad and no pedals reads half accelerator and half
 brake -- it is for pedal sets only (README says so).
+
+**R963 -- A FRAMEBUFFER GRAB FROM THE BOARD (READ-ONLY), AND THE TREE PIXELS
+SPLIT IN TWO: VF2'S CONIFER DOT IS R955'S FAR-EDGE CLASS (NEGZ, NOT YET IN A
+RELEASE); PILOT KIDS' WINDOW SPECKS ARE THE GAME'S OWN SPARSE TEXELS UNDER
+MAME'S ALPHA TEST, WHICH NO THRESHOLD CHANGE REMOVES.** Branch wheel-2a
+(tools only; no RTL change), not fitted.
+(Board, Model2A_20261024b = s1483, which does NOT carry R955's NEGZ: a green
+dot ~4-8 px above a VF2 conifer's tip on Lau's stage, flickering; a green
+pixel a few px from Pilot Kids' window tree; strays near Rally's trees. Ben
+later: stock MAME 0.289 pltkidsa shows the Pilot Kids specks too, and real
+Model 2A hardware shows none of them, "one bug shared by MAME and the core".)
+
+*The tool.* tools/m2-fbgrab.py runs on the MiSTer and only reads /dev/mem
+(O_RDONLY, PROT_READ): both buffers at 0x30000000 / +1 MB (Model2.sv fb_base
+0x06000000 words), 384 lines of 512 32-bit words, {7'd0, painted, RGB888}.
+Nothing the HPS can read says which buffer is on show, so it is inferred:
+a buffer that changes between two copies is being drawn and the other is on
+screen (m2_raster3d fb_draw / fb_show); with neither changing, the last to
+change is the newest frame. A copy is kept only if a second copy read
+straight after it is identical; a burst (-n N) keeps each distinct complete
+frame once, so a flickering pixel shows as a frame with it next to one
+without. -r y0:y1 narrows the lines when a full copy is too slow for a
+60 fps game. tools/m2-fb2png.py decodes exactly as the scanout shows
+(R[23:19] G[15:10] B[7:3] widened as Model2.sv r3d_r8/g8/b8; unpainted in
+a key colour), plus the painted mask, frame-to-frame diffs and word dumps
+(--px). The raster bench writes the same files (M2_R3D_FBRAW). VERIFIED:
+Pilot Kids frame 9000 (MAME's polygons, board settings): the converted
+buffer against the bench's scanout, 160,075 painted pixels, 0 painted-flag
+and 0 colour mismatches; the grab logic run against a file (--mem) with the
+buffers planted in it, both buffers and a 20-line burst returned exact.
+NOT run on the board (Ben runs it).
+
+*The tree pixels, measured (MAME 0.289 m2lod M2MIP dumps -- every textured
+pixel's 1/z, u/z, v/z, level and texel -- replayed through a transcription
+of model2rd.ipp's fetch_bilinear_texel<true> and the mip blend: 12,388
+translucent textured pixels of Pilot Kids frame 9000, 0 colour mismatches
+against MAME's own):*
+  * PILOT KIDS: every detached green pixel of the window tree (texture
+    448,192 in sheet 0, 128 x 128, wrap on both axes) in frames 8995-9004
+    takes ALL its opaque texels from inside the polygon's own texel box. None
+    comes from a wrap, a clamp, a mirror or a far edge. They are texels the
+    texture holds: 9 opaque texels with no opaque 8-neighbour, e.g. (92,25)
+    = 5 drawn at (110,76)-(110,77) of frame 9000 with ONE of its four taps
+    opaque (alpha 0.67 >= 1/2), and dozens with one or two. MAME's 4bpp
+    nibble order is the right one (of the 24 orders of a 16-bit word's four
+    texels, MAME's gives the smoothest texture and the fewest lone texels: 9,
+    the next 12). Under ANY of four alpha rules -- MAME's (>= 1/2), > 3/4,
+    two or more of the four taps opaque, all four opaque -- the tree layer of
+    frames 8996 / 9000 / 9003 keeps 0-8 pixels with no painted neighbour
+    (all four: 4-8, more than MAME's 2-6, because eroding a sparse fringe
+    leaves new fragments). A stricter test is not "the hardware rule that
+    removes them"; it removes nothing reliably and erodes 1-14% of the tree.
+    If real hardware draws none, the difference is elsewhere (its filter, or
+    the texture's luma on a CRT) and needs a real-hardware picture of the
+    same moment to find -- not settled here.
+  * VF2: THE DOT IS WHERE THE PLANE'S TOP EDGE IS. The conifer planes
+    (h0 6013 / 6293, 256 x 128, wrap off) run u 0 to 228.6 from the top;
+    the canopy's tip is at u ~22 (texture rows 54-72) and the trunk is in
+    columns 240-255, rows 56-71 -- i.e. ON THE TREE'S AXIS. On MAME's Lau
+    frames (R955's 1304 / 2704 / 4104) the u = 0 edge lies 8-19 px above the
+    tip on screen (8-12 px for the distant trees). A top-edge pixel whose u
+    goes a hair negative takes column 255 at its v -- the trunk when v is
+    56-71, so the dot lands centred above the tip, green because the texture
+    is luma on a green polygon, and flickers because u's sign there is a
+    knife edge. That is R955's fault (a negative u/z saturated to 4095.996),
+    fixed by NEGZ on branch tree-px -- not in 20261024b. MAME has the same
+    edge in its own maths (fetch_bilinear_texel's !wrap clamp takes column
+    w-1 for any raw u in [-0.5, 0)) but s32() truncates toward zero and its
+    floats stay on the right side: on R955's MAME Lau frame 1304 there is no
+    dot above any tip (zoomed), and 0 pixels anywhere draw from a texel
+    outside their polygon's box. MAME does not show the VF2 dot.
+  * The two do not share a mechanism: the VF2 dot is the core's own coordinate
+    fault (and R951's / R955's family: a texel from outside the polygon); the
+    Pilot Kids specks are drawn the same way by MAME and the core from texels
+    inside the polygon.
+*How established:* MAME pltkidsa frames 8995-9004 (M2MIP, r943 build) and
+vf2 (R955's M2DIFF dumps, r869 build -- attract runs are not repeatable:
+r943 and a second r869 run both landed on the temple stage, frames
+1200-1399 with no conifer). Scripts in the scratchpad (tp2/mipan.py,
+rules2.py, m2det.py); data in sm2-builds/tree-px2-data.
+*Left:* fit NEGZ (tree-px) and look again at VF2 Lau and Rally with it --
+then use m2-fbgrab.py on the board with the dot on screen: a grab says
+whether the pixel is in the 3D layer, its exact colour, and with the bench
+which polygon and texel painted it. For Pilot Kids, a real-hardware picture
+of the window tree is the only thing that can say what the hardware does
+with a lone opaque texel.
