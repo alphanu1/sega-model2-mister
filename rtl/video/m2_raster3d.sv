@@ -131,6 +131,8 @@ module m2_raster3d #(
   // entry per textured quad; its head is the box of the quad whose spans are
   // leaving, popped when the next textured quad's first span reaches the head.
   parameter bit UVCL = 1'b0,
+  // R955: a negative divided coordinate is 0 in m2_span_tex, not the far edge of the texture
+  parameter bit NEGZ = 1'b0,
   // R275: the SDRAM address width the texel fetch drives.
   parameter int unsigned TEX_AW = 25,
   // R867: THE TEXTURED COLOUR THROUGH THE GAME'S TABLES (m2_span_tex TEXLUT).
@@ -785,7 +787,7 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .SPCULL(SPCULL), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .UVSH(UVSH), .UVCL(UVCL)) u_spantex (   // R951   // R940   // R633, R791, R828, R867
+                .REUSE(TXREUSE), .SPCULL(SPCULL), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .UVSH(UVSH), .UVCL(UVCL), .NEGZ(NEGZ)) u_spantex (   // R955   // R954   // R951   // R940   // R633, R791, R828, R867
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784

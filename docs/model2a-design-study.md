@@ -44973,6 +44973,103 @@ walk / game behind) on the train directly; before the cull the prediction is
 *Tools (committed):* sim/io/mame_m2_vcop2_expert.lua. Session scratch (not
 committed): the MAME traces, the TGP capture, the M2DIFF / M2GEO dumps.
 
+**R955 -- THE "TREE PIXELS": A NEGATIVE DIVIDED COORDINATE WAS SATURATED TO
+THE FAR EDGE OF THE TEXTURE, NOT CLAMPED TO 0 AS to_tx SAYS, AND R951'S
+NEAR-MISS CLAMP NEVER SAW IT. FIXED (m2_span_tex NEGZ). DOA's SEAMS ARE
+TEXTURED T-JUNCTION CRACKS; DIL ON TEXTURED QUADS CLOSES THEM AND IS
+REJECTED. Branch tree-px (off int-2a b4250d8), not pushed, not fitted.**
+(Board, s1468 = int-2a: Sega Rally, a stray pixel near the trees; VF2,
+Lau's stage, the conifer dot "much better" since R951 but still there; Pilot
+Kids, a green pixel a few pixels from the tree seen through the bedroom
+window; DOA and VF2 Jacky / Sarah, seams showing the 2D layer.)
+
+*What was believed (R951):* a near miss outside a quad's u / v box is
+caught by the box clamp. Anything further out is "a fit gone wrong" and is
+left alone.
+
+*NOW KNOWN (MEASURED; MAME 0.289 m2lod dumps, ROM-derived scratch in
+sm2-builds/tree-px-data; the core's geometry (geodiff 2A) on MAME's walks;
+tb_m2_raster3d at the board's settings, benchbd):*
+  * THE FAULT. Stage 4a of the divide forms u/z x 1/z as a 64-bit UNSIGNED
+    product (d3_r1 is unsigned). A negative u/z -- a pixel a hair inside an
+    edge where u is 0, pushed a few 1/256 texel under 0 by the plane fit's
+    quantisation, R951's knife edge -- gives a two's-complement pattern that
+    the logical shift and sat32 turn into 0x7FFFFFFF, i.e. texel 4095.996.
+    to_tx's own comment says negative coordinates clamp to 0. They never
+    did once the product went 64-bit (R468 / R718). At a no-wrap edge
+    4095.996 is the texture's LAST column (MAME's rule for u just under 0,
+    model2rd fetch_bilinear_texel, applied to a far bigger miss). And
+    R951's clamp compares 4095 with the box floor 0: "not the texel under
+    0", so it is left alone. R951 is blind exactly where most boxes start.
+  * SEEN IN THE FETCH LOGS: 2-32 saturated coordinates a frame in every
+    game looked at (VF2 1304 walks, Rally 2724 walks, Pilot Kids 9000
+    walks, Rally 4940). Rally's canyon start (walks 4074-4082): 10-32 a
+    frame, mostly the roadside trees and bushes and the car beside them
+    (textures c319a5 / c399a5). VF2's conifers: u 0 at each plane's top,
+    the trunk in columns 254-255 (v 56-71). A top-edge pixel over the
+    tree's axis that goes negative paints a trunk texel above the canopy,
+    the class of Ben's dot.
+  * THE FIX (NEGZ, Model2.sv sets it, every build): the sign of u/z (and
+    v/z) is registered beside the product, and a negative one gives d4 = 0.
+    to_tx gives 0, and R951's clamp ("exactly on the floor") makes it
+    floor + 1/256, where MAME's exact coordinate is. Two flops, and the
+    sign folded into sat32's existing select.
+*VERIFIED:*
+  * Rally walks 4074-4082 (the core's geometry, board settings): 13 pixels
+    change in the 9 frames (0 / 1 / 1 / 1 / 1 / 1 / 1 / 3 / 4). Every one
+    was a near-black stray (0x1082 or 0x0000) among the trees' and car's
+    greens and greys and now takes its neighbours' colour. On the walk
+    matched to MAME's frame 2724 (walk 4080) the one changed pixel's error
+    vs MAME is 58 -> 12. R951's sky dots on the same walks: 0 before and
+    after. The images are tp/img/rally_4076_negz.png (scratchpad).
+  * VF2 1304 walks 2110-2119: 2 pixels change in 10 frames, neither on a
+    conifer. Pilot Kids 9000 walks 9309-9315: 3 pixels (the umbrella's
+    fringe). MAME's polygons, Rally 4940: 2 px, 3.303 -> 3.302. Rally 7300
+    (R944's shadow frame): unchanged. NEGZ 0 is pixel-identical to int-2a
+    (Rally 4940 hash 466f11933cfcf722).
+  * Unit: new test_m2_span_tex_negz (in `make test`): R951's coordinate
+    test with one span in four starting at a negative u/z and crossing 0;
+    8,930 negative fetches, each must be 0 then clamped. PASS, 7,226
+    checks. The old RTL against it FAILS (got fffff, want 00001).
+    test_m2_span_tex_uvcl unchanged (7,225 checks, PASS).
+  * lint_top clean (2A and M2_NO_2A). lint_idx 111, the base's count.
+*NOT REPRODUCED:* the conifer dot itself and the Pilot Kids window-tree
+pixel. In 10 VF2 walks only one conifer top-edge pixel saturated (179,152),
+at v 36.9, transparent in column 255. In 54 tiled copies of that tree (scaled
+0.94-1.06, moved in quarter pixels) none did. The window tree in Pilot Kids
+is three screen-parallel quads (constant 1/z), whose left edge u = 0 sits
+on a pixel boundary: no knife edge. NEGZ removes the one mechanism found
+that puts a texel from outside the polygon's top edge above a tree. Whether
+it is Ben's dot is for the board to say; a photo of the dot with Texture
+filter Point would pin it down.
+
+*(B) SEAMS.* Coverage-only bench (NOTEX, every quad flat so DIL applies):
+  * DOA frame 7290 (the temple, the ceiling's edge over the frieze), MAME's
+    polygons: 20 see-through pixels with DIL off, one every ~21 px along one
+    long shallow edge -- R944's T-junction crack -- and 0 with DIL. In the
+    textured picture DIL leaves textured quads alone, and the same 22 pixels
+    show the 2D layer. This is Ben's DOA seam class.
+  * VF2 5310 (the stage under the bridge, from the attract): 1-3
+    pixels on MAME's polygons, 7-8 on the core's walk 6945. No seam line.
+    Jacky / Sarah's floor-wall line was not found in this frame.
+  * DIL ON TEXTURED QUADS (DILT: both !tex_r[0] gates off, the span's plane
+    at its clamped start), with UVCL and NEGZ: DOA 7290 holes 22 -> 2, but
+    2,353 px change, error vs MAME 4.776 -> 5.309, isolated wrong pixels
+    481 -> 849. VF2 5310: 2,360 px, 5.603 -> 5.927, 130 -> 251. Rally
+    4940: 3.302 -> 3.219. REJECTED, for the same reason as R957's Rally-car
+    finding: a dilated edge paints the later polygon over its neighbour's
+    texture, and with decals that shows. Textured cracks stay open.
+*Also measured here (reported for R957):* the Rally car's white dots are
+R944's DIL on the flat white body panels over the textured livery (Lancia
+close-up, frame 4940: DIL 1 / UVCL / UVSH bisect, only DIL moves it; 309
+white px, error 2.981 -> 3.303). A black-only DIL keeps R944's shadow (7300:
+0 holes) with 156 black px on the car and none white.
+*AREA (quartus_map 17.0, 2A, full design, int-2a b4250d8 -> this):* ALMs
+needed 38,918 -> 38,869 (-49, the map's noise); registers 48,180 -> 48,181;
+block memory bits 4,580,944 and DSP 99 unchanged.
+*LEFT:* the fit and Ben's eyes (VF2 Lau, Rally's trees, Pilot Kids' window);
+the 2C tree (int-2c) has the same m2_span_tex lines and takes the patch as is.
+
 **R959 -- THE PATHS THAT FAIL SEEDS, SHORTENED WITHOUT CHANGING A CYCLE:
 THE SCSP DSP's MICROWORD AND RING ADDRESS, THE SDRAM GRANT'S REGISTERS, THE
 GEOMETRY POOL's ARBITER. EACH PROVEN IDENTICAL (A MITER, OR YOSYS).** Ben:

@@ -1039,6 +1039,12 @@ int main(int argc, char **argv) {
       q.DO = int64_t(roll(2001)) - 1000;                 // the 24-bit gradient, small
       q.V  = int64_t(roll(uint32_t(q.O)));               // (u/z) * 2^18: u = V/O * 4096 texels at most
       q.G  = int64_t(roll(4000));
+#ifdef TB_NEGZ
+      // R955: one span in four starts with u/z (and often v/z) NEGATIVE and
+      // crosses 0 part way along -- a pixel a hair inside an edge where the
+      // coordinate is 0, as the plane fit's quantisation leaves it
+      if ((i & 3) == 1) q.V = -((q.G << (UVS - 8)) * STEP) * int64_t(roll(uint32_t(q.x1 - q.x0 + 2))) - int64_t(roll(64));
+#endif
       const int k4 = int(roll(9));                       // K across the whole range
       q.K = (k4 == 0) ? -512 : int(roll(600)) - 200;
       // R828a: some spans carry a K as the fill now makes it from an edge
@@ -1096,6 +1102,9 @@ int main(int argc, char **argv) {
       }
     }
     long n_clu = 0, n_chu = 0, bad_v = 0;
+#endif
+#ifdef TB_NEGZ
+    long n_negu = 0;
 #endif
     issued.clear(); issued_u.clear(); rec_issue = true; got.clear(); force_texel = 0x8;
     size_t next = 0;
@@ -1173,7 +1182,14 @@ int main(int argc, char **argv) {
         const int sh = (e < 23) ? 18 : e - 5;
         const uint64_t pu = uint64_t(Vj) * r1;
         const uint64_t q0 = pu >> (sh + L);
+#ifdef TB_NEGZ
+        // R955: a negative u/z is coordinate 0 (the old RTL: the unsigned
+        // product saturated it to 0xfffff, the far edge of the texture)
+        const uint32_t want = (Vj < 0) ? 0u : (q0 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q0 >> 10) & 0xfffff);
+        if (Vj < 0) ++n_negu;
+#else
         const uint32_t want = (q0 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q0 >> 10) & 0xfffff);
+#endif
         const uint32_t mask = (1u << (20 - L)) - 1;
 #ifdef TB_UVCL
         // R951: at level 0, in the texel under the box's floor (or on it) ->
@@ -1191,7 +1207,11 @@ int main(int argc, char **argv) {
         {   // v: the same divide of V + 12345, clamped into the v box
           const uint64_t pv = uint64_t(Vj + 12345) * r1;
           const uint64_t q1 = pv >> (sh + L);
+#ifdef TB_NEGZ
+          const uint32_t wv = (Vj + 12345 < 0) ? 0u : (q1 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q1 >> 10) & 0xfffff);
+#else
           const uint32_t wv = (q1 >> 31) ? 0x7ffffu << 1 | 1u : uint32_t((q1 >> 10) & 0xfffff);
+#endif
           const uint32_t wvc = clamp(wv, q.lv, q.hv, nullptr, nullptr);
           if (((is.v ^ wvc) & mask) != 0) { if (bad_v++ < 5) std::printf("  FAIL v at L%d: got %05x want %05x (box %x..%x)\n", L, is.v, wvc, q.lv, q.hv); }
         }
@@ -1202,11 +1222,15 @@ int main(int argc, char **argv) {
         // and the divide is still the quotient, to its 2f tolerance scaled
         // (where the divide normalises: 1/z at 2^23 or more)
         const int64_t ex = (((Vj << 29) / O) >> 10) >> L;
-        if (O >= (int64_t(1) << 23) && std::llabs((int64_t(want) & mask) - (ex & mask)) > 2 + (ex >> 12)) { if (bad_q++ < 5) std::printf("  FAIL quotient at L%d: %05x vs exact %05llx (O %llx V %llx)\n", L, want, (long long)ex, (long long)O, (long long)Vj); }
+        if (Vj >= 0 && O >= (int64_t(1) << 23) && std::llabs((int64_t(want) & mask) - (ex & mask)) > 2 + (ex >> 12)) { if (bad_q++ < 5) std::printf("  FAIL quotient at L%d: %05x vs exact %05llx (O %llx V %llx)\n", L, want, (long long)ex, (long long)O, (long long)Vj); }
       }
     }
 #ifdef TB_UVCL
     std::printf("  R951: u clamped up %ld, down %ld\n", n_clu, n_chu);
+#ifdef TB_NEGZ
+    std::printf("  R955: fetches with u/z negative %ld\n", n_negu);
+    ck("R955: negative coordinates were exercised", n_negu > 200, 1);
+#endif
     ck("R951: every fetch's v, clamped into its quad's box at level 0", bad_v, 0);
     ck("R951: the floor clamp fired", n_clu > 50, 1);
     ck("R951: the top clamp fired", n_chu > 50, 1);

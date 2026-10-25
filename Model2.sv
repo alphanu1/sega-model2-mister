@@ -7575,6 +7575,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .PXC(1'b1), .PIXSTEP(4), .FRB(2), .M2COV(1'b1),   // R658/R662; R673: re-tested on top of R671 (s583's test had the texture ROM bug)
               .DIL(1'b1),   // R944: edges moved out 1/8 px across -- no T-junction cracks (Rally's car shadow)
               .UVCL(1'b1),  // R951: each level-0 fetch kept inside its quad's own texels (Rally's sky dots)
+              .NEGZ(1'b1),  // R955: a negative coordinate is 0, not the texture's far edge (the tree-top dots)
                 // R626: quarter-pixel plane fit
               .TXLATE(3),   // R627: point-sample while the fill is within 3 bands of the beam
               .TXNS(4), .TXRSP(4), .TXK(16),   // R789: R628's four misses in flight and 16 credits; the queue stays 4 (8 cost ~200 ALM for 1-4%)

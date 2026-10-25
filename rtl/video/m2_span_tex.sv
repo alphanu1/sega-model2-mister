@@ -119,6 +119,9 @@ module m2_span_tex #(
   // R951: each fetch's level-0 coordinate clamped into its quad's texel box
   // (m2_raster_fill UVCL). 0: as before.
   parameter bit          UVCL   = 1'b0,
+  // R955: a negative divided coordinate clamps to 0, as to_tx says it does.
+  // 0: as before (it saturated to the top of the sheet).
+  parameter bit          NEGZ   = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
@@ -892,6 +895,7 @@ module m2_span_tex #(
   logic [24:0] d3_r1;  logic [5:0]  d3_e;
   logic signed [31:0] d4_u, d4_v;
   logic        [63:0] d4a_pu, d4a_pv;   // R468: the product, before the shift
+  logic               d4a_nu, d4a_nv;   // R955: u/z, v/z negative (the product is)
   logic         [4:0] d4a_sh;
   // R828: the group's mip level, chosen as it enters d1 and carried down the
   // divide beside it; d4a_sr is the un-normalising shift past the first 18
@@ -1004,6 +1008,7 @@ module m2_span_tex #(
       d2_nd <= '0; d2_e <= '0; d2_r <= '0;
       d3_r1 <= '0; d3_e <= '0; d4_u <= '0; d4_v <= '0;
       d4a_pu <= '0; d4a_pv <= '0; d4a_sh <= '0;   // R468
+      d4a_nu <= 1'b0; d4a_nv <= 1'b0;             // R955
       d1_L <= '0; d2_L <= '0; d3_L <= '0; d4a_L <= '0; d4_L <= '0; d4a_sr <= '0;   // R828
       d1_S <= '0; d2_S <= '0; d3_S <= '0; d4a_ur <= '0;                            // R940
       u_h1 <= '0; v_h1 <= '0; u_h2 <= '0; v_h2 <= '0; u_h3 <= '0; v_h3 <= '0;
@@ -1128,6 +1133,20 @@ module m2_span_tex #(
       // instead of five, and nothing issues any slower.
       d4a_pu <= 64'(u_h5) * 64'(d3_r1);   // R718: one deeper, to match
       d4a_pv <= 64'(v_h5) * 64'(d3_r1);
+      // R955: the product is formed unsigned (d3_r1 is), so a NEGATIVE u/z --
+      // a pixel a hair inside an edge where the coordinate is 0, the plane
+      // fit's quantisation putting it a few 1/256 texel under -- comes out of
+      // the logical shift below as an enormous positive number and sat32 made
+      // it 0x7FFFFFFF: texel 4095.996, which at a no-wrap edge is the
+      // texture's LAST column (MAME's own rule for u just under 0, model2rd
+      // fetch_bilinear_texel). VF2's conifers run u 0 at the quad's top to
+      // ~229 at the trunk, and column 255 is trunk: a trunk texel on the top
+      // edge, above the canopy, where the edge crosses the tree's axis. And
+      // R951's near-miss clamp never saw it -- 4095 is not "the texel under
+      // 0". The sign is u/z's (the reciprocal is positive): a negative one
+      // becomes 0, which to_tx and the clamp were written to expect.
+      d4a_nu <= NEGZ && u_h5[31];
+      d4a_nv <= NEGZ && v_h5[31];
       // R791: u/z is times 2^18 now, not 2^16 -- two more, so the answer is
       // still 16.16 quarter-texels. 18..26, inside the five bits.
       d4a_sh <= d3_sh;
@@ -1141,11 +1160,11 @@ module m2_span_tex #(
       // R940: with UVSH 16 and then d4a_ur, which is the same as below
       // whenever the span's uvs is 0
       if (UVSH) begin
-        d4_u <= sat32((d4a_pu >> 16) >> d4a_ur);
-        d4_v <= sat32((d4a_pv >> 16) >> d4a_ur);
+        d4_u <= d4a_nu ? 32'sd0 : sat32((d4a_pu >> 16) >> d4a_ur);   // R955
+        d4_v <= d4a_nv ? 32'sd0 : sat32((d4a_pv >> 16) >> d4a_ur);
       end else begin
-        d4_u <= MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
-        d4_v <= MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
+        d4_u <= d4a_nu ? 32'sd0 : MIP ? sat32((d4a_pu >> 18) >> d4a_sr) : sat32(d4a_pu >> d4a_sh);
+        d4_v <= d4a_nv ? 32'sd0 : MIP ? sat32((d4a_pv >> 18) >> d4a_sr) : sat32(d4a_pv >> d4a_sh);
       end
       u_h1 <= dv_u;  v_h1 <= dv_v;
       u_h2 <= u_h1;  v_h2 <= v_h1;
