@@ -44807,6 +44807,172 @@ dil_on is 2 bits, and the fill latches dil_q = On || (Black only && the quad's
 colour is 0) with the quad -- one 24-bit zero compare, no new state.
 test_m2_fill_dil (On) 3,007 / 0, raster_fill_mip and raster3d PASS.
 
+**R954 -- VIRTUA COP 2's TRAIN SLOWDOWN (GitHub #29) IS THE DRAW: THE EXPERT
+STAGE's TRAIN LISTS DRAW IN 10-21 ms ON THE BENCH (THE BOARD ~1.2-1.3x THAT)
+AGAINST A 17.39 ms VBLANK, AND R652's HOLD MAKES THE GAME WAIT FOR IT. THE
+TGP, THE WALK AND THE i960 FIT. R813's SPAN CULL -- BUILT, BENCHED AND PARKED
+ON AREA SINCE R813 / R818 -- TAKES 21-36% OFF THOSE DRAWS PIXEL FOR PIXEL:
+NOW ON FOR 2A (+30 ALM STANDALONE, 0 M10K). NOT FITTED, NOT ON A BOARD.**
+2026-10-24, branch vc2-slow (int-2a b4250d8).
+(GitHub #29, mike911ok, Model2A_20261022: "Playing the expert stage, about one
+minute in, you will enter a train, slowdown is seen as soon as enemies show
+inside the train, anytime too many enemies appear the game slows a lot.")
+
+*What was believed.* The 2A slowdowns so far were the i960 (R854 / R855 VF2's
+push queue, R926 / R927 Rally's frame start) or the TGP (R888); R952 freed
+~1,300-1,500 ALM on 2A to spend on throughput, and the i960's remaining levers
+(R927's list) were the expected place to spend it.
+
+*THE SCENE, REPRODUCED IN MAME 0.289 (sim/io/mame_m2_vcop2_expert.lua, new;
+deterministic -- three runs and the committed copy give identical per-vblank
+logs).* Stage select at 29-42 s; the gun at (560,130) picks FILE 3, the
+subway (the gun's Y counts bottom to top: 560,330 picks nothing, 383,230
+MEDIUM). The script shoots at random points and takes the continues, so the
+stage goes on: platform ~40-95 s, the train from ~100 s, enemies and a hostage
+in the carriages from ~105 s -- the report's "one minute in".
+MAME's own figures (hints about the work, not hardware facts):
+  * Game rate: one flip (0x803008) every vblank from 5 s to 200 s (1.000 a
+    vblank in every 5 s bin; 0.93 only at the two stage loads). MAME never
+    overruns this scene.
+  * The frame loop (trace): the work ends with `call 0x36d8`, which stores
+    timer 0's count to 0x500014 (the game's own meter) and spins at
+    0x36fc / 0x3704 until the vblank counter (byte 0x500000) changes -- a
+    frame over one vblank costs two, the game's logic stepping at half speed.
+  * i960 work a frame (instructions retired, the spin subtracted; debugger
+    traces, loops not collapsed, 1 s windows): stage start (44 s) mean 16.3 k;
+    platform with enemies (51-52 s) 31.1 k, p90 36.9 k, max 39.8 k; train
+    (100, 129, 139 s) 25.0-27.7 k, p90 29-31 k, max 34.2 k; train 150 s
+    20.8 k. VF2 for scale (R854): attract 33 k, fight 39 k.
+  * TGP FIFO a vblank in the train (frames 7209-8110): in p50 2,862 / max
+    6,276 words, out p50 1,357 / max 2,756 -- ~1.1-2.3x VF2's (2,700 / 930).
+    Each shot raises it (the script fires every 6 frames).
+  * Polygons a rendered list (instrumented MAME, M2LOD): platform p50 ~600-900,
+    train p50 1,030-1,260, max 1,942 (list 6661, vblank ~7,453: four gunmen,
+    a hostage, "MISS! LIFE-1"); this core's store takes 1,964 quads of that
+    list -- 96% of m2_quad_store's NQ 2,048 (below).
+  * Real hardware: nothing in the repository or the study says whether the
+    cabinet slows here. MAME's i960 at 25 MHz does this work in well under a
+    vblank, which says nothing about the real chip's speed (CLAUDE.md).
+
+*EACH STAGE OF THIS CORE, MEASURED (benches, clk_sys 80 MHz; a vblank is
+17.39 ms; the board/bench factor ~1.2-1.3x is R814's / R855's, INFERRED):*
+  * TGP -- capture over the train (sim/tgp/tgp_capture.lua driven by the new
+    script, TGPCAP_START 7200, 901 frames, 2,791,905 words in, 1,252,432 out)
+    through tb_tgp_replay TGP_PROG 4096 (EARLY_ALU, BUFW_Q 32, OUT_STALL),
+    --board-push --gap 60 --jitter 40, lat 6: PASS, bit-exact but for 42 NaN
+    encodings; 0.907x MAME's model of the chip. Busy a frame p50 2.80 ms, p90
+    4.09, max 5.59; the model i960 waits on the output FIFO p50 2.42, p90
+    3.55, max 4.62 ms. Fits with ~3x room.
+  * Walk -- geodiff_ra built as the 2A geometry (CRTC_Y 127, WINKEY, MZX,
+    UVSH, TEXLUT), M2GD_LAT 12, MAME's walks 7453 (the list-6661 scene) and
+    9016: 957,205 / 926,468 clk_sys = 12.0 / 11.6 ms (0.69 / 0.67 vblank);
+    148 / 139 objects, 1,814 / 1,352 quads, 60,166 / 55,337 engine reads.
+    ~15 ms on the board by the factor: fits, narrowly.
+  * Draw -- tb_m2_raster3d in Model2.sv's 2A raster configuration (FTB, PXC,
+    PIXSTEP 4, FRB 2, M2COV, DIL, UVCL, SPLIT_TRI, FB_DDR3 + wcomb, TXLATE 3,
+    TXNS 4 / TXRSP 4 / TXK 16, TXLW8, MIP, TEXLUT, KW 20, UVSH, TEX_AW 26) at
+    the board's run-time settings (benchbd: step 1, bilinear, mip Sharp,
+    MIPZX 3, window key, TEXMEM latency 12 = idle SDRAM), M2_R3D_GAME 0x11,
+    on MAME's M2DIFF lists:
+        list (vblank)     polys   draw ms   + span cull   change
+        1908 (platform)     549     8.51       5.66        -33%
+        5300 (train)      1,315    19.00      13.64        -28%
+        5700              1,148    14.67      10.36        -29%
+        6000              1,180    13.73      10.60        -23%
+        6100              1,112    12.04       9.35        -22%
+        6400                870    11.26       8.56        -24%
+        6661 (enemies)    1,942    15.34      12.06        -21%
+        7000                825    10.07       7.56        -25%
+        7600              1,127    15.66      11.90        -24%
+        7900              1,074    16.38      11.55        -29%
+        8224 (red flash)  1,296    20.75      13.37        -36%
+    Contended memory (TEXLAT 30 + 0..30) adds 4-9% (6661 16.74, 8224 21.54).
+    With the board factor, 6-7 of the 10 train lists are over a vblank
+    before the cull (bench > ~13.4-14.5 ms) and none clearly is after it
+    (5300 13.64 and 8224 13.37 are the margin).
+  * WHAT THE DRAW IS BOUND BY (6661 / 8224): ideal texel memory (TEXLAT 1)
+    -2% / -1%; textures off 8.30 / 10.90 ms (-46% / -47%); texel step 2
+    11.97 / 15.04 (-22% / -28%). Per texel LOOKUP, not memory -- R808a's
+    finding again -- and the train's lists are heavy in hidden groups:
+    seats, partitions and figures overlapping front to back (list 6661's
+    polygons cover 3.98 screens, 8224's 6.66 with a full-screen red flash in
+    window 5), each hidden group walked a cycle until R813's cull drops the
+    span.
+  * i960 -- the whole-core bench at the board's clocks (obj_boot_2ax with
+    TMR_BOARD, RC_RING 1 / RC_FRAMES 8 / DC_LINES 64 as Model2.sv's 2A
+    i960; M2_BOARDCLK, M2_BOOT_LAT 12, the vcop2 image; M2_FRAMESTAT with
+    M2_SYNC_IPS 36f4, the frame's work done) on VCop2's first 3D attract
+    scene (vblanks 770-778, ~2,100 TGP words a vblank): 16.5 k instructions
+    in 173 k CPU cycles = 4.33 ms from the vblank, CPI 10.5, the TGP holding
+    it 0.93 ms. (Only ~780 vblanks were run: the bench is ~4-5 s a vblank,
+    the train ~7,000 vblanks in.) At that CPI MAME's train counts are
+    6.6-7.4 ms (mean), 8.9 ms (34.2 k, max); the platform's 39.8 k max
+    10.4 ms; with R854's board/bench factor (<= 1.42, measured before R855 /
+    R927) at most ~15 ms. INFERRED to fit; VF2's 33 k foreground ran at a
+    14.1 ms median on the board even before R927 (R855).
+*THE MECHANISM.* R652's hold: a finished list waits for the draw in progress
+and, while it waits, the vblank interrupt and the next walk are withheld
+(Model2.sv r3d_game_hold; 3D pacing tied to Hold game by R831). VCop2's frame
+loop waits for the vblank counter, so every list drawn in over a vblank costs
+the game a whole vblank: 28.75 game frames a second while the train is busy,
+the game's own clock at half speed -- "the game slows a lot". The 2D (HUD)
+holds with it by design.
+
+*THE CHANGE (2A only).* m2_raster3d gains SPCULL (default 0) and passes it to
+m2_span_tex (R813's cull, unchanged since R813 and still carried through
+R867's TEXLUT path); Model2.sv sets `.SPCULL(M2A)`. The original core keeps 0:
+its build is unchanged by construction (lint_top -DM2_NO_2A clean).
+  * Pixels: every displayed pixel identical with and without the cull
+    (M2_R3D_PXDUMP, PX lines compared): VCop2 lists 1908 / 6000 / 6661 /
+    8224 (189,954-189,968 px each), VF2 fr_3800c and vf_2704 (124,914 /
+    125,328 px), Sega Rally's R951 canyon list 2716 (190,464 px). The cull drops only a span whose every pixel is already
+    painted this band; the writer's own mask test is what decides a pixel.
+  * Other games gain less: VF2's heavy lists 8.13 -> 7.52 and 8.29 -> 7.38
+    ms (-7..-11%, R813's Daytona range); Sega Rally 2716 11.16 -> 9.03 ms
+    (-19%).
+  * Area: quartus_map 17.0 of m2_span_tex alone at the 2A parameters (TXK 16,
+    FTB, GC, MIP, TEXLUT, UVSH, UVCL): 1,961 -> 1,991 ALMs needed (+30),
+    1,934 -> 1,989 ALUTs, 1,839 -> 1,862 registers, block bits 72,704 both,
+    DSP 16 both. R818's whole-design estimate was +66, "<= ~170 placed".
+  * Timing: R813's whole build (clear under the draw + the cull + the
+    narrowing) failed on placement pressure at 99% (s995-s997), on paths
+    outside the cull; the cull alone has never been fitted. Its check reads
+    the fill mask's MLAB through one LUT on a registered address (cs_run /
+    cs_wi). At ~38,900 of 41,910 ALM (R952) the room is there; the clk_sys
+    margin is the risk to watch.
+  * Checks: test_m2_span_tex_ftb (R813, the cull) PASS, 17 checks; lint_top
+    clean on 2A and -DM2_NO_2A.
+
+*THE OTHER LEVERS, RANKED BY DRAW TIME PER ALM (none built here):*
+  1. The cull (above): -21..-36% on the train, +30 ALM standalone.
+  2. Four span parameter sets (R808's NSP 4, scratch RTL then, not in the
+     tree): -5..-9% more on Daytona's lists, +87 ALM estimated, ~+300 placed.
+  3. Hidden groups in runs (R808: a painted run 8 groups a cycle): the cull
+     removes whole hidden spans; partly hidden spans still walk their hidden
+     groups a cycle each. Upper bound 1.0-3.2 ms on Daytona; not built.
+  4. A second lookup a cycle (two texel pipes): up to ~2x on lookup-bound
+     lists, but a second cache read port and span walker -- hundreds of ALM
+     and M10K the 2A build does not have (548-550 / 553). A study-level
+     decision.
+  The i960 levers (R927's list) do not touch this scene's limit.
+*A SETTING THAT ALREADY HELPS:* Draw method "Single buffered" (R699 / R781:
+every second list drawn) keeps the game at full speed with 28.75 pictures a
+second -- the trade R792 measured on Daytona.
+
+*ALSO SEEN, NOT A SLOWDOWN:* list 6661 puts 1,964 quads into a store of
+2,048 (m2_quad_store NQ). A busier carriage (two players, more effects)
+could overflow it, and the store REFUSES the excess -- polygons missing from
+that frame. Not measured past this session; worth a probe if the board shows
+missing figures in the train.
+
+*What the board must show:* the expert stage's train with enemies at full
+speed (or nearly), and every other 2A game's picture unchanged. A probe build
+(M2_WHY) with WHY_SYNC at VCop2's 0x36f4 would give the 'V' split (draw /
+walk / game behind) on the train directly; before the cull the prediction is
+"draw behind" in most busy-carriage vblanks, after it few or none.
+*Tools (committed):* sim/io/mame_m2_vcop2_expert.lua. Session scratch (not
+committed): the MAME traces, the TGP capture, the M2DIFF / M2GEO dumps.
+
 **R959 -- THE PATHS THAT FAIL SEEDS, SHORTENED WITHOUT CHANGING A CYCLE:
 THE SCSP DSP's MICROWORD AND RING ADDRESS, THE SDRAM GRANT'S REGISTERS, THE
 GEOMETRY POOL's ARBITER. EACH PROVEN IDENTICAL (A MITER, OR YOSYS).** Ben:

@@ -77,6 +77,9 @@ module m2_raster3d #(
   parameter bit          TXLW8 = 1'b0,
   // R633: while tex_late, every other group reuses its neighbour's texel
   parameter bit          TXREUSE = 1'b0,
+  // R954: R813's span cull (m2_span_tex SPCULL, with FTB): a span whose every
+  // pixel is already painted is dropped at the walk's input
+  parameter bit          SPCULL = 1'b0,
 
   // ARE clk AND scan_clk ACTUALLY DIFFERENT CLOCKS?
   //
@@ -782,7 +785,7 @@ module m2_raster3d #(
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .UVSH(UVSH), .UVCL(UVCL)) u_spantex (   // R951   // R940   // R633, R791, R828, R867
+                .REUSE(TXREUSE), .SPCULL(SPCULL), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .UVSH(UVSH), .UVCL(UVCL)) u_spantex (   // R951   // R940   // R633, R791, R828, R867
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784
