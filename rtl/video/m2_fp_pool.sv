@@ -151,8 +151,34 @@ module m2_fp_pool #(
                     : first;
   endfunction
 
-  wire [CW-1:0] mul_win = rr_pick(mul_req, mul_rr);
-  wire [CW-1:0] add_win = rr_pick(add_req, add_rr);
+  // R959: mul_win AND add_win FROM A ONE-HOT, NOT FROM rr_pick. rr_pick is a
+  // rotate, a priority chain, an add and a conditional subtract, and its index
+  // then selects the 32-bit operands: m2_geo_clip cs -> its mul_req -> rr_pick
+  // -> mul_b[mul_win] -> mul_b_q was the failing clk_sys path on the Model 2
+  // build (s1488 -0.395), and near it on 2A (cp_a -> mul_a_q, s1479 -0.021).
+  // rr_pick's answer said as a one-hot (rr_oh): the lowest requester at or
+  // above the pointer, else the lowest requester, else the pointer itself --
+  // its masks a decode of the pointer REGISTER, beside the requests rather
+  // than behind them -- then encoded (one level) into the same index. The
+  // operand mux, the grants, the tags and the pointer are unchanged and read
+  // it as before. rr_pick stays for the divider, off these paths.
+  // Identical by construction; sim/miter/pool_eq.sh proves it.
+  function automatic [NC-1:0] rr_oh(input logic [NC-1:0] req, input logic [CW-1:0] first);
+    logic [NC-1:0] ge, hi, f1;
+    for (int k = 0; k < NC; k++) begin
+      ge[k] = CW'(k) >= first;
+      f1[k] = CW'(k) == first;
+    end
+    hi = req & ge;
+    rr_oh = (|hi)  ? (hi  & (~hi  + NC'(1))) :
+            (|req) ? (req & (~req + NC'(1))) : f1;
+  endfunction
+  function automatic [CW-1:0] oh_idx(input logic [NC-1:0] oh);
+    oh_idx = '0;
+    for (int k = 0; k < NC; k++) if (oh[k]) oh_idx = oh_idx | CW'(k);
+  endfunction
+  wire [CW-1:0] mul_win = oh_idx(rr_oh(mul_req, mul_rr));
+  wire [CW-1:0] add_win = oh_idx(rr_oh(add_req, add_rr));
   // A CLIENT IS MASKED FOR ONE CYCLE AFTER ITS GRANT.
   //
   // Grants here are combinational, and a client's "I have been granted" flag is
