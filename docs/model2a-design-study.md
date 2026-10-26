@@ -46514,6 +46514,107 @@ f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
 MLAB read into m2_texel_x2's request registers; 2C near the projector /
 clipper states).
 
+**R958 -- "ANALOG CONTROL": TWO WHEEL LAYOUTS (WHEEL A / WHEEL B) BESIDE THE
+PAD'S, FOR EVERY DRIVING AND RIDING GAME ON ALL THREE CORES (GitHub #12).**
+
+(Section: §10. Authority: the request itself -- a wheel owner's description of
+what MiSTer Main reports for two kinds of wheel, after Jotego's OutRun core's
+"Analog control" option. No MAME question: the game-side values are the
+existing ADC ranges, 0x20..0xE0 (R835/R837, R862/R887, R928/R933). Model 1
+has no wheel layout to follow.)
+
+*What was there.* R816 / R831: the pedals share the right stick's Y (split by
+sign, O[28] "Pedals" swaps the halves), steering is the paddle, else the left
+stick's X past a dead zone of +-12, else (O[54] "Right stick: Pedals+steer")
+the right stick's X past the same dead zone, else the d-pad's ramp. That fits
+a wheel only if MiSTer maps it onto the right stick. The reporter's wheels
+(the cathoderayblog guide's setup; and newer direct-drive pedal sets such as
+the Logitech RS50) put the wheel on the left stick's X and each pedal on its
+own axis, so neither pedal worked.
+
+*What is added.* O[71:70] "Analog control: Standard / Wheel A / Wheel B".
+O[71:70] is free on main, model2a, model2c, dilk-2a / dil-off-2a (Seam fill,
+O[69:68] / O[68]) and every other local branch (searched: no O[] or status[]
+use above 69 bar hps_io's own status words and O[122:121]); 0 is today's
+behaviour, so a saved config opens on Standard, and 3 (unreachable from the
+OSD) reads as Standard. All of it is in m2_cab_inputs, the one block every
+analog game goes through (main's Daytona / Desert Tank directly; the 2A / 2C
+games through m2_2a_inputs' cab_steer / accel / brake), so it lands once:
+  steering   Wheel A and B: the left stick's X, always, with NO dead zone (a
+             wheel's first degrees are steering, not noise); the right stick
+             never steers (Wheel B's brake is its X; "Right stick" is
+             ignored); the paddle still comes first; the d-pad steers while
+             its left / right is held. "Steering" (O[30:29]) and "Steering
+             smoothing" (O[51:50]) apply unchanged -- same scale, same
+             limiter downstream.
+  Wheel A    accelerator = the left stick's Y, brake = the right stick's Y,
+             each centre released .. full up (-127) fully pressed; the lower
+             half reads released.
+  Wheel B    accelerator = the left stick's Y over the whole axis, -127 (up)
+             released .. +127 (down) fully pressed; brake = the right
+             stick's X, -127 (left) released .. +127 (right) fully pressed.
+             Seven-bit pedal = (v + 127) / 2; -128 reads released.
+  both       a pedal p (0..127) reads 0x20 + p + p/2: the right-stick pedals'
+             own 3/2 scaling (0x20 released, 0xDE full -- the same top a pad
+             reaches today; the 0xE0 rail is the buttons'). "Pedals: Swapped"
+             exchanges the two pedals. The Accel / Brake buttons still give
+             0xE0. The pedal values are registered once (one clk_sys) so the
+             new arithmetic is off the stick -> ADC paths R842 / R934 timed.
+Per game:
+  Daytona USA (both sets), Sega Rally: steering / accelerator / brake as
+             above, nothing else.
+  Desert Tank (R837's one drive pedal and the lever): Wheel A / B count as a
+             wheel, as "Pedals+steer" does -- the further-pressed pedal past
+             the dead zone (12) drives, the accelerator forward and the
+             brake in reverse, setting the lever; the cannon is the
+             d-pad's. Its pedals ARE the cabinet's (HANDLE + ACCEL; the
+             third channel is the turret).
+  Manx TT, Motor Raid (manxtt ports: THROTTLE, BRAKE, BANK): the wheel banks
+             the bike (AN2 = 0xFF - steering, as before), the accelerator
+             pedal is the throttle grip and the brake pedal the brake lever.
+             No special case: the profile already takes the block's three
+             values in those roles.
+  Sky Target (0x18): a flight stick. m2_2a_inputs hands the block Standard
+             for it whatever the OSD says (p_sky), so its STICKX / STICKY are
+             byte for byte as before.
+  Over Rev, STCC (2C, R928 / R933): the block's values through the existing
+             0x20..0xE0 -> 0x00..0xFF widening and Over Rev's PORT_REVERSE.
+             Virtua Cop / VC2 / HOTD (guns) and the digital games: untouched.
+
+*Verified.* tb_m2_cab_inputs (all three branches, identical): Part A, the
+DUT at Standard against the 0f3cbc4 block, 30,000,000 checks, 0
+mismatches; Part B (Desert Tank, R837 model) 320,000,000 / 0; Part D,
+random inputs with Analog control random (Standard / 3 against the 0f3cbc4
+block, Wheel A / B against a model written from the request), 145,662,741
+checks / 0 (5.35 M Wheel A and 5.22 M Wheel B Daytona cycles, 10.8 M
+wheel-model steering checks, 3,980 Desert Tank lever sets to reverse);
+Part E, every axis swept -128..+127 in each wheel mode x Pedals Normal /
+Swapped x every Steering, 50,202 checks / 0, including the request's
+endpoints (released 0x20, full 0xDE, full lock 0x21 / 0xE0 -- -127 gives
+0x21 at 3/4 exactly as Standard does), monotonic pedals, the unused axes
+inert, buttons, d-pad and paddle precedence; Standard and 3 swept over every
+axis x 16 OSD combinations against the 0f3cbc4 block, 327,680 checks, 0
+differences (the default unchanged byte for byte); smoothing (Wheel) on the
+wheel's X slews 10 counts in 10 steps and settles at 0xE0; Desert Tank's
+pedals in A and B. Two mutations (Wheel B's brake read from the right Y; the
+mode decode leaking into Standard) each FAIL it. tb_m2_2a_inputs (2A, 2C):
+Analog control random, every analog profile against the block with the same
+setting, Sky Target against a second block held at Standard; 0 mismatches
+(removing the Sky Target exception: 711,768 mismatches). Quartus 17.0
+analyze_file clean on both RTL files; the new functions constant-folded by
+quartus_map to the bench's values (up(-128) 127, full(-127) 0, full(+127)
+127, full(0) 63, an(127) 0xDE). lint_top clean (2C: -DM2_2C
+-DM2_NO_2A_MANX_MOTION); lint_idx unchanged but for hps_io's CONF_STR
+width (2A's CONF_STR now passes 1,024 bytes, so byte_cnt is a bit wider).
+Not fitted; not on a wheel.
+
+*Open.* Whether MiSTer Main reports the RS50-class pedals exactly as the
+request says (whole axis, -127 released) is the reporter's account, not
+measured here; if a pedal set rests at +127 instead, "Pedals: Swapped" does
+not help (it exchanges pedals, not directions) and a Wheel C would be the
+fix. Wheel B with a pad and no pedals reads half accelerator and half
+brake -- it is for pedal sets only (README says so).
+
 **R960 -- THE HOUSE OF THE DEAD'S GUN: THE GAME'S MARK IS NOT MAME'S
 CROSSHAIR, AND MAME'S 5% OFF-SCREEN BORDER COST 18-25 PX AT EVERY EDGE
 (HOTD AND VIRTUA COP 2). BRANCH hotd-gun (OFF model2c), NOT FITTED.**
