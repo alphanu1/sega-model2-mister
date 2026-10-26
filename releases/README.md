@@ -39,6 +39,12 @@ hardware as possible:
   bilinear filtering draws thin lines where the sky's panels meet; the board
   doesn't. With `Texture filter` on `Auto` (the default), the core draws Sky
   Target with point sampling, and the lines are gone.
+- **Light guns fire right up to the screen edge (Virtua Cop, Virtua Cop
+  2).** MAME treats the outer 5% of the gun's range as off-screen (about 24
+  pixels at the sides), so shots near the edges turn into reloads. A real gun
+  only reads off-screen when it can't see the screen; the cores now treat
+  just the outermost 2 pixels as off-screen, so aiming off the screen still
+  reloads.
 
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
@@ -64,7 +70,32 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261024b`)
+### New in this build (`Model2A_20261026`)
+
+- **Virtua Cop 2 runs at full speed on the expert stage's train** (GitHub
+  #29). The 3D drawing ran out of time when the carriage filled with enemies
+  and the game dropped to half speed; spans hidden behind what's already
+  drawn are now skipped, and the train holds 57.5 frames a second.
+- **Virtua Cop 2's RANKING screen shows every score.** The ranking's big
+  letters and digits are 3D polygons, and the table needs more than the 2,048
+  polygons a frame the core could hold, so the last score went missing. A
+  heavy frame can now use up to 2,560.
+- **Light guns fire right up to the screen edge** (see *Not just a MAME port*
+  above): only the outermost 2 pixels count as off-screen.
+- **Fewer stray pixels around trees** (Virtua Fighter 2's Lau stage, Sega
+  Rally): a texture coordinate a hair below zero was read from the far side of
+  the texture instead of its edge.
+- **`Analog control` for wheels** (GitHub #12): `Wheel A` and `Wheel B`
+  layouts beside today's (`Standard`, still the default). Sega Rally steers
+  and pedals as Daytona does; in **Manx TT** and **Motor Raid** the wheel leans
+  the bike, the accelerator pedal is the throttle and the brake pedal the
+  brake. **Sky Target** ignores the setting. Not yet tried on a real wheel:
+  please report how it goes. See *Analog control* under the Model 2 core's
+  Controls below.
+- **Builds close timing with more room to spare**: three paths that most
+  often made builds fail are shorter, each proven to behave identically.
+
+### Earlier in `Model2A_20261024b`
 
 - **Sega Rally's cars no longer have white dots along their panels.** The
   shadow crack fix in `Model2A_20261024` widened plain-coloured polygons
@@ -84,16 +115,6 @@ below). Please report anything you find, and say which game and where.
   that draws plain polygons next to textured ones can show stray edge
   pixels. **This is a temporary fix**: a proper one, which fills only the
   real gaps, is being worked on.
-
-### Coming in the next build (not released yet)
-
-- **`Analog control` for wheels** (GitHub #12): `Wheel A` and `Wheel B`
-  layouts beside today's (`Standard`, still the default), for wheels whose
-  pedals MiSTer reports on their own axes. Sega Rally steers and pedals as
-  Daytona does. In **Manx TT** and **Motor Raid** the wheel leans the bike,
-  the accelerator pedal is the throttle and the brake pedal the brake.
-  **Sky Target** is flown with a stick and ignores the setting. See
-  *Analog control* under the Model 2 core's Controls below.
 
 ### Earlier in `Model2A_20261024`
 
@@ -193,7 +214,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261024b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -201,7 +222,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261024b.rbf` has the md5 `3bab755f6e5032da6fc65188bac70d0b`. As with
+`Model2A_20261026.rbf` has the md5 `ba126491849a02eab1f9e095be67b4c9`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -229,17 +250,21 @@ ROM sets: MAME 0.289.
   settings). That fixes the gun calibration.
 - **Manx TT**'s deluxe cabinet's extra sound board isn't emulated, so a few
   extra sounds are missing.
-- **A stray green pixel near some trees** (Sega Rally, Virtua Fighter 2's
-  Lau stage, Pilot Kids' window tree): much rarer than before, being worked
-  on.
+- **An occasional stray pixel near trees** (Sega Rally, Pilot Kids' window
+  tree): far fewer than before and gone in a moment. MAME draws Pilot Kids'
+  one too.
+- **Sega Rally:** the AI cars can flash for about a second in the second
+  race.
+- **Virtua Fighter 2:** Jacky and Sarah's stage slows down in places.
+- **Manx TT:** cresting a hill, the road beyond can show the sea through it
+  for a moment, and road behind hills appears a little late.
 - **Thin seams between some polygons show the background through them**
   (Virtua Fighter 2's Jacky and Sarah stages, Dead or Alive). Being worked on.
 - **Sound balance:** in Dynamite Cop the environment sounds (breaking boxes)
   are too loud against the shots and music, and Virtua Fighter 2's effects
   are low. Being investigated against MAME and the board.
-- **Slowdown:** Virtua Cop 2 slows down when many enemies appear (the
-  expert stage's train, GitHub #29), and Motor Raid a little in busy moments
-  (GitHub #25). Being investigated.
+- **Slowdown:** Motor Raid slows a little in busy moments (GitHub #25).
+  Being investigated.
 - **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
   are quiet overall. That is how MAME 0.289 mixes these games, and apart from
   the effects processor fix above the core matches it sample for sample. (MAME can sound louder because it also runs its own audio
@@ -278,7 +303,7 @@ Fighter 2 at the default 80%:
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261025.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -317,7 +342,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261025.rbf` has the md5 `9d181aec9309718fbac8270b07f15c23`.
+**Check you're running the right file.** `Model2_20261026.rbf` has the md5 `94173c3a71e2ee1eaf79e511cd319f7d`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -351,6 +376,14 @@ anything you find.
 
 ### New in this release
 
+- **`Analog control` for wheels** (GitHub #12): `Wheel A` and `Wheel B`
+  layouts beside today's (`Standard`, still the default), for wheels whose
+  pedals MiSTer reports on their own axes. Not yet tried on a real wheel:
+  please report how it goes. See *Analog control* under Controls below.
+  (`Model2_20261026`.)
+- **Virtua Cop: the gun fires right up to the screen edge.** Only the
+  outermost 2 pixels count as off-screen now, instead of MAME's 5% border
+  (see *Not just a MAME port* above). (`Model2_20261026`.)
 - **Cleaner sound.** The sound board runs at about 44.6 kHz and MiSTer's
   audio output at 48 kHz; the core now smooths between samples instead of
   repeating them, which removes the tinny, fizzy edge. (`Model2_20261025`.)
@@ -451,7 +484,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Steering` | how much stick gives full lock: `3/4` (default), `Full`, `5/4` or `Half` |
 | `Steering smoothing` | `Off` (default), `Light` or `Wheel` — see above |
 | `Right stick` | `Pedals only` (default), or `Pedals+steer`: left/right steers as well, for a wheel |
-| `Analog control` | `Standard` (default: the controls described here), `Wheel A` or `Wheel B`, for a wheel with its own pedal axes — see *Analog control* under Controls. Not released yet: in the next build |
+| `Analog control` | `Standard` (default: the controls described here), `Wheel A` or `Wheel B`, for a wheel with its own pedal axes — see *Analog control* under Controls. |
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
@@ -488,8 +521,7 @@ steering feels too light or too heavy, try the `Steering` settings. I'd love
 to hear from wheel owners: this has been built to how MiSTer maps wheels, but
 not yet tried on one.
 
-**Analog control: Wheel A / Wheel B** (next build, not released yet; GitHub
-#12). Many wheels show up with the wheel on the *left* stick and each pedal
+**Analog control: Wheel A / Wheel B** (GitHub #12). Many wheels show up with the wheel on the *left* stick and each pedal
 on its own axis, as Jotego's OutRun core expects. Pick the layout that
 matches yours:
 
