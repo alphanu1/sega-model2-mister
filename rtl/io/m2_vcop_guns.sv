@@ -19,8 +19,14 @@
 //   P1_X 0x083..0x276   P1_Y 0x024..0x1a9
 //   P2_X 0x080..0x273   P2_Y 0x027..0x1a9
 //
-// and model1io2.cpp fpga_r sets a gun's off-screen bit when any coordinate is
-// within 5% of its range of either end (int(span * 0.05): X 24, Y 19).
+// model1io2.cpp fpga_r sets a gun's off-screen bit when any coordinate is
+// within 5% of its range of either end (int(span * 0.05): X 24, Y 19 units =
+// 24 / 19 px), which kept the crosshair and every shot 19-24 px from each
+// edge. R961: here, as for Virtua Cop 2 and HOTD (R960), off-screen = a
+// reload, or the crosshair within 2 px of an edge (x <= 1 or >= 494, y <= 1
+// or >= 382). The game has no range test of its own: in MAME, shots at units
+// 0x086 / 0x273 (x px 2 / 493) and 0x027 / 0x1a6 (y px 2 / 381) with the bit
+// clear each spend a round; the bit set reloads.
 //
 // WHERE THE AIM COMES FROM -- MiSTer's convention (R846: System 32, PSX,
 // MegaDrive, SNES, NES cores and Main_MiSTer read):
@@ -234,9 +240,6 @@ module m2_vcop_guns #(
   localparam logic [9:0] P1X0 = V2 ? 10'h17f : 10'h17c;   // MAME's rest positions
   localparam logic [9:0] P2X0 = V2 ? 10'h17c : 10'h179;
   localparam logic [9:0] P2Y0 = V2 ? 10'h0e6 : 10'h0e8;
-  localparam logic [9:0] O1XL = V2 ? 10'h0a1 : 10'h09b;   // min + int(span * 0.05f)
-  localparam logic [9:0] O2XL = V2 ? 10'h09e : 10'h098;
-  localparam logic [9:0] O2YL = V2 ? 10'h037 : 10'h03a;
   // the corrections are 0..5: a 3-bit count of the thresholds passed
   function automatic logic [9:0] ux(input logic [8:0] p, input logic [9:0] lo);
     logic [2:0] k;
@@ -267,9 +270,9 @@ module m2_vcop_guns #(
     return m[25:16];
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
-  // R960 (V2 / HD): off the screen = the reload, or the last 2 px of an edge
-  // (a calibrated stick at +-127 lands on pixel 1 / 494 / 382: off). MAME's
-  // 5% border lost 18-25 px at every edge to "reload" (the board, R960).
+  // R960 / R961 (every game): off the screen = the reload, or the last 2 px of
+  // an edge (a calibrated stick at +-127 lands on pixel 1 / 494 / 382: off).
+  // MAME's 5% border lost 18-25 px at every edge to "reload" (the board, R960).
   logic [1:0] fire_q, edge_q;
   function automatic logic edg(input logic [8:0] x, input logic [8:0] y);
     return (x <= 9'd1) || (x >= 9'd494) || (y <= 9'd1) || (y >= 9'd382);
@@ -302,14 +305,10 @@ module m2_vcop_guns #(
   assign c1x = s1x; assign c1y = s1y; assign c2x = s2x; assign c2y = s2y;
 
   // ------------------------------------------------------ stage D: off-screen, the ports
-  // MAME's 5% border, from the coordinates as the board hands them over
-  // (V2: lightgun_offscreen_r's, the same rule on Virtua Cop 2's ranges)
-  // (R960: Virtua Cop 2 and House of the Dead from the pixel instead, edge_q;
-  // Virtua Cop keeps MAME's border)
-  wire o1 = (HD || V2) ? edge_q[0]
-               : ((p1x <= O1XL) || (p1x >= 10'h25e) || (p1y <= 10'h037) || (p1y >= 10'h196));
-  wire o2 = (HD || V2) ? edge_q[1]
-               : ((p2x <= O2XL) || (p2x >= 10'h25b) || (p2y <= O2YL) || (p2y >= 10'h196));
+  // from the pixel, edge_q (R960: Virtua Cop 2, House of the Dead; R961:
+  // Virtua Cop) -- not MAME's 5% border on the coordinates
+  wire o1 = edge_q[0];
+  wire o2 = edge_q[1];
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       off <= 2'b00; c_on <= 2'b00; in0 <= 8'hFF; in1 <= 8'hFF;
