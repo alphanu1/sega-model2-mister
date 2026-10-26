@@ -37829,10 +37829,13 @@ upstream.
   samples models the drive board well enough; it drops only bytes held one
   frame, 4 of 120 changes in the MAME session, none of them needed (the first
   race-start 0x07 was held two frames and turned the motor on).
-- *What the board showed:* s1528 with the matching Main and hori-ffb -v, a
-  whole Daytona race: the word changed exactly once -- the 20% idle spring
-  (motor off) -- and never again: no centring level, no friction, no
-  constant force on wall hits. The motor-on byte was never taken.
+- *What the board showed:* s1528 with the matching Main and hori-ffb -v
+  (driver log, times from the driver's start): at 43 s the word went to the
+  20% idle spring (motor off) and stayed there; at 138 s the motor came on
+  (friction, then centring), and from 151 s constant forces of both signs
+  followed (187 updates). Ben: forces start "completely random", after
+  minutes in some races and not at all in others. So the motor-on byte was
+  missed for most of the session and only caught by chance.
 - *Why (from the firmware and the core):* the type-1 I/O board's Z80 has no
   interrupt in this core (`z_int_n` is 1); it polls DPRAM 0x20 (EPR-14869C
   0x0039-0x0050), runs one scan and writes port E once (0x01B5), and the game
@@ -37876,8 +37879,9 @@ upstream.
 - *What is now known:* Ben reports that hitting a wall on the right of the
   car pushes the wheel left, which he says is correct (MAME's right-wall
   scrape held 0x53). The default (0x5- = left, Normal) stands; Invert stays.
-- *Caveat, recorded so it is not lost:* on the same s1528 session the word
-  never carried a constant force (above) -- only the 20% spring -- so the
-  push felt then cannot have been a decoded 0x5-; it fits the spring pulling
-  a wheel turned right back towards the centre. The direction should be felt
-  again on the every-write build, where 0x5- reaches the wheel.
+- *How sure:* the push was felt while the word carried constant forces (the
+  driver log above shows both signs from 151 s), so it was a decoded 0x5- /
+  0x6- or uncentring, not the idle spring. The log does not say which byte
+  each push came from (uncentring is signed by the steering too); Ben's
+  feel on the wall hit is the evidence. Worth feeling again on the
+  every-write build.

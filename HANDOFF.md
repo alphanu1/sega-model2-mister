@@ -33,9 +33,9 @@
     s1530 clk_mem -0.038 / HDMI -0.100; s1529 clk_sys -0.783.
   * DIRECTION: Ben on s1528, FFB direction Normal: a wall on the car's right
     pushes the wheel left, which he says is correct; 0x5- = left stays the
-    default (Invert kept). Caveat: s1528's word never carried a constant
-    force, so that push was not a decoded 0x5- (it fits the 20% spring
-    returning a right-turned wheel). Feel it again on s1531.
+    default (Invert kept). s1528's driver log has constant forces of both
+    signs from 151 s (after the motor-on byte was caught by chance at
+    138 s), so the push felt was a decoded force. Feel it again on s1531.
   * NEXT: Ben on the board with s1531 + the matching Main: motor on at race
     start (centring 107 = 42%), friction / constant force on wall hits.
   * Quartus --analyze_file rewrote Model2.qsf (appended four assignments);
