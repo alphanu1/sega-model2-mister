@@ -10,6 +10,7 @@ MRA names the core it runs on, so both can sit in `cores/` side by side.
 | `Model2A_*.rbf` | the Model 2A core |
 | `mra/` | every MRA for both cores, including the `[15kHz CRT]` versions |
 | `helpers/m2link/` | only for Daytona link play (experimental) -- see the Model 2 notes |
+| `scripts/` | a force feedback test for steering wheels: copy both files to `/media/fat/Scripts` and run `ffb_wheel_test` from the Scripts menu |
 
 Copy the MRAs you want from `mra/` to `/media/fat/_Arcade/` (or any folder
 under it).
@@ -740,6 +741,18 @@ the remaining features are in, if there's room left.
 If you build the core yourself: it's one small, switchable change to the
 framework file `sys/audio_out.sv`, kept as a patch in
 `docs/framework-patches/` with a README explaining it.
+
+### Force feedback test for wheels
+
+`scripts/` holds a small test for any steering wheel MiSTer has force
+feedback for (Logitech G25/G27/G29, Fanatec, Thrustmaster, and the HORI FFB
+Racing Wheel through [linux-hori](https://github.com/alphanu1/linux-hori)'s
+`hori-ffb`). Copy `ffb_wheel_test.sh` and `ffb-wheel-test` to
+`/media/fat/Scripts` and run `ffb_wheel_test` from the Scripts menu, with the
+wheel let go: it shows the wheel it found, plays weak effects (20 % at most)
+and reports each as `PASS`, `FAIL` or `SKIP` (not supported by that wheel).
+It checks that MiSTer can drive the wheel's force feedback; the Model 2 cores
+don't send force feedback yet.
 
 ### Still to come
 
