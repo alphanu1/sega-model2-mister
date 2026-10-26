@@ -1,5 +1,45 @@
 # Handoff
 
+## 2026-10-26 (night): Daytona force feedback on branch ffb-main (R966) -- NOT on the board
+
+  * Branch ffb-main (off main 47ad2e2), worktree sm2-builds/ffb-m2; not
+    pushed, not merged. Commits: c3b396b hps_io (joystick_N_ffb, UIO_GET_FFB
+    0x45 -- the Template half of the Main prototype, Main_MiSTer core-ffb
+    17a72dfa), cf90971 the feature, and this handoff.
+  * What: m2_ioz80 exports port E (the drive board's byte) and a strobe for
+    writes to 0x8004; rtl/io/m2_drive_ffb.sv samples it once a frame (vblank),
+    takes a byte on two equal samples (the drive board's rule), decodes it as
+    daytona-arcade-recomp's rt::DriveBoard (f32c48ff9b) and drives hps_io's
+    joystick_0_ffb: spring = centring level, friction = resistance level,
+    constant = 0x5-/0x6- force or uncentring away from centre (by `steer`,
+    0x80 centre, higher = right), a 20% spring when the motor gives nothing.
+    Daytona only (game_id 0); M2_NO_DRIVE_FFB=1 builds without it.
+  * OSD (Daytona only, menumask bit 3): O[72] "Force feedback" On (default) /
+    Off; O[73] "FFB direction" Normal / Invert. O[73:72] free on model2a and
+    model2c too.
+  * Build: Model2_ffb_s1528.rbf in sm2-builds/ffb-m2 (not a release), md5
+    332137bdeed7f822b3f493a8c8000cf9, 39,264 ALM (+132 on s1511), clk_sys
+    +0.448, clk_mem +0.131, i960 +1.593, hold +0.242, HDMI -0.987. s1526
+    fitter crash, s1527 can't fit (routing).
+  * Sim: test_m2_drive_ffb 388,070 checks / 0 fail with the MAME session
+    (M2_DRVLOG, ROM-derived, not committed; 223,095 without it, in `make
+    test`); seeds 1-10 both captures clean; five mutations caught.
+    test_m2_ioz80_drv 2,002 / 0. hps_io bench 20,018 / 0.
+  * Findings: the byte leaves the I/O board once per game frame (the scan the
+    game requests via DPRAM 0x20); the game never reads the drive board.
+    One sample a frame drops bytes held one frame: 4 of 120 port E changes in
+    the session (a repeated 0x07 at race start, three 0x52 kicks). MAME
+    samples about twice a frame; what the cabinet does is not known.
+    tb_m2_ioz80 cannot run the real firmware to its scan without the game's
+    DPRAM dialogue (spins at 0x0815, as before), so the port E test runs a
+    hand-written tv80 program with the firmware's own PE instruction.
+  * OPEN: which way 0x5- pushes (LEFT by default -- SailorSat /
+    FFBArcadePlugin / sm2-emu; recomp and m2-hle2 say right): Ben on his
+    wheel, Invert if wrong. The 0x38-0x3F dead zone, the board's ramp,
+    calibration, DIPs and the 0x7- slope are not expressible in the word.
+    Sega Rally (838-11661) and the EPR-18261 games need their own decoders.
+    The matching Main build is needed to feel anything; neither is upstream.
+
 ## 2026-10-26 (evening): releases/scripts -- a force feedback test for wheels
 
   * releases/scripts/ffb_wheel_test.sh + ffb-wheel-test (linux-hori v0.1.3's

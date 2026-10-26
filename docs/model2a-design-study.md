@@ -37810,7 +37810,16 @@ would take them. Whether the cabinet does is the open question in item 3.
   the two unused drv_ wires added. quartus_map --analyze_file 0 errors on
   m2_drive_ffb.sv, m2_ioz80.sv and hps_io.sv.
 
-*LEFT:* the fit (below, when run); the board and a wheel (Ben) -- above all
+*Fit (Quartus 17.0, seeds 1526-1528, map + fit + STA + asm):* s1528 closes:
+39,264 ALM (94%; main's Model2_20261026 s1511 39,132, so +132), 551 / 553
+M10K and 101 DSP (both unchanged), 46,884 registers (+69); setup clk_sys
++0.448, clk_mem +0.131, i960 +1.593, hold +0.242, HDMI -0.987 (report-only;
+s1511 -1.465). md5 332137bdeed7f822b3f493a8c8000cf9. quartus_map puts
+m2_drive_ffb at 57 LUTs / 43 registers. s1526: the fitter crashed (Segment
+Violation before a result); s1527: "Can't fit design in device" (routing
+at 94%), the fit's own failure, not this change's logic.
+
+*LEFT:* the board and a wheel (Ben) -- above all
 which way 0x5- pushes; the matching Main build. Sega Rally (838-11661, its
 own protocol: 0x80-0x9F right, 0xC0-0xDF left) and the EPR-18261 games
 (Indy 500, STCC, Over Rev, Super GT) need their own decoders; none is on
