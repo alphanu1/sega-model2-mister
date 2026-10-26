@@ -1,5 +1,27 @@
 # Handoff
 
+## 2026-10-26 (later): Model2A_20261026b and Model2C_20261026 released
+
+  * Model2A_20261026b = s1523 (gunflash-2a 6ba5aae on combo-2a; merged into
+    model2a 7538230), md5 2b7ceb02498f169fe3967ce0caa01b25: clk_sys +0.380,
+    clk_mem +0.311, i960 +0.798, hold +0.197 (HDMI -1.035). Gun flash Arcade /
+    Off for Virtua Cop 2 (R965: Off blanks tile words 0x6000-0x67FF while the
+    game's flash request stands; Arcade byte-identical). Board-tested on s1519.
+  * Model2C_20261026 = s1521 (gunflash-2c 8a1210f on combo-2c 1b67488; merged
+    into model2c 739fb6d), md5 b4fdec524fc036aea178c3ac238be55c: clk_sys +0.182,
+    clk_mem +0.189, i960 +1.800, HDMI +0.025, hold +0.241 -- clean on every
+    clock. HOTD crosshair mapping + 2-px gun edge (R960/R961), Gun flash
+    (R965), Analog control for Over Rev / STCC (R958), R959 timing (2C's
+    m2_sdram is byte-identical to 2A's, so the proven change is in).
+    Board-tested (s1515 for the guns and wheel, s1521 for Gun flash). README
+    tells HOTD players to reset the gun calibration once after updating.
+  * HORI FFB wheel: the patched MiSTer Main runs from the Scripts menu
+    (hori_wheel_on / hori_wheel_off, a bind mount, until reboot; stock file
+    untouched; the boot hook was not installed). Ben drives on Analog control
+    Standard. FFB: the wheel has no PID descriptor; it speaks hid-hori's
+    0x20 effect protocol (confirmed on the wheel). A userspace driver,
+    hori-ffb, is being written in /home/ben/source/hori-linux (its own repo).
+
 ## 2026-10-26: Model2A_20261026 and Model2_20261026 released
 
   * Model2A_20261026 = s1503 (combo-2a 3e883c2: R959 timing, R954 span cull,
