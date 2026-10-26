@@ -67,6 +67,17 @@ module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, 
 	input      [15:0] joystick_4_rumble,
 	input      [15:0] joystick_5_rumble,
 
+	// force feedback request, read by Main with UIO_GET_FFB (0x45). Leave at 0 if unused.
+	// [55:48] flags: bit 48 - active, bit 49 - core provides the centring spring, others 0
+	// [47:32] constant force, signed, positive pushes the wheel right
+	// [31:24] spring, [23:16] damper, [15:8] friction, [7:0] vibration (0..255)
+	input      [55:0] joystick_0_ffb,
+	input      [55:0] joystick_1_ffb,
+	input      [55:0] joystick_2_ffb,
+	input      [55:0] joystick_3_ffb,
+	input      [55:0] joystick_4_ffb,
+	input      [55:0] joystick_5_ffb,
+
 	// paddle 0..255
 	output reg  [7:0] paddle_0,
 	output reg  [7:0] paddle_1,
@@ -273,6 +284,7 @@ always@(posedge clk_sys) begin : uio_block
 	reg[127:0] status_req;
 	reg        old_status_set = 0;
 	reg        old_upload_req = 0;
+	reg [47:0] ffb_data;
 	reg        upload_req = 0;
 	reg        old_info = 0;
 	reg  [7:0] info_n = 0;
@@ -340,6 +352,12 @@ always@(posedge clk_sys) begin : uio_block
 				'h033F: io_dout <= joystick_3_rumble;
 				'h043F: io_dout <= joystick_4_rumble;
 				'h053F: io_dout <= joystick_5_rumble;
+				'h0045: begin io_dout <= {8'hFB, joystick_0_ffb[55:48]}; ffb_data <= joystick_0_ffb[47:0]; end
+				'h0145: begin io_dout <= {8'hFB, joystick_1_ffb[55:48]}; ffb_data <= joystick_1_ffb[47:0]; end
+				'h0245: begin io_dout <= {8'hFB, joystick_2_ffb[55:48]}; ffb_data <= joystick_2_ffb[47:0]; end
+				'h0345: begin io_dout <= {8'hFB, joystick_3_ffb[55:48]}; ffb_data <= joystick_3_ffb[47:0]; end
+				'h0445: begin io_dout <= {8'hFB, joystick_4_ffb[55:48]}; ffb_data <= joystick_4_ffb[47:0]; end
+				'h0545: begin io_dout <= {8'hFB, joystick_5_ffb[55:48]}; ffb_data <= joystick_5_ffb[47:0]; end
 			endcase
 
 			sd_buff_addr <= 0;
@@ -355,6 +373,13 @@ always@(posedge clk_sys) begin : uio_block
 				'h11: if(byte_cnt==1) joystick_3[15:0] <= io_din; else joystick_3[31:16] <= io_din;
 				'h12: if(byte_cnt==1) joystick_4[15:0] <= io_din; else joystick_4[31:16] <= io_din;
 				'h13: if(byte_cnt==1) joystick_5[15:0] <= io_din; else joystick_5[31:16] <= io_din;
+
+				// force feedback request, snapshot taken with the command word
+				'h0X45: case(byte_cnt)
+							1: io_dout <= ffb_data[47:32];
+							2: io_dout <= ffb_data[31:16];
+							3: io_dout <= ffb_data[15:0];
+						endcase
 
 				// store incoming ps2 mouse bytes
 				'h04: begin
