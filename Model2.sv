@@ -183,6 +183,18 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_VCOP2_GUN
 `define M2_2A_VCOP2_GUN
 `endif
+// R965: M2_2A_GUN_FLASH, the OSD's "Gun flash" (Arcade / Off) for Virtua Cop 2
+// and, on a 2C build, The House of the Dead -- main's m2_gun_flash (R929)
+// request detector and its Off path only: Arcade is the game's own flash,
+// the picture exactly as before R965; Off reads tilemaps 0/1's window table
+// as zero while the game's flash request stands. Needs the guns. On by
+// default; VERILOG_MACRO "M2_NO_2A_GUN_FLASH=1" (or -DM2_NO_2A_GUN_FLASH to
+// lint) leaves it out -- the core before R965, CONF_STR included.
+`ifdef M2_2A_VCOP2_GUN
+`ifndef M2_NO_2A_GUN_FLASH
+`define M2_2A_GUN_FLASH
+`endif
+`endif
 // R892: M2_2A_MANX_MOTION, Manx TT's DX motion base (the Active Motion
 // Slider's drive board) answered on the 315-5649's PD from its PE latch, so
 // the boot's check passes without Test (m2_2a_inputs MOTION; game ID 0x19
@@ -554,6 +566,12 @@ localparam CONF_STR = {
 	// has none (the game's own test menu holds its settings).
 	"h1O[57:56],Crosshair,Small,Large,Off;",
 	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
+`ifdef M2_2A_GUN_FLASH
+	// R965: Model 2's line and bit (R929, O[66]; never used on 2A / 2C, so a
+	// saved config opens on Arcade). Arcade: the game's own flash; Off: none
+	// (IR / Sinden / mouse players on a flat panel).
+	"h1O[66],Gun flash,Arcade,Off;",
+`endif
 `endif
 	"R[0],Reset and close OSD;",
 	// The button-definition line lives at the END of the menu block. Placed
@@ -2476,7 +2494,15 @@ wire [11:0] pal_addr;
 // clocked block would make the read TWO cycles and shift the whole picture by a
 // pixel column -- a memory change quietly becoming a rendering change, which is
 // exactly what a packing fix must not do. Continuous, so the depth is identical.
+`ifdef M2_2A_GUN_FLASH
+// R965: Gun flash Off -- the renderer reads tilemaps 0/1's window table as zero
+// while the game's flash request stands (m2_gun_flash's kill, registered on
+// tram_addr as the memory registers its output). 0 in Arcade.
+wire        gf_kill;
+wire [15:0] tram_data = gf_kill ? 16'h0000 : tram_q_vid;
+`else
 wire [15:0] tram_data = tram_q_vid;
+`endif
 wire [15:0] pal_data  = pal_q_vid;
 always_ff @(posedge clk_mem) begin   // R564: the video's read port is clk_mem's
 	// WHAT THE RENDERER ACTUALLY GETS OUT.
@@ -7809,6 +7835,25 @@ wire [7:0] mix_r  = (r3d_hit && !tile_cat1) ? r3d_r8 : tile_r;
 wire [7:0] mix_g  = (r3d_hit && !tile_cat1) ? r3d_g8 : tile_g;
 wire [7:0] mix_b  = (r3d_hit && !tile_cat1) ? r3d_b8 : tile_b;
 wire       tile_hs, tile_vs, tile_hb, tile_vb;
+// R965: GUN FLASH OFF FOR VIRTUA COP 2 / THE HOUSE OF THE DEAD. Both games ask
+// for their flash as Virtua Cop does (R929): all ones over tilemaps 0/1's
+// window table, word 0x6000 first, in the vblank after a shot (MAME 0.289:
+// Virtua Cop 2 0x19f08, cleared at the next four vblanks by 0x19f98; House of
+// the Dead 0x18620, cleared at the next by 0x18650). Nothing else they do
+// writes 0xFFFF to word 0x6000. m2_gun_flash as on main, used for Off only:
+// mode {O[66], 0} (no CRT gun mode), its white and trigger paths left
+// unconnected -- Arcade is the game's own flash, nothing added.
+`ifdef M2_2A_GUN_FLASH
+/* verilator lint_off PINCONNECTEMPTY */
+m2_gun_flash u_gun_flash (
+	.clk_sys(clk_sys), .rst_sys_n(cpu_rst_n), .en(v2_gun), .mode({status[66], 1'b0}),
+	.cpu_tram_we(cpu_tram_we), .cpu_tram_addr(cpu_oc_addr), .cpu_tram_din(cpu_oc_din),
+	.trig_n(2'b11), .trig_game_n(),
+	.clk(clk_mem), .rst_n(mem_rst_n), .vb(tile_vb), .tram_addr(tram_addr),
+	.kill(gf_kill), .white()
+);
+/* verilator lint_on PINCONNECTEMPTY */
+`endif
 
 // THE VIDEO DOMAIN'S RESET, ASYNC ASSERT AND SYNCHRONOUS RELEASE.
 //

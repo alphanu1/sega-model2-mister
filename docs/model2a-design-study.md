@@ -46909,3 +46909,117 @@ holds and the SDRAM change is kept. O[71:70] is free on 2C (no Seam fill).
     registers, 4,592,208 block memory bits (as int-2c / timing-2c: 549 M10K
     expected), 105 DSP.
   * Not checked: the fit (timing) and the board.
+
+**R965 -- GUN FLASH OFF FOR VIRTUA COP 2 (2A) AND THE HOUSE OF THE DEAD (2C):
+BOTH GAMES FLASH AS VIRTUA COP DOES, AND MODEL 2's OFF PATH PORTS AS IT IS.
+OSD "Gun flash" Arcade (default) / Off, O[66] as on Model 2 (R929).**
+R936 (1) and R942 (2), built. Branches gunflash-2a (off combo-2a 3e883c2) and
+gunflash-2c (off combo-2c 1b67488), the same change on each.
+
+*Believed:* R929 6 -- Virtua Cop 2 flashes with the window table (7 shots,
+7 white frames); House of the Dead "has the same table written by 0x18650 in
+its attract", its play not reached, "not measured".
+
+*Measured (MAME 0.289 /usr/bin/mame; sim/io/mame_m2_gunflash_wt.lua, every
+write to tile RAM words 0x6000-0x67FF logged per frame with the ip;
+House of the Dead driven by sim/io/mame_m2_hotd_play.lua, seed 1, beside it):*
+  1. VIRTUA COP 2 (vcop2): an accepted shot -> 0xFFFFFFFF over CPU
+     0x0100C000-0x0100CBFF (words 0x6000-0x65FF) from 0x6000 up, ip 0x19f08,
+     in the vblank after the shot; zeros the same at each of the next FOUR
+     vblanks (0x19f98) -- Virtua Cop's countdown. The frame after it is
+     (255,255,255) on all 190,464 pixels. Coverage: 85 s with shots every
+     1.3 s (12 requests), 400 s with shots every 0.7 s through play, game
+     over and attract (20), 400 s attract with no input (0): NOTHING else
+     writes the table at all -- the boot's clear (0x74c8) apart.
+  2. HOUSE OF THE DEAD (hotd): the same request, ip 0x18620 (same range,
+     from 0x6000 up), cleared at the NEXT vblank only (0x18650): one flash
+     frame, one flat colour, (228,228,228) on all 190,464 pixels (its
+     palette, not pure white). 300 s of play: 1,984 requests, every one from
+     0x18620; 720 s of attract with no input: no request (0x18650's zero
+     runs only -- R929's "attract" writes were these). The only other
+     writers: 0x185f0 (zeros, rows 256-383) and 0x183f0 / 0x184f8 -- a band
+     of mixed masks over rows 336-367, ONLY while a request stands on the
+     chapter card (below).
+  3. A SHOT DURING HOUSE OF THE DEAD's WHITE CHAPTER CARD ("The First
+     Chapter", 25.17 s): the request (one grey flash frame), then the table
+     is NOT cleared for 61 frames (0x18650 does not run while the card is
+     up) while 0x183f0 / 0x184f8 rewrite the rows 336-367 band every frame;
+     MAME shows the card streaked (tilemap 1's columns) with "HOLD YOUR
+     FIRE!" hidden, then the whole table cleared (26.25 s). With the table
+     writes forced to zero (WT_NOFLASH) the card is clean, "HOLD YOUR FIRE!"
+     blinking, white on 174,176 pixels -- the card's white is NOT the table's.
+  4. With every table write forced to zero, the game runs on identically
+     (the game never reads the table): vcop2 691 frames 29.5-41.5 s, only
+     the 9 flash frames differ (they become the scene); hotd 190 frames,
+     only the 13 flash frames and the 62 card frames of 3 differ.
+
+*So the request is a fact about the game, not about the picture:* word
+0x6000 written 0xFFFF is the flash routine's first store (0x19f08 / 0x18620)
+and nothing else in either game writes it. Off does not look at brightness:
+it takes out the table's effect -- the renderer reads words 0x6000-0x67FF as
+zero while the request stands and up to the frame start after it goes -- so
+a white explosion, a white card or any bright 3D is untouched (it is not the
+table), and the table's other uses (VCop's stage band, HOTD's band without a
+request) pass through. The one place Off changes more than the flash frame
+is 3: the card shows clean for the ~1 s the game leaves its flash standing,
+exactly as MAME does with the flash writes removed.
+
+*Built (Model2.sv, M2_2A_GUN_FLASH; on by default with M2_2A_VCOP2_GUN,
+VERILOG_MACRO "M2_NO_2A_GUN_FLASH=1" builds the core before R965, CONF_STR
+included):* rtl/video/m2_gun_flash.sv copied unchanged from main 5a192f5
+(R929); en = v2_gun (is_vcop2 on 2A, is_vcop2 | is_hotd on a 2C build),
+mode {status[66], 0} (no CRT gun mode), trig_n tied high, trig_game_n and
+white unconnected; its kill gates tram_q_vid into tram_data. OSD
+"h1O[66],Gun flash,Arcade,Off;" after the Crosshair / Mouse lines (menumask
+bit 1: the gun games only). O[66] was never used on model2a / model2c
+(git log -S), so every saved config opens on Arcade. ARCADE ADDS NOTHING --
+unlike Model 2's Arcade (R929 board: its tile path lost the flash, so
+Model 2 whites the output) the 2A / 2C picture is the game's own; R929's
+board note says House of the Dead flashes on its core without help. Whether
+Virtua Cop 2's own flash shows on the 2A board is NOT checked here.
+
+*Evidence:* sim/video/run_gunflash2a.sh (make test_m2_gunflash2a with
+GF2A_DUMPS = vcop2 f1726, hotd f1716, hotd f1470 the card; dumps from
+MAME, out of the tree), tb_m2_gunflash2a: m2_video with the 2A parameters
+(MASK_SKIP on), the kill on the tile-RAM read, a stand-in 3D, the output
+register; FLASH = 0 is the core before R965. The games' writes played into
+tile RAM in the vblank (and at line 200, a late handler): 30 checks PASS --
+Arcade equals the core before R965 byte for byte on every frame of all 10
+cases (no writes, vcop2's flash, late, VCop's stage band; hotd's flash,
+late; the card alone, a shot on the card with the band, the band alone);
+Off equals the no-writes picture on every frame of the 5 request cases and
+equals Arcade on the 5 others; en 0 Off = Arcade; the kill never rises
+without a request; and the cases bite (Arcade's flash frame white / flat
+over > 95%, torn over frames 5-6 when late). Planted faults, each caught:
+kill tied 0 (5 FAIL), the request taken from any table write (4 FAIL --
+the bands suppressed), the kill window narrowed to 0x6000-0x61FF (5 FAIL).
+Not caught, and harmless here: the frame start on the vblank's rising edge
+(it moves only ktail's end and the unconnected white). lint_top clean
+(2A; 2C with -DM2_2C -DM2_NO_2A_MANX_MOTION; each also with
+-DM2_NO_2A_GUN_FLASH); the -Wall list identical but status bit 66 now used
+and hps_io's CONF_STR width; lint_idx the same findings (108 2A, 93 2C);
+quartus_map --analyze_file 0 errors on m2_gun_flash.sv and Model2.sv (both);
+make test PASS (both).
+AREA, quartus_map 17.0, whole design (build/map, as seed-sweep sets a
+seed up), against the release maps of the same trees without it (combo-2a
+s1503, combo-2c s1515):
+
+    build              ALMs needed  ALUT (logic)  registers  block bits  DSP
+    2A before (s1503)    38,977       55,404       48,082    4,601,424   99
+    2A gunflash-2a       38,962       55,353       48,095    4,601,424   99
+    2C before (s1515)    39,046       55,456       48,600    4,592,208  105
+    2C gunflash-2c       39,067       55,453       48,613    4,592,208  105
+
+m2_gun_flash itself maps to 12 ALUT / 12 registers on 2A (11 / 11 on 2C):
+with mode[0] tied low and white / trig_game_n unconnected, its CRT gun and
+white logic are swept away; the rest is the kill's 16 ANDs on the tile-RAM
+read. No block memory, no DSP. -15 / +21 ALM is map noise (R848: +-40). On
+2C the CONF_STR crosses 1,024 bytes (1,004 -> 1,033) and hps_io's byte_cnt
+compare widens a bit (lint: 10 -> 11-bit selects); already past on 2A
+(1,041 -> 1,070). The fit decides; not fitted here.
+
+*What the board must show:* Gun flash Arcade -- Virtua Cop 2 and House of
+the Dead exactly as the release (whatever flash each shows today). Off --
+no flash on a shot in play, the picture under it the scene; House of the
+Dead's chapter card clean if shot at; everything else unchanged. The OSD
+line only for those two games.
