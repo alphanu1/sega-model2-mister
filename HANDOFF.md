@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-26: combo-2c (off model2c ed9fa94) -- R958 / R959 / R960 / R961 merged for fitting. LOCAL, NOT PUSHED, NOT FITTED
+
+  * Worktree sm2-builds/combo-2c, branch combo-2c. Merged: hotd-gun (R960:
+    HOTD's mark mapping, 2-px off-screen edge), wheel-2c (R958: Analog control
+    on O[71:70] for Over Rev / STCC), timing-2c (R959: SCSP DSP microword
+    register, m2_sdram and m2_fp_pool one-hot picks). Then m2_vcop_guns.sv
+    taken from gun-edge-2a (R961): it differed only in Virtua Cop 1's edge
+    rule (MAME's 5% border -> the 2-px rule) and its comments; it is now
+    byte-identical on main, model2a and combo-2c. On 2C (HD = 1) the VCop 1
+    branch is a constant, so the netlist is unaffected. Not included: span
+    cull, NEGZ, QNX (2A only for now).
+  * No RTL conflicts. Docs: HANDOFF / study keep both sides (R958, R959, R960,
+    R961 in order); releases/README keeps model2c's released text, plus
+    wheel-2c's "coming in the next build" note in the 2C section only.
+  * CONF_STR: O[71:70] free on model2c (no Seam fill on 2C; highest other
+    bits O[67], O[65:64], O[122:121]).
+  * m2_sdram: model2c's file before R959 is byte-identical to 2A's (md5
+    adf5502f...), and after it to model2a's (f64ab793...); the 2C
+    instantiation is the 2A one (M2A = 1, AGE 0). So the SDRAM change is in.
+  * lint_top clean (-DM2_2C -DM2_NO_2A_MANX_MOTION; also with PROCASSWIRE /
+    BLKANDNBLK off, full elaboration: 1,003 warnings vs model2c's 1,006, no
+    new ones); lint_idx 93 vs model2c's 96 (the 3 m2_sdram rr_grant selects
+    gone; else only hps_io's CONF_STR width); analyze_file 0 errors on
+    Model2.sv and the six changed RTL files. make test exit 0 (81 targets).
+    test_m2_hotd_guns 191,757 / 0, test_m2_vcop2_guns 223,916 / 0,
+    test_m2_vcop_guns 828,113 / 0, test_m2_cab_inputs 145.7 M / 0 (sweep
+    50,202 / 0, Standard vs 0f3cbc4 327,680 / 0), test_m2_2a_inputs
+    366,125,139 checks / 0 (Over Rev 1,568,289, STCC 2,681,806).
+  * SCSP DSP miter OVERLAP 1 (old = model2c): DSP_RANDOM 300, 384,247,199
+    cycles, 0 differing, invariants 0; tb_m2_scsp SCSP_OVL HOTD ch. 2 10 s,
+    424,517,283 cycles, 0 differing. pool_eq NC 4 PROVEN (2,554 cells);
+    sdram_eq 2a PROVEN (2,493), 2a-age PROVEN (2,524).
+  * quartus_map 17.0: 39,046 ALMs needed (timing-2c 39,010, int-2c 38,935),
+    48,600 registers, 4,592,208 block memory bits (= int-2c / timing-2c:
+    549 M10K expected), 105 DSP. Model2.qsf restored (M2_2C / M2_NO_2A_MANX_MOTION kept).
+  * Next: Ben fits; then the board (HOTD gun edges and mark, Over Rev / STCC
+    wheel modes, HOTD / Dynamite Cop sound unchanged).
+
 ## 2026-10-26: Model2A_20261026 and Model2_20261026 released
 
   * Model2A_20261026 = s1503 (combo-2a 3e883c2: R959 timing, R954 span cull,
@@ -74,6 +112,40 @@
     s1484-s1486 for a board test before it merges to main; wheel mapping #12 on
     all three cores (R958); tree pixels (R955, NEGZ); span cull for VCop2's
     train (#29, R954, branch vc2-slow) held until after this release.
+
+## 2026-10-24: wheel-2c (off model2c) -- Analog control: Wheel A / Wheel B (R958, GitHub #12). LOCAL, NOT PUSHED, NOT FITTED
+
+  * OSD "Analog control: Standard / Wheel A / Wheel B" on O[71:70] -- free on
+    main, model2a, model2c, dilk-2a (Seam fill O[69:68]) and every local
+    branch; Standard (0, and 3) is today's behaviour, so saved configs open
+    unchanged. The same change is on wheel-main (off main) and wheel-2a (off dilk-2a) -- carry them together.
+  * Wheel A: left X steers, left Y up = accelerator (centre released), right
+    Y up = brake. Wheel B: left X steers, left Y whole axis = accelerator (-127
+    released .. +127 pressed), right X whole axis = brake. Both: no steering
+    dead zone, right stick never steers, Steering / Steering smoothing apply,
+    Pedals: Swapped exchanges the pedals, buttons press fully, d-pad steers
+    while held. Pedal scale = the right-stick pedals' (0x20 .. 0xDE).
+  * All in rtl/io/m2_cab_inputs.sv (identical on the three branches), +
+    m2_2a_inputs (2A / 2C: st_wheel through, Sky Target forced Standard),
+    + Model2.sv (CONF_STR line, h2 on 2A / 2C, and the two instantiations).
+    Desert Tank: the further-pressed pedal drives (accelerator forward,
+    brake reverse, sets the lever). Manx TT / Motor Raid: wheel = bank,
+    accelerator = throttle, brake = brake. Over Rev / STCC through R928's
+    widening.
+  * Evidence: tb_m2_cab_inputs PASS (Standard vs the 0f3cbc4 block 30 M / 0;
+    wheel modes random 145.7 M checks / 0; every axis swept -128..+127 in
+    each mode, 50,202 / 0; Standard + 3 swept against the reference 327,680
+    / 0; two mutations caught); tb_m2_2a_inputs PASS on 2A / 2C (Sky Target
+    checked against a Standard block; dropping its exception = 711,768
+    mismatches); test_m2_315_5649, test_m2_vcop2_guns PASS; make test PASS (114 benches);
+    lint_top clean; lint_idx unchanged but for hps_io's CONF_STR width;
+    Quartus 17 analyze_file clean, the new functions constant-folded right.
+  * Releases README: OSD row, Controls "Analog control" table, Desert Tank
+    line, a "Coming in the next build" note. Not fitted: ~40 flops and a
+    little logic, plus ~50 bytes of CONF_STR (2A's passes 1 KB).
+  * Open: not tried on a wheel; Wheel B's axis ranges are the reporter's
+    account of MiSTer Main (RS50), not measured. Wheel B on a pad reads half
+    pedal (README warns).
 
 ## 2026-10-24 (night): Model2A_20261024 released (main + model2a); model2c published with the Model2C_20261024 beta
 

@@ -8,7 +8,9 @@
 
 `timescale 1ns/1ps
 
-module tb_m2_vcop2_top (
+module tb_m2_vcop2_top #(
+  parameter bit HD = 1'b0   // R960: The House of the Dead's units (test_m2_hotd_guns)
+) (
   input  logic        clk,
   input  logic        por_n,
   input  logic        rst_n,
@@ -31,7 +33,7 @@ module tb_m2_vcop2_top (
   output logic  [1:0] goff
 );
   logic [7:0] g_in0, g_in1;
-  m2_vcop_guns #(.TICK_LOG2(6), .V2(1'b1)) guns (
+  m2_vcop_guns #(.TICK_LOG2(6), .V2(1'b1), .HD(HD)) guns (
     .clk, .rst_n, .en(1'b1), .play,
     .joy0, .joy1, .ana0, .ana1, .ps2_mouse, .mouse_sel,
     .in0(g_in0), .in1(g_in1),
@@ -44,7 +46,7 @@ module tb_m2_vcop2_top (
     .clk, .rst_n, .game(7'h11),   // R887: Virtua Cop 2's ID, the GUN profile
     .joystick_0({16'd0, joy0}), .joystick_1({16'd0, joy1}),
     .joy_analog(16'd0), .joy_ranalog(16'd0), .joy_analog_1(16'd0), .paddle(8'd0),
-    .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0),
+    .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0), .st_wheel(2'd0),
     .gun_in1(g_in1), .pe(8'hFF),
     .in0, .in1, .in2, .an0, .an1, .an2
   );

@@ -46513,3 +46513,513 @@ f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
 *LEFT:* the fits (Ben); the timing checks R951 and R952 name (the clamp's
 MLAB read into m2_texel_x2's request registers; 2C near the projector /
 clipper states).
+
+**R958 -- "ANALOG CONTROL": TWO WHEEL LAYOUTS (WHEEL A / WHEEL B) BESIDE THE
+PAD'S, FOR EVERY DRIVING AND RIDING GAME ON ALL THREE CORES (GitHub #12).**
+
+(Section: §10. Authority: the request itself -- a wheel owner's description of
+what MiSTer Main reports for two kinds of wheel, after Jotego's OutRun core's
+"Analog control" option. No MAME question: the game-side values are the
+existing ADC ranges, 0x20..0xE0 (R835/R837, R862/R887, R928/R933). Model 1
+has no wheel layout to follow.)
+
+*What was there.* R816 / R831: the pedals share the right stick's Y (split by
+sign, O[28] "Pedals" swaps the halves), steering is the paddle, else the left
+stick's X past a dead zone of +-12, else (O[54] "Right stick: Pedals+steer")
+the right stick's X past the same dead zone, else the d-pad's ramp. That fits
+a wheel only if MiSTer maps it onto the right stick. The reporter's wheels
+(the cathoderayblog guide's setup; and newer direct-drive pedal sets such as
+the Logitech RS50) put the wheel on the left stick's X and each pedal on its
+own axis, so neither pedal worked.
+
+*What is added.* O[71:70] "Analog control: Standard / Wheel A / Wheel B".
+O[71:70] is free on main, model2a, model2c, dilk-2a / dil-off-2a (Seam fill,
+O[69:68] / O[68]) and every other local branch (searched: no O[] or status[]
+use above 69 bar hps_io's own status words and O[122:121]); 0 is today's
+behaviour, so a saved config opens on Standard, and 3 (unreachable from the
+OSD) reads as Standard. All of it is in m2_cab_inputs, the one block every
+analog game goes through (main's Daytona / Desert Tank directly; the 2A / 2C
+games through m2_2a_inputs' cab_steer / accel / brake), so it lands once:
+  steering   Wheel A and B: the left stick's X, always, with NO dead zone (a
+             wheel's first degrees are steering, not noise); the right stick
+             never steers (Wheel B's brake is its X; "Right stick" is
+             ignored); the paddle still comes first; the d-pad steers while
+             its left / right is held. "Steering" (O[30:29]) and "Steering
+             smoothing" (O[51:50]) apply unchanged -- same scale, same
+             limiter downstream.
+  Wheel A    accelerator = the left stick's Y, brake = the right stick's Y,
+             each centre released .. full up (-127) fully pressed; the lower
+             half reads released.
+  Wheel B    accelerator = the left stick's Y over the whole axis, -127 (up)
+             released .. +127 (down) fully pressed; brake = the right
+             stick's X, -127 (left) released .. +127 (right) fully pressed.
+             Seven-bit pedal = (v + 127) / 2; -128 reads released.
+  both       a pedal p (0..127) reads 0x20 + p + p/2: the right-stick pedals'
+             own 3/2 scaling (0x20 released, 0xDE full -- the same top a pad
+             reaches today; the 0xE0 rail is the buttons'). "Pedals: Swapped"
+             exchanges the two pedals. The Accel / Brake buttons still give
+             0xE0. The pedal values are registered once (one clk_sys) so the
+             new arithmetic is off the stick -> ADC paths R842 / R934 timed.
+Per game:
+  Daytona USA (both sets), Sega Rally: steering / accelerator / brake as
+             above, nothing else.
+  Desert Tank (R837's one drive pedal and the lever): Wheel A / B count as a
+             wheel, as "Pedals+steer" does -- the further-pressed pedal past
+             the dead zone (12) drives, the accelerator forward and the
+             brake in reverse, setting the lever; the cannon is the
+             d-pad's. Its pedals ARE the cabinet's (HANDLE + ACCEL; the
+             third channel is the turret).
+  Manx TT, Motor Raid (manxtt ports: THROTTLE, BRAKE, BANK): the wheel banks
+             the bike (AN2 = 0xFF - steering, as before), the accelerator
+             pedal is the throttle grip and the brake pedal the brake lever.
+             No special case: the profile already takes the block's three
+             values in those roles.
+  Sky Target (0x18): a flight stick. m2_2a_inputs hands the block Standard
+             for it whatever the OSD says (p_sky), so its STICKX / STICKY are
+             byte for byte as before.
+  Over Rev, STCC (2C, R928 / R933): the block's values through the existing
+             0x20..0xE0 -> 0x00..0xFF widening and Over Rev's PORT_REVERSE.
+             Virtua Cop / VC2 / HOTD (guns) and the digital games: untouched.
+
+*Verified.* tb_m2_cab_inputs (all three branches, identical): Part A, the
+DUT at Standard against the 0f3cbc4 block, 30,000,000 checks, 0
+mismatches; Part B (Desert Tank, R837 model) 320,000,000 / 0; Part D,
+random inputs with Analog control random (Standard / 3 against the 0f3cbc4
+block, Wheel A / B against a model written from the request), 145,662,741
+checks / 0 (5.35 M Wheel A and 5.22 M Wheel B Daytona cycles, 10.8 M
+wheel-model steering checks, 3,980 Desert Tank lever sets to reverse);
+Part E, every axis swept -128..+127 in each wheel mode x Pedals Normal /
+Swapped x every Steering, 50,202 checks / 0, including the request's
+endpoints (released 0x20, full 0xDE, full lock 0x21 / 0xE0 -- -127 gives
+0x21 at 3/4 exactly as Standard does), monotonic pedals, the unused axes
+inert, buttons, d-pad and paddle precedence; Standard and 3 swept over every
+axis x 16 OSD combinations against the 0f3cbc4 block, 327,680 checks, 0
+differences (the default unchanged byte for byte); smoothing (Wheel) on the
+wheel's X slews 10 counts in 10 steps and settles at 0xE0; Desert Tank's
+pedals in A and B. Two mutations (Wheel B's brake read from the right Y; the
+mode decode leaking into Standard) each FAIL it. tb_m2_2a_inputs (2A, 2C):
+Analog control random, every analog profile against the block with the same
+setting, Sky Target against a second block held at Standard; 0 mismatches
+(removing the Sky Target exception: 711,768 mismatches). Quartus 17.0
+analyze_file clean on both RTL files; the new functions constant-folded by
+quartus_map to the bench's values (up(-128) 127, full(-127) 0, full(+127)
+127, full(0) 63, an(127) 0xDE). lint_top clean (2C: -DM2_2C
+-DM2_NO_2A_MANX_MOTION); lint_idx unchanged but for hps_io's CONF_STR
+width (2A's CONF_STR now passes 1,024 bytes, so byte_cnt is a bit wider).
+Not fitted; not on a wheel.
+
+*Open.* Whether MiSTer Main reports the RS50-class pedals exactly as the
+request says (whole axis, -127 released) is the reporter's account, not
+measured here; if a pedal set rests at +127 instead, "Pedals: Swapped" does
+not help (it exchanges pedals, not directions) and a Wheel C would be the
+fix. Wheel B with a pad and no pedals reads half accelerator and half
+brake -- it is for pedal sets only (README says so).
+
+**R959 -- THE PATHS THAT FAIL SEEDS, SHORTENED WITHOUT CHANGING A CYCLE:
+THE SCSP DSP's MICROWORD AND RING ADDRESS, THE SDRAM GRANT'S REGISTERS, THE
+GEOMETRY POOL's ARBITER. EACH PROVEN IDENTICAL (A MITER, OR YOSYS).** Ben:
+"good idea, as long as it does not break anything". Branches timing-2a (off
+dilk-2a 509f505) and timing-2c (off model2c fccb5e2), LOCAL, NOT FITTED.
+*THE SURVEY* (quartus_sta, report_timing pairs under +0.3 ns, by path family;
+2A/2C: int-2a s1466-68, int-2c s1469/71, room-only-2a s1472/74, dilk-2a
+s1478/79; older 2C/2A s1337-s1458; Model 2: scan15-pair s1401-08 (before
+R952), room-main s1486-89 (R952 on main)). Which family fails a seed:
+  * pll_hdmi, the framework's scaler (ascal -> ascal, hdmi_osd): 6 of 9
+    recent 2A/2C seeds, worst -1.703 (s1466), -1.401 (s1467). The most common
+    failure by far; framework code (sys/), not touched here.
+  * clk_mem, m2_sdram's arbiter (pend / inflight / rr_mask -> rr_mask,
+    -> nxt_total; ras_ok -> cmd): 3 of 9 recent (s1466 -0.193, s1474 -0.177,
+    s1479 -0.070) and 4 of 14 older (s1458 -0.576, s1368 -0.335, s1353
+    -0.238, s1350 -0.001).
+  * clk_sys, the SCSP DSP's MPRO M10K read -> m2_scsp_dsp mul_a / mul_b:
+    1 of 9 recent (s1479 -0.247; s1474 +0.02) and 5 of 14 older (s1365 -0.510,
+    s1451 -0.386, s1338 -0.262, s1353 -0.212, s1337 -0.177).
+  * clk_sys, m2_geo_clip cs / cp_a -> m2_fp_pool mul_a_q / mul_b_q: Model 2
+    s1488 -0.395 (s1486 +0.13), 2A s1479 -0.021; before R952 s1401 +0.077 on
+    mul_a_q, nothing under +0.15 on mul_b_q in s1401-08. So R952's clipper
+    change made it worse (its registers' enables from cs, R952's own warning)
+    but the shape was there before it: cs -> the clipper's mul_req -> the
+    pool's rr_pick -> the operand mux.
+  * one seed each, different every time: m2_span_tex -> m2_texel_x2 (s1469,
+    s1479), TGP x_dst_r2 -> maddr_q (s1466 -0.543), gp_outr -> PhaseInc
+    (s1467), raster3d cst -> fill Mult (s1478), m2_scan15 / m2_texel_bl on
+    clk_mem (s1474), the framebuffer / DDR3 link on Model 2 (s1486-88).
+  The data arrival of s1479's DSP path: 2.46 ns of M10K clock-to-out, then
+  MASA's MADRS + DEC + ADRS + NXADR (three carry chains), the mask and RBP,
+  the < 0x40000 compare, PACK's pk_go, UNPACK's up_go, the multiplier's
+  operand enables. s1466's SDRAM path: pend -> arb_ready -> arb_sel ->
+  rr_grant (one-hot -> index, two levels) -> + 1 -> the shift -> rr_mask.
+*1. m2_scsp_dsp.* (a) ins, MPRO's output a clock later in a register, for
+everything a step decides in ph 2-4; the RAMs' read addresses (TEMP's TRA,
+MEMS's / MIXS's IRA -- both banks with OVERLAP --, COEF, MADRS, EFREG's EWA,
+which ef_q shows) keep MPRO's output itself, as before. The row is read in
+ph 0 and holds from ph 1 until k moves in ph 4, so ins == mp_q in ph 2-4 --
+given no MPRO write lands in a run, which m2_scsp guarantees (op_ok holds the
+68000's DSP-region accesses off while dsp_busy, and with OVERLAP dsp_pend);
+the standalone bench writes only when !busy too. (b) a_off, (TABLE ? 0 : DEC)
++ (ADREB ? ADRS : 0) + NXADR in a register: addr_w is read in ph 3 and 4
+only, and none of its terms moves from ph 2 to ph 4 (DEC in D_FIN, ADRS at
+ph 4's edge or a go); 16 bits, the mask keeps at most bits 15..0.
+  Proof, sim/miter/scsp_dsp.sh (R952's miter.py, old against new, all 11
+outputs every clock -- 13 with OVERLAP -- plus two invariants of the new
+copy: ins == mp_q in a run's ph 2-4, addr_w == the old copy's in ph 3-4).
+Mutations caught (a_off without NXADR: 4,312,107 of 5,069,058 cycles differ;
+MEMS read through ins: 787,223). 2A config, all 0 differing, invariants 0:
+    tb_m2_scsp_dsp DSP_RANDOM 1,000 programs x 2,000 samples, latency 6-40:
+      1,264,370,443 cycles; 300 at latency 1-2: 202,508,095; 300 at 60-400
+      (an order past the board's): 2,468,425,839
+    tb_m2_scsp, Dynamite Cop, ALL 179 s (7,890,000 samples): 10,502,771,682
+      cycles, and the bench's own totals equal R949's to the number (engine
+      mean 1,298 / max 2,038, DSP reads 51,137,118, writes 78,672,603);
+      10 s each of VF2 (291,207,492 cycles), VC2 (388,276,392), Zero Gunner
+      (499,241,398), Sega Rally (79,904,277), DOA (244,929,174), HOTD ch. 2
+      (446,217,094); Dynamite Cop 5 s at latency 1-400 (768,458,653)
+    tb_m2_2a_sound (fx68k on the real program, the whole board), Dynamite
+      Cop 10 s: WAV and log byte-identical to 509f505's (md5 889ca155...)
+2C (model2c's DSP: OVERLAP, WPOST, ABORT_MERGE):
+    DSP_RANDOM 300 each, OVERLAP 0 (384,247,199 cycles), OVERLAP 1
+      (384,247,199), OVERLAP 1 + WPOST (354,006,953), OVERLAP 1 at latency
+      1-2 (150 programs, 101,568,761); 12 outputs compared (mrg)
+    tb_m2_scsp OVERLAP 1 (SCSP_OVL): HOTD ch. 2 30 s (1,311,179,131 cycles,
+      572,250 non-zero samples), HOTD attract 10 s (424,505,505), Dynamite
+      Cop 10 s (424,310,344), VC2 10 s (369,799,532); OVERLAP 0 Dynamite Cop
+      10 s (456,922,165)
+    tb_m2_2a_sound OVERLAP 1, HOTD 10 s: WAV and log byte-identical to
+      fccb5e2's (md5 5efd7abd...; this stretch of ch. 2 is quiet, and the
+      bench's MAME comparison says FAIL on both alike); Dynamite Cop 10 s, OVERLAP 1:
+      WAV and log byte-identical to fccb5e2's (md5 a19dcf43..., PASS)
+*2. m2_sdram.* rr_mask, inflight, nxt_total and nxt_is_write are written
+from arb_sel (one-hot whenever rr_valid: rr_sel is the lowest bit of a
+non-zero mask, low_pri of one when use_pri), not through rr_grant: rr_mask
+<= bit i set iff a bit of arb_sel below i is (all ones when arb_sel[NP-1]) ==
+ones << (rr_grant + 1); inflight bit by bit; blen() OR-ed over arb_sel's bits;
+we_gr (R421 wrote it and nothing used it). rr_grant stays for nxt_grant. No
+state added or removed, so the proof is formal: sim/miter/sdram_eq.sh, yosys
+0.66 equiv_make / equiv_simple / equiv_induct over the two netlists,
+registers and outputs matched by name -- the same command stream, data and
+acks on every cycle for every input sequence. PROVEN at the 2A parameters
+(2,493 equivalence cells), the Model 2 build's (2,373), 2A with AGE (2,524)
+and the defaults NP = 5 (1,293). A mutation (the mask one bit off) leaves 16
+cells unproven -- the check sees it. The file is the same on dilk-2a,
+model2c and int-2c; main's differs (not touched). lint_idx 3 fewer
+(inflight[rr_grant], we_p[rr_grant] x 2 gone).
+  NOT DONE: ras_ok -> cmd (s1479 -0.070, bank_pre_ok[dsp_bank] into the
+command case). A registered pre_ok would have to equal the live counters'
+flags on the cycle it is read -- a next-state copy of ras_ok / rd_ok, more
+state, not a re-expression; left.
+*3. m2_fp_pool (the coordinator's addition: Model 2 s1488).* mul_win and
+add_win from a one-hot, rr_oh -- the lowest requester at or above the pointer,
+else the lowest, else the pointer, its masks a decode of the pointer
+register beside the requests -- encoded into the same index (one level); the
+add and conditional subtract of rr_pick are off the path. Operand mux,
+grants, tags, pointer untouched; rr_pick stays for the divider. Proof
+formal, sim/miter/pool_eq.sh (yosys, fp_mul / fp_add / fp_div flattened in):
+PROVEN at NC 4 (m2_geometry's, 2,554 cells) and NC 3; a mutation (> for >=)
+leaves 462 unproven. NC 5 does not prove by induction (the pointer's
+unreachable values 5-7 are the likely cause; not chased -- NC is 4). The file is
+the same on main, dilk-2a and model2c: the commit is cherry-pickable. A first
+version (operands as an AND-OR over a one-hot) cost the pool +229 ALUTs and
+was dropped for this one (656 against 663).
+*AREA, quartus_map 17.0, ALMs needed:* 2A 38,986 (s1479) -> 38,896,
+registers 48,189 -> 48,246; m2_scsp_dsp 688 -> 649 ALUTs, 440 -> 498 regs;
+m2_sdram 1,011 -> 988 ALUTs; m2_fp_pool 663 -> 656. 2C (before the pool
+change) 38,935 (s1471) -> 39,010, registers 48,515 -> 48,573; m2_scsp_dsp
+758 -> 714 ALUTs.
+*CHECKS:* lint_top clean on both trees (2A, and -DM2_2C -DM2_NO_2A_MANX_MOTION);
+lint_idx 109 lines against the parent's 112 (none new); Quartus 17.0
+analyze_file 0 errors on m2_scsp_dsp, m2_sdram, m2_fp_pool; make test on
+timing-2a exit 0 (every m2_sdram bench fails=0 violations=0, m2_geo PASS).
+*EXPECTED:* the DSP family loses the M10K's 2.46 ns clock-to-out and two of
+three adders on its next path (madrs's MLAB, +0.09 in s1479): it should leave
+the failing list. The SDRAM arbiter's rr_mask / nxt_total paths lose two
+levels of encode and the add-and-shift, ~1-1.5 ns; ras_ok -> cmd stays. The
+pool's clip -> mul_*_q loses the add / compare / subtract, ~1 ns. None of it
+touches pll_hdmi's ascal paths, the most common failure; seeds will still fail
+there until that is looked at. Unmeasured until Ben fits.
+
+**R960 -- THE HOUSE OF THE DEAD'S GUN: THE GAME'S MARK IS NOT MAME'S
+CROSSHAIR, AND MAME'S 5% OFF-SCREEN BORDER COST 18-25 PX AT EVERY EDGE
+(HOTD AND VIRTUA COP 2). BRANCH hotd-gun (OFF model2c), NOT FITTED.**
+
+*What was believed (R924):* HOTD's guns are Virtua Cop 2's driver on MAME
+0.289 INPUT_PORTS_START(hotd)'s ranges (P1_X 173-596, P2_X 163-596, Y
+87-380), each screen pixel mapped linearly onto the range as MAME's
+PORT_CROSSHAIR does -- "not benched against MAME's crosshair mapping". The
+off-screen bit was MAME's lightgun_offscreen_r, int(span * 0.05f) of the
+range at either end, for HOTD and (R870) Virtua Cop 2.
+
+*The board (Ben, Model2C_20261024, HOTD test menu GUN MARK CHECK, a 1080p
+capture; the screen shows the default calibration AD1/AD2 XMIN 173 / 163,
+YMIN 87, XMAX 596, YMAX 380):* the core's crosshair at pixel (38.6, 28.4),
+fed (205, 108), the game's own mark at (64.8, 55.8): +26 / +27 px; crosshair
+(451.2, 334.2), fed (557, 342), mark (420.9, 310.8): -30 / -23 px; centre
+within ~3 px (the hand moving). Running the test menu's gun adjustment on the
+board removed the offset (Ben) -- a calibration matched to the core's
+mapping. The crosshair is never seen within ~25 px of a side or ~18 px of
+the top / bottom (x 31.7-458.5, y 26.7-363.0 over 231 frames; absent in 29
+of them): c_on hides it where the 5% border calls the gun off-screen, and
+there a trigger is a reload, so nothing can be shot near an edge. Virtua Cop
+2 the same travel (Ben); its shots do land on its crosshair.
+
+*MAME, fresh NVRAM (sim/io/mame_m2_hotd_marks.lua, hotd_marks.py; mame
+0.289; gun forced through the channel-2 mux, 289 marks swept over and past
+the calibrated ranges):* the game draws the calibrated min / max on pixels
+x 31.89 / 461.63 and y 33.42 / 351.16 -- the gun adjustment's targets, inset
+from the edges -- linearly between them for both guns (rms 0.5 px, max 1.2
+px) and on past them (units below min / above max draw to the screen's edge:
+P1_X 148 -> 6 px, 622 -> 488 px). So MAME's own crosshair (min / max on 0 /
+496) is off by the same 32 px; the core inherited it. The game has no range
+test of its own: in play, six shots at units (146, 60) -- below the
+calibrated minimum, 4 px from the corner -- with the off bit clear empty the
+magazine 6 -> 0 (fired, not reloads). Its reload is the off bit alone.
+MAME ships no HOTD NVRAM; the board's fresh calibration is the game's own
+default, the same as MAME's.
+
+*The fix (m2_vcop_guns):*
+  * HD: v = (px * K + C) >> 16 with the game's mapping inverted: P1_X K
+    64508 C 9313331 (142..629 over 0..495), P2_X 66033 / 8609339 (131..630),
+    Y 60433 / 3714722 (56..409 over 0..383). A reload holds pixel (0, 0)'s
+    units.
+  * V2 and HD: off-screen = a reload, or the crosshair pixel within 2 of an
+    edge (x <= 1 or >= 494, y <= 1 or >= 382). A MiSTer-calibrated gun at
+    +-127 lands on 1 / 494 (x) and 1 / 382 (y): off, so shooting off the
+    screen still reloads; +-126 is on (3 / 492, 3 / 381). The mouse clamps to
+    0..495 / 0..383, so its edges reload too. Virtua Cop 2's units are
+    unchanged.
+  * Virtua Cop (V2 = 0, main) is unchanged: every term is still a parameter
+    constant (tb_m2_vcop_guns 417,527 checks pass unchanged). It HAS the same
+    short travel (model1io2's 5% border: X 24 units = 24 px, Y 19 = 19 px);
+    the same edge rule would fix it, not done here.
+
+*Proof:* test_m2_hotd_guns (new: tb_m2_vcop2_top with HD, -DHOTD; every
+stick value against the edges and centre, every pixel walked by the mouse
+for both guns, 40,000 random packets a mode, ten screens past each edge,
+buttons, reload through the 315-5649, the mux): every unit the one whose
+game mark is nearest the crosshair (or within 0.02 px of it), worst 0.542 px;
+191,757 checks, 0 failures. test_m2_vcop2_guns: Virtua Cop 2's units
+checked as before, the off byte and c_on by the 2-px rule; 223,916 checks, 0
+failures. Closed loop in MAME: the core's units for crosshair pixels at the
+centre, the four corners and edges 4 px in, and two interior points put
+HOTD's P1 mark at (248, 192) for (248, 192), (4.0, 4.0) for (4, 4), (491.0,
+379.5) for (491, 379), (100, 300) for (100, 300), (399, 61) for (400, 60) --
+within 1 px everywhere (was up to 32). lint_top clean with -DM2_2C
+-DM2_NO_2A_MANX_MOTION, -DM2_2A and the Model 2 build; quartus_map 17.0
+--analyze_file on m2_vcop_guns.sv 0 errors.
+
+*For the board:* a gun calibrated with the old core (Ben's) is now wrong by
+the inverse amount -- restore it with TEST MENU -> GUN SETTING -> PLAYER1 /
+PLAYER2 GUN DEFAULT ADJUSTMENT (173 / 163, 87, 596, 380), or clear the
+backup data. A fresh install needs no calibration.
+
+*NOT DONE:* no fit, no board. Virtua Cop 2's in-game reload near an edge
+under the 2-px rule is benched in the core, not run in MAME. Virtua Cop 1's
+border (main) left as it was.
+
+**R961 -- VIRTUA COP'S OFF-SCREEN BORDER: 2 PX AT EACH EDGE, NOT MAME'S 5%
+(R960'S RULE), AND VIRTUA COP 2'S THE SAME ON THE 2A BUILD. BRANCHES
+gun-edge-main (OFF main) AND gun-edge-2a (OFF model2a), NOT FITTED.**
+
+*2A (gun-edge-2a):* R960 (branch hotd-gun, off model2c; its entry is there)
+found on the board that MAME's lightgun_offscreen_r border -- int(span *
+0.05f), X 24 / Y 19 units = 24 / 19 px on Virtua Cop 2's ranges -- hides the
+crosshair and turns the trigger into a reload 19-24 px short of every edge,
+and changed Virtua Cop 2 and HOTD to the 2-px rule below. This branch
+carries that rule to the 2A build's Virtua Cop 2 (M2_2A_VCOP2_GUN, V2 = 1)
+with hotd-gun's module (plus the Virtua Cop change below): its HD (House of the Dead) mapping comes along as a parameter that
+is off here (Model2.sv leaves HD = 0: every HD term is a constant), and
+test_m2_hotd_guns comes with it. Virtua Cop 2's units are unchanged.
+
+*What was believed (R846):* the off-screen bit is MAME model1io2 fpga_r's
+rule -- any coordinate within int(span * 0.05) of its range's end: X 24
+units, Y 19 (P1_X <= 0x09b or >= 0x25e, P1_Y <= 0x037 or >= 0x196; P2 the
+same on its ranges). The core maps a pixel ~1:1 to a unit, so that is 24 px
+at each side and 19 px top / bottom where the crosshair is hidden (c_on)
+and the trigger reloads: nothing near an edge can be shot. R960 (branch
+hotd-gun) found the same on the board for HOTD and Virtua Cop 2 and fixed
+those; Virtua Cop was left as it was.
+
+*Does the game itself reject coordinates near the edge? No* (MAME 0.289,
+vcopa, fresh NVRAM -- its default calibration, MAME's ranges; the I/O
+board's FPGA reads forced through a Z80 read tap, sim/io/mame_m2_vcop_edge.lua;
+the revolver counted in snapshots every 0.25 s): in play, three shots at
+P1 (0x086, 0x0e6) -- the core's unit for x pixel 2 -- with the off bit
+clear: 6 -> 3 rounds; one shot at (0x083, 0x024) with the bit set: reloaded
+to 6; two at (0x273, 0x0e6) (x pixel 493): 6 -> 4; one at (0x17c, 0x027) (y
+pixel 2): 3; one at (0x17c, 0x1a6) (y pixel 381): 2. Every on-screen edge
+value is a shot; the reload is the off bit alone, as R960 found for HOTD.
+
+*The fix (m2_vcop_guns):* off-screen = a reload, or the crosshair pixel
+within 2 of an edge (x <= 1 or >= 494, y <= 1 or >= 382 on the 496 x 384
+screen) -- edge_q, now for every game; the 5% compares and their constants
+(O1XL / O2XL / O2YL) are gone. The units are unchanged. Game units at the
+edge: P1 x px 0-1 = 0x083-0x085, px 2 = 0x086 (on), px 493 = 0x273 (on), px
+494-495 = 0x274-0x275 (off); P1 y px 2 = 0x027, px 381 = 0x1a6 (on); P2 x px
+2 = 0x083, 493 = 0x270; P2 y px 2 = 0x02a, 381 = 0x1a6. A MiSTer-calibrated
+gun or stick at +-127 lands on pixel 1 / 494 (x) and 1 / 382 (y): off, so
+shooting off the screen reloads; +-126 is on (3 / 492, 3 / 381). The mouse
+clamps to 0..495 / 0..383: its every edge reloads. Kept at 2 px, not wider
+(Ben): a USB light gun reports absolute positions, so a wider zone would
+reload a gun aimed at a target near the edge. The file is now hotd-gun's
+m2_vcop_guns.sv (R960, its V2 / HD parameters off here) with this one
+change; main and model2a carry the same file, and hotd-gun needs only this
+change to match.
+
+*Proof (2A):* test_m2_vcop2_guns (hotd-gun's bench: the off byte through
+the 315-5649 and c_on by the 2-px rule, units as before) 223,916 checks, 0
+failures; test_m2_hotd_guns 191,757, 0 failures (mark within 0.542 px);
+test_m2_vcop_guns and test_m2_vcop_xhair as below. lint_top clean (the 2A
+default build); quartus_map --analyze_file 0 errors.
+*Proof (both):* tb_m2_vcop_guns, extended: the off bit and c_on against the 2-px
+rule at every stick sample (each value of each axis against the edges and
+centre), every one of the 200,000 random mouse packets, the mouse's every
+pixel walk, a walk across the middle of the screen both ways for both guns
+(off exactly at x 0-1 / 494-495, y 0-1 / 382-383), ten screens past each
+edge with the mouse, each axis alone at -128 / -127 / +127 (off) and +-126
+(on); units, buttons and reload checked as before. 828,113 checks, 0
+failures (main's old module: 20,512 failures, all the off bit / c_on;
+its units pass the same checks). test_m2_vcop_xhair PASS. lint_top clean;
+verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
+17.0 --analyze_file 0 errors.
+
+*LEFT:* the fit and the board (Ben). Virtua Cop 2's in-game reload at the
+2-px edge is benched in the core, not run in MAME (as R960).
+
+**R958-R961, INTEGRATED ON 2C: combo-2c (2026-10-26), off model2c ed9fa94,
+for fitting.** hotd-gun (R960), wheel-2c (R958) and timing-2c (R959) merged,
+then m2_vcop_guns.sv made byte-identical to gun-edge-2a's / model2a's / main's
+(R961): the only difference was Virtua Cop 1's off-screen rule (MAME's 5%
+border -> the last 2 px) and its comments; on 2C (HD = 1) that branch is a
+constant. Span cull (R954), NEGZ (R955) and QNX (R962) are not in: 2A only
+for now. No RTL conflicts; the R959 files are byte-identical to timing-2c's.
+m2_sdram on model2c was byte-identical to 2A's before R959 and is after, and
+2C instantiates it with 2A's parameters (M2A = 1, AGE 0), so the proof
+holds and the SDRAM change is kept. O[71:70] is free on 2C (no Seam fill).
+  * lint_top clean (-DM2_2C -DM2_NO_2A_MANX_MOTION); lint_idx 93 against
+    model2c's 96 (the three m2_sdram rr_grant selects R959 removed; else only
+    hps_io's CONF_STR width); analyze_file 0 errors on Model2.sv and the six
+    changed RTL files; make test exit 0.
+  * test_m2_hotd_guns 191,757 / 0, test_m2_vcop2_guns 223,916 / 0,
+    test_m2_vcop_guns 828,113 / 0, test_m2_cab_inputs PASS (145.7 M / 0),
+    test_m2_2a_inputs 366,125,139 / 0 (with OREV: Over Rev and STCC).
+  * SCSP DSP miter at OVERLAP 1, old = model2c: DSP_RANDOM 300, 384,247,199
+    cycles, 0 differing, invariants 0 (R959's count); tb_m2_scsp SCSP_OVL
+    HOTD ch. 2 10 s, 424,517,283 cycles, 0 differing. pool_eq NC 4 PROVEN
+    (2,554 cells); sdram_eq 2a PROVEN (2,493), 2a-age PROVEN (2,524).
+  * quartus_map 17.0: 39,046 ALMs needed (timing-2c 39,010), 48,600
+    registers, 4,592,208 block memory bits (as int-2c / timing-2c: 549 M10K
+    expected), 105 DSP.
+  * Not checked: the fit (timing) and the board.
+
+**R965 -- GUN FLASH OFF FOR VIRTUA COP 2 (2A) AND THE HOUSE OF THE DEAD (2C):
+BOTH GAMES FLASH AS VIRTUA COP DOES, AND MODEL 2's OFF PATH PORTS AS IT IS.
+OSD "Gun flash" Arcade (default) / Off, O[66] as on Model 2 (R929).**
+R936 (1) and R942 (2), built. Branches gunflash-2a (off combo-2a 3e883c2) and
+gunflash-2c (off combo-2c 1b67488), the same change on each.
+
+*Believed:* R929 6 -- Virtua Cop 2 flashes with the window table (7 shots,
+7 white frames); House of the Dead "has the same table written by 0x18650 in
+its attract", its play not reached, "not measured".
+
+*Measured (MAME 0.289 /usr/bin/mame; sim/io/mame_m2_gunflash_wt.lua, every
+write to tile RAM words 0x6000-0x67FF logged per frame with the ip;
+House of the Dead driven by sim/io/mame_m2_hotd_play.lua, seed 1, beside it):*
+  1. VIRTUA COP 2 (vcop2): an accepted shot -> 0xFFFFFFFF over CPU
+     0x0100C000-0x0100CBFF (words 0x6000-0x65FF) from 0x6000 up, ip 0x19f08,
+     in the vblank after the shot; zeros the same at each of the next FOUR
+     vblanks (0x19f98) -- Virtua Cop's countdown. The frame after it is
+     (255,255,255) on all 190,464 pixels. Coverage: 85 s with shots every
+     1.3 s (12 requests), 400 s with shots every 0.7 s through play, game
+     over and attract (20), 400 s attract with no input (0): NOTHING else
+     writes the table at all -- the boot's clear (0x74c8) apart.
+  2. HOUSE OF THE DEAD (hotd): the same request, ip 0x18620 (same range,
+     from 0x6000 up), cleared at the NEXT vblank only (0x18650): one flash
+     frame, one flat colour, (228,228,228) on all 190,464 pixels (its
+     palette, not pure white). 300 s of play: 1,984 requests, every one from
+     0x18620; 720 s of attract with no input: no request (0x18650's zero
+     runs only -- R929's "attract" writes were these). The only other
+     writers: 0x185f0 (zeros, rows 256-383) and 0x183f0 / 0x184f8 -- a band
+     of mixed masks over rows 336-367, ONLY while a request stands on the
+     chapter card (below).
+  3. A SHOT DURING HOUSE OF THE DEAD's WHITE CHAPTER CARD ("The First
+     Chapter", 25.17 s): the request (one grey flash frame), then the table
+     is NOT cleared for 61 frames (0x18650 does not run while the card is
+     up) while 0x183f0 / 0x184f8 rewrite the rows 336-367 band every frame;
+     MAME shows the card streaked (tilemap 1's columns) with "HOLD YOUR
+     FIRE!" hidden, then the whole table cleared (26.25 s). With the table
+     writes forced to zero (WT_NOFLASH) the card is clean, "HOLD YOUR FIRE!"
+     blinking, white on 174,176 pixels -- the card's white is NOT the table's.
+  4. With every table write forced to zero, the game runs on identically
+     (the game never reads the table): vcop2 691 frames 29.5-41.5 s, only
+     the 9 flash frames differ (they become the scene); hotd 190 frames,
+     only the 13 flash frames and the 62 card frames of 3 differ.
+
+*So the request is a fact about the game, not about the picture:* word
+0x6000 written 0xFFFF is the flash routine's first store (0x19f08 / 0x18620)
+and nothing else in either game writes it. Off does not look at brightness:
+it takes out the table's effect -- the renderer reads words 0x6000-0x67FF as
+zero while the request stands and up to the frame start after it goes -- so
+a white explosion, a white card or any bright 3D is untouched (it is not the
+table), and the table's other uses (VCop's stage band, HOTD's band without a
+request) pass through. The one place Off changes more than the flash frame
+is 3: the card shows clean for the ~1 s the game leaves its flash standing,
+exactly as MAME does with the flash writes removed.
+
+*Built (Model2.sv, M2_2A_GUN_FLASH; on by default with M2_2A_VCOP2_GUN,
+VERILOG_MACRO "M2_NO_2A_GUN_FLASH=1" builds the core before R965, CONF_STR
+included):* rtl/video/m2_gun_flash.sv copied unchanged from main 5a192f5
+(R929); en = v2_gun (is_vcop2 on 2A, is_vcop2 | is_hotd on a 2C build),
+mode {status[66], 0} (no CRT gun mode), trig_n tied high, trig_game_n and
+white unconnected; its kill gates tram_q_vid into tram_data. OSD
+"h1O[66],Gun flash,Arcade,Off;" after the Crosshair / Mouse lines (menumask
+bit 1: the gun games only). O[66] was never used on model2a / model2c
+(git log -S), so every saved config opens on Arcade. ARCADE ADDS NOTHING --
+unlike Model 2's Arcade (R929 board: its tile path lost the flash, so
+Model 2 whites the output) the 2A / 2C picture is the game's own; R929's
+board note says House of the Dead flashes on its core without help. Whether
+Virtua Cop 2's own flash shows on the 2A board is NOT checked here.
+
+*Evidence:* sim/video/run_gunflash2a.sh (make test_m2_gunflash2a with
+GF2A_DUMPS = vcop2 f1726, hotd f1716, hotd f1470 the card; dumps from
+MAME, out of the tree), tb_m2_gunflash2a: m2_video with the 2A parameters
+(MASK_SKIP on), the kill on the tile-RAM read, a stand-in 3D, the output
+register; FLASH = 0 is the core before R965. The games' writes played into
+tile RAM in the vblank (and at line 200, a late handler): 30 checks PASS --
+Arcade equals the core before R965 byte for byte on every frame of all 10
+cases (no writes, vcop2's flash, late, VCop's stage band; hotd's flash,
+late; the card alone, a shot on the card with the band, the band alone);
+Off equals the no-writes picture on every frame of the 5 request cases and
+equals Arcade on the 5 others; en 0 Off = Arcade; the kill never rises
+without a request; and the cases bite (Arcade's flash frame white / flat
+over > 95%, torn over frames 5-6 when late). Planted faults, each caught:
+kill tied 0 (5 FAIL), the request taken from any table write (4 FAIL --
+the bands suppressed), the kill window narrowed to 0x6000-0x61FF (5 FAIL).
+Not caught, and harmless here: the frame start on the vblank's rising edge
+(it moves only ktail's end and the unconnected white). lint_top clean
+(2A; 2C with -DM2_2C -DM2_NO_2A_MANX_MOTION; each also with
+-DM2_NO_2A_GUN_FLASH); the -Wall list identical but status bit 66 now used
+and hps_io's CONF_STR width; lint_idx the same findings (108 2A, 93 2C);
+quartus_map --analyze_file 0 errors on m2_gun_flash.sv and Model2.sv (both);
+make test PASS (both).
+AREA, quartus_map 17.0, whole design (build/map, as seed-sweep sets a
+seed up), against the release maps of the same trees without it (combo-2a
+s1503, combo-2c s1515):
+
+    build              ALMs needed  ALUT (logic)  registers  block bits  DSP
+    2A before (s1503)    38,977       55,404       48,082    4,601,424   99
+    2A gunflash-2a       38,962       55,353       48,095    4,601,424   99
+    2C before (s1515)    39,046       55,456       48,600    4,592,208  105
+    2C gunflash-2c       39,067       55,453       48,613    4,592,208  105
+
+m2_gun_flash itself maps to 12 ALUT / 12 registers on 2A (11 / 11 on 2C):
+with mode[0] tied low and white / trig_game_n unconnected, its CRT gun and
+white logic are swept away; the rest is the kill's 16 ANDs on the tile-RAM
+read. No block memory, no DSP. -15 / +21 ALM is map noise (R848: +-40). On
+2C the CONF_STR crosses 1,024 bytes (1,004 -> 1,033) and hps_io's byte_cnt
+compare widens a bit (lint: 10 -> 11-bit selects); already past on 2A
+(1,041 -> 1,070). The fit decides; not fitted here.
+
+*What the board must show:* Gun flash Arcade -- Virtua Cop 2 and House of
+the Dead exactly as the release (whatever flash each shows today). Off --
+no flash on a shot in play, the picture under it the scene; House of the
+Dead's chapter card clean if shot at; everything else unchanged. The OSD
+line only for those two games.

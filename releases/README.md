@@ -332,6 +332,12 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
+### Coming in the next build (not released yet)
+
+- **`Analog control` for wheels** (GitHub #12): `Wheel A` / `Wheel B` for
+  Over Rev and Sega Touring Car Championship, as in the Model 2A core — see
+  *Analog control* under the Model 2 core's Controls below.
+
 ### Fixed since the first test builds
 
 - **House of the Dead's sound no longer wobbles, crackles or clips** on the
