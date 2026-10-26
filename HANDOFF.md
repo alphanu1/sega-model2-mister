@@ -1,5 +1,46 @@
 # Handoff
 
+## 2026-10-26 (late night): Daytona FFB -- every port E write taken (R966), s1531
+
+  * BOARD RESULT on s1528 (Ben, matching Main, hori-ffb -v, a whole race):
+    the force word changed ONCE, to the 20% idle spring (motor off), and
+    never again -- no centring level, no friction, no constant force.
+  * DIAGNOSIS: the vblank two-sample filter. The type-1 I/O Z80 has no
+    interrupt here (z_int_n = 1); it polls DPRAM 0x20 (EPR-14869C
+    0x0039-0x0050) and writes port E once per scan (0x01B5), and the game
+    asks for one scan a frame from its vblank-locked loop. So PE writes keep a
+    fixed phase to vblank and a byte sent for one frame is sampled once and
+    never taken. Race start 07 27 71 07 10 3B goes one a frame: both 0x07s
+    (motor on) lost. MAME's capture took the first 0x07 only because a slow
+    game frame (no scan at f4825) held it two scans. The other PE writers in
+    the firmware (0x08CD/0x0925/0x097D) are unreferenced; all 9,038 MAME
+    writes come from 0x01B5.
+  * FIX (7d79512): every drv_stb write is decoded as it arrives, from the
+    first after reset (as daytona-arcade-recomp plays every command); the
+    `frame` input is gone. Decode, levels, mapping, OSD, the Daytona gate and
+    M2_NO_DRIVE_FFB unchanged. R966 has the board note.
+  * Sim: test_m2_drive_ffb 266,219 / 0 (make test); with each MAME capture
+    430,612 / 0, all 120 port E changes taken; seeds 1-10 both captures 0
+    fail. Race start at every write phase (768 sequences) ends on the 0x3B
+    spring 107. Mutations: two-sample filter reinstated 128,058 fails and 768
+    of 768 race starts end on the idle spring (the board symptom); taking
+    before the first write 15,797; 0x5- right 31,331; DEAD 3 125; a level off
+    by one 53,274. test_m2_ioz80_drv 2,002 / 0. lint_top warnings identical
+    before / after (both builds); analyze_file 0 errors.
+  * Build: Model2_ffb_s1531.rbf in sm2-builds/ffb-m2 (not a release), md5
+    7456f961a048f952a50760753f6e9290, 39,199 ALM, clk_sys +0.016, clk_mem
+    +0.165, i960 +0.645, HDMI +0.005, hold +0.179 -- clean on every clock.
+    s1530 clk_mem -0.038 / HDMI -0.100; s1529 clk_sys -0.783.
+  * DIRECTION: Ben on s1528, FFB direction Normal: a wall on the car's right
+    pushes the wheel left, which he says is correct; 0x5- = left stays the
+    default (Invert kept). Caveat: s1528's word never carried a constant
+    force, so that push was not a decoded 0x5- (it fits the 20% spring
+    returning a right-turned wheel). Feel it again on s1531.
+  * NEXT: Ben on the board with s1531 + the matching Main: motor on at race
+    start (centring 107 = 42%), friction / constant force on wall hits.
+  * Quartus --analyze_file rewrote Model2.qsf (appended four assignments);
+    reverted, not committed. Check the qsf after any analyze_file run.
+
 ## 2026-10-26 (night): Daytona force feedback on branch ffb-main (R966) -- NOT on the board
 
   * Branch ffb-main (off main 47ad2e2), worktree sm2-builds/ffb-m2; not
@@ -8,7 +49,8 @@
     17a72dfa), cf90971 the feature, and this handoff.
   * What: m2_ioz80 exports port E (the drive board's byte) and a strobe for
     writes to 0x8004; rtl/io/m2_drive_ffb.sv samples it once a frame (vblank),
-    takes a byte on two equal samples (the drive board's rule), decodes it as
+    takes a byte on two equal samples (the drive board's rule; REPLACED by
+    every-write acceptance, see above), decodes it as
     daytona-arcade-recomp's rt::DriveBoard (f32c48ff9b) and drives hps_io's
     joystick_0_ffb: spring = centring level, friction = resistance level,
     constant = 0x5-/0x6- force or uncentring away from centre (by `steer`,
@@ -30,12 +72,12 @@
     One sample a frame drops bytes held one frame: 4 of 120 port E changes in
     the session (a repeated 0x07 at race start, three 0x52 kicks). MAME
     samples about twice a frame; what the cabinet does is not known.
+    (WRONG to call this harmless: on the board it lost the motor-on byte at
+    race start -- see the entry above.)
     tb_m2_ioz80 cannot run the real firmware to its scan without the game's
     DPRAM dialogue (spins at 0x0815, as before), so the port E test runs a
     hand-written tv80 program with the firmware's own PE instruction.
-  * OPEN: which way 0x5- pushes (LEFT by default -- SailorSat /
-    FFBArcadePlugin / sm2-emu; recomp and m2-hle2 say right): Ben on his
-    wheel, Invert if wrong. The 0x38-0x3F dead zone, the board's ramp,
+  * OPEN: the 0x38-0x3F dead zone, the board's ramp,
     calibration, DIPs and the 0x7- slope are not expressible in the word.
     Sega Rally (838-11661) and the EPR-18261 games need their own decoders.
     The matching Main build is needed to feel anything; neither is upstream.

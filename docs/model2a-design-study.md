@@ -37863,6 +37863,11 @@ upstream.
   first write 15,797; 0x5- right 31,331; DEAD 3 125; one level off by one
   53,274. lint_top warning list identical before and after (both builds);
   quartus_map --analyze_file 0 errors.
+- *Fit (Quartus 17.0, seeds 1529-1531):* s1531 closes on every clock:
+  39,199 ALM (94%), 46,874 registers (-10 on s1528: the sample registers),
+  551 / 553 M10K, 101 DSP; setup clk_sys +0.016, clk_mem +0.165, i960
+  +0.645, HDMI +0.005, hold +0.179. md5 7456f961a048f952a50760753f6e9290.
+  s1530 clk_mem -0.038 / HDMI -0.100; s1529 clk_sys -0.783 / clk_mem -0.397.
 
 *R966, DIRECTION (Ben, 2026-10-26, s1528, HORI wheel, FFB direction Normal):*
 - *What was believed:* which way 0x5- pushes was unknown; the sources split
