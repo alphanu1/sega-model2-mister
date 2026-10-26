@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-10-26 (evening): releases/scripts -- a force feedback test for wheels
+
+  * releases/scripts/ffb_wheel_test.sh + ffb-wheel-test (linux-hori v0.1.3's
+    ffb-wheel-test-0.1.3-mister-armhf, sha256 2aaa1e93...c4c5ed, checked against
+    the release's SHA256SUMS). Any wheel MiSTer has FFB for; PASS / FAIL / SKIP
+    per effect. Ben's HORI through hori-ffb: 11 PASS. Same files on main,
+    model2a, model2c.
+  * linux-hori (github.com/alphanu1/linux-hori, GPL-2.0) is its own repo: the
+    hori-ffb driver and the test; releases build when VERSION changes.
+  * /home/ben/source/mistermain: the two Main_MiSTer patches (HORI wheel entry;
+    wheel axes only_max during joystick setup), both board-tested, for a PR.
+
 ## 2026-10-26 (later): Model2A_20261026b and Model2C_20261026 released
 
   * Model2A_20261026b = s1523 (gunflash-2a 6ba5aae on combo-2a; merged into
