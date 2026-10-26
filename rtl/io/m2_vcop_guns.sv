@@ -74,8 +74,10 @@
 //   P1_X 137..630 (0x089..0x276)   P1_Y 36..425 (0x024..0x1a9)
 //   P2_X 134..627 (0x086..0x273)   P2_Y 36..425 (0x024..0x1a9)
 //
-// rest 0x17f / 0x0e6 / 0x17c / 0x0e6; off-screen by the same int(span * 0.05f)
-// rule (lightgun_offscreen_r: X 24, Y 19). Y is Virtua Cop's P1_Y for both
+// rest 0x17f / 0x0e6 / 0x17c / 0x0e6. Off-screen (R960): the crosshair within
+// 2 px of an edge, or a reload -- NOT MAME's int(span * 0.05f) border
+// (lightgun_offscreen_r: X 24, Y 19 units = 24 / 19 px), which the board
+// showed as a gun that reloads 19-24 px short of every edge. Y is Virtua Cop's P1_Y for both
 // guns. X spans 493 units over 496 pixels, so v - min = ceil(px * 493 / 496)
 // = px - (px>=166) - (px>=331): the SAME two thresholds as Virtua Cop's X,
 // subtracted. Pixels 165, 330 and 495 have no unit of their own (MAME's
@@ -99,8 +101,12 @@ module m2_vcop_guns #(
   // Virtua Cop 2 runs; with V2): MAME 0.289 INPUT_PORTS_START(hotd)
   //   P1_X 173..596  P1_Y 87..380  P2_X 163..596  P2_Y 87..380
   //   rest 0x180 / 0x0e9 / 0x17b / 0x0e9; off-screen int(span * 0.05f): X 21, Y 14
-  // v = min + (px * round(span * 65536 / 496)) >> 16 (y: / 384) -- within one
-  // unit of MAME's crosshair mapping, which is all a light gun can tell.
+  // R960: NOT MAME's crosshair mapping. The game draws its calibrated min / max
+  // on screen pixels x 31.9 / 461.6, y 33.4 / 351.2 (its GUN MARK CHECK, the
+  // default calibration, in MAME and on the board alike), so the units a pixel
+  // gets are the game's own: v = (px * K + C) >> 16, P1_X 142..629, P2_X
+  // 131..630, Y 56..409 over the whole screen, outside the calibrated range at
+  // the edges as a real gun reads there.
   parameter bit          HD        = 1'b0
 ) (
   input  logic        clk,            // clk_sys
@@ -252,25 +258,36 @@ module m2_vcop_guns #(
     k = {2'b00, p != 9'd0} + {2'b00, p >= 9'd193};
     return 10'h027 + {1'b0, p} + {7'd0, k};
   endfunction
-  // R924: House of the Dead's (HD): a constant multiply and a shift
+  // R924 / R960: House of the Dead's (HD): a constant multiply, an add (the
+  // rounding in c) and a shift -- the game's own default-calibration mapping
   /* verilator lint_off UNUSEDSIGNAL */
-  function automatic logic [9:0] uh(input logic [8:0] p, input logic [9:0] lo, input logic [15:0] k);
-    logic [24:0] m;
-    m = {16'd0, p} * {9'd0, k};
-    return lo + {1'b0, m[24:16]};
+  function automatic logic [9:0] uh(input logic [8:0] p, input logic [16:0] k, input logic [25:0] c);
+    logic [25:0] m;
+    m = {17'd0, p} * {9'd0, k} + c;
+    return m[25:16];
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
-  logic [1:0] fire_q;
+  // R960 (V2 / HD): off the screen = the reload, or the last 2 px of an edge
+  // (a calibrated stick at +-127 lands on pixel 1 / 494 / 382: off). MAME's
+  // 5% border lost 18-25 px at every edge to "reload" (the board, R960).
+  logic [1:0] fire_q, edge_q;
+  function automatic logic edg(input logic [8:0] x, input logic [8:0] y);
+    return (x <= 9'd1) || (x >= 9'd494) || (y <= 9'd1) || (y >= 9'd382);
+  endfunction
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) edge_q <= 2'b00;
+    else        edge_q <= {hold2 | edg(s2x, s2y), hold1 | edg(s1x, s1y)};
+  end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       p1x <= HD ? 10'h180 : P1X0; p1y <= HD ? 10'h0e9 : 10'h0e6;   // MAME's rest positions
       p2x <= HD ? 10'h17b : P2X0; p2y <= HD ? 10'h0e9 : P2Y0;
       fire_q <= 2'b00;
     end else if (HD) begin
-      p1x <= hold1 ? 10'd173 : uh(s1x, 10'd173, 16'd55894);
-      p1y <= hold1 ? 10'd87  : uh(s1y, 10'd87,  16'd50006);
-      p2x <= hold2 ? 10'd163 : uh(s2x, 10'd163, 16'd57215);
-      p2y <= hold2 ? 10'd87  : uh(s2y, 10'd87,  16'd50006);
+      p1x <= uh(hold1 ? 9'd0 : s1x, 17'd64508, 26'd9313331);
+      p1y <= uh(hold1 ? 9'd0 : s1y, 17'd60433, 26'd3714722);
+      p2x <= uh(hold2 ? 9'd0 : s2x, 17'd66033, 26'd8609339);
+      p2y <= uh(hold2 ? 9'd0 : s2y, 17'd60433, 26'd3714722);
       fire_q <= {fire2, fire1};
     end else begin
       p1x <= hold1 ? X1LO : ux(s1x, X1LO);
@@ -287,9 +304,11 @@ module m2_vcop_guns #(
   // ------------------------------------------------------ stage D: off-screen, the ports
   // MAME's 5% border, from the coordinates as the board hands them over
   // (V2: lightgun_offscreen_r's, the same rule on Virtua Cop 2's ranges)
-  wire o1 = HD ? ((p1x <= 10'd194) || (p1x >= 10'd575) || (p1y <= 10'd101) || (p1y >= 10'd366))   // R924
+  // (R960: Virtua Cop 2 and House of the Dead from the pixel instead, edge_q;
+  // Virtua Cop keeps MAME's border)
+  wire o1 = (HD || V2) ? edge_q[0]
                : ((p1x <= O1XL) || (p1x >= 10'h25e) || (p1y <= 10'h037) || (p1y >= 10'h196));
-  wire o2 = HD ? ((p2x <= 10'd184) || (p2x >= 10'd575) || (p2y <= 10'd101) || (p2y >= 10'd366))
+  wire o2 = (HD || V2) ? edge_q[1]
                : ((p2x <= O2XL) || (p2x >= 10'h25b) || (p2y <= O2YL) || (p2y >= 10'h196));
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
