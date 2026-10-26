@@ -70,7 +70,14 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261026`)
+### New in this build (`Model2A_20261026b`)
+
+- **New OSD setting `Gun flash`: `Arcade` / `Off` (Virtua Cop 2)**, as on the
+  Model 2 core's Virtua Cop. `Arcade` (the default) is the game's own white
+  flash on each shot, for CRT light guns; `Off` removes it, and nothing else:
+  explosions and other bright moments are untouched.
+
+### Earlier in `Model2A_20261026`
 
 - **Virtua Cop 2 runs at full speed on the expert stage's train** (GitHub
   #29). The 3D drawing ran out of time when the carriage filled with enemies
@@ -214,7 +221,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261026b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -222,7 +229,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261026.rbf` has the md5 `ba126491849a02eab1f9e095be67b4c9`. As with
+`Model2A_20261026b.rbf` has the md5 `2b7ceb02498f169fe3967ce0caa01b25`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -488,7 +495,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
-| `Gun flash` | Virtua Cop only: `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
+| `Gun flash` | Virtua Cop (and Virtua Cop 2 on the Model 2A core): `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
 | `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
