@@ -1,5 +1,36 @@
 # Handoff
 
+## 2026-10-26: Model2A_20261026 and Model2_20261026 released
+
+  * Model2A_20261026 = s1503 (combo-2a 3e883c2: R959 timing, R954 span cull,
+    R955 NEGZ, R962 quad-store spill QNX, R960/R961 gun edge, R958 Analog
+    control, R963 framebuffer grab tools), md5 ba126491849a02eab1f9e095be67b4c9;
+    clk_sys +0.365, clk_mem +0.452, i960 +1.628, hold +0.212 (HDMI -0.890).
+    Board: VCop 2's train 57.5 fps / 100% of frames on time (#29), ranking
+    complete, gun edge good, trees much better, other games spot-checked.
+  * Model2_20261026 = s1511 (rel-main: Model2_20261025 + R958 Analog control +
+    R961 Virtua Cop gun edge + R959's FP-pool pick, re-proven on main's tree),
+    md5 94173c3a71e2ee1eaf79e511cd319f7d; clk_sys +0.069, clk_mem +0.258, i960
+    +1.799, hold +0.204 (HDMI -1.465). R959's SDRAM change is NOT in Model 2:
+    main's m2_sdram is a different file from the 2A one it was proven on.
+    s1508/s1510/s1513 Quartus crashes, s1509 far off, s1512 just short.
+  * Not regressions (also on Model2A_20261024b, Ben): Rally AI cars flash ~1 s
+    in race 2 (likely R769's far-small-quad drop after a >=1,792-quad list --
+    raise its threshold now the store is 2,560?); VF2 Jacky/Sarah slowdown;
+    Manx TT road appears late at crests (sea through the road). README known bugs.
+  * Unexplained, once: a ~2 s 3D freeze at the end of VCop 2's first train on
+    combo-2a; not reproduced on the board again or in the bench (R964,
+    vc2-freeze 09f6d5c). Next if it recurs: a probe build latching the 3D state.
+  * HORI FFB Racing Wheel (0f0d:015d PC mode / 015c Xbox GIP mode): MiSTer Main
+    doesn't know it (no QUIRK_WHEEL), so pedals act as stick axes and wreck the
+    mapping screen. A patched Main (sm2-builds/main-mister-hori, md5 2db940b7)
+    was installed and the board did not come back (also not with the stock
+    binary until USB devices were unplugged); rolled back to stock 2e99ab46.
+    Do not install it again without a hand-started test. Wheel modes go to
+    users to test.
+  * Board: Model2.rbf = Model2_20261026, Model2A.rbf = combo s1503 (same as
+    the release); backups .s1496_wheel, .s1503_combo, .pre_wheel etc.
+
 ## 2026-10-25: Model2_20261025 released -- R952 / R951 / the interpolator on the Model 2 core (R956)
 
   * room-main merged into main (8b247f8): the room savings (40,372 -> 38,944
