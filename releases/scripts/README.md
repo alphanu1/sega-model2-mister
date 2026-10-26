@@ -11,6 +11,22 @@ finds the wheel, plays a few gentle effects, and tells you which ones work.
   [linux-hori](https://github.com/alphanu1/linux-hori) running first.
   Other wheels don't need anything extra.
 
+## Requirements
+
+- **The standard MiSTer Linux.** Nothing to add or rebuild: the test uses
+  Linux's standard force feedback interface, and it's a self-contained
+  program (statically linked).
+- **A force feedback driver for your wheel in MiSTer's kernel.** That's what
+  decides whether your wheel works, not the kernel version:
+
+  | Wheel | On MiSTer |
+  |---|---|
+  | Logitech G25 / G27 / G29 and similar | built in |
+  | Fanatec CSL Elite family | built in |
+  | Wheels using the standard USB force feedback format (PID) | built in, through the generic driver |
+  | Thrustmaster T300RS and similar | basic driver only: full force feedback usually needs an extra driver MiSTer doesn't have, so expect `SKIP`s or "no force feedback" |
+  | HORI FFB Racing Wheel | no kernel driver: run `hori-ffb` from [linux-hori](https://github.com/alphanu1/linux-hori) first |
+
 ## Install
 
 1. Copy both files from this folder to **`/media/fat/Scripts`** on your SD
