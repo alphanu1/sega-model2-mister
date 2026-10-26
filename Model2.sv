@@ -5380,9 +5380,10 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
 
-// R966: DAYTONA'S DRIVE BOARD, AS MAIN'S FORCE FEEDBACK WORD. Port E sampled
-// at each vblank and taken on two equal samples, as the board's Z80 does;
-// decoded as daytona-arcade-recomp's rt::DriveBoard. The uncentring push
+// R966: DAYTONA'S DRIVE BOARD, AS MAIN'S FORCE FEEDBACK WORD. Every port E
+// write the I/O board makes is decoded as it arrives (not the board's
+// two-read filter: sampled at vblank it lost the motor-on byte on the board),
+// as daytona-arcade-recomp's rt::DriveBoard. The uncentring push
 // follows `steer` -- the value the I/O board's ADC reads, 0x80 at centre,
 // higher = right. OSD: O[72] Force feedback (0 = On), O[73] direction.
 // The enable and the OSD bits are quasi-static: registered once here.
@@ -5397,7 +5398,6 @@ generate if (DRIVE_FFB) begin : g_drive_ffb
 		.clk(clk_sys), .rst_n(cpu_rst_n),
 		.en(ffb_en_q), .on(ffb_on_q), .invert(ffb_inv_q),
 		.pe_cmd(drv_pe), .pe_stb(drv_pe_stb),
-		.frame(vbl_d && !vbl_dd),
 		.steer(steer),
 		.ffb(drv_ffb)
 	);

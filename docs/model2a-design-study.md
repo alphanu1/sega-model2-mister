@@ -37819,8 +37819,60 @@ m2_drive_ffb at 57 LUTs / 43 registers. s1526: the fitter crashed (Segment
 Violation before a result); s1527: "Can't fit design in device" (routing
 at 94%), the fit's own failure, not this change's logic.
 
-*LEFT:* the board and a wheel (Ben) -- above all
-which way 0x5- pushes; the matching Main build. Sega Rally (838-11661, its
-own protocol: 0x80-0x9F right, 0xC0-0xDF left) and the EPR-18261 games
-(Indy 500, STCC, Over Rev, Super GT) need their own decoders; none is on
-main yet.
+*LEFT:* Sega Rally (838-11661, its own protocol: 0x80-0x9F right, 0xC0-0xDF
+left) and the EPR-18261 games (Indy 500, STCC, Over Rev, Super GT) need
+their own decoders; none is on main yet. The matching Main build is not
+upstream.
+
+*R966, THE BOARD (2026-10-26) -- THE TWO-READ FILTER WAS WRONG HERE.*
+- *What was believed:* port E sampled once a vblank and taken on two equal
+  samples models the drive board well enough; it drops only bytes held one
+  frame, 4 of 120 changes in the MAME session, none of them needed (the first
+  race-start 0x07 was held two frames and turned the motor on).
+- *What the board showed:* s1528 with the matching Main and hori-ffb -v, a
+  whole Daytona race: the word changed exactly once -- the 20% idle spring
+  (motor off) -- and never again: no centring level, no friction, no
+  constant force on wall hits. The motor-on byte was never taken.
+- *Why (from the firmware and the core):* the type-1 I/O board's Z80 has no
+  interrupt in this core (`z_int_n` is 1); it polls DPRAM 0x20 (EPR-14869C
+  0x0039-0x0050), runs one scan and writes port E once (0x01B5), and the game
+  raises 0x20 once a frame from its vblank-locked loop. So the writes keep a
+  fixed phase to the vblank the filter sampled on, and a byte the game sends
+  for one frame spans exactly one sample: seen once, never taken. Race start
+  sends 07 27 71 07 10 3B one a frame; both 0x07s were lost and every later
+  byte decoded as motor off. MAME took the first 0x07 only because a slow
+  game frame (no scan at f4825) left it on port E for two scans; the core's
+  frame timing at race start differs. The real board's filter depends on its
+  own interrupt's phase against the I/O board, which is not known, so it
+  cannot be modelled from the vblank.
+- *The fix:* every port E write (`drv_stb`) is decoded as it arrives, from
+  the first write after reset -- as daytona-arcade-recomp plays every command
+  on the frame the game sends it. The `frame` input is gone; decode, levels,
+  mapping, OSD, the Daytona gate and the macro are unchanged.
+- *Proof:* tb_m2_drive_ffb rewritten for every-write acceptance: 266,219
+  checks / 0 fail synthetic (in `make test`), 430,612 / 0 with each MAME
+  capture (all 120 port E changes taken), seeds 1-10 on both captures 0 fail.
+  New: 4,000 x 4 bytes held under one frame each acting from their own write
+  (one-frame 0x07 then 0x3B -> spring 107; one-frame 0x57 -> -32767; one-frame
+  0x01 -> idle), 20,000 bursts of 1-6 writes on consecutive clocks, and the
+  race start (07 27 71 07 10 3B, and MAME's PE 07 71 07 3B) at every write
+  phase across 1.5 frames with +-8 clocks of jitter, Invert alternating: 768
+  sequences end on the 0x3B spring (107). Mutations: the two-sample filter
+  reinstated at one sample a frame -- 128,058 failures, 768 of 768 race-start
+  sequences end on the idle spring (the board's symptom); taking before the
+  first write 15,797; 0x5- right 31,331; DEAD 3 125; one level off by one
+  53,274. lint_top warning list identical before and after (both builds);
+  quartus_map --analyze_file 0 errors.
+
+*R966, DIRECTION (Ben, 2026-10-26, s1528, HORI wheel, FFB direction Normal):*
+- *What was believed:* which way 0x5- pushes was unknown; the sources split
+  (SailorSat, FFBArcadePlugin, sm2-emu: left; daytona-arcade-recomp and
+  m2-hle2: right). LEFT was the default.
+- *What is now known:* Ben reports that hitting a wall on the right of the
+  car pushes the wheel left, which he says is correct (MAME's right-wall
+  scrape held 0x53). The default (0x5- = left, Normal) stands; Invert stays.
+- *Caveat, recorded so it is not lost:* on the same s1528 session the word
+  never carried a constant force (above) -- only the 20% spring -- so the
+  push felt then cannot have been a decoded 0x5-; it fits the spring pulling
+  a wheel turned right back towards the centre. The direction should be felt
+  again on the every-write build, where 0x5- reaches the wheel.

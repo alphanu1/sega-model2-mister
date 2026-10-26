@@ -25,14 +25,25 @@
 // 9,038 frames). A byte written twice inside one pass never leaves the I/O
 // board (race start: the game wrote 07 27 71 07 10 3B, PE carried 07 71 07 3B).
 //
-// ACCEPTANCE, AS THE DRIVE BOARD DOES IT. Its Z80 samples the bus in its
+// ACCEPTANCE: EVERY WRITE. Each firmware write to port E (pe_stb) is decoded
+// on the clock it arrives, as daytona-arcade-recomp plays every command on
+// the frame the game sends it. Nothing is taken until the firmware has
+// written port E once after reset: the latch's reset value is not a command.
+//
+// WHY NOT THE BOARD'S OWN FILTER. The drive board's Z80 samples the bus in its
 // interrupt and acts on a byte only after reading the same value twice in a
-// row (EPR-16488A 0x0520-0x052A: compare with E141, store and return on a
-// mismatch). Here the sample is taken once per video frame (the core's own
-// vblank, `frame`) and a byte is taken when it equals the previous sample, so
-// a byte held for less than one frame is never taken and one held for two
-// always is. Nothing is sampled until the firmware has written port E at
-// least once after reset: the latch's reset value is not a command.
+// row (EPR-16488A 0x0520-0x052A). That rule depends on the phase of the
+// board's own interrupt against the I/O board's writes, and that phase is not
+// known. The first build modelled it with one sample per vblank. But the I/O
+// board's Z80 has no interrupt here: it polls DPRAM 0x20 (EPR-14869C
+// 0x0039-0x0050) and writes port E once per scan, and the game asks for one
+// scan per frame, so the writes keep a fixed phase to vblank: a byte the game
+// sends for one frame spans one vblank, is sampled once and is never taken.
+// Race start sends 07 27 71 07 10 3B one per frame; 0x07 (motor on) was lost
+// and every later byte decoded as motor off. On Ben's board (s1528, hori-ffb
+// -v) the word changed once in a whole race, to the 20% idle spring, and never
+// again. MAME's capture took the first 0x07 only because a slow game frame
+// left it on port E for two scans.
 //
 // THE DECODE is rt::DriveBoard from daytona-arcade-recomp
 // (github.com/alphanu1/daytona-arcade-recomp, src/runtime/drive_board.h at
@@ -89,8 +100,7 @@ module m2_drive_ffb #(
   input  logic        on,       // OSD: Force feedback On
   input  logic        invert,   // OSD: FFB direction Invert
   input  logic  [7:0] pe_cmd,   // the 315-5338A's port E latch
-  input  logic        pe_stb,   // one clk per firmware write to port E
-  input  logic        frame,    // one clk per video frame (vblank)
+  input  logic        pe_stb,   // one clk per firmware write to port E (pe_cmd already new)
   input  logic  [7:0] steer,    // the steering value the I/O board's ADC reads
   output logic [55:0] ffb       // hps_io joystick_0_ffb
 );
@@ -99,26 +109,19 @@ module m2_drive_ffb #(
                          E_UNC  = 3'd4, E_FORCE = 3'd5;
 
   // ------------------------------------------------------------ acceptance
-  logic       seen;      // port E written since reset
-  logic       have;      // smp holds a sample
-  logic [7:0] smp;       // the previous frame's sample
-  logic       started;   // a byte has been taken
+  logic       started;   // port E written since reset: a byte has been taken
   // rt::DriveBoard's state
   logic       motor;
   logic [2:0] eff;
   logic [2:0] n;
   logic       dir5;      // the force is 0x5- (else 0x6-)
 
-  wire take = frame && seen && have && (pe_cmd == smp);
-
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      seen <= 1'b0; have <= 1'b0; smp <= 8'd0; started <= 1'b0;
+      started <= 1'b0;
       motor <= 1'b0; eff <= E_NONE; n <= 3'd0; dir5 <= 1'b0;
     end else begin
-      if (pe_stb) seen <= 1'b1;
-      if (frame && seen) begin smp <= pe_cmd; have <= 1'b1; end
-      if (take) begin
+      if (pe_stb) begin
         started <= 1'b1;
         case (pe_cmd[7:4])
           4'h0: motor <= (pe_cmd == 8'h0A) || (pe_cmd[2:0] >= 3'd5);
