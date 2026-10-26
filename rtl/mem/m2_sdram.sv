@@ -630,29 +630,6 @@ module m2_sdram #(
     rr_grant = low_idx(arb_sel);                    // R498: one-hot -> index
   end
 
-  // R959: THE GRANT'S REGISTERS FROM THE ONE-HOT, NOT THE INDEX. rr_mask,
-  // inflight and nxt_total were written through rr_grant -- one-hot -> index
-  // (low_idx), then + 1 and a shift, an index decode, blen() of an index -- and
-  // pend / inflight / rr_mask -> rr_mask and -> nxt_total were the failing
-  // clk_mem paths (s1458 -0.576, s1466 -0.193, s1474 -0.177, s1353 -0.238).
-  // Whenever a grant is taken (rr_valid) arb_sel is one-hot -- rr_sel is the
-  // lowest set bit of a non-zero mask, low_pri of one when use_pri -- so:
-  //   ones << (rr_grant + 1), all ones at NP-1  ==  bit i set iff a bit below
-  //     i is set in arb_sel (gr_above), all ones when arb_sel[NP-1];
-  //   inflight[rr_grant] <= 1  ==  each bit of arb_sel set;
-  //   blen(rr_grant)  ==  the OR of blen(p) over arb_sel's bits (blen_gr);
-  //   we_p[rr_grant]  ==  we_gr (above).
-  // rr_grant stays for nxt_grant, a register of its own.
-  logic [NP-1:0] gr_above;
-  logic [3:0]    blen_gr;
-  always_comb begin
-    gr_above = '0;
-    for (int g = 1; g < NP; g++) gr_above[g] = gr_above[g-1] | arb_sel[g-1];
-    if (arb_sel[NP-1]) gr_above = '1;
-    blen_gr = '0;
-    for (int g = 0; g < NP; g++) if (arb_sel[g]) blen_gr = blen_gr | blen(g);
-  end
-
   // ------------------------------------------------------------- transfer
   logic [$clog2(NP+1)-1:0] grant;
   logic                    grant_is_wr;
@@ -1129,9 +1106,9 @@ module m2_sdram #(
           // rather than at issue is what lets the back stage consume without
           // re-arbitrating; inflight[] stops it being selected twice.
           nxt_grant          <= rr_grant;
-          nxt_is_write       <= we_gr;                                              // R959
-          nxt_total          <= we_gr ? 4'd1 : long_gr ? 4'd8 : blen_gr;   // R787 (R959: blen_gr)
-          for (int g = 0; g < NP; g++) if (arb_sel[g]) inflight[g] <= 1'b1;   // R959: inflight[rr_grant]
+          nxt_is_write       <= we_p[rr_grant];
+          nxt_total          <= we_p[rr_grant] ? 4'd1 : long_gr ? 4'd8 : blen(rr_grant);   // R787
+          inflight[rr_grant] <= 1'b1;
           // R574: a priority grant leaves the rotation where it was, so the
           // other ports keep their order; it counts toward the cap only while
           // someone else is waiting.
@@ -1141,7 +1118,9 @@ module m2_sdram #(
             pri_run <= '0;
             // R498: the round-robin position is the registered mask -- bits at
             // or above the port after this one; all ones on the wrap.
-            rr_mask            <= gr_above;   // R959: == ones << (rr_grant + 1), all ones at NP-1
+            rr_mask            <= (rr_grant == ($clog2(NP))'(NP-1))
+                                    ? {NP{1'b1}}
+                                    : ({NP{1'b1}} << (rr_grant + 1'b1));
           end
           pf_sel             <= 1'b1;
         end else if (pf_sel) begin
