@@ -72,7 +72,14 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261026`)
+### New in this build (`Model2A_20261026b`)
+
+- **New OSD setting `Gun flash`: `Arcade` / `Off` (Virtua Cop 2)**, as on the
+  Model 2 core's Virtua Cop. `Arcade` (the default) is the game's own white
+  flash on each shot, for CRT light guns; `Off` removes it, and nothing else:
+  explosions and other bright moments are untouched.
+
+### Earlier in `Model2A_20261026`
 
 - **Virtua Cop 2 runs at full speed on the expert stage's train** (GitHub
   #29). The 3D drawing ran out of time when the carriage filled with enemies
@@ -216,7 +223,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261026b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -224,7 +231,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261026.rbf` has the md5 `ba126491849a02eab1f9e095be67b4c9`. As with
+`Model2A_20261026b.rbf` has the md5 `2b7ceb02498f169fe3967ce0caa01b25`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -310,10 +317,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261024.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261024.rbf` has the md5 `f6a672fde023a08c4f45c8b042756a3d`. Keep
+`Model2C_20261026.rbf` has the md5 `b4fdec524fc036aea178c3ac238be55c`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -332,11 +339,28 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### Coming in the next build (not released yet)
+### New in this build (`Model2C_20261026`)
 
-- **`Analog control` for wheels** (GitHub #12): `Wheel A` / `Wheel B` for
-  Over Rev and Sega Touring Car Championship, as in the Model 2A core — see
-  *Analog control* under the Model 2 core's Controls below.
+**House of the Dead players: after updating, reset the gun calibration once**
+(TEST MENU → GUN SETTING → PLAYER 1 / PLAYER 2 GUN DEFAULT ADJUSTMENT, then
+OSD → Save settings). A calibration saved on an earlier core is now off.
+
+- **House of the Dead's shots land under the crosshair, edge to edge.** The
+  core used MAME's crosshair mapping, which puts the gun's calibrated range at
+  the very screen edges; the game itself draws it about 32 pixels in, so shots
+  drifted away from the crosshair towards the edges. The core now feeds the
+  values the game's own mapping expects: in the game's gun check the mark
+  lands within a pixel of the crosshair everywhere, corners included.
+- **The gun fires right up to the screen edge** (House of the Dead): only the
+  outermost 2 pixels count as off-screen, instead of MAME's 5% border.
+- **New OSD setting `Gun flash`: `Arcade` / `Off`** (House of the Dead): `Off`
+  removes the grey flash on each shot and nothing else.
+- **`Analog control` for wheels** (GitHub #12): `Standard` (default) /
+  `Wheel A` / `Wheel B` for Over Rev and Sega Touring Car Championship, as in
+  the Model 2 and 2A cores — see *Analog control* under the Model 2 core's
+  Controls below.
+- **Builds close timing with more room to spare**, from the same three
+  shortened paths as the Model 2A core.
 
 ### Fixed since the first test builds
 
@@ -355,9 +379,6 @@ Each of these also has a `[15kHz CRT]` MRA.
 
 ### Known bugs
 
-- **House of the Dead: shots don't land on the crosshair?** Run TEST MENU →
-  GUN SETTING → PLAYER 1 / PLAYER 2 GUN DEFAULT ADJUSTMENT, then save (OSD,
-  Save settings). A fix that lines them up without calibrating is coming.
 - **House of the Dead**: the music is too loud against the gun shots, in
   chapter 2 most of all. `Raw Sound Boost` brings the shots back up (it
   lifts the music a little too). Being investigated.
@@ -562,7 +583,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Crosshair` | Virtua Cop only: `Small`, `Large` or `Off`. Player 1's shows all the time, player 2's only while player 2 is playing. Use `Off` with a real light gun. |
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
-| `Gun flash` | Virtua Cop only: `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
+| `Gun flash` | Virtua Cop (and Virtua Cop 2 on the Model 2A core): `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
 | `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
