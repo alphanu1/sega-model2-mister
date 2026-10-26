@@ -127,6 +127,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_SND_LERP
 `define M2_SND_LERP 1
 `endif
+// R966: M2_DRIVE_FFB, Daytona's drive board as a force feedback request to
+// MiSTer Main (rtl/io/m2_drive_ffb.sv, hps_io's joystick_0_ffb) and its two
+// OSD lines, shown for Daytona only. On by default; VERILOG_MACRO
+// "M2_NO_DRIVE_FFB=1" (or -DM2_NO_DRIVE_FFB to lint) builds without them --
+// the word reads 0 (hps_io answers FB00: present, not active) and CONF_STR is
+// the core's before R966.
+`ifndef M2_NO_DRIVE_FFB
+`define M2_DRIVE_FFB
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -328,6 +337,15 @@ localparam CONF_STR = {
 	// Wheel A: left X steers, left Y up = accelerator, right Y up = brake;
 	// Wheel B: left X steers, left Y (whole axis) accelerator, right X brake.
 	"O[71:70],Analog control,Standard,Wheel A,Wheel B;",
+`ifdef M2_DRIVE_FFB
+	// R966: the drive board's force feedback, through Main to a force
+	// feedback wheel (Main acts only when the wheel has FF_CONSTANT and
+	// rumble is on). On first, the default. Direction: 0x5- pushes left
+	// (Normal) or right (Invert) -- unverified on a cabinet. Daytona only
+	// (menumask bit 3). O[73:72] are free on main, model2a and model2c.
+	"h3O[72],Force feedback,On,Off;",
+	"h3O[73],FFB direction,Normal,Invert;",
+`endif
 	// R828a: the mip rule (m2_raster3d MIP; no effect without it). How far
 	// each quad's level moves from its footprint's major axis (R828, the
 	// mountains right, the near road blurry) towards the minor: Sharp half
@@ -377,6 +395,8 @@ wire [127:0] status;
 wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
 wire         vc_gun;    // R839: Virtua Cop with guns built, declared ahead of hps_io (assigned below)
 wire         link_menu; // R916: Daytona with the link board built, declared ahead of hps_io (assigned below)
+wire         ffb_menu;  // R966: Daytona with the drive board's force feedback built (assigned below)
+wire  [55:0] drv_ffb;   // R966: m2_drive_ffb -> hps_io joystick_0_ffb
 
 wire [10:0] ps2_key;
 
@@ -410,7 +430,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({13'd0, link_menu, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines; R916: Link board
+	.status_menumask({12'd0, ffb_menu, link_menu, vc_gun, crt_mra}),   // R801: the CRT MRA's own Video line; R839: the gun lines; R916: Link board; R966: force feedback
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -425,6 +445,9 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.ps2_mouse(ps2_mouse),
 	.joystick_r_analog_0(joy_ranalog),
 	.paddle_0(paddle),
+	// R966: the drive board's force feedback (player 1's wheel); the rest 0
+	.joystick_0_ffb(drv_ffb), .joystick_1_ffb(56'd0), .joystick_2_ffb(56'd0),
+	.joystick_3_ffb(56'd0), .joystick_4_ffb(56'd0), .joystick_5_ffb(56'd0),
 	.ioctl_wait(ioctl_wait),
 	// NVRAM save: the framework reads backup SRAM back through ioctl_din when
 	// it saves the MRA's <nvram> section. upload_req stays 0 -- saves are
@@ -2474,6 +2497,15 @@ localparam bit LINK = 1'b1;
 localparam bit LINK = 1'b0;
 `endif
 assign link_menu = LINK & (game_id[6:0] == 7'd0);   // Daytona, either set
+// R966: the drive board's force feedback, compile time (M2_DRIVE_FFB) and
+// then Daytona only -- game_id 0, either set; Virtua Cop and Desert Tank
+// never assert it.
+`ifdef M2_DRIVE_FFB
+localparam bit DRIVE_FFB = 1'b1;
+`else
+localparam bit DRIVE_FFB = 1'b0;
+`endif
+assign ffb_menu = DRIVE_FFB & (game_id[6:0] == 7'd0);
 assign crt_mra = game_id[7];   // R801
 // R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
 // switch it, so the "[15kHz CRT]" MRAs set game_id[7] and the core starts
@@ -4154,6 +4186,8 @@ wire [31:0] bak_first;
 // stays compiled in as USE_Z80=0 fallback one parameter away, but the shipped
 // configuration is the real computer: it is what draws the credit digits.
 wire        dp_busy;    // MB8421 arbitration, m2_ioboard -> m2_ioz80
+wire  [7:0] drv_pe;     // R966: port E, the drive board's byte (m2_ioz80 -> m2_drive_ffb)
+wire        drv_pe_stb; // R966: one clk_sys per firmware write to port E
 
 // DO THE TWO SIDES ACTUALLY COLLIDE, ON THE BOARD? Simulation renders
 // correctly every time, so it cannot answer this -- only the hardware can.
@@ -4255,7 +4289,8 @@ m2_ioz80 #(.TICK_NUM(4), .TICK_DEN(SYS_MHZ),   // 4 MHz exactly, on clk_sys (R57
 	.dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
 	.dbg_rd_end(), .dbg_ra(), .dbg_rdat(),
 	.dbg_m1_n(), .dbg_a(), .dbg_last_wr(), .dbg_pf(),
-	.dbg_pa(iob_pa), .dbg_seccnt(iob_seccnt)
+	.dbg_pa(iob_pa), .dbg_seccnt(iob_seccnt),
+	.drv_cmd(drv_pe), .drv_stb(drv_pe_stb)   // R966: port E, the drive board's byte
 );
 
 // WHERE DOES THE TEST SWITCH STOP? The buttons are mapped, the firmware path
@@ -5344,6 +5379,31 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
+
+// R966: DAYTONA'S DRIVE BOARD, AS MAIN'S FORCE FEEDBACK WORD. Port E sampled
+// at each vblank and taken on two equal samples, as the board's Z80 does;
+// decoded as daytona-arcade-recomp's rt::DriveBoard. The uncentring push
+// follows `steer` -- the value the I/O board's ADC reads, 0x80 at centre,
+// higher = right. OSD: O[72] Force feedback (0 = On), O[73] direction.
+// The enable and the OSD bits are quasi-static: registered once here.
+generate if (DRIVE_FFB) begin : g_drive_ffb
+	logic ffb_en_q, ffb_on_q, ffb_inv_q;
+	always_ff @(posedge clk_sys) begin
+		ffb_en_q  <= ffb_menu;
+		ffb_on_q  <= ~status[72];
+		ffb_inv_q <= status[73];
+	end
+	m2_drive_ffb u_drive_ffb (
+		.clk(clk_sys), .rst_n(cpu_rst_n),
+		.en(ffb_en_q), .on(ffb_on_q), .invert(ffb_inv_q),
+		.pe_cmd(drv_pe), .pe_stb(drv_pe_stb),
+		.frame(vbl_d && !vbl_dd),
+		.steer(steer),
+		.ffb(drv_ffb)
+	);
+end else begin : g_no_drive_ffb
+	assign drv_ffb = 56'd0;
+end endgenerate
 
 // COIN PATH INSTRUMENT. The board hears a coin -- it plays the sound -- and does
 // not credit it, and there are three different places that can be true in: the

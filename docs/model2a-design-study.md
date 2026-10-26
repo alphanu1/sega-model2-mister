@@ -37690,3 +37690,128 @@ verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
 17.0 --analyze_file 0 errors.
 
 *LEFT:* the fit and the board (Ben).
+
+**R966 -- DAYTONA'S DRIVE BOARD AS FORCE FEEDBACK: PORT E, SAMPLED AS THE
+BOARD SAMPLES IT, DECODED AS THE RECOMP DOES, HANDED TO MAIN THROUGH A NEW
+hps_io WORD. BRANCH ffb-main (OFF main).**
+
+*What was believed:* there is no reference for Daytona's force feedback.
+MAME runs the drive board's Z80 (EPR-16488A) but its motor port is a stub
+(model2.cpp `driveio_port_w`, "TODO: hook up to the main CPU"), and the core
+answered the drive board's port as absent (m2_ioz80 PE reads 0xFF) and
+exported nothing. The Model 1 reference does the same (Model1.sv ties the
+drive line to 0xFF; m1_ioz80 PE "drive board absent", at `0b5d04f`, which
+is also the local repository's head), so neither board's RTL answers this.
+
+*What is now known (MAME 0.289 with a Lua tap on the stock daytona set, the
+I/O firmware's and the drive firmware's disassemblies; ROM-derived captures
+kept out of git):*
+1. The byte's path. The i960 writes DPRAM byte 0x11 (0x01C00022) when the
+   command changes -- 122 writes in a 9,200-frame session -- and byte 0x12
+   bit 0 chooses the direction (1 = read the drive board, at boot only; 0 =
+   send). The I/O firmware's scan (EPR-14869C 0x0190-0x01B9, `ld (iy+$04),e`
+   with iy = 0x8000) copies DPRAM 0x11 to the 315-5338A's port E, register
+   0x8004, once per scan -- the scan runs when the game raises DPRAM 0x20,
+   once a frame: 9,038 PE writes in 9,038 frames. In this core that latch
+   already existed (`port_out[4]`), unexported.
+2. The byte is a level. Bytes the game writes inside one scan never reach
+   port E (race start: 07 27 71 07 10 3B written, 07 71 07 3B on PE).
+3. The drive board acts on a byte only after reading the same value twice in
+   a row (EPR-16488A 0x0520-0x052A). MAME interrupts its Z80 at vblank and on
+   each PE write, about two samples a frame; what clocks the real board's
+   interrupt is not established.
+4. The game never reads the drive board back (0 reads of DPRAM 0x11/0x12 in
+   the session) and does not test for it: with 0xFF on PE it races normally.
+5. The command meanings (no Sega document found) come from community sources
+   that disagree in places: SailorSat's daytona-utils (2015 on, driving real
+   cabinet boards), FFBArcadePlugin, BackForceFeeder, and three 2026
+   disassemblies (sm2-emu, daytona-arcade-recomp, m2-hle2). This core follows
+   daytona-arcade-recomp's `rt::DriveBoard` (f32c48ff9b, BSD-3, Ben's) for
+   the decode and levels. The one real dispute is which way 0x5- pushes: the
+   hardware-based majority (SailorSat, FFBArcadePlugin, sm2-emu, and
+   BackForceFeeder for EPR-18261) says LEFT, recomp and m2-hle2 say right
+   (m2-hle2 took Model 3's convention, where 0x5- is right on a different
+   board). LEFT is the default here. The session is consistent with it but
+   does not prove it: scraping the right-hand wall (STEER 0xE0, snapshot
+   at f7500) held 0x53 for 832 frames.
+
+*The design (Ben approved the plan):*
+- `m2_ioz80` exports port E (`drv_cmd = port_out[4]`) and a registered
+  one-clock strobe for each write to 0x8004 (`drv_stb`), off on the type-2
+  board. Nothing else in the module changes.
+- `rtl/io/m2_drive_ffb.sv` samples port E at each vblank (`vbl_d &&
+  !vbl_dd`) and takes a byte on two equal samples -- the board's rule at one
+  sample a frame. Nothing is sampled until the firmware has written port E
+  once after reset. The decode is rt::DriveBoard command for command.
+- Main's word (hps_io `joystick_0_ffb`, `UIO_GET_FFB` 0x45, as the Main
+  prototype reads it -- Main_MiSTer branch core-ffb, 17a72dfa: {0xFB, flags}
+  then constant / spring+damper / friction+vibration): ACTIVE and CENTRE when built, Daytona (game_id 0),
+  the OSD on, and a byte taken. Spring = centring level x 255 (both kinds);
+  friction = resistance level x 255; constant = force level x 32767 (0x5-
+  negative = left by default), or for uncentring the same level away from
+  the centre by the steering value the I/O board's ADC reads (0x80 centre,
+  higher = right: m2_cab_inputs maps the d-pad's right and a positive stick
+  above 0x80, and MAME's STEER 0xE0 drives the car into the right-hand
+  wall), 0 within +-2 counts. With no motor force (motor off, or a no-force
+  command) the spring is 51 (20%) for the cabinet's mechanical return
+  spring, which a USB wheel lacks; ACTIVE stays set so Main's own centring
+  stays off. Damper and vibration are 0 (the board has neither).
+- OSD (main): O[72] "Force feedback: On / Off" (0 = On, the default) and
+  O[73] "FFB direction: Normal / Invert" (Invert flips the constant force and
+  the uncentring push together), shown for Daytona only (menumask bit 3).
+  O[73:72] are free on main, model2a (O[69:68] used) and model2c.
+- Compile time: `M2_NO_DRIVE_FFB=1` builds without it (the word reads 0,
+  hps_io answers 0xFB00, CONF_STR as before R966). Off for any other game at
+  run time; Virtua Cop and Desert Tank never assert ACTIVE.
+- `sys/hps_io.sv` carries the Template_MiSTer change (the six
+  `joystick_N_ffb` inputs, the 0x45 answer and its 48-bit snapshot); players
+  1-5 are tied to 0.
+
+*NOT EXPRESSED (the word has no field for it):* the 0x38-0x3F dead zone (both
+centring kinds give the same spring), the board's power ramp, its start-up
+calibration and DIP switches, and the 0x7- slope byte.
+
+*A consequence of one sample a frame:* a byte that stays on port E for only
+one scan is dropped. In the captured session that is 4 of the 120 port E
+changes -- the second 0x07 at race start (the first, held two frames, turns
+the motor on) and three one-frame 0x52 kicks. MAME's two samples a frame
+would take them. Whether the cabinet does is the open question in item 3.
+
+*Proof:*
+- `make test_m2_drive_ffb` (sim/io/tb_m2_drive_ffb.cpp, Verilator 5.052):
+  the RTL against rt::DriveBoard copied verbatim plus the stated mapping,
+  every word compared a few clocks after every frame, write, steering or OSD
+  event. With the MAME session (`M2_DRVLOG`, 9,038 PE writes over 9,203
+  frames, MAME's own steering inputs; then a 0x00-0xFF steering sweep and
+  random steering with random OSD changes; each OSD setting; en low):
+  388,070 checks, 0 failures; seeds 1-10 on both captures (two identical
+  runs), 0 failures. Without the capture (in `make test`): 223,095 checks, 0
+  failures -- 4,000 pairs of bytes each held under one frame never taken,
+  2,000 bytes held over exactly two vblanks all taken, 20,000 frames of
+  random hold times 0.1-3 frames; 512 resets (no latch value taken before
+  the firmware writes it, ACTIVE dropped by a reset); 20,000 frames with en
+  low (never ACTIVE); 16 stated directions (0x57 -32767, 0x67 +32767, 0x47 at
+  0xE0 +32767 / 0x20 -32767 / 0x80, 0x82, 0x7E 0, each inverted) and all 256
+  bytes x motor on/off x 7 steering values x Invert. Mutations caught:
+  taking a byte on one sample (56,228 failures), 0x5- right (17,169), DEAD 3
+  (91), sampling before the first write (7,852), one level off by one
+  (7,550).
+- `make test_m2_ioz80_drv` (ROM-free): tv80 running the firmware's own
+  `ld (iy+$04),e` beside DIR, PF, PA, 0x4004, 0x8014, 0x9004 and 0xC004
+  writes: 2,000 strobes, each the pass's value, one per pass (2,002 checks,
+  0 failures); with the strobe decoding only the low address bits, 1,988
+  failures. The real firmware cannot be run to its scan in the existing
+  harness without the game's side of the DPRAM dialogue (tb_m2_ioz80 spins
+  at 0x0815, as before this change).
+- `sys/hps_io.sv` against the Main prototype's RTL bench (not committed):
+  20,018 checks, 0 errors.
+- lint_top clean (the raw warning list differs from main's only in status
+  bits 72-73 now used and CONF_STR's length); with -DM2_NO_DRIVE_FFB only
+  the two unused drv_ wires added. quartus_map --analyze_file 0 errors on
+  m2_drive_ffb.sv, m2_ioz80.sv and hps_io.sv.
+
+*LEFT:* the fit (below, when run); the board and a wheel (Ben) -- above all
+which way 0x5- pushes; the matching Main build. Sega Rally (838-11661, its
+own protocol: 0x80-0x9F right, 0xC0-0xDF left) and the EPR-18261 games
+(Indy 500, STCC, Over Rev, Super GT) need their own decoders; none is on
+main yet.

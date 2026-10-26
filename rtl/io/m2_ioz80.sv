@@ -146,7 +146,16 @@ module m2_ioz80 #(
   // reasoned about. The count saturates instead of wrapping: "many" and "a few"
   // are different answers and a wrap would confuse them.
   output logic  [7:0] dbg_pa,
-  output logic [15:0] dbg_seccnt
+  output logic [15:0] dbg_seccnt,
+  // R966: PORT E, THE DRIVE BOARD'S BYTE. The firmware copies DPRAM 0x11 to
+  // PE in each scan (0x0190-0x01B9, in write mode: DPRAM 0x12 bit 0 clear;
+  // the game asks for a scan once a frame through DPRAM 0x20) and a
+  // cabinet's drive board reads it off the wire. drv_cmd
+  // is the latch as written; drv_stb is one clk for each write to 0x8004,
+  // registered so drv_cmd already holds the new byte. Off on the type-2
+  // board, whose map is not this one.
+  output logic  [7:0] drv_cmd,
+  output logic        drv_stb
 );
 
   // ------------------------------------------------------------ Z80 pacing
@@ -402,6 +411,11 @@ module m2_ioz80 #(
   assign z_addr = z_we ? z_addr_r : io_address[10:0];
   assign dbg_pf = port_out[5];
   assign dbg_pa = port_out[0];
+  // R966: the drive board's byte (see the port list).
+  assign drv_cmd = port_out[4];
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) drv_stb <= 1'b0;
+    else        drv_stb <= wr_stb && (aw_l == 16'h8004) && !t2;
 
   // ------------------------------------------------------------ 93C46 EEPROM
   // The board's own settings store, bit-banged by the firmware through the
