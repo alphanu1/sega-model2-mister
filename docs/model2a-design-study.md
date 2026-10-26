@@ -46615,6 +46615,128 @@ not help (it exchanges pedals, not directions) and a Wheel C would be the
 fix. Wheel B with a pad and no pedals reads half accelerator and half
 brake -- it is for pedal sets only (README says so).
 
+**R959 -- THE PATHS THAT FAIL SEEDS, SHORTENED WITHOUT CHANGING A CYCLE:
+THE SCSP DSP's MICROWORD AND RING ADDRESS, THE SDRAM GRANT'S REGISTERS, THE
+GEOMETRY POOL's ARBITER. EACH PROVEN IDENTICAL (A MITER, OR YOSYS).** Ben:
+"good idea, as long as it does not break anything". Branches timing-2a (off
+dilk-2a 509f505) and timing-2c (off model2c fccb5e2), LOCAL, NOT FITTED.
+*THE SURVEY* (quartus_sta, report_timing pairs under +0.3 ns, by path family;
+2A/2C: int-2a s1466-68, int-2c s1469/71, room-only-2a s1472/74, dilk-2a
+s1478/79; older 2C/2A s1337-s1458; Model 2: scan15-pair s1401-08 (before
+R952), room-main s1486-89 (R952 on main)). Which family fails a seed:
+  * pll_hdmi, the framework's scaler (ascal -> ascal, hdmi_osd): 6 of 9
+    recent 2A/2C seeds, worst -1.703 (s1466), -1.401 (s1467). The most common
+    failure by far; framework code (sys/), not touched here.
+  * clk_mem, m2_sdram's arbiter (pend / inflight / rr_mask -> rr_mask,
+    -> nxt_total; ras_ok -> cmd): 3 of 9 recent (s1466 -0.193, s1474 -0.177,
+    s1479 -0.070) and 4 of 14 older (s1458 -0.576, s1368 -0.335, s1353
+    -0.238, s1350 -0.001).
+  * clk_sys, the SCSP DSP's MPRO M10K read -> m2_scsp_dsp mul_a / mul_b:
+    1 of 9 recent (s1479 -0.247; s1474 +0.02) and 5 of 14 older (s1365 -0.510,
+    s1451 -0.386, s1338 -0.262, s1353 -0.212, s1337 -0.177).
+  * clk_sys, m2_geo_clip cs / cp_a -> m2_fp_pool mul_a_q / mul_b_q: Model 2
+    s1488 -0.395 (s1486 +0.13), 2A s1479 -0.021; before R952 s1401 +0.077 on
+    mul_a_q, nothing under +0.15 on mul_b_q in s1401-08. So R952's clipper
+    change made it worse (its registers' enables from cs, R952's own warning)
+    but the shape was there before it: cs -> the clipper's mul_req -> the
+    pool's rr_pick -> the operand mux.
+  * one seed each, different every time: m2_span_tex -> m2_texel_x2 (s1469,
+    s1479), TGP x_dst_r2 -> maddr_q (s1466 -0.543), gp_outr -> PhaseInc
+    (s1467), raster3d cst -> fill Mult (s1478), m2_scan15 / m2_texel_bl on
+    clk_mem (s1474), the framebuffer / DDR3 link on Model 2 (s1486-88).
+  The data arrival of s1479's DSP path: 2.46 ns of M10K clock-to-out, then
+  MASA's MADRS + DEC + ADRS + NXADR (three carry chains), the mask and RBP,
+  the < 0x40000 compare, PACK's pk_go, UNPACK's up_go, the multiplier's
+  operand enables. s1466's SDRAM path: pend -> arb_ready -> arb_sel ->
+  rr_grant (one-hot -> index, two levels) -> + 1 -> the shift -> rr_mask.
+*1. m2_scsp_dsp.* (a) ins, MPRO's output a clock later in a register, for
+everything a step decides in ph 2-4; the RAMs' read addresses (TEMP's TRA,
+MEMS's / MIXS's IRA -- both banks with OVERLAP --, COEF, MADRS, EFREG's EWA,
+which ef_q shows) keep MPRO's output itself, as before. The row is read in
+ph 0 and holds from ph 1 until k moves in ph 4, so ins == mp_q in ph 2-4 --
+given no MPRO write lands in a run, which m2_scsp guarantees (op_ok holds the
+68000's DSP-region accesses off while dsp_busy, and with OVERLAP dsp_pend);
+the standalone bench writes only when !busy too. (b) a_off, (TABLE ? 0 : DEC)
++ (ADREB ? ADRS : 0) + NXADR in a register: addr_w is read in ph 3 and 4
+only, and none of its terms moves from ph 2 to ph 4 (DEC in D_FIN, ADRS at
+ph 4's edge or a go); 16 bits, the mask keeps at most bits 15..0.
+  Proof, sim/miter/scsp_dsp.sh (R952's miter.py, old against new, all 11
+outputs every clock -- 13 with OVERLAP -- plus two invariants of the new
+copy: ins == mp_q in a run's ph 2-4, addr_w == the old copy's in ph 3-4).
+Mutations caught (a_off without NXADR: 4,312,107 of 5,069,058 cycles differ;
+MEMS read through ins: 787,223). 2A config, all 0 differing, invariants 0:
+    tb_m2_scsp_dsp DSP_RANDOM 1,000 programs x 2,000 samples, latency 6-40:
+      1,264,370,443 cycles; 300 at latency 1-2: 202,508,095; 300 at 60-400
+      (an order past the board's): 2,468,425,839
+    tb_m2_scsp, Dynamite Cop, ALL 179 s (7,890,000 samples): 10,502,771,682
+      cycles, and the bench's own totals equal R949's to the number (engine
+      mean 1,298 / max 2,038, DSP reads 51,137,118, writes 78,672,603);
+      10 s each of VF2 (291,207,492 cycles), VC2 (388,276,392), Zero Gunner
+      (499,241,398), Sega Rally (79,904,277), DOA (244,929,174), HOTD ch. 2
+      (446,217,094); Dynamite Cop 5 s at latency 1-400 (768,458,653)
+    tb_m2_2a_sound (fx68k on the real program, the whole board), Dynamite
+      Cop 10 s: WAV and log byte-identical to 509f505's (md5 889ca155...)
+2C (model2c's DSP: OVERLAP, WPOST, ABORT_MERGE):
+    DSP_RANDOM 300 each, OVERLAP 0 (384,247,199 cycles), OVERLAP 1
+      (384,247,199), OVERLAP 1 + WPOST (354,006,953), OVERLAP 1 at latency
+      1-2 (150 programs, 101,568,761); 12 outputs compared (mrg)
+    tb_m2_scsp OVERLAP 1 (SCSP_OVL): HOTD ch. 2 30 s (1,311,179,131 cycles,
+      572,250 non-zero samples), HOTD attract 10 s (424,505,505), Dynamite
+      Cop 10 s (424,310,344), VC2 10 s (369,799,532); OVERLAP 0 Dynamite Cop
+      10 s (456,922,165)
+    tb_m2_2a_sound OVERLAP 1, HOTD 10 s: WAV and log byte-identical to
+      fccb5e2's (md5 5efd7abd...; this stretch of ch. 2 is quiet, and the
+      bench's MAME comparison says FAIL on both alike); Dynamite Cop 10 s, OVERLAP 1:
+      WAV and log byte-identical to fccb5e2's (md5 a19dcf43..., PASS)
+*2. m2_sdram.* rr_mask, inflight, nxt_total and nxt_is_write are written
+from arb_sel (one-hot whenever rr_valid: rr_sel is the lowest bit of a
+non-zero mask, low_pri of one when use_pri), not through rr_grant: rr_mask
+<= bit i set iff a bit of arb_sel below i is (all ones when arb_sel[NP-1]) ==
+ones << (rr_grant + 1); inflight bit by bit; blen() OR-ed over arb_sel's bits;
+we_gr (R421 wrote it and nothing used it). rr_grant stays for nxt_grant. No
+state added or removed, so the proof is formal: sim/miter/sdram_eq.sh, yosys
+0.66 equiv_make / equiv_simple / equiv_induct over the two netlists,
+registers and outputs matched by name -- the same command stream, data and
+acks on every cycle for every input sequence. PROVEN at the 2A parameters
+(2,493 equivalence cells), the Model 2 build's (2,373), 2A with AGE (2,524)
+and the defaults NP = 5 (1,293). A mutation (the mask one bit off) leaves 16
+cells unproven -- the check sees it. The file is the same on dilk-2a,
+model2c and int-2c; main's differs (not touched). lint_idx 3 fewer
+(inflight[rr_grant], we_p[rr_grant] x 2 gone).
+  NOT DONE: ras_ok -> cmd (s1479 -0.070, bank_pre_ok[dsp_bank] into the
+command case). A registered pre_ok would have to equal the live counters'
+flags on the cycle it is read -- a next-state copy of ras_ok / rd_ok, more
+state, not a re-expression; left.
+*3. m2_fp_pool (the coordinator's addition: Model 2 s1488).* mul_win and
+add_win from a one-hot, rr_oh -- the lowest requester at or above the pointer,
+else the lowest, else the pointer, its masks a decode of the pointer
+register beside the requests -- encoded into the same index (one level); the
+add and conditional subtract of rr_pick are off the path. Operand mux,
+grants, tags, pointer untouched; rr_pick stays for the divider. Proof
+formal, sim/miter/pool_eq.sh (yosys, fp_mul / fp_add / fp_div flattened in):
+PROVEN at NC 4 (m2_geometry's, 2,554 cells) and NC 3; a mutation (> for >=)
+leaves 462 unproven. NC 5 does not prove by induction (the pointer's
+unreachable values 5-7 are the likely cause; not chased -- NC is 4). The file is
+the same on main, dilk-2a and model2c: the commit is cherry-pickable. A first
+version (operands as an AND-OR over a one-hot) cost the pool +229 ALUTs and
+was dropped for this one (656 against 663).
+*AREA, quartus_map 17.0, ALMs needed:* 2A 38,986 (s1479) -> 38,896,
+registers 48,189 -> 48,246; m2_scsp_dsp 688 -> 649 ALUTs, 440 -> 498 regs;
+m2_sdram 1,011 -> 988 ALUTs; m2_fp_pool 663 -> 656. 2C (before the pool
+change) 38,935 (s1471) -> 39,010, registers 48,515 -> 48,573; m2_scsp_dsp
+758 -> 714 ALUTs.
+*CHECKS:* lint_top clean on both trees (2A, and -DM2_2C -DM2_NO_2A_MANX_MOTION);
+lint_idx 109 lines against the parent's 112 (none new); Quartus 17.0
+analyze_file 0 errors on m2_scsp_dsp, m2_sdram, m2_fp_pool; make test on
+timing-2a exit 0 (every m2_sdram bench fails=0 violations=0, m2_geo PASS).
+*EXPECTED:* the DSP family loses the M10K's 2.46 ns clock-to-out and two of
+three adders on its next path (madrs's MLAB, +0.09 in s1479): it should leave
+the failing list. The SDRAM arbiter's rr_mask / nxt_total paths lose two
+levels of encode and the add-and-shift, ~1-1.5 ns; ras_ok -> cmd stays. The
+pool's clip -> mul_*_q loses the add / compare / subtract, ~1 ns. None of it
+touches pll_hdmi's ascal paths, the most common failure; seeds will still fail
+there until that is looked at. Unmeasured until Ben fits.
+
 **R960 -- THE HOUSE OF THE DEAD'S GUN: THE GAME'S MARK IS NOT MAME'S
 CROSSHAIR, AND MAME'S 5% OFF-SCREEN BORDER COST 18-25 PX AT EVERY EDGE
 (HOTD AND VIRTUA COP 2). BRANCH hotd-gun (OFF model2c), NOT FITTED.**

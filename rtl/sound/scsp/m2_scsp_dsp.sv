@@ -176,6 +176,7 @@ module m2_scsp_dsp #(
   logic [12:0] frc;
   logic [23:0] yreg;
   logic [11:0] adrs;
+  logic [15:0] a_off;                     // R959: DEC / ADRS / NXADR summed (below)
   logic        pk_take;                   // the packed word is in P this clock
   logic        go_p;                      // a go taken while the reset's clears run
   logic        w_pend, w_out, gap;        // a write waiting; on the port
@@ -203,9 +204,22 @@ module m2_scsp_dsp #(
   (* multstyle = "dsp" *) logic signed [37:0] prod;
   always_ff @(posedge clk) prod <= mul_a * mul_b;
 
-  // the step: MPRO's output, which holds while k does
-  wire  [63:0] ins = mp_q;
-  wire  [6:0] TRA   = ins[14:8];
+  // the step: MPRO's output, which holds while k does.
+  // R959: TWO COPIES OF IT. The RAMs' read addresses (ph 1, and EFREG's for
+  // ef_q) take MPRO's output straight, as before (a_*); everything the step
+  // decides in ph 2-4 takes ins, MPRO's output a clock later in a register,
+  // which takes the M10K's clock-to-out off the paths into the multiplier's
+  // operands (the worst clk_sys paths, s1479). The row is read in ph 0 and
+  // holds from ph 1 until k moves in ph 4, so in ph 2-4 ins is mp_q, bit for
+  // bit -- MPRO is written only by the 68000, which m2_scsp holds off while
+  // the DSP is busy (op_ok), so no write lands in a run's steps.
+  logic [63:0] ins;
+  always_ff @(posedge clk) ins <= mp_q;
+  wire  [6:0] a_TRA   = mp_q[14:8];
+  wire  [5:0] a_IRA   = mp_q[27:22];
+  wire  [3:0] a_EWA   = mp_q[43:40];
+  wire  [5:0] a_COEFI = mp_q[62:57];
+  wire  [4:0] a_MASA  = mp_q[54:50];
   wire        TWT   = ins[7];
   wire  [6:0] TWA   = ins[6:0];
   wire        XSEL  = ins[31];
@@ -226,8 +240,6 @@ module m2_scsp_dsp #(
   wire        ZERO  = ins[33];
   wire        BSEL  = ins[32];
   wire        NOFL  = ins[63];
-  wire  [5:0] COEFI = ins[62:57];
-  wire  [4:0] MASA  = ins[54:50];
   wire        ADREB = ins[49];
   wire        NXADR = ins[48];
 
@@ -235,7 +247,7 @@ module m2_scsp_dsp #(
     if (t_we)  temp[t_wa] <= shifted;
     if (ms_we) mems[IWA]  <= memval[23:0];
     t_q   <= temp[t_ra];
-    ms_q  <= mems[IRA[4:0]];
+    ms_q  <= mems[a_IRA[4:0]];
     ef_rq <= efreg[ef_ra];
     if (dst == D_CLRE) efreg[clr_i] <= 16'd0;
     else if (ef_we) efreg[EWA] <= ef_rq + shifted[23:8];
@@ -259,8 +271,8 @@ module m2_scsp_dsp #(
     // reads both at mg_i[4:1] and writes the sum into rbank, 0 into the other.
     (* ramstyle = "MLAB" *) logic [19:0] mixs_b [16];
     always_comb begin
-      ra_a = mg_on ? mg_i[4:1] : (dst == D_RUN && !rbank) ? IRA[3:0] : mix_sel;
-      ra_b = mg_on ? mg_i[4:1] : (dst == D_RUN &&  rbank) ? IRA[3:0] : mix_sel;
+      ra_a = mg_on ? mg_i[4:1] : (dst == D_RUN && !rbank) ? a_IRA[3:0] : mix_sel;
+      ra_b = mg_on ? mg_i[4:1] : (dst == D_RUN &&  rbank) ? a_IRA[3:0] : mix_sel;
     end
     // one adder: a send onto the slots' bank, or a merge's two banks
     wire [19:0] s_sum = ((wbank && !mg_on) ? q_b : q_a) + (mg_on ? q_b : mix_val);
@@ -295,15 +307,21 @@ module m2_scsp_dsp #(
       2'd2:    shifted = acc2[23:0];
       default: shifted = acc[23:0];
     endcase
-    a = {16'd0, madrs_q};
-    if (!TABLE) a = a + {16'd0, dec};
-    if (ADREB)  a = a + {20'd0, adrs};
-    if (NXADR)  a = a + 32'd1;
+    a = {16'd0, madrs_q + a_off};                     // (R959: a_off below)
     mask = TABLE ? 32'h0000ffff : ((32'h2000 << rbl) - 32'd1);
     addr_w = (a & mask) + {14'd0, rbp, 12'd0};
     mem_now = (MRD || MWT) && k[0];
   end
   assign stall = (IWT && mv_pend) || (mem_now && (mv_pend || w_pend));
+
+  // R959: the ring address's offset, MADRS's addend -- (TABLE ? 0 : DEC) +
+  // (ADREB ? ADRS : 0) + NXADR -- a register, so MADRS + DEC + ADRS + 1 is one
+  // add after MADRS's read and not three. addr_w is used in ph 3 (PACK's start)
+  // and ph 4 only; a_off there is the clock before's sum, and none of its terms
+  // moves between ph 2 and ph 4 (ins holds, DEC moves in D_FIN, ADRS in ph 4's
+  // edge or on a go). Sixteen bits: the mask keeps at most bits 15..0 of the sum.
+  always_ff @(posedge clk)
+    a_off <= (TABLE ? 16'd0 : dec) + (ADREB ? {4'd0, adrs} : 16'd0) + {15'd0, NXADR};
 
   // PACK's exponent: the leading sign bits of SHIFTED, at most 12
   always_comb begin
@@ -408,12 +426,12 @@ module m2_scsp_dsp #(
 
   always_comb begin
     mp_ra = (dst == D_SCAN) ? scan_i : (dst == D_IDLE) ? r_addr[9:3] : k[6:0];
-    t_ra  = TRA + dec[6:0];
+    t_ra  = a_TRA + dec[6:0];
     t_wa  = TWA + dec[6:0];
-    co_ra = (dst == D_IDLE) ? r_addr[6:1] : COEFI;
-    ma_ra = (dst == D_IDLE) ? r_addr[5:1] : MASA;
-    mx_ra = (dst == D_RUN) ? IRA[3:0] : mix_sel;
-    ef_ra = (dst == D_RUN) ? EWA : ef_idx;
+    co_ra = (dst == D_IDLE) ? r_addr[6:1] : a_COEFI;
+    ma_ra = (dst == D_IDLE) ? r_addr[5:1] : a_MASA;
+    mx_ra = (dst == D_RUN) ? a_IRA[3:0] : mix_sel;
+    ef_ra = (dst == D_RUN) ? a_EWA : ef_idx;
     t_we  = ph4 && TWT;
     ef_we = ph4 && EWT;
     ms_we = ph4 && IWT;
@@ -567,7 +585,7 @@ module m2_scsp_dsp #(
   assign mrg  = mg_need;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  wire _unused = &{1'b0, ins[56:55], ins[28], ins[15], c_mline[15:15], fill_data, addr_w[31:18], prod[37:35],
+  wire _unused = &{1'b0, ins[56:55], ins[28], ins[15], ins[14:8], ins[62:57], ins[54:50], a_IRA[5], c_mline[15:15], fill_data, addr_w[31:18], prod[37:35],
                     wsn_a[2:1], mg_wr, q_a, q_b, ra_a, ra_b, mx_q, mx_ra};   // (R946: the side a build leaves out)
   /* verilator lint_on UNUSEDSIGNAL */
 
