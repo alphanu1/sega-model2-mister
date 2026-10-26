@@ -1,5 +1,43 @@
 # Handoff
 
+## 2026-10-26: combo-2c (off model2c ed9fa94) -- R958 / R959 / R960 / R961 merged for fitting. LOCAL, NOT PUSHED, NOT FITTED
+
+  * Worktree sm2-builds/combo-2c, branch combo-2c. Merged: hotd-gun (R960:
+    HOTD's mark mapping, 2-px off-screen edge), wheel-2c (R958: Analog control
+    on O[71:70] for Over Rev / STCC), timing-2c (R959: SCSP DSP microword
+    register, m2_sdram and m2_fp_pool one-hot picks). Then m2_vcop_guns.sv
+    taken from gun-edge-2a (R961): it differed only in Virtua Cop 1's edge
+    rule (MAME's 5% border -> the 2-px rule) and its comments; it is now
+    byte-identical on main, model2a and combo-2c. On 2C (HD = 1) the VCop 1
+    branch is a constant, so the netlist is unaffected. Not included: span
+    cull, NEGZ, QNX (2A only for now).
+  * No RTL conflicts. Docs: HANDOFF / study keep both sides (R958, R959, R960,
+    R961 in order); releases/README keeps model2c's released text, plus
+    wheel-2c's "coming in the next build" note in the 2C section only.
+  * CONF_STR: O[71:70] free on model2c (no Seam fill on 2C; highest other
+    bits O[67], O[65:64], O[122:121]).
+  * m2_sdram: model2c's file before R959 is byte-identical to 2A's (md5
+    adf5502f...), and after it to model2a's (f64ab793...); the 2C
+    instantiation is the 2A one (M2A = 1, AGE 0). So the SDRAM change is in.
+  * lint_top clean (-DM2_2C -DM2_NO_2A_MANX_MOTION; also with PROCASSWIRE /
+    BLKANDNBLK off, full elaboration: 1,003 warnings vs model2c's 1,006, no
+    new ones); lint_idx 93 vs model2c's 96 (the 3 m2_sdram rr_grant selects
+    gone; else only hps_io's CONF_STR width); analyze_file 0 errors on
+    Model2.sv and the six changed RTL files. make test exit 0 (81 targets).
+    test_m2_hotd_guns 191,757 / 0, test_m2_vcop2_guns 223,916 / 0,
+    test_m2_vcop_guns 828,113 / 0, test_m2_cab_inputs 145.7 M / 0 (sweep
+    50,202 / 0, Standard vs 0f3cbc4 327,680 / 0), test_m2_2a_inputs
+    366,125,139 checks / 0 (Over Rev 1,568,289, STCC 2,681,806).
+  * SCSP DSP miter OVERLAP 1 (old = model2c): DSP_RANDOM 300, 384,247,199
+    cycles, 0 differing, invariants 0; tb_m2_scsp SCSP_OVL HOTD ch. 2 10 s,
+    424,517,283 cycles, 0 differing. pool_eq NC 4 PROVEN (2,554 cells);
+    sdram_eq 2a PROVEN (2,493), 2a-age PROVEN (2,524).
+  * quartus_map 17.0: 39,046 ALMs needed (timing-2c 39,010, int-2c 38,935),
+    48,600 registers, 4,592,208 block memory bits (= int-2c / timing-2c:
+    549 M10K expected), 105 DSP. Model2.qsf restored (M2_2C / M2_NO_2A_MANX_MOTION kept).
+  * Next: Ben fits; then the board (HOTD gun edges and mark, Over Rev / STCC
+    wheel modes, HOTD / Dynamite Cop sound unchanged).
+
 ## 2026-10-26: Model2A_20261026 and Model2_20261026 released
 
   * Model2A_20261026 = s1503 (combo-2a 3e883c2: R959 timing, R954 span cull,

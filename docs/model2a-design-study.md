@@ -46883,3 +46883,29 @@ verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
 
 *LEFT:* the fit and the board (Ben). Virtua Cop 2's in-game reload at the
 2-px edge is benched in the core, not run in MAME (as R960).
+
+**R958-R961, INTEGRATED ON 2C: combo-2c (2026-10-26), off model2c ed9fa94,
+for fitting.** hotd-gun (R960), wheel-2c (R958) and timing-2c (R959) merged,
+then m2_vcop_guns.sv made byte-identical to gun-edge-2a's / model2a's / main's
+(R961): the only difference was Virtua Cop 1's off-screen rule (MAME's 5%
+border -> the last 2 px) and its comments; on 2C (HD = 1) that branch is a
+constant. Span cull (R954), NEGZ (R955) and QNX (R962) are not in: 2A only
+for now. No RTL conflicts; the R959 files are byte-identical to timing-2c's.
+m2_sdram on model2c was byte-identical to 2A's before R959 and is after, and
+2C instantiates it with 2A's parameters (M2A = 1, AGE 0), so the proof
+holds and the SDRAM change is kept. O[71:70] is free on 2C (no Seam fill).
+  * lint_top clean (-DM2_2C -DM2_NO_2A_MANX_MOTION); lint_idx 93 against
+    model2c's 96 (the three m2_sdram rr_grant selects R959 removed; else only
+    hps_io's CONF_STR width); analyze_file 0 errors on Model2.sv and the six
+    changed RTL files; make test exit 0.
+  * test_m2_hotd_guns 191,757 / 0, test_m2_vcop2_guns 223,916 / 0,
+    test_m2_vcop_guns 828,113 / 0, test_m2_cab_inputs PASS (145.7 M / 0),
+    test_m2_2a_inputs 366,125,139 / 0 (with OREV: Over Rev and STCC).
+  * SCSP DSP miter at OVERLAP 1, old = model2c: DSP_RANDOM 300, 384,247,199
+    cycles, 0 differing, invariants 0 (R959's count); tb_m2_scsp SCSP_OVL
+    HOTD ch. 2 10 s, 424,517,283 cycles, 0 differing. pool_eq NC 4 PROVEN
+    (2,554 cells); sdram_eq 2a PROVEN (2,493), 2a-age PROVEN (2,524).
+  * quartus_map 17.0: 39,046 ALMs needed (timing-2c 39,010), 48,600
+    registers, 4,592,208 block memory bits (as int-2c / timing-2c: 549 M10K
+    expected), 105 DSP.
+  * Not checked: the fit (timing) and the board.
