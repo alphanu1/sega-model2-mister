@@ -37885,3 +37885,150 @@ upstream.
   each push came from (uncentring is signed by the steering too); Ben's
   feel on the wall hit is the evidence. Worth feeling again on the
   every-write build.
+
+**R968 -- THE FORCE FEEDBACK BUILD'S FAILING PATHS: FOUR OF OURS SHORTENED
+WITHOUT CHANGING A CYCLE (R959'S METHOD); THE HDMI ONES ARE THE FRAMEWORK'S,
+AND WHERE THEY FAIL IS DECIDED BY PLACEMENT. BRANCH ffb-main (OFF main).**
+
+*What was believed:* 9256c1b (hps_io's FFB parameter) broke timing -- s1531
+closed on every clock before it, and eight seeds after it (s1532, s1533,
+s1537-s1539, s1543-s1545) all failed, a different clock each time.
+
+*What is now known:*
+1. The parameter changed nothing that is synthesised. With M2_DRIVE_FFB
+   defined, FFB is 1 and every `if (FFB)` is the old code: quartus_map gives
+   s1531 and s1532 the same netlist (39,234 ALMs needed, 55,326 ALUTs,
+   49,955 registers, 4,671,024 block-memory bits). s1531 was one good seed
+   of three for the same design (s1529-s1531); main's rel-main seeds
+   (s1509-s1512) failed HDMI by -1.08 to -2.83 the same way.
+2. The release corner is Slow 1100mV 100C (the part is an I7). A first
+   survey at 85C and 0C gave slacks up to 0.09 ns away from the reports
+   (s1532 clk_sys +0.019 / -0.012 against -0.071) -- re-run at 100C, where
+   it matches the .sta.rpt to the picosecond. Survey: quartus_sta on copies
+   of each seed's database (build/sta-copies), 60 setup and 30 recovery
+   paths per clock. Clocks: general[0] clk_mem 100 MHz, general[1] clk_sys
+   80 MHz, general[3] i960 40 MHz, HDMI 148.5 MHz (6.732 ns).
+3. Ours, by family (worst slack, ns; - = not under +0.1):
+
+   | family                                   | 1532   | 1533   | 1537   | 1538   | 1539   | 1544   |
+   |------------------------------------------|--------|--------|--------|--------|--------|--------|
+   | i960 recovery: ldr_top -> cpu_rst_n -> i960_fpmul DSP aclr | - | -0.154 | -0.288 | - | - | -0.433 |
+   | clk_mem m2_sdram pend/inflight -> rr_mask | -      | -      | -0.053 | -      | -      | -      |
+   | clk_mem m2_sdram tag_v -> cmd (R959 left it) | -   | -      | -      | -      | -0.003 | -      |
+   | clk_mem m2_scan15 acc_b -> o_rgb          | -      | -      | -      | -0.090 | -      | -      |
+   | clk_sys sw_addr -> sw_addr (parked sweep) | -      | -      | -      | -      | -      | -0.221 |
+   | clk_sys m2_span_tex of_rp -> rt_take -> e_pr DSP enables | - | - | -0.271 | - | - | - |
+   | clk_sys m2_span_tex sh_p -> m2_texel_x2 RAM | -0.067 | -    | -      | -      | -      | -      |
+   | clk_sys fp_add s1_sum -> sC_shifted (pool) | -0.071 | -     | -      | -      | -      | -      |
+
+   s1543 and s1545 failed HDMI only; inflight -> rr_mask was +0.045 / +0.075
+   there. s1531 (clean) had ldr_top -> the sound 68000's nanoLatch at +0.016
+   on clk_sys -- the same compare, through cpu_rst_n.
+   The recovery path: ldr_top -> LessThan8 (3 levels, 2.5 ns) -> cpu_rst_n
+   (an AND of five registers) -> a global (5.0 ns to CLKCTRL_G2) -> 4,033
+   loads, i960_fpmul's DSP pipeline registers the farthest.
+4. HDMI is all framework: no node of ours is timed on pll_hdmi. Worst per
+   seed (100C): s1531 +0.005 ascal o_h_poly_t -> o_h_poly_pix; s1532 -0.277
+   ascal o_div -> o_hfrac; s1533 -0.500 osd h_cnt == h_osd_start ->
+   osd_hcnt2 (5 levels); s1537 -0.389 osd ordout1 -> vga_out's shift-tap
+   M10K (2 levels, 6 ns of routing: the RAM at Y2, the OSD at Y49), then
+   -0.233 osd cnt -> pixsz; s1538 -0.120 osd h_cnt > {dsp_width,00} ->
+   osd_en (6 levels, 49-fanout enable); s1539 -0.373 ascal o_hpixq[7] ->
+   o_hpixq[8] (0 levels, 6.31 ns of routing into a DSP at X86 from X45);
+   s1543 -0.560 ascal's line-buffer M10K (X49 Y80) -> a polyphase DSP at
+   X86 Y33 (0 levels, 6.21 ns routing); s1544 +0.092; s1545 -0.197 osd
+   h_cnt -> f1. The HDMI logic itself lands anywhere from X4 to X87 across
+   seeds. So the core's fill pushes these paths through PLACEMENT, not
+   through anything of ours on them: DSP 101 / 112 and M10K 551 / 553 leave
+   ascal's multipliers and line buffers wherever a block is free, and the
+   two worst seeds are 6 ns of routing between a RAM or register and a DSP
+   40 columns away. RTL of ours cannot shorten those; the OSD's compares
+   could be (sys/osd.v, a next-state compare per ce_pix), but they are the
+   worst path in three seeds of nine and ascal fails five, so it was left.
+
+*The changes (each proven identical; nothing else moves):*
+1. *Model2.sv, ldr_big.* A register beside ldr_top, written on the same edge
+   from the same address with (ldr_wr_addr > 0x80000), both 0 out of
+   reset; game_image = rom_loaded && ldr_big. Removes the compare from
+   cpu_rst_n's recovery paths and from ldr_top -> nanoLatch.
+2. *Model2.sv, the parked sweep.* `end else if (SWEEP_EN) begin`. With
+   SWEEP_EN 0 (R284), sw_take 0 (M2_NO_DEBUG) and sw_sel_i 0 (R666) the
+   sweep never leaves state 0 and every register keeps its reset value --
+   but that is a reachability fact Quartus did not find, so it kept
+   sw_addr's adder and the 25-bit compare against ldr_top, which failed
+   s1544.
+   Proof of 1 and 2: sim/miter/r968_top.sh cuts the two blocks out of the
+   old and new Model2.sv (the text itself, not a copy) and runs yosys sat
+   -tempinduct: ldr_big == (ldr_top > 0x80000), old and new ldr_top and
+   game_image equal on every cycle -- PROVEN; the old sweep never leaves its
+   reset values (all fifteen registers, sw_word / sw_wsel included) --
+   PROVEN, inductive; the new one likewise -- PROVEN. Mutations: SWEEP_EN 1
+   and the constant one off both fail on the base case.
+3. *m2_sdram, R959's one-hot grant registers* (gr_above, blen_gr, inflight
+   bit by bit, we_gr), the change 9decc9b left out of main because it had
+   been proven on the 2A file. Main's file is the 2A one before DUAL,
+   MASK_ON_A and AGE; 36d7297's version is main's plus exactly R959's 33
+   lines. sim/miter/sdram_eq.sh rewritten for main's header and run on it:
+   PROVEN at Model2.sv's parameters (NP 13, COL_BITS 10, T_REFI 781, PRI,
+   PRI_CAP 2, PRI_TOP; 2,355 cells) and NP 5 (1,283). gr_above one bit off
+   leaves 16 unproven. Benches sdram (2,111,407 checks), sdram13, sdram128,
+   romload, sdram_x2, sdram_cdc: 0 fails, 0 violations. lint_idx 141 lines
+   against 144, none new (inflight[rr_grant], we_p[rr_grant] x 2 gone).
+   tag_v -> cmd (R959's ras_ok -> cmd) is still not done.
+4. *m2_scan15, blend_q.* The x3277 blend in a register every clk_mem;
+   o_rgb takes blend_q at ce_out. acc is written on the edges where ph is
+   2 and 3; ce_out's enables are at least 9 clk_mem apart (547/5300 and
+   537/5300: 9, 861/8692: 10), so acc last moved 6 or more edges before an
+   enable and blend_q == blend there. Proof: tb_m2_scan15 under R952's
+   miter (sim/miter/miter.py, old and new side by side, all 5 outputs every
+   cycle): modes 0, 1, 2 and the slipping cadence (+rnd +slip3=20), 14
+   frames each, 22,599,226 cycles; modes 0 and 2 at 140 frames,
+   241,637,626 cycles: 0 differing, bench PASS. Mutation (blend_q loaded
+   only in ph 3): 4,575,877 of 8,692,026 cycles differ, FAIL.
+Checks: lint_top clean (debug, and LINT_DEFS=-DM2_NO_DEBUG); quartus_map
+--analyze_file 0 errors on Model2.sv, m2_sdram.sv, m2_scan15.sv.
+*Not done:* m2_span_tex of_rp -> rt_take -> the e_pr DSPs' input-register
+enables (s1537 -0.271: rt_col / rt_lum packed into the DSPs, 81 fanout,
+9.2 ns of routing; a registered head_skip / head_reuse would take two
+levels off), sh_p -> m2_texel_x2 (s1532, 9 levels), the pool's fp_add
+(s1532), tag_v -> cmd, and the framework's HDMI paths.
+*Area (quartus_map 17.0, ALMs needed):* 39,234 -> 39,198; ALUTs 55,326 ->
+55,148; registers 49,955 -> 49,930 (the sweep's registers gone, ldr_big and
+blend_q's 24 in); M10K bits and DSP (101) unchanged.
+
+*Fit (Quartus 17.0, seeds 1546-1548, all three fitted; 100C):*
+
+   | seed  | clk_sys | clk_mem | i960   | HDMI   | hold   | recovery | ALM    |
+   |-------|---------|---------|--------|--------|--------|----------|--------|
+   | s1546 | -0.419  | +0.195  | +0.990 | -0.321 | +0.191 | +1.005   | 39,228 |
+   | s1547 | -0.312  | +0.410  | +0.073 | -0.736 | -0.338 | +1.410   | 39,117 |
+   | s1548 | +0.254  | +0.649  | +1.867 | -0.171 | +0.171 | +0.721   | 39,168 |
+
+None is clean on every clock. s1548 is clean on all of ours, setup, hold,
+recovery and removal, and fails HDMI only (ascal o_v_poly_t ->
+o_v_poly_pix, 1 level -- the polyphase multiply, as in s1531's +0.005).
+None of the four shortened families came back: i960 recovery is +0.72 to
++1.41 in all three (it was -0.15 to -0.43 in three of eight), no
+m2_sdram, scan15 or sweep path is under +0.1. What failed instead is new
+each seed, and two of the three are placement, not depth:
+  * s1546 clk_sys -0.419: m2_span_tex d1a_m -> d1_m, 0 logic levels, 12.12
+    ns of routing into the divide's DSP (Mult0); then m2_fb_wcomb b_key ->
+    vlo -0.411. HDMI -0.321: osd h_cnt > {dsp_width,00} -> osd_en, 7 levels.
+  * s1547 clk_sys -0.312: m2_fb_wcomb wlo -> m2_span_tex's mk MLAB write
+    data (9 levels). HDMI -0.736: ascal o_hpixq[7] -> [8] into a DSP, 0
+    levels, 6.66 ns routing (s1539's path again); osd cnt -> pixsz -0.573.
+    HOLD -0.338 on i960: hps_io joystick_0[8] (clk_sys) -> m2_vcop_state
+    t_q (clk_i960), the two flops in one LAB, 0.575 ns of data against 0.853
+    ns of clock skew -- the Test button crossing 80 -> 40 MHz with nothing
+    between; the fitter did not pad it this time. First seen here.
+  * s1548: HDMI only, above.
+So with this design at DSP 90% / M10K 100%, a seed fails on whichever path
+the placement stretches: the logic-depth families that recurred are gone,
+and what is left is mostly routing into DSPs and RAMs (the framework's
+and ours alike) plus the OSD's compares. Next, if more is wanted: the OSD
+compares in sys/osd.v (the worst HDMI path in five of the twelve seeds
+surveyed, s1544's passing one included), the Test button's crossing (a
+slow input taken flop to flop across 80 -> 40 MHz; any fix adds a clock of
+latency to a button, so it is not "identical" and is Ben's call),
+m2_fb_wcomb's b_key / wlo paths, and the DSP placement question (ascal's multipliers into logic -- an area cost --
+or a LogicLock for the HDMI domain).

@@ -1,5 +1,31 @@
 # Handoff
 
+## 2026-10-27 (night): FFB build timing -- four of our paths shortened (R968), no clean seed yet
+
+  * The FFB parameter commit (9256c1b) changed nothing synthesised (same map
+    numbers as s1531); s1531 was a lucky seed. Survey of s1532-s1545 at the
+    release corner (Slow 100C; 85C / 0C runs disagree with the reports by up
+    to 0.09 ns -- use 100C): build/sta-copies, R968's table.
+  * Shortened, each proven identical (ffb-main b156ac1, bc45180, e157de1):
+    ldr_big (cpu_rst_n's compare; i960 recovery -0.15..-0.43 in 3 of 8),
+    the parked sweep gated by SWEEP_EN (sw_addr, s1544), R959's m2_sdram
+    one-hot grant re-proven on main's file (yosys, sim/miter/sdram_eq.sh),
+    m2_scan15 blend_q (s1538). Proofs: sim/miter/r968_top.sh (yosys sat
+    induction), sdram_eq.sh, tb_m2_scan15 under the miter (241,637,626
+    cycles, 0 differing); mutations caught. ALMs needed 39,234 -> 39,198.
+  * s1546-s1548 (100C): s1546 clk_sys -0.419 / HDMI -0.321; s1547 clk_sys
+    -0.312 / HDMI -0.736 / i960 HOLD -0.338 (Test button joystick_0[8] ->
+    m2_vcop_state t_q, 80 -> 40 MHz flop to flop); s1548 clk_sys +0.254,
+    clk_mem +0.649, i960 +1.867, hold +0.171, recovery +0.721, HDMI -0.171
+    (ascal's vertical polyphase). No .rbf assembled -- none is clean.
+  * None of the four families came back. What fails now is new each seed,
+    mostly routing into DSPs / RAMs (s1546 d1a_m -> the divide's DSP, 0
+    levels, 12.1 ns routing) and the framework's HDMI paths (ascal into far
+    DSP columns, the OSD's compares). DSP 101/112, M10K 551/553.
+  * Next options in R968: sys/osd.v's compares (worst HDMI path in 5 of 12
+    seeds), m2_fb_wcomb b_key / wlo, the Test button crossing (Ben's call:
+    a clock of latency), DSP placement for ascal.
+
 ## 2026-10-26 (late night): Daytona FFB -- every port E write taken (R966), s1531
 
   * BOARD RESULT on s1528 (Ben, matching Main, hori-ffb -v, a whole race):
