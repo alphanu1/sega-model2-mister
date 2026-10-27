@@ -1,5 +1,58 @@
 # Handoff
 
+## 2026-10-27: Model2A_20261027 -- the sound balance fixed (R967)
+
+  * Model2A_20261027 = s1536 (model2a c856030 + study baaf186), md5
+    7a14a706484b903b17a2bebdd631e444: clk_sys +0.401, clk_mem +0.519, i960
+    +1.553, hold +0.144 (HDMI -1.134; release s1523 was -1.035). 39,110 ALM,
+    551 / 553 RAM blocks. s1534 / s1535 failed clk_sys (-0.167 / -0.351).
+    Board-tested by Ben (Volume 80%, boost Off): VF2 and Virtua Cop 2 "really
+    good"; Dynamite Cop's box break "still a little loud, maybe right";
+    Sega Rally and Zero Gunner mix good but quieter overall (their own level,
+    as in MAME). Same release folder on main, model2a, model2c.
+  * THE CAUSE (R967): Quartus 17.0 built m2_scsp_dsp's MPRO (two byte-lane
+    writes into one packed row, lane index from the address) as ONE 8-bit
+    write port at {addr, w_be[1]}: word writes kept the high byte only, every
+    MPRO low byte 0 on the board (MASA, IWT/IWA, TWT/TWA, NXADR, SHFT, BSEL
+    ...). No warning. Verilator runs the RTL as written, so every bench said
+    "matches MAME + R914". Found by simulating the post-synthesis netlist
+    (sim/netsim/netsim.sh + atoms_vl.sv): it reproduces R953's board numbers
+    (hits -4.8 / -3.3 dB, break +8.1..+8.4 dB vs board -5.0 / -3.4, +7.8..+8.4;
+    music sd 0.53 dB). Fix: mpro_l / mpro_h, one write each. Rule taken: a RAM
+    whose write port is narrower than the widest write the RTL makes in a
+    clock is a mis-synthesis -- check the RAM summary's port A width.
+  * WHAT WENT WRONG BEFORE: R949 and R953 compared the RTL against our own
+    reference (scsp_ref.h with R914), concluded "matches MAME", and R953 left
+    the board difference "not reproduced". Ben was right that it wasn't "just
+    hardware": the bench was blind to synthesis. Also ruled out this session
+    (measured): the i960 -> 68000 MIDI path (lossless to 7.5x MAME's worst
+    latency), game settings (no volume option in DCop / HOTD), the output
+    stage and framework path at Ben's settings, timing on sound paths, the
+    MRA / ROM layout (byte-identical), SDRAM aliasing, reset order.
+  * R914 CONFIRMED: srg320's SCSP, RUN in a scratch Verilator bench (not
+    copied; no licence file), ignores 0x7C0 writes (R914's decode) and its
+    return matches R914 within 0.7 dB (DCop), 0.3 (VF2), 0.2 (HOTD). A real
+    Dynamite Cop arcade recording (The Game Nexus, YouTube FfdDF_Bu85Y) is
+    closer to R914 than to MAME (music r 0.74 vs 0.62; hits within 0.9 dB).
+    Open: at DCop's attract scene change (~6.5 s) the arcade's tail is
+    25-30 dB under R914's; unconfirmed (cut timing differs).
+  * 2C: the same fix on branch snd-2c (06c8f35, off model2c), DSP bench in
+    OVERLAP mode 0 wrong (captures + 500 random programs); seeds s1540-s1542
+    fitting. HOTD playthrough on the board next; README's HOTD known bug says
+    the fix comes in the next 2C build.
+  * Force feedback (not released; waits for Main #1393 / Template #122):
+    hps_io FFB parameter (default 0 = identical to upstream, 587 ALM) and
+    Main's start-up probe (4 x 0.5 s), re-pushed and re-review requested
+    2026-10-27. Board: s1532 (FFB(1)) probe FB00 present and forces good;
+    2A core (stock hps_io) four 0000 probes, then no polling. Model 2 FFB core
+    timing: s1532 / s1533 / s1537-s1539 all fail narrowly (best s1539:
+    core -0.003, HDMI -0.373); s1543-s1545 queued after the 2C batch.
+  * Board state: Model2.rbf = s1532 (FFB test), Model2A.rbf = s1536 (this
+    release; previous saved as Model2A.rbf.pre_snd_s1536), Main = debug FFB
+    probe build via hori_menu.sh + MiSTer.ini [Model2] main= (backups
+    *.pre_probe); hori_menu.sh now also stops a Main started under another
+    name (backup .pre_killall).
+
 ## 2026-10-26 (evening): releases/scripts -- a force feedback test for wheels
 
   * releases/scripts/ffb_wheel_test.sh + ffb-wheel-test (linux-hori v0.1.3's
