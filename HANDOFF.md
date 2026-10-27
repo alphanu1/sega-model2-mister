@@ -1,5 +1,21 @@
 # Handoff
 
+## 2026-10-27 (later): Model2C_20261027 -- the sound balance fixed on 2C
+
+  * Model2C_20261027 = s1561 (model2c d6d49cb: R967's MPRO fix, cherry-picked
+    from snd-2c 06c8f35), md5 4399bde5783ba6198bded9859e93ea07: clk_sys +0.198,
+    clk_mem +0.320, i960 +0.511, HDMI +0.154, hold +0.150 -- clean on every
+    clock. 39,343 ALM, 549 / 553 RAM blocks. Board-tested on s1541 (same RTL;
+    HDMI -0.046 there): Ben, "2C is much better". s1540 Quartus internal error
+    (Sub-system: DYN), s1542 failed (clk_sys -0.797).
+  * Release folder: Model2C_20261027.rbf replaces Model2C_20261026.rbf
+    (model2c only; main / model2a have no 2C). README: HOTD's sound known bug
+    removed, "New in this build" added.
+  * Model 2 FFB core (ffb-main, local): R968 shortened four path families
+    (proven identical); s1548 clean on every core clock, HDMI -0.171 (framework
+    OSD / scaler). Open: Test-button hold path (s1547) needs a one-clock delay,
+    Ben's call. Held until Main #1393 / Template #122 are accepted.
+
 ## 2026-10-27: Model2A_20261027 -- the sound balance fixed (R967)
 
   * Model2A_20261027 = s1536 (model2a c856030 + study baaf186), md5
