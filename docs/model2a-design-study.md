@@ -45821,3 +45821,39 @@ RAM summary (1024 x 8 / 128 x 64) for M10K counts, not as a write width.
 Rule taken: a RAM whose one write port is narrower than the widest write the
 RTL makes in a clock is a mis-synthesis -- check the summary's port A width
 against the code, and when in doubt, sim/netsim.
+
+**R967, THE MIX IT RESTORES CHECKED INDEPENDENTLY: srg320's SCSP, RUN, AND A
+REAL-ARCADE RECORDING BOTH GIVE R914's MIX, NOT MAME's.**
+*Believed (R949):* "the Saturn SCSP agrees with R914" -- from READING
+srg320's code only. *Now measured:* srg320's SCSP (MiSTer-devel/Saturn_MiSTer
+c072434, no licence file: run in a scratch Verilator bench only, nothing in
+the repository) on the p16 captures. Bench fixes needed before it ran right,
+none in its arithmetic: CE every second clock; four mixed-sign products in
+SCSP_pkg.sv (Interpolate x2, PhaseCalc, VolCalc) made signed, as intended;
+`OP2.PHASE = PHASE` made non-blocking (a simulation race; synthesis builds it
+that way).
+  * MADRS decode, by running it: the Dynamite Cop attract (62 s) is
+    bit-identical with the 0x7C0-0x7FF writes passed or dropped -- srg320
+    ignores them: R914's decode. Forcing MAME's mirror zeroes the taps.
+  * Levels (stable windows; direct sends corr >= 0.9999, +0.3 dB):
+      Dynamite Cop 3.5-12.2 s  srg320 - R914 return +0.67 dB (corr 0.93);
+                               srg320 with the mirror - MAME +0.17 dB
+      Dynamite Cop 6-7 s tail  srg320 302 / R914 296 RMS (corr 0.998), MAME 55
+      VF2 12.6-13.9 s          srg320 - R914 return +0.30 dB (corr 0.96)
+      HOTD attract 27-30 s     srg320 - R914 return -0.20 dB (corr 0.997)
+  * Not usable beyond those windows: srg320's DSP diverges exponentially
+    1.5-2 s after the music starts in every capture, either decode (trigger
+    not found; not accumulator overflow, MONITOR writes, NOFL or the decode).
+*Real arcade:* The Game Nexus, "Dynamite Deka 2 / Dynamite Cop ... Real HW"
+(YouTube FfdDF_Bu85Y, line level; local scratch only), its 54-68 s = MAME
+39.1-53.1 s (envelope corr 0.87-0.90) = Ben's board 0-14.7 s (music and
+hits; not the break). Music, 20 ms envelopes, 7-10.5 s: arcade vs R914 r 0.74
+(sd 1.9 dB), vs MAME r 0.62 (sd 6.3 dB); Ben's s1447 board vs MAME r 0.985 --
+the MPRO fault's signature. Hits against the music: arcade - R914 +0.9 dB,
+arcade - MAME -0.5 to -1.3 dB, s1447 board - MAME -4.6 dB.
+*Open:* at the attract's scene change (board 6.4-6.6 s) the arcade's tail
+falls 25-30 dB below R914's (MAME has none); elsewhere the arcade has R914's
+tail energy ~3 dB under it. Platform timing of the cut differs (s1447 went
+silent 0.4 s earlier), so unconfirmed. If the fixed build's tails sound long,
+look at Dynamite Cop's scene changes first.
+*Conclusion:* with MPRO built right, R914's mix stands; no other change.
