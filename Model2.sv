@@ -406,7 +406,15 @@ wire [10:0] ps2_key;
 // zero-extends a byte, and the ROM lands in SDRAM as garbage — which read back
 // from the board as an address-independent 000000FF and cost two hardware builds
 // chasing the SDRAM capture phase, which was never involved.
-hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+// R966: the drive board's force feedback, compile time (M2_DRIVE_FFB). Without
+// it hps_io's FFB is 0: UIO_GET_FFB answers 0 and Main never polls the core.
+`ifdef M2_DRIVE_FFB
+localparam bit DRIVE_FFB = 1'b1;
+`else
+localparam bit DRIVE_FFB = 1'b0;
+`endif
+
+hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .FFB(DRIVE_FFB)) hps_io
 (
 	// clk_sys, NOT clk_vid, AND THAT IS THE WHOLE POINT.
 	//
@@ -2497,14 +2505,8 @@ localparam bit LINK = 1'b1;
 localparam bit LINK = 1'b0;
 `endif
 assign link_menu = LINK & (game_id[6:0] == 7'd0);   // Daytona, either set
-// R966: the drive board's force feedback, compile time (M2_DRIVE_FFB) and
-// then Daytona only -- game_id 0, either set; Virtua Cop and Desert Tank
-// never assert it.
-`ifdef M2_DRIVE_FFB
-localparam bit DRIVE_FFB = 1'b1;
-`else
-localparam bit DRIVE_FFB = 1'b0;
-`endif
+// R966: the drive board's force feedback (DRIVE_FFB, above hps_io) is Daytona
+// only -- game_id 0, either set; Virtua Cop and Desert Tank never assert it.
 assign ffb_menu = DRIVE_FFB & (game_id[6:0] == 7'd0);
 assign crt_mra = game_id[7];   // R801
 // R795: THE CRT MRA FORCES 15 kHz. A CRT owner cannot see a 24 kHz OSD to
