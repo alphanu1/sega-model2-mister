@@ -73,7 +73,26 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261026b`)
+### New in this build (`Model2A_20261027`)
+
+- **The sound balance is fixed.** The sound chip's effects processor (the
+  reverb) was only getting half of its program on the FPGA: Quartus, the
+  tool that builds the core, stored just the high byte of each program word.
+  So the reverb lost its echoes, and the parts of the program that route each
+  sound came out wrong, making some sounds too loud and others too quiet. The
+  program is now stored in full. In Dynamite Cop the breaking boxes no
+  longer jump out (they were about 8 dB too loud) and the hits sit right
+  against the music; Virtua Fighter 2's effects come up against the music;
+  and the music in every game gets its reverb back. Checked against a
+  recording of a real Dynamite Cop arcade board and against a second,
+  independent sound chip core.
+- **Each game has its own overall volume, as in the arcade.** Arcade games
+  were never matched for loudness: every cabinet's amplifier was set for its
+  own game. MAME shows the same spread. So Sega Rally and Zero Gunner, for
+  example, still play quieter than Virtua Fighter 2 or Virtua Cop 2. Use the
+  OSD's `Volume` to set each game to taste (see *Sound settings* below).
+
+### Earlier in `Model2A_20261026b`
 
 - **New OSD setting `Gun flash`: `Arcade` / `Off` (Virtua Cop 2)**, as on the
   Model 2 core's Virtua Cop. `Arcade` (the default) is the game's own white
@@ -224,7 +243,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261026b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261027.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -232,7 +251,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261026b.rbf` has the md5 `2b7ceb02498f169fe3967ce0caa01b25`. As with
+`Model2A_20261027.rbf` has the md5 `7a14a706484b903b17a2bebdd631e444`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -270,17 +289,11 @@ ROM sets: MAME 0.289.
   for a moment, and road behind hills appears a little late.
 - **Thin seams between some polygons show the background through them**
   (Virtua Fighter 2's Jacky and Sarah stages, Dead or Alive). Being worked on.
-- **Sound balance:** in Dynamite Cop the environment sounds (breaking boxes)
-  are too loud against the shots and music, and Virtua Fighter 2's effects
-  are low. Being investigated against MAME and the board.
 - **Slowdown:** Motor Raid slows a little in busy moments (GitHub #25).
   Being investigated.
-- **Sound is quiet** with the default settings: Sega Rally and Zero Gunner
-  are quiet overall. That is how MAME 0.289 mixes these games, and apart from
-  the effects processor fix above the core matches it sample for sample. (MAME can sound louder because it also runs its own audio
-  effects, a compressor among them, after the sound chip.) Whether the arcade
-  is louder is still an open question. Until then, two OSD settings lift it
-  — see *Sound settings* below.
+- **Some games are quieter than others** (Sega Rally and Zero Gunner most
+  of all). That is each game's own level, as in the arcade and in MAME 0.289;
+  turn `Volume` up for those games — see *Sound settings* below.
 - **Zero Gunner's protection chip isn't emulated.** Its MRA patches out the
   checks instead, so enemy patterns differ from MAME's (the game's random
   numbers read its own code), but the game plays through normally.
@@ -295,10 +308,11 @@ ROM sets: MAME 0.289.
 | setting | what it does |
 |---|---|
 | `Volume` | 80% by default. The list runs upward from there: 80, 90, 100, **150, 200, 300, 400%**, then round to 0–70%. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
-| `Raw Sound Boost` | `Off` (default), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. (The level table below was measured before this build's effects processor fix, which made Virtua Fighter 2 about 9 dB quieter: give it more `Volume` than the table says.) |
+| `Raw Sound Boost` | `Off` (default), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. Since `Model2A_20261027` the balance is right without it; it stays for anyone who wants the direct sounds louder. |
 
-**Quiet games: turn `Volume` up. Virtua Fighter 2's hits too quiet against
-the music: use `Raw Sound Boost`.** For about the same loudness as Virtua
+**Quiet games: turn `Volume` up.** The table was measured before
+`Model2A_20261027`; Sega Rally and Zero Gunner barely use the effects
+processor, so their rows still hold. For about the same loudness as Virtua
 Fighter 2 at the default 80%:
 
 | game | with `Raw Sound Boost` Off | with `Raw Sound Boost` +12 dB |
@@ -381,8 +395,9 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 ### Known bugs
 
 - **House of the Dead**: the music is too loud against the gun shots, in
-  chapter 2 most of all. `Raw Sound Boost` brings the shots back up (it
-  lifts the music a little too). Being investigated.
+  chapter 2 most of all. The cause is found: it's the same effects processor
+  fault fixed in the Model 2A core (`Model2A_20261027`), and the fix comes in
+  the next 2C build. Until then, `Raw Sound Boost` brings the shots back up.
 - **Sega Touring Car Championship has no music.** Its music board plays
   MPEG audio, which the core doesn't have yet. Engine sounds and effects
   play. Races may slow down, and the pedals haven't been checked on a real
