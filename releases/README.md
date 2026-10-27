@@ -332,10 +332,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261027.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261026.rbf` has the md5 `b4fdec524fc036aea178c3ac238be55c`. Keep
+`Model2C_20261027.rbf` has the md5 `4399bde5783ba6198bded9859e93ea07`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -354,7 +354,20 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### New in this build (`Model2C_20261026`)
+### New in this build (`Model2C_20261027`)
+
+- **House of the Dead's sound balance is fixed.** The music and the high FM
+  voice no longer drown out the gun, in chapter 2 or anywhere else, and you
+  no longer need `Raw Sound Boost` to hear the shots. The cause was the same
+  as in the Model 2A core's `Model2A_20261027`: the sound chip's effects
+  processor was only getting half of its program on the FPGA, so the reverb
+  lost its echoes and some sounds came out too loud, others too quiet. Over
+  Rev and Sega Touring Car Championship get the same fix.
+- **Each game has its own overall volume, as in the arcade.** Use the OSD's
+  `Volume` to set each game to taste.
+- **Clean timing on every clock.**
+
+### Earlier in `Model2C_20261026`
 
 **House of the Dead players: after updating, reset the gun calibration once**
 (TEST MENU → GUN SETTING → PLAYER 1 / PLAYER 2 GUN DEFAULT ADJUSTMENT, then
@@ -394,10 +407,6 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 ### Known bugs
 
-- **House of the Dead**: the music is too loud against the gun shots, in
-  chapter 2 most of all. The cause is found: it's the same effects processor
-  fault fixed in the Model 2A core (`Model2A_20261027`), and the fix comes in
-  the next 2C build. Until then, `Raw Sound Boost` brings the shots back up.
 - **Sega Touring Car Championship has no music.** Its music board plays
   MPEG audio, which the core doesn't have yet. Engine sounds and effects
   play. Races may slow down, and the pedals haven't been checked on a real
