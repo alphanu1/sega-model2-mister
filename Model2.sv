@@ -2409,9 +2409,16 @@ end
 //
 // Decided by the highest address the loader wrote, which is a fact about the
 // image rather than a mode the user has to select correctly.
+// R968: ldr_big IS (ldr_top > 0x80000) HELD IN A REGISTER, written on the same
+// edge as ldr_top from the same address, both 0 out of reset -- so it equals
+// the compare on every cycle. The compare fed cpu_rst_n, the i960's and most of
+// the machine's asynchronous reset, and its three levels sat on the recovery
+// paths ldr_top -> cpu_rst_n -> i960_fpmul's DSP registers (s1533 -0.154, s1537
+// -0.288, s1544 -0.433) and ldr_top -> the sound 68000's nanoLatch.
 logic [SDR_AW:1] ldr_top;
+logic            ldr_big;
 always_ff @(posedge clk_sys or negedge mem_rst_n) begin
-	if (!mem_rst_n) ldr_top <= '0;
+	if (!mem_rst_n) begin ldr_top <= '0; ldr_big <= 1'b0; end
 	// ON req ALONE, not req AND ack. This dedicated write port does NOT use the
 	// level handshake the numbered ports use: m2_rom_loader PULSES req and drops
 	// it immediately -- "req pulsed so the controller sees a rising edge" -- then
@@ -2422,9 +2429,12 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	//
 	// The address is presented with the request, so sampling on req is correct
 	// and does not depend on when the controller answers.
-	else if (ldr_wr_req && (ldr_wr_addr > ldr_top)) ldr_top <= ldr_wr_addr;
+	else if (ldr_wr_req && (ldr_wr_addr > ldr_top)) begin
+		ldr_top <= ldr_wr_addr;
+		ldr_big <= (ldr_wr_addr > SDR_AW'(32'h0080000));   // R968: == ldr_top > 0x80000
+	end
 end
-wire game_image = rom_loaded && (ldr_top > SDR_AW'(32'h0080000));
+wire game_image = rom_loaded && ldr_big;   // R968: was (ldr_top > 0x80000)
 
 // THE CPU FOLLOWS THE GAME RESET; THE MEMORY DOES NOT.
 //
@@ -5604,7 +5614,13 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 		sw_val <= 24'd0; sw_burst <= 20'd0;
 		sw_state <= 3'd0; sw_sel <= 5'd0; sw_done <= 1'b0;
 		sw_done_d <= 1'b0; sw_emit <= 1'b0; sw_runs <= 8'd0; sw_pend <= 1'b0; sw_out <= 24'd0; sw_out_sel <= 5'd0;
-	end else begin
+	// R968: `if (SWEEP_EN)`. With SWEEP_EN 0 the sweep never leaves state 0 and
+	// every register here keeps its reset value (an inductive invariant: state
+	// 0, sw_sel == sw_sel_i == 0, sw_pend 0 so sw_take 0, nothing done) -- but
+	// Quartus does not see that, and kept the whole walker: sw_addr's
+	// `sw_addr + 7 > ldr_top` failed clk_sys in s1544 (-0.221) on logic that
+	// can never run. Gated, the registers hold their reset values as before.
+	end else if (SWEEP_EN) begin
 		// RESTART ON A NEW SELECTION -- but never out of state 1, which is the
 		// one state with a request outstanding on port 4. Dropping sw_req there
 		// does not cancel it; the controller still answers, and that ack would
