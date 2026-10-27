@@ -80,18 +80,29 @@ module m2_scsp_dsp #(
 );
 
   // ------------------------------------------------------------------ RAMs
-  // MPRO: 128 x 64; word j of a step in [16j+15:16j]
-  (* ramstyle = "M10K" *) logic [7:0][7:0] mpro [128];
+  // MPRO: 128 x 64; word j of a step in [16j+15:16j].
+  // TWO ARRAYS, ONE PER BYTE LANE (R967). As one array of eight bytes a row,
+  // written `mpro[row][{word, 0}] <= low; mpro[row][{word, 1}] <= high`,
+  // Quartus 17.0 made ONE 8-bit write port at address {row, word, w_be[1]}
+  // with data w_be[1] ? high : low (RAM summary: port A 1024 x 8) -- so a
+  // word write (be 11) stored its high byte only and every MPRO low byte
+  // stayed 0 on the board: MASA, IWT / IWA, TWT / TWA, IRA[1:0], ADREB /
+  // NXADR, YRL / FRCL / ADRL / SHFT / NEGB / ZERO / BSEL all read 0. Verilator
+  // runs the code as written; only the netlist shows it (sim/sound/netsim).
+  // One write statement an array leaves nothing to fold.
+  (* ramstyle = "M10K" *) logic [3:0][7:0] mpro_l [128];   // the low bytes of a step's four words
+  (* ramstyle = "M10K" *) logic [3:0][7:0] mpro_h [128];   // their high bytes
   logic  [6:0] mp_ra;
   logic [63:0] mp_q;
+  logic [3:0][7:0] mpl_q, mph_q;
   wire         w_mpro = w_en && w_addr >= 11'h400 && w_addr < 11'h600;
   always_ff @(posedge clk) begin
-    if (w_mpro) begin
-      if (w_be[0]) mpro[w_addr[9:3]][{w_addr[2:1], 1'b0}] <= w_data[7:0];
-      if (w_be[1]) mpro[w_addr[9:3]][{w_addr[2:1], 1'b1}] <= w_data[15:8];
-    end
-    mp_q <= mpro[mp_ra];
+    if (w_mpro && w_be[0]) mpro_l[w_addr[9:3]][w_addr[2:1]] <= w_data[7:0];
+    if (w_mpro && w_be[1]) mpro_h[w_addr[9:3]][w_addr[2:1]] <= w_data[15:8];
+    mpl_q <= mpro_l[mp_ra];
+    mph_q <= mpro_h[mp_ra];
   end
+  assign mp_q = {mph_q[3], mpl_q[3], mph_q[2], mpl_q[2], mph_q[1], mpl_q[1], mph_q[0], mpl_q[0]};
   // COEF 64 x 16, MADRS 32 x 16 (0x780; MAME's mirror at 0x7c0 only with MADRS_MIRROR, R914)
   (* ramstyle = "MLAB" *) logic [7:0] coef_h [64];
   (* ramstyle = "MLAB" *) logic [7:0] coef_l [64];
