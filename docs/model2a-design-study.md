@@ -47023,3 +47023,168 @@ the Dead exactly as the release (whatever flash each shows today). Off --
 no flash on a shot in play, the picture under it the scene; House of the
 Dead's chapter card clean if shot at; everything else unchanged. The OSD
 line only for those two games.
+
+**R967 -- R953 REPRODUCED AND FOUND: QUARTUS 17.0 BUILDS THE SCSP DSP's MPRO
+WITH AN 8-BIT WRITE PORT, SO A WORD WRITE STORES ITS HIGH BYTE ONLY. EVERY
+MPRO LOW BYTE IS 0 ON THE BOARD (MASA, IWT / IWA, TWT / TWA, IRA[1:0], ADREB,
+NXADR, YRL, FRCL, ADRL, SHFT, NEGB, ZERO, BSEL). VERILATOR RUNS THE CODE AS
+WRITTEN; THE POST-SYNTHESIS NETLIST, SIMULATED, IS THE BOARD: DYNAMITE COP's
+HITS -4.8 / -3.3 dB AND BREAK +8.1 .. +8.4 dB AGAINST THE MUSIC (BOARD -5.0 /
+-3.4, +7.8 .. +8.4), THE MUSIC WITHIN 0.53 dB OF THE BOARD's (R914's RTL:
+2.38). FIX: MPRO AS TWO ARRAYS, ONE PER BYTE LANE; ITS NETLIST EQUALS THE
+REFERENCE. NOT FITTED.** Branch snd-silicon (off model2a 91c2bf9), LOCAL.
+
+*Believed (R953):* the board's mix is not the bench's, the framework, SDRAM
+latency and clipping ruled out; the bench (tb_m2_2a_sound, tb_m2_scsp) gives
+R914's mix exactly. Left: the board's i960 MIDI, or the sound board's silicon
+doing what its simulation does not. The candidates checked here, in order:
+
+*1. INFERRED RAMS (s1447's own Model2.map.rpt, bridge-r937-2a build/seeds/
+s1447, rbf md5 2ce93917 = the recording's):* every M10K of the sound board
+(sreg x 2, st, rfa / rfb, mpro, mems, temp, both caches' dram / tram, lram,
+the 68000's line cache ln_d / ln_t / ln_v) is single-clock simple dual port
+with mixed-port read-during-write OLD_DATA -- the RTL's `q <= mem[ra]` beside
+`mem[wa] <= d` exactly; the ROMs (ucf, uce, eg, rate, lvl, lfo) unregistered
+outputs. Their MIFs equal the .hex files bit for bit (all six; the 44 -> 41,
+68 -> 66, 16 -> 13, 28 -> 27, 12 -> 9 truncation warnings keep the low bits,
+as Verilator). The MLABs (ud, mfifo, mo_fifo, ring, coef_h / l, madrs_h / l,
+mixs, efreg, the output fifo) are altdpram, mixed-port DONT_CARE, read
+address unregistered and output registered: a read at the edge of a write
+sees the old word in the RTL and in the part alike (the write lands after
+the edge). No pass-through logic added (no 276020 on the sound board), no
+dual-clock RAM. THE ONE SHAPE THAT IS WRONG: mpro, Simple Dual Port,
+port A 1024 x 8, port B 128 x 64. The RTL writes two byte lanes a clock,
+    if (w_be[0]) mpro[row][{word, 1'b0}] <= w_data[7:0];
+    if (w_be[1]) mpro[row][{word, 1'b1}] <= w_data[15:8];
+and Quartus folded the lane into the address of ONE 8-bit write port (its
+own netlist equations): address {w_addr[9:1], w_be[1]}, data w_be[1] ?
+w_data[15:8] : w_data[7:0], enable w_mpro && (w_be[0] || w_be[1]). The
+68000 writes MPRO with word moves (be 11): the high byte is stored and the
+low byte never. No warning (map.log names mpro only in the inference info).
+sreg, written the same way but with constant lane indices, was built right
+(16 bits, two byte enables) -- confirmed by the netlist below.
+*2. RESET / INITIAL VALUES:* every sound RAM powers up 0 on the part as in
+Verilator; nothing in rtl/sound/scsp has an initial block but the ROMs.
+*3. TIMING:* quartus_sta on s1447's database (a copy; the report had no
+paths): the sound board's worst setup slack +0.236 ns (madrs_l -> mul_b,
+slow 100C model), hold +0.333 / +0.152 (fast); the failing clocks are the
+raster (clk_sys -0.629, m2_span_tex -> m2_fb_wcomb) and pll_hdmi. Model2.sdc
+has no exception on u_snd2a (R743's fx68k multicycle names u_sndboard, the
+Model 1 board, absent on 2A). The SDRAM ports cross on m2_sdram_cdc (toggle
+ack, payload held by protocol), cut by the clock groups as intended.
+*4. LINT:* Verilator -Wall on the SCSP: unused bits only; on m2_2a_sound:
+pin-empty, unused, VARHIDDEN (scsp_uc.svh's OP_ADD / OP_SUB shadow fx68kAlu's
+$unit ones -- local wins in both tools). Quartus: the hex truncations, unused
+objects, and a latch warning on m2_2a_sound's `sk` (only reset when
+CHKSUM = 0: a constant, harmless).
+*5. THE NETLIST, SIMULATED (sim/netsim, new):* quartus_map of the module alone
+(virtual pins, Model2.qsf's synthesis settings), quartus_eda --functional
+(Cyclone V post-synthesis netlist), Verilator with sim/netsim/atoms_vl.sv
+(two-state lcell_comb / dffeas from the vendor models; M10K / MLAB from
+their parameters, "old" honoured, every collision counted; cyclonev_mac --
+encrypted in sim_lib -- as the multiply its parameters give), and the
+UNCHANGED benches (the netlist's top has the RTL's ports). s1447's RTL:
+    tb_m2_scsp_dsp DSP_RANDOM 20 (40,000 runs): RTL 0 / 0 wrong; NETLIST
+      130,647 EFREG values and 265,809 RAM words wrong, from sample 0
+    the RTL with Quartus's MPRO write ("board model", scratch): wrong in the
+      same 130,647 / 265,809, and its EFREG / RAM dumps EQUAL the netlist's
+      (640,000 EFREG values, 292,000 RAM writes, md5 identical)
+    tb_m2_scsp, the whole SCSP netlist on dcop_att: equal to the board model
+      sample for sample over the first 715,777 samples (16.2 s, 352,788
+      non-zero; stopped there -- the netlist runs ~40x slower than RTL), both away from the RTL
+      from the first key-on (n 172,628) on
+So the DSP's MPRO write is the only synthesis divergence these benches see
+in the SCSP; the rest of the netlist is the RTL.
+*REPRODUCED -- R953's three numbers.* sim r953.py (scratch): 100 ms windows,
+board 0 s = MAME 38.34 s (envelope correlation re-found at 38.34), each
+source against MAME's out.bin, music = 8-17 and 20-22 s, numbers relative to
+the music's mean (the board's own method gives R953's to ~0.3 dB but for the
+18.2 s hit, -3.4 here against -5.3 there: window placement):
+                              hits 11.0 / 18.2 s   break 18.8 / 18.9 / 19.0 s
+    board (HDMI, s1447)          -5.0 / -3.4         +8.2 / +8.4 / +7.8
+    netlist / board model        -4.8 / -3.3         +8.1 / +8.4 / +8.2
+    RTL as written (R914)        -2.0 / -1.4         -2.3 / -2.3 / -2.3
+  and against the board directly, the music windows' sd: board model 0.53 dB,
+  R914's RTL 2.38 dB (R953: MAME's mirror 0.89). The "no taps" is MASA = 0:
+  every ring access takes MADRS[0] (0x0000 in this driver) -- MAME's mirror by
+  another road, which is why R953 found the mirror closest. The level shifts
+  are the rest of the low bytes: IRA[1:0] = 0 (a program reading MIXS 1-3
+  reads MIXS 0 / 4 ...), no TEMP / MEMS writes, no Y / FRC / ADRS loads, B =
+  TEMP always. The break's ISEL 1 voices lose their DSP path and keep their dry
+  send, the music's inputs come in where the program never meant them.
+*Every 2A / 2C build is affected* (model2a, model2c and the release share the
+code since R856), every game with a DSP program: VF2, DOA, Virtua Cop 2,
+Zero Gunner, Dynamite Cop, House of the Dead -- Ben's "each game a different
+issue" is each driver's own program mangled differently. R914's board
+confirmation (DOA's drone gone, s1293) was made on a mangled program; with
+the fix the board runs the program R914's benches ran (no drone there), so
+it should hold -- to be heard again, not assumed. Sega Rally (no program) is unaffected. Model 2 (main) has no SCSP.
+*THE FIX (rtl/sound/scsp/m2_scsp_dsp.sv):* mpro_l / mpro_h, each [3:0][7:0]
+x 128, one write statement each (w_be[0] / w_be[1]), read together into the
+same 64-bit mp_q. quartus_map: two Simple Dual Port M10Ks, port A 512 x 8,
+port B 128 x 32 (4,096 bits each; the old one 8,192 bits in two blocks, so the
+block count should not move -- the fit decides). SCSP alone (model2a's RTL):
+2,047 -> 2,043 ALMs, registers 1,942 both, block bits 178,560 both, 3 DSP;
+no new warning.
+  Checks: fixed RTL tb_m2_scsp_dsp DSP_RANDOM 100: PASS; its NETLIST
+  DSP_RANDOM 100 (200,000 runs) PASS, at latency 1-2 (50) PASS, 60-400 (50)
+  PASS; model2a's unfixed netlist DSP_RANDOM 100: 881,509 / 1,250,729 wrong
+  (R959 did not touch the write); the fixed whole-SCSP netlist on dcop_att
+  300,000 samples: 0 differ from the reference, 420,139 slot samples right;
+  the fixed RTL on all of dcop_att (62 s, 2,734,658 samples): 0 differ
+  from the reference, 18,839,942 slot samples right (the unfixed RTL's
+  numbers exactly -- the fix changes nothing the RTL computes); lint_top clean.
+*WHAT THE BOARD SHOULD DO (after a fit):* the R914 mix the benches always had
+-- Dynamite Cop's hits up ~3-5 dB and its box break down ~10 dB against the
+music, the music with its reverb tail; VF2's effects up against the music;
+HOTD's FM / music down against the gun (R949's per-category numbers). If
+DOA's drone comes back, R914's MADRS decode is the question again.
+*WHY NO BENCH SAW IT:* every bench simulates the RTL, and the RTL is right;
+the error exists only in Quartus's netlist. R909 / R914 / R959 read mpro's
+RAM summary (1024 x 8 / 128 x 64) for M10K counts, not as a write width.
+Rule taken: a RAM whose one write port is narrower than the widest write the
+RTL makes in a clock is a mis-synthesis -- check the summary's port A width
+against the code, and when in doubt, sim/netsim.
+
+**R967, THE MIX IT RESTORES CHECKED INDEPENDENTLY: srg320's SCSP, RUN, AND A
+REAL-ARCADE RECORDING BOTH GIVE R914's MIX, NOT MAME's.**
+*Believed (R949):* "the Saturn SCSP agrees with R914" -- from READING
+srg320's code only. *Now measured:* srg320's SCSP (MiSTer-devel/Saturn_MiSTer
+c072434, no licence file: run in a scratch Verilator bench only, nothing in
+the repository) on the p16 captures. Bench fixes needed before it ran right,
+none in its arithmetic: CE every second clock; four mixed-sign products in
+SCSP_pkg.sv (Interpolate x2, PhaseCalc, VolCalc) made signed, as intended;
+`OP2.PHASE = PHASE` made non-blocking (a simulation race; synthesis builds it
+that way).
+  * MADRS decode, by running it: the Dynamite Cop attract (62 s) is
+    bit-identical with the 0x7C0-0x7FF writes passed or dropped -- srg320
+    ignores them: R914's decode. Forcing MAME's mirror zeroes the taps.
+  * Levels (stable windows; direct sends corr >= 0.9999, +0.3 dB):
+      Dynamite Cop 3.5-12.2 s  srg320 - R914 return +0.67 dB (corr 0.93);
+                               srg320 with the mirror - MAME +0.17 dB
+      Dynamite Cop 6-7 s tail  srg320 302 / R914 296 RMS (corr 0.998), MAME 55
+      VF2 12.6-13.9 s          srg320 - R914 return +0.30 dB (corr 0.96)
+      HOTD attract 27-30 s     srg320 - R914 return -0.20 dB (corr 0.997)
+  * Not usable beyond those windows: srg320's DSP diverges exponentially
+    1.5-2 s after the music starts in every capture, either decode (trigger
+    not found; not accumulator overflow, MONITOR writes, NOFL or the decode).
+*Real arcade:* The Game Nexus, "Dynamite Deka 2 / Dynamite Cop ... Real HW"
+(YouTube FfdDF_Bu85Y, line level; local scratch only), its 54-68 s = MAME
+39.1-53.1 s (envelope corr 0.87-0.90) = Ben's board 0-14.7 s (music and
+hits; not the break). Music, 20 ms envelopes, 7-10.5 s: arcade vs R914 r 0.74
+(sd 1.9 dB), vs MAME r 0.62 (sd 6.3 dB); Ben's s1447 board vs MAME r 0.985 --
+the MPRO fault's signature. Hits against the music: arcade - R914 +0.9 dB,
+arcade - MAME -0.5 to -1.3 dB, s1447 board - MAME -4.6 dB.
+*Open:* at the attract's scene change (board 6.4-6.6 s) the arcade's tail
+falls 25-30 dB below R914's (MAME has none); elsewhere the arcade has R914's
+tail energy ~3 dB under it. Platform timing of the cut differs (s1447 went
+silent 0.4 s earlier), so unconfirmed. If the fixed build's tails sound long,
+look at Dynamite Cop's scene changes first.
+*Conclusion:* with MPRO built right, R914's mix stands; no other change.
+
+**R967 on the 2C build:** m2_scsp_dsp.sv's MPRO block on model2c was the 2A
+code byte for byte (the 2C file differs elsewhere: R946 / R947's OVERLAP);
+the same two-array fix applies unchanged. tb_m2_scsp_dsp with OVERLAP=1: the
+captures, 441,000 runs, and 500 random programs, 1,000,000 runs, 0 EFREG
+values and 0 RAM words wrong. Board (Ben, s1541): House of the Dead "much
+better"; released as s1561 (clean on every clock).
