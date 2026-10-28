@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-10-28 (night): the i960 audit (R970) and R969 in this study
+
+- **R970, the i960 against Intel's 80960KB manuals** (report `docs/i960-intel-audit.md`,
+  scripts `sim/i960/audit/`, branch `i960-audit`). No RTL changed. Ranked: F1
+  cvtri/roundr round halves away from zero where the chip rounds to even (VF2
+  3,175 results in 120 s, Daytona 89 in 150 s, VC2 14; ~40 ALM to fix, first in
+  line once the Model 2 FFB release is out); the CPU's pace is not the chip's
+  (T6, T2, T1, T4: speed-only work, Rally reads a timer); subc's carry (I1, board
+  test first); subnormal inputs flushed (F2). clk_i960 is 40 MHz; the chip is 25.
+- **R969** (Daytona #34, the arcade's own behaviour) copied here from `daytona-wall`.
+- R968 (the FFB build's timing) is on `ffb-main` and comes with that release.
+- Order (Ben): the Model 2 FFB release first (clean build in progress), then F1.
+
 ## 2026-10-28 (evening): Daytona #34 is the arcade's own behaviour
 
 Real-cabinet footage (YouTube OwPQ8KY1OLo, "SEGA Daytona USA - Real MODEL 2 -
