@@ -1,14 +1,16 @@
 # Sega Model 2 — releases
 
-There are two cores: **Model 2** (`Model2.rbf`) for the original Model 2
-board, and **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board. Each game's
-MRA names the core it runs on, so both can sit in `cores/` side by side.
+There are three cores: **Model 2** (`Model2.rbf`) for the original Model 2
+board, **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board, and **Model
+2C** (`Model2C.rbf`, beta) for the Model 2C-CRX board. Each game's MRA names
+the core it runs on, so all three can sit in `cores/` side by side.
 
 | in this folder | what it is |
 |---|---|
 | `Model2_*.rbf` | the Model 2 core |
 | `Model2A_*.rbf` | the Model 2A core |
-| `mra/` | every MRA for both cores, including the `[15kHz CRT]` versions |
+| `Model2C_*.rbf` | the Model 2C core (beta) |
+| `mra/` | every MRA for all three cores, including the `[15kHz CRT]` versions |
 | `helpers/m2link/` | only for Daytona link play (experimental) -- see the Model 2 notes |
 | `scripts/` | a force feedback test for steering wheels: copy both files to `/media/fat/Scripts` and run `ffb_wheel_test` from the Scripts menu |
 
@@ -318,6 +320,102 @@ Fighter 2 at the default 80%:
 | Virtua Fighter 2 | `Volume` 80% (its loudest hits reach full scale at about 130%) | `Volume` 40–50% keeps the music where it was, with the hits up about 7 dB |
 | Sega Rally | `Volume` 400% still leaves it a little quieter (its peaks reach only a third of full scale) | `Volume` 150% (no limiting below about 300%) |
 | Zero Gunner | `Volume` 300–400% (no limiting up to 400%) | `Volume` 100% (no limiting below about 180%) |
+
+## Model 2C core — `Model2C.rbf` (BETA)
+
+The first Model 2C core: three games. The 2C board replaces the 2A's
+geometry chip with Sega's TGPx4 (Fujitsu MB86235), rebuilt here from
+scratch and checked against MAME output for output. It's a beta: please
+report anything you find, with the game and where.
+
+### What to copy
+
+| file | where it goes on the SD card |
+|---|---|
+| `Model2C_20261027.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
+
+`Model2C_20261027.rbf` has the md5 `4399bde5783ba6198bded9859e93ea07`. Keep
+exactly one `Model2C*.rbf` in `cores/`.
+
+**The game's settings now save.** Change them in the test menu, then use the
+OSD's "Save settings (NVRAM)". Use the MRAs from this folder: older 2C MRAs
+don't save the settings.
+
+### Games
+
+ROM sets: MAME 0.289.
+
+| Game | MRA | ROM zips | MAME set | State |
+|---|---|---|---|---|
+| The House of the Dead (Revision A) | `The House of the Dead (Revision A).mra` | `hotd.zip` | `hotd` | Plays at full speed, with guns from a mouse or stick. **Needs the 128 MB SDRAM module.** |
+| Over Rev (Model 2C, Revision A) | `Over Rev (Model 2C, Revision A).mra` | `overrev.zip` | `overrev` | Plays, with wheel and pedals |
+| Sega Touring Car Championship | `Sega Touring Car Championship (newer).mra` | `stcc.zip` | `stcc` | Boots and races. **Needs the 128 MB SDRAM module.** No music yet |
+
+Each of these also has a `[15kHz CRT]` MRA.
+
+### New in this build (`Model2C_20261027`)
+
+- **House of the Dead's sound balance is fixed.** The music and the high FM
+  voice no longer drown out the gun, in chapter 2 or anywhere else, and you
+  no longer need `Raw Sound Boost` to hear the shots. The cause was the same
+  as in the Model 2A core's `Model2A_20261027`: the sound chip's effects
+  processor was only getting half of its program on the FPGA, so the reverb
+  lost its echoes and some sounds came out too loud, others too quiet. Over
+  Rev and Sega Touring Car Championship get the same fix.
+- **Each game has its own overall volume, as in the arcade.** Use the OSD's
+  `Volume` to set each game to taste.
+- **Clean timing on every clock.**
+
+### Earlier in `Model2C_20261026`
+
+**House of the Dead players: after updating, reset the gun calibration once**
+(TEST MENU → GUN SETTING → PLAYER 1 / PLAYER 2 GUN DEFAULT ADJUSTMENT, then
+OSD → Save settings). A calibration saved on an earlier core is now off.
+
+- **House of the Dead's shots land under the crosshair, edge to edge.** The
+  core used MAME's crosshair mapping, which puts the gun's calibrated range at
+  the very screen edges; the game itself draws it about 32 pixels in, so shots
+  drifted away from the crosshair towards the edges. The core now feeds the
+  values the game's own mapping expects: in the game's gun check the mark
+  lands within a pixel of the crosshair everywhere, corners included.
+- **The gun fires right up to the screen edge** (House of the Dead): only the
+  outermost 2 pixels count as off-screen, instead of MAME's 5% border.
+- **New OSD setting `Gun flash`: `Arcade` / `Off`** (House of the Dead): `Off`
+  removes the grey flash on each shot and nothing else.
+- **`Analog control` for wheels** (GitHub #12): `Standard` (default) /
+  `Wheel A` / `Wheel B` for Over Rev and Sega Touring Car Championship, as in
+  the Model 2 and 2A cores — see *Analog control* under the Model 2 core's
+  Controls below.
+- **Builds close timing with more room to spare**, from the same three
+  shortened paths as the Model 2A core.
+
+### Fixed since the first test builds
+
+- **House of the Dead's sound no longer wobbles, crackles or clips** on the
+  attract's tutorial screen and similar busy moments (the sound chip was
+  running out of time on each sample).
+- **Cleaner sound.** The high, tinny layer (in House of the Dead's chapter
+  2 most of all) is gone: the core now smooths between the sound chip's
+  44.1 kHz samples for MiSTer's 48 kHz output instead of repeating them.
+- **Test-menu settings are saved** for all three games.
+- **Sega Touring Car Championship's title and rankings** no longer show
+  garbage tiles (the 2D read-back fix, as in the Model 2A core).
+- **`Texture filter`** is `Auto` / `Point`, as in the Model 2A core.
+- **Clean timing, with room to spare**, from the same space saving as the
+  Model 2A core.
+
+### Known bugs
+
+- **Sega Touring Car Championship has no music.** Its music board plays
+  MPEG audio, which the core doesn't have yet. Engine sounds and effects
+  play. Races may slow down, and the pedals haven't been checked on a real
+  wheel yet.
+- **Over Rev** slows down a few times in a race, sometimes for a few
+  seconds, and a row of dark blue dots can show in the sky along one line.
+- **House of the Dead**'s courtyard shadows can look like they slide apart
+  and meet again.
+- No link play for Over Rev or Sega Touring Car Championship yet.
 
 ## Model 2 core release notes
 
