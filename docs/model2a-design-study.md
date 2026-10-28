@@ -37693,8 +37693,9 @@ verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
 
 **R969 -- DAYTONA'S AI CAR THROUGH THE WALL (GITHUB #34): REPRODUCED IN
 MAME, AND IT IS THE GAME'S OWN CODE THAT LETS IT THROUGH. THE CORE'S TGP
-IS BIT-EXACT WITH MAME ACROSS THE SESSION. NO RTL CHANGE. BRANCH
-daytona-wall (OFF main), NOT FITTED.**
+IS BIT-EXACT WITH MAME ACROSS THE SESSION; CPU / TGP SPEED, THE HIT, TGP
+ROUNDING / DENORMALS / SATURATION AND THE SORT ALL CHECKED, NONE REMOVES IT.
+NO RTL CHANGE. BRANCH daytona-wall (OFF main), NOT FITTED.**
 
 *The report:* hitting an AI car into the wall at the Beginner course's
 "second hairpin" sometimes sends it through the wall, visible on the far
@@ -37767,23 +37768,68 @@ rolling start and ~9,200 to this hit (13 hours, more with the machine
 loaded; two runs were started and stopped), and its timing is not MAME's, so the same hit would not happen on
 the same frame anyway.
 
-*So, against "MAME is wrong here":* nothing found where MAME or the core
-departs from what the code asks for. The game's code itself lets an AI car
-below ~300 onto the wall's sloped collision surface, past the drawn wall,
-with no bounce. If the arcade truly never shows it, the difference is in
-something this path does not exercise and this session did not see --
-candidates, untested: (1) the draw order -- the car is ~4 units past the
-wall plane and up its slope; Model 2 sorts polygons rather than z-buffering
-and MAME's sort is its own reading, so on the board the car might be drawn
-over the wall (looking like it scrapes along it) where MAME and this core
-draw it behind; (2) the speed at impact (the class-2 thresholds are 300 /
-310; a cabinet whose AI runs faster would bounce); (3) the hit countdown
-and launch, which come from the car-to-car collision code (0x157f0-0x158c4,
-TGP function 0x0f and 0x43). None of these is MAME arithmetic the core
-could change without evidence. NEEDED FROM A CABINET: a video of a slow
-AI car pushed into the left hairpin's outer wall.
+*Ben's position, binding (after the first write-up): the arcade does not
+do this, MAME is wrong, so some INPUT to that game code must differ between
+MAME and the hardware. Four classes were tested for it; none removes the
+climb.*
+  1. TIME / CPU SPEED. MAME (R926's clock patch, mame-r926 m2lod) with the
+     i960 at 12 / 18 / 25 / 40 MHz and the TGP at 25 / 50 / 100 MHz, the same
+     autopilot (AP_RAM=50 AP_RAMOFF=3), 220 s. Any change of clock changes
+     the race (the game is timing-sensitive: different frames, different
+     hits), but AI cars on a wall polygon (surface 0x20) within 60 units of
+     the player, per race: 6 / 1 / 5 / 7 episodes (i960 12 / 18 / 25 / 40),
+     10 / 5 (TGP 25 / 100); entry speeds 67-276, never 300. Daytona reads no
+     timer (R835's survey); the physics set (0x501520) is
+     built from grid cells and the camera, not a budget. No speed makes
+     the wall response act.
+  2. THE HIT. The contact code (0x157f0-0x158c4) sets the countdown and the
+     wall-response class (+0x23a) is not set by it at all: it is the car's
+     slot constant from its setup record (0xe910: 20 cars class 2, 14 class
+     1, 4 class 0, every frame of the race). The speed the threshold sees,
+     +0x18 = cvtri(+0x34 x K) (0x11be0 / 0xed24), is the AI's ordinary
+     pace: car 33 did 248 before the hit and 245 after it; class-2 cars
+     run at a median 256 over the race and reach 320 only on the
+     straights. The thresholds (100 / 200 / 300 crash, 240 / 310 / 310
+     slide) are ROM constants (program ROM 0x31ef8). Nothing on this path
+     is close enough to a threshold for a rounding to move it.
+  3. TGP ARITHMETIC. sim/tgp/mame_tgp_fmode.patch (new): every MB86233 FP
+     op in MAME through a hook, M2_TGP_FMODE = 0 (MAME: frame-identical to
+     the stock build), 1 round toward zero, 2 flush denormals, 4 saturate
+     inf / NaN, 7 all three. Modes 2 and 4 change NOTHING in the 220 s race
+     (frame-identical to 0: no denormal, infinity or NaN reaches any
+     decision); modes 1 and 7 change the race and the climbs stay (6
+     episodes, 314 records near the player, against 5 / 23). Model 1's TGP
+     is MAME's arithmetic too (its own notes list denormals and NaN payloads
+     as unresolved), so it is not an independent reference; no MB86233
+     datasheet figure for rounding or table precision was found.
+  4. VISIBILITY. The same frames through this core's geometry (MAME's walks
+     9172 / 9178 / 9184 dumped by m2lod's M2GEO_TRIG, then make geodiff and
+     build/m2scripts/geodiff.py): walk 9178, 428 MAME polygons, 0 missing,
+     0 extra, 0 off by more than 1 px, "sort key: 428 polygons checked, 0
+     with our z != MAME's". MAME's own picture of render frames 8436 / 8446
+     (screen ~9173 / ~9183, M2DIFF) shows car 33 wholly hidden behind the
+     banner and wall, i.e. drawn behind them; only while it crosses (screen
+     ~9168) is it half over the banner. The core sorts it exactly as MAME
+     does. Whether the board sorts the car behind the wall at the frames
+     Ben saw is not measured.
 
-*Tools (committed):* sim/io/mame_m2_daytona_ap.lua (autopilot, APLOG,
+*Where this leaves it.* Every input this path takes was varied or checked
+-- CPU and TGP speed, the hit's speed and class, TGP rounding, denormals and
+saturation, and the sort -- and the climb survives all of them, because the
+code that allows it is integer: a slot constant, a speed against a ROM
+threshold, and a polygon whose surface is right. On this evidence the climb
+is the game's own; what the arcade shows of it is the question, and only a
+cabinet answers it. NOTHING WAS CHANGED IN THE CORE: no variant removes the
+behaviour, so there is no change that "keeps the car out of the wall with
+everything else unchanged" to put on the bench. What would decide it: a
+cabinet video of a slow AI car pushed into the left hairpin's outer wall
+(Beginner, the Sonic rock face); if the car stops dead there, the next
+suspect is the polygon search itself (TGP function 0x36's edge test and
+nearest-height choice, 0x49a-0x50c), which no variant here touched because
+MAME's flag and branch semantics were kept.
+
+*Tools (committed):* sim/tgp/mame_tgp_fmode.patch (above);
+sim/io/mame_m2_daytona_ap.lua (autopilot, APLOG,
 STRUCTLOG, INREC, AP_ZONES, AP_LATOFF, AP_CHAIN, snapshots);
 sim/tgp/tgp_capture.lua TGPCAP_NOINPUT; tb_m2_boot: M2_DAYTONA_AP /
 M2_DAYTONA_RAM / M2_DAYTONA_RAMOFF (the same autopilot in the bench,

@@ -1,0 +1,154 @@
+R969: MAME 0.289's MB86233 floating point with hardware-style variants, set
+from the environment (Sega Model 2 core for MiSTer FPGA, study R969, GitHub
+#34). M2_TGP_FMODE bits: 1 round toward zero, 2 flush denormals in and out,
+4 saturate overflow to the largest finite and NaN to +0; 0 (or unset) is
+MAME's host IEEE round-to-nearest, and runs Daytona frame-identical to the
+unpatched build. Every fadd / fsbd / fcpd / fml / fmsd / fmrd / fsmd / fspd /
+fdvd and the b+a / b-a forms go through it. What it showed: the AI car's
+climb onto Daytona's wall collision surface happens in every mode.
+Apply in a MAME 0.289 tree: patch -p1 < mame_tgp_fmode.patch, then e.g.
+make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp (16 s incremental).
+The patch is MAME code (BSD-3-Clause, mb86233.cpp's own licence); a tool,
+not part of the core.
+
+diff --git a/src/devices/cpu/mb86233/mb86233.cpp b/src/devices/cpu/mb86233/mb86233.cpp
+index 2e483756..fecc3127 100644
+--- a/src/devices/cpu/mb86233/mb86233.cpp
++++ b/src/devices/cpu/mb86233/mb86233.cpp
+@@ -3,10 +3,33 @@
+ 
+ #include "emu.h"
+ #include "mb86233.h"
++
++
+ #include "mb86233d.h"
+ 
+ #include "corefloat.h"
+ 
++// #34 experiment (sega-model2-mister R969): M2_TGP_FMODE bits -- 1 round toward
++// zero, 2 flush denormals in and out, 4 saturate overflow to the largest
++// finite and NaN to +0. 0 = MAME's host IEEE (round to nearest).
++#include <cmath>
++#include <cstdlib>
++static int tgp_fmode() { static int m = -1; if (m < 0) { const char *e = getenv("M2_TGP_FMODE"); m = e ? atoi(e) : 0; } return m; }
++static u32 tgp_fop(u32 a, u32 b, char op)
++{
++	const int md = tgp_fmode();
++	if (md & 2) { if (((a >> 23) & 0xff) == 0) a &= 0x80000000; if (((b >> 23) & 0xff) == 0) b &= 0x80000000; }
++	double x = u2f(a), y = u2f(b), r;
++	switch (op) { case '+': r = x + y; break; case '-': r = x - y; break; case '*': r = x * y; break; default: r = x / y; break; }
++	float f = float(r);
++	if ((md & 1) && std::isfinite(r)) { if (std::fabs(double(f)) > std::fabs(r)) f = std::nextafter(f, 0.0f); }
++	u32 u = f2u(f);
++	if ((md & 2) && ((u >> 23) & 0xff) == 0) u &= 0x80000000;
++	if (md & 4) { if (std::isnan(f)) u = 0; else if (std::isinf(f)) u = (u & 0x80000000) | 0x7f7fffff; }
++	return u;
++}
++
++
+ /*
+   Driver based on the initial reverse-engineering of Elsemi, extended,
+   generalized and made to look more like a cpu since then thanks in
+@@ -315,7 +338,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x05: {
+ 		// fcpd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		u32 r = f2u(u2f(m_d) - u2f(m_a));
++		u32 r = tgp_fop(m_d, m_a, '-');
+ 		stset_set_sz_fp(r);
+ 		break;
+ 	}
+@@ -323,7 +346,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x06: {
+ 		// fadd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_d) + u2f(m_a));
++		m_alu_r1 = tgp_fop(m_d, m_a, '+');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -331,7 +354,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x07: {
+ 		// fsbd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_d) - u2f(m_a));
++		m_alu_r1 = tgp_fop(m_d, m_a, '-');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -339,7 +362,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x08: {
+ 		// fml
+ 		m_alu_stmask = 0;
+-		m_alu_r1 = f2u(u2f(m_a) * u2f(m_b));
++		m_alu_r1 = tgp_fop(m_a, m_b, '*');
+ 		m_alu_stset = 0;
+ 		break;
+ 	}
+@@ -347,8 +370,8 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x09: {
+ 		// fmsd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_d) + u2f(m_p));
+-		m_alu_r2 = f2u(u2f(m_a) * u2f(m_b));
++		m_alu_r1 = tgp_fop(m_d, m_p, '+');
++		m_alu_r2 = tgp_fop(m_a, m_b, '*');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -356,8 +379,8 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x0a: {
+ 		// fmrd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_d) - u2f(m_p));
+-		m_alu_r2 = f2u(u2f(m_a) * u2f(m_b));
++		m_alu_r1 = tgp_fop(m_d, m_p, '-');
++		m_alu_r2 = tgp_fop(m_a, m_b, '*');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -373,7 +396,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x0c: {
+ 		// fsmd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_d) + u2f(m_p));
++		m_alu_r1 = tgp_fop(m_d, m_p, '+');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -382,7 +405,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 		// fspd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+ 		m_alu_r1 = m_p;
+-		m_alu_r2 = f2u(u2f(m_a) * u2f(m_b));
++		m_alu_r2 = tgp_fop(m_a, m_b, '*');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -411,7 +434,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x10: {
+ 		// fdvd
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_d) / u2f(m_a));
++		m_alu_r1 = tgp_fop(m_d, m_a, '/');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -427,7 +450,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x13: {
+ 		// d = b + a
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_b) + u2f(m_a));
++		m_alu_r1 = tgp_fop(m_b, m_a, '+');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
+@@ -435,7 +458,7 @@ void mb86233_device::alu_pre(u32 alu)
+ 	case 0x14: {
+ 		// d = b - a
+ 		m_alu_stmask = F_ZRD|F_SGD|F_CPD|F_OVD|F_DVZD;
+-		m_alu_r1 = f2u(u2f(m_b) - u2f(m_a));
++		m_alu_r1 = tgp_fop(m_b, m_a, '-');
+ 		stset_set_sz_fp(m_alu_r1);
+ 		break;
+ 	}
