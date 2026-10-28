@@ -1,5 +1,14 @@
 # Handoff
 
+## 2026-10-28 (night): Model2_20261028 in releases/ -- Daytona force feedback
+
+`releases/` matches main and model2c: `Model2_20261028.rbf` (md5
+`3e4c749bec6d5a3db3fc62373ad14519`, ffb-main s1572, clean on every clock incl.
+HDMI) replaces `Model2_20261026.rbf`. Force feedback works with a MiSTer Main
+that has the core force feedback channel (merged upstream 28 Oct); on today's
+Main Daytona plays as before without it. The FFB logic is on main only; 2A and
+2C cores are unchanged.
+
 ## 2026-10-28 (night): the i960 audit (R970) and R969 in this study
 
 - **R970, the i960 against Intel's 80960KB manuals** (report `docs/i960-intel-audit.md`,
