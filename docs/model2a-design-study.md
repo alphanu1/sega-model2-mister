@@ -37700,7 +37700,7 @@ NO RTL CHANGE. BRANCH daytona-wall (OFF main), NOT FITTED.**
 *SETTLED, 2026-10-28: A REAL CABINET DOES IT TOO.* Footage of a real
 Model 2 Daytona USA on Three Seven Speedway (YouTube OwPQ8KY1OLo, "SEGA
 Daytona USA - Real MODEL 2 - Three Seven Speedway", channel SEGA MODEL KING,
-at 1:16) shows an AI car clipping through the wall, found by Ben. So the
+at 2:20, and at 1:16) shows an AI car clipping through the wall, found by Ben. So the
 "hardware fact" this entry carried through four passes -- that a cabinet
 never lets the car onto or through the wall -- was wrong, and the first
 pass's conclusion stands: it is the game's own wall code (no wall response
