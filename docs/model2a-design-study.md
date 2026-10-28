@@ -45858,3 +45858,402 @@ tail energy ~3 dB under it. Platform timing of the cut differs (s1447 went
 silent 0.4 s earlier), so unconfirmed. If the fixed build's tails sound long,
 look at Dynamite Cop's scene changes first.
 *Conclusion:* with MPRO built right, R914's mix stands; no other change.
+
+**R969 -- DAYTONA'S AI CAR THROUGH THE WALL (GITHUB #34): REPRODUCED IN
+MAME, AND IT IS THE GAME'S OWN CODE THAT LETS IT THROUGH. THE CORE'S TGP
+IS BIT-EXACT WITH MAME ACROSS THE SESSION; CPU / TGP SPEED, THE HIT, TGP
+ROUNDING / DENORMALS / SATURATION AND THE SORT ALL CHECKED, NONE REMOVES IT.
+NO RTL CHANGE. BRANCH daytona-wall (OFF main), NOT FITTED.**
+
+*SETTLED, 2026-10-28: A REAL CABINET DOES IT TOO.* Footage of a real
+Model 2 Daytona USA on Three Seven Speedway (YouTube OwPQ8KY1OLo, "SEGA
+Daytona USA - Real MODEL 2 - Three Seven Speedway", channel SEGA MODEL KING,
+at 2:20, and at 1:16) shows an AI car clipping through the wall, found by Ben. So the
+"hardware fact" this entry carried through four passes -- that a cabinet
+never lets the car onto or through the wall -- was wrong, and the first
+pass's conclusion stands: it is the game's own wall code (no wall response
+below the class's speed threshold, a 1/16-rate steer back), and the core,
+like MAME, reproduces the arcade. #34 is the game's behaviour, not a fault.
+A second real-cabinet reference, also found by Ben: a Daytona USA cabinet
+playthrough (YouTube qOPltm7qw94, "Daytona USA Arcade Cabinet - Top ranking
+all circuits playthrough", channel Goji Ateam TV, at 4:42) shows a car's wheels
+clipping through its own bonnet. That is the arcade's geometry too: a report
+of it on the core is not a core fault.
+Kept from the later passes: the exact model of the 80960KB's
+single-precision rules (sim/io/i960_kb_fpcheck.py), and two genuine
+deviations from Intel's manual found on the way (cvtri rounding halves away
+from zero, addr/subr rounding twice) -- handed to the i960 audit. The lesson
+for the order of authority: a remembered hardware behaviour is a hypothesis
+like any other; footage of the cabinet settled in one look what four bench
+passes could only bound.
+
+*The report:* hitting an AI car into the wall at the Beginner course's
+"second hairpin" sometimes sends it through the wall, visible on the far
+side; seen on the board. The reporter then made it happen in MAME too, and
+Ben says a real cabinet does not do it. By this study's order of authority
+MAME is a reference, not the last word -- so the question was where MAME
+(and the core, which follows it) could differ from the silicon.
+
+*Reproduced in MAME 0.289 (daytona, Revision A).* sim/io/mame_m2_daytona_ap.lua
+(new) coins up, lets the selections time out (Beginner, Automatic) and
+drives the race on the AI cars' own trails; from AP_RAM it rams the nearest
+car ahead, AP_RAMOFF units to the outside of the bend. With AP_RAM=50
+AP_RAMOFF=3: car 33 is hit at frame ~9155 on the left hairpin (the Sonic
+rock face), climbs the outer wall's collision surface for 37 frames
+(9166-9202) to 15.3 units outside the lane tables where the player, driven
+40 units outward on purpose (AP_LATOFF), never gets past 11.0 (5.5 on the
+bottom bend), and to y 13.4 where the road is ~8; the snapshots show it
+behind the "Sao Paulo" banner, then it drives back down onto the road at
+frame 9203. A second case: z_L_6's car 1, hit near the bottom bend, goes
+~15 units past the wall line behind the player. MAME runs are
+deterministic (two runs of the same settings: identical every frame).
+
+*The mechanism, from the game's code (MAME's debugger, watch- and
+breakpoints, no symbols):*
+  * Every AI car runs handler 0xcfa0 (link cars 0xd06c). It does wall and
+    ground work only for cars in the frame's physics set (0x501520, grid
+    cells of 128 units around the player, kept by a view test against the
+    camera heading at 0x1770c -- read from the code, built at
+    0x172e8-0x17500); the rest move on the TGP's function 0x47 (pure
+    x += v sin a, z += v cos a, no clamp) with no ground query at all.
+  * The ground query, 0x11c28: TGP function 0x36 (point in polygon over a
+    16 x 16 grid of the collision mesh, answer through buffer RAM 0x91fff0)
+    gives the polygon and its surface bits (+0x1bc): 2 road, 0x20 wall.
+    Car 33's answers are right: road polygons 0x198 / 0x19b / 0x19e up to
+    frame 9165, wall polygons 0x410 / 0x3fa / 0x3eb / 0x400 / 0x3f5 from
+    9166 to 9202 (heights 9.7 -> 12.6 -> 9.2: the wall's collision surface
+    is a SLOPE that runs past the drawn wall), road 0x1aa from 9203.
+  * The wall response, 0x15be0 (called from 0x15d28 when the surface has
+    bit 2, 3 or 5 and +0xd2 / +0xd8 are 0): only above a speed threshold
+    from the table at 0x231f04 / 0x231ef8 indexed by +0x23a (class 2: 310
+    to slide along the wall, 300 to crash). Car 33 was doing 238-244: the
+    routine ran on all 37 frames and returned without acting (no slide
+    path 0x15bfc, no crash path 0x15c90). Below the threshold the only
+    response is 0x115e4's: on surface bits 0x21 the car steers back to its
+    lane at a sixteenth of the usual rate -- the slow turn back seen above.
+  * A hit car also skips its steering while a countdown runs (+0x211, set
+    by the contact code -- 0x158bc from the table at 0x2327a0, and other
+    writers; car 33: 14 frames, the second case's car 1: 108) and goes
+    straight; on a bend that is straight into the wall.
+Every decision on that path is an integer compare of game-table constants
+against the car's integer speed, or a surface code from a polygon search
+whose answers are geometrically right. Nothing on it is an FP edge case
+(the atan2 answers of TGP function 0x0f checked against the host over 243
+calls in the second case: worst 0.01 degrees).
+
+*The core against MAME over the session:* the TGP's boundary captured from
+frame 2900 for 3,001 frames of the ramming run (sim/tgp/tgp_capture.lua,
+new TGPCAP_NOINPUT so the autopilot drives; 12,509,484 words in, 3,802,756
+out, 7,543,028 io reads) and replayed through m2_copro: "PASS (bit-exact
+against MAME except NaN encoding)" -- every pop and io access equal, 695
+NaN payloads differ (MAME's host NaNs 7ffffc00 / ffc00000 / ffeaa8e4, the
+RTL's canonical 7fc00000) and 179 io-write data words with them. Those NaNs
+and infinities are the PLAYER's own car: i960 0x10074-0x101bc (TGP
+functions 03 / 1d / 1e / 25; an infinity out of 03, then NaN), in 411
+frames of the 200 s run; none reaches the AI or wall code. The i960 side is the
+lockstep-verified integer core; the path above uses no FP but the TGP's.
+So the core does what MAME does at this scene. The whole-core bench was not
+run to the scene: ~5 s a vblank on a quiet machine, ~2,600 vblanks to the
+rolling start and ~9,200 to this hit (13 hours, more with the machine
+loaded; two runs were started and stopped), and its timing is not MAME's, so the same hit would not happen on
+the same frame anyway.
+
+*Ben's position, binding (after the first write-up): the arcade does not
+do this, MAME is wrong, so some INPUT to that game code must differ between
+MAME and the hardware. Four classes were tested for it; none removes the
+climb.*
+  1. TIME / CPU SPEED. MAME (R926's clock patch, mame-r926 m2lod) with the
+     i960 at 12 / 18 / 25 / 40 MHz and the TGP at 25 / 50 / 100 MHz, the same
+     autopilot (AP_RAM=50 AP_RAMOFF=3), 220 s. Any change of clock changes
+     the race (the game is timing-sensitive: different frames, different
+     hits), but AI cars on a wall polygon (surface 0x20) within 60 units of
+     the player, per race: 6 / 1 / 5 / 7 episodes (i960 12 / 18 / 25 / 40),
+     10 / 5 (TGP 25 / 100); entry speeds 67-276, never 300. Daytona reads no
+     timer (R835's survey); the physics set (0x501520) is
+     built from grid cells and the camera, not a budget. No speed makes
+     the wall response act.
+  2. THE HIT. The contact code (0x157f0-0x158c4) sets the countdown and the
+     wall-response class (+0x23a) is not set by it at all: it is the car's
+     slot constant from its setup record (0xe910: 20 cars class 2, 14 class
+     1, 4 class 0, every frame of the race). The speed the threshold sees,
+     +0x18 = cvtri(+0x34 x K) (0x11be0 / 0xed24), is the AI's ordinary
+     pace: car 33 did 248 before the hit and 245 after it; class-2 cars
+     run at a median 256 over the race and reach 320 only on the
+     straights. The thresholds (100 / 200 / 300 crash, 240 / 310 / 310
+     slide) are ROM constants (program ROM 0x31ef8). Nothing on this path
+     is close enough to a threshold for a rounding to move it.
+  3. TGP ARITHMETIC. sim/tgp/mame_tgp_fmode.patch (new): every MB86233 FP
+     op in MAME through a hook, M2_TGP_FMODE = 0 (MAME: frame-identical to
+     the stock build), 1 round toward zero, 2 flush denormals, 4 saturate
+     inf / NaN, 7 all three. Modes 2 and 4 change NOTHING in the 220 s race
+     (frame-identical to 0: no denormal, infinity or NaN reaches any
+     decision); modes 1 and 7 change the race and the climbs stay (6
+     episodes, 314 records near the player, against 5 / 23). Model 1's TGP
+     is MAME's arithmetic too (its own notes list denormals and NaN payloads
+     as unresolved), so it is not an independent reference; no MB86233
+     datasheet figure for rounding or table precision was found.
+  4. VISIBILITY. The same frames through this core's geometry (MAME's walks
+     9172 / 9178 / 9184 dumped by m2lod's M2GEO_TRIG, then make geodiff and
+     build/m2scripts/geodiff.py): walk 9178, 428 MAME polygons, 0 missing,
+     0 extra, 0 off by more than 1 px, "sort key: 428 polygons checked, 0
+     with our z != MAME's". MAME's own picture of render frames 8436 / 8446
+     (screen ~9173 / ~9183, M2DIFF) shows car 33 wholly hidden behind the
+     banner and wall, i.e. drawn behind them; only while it crosses (screen
+     ~9168) is it half over the banner. The core sorts it exactly as MAME
+     does. Whether the board sorts the car behind the wall at the frames
+     Ben saw is not measured.
+
+*Where this leaves it.* Every input this path takes was varied or checked
+-- CPU and TGP speed, the hit's speed and class, TGP rounding, denormals and
+saturation, and the sort -- and the climb survives all of them, because the
+code that allows it is integer: a slot constant, a speed against a ROM
+threshold, and a polygon whose surface is right. On this evidence the climb
+is the game's own; what the arcade shows of it is the question, and only a
+cabinet answers it. NOTHING WAS CHANGED IN THE CORE: no variant removes the
+behaviour, so there is no change that "keeps the car out of the wall with
+everything else unchanged" to put on the bench. What would decide it: a
+cabinet video of a slow AI car pushed into the left hairpin's outer wall
+(Beginner, the Sonic rock face); if the car stops dead there, the next
+suspect is the polygon search itself (TGP function 0x36's edge test and
+nearest-height choice, 0x49a-0x50c), which no variant here touched because
+MAME's flag and branch semantics were kept.
+
+*BEN'S HARDWARE FACT (binding, recorded here): on a real cabinet the AI
+car never gets onto or through the wall at all, and is never hidden
+behind it.* So the visibility question is closed and the fault, if it is
+one, is the car reaching the wall polygon. Third pass, on the one suspect
+not yet touched -- the TGP's ground-polygon search, function 0x36 (TGP
+0x457-0x517; the edge test 0x49a-0x4a5, the nearest-height choice
+0x4e9-0x50c):
+  * TRACED. The TGP's traffic captured again around the event (frames
+    9142-9213 of the same run, AP_RAM=50 AP_RAMOFF=3; 310,707 words in,
+    81,982 out) and replayed through m2_copro (PASS, bit-exact except NaN
+    encoding), with a new trace in tb_tgp_replay (TGPTRACE / TGPTRACE_LO /
+    TGPTRACE_HI: pc, ir, a, b, d, p and the status word at every retire
+    in a pc range). Car 33's calls are the ones whose y matches its ground
+    queries (7.114 / 7.562 / 8.032 / 8.629 / 9.119 at frames 9163-9167).
+    The cell's list holds eight polygons; each is rejected on its first
+    failing edge (brif !ged on the fmsd result). Frame 9165: list polygon 4
+    accepted, its four edge products +96.93 / +4.830 / +23.08 / +94.34;
+    polygon 3 rejected on its fourth, -4.830 (the shared edge, the exact
+    negation). Frame 9166: polygon 4 rejected on its second edge, -2.350;
+    polygon 3 accepted, +104.4 / +170.8 / +38.37 / +2.350. One polygon
+    accepted in every call, so the nearest-height choice never chooses.
+    The car is 2.35 product units -- not a rounding, not a signed zero, not
+    an equal compare -- across the edge between the road (0x19e) and the
+    wall slope (0x410): the search answers what the geometry says.
+  * INSTRUCTIONS. 0x49a-0x50c uses lab, fml, fspd, fmrd, fmsd (fp multiply
+    and the add / subtract that set ZRD / SGD), mov, ldi, addd / subd,
+    fabd, fsbd, brif !ged / !led / zrd / zc0, bsul and rtif. The core's
+    mb86233 files are Model 1's with timing changes only (seq, dec, xfer,
+    agu, fp_mul, fp_div identical; alu, regs, mem, core, fp_add restructured
+    and miter-checked in R588 / R731 / R739 / R740), and Model 1's are
+    MAME's semantics. No semantic variant of these instructions can move a
+    +-2.35 product across zero.
+  * DATA. MAME's copro data region (cdata.bin, 8 MB, the upper 4 MB zero)
+    against the core's Revision A image at byte 0xa40000: the loaded 4 MB
+    byte-identical (0 differing dwords); R232 found no TGP read above
+    dword 0x100000. The cell lists come from the i960's work RAM (0x501428),
+    on the same lockstep-verified path as everything else.
+So the polygon search is not where MAME (or the core) departs from the
+silicon either. The car reaches the wall polygon because the game's
+integer logic moves it there (no wall response below the class threshold,
+a 1/16 steer back), with the inputs this study can vary all varied.
+Under Ben's further constraint -- a fix must leave every other scene's TGP
+results and i960 stream bit-identical -- nothing qualifies: the only
+changes that remove the climb would be edits to the game's behaviour
+(forcing a response the code does not ask for), not a correction of the
+emulation, and none has been made.
+
+*Fourth pass: the i960's precision, against Intel's manual, not MAME.*
+Ben: MAME is not the reference here; the 80960KB keeps fp0-fp3 in 80-bit
+extended, the core (p1-i960-spike.md section 8) and MAME in 64-bit double.
+Source: 80960KB Programmer's Reference Manual, March 1988 (local copy,
+git-ignored): reals in global / local registers are 32-bit (ch. 12, "the
+processor assumes that global- or local-register operands contain real
+(32-bit) values"); "the processor rounds results according to the
+destination format ... and the setting of the rounding-mode flags"
+(ch. 12, Rounding Control); AC[31:30] = 00 is "round to nearest (even)"
+(Table 3-4). Daytona's AC is 0x3f001002 (MAME's state at 60 s): round to
+nearest even.
+  * WHAT THE AI PATH USES. Static: every FP instruction in 0x8000-0x18000
+    (the AI handlers, contact, steering, height, wall and ground code), 316
+    sites: addr 102, subr 105, cmpr 29, cvtri 43, cvtir 23, scaler 12,
+    cvtzri 2 -- every operand a global / local register, none fp0-fp3, no
+    long-real form. Dynamic: a MAME trace of the whole program over frames
+    9150-9152 (312,209 instructions) -- 2,106 FP instructions, the same
+    seven, ZERO references to fp0-fp3 anywhere. No intermediate is ever
+    held in an extended register; every result is rounded once to real.
+    80-bit registers therefore cannot change this path.
+  * EVERY RESULT AGAINST THE MANUAL'S SEMANTICS. sim/io/i960_kb_fpcheck.py
+    (new): a breakpoint on each of the 316 sites logging sources and
+    destination, frames 9105-9175 (before car 33's hit to after it reaches
+    the wall polygon, all cars), and an exact model (Python Fraction: the
+    exact result, one rounding to real, nearest-even, denormals; cvtri by
+    nearest-even, cvtzri truncating, cvtir and scaler rounded to real):
+    35,978 results -- addr 8,415, subr 11,718, cvtri 12,489, cvtzri
+    2,810, cvtir 406, scaler 140 -- 0 differ from what MAME computed
+    (and the core computes the same: its FP units are proven against that
+    arithmetic). The check itself was broken on purpose (one ulp added to
+    odd results): 4,084 differences reported, so it does see a change.
+  * SO THE EXTENDED MODEL DOES NOT MOVE THE CAR: same speeds, same
+    positions, same polygon at frame 9166. p1-i960-spike section 8's
+    64-bit decision is NOT shown wrong by this: Daytona does not use the
+    extended registers on this path. (Other games may; the whole-i960
+    audit against the manual should look.)
+  * A REAL SILICON DEVIATION FOUND ON THE WAY, not the cause here: cvtri
+    (and roundr) in mode 00 -- the manual says nearest EVEN; this core
+    (i960_fpmisc.sv, "half away from 0") and MAME (round()) round halves
+    away from zero. Differs only for inputs exactly n + 0.5; none of the
+    12,489 cvtri here had one. A second, rarer one: the core's single-real
+    add and subtract are computed in double and then narrowed, two
+    roundings, where the KB rounds once; it can differ only when the
+    operands' exponents are 30 or more apart and the double result sits on
+    a single-precision half-way point; 0 cases in 20,133 here. Both are
+    for the i960 audit to price and fix on their own evidence.
+  * WHAT ELSE IN THE SILICON COULD DIFFER, still open: the TGP (no Fujitsu
+    MB86233 / MB86234 manual found; its polygon search was shown not to be
+    near any threshold); the ROM revision on the cabinet Ben remembers
+    (Revision A and Deluxe '93 carry the same wall thresholds, program
+    ROM 0x31ef8 / 0x35284 -- other revisions not checked); and inputs that
+    shape the scene earlier in a race (AI pace from difficulty and the
+    game's catch-up), which change where and how fast a car meets a wall
+    but not the class-2 rule that lets it onto the wall below 300.
+
+*Tools (committed):* sim/io/i960_kb_fpcheck.py (above);
+tb_tgp_replay TGPTRACE (above);
+sim/tgp/mame_tgp_fmode.patch (above);
+sim/io/mame_m2_daytona_ap.lua (autopilot, APLOG,
+STRUCTLOG, INREC, AP_ZONES, AP_LATOFF, AP_CHAIN, snapshots);
+sim/tgp/tgp_capture.lua TGPCAP_NOINPUT; tb_m2_boot: M2_DAYTONA_AP /
+M2_DAYTONA_RAM / M2_DAYTONA_RAMOFF (the same autopilot in the bench,
+steering / accelerator / brake on the I/O board's ADC 0-2 through new
+harness inputs cab_an0-2, idle 0x80 / 0x20 / 0x20 as before), M2_CARLOG
+(the Lua's STRUCTLOG format), M2_BOARDCLK (the board's 80 / 40 / 32 MHz
+ratios and vblank). *Bench fix:* with M2_REVA the 49 MB image ran over the
+harness's work, board, buffer, display-list and texture RAM (words
+0x1600000-0x177ffff), so a Revision A bench started with polygon ROM in
+work RAM and the buffer RAM's 0x07800f0f fill gone; those words are now put
+back after the polygons are copied out. test_m2_boot PASS, plain and
+Revision A, 2 M instructions.
+
+**R970 -- THE i960 AUDITED AGAINST INTEL'S OWN MANUALS (80960KB
+PROGRAMMER'S AND HARDWARE DESIGNER'S REFERENCE MANUALS, MARCH 1988):
+cvtri ROUNDS TIES THE WRONG WAY IN THREE GAMES; MAIN SPILLS REGISTER FRAMES
+BY MAME'S RULE, NOT THE CHIP'S; MAME'S CYCLE COUNTS ARE APPENDIX C, ITS
+MACHINE IS NOT. REPORT ONLY: NO RTL CHANGED.** docs/i960-intel-audit.md
+holds the tables, evidence, fixes, costs and proofs; this entry is the
+record.
+
+*Believed:* the core's i960 had only ever been checked against MAME, and
+p1-i960-spike.md §4 / §10 left three things open "until someone reads" the
+manual: whether MAME's cycle counts are Intel's, the instruction field
+positions, and (implicitly) every place where MAME and the silicon might
+differ. Daytona #34 raised the question whether MAME can be wrong where the
+cabinet is right (R969 has since found #34 to be the arcade's own
+behaviour), so the manual is the reference now -- and current play is not
+proof of correctness (Ben).
+
+*Measured context:* every one of the 16 game sets runs with AC =
+0x3F00_1000 after its first 0-5 frames (MAME, AC sampled each frame):
+rounding control 00 (PRM 3-11 Table 3-4: round to nearest EVEN), all five FP
+faults masked, normalising mode on, integer overflow masked. Every game's
+ICR is 0x0f0e0d0c (all four pins priority 1) and every game sends one IAC,
+the 0x93 reinitialise. clk_i960 is 40 MHz on main, model2a and model2c
+(pll.v; Model2.sv's "25 MHz" comments are stale); the chip runs 25 MHz.
+
+*What was wrong in this study (corrected here, not silently):*
+  1. R12 said the manual specifies "the truncated low 32 bits" for a masked
+     cvtri overflow. PRM 11-50 says the maximum positive or maximum negative
+     integer by sign. The core's 0x8000_0000 is right for negative and NaN
+     (12-23), wrong for positive overflow (no game reached it).
+  2. p1-i960-spike §8.2 took MAME's round-half-away-from-zero as the
+     mode-00 rule ("it is not round-to-nearest-even"). That is MAME's C
+     round(); Intel's mode 00 is ties-to-even. Measured with a
+     breakpoint on every cvtri: Daytona 89 results off by one in 150 s (pcs
+     0x68ac, 0x172a4/0x172c0, 0xc870, 0x11be0/0x11c04, 0x109b0, 0x6900,
+     0x964c), VF2 3,175 in 120 s (mostly 0x28ad4), Virtua Cop 2 14 in 120 s;
+     no other game runs cvtri or roundr. MAME has the same fault, so the core
+     equals MAME today and differs from the cabinet.
+  3. R21 asked for silicon evidence before touching the interrupt priority
+     OR: PRM 8-5/8-6 gives it -- the priority is SET to the interrupt's and
+     trace-enable cleared. Unreachable on Model 2 (every pin priority 1).
+  4. The spike's "field positions transcribed, not verified" is closed: REG,
+     COBR, MEMA and MEMB fields and both displacement widths match App. B.
+     One place where the MANUAL is wrong: it says compare-and-branch targets
+     are relative to the next instruction (11-20, 11-42..44, B-4); ROM
+     evidence in all 17 programs (targets landing on the second word of
+     two-word instructions: Daytona 15 / 1,937 by the core's reading, 437 by
+     the manual's) says the core's instruction-relative reading is the
+     silicon's.
+  5. The register cache: PRM C-6 / C-14 give the chip FOUR sets including
+     the current one (3 saved), the oldest flushed on demand. MAME (and
+     main) keep 4 saved + current and spill every call past them; 2A/2C's
+     R927 ring keeps 8 saved. R927 described the chip's rule correctly but
+     not its depth.
+
+*Timing (Appendix C transcribed in the audit):* MAME's per-instruction
+figures are Appendix C's typical or top-of-range values (mov, shifts, emul,
+ediv, cvtir/cvtilr, scaler and expr are the exceptions; sinr / sinrl / sqrtr
+have no Intel figure and MAME copies cosr / cosrl / sqrtrl). What MAME omits
+is the machine: wait states, 512-byte I-cache misses, the +24 cycles per
+register-set flush or reload, bypass and condition-code penalties,
+load/store overlap and the multiply early out. So R8's rule held in the
+way that matters: the numbers are Intel's, the model built from them is
+not the chip. Measured on i960_top with a directed harness
+(sim/i960/audit/, fixed bus latency L), core ns at 40 MHz against chip ns at
+25 MHz: simple ALU 50 vs 40-80; mulo 150 vs 360-840; divide 975 vs 1,480;
+call 275 vs 360, ret 375 vs 280; a call that spills on main ~4,150 on the
+board vs 1,320 (and only when all four sets are in use); ld ~237 (no
+overlap) vs 160-200 (net 40-80 overlapped); st waits (L+4) vs posted 2-3;
+basic FP 3-14x faster than the chip; sinr/cosr 3.0-3.7x, tanr 8.9-9.3x,
+atanr 7.5-9.6x SLOWER (R845's serial double-double microcode, ~7 cycles a
+micro-op). Daytona's busy code on main: ~236-334 ns an instruction against
+an estimated ~120-200 ns on the chip (+-50%, the wait-state format being
+unknown) and 92 ns in MAME.
+
+*The other differences* (all with fix, cost and proof in the audit): subc's
+carry sense (the core and MAME treat C as a borrow; 11-119 is misprinted and
+11-57's dsubc reads as carry / not-borrow; VF2 runs 6 subc in 90 s on a
+64-bit counter; the games' own compiled chains clear C first, which suits
+the core's sense -- a board test decides, not the manual); subnormals
+flushed (every 2A/2B/2C game builds a 32,768-entry exponent table at boot
+from logbnr; 126 bytes differ from the chip AND from MAME); addc/subc keep
+cc bit 2; dmovt clears AC[31:16]; modi tests the truncated product's sign;
+AC.of and the FP flags never set; no fault mechanism; faultno a branch;
+IACs 0x40/0x89/0x91/0x92 ignored; movre into fp3 writes the SAT (DOA runs
+it, never reads the SAT back); NaN payloads dropped; AC rounding mode
+ignored by the arithmetic units; double rounding when a single-destination
+op reads a double from fp0-fp3 (~2^-29 an op). None of those is reached in
+a way that changes a value in the logged sessions except subc and the
+logbnr table.
+
+*fp0-fp3 and the 64-bit decision (spike §8), measured:* Daytona, VF2 and
+VC2 never touch fp0-fp3; every other game writes them only with exact
+values (movr, movrl, cvtir, cpysre, movre) and no arithmetic result is ever
+written there. Single-in, single-out arithmetic computed in double and
+narrowed equals one correct rounding (53 >= 2 x 24 + 2; 20 M random pairs per
+operation, exponents up to 60 apart: 0 differences). So the decision
+stands, now on evidence, with the mixed-precision double rounding as its
+only, practically unreachable, exposure.
+
+*Recommended order (Ben decides):* (1) cvtri ties-to-even and positive
+saturation, 30-50 ALM -- the one documented, cheap difference a game
+reaches; changes Daytona, VF2 and VC2 toward the cabinet. (2) Before any
+speed change on main, the timer check: do Daytona, Virtua Cop and Desert
+Tank read their timers inside a frame and branch on them (Rally does,
+R926)? MAME is faster than the chip and main slower. (3) The chip's register-set rule on main (a
+4-slot ring capped at 3 saved, plus R927's data cache), then Virtua Cop's
+#28 window. (4) The zero-cost conformance batch (cc bit 2, dmovt, modi,
+faultno, interrupt priority, movre/SAT, subnormal single inputs). (5)
+Speed-only work: overlapped transcendental micro-ops (Manx TT), a store
+buffer and burst ldq/stq (measure Motor Raid #25 first); 2A's ring depth to
+3 only with burst spills. (6) subc only after a board test. (7) The rest
+when a game is found that reaches it.
+
+*Not settled:* subc on silicon; the wait-state format (R904); the chip's
+real busy CPI and interrupt latency; per-game call depth on main; what IAC
+0x93 does to priority / AC; what opcode 6E1 is on the silicon (the manual
+says movre is 6E9; DOA runs 6E1). Desert Tank was not run (its parent set
+is missing locally); Motor Raid, Dynamite Cop, Sky Target, Pilot Kids, HPY
+and the 2C sets have form logs and static scans only.
