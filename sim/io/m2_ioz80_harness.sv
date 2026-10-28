@@ -59,7 +59,10 @@ module m2_ioz80_harness #(
   output logic [15:0] spy_a,
   output logic        spy_we,
   output logic [10:0] spy_addr,
-  output logic  [7:0] spy_data
+  output logic  [7:0] spy_data,
+  // R966: port E, the drive board's byte, and its write strobe
+  output logic  [7:0] spy_drv_cmd,
+  output logic        spy_drv_stb
 );
 
   logic        z_we;
@@ -90,7 +93,8 @@ module m2_ioz80_harness #(
     .z_we(z_we), .z_addr(z_addr), .z_wdata(z_wdata), .z_rdata(z_rdata),
     .dbg_ee(spy_ee), .dbg_wrcnt(spy_wrcnt), .dbg_wr_stb(spy_wr), .dbg_dout(spy_dout), .dbg_di(spy_di),
     .dbg_rd_end(spy_rd_end), .dbg_ra(spy_ra), .dbg_rdat(spy_rdat), .dbg_m1_n(spy_m1_n), .dbg_a(spy_a),
-    .dbg_last_wr(), .dbg_pf(), .dbg_pa(), .dbg_seccnt()
+    .dbg_last_wr(), .dbg_pf(), .dbg_pa(), .dbg_seccnt(),
+    .drv_cmd(spy_drv_cmd), .drv_stb(spy_drv_stb)
   );
 
   assign spy_iorq_n = u_board.iorq_n;

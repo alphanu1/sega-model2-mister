@@ -60,6 +60,137 @@ model2c. Nothing was rebuilt.
     probe build via hori_menu.sh + MiSTer.ini [Model2] main= (backups
     *.pre_probe); hori_menu.sh now also stops a Main started under another
     name (backup .pre_killall).
+## 2026-10-28: FFB build CLEAN -- s1572, every clock at Slow 100C, HDMI included (R968 addendum)
+
+  * Model2_ffb_s1572.rbf (worktree root, git-ignored; build/seeds/s1572),
+    commit 3f52ee0d, md5 3e4c749bec6d5a3db3fc62373ad14519. Slow 1100mV 100C:
+    clk_sys +0.474, clk_mem +0.824, i960 +2.183, HDMI +0.103; hold >= +0.210,
+    recovery >= +1.945, removal >= +0.703. ALM 39,056 / 41,910, M10K 551/553,
+    DSP 101/112. Other corners: Slow -40C HDMI setup -0.151 (rest positive),
+    Fast 100C / -40C all positive. NOT on the board, NOT released, NOT pushed.
+  * Three changes, each proven identical: the Test button via a falling-edge
+    clk_sys register (no added clock; tb_r968_test_cdc.sv), m2_fb_wcomb's
+    mask word ungated by c_go, and its window key compare in a register keq
+    (sim/miter/wcomb.sh 98.6M cycles 0 differing; sim/miter/wcomb_keq.sh
+    yosys induction PROVEN; mutations caught).
+  * s1570 HDMI -0.187 (OSD compares), s1571 clk_sys -0.078 (m2_fb_read ->
+    f2sdram). Fits ran ~75 min each on a loaded machine (load ~60).
+  * Wrong on the way: a seed folder used as the "old tree" for a miter
+    compares the new file with itself (rtl/ is a symlink) -- use git archive.
+    And the first s1570-s1572 launch mapped while rtl/ was being edited; it
+    was killed and re-run. Don't edit rtl/ during a sweep's maps.
+  * hps_io.sv is byte-identical to Template_MiSTer 356951d (PR #122, merged
+    upstream as 76dd8f5).
+  * Main's release Model2_20261026 (s1511) is HDMI -1.465: main is clean on
+    the core clocks only, so this build is stricter than main's.
+
+## 2026-10-27 (night): FFB build timing -- four of our paths shortened (R968), no clean seed yet
+
+  * The FFB parameter commit (9256c1b) changed nothing synthesised (same map
+    numbers as s1531); s1531 was a lucky seed. Survey of s1532-s1545 at the
+    release corner (Slow 100C; 85C / 0C runs disagree with the reports by up
+    to 0.09 ns -- use 100C): build/sta-copies, R968's table.
+  * Shortened, each proven identical (ffb-main b156ac1, bc45180, e157de1):
+    ldr_big (cpu_rst_n's compare; i960 recovery -0.15..-0.43 in 3 of 8),
+    the parked sweep gated by SWEEP_EN (sw_addr, s1544), R959's m2_sdram
+    one-hot grant re-proven on main's file (yosys, sim/miter/sdram_eq.sh),
+    m2_scan15 blend_q (s1538). Proofs: sim/miter/r968_top.sh (yosys sat
+    induction), sdram_eq.sh, tb_m2_scan15 under the miter (241,637,626
+    cycles, 0 differing); mutations caught. ALMs needed 39,234 -> 39,198.
+  * s1546-s1548 (100C): s1546 clk_sys -0.419 / HDMI -0.321; s1547 clk_sys
+    -0.312 / HDMI -0.736 / i960 HOLD -0.338 (Test button joystick_0[8] ->
+    m2_vcop_state t_q, 80 -> 40 MHz flop to flop); s1548 clk_sys +0.254,
+    clk_mem +0.649, i960 +1.867, hold +0.171, recovery +0.721, HDMI -0.171
+    (ascal's vertical polyphase). No .rbf assembled -- none is clean.
+  * None of the four families came back. What fails now is new each seed,
+    mostly routing into DSPs / RAMs (s1546 d1a_m -> the divide's DSP, 0
+    levels, 12.1 ns routing) and the framework's HDMI paths (ascal into far
+    DSP columns, the OSD's compares). DSP 101/112, M10K 551/553.
+  * Next options in R968: sys/osd.v's compares (worst HDMI path in 5 of 12
+    seeds), m2_fb_wcomb b_key / wlo, the Test button crossing (Ben's call:
+    a clock of latency), DSP placement for ascal.
+
+## 2026-10-26 (late night): Daytona FFB -- every port E write taken (R966), s1531
+
+  * BOARD RESULT on s1528 (Ben, matching Main, hori-ffb -v, a whole race):
+    the force word changed ONCE, to the 20% idle spring (motor off), and
+    never again -- no centring level, no friction, no constant force.
+  * DIAGNOSIS: the vblank two-sample filter. The type-1 I/O Z80 has no
+    interrupt here (z_int_n = 1); it polls DPRAM 0x20 (EPR-14869C
+    0x0039-0x0050) and writes port E once per scan (0x01B5), and the game
+    asks for one scan a frame from its vblank-locked loop. So PE writes keep a
+    fixed phase to vblank and a byte sent for one frame is sampled once and
+    never taken. Race start 07 27 71 07 10 3B goes one a frame: both 0x07s
+    (motor on) lost. MAME's capture took the first 0x07 only because a slow
+    game frame (no scan at f4825) held it two scans. The other PE writers in
+    the firmware (0x08CD/0x0925/0x097D) are unreferenced; all 9,038 MAME
+    writes come from 0x01B5.
+  * FIX (7d79512): every drv_stb write is decoded as it arrives, from the
+    first after reset (as daytona-arcade-recomp plays every command); the
+    `frame` input is gone. Decode, levels, mapping, OSD, the Daytona gate and
+    M2_NO_DRIVE_FFB unchanged. R966 has the board note.
+  * Sim: test_m2_drive_ffb 266,219 / 0 (make test); with each MAME capture
+    430,612 / 0, all 120 port E changes taken; seeds 1-10 both captures 0
+    fail. Race start at every write phase (768 sequences) ends on the 0x3B
+    spring 107. Mutations: two-sample filter reinstated 128,058 fails and 768
+    of 768 race starts end on the idle spring (the board symptom); taking
+    before the first write 15,797; 0x5- right 31,331; DEAD 3 125; a level off
+    by one 53,274. test_m2_ioz80_drv 2,002 / 0. lint_top warnings identical
+    before / after (both builds); analyze_file 0 errors.
+  * Build: Model2_ffb_s1531.rbf in sm2-builds/ffb-m2 (not a release), md5
+    7456f961a048f952a50760753f6e9290, 39,199 ALM, clk_sys +0.016, clk_mem
+    +0.165, i960 +0.645, HDMI +0.005, hold +0.179 -- clean on every clock.
+    s1530 clk_mem -0.038 / HDMI -0.100; s1529 clk_sys -0.783.
+  * DIRECTION: Ben on s1528, FFB direction Normal: a wall on the car's right
+    pushes the wheel left, which he says is correct; 0x5- = left stays the
+    default (Invert kept). s1528's driver log has constant forces of both
+    signs from 151 s (after the motor-on byte was caught by chance at
+    138 s), so the push felt was a decoded force. Feel it again on s1531.
+  * NEXT: Ben on the board with s1531 + the matching Main: motor on at race
+    start (centring 107 = 42%), friction / constant force on wall hits.
+  * Quartus --analyze_file rewrote Model2.qsf (appended four assignments);
+    reverted, not committed. Check the qsf after any analyze_file run.
+
+## 2026-10-26 (night): Daytona force feedback on branch ffb-main (R966) -- NOT on the board
+
+  * Branch ffb-main (off main 47ad2e2), worktree sm2-builds/ffb-m2; not
+    pushed, not merged. Commits: c3b396b hps_io (joystick_N_ffb, UIO_GET_FFB
+    0x45 -- the Template half of the Main prototype, Main_MiSTer core-ffb
+    17a72dfa), cf90971 the feature, and this handoff.
+  * What: m2_ioz80 exports port E (the drive board's byte) and a strobe for
+    writes to 0x8004; rtl/io/m2_drive_ffb.sv samples it once a frame (vblank),
+    takes a byte on two equal samples (the drive board's rule; REPLACED by
+    every-write acceptance, see above), decodes it as
+    daytona-arcade-recomp's rt::DriveBoard (f32c48ff9b) and drives hps_io's
+    joystick_0_ffb: spring = centring level, friction = resistance level,
+    constant = 0x5-/0x6- force or uncentring away from centre (by `steer`,
+    0x80 centre, higher = right), a 20% spring when the motor gives nothing.
+    Daytona only (game_id 0); M2_NO_DRIVE_FFB=1 builds without it.
+  * OSD (Daytona only, menumask bit 3): O[72] "Force feedback" On (default) /
+    Off; O[73] "FFB direction" Normal / Invert. O[73:72] free on model2a and
+    model2c too.
+  * Build: Model2_ffb_s1528.rbf in sm2-builds/ffb-m2 (not a release), md5
+    332137bdeed7f822b3f493a8c8000cf9, 39,264 ALM (+132 on s1511), clk_sys
+    +0.448, clk_mem +0.131, i960 +1.593, hold +0.242, HDMI -0.987. s1526
+    fitter crash, s1527 can't fit (routing).
+  * Sim: test_m2_drive_ffb 388,070 checks / 0 fail with the MAME session
+    (M2_DRVLOG, ROM-derived, not committed; 223,095 without it, in `make
+    test`); seeds 1-10 both captures clean; five mutations caught.
+    test_m2_ioz80_drv 2,002 / 0. hps_io bench 20,018 / 0.
+  * Findings: the byte leaves the I/O board once per game frame (the scan the
+    game requests via DPRAM 0x20); the game never reads the drive board.
+    One sample a frame drops bytes held one frame: 4 of 120 port E changes in
+    the session (a repeated 0x07 at race start, three 0x52 kicks). MAME
+    samples about twice a frame; what the cabinet does is not known.
+    (WRONG to call this harmless: on the board it lost the motor-on byte at
+    race start -- see the entry above.)
+    tb_m2_ioz80 cannot run the real firmware to its scan without the game's
+    DPRAM dialogue (spins at 0x0815, as before), so the port E test runs a
+    hand-written tv80 program with the firmware's own PE instruction.
+  * OPEN: the 0x38-0x3F dead zone, the board's ramp,
+    calibration, DIPs and the 0x7- slope are not expressible in the word.
+    Sega Rally (838-11661) and the EPR-18261 games need their own decoders.
+    The matching Main build is needed to feel anything; neither is upstream.
 
 ## 2026-10-26 (evening): releases/scripts -- a force feedback test for wheels
 

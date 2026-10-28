@@ -42,7 +42,7 @@ module m2_vcop_state (
   input  logic        clk,            // clk_i960
   input  logic        rst_n,          // the CPU's reset
   input  logic        en,             // Virtua Cop with the guns built (quasi-static)
-  input  logic        test,           // the Test button (joystick 0 bit 8 for Virtua Cop; clk_sys)
+  input  logic        test,           // the Test button (joystick 0 bit 8 for Virtua Cop; from a falling-edge clk_sys register, R968)
   input  logic        bus_req, bus_we, bus_ack,
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic [31:0] bus_addr,       // [1:0] unused: word compares

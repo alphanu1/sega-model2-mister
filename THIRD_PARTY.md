@@ -48,7 +48,7 @@ recorded rather than referenced in place.
 
 | Copied | To | Note |
 |---|---|---|
-| `sys/` framework | `sys/` | Unmodified except `sys/audio_out.sv` (the audio-filter switch below, applied R788). GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
+| `sys/` framework | `sys/` | Unmodified except `sys/audio_out.sv` (the audio-filter switch below, applied R788) and `sys/hps_io.sv` (R966: `joystick_0_ffb`..`joystick_5_ffb` and the `UIO_GET_FFB` (0x45) answer, the force feedback request read by a matching MiSTer Main; to go upstream as a Template_MiSTer PR together with the Main change). GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
 | `sys/` patches | `docs/framework-patches/` | Macro-switched patches for FPGA room, to re-apply after a framework update: `audio-filter-disable.patch` (`MISTER_DISABLE_AUDIO_FILTER`, ~430 ALM) -- APPLIED (R788), the macro set in `Model2.qsf` See the README there. |
 | `Template.qsf`, `Template.qpf` | `Model2.qsf`, `Model2.qpf` | Renamed only. `sys/sys.tcl` supplies FAMILY and DEVICE (5CSEBA6U23I7), and `PRE_FLOW_SCRIPT_FILE` generates `build_id.v` — which `quartus_map` alone does not run, so a direct map invocation needs it generated first. |
 | `Template.sv` structure | `Model2.sv` | Port list via `sys/emu_ports.vh`; the unused-output assignments and `hps_io` instantiation follow the template. The core logic is ours. |
@@ -431,6 +431,18 @@ the copies. This is user-space Linux code for the helper, not RTL.
 Not taken: the app's launcher, config file code and status line (m2link has
 its own INI reader with the same key names and defaults, and the same status
 wording).
+
+### alphanu1/daytona-arcade-recomp — BSD-3-Clause (drive board)
+*Verified 2026-10-26 · pinned at **`f32c48ff9b`** (origin/main; `src/runtime/drive_board.h` last changed in `0435a46`), read from the local repository's git objects, not its working tree*
+
+The same repository as the link-play entry above (Ben's, BSD-3-Clause,
+"Copyright (c) 2026, Ben Templeman and contributors"). Its `rt::DriveBoard`
+is the decode of Daytona's drive board commands that study R966 rests on.
+
+| ours | theirs | changed |
+|---|---|---|
+| `rtl/io/m2_drive_ffb.sv` | `src/runtime/drive_board.h` (`rt::DriveBoard::command`, `level`) | **Re-expressed in RTL, not copied:** the command decode (0x0- motor on when 0x0A or n >= 5; 0x1- none; 0x2- resistance; 0x3- centring, 0x38-3F with a dead zone; 0x4- uncentring; 0x5- / 0x6- constant force; the x8-xF halves none; 0x7- and up unchanged) and the levels (7 + 2n and 17 + 2n of 31). Changed: 0x5- is LEFT here by default (recomp says right; see R966), the levels are scaled to Main's word, the uncentring push takes its side from the I/O board's steering value with a dead area of +-2, and a byte is taken only on two equal per-frame samples (the drive board's own rule; recomp takes every byte). |
+| `sim/io/tb_m2_drive_ffb.cpp` | `src/runtime/drive_board.h` | **Verbatim** copy of `rt::DriveBoard` as the bench's reference, with the BSD-3 notice. |
 
 ### MiSTer-devel/N64_MiSTer — GPL-3.0, VHDL
 *Verified 2026-08-16*

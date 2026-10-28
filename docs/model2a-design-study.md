@@ -37690,3 +37690,419 @@ verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
 17.0 --analyze_file 0 errors.
 
 *LEFT:* the fit and the board (Ben).
+
+**R966 -- DAYTONA'S DRIVE BOARD AS FORCE FEEDBACK: PORT E, SAMPLED AS THE
+BOARD SAMPLES IT, DECODED AS THE RECOMP DOES, HANDED TO MAIN THROUGH A NEW
+hps_io WORD. BRANCH ffb-main (OFF main).**
+
+*What was believed:* there is no reference for Daytona's force feedback.
+MAME runs the drive board's Z80 (EPR-16488A) but its motor port is a stub
+(model2.cpp `driveio_port_w`, "TODO: hook up to the main CPU"), and the core
+answered the drive board's port as absent (m2_ioz80 PE reads 0xFF) and
+exported nothing. The Model 1 reference does the same (Model1.sv ties the
+drive line to 0xFF; m1_ioz80 PE "drive board absent", at `0b5d04f`, which
+is also the local repository's head), so neither board's RTL answers this.
+
+*What is now known (MAME 0.289 with a Lua tap on the stock daytona set, the
+I/O firmware's and the drive firmware's disassemblies; ROM-derived captures
+kept out of git):*
+1. The byte's path. The i960 writes DPRAM byte 0x11 (0x01C00022) when the
+   command changes -- 122 writes in a 9,200-frame session -- and byte 0x12
+   bit 0 chooses the direction (1 = read the drive board, at boot only; 0 =
+   send). The I/O firmware's scan (EPR-14869C 0x0190-0x01B9, `ld (iy+$04),e`
+   with iy = 0x8000) copies DPRAM 0x11 to the 315-5338A's port E, register
+   0x8004, once per scan -- the scan runs when the game raises DPRAM 0x20,
+   once a frame: 9,038 PE writes in 9,038 frames. In this core that latch
+   already existed (`port_out[4]`), unexported.
+2. The byte is a level. Bytes the game writes inside one scan never reach
+   port E (race start: 07 27 71 07 10 3B written, 07 71 07 3B on PE).
+3. The drive board acts on a byte only after reading the same value twice in
+   a row (EPR-16488A 0x0520-0x052A). MAME interrupts its Z80 at vblank and on
+   each PE write, about two samples a frame; what clocks the real board's
+   interrupt is not established.
+4. The game never reads the drive board back (0 reads of DPRAM 0x11/0x12 in
+   the session) and does not test for it: with 0xFF on PE it races normally.
+5. The command meanings (no Sega document found) come from community sources
+   that disagree in places: SailorSat's daytona-utils (2015 on, driving real
+   cabinet boards), FFBArcadePlugin, BackForceFeeder, and three 2026
+   disassemblies (sm2-emu, daytona-arcade-recomp, m2-hle2). This core follows
+   daytona-arcade-recomp's `rt::DriveBoard` (f32c48ff9b, BSD-3, Ben's) for
+   the decode and levels. The one real dispute is which way 0x5- pushes: the
+   hardware-based majority (SailorSat, FFBArcadePlugin, sm2-emu, and
+   BackForceFeeder for EPR-18261) says LEFT, recomp and m2-hle2 say right
+   (m2-hle2 took Model 3's convention, where 0x5- is right on a different
+   board). LEFT is the default here. The session is consistent with it but
+   does not prove it: scraping the right-hand wall (STEER 0xE0, snapshot
+   at f7500) held 0x53 for 832 frames.
+
+*The design (Ben approved the plan):*
+- `m2_ioz80` exports port E (`drv_cmd = port_out[4]`) and a registered
+  one-clock strobe for each write to 0x8004 (`drv_stb`), off on the type-2
+  board. Nothing else in the module changes.
+- `rtl/io/m2_drive_ffb.sv` samples port E at each vblank (`vbl_d &&
+  !vbl_dd`) and takes a byte on two equal samples -- the board's rule at one
+  sample a frame. Nothing is sampled until the firmware has written port E
+  once after reset. The decode is rt::DriveBoard command for command.
+- Main's word (hps_io `joystick_0_ffb`, `UIO_GET_FFB` 0x45, as the Main
+  prototype reads it -- Main_MiSTer branch core-ffb, 17a72dfa: {0xFB, flags}
+  then constant / spring+damper / friction+vibration): ACTIVE and CENTRE when built, Daytona (game_id 0),
+  the OSD on, and a byte taken. Spring = centring level x 255 (both kinds);
+  friction = resistance level x 255; constant = force level x 32767 (0x5-
+  negative = left by default), or for uncentring the same level away from
+  the centre by the steering value the I/O board's ADC reads (0x80 centre,
+  higher = right: m2_cab_inputs maps the d-pad's right and a positive stick
+  above 0x80, and MAME's STEER 0xE0 drives the car into the right-hand
+  wall), 0 within +-2 counts. With no motor force (motor off, or a no-force
+  command) the spring is 51 (20%) for the cabinet's mechanical return
+  spring, which a USB wheel lacks; ACTIVE stays set so Main's own centring
+  stays off. Damper and vibration are 0 (the board has neither).
+- OSD (main): O[72] "Force feedback: On / Off" (0 = On, the default) and
+  O[73] "FFB direction: Normal / Invert" (Invert flips the constant force and
+  the uncentring push together), shown for Daytona only (menumask bit 3).
+  O[73:72] are free on main, model2a (O[69:68] used) and model2c.
+- Compile time: `M2_NO_DRIVE_FFB=1` builds without it (the word reads 0,
+  hps_io answers 0xFB00, CONF_STR as before R966). Off for any other game at
+  run time; Virtua Cop and Desert Tank never assert ACTIVE.
+- `sys/hps_io.sv` carries the Template_MiSTer change (the six
+  `joystick_N_ffb` inputs, the 0x45 answer and its 48-bit snapshot); players
+  1-5 are tied to 0.
+
+*NOT EXPRESSED (the word has no field for it):* the 0x38-0x3F dead zone (both
+centring kinds give the same spring), the board's power ramp, its start-up
+calibration and DIP switches, and the 0x7- slope byte.
+
+*A consequence of one sample a frame:* a byte that stays on port E for only
+one scan is dropped. In the captured session that is 4 of the 120 port E
+changes -- the second 0x07 at race start (the first, held two frames, turns
+the motor on) and three one-frame 0x52 kicks. MAME's two samples a frame
+would take them. Whether the cabinet does is the open question in item 3.
+
+*Proof:*
+- `make test_m2_drive_ffb` (sim/io/tb_m2_drive_ffb.cpp, Verilator 5.052):
+  the RTL against rt::DriveBoard copied verbatim plus the stated mapping,
+  every word compared a few clocks after every frame, write, steering or OSD
+  event. With the MAME session (`M2_DRVLOG`, 9,038 PE writes over 9,203
+  frames, MAME's own steering inputs; then a 0x00-0xFF steering sweep and
+  random steering with random OSD changes; each OSD setting; en low):
+  388,070 checks, 0 failures; seeds 1-10 on both captures (two identical
+  runs), 0 failures. Without the capture (in `make test`): 223,095 checks, 0
+  failures -- 4,000 pairs of bytes each held under one frame never taken,
+  2,000 bytes held over exactly two vblanks all taken, 20,000 frames of
+  random hold times 0.1-3 frames; 512 resets (no latch value taken before
+  the firmware writes it, ACTIVE dropped by a reset); 20,000 frames with en
+  low (never ACTIVE); 16 stated directions (0x57 -32767, 0x67 +32767, 0x47 at
+  0xE0 +32767 / 0x20 -32767 / 0x80, 0x82, 0x7E 0, each inverted) and all 256
+  bytes x motor on/off x 7 steering values x Invert. Mutations caught:
+  taking a byte on one sample (56,228 failures), 0x5- right (17,169), DEAD 3
+  (91), sampling before the first write (7,852), one level off by one
+  (7,550).
+- `make test_m2_ioz80_drv` (ROM-free): tv80 running the firmware's own
+  `ld (iy+$04),e` beside DIR, PF, PA, 0x4004, 0x8014, 0x9004 and 0xC004
+  writes: 2,000 strobes, each the pass's value, one per pass (2,002 checks,
+  0 failures); with the strobe decoding only the low address bits, 1,988
+  failures. The real firmware cannot be run to its scan in the existing
+  harness without the game's side of the DPRAM dialogue (tb_m2_ioz80 spins
+  at 0x0815, as before this change).
+- `sys/hps_io.sv` against the Main prototype's RTL bench (not committed):
+  20,018 checks, 0 errors.
+- lint_top clean (the raw warning list differs from main's only in status
+  bits 72-73 now used and CONF_STR's length); with -DM2_NO_DRIVE_FFB only
+  the two unused drv_ wires added. quartus_map --analyze_file 0 errors on
+  m2_drive_ffb.sv, m2_ioz80.sv and hps_io.sv.
+
+*Fit (Quartus 17.0, seeds 1526-1528, map + fit + STA + asm):* s1528 closes:
+39,264 ALM (94%; main's Model2_20261026 s1511 39,132, so +132), 551 / 553
+M10K and 101 DSP (both unchanged), 46,884 registers (+69); setup clk_sys
++0.448, clk_mem +0.131, i960 +1.593, hold +0.242, HDMI -0.987 (report-only;
+s1511 -1.465). md5 332137bdeed7f822b3f493a8c8000cf9. quartus_map puts
+m2_drive_ffb at 57 LUTs / 43 registers. s1526: the fitter crashed (Segment
+Violation before a result); s1527: "Can't fit design in device" (routing
+at 94%), the fit's own failure, not this change's logic.
+
+*LEFT:* Sega Rally (838-11661, its own protocol: 0x80-0x9F right, 0xC0-0xDF
+left) and the EPR-18261 games (Indy 500, STCC, Over Rev, Super GT) need
+their own decoders; none is on main yet. The matching Main build is not
+upstream.
+
+*R966, THE BOARD (2026-10-26) -- THE TWO-READ FILTER WAS WRONG HERE.*
+- *What was believed:* port E sampled once a vblank and taken on two equal
+  samples models the drive board well enough; it drops only bytes held one
+  frame, 4 of 120 changes in the MAME session, none of them needed (the first
+  race-start 0x07 was held two frames and turned the motor on).
+- *What the board showed:* s1528 with the matching Main and hori-ffb -v
+  (driver log, times from the driver's start): at 43 s the word went to the
+  20% idle spring (motor off) and stayed there; at 138 s the motor came on
+  (friction, then centring), and from 151 s constant forces of both signs
+  followed (187 updates). Ben: forces start "completely random", after
+  minutes in some races and not at all in others. So the motor-on byte was
+  missed for most of the session and only caught by chance.
+- *Why (from the firmware and the core):* the type-1 I/O board's Z80 has no
+  interrupt in this core (`z_int_n` is 1); it polls DPRAM 0x20 (EPR-14869C
+  0x0039-0x0050), runs one scan and writes port E once (0x01B5), and the game
+  raises 0x20 once a frame from its vblank-locked loop. So the writes keep a
+  fixed phase to the vblank the filter sampled on, and a byte the game sends
+  for one frame spans exactly one sample: seen once, never taken. Race start
+  sends 07 27 71 07 10 3B one a frame; both 0x07s were lost and every later
+  byte decoded as motor off. MAME took the first 0x07 only because a slow
+  game frame (no scan at f4825) left it on port E for two scans; the core's
+  frame timing at race start differs. The real board's filter depends on its
+  own interrupt's phase against the I/O board, which is not known, so it
+  cannot be modelled from the vblank.
+- *The fix:* every port E write (`drv_stb`) is decoded as it arrives, from
+  the first write after reset -- as daytona-arcade-recomp plays every command
+  on the frame the game sends it. The `frame` input is gone; decode, levels,
+  mapping, OSD, the Daytona gate and the macro are unchanged.
+- *Proof:* tb_m2_drive_ffb rewritten for every-write acceptance: 266,219
+  checks / 0 fail synthetic (in `make test`), 430,612 / 0 with each MAME
+  capture (all 120 port E changes taken), seeds 1-10 on both captures 0 fail.
+  New: 4,000 x 4 bytes held under one frame each acting from their own write
+  (one-frame 0x07 then 0x3B -> spring 107; one-frame 0x57 -> -32767; one-frame
+  0x01 -> idle), 20,000 bursts of 1-6 writes on consecutive clocks, and the
+  race start (07 27 71 07 10 3B, and MAME's PE 07 71 07 3B) at every write
+  phase across 1.5 frames with +-8 clocks of jitter, Invert alternating: 768
+  sequences end on the 0x3B spring (107). Mutations: the two-sample filter
+  reinstated at one sample a frame -- 128,058 failures, 768 of 768 race-start
+  sequences end on the idle spring (the board's symptom); taking before the
+  first write 15,797; 0x5- right 31,331; DEAD 3 125; one level off by one
+  53,274. lint_top warning list identical before and after (both builds);
+  quartus_map --analyze_file 0 errors.
+- *Fit (Quartus 17.0, seeds 1529-1531):* s1531 closes on every clock:
+  39,199 ALM (94%), 46,874 registers (-10 on s1528: the sample registers),
+  551 / 553 M10K, 101 DSP; setup clk_sys +0.016, clk_mem +0.165, i960
+  +0.645, HDMI +0.005, hold +0.179. md5 7456f961a048f952a50760753f6e9290.
+  s1530 clk_mem -0.038 / HDMI -0.100; s1529 clk_sys -0.783 / clk_mem -0.397.
+
+*R966, DIRECTION (Ben, 2026-10-26, s1528, HORI wheel, FFB direction Normal):*
+- *What was believed:* which way 0x5- pushes was unknown; the sources split
+  (SailorSat, FFBArcadePlugin, sm2-emu: left; daytona-arcade-recomp and
+  m2-hle2: right). LEFT was the default.
+- *What is now known:* Ben reports that hitting a wall on the right of the
+  car pushes the wheel left, which he says is correct (MAME's right-wall
+  scrape held 0x53). The default (0x5- = left, Normal) stands; Invert stays.
+- *How sure:* the push was felt while the word carried constant forces (the
+  driver log above shows both signs from 151 s), so it was a decoded 0x5- /
+  0x6- or uncentring, not the idle spring. The log does not say which byte
+  each push came from (uncentring is signed by the steering too); Ben's
+  feel on the wall hit is the evidence. Worth feeling again on the
+  every-write build.
+
+**R968 -- THE FORCE FEEDBACK BUILD'S FAILING PATHS: FOUR OF OURS SHORTENED
+WITHOUT CHANGING A CYCLE (R959'S METHOD); THE HDMI ONES ARE THE FRAMEWORK'S,
+AND WHERE THEY FAIL IS DECIDED BY PLACEMENT. BRANCH ffb-main (OFF main).**
+
+*What was believed:* 9256c1b (hps_io's FFB parameter) broke timing -- s1531
+closed on every clock before it, and eight seeds after it (s1532, s1533,
+s1537-s1539, s1543-s1545) all failed, a different clock each time.
+
+*What is now known:*
+1. The parameter changed nothing that is synthesised. With M2_DRIVE_FFB
+   defined, FFB is 1 and every `if (FFB)` is the old code: quartus_map gives
+   s1531 and s1532 the same netlist (39,234 ALMs needed, 55,326 ALUTs,
+   49,955 registers, 4,671,024 block-memory bits). s1531 was one good seed
+   of three for the same design (s1529-s1531); main's rel-main seeds
+   (s1509-s1512) failed HDMI by -1.08 to -2.83 the same way.
+2. The release corner is Slow 1100mV 100C (the part is an I7). A first
+   survey at 85C and 0C gave slacks up to 0.09 ns away from the reports
+   (s1532 clk_sys +0.019 / -0.012 against -0.071) -- re-run at 100C, where
+   it matches the .sta.rpt to the picosecond. Survey: quartus_sta on copies
+   of each seed's database (build/sta-copies), 60 setup and 30 recovery
+   paths per clock. Clocks: general[0] clk_mem 100 MHz, general[1] clk_sys
+   80 MHz, general[3] i960 40 MHz, HDMI 148.5 MHz (6.732 ns).
+3. Ours, by family (worst slack, ns; - = not under +0.1):
+
+   | family                                   | 1532   | 1533   | 1537   | 1538   | 1539   | 1544   |
+   |------------------------------------------|--------|--------|--------|--------|--------|--------|
+   | i960 recovery: ldr_top -> cpu_rst_n -> i960_fpmul DSP aclr | - | -0.154 | -0.288 | - | - | -0.433 |
+   | clk_mem m2_sdram pend/inflight -> rr_mask | -      | -      | -0.053 | -      | -      | -      |
+   | clk_mem m2_sdram tag_v -> cmd (R959 left it) | -   | -      | -      | -      | -0.003 | -      |
+   | clk_mem m2_scan15 acc_b -> o_rgb          | -      | -      | -      | -0.090 | -      | -      |
+   | clk_sys sw_addr -> sw_addr (parked sweep) | -      | -      | -      | -      | -      | -0.221 |
+   | clk_sys m2_span_tex of_rp -> rt_take -> e_pr DSP enables | - | - | -0.271 | - | - | - |
+   | clk_sys m2_span_tex sh_p -> m2_texel_x2 RAM | -0.067 | -    | -      | -      | -      | -      |
+   | clk_sys fp_add s1_sum -> sC_shifted (pool) | -0.071 | -     | -      | -      | -      | -      |
+
+   s1543 and s1545 failed HDMI only; inflight -> rr_mask was +0.045 / +0.075
+   there. s1531 (clean) had ldr_top -> the sound 68000's nanoLatch at +0.016
+   on clk_sys -- the same compare, through cpu_rst_n.
+   The recovery path: ldr_top -> LessThan8 (3 levels, 2.5 ns) -> cpu_rst_n
+   (an AND of five registers) -> a global (5.0 ns to CLKCTRL_G2) -> 4,033
+   loads, i960_fpmul's DSP pipeline registers the farthest.
+4. HDMI is all framework: no node of ours is timed on pll_hdmi. Worst per
+   seed (100C): s1531 +0.005 ascal o_h_poly_t -> o_h_poly_pix; s1532 -0.277
+   ascal o_div -> o_hfrac; s1533 -0.500 osd h_cnt == h_osd_start ->
+   osd_hcnt2 (5 levels); s1537 -0.389 osd ordout1 -> vga_out's shift-tap
+   M10K (2 levels, 6 ns of routing: the RAM at Y2, the OSD at Y49), then
+   -0.233 osd cnt -> pixsz; s1538 -0.120 osd h_cnt > {dsp_width,00} ->
+   osd_en (6 levels, 49-fanout enable); s1539 -0.373 ascal o_hpixq[7] ->
+   o_hpixq[8] (0 levels, 6.31 ns of routing into a DSP at X86 from X45);
+   s1543 -0.560 ascal's line-buffer M10K (X49 Y80) -> a polyphase DSP at
+   X86 Y33 (0 levels, 6.21 ns routing); s1544 +0.092; s1545 -0.197 osd
+   h_cnt -> f1. The HDMI logic itself lands anywhere from X4 to X87 across
+   seeds. So the core's fill pushes these paths through PLACEMENT, not
+   through anything of ours on them: DSP 101 / 112 and M10K 551 / 553 leave
+   ascal's multipliers and line buffers wherever a block is free, and the
+   two worst seeds are 6 ns of routing between a RAM or register and a DSP
+   40 columns away. RTL of ours cannot shorten those; the OSD's compares
+   could be (sys/osd.v, a next-state compare per ce_pix), but they are the
+   worst path in three seeds of nine and ascal fails five, so it was left.
+
+*The changes (each proven identical; nothing else moves):*
+1. *Model2.sv, ldr_big.* A register beside ldr_top, written on the same edge
+   from the same address with (ldr_wr_addr > 0x80000), both 0 out of
+   reset; game_image = rom_loaded && ldr_big. Removes the compare from
+   cpu_rst_n's recovery paths and from ldr_top -> nanoLatch.
+2. *Model2.sv, the parked sweep.* `end else if (SWEEP_EN) begin`. With
+   SWEEP_EN 0 (R284), sw_take 0 (M2_NO_DEBUG) and sw_sel_i 0 (R666) the
+   sweep never leaves state 0 and every register keeps its reset value --
+   but that is a reachability fact Quartus did not find, so it kept
+   sw_addr's adder and the 25-bit compare against ldr_top, which failed
+   s1544.
+   Proof of 1 and 2: sim/miter/r968_top.sh cuts the two blocks out of the
+   old and new Model2.sv (the text itself, not a copy) and runs yosys sat
+   -tempinduct: ldr_big == (ldr_top > 0x80000), old and new ldr_top and
+   game_image equal on every cycle -- PROVEN; the old sweep never leaves its
+   reset values (all fifteen registers, sw_word / sw_wsel included) --
+   PROVEN, inductive; the new one likewise -- PROVEN. Mutations: SWEEP_EN 1
+   and the constant one off both fail on the base case.
+3. *m2_sdram, R959's one-hot grant registers* (gr_above, blen_gr, inflight
+   bit by bit, we_gr), the change 9decc9b left out of main because it had
+   been proven on the 2A file. Main's file is the 2A one before DUAL,
+   MASK_ON_A and AGE; 36d7297's version is main's plus exactly R959's 33
+   lines. sim/miter/sdram_eq.sh rewritten for main's header and run on it:
+   PROVEN at Model2.sv's parameters (NP 13, COL_BITS 10, T_REFI 781, PRI,
+   PRI_CAP 2, PRI_TOP; 2,355 cells) and NP 5 (1,283). gr_above one bit off
+   leaves 16 unproven. Benches sdram (2,111,407 checks), sdram13, sdram128,
+   romload, sdram_x2, sdram_cdc: 0 fails, 0 violations. lint_idx 141 lines
+   against 144, none new (inflight[rr_grant], we_p[rr_grant] x 2 gone).
+   tag_v -> cmd (R959's ras_ok -> cmd) is still not done.
+4. *m2_scan15, blend_q.* The x3277 blend in a register every clk_mem;
+   o_rgb takes blend_q at ce_out. acc is written on the edges where ph is
+   2 and 3; ce_out's enables are at least 9 clk_mem apart (547/5300 and
+   537/5300: 9, 861/8692: 10), so acc last moved 6 or more edges before an
+   enable and blend_q == blend there. Proof: tb_m2_scan15 under R952's
+   miter (sim/miter/miter.py, old and new side by side, all 5 outputs every
+   cycle): modes 0, 1, 2 and the slipping cadence (+rnd +slip3=20), 14
+   frames each, 22,599,226 cycles; modes 0 and 2 at 140 frames,
+   241,637,626 cycles: 0 differing, bench PASS. Mutation (blend_q loaded
+   only in ph 3): 4,575,877 of 8,692,026 cycles differ, FAIL.
+Checks: lint_top clean (debug, and LINT_DEFS=-DM2_NO_DEBUG); quartus_map
+--analyze_file 0 errors on Model2.sv, m2_sdram.sv, m2_scan15.sv.
+*Not done:* m2_span_tex of_rp -> rt_take -> the e_pr DSPs' input-register
+enables (s1537 -0.271: rt_col / rt_lum packed into the DSPs, 81 fanout,
+9.2 ns of routing; a registered head_skip / head_reuse would take two
+levels off), sh_p -> m2_texel_x2 (s1532, 9 levels), the pool's fp_add
+(s1532), tag_v -> cmd, and the framework's HDMI paths.
+*Area (quartus_map 17.0, ALMs needed):* 39,234 -> 39,198; ALUTs 55,326 ->
+55,148; registers 49,955 -> 49,930 (the sweep's registers gone, ldr_big and
+blend_q's 24 in); M10K bits and DSP (101) unchanged.
+
+*Fit (Quartus 17.0, seeds 1546-1548, all three fitted; 100C):*
+
+   | seed  | clk_sys | clk_mem | i960   | HDMI   | hold   | recovery | ALM    |
+   |-------|---------|---------|--------|--------|--------|----------|--------|
+   | s1546 | -0.419  | +0.195  | +0.990 | -0.321 | +0.191 | +1.005   | 39,228 |
+   | s1547 | -0.312  | +0.410  | +0.073 | -0.736 | -0.338 | +1.410   | 39,117 |
+   | s1548 | +0.254  | +0.649  | +1.867 | -0.171 | +0.171 | +0.721   | 39,168 |
+
+None is clean on every clock. s1548 is clean on all of ours, setup, hold,
+recovery and removal, and fails HDMI only (ascal o_v_poly_t ->
+o_v_poly_pix, 1 level -- the polyphase multiply, as in s1531's +0.005).
+None of the four shortened families came back: i960 recovery is +0.72 to
++1.41 in all three (it was -0.15 to -0.43 in three of eight), no
+m2_sdram, scan15 or sweep path is under +0.1. What failed instead is new
+each seed, and two of the three are placement, not depth:
+  * s1546 clk_sys -0.419: m2_span_tex d1a_m -> d1_m, 0 logic levels, 12.12
+    ns of routing into the divide's DSP (Mult0); then m2_fb_wcomb b_key ->
+    vlo -0.411. HDMI -0.321: osd h_cnt > {dsp_width,00} -> osd_en, 7 levels.
+  * s1547 clk_sys -0.312: m2_fb_wcomb wlo -> m2_span_tex's mk MLAB write
+    data (9 levels). HDMI -0.736: ascal o_hpixq[7] -> [8] into a DSP, 0
+    levels, 6.66 ns routing (s1539's path again); osd cnt -> pixsz -0.573.
+    HOLD -0.338 on i960: hps_io joystick_0[8] (clk_sys) -> m2_vcop_state
+    t_q (clk_i960), the two flops in one LAB, 0.575 ns of data against 0.853
+    ns of clock skew -- the Test button crossing 80 -> 40 MHz with nothing
+    between; the fitter did not pad it this time. First seen here.
+  * s1548: HDMI only, above.
+So with this design at DSP 90% / M10K 100%, a seed fails on whichever path
+the placement stretches: the logic-depth families that recurred are gone,
+and what is left is mostly routing into DSPs and RAMs (the framework's
+and ours alike) plus the OSD's compares. Next, if more is wanted: the OSD
+compares in sys/osd.v (the worst HDMI path in five of the twelve seeds
+surveyed, s1544's passing one included), the Test button's crossing (a
+slow input taken flop to flop across 80 -> 40 MHz; any fix adds a clock of
+latency to a button, so it is not "identical" and is Ben's call),
+m2_fb_wcomb's b_key / wlo paths, and the DSP placement question (ascal's multipliers into logic -- an area cost --
+or a LogicLock for the HDMI domain).
+
+*R968 addendum (2026-10-28): three more of ours, and s1572 closes on every
+clock at Slow 1100mV 100C, HDMI included.*
+1. *The Test button crossing* (s1547 i960 hold -0.338). hps_io's
+   joystick_0[8] now reaches m2_vcop_state's t_q through a register on
+   clk_sys's FALLING edge (Model2.sv, vc_test_n). It is launched 6.25 ns
+   after a clk_i960 edge and 6.25 ns before the next, so hold and setup both
+   have 6.25 ns of relationship instead of 0 and 12.5, and t_q takes every
+   change on the same clk_i960 edge as before -- it costs no clock, where
+   the option offered (a second clk_i960 register) cost one. This is the
+   only consumer: t_q drives the crosshairs' test latch, not the game's
+   Test input. Proof: sim/io/tb_r968_test_cdc.sv (iverilog; both crossings
+   into two m2_vcop_state copies, presses as short as one clk_sys cycle,
+   the clocks' rising edges aligned as the PLL has them): 2,000,000
+   clk_i960 cycles, 0 differing in t_q / tl / play; a rising-edge register
+   instead differs on 26,090 of 200,000. A first run with the clocks out of
+   phase (clk_sys starting low) "failed" on 13% of cycles -- the bench, not
+   the design. s1572: joy8 -> vc_test_n setup +3.967 / hold +7.358,
+   vc_test_n -> t_q setup +3.201 / hold +6.524.
+2. *m2_fb_wcomb, the mask word written back* (s1547 wlo -> the mask MLAB's
+   write data -0.312, 9 levels). b_wd takes {hi_on, lo_on} ungated by
+   c_go. It is read only under pg_we (m2_raster3d writes mk_a, the span_tex
+   copy and its bypass under mk_we = fbw_we) and in the a_same bypass, both
+   of which imply c_go, and there the word is the same; so c_fits leaves the
+   data path and stays only on the write enable.
+3. *m2_fb_wcomb, the window key compare in a register* (s1546 b_key -> vlo
+   -0.411; b_key had 137 loads). keq[k] holds (wkey[k] == b_key), computed
+   from both registers' next values (nkey on a_go; b_key into a fresh
+   window's key), so c_fits starts from keq[ib] and the 13-bit compare is
+   off the path into the valid bits. Reset 2'b11 (both keys zero).
+   Proofs of 2 and 3: sim/miter/wcomb.sh (R952's miter, old and new
+   m2_fb_wcomb side by side under the write-path chain bench with WCOMB=1
+   FTB=1, every output every cycle, pg_wd compared under pg_we): BUSY 0 /
+   300 / 900 x seeds 1 / 7 / 12345 at 200,000 spans (10x the bench's
+   default), 98,624,383 cycles, 0 differing, and pg_wd differs while unread
+   on 2.0M-20.9M cycles a run, so the change is exercised; mutation (the
+   mask bit one pixel off) 687,250 of 687,257 differ. CAUGHT ON THE WAY: a
+   seed folder's rtl/ is a symlink to the worktree, so passing build/seeds/
+   s1548 as the "old tree" compared the new file with itself and showed 0
+   unread differences -- the old tree must be a `git archive` of the old
+   commit. keq's invariant: sim/miter/wcomb_keq.sh (yosys sat
+   -tempinduct, FTB 1, reset at step 1): PROVEN at induction length 1; with
+   the a_go branch removed, NOT PROVEN. Benches test_m2_fb_wcomb (43
+   checks) and test_m2_fbw_chain (all nine) PASS; lint_top clean; lint_idx
+   141 lines, none new; quartus_map --analyze_file 0 errors on Model2.sv,
+   m2_fb_wcomb.sv, m2_vcop_state.sv. test_m2_vcop_state was not run: its
+   MAME logs (build/vcopstate) are not in this tree; the module changed only
+   in a comment.
+*Process fault, recorded:* the first launch of s1570-s1572 began quartus_map
+at 18:05:53 while keq's update block was still being written (file mtime
+18:06:11), so the map may have read a keq that never updates. It was killed
+and re-run from the committed tree (3f52ee0d). Do not edit rtl/ while a
+sweep's maps are running: the seed folders read it through the symlink.
+
+*Fit (Quartus 17.0, 3f52ee0d, Slow 1100mV 100C):*
+
+   | seed  | clk_sys | clk_mem | i960   | HDMI   | hold   | recovery | removal | ALM    |
+   |-------|---------|---------|--------|--------|--------|----------|---------|--------|
+   | s1570 | +0.024  | +0.476  | +1.735 | -0.187 | +0.229 | +1.452   | +0.831  | 39,097 |
+   | s1571 | -0.078  | +0.629  | +1.413 | +0.198 | +0.171 | +1.125   | +1.050  | 39,122 |
+   | s1572 | +0.474  | +0.824  | +2.183 | +0.103 | +0.210 | +1.945   | +0.703  | 39,056 |
+
+s1572 is clean on every clock, setup, hold, recovery and removal, HDMI
+included: assembled, md5 3e4c749bec6d5a3db3fc62373ad14519. M10K 551/553,
+DSP 101/112, registers 49,937 at map. Other corners (quartus_sta, every
+operating condition): Slow 1100mV -40C setup HDMI -0.151 (everything else
+positive: clk_sys +0.432, clk_mem +0.443, i960 +1.761, hold +0.096);
+Fast 100C / Fast -40C all positive (worst setup +2.886 / +3.528, worst
+hold +0.100 / +0.079 clk_mem, removal +0.302 / +0.258). s1570 failed HDMI
+on the OSD's compares (h_cnt -> multiscan / osd_en); s1571 clk_sys on
+m2_fb_read tgt_y -> the HPS f2sdram port (-0.078). Neither the Test path
+nor any wcomb window path is in the worst 20 hold / 60 setup paths of
+either. For comparison, main's release Model2_20261026 (s1511) is HDMI
+-1.465 at this corner: it is clean on the core clocks only.

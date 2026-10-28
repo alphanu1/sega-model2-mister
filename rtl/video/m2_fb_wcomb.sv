@@ -194,6 +194,12 @@ module m2_fb_wcomb #(
   logic [3:0]    b_mw, b_off;              // mask word in the row; pair within it
   logic [31:0]   b_mk;                     // the mask word, current
   wire  [KW-1:0] ckey  = b_key;
+  // R968: keq[k] is (wkey[k] == b_key), kept in a register rather than
+  // compared in c_fits: b_key fanned out to 137 loads and its 13-bit compare
+  // headed the path into the valid bits (s1546 b_key -> vlo -0.411). It is
+  // worked out from the values both will have after the edge, below.
+  logic [1:0]    keq;
+  wire  [KW-1:0] nkey  = {sel_r, y_r, a_cw[RW-1:LW]};   // b_key's next value on a_go
   wire  [LW-1:0] cidx  = b_idx;
   wire           lo_in = b_lo;
   wire           hi_in = b_hi;
@@ -204,7 +210,7 @@ module m2_fb_wcomb #(
   wire           c_any = lo_on || hi_on;
   // Belongs in window ib: the same window, and on or beside the words it holds.
   wire           c_fits = !dirty[ib] ||
-                          ((wkey[ib] == ckey) &&
+                          (keq[ib] &&
                            ({1'b0, cidx} + (LW+1)'(1) >= {1'b0, wlo[ib]}) &&
                            ({1'b0, cidx} <= {1'b0, whi[ib]} + (LW+1)'(1)));
   wire           other_free = !pend[~ib];
@@ -216,7 +222,12 @@ module m2_fb_wcomb #(
   wire           c_go  = b_v && (!(lo_in || hi_in) || c_fits || other_free);
   wire           c_wr  = c_go && c_any;
   wire  [1:0]    b_wr  = c_go ? {hi_on, lo_on} : 2'b00;
-  wire  [31:0]   b_wd  = b_mk | (32'(b_wr) << {b_off, 1'b0});
+  // R968: the mask word written back takes the pixels UNGATED by c_go. It
+  // is used only where c_go is 1 -- pg_wd under pg_we (b_wr != 0), and the
+  // a_same bypass (which has c_go in it) -- and there it is the same word,
+  // so the window compares (c_fits) leave the write data's path (s1547:
+  // wlo -> c_fits -> c_go -> pg_wd -> the mask MLAB, -0.312).
+  wire  [31:0]   b_wd  = b_mk | (32'({hi_on, lo_on}) << {b_off, 1'b0});
   // A moves a word into B when B is empty or is emptying this cycle
   wire           a_go   = (ist == I_RUN) && (!b_v || c_go);
   // R808: A takes its next span when idle, or as its last word leaves --
@@ -297,6 +308,7 @@ module m2_fb_wcomb #(
       dbg_pixels <= '0; dbg_clears <= 16'd0;
       b_v <= 1'b0; b_key <= '0; b_idx <= '0; b_lo <= 1'b0; b_hi <= 1'b0; b_px <= '0;
       b_y <= '0; b_mw <= '0; b_off <= '0; b_mk <= '0;
+      keq <= 2'b11;   // wkey and b_key are both zero
     end else begin
       // ---- R808: the held span. Its payload is written on every take (no
       // a_go in its enable); it is HELD only when A did not take it at once.
@@ -377,7 +389,7 @@ module m2_fb_wcomb #(
       end
       if (a_go) begin
         b_v   <= 1'b1;
-        b_key <= {sel_r, y_r, a_cw[RW-1:LW]};
+        b_key <= nkey;
         b_idx <= a_cw[LW-1:0];
         b_lo  <= a_lo;
         b_hi  <= a_hi;
@@ -387,6 +399,15 @@ module m2_fb_wcomb #(
         b_off <= x_r[4:1];
         b_mk  <= a_same ? b_wd : pg_rword;
       end else if (c_go) b_v <= 1'b0;
+
+      // ---- R968: keq, from what wkey[k] and b_key become on this edge (the
+      // window's key is loaded from b_key where a fresh window opens above,
+      // b_key from nkey on a_go)
+      for (int k = 0; k < 2; k++)
+        if (c_wr && (!c_fits || !dirty[ib]) && (c_wb == 1'(k)))
+          keq[k] <= a_go ? (ckey == nkey) : 1'b1;
+        else if (a_go)
+          keq[k] <= (wkey[k] == nkey);
 
       // ---- a closed window, out as one burst -- or, R813, a chunk of the
       // clear: the window first unless it waits on the clear's line

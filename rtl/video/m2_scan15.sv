@@ -306,6 +306,12 @@ module m2_scan15 #(
   (* multstyle = "dsp" *) wire [24:0] mul_g = acc_g * 12'd3277;
   (* multstyle = "dsp" *) wire [24:0] mul_b = acc_b * 12'd3277;
   wire [23:0] blend = {mul_r[23:16], mul_g[23:16], mul_b[23:16]};
+  // R968: THE BLEND IN A REGISTER, a clock behind acc. acc is written on the edges where ph is 2 and 3 and then holds
+  // until the next pixel enable starts the next pair; ce_out's enables are at least 9 clk_mem apart (861/8692 at the
+  // most), so at an enable acc last moved 6 or more edges back and blend_q == blend. acc_b -> o_rgb (the 3277 DSP
+  // multiply straight into the output register) failed clk_mem in s1538 (-0.090).
+  logic [23:0] blend_q;
+  always_ff @(posedge clk) blend_q <= blend;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) ph <= 4'd0;
@@ -335,7 +341,7 @@ module m2_scan15 #(
       o_vs    <= vs_c;
       o_de    <= de_c;
       o_field <= field;
-      o_rgb   <= de_c ? blend : 24'd0;
+      o_rgb   <= de_c ? blend_q : 24'd0;   // R968: blend_q == blend at every ce_out
     end
   end
 
