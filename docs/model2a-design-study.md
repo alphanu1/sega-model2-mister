@@ -37697,6 +37697,23 @@ IS BIT-EXACT WITH MAME ACROSS THE SESSION; CPU / TGP SPEED, THE HIT, TGP
 ROUNDING / DENORMALS / SATURATION AND THE SORT ALL CHECKED, NONE REMOVES IT.
 NO RTL CHANGE. BRANCH daytona-wall (OFF main), NOT FITTED.**
 
+*SETTLED, 2026-10-28: A REAL CABINET DOES IT TOO.* Footage of a real
+Model 2 Daytona USA on Three Seven Speedway (YouTube OwPQ8KY1OLo, "SEGA
+Daytona USA - Real MODEL 2 - Three Seven Speedway", channel SEGA MODEL KING,
+at 1:16) shows an AI car clipping through the wall, found by Ben. So the
+"hardware fact" this entry carried through four passes -- that a cabinet
+never lets the car onto or through the wall -- was wrong, and the first
+pass's conclusion stands: it is the game's own wall code (no wall response
+below the class's speed threshold, a 1/16-rate steer back), and the core,
+like MAME, reproduces the arcade. #34 is the game's behaviour, not a fault.
+Kept from the later passes: the exact model of the 80960KB's
+single-precision rules (sim/io/i960_kb_fpcheck.py), and two genuine
+deviations from Intel's manual found on the way (cvtri rounding halves away
+from zero, addr/subr rounding twice) -- handed to the i960 audit. The lesson
+for the order of authority: a remembered hardware behaviour is a hypothesis
+like any other; footage of the cabinet settled in one look what four bench
+passes could only bound.
+
 *The report:* hitting an AI car into the wall at the Beginner course's
 "second hairpin" sometimes sends it through the wall, visible on the far
 side; seen on the board. The reporter then made it happen in MAME too, and
