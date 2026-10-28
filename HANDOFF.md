@@ -1,5 +1,11 @@
 # Handoff
 
+## 2026-10-28 (night): Model2_20261028 in releases/ -- Daytona force feedback
+
+`releases/` matches main and model2a: `Model2_20261028.rbf` (md5
+`3e4c749bec6d5a3db3fc62373ad14519`) replaces `Model2_20261026.rbf`. The 2C core
+is unchanged (Model2C_20261027).
+
 ## 2026-10-27 (later): Model2C_20261027 -- the sound balance fixed on 2C
 
   * Model2C_20261027 = s1561 (model2c d6d49cb: R967's MPRO fix, cherry-picked
