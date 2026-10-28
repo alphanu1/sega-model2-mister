@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-28 (night): Model2_20261028 released -- Daytona force feedback
+
+- `releases/Model2_20261028.rbf` = ffb-main s1572 (md5
+  `3e4c749bec6d5a3db3fc62373ad14519`), merged into main (d550068c). Clean on
+  every clock at Slow 1100mV 100C, HDMI included (HDMI +0.103); the -40C slow
+  corner fails HDMI by 0.151 (not the release corner). Note: the previous main
+  release, s1511, was NOT clean on HDMI (-1.465); this one is.
+- Board-tested by Ben with the HORI wheel on the test Main (MiSTer.ffb_probe1):
+  forces, Test button and picture all fine; and on stock Main (2e99ab46):
+  Daytona runs normally without force feedback.
+- Upstream: Main #1391 / #1393 and Template #122 are all merged (Main b4aac02,
+  Template 76dd8f5; our sys/hps_io.sv is byte-identical). No Main release
+  binary carries them yet (latest MiSTer_20261010).
+- releases/ goes to model2a and model2c identically.
+
 ## 2026-10-28: releases/ is the same on main, model2a and model2c
 
 `releases/` now carries the Model 2C beta (`Model2C_20261027.rbf`, md5
