@@ -216,7 +216,12 @@ module m2_fb_wcomb #(
   wire           c_go  = b_v && (!(lo_in || hi_in) || c_fits || other_free);
   wire           c_wr  = c_go && c_any;
   wire  [1:0]    b_wr  = c_go ? {hi_on, lo_on} : 2'b00;
-  wire  [31:0]   b_wd  = b_mk | (32'(b_wr) << {b_off, 1'b0});
+  // R968: the mask word written back takes the pixels UNGATED by c_go. It
+  // is used only where c_go is 1 -- pg_wd under pg_we (b_wr != 0), and the
+  // a_same bypass (which has c_go in it) -- and there it is the same word,
+  // so the window compares (c_fits) leave the write data's path (s1547:
+  // wlo -> c_fits -> c_go -> pg_wd -> the mask MLAB, -0.312).
+  wire  [31:0]   b_wd  = b_mk | (32'({hi_on, lo_on}) << {b_off, 1'b0});
   // A moves a word into B when B is empty or is emptying this cycle
   wire           a_go   = (ist == I_RUN) && (!b_v || c_go);
   // R808: A takes its next span when idle, or as its last word leaves --

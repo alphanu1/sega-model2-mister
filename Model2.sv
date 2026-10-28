@@ -4247,8 +4247,19 @@ generate if (VCOP_GUN) begin : g_vcgun
 	// R849: each crosshair only while its player is in play, as the game's
 	// own work RAM says (the i960's writes, snooped on clk_i960).
 	wire [1:0] vc_play;
+	// R968: the Test button crosses 80 -> 40 MHz through a register on
+	// clk_sys's FALLING edge. Taken straight from hps_io (a rising-edge
+	// clk_sys flop) into t_q, the two edges coincide every other clk_sys
+	// cycle and the hold check has 0 ns against ~0.85 ns of clock skew
+	// (s1547: -0.338). From the falling edge it is launched at least 6.25 ns
+	// after a clk_i960 edge and at least 6.25 ns before the next, so both
+	// checks have 6.25 ns, and t_q takes every change on the same clk_i960
+	// edge as before (a press at clk_sys edge T reaches the falling-edge
+	// register at T + 6.25, before the clk_i960 edge that took it before).
+	logic vc_test_n;
+	always_ff @(negedge clk_sys) vc_test_n <= joystick_0[8];
 	m2_vcop_state u_vcop_state (
-		.clk(clk_i960), .rst_n(cpu_rst_n), .en(vc_gun), .test(joystick_0[8]),   // the MRA's Test
+		.clk(clk_i960), .rst_n(cpu_rst_n), .en(vc_gun), .test(vc_test_n),   // the MRA's Test
 		.bus_req(cpu_req), .bus_we(cpu_we), .bus_ack(cpu_ack),
 		.bus_addr(cpu_addr), .bus_wdata(cpu_wdata), .bus_be(cpu_be),
 		.play(vc_play)
