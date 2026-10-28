@@ -1,5 +1,13 @@
 # Handoff
 
+## 2026-10-28 (evening): Daytona #34 is the arcade's own behaviour
+
+Real-cabinet footage (YouTube OwPQ8KY1OLo, "SEGA Daytona USA - Real MODEL 2 -
+Three Seven Speedway", 1:16) shows an AI car clipping through the wall, so the
+core is right and #34 is not a fault. The earlier notes below saying real
+cabinets never do it were wrong. R969 (branch `daytona-wall`, pushed) records
+the evidence and the correction. No core change.
+
 ## 2026-10-28 (later): releases/ is the same on main, model2a and model2c
 
 `releases/` now carries the Model 2C beta (`Model2C_20261027.rbf`, md5
