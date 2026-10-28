@@ -423,7 +423,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261026.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261028.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -462,7 +462,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261026.rbf` has the md5 `94173c3a71e2ee1eaf79e511cd319f7d`.
+**Check you're running the right file.** `Model2_20261028.rbf` has the md5 `3e4c749bec6d5a3db3fc62373ad14519`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -496,6 +496,20 @@ anything you find.
 
 ### New in this release
 
+- **Force feedback in Daytona USA.** The core reads the game's commands to
+  the cabinet's drive board and sends them to your wheel: the centring
+  spring, heavier steering on grass and sand, and the kicks from walls and
+  other cars, from the side and behind. It needs a MiSTer Main with force
+  feedback for cores, which was merged into MiSTer Main on 28 October 2026
+  and comes with the first Main release after `MiSTer_20261010`. **On the
+  current Main it works as before, just without force feedback:** nothing
+  else changes. In MiSTer.ini, `rumble` must not be `0`, and `wheel_force`
+  (0-100, default 50) sets how strong the forces are. New OSD settings
+  `Force feedback` (`On` by default) and `FFB direction` (`Normal` or
+  `Invert`, if the wheel pushes the wrong way); see *OSD settings* below.
+  Press a button on the wheel once after the game starts so it becomes
+  player 1: the forces go to player 1's controller. (`Model2_20261028`.)
+- **Builds close timing on every clock, HDMI included.** (`Model2_20261028`.)
 - **`Analog control` for wheels** (GitHub #12): `Wheel A` and `Wheel B`
   layouts beside today's (`Standard`, still the default), for wheels whose
   pedals MiSTer reports on their own axes. Not yet tried on a real wheel:
@@ -609,6 +623,8 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
 | `Gun flash` | Virtua Cop (and Virtua Cop 2 on the Model 2A core): `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
+| `Force feedback` | Daytona USA only: `On` (default) or `Off`. Needs a MiSTer Main with force feedback for cores (see *New in this release*) |
+| `FFB direction` | Daytona USA only: `Normal` (default) or `Invert`, if hitting a wall on your right pushes the wheel right instead of left |
 | `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
 | `Save settings (NVRAM)` | writes the game's own settings and records to the SD card |
 
@@ -863,8 +879,9 @@ Racing Wheel through [linux-hori](https://github.com/alphanu1/linux-hori)'s
 `/media/fat/Scripts` and run `ffb_wheel_test` from the Scripts menu, with the
 wheel let go: it shows the wheel it found, plays weak effects (20 % at most)
 and reports each as `PASS`, `FAIL` or `SKIP` (not supported by that wheel).
-It checks that MiSTer can drive the wheel's force feedback; the Model 2 cores
-don't send force feedback yet.
+It checks that MiSTer can drive the wheel's force feedback. Daytona USA on the
+Model 2 core sends its own force feedback from `Model2_20261028` (see *New in
+this release*).
 
 ### Still to come
 
