@@ -171,6 +171,12 @@ and a careful author working from judgement both produce differentiated values.
 270567-001**, which `i960dis.cpp`'s own header cites. Until someone reads it,
 every conclusion drawn from the table below is a hypothesis.
 
+**Read since (R970, `docs/i960-intel-audit.md`):** MAME's per-instruction
+counts are Appendix C's typical or top-of-range figures; what MAME omits is
+the machine around them (wait states, cache misses, register-set flushes,
+overlap). The table below stands as Intel's numbers, not as a model of the
+chip.
+
 ### 4.1 Measured from the reference
 
 | Class | Op | Cycles |
@@ -561,6 +567,11 @@ rounding modes, zero mismatches.
 round half *away from zero* (C's `round()`), 1 floor, 2 ceil, 3 truncate. Model
 1's M0 recorded the same trap on the TGP's `cfxd` — a mode field saying "round
 to nearest" usually means half-to-even, and here it does not.
+
+**Corrected (R970):** that is MAME's rule, not Intel's. PRM 3-11 Table 3-4
+defines mode 00 as round to nearest EVEN; `cvtri` and `roundr` here round
+ties away from zero, which changes measured results in Daytona, VF2 and
+Virtua Cop 2. Recorded, not yet changed.
 
 Three bugs, and the last is the one worth carrying forward:
 

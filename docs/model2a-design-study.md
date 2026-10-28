@@ -37690,3 +37690,124 @@ verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
 17.0 --analyze_file 0 errors.
 
 *LEFT:* the fit and the board (Ben).
+
+**R970 -- THE i960 AUDITED AGAINST INTEL'S OWN MANUALS (80960KB
+PROGRAMMER'S AND HARDWARE DESIGNER'S REFERENCE MANUALS, MARCH 1988):
+cvtri ROUNDS TIES THE WRONG WAY IN THREE GAMES; MAIN SPILLS REGISTER FRAMES
+BY MAME'S RULE, NOT THE CHIP'S; MAME'S CYCLE COUNTS ARE APPENDIX C, ITS
+MACHINE IS NOT. REPORT ONLY: NO RTL CHANGED.** docs/i960-intel-audit.md
+holds the tables, evidence, fixes, costs and proofs; this entry is the
+record.
+
+*Believed:* the core's i960 had only ever been checked against MAME, and
+p1-i960-spike.md §4 / §10 left three things open "until someone reads" the
+manual: whether MAME's cycle counts are Intel's, the instruction field
+positions, and (implicitly) every place where MAME and the silicon might
+differ. Daytona #34 raised the question whether MAME can be wrong where the
+cabinet is right (R969 has since found #34 to be the arcade's own
+behaviour), so the manual is the reference now -- and current play is not
+proof of correctness (Ben).
+
+*Measured context:* every one of the 16 game sets runs with AC =
+0x3F00_1000 after its first 0-5 frames (MAME, AC sampled each frame):
+rounding control 00 (PRM 3-11 Table 3-4: round to nearest EVEN), all five FP
+faults masked, normalising mode on, integer overflow masked. Every game's
+ICR is 0x0f0e0d0c (all four pins priority 1) and every game sends one IAC,
+the 0x93 reinitialise. clk_i960 is 40 MHz on main, model2a and model2c
+(pll.v; Model2.sv's "25 MHz" comments are stale); the chip runs 25 MHz.
+
+*What was wrong in this study (corrected here, not silently):*
+  1. R12 said the manual specifies "the truncated low 32 bits" for a masked
+     cvtri overflow. PRM 11-50 says the maximum positive or maximum negative
+     integer by sign. The core's 0x8000_0000 is right for negative and NaN
+     (12-23), wrong for positive overflow (no game reached it).
+  2. p1-i960-spike §8.2 took MAME's round-half-away-from-zero as the
+     mode-00 rule ("it is not round-to-nearest-even"). That is MAME's C
+     round(); Intel's mode 00 is ties-to-even. Measured with a
+     breakpoint on every cvtri: Daytona 89 results off by one in 150 s (pcs
+     0x68ac, 0x172a4/0x172c0, 0xc870, 0x11be0/0x11c04, 0x109b0, 0x6900,
+     0x964c), VF2 3,175 in 120 s (mostly 0x28ad4), Virtua Cop 2 14 in 120 s;
+     no other game runs cvtri or roundr. MAME has the same fault, so the core
+     equals MAME today and differs from the cabinet.
+  3. R21 asked for silicon evidence before touching the interrupt priority
+     OR: PRM 8-5/8-6 gives it -- the priority is SET to the interrupt's and
+     trace-enable cleared. Unreachable on Model 2 (every pin priority 1).
+  4. The spike's "field positions transcribed, not verified" is closed: REG,
+     COBR, MEMA and MEMB fields and both displacement widths match App. B.
+     One place where the MANUAL is wrong: it says compare-and-branch targets
+     are relative to the next instruction (11-20, 11-42..44, B-4); ROM
+     evidence in all 17 programs (targets landing on the second word of
+     two-word instructions: Daytona 15 / 1,937 by the core's reading, 437 by
+     the manual's) says the core's instruction-relative reading is the
+     silicon's.
+  5. The register cache: PRM C-6 / C-14 give the chip FOUR sets including
+     the current one (3 saved), the oldest flushed on demand. MAME (and
+     main) keep 4 saved + current and spill every call past them; 2A/2C's
+     R927 ring keeps 8 saved. R927 described the chip's rule correctly but
+     not its depth.
+
+*Timing (Appendix C transcribed in the audit):* MAME's per-instruction
+figures are Appendix C's typical or top-of-range values (mov, shifts, emul,
+ediv, cvtir/cvtilr, scaler and expr are the exceptions; sinr / sinrl / sqrtr
+have no Intel figure and MAME copies cosr / cosrl / sqrtrl). What MAME omits
+is the machine: wait states, 512-byte I-cache misses, the +24 cycles per
+register-set flush or reload, bypass and condition-code penalties,
+load/store overlap and the multiply early out. So R8's rule held in the
+way that matters: the numbers are Intel's, the model built from them is
+not the chip. Measured on i960_top with a directed harness
+(sim/i960/audit/, fixed bus latency L), core ns at 40 MHz against chip ns at
+25 MHz: simple ALU 50 vs 40-80; mulo 150 vs 360-840; divide 975 vs 1,480;
+call 275 vs 360, ret 375 vs 280; a call that spills on main ~4,150 on the
+board vs 1,320 (and only when all four sets are in use); ld ~237 (no
+overlap) vs 160-200 (net 40-80 overlapped); st waits (L+4) vs posted 2-3;
+basic FP 3-14x faster than the chip; sinr/cosr 3.0-3.7x, tanr 8.9-9.3x,
+atanr 7.5-9.6x SLOWER (R845's serial double-double microcode, ~7 cycles a
+micro-op). Daytona's busy code on main: ~236-334 ns an instruction against
+an estimated ~120-200 ns on the chip (+-50%, the wait-state format being
+unknown) and 92 ns in MAME.
+
+*The other differences* (all with fix, cost and proof in the audit): subc's
+carry sense (the core and MAME treat C as a borrow; 11-119 is misprinted and
+11-57's dsubc reads as carry / not-borrow; VF2 runs 6 subc in 90 s on a
+64-bit counter; the games' own compiled chains clear C first, which suits
+the core's sense -- a board test decides, not the manual); subnormals
+flushed (every 2A/2B/2C game builds a 32,768-entry exponent table at boot
+from logbnr; 126 bytes differ from the chip AND from MAME); addc/subc keep
+cc bit 2; dmovt clears AC[31:16]; modi tests the truncated product's sign;
+AC.of and the FP flags never set; no fault mechanism; faultno a branch;
+IACs 0x40/0x89/0x91/0x92 ignored; movre into fp3 writes the SAT (DOA runs
+it, never reads the SAT back); NaN payloads dropped; AC rounding mode
+ignored by the arithmetic units; double rounding when a single-destination
+op reads a double from fp0-fp3 (~2^-29 an op). None of those is reached in
+a way that changes a value in the logged sessions except subc and the
+logbnr table.
+
+*fp0-fp3 and the 64-bit decision (spike §8), measured:* Daytona, VF2 and
+VC2 never touch fp0-fp3; every other game writes them only with exact
+values (movr, movrl, cvtir, cpysre, movre) and no arithmetic result is ever
+written there. Single-in, single-out arithmetic computed in double and
+narrowed equals one correct rounding (53 >= 2 x 24 + 2; 20 M random pairs per
+operation, exponents up to 60 apart: 0 differences). So the decision
+stands, now on evidence, with the mixed-precision double rounding as its
+only, practically unreachable, exposure.
+
+*Recommended order (Ben decides):* (1) cvtri ties-to-even and positive
+saturation, 30-50 ALM -- the one documented, cheap difference a game
+reaches; changes Daytona, VF2 and VC2 toward the cabinet. (2) Before any
+speed change on main, the timer check: do Daytona, Virtua Cop and Desert
+Tank read their timers inside a frame and branch on them (Rally does,
+R926)? MAME is faster than the chip and main slower. (3) The chip's register-set rule on main (a
+4-slot ring capped at 3 saved, plus R927's data cache), then Virtua Cop's
+#28 window. (4) The zero-cost conformance batch (cc bit 2, dmovt, modi,
+faultno, interrupt priority, movre/SAT, subnormal single inputs). (5)
+Speed-only work: overlapped transcendental micro-ops (Manx TT), a store
+buffer and burst ldq/stq (measure Motor Raid #25 first); 2A's ring depth to
+3 only with burst spills. (6) subc only after a board test. (7) The rest
+when a game is found that reaches it.
+
+*Not settled:* subc on silicon; the wait-state format (R904); the chip's
+real busy CPI and interrupt latency; per-game call depth on main; what IAC
+0x93 does to priority / AC; what opcode 6E1 is on the silicon (the manual
+says movre is 6E9; DOA runs 6E1). Desert Tank was not run (its parent set
+is missing locally); Motor Raid, Dynamite Cop, Sky Target, Pilot Kids, HPY
+and the 2C sets have form logs and static scans only.
