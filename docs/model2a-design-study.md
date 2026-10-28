@@ -44852,7 +44852,8 @@ MAME's own figures (hints about the work, not hardware facts):
     list -- 96% of m2_quad_store's NQ 2,048 (below).
   * Real hardware: nothing in the repository or the study says whether the
     cabinet slows here. MAME's i960 at 25 MHz does this work in well under a
-    vblank, which says nothing about the real chip's speed (CLAUDE.md).
+    vblank, which says nothing about the real chip's speed (the project
+    rules: never treat a MAME cycle count as a hardware fact).
 
 *EACH STAGE OF THIS CORE, MEASURED (benches, clk_sys 80 MHz; a vblank is
 17.39 ms; the board/bench factor ~1.2-1.3x is R814's / R855's, INFERRED):*
