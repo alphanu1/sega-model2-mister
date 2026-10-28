@@ -37875,7 +37875,63 @@ changes that remove the climb would be edits to the game's behaviour
 (forcing a response the code does not ask for), not a correction of the
 emulation, and none has been made.
 
-*Tools (committed):* tb_tgp_replay TGPTRACE (above);
+*Fourth pass: the i960's precision, against Intel's manual, not MAME.*
+Ben: MAME is not the reference here; the 80960KB keeps fp0-fp3 in 80-bit
+extended, the core (p1-i960-spike.md section 8) and MAME in 64-bit double.
+Source: 80960KB Programmer's Reference Manual, March 1988 (local copy,
+git-ignored): reals in global / local registers are 32-bit (ch. 12, "the
+processor assumes that global- or local-register operands contain real
+(32-bit) values"); "the processor rounds results according to the
+destination format ... and the setting of the rounding-mode flags"
+(ch. 12, Rounding Control); AC[31:30] = 00 is "round to nearest (even)"
+(Table 3-4). Daytona's AC is 0x3f001002 (MAME's state at 60 s): round to
+nearest even.
+  * WHAT THE AI PATH USES. Static: every FP instruction in 0x8000-0x18000
+    (the AI handlers, contact, steering, height, wall and ground code), 316
+    sites: addr 102, subr 105, cmpr 29, cvtri 43, cvtir 23, scaler 12,
+    cvtzri 2 -- every operand a global / local register, none fp0-fp3, no
+    long-real form. Dynamic: a MAME trace of the whole program over frames
+    9150-9152 (312,209 instructions) -- 2,106 FP instructions, the same
+    seven, ZERO references to fp0-fp3 anywhere. No intermediate is ever
+    held in an extended register; every result is rounded once to real.
+    80-bit registers therefore cannot change this path.
+  * EVERY RESULT AGAINST THE MANUAL'S SEMANTICS. sim/io/i960_kb_fpcheck.py
+    (new): a breakpoint on each of the 316 sites logging sources and
+    destination, frames 9105-9175 (before car 33's hit to after it reaches
+    the wall polygon, all cars), and an exact model (Python Fraction: the
+    exact result, one rounding to real, nearest-even, denormals; cvtri by
+    nearest-even, cvtzri truncating, cvtir and scaler rounded to real):
+    35,978 results -- addr 8,415, subr 11,718, cvtri 12,489, cvtzri
+    2,810, cvtir 406, scaler 140 -- 0 differ from what MAME computed
+    (and the core computes the same: its FP units are proven against that
+    arithmetic). The check itself was broken on purpose (one ulp added to
+    odd results): 4,084 differences reported, so it does see a change.
+  * SO THE EXTENDED MODEL DOES NOT MOVE THE CAR: same speeds, same
+    positions, same polygon at frame 9166. p1-i960-spike section 8's
+    64-bit decision is NOT shown wrong by this: Daytona does not use the
+    extended registers on this path. (Other games may; the whole-i960
+    audit against the manual should look.)
+  * A REAL SILICON DEVIATION FOUND ON THE WAY, not the cause here: cvtri
+    (and roundr) in mode 00 -- the manual says nearest EVEN; this core
+    (i960_fpmisc.sv, "half away from 0") and MAME (round()) round halves
+    away from zero. Differs only for inputs exactly n + 0.5; none of the
+    12,489 cvtri here had one. A second, rarer one: the core's single-real
+    add and subtract are computed in double and then narrowed, two
+    roundings, where the KB rounds once; it can differ only when the
+    operands' exponents are 30 or more apart and the double result sits on
+    a single-precision half-way point; 0 cases in 20,133 here. Both are
+    for the i960 audit to price and fix on their own evidence.
+  * WHAT ELSE IN THE SILICON COULD DIFFER, still open: the TGP (no Fujitsu
+    MB86233 / MB86234 manual found; its polygon search was shown not to be
+    near any threshold); the ROM revision on the cabinet Ben remembers
+    (Revision A and Deluxe '93 carry the same wall thresholds, program
+    ROM 0x31ef8 / 0x35284 -- other revisions not checked); and inputs that
+    shape the scene earlier in a race (AI pace from difficulty and the
+    game's catch-up), which change where and how fast a car meets a wall
+    but not the class-2 rule that lets it onto the wall below 300.
+
+*Tools (committed):* sim/io/i960_kb_fpcheck.py (above);
+tb_tgp_replay TGPTRACE (above);
 sim/tgp/mame_tgp_fmode.patch (above);
 sim/io/mame_m2_daytona_ap.lua (autopilot, APLOG,
 STRUCTLOG, INREC, AP_ZONES, AP_LATOFF, AP_CHAIN, snapshots);
