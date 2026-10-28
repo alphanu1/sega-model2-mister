@@ -37706,6 +37706,11 @@ never lets the car onto or through the wall -- was wrong, and the first
 pass's conclusion stands: it is the game's own wall code (no wall response
 below the class's speed threshold, a 1/16-rate steer back), and the core,
 like MAME, reproduces the arcade. #34 is the game's behaviour, not a fault.
+A second real-cabinet reference, also found by Ben: a Daytona USA cabinet
+playthrough (YouTube qOPltm7qw94, "Daytona USA Arcade Cabinet - Top ranking
+all circuits playthrough", channel Goji Ateam TV) shows a car's wheels
+clipping through its own bonnet. That is the arcade's geometry too: a report
+of it on the core is not a core fault.
 Kept from the later passes: the exact model of the 80960KB's
 single-precision rules (sim/io/i960_kb_fpcheck.py), and two genuine
 deviations from Intel's manual found on the way (cvtri rounding halves away
