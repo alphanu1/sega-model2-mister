@@ -37708,7 +37708,7 @@ below the class's speed threshold, a 1/16-rate steer back), and the core,
 like MAME, reproduces the arcade. #34 is the game's behaviour, not a fault.
 A second real-cabinet reference, also found by Ben: a Daytona USA cabinet
 playthrough (YouTube qOPltm7qw94, "Daytona USA Arcade Cabinet - Top ranking
-all circuits playthrough", channel Goji Ateam TV) shows a car's wheels
+all circuits playthrough", channel Goji Ateam TV, at 4:42) shows a car's wheels
 clipping through its own bonnet. That is the arcade's geometry too: a report
 of it on the core is not a core fault.
 Kept from the later passes: the exact model of the 80960KB's
