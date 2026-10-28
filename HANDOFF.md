@@ -1,5 +1,29 @@
 # Handoff
 
+## 2026-10-28: FFB build CLEAN -- s1572, every clock at Slow 100C, HDMI included (R968 addendum)
+
+  * Model2_ffb_s1572.rbf (worktree root, git-ignored; build/seeds/s1572),
+    commit 3f52ee0d, md5 3e4c749bec6d5a3db3fc62373ad14519. Slow 1100mV 100C:
+    clk_sys +0.474, clk_mem +0.824, i960 +2.183, HDMI +0.103; hold >= +0.210,
+    recovery >= +1.945, removal >= +0.703. ALM 39,056 / 41,910, M10K 551/553,
+    DSP 101/112. Other corners: Slow -40C HDMI setup -0.151 (rest positive),
+    Fast 100C / -40C all positive. NOT on the board, NOT released, NOT pushed.
+  * Three changes, each proven identical: the Test button via a falling-edge
+    clk_sys register (no added clock; tb_r968_test_cdc.sv), m2_fb_wcomb's
+    mask word ungated by c_go, and its window key compare in a register keq
+    (sim/miter/wcomb.sh 98.6M cycles 0 differing; sim/miter/wcomb_keq.sh
+    yosys induction PROVEN; mutations caught).
+  * s1570 HDMI -0.187 (OSD compares), s1571 clk_sys -0.078 (m2_fb_read ->
+    f2sdram). Fits ran ~75 min each on a loaded machine (load ~60).
+  * Wrong on the way: a seed folder used as the "old tree" for a miter
+    compares the new file with itself (rtl/ is a symlink) -- use git archive.
+    And the first s1570-s1572 launch mapped while rtl/ was being edited; it
+    was killed and re-run. Don't edit rtl/ during a sweep's maps.
+  * hps_io.sv is byte-identical to Template_MiSTer 356951d (PR #122, merged
+    upstream as 76dd8f5).
+  * Main's release Model2_20261026 (s1511) is HDMI -1.465: main is clean on
+    the core clocks only, so this build is stricter than main's.
+
 ## 2026-10-27 (night): FFB build timing -- four of our paths shortened (R968), no clean seed yet
 
   * The FFB parameter commit (9256c1b) changed nothing synthesised (same map

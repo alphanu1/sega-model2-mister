@@ -38032,3 +38032,77 @@ slow input taken flop to flop across 80 -> 40 MHz; any fix adds a clock of
 latency to a button, so it is not "identical" and is Ben's call),
 m2_fb_wcomb's b_key / wlo paths, and the DSP placement question (ascal's multipliers into logic -- an area cost --
 or a LogicLock for the HDMI domain).
+
+*R968 addendum (2026-10-28): three more of ours, and s1572 closes on every
+clock at Slow 1100mV 100C, HDMI included.*
+1. *The Test button crossing* (s1547 i960 hold -0.338). hps_io's
+   joystick_0[8] now reaches m2_vcop_state's t_q through a register on
+   clk_sys's FALLING edge (Model2.sv, vc_test_n). It is launched 6.25 ns
+   after a clk_i960 edge and 6.25 ns before the next, so hold and setup both
+   have 6.25 ns of relationship instead of 0 and 12.5, and t_q takes every
+   change on the same clk_i960 edge as before -- it costs no clock, where
+   the option offered (a second clk_i960 register) cost one. This is the
+   only consumer: t_q drives the crosshairs' test latch, not the game's
+   Test input. Proof: sim/io/tb_r968_test_cdc.sv (iverilog; both crossings
+   into two m2_vcop_state copies, presses as short as one clk_sys cycle,
+   the clocks' rising edges aligned as the PLL has them): 2,000,000
+   clk_i960 cycles, 0 differing in t_q / tl / play; a rising-edge register
+   instead differs on 26,090 of 200,000. A first run with the clocks out of
+   phase (clk_sys starting low) "failed" on 13% of cycles -- the bench, not
+   the design. s1572: joy8 -> vc_test_n setup +3.967 / hold +7.358,
+   vc_test_n -> t_q setup +3.201 / hold +6.524.
+2. *m2_fb_wcomb, the mask word written back* (s1547 wlo -> the mask MLAB's
+   write data -0.312, 9 levels). b_wd takes {hi_on, lo_on} ungated by
+   c_go. It is read only under pg_we (m2_raster3d writes mk_a, the span_tex
+   copy and its bypass under mk_we = fbw_we) and in the a_same bypass, both
+   of which imply c_go, and there the word is the same; so c_fits leaves the
+   data path and stays only on the write enable.
+3. *m2_fb_wcomb, the window key compare in a register* (s1546 b_key -> vlo
+   -0.411; b_key had 137 loads). keq[k] holds (wkey[k] == b_key), computed
+   from both registers' next values (nkey on a_go; b_key into a fresh
+   window's key), so c_fits starts from keq[ib] and the 13-bit compare is
+   off the path into the valid bits. Reset 2'b11 (both keys zero).
+   Proofs of 2 and 3: sim/miter/wcomb.sh (R952's miter, old and new
+   m2_fb_wcomb side by side under the write-path chain bench with WCOMB=1
+   FTB=1, every output every cycle, pg_wd compared under pg_we): BUSY 0 /
+   300 / 900 x seeds 1 / 7 / 12345 at 200,000 spans (10x the bench's
+   default), 98,624,383 cycles, 0 differing, and pg_wd differs while unread
+   on 2.0M-20.9M cycles a run, so the change is exercised; mutation (the
+   mask bit one pixel off) 687,250 of 687,257 differ. CAUGHT ON THE WAY: a
+   seed folder's rtl/ is a symlink to the worktree, so passing build/seeds/
+   s1548 as the "old tree" compared the new file with itself and showed 0
+   unread differences -- the old tree must be a `git archive` of the old
+   commit. keq's invariant: sim/miter/wcomb_keq.sh (yosys sat
+   -tempinduct, FTB 1, reset at step 1): PROVEN at induction length 1; with
+   the a_go branch removed, NOT PROVEN. Benches test_m2_fb_wcomb (43
+   checks) and test_m2_fbw_chain (all nine) PASS; lint_top clean; lint_idx
+   141 lines, none new; quartus_map --analyze_file 0 errors on Model2.sv,
+   m2_fb_wcomb.sv, m2_vcop_state.sv. test_m2_vcop_state was not run: its
+   MAME logs (build/vcopstate) are not in this tree; the module changed only
+   in a comment.
+*Process fault, recorded:* the first launch of s1570-s1572 began quartus_map
+at 18:05:53 while keq's update block was still being written (file mtime
+18:06:11), so the map may have read a keq that never updates. It was killed
+and re-run from the committed tree (3f52ee0d). Do not edit rtl/ while a
+sweep's maps are running: the seed folders read it through the symlink.
+
+*Fit (Quartus 17.0, 3f52ee0d, Slow 1100mV 100C):*
+
+   | seed  | clk_sys | clk_mem | i960   | HDMI   | hold   | recovery | removal | ALM    |
+   |-------|---------|---------|--------|--------|--------|----------|---------|--------|
+   | s1570 | +0.024  | +0.476  | +1.735 | -0.187 | +0.229 | +1.452   | +0.831  | 39,097 |
+   | s1571 | -0.078  | +0.629  | +1.413 | +0.198 | +0.171 | +1.125   | +1.050  | 39,122 |
+   | s1572 | +0.474  | +0.824  | +2.183 | +0.103 | +0.210 | +1.945   | +0.703  | 39,056 |
+
+s1572 is clean on every clock, setup, hold, recovery and removal, HDMI
+included: assembled, md5 3e4c749bec6d5a3db3fc62373ad14519. M10K 551/553,
+DSP 101/112, registers 49,937 at map. Other corners (quartus_sta, every
+operating condition): Slow 1100mV -40C setup HDMI -0.151 (everything else
+positive: clk_sys +0.432, clk_mem +0.443, i960 +1.761, hold +0.096);
+Fast 100C / Fast -40C all positive (worst setup +2.886 / +3.528, worst
+hold +0.100 / +0.079 clk_mem, removal +0.302 / +0.258). s1570 failed HDMI
+on the OSD's compares (h_cnt -> multiscan / osd_en); s1571 clk_sys on
+m2_fb_read tgt_y -> the HPS f2sdram port (-0.078). Neither the Test path
+nor any wcomb window path is in the worst 20 hold / 60 setup paths of
+either. For comparison, main's release Model2_20261026 (s1511) is HDMI
+-1.465 at this corner: it is clean on the core clocks only.
