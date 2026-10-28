@@ -5,6 +5,8 @@
 --   TGPCAP_DIR     output directory (must exist)
 --   TGPCAP_START   first frame at which the snapshot may be taken (default 5200)
 --   TGPCAP_FRAMES  frames to record after the snapshot (default 30)
+--   TGPCAP_NOINPUT set: press no coins or start (another script drives, e.g.
+--                  sim/io/mame_m2_daytona_ap.lua with AP_CHAIN=<this file>)
 --
 -- METHOD. Everything that crosses the TGP's boundary is tapped from power-on,
 -- but only counted until the window opens:
@@ -40,6 +42,7 @@
 local outdir = os.getenv("TGPCAP_DIR") or "."
 local START  = tonumber(os.getenv("TGPCAP_START") or "5200")
 local NFR    = tonumber(os.getenv("TGPCAP_FRAMES") or "30")
+local NOINPUT = os.getenv("TGPCAP_NOINPUT") ~= nil
 
 local m    = manager.machine
 local cpu  = m.devices[":maincpu"]
@@ -203,11 +206,12 @@ end
 
 SUB = emu.add_machine_frame_notifier(function()
   frame = frame + 1
-  -- inputs: race.lua's sequence (3 coins, then start presses)
-  for _, f in ipairs({3000, 3020, 3040}) do
+  -- inputs: race.lua's sequence (3 coins, then start presses), unless
+  -- another script drives (TGPCAP_NOINPUT=1, e.g. sim/io/mame_m2_daytona_ap.lua)
+  for _, f in ipairs(NOINPUT and {} or {3000, 3020, 3040}) do
     if frame == f then coin:set_value(1) elseif frame == f + 8 then coin:set_value(0) end
   end
-  for _, f in ipairs({3100, 3500, 3700, 3900, 4300, 4500}) do
+  for _, f in ipairs(NOINPUT and {} or {3100, 3500, 3700, 3900, 4300, 4500}) do
     if frame == f then start:set_value(1) elseif frame == f + 10 then start:set_value(0) end
   end
   if done then return end

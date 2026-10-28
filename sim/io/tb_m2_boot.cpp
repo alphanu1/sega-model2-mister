@@ -343,6 +343,112 @@ template <class D> void report(D *d) {
 }
 } // namespace m2lk
 
+// #34: DAYTONA USA DRIVEN BY THE BENCH, AND ITS CAR TABLE LOGGED -- the
+// whole-core reproduction of an AI car pushed through the wall. The table, as
+// sim/io/mame_m2_daytona_ap.lua found it in MAME's work RAM: car k (0 = the
+// player, 1-39 the field) at 0x505100 + 0x300 k, +0x9c / +0xa0 / +0xa4 its
+// x / y / z (floats). Work RAM is the harness's word 0x1600000 on.
+//   M2_DAYTONA_AP=<vblank>  from then on the autopilot drives (cab_an0-2):
+//                           the AI cars' trails, as the Lua does
+//   M2_DAYTONA_RAM=<vblank> from then on it aims at the nearest car ahead
+//                           (within 60 units), M2_DAYTONA_RAMOFF units to the
+//                           outside of the bend
+//   M2_CARLOG=<file>        every M2_CARLOG_N (4) vblanks from M2_CARLOG_FROM:
+//                           the vblank (u32) and the 40 x 0x300-byte table,
+//                           the Lua's STRUCTLOG format
+static uint32_t wr32(uint32_t a) {
+  const uint32_t w = 0x1600000u + ((a - 0x500000u) >> 1);
+  return uint32_t(mem[w]) | (uint32_t(mem[w + 1]) << 16);
+}
+static double wrf(uint32_t a) { const uint32_t u = wr32(a); float x; std::memcpy(&x, &u, 4); return double(x); }
+template <class D> static void daytona_vblank(D *d, uint64_t vbl) {
+  static const long long ap_from = std::getenv("M2_DAYTONA_AP") ? std::atoll(std::getenv("M2_DAYTONA_AP")) : -1;
+  static const long long ram_from = std::getenv("M2_DAYTONA_RAM") ? std::atoll(std::getenv("M2_DAYTONA_RAM")) : -1;
+  static const double ramoff = std::getenv("M2_DAYTONA_RAMOFF") ? std::atof(std::getenv("M2_DAYTONA_RAMOFF")) : 0;
+  static FILE *cl = std::getenv("M2_CARLOG") ? std::fopen(std::getenv("M2_CARLOG"), "wb") : nullptr;
+  static const uint64_t cl_n = std::getenv("M2_CARLOG_N") ? std::strtoull(std::getenv("M2_CARLOG_N"), nullptr, 10) : 4;
+  static const uint64_t cl_from = std::getenv("M2_CARLOG_FROM") ? std::strtoull(std::getenv("M2_CARLOG_FROM"), nullptr, 10) : 0;
+  const uint32_t CAR = 0x505100u;
+  if (cl && vbl >= cl_from && vbl % cl_n == 0) {
+    const uint32_t f = uint32_t(vbl);
+    std::fwrite(&f, 4, 1, cl);
+    for (uint32_t a = CAR; a < CAR + 0x300u * 40; a += 4) { const uint32_t u = wr32(a); std::fwrite(&u, 4, 1, cl); }
+    std::fflush(cl);
+  }
+  if (ap_from < 0 || (long long)vbl < ap_from) return;
+  static std::map<int, std::vector<std::pair<double, double>>> trail;
+  static std::map<int, std::pair<double, double>> lastp;
+  static double head = 0, ppx = 0, ppz = 0;
+  static bool have_p = false;
+  auto px_ = [&](int k) { return wrf(CAR + 0x300u * k + 0x9c); };
+  auto pz_ = [&](int k) { return wrf(CAR + 0x300u * k + 0xa4); };
+  for (int k = 1; k < 40; ++k) {
+    const double x = px_(k), z = pz_(k);
+    if (!(x == x) || !(z == z)) continue;
+    auto &tr = trail[k];
+    auto lp = lastp.find(k);
+    if (lp != lastp.end() && (x - lp->second.first) * (x - lp->second.first) + (z - lp->second.second) * (z - lp->second.second) > 400) tr.clear();
+    if (tr.empty() || (x - tr.back().first) * (x - tr.back().first) + (z - tr.back().second) * (z - tr.back().second) > 4) tr.push_back({x, z});
+    lastp[k] = {x, z};
+  }
+  const double px = px_(0), pz = pz_(0);
+  double spd = 0;
+  if (have_p) {
+    const double vx = px - ppx, vz = pz - ppz;
+    spd = std::sqrt(vx * vx + vz * vz);
+    if (spd > 0.03) head = std::atan2(vx, vz);
+  }
+  ppx = px; ppz = pz; have_p = true;
+  const double kmh = spd * 60 * 3.6;
+  double best = 1e30; const std::vector<std::pair<double, double>> *bt = nullptr; size_t bi = 0;
+  for (auto &kv : trail)
+    for (size_t i = 0; i + 1 < kv.second.size(); ++i) {
+      const double dd = (kv.second[i].first - px) * (kv.second[i].first - px) + (kv.second[i].second - pz) * (kv.second[i].second - pz);
+      if (dd < best) { best = dd; bt = &kv.second; bi = i; }
+    }
+  auto ahead = [&](double dist, double &ax, double &az) {
+    ax = px + 30 * std::sin(head); az = pz + 30 * std::cos(head);
+    if (!bt) return;
+    double acc = 0; size_t i = bi;
+    while (i + 1 < bt->size() && acc < dist) {
+      acc += std::hypot((*bt)[i + 1].first - (*bt)[i].first, (*bt)[i + 1].second - (*bt)[i].second); ++i;
+    }
+    ax = (*bt)[i].first; az = (*bt)[i].second;
+  };
+  auto wrapa = [](double a) { while (a > M_PI) a -= 2 * M_PI; while (a < -M_PI) a += 2 * M_PI; return a; };
+  double tx, tz;
+  ahead(25 + 0.1 * kmh, tx, tz);
+  int target = -1;
+  if (ram_from >= 0 && (long long)vbl >= ram_from) {
+    double bd = 60.0 * 60.0;
+    for (int k = 1; k < 40; ++k) {
+      const double x = px_(k), z = pz_(k);
+      const double dd = (x - px) * (x - px) + (z - pz) * (z - pz);
+      if (dd < bd && std::fabs(wrapa(std::atan2(x - px, z - pz) - head)) < 1.0) { bd = dd; target = k; }
+    }
+    if (target > 0) {
+      double fx, fz;
+      ahead(60, fx, fz);
+      const double turn = wrapa(std::atan2(fx - px, fz - pz) - head);
+      const double sg = turn > 0 ? -1 : 1;
+      tx = px_(target) + sg * ramoff * std::cos(head);
+      tz = pz_(target) - sg * ramoff * std::sin(head);
+    }
+  }
+  const double err = wrapa(std::atan2(tx - px, tz - pz) - head);
+  int st = int(std::floor(err * 200));
+  st = st < -0x7f ? -0x7f : st > 0x7f ? 0x7f : st;
+  const bool brk = std::fabs(err) > 0.5 && kmh > 90;
+  // only once the player's car has moved: the menus read the wheel and pedals too
+  static bool moving = false;
+  if (spd > 0.05) moving = true;
+  if (moving) { d->cab_an0 = 0x80 + st; d->cab_an1 = brk ? 0 : 0xff; d->cab_an2 = brk ? 0xff : 0; }
+  else { d->cab_an0 = 0x80; d->cab_an1 = 0x20; d->cab_an2 = 0x20; }
+  if (vbl % 60 == 0)
+    std::printf("    AP v%llu P %.1f %.1f kmh %.0f err %.3f steer %02x target %d\n", (unsigned long long)vbl,
+                px, pz, kmh, err, unsigned(d->cab_an0), target);
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t max_instr = 3'000'000;
@@ -416,6 +522,10 @@ int main(int argc, char **argv) {
   // M2_BOOT_IMAGE. It is loaded at word 0, exactly as the loader places it, so
   // every bridge address translation is exercised against real data.
   if (const char *ip = std::getenv("M2_BOOT_IMAGE")) {
+    // #34: Revision A's image runs to word 0x1770000, over the harness's work,
+    // board, buffer, display-list and texture RAM (0x1600000 up), which the
+    // board keeps apart from the ROM. Kept here and put back below.
+    const std::vector<uint16_t> ram_keep(mem.begin() + 0x1600000, mem.begin() + 0x1780000);
     std::vector<uint8_t> full;
     if (load_file(ip, full)) {
       const size_t nw = full.size() / 2;
@@ -431,8 +541,8 @@ int main(int argc, char **argv) {
       // appended after the '93 image's end; the loader puts it at GAME_POLYX.
       if (std::getenv("M2_REVA")) {
         for (size_t w = 0; w < 0x180000 && 0x15F0000 + w < nw; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
-        for (size_t w = 0x1600000; w < 0x1610000; ++w) mem[w] = 0xffff;
-        std::printf("  REVISION A: polygons 13-16 MB copied to word 0x1880000\n");
+        std::copy(ram_keep.begin(), ram_keep.end(), mem.begin() + 0x1600000);
+        std::printf("  REVISION A: polygons 13-16 MB copied to word 0x1880000, RAM 0x1600000-0x177ffff as before the image\n");
       }
       if (std::getenv("M2_VCOP")) {
         for (size_t w = 0; w < 0x20000; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
@@ -1508,13 +1618,17 @@ int main(int argc, char **argv) {
     if (const char *cv = std::getenv("M2_IN0")) c = std::strtoul(cv, nullptr, 16);
     d->cab_in0 = c;
     d->cab_in1 = 0x8f;
+    d->cab_an0 = 0x80; d->cab_an1 = 0x20; d->cab_an2 = 0x20;   // #34: wheel centred, pedals up
     if (c != 0xff) std::printf("  CABINET in0 = %02x (bit2 clear = TEST held)\n", c);
   }
   int slow_prev = 0;
   int cpu_prev = 0;
   auto base_step = [&]() {
     const int m = int((base_t / 2) & 1);
-    const int v = int((base_t / 3) & 1);
+    // #34: M2_BOARDCLK=1 -- the board's ratios, clk_sys 80 : clk_vid 32 :
+    // clk_i960 40 (half-periods 2 / 5 / 4 base steps), the vblank to match
+    static const bool board_clk = std::getenv("M2_BOARDCLK") != nullptr;
+    const int v = int((base_t / (board_clk ? 5 : 3)) & 1);
     const int c = int((base_t / 4) & 1);
     // FRAME CAPTURE, on the falling edge of ce_pix so the pixel is settled.
     // This is the picture the renderer produces WHILE the CPU is running, which
@@ -1881,7 +1995,9 @@ int main(int argc, char **argv) {
   std::map<uint32_t,uint64_t> pc_hist;
 
   // V-blank at 57.52 Hz against a 48 MHz mem clock.
-  const uint64_t VBL = uint64_t(48e6 / 57.52);
+  // #34: M2_BOARDCLK, the board's 80 MHz clk_sys (the bench's clk_m)
+  const uint64_t VBL = uint64_t((std::getenv("M2_BOARDCLK") ? 80e6 : 48e6) / 57.52);
+  if (std::getenv("M2_BOARDCLK")) std::printf("  BOARD CLOCKS: clk_m 80, clk_cpu 40, clk_vid 32 MHz; vblank every %llu clk_m\n", (unsigned long long)VBL);
   uint64_t next_vbl = VBL, vblanks = 0;
   uint64_t first_win_rd = 0;
   FILE *out = outfile ? std::fopen(outfile, "wb") : nullptr;
@@ -2086,6 +2202,7 @@ int main(int argc, char **argv) {
           ++si;
         }
       }
+      daytona_vblank(d, vblanks);         // #34: autopilot and car log
       d->irq = 0x1;                       // level, cleared below
       m2lk::tick_req = true;              // R916: the link board's tick
     } else if (d->irq) {

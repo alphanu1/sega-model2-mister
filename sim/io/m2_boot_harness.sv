@@ -98,6 +98,11 @@ module m2_boot_harness #(
   input  logic  [7:0] cab_in0,
   // IN1 (R929): Daytona's 0x8F unless the testbench schedules another (M2_INSCHED)
   input  logic  [7:0] cab_in1,
+  // #34: the I/O board's analog channels 0-2 (Daytona: steering, accelerator,
+  // brake); the testbench holds 0x80 / 0x20 / 0x20 unless its autopilot drives
+  input  logic  [7:0] cab_an0,
+  input  logic  [7:0] cab_an1,
+  input  logic  [7:0] cab_an2,
   // DO THE TWO SIDES ACTUALLY COLLIDE? Testable rather than assertable: count
   // cycles where the game is inside the block window AND the Z80 is writing it.
   // Zero collisions would mean the BUSY fix addresses nothing.
@@ -734,7 +739,7 @@ module m2_boot_harness #(
     // The board's own DIP banks. Daytona defines all 24 bits PORT_DIPUNUSED
     // with the default equal to the mask, so each bank reads 0xFF.
     .dsw1(8'hFF), .dsw2(8'hFF), .dsw3(8'hFF),
-    .adc0(8'h80), .adc1(8'h20), .adc2(8'h20), .adc3(8'h80),
+    .adc0(cab_an0), .adc1(cab_an1), .adc2(cab_an2), .adc3(8'h80),
     .z_we(zio_we), .z_addr(zio_addr), .z_wdata(zio_wdata), .z_rdata(zio_rdata),
     .dbg_ee(), .dbg_wrcnt(), .dbg_wr_stb(), .dbg_dout(), .dbg_di(),
     .dbg_rd_end(), .dbg_ra(), .dbg_rdat(),

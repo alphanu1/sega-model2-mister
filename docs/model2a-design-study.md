@@ -37690,3 +37690,109 @@ verilator -Wall on the module clean for (V2, HD) = 00 / 10 / 11; quartus_map
 17.0 --analyze_file 0 errors.
 
 *LEFT:* the fit and the board (Ben).
+
+**R969 -- DAYTONA'S AI CAR THROUGH THE WALL (GITHUB #34): REPRODUCED IN
+MAME, AND IT IS THE GAME'S OWN CODE THAT LETS IT THROUGH. THE CORE'S TGP
+IS BIT-EXACT WITH MAME ACROSS THE SESSION. NO RTL CHANGE. BRANCH
+daytona-wall (OFF main), NOT FITTED.**
+
+*The report:* hitting an AI car into the wall at the Beginner course's
+"second hairpin" sometimes sends it through the wall, visible on the far
+side; seen on the board. The reporter then made it happen in MAME too, and
+Ben says a real cabinet does not do it. By this study's order of authority
+MAME is a reference, not the last word -- so the question was where MAME
+(and the core, which follows it) could differ from the silicon.
+
+*Reproduced in MAME 0.289 (daytona, Revision A).* sim/io/mame_m2_daytona_ap.lua
+(new) coins up, lets the selections time out (Beginner, Automatic) and
+drives the race on the AI cars' own trails; from AP_RAM it rams the nearest
+car ahead, AP_RAMOFF units to the outside of the bend. With AP_RAM=50
+AP_RAMOFF=3: car 33 is hit at frame ~9155 on the left hairpin (the Sonic
+rock face), climbs the outer wall's collision surface for 37 frames
+(9166-9202) to 15.3 units outside the lane tables where the player, driven
+40 units outward on purpose (AP_LATOFF), never gets past 11.0 (5.5 on the
+bottom bend), and to y 13.4 where the road is ~8; the snapshots show it
+behind the "Sao Paulo" banner, then it drives back down onto the road at
+frame 9203. A second case: z_L_6's car 1, hit near the bottom bend, goes
+~15 units past the wall line behind the player. MAME runs are
+deterministic (two runs of the same settings: identical every frame).
+
+*The mechanism, from the game's code (MAME's debugger, watch- and
+breakpoints, no symbols):*
+  * Every AI car runs handler 0xcfa0 (link cars 0xd06c). It does wall and
+    ground work only for cars in the frame's physics set (0x501520, grid
+    cells of 128 units around the player, kept by a view test against the
+    camera heading at 0x1770c -- read from the code, built at
+    0x172e8-0x17500); the rest move on the TGP's function 0x47 (pure
+    x += v sin a, z += v cos a, no clamp) with no ground query at all.
+  * The ground query, 0x11c28: TGP function 0x36 (point in polygon over a
+    16 x 16 grid of the collision mesh, answer through buffer RAM 0x91fff0)
+    gives the polygon and its surface bits (+0x1bc): 2 road, 0x20 wall.
+    Car 33's answers are right: road polygons 0x198 / 0x19b / 0x19e up to
+    frame 9165, wall polygons 0x410 / 0x3fa / 0x3eb / 0x400 / 0x3f5 from
+    9166 to 9202 (heights 9.7 -> 12.6 -> 9.2: the wall's collision surface
+    is a SLOPE that runs past the drawn wall), road 0x1aa from 9203.
+  * The wall response, 0x15be0 (called from 0x15d28 when the surface has
+    bit 2, 3 or 5 and +0xd2 / +0xd8 are 0): only above a speed threshold
+    from the table at 0x231f04 / 0x231ef8 indexed by +0x23a (class 2: 310
+    to slide along the wall, 300 to crash). Car 33 was doing 238-244: the
+    routine ran on all 37 frames and returned without acting (no slide
+    path 0x15bfc, no crash path 0x15c90). Below the threshold the only
+    response is 0x115e4's: on surface bits 0x21 the car steers back to its
+    lane at a sixteenth of the usual rate -- the slow turn back seen above.
+  * A hit car also skips its steering while a countdown runs (+0x211, set
+    by the contact code -- 0x158bc from the table at 0x2327a0, and other
+    writers; car 33: 14 frames, the second case's car 1: 108) and goes
+    straight; on a bend that is straight into the wall.
+Every decision on that path is an integer compare of game-table constants
+against the car's integer speed, or a surface code from a polygon search
+whose answers are geometrically right. Nothing on it is an FP edge case
+(the atan2 answers of TGP function 0x0f checked against the host over 243
+calls in the second case: worst 0.01 degrees).
+
+*The core against MAME over the session:* the TGP's boundary captured from
+frame 2900 for 3,001 frames of the ramming run (sim/tgp/tgp_capture.lua,
+new TGPCAP_NOINPUT so the autopilot drives; 12,509,484 words in, 3,802,756
+out, 7,543,028 io reads) and replayed through m2_copro: "PASS (bit-exact
+against MAME except NaN encoding)" -- every pop and io access equal, 695
+NaN payloads differ (MAME's host NaNs 7ffffc00 / ffc00000 / ffeaa8e4, the
+RTL's canonical 7fc00000) and 179 io-write data words with them. Those NaNs
+and infinities are the PLAYER's own car: i960 0x10074-0x101bc (TGP
+functions 03 / 1d / 1e / 25; an infinity out of 03, then NaN), in 411
+frames of the 200 s run; none reaches the AI or wall code. The i960 side is the
+lockstep-verified integer core; the path above uses no FP but the TGP's.
+So the core does what MAME does at this scene. The whole-core bench was not
+run to the scene: ~5 s a vblank on a quiet machine, ~2,600 vblanks to the
+rolling start and ~9,200 to this hit (13 hours, more with the machine
+loaded; two runs were started and stopped), and its timing is not MAME's, so the same hit would not happen on
+the same frame anyway.
+
+*So, against "MAME is wrong here":* nothing found where MAME or the core
+departs from what the code asks for. The game's code itself lets an AI car
+below ~300 onto the wall's sloped collision surface, past the drawn wall,
+with no bounce. If the arcade truly never shows it, the difference is in
+something this path does not exercise and this session did not see --
+candidates, untested: (1) the draw order -- the car is ~4 units past the
+wall plane and up its slope; Model 2 sorts polygons rather than z-buffering
+and MAME's sort is its own reading, so on the board the car might be drawn
+over the wall (looking like it scrapes along it) where MAME and this core
+draw it behind; (2) the speed at impact (the class-2 thresholds are 300 /
+310; a cabinet whose AI runs faster would bounce); (3) the hit countdown
+and launch, which come from the car-to-car collision code (0x157f0-0x158c4,
+TGP function 0x0f and 0x43). None of these is MAME arithmetic the core
+could change without evidence. NEEDED FROM A CABINET: a video of a slow
+AI car pushed into the left hairpin's outer wall.
+
+*Tools (committed):* sim/io/mame_m2_daytona_ap.lua (autopilot, APLOG,
+STRUCTLOG, INREC, AP_ZONES, AP_LATOFF, AP_CHAIN, snapshots);
+sim/tgp/tgp_capture.lua TGPCAP_NOINPUT; tb_m2_boot: M2_DAYTONA_AP /
+M2_DAYTONA_RAM / M2_DAYTONA_RAMOFF (the same autopilot in the bench,
+steering / accelerator / brake on the I/O board's ADC 0-2 through new
+harness inputs cab_an0-2, idle 0x80 / 0x20 / 0x20 as before), M2_CARLOG
+(the Lua's STRUCTLOG format), M2_BOARDCLK (the board's 80 / 40 / 32 MHz
+ratios and vblank). *Bench fix:* with M2_REVA the 49 MB image ran over the
+harness's work, board, buffer, display-list and texture RAM (words
+0x1600000-0x177ffff), so a Revision A bench started with polygon ROM in
+work RAM and the buffer RAM's 0x07800f0f fill gone; those words are now put
+back after the polygons are copied out. test_m2_boot PASS, plain and
+Revision A, 2 M instructions.
