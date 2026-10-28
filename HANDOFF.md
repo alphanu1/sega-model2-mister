@@ -1,5 +1,13 @@
 # Handoff
 
+## 2026-10-28: releases/ is the same on main, model2a and model2c
+
+`releases/` now carries the Model 2C beta (`Model2C_20261027.rbf`, md5
+`4399bde5783ba6198bded9859e93ea07`, s1561), its six MRAs and the README's 2C
+section on every branch, not only model2c. From here a release goes into all
+three branches' `releases/` folders identically. The 2C core's RTL stays on
+model2c. Nothing was rebuilt.
+
 ## 2026-10-27: Model2A_20261027 -- the sound balance fixed (R967)
 
   * Model2A_20261027 = s1536 (model2a c856030 + study baaf186), md5
