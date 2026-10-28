@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-10-28 (later): releases/ is the same on main, model2a and model2c
+
+`releases/` now carries the Model 2C beta (`Model2C_20261027.rbf`, md5
+`4399bde5783ba6198bded9859e93ea07`, s1561), its six MRAs and the README's 2C
+section on every branch, not only model2c. From here a release goes into all
+three branches' `releases/` folders identically. The 2C core's RTL stays on
+model2c. Nothing was rebuilt.
+
+Daytona #34 (branch `daytona-wall`, pushed, R969): four passes, no core change.
+The AI path's i960 floating point was checked against the 80960KB manual with
+an exact model (`sim/io/i960_kb_fpcheck.py`): 35,978 results, 0 different;
+Daytona never uses the 80-bit registers there. Two real deviations from the
+manual found on the way (cvtri rounds halves away from zero, not to even;
+addr/subr round twice) go to the whole-i960 audit (branch `i960-audit`, local).
+
 ## 2026-10-28: Daytona #34 open, Main #1393 one probe, nothing released
 
 - **Daytona USA, GitHub #34: an AI car rammed into the wall at the Beginner
