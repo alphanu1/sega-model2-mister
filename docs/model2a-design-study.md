@@ -37828,7 +37828,55 @@ suspect is the polygon search itself (TGP function 0x36's edge test and
 nearest-height choice, 0x49a-0x50c), which no variant here touched because
 MAME's flag and branch semantics were kept.
 
-*Tools (committed):* sim/tgp/mame_tgp_fmode.patch (above);
+*BEN'S HARDWARE FACT (binding, recorded here): on a real cabinet the AI
+car never gets onto or through the wall at all, and is never hidden
+behind it.* So the visibility question is closed and the fault, if it is
+one, is the car reaching the wall polygon. Third pass, on the one suspect
+not yet touched -- the TGP's ground-polygon search, function 0x36 (TGP
+0x457-0x517; the edge test 0x49a-0x4a5, the nearest-height choice
+0x4e9-0x50c):
+  * TRACED. The TGP's traffic captured again around the event (frames
+    9142-9213 of the same run, AP_RAM=50 AP_RAMOFF=3; 310,707 words in,
+    81,982 out) and replayed through m2_copro (PASS, bit-exact except NaN
+    encoding), with a new trace in tb_tgp_replay (TGPTRACE / TGPTRACE_LO /
+    TGPTRACE_HI: pc, ir, a, b, d, p and the status word at every retire
+    in a pc range). Car 33's calls are the ones whose y matches its ground
+    queries (7.114 / 7.562 / 8.032 / 8.629 / 9.119 at frames 9163-9167).
+    The cell's list holds eight polygons; each is rejected on its first
+    failing edge (brif !ged on the fmsd result). Frame 9165: list polygon 4
+    accepted, its four edge products +96.93 / +4.830 / +23.08 / +94.34;
+    polygon 3 rejected on its fourth, -4.830 (the shared edge, the exact
+    negation). Frame 9166: polygon 4 rejected on its second edge, -2.350;
+    polygon 3 accepted, +104.4 / +170.8 / +38.37 / +2.350. One polygon
+    accepted in every call, so the nearest-height choice never chooses.
+    The car is 2.35 product units -- not a rounding, not a signed zero, not
+    an equal compare -- across the edge between the road (0x19e) and the
+    wall slope (0x410): the search answers what the geometry says.
+  * INSTRUCTIONS. 0x49a-0x50c uses lab, fml, fspd, fmrd, fmsd (fp multiply
+    and the add / subtract that set ZRD / SGD), mov, ldi, addd / subd,
+    fabd, fsbd, brif !ged / !led / zrd / zc0, bsul and rtif. The core's
+    mb86233 files are Model 1's with timing changes only (seq, dec, xfer,
+    agu, fp_mul, fp_div identical; alu, regs, mem, core, fp_add restructured
+    and miter-checked in R588 / R731 / R739 / R740), and Model 1's are
+    MAME's semantics. No semantic variant of these instructions can move a
+    +-2.35 product across zero.
+  * DATA. MAME's copro data region (cdata.bin, 8 MB, the upper 4 MB zero)
+    against the core's Revision A image at byte 0xa40000: the loaded 4 MB
+    byte-identical (0 differing dwords); R232 found no TGP read above
+    dword 0x100000. The cell lists come from the i960's work RAM (0x501428),
+    on the same lockstep-verified path as everything else.
+So the polygon search is not where MAME (or the core) departs from the
+silicon either. The car reaches the wall polygon because the game's
+integer logic moves it there (no wall response below the class threshold,
+a 1/16 steer back), with the inputs this study can vary all varied.
+Under Ben's further constraint -- a fix must leave every other scene's TGP
+results and i960 stream bit-identical -- nothing qualifies: the only
+changes that remove the climb would be edits to the game's behaviour
+(forcing a response the code does not ask for), not a correction of the
+emulation, and none has been made.
+
+*Tools (committed):* tb_tgp_replay TGPTRACE (above);
+sim/tgp/mame_tgp_fmode.patch (above);
 sim/io/mame_m2_daytona_ap.lua (autopilot, APLOG,
 STRUCTLOG, INREC, AP_ZONES, AP_LATOFF, AP_CHAIN, snapshots);
 sim/tgp/tgp_capture.lua TGPCAP_NOINPUT; tb_m2_boot: M2_DAYTONA_AP /

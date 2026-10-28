@@ -492,6 +492,16 @@ split_done:
         if ((CORE(d_fsub) & 7) == 2) ++rep_iter;
       } else key = (7u << 11);
       cls[key].n++; cls[key].cyc += c;
+      // R969: TGPTRACE=<file> -- every retire with TGPTRACE_LO <= pc <= TGPTRACE_HI
+      // (hex): the capture frame, pc, ir, a, b, d, p and the status word
+      {
+        static FILE *tf = std::getenv("TGPTRACE") ? std::fopen(std::getenv("TGPTRACE"), "w") : nullptr;
+        static const unsigned tlo = std::getenv("TGPTRACE_LO") ? std::strtoul(std::getenv("TGPTRACE_LO"), nullptr, 16) : 0;
+        static const unsigned thi = std::getenv("TGPTRACE_HI") ? std::strtoul(std::getenv("TGPTRACE_HI"), nullptr, 16) : 0xfff;
+        if (tf && ipc >= tlo && ipc <= thi)
+          std::fprintf(tf, "%u %03x %08x a %08x b %08x d %08x p %08x st %08x\n", (unsigned)frame_no[cur_frame], ipc, (unsigned)CORE(ir),
+                       (unsigned)REGS(reg_a), (unsigned)REGS(reg_b), (unsigned)REGS(reg_d), (unsigned)REGS(reg_p), (unsigned)CORE(st));
+      }
       ring[ring_i & 31] = {ipc, (uint32_t)CORE(ir), (uint32_t)REGS(reg_a), (uint32_t)REGS(reg_b),
                            (uint32_t)REGS(reg_d), (uint32_t)REGS(reg_p), cyc};
       ++ring_i;
