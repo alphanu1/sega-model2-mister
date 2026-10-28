@@ -1,5 +1,26 @@
 # Handoff
 
+## 2026-10-28: Daytona #34 open, Main #1393 one probe, nothing released
+
+- **Daytona USA, GitHub #34: an AI car rammed into the wall at the Beginner
+  course's second hairpin climbs through it and stays visible.** MAME does the
+  same; real cabinets do not (Ben). Branch `daytona-wall` (off main, local)
+  reproduces it in MAME with an autopilot that rams cars
+  (`sim/io/mame_m2_daytona_ap.lua`) and replays the TGP for that scene
+  bit-exact against MAME. R969's first conclusion -- "the game's own wall code,
+  no fix" -- is NOT accepted: MAME is wrong here, so some input to the game's
+  wall code differs from the hardware (CPU/TGP timing, the post-hit speed
+  against the 300/310 thresholds, TGP arithmetic, or draw order). Still being
+  worked; no RTL change yet.
+- **Main #1393 (core force feedback):** Sorg asked that the start-up probe ask
+  only once. The change is made (uncommitted) on `core-ffb-pr` in
+  `sm2-builds/main-ffb`; a test Main with it (`MiSTer.ffb_probe1`) is on the
+  board for Ben's test, then squash, force-push and reply. Template #122 is
+  unchanged.
+- **Design study:** one line named the local rules file; it now states the
+  rule itself (never treat a MAME cycle count as a hardware fact).
+- **No release** until Ben says so.
+
 ## 2026-10-27: Model2A_20261027 -- the sound balance fixed (R967)
 
   * Model2A_20261027 = s1536 (model2a c856030 + study baaf186), md5
