@@ -1,8 +1,32 @@
 # Handoff
 
+## 2026-10-29: R972 board-test build -- 2A core with cvtri ties to even, s1582
+
+- **rbf:** `sm2-builds/i960-cvtri/build/seeds/s1582/output_files/Model2.rbf`,
+  md5 `7ac0c79d47f5a71020cf208ffe74b610`. Not loaded; for Ben's board test
+  as the 2A core (VF2 fights, Daytona, VC2).
+- **What it is:** the 2A release's RTL (Model2A_20261027, s1536) plus
+  i960_fpmisc.sv (R972) only; Model2.qsf identical to s1536's bar SEED.
+  Checked first: lint, lint_idx (none in fpmisc), all 27 i960 suites PASS
+  (test_i960_rom ran on Daytona), Quartus 17.0 analyze_file clean.
+- **Fit (Quartus 17.0, full map + fit, under the Model 1 fit lock):**
+
+  | seed  | ALM    | RAM     | DSP | clk_sys | clk_mem | clk_i960 | HDMI   | hold (worst) |
+  |-------|--------|---------|-----|---------|---------|----------|--------|--------------|
+  | s1580 | 39,378 | 551/553 | 99  | did not route (one i960 signal) |  |  |  |  |
+  | s1581 | 39,275 | 551/553 | 99  | +0.043  | +0.324  | -1.866   | -0.067 | -0.148 i960  |
+  | s1582 | 39,350 | 551/553 | 99  | +0.008  | +0.179  | +2.188   | +0.238 | +0.190 sys   |
+
+  s1582 is positive on every clock, HDMI included; clk_sys is thin. ALM
+  +240 on s1536's 39,110 (fpmisc in the full map: 1,147 -> 1,221 ALUTs).
+- seed-sweep.sh printed an empty table: with s1580 unrouted, the
+  failure-reason grep matched nothing and `set -o pipefail` ended the
+  script. The fits themselves were unaffected; read the reports directly.
+
 ## 2026-10-29: R972, cvtri ties to even (F1) -- and VF2's seam is not the i960
 
-Branch `i960-cvtri` (off model2a, local, not pushed, not fitted).
+Branch `i960-cvtri` (off model2a, local, not pushed; fitted for a board
+test, see above).
 - **Fix:** `i960_fpmisc` mode 00 is nearest-even (PRM 3-11 / 12-12), cvtri /
   cvtzri overflow saturates by sign (11-50); roundr shares it. +27 ALM
   (fpmisc alone, quartus_map 17.0). test_i960_fpmisc now checks against the
@@ -24,8 +48,8 @@ Branch `i960-cvtri` (off model2a, local, not pushed, not fitted).
   Snapping MAME's vertices to 1/4 px uncovers exactly those 7 pixels; 1/8
   covers them but cracks elsewhere; 1/32 was clean in four frames. Next step
   is a raster decision (Ben): measure the board's subpixel grid first.
-- **No fit:** the bench shows no improvement from F1. It rides the next 2A
-  build, then a board test, then main.
+- **Fit:** the bench shows no improvement from F1. Built for a board test
+  (s1582, above), then main after Ben signs it off.
 - Wrong turns: MAME's debugger reads bare numbers as hex (first census found
   nothing); the geometry bench drew the stage black until it preloads the
   texture-parameter table (fixed, M2GD_PRESET); VF2 is CRTC_Y 127, not 128.

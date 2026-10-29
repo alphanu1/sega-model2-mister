@@ -46449,3 +46449,18 @@ the board's subpixel grid first (a slow camera pan over this line).
 *Next for F1:* rides the next 2A build; then a board test (VF2 fights,
 Daytona, VC2) before it goes to main (it is shared i960 RTL; 2C takes it
 from model2a).
+*Board-test build (2026-10-29):* i960-cvtri 1ca4d60 fitted as the 2A
+core, Quartus 17.0, full quartus_map then fit. RTL is the 2A release's
+(Model2A_20261027, s1536: model2a c856030) plus i960_fpmisc.sv only; the
+seed Model2.qsf is identical to s1536's bar SEED. In the full design
+quartus_map puts i960_fpmisc at 1,221 ALUTs (s1536: 1,147), registers
+212 = 212; map warnings 6,340 = 6,340. Seeds:
+s1580 did not route (one i960 signal, LAB interconnect X16_Y27; 39,378
+ALM placed). s1581 39,275 ALM: clk_sys +0.043, clk_mem +0.324, clk_i960
+-1.866, HDMI -0.067, hold clk_i960 -0.148 -- rejected. s1582 39,350 ALM
+(+240 on s1536's 39,110; seed-to-seed spread is of that order), 551 / 553
+RAM blocks, 99 / 112 DSP (both as s1536): clk_sys +0.008, clk_mem
++0.179, clk_i960 +2.188, HDMI +0.238; hold clk_sys +0.190, clk_mem
++0.239, clk_i960 +0.270, HDMI +0.279; recovery +0.809, removal +0.704 --
+positive on every clock including HDMI, clk_sys thin. s1582's rbf
+(md5 7ac0c79d47f5a71020cf208ffe74b610) is the board test; not loaded.
