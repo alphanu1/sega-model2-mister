@@ -46257,3 +46257,53 @@ real busy CPI and interrupt latency; per-game call depth on main; what IAC
 says movre is 6E9; DOA runs 6E1). Desert Tank was not run (its parent set
 is missing locally); Motor Raid, Dynamite Cop, Sky Target, Pilot Kids, HPY
 and the 2C sets have form logs and static scans only.
+
+**R971 -- THE MULTIPCM HAS NO ENVELOPE GENERATOR: EVERY NOTE PLAYS AT FULL
+LEVEL FROM KEY-ON TO KEY-OFF. FOUND AND FIXED ON THE MODEL 1 CORE (NETMERC'S
+HISS); THE MODEL 2 PORT WAITS FOR BEN'S BOARD TEST THERE. NO MODEL 2 RTL
+CHANGED.**
+
+*Believed:* the MultiPCM (`rtl/sound/m2_multipcm.sv`, from meathax/s32, and
+R821's shared engine `m2_multipcm_dual.sv`) was right apart from rate and
+caching, the subjects of R573, R738 and R821.
+
+*Now known:* neither file has an envelope generator. A keyed voice plays at
+full level until key-off, and the sample rate, the 12-bit sample format,
+interpolation and MAME's position/loop arithmetic are also simplified. The
+Model 1 core shares this file and found it on 2026-10-29 through NetMerc,
+which sounded "tinny and hissy" on the board:
+
+- NetMerc's sample ROM `mpr-18134` is MAME's BAD_DUMP (CRC 9a4109e5): all
+  2 MB are 0xFF (checked on the zip). Its descriptors are garbage, and MAME
+  keys them 3,182 times in 90 s of play. In MAME those voices decay to
+  nothing in about 6 ms; in the core they held full level reading random
+  ROM: chip 1 at -27.6 dBFS rms with 72% of its energy above 6 kHz.
+  Removing only the envelope from a MAME reference model takes chip 1 from
+  rms 9.9 to 673.7 (+37 dB). The envelope is the cause.
+- Fix on the Model 1 core (sega-model1-mister, branch `netmerc-sound`,
+  ed9a1a0 / 2cc6568 / 5d536de, not pushed): MAME `gew.cpp`'s envelope
+  generator (attack, decay 1/2, release, decay level, key-rate scaling,
+  MAME's step and gain tables), 12-bit samples, linear interpolation, MAME's
+  32-bit position and loop arithmetic, the 2 MB address map. Still not
+  modelled: the LFO, level slew, level/pan as MAME's tables.
+- Proof there: 0 of 5,357,142 values differ from a transcription of MAME's
+  arithmetic, on 60 s of each Model 1 game's own register traffic, both
+  chips; a ROM-free fuzz (`make test_multipcm`) swept across fetch latency
+  and enable spacing. Every Model 1 game moved toward MAME's level and none
+  got worse (Star Wars chip 2: 109 dB -> 0.7 dB, its release tails had been
+  cut). NetMerc after the fix: chip 1 -66.1 dBFS against MAME's -80.7; the
+  gap is mostly the LFO. NetMerc stays nearly silent, as in MAME: the
+  missing sound is in the undumped ROM, not the core.
+- Cost there: about +1,090 ALM, +10 M10K, +4 DSP for two separate chips.
+
+*What it means for Model 2:* Daytona, Virtua Cop and Desert Tank use this
+sound board (Model2.sv `u_sndboard`, PCM_SHARED 1). Their notes stop dead at
+key-off instead of releasing, and attack/decay shapes are flat. The Model 2
+port is not a file copy: main runs R821's shared engine, which would need
+the envelope state per slot for both chips, so its cost is not the Model 1
+number and has to be measured. MAME is the reference for what the chip
+computes here (gew.cpp); the board decides whether it sounds right.
+
+*Order (Ben, 2026-10-29):* test the fix on the Model 1 board first; port to
+Model 2 only after that. Its ALM also waits on the size of Model 1's
+combined build.

@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-10-29: R971, the MultiPCM has no envelope (from the Model 1 core)
+
+The MultiPCM this core shares with the Model 1 core plays every note at full
+level from key-on to key-off: there is no envelope generator, in
+`m2_multipcm.sv` or in R821's `m2_multipcm_dual.sv`. The Model 1 core found it
+through NetMerc's hiss (a bad-dump ROM held at full level) and fixed it on its
+branch `netmerc-sound` (MAME gew.cpp's envelope, 12-bit samples,
+interpolation, MAME's position arithmetic; bit-exact against MAME on every
+Model 1 game). Daytona, Virtua Cop and Desert Tank use this board, so the same
+fix applies here, but through the shared engine, so the cost must be measured.
+Order (Ben): board test on Model 1 first, then the port. No Model 2 RTL
+changed. Details in R971.
+
 ## 2026-10-28 (night): Model2_20261028 in releases/ -- Daytona force feedback
 
 `releases/` matches main and model2c: `Model2_20261028.rbf` (md5
