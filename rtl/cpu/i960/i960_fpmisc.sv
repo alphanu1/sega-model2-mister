@@ -26,11 +26,16 @@
 //   round    roundr          -> double rounded to an integral double
 //   scale    scaler          -> multiply by 2^n, an exponent add
 //
-// The rounding mode is AC[31:30] and is NOT round-to-nearest-even:
-//   0 = round half AWAY FROM ZERO (C's round()), 1 = floor, 2 = ceil,
-//   3 = truncate toward zero.
-// Model 1's M0 recorded the same trap on the TGP's cfxd — "round to nearest"
-// in a mode field usually means half-to-even and here it does not.
+// The rounding mode is AC[31:30] (80960KB PRM 3-11 Table 3-4, 12-12):
+//   0 = round to nearest, ties to EVEN, 1 = floor (toward -inf),
+//   2 = ceil (toward +inf), 3 = truncate toward zero.
+// R972: mode 0 was round half AWAY FROM ZERO, MAME's C round(), and this
+// header said the i960 is "NOT round-to-nearest-even". That was MAME's rule,
+// not Intel's: the manual's mode 00 is "round to nearest (even)". The two
+// differ only on an exact n + 0.5 (VF2 3,175 cvtri results in 120 s, R970).
+// An unrepresentable cvtri / cvtzri result stores the maximum positive or
+// maximum negative integer by the operand's sign (PRM 11-50); NaN stores
+// 0x8000_0000 (12-23).
 
 module i960_fpmisc #(
   // R575: 1 puts a register after the round add, splitting the unit's ~25 ns
@@ -177,15 +182,21 @@ module i960_fpmisc #(
   assign frac_part = fa_w & frac_mask;
   assign int_part  = fa_w & ~frac_mask;
 
-  // Half of the fractional field, for round-half-away-from-zero. R952: the
-  // test frac_part >= half (half = 2^(fbits-1), frac_part < 2^fbits) is the
-  // fraction's top bit, fa_w[fbits-1] -- one bit select, where it was a 56-bit
-  // shift and a 56-bit compare.
-  logic half_up;
+  // Round to nearest, ties to even (R972). R952: the test frac_part >= half
+  // (half = 2^(fbits-1), frac_part < 2^fbits) is the fraction's top bit,
+  // fa_w[fbits-1] -- one bit select, where it was a 56-bit shift and compare.
+  // Nearest-even rounds up when that bit is set AND either something below it
+  // is set (above a half) or the integer part is odd (an exact half, odd n):
+  // the guard / sticky / lsb rule i960_fpcvt already uses for narrowing.
+  logic half_bit, below_half, int_lsb, half_up;
   // (indexed in a 64-bit copy: at fbits 0 the index wraps to 63, which the
-  // guard masks -- in range, so lint_idx has nothing to report)
+  // guard masks -- in range, so lint_idx has nothing to report. fbits <= 55,
+  // so fa_w64[fbits] is the units bit: 0 for |x| < 1, which is even.)
   wire [63:0] fa_w64 = {8'd0, fa_w};
-  assign half_up = (fbits != 6'd0) && fa_w64[fbits - 6'd1];
+  assign half_bit   = (fbits != 6'd0) && fa_w64[fbits - 6'd1];
+  assign below_half = (frac_part & (frac_mask >> 1)) != 56'd0;
+  assign int_lsb    = fa_w64[fbits];
+  assign half_up    = half_bit && (below_half || int_lsb);
 
   logic inc;
   // cvtzri truncates REGARDLESS of the mode field — the z is "toward zero" and
@@ -195,7 +206,7 @@ module i960_fpmisc #(
 
   always_comb begin
     case (eff_rmode)
-      2'd0:    inc = half_up;                                 // half away from 0
+      2'd0:    inc = half_up;                                 // nearest, ties to even
       2'd1:    inc = sa && (frac_part != 56'd0);              // floor
       2'd2:    inc = !sa && (frac_part != 56'd0);             // ceil
       default: inc = 1'b0;                                    // truncate
@@ -256,18 +267,21 @@ module i960_fpmisc #(
   // representable. Testing the exponent alone silently wrapped -3.18e9 to r2_a
   // positive value and agreed with nothing.
   //
-  // The out-of-range value is 0x8000_0000, matching the oracle. MAME casts r2_a
-  // double to int32_t, which is undefined in C++ and yields x86's indefinite
-  // value; the i960 manual instead specifies the truncated low 32 bits when the
-  // integer-overflow fault is masked. Those disagree, and the oracle wins --
-  // see the design study for the record. Daytona converts no out-of-range
-  // float, so nothing in the game depends on which was chosen.
+  // The out-of-range value saturates by sign (R972, PRM 11-50: "the maximum
+  // positive or maximum negative value is stored ... depending on whether the
+  // real value was positive or negative"): 0x7FFF_FFFF for positive overflow
+  // and +inf, 0x8000_0000 for negative overflow and -inf; NaN 0x8000_0000
+  // (12-23). It was 0x8000_0000 for both signs, from MAME's int32_t cast
+  // (x86's indefinite value), and R12 recorded the manual as giving "the
+  // truncated low 32 bits" -- this manual does not say that (R970). No logged
+  // game session reached a positive overflow.
   logic ovf;
   assign ovf = (r2_eu > 13'sd31) || (|shifted[56:32]) ||
                (shifted[31] && !(r2_sa && (shifted[30:0] == 31'd0)));
 
-  assign yi = (r2_a_nan || ovf) ? 32'h8000_0000
-                             : (r2_sa ? (~int_abs + 32'd1) : int_abs);
+  assign yi = r2_a_nan ? 32'h8000_0000
+            : ovf      ? (r2_sa ? 32'h8000_0000 : 32'h7FFF_FFFF)
+            :            (r2_sa ? (~int_abs + 32'd1) : int_abs);
 
   // Integral double result. The integral value is r2_rounded * 2^(r2_eu-52), so it
   // is renormalised rather than pasted back under the original exponent —

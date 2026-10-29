@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
   // games write op 0x06 / 0x16 once, not every walk: on the board the table
   // holds what earlier walks wrote; a one-walk replay starts with it empty.
   if (std::getenv("M2GD_PRESET")) {
-    FILE *f = std::fopen((dir + "/state.txt").c_str(), "r"); char line[1024]; int nc = 0; unsigned lod = 0;
+    FILE *f = std::fopen((dir + "/state.txt").c_str(), "r"); char line[1024]; int nc = 0, ntp = 0; unsigned lod = 0;
     while (f && std::fgets(line, sizeof line, f)) {
       unsigned w; char *p = line;
       if (std::sscanf(line, "walk %*d start %*x mode %*x lod %x", &w) == 1) lod = w;
@@ -298,11 +298,21 @@ int main(int argc, char **argv) {
         while (k < 32 && std::sscanf(p, " %x%n", &w, &n) == 1) { d->rootp->geodiff_top__DOT__u_geometry__DOT__ct[k++] = (w >> 19) & 0xfff; p += n; }
         nc = k;
       }
+      // R972: and the texture-parameter table (state.txt "tp <i> <diffuse>
+      // <ambient> ..."), which a game writes when a stage loads, not every walk:
+      // a one-walk replay started it at zero, so every polygon's luma was 0
+      // and a VF2 stage drew black. m2_geo_engine keeps {ambient, diffuse} as
+      // floats of the 8-bit values (i8f), which MAME's floats already are.
+      unsigned ti, td, ta;
+      if (std::sscanf(line, "tp %u %x %x", &ti, &td, &ta) == 3 && ti < 32) {
+        d->rootp->geodiff_top__DOT__u_geometry__DOT__u_engine__DOT__tp_tab[ti] = (uint64_t(ta) << 32) | td;
+        ++ntp;
+      }
     }
     if (f) std::fclose(f);
     d->rootp->geodiff_top__DOT__u_geo__DOT__lod_l = (lod >> 19) & 0xfff;
     tick();
-    std::printf("  M2GD_PRESET: %d coefficients, lod %08x\n", nc, lod);
+    std::printf("  M2GD_PRESET: %d coefficients, lod %08x, %d texture parameters\n", nc, lod, ntp);
   }
 
   // The game's flip: the read pointer is a BYTE address.

@@ -10,6 +10,64 @@ core needs it shrunk (program/data memory, a census-driven subset, possibly
 R920's one-word-at-a-time shape). Review and the steps are in R973. Not
 for now.
 
+## 2026-10-29: R972 board-test build -- 2A core with cvtri ties to even, s1582
+
+- **rbf:** `sm2-builds/i960-cvtri/build/seeds/s1582/output_files/Model2.rbf`,
+  md5 `7ac0c79d47f5a71020cf208ffe74b610`. **On the board 2026-10-29 as the
+  2A core: Ben, "it's working great" (VF2 normal). Signed off: the fix goes
+  to main and model2c** (merged into model2a here; each core needs its own
+  fit before a release).
+- **What it is:** the 2A release's RTL (Model2A_20261027, s1536) plus
+  i960_fpmisc.sv (R972) only; Model2.qsf identical to s1536's bar SEED.
+  Checked first: lint, lint_idx (none in fpmisc), all 27 i960 suites PASS
+  (test_i960_rom ran on Daytona), Quartus 17.0 analyze_file clean.
+- **Fit (Quartus 17.0, full map + fit, under the Model 1 fit lock):**
+
+  | seed  | ALM    | RAM     | DSP | clk_sys | clk_mem | clk_i960 | HDMI   | hold (worst) |
+  |-------|--------|---------|-----|---------|---------|----------|--------|--------------|
+  | s1580 | 39,378 | 551/553 | 99  | did not route (one i960 signal) |  |  |  |  |
+  | s1581 | 39,275 | 551/553 | 99  | +0.043  | +0.324  | -1.866   | -0.067 | -0.148 i960  |
+  | s1582 | 39,350 | 551/553 | 99  | +0.008  | +0.179  | +2.188   | +0.238 | +0.190 sys   |
+
+  s1582 is positive on every clock, HDMI included; clk_sys is thin. ALM
+  +240 on s1536's 39,110 (fpmisc in the full map: 1,147 -> 1,221 ALUTs).
+- seed-sweep.sh printed an empty table: with s1580 unrouted, the
+  failure-reason grep matched nothing and `set -o pipefail` ended the
+  script. The fits themselves were unaffected; read the reports directly.
+
+## 2026-10-29: R972, cvtri ties to even (F1) -- and VF2's seam is not the i960
+
+Branch `i960-cvtri` (off model2a, local, not pushed; fitted for a board
+test, see above).
+- **Fix:** `i960_fpmisc` mode 00 is nearest-even (PRM 3-11 / 12-12), cvtri /
+  cvtzri overflow saturates by sign (11-50); roundr shares it. +27 ALM
+  (fpmisc alone, quartus_map 17.0). test_i960_fpmisc now checks against the
+  PRM: every tie |n| < 2^24, near-ties, ties to 2^52, 68.9 M checks 0
+  mismatches (1.1 G wider); the old RTL fails it by 33.6 M. All 28 i960
+  suites PASS (test_i960_rom needs M2_ROMPATH with daytona93 unzipped, else it
+  SKIPs); audit t1-t7 output identical.
+- **0x28ad4** is the fighters' animation pose: TGP-interpolated key frames
+  rounded to 16-bit joint angles. In a Jacky vs Sarah fight (MAME, 200 s) 711
+  results change -- character joints by 0.0055 degrees. MAME polygons, core
+  quads and the bench's pixels on the floor / wall: identical with and without
+  the fix in 11 walks. 80-bit extended cannot matter (VF2 never uses
+  fp0-fp3); estimated +1,000-1,800 ALM if ever wanted. Not built.
+- **The seam IS reproduced** (core geometry + raster on MAME's walks, board
+  settings): pin-holes along the foot of the wall, e.g. 7 in walk 3338. The
+  same holes appear with MAME's own polygons through the core's fill, and
+  MAME paints them: the wall and floor are separate objects whose edges sit
+  ~0.01 px apart, and the core's 1/4 px vertex snap opens the sliver.
+  Snapping MAME's vertices to 1/4 px uncovers exactly those 7 pixels; 1/8
+  covers them but cracks elsewhere; 1/32 was clean in four frames. Next step
+  is a raster decision (Ben): measure the board's subpixel grid first.
+- **Fit:** the bench shows no improvement from F1. Built for a board test
+  (s1582, above), then main after Ben signs it off.
+- Wrong turns: MAME's debugger reads bare numbers as hex (first census found
+  nothing); the geometry bench drew the stage black until it preloads the
+  texture-parameter table (fixed, M2GD_PRESET); VF2 is CRTC_Y 127, not 128.
+- Data (ROM-derived, outside git): sm2-builds/i960-cvtri-data (js/ the MAME
+  runs, walks and bench outputs; yt/ the board video; obj/ the benches).
+
 ## 2026-10-29: R971, the MultiPCM has no envelope (from the Model 1 core)
 
 The MultiPCM this core shares with the Model 1 core plays every note at full
