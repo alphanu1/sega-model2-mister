@@ -4,6 +4,14 @@
 // Harness for i960_fpmisc against the host's own operations. Every operation
 // here is exactly specified, so these comparisons are bit-exact by right
 // rather than by tolerance.
+//
+// R972: the reference is Intel's 80960KB manual, not MAME. Rounding mode 0 is
+// round to nearest, ties to EVEN (PRM 3-11 Table 3-4, 12-12) -- the host's
+// nearbyint() in its default FE_TONEAREST mode -- and an out-of-range
+// cvtri / cvtzri saturates by sign (11-50). +ref=mame selects MAME's rule
+// instead (C round(), half away from zero; 0x8000_0000 for any overflow) so a
+// run can show the sweeps below DO see the difference: the fixed module must
+// FAIL under it.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -16,6 +24,7 @@ namespace {
 Vi960_fpmisc *dut = nullptr;
 uint64_t checks = 0, fails = 0;
 const int MAX_REPORT = 14;
+bool ref_mame = false;           // +ref=mame: MAME's rule, expected to FAIL now
 union U { double d; uint64_t u; };
 // Reinterpret raw bits as a double. `U{x}.d` initialises the FIRST member, so
 // for an integer x it CONVERTS rather than reinterprets and every NaN check
@@ -43,7 +52,8 @@ void set(int op, double A, double B, int32_t I, int rm) {
 
 // round_to_int, exactly as the reference selects it from AC[31:30].
 double rti(double v, int rm) {
-  switch (rm) { case 0: return std::round(v); case 1: return std::floor(v);
+  switch (rm) { case 0: return ref_mame ? std::round(v) : std::nearbyint(v);
+                case 1: return std::floor(v);
                 case 2: return std::ceil(v);  default: return std::trunc(v); }
 }
 
@@ -66,7 +76,15 @@ void chk_cvtir(int32_t I) {
   ++checks; if (dut->y != U{want}.u) fail("cvtir", "y", dut->y, U{want}.u);
 }
 void chk_cvtri(double A, int rm, bool trunc_mode) {
-  if (is_sub(A) || std::isnan(A) || std::isinf(A)) return;
+  if (is_sub(A)) return;
+  if (std::isnan(A) || std::isinf(A)) {
+    // NaN stores 0x8000_0000 (12-23); an infinity is the largest overflow
+    // there is and saturates by sign (11-50).
+    set(trunc_mode ? OP_CVTZRI : OP_CVTRI, A, 0, 0, rm);
+    const uint32_t want = (std::isnan(A) || A < 0 || ref_mame) ? 0x80000000u : 0x7fffffffu;
+    ++checks; if (dut->yi != want) fail(trunc_mode ? "cvtzri" : "cvtri", "yi(nan/inf)", dut->yi, want);
+    return;
+  }
   const double r = rti(A, trunc_mode ? 3 : rm);
   // Out of int32 range is CHECKED, not skipped. Skipping it is why the module
   // tested `eu > 31` for overflow -- which misses the entire exponent-31 band,
@@ -75,7 +93,8 @@ void chk_cvtri(double A, int rm, bool trunc_mode) {
   // the expected value is written out rather than computed.
   const bool oor = (r < -2147483648.0 || r > 2147483647.0);
   set(trunc_mode ? OP_CVTZRI : OP_CVTRI, A, 0, 0, rm);
-  const uint32_t want = oor ? 0x80000000u : (uint32_t)(int32_t)r;
+  const uint32_t want = !oor ? (uint32_t)(int32_t)r
+                      : (ref_mame || r < 0) ? 0x80000000u : 0x7fffffffu;
   ++checks; if (dut->yi != want) {
     std::printf("    [cvtri in] A=%.10g rm=%d trunc=%d oor=%d\n", A, rm, trunc_mode, oor);
     fail(trunc_mode ? "cvtzri" : "cvtri", "yi", dut->yi, want);
@@ -101,12 +120,16 @@ void chk_scale(double A, int32_t n) {
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t n = 200000, seed = 1;
+  int64_t tie_span = 1LL << 24;   // every n + 0.5 for |n| < tie_span
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+random=", 8)) n = std::strtoull(argv[i]+8, nullptr, 10);
     if (!std::strncmp(argv[i], "+seed=", 6))   seed = std::strtoull(argv[i]+6, nullptr, 10);
+    if (!std::strcmp(argv[i], "+ref=mame"))    ref_mame = true;
+    if (!std::strncmp(argv[i], "+ties=", 6))   tie_span = std::strtoll(argv[i]+6, nullptr, 10);
   }
   dut = new Vi960_fpmisc;
-  std::printf("i960_fpmisc vs the host (all operations exactly specified)\n");
+  std::printf("i960_fpmisc vs the host (all operations exactly specified), reference %s\n",
+              ref_mame ? "MAME (half away from zero) -- expected to FAIL" : "80960KB PRM (ties to even)");
 
   const double sp[] = {0.0,-0.0,1.0,-1.0,0.5,-0.5,1.5,-1.5,2.5,-2.5,
                        3.0,-3.0,1e300,1e-300,4503599627370496.0,
@@ -119,10 +142,43 @@ int main(int argc, char **argv) {
   }
   std::printf("  specials across every op and rounding mode\n");
 
-  // Halfway cases: mode 0 is round-half-AWAY-FROM-ZERO, not half-to-even.
+  // Halfway cases: mode 0 is round to nearest, ties to EVEN (R972).
   for (double h : {0.5,1.5,2.5,3.5,-0.5,-1.5,-2.5,-3.5,4.5,-4.5})
     for (int rm = 0; rm < 4; ++rm) { chk_round(h, rm); chk_cvtri(h, rm, false); }
   std::printf("  halfway cases in all four rounding modes\n");
+
+  // R972: EVERY tie n + 0.5 for |n| < tie_span (default 2^24: past single
+  // precision's 2^23, where a single stops holding a .5, and VF2's 32767.5 by
+  // three orders of magnitude), both signs, cvtri and roundr in mode 0, with
+  // the neighbours one double ulp either side (near-ties, which round to
+  // nearest whatever the tie rule). Then ties sampled by doubling out to
+  // 2^52, where a double stops holding a .5 -- far past int32 -- in every
+  // mode, so overflow-by-rounding (2147483647.5 -> 2^31, positive overflow)
+  // is in the sweep too.
+  const uint64_t c0 = checks, f0 = fails;
+  for (int64_t k = -tie_span; k < tie_span; ++k) {
+    const double h = double(k) + 0.5;
+    chk_cvtri(h, 0, false); chk_round(h, 0);
+    if ((k & 0xff) == 0 || (k > -4096 && k < 4096)) {
+      chk_cvtri(std::nextafter(h, INFINITY), 0, false);
+      chk_cvtri(std::nextafter(h, -INFINITY), 0, false);
+      chk_round(std::nextafter(h, INFINITY), 0);
+      chk_round(std::nextafter(h, -INFINITY), 0);
+    }
+  }
+  for (int e = 0; e <= 52; ++e)
+    for (double base : {std::ldexp(1.0, e), std::ldexp(1.0, e) - 1.0, std::ldexp(1.0, e) + 1.0,
+                        std::ldexp(3.0, e) / 2.0})
+      for (double sg : {1.0, -1.0}) {
+        const double h = sg * (std::floor(base) + 0.5);
+        if (h - sg * 0.5 != sg * std::floor(base)) continue;      // .5 not representable
+        for (double hh : {h, std::nextafter(h, INFINITY), std::nextafter(h, -INFINITY)})
+          for (int rm = 0; rm < 4; ++rm) { chk_cvtri(hh, rm, false); chk_cvtri(hh, rm, true); chk_round(hh, rm); }
+      }
+  // (Every game operand is a single widened to double; every tie a single
+  // can hold has |n| < 2^23, so the exhaustive loop above covers them all.)
+  std::printf("  ties: every n+0.5 for |n| < %lld, near-ties, ties to 2^52 : %llu checks, %llu mismatches\n",
+              (long long)tie_span, (unsigned long long)(checks - c0), (unsigned long long)(fails - f0));
 
   // The int32 boundary, walked directly. Random 64-bit patterns reach the
   // exponent-31 band about one time in 2048 and each one has to survive the

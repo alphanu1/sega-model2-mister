@@ -647,9 +647,20 @@ struct Cpu {
           bool handled = true, wr_int = false, wr_cc = false;
           double fres = 0.0; uint32_t ires = 0;
           const int rm = int((AC >> 30) & 3);
+          // R972: mode 0 is round to nearest, ties to EVEN (80960KB PRM 3-11
+          // Table 3-4), the host's nearbyint() in its default mode -- not C's
+          // round(), MAME's half-away-from-zero.
           auto rti = [&](double v) {
-            switch (rm) { case 0: return std::round(v); case 1: return std::floor(v);
+            switch (rm) { case 0: return std::nearbyint(v); case 1: return std::floor(v);
                           case 2: return std::ceil(v);  default: return std::trunc(v); }
+          };
+          // cvtri / cvtzri: an unrepresentable result saturates by sign (PRM
+          // 11-50); NaN gives 0x8000_0000 (12-23). The int32_t cast this
+          // replaced is undefined out of range.
+          auto sat_i = [](double r) -> uint32_t {
+            if (std::isnan(r) || r < -2147483648.0) return 0x80000000u;
+            if (r > 2147483647.0) return 0x7fffffffu;
+            return uint32_t(int32_t(r));
           };
           // Opcode and sub-opcode pack as 0xOOS across THREE hex digits, so
           // the shift is 4, not 8. With 8 the labels never matched, `handled`
@@ -693,8 +704,8 @@ struct Cpu {
                 AC |= (fa < fb) ? 4 : (fa == fb) ? 2 : 1;
               break;
             }
-            case 0x6c0: wr_int = true; ires = uint32_t(int32_t(rti(fa))); break;   // cvtri
-            case 0x6c2: wr_int = true; ires = uint32_t(int32_t(fa)); break;        // cvtzri
+            case 0x6c0: wr_int = true; ires = sat_i(rti(fa)); break;               // cvtri
+            case 0x6c2: wr_int = true; ires = sat_i(std::trunc(fa)); break;        // cvtzri
             case 0x6c9: fres = fa; break;                                          // movr
             case 0x674: fres = double(int32_t(s1)); break;                          // cvtir
             case 0x677: fres = fb * std::pow(2.0, double(int32_t(s1))); break;      // scaler
