@@ -46350,8 +46350,8 @@ given permission to use it. Reviewed 2026-10-29; nothing copied yet.
    (model2.cpp: ADSP21062 at 32 MHz, BOOT_MODE_HOST; the i960 uploads the
    program, Last Bronx through external DMA port 0). Its size sets PM_WORDS
    and its instruction mix sets the subset; its data use sets DM_WORDS. Sets
-   on this machine: doa, pltkids, zerogun, powsledr (2B); vstriker,
-   fvipers, vf2-era 2B titles are not here.
+   on this machine: doa, pltkids, zerogun, powsledr (2B); Virtua Striker,
+   Fighting Vipers and Virtual-On are not here.
 2. M10K is the binding resource: 156 against ~4 free. The program and data
    memories must come down to the TGP's ~19, e.g. a PM cache over SDRAM as
    R920 did for the TGPx4, and DM sized to the census.
