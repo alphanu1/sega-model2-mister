@@ -1,5 +1,37 @@
 # Handoff
 
+## 2026-10-29: R972, cvtri ties to even (F1) -- and VF2's seam is not the i960
+
+Branch `i960-cvtri` (off model2a, local, not pushed, not fitted).
+- **Fix:** `i960_fpmisc` mode 00 is nearest-even (PRM 3-11 / 12-12), cvtri /
+  cvtzri overflow saturates by sign (11-50); roundr shares it. +27 ALM
+  (fpmisc alone, quartus_map 17.0). test_i960_fpmisc now checks against the
+  PRM: every tie |n| < 2^24, near-ties, ties to 2^52, 68.9 M checks 0
+  mismatches (1.1 G wider); the old RTL fails it by 33.6 M. All 28 i960
+  suites PASS (test_i960_rom needs M2_ROMPATH with daytona93 unzipped, else it
+  SKIPs); audit t1-t7 output identical.
+- **0x28ad4** is the fighters' animation pose: TGP-interpolated key frames
+  rounded to 16-bit joint angles. In a Jacky vs Sarah fight (MAME, 200 s) 711
+  results change -- character joints by 0.0055 degrees. MAME polygons, core
+  quads and the bench's pixels on the floor / wall: identical with and without
+  the fix in 11 walks. 80-bit extended cannot matter (VF2 never uses
+  fp0-fp3); estimated +1,000-1,800 ALM if ever wanted. Not built.
+- **The seam IS reproduced** (core geometry + raster on MAME's walks, board
+  settings): pin-holes along the foot of the wall, e.g. 7 in walk 3338. The
+  same holes appear with MAME's own polygons through the core's fill, and
+  MAME paints them: the wall and floor are separate objects whose edges sit
+  ~0.01 px apart, and the core's 1/4 px vertex snap opens the sliver.
+  Snapping MAME's vertices to 1/4 px uncovers exactly those 7 pixels; 1/8
+  covers them but cracks elsewhere; 1/32 was clean in four frames. Next step
+  is a raster decision (Ben): measure the board's subpixel grid first.
+- **No fit:** the bench shows no improvement from F1. It rides the next 2A
+  build, then a board test, then main.
+- Wrong turns: MAME's debugger reads bare numbers as hex (first census found
+  nothing); the geometry bench drew the stage black until it preloads the
+  texture-parameter table (fixed, M2GD_PRESET); VF2 is CRTC_Y 127, not 128.
+- Data (ROM-derived, outside git): sm2-builds/i960-cvtri-data (js/ the MAME
+  runs, walks and bench outputs; yt/ the board video; obj/ the benches).
+
 ## 2026-10-29: R971, the MultiPCM has no envelope (from the Model 1 core)
 
 The MultiPCM this core shares with the Model 1 core plays every note at full

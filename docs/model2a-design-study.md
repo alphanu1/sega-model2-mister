@@ -46307,3 +46307,145 @@ computes here (gew.cpp); the board decides whether it sounds right.
 *Order (Ben, 2026-10-29):* test the fix on the Model 1 board first; port to
 Model 2 only after that. Its ALM also waits on the size of Model 1's
 combined build.
+
+**R972 -- cvtri / roundr ROUND TIES TO EVEN AND SATURATE BY SIGN (R970's
+F1, FIXED IN RTL); VF2's FLOOR/WALL SEAM (GITHUB #27 PART 2) IS NOT THE
+i960: THE FIX CHANGES ZERO PIXELS THERE. THE SEAM IS REPRODUCED ON THE
+BENCH AND IS THE RASTER'S QUARTER-PIXEL VERTEX SNAP OPENING A CRACK THAT
+MAME's FLOAT EDGES DO NOT HAVE. No fit (no improvement to fit). Branch
+i960-cvtri (off model2a), not pushed.**
+
+*Believed (Ben, on the issue):* the core shows the Jacky / Sarah seam more
+strongly than a real board (YouTube go7Sf1lwgxo, round 2, the alley stage)
+because the i960's floating point differs from the chip's -- cvtri rounds
+ties away from zero (R970 F1, VF2 ~3,000 a two minutes, mostly 0x28ad4) and
+the core keeps 64-bit doubles where the 80960KB keeps 80-bit extended -- so
+vertices land half a pixel off at polygon edges.
+
+*THE FIX (rests on PRM 3-11 Table 3-4, 12-12 and 11-50; MAME is not the
+reference here, it has the same fault):* i960_fpmisc's mode-00 increment is
+now guard AND (sticky below the half OR the integer LSB) -- nearest, ties to
+even, the rule i960_fpcvt already uses for narrowing; roundr shares it. An
+unrepresentable cvtri / cvtzri result stores 0x7FFF_FFFF for positive
+(and +inf), 0x8000_0000 for negative (and -inf); NaN stays 0x8000_0000.
+cvtzri ignores the mode as before. The module header that said "mode 0 is
+NOT round-to-nearest-even" and the R12 comment ("the truncated low 32
+bits") were MAME's rule and a misreading; both are corrected in the file.
+The lockstep reference (sim/i960/i960_cpu_ref.h) takes nearbyint() and the
+same saturation. No other float->int or mode-00 path exists in the i960:
+i960_fpcvt narrows by nearest-even already, cvtzri truncates, cvtril /
+roundrl trap. *Cost:* quartus_map 17.0 of i960_fpmisc alone (STAGED 1,
+SCALE 0, registered ports): 1,055 -> 1,082 ALMs needed (+27), 1,222 ->
+1,285 ALUTs, registers 476 = 476. Quartus parse clean; lint_idx unchanged
+(108 lines before and after, none in fpmisc); lint_top, lint_i960_* clean.
+
+*Proof:* test_i960_fpmisc's reference is now the PRM (+ref=mame keeps
+MAME's rule). Every n + 0.5 for |n| < 2^24 (all ties a single can hold, and
+VF2's 32767.5 by three orders of magnitude), cvtri and roundr, with one
+double ulp either side on the near-ties; ties sampled out to 2^52 in all
+four modes for cvtri, cvtzri and roundr (2147483647.5 -> positive overflow,
+-2147483648.5 -> 0x8000_0000 representable by even rounding); NaN and both
+infinities; the int32 boundary walk; 200 k random rounds: 68,879,734 checks,
+0 mismatches. Swept wider (+ties=2^28, +random=3.3 M): 1,101,940,936 checks,
+0 mismatches. STAGED 1 build: 73.7 M checks, 0. The test sees the fault:
+the fixed RTL under +ref=mame, and the old RTL under the PRM reference, each
+FAIL with 33,605,546 mismatches (half the ties: the odd-floor ones agree).
+All 28 i960 suites PASS (61 PASS lines, 0 FAIL), including test_i960_rom on
+the real Daytona program (M2_ROMPATH with daytona93 unzipped -- it SKIPs
+silently without). R970's directed timing harness (sim/i960/audit t1-t7,
+2A configuration, latencies 0 and 6): output identical old vs new.
+
+*WHAT 0x28ad4 IS (VF2 disassembly, MAME's debugger, headless):* the end of
+a character's animation-pose routine. 0x28934-0x28ac0 walks 60 key-frame
+channels; interpolated channels are sent to the TGP (st r15 / r3-r8 to
+(g11)[g12], TGP functions 0x19003232 and 0x18803131 -- cubic and linear key
+interpolation) and the single result read back to the pose buffer (g5).
+0x28acc-0x28ae4 then converts the first 36 words, cvtri r13,r13 / stis, to
+16-bit binary angles (65,536 = 360 degrees): 12 joints x 3 axes. When the
+fighter faces the other way (bit 6 of the object's flags) 0x28af8 mirrors
+the pose (negate, 0x8000 - angle, swap left / right). 0x27cc8, 0x28820 and
+0x288f0 are the same loop in the routine's other forms (no interpolation).
+So the cvtri results are joint rotations of the two fighters, 0.0055 degrees
+a unit. The input is a single the TGP computed -- the i960 does no
+arithmetic on it before the cvtri.
+*Census in MAME (sim/i960/audit/mame_cvtri_ties.lua: a conditional
+breakpoint on all 46 cvtri sites firing on an exact tie; Jacky vs Sarah in VS
+mode, sim/io/mame_m2_vf2_jvs.lua, both fighters moving from 40 s, 200 s
+emulated):* 0x28ad4 7,268 ties, 932 of them change under ties-to-even (711
+during the Jacky / Sarah fight); 0x28820 318 / 14; 0x27cc8 45 / 15; 0x288f0
+56 / 0; 0x21194 6 / 0. The ties that change: +-10922.5 (most), 17070.5,
+13758.5, 2184.5, and values past 65,536 that stis wraps. 32767.5 -- R970's
+example, 6,000+ of the ties -- gives 32768 under both rules. With both
+fighters standing still (the first 60 s run) no tie in the fight changes.
+*In the walk:* the fix emulated in MAME (TIE_FIX=1: at the stis after each
+pose loop, an exact tie with an odd away-from-zero result is moved one
+toward zero) at a frame where a changed tie lands (walk 3321): bufferram 503
+bytes differ, 105 of 1,457 MAME polygons, all of them inside one fighter's
+box (x 371-430), largest vertex move 0.0052 px; 0 of the 42 wide (stage)
+polygons. The core's geometry on both walks: ours.txt identical (the moves
+are under the quarter pixel). Raster bench at the board's settings: pixel
+hash identical. Ten more walks through the fight (42-78 s, base and fix):
+MAME polygons, core quads and pixel hashes identical in all ten. F1 changes
+the cabinet's pose angles by one unit now and then; it cannot reach the
+floor or the wall, which no i960 rounding touches.
+*80-bit extended:* cannot matter to VF2. R970's form logs: VF2 neither
+writes nor reads fp0-fp3, and every single-in single-out operation the core
+computes in double and narrows equals one correct rounding (R970: 20 M
+random pairs per operation, 0 differences). 0x28ad4's input is the TGP's
+32-bit result, converted directly. A C model of "the computation in double
+vs extended" would have nothing to compare: there is no i960 arithmetic on
+this path. Cost of extended anyway (not built, needs Ben's go): the FPU
+today is i960_fpadd 1,031, fpmisc 1,147, fpmul 371 + 4 DSP, fpdiv 316,
+fpsqrt 279 ALUTs plus R845's double-double transcendental sequencer in
+i960_top (s1536 map); a 64-bit significand and 15-bit exponent widens the
+adders, shifters and normalisers ~20-30%, the multiplier to 64 x 64 (DSP
+4 -> ~6-9) and the sequencer's double-double to extended pairs: an estimated
++1,000-1,800 ALM and +2-5 DSP, unverifiable against any oracle we have
+(p1-i960-spike section 8), for no change in VF2, Daytona or VC2.
+
+*THE SEAM, REPRODUCED (the core's own path, MAME's walks):* Jacky vs Sarah
+in MAME 0.289 (m2lod, mame-r943) through the core's geometry (geodiff 2A,
+CRTC_Y 127) and tb_m2_raster3d in Model2.sv's 2A configuration at the
+board's settings, Seam fill Off (the OSD default). Pin-holes (an unpainted
+3D pixel with at least 6 of 8 painted neighbours -- where the 2D layer shows
+through) in the ten fight walks: 1, 2, 2, 0, 7, 0, 0, 3, 0, 2. Those on the
+floor / wall line: walk 2648 (246,271) (307,273); walk 3338 (18,272),
+(165-168,274), (242-243,275) -- short horizontal dashes along the foot of
+the wall, the reporter's photo. Identical with the fix (same coordinates).
+MAME's own polygons through the core's fill give the SAME holes at the same
+pixels (walk 3338 = MAME frame 2311), so the geometry is not it. MAME's own
+render (M2DIFF owners, frame 2311) paints every one of those pixels
+(polygons 13, 14, 16).
+*Why:* the wall object's bottom edge (MAME polygon 13, (356.4485, 277.0915)
+to (0, 272.1992)) and the floor strip's top edge (polygons 14 and 16, with a
+vertex at (88.6235, 273.4009) on the far side, and (356.4542, 277.0743))
+are two objects projected separately: the edges do not share vertices and
+sit ~0.01-0.02 px apart -- a T-junction across object boundaries. MAME's
+edges are float, so a pixel centre almost never falls in the sliver. The
+core snaps vertices to 1/4 px (R626 / R658). sim/video/snapcrack.py (the
+pixel centres a float polygon list covers that no polygon covers once its
+vertices are snapped, no fill-rule ties): on frame 2311, snapping to 1/4 px
+uncovers exactly the 7 hole pixels the bench shows on the line, 20 in the
+frame; to 1/8 px, 0 on the line (1 in the frame); 1/16, 0 (10); 1/32, 0
+(0). Other frames: 2314 1/4: 35, 1/8: 8, 1/16: 5, 1/32: 0; 2312 3 / 22 /
+7 / 0; 2297 7 / 6 / 0 / 0. Snapping at any grid opens some cracks; the
+count and where they fall move with the grid, and only 1/32 px reached 0 in
+these four frames. The board shows the seam weaker: consistent with its
+own snap being finer than the core's quarter pixel (not measured).
+*Wrong turns, recorded:* (1) The first tie census found nothing: MAME's
+debugger reads bare numbers as HEX, so ">>17>>6" shifted by 29. Constants
+are now written 0x..; the expression was checked against 14 known values.
+(2) The geometry bench drew the stage black: a one-walk replay started the
+texture-parameter table (diffuse / ambient) at zero, so every luma was 0.
+tb_m2_geodiff now loads state.txt's "tp" lines under M2GD_PRESET; luma
+distribution then matches MAME's (158 / 95 / 63 most common in both).
+M2GD_STATE, documented in that bench's header, is not implemented.
+(3) geodiff 2A with CRTC_Y 128 (Rally's) offsets VF2 by a line; VF2 is 127.
+*What would move the seam (not done, Ben decides):* a finer vertex
+fraction in the raster (1/8 px removed this line in frame 2311 but not
+every crack in other frames), or a coverage rule for textured edges that
+does not overlap (R955 / R957 rejected the dilation for decals). Measure
+the board's subpixel grid first (a slow camera pan over this line).
+*Next for F1:* rides the next 2A build; then a board test (VF2 fights,
+Daytona, VC2) before it goes to main (it is shared i960 RTL; 2C takes it
+from model2a).
