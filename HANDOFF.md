@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-29: R973, a SHARC for Model 2B exists (documented, not started)
+
+Paul Priest's Konami Hornet core (https://github.com/ppriest/Arcade-KonamiHornet_MiSTer,
+`91edb27`, GPL-3.0) has an ADSP-21062 SHARC in RTL, MAME-verified, and its
+author has given permission to use it. As fitted there it is about 10,900
+ALM, 156 M10K and 5 DSP, against the TGP's 2,802 ALM and 19 M10K, so a 2B
+core needs it shrunk (program/data memory, a census-driven subset, possibly
+R920's one-word-at-a-time shape). Review and the steps are in R973. Not
+for now.
+
 ## 2026-10-29: R971, the MultiPCM has no envelope (from the Model 1 core)
 
 The MultiPCM this core shares with the Model 1 core plays every note at full

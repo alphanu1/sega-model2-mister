@@ -46307,3 +46307,61 @@ computes here (gew.cpp); the board decides whether it sounds right.
 *Order (Ben, 2026-10-29):* test the fix on the Model 1 board first; port to
 Model 2 only after that. Its ALM also waits on the size of Model 1's
 combined build.
+
+**R973 -- MODEL 2B: AN ADSP-21062 SHARC IN RTL EXISTS, MAME-VERIFIED, AND ITS
+AUTHOR HAS GIVEN PERMISSION TO USE IT. AS BUILT FOR KONAMI HORNET IT IS ABOUT
+FOUR TIMES THE TGP AND SIX TIMES ITS BLOCK RAM, SO 2B NEEDS IT SHRUNK.
+DOCUMENTED FOR LATER, NOT STARTED (Ben, 2026-10-29).**
+
+*Believed:* R832 (2026-10-13) left 2B and 2C as documented only, with no
+measured room for a new geometry processor. 2C has since been built anyway
+(R920: the TGPx4 as a ~2,800 ALM skeleton on shared units, branch model2c,
+39,343 ALM and 549/553 M10K). 2B was still blocked on there being no SHARC.
+
+*Now known:* Paul Priest's Konami Hornet core
+(https://github.com/ppriest/Arcade-KonamiHornet_MiSTer, reviewed at
+`91edb27`, 2026-10-26, GPL-3.0, so compatible with this project) has an
+ADSP-21062 in RTL. Its author has told Ben it is "a bit of a beast" and has
+given permission to use it. Reviewed 2026-10-29; nothing copied yet.
+
+- Two cores. `rtl/cpu/sharc` (v1) is MAME's sharc.cpp transcribed, one
+  instruction per clock as a combinational function: 126,000 ALUTs, a
+  simulation-only golden model. `rtl/cpu/sharc2` (v2, `sharc2_core`) is an
+  in-order pipeline (F / D / X / W) checked against v1 in lockstep and against
+  MAME's traces.
+- Verification is strong and reusable: 2.3 M instructions in two game
+  windows match MAME in PC and 56 registers; the float units (`sharc_fadd`,
+  511 ALM; `sharc_fmul`, 376 ALM + 2 DSP, two stages each) are bit-exact
+  against MAME's host-float code on 9.2 M vectors; MAME trace/census tooling
+  (scripts/sharc_census.py, mame_sharc_*_census.py, compare_sharc_trace.py,
+  sharc_pipe_model.py) is all there.
+- Size as fitted in Hornet (docs/floorplan/KonamiHornet_groups.md): 21,848
+  LUTs (about 10,900 ALM), 8,281 FFs, 659 MLAB, **156 M10K**, 5 DSP, on its
+  own 48 MHz clock at about 2.3 clocks an instruction. Against the TGP's
+  2,802 ALM and 19 M10K that is roughly +8,000 ALM and +137 M10K. The 2A/2C
+  cores sit at ~39,300 ALM and 549/553 M10K: it does not fit as built.
+- Already parameterised for shrinking: PM_WORDS (20,480 x 48 bits, 100 M10K),
+  DM_WORDS (Hornet uses 16K, 56 M10K), SUBSET (only the instructions a
+  census of the game's program finds; Hornet's is Gradius IV's), ONE_FADD,
+  DMA_PACK, DMA_LOCK.
+
+*What 2B would need (to measure, not assume):*
+1. A census of the 2B copro program. MAME boots the 2B SHARC in host mode
+   (model2.cpp: ADSP21062 at 32 MHz, BOOT_MODE_HOST; the i960 uploads the
+   program, Last Bronx through external DMA port 0). Its size sets PM_WORDS
+   and its instruction mix sets the subset; its data use sets DM_WORDS. Sets
+   on this machine: doa, pltkids, zerogun, powsledr (2B); vstriker,
+   fvipers, vf2-era 2B titles are not here.
+2. M10K is the binding resource: 156 against ~4 free. The program and data
+   memories must come down to the TGP's ~19, e.g. a PM cache over SDRAM as
+   R920 did for the TGPx4, and DM sized to the census.
+3. Throughput: the 2B chip runs at 32 MHz, below Hornet's 36 MHz, so the
+   needed instruction rate is lower; the R920 approach (one word at a time on
+   shared units) may be enough and far smaller than a pipeline.
+4. Its float units and MAME-trace benches are worth taking whatever the
+   core's final shape; v1 stays a simulation reference.
+
+*Recommendation:* a good starting point for verification and arithmetic;
+the pipeline itself is likely too large for this device and would need
+R920-style shrinking. Not started; when it is, record the source commit in
+THIRD_PARTY.md and credit the author.
