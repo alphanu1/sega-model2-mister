@@ -48,6 +48,14 @@ hardware as possible:
   only reads off-screen when it can't see the screen; the cores now treat
   just the outermost 2 pixels as off-screen, so aiming off the screen still
   reloads.
+- **The i960 rounds the way Intel's chip does (all three cores).** Checked
+  against Intel's own 80960KB manuals: when the CPU turns a decimal number
+  into a whole one, a value exactly halfway between two numbers goes to the
+  even one, and a number too big to fit is clamped, as the chip does. MAME
+  rounds halfway values away from zero. Virtua Fighter 2 does this thousands
+  of times a fight for the fighters' joint angles, Daytona a little and
+  Virtua Cop 2 now and then. Too small to see, but the CPU now computes what
+  the arcade board computes. (`*_20261030`.)
 
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
