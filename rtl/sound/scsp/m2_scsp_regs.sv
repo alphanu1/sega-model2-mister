@@ -29,11 +29,26 @@
 // when the phase reaches it. The replay benches (step_mode) apply their
 // writes at sample boundaries: exact is 0 there and a timer fires on the
 // tick, as before.
+//
+// THE ARCADE'S PERIOD (R976, TIMER / tarc). MAME's period is matched to MAME,
+// not to the chip: a real Sega Rally cabinet's music runs 2.18% slower than
+// MAME's (an arcade recording against MAME 0.289, pitch equal to 0.03%), so
+// its timer A (TIMA 0xCE, prescale 0, re-armed ~0.9 sample after each
+// interrupt) is 49.874 x 1.0218 = 50.96 samples, not MAME's 49 + latency.
+// Arcade mode counts as the chip's documented counter does -- 8 bits, up,
+// on the prescaled sample clock of a free-running prescaler (manual 4.2.11;
+// srg320's and Mednafen's SCSPs) -- and is fitted, by one sample, to that
+// recording: the value written is taken at the next sample boundary and the
+// interrupt comes on the (256 - count)-th prescaled tick after it. That is
+// 51 samples for Rally's timer A and 512 for its timer B (the emulators' 512
+// too). Every timer fires on a sample boundary; the write's phase is not
+// kept. TIMER: 0 MAME only, 1 arcade only, 2 both (tarc selects, an OSD A/B).
 
 `timescale 1ns/1ps
 
 module m2_scsp_regs #(
-  parameter bit MIDI_OUT = 1'b1
+  parameter bit MIDI_OUT = 1'b1,
+  parameter int TIMER    = 0             // R976: 0 MAME's timers, 1 the arcade's, 2 tarc selects
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -47,6 +62,7 @@ module m2_scsp_regs #(
   input  logic        tick44,
   input  logic        exact,             // a timer falls due at its write's phase (R883)
   input  logic  [5:0] tph,               // the phase within the drained sample (0 at its tick)
+  input  logic        tarc,              // R976: with TIMER 2, 1 = the arcade's timers (quasi-static)
   // MIDI
   input  logic  [7:0] midi_data,
   input  logic        midi_valid,
@@ -119,6 +135,11 @@ module m2_scsp_regs #(
   // only for count 254 at prescale 0: tested directly, not through the adder
   // -- R859, timing)
   wire        tone  = mrg[10:0] == 11'h0fe;
+  // R976: the arcade's -- the (256 - count)-th prescaled tick after the next
+  // sample boundary, ticks where the free-running sample count is a multiple
+  // of 2^prescale (mod 2^15, as gcnt)
+  wire        arc   = (TIMER == 1) || (TIMER == 2 && tarc);
+  wire [14:0] tdue_a = 15'((15'(gnext >> mrg[10:8]) + 15'(9'd256 - {1'b0, mrg[7:0]})) << mrg[10:8]);
   logic [10:0] scipd_n, scipd_c, mcipd_n;
   logic  [4:0] mw_n, mr_n;
   logic  [2:0] arm_n, ex_n, fired_n, rep, clr;   // clr: {MIDI, timer B / C, timer A}
@@ -143,7 +164,8 @@ module m2_scsp_regs #(
         end
         5'h0c, 5'h0d, 5'h0e: begin
           ex_n[tw] = 1'b0; fired_n[tw] = 1'b0; late_n[tw] = 1'b0;
-          if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
+          if (arc) begin arm_n[tw] = 1'b1; due_n[tw] = tdue_a; dph_n[tw] = 6'd0; wrt[tw] = 1'b1; end   // R976: every count
+          else if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
         end
         5'h0f: chk = 1'b1;                 // SCIEB
         5'h10: scipd_n = mrg[10:0];
@@ -167,7 +189,7 @@ module m2_scsp_regs #(
       // the count due at this tick: now if written on a tick, else once the
       // phase reaches the write's (a phase past this sample's last clock fires
       // at the next tick)
-      if (tick44 && arm_n[t] && (wrt[t] ? tone : due[t] == gnext)) begin
+      if (tick44 && arm_n[t] && (wrt[t] ? tone && !arc : due[t] == gnext)) begin
         if (wrt[t] || dph[t] == 6'd0) go[t] = 1'b1; else late_n[t] = 1'b1;
       end else if (late[t] && !wrt[t] && (tick44 || tph >= dph[t])) begin
         go[t] = 1'b1; late_n[t] = 1'b0;

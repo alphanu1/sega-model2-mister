@@ -48,6 +48,7 @@ module m2_2a_sound #(
   parameter bit          CHKSUM   = 1'b0,  // R882: sum the program and the four sample ROMs in SDRAM before boot (a probe build)
   parameter bit          POST_WR  = 1'b1,  // R877: the 68000's RAM writes posted (0: DTACK on the SDRAM's acknowledge, as before)
   parameter bit          EXACT    = 1'b1,  // R884: the 68000 on MAME's wait states, its clock stopped while SDRAM answers
+  parameter int          TIMER    = 0,     // R976: the SCSP's timers -- 0 MAME's, 1 the arcade's, 2 snd_tarc selects
   parameter bit          LERP     = 1'b0   // R949: the output linearly interpolated between samples (m2_snd_lerp)
 ) (
   input  logic        clk,
@@ -83,6 +84,7 @@ module m2_2a_sound #(
   input  logic [63:0] c_dout,
 
   // ---- the sound
+  input  logic        snd_tarc,          // R976: with TIMER 2, 1 = the arcade's timer period; quasi-static
   input  logic  [1:0] snd_boost,         // R894: the SCSP's direct sends x 1 / 2 / 4 (0 = MAME's mix); quasi-static
   output logic signed [15:0] snd_l,
   output logic signed [15:0] snd_r,
@@ -249,7 +251,7 @@ module m2_2a_sound #(
   logic        sm_req, dm_req, dm_we;
   logic [15:0] sm_line, dm_wdata;
   logic [18:1] dm_addr;
-  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT)) u_scsp (
+  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT), .TIMER(TIMER)) u_scsp (
     .clk(clk), .rst_n(rst_n),
     .cpu_req(s_req), .cpu_we(!rwn), .cpu_addr(addr[11:1]), .cpu_din(oedb), .cpu_be({!udsn, !ldsn}),
     .cpu_ack(s_ack), .cpu_dout(s_dout), .ipl(ipl),
@@ -259,7 +261,7 @@ module m2_2a_sound #(
     .dm_req(dm_req), .dm_we(dm_we), .dm_addr(dm_addr), .dm_wdata(dm_wdata), .dm_ack(c_ack), .dm_data(c_dout),
     .snp(snp), .snp_addr(snp_a),
     .out_ready(o_ready), .out_valid(o_valid), .out_l_raw(), .out_r_raw(), .out_l(o_l), .out_r(o_r),
-    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .cpu_tick(cpu_tick), .boost(snd_boost), .step_mode(1'b0), .step_go(1'b0), .quiet(),
+    .tick44(tick44), .tph(tacc[TW-2 -: 6]), .cpu_tick(cpu_tick), .tarc(snd_tarc), .boost(snd_boost), .step_mode(1'b0), .step_go(1'b0), .quiet(),
     .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(dbg_samples), .dbg_miss(),
     .dbg_mvol(dbg_mvol)
   );

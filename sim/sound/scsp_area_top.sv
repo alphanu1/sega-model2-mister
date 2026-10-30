@@ -49,7 +49,7 @@ module scsp_area_top (
     .dm_req(dm_req), .dm_we(dm_we), .dm_addr(dm_addr), .dm_wdata(dm_wdata), .dm_ack(dm_ack), .dm_data(dm_data),
     .snp(snp), .snp_addr(snp_addr),
     .out_ready(out_ready), .out_valid(out_valid), .out_l_raw(), .out_r_raw(), .out_l(out_l), .out_r(out_r),
-    .tick44(tick44), .tph(tph), .cpu_tick(cpu_tick), .boost(boost), .step_mode(1'b0), .step_go(1'b0), .quiet(),
+    .tick44(tick44), .tph(tph), .cpu_tick(cpu_tick), .tarc(1'b0), .boost(boost), .step_mode(1'b0), .step_go(1'b0), .quiet(),
     .dbg_slot_valid(), .dbg_slot(), .dbg_slot_smp(), .dbg_samples(), .dbg_miss()
   );
 endmodule
