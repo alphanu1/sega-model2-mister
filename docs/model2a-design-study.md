@@ -38106,3 +38106,414 @@ m2_fb_read tgt_y -> the HPS f2sdram port (-0.078). Neither the Test path
 nor any wcomb window path is in the worst 20 hold / 60 setup paths of
 either. For comparison, main's release Model2_20261026 (s1511) is HDMI
 -1.465 at this corner: it is clean on the core clocks only.
+
+**R974 -- THE R972 RELEASE BUILDS' SLACK: NOTHING THE FIX TOUCHED IS ON A
+FAILING PATH. HDMI FAILS IN THE FRAMEWORK'S SCALER BY PLACEMENT (R968'S
+FINDING, AGAIN); THE CLEAN RELEASES WERE ONE SEED IN SIX. sys/ IS BEHIND
+UPSTREAM BUT UPSTREAM HAS NO FIX FOR THESE PATHS. 2C's AND MAIN'S CLK_SYS
+FAMILIES: THE TEXEL QUEUE'S HEAD REGISTERED (BOTH), R968's WINDOW COMPARE
+PORTED (2C). BRANCHES slack-main (OFF main 595d35e) AND slack-2c (OFF
+model2c 2ec33e2).**
+
+*What was believed:* the cvtri fix (R972, i960_fpmisc only) cost the main
+and 2C builds their timing: main s1583 / s1592 / s1593 missed HDMI by
+-0.374 / -0.585 / -0.473 (+106..+148 ALM on s1572's 39,056), three more
+crashed; 2C missed clk_sys in four of six seeds and HDMI in four.
+
+*What is now known:*
+1. The only RTL between the clean releases and these builds is
+   i960_fpmisc.sv (3f52ee0d..595d35e on main, 06c8f352..2ec33e2 on 2C:
+   sys/, Model2.qsf, Model2.sdc identical). quartus_map's estimate: main
+   39,197 -> 39,245 (+48), 2C 39,072 -> 39,064 (-8). The fitted ALM moves
+   by +-150 between seeds of one netlist (s1546-s1548: 39,117..39,228), so
+   the "+106..+148" is placement, not the fix.
+2. The clean releases were one seed of six each: ffb-main s1546-s1548,
+   s1570-s1572 -> s1572 only; snd-2c s1540-s1542, s1560-s1562 -> s1561
+   only (s1560 did not fit). Main's HDMI over those and today's seeds:
+   2 of 10 fitted seeds positive.
+3. No node of ours is on a failing HDMI path, and each seed fails a
+   different one (quartus_sta 17.0 at the release corner, 100C, on copies
+   of every seed's database, sm2-builds/r974-sta):
+     s1583  o_acpt4 -> o_hpixs           -0.374
+     s1592  o_vcpt_pre3 -> itself        -0.585; o_hcpt -> o_vcpt_pre2 -0.319
+     s1593  o_hpixq[7] -> o_hpixq[8]     -0.473 (0 levels: 6.4 ns of routing
+            from a register at X45 Y63 to the polyphase DSP at X54 Y26)
+     s1599  o_vcpt_pre3 -> itself        -0.255; o_div -> o_hfrac -0.216
+     2C s1589 o_hcpt -> o_vcpt -0.276; s1595 o_hcpt -> o_hcpt -0.245;
+     s1596 o_acpt4 -> o_shift -0.799; s1597 o_hpixq[5] -> [6] -0.920;
+     s1601 shadowmask vid RAM -> o_h_poly_phase -0.885; s1602 o_hpixq -0.568
+   About twenty ascal / OSD families, none in more than four of thirteen
+   seeds. As R968 found: with M10K 549-551 / 553 and DSP 101-105 / 112 the
+   scaler's line buffers and multipliers land wherever a block is free.
+4. sys/ against upstream Template_MiSTer (76dd8f5, 2026-10-28):
+   ascal.vhd is upstream 0874acd (2026-08-15, the four-bit gray-counter
+   handshake). Upstream since: 54ac838 (two-bit gray counters), f38ab86
+   (the gray counter reverted -- back to the toggle handshake), baaeff6
+   (o_state reset at vsync, for an o_clk paused by PLL reconfiguration).
+   None of the three touches the paths above (o_hcpt / o_vcpt / o_hpixq /
+   o_acpt4 / o_hfrac / the polyphase); they are a CDC handshake and a state
+   reset. Also behind: afd7808 (#119, audio pins from registers,
+   clk_audio) and 5dda373 (#120, yc_out's sine registered; YC is off here,
+   MISTER_DISABLE_YC). sys_top.sdc is upstream's byte for byte. Main's
+   hps_io.sv is upstream's (#122 merged); model2a's / model2c's are the
+   pre-#122 file. Ours on purpose: IHRES 512 / OHRES 2048 (R304), the audio
+   filter macro, analog audio pins unregistered, mcp23009's mode bit read
+   once, no LFB ports, yc_out's older IRE. NOTHING IN sys/ WAS CHANGED: the
+   upstream commits are not timing fixes for these paths. The gray-counter
+   revert and the vsync reset are correctness questions for a separate,
+   all-three-branches change (Ben).
+5. The crashes are Quartus, inside the fitter's timing netlist: s1584 DYN
+   after routing, s1585 / s1594 a null pointer in register packing's
+   timing analysis, s1598 STA_SCC (compute_scc_delays,
+   is_legal_arrival_rise_fall_time), s1600 the synchronizer-chain finder
+   (Segment Violation at 0x48), 2C s1608 DYN again. No OOM (journal: no
+   kill, no Quartus coredump). Main crashed 5 of 12 fits today, 2C 1 of
+   12, 2A 0 of 3. Memory
+   during 2C's s1601-s1603: 31 GB, ~19 GB available, swap 30 of 39 GB --
+   baloo_file_extractor (KDE's indexer) held 3.5 GB resident and 13 GB of
+   swap, more than the three fits together (each ~2 GB resident, ~2 GB
+   swapped). It slows fits; it is not shown to cause the crashes.
+6. clk_sys, ours (worst per seed; - = nothing under 0):
+     2C   s1589 SCSP rfb/st -> st write -0.164, m2_geo D_IDLE -> m2_wr_arb
+          pick_r -0.149, m2_geo_clip cs -> kst -0.120 (cs -> the pool's
+          grant and back); s1590 m2_fb_wcomb ib -> vlo -0.096; s1591
+          joy_analog_q -> m2_cab_inputs steer_rq -0.145; s1597 m2_span_tex
+          of_skip -> rt_take -> m2_texel_cdc's address stall -0.471
+          (of_rp -> rt_texel +0.039)
+     main s1599 m2_span_tex ubi_p -> the box read -> tx_tex -> texel_x2
+          -0.135; of_skip -> rt_take -> the e_pr multipliers' enables
+          -0.072
+   One family a seed, a different one each time, except the texel queue's
+   head (2C s1597, main s1599, R968's s1537 of_rp -> rt_take -> e_pr).
+
+*The changes (each proven identical; nothing else moves):*
+1. *m2_span_tex (both).* hq_skip / hq_reuse in registers, equal to
+   of_skip / of_reuse at of_rp, and of_ne equal to (of_wp != of_rp), each
+   from what the pointers and entries become on the edge: the head is entry
+   of_rp or of_rp + 1 (rt_take), with this edge's cons_take write to it
+   passed through; of_ne moves only when exactly one of cons_take / rt_take
+   happens. Every read of the head is under of_ne, so equality while the
+   queue holds anything is the whole requirement. A Verilator-only check
+   compares them with the queue on every clock. The 16-way read and the
+   4-bit compare leave rt_take.
+   Proof: sim/miter/spantex.sh (R952's miter, old against new, all 19
+   outputs every clock): tb_m2_span_tex plain / FTB+SPCULL / MIP / GC / UVCL
+   at TXK 4 and 16, each with no misses, 40% misses + 30% stalls, and 90%
+   misses + 60% stalls; and sim/miter/tb_spantex_rand.cpp, a random soak at
+   the build's parameters (PIXSTEP 4, TXK 16, FTB, GC, MIP, UVCL; LSB 5 +
+   UVSH on 2C, TEXLUT with lut_en toggling on main) with REUSE off and on,
+   a mask rewritten at random (groups skip), misses, stalls, credits 4-16:
+   30,000,000 cycles a tree, ~5.8 M skipped and ~0.6 M reused groups
+   retired, 0 differing, the check never fired. Mutation (the take-side
+   head without the write passed through): the check stops the run. The
+   unit benches PASS on both (2C's GC configuration FAILs on model2c
+   without this change too -- 1 of 8, "every fetch's coordinate": not
+   R974's).
+2. *m2_fb_wcomb (2C).* R968's keq register and ungated mask word (3f52ee0d,
+   66e61a92), applied unchanged: the 2C file was main's before R968.
+   sim/miter/wcomb_keq.sh on 2C: PROVEN, mutation NOT PROVEN;
+   sim/miter/wcomb.sh against model2c: 98,624,383 cycles, 0 differing,
+   mutation differs.
+NOT DONE (one seed each, and none is a re-expression): m2_geo_clip cs ->
+the pool's grant -> kst (the request decode in a register would need a
+next-state copy of cs, written in eleven places); m2_cab_inputs' stick ->
+steer_rq (R843 registered it once; another register is a cycle of latency
+or a retime across the module's port); the SCSP slot-state write; m2_geo
+-> m2_wr_arb; span_tex's box read (ubi_p -> ub_rd -> the clamp -> tx_tex).
+*Checks:* lint_top clean (2C: the qsf's macros incl. M2_2C,
+M2_NO_2A_MANX_MOTION; main: its own); lint_idx identical to the parents'
+(92 / 141 lines); Quartus 17.0 analyze_file 0 errors on m2_span_tex.sv and
+m2_fb_wcomb.sv; full quartus_map: 2C 39,064 -> 39,095 ALMs needed
+(span_tex 1,460 -> 1,473 ALUTs, wcomb 495 -> 497; registers +4; DSP 105,
+block bits unchanged), main 39,245 -> 39,250 (span_tex 1,485 -> 1,496).
+
+*Fit (Quartus 17.0, full map + fit, three at a time under the Model 1 fit
+lock; slack in ns at 100C; hold = worst of all clocks; recovery and removal
+positive on every seed):*
+
+  main 595d35e (unchanged RTL, a reseed):
+  | seed  | ALM    | clk_sys | clk_mem | clk_i960 | HDMI   | hold   |
+  | s1598 | Quartus Internal Error STA (above)                      |
+  | s1599 | 39,272 | -0.135  | +0.562  | +2.524   | -0.255 | +0.162 |
+  | s1600 | Quartus Segment Violation (above)                       |
+  main slack-main 0a09eaa (the span_tex change):
+  | s1604 | 39,213 | +0.330  | +0.798  | +0.519   | -0.638 | +0.240 |
+  | s1605 | 39,240 | -0.169  | +0.304  | +1.677   | -0.128 | +0.242 |
+  | s1606 | 39,259 | -0.419  | +0.542  | +1.085   | -0.159 | +0.176 |
+  2C slack-2c e66cdf7 (wcomb + span_tex):
+  | s1601 | 39,273 | -0.181  | +0.516  | +1.941   | -0.885 | +0.130 |
+  | s1602 | 39,445 | +0.071  | +0.687  | +1.672   | -0.568 | +0.209 |
+  | s1603 | 40,737 | +0.024  | +0.811  | +1.837   | -0.171 | +0.214 |
+  | s1607 | 39,353 | -0.042  | +0.115  | +1.581   | -1.245 | +0.176 |
+  | s1608 | Quartus Internal Error DYN                              |
+  | s1609 | 39,501 | -0.536  | +0.122  | +0.894   | +0.046 | +0.207 |
+
+NO SEED IS CLEAN ON EVERY CLOCK; the brief's two batches per core are
+spent and nothing was assembled or released. What failed:
+  * HDMI, every seed but s1609: ascal / OSD again (s1604 o_vcpt_pre3 ->
+    o_fload -0.638, osd h_cnt -> osd_hcnt2 -0.488; s1607 o_hpixq -1.245).
+  * clk_sys: main s1605 m2_raster_fill div_num -> u_div n_mag -0.169;
+    main s1606 the box read again, sh_p -> ub_ra -> ub_mem -> uv_cl ->
+    tx_v -> tx_tex -> q_tex, -0.419 (9 levels; it was s1599's -0.135, and
+    R951's own comment calls it the fit's to check); 2C s1601 of_rp ->
+    m2_raster3d's span queue rp -0.181 (span_tex's in_ready through of_room);
+    2C s1609 fb_clear_req / wcomb cl_on -> the e_pr multipliers' input
+    enables -0.536 (the ready chain: wcomb in_ready -> the raster's span
+    output -> span_tex's e_rdy -> the DSPs' enables).
+  * The families R974 fixed did not recur in its six fits each. Core clocks
+    all positive: 2C 2 of 5 fitted (s1602, s1603; before: 2 of 6), main 1
+    of 3 with the change (s1604).
+*NEXT, in order of what fails most:* (1) the UVCL box read -- carry each
+span's box word in the slot (in_ub, 2 x 45 registers) or read it a stage
+early into a register, so ub_ra's MLAB read leaves the request path; (2)
+the e_pr DSP enables -- the ready chain into the multipliers, R968's
+s1537 and 2C s1609; (3) more seeds. HDMI stays a placement draw (~1 seed
+in 4-5) that only the framework or the fill can move; a setting
+(PLACEMENT_EFFORT_MULTIPLIER, ROUTER_TIMING_OPTIMIZATION_LEVEL) is untried
+and would be a study-level experiment, not a release step. Seed databases:
+sm2-builds/r974-sta (copies, with path reports; s1561 / s1570-s1572 from
+the clean releases' own databases -- their seed folders were removed from
+sm2-builds at ~20:33 tonight, not by this work).
+
+**R975 -- THE HDMI SLACK IS OURS AFTER ALL, INDIRECTLY: THE WORST SEEDS ARE
+THE SCALER'S POLYPHASE DSP BLOCKS SPLIT ACROSS THE DIE BECAUSE OUR RASTER
+FILL HOLDS THE DSP SITES BESIDE IT. FIFTEEN (MAIN) / TWELVE (2C) SMALL
+PRODUCTS MOVED FROM DSP BLOCKS TO LOGIC, AND (BEN'S DECISION) AGGRESSIVE
+ROUTABILITY BACK TO AUTOMATICALLY (R131). BRANCHES slack-main AND slack-2c.**
+
+*What was believed (R968, R974):* HDMI fails inside the framework's scaler
+(ascal / OSD), a different path family each seed, "a placement draw that only
+the framework or the fill can move"; no node of ours is on a failing path.
+Ben: "I know it's in HDMI, but our code must be causing it."
+
+*What is now known -- placement, measured.* Every cell's location was read
+from all 22 saved databases in sm2-builds/r974-sta (quartus_sta 17.0,
+get_cells -hierarchical, get_cell_info -location / -wysiwyg_type; 8 s a
+seed). The 5CSEBA6 has its 112 DSP blocks in four columns: X20 and X32 with
+39 each (Y2-79), X54 and X86 with 17 each (Y2-35; the HPS takes the top
+right). ascal uses 13 (six sum-of-two 18x18 for each polyphase direction,
+Add172-177 and Add231-236, plus Mult14).
+1. THE WORST HDMI SEEDS ARE A SPLIT SCALER. In seven of 22 seeds ascal's 13
+   DSPs were placed in two groups 50-60 rows apart: one beside its logic at
+   X20/X32 Y63-79, the rest at X54/X86 Y24-35. All seven failed, and they
+   are the seven worst but two: c1607 -1.245, c1597 -0.920, c1601 -0.885,
+   c1596 -0.799, c1602 -0.568, m1593 -0.473, c1595 -0.245 (s1593's 0-level
+   o_hpixq[7] -> [8] into X54 Y26 is this; so are R968's s1539 / s1543).
+   In every clean seed (m1571, m1572, c1561, c1590, c1591, c1609) all 13
+   sit in one block of the columns next to ascal's output logic.
+2. WHAT HOLDS THE SITES IS OURS. In the split seeds the X20/X32 Y55-79
+   window ascal wants is filled by m2_raster_fill's cluster (u_div, u_divb,
+   u_denr, Mult2-30, Add36-42: 38 blocks), leaving ascal 6-7 sites there.
+3. THE SPLIT RATE FOLLOWS THE DSP TOTAL. 2C (105 DSP blocks) split in 6 of
+   12 seeds -- 6 of the 7 whose ascal landed top-left; main (101) in 1 of
+   10 (1 of 8 top-left). Four more blocks took the top-left from "usually
+   fits" to "almost never fits".
+4. THE REST IS A SECOND FAMILY, NOT PLACEMENT OF OURS. The other failures
+   (-0.13 .. -0.64) are ascal / OSD counter and compare paths of 4-7 logic
+   levels inside a few LABs (s1592: o_vcpt_pre3 -> Add183 carry ->
+   LessThan33 -> sclr, 7.0 ns of data against 6.73, the hops 0.2-1.3 ns):
+   the framework at 148.5 MHz with no margin. How much of our logic shares
+   ascal's region (12 x 8 LABs around its output registers: 9% to 89% ours)
+   does not separate pass from fail. On main this family is most of what
+   fails (2 of 9 unsplit seeds passed); on 2C 4 of 5 bottom-right seeds
+   passed.
+5. M10K IS NOT THE MECHANISM. ascal's 35 M10Ks sit at the same distance
+   from its output logic in clean and failing seeds (mean 10-16, 20-29 for
+   the far bottom-left draws), uncorrelated with slack.
+
+*Resources by module (fitted s1572 main / s1561 2C; DSP blocks / M10K):*
+
+  | module                         | DSP main | DSP 2C | M10K main | M10K 2C |
+  |--------------------------------|----------|--------|-----------|---------|
+  | m2_raster_fill (+div, divb, denr) | 38    | 38     | -         | -       |
+  | m2_span_tex                    | 19       | 16     | 9         | 12      |
+  | ascal (framework)              | 13       | 13     | 35        | 35      |
+  | m2_scan15                      | 6        | 6      | 20        | 20      |
+  | m2_texel_bl                    | 4        | 4      | 28        | 28      |
+  | i960_fpmul                     | 4        | 4      | -         | -       |
+  | i960_muldiv                    | 3        | 3      | -         | -       |
+  | m2_palette                     | 3        | 3      | 16 (u_pal)| 16      |
+  | m2_snd_lerp                    | 3        | 3      | -         | -       |
+  | m2_geo_engine                  | 2        | 2      | 1         | 1       |
+  | master volume (Model2.sv / m2_volume) | 2 | 2      | -         | -       |
+  | sound board (MultiPCM+68000 main; SCSP+68000 2C) | 2 | 3 | 24 | 39 |
+  | m2_vcop_guns (2C, HotD)        | -        | 4      | -         | -       |
+  | copro: TGP (main) / TGPx4 (2C) incl. FIFOs | 1 | 3 | 12 | 17 |
+  | I/O Z80 (main)                 | -        | -      | 24        | -       |
+  | m2_fp_pool fp_mul              | 1        | 1      | -         | -       |
+  | m2_quad_store (u_store)        | -        | -      | 151       | 153     |
+  | char cache / tile RAM          | -        | -      | 68 / 64   | 68 / 64 |
+  | total                          | 101      | 105    | 551       | 549     |
+
+  The fitter report's DSP Block Details show 126 multipliers in main's 101
+  blocks: Quartus packs no two independent products into one block, so 39
+  "Two Independent 18x18" blocks and 10 "Independent 9x9" blocks each hold
+  a single product -- many of them 8 x 6 or 5 x 9.
+  Candidates looked at and left: the fill's 38 (deep, cycle-tuned; R847);
+  the 2C guns' four constant multiplies (HotD needs them; ~50 ALM each);
+  main's TEXLUT lpr / lp4_g (8 x 17 by a constant mux, ~65 ALM each); the
+  volume and MultiPCM products (16 x 9, ~80 ALM each). M10K: the
+  framework's vga_osd (4), shadow mask (4), vga_scaler (1) and direct-video
+  (2) are features; ours (store, caches, rings) are sized to the game.
+  Nothing in the release builds is debug: M2_NO_DEBUG and M2_NO_OVERLAY are
+  set in both qsfs.
+
+*The changes.*
+1. *Small multiplies in logic (RTL, both trees, 4fd68a5 / 474e758).*
+   `(* multstyle = "logic" *)` on m2_scan15 (module, and its three x 3277
+   wires that said "dsp"), m2_texel_bl (module), m2_geo_engine (module) and
+   m2_span_tex's e_pr. No expression, width or register is touched -- the
+   arithmetic and every cycle are the old ones; only where Quartus builds
+   the products changes. e_pr is unused on 2C (TEXLUT only), so 2C frees 12.
+   The span_tex e_pr enable is also R968 s1537's / R974 2C s1609's failing
+   clk_sys path into the DSPs' input registers; it now ends in LAB flops.
+   quartus_map 17.0:
+     main  DSP 101 -> 86, ALMs needed 39,250 -> 39,662 (+412), registers
+           49,939 -> 49,933, block bits 4,671,024 unchanged
+           (scan15 215 -> 478 ALUT, texel_bl 1,706 -> 1,971, geo_engine
+           1,783 -> 1,897, span_tex 1,496 -> 1,618)
+     2C    DSP 105 -> 93, ALMs needed 39,095 -> 39,463 (+368), registers
+           48,618 -> 48,612, block bits 4,592,208 unchanged
+2. *FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY (Ben's
+   decision; both qsfs, 407f441 / 47d2950).* R131 measured ALWAYS ->
+   AUTOMATICALLY as +0.552 ns on HDMI (seed 19, -0.124 -> +0.428, +353 ALM).
+   ALWAYS had been PUT BACK after the router segfaulted at 99.5% (R836's
+   note); so this campaign counts crashes and unroutable fits against it.
+   Ben's call was both levers on every seed, no A/B: the builds are for
+   release.
+
+*Checks:* lint_top clean (main default and -DM2_NO_DEBUG; 2C with the qsf's
+macros); lint_idx identical to the parents apart from line numbers (141 /
+111 lines); benches PASS on both trees: run_scan15.sh modes 0 / 1 / 2 at 14
+frames, test_m2_texel_bl (200,000 checks, 0 fails), test_m2_geo_engine (70,
+0), test_m2_span_tex (7,214, 0) -- they cannot see an attribute, so they
+show only that nothing else moved; full quartus_map 17.0 0 errors on both,
+re-run after the qsf change (same numbers).
+
+*Fits (Quartus 17.0, Slow 1100mV 100C; hold = worst of all clocks).*
+With AUTOMATICALLY (Ben's first decision, then withdrawn) and the R975 RTL --
+crashes are not counted:
+
+  | seed  | core | ALM    | clk_sys | clk_mem | clk_i960 | HDMI   | hold   |
+  |-------|------|--------|---------|---------|----------|--------|--------|
+  | s1610 | main | could not route (congestion; peak 68% X11-21 Y35-45)    |
+  | s1611 | main | 40,919 | +0.009  | -0.256  | +1.976   | -0.259 | -0.002 |
+  | s1615 | main | 40,991 | +0.192  | -0.685  | +1.867   | -0.170 | +0.197 |
+  | s1616 | main | 40,981 | +0.354  | -0.339  | +1.671   | -0.372 | +0.140 |
+  | s1612 | 2C   | Segment Violation, register packing's STA masks (pre-placement) |
+  | s1613 | 2C   | the same                                                |
+  | s1617 | 2C   | 41,028 | +0.415  | -0.794  | -2.122   | -0.134 | -0.320 |
+  | s1618 | 2C   | 41,019 | -0.936  | -0.445  | +1.778   | -0.741 | +0.244 |
+
+AUTOMATICALLY at this fill: 0 clean of 6 fitted, 1 unroutable, placed ALM
+40,919-41,028 against 39,056-39,445 under ALWAYS (+~1,700, of which the map
+accounts for ~400). R131's +0.55 ns was measured at 79%; at 94% the spreading
+is what lets the design route. ALWAYS is back (daa0bb3 / b4eb8c3) and stays
+(Ben: it was chosen to reduce ALM). In s1611 ascal's 13 DSPs sat together
+(X20/X32 Y2-20): the split was gone, and HDMI still failed on logic paths.
+
+*The history (Ben: "it must be one of the new additions").* quartus_map 17.0
+at each release commit (sm2-builds/r975-hist), ALMs needed / DSP / block bits:
+
+  main  1014 0fe853f 39,597 / 90 / 4,355,199    1016 78607d8 40,486 / 88 / 4,379,775
+        1022 8a7c25e 40,293 / 98 / 4,670,992    1023 61da7db 40,340 / 98 / 4,670,992
+        1023b b1d0416 40,380 / 98 / 4,670,992   1025 7017b29 39,130 / 101 / 4,671,024
+        1026 9decc9b 39,165 / 101 / 4,671,024   1028 ca966d5 39,194 / 101 / 4,671,024
+        now  595d35e 39,245 / 101 / 4,671,024
+  2C    1024 6459eca 38,935 / 105 / 4,592,208   1026 42118ce 39,140 / 105 / 4,592,208
+        1027 879ed15 39,091 / 105 / 4,592,208   now  39,095 / 105
+
+DSP on main: +6 m2_scan15 (R898) and +4 span_tex TEXLUT (R925) between 1016
+and 1022, +3 m2_snd_lerp (R949 / R956) at 1025. ALM is LOWER now than on
+10-16..10-23 (R952 took 1,400 out). The release records (HANDOFF) show what
+changed: HDMI WAS REPORT-ONLY UNTIL 2026-10-27. Released with HDMI failing:
+main s1087 -0.003, s1142 -0.350, s1492 -0.250 ("report-only"), s1511 -1.465;
+2A s1468 -0.140, s1503 -0.890, s1523 -1.035, s1536 -1.134; 2C s1471 -0.102.
+HDMI positive: s1483 (2A) +0.109, s1521 (2C) +0.025, s1561 (2C) +0.154,
+s1572 (main) +0.103. On the core clocks the batches were as Ben remembers --
+s1466-68, s1469-71, s1534-36 one clean of three; s1484-92 one of nine;
+s1508-13 one of six with three crashes -- and under that criterion R974's
+s1604 (main) and s1602 / s1603 (2C) were releasable. Daytona FFB was not an
+easy fit even on core clocks (s1526 crash, s1527 unroutable, s1528 HDMI
+-0.987, s1529 clk_sys -0.783, s1530 clk_mem -0.038, s1531 clean, then eleven
+fails to s1572). WHAT GOT HARDER IS THE CRITERION, NOT THE DESIGN.
+
+*Reproduction (Ben's test).* 3f52ee0d at seed 1572 in a fresh worktree with
+seed-sweep.sh reproduced s1572 TO THE PICOSECOND and the BIT (39,056 ALM,
+clk_sys +0.474, clk_mem +0.824, i960 +2.183, HDMI +0.103, hold +0.210;
+rbf md5 3e4c749bec6d5a3db3fc62373ad14519 = the release). The settings
+panels of the report databases (Flow Non-Default, A&S Settings, Fitter
+Settings) of s1572 / s1593 and s1561 / s1607 differ only in SEED: no tool,
+setting or method difference. Two inputs had to be matched: BUILD_DATE
+(build_id.v is copied from the worktree root -- quartus_map does not run the
+PRE_FLOW script -- and Model2.sv puts it in CONF_STR, so a different date is a
+different netlist: s1572 had "261021", R974's and these seeds "261029"), and
+the seed qsf (ffb-m2's carried five lines Quartus had appended: the missing
+m2_testpattern.sv and SDRAM FAST_* duplicates of sys.tcl).
+595d35e (cvtri only) at seed 1572, same qsf and date: 39,227 ALM, clk_sys
++0.308, clk_mem +0.746, i960 +0.800, hold +0.233, HDMI -0.248 (ascal o_hcpt
+counter; its DSPs split 7 top-left / 6 bottom-right). One seed cannot tell
+"cvtri hurts HDMI" from "any change re-draws a fragile placement"; the
+control proposed is 3f52ee0d at seed 1572 with BUILD_DATE alone changed.
+
+*Open (Ben's decisions pending):* the control fit; a leaner cvtri (step 3);
+whether the R975 multstyle change (+412 / +368 ALMs needed, DSP -15 / -12)
+stays -- it removes the DSP-split mechanism but not the ascal logic-path
+family, and its ALM cost is real.
+
+*R975 addendum -- the control: cvtri is not the cause; s1572 was a fragile
+draw.* 3f52ee0d (the release RTL, no cvtri) at seed 1572, s1572's qsf,
+ALWAYS, with ONLY build_id.v changed from "261021" to "261022": 39,070 ALM,
+clk_sys +0.693, clk_mem +0.836, i960 +2.856, hold +0.142, HDMI -1.421
+(HDMI_shadowmask's shift-tap RAM -> ascal o_h_poly_phase; osd_mux -> the
+vga_scaler shift-tap RAM -1.213; o_h_poly_t -> o_h_poly_pix -1.082), with
+ascal's DSPs split 7 top-left / 6 bottom-right. A one-character date change
+moved HDMI from +0.103 to -1.421 -- further than cvtri did (-0.248). So the
+cvtri fix is not what turned clean into failing, and a leaner cvtri is not
+the lever; the release's clean HDMI was one draw of a placement that fails
+most draws.
+FINDING: BUILD_DATE IS IN CONF_STR ("V,v",`BUILD_DATE, Model2.sv), so it is
+in the netlist (hps_io's string ROM). Every rebuild on a new date -- or from
+a worktree whose build_id.v was last written on another day -- is a
+different netlist and re-rolls placement even at the same seed: "same RTL,
+same seed" reproduces only with the same build_id.v (and the same qsf,
+appended lines included). Pin build_id.v when reproducing a build.
+
+*R975 correction (2026-10-30) -- the multstyle change was harmful, and the
+"+1,700 ALM from AUTOMATICALLY" above was the multstyle change's.* The
+release batch at the branch heads with ALWAYS and the multstyle RTL: main
+s1619 40,890 ALM, clk_sys +0.069, clk_mem -0.683, i960 +1.557, HDMI -1.556,
+hold +0.230; s1620 40,934, +0.144, -0.365, +2.297, -0.070, +0.152; s1621
+40,837, +0.087, -0.382, +1.529, -0.388, +0.201 (2C s1622 / s1623 stopped
+early, s1624 not run). Placed ALM under ALWAYS (40,837-40,934) is the same as
+under AUTOMATICALLY (40,919-41,028): the map's +412 ALMs needed became
+~+1,650 placed (logic multipliers pack poorly), and THAT is the jump wrongly
+credited to AUTOMATICALLY above. Every one of the seven fitted seeds with the
+change failed clk_mem by 0.26-0.79 ns on paths the change created: m2_scan15's
+ring M10K -> rd * wcur (now logic) -> acc_r / acc_g (s1619, s1621), m2_texel_bl
+v1_q.vf -> the 10 x 10 down weight (now logic) -> texel (s1620) -- 100 MHz
+paths that had a DSP. ascal's DSPs no longer split, and HDMI still failed on
+its logic paths. Reverted on both branches (662a1ba / 8c48175; the RTL is
+again 0a09eaa / e66cdf7's: the span_tex head register and 2C's wcomb port
+stay). Lesson: a DSP-to-logic move is not "same arithmetic, free": at 94%
+fill the placed cost is about four times the map estimate, and a product on
+a 100 MHz path needs its timing checked, not assumed.
+
+*R975 close (2026-10-30, Ben's decision): NOT RELEASED.* The release is
+rounding-only (R972): main s1583, 2C s1595, 2A s1582. slack-main and slack-2c
+(R974's span_tex head register, 2C's wcomb port, and R975's reverted multstyle
+change) stay as branches, unmerged. Their last fits, multstyle reverted and
+routing ALWAYS (quartus_map 39,250 / 39,095 ALMs needed, DSP 101 / 105):
+  main s1625 39,305 ALM, clk_sys -0.190, clk_mem +0.775, i960 +0.550, HDMI -0.427
+       s1626 39,350, -0.753, -0.289, +0.390, -0.952
+       s1627 39,182, +0.272, +0.103, +0.615, -0.801  (core clocks clean)
+       s1631 39,195, -0.072, +0.608, +1.561, -0.105
+       s1632 39,267, +0.110, -0.195, +1.327, -0.289
+       s1633 39,272, +0.623, +0.520, +0.441, -0.315  (core clocks clean)
+  2C   s1628 39,527, -0.842, +0.145, +0.814, -0.357
+       s1629 could not route (congestion) -- under ALWAYS, so unroutable
+             fits are not AUTOMATICALLY's alone (s1527 was one too)
+       s1630 39,402, +0.334, +0.568, +1.271, -0.741  (core clocks clean)
+       s1634-s1636 stopped unfinished on Ben's decision.
+  Hold, recovery and removal positive on every fitted seed. None clean with
+  HDMI included: 0 of 6 main, 0 of 2 fitted 2C.

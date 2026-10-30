@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-10-30: study R974 and R975 copied here from slack-main
+
+The HDMI slack investigation (R974, R975) is now in this branch's study, from
+branch slack-main (not released, not merged). In short: the clean releases
+were lucky placements; BUILD_DATE in CONF_STR re-rolls placement on every
+rebuild; the worst HDMI misses are the framework scaler's 13 DSPs split
+across the die when ours fill the sites beside it; multstyle-logic (+1,650
+placed ALM, clk_mem failures) and AUTOMATICALLY routing both made it worse
+and were reverted. No RTL changed here.
+
 ## 2026-10-30: Model2_20261030, Model2A_20261030, Model2C_20261030 in releases/
 
 `releases/` matches model2a: each core is its last release plus only the i960
