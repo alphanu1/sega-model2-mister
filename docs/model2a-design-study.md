@@ -46766,3 +46766,14 @@ code stays as TIMER 0 / the OSD's "MAME" setting; the default is now R976's
 arcade period. Lesson recorded with R976: a tempo matched to MAME is a tempo
 matched to MAME (the project rules, "never treat a MAME cycle count as a hardware
 fact"); where a recording of the real machine exists, it is the reference.
+
+**R978 -- SEAM FILL DEFAULTS TO BLACK ONLY (Ben, 2026-10-30).** R957 put
+R944's edge dilation behind the OSD's Seam fill, Off by default, and added
+Black only (dilate only black flat quads: Rally's car-shadow cracks close,
+the white body panels are left alone). Ben, on the board: Black only works,
+so it is the default. The setting moves to new bits, O[74:73] "Black only,
+Off, On", so every saved config opens on Black only rather than on whatever
+69:68 held; 69:68 are no longer read. The fill's dil_on is unchanged (0 Off,
+1 Black only, 2 On); menu 3, never offered, maps to Black only. Checks:
+lint_top clean; Quartus 17.0 analyze_file on Model2.sv, 0 errors. Not fitted
+on its own; it goes into the next build from this branch.

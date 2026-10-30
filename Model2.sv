@@ -443,8 +443,10 @@ localparam CONF_STR = {
 	// (68), so a saved config opens Off. Black only: only black flat quads (the
 	// cars' shadows) are dilated -- the shadow's cracks stay closed and the
 	// white panels are left alone; black trim overlaps its neighbours by the
-	// same 1/8 px (R957). On: R944 as it was.
-	"O[69:68],Seam fill,Off,Black only,On;",
+	// same 1/8 px (R957). On: R944 as it was. R978: Black only is the
+	// default, on new bits (74:73) so every saved config opens on it; 69:68
+	// are no longer read.
+	"O[74:73],Seam fill,Black only,Off,On;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
@@ -1146,7 +1148,9 @@ wire [1:0] mip_mode = 2'd3 - mip_s3;
 // R957: the OSD's Seam fill, into clk_sys where m2_raster_fill runs (three
 // flops). Quasi-static; the fill takes it per quad.
 reg [1:0] dil_s1, dil_s2, dil_s3;
-always_ff @(posedge clk_sys) begin dil_s1 <= (status[69:68] == 2'd3) ? 2'd0 : status[69:68]; dil_s2 <= dil_s1; dil_s3 <= dil_s2; end
+// R978: menu 0 Black only, 1 Off, 2 On (3, never offered, as Black only)
+// -> the fill's dil_on 1, 0, 2.
+always_ff @(posedge clk_sys) begin dil_s1 <= (status[74:73] == 2'd1) ? 2'd0 : (status[74:73] == 2'd2) ? 2'd2 : 2'd1; dil_s2 <= dil_s1; dil_s3 <= dil_s2; end
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
