@@ -1,5 +1,14 @@
 # Handoff
 
+## 2026-10-30: Model2_20261030, Model2A_20261030, Model2C_20261030 in releases/
+
+`releases/` matches model2a: each core is its last release plus only the i960
+rounding fix (R972, cvtri / roundr ties to even, overflow saturates by sign).
+Model 2 s1583 (md5 c81c118e...), 2A s1582 (7ac0c79d..., every clock clean),
+2C s1595 (e7e58e0c...). Model 2 and 2C close every core clock and hold; HDMI
+is report-only (-0.374 / -0.245, framework scaler), on Ben's word. Details in
+model2a's HANDOFF and its study (R972; R974/R975 on slack-main / slack-2c).
+
 ## 2026-10-28 (night): Model2_20261028 released -- Daytona force feedback
 
 - `releases/Model2_20261028.rbf` = ffb-main s1572 (md5
