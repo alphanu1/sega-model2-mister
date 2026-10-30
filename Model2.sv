@@ -139,6 +139,13 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_SND_LERP
 `define M2_2A_SND_LERP 1
 `endif
+// R976: M2_2A_SND_TIMER, the SCSP's timers (m2_2a_sound TIMER): 0 MAME 0.289's
+// period, 1 the arcade's (fitted to a Sega Rally cabinet recording), 2 both,
+// the OSD's "SCSP timer" choosing (status[72]: 0 Arcade, 1 MAME) -- the A/B
+// build, the default for now.
+`ifndef M2_2A_SND_TIMER
+`define M2_2A_SND_TIMER 2
+`endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
 // On by default; VERILOG_MACRO "M2_NO_2A_RALLY=1" (or -DM2_NO_2A_RALLY to
@@ -436,8 +443,10 @@ localparam CONF_STR = {
 	// (68), so a saved config opens Off. Black only: only black flat quads (the
 	// cars' shadows) are dilated -- the shadow's cracks stay closed and the
 	// white panels are left alone; black trim overlaps its neighbours by the
-	// same 1/8 px (R957). On: R944 as it was.
-	"O[69:68],Seam fill,Off,Black only,On;",
+	// same 1/8 px (R957). On: R944 as it was. R978: Black only is the
+	// default, on new bits (74:73) so every saved config opens on it; 69:68
+	// are no longer read.
+	"O[74:73],Seam fill,Black only,Off,On;",
 	// R650: THE TEXEL STEP -- pixels one texel fetch serves. 1 is MAME's
 	// sharpness; 2, 4 and 8 draw faster (a heavy list draws in ~5.2, 3.1,
 	// 1.9 video frames at 1, 2, 4 -- a list comes every ~2.1) and the 3D
@@ -483,6 +492,10 @@ localparam CONF_STR = {
 	// x2 / x4 before the DSP's return; Off, the default, is MAME's mix.
 	"O[49:46],Volume,80%,90%,100%,150%,200%,300%,400%,0%,10%,20%,30%,40%,50%,60%,70%;",
 	"O[65:64],Raw Sound Boost,Off,+6 dB,+12 dB;",
+	// R976: the SCSP's timer period. Arcade (the default) is fitted to a real
+	// Sega Rally cabinet, whose music runs 2.18% slower than MAME's; MAME is
+	// MAME 0.289's period, as every build before. M2_2A_SND_TIMER 2 only.
+	"O[72],SCSP timer,Arcade,MAME;",
 `else
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
 `endif
@@ -1135,7 +1148,9 @@ wire [1:0] mip_mode = 2'd3 - mip_s3;
 // R957: the OSD's Seam fill, into clk_sys where m2_raster_fill runs (three
 // flops). Quasi-static; the fill takes it per quad.
 reg [1:0] dil_s1, dil_s2, dil_s3;
-always_ff @(posedge clk_sys) begin dil_s1 <= (status[69:68] == 2'd3) ? 2'd0 : status[69:68]; dil_s2 <= dil_s1; dil_s3 <= dil_s2; end
+// R978: menu 0 Black only, 1 Off, 2 On (3, never offered, as Black only)
+// -> the fill's dil_on 1, 0, 2.
+always_ff @(posedge clk_sys) begin dil_s1 <= (status[74:73] == 2'd1) ? 2'd0 : (status[74:73] == 2'd2) ? 2'd2 : 2'd1; dil_s2 <= dil_s1; dil_s3 <= dil_s2; end
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
 wire [15:0] tex_lost, tex_to, fb_pub, fb_drop, fb_lines, fb_late;
@@ -3460,6 +3475,9 @@ m2_volume u_vol (.clk(clk_sys), .code(vol_s3), .in_l(snd_l), .in_r(snd_r), .out_
 // R894: the OSD's Raw Sound Boost (was 'Direct boost') into clk_sys like the volume (m2_2a_sound)
 reg  [1:0] boost_s1, boost_s2, snd_boost;
 always_ff @(posedge clk_sys) begin boost_s1 <= status[65:64]; boost_s2 <= boost_s1; snd_boost <= boost_s2; end
+// R976: the OSD's SCSP timer into clk_sys (0 = Arcade -> snd_tarc 1)
+reg        tarc_s1, tarc_s2, snd_tarc;
+always_ff @(posedge clk_sys) begin tarc_s1 <= !status[72]; tarc_s2 <= tarc_s1; snd_tarc <= tarc_s2; end
 `else
 reg  [8:0] vol_gain;
 always_comb begin
@@ -3482,6 +3500,7 @@ end
 (* multstyle = "dsp" *) wire signed [25:0] vol_pr = snd_r * $signed({1'b0, vol_gain});
 always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8]; end
 wire [1:0] snd_boost = 2'd0;
+wire       snd_tarc  = 1'b1;
 `endif
 
 // Byte out of the burst: word by [2:1], byte within it by [0].
@@ -3554,7 +3573,7 @@ end else if (SND2A) begin : g_2asnd
 	              .SMP_BASE(GAME_SAMP_2A), .ROM_SWAP(1'b1), .CHKSUM(SND_CHKSUM),   // R882
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
-	              .EXACT(`M2_2A_SND_EXACT != 0),
+	              .EXACT(`M2_2A_SND_EXACT != 0), .TIMER(`M2_2A_SND_TIMER),   // R976
 	              .LERP(`M2_2A_SND_LERP != 0)) u_snd2a (   // R884, R949
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
@@ -3564,7 +3583,7 @@ end else if (SND2A) begin : g_2asnd
 		.b_req(s2a_b_req), .b_addr(s2a_b_addr), .b_ack(p_ack[6]), .b_dout(p_dout[6]),
 		.c_req(s2a_c_req), .c_addr(s2a_c_addr), .c_we(s2a_c_we), .c_din(s2a_c_din),
 		.c_ack(p_ack[7]), .c_dout(p_dout[7]),
-		.snd_boost(snd_boost), .snd_l(snd_l), .snd_r(snd_r),   // R894
+		.snd_boost(snd_boost), .snd_tarc(snd_tarc), .snd_l(snd_l), .snd_r(snd_r),   // R894, R976
 		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
 		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
 		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418),

@@ -16,6 +16,7 @@
 //   SND_IMG=<dir with prog.bin, samp.bin (snd_img.py)>  SCSP_CAP=<p16 capture>
 //   SND_S=<seconds, default 10>  LAT_LO / LAT_HI (default 6 / 40)
 //   SND_RAMFILL=<word>  what unwritten sound RAM reads (default 0xffff)
+//   SND_TARC=1  R976: the arcade's timer period (a build with SCSP_DEFS=-GTIMER=2)
 //   SND_BOOST=<0..2>  R894: the SCSP's Direct boost, x1 / x2 / x4 (default 0, MAME's mix)
 //   LAT_A_LO / LAT_A_HI the 68000's port alone (R874)
 //   LAT_TRACE=<prefix>  R877: each port's latency from tb_m2_sdram_load's trace
@@ -26,6 +27,8 @@
 //   SND_SHIFT=<s> [SND_SHIFT_AFTER=<s>, default 5]  MAME's MIDI and writes from
 //     SND_SHIFT_AFTER moved SND_SHIFT seconds earlier, to reach a late event
 //     in a short run (R874: VF2's music at 4.77 s with SND_SHIFT=9)
+//   LAP_MS=<ms>  R976: a streaming-window line read again after more than this
+//     (default 50) with no 68000 write since counts as a lap read stale
 //   SND_MIDI_DROP=1  MAME's MIDI between SND_SHIFT_AFTER - SND_SHIFT and SND_SHIFT_AFTER
 //     dropped, as its writes are (R886: a later game's MIDI moved to the boot's end
 //     instead of queued behind the dropped stretch)
@@ -68,7 +71,17 @@ static uint16_t rd16(uint32_t w) {
 }
 static uint64_t rd64(uint32_t w) { w &= ~3u; uint64_t v = 0; for (int i = 0; i < 4; i++) v |= uint64_t(rd16(w + i)) << (16 * i); return v; }
 static uint64_t ram_writes = 0, bad_writes = 0, part_writes = 0;   // R871: part = a write with be != 3
+// R976: a streamed ring read a lap stale -- a slot fill (port 6) of a line in
+// the streaming windows (sound RAM bytes 0x10000-0x4ffff) read before, not
+// written since, and more than LAP_MS ago: the slot came round again before
+// the 68000 refilled it (it plays last lap's data)
+static std::vector<uint64_t> ln_rd(0x10000, 0);   // per 4-word line: clock of the last slot read
+static std::vector<uint8_t>  ln_wr(0x10000, 1);   // written since that read
+static uint64_t lap_stale = 0, lap_reads = 0; static uint64_t lap_win[32] = {0};
+static uint64_t cyc_now();
+static void lap_read(uint32_t w);
 static void wr16(uint32_t w, uint16_t d, int be) {
+	if (w >= RAM_BASE && w < RAM_BASE + 0x40000) ln_wr[(w - RAM_BASE) >> 2] = 1;
 	if (w >= RAM_BASE && w < RAM_BASE + 0x40000) {
 		uint16_t &x = ram[w - RAM_BASE];
 		// R871: AS THE BOARD DOES IT -- the byte enables never reach the
@@ -130,7 +143,7 @@ static void tick() {
 	}
 	pa.was = t->a_req;
 	if (t->b_req && !pb.was && !pb.busy) { pb.busy = true; pb.wait = use_tr ? lat_tr(1) : lat(); dem_req(1, false, pb.wait); }
-	if (pb.busy && --pb.wait <= 0) { pb.busy = false; t->b_ack = 1; t->b_dout = rd64(t->b_addr); }
+	if (pb.busy && --pb.wait <= 0) { pb.busy = false; t->b_ack = 1; t->b_dout = rd64(t->b_addr); lap_read(t->b_addr); }
 	pb.was = t->b_req;
 	if (t->c_req && !pc.was && !pc.busy) { pc.busy = true; pc.wait = use_tr ? lat_tr(2) : lat(); dem_req(2, t->c_we, pc.wait); }
 	if (pc.busy && --pc.wait <= 0) {
@@ -141,6 +154,21 @@ static void tick() {
 	t->eval();
 	t->clk = 1; t->eval();
 	cyc++;
+}
+
+static uint64_t cyc_now() { return cyc; }
+static void lap_read(uint32_t w) {
+	if (w < RAM_BASE || w >= RAM_BASE + 0x40000) return;
+	const uint32_t ln = (w - RAM_BASE) >> 2, byte = (w - RAM_BASE) << 1;
+	if (byte < 0x10000 || byte >= 0x50000) return;
+	static const double lap_ms = getenv("LAP_MS") ? atof(getenv("LAP_MS")) : 50.0;
+	lap_reads++;
+	if (ln_rd[ln] && !ln_wr[ln] && double(cyc_now() - ln_rd[ln]) > lap_ms * 1e-3 * CLK) {
+		lap_stale++; lap_win[(byte - 0x10000) >> 13]++;
+		static int shown = 0;
+		if (shown < 20) { shown++; printf("  STALE: %.4f s window %u (byte %05x), last read %.1f ms before, not rewritten\n", cyc_now() / CLK, (byte - 0x10000) >> 13, byte, (cyc_now() - ln_rd[ln]) / CLK * 1e3); }
+	}
+	ln_rd[ln] = cyc_now(); ln_wr[ln] = 0;
 }
 
 struct Rec { uint32_t n; uint16_t off, data, mask, pad; };
@@ -197,7 +225,7 @@ int main(int argc, char **argv) {
 		Rec r;
 		while (fread(&r, sizeof r, 1, f) == 1) {
 			const double tm = r.n / 44100.0;
-			if (shifted(tm) > secs) break;
+			if (shifted(tm) > secs) { if (shift == 0.0 || tm >= shift_after) break; else continue; }   // R976: the shifted writes lie past an unshifted stretch longer than the run
 			if (!r.pad && (shift == 0.0 || tm < shift_after - shift || tm >= shift_after)) mw.push_back({shifted(tm), r.off, uint16_t(r.data & r.mask), r.mask});
 		}
 		fclose(f);
@@ -212,6 +240,7 @@ int main(int argc, char **argv) {
 	t = new Vm2_2a_sound;
 	t->rst_n = 0; t->rx_valid = 0; t->tx_ack = 0;
 	t->snd_boost = getenv("SND_BOOST") ? (atoi(getenv("SND_BOOST")) & 3) : 0;   // R894: the Direct boost (0 = MAME)
+	t->snd_tarc = getenv("SND_TARC") ? (atoi(getenv("SND_TARC")) & 1) : 0;      // R976: with TIMER 2 (-GTIMER=2), 1 = the arcade's timers
 	for (int i = 0; i < 8; i++) tick();
 	t->rst_n = 1;
 
@@ -352,6 +381,10 @@ int main(int argc, char **argv) {
 	// R882: the boot-time sums (CHKSUM builds; zero otherwise)
 	printf("  sound ROM sums (R882): program %08x, samples %08x %08x %08x %08x\n",
 		t->dbg_sums[0], t->dbg_sums[1], t->dbg_sums[2], t->dbg_sums[3], t->dbg_sums[4]);
+	printf("  R976: streaming-window slot fills %llu, read a lap stale (not rewritten since a read > LAP_MS ago) %llu\n   per window:",
+		(unsigned long long)lap_reads, (unsigned long long)lap_stale);
+	for (int k = 0; k < 32; k++) printf(" %llu", (unsigned long long)lap_win[k]);
+	printf("\n");
 	printf("  RAM writes with a byte mask (R871: must be 0 -- the board drops the mask): %llu\n", (unsigned long long)part_writes);
 	bool ok = t->dbg_under == 0 && bad_writes == 0 && part_writes == 0 && t->dbg_cycles > 1000 && (nb == 0 || mtch >= nb * 9 / 10);
 	printf("%s\n", ok ? "PASS" : "FAIL");

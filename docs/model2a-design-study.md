@@ -46525,3 +46525,255 @@ given permission to use it. Reviewed 2026-10-29; nothing copied yet.
 the pipeline itself is likely too large for this device and would need
 R920-style shrinking. Not started; when it is, record the source commit in
 THIRD_PARTY.md and credit the author.
+
+**R976 -- SEGA RALLY's HI-HATS OFF TIME (GITHUB #37) IS THE SCSP TIMER's
+PERIOD: A REAL CABINET's MUSIC RUNS 2.26% SLOWER THAN MAME's, SO ITS TIMER A
+IS 51.0 SAMPLES WHERE MAME (AND THIS CORE) GIVE 49.87. MAME HAS THE SAME
+FAULT. FIXED AS AN "ARCADE" TIMER MODE (DEFAULT) WITH AN OSD A/B AGAINST
+MAME's; ON THE BENCH THE MUSIC IS NOW 0.17% FROM THE CABINET's TEMPO (WAS
+2.24%), THE HATS IN TIME. MEASURED AGAINST AN ARCADE RECORDING, NOT MAME.**
+
+*How it was established.* Ben: the kick is fine, the hi-hats / taps /
+cymbals play off time against the music -- and MAME 0.289 has it too. So
+MAME could not be the reference here (the project rules: MAME is a reference, not the
+oracle). Ben supplied a real cabinet recording (YouTube short cJ5oFV1Phwk,
+phone microphone, 52 s of attract, mono 44.1 kHz) and his board's (OBS, the
+Championship Top 16 screen); the coordinator aligned them: board 0 s = MAME
+46.255 s = arcade 21.71 s (the attract's second piece, 'ae 10 02' at MAME
+24.08 s), board against MAME within ~10 ms a hat and ~0.3% tempo (the board
+is MAME, as the benches said); arcade against MAME 2.18% slower, pitch equal
+to 0.03% (a long-term spectrum on a log-frequency axis), so the sample rate
+is right and only the sequencer's tick differs.
+*Re-measured here (sim/sound/snd_tempo_arcade.py: 1.5 s windows of a
+150-6000 Hz log spectrogram, 10 ms hop, each matched in the arcade near its
+predicted time, a line through the matches):* MAME 46.3-57.3 s against
+arcade: arcade advances 1.0230 s a MAME second (residual sd 3.4 ms, 20
+windows); MAME 25.6-35.4 s (the same piece, earlier): 1.0224-1.0226 (sd
+3.8-4.2 ms). So the cabinet's timer A is 49.866-49.874 x 1.0226 = 50.99-51.00
+samples, against MAME's 49 + latency = 49.87 (R883 / R884) and this core's
+49.91 (bench). MAME's capture and the coordinator's MAME wav share one
+timeline (cross-correlation 0.90 at 0 offset, 40 s).
+
+*Why it is heard on the hats.* Everything in Rally's music is keyed on the
+timer A sequencer (the driver, as R976's first part below found), but the
+sounds are samples played at the sample rate: the kick and the melodic
+voices are long streamed or sustained samples whose own rhythm runs at 44.1
+kHz, the hats are short one-shots whose placement IS the tick. With the
+tick 2.2% short the sequenced one-shots run ahead of the sample-rate parts
+between re-keys -- ~85 ms over 4 s -- and the hats are where the ear finds it.
+
+*The rule (what the sources say, and what was fitted).*
+  * SCSP User's Manual 4.2.11 (Sega, via infochunk.com): TIMA / TIMB / TIMC
+    are 8-bit UP counters, one count per Fs / 2^TxCTL; "the timer starts
+    counting immediately after transferring the set value"; the interrupt is
+    requested "when all bits become 1"; the formula is printed as {2^8 (FFh)
+    - TIMx} x count cycle and Table 4.30 gives FEh -> one cycle but 00h ->
+    5.8050 ms (256 cycles) -- the manual is one count inconsistent with itself.
+  * Mednafen's ss/scsp.inc (read, nothing copied): a free-running sample
+    counter clocks each timer when its low TxCTL bits are 0; a write is a
+    pending RELOAD taken on the next clock instead of an increment; the
+    interrupt pends when the counter becomes FF. srg320's SCSP.sv (read):
+    the write lands at once, the interrupt on FF -> 00. For a re-arm under one
+    sample after the interrupt both give timer A 50 samples and timer B
+    (0x03C0) 512.
+  * MAME: (255 - count) << prescale from the write, plus the 68000's latency
+    to the re-arm (~0.87 sample): 49.87 and 505.
+  * The cabinet: 51.0. None of the three gives it for a sub-sample re-arm; all
+    three give 51 if the real 68000 takes between one and two samples from the
+    interrupt to its TIMA write (Mednafen charges every 68000 access six
+    clocks on the same SCSP bus; MAME's model of this board gives RAM and the
+    SCSP five and the ROM four -- about 50 clocks less over Rally's handler,
+    whose MOVEM.L of 13 registers is 26 stack writes, enough to carry 226
+    clocks past 256). The same 51 comes from a counter that takes the written
+    value at the next sample boundary and interrupts on overflow. The second
+    is what is BUILT: it gives the cabinet's 51 at this core's own latency
+    without slowing the 68000 everywhere, and timer B's 512, the emulators'
+    number (TIMER 1 / 2, m2_scsp_regs: due = ((next sample >> p) + 256 -
+    count) << p on the free-running sample count; every count arms,
+    including FF; the write's phase is not kept). Which of the two the
+    silicon does is NOT settled -- one recording of one driver cannot tell
+    them apart; they differ only for a handler slower than a sample.
+
+*Bench (tb_m2_2a_sound, 80 MHz, latency 6-40, MAME's MIDI, from reset;
+SND_SHIFT 20.5 / 23.5 + SND_MIDI_DROP, 15 s, built -GTIMER=2, SND_TARC=1):*
+  * timer A re-arm: 51.088 samples mean over 9,494 (51: 8,629, 52: 865 --
+    the 9% where this core's 68000 takes more than a sample to re-arm, fx68k's
+    interrupt latch and SDRAM, R884); timer B 512.17 over 946. MAME mode
+    (SND_TARC=0, run 1): 49.911 / 505.3.
+  * against the cabinet, piece 2 at 5.1-14.9 s: arcade advances 0.9983 s a
+    second of ours -- ours 0.17% SLOW (residual sd 2.6 ms, 17 windows); MAME
+    over the same stretch +2.24% FAST. Over the 9.8 s ours drifts -10 ms,
+    MAME +181 ms.
+  * the hats against the cabinet (sim/sound/snd_tempo_arcade.py hats: 5-10 kHz onset
+    envelopes, 1 s windows, the lag that best matches the arcade, no tempo
+    correction): ours -10, -10, -10, -20, -20, (-270: a beat ambiguity), -30,
+    -30 ms -- steady; MAME +30, +40, +70, +90, (-130, -370 ambiguous), +150,
+    +170 ms -- the hats running away from the music.
+  * MAME mode unchanged: tb_m2_scsp built TIMER 2, tarc 0, Rally 30 s
+    (1,323,000 samples): 0 differ from the reference or MAME's mix, IPL 0
+    wrong against the reference, 5,019,653 slot samples right.
+  * lint_top clean; Verilator -Wall on m2_scsp_regs: the two unused-bit
+    warnings model2a already has; quartus_map --analyze_file on
+    m2_scsp_regs.sv, m2_scsp.sv, m2_2a_sound.sv, Model2.sv: 0 errors.
+    (analyze_file rewrote Model2.qsf with five lines; restored by git.)
+
+*THE CHANGE (branch rally-tempo):* m2_scsp_regs TIMER (0 MAME, 1 arcade, 2
+both) and tarc; m2_scsp / m2_2a_sound pass them; Model2.sv
+M2_2A_SND_TIMER (default 2 for this A/B build) and the OSD line "SCSP timer:
+Arcade, MAME" on status[72] (0 = Arcade, the default; free on model2a --
+check main / model2c before porting). tb_m2_2a_sound SND_TARC.
+*EVERY SCSP GAME's TEMPO MOVES with it (timer A and B, and C where used):*
+Model2A -- Sega Rally, Virtua Fighter 2, Virtua Cop 2, Zero Gunner, Dynamite
+Cop, Dead or Alive, Sky Target, Pilot Kids, Hanguk Pro Yagu 98, Motor Raid,
+Manx TT; Model2C (when ported) -- House of the Dead, Over Rev, Sega Touring
+Car. VF2's driver re-arms TIMA 0xCE like Rally's (R883), so its music slows
+by the same ~2.3%. Ben judges each on the board with the OSD toggle. Model 2
+(Daytona, Desert Tank, Virtua Cop) has no SCSP and is untouched.
+*FIT (Quartus 17.0 full map + fit, seed-sweep.sh 1640-1642 under the shared
+fit lock, FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS unchanged,
+M2_2A_SND_TIMER 2; slack in ns, slow 85C):*
+  seed   ALM            M10K     DSP  clk_sys  clk_mem  clk_i960  HDMI    hold
+  s1640  39,450/41,910  551/553  99   -0.746   +0.552   +1.455    -0.106  +0.227
+  s1641  39,450         551/553  99   -0.894   +0.158   +1.318    +0.014  -0.046 (recovery -0.343)
+  s1642  39,378         551/553  99   +0.285   +0.061   +1.111    -0.764  +0.192
+  s1642: every core clock and hold clean, HDMI -0.764 in the framework's
+  scaler (shadowmask -> ascal o_h_poly_phase, sys/), report-only as the
+  releases before s1582; rbf build/seeds/s1642/output_files/Model2.rbf (in the
+  rally-tempo worktree), md5 fd0e396f8e9c644c8439ca63e217834a. s1640 / s1641's
+  clk_sys misses are m2_span_tex (d2_nd / d2_r -> d3_r1), R975's raster path,
+  none in the sound board. ALM against s1582 (39,350): +28 at s1642, +100 at
+  the others -- seed spread; M10K and DSP unchanged. Not loaded on the board.
+*Open:* which silicon mechanism (next-sample load, or the real 68000's
+slower re-arm) -- a recording of a driver that re-arms more than a sample
+late, or a Saturn test, would settle it; timer B (note lengths) is the
+emulators' 512 in both, not measured against the cabinet.
+
+*The first part of this entry (before the cabinet recording), kept:*
+
+*Ben's report, as corrected:* not SDRAM bandwidth; the kick's tempo is fine;
+the hi-hats, taps and cymbals are off time against the music -- in what is
+HEARD. (This entry first measured key-on register writes and pointed at
+latency; that is kept below only as a side note.)
+
+*The driver (epr-17890a, snd_dasm.py):* timer A (TIMA 0x00CE) is the
+sequencer: eight tracks posting events to a queue the main loop dispatches,
+one between slots; timer B only counts durations. The kick is STREAMED (OCT 0,
+a 512-byte chunk ahead of key-on, the rest filled by the main loop into the
+slot's 8 KB ring at 0x10000 + slot x 0x2000, word writes). The hats are
+RESIDENT one-shots (LPCTL 0, PCM8): at boot (0x600406) the 68000 copies 16
+samples from the sample ROM into 0x50000-0x79166 WITH BYTE MOVES (move.b
+(a4)+,(a3)+), i.e. through R871's read-merge-write on our board:
+  0x6823c..0x6a5cc from ROM 0x0fc16, 0x6a5cc..0x70958 from 0x25dd0,
+  0x70958..0x77388 from 0x354f6, 0x77388..0x79166 from 0x12a678 (the hats);
+  0x50000..0x6823c from 0x71c8a8-0x74dc10 (MIDI-keyed effects in the race).
+MAME never writes 0x50000+ again after 2.2 s.
+
+*Measured (MAME 0.289 m2lod p16 captures from boot; tb_m2_2a_sound from
+RESET at 80 MHz, latency 6-40, on MAME's MIDI; scsp_split, new SPLIT_BYSA=1,
+splits each mix into the streamed OCT-0 voices (kick), the resident one-shots
+(hats), the rest and the effect return; sim/sound/snd_hit_cmp.py per hit):*
+  1. THE COPY, FROM RESET: our sound RAM at 3.0 s (SND_RAMDUMP) against MAME's
+     rebuilt from its RAM writes at 2.5 s: 0x50000-0x79166, 84,147 words, 0
+     differ. Word sum of 0x50000-0x7ffff after boot: 0xa8668ab7.
+  2. THE HATS, HIT BY HIT, attract piece 2 (MAME 24.08 s, ours 6.08 s; 8
+     resident hits, 5.4 s): audible onset after its key-on ours / MAME 0.39 /
+     0.20, 0.00 / 0.00, 0.00 / 0.02, then 2.81-2.86 / 2.68 ms for the five
+     0x77388 hits; the hats-only waveform of each 0x77388 hit EQUAL to MAME's
+     (residual 0.000 at a 6-8 sample lag -- the bench's sub-ms key-on
+     offset); audible onset on the piece's timeline ours - MAME +0.18, +1.42,
+     +0.61, +1.49, +1.79, +2.10, +2.78, +3.40 ms -- a drift of 0.6 ms a
+     second, the whole sequence's (timer A 49.911 against MAME's 49.874
+     samples), shared by the kick and the notes.
+  3. THE RACE (MAME 52.72 s 'ae 10 0b', ours 5.72 s, 1,726 MIDI bytes; 16
+     hits of 0x77388 in 6.2 s): onset after key-on equal to MAME's within 0.6
+     ms on 15 (the 16th is an overlap in MAME's window); on the piece's
+     timeline ours - MAME -1.1 .. +7.4 ms, median +1.7, the same slow drift
+     (timer A +0.11% in the race). The resident class here also carries the
+     MIDI-keyed effects, so the waveform residuals (0.17-0.91) are not hats
+     alone.
+  4. THE ENGINE AGAINST THE REFERENCE: our engine's trace replayed through
+     scsp_ref.h -- attract 529,207 samples 0 differ (EQUAL), race 15 differ of
+     529,206 (R885's mid-slot RAM write ambiguity). No streamed ring read a
+     lap stale (new counter: 670,583 slot fills in the race, 0).
+  5. THE SYNTHESISED SCSP: sim/netsim/netsim.sh on m2_scsp (quartus_map 17.0,
+     functional netlist, Verilator) with tb_m2_scsp on the capture cut to
+     boot + piece 2 (sim/sound/scsp_capcut.py: 3.0-23.9 s removed; the cut
+     capture replays to MAME's out.bin with 0 differences): 330,000 samples,
+     723,716 slot samples, 0 differ from the reference or from MAME's mix.
+     RAM shapes as R967's fix left them (mpro_h / mpro_l 512 x 8 each; the
+     slot cache's tag 256 x 9 covers all of 512 KB).
+  6. Checked against the coordinator's list: a key-on of a playing slot
+     (MAME: restart only if inactive or in release; ours equal by 2-5);
+     KYONB / KYONEX within a sample (2-5); SA / LSA / LEA / LPCTL 0 and SA
+     above 0x40000 (the hats sit at 0x6a5cc-0x79166: 2, 5); EG / KRS and
+     OCT / FNS (equal waveforms); an old tail (the hit windows); rings
+     overrunning into 0x50000+ (1: no word differs after boot; MAME writes
+     none there after 2.2 s, ours none either by 1 + 4); the boot copy (1,
+     from reset, in our RTL).
+
+*So every path the benches can reach plays MAME's hats. NOT COVERED, and so
+where the board can still differ:*
+  a. The sample ROM as the board's loader put it in SDRAM (every bench loads
+     snd_img.py's image from the zip directly). The kick and the hats come
+     from different ROM addresses (the hats from 0x0fc16-0x12a678 of the
+     first 2 MB). R882's CHKSUM build sums them before boot; expected for
+     srallyc: program 0x2a8aca90 (512 KB, zero-padded), samples by 2 MB
+     0x015c3019, 0xee38ddcd, 0x05ee638c, 0x4cd3282c.
+  b. The resident samples as the REAL SDRAM holds them after the byte-move
+     copy (read-merge-write, R871: each byte read back from a word written a
+     few clocks before). The controller acknowledges a write after its WRITE
+     command (m2_sdram S_WRRC), so a following read should see it; only a
+     board sum settles it: 0x50000-0x7ffff after boot, expected 0xa8668ab7
+     (a probe that does not exist yet).
+  c. m2_2a_sound and fx68k as Quartus builds them (only the SCSP was netlist-
+     simulated: the 68000 side at netlist speed is ~40 x a 3.5 min boot).
+  d. Whether MAME's own hats are where the arcade's are. The clips below let
+     Ben hear MAME's and ours side by side: if MAME's hats are also off, the
+     fault is in what both share (the model), not in this core's build.
+*Clips (5 s, scratch, ROM-derived, not committed):* attract piece 2, ours
+and MAME's -- full mix, hats only x4, kick only x4.
+
+*Side note, not #37 (Ben: not bandwidth):* the sequencer's tempo depends on
+the 68000's SDRAM latency -- its timer A handler's MOVEM.L of 13 registers is
+26 stack writes posted one deep, and the re-arm waits for them under EXACT:
+at a mean of 135 clk_sys timer A is 51.79 samples (+3.9%), at 6-40 49.911
+(+0.07%); expected slowdown ~ 26 x max(0, lat - 25) / 1,814 / 49.9. Drums
+and notes move together. And the silicon's timer (srg320's SCSP.sv read,
+nothing copied): TIMA counts up from the value written and interrupts on
+FF -> 00, (256 - v) ticks on sample boundaries, so a re-arm within a sample
+gives exactly 50 samples; MAME's 49 + latency is 0.26% faster. Neither
+changed.
+*What turned out wrong in this entry's first version:* it measured key-on
+REGISTER WRITES, not the sound, and took the heavy-latency tempo shift for
+the lead; Ben's board rules both out. Also wrong there: "streaming lags a lap"
+(0 stale) and "race MIDI delays drum key-ons" (MAME's to ~1 ms).
+*Benches / tools:* tb_m2_2a_sound (stale-lap counter LAP_MS; MAME's shifted
+writes now loaded when SND_S < SND_SHIFT_AFTER -- a shifted run also needs
+SND_MIDI_DROP=1); scsp_split SPLIT_BYSA; sim/sound/snd_hit_cmp.py,
+scsp_capcut.py, snd_keyon_cmp.py, snd_keyon_ev.py, snd_beat_rel.py,
+snd_stream_margin.py. No RTL changed: lint and a fit not run.
+
+**R977 -- NOTE ON R883: "MAME's PERIOD" WAS MATCHED TO MAME, NOT TO THE
+SILICON.** R883 made each timer fall due (255 - count) << prescale samples
+after the write, at the write's phase, because that is how MAME 0.289's
+scheduler timers behave, and called the result "MAME's period" -- VF2's music
+had run 1.3% fast against MAME and then matched it. It was right as a match to
+MAME and nothing more: no hardware fact stood behind it. R976 measured a real
+Sega Rally cabinet against MAME: the cabinet's timer A is 51.0 samples where
+MAME's is 49.87, its music 2.26% slower. So R883's "fix" moved VF2 to the same
+wrong tempo MAME has (VF2's driver re-arms TIMA 0xCE as Rally's does). R883's
+code stays as TIMER 0 / the OSD's "MAME" setting; the default is now R976's
+arcade period. Lesson recorded with R976: a tempo matched to MAME is a tempo
+matched to MAME (the project rules, "never treat a MAME cycle count as a hardware
+fact"); where a recording of the real machine exists, it is the reference.
+
+**R978 -- SEAM FILL DEFAULTS TO BLACK ONLY (Ben, 2026-10-30).** R957 put
+R944's edge dilation behind the OSD's Seam fill, Off by default, and added
+Black only (dilate only black flat quads: Rally's car-shadow cracks close,
+the white body panels are left alone). Ben, on the board: Black only works,
+so it is the default. The setting moves to new bits, O[74:73] "Black only,
+Off, On", so every saved config opens on Black only rather than on whatever
+69:68 held; 69:68 are no longer read. The fill's dil_on is unchanged (0 Off,
+1 Black only, 2 On); menu 3, never offered, maps to Black only. Checks:
+lint_top clean; Quartus 17.0 analyze_file on Model2.sv, 0 errors. Not fitted
+on its own; it goes into the next build from this branch.

@@ -25,6 +25,9 @@
 //                      word 9 [15:8] is SPLIT_SFX (default 0x51: VF2's effects), of
 //                      those whose is SPLIT_DRUM (0x53: its drums), of the rest, and
 //                      the effect (DSP) return -- the mix taken apart (R886)
+//   SPLIT_BYSA=1       R976: SPLIT_CLS classes by address instead -- streamed at
+//                      OCT 0 FNS 0, resident (SA >= 0x50000), the rest, the
+//                      effect return; 8 int32 a sample, left four then right four
 //   SPLIT_CAP=<dir> [SPLIT_S=<s>]  MAME's capture itself (regs.bin, ramw.bin,
 //                      out.bin) in place of a trace: every access before slot 0
 //                      of its sample (scsp_cap2tr.py's order), out.bin the samples
@@ -126,8 +129,20 @@ static void memhook(void *, int k, u32 a) {
 
 static FILE *fcls = nullptr;
 static unsigned cls_sfx = 0x51, cls_drum = 0x53;
+static bool cls_bysa = false;   // R976: SPLIT_BYSA=1
 static void cls_out() {
 	if (!fcls) return;
+	if (cls_bysa) {   // R976: streamed at OCT 0 FNS 0 (the kick), resident one-shots (SA >= 0x50000: hats), the rest; L then R
+		int32_t c[8] = {0, 0, 0, R->efx_l, 0, 0, 0, R->efx_r};
+		for (int sl = 0; sl < 32; sl++) {
+			const auto *sp = &R->S[sl];
+			const unsigned sa = ((sp->data[0] & 0xf) << 16) | sp->data[1];
+			const int k = sa >= 0x50000 ? 1 : (sp->data[8] & 0x7fff) == 0 ? 0 : 2;
+			c[k] += R->slot_dl[sl]; c[4 + k] += R->slot_dr[sl];
+		}
+		fwrite(c, sizeof c, 1, fcls);
+		return;
+	}
 	int32_t c[4] = {0, 0, 0, R->efx_l};
 	for (int sl = 0; sl < 32; sl++) {
 		const unsigned h = R->S[sl].data[9] >> 8;
@@ -163,6 +178,7 @@ int main(int argc, char **argv) {
 	R->mem_hook = memhook;
 
 	if (getenv("SPLIT_CLS")) fcls = fopen(getenv("SPLIT_CLS"), "wb");
+	cls_bysa = getenv("SPLIT_BYSA") != nullptr;
 	if (getenv("SPLIT_SFX")) cls_sfx = unsigned(strtoul(getenv("SPLIT_SFX"), nullptr, 0));
 	if (getenv("SPLIT_DRUM")) cls_drum = unsigned(strtoul(getenv("SPLIT_DRUM"), nullptr, 0));
 	FILE *fo = getenv("SPLIT_OUT") ? fopen(getenv("SPLIT_OUT"), "wb") : nullptr;
