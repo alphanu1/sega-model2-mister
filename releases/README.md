@@ -73,7 +73,19 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261027`)
+### New in this build (`Model2A_20261030`)
+
+- **The i960 CPU now rounds the way Intel's chip does.** I checked the core's
+  i960 against Intel's own 80960KB manuals. One difference the games actually
+  hit: converting a floating-point number to a whole number rounded a value
+  exactly halfway between two numbers away from zero, where the real chip
+  rounds it to the even neighbour, and a number too big to fit is now clamped
+  the way the chip clamps it. MAME has the old behaviour too. Virtua Fighter 2
+  uses this thousands of times a fight, for the fighters' joint angles, and
+  Virtua Cop 2 now and then. The difference is far too small to see, but the
+  CPU now computes what the arcade board computes.
+
+### Earlier in `Model2A_20261027`
 
 - **The sound balance is fixed.** The sound chip's effects processor (the
   reverb) was only getting half of its program on the FPGA: Quartus, the
@@ -243,7 +255,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261027.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261030.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -251,7 +263,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261027.rbf` has the md5 `7a14a706484b903b17a2bebdd631e444`. As with
+`Model2A_20261030.rbf` has the md5 `7ac0c79d47f5a71020cf208ffe74b610`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -332,10 +344,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261027.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261030.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261027.rbf` has the md5 `4399bde5783ba6198bded9859e93ea07`. Keep
+`Model2C_20261030.rbf` has the md5 `e7e58e0c770e10f5519da2c0fb2086bb`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -354,7 +366,15 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### New in this build (`Model2C_20261027`)
+### New in this build (`Model2C_20261030`)
+
+- **The i960 CPU now rounds the way Intel's chip does**, as in the Model 2A
+  core's `Model2A_20261030`: a float converted to a whole number now rounds a
+  value exactly halfway to the even neighbour, and clamps on overflow, as
+  Intel's 80960KB manuals say (MAME rounds it away from zero). None of the 2C
+  games is known to use it; it's here so all three cores run the same CPU.
+
+### Earlier in `Model2C_20261027`
 
 - **House of the Dead's sound balance is fixed.** The music and the high FM
   voice no longer drown out the gun, in chapter 2 or anywhere else, and you
@@ -423,7 +443,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261028.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261030.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -462,7 +482,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261028.rbf` has the md5 `3e4c749bec6d5a3db3fc62373ad14519`.
+**Check you're running the right file.** `Model2_20261030.rbf` has the md5 `c81c118ed05e74ea703b620b378bb83c`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -496,6 +516,14 @@ anything you find.
 
 ### New in this release
 
+- **The i960 CPU now rounds the way Intel's chip does.** I checked the core's
+  i960 against Intel's own 80960KB manuals. Converting a floating-point number
+  to a whole number rounded a value exactly halfway between two numbers away
+  from zero, where the real chip rounds it to the even neighbour, and a number
+  too big to fit is now clamped the way the chip clamps it. MAME has the old
+  behaviour too. Daytona uses it a little; the difference is far too small to
+  see, but the CPU now computes what the arcade board computes.
+  (`Model2_20261030`.)
 - **Force feedback in Daytona USA.** The core reads the game's commands to
   the cabinet's drive board and sends them to your wheel: the centring
   spring, heavier steering on grass and sand, and the kicks from walls and

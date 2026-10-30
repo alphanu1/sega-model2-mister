@@ -1,5 +1,23 @@
 # Handoff
 
+## 2026-10-30: Model2_20261030, Model2A_20261030, Model2C_20261030 in releases/ -- the i960 rounding (R972)
+
+`releases/` is the same on main, model2a and model2c. Each core is its last
+release plus only R972 (cvtri / roundr round ties to even, overflow
+saturates by sign); nothing else:
+
+| core | seed | from | md5 | timing |
+|---|---|---|---|---|
+| Model 2 | s1583 | main 595d35e3 | c81c118ed05e74ea703b620b378bb83c | core clocks and hold clean; HDMI -0.374 (framework scaler) |
+| 2A | s1582 | i960-cvtri 0c63cfcd (= model2a RTL) | 7ac0c79d47f5a71020cf208ffe74b610 | every clock clean, HDMI included; board-tested |
+| 2C | s1595 | model2c 2ec33e2a | e7e58e0c770e10f5519da2c0fb2086bb | core clocks and hold clean; HDMI -0.245 (framework scaler) |
+
+Released on Ben's word with HDMI report-only for Model 2 and 2C, as most
+releases before 27 Oct. Why HDMI misses, and what was tried, is R974/R975 on
+branches slack-main / slack-2c (not released, not merged): the scaler's DSPs
+split when the DSP sites beside it are full; BUILD_DATE re-rolls placement;
+multstyle-logic and AUTOMATICALLY routing both made it worse.
+
 ## 2026-10-29: R973, a SHARC for Model 2B exists (documented, not started)
 
 Paul Priest's Konami Hornet core (https://github.com/ppriest/Arcade-KonamiHornet_MiSTer,
