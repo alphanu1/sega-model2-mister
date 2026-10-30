@@ -790,6 +790,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/mem/m2_char_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_x2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_i8251.sv
+# R979: STCC's Digital Sound Board (elaborated only with M2_2C_DSB)
+set_global_assignment -name SEARCH_PATH rtl/sound
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/dsb_board.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/dsb_z80.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/dsb_mpeg.sv
 # fx68k's microcode and nanocode are $readmemb'd by BARE FILENAME. Quartus
 # resolves those against the project directory and its search paths, so without
 # this the ROMs synthesise as all zeroes -- a CPU that fits, meets timing, and
@@ -1019,4 +1024,8 @@ set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[4]"
 
 set_global_assignment -name VERILOG_MACRO "M2_2C=1"
+# R979: Sega Touring Car Championship's Digital Sound Board (its music); the
+# Z80's opcode dispatch as logic rather than an M10K
+set_global_assignment -name VERILOG_MACRO "M2_2C_DSB=1"
+set_global_assignment -name VERILOG_MACRO "DSB_UENT_LOGIC=1"
 set_global_assignment -name VERILOG_MACRO "M2_NO_2A_MANX_MOTION=1"

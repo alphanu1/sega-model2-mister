@@ -165,16 +165,16 @@ syn_check:
 lint_idx:
 	@echo "== variable selects past an array's end (R807 class)"
 	@rm -rf obj_idx && verilator --json-only -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE --top-module emu $(LINT_DEFS) \
-	  -Irtl/sound/jt12 -Irtl/sound/scsp -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
+	  -Irtl/sound -Irtl/sound/jt12 -Irtl/sound/scsp -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv --Mdir obj_idx >/dev/null 2>&1
 	@python3 sim/lint/idxcheck.py obj_idx/Vemu.tree.json obj_idx/Vemu.tree.meta.json
 
 # R839: LINT_DEFS=-DM2_NO_VCOP_GUN (or -DM2_VCOP_IO=0 ...) lints another build of the core (R846: the guns are on by default).
 lint_top:
 	@echo "== lint Model2.sv and everything it instantiates"
 	@verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-fatal --top-module emu $(LINT_DEFS) \
-	  -Irtl/sound/jt12 -Irtl/sound/scsp -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) \
+	  -Irtl/sound -Irtl/sound/jt12 -Irtl/sound/scsp -Irtl/cpu/i960 -Isys $(LINTTOP_RTL) \
 	  sys/hps_io.sv rtl/pll/pll.v sim/lint/altera_pll_stub.v Model2.sv > .lint_top.raw 2>&1 || true
-	@grep -E "syntax error|Cannot find file containing module" .lint_top.raw \
+	@grep -E "syntax error|Cannot find file containing module|Cannot find include file" .lint_top.raw \
 	  | grep -vE "sys/|rtl/pll/|sim/lint/" > .lint_top.syn || true
 	@if [ -s .lint_top.syn ]; then \
 	  echo "SYNTAX ERROR OR MISSING MODULE -- quartus_map would fail on this:"; \

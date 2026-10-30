@@ -225,8 +225,14 @@ if __name__ == '__main__':
                ', '.join(f'{n}[{b}]' for n, b in LAYOUT))
     out.append(f'localparam int UW = {WIDTH};')
     out.append(f"localparam logic [7:0] U_INT = 8'd{addr['int_im1']};   // the IM 1 interrupt's first micro-op")
-    # an initialised array, which is what Quartus turns into an M10K ROM
+    # an initialised array, which is what Quartus turns into an M10K ROM --
+    # or, with DSB_UROM_LOGIC (Model 2, R979: an M10K back), into LUTs; the
+    # read stays registered (uw), so the two are cycle-identical
+    out.append('`ifdef DSB_UROM_LOGIC')
+    out.append('(* romstyle = "logic" *) logic [UW-1:0] urom [256];')
+    out.append('`else')
     out.append('(* romstyle = "M10K" *) logic [UW-1:0] urom [256];')
+    out.append('`endif')
     out.append('initial begin')
     for i in range(256):
         w = rom[i] if i < len(rom) else u(nxt='trap', t=4)

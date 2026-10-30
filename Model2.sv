@@ -272,6 +272,17 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `define M2_2C_PLINES 1024
 `endif
 `endif
+// R979: M2_2C_DSB, SEGA TOURING CAR CHAMPIONSHIP'S MUSIC -- the Z80 Digital
+// Sound Board (MAME dsbz80; rtl/sound/dsb_board.sv, from Model 1's Star Wars
+// board): a Z80 running epr-19275.2s and an MPEG-1 Layer II decoder over 8 MB
+// of mpr-19262..19265, its only input the i960's i8251 transmit line (the
+// same bytes the SCSP's MIDI in gets), its output summed with the SCSP's. 2C
+// builds only, held in reset unless the game is STCC (0x1D). SDRAM port 8
+// (the TGP's tables, dead on 2C). OFF by default: VERILOG_MACRO
+// "M2_2C_DSB=1" (or -DM2_2C_DSB=1 to lint) builds it.
+`ifndef M2_2C_DSB
+`define M2_2C_DSB 0
+`endif
 // R927: THE i960'S SPEED IN SEGA RALLY'S FRAME START (R926: the game's AI
 // detail budget). M2_2A_I960_RING: the local-register cache as the chip keeps
 // it, a ring of eight frames that goes to memory only when a call finds it
@@ -638,9 +649,11 @@ localparam bit M2A = 1'b0;
 `ifdef M2_2C
 localparam bit          C2        = M2A;
 localparam int unsigned C2_PLINES = `M2_2C_PLINES;
+localparam bit          DSB       = M2A && (`M2_2C_DSB != 0);   // R979
 `else
 localparam bit          C2        = 1'b0;
 localparam int unsigned C2_PLINES = 1024;
+localparam bit          DSB       = 1'b0;
 `endif
 // R891: VERILOG_MACRO "M2_MEMTEST=1" (with "M2_PROBE=1"; or -DM2_MEMTEST to
 // lint) adds m2_memtest: at power-up, before any download, it writes 4,096
@@ -1667,6 +1680,15 @@ always_comb begin
 	// had already reversed for the 68000 sound ROM.
 	p_req[8]  = tgp_tbl_req_r;
 	p_addr[8] = GAME_TGPTBL + SDR_AW'({tgp_tbl_addr_r, 1'b0});
+	// R979: ON 2C PORT 8 IS THE DIGITAL SOUND BOARD'S. The TGPx4 has no table
+	// window (m2_copro ties tbl_req to 0), so the port was idle. Reads (the
+	// MPEG data, the Z80's ROM and RAM outside its on-chip block) and the
+	// Z80's few RAM writes -- one per received byte after its boot-time RAM
+	// test -- on the same port, so a read can never pass a write.
+	if (DSB) begin
+		p_req[8]  = dsb_s_req;   p_addr[8] = dsb_s_addr;
+		p_we[8]   = dsb_s_we;    p_din[8]  = dsb_s_din;   p_be[8] = dsb_s_be;
+	end
 	// PORT 9 REACHES TWO REGIONS NOW, chosen by the coprocessor's bank register
 	// (R133). The reference's banked window is the copro data ROM when the
 	// effective address sets bit 23 and BUFFER RAM when it sets bit 22, and the
@@ -3601,6 +3623,46 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 end
 
 wire signed [15:0] snd_l, snd_r;
+wire signed [15:0] s2a_l, s2a_r;   // R979: the 2A sound board's, before the DSB's mix
+// R979: THE DIGITAL SOUND BOARD (M2_2C_DSB, STCC's music). Its input is the
+// i8251's transmit line as the SCSP's MIDI in gets it: m2_sound_link's B side
+// raises b_rx_valid the moment a byte lands, one character time after the
+// i960 wrote it, and every byte is such an edge (the link holds the next one
+// until the last is taken). Reset: the game's, and only for STCC.
+wire signed [15:0] dsb_l, dsb_r;
+wire               dsb_s_req, dsb_s_we;
+wire [SDR_AW:1]    dsb_s_addr;
+wire [15:0]        dsb_s_din;
+wire  [1:0]        dsb_s_be;
+wire               dsb_trap;
+wire [15:0]        dsb_frames;
+generate if (DSB) begin : g_dsb
+	logic dsb_rst_n, dsb_rx_tog, b_rx_v_d;
+	always_ff @(posedge clk_sys) dsb_rst_n <= cpu_rst_n & mem_rst_n & cp_done & is_stcc;
+	always_ff @(posedge clk_sys or negedge mem_rst_n)
+		if (!mem_rst_n) begin dsb_rx_tog <= 1'b0; b_rx_v_d <= 1'b0; end
+		else begin b_rx_v_d <= b_rx_v; if (b_rx_v && !b_rx_v_d) dsb_rx_tog <= ~dsb_rx_tog; end
+	// SDRAM (word addresses), above STCC's polygons (byte 0x5000000, 16 MB),
+	// where the MRA's appended stream lands through the loader's third remap:
+	//   MRA 0x52C0000  MPEG data, 8 MB    -> byte 0x6000000
+	//   MRA 0x5AC0000  epr-19275.2s, 128 KB -> byte 0x6800000
+	//   byte 0x6820000  the Z80's 32 KB of RAM (never loaded; its boot test writes it)
+	dsb_board #(.AW(SDR_AW), .ROM_BASE(SDR_AW'(32'h3400000)), .MPEG_BASE(SDR_AW'(32'h3000000)),
+	            .RAM_BASE(SDR_AW'(32'h3410000)), .MAW(22),
+	            .T_NUM(1), .T_DEN(SYS_MHZ / 4), .TICK_NUM(4), .TICK_DEN(SYS_MHZ * 125)) u_dsb (
+		.clk(clk_sys), .rst_n(dsb_rst_n),
+		.rx_tog(dsb_rx_tog), .rx_byte(b_rx_d),
+		.vol_mame(1'b1),   // MAME's reading of e8 (every write is the volume)
+		.s_req(dsb_s_req), .s_we(dsb_s_we), .s_addr(dsb_s_addr), .s_din(dsb_s_din), .s_be(dsb_s_be),
+		.s_ack(p_ack[8]), .s_dout(p_dout[8][15:0]),
+		.out_l(dsb_l), .out_r(dsb_r), .out_stb(),
+		.dbg_trap(dsb_trap), .dbg_frames(dsb_frames)
+	);
+end else begin : g_nodsb
+	assign {dsb_s_req, dsb_s_we, dsb_s_addr, dsb_s_din, dsb_s_be} = '0;
+	assign dsb_l = 16'sd0; assign dsb_r = 16'sd0;
+	assign dsb_trap = 1'b0; assign dsb_frames = 16'd0;
+end endgenerate
 // R829: THE OSD VOLUME. status[49:46] indexes 80, 90, 100, 0, 10 .. 70 %;
 // the gain is that percentage of 256 (rounded), applied as one 16 x 10
 // signed multiply per channel and the product's [23:8]: at 100% exactly the
@@ -3725,12 +3787,22 @@ end else if (SND2A) begin : g_2asnd
 		.b_req(s2a_b_req), .b_addr(s2a_b_addr), .b_ack(p_ack[6]), .b_dout(p_dout[6]),
 		.c_req(s2a_c_req), .c_addr(s2a_c_addr), .c_we(s2a_c_we), .c_din(s2a_c_din),
 		.c_ack(p_ack[7]), .c_dout(p_dout[7]),
-		.snd_boost(snd_boost), .snd_tarc(snd_tarc), .snd_l(snd_l), .snd_r(snd_r),   // R894, R976
+		.snd_boost(snd_boost), .snd_tarc(snd_tarc), .snd_l(s2a_l), .snd_r(s2a_r),   // R894, R976; R979: through the DSB's mix
 		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
 		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
 		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418),
 		.dbg_sums(snd_sums)
 	);
+	// R979: the Digital Sound Board's 32 kHz output, held, summed with the
+	// SCSP's at unity (MAME routes both to the speaker at 1.0), clamped
+	if (DSB) begin : g_dsbmix
+		wire signed [16:0] mix_l = 17'(s2a_l) + 17'(dsb_l);
+		wire signed [16:0] mix_r = 17'(s2a_r) + 17'(dsb_r);
+		assign snd_l = (mix_l[16] != mix_l[15]) ? (mix_l[16] ? 16'sh8000 : 16'sh7fff) : mix_l[15:0];
+		assign snd_r = (mix_r[16] != mix_r[15]) ? (mix_r[16] ? 16'sh8000 : 16'sh7fff) : mix_r[15:0];
+	end else begin : g_nodsbmix
+		assign snd_l = s2a_l; assign snd_r = s2a_r;
+	end
 	assign snd_pc[31:24] = 8'd0;
 	assign snd_rom_req = 1'b0; assign snd_rom_addr = '0;
 	assign pcm1_req = 1'b0; assign pcm1_addr = '0;

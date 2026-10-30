@@ -2,7 +2,11 @@
 // 173 micro-ops, 40 bits; fields MSB first: mem[2], asrc[3], aoff[3], awb[3], wsrc[3], rmode[3], ridx[3], alu[4], ysel[2], fz[1], fc[1], nxt[2], csel[2], io[3], tst[5]
 localparam int UW = 40;
 localparam logic [7:0] U_INT = 8'd111;   // the IM 1 interrupt's first micro-op
+`ifdef DSB_UROM_LOGIC
+(* romstyle = "logic" *) logic [UW-1:0] urom [256];
+`else
 (* romstyle = "M10K" *) logic [UW-1:0] urom [256];
+`endif
 initial begin
   urom[0] = 40'h4120808707;
   urom[1] = 40'h4122008300;

@@ -21,6 +21,11 @@
 //
 //   DSB_MPEG (default build/rom/dsb/mpeg.bin, from tools/dsb/prepare.sh)
 //   DSB_FULL=1 plays every song to its end (long). DSB_LAT, DSB_VOLMAME.
+//   DSB_MB    the image in MB (default 4, Star Wars; 8 for STCC)
+//   DSB_SONGS the song list, "start end" in hex (default tools/dsb/swa_songs.txt)
+// Model 2: also built with dsb_mpeg's shrink parameters (MAW, FIFO_MLAB,
+// WRAM_MLAB, TBL_PACK, -G on the Verilator line) -- the same checks, so each
+// shrink is shown bit-exact against the same reference.
 #include "Vdsb_mpeg.h"
 #include "verilated.h"
 #include "dsb_fixmodel.h"
@@ -164,8 +169,9 @@ int main(int argc, char **argv) {
   const char *mp = getenv("DSB_MPEG") ? getenv("DSB_MPEG") : "build/rom/dsb/mpeg.bin";
   FILE *f = fopen(mp, "rb");
   if (!f) { printf("dsb_mpeg: SKIPPED (cannot open %s)\n", mp); return 0; }
-  rom.assign(4 << 20, 0xff); size_t n = fread(rom.data(), 1, 4 << 20, f); fclose(f);
-  if (n != (4u << 20)) { printf("dsb_mpeg: short MPEG image (%zu)\n", n); return 1; }
+  const size_t MB = getenv("DSB_MB") ? (size_t)atoi(getenv("DSB_MB")) : 4;
+  rom.assign(MB << 20, 0xff); size_t n = fread(rom.data(), 1, MB << 20, f); fclose(f);
+  if (n != (MB << 20)) { printf("dsb_mpeg: short MPEG image (%zu)\n", n); return 1; }
   // window from the RTL's own table, so both sides hold the same integers
   { FILE *t = fopen("rtl/sound/dsb_tables.svh", "r"); char line[256]; int i, v;
     while (fgets(line, sizeof line, t)) if (sscanf(line, "  win[%d] = %d;", &i, &v) == 2) winf[i] = (double)((v & 0x20000) ? v - 0x40000 : v) / 65536.0;
@@ -182,7 +188,7 @@ int main(int argc, char **argv) {
   // the song table, as the firmware's: start, end, mode
   struct Song { uint32_t s, e; int mode; uint32_t ls; };
   std::vector<Song> songs;
-  { FILE *t = fopen("tools/dsb/swa_songs.txt", "r"); unsigned a, b; while (fscanf(t, "%x %x", &a, &b) == 2) songs.push_back({a, b, 1, 0}); fclose(t); }
+  { FILE *t = fopen(getenv("DSB_SONGS") ? getenv("DSB_SONGS") : "tools/dsb/swa_songs.txt", "r"); unsigned a, b; while (fscanf(t, "%x %x", &a, &b) == 2) songs.push_back({a, b, 1, 0}); fclose(t); }
 
   // ---- 1. every entry, from its start (and for DSB_FULL, to its end)
   int sn = 0;

@@ -55,7 +55,18 @@ module dsb_mpeg #(
   // 32 kHz from clk, as a fraction: clk_cpu is 560/19 MHz, so 32 kHz is
   // 19 / 17,500 of it, exactly.
   parameter int unsigned TICK_NUM = 19,
-  parameter int unsigned TICK_DEN = 17500
+  parameter int unsigned TICK_DEN = 17500,
+  // Model 2 (STCC): the MPEG data is 8 MB, so the word address is 22 bits
+  // (Model 1's Star Wars: 4 MB, 21).
+  parameter int unsigned MAW = 21,
+  // M10K SHRINKS, each bit-identical by construction (same values read in
+  // the same cycle; see the memories below):
+  //   FIFO_MLAB  the 64 x 32 output FIFO in MLAB, two 16-bit halves
+  //   WRAM_MLAB  the 256 x 25 side-information / sample RAM in MLAB
+  //   TBL_PACK   window and misc tables in ONE M10K by their symmetries
+  parameter bit FIFO_MLAB = 1'b0,
+  parameter bit WRAM_MLAB = 1'b0,
+  parameter bit TBL_PACK  = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -69,9 +80,9 @@ module dsb_mpeg #(
   // bit 7 set is NOT the volume (see the note at the register).
   input  logic        vol_mame,
 
-  // ---- the MPEG data, 16-bit words of the 4 MB region, little-endian bytes
+  // ---- the MPEG data, 16-bit words of the region, little-endian bytes
   output logic        m_req,
-  output logic [20:0] m_addr,
+  output logic [MAW-1:0] m_addr,
   input  logic        m_ack,
   input  logic [15:0] m_data,
 
@@ -100,42 +111,101 @@ module dsb_mpeg #(
   logic        stop_now;           // e0 <- 0: flush and abort
 
   // ================================================================ memories
-  // Window, 512 x 18, read-only.
-  (* ramstyle = "M10K" *) logic [17:0] win [512];
-  // cos / scale factor / C, read-only (0..145).
-  (* ramstyle = "M10K" *) logic [31:0] misc [256];
-  // The output FIFO, 64 stereo samples. Its own block: a 32-bit port beside a
-  // table port would make `misc` true-dual-port, which M10K does only to x20.
-  // Each half written by its own channel's result: byte enables, no holding
-  // register for the left sample.
-  (* ramstyle = "M10K" *) logic [1:0][15:0] fifo [64];
-`include "dsb_tables.svh"
-  // Side information at t = 3 ({class, scfsi, scf0, scf1, scf2}) and one
-  // granule's requantised samples at t = 0..2, addressed {ch, t, sb}.
-  (* ramstyle = "M10K" *) logic [24:0] wram [256];
-  // The synthesis history, {ch, 9-bit ring index}.
+  // The synthesis history, {ch, 9-bit ring index}. 1,024 x 24: three M10K, and
+  // it stays 24 bits (narrower would change samples).
   (* ramstyle = "M10K" *) logic [23:0] vram [1024];
 
   logic  [8:0] win_a;   logic [17:0] win_q;
-  logic  [7:0] misc_a;  logic [31:0] misc_q;
+  logic  [7:0] misc_a;  logic [24:0] misc_q;
+  logic        q_tneg;              // TBL_PACK: the table's own sign, at q_*
   logic [1:0][15:0] fifo_q;
   logic  [7:0] wram_a;  logic [24:0] wram_q, wram_d;  logic wram_we;
   logic  [9:0] vram_a;  logic [23:0] vram_q;  wire vram_we;
-
-  always_ff @(posedge clk) win_q <= win[win_a];
-  always_ff @(posedge clk) misc_q <= misc[misc_a];
-  // written straight from the window's result in S_WN_O; read on a pop only,
-  // so its output register holds the sample being played.
   wire fifo_we_l, fifo_we_r;
-  always_ff @(posedge clk) begin
-    if (fifo_we_l) fifo[f_wp][1] <= o_sat;
-    if (fifo_we_r) fifo[f_wp][0] <= o_sat;
-    if (f_pop) fifo_q <= fifo[f_rp];
-  end
-  always_ff @(posedge clk) begin
-    if (wram_we) wram[wram_a] <= wram_d;
-    wram_q <= wram[wram_a];
-  end
+
+  // ---- the tables: window (512 x 18), and cos / scale factor / C (0..145)
+  generate if (!TBL_PACK) begin : g_tbl
+    (* ramstyle = "M10K" *) logic [17:0] win [512];
+    (* ramstyle = "M10K" *) logic [31:0] misc [256];
+`include "dsb_tables.svh"
+    logic [31:0] misc_w;
+    always_ff @(posedge clk) win_q <= win[win_a];
+    always_ff @(posedge clk) misc_w <= misc[misc_a];
+    assign misc_q = misc_w[24:0];
+    assign q_tneg = 1'b0;
+  end else begin : g_tblp
+    // ONE M10K, 256 x 40, by the tables' symmetries (tools/dsb/gen_tables_pack.py
+    // checks both on the values themselves before it writes the file):
+    //   window: win[512-i] == -win[i] for every i, except i a multiple of 64,
+    //           where win[512-i] == win[i] -- so win[0..256] is all of it;
+    //           two entries a word, words 0..128
+    //   cos:    cos[64-k] == -cos[k] (k = 1..63) -- cos[0..32], words 129..161
+    //   scale factors and C as they were, words 162..243 (misc_a + 98).
+    // The two tables were never read in the same cycle (a MAC uses one or the
+    // other, p_bsel), so one read port serves both. The sign a symmetry
+    // implies goes into the MAC's operand negation with q_sub and q_neg_b, so
+    // every product is the same integer as before.
+    (* romstyle = "M10K" *) logic [39:0] trom [256];
+`include "dsb_tables_pack.svh"
+    wire  [8:0] w_neg = 9'd0 - win_a;                 // 512 - win_a, mod 512
+    wire        w_hi  = (win_a > 9'd256);
+    wire  [8:0] w_idx = w_hi ? w_neg : win_a;         // 0..256
+    wire        w_sgn = w_hi && (win_a[5:0] != 6'd0);
+    wire        c_hi  = (misc_a[7:6] == 2'b00) && (misc_a[5:0] > 6'd32);
+    wire  [5:0] c_idx = c_hi ? (6'd0 - misc_a[5:0]) : misc_a[5:0];   // 64 - k
+    wire  [7:0] m_wd  = (misc_a[7:6] == 2'b00) ? (8'd129 + 8'(c_idx)) : (misc_a + 8'd98);
+    // p_bsel is the issued MAC's table, valid the cycle its address is
+    logic [39:0] t_q;
+    logic        t_half, t_neg;
+    always_ff @(posedge clk) begin
+      t_q    <= trom[p_bsel ? 8'(w_idx[8:1]) : m_wd];
+      t_half <= w_idx[0];
+      t_neg  <= p_bsel ? w_sgn : c_hi;
+    end
+    assign win_q  = t_half ? t_q[35:18] : t_q[17:0];
+    assign misc_q = t_q[24:0];
+    assign q_tneg = t_neg;
+  end endgenerate
+
+  // ---- the output FIFO, 64 stereo samples, written straight from the
+  // window's result in S_WN_O (each half by its own channel's result); read
+  // on a pop only, so its output register holds the sample being played.
+  generate if (!FIFO_MLAB) begin : g_fifo
+    // Its own block: a 32-bit port beside a table port would make `misc`
+    // true-dual-port, which M10K does only to x20. Byte enables, no holding
+    // register for the left sample.
+    (* ramstyle = "M10K" *) logic [1:0][15:0] fifo [64];
+    always_ff @(posedge clk) begin
+      if (fifo_we_l) fifo[f_wp][1] <= o_sat;
+      if (fifo_we_r) fifo[f_wp][0] <= o_sat;
+      if (f_pop) fifo_q <= fifo[f_rp];
+    end
+  end else begin : g_fifom
+    // 2,048 bits: four MLABs, as two 64 x 16 arrays with a write each
+    (* ramstyle = "MLAB" *) logic [15:0] fifo_l [64];
+    (* ramstyle = "MLAB" *) logic [15:0] fifo_r [64];
+    always_ff @(posedge clk) begin
+      if (fifo_we_l) fifo_l[f_wp] <= o_sat;
+      if (fifo_we_r) fifo_r[f_wp] <= o_sat;
+      if (f_pop) fifo_q <= {fifo_l[f_rp], fifo_r[f_rp]};
+    end
+  end endgenerate
+
+  // ---- side information at t = 3 ({class, scfsi, scf0, scf1, scf2}) and one
+  // granule's requantised samples at t = 0..2, addressed {ch, t, sb}
+  generate if (!WRAM_MLAB) begin : g_wram
+    (* ramstyle = "M10K" *) logic [24:0] wram [256];
+    always_ff @(posedge clk) begin
+      if (wram_we) wram[wram_a] <= wram_d;
+      wram_q <= wram[wram_a];
+    end
+  end else begin : g_wramm
+    (* ramstyle = "MLAB" *) logic [24:0] wram [256];
+    always_ff @(posedge clk) begin
+      if (wram_we) wram[wram_a] <= wram_d;
+      wram_q <= wram[wram_a];
+    end
+  end endgenerate
 `ifdef DSB_TRACE
   always_ff @(posedge clk) begin
     if (vram_we) $display("V %0d %0d %0d", vram_a[9], vram_a[8:0], $signed(v_sat));
@@ -226,8 +296,8 @@ module dsb_mpeg #(
       2'd2: ma = wram_q[23:0];
       default: ma = vram_q;
     endcase
-    mb  = q_bsel ? {{7{win_q[17]}}, win_q} : $signed(misc_q[24:0]);
-    mbn = (q_sub ^ q_neg_b) ? -mb : mb;
+    mb  = q_bsel ? {{7{win_q[17]}}, win_q} : $signed(misc_q);
+    mbn = (q_sub ^ q_neg_b ^ q_tneg) ? -mb : mb;
   end
   // In this exact shape -- operand muxes, the negation on one operand, a
   // constant load -- Quartus puts the accumulator inside the DSP block.
@@ -329,7 +399,7 @@ module dsb_mpeg #(
 
       // ------------------------------------------------------- word fetch
       // Held until acknowledged: the SDRAM port's rule.
-      if (w_issue) begin m_req <= 1'b1; m_addr <= rd_pos[24:4]; stale <= 1'b0; end
+      if (w_issue) begin m_req <= 1'b1; m_addr <= rd_pos[MAW+3:4]; stale <= 1'b0; end
       if (m_req && m_ack) begin
         m_req <= 1'b0;
         if (!stale) begin wbuf <= m_data; wvalid <= 1'b1; end
