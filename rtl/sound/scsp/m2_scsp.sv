@@ -72,7 +72,8 @@ module m2_scsp #(
   // for the benches
   parameter bit WPOST = 1'b0,
   // R947: m2_scsp_dsp ABORT_MERGE (with OVERLAP)
-  parameter bit ABORT_MERGE = 1'b1
+  parameter bit ABORT_MERGE = 1'b1,
+  parameter int TIMER     = 0         // R976: m2_scsp_regs; 0 MAME's timers, 1 the arcade's, 2 tarc selects
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -117,6 +118,7 @@ module m2_scsp #(
   input  logic        tick44,           // one per sample drained at 44.1 kHz
   input  logic  [5:0] tph,              // the drained sample's phase, 0 at tick44 (the timers, R883)
   input  logic        cpu_tick,         // the 68000's own sample boundary (each 512 of its half-clocks): the 0x408 monitor, R885
+  input  logic        tarc,             // R976: with TIMER 2, 1 = the arcade's timer period; quasi-static
   input  logic  [1:0] boost,            // R894: the direct sends x 1 / 2 / 4 (0 = MAME's mix exactly); quasi-static
 
   // ---- benches
@@ -1040,10 +1042,10 @@ module m2_scsp #(
   // =====================================================================
   // common registers, timers, interrupts, MIDI
   // =====================================================================
-  m2_scsp_regs #(.MIDI_OUT(MIDI_OUT)) u_regs (
+  m2_scsp_regs #(.MIDI_OUT(MIDI_OUT), .TIMER(TIMER)) u_regs (
     .clk(clk), .rst_n(rst_n),
     .a(o_addr[5:1]), .we(cw_en), .d(o_data), .be(o_be), .q(regs_q), .mi_pop(mi_pop), .mon(mon),
-    .tick44(tick44), .exact(!step_mode), .tph(tph),
+    .tick44(tick44), .exact(!step_mode), .tph(tph), .tarc(tarc),
     .midi_data(midi_data), .midi_valid(midi_valid), .midi_ack(midi_ack),
     .mout_data(mout_data), .mout_valid(mout_valid), .mout_ack(mout_ack),
     .ipl(ipl), .mvol(mvol), .dac18(dac18), .rbl(rbl), .rbp(rbp), .mslc(mslc)

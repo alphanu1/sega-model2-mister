@@ -158,7 +158,7 @@ module m2_sdram_cdc_load_harness #(
     .b_req(s_req[6]), .b_addr(s_addr[6]), .b_ack(s_ack[6]), .b_dout(s_dout[6]),
     .c_req(s_req[7]), .c_addr(s_addr[7]), .c_we(s_we[7]), .c_din(s_din[7]),
     .c_ack(s_ack[7]), .c_dout(s_dout[7]),
-    .snd_boost(2'd0), .snd_l(), .snd_r(),
+    .snd_boost(2'd0), .snd_tarc(1'b0), .snd_l(), .snd_r(),
     .dbg_addr(), .dbg_cycles(), .dbg_samples(), .dbg_under(), .dbg_selftest(selftest),
     .dbg_mvol(), .dbg_w400(), .dbg_w418(), .dbg_scsp_we(), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
     .dbg_sums()                                       // (R882's port; this harness predates it)
