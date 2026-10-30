@@ -46526,112 +46526,113 @@ the pipeline itself is likely too large for this device and would need
 R920-style shrinking. Not started; when it is, record the source commit in
 THIRD_PARTY.md and credit the author.
 
-**R976 -- SEGA RALLY "DRUMS OFF TEMPO AGAINST THE REST" (GITHUB #37, Ben, the
-board, Model2A_20261030 / s1582): NOT REPRODUCED. THE SOUND BOARD ON MAME's
-MIDI KEYS EVERY DRUM AND EVERY NOTE AT MAME's TIME (+-1 ms) AT THE BENCH's
-LATENCY. FOUND ON THE WAY: THE SEQUENCER's TEMPO DEPENDS ON THE 68000's SDRAM
-LATENCY -- 3.6% SLOW AT A MEAN OF 135 clk_sys -- BUT DRUMS AND NOTES MOVE
-TOGETHER. NO RTL CHANGED.**
+**R976 -- SEGA RALLY: THE HI-HATS / TAPS / CYMBALS PLAY OFF TIME AGAINST THE
+MUSIC; THE KICK IS FINE (GITHUB #37, Ben, the board, Model2A_20261030 /
+s1582). NOT REPRODUCED IN SIMULATION: EVERY HAT HIT OUR SOUND BOARD MAKES IS
+MAME's, SAMPLE FOR SAMPLE, AT MAME's TIME TO A FEW ms -- IN THE RTL, IN THE
+QUARTUS-SYNTHESISED SCSP, AND WITH THE RESIDENT SAMPLES COPIED BY OUR OWN
+68000 FROM RESET. WHAT THE SIMULATIONS DO NOT COVER IS LISTED, WITH THE
+CHECKSUMS A PROBE WOULD COMPARE. NO RTL CHANGED.**
 
-*Believed (the task):* a timer rate or a late timer interrupt moves notes
-against each other, or the drums are keyed on time but start late / at the
-wrong rate.
+*Ben's report, as corrected:* not SDRAM bandwidth; the kick's tempo is fine;
+the hi-hats, taps and cymbals are off time against the music -- in what is
+HEARD. (This entry first measured key-on register writes and pointed at
+latency; that is kept below only as a side note.)
 
-*How Sega Rally's driver keeps time (epr-17890a, read with snd_dasm.py):*
-  * Timer A (TIMA 0x00CE, prescale 0: MAME's period 49 samples + the
-    handler's latency to its re-arm) is the SEQUENCER: its level-2 handler
-    (0x6026f6) re-arms, then walks eight tracks (a6+0x2000..0x2070, MIDI-like
-    delta times in ticks) and posts their events into the same 4 KB queue
-    the MIDI-in handler (level 3, 0x600582) fills. Timer B (0x03C0, 504
-    samples + latency, level 1, 0x60068e) only counts note durations down
-    (key-off). Drums and notes are both sequencer events -- one tick for all.
-  * The main loop (0x602a20) walks the 32 slot records: a slot that streams
-    copies 512-byte chunks from ROM into its 8 KB ring in sound RAM
-    (0x10000 + slot x 0x2000), gated by the CA bit after an MSLC write and
-    ~340 clocks of ROR.L delay; between slots it dispatches one queued
-    event (0x6007ec): a key-on copies the first 512 bytes, then KYONB|KYONEX.
-    Resident one-shots (copied at boot to 0x50000-0x7ffff: the hats at
-    0x77388, 0x70958, 0x6a5cc, 0x6823c) are keyed without streaming; the
-    kick is streamed at OCT 0 (44.1 kHz, twice the 22 kHz of most notes).
-  * The attract's first piece (MAME 16.27-23.5 s) is 17 streamed voices keyed
-    together plus three more at 19.6 s (one 3.5 s pad, three pans); the
-    second (24.08 s on, 'ae 10 02') and the race music (52.72 s, 'ae 10 0b')
-    are short sequenced notes and hits on a 121.9 / 133.4 ms grid.
+*The driver (epr-17890a, snd_dasm.py):* timer A (TIMA 0x00CE) is the
+sequencer: eight tracks posting events to a queue the main loop dispatches,
+one between slots; timer B only counts durations. The kick is STREAMED (OCT 0,
+a 512-byte chunk ahead of key-on, the rest filled by the main loop into the
+slot's 8 KB ring at 0x10000 + slot x 0x2000, word writes). The hats are
+RESIDENT one-shots (LPCTL 0, PCM8): at boot (0x600406) the 68000 copies 16
+samples from the sample ROM into 0x50000-0x79166 WITH BYTE MOVES (move.b
+(a4)+,(a3)+), i.e. through R871's read-merge-write on our board:
+  0x6823c..0x6a5cc from ROM 0x0fc16, 0x6a5cc..0x70958 from 0x25dd0,
+  0x70958..0x77388 from 0x354f6, 0x77388..0x79166 from 0x12a678 (the hats);
+  0x50000..0x6823c from 0x71c8a8-0x74dc10 (MIDI-keyed effects in the race).
+MAME never writes 0x50000+ again after 2.2 s.
 
-*Measured (MAME 0.289 m2lod p16 captures: attract 45 s, a race 110 s with
-coin at 40 s; tb_m2_2a_sound, 80 MHz, on MAME's MIDI; analysis
-sim/sound/snd_keyon_cmp.py, snd_keyon_ev.py, snd_beat_rel.py,
-snd_stream_margin.py):*
-  1. LATENCY 6-40 (the board's VF2 attract sat here, R877) -- reproduces
-     nothing:
-       * attract, both pieces (SND_SHIFT 13 / 16, 12 s): 47 of 47 key-ons in
-         MAME's order, ours - MAME -0.7..+3.5 ms (median +0.5); in the
-         sequenced piece a key-on's delay after its grid line is MAME's to
-         0.2 ms for every class (drums 0.3-1.3 ms, notes -0.4-5.1 ms in both).
-       * timer A's re-arm period 49.911 samples against MAME's 49.874
-         (+0.07%); timer B 505.3 against 505.0.
-       * the race (SND_SHIFT 47 / 50 + SND_MIDI_DROP, 12 s, 1,726 MIDI bytes
-         taken): drum-minus-first-note offset per beat median 5.5 ms (MAME
-         5.6), p10 / p90 -7.8 / 24.5 (MAME -13.8 / 25.1); the hat (0x77388)
-         drifts 0 -> +8 ms over 16 hits (4 s) against MAME -- timer A 49.976
-         against MAME's 49.919 in the race (+0.11%) -- while the i960's MIDI
-         SFX (0x58d54) stay within +-0.9 ms. Music and SFX part by ~2 ms a
-         second; drums and notes do not part at all.
-       * the output against MAME's out.bin (first piece, 0.25 s windows, one
-         lag): level within 1-3%, no window better aligned at any other lag
-         (+-270 ms searched).
-  2. LATENCY 20-250 (mean 135; R877's render-saturated "heavy" p50 89 / p90
-     243 clk_mem is in this range): the TEMPO SLOWS. Timer A re-arm 51.79
-     samples (+3.9% on MAME's); the sequenced piece's grid 126.5 ms against
-     122.1 (p10-p90 of a step 125.1-128.2 against 121.1-122.9); the first
-     piece's three later voices keyed 146-150 ms late against its 17 streamed
-     voices (which play at the sample rate). Drums against notes within a
-     beat: -2.7..+3.4 ms (MAME -1.4..+1.5); a beat's key-ons spread median
-     2.4 ms (MAME 0.7). No streamed ring was read a lap stale (new bench
-     counter, 377,162 slot fills of the streaming windows, 0 stale; MAME
-     fills each chunk 400-900 samples ahead at the start of a note and the
-     lead grows). So under load the WHOLE music slows and wanders with the
-     load -- not the drums against the rest.
-  3. WHY THE TEMPO DEPENDS ON LATENCY: the handler's first instruction is
-     MOVEM.L of 13 registers -- 26 stack writes. A RAM write is posted ONE
-     deep (R877) and the next RAM access, and any SCSP access, waits for it
-     to land; under EXACT (R884) the 68000's clock stops meanwhile and its
-     catch-up is capped at ~1 sample. So the re-arm (move.w #$ce,$418)
-     lands 26 x (latency - MAME's ~25 clk_sys write cycle) later: 26 x 110 /
-     1,814 = 1.6 samples at 135 (measured +1.9), ~0 at 23. Expected slowdown
-     ~= 26 x max(0, lat - 25) / 1,814 / 49.9: 0.7% at 50 clk_sys, 2.2% at
-     100. Timer B's 504 hardly moves (0.4%), so durations stay while the
-     beat slows.
-  4. THE SILICON, FOR THE RECORD (srg320's SCSP.sv read, nothing copied; the
-     YMF292 manual's counting the same): TIMA counts UP once per (prescaled)
-     sample from the value written and interrupts on FF -> 00 -- (256 - v)
-     ticks, every interrupt on a sample boundary, the prescaler free-running.
-     A handler that re-arms within a sample therefore keeps EXACTLY 50
-     samples whatever its latency; MAME's (255 - v) from the write plus the
-     latency (49.87) is 0.26% faster than that. Not changed (too small to be
-     #37, and a study-level choice); noted because it is the one place MAME's
-     timer is not the chip's.
+*Measured (MAME 0.289 m2lod p16 captures from boot; tb_m2_2a_sound from
+RESET at 80 MHz, latency 6-40, on MAME's MIDI; scsp_split, new SPLIT_BYSA=1,
+splits each mix into the streamed OCT-0 voices (kick), the resident one-shots
+(hats), the rest and the effect return; sim/sound/snd_hit_cmp.py per hit):*
+  1. THE COPY, FROM RESET: our sound RAM at 3.0 s (SND_RAMDUMP) against MAME's
+     rebuilt from its RAM writes at 2.5 s: 0x50000-0x79166, 84,147 words, 0
+     differ. Word sum of 0x50000-0x7ffff after boot: 0xa8668ab7.
+  2. THE HATS, HIT BY HIT, attract piece 2 (MAME 24.08 s, ours 6.08 s; 8
+     resident hits, 5.4 s): audible onset after its key-on ours / MAME 0.39 /
+     0.20, 0.00 / 0.00, 0.00 / 0.02, then 2.81-2.86 / 2.68 ms for the five
+     0x77388 hits; the hats-only waveform of each 0x77388 hit EQUAL to MAME's
+     (residual 0.000 at a 6-8 sample lag -- the bench's sub-ms key-on
+     offset); audible onset on the piece's timeline ours - MAME +0.18, +1.42,
+     +0.61, +1.49, +1.79, +2.10, +2.78, +3.40 ms -- a drift of 0.6 ms a
+     second, the whole sequence's (timer A 49.911 against MAME's 49.874
+     samples), shared by the kick and the notes.
+  3. THE RACE (MAME 52.72 s 'ae 10 0b', ours 5.72 s, 1,726 MIDI bytes; 16
+     hits of 0x77388 in 6.2 s): onset after key-on equal to MAME's within 0.6
+     ms on 15 (the 16th is an overlap in MAME's window); on the piece's
+     timeline ours - MAME -1.1 .. +7.4 ms, median +1.7, the same slow drift
+     (timer A +0.11% in the race). The resident class here also carries the
+     MIDI-keyed effects, so the waveform residuals (0.17-0.91) are not hats
+     alone.
+  4. THE ENGINE AGAINST THE REFERENCE: our engine's trace replayed through
+     scsp_ref.h -- attract 529,207 samples 0 differ (EQUAL), race 15 differ of
+     529,206 (R885's mid-slot RAM write ambiguity). No streamed ring read a
+     lap stale (new counter: 670,583 slot fills in the race, 0).
+  5. THE SYNTHESISED SCSP: sim/netsim/netsim.sh on m2_scsp (quartus_map 17.0,
+     functional netlist, Verilator) with tb_m2_scsp on the capture cut to
+     boot + piece 2 (sim/sound/scsp_capcut.py: 3.0-23.9 s removed; the cut
+     capture replays to MAME's out.bin with 0 differences): 330,000 samples,
+     723,716 slot samples, 0 differ from the reference or from MAME's mix.
+     RAM shapes as R967's fix left them (mpro_h / mpro_l 512 x 8 each; the
+     slot cache's tag 256 x 9 covers all of 512 KB).
+  6. Checked against the coordinator's list: a key-on of a playing slot
+     (MAME: restart only if inactive or in release; ours equal by 2-5);
+     KYONB / KYONEX within a sample (2-5); SA / LSA / LEA / LPCTL 0 and SA
+     above 0x40000 (the hats sit at 0x6a5cc-0x79166: 2, 5); EG / KRS and
+     OCT / FNS (equal waveforms); an old tail (the hit windows); rings
+     overrunning into 0x50000+ (1: no word differs after boot; MAME writes
+     none there after 2.2 s, ours none either by 1 + 4); the boot copy (1,
+     from reset, in our RTL).
 
-*What turned out wrong:* (a) "every slot a streaming window means a slow
-68000 plays stale rings, a drum a lap late" -- 0 stale reads even at mean 135;
-MAME's driver keeps a lap of slack and the CA gate never lost a lap here.
-(b) "the race's MIDI traffic delays drum key-ons behind controller events" --
-the race's beat offsets are MAME's to ~1 ms. (c) The bench itself: with
-SND_SHIFT and SND_S below SND_SHIFT_AFTER, MAME's shifted writes were never
-loaded (the reader stopped at the first unshifted write past SND_S), and a
-shifted run must use SND_MIDI_DROP or the in-order MIDI waits for the
-dropped stretch -- both cost a run here; the first is fixed.
+*So every path the benches can reach plays MAME's hats. NOT COVERED, and so
+where the board can still differ:*
+  a. The sample ROM as the board's loader put it in SDRAM (every bench loads
+     snd_img.py's image from the zip directly). The kick and the hats come
+     from different ROM addresses (the hats from 0x0fc16-0x12a678 of the
+     first 2 MB). R882's CHKSUM build sums them before boot; expected for
+     srallyc: program 0x2a8aca90 (512 KB, zero-padded), samples by 2 MB
+     0x015c3019, 0xee38ddcd, 0x05ee638c, 0x4cd3282c.
+  b. The resident samples as the REAL SDRAM holds them after the byte-move
+     copy (read-merge-write, R871: each byte read back from a word written a
+     few clocks before). The controller acknowledges a write after its WRITE
+     command (m2_sdram S_WRRC), so a following read should see it; only a
+     board sum settles it: 0x50000-0x7ffff after boot, expected 0xa8668ab7
+     (a probe that does not exist yet).
+  c. m2_2a_sound and fx68k as Quartus builds them (only the SCSP was netlist-
+     simulated: the 68000 side at netlist speed is ~40 x a 3.5 min boot).
+  d. Whether MAME's own hats are where the arcade's are. The clips below let
+     Ben hear MAME's and ours side by side: if MAME's hats are also off, the
+     fault is in what both share (the model), not in this core's build.
+*Clips (5 s, scratch, ROM-derived, not committed):* attract piece 2, ours
+and MAME's -- full mix, hats only x4, kick only x4.
 
-*Not known / what would settle it:* the board's port-5 latency in Sega
-Rally (VF2's attract was light, R877; Rally's render is heavier, R888). A
-probe build (M2_PROBE, record 'L': longest port 5 wait, clocks with a
-request outstanding) through Rally's attract and a race would say whether
-item 2 happens on the board; a clip of the board's Rally music against MAME's
-(or the arcade) would say whether what Ben hears is the whole tempo
-wandering (item 2/3) or something no bench here shows. If 'L' shows waits
-well above ~25 clk_sys, the change is a deeper posted-write queue for the
-68000 (so the handler's MOVEM does not stall it) with SCSP common-register
-writes (0x400-0x42f) not waiting on it; ordering for slot registers kept.
-*Benches added:* tb_m2_2a_sound's stale-lap counter (LAP_MS) and the
-shifted-write fix; the four analysis scripts above. No RTL changed: lint,
-quartus_map and a fit not run.
+*Side note, not #37 (Ben: not bandwidth):* the sequencer's tempo depends on
+the 68000's SDRAM latency -- its timer A handler's MOVEM.L of 13 registers is
+26 stack writes posted one deep, and the re-arm waits for them under EXACT:
+at a mean of 135 clk_sys timer A is 51.79 samples (+3.9%), at 6-40 49.911
+(+0.07%); expected slowdown ~ 26 x max(0, lat - 25) / 1,814 / 49.9. Drums
+and notes move together. And the silicon's timer (srg320's SCSP.sv read,
+nothing copied): TIMA counts up from the value written and interrupts on
+FF -> 00, (256 - v) ticks on sample boundaries, so a re-arm within a sample
+gives exactly 50 samples; MAME's 49 + latency is 0.26% faster. Neither
+changed.
+*What turned out wrong in this entry's first version:* it measured key-on
+REGISTER WRITES, not the sound, and took the heavy-latency tempo shift for
+the lead; Ben's board rules both out. Also wrong there: "streaming lags a lap"
+(0 stale) and "race MIDI delays drum key-ons" (MAME's to ~1 ms).
+*Benches / tools:* tb_m2_2a_sound (stale-lap counter LAP_MS; MAME's shifted
+writes now loaded when SND_S < SND_SHIFT_AFTER -- a shifted run also needs
+SND_MIDI_DROP=1); scsp_split SPLIT_BYSA; sim/sound/snd_hit_cmp.py,
+scsp_capcut.py, snd_keyon_cmp.py, snd_keyon_ev.py, snd_beat_rel.py,
+snd_stream_margin.py. No RTL changed: lint and a fit not run.
