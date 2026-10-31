@@ -47440,6 +47440,128 @@ games (House of the Dead, Over Rev, STCC) move by the same ~2.2% and are to
 be heard on the 2C build. Checks: lint_top clean; Quartus 17.0 analyze_file
 on the four changed files, 0 errors.
 
+**R979 -- STCC'S MUSIC: THE Z80 DIGITAL SOUND BOARD ON 2C. IT RUNS, BENCHED;
+IT DOES NOT FIT IN 2C'S FOUR FREE M10K ON ITS OWN (branch stcc-dsb, from
+model2c b67321c5; nothing built past quartus_map, nothing on the board).**
+
+*Believed:* Model 1's Star Wars board (sega-model1-mister 2657c46:
+rtl/sound/dsb_*; ~1,040 ALM fitted, 14 M10K, 3 DSP) transfers to STCC with at
+most a few missing opcodes, and shrinks bit-exactly into 2C's last 4 M10K
+(fit s1597: 39,273 ALM, 549 / 553 RAM blocks).
+
+*Found, compatibility:*
+  * **STCC's DSB program is a different program.** epr-19275.2s is 1.5 KB of
+    code (0000-0601) and interrupt-driven: MAME wires the DSB UART's RxRDY to
+    the Z80's INT, the program runs with EI in IM 1, and the handler at 0x38
+    (EX AF,AF', EXX, `in f0`, echo on f0) fills a ring at 8000-8FFF. Model 1's
+    census method (MAME 0.289 `dasm`, tools/dsb/z80_census.py, plus the two
+    4-entry jump tables at 02D8 / 04D7 as entry points): 783 instructions, 128
+    opcodes, 69 that Star Wars' never uses (IY and (iy+d), EXX, EX AF, S flag
+    for `jp m`, adc / sub / sbc hl,de, rr / rra / rrca / rlc, cpl, jp (hl),
+    rst 08, ...). Model 1's Z80 ("interrupts can never be taken", 76 opcodes,
+    Z and C only) would have trapped at once. dsb_z80 now runs the union, 145
+    opcodes, 173 x 40-bit micro-ops (one M10K), IM 1 with IFF1 / EI's delay /
+    13 T, the alternates by swap, IY, S; dispatch as logic (DSB_UENT_LOGIC).
+    Against tv80s over both 300 s MAME captures: every port access equal in
+    order, value and T-state -- STCC 2,567,924 accesses, 27,912 interrupts;
+    Star Wars 6,843,318 (Model 1's own figure); 0 traps.
+  * **The MPEG data is the same format.** All 27,624 frames in mpr-19262..19265
+    (walked from the program's 23-entry table at A028) are MPEG-1 Layer II,
+    32 kHz, 128 kbit/s, stereo, no CRC -- Star Wars' one format. The decoder
+    needs only a 22-bit word address (8 MB; MAW).
+  * **Wiring.** MAME `model2c_state::stcc()`: `m_uart->txd_handler().append(
+    m_dsbz80, write_txd)` -- the DSB hears exactly what the SCSP's MIDI in
+    hears. Here: m2_sound_link's B side, a toggle per rising b_rx_valid (one
+    character time after the i960's write). The DSB's own transmit (its echo)
+    goes nowhere, as in MAME.
+  * **Memory map and room.** Measured over 300 s (tb_dsb_z80): code fetched
+    0000-0601 (94% of fetches 0300-0601), variables 9000-9026 (7.5 M reads),
+    stack FF page (77 M reads and writes; lowest SP fff8, fff6 reachable),
+    the ring one write + one read per byte, A000-A1FF a few hundred table
+    reads; the boot tests all 32 KB and copies ROM 1000-6FFF to A000. MAME:
+    no read of unwritten RAM. So ONE 1 KB on-chip block (code 0380-067F,
+    9000-907F, FF80-FFFF) replaces Model 1's four M10K; the rest stays in
+    SDRAM behind the one-word cache. The MRA appends the 8 MB + 128 KB after
+    the polygons (MRA 0x52C0000 -> SDRAM byte 0x6000000 through the existing
+    third remap; Z80 ROM 0x6800000, RAM 0x6820000): the 128 MB module, as STCC
+    already needs. SDRAM port 8 (the TGP's tables; m2_copro ties tbl_req to 0
+    on 2C), reads and the Z80's few writes on the one port.
+  * **The volume register.** STCC writes e8 on every main-loop pass with its
+    level (801,515 times in 300 s); the bit-7 writes (80, c5) are only at
+    boot. The board takes MAME's reading (vol_mame = 1).
+
+*Found, "bit-identical to MAME":* **the board was never bit-identical to
+MAME, before or after any shrink.** dsb_mpeg is bit-exact against
+tools/dsb/dsb_fixmodel.h, and that fixed-point model against MAME's own
+mpeg_audio.cpp (doubles), every song start to end (dsb_cmp.cpp): STCC
+27,611 frames, 63,615,744 samples, 11,494,132 differ by 1 LSB (18.1%), none
+by more; Star Wars 51,796,224 samples, 9,598,916 by 1 (18.5%) -- Model 1's
+"within 1 LSB". Every shrink below is bit-identical to the unshrunk board
+(same integers read in the same cycle); exact MAME equality would need its
+double-precision arithmetic, which nothing here attempts.
+
+*Benched (the board, tb_dsb_board, at 80 MHz behind m2_sdram_cdc's
+contract, memory [1, LAT] cycles, unwritten 0xFFFF):* STCC, MAME's capture
+(attract, coin 150 s), 20 s at LAT 1 and 40: 0 fails; UART 79, controls 38,
+volume changes 9 accesses equal to MAME's in order and value; 110,272
+decoded samples bit-exact against the fixed-point model and 110,237 32 kHz
+outputs equal to them with volume and pan; at LAT 40 the boot (its RAM test
+goes through SDRAM) ends 115 us late and is back to MAME's -22 us by 12 s,
+before the first command. 60 s at LAT 40 (song 0 from 16.6 s, the next
+from 52.8 s): 0 fails; UART 97, controls 57, volume changes 91 equal to
+MAME's; 1,250,272 decoded samples bit-exact, 1,250,179 outputs; 309,441
+position reads on both sides; SDRAM 30,554 requests a second averaged over
+the 60 s, boot included (the MPEG stream itself is ~8,000 words a second).
+Star Wars on the same board (Model 1's parameters: MAW 21, code 0100-03FF
+on chip), 70 s at LAT 1 and 40: 0 fails, 460,288 decoded samples -- Model 1's
+own count. Decoder (tb_dsb_mpeg) with every shrink on: Star Wars 105,764 and
+STCC 120,588 samples bit-exact at LAT 1 / 20 / 400 (every song's start, end,
+loops, stop and play mid-frame). Not run: every STCC song to its end
+(stopped after 22 min, past this branch's bench limit).
+
+*Measured, cost.* quartus_map (Quartus 17.0, the whole 2C core) against
+model2c's s1597 map (39,064 ALM estimated; s1597 fitted 39,273, 549 M10K):
+
+    A  board, tables packed, FIFO in MLAB, 1 KB Z80 block, dispatch in logic
+         40,366 ALM est (+1,302), DSP +3; M10K by shape 7: vram 3 (1,024 x
+         24, stays 24 bits), the Z80 block 1, packed tables 1, wram 1,
+         microcode 1                                    -> 556 of 553
+    C  A + wram in MLAB (no_rw_check) + microcode in LUTs (M2_2C_DSB_LEAN)
+         40,705 ALM est (+1,641) plus 6,400 more MLAB bits (~150 ALM of
+         LABs); M10K 5: vram 3, Z80 block 1, tables 1   -> 554 of 553
+
+  (M10K counts by shape -- quartus_map does not count blocks; Model 1's fit
+  of the same shapes is the check.) Per option, map: the packed tables -1
+  M10K (window by win[512-i] = -win[i] except i % 64 == 0, cos by cos[64-k]
+  = -cos[k], the sign into the MAC's operand negation; checked on every
+  index by tools/dsb/gen_tables_pack.py); FIFO to MLAB -2 (2,048 MLAB bits);
+  one Z80 block -3; dispatch to logic -1; microcode to LUTs -1 for +201
+  ALUT; wram to MLAB -1 for +79 ALUT and 6,400 MLAB bits. **Wrong first:**
+  wram as plain `ramstyle "MLAB"` -- Quartus kept the RTL's old-data read by
+  building it in 6,400 registers (+3,225 ALM estimated); no read in the
+  cycle of a write is ever used, so `no_rw_check` is exact.
+
+*Game sharing (Ben's proposal), 2C's M10K list (s1597 fitter RAM summary,
+per-RAM rows 564 = 549 physical after 15 packed pairs): renderer 217
+(quad store, texel cache, spans, fb read), texture / luma / palette RAM 80,
+glyph cache 68, SCSP + 68000 42, i960 12, bridge cache 17, TGPx4 17, backup
+RAM 16, tilemap line buffers 16, 15 kHz scan converter 20, loader FIFO 5,
+geometry 3, framework 51. **Every one is shared by all three 2C games**
+(The House of the Dead 0x17, Over Rev 0x1C, STCC 0x1D): the per-game
+hardware on 2C -- HOTD's guns, Over Rev's comm stub, the analog profiles --
+is logic, not memory. There is no game-exclusive M10K to mux on game id.
+
+*So it fits only with M10K from the core.* Bit-identical candidates, none
+measured past this (each needs a fit): the glyph cache's 8,192 x 64 is 64
+blocks as 8 K x 1 slices for 51.2 blocks' worth of bits -- 2 K x 5 slicing
+(max_depth 2048) would be 52, -12, for a 4:1 mux on clk_mem's tile path; the
+loader's 5 M10K are idle once the image is in and could be time-shared with
+the board's written-before-read arrays (wram, the FIFO, the Z80 block, which
+is reloaded at the board's start) -- not vram, which must start as MAME's
+zeros. ALM: C is ~41,000 fitted on s1597's base, ~98% -- the bigger risk
+once the block is found. Not changed: the TGPx4 cache (PLINES) would save 3
+but is a speed change.
+
 **R980 -- THE SINDEN BORDER, BUILT ON 2C (R942 (1), 2026-11-06).** Ben:
 Sinden support for The House of the Dead first, in the OSD beside the gun
 flash, "a white border around the screen", two pixels hoped to be enough.
