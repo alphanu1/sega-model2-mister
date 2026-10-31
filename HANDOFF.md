@@ -1,5 +1,38 @@
 # Handoff
 
+## 2026-10-31: Model2A_20261031 in releases/ -- the SCSP timer at the arcade's period (R976-R978)
+
+`releases/` is the same on main, model2a and model2c; only the 2A rbf
+changed. Model2A_20261031 = s1644 of branch rally-tempo (merged into model2a
+as a95c6659), md5 89ffe013be57391d1dacbe8c3360d13a, 39,396 ALM, 551/553
+M10K; core clocks and hold clean, HDMI -0.324 (framework scaler), released
+on Ben's word. Board-tested by Ben: every 2A SCSP game "more in time".
+
+- R976: Sega Rally's hats off time (GitHub #37). MAME has it too. Measured
+  against a real cabinet's recording (YouTube cJ5oFV1Phwk): same pitch,
+  tempo 2.2% slower; timer A ticks ~51 samples, not MAME's 49.87. New
+  m2_scsp_regs TIMER (0 MAME, 1 arcade, 2 OSD-selected); OSD "SCSP timer,
+  Arcade, MAME" on status[72]. The mechanism (load at the next sample, IRQ
+  on FF->00) is fitted to one recording; the emulators' rule gives 50.
+  Timer B was not measured against a cabinet.
+- What went wrong first: the first agent pass compared key-on register
+  writes, then audible onsets, against MAME, and "did not reproduce" --
+  MAME was the wrong reference. Ben's board video plus an arcade recording
+  found it in minutes.
+- R977: R883's "MAME's period" matched MAME, not the chip.
+- R978: Seam fill defaults to Black only, on new bits O[74:73].
+
+Open:
+- 2C: the timer is ported on branch tempo-2c (6214e5da, 8fdc6fc4); seeds
+  s1646-s1648 all missed clk_sys (-0.130 best), s1649-s1651 running.
+  Board-test HOTD / Over Rev / STCC before releasing.
+- STCC music (R979, branch stcc-dsb, not fitted): Model 1's DSB with an
+  extended Z80 runs STCC exactly on the bench, but needs 5 M10K (4 free on
+  2C) and ~+1,650 ALM (~98%). Its MPEG decoder is Model 1's fixed-point
+  model, 1 LSB off MAME's on ~18% of samples -- Ben asked for MAME
+  bit-identical; his call. Room: glyph cache re-slice (~-12 M10K), loader
+  FIFO reuse, or the quad payload to DDR3.
+
 ## 2026-10-30: Model2_20261030, Model2A_20261030, Model2C_20261030 in releases/ -- the i960 rounding (R972)
 
 `releases/` is the same on main, model2a and model2c. Each core is its last
