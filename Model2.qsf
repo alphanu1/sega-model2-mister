@@ -1028,4 +1028,6 @@ set_global_assignment -name VERILOG_MACRO "M2_2C=1"
 # Z80's opcode dispatch as logic rather than an M10K
 set_global_assignment -name VERILOG_MACRO "M2_2C_DSB=1"
 set_global_assignment -name VERILOG_MACRO "DSB_UENT_LOGIC=1"
+set_global_assignment -name VERILOG_MACRO "M2_2C_DSB_LEAN=1"
+set_global_assignment -name VERILOG_MACRO "DSB_UROM_LOGIC=1"
 set_global_assignment -name VERILOG_MACRO "M2_NO_2A_MANX_MOTION=1"

@@ -283,6 +283,12 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2C_DSB
 `define M2_2C_DSB 0
 `endif
+// R979: M2_2C_DSB_LEAN=1 moves two more of the board's tables out of M10K,
+// both bit-identical: dsb_mpeg's side-information RAM to MLAB (WRAM_MLAB)
+// and, with VERILOG_MACRO "DSB_UROM_LOGIC=1", the Z80's microcode into LUTs.
+`ifndef M2_2C_DSB_LEAN
+`define M2_2C_DSB_LEAN 0
+`endif
 // R927: THE i960'S SPEED IN SEGA RALLY'S FRAME START (R926: the game's AI
 // detail budget). M2_2A_I960_RING: the local-register cache as the chip keeps
 // it, a ring of eight frames that goes to memory only when a call finds it
@@ -3649,7 +3655,8 @@ generate if (DSB) begin : g_dsb
 	//   byte 0x6820000  the Z80's 32 KB of RAM (never loaded; its boot test writes it)
 	dsb_board #(.AW(SDR_AW), .ROM_BASE(SDR_AW'(32'h3400000)), .MPEG_BASE(SDR_AW'(32'h3000000)),
 	            .RAM_BASE(SDR_AW'(32'h3410000)), .MAW(22),
-	            .T_NUM(1), .T_DEN(SYS_MHZ / 4), .TICK_NUM(4), .TICK_DEN(SYS_MHZ * 125)) u_dsb (
+	            .T_NUM(1), .T_DEN(SYS_MHZ / 4), .TICK_NUM(4), .TICK_DEN(SYS_MHZ * 125),
+	            .WRAM_MLAB(`M2_2C_DSB_LEAN != 0)) u_dsb (
 		.clk(clk_sys), .rst_n(dsb_rst_n),
 		.rx_tog(dsb_rx_tog), .rx_byte(b_rx_d),
 		.vol_mame(1'b1),   // MAME's reading of e8 (every write is the volume)

@@ -200,7 +200,13 @@ module dsb_mpeg #(
       wram_q <= wram[wram_a];
     end
   end else begin : g_wramm
-    (* ramstyle = "MLAB" *) logic [24:0] wram [256];
+    // no_rw_check: the read in the cycle of a write is never used. Every write
+    // (S_ALLOC, S_SFSI_W, S_SCF_W, S_GR_Z, S_RQ2W) is followed by a state
+    // that sets a new wram_a and an S_W1 wait, or by more writes, before
+    // wram_q is consumed; matrixing (S_ID_RUN) reads and never writes.
+    // Without it Quartus 17.0 keeps the RTL's old-data read by building the
+    // array in 6,400 registers (measured, R979).
+    (* ramstyle = "MLAB, no_rw_check" *) logic [24:0] wram [256];
     always_ff @(posedge clk) begin
       if (wram_we) wram[wram_a] <= wram_d;
       wram_q <= wram[wram_a];
