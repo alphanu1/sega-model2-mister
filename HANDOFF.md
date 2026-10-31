@@ -22,10 +22,14 @@ on Ben's word. Board-tested by Ben: every 2A SCSP game "more in time".
 - R977: R883's "MAME's period" matched MAME, not the chip.
 - R978: Seam fill defaults to Black only, on new bits O[74:73].
 
+**Model2C_20261031 (same day):** the timer on 2C, branch tempo-2c merged
+into model2c. s1651, md5 b05a3dd43aefa2b18637342370be1011, 39,357 ALM,
+549/553 M10K; core clocks and hold clean (clk_sys +0.123), HDMI -0.084.
+s1646-s1648 and s1650 missed clk_sys, s1649 a Quartus internal error.
+Board-tested by Ben ("its good"). The cherry-pick met 2C's R946 OVERLAP in
+m2_2a_sound / m2_scsp; both parameters kept. 2C's study carries R976/R977.
+
 Open:
-- 2C: the timer is ported on branch tempo-2c (6214e5da, 8fdc6fc4); seeds
-  s1646-s1648 all missed clk_sys (-0.130 best), s1649-s1651 running.
-  Board-test HOTD / Over Rev / STCC before releasing.
 - STCC music (R979, branch stcc-dsb, not fitted): Model 1's DSB with an
   extended Z80 runs STCC exactly on the bench, but needs 5 M10K (4 free on
   2C) and ~+1,650 ALM (~98%). Its MPEG decoder is Model 1's fixed-point
