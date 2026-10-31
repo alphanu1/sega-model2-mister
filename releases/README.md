@@ -56,6 +56,15 @@ hardware as possible:
   of times a fight for the fighters' joint angles, Daytona a little and
   Virtua Cop 2 now and then. Too small to see, but the CPU now computes what
   the arcade board computes. (`*_20261030`.)
+- **Sega Rally's hi-hats play in time with the music (Model 2A; coming to
+  the Model 2C core).** Checked against a recording of a real Sega Rally
+  cabinet: the music plays at exactly the same pitch, but the arcade's
+  sequencer runs 2.2% slower than MAME's. The sound chip's timer, which
+  triggers the hi-hats, taps and cymbals, runs fast in MAME, so they drift
+  ahead of the streamed kick and instrument parts, by about 240 ms over 11
+  seconds. The core now uses the cabinet's timer period. Every Model 2A game
+  uses this timer, so every game's music is a little more in time. The OSD's
+  `SCSP timer` setting switches back to MAME's period. (`Model2A_20261031`.)
 
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
@@ -81,7 +90,22 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261030`)
+### New in this build (`Model2A_20261031`)
+
+- **The music plays in time, as on a real cabinet** (GitHub #37). Sega
+  Rally's hi-hats, taps and cymbals drifted ahead of the rest of the music.
+  MAME has the same fault: the sound chip's timer ran 2.2% fast. Measured
+  against a recording of a real Sega Rally cabinet, the core now uses the
+  arcade's timer period (see *Not just a MAME port* above). Every 2A game's
+  music moves with it, a little slower and more in time.
+- **New OSD setting `SCSP timer`: `Arcade` (default) / `MAME`.** `MAME`
+  plays the music at MAME's tempo, as every build before this one.
+- **`Seam fill` now defaults to `Black only`**: Sega Rally's car shadows are
+  solid, and the cars stay clean. The setting has moved, so it opens on
+  `Black only` even if you had saved something else; set it again if you
+  want `Off` or `On`.
+
+### Earlier in `Model2A_20261030`
 
 - **The i960 CPU now rounds the way Intel's chip does.** I checked the core's
   i960 against Intel's own 80960KB manuals. One difference the games actually
@@ -152,10 +176,10 @@ below). Please report anything you find, and say which game and where.
   with the livery drawn over them as decals, and the widened panels painted
   over the decals' edges. MAME draws no dots there.
 - **New OSD setting `Seam fill`: `Off` / `Black only` / `On`.**
-  - `Off` (default): polygons are drawn as before `Model2A_20261024`. The
+  - `Off`: polygons are drawn as before `Model2A_20261024`. The
     cars are clean; Sega Rally's car shadows can show thin cracks.
-  - `Black only`: the crack fix only on black polygons, which is what the
-    shadows are. Solid shadows, clean cars; black trim (window frames,
+  - `Black only` (the default since `Model2A_20261031`): the crack fix only
+    on black polygons, which is what the shadows are. Solid shadows, clean cars; black trim (window frames,
     sills) can be widened by a fraction of a pixel.
   - `On`: the crack fix on every plain polygon, as in `Model2A_20261024`,
     dots included.
@@ -263,7 +287,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261030.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261031.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -271,7 +295,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261030.rbf` has the md5 `7ac0c79d47f5a71020cf208ffe74b610`. As with
+`Model2A_20261031.rbf` has the md5 `89ffe013be57391d1dacbe8c3360d13a`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -329,6 +353,7 @@ ROM sets: MAME 0.289.
 |---|---|
 | `Volume` | 80% by default. The list runs upward from there: 80, 90, 100, **150, 200, 300, 400%**, then round to 0–70%. Above 100% the loudest moments are limited at full scale, never distorted by wrap-around. |
 | `Raw Sound Boost` | `Off` (default), `+6 dB` or `+12 dB`. Raises every voice the sound chip plays directly, but not the effects processor's return. Sega Rally and Zero Gunner use the direct path for almost everything, so they come up nearly the full amount. Since `Model2A_20261027` the balance is right without it; it stays for anyone who wants the direct sounds louder. |
+| `SCSP timer` | `Arcade` (default) or `MAME`. The sound chip's timer drives each game's music sequencer. `Arcade` is the period measured on a real Sega Rally cabinet; `MAME` is MAME 0.289's, 2.2% faster, as in builds before `Model2A_20261031`. |
 
 **Quiet games: turn `Volume` up.** The table was measured before
 `Model2A_20261027`; Sega Rally and Zero Gunner barely use the effects
