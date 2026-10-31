@@ -16,6 +16,7 @@
 //   SND_IMG=<dir with prog.bin, samp.bin (snd_img.py)>  SCSP_CAP=<p16 capture>
 //   SND_S=<seconds, default 10>  LAT_LO / LAT_HI (default 6 / 40)
 //   SND_RAMFILL=<word>  what unwritten sound RAM reads (default 0xffff)
+//   SND_TARC=1  R976: the arcade's timer period (a build with SCSP_DEFS=-GTIMER=2)
 //   SND_BOOST=<0..2>  R894: the SCSP's Direct boost, x1 / x2 / x4 (default 0, MAME's mix)
 //   LAT_A_LO / LAT_A_HI the 68000's port alone (R874)
 //   LAT_TRACE=<prefix>  R877: each port's latency from tb_m2_sdram_load's trace
@@ -212,6 +213,7 @@ int main(int argc, char **argv) {
 	t = new Vm2_2a_sound;
 	t->rst_n = 0; t->rx_valid = 0; t->tx_ack = 0;
 	t->snd_boost = getenv("SND_BOOST") ? (atoi(getenv("SND_BOOST")) & 3) : 0;   // R894: the Direct boost (0 = MAME)
+	t->snd_tarc = getenv("SND_TARC") ? (atoi(getenv("SND_TARC")) & 1) : 0;      // R976: with TIMER 2 (-GTIMER=2), 1 = the arcade's timers
 	for (int i = 0; i < 8; i++) tick();
 	t->rst_n = 1;
 

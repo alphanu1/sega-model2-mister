@@ -165,6 +165,13 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_SND_LERP
 `define M2_2A_SND_LERP 1
 `endif
+// R976: M2_2A_SND_TIMER, the SCSP's timers (m2_2a_sound TIMER): 0 MAME 0.289's
+// period, 1 the arcade's (fitted to a Sega Rally cabinet recording), 2 both,
+// the OSD's "SCSP timer" choosing (status[72]: 0 Arcade, 1 MAME) -- the A/B
+// build, the default for now.
+`ifndef M2_2A_SND_TIMER
+`define M2_2A_SND_TIMER 2
+`endif
 // R862: M2_2A_RALLY, Sega Rally's cabinet (steering, pedals, shifter: Daytona's
 // m2_cab_inputs inside m2_2a_inputs, its four OSD lines shown for that game).
 // On by default; VERILOG_MACRO "M2_NO_2A_RALLY=1" (or -DM2_NO_2A_RALLY to
@@ -517,6 +524,10 @@ localparam CONF_STR = {
 	// x2 / x4 before the DSP's return; Off, the default, is MAME's mix.
 	"O[49:46],Volume,80%,90%,100%,150%,200%,300%,400%,0%,10%,20%,30%,40%,50%,60%,70%;",
 	"O[65:64],Raw Sound Boost,Off,+6 dB,+12 dB;",
+	// R976: the SCSP's timer period. Arcade (the default) is fitted to a real
+	// Sega Rally cabinet, whose music runs 2.18% slower than MAME's; MAME is
+	// MAME 0.289's period, as every build before. M2_2A_SND_TIMER 2 only.
+	"O[72],SCSP timer,Arcade,MAME;",
 `else
 	"O[49:46],Volume,80%,90%,100%,0%,10%,20%,30%,40%,50%,60%,70%;",
 `endif
@@ -3558,6 +3569,9 @@ m2_volume u_vol (.clk(clk_sys), .code(vol_s3), .in_l(snd_l), .in_r(snd_r), .out_
 // R894: the OSD's Raw Sound Boost (was 'Direct boost') into clk_sys like the volume (m2_2a_sound)
 reg  [1:0] boost_s1, boost_s2, snd_boost;
 always_ff @(posedge clk_sys) begin boost_s1 <= status[65:64]; boost_s2 <= boost_s1; snd_boost <= boost_s2; end
+// R976: the OSD's SCSP timer into clk_sys (0 = Arcade -> snd_tarc 1)
+reg        tarc_s1, tarc_s2, snd_tarc;
+always_ff @(posedge clk_sys) begin tarc_s1 <= !status[72]; tarc_s2 <= tarc_s1; snd_tarc <= tarc_s2; end
 `else
 reg  [8:0] vol_gain;
 always_comb begin
@@ -3580,6 +3594,7 @@ end
 (* multstyle = "dsp" *) wire signed [25:0] vol_pr = snd_r * $signed({1'b0, vol_gain});
 always_ff @(posedge clk_sys) begin vol_l <= vol_pl[23:8]; vol_r <= vol_pr[23:8]; end
 wire [1:0] snd_boost = 2'd0;
+wire       snd_tarc  = 1'b1;
 `endif
 
 // Byte out of the burst: word by [2:1], byte within it by [0].
@@ -3653,6 +3668,7 @@ end else if (SND2A) begin : g_2asnd
 	              .PHI_NUM(225792), .PHI_DEN(SYS_MHZ * 10000),
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
 	              .EXACT(`M2_2A_SND_EXACT != 0), .OVERLAP(`M2_2A_SND_OVL != 0),
+	              .TIMER(`M2_2A_SND_TIMER),   // R976
 	              .LERP(`M2_2A_SND_LERP != 0)) u_snd2a (   // R884, R946, R949
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
@@ -3662,7 +3678,7 @@ end else if (SND2A) begin : g_2asnd
 		.b_req(s2a_b_req), .b_addr(s2a_b_addr), .b_ack(p_ack[6]), .b_dout(p_dout[6]),
 		.c_req(s2a_c_req), .c_addr(s2a_c_addr), .c_we(s2a_c_we), .c_din(s2a_c_din),
 		.c_ack(p_ack[7]), .c_dout(p_dout[7]),
-		.snd_boost(snd_boost), .snd_l(snd_l), .snd_r(snd_r),   // R894
+		.snd_boost(snd_boost), .snd_tarc(snd_tarc), .snd_l(snd_l), .snd_r(snd_r),   // R894, R976
 		.dbg_addr(snd_pc[23:0]), .dbg_cycles(snd_insns), .dbg_samples(snd_samples),
 		.dbg_under(snd_under), .dbg_scsp_we(snd_scsp_we), .dbg_scsp_a(), .dbg_scsp_d(), .dbg_scsp_be(),
 		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418),
