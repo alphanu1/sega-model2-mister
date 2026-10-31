@@ -1,5 +1,19 @@
 # Handoff
 
+## 2026-10-31: Model2C_20261031 -- the SCSP timer at the arcade's period (R976)
+
+model2a's R976 (Sega Rally's hats, GitHub #37: the SCSP timer ran ~2% fast
+in MAME; the arcade's period measured on a real cabinet) ported on branch
+tempo-2c and merged. Conflicts only with R946's OVERLAP in m2_2a_sound and
+m2_scsp; both parameters kept. OSD "SCSP timer, Arcade, MAME" on status[72]
+(free on 2C). Released as s1651, md5 b05a3dd43aefa2b18637342370be1011,
+39,357 ALM, 549/553 M10K, core clocks and hold clean, HDMI -0.084;
+board-tested by Ben on HOTD / Over Rev / STCC. releases/ is the same on all
+three branches (Model2A_20261031 and Model2C_20261031 new).
+
+STCC's music: branch stcc-dsb (R979), not fitted -- 5 M10K needed, 4 free,
+~98% ALM; see model2a's HANDOFF.
+
 ## 2026-10-30: Model2_20261030, Model2A_20261030, Model2C_20261030 in releases/
 
 `releases/` matches model2a: each core is its last release plus only the i960
