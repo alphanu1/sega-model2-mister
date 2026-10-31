@@ -56,15 +56,15 @@ hardware as possible:
   of times a fight for the fighters' joint angles, Daytona a little and
   Virtua Cop 2 now and then. Too small to see, but the CPU now computes what
   the arcade board computes. (`*_20261030`.)
-- **Sega Rally's hi-hats play in time with the music (Model 2A; coming to
-  the Model 2C core).** Checked against a recording of a real Sega Rally
+- **Sega Rally's hi-hats play in time with the music (Model 2A and 2C).** Checked against a recording of a real Sega Rally
   cabinet: the music plays at exactly the same pitch, but the arcade's
   sequencer runs 2.2% slower than MAME's. The sound chip's timer, which
   triggers the hi-hats, taps and cymbals, runs fast in MAME, so they drift
   ahead of the streamed kick and instrument parts, by about 240 ms over 11
-  seconds. The core now uses the cabinet's timer period. Every Model 2A game
-  uses this timer, so every game's music is a little more in time. The OSD's
-  `SCSP timer` setting switches back to MAME's period. (`Model2A_20261031`.)
+  seconds. The cores now use the cabinet's timer period. Every Model 2A and
+  2C game uses this timer, so every game's music is a little more in time.
+  The OSD's `SCSP timer` setting switches back to MAME's period.
+  (`Model2A_20261031`, `Model2C_20261031`.)
 
 **The ROM sets are MAME 0.289's.** Every zip in the tables below is MAME
 0.289's set of that name (split sets: a clone needs its parent zip too). Sets
@@ -377,10 +377,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261030.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261031.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261030.rbf` has the md5 `e7e58e0c770e10f5519da2c0fb2086bb`. Keep
+`Model2C_20261031.rbf` has the md5 `b05a3dd43aefa2b18637342370be1011`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -399,7 +399,18 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### New in this build (`Model2C_20261030`)
+### New in this build (`Model2C_20261031`)
+
+- **The music plays in time, as on a real cabinet**, as in the Model 2A
+  core's `Model2A_20261031`. The sound chip's timer ran ~2% fast in MAME,
+  so sequenced drums drifted ahead of the streamed music; measured against a
+  real Sega Rally cabinet, the core now uses the arcade's timer period (see
+  *Not just a MAME port* above). House of the Dead, Over Rev and Sega
+  Touring Car's sound play a little slower and more in time.
+- **New OSD setting `SCSP timer`: `Arcade` (default) / `MAME`.** `MAME`
+  plays at MAME's tempo, as every build before this one.
+
+### Earlier in `Model2C_20261030`
 
 - **The i960 CPU now rounds the way Intel's chip does**, as in the Model 2A
   core's `Model2A_20261030`: a float converted to a whole number now rounds a
