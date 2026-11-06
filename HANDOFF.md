@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-11-06 (late): Model 2 release candidate s1728, board-tested
+
+s1728 = main 4997dfaf (Sinden R980, triggers R981, stock sys/ + audio filter
+R982, DV-safe 15 kHz R983): md5 f5f375dec556756c3a69fe43e5516def, 41,103 ALM
+(98%), 109/112 DSP, 551/553 M10K; clk_sys +0.273, clk_mem +0.706, clk_i960
++1.411, hold +0.224, recovery / removal clean; HDMI -0.404 (report-only).
+1 of 6 seeds closed with the filter on (s1724-s1729: the rest failed core
+clocks, s1727 -1.851, s1729 -1.529). Ben, on the board with the nightly Main:
+"all good and working". Not yet in releases/. 2A / 2C builds (s1730-s1735)
+queued from model2a 7835ee6f / model2c 757aa7ba.
+
 ## 2026-11-06: DV-safe 15 kHz timing (R983), not fitted; triggers board-tested
 
 "15kHz lines: 265 (15.2kHz DV)": whole clocks (10 a pixel, 6,560 a line),
