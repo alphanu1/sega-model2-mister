@@ -38605,3 +38605,39 @@ IIR_filter's own entity count in s927; the fitter's total moves far more at
 margin for every later feature. Against it, the trigger build without the
 filter (s1722, 5c013ede): 39,236 ALM, 101 DSP, core clocks clean (clk_sys
 +0.246), hold +0.204, HDMI -0.063.
+
+**R983 -- A DIRECT-VIDEO-SAFE 15 kHz TIMING: "15kHz lines: 265 (15.2kHz DV)",
+WHOLE CLOCKS, PROGRESSIVE (2026-11-06).** Report (Discord, a mod): Direct
+Video at 15 kHz into a DAC and a CRT is fine; the same signal into an HDMI
+scaler (Morph, RetroTINK) is "out of sync" -- "if your clocks are weird, the
+scaler will have trouble."
+*Cause, measured (tb_m2_scan15, new line-period-in-clocks check):* in Direct
+Video every CLK_VIDEO cycle (clk_mem, 100 MHz) is one HDMI pixel. R898's
+three modes time the output as exact fractions of it (547/5300, 537/5300,
+861/8692), so the HDMI line alternates: 6,356 / 6,357 clocks (15.7 kHz),
+6,474 / 6,475, 6,622 / 6,623, and a game pixel is 9 or 10 (10 or 11) HDMI
+pixels. Native 24 kHz is 4,100 every line (16/100 x 656 is whole). A CRT
+follows the analogue sync; a scaler measures the HDMI line and rejects it.
+*Why not simply round:* the exactness is what keeps two output fields equal
+to two native frames (R898, R939's lines that never move). A whole line
+that also keeps it needs L x T = 3,476,800 = 2^6 5^2 41 53 with T odd for
+interlace; no odd T lies near 525-547. T = 530, L = 6,560 (10 clocks a
+pixel, 15,244 Hz) is whole and exact, but even: progressive.
+*Built:* m2_scan15 input dv (OSD value 3 of O[61:60], "265 (15.2kHz DV)",
+synchronised like nl / ml; ce_out 1/10 in Model2.sv). 265-line fields, every
+one field 0 from reset (frame rows 0, 2 .. 478 of the 4:5 blend), vsync on a
+whole line at 248, VGA_F1 0. Each field is exactly one native frame and the
+read moves at the write's rate (240 x 65.6 us = 384 x 41 us), so D_PX (3000)
+sits mid-window: the bench's window is ~410..~6,040 (300 and 6000 fail on
+the ring, 700-5600 pass); margins at 3000 are 259 us / 305 us against 15.7
+kHz's 41 us. Not chosen automatically from direct_video: DV into a CRT works
+today in the interlaced modes, so a DV CRT owner keeps 480i.
+*Checks:* tb_m2_scan15 mode 3 (new): 1,309,440 pixels, 0 blend / ring /
+row-step mismatches, line period 6,560..6,560 clocks, pixel 10..10, every
+vsync interval one native frame, no field-1 pixel, no re-alignment moves
+(14 and 80 frames, both cadence phases): PASS. Modes 0-2 (14 frames), mode 0
+80 frames phase 1 and a slipping cadence (200 frames, +rnd=1 +slip3=20
++seed=7): output hashes identical to the RTL before R983 (built from HEAD
+separately). The bench's warm-up now ignores a line cut by the first lock.
+lint_top clean (as built, -DM2_NO_DRIVE_FFB); Quartus 17.0 analyze_file on
+Model2.sv and m2_scan15.sv: 0 errors. Not fitted; not seen on a scaler.

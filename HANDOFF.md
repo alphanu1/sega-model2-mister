@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-11-06: DV-safe 15 kHz timing (R983), not fitted; triggers board-tested
+
+"15kHz lines: 265 (15.2kHz DV)": whole clocks (10 a pixel, 6,560 a line),
+progressive, for Direct Video into an HDMI scaler (Morph / RetroTINK reported
+"out of sync" on the 15.7 kHz mode, whose HDMI line alternates 6,356 / 6,357
+clocks). tb_m2_scan15 mode 3 PASS; modes 0-2 hash-identical to before.
+Analogue triggers (R981, s1722) work on the board with the nightly Main
+(Ben); stable Main still to test. s1723 (stock sys/ + filter) died in the
+fitter (Segment Violation).
+
 ## 2026-11-06: sys/ = stock Template e901a9f, audio filter back (R982), not fitted
 
 Full merge of sys/ from upstream; the only local setting is sys_top's IHRES /

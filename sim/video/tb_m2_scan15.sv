@@ -31,14 +31,14 @@
 // The parameters default to the design's (Model2.sv instantiates m2_scan15 with its defaults); -G overrides them for a
 // sweep, and the report says whether the run was at the design's values.
 module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, parameter int DPX_M = 4310,
-                      parameter int DPX_N = 2490);
+                      parameter int DPX_N = 2490, parameter int DPX_D = 3000);
   logic clk = 1'b0;
   always #5 clk = ~clk;                     // 100 MHz
   logic rst_n = 1'b0;
 
   int mode, nframes, cad, cph, rnd, slip1, slip3, slip4, pe;
   int unsigned seed;
-  logic nl, ml;
+  logic nl, ml, dv;
   initial begin
     if (!$value$plusargs("mode=%d", mode)) mode = 0;
     if (!$value$plusargs("frames=%d", nframes)) nframes = 14;
@@ -52,13 +52,14 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
     if (!$value$plusargs("pe=%d", pe)) pe = 1;
     nl = (mode == 2);
     ml = (mode == 1);
+    dv = (mode == 3);                       // R983: 265 lines, progressive, 10 clocks a pixel
   end
 
   // ---- the two pixel enables, exactly as Model2.sv makes them
   logic [19:0] acc_i = 0, acc_o = 0;
   logic        ce_in = 0, ce_out = 0;
-  wire  [19:0] on = nl ? 20'd861 : ml ? 20'd537 : 20'd547;
-  wire  [19:0] od = nl ? 20'd8692 : 20'd5300;
+  wire  [19:0] on = dv ? 20'd1 : nl ? 20'd861 : ml ? 20'd537 : 20'd547;
+  wire  [19:0] od = dv ? 20'd10 : nl ? 20'd8692 : 20'd5300;
   always @(posedge clk) begin
     if (acc_i >= 20'd100) acc_i <= 20'd0;
     else if (acc_i + 20'd16 >= 20'd100) begin acc_i <= acc_i + 20'd16 - 20'd100; ce_in <= 1'b1; end
@@ -113,12 +114,12 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
   // ---- the device under test
   logic o_hs, o_vs, o_de, o_field;
   logic [23:0] o_rgb;
-  m2_scan15 #(.RING(RING), .DPX_I(DPX_I), .DPX_M(DPX_M), .DPX_N(DPX_N)) dut (.clk(clk), .rst_n(rst_n), .en(1'b1), .img_tag(tag),
+  m2_scan15 #(.RING(RING), .DPX_I(DPX_I), .DPX_M(DPX_M), .DPX_N(DPX_N), .DPX_D(DPX_D)) dut (.clk(clk), .rst_n(rst_n), .en(1'b1), .img_tag(tag),
 `ifndef OLD_RTL
                  .pair_en(pe != 0),
 `endif
                  .ce_in(ce_in), .de_in(de_s), .vb_in(vb_s),
-                 .rgb_in(rgb_s), .ce_out(ce_out), .nl(nl), .ml(ml), .o_hs(o_hs), .o_vs(o_vs), .o_de(o_de),
+                 .rgb_in(rgb_s), .ce_out(ce_out), .nl(nl), .ml(ml), .dv(dv), .o_hs(o_hs), .o_vs(o_vs), .o_de(o_de),
                  .o_field(o_field), .o_rgb(o_rgb));
   // the design's own values, from an instance at its defaults (inputs idle)
   m2_scan15 dflt (.clk(1'b0), .rst_n(1'b0), .en(1'b0), .img_tag(4'd0),
@@ -126,8 +127,8 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
                   .pair_en(1'b1),
 `endif
                   .ce_in(1'b0), .de_in(1'b0), .vb_in(1'b1),
-                  .rgb_in(24'd0), .ce_out(1'b0), .nl(1'b0), .ml(1'b0), .o_hs(), .o_vs(), .o_de(), .o_field(), .o_rgb());
-  wire design_vals = (RING == dflt.RING) && (DPX_I == dflt.DPX_I) && (DPX_M == dflt.DPX_M) && (DPX_N == dflt.DPX_N);
+                  .rgb_in(24'd0), .ce_out(1'b0), .nl(1'b0), .ml(1'b0), .dv(1'b0), .o_hs(), .o_vs(), .o_de(), .o_field(), .o_rgb());
+  wire design_vals = (RING == dflt.RING) && (DPX_I == dflt.DPX_I) && (DPX_M == dflt.DPX_M) && (DPX_N == dflt.DPX_N) && (DPX_D == dflt.DPX_D);
 
   initial begin #200 rst_n = 1'b1; end
 
@@ -181,6 +182,9 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
   logic o_hs_d = 0, o_vs_d = 0, o_de_d = 0;
   logic waiting_de = 0;
   logic vs_field = 0;
+  // R983: the line period in CLOCKS -- in Direct Video each clock is an HDMI pixel; a scaler wants it constant
+  longint hs_clk_prev = 0, hs_clk_min = 64'h7FFFFFFF, hs_clk_max = 0, ce_gap_min = 64'h7FFFFFFF, ce_gap_max = 0, ce_prev = 0;
+  int     fld1_seen = 0, de_short = 0;
 
   always @(posedge clk) begin
     automatic logic warm = (frame >= 3);
@@ -198,7 +202,7 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
 `ifdef OLD_RTL
       if (nv != int'(dut.v_ld) || nh != int'(dut.h_ld) || dut.field != 1'b1) begin
 `else
-      if (nv != int'(dut.v_ld) + int'(dut.s_e) || nh != int'(dut.h_ld) || dut.field != !dut.s_e) begin
+      if (nv != int'(dut.v_ld) + int'(dut.s_e) || nh != int'(dut.h_ld) || dut.field != (dv ? 1'b0 : !dut.s_e)) begin   // R983: dv's fields are all 0
 `endif
         // R939: nothing may move the output once locked (retrorepair's pairing lock did, by half a line); counted, and
         // the timing checks run straight through it
@@ -273,6 +277,15 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
       exp_vis = 1'b1;
     end
 
+    // R983: the pixel enable's spacing in clocks, and whether any field 1 is shown
+    if (ce_out && warm && frame >= 5) begin
+      if (ce_prev != 0) begin
+        if (($time - ce_prev) / 10 < ce_gap_min) ce_gap_min = ($time - ce_prev) / 10;
+        if (($time - ce_prev) / 10 > ce_gap_max) ce_gap_max = ($time - ce_prev) / 10;
+      end
+      ce_prev = $time;
+      if (dut.field) fld1_seen++;
+    end
     // the output latches the pixel prepared in the previous period on every enable
     if (ce_out) begin pr = exp_r; pg = exp_g; pb = exp_b; pvis = exp_vis; exp_vis = 1'b0; end
     if (ce_out_d) begin
@@ -291,12 +304,20 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
         if (hs_w < hs_min) hs_min = hs_w;
         hs_w = 0;
       end
-      if (o_de) de_w++; else if (de_w != 0) begin
+      if (o_de) de_w++; else if (de_w != 0 && !warm) de_w = 0;   // R983: a line cut by the first lock, before warm-up
+      else if (de_w != 0) begin
         if (de_w > de_max) de_max = de_w;
         if (de_w < de_min) de_min = de_w;
+        if (de_w != 496 && de_short++ < 3) $display("  short visible line: %0d px at native frame %0d", de_w, frame);
         de_w = 0;
       end
       if (o_hs && !o_hs_d) begin
+        if (warm && frame >= 5 && hs_clk_prev != 0) begin
+          automatic longint pc = ($time - hs_clk_prev) / 10;
+          if (pc < hs_clk_min) hs_clk_min = pc;
+          if (pc > hs_clk_max) hs_clk_max = pc;
+        end
+        hs_clk_prev = $time;
         if (warm && hs_prev != 0 && px - hs_prev != 656) begin
           hs_per_bad++;
           if (frame >= 5) ev_hs++;
@@ -351,11 +372,11 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
   initial begin
     for (int i = -4; i <= 4; i++) vsd_hist[i] = 0;
     for (int i = 0; i < 5; i++) nlen[i] = 0;
-    #1 ipx_nat = nl ? 64'd172200 : ml ? 64'd176136 : 64'd179416;   // (N0 - 1/2) x 656
+    #1 ipx_nat = dv ? 64'd173840 : nl ? 64'd172200 : ml ? 64'd176136 : 64'd179416;   // (N0 - 1/2) x 656; R983 dv 265 x 656
     wait (rst_n);
     wait (frame >= nframes);
-    $display("mode %0d (%s), ring %0d lines, D_PX %0d: %0d native frames (%s)", mode, nl ? "262/263" : ml ? "268/269" : "273/274",
-             RING, nl ? DPX_N : ml ? DPX_M : DPX_I, frame, design_vals ? "the design's values" : "OVERRIDDEN, not the design's");
+    $display("mode %0d (%s), ring %0d lines, D_PX %0d: %0d native frames (%s)", mode, dv ? "265 DV" : nl ? "262/263" : ml ? "268/269" : "273/274",
+             RING, dv ? DPX_D : nl ? DPX_N : ml ? DPX_M : DPX_I, frame, design_vals ? "the design's values" : "OVERRIDDEN, not the design's");
     $display("  pixels checked %0d, blend mismatches %0d, ring mismatches %0d, row-step mismatches %0d", checked, fails, ring_fails, step_fails);
     $display("  hsync %0d..%0d px, visible %0d..%0d px a line, line period faults %0d, fields not 240 lines %0d, vsyncs %0d",
              hs_min, hs_max, de_min, de_max, hs_per_bad, field_lines_bad, vs_seen);
@@ -377,8 +398,20 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
     $display("  vsync to the first visible line: before field 0 %0d px, before field 1 %0d px (difference %0d, want 328)",
              to_de[0], to_de[1], to_de[1] - to_de[0]);
     $display("  re-alignments %0d, of which moved the output %0d (the pairing lock, at native frame %0d)", al_n, al_moved, relock_frame);
+    $display("  line period %0d..%0d clocks (Direct Video's HDMI line), pixel enable every %0d..%0d clocks, field-1 pixels %0d",
+             hs_clk_min, hs_clk_max, ce_gap_min, ce_gap_max, fld1_seen);
     $display("  margin before the data is written (smallest, ns): %0d   margin before it is overwritten (smallest, ns): %0d",
              min_avail, min_over);
+    if (dv) begin
+      // R983: progressive, whole clocks: every line 6,560 clocks, every pixel 10, every vsync interval one native frame,
+      // no field 1, the picture and the ring as in every mode
+      if (fails == 0 && ring_fails == 0 && step_fails == 0 && checked > 100000 && hs_max == 64 && hs_min == 64 &&
+          de_max == 496 && de_min == 496 && hs_per_bad == 0 && field_lines_bad == 0 && nint > 6 && al_n > 0 &&
+          al_moved == 0 && ev_vsd == 0 && vs_bad == 0 && hs_clk_min == 6560 && hs_clk_max == 6560 &&
+          ce_gap_min == 10 && ce_gap_max == 10 && fld1_seen == 0 && to_de_ok[0] && !to_de_ok[1] &&
+          min_avail > 1000 && min_over > 1000) $display("PASS");
+      else $display("FAIL");
+    end else
     if (fails == 0 && ring_fails == 0 && step_fails == 0 && checked > 100000 && hs_max == 64 && hs_min == 64 &&
         de_max == 496 && de_min == 496 && hs_per_bad == 0 && field_lines_bad == 0 && nint > 6 &&
         to_de_ok[0] && to_de_ok[1] && to_de[1] - to_de[0] == 328 && al_n > 0 &&
