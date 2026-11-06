@@ -1,5 +1,12 @@
 # Handoff
 
+## 2026-11-06: sys/ = stock Template e901a9f, audio filter back (R982), not fitted
+
+Full merge of sys/ from upstream; the only local setting is sys_top's IHRES /
+OHRES (build parameters). R788's audio-filter patch retired and the macro
+removed from Model2.qsf. YC measured and left off (R982). Releases README's
+audio-filter section still to rewrite at release.
+
 ## 2026-11-06: analogue triggers for Daytona (R981), not fitted
 
 sys/hps_io.sv = Template_MiSTer e901a9f (UIO 0x46, joystick_lt/rt_analog).

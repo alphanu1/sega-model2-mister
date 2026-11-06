@@ -38566,3 +38566,31 @@ Makefile's unused-pin filter now names joystick_lt/rt_analog_N); Quartus
 17.0 analyze_file on Model2.sv, m2_cab_inputs.sv, hps_io.sv: 0 errors. Not
 fitted, not on the board. 2A (Sega Rally, Indy, Manx TT, Motor Raid ...)
 reads its pedals in m2_2a_inputs: not done yet.
+
+**R982 -- sys/ IS STOCK TEMPLATE_MISTER (e901a9f); R788'S AUDIO-FILTER PATCH
+RETIRED, THE FILTER BACK (2026-11-06).** Ben: bring sys/ up to upstream with
+a full merge, and "you might as well remove the filter patch with the merge
+too" -- a stock framework is what a merge into MiSTer-devel needs.
+*Believed (my first account, corrected by Ben):* that sys/ carried two
+framework patches, the audio filter and sys_top's IHRES / OHRES. Wrong: IHRES
+/ OHRES are the scaler's build parameters (R211 / R304), set where every core
+sets them; the only patch was R788's.
+*Done:* every file in sys/ is Template_MiSTer e901a9f byte for byte except
+sys_top.v, which differs only by `.IHRES(512), .OHRES(2048)` and their
+comment. New from upstream: #119 (analog audio pins from registers, the
+mode bit read twice; FAST_OUTPUT_REGISTER on AUDIO_L/R/SPDIF), #120 (yc_out,
+not built here: MISTER_DISABLE_YC), the LFB_* framebuffer inputs on
+emu_ports (unused), ascal's later fixes. MISTER_DISABLE_AUDIO_FILTER is gone
+from Model2.qsf, so audio_out's IIR filter is built again (R788 measured
+~430 ALM; R786's s927 entity table: IIR_filter 432 of audio_out's 920) and
+the menu's audio filter presets work on this core again.
+*Measured the same day (no merge, one change each, R980 Sinden code):* YC
+back (#38) costs ~250-330 ALM, +2 DSP, +1 M10K (552 / 553) and in three fits
+none usable: 2A s1716 unroutable (one i960 signal), 2A s1717 clk_sys -0.101 /
+another core clock -0.425 / HDMI -0.936, main s1718 a core clock -1.146
+(TNS -19.9). YC stays off. The filter's own fits (afilt-2a s1719 / s1720,
+afilt-main s1721) are in progress.
+Checks: lint_top clean (as built, -DM2_NO_DRIVE_FFB); Quartus 17.0
+analyze_file on sys_top.v, yc_out.sv, mcp23009.sv, ascal.vhd, audio_out.sv:
+0 errors. Not fitted. The releases README's "MiSTer's audio filter is
+switched off" section is to be rewritten with the release that carries this.
