@@ -5,8 +5,12 @@
 OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, for House
 of the Dead and Virtua Cop 2: a white border over the edge of the native
 picture, drawn in m2_vcop_xhair before m2_scan15. Behind M2_2A_SINDEN.
-tb_m2_vcop_xhair 72 checks, 0 fails; lint_top and Quartus analyze clean. Next:
-fit, then a Sinden owner tries each width on the board.
+tb_m2_vcop_xhair 72 checks, 0 fails; lint_top and Quartus analyze clean.
+Fit (test build): s1703, 39,383 ALM, 549 / 553 RAM blocks, every core clock
+and hold clean (worst core setup +0.130, hold +0.248), HDMI -0.740 (framework
+scaler, report-only). rbf build/Model2C_sinden_s1703.rbf, md5
+92946b75e7c5f88b96c96ab51cbdce07. s1702: clk_sys -0.031; s1701: fitter
+Segment Violation. Next: Ben tries each width with a Sinden on the board.
 
 ## 2026-10-31: Model2C_20261031 -- the SCSP timer at the arcade's period (R976)
 
