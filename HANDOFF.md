@@ -1,5 +1,14 @@
 # Handoff
 
+## 2026-11-06: Sinden border for Virtua Cop 2 (R980), from model2c
+
+OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, shown
+for Virtua Cop 2: a white border over the edge of the native picture, drawn
+in m2_vcop_xhair before m2_scan15. Picked from model2c (817f0d91), where Ben
+tested it on House of the Dead with a Sinden: 4 px in daylight, 2 px in the
+dark. Behind M2_2A_SINDEN. tb_m2_vcop_xhair 72 checks, 0 fails; lint_top
+clean; Quartus analyze clean. Next: fit, then Virtua Cop 2 on the board.
+
 ## 2026-10-31: Model2A_20261031 in releases/ -- the SCSP timer at the arcade's period (R976-R978)
 
 `releases/` is the same on main, model2a and model2c; only the 2A rbf

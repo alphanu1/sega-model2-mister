@@ -46777,3 +46777,19 @@ Off, On", so every saved config opens on Black only rather than on whatever
 1 Black only, 2 On); menu 3, never offered, maps to Black only. Checks:
 lint_top clean; Quartus 17.0 analyze_file on Model2.sv, 0 errors. Not fitted
 on its own; it goes into the next build from this branch.
+
+**R980 -- THE SINDEN BORDER, ON MODEL2A FOR VIRTUA COP 2 (R942 (1),
+2026-11-06).** Built first on model2c (817f0d91) for The House of the Dead
+and board-tested there by Ben with a Sinden: it works; 4 px is good in
+daylight, 2 px works in the dark. Picked onto model2a unchanged: the same
+m2_vcop_xhair (the gun overlay in the shared output path, before m2_scan15,
+HDMI and 15 kHz alike) forces every pixel within N of an edge of the native
+496 x 384 picture white, over the picture's edge and over the crosshairs.
+R942 (1) planned it on the gun flash's white mux; 2A, like 2C, has only the
+flash's Off path (R965), so the border rides the overlay instead. OSD "Sinden
+border" Off / 2 / 4 / 8 px, O[76:75] (free on model2a; O[74:73] is Seam fill,
+O[72] SCSP timer), shown for Virtua Cop 2 (menumask bit 1). Off is the picture
+as before. Behind M2_2A_SINDEN (on with M2_2A_VCOP2_GUN; M2_NO_2A_SINDEN
+leaves it and its CONF_STR line out). Checks: tb_m2_vcop_xhair 72 checks,
+0 fails; lint_top clean as built and with -DM2_NO_2A_SINDEN; Quartus 17.0
+analyze_file on Model2.sv, 0 errors.

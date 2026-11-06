@@ -176,6 +176,16 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `define M2_2A_GUN_FLASH
 `endif
 `endif
+// R980: M2_2A_SINDEN, the OSD's "Sinden border" (Off / 2 / 4 / 8 px) for the
+// gun games (study R942 (1)): a white border drawn over the edge of the native
+// picture, in m2_vcop_xhair, so a Sinden gun can find the screen. Needs the
+// guns. On by default; VERILOG_MACRO "M2_NO_2A_SINDEN=1" (or -DM2_NO_2A_SINDEN
+// to lint) leaves it out -- the core before R980, CONF_STR included.
+`ifdef M2_2A_VCOP2_GUN
+`ifndef M2_NO_2A_SINDEN
+`define M2_2A_SINDEN
+`endif
+`endif
 // R892: M2_2A_MANX_MOTION, Manx TT's DX motion base (the Active Motion
 // Slider's drive board) answered on the 315-5649's PD from its PE latch, so
 // the boot's check passes without Test (m2_2a_inputs MOTION; game ID 0x19
@@ -550,6 +560,11 @@ localparam CONF_STR = {
 	// saved config opens on Arcade). Arcade: the game's own flash; Off: none
 	// (IR / Sinden / mouse players on a flat panel).
 	"h1O[66],Gun flash,Arcade,Off;",
+`endif
+`ifdef M2_2A_SINDEN
+	// R980: a white border round the picture for a Sinden gun, drawn over its
+	// edge. O[76:75] is free on main, model2a and model2c.
+	"h1O[76:75],Sinden border,Off,2 px,4 px,8 px;",
 `endif
 `endif
 	"R[0],Reset and close OSD;",
@@ -7954,6 +7969,11 @@ logic [7:0] mix_r_q, mix_g_q, mix_b_q;
 generate if (VCOP_GUN || VCOP2GUN) begin : g_xhair   // R870: and Virtua Cop 2's
 	m2_vcop_xhair u_vcop_xhair (
 		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
+`ifdef M2_2A_SINDEN
+		.border(status[76:75]),   // R980
+`else
+		.border(2'd0),
+`endif
 		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),
 		.il(vid_il_c), .vx(vid_x_d), .vy(vid_y),
 		.in_r(mix_r), .in_g(mix_g), .in_b(mix_b),
