@@ -48,8 +48,8 @@ recorded rather than referenced in place.
 
 | Copied | To | Note |
 |---|---|---|
-| `sys/` framework | `sys/` | Unmodified except `sys/audio_out.sv` (the audio-filter switch below, applied R788). GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
-| `sys/` patches | `docs/framework-patches/` | Macro-switched patches for FPGA room, to re-apply after a framework update: `audio-filter-disable.patch` (`MISTER_DISABLE_AUDIO_FILTER`, ~430 ALM) -- APPLIED (R788), the macro set in `Model2.qsf` See the README there. |
+| `sys/` framework | `sys/` | Template_MiSTer `e901a9f` (2026-11-03), unmodified (R982, a full merge from upstream, as main). The only local setting is the scaler's build parameters in `sys/sys_top.v` (`IHRES(512)`, `OHRES(2048)`: R211 / R304). History: R788's audio-filter patch (2026-10-10 to 2026-11-06). `hps_io.sv` brings the force feedback request (76dd8f5, unused here: FFB 0) and the analogue triggers (e901a9f, R981). GPL-2.0-**or-later**, so it is used here under GPL-3. This is the 6,630 ALM row in the budget (§5.5), measured via M2-E. |
+| `sys/` patches | `docs/framework-patches/` | `audio-filter-disable.patch` (`MISTER_DISABLE_AUDIO_FILTER`, ~430 ALM): applied R788, RETIRED R982 (not applied, macro not set); kept for reference. See the README there. |
 | `Template.qsf`, `Template.qpf` | `Model2.qsf`, `Model2.qpf` | Renamed only. `sys/sys.tcl` supplies FAMILY and DEVICE (5CSEBA6U23I7), and `PRE_FLOW_SCRIPT_FILE` generates `build_id.v` — which `quartus_map` alone does not run, so a direct map invocation needs it generated first. |
 | `Template.sv` structure | `Model2.sv` | Port list via `sys/emu_ports.vh`; the unused-output assignments and `hps_io` instantiation follow the template. The core logic is ours. |
 

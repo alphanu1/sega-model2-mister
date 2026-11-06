@@ -15,4 +15,4 @@ if [ ! -x "$obj/tb" ] || [ rtl/video/m2_scan15.sv -nt "$obj/tb" ] || [ sim/video
     || { tail -30 "$obj/build.log"; exit 1; }
 fi
 "$obj/tb" "+mode=$mode" "+frames=$frames" "+cad=$cad" "+ph=$ph" ${PLUS:-} 2>&1 \
-  | grep -E "output hash|EVENTS|VSYNC|ALIGN|PAIRBAD|image cadence|mode |pixels checked|hsync|vsync|re-align|margin|FIELD|PASS|FAIL|TIMEOUT|RING|PIXEL|STEP|HSYNC" | head -40
+  | grep -E "output hash|EVENTS|VSYNC|ALIGN|PAIRBAD|image cadence|mode |pixels checked|hsync|vsync|re-align|margin|FIELD|PASS|FAIL|TIMEOUT|RING|PIXEL|STEP|HSYNC|clocks|short" | head -40

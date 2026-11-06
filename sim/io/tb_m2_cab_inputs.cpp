@@ -52,6 +52,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <random>
+#include <algorithm>
 
 static Vtb_m2_cab_inputs_top *t;
 static std::mt19937_64 rng(0x835835);
@@ -474,6 +475,65 @@ int main(int argc, char **argv) {
   }
   t->st_wheel = 0; settle(true);
   printf("   %llu checks, %llu failures\n", (unsigned long long)(checks - k1), (unsigned long long)(mism - c3));
+
+  // Part F, R981: THE ANALOGUE TRIGGERS (Main's 0x46). Parts A-E ran with both
+  // at 0, as a stable Main leaves them -- Part A is the reference there.
+  // Here: Daytona, every mode (0-3), Pedals Normal / Swapped, every trigger
+  // value against a random stick: accel = max(the stick's accel, 0x20 + p +
+  // p/2) with p = RT >> 1, brake the same from LT; Swapped never moves the
+  // triggers; the buttons still give 0xe0; Desert Tank ignores them.
+  printf("== Part F: analogue triggers (R981)\n");
+  uint64_t c4 = mism, k2 = checks, trig_n = 0;
+  t->is_desert = 0; t->joystick_0 = 0; t->paddle = 0; t->st_ssm = 0; t->st_rsteer = 0; t->st_ssens = 0;
+  t->rst_n = 0; t->eval(); areset(); edge(false); t->rst_n = 1;
+  for (int mode = 0; mode < 4; ++mode)
+    for (int sw = 0; sw < 2; ++sw) {
+      t->st_wheel = mode; t->st_pedswap = sw;
+      for (int v = 0; v < 256; ++v) {
+        for (int k = 0; k < 4; ++k) {
+          // the stick: at rest, or random; first with the triggers at 0 (its own values)
+          int rx = (k == 0) ? (mode == 2 ? -127 : 0) : int8_t(rng()), ry = (k == 0) ? 0 : int8_t(rng());
+          int ly = (k == 0) ? (mode == 2 ? -127 : 0) : int8_t(rng());
+          t->joy_analog = ax16(0, ly); t->joy_ranalog = ax16(rx, ry);
+          t->trig_rt = 0; t->trig_lt = 0; settle(false);
+          int s_acc = t->accel, s_brk = t->brake;
+          t->trig_rt = v; t->trig_lt = 255 - v; settle(false);
+          int ta = p_an(v >> 1), tb = p_an((255 - v) >> 1);
+          ++trig_n;
+          want("trigger accel", t->accel, std::max(s_acc, ta), mode, sw, 10, v);
+          want("trigger brake", t->brake, std::max(s_brk, tb), mode, sw, 10, v);
+        }
+      }
+      // the endpoints by name, stick at rest
+      t->joy_analog = ax16(0, mode == 2 ? -127 : 0); t->joy_ranalog = ax16(mode == 2 ? -127 : 0, 0);
+      t->trig_rt = 0; t->trig_lt = 0; settle(false);
+      want("triggers released: accel", t->accel, 0x20, mode, sw, 11, 0);
+      want("triggers released: brake", t->brake, 0x20, mode, sw, 11, 0);
+      t->trig_rt = 255; settle(false);
+      want("RT full: accel 0xde (Swapped or not)", t->accel, 0xde, mode, sw, 11, 1);
+      want("RT full: brake released", t->brake, 0x20, mode, sw, 11, 1);
+      t->trig_rt = 0; t->trig_lt = 255; settle(false);
+      want("LT full: brake 0xde", t->brake, 0xde, mode, sw, 11, 2);
+      want("LT full: accel released", t->accel, 0x20, mode, sw, 11, 2);
+      t->trig_lt = 128; settle(false);
+      want("LT half: brake 0x20 + 64 + 32", t->brake, 0x80, mode, sw, 11, 3);
+      t->joystick_0 = (1u << 10) | (1u << 11); t->trig_rt = 10; t->trig_lt = 10; settle(false);
+      want("buttons over triggers", (t->accel << 8) | t->brake, 0xe0e0, mode, sw, 11, 4);
+      t->joystick_0 = 0; t->trig_rt = 0; t->trig_lt = 0;
+    }
+  // Desert Tank: the triggers change nothing (its pedals are the stick's and the buttons')
+  t->is_desert = 1; t->st_wheel = 0; t->st_pedswap = 0;
+  t->rst_n = 0; t->eval(); areset(); edge(true); t->rst_n = 1;
+  for (int i = 0; i < 2000; ++i) {
+    t->joy_ranalog = uint16_t(rng()); t->joy_analog = uint16_t(rng());
+    t->trig_rt = 0; t->trig_lt = 0; settle(true);
+    int a0 = t->accel, i0 = t->in1;   // (brake is the turret: its slew may step between reads)
+    t->trig_rt = rnd(256); t->trig_lt = rnd(256); settle(true);
+    want("Desert Tank ignores the triggers", (t->accel << 8) | t->in1, (a0 << 8) | i0, 0, 0, 12, i);
+  }
+  t->is_desert = 0; t->trig_rt = 0; t->trig_lt = 0; settle(false);
+  printf("   %llu trigger cases, %llu checks, %llu failures\n", (unsigned long long)trig_n,
+         (unsigned long long)(checks - k2), (unsigned long long)(mism - c4));
 
   bool ok = (mism == 0) && n_wa > 100000 && n_wb > 100000 && n_wcheck > 100000 && d > 1000 && m80.n_tstep > 10 && m1.n_tstep > 1000 && m1.n_slew > 1000
             && n_tuse > 100000 && n_wheel > 100000 && n_setrev > 100 && n_vr4 > 10;

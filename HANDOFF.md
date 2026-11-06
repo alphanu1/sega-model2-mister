@@ -1,5 +1,12 @@
 # Handoff
 
+## 2026-11-06: model2c gets main's triggers, stock sys/ and DV timing (R981-R983, via model2a 7835ee6f), not fitted
+
+Over Rev / STCC pedals take the triggers through m2_2a_inputs; sys/ =
+Template e901a9f, audio filter back; "15kHz lines: 265 (15.2kHz DV)".
+Benches PASS (2A inputs 367 M checks incl. Over Rev / STCC, HotD guns),
+lint (M2_2C) and Quartus analyze clean.
+
 ## 2026-11-06: Sinden border for the gun games on 2C (R980), not fitted
 
 OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, for House

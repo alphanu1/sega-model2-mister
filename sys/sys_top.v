@@ -1576,9 +1576,6 @@ assign SDCD_SPDIF = (mcp_en & ~spdif) ? 1'b0 : 1'bZ;
 `ifndef MISTER_DUAL_SDRAM
 	wire analog_l, analog_r;
 
-	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_LRCLK : spdif;
-	assign AUDIO_R     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_I2S   : analog_r;
-	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_SCLK  : analog_l;
 `endif
 
 assign HDMI_MCLK = clk_audio;
@@ -1630,6 +1627,18 @@ audio_out audio_out
 	.spdif(spdif)
 );
 
+`ifndef MISTER_DUAL_SDRAM
+	reg aud_spdif_q, aud_r_q, aud_l_q;
+	always @(posedge clk_audio) begin
+		aud_spdif_q <= (SW[0] | mcp_en) ? HDMI_LRCLK : spdif;
+		aud_r_q     <= (SW[0] | mcp_en) ? HDMI_I2S   : analog_r;
+		aud_l_q     <= (SW[0] | mcp_en) ? HDMI_SCLK  : analog_l;
+	end
+
+	assign AUDIO_SPDIF = av_dis ? 1'bZ : aud_spdif_q;
+	assign AUDIO_R     = av_dis ? 1'bZ : aud_r_q;
+	assign AUDIO_L     = av_dis ? 1'bZ : aud_l_q;
+`endif
 
 `ifndef MISTER_DISABLE_ALSA
 	wire aspi_sck,aspi_mosi,aspi_ss,aspi_miso;
@@ -1795,6 +1804,12 @@ emu emu
 	.HDMI_FREEZE(freeze),
 	.HDMI_BLACKOUT(hdmi_blackout),
 	.HDMI_BOB_DEINT(bob_deint),
+
+	.LFB_FMT(LFB_FMT),
+	.LFB_BASE(LFB_BASE),
+	.LFB_WIDTH(LFB_WIDTH),
+	.LFB_HEIGHT(LFB_HEIGHT),
+	.LFB_STRIDE(LFB_STRIDE),
 
 	.CLK_VIDEO(clk_vid),
 	.CE_PIXEL(ce_pix),

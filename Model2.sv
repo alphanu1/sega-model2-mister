@@ -370,7 +370,9 @@ localparam CONF_STR = {
 	// R898: KEPT with the converter, which outputs every one of the three: the
 	// same 240 visible lines a field, more blank lines (and a faster pixel
 	// clock on the same 656-pixel line) for the faster line rates.
-	"O[61:60],15kHz lines,273/274 (15.7kHz),268/269 (15.4kHz),262/263 (15.1kHz);",
+	// R983: the fourth entry, 265 (15.2kHz DV), is the Direct Video timing for an
+	// HDMI scaler: whole clocks (10 a pixel, 6,560 a line), progressive.
+	"O[61:60],15kHz lines,273/274 (15.7kHz),268/269 (15.4kHz),262/263 (15.1kHz),265 (15.2kHz DV);",
 	// R834's "15kHz width" (O[55], Full / Narrow) IS REMOVED (R898): it
 	// lengthened the 1:1 picture's line, and the converter has one 656-pixel
 	// line in every mode (a narrow line there would need its own line length,
@@ -727,6 +729,10 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.joystick_l_analog_1(joy_analog_1),
 	.ps2_mouse(ps2_mouse),
 	.joystick_r_analog_0(joy_ranalog),
+	.joystick_lt_analog_0(joy_lt), .joystick_rt_analog_0(joy_rt),   // R981: Main's 0x46
+	// hps_io's force feedback request (Template 76dd8f5; FFB parameter 0 here): no 2A drive board
+	.joystick_0_ffb(56'd0), .joystick_1_ffb(56'd0), .joystick_2_ffb(56'd0),
+	.joystick_3_ffb(56'd0), .joystick_4_ffb(56'd0), .joystick_5_ffb(56'd0),
 	.paddle_0(paddle),
 	.ioctl_wait(ioctl_wait),
 	// NVRAM save: the framework reads backup SRAM back through ioctl_din when
@@ -750,6 +756,7 @@ wire [15:0] joy_analog;
 wire [15:0] joy_analog_1;   // R839
 wire [24:0] ps2_mouse;      // R839
 wire [15:0] joy_ranalog;
+wire  [7:0] joy_lt, joy_rt;   // R981: the analogue triggers (hps_io 0x46; 0 with a Main that has none)
 wire  [7:0] paddle;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
 wire [15:0] ioctl_din;
@@ -873,10 +880,13 @@ wire       vid_il_c = 1'b0;               // R898: the renderer's own interlace 
 reg [2:0]  vnl_s;                         // R783: the line-count bit, into clk_mem
 reg [2:0]  vml_s;                         // R834: 268.5 lines
 always @(posedge clk_mem) vnl_s <= {vnl_s[1:0], status[61:60] == 2'd2};   // R840: 2 = 262/263
-always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R834; 0 and 3 = 273/274
+always @(posedge clk_mem) vml_s <= {vml_s[1:0], status[61:60] == 2'd1};   // R834; 0 = 273/274
+reg [2:0]  vdv_s;                         // R983: 3 = 265 (DV), into clk_mem
+always @(posedge clk_mem) vdv_s <= {vdv_s[1:0], status[61:60] == 2'd3};
 // status[55] (R834's narrow line) is reserved, not read (R898).
 wire       vid_nl = vnl_s[2];
 wire       vid_ml = vml_s[2];
+wire       vid_dv = vdv_s[2];             // R983
 reg [2:0]  vpr_s;                         // R939: 15kHz pairing (0 = Auto), into clk_mem
 always @(posedge clk_mem) vpr_s <= {vpr_s[1:0], ~status[67]};
 wire       vid_pair = vpr_s[2];
@@ -895,8 +905,10 @@ end
 // ce_pix is fixed for ever: two output fields are exactly two native frames
 // (3,476,800 clk_mem cycles either way) at every line count. retrorepair's
 // guncon-scan15 had 262/263 only; here each line count has its own.
-wire [13:0] ceo_num = vid_nl ? 14'(CEN_NUM) : vid_ml ? 14'(CEM_NUM) : 14'(CEI_NUM);
-wire [13:0] ceo_den = vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);   // 537 and 547 are both over 5300
+// R983: 265 (DV) is 1/10 -- a pixel every 10 clk_mem exactly, so Direct Video's
+// HDMI line is the same 6,560 pixels every line (m2_scan15's dv).
+wire [13:0] ceo_num = vid_dv ? 14'd1  : vid_nl ? 14'(CEN_NUM) : vid_ml ? 14'(CEM_NUM) : 14'(CEI_NUM);
+wire [13:0] ceo_den = vid_dv ? 14'd10 : vid_nl ? 14'(CEN_DEN) : 14'(CEI_DEN);   // 537 and 547 are both over 5300
 reg  [13:0] ceo_acc;                      // 8692 + 861 < 2^14
 reg         ce_out;
 always @(posedge clk_mem) begin
@@ -6491,12 +6503,14 @@ end
 // chip into the steering limiter (steer_lim). The stick moves at USB rates;
 // one 12.5 ns cycle more is nothing. m2_cab_inputs is unchanged.
 logic [15:0] joy_analog_q, joy_ranalog_q, joy_analog_1_q;   // R879: player 2's too
-logic  [7:0] paddle_q;
+logic  [7:0] paddle_q, joy_lt_q, joy_rt_q;
 always_ff @(posedge clk_sys) begin
 	joy_analog_1_q <= joy_analog_1;
 	joy_analog_q  <= joy_analog;
 	joy_ranalog_q <= joy_ranalog;
 	paddle_q      <= paddle;
+	joy_lt_q      <= joy_lt;   // R981
+	joy_rt_q      <= joy_rt;
 end
 wire [7:0] iob_in0, iob_in1, steer, accel, brake;
 generate if (IOZ80) begin : g_cab
@@ -6506,6 +6520,7 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.paddle(paddle_q),
 	.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
 	.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
+	.trig_rt(joy_rt_q), .trig_lt(joy_lt_q),             // R981: the analogue triggers
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
 end else begin : g_nocab
@@ -6658,6 +6673,7 @@ end else begin : g_noioboard
 			.joy_analog(joy_analog_q), .joy_ranalog(joy_ranalog_q), .joy_analog_1(joy_analog_1_q), .paddle(paddle_q),
 			.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
 			.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
+			.trig_rt(joy_rt_q), .trig_lt(joy_lt_q),             // R981: the analogue triggers
 			.gun_in1(vc_in1),                            // R870: the guns' triggers
 			.pe(a2_pe),                                  // R892
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
@@ -8117,7 +8133,7 @@ wire [23:0] sc_rgb;
 m2_scan15 u_scan15 (
 	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag), .pair_en(vid_pair),   // R939
 	.ce_in(ce_pix), .de_in(~(tile_hb | tile_vb)), .vb_in(tile_vb), .rgb_in({ov_r, ov_g, ov_b}),
-	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml),
+	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml), .dv(vid_dv),   // R983
 	.o_hs(sc_hs), .o_vs(sc_vs), .o_de(sc_de), .o_field(sc_fld), .o_rgb(sc_rgb)
 );
 

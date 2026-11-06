@@ -224,6 +224,7 @@ int main(int argc, char **argv) {
     if (rnd(2000) == 0) t->joy_analog_1 = uint16_t(rng());   // R879
     t->jr0 = t->joystick_0 | adir(t->joy_analog); t->jr1 = t->joystick_1 | adir(t->joy_analog_1);
     if (rnd(3000) == 0) t->paddle = (rnd(3) == 0) ? uint8_t(rng()) : 0;
+    if (rnd(2500) == 0) { t->trig_rt = (rnd(3) == 0) ? 0 : uint8_t(rng()); t->trig_lt = (rnd(3) == 0) ? 0 : uint8_t(rng()); }   // R981
     if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); t->st_wheel = rnd(4); }
     if (rnd(64) == 0)   // R892: PE, the game's motion command -- 0x3D a third of the time, its neighbours often
       t->pe = rnd(3) == 0 ? 0x3d : rnd(3) == 0 ? (0x3d ^ (1 << rnd(8))) : uint8_t(rng());
