@@ -7,7 +7,13 @@ progressive, for Direct Video into an HDMI scaler (Morph / RetroTINK reported
 "out of sync" on the 15.7 kHz mode, whose HDMI line alternates 6,356 / 6,357
 clocks). tb_m2_scan15 mode 3 PASS; modes 0-2 hash-identical to before.
 Analogue triggers (R981, s1722) work on the board with the nightly Main
-(Ben); stable Main still to test. s1723 (stock sys/ + filter) died in the
+and Daytona still drives as before on stable Main (Ben, both tested).
+FOR THE RELEASE NOTES (Ben): to get analogue pedals, leave L2 / R2 UNMAPPED
+in the core's controller mapping. Mapped to Accel / Brake they are buttons:
+full press only, and a held button wins over the trigger. Needs a Main with
+the trigger command (nightly since 2026-11-03; stable 20261010 has none).
+The DV-safe "15kHz lines: 265 (15.2kHz DV)" goes in the notes as a user test
+for HDMI scaler owners (Morph, RetroTINK), with a call for reports. s1723 (stock sys/ + filter) died in the
 fitter (Segment Violation).
 
 ## 2026-11-06: sys/ = stock Template e901a9f, audio filter back (R982), not fitted
