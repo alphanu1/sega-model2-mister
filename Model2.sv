@@ -468,6 +468,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .FFB(DRIVE_FFB)) hps_io
 	.joystick_l_analog_1(joy_analog_1),
 	.ps2_mouse(ps2_mouse),
 	.joystick_r_analog_0(joy_ranalog),
+	.joystick_lt_analog_0(joy_lt), .joystick_rt_analog_0(joy_rt),   // R981: Main's 0x46
 	.paddle_0(paddle),
 	// R966: the drive board's force feedback (player 1's wheel); the rest 0
 	.joystick_0_ffb(drv_ffb), .joystick_1_ffb(56'd0), .joystick_2_ffb(56'd0),
@@ -492,6 +493,7 @@ wire [15:0] joy_analog;
 wire [15:0] joy_analog_1;   // R839
 wire [24:0] ps2_mouse;      // R839
 wire [15:0] joy_ranalog;
+wire  [7:0] joy_lt, joy_rt;   // R981: the analogue triggers (hps_io 0x46; 0 with a Main that has none)
 wire  [7:0] paddle;
 wire        ioctl_download, ioctl_wr, ioctl_wait, ioctl_upload;
 wire [15:0] ioctl_din;
@@ -5403,11 +5405,13 @@ end
 // chip into the steering limiter (steer_lim). The stick moves at USB rates;
 // one 12.5 ns cycle more is nothing. m2_cab_inputs is unchanged.
 logic [15:0] joy_analog_q, joy_ranalog_q;
-logic  [7:0] paddle_q;
+logic  [7:0] paddle_q, joy_lt_q, joy_rt_q;
 always_ff @(posedge clk_sys) begin
 	joy_analog_q  <= joy_analog;
 	joy_ranalog_q <= joy_ranalog;
 	paddle_q      <= paddle;
+	joy_lt_q      <= joy_lt;   // R981
+	joy_rt_q      <= joy_rt;
 end
 wire [7:0] iob_in0, iob_in1, steer, accel, brake;
 m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
@@ -5416,6 +5420,7 @@ m2_cab_inputs #(.SYS_MHZ(SYS_MHZ)) u_cab_inputs (
 	.paddle(paddle_q),
 	.st_pedswap(status[28]), .st_ssens(status[30:29]), .st_ssm(status[51:50]),
 	.st_rsteer(status[54]), .st_wheel(status[71:70]),   // R958
+	.trig_rt(joy_rt_q), .trig_lt(joy_lt_q),             // R981: the analogue triggers
 	.in0(iob_in0), .in1(iob_in1), .steer(steer), .accel(accel), .brake(brake)
 );
 

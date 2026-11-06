@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-11-06: analogue triggers for Daytona (R981), not fitted
+
+sys/hps_io.sv = Template_MiSTer e901a9f (UIO 0x46, joystick_lt/rt_analog).
+Daytona: RT accelerator, LT brake, beside the right stick (each pedal the
+furthest pressed); with stable Main the triggers stay 0 and nothing changes.
+tb_m2_cab_inputs Part F 18,448 checks 0 fails; lint and Quartus analyze
+clean. Next: fit, then Daytona on the board with the nightly Main
+(MiSTer.nightly_20261106) and with stable (MiSTer.pre_nightly_20261106).
+Sinden release candidates: Model 2 s1708 (4e3d4d9c), 2A s1710 (0d7f9b60),
+both on the board; YC / audio-filter measurement fits in sm2-builds/yc-* and
+afilt-*.
+
 ## 2026-11-06: Sinden border for Virtua Cop (R980), from model2c
 
 OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, shown

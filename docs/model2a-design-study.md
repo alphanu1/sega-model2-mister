@@ -38534,3 +38534,35 @@ M2_VCOP_SINDEN (on with the guns; M2_NO_VCOP_SINDEN leaves it and its CONF_STR
 line out). Checks: tb_m2_vcop_xhair 72 checks, 0 fails; lint_top clean as
 built, with -DM2_NO_VCOP_SINDEN and with -DM2_NO_VCOP_GUN; Quartus 17.0
 analyze_file on Model2.sv and m2_vcop_xhair.sv, 0 errors.
+
+**R981 -- ANALOGUE TRIGGERS FOR DAYTONA'S PEDALS (MAIN 0x46), 2026-11-06.**
+Ben, with the MiSTer nightly (Main 4ed0946, joymap v4, #1405) on the board:
+"like the right stick does accel and brake let's do the same for the
+triggers", and it must still work with stable Main. Template_MiSTer
+e901a9f (2026-11-03) adds UIO 0x46 to hps_io: a player index, then one word
+{RT, LT}, each 0 released .. 255, into joystick_rt/lt_analog_0..5 (0 at
+power-up). sys/hps_io.sv is now that file byte for byte (it was 76dd8f5, our
+FFB change, one commit before). m2_cab_inputs takes player 1's two triggers
+(registered once in Model2.sv beside the sticks): RT = accelerator, LT =
+brake, magnitude = the top seven bits through the stick pedals' 3/2 scaling
+(0x20 released, 0xde full), and each Daytona pedal reads the furthest
+pressed of stick and trigger (max), in every Analog control mode; the Accel
+/ Brake buttons still give 0xe0; "Pedals: Swapped" does not touch the
+triggers (it fixes a stick's unknown polarity; a trigger has none). Desert
+Tank's drive and turret do not read them.
+*Stable Main:* 20261010 has no 0x45 or 0x46 (both later), never writes the
+triggers, so they stay 0 and read 0x20, which is never above a stick pedal:
+the outputs are the core before R981. Nothing on the HPS side asks the core
+whether it understands 0x46, so a nightly Main talking to an older core is
+equally harmless (the command is ignored).
+Checks: tb_m2_cab_inputs Parts A-E unchanged with the triggers at 0 (Part A
+against the 0f3cbc4 reference: 0 differences); NEW Part F, every trigger
+value 0..255 against a rest and three random sticks in all four modes, Normal
+and Swapped, the endpoints by name, buttons over triggers, Desert Tank
+unaffected: 18,448 checks, 0 failures; two mutations (LT read from RT; the
+max inverted) fail it (7,208 / 6,267). test_m2_drive_ffb PASS (hps_io
+changed). lint_top clean as built, -DM2_NO_DRIVE_FFB, -DM2_NO_VCOP_GUN (the
+Makefile's unused-pin filter now names joystick_lt/rt_analog_N); Quartus
+17.0 analyze_file on Model2.sv, m2_cab_inputs.sv, hps_io.sv: 0 errors. Not
+fitted, not on the board. 2A (Sega Rally, Indy, Manx TT, Motor Raid ...)
+reads its pedals in m2_2a_inputs: not done yet.
