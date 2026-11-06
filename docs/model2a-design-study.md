@@ -46793,3 +46793,34 @@ as before. Behind M2_2A_SINDEN (on with M2_2A_VCOP2_GUN; M2_NO_2A_SINDEN
 leaves it and its CONF_STR line out). Checks: tb_m2_vcop_xhair 72 checks,
 0 fails; lint_top clean as built and with -DM2_NO_2A_SINDEN; Quartus 17.0
 analyze_file on Model2.sv, 0 errors.
+
+**R981 / R982 / R983 ON MODEL2A (2026-11-06): THE ANALOGUE TRIGGERS, STOCK
+sys/ WITH THE AUDIO FILTER BACK, AND THE DV-SAFE 15 kHz TIMING, FROM MAIN.**
+Ben: "add them to 2a and 2c". The three entries are main's (main 5c013ede,
+c17b2e17, 4997dfaf; their full text is in main's study); here, what the port
+is on 2A.
+*R981, the triggers:* the 2A analog games read Daytona's block inside
+m2_2a_inputs (u_cab), so the block's trig_rt / trig_lt (rtl/io/
+m2_cab_inputs.sv, main's file) reach every one through cab_accel /
+cab_brake: Sega Rally an1 / an2, Manx TT and Motor Raid an0 (throttle) /
+an1 (brake), Daytona's own block on the IOZ80 path too. Sky Target's
+analog is the stick, not cab_accel: unaffected. m2_2a_inputs passes the two
+triggers in; Model2.sv registers them beside the sticks. Board-tested on
+Model 2 only (Daytona, nightly and stable Main, Ben); "leave L2 / R2
+unmapped" holds here as there.
+*R982, sys/:* main's sys/ byte for byte (Template e901a9f; sys_top's IHRES /
+OHRES); Model2.qsf no longer sets MISTER_DISABLE_AUDIO_FILTER. hps_io's FFB
+inputs are tied to 0 (FFB parameter 0). MAIN MEASURED THE FILTER at +1,600
+-2,000 ALM and +8 DSP in context (2A s1719: 41,027 ALM, 107 DSP, core clocks
+clean, HDMI -1.118); main's next build with it (s1724-s1726) closed no core
+clock -- 2A is expected to be as tight.
+*R983, DV timing:* m2_scan15 is main's file, so 2A also gains main's R968
+(the blend in a register, a clk_mem timing fix) -- output-neutral: modes 0-2
+(14 frames) and mode 0 at 80 frames phase 1 hash-identical to model2a's
+converter before this change; mode 3 as main's bench (PASS). OSD O[61:60]
+fourth entry "265 (15.2kHz DV)".
+*Checks:* tb_m2_cab_inputs PASS (Part F 18,448 checks); tb_m2_2a_inputs PASS
+(246 M checks, triggers now random beside the sticks on every copy);
+tb_m2_vcop2_guns PASS; lint_top clean (as built, -DM2_NO_2A_RALLY,
+-DM2_NO_2A_SINDEN); Quartus 17.0 analyze_file on Model2.sv, m2_2a_inputs,
+m2_cab_inputs, m2_scan15, sys_top, hps_io: 0 errors. Not fitted.

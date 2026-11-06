@@ -89,6 +89,8 @@ module m2_2a_inputs #(
   input  logic  [1:0] st_ssm,       // status[51:50] Steering smoothing
   input  logic        st_rsteer,    // status[54]  Right stick
   input  logic  [1:0] st_wheel,     // status[71:70] Analog control (R958)
+  input  logic  [7:0] trig_rt,      // R981: player 1's analogue triggers (hps_io 0x46), into m2_cab_inputs
+  input  logic  [7:0] trig_lt,
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic  [7:0] gun_in1,      // R870 (GUN): m2_vcop_guns in1, the triggers
   input  logic  [7:0] pe,           // R892 (MOTION): the 315-5649's PE latch
@@ -151,6 +153,7 @@ module m2_2a_inputs #(
       .paddle(paddle),
       .st_pedswap(st_pedswap), .st_ssens(st_ssens), .st_ssm(st_ssm), .st_rsteer(st_rsteer),
       .st_wheel(p_sky ? 2'd0 : st_wheel),   // R958: Sky Target's stick keeps Standard
+      .trig_rt(trig_rt), .trig_lt(trig_lt),   // R981: RT accelerator / throttle, LT brake, beside the stick
       .in0(cab_in0), .in1(cab_in1), .steer(cab_steer), .accel(cab_accel), .brake(cab_brake)
     );
     // Sky Target's Y: the left stick's Y as offset binary, 0x80 + y (MAME's

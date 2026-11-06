@@ -34,6 +34,8 @@ module m2_cab_inputs #(
   input  logic  [1:0] st_ssm,       // status[51:50] Steering smoothing
   input  logic        st_rsteer,    // status[54]  Right stick
   input  logic  [1:0] st_wheel,     // status[71:70] Analog control (R958): 0 Standard, 1 Wheel A, 2 Wheel B
+  input  logic  [7:0] trig_rt,      // R981: player 1's right trigger, 0 released .. 255 (hps_io 0x46)
+  input  logic  [7:0] trig_lt,      // R981: player 1's left trigger
   output logic  [7:0] in0,          // the I/O board's IN0 / IN1, active low
   output logic  [7:0] in1,
   output logic  [7:0] steer,        // its ADC channels 0..2 (Desert Tank:
@@ -315,8 +317,28 @@ always_ff @(posedge clk) begin
 	whl_acc_an <= whl_an(st_pedswap ? whl_brk_c : whl_acc_c);
 	whl_brk_an <= whl_an(st_pedswap ? whl_acc_c : whl_brk_c);
 end
-wire        [7:0] dy_accel  = joystick_0[10] ? 8'he0 : whl ? whl_acc_an : accel_an;   // Daytona's, as before
-wire        [7:0] dy_brake  = joystick_0[11] ? 8'he0 : whl ? whl_brk_an : brake_an;
+// R981: THE ANALOGUE TRIGGERS, AS THE RIGHT STICK'S PEDALS ARE. Main sends a
+// pad's L2 / R2 travel (0..255) with UIO command 0x46 (Template e901a9f);
+// right trigger = accelerator, left = brake, in every Analog control mode,
+// beside the stick and the buttons: each pedal reads whichever source is
+// pressed furthest. The magnitude is the trigger's top seven bits, through
+// the same 3/2 scaling (0x20 released, 0xde fully pressed). "Pedals:
+// Swapped" leaves them alone -- it fixes a stick's unknown polarity, and a
+// trigger has none. A Main without 0x46 (stable 20261010) never writes them,
+// so they stay 0, read 0x20, and the max is the stick's value: the core
+// before R981, output for output (tb_m2_cab_inputs Parts A-E unchanged).
+// Registered, as the wheel pedals are.
+reg         [7:0] trg_acc_an, trg_brk_an;
+always_ff @(posedge clk) begin
+	trg_acc_an <= whl_an(trig_rt[7:1]);
+	trg_brk_an <= whl_an(trig_lt[7:1]);
+end
+wire        [7:0] stk_accel = whl ? whl_acc_an : accel_an;
+wire        [7:0] stk_brake = whl ? whl_brk_an : brake_an;
+wire        [7:0] dy_accel  = joystick_0[10] ? 8'he0                                  // Daytona's, as before
+                            : (trg_acc_an > stk_accel) ? trg_acc_an : stk_accel;      // R981
+wire        [7:0] dy_brake  = joystick_0[11] ? 8'he0
+                            : (trg_brk_an > stk_brake) ? trg_brk_an : stk_brake;
 
 // ------------------------------------------------- R837: Desert Tank's ADC
 //

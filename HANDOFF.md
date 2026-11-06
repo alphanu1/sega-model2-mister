@@ -1,5 +1,14 @@
 # Handoff
 
+## 2026-11-06: model2a gets main's triggers, stock sys/ and DV timing (R981-R983), not fitted
+
+Analogue triggers through m2_2a_inputs to every analog 2A game; sys/ =
+Template e901a9f with the audio filter back (main measured it at ~2,000 ALM
+and 8 DSP; main's build with it did not close); "15kHz lines: 265 (15.2kHz
+DV)", and main's R968 blend register with it (output-identical). Benches
+PASS, lint and Quartus analyze clean. #32's MRAs (bbcb83b5) still to copy to
+main's and model2c's releases/ at the release.
+
 ## 2026-11-06: Sinden border for Virtua Cop 2 (R980), from model2c
 
 OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, shown

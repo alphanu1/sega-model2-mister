@@ -24,6 +24,8 @@ module tb_m2_cab_inputs_top (
   input  logic  [1:0] st_ssm,
   input  logic        st_rsteer,
   input  logic  [1:0] st_wheel,
+  input  logic  [7:0] trig_rt,      // R981
+  input  logic  [7:0] trig_lt,
   output logic  [7:0] in0,  output logic [7:0] in1,
   output logic  [7:0] steer, output logic [7:0] accel, output logic [7:0] brake,
   output logic  [7:0] r_in0, output logic [7:0] r_in1,
@@ -33,7 +35,7 @@ module tb_m2_cab_inputs_top (
 );
   m2_cab_inputs #(.SYS_MHZ(80)) dut (
     .clk, .rst_n, .is_desert, .joystick_0, .joy_analog, .joy_ranalog, .paddle,
-    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel,
+    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
     .in0, .in1, .steer, .accel, .brake);
   m2_cab_inputs_ref #(.SYS_MHZ(80)) ref_ (
     .clk, .rst_n, .joystick_0, .joy_analog, .joy_ranalog, .paddle,
@@ -41,6 +43,6 @@ module tb_m2_cab_inputs_top (
     .in0(r_in0), .in1(r_in1), .steer(r_steer), .accel(r_accel), .brake(r_brake));
   m2_cab_inputs #(.SYS_MHZ(1)) fast (
     .clk, .rst_n, .is_desert, .joystick_0, .joy_analog, .joy_ranalog, .paddle,
-    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel,
+    .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
     .in0(f_in0), .in1(f_in1), .steer(f_steer), .accel(f_accel), .brake(f_brake));
 endmodule
