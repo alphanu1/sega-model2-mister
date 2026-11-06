@@ -16,6 +16,7 @@ module tb_m2_vcop_xhair_top (
   input  logic        il,             // 15 kHz interlaced (273/274, CEI) or 24 kHz
   input  logic  [1:0] on,
   input  logic  [1:0] size,
+  input  logic  [1:0] border,         // R980: the Sinden border
   input  logic  [8:0] c1x, c1y, c2x, c2y,
   output logic        ce,             // the framework samples here
   output logic  [7:0] r, g, b,        // what it samples
@@ -57,6 +58,7 @@ module tb_m2_vcop_xhair_top (
 
   m2_vcop_xhair u_x (
     .clk(clk), .on(on), .size(size),
+    .border(border),
     .c1x(c1x), .c1y(c1y), .c2x(c2x), .c2y(c2y),
     .il(il), .vx(vid_x_d), .vy(vcnt),
     .in_r(pr), .in_g(pg), .in_b(pb),

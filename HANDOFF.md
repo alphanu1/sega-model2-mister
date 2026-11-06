@@ -1,5 +1,13 @@
 # Handoff
 
+## 2026-11-06: Sinden border for the gun games on 2C (R980), not fitted
+
+OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, for House
+of the Dead and Virtua Cop 2: a white border over the edge of the native
+picture, drawn in m2_vcop_xhair before m2_scan15. Behind M2_2A_SINDEN.
+tb_m2_vcop_xhair 72 checks, 0 fails; lint_top and Quartus analyze clean. Next:
+fit, then a Sinden owner tries each width on the board.
+
 ## 2026-10-31: Model2C_20261031 -- the SCSP timer at the arcade's period (R976)
 
 model2a's R976 (Sega Rally's hats, GitHub #37: the SCSP timer ran ~2% fast

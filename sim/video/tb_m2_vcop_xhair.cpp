@@ -20,7 +20,7 @@ static Vtb_m2_vcop_xhair_top* d;
 static long fails = 0, checks = 0;
 #define CHECK(c, ...) do { checks++; if (!(c)) { if (fails++ < 30) { printf("FAIL: " __VA_ARGS__); printf("\n"); } } } while (0)
 
-enum { PIC = 0, P1 = 1, P2 = 2, OUT = 3, BAD = 4 };
+enum { PIC = 0, P1 = 1, P2 = 2, OUT = 3, BAD = 4, WHT = 5 };
 static const int W = 496, H = 384;
 static std::vector<int> img;
 
@@ -39,6 +39,7 @@ static void cyc(bool rec) {
       else if (r == 0x69 && g == 0xff && b == 0xff) k = P1;
       else if (r == 0xff && g == 0x90 && b == 0xa4) k = P2;
       else if (r == 0 && g == 0 && b == 0) k = OUT;
+      else if (r == 0xff && g == 0xff && b == 0xff) k = WHT;   // R980: the Sinden border
       else k = BAD;
       img[line * W + x] = k;
     }
@@ -46,7 +47,9 @@ static void cyc(bool rec) {
   d->clk = 1; d->eval();
 }
 
-static int expect(int x, int line, bool il, const int on[2], int L, const int cx[2], const int cy[2]) {
+static int expect(int x, int line, bool il, const int on[2], int L, const int cx[2], const int cy[2], int bw) {
+  // R980: the border is over everything, picture and crosshairs alike
+  if (bw && (x < bw || x >= W - bw || line < bw || line >= H - bw)) return WHT;
   int col = PIC; bool out = false;
   for (int p = 1; p >= 0; p--) {
     if (!on[p]) continue;
@@ -70,7 +73,7 @@ int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
   d = new Vtb_m2_vcop_xhair_top;
   std::mt19937 rng(846);
-  struct Case { int il, size, on1, on2, x1, y1, x2, y2; };
+  struct Case { int il, size, on1, on2, x1, y1, x2, y2, border = 0; };
   std::vector<Case> cs = {
     {0, 0, 1, 1, 248, 192, 100, 50}, {1, 0, 1, 1, 248, 192, 100, 50},
     {0, 1, 1, 1, 0, 0, 495, 383},    {1, 1, 1, 1, 0, 0, 495, 383},
@@ -80,8 +83,16 @@ int main(int argc, char** argv) {
   };
   for (int i = 0; i < 8; i++)
     cs.push_back({int(i & 1), int(rng() % 2), 1, 1, int(rng() % W), int(rng() % H), int(rng() % W), int(rng() % H)});
+  // R980: the Sinden border at each width, both modes, with crosshairs in the
+  // corners (under the border) and in the middle (untouched by it)
+  for (int b = 1; b <= 3; b++)
+    for (int il = 0; il <= 1; il++) {
+      cs.push_back({il, 0, 1, 1, 0, 0, 495, 383, b});
+      cs.push_back({il, 1, 1, 1, 3, 380, 248, 192, b});
+      cs.push_back({il, 2, 1, 1, 248, 192, 100, 50, b});
+    }
   for (auto& c : cs) {
-    d->il = c.il; d->size = c.size; d->on = c.on1 | (c.on2 << 1);
+    d->il = c.il; d->size = c.size; d->on = c.on1 | (c.on2 << 1); d->border = c.border;
     d->c1x = c.x1; d->c1y = c.y1; d->c2x = c.x2; d->c2y = c.y2;
     d->rst_n = 0; for (int i = 0; i < 20; i++) cyc(false);
     d->rst_n = 1;
@@ -95,23 +106,28 @@ int main(int argc, char** argv) {
     bool show = c.size < 2;
     if (!show) on[0] = on[1] = 0;
     int L = c.size == 1 ? 9 : 5;
-    long miss = 0, wrong = 0, drawn = 0;
+    int bw = c.border ? (2 << (c.border - 1)) : 0;
+    long miss = 0, wrong = 0, drawn = 0, white = 0;
     for (int y = 0; y < H; y++)
       for (int x = 0; x < W; x++) {
-        int got = img[y * W + x], want = expect(x, y, c.il, on, L, cx, cy);
+        int got = img[y * W + x], want = expect(x, y, c.il, on, L, cx, cy, bw);
         if (got < 0) { miss++; continue; }
-        if (got != PIC) drawn++;
+        if (got == WHT) white++;
+        else if (got != PIC) drawn++;
         if (got != want) { if (wrong++ < 5) printf("  il %d size %d (%d,%d)/(%d,%d): pixel (%d,%d) is %d, want %d\n",
                                                      c.il, c.size, c.x1, c.y1, c.x2, c.y2, x, y, got, want); }
       }
     // the aim pixel itself, in the field that shows it
     int ctr = img[c.y1 * W + c.x1];
-    CHECK(miss == 0 && wrong == 0 && (!(show && c.on1) || ctr == P1),
+    bool ctr_ok = !(show && c.on1) || ctr == (expect(c.x1, c.y1, c.il, on, L, cx, cy, bw) == WHT ? WHT : P1);
+    long want_white = bw ? long(W) * H - long(W - 2 * bw) * (H - 2 * bw) : 0;
+    CHECK(white == want_white, "il %d border %d: %ld white pixels, want %ld", c.il, c.border, white, want_white);
+    CHECK(miss == 0 && wrong == 0 && ctr_ok,
           "il %d size %d P1 (%d,%d) P2 (%d,%d): %ld unseen, %ld wrong, centre %d",
           c.il, c.size, c.x1, c.y1, c.x2, c.y2, miss, wrong, ctr);
-    printf("il %d size %d on %d%d P1 (%3d,%3d) P2 (%3d,%3d): %6d pixels sampled, %4ld drawn, %ld wrong, P1 centre %s\n",
-           c.il, c.size, c.on2, c.on1, c.x1, c.y1, c.x2, c.y2, W * H, drawn, wrong,
-           ctr == P1 ? "P1" : ctr == P2 ? "P2" : ctr == OUT ? "outline" : "picture");
+    printf("il %d size %d on %d%d border %d P1 (%3d,%3d) P2 (%3d,%3d): %6d pixels sampled, %4ld drawn, %5ld white, %ld wrong, P1 centre %s\n",
+           c.il, c.size, c.on2, c.on1, bw, c.x1, c.y1, c.x2, c.y2, W * H, drawn, white, wrong,
+           ctr == P1 ? "P1" : ctr == P2 ? "P2" : ctr == OUT ? "outline" : ctr == WHT ? "border" : "picture");
   }
   printf("tb_m2_vcop_xhair: %ld checks, %ld failures\n", checks, fails);
   printf(fails ? "FAIL\n" : "PASS\n");

@@ -47439,3 +47439,26 @@ heard every 2A SCSP game on the arcade period (s1642) "more in time"; the 2C
 games (House of the Dead, Over Rev, STCC) move by the same ~2.2% and are to
 be heard on the 2C build. Checks: lint_top clean; Quartus 17.0 analyze_file
 on the four changed files, 0 errors.
+
+**R980 -- THE SINDEN BORDER, BUILT ON 2C (R942 (1), 2026-11-06).** Ben:
+Sinden support for The House of the Dead first, in the OSD beside the gun
+flash, "a white border around the screen", two pixels hoped to be enough.
+Built as R942 (1) planned, with one change of place: on 2C there is no
+gun-flash white mux (R965 ported only the Off path), so the border rides
+m2_vcop_xhair, the gun overlay already in the shared output path before
+m2_scan15 (HDMI and 15 kHz alike). Every pixel within N of an edge of the
+native 496 x 384 picture is forced white, over the picture's edge and over
+the crosshairs, so the border is never broken. N is an OSD choice because
+nobody has measured what a Sinden needs on this picture: "Sinden border"
+Off / 2 / 4 / 8 px, O[76:75] (free on main, model2a and model2c), shown for
+the gun games (menumask bit 1: Virtua Cop 2, House of the Dead). Off is the
+picture as before. Interlaced (il, tied off in the build, kept in the module):
+a field's row r is line 2r + field, so for even N the row is in the border
+when r < N/2 or r >= 192 - N/2. Behind M2_2A_SINDEN (on with the guns;
+M2_NO_2A_SINDEN leaves it and its CONF_STR line out).
+Checks: tb_m2_vcop_xhair 72 checks, 0 fails (every visible pixel of a frame
+classified, borders 2 / 4 / 8 in both modes, crosshairs under and clear of
+it, white count exact); three off-by-one mutations (right edge, interlaced
+bottom, top) caught. lint_top clean with and without M2_NO_2A_SINDEN;
+Quartus 17.0 analyze_file on both changed files, 0 errors. Not fitted, not
+on the board; needs a Sinden owner to say which width works.
