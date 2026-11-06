@@ -109,6 +109,17 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `define M2_VCOP_FLASH
 `endif
 `endif
+// R980: M2_VCOP_SINDEN, the OSD's "Sinden border" (Off / 2 / 4 / 8 px) for
+// Virtua Cop (study R942 (1)): a white border drawn over the edge of the
+// native picture, in m2_vcop_xhair, so a Sinden gun can find the screen. Needs
+// the guns. On by default; VERILOG_MACRO "M2_NO_VCOP_SINDEN=1" (or
+// -DM2_NO_VCOP_SINDEN to lint) leaves it out -- the core before R980, CONF_STR
+// included.
+`ifndef M2_NO_VCOP_SINDEN
+`ifdef M2_VCOP_GUN
+`define M2_VCOP_SINDEN
+`endif
+`endif
 // R899: M2_NO_WINKEY=1 builds the 16-bit z sort key -- the core before R899
 // exactly (see R3D_WINKEY below).
 // R916: LINK PLAY -- the communication board (rtl/io/m2_comm.sv: its shared
@@ -377,6 +388,11 @@ localparam CONF_STR = {
 	// through the game's flash (CRT gun: a GunCon on a CRT needs several fields
 	// of light before its aim is good); or none at all (Off: Sinden / mouse).
 	"h1O[66],Gun flash,Arcade,Off;",
+`endif
+`ifdef M2_VCOP_SINDEN
+	// R980: a white border round the picture for a Sinden gun, drawn over its
+	// edge. O[76:75] is free on main, model2a and model2c.
+	"h1O[76:75],Sinden border,Off,2 px,4 px,8 px;",
 `endif
 `endif
 	"R[0],Reset and close OSD;",
@@ -7002,6 +7018,11 @@ logic [7:0] mix_r_q, mix_g_q, mix_b_q;
 generate if (VCOP_GUN) begin : g_xhair
 	m2_vcop_xhair u_vcop_xhair (
 		.clk(clk_mem), .on(vc_con), .size(status[57:56]),
+`ifdef M2_VCOP_SINDEN
+		.border(status[76:75]),   // R980
+`else
+		.border(2'd0),
+`endif
 		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y),
 		.il(vid_il_c), .vx(vid_x_d), .vy(vid_y),
 		.in_r(gf_r), .in_g(gf_g), .in_b(gf_b),   // R929: after the gun flash

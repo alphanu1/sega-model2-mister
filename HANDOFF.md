@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-11-06: Sinden border for Virtua Cop (R980), from model2c
+
+OSD "Sinden border" (Off / 2 / 4 / 8 px, O[76:75]) beside Gun flash, shown
+for Virtua Cop: a white border over the edge of the native picture, drawn in
+m2_vcop_xhair after the gun flash and before m2_scan15. The module is
+model2c's (817f0d91), where Ben tested it on House of the Dead with a Sinden:
+4 px in daylight, 2 px in the dark. Behind M2_VCOP_SINDEN. tb_m2_vcop_xhair
+72 checks, 0 fails; lint_top clean in three builds; Quartus analyze clean.
+Next: fit, then Virtua Cop on the board with a Sinden.
+
 ## 2026-10-30: study R974 and R975 copied here from slack-main
 
 The HDMI slack investigation (R974, R975) is now in this branch's study, from

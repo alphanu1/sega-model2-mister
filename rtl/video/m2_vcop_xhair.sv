@@ -37,6 +37,15 @@
 // 6.25 cycles at 24 kHz and 9-10 at 15 kHz, and the framework samples on the
 // next ce_pix, so the cross is on its column (tb_m2_vcop_xhair checks it
 // against the column/line the picture is showing, both modes).
+//
+// R980: THE SINDEN BORDER (study R942 (1)). A Sinden gun finds the screen by
+// a white border round the picture, and on MiSTer the core has to draw it.
+// `border` (OSD "Sinden border": Off, 2, 4 or 8 px) forces every pixel within
+// that many of an edge of the native 496 x 384 picture to white, drawn over
+// the picture's edge rather than shrinking it, and over the crosshairs, so
+// the border is never broken. It rides the crosshair's pipeline, so it leaves
+// on the same clk_mem cycle as the cross and reaches HDMI and the 15 kHz
+// converter alike. Off is the picture exactly as before.
 
 `timescale 1ns/1ps
 
@@ -44,6 +53,7 @@ module m2_vcop_xhair (
   input  logic        clk,            // clk_mem
   input  logic  [1:0] on,             // {P2, P1} from m2_vcop_guns c_on (clk_sys)
   input  logic  [1:0] size,           // OSD: 0 Small, 1 Large, 2 Off (clk_sys)
+  input  logic  [1:0] border,         // OSD: 0 Off, 1 2 px, 2 4 px, 3 8 px (clk_sys)
   input  logic  [8:0] c1x, c1y, c2x, c2y,   // screen pixels (clk_sys)
   input  logic        il,             // 15 kHz interlaced (clk)
   input  logic  [9:0] vx,             // the column showing (vid_x_d)
@@ -55,11 +65,16 @@ module m2_vcop_xhair (
   // ---------------------------------------------------- crossings (quasi-static)
   logic [8:0] x1a, y1a, x2a, y2a, x1b, y1b, x2b, y2b;
   logic [3:0] ea, eb;
+  logic [1:0] ba, bb;
   always_ff @(posedge clk) begin
     x1a <= c1x; y1a <= c1y; x2a <= c2x; y2a <= c2y;
     x1b <= x1a; y1b <= y1a; x2b <= x2a; y2b <= y2a;
     ea  <= {size, on}; eb <= ea;
+    ba  <= border; bb <= ba;
   end
+  // the border's width: 2, 4 or 8 pixels (all even, so an interlaced field's
+  // row r, line 2r + field, is in it exactly when r is within half of it)
+  wire [3:0] bw = (bb == 2'd3) ? 4'd8 : (bb == 2'd2) ? 4'd4 : 4'd2;
   wire       show = (eb[3:2] != 2'd2) && (eb[3:2] != 2'd3);
   wire [1:0] sh   = eb[1:0] & {2{show}};
   wire [4:0] la   = eb[2] ? 5'd9 : 5'd5;      // the arm
@@ -80,13 +95,20 @@ module m2_vcop_xhair (
     r1  <= {inr(dy1, lo), inr(dy1, la), inr(dy1, 5'd1), (dy1 == 11'd0)};
     r2  <= {inr(dy2, lo), inr(dy2, la), inr(dy2, 5'd1), (dy2 == 11'd0)};
   end
+  logic brow;                         // the line is in the top or bottom border
+  always_ff @(posedge clk)
+    brow <= il ? ((vy < 10'(bw[3:1])) || (vy >= 10'd192 - 10'(bw[3:1])))
+               : ((vy < 10'(bw))      || (vy >= 10'd384 - 10'(bw)));
 
   // ---------------------------------------------------- the pixel
   logic [10:0] dx1, dx2;
   logic [1:0]  hc, ho;                // {P2, P1}: colour, outline
+  logic        bcol, bw_on;           // the column is in a side border; the pixel is white
   always_ff @(posedge clk) begin
     dx1 <= {1'b0, vx} - {2'b00, x1b};
     dx2 <= {1'b0, vx} - {2'b00, x2b};
+    bcol  <= (vx < 10'(bw)) || (vx >= 10'd496 - 10'(bw));
+    bw_on <= (bb != 2'd0) && (bcol || brow);
     hc[0] <= sh[0] && ((r1[0] && inr(dx1, la)) || (r1[2] && (dx1 == 11'd0)));
     ho[0] <= sh[0] && ((r1[1] && inr(dx1, lo)) || (r1[3] && inr(dx1, 5'd1)));
     hc[1] <= sh[1] && ((r2[0] && inr(dx2, la)) || (r2[2] && (dx2 == 11'd0)));
@@ -94,7 +116,8 @@ module m2_vcop_xhair (
   end
 
   always_ff @(posedge clk) begin
-    if (hc[0])      begin out_r <= 8'h69; out_g <= 8'hFF; out_b <= 8'hFF; end
+    if (bw_on)      begin out_r <= 8'hFF; out_g <= 8'hFF; out_b <= 8'hFF; end
+    else if (hc[0]) begin out_r <= 8'h69; out_g <= 8'hFF; out_b <= 8'hFF; end
     else if (hc[1]) begin out_r <= 8'hFF; out_g <= 8'h90; out_b <= 8'hA4; end
     else if (|ho)   begin out_r <= 8'h00; out_g <= 8'h00; out_b <= 8'h00; end
     else            begin out_r <= in_r;  out_g <= in_g;  out_b <= in_b;  end

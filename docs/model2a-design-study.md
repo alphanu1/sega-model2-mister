@@ -38517,3 +38517,20 @@ routing ALWAYS (quartus_map 39,250 / 39,095 ALMs needed, DSP 101 / 105):
        s1634-s1636 stopped unfinished on Ben's decision.
   Hold, recovery and removal positive on every fitted seed. None clean with
   HDMI included: 0 of 6 main, 0 of 2 fitted 2C.
+
+**R980 -- THE SINDEN BORDER, ON MAIN FOR VIRTUA COP (R942 (1), 2026-11-06).**
+Built first on model2c for The House of the Dead and board-tested there by
+Ben with a Sinden: it works; 4 px is good in daylight, 2 px works in the dark.
+Ported to main as the same module (rtl/video/m2_vcop_xhair.sv and its bench
+copied from model2c 817f0d91, byte-identical). R942 (1) planned it on the gun
+flash's white mux; it rides m2_vcop_xhair instead, as on 2C, because that is
+the one module all three builds share, and on main it already sits after the
+gun flash (in_r = gf_r), so the border is drawn over the flash and over the
+crosshairs and is never broken. Every pixel within N of an edge of the native
+496 x 384 picture is forced white, before m2_scan15 (HDMI and 15 kHz alike).
+OSD "Sinden border" Off / 2 / 4 / 8 px, O[76:75] (free on main), shown for
+Virtua Cop only (menumask bit 1). Off is the picture as before. Behind
+M2_VCOP_SINDEN (on with the guns; M2_NO_VCOP_SINDEN leaves it and its CONF_STR
+line out). Checks: tb_m2_vcop_xhair 72 checks, 0 fails; lint_top clean as
+built, with -DM2_NO_VCOP_SINDEN and with -DM2_NO_VCOP_GUN; Quartus 17.0
+analyze_file on Model2.sv and m2_vcop_xhair.sv, 0 errors.
