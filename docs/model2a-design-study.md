@@ -38594,3 +38594,14 @@ Checks: lint_top clean (as built, -DM2_NO_DRIVE_FFB); Quartus 17.0
 analyze_file on sys_top.v, yc_out.sv, mcp23009.sv, ascal.vhd, audio_out.sv:
 0 errors. Not fitted. The releases README's "MiSTer's audio filter is
 switched off" section is to be rewritten with the release that carries this.
+*R982, the filter's cost measured (same day; one change each against the
+Sinden code, filter macro removed, old sys/):* 2A s1719 41,027 ALM (98%),
+107 DSP (from 99), 551 M10K; core clocks clean (clk_sys +0.233), hold
++0.244, HDMI -1.118. Model 2 s1721 41,205 ALM (98%), 109 DSP (from 101);
+clk_sys -0.117, HDMI -0.547. 2A s1720: Quartus internal error (STA). So the
+filter is ~1,600-2,000 ALM and 8 DSP in context, not R788's ~430 (that was
+IIR_filter's own entity count in s927; the fitter's total moves far more at
+98% -- WRONG ESTIMATE, KEEP). It fits, at 98% and 109-of-112 DSP, with less
+margin for every later feature. Against it, the trigger build without the
+filter (s1722, 5c013ede): 39,236 ALM, 101 DSP, core clocks clean (clk_sys
++0.246), hold +0.204, HDMI -0.063.
