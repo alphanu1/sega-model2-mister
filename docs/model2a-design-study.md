@@ -46831,3 +46831,40 @@ a scaler that will not lock. m2_scan15.sv and its bench are main's files;
 main's bench: modes 3 / 4 PASS, modes 0-2 hash-identical to before R983.
 Neither is anyone's default: 273/274 stays the "15kHz lines" default.
 lint_top clean (as built, -DM2_NO_2A_RALLY); Quartus analyze clean.
+
+**R984 (as model2c's R984) -- THE FILL's PLANE PRODUCTS SHARED: S_PF_B's
+CORNER AND THE SPAN's PLANE ON ONE SET OF SIX MULTIPLIERS, ON MODEL2A.
+m2_raster_fill standalone quartus_map 17.0 (2A parameters: PXC 1, FRB 2,
+M2COV 1, UZF 4, MIP 1, DIL 1, UVCL 1): 38 -> 32 DSP, 3,828 -> 3,838 ALMs
+needed (+10), ALUTs 4,989 -> 5,022, registers 3,898 (=). Output-identical,
+every cycle. BRANCH area-2a (off model2a a6cf8262), LOCAL, NOT FITTED.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Ported, not cherry-picked:* the area pass model2c measured (R984-R988:
+41,203 -> 39,194 ALM and 112 -> 107 DSP in the 2C fit, s1743), applied to
+this branch's own files. model2a's fill carries R944 / R957 (DIL: the
+walk's S_FS_DIL, the span clamps s1_x0 / s1_x1, dil_on) beside model2c's
+parent; the products and S_PF_B are the same lines, and model2c's patch
+applied as it stands. What the sharing rests on still holds here: every
+s1_valid load (S_LOADX's, S_FS_WALK's, the last row's) needs pf_st ==
+S_IDLE and a quad is taken only with stage 1 empty, so throughout S_PF_B
+stage 1 is empty; S_FS_DIL is a state of the walk (`state`), not of the fit,
+and DIL's clamps read s1_cl only on s1_adv.
+*Proved:* sim/miter/area_r984 (fill_miter.sh: sim/miter/miter.py, the old
+fill against the new with m2_raster_div, every output every cycle):
+tb_m2_raster_fill 52,211,088 cycles (152,373 checks, 0 fails), MIP
+54,784,527 (1,989,828 checks), tb_m2_fill_m2cov 1,471,467 (PASS), with DIL
+1,497,032 (PASS), and at the 2A parameters (the bench's own reference is
+FRB 0, so its checks fail there as before -- the miter is the check)
+56,562,112, with MIP 59,248,384, and with a random in_frac and dil_on on
+every quad offered 57,257,034 and 59,958,880: 343.0 M cycles, 0 with an
+output differing. Planted faults: s1_y loaded from sx -- 56,041,892 of
+56,562,112 cycles; s1_y with the x fraction bits -- 0 at the 2A parameters
+with in_frac 0, 42,609,868 of 57,257,034 with random fractions (why that
+run exists). test_m2_raster3d's run output identical to the parent's;
+quartus_map --analyze_file clean (K_NONE's constant warning is the
+parent's).
+*Timing (not fitted):* as model2c's -- the corner select adds a source to
+s1_cl / s1_y's D input; the span path s1_cl -> DSP -> span_u sums in the
+DSP chain before the base add. clk_sys near s1_cl / s1_y and span_u is the
+fit's check.
