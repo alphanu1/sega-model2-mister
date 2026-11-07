@@ -90,7 +90,33 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261031`)
+### New in this build (`Model2A_20261107`)
+
+- **Sinden light gun support** (Virtua Cop 2). New OSD setting `Sinden
+  border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
+  white border around the picture so a Sinden gun can find the screen. On my
+  setup 4 px is good in daylight and 2 px works in the dark. Set `Gun flash`
+  to `Off` and calibrate the gun once with F10.
+- **Analogue triggers** for Sega Rally, Manx TT and Motor Raid: the right
+  trigger is the accelerator (throttle), the left trigger the brake, fully
+  analogue, alongside the right stick. They need a MiSTer Main with analogue
+  trigger support (the unstable / nightly Main since 2026-11-03); on the
+  stable Main everything works as before. **Leave L2 / R2 unmapped** in the
+  core's button mapping: mapped to Accel / Brake they act as buttons (full
+  press only).
+- **MiSTer's audio filter is back.** The framework (`sys/`) is stock MiSTer
+  again, so the audio filter presets in the MiSTer menu work on this core.
+- **A Direct Video timing for HDMI scalers** (please test): `15kHz lines` has
+  a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
+  whole number of video clocks, so a scaler (Morph, RetroTINK) fed Direct
+  Video at 15 kHz can lock to it. `15kHz DV scan` picks `480i` (the whole
+  picture, the default) or `240p` (for a scaler that will not take the
+  interlace). The other 15 kHz modes are unchanged, and `273/274 (15.7kHz)`
+  is still the default; CRT users need change nothing.
+- **Pilot Kids and Zero Gunner's buttons are named Shoot and Bomb**
+  (GitHub #32): copy the new MRAs from `mra/`.
+
+### Earlier in `Model2A_20261031`
 
 - **The music plays in time, as on a real cabinet** (GitHub #37). Sega
   Rally's hi-hats, taps and cymbals drifted ahead of the rest of the music.
@@ -287,7 +313,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261031.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -295,7 +321,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261031.rbf` has the md5 `89ffe013be57391d1dacbe8c3360d13a`. As with
+`Model2A_20261107.rbf` has the md5 `b9c8c5ca8915d99c4210905f7fe5bcfa`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -487,7 +513,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261030.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -526,7 +552,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261030.rbf` has the md5 `c81c118ed05e74ea703b620b378bb83c`.
+**Check you're running the right file.** `Model2_20261107.rbf` has the md5 `50ba81b3f71fbd894aa9ad576b5b0945`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -560,6 +586,28 @@ anything you find.
 
 ### New in this release
 
+- **Sinden light gun support** (Virtua Cop). New OSD setting `Sinden
+  border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
+  white border around the picture so a Sinden gun can find the screen. On my
+  setup 4 px is good in daylight and 2 px works in the dark. Calibrate the
+  gun once with F10. The border is drawn over the gun flash, so it stays
+  whole with `Gun flash` on `Arcade`. (`Model2_20261107`.)
+- **Analogue triggers in Daytona USA**: the right trigger is the accelerator
+  and the left trigger the brake, fully analogue, alongside the right stick.
+  They need a MiSTer Main with analogue trigger support (the unstable /
+  nightly Main since 2026-11-03); on the stable Main everything works as
+  before. **Leave L2 / R2 unmapped** in the core's button mapping: mapped to
+  Accel / Brake they act as buttons (full press only). (`Model2_20261107`.)
+- **MiSTer's audio filter is back.** The framework (`sys/`) is stock MiSTer
+  again, so the audio filter presets in the MiSTer menu work on this core.
+  (`Model2_20261107`.)
+- **A Direct Video timing for HDMI scalers** (please test): `15kHz lines` has
+  a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
+  whole number of video clocks, so a scaler (Morph, RetroTINK) fed Direct
+  Video at 15 kHz can lock to it. `15kHz DV scan` picks `480i` (the whole
+  picture, the default) or `240p` (for a scaler that will not take the
+  interlace). The other 15 kHz modes are unchanged and `273/274 (15.7kHz)`
+  is still the default: CRT users need change nothing. (`Model2_20261107`.)
 - **The i960 CPU now rounds the way Intel's chip does.** I checked the core's
   i960 against Intel's own 80960KB manuals. Converting a floating-point number
   to a whole number rounded a value exactly halfway between two numbers away
@@ -678,7 +726,8 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 |---|---|
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
-| `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)` or `262/263 (15.1kHz)` — see the CRT section |
+| `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)`, `262/263 (15.1kHz)` — see the CRT section — or `265 (15.2kHz DV)`, whole-clock timing for Direct Video into an HDMI scaler |
+| `15kHz DV scan` | with `265 (15.2kHz DV)` only: `480i` (default, the whole picture) or `240p` (for a scaler that will not take the interlace) |
 | `15kHz pairing` | `Auto` (default) or `Off`. Only Virtua Cop and Desert Tank (they draw a new picture every second frame) are affected. `Auto` keeps both fields of a frame from the same picture; if your CRT still loses sync briefly in those two games, choose `Off` — on a CRT it costs nothing |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
 | `Texture filter` | `Bilinear` (default) or `Point` |
@@ -695,6 +744,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 | `Mouse` | Virtua Cop only: which gun the mouse drives — `Gun 1 trigger` (default: its buttons only), `Gun 1 aim+trigger`, `Gun 2 trigger` or `Gun 2 aim+trigger` |
 | `Gun reload` | Virtua Cop only: `Shoot off-screen` (default, as the cabinet) or `Auto` |
 | `Gun flash` | Virtua Cop (and Virtua Cop 2 on the Model 2A core): `Arcade` (default) or `Off` — the white flash on a shot, for CRT light guns |
+| `Sinden border` | the gun games: `Off` (default), `2 px`, `4 px` or `8 px` — a white border round the picture for a Sinden light gun |
 | `Force feedback` | Daytona USA only: `On` (default) or `Off`. Needs a MiSTer Main with force feedback for cores (see *New in this release*) |
 | `FFB direction` | Daytona USA only: `Normal` (default) or `Invert`, if hitting a wall on your right pushes the wheel right instead of left |
 | `Link board` | Daytona USA only, experimental: `Off` (default) or `On`, for link play with the `m2link` helper — see *Link play* |
@@ -927,20 +977,13 @@ Three testers have confirmed the converter working on their CRTs. More
 reports are very welcome: which TV, how it's connected, and which settings
 work for you.
 
-### MiSTer's audio filter is switched off
+### MiSTer's audio filter is back
 
-This core switches off MiSTer's own audio filter. The game sounds exactly the
-same on HDMI, the 3.5 mm jack and S/PDIF; it's only MiSTer's filter presets
-(in the menu and `MiSTer.ini`) that have no effect while this core is running.
-Nothing in your MiSTer setup is changed.
-
-The reason is space: the whole Model 2 board only just fits in the FPGA, and
-the filter takes about 430 of its logic blocks. It's meant to come back once
-the remaining features are in, if there's room left.
-
-If you build the core yourself: it's one small, switchable change to the
-framework file `sys/audio_out.sv`, kept as a patch in
-`docs/framework-patches/` with a README explaining it.
+From `Model2_20261107` and `Model2A_20261107` the cores use MiSTer's
+framework (`sys/`) exactly as it comes, so MiSTer's own audio filter and its
+presets (in the menu and `MiSTer.ini`) work on them again. Earlier builds
+switched the filter off to save space; the old patch is kept in
+`docs/framework-patches/` for reference.
 
 ### Force feedback test for wheels
 
