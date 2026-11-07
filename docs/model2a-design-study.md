@@ -47594,3 +47594,33 @@ fill's accept (sx / sy / qu / qv and R735's first compares, ye_in(in_y1) <
 ye_in(in_y0) into m01_r) through raster3d's R677 triangle split (sp_*). A
 path of M10K tCO, two LUTs and a 16-bit compare at 80 MHz; the fit's
 clk_sys report on m01_r / x01_r / sx is the check.
+
+**R986 -- THE QUAD STORE's RADIX HISTOGRAM AND BUCKET BASES IN LUT RAM.
+m2_quad_store standalone quartus_map 17.0 (2C parameters, on R985):
+1,617 -> 1,361 ALMs needed (-256), ALUTs 1,588 -> 1,390, registers 1,260
+-> 908; two 16 x 12 MLABs (the map's RAM summary: hist_rtl_0, base_rtl_0,
+MLAB, simple dual port). Output-identical, every cycle. BRANCH area-2c,
+LOCAL, NOT FITTED.**
+
+*Found:* hist[16] and base[16] (IW+1 = 12 bits) were 384 flip-flops with a
+reset loop, two 16:1 x 12 reads (the 2C map's restructuring report: 240
+and 120 LEs) and sixteen write decodes each. Every access is one write and
+one read a cycle at an address the sort's state names: hist cleared at hi
+(R_CNT), counted at digit (R_CNT_RUN), summed at hi (R_SUM); base set at hi
+(R_SUM), stepped at digit (R_SCAT_RUN). So each is an MLAB with one write
+port (address, data and enable selected by the state, in a block of its own
+with no reset) and one asynchronous read, as the flops were read. The reset
+loop goes: R_CNT clears every count before a pass reads one and R_SUM
+writes every base before R_SCAT_RUN reads one, so no reset value was ever
+read. The read-modify-write is the flops' own: the word read in a cycle is
+the one written at its end, and a word written at an edge is read from the
+next cycle (as R866's register banks read theirs).
+*Proved:* the R985 miter bench, R985's RTL against this, 3 seeds x 2,000
+frames, 28.9 M cycles: 0 differing. A planted fault (R_CNT clearing only
+the low eight buckets) differs on 902,222 of 987,710 cycles.
+test_m2_quad_store and tb_m2_raster3d PASS with logs byte-identical to the
+parent's; -Wall clean; quartus_map --analyze_file clean.
+*Timing (not fitted):* base_q now comes from an MLAB's asynchronous read
+into the index RAMs' write address in R_SCAT_RUN, where it came from a
+16:1 select of flops -- comparable depth; key_rd -> digit -> base_q ->
+idx_* write address is the path to watch.
