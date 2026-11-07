@@ -38660,3 +38660,36 @@ pairing as mode 0 on the same cadence (79 output frames, 8 of two images,
 identical to mode 0's); mode 4 (240p) as before; modes 0-2, mode 0 80
 frames phase 1 and mode 0's slipping run: output hashes identical to before
 R983. lint_top clean; Quartus analyze clean.
+
+**R984 (as model2c's R984) -- THE FILL's PLANE PRODUCTS SHARED: S_PF_B's
+CORNER AND THE SPAN's PLANE ON ONE SET OF SIX MULTIPLIERS, ON MAIN.
+m2_raster_fill standalone quartus_map 17.0 (Model 2 parameters: PXC 1, FRB
+2, M2COV 1, UZF 4, MIP 1, UVCL 1): 38 -> 32 DSP, 3,596 -> 3,607 ALMs needed
+(+11), ALUTs 4,645 -> 4,676, registers 3,853 (=). Output-identical, every
+cycle. BRANCH area-main (off main d458e662), LOCAL, NOT FITTED.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Ported, not cherry-picked:* the area pass model2c measured (R984-R988:
+41,203 -> 39,194 ALM and 112 -> 107 DSP in the 2C fit, s1743), applied to
+this branch's own files. main's fill lacks R940 (in_uvs) and R948
+(RECIP_M10K) beside model2c's parent; the products and S_PF_B are the same
+lines, and model2c's patch applied as it stands. The sharing rests on what
+it did there: every s1_valid load needs pf_st == S_IDLE and a quad is taken
+only with stage 1 empty, so throughout S_PF_B stage 1 is empty.
+*Proved:* sim/miter/area_r984 (fill_miter.sh: sim/miter/miter.py, the old
+fill against the new with m2_raster_div, every output every cycle):
+tb_m2_raster_fill 52,211,088 cycles (152,373 checks, 0 fails), MIP
+54,784,527 (1,989,828 checks), tb_m2_fill_m2cov 614,406 (PASS), and at the
+Model 2 parameters (the bench's own reference is FRB 0, so its checks fail
+there as before -- the miter is the check) 56,562,112, with MIP 59,248,384,
+and with a random in_frac on every quad offered 57,354,119 and 60,029,169:
+340.8 M cycles, 0 with an output differing. Planted faults: s1_y loaded
+from sx -- 56,041,892 of 56,562,112 cycles; s1_y with the x fraction bits
+-- 0 with in_frac 0, 42,808,297 of 57,354,119 with random fractions.
+test_m2_raster_fill, _mip and test_m2_raster3d PASS, run output
+identical to the parent's; quartus_map --analyze_file clean (K_NONE's
+constant warning is the parent's).
+*Timing (not fitted):* as model2c's -- the corner select adds a source to
+s1_cl / s1_y's D input; the span path s1_cl -> DSP -> span_u sums in the
+DSP chain before the base add. clk_sys near s1_cl / s1_y and span_u is the
+fit's check.
