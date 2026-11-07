@@ -46985,3 +46985,8 @@ clean; quartus_map --analyze_file clean.
 -6 DSP fitted. Timing: s1745 clk_sys -0.191 (HDMI +0.127, hold +0.220);
 s1747 clk_mem -0.069 (HDMI -0.379); s1749 a Quartus internal error (DYN).
 More seeds to come.
+*More 2A seeds:* s1751 39,332 ALM, core clocks clean (clk_sys +0.163,
+clk_mem +0.574), hold +0.171, HDMI -0.256; s1752 39,318 ALM, core clocks
+clean (clk_sys +0.261, clk_mem +0.441, clk_i960 +1.875), hold +0.077, HDMI
+-0.101 -- the 2A candidate; s1753 clk_sys -0.142. 2 of 5 fitted seeds close
+the core clocks with the area pass, against 1 of 3 at 98% before it.
