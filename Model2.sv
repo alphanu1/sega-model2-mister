@@ -330,6 +330,11 @@ localparam CONF_STR = {
 	// R983: the fourth entry, 265 (15.2kHz DV), is the Direct Video timing for an
 	// HDMI scaler: whole clocks (10 a pixel, 6,560 a line), progressive.
 	"O[61:60],15kHz lines,273/274 (15.7kHz),268/269 (15.4kHz),262/263 (15.1kHz),265 (15.2kHz DV);",
+	// R983: the DV timing's scan, read only with 265 (DV): 480i shows all 480
+	// lines (equal fields, the half line from the vsync); 240p every other one,
+	// for a scaler that will not lock to unequal fields. O[77] is free on main,
+	// model2a and model2c.
+	"O[77],15kHz DV scan,480i,240p;",
 	// R834's "15kHz width" (O[55], Full / Narrow) IS REMOVED (R898): it
 	// lengthened the 1:1 picture's line, and the converter has one 656-pixel
 	// line in every mode (a narrow line there would need its own line length,
@@ -847,6 +852,9 @@ always @(posedge clk_mem) vdv_s <= {vdv_s[1:0], status[61:60] == 2'd3};
 wire       vid_nl = vnl_s[2];
 wire       vid_ml = vml_s[2];
 wire       vid_dv = vdv_s[2];             // R983
+reg [2:0]  vdvp_s;                        // R983: O[77], the DV timing's 240p, into clk_mem
+always @(posedge clk_mem) vdvp_s <= {vdvp_s[1:0], status[77]};
+wire       vid_dvp = vdvp_s[2];
 reg [2:0]  vpr_s;                         // R939: 15kHz pairing (0 = Auto), into clk_mem
 always @(posedge clk_mem) vpr_s <= {vpr_s[1:0], ~status[67]};
 wire       vid_pair = vpr_s[2];
@@ -8014,7 +8022,7 @@ wire [23:0] sc_rgb;
 m2_scan15 u_scan15 (
 	.clk(clk_mem), .rst_n(mem_rst_n), .en(vid_scan), .img_tag(r826_stag), .pair_en(vid_pair),   // R939
 	.ce_in(ce_pix), .de_in(~(tile_hb | tile_vb)), .vb_in(tile_vb), .rgb_in({ov_r, ov_g, ov_b}),
-	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml), .dv(vid_dv),   // R983
+	.ce_out(ce_out), .nl(vid_nl), .ml(vid_ml), .dv(vid_dv), .dvp(vid_dvp),   // R983
 	.o_hs(sc_hs), .o_vs(sc_vs), .o_de(sc_de), .o_field(sc_fld), .o_rgb(sc_rgb)
 );
 

@@ -38,7 +38,7 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
 
   int mode, nframes, cad, cph, rnd, slip1, slip3, slip4, pe;
   int unsigned seed;
-  logic nl, ml, dv;
+  logic nl, ml, dv, dvp;
   initial begin
     if (!$value$plusargs("mode=%d", mode)) mode = 0;
     if (!$value$plusargs("frames=%d", nframes)) nframes = 14;
@@ -52,7 +52,8 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
     if (!$value$plusargs("pe=%d", pe)) pe = 1;
     nl = (mode == 2);
     ml = (mode == 1);
-    dv = (mode == 3);                       // R983: 265 lines, progressive, 10 clocks a pixel
+    dv  = (mode == 3) || (mode == 4);       // R983: 265 + 265 lines, 10 clocks a pixel: 3 = 480i, 4 = 240p
+    dvp = (mode == 4);
   end
 
   // ---- the two pixel enables, exactly as Model2.sv makes them
@@ -119,7 +120,7 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
                  .pair_en(pe != 0),
 `endif
                  .ce_in(ce_in), .de_in(de_s), .vb_in(vb_s),
-                 .rgb_in(rgb_s), .ce_out(ce_out), .nl(nl), .ml(ml), .dv(dv), .o_hs(o_hs), .o_vs(o_vs), .o_de(o_de),
+                 .rgb_in(rgb_s), .ce_out(ce_out), .nl(nl), .ml(ml), .dv(dv), .dvp(dvp), .o_hs(o_hs), .o_vs(o_vs), .o_de(o_de),
                  .o_field(o_field), .o_rgb(o_rgb));
   // the design's own values, from an instance at its defaults (inputs idle)
   m2_scan15 dflt (.clk(1'b0), .rst_n(1'b0), .en(1'b0), .img_tag(4'd0),
@@ -127,7 +128,7 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
                   .pair_en(1'b1),
 `endif
                   .ce_in(1'b0), .de_in(1'b0), .vb_in(1'b1),
-                  .rgb_in(24'd0), .ce_out(1'b0), .nl(1'b0), .ml(1'b0), .dv(1'b0), .o_hs(), .o_vs(), .o_de(), .o_field(), .o_rgb());
+                  .rgb_in(24'd0), .ce_out(1'b0), .nl(1'b0), .ml(1'b0), .dv(1'b0), .dvp(1'b0), .o_hs(), .o_vs(), .o_de(), .o_field(), .o_rgb());
   wire design_vals = (RING == dflt.RING) && (DPX_I == dflt.DPX_I) && (DPX_M == dflt.DPX_M) && (DPX_N == dflt.DPX_N) && (DPX_D == dflt.DPX_D);
 
   initial begin #200 rst_n = 1'b1; end
@@ -202,7 +203,7 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
 `ifdef OLD_RTL
       if (nv != int'(dut.v_ld) || nh != int'(dut.h_ld) || dut.field != 1'b1) begin
 `else
-      if (nv != int'(dut.v_ld) + int'(dut.s_e) || nh != int'(dut.h_ld) || dut.field != (dv ? 1'b0 : !dut.s_e)) begin   // R983: dv's fields are all 0
+      if (nv != int'(dut.v_ld) + int'(dut.s_e && !dv) || nh != int'(dut.h_ld) || dut.field != (dvp ? 1'b0 : !dut.s_e)) begin   // R983
 `endif
         // R939: nothing may move the output once locked (retrorepair's pairing lock did, by half a line); counted, and
         // the timing checks run straight through it
@@ -375,7 +376,7 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
     #1 ipx_nat = dv ? 64'd173840 : nl ? 64'd172200 : ml ? 64'd176136 : 64'd179416;   // (N0 - 1/2) x 656; R983 dv 265 x 656
     wait (rst_n);
     wait (frame >= nframes);
-    $display("mode %0d (%s), ring %0d lines, D_PX %0d: %0d native frames (%s)", mode, dv ? "265 DV" : nl ? "262/263" : ml ? "268/269" : "273/274",
+    $display("mode %0d (%s), ring %0d lines, D_PX %0d: %0d native frames (%s)", mode, dvp ? "265 DV 240p" : dv ? "265 DV 480i" : nl ? "262/263" : ml ? "268/269" : "273/274",
              RING, dv ? DPX_D : nl ? DPX_N : ml ? DPX_M : DPX_I, frame, design_vals ? "the design's values" : "OVERRIDDEN, not the design's");
     $display("  pixels checked %0d, blend mismatches %0d, ring mismatches %0d, row-step mismatches %0d", checked, fails, ring_fails, step_fails);
     $display("  hsync %0d..%0d px, visible %0d..%0d px a line, line period faults %0d, fields not 240 lines %0d, vsyncs %0d",
@@ -402,8 +403,21 @@ module tb_m2_scan15 #(parameter int RING = 16, parameter int DPX_I = 5840, param
              hs_clk_min, hs_clk_max, ce_gap_min, ce_gap_max, fld1_seen);
     $display("  margin before the data is written (smallest, ns): %0d   margin before it is overwritten (smallest, ns): %0d",
              min_avail, min_over);
-    if (dv) begin
-      // R983: progressive, whole clocks: every line 6,560 clocks, every pixel 10, every vsync interval one native frame,
+    if (dv && !dvp) begin
+      // R983, 480i: whole clocks (every line 6,560, every pixel 10); equal fields, so every vsync interval is half a
+      // line off one native frame, alternately early and late (a label repeat aside); field 1 half a line lower; the
+      // picture, the ring and the pairing as in every mode
+      if (fails == 0 && ring_fails == 0 && step_fails == 0 && checked > 100000 && hs_max == 64 && hs_min == 64 &&
+          de_max == 496 && de_min == 496 && hs_per_bad == 0 && field_lines_bad == 0 && nint > 6 && al_n > 0 &&
+          al_moved == 0 && ev_vsd_big == 0 && ev_vsd + ev_rep >= n_vsi &&
+          vsd_hist[-1] - vsd_hist[1] <= 1 + ev_rep && vsd_hist[1] - vsd_hist[-1] <= 1 + ev_rep &&
+          hs_clk_min == 6560 && hs_clk_max == 6560 && ce_gap_min == 10 && ce_gap_max == 10 && fld1_seen > 100000 &&
+          to_de_ok[0] && to_de_ok[1] && to_de[1] - to_de[0] == 328 && min_avail > 1000 && min_over > 1000 &&
+          (rnd != 0 || ev_rep <= ((cad == 2) ? 1 : 0)) &&
+          !(rnd == 0 && pe != 0 && cad == 2 && nframes >= 70 && (pairs < 10 || pair_bad != 0))) $display("PASS");
+      else $display("FAIL");
+    end else if (dv) begin
+      // R983, 240p: whole clocks: every line 6,560 clocks, every pixel 10, every vsync interval one native frame,
       // no field 1, the picture and the ring as in every mode
       if (fails == 0 && ring_fails == 0 && step_fails == 0 && checked > 100000 && hs_max == 64 && hs_min == 64 &&
           de_max == 496 && de_min == 496 && hs_per_bad == 0 && field_lines_bad == 0 && nint > 6 && al_n > 0 &&

@@ -46824,3 +46824,10 @@ fourth entry "265 (15.2kHz DV)".
 tb_m2_vcop2_guns PASS; lint_top clean (as built, -DM2_NO_2A_RALLY,
 -DM2_NO_2A_SINDEN); Quartus 17.0 analyze_file on Model2.sv, m2_2a_inputs,
 m2_cab_inputs, m2_scan15, sys_top, hps_io: 0 errors. Not fitted.
+*R983 amended on model2a (2026-11-07), as main 9701d7c2:* the DV timing
+interlaces by default (equal 265-line fields, the half line from the vsync,
+all 480 lines shown); OSD O[77] "15kHz DV scan: 480i / 240p" keeps 240p for
+a scaler that will not lock. m2_scan15.sv and its bench are main's files;
+main's bench: modes 3 / 4 PASS, modes 0-2 hash-identical to before R983.
+Neither is anyone's default: 273/274 stays the "15kHz lines" default.
+lint_top clean (as built, -DM2_NO_2A_RALLY); Quartus analyze clean.
