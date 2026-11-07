@@ -38693,3 +38693,31 @@ constant warning is the parent's).
 s1_cl / s1_y's D input; the span path s1_cl -> DSP -> span_u sums in the
 DSP chain before the base add. clk_sys near s1_cl / s1_y and span_u is the
 fit's check.
+
+**R985 (as model2c's R985) -- THE QUAD STORE's VERTEX AND TEXTURE WORDS
+HELD IN THE M10Ks' OWN OUTPUT LATCHES, ON MAIN. m2_quad_store standalone
+quartus_map 17.0 (Model 2 parameters: KW 20, CW 17, TXW 26, VX, MZ, FTB,
+FRB 2): 2,200 -> 1,662 ALMs needed (-538), ALUTs 1,931 -> 1,584, registers
+2,855 -> 1,261; block memory bits 1,505,280 (=), the same twelve RAMs.
+Output-identical, every cycle. BRANCH area-main (off main d458e662), LOCAL,
+NOT FITTED.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Ported:* model2c's change as it stands; main's store differs from
+model2c's parent by R899's key_hi (the sort) and a one-bit out_vx, neither
+on this path. The parent's map logs Warning 276020 on eleven RAMs: vtx_0 /
+vtx_1 / uvt_0 / uvt_1 (gone here) and att_0 / att_1 / idx_a0 x2 / idx_a1
+x2 / idx_b (R987).
+*Proved:* sim/miter/area_r984 (qs/run.sh: model2c's tb_qs_miter.cpp at the
+Model 2 parameters, key_hi random a frame): the parent against this, seeds
+1-2 x 2,000 frames, 18.1 M cycles, 1.04 M quads in, 0 cycles with any of
+the 32 outputs differing. Planted faults: the latched bank from wbank --
+1,241,798 of 1.35 M cycles; the read not held off by a replay_start -- 0
+in 300 frames, 153 of 9.05 M and 113 of 9.10 M in 2,000 (rare: the bench
+reaches that edge on a restarted band only).
+*Timing (not fitted):* as model2c's -- out_* are the M10K's output and one
+LUT into the fill's accept through R677's triangle split.
+*Checks:* test_m2_quad_store (23 checks) and test_m2_raster3d (40) PASS,
+run output identical to the parent's (run once, on R984-R988 together);
+-Wall clean; lint_top clean and lint_idx's list identical to the parent's;
+quartus_map --analyze_file clean.
