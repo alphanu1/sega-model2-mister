@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-11-07: Model2_20261107b in releases/ (all three branches, pushed)
+
+Model 2 s1750 (main 0e26f5e2, the area pass R984-R988): md5
+77564b49d95ace450d4e831642a5fece, 39,100 ALM, 103 DSP, every clock clean
+including HDMI (+0.090; s1740 was -0.271). Board-tested by Ben. Replaces
+Model2_20261107 (s1740). 2A stays at Model2A_20261107 (s1737): its area build
+s1752 is board-tested and pushed on model2a but HDMI is -0.101 against
+s1737's -0.041, so Ben kept the release as it is. releases/ is identical on
+main, model2a and model2c.
+
 ## 2026-11-07: area pass R984-R988 on main, board-tested, pushed
 
 Ported from model2c (fill corner products on the span DSPs, quad store reads
