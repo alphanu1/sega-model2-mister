@@ -47657,3 +47657,35 @@ was -0.467 at 80 MHz before R741 took the hit out of the RAMs' enable), and
 att's read address is the idx latches' select. The read enables are
 adv && !replay_start, R741's form. The fit's clk_sys report around
 u_store's hq_* and att_* is the check.
+
+**R988 -- R985 FOR THE ROM LOADER's FIFO: sdr_wr_addr / sdr_wr_din FROM THE
+M10Ks' OWN LATCHES. m2_rom_loader standalone quartus_map 17.0 (2C
+parameters): 240 -> 208 ALMs needed (-32), ALUTs 198 -> 181, registers 302
+-> 117; block memory bits 21,504 (=); Warning 276020 on fifo_addr /
+fifo_data_lo / fifo_data_hi gone -- the last three in the 2C map (R985
+listed fourteen; R985-R987 took eleven). Output-identical, every cycle.
+BRANCH area-2c, LOCAL, NOT FITTED.**
+
+*Found:* the drain's launch branch loaded sdr_wr_addr / sdr_wr_din (reset
+to zero) from the FIFO, a read in a register with a reset in front, so
+Quartus read a cycle early and forwarded writes (42 bits of pass-through).
+Now the three RAMs are read into their own latches on the same condition
+(!busy && !fifo_empty && mem_ready && !rd_armed, outside reset) and the
+ports are those latches behind a loaded flag, zero until the first launch
+after a reset, as the flops were.
+*Proved:* sim/miter/miter.py on m2_rom_loader under a new random bench at
+the 2C parameters (scratch tb_rl_miter.cpp: ROM, TGP and other indices,
+bursts and gaps, mem_ready dropping 1 cycle in 50, the SDRAM ack 0-5 cycles
+after a request, a reset 1 cycle in 400,000): 3 seeds x 5 M cycles, 2.86 M
+words in, 1.61 M written, 0 cycles with any of the 12 outputs differing.
+Planted faults: the loaded flag ignored on sdr_wr_din -- 333,914 of 5 M
+cycles; the read not held off by an empty FIFO -- 2,046,313. (Dropping
+the !rst term from the read enable is NOT a fault: a read during reset is
+masked by the flag and replaced at the next launch -- the miter shows 0,
+and it is kept only to make the enable read as the FSM's branch does.)
+test_m2_romload (loader -> m2_sdram -> readback, 6 checks), tb_m2_rom_xtra
+(7) and tb_m2_rom_xtra2a (29,416) PASS with logs byte-identical to the
+parent's; lint_top clean; quartus_map --analyze_file clean.
+*Timing:* sdr_wr_addr / sdr_wr_din are an M10K's output and one LUT into
+m2_sdram's write port, where they were flops; the loader runs only during
+a download.
