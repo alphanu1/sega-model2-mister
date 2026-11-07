@@ -197,6 +197,7 @@ module m2_rom_loader #(
   (* ramstyle = "M10K" *) logic [7:0] fifo_data_hi [FIFO_DEPTH];
   logic [AW:0]        wptr, rptr;          // one extra bit distinguishes full
   logic               rd_armed;            // M10K read launched, data next cycle
+  logic               busy;                // a transaction is outstanding (R988: declared here)
   logic [AW:0]        level;
 
   assign level = wptr - rptr;
@@ -204,6 +205,30 @@ module m2_rom_loader #(
   logic fifo_empty, fifo_full;
   assign fifo_empty = (wptr == rptr);
   assign fifo_full  = (level == (AW+1)'(FIFO_DEPTH));
+
+  // R988: THE READ IS THE BLOCKS' OWN, and sdr_wr_addr / sdr_wr_din are the
+  // select after it. Loaded in the drain's launch branch with a reset in
+  // front, they were not a read port, so Quartus read the FIFO a cycle early
+  // and forwarded a write at that edge (Warning 276020, three RAMs). Now the
+  // M10Ks' output latches hold the word (a read enable on the launch, as the
+  // flops' enable was), and a flag gives the flops' reset value, zero, until
+  // the first launch after a reset.
+  logic [SDR_AW:1]    fq_addr;
+  logic [7:0]         fq_lo, fq_hi;
+  logic               fq_ld;
+  wire                f_rd = !rst && !busy && !fifo_empty && mem_ready && !rd_armed;
+  always_ff @(posedge clk) begin
+    if (f_rd) begin
+      fq_addr <= fifo_addr[rptr[AW-1:0]];
+      fq_lo   <= fifo_data_lo[rptr[AW-1:0]];
+      fq_hi   <= fifo_data_hi[rptr[AW-1:0]];
+    end
+  end
+  always_ff @(posedge clk or posedge rst)
+    if (rst)       fq_ld <= 1'b0;
+    else if (f_rd) fq_ld <= 1'b1;
+  assign sdr_wr_addr = fq_ld ? fq_addr : '0;
+  assign sdr_wr_din  = fq_ld ? {fq_hi, fq_lo} : 16'd0;
 
   // Assert wait with room still left, not once full. The host keeps sending
   // for a few cycles after it sees this.
@@ -237,7 +262,6 @@ module m2_rom_loader #(
 
   // ------------------------------------------------------------ SDRAM side
   logic        req_q;
-  logic        busy;          // a transaction is outstanding
   logic        ack_d;
 
   assign sdr_wr_req  = req_q;
@@ -256,7 +280,6 @@ module m2_rom_loader #(
     if (rst) begin
       wptr <= '0; rptr <= '0; rd_armed <= 1'b0;
       req_q <= 1'b0; busy <= 1'b0; ack_d <= 1'b0;
-      sdr_wr_addr <= '0; sdr_wr_din <= '0;
       tgp_wr <= 1'b0; tgp_addr <= '0; tgp_din <= '0; tgp_lo <= '0;
       rom_loaded <= 1'b0; overflow <= 1'b0; sok_d <= 1'b0; dl_done <= 1'b0;
       ucode_words <= '0; ucode_csum <= '0;
@@ -330,9 +353,7 @@ module m2_rom_loader #(
       // wrong bytes. The self-test writes its data from a REGISTER through the
       // same port and was always correct -- that difference is what localised it.
       end else if (!fifo_empty && mem_ready && !rd_armed) begin
-        sdr_wr_addr <= fifo_addr[rptr[AW-1:0]];
-        sdr_wr_din  <= {fifo_data_hi[rptr[AW-1:0]],
-                        fifo_data_lo[rptr[AW-1:0]]};
+        // (sdr_wr_addr / sdr_wr_din: R988, the latches above)
         rd_armed    <= 1'b1;
       end else if (rd_armed) begin
         rd_armed    <= 1'b0;

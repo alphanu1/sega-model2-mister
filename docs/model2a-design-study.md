@@ -38762,3 +38762,21 @@ address is the idx latches' select.
 run output identical to the parent's (run once, on R984-R988 together);
 -Wall clean; lint_top clean and lint_idx's list identical to the parent's;
 quartus_map --analyze_file clean.
+
+**R988 (as model2c's R988) -- R985 FOR THE ROM LOADER's FIFO ON MAIN.
+m2_rom_loader standalone quartus_map 17.0 (Model 2 parameters: SDR_AW 25,
+R725's remap): 226 -> 191 ALMs needed (-35), ALUTs 171 -> 154, registers
+299 -> 117; block memory bits 20,992 (=); Warning 276020 on fifo_addr /
+fifo_data_lo / fifo_data_hi gone. Output-identical, every cycle. BRANCH
+area-main, LOCAL, NOT FITTED.**
+
+*Ported:* model2c's change; main's loader has one remap (no R862 / R897),
+which is outside this path, and the patch applied as it stands.
+*Proved:* sim/miter/area_r984 (rl/run.sh, model2c's random download bench
+at the Model 2 parameters): 3 seeds x 5 M cycles, 2.86 M words in, 1.61 M
+written, 0 cycles with any of the 12 outputs differing. Planted faults: the
+loaded flag ignored on sdr_wr_din -- 139,154 of 2 M cycles; the read not
+held off by an empty FIFO -- 831,242 of 2 M.
+*Checks:* test_m2_romload (6 checks) and tb_m2_rom_xtra (7) PASS, run
+output identical to the parent's (run once, on R984-R988 together);
+lint_top clean; quartus_map --analyze_file clean.
