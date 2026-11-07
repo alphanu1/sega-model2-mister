@@ -47505,3 +47505,49 @@ the DV timing interlaces by default (equal 265-line fields, the half line
 from the vsync, all 480 lines shown); OSD O[77] "15kHz DV scan: 480i /
 240p" keeps 240p for a scaler that will not lock. 273/274 stays the
 default. lint_top clean (-DM2_2C=1); Quartus analyze clean.
+
+**R984 -- THE FILL's PLANE PRODUCTS SHARED: S_PF_B's CORNER AND THE SPAN's
+PLANE ON ONE SET OF SIX MULTIPLIERS. m2_raster_fill standalone quartus_map
+17.0 (2C parameters): 38 -> 32 DSP, 3,615 -> 3,625 ALMs needed (+10),
+4,675 -> 4,708 ALUTs, registers 3,855 (=). Output-identical, every cycle.
+BRANCH area-2c (off model2c 9df78a2a), LOCAL, NOT FITTED.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Believed:* the 2C build is at 112 / 112 DSP (s1731) and the fill's 38 are
+all live -- R952 had shared its normaliser and dividers but not its
+products. *Found:* twelve of the 38 were two copies of the same six
+products. emit_u / emit_v / emit_o evaluate the plane at stage 1
+(dudx * s1_cl + dudy * s1_y, and the v and 1/z pairs), and S_PF_B's b_prod
+cycle formed bp_* = the same gradients times the plane's corner
+(p4(sx[0]), p4(sy[0])). They never run together: every s1_valid load
+needs pf_st == S_IDLE and a quad is taken only with stage 1 empty, so
+throughout S_PF_B stage 1 is empty and the span products are read by
+nothing (span_* load only on s1_adv). Now the corner goes into s1_cl /
+s1_y in S_PF_B's third cycle (the one that lands dody) and bp_* takes the
+products in the fourth, where it took its own; each pair is summed before
+the shift ((a << k) + (b << k) = (a + b) << k mod 2^32), so the sum stays
+in the DSP pair's output adder chain as bp_*'s did. A first version kept
+the two products apart and summed bp_* in logic: -6 DSP but +47 ALMs (the
+three adder chains went to LUTs); summed first it is +10, the corner's
+operand select on s1_cl / s1_y.
+*Proved:* sim/miter/miter.py, the old fill against the new (with
+m2_raster_div), every output every cycle, under the fill's benches:
+tb_m2_raster_fill 52,211,088 cycles (checks 152,373, 0 fails), MIP
+54,784,527 (1,989,828 checks), tb_m2_fill_m2cov 614,406 (PASS), and at the
+2C parameters (PXC 1, FRB 2, M2COV 1, UZF 4, UVCL 1; the bench's own
+reference is FRB 0 there, so its checks fail as they did before -- the
+miter is the check): 56,562,112, with MIP 59,248,384, and with random
+quarter-pixel fractions on every textured quad (the bench drives
+in_frac = 0 otherwise) 57,207,620: 0 cycles with an output differing in
+any run. Planted faults: s1_y loaded from sx instead of sy differs on
+51,761,536 of 52,211,088 cycles (and the bench's own checks catch 137);
+s1_y taking the x fraction bits (sf[1:0]) differs on 6,473 cycles -- but
+only in the run with random fractions: without it the fault was invisible,
+which is why that run exists. tb_m2_raster3d's log byte-identical to the
+parent's. quartus_map --analyze_file clean (the one warning, K_NONE's
+constant at line 1939, is the parent's).
+*Timing (not fitted):* the corner select adds a source to s1_cl / s1_y's D
+input beside emit_cl (R741's stage-1 load); the span path s1_cl -> DSP ->
+span_u is unchanged except that the pair now sums in the DSP chain before
+the base add rather than in a three-input add after it. clk_sys near
+s1_cl / s1_y and span_u is the fit's check.
