@@ -38641,3 +38641,22 @@ vsync interval one native frame, no field-1 pixel, no re-alignment moves
 separately). The bench's warm-up now ignores a line cut by the first lock.
 lint_top clean (as built, -DM2_NO_DRIVE_FFB); Quartus 17.0 analyze_file on
 Model2.sv and m2_scan15.sv: 0 errors. Not fitted; not seen on a scaler.
+*R983 amended the same night -- 480i BY DEFAULT, 240p A SWITCH.* Ben: "the
+issue with 240p is you miss half the picture", then "let's offer both".
+Right: 240p shows frame rows 0, 2 .. 478 of the 4:5 blend, half of what the
+converter exists to show. The whole-clock line does not need progressive
+scan, only equal fields: 265 + 265 lines with the half line taken from the
+vsync alone (half a line early before a field 1, on the line before a field
+0), so vsync to vsync alternates 265.5 / 264.5 lines, every line 6,560
+clocks, field 1's picture half a line lower -- a CRT interlaces it; whether
+a scaler locks to unequal field intervals is the users' test. New input dvp
+(OSD O[77] "15kHz DV scan: 480i / 240p", 480i first; free on main, model2a,
+model2c) keeps 240p for a scaler that will not. Neither is a default for
+anyone else: DV is the fourth "15kHz lines" entry; 273/274 stays the default.
+Bench: mode 3 (480i) 14 / 80 frames both phases, and the slipping cadence
+(200 frames, seed 7): 0 blend / ring / step mismatches, line 6,560..6,560,
+pixel 10..10, intervals +-1/2 line (37 / 38 of 75), field 1 328 px lower,
+pairing as mode 0 on the same cadence (79 output frames, 8 of two images,
+identical to mode 0's); mode 4 (240p) as before; modes 0-2, mode 0 80
+frames phase 1 and mode 0's slipping run: output hashes identical to before
+R983. lint_top clean; Quartus analyze clean.

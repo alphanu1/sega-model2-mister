@@ -1,5 +1,12 @@
 # Handoff
 
+## 2026-11-07: DV timing 480i by default, 240p a switch (R983 amended), not fitted
+
+"15kHz DV scan" (O[77]: 480i / 240p) beside "15kHz lines: 265 (15.2kHz DV)".
+480i: equal 265-line fields, half line from the vsync; all 480 lines shown.
+Bench PASS both; normal modes hash-identical. s1728 (240p-only DV) is no
+longer the candidate: the next Model 2 build replaces it.
+
 ## 2026-11-06 (late): Model 2 release candidate s1728, board-tested
 
 s1728 = main 4997dfaf (Sinden R980, triggers R981, stock sys/ + audio filter
