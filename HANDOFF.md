@@ -1,5 +1,11 @@
 # Handoff
 
+## 2026-11-07: releases/ staged as model2c (all three 20261107 cores, local)
+
+Model2_20261107 (s1740, 50ba81b3), Model2A_20261107 (s1737, b9c8c5ca),
+Model2C_20261107 (s1743, 227d939f), all board-tested by Ben. 2C's build has
+the area pass (R984-R988, on model2c); to be ported here after the release.
+
 ## 2026-11-07: releases/ staged as model2a 941a8f38 (local)
 
 releases/ is model2a's: Model2_20261107 (s1740, 50ba81b3) and

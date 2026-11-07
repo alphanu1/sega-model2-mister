@@ -106,12 +106,12 @@ below). Please report anything you find, and say which game and where.
   press only).
 - **MiSTer's audio filter is back.** The framework (`sys/`) is stock MiSTer
   again, so the audio filter presets in the MiSTer menu work on this core.
-- **A Direct Video timing for HDMI scalers** (please test): `15kHz lines` has
+- **A Direct Video timing for 15 kHz** (please test): `15kHz lines` has
   a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
-  whole number of video clocks, so a scaler (Morph, RetroTINK) fed Direct
-  Video at 15 kHz can lock to it. `15kHz DV scan` picks `480i` (the whole
-  picture, the default) or `240p` (for a scaler that will not take the
-  interlace). The other 15 kHz modes are unchanged, and `273/274 (15.7kHz)`
+  whole number of video clocks, for Direct Video at 15 kHz through an
+  HDMI-to-VGA DAC or into an HDMI scaler (Morph, RetroTINK). `15kHz DV
+  scan` picks `480i` (the whole picture, the default) or `240p` (for a
+  scaler that will not take the interlace). The other 15 kHz modes are unchanged, and `273/274 (15.7kHz)`
   is still the default; CRT users need change nothing.
 - **Pilot Kids and Zero Gunner's buttons are named Shoot and Bomb**
   (GitHub #32): copy the new MRAs from `mra/`.
@@ -403,10 +403,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261031.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261031.rbf` has the md5 `b05a3dd43aefa2b18637342370be1011`. Keep
+`Model2C_20261107.rbf` has the md5 `227d939f8a83f5fe27896763e939930c`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -425,7 +425,35 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### New in this build (`Model2C_20261031`)
+### New in this build (`Model2C_20261107`)
+
+- **Sinden light gun support** (House of the Dead). New OSD setting `Sinden
+  border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
+  white border around the picture so a Sinden gun can find the screen. On my
+  setup 4 px is good in daylight and 2 px works in the dark. Set `Gun flash`
+  to `Off`.
+- **Analogue triggers** for Over Rev and Sega Touring Car Championship: the
+  right trigger is the accelerator, the left trigger the brake, fully
+  analogue, alongside the right stick. They need a MiSTer Main with analogue
+  trigger support (the unstable / nightly Main since 2026-11-03); on the
+  stable Main everything works as before. **Leave L2 / R2 unmapped** in the
+  core's button mapping: mapped to Accel / Brake they act as buttons (full
+  press only).
+- **MiSTer's audio filter is back.** The framework (`sys/`) is stock MiSTer
+  again, so the audio filter presets in the MiSTer menu work on this core.
+- **A Direct Video timing for 15 kHz** (please test): `15kHz lines` has a
+  fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
+  whole number of video clocks, for Direct Video through an HDMI-to-VGA DAC
+  or into an HDMI scaler (Morph, RetroTINK). `15kHz DV scan` picks `480i`
+  (the whole picture, the default) or `240p` (for a scaler that will not take
+  the interlace). The other 15 kHz modes are unchanged and `273/274
+  (15.7kHz)` is still the default.
+- **More room in the FPGA**: about 2,000 logic blocks and 5 DSP blocks freed
+  inside the 3D renderer with no change to the picture, which is what lets
+  this build fit with the audio filter back. The same work comes to the
+  Model 2 and 2A cores next.
+
+### Earlier in `Model2C_20261031`
 
 - **The music plays in time, as on a real cabinet**, as in the Model 2A
   core's `Model2A_20261031`. The sound chip's timer ran ~2% fast in MAME,
@@ -601,12 +629,12 @@ anything you find.
 - **MiSTer's audio filter is back.** The framework (`sys/`) is stock MiSTer
   again, so the audio filter presets in the MiSTer menu work on this core.
   (`Model2_20261107`.)
-- **A Direct Video timing for HDMI scalers** (please test): `15kHz lines` has
+- **A Direct Video timing for 15 kHz** (please test): `15kHz lines` has
   a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
-  whole number of video clocks, so a scaler (Morph, RetroTINK) fed Direct
-  Video at 15 kHz can lock to it. `15kHz DV scan` picks `480i` (the whole
-  picture, the default) or `240p` (for a scaler that will not take the
-  interlace). The other 15 kHz modes are unchanged and `273/274 (15.7kHz)`
+  whole number of video clocks, for Direct Video at 15 kHz through an
+  HDMI-to-VGA DAC or into an HDMI scaler (Morph, RetroTINK). `15kHz DV
+  scan` picks `480i` (the whole picture, the default) or `240p` (for a
+  scaler that will not take the interlace). The other 15 kHz modes are unchanged and `273/274 (15.7kHz)`
   is still the default: CRT users need change nothing. (`Model2_20261107`.)
 - **The i960 CPU now rounds the way Intel's chip does.** I checked the core's
   i960 against Intel's own 80960KB manuals. Converting a floating-point number
@@ -726,7 +754,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 |---|---|
 | `Aspect ratio` | as on other MiSTer cores |
 | `Video` | `Native 24kHz`, or `15kHz interlaced` for a CRT. With a `[15kHz CRT]` MRA it reads `15kHz (CRT MRA)` and can't be changed. |
-| `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)`, `262/263 (15.1kHz)` — see the CRT section — or `265 (15.2kHz DV)`, whole-clock timing for Direct Video into an HDMI scaler |
+| `15kHz lines` | `273/274 (15.7kHz)` (default), `268/269 (15.4kHz)`, `262/263 (15.1kHz)` — see the CRT section — or `265 (15.2kHz DV)`, whole-clock timing for Direct Video through a DAC or into an HDMI scaler |
 | `15kHz DV scan` | with `265 (15.2kHz DV)` only: `480i` (default, the whole picture) or `240p` (for a scaler that will not take the interlace) |
 | `15kHz pairing` | `Auto` (default) or `Off`. Only Virtua Cop and Desert Tank (they draw a new picture every second frame) are affected. `Auto` keeps both fields of a frame from the same picture; if your CRT still loses sync briefly in those two games, choose `Off` — on a CRT it costs nothing |
 | `Textures` | `On`, or `Off` to draw every polygon flat |
@@ -979,7 +1007,7 @@ work for you.
 
 ### MiSTer's audio filter is back
 
-From `Model2_20261107` and `Model2A_20261107` the cores use MiSTer's
+From `Model2_20261107`, `Model2A_20261107` and `Model2C_20261107` the cores use MiSTer's
 framework (`sys/`) exactly as it comes, so MiSTer's own audio filter and its
 presets (in the menu and `MiSTer.ini`) work on them again. Earlier builds
 switched the filter off to save space; the old patch is kept in
