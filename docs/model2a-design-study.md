@@ -47551,3 +47551,46 @@ input beside emit_cl (R741's stage-1 load); the span path s1_cl -> DSP ->
 span_u is unchanged except that the pair now sums in the DSP chain before
 the base add rather than in a three-input add after it. clk_sys near
 s1_cl / s1_y and span_u is the fit's check.
+
+**R985 -- THE QUAD STORE's VERTEX AND TEXTURE WORDS HELD IN THE M10Ks' OWN
+OUTPUT LATCHES: QUARTUS's PASS-THROUGH LOGIC GONE. m2_quad_store standalone
+quartus_map 17.0 (2C parameters): 2,167 -> 1,617 ALMs needed (-550), ALUTs
+1,939 -> 1,588, registers 2,874 -> 1,260; block memory bits 1,521,664 (=),
+the same twelve RAMs at the same depths and widths. Output-identical, every
+cycle. BRANCH area-2c, LOCAL, NOT FITTED.**
+
+*Believed (R952):* the bank select into vtx_r / uvt_r (304 bits) was the
+module's large mux and could only go with a 4096-deep array, more M10K.
+*Found:* the select was not the cost; what sat behind it was. The map logs
+Warning 276020 for vtx_0 / vtx_1 / uvt_0 / uvt_1 ("Pass-through logic has
+been added to match the read-during-write behavior"): E_READ's
+`vtx_r <= rbank ? vtx_1[q] : vtx_0[q]` is a select in front of a register
+with a reset and a hold, so the block cannot use vtx_r as its read; Quartus
+retimes the read a cycle earlier (address from q's D input) and then has to
+forward any write at that edge to match the RTL -- a copy of every write
+word, an address compare and a select, 304 bits a bank. Now each bank is
+read into its own register in E_READ (`if (e_rd) vtx_q0 <= vtx_0[q]`: the
+M10K's address register takes q and its read enable holds the output, the
+template), and vtx_r / uvt_r are a select after it on the bank and a loaded
+flag taken at the same edge: the flops' reset value until the first read,
+then the bank E_READ chose. The map gives no 276020 for these four now.
+The same warning stands on att_0 / att_1 / idx_a0 / idx_a1 / idx_b (R987)
+and, outside this module, on m2_rom_loader's FIFO (three RAMs; not done).
+*Proved:* sim/miter/miter.py on m2_quad_store under a new random bench at
+the 2C parameters (scratch tb_qs_miter.cpp: quads with gaps, the sort,
+1-12 bands a frame with out_ready random, a replay_start in mid-band 1 in
+20,000 cycles, the banks equal in 1 frame in 16, rbank moved under a band 1
+in 30,000): 3 seeds x 2,000 frames, 28.9 M cycles, 1.6 M quads in, 586 K
+out, 0 cycles with any of the 32 outputs differing. Planted faults: the
+latched bank wrong on 1 address in 16 -- 55,488 of 1.05 M cycles; the
+read not held off by a replay_start -- 208 of 9.8 M (the bench reaches
+that edge case). test_m2_quad_store PASS (23) and tb_m2_raster3d PASS (40),
+both logs byte-identical to the parent's; built with -Wall, no warnings;
+lint_top clean (-DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1); quartus_map
+--analyze_file clean.
+*Timing (not fitted):* out_* are now the M10K's output (clock-to-out of an
+unregistered read) and one LUT, where they were flip-flops. They go to the
+fill's accept (sx / sy / qu / qv and R735's first compares, ye_in(in_y1) <
+ye_in(in_y0) into m01_r) through raster3d's R677 triangle split (sp_*). A
+path of M10K tCO, two LUTs and a 16-bit compare at 80 MHz; the fit's
+clk_sys report on m01_r / x01_r / sx is the check.

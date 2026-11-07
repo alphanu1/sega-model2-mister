@@ -771,9 +771,20 @@ module m2_quad_store #(
   logic [AT_W-1:0] att_rd;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
-  logic [VWX-1:0] vtx_r;
+  // R985: THE WORDS ARE HELD IN THE BLOCKS' OWN OUTPUT LATCHES. vtx_r and
+  // uvt_r were 304 flip-flops loaded in E_READ from a two-bank select, with a
+  // hold and a reset in front of each: a 6:1 select a bit (the map's
+  // restructuring report priced it at 1,216 LEs). Each bank is now read into
+  // its own latch only in E_READ (a read enable: the M10K holds its output
+  // between reads, as the flops did), and the bank and a loaded flag are
+  // taken with it, so the word below is the same on every cycle: the flops'
+  // reset value until the first read, then the bank E_READ chose.
+  logic [VWX-1:0] vtx_q0, vtx_q1;
+  logic [UW-1:0]  uvt_q0, uvt_q1;
+  logic           rd_bank, rd_ld;
+  wire  [VWX-1:0] vtx_r = !rd_ld ? '0 : rd_bank ? vtx_q1 : vtx_q0;
   assign out_vx = VX ? vtx_r[VWX-1 -: VXN] : '0;   // R867; R932
-  logic [UW-1:0] uvt_r;
+  wire  [UW-1:0]  uvt_r = !rd_ld ? '0 : rd_bank ? uvt_q1 : uvt_q0;
   wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
   wire [2*XW-1:0] v2_r = vtx_r[2*2*XW +: 2*XW];
@@ -813,6 +824,23 @@ module m2_quad_store #(
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
 
+  // R985: the read the flops' E_READ did, at the same edge (E_READ outside
+  // reset and a replay_start, which take priority over the case below).
+  wire e_rd = (e_st == E_READ) && !replay_start;
+  always_ff @(posedge clk) begin
+    if (e_rd) begin
+      vtx_q0 <= vtx_0[q]; vtx_q1 <= vtx_1[q];
+      uvt_q0 <= uvt_0[q]; uvt_q1 <= uvt_1[q];
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rd_bank <= 1'b0; rd_ld <= 1'b0;
+    end else if (e_rd) begin
+      rd_bank <= rbank; rd_ld <= 1'b1;
+    end
+  end
+
   assign replay_busy = sc_run || !hq_empty || (e_st != E_IDLE);
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -822,7 +850,6 @@ module m2_quad_store #(
       ord_idx <= '0; att_rd <= '0;
       hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE;
       out_valid <= 1'b0;
-      vtx_r <= '0; uvt_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
     end else if (replay_start) begin
       // A band starts only when the previous one has drained (the sequencer
@@ -861,8 +888,7 @@ module m2_quad_store #(
           e_st      <= E_READ;
         end
         E_READ: begin
-          vtx_r     <= rbank ? vtx_1[q] : vtx_0[q];
-          uvt_r     <= rbank ? uvt_1[q] : uvt_0[q];
+          // (vtx_r / uvt_r: R985, the latches above)
           out_valid <= 1'b1;
           e_st      <= E_OUT;
         end
