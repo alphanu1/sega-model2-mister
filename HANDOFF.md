@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-11-07: Model2C_20261107 staged; the area pass merged into model2c
+
+area-2c merged (38b20231): R984-R988, measured in the 2C fit at about
+-2,000 ALM and -5 DSP (41,203 -> 39,194 ALM, 112 -> 107 DSP). 2C s1743 (built
+from area-2c 9db89154, RTL identical to this merge): md5
+227d939f8a83f5fe27896763e939930c; clk_sys +0.306, clk_mem +0.443, clk_i960
++1.613, hold +0.242, recovery +0.744, HDMI -0.068. Board-tested by Ben with
+House of the Dead ("its good"). releases/ now has all three 20261107 cores;
+README's DV wording covers DACs as well as scalers. Next: push on Ben's word,
+then port R984-R988 to model2a and main (after the release).
+
 ## 2026-11-07: releases/ staged as model2a 941a8f38 (local)
 
 releases/ is model2a's: Model2_20261107 (s1740, 50ba81b3) and
