@@ -675,6 +675,13 @@ module m2_quad_store #(
   // Without NX this is the old read: rs_sel 2 or wbank, at ri.
   logic [PIW-1:0] idx_rd;
   logic [KW-1:0]  key_rd;
+  // R987: and the key read the same way: key and key_x each into its own
+  // latch, the select after them on sb(cur_idx) taken at the same edge. As
+  // `key_rd <= sb(cur_idx) ? key_x[..] : key[..]` it was a select in front of
+  // a register, and the map built pass-through logic for both (Warning
+  // 276020 on key / key_x).
+  logic [KW-1:0]  kq, kxq;
+  logic           ksel;
   logic [PIW-1:0] rd_a0, rd_a1, rd_b;
   logic [1:0]     rd_sel;
   wire  [PIW-1:0] r_pos  = ri[PIW-1:0];
@@ -691,9 +698,12 @@ module m2_quad_store #(
     rd_a1  <= idx_a1[r_addr];
     rd_b   <= idx_b[r_addr];
     rd_sel <= r_sel;
-    key_rd <= sb(cur_idx) ? key_x[cur_idx[XB-1:0]] : key[cur_idx[IW-1:0]];
+    kq     <= key[cur_idx[IW-1:0]];
+    kxq    <= key_x[cur_idx[XB-1:0]];
+    ksel   <= sb(cur_idx);
   end
   assign idx_rd = (rd_sel == 2'd2) ? rd_b : (rd_sel[0] ? rd_a1 : rd_a0);
+  assign key_rd = ksel ? kxq : kq;   // R987
 
   // R962: THE SORT'S WRITES, ONE A CYCLE, REGISTERED. The FSM names a write
   // to order position lw_o of A or B; it lands a cycle later through the
@@ -908,11 +918,16 @@ module m2_quad_store #(
   logic [PIW-1:0] ord_idx;
   logic [PIW-1:0] ord_a0, ord_a1;   // R962: the two arrays' reads, selected after
   logic           ord_sel;
-  assign ord_idx = ord_sel ? ord_a1 : ord_a0;
   logic [AT_W-1:0] att_rd;
   logic [AT_W-1:0] att_r0, att_r1;   // R962: as ord_idx -- each array read alone
   logic            att_sel;
-  assign att_rd = att_sel ? att_r1 : att_r0;
+  // R987: the four reads in the blocks' own latches (no reset in front: a
+  // read enable on the scan's advance, as the flops' hold was), the selects
+  // and a loaded flag beside them; ord_idx and att_rd read 0 until the
+  // scan's first advance after reset, as the flops' reset left them.
+  logic            o_ld;
+  assign ord_idx = !o_ld ? '0 : ord_sel ? ord_a1 : ord_a0;
+  assign att_rd  = !o_ld ? '0 : att_sel ? att_r1 : att_r0;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
   // R985: THE WORDS ARE HELD IN THE BLOCKS' OWN OUTPUT LATCHES. vtx_r and
@@ -969,6 +984,26 @@ module m2_quad_store #(
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
 
+  // R987: the scan's reads, at the edge the flops took them
+  wire o_rd = adv && !replay_start;
+  always_ff @(posedge clk) begin
+    if (o_rd) begin
+      ord_a0 <= idx_a0[two_end(pi[PIW-1:0])];
+      ord_a1 <= idx_a1[two_end(pi[PIW-1:0])];
+      att_r0 <= att_0[ord_idx[IW-1:0]];
+      att_r1 <= att_1[ord_idx[IW-1:0]];
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      ord_sel <= 1'b0; att_sel <= 1'b0; o_ld <= 1'b0;
+    end else if (o_rd) begin
+      ord_sel <= rbank ^ sb(pi[PIW-1:0]);
+      att_sel <= rbank ^ sb(ord_idx);
+      o_ld    <= 1'b1;
+    end
+  end
+
   // R985: the read the flops' E_READ did, at the same edge (E_READ outside
   // reset and a replay_start, which take priority over the case below).
   wire e_rd = (e_st == E_READ) && !replay_start;
@@ -992,7 +1027,6 @@ module m2_quad_store #(
     if (!rst_n) begin
       sc_run <= 1'b0; pi <= '0; q <= '0;
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
-      ord_a0 <= '0; ord_a1 <= '0; ord_sel <= 1'b0; att_r0 <= '0; att_r1 <= '0; att_sel <= 1'b0;
       hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE;
       out_valid <= 1'b0;
       out_col <= '0; out_moire <= 1'b0;
@@ -1007,12 +1041,7 @@ module m2_quad_store #(
       if (adv) begin
         // R962: order position pi two-ended from rbank; the code read back is
         // the slot's address as it stands, its bank rbank ^ the code's top bit.
-        ord_a0  <= idx_a0[two_end(pi[PIW-1:0])];
-        ord_a1  <= idx_a1[two_end(pi[PIW-1:0])];
-        ord_sel <= rbank ^ sb(pi[PIW-1:0]);
-        att_r0  <= att_0[ord_idx[IW-1:0]];
-        att_r1  <= att_1[ord_idx[IW-1:0]];
-        att_sel <= rbank ^ sb(ord_idx);
+        // (ord_idx, att_rd: R987, the latches above)
         q2      <= ord_idx;
         v1      <= v0;
         v2      <= v1;

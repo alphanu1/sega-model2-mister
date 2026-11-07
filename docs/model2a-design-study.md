@@ -46922,3 +46922,40 @@ run output identical to the parent's (run once, on R984-R988 together; the
 raster3d bench builds the store at NX 0); -Wall clean; lint_top clean and
 lint_idx's list identical to the parent's; quartus_map --analyze_file
 clean.
+
+**R987 (as model2c's R987) -- R985 FOR THE QUAD STORE's KEY READ AND THE
+SCAN's READS, ON MODEL2A. m2_quad_store standalone quartus_map 17.0 (2A
+parameters, on R986): 1,288 -> 1,242 ALMs needed (-46), ALUTs 1,397 ->
+1,348, registers 660 -> 514; RAMs unchanged; no Warning 276020 left in the
+module. R985-R987 together: 2,111 -> 1,242 ALMs (-869), registers 2,648 ->
+514. Output-identical, every cycle. BRANCH area-2a, LOCAL, NOT FITTED.**
+
+*Not model2c's change:* model2c's R987 split idx_rd, ord_idx and att_rd;
+here R962 had already split all three into a register an array with the
+select after, and the map gave no 276020 for idx_* or att_*. What it did
+give it for is R962's own `key_rd <= sb(cur_idx) ? key_x[..] : key[..]` --
+a select in front of a register again, on key and key_x. So the key read is
+now two latches (key, key_x) and a select on sb(cur_idx) taken at the same
+edge. And the scan's ord_a0 / ord_a1 / att_r0 / att_r1, which R962 left
+under the replay block's reset, are read in their own block on the scan's
+advance (adv && !replay_start, the edge the flops took them), the selects
+and a loaded flag beside them: ord_idx and att_rd read 0 until the first
+advance after reset, as the reset left them. That part removed no warning
+(the two were not mapped apart: -46 ALMs and -146 registers is both).
+*Proved:* the R985 bench, R986's RTL against this, seeds 5-6 x 2,000
+frames, 52.3 M cycles; the parent (a6cf8262) against this, seeds 7-9 x
+2,000 frames, 74.4 M cycles: 0 differing. Planted faults: the key select
+never taking key_x -- 92,346 of 3.72 M cycles (spilled lists only); att_rd's
+select without sb(ord_idx) -- 66,339 of 4.04 M; ord_idx's without
+sb(pi) -- 91,241 of 3.82 M. (The read enable without !replay_start is NOT a
+fault: a read on replay_start's edge is overwritten by the next advance
+before anything uses it -- v1 / v2 are cleared there -- and the miter shows
+0; the term is kept to match the flops' enable.)
+*Timing (not fitted):* key_rd is now a select after the two key latches
+into digit, then the MLAB's read address (R986) and base_q into the scatter
+-- one LUT more ahead of R986's path; the scan's as model2c's R987.
+*Checks:* test_m2_quad_store (23 checks) and test_m2_raster3d (40) PASS,
+run output identical to the parent's (run once, on R984-R988 together; the
+raster3d bench builds the store at NX 0); -Wall clean; lint_top clean and
+lint_idx's list identical to the parent's; quartus_map --analyze_file
+clean.
