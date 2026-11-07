@@ -541,7 +541,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261107b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -580,7 +580,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261107.rbf` has the md5 `50ba81b3f71fbd894aa9ad576b5b0945`.
+**Check you're running the right file.** `Model2_20261107b.rbf` has the md5 `77564b49d95ace450d4e831642a5fece`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -614,6 +614,10 @@ anything you find.
 
 ### New in this release
 
+- **More room on the chip, and timing closes on every clock, HDMI
+  included.** The 3D renderer shares its multipliers and reads its sort
+  memory more efficiently: about 2,000 fewer logic cells and 6 fewer DSP
+  blocks, with the picture unchanged. (`Model2_20261107b`.)
 - **Sinden light gun support** (Virtua Cop). New OSD setting `Sinden
   border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
   white border around the picture so a Sinden gun can find the screen. On my
