@@ -1,5 +1,16 @@
 # Handoff
 
+## 2026-11-07: area pass R984-R988 on model2a, board-tested, pushed
+
+Ported from model2c, R987 adapted to 2A's quad store (key read and scan
+reads); miters in sim/miter/area_r984/. s1752 = model2a aafcd3fe: md5
+f24cffdffb2672ab44fe858003b0070a, 39,318 ALM (94%, was 41,029), 101 DSP (was
+107); clk_sys +0.261, clk_mem +0.441, clk_i960 +1.875, hold +0.077, recovery
++0.687, HDMI -0.101 (s1737 was -0.041). 2 of 5 seeds closed the core clocks
+(s1751 too: hold +0.171, HDMI -0.256), against 1 in 3 before; s1753, s1745,
+s1747 failed, s1749 internal error. Board-tested by Ben ("All looks good!").
+Not in releases/: Model2A_20261107 (s1737) stays the release.
+
 ## 2026-11-07: releases/ staged as model2c (all three 20261107 cores, local)
 
 Model2_20261107 (s1740, 50ba81b3), Model2A_20261107 (s1737, b9c8c5ca),
