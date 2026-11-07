@@ -47505,3 +47505,199 @@ the DV timing interlaces by default (equal 265-line fields, the half line
 from the vsync, all 480 lines shown); OSD O[77] "15kHz DV scan: 480i /
 240p" keeps 240p for a scaler that will not lock. 273/274 stays the
 default. lint_top clean (-DM2_2C=1); Quartus analyze clean.
+
+**R984 -- THE FILL's PLANE PRODUCTS SHARED: S_PF_B's CORNER AND THE SPAN's
+PLANE ON ONE SET OF SIX MULTIPLIERS. m2_raster_fill standalone quartus_map
+17.0 (2C parameters): 38 -> 32 DSP, 3,615 -> 3,625 ALMs needed (+10),
+4,675 -> 4,708 ALUTs, registers 3,855 (=). Output-identical, every cycle.
+BRANCH area-2c (off model2c 9df78a2a), LOCAL, NOT FITTED.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Believed:* the 2C build is at 112 / 112 DSP (s1731) and the fill's 38 are
+all live -- R952 had shared its normaliser and dividers but not its
+products. *Found:* twelve of the 38 were two copies of the same six
+products. emit_u / emit_v / emit_o evaluate the plane at stage 1
+(dudx * s1_cl + dudy * s1_y, and the v and 1/z pairs), and S_PF_B's b_prod
+cycle formed bp_* = the same gradients times the plane's corner
+(p4(sx[0]), p4(sy[0])). They never run together: every s1_valid load
+needs pf_st == S_IDLE and a quad is taken only with stage 1 empty, so
+throughout S_PF_B stage 1 is empty and the span products are read by
+nothing (span_* load only on s1_adv). Now the corner goes into s1_cl /
+s1_y in S_PF_B's third cycle (the one that lands dody) and bp_* takes the
+products in the fourth, where it took its own; each pair is summed before
+the shift ((a << k) + (b << k) = (a + b) << k mod 2^32), so the sum stays
+in the DSP pair's output adder chain as bp_*'s did. A first version kept
+the two products apart and summed bp_* in logic: -6 DSP but +47 ALMs (the
+three adder chains went to LUTs); summed first it is +10, the corner's
+operand select on s1_cl / s1_y.
+*Proved:* sim/miter/miter.py, the old fill against the new (with
+m2_raster_div), every output every cycle, under the fill's benches:
+tb_m2_raster_fill 52,211,088 cycles (checks 152,373, 0 fails), MIP
+54,784,527 (1,989,828 checks), tb_m2_fill_m2cov 614,406 (PASS), and at the
+2C parameters (PXC 1, FRB 2, M2COV 1, UZF 4, UVCL 1; the bench's own
+reference is FRB 0 there, so its checks fail as they did before -- the
+miter is the check): 56,562,112, with MIP 59,248,384, and with random
+quarter-pixel fractions on every textured quad (the bench drives
+in_frac = 0 otherwise) 57,207,620: 0 cycles with an output differing in
+any run. Planted faults: s1_y loaded from sx instead of sy differs on
+51,761,536 of 52,211,088 cycles (and the bench's own checks catch 137);
+s1_y taking the x fraction bits (sf[1:0]) differs on 6,473 cycles -- but
+only in the run with random fractions: without it the fault was invisible,
+which is why that run exists. tb_m2_raster3d's log byte-identical to the
+parent's. quartus_map --analyze_file clean (the one warning, K_NONE's
+constant at line 1939, is the parent's).
+*Timing (not fitted):* the corner select adds a source to s1_cl / s1_y's D
+input beside emit_cl (R741's stage-1 load); the span path s1_cl -> DSP ->
+span_u is unchanged except that the pair now sums in the DSP chain before
+the base add rather than in a three-input add after it. clk_sys near
+s1_cl / s1_y and span_u is the fit's check.
+
+**R985 -- THE QUAD STORE's VERTEX AND TEXTURE WORDS HELD IN THE M10Ks' OWN
+OUTPUT LATCHES: QUARTUS's PASS-THROUGH LOGIC GONE. m2_quad_store standalone
+quartus_map 17.0 (2C parameters): 2,167 -> 1,617 ALMs needed (-550), ALUTs
+1,939 -> 1,588, registers 2,874 -> 1,260; block memory bits 1,521,664 (=),
+the same twelve RAMs at the same depths and widths. Output-identical, every
+cycle. BRANCH area-2c, LOCAL, NOT FITTED.**
+
+*Believed (R952):* the bank select into vtx_r / uvt_r (304 bits) was the
+module's large mux and could only go with a 4096-deep array, more M10K.
+*Found:* the select was not the cost; what sat behind it was. The map logs
+Warning 276020 for vtx_0 / vtx_1 / uvt_0 / uvt_1 ("Pass-through logic has
+been added to match the read-during-write behavior"): E_READ's
+`vtx_r <= rbank ? vtx_1[q] : vtx_0[q]` is a select in front of a register
+with a reset and a hold, so the block cannot use vtx_r as its read; Quartus
+retimes the read a cycle earlier (address from q's D input) and then has to
+forward any write at that edge to match the RTL -- a copy of every write
+word, an address compare and a select, 304 bits a bank. Now each bank is
+read into its own register in E_READ (`if (e_rd) vtx_q0 <= vtx_0[q]`: the
+M10K's address register takes q and its read enable holds the output, the
+template), and vtx_r / uvt_r are a select after it on the bank and a loaded
+flag taken at the same edge: the flops' reset value until the first read,
+then the bank E_READ chose. The map gives no 276020 for these four now.
+The same warning stands on att_0 / att_1 / idx_a0 / idx_a1 / idx_b (R987)
+and, outside this module, on m2_rom_loader's FIFO (three RAMs; not done).
+*Proved:* sim/miter/miter.py on m2_quad_store under a new random bench at
+the 2C parameters (scratch tb_qs_miter.cpp: quads with gaps, the sort,
+1-12 bands a frame with out_ready random, a replay_start in mid-band 1 in
+20,000 cycles, the banks equal in 1 frame in 16, rbank moved under a band 1
+in 30,000): 3 seeds x 2,000 frames, 28.9 M cycles, 1.6 M quads in, 586 K
+out, 0 cycles with any of the 32 outputs differing. Planted faults: the
+latched bank wrong on 1 address in 16 -- 55,488 of 1.05 M cycles; the
+read not held off by a replay_start -- 208 of 9.8 M (the bench reaches
+that edge case). test_m2_quad_store PASS (23) and tb_m2_raster3d PASS (40),
+both logs byte-identical to the parent's; built with -Wall, no warnings;
+lint_top clean (-DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1); quartus_map
+--analyze_file clean.
+*Timing (not fitted):* out_* are now the M10K's output (clock-to-out of an
+unregistered read) and one LUT, where they were flip-flops. They go to the
+fill's accept (sx / sy / qu / qv and R735's first compares, ye_in(in_y1) <
+ye_in(in_y0) into m01_r) through raster3d's R677 triangle split (sp_*). A
+path of M10K tCO, two LUTs and a 16-bit compare at 80 MHz; the fit's
+clk_sys report on m01_r / x01_r / sx is the check.
+
+**R986 -- THE QUAD STORE's RADIX HISTOGRAM AND BUCKET BASES IN LUT RAM.
+m2_quad_store standalone quartus_map 17.0 (2C parameters, on R985):
+1,617 -> 1,361 ALMs needed (-256), ALUTs 1,588 -> 1,390, registers 1,260
+-> 908; two 16 x 12 MLABs (the map's RAM summary: hist_rtl_0, base_rtl_0,
+MLAB, simple dual port). Output-identical, every cycle. BRANCH area-2c,
+LOCAL, NOT FITTED.**
+
+*Found:* hist[16] and base[16] (IW+1 = 12 bits) were 384 flip-flops with a
+reset loop, two 16:1 x 12 reads (the 2C map's restructuring report: 240
+and 120 LEs) and sixteen write decodes each. Every access is one write and
+one read a cycle at an address the sort's state names: hist cleared at hi
+(R_CNT), counted at digit (R_CNT_RUN), summed at hi (R_SUM); base set at hi
+(R_SUM), stepped at digit (R_SCAT_RUN). So each is an MLAB with one write
+port (address, data and enable selected by the state, in a block of its own
+with no reset) and one asynchronous read, as the flops were read. The reset
+loop goes: R_CNT clears every count before a pass reads one and R_SUM
+writes every base before R_SCAT_RUN reads one, so no reset value was ever
+read. The read-modify-write is the flops' own: the word read in a cycle is
+the one written at its end, and a word written at an edge is read from the
+next cycle (as R866's register banks read theirs).
+*Proved:* the R985 miter bench, R985's RTL against this, 3 seeds x 2,000
+frames, 28.9 M cycles: 0 differing. A planted fault (R_CNT clearing only
+the low eight buckets) differs on 902,222 of 987,710 cycles.
+test_m2_quad_store and tb_m2_raster3d PASS with logs byte-identical to the
+parent's; -Wall clean; quartus_map --analyze_file clean.
+*Timing (not fitted):* base_q now comes from an MLAB's asynchronous read
+into the index RAMs' write address in R_SCAT_RUN, where it came from a
+16:1 select of flops -- comparable depth; key_rd -> digit -> base_q ->
+idx_* write address is the path to watch.
+
+**R987 -- R985 FOR THE QUAD STORE's SORT AND SCAN READS: idx_rd, ord_idx AND
+att_rd FROM THE M10Ks' OWN LATCHES. m2_quad_store standalone quartus_map
+17.0 (2C parameters, on R986): 1,361 -> 1,171 ALMs needed (-190), ALUTs
+1,390 -> 1,238, registers 908 -> 462; RAMs unchanged; no Warning 276020
+left in the module. R985-R987 together: 2,167 -> 1,171 ALMs (-996),
+registers 2,874 -> 462. Output-identical, every cycle. BRANCH area-2c,
+LOCAL, NOT FITTED.**
+
+*Found:* the seven remaining pass-through RAMs (R985) were the sort's
+`idx_rd <= which ? idx_b[ri] : (wbank ? idx_a1[ri] : idx_a0[ri])` (idx_a0 /
+idx_a1 / idx_b copy 0) and the scan's `ord_idx <= rbank ? idx_a1[pi] :
+idx_a0[pi]` and `att_rd <= rbank ? att_1[ord_idx] : att_0[ord_idx]` under
+adv (the idx copies 1, att_0 / att_1) -- selects in front of registers
+again. Each read is now its own latch (the scan's held by a read enable,
+adv && !replay_start, as the flops were), with which / wbank / rbank and a
+loaded flag taken at the same edge; ord_idx and att_rd read 0 until the
+scan's first advance after reset, as the flops' reset left them. att's
+read address is ord_idx, now the select after idx's latches, exactly the
+value the flop held.
+*Proved:* the R985 bench, R986's RTL against this: seeds 4 and 5 x 2,000
+frames, 18.6 M cycles; the parent RTL (9df78a2a) against this: seeds 1-3 x
+2,000 frames, 28.9 M cycles: 0 differing. Planted faults: ord_idx / att_rd
+latched with wbank for rbank -- 831,372 of 934,656 cycles; idx_rd's bank
+taken from rbank -- 787,914 of 920,237. test_m2_quad_store and
+tb_m2_raster3d PASS, logs byte-identical to the parent's; -Wall clean;
+quartus_map --analyze_file clean.
+*Timing (not fitted):* the scan's hit test now reads att_rd from an M10K
+latch (it was a flop) into the queue's write enables (R741's path, which
+was -0.467 at 80 MHz before R741 took the hit out of the RAMs' enable), and
+att's read address is the idx latches' select. The read enables are
+adv && !replay_start, R741's form. The fit's clk_sys report around
+u_store's hq_* and att_* is the check.
+
+**R988 -- R985 FOR THE ROM LOADER's FIFO: sdr_wr_addr / sdr_wr_din FROM THE
+M10Ks' OWN LATCHES. m2_rom_loader standalone quartus_map 17.0 (2C
+parameters): 240 -> 208 ALMs needed (-32), ALUTs 198 -> 181, registers 302
+-> 117; block memory bits 21,504 (=); Warning 276020 on fifo_addr /
+fifo_data_lo / fifo_data_hi gone -- the last three in the 2C map (R985
+listed fourteen; R985-R987 took eleven). Output-identical, every cycle.
+BRANCH area-2c, LOCAL, NOT FITTED.**
+
+*Found:* the drain's launch branch loaded sdr_wr_addr / sdr_wr_din (reset
+to zero) from the FIFO, a read in a register with a reset in front, so
+Quartus read a cycle early and forwarded writes (42 bits of pass-through).
+Now the three RAMs are read into their own latches on the same condition
+(!busy && !fifo_empty && mem_ready && !rd_armed, outside reset) and the
+ports are those latches behind a loaded flag, zero until the first launch
+after a reset, as the flops were.
+*Proved:* sim/miter/miter.py on m2_rom_loader under a new random bench at
+the 2C parameters (scratch tb_rl_miter.cpp: ROM, TGP and other indices,
+bursts and gaps, mem_ready dropping 1 cycle in 50, the SDRAM ack 0-5 cycles
+after a request, a reset 1 cycle in 400,000): 3 seeds x 5 M cycles, 2.86 M
+words in, 1.61 M written, 0 cycles with any of the 12 outputs differing.
+Planted faults: the loaded flag ignored on sdr_wr_din -- 333,914 of 5 M
+cycles; the read not held off by an empty FIFO -- 2,046,313. (Dropping
+the !rst term from the read enable is NOT a fault: a read during reset is
+masked by the flag and replaced at the next launch -- the miter shows 0,
+and it is kept only to make the enable read as the FSM's branch does.)
+test_m2_romload (loader -> m2_sdram -> readback, 6 checks), tb_m2_rom_xtra
+(7) and tb_m2_rom_xtra2a (29,416) PASS with logs byte-identical to the
+parent's; lint_top clean; quartus_map --analyze_file clean.
+*Timing:* sdr_wr_addr / sdr_wr_din are an M10K's output and one LUT into
+m2_sdram's write port, where they were flops; the loader runs only during
+a download.
+
+**R984-R988 MEASURED IN CONTEXT (2C, 2026-11-07).** The area-2c build
+(9db89154: R984-R988 on model2c 9df78a2a, audio filter on, DV 480i/240p)
+against the same code without them (s1731, 41,203 ALM, 112/112 DSP):
+s1742 39,259 ALM (94%), s1743 39,194 (94%), 107 DSP, 549 M10K both -- about
+-1,950 to -2,010 ALM and -5 DSP in the fitted design, twice the standalone
+maps' -1,018 (the fitter packs the rest of a 98%-full design better once
+there is room). Timing: s1743 clean on every core clock (clk_sys +0.306,
+clk_mem +0.443, clk_i960 +1.613), hold +0.242, recovery +0.744, HDMI -0.068;
+s1742 clk_sys -0.370. None of R984-R988's named paths was the worst in
+either fit. s1743 is the 2C release candidate (md5
+227d939f8a83f5fe27896763e939930c), not yet on the board.

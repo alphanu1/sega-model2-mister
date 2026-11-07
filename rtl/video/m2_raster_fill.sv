@@ -856,9 +856,6 @@ module m2_raster_fill #(
   logic [23:0]        s1_col;
   wire                s1_adv  = s1_valid && (!span_valid || span_ready);
   wire                s1_free = !s1_valid || s1_adv;
-  wire signed [31:0] emit_u  = uv_at_uv(base_u, dudx, dudy, s1_cl, s1_y);   // R791
-  wire signed [31:0] emit_v  = uv_at_uv(base_v, dvdx, dvdy, s1_cl, s1_y);
-  wire signed [31:0] emit_o  = uv_at(base_o, dodx, dody, s1_cl, s1_y);   // R337
 
   logic               pf_a, pf_b;        // the two plane-fit divides, back
 
@@ -873,32 +870,26 @@ module m2_raster_fill #(
   // survived constant-propagation, and this expression was most of it.
   // The gradient is 8.8 and the answer is 16.16, so each product -- 16 x 16,
   // one DSP -- is shifted up by eight on its way in.
-  function automatic logic signed [31:0] uv_at(input logic signed [31:0] base,
-                                               input logic signed [23:0] gx,   // R618
-                                               input logic signed [23:0] gy,
-                                               input logic signed [15:0] x,
-                                               input logic signed [15:0] y);
-    logic signed [31:0] gxp, gyp;
-    begin
-      gxp = gx * x;
-      gyp = gy * y;
-      uv_at = base + (gxp <<< 8) + (gyp <<< 8);
-    end
-  endfunction
-  // R791: the same for u/z and v/z, whose values carry UVS fraction bits
-  // rather than 16 -- the 8-fraction-bit products shift up by UVS - 8.
-  function automatic logic signed [31:0] uv_at_uv(input logic signed [31:0] base,
-                                                  input logic signed [23:0] gx,
-                                                  input logic signed [23:0] gy,
-                                                  input logic signed [15:0] x,
-                                                  input logic signed [15:0] y);
-    logic signed [31:0] gxp, gyp;
-    begin
-      gxp = gx * x;
-      gyp = gy * y;
-      uv_at_uv = base + (gxp <<< (UVS - 8)) + (gyp <<< (UVS - 8));
-    end
-  endfunction
+  // R791: u/z and v/z carry UVS fraction bits rather than 16 -- the
+  // 8-fraction-bit products shift up by UVS - 8. (R984: written out at
+  // emit_u / emit_v / emit_o below, which were uv_at and uv_at_uv.)
+
+  // R984: THE SIX PRODUCTS ARE NAMED ONCE AND SERVE TWO STATES. The plane at
+  // s1_cl / s1_y below, and S_PF_B's corner products (bp_*), were six
+  // multipliers each -- twelve DSP blocks -- and never run together: stage 1
+  // fills only while the fit is idle (every s1_valid load needs pf_st ==
+  // S_IDLE, and a quad is taken only with stage 1 empty), so throughout
+  // S_PF_B stage 1 is empty and its products are read by nothing. The corner
+  // goes into s1_cl / s1_y in S_PF_B's third cycle and bp_* takes the sums in
+  // its fourth, exactly where it took its own products. Each pair is summed
+  // before the shift -- (a << k) + (b << k) is (a + b) << k mod 2^32 -- so the
+  // sum is the DSP pair's own output adder, as bp_*'s was.
+  wire signed [31:0] gp_u = dudx * s1_cl + dudy * s1_y;
+  wire signed [31:0] gp_v = dvdx * s1_cl + dvdy * s1_y;
+  wire signed [31:0] gp_o = dodx * s1_cl + dody * s1_y;
+  wire signed [31:0] emit_u  = base_u + (gp_u <<< (UVS - 8));   // R791
+  wire signed [31:0] emit_v  = base_v + (gp_v <<< (UVS - 8));
+  wire signed [31:0] emit_o  = base_o + (gp_o <<< 8);           // R337
   logic [2:0]         ps1m1, ps2p1;
   logic signed [15:0] ya_next, yb_next;
   always_comb begin
@@ -1541,13 +1532,17 @@ module m2_raster_fill #(
         end else if (!b_w3) begin
           dody   <= sc_s;   // the last gradient
           b_w3   <= 1'b1;
+          // R984: the corner, for the shared products' next cycle
+          s1_cl  <= p4(sx[fa], sf[fa][1:0]);
+          s1_y   <= p4(sy[fa], sf[fa][3:2]);
         end else if (!b_prod) begin
           // R566: the six products and the corner, registered.
           // R626: at the vertex's quarter-pixel position when FRB (the <<< 8
           // below becomes <<< 6 -- the product is four times as large)
-          bp_u <= 32'(dudx * p4(sx[fa], sf[fa][1:0]) + dudy * p4(sy[fa], sf[fa][3:2]));   // R952
-          bp_v <= 32'(dvdx * p4(sx[fa], sf[fa][1:0]) + dvdy * p4(sy[fa], sf[fa][3:2]));
-          bp_o <= 32'(dodx * p4(sx[fa], sf[fa][1:0]) + dody * p4(sy[fa], sf[fa][3:2]));
+          // R984: the span's products, at the corner s1_cl / s1_y now holds
+          bp_u <= gp_u;   // R952
+          bp_v <= gp_v;
+          bp_o <= gp_o;
           bq_u  <= qu[fa]; bq_v <= qv[fa]; bq_o <= qoz[fa];
           // R616: (gx + gy) / 2 in 16.16 -- the gradients are 8.8, so << 7.
           // R791: u/v at UVS fraction bits, so half a gradient is << UVS - 9

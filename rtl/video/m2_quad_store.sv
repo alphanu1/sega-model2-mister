@@ -562,8 +562,22 @@ module m2_quad_store #(
   logic [PW-1:0] pass;                // which digit of the key
   logic [IW:0]  ri;
   logic [RADIX:0] hi;
-  logic [IW:0]  hist [NBUCK];
-  logic [IW:0]  base [NBUCK];
+  // R986: THE HISTOGRAM AND THE BUCKET BASES ARE LUT RAM. Sixteen 12-bit
+  // words each, in flops, were 384 registers, two 16:1 reads 12 bits wide
+  // and sixteen write decodes each. Every access is one write and one read a
+  // cycle, at addresses the state names: the histogram is cleared at hi
+  // (R_CNT), counted at digit (R_CNT_RUN) and summed at hi (R_SUM); the
+  // bases are set at hi (R_SUM) and stepped at digit (R_SCAT_RUN). The reads
+  // are asynchronous, as the flops' were, and a word written at an edge is
+  // read from the next cycle, as theirs was. Not cleared in reset: R_CNT
+  // clears every count before a pass reads one, and R_SUM writes every base
+  // before R_SCAT_RUN reads one, so the reset values were never seen.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [IW:0] hist [NBUCK];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [IW:0] base [NBUCK];
+  logic             h_we, b_we;
+  logic [RADIX-1:0] h_wa, b_wa, h_ra;
+  logic [IW:0]      h_wd, b_wd;
+  wire  [IW:0]      hist_q, base_q;
   logic [IW:0]  acc;
   logic         which;                // 0: a -> b, 1: b -> a
   logic [IW-1:0] cur_idx;
@@ -589,12 +603,21 @@ module m2_quad_store #(
   // arrays, and the band mask out of att.
   //
   // The cost is a cycle per access, which this sequencer already had states for.
-  logic [IW-1:0] idx_rd;
+  // R987: each index array read into the block's own output latch, the
+  // select after it from the selects taken at the same edge -- the same word
+  // on every cycle, without the pass-through logic Quartus built for a
+  // select in front of a register (see vtx_r below, R985).
+  logic [IW-1:0] ib_q, ia0_q, ia1_q;
+  logic          which_q, wbank_q;
   logic [KW-1:0] key_rd;
   always_ff @(posedge clk) begin
-    idx_rd <= which ? idx_b[ri[IW-1:0]] : (wbank ? idx_a1[ri[IW-1:0]] : idx_a0[ri[IW-1:0]]);
+    ib_q  <= idx_b [ri[IW-1:0]];
+    ia0_q <= idx_a0[ri[IW-1:0]];
+    ia1_q <= idx_a1[ri[IW-1:0]];
+    which_q <= which; wbank_q <= wbank;
     key_rd <= key[cur_idx];
   end
+  wire [IW-1:0] idx_rd = which_q ? ib_q : (wbank_q ? ia1_q : ia0_q);
 
   // ONE ELEMENT PER CYCLE, NOT FIVE.
   //
@@ -617,6 +640,23 @@ module m2_quad_store #(
   wire [KW-1:0] key_shifted = key_rd >> (RADIX * pass);
   wire [RADIX-1:0] digit = key_shifted[RADIX-1:0];
 
+  // R986: the two arrays' ports, in their own block (no reset)
+  assign hist_q = hist[h_ra];
+  assign base_q = base[digit];
+  always_comb begin
+    h_ra = (rst_st == R_SUM) ? hi[RADIX-1:0] : digit;
+    h_we = (rst_st == R_CNT) || ((rst_st == R_CNT_RUN) && s2);
+    h_wa = (rst_st == R_CNT) ? hi[RADIX-1:0] : digit;
+    h_wd = (rst_st == R_CNT) ? '0 : hist_q + 1'b1;
+    b_we = (rst_st == R_SUM) || ((rst_st == R_SCAT_RUN) && s2);
+    b_wa = (rst_st == R_SUM) ? hi[RADIX-1:0] : digit;
+    b_wd = (rst_st == R_SUM) ? acc : base_q + 1'b1;
+  end
+  always_ff @(posedge clk) begin
+    if (h_we) hist[h_wa] <= h_wd;
+    if (b_we) base[b_wa] <= b_wd;
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       rst_st <= R_IDLE; pass <= '0; ri <= '0; hi <= '0; acc <= '0;
@@ -628,7 +668,7 @@ module m2_quad_store #(
       // the declared range". A constant that has to track a parameter and does
       // not is the same class of bug as the band mask that was still six bits
       // after the band height halved.
-      for (int i = 0; i < int'(NBUCK); i++) begin hist[i] <= '0; base[i] <= '0; end
+      // (R986: hist and base are not cleared here -- see their declaration)
     end else begin
       case (rst_st)
         R_IDLE: if (sort_start) begin
@@ -649,7 +689,7 @@ module m2_quad_store #(
         end
 
         R_CNT: begin                       // clear the histogram
-          hist[hi[RADIX-1:0]] <= '0;
+          // (R986: hist[hi] <= 0 by the array's port)
           if (hi == (RADIX+1)'(NBUCK-1)) begin
             hi <= '0; ri <= '0;
             s0 <= 1'b0; s1 <= 1'b0; s2 <= 1'b0;
@@ -671,15 +711,15 @@ module m2_quad_store #(
           s0 <= more; s1 <= s0; s2 <= s1;
           cur_idx <= idx_rd;
           cidx_d  <= cur_idx;
-          if (s2) hist[digit] <= hist[digit] + 1'b1;
+          // (R986: if (s2) hist[digit] += 1 by the array's port)
           if (!more && !pipe_busy) begin
             hi <= '0; acc <= '0; rst_st <= R_SUM;
           end
         end
 
         R_SUM: begin                       // exclusive prefix sum
-          base[hi[RADIX-1:0]] <= acc;
-          acc <= acc + hist[hi[RADIX-1:0]];
+          // (R986: base[hi] <= acc by the array's port)
+          acc <= acc + hist_q;
           if (hi == (RADIX+1)'(NBUCK-1)) begin
             ri <= '0; s0 <= 1'b0; s1 <= 1'b0; s2 <= 1'b0;
             rst_st <= R_SCAT_RUN;
@@ -697,10 +737,10 @@ module m2_quad_store #(
           cidx_d  <= cur_idx;
           if (s2) begin
             if (which) begin
-              if (wbank) idx_a1[base[digit][IW-1:0]] <= cidx_d; else idx_a0[base[digit][IW-1:0]] <= cidx_d;
+              if (wbank) idx_a1[base_q[IW-1:0]] <= cidx_d; else idx_a0[base_q[IW-1:0]] <= cidx_d;
             end
-            else       idx_b[base[digit][IW-1:0]] <= cidx_d;
-            base[digit] <= base[digit] + 1'b1;
+            else       idx_b[base_q[IW-1:0]] <= cidx_d;
+            // (R986: base[digit] += 1 by the array's port)
           end
           if (!more && !pipe_busy) rst_st <= R_NEXT;
         end
@@ -767,13 +807,29 @@ module m2_quad_store #(
   logic          v1, v2;
   logic [IW-1:0] q2;
 
-  logic [IW-1:0] ord_idx;
-  logic [AT_W-1:0] att_rd;
+  // R987: ord_idx and att_rd as R985's words: each bank's read in its own
+  // latch on the scan's advance, the bank and a loaded flag beside them.
+  logic [IW-1:0]   oi_q0, oi_q1;
+  logic [AT_W-1:0] at_q0, at_q1;
+  logic            o_bank, o_ld;
+  wire  [IW-1:0]   ord_idx = !o_ld ? '0 : o_bank ? oi_q1 : oi_q0;
+  wire  [AT_W-1:0] att_rd  = !o_ld ? '0 : o_bank ? at_q1 : at_q0;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
-  logic [VWX-1:0] vtx_r;
+  // R985: THE WORDS ARE HELD IN THE BLOCKS' OWN OUTPUT LATCHES. vtx_r and
+  // uvt_r were 304 flip-flops loaded in E_READ from a two-bank select, with a
+  // hold and a reset in front of each: a 6:1 select a bit (the map's
+  // restructuring report priced it at 1,216 LEs). Each bank is now read into
+  // its own latch only in E_READ (a read enable: the M10K holds its output
+  // between reads, as the flops did), and the bank and a loaded flag are
+  // taken with it, so the word below is the same on every cycle: the flops'
+  // reset value until the first read, then the bank E_READ chose.
+  logic [VWX-1:0] vtx_q0, vtx_q1;
+  logic [UW-1:0]  uvt_q0, uvt_q1;
+  logic           rd_bank, rd_ld;
+  wire  [VWX-1:0] vtx_r = !rd_ld ? '0 : rd_bank ? vtx_q1 : vtx_q0;
   assign out_vx = VX ? vtx_r[VWX-1 -: VXN] : '0;   // R867; R932
-  logic [UW-1:0] uvt_r;
+  wire  [UW-1:0]  uvt_r = !rd_ld ? '0 : rd_bank ? uvt_q1 : uvt_q0;
   wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
   wire [2*XW-1:0] v2_r = vtx_r[2*2*XW +: 2*XW];
@@ -813,16 +869,47 @@ module m2_quad_store #(
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
 
+  // R987: the scan's two reads, at the edge the flops took them
+  wire o_rd = adv && !replay_start;
+  always_ff @(posedge clk) begin
+    if (o_rd) begin
+      oi_q0 <= idx_a0[pi[IW-1:0]]; oi_q1 <= idx_a1[pi[IW-1:0]];
+      at_q0 <= att_0[ord_idx];     at_q1 <= att_1[ord_idx];
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      o_bank <= 1'b0; o_ld <= 1'b0;
+    end else if (o_rd) begin
+      o_bank <= rbank; o_ld <= 1'b1;
+    end
+  end
+
+  // R985: the read the flops' E_READ did, at the same edge (E_READ outside
+  // reset and a replay_start, which take priority over the case below).
+  wire e_rd = (e_st == E_READ) && !replay_start;
+  always_ff @(posedge clk) begin
+    if (e_rd) begin
+      vtx_q0 <= vtx_0[q]; vtx_q1 <= vtx_1[q];
+      uvt_q0 <= uvt_0[q]; uvt_q1 <= uvt_1[q];
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rd_bank <= 1'b0; rd_ld <= 1'b0;
+    end else if (e_rd) begin
+      rd_bank <= rbank; rd_ld <= 1'b1;
+    end
+  end
+
   assign replay_busy = sc_run || !hq_empty || (e_st != E_IDLE);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       sc_run <= 1'b0; pi <= '0; q <= '0;
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
-      ord_idx <= '0; att_rd <= '0;
       hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE;
       out_valid <= 1'b0;
-      vtx_r <= '0; uvt_r <= '0;
       out_col <= '0; out_moire <= 1'b0;
     end else if (replay_start) begin
       // A band starts only when the previous one has drained (the sequencer
@@ -833,8 +920,7 @@ module m2_quad_store #(
     end else begin
       // ---- the scan: the same three-stage alignment as before (see above).
       if (adv) begin
-        ord_idx <= rbank ? idx_a1[pi[IW-1:0]] : idx_a0[pi[IW-1:0]];
-        att_rd  <= rbank ? att_1[ord_idx] : att_0[ord_idx];
+        // (ord_idx, att_rd: R987, the latches above)
         q2      <= ord_idx;
         v1      <= v0;
         v2      <= v1;
@@ -861,8 +947,7 @@ module m2_quad_store #(
           e_st      <= E_READ;
         end
         E_READ: begin
-          vtx_r     <= rbank ? vtx_1[q] : vtx_0[q];
-          uvt_r     <= rbank ? uvt_1[q] : uvt_0[q];
+          // (vtx_r / uvt_r: R985, the latches above)
           out_valid <= 1'b1;
           e_st      <= E_OUT;
         end
