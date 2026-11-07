@@ -46978,3 +46978,10 @@ held off by an empty FIFO -- 831,242 of 2 M.
 (29,416) and its _old (13,012) PASS and _mut FAILS as it must, run output
 identical to the parent's (run once, on R984-R988 together); lint_top
 clean; quartus_map --analyze_file clean.
+
+**R984-R988 MEASURED IN THE 2A FIT (2026-11-07).** area-2a (model2a a6cf8262
++ the port) against Model2A_20261107 (s1737: 41,029 ALM, 107 DSP): s1745
+39,346 ALM, s1747 39,347 (94%), 101 DSP, 551 M10K -- about -1,680 ALM and
+-6 DSP fitted. Timing: s1745 clk_sys -0.191 (HDMI +0.127, hold +0.220);
+s1747 clk_mem -0.069 (HDMI -0.379); s1749 a Quartus internal error (DYN).
+More seeds to come.
