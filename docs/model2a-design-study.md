@@ -38780,3 +38780,12 @@ held off by an empty FIFO -- 831,242 of 2 M.
 *Checks:* test_m2_romload (6 checks) and tb_m2_rom_xtra (7) PASS, run
 output identical to the parent's (run once, on R984-R988 together);
 lint_top clean; quartus_map --analyze_file clean.
+
+**R984-R988 MEASURED IN THE MODEL 2 FIT (2026-11-07).** area-main (main
+d458e662 + the port) against Model2_20261107 (s1740: 41,128 ALM, 109 DSP):
+s1750 39,100 ALM (93%), 103 DSP, 551 M10K -- about -2,030 ALM and -6 DSP in
+the fitted design, as on 2C. s1750 CLOSES EVERY CLOCK, HDMI INCLUDED: HDMI
++0.090, clk_sys +0.456, clk_mem +0.521, clk_i960 +1.921, hold +0.227,
+recovery +0.992 (the first fully clean Model 2 fit since s1572). s1746 died
+in the fitter (Segment Violation), s1748 a Quartus internal error (DYN).
+md5 77564b49d95ace450d4e831642a5fece; not yet on the board.
