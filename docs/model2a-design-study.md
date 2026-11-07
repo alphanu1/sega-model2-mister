@@ -47624,3 +47624,36 @@ parent's; -Wall clean; quartus_map --analyze_file clean.
 into the index RAMs' write address in R_SCAT_RUN, where it came from a
 16:1 select of flops -- comparable depth; key_rd -> digit -> base_q ->
 idx_* write address is the path to watch.
+
+**R987 -- R985 FOR THE QUAD STORE's SORT AND SCAN READS: idx_rd, ord_idx AND
+att_rd FROM THE M10Ks' OWN LATCHES. m2_quad_store standalone quartus_map
+17.0 (2C parameters, on R986): 1,361 -> 1,171 ALMs needed (-190), ALUTs
+1,390 -> 1,238, registers 908 -> 462; RAMs unchanged; no Warning 276020
+left in the module. R985-R987 together: 2,167 -> 1,171 ALMs (-996),
+registers 2,874 -> 462. Output-identical, every cycle. BRANCH area-2c,
+LOCAL, NOT FITTED.**
+
+*Found:* the seven remaining pass-through RAMs (R985) were the sort's
+`idx_rd <= which ? idx_b[ri] : (wbank ? idx_a1[ri] : idx_a0[ri])` (idx_a0 /
+idx_a1 / idx_b copy 0) and the scan's `ord_idx <= rbank ? idx_a1[pi] :
+idx_a0[pi]` and `att_rd <= rbank ? att_1[ord_idx] : att_0[ord_idx]` under
+adv (the idx copies 1, att_0 / att_1) -- selects in front of registers
+again. Each read is now its own latch (the scan's held by a read enable,
+adv && !replay_start, as the flops were), with which / wbank / rbank and a
+loaded flag taken at the same edge; ord_idx and att_rd read 0 until the
+scan's first advance after reset, as the flops' reset left them. att's
+read address is ord_idx, now the select after idx's latches, exactly the
+value the flop held.
+*Proved:* the R985 bench, R986's RTL against this: seeds 4 and 5 x 2,000
+frames, 18.6 M cycles; the parent RTL (9df78a2a) against this: seeds 1-3 x
+2,000 frames, 28.9 M cycles: 0 differing. Planted faults: ord_idx / att_rd
+latched with wbank for rbank -- 831,372 of 934,656 cycles; idx_rd's bank
+taken from rbank -- 787,914 of 920,237. test_m2_quad_store and
+tb_m2_raster3d PASS, logs byte-identical to the parent's; -Wall clean;
+quartus_map --analyze_file clean.
+*Timing (not fitted):* the scan's hit test now reads att_rd from an M10K
+latch (it was a flop) into the queue's write enables (R741's path, which
+was -0.467 at 80 MHz before R741 took the hit out of the RAMs' enable), and
+att's read address is the idx latches' select. The read enables are
+adv && !replay_start, R741's form. The fit's clk_sys report around
+u_store's hq_* and att_* is the check.
