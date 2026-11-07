@@ -96,7 +96,7 @@ below). Please report anything you find, and say which game and where.
   border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
   white border around the picture so a Sinden gun can find the screen. On my
   setup 4 px is good in daylight and 2 px works in the dark. Set `Gun flash`
-  to `Off` and calibrate the gun once with F10.
+  to `Off`.
 - **Analogue triggers** for Sega Rally, Manx TT and Motor Raid: the right
   trigger is the accelerator (throttle), the left trigger the brake, fully
   analogue, alongside the right stick. They need a MiSTer Main with analogue
@@ -589,9 +589,9 @@ anything you find.
 - **Sinden light gun support** (Virtua Cop). New OSD setting `Sinden
   border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
   white border around the picture so a Sinden gun can find the screen. On my
-  setup 4 px is good in daylight and 2 px works in the dark. Calibrate the
-  gun once with F10. The border is drawn over the gun flash, so it stays
-  whole with `Gun flash` on `Arcade`. (`Model2_20261107`.)
+  setup 4 px is good in daylight and 2 px works in the dark. The border is
+  drawn over the gun flash, so it stays whole with `Gun flash` on `Arcade`.
+  (`Model2_20261107`.)
 - **Analogue triggers in Daytona USA**: the right trigger is the accelerator
   and the left trigger the brake, fully analogue, alongside the right stick.
   They need a MiSTer Main with analogue trigger support (the unstable /
