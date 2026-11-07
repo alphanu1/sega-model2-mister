@@ -608,12 +608,21 @@ module m2_quad_store #(
   // arrays, and the band mask out of att.
   //
   // The cost is a cycle per access, which this sequencer already had states for.
-  logic [IW-1:0] idx_rd;
+  // R987: each index array read into the block's own output latch, the
+  // select after it from the selects taken at the same edge -- the same word
+  // on every cycle, without the pass-through logic Quartus built for a
+  // select in front of a register (see vtx_r below, R985).
+  logic [IW-1:0] ib_q, ia0_q, ia1_q;
+  logic          which_q, wbank_q;
   logic [KW-1:0] key_rd;
   always_ff @(posedge clk) begin
-    idx_rd <= which ? idx_b[ri[IW-1:0]] : (wbank ? idx_a1[ri[IW-1:0]] : idx_a0[ri[IW-1:0]]);
+    ib_q  <= idx_b [ri[IW-1:0]];
+    ia0_q <= idx_a0[ri[IW-1:0]];
+    ia1_q <= idx_a1[ri[IW-1:0]];
+    which_q <= which; wbank_q <= wbank;
     key_rd <= key[cur_idx];
   end
+  wire [IW-1:0] idx_rd = which_q ? ib_q : (wbank_q ? ia1_q : ia0_q);
 
   // ONE ELEMENT PER CYCLE, NOT FIVE.
   //
@@ -804,8 +813,13 @@ module m2_quad_store #(
   logic          v1, v2;
   logic [IW-1:0] q2;
 
-  logic [IW-1:0] ord_idx;
-  logic [AT_W-1:0] att_rd;
+  // R987: ord_idx and att_rd as R985's words: each bank's read in its own
+  // latch on the scan's advance, the bank and a loaded flag beside them.
+  logic [IW-1:0]   oi_q0, oi_q1;
+  logic [AT_W-1:0] at_q0, at_q1;
+  logic            o_bank, o_ld;
+  wire  [IW-1:0]   ord_idx = !o_ld ? '0 : o_bank ? oi_q1 : oi_q0;
+  wire  [AT_W-1:0] att_rd  = !o_ld ? '0 : o_bank ? at_q1 : at_q0;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
   // R985: THE WORDS ARE HELD IN THE BLOCKS' OWN OUTPUT LATCHES. vtx_r and
@@ -861,6 +875,22 @@ module m2_quad_store #(
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
 
+  // R987: the scan's two reads, at the edge the flops took them
+  wire o_rd = adv && !replay_start;
+  always_ff @(posedge clk) begin
+    if (o_rd) begin
+      oi_q0 <= idx_a0[pi[IW-1:0]]; oi_q1 <= idx_a1[pi[IW-1:0]];
+      at_q0 <= att_0[ord_idx];     at_q1 <= att_1[ord_idx];
+    end
+  end
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      o_bank <= 1'b0; o_ld <= 1'b0;
+    end else if (o_rd) begin
+      o_bank <= rbank; o_ld <= 1'b1;
+    end
+  end
+
   // R985: the read the flops' E_READ did, at the same edge (E_READ outside
   // reset and a replay_start, which take priority over the case below).
   wire e_rd = (e_st == E_READ) && !replay_start;
@@ -884,7 +914,6 @@ module m2_quad_store #(
     if (!rst_n) begin
       sc_run <= 1'b0; pi <= '0; q <= '0;
       v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
-      ord_idx <= '0; att_rd <= '0;
       hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE;
       out_valid <= 1'b0;
       out_col <= '0; out_moire <= 1'b0;
@@ -897,8 +926,7 @@ module m2_quad_store #(
     end else begin
       // ---- the scan: the same three-stage alignment as before (see above).
       if (adv) begin
-        ord_idx <= rbank ? idx_a1[pi[IW-1:0]] : idx_a0[pi[IW-1:0]];
-        att_rd  <= rbank ? att_1[ord_idx] : att_0[ord_idx];
+        // (ord_idx, att_rd: R987, the latches above)
         q2      <= ord_idx;
         v1      <= v0;
         v2      <= v1;

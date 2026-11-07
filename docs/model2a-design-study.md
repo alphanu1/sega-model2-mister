@@ -38739,3 +38739,26 @@ low eight buckets): 1,134,246 of 1.30 M cycles.
 run output identical to the parent's (run once, on R984-R988 together);
 -Wall clean; lint_top clean and lint_idx's list identical to the parent's;
 quartus_map --analyze_file clean.
+
+**R987 (as model2c's R987) -- R985 FOR THE QUAD STORE's SORT AND SCAN
+READS, ON MAIN: idx_rd, ord_idx AND att_rd FROM THE M10Ks' OWN LATCHES.
+m2_quad_store standalone quartus_map 17.0 (Model 2 parameters, on R986):
+1,400 -> 1,167 ALMs needed (-233), ALUTs 1,388 -> 1,235, registers 909 ->
+463; RAMs unchanged; no Warning 276020 left in the module. R985-R987
+together: 2,200 -> 1,167 ALMs (-1,033), registers 2,855 -> 463.
+Output-identical, every cycle. BRANCH area-main, LOCAL, NOT FITTED.**
+
+*Ported:* model2c's change as it stands (main's reads are model2c's
+parent's).
+*Proved:* the R985 bench, R986's RTL against this, seeds 5-6 x 2,000
+frames, 18.0 M cycles; the parent (d458e662) against this, seeds 7-9 x
+2,000 frames, 27.2 M cycles: 0 differing. Planted faults: ord_idx / att_rd
+latched with wbank for rbank -- 1,059,142 of 1.19 M cycles; idx_rd's bank
+taken from rbank -- 1,333,460 of 1.53 M.
+*Timing (not fitted):* as model2c's R987 -- the scan's hit test reads
+att_rd from an M10K latch into the queue's write enables, and att's read
+address is the idx latches' select.
+*Checks:* test_m2_quad_store (23 checks) and test_m2_raster3d (40) PASS,
+run output identical to the parent's (run once, on R984-R988 together);
+-Wall clean; lint_top clean and lint_idx's list identical to the parent's;
+quartus_map --analyze_file clean.
