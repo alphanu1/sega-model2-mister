@@ -47500,3 +47500,8 @@ guns are not touched. tb_m2_2a_inputs on model2c (the Over Rev / STCC copy
 dut_or now given the triggers too): 367 M checks, PASS; tb_m2_hotd_guns
 PASS; lint_top clean with -DM2_2C=1 and -DM2_NO_2A_SINDEN; m2_scan15 before
 this change was the same file as model2a's (hashes as there).
+*R983 amended on model2c (2026-11-07), from model2a f8a2d8c1 (main 9701d7c2):*
+the DV timing interlaces by default (equal 265-line fields, the half line
+from the vsync, all 480 lines shown); OSD O[77] "15kHz DV scan: 480i /
+240p" keeps 240p for a scaler that will not lock. 273/274 stays the
+default. lint_top clean (-DM2_2C=1); Quartus analyze clean.

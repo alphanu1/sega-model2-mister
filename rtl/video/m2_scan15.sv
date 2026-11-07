@@ -87,9 +87,12 @@
 // pixels wide. A DAC into a CRT follows the analogue sync and does not mind; an HDMI scaler (Morph, RetroTINK) measures
 // the line and calls it out of sync. dv makes every period whole: a pixel every 10 clocks, a 656-pixel line of 6,560
 // (15,244 Hz), 265 lines a field = 1,738,400 clocks, exactly one native frame. No odd line count near 530 divides two
-// native frames (3,476,800 = 2^6 5^2 41 53), so it cannot interlace with whole lines: it is progressive, every field
-// field 0 (frame rows 0, 2, 4 .. 478 of the 4:5 blend, s = floor(8v/5)), its vsync on a whole line at 248. The read
-// and the write move at the same rate (240 x 65.6 us = 384 x 41 us), so D_PX sits mid-window and stays there.
+// native frames (3,476,800 = 2^6 5^2 41 53), so its fields are EQUAL, 265 + 265: 480i (the default) takes its half
+// line from the vsync alone, which is half a line early before a field 1 -- vsync to vsync alternates 265.5 / 264.5
+// lines, every line still 6,560 clocks, and all 480 lines of the 4:5 blend are shown; dvp (OSD "15kHz DV scan: 240p")
+// makes every field field 0 (frame rows 0, 2 .. 478, half the picture's lines) with its vsync on a whole line, for a
+// scaler that will not lock to unequal fields. The read and the write move at the same rate (240 x 65.6 us = 384 x
+// 41 us), so D_PX sits mid-window and stays there.
 //
 // GEOMETRY (as the 1:1 mode had it): 656-pixel line, 496 visible, hsync
 // 520..584 (64 pixels); fields of N0 and N0-1 lines, field 1's vsync half a
@@ -109,7 +112,7 @@ module m2_scan15 #(
   parameter int unsigned DPX_I = 5840,  // 273/274
   parameter int unsigned DPX_M = 4310,  // 268/269
   parameter int unsigned DPX_N = 2490,  // 262/263
-  parameter int unsigned DPX_D = 3000,  // R983: 265 (DV), progressive -- read and write move at the same rate here
+  parameter int unsigned DPX_D = 3000,  // R983: 265 (DV) -- read and write move at the same rate here
   parameter int unsigned PAIR_N = 8     // wrong-frame image changes running before the fields are swapped (1..8)
 ) (
   input  logic        clk,             // the video clock (clk_mem)
@@ -128,7 +131,8 @@ module m2_scan15 #(
   input  logic        ce_out,
   input  logic        nl,              // 262/263 lines a field
   input  logic        ml,              // 268/269 (else 273/274)
-  input  logic        dv,              // R983: 265 lines, progressive, 10 clocks a pixel (overrides nl / ml)
+  input  logic        dv,              // R983: 265 + 265 lines, 10 clocks a pixel (overrides nl / ml)
+  input  logic        dvp,             // R983: with dv, progressive (240p, every field field 0); else 480i
   output logic        o_hs,
   output logic        o_vs,
   output logic        o_de,
@@ -233,7 +237,9 @@ module m2_scan15 #(
   logic [9:0] hcnt, vcnt;
   logic       field, nxt, ise, s_e;
 
-  // R983: dv -- every field 265 lines and field 0 (progressive): 265 x 656 x 10 clocks = 1,738,400, one native frame.
+  // R983: dv -- every field 265 lines: 265 x 656 x 10 clocks = 1,738,400, one native frame. 480i alternates the labels
+  // as the other modes do; dvp (240p) makes every field field 0.
+  wire       prog = dv && dvp;
   wire [9:0] n0  = dv ? 10'd265 : nl ? 10'd263 : ml ? 10'd269 : 10'd274;
   wire [9:0] vt  = (field && !dv) ? n0 - 10'd1 : n0;
   wire [9:0] vss = dv ? 10'd248 : nl ? 10'd247 : ml ? 10'd250 : 10'd253;   // field 0's vsync start (3 lines), before a field 1
@@ -245,7 +251,7 @@ module m2_scan15 #(
   localparam int unsigned DL_M = (DPX_M + HT - 1) / HT;
   localparam int unsigned DL_N = (DPX_N + HT - 1) / HT;
   localparam int unsigned DL_D = (DPX_D + HT - 1) / HT;
-  // R983: in dv the field before an E field is a 265-line field 0
+  // R983: in dv the field before an E field is 265 lines whatever its label
   wire [9:0] v_ld = dv ? 10'(265 - DL_D) : nl ? 10'(262 - DL_N) : ml ? 10'(268 - DL_M) : 10'(273 - DL_I);
   wire [9:0] h_ld = dv ? 10'(DL_D * HT - DPX_D)
                   : nl ? 10'(DL_N * HT - DPX_N) : ml ? 10'(DL_M * HT - DPX_M) : 10'(DL_I * HT - DPX_I);
@@ -255,8 +261,13 @@ module m2_scan15 #(
   // vss - 1/2, as before; a repeated label puts it on a whole line (two 1s) or a half line (two 0s).
   wire        hs_c  = (hcnt >= 10'(HSS)) && (hcnt < 10'(HSE));
   wire [19:0] vpos  = {vcnt, hcnt};
-  wire [9:0]  vs_h  = (nxt || dv) ? 10'd0 : 10'(HT >> 1);   // R983: dv's vsync on a whole line, every field
-  wire        vs_c  = (vpos >= {vss - 10'(field), vs_h}) && (vpos < {vse - 10'(field), vs_h});
+  // R983: dv's fields are equal, so its half line comes from the vsync alone: placed for a field 1, half a line early
+  // ({vss - 1, HT/2}); for a field 0, on the line (vss). Vsync to vsync alternates 265.5 / 264.5 lines, two of them
+  // exactly two native frames, and field 1's picture sits half a line lower after its vsync than field 0's -- what
+  // interlaces. 240p (nxt always 0): vss, whole, every field.
+  wire [9:0]  vs_h  = dv ? (nxt ? 10'(HT >> 1) : 10'd0) : nxt ? 10'd0 : 10'(HT >> 1);
+  wire [9:0]  vs_l  = dv ? 10'(nxt) : 10'(field);
+  wire        vs_c  = (vpos >= {vss - vs_l, vs_h}) && (vpos < {vse - vs_l, vs_h});
   wire        de_c  = (hcnt < 10'(W)) && (vcnt < 10'(VIS));
 
   // The line on show is frame row m = 2 * vcnt + field: source rows s = floor(4m/5) and s + 1, fraction r = 4m mod 5.
@@ -279,23 +290,23 @@ module m2_scan15 #(
       hcnt <= '0; vcnt <= '0; field <= 1'b0; nxt <= 1'b1; ise <= 1'b1; s_e <= 1'b0; p <= '0; r_c <= '0;
     end else if (align) begin
       // in the O field: its label was taken at the last E frame's start (s_e); the E field's is s
-      // R983: dv -- every label 0 (the pairing runs, unused)
-      field <= dv ? 1'b0 : ~s_e;
-      nxt   <= dv ? 1'b0 : s;
+      // R983: 240p -- every label 0 (the pairing runs, unused); dv's fields are equal, so no extra line for a field 0
+      field <= prog ? 1'b0 : ~s_e;
+      nxt   <= prog ? 1'b0 : s;
       ise   <= 1'b0;
-      s_e   <= dv ? 1'b0 : s;
-      vcnt  <= v_ld + 10'(s_e);
+      s_e   <= prog ? 1'b0 : s;
+      vcnt  <= v_ld + 10'(s_e && !dv);
       hcnt  <= h_ld;
     end else if (ce_out) begin
       if (hcnt == 10'(HT - 1)) begin
         hcnt <= '0;
         if (vcnt == vt - 10'd1) begin
           vcnt  <= '0;
-          field <= nxt && !dv;              // R983: dv -- field 0 from the first field, before any align
-          nxt   <= dv ? 1'b0 : ise ? s : ~s;   // after an O field comes E (label s), after an E field O (~s); R983: dv 0
+          field <= nxt && !prog;            // R983: 240p -- field 0 from the first field, before any align
+          nxt   <= prog ? 1'b0 : ise ? s : ~s;   // after an O field comes E (label s), after an E field O (~s); R983: 240p 0
           ise   <= ~ise;
           p     <= '0;
-          r_c   <= (nxt && !dv) ? 3'd4 : 3'd0;   // the field about to start: field 1 starts on frame row 1 (4 mod 5)
+          r_c   <= (nxt && !prog) ? 3'd4 : 3'd0;   // the field about to start: field 1 starts on frame row 1 (4 mod 5)
         end else begin
           vcnt <= vcnt + 10'd1;
           if (vcnt < 10'(VIS) - 10'd1) begin
