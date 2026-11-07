@@ -90,7 +90,33 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261031`)
+### New in this build (`Model2A_20261107`)
+
+- **Sinden light gun support** (Virtua Cop 2). New OSD setting `Sinden
+  border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
+  white border around the picture so a Sinden gun can find the screen. On my
+  setup 4 px is good in daylight and 2 px works in the dark. Set `Gun flash`
+  to `Off` and calibrate the gun once with F10.
+- **Analogue triggers** for Sega Rally, Manx TT and Motor Raid: the right
+  trigger is the accelerator (throttle), the left trigger the brake, fully
+  analogue, alongside the right stick. They need a MiSTer Main with analogue
+  trigger support (the unstable / nightly Main since 2026-11-03); on the
+  stable Main everything works as before. **Leave L2 / R2 unmapped** in the
+  core's button mapping: mapped to Accel / Brake they act as buttons (full
+  press only).
+- **MiSTer's audio filter is back.** The framework (`sys/`) is stock MiSTer
+  again, so the audio filter presets in the MiSTer menu work on this core.
+- **A Direct Video timing for HDMI scalers** (please test): `15kHz lines` has
+  a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
+  whole number of video clocks, so a scaler (Morph, RetroTINK) fed Direct
+  Video at 15 kHz can lock to it. `15kHz DV scan` picks `480i` (the whole
+  picture, the default) or `240p` (for a scaler that will not take the
+  interlace). The other 15 kHz modes are unchanged, and `273/274 (15.7kHz)`
+  is still the default; CRT users need change nothing.
+- **Pilot Kids and Zero Gunner's buttons are named Shoot and Bomb**
+  (GitHub #32): copy the new MRAs from `mra/`.
+
+### Earlier in `Model2A_20261031`
 
 - **The music plays in time, as on a real cabinet** (GitHub #37). Sega
   Rally's hi-hats, taps and cymbals drifted ahead of the rest of the music.
@@ -287,7 +313,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261031.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -295,7 +321,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261031.rbf` has the md5 `89ffe013be57391d1dacbe8c3360d13a`. As with
+`Model2A_20261107.rbf` has the md5 `b9c8c5ca8915d99c4210905f7fe5bcfa`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games

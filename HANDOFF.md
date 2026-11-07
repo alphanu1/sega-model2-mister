@@ -1,5 +1,17 @@
 # Handoff
 
+## 2026-11-07: Model2A_20261107 staged in releases/ (model2a only, local)
+
+2A s1737 = model2a f8a2d8c1 (Sinden R980, triggers R981, stock sys/ + audio
+filter R982, DV 480i/240p R983): md5 b9c8c5ca8915d99c4210905f7fe5bcfa,
+41,029 ALM (98%), 107 DSP, 551 M10K; clk_sys +0.044, clk_mem +0.035,
+clk_i960 +1.500, hold +0.240, recovery +0.708; HDMI -0.041. Board-tested by
+Ben ("running well"). releases/README's 2A section updated; #32's MRAs are in
+releases/mra here. Still to do at the full release: Model 2 and 2C rbfs,
+their README sections, the shared "MiSTer's audio filter is switched off"
+section (now wrong on every core), and releases/ copied to main and model2c.
+s1739 (clk_sys -0.433) and s1741 (stopped) not used.
+
 ## 2026-11-06: model2a gets main's triggers, stock sys/ and DV timing (R981-R983), not fitted
 
 Analogue triggers through m2_2a_inputs to every analog 2A game; sys/ =
