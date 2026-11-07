@@ -1,5 +1,11 @@
 # Handoff
 
+## 2026-11-07: releases/ staged as model2a 941a8f38 (local)
+
+releases/ is model2a's: Model2_20261107 (s1740, 50ba81b3) and
+Model2A_20261107 (s1737, b9c8c5ca), both board-tested by Ben; Model2C still
+20261031 until the 2C area-pass build is tested; #32's MRAs (Shoot / Bomb).
+
 ## 2026-11-07: DV timing 480i by default, 240p a switch (R983 amended), not fitted
 
 "15kHz DV scan" (O[77]: 480i / 240p) beside "15kHz lines: 265 (15.2kHz DV)".
