@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-11-07: area pass R984-R988 on main, board-tested, pushed
+
+Ported from model2c (fill corner products on the span DSPs, quad store reads
+from M10K output latches, radix hist/base in MLAB, ROM loader FIFO latch);
+old-against-new miters in sim/miter/area_r984/. s1750 = main 0e26f5e2: md5
+77564b49d95ace450d4e831642a5fece, 39,100 ALM (93%, was 41,128), 103 DSP (was
+109); clk_sys +0.456, clk_mem +0.521, clk_i960 +1.921, hold +0.227, recovery
++0.992, HDMI +0.090 (s1740 was -0.271) -- the first fully clean Model 2 fit
+with the audio filter. Board-tested by Ben ("All looks good!"). Not in
+releases/: Model2_20261107 (s1740) stays the release for now. Untaken area
+candidates: fill numerators (-4 DSP), tile-fetch char cache and texel_bl
+response FIFO to MLAB, i960 writeback mux.
+
 ## 2026-11-07: releases/ staged as model2c (all three 20261107 cores, local)
 
 Model2_20261107 (s1740, 50ba81b3), Model2A_20261107 (s1737, b9c8c5ca),
