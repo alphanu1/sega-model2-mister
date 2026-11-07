@@ -46902,3 +46902,23 @@ run output identical to the parent's (run once, on R984-R988 together; the
 raster3d bench builds the store at NX 0); -Wall clean; lint_top clean and
 lint_idx's list identical to the parent's; quartus_map --analyze_file
 clean.
+
+**R986 (as model2c's R986) -- THE QUAD STORE's RADIX HISTOGRAM AND BUCKET
+BASES IN LUT RAM, ON MODEL2A. m2_quad_store standalone quartus_map 17.0 (2A
+parameters, on R985): 1,576 -> 1,288 ALMs needed (-288), ALUTs 1,608 ->
+1,397, registers 1,044 -> 660; two 16 x 12 MLABs (hist_rtl_0, base_rtl_0).
+Output-identical, every cycle. BRANCH area-2a, LOCAL, NOT FITTED.**
+
+*Ported:* model2c's change; the scatter's write now names R962's lw_o from
+base_q[PIW-1:0] (PIW = IW + 1 = 12 with NX: the bases count to NQ + NX =
+2,560, inside the arrays' 12 bits). R_CNT still clears every count before a
+pass reads one and R_SUM writes every base before R_SCAT_RUN reads one, so
+the reset loop's values were never read here either.
+*Proved:* the R985 bench, R985's RTL against this, seeds 3-4 x 2,000
+frames, 53.0 M cycles: 0 differing. Planted fault (R_CNT clearing only the
+low eight buckets): 3,305,025 of 3,478,368 cycles.
+*Checks:* test_m2_quad_store (23 checks) and test_m2_raster3d (40) PASS,
+run output identical to the parent's (run once, on R984-R988 together; the
+raster3d bench builds the store at NX 0); -Wall clean; lint_top clean and
+lint_idx's list identical to the parent's; quartus_map --analyze_file
+clean.
