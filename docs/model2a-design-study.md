@@ -47689,3 +47689,15 @@ parent's; lint_top clean; quartus_map --analyze_file clean.
 *Timing:* sdr_wr_addr / sdr_wr_din are an M10K's output and one LUT into
 m2_sdram's write port, where they were flops; the loader runs only during
 a download.
+
+**R984-R988 MEASURED IN CONTEXT (2C, 2026-11-07).** The area-2c build
+(9db89154: R984-R988 on model2c 9df78a2a, audio filter on, DV 480i/240p)
+against the same code without them (s1731, 41,203 ALM, 112/112 DSP):
+s1742 39,259 ALM (94%), s1743 39,194 (94%), 107 DSP, 549 M10K both -- about
+-1,950 to -2,010 ALM and -5 DSP in the fitted design, twice the standalone
+maps' -1,018 (the fitter packs the rest of a 98%-full design better once
+there is room). Timing: s1743 clean on every core clock (clk_sys +0.306,
+clk_mem +0.443, clk_i960 +1.613), hold +0.242, recovery +0.744, HDMI -0.068;
+s1742 clk_sys -0.370. None of R984-R988's named paths was the worst in
+either fit. s1743 is the 2C release candidate (md5
+227d939f8a83f5fe27896763e939930c), not yet on the board.
