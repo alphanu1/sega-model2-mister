@@ -1,5 +1,15 @@
 # Handoff
 
+## 2026-11-07: Model2_20261107 staged in releases/ (model2a, local)
+
+Model 2 s1740 = main 9701d7c2 (Sinden, triggers, stock sys/ + audio filter,
+DV 480i/240p): md5 50ba81b3f71fbd894aa9ad576b5b0945, 41,128 ALM (98%), 109
+DSP; clk_sys +0.189, clk_mem +0.422, clk_i960 +1.505, hold +0.243, recovery
++0.395; HDMI -0.271. Board-tested by Ben with Daytona on the nightly Main
+("model 2 is good"). README: the Model 2 "New in this release" bullets, the
+OSD rows (15kHz lines DV, 15kHz DV scan, Sinden border), and the audio filter
+section rewritten ("is back"). Waiting on 2C (area-2c seeds s1742-s1744).
+
 ## 2026-11-07: Model2A_20261107 staged in releases/ (model2a only, local)
 
 2A s1737 = model2a f8a2d8c1 (Sinden R980, triggers R981, stock sys/ + audio
