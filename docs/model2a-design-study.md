@@ -46868,3 +46868,37 @@ parent's).
 s1_cl / s1_y's D input; the span path s1_cl -> DSP -> span_u sums in the
 DSP chain before the base add. clk_sys near s1_cl / s1_y and span_u is the
 fit's check.
+
+**R985 (as model2c's R985) -- THE QUAD STORE's VERTEX AND TEXTURE WORDS
+HELD IN THE M10Ks' OWN OUTPUT LATCHES, ON MODEL2A. m2_quad_store standalone
+quartus_map 17.0 (2A parameters: NX 512, KW 20, CW 17, TXW 28, VX, MZ, FTB,
+FRB 2): 2,111 -> 1,576 ALMs needed (-535), ALUTs 1,952 -> 1,608, registers
+2,648 -> 1,044; block memory bits 1,533,952 (=), the same thirteen RAMs.
+Output-identical, every cycle. BRANCH area-2a (off model2a a6cf8262),
+LOCAL, NOT FITTED.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Ported, not cherry-picked:* model2a's store has R962's spill, so E_READ
+read `(rbank ^ sb(q)) ? vtx_1[q[IW-1:0]] : vtx_0[q[IW-1:0]]` -- the bank is
+the slot code's, not rbank. The latch takes q[IW-1:0] and the bank flag
+takes rbank ^ sb(q) at the same edge; otherwise model2c's change. The
+parent's map logs Warning 276020 on vtx_0 / vtx_1 / uvt_0 / uvt_1 and on
+key / key_x (R987 below); not on idx_* or att_* -- R962 had already split
+those reads into a register an array with the select after (model2c's R987
+for idx_rd), though the scan's are still under a reset.
+*Proved:* sim/miter/area_r984 (qs/run.sh, a bench at the 2A parameters:
+model2c's tb_qs_miter.cpp plus ofree low, high or rising during the list,
+in_stall honoured but now and then ignored, and one list in six 1,800-2,800
+quads -- past 2,048 is the spill): the parent against this, seeds 1-2 x
+2,000 frames, 54.4 M cycles, 2.46 M quads in, 252 lists into the spill, 0
+cycles with any of the 33 outputs differing. Planted faults: the latched
+bank without sb(q) -- 35,285 of 4.10 M cycles (seen only on spilled quads);
+the read not held off by a replay_start -- 15 of 4.10 M.
+*Timing (not fitted):* as model2c's -- out_* are the M10K's output and one
+LUT (now the select on rd_bank, which is rbank ^ sb(q)) into the fill's
+accept through R677's triangle split.
+*Checks:* test_m2_quad_store (23 checks) and test_m2_raster3d (40) PASS,
+run output identical to the parent's (run once, on R984-R988 together; the
+raster3d bench builds the store at NX 0); -Wall clean; lint_top clean and
+lint_idx's list identical to the parent's; quartus_map --analyze_file
+clean.
