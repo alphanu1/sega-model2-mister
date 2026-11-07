@@ -38721,3 +38721,21 @@ LUT into the fill's accept through R677's triangle split.
 run output identical to the parent's (run once, on R984-R988 together);
 -Wall clean; lint_top clean and lint_idx's list identical to the parent's;
 quartus_map --analyze_file clean.
+
+**R986 (as model2c's R986) -- THE QUAD STORE's RADIX HISTOGRAM AND BUCKET
+BASES IN LUT RAM, ON MAIN. m2_quad_store standalone quartus_map 17.0 (Model
+2 parameters, on R985): 1,662 -> 1,400 ALMs needed (-262), ALUTs 1,584 ->
+1,388, registers 1,261 -> 909; two 16 x 12 MLABs (hist_rtl_0, base_rtl_0).
+Output-identical, every cycle. BRANCH area-main, LOCAL, NOT FITTED.**
+
+*Ported:* model2c's change. R899's four-pass sort (key_hi low) ends at
+R_NEXT before the fifth pass; every pass it runs still starts in R_CNT,
+which clears every count before one is read, and R_SUM writes every base
+before R_SCAT_RUN reads one -- so the reset loop's values were never read.
+*Proved:* the R985 bench, R985's RTL against this, seeds 3-4 x 2,000
+frames, 18.8 M cycles: 0 differing. Planted fault (R_CNT clearing only the
+low eight buckets): 1,134,246 of 1.30 M cycles.
+*Checks:* test_m2_quad_store (23 checks) and test_m2_raster3d (40) PASS,
+run output identical to the parent's (run once, on R984-R988 together);
+-Wall clean; lint_top clean and lint_idx's list identical to the parent's;
+quartus_map --analyze_file clean.

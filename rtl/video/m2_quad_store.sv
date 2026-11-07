@@ -567,8 +567,22 @@ module m2_quad_store #(
   logic [PW-1:0] pass;                // which digit of the key
   logic [IW:0]  ri;
   logic [RADIX:0] hi;
-  logic [IW:0]  hist [NBUCK];
-  logic [IW:0]  base [NBUCK];
+  // R986: THE HISTOGRAM AND THE BUCKET BASES ARE LUT RAM. Sixteen 12-bit
+  // words each, in flops, were 384 registers, two 16:1 reads 12 bits wide
+  // and sixteen write decodes each. Every access is one write and one read a
+  // cycle, at addresses the state names: the histogram is cleared at hi
+  // (R_CNT), counted at digit (R_CNT_RUN) and summed at hi (R_SUM); the
+  // bases are set at hi (R_SUM) and stepped at digit (R_SCAT_RUN). The reads
+  // are asynchronous, as the flops' were, and a word written at an edge is
+  // read from the next cycle, as theirs was. Not cleared in reset: R_CNT
+  // clears every count before a pass reads one, and R_SUM writes every base
+  // before R_SCAT_RUN reads one, so the reset values were never seen.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [IW:0] hist [NBUCK];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [IW:0] base [NBUCK];
+  logic             h_we, b_we;
+  logic [RADIX-1:0] h_wa, b_wa, h_ra;
+  logic [IW:0]      h_wd, b_wd;
+  wire  [IW:0]      hist_q, base_q;
   logic [IW:0]  acc;
   logic         which;                // 0: a -> b, 1: b -> a
   logic [IW-1:0] cur_idx;
@@ -622,6 +636,23 @@ module m2_quad_store #(
   wire [KW-1:0] key_shifted = key_rd >> (RADIX * pass);
   wire [RADIX-1:0] digit = key_shifted[RADIX-1:0];
 
+  // R986: the two arrays' ports, in their own block (no reset)
+  assign hist_q = hist[h_ra];
+  assign base_q = base[digit];
+  always_comb begin
+    h_ra = (rst_st == R_SUM) ? hi[RADIX-1:0] : digit;
+    h_we = (rst_st == R_CNT) || ((rst_st == R_CNT_RUN) && s2);
+    h_wa = (rst_st == R_CNT) ? hi[RADIX-1:0] : digit;
+    h_wd = (rst_st == R_CNT) ? '0 : hist_q + 1'b1;
+    b_we = (rst_st == R_SUM) || ((rst_st == R_SCAT_RUN) && s2);
+    b_wa = (rst_st == R_SUM) ? hi[RADIX-1:0] : digit;
+    b_wd = (rst_st == R_SUM) ? acc : base_q + 1'b1;
+  end
+  always_ff @(posedge clk) begin
+    if (h_we) hist[h_wa] <= h_wd;
+    if (b_we) base[b_wa] <= b_wd;
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       rst_st <= R_IDLE; pass <= '0; ri <= '0; hi <= '0; acc <= '0; odd_q <= 1'b0;
@@ -633,7 +664,7 @@ module m2_quad_store #(
       // the declared range". A constant that has to track a parameter and does
       // not is the same class of bug as the band mask that was still six bits
       // after the band height halved.
-      for (int i = 0; i < int'(NBUCK); i++) begin hist[i] <= '0; base[i] <= '0; end
+      // (R986: hist and base are not cleared here -- see their declaration)
     end else begin
       case (rst_st)
         R_IDLE: if (sort_start) begin
@@ -654,7 +685,7 @@ module m2_quad_store #(
         end
 
         R_CNT: begin                       // clear the histogram
-          hist[hi[RADIX-1:0]] <= '0;
+          // (R986: hist[hi] <= 0 by the array's port)
           if (hi == (RADIX+1)'(NBUCK-1)) begin
             hi <= '0; ri <= '0;
             s0 <= 1'b0; s1 <= 1'b0; s2 <= 1'b0;
@@ -676,15 +707,15 @@ module m2_quad_store #(
           s0 <= more; s1 <= s0; s2 <= s1;
           cur_idx <= idx_rd;
           cidx_d  <= cur_idx;
-          if (s2) hist[digit] <= hist[digit] + 1'b1;
+          // (R986: if (s2) hist[digit] += 1 by the array's port)
           if (!more && !pipe_busy) begin
             hi <= '0; acc <= '0; rst_st <= R_SUM;
           end
         end
 
         R_SUM: begin                       // exclusive prefix sum
-          base[hi[RADIX-1:0]] <= acc;
-          acc <= acc + hist[hi[RADIX-1:0]];
+          // (R986: base[hi] <= acc by the array's port)
+          acc <= acc + hist_q;
           if (hi == (RADIX+1)'(NBUCK-1)) begin
             ri <= '0; s0 <= 1'b0; s1 <= 1'b0; s2 <= 1'b0;
             rst_st <= R_SCAT_RUN;
@@ -702,10 +733,10 @@ module m2_quad_store #(
           cidx_d  <= cur_idx;
           if (s2) begin
             if (which) begin
-              if (wbank) idx_a1[base[digit][IW-1:0]] <= cidx_d; else idx_a0[base[digit][IW-1:0]] <= cidx_d;
+              if (wbank) idx_a1[base_q[IW-1:0]] <= cidx_d; else idx_a0[base_q[IW-1:0]] <= cidx_d;
             end
-            else       idx_b[base[digit][IW-1:0]] <= cidx_d;
-            base[digit] <= base[digit] + 1'b1;
+            else       idx_b[base_q[IW-1:0]] <= cidx_d;
+            // (R986: base[digit] += 1 by the array's port)
           end
           if (!more && !pipe_busy) rst_st <= R_NEXT;
         end
