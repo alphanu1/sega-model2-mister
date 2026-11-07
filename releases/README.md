@@ -109,9 +109,9 @@ below). Please report anything you find, and say which game and where.
 - **A Direct Video timing for 15 kHz** (please test): `15kHz lines` has
   a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
   whole number of video clocks, for Direct Video at 15 kHz through an
-  HDMI-to-VGA DAC or into an HDMI scaler (Morph, RetroTINK). `15kHz DV scan` picks `480i` (the whole
-  picture, the default) or `240p` (for a scaler that will not take the
-  interlace). The other 15 kHz modes are unchanged, and `273/274 (15.7kHz)`
+  HDMI-to-VGA DAC or into an HDMI scaler (Morph, RetroTINK). `15kHz DV
+  scan` picks `480i` (the whole picture, the default) or `240p` (for a
+  scaler that will not take the interlace). The other 15 kHz modes are unchanged, and `273/274 (15.7kHz)`
   is still the default; CRT users need change nothing.
 - **Pilot Kids and Zero Gunner's buttons are named Shoot and Bomb**
   (GitHub #32): copy the new MRAs from `mra/`.
@@ -632,9 +632,9 @@ anything you find.
 - **A Direct Video timing for 15 kHz** (please test): `15kHz lines` has
   a fourth entry, `265 (15.2kHz DV)`, where every line and every pixel is a
   whole number of video clocks, for Direct Video at 15 kHz through an
-  HDMI-to-VGA DAC or into an HDMI scaler (Morph, RetroTINK). `15kHz DV scan` picks `480i` (the whole
-  picture, the default) or `240p` (for a scaler that will not take the
-  interlace). The other 15 kHz modes are unchanged and `273/274 (15.7kHz)`
+  HDMI-to-VGA DAC or into an HDMI scaler (Morph, RetroTINK). `15kHz DV
+  scan` picks `480i` (the whole picture, the default) or `240p` (for a
+  scaler that will not take the interlace). The other 15 kHz modes are unchanged and `273/274 (15.7kHz)`
   is still the default: CRT users need change nothing. (`Model2_20261107`.)
 - **The i960 CPU now rounds the way Intel's chip does.** I checked the core's
   i960 against Intel's own 80960KB manuals. Converting a floating-point number
