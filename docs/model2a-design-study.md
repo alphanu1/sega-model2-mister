@@ -47022,3 +47022,8 @@ phases and 7 at 6, never 496 x rep = 3,100 (the report reproduced). R989:
 repetition 5, width 620, 384 lines, 3,100 DE clocks at all 125 phases. PASS.
 lint_top clean (2A); quartus_map --analyze_file clean.
 *Not yet:* the board with a RetroTINK; then main and model2c.
+*Fitted (2026-11-08):* s1756 39,357 ALM (94%), 101 DSP, 551 M10K; clk_mem
++0.648, clk_sys +0.568, clk_i960 +1.585, hold +0.208, recovery +0.315,
+removal clean; HDMI -0.136 (report-only). md5 044fabee90d1744dbc49492957d25bca,
+staged as releases/Model2A_20261108_DVtest.rbf on this branch only. s1754 a
+Quartus internal error (STA); s1755 clk_sys -0.039, HDMI -0.493.
