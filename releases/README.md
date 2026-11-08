@@ -90,7 +90,27 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261107`)
+### Test build (`Model2A_20261108_DVtest`): Direct Video at 24 kHz
+
+This is a test build, on this branch only. It's `Model2A_20261107` plus one
+change, and everything below still applies.
+
+- **Direct Video at the native 24 kHz now gives a scaler the whole
+  picture.** Over Direct Video, MiSTer tells the scaler (RetroTINK, Morph)
+  how wide the picture is and how many HDMI clocks each pixel takes. This
+  core's pixels are 6.25 clocks wide, which MiSTer can't describe, so the
+  scaler was told 6 (the right edge cut off) or 7 (black added on the
+  right, the picture read as wider). With Direct Video on, the core now
+  describes the picture as 620 pixels at 5 clocks each: exactly the same
+  span. The video on the cable is unchanged, so a DAC or CRT sees no
+  difference, and without Direct Video nothing changes. There is no new
+  OSD setting.
+- The scaler now sees 620 x 384. If it doesn't pick 4:3 by itself, set its
+  aspect ratio to 4:3.
+
+Please report whether the whole picture now shows over Direct Video at
+24 kHz, and which scaler you used.
+
 
 - **Sinden light gun support** (Virtua Cop 2). New OSD setting `Sinden
   border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
@@ -313,7 +333,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261108_DVtest.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -321,7 +341,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261107.rbf` has the md5 `b9c8c5ca8915d99c4210905f7fe5bcfa`. As with
+`Model2A_20261108_DVtest.rbf` has the md5 `044fabee90d1744dbc49492957d25bca`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
