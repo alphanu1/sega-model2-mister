@@ -642,6 +642,7 @@ localparam bit EESAVE2A = 1'b0;
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
 
 wire        forced_scandoubler;
+wire        direct_video;          // R989: hps_io (cfg[10], the bit sys_top switches Direct Video on), clk_sys
 wire  [1:0] buttons;
 wire [127:0] status;
 wire         crt_mra;   // R801: game_id[7], declared ahead of hps_io (assigned below)
@@ -678,6 +679,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.EXT_BUS(),
 	.gamma_bus(),
 	.forced_scandoubler(forced_scandoubler),
+	.direct_video(direct_video),         // R989: Main's direct_video=1
 	.buttons(buttons),
 	.status(status),
 	.status_menumask({13'd0, a2_rally_menu, vc_gun | v2_gun, crt_mra}),   // R862: bit 2 Sega Rally's lines   // R801: the CRT MRA's own Video line; R839: the gun lines
@@ -888,6 +890,29 @@ always @(posedge clk_mem) begin
 		ceo_acc <= ceo_acc + ceo_num;
 		ce_out  <= 1'b0;
 	end
+end
+
+// R989: DIRECT VIDEO AT 24 kHz. Over Direct Video the framework's CE_PIXEL does
+// not touch the picture (the HDMI pixel is every clk_mem), but hps_io's
+// video_calc measures it and MiSTer Main sends the result to the display in
+// the DV1 info frame: width (DE pixels a line) and pixel repetition, which
+// video_calc takes from ONE ce gap at the start of DE. The native 16/100
+// enable has gaps of 6 and 7 (6.25 on average), so the info says 496 at 6 (a
+// scaler reading it takes 2,976 of the 3,100 clocks and cuts ~20 pixels off
+// the right) or at 7 (3,472: ~60 blank pixels added). No whole repetition
+// fits 496 pixels in 3,100 clocks, so in Direct Video only, CE_PIXEL is a
+// steady 1 in 5: 620 at 5 = 3,100 exactly, the 4,100-clock line 820, the
+// frame 347,680. The RGB, sync and DE on the pins are unchanged. hps_io's
+// direct_video is the same config bit sys_top switches Direct Video on, so this is
+// automatic; the HDMI scaler keeps the native 496.
+reg  [2:0] dvo_s;                         // Direct Video on, into clk_mem
+always @(posedge clk_mem) dvo_s <= {dvo_s[1:0], direct_video};
+wire       vid_dvo = dvo_s[2];
+reg  [2:0] ce5_cnt = 3'd0;
+reg        ce_dv5  = 1'b0;
+always @(posedge clk_mem) begin
+	ce5_cnt <= (ce5_cnt >= 3'd4) ? 3'd0 : ce5_cnt + 3'd1;
+	ce_dv5  <= (ce5_cnt == 3'd4);
 end
 
 // Memory comes out of reset on PLL lock and STAYS out, separately from the
@@ -8027,7 +8052,7 @@ m2_scan15 u_scan15 (
 );
 
 assign CLK_VIDEO = clk_mem;   // R564: the video runs on the memory clock
-assign CE_PIXEL  = vid_scan ? ce_out : ce_pix;
+assign CE_PIXEL  = vid_scan ? ce_out : vid_dvo ? ce_dv5 : ce_pix;   // R989
 
 assign VGA_DE = vid_scan ? sc_de : ~(tile_hb | tile_vb);
 assign VGA_HS = vid_scan ? sc_hs : tile_hs;

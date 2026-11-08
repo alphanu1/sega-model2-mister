@@ -46990,3 +46990,35 @@ clk_mem +0.574), hold +0.171, HDMI -0.256; s1752 39,318 ALM, core clocks
 clean (clk_sys +0.261, clk_mem +0.441, clk_i960 +1.875), hold +0.077, HDMI
 -0.101 -- the 2A candidate; s1753 clk_sys -0.142. 2 of 5 fitted seeds close
 the core clocks with the area pass, against 1 of 3 at 98% before it.
+
+**R989 -- DIRECT VIDEO AT 24 kHz: CE_PIXEL A STEADY 1 IN 5, SO THE DV1 INFO
+FRAME DESCRIBES THE PICTURE. BRANCH dv24-2a (off model2a 91b6cbbd), FOR A
+USER TEST BEFORE THE OTHER CORES.**
+
+*Reported:* over Direct Video at the native 24 kHz, a RetroTINK cut the right
+of the picture off (on the board: the "4" of "(C) SEGA 1994" gone in VF2) and
+"thinks it's widescreen". The new 15 kHz DV timing (R983) does not.
+*Believed:* Direct Video sends the core's line as it is, so CE_PIXEL does not
+matter there (true for the pins: sys_top's DV path takes every clk_vid).
+*Now known (sys/hps_io.sv video_calc, Main_MiSTer video.cpp
+spd_config_update):* Main sends the scaler a "DV1" SPD info frame with the
+width (DE pixels a line, counted on CE_PIXEL), the DE start and the pixel
+repetition -- and video_calc takes the repetition from ONE CE_PIXEL gap, the
+one into DE's second pixel. The native enable is 16/100 of clk_mem, gaps
+7,6,6,6: 496 pixels span 3,100 clocks (6.25 each), but the frame says 496 at
+6 (2,976 clocks: ~20 pixels lost on the right) or at 7 (3,472: ~60 pixels of
+blank taken in). No whole repetition fits 496 pixels in 3,100 clocks.
+*Change:* with hps_io's direct_video (cfg[10], the bit sys_top switches DV
+on), and only at 24 kHz (vid_scan keeps ce_out), CE_PIXEL is a steady 1 in 5
+of clk_mem: 620 at 5 = 3,100 exactly; the 4,100-clock line is 820 and the
+frame 347,680, so the phase never moves. RGB, sync and DE are untouched, so
+a DAC sees the same signal; without DV nothing changes (the HDMI scaler
+still reads 496). The scaler now samples 620 a line, each native pixel 1.25
+times on average; its own aspect setting gives 4:3. No OSD line.
+*Established:* sim/video/run_dv24_vcalc.sh -- the core's m2_video_timing into
+the framework's own video_calc, every phase (25 of the native accumulator, 5
+of the 1-in-5 counter, four frames each). Native: repetition 6 at 19 of 25
+phases and 7 at 6, never 496 x rep = 3,100 (the report reproduced). R989:
+repetition 5, width 620, 384 lines, 3,100 DE clocks at all 125 phases. PASS.
+lint_top clean (2A); quartus_map --analyze_file clean.
+*Not yet:* the board with a RetroTINK; then main and model2c.
