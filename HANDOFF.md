@@ -1,5 +1,19 @@
 # Handoff
 
+## 2026-11-08: Direct Video at 24 kHz (R989), 2A test build on branch dv24-2a, pushed
+
+Over Direct Video at 24 kHz a RetroTINK cut off the right of the picture
+and read it as widescreen: Main's DV1 info frame takes the pixel repetition
+from one CE_PIXEL gap (6 or 7) while the native pixel is 6.25 clocks. With
+direct_video on and not at 15 kHz, CE_PIXEL is now a steady 1 in 5 (620 at
+5 = the picture's 3,100 clocks); the pins are unchanged. Bench
+sim/video/run_dv24_vcalc.sh PASS (all 125 phases). s1756: 39,357 ALM, 101
+DSP, core clocks clean, hold +0.208, HDMI -0.136; md5 044fabee. Ben tested it
+on the board ("perfect"). releases/ on dv24-2a ONLY has
+Model2A_20261108_DVtest.rbf for the user to test; main, model2a and model2c
+are untouched. Once confirmed: port R989 to Model 2 and 2C (both have the
+same 16/100 enable) and do a full release.
+
 ## 2026-11-07: Model2_20261107b in releases/ (all three branches, pushed)
 
 Model 2 s1750 (main 0e26f5e2, the area pass R984-R988): md5
