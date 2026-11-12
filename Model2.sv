@@ -147,6 +147,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_DRIVE_FFB
 `define M2_DRIVE_FFB
 `endif
+// R997: M2_I960_RING, the i960's local-register cache as the chip keeps it
+// (2A's R927, i960_top RC_RING): a ring of eight saved frames that goes to
+// memory only when a call finds it full, where MAME's rule sends every frame
+// deeper than four to memory on its call and back on its return. On by
+// default; VERILOG_MACRO "M2_I960_RING=0" builds MAME's rule, the core
+// before R997 exactly.
+`ifndef M2_I960_RING
+`define M2_I960_RING 1
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -2572,7 +2581,9 @@ wire [16:0] cpu_br_sample;   // R721: the bridge's transaction in flight, for te
 // while the CPU is held in reset).
 logic [1:0] vc_fpu_s;
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], VCOP_FPU & is_vcop};
-i960_top #(.VC(VCOP_FPU)) u_i960 (
+// R997: the register ring (M2_I960_RING, above), for every game on the board
+localparam bit I960_RING = (`M2_I960_RING != 0);
+i960_top #(.VC(VCOP_FPU), .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4)) u_i960 (
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),

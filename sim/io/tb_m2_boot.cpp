@@ -195,6 +195,7 @@ static const int FW = 496, FH = 384;
 static std::vector<uint8_t> g_frame(size_t(FW)*FH*3, 0);
 static int g_px = 0, g_py = 0, g_hb_p = 0, g_vb_p = 0;
 static uint64_t g_nonblack = 0, g_frames_done = 0;
+static void (*g_fs_print)(void) = nullptr;   // R997: M2_FRAMESTAT's window summary
 static FILE *g_copro_trace = nullptr;
 static FILE *g_state_trace = nullptr;
 enum { IPRING = 40 };
@@ -434,7 +435,8 @@ int main(int argc, char **argv) {
         for (size_t w = 0x1600000; w < 0x1610000; ++w) mem[w] = 0xffff;
         std::printf("  REVISION A: polygons 13-16 MB copied to word 0x1880000\n");
       }
-      if (std::getenv("M2_VCOP")) {
+      // R997: M2_PROGX does the same for Desert Tank (obj_boot_dt, PROG_EXT)
+      if (std::getenv("M2_VCOP") || std::getenv("M2_PROGX")) {
         for (size_t w = 0; w < 0x20000; ++w) mem[0x1880000 + w] = mem[0x15F0000 + w];
         // and the harness's work RAM (word 0x1600000, which Model2.sv keeps
         // apart at 0x1620000) back to unwritten: the image's tail lies there
@@ -2060,6 +2062,140 @@ int main(int argc, char **argv) {
       ++retired;
       pc_acc_prev = d->dbg_acc;
     }
+    // R997 (2A's R927 M2_FRAMESTAT, the part that measures the register
+    // frames): M2_FRAMESTAT=<file> writes one 'V' line a bench vblank -- the
+    // i960's cycles and instructions, its cycles in every sequencer state
+    // (ts0..ts22, i960_top's tstate_e: T_FRAME is ts13), calls / returns /
+    // flushregs, the register file's own bus transactions and bus cycles
+    // (gsel G_RF), and the frame transfers two models of the register cache
+    // would make on the same call stream: MAME's depth rule (4 frames since
+    // the last flushreg) and the chip's ring of 8. M2_FS_VFROM / M2_FS_VTO
+    // (bench vblanks, inclusive) choose the window the summary at the end
+    // sums. M2_FS_IDLE=<lo>,<hi> (hex IPs): the game's wait loop -- the
+    // cycles after a retire inside it are counted as idle, so the summary
+    // also gives the work's own cycles (the window less the wait). Sampled on
+    // the CPU's own edge.
+    {
+      struct Fs {
+        uint64_t cyc = 0, ins = 0, ts[32] = {}, calls = 0, rets = 0, flush = 0;
+        uint64_t rf_n = 0, rf_c = 0, mame_x = 0, ring_x = 0, vbls = 0, idle = 0, idle_fr = 0;
+        void add(const Fs &o) {
+          idle += o.idle; idle_fr += o.idle_fr;
+          cyc += o.cyc; ins += o.ins; calls += o.calls; rets += o.rets; flush += o.flush;
+          rf_n += o.rf_n; rf_c += o.rf_c; mame_x += o.mame_x; ring_x += o.ring_x; vbls += o.vbls;
+          for (int k = 0; k < 32; ++k) ts[k] += o.ts[k];
+        }
+      };
+      static FILE *fsf = std::getenv("M2_FRAMESTAT") ? std::fopen(std::getenv("M2_FRAMESTAT"), "w") : nullptr;
+      static const uint64_t fs_from = std::getenv("M2_FS_VFROM") ? std::strtoull(std::getenv("M2_FS_VFROM"), nullptr, 10) : 0;
+      static const uint64_t fs_to   = std::getenv("M2_FS_VTO")   ? std::strtoull(std::getenv("M2_FS_VTO"), nullptr, 10) : ~0ull;
+      static Fs fv, fw;                       // this vblank's, the window's
+      static int cp = 0, ack_p = 0; static uint32_t acc_p = 0;
+      static int64_t m_pos = 0, r_n = 0;       // the two models' state: the game's, not the window's
+      static uint32_t id_lo = 1, id_hi = 0; static bool id_init = false, in_idle = false;
+      if (!id_init) { id_init = true;
+        if (const char *e = std::getenv("M2_FS_IDLE")) std::sscanf(e, "%x,%x", &id_lo, &id_hi); }
+      if (fsf) {
+        if (d->clk_cpu && !cp) {
+          ++fv.cyc; ++fv.ts[d->obs_ts & 31];
+          if (in_idle) { ++fv.idle; if ((d->obs_ts & 31) == 13) ++fv.idle_fr; }
+          if ((d->obs_gsel & 7) == 2 && d->obs_bus_req) {   // G_RF
+            ++fv.rf_c;
+            if (d->obs_bus_ack && !ack_p) ++fv.rf_n;
+          }
+          ack_p = ((d->obs_gsel & 7) == 2) && d->obs_bus_ack;
+          if (d->obs_rf_call) {
+            ++fv.calls;
+            if (m_pos >= 4) ++fv.mame_x;
+            ++m_pos;
+            if (r_n >= 8) ++fv.ring_x; else ++r_n;
+          }
+          if (d->obs_rf_ret) {
+            ++fv.rets;
+            --m_pos;
+            if (m_pos >= 4 || m_pos < 0) ++fv.mame_x;
+            if (m_pos < 0) m_pos = 0;
+            if (r_n > 0) --r_n; else ++fv.ring_x;
+          }
+          if (d->obs_rf_flush) {
+            ++fv.flush;
+            fv.mame_x += uint64_t(std::min<int64_t>(m_pos, 4)); m_pos = 0;
+            fv.ring_x += uint64_t(r_n); r_n = 0;
+          }
+          if (d->dbg_acc != acc_p) {
+            fv.ins += uint32_t(d->dbg_acc - acc_p); acc_p = d->dbg_acc;
+            in_idle = (uint32_t(d->dbg_ip) >= id_lo && uint32_t(d->dbg_ip) <= id_hi);
+          }
+        }
+        cp = d->clk_cpu;
+        if (mem_edges >= next_vbl) {
+          fv.vbls = 1;
+          std::fprintf(fsf, "V %llu cyc %llu idle %llu ins %llu calls %llu rets %llu flush %llu rf %llu %llu mame4 %llu ring8 %llu ts",
+                       (unsigned long long)vblanks, (unsigned long long)fv.cyc, (unsigned long long)fv.idle,
+                       (unsigned long long)fv.ins,
+                       (unsigned long long)fv.calls, (unsigned long long)fv.rets, (unsigned long long)fv.flush,
+                       (unsigned long long)fv.rf_n, (unsigned long long)fv.rf_c,
+                       (unsigned long long)fv.mame_x, (unsigned long long)fv.ring_x);
+          for (int k = 0; k < 23; ++k) std::fprintf(fsf, " %llu", (unsigned long long)fv.ts[k]);
+          std::fprintf(fsf, "\n");
+          std::fflush(fsf);
+          if (vblanks >= fs_from && vblanks <= fs_to) fw.add(fv);
+          fv = Fs();
+        }
+      }
+      g_fs_print = [](void) {
+        if (!fsf || !fw.vbls) return;
+        const double c = double(fw.cyc), i = double(fw.ins ? fw.ins : 1), v = double(fw.vbls);
+        std::printf("\n  R997 FRAMESTAT window: vblanks %llu-%llu (%llu)\n",
+                    (unsigned long long)fs_from, (unsigned long long)std::min<uint64_t>(fs_to, fs_from + fw.vbls - 1),
+                    (unsigned long long)fw.vbls);
+        std::printf("    CPU cycles %llu (%.0f a vblank), instructions %llu, CPI %.3f\n",
+                    (unsigned long long)fw.cyc, c / v, (unsigned long long)fw.ins, c / i);
+        std::printf("    T_FRAME %llu cycles: %.2f%% of the window, %.3f of the CPI, %.0f a vblank\n",
+                    (unsigned long long)fw.ts[13], 100.0 * double(fw.ts[13]) / c, double(fw.ts[13]) / i,
+                    double(fw.ts[13]) / v);
+        std::printf("    register-file bus: %llu transactions, %llu cycles (%.2f%% of the window)\n",
+                    (unsigned long long)fw.rf_n, (unsigned long long)fw.rf_c, 100.0 * double(fw.rf_c) / c);
+        std::printf("    calls %llu rets %llu flushreg %llu (%.1f calls a vblank)\n",
+                    (unsigned long long)fw.calls, (unsigned long long)fw.rets, (unsigned long long)fw.flush,
+                    double(fw.calls) / v);
+        if (fw.idle) {
+          const double b = double(fw.cyc - fw.idle);
+          std::printf("    the work (the window less M2_FS_IDLE's wait): %.0f cycles (%.0f a vblank); T_FRAME %.2f%% of it\n",
+                      b, b / v, 100.0 * double(fw.ts[13] - fw.idle_fr) / b);
+        }
+        std::printf("    modelled frame transfers: MAME's rule %llu (%.1f a vblank), ring of 8 %llu (%.2f a vblank)\n",
+                    (unsigned long long)fw.mame_x, double(fw.mame_x) / v,
+                    (unsigned long long)fw.ring_x, double(fw.ring_x) / v);
+      };
+    }
+    // R997: THE RETIRED STREAM SPLIT BY INTERRUPT LEVEL -- M2_FG_OUT=<file>
+    // the instructions retired outside any interrupt handler, M2_IRQ_OUT=<file>
+    // those inside one (the depth counts take_interrupt's type-7 calls up and
+    // T_RET7 entries down), each in +out='s format. A change that moves only
+    // the timing moves where an interrupt lands in the stream, which stops
+    // tools/i960-resync-diff.py at the first interrupt; the foreground stream
+    // has no interrupts in it, so the two builds' foregrounds compare across
+    // their wait loops alone.
+    {
+      static FILE *fgf = std::getenv("M2_FG_OUT") ? std::fopen(std::getenv("M2_FG_OUT"), "w") : nullptr;
+      static FILE *irf = std::getenv("M2_IRQ_OUT") ? std::fopen(std::getenv("M2_IRQ_OUT"), "w") : nullptr;
+      static int cp = 0, ts_p = 0, depth = 0; static uint32_t acc_p = 0;
+      if (fgf || irf) {
+        if (d->clk_cpu && !cp) {
+          const int t = d->obs_ts & 31;
+          if (d->obs_rf_call && d->obs_intr_call) ++depth;
+          if (t == 19 && ts_p != 19 && depth > 0) --depth;   // T_RET7
+          ts_p = t;
+        }
+        cp = d->clk_cpu;
+        if (d->dbg_acc != acc_p) {
+          FILE *f = depth ? irf : fgf;
+          if (f) std::fprintf(f, "%08x\n", (unsigned)d->dbg_ip);
+          acc_p = d->dbg_acc;
+        }
+      }
+    }
     if (mem_edges >= next_vbl) {
       next_vbl += VBL; ++vblanks;
       // R929: M2_INSCHED="vbl:in0:in1;..." (hex in0 / in1) -- cabinet inputs by
@@ -3042,6 +3178,7 @@ int main(int argc, char **argv) {
     std::printf("\n");
   }
 
+  if (g_fs_print) g_fs_print();   // R997
   int fail = 0;
   if (d->iob_win_rd == 0) {
     std::printf("\n  BLOCKED: the i960 never read the block window -- the\n"

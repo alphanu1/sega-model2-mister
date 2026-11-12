@@ -39179,3 +39179,169 @@ three 32 x 24 MLAB arrays where there were three 32 x 8.
 *Left:* the fit -- whether clk_sys's new worst path is the box MLAB read
 (ub_ra -> ub_mem -> uv_cl -> q_tex) or the write side's curve, and the
 board, which should show nothing new.
+
+**R997 -- MODEL 2's i960 STILL USED MAME's DEPTH RULE AFTER R927: EVERY CALL
+FOUR OR MORE FRAMES DEEP SPILLED 16 WORDS AND ITS RETURN READ THEM BACK. 2A's
+REGISTER RING (EIGHT FRAMES, SPILLED ONLY WHEN A CALL FINDS IT FULL) IS
+PORTED TO MAIN AS M2_I960_RING, ON. EVERY MODEL 2 GAME's FOREGROUND STREAM
+EQUALS MAME-RULE MAIN's ACROSS ITS WAIT LOOPS; THE REGISTER FILE's BUS TIME
+GOES TO ZERO. BENCH AND PARSE ONLY; NOT MAPPED, NOT FITTED, NOT ON A
+BOARD.** Branch i960-ring (off main 9cd8685f), 2026-11-12.
+
+*What was believed:* that main's i960 was the same CPU as 2A's / 2C's but
+for the 2A forms. R927 (model2a's study; model2a 1df46cde + c234c262,
+board-proven in s1328, where it cured 2A's slowdowns) changed the register
+cache for 2A only: "The original core (M2_NO_2A) builds with RC_RING = 0".
+Main was branched before that and never took it, so main still ran MAME's
+I960_RCACHE_SIZE rule (four frames by depth since the last flushreg; every
+deeper call writes its 16 words to memory and every matching return reads
+them back).
+
+*Why it matters (READ -- the read-and-measure pass that asked for this
+port; not re-measured here):* Virtua Cop's Beginner van scene (GitHub #28,
+R991, heavy slowdown on the board) makes ~639 spill / fill pairs a game
+frame under MAME's rule, ~3.5-5.5 ms of its 34.8 ms frame; with the 8-frame
+ring ~1.6. R927's own numbers for a spill / fill pair through the bridge:
+~280 bus cycles at the bench's latency (a spill word 10.4 cycles, a fill
+word 7.0).
+
+*THE PORT (main's file set; R927's other parts left out):*
+  * rtl/cpu/i960/i960_regs.sv: RING and CACHE_FRAMES as model2a has them --
+    r_head / r_n / fl_left / fl_call; a call into the slot after the newest,
+    a full ring writing its oldest frame out through the flush path first
+    (S_FLUSH_RD -> S_FLUSH_WR -> S_CALL_SAVE); a return from the newest, or
+    from memory when the ring is empty; flushreg writing every cached frame
+    oldest first; slot / index widths from SW = log2(CACHE_FRAMES). RING = 0
+    is the old code path exactly. Put on main's FLIP-FLOP register file:
+    model2a's file is R866's MLAB banks, which main does not have and which
+    this port does not bring. And c234c262's half of R952: the saved frames'
+    addresses in an MLAB (written in their own block), not "logic" -- with
+    eight frames that is otherwise 208 registers and an eight-way 26-bit
+    mux (2A's map showed the MLAB inference; NOT checked by a map here).
+  * rtl/cpu/i960/i960_top.sv: RC_RING / RC_FRAMES (default 0 / 4), passed
+    to i960_regs. Nothing else: R927's i960_dcache and its bus plumbing
+    (c_req / c_ack / c_rdata) are not ported.
+  * Model2.sv: M2_I960_RING (default 1; "=0" builds MAME's rule, the core
+    before R997) -> i960_top RC_RING 1, RC_FRAMES 8, for every game on the
+    board (Daytona '93 and Rev. A, Desert Tank, Virtua Cop).
+  * sim/i960/i960_regs_ref.h, tb_i960_regs.cpp: R927's reference ring
+    (I960_RING) and the deeper directed runs (depth 20, flushreg 0-12),
+    applied unchanged (main's two files equalled model2a's before R927).
+  * Makefile: test_i960_regs_ring (8 and 4), test_i960_top_ring (VC=1 as
+    Model2.sv builds it, +vc so flushreg is in the mix; ring of 8 and of 4;
+    the lockstep, the interrupt soak, latency 7 and 40), both in `make test`;
+    lint_i960_regs / lint_i960_top also lint the ring build;
+    test_i960_rom_ring; the boot benches follow BOOT_RING (default 1, as
+    Model2.sv; BOOT_RING=0 builds obj_boot_r0 / obj_boot_vc_r0 /
+    obj_boot_dt_r0); obj_boot_dt, Desert Tank's boot (PROG_EXT).
+  * sim/io/m2_boot_harness.sv: RC_RING / RC_FRAMES, PROG_EXT (the program's
+    second half without the rest of VCOP), obs_gsel / obs_rf_call /
+    obs_rf_ret / obs_rf_flush / obs_intr_call.
+  * sim/io/tb_m2_boot.cpp: M2_FRAMESTAT (the frame part of R927's: one V
+    line a vblank -- cycles, instructions, sequencer states, calls / rets /
+    flushregs, the register file's own bus transactions and cycles, and the
+    frame transfers MAME's rule and a ring of 8 would make on the same call
+    stream), M2_FS_VFROM / M2_FS_VTO (a summarised window), M2_FS_IDLE (the
+    game's wait loop, taken out of the window); M2_FG_OUT / M2_IRQ_OUT (the
+    retired stream split by interrupt level); M2_PROGX.
+  Left out, deliberately: i960_dcache (R927 part 2), M2_BOARDCLK / the
+  harness TMR_BOARD, the P-line bus profiler and sim/io/i960_prof.py, R866.
+
+*CHECKS (all run):*
+  * test_i960_regs (MAME's rule) and test_i960_regs_ring (rings of 8 and
+    4 against the reference's I960_RING): PASS -- 737,884 / 660,412 /
+    669,980 checks at the default, 7,413,991 / 6,571,847 / 6,659,303 at
+    RANDOM=200000 SEED=7, 0 mismatches. Four ring mutants (eviction of the
+    newest, an empty ring's return from the cache, r_n unsaturated, flushreg
+    starting one frame early) each FAIL it (208 / 33 / 10 / 1,312
+    mismatches).
+  * Whole-CPU lockstep, MAME's rule: test_i960_top, _irq, _lat (latency 1,
+    3, 7, 100, and 40 with loops), _vc: PASS, unchanged. test_i960_top_ring
+    (VC=1, +vc): ring of 8 -- default, the interrupt soak (+steps=400
+    +strictcov, 23,675 retires), latency 7 (3,000 programs, 92,661 retires),
+    latency 40 with loops (231,200 retires); ring of 4 -- the soak and
+    latency 7: PASS, flushreg retired 39-891 times a run.
+  * The rest of the i960 suite (dec, alu, agu, ldst, lsu, icache,
+    icache_r817, muldiv, fpmul, fpadd, fpdiv, fpsqrt, fpmisc, fpcvt,
+    fptrans): PASS. make lint: clean, the ring builds of i960_regs and
+    i960_top included.
+  * DAYTONA AGAINST MAME (tools/i960-diff.sh's method, a 100 ms MAME 0.289
+    trace, 1,904,397 instructions, 0 collapse markers): obj_i960_rom and
+    obj_i960_rom_ring both match MAME for 1,104,070 instructions and stop at
+    the known DPRAM poll (0x228240, the C++ model's, not a CPU fault); the
+    two streams are byte-identical over all 1,904,404, in 7,870,464 cycles
+    each (the boot never goes four frames deep).
+  * EVERY MODEL 2 GAME THROUGH THE WHOLE-CORE BOOT BENCH, the ring build
+    against BOOT_RING=0 (main before R997, which equals MAME's rule):
+    Daytona '93 30 M instructions (393 vblanks), Daytona Rev. A 30 M (393),
+    Desert Tank 30 M (333; obj_boot_dt), Virtua Cop 60 M (~660). An
+    interrupt lands at a different instruction when only the timing moves,
+    which stops i960-resync-diff.py at the first one, so the streams are
+    split by interrupt level (M2_FG_OUT / M2_IRQ_OUT) and each compared
+    across its wait loops: every foreground and every interrupt stream is
+    IDENTICAL to the end of the shorter one (Desert Tank 117 resyncs, Rev. A
+    163, Virtua Cop 2, Daytona '93 20). Daytona's 20 include 19 of one or
+    two iterations of a 2-3 instruction poll (0x12f0-0x12fc and others),
+    which the tool's MIN_SKIP of 8 refuses; they were accepted only where
+    the side that ran on had been going round that loop for >= 3 iterations
+    and the skip is whole iterations. The modelled MAME-rule transfers equal
+    the RTL's measured ones exactly in every run (Daytona 2,364 x 16 =
+    37,824 register-file transactions, Desert Tank 1,130, Rev. A 1,324,
+    Virtua Cop 6,064), and the ring build makes none, but for Virtua Cop's
+    one boot flushreg (2 cached frames, 32 words).
+  * lint_top: clean at the default, M2_I960_RING=0, M2_NO_VCOP_GUN,
+    M2_VCOP_IO=0 + M2_VCOP_FPU=0 + M2_NO_VCOP_GUN, and M2_NO_LINK +
+    M2_NO_DRIVE_FFB. lint_idx: the same 141 lines as 9cd8685f's (only
+    Model2.sv's line numbers move), none in the i960. quartus_map 17.0
+    --analyze_file on i960_regs.sv, i960_top.sv and Model2.sv: 0 errors (the
+    4 warnings are m2_cab_inputs / m2_raster_fill / pll.qip, as before);
+    the .qsf it touched reverted.
+
+*THE GAIN (run, bench):*
+  bench clocks (i960 24 MHz, 417,246 CPU cycles a vblank), the window less
+  the game's wait loop (M2_FS_IDLE):
+                         RING 0 (MAME's rule)        RING 1 (ring of 8)
+  Virtua Cop, vblanks 150-~660 (R844's frame-sync loop, 0x9124-0x9134):
+    work a vblank        27,123 cycles               23,177 (-14.5%)
+    T_FRAME of the work  15.53%                      1.07%
+    register-file bus    1,900,336 cycles (0.89%     0
+                         of the window; 216,160
+                         transactions, 26.3 frames
+                         a vblank)
+    CPI over the window  4.261                       4.221
+  Daytona '93, vblanks 100-~392 (attract; the wait is the mailbox poll at
+  0x1166c-0x11674):
+    work a vblank        229,570                     228,954 (-0.27%)
+    T_FRAME of the work  0.75%                       0.27%
+    register-file bus    332,941 cycles (0.27%)      0
+  Desert Tank / Rev. A, vblanks 0-332 / 0-392 (whole window): register-file
+  bus 0.11% -> 0, T_FRAME 0.25% -> 0.12% / 0.24% -> 0.12%.
+  The frame-spill share falls to 0 everywhere the bench reaches; what is
+  left in T_FRAME is a call's or return's own cycles (a cached frame is
+  four rows each way). These are small, early-game windows -- Daytona's
+  attract makes 8 MAME-rule transfers a vblank, Virtua Cop's stuck boot 26
+  -- against the pass's ~1,278 (639 pairs) a frame in the van scene, which
+  the ring takes to ~1.6 pairs.
+
+*WHAT IS NOT SETTLED:*
+  1. THE DEPTH. model2a's R970 (the i960 audit against Intel's manuals):
+     PRM C-6 / C-14 give the 80960KB FOUR register sets including the
+     current one -- three saved -- and R970 recommended "a 4-slot ring capped
+     at 3 saved" for main. This port is R927's eight, as asked and as 2A /
+     2C run it on the board. Eight is deeper than the chip: a frame the chip
+     would spill at depth 4 stays here. Only the save areas see it (undefined
+     until flushreg, R927), and the time it saves is more than the chip
+     would. CACHE_FRAMES must be a power of two; a cap of 3 is a small change
+     to the full test (r_n == 3), not done.
+  2. The van scene's numbers are the read-and-measure pass's. This bench
+     cannot reach the scene: the whole-core Virtua Cop bench still sits in
+     R844's 30 Hz frame-sync loop (0x9124 polling 0x98000c) from ~vblank 140
+     and never reaches the attract. Its window is the boot's; the ring's
+     effect on a heavy frame is R927's (Sega Rally: T_FRAME 2.88 -> 0.15 of
+     the CPI) and the pass's count.
+  3. The map and the fit: area (R927 on 2A: i960_regs 1,023 -> 951 ALUTs, +85
+     registers, 0 M10K, with R952's MLAB), the MLAB inference of the frame
+     addresses on main, and timing.
+*What the board should show:* Virtua Cop's Beginner van scene (and every
+heavy 3D frame) slowing down less; Daytona, Desert Tank and Virtua Cop
+otherwise unchanged.

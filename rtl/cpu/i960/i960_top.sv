@@ -50,7 +50,15 @@ module i960_top #(
   // (0x69.8), cpysre (0x6e.2) and cvtzril (0x6c.3), MAME's semantics. Built
   // only with VC = 1, and then live only while vc_en (the game ID says
   // Virtua Cop): with vc_en low they trap exactly as before. Needs RL.
-  parameter bit VC     = 1'b0
+  parameter bit VC     = 1'b0,
+  // R997 (2A's R927): THE LOCAL-REGISTER CACHE AS THE CHIP KEEPS IT
+  // (i960_regs RING): a ring of RC_FRAMES saved frames that writes a frame to
+  // memory only when a call finds it full, instead of MAME's rule (every
+  // frame deeper than four goes out on its call and comes back on its
+  // return). 0 is MAME's rule and its memory stream exactly, as the lockstep
+  // benches compare it.
+  parameter bit          RC_RING   = 1'b0,
+  parameter int unsigned RC_FRAMES = 4
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -453,7 +461,7 @@ module i960_top #(
   logic        rf_mem_req, rf_mem_we;
   logic [31:0] rf_mem_addr, rf_mem_wdata;
 
-  i960_regs u_regs (
+  i960_regs #(.CACHE_FRAMES(RC_FRAMES), .RING(RC_RING)) u_regs (   // R997
     .clk(clk), .rst_n(rst_n),
     .ra1(ra1), .ra2(ra2), .rd1(rd1), .rd2(rd2),
     .wa(wa), .wd(wd), .we(we),

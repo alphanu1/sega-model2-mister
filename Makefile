@@ -274,6 +274,8 @@ lint_m2_raster_fill:
 lint_i960_regs:
 	@echo "== lint i960_regs"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_regs $(REG_RTL)
+	@echo "== lint i960_regs (R997 ring of 8)"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_regs -GRING=1 -GCACHE_FRAMES=8 $(REG_RTL)
 
 lint_i960_agu:
 	@echo "== lint i960_agu"
@@ -340,6 +342,8 @@ lint_i960_fpcvt:
 lint_i960_top:
 	@echo "== lint i960_top"
 	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_top $(TOP_RTL)
+	@echo "== lint i960_top (R997 ring of 8, VC as Model2.sv builds it)"
+	$(VERILATOR) --lint-only $(VFLAGS) --top-module i960_top -GVC=1 -GRC_RING=1 -GRC_FRAMES=8 $(TOP_RTL)
 
 # --------------------------------------------------------------------- synth
 #
@@ -399,8 +403,8 @@ SDR_RTL := rtl/mem/m2_sdram.sv rtl/mem/bw_monitor.sv sim/mem/sdram_model.sv sim/
 RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv sim/mem/m2_romload_harness.sv
 
 
-.PHONY: test test_m2_gunflash test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_span_tex_gc test_m2_span_tex_uvcl test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state test_m2_drive_ffb test_m2_ioz80_drv
-test: test_m2_comm test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_lut0 test_m2_span_tex_mip test_m2_span_tex_uvcl test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_geo test_m2_geo_engine_lut test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_snd_lerp test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_drive_ffb test_m2_ioz80_drv test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_gunflash test_m2_cpu_bridge test_m2_cpu_sdram
+.PHONY: test test_m2_gunflash test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_span_tex_gc test_m2_span_tex_uvcl test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state test_m2_drive_ffb test_m2_ioz80_drv
+test: test_m2_comm test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_lut0 test_m2_span_tex_mip test_m2_span_tex_uvcl test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_geo test_m2_geo_engine_lut test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_snd_lerp test_m2_ioboard test_m2_cab_inputs test_m2_vcop_guns test_m2_vcop_xhair test_m2_drive_ffb test_m2_ioz80_drv test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_ring test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_gunflash test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -433,6 +437,22 @@ test_i960_regs: obj_i960_regs/Vi960_regs
 obj_i960_regs/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
 	$(VBUILD) --top-module i960_regs -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_regs -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
+
+# R997 (2A's R927): the chip's ring of eight frames (RING=1, CACHE_FRAMES=8)
+# against the reference's ring (I960_RING=8), and the ring of four
+test_i960_regs_ring: obj_i960_regs_ring/Vi960_regs obj_i960_regs_ring4/Vi960_regs
+	@echo "== test i960_regs (R997 ring of 8)"
+	./obj_i960_regs_ring/Vi960_regs $(TEST_ARGS)
+	@echo "== test i960_regs (R997 ring of 4)"
+	./obj_i960_regs_ring4/Vi960_regs $(TEST_ARGS)
+
+obj_i960_regs_ring/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_regs -GRING=1 -GCACHE_FRAMES=8 -CFLAGS "-O2 -I../$(TB) -DI960_RING=8" \
+	  --Mdir obj_i960_regs_ring -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
+
+obj_i960_regs_ring4/Vi960_regs: $(REG_RTL) $(TB)/tb_i960_regs.cpp $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_regs -GRING=1 -GCACHE_FRAMES=4 -CFLAGS "-O2 -I../$(TB) -DI960_RING=4" \
+	  --Mdir obj_i960_regs_ring4 -o Vi960_regs $(REG_RTL) $(TB)/tb_i960_regs.cpp
 
 test_i960_agu: obj_i960_agu/Vi960_agu
 	@echo "== test i960_agu"
@@ -785,6 +805,30 @@ obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960
 	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
 	  --Mdir obj_i960_top_vc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
+# R997 (2A's R927): the Model 2 core's i960 as Model2.sv builds it (VC=1)
+# with the chip's register ring (RC_RING=1, RC_FRAMES=8) against the
+# reference's ring (I960_RING=8): the VC lockstep (flushreg in the mix), the
+# interrupt soak and the latency sweep; and a ring of 4, whose full ring's
+# write-out runs often.
+.PHONY: test_i960_top_ring
+test_i960_top_ring: obj_i960_top_ring/Vi960_top obj_i960_top_ring4/Vi960_top
+	@echo "== test i960_top RING (the chip's register ring of 8, R997)"
+	./obj_i960_top_ring/Vi960_top +vc $(TEST_ARGS)
+	./obj_i960_top_ring/Vi960_top +vc +steps=400 +seed=7 +strictcov
+	./obj_i960_top_ring/Vi960_top +vc +noirq +lat=7 +seed=3 +random=3000
+	./obj_i960_top_ring/Vi960_top +vc +noirq +loops +steps=400 +lat=40 +random=300
+	@echo "== test i960_top RING4 (a ring of 4: the full ring's write-out, often)"
+	./obj_i960_top_ring4/Vi960_top +vc +steps=400 +seed=7 +strictcov
+	./obj_i960_top_ring4/Vi960_top +vc +noirq +lat=7 +seed=3 +random=3000
+obj_i960_top_ring/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 -GRC_RING=1 -GRC_FRAMES=8 --public-flat-rw \
+	  -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_RING=8" \
+	  --Mdir obj_i960_top_ring -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+obj_i960_top_ring4/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h $(TB)/i960_regs_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 -GRC_RING=1 -GRC_FRAMES=4 --public-flat-rw \
+	  -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_RING=4" \
+	  --Mdir obj_i960_top_ring4 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
 # Render a whole frame out of m2_video, from the tile/char/palette images our
 # own i960 built. Skips when they are absent.
 test_m2_video_frame: obj_m2_vf/Vm2_video
@@ -1036,6 +1080,18 @@ test_i960_rom: obj_i960_rom/Vi960_rom
 obj_i960_rom/Vi960_rom: $(TOP_RTL) $(TB)/tb_i960_rom.cpp
 	$(VBUILD) --top-module i960_top -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_rom -o Vi960_rom $(TOP_RTL) $(TB)/tb_i960_rom.cpp
+
+# R997: the same run on the i960 as Model2.sv builds it (VC=1, vc_en low for
+# Daytona; the register ring of 8). Its +out= stream is what tools/i960-diff.sh
+# compares against MAME, with this binary in place of obj_i960_rom's.
+.PHONY: test_i960_rom_ring
+test_i960_rom_ring: obj_i960_rom_ring/Vi960_rom
+	@echo "== test i960_rom RING (real Daytona program ROM, the register ring of 8)"
+	@./obj_i960_rom_ring/Vi960_rom $(TEST_ARGS)
+
+obj_i960_rom_ring/Vi960_rom: $(TOP_RTL) $(TB)/tb_i960_rom.cpp
+	$(VBUILD) --top-module i960_top -GVC=1 -GRC_RING=1 -GRC_FRAMES=8 -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_rom_ring -o Vi960_rom $(TOP_RTL) $(TB)/tb_i960_rom.cpp
 
 # -------------------------------------------------- SDRAM at 2:1 (96/48 MHz)
 #
@@ -1326,23 +1382,29 @@ obj_cdc/Vm2_sdram_cdc_harness: sim/mem/m2_sdram_cdc_harness.sv rtl/mem/m2_sdram_
 # share. Found 2026-09-11 (study R204). BOOT_BUFFERRAM=0 is the bench that
 # proves nothing about the mailbox.
 BOOT_BUFFERRAM ?= 1
+# R997: the i960's register ring, as Model2.sv builds it (M2_I960_RING, on:
+# a ring of 8). BOOT_RING=0 builds MAME's rule into obj_boot_r0 / obj_boot_vc_r0
+# (the core before R997), so the two can be run side by side.
+BOOT_RING ?= 1
+BOOT_RSFX := $(if $(filter 0,$(BOOT_RING)),_r0,)
+BOOT_RGEN := -GRC_RING=$(BOOT_RING) -GRC_FRAMES=$(if $(filter 0,$(BOOT_RING)),4,8)
 
-test_m2_boot: obj_boot/Vm2_boot_harness
+test_m2_boot: obj_boot$(BOOT_RSFX)/Vm2_boot_harness
 	@echo "== test m2_boot (the real boot through the real bridge)"
-	@./obj_boot/Vm2_boot_harness $(TEST_ARGS)
+	@./obj_boot$(BOOT_RSFX)/Vm2_boot_harness $(TEST_ARGS)
 
 # NOW CARRIES THE RENDERER TOO. Every isolated test passes and the board still
 # misbehaves, so what this harness is for is the one configuration nothing else
 # builds: the CPU writing tile RAM while m2_video reads it, with character
 # fetches crossing clk_vid/clk_sys through the real m2_char_cdc.
-obj_boot/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
+obj_boot$(BOOT_RSFX)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv rtl/mem/m2_tdp_ram.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
-	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot -o Vm2_boot_harness \
-	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot$(BOOT_RSFX) -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) $(BOOT_RGEN) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv rtl/io/m2_comm.sv rtl/mem/m2_ddr3.sv \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
@@ -1359,7 +1421,7 @@ obj_boot_link/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp 
                            $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
 	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING -Wno-SYNCASYNCNET --Mdir obj_boot_link -o Vm2_boot_harness \
-	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GLINK_EN=1 \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GLINK_EN=1 $(BOOT_RGEN) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv rtl/io/m2_comm.sv rtl/mem/m2_ddr3.sv \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
@@ -1370,14 +1432,33 @@ obj_boot_link/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp 
 # tools/rom_csum.py --out in M2_BOOT_IMAGE, M2_VCOP=1, EPR-17181 in M2_IOFW,
 # and M2_ROMPATH at a directory whose daytona93/ holds only the two program
 # ROMs (the bench insists on them; the image overwrites them).
-obj_boot_vc/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
+obj_boot_vc$(BOOT_RSFX)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
                            rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
                            rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
                            rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
                            $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
 	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
-	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_vc -o Vm2_boot_harness \
-	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GVCOP=1 \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_vc$(BOOT_RSFX) -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GVCOP=1 $(BOOT_RGEN) \
+	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv rtl/io/m2_comm.sv rtl/mem/m2_ddr3.sv \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
+	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
+	  sim/io/tb_m2_boot.cpp
+
+# R997: the same boot as Desert Tank (game ID 2): PROG_EXT=1 (its program's
+# second half at GAME_POLYX, as Virtua Cop's) and nothing else of VCOP; the
+# desert image from tools/rom_csum.py --out in M2_BOOT_IMAGE, M2_PROGX=1, and
+# M2_ROMPATH as for obj_boot_vc (daytona93/ holding the two program ROMs, and
+# epr-14869c.25 or M2_IOFW for the type-1 board's firmware).
+obj_boot_dt$(BOOT_RSFX)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+                           rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL -Wno-PINMISSING --Mdir obj_boot_dt$(BOOT_RSFX) -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GPROG_EXT=1 $(BOOT_RGEN) \
 	  -CFLAGS "-O2" sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv rtl/io/m2_comm.sv rtl/mem/m2_ddr3.sv \
 	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
 	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
@@ -1418,7 +1499,7 @@ BOOTSRC := sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv rtl/io/m2_comm.sv r
            $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv)
 
 obj_boot_rm/Vm2_boot_harness: $(BOOTSRC) sim/io/tb_m2_boot.cpp
-	$(VBUILD) --top-module m2_boot_harness -GREAL_MEM=1 -GBUFFERRAM_EN=1 \
+	$(VBUILD) --top-module m2_boot_harness -GREAL_MEM=1 -GBUFFERRAM_EN=1 $(BOOT_RGEN) \
 	  -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-UNUSEDSIGNAL \
 	  -Wno-SYNCASYNCNET -Wno-PINMISSING \
 	  -Wno-DECLFILENAME --Mdir obj_boot_rm -o Vm2_boot_harness \

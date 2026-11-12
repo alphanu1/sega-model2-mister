@@ -60,9 +60,17 @@ module m2_boot_harness #(
   // board (EPR-17181 in M2_IOFW), the i960's VC forms, and the program's
   // second half at word 0x1880000 (tb_m2_boot copies it there under M2_VCOP).
   parameter bit          VCOP            = 1'b0,
+  // R997: the program's second half at word 0x1880000 without the rest of
+  // VCOP -- Desert Tank (game ID 2: Model2.sv prog_ext, the type-1 I/O board,
+  // the i960's VC forms off). tb_m2_boot copies it there under M2_PROGX.
+  parameter bit          PROG_EXT        = VCOP,
   // R916: the communication board (m2_comm) on its own m2_ddr3, whose DDRAM
   // pins the bench models. 0 is the bench before R916: the window reads 0.
-  parameter bit          LINK_EN         = 1'b0
+  parameter bit          LINK_EN         = 1'b0,
+  // R997: the i960's register ring (i960_top RC_RING / RC_FRAMES; Model2.sv
+  // M2_I960_RING builds 1 / 8, 0 / 4 is MAME's rule)
+  parameter bit          RC_RING         = 1'b0,
+  parameter int unsigned RC_FRAMES       = 4
 ) (
   // R916: the link board's switch (the OSD's Link board), its tick (the
   // vblank the game takes), the DDRAM pins, and what it holds for the report.
@@ -343,6 +351,10 @@ module m2_boot_harness #(
   // the histogram of this signal IS the breakdown. Taken by hierarchical
   // reference so the CPU is not modified to be measured.
   output logic  [4:0] obs_ts,
+  // R997: the i960's bus master and frame operations (tb_m2_boot M2_FRAMESTAT)
+  output logic  [2:0] obs_gsel,
+  output logic        obs_rf_call, obs_rf_ret, obs_rf_flush,
+  output logic        obs_intr_call,     // R997: the call is take_interrupt's (type 7)
   // The scroll registers the renderer used, per layer. The board reports the
   // grass and sky standing still; this says whether the game writes zero.
   output logic [15:0] obs_hscr [4],
@@ -577,7 +589,7 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top #(.VC(VCOP)) u_cpu (
+  i960_top #(.VC(VCOP), .RC_RING(RC_RING), .RC_FRAMES(RC_FRAMES)) u_cpu (   // R997: RC_*
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(bus_rdata), .bus_ack(bus_ack),
@@ -667,7 +679,7 @@ module m2_boot_harness #(
     // The top level's own bases for a game image (Model2.sv GAME_*), so the
     // address arithmetic under test is the arithmetic that runs on the board.
     .base_prog (AW'(32'h0000000)), .base_data (AW'(32'h0020000)),
-    .prog_ext(VCOP), .base_progx(AW'(32'h1880000)),   // R726 / R839
+    .prog_ext(PROG_EXT), .base_progx(AW'(32'h1880000)),   // R726 / R839
     .base_work (AW'(32'h1600000)), .base_board(AW'(32'h1680000)),
     // R257: THE SAME BUFFER BASE THE WALKER USES. This said 0x16d0000 while
     // the geometrizer below says 0x16f0000, so at the desk the CPU wrote the
@@ -1195,6 +1207,11 @@ assign obs_xlat_addr = oc_xlat_addr;
 assign obs_xlat_din  = oc_xlat_din;
 
   assign obs_ts       = u_cpu.ts;
+  assign obs_gsel     = u_cpu.gsel;       // R997
+  assign obs_rf_call  = u_cpu.rf_call;
+  assign obs_rf_ret   = u_cpu.rf_ret;
+  assign obs_rf_flush = u_cpu.rf_flush;
+  assign obs_intr_call = u_cpu.intr_call;
   assign obs_pf_valid = u_cpu.pf_valid;
   assign obs_pf_armed = u_cpu.pf_armed;
   assign obs_pf_match = (u_cpu.pf_ip == u_cpu.ip);
