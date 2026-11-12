@@ -39047,3 +39047,135 @@ constant holds while z_adjust stays 4.0".
   *Left:* quartus_map (the compare constant only), the fit with R992, and
   the board: the van scene's boss whole and the HUD steady, and Daytona's
   attract and race (R776's lists: attract peak 2,368 quads, inside 2,560).
+
+**R995 -- TWO SETUP MISSES ON vcop-head (R992 + R993), BOTH RETIMED WITH NO
+LATENCY AND NO CHANGE TO ANY PIXEL OR CYCLE: span_tex's texture word, mirror
+indexes and box address from registers loaded a stage early; the gamma curve
+stored in the colour translation table as it is written. BENCH AND MAP ONLY;
+NOT FITTED, NOT ON A BOARD.** Branch vcop-head.
+
+*What was believed:* that R992's build (s1767, every clock met at 552/553
+M10K) left the two paths below with room. Six seeds of R992 + R993 (s1769 -
+s1774) gave no clean build: three fitter segfaults, one routing failure, two
+setup misses.
+
+*The paths (run; report_timing -detail summary, worst_paths.txt):*
+  1. s1771, clk_sys (80 MHz, 12.5 ns), -0.108 ns, six endpoints negative:
+     `m2_span_tex|sh_p[6]` -> `m2_texel_cdc:u_texel_x2|q_tex[0][31]__6 ...
+     ram_block1a72~porta_datain_reg2` (data 12.007 ns, skew -0.521). The
+     same RAM from `ubi_p[1][2]`: +0.053. On s1773 the same pair is +0.215.
+     sh_p[6] is res_p: it selects the slot's tex_p (-> mt_bu = 13 +
+     t[3:1] - L -> the 32:1 bit select of tx_u -> mt_fu -> tx_tex) and
+     the slot's ubi_p (-> ub_ra -> m2_raster3d's box MLAB, read
+     asynchronously -> uv_cl's two 13-bit subtracts -> tx_u). Both reach
+     the crossing's payload RAM.
+  2. s1773, clk_mem (100 MHz), -0.072 ns, five endpoints negative:
+     `m2_video|altdpram:xlat_r_rtl_0|...|dataout_reg[2]` -> `m2_video|pr_q[3]`
+     (data 9.578 ns). The xlat MLAB's output register, then m2_palette's
+     gamma: v - bias, a compare, the 17-bit constant multiply (one DSP a
+     channel, "Two Independent 18x18", unregistered) and the saturate.
+
+*The fix, path 1 (m2_span_tex):* mt_t (the slot's 24-bit texture word),
+mt_bu / mt_bv (13 + code - level, from d4a_L) and ub_ra are registers,
+loaded from slot sh_p[PIPE_D-2] on the pipe_en edge that moves the group
+into d4 -- beside d4_L <= d4a_L. And uv_cl's `lo - ti == 1`, `lo - ti == 0`,
+`ti - hm == 1` are `lo == ti + 1`, `lo == ti`, `hm == ti - 1`, the same
+mod 2^13, so the carry chains are on ti (d4_u, a register) beside the MLAB
+read, and the box's bits meet only equality compares. sh_p[6] is no longer
+on any path into the crossing's payload.
+  - WHY THE EARLY COPY IS THE SAME VALUE (read): tex_p and ubi_p are written
+    only by a span load. ld_over writes ~sp_iss, and needs sp_n < 2 and
+    !iss_run: at most one span live, and it is the issuing one, so every
+    valid group in the shadow is sp_iss's; ld_cold writes only from T_IDLE,
+    nothing in flight, and clears the shadow on the same edge. So no load
+    writes the slot of a group anywhere in the shadow, and a group stalled
+    at d4 (pipe_en low) sees no ld_over at all (it needs pipe_en). This is
+    R490's argument, the one R731 and R739 already rest on. ub_ra is the
+    same address on the same cycle, so the asynchronous box read returns
+    the same word whatever the box queue does.
+  - CHECKED, not only argued (run): M2_R995_CHECK (in the RTL, sim only)
+    stops the bench on any cycle a result stands at d4 in T_RUN with mt_t,
+    ub_ra, mt_bu or mt_bv different from the res_p selects they replace.
+    It never fired, on the six span_tex benches or the eight MAME lists.
+
+*The fix, path 2 (m2_palette, which now holds the table):* the screen colour
+is gam(xlat[ch][i], gsel), a function of a 5-bit index and gsel. Each entry
+is stored as {mild curve, MAME's curve, the value} -- worked out from the
+written byte on xlat_clk, one computation shared by the three channels --
+and the read is the same registered MLAB read followed by a 3:1 select on
+gsel (GAMMA 0: the value). gsel is sampled where it was (the cycle after
+the table read, into pr_q), so the colour is the same for every gsel at
+every moment, including the cycle gsel changes. The power-up table is
+ent(pal5bit(i)), computed by the same function. Not in M10K (552/553):
+three 32 x 24 MLAB arrays where there were three 32 x 8.
+  - CYCLE ACCOUNTING, UNCHANGED (read; R570/R582/R605/R648): hcnt moves at a
+    ce edge E; line buffer E+1, rd_qq E+2, pal_addr_q E+3, palette M10K
+    E+4, pal_data_q E+5, the xlat register E+6, pr_q E+7 -- the same stages
+    as before; only pr_q's input logic is smaller. ce_pix is the free-running
+    CE_NUM / CE_DEN = 16 / 100 accumulator on clk_mem in EVERY video mode:
+    native, 15 kHz and DV change ce_out (m2_scan15's output enable) and
+    CE_PIXEL's choice, never m2_video's ce_pix, and m2_scan15 takes
+    m2_video's output on ce_in = ce_pix. So the gaps are 6 or 7 clk_mem
+    cycles everywhere; vid_r captures pr_q at the next pixel's ce_dd, E+8
+    (gap 6) or E+9 (gap 7), after E+7; pr_q holds until the next pixel's
+    E'+7 >= E+13; the flags (vis_q, cat1_q, hb_q, vb_q, hs_q, vs_q) are
+    latched on ce and leave on the same ce_dd as the colour; the downstream
+    sample is the ce_pix after that, 6-7 cycles on. The ce_ddd alternative
+    (a register before the curve, or the curve in two halves, and the
+    capture a cycle later) also fits every gap -- capture E+9 / E+10 against
+    a hold to E+14 -- but costs a cycle in every pixel and leaves the
+    multiply on the read side; not taken.
+  - THE WRITE SIDE NOW CARRIES THE CURVE (read, not measured): xlat_din
+    (Model2.sv's 2:1 of the bridge's oc_xlat_din and the copy engine's
+    xlat_din_r, both registers) -> subtract, compare, constant multiply,
+    saturate, twice -> the MLAB write registers, on clk_sys, 12.5 ns. The
+    same arithmetic was 9.58 ns on the read side including the MLAB's clock
+    to out. The fit's report is the check.
+
+*Proof (run):*
+  - tb_m2_raster3d at Model2.sv's m2_raster3d parameters (SCR 496 x 384,
+    BAND_H 8, NBUF 6, FTB, FB_DDR3, FB_WCOMB, SPLIT_TRI, PXC, PIXSTEP 4,
+    FRB 2, M2COV, UVCL, TXLATE 3, TXNS 4, TXRSP 4, TXK 16, TXLW8, MIP, KW 20,
+    TEXLUT, QNX 512), textured with the real colour path (REALCOL, WINKEY,
+    MIPMODE 3, MIPZ 3, FRAC, FB, TPL 2870; LUT for Virtua Cop), 9ba7115a's
+    m2_span_tex against this one. Every list: the painted-pixel dump's md5,
+    the draw's core cycles, every fetch (y, x, u, v, t, colour) and every
+    texel answer identical, and the whole log identical but for its path:
+      Daytona f1000 518,443 cycles, 173,696 px, 63,673 fetches;
+      f3000 380,017 / 138,821 / 41,631; f5000 372,867 / 143,411 / 47,937;
+      f9000 394,512 / 190,464 / 59,591; Virtua Cop Beginner (beg2) 564,936 /
+      146,406 / 51,447; Expert (runA) 637,466 / 190,464 / 57,277; walk 7509
+      539,012 / 133,765 / 48,727; House of the Dead (issue41 mame2)
+      431,721 / 190,464 / 67,937.
+  - test_m2_span_tex, _ftb, _mip, _lut0, _gc, _uvcl: PASS, each log
+    byte-identical to 9ba7115a's. test_m2_texel_cdc, _cdc16,
+    test_m2_texel_bl_mip, test_m2_raster3d (40 checks): PASS.
+  - uv_cl old against new (Verilator, exhaustive): every ti (4,096) against
+    every lo (2,048) at six fractions, and every ti against every hm --
+    67,108,864 input sets, 0 differ.
+  - test_m2_video_r995 (new; sim/video/m2_video_r995_miter.sv): this
+    m2_video / m2_palette against 9ba7115a's, from git, every output --
+    colour, cat1, hs, vs, hb, vb, field, x, y and the palette address --
+    compared EVERY clk_mem cycle, and the ce_pix-sampled stream hashed,
+    with the table written at random on its own 80 MHz clock (~41k writes a
+    frame pair) and gsel changed every 997 (one run every 13) cycles. Eight
+    runs: ce phase 0 / 37 / 99 / 50 / 7 / 63 / 81 / 25, progressive and
+    interlaced with ntsc_lines, mid_lines, narrow and mid + narrow: 0 fails
+    in 46.8 M cycles, the stream hashes equal, every gsel lit (~650k px
+    each a run). A control with the two curves swapped in the select fails
+    on cycle 37 (670,955 fails a frame).
+  - test_m2_video_xlat (R907, against 2cebd70; its Makefile rule now takes
+    2cebd70's m2_palette too, renamed), test_m2_video_r826, _ovr, _r826b:
+    PASS.
+  - lint_top clean at the default, M2_NO_DEBUG + M2_NO_OVERLAY, M2_NO_TEXLUT,
+    M2_NO_QSPILL, M2_QNX_1024, M2_NO_VCOP_GUN and M2_NO_WINKEY. lint_idx:
+    the same 141 lines as 9ba7115a's.
+  - quartus_map (run, Quartus 17.0, s1773's settings, against s1773's own
+    map): the three tables infer as MLAB, Simple Dual Port 32 x 24
+    (altdpram xlat_[rgb]_rtl_0 under m2_palette); MLAB bits 47,228 -> 48,764;
+    M10K bits 4,691,504 -> 4,691,504; DSP blocks 103 -> 102 ("Two
+    Independent 18x18" 39 -> 38: the curves are worked out once a write,
+    not once a channel); ALMs needed (estimate) 38,950 -> 38,948; 0 errors.
+*Left:* the fit -- whether clk_sys's new worst path is the box MLAB read
+(ub_ra -> ub_mem -> uv_cl -> q_tex) or the write side's curve, and the
+board, which should show nothing new.

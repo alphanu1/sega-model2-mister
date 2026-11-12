@@ -1330,60 +1330,21 @@ module m2_video #(
 
   // COLOUR TRANSLATION TABLE. Model 2's palette runs each 5-bit channel through
   // a RAM the game programs at 0x01810000 before the gamma curve -- see
-  // m2_palette.sv. The game writes it at a stride of 256 words, so only 32
-  // entries per channel are ever read and the whole thing is 96 bytes.
-  //
-  // It POWERS UP holding pal5bit, the expansion this module used before the
-  // translation existed. That is deliberate: a core that has not loaded the
-  // table renders exactly as it did, so adding this cannot regress the picture
-  // on hardware, and loading it can only make the colours more correct.
-  //
-  // Layout: {channel, value}, channel 0 = R, 1 = G, 2 = B.
-  //
-  // R907: ONE 32-ENTRY ARRAY PER CHANNEL, TAGGED MLAB. As a single 96-entry
-  // array read at three addresses at once it was never a RAM at all: the map
-  // put it in 768 flip-flops with three 32:1 read muxes, while R564's notes
-  // (and this comment's own history) took it for an MLAB. One array per read
-  // port is the shape an MLAB can be: written on xlat_clk, read on clk into
-  // the same registers as before. Addresses 96-127 (channel 3) were outside
-  // the old array and wrote nothing; they write nothing here either.
-  (* ramstyle = "MLAB" *) logic [7:0] xlat_r [32];
-  (* ramstyle = "MLAB" *) logic [7:0] xlat_g [32];
-  (* ramstyle = "MLAB" *) logic [7:0] xlat_b [32];
-  initial begin
-    for (int i = 0; i < 32; i++) begin
-      xlat_r[i] = {i[4:0], i[4:2]};      // pal5bit
-      xlat_g[i] = {i[4:0], i[4:2]};
-      xlat_b[i] = {i[4:0], i[4:2]};
-    end
-  end
-  always_ff @(posedge xlat_clk) begin
-    if (xlat_we && xlat_addr[6:5] == 2'd0) xlat_r[xlat_addr[4:0]] <= xlat_din;
-    if (xlat_we && xlat_addr[6:5] == 2'd1) xlat_g[xlat_addr[4:0]] <= xlat_din;
-    if (xlat_we && xlat_addr[6:5] == 2'd2) xlat_b[xlat_addr[4:0]] <= xlat_din;
-  end
-
-  logic [4:0] x_r5, x_g5, x_b5;
-  logic [7:0] x_r, x_g, x_b;
-  // R582: the xlat lookup registered before the gamma curve (s312: pal_data_q
-  // -> xlat -> gamma -> pb_q, -0.278 ns at 100 MHz). See vid_r below for where
-  // the cycle comes from.
-  always_ff @(posedge clk) begin
-    x_r <= xlat_r[x_r5];
-    x_g <= xlat_g[x_g5];
-    x_b <= xlat_b[x_b5];
-  end
-
+  // m2_palette.sv, which holds it (R995: with the curve applied as each entry
+  // is written, so the read side has no arithmetic). The game writes it at a
+  // stride of 256 words, so only 32 entries per channel are ever read.
+  // R564: written on xlat_clk (its writers' clock), read on clk.
   logic [7:0] pr, pg, pb;
   // R572: and the palette's output registered too (s306: pal_data_q -> gamma
   // -> xlat -> vid_b, -0.863 ns). Ready at E+5; vid_r takes it at the next ce
   // edge, E+6 at the earliest (100 / 16 puts ce edges six or seven apart).
+  // R582/R648: E+7 now -- see vid_r below. R995: unchanged.
   logic [7:0] pr_q, pg_q, pb_q;
   always_ff @(posedge clk) begin pr_q <= pr; pg_q <= pg; pb_q <= pb; end
   m2_palette pal (
+    .clk(clk),
     .entry(pal_data_q),                  // R570: registered, see pal_addr
-    .x_r5(x_r5), .x_g5(x_g5), .x_b5(x_b5),
-    .x_r(x_r),   .x_g(x_g),   .x_b(x_b),
+    .xlat_clk(xlat_clk), .xlat_we(xlat_we), .xlat_addr(xlat_addr), .xlat_din(xlat_din),
     .r(pr), .g(pg), .b(pb), .gsel(gamma_sel)   // R630
   );
 
