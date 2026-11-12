@@ -47701,3 +47701,111 @@ clk_mem +0.443, clk_i960 +1.613), hold +0.242, recovery +0.744, HDMI -0.068;
 s1742 clk_sys -0.370. None of R984-R988's named paths was the worst in
 either fit. s1743 is the 2C release candidate (md5
 227d939f8a83f5fe27896763e939930c), not yet on the board.
+
+
+**R990 -- HOUSE OF THE DEAD'S COURTYARD "SHADOW" TRAPEZOID
+(GitHub #41) IS THE MIP RULE, NOT THE LIST: THE COBBLED PATH IS ONE LONG
+RECEDING QUAD, AND R828a's FOOTPRINT LEVEL (SHARP, THE OSD DEFAULT) DRAWS
+MOST OF IT FROM HOTD's DARKER MIP LEVELS WITH A HARD EDGE. GEO_LIST_WIN
+IS NOT IT. BENCH REPRODUCED; FOR NOW HOTD RUNS WITH THE MIP RULE OFF
+(BRANCH hotd-mip-off, OFF model2c).** (Ben, 2C: on the
+outdoor courtyard view down the path a large dark trapezoid, far edge at
+the fence, near edge far forward; the reference video shows only a thin
+dark band at the fence's base; its pieces slide at different speeds as the
+camera moves.)
+
+*What was believed (R935):* the courtyard's dark pieces are MAME's own
+dark-paving polygons (colour base 0x8f00 / 0x8b00) and the board's are
+misplaced -- a list race (GEO_LIST_WIN 4,096 < HOTD's 4.6 K-dword lists),
+strip vertex carry, or a stale matrix. WRONG TURN, KEEP: R935's raster
+bench ran tb_m2_raster3d with M2_R3D_MIPMODE unset, which is mip-mapping
+OFF; the board runs Sharp. The trapezoid is not one of the 0x8f00 pieces.
+
+*MAME (0.289 m2lod, sim/io/mame_m2_hotd_play.lua seed 1, list 1808 at
+48.5 s, the same view):* the trapezoid's outline is polygon 5 -- the path,
+lit paving (h 40d2,004c,1a04,91c0), one quad from (221.5, 211.8) /
+(274.4, 211.8) at the fence to (376.9, 288.7) / (119.0, 288.7), z 375.6 ->
+77.0, under a translucent decal (polygon 11, h 60d2,0060,1a00,0440, 86% of
+its texels 0xF) with the same corners. Both are object 2 (oba 0x93a872,
+list dwords 0x8a-0x9b). HOTD's sheets DO hold mip levels, and they are
+darker: the path's texture (1a04) has mean texel ~11 at level 0, ~6 at
+level 1, ~4.5 at level 2 (MAME's tex0 / tex1 at the R905 mip addresses).
+MAME's level is (-texlod + log2 z^2) >> 7 per pixel, texlod 1829 here,
+blended between L and L+1: so only the far rows go dark. The path's own
+pixels, mean luminance by screen row (MAME's 3D layer):
+  row     212 220 228 236 240 248 256 264 272 280 288
+  MAME      0   8  20  40  59  63  64  65  57  60  66
+  Off      47  63  61  51  65  62  61  63  51  57  62
+  Sharp     0   4  11   7  12  24  24  23  55  57  67   <- the board's default
+  Medium    1   0   3   3   7   5  24  23  20  57  59
+  Smooth    0   0   0   0   3   3   6   6  20  19  24
+(tb_m2_raster3d built in Model2.sv's raster parameters -- FTB, FB_DDR3 +
+FB_WCOMB, SPLIT_TRI, PXC, PIXSTEP 4, FRB 2, M2COV, TXLATE 3, TXNS 4, TXRSP
+4, TXK 16, TXLW8 + -DR3D_LW8, UVCL, MIP, TWO_CLOCKS, TEXLUT + -DR3D_TEXLUT,
+LSB 5, KW 20, RECIP_M10K, UVSH -- on MAME's list 1808 with M2_R3D_FB,
+REALCOL, GAME 17, C2, WINKEY, UVSH, FRAC, MIPZX 3, TPL 2870, SCANMEM.)
+MAME's dark band is rows 212-236 and graded; Sharp's is rows 212-264,
+uniform, and ends in a hard horizontal edge: the board's trapezoid. As the
+camera moves each quad's level changes on its own (one K per quad), which
+is "pieces sliding at different speeds". Off draws no band at all.
+
+*WHY:* m2_raster_fill's K is the quad's screen footprint (R828: max edge
+texels-per-pixel; R828a Sharp: max - (max - min) / 2). For a long quad at
+a grazing angle the major axis is the compressed depth axis, so K is about
+a level above the game's own (texlod) and the whole quad is pushed a level
+deeper than MAME at every depth -- R828a's own note ("the near road went
+2-4 levels blurry") seen on the darkest mip data of any game measured. An
+experiment (mode 1 replaced by the MINOR edge K, bench only, reverted)
+gives rows 212-236 dark and the rest lit, MAME's extent: the error is the
+per-quad constant, not the z term.
+
+*THE LIST (MEASURED, NOT THE CAUSE):* HOTD double-buffers at dwords 0x0000
+/ 0x4000, a list every frame, no jumps, 1,039-4,660 dwords (241 of 577
+lists in 40-50 s exceed 4,096). The game starts rewriting a buffer 17.55 ms
+after that buffer's walk began (one frame + 0.17 ms), sequentially from
+dword 0. The scenery, path and shadows are at the list's head (dword
+0x8a); words past 4,096 are effects. Raising GEO_LIST_WIN to 8,192 is safe
+against every spacing measured (HOTD / Over Rev / STCC 0x4000; VF2 0x2000,
+reach <= 0xa84 after boot) but not needed for this symptom.
+
+*THE FIX THE SILICON POINTS AT (NOT DONE):* the geometry already forms
+MAME's own level for 2A / 2C (R905 / R912: log |dotp| + log coef + log lod,
+in sixteenths) for the 1-bit no-mip flag. Carrying that per-polygon level
+to the fill as K (in place of the footprint, for mz_exact builds) puts the
+level where the game puts it; MAME also blends L and L+1 (Model 2's
+trilinear), which the core does not. Costs bits in the quad store (M10K-
+bound): a study-level decision. Until then Mip-mapping Off on the OSD
+removes the trapezoid (and MAME's thin band with it).
+
+
+*THE DECISION, FOR NOW (Ben, 2026-11-12):* The House of the Dead has the mip
+rule Off whatever the OSD says, the same way Sky Target has point sampling
+(R950). Model2.sv: `mipoff_game` = is_hotd, which forces the menu value to 3
+(Off) at the head of the clk_sys sync, so the fill gets mip_mode 0. Every
+other game keeps the OSD's rule (Sharp by default). Cost: one mux on two
+quasi-static bits. Bench: the Off row above is HOTD's courtyard at this
+setting: no trapezoid. MAME's thin graded band at the fence goes with it.
+
+*WHY THE REAL FIX WILL BE NEEDED LATER (not now, Ben):*
+  * Off is not the silicon. MAME, and the reference video, show a far band
+    on the path. That band is the game's own level choice: the far rows are
+    drawn from the darker levels, and the game's art expects it. With Off,
+    HOTD's far ground is drawn at level 0 everywhere: brighter at distance
+    than the board, and shimmering where level 0 is minified.
+  * The same per-quad footprint rule runs on every other 2A / 2C game. HOTD's
+    mip data is just the darkest measured, so it shows worst. Any game with
+    long grazing quads (roads, floors) is pushed a level deeper than MAME at
+    every depth. R828a's own note ("the near road went 2-4 levels blurry")
+    is the same error seen as blur rather than darkness. Forcing Off game by
+    game does not scale.
+  * What the fix is: carry the game's per-polygon level (the geometry already
+    forms it for R828c's 1-bit flag: log |dotp| + log coef + log lod, R905 /
+    R912) through the quad store to the fill as K, with the per-pixel z
+    term. Then blend L and L+1 as MAME does (Model 2's trilinear), or at
+    least pick per pixel. That is the level's width in bits for every quad in the quad store,
+    which is M10K-bound (2C 549 / 553), so it waits on the quad payload
+    moving to DDR3 (the queued port of Model 1's m1_ddram_payload, about
+    120 M10K back). When that lands, this entry's bench (tb_m2_raster3d on
+    MAME's HOTD list 1808, the luminance-by-row table above) is the
+    acceptance test: the path's rows must come out graded like MAME's, not
+    flat. Then drop mipoff_game.

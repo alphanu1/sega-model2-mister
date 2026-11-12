@@ -1223,8 +1223,13 @@ always_ff @(posedge clk_sys) begin pxk_s1 <= 2'b00; pxk_s2 <= pxk_s1; pxk_s3 <= 
 // R828a: the mip option, into clk_sys where m2_raster_fill runs (three
 // flops). Menu 0 Sharp, 1 Medium, 2 Smooth, 3 Off -> the fill's mip_mode 3,
 // 2, 1, 0. Quasi-static; the fill takes it per quad.
+// R990: a game whose look the mip rule breaks has it Off whatever the menu
+// says, as Sky Target has point sampling (R950): The House of the Dead, whose
+// courtyard path the footprint level draws from its darker mip levels as a
+// hard-edged trapezoid (GitHub #41).
+wire       mipoff_game;   // R990: assigned with the game decode
 reg [1:0] mip_s1, mip_s2, mip_s3;
-always_ff @(posedge clk_sys) begin mip_s1 <= status[53:52]; mip_s2 <= mip_s1; mip_s3 <= mip_s2; end
+always_ff @(posedge clk_sys) begin mip_s1 <= mipoff_game ? 2'd3 : status[53:52]; mip_s2 <= mip_s1; mip_s3 <= mip_s2; end
 wire [1:0] mip_mode = 2'd3 - mip_s3;
 // R650: the renderer's texture and framebuffer counters, read by telemetry 'T'
 // (declared here, ahead of their first use in the telemetry block)
@@ -2951,6 +2956,7 @@ wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
 // (a2_big: 32 MB main_data, 16 MB textures, 32 MB polygons), its 1 MB of copro
 // data in the 2A copro-data slot, Virtua Cop 2's guns on serial channel 2.
 wire is_hotd    = C2 && (game_id[6:0] == 7'h17);
+assign mipoff_game = is_hotd;   // R990: HOTD's mip rule is Off (GitHub #41)
 // R928: 0x1C Over Rev (overrev, Revision A) -- Sega Rally's 2A layout (no
 // copro data: MAME's region is empty), indy500's steering / pedals / shifter
 // (m2_2a_inputs OREV), its luma rows. 0x18-0x1B are skipped: their 2A analog
