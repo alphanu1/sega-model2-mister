@@ -403,10 +403,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261112.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261107.rbf` has the md5 `227d939f8a83f5fe27896763e939930c`. Keep
+`Model2C_20261112.rbf` has the md5 `3b9b10a7d62901a33a55c9d524a59385`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -425,7 +425,18 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### New in this build (`Model2C_20261107`)
+### New in this build (`Model2C_20261112`)
+
+- **House of the Dead's courtyard is fixed.** The big dark shape on the path
+  in front of the mansion, whose pieces slid apart as the camera moved, is
+  gone. It wasn't a shadow: the core was drawing the path from the game's
+  darker, lower-detail texture levels. For now House of the Dead runs with
+  mip-mapping off, the same way Sky Target always uses point sampling, so
+  the `Mip-mapping` setting does nothing in this game. Over Rev and Sega
+  Touring Car Championship still follow the setting. (#41)
+- **Timing closes on every clock, HDMI included.**
+
+### Earlier in `Model2C_20261107`
 
 - **Sinden light gun support** (House of the Dead). New OSD setting `Sinden
   border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
@@ -531,8 +542,6 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
   wheel yet.
 - **Over Rev** slows down a few times in a race, sometimes for a few
   seconds, and a row of dark blue dots can show in the sky along one line.
-- **House of the Dead**'s courtyard shadows can look like they slide apart
-  and meet again.
 - No link play for Over Rev or Sega Touring Car Championship yet.
 
 ## Model 2 core release notes
