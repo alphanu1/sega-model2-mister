@@ -47925,3 +47925,313 @@ Over Rev's walk pace is not measured.
 index and att read registers on clk_sys, R962's note), then the board: 2A
 the Virtua Cop 2 ranking and train unchanged; 2C House of the Dead, Over
 Rev, STCC and Sky Target unchanged in normal scenes.
+
+**R998 -- THE TRANSCENDENTAL SEQUENCER (R845) IS PIPELINED: cosrl 2,199 ->
+738 CYCLES MEAN AT clk_i960, sinrl 2,196 -> 739, tanrl 4,236 -> 1,489,
+atanrl 3,735 -> 1,361 (R845's 20,000 vectors). THE SAME OPERATIONS IN THE SAME
+ORDER, SO THE SAME RESULTS: R845's SEQUENCER AND THIS ONE, SIDE BY SIDE ON
+1.7 M ARGUMENTS, GIVE EQUAL RESULTS AND EQUAL REGISTER-FILE WRITES. 0 M10K.
+BENCH, LINT AND PARSE ONLY; NOT FITTED, NOT ON A BOARD.** Branch
+i960-fptrans (off i960-ring 7c075697), 2026-11-12.
+
+*What was believed:* R845 left the speed alone ("cycles sin / cos ~2,200").
+Virtua Cop's Beginner van scene (R991, GitHub #28) still shows a small
+slowdown with R997's ring on the board; it runs a 2-vblank frame (34.8 ms) and
+makes ~58 cosrl a game frame (READ: the brief's count, not re-measured here),
+~3.2 ms of the frame at 2,199 cycles each. Intel's 80960KB takes 441 cycles
+for cosrl at 25 MHz (17.6 us), 323 for tanrl, 350 for atanrl (READ: the
+brief's citation of the PRM's appendix C, not re-checked against the manual
+here; §1's 441 is the same figure through MAME's table). So the core was
+3-8x slower than the chip in wall-clock time.
+
+*Where R845's cycles went (READ, then measured):* one micro-op at a time --
+FETCH, DEC, RA, RB, ISSUE, three of WAIT -- eight cycles an arithmetic op,
+two or three a JMP / CALL / RET / BR. A cosrl is ~264 arithmetic ops (55 of
+them moves, x - 0) and ~41 control ops; 143 of the 264 need the op straight
+before them (tools/i960_fptrans.py's programs, traced).
+
+*THE PIPELINE (rtl/cpu/i960/i960_fptrans.sv):*
+  * The next ROM word is addressed as the current one leaves decode (the
+    ROM's address is combinational: uw is ucode(fa) a cycle later), so a
+    JMP / CALL / RET is one cycle and a BR two (its register read, then the
+    condition picks fa).
+  * D (decode) uses the register file's one read port every cycle; the last
+    read of an op lands in X, which sets the request. An independent op that
+    reads one register issues a cycle after the one before, two registers
+    two cycles after.
+  * Register 0 is ZERO, a constant never written, so it is never read: the
+    operand is +-0 by its modifier (the four modes of the moves' b).
+  * Results are written to the register file in P2, the unit's done cycle
+    (add and multiply both take two cycles, so P2 is fixed). An operand whose
+    writer is still in X, ISS or P1 waits and is taken from res as it is
+    written, so an op that needs the one before issues three cycles after it
+    -- two of the unit's latency and one of the operand register's. That is
+    the floor without feeding res into the units' inputs, which would put a
+    mux in front of the adder's alignment stage (the clk_i960 critical path,
+    R845 item 6). Not done.
+  * Three hazard rules: no read of a register being written this cycle (the
+    M10K would return the old word -- so its read-during-write mode never
+    matters); no capture from res, and no latch without a read, in the cycle
+    X holds the operands of the op before (those wait a cycle and read the
+    file); and no op leaves D while another write to its destination is in
+    flight, so a capture always takes the one writer before it. MEASURED:
+    the last never binds on these programs (0 cycles where it alone held an
+    op, 3,000 vectors) -- it is there for any other program the assembler
+    could produce.
+  * DIV is not piped: D stops from the moment a DIV leaves until the
+    divider's done (58 cycles; 2 a tanrl, ~3.6 an atanrl).
+  * i960_top is unchanged: the same ports, opa / opb still registers into
+    u_a / u_b, sub now a register (it was decoded from `unit`), sel_* from
+    P2. END's result is on res with fin, and act drops the cycle after, as
+    before.
+  * Tried and dropped, KEEP: capturing from res a cycle late (the unit's y
+    holds until its next result) where X had held the operands. It fired 48
+    times a vector and saved 7 cycles of ~990: the op was almost always
+    still waiting for its other operand. Not worth its state bit.
+
+*THE GAIN (RUN, bench cycles at clk_i960, from start to fin):*
+
+       form    R845 (20k set)   R998 (20k set)   R998 A/B mix   Intel @25 MHz   R998 @40 MHz
+       sinrl   2,196 / 2,377    739 / 801        695 / 801      --              18.5 us
+       cosrl   2,199 / 2,374    738 / 799        703 / 799      441 = 17.6 us   18.5 us
+       tanrl   4,236 / 4,370    1,489 / 1,537    1,403 / 1,537  323 = 12.9 us   37.2 us
+       atanrl  3,735 / 4,238    1,361 / 1,563    1,190 / 1,583  350 = 14.0 us   34.0 us
+       (mean / max; "20k set": R845's 20,000 vectors of test_i960_fptrans,
+       seed 7; "A/B mix": tb_i960_fptrans_ab's arguments, 1.7 M vectors,
+       where R845's own means are 2,068 / 2,095 / 3,990 / 3,300)
+
+  cosrl is now 1.05x Intel's wall-clock time (it was 3.1x); tanrl 2.9x (was
+  8.2x), atanrl 2.4x (was 6.7x). Every form is ~2.8-3.0x faster than R845. At ~58 cosrl a frame the scene's cosine
+  time goes from ~3.2 ms to ~1.07 ms of the 34.8 ms frame (INFERRED from the
+  bench's cycles and the brief's count). What is left is the programs':
+  double-double with Dekker's products is ~264 IEEE ops a cosrl, and tanrl
+  runs both kernels and a double-double divide. Shortening them changes
+  operations, so possibly results; bit-exactness was the constraint here.
+
+*THE PROOF (all RUN):*
+  * tb_i960_fptrans_ab (new: make test_i960_fptrans_ab): R845's sequencer
+    exactly as 7c075697 had it (sim/i960/i960_fptrans_r845.sv) beside the
+    new one, each on its own adder, multiplier and divider, started together
+    back to back with 0-2 idle cycles between. For every instruction: the
+    result bit for bit (NaNs too) and the whole sequence of register-file
+    writes, address and data, equal -- so the 52 working registers, which
+    carry from one instruction to the next, stay equal. Arguments: uniform
+    +-4 / +-1e4 / +-1e6, the whole exponent range, raw 64-bit patterns,
+    specials (+-0, +-min / max subnormal, random subnormals, +-inf, quiet /
+    signalling / negative NaNs and payloads, +-max, tiny, huge, pi/4 and its
+    neighbours, 2^19 pi/2), k pi/2 +- 16 ulp for k to 2^20 and 2^30, and for
+    atan2 every pairing plus |y| = |x| +- 1 ulp and y = x * {0.2, 7/16,
+    11/16, 1} +- 4 ulp. Seed 1 200,000, seeds 2 / 3 / 4 500,000 each:
+    1,700,000 vectors, 0 result and 0 write-sequence mismatches.
+  * Its assertions (Verilator only), every cycle of those runs: P2 always
+    has its unit's done; D never latches while X holds; never two writes in
+    a cycle; a pending operand's writer never reaches P2 with X full.
+  * Mutants against it: the capture made while X holds (the assertion
+    stops it), DIV's write address taken while the divider is busy (142 /
+    1,302 mismatches in 3,000), a read of the register being written (2,662
+    / 2,806), BR's hazard check and the P1 hazard each dropped (hang): all
+    caught. Three survive, each explained: the WAW stall (never binds, as
+    above), the immediate's sign (no ZERO operand in the ROM carries a
+    modifier) and a PEND-to-NEW retry (unreachable -- removed).
+  * test_i960_fptrans (the RTL against the interpreter): R845's 20,000
+    vectors plus 3,933 edges (tools/i960_fptrans.py edge_args: the specials
+    above, k pi/2 +- 2 ulp to k = 2^30, atan2's pairings and breakpoints):
+    0 mismatches; FPTRANS_N=200000: 203,933 vectors, 0 mismatches.
+  * test_i960_top_vc and test_i960_top_ring (the whole CPU, VC=1, +vc,
+    against the reference with host libm): PASS, 51 transcendentals retired
+    in the default run, one-ulp differences taken 0. The rest of the i960
+    suite (dec, alu, regs, regs_ring, agu, ldst, lsu, icache, icache_r817,
+    muldiv, fpmul, fpadd, fpdiv, fpsqrt, fpmisc, fpcvt, top, top_irq,
+    top_lat): PASS. test_i960_rom / _rom_ring: SKIP here (no unpacked
+    Daytona ROMs on this path; neither builds the sequencer). make lint:
+    clean, lint_top included. lint_idx: the same 141 lines as 7c075697's,
+    none in i960_fptrans.
+  * tb_i960_top.cpp's stall dump printed the sequencer's `upc`; it prints
+    `pc` now (and TB_TRDBG's LDX / LDY print keys on S_RUN, not S_DEC).
+
+*WRONG IN R845's REFERENCE, KEEP:* tools/i960_fptrans.py flushed a
+subnormal operand to a signed zero. i960_fpadd takes a subnormal as a zero
+significand that is not "a zero", so with the other operand +-0 the sum is
+an exact cancellation: +0 whatever the signs. Through LDX (x - 0) that makes
+sinrl / tanrl of a NEGATIVE subnormal +0 on the RTL -- R845's and this one's
+-- where the interpreter said -0 (MAME's libm gives the subnormal itself).
+R845's vectors had no subnormal argument, so it never showed. The
+interpreter now flushes add / subtract operands to +0, as the adder does,
+and asserts that no subnormal reaches a MUL or DIV (the RTL multiplier and
+divider do not handle one; every operand they get is a unit result or a
+constant). The ROM it generates is byte-identical. The RTL's +0 is left as
+it is: changing it is a change of result, and nothing measured puts a
+subnormal argument in a game.
+
+*AREA:* 0 M10K added -- the same 128 x 64 register file and 512 x 32 ROM.
+Yosys 0.66 synth_intel_alm on the module alone, as a RELATIVE measure only
+(it put R845's at 250 LUTs where Quartus measured 172 ALUTs): R845 250
+LUTs / 201 FF, R998 488 / 251 (587 before the operand registers were
+written as load / clear / source). QUARTUS 17.0 quartus_map of the
+module alone (Cyclone V 5CSEBA6U23I7, Aggressive Area, virtual pins; RUN):
+
+       build                    ALMs est.   ALUTs   registers   block bits
+       R845 (7c075697)          278         166     201         24,576
+       R998 (this)              413         287     251         24,576
+
+  So +135 ALM estimated, +121 ALUT, +50 registers, the same block memory:
+  both infer the identical altsyncram_6it1 (the register file) and
+  altsyncram_21d1 (the ROM). R845's in-core entity was 172 ALUT / 201
+  registers (R845 item 5), so the standalone figure tracks the core's. The
+  whole-core number is a map of Model2 (not run: no map or fit was asked
+  for here).
+
+*TIMING (READ, not fitted):* the units' inputs are still registers (opa /
+opb), so the adder path R845 named is untouched. New paths: the ROM's
+output -> decode -> the hazard compares (7-bit, against three places) ->
+the leave decision -> fa -> the ROM's address, and the register file's q ->
+the BR condition -> fa; ~8-9 LUT levels between two M10Ks, against a 25 ns
+period. Res -> the operand mux -> opa is three or four levels. Only a fit
+says.
+
+*Quartus parse (RUN):* quartus_map 17.0 --analyze_file on i960_fptrans.sv,
+i960_top.sv and Model2.sv: 0 errors (the 4 warnings are pll.qip,
+m2_cab_inputs and m2_raster_fill, as R997 had them); the .qsf it touched
+reverted.
+
+*NOT SETTLED:* the whole-core map's ALM figure and a fit
+(clk_i960's slack, +0.4 to +1.5 ns in recent fits); the board (does the van
+scene's slowdown go?). If it does not, the next costs in the scene are not
+the cosines.
+
+**R998 ON THE 2C BUILD: THE PIPELINE CARRIES R935's LOG PROGRAM -- logrl
+3,376 -> 1,202 CYCLES MEAN AT clk_i960, AND THE OTHER FOUR AS ON 2A. R935's
+SEQUENCER AND THIS ONE, SIDE BY SIDE ON 1.7 M ARGUMENTS (340 K OF THEM
+logrl), GIVE EQUAL RESULTS AND EQUAL REGISTER-FILE WRITES. 0 M10K. BENCH AND
+LINT ONLY; NOT PARSED BY QUARTUS, NOT FITTED, NOT ON A BOARD.** Branch
+quads-2c-ft (off quads-2c 3792f4da), 2026-11-12.
+
+*What differs from main / 2A:* 2C's i960_fptrans.sv is not main's. It has
+R935's LOG parameter (1 on the 2C build: i960_top's C2), the lg input
+(entry 4, logrl), the second program (i960_fptrans_rom_log.svh, 465 words,
+75 constants, the Horner steps through HSTEP) and two more loads, LDE (op 11:
+x's unbiased exponent as a double, (MAGIC + e - 1023) - MAGIC on the adder)
+and LDM (op 12: x's mantissa in [1, 2), - 0). So R998 could not be taken as a
+file; it was merged by hand.
+
+*THE MERGE (rtl/cpu/i960/i960_fptrans.sv):* R998's pipeline unchanged, plus
+  * LOG, lg, the second ROM and uconst_log exactly as R935 had them (the
+    ROM function chosen by a generate, the register file's initial values by
+    LOG);
+  * fa at idle: 4 when LOG and lg, else the entry (lg overrides any entry);
+  * LDE / LDM are loads, as LDX / LDY are: is_ld includes them (LOG only),
+    so they read no register and leave D straight to the adder as SUB. a is
+    x_ld -- x, or for LDE x_lde, for LDM x_ldm (R935's wiring, unchanged) --
+    through the load source a_src 2 with no modifier; b is +0, or for LDE
+    MAGIC (b_mg puts MAGIC's bits on the cleared operand). With LOG = 0
+    is_lde / is_ldm are 0, everything they touch folds away, and the module
+    is R998's as main and 2A have it (the LOG = 0 A/B run below).
+  * Read here, not assumed: register 0 is ZERO in the LOG program too
+    (uconst_log(0) = 0, never written), which R998's "never read register 0"
+    rests on; and the LDE / LDM words carry a = b = 0 (0xbb600000,
+    0xcbc00000).
+
+*THE GAIN (RUN, bench cycles at clk_i960, start to fin, mean / max):*
+
+       form    R935 (25k set)   R998 2C (25k set)   A/B mix, R935 -> R998 2C
+       sinrl   2,294 / 2,473    753 / 813           2,154 -> 707 (x3.05)
+       cosrl   2,294 / 2,470    751 / 811           2,187 -> 716 (x3.05)
+       tanrl   4,427 / 4,562    1,515 / 1,562       4,170 -> 1,428 (x2.92)
+       atanrl  3,851 / 4,377    1,376 / 1,587       3,406 -> 1,202 (x2.83)
+       logrl   3,376 / 3,605    1,202 / 1,303       2,907 -> 1,042 (x2.79)
+       ("25k set": test_i960_fptrans_log's 25,000 vectors, seed 7, without
+       the edges -- R935's own logrl figure, 3,376 / 3,605, is reproduced;
+       "A/B mix": tb_i960_fptrans_ab_log's arguments over the 1.7 M below)
+
+  The four trig forms are 1-2% slower than 2A's R998 (sinrl 753 against
+  739) for R935's reason: the 2C program's Horner steps are CALLs to HSTEP.
+  In the whole-CPU lockstep (test_i960_top_c2, 20,000 random programs,
+  transcendental-heavy: ~3,500 trig forms and ~950 logrl a run) the total
+  cycles fall from 28,692,258 to 20,711,008 (seed 1) and 28,438,629 to
+  20,638,674 (seed 2) with the same retires and the same checks -- the
+  programs, not a game; nothing here measures House of the Dead.
+
+*THE PROOF (all RUN):*
+  * tb_i960_fptrans_ab against R935's sequencer, frozen as
+    sim/i960/i960_fptrans_r935.sv (3792f4da's file, the module renamed; with
+    LOG = 0 it is R845's exactly, so on this branch it replaces R998's
+    i960_fptrans_r845.sv). The harness takes LOG and lg; built with
+    -DFPTRANS_LOG (make test_i960_fptrans_ab_log, LOG = 1) a fifth of the
+    vectors are logrl with a random entry that lg must override. logrl's x:
+    0-4096 (HOTD's range), 1 +- up to 2^-1 and 1 +- 8 ulp, every 2^k +- 3 ulp,
+    the halving threshold 1.5 x 2^k +- 4 ulp, every exponent, the largest
+    double and its neighbours, negatives (-0 and -NaN among them), the
+    specials (+-0, subnormals, +-inf, quiet / signalling / negative NaNs and
+    payloads), raw bits; y: 1, +-100, every exponent down to subnormal, the
+    same specials (y = +-0, +-inf, NaN) and raw bits. LOG = 1: seed 1
+    200,000, seeds 2 / 3 / 4 500,000 each -- 1,700,000 vectors (340,656
+    logrl), 0 result and 0 write-sequence mismatches. LOG = 0 (make
+    test_i960_fptrans_ab, the 2A program against R845's sequencer): seed 1
+    200,000, 0 and 0; means sin 695 / cos 704 / tan 1,404 / atan 1,188
+    (R998 on main, over its 1.7 M: 695 / 703 / 1,403 / 1,190).
+  * R998's assertions (Verilator only) held every cycle of those runs.
+  * Mutants (3,000 vectors each, LOG = 1, seed 1): R998's five -- a capture
+    while X holds (the assertion stops it), DIV's write address while the
+    divider is busy (147 / 1,568), a read of a register being written (wrong
+    result, then a hang), BR's hazard check dropped (wrong result, hang),
+    the P1 hazard dropped (2,211 / 2,785) -- and the LOG ones: LDE's b 0
+    instead of MAGIC (425 / 465), LDE's bias 1022 (418 / 465), LDM as LDX
+    (357 / 398), LDE / LDM swapped (437 / 465), LDE adding (425 / 465),
+    LDE's a from the register file's q (437 / 465), lg ignored (536 / 579):
+    all caught. Two survive, each explained: the WAW stall (never binds, as
+    R998 found on the 2A program -- this program neither), and LDE / LDM
+    dropped from is_ld, which is the same circuit on this ROM: their words
+    have a = b = ZERO, so need_a / need_b are 0 either way and they still
+    leave by the load path. is_ld keeps them, so the rule does not rest on
+    the encoding.
+  * test_i960_fptrans_log (the RTL against the interpreter, LOG): 25,000
+    vectors plus 7,238 edges (R998's 3,933 and logrl's 3,305: x = +-0,
+    negatives, +-inf, NaNs, subnormals, 1 and 1 +- 1..4 ulp, 1 +- 2^-k,
+    every power of 2 (every eighth with its neighbours), 1.5 x 2^k +- 2 ulp,
+    huge; at y = 1, and a set of 31 x against y = 1, +-0, +-inf, NaNs, a
+    subnormal, -3, huge, tiny): 32,238 vectors, 0 mismatches, logrl mean
+    1,188 / max 1,303 over its 8,305. R935's sequencer on the same file:
+    0 mismatches too (the edges are not new failures of the old one).
+    FPTRANS_LOG_N=250000: 257,238 vectors (53,305 logrl), 0 mismatches.
+    test_i960_fptrans (the 2A program, LOG = 0): 20,000 plus R998's 3,933
+    edges, 0 mismatches, sin 739 / cos 739 / tan 1,491 / atan 1,280, R998's
+    figures.
+  * tools/i960_fptrans.py: R998's subnormal fix taken (add / subtract
+    operands flush to +0, MUL / DIV assert no subnormal -- it holds over
+    every vector above, logrl's included), its edge_args() taken and
+    extended with logrl's (log = True only). Both ROMs it generates are
+    byte-identical to the checked-in .svh files.
+  * The whole CPU: test_i960_top_c2 (VC + FR + F2A + C2: logrl in the mix)
+    PASS by default (9 logrl), and +random=20000 seeds 1 and 2: 0
+    mismatches, 976 and 909 logrl, retire counts and checks equal to
+    3792f4da's own runs (and the 3 one-ulp libm differences seed 2 takes,
+    the same there). The forced-off check: +c2 on obj_i960_top_vc (C2 = 0)
+    FAILS (module trap at the first logrl), as it must. test_i960_top,
+    _irq, _lat, _vc, _fx, _fr, _ring, _dc: PASS. dec, alu, regs, regs_ring,
+    regs_miter, agu, ldst, lsu, icache, icache_r817, muldiv, fpmul, fpadd,
+    fpdiv, fprem, fpsqrt, fpmisc, fpcvt, dcache: PASS; alu_carrybug its
+    expected divergence; test_i960_rom SKIP (no Daytona ROMs on this path).
+  * Lint: make lint with LINT_DEFS="-DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1"
+    clean (lint_top: no syntax error, port mismatch or undriven signal);
+    lint_top's raw output against 3792f4da's under the same defines: the
+    same 1,020 warnings and 11 errors (sys/hps_io's PROCASSWIRE), line
+    numbers dropped, none in i960_fptrans. i960_fptrans alone at LOG = 0 and
+    1, and i960_top at VC / FR / F2A / C2 = 1, -Wall: clean. lint_idx (2C
+    defines): 98 lines, identical to 3792f4da's, none in i960_fptrans.
+  * tb_i960_top.cpp's stall dump prints `pc`, and TB_TRDBG keys on S_RUN, as
+    on main.
+
+*AREA (READ, not measured here):* no new array -- the same 128 x 64
+register file and the same two ROM functions, one of them chosen by LOG.
+The logic added over R998 is LDE / LDM's decode, a 64-bit mux in front of
+the load source and MAGIC's bits on b (R935 had the 12-bit subtract and the
+64-bit add already). R998's +135 ALM (quartus_map of main's module alone) is
+the nearest figure; this module was not mapped.
+
+*Quartus parse: NOT RUN.* Three quartus_fit were running each time it was
+checked (the rule is fewer than two), so no --analyze_file was made; the
+.qsf is untouched. Verilator's -Wall lint above is the only parse.
+
+*NOT SETTLED:* a map, a fit (clk_i960's slack: the new paths are R998's,
+plus x_ld's mux on a path from x, a register in i960_top), the board: House
+of the Dead from the stone wall (logrl) and the 2C games' trig forms.

@@ -857,28 +857,57 @@ obj_i960_top/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_to
 	  --Mdir obj_i960_top -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # R845: the transcendental sequencer on the RTL units against its microcode's
-# interpreter (tools/i960_fptrans.py), 20,000 vectors.
+# interpreter (tools/i960_fptrans.py), 20,000 vectors; R998 adds the
+# interpreter's edge vectors. FPTRANS_N=200000 is the long sweep.
+FPTRANS_N ?= 20000
 .PHONY: test_i960_fptrans
 test_i960_fptrans: obj_i960_fptrans/Vi960_fptrans_harness
-	@echo "== test i960_fptrans (sinrl cosrl tanrl atanrl microcode, R845)"
-	@python3 -I tools/i960_fptrans.py --vec obj_i960_fptrans/vec.txt 20000
+	@echo "== test i960_fptrans (sinrl cosrl tanrl atanrl microcode, R845 / R998)"
+	@python3 -I tools/i960_fptrans.py --vec obj_i960_fptrans/vec.txt $(FPTRANS_N)
 	@./obj_i960_fptrans/Vi960_fptrans_harness +vec=obj_i960_fptrans/vec.txt
 obj_i960_fptrans/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fptrans_rom.svh $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
                                         sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 	$(VBUILD) --top-module i960_fptrans_harness -CFLAGS "-O2" --Mdir obj_i960_fptrans -o Vi960_fptrans_harness \
 	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 # R935: the 2C build's program (LOG: logrl, House of the Dead), 25,000 vectors
-# -- every fifth one logrl, the other four as above.
+# -- every fifth one logrl, the other four as above -- and R998's edges plus
+# logrl's. FPTRANS_LOG_N=250000 is the long sweep.
+FPTRANS_LOG_N ?= 25000
 .PHONY: test_i960_fptrans_log
 test_i960_fptrans_log: obj_i960_fptrans_log/Vi960_fptrans_harness
-	@echo "== test i960_fptrans LOG (the 2C program: + logrl, R935)"
-	@python3 -I tools/i960_fptrans.py --log --vec obj_i960_fptrans_log/vec.txt 25000
+	@echo "== test i960_fptrans LOG (the 2C program: + logrl, R935 / R998)"
+	@python3 -I tools/i960_fptrans.py --log --vec obj_i960_fptrans_log/vec.txt $(FPTRANS_LOG_N)
 	@./obj_i960_fptrans_log/Vi960_fptrans_harness +vec=obj_i960_fptrans_log/vec.txt
 obj_i960_fptrans_log/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
                                         sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 	$(VBUILD) --top-module i960_fptrans_harness -GLOG=1 -CFLAGS "-O2" --Mdir obj_i960_fptrans_log -o Vi960_fptrans_harness \
 	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 # The ROM is generated: tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
+
+# R998: the pipelined sequencer against the one before it side by side: the
+# same result and the same register-file writes for every instruction, on
+# arguments drawn by the bench (specials, subnormals, NaN payloads, k pi/2,
+# atan2's breakpoints; logrl's edges in _log). The reference on 2C is R935's
+# sequencer (sim/i960/i960_fptrans_r935.sv, model2c 3792f4da): LOG = 0 is
+# R845's exactly (the 2A program), LOG = 1 the 2C build's with logrl.
+# FPTRANS_AB_N vectors, seed FPTRANS_AB_SEED.
+FPTRANS_AB_N ?= 200000
+FPTRANS_AB_SEED ?= 1
+FPTRANS_AB_SRC := $(I960)/i960_fptrans.sv sim/i960/i960_fptrans_r935.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
+                  sim/i960/i960_fptrans_ab_harness.sv $(TB)/tb_i960_fptrans_ab.cpp
+.PHONY: test_i960_fptrans_ab test_i960_fptrans_ab_log
+test_i960_fptrans_ab: obj_i960_fptrans_ab/Vi960_fptrans_ab_harness
+	@echo "== test i960_fptrans against R845's sequencer, $(FPTRANS_AB_N) vectors (R998)"
+	@./obj_i960_fptrans_ab/Vi960_fptrans_ab_harness +n=$(FPTRANS_AB_N) +seed=$(FPTRANS_AB_SEED)
+obj_i960_fptrans_ab/Vi960_fptrans_ab_harness: $(FPTRANS_AB_SRC) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh
+	$(VBUILD) --top-module i960_fptrans_ab_harness -CFLAGS "-O2" --Mdir obj_i960_fptrans_ab -o Vi960_fptrans_ab_harness \
+	  $(FPTRANS_AB_SRC)
+test_i960_fptrans_ab_log: obj_i960_fptrans_ab_log/Vi960_fptrans_ab_harness
+	@echo "== test i960_fptrans LOG against R935's sequencer, $(FPTRANS_AB_N) vectors (R998 on 2C)"
+	@./obj_i960_fptrans_ab_log/Vi960_fptrans_ab_harness +n=$(FPTRANS_AB_N) +seed=$(FPTRANS_AB_SEED)
+obj_i960_fptrans_ab_log/Vi960_fptrans_ab_harness: $(FPTRANS_AB_SRC) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh
+	$(VBUILD) --top-module i960_fptrans_ab_harness -GLOG=1 -CFLAGS "-O2 -DFPTRANS_LOG" --Mdir obj_i960_fptrans_ab_log -o Vi960_fptrans_ab_harness \
+	  $(FPTRANS_AB_SRC)
 
 # R839: the same lockstep on a VC=1 build with vc_en high (+vc): sqrtrl,
 # cpysre and cvtzril in the FP mix against the reference's MAME semantics.

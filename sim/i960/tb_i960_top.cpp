@@ -1365,7 +1365,7 @@ int main(int argc, char **argv) {
                       (unsigned long long)dfp(2));
         tick();
 #ifdef TB_VC
-        if (std::getenv("TB_TRDBG") && (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__st == 2
+        if (std::getenv("TB_TRDBG") && (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__st == 1   // R998: S_RUN (R845: S_DEC)
             && ((dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__uw >> 28) == 8
              || (dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__uw >> 28) == 9))
           std::printf("    LD%c x %016llx y %016llx\n",
@@ -1404,9 +1404,9 @@ int main(int argc, char **argv) {
                     (int)dut->rootp->i960_top__DOT__ts, dreg((si & 0x1e) + 1), dreg(si & 0x1e),
                     dreg(((si >> 14) & 0x1e) + 1), dreg((si >> 14) & 0x1e));
 #ifdef TB_VC
-        std::printf("  fptrans st %d upc %d act %d fin %d\n",
+        std::printf("  fptrans st %d pc %d act %d fin %d\n",
                     (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__st,
-                    (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__upc,
+                    (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__pc,
                     (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__act,
                     (int)dut->rootp->i960_top__DOT__g_trans__DOT__u_trans__DOT__fin);
 #endif
