@@ -38951,3 +38951,99 @@ fit, and the board: the van scene's HUD steady. The tiny threshold still
 follows NQ (fine while the last list needed < 1,792, R769): with the spill it
 could follow NQ + NX -- not changed here, it would move every heavy list's
 picture.
+
+**R993 -- VIRTUA COP's HEADLESS BOSS (GitHub #28) IS THE QUAD STORE's COARSE
+TINY CULL (R769 / R776), NOT THE GEOMETRY. EVERY LIST OF THE VAN SCENE's
+1.25 s BURST FOLLOWS ONE WHOSE 2-PX COUNT IS OVER 1,792, SO IT IS COLLECTED
+COARSE, AND THE BOSS's HEAD AND ARMS ARE 2-3 PX QUADS AT zval >= 0x3000.
+THE SWITCH NOW FOLLOWS NQ + NX (R992's spill). BENCH ONLY; NOT MAPPED, NOT
+FITTED, NOT ON A BOARD.** Branch vcop-head (off vcop-quads 7e229b4b).
+
+*What was believed:* R991 -- "the boss's head is not among [the lost quads]
+in this capture", from walk 7502 drawn FROM RESET, i.e. fine; and its pairs
+"cull at 4 px (1,710-1,749) and lose nothing", counting only what the store
+REFUSED FOR ROOM, never what the tiny test refused. R776 -- "a single
+constant holds while z_adjust stays 4.0".
+
+*Now known:*
+  1. THE BOSS (run; MAME's lists, walks 7470-7556, decoded with
+     m2_listdec.py, parts found by moving each object behind the camera and
+     re-running geodiff_wk): 16 objects, each with its own matrix, polygon
+     ROM 0x80a58e-0x80bd49 plus one at 0x889480. Upper body, 9 objects:
+     0x80a77a / 0x80b5ed (torso), 0x80a9df (head, 152 polygons), 0x80b0e9 /
+     0x80bd49 / 0x889480 and 0x80afda / 0x80bc9e / 0x80b882 (the two arms
+     and hands). Legs, 7 objects: 0x80b1f8, 0x80b47a / 0x80a8d0 / 0x80a67f,
+     0x80b307 / 0x80a7c1 / 0x80a58e. Nothing distinguishes the upper body's
+     ROM region or textures from the legs'. At walk 7508 (z ~21) the upper body is 226 quads, 149 of
+     them under 4 px on both axes, 60 under 2 px, zval 0x5448-0x5596; the
+     legs 102 quads, 12 under 4 px. The matrices are not suspect: MAME's own
+     list draws him whole through the core (R991), and the TGP replays
+     bit-exact over the scene (5).
+  2. WHY "FAR" (read, MAME model2_v.cpp float_to_zval; run, the list):
+     zval's octave is the exponent of z MINUS z_adjust's. Virtua Cop's zsort
+     word is 0x3f804000 (z_adjust 1.002), Daytona's 4.0, so 0x3000 is z = 4
+     in Virtua Cop against Daytona's 16 -- R776's constant does not carry over.
+     It is not the whole fault: the boss at z ~21 is far at Daytona's scale
+     too (0x5000 there would still cull him).
+  3. THE BOARD's COLLECTION (run; geodiff_wk quads, every walk 7420-7520,
+     the store's rule applied to consecutive lists): walks 7476-7512
+     (257.37-258.62 s), 37 consecutive lists, each follows a list with
+     2,013-2,158 quads passing 2 px (>= 1,792), so each is collected COARSE.
+     The coarse test refuses 72-103 of the boss's upper-body quads a list
+     and 7-62 of his legs' (the legs' quads are long; up to 62 only while he
+     is far, 255-256 s). Table: build/vh/coarse_tab.txt.
+  4. REPRODUCED (run; tb_m2_raster3d at Model2.sv's m2_raster3d parameters,
+     checked line by line against Model2.sv; the cull is a synthesis
+     parameter, so no OSD setting reaches it):
+       - MAME's walk 7509 (M2DIFF, a new run) collected after MAME's walk
+         7502 (2,155 passing 2 px), main's store (Model2_20261107b's,
+         TINY 4 / TINY_FINE 2 / TINY_FAR 0x3000, read from 4d79cd47): 1,629
+         quads stored of 2,214; the boss has no head, no left hand, the
+         raised arm a shapeless orange mass over a grey vest -- the board
+         photo. The same with M2_R3D_COARSE forced on a single list. The same
+         list from reset (fine): 2,031 stored, the boss whole.
+       - Our geometry, walk 7508 after 7507 (owner colours): upper body 273
+         px against 340 from reset, legs 527 against 537.
+  5. THE TGP IS RIGHT HERE (run): tgp_capture.lua on the scripted Beginner
+     game (vcop_auto_sel.lua), 230 frames from 256.5 s (frame 14756), through
+     tb_tgp_replay: 470,780 outputs, 470,780 i960 pops, 869,022 input pops,
+     148,450 io reads and 76,260 io writes, all bit-exact against MAME. Its
+     work in the burst: 7.97 ms mean, 8.62 ms most, per game frame at 80 MHz
+     (5.85 / 8.62 over all 116 working frames).
+  6. THE FIX (R993): m2_quad_store's switch is at 7/8 of the list's real
+     room, MAXL = NQ + NX: `fine <= (need < MAXL - MAXL/8)`. NX 0 is
+     unchanged (MAXL = NQ, 1,792). At R992's QNX 512 it is 2,240; at 1,024,
+     2,688. One constant in a compare; no new register.
+       - The burst (run, owner colours, list A then B, the bench pacing the
+         quads at the walk's rate, 650 cycles a quad -- geodiff t7508: 2,224
+         quads in 1,461,197 cycles): walks 7476-7513 sampled (12 pairs), every
+         B stored fine (stored = its 2-px count, 1,680-2,158), 0 refused, no
+         hold. Walk 7508 after 7507: the owner picture IDENTICAL to 7508 from
+         reset; without R993 (QNX 512 alone) 339 px differ. Walk 7509 after
+         7502, textured: the boss whole.
+       - Over every dumped list (run, the rule applied to consecutive dumps):
+         Beginner 100 lists -- coarse 40 -> 0, refused 0 -> 0; Expert (runA /
+         B / C) 123 lists -- coarse 85 -> 60, refused 0 -> 0 (main's 2,048
+         store without the spill: 411 refused on 10 lists).
+       - The cost: more lists spill, so a list collected behind one is held
+         if it reaches the spill's edge before that one's draw is whole.
+         Walk 7502 after 7501 (A spills 104), the quads paced 0 / 25 / 50 /
+         100 / 200 / 325 / 650 cycles apart: held 432,791 / 379,343 /
+         325,893 / 218,993 / 5,193 / 0 / 0 cycles. No hold unless the walk
+         hands quads over faster than ~1 per 200-325 cycles, ~2-3x the
+         bench geometry's measured pace (INFERRED for the board: the walk's
+         pace there is not measured).
+       - Checks: test_m2_quad_store PASS (23) at NX 0, 512 (ofree 1) and
+         1,024; the old switch at NX 512 fails it ("2239 fine quads made the
+         next list coarse"). test_m2_raster3d PASS (40). lint_m2_quad_store
+         clean at NX 0 / 512 / 1,024; lint_top clean at the default,
+         M2_QNX_1024 and M2_NO_QSPILL.
+  *Not explained:* the reporter's slowdown. Nothing here measures it on the
+  board; the TGP's 8.6 ms and the walk's 21 ms (R991) fit the game's 30 Hz
+  frame on the bench.
+  *Depends on R992:* without the spill (M2_NO_QSPILL, or main as released)
+  the fix is a no-op -- MAXL = NQ -- and the scene stays coarse, because a
+  fine list there would lose its HUD to the 2,048 store instead (R991).
+  *Left:* quartus_map (the compare constant only), the fit with R992, and
+  the board: the van scene's boss whole and the HUD steady, and Daytona's
+  attract and race (R776's lists: attract peak 2,368 quads, inside 2,560).

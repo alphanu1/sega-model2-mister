@@ -6,7 +6,7 @@
 // R769: the car-select tyres are rings of quads 2-3 px across, and TINY = 4
 // refused 621 of the 1,340 quads on that screen -- the tyres went and the
 // background showed through the wheel arches. The store now tests a list at
-// TINY_FINE (2) when the list before it had fewer than NQ - NQ/8 quads passing
+// TINY_FINE (2) when the list before it had fewer than 7/8 of NQ + NX quads passing
 // that test, and at TINY (4) otherwise. This checks:
 //   1. the size test at both thresholds, swept from 0 to 40 px of spread on
 //      each axis and on the diagonal, at positive, negative and straddling
@@ -33,7 +33,12 @@
 static int checks = 0, fails = 0;
 #define CHECK(c, ...) do { ++checks; if (!(c)) { ++fails; std::printf("  FAIL: " __VA_ARGS__); std::printf("\n"); } } while (0)
 
-static const int NQ = 2048, FINE_LIMIT = NQ - NQ / 8;   // 1,792
+// R993: the switch is at 7/8 of the list's real room, NQ + NX (R962's spill).
+// Build with -GNX=<n> -DQS_NX=<n> to test a spilling store; NX 0 is 1,792.
+#ifndef QS_NX
+#define QS_NX 0
+#endif
+static const int NQ = 2048, FINE_LIMIT = (NQ + QS_NX) - (NQ + QS_NX) / 8;   // 1,792 at NX 0
 static const int T_COARSE = 4, T_FINE = 2;               // the instance's TINY / TINY_FINE
 
 struct Q { int x[4], y[4]; };
@@ -109,6 +114,7 @@ int main(int argc, char **argv) {
   d->in_moire = 0; d->in_tex = 0; d->in_frac = 0;
   d->in_u0 = d->in_v0 = d->in_u1 = d->in_v1 = d->in_u2 = d->in_v2 = d->in_u3 = d->in_v3 = 0;
   d->in_oz0 = d->in_oz1 = d->in_oz2 = d->in_oz3 = 0x7F00;
+  d->ofree = (QS_NX > 0);   // R993: with a spill, the other bank is free here (nothing draws it)
   for (int k = 0; k < 4; k++) tick();
   d->rst_n = 1; tick();
 
@@ -201,12 +207,13 @@ int main(int argc, char **argv) {
   { const R r = run_list(tyre); CHECK(r.tiny == 0 && r.stored == 32, "second light list after heavy not fine: tiny %d", r.tiny); }
   // heavy after light: collected fine, so it fills the store and drops the
   // tail; the next list is coarse
-  for (int n : {2100, 5000, 50000}) {
+  for (int n : {2100 + QS_NX, 5000, 50000}) {
     run_list(tyre); run_list(tyre);   // fine for certain
     CHECK(fine(), "not fine before the heavy list of %d", n);
     auto p = next_fine_after(n);
-    CHECK(p.second.stored == NQ && p.second.dropped == n - NQ,
-          "heavy list of %d at fine: stored %d dropped %d, want %d and %d", n, p.second.stored, p.second.dropped, NQ, n - NQ);
+    const int room = NQ + QS_NX;   // R993: the spill's room when the other bank is free
+    CHECK(p.second.stored == room && p.second.dropped == n - room,
+          "heavy list of %d at fine: stored %d dropped %d, want %d and %d", n, p.second.stored, p.second.dropped, room, n - room);
     CHECK(!p.first, "a list of %d quads (count saturating) left the next list fine", n);
     std::printf("  heavy list of %d after a light one: stored %d, dropped %d; next list fine=%d\n",
                 n, p.second.stored, p.second.dropped, (int)p.first);

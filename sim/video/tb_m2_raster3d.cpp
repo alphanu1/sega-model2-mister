@@ -1103,6 +1103,12 @@ int main(int argc, char **argv) {
         if (std::sscanf(L[i].c_str(), "Q %d %d,%d %d,%d %d,%d %d,%d frac=%x uv=%u,%u %u,%u %u,%u %u,%u tex=%x col=%x z=%x lum=%u oz=%x,%x,%x,%x mz=%u",
               &n, &x[0], &y[0], &x[1], &y[1], &x[2], &y[2], &x[3], &y[3], &frac, &u[0], &v[0], &u[1], &v[1], &u[2], &v[2], &u[3], &v[3],
               &tex, &col, &z, &lum, &oz[0], &oz[1], &oz[2], &oz[3], &mz) != 27) { std::printf("  bad quad line %zu\n", i); continue; }
+        // R993: M2_R3D_QGAP=<cycles> -- the geometry's pace: that many idle
+        // cycles before each quad (the walk hands one over every ~650 cycles
+        // in Virtua Cop's van scene: 2,224 quads in 1,461,197). Unset, back
+        // to back, as before. The wait on q_ready is counted after the gap.
+        static const long QGAP = std::getenv("M2_R3D_QGAP") ? std::atol(std::getenv("M2_R3D_QGAP")) : 0;
+        d->q_valid = 0; for (long k = 0; k < QGAP; k++) tick();
         { long g = 0; d->q_valid = 0; d->eval(); while (!d->q_ready && g++ < 20000000L) tick();   // R962: a stall lasts a draw
           qwait_sum += g; if (g > qwait_max) qwait_max = g; }
         d->q_valid = 1;
