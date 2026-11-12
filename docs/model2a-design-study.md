@@ -47809,3 +47809,8 @@ setting: no trapezoid. MAME's thin graded band at the fence goes with it.
     MAME's HOTD list 1808, the luminance-by-row table above) is the
     acceptance test: the path's rows must come out graded like MAME's, not
     flat. Then drop mipoff_game.
+
+*FIT AND BOARD (2026-11-12):* 2C s1765 from 4e4df36f: clk_sys +0.352, clk_mem
++0.556, clk_i960 +0.921, hold +0.141, recovery +0.761, HDMI +0.012; 39,337 ALM,
+549 / 553 M10K, 107 DSP. Ben, on the board: the courtyard is right, with no
+mip-mapping in HOTD. Released as Model2C_20261112.

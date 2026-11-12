@@ -1,5 +1,32 @@
 # Handoff
 
+## 2026-11-12: Model2C_20261112 in releases/ -- House of the Dead's courtyard (R990, #41)
+
+2C s1765 (hotd-mip-off 4e4df36f, merged into model2c): md5
+3b9b10a7d62901a33a55c9d524a59385; clk_sys +0.352, clk_mem +0.556, clk_i960
++0.921, hold +0.141, recovery +0.761, HDMI +0.012 (every clock clean);
+39,337 ALM, 549/553 M10K, 107 DSP. Board-tested by Ben ("HOTD is now right").
+Seeds 1757-1765: 1757 clk_sys -0.061, 1758 STA internal error (TDB), 1759
+HDMI -0.312, 1760 clk_sys -0.314, 1761 / 1762 fitter internal error (TDC,
+both at once), 1763 / 1764 HDMI -0.99. releases/ is identical on main,
+model2a and model2c.
+
+FINDINGS (R990 in the study):
+- The courtyard "shadow" trapezoid was the path quad drawn from HOTD's darker
+  mip levels by R828a's per-quad footprint rule (Sharp, the default). It is not
+  a list race. R935's bench missed it because it ran with mips OFF. WRONG TURN,
+  KEEP: my first guess (GEO_LIST_WIN 4,096 < HOTD's 4.6 K-dword lists) was
+  measured and is not it; the courtyard is at the head of the list.
+- For now `mipoff_game` = is_hotd forces mip-mapping Off, as Sky Target forces
+  point sampling (R950). The real fix (the game's per-polygon level to the
+  fill) waits on M10K: the quad payload moving to DDR3.
+
+IN FLIGHT: branch vcop-quads (main + R962's quad spill, R991/R992, #28),
+seeds 1766-1768 fitting from sm2-builds/vcop-quads. The boss's missing head is
+NOT the quad cap (the HUD, submitted last, is drawn on the board); an agent is
+on it. Model 1 branch v60-manual (NOT keeps CY, MUL OV, DIV overflow / zero
+divide per NEC's V60 manual, IEEE denormals): agent at work, not committed.
+
 ## 2026-11-07: Model2_20261107b in releases/ (all three branches, pushed)
 
 Model 2 s1750 (main 0e26f5e2, the area pass R984-R988): md5
