@@ -122,7 +122,7 @@ module m2_quad_store #(
   // 2-3 px quads -- so TINY = 4 is kept only for the lists that need it. The
   // store counts, per list, the quads that pass THIS test; when that count
   // left an eighth of the store free, the next list is tested at TINY_FINE,
-  // else at TINY. 0 disables it (TINY always).
+  // else at TINY. 0 disables it (TINY always). R993: "the store" is NQ + NX.
   parameter int unsigned TINY_FINE = 0,
   // R776: AND THE COARSE TEST ONLY FOR FAR QUADS. In a list tested coarse, a
   // quad between TINY_FINE and TINY pixels is refused only when its z value
@@ -130,6 +130,9 @@ module m2_quad_store #(
   // mantissa, larger is farther) is at least TINY_FAR. 0x3000 is z = 16 at
   // Daytona's z_adjust of 4.0: car-select tyres sit at 6,510-8,442, the busy
   // scenes' small quads at p5 >= ~12,000. 0 makes every quad far (R769).
+  // R993: Virtua Cop's z_adjust is 1.0 (zsort 0x3f804000), two octaves
+  // down, so 0x3000 is z = 4 there, and the van scene's boss (z ~21, zval
+  // 0x5448-0x5596) is "far" -- he is so at Daytona's scale too (z > 16).
   parameter logic [15:0] TINY_FAR = 16'h0000,
   parameter int unsigned SCR_H  = 384,
   // R607: FRONT TO BACK, the reference's order (model2_v.cpp render_polygons:
@@ -553,7 +556,10 @@ module m2_quad_store #(
     end else if (clear) begin
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       // R769: the list just ended decides the next one's threshold.
-      fine <= (need < (IW+1)'(NQ - NQ/8));
+      // R993: against the list's real room, NQ + NX (R962's spill), not NQ.
+      // At NQ alone Virtua Cop's van scene (2,013-2,158 passing quads a list)
+      // was collected coarse for 1.25 s and the boss lost his head and arms.
+      fine <= (need < (IW+1)'(MAXL - MAXL/8));
       need <= '0;
     end else begin
       if (a_v && a_need && !(&need)) need <= need + 1'b1;

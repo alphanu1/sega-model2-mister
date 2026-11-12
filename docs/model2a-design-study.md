@@ -46990,3 +46990,114 @@ clk_mem +0.574), hold +0.171, HDMI -0.256; s1752 39,318 ALM, core clocks
 clean (clk_sys +0.261, clk_mem +0.441, clk_i960 +1.875), hold +0.077, HDMI
 -0.101 -- the 2A candidate; s1753 clk_sys -0.142. 2 of 5 fitted seeds close
 the core clocks with the area pass, against 1 of 3 at 98% before it.
+
+**R994 -- R993 ON THE 2A BUILD, AND R962 + R993 ON THE 2C BUILD. THE 2A
+STORE ALREADY SPILLS (R962) BUT STILL WENT COARSE BEHIND ANY LIST OF 1,792;
+THE 2C STORE HELD 2,048 A LIST, AND HOUSE OF THE DEAD's MAME LIST AT 3D
+FRAME 900 IS 2,127 QUADS (79 REFUSED). BENCH ONLY; NOT MAPPED, NOT FITTED,
+NOT ON A BOARD.** Branches quads-2a (off model2a e72abc8f) and quads-2c (off
+model2c 37329918), 2026-11-12.
+
+*What was believed:* that R962 finished the 2A store. It did not touch the
+coarse tiny-quad switch (R769), which stayed at 7/8 of NQ (1,792) while the
+2A list can run to NQ + NX = 2,560 -- R993's fault (vcop-head 9ba7115a,
+Virtua Cop's boss without his head, #28) is in the 2A store too. And that
+the 2C build needed none of it: R962 was 2A-only (`.QNX(M2A ? 512 : 0)`)
+when model2c forked, and the 2C store was never given NX.
+
+*The change:*
+  1. quads-2a: R993 as on vcop-head -- m2_quad_store's switch
+     `fine <= (need < MAXL - MAXL/8)`, MAXL = NQ + NX (2,240 at NX 512);
+     its comments; tb_m2_quad_store's QS_NX / ofree / room-aware checks;
+     tb_m2_raster3d's M2_R3D_QGAP. The code round the switch is vcop-head's
+     (read: the only differences between model2a's store and vcop-head's
+     are R899's key_hi, which model2a does not have, and the R993 lines).
+     tb_m2_raster3d's QGAP block is placed by hand: model2a has R938's
+     M2_R3D_COARSE line in that loop and vcop-head does not.
+  2. quads-2c: the 2C store was model2a's minus R962, plus R932's VXN
+     (read: those are the only differences). It is now model2a's store with
+     R993 and VXN (11 lines differ, all VXN). Its R985-R987 read latches
+     are therefore 2A's form of them ("as model2c", rewritten round R962's
+     two-ended arrays and key_x) -- identical in output at NX 0 (below), but
+     only quartus_map can say they infer as the 2C form did. m2_raster3d gains R962's QNX,
+     qs_stall / qs_ofree and the store's NX / ofree / in_stall wiring;
+     Model2.sv `.QNX(M2A ? 512 : 0)` (M2A is 1 in the 2C build; the
+     instance has FB_DDR3 1'b1); tb_m2_raster3d R962's push_qfile /
+     M2_R3D_QUADS2 / q_ready waits and R993's QGAP. NOT brought over: R954
+     SPCULL, R944 DIL, R955 NEGZ, R957 seam fill, R899 key_hi, main's
+     M2_NO_QSPILL / M2_QNX_1024 macros (R992). Elaborated (run, verilator
+     --json-only, -DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1): u_raster3d QNX 512,
+     FB_DDR3 1; u_store NX 512, MAXL 2,560.
+
+*Checks (run, both branches unless named):*
+  * test_m2_quad_store PASS (23 checks) at NX 0, 512 (ofree 1) and 1,024;
+    the old switch at NX 512 FAILS ("2239 fine quads made the next list
+    coarse"), as on vcop-head. test_m2_raster3d PASS (40).
+  * Bench builds: tb_m2_raster3d at each Model2.sv's m2_raster3d parameters
+    (2A: + DIL, NEGZ, SPCULL; 2C: + LSB 5, RECIP_M10K 0; both TEXLUT, KW 20,
+    UVSH, MIP, TEX_AW 26). Old = the branch's own store (2A: R962 with the
+    old switch; 2C: model2c's store and raster3d, no QNX). MAME lists
+    textured (FB, REALCOL, WINKEY, UVSH, FRAC, MIPZX 3, TPL 2870; 2C: GAME,
+    C2). "PX" is the md5 of the shown frame's pixel dump.
+  * IDENTITY, lists under the threshold:
+      - 2A, Virtua Cop 2 car scene (MAME 3D frame 3780, 1,040 polygons, a
+        new dump): old NX 0 / new NX 0 / old 512 / new 512 all 1,059 quads,
+        draw 427,934 cycles, PX 6cbbca445f4f. Behind itself (M2_R3D_LIST2):
+        all four 425,805, PX f6accca8e140.
+      - 2C, House of the Dead list 1808 (R990's, 841 polygons): old / new 0
+        / new 512 847 quads, 452,250 cycles, PX 28e3a755b158. Behind HOTD
+        frame 1500 (907 polygons): all three 452,250, PX 29f0a17529dd. Over
+        Rev (r931 d1, 1,025 polygons, GAME 1C): all three 1,016 quads,
+        608,787 cycles, PX 3ffd5eaaf2fa.
+      - NX 0 on a long list: 2A VCop2 ranking (3880) old 0 = new 0 (2,048
+        stored, 188 dropped, 626,453 cycles, PX 633582b1a7ce); 2C HOTD
+        frame 900 old = new 0 (2,048, 79 dropped, 792,112, PX 28499dd1c0d4).
+  * THE SPILL ON 2C: HOTD frame 900 alone, new 512: 2,127 quads stored, 0
+    dropped (old: 2,048 + 79 refused); draw 798,880 cycles (792,112); MAME
+    pixels not painted 222 -> 135. VCop2's ranking on 2A, for comparison:
+    2,236 stored, colour error against MAME 7.32 -> 5.26 mean.
+  * A LONG LIST BEHIND A HEAVY ONE:
+      - 2C, HOTD 900 behind HOTD 900 (A drawn whole first, INTR 3,000,000):
+        old 1,847 stored (coarse: 280 refused by the tiny test); R962 alone
+        (old switch, NX 512) 1,847; with R993 2,127, the count from reset,
+        MAME px not painted 184 -> 135 (= the list alone).
+      - 2A, VCop2 ranking 3880 behind 3879 (2,219 polygons each): old 512
+        2,235 (one refused coarse, 58 px differ); new 2,236, as from reset.
+      - Owner colours, our geometry (vcop-quads beg2), 7508 behind 7507,
+        quads paced 650 cycles: 2C R962 alone 1,646 stored, 339 px differ
+        from 7508 drawn from reset (vcop-head's number on main); with R993
+        2,038 stored, PX ef8e01fdccae and 418,791 cycles = from reset. 2A
+        the same (old 359 px differ -- DIL etc.; new = reset, 5e53d32a49d1).
+  * THE HOLD (R962's, exercised on 2C for the first time): 7502 behind 7501
+    (A spills 104), quads back to back: B held 432,791 cycles once (2A
+    397,192), then 2,155 stored, 0 refused, PX and draw = 7502 from reset
+    (2C f94f847f1458 / 436,125; 2A fc5113742560 / 401,221) -- 432,791 is
+    vcop-head's figure. R962 alone: 1,749 stored, no hold.
+  * AN ORDER OF MAGNITUDE PAST: 4,587 quads (7502 + 7508 as one list), 2C
+    new 512: 2,560 stored, 1,633 dropped; behind spilled 7501 held 432,791,
+    then the same 2,560 / 1,633, draw 613,401 and hash 45927f8e0ac82709 as
+    alone.
+  * Lint (run): lint_top clean on 2A (default, -DM2_NO_2A) and 2C (default,
+    -DM2_NO_2A, -DM2_2C=1 -DM2_NO_2A_MANX_MOTION=1); the raw lint warning
+    set (line numbers dropped) identical to the base branch's: 2A 1,052
+    lines, 2C 1,031. lint_idx unchanged: 2A 113 lines, 2C (2C defines) 98,
+    none in the store. The store alone at NX 0 / 512 / 1,024 and at the 2C
+    instance's parameters (VX, VXN 3, KW 20): UNUSEDSIGNAL only.
+  * A bench property, not this change (run): a list drawn behind another
+    (M2_R3D_LIST2) shows 1,232-4,616 px different from the same list drawn
+    from reset, in the old RTL as in the new (VCop2 3780: 2,841 in all four
+    builds); identity above is always pair against pair, single against
+    single.
+
+*Expected M10K:* 2C 549 / 553 (s1765) -> 550: key_x, 512 x 20, one block
+(R962); the index arrays go 11 -> 12 bits and stay three 2048x5 blocks
+each. R993 adds a constant to a compare -- no storage, no new register; 2A
+unchanged by it.
+*Cost in time (INFERRED from R993):* more lists are collected fine, so more
+spill, and a list behind a spilled one is held at the spill's edge if the
+geometry hands quads over faster than ~1 per 200-325 cycles. HOTD's and
+Over Rev's walk pace is not measured.
+*Left:* quartus_map / fit of each branch (2C: R962's two_end select and the
+index and att read registers on clk_sys, R962's note), then the board: 2A
+the Virtua Cop 2 ranking and train unchanged; 2C House of the Dead, Over
+Rev, STCC and Sky Target unchanged in normal scenes.
