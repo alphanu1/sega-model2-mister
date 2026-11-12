@@ -932,15 +932,30 @@ module m2_span_tex #(
   // coordinate's bit at the level's width, (u >> L) & ((w >> L) << 8) in
   // model2rd.ipp, i.e. bit 13 + code - L of the level's u. A 4096-wide
   // texture's bit is 20, past the coordinate: never mirrored, as before.
-  wire [23:0] mt_t  = tex_p[res_p];
+  //
+  // R995: THE SLOT'S TEXTURE WORD, ITS MIRROR-BIT INDEXES AND THE BOX
+  // QUEUE'S ADDRESS COME FROM REGISTERS, loaded as the group moves from d4a
+  // to d4 (sh_p[PIPE_D-2]), not through res_p's slot select. s1771 at
+  // 80 MHz: m2_span_tex|sh_p[6] -> the slot select -> mt_bu's add -> the
+  // 32:1 bit select -> mt_fu -> m2_texel_cdc's q_tex datain, -0.108 ns, the
+  // same select also heading ub_ra into the box MLAB (ubi_p -> q_tex, +0.053).
+  // The same values, cycle for cycle: tex_p and ubi_p are written only by a
+  // span load, a load writes the slot no group in flight belongs to (R490;
+  // the argument R731 and R739 rest on -- ld_over writes ~sp_iss with at most
+  // one span live, the issuing one; ld_cold only with nothing in flight and
+  // the shadow cleared), so the slot a group's copies were loaded from is not
+  // written until the group has left d4 -- stalled there or not. d4_L is
+  // loaded from d4a_L on the same edge, so the index uses the same level.
+  // Checked every cycle by M2_R995_CHECK (below) on the benches.
+  logic [23:0] mt_t;
+  logic [4:0]  mt_bu, mt_bv;
+  wire  [23:0] mt_tn = tex_p[sh_p[PIPE_D-2]];
   wire [31:0] mt_u  = {12'd0, tx_u};   // 32 wide: every 5-bit index is in range (R807)
   wire [31:0] mt_v  = {12'd0, tx_v};
-  wire [4:0]  mt_bu = 5'd13 + {2'd0, mt_t[3:1]} - {2'd0, d4_L};
-  wire [4:0]  mt_bv = 5'd13 + {2'd0, mt_t[6:4]} - {2'd0, d4_L};
   wire        mt_fu = mt_t[9]  && mt_u[mt_bu];
   wire        mt_fv = mt_t[10] && mt_v[mt_bv];
   assign tx_tex = MIP ? {3'd0, mt_fv, mt_fu, d4_L, mt_t[23:13], mt_t[12] ^ d4_L[0], mt_t[11:0]}
-                      : {8'd0, tex_p[res_p]};
+                      : {8'd0, mt_t};
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   // R951: AND KEPT INSIDE THE QUAD'S OWN TEXELS. Every pixel the fill covers
   // is inside the quad, so in exact arithmetic its u and v lie in the box of
@@ -962,21 +977,25 @@ module m2_span_tex #(
   // corner's fraction only loosens it. TIMING: ub_ra -> m2_raster3d's MLAB
   // (an asynchronous read) -> the two subtracts -> the select -> m2_texel_x2's
   // request registers, on clk_sys -- the fit's report is the check.
+  // R995: THE DIFFERENCES AS EQUALITIES. dl == 1 is lo == ti + 1 and dh == 1
+  // is hm == ti - 1, both mod 2^13 exactly as the subtracts were, so the
+  // carry chains are on ti -- d4_u, a register, beside the MLAB's read --
+  // and the box's own bits meet only an equality compare.
   function automatic logic [19:0] uv_cl(input logic [19:0] t, input logic [10:0] lo, input logic [10:0] hm);
-    logic [12:0] ti, dl, dh;      // 13 bits: a difference never wraps onto 0 or 1
+    logic [12:0] ti, tp, tm;      // 13 bits: a difference never wraps onto 0 or 1
     begin
       ti = 13'(t[19:8]);
-      dl = 13'(lo) - ti;          // 1: t in the texel under lo; 0: in lo's
-      dh = ti - 13'(hm);          // 1: t in the texel over hm
-      if ((dl == 13'd1) || ((dl == 13'd0) && (t[7:0] == 8'd0)))
+      tp = ti + 13'd1;
+      tm = ti - 13'd1;
+      if ((13'(lo) == tp) || ((13'(lo) == ti) && (t[7:0] == 8'd0)))   // t in the texel under lo, or on it
         uv_cl = {1'b0, lo, 8'h01};
-      else if (dh == 13'd1)
+      else if (13'(hm) == tm)     // t in the texel over hm
         uv_cl = {1'b0, hm, 8'hFF};
       else
         uv_cl = t;
     end
   endfunction
-  assign ub_ra = ubi_p[res_p];
+  // R995: ub_ra is a register, ubi_p[sh_p[PIPE_D-2]] loaded with mt_t (above)
   wire [44:0] ub_r  = ub_rd;
   wire        ub_on = UVCL && !ub_r[44] && (!MIP || (d4_L == 3'd0));
   assign tx_u   = ub_on ? uv_cl(to_tx(d4_u), ub_r[43:33], ub_r[32:22]) : to_tx(d4_u);
@@ -999,6 +1018,18 @@ module m2_span_tex #(
   assign dbg_fetch_u = tx_u;
   assign dbg_fetch_v = tx_v;
   assign dbg_fetch_t = {MIP ? d4_L : 3'd0, tex_p[res_p]};
+`ifdef M2_R995_CHECK
+  // R995's registers against the slot selects they replace, every cycle a
+  // result stands at the end of the pipeline
+  always_ff @(posedge clk)
+    if (res_valid && (st == T_RUN)
+        && ((mt_t != tex_p[res_p]) || (ub_ra != ubi_p[res_p])
+            || (mt_bu != 5'd13 + {2'd0, tex_p[res_p][3:1]} - {2'd0, d4_L})
+            || (mt_bv != 5'd13 + {2'd0, tex_p[res_p][6:4]} - {2'd0, d4_L}))) begin
+      $display("R995 CHECK FAILED: slot %0d mt_t %h tex_p %h ub_ra %0d ubi_p %0d", res_p, mt_t, tex_p[res_p], ub_ra, ubi_p[res_p]);
+      $stop;
+    end
+`endif
   assign dbg_fetch_c = col_p[res_p];
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -1015,6 +1046,7 @@ module m2_span_tex #(
       u_h4 <= '0; v_h4 <= '0; u_h5 <= '0; v_h5 <= '0; sh_m <= 1'b0;   // R607
       mq_f1 <= 1'b0; mq_f0 <= 1'b1; mq_wi <= '0; mq_need <= '0;   // R631
       q_x1 <= '0; q_y <= '0; q_sm1 <= '0;                           // R739, R742
+      mt_t <= '0; mt_bu <= '0; mt_bv <= '0; ub_ra <= '0;            // R995
       iss_u <= '0; iss_v <= '0; iss_ooz <= '0; iss_x <= '0; iss_run <= 1'b0; iss_step <= 4'd1;
       for (int k = 0; k < PIPE_D; k++) begin
         sh_v[k] <= 1'b0; sh_x[k] <= '0; sh_last[k] <= 1'b0; sh_p[k] <= 1'b0;
@@ -1078,6 +1110,11 @@ module m2_span_tex #(
       q_sm1 <= 16'(stp(k_p[sh_p[PIPE_D-4]]) - 32'sd1);   // R742
       q_x1 <= x1_p[sh_p[PIPE_D-4]][15:0];
       q_y  <= y_p [sh_p[PIPE_D-4]][15:0];
+      // R995: for PIPE_D-1, a stage early, beside d4_L <= d4a_L
+      mt_t  <= mt_tn;
+      mt_bu <= 5'd13 + {2'd0, mt_tn[3:1]} - {2'd0, d4a_L};
+      mt_bv <= 5'd13 + {2'd0, mt_tn[6:4]} - {2'd0, d4a_L};
+      ub_ra <= ubi_p[sh_p[PIPE_D-2]];
       sh_v[0]    <= iss_run;
       sh_x[0]    <= 32'(iss_x);
       sh_last[0] <= iss_run && iss_last;

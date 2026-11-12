@@ -63,11 +63,23 @@
 // comparison meaningful, and it is a parameter so a hardware A/B can turn it
 // off without editing anything.
 
+// R995: THE CURVE IS APPLIED AS THE TABLE IS WRITTEN, NOT AS IT IS READ.
+// The colour on screen is gam(xlat[entry channel], gsel): a function of a
+// 5-bit index and of gsel. Each entry holds {mild curve, MAME's curve, the value written}, all
+// three worked out from the written byte on the write side, and the read
+// selects one by gsel. The same colour for every gsel at every moment (gsel
+// is sampled where it was, the cycle after the table's registered read), and
+// the read side is an MLAB's output register and a 3:1 select. s1773 at
+// 100 MHz: the read side's subtract, multiply and saturate missed by 0.072 ns
+// (xlat_r ... dataout_reg[2] -> m2_video|pr_q[3]).
+
 `timescale 1ns/1ps
 
 module m2_palette #(
   parameter bit GAMMA = 1
 ) (
+  input  logic        clk,        // the read side: m2_video's clock
+
   // Bit 15 is deliberately unread -- see the note above. Silenced rather
   // than trimmed to 15 bits, because the palette entry IS 16 bits and a
   // narrowed port would hide that a bit is being ignored on purpose.
@@ -75,24 +87,18 @@ module m2_palette #(
   input  logic [15:0] entry,
   /* verilator lint_on UNUSEDSIGNAL */
 
-  // The three 5-bit channel indices, out to the translation table...
-  output logic [4:0]  x_r5,
-  output logic [4:0]  x_g5,
-  output logic [4:0]  x_b5,
-  // ...and the translated values back.
-  input  logic [7:0]  x_r,
-  input  logic [7:0]  x_g,
-  input  logic [7:0]  x_b,
+  // The colour translation table's write port, on its writers' clock (R564).
+  // Layout: {channel, value}, channel 0 = R, 1 = G, 2 = B; 3 writes nothing.
+  input  logic        xlat_clk,
+  input  logic        xlat_we,
+  input  logic  [6:0] xlat_addr,
+  input  logic  [7:0] xlat_din,
 
   output logic [7:0]  r,
   output logic [7:0]  g,
   output logic [7:0]  b,
   input  logic [1:0]  gsel       // R630: 0 MAME, 1 mild, 2/3 off (quasi-static)
 );
-
-  assign x_r5 = entry[4:0];
-  assign x_g5 = entry[9:5];
-  assign x_b5 = entry[14:10];
 
   // gamma: max((i - bias) * 255 / (255 - bias), 0), truncated. R630: THE
   // CURVE IS AN OSD CHOICE (gsel) -- 0 MAME's (bias 64, 255/191 as 16.16 =
@@ -120,9 +126,60 @@ module m2_palette #(
       end
     end
   endfunction
+  // R995: an entry as stored -- {mild, MAME's, the value}
+  function automatic logic [23:0] ent(input logic [7:0] v);
+    ent = {gam(v, 2'd1), gam(v, 2'd0), v};
+  endfunction
+  // ...and as read: the curve gsel names (GAMMA 0: the value)
+  function automatic logic [7:0] pick(input logic [23:0] e, input logic [1:0] sel);
+    pick = (!GAMMA || sel[1]) ? e[7:0] : sel[0] ? e[23:16] : e[15:8];
+  endfunction
 
-  assign r = GAMMA ? gam(x_r, gsel) : x_r;
-  assign g = GAMMA ? gam(x_g, gsel) : x_g;
-  assign b = GAMMA ? gam(x_b, gsel) : x_b;
+  // COLOUR TRANSLATION TABLE. It POWERS UP holding pal5bit, the expansion this
+  // module used before the translation existed. That is deliberate: a core
+  // that has not loaded the table renders exactly as it did, so adding this
+  // cannot regress the picture on hardware, and loading it can only make the
+  // colours more correct.
+  //
+  // R907: ONE 32-ENTRY ARRAY PER CHANNEL, TAGGED MLAB. As a single 96-entry
+  // array read at three addresses at once it was never a RAM at all: the map
+  // put it in 768 flip-flops with three 32:1 read muxes, while R564's notes
+  // (and this comment's own history) took it for an MLAB. One array per read
+  // port is the shape an MLAB can be: written on xlat_clk, read on clk into
+  // the same registers as before. Addresses 96-127 (channel 3) were outside
+  // the old array and wrote nothing; they write nothing here either.
+  // R995: 24 bits an entry (two MLABs a channel, was one), so the curve is
+  // looked up rather than computed. One entry is worked out a write, shared
+  // by the three channels.
+  (* ramstyle = "MLAB" *) logic [23:0] xlat_r [32];
+  (* ramstyle = "MLAB" *) logic [23:0] xlat_g [32];
+  (* ramstyle = "MLAB" *) logic [23:0] xlat_b [32];
+  initial begin
+    for (int i = 0; i < 32; i++) begin
+      xlat_r[i] = ent({i[4:0], i[4:2]});      // pal5bit
+      xlat_g[i] = ent({i[4:0], i[4:2]});
+      xlat_b[i] = ent({i[4:0], i[4:2]});
+    end
+  end
+  wire [23:0] xlat_e = ent(xlat_din);
+  always_ff @(posedge xlat_clk) begin
+    if (xlat_we && xlat_addr[6:5] == 2'd0) xlat_r[xlat_addr[4:0]] <= xlat_e;
+    if (xlat_we && xlat_addr[6:5] == 2'd1) xlat_g[xlat_addr[4:0]] <= xlat_e;
+    if (xlat_we && xlat_addr[6:5] == 2'd2) xlat_b[xlat_addr[4:0]] <= xlat_e;
+  end
+
+  // R582: the xlat lookup registered before the gamma curve (s312: pal_data_q
+  // -> xlat -> gamma -> pb_q, -0.278 ns at 100 MHz). See m2_video's vid_r for
+  // where the cycle comes from. R995: the same register, now 24 bits.
+  logic [23:0] x_r, x_g, x_b;
+  always_ff @(posedge clk) begin
+    x_r <= xlat_r[entry[4:0]];
+    x_g <= xlat_g[entry[9:5]];
+    x_b <= xlat_b[entry[14:10]];
+  end
+
+  assign r = pick(x_r, gsel);
+  assign g = pick(x_g, gsel);
+  assign b = pick(x_b, gsel);
 
 endmodule

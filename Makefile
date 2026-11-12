@@ -982,14 +982,39 @@ test_m2_video_xlat: obj_m2_vxlat/Vm2_video_xlat_miter
 	@echo "== test m2_video xlat (three MLAB arrays against the 96-entry table)"
 	@./obj_m2_vxlat/Vm2_video_xlat_miter $(TEST_ARGS)
 
+# R995: the reference keeps its own m2_palette (the one-byte table's), renamed.
 obj_m2_vxlat/m2_video_ref.sv:
 	@mkdir -p obj_m2_vxlat
-	git show 75ee3a2:rtl/video/m2_video.sv | sed 's/^module m2_video #(/module m2_video_ref #(/' > $@
+	git show 75ee3a2:rtl/video/m2_video.sv | sed -e 's/^module m2_video #(/module m2_video_ref #(/' \
+	  -e 's/^  m2_palette pal (/  m2_palette_ref pal (/' > $@
+	git show 75ee3a2:rtl/video/m2_palette.sv | sed 's/^module m2_palette #(/module m2_palette_ref #(/' > obj_m2_vxlat/m2_palette_ref.sv
 
 obj_m2_vxlat/Vm2_video_xlat_miter: $(M2V_RTL) obj_m2_vxlat/m2_video_ref.sv sim/video/m2_video_xlat_miter.sv sim/video/tb_m2_video_xlat.cpp
 	$(VBUILD) -Wno-fatal --top-module m2_video_xlat_miter -CFLAGS "-O2" \
-	  --Mdir obj_m2_vxlat -o Vm2_video_xlat_miter $(M2V_RTL) obj_m2_vxlat/m2_video_ref.sv \
+	  --Mdir obj_m2_vxlat -o Vm2_video_xlat_miter $(M2V_RTL) obj_m2_vxlat/m2_video_ref.sv obj_m2_vxlat/m2_palette_ref.sv \
 	  sim/video/m2_video_xlat_miter.sv sim/video/tb_m2_video_xlat.cpp
+
+# R995: the gamma curve folded into the translation table, against m2_video and
+# m2_palette at e0f460e1 (taken from git, renamed), every output every clk_mem
+# cycle and the ce_pix-sampled stream, through table writes and gamma changes.
+# R995_RUNS sweeps the ce phase, the seed and the line modes m2_video has.
+R995_RUNS ?= +phase=0 +phase=37,+seed=2 +phase=99,+seed=3,+gper=13 +il=1,+phase=50,+seed=4 \
+             +il=1,+ntsc=1,+phase=7,+seed=5 +il=1,+mid=1,+phase=63,+seed=6 +il=1,+narrow=1,+phase=81,+seed=7 \
+             +il=1,+mid=1,+narrow=1,+phase=25,+seed=8
+test_m2_video_r995: obj_m2_vr995/Vm2_video_r995_miter
+	@echo "== test m2_video R995 (the curve stored in the table, against e0f460e1)"
+	@set -e; for a in $(R995_RUNS); do ./obj_m2_vr995/Vm2_video_r995_miter `echo $$a | tr ',' ' '` $(TEST_ARGS); done
+
+obj_m2_vr995/m2_video_r995ref.sv:
+	@mkdir -p obj_m2_vr995
+	git show e0f460e1:rtl/video/m2_video.sv | sed -e 's/^module m2_video #(/module m2_video_r995ref #(/' \
+	  -e 's/^  m2_palette pal (/  m2_palette_r995ref pal (/' > $@
+	git show e0f460e1:rtl/video/m2_palette.sv | sed 's/^module m2_palette #(/module m2_palette_r995ref #(/' > obj_m2_vr995/m2_palette_r995ref.sv
+
+obj_m2_vr995/Vm2_video_r995_miter: $(M2V_RTL) obj_m2_vr995/m2_video_r995ref.sv sim/video/m2_video_r995_miter.sv sim/video/tb_m2_video_r995.cpp
+	$(VBUILD) -Wno-fatal --top-module m2_video_r995_miter -CFLAGS "-O2" \
+	  --Mdir obj_m2_vr995 -o Vm2_video_r995_miter $(M2V_RTL) obj_m2_vr995/m2_video_r995ref.sv obj_m2_vr995/m2_palette_r995ref.sv \
+	  sim/video/m2_video_r995_miter.sv sim/video/tb_m2_video_r995.cpp
 
 # R823: tile overruns. The shipped tilemap path (two-bank swap, sibling fill)
 # beside a variant -- LB_RING and/or SIBLING -- through whole frames with the
