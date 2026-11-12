@@ -7804,7 +7804,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .TEXLUT(R3D_TEXLUT), .LSB(R3D_LSB),   // R932
               .KW(R3D_WINKEY ? 20 : 16),
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
-              .UVSH(R3D_UVSH)) u_raster3d (   // R940   // R564: scan on clk_mem; R867; R889
+              .UVSH(R3D_UVSH),   // R940
+              .QNX(M2A ? 512 : 0)) u_raster3d (   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
