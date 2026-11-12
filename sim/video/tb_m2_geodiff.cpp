@@ -293,6 +293,14 @@ int main(int argc, char **argv) {
   for (t = 0; t < 400000000L; t++) {
     const long before = nq;
     tick();
+    // R991: M2GD_WIP=1 -- the walk's read pointer against the cycle, every
+    // 64 dwords it passes (for the push hold window's reach, R638)
+    { static const bool wipl = std::getenv("M2GD_WIP") != nullptr; static unsigned last = ~0u; static bool act = false;
+      if (wipl) { const unsigned w = d->rootp->geodiff_top__DOT__u_geo__DOT__w_ip;
+        const bool a = d->rootp->geodiff_top__DOT__u_geo__DOT__walk_active;
+        if (a && (w >> 6) != last) { last = w >> 6; std::printf("WIP %ld %05x\n", t, w); }
+        if (act && !a) std::printf("WIPEND %ld %05x\n", t, w);
+        act = a; } }
     if (phash) {
       auto *r = d->rootp;
       const uint64_t rg =

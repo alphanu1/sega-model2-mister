@@ -38789,3 +38789,165 @@ the fitted design, as on 2C. s1750 CLOSES EVERY CLOCK, HDMI INCLUDED: HDMI
 recovery +0.992 (the first fully clean Model 2 fit since s1572). s1746 died
 in the fitter (Segment Violation), s1748 a Quartus internal error (DYN).
 md5 77564b49d95ace450d4e831642a5fece; not yet on the board.
+
+**R991 -- VIRTUA COP (GitHub #28): THE BEGINNER STAGE's VAN SCENE IS FOUND
+(257-260 s of a scripted Beginner game: the van smashes the crates, the boss
+rides its back). ITS LISTS REACH 2,363 QUADS ON THIS GEOMETRY; THE 2,048
+STORE LOSES THE LAST-SUBMITTED 66-107 OF THEM ON EVERY SECOND LIST -- THE
+REVOLVER, THE SHOT BURST, THE ENERGY BAR AND A CRATE WORKER -- BUT NOT THE
+BOSS. R638's HOLD WINDOW CANNOT REACH THE OTHER BUFFER THERE (LISTS UNDER
+4,096 DWORDS). NEITHER THE MISSING HEAD NOR THE SLOWDOWN IS REPRODUCED ON
+THE BENCH. MEASURED (MAME + BENCH); NOTHING FITTED.** Branch vcop-quads (off
+main 8f2c7306), 2026-11-12.
+
+*What was believed (a draft from the issue41 worktree):* the reporter's scene
+was the garage (139 s, crates smashed, a big enemy) or the lorry (228-260 s);
+lists 349-3,553 dwords and 2,788-3,065 polygons in 106-136 s; R638's window
+"a CPU stall if the walk is past dword 4,096" in the lorry scene.
+
+*WRONG TURN, KEEP: EVERY ONE OF THOSE SCENES IS STAGE 3 (EXPERT).* The
+scripted game (vcop_auto.lua: coins, starts and seeded random shots) left the
+stage select on its default -- the snapshots at 15.5-17.5 s read "STAGE 3",
+the EVL Corporation building. The reporter plays Beginner. The script now
+takes VA_SELX / VA_SELY (hex gun position) until VA_SELT: VA_SELX=0c0 aims at
+the Beginner panel ("STAGE 1", the harbour). Also wrong in the draft: its
+times. The walk count is t = (walk - 74) / 28.76 s (vcop4's triggers at
+131.01 / 133.01 / 135.01 / 143.0 s fired walks 3842 / 3900 / 3957 / 4187, each
+the predicted walk), and an M2LOD frame is walk - 531 (Expert) or walk - 523
+(Beginner) -- the walks with no polygons at boot. Read without that offset
+the draft put Expert's heavy lists at 106-110 / 130-136 s; they are 123-127 /
+148-153 s.
+
+*THE SCENE (MAME 0.289 m2lod, Beginner, scripted 1P; the issue says "after
+finishing scene 1"):* SCENE 1 RESULTS at ~225 s; the warehouse; at 257.1 s a
+blue van drives through a stack of crates (257.4-258.2 s the crates burst,
+workers thrown), and from 258.2 s a man in camouflage trousers rides the back
+of the van, jumping off at ~259.5 s. Snapshots every 0.1 s (beg2/snap) and a
+sheet (van_scene_beginner_mame.png) are in the worktree's build/vcop.
+
+*THE LISTS (every walk 7,420-7,520 dumped; geodiff_wk, main's geometry):*
+40 consecutive lists, 257.34-258.59 s, are 2,107-2,363 quads (MAME's own
+count 2,079-2,350; ours is 0.2-1.3% more), plus 255.60 s (2,269) and
+256.57-256.64 s (2,167 / 2,135); 3,391-3,931 dwords, double-buffered at
+0 / 0x4000, no jumps. Through the raster bench at main's m2_raster3d
+parameters (FTB, FB_DDR3, FB_WCOMB, SPLIT_TRI, PXC, PIXSTEP 4, FRB 2, M2COV,
+UVCL, TXLATE 3, TXNS / TXRSP 4, TXK 16, TXLW8, MIP, TWO_CLOCKS, KW 20, TEXLUT;
+TPL 2,870):
+  * walk 7502 (258.28 s, 2,363 quads), drawn from reset: 2,155 above the
+    tiny threshold; the store keeps 2,048 and refuses 107. The lost pixels
+    (4,729) are window 5 -- the revolver, the shot burst, the energy bar
+    (37 quads, submission positions 2,319-2,361) -- and window 1's last 46
+    quads (2,260-2,318), a crate worker's legs and debris at x 314-356, y
+    232-274. The boss's quads in the same list are at positions ~1,100-1,480:
+    nowhere near the cut, and drawn.
+  * In pairs (the list before, then this one -- the tiny threshold follows
+    the last list, R769): a list after a light one keeps 2,114-2,152 and the
+    old store refuses 66-104; the list after that culls at 4 px (1,710-1,749)
+    and loses nothing. So on the board, INFERRED, every second list of the
+    1.3 s burst loses the HUD and the last scene objects: a 15 Hz flicker of
+    exactly what is submitted last.
+  * The boss's head is not among them in this capture. A different play (more
+    enemies or debris on screen, the gun pointed elsewhere) changes the list;
+    the bench cannot rule out a heavier list where the cut reaches him, but
+    nothing measured here does.
+
+*R638 (the push hold) IN THIS SCENE:* the lists are under 4,096 dwords, and
+the window reaches the other buffer only past w_ip = 0x1000 + k -- a list of
+3,931 dwords never gets there. Simulated against the bench's walk (geodiff
+M2GD_WIP: the read pointer every 64 dwords) and MAME's push log (gw, the game's
+pushes timed from the walk's vblank): no word held at walk x1 to x2; at x3 and
+beyond the holds are the game rewriting the walk's OWN buffer ahead of a slow
+walk, which is what R638 is for. The walks are long here: the walker ends at
+<= 18.45 ms and the geometry at <= 21.3 ms (1,491,436 cycles at 70 MHz, bench,
+q_ready always high) -- inside two vblanks (34.8 ms) unless the board is
+x1.6 slower than the bench. NOT the measured slowdown; INFERRED, not ruled out.
+
+*Expert, kept for the record (the draft's scenes):* lists over 2,048 quads at
+123-127 s (the car into the barrels), 148-153 s (the barrels), 209 s and 405 s,
+3,074 the most (walk 4368); the garage's lost quads are the HUD and the shot
+burst (walk 3709: 632 refused). The lorry at 228-230 s carries the only lists
+over 4,096 dwords in 421 s (5,173-5,587): <= 1,307 quads, nothing lost, and
+the geometry equals MAME's there (geodiff.py: every z equal, one u/v of 1,287
+polygons off). Its R638 timing: the next list's pushes into the other buffer
+start 17.66-17.95 ms after the walk's vblank (MAME time, not a hardware
+fact); the bench walker ends at <= 10.56 ms. Simulated over 46 walks: nothing
+held at x1-x1.5; at x2 14 of 28 buffer-0 walks fill the queue and stall the CPU
+<= 2.88 ms (the overreach); none at x3 / x5 (the walk is still below 0x1000 +
+k). With the window stopped at w_start + 0x4000 the x2 holds go (0 of 28).
+THE SMALLEST FIX, NOT APPLIED (the bench shows no stall at its own speed):
+latch w_start beside w_ip at the walk's start (m2_geo.sv, the
+`w_ip <= 19'(geo_rp[16:2])` line) and add `&& (q_dw < w_start + 19'h4000)` to
+q_in_win -- 19 flip-flops and a comparator. Worth a board A/B only if a
+board measurement shows the walk at twice the bench's length.
+
+*How established:* MAME 0.289 m2lod (r943 build), headless; runs in
+sm2-builds/vcop-quads/build/vcop (runA / runB / runC Expert, beg1 / beg2
+Beginner; ROM-derived, never commit): M2LOD + M2JMP every list, M2GEO walk
+dumps by trigger, M2DIFF one frame a run, geo_wlog.lua (pushes and pointer
+writes); geodiff_wk (+ M2GD_WIP); tb_m2_raster3d (+ M2_R3D_QUADS) built at
+main's parameters. Scripts in build/vcop/scripts (vcop_auto_sel.lua selects Beginner).
+*Left:* the board: the scene on Model2_20261107b with the HUD watched (does it
+flicker at 15 Hz?), and the reporter's own description of the head (whose,
+and when). A board measurement of the walk's length in this scene.
+
+**R992 -- THE QUAD STORE's SPILL (R962) ON MAIN: A LIST RUNS ON INTO THE
+OTHER BANK's TOP, 512 BY DEFAULT (2,560 A LIST, +1 M10K), 1,024 BY
+M2_QNX_1024 (3,072, +2 M10K). THE BEGINNER VAN SCENE IS DRAWN WHOLE.
+BENCH ONLY; NOT MAPPED, NOT FITTED, NOT ON A BOARD.** Branch vcop-quads.
+
+*THE PORT:* m2_quad_store.sv is model2a's (R962 + R985-R987) with main's
+R899 put back -- key_hi and odd_q, the odd pass starting in idx_b only with
+the window key in use (R_INIT's lw_a <= !odd_q, R_NEXT's four-pass end).
+m2_raster3d gains QNX, qs_stall / qs_ofree, .NX(FB_DDR3 ? QNX : 0) exactly as
+R962. Model2.sv: R3D_QNX 512, `M2_QNX_1024` 1,024, `M2_NO_QSPILL` 0.
+tb_m2_raster3d gains R902's M2_R3D_QUADS (our geodiff quads, owner colours)
+and R962's M2_R3D_QUADS2 / q_ready waits; tb_m2_geodiff M2GD_WIP.
+
+*CHECKS (bench, main's raster parameters):*
+  * The van scene, walk 7502 from reset: old 2,048 kept / 107 refused; QNX
+    512 and 1,024 both 2,155 / 0, the same picture (owner PX md5
+    f94f847f1458, textured 07c439cea5b7) and 436,125 draw cycles. Its pairs
+    (7480, 7502): 2,147 / 2,152 then 1,722 / 1,749, nothing refused, no hold.
+  * Pixel- and cycle-identical to the old store rebuilt with NQ 4,096 (and IW
+    12): Expert walk 3709 from reset, 2,680 kept, 496,823 cycles, PX
+    399697fde0d6 (QNX 1,024).
+  * QNX 0 is the old RTL: walk 3709 (2,048 / 632, 414,677 cycles, PX
+    9d78e972323a) and walk 4115 (1,609 quads: 1,533 kept, 405,537 cycles, PX
+    87d183618cd2) -- and QNX 512 / 1,024 on walk 4115 identical to both.
+  * The hold: A = walk 3709 spilled, B = walk 3711 collected at once behind
+    it: B held once for 464,411 cycles (QNX 512; 484,398 at 1,024), 0 refused;
+    A's shown frame equals A drawn alone (PX 8c221a69f994 at 512, 399697fde0d6
+    at 1,024). B keeps 2,155 against the old store's 2,048 + 107 refused; the
+    6,509 pixels that differ are all painted by B's quads at submission
+    positions >= 2,620 -- the ones the old store refused.
+  * An order of magnitude past: walk 3709 four times (11,160 quads): alone,
+    2,560 kept / 8,160 refused (512), 3,072 / 7,648 (1,024); behind a spilled
+    list, held ~464-484 K cycles and then the same; A's frame intact.
+  * Expert pairs (12 of the heaviest): a list after a light one keeps
+    2,119-2,788 at QNX 1,024; at 512 walk 3709 still refuses 120 (2,680
+    needed). The list behind keeps 1,390-2,218, the old store refusing 26-170
+    on 4 of 12.
+  * test_m2_quad_store PASS (23 checks) at NX 0 and NX 1,024 (ofree 0);
+    test_m2_raster3d PASS (40); lint_m2_quad_store clean at NX 0 / 512 / 1,024;
+    lint_top clean at 512, M2_QNX_1024 and M2_NO_QSPILL; lint_idx 141 lines,
+    the same as main's.
+
+*COST:* key_x is QNX x 20 bits -- 512 x 20 is one M10K (R962's map: one
+block), 1,024 x 20 two (1K x 10 mode). The index arrays at 12 bits stay three
+2048x5 blocks each. Main's s1750 is 551 of 553 M10K: 552 with 512, 553 --
+every block -- with 1,024. ALMs: R962's standalone map of the store at 512
+read 2,208 against 2,252 (noise). R962's FOUND ON THE WAY stands: each index
+and att array is read into its own register and selected after, or Quartus
+leaves them as flip-flops. NOT MAPPED HERE (no Quartus this session).
+
+*Cost in time:* a list collected behind a spilled one is held only until that
+one's draw is whole (~0.42-0.56 M cycles, 6-8 ms, on these lists), and only
+if it reaches the spill's edge (2,048 - the excess) first. On the board the
+next walk takes 17-21 ms to get there, so INFERRED rarely; the bench's pairs
+from the van scene never held.
+
+*Left:* quartus_map of the store at 512 (and 1,024 if the M10K allows), the
+fit, and the board: the van scene's HUD steady. The tiny threshold still
+follows NQ (fine while the last list needed < 1,792, R769): with the spill it
+could follow NQ + NX -- not changed here, it would move every heavy list's
+picture.

@@ -141,7 +141,18 @@ module m2_quad_store #(
   // R828c: one more bit a quad, the geometry's no-mip flag (m2_geometry
   // q_mipz), at the top of the texture word: 192 -> 193 bits, still 39
   // M10K a bank in the 2048x5 mode (195 bits). 0: not stored, out_mipz 0.
-  parameter bit          MZ     = 1'b0
+  parameter bit          MZ     = 1'b0,
+  // R962: A LIST LONGER THAN A BANK SPILLS INTO THE OTHER BANK'S TOP. NX
+  // more quads a list (NQ + NX in all; NX a power of two, at most NQ/2),
+  // held from the top of the other bank downwards -- only while that bank's
+  // list is finished with (`ofree`: the framebuffer has it whole). The list
+  // collected next starts at the bottom of that bank, and while the spilled
+  // list is still being drawn it is held at the spill's edge (`in_stall`)
+  // rather than refused. The sort's scratch for the spilled positions is
+  // the other bank's index array, free for the same reason; only the keys
+  // need a new array (NX deep). Virtua Cop 2's ranking is 2,248 quads.
+  // 0: the store as it was (2,048 a list, the excess refused).
+  parameter int unsigned NX     = 0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -150,6 +161,8 @@ module m2_quad_store #(
   input  logic        clear,                 // start a new frame (in wbank)
   input  logic        wbank,                 // the bank collected into and sorted
   input  logic        rbank,                 // the bank replayed
+  input  logic        ofree,                 // R962: rbank's list is drawn and done with (NX only)
+  output logic        in_stall,              // R962: hold the next quad (NX only)
   input  logic        in_valid,
   input  logic signed [15:0] in_x0, in_y0, in_x1, in_y1,
   input  logic signed [15:0] in_x2, in_y2, in_x3, in_y3,
@@ -259,6 +272,27 @@ module m2_quad_store #(
   localparam int unsigned AT_W = 2*BW + 1 + CW;   // {hi, lo, moire, col565}
   (* ramstyle = "M10K" *) logic [AT_W-1:0] att_0 [NQ], att_1 [NQ];
   (* ramstyle = "M10K" *) logic [KW-1:0] key [NQ];
+  // R962: POSITIONS AND SLOT CODES. A list's quads are numbered 0..count-1
+  // in submission order (PIW bits); position p >= NQ is the spill. Where a
+  // quad lives -- its SLOT CODE, what the index arrays hold -- is {s, a}:
+  // s = 0, address a of the list's own bank (a = p); s = 1, address a of the
+  // other bank, counted down from its top (a = ~p). So a code is the address
+  // as it stands and the bank is the list's own XOR s -- no arithmetic on
+  // the replay's RAM-to-RAM path. The keys of the spill sit in key_x at
+  // a's low bits (the top NX addresses, all distinct).
+  localparam int unsigned PIW  = (NX > 0) ? IW + 1 : IW;
+  localparam int unsigned XB   = (NX > 1) ? $clog2(NX) : 1;
+  localparam int unsigned MAXL = NQ + NX;
+  (* ramstyle = "M10K" *) logic [KW-1:0] key_x [(NX > 0) ? NX : 1];
+  function automatic logic sb(input logic [PIW-1:0] p);   // spilled position / other-bank code
+    sb = (NX > 0) && p[PIW-1];
+  endfunction
+  function automatic [IW-1:0] two_end(input logic [PIW-1:0] p);   // the address of position p
+    two_end = p[IW-1:0] ^ {IW{sb(p)}};
+  endfunction
+  function automatic [PIW-1:0] code_of(input logic [PIW-1:0] p);
+    code_of = PIW'({sb(p), two_end(p)});
+  endfunction
   // R273: the texture, in its own array for the same reason the vertices are in
   // theirs -- written once with the quad, read once on replay, never touched by
   // the sort. 8 x 13 + 21 = 125 bits, which fills three 40-bit M10K slices and
@@ -316,9 +350,14 @@ module m2_quad_store #(
   // Quartus inferred only the replay's read port and built the sort's read
   // (45,613 registers, build/dbuf7); two arrays with the bank selecting the
   // result infer as the single-bank store did, one write and two reads each.
-  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a0 [NQ];
-  (* ramstyle = "M10K" *) logic [IW-1:0] idx_a1 [NQ];
-  (* ramstyle = "M10K" *) logic [IW-1:0] idx_b [NQ];
+  // R962: they hold slot codes, PIW bits (12 still fits the 2048x5 blocks).
+  // A list's sorted order is two-ended like its quads (order o >= NQ in the
+  // other bank's array, from the top); the sort's scratch for o >= NQ is the
+  // other bank's array from the BOTTOM (o - NQ) -- NX <= NQ/2 keeps the two
+  // apart, and both are free only while the other list is (ofree).
+  (* ramstyle = "M10K" *) logic [PIW-1:0] idx_a0 [NQ];
+  (* ramstyle = "M10K" *) logic [PIW-1:0] idx_a1 [NQ];
+  (* ramstyle = "M10K" *) logic [PIW-1:0] idx_b [NQ];
 
   logic [IW:0]  count [NBANK];
   // R566: the count as it WILL be once a quad still in the one-cycle attribute
@@ -333,7 +372,33 @@ module m2_quad_store #(
 
   // The capacity test, written once. count is one bit wider than an index so it
   // can hold NQ itself without wrapping.
-  wire has_room = (wcount < {1'b0, IW'(NQ-1)} + 1'b1);
+  // R962: with NX, the limit moves. While the other bank's list is in use
+  // its spill (its count over NQ) is the top of THIS bank, so the list stops
+  // below it -- held there (in_stall), not refused, until that list is done
+  // with; then it may run on to NQ + NX. ofree only rises during a
+  // collection (the swap that lowers it ends one), so a late view of it is
+  // only ever conservative. in_stall is registered and set two quads early:
+  // a quad taken while it was low had wcount at most own_lim - 2 the cycle
+  // before, and wcount moves by at most one a cycle.
+  logic          ofree_r, stall_r;
+  logic [IW:0]   own_lim_r;
+  wire  [IW:0]   lim = (NX == 0) ? (IW+1)'(NQ) : (ofree_r ? (IW+1)'(MAXL) : own_lim_r);
+  wire has_room = (wcount < lim);
+  assign in_stall = stall_r;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      ofree_r <= 1'b0; stall_r <= 1'b0; own_lim_r <= (IW+1)'(NQ);
+    end else begin
+      ofree_r   <= ofree;
+      own_lim_r <= (count[rbank] > (IW+1)'(NQ)) ? (IW+1)'((IW+2)'(2*NQ) - (IW+2)'(count[rbank])) : (IW+1)'(NQ);
+      stall_r   <= (NX > 0) && !ofree && ((IW+2)'(wcount) + (IW+2)'(2) >= (IW+2)'(own_lim_r));
+    end
+  end
+
+  // R962: where the quad at position wcount goes (two-ended, above).
+  wire [PIW-1:0] w_pos  = wcount[PIW-1:0];
+  wire           w_pb   = wbank ^ sb(w_pos);     // the physical bank
+  wire [IW-1:0]  w_addr = two_end(w_pos);
 
   // Which of the six 64-row bands this quad's rows touch. Computed from the
   // vertex extremes, clamped: a quad above the screen or below it lands in no
@@ -442,6 +507,7 @@ module m2_quad_store #(
   // exactly as before; a tiny quad's slot is reused by the next quad as it
   // always was. `clear` wins over a pending increment, as it did over in_valid.
   logic                a_moire;
+  logic                a_pb;     // R962: the physical bank of the slot (a_bank stays the list's)
   logic [IW-1:0]       a_slot;
   logic signed [15:0] a_lo, a_hi;   // R731: band_of() at the write
   // R739: and only the first round of the min/max tree here -- the pairs --
@@ -463,7 +529,7 @@ module m2_quad_store #(
   logic [CW-1:0]       b_col;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0; a_need <= 1'b0;
+      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0; a_need <= 1'b0; a_pb <= 1'b0;
       a_slot <= '0; a_lo01 <= '0; a_lo23 <= '0; a_hi01 <= '0; a_hi23 <= '0; a_col <= '0;
       b_v <= 1'b0; b_bank <= 1'b0; b_moire <= 1'b0; b_slot <= '0; b_band <= '0; b_col <= '0;   // R740
     end else begin
@@ -472,10 +538,11 @@ module m2_quad_store #(
       a_tiny  <= tiny_sel;
       a_need  <= !is_tiny_f;
       a_bank  <= wbank;
-      a_slot  <= wcount[IW-1:0];
+      a_pb    <= w_pb;      // R962
+      a_slot  <= w_addr;
       a_lo01  <= smin(in_y0, in_y1);  a_lo23 <= smin(in_y2, in_y3);   // R579 balanced; R739 split
       b_v     <= a_v && a_room;                                   // R740: the att word, finished
-      b_bank  <= a_bank;  b_slot <= a_slot;  b_moire <= a_moire;  b_col <= a_col;
+      b_bank  <= a_pb;  b_slot <= a_slot;  b_moire <= a_moire;  b_col <= a_col;   // R962: b_bank physical
       b_band  <= band_of(a_lo, a_hi);
       a_hi01  <= smax(in_y0, in_y1);  a_hi23 <= smax(in_y2, in_y3);
       a_moire <= in_moire;
@@ -500,22 +567,22 @@ module m2_quad_store #(
       // Every accepted quad is WRITTEN at slot wcount and only the COUNT is
       // withheld when it is tiny: the slot is simply reused by the next quad.
       if (in_valid && has_room) begin
-        if (wbank) begin
-          vtx_1[wcount[IW-1:0]] <= VWX'({in_vx,                                    // R867: dropped without VX
+        if (w_pb) begin   // R962: the slot's bank, at its address
+          vtx_1[w_addr] <= VWX'({in_vx,                                    // R867: dropped without VX
                                     satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
                                     satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
                                     satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
                                     satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])});
-          uvt_1[wcount[IW-1:0]]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,   // R828c: the cast drops in_mipz without MZ
+          uvt_1[w_addr]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,   // R828c: the cast drops in_mipz without MZ
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0});
         end else begin
-          vtx_0[wcount[IW-1:0]] <= VWX'({in_vx,                                    // R867: dropped without VX
+          vtx_0[w_addr] <= VWX'({in_vx,                                    // R867: dropped without VX
                                     satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
                                     satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
                                     satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
                                     satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])});
-          uvt_0[wcount[IW-1:0]]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,
+          uvt_0[w_addr]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0});
         end
@@ -524,7 +591,8 @@ module m2_quad_store #(
         // Complemented because the sort is ascending and the painter wants the
         // largest z -- the furthest -- first.
         // R607: uncomplemented when front to back -- nearest first.
-        key[wcount[IW-1:0]] <= FTB ? in_z[KW-1:0] : ~in_z[KW-1:0];
+        if (sb(w_pos)) key_x[w_addr[XB-1:0]] <= FTB ? in_z[KW-1:0] : ~in_z[KW-1:0];   // R962
+        else           key[w_addr]            <= FTB ? in_z[KW-1:0] : ~in_z[KW-1:0];
       end
       // R566: a cycle later, from the registered comparators.
       if (b_v) begin   // R740: a cycle after the count
@@ -585,10 +653,10 @@ module m2_quad_store #(
   wire  [IW:0]      hist_q, base_q;
   logic [IW:0]  acc;
   logic         which;                // 0: a -> b, 1: b -> a
-  logic [IW-1:0] cur_idx;
+  logic [PIW-1:0] cur_idx;            // R962: slot codes
   // The index that goes with the digit now leaving the pipeline: cur_idx has
   // already moved on by the time its key comes back.
-  logic [IW-1:0] cidx_d;
+  logic [PIW-1:0] cidx_d;
   // Three valid bits, one per stage of the two registered reads. Named for the
   // sort; the replay path below has its own.
   logic s0, s1, s2;
@@ -608,21 +676,64 @@ module m2_quad_store #(
   // arrays, and the band mask out of att.
   //
   // The cost is a cycle per access, which this sequencer already had states for.
-  // R987: each index array read into the block's own output latch, the
-  // select after it from the selects taken at the same edge -- the same word
-  // on every cycle, without the pass-through logic Quartus built for a
-  // select in front of a register (see vtx_r below, R985).
-  logic [IW-1:0] ib_q, ia0_q, ia1_q;
-  logic          which_q, wbank_q;
-  logic [KW-1:0] key_rd;
+  // R962: ONE ADDRESS FOR THE THREE ARRAYS, AND A SELECT. Order position ri
+  // of the logical array being read -- the bank's own (A, two-ended) or the
+  // scratch (B: idx_b, the spill at the bottom of the other bank's array) --
+  // is one physical array at one address, so each array keeps one read port.
+  // Without NX this is the old read: rs_sel 2 or wbank, at ri.
+  logic [PIW-1:0] idx_rd;
+  logic [KW-1:0]  key_rd;
+  // R987: and the key read the same way: key and key_x each into its own
+  // latch, the select after them on sb(cur_idx) taken at the same edge. As
+  // `key_rd <= sb(cur_idx) ? key_x[..] : key[..]` it was a select in front of
+  // a register, and the map built pass-through logic for both (Warning
+  // 276020 on key / key_x).
+  logic [KW-1:0]  kq, kxq;
+  logic           ksel;
+  logic [PIW-1:0] rd_a0, rd_a1, rd_b;
+  logic [1:0]     rd_sel;
+  wire  [PIW-1:0] r_pos  = ri[PIW-1:0];
+  wire            r_sp   = sb(r_pos);
+  wire  [IW-1:0]  r_addr = which ? r_pos[IW-1:0] : two_end(r_pos);
+  wire  [1:0]     r_sel  = (which && !r_sp) ? 2'd2                          // idx_b
+                         : {1'b0, which ? ~wbank : (wbank ^ r_sp)};        // idx_a0 / idx_a1
+  // Each array read into its own register and the select applied after:
+  // as one `idx_rd <= sel ? ...` with a select that depends on ri, Quartus
+  // left all three arrays uninferred ("asynchronous read logic", 60,818 ALMs
+  // standalone); in this form each is a plain registered read.
   always_ff @(posedge clk) begin
-    ib_q  <= idx_b [ri[IW-1:0]];
-    ia0_q <= idx_a0[ri[IW-1:0]];
-    ia1_q <= idx_a1[ri[IW-1:0]];
-    which_q <= which; wbank_q <= wbank;
-    key_rd <= key[cur_idx];
+    rd_a0  <= idx_a0[r_addr];
+    rd_a1  <= idx_a1[r_addr];
+    rd_b   <= idx_b[r_addr];
+    rd_sel <= r_sel;
+    kq     <= key[cur_idx[IW-1:0]];
+    kxq    <= key_x[cur_idx[XB-1:0]];
+    ksel   <= sb(cur_idx);
   end
-  wire [IW-1:0] idx_rd = which_q ? ib_q : (wbank_q ? ia1_q : ia0_q);
+  assign idx_rd = (rd_sel == 2'd2) ? rd_b : (rd_sel[0] ? rd_a1 : rd_a0);
+  assign key_rd = ksel ? kxq : kq;   // R987
+
+  // R962: THE SORT'S WRITES, ONE A CYCLE, REGISTERED. The FSM names a write
+  // to order position lw_o of A or B; it lands a cycle later through the
+  // same mapping as the reads. A cycle late is safe: a pass reads one array
+  // and writes the other, and the next pass's first read is past R_CNT's
+  // sixteen cycles. (The scatter's address was the histogram's base[digit],
+  // off the key RAM: the mapping is not added to that path.)
+  logic           lw_en, lw_a;
+  logic [PIW-1:0] lw_o, lw_v;
+  logic [1:0]     sw_sel;
+  logic [IW-1:0]  sw_addr;
+  always_comb begin
+    sw_addr = lw_a ? two_end(lw_o) : lw_o[IW-1:0];
+    sw_sel  = (!lw_a && !sb(lw_o)) ? 2'd2 : {1'b0, lw_a ? (wbank ^ sb(lw_o)) : ~wbank};
+  end
+  always_ff @(posedge clk) begin
+    if (lw_en) begin
+      if (sw_sel == 2'd2)  idx_b [sw_addr] <= lw_v;
+      else if (sw_sel[0])  idx_a1[sw_addr] <= lw_v;
+      else                 idx_a0[sw_addr] <= lw_v;
+    end
+  end
 
   // ONE ELEMENT PER CYCLE, NOT FIVE.
   //
@@ -667,6 +778,7 @@ module m2_quad_store #(
       rst_st <= R_IDLE; pass <= '0; ri <= '0; hi <= '0; acc <= '0; odd_q <= 1'b0;
       which <= 1'b0; cur_idx <= '0; cidx_d <= '0;
       s0 <= 1'b0; s1 <= 1'b0; s2 <= 1'b0;
+      lw_en <= 1'b0; lw_a <= 1'b0; lw_o <= '0; lw_v <= '0;   // R962
       // NBUCK, not a hardcoded 256. Narrowing the radix left this loop walking
       // sixteen times past the end of both arrays - which Verilator tolerates
       // silently and Quartus rejects outright with "index 16 cannot fall outside
@@ -675,6 +787,7 @@ module m2_quad_store #(
       // after the band height halved.
       // (R986: hist and base are not cleared here -- see their declaration)
     end else begin
+      lw_en <= 1'b0;   // R962: a write is named for one cycle
       case (rst_st)
         R_IDLE: if (sort_start) begin
           pass <= '0; which <= ODDP & key_hi; odd_q <= ODDP & key_hi; ri <= '0;   // R899
@@ -685,10 +798,11 @@ module m2_quad_store #(
         // tie-break, exactly as quad_t::compare does with the address.
         // R607: FRONT TO BACK STARTS IN REVERSE SUBMISSION ORDER, so the stable
         // sort leaves ties last-submitted-first -- MAME's bucket LIFO.
+        // R962: order position ri of B (odd_q, R899) or A; the value is the slot
+        // code of submission position wcount-1-ri (FTB) or ri.
         R_INIT: begin
-          if (odd_q)      idx_b [ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];   // R899
-          else if (wbank) idx_a1[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
-          else            idx_a0[ri[IW-1:0]] <= FTB ? IW'(wcount - 1'b1 - ri) : ri[IW-1:0];
+          lw_en <= 1'b1; lw_a <= !odd_q; lw_o <= ri[PIW-1:0];
+          lw_v  <= code_of(FTB ? PIW'(wcount - 1'b1 - ri) : ri[PIW-1:0]);
           if (ri + 1 >= wcount) begin ri <= '0; hi <= '0; rst_st <= R_CNT; end
           else                       ri <= ri + 1'b1;
         end
@@ -741,10 +855,7 @@ module m2_quad_store #(
           cur_idx <= idx_rd;
           cidx_d  <= cur_idx;
           if (s2) begin
-            if (which) begin
-              if (wbank) idx_a1[base_q[IW-1:0]] <= cidx_d; else idx_a0[base_q[IW-1:0]] <= cidx_d;
-            end
-            else       idx_b[base_q[IW-1:0]] <= cidx_d;
+            lw_en <= 1'b1; lw_a <= which; lw_o <= base_q[PIW-1:0]; lw_v <= cidx_d;   // R962
             // (R986: base[digit] += 1 by the array's port)
           end
           if (!more && !pipe_busy) rst_st <= R_NEXT;
@@ -799,7 +910,7 @@ module m2_quad_store #(
   // order the sort established is exactly what the fill sees.
   localparam int unsigned HQ = 4;
   localparam int unsigned HW = $clog2(HQ) + 1;
-  logic [IW-1:0] hq_q   [HQ];
+  logic [PIW-1:0] hq_q  [HQ];         // R962: slot codes
   logic [CW:0]   hq_att [HQ];         // {moire, col565}, taken at the hit
   logic [HW-1:0] hq_wp, hq_rp;
   wire           hq_empty = (hq_wp == hq_rp);
@@ -809,27 +920,34 @@ module m2_quad_store #(
 
   logic          sc_run;              // the scan is walking the list
   logic [IW:0]   pi;
-  logic [IW-1:0] q;
+  logic [PIW-1:0] q;
   logic          v1, v2;
-  logic [IW-1:0] q2;
+  logic [PIW-1:0] q2;
 
-  // R987: ord_idx and att_rd as R985's words: each bank's read in its own
-  // latch on the scan's advance, the bank and a loaded flag beside them.
-  logic [IW-1:0]   oi_q0, oi_q1;
-  logic [AT_W-1:0] at_q0, at_q1;
-  logic            o_bank, o_ld;
-  wire  [IW-1:0]   ord_idx = !o_ld ? '0 : o_bank ? oi_q1 : oi_q0;
-  wire  [AT_W-1:0] att_rd  = !o_ld ? '0 : o_bank ? at_q1 : at_q0;
+  logic [PIW-1:0] ord_idx;
+  logic [PIW-1:0] ord_a0, ord_a1;   // R962: the two arrays' reads, selected after
+  logic           ord_sel;
+  logic [AT_W-1:0] att_rd;
+  logic [AT_W-1:0] att_r0, att_r1;   // R962: as ord_idx -- each array read alone
+  logic            att_sel;
+  // R987: the four reads in the blocks' own latches (no reset in front: a
+  // read enable on the scan's advance, as the flops' hold was), the selects
+  // and a loaded flag beside them; ord_idx and att_rd read 0 until the
+  // scan's first advance after reset, as the flops' reset left them.
+  logic            o_ld;
+  assign ord_idx = !o_ld ? '0 : ord_sel ? ord_a1 : ord_a0;
+  assign att_rd  = !o_ld ? '0 : att_sel ? att_r1 : att_r0;
   // R262: one 104-bit word holds all four, packed {v3,v2,v1,v0} with {y,x} in
   // each. The slices below are the same four words the four arrays used to be.
   // R985: THE WORDS ARE HELD IN THE BLOCKS' OWN OUTPUT LATCHES. vtx_r and
-  // uvt_r were 304 flip-flops loaded in E_READ from a two-bank select, with a
-  // hold and a reset in front of each: a 6:1 select a bit (the map's
-  // restructuring report priced it at 1,216 LEs). Each bank is now read into
-  // its own latch only in E_READ (a read enable: the M10K holds its output
-  // between reads, as the flops did), and the bank and a loaded flag are
-  // taken with it, so the word below is the same on every cycle: the flops'
-  // reset value until the first read, then the bank E_READ chose.
+  // uvt_r were flip-flops loaded in E_READ from a two-bank select (R962: the
+  // bank rbank ^ sb(q)), with a hold and a reset in front of each, so the
+  // map retimed the read a cycle early and forwarded writes past it
+  // (Warning 276020 on vtx_0 / vtx_1 / uvt_0 / uvt_1). Each bank is now read
+  // into its own latch only in E_READ (a read enable: the M10K holds its
+  // output between reads, as the flops did), and the bank and a loaded flag
+  // are taken with it, so the word below is the same on every cycle: the
+  // flops' reset value until the first read, then the bank E_READ chose.
   logic [VWX-1:0] vtx_q0, vtx_q1;
   logic [UW-1:0]  uvt_q0, uvt_q1;
   logic           rd_bank, rd_ld;
@@ -875,19 +993,23 @@ module m2_quad_store #(
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
 
-  // R987: the scan's two reads, at the edge the flops took them
+  // R987: the scan's reads, at the edge the flops took them
   wire o_rd = adv && !replay_start;
   always_ff @(posedge clk) begin
     if (o_rd) begin
-      oi_q0 <= idx_a0[pi[IW-1:0]]; oi_q1 <= idx_a1[pi[IW-1:0]];
-      at_q0 <= att_0[ord_idx];     at_q1 <= att_1[ord_idx];
+      ord_a0 <= idx_a0[two_end(pi[PIW-1:0])];
+      ord_a1 <= idx_a1[two_end(pi[PIW-1:0])];
+      att_r0 <= att_0[ord_idx[IW-1:0]];
+      att_r1 <= att_1[ord_idx[IW-1:0]];
     end
   end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      o_bank <= 1'b0; o_ld <= 1'b0;
+      ord_sel <= 1'b0; att_sel <= 1'b0; o_ld <= 1'b0;
     end else if (o_rd) begin
-      o_bank <= rbank; o_ld <= 1'b1;
+      ord_sel <= rbank ^ sb(pi[PIW-1:0]);
+      att_sel <= rbank ^ sb(ord_idx);
+      o_ld    <= 1'b1;
     end
   end
 
@@ -896,15 +1018,15 @@ module m2_quad_store #(
   wire e_rd = (e_st == E_READ) && !replay_start;
   always_ff @(posedge clk) begin
     if (e_rd) begin
-      vtx_q0 <= vtx_0[q]; vtx_q1 <= vtx_1[q];
-      uvt_q0 <= uvt_0[q]; uvt_q1 <= uvt_1[q];
+      vtx_q0 <= vtx_0[q[IW-1:0]]; vtx_q1 <= vtx_1[q[IW-1:0]];
+      uvt_q0 <= uvt_0[q[IW-1:0]]; uvt_q1 <= uvt_1[q[IW-1:0]];
     end
   end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       rd_bank <= 1'b0; rd_ld <= 1'b0;
     end else if (e_rd) begin
-      rd_bank <= rbank; rd_ld <= 1'b1;
+      rd_bank <= rbank ^ sb(q); rd_ld <= 1'b1;   // R962: the slot's physical bank
     end
   end
 
@@ -926,6 +1048,8 @@ module m2_quad_store #(
     end else begin
       // ---- the scan: the same three-stage alignment as before (see above).
       if (adv) begin
+        // R962: order position pi two-ended from rbank; the code read back is
+        // the slot's address as it stands, its bank rbank ^ the code's top bit.
         // (ord_idx, att_rd: R987, the latches above)
         q2      <= ord_idx;
         v1      <= v0;

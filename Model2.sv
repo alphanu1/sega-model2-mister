@@ -6669,6 +6669,21 @@ m2_ddr3 u_ddr3 (
 // (Daytona) the quad is what it was: the slope as 565 and the row-1 flag in
 // q_tex[11], the slot bits 0.
 localparam int R3D_QTW = R3D_TEXLUT ? 27 : 24;
+// R992 (the 2A branch's R962): A LIST LONGER THAN THE STORE'S 2,048 QUADS
+// SPILLS INTO THE OTHER BANK'S TOP while that bank's list is drawn whole
+// (m2_quad_store NX; FB_DDR3 only). Virtua Cop's Beginner stage (#28, the
+// van that smashes the crates) measured 2,155 quads a list on this geometry,
+// its Expert garage 2,790. 512 holds the Beginner scene whole (2,560 a list),
+// +1 M10K (key_x 512 x 20). M2_QNX_1024 builds 1,024 (3,072, every list
+// measured, +2 M10K); M2_NO_QSPILL the store as it was (2,048, the excess
+// refused).
+`ifdef M2_NO_QSPILL
+localparam int R3D_QNX = 0;
+`elsif M2_QNX_1024
+localparam int R3D_QNX = 1024;
+`else
+localparam int R3D_QNX = 512;
+`endif
 wire [23:0]        r3d_qcol;
 wire [R3D_QTW-1:0] r3d_qtex;
 logic              r3d_lut_we;
@@ -6727,7 +6742,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
                 // R616: pixel-centre planes; R626: bilinear, a texel per four pixels (PIXSTEP 2 drops bands on the board)
               .TWO_CLOCKS(1'b1), .TEX_AW(SDR_AW),
               .KW(R3D_WINKEY ? 20 : 16),
-              .TEXLUT(R3D_TEXLUT)) u_raster3d (   // R564: scan on clk_mem; R899; R925
+              .TEXLUT(R3D_TEXLUT),
+              .QNX(R3D_QNX)) u_raster3d (   // R564: scan on clk_mem; R899; R925; R992
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
