@@ -21,15 +21,10 @@
 // returns on ~99.8% of arguments and the 80960KB's extended-precision
 // microcode would.
 //
-// The machine: 128 x 64-bit registers in M10K (the first 68 hold the
+// The machine: 128 x 64-bit registers in M10K (the first 73 hold the
 // constants, initialised and never written), a 512-word microcode ROM, a
 // four-deep return stack, and two operand registers that drive the adder,
 // multiplier and divider i960_top already has (it muxes them in while `act`).
-// One instruction at a time:
-//
-//   FETCH  the ROM word        DEC  decode, present register a
-//   RA     operand A <- a      RB   operand B <- b
-//   ISSUE  request the unit    WAIT its done; the result into register d
 //
 //   op  0 ADD  d = a + b     1 SUB  d = a - b     2 MUL  d = a * b
 //       3 DIV  d = a / b     4 BR   if cond(a) goto t     5 JMP t
@@ -43,6 +38,17 @@
 //
 // The units see A on their .a port and B on .b: a - b, a / b, as the i960's
 // src2 - src1 and src2 / src1 are wired.
+//
+// R998: PIPELINED. R845 ran one instruction at a time -- FETCH, DEC, RA, RB,
+// ISSUE and three cycles of WAIT, eight a micro-op -- so cosrl took ~2,200
+// cycles where Intel's 80960KB takes 441 at 25 MHz (PRM appendix C). Now the
+// next word is fetched while one executes, the register file's one read port
+// is kept busy, and an operand whose writer is still in a unit is taken from
+// res as it is written, so an op that needs the one before it issues three
+// cycles after it, an independent one a cycle or two after, and a JMP / CALL
+// / RET costs a cycle. The same operations on the same values in the same
+// order, and the same register-file writes: the results are R845's bit for
+// bit (tb_i960_fptrans_ab runs both side by side).
 
 module i960_fptrans (
   input  logic        clk,
@@ -55,8 +61,8 @@ module i960_fptrans (
   output logic [63:0] opa,          // to the units' .a
   output logic [63:0] opb,          // to the units' .b
   output logic        add_req, mul_req, div_req,   // one-cycle requests
-  output logic        sub,          // the adder subtracts
-  output logic        sel_add, sel_mul, sel_div,   // which unit's y is the result
+  output logic        sub,          // the adder subtracts (valid with add_req)
+  output logic        sel_add, sel_mul, sel_div,   // which unit's y is on res
   input  logic        add_done, mul_done, div_done,
   input  logic [63:0] res,          // the selected unit's y (i960_top's fp_res_wide)
   output logic        fin           // one cycle: END's result is on res
@@ -77,9 +83,10 @@ module i960_fptrans (
     q <= rf[raddr];
   end
 
-  logic [8:0]  upc;
+  logic [8:0]  fa;           // the ROM address this cycle: uw is ucode(fa) next cycle
+  logic [8:0]  pc;           // the address uw came from
   logic [31:0] uw;
-  always_ff @(posedge clk) uw <= ucode(upc);
+  always_ff @(posedge clk) uw <= ucode(fa);
 
   // ------------------------------------------------------------ decode
   wire [3:0] op   = uw[31:28];
@@ -91,6 +98,22 @@ module i960_fptrans (
   wire [2:0] f_c  = uw[27:25];
   wire       f_i  = uw[24];
   wire [8:0] f_t  = uw[8:0];
+
+  wire is_br   = (op == 4'd4);
+  wire is_jmp  = (op == 4'd5);
+  wire is_call = (op == 4'd6);
+  wire is_ret  = (op == 4'd7);
+  wire is_alu  = !(is_br || is_jmp || is_call || is_ret);   // 0-3, 8-15 (11-15 never assembled: SUB, as R845's default)
+  wire is_ld   = (op == 4'd8) || (op == 4'd9);
+  wire is_end  = (op == 4'd10);
+  wire d_mul   = (op == 4'd2);
+  wire d_div   = (op == 4'd3);
+  wire d_sub   = !(op == 4'd0) && !d_mul && !d_div;          // SUB, LDX, LDY, END
+  wire d_wr    = is_alu && !is_end;
+  // register 0 is ZERO (a constant: never written), so it is never read --
+  // the operand is +-0 by its modifier, which is what the read returned
+  wire need_a  = is_alu && !is_ld && (f_a != 7'd0);
+  wire need_b  = is_alu && !is_ld && !is_end && (f_b != 7'd0);
 
   function automatic logic [63:0] modv(input logic [63:0] v, input logic [1:0] m);
     case (m)
@@ -116,76 +139,223 @@ module i960_fptrans (
     endcase
   end
 
-  // ------------------------------------------------------------ sequencer
-  typedef enum logic [3:0] {S_IDLE, S_FETCH, S_DEC, S_RA, S_RB, S_ISSUE, S_WAIT, S_BR, S_END} st_t;
+  // ------------------------------------------------------------ the pipeline
+  // An instruction is in D while it reads its operands (one register-file
+  // read a cycle), X the cycle its last read lands, ISS the cycle its
+  // request is high, P1, then P2: the unit's done, its y on res, written to
+  // the register file in that cycle. Add and multiply both take two cycles,
+  // so one op a cycle can be in each place. DIV is not piped: D waits from
+  // the moment it leaves until the divider's done.
+  typedef enum logic [1:0] {S_IDLE, S_RUN, S_DRAIN} st_t;
   st_t st;
-  logic [8:0] ras [4];
-  logic [1:0] sp;
-  logic [1:0] unit;          // 0 add, 1 sub, 2 mul, 3 div
 
-  assign raddr = (st == S_RA) ? f_b : f_a;   // DEC presents a, RA presents b
+  logic        x_v, x_b, x_imm, x_isg, x_w, x_mul, x_div, x_sub, x_end;
+  logic [1:0]  x_mod;
+  logic [6:0]  x_d;
+  logic        i_v, i_w, i_mul, i_end;
+  logic [6:0]  i_d;
+  logic        p1_v, p1_w, p1_mul, p1_end;
+  logic [6:0]  p1_d;
+  logic        p2_v, p2_w, p2_mul;
+  logic [6:0]  p2_d;
+  logic        dv_busy;
+  logic [6:0]  dv_d;
+
+  logic [8:0]  ras [4];
+  logic [1:0]  sp;
+  logic        bph;          // BR: its register read is in flight
+  // the operand slots of the instruction in D: not yet read, read last
+  // cycle (lands now), waiting for its writer to reach P2, latched
+  localparam logic [1:0] SL_NEW = 2'd0, SL_RQ = 2'd1, SL_PEND = 2'd2, SL_OK = 2'd3;
+  logic [1:0]  sa, sb;
+
+  // a register with a write still to come (in X, ISS or P1), or being
+  // written this cycle (P2: the read would return the old value)
+  wire hl_a = (x_v && x_w && (x_d == f_a)) || (i_v && i_w && (i_d == f_a)) || (p1_v && p1_w && (p1_d == f_a));
+  wire hl_b = (x_v && x_w && (x_d == f_b)) || (i_v && i_w && (i_d == f_b)) || (p1_v && p1_w && (p1_d == f_b));
+  wire hl_d = (x_v && x_w && (x_d == f_d)) || (i_v && i_w && (i_d == f_d)) || (p1_v && p1_w && (p1_d == f_d));
+  wire hn_a = p2_v && p2_w && (p2_d == f_a);
+  wire hn_b = p2_v && p2_w && (p2_d == f_b);
+
+  wire drun = (st == S_RUN) && !dv_busy;
+  wire dalu = drun && is_alu;
+
+  // slot a: lands (its read was last cycle), captured from res (its writer
+  // is in P2), or read now. A capture or a latch with no read is never made
+  // while X latches the instruction before (x_v): its operands are held.
+  // A NEW slot whose writer is in P2 while X holds the operands waits a
+  // cycle and reads the register file. A PEND slot's writer is never in P2
+  // with X full: X is only ever the first cycle an instruction spends in D.
+  wire a_land = dalu && (sa == SL_RQ);
+  wire a_cap  = dalu && need_a && (sa == SL_NEW || sa == SL_PEND) && hn_a && !x_v;
+  wire a_rd   = dalu && need_a && (sa == SL_NEW) && !hl_a && !hn_a;
+  wire a_ok   = !need_a || (sa == SL_OK) || a_land || a_cap;
+  wire b_land = dalu && (sb == SL_RQ);
+  wire b_cap  = dalu && need_b && (sb == SL_NEW || sb == SL_PEND) && hn_b && !x_v;
+  wire b_rd   = dalu && need_b && (sb == SL_NEW) && !hl_b && !hn_b && !a_rd;
+  wire b_ok   = !need_b || (sb == SL_OK) || b_land || b_cap;
+  // a second write in flight to one register is never made, so a capture
+  // always takes the one writer before it
+  wire waw    = d_wr && hl_d;
+  wire lv_x   = dalu && !waw && ((a_rd && b_ok) || (b_rd && a_ok));
+  wire lv_d   = dalu && !waw && !a_rd && !b_rd && a_ok && b_ok && !x_v;
+
+  wire br_rd  = drun && is_br && !bph && !hl_a && !hn_a;
+  wire br_ev  = drun && is_br && bph;
+  wire ctl    = drun && (is_jmp || is_call || is_ret);
+  wire adv    = lv_x || lv_d || br_ev || ctl;
+
+  assign raddr = (is_br || (need_a && sa == SL_NEW && !hl_a && !hn_a)) ? f_a : f_b;
+
+  wire [8:0] pc1 = pc + 9'd1;
+  always_comb begin
+    if (st == S_IDLE)                  fa = {7'd0, entry};
+    else if (!adv)                     fa = pc;
+    else if (is_jmp || is_call)        fa = f_t;
+    else if (is_ret)                   fa = ras[sp - 2'd1];
+    else if (is_br)                    fa = (cond ^ f_i) ? f_t : pc1;
+    else                               fa = pc1;
+  end
+
+  assign we    = (p2_v && p2_w) || (dv_busy && div_done);
+  assign waddr = (dv_busy && div_done) ? dv_d : p2_d;
+
+  wire imm_a_sg = f_ma[0];             // modv(+0, m): -0 for 1 and 3
+  wire imm_b_sg = f_mb[0];
+
+  // The operand registers' next values, as a load, a clear (an immediate
+  // +-0: only the sign survives) and a source -- the register file's q, res,
+  // x or y -- with the modifier on the sign. The cases are exclusive: X
+  // never shares a cycle with a latch by D.
+  logic        a_ld, a_zero, a_zsg, b_ld, b_zero, b_zsg;
+  logic [1:0]  a_src, a_m, b_m;       // a_src: 0 q, 1 res, 2 x, 3 y
+  logic        b_src;                 // 0 q, 1 res
+  always_comb begin
+    a_ld = 1'b0; a_zero = 1'b0; a_zsg = 1'b0; a_src = 2'd0; a_m = f_ma;
+    b_ld = 1'b0; b_zero = 1'b0; b_zsg = 1'b0; b_src = 1'b0; b_m = f_mb;
+    if (x_v) begin
+      a_m = x_mod; b_m = x_mod;
+      if (x_b) begin b_ld = 1'b1; a_ld = x_imm; a_zero = 1'b1; a_zsg = x_isg; end
+      else     begin a_ld = 1'b1; b_ld = x_imm; b_zero = 1'b1; b_zsg = x_isg; end
+    end else if (dalu) begin
+      if (a_land) a_ld = 1'b1;
+      if (a_cap)  begin a_ld = 1'b1; a_src = 2'd1; end
+      if (b_land) b_ld = 1'b1;
+      if (b_cap)  begin b_ld = 1'b1; b_src = 1'b1; end
+      if (lv_d && !need_a) begin
+        a_ld = 1'b1; a_m = 2'd0;
+        if (op == 4'd8)      a_src = 2'd2;
+        else if (op == 4'd9) a_src = 2'd3;
+        else begin a_zero = 1'b1; a_zsg = imm_a_sg; end
+      end
+      if (lv_d && !need_b) begin
+        b_ld = 1'b1; b_zero = 1'b1; b_zsg = imm_b_sg && !(is_ld || is_end);
+      end
+    end
+  end
+  logic [63:0] a_v, b_v;
+  always_comb begin
+    case (a_src)
+      2'd0:    a_v = q;
+      2'd1:    a_v = res;
+      2'd2:    a_v = x;
+      default: a_v = y;
+    endcase
+    b_v = b_src ? res : q;
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= S_IDLE; upc <= 9'd0; sp <= 2'd0; unit <= 2'd0;
+      st <= S_IDLE; pc <= 9'd0; sp <= 2'd0; bph <= 1'b0;
+      sa <= SL_NEW; sb <= SL_NEW;
       opa <= 64'd0; opb <= 64'd0;
-      add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0;
-      we <= 1'b0; waddr <= 7'd0; fin <= 1'b0; act <= 1'b0;
+      add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0; sub <= 1'b0;
+      fin <= 1'b0; act <= 1'b0;
+      x_v <= 1'b0; x_b <= 1'b0; x_imm <= 1'b0; x_isg <= 1'b0; x_w <= 1'b0;
+      x_mul <= 1'b0; x_div <= 1'b0; x_sub <= 1'b0; x_end <= 1'b0; x_mod <= 2'd0; x_d <= 7'd0;
+      i_v <= 1'b0; i_w <= 1'b0; i_mul <= 1'b0; i_end <= 1'b0; i_d <= 7'd0;
+      p1_v <= 1'b0; p1_w <= 1'b0; p1_mul <= 1'b0; p1_end <= 1'b0; p1_d <= 7'd0;
+      p2_v <= 1'b0; p2_w <= 1'b0; p2_mul <= 1'b0; p2_d <= 7'd0;
+      dv_busy <= 1'b0; dv_d <= 7'd0;
       for (int i = 0; i < 4; i++) ras[i] <= 9'd0;
     end else begin
+      pc <= fa;
       add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0;
-      we <= 1'b0; fin <= 1'b0;
+      x_v <= 1'b0; i_v <= 1'b0;
+      p1_v <= i_v; p1_w <= i_w; p1_mul <= i_mul; p1_end <= i_end; p1_d <= i_d;
+      p2_v <= p1_v; p2_w <= p1_w; p2_mul <= p1_mul; p2_d <= p1_d;
+      fin <= p1_v && p1_end;
+      if (dv_busy && div_done) dv_busy <= 1'b0;
+
       case (st)
         S_IDLE: if (start) begin
-          upc <= {7'd0, entry}; sp <= 2'd0; act <= 1'b1; st <= S_FETCH;
+          st <= S_RUN; act <= 1'b1; sp <= 2'd0; bph <= 1'b0; sa <= SL_NEW; sb <= SL_NEW;
         end
-        S_FETCH: st <= S_DEC;                     // uw <= ucode(upc) this edge
-        S_DEC: begin
-          case (op)
-            4'd4: st <= S_BR;                     // q <- register a next edge
-            4'd5: begin upc <= f_t; st <= S_FETCH; end
-            4'd6: begin ras[sp] <= upc + 9'd1; sp <= sp + 2'd1; upc <= f_t; st <= S_FETCH; end
-            4'd7: begin upc <= ras[sp - 2'd1]; sp <= sp - 2'd1; st <= S_FETCH; end
-            4'd8, 4'd9: begin
-              opa <= (op == 4'd8) ? x : y; opb <= 64'd0; unit <= 2'd1; st <= S_ISSUE;
-            end
-            default: begin
-              unit <= (op == 4'd0) ? 2'd0 : (op == 4'd2) ? 2'd2 : (op == 4'd3) ? 2'd3 : 2'd1;
-              st <= S_RA;
-            end
-          endcase
+        S_DRAIN: if (fin) begin          // END's result was on res this cycle
+          act <= 1'b0; st <= S_IDLE;
         end
-        S_RA: begin opa <= modv(q, f_ma); st <= S_RB; end
-        S_RB: begin opb <= (op == 4'd10) ? 64'd0 : modv(q, f_mb); st <= S_ISSUE; end
-        S_BR: begin
-          upc <= (cond ^ f_i) ? f_t : upc + 9'd1;
-          st  <= S_FETCH;
-        end
-        S_ISSUE: begin
-          add_req <= (unit == 2'd0) || (unit == 2'd1);
-          mul_req <= (unit == 2'd2);
-          div_req <= (unit == 2'd3);
-          st <= S_WAIT;
-        end
-        S_WAIT: if ((sel_add && add_done) || (sel_mul && mul_done) || (sel_div && div_done)) begin
-          if (op == 4'd10) begin
-            // fin with the adder still selected: i960_top writes res back
-            // in this cycle; act drops in the next
-            fin <= 1'b1; st <= S_END;
-          end else begin
-            we <= 1'b1; waddr <= f_d;
-            upc <= upc + 9'd1; st <= S_FETCH;
-          end
-        end
-        S_END: begin act <= 1'b0; st <= S_IDLE; end
-        default: st <= S_IDLE;
+        default: ;
       endcase
+
+      if (a_ld) opa <= a_zero ? {a_zsg, 63'd0} : modv(a_v, a_m);
+      if (b_ld) opb <= b_zero ? {b_zsg, 63'd0} : modv(b_v, b_m);
+
+      // X: the last read lands; the request goes out
+      if (x_v) begin
+        add_req <= !x_mul && !x_div; mul_req <= x_mul; div_req <= x_div; sub <= x_sub;
+        i_v <= !x_div; i_w <= x_w; i_mul <= x_mul; i_end <= x_end; i_d <= x_d;
+      end
+
+      if (dalu) begin
+        if (lv_d) begin
+          add_req <= !d_mul && !d_div; mul_req <= d_mul; div_req <= d_div; sub <= d_sub;
+          i_v <= !d_div; i_w <= d_wr; i_mul <= d_mul; i_end <= is_end; i_d <= f_d;
+        end
+        if (lv_x) begin
+          x_v <= 1'b1; x_b <= b_rd; x_mod <= b_rd ? f_mb : f_ma;
+          x_imm <= b_rd ? !need_a : !need_b;
+          x_isg <= b_rd ? imm_a_sg : (imm_b_sg && !is_end);
+          x_w <= d_wr; x_mul <= d_mul; x_div <= d_div; x_sub <= d_sub; x_end <= is_end; x_d <= f_d;
+        end
+        if (lv_x || lv_d) begin
+          sa <= SL_NEW; sb <= SL_NEW;
+          if (d_div) begin dv_busy <= 1'b1; dv_d <= f_d; end
+          if (is_end) st <= S_DRAIN;
+        end else begin
+          if (a_land || a_cap)                              sa <= SL_OK;
+          else if (a_rd)                                    sa <= SL_RQ;
+          else if (need_a && sa == SL_NEW && hl_a)          sa <= SL_PEND;
+          if (b_land || b_cap)                              sb <= SL_OK;
+          else if (b_rd)                                    sb <= SL_RQ;
+          else if (need_b && sb == SL_NEW && hl_b)          sb <= SL_PEND;
+        end
+      end
+
+      if (br_rd) bph <= 1'b1;
+      if (br_ev) bph <= 1'b0;
+      if (ctl && is_call) begin ras[sp] <= pc1; sp <= sp + 2'd1; end
+      if (ctl && is_ret)  sp <= sp - 2'd1;
     end
   end
 
-  assign sub     = (unit == 2'd1);
-  assign sel_add = act && ((unit == 2'd0) || (unit == 2'd1));
-  assign sel_mul = act && (unit == 2'd2);
-  assign sel_div = act && (unit == 2'd3);
+  assign sel_mul = act && p2_v && p2_mul;
+  assign sel_div = act && dv_busy && !p2_v;
+  assign sel_add = act && !(p2_v && p2_mul) && !(dv_busy && !p2_v);
+
+  // The adder's and multiplier's done are not needed: P2 is their done by
+  // construction (both take two cycles). The bench checks it, and the
+  // pipeline's own rules, every cycle.
+`ifdef VERILATOR
+  always_ff @(posedge clk) begin
+    if (p2_v && !(p2_mul ? mul_done : add_done))
+      $fatal(1, "i960_fptrans: P2 without its unit's done (a unit is no longer two cycles)");
+    if (x_v && (lv_d || a_land || b_land || a_cap || b_cap))
+      $fatal(1, "i960_fptrans: D latched an operand while X held the instruction before");
+    if (we && (p2_v && p2_w) && (dv_busy && div_done))
+      $fatal(1, "i960_fptrans: two writes in one cycle");
+    if (x_v && ((sa == SL_PEND && hn_a) || (sb == SL_PEND && hn_b)))
+      $fatal(1, "i960_fptrans: a pending operand's writer reached P2 while X held the operands");
+  end
+`endif
 
 endmodule

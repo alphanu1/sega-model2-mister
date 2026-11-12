@@ -53,8 +53,26 @@ def flush(x):
     return x
 
 
+def is_sub(x):
+    u = d2u(x)
+    return (u >> 52) & 0x7ff == 0 and (u & ((1 << 52) - 1)) != 0
+
+
 def fop(op, a, b):
-    a, b = flush(a), flush(b)
+    # R998: i960_fpadd takes a subnormal operand as a zero significand that
+    # is not "a zero", so with the other operand +-0 it is an exact
+    # cancellation and the sum is +0 whatever the signs. That reaches the
+    # programs only through LDX / LDY (x - 0): sin / tan of a negative
+    # subnormal is +0 on the RTL. Flushing to a signed zero here gave -0.
+    # Every MUL / DIV operand is a unit's result or a constant, never
+    # subnormal -- the RTL multiplier and divider zero a subnormal's
+    # significand without treating it as a zero (the exponent is used), so
+    # that is asserted, not modelled.
+    if op in ('MUL', 'DIV'):
+        assert not is_sub(a) and not is_sub(b), 'a subnormal reaches the %s' % op
+    else:
+        a = 0.0 if is_sub(a) else a
+        b = 0.0 if is_sub(b) else b
     try:
         if op == 'ADD': r = a + b
         elif op in ('SUB', 'END', 'LDX', 'LDY'): r = a - b
@@ -583,10 +601,59 @@ def main():
         vectors(p, words, addr, names, a[a.index('--vec') + 1], int(a[a.index('--vec') + 2]))
 
 
+def edge_args():
+    """R998: the edges, as (entry, x, y): +-0, subnormals, +-inf, NaNs (quiet,
+    signalling, negative, payloads), huge and tiny, pi/4 (the reduction's
+    threshold) and k pi/2 +- a few ulp for k to 2^20 and beyond (where the
+    reduction stops being exact), and for atan2 every pairing of a set of
+    those plus |y| = |x| and the breakpoints 0.2, 7/16, 11/16."""
+    def nxt(v, k):
+        for _ in range(abs(k)):
+            v = math.nextafter(v, math.inf if k > 0 else -math.inf)
+        return v
+    sp = [0x0, 1 << 63, 1, (1 << 63) | 1, (1 << 52) - 1, (1 << 63) | ((1 << 52) - 1),
+          1 << 52, (1 << 63) | (1 << 52), 0x7ff0000000000000, 0xfff0000000000000,
+          0x7ff8000000000000, 0xfff8000000000000, 0x7ff0000000000001, 0xfff4000000000000,
+          0x7fffffffffffffff, 0x7fefffffffffffff, 0xffefffffffffffff]
+    xs = [u2d(u) for u in sp]
+    xs += [1e-300, -1e-300, 2.0 ** -1022 * 3, 1e300, -1e300, 2.0 ** -27, -2.0 ** -30, 1.0, -1.0,
+           math.pi, -math.pi, math.pi / 2, 1e5, -1e7, 1e15, 2.0 ** 60, -2.0 ** 100]
+    p4 = 0.7853981633974483
+    xs += [nxt(p4, k) for k in range(-3, 4)] + [-nxt(p4, k) for k in range(-3, 4)]
+    hp = 1.5707963267948966192313216916397514
+    rnd = random.Random(11)
+    ks = list(range(-40, 41)) + [rnd.randint(-(1 << 20), 1 << 20) for _ in range(60)] + \
+         [rnd.randint(-(1 << 30), 1 << 30) for _ in range(20)] + [(1 << 19) - 1, 1 << 19, -(1 << 19), 1 << 20]
+    for k in ks:
+        v = float(hp * k) if abs(k) < (1 << 53) else hp * k
+        for d in (-2, -1, 0, 1, 2):
+            xs.append(nxt(v, d))
+    out = []
+    for e in range(3):
+        out += [(e, x, 0.0) for x in xs]
+    at = [u2d(u) for u in sp] + [1e-300, -1e-300, 1e300, -1e300, 1.0, -1.0, 2.0, -3.0, 40.0, 1e-5,
+                                 2.0 ** -1000, 2.0 ** 1000, -2.0 ** 1020]
+    for xv in at:
+        for yv in at:
+            out.append((3, xv, yv))
+    for v in [1.0, 3.0, -7.5, 1e-200, 1e200, 0.3]:
+        for d in (-1, 0, 1):
+            out += [(3, v, nxt(v, d)), (3, -v, nxt(v, d)), (3, nxt(v, d), -v)]
+        for t in (0.2, 0.4375, 0.6875):
+            for d in (-2, -1, 0, 1, 2):
+                w = nxt(v * t, d)
+                out += [(3, v, w), (3, w, v), (3, -v, w), (3, w, -v)]
+    return out
+
+
 def vectors(p, words, addr, names, path, n):
-    """Test vectors for the RTL bench: entry, x, y, expected (hex)."""
+    """Test vectors for the RTL bench: entry, x, y, expected (hex); n random,
+    then edge_args()."""
     random.seed(7)
     with open(path, 'w') as f:
+        for e, x, y in edge_args():
+            r, _ = run(p, words, addr, names, ENTRY_ORDER[e], x, y)
+            f.write('%d %016x %016x %016x\n' % (e, d2u(x), d2u(y), d2u(r)))
         for i in range(n):
             e = ENTRY_ORDER[i % 4]
             k = random.random()

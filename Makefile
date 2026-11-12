@@ -783,17 +783,34 @@ obj_i960_top/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_to
 	  --Mdir obj_i960_top -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # R845: the transcendental sequencer on the RTL units against its microcode's
-# interpreter (tools/i960_fptrans.py), 20,000 vectors.
+# interpreter (tools/i960_fptrans.py), 20,000 vectors; R998 adds the
+# interpreter's 3,933 edge vectors. FPTRANS_N=200000 is the long sweep.
+FPTRANS_N ?= 20000
 .PHONY: test_i960_fptrans
 test_i960_fptrans: obj_i960_fptrans/Vi960_fptrans_harness
-	@echo "== test i960_fptrans (sinrl cosrl tanrl atanrl microcode, R845)"
-	@python3 -I tools/i960_fptrans.py --vec obj_i960_fptrans/vec.txt 20000
+	@echo "== test i960_fptrans (sinrl cosrl tanrl atanrl microcode, R845 / R998)"
+	@python3 -I tools/i960_fptrans.py --vec obj_i960_fptrans/vec.txt $(FPTRANS_N)
 	@./obj_i960_fptrans/Vi960_fptrans_harness +vec=obj_i960_fptrans/vec.txt
 obj_i960_fptrans/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fptrans_rom.svh $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
                                         sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 	$(VBUILD) --top-module i960_fptrans_harness -CFLAGS "-O2" --Mdir obj_i960_fptrans -o Vi960_fptrans_harness \
 	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 # The ROM is generated: tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
+
+# R998: the pipelined sequencer against R845's (sim/i960/i960_fptrans_r845.sv)
+# side by side: the same result and the same register-file writes for every
+# instruction, on arguments drawn by the bench (specials, subnormals, NaN
+# payloads, k pi/2, atan2's breakpoints). FPTRANS_AB_N vectors, seed 1.
+FPTRANS_AB_N ?= 200000
+.PHONY: test_i960_fptrans_ab
+test_i960_fptrans_ab: obj_i960_fptrans_ab/Vi960_fptrans_ab_harness
+	@echo "== test i960_fptrans against R845's sequencer, $(FPTRANS_AB_N) vectors (R998)"
+	@./obj_i960_fptrans_ab/Vi960_fptrans_ab_harness +n=$(FPTRANS_AB_N) +seed=1
+obj_i960_fptrans_ab/Vi960_fptrans_ab_harness: $(I960)/i960_fptrans.sv $(I960)/i960_fptrans_rom.svh sim/i960/i960_fptrans_r845.sv \
+                                              $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_ab_harness.sv $(TB)/tb_i960_fptrans_ab.cpp
+	$(VBUILD) --top-module i960_fptrans_ab_harness -CFLAGS "-O2" --Mdir obj_i960_fptrans_ab -o Vi960_fptrans_ab_harness \
+	  $(I960)/i960_fptrans.sv sim/i960/i960_fptrans_r845.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) \
+	  sim/i960/i960_fptrans_ab_harness.sv $(TB)/tb_i960_fptrans_ab.cpp
 
 # R839: the same lockstep on a VC=1 build with vc_en high (+vc): sqrtrl,
 # cpysre and cvtzril in the FP mix against the reference's MAME semantics.
