@@ -90,7 +90,34 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261107`)
+### New in this build (`Model2A_20261113`)
+
+- **Busy scenes keep their small polygons.** When the 3D list is nearly
+  full, the core starts leaving out the tiniest polygons so the big ones
+  still fit. It was judging "nearly full" without counting the list's
+  second bank, so it began leaving them out early, and faces, hands and
+  distant detail could go missing in heavy scenes. It now counts the whole
+  list. (The same fix brings back the boss's head in Virtua Cop on the
+  Model 2 core.)
+- **Faster maths:** the i960's sine, cosine, tangent and arctangent run
+  about three times faster, with bit-for-bit the same results. A cosine
+  now takes 18.5 µs; Intel gives 17.6 µs for the real chip. Games that
+  lean on them get more done in each frame.
+- **Sega Rally's AI cars no longer flash** (#35), and the game runs faster.
+  Sega Rally picks how much detail to give the other cars from how much CPU
+  time is left in each frame, so the faster maths means no more blinking.
+  Not every race has been tested yet: if you still see a car flash, please
+  say which track and where.
+- **Motor Raid no longer slows down** when the bikers bunch up and scuffle
+  for first place (#25).
+- **New OSD setting `Off-screen edge`** (Virtua Cop 2): `4 px` (the default),
+  `2 px`, `8 px` or `10 px`. How close to the edge of the screen a shot
+  counts as off the screen, which reloads. Before it was always 2 px, which
+  a real gun pointed just off the screen didn't always reach.
+- **Timing closes on every clock, HDMI included.** Two long paths in the
+  texture and 2D colour logic were split, with no added delay.
+
+### Earlier in `Model2A_20261107`
 
 - **Sinden light gun support** (Virtua Cop 2). New OSD setting `Sinden
   border`, next to `Gun flash`: `Off` / `2 px` / `4 px` / `8 px`. It draws a
@@ -313,7 +340,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261107.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -321,7 +348,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261107.rbf` has the md5 `b9c8c5ca8915d99c4210905f7fe5bcfa`. As with
+`Model2A_20261113.rbf` has the md5 `2308a87056dc842407bd9ac150b662a5`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -352,15 +379,11 @@ ROM sets: MAME 0.289.
 - **An occasional stray pixel near trees** (Sega Rally, Pilot Kids' window
   tree): far fewer than before and gone in a moment. MAME draws Pilot Kids'
   one too.
-- **Sega Rally:** the AI cars can flash for about a second in the second
-  race.
 - **Virtua Fighter 2:** Jacky and Sarah's stage slows down in places.
 - **Manx TT:** cresting a hill, the road beyond can show the sea through it
   for a moment, and road behind hills appears a little late.
 - **Thin seams between some polygons show the background through them**
   (Virtua Fighter 2's Jacky and Sarah stages, Dead or Alive). Being worked on.
-- **Slowdown:** Motor Raid slows a little in busy moments (GitHub #25).
-  Being investigated.
 - **Some games are quieter than others** (Sega Rally and Zero Gunner most
   of all). That is each game's own level, as in the arcade and in MAME 0.289;
   turn `Volume` up for those games — see *Sound settings* below.
@@ -403,10 +426,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261112.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261112.rbf` has the md5 `3b9b10a7d62901a33a55c9d524a59385`. Keep
+`Model2C_20261113.rbf` has the md5 `4da5cea2f2be436dc746350828fb4196`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -425,7 +448,23 @@ ROM sets: MAME 0.289.
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-### New in this build (`Model2C_20261112`)
+### New in this build (`Model2C_20261113`)
+
+- **House of the Dead's busy scenes keep all their polygons.** The 3D list
+  ran out of room in the heaviest scenes and dropped up to 79 polygons a
+  frame. It now spills into a second bank, with room for 2,560, and the
+  tiny-polygon switch counts that room.
+- **Faster maths:** the i960's sine, cosine, tangent, arctangent and
+  logarithm run about three times faster, with bit-for-bit the same
+  results. A cosine now takes 18.5 µs; Intel gives 17.6 µs for the real
+  chip. Games that lean on them get more done in each frame.
+- **New OSD setting `Off-screen edge`** (House of the Dead): `4 px` (the
+  default), `2 px`, `8 px` or `10 px`. How close to the edge of the screen a
+  shot counts as off the screen, which reloads. Before it was always 2 px,
+  which a real gun pointed just off the screen didn't always reach.
+- **Timing closes on every clock, HDMI included.**
+
+### Earlier in `Model2C_20261112`
 
 - **House of the Dead's courtyard is fixed.** The big dark shape on the path
   in front of the mansion, whose pieces slid apart as the camera moved, is
@@ -538,8 +577,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 - **Sega Touring Car Championship has no music.** Its music board plays
   MPEG audio, which the core doesn't have yet. Engine sounds and effects
-  play. Races may slow down, and the pedals haven't been checked on a real
-  wheel yet.
+  play. The pedals work, but races still drop to 30 fps in places.
 - **Over Rev** slows down a few times in a race, sometimes for a few
   seconds, and a row of dark blue dots can show in the sky along one line.
 - No link play for Over Rev or Sega Touring Car Championship yet.
@@ -550,7 +588,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261107b.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -589,7 +627,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261107b.rbf` has the md5 `77564b49d95ace450d4e831642a5fece`.
+**Check you're running the right file.** `Model2_20261113.rbf` has the md5 `584e19efaa932e01ff4593ff05fe72bc`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -623,6 +661,27 @@ anything you find.
 
 ### New in this release
 
+- **Virtua Cop's van scene is fixed** (stage 1, GitHub #28). The boss who
+  jumps out of the back of the van has his head and arms again: his head is
+  about 100 tiny polygons, and the core was leaving the smallest out to save
+  room. It now keeps every polygon whenever the scene fits, like the real
+  board, and the list spills into a second bank, with room for 2,560. The
+  HUD (gun and energy bar) no longer flickers while the crates are being
+  smashed, and the slowdown there is gone. The dark strip across the van
+  in that scene stays: real Model 2 boards draw it too. (`Model2_20261113`.)
+- **A faster i960.** The CPU now keeps its most recent register frames
+  on-chip, as the real 80960KB does, instead of writing them out to memory
+  on every function call; Virtua Cop's CPU does about 15% less work a
+  frame. And the i960's sine, cosine, tangent and arctangent run about
+  three times faster, with bit-for-bit the same results. A cosine now
+  takes 18.5 µs; Intel gives 17.6 µs for the real chip. Games that lean on
+  them get more done in each frame. (`Model2_20261113`.)
+- **New OSD setting `Off-screen edge`** (Virtua Cop): `4 px` (the default),
+  `2 px`, `8 px` or `10 px`. How close to the edge of the screen a shot
+  counts as off the screen, which reloads. Before it was always 2 px, which
+  a real gun pointed just off the screen didn't always reach.
+  (`Model2_20261113`.)
+- **Timing closes on every clock, HDMI included.** (`Model2_20261113`.)
 - **More room on the chip, and timing closes on every clock, HDMI
   included.** The 3D renderer shares its multipliers and reads its sort
   memory more efficiently: about 2,000 fewer logic cells and 6 fewer DSP
