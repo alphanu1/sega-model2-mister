@@ -47448,3 +47448,16 @@ so edge_q's compare is no deeper than R961's constants were.
 it at the others. A planted fault (the 4 px right bound one pixel out) fails
 test_m2_vcop_guns at once. lint_top clean; both files parse in Quartus 17.0.
 NOT SETTLED: a fit, the board (a real gun and a mouse at each setting).
+
+*FIT AND BOARD (2026-11-13), released as Model2_20261113, Model2A_20261113,
+Model2C_20261113:* Model 2 s2171 (6e069e5d): clk_sys +0.258, clk_mem +0.386,
+clk_i960 +1.350, hold +0.159, HDMI +0.062; 39,275 ALM, 552 / 553 M10K, 102
+DSP. 2A s2232 (a127cc80): clk_sys +0.031, clk_mem +0.339, clk_i960 +0.267,
+hold +0.211, HDMI +0.150; 39,474 ALM, 551 / 553 M10K, 100 DSP. 2C s2137
+(0db403d2): clk_sys +0.013, clk_mem +0.388, clk_i960 +0.990, hold +0.243,
+HDMI +0.231; 39,403 ALM, 550 / 553 M10K, 107 DSP. Ben, on the board: the
+off-screen edge setting helps reloading off screen (Virtua Cop, Virtua Cop
+2, House of the Dead); the Virtua Cop van boss's head is there with no
+flicker (R1000/R1001, Model 2); Motor Raid no longer slows (R998, #25); Sega
+Rally's AI cars did not flash in his races (R998, #35, wider testing
+pending). R1002 is SETTLED.

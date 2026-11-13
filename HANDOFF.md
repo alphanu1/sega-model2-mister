@@ -1,5 +1,53 @@
 # Handoff
 
+## 2026-11-13: Model2_20261113, Model2A_20261113, Model2C_20261113 in releases/ -- one joint release
+
+All three board-tested by Ben before release; every clock clean on all three,
+HDMI included. releases/ is identical on main, model2a and model2c.
+
+| core | seed | commit | md5 | setup (clk_sys / clk_mem / clk_i960 / HDMI) | hold | ALM / M10K / DSP |
+|---|---|---|---|---|---|---|
+| Model 2 | s2171 | 6e069e5d | 584e19efaa932e01ff4593ff05fe72bc | +0.258 / +0.386 / +1.350 / +0.062 | +0.159 | 39,275 / 552 / 102 |
+| 2A | s2232 | a127cc80 | 2308a87056dc842407bd9ac150b662a5 | +0.031 / +0.339 / +0.267 / +0.150 | +0.211 | 39,474 / 551 / 100 |
+| 2C | s2137 | 0db403d2 | 4da5cea2f2be436dc746350828fb4196 | +0.013 / +0.388 / +0.990 / +0.231 | +0.243 | 39,403 / 550 / 107 |
+
+In it: R998 faster transcendentals (all three; logrl too on 2C), R1002 OSD
+`Off-screen edge` (4 px default, 2 / 8 / 10), R993/R994 tiny switch counts the
+spill (2A, 2C), R995 retimes, R997 register ring (Model 2), R1000/R1001 whole
+lists for the Virtua Cop van boss (Model 2 only), R999 Over Rev pedal and HOTD
+gun registers (2C).
+
+BOARD (Ben's tests): Model 2 -- the van boss's head is there from the start with
+no flicker, the slowdown is gone, Daytona still good. 2A -- Motor Raid no
+longer slows (#25 closed), every game boots and runs, Sega Rally's AI cars did
+not flash in his races (#35 left open for wider testing). 2C -- all working,
+HOTD reloads off screen; STCC still drops to 30 fps in places (README known
+bug). The gun edge setting helps reloading off screen on all three.
+
+FINDINGS:
+- HDMI misses live in the stock framework (ascal v_poly/h_poly, osd h_cnt,
+  shadowmask). They fail when ascal's 13 DSPs are placed in columns 20/32,
+  rows 63-79, by the HPS; passing fits have them mid-chip. Pass rate about 1
+  seed in 5 at >= -0.05. WRONG TURNS, KEEP: DSP location anchors (fixed
+  v_poly, exposed the OSD path; full anchoring was unroutable or crashed
+  Quartus), register retiming (worse on every clock). LogicLock is not in
+  Lite 17.0.
+- Quartus is deterministic: refitting 2C s1980 reproduced it to the
+  picosecond, and 2A s2104 refit to the same -0.079. A seed is a result, not
+  a roll.
+- 2C was called "too crowded" to close; that was wrong, and the data agreed with
+  Ben (releases at 99.5 % M10K have closed). Recorded in R999.
+- A new worktree without build_id.v makes every seed fail at once with "no
+  result" -- seed-sweep.sh needs it in the worktree root.
+- A first R1000 still flickered the boss's head a couple of times; R1001
+  decides "whole" from a shadow count of what whole collection keeps (<= 31/32
+  of MAXL) and fixed it on the board.
+
+REMAINS: QNX 1024 (Ben's call; 512 for now). R1000/R1001 to 2A/2C. The recurring
+clk_sys paths (geo_clip -> mul_a_q, quad_store vtx M10K -> fill x01_r,
+span_tex -> texel_cdc) are the real lever on HDMI, with freeing M10K/DSP.
+STCC 30 fps. Prune finished worktrees in sm2-builds/.
+
 ## 2026-11-12: Model2C_20261112 in releases/ -- House of the Dead's courtyard (R990, #41)
 
 2C s1765 (hotd-mip-off 4e4df36f, merged into model2c): md5
