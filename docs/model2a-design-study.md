@@ -39658,3 +39658,122 @@ VA_SEED); geodiff_wk on vcop-quads' beg2 dumps (byte-identical ours.txt
 from this branch's geometry); tb_m2_raster3d at Model2.sv's parameters
 (QNX 512) as released, with no size cull, and with R1000. All under
 sm2-builds/vcop-head2/build/vh2 (ROM-derived, never committed).
+
+**R1001 -- R1000 ON THE BOARD (s2008, 5daef5a6): THE HEAD COMES IN, "THEN IT
+FLICKERS A COUPLE OF TIMES, THEN STAYS". A LIST THAT OFFERS 2,560 OR MORE
+QUADS -- MORE CRATES SMASHED, THEIR DEBRIS SUBMITTED BEFORE THE BOSS --
+SENDS THE NEXT ONE BACK TO R769 / R776 FROM ITS FIRST QUAD, AND AFTER A LIST
+THAT BUSY THAT IS COARSE: THE HEAD GOES FOR ONE LIST. WHOLE NOW FOLLOWS
+WHAT THE WHOLE COLLECTION WOULD HAVE KEPT, NOT WHAT WAS OFFERED. BENCH
+ONLY; NOT MAPPED (BUT FOR QNX 1,024's MEMORY), NOT FITTED, NOT ON A BOARD.**
+Branch vcop-head2, 2026-11-13.
+
+*What was believed (R1000):* a list after one whose every OFFERED quad fitted
+(tot < 2,560) is whole; otherwise R769 / R776. The scripted play's burst is
+2,179-2,363 quads, so every list was whole and the head equal to MAME's.
+
+*Now known:*
+  1. THE DEBRIS (run; m2_listdec + geodiff_wk, objects moved behind the
+     camera): the crates' fragments are five objects (0x80fab4 / fae7 / fb1a
+     / fb4d / fb80, four polygons each) repeated 15 times, ~300 quads, and
+     they are submitted BEFORE the boss -- his upper body starts at the quad
+     after the last fragment on every burst walk. They are big: 292 of 300
+     are 10 px or more. So a play with more crates broken adds quads that
+     pass every size test, ahead of him: the list's total AND its 2-px count
+     both rise.
+  2. THE FLICKER, REPRODUCED (run; each burst list padded with D copies of
+     its own fragments inserted after the last one, then collected behind the
+     padded list before it, as the board does; tb_m2_raster3d at Model2.sv's
+     parameters, R1000's store): at D = 230, walks 7479 / 7480 / 7481 / 7483
+     / 7484 / 7501 / 7502 / 7503 / 7505 / 7506 draw 50 / 11 / 12 / 15 / 49 /
+     42 / 10 / 9 / 43 / 5 head pixels; with no size cull 49 on 7480, 7484 and
+     47 on 7502 (MAME, unpadded: 50 / 49 / 43). The mechanism, from the
+     store's rule applied to every list (sim2.py, the same rules in Python,
+     agreeing with the bench on every walk run): the lists before 7480-7483,
+     7502-7504 and 7506 offer 2,561-2,593 quads, so
+     R1000 makes the next list R769 / R776 from its first quad, and their
+     2-px counts are 2,353-2,388 (>= 2,240) -- COARSE: 5-7 of the head's 91-
+     102 quads kept. The lists between offer 2,519-2,559: whole, the head
+     whole. That is Ben's "a couple of flickers, then stays" (the burst's
+     totals fall after 7507). The second suspicion -- the boss pushed past
+     ESC_F (2,048) inside a list by the extra debris -- needs D >= ~820 at
+     QNX 512 (his head starts at ~1,230 + D): not this.
+  3. THE CANDIDATES, on the padded burst (36 lists, 7477-7512; "lost" = the
+     head under 70% of the no-cull count; room = quads refused for room, the
+     tail, the HUD), and on every dumped list (Beginner 100, Expert's 123
+     heaviest; room-refused / size-refused):
+       pad D                 0   200   230   260   300   400   500   600   700   800
+       R993 (release)       36    36    36    36    36    36    36    36    36    36
+       R1000 (s2008)         0     1     8    23    29    35    36    36    36    36
+       (a) need < ESC_C      the same as R1000 on every pad (the debris
+                             raises the 2-px count with the total)
+       (b) R1000, QNX 1024   0     0     0     0     0     0     0     0     0    29
+       R1001 (below)         0     0     0     0     0    12    25    34    36    36
+       R1001, QNX 1024       0     0     0     0     0     0     0     0     0     0
+       R1001 margin 0        0     0     0     0     0     0     0  20 r165 33 r27  36
+     No candidate above refuses a quad for room on the van at any pad but
+     "margin 0" (165 quads on 6 lists at D 600, 27 at 700); none at D 1,000
+     except that every QNX 512 rule loses 4,506 (3,300-quad lists: real
+     overflow, R993 too). Dumped lists, room-refused: 0 for every rule except
+     margin 0 (Expert, 20 on 2 lists); size-refused Beginner 21,962 (R993) /
+     927 (R1000, R1001) / 0 (QNX 1024); Expert 65,594 / 46,942 (R1000) /
+     46,203 (R1001) / 3,723 (R1000 QNX 1024) / 3,552 (R1001 QNX 1024).
+     Daytona's attract (R1000's run, 11,680 lists, MAME total <= 2,384):
+     every list whole under all of them -- the whole collection cannot keep
+     more than a list offers.
+     (c), the floor by need (whole while offered < room, else fine from the
+     first quad while the 2-px count < room, escalating), keeps 33-60 of the
+     head's quads instead of 5-7 -- a patchy head, still a flicker.
+  4. THE HOLD (run; walk 7480 behind 7479, quads every 200 / 325 / 650
+     cycles; longest q_ready wait): unpadded, R1000 and R1001 144,084 / 0 / 0,
+     QNX 1024 154,938 / 0 / 0; padded D 230, R1000 125,748 / 0 / 0 (its B is
+     coarse), R1001 193,887 / 0 / 0, QNX 1024 238,428 / 48,803 / 0. No hold
+     at the bench geometry's pace (650) for any of them; QNX 1024 is the only
+     one that holds at 325.
+  5. QNX 1,024's MEMORY (run; quartus_map 17.0 of the whole Model 2 tree with
+     M2_QNX_1024, a copy of this branch, no fit): 0 errors; total block
+     memory bits 4,691,504 (s2008's map) -> 4,701,744, +10,240, all of it
+     key_x: 512 x 20 (one M10K, 512 x 20 mode) -> 1,024 x 20 (two, 1K x 10).
+     So +1 M10K over s2008's fitted 552 / 553: 553 / 553, EVERY block. It
+     fits on the count with nothing to spare; only a fit says whether the
+     fitter can place it, and it leaves no M10K for anything after it.
+
+*THE FIX (R1001, m2_quad_store; no new parameter, TINY_WHOLE as R1000):
+whole follows what the WHOLE collection would have kept of the list before,
+not what it offered.* A shadow count `sh` runs beside every collection: a
+quad counts if it passes the test the whole collection would apply at `sh`'s
+own count (none below ESC_F, fine to ESC_C, coarse past it) -- whatever test
+the list is really collected by. At the clear the next list is whole while
+sh <= SH_LIM = 31/32 of the room (2,480 at QNX 512, 1,984 at NX 0, 2,976 at
+1,024); else R769 / R776 exactly as before. `tot` goes; `sh` (12 bits,
+saturating), two flags from it and a registered coarse-pass bit (a_nc) come
+in. The margin is measured (3: none loses tails); a list the whole
+collection kept inside it, collected whole next, can still meet a heavier
+list -- the escalation is what keeps that one's tail, as in R1000.
+  * The van, padded D 230 (run, bench): walks 7479 / 7480 / 7481 / 7483 /
+    7484 / 7502 / 7503 / 7506 draw 50 / 49 / 52 / 48 / 49 / 46 / 45 / 49 head
+    pixels (no cull: 49 / 49 / 47 on 7480 / 7484 / 7502); at QNX 1024 49 /
+    46 / 49 on 7480 / 7502 / 7506. Nothing refused for room.
+  * Unpadded the store does what R1000 did: the scripted burst whole, the
+    same head pixels (R1000's table).
+  * Checks: test_m2_quad_store PASS (23, TINY_WHOLE 0) at NX 0 and 512;
+    test_m2_quad_store_whole PASS (25 at NX 512; also NX 0 and 1,024): R1000's
+    checks, with the boundary moved to SH_LIM / SH_LIM + 1 kept, dots lists
+    of any length leaving the next list whole, and new -- 4,598 offered (2,038
+    of 2 px, then dots) keeps the next list whole. The same tests against
+    R1000's store fail 4 (the control). test_m2_raster3d PASS (41).
+    lint_top clean (default, M2_QNX_1024, M2_NO_QSPILL); lint_m2_quad_store
+    clean, and at TINY_WHOLE 1 with NX 0 / 512 / 1,024; lint_idx 141 lines;
+    Quartus 17.0 --analyze_file m2_quad_store.sv 0 errors (the .qsf it
+    touched reverted).
+*Not settled:* Ben's lists are not measured -- D 230 is the smallest even pad
+that reproduces his pattern, and R1001 holds the head to D ~300 at QNX 512
+(12 lists of 36 lose it at 400). Past that only room does: QNX 1,024 keeps
+the head to D 700+ on this geometry with no tail lost, at every M10K block
+and a hold at 325 cycles a quad. That is a study-level choice (the fit), not
+made here: the default stays QNX 512. The board: the van with crates broken,
+the HUD steady; the map and fit of R1001 (a 12-bit counter, two compares and
+three flags, in place of R1000's counter).
+*How established:* sm2-builds/vcop-head2/build/vh2 -- py/sim2.py (rules,
+padding, dumps), pad230/ and pad0/ (padded lists), scripts/padpair.sh,
+padsweep.sh, holds.sh; map1024/ (the quartus_map); r1000src/ (the control).

@@ -134,9 +134,9 @@ module m2_quad_store #(
   // down, so 0x3000 is z = 4 there, and the van scene's boss (z ~21, zval
   // 0x5448-0x5596) is "far" -- he is so at Daytona's scale too (z > 16).
   parameter logic [15:0] TINY_FAR = 16'h0000,
-  // R1000: after a list that fitted whole (every quad it offered, NQ + NX),
-  // no size test until the count nears the room (see `whole` below). Needs
-  // TINY_FINE. 0: R769 / R776 alone.
+  // R1000 / R1001: after a list that the WHOLE collection would have kept
+  // within 31/32 of NQ + NX, no size test until the count nears the room
+  // (see `whole` below). Needs TINY_FINE. 0: R769 / R776 alone.
   parameter bit          TINY_WHOLE = 1'b0,
   parameter int unsigned SCR_H  = 384,
   // R607: FRONT TO BACK, the reference's order (model2_v.cpp render_polygons:
@@ -372,6 +372,7 @@ module m2_quad_store #(
   // takes the next slot rather than the pending one's. Every term is a
   // register, so this does not bring the comparator trees back into the path.
   logic          a_v, a_room, a_tiny, a_bank, a_need;
+  logic          a_nc;   // R1001: the quad passes the coarse test (R776)
   wire           a_inc  = a_v && a_room && !a_tiny && (a_bank == wbank);
   wire  [IW:0]  wcount = count[wbank] + {{IW{1'b0}}, a_inc};
   wire  [IW:0]  rcount = count[rbank];
@@ -492,18 +493,30 @@ module m2_quad_store #(
   logic [IW:0]   need;        // this list's quads that pass the fine test, saturating
   wire           far_q    = (TINY_FAR == 16'h0000) || (in_z[15:0] >= TINY_FAR);   // R776
   // R1000: WHOLE -- NO SIZE TEST WHILE THE LIST FITS. The board draws every
-  // polygon; the cull exists only for room. A list that follows one whose
-  // every quad fitted (tot < NQ + NX) is collected with no size test at all
-  // until its own count reaches ESC_F (4/5 of the room: 2,048 of 2,560), the
-  // fine test from there to ESC_C (7/8: 2,240), the coarse test past it --
-  // so a list that turns out heavy still keeps room for its tail (the HUD).
-  // Otherwise R769 / R776 as before. m_none / m_fine are registers: the
-  // select stays one LUT (five inputs) behind the two trees, and a step lands
-  // one quad late at most. Virtua Cop's van boss: his head is ~92-102 quads
-  // in an 8x12 px box, half of them under 2 px (R1000).
-  logic          whole;       // the previous list fitted whole
-  logic [IW:0]   tot;         // this list's quads offered, saturating
+  // polygon; the cull exists only for room. A WHOLE list is collected with
+  // no size test at all until its own count reaches ESC_F (4/5 of the room:
+  // 2,048 of 2,560), the fine test from there to ESC_C (7/8: 2,240), the
+  // coarse test past it -- so a list that turns out heavy still keeps room
+  // for its tail (the HUD). m_none / m_fine are registers: the select stays
+  // one LUT (five inputs) behind the two trees, and a step lands one quad
+  // late at most. Virtua Cop's van boss: his head is ~92-102 quads in an
+  // 8x12 px box, half of them under 2 px (R1000).
+  // R1001: WHICH LISTS ARE WHOLE. R1000 asked whether every quad the last
+  // list OFFERED fitted (< NQ + NX); a list of 2,580 that the escalation
+  // collected without losing a quad then sent the next one back to R769 /
+  // R776 from its first quad -- coarse, after a busy list -- and the boss's
+  // head went for that list (s2008 on the board: "flickers a couple of
+  // times"). Now `sh` counts what the WHOLE collection keeps of the list,
+  // escalating on its own count exactly as above, whatever the list was
+  // really collected by; the next list is whole while that came to at most
+  // SH_LIM = 31/32 of the room (2,480), else R769 / R776 as before. The 1/32
+  // is measured: with none, two Expert lists (and the van with 600 extra
+  // debris quads) lose their tails for room.
+  logic          whole;       // the next list is collected whole
+  logic [IW:0]   sh;          // R1001: what the whole collection keeps of this list, saturating
+  logic          sh_none, sh_fine;   // R1001: its escalation, from sh
   logic          m_none, m_fine;   // the test in force: none; fine; else coarse
+  localparam int unsigned SH_LIM = MAXL - MAXL/32;
   localparam int unsigned ESC_F = MAXL - MAXL/5;
   localparam int unsigned ESC_C = MAXL - MAXL/8;
   wire           tiny_sel = (TINY_FINE == 0) ? is_tiny
@@ -552,7 +565,7 @@ module m2_quad_store #(
   logic [CW-1:0]       b_col;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0; a_need <= 1'b0; a_pb <= 1'b0;
+      a_v <= 1'b0; a_room <= 1'b0; a_tiny <= 1'b0; a_bank <= 1'b0; a_moire <= 1'b0; a_need <= 1'b0; a_pb <= 1'b0; a_nc <= 1'b0;
       a_slot <= '0; a_lo01 <= '0; a_lo23 <= '0; a_hi01 <= '0; a_hi23 <= '0; a_col <= '0;
       b_v <= 1'b0; b_bank <= 1'b0; b_moire <= 1'b0; b_slot <= '0; b_band <= '0; b_col <= '0;   // R740
     end else begin
@@ -560,6 +573,7 @@ module m2_quad_store #(
       a_room  <= has_room;
       a_tiny  <= tiny_sel;
       a_need  <= !is_tiny_f;
+      a_nc    <= !(is_tiny_f | (is_tiny & far_q));   // R1001
       a_bank  <= wbank;
       a_pb    <= w_pb;      // R962
       a_slot  <= w_addr;
@@ -579,7 +593,8 @@ module m2_quad_store #(
       for (int b = 0; b < int'(NBANK); b++) count[b] <= '0;
       wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       fine <= 1'b1; need <= '0;
-      whole <= TINY_WHOLE; tot <= '0; m_none <= TINY_WHOLE; m_fine <= 1'b1;   // R1000: nothing before it
+      whole <= TINY_WHOLE; sh <= '0; sh_none <= 1'b1; sh_fine <= 1'b1;   // R1000: nothing before it
+      m_none <= TINY_WHOLE; m_fine <= 1'b1;
     end else if (clear) begin
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       // R769: the list just ended decides the next one's threshold.
@@ -588,14 +603,17 @@ module m2_quad_store #(
       // was collected coarse for 1.25 s and the boss lost his head and arms.
       fine <= (need < (IW+1)'(MAXL - MAXL/8));
       need <= '0;
-      // R1000: and whole if every quad it offered fitted
-      whole  <= TINY_WHOLE && (tot < (IW+1)'(MAXL));
-      m_none <= TINY_WHOLE && (tot < (IW+1)'(MAXL));
-      m_fine <= (TINY_WHOLE && (tot < (IW+1)'(MAXL))) || (need < (IW+1)'(MAXL - MAXL/8));
-      tot    <= '0;
+      // R1001: and whole if the whole collection kept it within SH_LIM
+      whole  <= TINY_WHOLE && (sh <= (IW+1)'(SH_LIM));
+      m_none <= TINY_WHOLE && (sh <= (IW+1)'(SH_LIM));
+      m_fine <= (TINY_WHOLE && (sh <= (IW+1)'(SH_LIM))) || (need < (IW+1)'(MAXL - MAXL/8));
+      sh     <= '0; sh_none <= 1'b1; sh_fine <= 1'b1;
     end else begin
       if (a_v && a_need && !(&need)) need <= need + 1'b1;
-      if (a_v && !(&tot)) tot <= tot + 1'b1;   // R1000
+      // R1001: the whole collection's count of this list, on its own escalation
+      if (a_v && (sh_none || (sh_fine ? a_need : a_nc)) && !(&sh)) sh <= sh + 1'b1;
+      sh_none <= (sh < (IW+1)'(ESC_F));
+      sh_fine <= (sh < (IW+1)'(ESC_C));
       m_none <= whole && (wcount < (IW+1)'(ESC_F));
       m_fine <= whole ? (wcount < (IW+1)'(ESC_C)) : fine;
       // THE VERTEX RAMs' WRITE ENABLE DOES NOT WAIT FOR THE TINY TEST (R222).
