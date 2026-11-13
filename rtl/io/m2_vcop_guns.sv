@@ -125,6 +125,7 @@ module m2_vcop_guns #(
   input  logic [24:0] ps2_mouse,
   /* verilator lint_on UNUSEDSIGNAL */
   input  logic  [1:0] mouse_sel,      // OSD: 0 gun 1 trigger, 1 gun 1 aim+trig, 2 gun 2 trigger, 3 gun 2 aim+trig
+  input  logic  [1:0] edge_sel,       // R1002 OSD "Off-screen edge": 0 4 px (default), 1 2 px, 2 8 px, 3 10 px
   output logic  [7:0] in0, in1,
   output logic  [9:0] p1x, p1y, p2x, p2y,   // game units
   output logic  [1:0] off,                  // {P2, P1} off-screen
@@ -270,12 +271,27 @@ module m2_vcop_guns #(
     return m[25:16];
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
-  // R960 / R961 (every game): off the screen = the reload, or the last 2 px of
-  // an edge (a calibrated stick at +-127 lands on pixel 1 / 494 / 382: off).
-  // MAME's 5% border lost 18-25 px at every edge to "reload" (the board, R960).
+  // R960 / R961 (every game): off the screen = the reload, or the last N px of
+  // an edge. MAME's 5% border lost 18-25 px at every edge to "reload" (the
+  // board, R960); R961 made it 2 px (a calibrated stick at +-127 lands on
+  // pixel 1 / 494 / 382: off).
+  // R1002: N is the OSD's "Off-screen edge" -- 4 px by default (status 0, so
+  // a saved config from before opens on 4), or 2 (R961's rule exactly), 8 or
+  // 10: a real gun that cannot quite reach the last 2 px of a screen could not
+  // reload. Off = x < N, x >= 496 - N, y < N, y >= 384 - N. The bounds are
+  // registers loaded from the setting, so the compare is as deep as before.
   logic [1:0] fire_q, edge_q;
-  function automatic logic edg(input logic [8:0] x, input logic [8:0] y);
-    return (x <= 9'd1) || (x >= 9'd494) || (y <= 9'd1) || (y >= 9'd382);
+  logic [8:0] e_lo, e_xhi, e_yhi;     // N - 1, 496 - N, 384 - N
+  always_ff @(posedge clk)
+    case (edge_sel)
+      2'd1:    begin e_lo <= 9'd1; e_xhi <= 9'd494; e_yhi <= 9'd382; end   //  2 px
+      2'd2:    begin e_lo <= 9'd7; e_xhi <= 9'd488; e_yhi <= 9'd376; end   //  8 px
+      2'd3:    begin e_lo <= 9'd9; e_xhi <= 9'd486; e_yhi <= 9'd374; end   // 10 px
+      default: begin e_lo <= 9'd3; e_xhi <= 9'd492; e_yhi <= 9'd380; end   //  4 px
+    endcase
+  function automatic logic edg(input logic [8:0] x, input logic [8:0] y,
+                               input logic [8:0] lo, input logic [8:0] xhi, input logic [8:0] yhi);
+    return (x <= lo) || (x >= xhi) || (y <= lo) || (y >= yhi);
   endfunction
   // R999 (HD): the multiply's operands are registered a clock before it.
   // reload -> hold -> the 9x17 multiply and its add -> p2y in one clock was
@@ -284,7 +300,7 @@ module m2_vcop_guns #(
   // together, so they stay in step; the game reads them once a frame.
   logic [8:0] h1x, h1y, h2x, h2y;
   logic [1:0] fire_h, edge_h;
-  wire  [1:0] edge_n = {hold2 | edg(s2x, s2y), hold1 | edg(s1x, s1y)};
+  wire  [1:0] edge_n = {hold2 | edg(s2x, s2y, e_lo, e_xhi, e_yhi), hold1 | edg(s1x, s1y, e_lo, e_xhi, e_yhi)};
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       edge_q <= 2'b00; edge_h <= 2'b00; fire_h <= 2'b00;

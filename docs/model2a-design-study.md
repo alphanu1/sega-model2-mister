@@ -48282,3 +48282,32 @@ test_m2_gunflash2a SKIPs without its MAME dumps (it does not use these
 paths). NOT SETTLED: a fit (span_tex's iss_x -> sh_last and the clipper are
 left as they are until a seed shows them again), the board: House of the
 Dead's guns, Over Rev's wheel and pedals.
+
+**R1002 -- THE OFF-SCREEN EDGE IS AN OSD SETTING, 4 px BY DEFAULT (2 / 4 / 8 /
+10). BENCH, LINT AND PARSE; NOT FITTED, NOT ON A BOARD.** Every gun game on
+every core (Virtua Cop on Model 2, Virtua Cop 2 on 2A, House of the Dead on
+2C): one m2_vcop_guns.
+
+*What was believed:* R960 / R961 -- off the screen is the last 2 px of an
+edge, against MAME's 5% border (18-25 px), because a real gun reads
+off-screen only when it cannot see the screen.
+
+*Now known (Ben, the board, 2026-11-13):* "there is a bug with reloading off
+screen for gun games". 2 px is too narrow for a real gun pointed just off the
+screen: its reported position does not always reach the last 2 px, so the
+shot lands on the screen and does not reload. The width is a property of the
+gun and the screen, not of the board, so it is a setting.
+
+*Change:* OSD "Off-screen edge", O[79:78] (never used on main, model2a or
+model2c, so a saved config opens on 0 = 4 px): 4 px, 2 px (R961 exactly), 8
+px, 10 px. Off = x < N, x >= 496 - N, y < N, y >= 384 - N, the crosshair's
+own pixel, as R961. The three bounds are registers loaded from the setting,
+so edge_q's compare is no deeper than R961's constants were.
+
+*Checks (run):* test_m2_vcop_guns (828,113-828,117 checks), test_m2_vcop2_guns
+(223,916), test_m2_hotd_guns (191,757), each at all four settings (+edge=0..3),
+0 failures. The benches' off-screen rule follows the setting; the stick's +-126
+"on the screen" check is R961's and runs at 2 px only, the general rule judges
+it at the others. A planted fault (the 4 px right bound one pixel out) fails
+test_m2_vcop_guns at once. lint_top clean; both files parse in Quartus 17.0.
+NOT SETTLED: a fit, the board (a real gun and a mouse at each setting).

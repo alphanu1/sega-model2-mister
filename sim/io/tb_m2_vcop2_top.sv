@@ -19,6 +19,7 @@ module tb_m2_vcop2_top #(
   input  logic [15:0] ana0, ana1,
   input  logic [24:0] ps2_mouse,
   input  logic  [1:0] mouse_sel,
+  input  logic  [1:0] edge_sel,      // R1002
   // the i960's access to 0x01c00000-0x01c0001f
   input  logic        sel,
   input  logic        we,
@@ -35,7 +36,7 @@ module tb_m2_vcop2_top #(
   logic [7:0] g_in0, g_in1;
   m2_vcop_guns #(.TICK_LOG2(6), .V2(1'b1), .HD(HD)) guns (
     .clk, .rst_n, .en(1'b1), .play,
-    .joy0, .joy1, .ana0, .ana1, .ps2_mouse, .mouse_sel,
+    .joy0, .joy1, .ana0, .ana1, .ps2_mouse, .mouse_sel, .edge_sel,
     .in0(g_in0), .in1(g_in1),
     .p1x, .p1y, .p2x, .p2y, .off(goff),
     .c1x, .c2x, .c1y, .c2y, .c_on
