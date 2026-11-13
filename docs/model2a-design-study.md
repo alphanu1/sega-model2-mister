@@ -48235,3 +48235,50 @@ checked (the rule is fewer than two), so no --analyze_file was made; the
 *NOT SETTLED:* a map, a fit (clk_i960's slack: the new paths are R998's,
 plus x_ld's mux on a path from x, a register in i960_top), the board: House
 of the Dead from the stone wall (logrl) and the 2C games' trig forms.
+
+**R999 -- 2C WITH R998 DOES NOT CLOSE FOR WANT OF ROOM; IT IS A HANDFUL OF
+ONE-CLOCK PATHS OF ~12 ns AT 80 MHz, A DIFFERENT ONE WORST EACH SEED. THE TWO
+IN THE INPUTS ARE CUT. BENCH AND PARSE ONLY; NOT FITTED, NOT ON A BOARD.**
+Branch quads-2c-io (off quads-2c-ft b6a06c4d).
+
+*What was believed (my own, 2026-11-13 morning, and wrong):* twenty-three
+2C seeds with R998 (s1890-s1913) and two with R995 added (s1930, s1933) fail
+on clk_sys setup (-0.07 to -0.74) or HDMI, the worst path moves between
+unrelated blocks from seed to seed, so the part is too full to place. Ben:
+"no it's not too crowded. we have had 99.5% core full that close". He is
+right, and the numbers say so: s1779 (R962 + R993, no R998, clean) is 39,402
+ALM and 107 DSP; s1912 39,448, s1913 39,343, s1933 39,367 -- the same.
+
+*Now known (run; the seed driver now keeps a failing seed's database and
+writes report_timing's 30 worst setup paths per clock):*
+  * s1912, clk_sys -0.286: joy_ranalog_q[15] -> m2_2a_inputs or_dq[4], 12.15
+    ns of data delay -- the stick through m2_cab_inputs' pedal_an, the
+    channel select and the Over Rev / STCC clamp in one clock (R934 split
+    the multiply off but not this).
+  * s1913, clk_sys +0.012 (HDMI -0.413 failed it): m2_vcop_guns rs2[1] ->
+    p2y[9], 11.85 ns -- the reload hold through R960's 9x17 multiply and add.
+  * s1933 (R995 branch), clk_sys -0.332: span_tex iss_x -> sh_last[0], 12.20
+    ns; then geo_clip cs -> geo_engine st, -0.158, 12.0 ns.
+  * HDMI, every one: the framework's ascal (o_acpt4 -> o_hpixs, o_h_poly_t ->
+    o_h_poly_pix) and osd (cnt -> pixsz), -0.07 to -0.41; sys/ is stock
+    (R982), so placement is the only lever there.
+  Each of these is a single clock with ~12 ns of logic against a 12.5 ns
+  period. Which of them the placer lands badly changes with the seed, which
+  is why the worst path wanders. R995's two paths are not among 2C's.
+
+*Change:* both input paths get one register. m2_2a_inputs: the selected
+stick value and its channel (or_aq, or_ca) are registered, the clamp is the
+next clock -- the Over Rev / STCC values arrive one clk_sys clock later
+(12.5 ns), every value the same. m2_vcop_guns (HD only): the hold-muxed
+pixel positions and the triggers are registered before R960's multiply,
+and the edge flags take the same clock, so position, trigger and edge stay
+in step, one clock later. The game reads both once a frame.
+
+*Checks (run):* test_m2_2a_inputs PASS (20,000,000 cycles, 367,180,461
+checks; Over Rev's 14,203,431 channel checks, STCC's); test_m2_cab_inputs,
+test_m2_vcop_guns (828,113), test_m2_vcop2_guns (223,916), test_m2_hotd_guns
+(191,757) PASS, 0 failures; both files parse in Quartus 17.0.
+test_m2_gunflash2a SKIPs without its MAME dumps (it does not use these
+paths). NOT SETTLED: a fit (span_tex's iss_x -> sh_last and the clipper are
+left as they are until a seed shows them again), the board: House of the
+Dead's guns, Over Rev's wheel and pedals.

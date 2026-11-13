@@ -277,9 +277,25 @@ module m2_vcop_guns #(
   function automatic logic edg(input logic [8:0] x, input logic [8:0] y);
     return (x <= 9'd1) || (x >= 9'd494) || (y <= 9'd1) || (y >= 9'd382);
   endfunction
+  // R999 (HD): the multiply's operands are registered a clock before it.
+  // reload -> hold -> the 9x17 multiply and its add -> p2y in one clock was
+  // the worst clk_sys path of 2C s1913 (+0.012 ns, 11.9 ns of logic). The
+  // positions, the triggers and the edge flags all move one clock later
+  // together, so they stay in step; the game reads them once a frame.
+  logic [8:0] h1x, h1y, h2x, h2y;
+  logic [1:0] fire_h, edge_h;
+  wire  [1:0] edge_n = {hold2 | edg(s2x, s2y), hold1 | edg(s1x, s1y)};
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) edge_q <= 2'b00;
-    else        edge_q <= {hold2 | edg(s2x, s2y), hold1 | edg(s1x, s1y)};
+    if (!rst_n) begin
+      edge_q <= 2'b00; edge_h <= 2'b00; fire_h <= 2'b00;
+      h1x <= 9'd0; h1y <= 9'd0; h2x <= 9'd0; h2y <= 9'd0;
+    end else begin
+      edge_h <= edge_n;
+      edge_q <= HD ? edge_h : edge_n;
+      h1x <= hold1 ? 9'd0 : s1x;  h1y <= hold1 ? 9'd0 : s1y;
+      h2x <= hold2 ? 9'd0 : s2x;  h2y <= hold2 ? 9'd0 : s2y;
+      fire_h <= {fire2, fire1};
+    end
   end
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -287,11 +303,11 @@ module m2_vcop_guns #(
       p2x <= HD ? 10'h17b : P2X0; p2y <= HD ? 10'h0e9 : P2Y0;
       fire_q <= 2'b00;
     end else if (HD) begin
-      p1x <= uh(hold1 ? 9'd0 : s1x, 17'd64508, 26'd9313331);
-      p1y <= uh(hold1 ? 9'd0 : s1y, 17'd60433, 26'd3714722);
-      p2x <= uh(hold2 ? 9'd0 : s2x, 17'd66033, 26'd8609339);
-      p2y <= uh(hold2 ? 9'd0 : s2y, 17'd60433, 26'd3714722);
-      fire_q <= {fire2, fire1};
+      p1x <= uh(h1x, 17'd64508, 26'd9313331);   // R999: operands a clock earlier
+      p1y <= uh(h1y, 17'd60433, 26'd3714722);
+      p2x <= uh(h2x, 17'd66033, 26'd8609339);
+      p2y <= uh(h2y, 17'd60433, 26'd3714722);
+      fire_q <= fire_h;
     end else begin
       p1x <= hold1 ? X1LO : ux(s1x, X1LO);
       p1y <= hold1 ? 10'h024 : uy1(s1y);

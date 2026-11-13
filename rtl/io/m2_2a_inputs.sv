@@ -195,20 +195,27 @@ module m2_2a_inputs #(
   // was the worst clk_sys path of every 2C seed (-0.52 to -1.91 ns). The
   // clamped value is registered with its channel; the multiply is the next
   // clock. One clock more of latency on a value the game reads per frame.
-  logic [1:0] or_ch, or_cq;
+  // R999: THREE STAGES. R934's split left stick -> pedal_an -> the channel
+  // select -> the clamp -> or_dq in one clock, and on the 2C build with R998
+  // that was the worst clk_sys path of s1912 (-0.286 ns, 12.1 ns of logic).
+  // The selected stick value is registered with its channel (or_aq, or_ca)
+  // and the clamp is the next clock: one clock more on a value the game reads
+  // once a frame, every channel's result the same, one clock later.
+  logic [1:0] or_ch, or_ca, or_cq;
   logic [7:0] or_str, or_acc, or_brk;
-  logic [7:0] or_dq;
+  logic [7:0] or_aq, or_dq;
   logic       or_uq;
   wire  [7:0] or_a   = (or_ch == 2'd0) ? cab_steer : (or_ch == 2'd1) ? cab_accel : cab_brake;
-  wire        or_up  = (or_a >= 8'h80);
-  wire  [7:0] or_d   = (or_ch != 2'd0) ? ((or_a < 8'h20) ? 8'd0 : (or_a > 8'hE0) ? 8'hC0 : or_a - 8'h20)
-                     : or_up ? ((or_a > 8'hE0) ? 8'h60 : or_a - 8'h80)
-                             : ((or_a < 8'h20) ? 8'h60 : 8'h80 - or_a);
+  wire        or_up  = (or_aq >= 8'h80);
+  wire  [7:0] or_d   = (or_ca != 2'd0) ? ((or_aq < 8'h20) ? 8'd0 : (or_aq > 8'hE0) ? 8'hC0 : or_aq - 8'h20)
+                     : or_up ? ((or_aq > 8'hE0) ? 8'h60 : or_aq - 8'h80)
+                             : ((or_aq < 8'h20) ? 8'h60 : 8'h80 - or_aq);
   wire [13:0] or_p   = {or_dq, 6'd0} + {2'd0, or_dq, 4'd0} + {4'd0, or_dq, 2'd0} + {6'd0, or_dq};
   wire  [7:0] or_m   = or_p[13:6];                    // d * 85 / 64
   always_ff @(posedge clk) begin
     or_ch <= (or_ch == 2'd2) ? 2'd0 : or_ch + 2'd1;
-    or_cq <= or_ch; or_dq <= or_d; or_uq <= or_up;
+    or_aq <= or_a;  or_ca <= or_ch;                   // R999
+    or_cq <= or_ca; or_dq <= or_d; or_uq <= or_up;
     case (or_cq)
       2'd0:    or_str <= or_uq ? 8'h80 + or_m : 8'h80 - or_m;
       2'd1:    or_acc <= p_stcc ? or_m : ~or_m;       // PORT_REVERSE (Over Rev only; R933)
