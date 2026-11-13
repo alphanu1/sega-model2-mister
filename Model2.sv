@@ -555,6 +555,9 @@ localparam CONF_STR = {
 	// R846: O[58] (Gun 1 Stick / Mouse, never in a build) is not reused.
 	"h1O[57:56],Crosshair,Small,Large,Off;",
 	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
+	// R1002: how close to an edge counts as off the screen (a reload). 4 px
+	// by default (O[79:78] never used before, so a saved config opens on 4).
+	"h1O[79:78],Off-screen edge,4 px,2 px,8 px,10 px;",
 	"h1O[59],Gun reload,Shoot off-screen,Auto;",
 `elsif M2_2A_VCOP2_GUN
 	// R870: Virtua Cop 2's, the same bits and menumask bit 1 (is_vcop2).
@@ -562,6 +565,9 @@ localparam CONF_STR = {
 	// has none (the game's own test menu holds its settings).
 	"h1O[57:56],Crosshair,Small,Large,Off;",
 	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
+	// R1002: how close to an edge counts as off the screen (a reload). 4 px
+	// by default (O[79:78] never used before, so a saved config opens on 4).
+	"h1O[79:78],Off-screen edge,4 px,2 px,8 px,10 px;",
 `ifdef M2_2A_GUN_FLASH
 	// R965: Model 2's line and bit (R929, O[66]; never used on 2A / 2C, so a
 	// saved config opens on Arcade). Arcade: the game's own flash; Off: none
@@ -4897,7 +4903,7 @@ generate if (VCOP_GUN || VCOP2GUN) begin : g_vcgun
 		.clk(clk_sys), .rst_n(cpu_rst_n), .en(vc_gun | v2_gun), .play(vc_play),
 		.joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]),
 		.ana0(joy_analog), .ana1(joy_analog_1),
-		.ps2_mouse(ps2_mouse), .mouse_sel(status[63:62]),
+		.ps2_mouse(ps2_mouse), .mouse_sel(status[63:62]), .edge_sel(status[79:78]),   // R1002
 		.in0(vc_in0), .in1(vc_in1),
 		.p1x(vc_p1x), .p1y(vc_p1y), .p2x(vc_p2x), .p2y(vc_p2y), .off(vc_off),
 		.c1x(vc_c1x), .c1y(vc_c1y), .c2x(vc_c2x), .c2y(vc_c2y), .c_on(vc_con)

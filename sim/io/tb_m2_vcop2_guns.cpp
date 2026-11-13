@@ -53,7 +53,9 @@ static void tick(int n = 1) {
 
 struct Rng { int lo, hi; };
 // R960: off the screen = within 2 px of an edge
-static bool offp(int x, int y) { return x <= 1 || x >= 494 || y <= 1 || y >= 382; }
+// R1002: within EN px, the OSD's Off-screen edge (+edge=SEL: 0 4 px, 1 2 px, 2 8 px, 3 10 px)
+static int ESEL = 0, EN = 4;
+static bool offp(int x, int y) { return x < EN || x >= 496 - EN || y < EN || y >= 384 - EN; }
 #ifdef HOTD
 #include <cmath>
 // the game's calibration (INPUT_PORTS_START(hotd), its defaults) and where its
@@ -147,9 +149,13 @@ static void mouse(int dx, int dy, int btn = 0) {
 
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
+  { const char* a = Verilated::commandArgsPlusMatch("edge=");   // R1002
+    if (a && *a) ESEL = atoi(a + 6) & 3;
+    EN = (ESEL == 1) ? 2 : (ESEL == 2) ? 8 : (ESEL == 3) ? 10 : 4;
+    printf("R1002: Off-screen edge sel %d = %d px\n", ESEL, EN); }
   d = new Vtb_m2_vcop2_top;
   d->por_n = 0; d->rst_n = 0; d->play = 3; d->joy0 = 0; d->joy1 = 0; d->ana0 = 0; d->ana1 = 0;
-  d->ps2_mouse = 0; d->mouse_sel = 0; d->sel = 0;
+  d->ps2_mouse = 0; d->mouse_sel = 0; d->sel = 0; d->edge_sel = ESEL;
   tick(4); d->por_n = 1; d->rst_n = 1; tick(8);
 
   // ---------------------------------------------------------- 0. rest, centre
