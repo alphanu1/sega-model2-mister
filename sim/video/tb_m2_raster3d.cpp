@@ -978,7 +978,9 @@ int main(int argc, char **argv) {
       // the board runs it after a list that needed more than 7/8 of the store: a
       // single list here always starts fine. Set before every quad (a clear resets it).
       static const bool COARSE = std::getenv("M2_R3D_COARSE") != nullptr;
-      if (COARSE) d->rootp->m2_raster3d__DOT__u_store__DOT__fine = 0;
+      if (COARSE) { d->rootp->m2_raster3d__DOT__u_store__DOT__fine = 0;   // R1000: and not whole
+        d->rootp->m2_raster3d__DOT__u_store__DOT__whole = 0; d->rootp->m2_raster3d__DOT__u_store__DOT__m_none = 0;
+        d->rootp->m2_raster3d__DOT__u_store__DOT__m_fine = 0; }
       d->q_valid = 1;
       d->q_x0 = X[0]; d->q_y0 = Y[0]; d->q_x1 = X[1]; d->q_y1 = Y[1];
       d->q_x2 = X[2]; d->q_y2 = Y[2]; d->q_x3 = X[3]; d->q_y3 = Y[3];
@@ -1450,6 +1452,9 @@ int main(int argc, char **argv) {
     CHECK(fine_now() == 1, "a light list after the heavy one did not return to fine");
     auto r3 = show(tyre, &tiny, &drop);
     CHECK(tiny == 0 && r3.first == (int)must.size(), "tyre fine again: tiny %d, %d of %zu ring pixels painted", tiny, r3.first, must.size());
+    // R1000: QWHOLE reaches the store -- after these light lists the next is
+    // collected whole (no size test), and a heavy one is not
+    CHECK(d->rootp->m2_raster3d__DOT__u_store__DOT__whole == 1, "the list after a light one is not whole (QWHOLE)");
   }
 
   // R810: THE WALK'S FIRST QUAD, HELD AT THE STORE WHILE A READY LIST WAITS

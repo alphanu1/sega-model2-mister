@@ -19,6 +19,10 @@
 //      once and then fine; the heavy list at fine stores NQ and drops the rest;
 //      the per-list count saturates instead of wrapping (lists of 5,000 and
 //      50,000 quads).
+// R1000: built with -GTINY_WHOLE=1 -DQS_WHOLE=1 (any NX), the WHOLE collection
+// instead: after a list whose every offered quad fitted (NQ + NX), no size
+// test until the count reaches 4/5 of the room, the fine test to 7/8, the
+// coarse test past it; a list that did not fit falls back to R769 / R776.
 // The quads are made here; nothing comes from a ROM.
 #include "Vm2_quad_store.h"
 #include "Vm2_quad_store___024root.h"
@@ -53,11 +57,12 @@ static void new_list() {
   d->wbank = !d->wbank; d->rbank = !d->wbank;
   d->clear = 1; tick(); d->clear = 0; tick();
 }
+static uint32_t g_zval = 1000;   // R1000: the quad's zval (R776's far test)
 static void push(const Q &q) {
   d->in_valid = 1;
   d->in_x0 = q.x[0]; d->in_y0 = q.y[0]; d->in_x1 = q.x[1]; d->in_y1 = q.y[1];
   d->in_x2 = q.x[2]; d->in_y2 = q.y[2]; d->in_x3 = q.x[3]; d->in_y3 = q.y[3];
-  d->in_z = 0x3F800000u | 1000u; d->in_col = 0xF80000;
+  d->in_z = 0x3F800000u | g_zval; d->in_col = 0xF80000;
   tick();
   d->in_valid = 0;
 }
@@ -120,6 +125,72 @@ int main(int argc, char **argv) {
 
   // ---- 3a. power-up: fine
   CHECK(fine(), "the store does not start at the fine threshold");
+#ifdef QS_WHOLE
+  {
+    const int ROOM = NQ + QS_NX, ESC_F = ROOM - ROOM / 5, ESC_C = ROOM - ROOM / 8;
+    auto whole = [&]() { return (bool)d->rootp->m2_quad_store__DOT__whole; };
+    auto dots = [&](int n) { std::vector<Q> l; for (int i = 0; i < n; i++) l.push_back(quad(i % 400, 10 + (i / 400 % 100) * 3, (i % 3) == 0, (i % 5) == 0, 0)); return l; };
+    auto twos = [&](int n, int y0) { std::vector<Q> l; for (int i = 0; i < n; i++) l.push_back(quad(i % 400, y0 + (i / 400 % 100) * 3, 2, 3, 0)); return l; };
+    // 1. power-up is whole: a list of 1 px quads is stored, every one
+    CHECK(whole(), "the store does not start whole");
+    { const R r = run_list(dots(300)); CHECK(r.stored == 300 && r.tiny == 0, "dots after power-up: stored %d tiny %d, want 300 and 0", r.stored, r.tiny); }
+    // 2. the tyre ring, whole
+    { const R r = run_list(ring(200, 150)); CHECK(r.stored == 32 && r.tiny == 0, "tyre whole: stored %d tiny %d", r.stored, r.tiny); }
+    // 3. a list of dots longer than the room: kept to ESC_F (one more at most, the
+    // select is a register), refused from there for size, none for room
+    for (int n : {ESC_F + 100, 3 * ROOM, 50000}) {
+      run_list(ring(200, 150));
+      CHECK(whole(), "not whole before %d dots", n);
+      const R r = run_list(dots(n));
+      std::printf("  R1000 %d dots after a light list: stored %d tiny %d dropped %d (ESC_F %d)\n", n, r.stored, r.tiny, r.dropped, ESC_F);
+      CHECK(r.stored >= ESC_F && r.stored <= ESC_F + 1 && r.tiny == n - r.stored && r.dropped == 0,
+            "%d dots whole: stored %d tiny %d dropped %d, want %d kept and the rest refused for size", n, r.stored, r.tiny, r.dropped, ESC_F);
+      new_list();
+      CHECK(whole() == (n < ROOM), "a list of %d quads offered (room %d) left the next list whole=%d", n, ROOM, (int)whole());
+      CHECK(fine(), "a list of %d dots (none passing 2 px) left the next list coarse", n);
+      d->in_valid = 0;
+    }
+    // 4. past ESC_C the coarse test: near 2-3 px quads are kept, far ones refused
+    run_list(ring(200, 150)); run_list(ring(200, 150));
+    {
+      new_list();
+      CHECK(whole(), "not whole before the escalation list");
+      for (const Q &q : twos(ESC_C + 20, 500)) push(q);           // near (zval 1000): all kept
+      g_zval = 0x3000;
+      for (const Q &q : twos(100, 600)) push(q);                  // far: refused at coarse
+      g_zval = 1000;
+      settle();
+      const R r{(int)d->dbg_count, (int)d->dbg_tiny, (int)d->dbg_dropped};
+      std::printf("  R1000 %d near + 100 far 2-3 px quads: stored %d tiny %d dropped %d (ESC_C %d)\n", ESC_C + 20, r.stored, r.tiny, r.dropped, ESC_C);
+      CHECK(r.stored == ESC_C + 20 && r.tiny == 100 && r.dropped == 0, "coarse past ESC_C: stored %d tiny %d dropped %d", r.stored, r.tiny, r.dropped);
+    }
+    // ...and the same far quads early in a whole list are kept
+    run_list(ring(200, 150));
+    { new_list(); g_zval = 0x3000; for (const Q &q : twos(100, 600)) push(q); g_zval = 1000; settle();
+      CHECK((int)d->dbg_count == 100 && (int)d->dbg_tiny == 0, "far quads early in a whole list: stored %d tiny %d", (int)d->dbg_count, (int)d->dbg_tiny); }
+    // 5. the boundary: ROOM - 1 offered keeps the next list whole, ROOM does not
+    for (int n : {ROOM - 1, ROOM}) {
+      run_list(ring(200, 150));
+      run_list(twos(n, 300));
+      new_list();
+      CHECK(whole() == (n < ROOM), "after %d quads offered: whole %d", n, (int)whole());
+      d->in_valid = 0;
+    }
+    // 6. not whole: R769 / R776 exactly -- after a heavy list of 2 px quads (it
+    // passes the fine test) the next list is coarse and refuses far 2-3 px quads
+    { run_list(twos(FINE_LIMIT + ROOM, 300));
+      new_list(); CHECK(!whole() && !fine(), "after a heavy list: whole %d fine %d, want coarse", (int)whole(), (int)fine());
+      g_zval = 0x3000; for (const Q &q : twos(50, 600)) push(q); g_zval = 1000; settle();
+      CHECK((int)d->dbg_tiny == 50 && (int)d->dbg_count == 0, "far quads in a coarse list: stored %d tiny %d", (int)d->dbg_count, (int)d->dbg_tiny); }
+    // a light list after it is not whole either (the heavy one did not fit) -- it
+    // is the coarse one above; the list after THAT is whole again
+    { const R r = run_list(dots(50)); CHECK(r.stored == 50 && r.tiny == 0, "dots, two lists after a heavy one: stored %d tiny %d", r.stored, r.tiny); }
+    std::printf("m2_quad_store (R1000 WHOLE, NX %d): checks=%d fails=%d\n", QS_NX, checks, fails);
+    std::printf(fails ? "FAIL\n" : "PASS\n");
+    delete d;
+    return fails ? 1 : 0;
+  }
+#endif
 
   // ---- 1. the size test at both thresholds
   auto sweep = [&](int t, const char *name) {

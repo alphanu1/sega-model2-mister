@@ -134,6 +134,10 @@ module m2_quad_store #(
   // down, so 0x3000 is z = 4 there, and the van scene's boss (z ~21, zval
   // 0x5448-0x5596) is "far" -- he is so at Daytona's scale too (z > 16).
   parameter logic [15:0] TINY_FAR = 16'h0000,
+  // R1000: after a list that fitted whole (every quad it offered, NQ + NX),
+  // no size test until the count nears the room (see `whole` below). Needs
+  // TINY_FINE. 0: R769 / R776 alone.
+  parameter bit          TINY_WHOLE = 1'b0,
   parameter int unsigned SCR_H  = 384,
   // R607: FRONT TO BACK, the reference's order (model2_v.cpp render_polygons:
   // z buckets from min_z up, each bucket a LIFO -- the last polygon submitted
@@ -487,9 +491,25 @@ module m2_quad_store #(
   logic          fine;
   logic [IW:0]   need;        // this list's quads that pass the fine test, saturating
   wire           far_q    = (TINY_FAR == 16'h0000) || (in_z[15:0] >= TINY_FAR);   // R776
-  wire           tiny_sel = (TINY_FINE != 0 && fine) ? is_tiny_f
-                          : (TINY_FINE != 0) ? (is_tiny_f | (is_tiny & far_q))
-                          : is_tiny;
+  // R1000: WHOLE -- NO SIZE TEST WHILE THE LIST FITS. The board draws every
+  // polygon; the cull exists only for room. A list that follows one whose
+  // every quad fitted (tot < NQ + NX) is collected with no size test at all
+  // until its own count reaches ESC_F (4/5 of the room: 2,048 of 2,560), the
+  // fine test from there to ESC_C (7/8: 2,240), the coarse test past it --
+  // so a list that turns out heavy still keeps room for its tail (the HUD).
+  // Otherwise R769 / R776 as before. m_none / m_fine are registers: the
+  // select stays one LUT (five inputs) behind the two trees, and a step lands
+  // one quad late at most. Virtua Cop's van boss: his head is ~92-102 quads
+  // in an 8x12 px box, half of them under 2 px (R1000).
+  logic          whole;       // the previous list fitted whole
+  logic [IW:0]   tot;         // this list's quads offered, saturating
+  logic          m_none, m_fine;   // the test in force: none; fine; else coarse
+  localparam int unsigned ESC_F = MAXL - MAXL/5;
+  localparam int unsigned ESC_C = MAXL - MAXL/8;
+  wire           tiny_sel = (TINY_FINE == 0) ? is_tiny
+                          : m_none ? 1'b0
+                          : m_fine ? is_tiny_f
+                          : (is_tiny_f | (is_tiny & far_q));
 
   // R566: THE COUNT AND THE ATTRIBUTE WORD LAND ONE CYCLE AFTER THE QUAD.
   //
@@ -559,6 +579,7 @@ module m2_quad_store #(
       for (int b = 0; b < int'(NBANK); b++) count[b] <= '0;
       wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       fine <= 1'b1; need <= '0;
+      whole <= TINY_WHOLE; tot <= '0; m_none <= TINY_WHOLE; m_fine <= 1'b1;   // R1000: nothing before it
     end else if (clear) begin
       count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       // R769: the list just ended decides the next one's threshold.
@@ -567,8 +588,16 @@ module m2_quad_store #(
       // was collected coarse for 1.25 s and the boss lost his head and arms.
       fine <= (need < (IW+1)'(MAXL - MAXL/8));
       need <= '0;
+      // R1000: and whole if every quad it offered fitted
+      whole  <= TINY_WHOLE && (tot < (IW+1)'(MAXL));
+      m_none <= TINY_WHOLE && (tot < (IW+1)'(MAXL));
+      m_fine <= (TINY_WHOLE && (tot < (IW+1)'(MAXL))) || (need < (IW+1)'(MAXL - MAXL/8));
+      tot    <= '0;
     end else begin
       if (a_v && a_need && !(&need)) need <= need + 1'b1;
+      if (a_v && !(&tot)) tot <= tot + 1'b1;   // R1000
+      m_none <= whole && (wcount < (IW+1)'(ESC_F));
+      m_fine <= whole ? (wcount < (IW+1)'(ESC_C)) : fine;
       // THE VERTEX RAMs' WRITE ENABLE DOES NOT WAIT FOR THE TINY TEST (R222).
       // Every accepted quad is WRITTEN at slot wcount and only the COUNT is
       // withheld when it is tiny: the slot is simply reused by the next quad.

@@ -146,6 +146,9 @@ module m2_raster3d #(
   // bank's list is drawn whole. FB_DDR3 only (the band path replays the
   // other bank every frame). 0: 2,048 a list, as before.
   parameter int unsigned QNX = 0,
+  // R1000: the store's WHOLE collection -- no size cull after a list that
+  // fitted, until the count nears the room. 0: R769 / R776 alone.
+  parameter bit          QWHOLE = 1'b1,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 27 : 24
 ) (
@@ -462,6 +465,7 @@ module m2_raster3d #(
   // R776: and at 4 only for quads at z >= 16 (zval 0x3000): close-up detail
   // keeps every quad of 2 px or more whatever the list's size.
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
+                  .TINY_WHOLE(QWHOLE),   // R1000
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),
                   .RAWCOL(TEXLUT), .VX(TEXLUT), .CW(TEXLUT ? 17 : 16), .TXW(TEXLUT ? 26 : 24),
                   .NX(FB_DDR3 ? QNX : 0)) u_store (   // R962   // R607, R626, R828c, R899, R867

@@ -1311,6 +1311,16 @@ obj_quad_store/Vm2_quad_store: $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store.cpp
 	  --Mdir obj_quad_store -o Vm2_quad_store -CFLAGS "-O2" \
 	  $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store.cpp
 
+# R1000: the store's WHOLE collection (no size test while the list fits), at the release's spill
+test_m2_quad_store_whole: obj_quad_store_whole/Vm2_quad_store
+	@echo "== test m2_quad_store (R1000: whole while the list fits, NX 512)"
+	@./obj_quad_store_whole/Vm2_quad_store $(TEST_ARGS)
+
+obj_quad_store_whole/Vm2_quad_store: $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store.cpp
+	$(VBUILD) --top-module m2_quad_store --public-flat-rw -GTINY=4 -GTINY_FINE=2 -GTINY_FAR=16\'h3000 -GTINY_WHOLE=1 -GNX=512 -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN \
+	  --Mdir obj_quad_store_whole -o Vm2_quad_store -CFLAGS "-O2 -DQS_WHOLE=1 -DQS_NX=512" \
+	  $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store.cpp
+
 test_m2_raster3d: obj_raster3d/Vm2_raster3d
 	@echo "== test m2_raster3d (a list every second frame is drawn every frame)"
 	@./obj_raster3d/Vm2_raster3d $(TEST_ARGS)

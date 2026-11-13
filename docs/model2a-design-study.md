@@ -39518,3 +39518,143 @@ reverted.
 (clk_i960's slack, +0.4 to +1.5 ns in recent fits); the board (does the van
 scene's slowdown go?). If it does not, the next costs in the scene are not
 the cosines.
+
+**R1000 -- VIRTUA COP's VAN BOSS (GitHub #28), AFTER R993: HIS HEAD IS 91-102
+QUADS IN AN 8 x 12 PX BOX, 42-59 OF THEM UNDER 2 PX. THE FINE CULL (R769)
+COSTS IT UP TO 27% OF MAME's PIXELS, THE COARSE ONE (R776) ~80%, AND R993's
+SWITCH (2,240) SITS ONLY 82-136 QUADS ABOVE THIS PLAY's LISTS. NOT THE VAN's
+WINDOW. THE STORE NOW KEEPS EVERY QUAD WHILE THE LIST FITS ("WHOLE"). BENCH
+ONLY; NOT MAPPED, NOT FITTED, NOT ON A BOARD.** Branch vcop-head2 (off
+i960-fptrans 93e7b597), 2026-11-13. (R999 is not on this branch; this entry
+follows R998 here.)
+
+*What was believed:* Ben, on the R992 + R993 + R995/R997/R998 build: the
+slowdown is gone and the head is there once the boss is out, "but when the
+van first drives in the head is missing for about 1 second -- I feel it's
+the window z and behind the van door". R993 had checked the burst (walks
+7476-7513) collected FINE and drawn "whole" -- from the owner picture of the
+upper body, never the head on its own, and never against MAME's pixels.
+
+*Now known (scripted Beginner game, vcop_auto_sel.lua seed 1; t = (walk -
+74) / 28.76 s; MAME frame = walk - 523):*
+  1. WHERE HE IS (run; M2TEX in MAME 0.289 m2lod, per-polygon pixel counts
+     and the object's sequence in the list; the head is object 0x80a9df,
+     found per walk with m2_listdec): the boss's 16 objects are in every list
+     from walk 7420 (255.42 s), at x 369-441, behind the crate stack. MAME
+     draws 0 head pixels on walks 7420-7476; the head is first seen on 7477
+     (257.41 s, 16 px) as the van carries him out, then 45-60 px a list to
+     7513, with dips to 6-14 px where the exhaust stack covers him (7485,
+     7486, 7490). So "the van first drives in" is walks 7477 on, which are
+     R993's burst: every one of those lists is 2,164-2,363 quads.
+  2. THE HEAD's QUADS (run; geodiff_wk with the head moved behind the camera,
+     the missing indexes are its quads): 91-102 quads a list on 7477-7512, in
+     a box 7-10 x 11-15 px; 42-59 of them under 2 px both ways (refused by the
+     FINE test), and 27-55 more 2-4 px at zval >= 0x3000 (refused too by the
+     COARSE test). His whole upper body is 207-226 quads.
+  3. PIXELS, OURS AGAINST MAME (run; tb_m2_raster3d at Model2.sv's
+     m2_raster3d parameters, QNX 512, our geometry's lists, each collected
+     behind the list before it as the board does, M2_R3D_QGAP 650; owner
+     colours; MAME's head pixels from M2TEX):
+       walk   release (R993)  no size cull   MAME
+       7477          3              8          16
+       7478         40             46          45
+       7480         44             49          50
+       7484         37             49          49
+       7490          5              8           6
+       7496         33             45          42
+       7500         30             41          41
+       7504         34             44          45
+       7508         44             50          50
+       7512         51             60          60
+     (20 walks run, 7477-7512.) The release, collecting FINE, draws 73-100% of
+     MAME's head on 7478-7512 (median ~83%); with no size cull the head is MAME's to +/- 3 px
+     on every walk but 7477 (8 against 16: the first list he shows, the same
+     with or without the cull -- not this; not looked into).
+  4. NOT THE WINDOW (b) (run): the no-cull bench matches MAME's head pixel
+     count to +/- 3 px, so nothing in front of him takes his pixels in our
+     front-to-back order; and textured (MAME's own list of walk 7480 through
+     the bench, M2_R3D_REALCOL) the head pixels off MAME by more than 48 in a
+     channel are 5 of 50 at fine, 33 of 50 at coarse, 3 of 50 with no cull --
+     transparency and the checker add nothing. The head is above the cab roof,
+     beside the exhaust stack, not behind glass.
+  5. COARSE TAKES THE HEAD (run): walk 7480 behind a list A = walk 7479 plus
+     150 far 2 x 2 px quads (A's 2-px count 2,297, over 2,240): the release
+     stores 1,722 of B's 2,354 and draws 11 head pixels of MAME's 50 -- the
+     board photo of R993. MAME's list 7480 forced coarse (M2_R3D_COARSE): 1,715
+     stored of 2,349.
+  6. THE MARGIN (run, then INFERRED): in this play the lists before the
+     burst's need 1,960-2,158 quads passing 2 px (walks 7476-7506) against
+     R993's switch at 2,240 -- 82 quads short at the heaviest. Debris, hit
+     sparks, more workers on screen: a play with ~100 more passing quads (the
+     crates burst in exactly this second) is collected coarse and loses the
+     head for that second, as R993 found before its fix. Ben's play is not
+     measured; two other scripted seeds (7, 23; M2LOD only, no pictures)
+     reach MAME list totals of 2,222 and 2,342 in their heaviest late bursts
+     (frames 7178-7189 and 7005-7063), neither confirmed as the van. So which
+     of fine (up to 27% of the head, patchy) or coarse (the head gone) the board
+     showed is INFERRED: "missing" reads like coarse.
+
+*THE FIX (R1000, m2_quad_store TINY_WHOLE, m2_raster3d QWHOLE = 1): the board
+draws every polygon; the size cull exists only for room, so it now applies
+only when room runs short.* A list that follows one whose every OFFERED quad
+fitted (tot < NQ + NX: 2,560) is collected with no size test until its own
+count reaches ESC_F = 4/5 of the room (2,048), the fine test from there to
+ESC_C = 7/8 (2,240), the coarse test past that -- so a list that turns out
+heavy still keeps room for its tail (the HUD is submitted last). A list
+after one that did not fit is collected by R769 / R776 exactly as before.
+`tot` (12 bits, saturating), `whole`, and two mode registers m_none / m_fine,
+which keep tiny_sel one five-input LUT behind the trees; a step lands one
+quad late at most. No M10K.
+  * The van (run): every walk 7477-7512 collected whole; the head equals the
+    no-cull bench on all 20 walks (table above). MAME's list 7480 textured:
+    3 of 50 head pixels off, as no cull; 2,313 stored of 2,349 (the 36 are
+    sub-2-px quads past 2,048). The stress list of (5): 49 head pixels, 2,317
+    stored. Draw +1.5%: 496,243 -> 503,470 cycles (walk 7479's), 506,916 ->
+    512,252 (7480's).
+  * The hold (R962), walk 7480 behind 7479 (A now stores 2,307, spilling 259
+    where it spilled 99): quads every 0 / 100 / 200 / 325 / 650 cycles held
+    501,682 / 322,884 / 144,084 / 0 / 0 cycles (release: 494,117 / 281,519 /
+    68,919 / 0 / 0). No hold at the bench geometry's pace (650); at 200 the
+    hold doubles. The board's walk pace is not measured (R993's caveat
+    stands).
+  * Every dumped list (run; tiersim.py, the store's rules applied to
+    consecutive geodiff lists, room 2,560): Beginner 100 lists -- quads
+    refused for size 21,962 -> 927, for room 0 -> 0; Expert (runA/B/C) 123
+    of the heaviest lists -- size 65,594 -> 46,942 (85 collected whole), room
+    0 -> 0. Variants rejected on the same lists: no prev-list floor (always
+    whole, escalating) loses 2,996-12,460 tail quads on 32-36 Expert lists;
+    whole with a fine-only escalation loses 225-302 on one Expert list.
+  * Daytona (run; MAME m2lod, 240 s of attract including its demo races,
+    11,680 lists): MAME's total peaks at 2,384 (153 lists over 2,048, 52 over
+    2,240, none over 2,560), so every list after the first is collected whole
+    and none can lose its tail for room even at ours' +1.3% (R991). R769's
+    car select (1,340 quads) is under ESC_F, so whole (INFERRED, not run). A PLAYED race is not measured here.
+  * Checks: test_m2_quad_store PASS (23, unchanged: TINY_WHOLE 0) at NX 0 and
+    512; new test_m2_quad_store_whole (NX 512, 24 checks: power-up whole, 1 px
+    dots and the tyre kept whole, 2,148 / 7,680 / 50,000 dots kept to ESC_F +1
+    and refused for size past it with none refused for room, far 2-3 px quads
+    refused only past ESC_C, the boundary ROOM - 1 / ROOM, the R769 fallback
+    after a heavy list) PASS, and at NX 0 and 1,024. test_m2_raster3d PASS (41:
+    + QWHOLE reaches the store; the R769 / R776 phase unchanged). lint_top clean
+    at the default, M2_QNX_1024 and M2_NO_QSPILL; lint_m2_quad_store clean
+    (and at TINY_WHOLE 1, NX 0 / 512); lint_idx 141 lines as before; Quartus
+    17.0 --analyze_file on m2_quad_store.sv and m2_raster3d.sv: 0 errors (the
+    .qsf it touched reverted).
+*Found on the way, not looked into:* in the textured bench of MAME's list
+7480 the warehouse wall behind the boss and the van's hubcap are not
+MAME's texture (MAME: the fence's X-brace and a spoked hubcap; ours: grey
+blocks and stripes). The bench's texture source for Virtua Cop (M2DIFF's
+tex0/tex1) may be the cause; the board's picture has not been compared.
+*Not settled:* which collection the board was in when Ben saw it (no board
+measurement of the store's `fine`); the board's walk pace and so whether the
+larger spill holds the next list there; the map and fit (two registers, a
+12-bit counter and three compares on the count); the board: the van scene's
+head from his first appearance, the HUD steady, Daytona's attract and a
+played race.
+*How established:* MAME 0.289 m2lod (r943 build) headless -- run_tex.sh
+(M2TEX every frame, owner maps kept for frames 6890-6995, M2DIFF frame
+6957), Daytona attract with M2LOD, two other seeds (vcop_auto_seed.lua,
+VA_SEED); geodiff_wk on vcop-quads' beg2 dumps (byte-identical ours.txt
+from this branch's geometry); tb_m2_raster3d at Model2.sv's parameters
+(QNX 512) as released, with no size cull, and with R1000. All under
+sm2-builds/vcop-head2/build/vh2 (ROM-derived, never committed).
