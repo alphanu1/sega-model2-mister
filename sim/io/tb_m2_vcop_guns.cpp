@@ -39,7 +39,9 @@ static void tick(int n = 1) {
 struct Rng { int lo, hi; };
 static const Rng P1X{0x083, 0x276}, P1Y{0x024, 0x1a9}, P2X{0x080, 0x273}, P2Y{0x027, 0x1a9};
 // R961: off the screen = within 2 px of an edge
-static bool offp(int x, int y) { return x <= 1 || x >= 494 || y <= 1 || y >= 382; }
+// R1002: within EN px, the OSD's Off-screen edge (+edge=SEL: 0 4 px, 1 2 px, 2 8 px, 3 10 px)
+static int ESEL = 0, EN = 4;
+static bool offp(int x, int y) { return x < EN || x >= 496 - EN || y < EN || y >= 384 - EN; }
 static long n_off = 0, n_on = 0;
 static void check_off(const char* what, int a, int b) {
   bool o1 = offp(d->c1x, d->c1y), o2 = offp(d->c2x, d->c2y);
@@ -58,9 +60,13 @@ static void set_ana(int p, int x, int y) {   // signed -128..127
 
 int main(int argc, char** argv) {
   Verilated::commandArgs(argc, argv);
+  { const char* a = Verilated::commandArgsPlusMatch("edge=");   // R1002
+    if (a && *a) ESEL = atoi(a + 6) & 3;
+    EN = (ESEL == 1) ? 2 : (ESEL == 2) ? 8 : (ESEL == 3) ? 10 : 4;
+    printf("R1002: Off-screen edge sel %d = %d px\n", ESEL, EN); }
   d = new Vm2_vcop_guns;
   d->rst_n = 0; d->en = 1; d->play = 3; d->joy0 = 0; d->joy1 = 0; d->ana0 = 0; d->ana1 = 0;
-  d->ps2_mouse = 0; d->mouse_sel = 0;
+  d->ps2_mouse = 0; d->mouse_sel = 0; d->edge_sel = ESEL;
   tick(4); d->rst_n = 1; tick(4);
 
   // ---------------------------------------------------------- 1. the stick
@@ -97,13 +103,15 @@ int main(int argc, char** argv) {
   }
   for (int e : {-126, 126}) for (int ax = 0; ax < 2; ax++) {
     set_ana(0, ax ? 0 : e, ax ? e : 0); set_ana(1, ax ? 0 : e, ax ? e : 0); tick(8);
-    CHECK(d->off == 0, "stick %d on axis %d: off %d, want 0 (px %d,%d)", e, ax, d->off, d->c1x, d->c1y);
+    if (EN == 2) CHECK(d->off == 0, "stick %d on axis %d: off %d, want 0 (px %d,%d)", e, ax, d->off, d->c1x, d->c1y);
+    else check_off("stick 126", e, ax);   // R1002: wider edges take +-126 too
   }
   // the edge units the game sees on the screen (MAME: each one is a shot)
   set_ana(0, -126, -126); set_ana(1, -126, -126); tick(8);
   printf("stick -126: px (%d,%d) units P1 %03x,%03x P2 %03x,%03x off %d\n", d->c1x, d->c1y, d->p1x, d->p1y, d->p2x, d->p2y, d->off);
   set_ana(0, 126, 126); set_ana(1, 126, 126); tick(8);
   printf("stick +126: px (%d,%d) units P1 %03x,%03x P2 %03x,%03x off %d\n", d->c1x, d->c1y, d->p1x, d->p1y, d->p2x, d->p2y, d->off);
+  if (EN != 2) { set_ana(0, 0, 0); set_ana(1, 0, 0); tick(8); }   // R1002: the units above are only printed
   set_ana(0, 0, 0); set_ana(1, 0, 0); tick(8);
   CHECK(d->off == 0 && d->p1x == 0x17d && d->p1y == 0x0e7, "centre: off=%d p1 %03x,%03x", d->off, d->p1x, d->p1y);
 
@@ -180,7 +188,7 @@ int main(int argc, char** argv) {
       int cx = (sel == 1) ? d->c1x : d->c2x, cy = (sel == 1) ? d->c1y : d->c2y;
       CHECK(cx == x && cy == 192, "edge walk x: at (%d,%d) want (%d,192)", cx, cy, x);
       int o = (d->off >> (sel == 1 ? 0 : 1)) & 1;
-      CHECK(o == (x <= 1 || x >= 494), "edge walk x sel %d px %d: off %d", sel, x, o);
+      CHECK(o == (x < EN || x >= 496 - EN), "edge walk x sel %d px %d: off %d", sel, x, o);
       check_off("edge walk x", sel, x);
     }
     for (int k = 0; k < 2; k++) send(-124, 0);       // (247, 192)
@@ -191,7 +199,7 @@ int main(int argc, char** argv) {
       int cx = (sel == 1) ? d->c1x : d->c2x, cy = (sel == 1) ? d->c1y : d->c2y;
       CHECK(cx == 248 && cy == y, "edge walk y: at (%d,%d) want (248,%d)", cx, cy, y);
       int o = (d->off >> (sel == 1 ? 0 : 1)) & 1;
-      CHECK(o == (y <= 1 || y >= 382), "edge walk y sel %d px %d: off %d", sel, y, o);
+      CHECK(o == (y < EN || y >= 384 - EN), "edge walk y sel %d px %d: off %d", sel, y, o);
       check_off("edge walk y", sel, y);
     }
     const int ed[4][2] = {{255, 0}, {-255, 0}, {0, 255}, {0, -255}};
