@@ -3794,7 +3794,7 @@ end else if (SND2A) begin : g_2asnd
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
 	              .EXACT(`M2_2A_SND_EXACT != 0), .OVERLAP(`M2_2A_SND_OVL != 0),
 	              .TIMER(`M2_2A_SND_TIMER),   // R976
-	              .LERP(`M2_2A_SND_LERP != 0)) u_snd2a (   // R884, R946, R949
+	              .LERP(`M2_2A_SND_LERP != 0), .SCSP_M10K(C2)) u_snd2a (   // R884, R946, R949, R1008
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),

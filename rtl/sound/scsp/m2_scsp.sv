@@ -73,7 +73,11 @@ module m2_scsp #(
   parameter bit WPOST = 1'b0,
   // R947: m2_scsp_dsp ABORT_MERGE (with OVERLAP)
   parameter bit ABORT_MERGE = 1'b1,
-  parameter int TIMER     = 0         // R976: m2_scsp_regs; 0 MAME's timers, 1 the arcade's, 2 tarc selects
+  parameter int TIMER     = 0,        // R976: m2_scsp_regs; 0 MAME's timers, 1 the arcade's, 2 tarc selects
+  // R1008: M10K to spare (2C). The FM ring and the DSP's COEF / MADRS, all
+  // read through registers, go to M10K in place of MLAB: the same circuit,
+  // eight LABs back as logic. 0 keeps them in MLAB.
+  parameter bit RAM_M10K  = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -887,7 +891,13 @@ module m2_scsp #(
       ring_wd = (oc == 3'd0) ? o_data : {o_be[1] ? o_data[15:8] : ring_q[15:8], o_be[0] ? o_data[7:0] : ring_q[7:0]};
     end
   end
-  generate if (FM) begin : g_fm
+  generate if (FM && RAM_M10K) begin : g_fm_m10k
+    (* ramstyle = "M10K" *) logic [15:0] ring [128];
+    always_ff @(posedge clk) begin
+      if (ring_we) ring[ring_wa] <= ring_wd;
+      ring_q <= ring[ring_ra];
+    end
+  end else if (FM) begin : g_fm
     (* ramstyle = "MLAB" *) logic [15:0] ring [128];
     always_ff @(posedge clk) begin
       if (ring_we) ring[ring_wa] <= ring_wd;
@@ -913,7 +923,7 @@ module m2_scsp #(
 
   assign mix_we  = e_s2 == 4'(S2_MIXW);
   assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
-  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST), .ABORT_MERGE(ABORT_MERGE)) u_dsp (
+  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST), .ABORT_MERGE(ABORT_MERGE), .COEF_M10K(RAM_M10K)) u_dsp (   // R1008
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
     .rbl(rbl), .rbp(rbp),
