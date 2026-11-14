@@ -2726,7 +2726,7 @@ obj_fx68k/Vfx68k_harness: sim/sound/fx68k_harness.sv sim/sound/tb_fx68k.cpp $(FX
 TGPX4_RTL := rtl/tgpx4/tgpx4_agu.sv rtl/tgpx4/tgpx4_rf.sv rtl/tgpx4/tgpx4_fsqrt.sv rtl/tgpx4/tgpx4_cvt.sv \
              rtl/tgpx4/tgpx4_pmem.sv rtl/tgpx4/tgpx4_core.sv \
              rtl/tgp/fp_add.sv rtl/tgp/fp_mul.sv rtl/tgp/fp_div.sv
-TGPX4_PLINES ?= 1024
+TGPX4_PLINES ?= 4096
 lint_tgpx4:
 	$(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
 	  -GPLINES=$(TGPX4_PLINES) --top-module tgpx4_core $(TGPX4_RTL)

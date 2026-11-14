@@ -261,7 +261,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // R924: M2_2C, THE MODEL 2C-CRX BOARD ON THE 2A CORE (branch model2c only): the
 // MB86235 TGPx4 (rtl/tgpx4, m2_copro TGPX4) in place of the TGP, its program
 // uploaded as dword pairs and held in a line cache over an SDRAM copy
-// (M2_2C_PLINES lines: 1024 by default, 4096 = all on chip), 2C's texture RAM
+// (M2_2C_PLINES lines: 4096 = all on chip, the default since R1006 -- 1024 /
+// 2048 a cache), 2C's texture RAM
 // (0x11000000 / 0x11200000, plain 32-bit) and luma RAM (0x11400000, a byte per
 // halfword) in the bridge, the 2A texture / luma windows unmapped, and the copro
 // status register at 0x00980014. OFF by default: VERILOG_MACRO "M2_2C=1" (or
@@ -269,7 +270,12 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // House of the Dead); the 2A games need the TGP it leaves out.
 `ifdef M2_2C
 `ifndef M2_2C_PLINES
-`define M2_2C_PLINES 1024
+`define M2_2C_PLINES 4096
+`endif
+// R1006: M2_2C_XCACHE, the TGPx4's copro data ROM read cache: 2^n words in
+// M10K (12 = 4 K words, 21 M10K; 0 = none)
+`ifndef M2_2C_XCACHE
+`define M2_2C_XCACHE 12
 `endif
 `endif
 // R979: M2_2C_DSB, SEGA TOURING CAR CHAMPIONSHIP'S MUSIC -- the Z80 Digital
@@ -670,10 +676,12 @@ localparam bit M2A = 1'b0;
 `ifdef M2_2C
 localparam bit          C2        = M2A;
 localparam int unsigned C2_PLINES = `M2_2C_PLINES;
+localparam int unsigned C2_XCACHE = `M2_2C_XCACHE;   // R1006
 localparam bit          DSB       = M2A && (`M2_2C_DSB != 0);   // R979
 `else
 localparam bit          C2        = 1'b0;
 localparam int unsigned C2_PLINES = 1024;
+localparam int unsigned C2_XCACHE = 0;
 localparam bit          DSB       = 1'b0;
 `endif
 // R891: VERILOG_MACRO "M2_MEMTEST=1" (with "M2_PROBE=1"; or -DM2_MEMTEST to
@@ -4870,7 +4878,7 @@ end
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
 m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
-           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES)) u_copro (   // R852, R888; R924, R931
+           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE)) u_copro (   // R852, R888; R924, R931
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
