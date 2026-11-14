@@ -6784,7 +6784,7 @@ end else begin : g_noioboard
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
 		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words);
 		// R945: and the NVRAM file's EEPROM, both through u_nv_port
-		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A | EESAVE2A), .EE_SAVE(EESAVE2A)) u_315_5649 (
+		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A | EESAVE2A), .EE_SAVE(EESAVE2A), .EE_M10K(C2)) u_315_5649 (   // R1008
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),

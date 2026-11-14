@@ -42,7 +42,11 @@
 
 module m2_93c46 #(
   parameter bit LOAD = 1'b0,  // R897: a load port (Hanguk Pro Yagu 98's factory image)
-  parameter bit DUMP = 1'b0   // R945: a read port for the NVRAM save
+  parameter bit DUMP = 1'b0,  // R945: a read port for the NVRAM save
+  // R1008: the array in M10K (1) or MLAB (0). Both reads are registered (q,
+  // dump_q) and it powers up erased either way, so the two are the same
+  // circuit; a build with M10K to spare (2C) takes the blocks for the LABs.
+  parameter bit M10K = 1'b0
 ) (
   input  logic clk,
   input  logic rst_n,   // power-on only: the part has no reset pin (MAME resets it never)
@@ -64,23 +68,36 @@ module m2_93c46 #(
   output logic [15:0] dump_q
 );
 
-  (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] ee [64];
-  initial for (int i = 0; i < 64; i++) ee[i] = 16'hffff;
-
   logic        we;
   logic  [5:0] wa, ra;
   logic [15:0] wd, q;
   wire         l_we = LOAD && ld_we;                 // R897
-  always_ff @(posedge clk) begin
-    if (we || l_we) ee[l_we ? ld_a : wa] <= l_we ? ld_d : wd;
-    q <= ee[ra];
-  end
 
-  // R945: the save's read port, the same array (a second MLAB copy).
-  generate if (DUMP) begin : g_dump
-    always_ff @(posedge clk) dump_q <= ee[dump_a];
-  end else begin : g_nodump
-    assign dump_q = 16'hffff;
+  // R945: the save's read port reads the same array (a second copy of it).
+  generate if (M10K) begin : g_ee_m10k
+    (* ramstyle = "M10K, no_rw_check" *) logic [15:0] ee [64];
+    initial for (int i = 0; i < 64; i++) ee[i] = 16'hffff;
+    always_ff @(posedge clk) begin
+      if (we || l_we) ee[l_we ? ld_a : wa] <= l_we ? ld_d : wd;
+      q <= ee[ra];
+    end
+    if (DUMP) begin : g_dump
+      always_ff @(posedge clk) dump_q <= ee[dump_a];
+    end else begin : g_nodump
+      assign dump_q = 16'hffff;
+    end
+  end else begin : g_ee_mlab
+    (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] ee [64];
+    initial for (int i = 0; i < 64; i++) ee[i] = 16'hffff;
+    always_ff @(posedge clk) begin
+      if (we || l_we) ee[l_we ? ld_a : wa] <= l_we ? ld_d : wd;
+      q <= ee[ra];
+    end
+    if (DUMP) begin : g_dump
+      always_ff @(posedge clk) dump_q <= ee[dump_a];
+    end else begin : g_nodump
+      assign dump_q = 16'hffff;
+    end
   end endgenerate
 
   typedef enum logic [2:0] { S_RESET, S_START, S_CMD, S_READ, S_DATA, S_DONE } st_t;
