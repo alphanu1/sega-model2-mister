@@ -48661,3 +48661,13 @@ is identical in all 73.*
     4,587 quads (cap)*        40b       840,919   840,136      -783  -0.09
 *Not settled:* the clear/window priority (above), and everything left from
 the first part of this entry (fit, board, real HPS latency).
+
+*FIT AND BOARD (2026-11-14):* 2C s2301 from 212250fc (the never-slower form):
+39,557 ALM (+154 on the release's s2137), 448 / 553 M10K (-102; the map's
+by-shape count said -104), 107 DSP; clk_sys +0.034, every core clock and hold
+clean, HDMI -0.383. s2302: HDMI -0.545, core clean. **Freeing 102 M10K did not
+close HDMI on either seed** -- two seeds only, but it does not support "M10K
+pressure is what fails HDMI" (R974 / R975). Ben, on the board (s2301, md5
+29ff3bd143b143e771357aa061d30644): "runs as well as the previous" -- STCC,
+House of the Dead and Over Rev as the release. The payload in DDR3 is SETTLED
+as a test build; the room is for STCC's sound board (R979) next.
