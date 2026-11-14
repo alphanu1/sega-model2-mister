@@ -52,6 +52,9 @@ module m2_tgpx4 #(
   parameter bit          SUBNORM = 1'b1,
   parameter int unsigned XC_AW   = 12,      // R1006: tgpx4_core's ROM read cache
   parameter bit          FWD     = 1'b1,    // R1009: tgpx4_core's operand forwarding
+  parameter bit          XSRF    = 1'b1,    // R1009: tgpx4_core's S_DEC register-file source
+  parameter bit          QD2     = 1'b1,
+  parameter bit          CTLD    = 1'b1,
   parameter int unsigned WQ_AW   = 4        // R1009: the posted-write queue, 2^WQ_AW deep
 ) (
   input  logic        clk,
@@ -108,7 +111,7 @@ module m2_tgpx4 #(
   logic [23:0] ext_addr;
   logic [31:0] ext_wdata, ext_rdata;
 
-  tgpx4_core #(.PLINES(PLINES), .SUBNORM(SUBNORM), .XC_AW(XC_AW), .FWD(FWD)) u_core (
+  tgpx4_core #(.PLINES(PLINES), .SUBNORM(SUBNORM), .XC_AW(XC_AW), .FWD(FWD), .XSRF(XSRF), .QD2(QD2), .CTLD(CTLD)) u_core (
     .clk(clk), .rst_n(rst_n), .run(run),
     .prog_we(prog_we), .prog_addr(prog_addr), .prog_data(prog_data),
     .pf_req(pf_req), .pf_addr(pf_addr), .pf_data(pf_data), .pf_ack(pf_ack),

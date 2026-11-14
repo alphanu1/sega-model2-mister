@@ -73,6 +73,9 @@ module m2_copro #(
   parameter int unsigned X4_XCACHE = 12,
   // R1009: the TGPx4's operand forwarding, and its posted-write queue (2^n)
   parameter bit          X4_FWD    = 1'b1,
+  parameter bit          X4_XSRF   = 1'b1,
+  parameter bit          X4_QD2    = 1'b1,
+  parameter bit          X4_CTLD   = 1'b1,
   parameter int unsigned X4_WQ     = 4,
   // R931: a full output FIFO holds the TGP (m2_tgp OUT_STALL); 0 drops (R146)
   parameter bit OUT_STALL = 1'b0
@@ -554,7 +557,7 @@ module m2_copro #(
       else if (fifo_wr && uploading && !up_hold) x4_up_idx <= 13'(coprocnt);
     logic [11:0] x4_pc;
     logic        x4_retire;
-    m2_tgpx4 #(.PLINES(X4_PLINES), .SUBNORM(1'b1), .XC_AW(X4_XCACHE), .FWD(X4_FWD), .WQ_AW(X4_WQ)) u_x4 (
+    m2_tgpx4 #(.PLINES(X4_PLINES), .SUBNORM(1'b1), .XC_AW(X4_XCACHE), .FWD(X4_FWD), .XSRF(X4_XSRF), .QD2(X4_QD2), .CTLD(X4_CTLD), .WQ_AW(X4_WQ)) u_x4 (
       .clk(clk), .rst_n(rst_n), .run(!halted),
       .up_we(uc_we), .up_idx(x4_up_idx), .up_data(uc_data), .up_busy(x4_up_busy),
       .fi_data(fin_q), .fi_valid(fin_valid), .fi_full(fin_full), .fi_pop(tgp_in_pop),
