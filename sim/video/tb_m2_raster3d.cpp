@@ -338,7 +338,8 @@ int main(int argc, char **argv) {
       } }
     { static const bool BT = std::getenv("M2_R3D_BANDTRACE") != nullptr;   // R1003: each band's end, in core cycles
       static int pc = -1; const int c = d->rootp->m2_raster3d__DOT__cst & 7;
-      if (BT && c != pc && c == 6 && g_draw_c0 >= 0) std::printf("BAND %d %ld\n", (int)d->rootp->m2_raster3d__DOT__fill_band, g_cyc - g_draw_c0);
+      if (BT && c != pc && c == 6 && g_draw_c0 >= 0) std::printf("BAND %d %ld clr_y %d cl_on %d\n", (int)d->rootp->m2_raster3d__DOT__fill_band, g_cyc - g_draw_c0,
+                  (int)d->rootp->m2_raster3d__DOT__g_fb__DOT__g_wcomb__DOT__u_fbw__DOT__clr_y, (int)d->rootp->m2_raster3d__DOT__g_fb__DOT__g_wcomb__DOT__u_fbw__DOT__cl_on);
       pc = c; }
     if (FBM) {
       const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;

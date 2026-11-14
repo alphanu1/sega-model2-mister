@@ -9,10 +9,12 @@
 // any later version. See LICENSE for the full text.
 //
 // R1003: FROM THE MODEL 1 CORE, rtl/mem/m1_ddram_mux.sv @ 311710f
-// (sega-model1-mister), renamed m1_ -> m2_. Nothing else is changed. Model 1
-// wrote it for exactly this pairing -- this core's m2_ddr3 (the frame buffer)
-// as master A and the quad payload client as master B -- so the comments
-// below are Model 1's and their R-numbers are this project's study.
+// (sega-model1-mister), renamed m1_ -> m2_. Model 1 wrote it for exactly this
+// pairing -- this core's m2_ddr3 (the frame buffer) as master A and the quad
+// payload client as master B -- and its rules, its read-owner queue and its
+// bench are kept. ONE THING IS CHANGED, MEASURED: the grant (below, and the
+// PRIORITY paragraph). The comments are otherwise Model 1's; their R-numbers
+// are this project's study.
 //
 // TWO DDRAM MASTERS ON THE FRAMEWORK'S ONE DDRAM PORT.
 //
@@ -45,9 +47,13 @@
 // The master not granted sees BUSY, which is exactly what a busy bridge looks
 // like to it - both masters already hold their commands through a BUSY.
 //
-// PRIORITY: alternate, so neither waits longer than one of the other's
-// commands; and `hold_b` keeps B off while the scanout is fetching (the Model 2
-// study's R655 - a line read must not queue behind a flood of other traffic).
+// PRIORITY (R1003, not Model 1's): A FIRST, DECIDED IN THE CYCLE. Model 1
+// alternated a registered grant, which costs A an edge whenever B holds the
+// grant; here A's command goes straight to the bus unless B's is already on it
+// (left under BUSY, or a write burst part done), so a frame-buffer command
+// with the payload idle is taken exactly as on a port of its own. B takes
+// every cycle A leaves. `hold_b` keeps B off while the scanout is fetching
+// (the study's R655 - a line read must not queue behind other traffic).
 
 `timescale 1ns/1ps
 
@@ -97,9 +103,32 @@ module m2_ddram_mux #(
   output logic [15:0] dbg_q_ovf           // reads accepted with the queue full: zero
 );
 
-  logic g;                                // the granted master: 0 = A, 1 = B
-  logic fresh;                            // B granted and has not yet presented
+  // R1003: THE GRANT IS DECIDED IN THE CYCLE, NOT REGISTERED (not Model 1's).
+  //
+  // Model 1's mux registered the grant and handed it to B whenever B *wanted*
+  // the port, so a command A raised while B held it waited an edge for the
+  // grant to come back -- even with nothing of B's on the bus. On 2C, A is the
+  // frame buffer's m2_ddr3 and B the payload, whose reads are prefetched and
+  // queued most of the time: m2_ddr3 lost 1,621 cycles that way in STCC's
+  // title list and that list drew 0.71% slower than the release store. A
+  // registered "A first" grant changed nothing (the edge is lost either way).
+  //
+  // So the port goes, in the cycle, to:
+  //   - whoever's command is ON THE BUS and still owed: a command presented
+  //     under BUSY last cycle (it must not change -- Avalon) or a write
+  //     burst with beats to come (its beats carry no address);
+  //   - otherwise A, if A presents a command;
+  //   - otherwise B, if B presents one (and the scanout is not fetching).
+  // A command A raises with B not on the bus is taken in the same cycle it
+  // would be on a port of its own: zero added cycles. B, refused, holds its
+  // command as it would for a busy bridge; it raises one only after a cycle
+  // it saw !BUSY, and b_busy is low whenever A is idle, so it needs no
+  // `want` and no `fresh`. B cannot starve: m2_ddr3 is one transaction at a
+  // time and idles between them, and after a read waits ~300 cycles for it.
+  logic       g;                          // this cycle's owner of the port: 0 = A, 1 = B
   logic [7:0] wleft;                      // beats of the open write burst still to go
+  logic       wown;                       // its owner
+  logic       stk, stk_own;               // a command was left on the bus under BUSY, and whose
 
   assign DDRAM_RD       = g ? b_rd       : a_rd;
   assign DDRAM_WE       = g ? b_we       : a_we;
@@ -109,13 +138,22 @@ module m2_ddram_mux #(
   assign DDRAM_BE       = g ? b_be       : a_be;
   assign dout   = DDRAM_DOUT;
   assign a_busy = DDRAM_BUSY ||  g;
-  assign b_busy = DDRAM_BUSY || !g;
+  assign b_busy = DDRAM_BUSY || !b_ok;
 
   wire a_cmd = a_rd || a_we;
   wire b_cmd = b_rd || b_we;
+  wire lock  = (wleft != 8'd0) || stk;
+  wire lown  = (wleft != 8'd0) ? wown : stk_own;
+  // B would have the port this cycle if it presented a command. b_busy is
+  // this, not g: B raises a command only after a cycle it saw !BUSY, so a
+  // b_busy that waited for B's command would never let it raise one.
+  wire b_ok  = lock ? lown : (!a_cmd && !hold_b);
+  assign g   = lock ? lown : (b_ok && b_cmd);
   wire cmd   = DDRAM_RD || DDRAM_WE;
-  wire take  = cmd && !DDRAM_BUSY;       // the granted master's command or beat is taken
   wire rd_take = DDRAM_RD && !DDRAM_BUSY;
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire unused_want = b_want;              // R1003: the in-cycle grant needs no `want`
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // ---- the owners of the reads in flight, in order
   localparam int unsigned QW = $clog2(QD);
@@ -134,34 +172,22 @@ module m2_ddram_mux #(
   wire         head_done = DDRAM_DOUT_READY && (q_fill != '0)
                         && ((beat + 8'd1 >= head_len) || (head_len == 8'd0));
 
-  // After this cycle: is a write burst still open, and is a command still
-  // waiting on BUSY? Either keeps the grant where it is.
+  // After this cycle: a write burst still open, and a command left under BUSY.
   wire [7:0] wleft_nx = (DDRAM_WE && !DDRAM_BUSY)
                       ? ((wleft == 8'd0) ? ((DDRAM_BURSTCNT == 8'd0) ? 8'd0 : DDRAM_BURSTCNT - 8'd1)
                                          : wleft - 8'd1)
                       : wleft;
-  wire       stuck    = cmd && DDRAM_BUSY;
-  wire       free     = (wleft_nx == 8'd0) && !stuck;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      g <= 1'b0; fresh <= 1'b0; wleft <= 8'd0; q_wp <= '0; q_rp <= '0; beat <= 8'd0;
+      wleft <= 8'd0; wown <= 1'b0; stk <= 1'b0; stk_own <= 1'b0;
+      q_wp <= '0; q_rp <= '0; beat <= 8'd0;
       dbg_q_max <= '0; dbg_q_ovf <= '0;
     end else begin
       wleft <= wleft_nx;
-      if (g && (b_cmd || !b_want)) fresh <= 1'b0;
-      if (free) begin
-        // Alternate: whichever did not just hold the port goes next if it
-        // has something to say. A taken command hands over; an idle owner
-        // hands over to a waiting one.
-        if (!g) begin
-          if ((b_cmd || b_want) && !hold_b && (take || !a_cmd)) begin
-            g <= 1'b1; fresh <= 1'b1;
-          end
-        end else if (!(fresh && b_want && !b_cmd)) begin
-          if (a_cmd && (take || !b_cmd || hold_b)) begin g <= 1'b0; fresh <= 1'b0; end
-        end
-      end
+      if (DDRAM_WE && !DDRAM_BUSY && wleft == 8'd0) wown <= g;   // a burst's first beat names its owner
+      stk     <= cmd && DDRAM_BUSY;
+      stk_own <= g;
 
       if (rd_take) begin
         q_own[q_wp[QW-1:0]] <= g;
