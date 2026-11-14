@@ -49037,8 +49037,8 @@ the module itself; the estimate is the whole core's):*
   every bench of the module runs the same circuit; the change is Quartus's
   block, and the map gives no Warning 276020 (pass-through logic) for any
   of them -- or anywhere in the core, before or after. lint_top clean with
-  and without M2_2C; lint_idx (M2_2C) the same 97 findings less one (the
-  transform's r[got], gone with r).
+  and without M2_2C; lint_idx (M2_2C) 98 -> 97 findings, the same ones less
+  the transform's r[got] (gone with r).
 
 *Tried and REVERTED (measured):*
   * i960_top's register write data named by source (a 4-bit code in each
