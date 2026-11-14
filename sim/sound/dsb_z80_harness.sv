@@ -156,7 +156,7 @@ module dsb_z80_harness (
   assign c_data = io_wr ? io_wdata : io_rdata;
   assign c_mstb = m_ack; assign c_mwe = m_we; assign c_maddr = m_addr;
   assign c_fetch = m_ack && (u_cut.st == 3'd1);            // S_FWAIT: an opcode byte
-  assign c_sp = u_cut.SP;
+  assign c_sp = {u_cut.rf_h[4], u_cut.rf_l[4]};
   assign c_int = (u_cut.st == 3'd0) && u_cut.int_take;
 endmodule
 

@@ -33,6 +33,9 @@
 //   reading; STCC on Model 2 uses it), DSB_Z80ROM / DSB_MPEG / DSB_CAP the
 //   inputs, DSB_MB the MPEG image in MB (default 8), DSB_ROMB / DSB_MPB /
 //   DSB_RAMB the SDRAM word bases (hex; default the 2C layout).
+//   DSB_DUMP=<file> writes every 32 kHz output (tick number, source, L, R)
+//   and every decoded sample with its clock, so two builds of the board can be
+//   compared tick for tick (R1007: tools/dsb/dsb_dumpcmp.py).
 #include "Vdsb_board_harness.h"
 #include "verilated.h"
 #include "dsb_fixmodel.h"
@@ -115,7 +118,10 @@ int main(int argc, char **argv) {
   if (zr.empty() || mp.empty()) { printf("dsb_board: SKIPPED (ROMs not readable)\n"); return 0; }
   { FILE *t = fopen("rtl/sound/dsb_tables.svh", "r"); char line[256]; int i, v;
     while (fgets(line, sizeof line, t)) if (sscanf(line, "  win[%d] = %d;", &i, &v) == 2) winf[i] = (double)((v & 0x20000) ? v - 0x40000 : v) / 65536.0;
-    fclose(t); }
+    fclose(t);
+    // R1007: the RTL's table carries the synthesis's signs (negated where
+    // i mod 64 >= 16, tools/dsb/gen_tables.py); the model takes ISO's window
+    for (int k = 0; k < 512; k++) if ((k & 63) >= 16) winf[k] = -winf[k]; }
   double secs = getenv("DSB_SECS") ? atof(getenv("DSB_SECS")) : 70.0;
   int LAT = getenv("DSB_LAT") ? atoi(getenv("DSB_LAT")) : 40;
   int volmame = getenv("DSB_VOLMAME") ? atoi(getenv("DSB_VOLMAME")) : 0;
@@ -166,6 +172,14 @@ int main(int argc, char **argv) {
 
   long fails = 0, schk = 0, ochk = 0, rxn = 0, bad_mem = 0, nreq = 0, zreq_chip = 0, zreq_off = 0, our_pos = 0;
   std::deque<uint32_t> popq;
+  FILE *dump = getenv("DSB_DUMP") ? fopen(getenv("DSB_DUMP"), "w") : nullptr;
+  long ntick = 0;
+  // R1007: the 32 kHz strobe's period, where the clock is a whole multiple of
+  // it (80 MHz: 2,500), checked on every strobe -- a period one clock short
+  // passed every other check here (it plays the same samples, faster)
+  const double per_f = CLK / 32000.0;
+  const uint64_t per = (per_f == (double)(uint64_t)per_f) ? (uint64_t)per_f : 0;
+  uint64_t last_stb = 0; long bad_per = 0;
   int vol = 0x7f, pan = 0, lastv = -1;
   // m2_sdram_cdc's slow side: s_req a level, held with its address and data
   // until s_ack; s_ack sticky while the request stands; then the request
@@ -217,6 +231,7 @@ int main(int argc, char **argv) {
     }
     // 2. decoded samples against the model
     if (h->smp_stb) {
+      if (dump) fprintf(dump, "S %llu %08x\n", (unsigned long long)cyc, h->smp_lr);
       popq.push_back(h->smp_lr);
       if (ref.q.empty()) ref.next();
       if (ref.q.empty()) { if (fails < 20) printf("FAIL: a sample the reference does not have\n"); fails++; }
@@ -228,6 +243,13 @@ int main(int argc, char **argv) {
     }
     // 3. the 32 kHz output
     if (h->out_stb) {
+      if (per && last_stb && cyc - last_stb != per) {
+        if (bad_per++ < 5) printf("FAIL: 32 kHz strobe after %llu clocks, not %llu\n", (unsigned long long)(cyc - last_stb), (unsigned long long)per);
+        fails++;
+      }
+      last_stb = cyc;
+      if (dump) fprintf(dump, "O %ld %d %04x %04x\n", ntick, (int)h->out_src, (uint16_t)h->out_l, (uint16_t)h->out_r);
+      ntick++;
       if (h->out_src && !popq.empty()) {
         uint32_t s = popq.front(); popq.pop_front();
         int16_t L = s >> 16, R = s & 0xffff, sl = pan == 2 ? R : L, sr = pan == 1 ? L : R;
@@ -249,6 +271,7 @@ int main(int argc, char **argv) {
   printf("  Z80 memory: %ld on chip, %ld through the cache / SDRAM (%.0f/s)\n", zreq_chip, zreq_off, zreq_off / secs);
   printf("dsb_board[lat=%d%s,%.0fs]: fails=%ld samples=%ld out=%ld rx=%ld sdram=%.0f/s\n",
          LAT, volmame ? ",volmame" : "", secs, fails, schk, ochk, rxn, nreq / secs);
+  if (dump) fclose(dump);
   delete h;
   return fails ? 1 : 0;
 }

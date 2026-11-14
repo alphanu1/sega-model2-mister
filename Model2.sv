@@ -297,18 +297,17 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // without the board, against R979's lean form's 1,636). Each is a macro:
 //   M2_2C_DSB_LEAN=1      dsb_mpeg's side-information RAM in MLAB (WRAM_MLAB)
 //   M2_2C_DSB_FIFO_MLAB=1 the 64 x 32 output FIFO in MLAB (2 M10K back)
-//   M2_2C_DSB_TBL_PACK=1  the window and cos tables packed into one M10K
+//   (M2_2C_DSB_TBL_PACK, the window and cos tables packed into one M10K, is
+//   retired by R1007: the tables now carry the synthesis's signs)
 //   DSB_UROM_LOGIC=1      the Z80's microcode in LUTs (one M10K back)
 //   DSB_UENT_LOGIC=1      the Z80's opcode dispatch in LUTs (one M10K back)
-// all 0 / undefined by default: 11 M10K, the fewest ALM.
+// all 0 / undefined by default: the fewest ALM. R1007: 16 M10K by shape (the
+// Z80's registers in two, dsb_mpeg's side information in four lanes).
 `ifndef M2_2C_DSB_LEAN
 `define M2_2C_DSB_LEAN 0
 `endif
 `ifndef M2_2C_DSB_FIFO_MLAB
 `define M2_2C_DSB_FIFO_MLAB 0
-`endif
-`ifndef M2_2C_DSB_TBL_PACK
-`define M2_2C_DSB_TBL_PACK 0
 `endif
 // R927: THE i960'S SPEED IN SEGA RALLY'S FRAME START (R926: the game's AI
 // detail budget). M2_2A_I960_RING: the local-register cache as the chip keeps
@@ -3673,8 +3672,7 @@ generate if (DSB) begin : g_dsb
 	//   byte 0x6820000  the Z80's 32 KB of RAM (never loaded; its boot test writes it)
 	m2_dsb_2c #(.AW(SDR_AW), .ROM_BASE(SDR_AW'(32'h3400000)), .MPEG_BASE(SDR_AW'(32'h3000000)),
 	            .RAM_BASE(SDR_AW'(32'h3410000)), .SYS_MHZ(SYS_MHZ),
-	            .WRAM_MLAB(`M2_2C_DSB_LEAN != 0), .FIFO_MLAB(`M2_2C_DSB_FIFO_MLAB != 0),
-	            .TBL_PACK(`M2_2C_DSB_TBL_PACK != 0)) u_dsb2c (
+	            .WRAM_MLAB(`M2_2C_DSB_LEAN != 0), .FIFO_MLAB(`M2_2C_DSB_FIFO_MLAB != 0)) u_dsb2c (
 		.clk(clk_sys), .mem_rst_n(mem_rst_n), .run(cpu_rst_n & mem_rst_n & cp_done & is_stcc),
 		.b_rx_v(b_rx_v), .b_rx_d(b_rx_d),
 		.in_l(s2a_l), .in_r(s2a_r), .out_l(dsb_mix_l), .out_r(dsb_mix_r),

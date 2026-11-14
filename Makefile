@@ -3236,7 +3236,7 @@ obj_boot_2as/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $
 # dsb_mpeg's memory forms, the 2C build's by default.
 .PHONY: test_dsb_mpeg test_dsb_z80 test_dsb_board
 DSB_RTL  := rtl/sound/dsb_board.sv rtl/sound/dsb_z80.sv rtl/sound/dsb_mpeg.sv rtl/sound/m2_i8251.sv
-DSB_FORM ?= -GFIFO_MLAB=0 -GWRAM_MLAB=0 -GTBL_PACK=0
+DSB_FORM ?= -GFIFO_MLAB=0 -GWRAM_MLAB=0
 DSB_SECS ?= 20
 DSB_LAT  ?= 40
 DSB_VDEF ?=

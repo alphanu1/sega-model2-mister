@@ -24,7 +24,7 @@
 //   DSB_MB    the image in MB (default 4, Star Wars; 8 for STCC)
 //   DSB_SONGS the song list, "start end" in hex (default tools/dsb/swa_songs.txt)
 // Model 2: also built with dsb_mpeg's shrink parameters (MAW, FIFO_MLAB,
-// WRAM_MLAB, TBL_PACK, -G on the Verilator line) -- the same checks, so each
+// WRAM_MLAB, -G on the Verilator line) -- the same checks, so each
 // shrink is shown bit-exact against the same reference.
 #include "Vdsb_mpeg.h"
 #include "verilated.h"
@@ -175,7 +175,10 @@ int main(int argc, char **argv) {
   // window from the RTL's own table, so both sides hold the same integers
   { FILE *t = fopen("rtl/sound/dsb_tables.svh", "r"); char line[256]; int i, v;
     while (fgets(line, sizeof line, t)) if (sscanf(line, "  win[%d] = %d;", &i, &v) == 2) winf[i] = (double)((v & 0x20000) ? v - 0x40000 : v) / 65536.0;
-    fclose(t); }
+    fclose(t);
+    // R1007: the RTL's table carries the synthesis's signs (negated where
+    // i mod 64 >= 16, tools/dsb/gen_tables.py); the model takes ISO's window
+    for (int k = 0; k < 512; k++) if ((k & 63) >= 16) winf[k] = -winf[k]; }
   bool full = getenv("DSB_FULL") != nullptr;
   int NF = full ? 100000 : 2;
   LAT = getenv("DSB_LAT") ? atoi(getenv("DSB_LAT")) : 20;

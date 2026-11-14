@@ -42,8 +42,7 @@ module m2_dsb_2c #(
   parameter logic [AW:1] RAM_BASE  = AW'(32'h3410000),
   parameter int unsigned SYS_MHZ   = 80,
   parameter bit WRAM_MLAB = 1'b0,
-  parameter bit FIFO_MLAB = 1'b0,
-  parameter bit TBL_PACK  = 1'b0
+  parameter bit FIFO_MLAB = 1'b0
 ) (
   input  logic        clk,
   input  logic        mem_rst_n,
@@ -78,7 +77,7 @@ module m2_dsb_2c #(
   logic signed [15:0] dsb_l, dsb_r;
   dsb_board #(.AW(AW), .ROM_BASE(ROM_BASE), .MPEG_BASE(MPEG_BASE), .RAM_BASE(RAM_BASE), .MAW(22),
               .T_NUM(1), .T_DEN(SYS_MHZ / 4), .TICK_NUM(4), .TICK_DEN(SYS_MHZ * 125),
-              .WRAM_MLAB(WRAM_MLAB), .FIFO_MLAB(FIFO_MLAB), .TBL_PACK(TBL_PACK)) u_dsb (
+              .WRAM_MLAB(WRAM_MLAB), .FIFO_MLAB(FIFO_MLAB)) u_dsb (
     .clk(clk), .rst_n(dsb_rst_n),
     .rx_tog(rx_tog), .rx_byte(b_rx_d),
     .vol_mame(1'b1),   // MAME's reading of e8 (every write is the volume)

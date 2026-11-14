@@ -33,37 +33,29 @@
 // Generated with --union (U_UNION 1) it is R979's core, and Star Wars'
 // program runs exactly as it did.
 //
-// MICROCODED. A regular datapath -- seven 8-bit registers and their
-// alternates, PC, SP, IY, a 16-bit TMP, one 16-bit address adder, one 8-bit
-// ALU -- is driven by 153 40-bit micro-ops (173 with --union) in one M10K
-// (tools/dsb/gen_z80_ucode.py writes them), dispatched by a 1024 x 8 table
-// ({prefix, opcode}; prefix 0 none, 1 CB, 2 ED, 3 FD) in another M10K or, with
-// DSB_UENT_LOGIC defined, as logic with the same one-cycle registered output.
-// The alternate registers are SWAPPED by EXX / EX AF, not banked, so every
-// register read port is as narrow as Model 1's.
+// MICROCODED. A regular datapath -- a two-port register file holding BC DE
+// HL and their alternates, PC, SP, IY and a 16-bit TMP; A and the flags in
+// flops; one 16-bit address adder, one 8-bit ALU -- is driven by 153 40-bit
+// micro-ops (173 with --union) in one M10K (tools/dsb/gen_z80_ucode.py writes
+// them), dispatched by a 1024 x 8 table ({prefix, opcode}; prefix 0 none,
+// 1 CB, 2 ED, 3 FD) in another M10K or, with DSB_UENT_LOGIC defined, as logic
+// with the same one-cycle registered output.
 //
-// What the rest of the board can see is preserved exactly:
-//   - every instruction takes the Z80's documented T-states (taken and
-//     untaken branches, LDIR per iteration), carried on the micro-op that
-//     ends it, so the firmware's loops, fades and delays run at real speed;
-//   - every I/O access lands at the T-state at which tv80s commits it;
-//   - an interrupt is taken at the instruction boundary at which tv80s takes
-//     it: IFF1 set, not the instruction right after EI, INT high when real
-//     time reaches the boundary. Accepting it is RST 38 with the Z80's 13 T-states.
-// Only S, Z and C exist, the only flags either program reads (S and Z are
-// always written together by the instructions both programs use). IFF2 is
-// not kept: nothing either program executes reads it (no RETN, no LD A,I).
+// R1007: THE REGISTERS ARE IN M10K. Until R1004 every register was a flop and
+// every read a wide mux (the address base 8:1 x 16, three 8:1 byte reads, and
+// a multi-source write mux on each of 20 bytes). Now they are rows of a
+// 16 x 16 register file, one M10K per byte lane, each true dual-port: port A
+// reads the micro-op's address base and writes its 16-bit result, port B reads
+// its one other register (rb, chosen by the generator) and writes its one
+// byte. A micro-op therefore takes two clocks, not one (the read, then the
+// execute), and a fetch three (PC is a row too, incremented through the
+// address adder) -- invisible outside, because the T-state accounting below
+// (`ahead`) never depended on how many clocks a micro-op takes; at 20 clocks
+// a T-state the core is still far ahead of real time. EXX is a bank bit on the
+// BC / DE / HL rows, not a copy. The file is written with the reset values of
+// the flops it replaces (all 0, SP ffff) by a 16-clock S_CLR after reset.
+// The alternate A and flags are SWAPPED by EX AF, as before.
 //
-// TIMING. `ahead` is how far the core's T-time is ahead of real T-time: an
-// instruction adds its T-states, each `tick` takes one away. Fetching waits
-// while the core is ahead, and an I/O access waits until real time reaches
-// it, so SDRAM latency never moves an I/O event; a stall only makes the core
-// run back to back until it has caught up. With interrupts enabled the core
-// may not pass an instruction boundary until real time reaches the point where
-// INT is sampled; if it arrives there late (behind real time, after a stall)
-// it decides from how long INT has been high (`irq_age`), so the answer is the
-// one it would have had on time.
-
 `timescale 1ns/1ps
 
 module dsb_z80 (
@@ -103,10 +95,9 @@ module dsb_z80 (
   localparam int IRQ_S = 0;
 
   // ---------------------------------------------------------------- state
-  logic [7:0]  R [8];                // B C D E H L - A, by Z80 register number
-  logic [7:0]  Rx [8];               // their alternates (6 unused)
+  logic [7:0]  A, Ax;                // A and its alternate
   logic        fS, fZ, fC, xS, xZ, xC;
-  logic [15:0] PC, SP, IY, TMP;
+  logic        xb;                   // EXX: which bank of BC / DE / HL
   /* verilator lint_off UNUSEDSIGNAL */
   logic [7:0]  IR;                   // bit 6 is never decoded
   /* verilator lint_on UNUSEDSIGNAL */
@@ -115,8 +106,13 @@ module dsb_z80 (
   logic signed [11:0] ahead;
   logic        iff1, ei_blk;
   logic [11:0] irq_age;              // ticks INT has been high (saturating)
+  logic [3:0]  clr;                  // S_CLR's row
+  logic        intm;                 // in the IM 1 sequence: RST's vector is 38
 
-  typedef enum logic [2:0] {S_FETCH, S_FWAIT, S_DISP, S_RUN, S_IO} st_t;
+  // S_FETCH 0 and S_FWAIT 1 are read by the bench (dsb_z80_harness)
+  typedef enum logic [3:0] {S_FETCH = 4'd0, S_FWAIT = 4'd1, S_DISP = 4'd2, S_RA = 4'd3,
+                            S_EX = 4'd4, S_IO = 4'd5, S_FADR = 4'd6, S_PFX = 4'd7,
+                            S_CLR = 4'd8} st_t;
   st_t st;
 
   // ---------------------------------------------------------------- micro-op
@@ -134,17 +130,17 @@ module dsb_z80 (
   wire [2:0] f_asrc = uw[37:35];
   wire [2:0] f_aoff = uw[34:32];
   wire [2:0] f_awb  = uw[31:29];
-  wire [2:0] f_wsrc = uw[28:26];
-  wire [2:0] f_rmod = uw[25:23];
-  wire [2:0] f_ridx = uw[22:20];
-  wire [3:0] f_alu  = uw[19:16];
-  wire [1:0] f_ysel = uw[15:14];
-  wire       f_fz   = uw[13];
-  wire       f_fc   = uw[12];
-  wire [1:0] f_nxt  = uw[11:10];
-  wire [1:0] f_csel = uw[9:8];
-  wire [2:0] f_io   = uw[7:5];
-  wire [4:0] f_tst  = uw[4:0];
+  wire [1:0] f_wsrc = uw[28:27];
+  wire [3:0] f_wt   = uw[26:23];
+  wire [3:0] f_alu  = uw[22:19];
+  wire [1:0] f_ysel = uw[18:17];
+  wire       f_fz   = uw[16];
+  wire       f_fc   = uw[15];
+  wire [1:0] f_nxt  = uw[14:13];
+  wire [1:0] f_csel = uw[12:11];
+  wire [2:0] f_io   = uw[10:8];
+  wire [4:0] f_tst  = uw[7:3];
+  wire [2:0] f_rb   = uw[2:0];
 
   /* verilator lint_off UNUSEDPARAM */
   localparam logic [3:0] A_PASS = 4'd0, A_IRALU = 4'd1, A_IRROT = 4'd2, A_INC = 4'd3,
@@ -152,49 +148,85 @@ module dsb_z80 (
                          A_SBC16 = 4'd8, A_EXX = 4'd9, A_EXAF = 4'd10, A_EI = 4'd11,
                          A_DI = 4'd12;
   /* verilator lint_on UNUSEDPARAM */
+  localparam logic [3:0] RF_PC = 4'd3, RF_SP = 4'd4, RF_TMP = 4'd6;
 
-  wire [15:0] BC = {R[0], R[1]}, DE = {R[2], R[3]}, HL = {R[4], R[5]};
+  // ---------------------------------------------------------------- register file
+  // Rows: 0 BC, 1 DE, 2 HL (8-10 their alternates, by xb), 3 PC, 4 SP, 5 IY,
+  // 6 TMP. One M10K per byte lane, true dual-port. A port's address is its
+  // write row in the cycle it writes, else its read row; nothing reads a port
+  // in the cycle after it wrote (the next micro-op reads first).
+  function automatic logic [3:0] row(input logic [2:0] r, input logic bank);
+    row = {bank && (r < 3'd3), r};
+  endfunction
+  logic        we_a, we_bh, we_bl;
+  logic  [3:0] pa, pb;
+  logic [15:0] wd_a;
+  logic  [7:0] wd_b;
+  logic [15:0] qa, qb;
+  (* ramstyle = "M10K, no_rw_check" *) logic [7:0] rf_h [16];
+  (* ramstyle = "M10K, no_rw_check" *) logic [7:0] rf_l [16];
+  // unwritten rows read 0xFF until S_CLR has written them
+  initial for (int i = 0; i < 16; i++) begin rf_h[i] = 8'hff; rf_l[i] = 8'hff; end
+  always_ff @(posedge clk) begin
+    if (we_a) rf_h[pa] <= wd_a[15:8];
+    qa[15:8] <= rf_h[pa];
+  end
+  always_ff @(posedge clk) begin
+    if (we_a) rf_l[pa] <= wd_a[7:0];
+    qa[7:0] <= rf_l[pa];
+  end
+  always_ff @(posedge clk) begin
+    if (we_bh) rf_h[pb] <= wd_b;
+    qb[15:8] <= rf_h[pb];
+  end
+  always_ff @(posedge clk) begin
+    if (we_bl) rf_l[pb] <= wd_b;
+    qb[7:0] <= rf_l[pb];
+  end
 
   // ---------------------------------------------------------------- AGU
-  // sbc hl,de is HL + ~DE + !C through the same adder
-  wire        sbc16 = (f_alu == A_SBC16);
-  logic [15:0] abase, aoffv;
+  // sbc hl,de is HL + ~DE + !C through the same adder. S_FADR is the fetch's
+  // PC + 1 through it, and S_CLR's reset values are 0 + 0 and 0 + ffff (SP):
+  // RST's base, {IR[5:3], 000}, is 0 there, IR being 0 from reset to the
+  // first fetch.
+  wire        fadr  = (st == S_FADR);
+  wire        clr_s = (st == S_CLR);
+  wire        sbc16 = !fadr && !clr_s && (f_alu == A_SBC16);
+  wire  [2:0] aoff  = fadr ? 3'd1 : clr_s ? ((clr == RF_SP) ? 3'd2 : 3'd0) : f_aoff;
+  // (the IM 1 interrupt's vector is RST 38's: IR[5:3] forced to 7 by intm,
+  // where the core used to load IR with ff)
+  wire [15:0] abase = ((!fadr && f_asrc == 3'd7) || clr_s) ? {10'd0, IR[5:3] | {3{intm}}, 3'd0} : qa;   // RST / IM 1
+  logic [15:0] aoffv;
   always_comb begin
-    case (f_asrc)
-      3'd0: abase = PC;  3'd1: abase = SP;  3'd2: abase = BC;
-      3'd3: abase = DE;  3'd4: abase = HL;  3'd5: abase = TMP;
-      3'd6: abase = IY;  default: abase = {10'd0, IR[5:3], 3'd0};   // RST / IM 1
-    endcase
-    case (f_aoff)
+    case (aoff)
       3'd0: aoffv = 16'h0000; 3'd1: aoffv = 16'h0001; 3'd2: aoffv = 16'hffff;
-      3'd3: aoffv = 16'hfffe; 3'd4: aoffv = sbc16 ? ~DE : DE; 3'd5: aoffv = {{8{dat[7]}}, dat};
-      3'd6: aoffv = BC;       default: aoffv = HL;
+      3'd3: aoffv = 16'hfffe; 3'd4: aoffv = sbc16 ? ~qb : qb; 3'd5: aoffv = {{8{dat[7]}}, dat};
+      default: aoffv = qb;          // BC, HL
     endcase
   end
   wire [16:0] asum = {1'b0, abase} + {1'b0, aoffv} + {16'd0, sbc16 & !fC};
   // post-increment (read at the base, write back base+1) vs offset address
-  wire        a_post = (f_awb != 3'd0) && (f_aoff == 3'd1);
+  wire        a_post = (f_awb != 3'd7) && (f_aoff == 3'd1);
   wire [15:0] maddr  = a_post ? abase : asum[15:0];
 
   // ---------------------------------------------------------------- ALU
   wire        is_rd = (f_mem == 2'd1);
   wire [7:0]  din   = is_rd ? m_rdata : dat;        // a read's data, on its ack
-  logic [7:0] Y;
-  always_comb begin
-    case (f_ysel)
-      2'd0: Y = R[IR[2:0]];
-      2'd1: Y = R[IR[5:3]];
-      2'd2: Y = din;
-      default: Y = R[0];
-    endcase
-  end
+  // a register by number (7 A, else a byte of port B's row)
+  wire [2:0]  yn = (f_ysel == 2'd0) ? IR[2:0] : (f_ysel == 2'd1) ? IR[5:3] : 3'd0;
+  wire [7:0]  Y  = (f_ysel == 2'd2) ? din : (yn == 3'd7) ? A : yn[0] ? qb[7:0] : qb[15:8];
   // the 8-bit group by IR[5:3]: add adc sub sbc and xor or cp. One adder:
   // A + (Y or ~Y) + carry-in; a subtract's carry out is the inverse borrow.
   wire [2:0] grp   = IR[5:3];
   wire       g_ar  = !grp[2] || (grp == 3'd7);      // arithmetic (else logic)
   wire       g_sub = grp[1] && g_ar;                // sub, sbc, cp
   wire       g_cin = g_sub ? !(grp[0] && fC && !grp[2]) : (grp[0] && fC);
-  wire [8:0] g_sum = {1'b0, R[7]} + {1'b0, g_sub ? ~Y : Y} + {8'd0, g_cin};
+  // R1007: INC and DEC through the same adder, 00 + Y + 1 and ff + Y (they
+  // had an adder each); their carry out is not used (C is not written)
+  wire       a_inc = (f_alu == A_INC), a_dec = (f_alu == A_DEC);
+  wire [7:0] g_a   = a_inc ? 8'h00 : a_dec ? 8'hff : A;
+  wire [8:0] g_sum = {1'b0, g_a} + {1'b0, (g_sub && !a_inc && !a_dec) ? ~Y : Y} +
+                     {8'd0, a_inc || (!a_dec && g_cin)};
   logic [7:0] alu_r, fl_v;          // result; the value S and Z are taken from
   logic       alu_c;
   always_comb begin
@@ -202,14 +234,14 @@ module dsb_z80 (
     case (f_alu)
       A_IRALU: begin
         if (g_ar) begin
-          alu_r = (grp == 3'd7) ? R[7] : g_sum[7:0];          // cp leaves A
+          alu_r = (grp == 3'd7) ? A : g_sum[7:0];             // cp leaves A
           alu_c = g_sub ? !g_sum[8] : g_sum[8];
           fl_v  = g_sum[7:0];
         end else begin
           case (grp[1:0])
-            2'd0: alu_r = R[7] & Y;
-            2'd1: alu_r = R[7] ^ Y;
-            default: alu_r = R[7] | Y;
+            2'd0: alu_r = A & Y;
+            2'd1: alu_r = A ^ Y;
+            default: alu_r = A | Y;
           endcase
           alu_c = 1'b0; fl_v = alu_r;
         end
@@ -231,8 +263,7 @@ module dsb_z80 (
         end
         fl_v = alu_r;
       end
-      A_INC:   begin alu_r = Y + 8'd1; fl_v = alu_r; end
-      A_DEC:   begin alu_r = Y - 8'd1; fl_v = alu_r; end
+      A_INC, A_DEC: begin alu_r = g_sum[7:0]; fl_v = alu_r; end
       A_CPL:   alu_r = ~Y;
       A_AGUC:  alu_c = asum[16];
       A_SBC16: alu_c = !asum[16];
@@ -268,8 +299,8 @@ module dsb_z80 (
   always_comb begin
     case (f_csel)
       2'd0: cond = ccv;
-      2'd1: cond = (R[0] != 8'd0);
-      2'd2: cond = (BC != 16'd0);
+      2'd1: cond = (qb[15:8] != 8'd0);         // B (port B reads BC)
+      2'd2: cond = (qb != 16'd0);              // BC
       default: cond = 1'b1;
     endcase
   end
@@ -280,13 +311,16 @@ module dsb_z80 (
   // high there: now, if on time; `irq_age` T ago or more, if behind.
   wire        int_arm  = iff1 && !ei_blk;
   wire        int_wait = int_arm && (ahead > 12'(IRQ_S));
-  wire signed [12:0] int_need = 13'(IRQ_S) - 13'(ahead);    // >= 0 once not waiting
-  wire        int_take = int_arm && !int_wait && irq && ($signed({1'b0, irq_age}) >= int_need);
+  // irq_age >= IRQ_S - ahead, as the sign of irq_age + ahead - IRQ_S (R1007:
+  // one adder, not a negation and a compare). Only read when not waiting
+  // (ahead <= IRQ_S), where the sum is at most 4,095 and fits.
+  wire signed [12:0] int_m = $signed({1'b0, irq_age}) + 13'(ahead) - 13'(IRQ_S);
+  wire        int_take = int_arm && !int_wait && irq && !int_m[12];
 
   // ---------------------------------------------------------------- sequencing
-  // A micro-op completes when its memory access (if any) is acknowledged; an
-  // I/O micro-op completes in S_IO.
-  wire u_done = (st == S_RUN) && (f_io == 3'd0) && ((f_mem == 2'd0) || m_ack);
+  // A micro-op reads in S_RA and completes in S_EX when its memory access (if
+  // any) is acknowledged; an I/O micro-op completes in S_IO.
+  wire u_done = (st == S_EX) && (f_io == 3'd0) && ((f_mem == 2'd0) || m_ack);
   wire u_end  = (f_nxt == 2'd1) || (f_nxt == 2'd3) || (f_nxt == 2'd2 && !cond);
   wire pfx_byte = (pfx == 2'd0) && (m_rdata == 8'hcb || m_rdata == 8'hed || m_rdata == 8'hfd);
 
@@ -297,12 +331,41 @@ module dsb_z80 (
     else if (u_done && !u_end)               upc_n = upc + 8'd1;
   end
 
+  // the byte a micro-op writes: a register by number (7 is A), or TMP's
+  wire [2:0] wn    = (f_wt == 4'd1) ? IR[5:3] : (f_wt == 4'd2) ? IR[2:0] : f_wt[2:0];
+  wire       w_tmp = (f_wt == 4'd3) || (f_wt == 4'd4);
+  wire       w_reg = (f_wt == 4'd1) || (f_wt == 4'd2) || f_wt[3];
+  wire       w_a   = w_reg && (wn == 3'd7);
+  // port B's read row: the pair of ysel's register, or a fixed one
+  wire [2:0] rbr   = (f_rb == 3'd7) ? {1'b0, yn[2:1]} : (f_rb == 3'd4) ? 3'd6 : f_rb;
+
+  always_comb begin
+    // port A: the fetch's PC, S_FADR's PC + 1, a micro-op's base and its awb
+    we_a = 1'b0; wd_a = asum[15:0];
+    pa   = (st == S_FETCH || st == S_PFX) ? RF_PC : row(f_asrc, xb);
+    if (clr_s) begin
+      we_a = 1'b1; pa = clr;
+    end else if (fadr) begin
+      we_a = 1'b1; pa = RF_PC;
+    end else if (u_done && f_awb != 3'd7) begin
+      we_a = 1'b1; pa = row(f_awb, xb);
+    end
+    // port B: one other register, and the byte written
+    wd_b  = alu_r;
+    we_bh = 1'b0; we_bl = 1'b0;
+    pb    = row(rbr, xb);
+    if (u_done && (w_tmp || (w_reg && !w_a))) begin
+      if (w_tmp) begin pb = RF_TMP; we_bh = (f_wt == 4'd4); we_bl = (f_wt == 4'd3); end
+      else begin pb = row({1'b0, wn[2:1]}, xb); we_bh = !wn[0]; we_bl = wn[0]; end
+    end
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      for (int i = 0; i < 8; i++) begin R[i] <= (i == 7) ? 8'hff : 8'h00; Rx[i] <= 8'h00; end
+      A <= 8'hff; Ax <= 8'h00; xb <= 1'b0; clr <= '0; intm <= 1'b0;
       fS <= 1'b1; fZ <= 1'b1; fC <= 1'b1; xS <= 1'b0; xZ <= 1'b0; xC <= 1'b0;
-      PC <= '0; SP <= 16'hffff; IY <= '0; TMP <= '0; IR <= '0; dat <= '0; pfx <= '0;
-      ahead <= '0; st <= S_FETCH; upc <= '0; iff1 <= 1'b0; ei_blk <= 1'b0; irq_age <= '0;
+      IR <= '0; dat <= '0; pfx <= '0;
+      ahead <= '0; st <= S_CLR; upc <= '0; iff1 <= 1'b0; ei_blk <= 1'b0; irq_age <= '0;
       m_req <= 1'b0; m_we <= 1'b0; m_addr <= '0; m_wdata <= '0;
       io_rd <= 1'b0; io_wr <= 1'b0; io_addr <= '0; io_wdata <= '0;
       trap <= 1'b0; trap_pc <= '0; trap_cnt <= '0;
@@ -316,89 +379,74 @@ module dsb_z80 (
       else if (tick && irq_age != 12'hfff) irq_age <= irq_age + 12'd1;
 
       case (st)
+        // the register file's reset values, once
+        S_CLR: begin clr <= clr + 4'd1; if (clr == 4'd15) st <= S_FETCH; end
+
+        // PC is read here (port A), issued and incremented in S_FADR
         S_FETCH: if (int_take) begin
           // IM 1: RST 38 with the interrupt's T-states (micro-op U_INT)
-          iff1 <= 1'b0; IR <= 8'hff; st <= S_RUN;
+          iff1 <= 1'b0; intm <= 1'b1; st <= S_RA;
         end else if (!int_wait && ahead <= 12'sd32) begin
-          ei_blk <= 1'b0;
-          m_req <= 1'b1; m_we <= 1'b0; m_addr <= PC; st <= S_FWAIT;
+          ei_blk <= 1'b0; intm <= 1'b0; st <= S_FADR;
         end
+        S_FADR: begin m_req <= 1'b1; m_we <= 1'b0; m_addr <= qa; st <= S_FWAIT; end
         S_FWAIT: if (m_ack) begin
-          PC <= PC + 16'd1;
           if (pfx_byte) begin
             pfx <= (m_rdata == 8'hcb) ? 2'd1 : (m_rdata == 8'hed) ? 2'd2 : 2'd3;
-            m_req <= 1'b1; m_addr <= PC + 16'd1;           // the second opcode byte
+            st <= S_PFX;                                     // the second opcode byte
           end else begin
             IR <= m_rdata; st <= S_DISP;
           end
         end
+        S_PFX: st <= S_FADR;
 
-        S_DISP: st <= S_RUN;
+        S_DISP: st <= S_RA;
+        S_RA:   st <= S_EX;
 
-        S_RUN: begin
+        S_EX: begin
           // issue this micro-op's memory access once
           if (f_mem != 2'd0 && !m_req && !m_ack) begin
             m_req <= 1'b1; m_we <= (f_mem == 2'd2); m_addr <= maddr;
             case (f_wsrc)
-              3'd0: m_wdata <= R[f_ridx];
-              3'd1: m_wdata <= PC[15:8];
-              3'd2: m_wdata <= PC[7:0];
-              3'd4: m_wdata <= TMP[15:8];
-              3'd5: m_wdata <= TMP[7:0];
-              default: m_wdata <= alu_r;
+              2'd0: m_wdata <= alu_r;
+              2'd1: m_wdata <= A;
+              2'd2: m_wdata <= qb[15:8];
+              default: m_wdata <= qb[7:0];
             endcase
           end
           if (f_io != 3'd0) begin
             // charge the instruction's T-states, then wait for real time
             addT = 12'(f_tst);
             case (f_io)
-              3'd1: begin io_addr <= dat;  io_wdata <= R[7]; end
-              3'd2: if (U_UNION) begin io_addr <= R[1]; io_wdata <= R[7]; end   // out (c),a: Star Wars only
-              3'd3: begin io_addr <= R[1]; io_wdata <= dat;  end
+              3'd1: begin io_addr <= dat;  io_wdata <= A; end
+              3'd2: if (U_UNION) begin io_addr <= qb[7:0]; io_wdata <= A; end   // out (c),a: Star Wars only
+              3'd3: begin io_addr <= qb[7:0]; io_wdata <= dat;  end
               default: io_addr <= dat;
             endcase
             st <= S_IO;
           end
           if (u_done) begin
             if (is_rd) dat <= m_rdata;
-            // 8-bit register write: always the ALU's result (a load passes data)
-            case (f_rmod)
-              3'd1: R[IR[5:3]] <= alu_r;
-              3'd2: R[IR[2:0]] <= alu_r;
-              3'd3: R[f_ridx]  <= alu_r;
-              3'd4: TMP[7:0]   <= alu_r;
-              3'd5: TMP[15:8]  <= alu_r;
-              default: ;
-            endcase
-            // 16-bit write back from the address adder
-            case (f_awb)
-              3'd1: PC <= asum[15:0];
-              3'd2: SP <= asum[15:0];
-              3'd3: {R[0], R[1]} <= asum[15:0];
-              3'd4: {R[2], R[3]} <= asum[15:0];
-              3'd5: {R[4], R[5]} <= asum[15:0];
-              3'd6: TMP <= asum[15:0];
-              3'd7: IY <= asum[15:0];
-              default: ;
-            endcase
+            if (w_a) A <= alu_r;      // the rest of the writes are the register file's
             if (f_fz) begin fZ <= alu_z; fS <= alu_sgn; end
             if (f_fc) fC <= alu_c;
             // the instructions that are only an action
             case (f_alu)
-              A_EXX: for (int i = 0; i < 6; i++) begin R[i] <= Rx[i]; Rx[i] <= R[i]; end
+              A_EXX: xb <= !xb;
               A_EXAF: begin
-                R[7] <= Rx[7]; Rx[7] <= R[7];
+                A <= Ax; Ax <= A;
                 {fS, fZ, fC} <= {xS, xZ, xC}; {xS, xZ, xC} <= {fS, fZ, fC};
               end
               A_EI: begin iff1 <= 1'b1; ei_blk <= 1'b1; end
               A_DI: iff1 <= 1'b0;
               default: ;
             endcase
+            st <= S_RA;
             if (u_end) begin
               addT = 12'(f_tst);
               pfx <= 2'd0; st <= S_FETCH;
               if (f_nxt == 2'd3) begin
-                trap <= 1'b1; trap_pc <= PC;
+                trap <= 1'b1; trap_pc <= qa;
                 if (trap_cnt != 16'hffff) trap_cnt <= trap_cnt + 16'd1;
               end
             end
@@ -407,17 +455,27 @@ module dsb_z80 (
 
         // the strobe a real Z80 (and tv80s) ends one T before the instruction does
         S_IO: if (ahead <= 12'sd1) begin
-          if (f_io == 3'd4) begin io_rd <= 1'b1; R[7] <= io_rdata; end
+          if (f_io == 3'd4) begin io_rd <= 1'b1; A <= io_rdata; end
           else io_wr <= 1'b1;
           pfx <= 2'd0; st <= S_FETCH;
         end
         default: st <= S_FETCH;
       endcase
-      // one T of real time per tick (floored, so a long stall cannot wrap)
-      ahead <= ahead + addT - ((tick && ahead > -12'sd2000) ? 12'sd1 : 12'sd0);
+      // one T of real time per tick (floored, so a long stall cannot wrap);
+      // R1007: the step (-1 .. 31) first, then one add
+      begin
+        logic signed [6:0] step;
+        step = 7'(addT) - ((tick && ahead > -12'sd2000) ? 7'sd1 : 7'sd0);
+        ahead <= ahead + 12'(step);
+      end
     end
   end
 
-  assign dbg_pc = PC;
+  // the bench's view of PC (not wired on the board)
+`ifdef VERILATOR
+  assign dbg_pc = {rf_h[RF_PC], rf_l[RF_PC]};
+`else
+  assign dbg_pc = 16'h0000;
+`endif
 
 endmodule
