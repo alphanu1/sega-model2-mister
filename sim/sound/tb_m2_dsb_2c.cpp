@@ -81,6 +81,15 @@ int main(int argc, char **argv) {
   };
   auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
 
+  // The mix is registered twice (R1004): out at a sample point is the mix of
+  // in and the board two sample points before. hist[] keeps them.
+  struct H { int16_t L, R, bl, br; } hist[4] = {};
+  uint64_t g = 0;   // sample points since the start, across all three phases
+  auto rec = [&](int16_t L, int16_t R) -> H {   // record this point, return the one two back
+    H h = { L, R, (int16_t)d->rootp->m2_dsb_2c__DOT__dsb_l, (int16_t)d->rootp->m2_dsb_2c__DOT__dsb_r };
+    hist[g & 3] = h; H o = hist[(g - 2) & 3]; g++; return o;
+  };
+
   // ---- 1. not STCC
   d->mem_rst_n = 0; d->run = 0; d->b_rx_v = 0; d->b_rx_d = 0; d->in_l = 0; d->in_r = 0;
   for (int i = 0; i < 16; i++) tick();
@@ -93,7 +102,9 @@ int main(int argc, char **argv) {
     if (rxhold) { if (--rxhold == 0) d->b_rx_v = 0; }
     else if ((uint64_t)c >= next_byte) { d->b_rx_v = 1; d->b_rx_d = rng() & 0xff; rxhold = 1 + rng() % 200; next_byte = c + 25600 + rng() % 4096; p1_bytes++; }
     d->clk = 0; d->eval();
-    if ((int16_t)d->out_l != L || (int16_t)d->out_r != R) { if (fails < 10) printf("FAIL: phase 1 cycle %ld: out %d %d, SCSP %d %d\n", c, (int16_t)d->out_l, (int16_t)d->out_r, L, R); fails++; }
+    { H o = rec(L, R);
+      if (o.bl || o.br) { if (fails < 10) printf("FAIL: phase 1 cycle %ld: the board's output is %d %d, not 0\n", c, o.bl, o.br); fails++; }
+      if (c >= 2 && ((int16_t)d->out_l != o.L || (int16_t)d->out_r != o.R)) { if (fails < 10) printf("FAIL: phase 1 cycle %ld: out %d %d, SCSP %d %d\n", c, (int16_t)d->out_l, (int16_t)d->out_r, o.L, o.R); fails++; } }
     if (d->s_req) p1_req++;
     p1_chk++;
     sdram(); d->clk = 1; d->eval();
@@ -112,11 +123,12 @@ int main(int argc, char **argv) {
     if (rxhold) { if (--rxhold == 0) d->b_rx_v = 0; }
     else if (!rx.empty() && rx.front().first <= c) { d->b_rx_v = 1; d->b_rx_d = rx.front().second; rx.pop_front(); rxhold = 1 + rng() % 200; p2_bytes++; }
     d->clk = 0; d->eval();
-    int16_t bl = (int16_t)d->rootp->m2_dsb_2c__DOT__dsb_l, br = (int16_t)d->rootp->m2_dsb_2c__DOT__dsb_r;
-    int16_t el = sat16(L + bl), er = sat16(R + br);
+    H o = rec(L, R);
+    int16_t bl = o.bl, br = o.br;
+    int16_t el = sat16(o.L + bl), er = sat16(o.R + br);
     if ((int16_t)d->out_l != el || (int16_t)d->out_r != er) { if (fails < 10) printf("FAIL: phase 2 cycle %llu: out %d %d, expected %d %d\n", (unsigned long long)c, (int16_t)d->out_l, (int16_t)d->out_r, el, er); fails++; }
     if (bl || br) p2_nz++;
-    if (el != L + bl || er != R + br) p2_clamp++;
+    if (el != o.L + bl || er != o.R + br) p2_clamp++;
     if (d->s_req) p2_req++;
     p2_chk++;
     sdram(); d->clk = 1; d->eval();
@@ -133,8 +145,9 @@ int main(int argc, char **argv) {
     int16_t L = (int16_t)rng(), R = (int16_t)rng();
     d->in_l = L; d->in_r = R;
     d->clk = 0; d->eval();
-    if (c >= 2) {
-      if ((int16_t)d->out_l != L || (int16_t)d->out_r != R) { if (fails < 10) printf("FAIL: phase 3 cycle %ld: out %d %d, SCSP %d %d\n", c, (int16_t)d->out_l, (int16_t)d->out_r, L, R); fails++; }
+    H o = rec(L, R);
+    if (c >= 4) {   // the board's reset is registered: two points, then the mix's two
+      if ((int16_t)d->out_l != o.L || (int16_t)d->out_r != o.R) { if (fails < 10) printf("FAIL: phase 3 cycle %ld: out %d %d, SCSP %d %d\n", c, (int16_t)d->out_l, (int16_t)d->out_r, o.L, o.R); fails++; }
       if (d->s_req) p3_req++;
       p3_chk++;
     }

@@ -31,7 +31,7 @@
 //   is MAME's dsbz80 stream x 32,768 ((sample x vol) >> 7, MAME's
 //   sample x vol / (32,768 x 128)). So the two add at unity; the sum is
 //   clamped to 16 bits, never wrapped. The board's 32 kHz sample is held
-//   between strobes.
+//   between strobes. Out is the mix of in and the board two clocks before.
 
 `timescale 1ns/1ps
 
@@ -88,9 +88,20 @@ module m2_dsb_2c #(
     .dbg_trap(dbg_trap), .dbg_frames(dbg_frames)
   );
 
-  wire signed [16:0] mix_l = 17'(in_l) + 17'(dsb_l);
-  wire signed [16:0] mix_r = 17'(in_r) + 17'(dsb_r);
-  assign out_l = (mix_l[16] != mix_l[15]) ? (mix_l[16] ? 16'sh8000 : 16'sh7fff) : mix_l[15:0];
-  assign out_r = (mix_r[16] != mix_r[15]) ? (mix_r[16] ? 16'sh8000 : 16'sh7fff) : mix_r[15:0];
+  // R1004: both sides registered, then the clamped sum registered. The board's
+  // sample comes straight off its output FIFO's M10K through the volume
+  // multiply, and fed on through the add, the clamp and m2_volume's multiply
+  // in one clk_sys cycle it missed by 6.2-6.5 ns on every seed (s2400-s2421).
+  // Two cycles at 80 MHz (25 ns) on a 32 kHz sample, the same for every game.
+  logic signed [15:0] in_lq, in_rq, dsb_lq, dsb_rq;
+  always_ff @(posedge clk) begin
+    in_lq <= in_l; in_rq <= in_r; dsb_lq <= dsb_l; dsb_rq <= dsb_r;
+  end
+  wire signed [16:0] mix_l = 17'(in_lq) + 17'(dsb_lq);
+  wire signed [16:0] mix_r = 17'(in_rq) + 17'(dsb_rq);
+  always_ff @(posedge clk) begin
+    out_l <= (mix_l[16] != mix_l[15]) ? (mix_l[16] ? 16'sh8000 : 16'sh7fff) : mix_l[15:0];
+    out_r <= (mix_r[16] != mix_r[15]) ? (mix_r[16] ? 16'sh8000 : 16'sh7fff) : mix_r[15:0];
+  end
 
 endmodule
