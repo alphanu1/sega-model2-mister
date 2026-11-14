@@ -157,16 +157,23 @@ module m2_ddram_mux #(
 
   // ---- the owners of the reads in flight, in order
   localparam int unsigned QW = $clog2(QD);
-  // Flip-flops, deliberately: the head is read in the cycle a push to an
-  // empty queue lands, which a block RAM's registered read would answer with
-  // the old word (and Quartus inferred one, two M10K, when this was unmarked).
-  (* ramstyle = "logic" *) logic       q_own [QD];
-  (* ramstyle = "logic" *) logic [7:0] q_len [QD];
+  // Not a block RAM: the head is read in the cycle a push to an empty queue
+  // lands, which an M10K's registered read would answer with the old word
+  // (and Quartus inferred one, two M10K, when this was unmarked).
+  // R1008: LUT RAM, NOT FLIP-FLOPS (Model 1 kept flops). An MLAB's read is
+  // asynchronous -- the word written at an edge is read from the next cycle,
+  // exactly as the flops were -- and {owner, length} is one 9-bit word, so
+  // the 288 flops, their 32 write decodes and the two 32:1 head selects are
+  // one LAB of RAM. The queue is never cleared: q_wp / q_rp are, and no slot
+  // is read before it is written (q_fill gates every use of the head).
+  (* ramstyle = "MLAB, no_rw_check" *) logic [8:0] q_ent [QD];
   logic [QW:0] q_wp, q_rp;
   logic [7:0]  beat;                      // beats of the head burst already returned
   wire  [QW:0] q_fill = q_wp - q_rp;
-  wire         head_own = q_own[q_rp[QW-1:0]];
-  wire  [7:0]  head_len = q_len[q_rp[QW-1:0]];
+  wire  [8:0]  q_head = q_ent[q_rp[QW-1:0]];
+  wire         head_own = q_head[8];
+  wire  [7:0]  head_len = q_head[7:0];
+  always_ff @(posedge clk) if (rd_take) q_ent[q_wp[QW-1:0]] <= {g, DDRAM_BURSTCNT};
   assign a_dout_ready = DDRAM_DOUT_READY && (q_fill != '0) && !head_own;
   assign b_dout_ready = DDRAM_DOUT_READY && (q_fill != '0) &&  head_own;
   wire         head_done = DDRAM_DOUT_READY && (q_fill != '0)
@@ -190,8 +197,6 @@ module m2_ddram_mux #(
       stk_own <= g;
 
       if (rd_take) begin
-        q_own[q_wp[QW-1:0]] <= g;
-        q_len[q_wp[QW-1:0]] <= DDRAM_BURSTCNT;
         q_wp <= q_wp + 1'b1;
         if (q_fill == (QW+1)'(QD) && !(&dbg_q_ovf)) dbg_q_ovf <= dbg_q_ovf + 16'd1;
       end
