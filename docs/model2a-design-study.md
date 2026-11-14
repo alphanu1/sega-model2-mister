@@ -48324,3 +48324,194 @@ off-screen edge setting helps reloading off screen (Virtua Cop, Virtua Cop
 flicker (R1000/R1001, Model 2); Motor Raid no longer slows (R998, #25); Sega
 Rally's AI cars did not flash in his races (R998, #35, wider testing
 pending). R1002 is SETTLED.
+
+**R1003 -- 2C: THE QUAD STORE'S PAYLOAD IN DDR3, AS MODEL 1 (ITS 9c05b79 /
+311710f). -104 M10K BY SHAPE (156 -> 52 for the store and its DDR3 client),
++401 ALM ESTIMATED; THE STORE HANDS THE FILL THE SAME QUADS IN THE SAME ORDER
+ON EVERY LIST AT EVERY LATENCY; TEXTURED, AT A REALISTIC LATENCY, 12 OF 13
+LISTS DRAW FASTER AND ONE 0.71% SLOWER; UNTEXTURED 7 OF 13 ARE UP TO 0.84%
+SLOWER. BENCH AND quartus_map ONLY; NOT FITTED, NOT ON A
+BOARD.** Branch ddr3-payload-2c (off model2c ad6c8081, the 20261113
+release), 2026-11-14.
+
+*What was believed:* that the 2C store's vertex and texture words (vtx 2 x
+2048 x 107, uvt 2 x 2048 x 197) are ~120 M10K that can go the way Model 1's
+went -- behind a request/valid interface, prefetched by a scan that runs
+ahead, in DDR3 -- at no cost in time and with the picture bit-identical, and
+that the 2C difference to prove was sharing DDR3 with the frame buffer
+(R640: FB_DDR3, m2_ddr3 one transaction at a time, the scanout's 248-beat
+line reads).
+
+*Model 1 is the oracle (the project rules), and its later commit already answered
+the sharing:* 311710f moved Model 1's 3D to this core's frame buffer and put
+m2_ddr3 and the payload client on the one DDRAM port with m1_ddram_mux --
+at the DDRAM level, because m2_ddr3's request/acknowledge port would hold
+the payload to one read in flight. Taken here (THIRD_PARTY.md, pinned):
+m1_ddram_mux renamed only; m1_ddram_payload generalised from two beats to
+NB (304 bits, five beats, a slot of eight words at byte 0x30800000, 8 MB
+above the frame buffers); Model 1's hostile DDR3 bench model (unwritten
+reads 0xFFFF..., BUSY runs, held beats, Avalon checks) with per-region beat
+counters. m2_raster3d DDRAM_IN builds m2_ddr3 inside (Model 1's shape) and
+PAY_DDR3 the client and mux beside it; Model2.sv sets both on the 2C build
+(R3D_PAY = C2) with m2_ddr3's own base and reset (mem_rst_n & ddr_go,
+R380); every other build is as it was. m2_quad_store EXT_PAY: the writes
+leave on the quad's own cycle at its slot (R962's physical bank and
+address); without EXT_PAY the old replay is kept verbatim.
+
+*Where 2C differs from Model 1, and why:*
+  1. FIVE BEATS, NOT TWO (2C's payload is 304 bits: 104 vertex, 3 slot, 197
+     texture). The reply FIFO's lanes stay one per beat (29a5fa0's reason).
+  2. THE STORE CAN HOLD THE GEOMETRY, Model 1's cannot: m2_raster3d's
+     q_ready waits on the client's wr_room (a registered "8 free" of a
+     256-deep queue). No posted write is ever lost, where Model 1 counts an
+     overrun. The board's geometry is ~1 quad per 200-325 cycles (R994)
+     against ~7 for a write; the bench's back-to-back quads are held.
+  3. P_SORTW waits for every posted write to be on the bus before the list
+     can be handed to the reader (Model 1's rule, here because the client
+     puts reads first).
+  4. NO FLUSH: the 2C 3D layer runs on mem_rst_n (no game reset), so the
+     client's flush is tied low; its reset is m2_ddr3's.
+  5. THE OUTPUT IS THE FIFO HEADS, NOT A REGISTER (Model 1 copies its 128
+     bits into out_*; here that would be 304 flops). The take is
+     registered, so a quad is offered every second cycle at most -- the old
+     E_OUT/E_READ rate -- and the fill's ready reaches no RAM address.
+  6. THE SCAN RUNS ONE BAND AHEAD (new, 2C only). Model 1 fills 8-row bands
+     against the beam; 2C's frame buffer draws 48 bands a list, each started
+     only once the last has drained (C_DONE), so every band began with a
+     DDR3 round trip: HOTD list 1808 drew 1,392 cycles (0.31%) SLOWER with
+     Model 1's form alone. Now, when a band's scan finishes, the store scans
+     the next band (replay_ahead: FB_DDR3 and not the last band) while the
+     fill drains: its colours queue behind the band's (`bnd`), its payloads
+     are asked for, nothing is offered until the sequencer starts that band.
+     A start for any other band (the R653 self-test can swap a list mid-
+     draw) DROPS the lookahead's quads unseen as their payloads arrive, then
+     starts the band. The quads the fill sees and their order are unchanged.
+
+*How identity was established, and WHY NOT BY THE TEXTURED PX ALONE
+(measured):* the 2C textured picture on tb_m2_raster3d depends on memory
+timing on the RELEASE RTL. With the store untouched, the bench's own JIT
+100 moves 7,225 px of HOTD 1808; DDR3 latency 1 / 20 / 40 against the fb_*
+model moves 57 / 34 / 676 px. The pixels move in groups of four (PIXSTEP 4,
+a texel a group) and the texel cache's hits and misses shift with it
+(67,672 / 9,963 against 67,664 / 9,968): a texture-path timing dependence,
+not the store's, and not chased here. Untextured (M2_R3D_NOTEX) the same
+list is a69505d8cd60 at every latency and under JIT. So:
+  * THE STORE'S STREAM: a hash of every quad m2_quad_store hands the fill
+    (band, eight coordinates, quarters, colour, checker, texture word,
+    u/v, 1/z, no-mip, slot bits, in order), timing-independent by
+    construction. IDENTICAL, on-chip against DDR3, on every list at every
+    latency (table below).
+  * UNTEXTURED PX on every list, both builds: IDENTICAL on all 13 lists (M2_R3D_NOTEX,
+    latency 40): HOTD 1808 a69505d8cd60, 1500 5a2889db917a, 900
+    1ce6ce5d9818, Over Rev d1 18cc1e9e9713, d2 543c6c0600c8, STCC 1500
+    46a297aa6a70, 3000 4b104082ef4d, 4500 dc020430b3ae, 6000 0d9b5a70448f,
+    the VCop pair e55c4454035e, the 4,587-quad list a0c85455000c (and the
+    two list-behind-list runs as their single lists).
+  * tb_m2_quad_store_ext: the store alone, one stimulus, EXT_PAY 0 and 1,
+    a backing answering 1..60 cycles late, consumer stalls 0 / 50 / 90%,
+    gaps 0..400 cycles between bands, lists 1..3,100 quads (spill, refusal),
+    five starts for another band: 500 band streams identical, 68,145 quads,
+    0 refused, 422 lookaheads, 5 drops.
+  * Planted faults, each caught: lookahead quads offered in the current
+    band; a dropped quad offered; the client ignoring the bank (both banks
+    alias). The last passes every single-list check and the shown frame's
+    PX -- only the stream hash of a list collected during a draw (R962's
+    QUADS2 pair) sees it: hash b4f5d6c63749357e against 6ae7bd7a8fab1b44.
+
+*Measured, draw cycles (swap to fb_complete), tb_m2_raster3d at R994's 2C
+parameters, textured (REALCOL, WINKEY, UVSH, FRAC, MIPZX 3, TPL 2870), both
+builds through the same DDRAM-level model and the same m2_ddr3 (before =
+DDRAM_IN with the payload on chip). L40 = 40 cycles (500 ns at 80 MHz, the
+top of R351's 130-500 ns); L400 = ten times that; L40b = 40 with BUSY runs
+starting on 100 per mille of cycles (~56% of cycles busy) and 20% of due
+beats held:
+
+    list                    quads (drop)   L40 before -> after     L40    L400    L40b  pay%
+    HOTD 1808                 847 (   0)    454,730 ->   446,120  -1.89%  -1.74%  +0.32%  2.4
+    HOTD 1500                 910 (   0)    553,852 ->   553,013  -0.15%  -0.00%  +0.68%  3.8
+    HOTD 900 (spill)         2127 (   0)    801,794 ->   784,363  -2.17%  -1.32%  +0.08%  6.7
+    Over Rev d1              1016 (   0)    609,288 ->   604,740  -0.75%  -0.54%  +0.06%  3.6
+    Over Rev d2               629 (   0)    499,251 ->   496,066  -0.64%  -1.11%  +0.79%  2.6
+    STCC 1500 (title)        1389 (   0)    386,778 ->   389,513  +0.71%  +1.32%  +0.62%  3.5
+    STCC 3000                 805 (   0)    471,808 ->   469,729  -0.44%  -0.02%  +0.66%  2.6
+    STCC 4500                1138 (   0)    456,135 ->   447,519  -1.89%  -1.70%  +1.07%  3.2
+    STCC 6000 (race start)   1694 (   0)    393,165 ->   384,360  -2.24%  -0.88%  +0.13%  4.0
+    HOTD 1808 behind 1500     847 (   0)    453,769 ->   446,120  -1.69%  -1.74%  +0.65%  2.5
+    HOTD 900 behind 900      2127 (   0)    801,794 ->   784,363  -2.17%  -0.99%  +0.47%  5.4
+    VCop 7506 behind 7482    2032 (   0)    423,692 ->   403,713  -4.72%  -2.80%  +1.39%  8.5
+    4,587 quads (the cap)    2560 (1633)    614,115 ->   590,994  -3.76%  -1.39%  +1.23%  7.2
+  (STCC lists: new MAME 0.289 m2lod dumps, attract frames 1500 / 3000 /
+  4500 / 6000; HOTD and Over Rev R994's; the pair and the 4,587 R994's
+  quad files. The 7482 list spills and 7506 is collected during its draw,
+  held at the spill's edge; its first draw 488,565 -> 468,968.)
+  UNTEXTURED (OSD textures Off; the fill is frame-buffer-write bound) the
+  same lists at L40 draw slower on 7 of 13: HOTD 1500 438,856 -> 442,536
+  (+0.84%), STCC 4500 +0.65%, STCC 1500 +0.62%, STCC 6000 +0.43%, Over Rev
+  d1 +0.16%, HOTD 1808 +0.07%, Over Rev d2 +0.02%; faster on HOTD 900
+  (-2.16%), the pair (-4.72%) and the cap list (-3.76%).
+
+  "pay%" is the payload's share of all DDR3 beats in the run (FB reads and
+  writes the rest). No protocol error, no lost write, no refused read in
+  any run. "late" (scanout lines late) is 185-188 on the list-behind-list
+  runs in BOTH builds, and 185 in R994's own run of the release RTL on the
+  fb_* model (p1500_1808_new512): a property of that bench mode, not of
+  this change; 0 elsewhere.
+
+*Wrong first, and kept:*
+  * Model 1's form alone was 0.31% slower on HOTD 1808 (above); the cause
+    was the per-band first read, found by a band-by-band trace.
+  * The first lookahead was started only when a band's scan drained; when
+    the lookahead's own scan had finished before its band started, nothing
+    started the next one, so every second band still paid the round trip.
+    tb_m2_quad_store_ext's restart state showed it (la 0 after a long gap).
+  * The reply lanes as an array inside the generate loop: quartus_map
+    dropped the ramstyle and inferred five altsyncrams of type AUTO
+    ("fq[0][63]__7"), leaving M10K or MLAB to the fitter. Each lane is now
+    its own module (m2_ddram_lane) and maps as M10K.
+  * My first store bench passed unmasked 32-bit values into narrow inputs;
+    the two builds read the stray high bits differently and the streams
+    "differed" at the v3/texture boundary. The bench masks every input.
+  * Deeper prefetch (PAY_DEPTH 32, 64) changes nothing (405,650 cycles
+    untextured at 16, 32, 64): not the limit. Model 1's hold_b on the
+    scanout's fetch changes nothing either (a read behind a 248-beat line
+    waits ~280 cycles regardless).
+  * STCC 1500 (the title "Cha" over the track) stays 0.71% slower at L40:
+    its middle bands are frame-buffer-write bound, and m2_ddr3 waits 1,621
+    cycles in all for the mux's grant (one edge each time it asks while the
+    payload holds the port) and the scanout stays hungry 435 cycles longer
+    (its line lands behind up to 80 payload reply beats), which holds the
+    FB writer (R655). Giving the frame buffer the port first (an APRI mode
+    in the mux, tried and REMOVED) changed nothing: 1,614 cycles, the same
+    draw -- the grant is a register, so the edge is lost either way.
+
+*Measured, quartus_map (Quartus 17.0 Build 595, the whole 2C core, M2_2C;
+release ad6c8081 against 826bf269):* ALM estimate 38,997 -> 39,398 (+401); DSP 107
+-> 107; registers 46,789 -> 47,075. RAM summary diff: nothing moves but
+the payload. M10K by shape (quartus_map does not count blocks; R979's
+method):
+    before: store 156 -- att 2 x 6, the five index reads 5 x 3, key 4,
+            key_x 1, uvt 2 x 40 (2048 x 197), vtx 2 x 22 (2048 x 107)
+    after:  store 33 (the same less uvt and vtx, plus the colour queue 16 x
+            18: 1); client 19 -- write queue 256 x 316: 8, read queue 16 x
+            12: 1, five reply lanes 16 x 64 / 16 x 48: 10
+    net -104, so the s2137 fit's 550 / 553 should land near 446.
+  Logic (map, ALUT / registers): m2_ddram_mux 417 / 318 (its 32-entry read
+  owner queue in flops, as Model 1 chose), m2_ddram_payload 134 / 89, the
+  store 1,131 / 482 -> 996 / 359, m2_raster3d in all +264 / +362.
+
+*What the room could buy (estimated, not tried):* with the payload off
+chip, a bank's on-chip cost is att, key and the index arrays: ~31 M10K per
+2,048 more quads a bank split at 2,048 deep (att 12, index reads 15, key 4),
+so NQ 4,096 (a list to 4,096 + NX) for ~31 of the 104, leaving room for
+STCC's sound board (R979: 5 M10K in its lean form). The cap stays 2,560
+(MAXL) here, as asked. A longer list also lengthens every band's scan
+(the scan walks the whole list per band) and the sort.
+
+*Not settled:* the fit (timing on clk_sys: the reply lanes feed the fill's
+x01_r path the vtx latches fed, the write queue's data the satf path the
+arrays had); the board -- HOTD, Over Rev, STCC, Sky Target in normal play,
+the R653 self-test toggled mid-draw (the drop path, benched only); the HPS
+bus's real latency under the scaler and Linux (R351 measured 130-500 ns);
+whether STCC's title list's +0.71% is visible (it is 0.32 video frames of
+draw); the textured picture's timing dependence in the texel path, which
+this change will exercise differently on the board.
