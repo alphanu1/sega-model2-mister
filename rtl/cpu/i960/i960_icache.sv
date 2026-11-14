@@ -56,7 +56,15 @@ module i960_icache #(
   // Needs HUF: the requester runs on while the line completes.
   // Both default on, as i960_top uses them, so every bench of the module
   // alone tests the configuration that ships.
-  parameter bit          ER    = 1'b1
+  parameter bit          ER    = 1'b1,
+  // R1011: THE WORD AFTER, WITH THE WORD ASKED FOR. The data array in two
+  // banks by word parity (even words, odd words), each read at its own
+  // address, so an answer from the array carries the next word of the line
+  // too (data2, valid2 with `valid`; not for the line's last word, nor for an
+  // early-restart answer, which comes from the bus). A two-word instruction
+  // then has its displacement when its own word lands (i960_top IC_PAIR). The
+  // words, the fills and the bus are as before; 0 builds the one array.
+  parameter bit          PAIR  = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -81,6 +89,8 @@ module i960_icache #(
   // being waited for. `valid` alone cannot separate them.
   output logic [31:2] vaddr,
   output logic        valid,                  // `data` is good this cycle
+  output logic [31:0] data2,                  // R1011: the word at vaddr + 4 ...
+  output logic        valid2,                 // ... good with `valid` when this is set
   output logic        busy,
 
   // ------- refill side. One 4-word line burst per miss.
@@ -96,7 +106,6 @@ module i960_icache #(
   // Data store: LINES x 4 words. Never cleared in reset — clearing an array in
   // reset forces it out of RAM into flip-flops, measured on this toolchain.
   // Validity lives in the tag array, which is where a reset can be afforded.
-  (* ramstyle = "M10K" *) logic [31:0] cdata [0:LINES*4-1];
 
   // Pinned to logic, and this is not a tidy-up. Quartus inferred the tag array
   // into an altsyncram -- a 10 Kbit M10K block for 736 bits -- and the header
@@ -168,10 +177,38 @@ module i960_icache #(
   logic             req_accept;   // a request is being taken this cycle
   logic [31:0] rd_wdata;
 
-  always_ff @(posedge clk) begin
-    if (rd_we) cdata[rd_waddr] <= rd_wdata;
-    cdata_q <= cdata[rd_raddr];
-  end
+  generate if (!PAIR) begin : g_one
+    (* ramstyle = "M10K" *) logic [31:0] cdata [0:LINES*4-1];
+    always_ff @(posedge clk) begin
+      if (rd_we) cdata[rd_waddr] <= rd_wdata;
+      cdata_q <= cdata[rd_raddr];
+    end
+    assign data2  = cdata_q;
+    assign valid2 = 1'b0;
+  end else begin : g_pair
+    // R1011: words 0 and 2 of each line in one bank, 1 and 3 in the other. A
+    // read at word w takes w from its bank and w + 1 from the other: the even
+    // bank at line word (w[1] | w[0]) -- 0, 2, 2 for w = 0, 1, 2 -- the odd at
+    // w[1] -- 1, 1, 3. A fill writes its one word into its one bank.
+    (* ramstyle = "M10K" *) logic [31:0] cev [0:LINES*2-1];
+    (* ramstyle = "M10K" *) logic [31:0] cod [0:LINES*2-1];
+    wire [IDX_W-1:0] r_i = rd_raddr[IDX_W+1:2];
+    wire [1:0]       r_w = rd_raddr[1:0];
+    wire [IDX_W:0]   w_a = {rd_waddr[IDX_W+1:2], rd_waddr[1]};
+    logic [31:0] ev_q, od_q;
+    logic        sel_q, w3_q;
+    always_ff @(posedge clk) begin
+      if (rd_we && !rd_waddr[0]) cev[w_a] <= rd_wdata;
+      if (rd_we &&  rd_waddr[0]) cod[w_a] <= rd_wdata;
+      ev_q  <= cev[{r_i, r_w[1] | r_w[0]}];
+      od_q  <= cod[{r_i, r_w[1]}];
+      sel_q <= r_w[0];
+      w3_q  <= (r_w == 2'd3);
+    end
+    assign cdata_q = sel_q ? od_q : ev_q;
+    assign data2   = sel_q ? ev_q : od_q;
+    assign valid2  = !byp_sel && !w3_q;
+  end endgenerate
 
   // THE READ ADDRESS IS LIVE WHEN A REQUEST IS TAKEN AND LATCHED AFTERWARDS.
   //

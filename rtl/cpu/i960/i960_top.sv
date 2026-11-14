@@ -41,6 +41,22 @@ module i960_top #(
   parameter bit IC_HUF = 1'b1,
   parameter bit IC_ER  = 1'b1,
   parameter bit PF2W   = 1'b1,
+  // R1011: A TWO-WORD INSTRUCTION'S DISPLACEMENT FROM THE SAME ANSWER AS ITS
+  // OWN WORD (i960_icache PAIR: the word after comes with every answer from
+  // the array while it is in the same line). It then goes from its accept
+  // straight to T_EXEC, as a one-word instruction does, and prefetches ip+8
+  // there -- the two T_FETCH2_W cycles a hit cost are gone. Otherwise (the
+  // line's last word, an early-restart answer) T_FETCH2_W as before. 0 is the
+  // front end as R817 left it.
+  parameter bit IC_PAIR = 1'b1,
+  // R1011: i960_lsu ST1 -- a store's first word on the bus the cycle after its
+  // request, the source register being read from T_EXEC. 0: S_OPD as before.
+  parameter bit LSU_ST1 = 1'b1,
+  // R1011: i960_lsu POST -- a one-word aligned store retires the cycle its
+  // request goes out, the LSU finishing it on the bus behind the next
+  // instructions; a load or store that finds the LSU still busy waits in
+  // T_EXEC. Needs LSU_ST1. 0: a store retires on its acknowledge.
+  parameter bit LSU_POST = 1'b1,
   // R836: THE LONG-REAL FORMS -- addrl subrl mulrl divrl (0x79), cmprl
   // (0x69.5), movrl (0x6d.9). Desert Tank runs them from the title's end
   // (MAME: first movrl at frame 1105, 19.23 s) and this core trapped on every
@@ -85,7 +101,10 @@ module i960_top #(
   parameter int unsigned DC_LINES = 0,
   parameter bit          DC_2A    = 1'b1,
   parameter bit          DC_TEST  = 1'b0,   // i960_dcache TEST_ALL: the lockstep bench's low memory
-  parameter bit          DC_LANES = 1'b1    // i960_dcache LANES
+  parameter bit          DC_LANES = 1'b1,   // i960_dcache LANES
+  // R1011: i960_dcache ROMS -- the program and data ROMs' reads cached too
+  // (nothing writes them while the CPU runs; the bridge drops a CPU write).
+  parameter bit          DC_ROMS  = 1'b1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -992,7 +1011,7 @@ module i960_top #(
   logic [31:0] lsu_baddr, lsu_bwdata;
   logic [3:0]  lsu_bbe;
 
-  i960_lsu u_lsu (
+  i960_lsu #(.ST1(LSU_ST1), .POST(LSU_POST)) u_lsu (   // R1011
     .clk(clk), .rst_n(rst_n),
     .req(lsu_req), .addr(ea), .size(ls_size), .n_words(ls_nwords),
     .is_store(ls_store), .sign_ext(ls_sext), .is_burst(mm_burst),
@@ -1012,6 +1031,8 @@ module i960_top #(
   logic [31:2] ic_vaddr;
   /* verilator lint_on UNUSEDSIGNAL */
   logic [31:0] ic_data, ic_baddr;
+  logic [31:0] ic_data2;   // R1011: the word after, with ic_v2
+  logic        ic_v2;
 
   // R768: 8 KB (512 lines), not the i960KB's 512 B. The board's fetch path is
   // a clock crossing and SDRAM, not the real board's fast ROM, so a miss costs
@@ -1022,10 +1043,11 @@ module i960_top #(
   // board (R768: the menus' trouble was the capture card, R770), the game
   // now keeps up and the 3D draw is the limit (R780), and its tag RAM was
   // ~264 ALM the texel path needs. The valid-bit-in-tag design stays.
-  i960_icache #(.LINES(IC_LINES), .HUF(IC_HUF), .ER(IC_ER)) u_icache (   // R815: 8 KB again -- the game is the limit now (R814); R817: HUF, ER
+  i960_icache #(.LINES(IC_LINES), .HUF(IC_HUF), .ER(IC_ER), .PAIR(IC_PAIR)) u_icache (   // R815: 8 KB again -- the game is the limit now (R814); R817: HUF, ER
     .clk(clk), .rst_n(rst_n), .inval(1'b0),
     .req(ic_req), .req_demand(1'b1), .addr(fetch_addr[31:2]), .data(ic_data),
     .valid(ic_valid), .vaddr(ic_vaddr), .busy(ic_busy),
+    .data2(ic_data2), .valid2(ic_v2),   // R1011
     .bus_req(ic_breq), .bus_addr(ic_baddr),
     .bus_rdata(c_rdata), .bus_ack(ic_back)
   );
@@ -1150,7 +1172,8 @@ module i960_top #(
     /* verilator lint_off UNUSEDSIGNAL */
     logic [31:0] dc_hits, dc_miss;
     /* verilator lint_on UNUSEDSIGNAL */
-    i960_dcache #(.LINES(DC_LINES), .BOARD_2A(DC_2A), .TEST_ALL(DC_TEST), .LANES(DC_LANES)) u_dcache (
+    i960_dcache #(.LINES(DC_LINES), .BOARD_2A(DC_2A), .TEST_ALL(DC_TEST), .LANES(DC_LANES),
+                  .ROMS(DC_ROMS)) u_dcache (   // R1011
       .clk(clk), .rst_n(rst_n),
       .req(c_req), .rd_ok((gsel == G_LSU) || (gsel == G_RF)),
       .we(bus_we), .addr(bus_addr), .be(bus_be), .wdata(bus_wdata),
@@ -1223,6 +1246,8 @@ module i960_top #(
   // displacement word, so they do not prefetch and fall back to T_FETCH.
   logic [31:0] pf_insn, pf_ip;
   logic        pf_valid, pf_armed, pf_issued;
+  logic [31:0] pf_disp;      // R1011: the word after pf_insn, when pf_disp_ok
+  logic        pf_disp_ok;
 
   // R812: A CACHE ANSWER COUNTS ONLY FOR THE ADDRESS IT ANSWERS. `ic_valid` was
   // taken on its own in T_FETCH_W, so a prefetch whose answer was delayed --
@@ -1248,21 +1273,30 @@ module i960_top #(
   // exactly here, one cycle after a latched-only check would catch it. Checking
   // only the latched copy misses every hit and the prefetch does nothing, which
   // is precisely what the first version measured.
+  // R1011: and the word after it, with whether it is there (fetch_disp_ok).
+  logic [31:0] fetch_disp;
+  logic        fetch_disp_ok;
   always_comb begin
     fetch_word_ok = 1'b0;
     fetch_word    = ic_data;
+    fetch_disp    = ic_data2;
+    fetch_disp_ok = 1'b0;
     case (ts)
       T_FETCH: begin
         if (pf_valid && (pf_ip == ip)) begin
           fetch_word_ok = 1'b1;
           fetch_word    = pf_insn;
+          fetch_disp    = pf_disp;
+          fetch_disp_ok = pf_disp_ok;
         end else if (pf_armed && ic_ok && (pf_ip == ip)) begin
           fetch_word_ok = 1'b1;
+          fetch_disp_ok = ic_v2;
         end
       end
-      T_FETCH_W: fetch_word_ok = ic_ok;
+      T_FETCH_W: begin fetch_word_ok = ic_ok; fetch_disp_ok = ic_v2; end
       default: ;
     endcase
+    if (!IC_PAIR) fetch_disp_ok = 1'b0;
   end
 
   // Read-address drive. See the note at the ra1/ra2 declaration: each case is
@@ -1281,6 +1315,11 @@ module i960_top #(
       T_FETCH2_W: ra1 = (d_fmt == 2'd1) ? d_srcdst : d_src1;
       T_EXEC: begin
         if      (is_movx)        ra1 = d_src1 + 5'd1;   // second word of movl/t/q
+        // R1011 (LSU_POST): while a posted store holds the LSU this state
+        // waits, and the address operand T_FETCH presented (src1) must stay
+        // on port 1 for the AGU; the store source goes on it in the cycle
+        // the LSU takes the request, as always.
+        else if ((d_fmt == 2'd3) && lsu_busy) ra1 = d_src1;
         else if (d_fmt == 2'd3)  ra1 = d_srcdst & ls_regmask;  // store source
         // modpc takes srcdst as an operand and writes the OLD PC back to it.
         // Presented here so rd1 is valid when T_MODPC runs next cycle.
@@ -1319,6 +1358,8 @@ module i960_top #(
       pf_armed  <= 1'b0;
       pf_issued <= 1'b0;
       pf_insn   <= 32'd0;
+      pf_disp   <= 32'd0;      // R1011
+      pf_disp_ok <= 1'b0;
       pf_ip     <= 32'd0;
       ip        <= 32'd0;
       pc_reg    <= 32'h001f_2002;   // priority 31, supervisor, interrupt flag
@@ -1426,6 +1467,8 @@ module i960_top #(
 
       if (pf_armed && ic_ok) begin
         pf_insn  <= ic_data;
+        pf_disp  <= ic_data2;      // R1011
+        pf_disp_ok <= ic_v2;
         pf_valid <= 1'b1;
         pf_armed <= 1'b0;
       end
@@ -1570,6 +1613,16 @@ module i960_top #(
             if (!f_valid || f_memb_bad) begin
               trap_op <= f_op;
               ts      <= T_TRAP;
+            end else if (f_len2 && fetch_disp_ok) begin
+              // R1011: the displacement came with the word. On to execute,
+              // and predict sequential from ip+8 now, as T_FETCH2_W would.
+              disp_word  <= fetch_disp;
+              fetch_addr <= ip_p8;
+              ic_req     <= 1'b1;
+              ip_next    <= ip_p8;
+              pf_ip      <= ip_p8;
+              pf_issued  <= 1'b1;
+              ts         <= T_EXEC;
             end else if (f_len2) begin
               fetch_addr <= ip_p4;
               ic_req     <= 1'b1;
@@ -1843,9 +1896,11 @@ module i960_top #(
               end else if (ls_nomem) begin                // lda
                 wa <= d_srcdst; wd <= ea; we <= 1'b1;
                 ip <= ip_next; ts <= T_FETCH;
-              end else begin
+              end else if (!lsu_busy) begin
                 ts <= T_MEM_W;   // lsu_req is already asserted, see above
               end
+              // R1011: else the LSU is still putting a posted store on the
+              // bus; lsu_req stays up here and is taken when it is idle.
             end
           endcase
         end

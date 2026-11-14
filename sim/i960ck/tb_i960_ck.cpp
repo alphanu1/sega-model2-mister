@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1
 //
-// R1010: THE i960 FROM A MAME CHECKPOINT (m2_i960_ck_harness).
+// R1011: THE i960 FROM A MAME CHECKPOINT (m2_i960_ck_harness).
 //
 //   Vm2_i960_ck_harness <ckdir> [--lat N] [--icr HEX] [--stub HEX] [--max-ins N]
-//                       [--spin LO,HI] [--frame-ip HEX] [--quiet] [--trace N]
+//                       [--spin LO,HI] [--frame-ip HEX] [--only-frame N] [--ws] [--quiet] [--trace N]
 //
 // <ckdir> is tools/mame_i960_ck.lua's output after sim/i960ck/ck_prep.py. The
 // bench builds the memory image MAME had at the checkpoint, boots the RTL into
@@ -110,6 +110,7 @@ int main(int argc, char **argv) {
   uint32_t spin_lo = 0x763d4, spin_hi = 0x763e8;
   uint64_t max_ins = ~0ull; bool quiet = false; long trace = 0;
   int only_frame = -1;   // the totals over this game frame alone
+  bool ws = false;
   for (int i = 2; i < argc; ++i) {
     std::string a = argv[i];
     auto nx = [&]() { return (i + 1 < argc) ? argv[++i] : ""; };
@@ -122,6 +123,7 @@ int main(int argc, char **argv) {
     else if (a == "--quiet") quiet = true;
     else if (a == "--trace") trace = std::atol(nx());
     else if (a == "--only-frame") only_frame = std::atoi(nx());
+    else if (a == "--ws") ws = true;   // m2_waitst live (Sega Rally; a WAITST=1 build)
   }
 
   // ---- MAME's state
@@ -202,7 +204,7 @@ int main(int argc, char **argv) {
   }
 
   // ---- run
-  top->clk_cpu = 0; top->clk_mem = 0; top->rst_n = 0; top->ws_en = 0; top->irq = 0;
+  top->clk_cpu = 0; top->clk_mem = 0; top->rst_n = 0; top->ws_en = ws ? 1 : 0; top->irq = 0;
   top->sd_ack = 0; top->sd_dout = 0; top->io_rdata = 0;
   top->eval();
   int s_lat = 0, ack_left = 0; bool busy = false; uint32_t pend = 0;
@@ -214,18 +216,23 @@ int main(int argc, char **argv) {
   uint64_t cyc = 0, h = 0;
   int irq_hold = 0; uint32_t irq_line = 0;
   bool fail = false; std::string why;
-  uint64_t geo_step = 0;   // stores into the geo push window at a stepped address (R1010)
+  uint64_t geo_step = 0;   // stores into the geo push window at a stepped address (R1011)
   uint64_t n_vdiff = 0, n_iodiff = 0;
   // the RTL's own stream (ips, LSU words, I/O accesses, in order): two builds
   // that differ only in timing must print the same digest
-  uint64_t digest = 1469598103934665603ull;
-  auto dg = [&](uint32_t x) { for (int b = 0; b < 4; ++b) { digest ^= (x >> (8 * b)) & 0xff; digest *= 1099511628211ull; } };
+  // One digest a stream, not one over them interleaved: a posted store (R1011)
+  // completes after later instructions are accepted, so the interleaving is
+  // timing; each stream's own order is not.
+  uint64_t dgs[3] = {1469598103934665603ull, 1469598103934665603ull, 1469598103934665603ull};
+  int dsel = 0;
+  auto dg = [&](uint32_t x) { uint64_t &d_ = dgs[dsel]; for (int b = 0; b < 4; ++b) { d_ ^= (x >> (8 * b)) & 0xff; d_ *= 1099511628211ull; } };
   // profile
   uint64_t c_ts[32] = {0}, c_spin = 0, c_all = 0, n_busy = 0, n_spin = 0;
   uint64_t memw_rgn[13] = {0}, memn_rgn[13] = {0}, fw_fill = 0, fw_hit = 0;
   // per LSU word: the cycles its request was up, by region / direction / data-cache hit
   uint64_t aw_n[13][2][2] = {{{0}}}, aw_c[13][2][2] = {{{0}}}; uint64_t a_cyc = 0;
   uint64_t n_len2 = 0, f2w_cyc = 0, n_ld = 0, n_st = 0;
+  uint64_t ic_fills = 0, ic_fill_cyc = 0, ic_words = 0; int ic_prev = 0;   // the i-cache's line fills
   uint64_t f_ts[32] = {0}; uint64_t f_cyc = 0, f_spin = 0, f_n = 0, f_nspin = 0; double f_mame = 0;
   double mame_busy = 0; size_t f_first = 0; int frames = 0;
   uint32_t cur_ip = 0; uint32_t last_lsu_addr = 0;
@@ -250,7 +257,9 @@ int main(int argc, char **argv) {
               "spin_i", "by state (busy, % of cycles)");
 
   const uint64_t HMAX = 4000000000ull;
+  uint64_t end_at = 0;   // the stream is done: a few cycles more, for what is still on the bus
   for (h = 0; h < HMAX && !fail; ++h) {
+    if (end_at && cyc >= end_at) break;
     const bool mem_rise = (h & 1);
     const bool cpu_rise = mem_rise && !((h >> 1) & 1);   // every second clk_mem rise
     if (h == 40) top->rst_n = 1;
@@ -268,6 +277,21 @@ int main(int argc, char **argv) {
           if (ts == 1 || ts == 3) { if (R(u_cpu__DOT__ic_breq)) ++fw_fill; else ++fw_hit; }
         }
       }
+      {
+        const int ist = R(u_cpu__DOT__u_icache__DOT__state);
+        static long ftr = std::getenv("CK_FILLTRACE") ? std::atol(std::getenv("CK_FILLTRACE")) : 0;
+        if (started && ftr > 0) {
+          if (ist == 1 && ic_prev != 1) std::printf("  fill start cyc %llu addr %08x ts %s\n", (unsigned long long)cyc, R(u_cpu__DOT__ic_baddr), TSN[ts]);
+          if (R(u_cpu__DOT__ic_breq) && R(u_cpu__DOT__ic_back)) std::printf("    word %08x at cyc %llu (ts %s)\n", R(u_cpu__DOT__ic_baddr), (unsigned long long)cyc, TSN[ts]);
+          if (ist != 1 && ic_prev == 1) { std::printf("  fill end cyc %llu\n", (unsigned long long)cyc); --ftr; }
+        }
+        if (started) {
+          if (ist == 1 && ic_prev != 1) ++ic_fills;
+          if (ist == 1) ++ic_fill_cyc;
+          if (R(u_cpu__DOT__ic_breq) && R(u_cpu__DOT__ic_back)) ++ic_words;
+        }
+        ic_prev = ist;
+      }
       // the LSU's completed access
       if (R(u_cpu__DOT__lsu_breq)) ++a_cyc;
       if (R(u_cpu__DOT__lsu_breq) && R(u_cpu__DOT__lsu_back)) {
@@ -282,7 +306,8 @@ int main(int argc, char **argv) {
           const bool we = R(u_cpu__DOT__lsu_bwe);
           const uint32_t be = R(u_cpu__DOT__lsu_bbe);
           const uint32_t wd = R(u_cpu__DOT__lsu_bwdata), rd = R(u_cpu__DOT__c_rdata);
-          if (op_i >= NO) { fail = true; why = "LSU access past MAME's log"; }
+          const bool inlog = op_i < NO;
+          if (op_i >= NO) { if (!end_at) { fail = true; why = "LSU access past MAME's log"; } }
           else {
             const Op &o = ops[op_i];
             uint32_t bm = 0; for (int b = 0; b < 4; ++b) if (be & (1u << b)) bm |= 0xffu << (8 * b);
@@ -293,7 +318,7 @@ int main(int argc, char **argv) {
               std::snprintf(buf, sizeof buf, "LSU %zu (insn %u ip %08x): RTL %s %08x be %x data %08x, MAME %s %08x mask %08x data %08x",
                             op_i, o.idx, ins[o.idx].ip, we ? "W" : "R", a, be, v, o.we ? "W" : "R", o.addr, o.mask, o.data);
               if (bool(we) == bool(o.we) && ((a & ~3u) == o.addr || geo) && (!we || bm == o.mask)) {
-                // R1010: the same access with another value. The RTL's FP units
+                // R1011: the same access with another value. The RTL's FP units
                 // flush subnormals (study 8.1) where MAME's host floats keep
                 // them, and STCC's race has them (0x202638): the run goes on
                 // with the RTL's own values, every one counted. Only a
@@ -305,7 +330,7 @@ int main(int argc, char **argv) {
             ++op_i;
           }
           { uint32_t m = 0; for (int b = 0; b < 4; ++b) if (be & (1u << b)) m |= 0xffu << (8 * b);
-            dg((we ? 0x80000000u : 0x40000000u) | (be << 24) | (a & 0x00ffffffu)); dg(we ? (wd & m) : (rd & m)); }
+            if (inlog) { dsel = 1; dg((we ? 0x80000000u : 0x40000000u) | (be << 24) | (a & 0x00ffffffu)); dg(we ? (wd & m) : (rd & m)); } }
         }
         a_cyc = 0;
         // (accesses before the start: the stub's own, not compared)
@@ -338,11 +363,12 @@ int main(int argc, char **argv) {
       const uint32_t a = top->io_addr;
       if (top->io_we) {
         if (started) {
-          if (io_w >= io_wr.size()) { fail = true; why = "I/O write past MAME's log"; }
+          const bool inl = io_w < io_wr.size();
+          if (io_w >= io_wr.size()) { if (!end_at) { fail = true; why = "I/O write past MAME's log"; } }
           else {
             const Op &o = ops[io_wr[io_w++]];
             uint32_t bm = 0; for (int b = 0; b < 4; ++b) if (top->io_be & (1u << b)) bm |= 0xffu << (8 * b);
-            // R1010: on 2C MAME maps 0x804000-0x807fff (geo_prg) WITHOUT i960
+            // R1011: on 2C MAME maps 0x804000-0x807fff (geo_prg) WITHOUT i960
             // BURST, so a multi-word store repeats its address there; the RTL's
             // memmap steps it (the 2A map). The core decodes the whole window
             // as one push port, so only the data is compared there, and counted.
@@ -355,13 +381,14 @@ int main(int argc, char **argv) {
               if ((a & ~3u) == o.addr || geo) { if (n_iodiff++ < 12) std::printf("  I/O value differs: %s\n", buf); }
               else { fail = true; why = buf; }
             }
-            dg(0x10000000u | (a & 0x00ffffffu)); dg(top->io_wdata & bm);
+            if (inl) { dsel = 2; dg(0x10000000u | (a & 0x00ffffffu)); dg(top->io_wdata & bm); }
           }
         }
       } else {
         uint32_t v = 0xffffffff;
         if (started) {
-          if (io_r >= io_rd.size()) { fail = true; why = "I/O read past MAME's log"; }
+          const bool inl = io_r < io_rd.size();
+          if (io_r >= io_rd.size()) { if (!end_at) { fail = true; why = "I/O read past MAME's log"; } }
           else {
             const Op &o = ops[io_rd[io_r++]];
             if ((a & ~3u) != o.addr) {
@@ -371,7 +398,7 @@ int main(int argc, char **argv) {
             }
             v = o.data;
           }
-          dg(0x20000000u | (a & 0x00ffffffu));
+          if (inl) { dsel = 2; dg(0x20000000u | (a & 0x00ffffffu)); }
         }
         top->io_rdata = v;
       }
@@ -397,14 +424,14 @@ int main(int argc, char **argv) {
       }
       if (started) {
         const uint64_t j = acc - 1 - base_acc;   // this instruction's index
-        if (j >= NI) { break; }
+        if (j >= NI || end_at) { if (!end_at) end_at = cyc + 64; continue; }
         if (ip != ins[j].ip) {
           char buf[160]; std::snprintf(buf, sizeof buf, "PC: instruction %llu RTL %08x MAME %08x (prev %08x)",
                                        (unsigned long long)j, ip, ins[j].ip, j ? ins[j - 1].ip : 0);
           fail = true; why = buf; break;
         }
         if (trace && long(j) < trace) std::printf("  i %llu %08x cyc %llu\n", (unsigned long long)j, ip, (unsigned long long)cyc);
-        cur_ip = ip; k = j + 1; dg(ip);
+        cur_ip = ip; k = j + 1; dsel = 0; dg(ip);
         if (in_spin(ip)) { ++n_spin; ++f_nspin; } else { ++n_busy; ++f_n; const double dt = mame_dt(j); mame_busy += dt; f_mame += dt;
           if (R(u_cpu__DOT__d_len2)) ++n_len2; }
         // the next instruction is entered by an interrupt: raise its line now
@@ -429,7 +456,7 @@ int main(int argc, char **argv) {
             std::memset(c_ts, 0, sizeof c_ts); c_spin = c_all = n_busy = n_spin = 0; mame_busy = 0;
             std::memset(memw_rgn, 0, sizeof memw_rgn); std::memset(memn_rgn, 0, sizeof memn_rgn);
             std::memset(aw_n, 0, sizeof aw_n); std::memset(aw_c, 0, sizeof aw_c);
-            fw_fill = fw_hit = n_len2 = f2w_cyc = 0;
+            fw_fill = fw_hit = n_len2 = f2w_cyc = 0; ic_fills = ic_fill_cyc = ic_words = 0;
           }
           if (only_frame >= 0 && frames == only_frame + 1) { k = j; break; }
           std::memset(f_ts, 0, sizeof f_ts); f_cyc = f_spin = f_n = f_nspin = 0; f_mame = 0; f_first = j;
@@ -442,7 +469,8 @@ int main(int argc, char **argv) {
   std::printf("\n%s after %llu MAME instructions (%llu clk_i960 cycles); LSU %zu / %zu, I/O reads %zu / %zu, writes %zu / %zu\n",
               fail ? "FAIL" : "PASS", (unsigned long long)k, (unsigned long long)cyc, op_i, NO, io_r, io_rd.size(), io_w, io_wr.size());
   if (fail) std::printf("  %s\n", why.c_str());
-  std::printf("  digest %016llx; values that differ from MAME's: LSU %llu, I/O writes %llu\n", (unsigned long long)digest,
+  std::printf("  digests: instructions %016llx, LSU %016llx, I/O %016llx; values that differ from MAME's: LSU %llu, I/O writes %llu\n",
+              (unsigned long long)dgs[0], (unsigned long long)dgs[1], (unsigned long long)dgs[2],
               (unsigned long long)n_vdiff, (unsigned long long)n_iodiff);
   if (geo_step) std::printf("  %llu geo-window writes at a stepped address (MAME: the same address; data equal)\n", (unsigned long long)geo_step);
   const uint64_t cb = c_all - c_spin;
@@ -453,6 +481,9 @@ int main(int argc, char **argv) {
   for (int s = 0; s < 24; ++s) if (c_ts[s]) std::printf("  %-10s %10llu  %5.1f%%  %.3f\n", TSN[s], (unsigned long long)c_ts[s],
                                                       100.0 * c_ts[s] / cb, double(c_ts[s]) / n_busy);
   std::printf("  fetch wait: %llu cycles with the i-cache filling, %llu without\n", (unsigned long long)fw_fill, (unsigned long long)fw_hit);
+  std::printf("  i-cache: %llu fills (%.1f a 1000 busy instructions), %.1f cycles filling each, %llu bus words\n",
+              (unsigned long long)ic_fills, 1000.0 * ic_fills / (n_busy ? n_busy : 1), ic_fills ? double(ic_fill_cyc) / ic_fills : 0,
+              (unsigned long long)ic_words);
   std::printf("  two-word instructions %llu (%.1f%%), FETCH2_W %.2f cycles each\n", (unsigned long long)n_len2,
               100.0 * n_len2 / (n_busy ? n_busy : 1), n_len2 ? double(f2w_cyc) / n_len2 : 0);
   std::printf("LSU words (busy): region dir dcache  n  request-cycles-each\n");

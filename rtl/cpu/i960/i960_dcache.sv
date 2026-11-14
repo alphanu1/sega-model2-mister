@@ -58,7 +58,16 @@ module i960_dcache #(
   parameter bit          BOARD_2A = 1'b1,
   // The lockstep bench (sim/i960/tb_i960_top.cpp) runs its programs and data
   // below 0x10000: 1 caches everything below 0x800000 so it can see this.
-  parameter bit          TEST_ALL = 1'b0
+  parameter bit          TEST_ALL = 1'b0,
+  // R1011: AND THE TWO ROMS' READS -- program ROM (0x000000-0x1fffff) and the
+  // data ROM (0x2000000-0x3ffffff). Nothing writes them once the CPU runs:
+  // the loader fills them with the CPU in reset (and this cache sweeps at
+  // reset), and m2_cpu_bridge drops a CPU write to either (is_rom, MAME's
+  // .rom().nopw()) -- so a write there leaves a held word alone here too.
+  // STCC's race reads constants from program ROM (99 k a 0.6 s window, ~6.6
+  // cycles each through the bridge) and copies glyphs out of the data ROM a
+  // byte at a time. The tag widens to addr[25:IW+4]. 0: as R927.
+  parameter bit          ROMS     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -84,15 +93,20 @@ module i960_dcache #(
 );
 
   localparam int unsigned IW = $clog2(LINES);   // index bits
-  localparam int unsigned TW = 23 - IW - 4;     // tag: addr[22:IW+4] (cached space < 0x800000)
+  // tag: addr[22:IW+4] (cached space < 0x800000); R1011: addr[25:IW+4] with ROMS
+  localparam int unsigned AT = ROMS ? 26 : 23;
+  localparam int unsigned TW = AT - IW - 4;
 
   // ------------------------------------------------------------ what is cached
-  wire cacheable = (addr[31:23] == 9'd0) && (TEST_ALL ||
-                   (addr[22:20] == 3'h5) ||                                      // work RAM
-                    (BOARD_2A ? (addr[22:18] == 5'h08) : (addr[22:17] == 6'h10)));   // board RAM
+  wire ram_c = (addr[31:23] == 9'd0) && (TEST_ALL ||
+               (addr[22:20] == 3'h5) ||                                      // work RAM
+                (BOARD_2A ? (addr[22:18] == 5'h08) : (addr[22:17] == 6'h10)));   // board RAM
+  wire rom_c = ROMS && ((addr[31:21] == 11'd0) ||                          // program ROM
+                        (addr[31:25] == 7'd1));                            // data ROM
+  wire cacheable = ram_c || rom_c;
 
   wire [IW-1:0] idx  = addr[IW+3:4];
-  wire [TW-1:0] tagv = addr[22:IW+4];
+  wire [TW-1:0] tagv = addr[AT-1:IW+4];
   wire [1:0]    wsel = addr[3:2];
 
   // --------------------------------------------------------------- the tags
@@ -114,7 +128,7 @@ module i960_dcache #(
 
   // A read the bridge answered, or a write it accepted, on a cached address.
   wire fill = req && rd_ok && !we && cacheable && ack_x && !sweeping;
-  wire wupd = req && we && cacheable && ack_x && !sweeping && tmatch;
+  wire wupd = req && we && ram_c && ack_x && !sweeping && tmatch;   // R1011: never a ROM
 
   // --------------------------------------------------------------- the data
   wire  [IW+1:0] waddr = {idx, wsel};

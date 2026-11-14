@@ -1572,16 +1572,31 @@ int main(int argc, char **argv) {
       // the wrong address be overwritten before anyone looks, which is how the
       // stt defect survived "zero divergence" for so long.
       {
+        // R1011 (i960_top LSU_POST): a one-word store retires as its request
+        // goes out and may still be on the bus at this retire. Its bytes are
+        // what memory will hold, so they are laid over the bench's copy for
+        // this compare (merging them again after it landed changes nothing).
+        uint32_t pw_a = 0, pw_m = 0, pw_d = 0; bool pw = false;
+        if (dut->rootp->i960_top__DOT__u_lsu__DOT__post_q &&
+            dut->rootp->i960_top__DOT__lsu_breq && dut->rootp->i960_top__DOT__lsu_bwe) {
+          pw = true;
+          pw_a = dut->rootp->i960_top__DOT__lsu_baddr & ~3u;
+          const uint32_t be = dut->rootp->i960_top__DOT__lsu_bbe;
+          for (int b = 0; b < 4; ++b) if (be & (1u << b)) pw_m |= 0xffu << (8 * b);
+          pw_d = dut->rootp->i960_top__DOT__lsu_bwdata;
+          if (!mem.count(pw_a)) mem[pw_a] = 0xffffffffu;   // unwritten memory reads 0xFFFF
+        }
         bool bad = false;
         for (const auto &kv : mem) {
           if (kv.first < 0x800) continue;          // program, not data
           auto it = ref.rf.mem.find(kv.first);
           const uint32_t rv = (it == ref.rf.mem.end()) ? 0xffffffffu : it->second;
-          if (rv != kv.second) {
+          const uint32_t dv = (pw && kv.first == pw_a) ? ((kv.second & ~pw_m) | (pw_d & pw_m)) : kv.second;
+          if (rv != dv) {
             if (fails < MAX_REPORT)
               std::printf("  MEMSTATE retire %llu  %08x dut=%08x ref=%08x"
                           "  (insn %08x)\n", (unsigned long long)r,
-                          kv.first, kv.second, rv, exec_insn);
+                          kv.first, dv, rv, exec_insn);
             bad = true; break;
           }
         }

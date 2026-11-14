@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1
 #
-# R1010: MAME's access log after a checkpoint (tools/mame_i960_ck.lua) ->
+# R1011: MAME's access log after a checkpoint (tools/mame_i960_ck.lua) ->
 # what tb_i960_ck replays and compares.
 #
 #   ck_prep.py <ckdir> [--c2 0|1] [--icr HEX]

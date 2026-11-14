@@ -506,7 +506,8 @@ obj_i960_icache/Vi960_icache: $(ICA_RTL) $(TB)/tb_i960_icache.cpp
 # both, HUF alone, and R815's (neither). Directories are obj_ic17_LINES_HUF_ER. +huf / +er turn on the efficiency
 # checks that only hold with the option. BUS_MAX of 0 is the old bench's
 # same-cycle memory; 40 is past the bridge's SDRAM round trip.
-IC17_CFGS := 512_1_1 32_1_1 512_1_0 512_0_0
+# R1011: a fourth field, i960_icache PAIR (the word after with every answer).
+IC17_CFGS := 512_1_1_1 32_1_1_1 512_1_0_1 512_0_0_1 512_1_1_0
 test_i960_icache_r817: $(foreach c,$(IC17_CFGS),obj_ic17_$(c)/Vi960_icache)
 	@echo "== test i960_icache_r817 (slow bus, a requester that does not wait)"
 	@set -e; for c in $(IC17_CFGS); do \
@@ -518,7 +519,7 @@ test_i960_icache_r817: $(foreach c,$(IC17_CFGS),obj_ic17_$(c)/Vi960_icache)
 obj_ic17_%/Vi960_icache: $(ICA_RTL) $(TB)/tb_i960_icache_r817.cpp
 	$(VBUILD) --top-module i960_icache -CFLAGS "-O2" \
 	  -GLINES=$(word 1,$(subst _, ,$*)) -GHUF=$(word 2,$(subst _, ,$*)) \
-	  -GER=$(word 3,$(subst _, ,$*)) \
+	  -GER=$(word 3,$(subst _, ,$*)) -GPAIR=$(word 4,$(subst _, ,$*)) \
 	  --Mdir obj_ic17_$* -o Vi960_icache $(ICA_RTL) $(TB)/tb_i960_icache_r817.cpp
 
 test_i960_muldiv: obj_i960_muldiv/Vi960_muldiv
@@ -941,13 +942,22 @@ obj_i960_top_ring/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i9
 # R927: i960_dcache alone against a flat memory (transparency), byte lanes
 # (4 KB) and the one-array form (1 KB and 256 B), bus latency 0..4 and 0..40.
 .PHONY: test_i960_dcache
-test_i960_dcache: obj_i960_dc_l/Vi960_dcache obj_i960_dc_w/Vi960_dcache obj_i960_dc_w16/Vi960_dcache
+test_i960_dcache: obj_i960_dc_l/Vi960_dcache obj_i960_dc_w/Vi960_dcache obj_i960_dc_w16/Vi960_dcache \
+                  obj_i960_dc_wr/Vi960_dcache obj_i960_dc_lr/Vi960_dcache
 	@echo "== test i960_dcache (R927)"
 	./obj_i960_dc_l/Vi960_dcache $(TEST_ARGS)
 	./obj_i960_dc_l/Vi960_dcache +lat=40 +ops=50000 +seed=3
 	./obj_i960_dc_w/Vi960_dcache $(TEST_ARGS)
 	./obj_i960_dc_w/Vi960_dcache +lat=40 +ops=50000 +seed=3
 	./obj_i960_dc_w16/Vi960_dcache +lat=0 +seed=5
+	@echo "== test i960_dcache ROMS (R1011: the program and data ROMs' reads too; their writes dropped)"
+	./obj_i960_dc_wr/Vi960_dcache $(TEST_ARGS)
+	./obj_i960_dc_wr/Vi960_dcache +lat=40 +ops=50000 +seed=3
+	./obj_i960_dc_lr/Vi960_dcache +lat=7 +seed=9
+obj_i960_dc_wr/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
+	$(VBUILD) --top-module i960_dcache -GLINES=64 -GLANES=0 -GROMS=1 -CFLAGS "-O2 -DROMS_BENCH=1" --Mdir obj_i960_dc_wr -o Vi960_dcache $^
+obj_i960_dc_lr/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
+	$(VBUILD) --top-module i960_dcache -GLINES=256 -GLANES=1 -GROMS=1 -CFLAGS "-O2 -DROMS_BENCH=1" --Mdir obj_i960_dc_lr -o Vi960_dcache $^
 obj_i960_dc_l/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
 	$(VBUILD) --top-module i960_dcache -GLINES=256 -GLANES=1 -CFLAGS "-O2" --Mdir obj_i960_dc_l -o Vi960_dcache $^
 obj_i960_dc_w/Vi960_dcache: $(I960)/i960_dcache.sv $(TB)/tb_i960_dcache.cpp
@@ -1236,7 +1246,7 @@ $(RP_OBJ)/Vm2_ifetch_replay_harness: $(ICA_RTL) rtl/io/m2_cpu_bridge.sv rtl/mem/
 	  sim/mem/sdram_model.sv sim/mem/m2_cpu_sdram_harness.sv sim/mem/m2_ifetch_replay_harness.sv \
 	  sim/mem/tb_m2_ifetch_replay.cpp
 
-# R1010: THE i960 FROM A MAME CHECKPOINT (sim/i960ck). i960_top as Model2.sv
+# R1011: THE i960 FROM A MAME CHECKPOINT (sim/i960ck). i960_top as Model2.sv
 # builds it for 2C (the ring of eight, the 1 KB data cache, VC / FR / F2A / C2)
 # on the real bridge, started inside a game's race from MAME's state and
 # checked against MAME's instruction and load / store stream; the profile is
