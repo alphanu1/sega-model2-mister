@@ -48951,3 +48951,167 @@ music than MAME -- at its default 0 it is MAME's mix.
     shows STCC makes one; not changed here.
   * The board hears the link's B side, so a slow SCSP acknowledge would delay
     its bytes too (R979's wiring); MAME's UART feeds both independently.
+
+**R1007 -- STCC'S SOUND BOARD SHRUNK, SAMPLE-IDENTICAL: m2_dsb_2c 1,759 ->
+1,402 ALUT AND 1,106 -> 897 REGISTERS, +5 M10K (branch dsb-shrink, from
+2c-mpeg 6f1fc392; quartus_map of the whole 2C core only -- NOT FITTED, NOT ON
+THE BOARD).** With the board in, 2C fitted at 41,311-41,546 / 41,910 ALM and
+most seeds failed placement ("4196 LABs, device has 4191"); the board costs
+~1,890 ALM fitted, M10K is not short (~94 free). The ask: spend M10K, save
+ALUTs and registers, every sample the same.
+
+*Believed (going in):* 700-1,000 ALM could come out -- the decoder has ~28x
+more clocks than it uses (2,500 a stereo sample at 80 MHz), so serialising it
+and moving its state into M10K would pay, and the Z80's register file would
+go to M10K.
+
+*Found -- the Z80's registers were the one big block.* dsb_z80 now keeps BC DE
+HL (both banks), PC, SP, IY and TMP as rows of a 16 x 16 register file, one
+M10K per byte lane, each true dual-port: port A reads a micro-op's address
+base and writes its 16-bit result, port B reads its one other register and
+writes its one byte. gen_z80_ucode.py works out port B's row (rb), the store
+source and the byte written from the unchanged instruction list and asserts
+no micro-op needs two things from one port (the 40-bit word still fits one
+M10K). A micro-op takes two clocks (read, execute) and a fetch three (PC is a
+row, incremented through the address adder); nothing outside sees it, because
+the T-state accounting (`ahead`) never counted clocks. EXX is a bank bit; the
+reset values (0, SP ffff) are written by a 16-clock S_CLR through the address
+adder itself (RST's base is 0 while IR is 0). 634 -> 427 ALUT, 307 -> 132
+registers, +2 M10K (standalone map); then INC / DEC through the group adder
+(the 8-bit add the ALU already has: 00 + Y + 1, ff + Y; -17), the reset mux
+removed (-11), the T-state step and the interrupt test as one add each (-4),
+the IM 1 vector by a flag instead of loading IR with ff (within the map's
+noise). Whole core: 635 -> 389 ALUT.
+
+*Found -- the decoder is a long tail, and the obvious table misleads.*
+quartus_map's "Multiplexer Restructuring Statistics" listed gb_v as a 20:1 x
+16 mux (208 LEs) -- before restructuring; after, 0 (the clears became register
+sync-clears). Cutting it out of the RTL (the bit reader as a mode) saved 28,
+not 200. The real attribution came from the post-map netlist (quartus_eda
+--functional on a standalone map of m2_dsb_2c, LUT cells grouped by the signal
+they are named after): no block of the decoder is over ~30 cells except the
+one-hot state register (63); the rest is ~330 of arithmetic that has to exist
+and ~250 of register-input selectors. What paid (standalone, decoder ALUT):
+  * the bit reader as a mode (gb_act) with one bit-take path, no `ret` / `wnext`
+    state registers, gb_v cleared by its first shift: 939 -> 911;
+  * the 32 kHz tick as a mod-2,500 count when TICK_NUM divides TICK_DEN (the
+    same tick on the same clock; the board's T clock likewise): -11, glue -6;
+  * the synthesis's signs in the tables: cos stored for all 128 k (k >= 64
+    negated, exact at this rounding), window entries with i mod 64 >= 16
+    negated (exactly the subtracted terms) -- the MAC never negates an operand:
+    -25. R979's TBL_PACK form (which needed the negation) is retired with
+    tools/dsb/gen_tables_pack.py; the benches un-fold the window for the model;
+  * the frame limit from one 25-bit subtract, e = lim - rd_pos[26:3], every
+    test on e and b = rd_pos[2:0], instead of a second 28-bit counter (remb)
+    loaded by a 28-bit subtract of its own: -24. It costs one clock per frame
+    start (S_START2: the < 16 check waits for rd_pos and lim to load);
+  * 12 x a granule's bits per class from misc[224..241], read during
+    allocation and added two clocks later: -3;
+  * the side information in four lanes (class+scfsi, scf0, scf1, scf2), each
+    scale factor written into its fields as it is read: -10, -8 registers,
+    +3 M10K;
+  * dsb_board's preload word kept in the cache's word register: -16 registers.
+  Decoder 935 -> 829 ALUT, 570 -> 551 registers (whole core).
+
+*Wrong first (kept here because each looked right):*
+  * remb as lim*8 - rd_pos with start_rem kept: +4 (a counter with a load is
+    cheap in Quartus); it only paid once start_rem went too;
+  * the pan / volume product registered "in the DSP's output register" to drop
+    m2_dsb_2c's 32 board-side registers: the registers did not pack into the
+    DSP (+32 in dsb_mpeg, -32 in the wrapper, +5 ALUT). Reverted;
+  * the on-chip block's code window indexed by the address's low 10 bits (no
+    subtract): +4 -- Quartus had already reduced the constant subtract;
+  * CPL and CP through the adder too: +13 and +19 (the extra selects cost more
+    than the mux inputs they removed);
+  * the four lanes written as a generate loop: Quartus 17.0 dropped the
+    ramstyle (RAM summary "AUTO", likely MLAB in the fitter) and left the read
+    registers in flops -- R1004's FIFO failure again. Written out as four
+    arrays they are M10K with their read registers packed. Every map since
+    checks the DSB's RAM types;
+  * synthesis settings: SYNTH_TIMING_DRIVEN_SYNTHESIS off changes nothing;
+    one-hot (the default) is the smallest state encoding (minimal bits +65);
+  * a bench script edited while it ran (bash reads as it goes) broke that run's
+    summary, not its results; benches now run from snapshots of the RTL.
+
+*Measured.* quartus_map (17.0), the whole 2C core, against 6f1fc392's map
+(reproduced exactly: 40,460 ALM estimated, m2_dsb_2c 1,759 / 1,106):
+
+                         6f1fc392          dsb-shrink
+    m2_dsb_2c            1,759 / 1,106     1,402 / 897     (ALUT / registers)
+      dsb_mpeg             935 / 570         829 / 551
+      dsb_z80              635 / 306         389 / 132
+      dsb_board (glue)     141 / 117         136 / 101
+      m2_i8251, wrapper    9 / 14, 39 / 99   unchanged
+    M10K (by shape)      11                16  (Z80 registers 2, lanes +3)
+    DSP                  3                 3   (core 110 / 112)
+    core ALM estimate    40,460            40,202  (-258)
+  The estimate is not linear in ALUT: at 1,469 ALUT it read 40,216, and the
+  last 67 ALUT moved it 14 (R1004: ~±95 of scatter). The fit is what counts.
+
+*Benched (final form; benches from snapshots, memory [1, LAT], unwritten
+0xFFFF everywhere; the Z80's register file starts 0xFF until S_CLR):*
+  * Decoder (tb_dsb_mpeg, bit-exact against dsb_fixmodel.h): STCC 120,588
+    samples, 119,335 outputs, 0 fails at LAT 1 / 20 / 40 / 400; Star Wars
+    105,764 / 104,607, 0 fails at 1 / 40 / 400 -- R1004's counts.
+  * Z80 (tb_dsb_z80 against tv80s, MAME's 300 s capture): 2,567,924 accesses
+    equal in order, value and T-state, 27,912 / 27,912 interrupts, 27,913
+    bytes, 0 traps, fetch 0000-0601, lowest SP fff8 -- R1004's count.
+  * Board (tb_dsb_board): 20 s at LAT 1 and 40 and 60 s at LAT 40: every
+    count R1004's (UART 79 / 97, controls 38 / 57, volume 9 / 91, 110,272 /
+    1,250,272 samples, 110,237 / 1,250,179 outputs, 27,375 / 309,441 position
+    reads), and with the new dump (DSB_DUMP, tools/dsb/dsb_dumpcmp.py) the
+    outputs equal 6f1fc392's TICK FOR TICK (639,999 and 1,919,999 ticks);
+    the control writes' times against MAME equal to 0.1 us. 32 / 64 / 128 of
+    the decoded samples come on another clock (the Z80's SDRAM accesses
+    interleave differently with the decoder's), all inside the FIFO.
+    LAT 400: 0 fails, every sample equal in value and order, but 110,228
+    outputs, not 110,229: the one song start lands ONE TICK (31 us) LATER.
+    The boot's RAM test runs through SDRAM, so at LAT 400 it is memory-bound,
+    and with two-clock micro-ops it ends up to 790 ms late (6f1fc392: 761 ms).
+    By 12 s both are back within ~20 us of MAME, but the music-start burst at
+    16.5547 s runs from code outside the on-chip window, and at LAT 400 the
+    core falls behind real time inside it: the play write (e0=02) lands
+    +57.7 us after MAME on 6f1fc392 and +80.2 us here (DSB_SHOWT=0) -- the
+    extra clock per micro-op and two per fetch -- and that moves the first
+    output across one tick. At LAT 1 and 40 the core never falls behind and
+    every time is equal; the real port is far below 400.
+  * The mix (tb_m2_dsb_2c, 20 s) at LAT 40 and 400: 0 fails, 1.6 G cycles,
+    95 frames; the other games' phases equal to the SCSP, 0 requests.
+  * Lint: lint_top clean with M2_2C_DSB; lint_idx 98 lines, none in the DSB.
+
+*Planted faults (one per changed block, each in a copy of the tree):* caught --
+Z80: EXX bank ignored, port B's PC row read as SP, PC reset to 1, the IM 1
+vector without its flag, DEC by 2, every instruction 1 T long (all by
+tb_dsb_z80 in 20 s); decoder: gb_v not cleared, cos with the old 64 entries,
+rem_le0 one byte late, S_CHECK without b, the g12 read from the C rows, one
+lane enable (all by tb_dsb_mpeg); board: the preload's bytes swapped. Not
+caught, and why:
+  * port B's TMP row read as IY: equivalent -- the only micro-ops reading TMP
+    on port B are PUSH IY's, right after TMP <- IY;
+  * the < 16 start check's e = 2, b > 0 edge, and the scan's >= limit + 3 edge
+    (b >= 2): no song in the decoder bench starts a frame or scans within those
+    few bits of the end address -- R1004's remb forms had the same edges,
+    equally unexercised. tools/dsb/check_limit_tests.py now proves the new
+    tests equal the old ones on 7,544,898 cases (every rd_pos within 2^16 bits
+    of the limit, every g12 edge) and catches both planted edges (7 and 1);
+  * the 32 kHz period one clock short (2,499): 0 fails -- the board bench
+    paired each output with the next sample and never looked at the rate (and
+    the decoder bench runs Model 1's fractional tick, never this count). Only
+    the counts and the dump showed it. tb_dsb_board now asserts the strobe
+    period where the clock divides evenly; it flags all 640,255 strobes.
+
+*Not settled:*
+  * The fit. By proportion (-20% of the board's ALUT and -19% of its
+    registers against ~1,890 fitted ALM) roughly -350 to -400 ALM fitted --
+    short of the 700-1,000 asked. Not measured.
+  * What is left is the decoder's control (the state register and ~250 of
+    selectors). A microcoded sequencer would keep every clock but was judged
+    -50 to -100 for a rewrite of all 35 states; not attempted. The position
+    registers (mp_start / mp_end / lp_start / lp_end, st_r / en_r) are worth
+    41 ALUT, 88 registers and 38 estimated ALM by ablation, but in an M10K
+    their write-data and port-conflict logic nets ~0 ALUT for ~-90 registers;
+    not done.
+  * LAT 400's one-tick start, above. A faster Z80 boot (all of 0000-0601 on
+    chip) would remove it but moves every Z80 time by the longer preload.
+  * On the board: s2441 (6f1fc392's form) plays STCC's music; this form has
+    not been built or loaded.
