@@ -295,7 +295,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 //   retired by R1007: the tables now carry the synthesis's signs)
 //   DSB_UROM_LOGIC=1      the Z80's microcode in LUTs (one M10K back)
 //   DSB_UENT_LOGIC=1      the Z80's opcode dispatch in LUTs (one M10K back)
-// all 0 / undefined by default: 11 M10K, the fewest ALM.
+// all 0 / undefined by default: the fewest ALM. R1007: 16 M10K by shape (the
+// Z80's registers in two, dsb_mpeg's side information in four lanes).
 `ifndef M2_2C_DSB_LEAN
 `define M2_2C_DSB_LEAN 0
 `endif

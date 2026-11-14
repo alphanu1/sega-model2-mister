@@ -185,11 +185,14 @@ module dsb_board #(
   logic  [7:0] chip_q;
   logic  [9:0] pre_i;                // byte index of the copy
   logic        pre_we, pre_hi;
-  logic [15:0] pre_d;
   logic        z_ack_r;
+  logic [15:0] c_word;
   wire         chip_we = pre_we || (z_req && z_we && (z_var || z_stk) && !z_ack_r && pre_done);
   wire   [9:0] chip_wa = pre_we ? pre_i : z_idx;
-  wire   [7:0] chip_wd = pre_we ? (pre_hi ? pre_d[15:8] : pre_d[7:0]) : z_wdata;
+  // R1007: the preload's word waits in the cache's word register (it was a
+  // register of its own): the cache is not valid, and nothing reads it, until
+  // the copy is done and the Z80 is out of reset
+  wire   [7:0] chip_wd = pre_we ? (pre_hi ? c_word[15:8] : c_word[7:0]) : z_wdata;
   always_ff @(posedge clk) begin
     if (chip_we) chip[chip_wa] <= chip_wd;
     chip_q <= chip[z_idx];
@@ -199,7 +202,6 @@ module dsb_board #(
   // straight through and update it.
   logic        c_valid;
   logic [15:1] c_tag;
-  logic [15:0] c_word;
   wire         c_hit = c_valid && (c_tag == z_addr[15:1]);
 
   typedef enum logic [1:0] {M_IDLE, M_Z, M_MP, M_PRE} mown_t;
@@ -212,7 +214,7 @@ module dsb_board #(
     if (!rst_n) begin
       own <= M_PRE; s_req <= 1'b0; s_we <= 1'b0; s_addr <= '0; s_din <= '0; s_be <= '0;
       c_valid <= 1'b0; c_tag <= '0; c_word <= '0; z_ack_r <= 1'b0; mp_ack <= 1'b0;
-      z_src <= 1'b0; pre_done <= 1'b0; pre_i <= '0; pre_we <= 1'b0; pre_hi <= 1'b0; pre_d <= '0;
+      z_src <= 1'b0; pre_done <= 1'b0; pre_i <= '0; pre_we <= 1'b0; pre_hi <= 1'b0;
     end else begin
       z_ack_r <= 1'b0; mp_ack <= 1'b0; pre_we <= 1'b0;
 
@@ -248,7 +250,7 @@ module dsb_board #(
         M_Z: if (s_ack) begin
           s_req <= 1'b0;
           if (!pre_done) begin
-            pre_we <= 1'b1; pre_hi <= 1'b0; pre_d <= s_dout;
+            pre_we <= 1'b1; pre_hi <= 1'b0; c_word <= s_dout;
             own <= M_PRE;
           end else begin
             own <= M_IDLE; z_ack_r <= 1'b1; z_src <= 1'b0;

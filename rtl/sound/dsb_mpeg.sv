@@ -29,9 +29,11 @@
 //   - ONE multiplier (a DSP) and one 48-bit accumulator do every product:
 //     requantisation (two per value), the 32-point matrixing and the window;
 //   - the tables live in M10K: the window (512 x 18) in one, cos / scale
-//     factor / requantisation constants and the 64-sample output FIFO in a
-//     second, the side information and one granule's samples in a third, and
-//     the 2 x 512 synthesis history in three (1,024 x 24).
+//     factor / requantisation constants / bits per granule in a second, the
+//     64-sample output FIFO in two, the side information and one granule's
+//     samples in four lanes (R1007), and the 2 x 512 synthesis history in
+//     three (1,024 x 24).
+// (On Model 2C clk is clk_sys, 80 MHz: 2,500 cycles a stereo sample.)
 //
 // MAME's control flow, reproduced because it decides WHICH samples play:
 //   - the sync scan is bit by bit, and resumes from where a frame's DATA
@@ -120,6 +122,7 @@ module dsb_mpeg #(
   logic  [7:0] misc_a;  logic [24:0] misc_q;
   logic [1:0][15:0] fifo_q;
   logic  [7:0] wram_a;  logic [24:0] wram_q, wram_d;  logic wram_we;
+  logic  [3:0] wram_be;             // lanes: [3] {class, scfsi}, [2] scf0, [1] scf1, [0] scf2
   logic  [9:0] vram_a;  logic [23:0] vram_q;  wire vram_we;
   wire fifo_we_l, fifo_we_r;
 
@@ -163,30 +166,67 @@ module dsb_mpeg #(
   end endgenerate
 
   // ---- side information at t = 3 ({class, scfsi, scf0, scf1, scf2}) and one
-  // granule's requantised samples at t = 0..2, addressed {ch, t, sb}
+  // granule's requantised samples at t = 0..2, addressed {ch, t, sb}.
+  // R1007: in four lanes, one RAM each -- [24:18] {class, scfsi}, [17:12]
+  // scf0, [11:6] scf1, [5:0] scf2 -- so each scale factor is written into its
+  // field(s) as it is read (S_SCF_G), not assembled in registers and written
+  // whole. A sample writes all four (its 24 bits span them).
+  // (Four arrays written out, not a generate loop: in a loop Quartus 17.0
+  // dropped the ramstyle -- RAM summary "AUTO" -- and left the read registers
+  // in flops, as R1004 found for the FIFO.)
   generate if (!WRAM_MLAB) begin : g_wram
-    (* ramstyle = "M10K" *) logic [24:0] wram [256];
+    (* ramstyle = "M10K" *) logic [6:0] wl3 [256];
+    (* ramstyle = "M10K" *) logic [5:0] wl2 [256];
+    (* ramstyle = "M10K" *) logic [5:0] wl1 [256];
+    (* ramstyle = "M10K" *) logic [5:0] wl0 [256];
     always_ff @(posedge clk) begin
-      if (wram_we) wram[wram_a] <= wram_d;
-      wram_q <= wram[wram_a];
+      if (wram_we && wram_be[3]) wl3[wram_a] <= wram_d[24:18];
+      wram_q[24:18] <= wl3[wram_a];
+    end
+    always_ff @(posedge clk) begin
+      if (wram_we && wram_be[2]) wl2[wram_a] <= wram_d[17:12];
+      wram_q[17:12] <= wl2[wram_a];
+    end
+    always_ff @(posedge clk) begin
+      if (wram_we && wram_be[1]) wl1[wram_a] <= wram_d[11:6];
+      wram_q[11:6] <= wl1[wram_a];
+    end
+    always_ff @(posedge clk) begin
+      if (wram_we && wram_be[0]) wl0[wram_a] <= wram_d[5:0];
+      wram_q[5:0] <= wl0[wram_a];
     end
   end else begin : g_wramm
     // no_rw_check: the read in the cycle of a write is never used. Every write
-    // (S_ALLOC, S_SFSI_W, S_SCF_W, S_GR_Z, S_RQ2W) is followed by a state
+    // (S_ALLOC, S_SFSI_W, S_SCF_G, S_GR_Z, S_RQ2W) is followed by a state
     // that sets a new wram_a and a w1 wait, or by more writes, before
     // wram_q is consumed; matrixing (S_ID_RUN) reads and never writes.
     // Without it Quartus 17.0 keeps the RTL's old-data read by building the
-    // array in 6,400 registers (measured, R979).
-    (* ramstyle = "MLAB, no_rw_check" *) logic [24:0] wram [256];
+    // array in registers (measured, R979).
+    (* ramstyle = "MLAB, no_rw_check" *) logic [6:0] wl3 [256];
+    (* ramstyle = "MLAB, no_rw_check" *) logic [5:0] wl2 [256];
+    (* ramstyle = "MLAB, no_rw_check" *) logic [5:0] wl1 [256];
+    (* ramstyle = "MLAB, no_rw_check" *) logic [5:0] wl0 [256];
     always_ff @(posedge clk) begin
-      if (wram_we) wram[wram_a] <= wram_d;
-      wram_q <= wram[wram_a];
+      if (wram_we && wram_be[3]) wl3[wram_a] <= wram_d[24:18];
+      wram_q[24:18] <= wl3[wram_a];
+    end
+    always_ff @(posedge clk) begin
+      if (wram_we && wram_be[2]) wl2[wram_a] <= wram_d[17:12];
+      wram_q[17:12] <= wl2[wram_a];
+    end
+    always_ff @(posedge clk) begin
+      if (wram_we && wram_be[1]) wl1[wram_a] <= wram_d[11:6];
+      wram_q[11:6] <= wl1[wram_a];
+    end
+    always_ff @(posedge clk) begin
+      if (wram_we && wram_be[0]) wl0[wram_a] <= wram_d[5:0];
+      wram_q[5:0] <= wl0[wram_a];
     end
   end endgenerate
 `ifdef DSB_TRACE
   always_ff @(posedge clk) begin
     if (vram_we) $display("V %0d %0d %0d", vram_a[9], vram_a[8:0], $signed(v_sat));
-    if (wram_we && wram_a[6:5] == 2'd3) $display("P %0d %0d %0d %0d %0d %0d %0d", wram_a[7], wram_a[4:0], wram_d[24:20], wram_d[19:18], wram_d[17:12], wram_d[11:6], wram_d[5:0]);
+    if (wram_we && wram_a[6:5] == 2'd3) $display("P %0d %0d be %b %0d %0d %0d %0d %0d", wram_a[7], wram_a[4:0], wram_be, wram_d[24:20], wram_d[19:18], wram_d[17:12], wram_d[11:6], wram_d[5:0]);
     if (wram_we && wram_a[6:5] != 2'd3) $display("S %0d %0d %0d %0d", wram_a[7], wram_a[6:5], wram_a[4:0], $signed(wram_d[23:0]));
   end
 `endif
@@ -337,7 +377,6 @@ module dsb_mpeg #(
   logic        g12_p, g12_q;       // misc[224 + class] read for S_ALLOC, two clocks on
   logic [24:0] prm;                // the side-information word being built
   logic  [1:0] fld;                // scale-factor field counter
-  logic  [5:0] f0, f1;
   logic  [9:0] code;               // a grouped code, then its quotient
   logic  [3:0] rem;
   logic  [3:0] dcnt;               // restoring division, quotient shifts into `code`
@@ -516,9 +555,11 @@ module dsb_mpeg #(
 
         // ---- allocation: sb 0..26, ch 0..1
         S_ALLOC: begin
-          wram_we <= 1'b1;
+          // the class (its scfsi and scale factors are written for an allocated
+          // subband only, and read for one only)
+          wram_we <= 1'b1; wram_be <= 4'b1000;
           wram_a  <= {ch, 2'd3, sb};
-          wram_d  <= {cls(sb, idx_m), 20'd0};
+          wram_d[24:18] <= {cls(sb, idx_m), gb_v[1:0]};
           misc_a  <= {3'b111, cls(sb, idx_m)};          // 12 x its granule's bits
           g12_p   <= 1'b1;
           if (ch) begin
@@ -539,7 +580,7 @@ module dsb_mpeg #(
         end
         S_SFSI_W: begin
           if (prm[24:20] != 5'd0) begin
-            wram_we <= 1'b1; wram_d <= {prm[24:20], gb_v[1:0], 18'd0};
+            wram_we <= 1'b1; wram_be <= 4'b1000; wram_d[24:18] <= {prm[24:20], gb_v[1:0]};
           end
           if (ch) begin
             ch <= 1'b0;
@@ -555,9 +596,18 @@ module dsb_mpeg #(
           else st <= S_SCF_W;
         end
         S_SCF_G: begin
-          // fields per scfsi: 0 -> 3, 1 -> 2, 2 -> 1, 3 -> 2
-          if (fld == 2'd0) f0 <= gb_v[5:0];
-          if (fld == 2'd1) f1 <= gb_v[5:0];
+          // fields per scfsi: 0 -> 3, 1 -> 2, 2 -> 1, 3 -> 2. Each is written as
+          // read, into the scale factors it stands for: scfsi 0 one each;
+          // 1: the first to scf0 and scf1, the second to scf2; 2: the one to
+          // all three; 3: the first to scf0, the second to scf1 and scf2.
+          wram_we <= 1'b1;
+          wram_d[17:0] <= {3{gb_v[5:0]}};
+          case (prm[19:18])
+            2'd0: wram_be <= (fld == 2'd0) ? 4'b0100 : (fld == 2'd1) ? 4'b0010 : 4'b0001;
+            2'd1: wram_be <= (fld == 2'd0) ? 4'b0110 : 4'b0001;
+            2'd2: wram_be <= 4'b0111;
+            2'd3: wram_be <= (fld == 2'd0) ? 4'b0100 : 4'b0011;
+          endcase
           if ((prm[19:18] == 2'd2) ||
               (prm[19:18] != 2'd0 && fld == 2'd1) || (fld == 2'd2)) begin
             st <= S_SCF_W;
@@ -566,15 +616,6 @@ module dsb_mpeg #(
           end
         end
         S_SCF_W: begin
-          if (prm[24:20] != 5'd0) begin
-            wram_we <= 1'b1;
-            case (prm[19:18])
-              2'd0: wram_d <= {prm[24:18], f0, f1, gb_v[5:0]};
-              2'd1: wram_d <= {prm[24:18], f0, f0, gb_v[5:0]};
-              2'd2: wram_d <= {prm[24:18], gb_v[5:0], gb_v[5:0], gb_v[5:0]};
-              2'd3: wram_d <= {prm[24:18], f0, gb_v[5:0], gb_v[5:0]};
-            endcase
-          end
           if (ch) begin
             ch <= 1'b0;
             if (sb == 5'd26) begin sb <= 5'd0; st <= S_CHECK; end
@@ -610,7 +651,7 @@ module dsb_mpeg #(
           end
         end
         S_GR_Z: begin
-          wram_we <= 1'b1; wram_a <= {ch, t, sb}; wram_d <= '0;
+          wram_we <= 1'b1; wram_be <= 4'b1111; wram_a <= {ch, t, sb}; wram_d <= '0;
           if (t == 2'd2) st <= S_NEXT; else t <= t + 2'd1;
         end
         S_GR_V: begin
@@ -650,7 +691,7 @@ module dsb_mpeg #(
         end
         S_RQ2W: if (!mac_busy) begin
           // S = (p1 x scf) >> 24
-          wram_we <= 1'b1; wram_a <= {ch, t, sb}; wram_d <= {1'b0, acc[47:24]};
+          wram_we <= 1'b1; wram_be <= 4'b1111; wram_a <= {ch, t, sb}; wram_d <= {1'b0, acc[47:24]};
           if (t == 2'd2) st <= S_NEXT;
           else begin
             t <= t + 2'd1;
