@@ -107,6 +107,7 @@ module dsb_z80 (
   logic        iff1, ei_blk;
   logic [11:0] irq_age;              // ticks INT has been high (saturating)
   logic [3:0]  clr;                  // S_CLR's row
+  logic        intm;                 // in the IM 1 sequence: RST's vector is 38
 
   // S_FETCH 0 and S_FWAIT 1 are read by the bench (dsb_z80_harness)
   typedef enum logic [3:0] {S_FETCH = 4'd0, S_FWAIT = 4'd1, S_DISP = 4'd2, S_RA = 4'd3,
@@ -185,11 +186,16 @@ module dsb_z80 (
 
   // ---------------------------------------------------------------- AGU
   // sbc hl,de is HL + ~DE + !C through the same adder. S_FADR is the fetch's
-  // PC + 1 through it.
+  // PC + 1 through it, and S_CLR's reset values are 0 + 0 and 0 + ffff (SP):
+  // RST's base, {IR[5:3], 000}, is 0 there, IR being 0 from reset to the
+  // first fetch.
   wire        fadr  = (st == S_FADR);
-  wire        sbc16 = !fadr && (f_alu == A_SBC16);
-  wire  [2:0] aoff  = fadr ? 3'd1 : f_aoff;
-  wire [15:0] abase = (!fadr && f_asrc == 3'd7) ? {10'd0, IR[5:3], 3'd0} : qa;   // RST / IM 1
+  wire        clr_s = (st == S_CLR);
+  wire        sbc16 = !fadr && !clr_s && (f_alu == A_SBC16);
+  wire  [2:0] aoff  = fadr ? 3'd1 : clr_s ? ((clr == RF_SP) ? 3'd2 : 3'd0) : f_aoff;
+  // (the IM 1 interrupt's vector is RST 38's: IR[5:3] forced to 7 by intm,
+  // where the core used to load IR with ff)
+  wire [15:0] abase = ((!fadr && f_asrc == 3'd7) || clr_s) ? {10'd0, IR[5:3] | {3{intm}}, 3'd0} : qa;   // RST / IM 1
   logic [15:0] aoffv;
   always_comb begin
     case (aoff)
@@ -330,8 +336,8 @@ module dsb_z80 (
     // port A: the fetch's PC, S_FADR's PC + 1, a micro-op's base and its awb
     we_a = 1'b0; wd_a = asum[15:0];
     pa   = (st == S_FETCH || st == S_PFX) ? RF_PC : row(f_asrc, xb);
-    if (st == S_CLR) begin
-      we_a = 1'b1; pa = clr; wd_a = (clr == RF_SP) ? 16'hffff : 16'h0000;
+    if (clr_s) begin
+      we_a = 1'b1; pa = clr;
     end else if (fadr) begin
       we_a = 1'b1; pa = RF_PC;
     end else if (u_done && f_awb != 3'd7) begin
@@ -349,7 +355,7 @@ module dsb_z80 (
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      A <= 8'hff; Ax <= 8'h00; xb <= 1'b0; clr <= '0;
+      A <= 8'hff; Ax <= 8'h00; xb <= 1'b0; clr <= '0; intm <= 1'b0;
       fS <= 1'b1; fZ <= 1'b1; fC <= 1'b1; xS <= 1'b0; xZ <= 1'b0; xC <= 1'b0;
       IR <= '0; dat <= '0; pfx <= '0;
       ahead <= '0; st <= S_CLR; upc <= '0; iff1 <= 1'b0; ei_blk <= 1'b0; irq_age <= '0;
@@ -372,9 +378,9 @@ module dsb_z80 (
         // PC is read here (port A), issued and incremented in S_FADR
         S_FETCH: if (int_take) begin
           // IM 1: RST 38 with the interrupt's T-states (micro-op U_INT)
-          iff1 <= 1'b0; IR <= 8'hff; st <= S_RA;
+          iff1 <= 1'b0; intm <= 1'b1; st <= S_RA;
         end else if (!int_wait && ahead <= 12'sd32) begin
-          ei_blk <= 1'b0; st <= S_FADR;
+          ei_blk <= 1'b0; intm <= 1'b0; st <= S_FADR;
         end
         S_FADR: begin m_req <= 1'b1; m_we <= 1'b0; m_addr <= qa; st <= S_FWAIT; end
         S_FWAIT: if (m_ack) begin
