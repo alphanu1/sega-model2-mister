@@ -48951,3 +48951,169 @@ music than MAME -- at its default 0 it is MAME's mix.
     shows STCC makes one; not changed here.
   * The board hears the link's B side, so a slow SCSP acknowledge would delay
     its bytes too (R979's wiring); MAME's UART feeds both independently.
+
+**R1008 -- AREA FOR STCC'S SOUND BOARD ON 2C: FLIP-FLOP ARRAYS INTO LUT RAM,
+AND MLABs WHOSE READ IS REGISTERED INTO M10K. quartus_map of the whole 2C
+core (2c-mpeg 6f1fc392 -> area-2c 45e20aa7): ALM estimate 40,460 -> 39,300
+(-1,160); ALUTs 58,292 -> 57,395 (-897); registers 48,249 -> 45,706
+(-2,543); MLAB -17 LABs; M10K +20 by shape (~459 -> ~479 of 553); DSP 110
+(=). Every change output-identical on its module's benches, no cycle moved.
+BRANCH area-2c, LOCAL, NOT FITTED, NOT ON THE BOARD.**
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Believed (R1004):* the 2C build with the sound board maps at ~40,500 and
+fits at 41,311-41,546 of 41,910 (most seeds fail placement, "requires 4196
+LABs, device has 4191"; the ones that place miss clk_sys), while ~94 M10K
+are free. So the trade is the reverse of R909 / R684: spend M10K, save
+LABs. An MLAB is not a saving (it is a LAB); a flip-flop array read one word
+at a time becoming an MLAB is, and an MLAB whose read already goes through a
+register becoming an M10K is the same circuit with its LABs back.
+*The method (R984-R988's):* each change is old-against-new on the module's
+own benches through sim/miter/miter.py (every output, every cycle), a
+planted fault to show the bench reaches it, then ONE whole-core quartus_map
+from its own directory (sm2-builds/area-2c-maps, Quartus 17.0, M2_2C,
+M2_2C_DSB), never more than three Quartus processes machine-wide.
+
+*Taken, in order (map deltas against the map before; ALUT / registers of
+the module itself; the estimate is the whole core's):*
+
+  1. m2_ddram_mux's read-owner queue (R1003, Model 1's flops): {owner,
+     length} as one 9-bit word of a 32-deep MLAB, written on the accept and
+     read asynchronously at the head. -115 ALUT, -288 registers, +1 LAB;
+     estimate -125. tb_m2_ddram_mux (1,020,496 checks, five latency / BUSY
+     configurations) through the miter: 2,000,005 cycles, 0 differing; a
+     length off by one in slot 7 differs on 1,864,217.
+  2. The geometry (m2_geometry M10K_ROOM, set to C2 by Model2.sv):
+     m2_geo_clip's created points (tx..tv, 640 flops) as five 4 x 32 MLABs
+     -- written a coordinate at a time by K_CLIPW, read only by K_CHILD's
+     push at kid()'s index, every index a case pushes being one its own
+     clips wrote at that level, so the reset to zero was never seen; the
+     push's select of 160 bits (8:1, 800 LEs in the map) is now a 5:1 (480).
+     With STK_M10K the clip stack (registered read, R684's M10K form) and,
+     with TP_M10K, the engine's texture-parameter table (tp_rd registered)
+     go to M10K. Clip -175 ALUT, -803 registers; engine -62 registers;
+     +7 M10K, -13 + 10 LABs; estimate -371. sim/miter/geo.sh: tb_m2_geometry
+     plain and MIPZ (MIPZ with -GM10K_ROOM=1), the geodiff walks r5701 /
+     r6601 (2A) and w4000 / w9000 (main): 0 cycles differing in 3.5 M, the
+     pool's operand hash unchanged on every walk; the clipper's own bench
+     (tb_clip_top, 2,003 random quads against MAME's clipper transcribed)
+     through a miter: 3,280,961 cycles, 0 differing.
+  3. i960_regs' frame cache (32 x 128, rc_q registered) in M10K on 2C
+     (RC_M10K = i960_top's C2): -128 registers, +4 M10K, -7 LABs; estimate
+     -93. test_i960_regs / _ring (both rings) and the ring of eight with
+     -GRC_M10K=1: PASS.
+  4. m2_tile_fetch's glyph cache: the 16 glyphs (512 flops and a 16:1
+     AND-OR of 32 bits) as one MLAB; the compare (cc_addr stays flops) is
+     registered in F_CHIT as an index, and F_CHAR reads the glyph from it --
+     the word cc_hit_data_q held, since the cache's one write is F_CHAR's
+     own miss. -283 ALUT, -540 registers, +2 LABs; estimate -157.
+     tb_m2_tile_fetch through the miter at MASK_SKIP 0 and 1 (2C's), and the
+     MASK_SKIP run on repeated tiles (its own run has distinct tiles, few
+     hits): 442,067 cycles, 0 differing; the glyph read one entry off:
+     386,209 (the bench's own check missed it on the distinct-tile run --
+     the miter is the check).
+  5. m2_eng_ra's pair store (8 x 64, read only into rd_q on a hit) in M10K
+     on 2C (PR_M10K): -64 registers, +2 M10K, -4 LABs; estimate -1 (the
+     estimate barely sees an MLAB's LABs). tb_m2_eng_ra with -GPR_M10K=1:
+     13,878,373 checks, PASS.
+  6. m2_geo_xform's two product banks (r[2][9], 576 flops): product i in
+     column i % 3 at {bank, i / 3}, three 8 x 32 MLABs read asynchronously at
+     {sum_bank, k} -- the triple R566 selects. -576 registers, -14 ALUT in
+     the transform and -135 in the pool (its operand select took the bank
+     and triple selects into the RAM's read); +6 LABs; estimate -242.
+     geo.sh as in 2 (the transform now renamed in the miter too): 0
+     differing, the same pool hashes; a product written to the wrong column
+     differs on 450,935 of 452,856 cycles of w4000.
+  7. m2_scsp's FM ring (128 x 16) and m2_scsp_dsp's COEF / MADRS byte
+     arrays, all read through registers, in M10K on 2C (m2_2a_sound
+     SCSP_M10K -> m2_scsp RAM_M10K -> COEF_M10K): -38 ALUT, -48 registers,
+     +5 M10K, -8 LABs; estimate -56.
+  8. m2_93c46's array (its two registered reads, two copies) in M10K on 2C
+     (m2_315_5649 EE_M10K), powering up erased as before: -34 ALUT, -38
+     registers, +2 M10K, -4 LABs; estimate -115 (with -87 of the i960's
+     scatter in it). test_m2_315_5649 with and without -GEE_M10K=1 and
+     test_m2_nv_save: PASS.
+  For 3, 5, 7 and 8 the two generate branches are the same statements, so
+  every bench of the module runs the same circuit; the change is Quartus's
+  block, and the map gives no Warning 276020 (pass-through logic) for any
+  of them -- or anywhere in the core, before or after. lint_top clean with
+  and without M2_2C; lint_idx (M2_2C) the same 97 findings less one (the
+  transform's r[got], gone with r).
+
+*Tried and REVERTED (measured):*
+  * i960_top's register write data named by source (a 4-bit code in each
+    branch, wd loaded once from a 16-way select at the end of the block).
+    The map's restructuring table shows wd as 334:1 (923 LEs over 26 bits);
+    I took that for the select's cost and expected ~400 ALM. Measured: -37
+    ALUT in the i960 (inside its scatter); the table still shows wd 322:1.
+    The inputs Quartus counts are the sources' own logic seen through the
+    select (alu_result's ops, the load lanes, the FP results), not the
+    branch tree. Proven identical first (tb_i960_top at the C2 build through
+    an i960_top miter, seven runs to 21.7 M cycles, 0 differing), reverted
+    as not worth its diff.
+  * m2_texel_bl's response entries' fixed fields (uf, vf, flags, selects) as
+    an MLAB FIFO: on 2C RSP_D is 4, so 160 flops and a 4:1 -- ~40 ALM -- for
+    an asynchronous read into the head pick at clk_mem. Written, not
+    benched, reverted.
+
+*Rejected (looked at):*
+  * i960_icache's tag (512 x 20, 16 LABs) to M10K: its hit is a
+    combinational compare at the request; from an M10K it is known a cycle
+    later, a cycle more per miss on the CPU that bounds STCC (R1005).
+  * m2_raster3d mk_a / m2_span_tex mk (8 LABs each), m2_fb_wcomb mlo / mhi,
+    ub_mem, texel_bl ms_ma: read asynchronously at an address formed in the
+    cycle; an M10K needs it a cycle early plus a bypass three deep (mk_a
+    has two already), or answers stale (a fetch not skipped: timing moves).
+  * The fill's two dividers as one: two more divides of latency a quad.
+  * M2_RECIP_M10K (R948's table in two M10K, -280 ALUT): R952 found it
+    worse for timing on the very path class (clk_sys) the fit misses.
+  * fx68k's register file (2 x 32:1 x 32, 896 LEs): two write ports and a
+    reset; third-party.
+  * The i960's fpr[0:3]: architecturally reset, and an MLAB cannot be.
+  * m2_geo_engine's strip vertices, m2_geometry's h* copy, the fill's
+    corner arrays, m2_video's scroll copies: read four at a time.
+  * m2_2a_sound's output FIFO (2 LABs): read inside the reset block (q_l /
+    q_r reset) -- R985's latch-and-flag form needed for an M10K; small.
+  * m2_sdram's per-port p_dout: one shared bus would change what a port
+    shows between its acknowledges -- not identical at the module's edge.
+  * The fill-numerator DSP sharing and House of the Dead's gun multiplies:
+    DSP, not ALM (110 / 112 is not the limit).
+
+*Wrong first, kept:*
+  * The wd select (above): the restructuring table's input count is not a
+    select's cost.
+  * m2_geo_xform's own R866 bench (strict: every output every cycle against
+    the flip-flop transform) FAILED after change 6: after one of its random
+    mid-run resets the operands the transform shows with NO add request
+    come from a bank nothing has summed -- the RAM's old contents where the
+    flops held zero. The pool starts an add only on a request and an
+    operand latched without one is never used, so the bench now compares
+    add_a / add_b under add_req (0 differences, seeds 1 and 9); the
+    m2_geometry miter, which compares everything the geometry sends on,
+    was 0 throughout.
+  * A planted fault in the clipper's u at the mantissa LSB was invisible on
+    every bench: f2uvw truncates u to an integer. A fault must flip a high
+    bit to be seen. And the "0,2 out" case (t2 / t3) is reached by
+    tb_clip_top only -- not by the MAME walks or tb_m2_geometry.
+  * The map's estimate is not the fitted cost in either direction: unchanged
+    modules move 50-135 ALUT between maps (the i960 +135 at change 1 and -87
+    at 8, the framework's IIR filter -99 at 2), and an MLAB's LABs barely
+    register (change 5: 4 LABs and 64 registers, estimate -1). R984-R988
+    fitted at twice their maps' saving; R1004's board fitted ~50% over its.
+
+*Timing (not fitted) -- the paths a fit should be read for:*
+  * clk_sys, the geometry: sk_rd is an M10K's output into K_POPR's q* and
+    f2uvw -> qwu / qwv (R952's converter, added after R684 last had the
+    stack in M10K); the transform's rsel from an MLAB read into the pool's
+    add operand select (add_a_q / add_b_q, the core's largest select, 29:1);
+    tp_rd an M10K output into the engine's multiplier operands.
+  * The DDRAM mux: head_own / head_len from an MLAB read into a_dout_ready /
+    b_dout_ready, where they came from a 32:1 select of flops.
+  * clk_i960: rc_q an M10K output into the register banks' write data
+    (S_RET_CAP).
+  * clk_mem: the tile fetch's glyph from an MLAB read at a registered index
+    into ch_f (short).
+
+*Not settled:* the fit (LABs, clk_sys, HDMI), the board; M10K ~479 of 553
+by shape (R1004's ~459 + 20); whether the 2,543 registers fewer pack into
+LABs as the R984-R988 savings did.
