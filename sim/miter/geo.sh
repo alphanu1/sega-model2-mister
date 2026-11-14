@@ -6,13 +6,20 @@
 #
 #   GD2A="<2A walk dumps>" GD="<main walk dumps>" sim/miter/geo.sh <old tree>
 #
+# R1008: m2_geo_xform is renamed too (its m2_xf_mat as m2_xf_mat_old in the
+# old copy). DROP_OLD_PARAMS="P ..." leaves parameters the old m2_geometry
+# does not have off its instance (R1008's M10K_ROOM); GEOMZ_G / GD2A_G add
+# -G flags to those builds (GEOMZ_G=-GM10K_ROOM=1 elaborates the 2C form).
+#
 # GD2A walks run the 2A build's geometry (geodiff_2a: CRTC_Y 127, WINKEY,
 # MZX, UVSH, M2GD_PRESET's coef table loaded into BOTH copies); GD walks the
 # main build's. geodiff writes ours.txt into each dump directory.
 set -u
 O=$(cd "$1" && pwd); M=obj_miter_geo; mkdir -p $M
-S=""; for m in m2_geo_clip m2_geo_project m2_geo_engine; do S="$S $m $O/rtl/video/$m.sv rtl/video/$m.sv"; done
+S=""; for m in m2_geo_clip m2_geo_project m2_geo_engine m2_geo_xform; do S="$S $m $O/rtl/video/$m.sv rtl/video/$m.sv"; done
 python3 sim/miter/miter.py m2_geometry $O/rtl/video/m2_geometry.sv rtl/video/m2_geometry.sv $M $S >/dev/null
+sed -i "s/m2_xf_mat/m2_xf_mat_old/g" $M/m2_geo_xform_old.sv
+for pr in ${DROP_OLD_PARAMS:-}; do sed -i "/m2_geometry_old #/s/, \.$pr($pr)//" $M/m2_geometry_miter.sv; done
 for tb in tb_m2_geometry tb_m2_geodiff; do
   sed -e 's/m2_geometry__DOT__/m2_geometry__DOT__u_new__DOT__/g' -e 's/u_geometry__DOT__/u_geometry__DOT__u_new__DOT__/g' \
       -e 's/delete d;/d->final(); delete d;/g' sim/video/$tb.cpp > $M/$tb.cpp
@@ -20,14 +27,14 @@ done
 sed -i 's/{ d->rootp->geodiff_top__DOT__u_geometry__DOT__u_new__DOT__ct\[k++\] = (w >> 19) \& 0xfff;/{ d->rootp->geodiff_top__DOT__u_geometry__DOT__u_old__DOT__ct[k] = (w >> 19) \& 0xfff; d->rootp->geodiff_top__DOT__u_geometry__DOT__u_new__DOT__ct[k++] = (w >> 19) \& 0xfff;/' $M/tb_m2_geodiff.cpp
 W="-Wno-fatal -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-DECLFILENAME -Wno-UNOPTFLAT -Wno-TIMESCALEMOD -Wno-WIDTHTRUNC -Wno-MULTITOP"
 GEO="$M/m2_geometry_miter.sv $M/m2_geometry_new.sv $M/m2_geometry_old.sv"
-for m in m2_geo_clip m2_geo_project m2_geo_engine; do GEO="$GEO $M/${m}_new.sv $M/${m}_old.sv"; done
-GEO="$GEO rtl/video/m2_geo_xform.sv rtl/video/m2_fp_pool.sv rtl/video/fp_to_int.sv rtl/tgp/fp_mul.sv rtl/tgp/fp_add.sv rtl/tgp/fp_div.sv"
+for m in m2_geo_clip m2_geo_project m2_geo_engine m2_geo_xform; do GEO="$GEO $M/${m}_new.sv $M/${m}_old.sv"; done
+GEO="$GEO rtl/video/m2_fp_pool.sv rtl/video/fp_to_int.sv rtl/tgp/fp_mul.sv rtl/tgp/fp_add.sv rtl/tgp/fp_div.sv"
 WALK="sim/video/geodiff_top.sv rtl/video/m2_geo.sv rtl/video/m2_geo_view.sv rtl/tgp/m2_fifo_m10k.sv"
 b() { local n=$1; shift; rm -rf $M/obj_$n
-  verilator --cc --exe --build -j 0 $W --public-flat-rw --flatten -Irtl/tgp -Irtl/video --Mdir $M/obj_$n -o V "$@" > $M/build_$n.log 2>&1 || echo "$n: build failed ($M/build_$n.log)"; }
+  verilator --cc --exe --build -j 2 $W --public-flat-rw --flatten -Irtl/tgp -Irtl/video --Mdir $M/obj_$n -o V "$@" > $M/build_$n.log 2>&1 || echo "$n: build failed ($M/build_$n.log)"; }
 b geo --top-module m2_geometry -CFLAGS "-O2" $GEO $M/tb_m2_geometry.cpp &
-b geomz --top-module m2_geometry -GMIPZ=1 -CFLAGS "-O2 -DTB_MIPZ" $GEO $M/tb_m2_geometry.cpp &
-b gd2a --top-module geodiff_top -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -GUVSH=1 -CFLAGS "-O2" $WALK $GEO $M/tb_m2_geodiff.cpp &
+b geomz --top-module m2_geometry -GMIPZ=1 ${GEOMZ_G:-} -CFLAGS "-O2 -DTB_MIPZ" $GEO $M/tb_m2_geometry.cpp &
+b gd2a --top-module geodiff_top ${GD2A_G:-} -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -GUVSH=1 -CFLAGS "-O2" $WALK $GEO $M/tb_m2_geodiff.cpp &
 b gd --top-module geodiff_top -CFLAGS "-O2" $WALK $GEO $M/tb_m2_geodiff.cpp &
 wait
 r() { local n=$1 lab=$2; shift 2; [ -x $M/obj_$n/V ] || return; env "$@" $M/obj_$n/V > $M/run_$lab.log 2>&1

@@ -99,7 +99,12 @@ module m2_geometry #(
   parameter bit WINKEY = 1'b0,
   // R940: a quad whose u or v extent passes 2,048 texels is shifted down by
   // 2^q_uvs instead of clamped (see the stage at ru/rv). 0: clamped as before.
-  parameter bit UVSH = 1'b0
+  parameter bit UVSH = 1'b0,
+  // R1008: M10K TO SPARE (the 2C build). The clipper's stack and the engine's
+  // texture-parameter table -- both read through a register -- go to M10K
+  // in place of MLAB: the same circuit, thirteen LABs back as logic. 0
+  // keeps them in MLAB for a build short of M10K (2A).
+  parameter bit M10K_ROOM = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -234,7 +239,7 @@ module m2_geometry #(
   logic [11:0] poly_dotp;                                // R828c: |normal . point|, exp + 4 bits
 
   logic [4:0] eng_dbg_st;   // R719: telemetry
-  m2_geo_engine #(.TEXLUT(TEXLUT)) u_engine (   // R867
+  m2_geo_engine #(.TEXLUT(TEXLUT), .TP_M10K(M10K_ROOM)) u_engine (   // R867; R1008
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
     .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .tex_off(tex_off), .mem_space(mem_space),
@@ -1119,7 +1124,7 @@ module m2_geometry #(
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 
   // ------------------------------------------------------------- the clipper
-  m2_geo_clip u_clip (
+  m2_geo_clip #(.STK_M10K(M10K_ROOM)) u_clip (   // R1008
     .clk(clk), .rst_n(rst_n),
     .a_left(a_left), .a_right(a_right), .a_bottom(a_bottom), .a_top(a_top),
     .in_valid(clip_in_valid), .in_ready(clip_in_ready),

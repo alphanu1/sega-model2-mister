@@ -107,7 +107,12 @@ module i960_regs #(
   // only in the 64-byte register save areas, which the architecture leaves
   // undefined until flushreg (MAME's own stream is one implementation's).
   // CACHE_FRAMES a power of two, at most 8 (one MLAB deep).
-  parameter bit          RING         = 1'b0
+  parameter bit          RING         = 1'b0,
+  // R1008: THE FRAME CACHE IN M10K (1) OR MLAB (0). Its read is registered
+  // (rc_q), so the two are the same circuit; the header's reason for MLAB
+  // (M10K the resource under pressure) does not hold on a build with M10K to
+  // spare (2C), which takes the blocks and gets the LABs back as logic.
+  parameter bit          RC_M10K      = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -237,7 +242,7 @@ module i960_regs #(
   // Four saved frames, four words per row. MLAB rather than M10K — see header.
   // Dedicated ports: one write, one registered read, each with its own address.
   // Reading the array inside the control FSM is what defeated inference.
-  (* ramstyle = "MLAB" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
+  // (R1008: rcache itself is declared in g_rc_* below, by RC_M10K.)
   // Four words. Quartus inferred this into an altsyncram and spent a whole
   // 10 Kbit M10K block on 128 bits -- one of 553, for a resource §5.6 records
   // as the one under pressure on this part while ALM has headroom. It is
@@ -263,10 +268,19 @@ module i960_regs #(
   logic [W*32-1:0] rc_wdata;
   logic [W*32-1:0] rc_q;
 
-  always_ff @(posedge clk) begin
-    if (rc_we) rcache[rc_waddr] <= rc_wdata;
-    rc_q <= rcache[rc_raddr];
-  end
+  generate if (RC_M10K) begin : g_rc_m10k
+    (* ramstyle = "M10K" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
+    always_ff @(posedge clk) begin
+      if (rc_we) rcache[rc_waddr] <= rc_wdata;
+      rc_q <= rcache[rc_raddr];
+    end
+  end else begin : g_rc_mlab
+    (* ramstyle = "MLAB" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
+    always_ff @(posedge clk) begin
+      if (rc_we) rcache[rc_waddr] <= rc_wdata;
+      rc_q <= rcache[rc_raddr];
+    end
+  end endgenerate
 
   // Depth counter, exactly MAME's m_rcache_pos. Signed, because do_ret_0
   // decrements first and tests for < 0 to detect the post-flushreg case.

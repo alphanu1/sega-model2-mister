@@ -495,7 +495,7 @@ module i960_top #(
   logic        rf_mem_req, rf_mem_we;
   logic [31:0] rf_mem_addr, rf_mem_wdata;
 
-  i960_regs #(.CACHE_FRAMES(RC_FRAMES), .RING(RC_RING)) u_regs (   // R927
+  i960_regs #(.CACHE_FRAMES(RC_FRAMES), .RING(RC_RING), .RC_M10K(C2)) u_regs (   // R927; R1008
     .clk(clk), .rst_n(rst_n),
     .ra1(ra1), .ra2(ra2), .rd1(rd1), .rd2(rd2),
     .wa(wa), .wd(wd), .we(we),

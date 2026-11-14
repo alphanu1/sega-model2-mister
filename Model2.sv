@@ -3802,7 +3802,7 @@ end else if (SND2A) begin : g_2asnd
 	              .T44_NUM(441), .T44_DEN(SYS_MHZ * 10000), .POST_WR(`M2_2A_SND_POST != 0),
 	              .EXACT(`M2_2A_SND_EXACT != 0), .OVERLAP(`M2_2A_SND_OVL != 0),
 	              .TIMER(`M2_2A_SND_TIMER),   // R976
-	              .LERP(`M2_2A_SND_LERP != 0)) u_snd2a (   // R884, R946, R949
+	              .LERP(`M2_2A_SND_LERP != 0), .SCSP_M10K(C2)) u_snd2a (   // R884, R946, R949, R1008
 		.clk(clk_sys), .rst_n(cpu_rst_n & mem_rst_n & cp_done),
 		.rx_data(b_rx_d), .rx_valid(b_rx_v), .rx_ack(b_rx_a),
 		.tx_data(b_tx_d), .tx_valid(b_tx_v), .tx_ack(b_tx_a),
@@ -4403,7 +4403,7 @@ m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 // write's acknowledge -- the write has landed -- drops both streams; no copy
 // outlives an object (`active`). tb_m2_geodiff: 25-26% off a heavy list's walk.
 wire eng_ra_busy;
-m2_eng_ra #(.AW(SDR_AW-1)) u_eng_ra (
+m2_eng_ra #(.AW(SDR_AW-1), .PR_M10K(C2)) u_eng_ra (   // R1008
 	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .active(eng_busy),
 	.inval(geo_sd_req & wr_ack_geo),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]),
@@ -4549,7 +4549,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH)) u_geometry (   // R828c, R867, R889, R940
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH), .M10K_ROOM(C2)) u_geometry (   // R828c, R867, R889, R940, R1008
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -6792,7 +6792,7 @@ end else begin : g_noioboard
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
 		// R897: ioctl index 5, the EEPROM image (bytes 0-127; MAME's .nv words);
 		// R945: and the NVRAM file's EEPROM, both through u_nv_port
-		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A | EESAVE2A), .EE_SAVE(EESAVE2A)) u_315_5649 (
+		m2_315_5649 #(.GUN(VCOP2GUN), .EE_LOAD(EELOAD2A | EESAVE2A), .EE_SAVE(EESAVE2A), .EE_M10K(C2)) u_315_5649 (   // R1008
 			.clk(clk_sys), .por_n(mem_rst_n), .rst_n(cpu_rst_n),
 			.sel(iob_sel && (cpu_io_addr[11:5] == 7'd0)), .we(cpu_io_we),
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),

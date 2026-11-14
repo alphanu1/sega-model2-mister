@@ -72,7 +72,11 @@ module m2_geo_engine #(
   // word 3 >> 6), with poly_luma and poly_tex[25:24] (the luma table's row)
   // beside it. No palette or table read, no cache entry. tex_off (the OSD's
   // textures Off) colours a textured polygon as a flat one instead.
-  parameter bit TEXLUT = 1'b0
+  parameter bit TEXLUT = 1'b0,
+  // R1008: the texture-parameter table in M10K (1) or MLAB (0). Its read is
+  // registered (tp_rd), so the two are the same circuit; a build with M10K
+  // to spare (2C) takes the block and gets the four LABs back as logic.
+  parameter bit TP_M10K = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -382,7 +386,7 @@ module m2_geo_engine #(
   logic [7:0]   lt;         // R784: ... and by the output curve's gain (Off, Mild)
   // The texture parameters as floats, converted once when the walker streams
   // them; the colour cache: 256 entries direct-mapped on {colorbase, luma6}.
-  (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];    // {ambient, diffuse}
+  // {ambient, diffuse}: tp_tab, in g_tp_* below (R1008)
   logic [63:0] tp_rd;
   // R637: M10K, not MLAB. 256 x 41 in LUT-RAM is ~16 MLABs (~160 ALM); the
   // read is registered (cc_rd below), so two M10K blocks hold it. The ALM
@@ -551,11 +555,23 @@ module m2_geo_engine #(
   assign poly_zmode = attr[11:10];             // R246: (attr >> 10) & 3
 
   always_ff @(posedge clk) begin
-    if (tp_we) tp_tab[tp_idx] <= {i8f(tp_ambient), i8f(tp_diffuse)};
-    tp_rd <= tp_tab[attr[22:18]];
     if (cc_we) cc_mem[cc_idx] <= {cc_key, rgb[0], rgb[1], rgb[2]};
     cc_rd <= cc_mem[cc_idx];
   end
+  generate if (TP_M10K) begin : g_tp_m10k
+    (* ramstyle = "M10K" *) logic [63:0] tp_tab [32];
+    always_ff @(posedge clk) begin
+      if (tp_we) tp_tab[tp_idx] <= {i8f(tp_ambient), i8f(tp_diffuse)};
+      tp_rd <= tp_tab[attr[22:18]];
+    end
+  end else begin : g_tp_mlab
+    (* ramstyle = "MLAB" *) logic [63:0] tp_tab [32];
+    always_ff @(posedge clk) begin
+      if (tp_we) tp_tab[tp_idx] <= {i8f(tp_ambient), i8f(tp_diffuse)};
+      tp_rd <= tp_tab[attr[22:18]];
+    end
+  end endgenerate
+
   // Rising-edge acknowledge and a one-cycle request gap per word: see the
   // same note in m2_geo.sv (R207). This engine advances ptr on every
   // acknowledge and held its request across words the same way.

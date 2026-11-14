@@ -30,7 +30,14 @@ module m2_geo_xform_miter (
     end else begin : g_old
       m2_geo_xform_ff u (.*);
     end
-    assign o[g] = {in_ready, mul_req, mul_a, mul_b, add_req, add_a, add_b, add_sub, out_valid,
+    // R1008: add_a / add_b are compared while add_req is up. The products
+    // are LUT RAM now, which a reset does not clear, so after one of the
+    // bench's random resets the operands the xform shows with NO request
+    // (read from a bank nothing has summed) are what the RAM holds, where
+    // the flops showed zero. The pool starts an add only on a request, and
+    // an operand it latches without one is never used.
+    assign o[g] = {in_ready, mul_req, mul_a, mul_b, add_req,
+                   add_req ? add_a : 32'd0, add_req ? add_b : 32'd0, add_sub, out_valid,
                    out_x, out_y, out_z};
   end endgenerate
   assign diff = o[0] != o[1];

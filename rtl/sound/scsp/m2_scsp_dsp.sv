@@ -41,6 +41,10 @@ module m2_scsp_dsp #(
   // after its MADRS table -- so in MAME every game's DSP runs with all
   // MADRS 0. 1 restores MAME's mirror (benches: equal to MAME's mix).
   parameter bit MADRS_MIRROR = 1'b0,
+  // R1008: COEF and MADRS in M10K (1) or MLAB (0). Both are read through a
+  // register (coef_q, madrs_q), so the two are the same circuit; a build
+  // with M10K to spare (2C) takes four blocks for the four LABs.
+  parameter bit COEF_M10K = 1'b0,
   // R946: OVERLAP -- the run for sample n while the slots make sample n+1
   // (m2_scsp OVERLAP). MIXS becomes two banks: the slots add their sends to
   // one while a run reads the other, and a go hands the run the slots' bank
@@ -126,23 +130,39 @@ module m2_scsp_dsp #(
   end
   assign mp_q = {mph_q[3], mpl_q[3], mph_q[2], mpl_q[2], mph_q[1], mpl_q[1], mph_q[0], mpl_q[0]};
   // COEF 64 x 16, MADRS 32 x 16 (0x780; MAME's mirror at 0x7c0 only with MADRS_MIRROR, R914)
-  (* ramstyle = "MLAB" *) logic [7:0] coef_h [64];
-  (* ramstyle = "MLAB" *) logic [7:0] coef_l [64];
-  (* ramstyle = "MLAB" *) logic [7:0] madrs_h [32];
-  (* ramstyle = "MLAB" *) logic [7:0] madrs_l [32];
+  // (R1008: the four arrays are declared in g_co_* below, by COEF_M10K.)
   wire w_coef  = w_en && w_addr >= 11'h380 && w_addr < 11'h3c0;
   wire w_madrs = w_en && w_addr >= 11'h3c0 && w_addr < (MADRS_MIRROR ? 11'h400 : 11'h3e0);
   logic [15:0] coef_q, madrs_q;
   logic  [5:0] co_ra;
   logic  [4:0] ma_ra;
-  always_ff @(posedge clk) begin
-    if (w_coef  && w_be[1]) coef_h[w_addr[6:1]]  <= w_data[15:8];
-    if (w_coef  && w_be[0]) coef_l[w_addr[6:1]]  <= w_data[7:0];
-    if (w_madrs && w_be[1]) madrs_h[w_addr[5:1]] <= w_data[15:8];
-    if (w_madrs && w_be[0]) madrs_l[w_addr[5:1]] <= w_data[7:0];
-    coef_q  <= {coef_h[co_ra], coef_l[co_ra]};
-    madrs_q <= {madrs_h[ma_ra], madrs_l[ma_ra]};
-  end
+  generate if (COEF_M10K) begin : g_co_m10k
+    (* ramstyle = "M10K" *) logic [7:0] coef_h [64];
+    (* ramstyle = "M10K" *) logic [7:0] coef_l [64];
+    (* ramstyle = "M10K" *) logic [7:0] madrs_h [32];
+    (* ramstyle = "M10K" *) logic [7:0] madrs_l [32];
+    always_ff @(posedge clk) begin
+      if (w_coef  && w_be[1]) coef_h[w_addr[6:1]]  <= w_data[15:8];
+      if (w_coef  && w_be[0]) coef_l[w_addr[6:1]]  <= w_data[7:0];
+      if (w_madrs && w_be[1]) madrs_h[w_addr[5:1]] <= w_data[15:8];
+      if (w_madrs && w_be[0]) madrs_l[w_addr[5:1]] <= w_data[7:0];
+      coef_q  <= {coef_h[co_ra], coef_l[co_ra]};
+      madrs_q <= {madrs_h[ma_ra], madrs_l[ma_ra]};
+    end
+  end else begin : g_co_mlab
+    (* ramstyle = "MLAB" *) logic [7:0] coef_h [64];
+    (* ramstyle = "MLAB" *) logic [7:0] coef_l [64];
+    (* ramstyle = "MLAB" *) logic [7:0] madrs_h [32];
+    (* ramstyle = "MLAB" *) logic [7:0] madrs_l [32];
+    always_ff @(posedge clk) begin
+      if (w_coef  && w_be[1]) coef_h[w_addr[6:1]]  <= w_data[15:8];
+      if (w_coef  && w_be[0]) coef_l[w_addr[6:1]]  <= w_data[7:0];
+      if (w_madrs && w_be[1]) madrs_h[w_addr[5:1]] <= w_data[15:8];
+      if (w_madrs && w_be[0]) madrs_l[w_addr[5:1]] <= w_data[7:0];
+      coef_q  <= {coef_h[co_ra], coef_l[co_ra]};
+      madrs_q <= {madrs_h[ma_ra], madrs_l[ma_ra]};
+    end
+  end endgenerate
   // the 68000's read: 0x700 COEF, 0x780 MADRS, 0x7c0 0 (MAME: MADRS again,
   // MADRS_MIRROR), 0x800 MPRO
   assign r_q = (r_addr < 11'h3c0) ? coef_q :

@@ -245,7 +245,15 @@ module m2_tile_fetch #(
   // width already did once while this was being sized.
   localparam int unsigned CC_W = $clog2(CC_N);
   logic [17:0]     cc_addr [CC_N];
-  logic [31:0]     cc_data [CC_N];
+  // R1008: THE GLYPHS IN LUT RAM, NOT 512 FLIP-FLOPS. Only the addresses
+  // need to be flops (the 16-way compare reads them all at once); a hit
+  // reads ONE glyph, so the data is an MLAB read at the matching entry. The
+  // match is registered in F_CHIT as an index (the entries are unique: see
+  // R595 below) and the glyph is read in F_CHAR from that registered index
+  // -- the word cc_hit_data_q held, since nothing writes the cache between
+  // F_CHIT and F_CHAR (its one write is F_CHAR's own miss path). The 16:1
+  // AND-OR of 32 bits and cc_hit_data_q's 32 flops go with the flops.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] cc_data [CC_N];
   logic [CC_N-1:0] cc_val;
   logic [CC_W-1:0] cc_rr;              // round-robin replacement
 
@@ -258,7 +266,7 @@ module m2_tile_fetch #(
   logic        cc_hit;
   logic [31:0] cc_hit_data;
   logic        cc_hit_q;            // R572
-  logic [31:0] cc_hit_data_q;
+  logic [CC_W-1:0] cc_hit_i, cc_hit_i_q;   // R1008: the matching entry
   // R595: AND-OR, NOT A PRIORITY CHAIN. Written as "last match wins" this was
   // sixteen mux levels behind the compare (s320: f_char_addr_q ->
   // cc_hit_data_q, -0.419 ns at clk_mem 100). An address is only ever written
@@ -268,14 +276,21 @@ module m2_tile_fetch #(
   always_comb
     for (int i = 0; i < CC_N; i++)
       cc_m[i] = cc_val[i] && (cc_addr[i] == f_char_addr_q);
+  // R1008: the OR of the matching entry's index, as the AND-OR took its data
+  // (at most one entry matches).
   always_comb begin
-    cc_hit      = 1'b0;
-    cc_hit_data = 32'd0;
+    cc_hit   = 1'b0;
+    cc_hit_i = '0;
     for (int i = 0; i < CC_N; i++) begin
-      cc_hit      = cc_hit | cc_m[i];
-      cc_hit_data = cc_hit_data | ({32{cc_m[i]}} & cc_data[i]);
+      cc_hit   = cc_hit | cc_m[i];
+      cc_hit_i = cc_hit_i | ({CC_W{cc_m[i]}} & CC_W'(i));
     end
   end
+  assign cc_hit_data = cc_data[cc_hit_i_q];   // R1008: read in F_CHAR
+  // R1008: written where the flops were (F_CHAR's miss, on the acknowledge)
+  always_ff @(posedge clk)
+    if (!start && fst == F_CHAR && !cc_hit_q && char_req && char_ack)
+      cc_data[cc_rr] <= char_data;
   logic        tile_valid;
 
   // Emit side: sx is the first pixel of the group being written, and rem is
@@ -463,7 +478,7 @@ module m2_tile_fetch #(
         // on it (s306: f_char_addr_q -> cc_hit_data -> ch_f, -0.243 ns).
         F_CHIT: begin
           cc_hit_q      <= cc_hit;
-          cc_hit_data_q <= cc_hit_data;
+          cc_hit_i_q    <= cc_hit_i;   // R1008: the glyph is read from it in F_CHAR
           fst           <= F_CHAR;
         end
 
@@ -471,7 +486,7 @@ module m2_tile_fetch #(
           // f_char_addr_q is valid now the tile word is latched.
           if (cc_hit_q) begin
             // Already fetched this glyph on this line; nothing to ask for.
-            ch_f   <= cc_hit_data_q;
+            ch_f   <= cc_hit_data;
             f_have <= 1'b1;
             fst    <= F_FULL;
           end else if (!char_req) begin
@@ -480,7 +495,6 @@ module m2_tile_fetch #(
             char_req   <= 1'b0;
             ch_f       <= char_data;
             cc_addr[cc_rr] <= f_char_addr_q;
-            cc_data[cc_rr] <= char_data;
             cc_val[cc_rr]  <= 1'b1;
             cc_rr <= (cc_rr == CC_W'(CC_N-1)) ? '0 : cc_rr + CC_W'(1);
             fetches    <= fetches + 8'd1;
