@@ -49134,3 +49134,209 @@ hints about the work, never hardware facts):*
     RTL's at a fixed latency of 6, not the board's shared SDRAM.
   * Whether the race's i960 work scales like the core's CPI on other games;
     R927's rows differ by 40% between games.
+
+**R1006 -- THE TGPx4 TWICE AS FAST ON STCC'S RACE, EVERY OUTPUT AND EVERY
+COMPARED STATE MAME'S: ITS RESULTS ARE WRITTEN BEHIND THE SEQUENCER (A
+SCOREBOARD KEEPS MAME'S ORDER), ITS REGISTER FILE IN TWO BANKS, CONTROL WORDS
+AND SOURCES IN HAND A STATE SHORTER, A 4 K-WORD ROM READ CACHE AND POSTED
+BUFFER WRITES; THE PROGRAM ALL ON CHIP. RACE 6.48 -> 3.22 clk / word; THE
+MODEL'S RACE START AT s = 2.2 17.2 -> 13.2 ms p50, 200 -> 1 FRAMES OVER A
+VBLANK. +642 ALM AND +37 M10K ON THE MAP (DSB OFF). NOT FITTED, NOT ON A
+BOARD.** Branch stcc-speed, 2026-11-14.
+
+*What was believed (R1005):* a TGPx4 1.33x faster (5 clk / word) removes the
+race start's overruns at s = 2.2, 2x gives margin at 2.5; the levers named
+were the program on chip (-2.8%), hiding the external reads' / program
+misses' latency (27% of race time in words of 10+ clocks), and overlapping
+the FP latency with the next word ("ALM and hazard risk"). R920 built the
+word strictly in sequence; Model 1's MB86233 (tools/model1-ref 0d062e0,
+mb86233_core) is the same kind of machine -- a multi-cycle FSM, prefetch and
+retire-in-the-finishing-state (Model 2's own R771-R774, ported there) -- and
+has no result overlap: its TGP was never the frame's limit. So this goes past
+the oracle's structure, and keeps its rule: the architectural state after
+every word is MAME's, checked in lockstep.
+
+*THE INSTRUMENT (new, committed):*
+  * tb_tgpx4_replay --ck-frame N: a CHECKPOINT START. The first capture
+    vblank at or after N with both of MAME's FIFOs empty; MAME's interpreter
+    runs to the first word after it that pops the input FIFO (not in a delay
+    slot or a repeat, no output unread); the RTL boots normally and at its
+    first idle clock is restarted there (tgpx4_core dbg_restart, Verilator
+    only: the word in hand becomes a NOP, the FIFOs clear) with MAME's
+    registers, PR queue and RAMs written in. The race is minutes, not hours:
+    150 M clocks from frame 7000 in ~7-10 min. The first version presented
+    the first push in the same clock as the FIFO clear (a clear wins: the push
+    was lost, AA0 0x5a for 0x1a) and later missed the NOP's own retire inside
+    the settling clocks (every compare one word off) -- both fixed, kept.
+  * --stprof: clocks by sequencer state, FIFO waits apart, and (new core) the
+    S_DEC hazard holds by reason.
+  * sim/tgpx4/x4_deps.cpp (x4_xdec.h: the core's xdec in C++): the word mix,
+    the distance from each register / flag read back to its ALU / multiplier
+    producer, external access spacing, ROM read-cache hit rates by size.
+  * The captures were re-taken (the R1005 data had gone with the scratch):
+    MAME 0.289 + the capture patch (sm2-builds/mame-r943/m2lod), headless.
+    STCC tools/mame_stcc_timing.lua 200 s: 27,781,055 i960 accesses -- R1005's
+    count exactly -- 649 M words; HOTD sim/io/mame_m2_hotd_play.lua 150 s
+    (352.7 M words, play from 22 s); Over Rev sim/io/mame_m2_orev_race.lua
+    150 s (200.8 M words). ROM-derived, in sm2-builds/stcc-speed/cap.
+
+*WHERE THE TIME WAS (baseline cd01bb87, PLINES 4096, race 150 M clocks from
+frame 7000; % of busy clocks):* S_DEC 15.9, S_XA 17.2 (external reads 8.3),
+S_WXA 21.3 (buffer writes 5.5), S_WAIT 29.6, S_WA 13.1, S_FIN 2.9: 45% of
+the race spent after the transfers, waiting for and writing results. The
+word mix (x4_deps, whole session): 45% control words (22% with no
+operation at all -- the ALU NOP took the full ALU pass: S_WAIT, S_WA, S_FIN),
+21% single moves, ~25% with an FP op. Distance to the producer: 18% of words
+read an ALU / multiplier result of the word just before (RAW at 1), 2.4% at
+2, 4.2% at 3; 6.5% read ST right after a flag-setting op. External reads:
+79% in consecutive words, 81% at the address the last left (EB + EO); a
+direct-mapped cache of single words over the race's ROM reads hits 64% at
+1 K, 74% at 2 K, 84% at 4 K, 91% at 8 K (4-word lines 94-99%, but port 9
+answers one dword a request: lines buy no bandwidth). Buffer writes come in
+bursts of 4-15 words, 62% one word apart.
+
+*WHAT WAS BUILT (rtl/tgpx4; every step lockstep-clean on the race window
+before the next; race clk / word, 20 M clocks from frame 6900, PLINES 4096,
+base 6.37):*
+  1. RESULTS BEHIND THE SEQUENCER (4.96). A word ends when its transfers are
+     done; its operations' descriptors (destination, write enable, flags or
+     not, opcode, MAME's NaN operand) queue two deep per class until the unit
+     answers, and the result is written by a writer of its own. S_DEC holds a
+     word (dec_hz) while any register it reads or writes has a result to
+     come (a 32-bit scoreboard), while it reads or writes ST and any result is
+     outstanding, and issues an op only behind ops of the same pipelined unit
+     (in order, two or more clocks apart -- FRCP / FRSQ and the integer ALU
+     alone). A transfer to the op's register, or the multiply to the ALU's,
+     drops the op's write (decided from the decode: MAME's order); a word
+     writing ST drops its ops' flags. The ALU NOP is no operation.
+  2. RESULTS WRITTEN AS THEY ARRIVE (4.73), not a clock later -- unless the
+     word that issued them still has a transfer source to read (S_XA with a
+     source B or an external read to come: MAME reads every source before the
+     ALU), or the ALU and multiplier want the same bank (the multiplier waits
+     one clock). The register file is two banks of 16 (AA / AB, MA / MB),
+     each its own write port, the same four 2-MLAB read copies.
+  3. THE ROM READ CACHE (4.23): 4 K words direct-mapped in M10K, read in
+     S_DEC at EB + EO, answering in S_XA's first clock; a miss goes to memory
+     a clock later than before and fills. Copro data ROM only (every 2C
+     game's external reads so far); swept invalid after a reset (4 K clocks).
+  4. POSTED BUFFER WRITES (3.92): m2_tgpx4 queues the core's buffer RAM
+     writes (16 x 47 MLAB) and acknowledges at once; a buffer RAM read waits
+     for the queue (ROM reads and refills pass it) and the core holds an
+     output FIFO write while the queue is not empty (wq_busy), so everything
+     the i960 can learn from a result is already through the port.
+  5. A STATE SHORTER (3.35): a control word with nothing to fetch takes its
+     effect in S_DEC (condition, target, REP / SETL / CLRF / MOD / DBLP and
+     the PC stack, as S_WXA did) and ends in S_WAIT; a single source already
+     in hand at S_DEC -- an immediate, a special register, or a register-file
+     source when its bank's first copy is free -- skips S_XA; and a register
+     written by the end of this clock no longer holds a source, destination
+     or result target of the word in S_DEC.
+  6. S_DEC'S OPERANDS FORWARDED (3.21): from the results written in the same
+     clock (rfo / xa_rdo), so a word using the result of the one before
+     starts a clock earlier.
+  Not taken: ending a control word in S_DEC itself -- its successor is
+  fetched in that S_DEC and is not there yet: two clocks a word is the
+  fetch's floor. Letting an integer op pass an FP op in flight (flags out of
+  order). Wider read lines (port 9's one dword a request).
+
+*MEASURED (final RTL = 47eecbb2's tgpx4; lockstep compares the whole state at
+every word whose results are all written -- 65% of words -- and every output
+the i960 reads; "base" = cd01bb87, the 2C build as it was, PLINES 1024):*
+
+    clk / word (busy)         base 1024   base 4096   R1006     speed-up
+    STCC race, 150 M clk
+      from frame 7000         6.484       6.298       3.221     2.01x
+    HOTD, first 60 M words    5.707       --          3.119     1.83x
+    Over Rev, first 60 M w.   5.747       --          3.354     1.71x
+
+  STCC race window: 46,426,071 words, 381,040 outputs 0 differ, 30,241,536
+  state compares 0 bad. HOTD / Over Rev 60 M words: 2,751,773 / 2,206,240
+  outputs 0 differ, lockstep 0 bad, the base the same. NOT RUN: the three
+  whole captures end to end -- the HOTD and Over Rev runs were stopped at 36
+  minutes (the machine at load 31 on 32 cores), STCC's never started; the
+  race window above and the first 60 M words of the others are what is
+  checked.
+  MEMORY LATENCY SWEPT (port 9 and the write port, the race window from
+  frame 7000, 40 M clocks; HOTD / Over Rev 30 M words): STCC latency 1 / 40
+  + 0-20 jitter / 120 + 0-80: 3.16 / 4.91 / 10.28 clk / word, 105,022 /
+  65,963 / 30,072 outputs 0 differ, lockstep 0 bad; HOTD and Over Rev at 60
+  + 0-60: 3.13 / 3.35, 0 differ, 0 bad. The base at 40 + 0-20: 11.82 -- so
+  2.4x there. At high latency the posted writes are the limit (41.6% of
+  clocks pending at 120): each buffer write is two 16-bit port writes with
+  an idle clock between (R133's rule), which the queue cannot shorten.
+  Race hazards that remain (% of clocks): a register still to be written
+  21.3, ST 2.1, ALU issue order 2.2, multiplier 0.4 -- the FP units' four
+  clocks, which MAME's semantics (a result visible to the next word) leave
+  to wait for. External reads 2.9%, buffer writes 1.2%.
+
+*THE GAME'S FRAME (x4_pace_model as R1005, from 112 s; race start = game
+frames 6944-7462, 121-130 s, 519 frames; race = 6427-11489; work = vblank to
+flip; costs per program address from the RTL's --pcprof, session head 600 M
+clocks + the race window):*
+
+    s      TGPx4      race start p50 / p90 / over      race p50 / p90 / over      wait for results
+    1.84   base       15.77 / 16.30 /   1 of 519       13.94 / 15.19 /   1        5.8 ms
+           R1006      11.69 / 12.18 /   0              10.40 / 11.24 /   0        2.4
+    2.2    base       17.20 / 17.84 / 196              15.21 / 16.56 / 198        5.6
+           R1006      13.22 / 13.79 /   1              11.77 / 12.70 /   1        2.3
+    2.5    base       18.42 / 19.12 / 459              16.30 / 17.72 / 874        5.5
+           R1006      14.50 / 15.14 /   1              12.94 / 13.92 /   1        2.2
+
+  (costs: each build's race-window --pcprof alone -- 0.06% of the race's
+  words at addresses it never saw, charged the mean; the base computed the
+  same way gives R1005's 17.20 p50 at 2.2. The session-head profile run for
+  R1006 was stopped at 26 minutes on a loaded machine.) The one frame over
+  is 6966, the i960's own 14.7 ms at s = 2.2 (MAME's own frame there 11.7
+  ms): it is over at every TGPx4 speed. With every word cost x1.24 (a 4
+  clk / word average, the part's rate): 2.2 -> 14.13 / 14.71 / 1, 2.5 ->
+  15.39 / 16.05 / 1 -- still clear.
+
+*AREA (quartus_map 17.0, whole 2C core, M2_2C_DSB=0 in the map's QSF only;
+base cd01bb87 mapped the same day):*
+
+    build                         ALMs     block bits   M10K (TGPx4, by shape)
+    base (PLINES 1024)            39,263   3,453,744    15
+    R1006 steps 1-5 (v5)          39,805   3,815,216    52
+    R1006 final (v6)              39,905   3,815,216    52
+    final, M2_2C_XCACHE=0         39,768   3,647,280    34
+
+  So +642 ALM and +37 M10K (program 4 K x 64: +19; the ROM cache: +18 and
+  +137 ALM; forwarding +100 ALM). WITHOUT THE ROM CACHE (the option if the
+  M10K are wanted elsewhere): race 3.70 clk / word (1.75x; 333,104 outputs 0
+  differ, lockstep 0 bad), the model's race start at s = 2.2 13.87 / 14.44 /
+  1 over, at 2.5 15.15 / 15.79 / 1 -- still clear. tgpx4_core's own logic 1,831 -> 2,731
+  ALUTs; m2_copro 4,073 -> 4,987. Registers +96, DSP unchanged (107). On
+  s2301's 39,557 fitted (DSB off) that is ~40,200 -- inside the device; with
+  the sound board (41,449 fitted, 4196 / 4191 LABs, did not fit) it does not
+  fit without taking room from somewhere else: Ben's trade.
+
+*HOW CLOSE TO THE CHIP:* the MB86235 issues a word a cycle at 20 MHz -- 4
+clk_sys at 80 MHz (Fujitsu / Sega's figure as the family document has it;
+MAME's model of it the same). R1006's race average is 3.2, under it: words
+without a pending result run in 2 clocks (the fetch's floor), a word on a
+fresh FP result waits up to ~4. The average is now faster than the part, the
+dependent word slower. A pace (no more than one word per 4 clocks on
+average) would be a counter on the take, if the board shows a game that
+minds; the core's i960 is ~2x slower than the real one (R1005's s), so the
+frame is still longer than the real board's.
+
+*WRONG FIRST, KEPT:*
+  * Quartus 17.0 rejects a named assignment pattern whose key is also a
+    signal's name ('{..., aop: aop_q, ...}: "aop is not a constant"); the
+    first map died on it, Verilator had passed it. Built by a function (mkd).
+  * The first decoupled lockstep compared at every word and could not pass:
+    results are in flight at a word's end. It compares where none is.
+  * The checkpoint start's two faults above.
+  * The baseline HOTD / Over Rev runs over their whole captures went past
+    25 minutes on a loaded machine and were stopped; the comparison is the
+    first 60 M words of each, both builds.
+
+*NOT SETTLED:*
+  * Timing at 80 MHz: never fitted. New paths to watch: the arriving FP
+    result -> NaN / clamp mux -> forwarding -> the adder's operand registers
+    (S_DEC); cond -> take_d -> delay_pc / PC stack in S_DEC; EB + EO -> the
+    ROM cache's M10K address; the scoreboard's 32:1 lookups into dec_hz ->
+    the whole S_DEC block.
+  * The board's s and memory latency (R1005's open points stand).
+  * Any 2C game reading buffer RAM it wrote (none of the three does): kept in
+    order by the queue rule, not exercised by a capture.

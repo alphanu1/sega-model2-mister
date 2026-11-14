@@ -1,5 +1,32 @@
 # Handoff
 
+## 2026-11-14: stcc-speed (local, not pushed) -- the TGPx4 2x faster on STCC's race (R1006), quartus_map only
+
+Study R1006 has the record. Not fitted, not on the board.
+
+  * tgpx4_core: results written behind the sequencer (scoreboard, two-deep
+    descriptor queues per class, in-order issue per unit), the register file
+    in two banks (two write ports), results written as they arrive, operands
+    forwarded, control words with nothing to fetch done in S_DEC, a source in
+    hand skips S_XA, the ALU NOP is no op; a 4 K-word copro data ROM read
+    cache (M2_2C_XCACHE, 12; 0 = off). m2_tgpx4: posted buffer RAM writes
+    (16 deep), outputs held until they are through. M2_2C_PLINES now 4096.
+  * Race (150 M clocks from frame 7000): 6.48 -> 3.22 clk / word; HOTD 5.71 ->
+    3.12, Over Rev 5.75 -> 3.35 (first 60 M words). Every output and every
+    compared state equal to MAME's interpreter. Model, s = 2.2: race start
+    p50 17.2 -> 13.2 ms, 200 -> 1 frames over a vblank (frame 6966, the
+    i960's own 14.7 ms).
+  * quartus_map, DSB off: 39,263 -> 39,905 ALM (+642), TGPx4 M10K 15 -> 52 by
+    shape (+37). Without the ROM cache 39,768 / 34. With the sound board it
+    will not fit as it stands: Ben's trade.
+  * Bench: tb_tgpx4_replay --ck-frame N (checkpoint start: the race in
+    minutes), --stprof; sim/tgpx4/x4_deps.cpp. Captures (ROM-derived) and run
+    logs in sm2-builds/stcc-speed (cap/, runs/, maps/).
+
+REMAINS: a fit (DSB off, to test on the board); timing at 80 MHz unknown
+(R1006 lists the new paths). On the board: STCC's race start at 60 fps,
+HOTD / Over Rev unchanged.
+
 ## 2026-11-14: stcc-speed (local, not pushed) -- why STCC drops to 30 fps in the race (R1005), measured, no RTL changed
 
 Branch `stcc-speed` off 2c-mpeg d164d6be. Study R1005 has the record.
