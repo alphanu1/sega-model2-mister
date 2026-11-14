@@ -95,7 +95,13 @@
 
 `timescale 1ns/1ps
 
-module m2_geo_clip (
+module m2_geo_clip #(
+  // R1008: THE STACK IN M10K (1) OR MLAB (0). Its read is registered, so the
+  // two are the same circuit; R684 had it in M10K and R909 moved it back to
+  // MLAB for the 2A core's M10K. A build with M10K to spare (2C) sets 1 and
+  // gets its nine LABs back as logic.
+  parameter bit STK_M10K = 1'b0
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -213,8 +219,20 @@ module m2_geo_clip (
   logic [3:0]         is_out;
 
   // The points this level creates. At most four, in the "0,2 out" case.
-  logic [31:0]        tx [4], ty [4], tz [4];
-  logic [31:0]        tu [4], tv [4];             // R270
+  // R1008: IN LUT RAM, ONE ARRAY A COORDINATE, NOT 640 FLIP-FLOPS. Each is
+  // written one coordinate at a time (K_CLIPW's last step, at cp_dst) and
+  // read only by K_CHILD's push, at kid()'s constant index -- and every index
+  // a case pushes is one of the cn_last + 1 points that case's clips wrote at
+  // this level, so no point is read that this level did not write (the reset
+  // to zero was never seen). An MLAB reads asynchronously, as the flops did,
+  // and the word written at an edge is read from the next cycle. The push's
+  // 8:1 select of 160 bits (q or t, four each: 800 LEs in the map) becomes
+  // the q select and a 2:1 with the RAM's word.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] tx [4];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] ty [4];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] tz [4];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] tu [4];   // R270
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] tv [4];
 
   // ------------------------------------------------------------- the stack
   // A shift register: the top is always entry 0, so a push shifts down and a
@@ -232,13 +250,29 @@ module m2_geo_clip (
   // 8 LABs it held are logic the fitter is short of (R683, s638-s640).
   // R909: BACK TO MLAB on the 2A core's account -- 3,260 bits in five whole
   // M10K, and M10K is what the 2A core with the 15 kHz converter runs out of.
-  (* ramstyle = "MLAB" *) logic [162:0] sk_mem [NSTK*4];
+  // R1008: STK_M10K picks the block; the write (K_CHILD's push, below) is
+  // named here so either array is written from one place.
   logic [162:0]       sk_rd;
+  logic               sk_we;
+  logic [4:0]         sk_wa;
+  logic [162:0]       sk_wd;
   logic [2:0]         pcnt;                     // the pop's vertex counter, 0..4
   // The read address: vertex 0 of the top level in K_POP, vertex pcnt after.
   wire  [1:0]         pop_va     = (kst == K_POP) ? 2'd0 : pcnt[1:0];
   wire  [4:0]         sk_rd_addr = {sp[2:0] - 3'd1, pop_va};
-  always_ff @(posedge clk) sk_rd <= sk_mem[sk_rd_addr];
+  generate if (STK_M10K) begin : g_stk_m10k
+    (* ramstyle = "M10K, no_rw_check" *) logic [162:0] sk_mem [NSTK*4];
+    always_ff @(posedge clk) begin
+      if (sk_we) sk_mem[sk_wa] <= sk_wd;
+      sk_rd <= sk_mem[sk_rd_addr];
+    end
+  end else begin : g_stk_mlab
+    (* ramstyle = "MLAB" *) logic [162:0] sk_mem [NSTK*4];
+    always_ff @(posedge clk) begin
+      if (sk_we) sk_mem[sk_wa] <= sk_wd;
+      sk_rd <= sk_mem[sk_rd_addr];
+    end
+  end endgenerate
   logic [1:0]         sv_i;                     // the vertex being pushed or popped
   // R218: A VERTEX THE CLIPPER DID NOT CREATE KEEPS THE PIXEL IT CAME WITH.
   // Every emitted quad was reprojected here, four reciprocals at 29 cycles,
@@ -469,8 +503,7 @@ module m2_geo_clip (
         qx[si] <= '0; qy[si] <= '0; qz[si] <= '0; qsx[si] <= '0; qsy[si] <= '0; qpx[si] <= 1'b0; qid[si] <= 2'd0;
         qoz[si] <= 16'd0;
         ipx[si] <= '0; ipy[si] <= '0; ioz[si] <= 16'd0; ipf[si] <= 4'd0; qsf[si] <= 4'd0;
-        tx[si] <= '0; ty[si] <= '0; tz[si] <= '0;
-        qu[si] <= '0; qv[si] <= '0; tu[si] <= '0; tv[si] <= '0;
+        qu[si] <= '0; qv[si] <= '0;
         qwu[si] <= 16'd0; qwv[si] <= 16'd0;   // R952: f2uvw(0) is 0
       end
       for (si = 0; si < NSTK; si = si + 1) begin
@@ -602,13 +635,7 @@ module m2_geo_clip (
           4'd8: if (mul_rsp) begin c_m1  <= mul_res; cs <= 4'd9; kst <= K_CLIP; end
           4'd9: if (mul_rsp) begin c_m2  <= mul_res; cs <= 4'd10; kst <= K_CLIP; end
           default: if (add_rsp) begin
-            case (c_axis)
-              3'd0:    tx[cp_dst] <= add_res;
-              3'd1:    ty[cp_dst] <= add_res;
-              3'd2:    tz[cp_dst] <= add_res;
-              3'd3:    tu[cp_dst] <= add_res;
-              default: tv[cp_dst] <= add_res;
-            endcase
+            // R1008: the point's coordinate is written by t_we (below)
             if (c_axis == 3'd4) begin
               // No projection here any more: a created vertex carries only its
               // camera coordinates and is projected when its quad is emitted.
@@ -646,17 +673,8 @@ module m2_geo_clip (
         // is pushed first, so it sits deeper and is popped last -- MAME's
         // recursion order.
         K_CHILD: begin
-          automatic logic [2:0] k;
           // second_child, NOT its inverse: on the first pass this selects
-          // MAME's SECOND child.
-          k = kid(ccase, second_child, sv_i);
-          sk_mem[{sp[2:0], sv_i}] <= {k[2] ? 1'b0 : qpx[k[1:0]],
-                                      k[2] ? 2'd0 : qid[k[1:0]],
-                                      k[2] ? tv[k[1:0]] : qv[k[1:0]],
-                                      k[2] ? tu[k[1:0]] : qu[k[1:0]],
-                                      k[2] ? tz[k[1:0]] : qz[k[1:0]],
-                                      k[2] ? ty[k[1:0]] : qy[k[1:0]],
-                                      k[2] ? tx[k[1:0]] : qx[k[1:0]]};
+          // MAME's SECOND child. The word written is sk_wd (below).
           if (sv_i == 2'd3) begin
             sk_lvl[sp] <= lvl + 3'd1;
             sp   <= sp + 3'd1;
@@ -675,5 +693,30 @@ module m2_geo_clip (
       endcase
     end
   end
+
+  // R1008: the created point's coordinates: K_CLIPW's last step (the
+  // sequencer's `default` cs, the add that lands the coordinate) writes the
+  // axis c_axis of point cp_dst, exactly where the flops were loaded.
+  wire t_we = (kst == K_CLIPW) && (cs > 4'd9) && add_rsp;
+  always_ff @(posedge clk) begin
+    if (t_we && c_axis == 3'd0) tx[cp_dst] <= add_res;
+    if (t_we && c_axis == 3'd1) ty[cp_dst] <= add_res;
+    if (t_we && c_axis == 3'd2) tz[cp_dst] <= add_res;
+    if (t_we && c_axis == 3'd3) tu[cp_dst] <= add_res;
+    if (t_we && c_axis >= 3'd4) tv[cp_dst] <= add_res;
+  end
+
+  // R1008: the push, one vertex a cycle into level sp: a vertex of the
+  // current quad (k[2] = 0) or a point this level created.
+  wire [2:0] sk_k = kid(ccase, second_child, sv_i);
+  assign sk_we = (kst == K_CHILD);
+  assign sk_wa = {sp[2:0], sv_i};
+  assign sk_wd = {sk_k[2] ? 1'b0 : qpx[sk_k[1:0]],
+                  sk_k[2] ? 2'd0 : qid[sk_k[1:0]],
+                  sk_k[2] ? tv[sk_k[1:0]] : qv[sk_k[1:0]],
+                  sk_k[2] ? tu[sk_k[1:0]] : qu[sk_k[1:0]],
+                  sk_k[2] ? tz[sk_k[1:0]] : qz[sk_k[1:0]],
+                  sk_k[2] ? ty[sk_k[1:0]] : qy[sk_k[1:0]],
+                  sk_k[2] ? tx[sk_k[1:0]] : qx[sk_k[1:0]]};
 
 endmodule
