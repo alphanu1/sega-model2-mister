@@ -158,7 +158,20 @@ module m2_quad_store #(
   // the other bank's index array, free for the same reason; only the keys
   // need a new array (NX deep). Virtua Cop 2's ranking is 2,248 quads.
   // 0: the store as it was (2,048 a list, the excess refused).
-  parameter int unsigned NX     = 0
+  parameter int unsigned NX     = 0,
+  // R1003: WHERE THE PAYLOAD LIVES -- Model 1's EXT_PAY (m1_quad_store,
+  // 9c05b79). 0: vtx_* and uvt_* in M10K, replayed exactly as before. 1:
+  // outside, through the ext_* ports (m2_raster3d puts both banks in DDR3
+  // through m2_ddram_payload): every quad accepted is written there the cycle
+  // it is accepted, and the scan ASKS for a quad's payload on the hit and
+  // carries on, the quad's colour waiting in a queue of XD until its payload
+  // arrives to meet it (Model 1's 29551b1). The sort, the band filter and the
+  // spill do not change; att, key, key_x and the index arrays stay here.
+  parameter bit          EXT_PAY = 1'b0,
+  parameter int unsigned XD     = 16,      // the colour queue: = m2_ddram_payload's DEPTH
+  // Derived -- never overridden (Quartus 17 takes no localparam here): the
+  // payload's width, the vertex word and the texture word.
+  parameter int unsigned PAYW   = 4 * 2 * XW + (VX ? VXN : 0) + 4 * 2 * UVW + TXW + 4 * OZW + (MZ ? 1 : 0)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -205,6 +218,9 @@ module m2_quad_store #(
   // draw nothing.
   input  logic [BW-1:0] replay_band,
   input  logic        replay_start,
+  // R1003 (EXT_PAY only): the band after replay_band will be the next one
+  // started, so its scan may begin as soon as this band's has finished.
+  input  logic        replay_ahead,
   output logic        replay_busy,
   input  logic        out_ready,
   output logic        out_valid,
@@ -222,7 +238,24 @@ module m2_quad_store #(
 
   output logic [15:0] dbg_count,
   output logic [15:0] dbg_dropped,
-  output logic [15:0] dbg_tiny        // R216: quads refused for being under TINY px both ways
+  output logic [15:0] dbg_tiny,       // R216: quads refused for being under TINY px both ways
+
+  // ---- R1003: the payload's backing, when EXT_PAY (else outputs zero).
+  // Writes are posted -- one a quad, the cycle it is accepted, at the slot's
+  // physical bank and address -- and reads are request/ready, valid/take,
+  // m2_ddram_payload's shape. ext_req leaves a register a cycle after the
+  // hit that asked; ext_take is a register too.
+  output logic            ext_we,
+  output logic            ext_wbank,
+  output logic [IW-1:0]   ext_waddr,
+  output logic [PAYW-1:0] ext_wdata,
+  output logic            ext_req,
+  output logic            ext_rbank,
+  output logic [IW-1:0]   ext_raddr,
+  input  logic            ext_ready,
+  input  logic            ext_valid,
+  output logic            ext_take,
+  input  logic [PAYW-1:0] ext_rdata
 );
 
 
@@ -570,6 +603,8 @@ module m2_quad_store #(
       // Every accepted quad is WRITTEN at slot wcount and only the COUNT is
       // withheld when it is tiny: the slot is simply reused by the next quad.
       if (in_valid && has_room) begin
+        // R1003: with EXT_PAY the same words leave on ext_* (below) instead
+        if (!EXT_PAY) begin
         if (w_pb) begin   // R962: the slot's bank, at its address
           vtx_1[w_addr] <= VWX'({in_vx,                                    // R867: dropped without VX
                                     satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
@@ -588,6 +623,7 @@ module m2_quad_store #(
           uvt_0[w_addr]  <= UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,
                                      in_tex, in_v3, in_u3, in_v2, in_u2,
                                      in_v1, in_u1, in_v0, in_u0});
+        end
         end
         // R246: in_z CARRIES THE REFERENCE'S 16-BIT z VALUE in its low half
         // (m2_geometry's zval, model2_v.cpp's float_to_zval), not a float.
@@ -613,6 +649,30 @@ module m2_quad_store #(
       end
     end
   end
+
+  // R1003: THE POSTED WRITE, on the cycle and at the slot the arrays above are
+  // written without EXT_PAY: {texture word, vertex word}, the same two words.
+  // A tiny quad's payload is written too and its slot reused, as there.
+  generate
+    if (EXT_PAY) begin : g_ext_w
+      if (PAYW != VWX + UW) begin : g_payw_mismatch
+        PAYW_must_be_VWX_plus_UW u_error ();   // no such module: elaboration stops here
+      end
+      assign ext_we    = in_valid && has_room && !clear;
+      assign ext_wbank = w_pb;
+      assign ext_waddr = w_addr;
+      assign ext_wdata = {UW'({in_mipz, in_oz3, in_oz2, in_oz1, in_oz0,
+                               in_tex, in_v3, in_u3, in_v2, in_u2,
+                               in_v1, in_u1, in_v0, in_u0}),
+                          VWX'({in_vx,
+                                satf(in_y3, in_frac[15:14]), satf(in_x3, in_frac[13:12]),
+                                satf(in_y2, in_frac[11:10]), satf(in_x2, in_frac[9:8]),
+                                satf(in_y1, in_frac[7:6]),   satf(in_x1, in_frac[5:4]),
+                                satf(in_y0, in_frac[3:2]),   satf(in_x0, in_frac[1:0])})};
+    end else begin : g_int_w
+      assign ext_we = 1'b0; assign ext_wbank = 1'b0; assign ext_waddr = '0; assign ext_wdata = '0;
+    end
+  endgenerate
 
   // ---------------------------------------------------------------- radix sort
   typedef enum logic [3:0] {
@@ -951,9 +1011,13 @@ module m2_quad_store #(
   logic [VWX-1:0] vtx_q0, vtx_q1;
   logic [UW-1:0]  uvt_q0, uvt_q1;
   logic           rd_bank, rd_ld;
-  wire  [VWX-1:0] vtx_r = !rd_ld ? '0 : rd_bank ? vtx_q1 : vtx_q0;
+  // R1003: with EXT_PAY the words are the backing's reply FIFO head
+  // (m2_ddram_payload's lanes are M10K read latches too, held between pops).
+  wire  [VWX-1:0] vtx_r = EXT_PAY ? ext_rdata[VWX-1:0]
+                        : !rd_ld ? '0 : rd_bank ? vtx_q1 : vtx_q0;
   assign out_vx = VX ? vtx_r[VWX-1 -: VXN] : '0;   // R867; R932
-  wire  [UW-1:0]  uvt_r = !rd_ld ? '0 : rd_bank ? uvt_q1 : uvt_q0;
+  wire  [UW-1:0]  uvt_r = EXT_PAY ? ext_rdata[PAYW-1:VWX]
+                        : !rd_ld ? '0 : rd_bank ? uvt_q1 : uvt_q0;
   wire [2*XW-1:0] v0_r = vtx_r[0*2*XW +: 2*XW];
   wire [2*XW-1:0] v1_r = vtx_r[1*2*XW +: 2*XW];
   wire [2*XW-1:0] v2_r = vtx_r[2*2*XW +: 2*XW];
@@ -981,14 +1045,21 @@ module m2_quad_store #(
 
   wire [BW-1:0] q_band_hi = att_rd[AT_W-1:AT_W-BW];
   wire [BW-1:0] q_band_lo = att_rd[AT_W-BW-1:CW+1];
-  wire          hit = v2 && (replay_band >= q_band_lo) && (replay_band <= q_band_hi);
+  // R1003: with EXT_PAY the band the SCAN is on (s_band, registered), which
+  // runs one band ahead of replay_band while the fill drains a band.
+  logic [BW-1:0] s_band;
+  wire  [BW-1:0] h_band = EXT_PAY ? s_band : replay_band;
+  wire          hit = v2 && (h_band >= q_band_lo) && (h_band <= q_band_hi);
   // The pipeline moves unless a hit is standing with nowhere to go.
   // R741: unless ANY quad is standing in stage two with the queue full -- hit
   // or not. The hit test (replay_band against the att word just read) was in
   // the list RAMs' read enable (s791 at 80 MHz: raster3d fill_band -> the
   // RAM's PORT_B_ADDRESS_STALL -0.467). A miss now waits for a queue slot it
   // does not need, a cycle, only while the queue is full; nothing is reordered.
-  wire          adv = sc_run && !(v2 && hq_full);
+  // R1003: "the queue" is the backing's when EXT_PAY: the colour queue and the
+  // payload client's credit, both registered (q_full, below).
+  wire          q_full;
+  wire          adv = sc_run && !(v2 && q_full);
 
   typedef enum logic [1:0] { E_IDLE, E_READ, E_OUT } estate_t;
   estate_t e_st;
@@ -1012,6 +1083,12 @@ module m2_quad_store #(
       o_ld    <= 1'b1;
     end
   end
+
+  generate
+    if (!EXT_PAY) begin : g_emit_m10k
+  assign q_full = hq_full;
+  assign s_band = '0;
+  assign ext_req = 1'b0; assign ext_rbank = 1'b0; assign ext_raddr = '0; assign ext_take = 1'b0;
 
   // R985: the read the flops' E_READ did, at the same edge (E_READ outside
   // reset and a replay_start, which take priority over the case below).
@@ -1096,5 +1173,154 @@ module m2_quad_store #(
       endcase
     end
   end
+
+    end else begin : g_emit_ext
+  // ---- R1003: THE SCAN ASKS, THE OUTPUT WAITS (Model 1's 29551b1, 9c05b79).
+  //
+  // The payload is not one cycle away any more, so the emitter cannot fetch
+  // it when the quad reaches the head of R541's queue: that would put a DDR3
+  // round trip in front of every quad the fill takes. The scan asks for it
+  // instead, on the hit, and carries on; the quad's colour waits here, in
+  // order, until its payload arrives to meet it. Colours and payloads are
+  // queued in the same order, one FIFO each, so neither needs a tag -- the
+  // Nth reply is the Nth hit's (m2_ddram_payload returns in order).
+  //
+  // THE CREDIT RULE IS MODEL 1's. The colour is queued at the hit and the
+  // request leaves a register a cycle later; both are retired on the same
+  // edge (tk). So this queue counts every read a cycle EARLIER than the
+  // client's credit does and never later, and with XD = the client's DEPTH a
+  // request can never arrive with the credit spent. ext_ready is consulted as
+  // well, as Model 1's can_take does: it is the client's registered compare,
+  // and it holds the scan while the client is in reset.
+  //
+  // THE OUTPUT IS THE HEADS, NOT A REGISTER. The payload words are the reply
+  // FIFO's M10K read latches and the colour is this queue's, both read
+  // show-ahead at the pointer the next pop leaves; the take is registered
+  // (tk), so nothing from the fill's out_ready reaches a RAM address in the
+  // same cycle (R741's lesson), and a quad is offered every second cycle at
+  // most -- E_OUT -> E_READ -> E_OUT's rate, the old emitter's. The colour is
+  // read at least two edges after its write: its payload's request leaves a
+  // cycle after the hit and DDR3 answers no sooner than the next.
+  localparam int unsigned XQW = (XD > 1) ? $clog2(XD) : 1;
+  (* ramstyle = "M10K" *) logic [CW:0] cq [XD];   // {moire, colour}, taken at the hit
+  logic [CW:0]  cq_q;
+  logic [XQW:0] cwp, crp;
+  wire  [XQW:0] cfill  = cwp - crp;
+  wire          cfull  = (cfill == (XQW+1)'(XD));
+  wire          cempty = (cfill == '0);
+  logic         tk;                 // the quad offered last cycle was taken: retire both heads
+  assign q_full = cfull || !ext_ready;
+  wire          c_push = adv && hit && !replay_start;
+  wire  [XQW:0] crp_nx = crp + (XQW+1)'(tk);
+  always_ff @(posedge clk) begin
+    if (c_push) cq[cwp[XQW-1:0]] <= att_rd[CW:0];
+    cq_q <= cq[crp_nx[XQW-1:0]];
+  end
+  // ---- R1003: AND THE SCAN RUNS ONE BAND AHEAD. Every band starts with its
+  // first payload a DDR3 round trip away, and the sequencer starts a band
+  // only once the last has drained (C_DONE waits on replay_busy and on the
+  // span path), so 48 bands a list paid it 48 times: HOTD's list 1808 drew
+  // 1,392 cycles slower than with the payload on chip. So when the scan of
+  // a band has finished and replay_ahead says the next band follows, the scan
+  // goes straight on to that band, while the fill is still drawing this one:
+  // its colours queue behind this band's (`bnd` marks where they start) and
+  // its payloads are asked for, but nothing of it is offered until the
+  // sequencer starts that band. The quads the fill sees, and their order, are
+  // exactly as before; only the waiting moves under the previous band's
+  // drain.
+  //
+  // A START FOR ANOTHER BAND finds the lookahead's quads in the queues: on
+  // FB_DDR3 bands run 0..NBANDS-1 in order, so this happens only if the list
+  // is swapped mid-draw (the R653 self-test can do that). They are DROPPED --
+  // taken as their payloads arrive and never offered -- and the new band's
+  // scan starts once the queues are empty, so no reply is ever mismatched.
+  logic          ahead;            // the scan is on the band after replay_band
+  logic          la;               // a lookahead was started this band: entries from bnd on are its
+  logic [XQW:0]  bnd;
+  logic          drop, pend;       // R1003: dropping a stale lookahead; a start waiting for it
+  wire           cur_left = la ? (crp != bnd) : !cempty;   // this band's quads still queued
+  assign out_valid   = ext_valid && cur_left && !tk && !drop;
+  assign out_col     = c888(cq_q[CW-1:0]);
+  assign out_moire   = cq_q[CW];
+  assign ext_take    = tk;
+  // Busy until this band's scan has drained AND every quad it queued has been
+  // taken; a quad still waiting for its payload holds a colour here. The
+  // lookahead's own scan and quads do not hold the band.
+  assign replay_busy = (sc_run && !ahead) || cur_left || tk || drop || pend;
+
+  // The old emitter's registers, unused here.
+  assign q = '0; assign e_st = E_IDLE; assign hq_wp = '0; assign hq_rp = '0;
+  assign vtx_q0 = '0; assign vtx_q1 = '0; assign uvt_q0 = '0; assign uvt_q1 = '0;
+  assign rd_bank = 1'b0; assign rd_ld = 1'b0;
+
+  wire drained = sc_run && !v0 && !v1 && !v2;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      sc_run <= 1'b0; pi <= '0;
+      v1 <= 1'b0; v2 <= 1'b0; q2 <= '0;
+      cwp <= '0; crp <= '0; tk <= 1'b0;
+      ext_req <= 1'b0; ext_rbank <= 1'b0; ext_raddr <= '0;
+      s_band <= '0; ahead <= 1'b0; la <= 1'b0; bnd <= '0; drop <= 1'b0; pend <= 1'b0;
+    end else begin
+      ext_req <= 1'b0;
+      // ---- the output: independent of the scan. A quad is taken by the fill
+      // (offered) or, while dropping, as soon as its payload is there.
+      tk <= (out_valid && out_ready) || (drop && ext_valid && !cempty && !tk);
+      if (tk) crp <= crp + 1'b1;
+      if (drop && cempty && !tk && !ext_req) begin
+        drop <= 1'b0; la <= 1'b0;                       // the stale lookahead is gone
+      end
+      if (replay_start || (pend && !drop)) begin
+        if (replay_start && la && (replay_band == s_band) && !drop) begin
+          // the lookahead was this band: it simply becomes the band. If its
+          // scan has already finished, the next band's begins now -- `drained`
+          // will not come round again to start it, and without this every
+          // second band paid the round trip (tb_m2_quad_store_ext: la 0 at a
+          // restart after a long gap).
+          if (!sc_run && replay_ahead && rcount != 0) begin
+            ahead <= 1'b1; la <= 1'b1; bnd <= cwp;
+            s_band <= s_band + 1'b1;
+            sc_run <= 1'b1; pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
+          end else begin
+            ahead <= 1'b0; la <= 1'b0;
+          end
+        end else if (replay_start && la) begin
+          // a start for another band: drop the lookahead first (above)
+          drop <= 1'b1; pend <= 1'b1; ahead <= 1'b0;
+          sc_run <= 1'b0; v1 <= 1'b0; v2 <= 1'b0;
+        end else begin
+          pend <= 1'b0;
+          sc_run <= (rcount != 0); s_band <= replay_band;
+          pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
+        end
+      end else if (!drop) begin
+        // ---- the scan: the same three-stage alignment as before (see above).
+        if (adv) begin
+          q2      <= ord_idx;
+          v1      <= v0;
+          v2      <= v1;
+          if (v0) pi <= pi + 1'b1;
+          // The hit in stage two leaves the pipeline on this same edge: its
+          // colour into the queue, its payload asked for from the register.
+          if (hit) begin
+            cwp       <= cwp + 1'b1;
+            ext_req   <= 1'b1;
+            ext_rbank <= rbank ^ sb(q2);   // R962: the slot's physical bank
+            ext_raddr <= q2[IW-1:0];
+          end
+        end
+        if (drained) begin
+          // this band's scan is done; the next band's begins at once
+          if (!ahead && replay_ahead && rcount != 0) begin
+            ahead <= 1'b1; la <= 1'b1; bnd <= cwp;
+            s_band <= s_band + 1'b1;
+            pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
+          end else sc_run <= 1'b0;
+        end
+      end
+    end
+  end
+    end
+  endgenerate
 
 endmodule
