@@ -156,6 +156,19 @@ module m2_raster3d #(
   // drawn whole. FB_DDR3 only (the band path replays the other bank every
   // frame). 0: 2,048 a list, as before.
   parameter int unsigned QNX = 0,
+  // R1003: THE DDR3 MASTER INSIDE (FB_DDR3 only). 1: m2_ddr3 is built here and
+  // this module drives the framework's DDRAM_* port itself (Model 1's
+  // m1_raster3d, 311710f); fb_* are unused. 0: m2_ddr3 is the caller's, on
+  // fb_*, as before.
+  parameter bit DDRAM_IN = 1'b0,
+  // R1003: THE QUAD STORE'S PAYLOAD IN DDR3 (DDRAM_IN only): m2_quad_store
+  // EXT_PAY through m2_ddram_payload, sharing the port with m2_ddr3 through
+  // m2_ddram_mux (both Model 1's). ~124 M10K of vertex and texture words leave
+  // the chip; the picture is the same bit for bit. 0: they stay in M10K.
+  parameter bit PAY_DDR3 = 1'b0,
+  parameter logic [28:0] PAY_BASE = 29'h0610_0000,   // byte 0x30800000, 8 MB above the frame buffers
+  parameter int unsigned PAY_DEPTH = 16,              // payload reads in flight (and the store's colour queue)
+  parameter bit PAY_HOLD = 1'b1,                     // the payload waits while the scanout fetches a line (R655)
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -355,6 +368,28 @@ module m2_raster3d #(
   input  logic        fb_rvalid,
   input  logic        fb_ack,
   input  logic [63:0] fb_dout,
+  // ---- R1003: the framework's DDRAM port itself, with DDRAM_IN (else idle).
+  // ddr_rst_n is the MEMORY reset with the boot's release (Model2.sv's
+  // mem_rst_n & ddr_go, R380): it alone resets m2_ddr3, the mux and the
+  // payload client, so no burst is ever cut short (R649).
+  input  logic        ddr_rst_n,
+  input  logic [28:0] fb_base,       // R654: m2_ddr3's base
+  output logic        DDRAM_CLK,
+  input  logic        DDRAM_BUSY,
+  output logic [7:0]  DDRAM_BURSTCNT,
+  output logic [28:0] DDRAM_ADDR,
+  input  logic [63:0] DDRAM_DOUT,
+  input  logic        DDRAM_DOUT_READY,
+  output logic        DDRAM_RD,
+  output logic [63:0] DDRAM_DIN,
+  output logic [7:0]  DDRAM_BE,
+  output logic        DDRAM_WE,
+  // R1003: the payload's health, as Model 1's dbg_pay_*: posted writes lost
+  // (zero by construction -- q_ready waits on the queue's room), reads
+  // refused (zero by contract), and the longest wait for a reply in cycles.
+  output logic [15:0] dbg_pay_ovf,
+  output logic [15:0] dbg_pay_refused,
+  output logic [15:0] dbg_pay_wait,
   output logic [15:0] dbg_fb_lines,
   output logic [15:0] dbg_fb_late,
   output logic [15:0] dbg_fb_pub,    // frames published
@@ -460,7 +495,23 @@ module m2_raster3d #(
   logic swap_d;   // the store's clear (below)
   // R962: and not while the store holds the list at the spill's edge.
   logic qs_stall, qs_ofree;
-  assign q_ready = (pst == P_COLLECT) && !swap_d && !qs_stall;
+  // R1003: THE PAYLOAD'S PORTS. m2_ddram_payload (g_fb) is the backing when
+  // PAY_ON; q_ready also waits for room in its posted-write queue -- a quad is
+  // held, never lost, when the geometry outruns DDR3 (the bench does; the
+  // board's geometry is ~1 quad per 200-325 cycles against ~7 for a write).
+  localparam bit          PAY_ON = FB_DDR3 && DDRAM_IN && PAY_DDR3;
+  localparam int unsigned QPW = 4 * 2 * 13 + (TEXLUT ? LSB - 2 : 0)        // the vertex word (XW 13)
+                              + 4 * 2 * 13 + STW + 4 * 16 + (MIP ? 1 : 0);   // the texture word (UVW 13, OZW 16)
+  logic            qp_we, qp_wbank, qp_req, qp_rbank, qp_ready, qp_valid, qp_take;
+  logic [10:0]     qp_waddr, qp_raddr;
+  logic [QPW-1:0]  qp_wdata, qp_rdata;
+  logic            qp_wr_idle, qp_wr_room;
+  generate if (!PAY_ON) begin : g_qp_none   // else g_fb.g_ddr_in.g_pay drives them
+    assign qp_ready = 1'b0; assign qp_valid = 1'b0; assign qp_rdata = '0;
+    assign qp_wr_idle = 1'b1; assign qp_wr_room = 1'b1;
+    assign dbg_pay_ovf = '0; assign dbg_pay_refused = '0; assign dbg_pay_wait = '0;
+  end endgenerate
+  assign q_ready = (pst == P_COLLECT) && !swap_d && !qs_stall && (!PAY_ON || qp_wr_room);
   wire   q_take  = q_valid && q_ready;
 
   // One two-bank store: collect into `bank`, replay `~bank` (R213 shares the
@@ -485,7 +536,8 @@ module m2_raster3d #(
   m2_quad_store #(.BAND_H(BAND_H), .NBANDS(NBANDS), .BW(BW), .SCR_H(SCR_H), .TINY(4), .TINY_FINE(2), .TINY_FAR(16'h3000),   // R769, R776
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
                   .RAWCOL(TEXLUT), .VX(TEXLUT), .VXN(LSB - 2), .CW(TEXLUT ? 17 : 16), .TXW(STW),
-                  .NX(FB_DDR3 ? QNX : 0)) u_store (   // R962   // R607, R626, R828c, R867; R932: VXN; R940: STW
+                  .NX(FB_DDR3 ? QNX : 0),   // R962   // R607, R626, R828c, R867; R932: VXN; R940: STW
+                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH)) u_store (   // R1003
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .ofree(qs_ofree), .in_stall(qs_stall),   // R962
@@ -502,6 +554,9 @@ module m2_raster3d #(
     .sort_start(qs_sort_start), .sort_busy(qs_sort_busy),
     .replay_band(qs_band),
     .replay_start(qs_replay_start), .replay_busy(qs_replay_busy),
+    // R1003: on the frame buffer the bands run 0..NBANDS-1 in order (C_DONE),
+    // so the store may scan the next band while this one drains
+    .replay_ahead(FB_DDR3 && (fill_band != BW'(NBANDS-1))),
     .out_ready(qs_out_ready), .out_valid(qs_out_valid),
     .out_x0(qo_x0), .out_y0(qo_y0), .out_x1(qo_x1), .out_y1(qo_y1),
     .out_x2(qo_x2), .out_y2(qo_y2), .out_x3(qo_x3), .out_y3(qo_y3),
@@ -510,7 +565,11 @@ module m2_raster3d #(
     .out_u0(qo_u0), .out_v0(qo_v0), .out_u1(qo_u1), .out_v1(qo_v1),
     .out_u2(qo_u2), .out_v2(qo_v2), .out_u3(qo_u3), .out_v3(qo_v3),
     .out_tex(qo_texs), .out_mipz(qo_mipz),                            // R828c, R867
-    .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped), .dbg_tiny(dbg_tiny)
+    .dbg_count(dbg_quads), .dbg_dropped(dbg_dropped), .dbg_tiny(dbg_tiny),
+    // R1003: the payload's backing, m2_ddram_payload in g_fb below
+    .ext_we(qp_we), .ext_wbank(qp_wbank), .ext_waddr(qp_waddr), .ext_wdata(qp_wdata),
+    .ext_req(qp_req), .ext_rbank(qp_rbank), .ext_raddr(qp_raddr),
+    .ext_ready(qp_ready), .ext_valid(qp_valid), .ext_take(qp_take), .ext_rdata(qp_rdata)
   );
 
   // ------------------------------------------------------------- the filler
@@ -1092,6 +1151,11 @@ module m2_raster3d #(
       FB_DDR3_FTB_requires_FB_WCOMB u_error ();   // no such module: elaboration stops here (R683)
     end
     if (FB_DDR3) begin : g_fb
+      // R1003: m2_ddr3's consumer port, to the caller's master (fb_*) or ours
+      logic        f_req, f_we, f_wnext, f_wacc, f_rvalid, f_ack;
+      logic [24:0] f_addr;
+      logic [7:0]  f_blen, f_be;
+      logic [63:0] f_din, f_dout;
       logic        w_req, w_we, w_wnext, w_wacc, w_ack;
       logic [24:0] w_addr;
       logic [7:0]  w_blen, w_be;
@@ -1214,7 +1278,7 @@ module m2_raster3d #(
         .line_req(line_pulse), .line_y(fl_line_c), .line_ready(), .hungry(fbr_hungry),   // R655
         .il(il_s[2]), .line_f(fl_fld_c),                                                  // R682
         .m_req(r_req), .m_we(r_we), .m_addr(r_addr), .m_blen(r_blen),
-        .m_rvalid(r_rvalid), .m_dout(fb_dout), .m_ack(r_ack),
+        .m_rvalid(r_rvalid), .m_dout(f_dout), .m_ack(r_ack),   // R1003: f_dout
         .rd_buf(scan_y[1:0]), .rd_x(scan_x[$clog2(SCR_W)-1:0]),   // R655
         .rd_col(fb_rd_col), .rd_hit(fbr_hit),
         .dbg_lines(dbg_fb_lines), .dbg_late(dbg_fb_late),
@@ -1312,16 +1376,92 @@ module m2_raster3d #(
         .b_req(w_req), .b_hold(fbr_hungry || pace_hold), .b_we(w_we), .b_addr(w_addr), .b_blen(w_blen),   // R655, R656
         .b_din(w_din), .b_be(w_be),
         .b_wnext(w_wnext), .b_wacc(w_wacc), .b_rvalid(), .b_ack(w_ack),
-        .m_req(fb_req), .m_we(fb_we), .m_addr(fb_addr), .m_blen(fb_blen),
-        .m_din(fb_din), .m_be(fb_be),
-        .m_wnext(fb_wnext), .m_wacc(fb_wacc), .m_rvalid(fb_rvalid), .m_ack(fb_ack),
-        .m_dout(fb_dout), .dout(),
+        .m_req(f_req), .m_we(f_we), .m_addr(f_addr), .m_blen(f_blen),   // R1003: f_*
+        .m_din(f_din), .m_be(f_be),
+        .m_wnext(f_wnext), .m_wacc(f_wacc), .m_rvalid(f_rvalid), .m_ack(f_ack),
+        .m_dout(f_dout), .dout(),
         .dbg_a_waits(), .dbg_b_waits(),
         .dbg_busy(), .dbg_owner()
       );
+
+      // ---- R1003: THE DDR3 MASTER, HERE OR THE CALLER'S. With DDRAM_IN it is
+      // built here (Model 1's m1_raster3d does the same, 311710f), so that the
+      // frame buffer and the quad payload can share the framework's one port
+      // at the DDRAM level: m2_ddr3 is one transaction at a time, and the
+      // payload's prefetch exists to have sixteen reads in flight, which its
+      // request/acknowledge port would serialise (m2_ddram_mux's header).
+      if (DDRAM_IN) begin : g_ddr_in
+        assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
+        assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
+        logic        fa_rd, fa_we, fa_busy, fa_dout_ready;
+        logic [28:0] fa_addr;
+        logic [7:0]  fa_bc, fa_be;
+        logic [63:0] fa_din, fa_dout;
+        m2_ddr3 u_ddr3 (
+          .base(fb_base),   // R654
+          .clk(clk), .rst_n(ddr_rst_n),
+          .req(f_req), .we(f_we), .addr(f_addr), .blen(f_blen), .din(f_din), .be(f_be),
+          .wnext(f_wnext), .wacc(f_wacc), .rvalid(f_rvalid), .ack(f_ack), .dout(f_dout),
+          .DDRAM_CLK(), .DDRAM_BUSY(fa_busy),
+          .DDRAM_BURSTCNT(fa_bc), .DDRAM_ADDR(fa_addr),
+          .DDRAM_DIN(fa_din), .DDRAM_BE(fa_be),
+          .DDRAM_WE(fa_we), .DDRAM_RD(fa_rd),
+          .DDRAM_DOUT(fa_dout), .DDRAM_DOUT_READY(fa_dout_ready),
+          .dbg_lat_last(), .dbg_lat_max(), .dbg_inflight_max(), .dbg_stuck_wr(), .dbg_acks()
+        );
+        assign DDRAM_CLK = clk;
+        if (PAY_ON) begin : g_pay
+          logic        pb_rd, pb_we, pb_busy, pb_dout_ready, pb_want;
+          logic [28:0] pb_addr;
+          logic [7:0]  pb_bc, pb_be;
+          logic [63:0] pb_din;
+          m2_ddram_payload #(.IW(11), .PW(QPW), .DEPTH(PAY_DEPTH), .BASE(PAY_BASE)) u_pay (
+            .clk(clk), .rst_n(ddr_rst_n),
+            .flush(1'b0),   // the 3D layer is not reset by the game (rst_n is the memory's)
+            .wr_req(qp_we), .wr_bank(qp_wbank), .wr_idx(qp_waddr), .wr_data(qp_wdata),
+            .wr_idle(qp_wr_idle), .wr_room(qp_wr_room),
+            .rd_req(qp_req), .rd_bank(qp_rbank), .rd_idx(qp_raddr),
+            .rd_ready(qp_ready), .rd_valid(qp_valid), .rd_take(qp_take), .rd_data(qp_rdata),
+            .dbg_wr_ovf(dbg_pay_ovf), .dbg_rd_refused(dbg_pay_refused), .dbg_rd_wait(dbg_pay_wait),
+            .want(pb_want),
+            .DDRAM_CLK(), .DDRAM_BUSY(pb_busy),
+            .DDRAM_BURSTCNT(pb_bc), .DDRAM_ADDR(pb_addr),
+            .DDRAM_DOUT(fa_dout), .DDRAM_DOUT_READY(pb_dout_ready),
+            .DDRAM_RD(pb_rd), .DDRAM_DIN(pb_din), .DDRAM_BE(pb_be), .DDRAM_WE(pb_we)
+          );
+          // The frame buffer is master A, the payload B; B waits while the
+          // scanout has a line to fetch (R655), as Model 1's does.
+          m2_ddram_mux u_mux (
+            .clk(clk), .rst_n(ddr_rst_n), .hold_b(PAY_HOLD && fbr_hungry),
+            .a_rd(fa_rd), .a_we(fa_we), .a_addr(fa_addr), .a_burstcnt(fa_bc),
+            .a_din(fa_din), .a_be(fa_be), .a_busy(fa_busy), .a_dout_ready(fa_dout_ready),
+            .dout(fa_dout),
+            .b_rd(pb_rd), .b_we(pb_we), .b_want(pb_want), .b_addr(pb_addr), .b_burstcnt(pb_bc),
+            .b_din(pb_din), .b_be(pb_be), .b_busy(pb_busy), .b_dout_ready(pb_dout_ready),
+            .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+            .DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+            .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+            .dbg_q_max(), .dbg_q_ovf()
+          );
+        end else begin : g_nopay
+          // straight onto the port: the frame buffer alone, as Model2.sv's was
+          assign DDRAM_RD = fa_rd; assign DDRAM_WE = fa_we; assign DDRAM_ADDR = fa_addr;
+          assign DDRAM_BURSTCNT = fa_bc; assign DDRAM_DIN = fa_din; assign DDRAM_BE = fa_be;
+          assign fa_busy = DDRAM_BUSY; assign fa_dout_ready = DDRAM_DOUT_READY; assign fa_dout = DDRAM_DOUT;
+        end
+      end else begin : g_ddr_out
+        assign fb_req = f_req; assign fb_we = f_we; assign fb_addr = f_addr;
+        assign fb_blen = f_blen; assign fb_din = f_din; assign fb_be = f_be;
+        assign f_wnext = fb_wnext; assign f_wacc = fb_wacc; assign f_rvalid = fb_rvalid;
+        assign f_ack = fb_ack; assign f_dout = fb_dout;
+        assign DDRAM_CLK = clk; assign DDRAM_BURSTCNT = 8'd1; assign DDRAM_ADDR = '0;
+        assign DDRAM_RD = 1'b0; assign DDRAM_DIN = '0; assign DDRAM_BE = 8'hff; assign DDRAM_WE = 1'b0;
+      end
     end else begin : g_nofb
       assign fb_req = 1'b0; assign fb_we = 1'b0; assign fb_addr = 25'd0;
       assign fb_blen = 8'd0; assign fb_din = 64'd0; assign fb_be = 8'd0;
+      assign DDRAM_CLK = clk; assign DDRAM_BURSTCNT = 8'd1; assign DDRAM_ADDR = '0;
+      assign DDRAM_RD = 1'b0; assign DDRAM_DIN = '0; assign DDRAM_BE = 8'hff; assign DDRAM_WE = 1'b0;
       assign fb_rd_col = 24'd0; assign fb_rd_hit = 1'b0;
       assign fbw_in_ready = 1'b0;
       assign fbw_empty    = 1'b1;
@@ -1860,7 +2000,13 @@ module m2_raster3d #(
       case (pst)
         P_COLLECT: if (q_end) pst <= P_SORT;
         P_SORT:    pst <= P_SORTW;
-        P_SORTW:   if (!qs_sort_busy) pst <= P_READY;
+        // R1003: and every posted payload write is on the DDR3 bus before the
+        // list can be handed to the reader (Model 1's P_SORTW): the client
+        // puts reads first, so a read must not overtake a write it needs.
+        // The sort takes ~5 x 2 x count cycles after the last quad, so this
+        // does not wait in practice; it is here so that it cannot be the
+        // reason a picture is wrong.
+        P_SORTW:   if (!qs_sort_busy && (!PAY_ON || qp_wr_idle)) pst <= P_READY;
         P_READY:   if (swap) begin pst <= P_COLLECT; bank <= ~bank; dvalid <= 1'b1;   // R650: swap, not frame_start
                                           dbg_hold <= hold_cnt; hold_cnt <= 8'd0; end
       endcase

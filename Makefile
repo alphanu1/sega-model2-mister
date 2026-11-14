@@ -406,7 +406,7 @@ RLD_RTL := rtl/mem/m2_sdram.sv rtl/io/m2_rom_loader.sv sim/mem/sdram_model.sv si
 
 
 .PHONY: test test_m2_ym_timers test_m2_sndboard_ymstub test_m2_texel_bl_mip test_m2_span_tex_mip test_m2_span_tex_gc test_m2_raster_fill_mip test_m2_video_ovr test_m2_video_r826 test_m2_mpcm_level test_m2_mpcm_dual test_m2_sndboard_shared test_m2_backup test_m2_fb_wcomb test_m2_fbw_chain test_m2_sndboard test_m2_romload test_m2_rom_xtra test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_video_timing test_i960_dec test_i960_alu test_i960_alu_carrybug test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram test_fx68k test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_nv_save test_m2_vcop_guns test_m2_vcop_xhair test_m2_vcop_state
-test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_span_tex_uvcl test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_nv_save test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_hotd_guns test_m2_vcop_xhair test_m2_gunflash2a test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
+test: test_m2_handshake_cdc test_m2_texel test_m2_texel_bl4 test_m2_texel_bl8 test_m2_texel_bl48 test_m2_texel_bl_mip test_m2_texel_cdc test_m2_texel_cdc16 test_m2_span_tex test_m2_span_tex_ftb test_m2_span_tex_mip test_m2_span_tex_uvcl test_m2_raster_fill_mip test_m2_geo test_m2_wr_arb test_m2_pair_cache test_m2_eng_ra test_m2_quad_store test_m2_quad_store_ext test_m2_ddram_payload test_m2_ddram_mux test_m2_luma_map test_m2_raster3d test_m2_backup test_m2_sndlink test_m2_mpcm_level test_m2_mpcm_dual test_m2_ym_timers test_fx68k test_m2_sndboard test_m2_sndboard_shared test_m2_sndboard_ymstub test_m2_ioboard test_m2_cab_inputs test_m2_315_5649 test_m2_nv_save test_m2_2a_inputs test_m2_rom_xtra2a test_m2_cpu_bridge_2a test_m2_vcop_guns test_m2_vcop2_guns test_m2_hotd_guns test_m2_vcop_xhair test_m2_gunflash2a test_m2_char_cdc test_m2_char_cache test_m2_sdram_x2 test_m2_sdram_cdc test_m2_romload test_m2_sdram test_m2_sdram13 test_m2_sdram128 test_m2_sdram128d test_m2_memtest test_m2_video_timing test_i960_dec test_i960_alu test_i960_regs test_i960_regs_ring test_i960_regs_miter test_i960_agu test_i960_ldst test_i960_lsu test_i960_icache test_i960_icache_r817 test_i960_muldiv test_i960_fpmul test_i960_fpadd test_i960_fpdiv test_i960_fpsqrt test_i960_fpmisc test_i960_fpcvt test_i960_top test_i960_top_fr test_i960_top_fx test_i960_top_ring test_i960_dcache test_i960_top_dc test_i960_fprem test_i960_top_irq test_i960_top_lat test_i960_rom test_m2_video_frame test_m2_cpu_bridge test_m2_cpu_sdram
 
 test_i960_dec: obj_i960_dec/Vi960_dec
 	@echo "== test i960_dec"
@@ -1515,6 +1515,67 @@ obj_raster3d/Vm2_raster3d: rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv r
 	  --Mdir obj_raster3d -o Vm2_raster3d -CFLAGS "-O2" \
 	  rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
 	  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv rtl/video/m2_fb_wcomb.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv sim/video/tb_m2_raster3d.cpp
+
+# R1003: the quad payload's DDR3 client and the DDRAM mux (Model 1's
+# m1_ddram_payload / m1_ddram_mux and their benches, five beats here), against
+# Model 1's hostile DDR3 model.
+test_m2_ddram_payload: obj_ddram_payload/Vm2_ddram_payload
+	@echo "== test m2_ddram_payload (R1003: the quad payload's DDR3 client)"
+	@./obj_ddram_payload/Vm2_ddram_payload $(TEST_ARGS)
+obj_ddram_payload/Vm2_ddram_payload: rtl/mem/m2_ddram_payload.sv sim/video/tb_m2_ddram_payload.cpp
+	$(VBUILD) --top-module m2_ddram_payload -Wno-TIMESCALEMOD --Mdir obj_ddram_payload -o Vm2_ddram_payload -CFLAGS "-O2" \
+	  rtl/mem/m2_ddram_payload.sv sim/video/tb_m2_ddram_payload.cpp
+test_m2_ddram_mux: obj_ddram_mux/Vm2_ddram_mux
+	@echo "== test m2_ddram_mux (R1003: the frame buffer and the payload on one DDRAM port)"
+	@./obj_ddram_mux/Vm2_ddram_mux $(TEST_ARGS)
+obj_ddram_mux/Vm2_ddram_mux: rtl/mem/m2_ddram_mux.sv sim/mem/tb_m2_ddram_mux.cpp sim/mem/ddr3_model.h
+	$(VBUILD) --top-module m2_ddram_mux -Wno-TIMESCALEMOD --Mdir obj_ddram_mux -o Vm2_ddram_mux -CFLAGS "-O2" \
+	  rtl/mem/m2_ddram_mux.sv sim/mem/tb_m2_ddram_mux.cpp
+
+# R1003: the store's replay with the payload outside (EXT_PAY) against the
+# same store with it on chip, at the 2C instance's parameters: one stimulus,
+# two builds, every band's emitted stream diffed (sim/video/tb_m2_quad_store_ext.cpp).
+QS_2C_G := -GBAND_H=8 -GNBANDS=48 -GBW=6 -GSCR_H=384 -GTINY=4 -GTINY_FINE=2 -GTINY_FAR=16\'h3000 -GFTB=1 -GFRB=2 -GMZ=1 \
+  -GKW=20 -GRAWCOL=1 -GVX=1 -GVXN=3 -GCW=17 -GTXW=28 -GNX=512
+test_m2_quad_store_ext: obj_qs_int/Vm2_quad_store obj_qs_ext/Vm2_quad_store
+	@echo "== test m2_quad_store EXT_PAY (R1003: the payload outside, every band's stream as on chip)"
+	@./obj_qs_int/Vm2_quad_store > .qs_int.out; ./obj_qs_ext/Vm2_quad_store > .qs_ext.out; \
+	 grep -E "^(LIST|STREAM|TOTAL)" .qs_int.out > .qs_int.s; grep -E "^(LIST|STREAM|TOTAL)" .qs_ext.out > .qs_ext.s; \
+	 grep -E "backing|EXT_PAY|PASS|FAIL|STUCK" .qs_ext.out; tail -n 1 .qs_int.s; \
+	 if [ $$(wc -l < .qs_int.s) -gt 400 ] && cmp -s .qs_int.s .qs_ext.s && grep -q PASS .qs_ext.out; then \
+	   echo "  $$(grep -c STREAM .qs_int.s) band streams identical"; rm -f .qs_int.out .qs_ext.out .qs_int.s .qs_ext.s; \
+	 else echo "  STREAMS DIFFER (or the run failed):"; diff .qs_int.s .qs_ext.s | head -20; exit 1; fi
+obj_qs_int/Vm2_quad_store: $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store_ext.cpp
+	$(VBUILD) --top-module m2_quad_store --public-flat-rw $(QS_2C_G) -GEXT_PAY=0 -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --Mdir obj_qs_int -o Vm2_quad_store -CFLAGS "-O2" $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store_ext.cpp
+obj_qs_ext/Vm2_quad_store: $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store_ext.cpp
+	$(VBUILD) --top-module m2_quad_store --public-flat-rw $(QS_2C_G) -GEXT_PAY=1 -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --Mdir obj_qs_ext -o Vm2_quad_store -CFLAGS "-O2 -DQS_EXT" $(QUAD_STORE_RTL) sim/video/tb_m2_quad_store_ext.cpp
+
+# R1003: tb_m2_raster3d at the 2C build's m2_raster3d parameters (Model2.sv's
+# instance with M2_2C: R994's set), into R3D_2C_MDIR. R3D_2C_G adds or
+# overrides parameters, R3D_2C_D adds -D defines for the bench. Run it on a
+# MAME list: M2_R3D_LIST=<dir> M2_R3D_FB=1 M2_R3D_REALCOL=1 M2_R3D_GAME=<id>
+# M2_R3D_C2=1 M2_R3D_WINKEY=1 M2_R3D_UVSH=1 M2_R3D_FRAC=1 M2_R3D_MIPZX=3
+# M2_R3D_TPL=2870 M2_R3D_PXDUMP=1; the identity is the md5 of the PX lines.
+R3D_2C_MDIR ?= obj_r3d_2c
+R3D_2C_G    ?=
+R3D_2C_D    ?=
+R3D_2C_RTL  := rtl/video/m2_raster3d.sv rtl/video/m2_quad_store.sv rtl/video/m2_raster_fill.sv \
+  rtl/video/m2_raster_div.sv rtl/video/m2_recip_rom.sv rtl/video/m2_persp_recip.sv rtl/video/m2_raster_band.sv \
+  rtl/video/m2_span_tex.sv rtl/video/m2_texel.sv rtl/video/m2_texel_bl.sv rtl/video/m2_texel_addr.sv \
+  rtl/video/m2_texel_x2.sv rtl/video/m2_texel_cdc.sv rtl/video/m2_char_x2.sv rtl/tgp/m2_fifo_m10k.sv \
+  rtl/video/m2_fb_wcomb.sv rtl/video/m2_fb_read.sv rtl/mem/m2_ddr3_arb.sv \
+  rtl/mem/m2_ddr3.sv rtl/mem/m2_ddram_mux.sv rtl/mem/m2_ddram_payload.sv
+.PHONY: r3d_2c
+r3d_2c:
+	$(VBUILD) --top-module m2_raster3d --public-flat-rw -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC \
+	  --Mdir $(R3D_2C_MDIR) -o Vm2_raster3d \
+	  -GSCR_W=496 -GSCR_H=384 -GBAND_H=8 -GNBUF=6 -GFTB=1 -GFB_DDR3=1 -GFB_WCOMB=1 -GSPLIT_TRI=1 -GPXC=1 -GPIXSTEP=4 \
+	  -GFRB=2 -GM2COV=1 -GUVCL=1 -GTXLATE=3 -GTXNS=4 -GTXRSP=4 -GTXK=16 -GTXLW8=1 -GTXREUSE=0 -GMIP=1 -GTWO_CLOCKS=1 \
+	  -GTEX_AW=26 -GTEXLUT=1 -GKW=20 -GUVSH=1 -GLSB=5 -GRECIP_M10K=0 -GQNX=512 $(R3D_2C_G) \
+	  -CFLAGS "-O2 -DR3D_TEXLUT -DR3D_LW8 -DR3D_FB $(R3D_2C_D)" \
+	  $(R3D_2C_RTL) sim/video/tb_m2_raster3d.cpp
 
 # R900: the luma-row map (the large layout's games' row ranges) against its reference.
 test_m2_luma_map: obj_luma_map/Vm2_luma_map obj_luma_map_2c/Vm2_luma_map

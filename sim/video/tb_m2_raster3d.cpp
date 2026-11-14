@@ -23,6 +23,18 @@
 #include <cstdint>
 #include <map>
 
+// R1003: R3D_DDRAM -- a DDRAM_IN=1 build (m2_ddr3 inside m2_raster3d, and with
+// PAY_DDR3 the quad payload beside it through m2_ddram_mux). The framework's
+// port is then driven by Model 1's hostile DDR3 model: M2_R3D_DDRLAT cycles of
+// latency (default 40, ~500 ns at 80 MHz), M2_R3D_DDRBUSY per mille of cycles
+// starting a BUSY run of 1-24, M2_R3D_DDRHOLD percent of due reply beats held
+// back. Unwritten memory reads 0xFFFF..., and the Avalon rules are checked.
+#ifdef R3D_DDRAM
+#include "../mem/ddr3_model.h"
+static Ddr3Model<Vm2_raster3d> g_dm;
+static long g_dw_fa = 0, g_dw_hungry = 0, g_dw_wreq = 0, g_dw_cyc = 0;   // over draws: m2_ddr3 waiting, scanout hungry, FB writer asking
+#endif
+
 // R640: M2_R3D_FB -- the DDR3 side of FB_DDR3 (build with -GFB_DDR3=1 -GFTB=0).
 // From the ddr3 branch's tb_m2_raster3d_fb: one command at a time, bursts of
 // fb_blen beats, reads LAT cycles out, writes a cycle after the command (as
@@ -158,6 +170,14 @@ static std::vector<Fetch> g_fetch;
 // R626: every texel answer, in order -- answer n belongs to fetch n
 static std::vector<uint16_t> g_ans;
 static long g_nfetch = 0;
+// R1003: THE STORE'S OUTPUT, HASHED. Every quad m2_quad_store hands the fill
+// (qs_out_valid && qs_out_ready): band, vertices, quarters, colour, checker,
+// texture word, the four u/v and 1/z, the no-mip flag and the slot bits, in
+// order. The sequence is fixed by the sort and the band filter alone, so it
+// must not move with memory timing -- where the textured picture does (R1003:
+// the texel cache's hits and misses shift with it). FNV-1a, 64 bits.
+static uint64_t g_qh = 1469598103934665603ull; static long g_qn = 0;
+static void qh_add(uint64_t v) { for (int i = 0; i < 8; i++) { g_qh ^= (v >> (8 * i)) & 0xff; g_qh *= 1099511628211ull; } }
 static bool g_rec = false;
 
 int main(int argc, char **argv) {
@@ -169,6 +189,15 @@ int main(int argc, char **argv) {
   std::printf("  %d core clocks per scanline\n", TPL);
   auto d = new Vm2_raster3d;
   d->clk = 0; d->clk_mem = 0; d->scan_clk = 0; d->rst_n = 0; d->frame_start = 0; d->q_valid = 0; d->q_end = 0;
+  d->ddr_rst_n = 0; d->fb_base = 0x06000000;   // R1003: Model2.sv's fb_base (R654)
+#ifdef R3D_DDRAM
+  g_dm.d = d;
+  g_dm.latency  = std::getenv("M2_R3D_DDRLAT")  ? atol(std::getenv("M2_R3D_DDRLAT")) : 40;
+  g_dm.busy_pct = std::getenv("M2_R3D_DDRBUSY") ? std::atoi(std::getenv("M2_R3D_DDRBUSY")) : 0;
+  g_dm.hold_pct = std::getenv("M2_R3D_DDRHOLD") ? std::atoi(std::getenv("M2_R3D_DDRHOLD")) : 0;
+  g_dm.split    = 0x06100000;   // m2_raster3d PAY_BASE: the frame buffer below, the payload above
+  std::printf("  R1003 DDRAM model: latency %ld, BUSY %d per mille, beats held %d%%\n", g_dm.latency, g_dm.busy_pct, g_dm.hold_pct);
+#endif
   d->scan_x = 0; d->scan_y = 0;
   d->tex_m_ack = 0; d->tex_m_data = 0; d->tex_inval = 0;
   d->tex_m2_ack = 0; d->tex_m2_data = 0;
@@ -288,6 +317,29 @@ int main(int argc, char **argv) {
         if (p == FLL) std::printf("FILL p%d y %d x0 %d x1 %d\n", p, (int)r->m2_raster3d__DOT__u_fill__DOT__span_y,
                                   (int)r->m2_raster3d__DOT__u_fill__DOT__span_x0, (int)r->m2_raster3d__DOT__u_fill__DOT__span_x1);
       } }
+    { auto *r = d->rootp;   // R1003: the store's output, as the fill takes it
+      if (r->m2_raster3d__DOT__qs_out_valid && r->m2_raster3d__DOT__qs_out_ready) {
+        g_qn++;
+        qh_add(r->m2_raster3d__DOT__fill_band);
+        qh_add(uint64_t(uint16_t(r->m2_raster3d__DOT__qo_x0)) | uint64_t(uint16_t(r->m2_raster3d__DOT__qo_y0)) << 16
+             | uint64_t(uint16_t(r->m2_raster3d__DOT__qo_x1)) << 32 | uint64_t(uint16_t(r->m2_raster3d__DOT__qo_y1)) << 48);
+        qh_add(uint64_t(uint16_t(r->m2_raster3d__DOT__qo_x2)) | uint64_t(uint16_t(r->m2_raster3d__DOT__qo_y2)) << 16
+             | uint64_t(uint16_t(r->m2_raster3d__DOT__qo_x3)) << 32 | uint64_t(uint16_t(r->m2_raster3d__DOT__qo_y3)) << 48);
+        qh_add(uint64_t(r->m2_raster3d__DOT__qo_frac) | uint64_t(r->m2_raster3d__DOT__qo_colw) << 16
+             | uint64_t(r->m2_raster3d__DOT__qo_moire) << 40 | uint64_t(r->m2_raster3d__DOT__qo_mipz) << 41
+             | uint64_t(r->m2_raster3d__DOT__qo_vx) << 42);
+        qh_add(uint64_t(r->m2_raster3d__DOT__qo_texs));
+        qh_add(uint64_t(r->m2_raster3d__DOT__qo_u0) | uint64_t(r->m2_raster3d__DOT__qo_v0) << 13 | uint64_t(r->m2_raster3d__DOT__qo_u1) << 26
+             | uint64_t(r->m2_raster3d__DOT__qo_v1) << 39);
+        qh_add(uint64_t(r->m2_raster3d__DOT__qo_u2) | uint64_t(r->m2_raster3d__DOT__qo_v2) << 13 | uint64_t(r->m2_raster3d__DOT__qo_u3) << 26
+             | uint64_t(r->m2_raster3d__DOT__qo_v3) << 39);
+        qh_add(uint64_t(r->m2_raster3d__DOT__qo_oz0) | uint64_t(r->m2_raster3d__DOT__qo_oz1) << 16
+             | uint64_t(r->m2_raster3d__DOT__qo_oz2) << 32 | uint64_t(r->m2_raster3d__DOT__qo_oz3) << 48);
+      } }
+    { static const bool BT = std::getenv("M2_R3D_BANDTRACE") != nullptr;   // R1003: each band's end, in core cycles
+      static int pc = -1; const int c = d->rootp->m2_raster3d__DOT__cst & 7;
+      if (BT && c != pc && c == 6 && g_draw_c0 >= 0) std::printf("BAND %d %ld\n", (int)d->rootp->m2_raster3d__DOT__fill_band, g_cyc - g_draw_c0);
+      pc = c; }
     if (FBM) {
       const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;
       // the swap starts it, marked by fb_busy rising (a register; `swap` is a
@@ -491,6 +543,18 @@ int main(int argc, char **argv) {
       }
       d->eval();
     };
+    d->ddr_rst_n = d->rst_n;   // R1003: the bench's one reset is the memory's too
+#ifdef R3D_DDRAM
+    g_dm.pre();
+    { auto *r = d->rootp;
+      if (r->m2_raster3d__DOT__fb_busy && !r->m2_raster3d__DOT__fb_complete) {
+        g_dw_cyc++;
+        if ((r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__fa_rd || r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__fa_we)
+            && r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__fa_busy) g_dw_fa++;
+        if (r->m2_raster3d__DOT__g_fb__DOT__fbr_hungry) g_dw_hungry++;
+        if (r->m2_raster3d__DOT__g_fb__DOT__w_req) g_dw_wreq++;
+      } }
+#endif
     static const bool SCANMEM = std::getenv("M2_R3D_SCANMEM") != nullptr;
     if (SCANMEM) {
       d->clk_mem = 1; d->scan_clk = 1; d->eval(); d->clk_mem = 0; d->scan_clk = 0; d->eval();
@@ -515,6 +579,9 @@ int main(int argc, char **argv) {
     d->clk = 1; d->scan_clk = 1; d->eval(); d->clk = 0; d->scan_clk = 0; d->eval();
     d->clk_mem = 1; d->eval(); d->clk_mem = 0; d->eval();
     }
+#ifdef R3D_DDRAM
+    g_dm.post();
+#endif
     static const bool TEXMEM1 = std::getenv("M2_R3D_TEXMEM") != nullptr;   // R668
     if (TEXMEM1) {}
     else if (d->tex_m_ack) { d->tex_m_ack = 0; tex_wait = -1; }
@@ -1238,6 +1305,16 @@ int main(int argc, char **argv) {
     if (FBM) std::printf("  R640 FB: %ld write beats, %ld read beats, %ld Avalon violations, published %u dropped %u; R650 scanout lines %u LATE %u\n",
                          g_ddr_wbeats, g_ddr_rbeats, g_ddr_proto, (unsigned)d->dbg_fb_pub, (unsigned)d->dbg_fb_drop,
                          (unsigned)d->dbg_fb_lines, (unsigned)d->dbg_fb_late);
+    std::printf("  R1003 store stream: %ld quads handed, hash %016llx\n", g_qn, (unsigned long long)g_qh);
+#ifdef R3D_DDRAM
+    std::printf("  R1003 DDR3: %ld cycles, FB beats r %ld w %ld, payload beats r %ld w %ld (%.1f%% of all beats), BUSY %ld cycles, protocol errors %ld; payload lost %u refused %u longest wait %u; scanout LATE %u\n",
+                g_dm.cyc, g_dm.rbeats[0], g_dm.wbeats[0], g_dm.rbeats[1], g_dm.wbeats[1],
+                100.0 * (g_dm.rbeats[1] + g_dm.wbeats[1]) / std::max(1L, g_dm.rbeats[0] + g_dm.wbeats[0] + g_dm.rbeats[1] + g_dm.wbeats[1]),
+                g_dm.busy_cycles, g_dm.protocol_errs, (unsigned)d->dbg_pay_ovf, (unsigned)d->dbg_pay_refused,
+                (unsigned)d->dbg_pay_wait, (unsigned)d->dbg_fb_late);
+    std::printf("  R1003 during draws (%ld cycles): m2_ddr3 command held %ld, scanout hungry %ld, FB writer asking %ld\n",
+                g_dw_cyc, g_dw_fa, g_dw_hungry, g_dw_wreq);
+#endif
     g_rec = false;
     FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
     for (const Fetch &f : g_fetch) std::fprintf(fo, "%d %d %u %u %u %u\n", f.y, f.x, f.u, f.v, f.t, f.c);

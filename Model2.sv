@@ -7719,15 +7719,36 @@ wire [63:0] ddr_din, ddr_dout;
 logic       ddr_go;
 always_ff @(posedge clk_sys or negedge mem_rst_n)
 	if (!mem_rst_n) ddr_go <= 1'b0; else ddr_go <= cp_done;
+// R1003: ON THE 2C BUILD THE 3D LAYER DRIVES DDRAM ITSELF -- m2_ddr3 inside
+// m2_raster3d (DDRAM_IN), sharing the port with the quad store's payload
+// (PAY_DDR3) through m2_ddram_mux, as Model 1 does. The same master, the same
+// base and the same reset (mem_rst_n & ddr_go, R380), one level down.
+localparam bit R3D_PAY = C2;
+// The raster3d's DDRAM side, used only when R3D_PAY.
+wire        r3d_ddram_clk, r3d_ddram_rd, r3d_ddram_we;
+wire [7:0]  r3d_ddram_bc, r3d_ddram_be;
+wire [28:0] r3d_ddram_addr;
+wire [63:0] r3d_ddram_din;
+wire        m2d_ddram_clk, m2d_ddram_rd, m2d_ddram_we;
+wire [7:0]  m2d_ddram_bc, m2d_ddram_be;
+wire [28:0] m2d_ddram_addr;
+wire [63:0] m2d_ddram_din;
+assign DDRAM_CLK      = R3D_PAY ? r3d_ddram_clk  : m2d_ddram_clk;
+assign DDRAM_RD       = R3D_PAY ? r3d_ddram_rd   : m2d_ddram_rd;
+assign DDRAM_WE       = R3D_PAY ? r3d_ddram_we   : m2d_ddram_we;
+assign DDRAM_BURSTCNT = R3D_PAY ? r3d_ddram_bc   : m2d_ddram_bc;
+assign DDRAM_BE       = R3D_PAY ? r3d_ddram_be   : m2d_ddram_be;
+assign DDRAM_ADDR     = R3D_PAY ? r3d_ddram_addr : m2d_ddram_addr;
+assign DDRAM_DIN      = R3D_PAY ? r3d_ddram_din  : m2d_ddram_din;
 m2_ddr3 u_ddr3 (
 	.base(fb_base),   // R654
-	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go),
+	.clk(clk_sys), .rst_n(mem_rst_n & ddr_go & !R3D_PAY),   // R1003: idle when the raster3d has its own
 	.req(ddr_req), .we(ddr_we), .addr(ddr_addr), .blen(ddr_blen), .din(ddr_din), .be(ddr_be),
 	.wnext(ddr_wnext), .wacc(ddr_wacc), .rvalid(ddr_rvalid), .ack(ddr_ack), .dout(ddr_dout),
-	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
-	.DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
-	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
-	.DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+	.DDRAM_CLK(m2d_ddram_clk), .DDRAM_BUSY(DDRAM_BUSY),
+	.DDRAM_BURSTCNT(m2d_ddram_bc), .DDRAM_ADDR(m2d_ddram_addr),
+	.DDRAM_DIN(m2d_ddram_din), .DDRAM_BE(m2d_ddram_be),
+	.DDRAM_WE(m2d_ddram_we), .DDRAM_RD(m2d_ddram_rd),
 	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
 	.dbg_lat_last(), .dbg_lat_max(), .dbg_inflight_max(), .dbg_stuck_wr(), .dbg_acks()
 );
@@ -7811,7 +7832,8 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .KW(R3D_WINKEY ? 20 : 16),
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH),   // R940
-              .QNX(M2A ? 512 : 0)) u_raster3d (   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
+              .QNX(M2A ? 512 : 0),   // R962
+              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY)) u_raster3d (   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -7886,6 +7908,13 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	.fb_req(ddr_req), .fb_we(ddr_we), .fb_addr(ddr_addr), .fb_blen(ddr_blen),
 	.fb_din(ddr_din), .fb_be(ddr_be),
 	.fb_wnext(ddr_wnext), .fb_wacc(ddr_wacc), .fb_rvalid(ddr_rvalid), .fb_ack(ddr_ack), .fb_dout(ddr_dout),
+	// R1003: the framework's port, when R3D_PAY (DDRAM_IN); idle otherwise
+	.ddr_rst_n(mem_rst_n & ddr_go), .fb_base(fb_base),
+	.DDRAM_CLK(r3d_ddram_clk), .DDRAM_BUSY(DDRAM_BUSY),
+	.DDRAM_BURSTCNT(r3d_ddram_bc), .DDRAM_ADDR(r3d_ddram_addr),
+	.DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.DDRAM_RD(r3d_ddram_rd), .DDRAM_DIN(r3d_ddram_din), .DDRAM_BE(r3d_ddram_be), .DDRAM_WE(r3d_ddram_we),
+	.dbg_pay_ovf(), .dbg_pay_refused(), .dbg_pay_wait(),
 	.dbg_fb_lines(fb_lines), .dbg_fb_late(fb_late), .dbg_fb_pub(fb_pub), .dbg_fb_drop(fb_drop), .dbg_fb_pixels(),
 	.dbg_pipe(r3d_dbg_pipe)   // R719: {pst, cst, fb_busy, fb_complete, 0}
 );
