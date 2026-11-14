@@ -2767,6 +2767,16 @@ $(TGPX4_ROBJ)/Vm2_copro: $(TGPX4_RTL) rtl/tgpx4/m2_tgpx4.sv $(wildcard rtl/tgp/*
 tgpx4_replay: $(TGPX4_ROBJ)/Vm2_copro
 	./$(TGPX4_ROBJ)/Vm2_copro $(TGPX4CAP) $(TEST_ARGS)
 
+# R1005: the 2C frame's timing model -- the i960 paced by MAME's own gaps
+# (tools/mame_stcc_timing.lua + sim/tgpx4/tm_gaps.py) against the TGPx4 as
+# MAME's interpreter at the RTL's measured clocks per word (tb_tgpx4_replay
+# --pcprof). A whole session in seconds where the RTL replay takes hours.
+.PHONY: x4_pace_model
+obj_x4_pace/x4_pace_model: sim/tgpx4/x4_pace_model.cpp sim/tgpx4/cap.h $(wildcard sim/tgpx4/mame/*)
+	mkdir -p obj_x4_pace && g++ -O2 -std=c++17 -Isim/tgpx4 -Isim/tgpx4/mame -o $@ sim/tgpx4/x4_pace_model.cpp $(TGPX4_REF) -lz
+x4_pace_model: obj_x4_pace/x4_pace_model
+	./obj_x4_pace/x4_pace_model $(TGPX4CAP) $(TEST_ARGS)
+
 .PHONY: quartus quartus_all quartus_report quartus_paths
 MOD  ?= i960_alu
 QDIR := build/quartus/$(MOD)

@@ -38,9 +38,30 @@
 // clocks (the frame's work done), or after a frame's worth of clocks
 // (--frame, 80 MHz / 57.5 = 1,391,304). --no-frames presents events as before.
 //
+// R1005: THE i960 PACED (--tm). The bench above presents the i960's accesses as
+// fast as the bus takes them, so it measures the TGPx4 alone. With --tm <dir>
+// (sim/tgpx4/tm_gaps.py: MAME's own i960 time between consecutive copro
+// accesses, from tools/mame_stcc_timing.lua's taps, aligned to the capture)
+// each access from frame --tm-from on is presented no earlier than the last
+// one's completion plus MAME's gap times --tm-scale (the core's i960 time per
+// MAME i960 time), and each game frame starts at the first vblank edge after
+// the last frame's flip -- the game's own pacing (it flips, then spins until
+// the frame-parity bit at 0x98000c changes). One line per frame to --flog:
+// the frame's work from its vblank to its flip, how many vblanks it took, and
+// where the time went: the i960's own (scaled) time, the i960 held on a full
+// input FIFO, the i960 held waiting for an output, TGPx4 words. Clocks in which
+// the TGPx4 sits on an empty input FIFO with nothing on its memory ports, and
+// the i960 has time still to spend, are skipped rather than simulated.
+//
 //   Vm2_copro <capdir> [--lat N] [--jitter N] [--seed N] [--max-words N]
 //             [--max-cyc M] [--ram-every N] [--no-lockstep] [--quiet]
 //             [--no-frames] [--idle N] [--frame N]
+//             [--tm DIR --tm-scale S --tm-from F --flog FILE --vbl N --tm-to F]
+//             [--pcprof FILE]
+// --pcprof: each word's own clocks (accept to accept, less the clocks it sat in
+// S_DEC on an empty input or full output FIFO), summed by program address --
+// the RTL's cost table for a model of the TGPx4 (R1005). Without --tm, --flog
+// gets one line per vblank passed: the TGPx4's busy clocks in it and its words.
 #include "Vm2_copro.h"
 #include "Vm2_copro___024root.h"
 #include "verilated.h"
@@ -64,6 +85,8 @@ int main(int argc, char **argv)
   uint64_t max_words = UINT64_MAX, max_cyc = UINT64_MAX, ram_every = 4096;
   bool lockstep = true, quiet = false;
   bool frames_on = true; uint64_t idle_need = 64, frame_cyc = 1391304;   // R933
+  std::string tm_dir, flog_path, pcprof_path; double tm_scale = 1.0;    // R1005
+  uint32_t tm_from = UINT32_MAX, tm_to = UINT32_MAX; uint64_t vbl_cyc = 1391304;
   for (int i = 2; i < argc; i++) {
     std::string a = argv[i];
     auto nx = [&]() { return (i + 1 < argc) ? strtoull(argv[++i], nullptr, 0) : 0ull; };
@@ -78,6 +101,13 @@ int main(int argc, char **argv)
     else if (a == "--no-frames") frames_on = false;      // R933
     else if (a == "--idle") idle_need = nx();
     else if (a == "--frame") frame_cyc = nx();
+    else if (a == "--tm") tm_dir = argv[++i];                         // R1005
+    else if (a == "--tm-scale") tm_scale = strtod(argv[++i], nullptr);
+    else if (a == "--tm-from") tm_from = uint32_t(nx());
+    else if (a == "--tm-to") tm_to = uint32_t(nx());
+    else if (a == "--flog") flog_path = argv[++i];
+    else if (a == "--vbl") vbl_cyc = nx();
+    else if (a == "--pcprof") pcprof_path = argv[++i];
   }
   Capture cap;
   if (!cap.load(dir, 0)) return 2;
@@ -158,6 +188,27 @@ int main(int argc, char **argv)
       }
       i++;
     } }
+  // R1005: MAME's i960 gaps, one record per entry of `cpu`
+  struct TmRec { double gap; uint32_t frame, flags; };
+  std::vector<TmRec> tmg; std::vector<double> tml, tmw;
+  if (!tm_dir.empty()) {
+    std::vector<uint8_t> b;
+    if (!Capture::rd_all(tm_dir + "/tmg.bin", b) || b.size() / 16 != cpu.size()) {
+      fprintf(stderr, "tmg.bin: %zu records, the capture has %zu i960 events\n", b.size() / 16, cpu.size()); return 2; }
+    tmg.resize(cpu.size()); memcpy(tmg.data(), b.data(), cpu.size() * 16);
+    b.clear(); Capture::rd_all(tm_dir + "/tml.bin", b);
+    tml.resize(b.size() / 16); tmw.resize(b.size() / 16);
+    for (size_t i = 0; i < tml.size(); i++) { memcpy(&tml[i], &b[i * 16], 8); memcpy(&tmw[i], &b[i * 16 + 8], 8); }
+    printf("R1005: %zu gaps, %zu frames, scale %.3f, paced from frame %u\n", tmg.size(), tml.size(), tm_scale, tm_from);
+  }
+  FILE *flog = flog_path.empty() ? nullptr : fopen(flog_path.c_str(), "w");
+  if (flog) fprintf(flog, "# frame vstart work_clk vblanks cpu_clk held_in_clk held_out_clk words events mame_work_s\n");
+  auto paced = [&](size_t k) { return !tmg.empty() && k < tmg.size() && tmg[k].frame >= tm_from && tmg[k].frame < tm_to; };
+  bool tm_has_e = false; uint64_t tm_e = 0, tm_done = 0, tm_v = 0, tm_v0 = 0;
+  uint32_t tm_f = UINT32_MAX;
+  uint64_t tf_cpu = 0, tf_hin = 0, tf_hout = 0, tf_w0 = 0, tf_ev = 0, tm_pres = 0, tm_skip = 0;
+  uint64_t tm_frames = 0, tm_over = 0, tm_hist[5] = {};
+  auto sc = [&](double sec) { return uint64_t(sec * 80e6 * tm_scale + 0.5); };
   uint32_t fdone = 0; uint64_t idle_run = 0, fstart = 0, gate_cyc = 0, fpassed_idle = 0, fpassed_cap = 0;
   size_t ie = 0;
   uint64_t xs = 0, xbad = 0, words = 0, lbad = 0, frames = 0;
@@ -209,6 +260,8 @@ int main(int argc, char **argv)
   };
 
   uint32_t last_pc[16] = {}; int lp = 0;
+  std::vector<uint64_t> pp_n(4096), pp_c(4096); uint64_t pp_last = 0, pp_wait = 0; uint32_t pp_pc = 0; bool pp_have = false;   // R1005
+  uint64_t uf_w0 = 0;
   int pend = 0;          // an access is on the bus
   const CapEv *cur = nullptr;
   bool done = false;
@@ -217,9 +270,42 @@ int main(int argc, char **argv)
     const bool waiting_in = C(needs_fi) && !C(fi_valid);
     idle_run = waiting_in ? idle_run + 1 : 0;
     bool gated = false;
-    if (frames_on && !pend && ie < cpu.size() && postboot[ie] && fbefore[ie] > fdone) {
-      if (idle_run >= idle_need) { fdone++; fpassed_idle++; fstart = cyc; idle_run = 0; }
-      else if (cyc - fstart >= frame_cyc) { fdone++; fpassed_cap++; fstart = cyc; }
+    if (!pend && ie < cpu.size() && paced(ie)) {   // R1005
+      if (!tm_has_e) {
+        const TmRec &r = tmg[ie];
+        if (r.frame != tm_f) {
+          uint64_t v;
+          if (tm_f == UINT32_MAX) { v = cyc; tm_v0 = cyc; }
+          else {
+            uint64_t e = tm_done + sc(tm_f < tml.size() ? tml[tm_f] : 0.0);
+            uint64_t work = e - tm_v, nv = (work + vbl_cyc - 1) / vbl_cyc;
+            if (flog) fprintf(flog, "%u %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %.6f\n",
+                              tm_f, tm_v - tm_v0, work, nv, tf_cpu, tf_hin, tf_hout, words - tf_w0, tf_ev, tm_f < tmw.size() ? tmw[tm_f] : 0.0);
+            tm_frames++; if (nv > 1) tm_over++; tm_hist[nv < 4 ? nv : 4]++;
+            v = tm_v0 + ((e - tm_v0) / vbl_cyc + 1) * vbl_cyc;            // the first edge after the flip
+            v += uint64_t(r.frame - tm_f - 1) * vbl_cyc;                   // frames with no copro access
+          }
+          tm_f = r.frame; tm_v = v; tf_cpu = tf_hin = tf_hout = tf_ev = 0; tf_w0 = words;
+          tm_e = v + sc(r.gap);
+        } else tm_e = tm_done + sc(r.gap);
+        tf_cpu += sc(r.gap);
+        tm_has_e = true;
+      }
+      if (cyc < tm_e) {
+        gated = true;
+        // nothing to simulate: the TGPx4 sits in S_DEC on a FIFO (needs_fi alone is
+        // not enough -- it stays set for the rest of the word that popped) and its
+        // memory ports are quiet
+        if (C(s) == 2 && C(dec_stall) && !top->dat_req && !top->bufw_req && !top->tbl_req) { tm_skip += tm_e - cyc; cyc = tm_e; gated = false; }
+      }
+      if (!gated) tm_pres = cyc;
+    } else if (frames_on && !pend && ie < cpu.size() && postboot[ie] && fbefore[ie] > fdone) {
+      if (idle_run >= idle_need || cyc - fstart >= frame_cyc) {
+        const bool idle = idle_run >= idle_need;
+        if (flog && tmg.empty()) fprintf(flog, "%u %c %" PRIu64 " %" PRIu64 "\n", fdone, idle ? 'I' : 'C', cyc - fstart - (idle ? idle_need : 0), words - uf_w0);
+        uf_w0 = words;
+        fdone++; if (idle) { fpassed_idle++; idle_run = 0; } else fpassed_cap++; fstart = cyc;
+      }
       gated = fbefore[ie] > fdone;
       if (gated) gate_cyc++;
     } else if (!frames_on || (ie < cpu.size() && !postboot[ie])) { fdone = fbefore[ie]; fstart = cyc; }
@@ -244,7 +330,17 @@ int main(int argc, char **argv)
         xs++;
       }
       top->sel_ctl = 0; top->sel_fifo = 0; top->sel_fn = 0; top->we = 0;
+      if (tm_has_e) {   // R1005
+        uint64_t held = cyc - tm_pres;
+        if (cur->t == 'X') tf_hout += held; else tf_hin += held;
+        tf_ev++; tm_done = cyc; tm_has_e = false;
+      }
       pend = 0; ie++;
+    }
+    if (C(s) == 2 && C(dec_stall)) pp_wait++;   // R1005: S_DEC held on a FIFO
+    if (C(dbg_retire) && !pcprof_path.empty()) {
+      if (pp_have) { uint64_t c = cyc - pp_last - pp_wait; pp_n[pp_pc & 0xfff]++; pp_c[pp_pc & 0xfff] += c; }
+      pp_have = true; pp_last = cyc; pp_wait = 0; pp_pc = C(ir_pc);
     }
     // the lockstep
     if (C(dbg_retire)) {
@@ -268,7 +364,7 @@ int main(int argc, char **argv)
     if (ie >= cpu.size() && !pend) done = true;
     // R933: a wedge is a result, not a wait -- no word for 50 M clocks ends the run
     static uint64_t last_words = 0, last_move = 0;
-    if (words != last_words || !active) { last_words = words; last_move = cyc; }
+    if (words != last_words || !active || tm_has_e) { last_words = words; last_move = cyc; }
     else if (cyc - last_move > 50000000ull) {
       printf("WEDGED: no word retired in 50 M clocks (word %" PRIu64 ", pc %03x, i960 event %zu/%zu '%c', input waiting %d, frames %u/%u)\n",
              words, C(ir_pc), ie, cpu.size(), ie < cpu.size() ? cpu[ie]->t : '-', int(waiting_in), fdone, ie < fbefore.size() ? fbefore[ie] : 0u);
@@ -280,6 +376,17 @@ int main(int argc, char **argv)
     if (C(dbg_bad) && !frames) { printf("RTL dbg_bad raised at word %" PRIu64 ", pc %03x\n", words, C(ir_pc)); frames = 1; }
   }
   size_t nx = 0; for (auto *e : cpu) if (e->t == 'X') nx++;
+  if (!pcprof_path.empty()) {
+    FILE *pf = fopen(pcprof_path.c_str(), "w");
+    for (int i = 0; i < 4096; i++) if (pp_n[i]) fprintf(pf, "%03x %" PRIu64 " %" PRIu64 "\n", i, pp_n[i], pp_c[i]);
+    fclose(pf);
+  }
+  if (flog && tmg.empty()) fclose(flog);
+  if (!tmg.empty()) {
+    printf("R1005 PACED: %" PRIu64 " frames, %" PRIu64 " over one vblank (1: %" PRIu64 "  2: %" PRIu64 "  3: %" PRIu64 "  4+: %" PRIu64 "); %" PRIu64 " idle clocks skipped\n",
+           tm_frames, tm_over, tm_hist[1], tm_hist[2], tm_hist[3], tm_hist[4], tm_skip);
+    if (flog) fclose(flog);
+  }
   if (frames_on) printf("FRAMES (R933): %u vblanks passed, %" PRIu64 " with the TGPx4 idle, %" PRIu64 " at the frame cap; %" PRIu64 " clocks held for them (%.2f clk/word without)\n",
                         fdone, fpassed_idle, fpassed_cap, gate_cyc, words ? double(cyc - gate_cyc) / words : 0.0);
   printf("RESULT: %" PRIu64 " cycles, %" PRIu64 " words (%.2f clk/word), i960 events %zu/%zu, outputs %" PRIu64 "/%zu checked, %" PRIu64 " differ (%.4f%% match), lockstep %s %" PRIu64 " bad\n",
