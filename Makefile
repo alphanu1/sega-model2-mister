@@ -3217,24 +3217,31 @@ obj_boot_2as/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $
 # R979: STCC's Digital Sound Board (M2_2C_DSB). Inputs in build/rom/dsb/ from
 # tools/dsb/prepare_stcc.sh <stcc.zip> MAME=1 (ROM-derived, git-ignored); each
 # target SKIPS without them. Short forms (a few minutes each):
-#   test_dsb_mpeg   the decoder with every 2C shrink on, bit-exact against
+#   test_dsb_mpeg   the decoder in the 2C build's memory forms, bit-exact against
 #                   tools/dsb/dsb_fixmodel.h, every STCC song's start, end and loops
 #   test_dsb_z80    the Z80 against tv80s on STCC's program, 20 s of MAME's input
 #   test_dsb_board  the board against MAME's capture, 20 s
+# R1004: built through $(VBUILD) (so the memory-capped -j 2 line applies);
+# DSB_SECS / DSB_LAT / DSB_FORM override the run. DSB_FORM is the -G list of
+# dsb_mpeg's memory forms, the 2C build's by default.
 .PHONY: test_dsb_mpeg test_dsb_z80 test_dsb_board
-DSB_RTL := rtl/sound/dsb_board.sv rtl/sound/dsb_z80.sv rtl/sound/dsb_mpeg.sv rtl/sound/m2_i8251.sv
+DSB_RTL  := rtl/sound/dsb_board.sv rtl/sound/dsb_z80.sv rtl/sound/dsb_mpeg.sv rtl/sound/m2_i8251.sv
+DSB_FORM ?= -GFIFO_MLAB=0 -GWRAM_MLAB=0 -GTBL_PACK=0
+DSB_SECS ?= 20
+DSB_LAT  ?= 40
+DSB_VDEF ?=
 test_dsb_mpeg:
-	verilator --cc --exe --build -O2 -Wno-fatal -Irtl/sound --top-module dsb_mpeg \
-	  -GMAW=22 -GTBL_PACK=1 -GFIFO_MLAB=1 -GWRAM_MLAB=1 rtl/sound/dsb_mpeg.sv sim/sound/tb_dsb_mpeg.cpp \
+	$(VBUILD) -O2 -Wno-fatal -Wno-lint -Wno-style -Irtl/sound --top-module dsb_mpeg \
+	  -GMAW=22 $(DSB_FORM) rtl/sound/dsb_mpeg.sv sim/sound/tb_dsb_mpeg.cpp \
 	  -CFLAGS "-I$(CURDIR)/tools/dsb -O2" -o tb_dsb_mpeg --Mdir obj_dsb_mpeg
 	DSB_MB=8 DSB_SONGS=tools/dsb/stcc_songs.txt ./obj_dsb_mpeg/tb_dsb_mpeg
 test_dsb_z80:
-	verilator --cc --exe --build -O2 -Wno-fatal -DDSB_UENT_LOGIC -Irtl/sound --top-module dsb_z80_harness \
+	$(VBUILD) -O2 -Wno-fatal -Wno-lint -Wno-style $(DSB_VDEF) -Irtl/sound --top-module dsb_z80_harness \
 	  sim/sound/dsb_z80_harness.sv rtl/sound/dsb_z80.sv rtl/sound/m2_i8251.sv rtl/cpu/tv80/*.v \
 	  sim/sound/tb_dsb_z80.cpp -o tb_dsb_z80 --Mdir obj_dsb_z80
-	DSB_SECS=20 DSB_Z80ROM=build/rom/dsb/epr-19275.2s ./obj_dsb_z80/tb_dsb_z80
+	DSB_SECS=$(DSB_SECS) DSB_Z80ROM=build/rom/dsb/epr-19275.2s ./obj_dsb_z80/tb_dsb_z80
 test_dsb_board:
-	verilator --cc --exe --build -O2 -Wno-fatal -DDSB_UENT_LOGIC -Irtl/sound --top-module dsb_board_harness \
-	  sim/sound/dsb_board_harness.sv $(DSB_RTL) sim/sound/tb_dsb_board.cpp \
+	$(VBUILD) -O2 -Wno-fatal -Wno-lint -Wno-style $(DSB_VDEF) -Irtl/sound --top-module dsb_board_harness \
+	  $(DSB_FORM) sim/sound/dsb_board_harness.sv $(DSB_RTL) sim/sound/tb_dsb_board.cpp \
 	  -CFLAGS "-I$(CURDIR)/tools/dsb -O2" -o tb_dsb_board --Mdir obj_dsb_board
-	DSB_SECS=20 DSB_VOLMAME=1 ./obj_dsb_board/tb_dsb_board
+	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) DSB_VOLMAME=1 ./obj_dsb_board/tb_dsb_board

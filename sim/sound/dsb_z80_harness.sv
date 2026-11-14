@@ -63,6 +63,7 @@ module dsb_z80_harness (
   logic [15:0] A; logic [7:0] di, dout;
   logic mreq_n, iorq_n, rd_n, wr_n, m1_n;
   logic [7:0] tram [32768];
+  initial for (int i = 0; i < 32768; i++) tram[i] = 8'hff;   // R1004: unwritten RAM reads 0xFF
   logic t_irq; logic [7:0] t_udout;
   tv80s u_ref (
     .reset_n(rst_n), .clk(clk), .cen(tick),
@@ -117,6 +118,7 @@ module dsb_z80_harness (
   // ---------------------------------------------------------- dsb_z80
   logic m_req, m_we, m_ack; logic [15:0] m_addr; logic [7:0] m_wdata, m_rdata;
   logic [7:0] cram [32768];
+  initial for (int i = 0; i < 32768; i++) cram[i] = 8'hff;
   logic io_rd, io_wr; logic [7:0] io_addr, io_wdata, io_rdata;
   logic c_irq; logic [7:0] c_udo;
   dsb_z80 u_cut (
