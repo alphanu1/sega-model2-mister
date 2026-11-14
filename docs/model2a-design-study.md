@@ -48793,3 +48793,161 @@ pressure is what fails HDMI" (R974 / R975). Ben, on the board (s2301, md5
 29ff3bd143b143e771357aa061d30644): "runs as well as the previous" -- STCC,
 House of the Dead and Over Rev as the release. The payload in DDR3 is SETTLED
 as a test build; the room is for STCC's sound board (R979) next.
+
+**R1004 -- R979 CONTINUED: STCC'S SOUND BOARD BUILT INTO 2C, IN ITS
+ALL-M10K FORM, ON R1003'S FREED M10K (branch 2c-mpeg, from ddr3-payload-2c
+b9553518; quartus_map only -- NOT FITTED, NOT ON THE BOARD).** quartus_map of
+the whole 2C core: 39,263 -> 40,499 ALM estimated (+1,236), M10K +11 by shape
+(R1003's s2301 fitted 448, so ~459 / 553), DSP 107 -> 110 (of 112),
+registers 47,076 -> 48,153. Every DSB bench bit-exact and equal to MAME's
+traffic; the renderer's RTL and its benches unchanged.
+
+*Believed (from R979):* the board fits only in its leanest form (option C:
+side-information RAM in MLAB, microcode and dispatch in LUTs, FIFO in MLAB,
+packed tables), because M10K was the binding resource; and (Ben) the Z80 cut
+to the 128 opcodes STCC's program uses would save ALM over R979's 145.
+
+*Found -- the trade inverts.* With ~105 M10K free and ALM binding, every one
+of R979's memory forms costs ALM, and the board is smallest with all of them
+back in M10K. quartus_map, whole 2C core, each against the same base (39,263):
+
+    form (Z80 at R979's 145 opcodes)                      ALM est   DSB ALUT (Z80)  M10K
+    C   R979's lean: WRAM MLAB, FIFO MLAB, tables packed,
+        microcode + dispatch in LUTs                      +1,636    2,229 (1,014)     5
+    A   R979's A: FIFO MLAB, packed, dispatch in LUTs     +1,439    1,960   (824)     7
+    M   all in M10K (FIFO, wram, window, misc, microcode,
+        dispatch)                                         +1,241    1,718   (635)    11
+  R979 measured C at +1,641 and A at +1,302 on s1597's base; C reproduces to
+  5 ALM. The dispatch in LUTs is 189 ALUT, the microcode 190; the packed
+  tables and MLAB FIFO save M10K and cost ALUT. M is what the 2C build takes
+  (Model2.sv defaults; the others stay as macros: M2_2C_DSB_LEAN,
+  M2_2C_DSB_FIFO_MLAB, M2_2C_DSB_TBL_PACK, DSB_UROM_LOGIC, DSB_UENT_LOGIC).
+  M10K by shape, the only rows the RAM summary adds (nothing else moves):
+  vram 1,024 x 24 (3), chip 1,024 x 8, the two FIFO halves 64 x 16 (1 each),
+  misc 256 x 32, win 512 x 18, wram 256 x 25, urom 256 x 40, uent 1,024 x 8
+  -- 11.
+
+*Found -- the opcode strip saves nothing in the form that is built.*
+z80_census.py on MAME's disassembly (epr-19275.2s, the same eight jump-table
+entry points): 783 instructions, 128 opcodes; the union's other 17 are Star
+Wars' only -- 1B 34 35 4E 66 69 80 B3 C4 C6 D0, CB 07 27 4A 67, ED 4D 79 --
+and seven micro-op routines have no other opcode (inc / dec (hl), dec de,
+call nz, ret nc, reti, out (c),a): 173 -> 153 micro-ops. The datapath drops
+what only Star Wars reached: out (c),a's port select, sla (and rl, which
+neither program has), bit 7's S (neither tests bit 7). gen_z80_ucode.py
+--union gives R979's core back (U_UNION 1). Measured, Z80 ALUT:
+C 1,014 -> 999, A 824 -> 805, M 635 -> 637. The map's estimate moved -23 /
+-68 / -100, but in M the Z80 did not shrink at all: the -100 is the
+estimate's own scatter (fin1, the same logic within 4 ALUT, reads 40,499
+where s_M read 40,404). With the dispatch and the microcode in M10K the
+opcode list costs nothing, and STCC's program reaches nearly the whole
+datapath (every address source, offset, write source, condition and I/O mode
+but the one). Kept: it is proven equal over the 300 s and costs nothing;
+anything outside STCC's census now traps (visibly) instead of running a Star
+Wars path.
+
+*Found, smaller:*
+  * dsb_mpeg's M10K FIFO, written as one array with byte lanes, was split by
+    Quartus 17.0 into two 64 x 16 arrays that lost the ramstyle (RAM summary
+    "AUTO" -- the fitter's choice, likely MLAB). Now two arrays, M10K by name,
+    the same reads in the same cycles.
+  * The board, its reset gate and its mix moved out of Model2.sv unchanged
+    into rtl/sound/m2_dsb_2c.sv so a bench drives the RTL the core builds.
+  * Port 8 is still unused on 2C (m2_copro's TGPX4 branch ties tbl_req to 0),
+    nothing in Model2.sv claims SDRAM word 0x3000000 or above, and the House
+    of the Dead and Over Rev MRAs are unchanged since R979.
+  * **Wrong first (R979's handoff):** "rtl/video/m2_testpattern.sv is listed
+    in the QSF and absent (pre-existing)". It was not pre-existing: stcc-dsb's
+    9c05c4d4 carried four lines a Quartus run had appended to that worktree's
+    QSF (that file, and FAST_INPUT / OUTPUT / OUTPUT_ENABLE_REGISTER on
+    SDRAM_*, which sys.tcl already sets). Dropped in the cherry-pick.
+  * The DSB bench targets called verilator directly (not $(VBUILD)), so the
+    memory-capped -j 2 line did not reach them; now $(VBUILD). The Z80
+    bench's two 32 KB RAMs started as Verilator's zeros; now 0xFF (MAME: no
+    read of unwritten RAM, so no result moved -- 2,567,924 accesses before
+    and after).
+
+*The mix (MAME model2c stcc()):* m_scsp add_route 1.0 and m_dsbz80
+add_route 1.0 into the one speaker. m2_scsp's out_l is MAME's SCSP stream x
+32,768 (its dac(): smpl >> 2 clamped, or the 18-bit form >> 2); dsb_mpeg's is
+(sample x vol) >> 7, MAME's put_int(sample x m_mp_vol, 32,768 x 128) x
+32,768 -- the same scale, the >> 7 a floor where MAME keeps the fraction
+(<= 1 LSB, inside R979's accepted 1-LSB difference). Pan as MAME: 0 stereo,
+1 left on both, 2 right on both, 3 silent. So the two add at unity and the
+sum is clamped, never wrapped, as MAME clamps its float mix at the output;
+the OSD volume (m2_volume) comes after, as MAME's. The board's 32 kHz sample
+is held between strobes (MAME resamples to the output rate); the OSD's Raw
+Sound Boost (R894) scales the SCSP only, so above 0 it is louder against the
+music than MAME -- at its default 0 it is MAME's mix.
+
+*Benched (all with the 2C form: everything in M10K, STCC's 128 opcodes):*
+  * Z80 (tb_dsb_z80, against tv80s, MAME's 300 s capture, memory latency 0
+    so T-states must match exactly): STCC's 128-opcode core: 2,567,924 port
+    accesses equal in order, value and T-state, 27,912 / 27,912 interrupts,
+    27,913 bytes received, 0 traps, 0 fails, code fetched 0000-0601, lowest
+    SP fff8 (32 min; past the 22-minute ceiling, run because the proof asks
+    for the whole capture). It ran with the dispatch as logic; the M10K
+    dispatch the 2C build uses is the same table (all 1,024 entries of the
+    generated ROM equal uent_f's, checked from the .svh) behind the same
+    registered read, and the two are equal over 20 s (75,361 accesses each). R979's 145-opcode core, rerun on
+    this branch for the reproduction: the same 2,567,924, 27,912 interrupts,
+    0 traps -- R979's count to the access.
+  * Decoder (tb_dsb_mpeg, bit-exact against dsb_fixmodel.h, every STCC
+    song's start, end, loops, stop and play mid-frame; memory [1, LAT]
+    cycles, unwritten 0xFFFF): STCC 120,588 samples, 119,335 outputs, 0
+    fails at LAT 1, 20, 40 and 400, in the 2C form and in R979's A and C
+    forms -- R979's count. Star Wars' data through the same decoder (it
+    does not depend on the Z80): 105,764 samples, 0 fails at 1 / 40 / 400.
+  * Board (tb_dsb_board at 80 MHz, MAME's capture, memory [1, LAT]):
+    20 s at LAT 1, 40 and 400: 0 fails; UART 79, controls 38, volume 9
+    accesses equal to MAME's in order and value; 110,272 decoded samples
+    bit-exact and 110,237 outputs (110,229 at 400: its decode starts later)
+    equal to them with volume and pan. 60 s at LAT 40: 0 fails; UART 97,
+    controls 57, volume 91; 1,250,272 samples, 1,250,179 outputs, 309,441
+    position reads, SDRAM 30,554 requests / s -- every figure R979's.
+    Timing at LAT 400 (every access, DSB_SHOWT 0): the boot ends up to
+    761 ms late; 12-13 s within -21.8 / +13.3 us of MAME; the first command
+    (16.56 s) +5.7 us. Star Wars on the board: not run -- the board's Z80 no
+    longer has Star Wars' opcodes (it needs a --union build; R979's 70 s
+    runs stand for that core).
+  * The gate and the mix (tb_m2_dsb_2c, m2_dsb_2c as built, 80 MHz, memory
+    [1, LAT], unwritten 0xFFFF), at LAT 40 and 400: not STCC (run 0), 4 M
+    cycles, every value of each channel swept, 144 link bytes: the speaker
+    equal to the SCSP on every cycle, 0 SDRAM requests. STCC, 20 s, the
+    real ROM and MPEG data and MAME's bytes: the speaker equal to
+    clamp16(SCSP + board) on every one of 1.6 G cycles (the board nonzero
+    on 275 M of them, the clamp taken on 22 M, the SCSP side random and
+    near full scale), 95 frames decoded, 0 traps. Back to another game: from
+    two cycles on, the SCSP's again and no request. 0 fails.
+  * Renderer (rule: never slower): git diff b9553518 -- rtl/video rtl/mem
+    rtl/tgp sim/video sim/mem is empty. test_m2_ddram_payload 2,968 checks,
+    test_m2_ddram_mux 1,020,496 checks, test_m2_quad_store 23, test_m2_
+    quad_store_ext 500 band streams identical: 0 fails. tb_m2_raster3d at
+    the 2C build's parameters with the payload in DDR3 (r3d_2c, DDRAM_IN,
+    PAY_DDR3, R3D_DDRAM), HEAD and b9553518 built side by side: HOTD 1808 at
+    40 445,159 cycles, STCC 1500 at 40 386,712 and at 400 415,043, Over Rev
+    d1 at 400 651,261 -- identical draws, PX md5s and store streams. (The
+    plain test_m2_raster3d target does not compile at b9553518 either: its
+    bench reads m2_fb_wcomb signals of a 2C-parameter build.)
+  * Lint: lint_top clean with and without M2_2C_DSB; lint_idx adds no
+    finding with it on (98 lines, identical).
+
+*Not settled:*
+  * The fit. 40,499 estimated; s2301's fit came in +294 over its map's
+    estimate (39,263 -> 39,557), which puts this near 40,800 / 41,910
+    (97%). DSP 110 / 112. Timing on clk_sys with the board in it, and HDMI
+    (R974 / R975 / R1003: freeing M10K did not close it).
+  * The board: STCC's music, levels against MAME by ear and by capture; House
+    of the Dead and Over Rev unchanged (benched only).
+  * Every STCC song to its end: not run (the decoder's full run is ~50
+    minutes at this bench's speed, past the bench limit); the song starts,
+    ends, loops and mid-frame stops are.
+  * At SDRAM latency 400 the Z80's boot (its RAM test goes through SDRAM) ends
+    up to 0.76 s late; by 12 s, before the first command, it is back within
+    22 us of MAME. The real port's latency is far below 400.
+  * STCC's polygon window is R897's 32 MB (a2_big) over 16 MB of polygons;
+    MAME masks at 16 MB. A read in the upper 16 MB used to land in unloaded
+    SDRAM and would now land in the board's MPEG data, ROM or RAM. Nothing
+    shows STCC makes one; not changed here.
+  * The board hears the link's B side, so a slow SCSP acknowledge would delay
+    its bytes too (R979's wiring); MAME's UART feeds both independently.

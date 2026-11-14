@@ -1,5 +1,44 @@
 # Handoff
 
+## 2026-11-14: 2c-mpeg (local, not pushed) -- STCC's sound board built into 2C, quartus_map only
+
+Branch `2c-mpeg`, from ddr3-payload-2c b9553518 (R1003: the quad payload in
+DDR3, s2301 on the board as the release). Study R1004 has the whole record.
+Not fitted, not on the board.
+
+  * stcc-dsb's five commits cherry-picked (R979). Conflicts: Model2.sv's
+    m2_2a_sound line (R976's snd_tarc kept, the output now through the mix),
+    the study (R979 placed after R977) and HANDOFF (stcc-dsb's section dropped
+    for this one). Four stray QSF lines from stcc-dsb's worktree dropped
+    (m2_testpattern.sv -- R979's handoff called it pre-existing; it was not --
+    and FAST_* duplicates of sys.tcl).
+  * Built ON in the 2C QSF (`M2_2C_DSB=1`), every memory form in M10K: with
+    ~105 M10K free that is the fewest ALM. quartus_map, whole 2C core:
+    39,263 -> 40,499 ALM est (+1,236), +11 M10K by shape (~459 / 553 on
+    s2301's 448), DSP 107 -> 110 / 112. R979's lean form C measures +1,636,
+    form A +1,439. The other forms stay as macros (Model2.sv lists them).
+  * Z80 cut to STCC's 128 opcodes (153 micro-ops; `gen_z80_ucode.py --union`
+    is R979's 145 / 173). Equal to tv80s over the whole 300 s capture
+    (2,567,924 accesses, 27,912 interrupts, 0 traps). It saves 15-19 ALUT in
+    the logic forms and nothing in the M10K form that is built -- kept because
+    it is proven and free.
+  * Benches: decoder bit-exact (STCC 120,588 samples at LAT 1/20/40/400, Star
+    Wars 105,764), board equal to MAME's traffic at LAT 1/40/400 (20 s) and
+    60 s at 40 (1,250,272 samples) -- every count R979's. New
+    tb_m2_dsb_2c (`make test_m2_dsb_2c`): for any game but STCC the speaker
+    is the SCSP's bit for bit and the board never asks for SDRAM; for STCC
+    the mix is clamp16(SCSP + board) on every cycle. Renderer RTL unchanged;
+    its 2C benches identical to b9553518's.
+  * Bench inputs: `tools/dsb/prepare_stcc.sh ~/roms/Model2/stcc.zip` with
+    MAME=1 (6 min) into build/rom/dsb/. Star Wars' decoder data in
+    build/rom/dsb_swa/. Map reports in sm2-builds/2c-mpeg-maps/ (base =
+    b9553518, fin1 = the build as committed, u_* / s_* the forms).
+
+REMAINS: the fit (expect ~40,800 / 41,910 ALM, 97%), then the board -- STCC's
+music by ear against MAME, HOTD and Over Rev unchanged. Not settled: every
+STCC song to its end (not run, past the bench limit); STCC's 32 MB polygon
+window over 16 MB of polygons now ends in the board's data (R1004).
+
 ## 2026-11-13: Model2_20261113, Model2A_20261113, Model2C_20261113 in releases/ -- one joint release
 
 All three board-tested by Ben before release; every clock clean on all three,
