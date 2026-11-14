@@ -65,8 +65,7 @@ module dsb_board #(
   parameter int unsigned TICK_DEN = 10000,
   // dsb_mpeg's bit-identical M10K shrinks and the Z80's dispatch-as-logic
   parameter bit FIFO_MLAB = 1'b1,
-  parameter bit WRAM_MLAB = 1'b0,
-  parameter bit TBL_PACK  = 1'b1
+  parameter bit WRAM_MLAB = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -100,6 +99,11 @@ module dsb_board #(
   logic       tick;
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin t_acc <= '0; tick <= 1'b0; end
+    // R1007: T_NUM 1 is a plain count to T_DEN (the same tick on the same clock)
+    else if (T_NUM == 1) begin
+      if (t_acc == 8'(T_DEN - 1)) begin t_acc <= '0; tick <= 1'b1; end
+      else begin t_acc <= t_acc + 8'd1; tick <= 1'b0; end
+    end
     else if (t_acc + 8'(T_NUM) >= 8'(T_DEN)) begin t_acc <= t_acc + 8'(T_NUM) - 8'(T_DEN); tick <= 1'b1; end
     else begin t_acc <= t_acc + 8'(T_NUM); tick <= 1'b0; end
   end
@@ -153,7 +157,7 @@ module dsb_board #(
   logic  [7:0]    mp_q;
   wire            mp_sel = io_addr[7:4] == 4'he;
   dsb_mpeg #(.TICK_NUM(TICK_NUM), .TICK_DEN(TICK_DEN), .MAW(MAW),
-             .FIFO_MLAB(FIFO_MLAB), .WRAM_MLAB(WRAM_MLAB), .TBL_PACK(TBL_PACK)) u_mpeg (
+             .FIFO_MLAB(FIFO_MLAB), .WRAM_MLAB(WRAM_MLAB)) u_mpeg (
     .clk(clk), .rst_n(rst_n),
     .reg_we(io_wr && mp_sel), .reg_a(io_addr[3:0]), .reg_d(io_wdata), .reg_q(mp_q),
     .vol_mame(vol_mame),

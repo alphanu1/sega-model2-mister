@@ -63,10 +63,11 @@ module dsb_mpeg #(
   // the same cycle; see the memories below):
   //   FIFO_MLAB  the 64 x 32 output FIFO in MLAB, two 16-bit halves
   //   WRAM_MLAB  the 256 x 25 side-information / sample RAM in MLAB
-  //   TBL_PACK   window and misc tables in ONE M10K by their symmetries
+  // (R1007: R979's TBL_PACK -- window and misc packed into one M10K by their
+  // symmetries -- is retired: it needed the MAC's operand negation, which the
+  // tables now carry instead, and on 2C M10K is spare and ALM is not.)
   parameter bit FIFO_MLAB = 1'b0,
-  parameter bit WRAM_MLAB = 1'b0,
-  parameter bit TBL_PACK  = 1'b0
+  parameter bit WRAM_MLAB = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -117,55 +118,21 @@ module dsb_mpeg #(
 
   logic  [8:0] win_a;   logic [17:0] win_q;
   logic  [7:0] misc_a;  logic [24:0] misc_q;
-  logic        q_tneg;              // TBL_PACK: the table's own sign, at q_*
   logic [1:0][15:0] fifo_q;
   logic  [7:0] wram_a;  logic [24:0] wram_q, wram_d;  logic wram_we;
   logic  [9:0] vram_a;  logic [23:0] vram_q;  wire vram_we;
   wire fifo_we_l, fifo_we_r;
 
-  // ---- the tables: window (512 x 18), and cos / scale factor / C (0..145)
-  generate if (!TBL_PACK) begin : g_tbl
-    (* ramstyle = "M10K" *) logic [17:0] win [512];
-    (* ramstyle = "M10K" *) logic [31:0] misc [256];
+  // ---- the tables: window (512 x 18), and cos (0..127) / scale factor
+  // (128..191) / C (192..209). R1007: every sign the synthesis applies is in
+  // the tables (tools/dsb/gen_tables.py), so every product is added.
+  (* ramstyle = "M10K" *) logic [17:0] win [512];
+  (* ramstyle = "M10K" *) logic [31:0] misc [256];
 `include "dsb_tables.svh"
-    logic [31:0] misc_w;
-    always_ff @(posedge clk) win_q <= win[win_a];
-    always_ff @(posedge clk) misc_w <= misc[misc_a];
-    assign misc_q = misc_w[24:0];
-    assign q_tneg = 1'b0;
-  end else begin : g_tblp
-    // ONE M10K, 256 x 40, by the tables' symmetries (tools/dsb/gen_tables_pack.py
-    // checks both on the values themselves before it writes the file):
-    //   window: win[512-i] == -win[i] for every i, except i a multiple of 64,
-    //           where win[512-i] == win[i] -- so win[0..256] is all of it;
-    //           two entries a word, words 0..128
-    //   cos:    cos[64-k] == -cos[k] (k = 1..63) -- cos[0..32], words 129..161
-    //   scale factors and C as they were, words 162..243 (misc_a + 98).
-    // The two tables were never read in the same cycle (a MAC uses one or the
-    // other, p_bsel), so one read port serves both. The sign a symmetry
-    // implies goes into the MAC's operand negation with q_sub and q_neg_b, so
-    // every product is the same integer as before.
-    (* romstyle = "M10K" *) logic [39:0] trom [256];
-`include "dsb_tables_pack.svh"
-    wire  [8:0] w_neg = 9'd0 - win_a;                 // 512 - win_a, mod 512
-    wire        w_hi  = (win_a > 9'd256);
-    wire  [8:0] w_idx = w_hi ? w_neg : win_a;         // 0..256
-    wire        w_sgn = w_hi && (win_a[5:0] != 6'd0);
-    wire        c_hi  = (misc_a[7:6] == 2'b00) && (misc_a[5:0] > 6'd32);
-    wire  [5:0] c_idx = c_hi ? (6'd0 - misc_a[5:0]) : misc_a[5:0];   // 64 - k
-    wire  [7:0] m_wd  = (misc_a[7:6] == 2'b00) ? (8'd129 + 8'(c_idx)) : (misc_a + 8'd98);
-    // p_bsel is the issued MAC's table, valid the cycle its address is
-    logic [39:0] t_q;
-    logic        t_half, t_neg;
-    always_ff @(posedge clk) begin
-      t_q    <= trom[p_bsel ? 8'(w_idx[8:1]) : m_wd];
-      t_half <= w_idx[0];
-      t_neg  <= p_bsel ? w_sgn : c_hi;
-    end
-    assign win_q  = t_half ? t_q[35:18] : t_q[17:0];
-    assign misc_q = t_q[24:0];
-    assign q_tneg = t_neg;
-  end endgenerate
+  logic [31:0] misc_w;
+  always_ff @(posedge clk) win_q <= win[win_a];
+  always_ff @(posedge clk) misc_w <= misc[misc_a];
+  assign misc_q = misc_w[24:0];
 
   // ---- the output FIFO, 64 stereo samples, written straight from the
   // window's result in S_WN_O (each half by its own channel's result); read
@@ -206,7 +173,7 @@ module dsb_mpeg #(
   end else begin : g_wramm
     // no_rw_check: the read in the cycle of a write is never used. Every write
     // (S_ALLOC, S_SFSI_W, S_SCF_W, S_GR_Z, S_RQ2W) is followed by a state
-    // that sets a new wram_a and an S_W1 wait, or by more writes, before
+    // that sets a new wram_a and a w1 wait, or by more writes, before
     // wram_q is consumed; matrixing (S_ID_RUN) reads and never writes.
     // Without it Quartus 17.0 keeps the RTL's old-data read by building the
     // array in 6,400 registers (measured, R979).
@@ -234,21 +201,30 @@ module dsb_mpeg #(
   // No address tag: the word is dropped when the position leaves it, and a
   // fetch in flight when the position is reloaded comes back stale.
   //
-  // remb = limit - rd_pos, the bits left before the frame's end, kept as a
-  // down-counter beside rd_pos so every limit test is a sign or a small
-  // compare. The limit is LATCHED per frame: the firmware stops, writes a new
+  // The bits left before the frame's end, limit - rd_pos. The limit is
+  // LATCHED per frame (lim, a byte address): the firmware stops, writes a new
   // end and plays while a stopped frame is still being finished muted (see
   // `mute`), and that frame must keep the end it started with, as in MAME.
+  // R1007: no counter. The bits left are 8e - b, where e = lim - rd_pos[26:3]
+  // (bytes, one subtractor) and b = rd_pos[2:0], and every limit test is a
+  // test on e and b (derivations at each). Until R1007 a second 28-bit counter
+  // (remb) stepped beside rd_pos, loaded by a 28-bit subtract of its own.
   logic [26:0] rd_pos;
-  logic signed [27:0] remb;
+  logic [23:0] lim;
   logic [15:0] wbuf;
   logic        wvalid, stale;
   wire         whit    = wvalid;
   wire         cur_bit = wbuf[{rd_pos[3], ~rd_pos[2:0]}];
   wire         w_issue = !m_req && !wvalid;
-  wire signed [27:0] start_rem = $signed({1'b0, mp_end, 3'b000}) - $signed({1'b0, mp_pos});
-  wire         rem_le0  = remb[27] || (remb == 28'sd0);          // rd_pos >= limit
-  wire         rem_lem3 = remb[27] && !(&remb[27:1]);            // rd_pos >= limit + 3
+  wire signed [24:0] e_b  = $signed({1'b0, lim}) - $signed({1'b0, rd_pos[26:3]});
+  wire  [2:0]  b_b       = rd_pos[2:0];
+  wire         e_0       = (e_b == 25'sd0);
+  // 8e - b <= 0  <=>  e <= 0 (b is 0..7)                      -- rd_pos >= limit
+  wire         rem_le0   = e_b[24] || e_0;
+  // 8e - b <= -3 <=>  e < 0, or e = 0 and b >= 3              -- rd_pos >= limit + 3
+  wire         rem_lem3  = e_b[24] || (e_0 && b_b >= 3'd3);
+  // 8e - b < 16  <=>  e <= 1, or e = 2 and b >= 1             -- decode_buffer's < 16
+  wire         rem_lt16  = e_b[24] || (e_b[23:1] == 23'd0) || (e_b == 25'sd2 && b_b != 3'd0);
 
   // ================================================================ tables
   // nbal and the class mapping for allocation table 0.
@@ -262,11 +238,11 @@ module dsb_mpeg #(
     else                 cls = (idx == 4'd3)  ? 5'd17 : 5'(idx);
   endfunction
   // Per class: sample bits b, grouped, bits of a grouped code, its modulus,
-  // the addend that centres a value (see requantise), and 12 x the bits one
-  // granule spends on a triplet of this class.
+  // the addend that centres a value (see requantise). (12 x the bits one
+  // granule spends on a triplet of the class is a table, misc[224 + class].)
   logic [4:0] c_class;
   logic [4:0] c_bits;  logic c_grp;  logic [3:0] c_cube;  logic [3:0] c_mod;
-  logic [2:0] c_add;   logic [9:0] c_g12;
+  logic [2:0] c_add;
   always_comb begin
     c_grp = 1'b0; c_cube = 4'd0; c_mod = 4'd0; c_add = 3'd1;
     case (c_class)
@@ -277,26 +253,24 @@ module dsb_mpeg #(
       5'd4:  begin c_bits = 5'd4; c_grp = 1'b1; c_cube = 4'd10; c_mod = 4'd9; c_add = 3'd4; end
       default: c_bits = c_class - 5'd1;      // 5 -> 4 bits ... 17 -> 16 bits
     endcase
-    c_g12 = (c_class == 5'd0) ? 10'd0 : c_grp ? 10'(c_cube) * 10'd12 : 10'(c_bits) * 10'd36;
   end
 
   // ================================================================ MAC
-  // acc <= (load ? base : acc) +/- A * B. A MAC is ISSUED in the same cycle
+  // acc <= (load ? base : acc) + A * B. A MAC is ISSUED in the same cycle
   // as its memory addresses; the address registers reach the RAMs the next
   // cycle and their registered outputs are valid the cycle after, so the
   // controls travel two stages (p_* then q_*) and the product is taken then.
   logic signed [47:0] acc;
-  logic        p_en, p_load, p_sub, p_rnd;
+  logic        p_en, p_load, p_rnd;
   logic  [1:0] p_asel;              // 0 Nal, 1 p1, 2 wram (S), 3 vram (V)
   logic        p_bsel;              // 0 misc, 1 window
-  logic        p_neg_b;             // cos with k[6] set
   logic signed [23:0] ma;
-  logic signed [24:0] mb, mbn;
-  logic        q_en, q_load, q_sub, q_rnd, q_bsel, q_neg_b;
+  logic signed [24:0] mb;
+  logic        q_en, q_load, q_rnd, q_bsel;
   logic  [1:0] q_asel;
   always_ff @(posedge clk) begin
-    q_en <= p_en; q_load <= p_load; q_sub <= p_sub; q_rnd <= p_rnd;
-    q_asel <= p_asel; q_bsel <= p_bsel; q_neg_b <= p_neg_b;
+    q_en <= p_en; q_load <= p_load; q_rnd <= p_rnd;
+    q_asel <= p_asel; q_bsel <= p_bsel;
   end
   wire mac_busy = p_en || q_en;
   always_comb begin
@@ -307,13 +281,12 @@ module dsb_mpeg #(
       default: ma = vram_q;
     endcase
     mb  = q_bsel ? {{7{win_q[17]}}, win_q} : $signed(misc_q);
-    mbn = (q_sub ^ q_neg_b ^ q_tneg) ? -mb : mb;
   end
-  // In this exact shape -- operand muxes, the negation on one operand, a
-  // constant load -- Quartus puts the accumulator inside the DSP block.
+  // In this shape -- operand muxes, a constant load -- Quartus puts the
+  // accumulator inside the DSP block.
   always_ff @(posedge clk) begin
     if (q_en)
-      acc <= (q_load ? (q_rnd ? 48'sd131072 : 48'sd0) : acc) + ma * mbn;
+      acc <= (q_load ? (q_rnd ? 48'sd131072 : 48'sd0) : acc) + ma * mb;
   end
 
   // V = sat24(acc >>> 20); output = round-half-up-toward-zero of acc / 2^18
@@ -334,24 +307,34 @@ module dsb_mpeg #(
 
   // ================================================================ sequencer
   typedef enum logic [5:0] {
-    S_IDLE, S_START, S_SCAN0, S_SCAN, S_HDR, S_CRC,
+    S_IDLE, S_START, S_START2, S_SCAN0, S_HDR, S_CRC,
     S_ALLOC, S_SFSI_R, S_SFSI_D, S_SFSI_W, S_SCF_R, S_SCF_D, S_SCF_G, S_SCF_W,
     S_CHECK, S_GR_R, S_GR_D, S_GR_Z, S_GR_V, S_GR_DIV, S_GR_X, S_GR_AL,
-    S_RQ1W, S_RQ2W, S_NEXT, S_W1,
+    S_RQ1W, S_RQ2W, S_NEXT,
     S_SY_WAIT, S_ID_RUN, S_ID_DR, S_ID_W, S_WN_RUN, S_WN_DR, S_WN_O,
-    S_STEP_END, S_DONE, S_FAIL, S_GB
+    S_STEP_END, S_DONE, S_FAIL
   } st_t;
-  st_t st, ret, wnext;
+  st_t st;
 
-  // get-bits: gb_n bits into gb_v, checking the limit, then back to `ret`.
+  // get-bits: gb_n bits into gb_v, then on with `st`. R1007: a MODE, not a
+  // state with a return register -- the caller sets st to where the bits go
+  // and gb_act, and the sequencer holds while gb_act reads (gb_chk: checking
+  // the limit; the sync scan does not). gb_v is cleared by its first shift
+  // (gb_clr), not by each of the twenty states that used to clear it, and
+  // every bit is taken in one place (bit_take), so rd_pos and gb_v each
+  // have one source. w1 is the one-cycle wait for a side word (was S_W1).
   logic  [4:0] gb_n;
   logic [15:0] gb_v;
+  logic        gb_act, gb_chk, gb_clr, w1;
+  wire         e0_wr    = reg_we && (reg_a == 4'h0);
+  wire         bit_take = !e0_wr && gb_act && !(gb_chk && rem_le0) && whit;
 
   logic        prot;
   logic  [4:0] sb;  logic ch;  logic [1:0] t;  logic [3:0] gr;
   logic  [4:0] ii;  logic [4:0] jj; logic [3:0] kk; logic [6:0] ck;
   logic  [3:0] slot;               // ring position, in 32-word slots
   logic [14:0] g12;                // 12 x the data bits of one granule
+  logic        g12_p, g12_q;       // misc[224 + class] read for S_ALLOC, two clocks on
   logic [24:0] prm;                // the side-information word being built
   logic  [1:0] fld;                // scale-factor field counter
   logic  [5:0] f0, f1;
@@ -375,7 +358,7 @@ module dsb_mpeg #(
   wire [5:0] w_s0 = wram_q[17:12], w_s1 = wram_q[11:6], w_s2 = wram_q[5:0];
 
   // the allocation index, gb_v holding exactly nbal(sb) bits (it is cleared
-  // on every entry to S_GB)
+  // on every entry to get-bits)
   wire [3:0] idx_m = gb_v[3:0];
   wire [1:0] part = (gr < 4'd4) ? 2'd0 : (gr < 4'd8) ? 2'd1 : 2'd2;
 
@@ -385,26 +368,29 @@ module dsb_mpeg #(
   wire  [8:0] tap    = {kk[3:1], 6'd0};
   wire  [5:0] v_off  = (kk[0] ^ i_le16) ? 6'(ii) : i32m;   // term1: i<=16 ? i : 32-i
   wire  [8:0] w_off  = kk[0] ? 9'(6'd32 + 6'(ii)) : 9'(ii);
-  wire        w_sub  = kk[0] ? 1'b1 : !(ii < 5'd16);
 
   // positions
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= S_IDLE; ret <= S_IDLE;
+      st <= S_IDLE; gb_act <= 1'b0; gb_chk <= 1'b0; gb_clr <= 1'b0; w1 <= 1'b0;
       st_r <= '0; en_r <= '0; mp_start <= '0; mp_end <= '0;
       lp_start <= '0; lp_end <= '0; mp_state <= '0; vol <= 7'h7f; pan <= '0;
       mp_pos <= '0; pos_set <= 1'b0; stop_now <= 1'b0;
-      rd_pos <= '0; remb <= '0; slot <= '0;
+      rd_pos <= '0; lim <= '0; slot <= '0;
       m_req <= 1'b0; m_addr <= '0; wbuf <= '0; wvalid <= 1'b0; stale <= 1'b0;
-      p_en <= 1'b0; p_load <= 1'b0; p_sub <= 1'b0; p_rnd <= 1'b0;
-      p_asel <= '0; p_bsel <= 1'b0; p_neg_b <= 1'b0;
+      p_en <= 1'b0; p_load <= 1'b0; p_rnd <= 1'b0;
+      p_asel <= '0; p_bsel <= 1'b0;
       wram_we <= 1'b0;
-      f_push <= 1'b0; dbg_frames <= '0; dbg_fails <= '0;
+      f_push <= 1'b0; dbg_frames <= '0; dbg_fails <= '0; g12_p <= 1'b0; g12_q <= 1'b0;
       synth_begun <= 1'b0; mute <= 1'b0;
       smp_stb <= 1'b0; smp_lr <= '0;
     end else begin
       p_en <= 1'b0; wram_we <= 1'b0;
+      // R1007: S_ALLOC's table read lands two clocks later (allocation reads
+      // bits or waits in between, never a MAC, so misc_a is free)
+      g12_p <= 1'b0; g12_q <= g12_p;
+      if (g12_q) g12 <= g12 + misc_q[14:0];
       f_push <= 1'b0; smp_stb <= 1'b0; stop_now <= 1'b0;
 
       // ------------------------------------------------------- word fetch
@@ -454,64 +440,78 @@ module dsb_mpeg #(
         endcase
       end
 
+      // ------------------------------------------------------- the bit reader
+      if (bit_take) begin
+        gb_v   <= {gb_clr ? 15'd0 : gb_v[14:0], cur_bit};
+        gb_clr <= 1'b0;
+        rd_pos <= rd_pos + 27'd1;
+        if (rd_pos[3:0] == 4'hf) wvalid <= 1'b0;
+        if (st == S_HDR && gb_n == 5'd17) prot <= cur_bit;
+        if (gb_n == 5'd1) gb_act <= 1'b0;
+        gb_n <= gb_n - 5'd1;
+      end
+
       // ------------------------------------------------------- sequencer
       // A write to e0 decides the cycle: a stop aborts at once, and a play
       // holds the sequencer so that nothing it does this cycle (S_START,
       // S_DONE, S_FAIL) can overwrite the position the write sets.
-      if (reg_we && reg_a == 4'h0) begin
+      if (e0_wr) begin
         if (reg_d == 8'd0) begin
           if (synth_begun) mute <= 1'b1;
-          else st <= S_IDLE;
+          else begin st <= S_IDLE; gb_act <= 1'b0; w1 <= 1'b0; end
         end
-      end else case (st)
+      end else if (gb_act) begin
+        // get-bits, limit-checked bit by bit (MAME's gb() checks the field;
+        // either way nothing of the frame is played)
+        if (gb_chk && rem_le0) begin st <= S_FAIL; gb_act <= 1'b0; end
+      end else if (w1) w1 <= 1'b0;
+      else case (st)
         S_IDLE: if (mp_state != 8'd0) st <= S_START;
 
         S_START: begin
-          // decode_buffer(): limit - pos < 16 fails before anything is read.
           rd_pos  <= mp_pos;
-          remb    <= start_rem;
+          lim     <= mp_end;
           wvalid  <= 1'b0;
           if (m_req || w_issue) stale <= 1'b1;
           synth_begun <= 1'b0;
           pos_set <= 1'b0;
-          if (start_rem < 28'sd16)
+          st <= S_START2;
+        end
+        // decode_buffer(): limit - pos < 16 fails before anything is read.
+        // (R1007: a clock after S_START, on the loaded rd_pos and lim.)
+        S_START2: begin
+          if (rem_lt16)
             st <= S_FAIL;
           else begin
-            gb_n <= 5'd15; ret <= S_SCAN0; st <= S_SCAN;   // first 15 bits, unchecked
-            gb_v <= '0;
+            gb_n <= 5'd15; st <= S_SCAN0; gb_act <= 1'b1; gb_chk <= 1'b0;   // first 15 bits, unchecked
+            gb_clr <= 1'b1;
           end
         end
 
         // The scan, as a 15-bit window over bits [c-12, c+2] with
         // rd_pos = c + 3 (see docs/findings.md for the derivation from
         // decode_buffer's loop). During the first 15 reads gb_n counts down.
-        S_SCAN: if (whit) begin
-          gb_v   <= {gb_v[14:0], cur_bit};    // gb_v[14:0] is the scan window
-          rd_pos <= rd_pos + 27'd1; remb <= remb - 28'sd1;
-          if (rd_pos[3:0] == 4'hf) wvalid <= 1'b0;
-          if (gb_n != 5'd0) gb_n <= gb_n - 5'd1;
-          if (gb_n == 5'd1) st <= S_SCAN0;
-        end
+        // gb_v[14:0] is the scan window (gb_chk 0: unchecked)
         S_SCAN0: begin
           if (gb_v[14:3] == 12'hfff) begin
             if (rem_le0)                      st <= S_FAIL;
-            else if (gb_v[2:0] == 3'b110)    begin gb_n <= 5'd17; ret <= S_HDR; st <= S_GB; gb_v <= '0; end
-            else                              begin gb_n <= 5'd1; st <= S_SCAN; end
+            else if (gb_v[2:0] == 3'b110)    begin gb_n <= 5'd17; st <= S_HDR; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1; end
+            else                              begin gb_n <= 5'd1; gb_act <= 1'b1; end
           end else begin
             if (rem_lem3)                     st <= S_FAIL;
-            else                              begin gb_n <= 5'd1; st <= S_SCAN; end
+            else                              begin gb_n <= 5'd1; gb_act <= 1'b1; end
           end
         end
 
         S_HDR: begin
           // gb_v[16] would be prot: 17 bits read, MSB first, into 16 -- so
-          // prot is captured on the way in (see S_GB) as `prot`.
-          if (!prot) begin gb_n <= 5'd16; ret <= S_CRC; st <= S_GB; gb_v <= '0; end
+          // prot is captured on the way in (see bit_take) as `prot`.
+          if (!prot) begin gb_n <= 5'd16; st <= S_CRC; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1; end
           else       st <= S_CRC;
           sb <= 5'd0; ch <= 1'b0; g12 <= '0;
         end
         S_CRC: begin
-          gb_n <= 5'(nbal(5'd0)); ret <= S_ALLOC; st <= S_GB; gb_v <= '0;
+          gb_n <= 5'(nbal(5'd0)); st <= S_ALLOC; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1;
         end
 
         // ---- allocation: sb 0..26, ch 0..1
@@ -519,21 +519,22 @@ module dsb_mpeg #(
           wram_we <= 1'b1;
           wram_a  <= {ch, 2'd3, sb};
           wram_d  <= {cls(sb, idx_m), 20'd0};
-          g12     <= g12 + 15'(c_g12);
+          misc_a  <= {3'b111, cls(sb, idx_m)};          // 12 x its granule's bits
+          g12_p   <= 1'b1;
           if (ch) begin
             ch <= 1'b0;
             if (sb == 5'd26) begin sb <= 5'd0; st <= S_SFSI_R; end
-            else begin sb <= sb + 5'd1; gb_n <= 5'(nbal(sb + 5'd1)); ret <= S_ALLOC; st <= S_GB; gb_v <= '0; end
+            else begin sb <= sb + 5'd1; gb_n <= 5'(nbal(sb + 5'd1)); st <= S_ALLOC; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1; end
           end else begin
-            ch <= 1'b1; gb_n <= 5'(nbal(sb)); ret <= S_ALLOC; st <= S_GB; gb_v <= '0;
+            ch <= 1'b1; gb_n <= 5'(nbal(sb)); st <= S_ALLOC; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1;
           end
         end
 
         // ---- scfsi, then scale factors: read the side word, fill, write back
-        S_SFSI_R: begin wram_a <= {ch, 2'd3, sb}; wnext <= S_SFSI_D; st <= S_W1; end
+        S_SFSI_R: begin wram_a <= {ch, 2'd3, sb}; st <= S_SFSI_D; w1 <= 1'b1; end
         S_SFSI_D: begin
           prm <= wram_q;
-          if (w_class != 5'd0) begin gb_n <= 5'd2; ret <= S_SFSI_W; st <= S_GB; gb_v <= '0; end
+          if (w_class != 5'd0) begin gb_n <= 5'd2; st <= S_SFSI_W; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1; end
           else st <= S_SFSI_W;
         end
         S_SFSI_W: begin
@@ -547,10 +548,10 @@ module dsb_mpeg #(
           end else begin ch <= 1'b1; st <= S_SFSI_R; end
         end
 
-        S_SCF_R: begin wram_a <= {ch, 2'd3, sb}; wnext <= S_SCF_D; st <= S_W1; end
+        S_SCF_R: begin wram_a <= {ch, 2'd3, sb}; st <= S_SCF_D; w1 <= 1'b1; end
         S_SCF_D: begin
           prm <= wram_q; fld <= 2'd0;
-          if (w_class != 5'd0) begin gb_n <= 5'd6; ret <= S_SCF_G; st <= S_GB; gb_v <= '0; end
+          if (w_class != 5'd0) begin gb_n <= 5'd6; st <= S_SCF_G; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1; end
           else st <= S_SCF_W;
         end
         S_SCF_G: begin
@@ -561,7 +562,7 @@ module dsb_mpeg #(
               (prm[19:18] != 2'd0 && fld == 2'd1) || (fld == 2'd2)) begin
             st <= S_SCF_W;
           end else begin
-            fld <= fld + 2'd1; gb_n <= 5'd6; ret <= S_SCF_G; st <= S_GB; gb_v <= '0;
+            fld <= fld + 2'd1; gb_n <= 5'd6; st <= S_SCF_G; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1;
           end
         end
         S_SCF_W: begin
@@ -587,13 +588,14 @@ module dsb_mpeg #(
         // crosses the end fails the frame. Same here: decode it muted.
         S_CHECK: begin
           gr <= 4'd0;
-          if (remb[27] || (remb[26:15] == 12'd0 && 15'(g12) > remb[14:0])) mute <= 1'b1;
+          // the bits left (8e - b) < g12  <=>  8e < g12 + b: e < 0, or e's
+          // high bits clear and 8e[15:0] < g12 + b (R1007; was remb < g12)
+          if (e_b[24] || (e_b[23:13] == 11'd0 && {e_b[12:0], 3'b000} < 16'(g12) + 16'(b_b))) mute <= 1'b1;
           st <= S_GR_R;
         end
 
         // ---- one granule: sb 0..26, ch 0..1, three values each
-        S_GR_R: begin wram_a <= {ch, 2'd3, sb}; t <= 2'd0; wnext <= S_GR_D; st <= S_W1; end
-        S_W1: st <= wnext;
+        S_GR_R: begin wram_a <= {ch, 2'd3, sb}; t <= 2'd0; st <= S_GR_D; w1 <= 1'b1; end
         S_GR_D: begin
           prm <= wram_q;
           case (part)
@@ -604,7 +606,7 @@ module dsb_mpeg #(
           if (w_class == 5'd0) st <= S_GR_Z;
           else begin
             gb_n <= c_grp ? 5'(c_cube) : c_bits;
-            ret <= S_GR_V; st <= S_GB; gb_v <= '0;
+            st <= S_GR_V; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1;
           end
         end
         S_GR_Z: begin
@@ -634,15 +636,15 @@ module dsb_mpeg #(
         S_GR_AL: begin
           if (alc == 5'd0) begin
             // Nal = x - 2^15; issue Nal x C
-            misc_a <= 8'd128 + 8'(prm[24:20]);
-            p_en <= 1'b1; p_load <= 1'b1; p_rnd <= 1'b0; p_sub <= 1'b0;
-            p_asel <= 2'd0; p_bsel <= 1'b0; p_neg_b <= 1'b0;
+            misc_a <= {3'b110, prm[24:20]};                 // C, 192 + class
+            p_en <= 1'b1; p_load <= 1'b1; p_rnd <= 1'b0;
+            p_asel <= 2'd0; p_bsel <= 1'b0;
             st <= S_RQ1W;
           end else begin x <= {x[15:0], 1'b0}; alc <= alc - 5'd1; end
         end
         S_RQ1W: if (!mac_busy) begin
           // p1 = (Nal x C) >> 9, then issue p1 x 2^(1-s/3)
-          misc_a <= 8'd64 + 8'(scf_cur);
+          misc_a <= {2'b10, scf_cur};                        // 128 + scf
           p_en <= 1'b1; p_load <= 1'b1; p_asel <= 2'd1;
           st <= S_RQ2W;
         end
@@ -653,7 +655,7 @@ module dsb_mpeg #(
           else begin
             t <= t + 2'd1;
             if (c_grp) begin rem <= '0; dcnt <= 4'd9; st <= S_GR_DIV; end
-            else begin gb_n <= c_bits; ret <= S_GR_V; st <= S_GB; gb_v <= '0; end
+            else begin gb_n <= c_bits; st <= S_GR_V; gb_act <= 1'b1; gb_chk <= 1'b1; gb_clr <= 1'b1; end
           end
         end
         S_NEXT: begin
@@ -673,9 +675,9 @@ module dsb_mpeg #(
         S_ID_RUN: begin
           wram_a <= {ch, t, jj};
           vram_a <= {ch, slot, ii};          // where S_ID_W will write
-          misc_a <= {2'b00, ck[5:0]};
-          p_en <= 1'b1; p_load <= (jj == 5'd0); p_rnd <= 1'b0; p_sub <= 1'b0;
-          p_asel <= 2'd2; p_bsel <= 1'b0; p_neg_b <= ck[6];
+          misc_a <= {1'b0, ck};                              // cos, all 128 k
+          p_en <= 1'b1; p_load <= (jj == 5'd0); p_rnd <= 1'b0;
+          p_asel <= 2'd2; p_bsel <= 1'b0;
           ck <= ck + {ii, 1'b0};
           if (jj == 5'd26) st <= S_ID_DR; else jj <= jj + 5'd1;
         end
@@ -698,7 +700,7 @@ module dsb_mpeg #(
           // i == 16 has no first term: issue nothing for it
           p_en <= !(ii == 5'd16 && !kk[0]);
           p_load <= (kk == 4'd0) || (ii == 5'd16 && kk == 4'd1);
-          p_rnd <= 1'b1; p_sub <= w_sub; p_asel <= 2'd3; p_bsel <= 1'b1; p_neg_b <= 1'b0;
+          p_rnd <= 1'b1; p_asel <= 2'd3; p_bsel <= 1'b1;   // the term's sign is in win
           if (kk == 4'd15) st <= S_WN_DR; else kk <= kk + 4'd1;
         end
         S_WN_DR: if (!mac_busy) st <= S_WN_O;
@@ -742,20 +744,6 @@ module dsb_mpeg #(
           st <= S_IDLE;
         end
 
-        // get-bits, limit-checked bit by bit (MAME's gb() checks the field;
-        // either way nothing of the frame is played)
-        S_GB: begin
-          if (rem_le0) st <= S_FAIL;
-          else if (whit) begin
-            gb_v   <= {gb_v[14:0], cur_bit};
-            rd_pos <= rd_pos + 27'd1; remb <= remb - 28'sd1;
-            if (rd_pos[3:0] == 4'hf) wvalid <= 1'b0;
-            if (ret == S_HDR && gb_n == 5'd17) prot <= cur_bit;
-            if (gb_n == 5'd1) st <= ret;
-            gb_n <= gb_n - 5'd1;
-          end
-        end
-
         default: st <= S_IDLE;
       endcase
     end
@@ -773,6 +761,11 @@ module dsb_mpeg #(
   // ================================================================ output
   // 32 kHz: pop one stereo sample, apply pan and volume (dsbz80.cpp
   // sound_stream_update: sample * vol / 128; pan 3 plays nothing).
+  // R1007: when TICK_NUM divides TICK_DEN (2C: 4 / 10,000, one tick in 2,500
+  // clocks) the accumulator only ever holds TICK_NUM x a count, so it is that
+  // count, mod TICK_DEN / TICK_NUM: the same tick on the same clock.
+  localparam bit          TICK_INT = (TICK_DEN % TICK_NUM) == 0;
+  localparam int unsigned TICK_P   = TICK_DEN / TICK_NUM;
   logic [15:0] tick_acc;
   logic        tick, ovalid;
   always_ff @(posedge clk or negedge rst_n) begin
@@ -782,7 +775,10 @@ module dsb_mpeg #(
       out_stb <= 1'b0; out_src <= 1'b0;
     end else begin
       tick <= 1'b0;
-      if (tick_acc + 16'(TICK_NUM) >= 16'(TICK_DEN)) begin
+      if (TICK_INT) begin
+        if (tick_acc == 16'(TICK_P - 1)) begin tick_acc <= '0; tick <= 1'b1; end
+        else tick_acc <= tick_acc + 16'd1;
+      end else if (tick_acc + 16'(TICK_NUM) >= 16'(TICK_DEN)) begin
         tick_acc <= tick_acc + 16'(TICK_NUM) - 16'(TICK_DEN); tick <= 1'b1;
       end else tick_acc <= tick_acc + 16'(TICK_NUM);
 

@@ -17,9 +17,8 @@ module dsb_board_harness #(
   parameter int unsigned CODE_LEN  = 768,
   parameter logic [15:0] VAR_BASE  = 16'h9000,
   parameter logic [15:0] STK_BASE  = 16'hff80,
-  parameter bit FIFO_MLAB = 1'b1,
+  parameter bit FIFO_MLAB = 1'b0,
   parameter bit WRAM_MLAB = 1'b0,
-  parameter bit TBL_PACK  = 1'b1,
   parameter int unsigned T_DEN = 20,
   parameter int unsigned TICK_DEN = 10000
 ) (
@@ -45,7 +44,7 @@ module dsb_board_harness #(
 );
   dsb_board #(.AW(AW), .ROM_BASE(ROM_BASE), .MPEG_BASE(MPEG_BASE), .RAM_BASE(RAM_BASE), .MAW(MAW),
               .CODE_BASE(CODE_BASE), .CODE_LEN(CODE_LEN), .VAR_BASE(VAR_BASE), .STK_BASE(STK_BASE),
-              .FIFO_MLAB(FIFO_MLAB), .WRAM_MLAB(WRAM_MLAB), .TBL_PACK(TBL_PACK), .T_DEN(T_DEN), .TICK_DEN(TICK_DEN)) u (
+              .FIFO_MLAB(FIFO_MLAB), .WRAM_MLAB(WRAM_MLAB), .T_DEN(T_DEN), .TICK_DEN(TICK_DEN)) u (
     .clk, .rst_n, .rx_tog, .rx_byte, .vol_mame, .s_req, .s_we, .s_addr, .s_din, .s_be,
     .s_ack, .s_dout, .out_l, .out_r, .out_stb, .dbg_trap(trap), .dbg_frames());
   assign io_wr = u.io_wr, io_rd = u.io_rd, tick = u.tick, io_addr = u.io_addr;
