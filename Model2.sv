@@ -289,6 +289,16 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2C_DSB_LEAN
 `define M2_2C_DSB_LEAN 0
 `endif
+// R1004: the other two of dsb_mpeg's bit-identical memory forms, as macros
+// so that each form is a QSF line: M2_2C_DSB_FIFO_MLAB (default 1, R979's
+// choice) puts the 64 x 32 output FIFO in MLAB, M2_2C_DSB_TBL_PACK (default 1)
+// packs the window and cos tables into one M10K by their symmetries.
+`ifndef M2_2C_DSB_FIFO_MLAB
+`define M2_2C_DSB_FIFO_MLAB 1
+`endif
+`ifndef M2_2C_DSB_TBL_PACK
+`define M2_2C_DSB_TBL_PACK 1
+`endif
 // R927: THE i960'S SPEED IN SEGA RALLY'S FRAME START (R926: the game's AI
 // detail budget). M2_2A_I960_RING: the local-register cache as the chip keeps
 // it, a ring of eight frames that goes to memory only when a call finds it
@@ -3656,7 +3666,8 @@ generate if (DSB) begin : g_dsb
 	dsb_board #(.AW(SDR_AW), .ROM_BASE(SDR_AW'(32'h3400000)), .MPEG_BASE(SDR_AW'(32'h3000000)),
 	            .RAM_BASE(SDR_AW'(32'h3410000)), .MAW(22),
 	            .T_NUM(1), .T_DEN(SYS_MHZ / 4), .TICK_NUM(4), .TICK_DEN(SYS_MHZ * 125),
-	            .WRAM_MLAB(`M2_2C_DSB_LEAN != 0)) u_dsb (
+	            .WRAM_MLAB(`M2_2C_DSB_LEAN != 0), .FIFO_MLAB(`M2_2C_DSB_FIFO_MLAB != 0),
+	            .TBL_PACK(`M2_2C_DSB_TBL_PACK != 0)) u_dsb (
 		.clk(clk_sys), .rst_n(dsb_rst_n),
 		.rx_tog(dsb_rx_tog), .rx_byte(b_rx_d),
 		.vol_mame(1'b1),   // MAME's reading of e8 (every write is the volume)
