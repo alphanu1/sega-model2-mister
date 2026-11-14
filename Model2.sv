@@ -328,6 +328,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2A_I960_RING
 `define M2_2A_I960_RING 1
 `endif
+// R1011: the i960's front end and load / store timing on the 2A board (and
+// the 2C build of it): a two-word instruction's displacement with its own
+// word (i960_top IC_PAIR), the program and data ROMs' reads in the data cache
+// (DC_ROMS), a store's first word a cycle sooner (LSU_ST1) and one-word stores
+// posted (LSU_POST). Timing only: every bus access and its order as before.
+// 0 builds the i960 as R927 left it; the original board's core is unchanged.
+`ifndef M2_2A_I960_R1011
+`define M2_2A_I960_R1011 1
+`endif
 `ifndef M2_2A_I960_DC
 `define M2_2A_I960_DC 1
 `endif
@@ -3170,9 +3179,16 @@ localparam int unsigned I960_DC = (M2A && (`M2_2A_I960_DC != 0)) ? 64 : 0;
 `else
 localparam int unsigned I960_DC = 0;
 `endif
+`ifdef M2_2A_I960_R1011
+localparam bit I960_R1011 = M2A && (`M2_2A_I960_R1011 != 0);
+`else
+localparam bit I960_R1011 = 1'b0;
+`endif
 i960_top #(.VC(VCOP_FPU || C2), .FR(FPU2A), .F2A(FPU2A), .C2(C2),   // R869: F2A; R924: C2
            .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4),
-           .DC_LINES(I960_DC), .DC_2A(M2A), .DC_LANES(1'b0)) u_i960 (   // R927
+           .DC_LINES(I960_DC), .DC_2A(M2A), .DC_LANES(1'b0),   // R927
+           .IC_PAIR(I960_R1011), .DC_ROMS(I960_R1011),
+           .LSU_ST1(I960_R1011), .LSU_POST(I960_R1011)) u_i960 (   // R1011
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
