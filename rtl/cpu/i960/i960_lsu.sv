@@ -49,7 +49,26 @@
 // than dword address because it keeps the transaction stream directly
 // comparable with the reference's own read_byte/read_dword calls.
 
-module i960_lsu (
+module i960_lsu #(
+  // R1011: A STORE'S FIRST WORD GOES OUT THE CYCLE AFTER THE REQUEST. i960_top
+  // presents the store source to the register file in T_EXEC (ra1 = srcdst),
+  // the cycle the request is made, so st_word is that register from the next
+  // cycle -- the S_XFER cycle. S_OPD waited a cycle more for it. A later word
+  // of stl / stt / stq still passes S_OPD (its register is addressed from
+  // cur_idx, which moves on the previous word's acknowledge). 0: as before.
+  parameter bit ST1 = 1'b1,
+  // R1011: A ONE-WORD ALIGNED STORE IS POSTED. With ST1, its request goes out
+  // the cycle after the LSU takes it, and in that same cycle the store is
+  // reported done (done_now) -- the instruction retires -- while the request
+  // stays up until the bus acknowledges it (`busy` meanwhile). Its data is
+  // held in wd_q from that first cycle, since the register file's port moves
+  // on with the next instruction. i960_top keeps the next load or store in
+  // T_EXEC while `busy`, and every other master is behind the arbiter's grant,
+  // which this request holds from its first cycle: every bus access is the
+  // one it was, in the order it was; only the instructions between run
+  // earlier. 0: the store retires on its acknowledge, as before.
+  parameter bit POST = 1'b0
+) (
   input  logic        clk,
   input  logic        rst_n,
 
@@ -121,7 +140,10 @@ module i960_lsu (
   logic retire_now;
   assign retire_now  = (state == S_XFER) && bus_ack && !word_split;
   assign ld_we_now   = retire_now && !store_q;
-  assign done_now    = retire_now && ((widx + 3'd1) >= nw);
+  logic post_q, post_first;   // R1011: this transfer is a posted store; its first cycle
+  logic [31:0] wd_q;
+  assign done_now    = (retire_now && ((widx + 3'd1) >= nw) && !post_q)
+                     || ((state == S_XFER) && post_first);
   assign ld_word_now = (sz == 2'd0) ? (sext_q ? {{24{rd_byte[7]}},  rd_byte}
                                               : {24'd0,            rd_byte})
                      : (sz == 2'd1) ? (sext_q ? {{16{rd_half[15]}}, rd_half}
@@ -136,10 +158,11 @@ module i960_lsu (
   assign bus_we    = store_q;
   assign bus_addr  = word_split ? byte_addr : cur_addr;
   assign bus_be    = word_split ? (4'b0001 << byte_addr[1:0]) : be_full;
-  assign bus_wdata = word_split ? {4{st_byte_split}}
-                   : (sz == 2'd0) ? {4{st_word[7:0]}}
-                   : (sz == 2'd1) ? {2{st_word[15:0]}}
-                                  : st_word;
+  wire [31:0] wdata_c = word_split ? {4{st_byte_split}}
+                      : (sz == 2'd0) ? {4{st_word[7:0]}}
+                      : (sz == 2'd1) ? {2{st_word[15:0]}}
+                                     : st_word;
+  assign bus_wdata = (post_q && !post_first) ? wd_q : wdata_c;   // R1011
   // The index that goes with ld_word, captured when ld_word is, NOT the live
   // counter. S_NEXT asserts ld_we and advances widx in the same cycle, so a
   // consumer sampling `widx` alongside `ld_we` sees the NEXT word's index --
@@ -242,9 +265,14 @@ module i960_lsu (
       sext_q   <= 1'b0;
       burst_q  <= 1'b0;
       ld_widx  <= 3'd0;
+      post_q   <= 1'b0;
+      post_first <= 1'b0;
+      wd_q     <= 32'd0;
     end else begin
       ld_we <= 1'b0;
       done  <= 1'b0;
+      post_first <= 1'b0;
+      if (post_first) wd_q <= wdata_c;   // R1011: the store's data, held
 
       case (state)
         S_IDLE: begin
@@ -267,7 +295,13 @@ module i960_lsu (
             assemble <= 32'd0;
             // A store must wait for the caller to deliver r[base+0]; a load has
             // no operand and goes straight to the transfer.
-            state    <= is_store ? S_OPD : S_XFER;
+            state    <= (is_store && !ST1) ? S_OPD : S_XFER;
+            // R1011: post a one-word store whose word goes out in one transfer
+            // (aligned for its size: the byte split stays as it was)
+            post_q     <= POST && ST1 && is_store && (n_words == 3'd1) &&
+                          ((size == 2'd0) || ((size == 2'd1) && !addr[0]) || (addr[1:0] == 2'd0));
+            post_first <= POST && ST1 && is_store && (n_words == 3'd1) &&
+                          ((size == 2'd0) || ((size == 2'd1) && !addr[0]) || (addr[1:0] == 2'd0));
           end
         end
 
@@ -315,7 +349,8 @@ module i960_lsu (
                 endcase
               end
               if (widx + 3'd1 >= nw) begin
-                done  <= 1'b1;
+                done  <= !post_q;   // R1011: a posted store retired already
+                post_q <= 1'b0;
                 state <= S_IDLE;
               end else begin
                 widx <= widx + 3'd1;

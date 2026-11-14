@@ -17,6 +17,9 @@
 #include <random>
 #include "Vi960_dcache.h"
 #include "verilated.h"
+#ifndef ROMS_BENCH
+#define ROMS_BENCH 0
+#endif
 
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
@@ -35,10 +38,17 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 2000; ++i) tick();   // the reset sweep
   // addresses: a few lines in work RAM and board RAM that alias in the cache,
   // and one region it must never hold (buffer RAM)
-  const uint32_t BASES[] = {0x500000u, 0x500000u + 0x400u, 0x500000u + 0x4000u, 0x20aa00u, 0x900000u, 0x5ff000u};
+  const uint32_t BASES[] = {0x500000u, 0x500000u + 0x400u, 0x500000u + 0x4000u, 0x20aa00u, 0x900000u, 0x5ff000u,
+                            // R1011: the two ROMs (ROMS builds cache them; their writes are dropped, as the bridge does)
+                            0x000400u, 0x1ffc00u, 0x2000400u, 0x3fffc00u};
+  const bool roms_in = ROMS_BENCH;
+  if (roms_in)   // ROM contents, so a write that wrongly lands in a held ROM word shows
+    for (uint32_t rb : {0x000400u, 0x1ffc00u, 0x2000400u, 0x3fffc00u})
+      for (uint32_t w = 0; w < 64; ++w) mem[rb + 4 * w] = uint32_t(rng());
   uint64_t fails = 0, reads = 0, writes = 0, hits = 0;
   for (uint64_t k = 0; k < ops && fails < 10; ++k) {
-    const uint32_t base = BASES[rng() % 6];
+    const uint32_t base = BASES[rng() % (roms_in ? 10 : 6)];
+    const bool rom = base < 0x200000u || (base >= 0x2000000u && base < 0x4000000u);
     const uint32_t a = base + uint32_t(rng() % 64) * 4u;
     const bool we = (rng() % 3) == 0;
     static const uint8_t BE[] = {0xf, 0xf, 0xf, 0x1, 0x2, 0x4, 0x8, 0x3, 0xc, 0x6};
@@ -53,7 +63,8 @@ int main(int argc, char **argv) {
       if (ext) { if (wait < 0) wait = int(rng() % (lat + 1)); }
       if (ext && wait == 0) {
         d->ack_x = 1;
-        if (we) { uint32_t v = rdm(a); for (int b = 0; b < 4; ++b) if (be & (1 << b)) v = (v & ~(0xffu << (8 * b))) | (wd & (0xffu << (8 * b))); mem[a & ~3u] = v; }
+        if (we && rom) { /* dropped, as m2_cpu_bridge drops a ROM write */ }
+        else if (we) { uint32_t v = rdm(a); for (int b = 0; b < 4; ++b) if (be & (1 << b)) v = (v & ~(0xffu << (8 * b))) | (wd & (0xffu << (8 * b))); mem[a & ~3u] = v; }
         else d->rdata_x = rdm(a);
         d->eval();
       }

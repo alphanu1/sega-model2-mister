@@ -1,7 +1,7 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 -- Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1
 --
--- R1010: AN i960 CHECKPOINT FOR THE RTL (sim/i960ck). The core's i960 cannot
+-- R1011: AN i960 CHECKPOINT FOR THE RTL (sim/i960ck). The core's i960 cannot
 -- reach a game's race on the whole-core bench inside an hour, so its speed on
 -- race code was inferred (R1005's s). This takes MAME to an instruction
 -- boundary at a main-loop address, writes what the RTL needs to start there,

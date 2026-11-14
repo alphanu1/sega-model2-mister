@@ -42,7 +42,7 @@
 static Vi960_icache *dut;
 static int HUF_EXPECTED = 0, ER_EXPECTED = 0;
 static std::mt19937 rng(1);
-static uint64_t ticks = 0, fails = 0, valids_checked = 0, answers = 0, fills = 0;
+static uint64_t ticks = 0, fails = 0, valids_checked = 0, answers = 0, fills = 0, pairs_checked = 0;
 static int BUS_MAX = 12;
 static const int HANG_LIMIT = 4000;
 static uint32_t mem_of(uint32_t a) { a &= ~3u; return (a * 2654435761u) ^ 0x5a5a1234u ^ (a >> 7); }
@@ -74,6 +74,17 @@ static void check_valid() {
     if (dut->data != mem_of(va)) {
       if (fails < 12) std::printf("  BAD ANSWER: vaddr=%08x data=%08x want=%08x at tick %llu\n", va, dut->data, mem_of(va), (unsigned long long)ticks);
       ++fails;
+    }
+    // R1011 (PAIR): the word after, when the cache says it has it
+    if (dut->valid2) {
+      ++pairs_checked;
+      if ((va & 0xc) == 0xc) {
+        if (fails < 12) std::printf("  PAIR ACROSS A LINE: vaddr=%08x at tick %llu\n", va, (unsigned long long)ticks);
+        ++fails;
+      } else if (dut->data2 != mem_of(va + 4)) {
+        if (fails < 12) std::printf("  BAD SECOND WORD: vaddr=%08x data2=%08x want=%08x at tick %llu\n", va, dut->data2, mem_of(va + 4), (unsigned long long)ticks);
+        ++fails;
+      }
     }
   }
 }
@@ -197,8 +208,8 @@ int main(int argc, char **argv) {
   random_run(N, 0x10000, "random, 64 KB of code");
   random_run(N / 3, 0x400, "random, 1 KB of code");
   random_run(N, 0x4000, "16 KB, requests abandoned often", 25);
-  std::printf("  %llu valids checked against memory, %llu answers taken, %llu fails\n",
-              (unsigned long long)valids_checked, (unsigned long long)answers, (unsigned long long)fails);
+  std::printf("  %llu valids checked against memory (%llu with the word after), %llu answers taken, %llu fails\n",
+              (unsigned long long)valids_checked, (unsigned long long)pairs_checked, (unsigned long long)answers, (unsigned long long)fails);
   std::printf("%s\n", fails ? "FAIL" : "PASS");
   delete dut;
   return fails ? 1 : 0;

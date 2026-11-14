@@ -24,6 +24,7 @@
 //
 //   x4_pace_model <capdir> --tm DIR --pcprof FILE [--scale S] [--x4 K]
 //                 [--from F] [--to F] [--flog FILE] [--cost C] [--vbl N]
+//                 [--scale-file FILE]   (R1011: "frame s" lines; --scale elsewhere)
 //   X4_PCHIST=<file>: the words run from frame --from on, by program address.
 //
 // CHECKED (R1005): unpaced, against the RTL replay of the same capture over
@@ -34,11 +35,12 @@
 #include "cap.h"
 #include <cinttypes>
 #include <deque>
+#include <map>
 
 int main(int argc, char **argv)
 {
   if (argc < 2) { fprintf(stderr, "usage: x4_pace_model <capdir> [options]\n"); return 2; }
-  std::string dir = argv[1], tm_dir, pcprof, flog_path;
+  std::string dir = argv[1], tm_dir, pcprof, flog_path, scale_file;
   double scale = 1.0, x4 = 1.0, cost_def = 6.72;
   uint32_t from = UINT32_MAX, to = UINT32_MAX;
   uint64_t vbl = 1391304, idle_need = 64, frame_cap = 1391304;
@@ -49,6 +51,7 @@ int main(int argc, char **argv)
     if (a == "--tm") tm_dir = nx();
     else if (a == "--pcprof") pcprof = nx();
     else if (a == "--scale") scale = atof(nx().c_str());
+    else if (a == "--scale-file") scale_file = nx();
     else if (a == "--x4") x4 = atof(nx().c_str());
     else if (a == "--from") from = uint32_t(strtoul(nx().c_str(), nullptr, 0));
     else if (a == "--to") to = uint32_t(strtoul(nx().c_str(), nullptr, 0));
@@ -119,7 +122,16 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < tml.size(); i++) { memcpy(&tml[i], &b[i * 16], 8); memcpy(&tmw[i], &b[i * 16 + 8], 8); }
   }
   auto paced = [&](size_t k) { return !tmg.empty() && tmg[k].frame >= from && tmg[k].frame < to; };
-  const double clk_s = 80e6 * scale;
+  // R1011: --scale-file <frame s lines>: the core's i960 time per MAME's, by
+  // game frame, as tb_i960_ck measures it (sim/i960ck); --scale elsewhere.
+  std::map<uint32_t, double> fscale;
+  if (!scale_file.empty()) {
+    FILE *sf = fopen(scale_file.c_str(), "r"); unsigned fr; double sv;
+    while (sf && fscanf(sf, "%u %lf", &fr, &sv) == 2) fscale[fr] = sv;
+    if (sf) fclose(sf);
+    printf("scale file: %zu frames\n", fscale.size());
+  }
+  double clk_s = 80e6 * scale;
   FILE *flog = flog_path.empty() ? nullptr : fopen(flog_path.c_str(), "w");
   if (flog) fprintf(flog, "# P frame vstart work vblanks cpu held_in held_out words events mame_work_s | U capframe busy words\n");
 
@@ -205,6 +217,7 @@ int main(int argc, char **argv)
           if (pf == UINT32_MAX) { v = std::max(Ti, Tx); pv0 = v; }
           else v = finish_frame(r.frame);
           pf = r.frame; pv = v; f_cpu = f_hin = f_hout = 0; f_w0 = words; f_ev = 0;
+          { auto it = fscale.find(pf); clk_s = 80e6 * (it != fscale.end() ? it->second : scale); }   // R1011
           e_at = v + r.gap * clk_s;
         } else e_at = pdone + r.gap * clk_s;
         f_cpu += r.gap * clk_s; have_e = true;
