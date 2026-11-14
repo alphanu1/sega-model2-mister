@@ -168,7 +168,14 @@ module m2_raster3d #(
   parameter bit PAY_DDR3 = 1'b0,
   parameter logic [28:0] PAY_BASE = 29'h0610_0000,   // byte 0x30800000, 8 MB above the frame buffers
   parameter int unsigned PAY_DEPTH = 16,              // payload reads in flight (and the store's colour queue)
-  parameter bit PAY_HOLD = 1'b1,                     // the payload waits while the scanout fetches a line (R655)
+  // R1003: hold the payload off the bus while the scanout has a line to fetch
+  // (Model 1's hold_b, R655). 0: not held. With m2_ddram_mux's in-cycle grant
+  // a line read about to be issued wins the port anyway and one already
+  // issued is ahead of any later payload read, so the hold protects nothing
+  // -- and at a 400-cycle round trip the scanout is hungry for most of a
+  // heavy band: STCC's title list starved the store 3,839 cycles and drew
+  // 2,483 cycles slower than the release with it, 948 faster without.
+  parameter bit PAY_HOLD = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (

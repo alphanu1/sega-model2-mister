@@ -195,6 +195,7 @@ int main(int argc, char **argv) {
   g_dm.latency  = std::getenv("M2_R3D_DDRLAT")  ? atol(std::getenv("M2_R3D_DDRLAT")) : 40;
   g_dm.busy_pct = std::getenv("M2_R3D_DDRBUSY") ? std::atoi(std::getenv("M2_R3D_DDRBUSY")) : 0;
   g_dm.hold_pct = std::getenv("M2_R3D_DDRHOLD") ? std::atoi(std::getenv("M2_R3D_DDRHOLD")) : 0;
+  if (const char *e = std::getenv("M2_R3D_DDRSEED")) g_dm.seed = unsigned(std::strtoul(e, nullptr, 0));   // R1003: the BUSY / held-beat pattern
   g_dm.split    = 0x06100000;   // m2_raster3d PAY_BASE: the frame buffer below, the payload above
   std::printf("  R1003 DDRAM model: latency %ld, BUSY %d per mille, beats held %d%%\n", g_dm.latency, g_dm.busy_pct, g_dm.hold_pct);
 #endif
@@ -338,8 +339,16 @@ int main(int argc, char **argv) {
       } }
     { static const bool BT = std::getenv("M2_R3D_BANDTRACE") != nullptr;   // R1003: each band's end, in core cycles
       static int pc = -1; const int c = d->rootp->m2_raster3d__DOT__cst & 7;
+      static long w_st = 0, w_hu = 0, w_wr = 0;   // this band: fill waiting on the store, scanout hungry, writer not ready
+      { auto *r = d->rootp;
+        if (c == 4 && !r->m2_raster3d__DOT__qs_out_valid && r->m2_raster3d__DOT__qs_replay_busy) w_st++;
+#ifdef R3D_DDRAM
+        if (r->m2_raster3d__DOT__g_fb__DOT__fbr_hungry) w_hu++;
+#endif
+        if (!r->m2_raster3d__DOT__fbw_ready) w_wr++; }
       if (BT && c != pc && c == 6 && g_draw_c0 >= 0) std::printf("BAND %d %ld clr_y %d cl_on %d\n", (int)d->rootp->m2_raster3d__DOT__fill_band, g_cyc - g_draw_c0,
                   (int)d->rootp->m2_raster3d__DOT__g_fb__DOT__g_wcomb__DOT__u_fbw__DOT__clr_y, (int)d->rootp->m2_raster3d__DOT__g_fb__DOT__g_wcomb__DOT__u_fbw__DOT__cl_on);
+      if (BT && c != pc && c == 6 && g_draw_c0 >= 0) { std::printf("BANDW %d store %ld hungry %ld writer %ld\n", (int)d->rootp->m2_raster3d__DOT__fill_band, w_st, w_hu, w_wr); w_st = w_hu = w_wr = 0; }
       pc = c; }
     if (FBM) {
       const bool fc = d->rootp->m2_raster3d__DOT__fb_complete;
