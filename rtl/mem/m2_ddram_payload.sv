@@ -208,16 +208,19 @@ module m2_ddram_payload #(
   /* verilator lint_off UNUSEDSIGNAL */   // the pointer's wrap bit; the last lane's padding
   logic [64*NB-1:0] fq_q;
   /* verilator lint_on UNUSEDSIGNAL */
+  // R1003: EACH LANE IS ITS OWN MODULE (m2_ddram_lane, below). As an array
+  // declared inside this generate loop the ramstyle was dropped: quartus_map
+  // inferred the five lanes as altsyncram of type AUTO ("fq[0][63]__7"),
+  // leaving M10K or MLAB to the fitter. At module level it is kept.
   genvar k;
   generate
     for (k = 0; k < int'(NB); k++) begin : g_lane
       localparam int unsigned LB = (k == int'(NB) - 1) ? LW : 64;   // the last lane holds what is left
-      (* ramstyle = "M10K" *) logic [LB-1:0] fq [DEPTH];
       logic [LB-1:0] lq;
-      always_ff @(posedge clk) begin
-        if (DDRAM_DOUT_READY && rbeat == BW_'(k)) fq[fq_wp[DW-1:0]] <= DDRAM_DOUT[LB-1:0];
-        lq <= fq[fq_rp_nx[DW-1:0]];
-      end
+      m2_ddram_lane #(.W(LB), .DEPTH(DEPTH)) u_lane (
+        .clk(clk), .we(DDRAM_DOUT_READY && rbeat == BW_'(k)), .waddr(fq_wp[DW-1:0]),
+        .wdata(DDRAM_DOUT[LB-1:0]), .raddr(fq_rp_nx[DW-1:0]), .q(lq)
+      );
       assign fq_q[64*k +: 64] = 64'(lq);
     end
   endgenerate
@@ -339,4 +342,23 @@ module m2_ddram_payload #(
     end
   end
 
+endmodule
+
+// One reply lane: a simple dual-port block RAM, registered read.
+module m2_ddram_lane #(
+  parameter int unsigned W     = 64,
+  parameter int unsigned DEPTH = 16
+) (
+  input  logic                     clk,
+  input  logic                     we,
+  input  logic [$clog2(DEPTH)-1:0] waddr,
+  input  logic [W-1:0]             wdata,
+  input  logic [$clog2(DEPTH)-1:0] raddr,
+  output logic [W-1:0]             q
+);
+  (* ramstyle = "M10K" *) logic [W-1:0] mem [DEPTH];
+  always_ff @(posedge clk) begin
+    if (we) mem[waddr] <= wdata;
+    q <= mem[raddr];
+  end
 endmodule
