@@ -174,6 +174,12 @@ int main(int argc, char **argv) {
   std::deque<uint32_t> popq;
   FILE *dump = getenv("DSB_DUMP") ? fopen(getenv("DSB_DUMP"), "w") : nullptr;
   long ntick = 0;
+  // R1007: the 32 kHz strobe's period, where the clock is a whole multiple of
+  // it (80 MHz: 2,500), checked on every strobe -- a period one clock short
+  // passed every other check here (it plays the same samples, faster)
+  const double per_f = CLK / 32000.0;
+  const uint64_t per = (per_f == (double)(uint64_t)per_f) ? (uint64_t)per_f : 0;
+  uint64_t last_stb = 0; long bad_per = 0;
   int vol = 0x7f, pan = 0, lastv = -1;
   // m2_sdram_cdc's slow side: s_req a level, held with its address and data
   // until s_ack; s_ack sticky while the request stands; then the request
@@ -237,6 +243,11 @@ int main(int argc, char **argv) {
     }
     // 3. the 32 kHz output
     if (h->out_stb) {
+      if (per && last_stb && cyc - last_stb != per) {
+        if (bad_per++ < 5) printf("FAIL: 32 kHz strobe after %llu clocks, not %llu\n", (unsigned long long)(cyc - last_stb), (unsigned long long)per);
+        fails++;
+      }
+      last_stb = cyc;
       if (dump) fprintf(dump, "O %ld %d %04x %04x\n", ntick, (int)h->out_src, (uint16_t)h->out_l, (uint16_t)h->out_r);
       ntick++;
       if (h->out_src && !popq.empty()) {
