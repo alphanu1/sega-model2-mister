@@ -221,7 +221,12 @@ module dsb_z80 (
   wire       g_ar  = !grp[2] || (grp == 3'd7);      // arithmetic (else logic)
   wire       g_sub = grp[1] && g_ar;                // sub, sbc, cp
   wire       g_cin = g_sub ? !(grp[0] && fC && !grp[2]) : (grp[0] && fC);
-  wire [8:0] g_sum = {1'b0, A} + {1'b0, g_sub ? ~Y : Y} + {8'd0, g_cin};
+  // R1007: INC and DEC through the same adder, 00 + Y + 1 and ff + Y (they
+  // had an adder each); their carry out is not used (C is not written)
+  wire       a_inc = (f_alu == A_INC), a_dec = (f_alu == A_DEC);
+  wire [7:0] g_a   = a_inc ? 8'h00 : a_dec ? 8'hff : A;
+  wire [8:0] g_sum = {1'b0, g_a} + {1'b0, (g_sub && !a_inc && !a_dec) ? ~Y : Y} +
+                     {8'd0, a_inc || (!a_dec && g_cin)};
   logic [7:0] alu_r, fl_v;          // result; the value S and Z are taken from
   logic       alu_c;
   always_comb begin
@@ -258,8 +263,7 @@ module dsb_z80 (
         end
         fl_v = alu_r;
       end
-      A_INC:   begin alu_r = Y + 8'd1; fl_v = alu_r; end
-      A_DEC:   begin alu_r = Y - 8'd1; fl_v = alu_r; end
+      A_INC, A_DEC: begin alu_r = g_sum[7:0]; fl_v = alu_r; end
       A_CPL:   alu_r = ~Y;
       A_AGUC:  alu_c = asum[16];
       A_SBC16: alu_c = !asum[16];
@@ -307,8 +311,11 @@ module dsb_z80 (
   // high there: now, if on time; `irq_age` T ago or more, if behind.
   wire        int_arm  = iff1 && !ei_blk;
   wire        int_wait = int_arm && (ahead > 12'(IRQ_S));
-  wire signed [12:0] int_need = 13'(IRQ_S) - 13'(ahead);    // >= 0 once not waiting
-  wire        int_take = int_arm && !int_wait && irq && ($signed({1'b0, irq_age}) >= int_need);
+  // irq_age >= IRQ_S - ahead, as the sign of irq_age + ahead - IRQ_S (R1007:
+  // one adder, not a negation and a compare). Only read when not waiting
+  // (ahead <= IRQ_S), where the sum is at most 4,095 and fits.
+  wire signed [12:0] int_m = $signed({1'b0, irq_age}) + 13'(ahead) - 13'(IRQ_S);
+  wire        int_take = int_arm && !int_wait && irq && !int_m[12];
 
   // ---------------------------------------------------------------- sequencing
   // A micro-op reads in S_RA and completes in S_EX when its memory access (if
@@ -454,8 +461,13 @@ module dsb_z80 (
         end
         default: st <= S_FETCH;
       endcase
-      // one T of real time per tick (floored, so a long stall cannot wrap)
-      ahead <= ahead + addT - ((tick && ahead > -12'sd2000) ? 12'sd1 : 12'sd0);
+      // one T of real time per tick (floored, so a long stall cannot wrap);
+      // R1007: the step (-1 .. 31) first, then one add
+      begin
+        logic signed [6:0] step;
+        step = 7'(addT) - ((tick && ahead > -12'sd2000) ? 7'sd1 : 7'sd0);
+        ahead <= ahead + 12'(step);
+      end
     end
   end
 
