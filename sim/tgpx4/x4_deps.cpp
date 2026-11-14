@@ -26,13 +26,14 @@ int main(int argc, char **argv)
 {
   if (argc < 2) { fprintf(stderr, "usage: x4_deps <capdir> [--from W] [--words N] [--pcs FILE]\n"); return 2; }
   uint64_t from = 0, nwin = UINT64_MAX; std::vector<bool> pcsel; bool usepcs = false;
-  std::string pcdump;                    // --pcdump FILE: pc, words counted there, the word's class
+  std::string pcdump; uint64_t from_pop = 0;   // --from-pop P: the external-access statistics from the P-th pop on                    // --pcdump FILE: pc, words counted there, the word's class
   std::vector<uint64_t> pc_n(4096, 0); std::vector<std::string> pc_k(4096);
   for (int i = 2; i < argc; i++) {
     std::string a = argv[i];
     if (a == "--from") from = strtoull(argv[++i], nullptr, 0);
     else if (a == "--words") nwin = strtoull(argv[++i], nullptr, 0);
     else if (a == "--pcdump") pcdump = argv[++i];
+    else if (a == "--from-pop") from_pop = strtoull(argv[++i], nullptr, 0);
     else if (a == "--pcs") { usepcs = true; pcsel.assign(4096, false); FILE *f = fopen(argv[++i], "r"); unsigned p; while (f && fscanf(f, "%x%*[^\n]", &p) == 1) pcsel[p & 0xfff] = true; if (f) fclose(f); }
   }
   Capture c;
@@ -65,13 +66,16 @@ int main(int argc, char **argv)
   // write bursts: consecutive writes no more than 2 words apart
   uint64_t burst = 0, h_bl[7] = {};
   d.m_external.rd = [&](uint32_t a) -> uint32_t {
+    const bool cnt_on = ip >= from_pop;
     for (int i = 0; i < 4; i++) for (int j = 0; j < 3; j++) {
       uint32_t ln = a >> CL[j], ix2 = ln & ((1u << CK[i]) - 1);
-      if (ctag[i][j][ix2] == ln) chit[i][j]++; else ctag[i][j][ix2] = ln; }
+      if (ctag[i][j][ix2] == ln) { if (cnt_on) chit[i][j]++; } else ctag[i][j][ix2] = ln; }
+    if (!cnt_on) { while (ix < exts.size() && exts[ix]->t != 'R') ix++; return ix < exts.size() ? exts[ix++]->b : c.rom(a); }
     nrd++; if (a >= 0x800000) rd_rom++; if (a == pred_a) rd_pred++; rd_this = true;
     if (last_rw != UINT64_MAX) h_rg[gb(cur_w - last_rw)]++; last_rw = cur_w;
     while (ix < exts.size() && exts[ix]->t != 'R') ix++; return ix < exts.size() ? exts[ix++]->b : c.rom(a); };
   d.m_external.wr = [&](uint32_t, uint32_t) {
+    if (ip < from_pop) { if (ix < exts.size() && exts[ix]->t == 'W') ix++; return; }
     nwr++; if (last_ww != UINT64_MAX) h_wg[gb(cur_w - last_ww)]++;
     if (last_ww != UINT64_MAX && cur_w - last_ww <= 2) burst++; else { if (burst) h_bl[gb(burst)]++; burst = 1; }
     last_ww = cur_w;
