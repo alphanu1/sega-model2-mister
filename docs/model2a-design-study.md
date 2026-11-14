@@ -48951,3 +48951,186 @@ music than MAME -- at its default 0 it is MAME's mix.
     shows STCC makes one; not changed here.
   * The board hears the link's B side, so a slow SCSP acknowledge would delay
     its bytes too (R979's wiring); MAME's UART feeds both independently.
+
+**R1005 -- STCC'S 30 FPS IN THE RACE (Ben, board: the second race, with the
+other cars on the track; qualifying, alone, is fine) IS THE GAME'S OWN FRAME:
+THE i960 AND THE TGPx4 TOGETHER, NOT THE DRAW AND NOT (YET) THE WALK. THE
+RACE TRIPLES BOTH: ~45,000 i960 INSTRUCTIONS AND ~100,000 TGPx4 WORDS A
+FRAME AGAINST QUALIFYING'S ~35,000 WORDS; ON THE CORE'S SPEEDS THE RACE
+START'S FRAME IS 15.8-18.0 ms AGAINST A 17.39 ms VBLANK. MEASURED IN MAME,
+ON BENCHES AND ON A TIMING MODEL CHECKED AGAINST THE RTL; NOTHING ON A BOARD,
+NO RTL CHANGED.** Branch stcc-speed (off 2c-mpeg d164d6be), 2026-11-14.
+
+*What was believed:* the 3D draw is probably not it (R1003's table: STCC's
+attract lists 4.8-6.3 ms); past slowdowns were the i960 (R926 / R927), the
+draw behind R652's hold (R954), the transcendental sequencer (R998). Nothing
+said which 2C stage a race frame overruns, or how STCC drops a frame.
+
+*HOW STCC DROPS A FRAME (its program, MAME 0.289's disassembly):* the main
+loop (0xffc-0x1174) runs the mode's handler, pushes command 0x23 to the
+TGPx4 and reads its reply (0x1090-0x10a0: the read waits until the TGPx4 has
+worked through everything queued before it), sets the geometrizer's list
+addresses, and calls 0x76380, which writes the flip (0x803008) and then
+spins reading 0x98000c until bit 2 -- the frame parity, io_framenum[0] here
+(render mode set) -- changes. There is no frame-rate decision anywhere: a
+frame whose work ends after the next vblank simply waits for the one after,
+so it costs two vblanks. On the core the parity advances only on a vblank
+R652 does not withhold, so the frame is lost to (a) the i960 + TGPx4 work
+running past the vblank, or (b) the draw still busy when the next list is
+ready (R652's hold). (c) A walk longer than a vblank holds nothing: its list
+misses the swap and the picture repeats, the game runs on.
+
+*THE INSTRUMENT (new, committed; ROM-derived data outside the repository):*
+  * tools/mame_stcc_timing.lua over sim/io/mame_m2_stcc_race.lua's timeline:
+    taps on the i960's copro accesses (FIFO writes / reads, function port,
+    ctl1), the flip and the frame notifier, stamped with emu.time() INSIDE
+    the tap -- the i960's own local time. Run with R924_CAP the taps are the
+    capture's i960 events one for one: 27,781,055 of 27,781,055 in 200 s,
+    type for type. The run is deterministic (four reruns: the same 8,870
+    lists). The car drives (AT) from 58 s, qualifying to ~100 s, the race
+    with seven opponents from ~120 s.
+  * sim/tgpx4/tm_gaps.py: MAME's i960 time between consecutive accesses, per
+    GAME frame (vblank to flip); an X read MAME found empty (Y) is timed to
+    its first Y, and the access after a push onto a full input FIFO (MAME
+    halts the i960 there, 5.1 M of 24.0 M) is zeroed (lower bound) or kept
+    (TM_KEEP_HALT=1, upper bound).
+  * tb_tgpx4_replay --tm / --flog / --pcprof: the RTL replay with the i960
+    paced by those gaps times a scale, game frames starting at the first
+    vblank edge after the last flip (the game's rule); --pcprof the RTL's
+    clocks per word by program address. At ~0.4-0.5 M clocks a second under
+    this machine's load the whole 200 s session (~4.4 G clocks) is hours, so:
+  * sim/tgpx4/x4_pace_model.cpp (make x4_pace_model): MAME's MB86235
+    interpreter fed the capture (so the same words), each word at the RTL's
+    measured cost for its address, coupled to the paced i960 through two
+    8-deep FIFOs. 200 s in ~20 s. CHECKED against the RTL: unpaced, the
+    TGPx4's busy clocks per vblank over the first 3,129 vblanks with work
+    agree p1 0.991 / p50 1.001 / p99 1.057 (sum 0.9998, words equal in
+    3,128); paced at scale 2.2 over 299 attract frames, the frame's work
+    p1 0.991 / p50 0.997 / p99 0.999 of the RTL's (the split inside it
+    differs: the model holds the i960 on a full input FIFO 0.11 ms a frame
+    where the RTL holds 0.005, and on results 8% less). Outputs and external
+    reads in step with MAME's for all 649 M words. 1.2% of the race's words
+    are at addresses the profile never saw (charged the mean).
+
+*MAME's frame (MAME's model: i960 25 MHz, TGPx4 a word a cycle at 20 MHz --
+hints about the work, never hardware facts):*
+
+    game frame, vblank to flip   qualifying (60-100 s)   race (114-196 s)
+    MAME's work                  p50 2.8-3.5 ms          p50 8.4-9.6, max 11.7
+    of it, the i960's own        1.3 (1.8 upper)         4.1-4.7 (4.8-5.7)
+    TGPx4 words                  p50 35-41 k             p50 94-109 k, max 144 k
+    i960 instructions (trace)                            ~45,000 (4 frames, 139 s)
+
+  The rest of MAME's frame is the i960 waiting on the TGPx4. So MAME's CPI
+  on STCC's race code is ~2.4 (45 k instructions in ~4.4 ms at 25 MHz) --
+  Sega Rally's R926 figure. 6.4% of the instructions are FP; 23% loads.
+
+*EACH STAGE, MEASURED:*
+  * DRAW (tb_m2_raster3d at the 2C build's parameters, DDRAM_IN + PAY_DDR3,
+    R3D_DDRAM, latency 40; stcc_f6000 reproduces R1003's 384,277 exactly):
+    the race's heaviest list, the start with the cars ahead (MAME 3D frame
+    5638, 2,402 polygons, 2,069 quads) 439,655 cycles = 5.50 ms; a race
+    list in the bumper view (7732, 1,706 / 1,171) 4.25 ms. With R954's
+    board factor <= 7.2 ms. NOT THE CAUSE.
+  * WALK (geodiff, STCC's CRTC 0 / 128, M2GD_BIG, M2GD_PRESET, through
+    m2_eng_ra as Model2.sv builds it; 39 MAME walks every 3 s, 60-174 s):
+
+        latency (clk_sys)        12                    20
+        qualifying (60-96 s)     9.05-11.47 ms         9.8-12.5 ms
+        race, mid (129-174 s)    9.9-12.4              10.7-13.5
+        race start (114-126 s)   13.0-15.4             14.2-16.8
+
+    The race start's walks carry 1,942-2,359 quads and 1,292-1,669 culled
+    polygons (the cars' models are walked whether drawn or not; qualifying
+    383-1,073). One walk, 7767: 865 k / 922 k / 998 k / 1,423 k cycles at
+    latency 6 / 12 / 20 / 40. Under a vblank on the bench, 0.75-0.97 of it at
+    the start: the next stage to watch, not the cause by itself.
+  * TGPx4 (RTL, the raceB capture's first 600 M clocks, 4,131 vblanks, lat
+    6): 82.5 M words, 7.27 clk / word, 501,602 outputs 0 differ. In the
+    race the profile averages 6.53 clk / word: 58% of the words take 3.5-5.5
+    clocks (40% of the time), 10.7% take 10 or more (27%: external reads,
+    program misses, buffer-RAM writes). MAME's model of the chip is 4 clk_sys
+    a word. No address above 4% of the time.
+  * THE GAME'S FRAME (x4_pace_model, from 112 s; s = the core's i960 time
+    per MAME i960 time; work = vblank to flip, budget 17.39 ms):
+
+        s      race start 121-130 s           mid-race            2-vblank frames
+        0      p50 ~9.2 ms                    7.9-8.6             0
+        1.0    12.5                           10.9-11.8           0
+        1.84   15.8 (p90 16.4; upper 16.2)    13.8-15.0           1
+        2.05   16.6 (p90 17.1)                14.9-15.5           37
+        2.2    17.3 (p90 17.9; upper 18.0)    15.1-16.3           244 of 575 at the start (upper 435)
+        2.5    18.5                           16.2-17.5           1,170 of 7,478 (15.6%)
+
+    Qualifying is 5-7 ms at every s here. At s = 2.2 the start's frame is the
+    i960's own 10.2 ms + 5.7 ms waiting for TGPx4 results + 1.1 ms on a full
+    input FIFO. The 2-vblank frames cluster at 121.4-129.5 s: the race start,
+    the cars bunched -- "the second race, with the other cars". (52 frames
+    at 110.8-111.7 s are over at every s >= 1.5: the grid-to-race change,
+    a walk with 0 quads; MAME's own frame reaches 13.1 ms there.)
+  * WHERE s IS (INFERRED, the one unmeasured number): STCC's MAME CPI ~2.4;
+    the core's measured CPIs on similar code (R927, ring + data cache):
+    Sega Rally 7.18 at LAT 6, 8.18 at the board-like latency; VF2 9.63, Manx
+    TT 10.14. s = (CPI / 40 MHz) / (2.4 / 25 MHz) = 1.87 / 2.13 / 2.51 /
+    2.64. Board-like Rally gives ~2.1: the model then puts the race start at
+    ~16.9-17.5 ms p50 -- dropping in places, which is what the board shows.
+
+*WHAT WOULD FIX IT (model, s = 2.2 unless said; race start p50 / p90 / over):*
+  1. THE TGPx4 FASTER: x0.75 (5 clk / word) 15.2 / 15.7 / 0; x0.6 14.0; x0.5
+     13.2 / 13.7 / 0. At s = 2.5: x0.75 still 10 over, x0.5 0 over. It
+     takes the wait out of the i960's frame (5.7 -> 3.6-2.2 ms). Toward the
+     documented part (a word a cycle), so wanted by the silicon-first rule.
+     Levers inside tgpx4_core: hide the external-read / program-fetch
+     latency (27% of the race's TGPx4 time is words of 10+ clocks); the
+     program all on chip (M2_2C_PLINES 4096, a parameter that exists: RTL
+     replay, the session's first 250 M clocks, 7.403 -> 7.195 clk / word,
+     -2.8%, outputs 0 differ; in the model at s = 2.2 the start's p50 17.20 ->
+     16.97 ms and its 2-vblank frames 215 -> 107 of 575; cost 7 -> 32 M10K,
+     +25 on ~459 / 553 -- worth having, not a fix alone); overlap the
+     FP units' latency with the next word's transfers (R920 built the word
+     strictly in sequence; ALM and hazard risk, a study-level change on a
+     2C at ~40,800 / 41,910 ALM est. with the sound board).
+  2. THE i960 FASTER: -15% (s 1.87) 15.9 / 16.4 / 0; -25% (s 1.65) 15.0. R927's
+     remaining list (2-way i-cache ~-7%, fills from the bridge's line ~-7%,
+     store buffer ~-5%, the CPU on clk_sys the largest), each with its area.
+  3. THE WALK, next: the start's walks at 0.75-0.97 of a vblank; deeper
+     read-ahead or a polygon cache (it is latency-bound: 805 k -> 1,617 k
+     cycles from latency 1 to 20 without m2_eng_ra), or less work on culled
+     polygons. Not needed for this symptom by these numbers.
+  The draw needs nothing (5.5 ms).
+
+*WRONG FIRST, KEPT:*
+  * Game frames cut at MAME's frame notifier: the copro accesses ran up to
+    it and the i960's "own" time came out larger than the frame. The
+    notifier fires 0.723-0.756 ms after the vblank the game's spin sees
+    (every race and qualifying frame); frames are now cut at the flip.
+  * The first walk figures came from geodiff_2abig, which reads polygon ROM
+    without m2_eng_ra: 1,209,875 cycles (15.1 ms) for walk 7767 at latency
+    12 against 922,185 through the read-ahead the core has.
+  * The first paced RTL run skipped clocks whenever needs_fi was set with the
+    FIFO empty -- but needs_fi stays set for the rest of the word that popped,
+    so the TGPx4 lost cycles mid-word: frame work 11% over the model, the
+    i960's wait for results 1.65x. Skipping only in S_DEC on dec_stall, the
+    RTL and the model agree to 0.3%.
+  * MAME's "3D frame" numbers (M2LOD / M2DIFF) are lists, not vblanks: list
+    5638, taken for a qualifying frame, is the race start.
+  * The first race run (sim/io/mame_m2_stcc_race.lua's timeline, snapshots
+    from 20 s) came out MT and never moved; every later run of the same
+    timeline came out AT and drove. Not understood; the runs used here are
+    the later, deterministic ones.
+  * The constant 6.72 clk / word (R933's session mean) put the model's
+    vblanks 18% under the RTL's in the attract; the per-address profile fixed
+    it (the session's head runs 8.19 clk / word, the race 6.53).
+
+*NOT SETTLED:*
+  * s on the board -- the core's i960 on STCC's race code was not measured
+    (the whole-core bench reaches the race only after hours). The board can:
+    a 2C M2_WHY build with WHY_SYNC0 = 32'h0007_6380 (STCC's flip-and-wait)
+    gives 'Y' (vblank to flip, the game's frame), 'K' (the TGPx4 holding the
+    i960), 'W' and 'D' (walk and draw, last and longest) and 'V' (held for
+    the draw / walk busy / game late). Prediction at the race start: Y ~16-18
+    ms, K ~5-6 ms, W <= ~16 ms, D ~5-7 ms, V mostly "game late".
+  * The TGPx4's real clock: MAME's 20 MHz is MAME's; the costs here are the
+    RTL's at a fixed latency of 6, not the board's shared SDRAM.
+  * Whether the race's i960 work scales like the core's CPI on other games;
+    R927's rows differ by 40% between games.

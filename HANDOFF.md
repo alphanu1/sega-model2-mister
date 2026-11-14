@@ -1,5 +1,26 @@
 # Handoff
 
+## 2026-11-14: stcc-speed (local, not pushed) -- why STCC drops to 30 fps in the race (R1005), measured, no RTL changed
+
+Branch `stcc-speed` off 2c-mpeg d164d6be. Study R1005 has the record.
+
+  * STCC never decides to drop a frame: it flips, then spins on 0x98000c's
+    parity bit, so a frame whose work ends after the next vblank costs two.
+  * The race start's frame (i960 + TGPx4, vblank to flip) is the stage over
+    budget: 15.8-18.0 ms against 17.39 by the timing model, depending on the
+    core's i960 speed on STCC's code (unmeasured; ~2.1x MAME's per R927's
+    board-like CPI). The race triples the work (TGPx4 ~100 k words a frame
+    against qualifying's ~35 k; ~45 k i960 instructions). Draw 4.3-5.5 ms:
+    not it. Walk 13-15.4 ms at the start: next in line, not the cause.
+  * Fix candidates (model): TGPx4 1.33x faster removes the overruns at s 2.2,
+    2x at s 2.5; i960 -15% removes them at s 2.2. M2_2C_PLINES 4096 (+25
+    M10K): TGPx4 -2.8%, halves the start's overruns at s 2.2 -- not a fix
+    alone. Nothing built: needs a decision.
+  * New tools: tools/mame_stcc_timing.lua, sim/tgpx4/tm_gaps.py,
+    sim/tgpx4/x4_pace_model.cpp (make x4_pace_model), tb_tgpx4_replay
+    --tm / --flog / --pcprof. Data (ROM-derived) was in the session scratch.
+  * Board measurement wanted: a 2C M2_WHY build with WHY_SYNC0 = 0x76380.
+
 ## 2026-11-14: 2c-mpeg (local, not pushed) -- STCC's sound board built into 2C, quartus_map only
 
 Branch `2c-mpeg`, from ddr3-payload-2c b9553518 (R1003: the quad payload in
