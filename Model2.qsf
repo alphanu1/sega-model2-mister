@@ -1024,10 +1024,7 @@ set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[4]"
 
 set_global_assignment -name VERILOG_MACRO "M2_2C=1"
-# R979: Sega Touring Car Championship's Digital Sound Board (its music); the
-# Z80's opcode dispatch as logic rather than an M10K
+# R979 / R1004: Sega Touring Car Championship's Digital Sound Board (its
+# music), in its all-M10K form (Model2.sv lists the other forms)
 set_global_assignment -name VERILOG_MACRO "M2_2C_DSB=1"
-set_global_assignment -name VERILOG_MACRO "DSB_UENT_LOGIC=1"
-set_global_assignment -name VERILOG_MACRO "M2_2C_DSB_LEAN=1"
-set_global_assignment -name VERILOG_MACRO "DSB_UROM_LOGIC=1"
 set_global_assignment -name VERILOG_MACRO "M2_NO_2A_MANX_MOTION=1"

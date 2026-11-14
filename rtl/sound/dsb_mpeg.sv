@@ -171,14 +171,18 @@ module dsb_mpeg #(
   // window's result in S_WN_O (each half by its own channel's result); read
   // on a pop only, so its output register holds the sample being played.
   generate if (!FIFO_MLAB) begin : g_fifo
-    // Its own block: a 32-bit port beside a table port would make `misc`
-    // true-dual-port, which M10K does only to x20. Byte enables, no holding
-    // register for the left sample.
-    (* ramstyle = "M10K" *) logic [1:0][15:0] fifo [64];
+    // Its own blocks: a 32-bit port beside a table port would make `misc`
+    // true-dual-port, which M10K does only to x20. R1004: two 64 x 16 arrays,
+    // one per channel, as the MLAB form below -- written as one array with
+    // byte lanes, Quartus 17.0 split it into two and dropped the ramstyle
+    // (RAM summary: "AUTO"), leaving the choice to the fitter. Same reads in
+    // the same cycles either way.
+    (* ramstyle = "M10K" *) logic [15:0] fifo_l [64];
+    (* ramstyle = "M10K" *) logic [15:0] fifo_r [64];
     always_ff @(posedge clk) begin
-      if (fifo_we_l) fifo[f_wp][1] <= o_sat;
-      if (fifo_we_r) fifo[f_wp][0] <= o_sat;
-      if (f_pop) fifo_q <= fifo[f_rp];
+      if (fifo_we_l) fifo_l[f_wp] <= o_sat;
+      if (fifo_we_r) fifo_r[f_wp] <= o_sat;
+      if (f_pop) fifo_q <= {fifo_l[f_rp], fifo_r[f_rp]};
     end
   end else begin : g_fifom
     // 2,048 bits: four MLABs, as two 64 x 16 arrays with a write each

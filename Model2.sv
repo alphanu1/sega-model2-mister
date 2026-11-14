@@ -283,21 +283,26 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2C_DSB
 `define M2_2C_DSB 0
 `endif
-// R979: M2_2C_DSB_LEAN=1 moves two more of the board's tables out of M10K,
-// both bit-identical: dsb_mpeg's side-information RAM to MLAB (WRAM_MLAB)
-// and, with VERILOG_MACRO "DSB_UROM_LOGIC=1", the Z80's microcode into LUTs.
+// R1004: THE BOARD'S MEMORY FORMS. Every one is bit-identical (the same
+// integers read in the same cycle); they trade M10K against ALM. R979 had
+// four free M10K and so took MLAB / logic forms; since R1003 there are ~100
+// free and ALM is the binding resource, so the 2C build takes the all-M10K
+// form (quartus_map, the whole 2C core: 1,241 ALM estimated over the core
+// without the board, against R979's lean form's 1,636). Each is a macro:
+//   M2_2C_DSB_LEAN=1      dsb_mpeg's side-information RAM in MLAB (WRAM_MLAB)
+//   M2_2C_DSB_FIFO_MLAB=1 the 64 x 32 output FIFO in MLAB (2 M10K back)
+//   M2_2C_DSB_TBL_PACK=1  the window and cos tables packed into one M10K
+//   DSB_UROM_LOGIC=1      the Z80's microcode in LUTs (one M10K back)
+//   DSB_UENT_LOGIC=1      the Z80's opcode dispatch in LUTs (one M10K back)
+// all 0 / undefined by default: 11 M10K, the fewest ALM.
 `ifndef M2_2C_DSB_LEAN
 `define M2_2C_DSB_LEAN 0
 `endif
-// R1004: the other two of dsb_mpeg's bit-identical memory forms, as macros
-// so that each form is a QSF line: M2_2C_DSB_FIFO_MLAB (default 1, R979's
-// choice) puts the 64 x 32 output FIFO in MLAB, M2_2C_DSB_TBL_PACK (default 1)
-// packs the window and cos tables into one M10K by their symmetries.
 `ifndef M2_2C_DSB_FIFO_MLAB
-`define M2_2C_DSB_FIFO_MLAB 1
+`define M2_2C_DSB_FIFO_MLAB 0
 `endif
 `ifndef M2_2C_DSB_TBL_PACK
-`define M2_2C_DSB_TBL_PACK 1
+`define M2_2C_DSB_TBL_PACK 0
 `endif
 // R927: THE i960'S SPEED IN SEGA RALLY'S FRAME START (R926: the game's AI
 // detail budget). M2_2A_I960_RING: the local-register cache as the chip keeps
