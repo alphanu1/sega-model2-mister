@@ -60,7 +60,11 @@
 `timescale 1ns/1ps
 module m2_eng_ra #(
   parameter int unsigned AW    = 24,
-  parameter int unsigned DEPTH = 4       // pairs a stream holds: 4 (the ring index is two bits)
+  parameter int unsigned DEPTH = 4,      // pairs a stream holds: 4 (the ring index is two bits)
+  // R1008: the pair store in M10K (1) or MLAB (0). It is read only through
+  // rd_q (a register, loaded on a hit), so the two are the same circuit; a
+  // build with M10K to spare (2C) takes two blocks for the four LABs.
+  parameter bit          PR_M10K = 1'b0
 )(
   input  logic          clk,
   input  logic          rst_n,
@@ -95,7 +99,7 @@ module m2_eng_ra #(
   // the hit cycle: read inside the async-reset block, Quartus 17 would not
   // infer it ("uninferred due to asynchronous read logic") and built 512
   // flip-flops and their mux instead -- 424 ALM for the module in s717.
-  (* ramstyle = "MLAB, no_rw_check" *) logic [63:0] pairs [8];
+  // (R1008: `pairs`, the store, is declared in g_pr_* below, by PR_M10K.)
 
   // ------------------------------------------------------------ the request
   // R714: registered as it arrives; the engine holds idx, stream_en and sid
@@ -173,7 +177,7 @@ module m2_eng_ra #(
   wire [1:0]  g_ph      = s_rp[g_s] + s_fill[g_s][1:0];
   wire        g_dem     = want && strm && (g_s == sid_q) && (g_idx == {idx_q[AW-1:1], 1'b0});
 
-  always_ff @(posedge clk) if (pst == P_REQ && p_rise && !f_pass && f_keep && !flush) pairs[{f_s, f_ph}] <= p_dout;
+  wire        pr_we = (pst == P_REQ) && p_rise && !f_pass && f_keep && !flush;
 
   // arrived-flags: an arrival sets its slot, a hit drops the slots before it,
   // a restart or a drop clears the stream -- merged, because a hit and an
@@ -197,7 +201,19 @@ module m2_eng_ra #(
   logic [63:0] rd_q;
   // a hit's pair, read on the hit cycle; never the slot being written (the
   // one in flight is never the one hit)
-  always_ff @(posedge clk) if (hit) rd_q <= pairs[{sid_q, hph}];
+  generate if (PR_M10K) begin : g_pr_m10k
+    (* ramstyle = "M10K, no_rw_check" *) logic [63:0] pairs [8];
+    always_ff @(posedge clk) begin
+      if (pr_we) pairs[{f_s, f_ph}] <= p_dout;
+      if (hit) rd_q <= pairs[{sid_q, hph}];
+    end
+  end else begin : g_pr_mlab
+    (* ramstyle = "MLAB, no_rw_check" *) logic [63:0] pairs [8];
+    always_ff @(posedge clk) begin
+      if (pr_we) pairs[{f_s, f_ph}] <= p_dout;
+      if (hit) rd_q <= pairs[{sid_q, hph}];
+    end
+  end endgenerate
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
