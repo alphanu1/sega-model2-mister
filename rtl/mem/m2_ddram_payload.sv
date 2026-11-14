@@ -234,7 +234,11 @@ module m2_ddram_payload #(
   wire            w_last = (wbeat == BW_'(NB - 1));
   wire            wr_open = DDRAM_WE && !w_last;   // a later beat is still owed
   wire            wq_pop = !DDRAM_BUSY && DDRAM_WE && w_last;
-  wire [64*NB-1:0] wq_pad = (64*NB)'(wq_q[PW-1:0]);
+  // padded to every value wbeat can hold, not just NB (lint_idx, R807): the
+  // logic never presents beat NB or past, and now the select cannot leave it
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire [64*(1<<BW_)-1:0] wq_pad = (64*(1<<BW_))'(wq_q[PW-1:0]);
+  /* verilator lint_on UNUSEDSIGNAL */
   assign DDRAM_DIN = wq_pad[64*wbeat +: 64];
 
   // What goes out at this edge, if the bus takes commands. Reads first: they
