@@ -85,7 +85,20 @@
 //                 min + floor((a + 128) * (span + 1) / 256), exact, of any of
 //                 the last 8 stick samples (four channels share a multiply);
 //                 the extremes and the MAME range checked separately.
-//       The C2G 0 builds (dut, dut_nm) read all three as digital IDs; an3 is
+//       0x21 Sega Ski Super G INPUT_PORTS_START(skisuprg) (J 4 Coin 5 Select 1
+//                 6 Test 7 Service 8 Select 2 9 Select 3 10 Zoom In 11 Zoom
+//                 Out 12 Foot L 13 Foot R): IN0 0x01 COIN1 0x04 TEST 0x08
+//                 SERVICE 0x10 Select 3 0x20 Zoom In 0x40 Select 1 0x80 Select
+//                 2; IN1 0x01 Zoom Out; IN2 ACTIVE HIGH 0xF0 foot L 0x0F foot
+//                 R; AN0 SWING = 0x80 + the left stick's Y; AN1 INCLINING =
+//                 the steering line; AN2 0xFF.
+//       0x22 Top Skater INPUT_PORTS_START(topskatr) (J 4 Coin 5 Start 6 Test
+//                 7 Service 8 Jump Front 9 Jump Tail 10 Select Left 11 Select
+//                 Right): IN0 0x10 Select Right 0x20 Jump Front 0x40 START1
+//                 0x80 Select Left; IN1 0x01 Jump Tail; IN2 0xFF; AN0 CURVING =
+//                 AN1 SLIDE = the steering line.
+//       0x23 / 0x24 (Dynamite Cop 2C, Royal Ascot II): DIGITAL in every build.
+//       The C2G 0 builds (dut, dut_nm) read all of them as digital IDs; an3 is
 //       0xFF on every other ID and build.
 
 #include "Vtb_m2_2a_inputs_top.h"
@@ -116,12 +129,12 @@ static uint32_t adir(uint16_t a) {
   return (x > 48 ? 1u : 0u) | (x < -48 ? 2u : 0u) | (y > 48 ? 4u : 0u) | (y < -48 ? 8u : 0u);
 }
 // the game index the bench switches between, and the ID it drives
-enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_STCC, G_WAVE, G_WSKI, G_BEL, G_N };
+enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_STCC, G_WAVE, G_WSKI, G_BEL, G_SKIS, G_TOPS, G_N };
 static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner / Pilot Kids", "other digital",
                                  "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)", "Over Rev (0x1C)",
-                                 "STCC (0x1D)", "Wave Runner (0x1E)", "Water Ski (0x1F)", "Behind Enemy Lines (0x20)"};
+                                 "STCC (0x1D)", "Wave Runner (0x1E)", "Water Ski (0x1F)", "Behind Enemy Lines (0x20)", "Ski Super G (0x21)", "Top Skater (0x22)"};
 static int game_id(int g) {
-  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x7f};
+  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x23, 0x24, 0x7f};
   switch (g) {
     case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
     case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
@@ -129,6 +142,7 @@ static int game_id(int g) {
     case G_OREV: return 0x1c;
     case G_STCC: return 0x1d;   // R933
     case G_WAVE: return 0x1e; case G_WSKI: return 0x1f; case G_BEL: return 0x20;   // R1010
+    case G_SKIS: return 0x21; case G_TOPS: return 0x22;
     default: return dig[rnd(int(sizeof dig / sizeof dig[0]))];
   }
 }
@@ -306,7 +320,24 @@ int main(int argc, char **argv) {
     // (sampled before the edge: joy_analog P1, joy_analog_1 P2; X low byte, Y high)
     bh[0][0] = int8_t(t->joy_analog & 0xff); bh[1][0] = int8_t(t->joy_analog_1 & 0xff);
     bh[2][0] = int8_t(t->joy_analog >> 8);   bh[3][0] = int8_t(t->joy_analog_1 >> 8);
-    if (t->game == 0x1e || t->game == 0x1f || t->game == 0x20) {
+    if (t->game == 0x21 || t->game == 0x22) {   // R1010: Ski Super G, Top Skater
+      uint32_t j0 = t->joystick_0;
+      ++c2g_checks;
+      if (t->game == 0x21) {
+        cmp("skis in0", game, c, t->o_in0, lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 9) << 4 | b(j0, 10) << 5 | b(j0, 5) << 6 | b(j0, 8) << 7));
+        cmp("skis in1", game, c, t->o_in1, lo(b(j0, 11)));
+        cmp("skis in2", game, c, t->o_in2, (b(j0, 12) ? 0xf0 : 0) | (b(j0, 13) ? 0x0f : 0));
+        cmp("skis an0", game, c, t->o_an0, sky_y(t->joy_analog));
+        if (since > 6) near("skis an1", c, t->o_an1, hs);
+        cmp("skis an2", game, c, t->o_an2, 0xff); cmp("skis an3", game, c, t->o_an3, 0xff);
+      } else {
+        cmp("tops in0", game, c, t->o_in0, lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 11) << 4 | b(j0, 8) << 5 | b(j0, 5) << 6 | b(j0, 10) << 7));
+        cmp("tops in1", game, c, t->o_in1, lo(b(j0, 9)));
+        cmp("tops in2", game, c, t->o_in2, 0xff);
+        if (since > 6) { near("tops an0", c, t->o_an0, hs); near("tops an1", c, t->o_an1, hs); }
+        cmp("tops an2", game, c, t->o_an2, 0xff); cmp("tops an3", game, c, t->o_an3, 0xff);
+      }
+    } else if (t->game == 0x1e || t->game == 0x1f || t->game == 0x20) {
       uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
       ++c2g_checks;
       if (t->game == 0x20) {

@@ -1186,6 +1186,13 @@ localparam logic [26:0]     XTRA2_FROM_2A  = 27'h2D40000;
 localparam logic [SDR_AW:1] GAME_PROGX_2A  = SDR_AW'(32'h1300000);   // byte 0x2600000
 localparam logic [SDR_AW:1] GAME_PROGXB_2A = GAME_PROGX_2A - SDR_AW'(32'h0040000);   // so that + the CPU's word lands in it
 localparam logic [SDR_AW:1] GAME_COPRO_2A  = SDR_AW'(32'h13C0000);   // byte 0x2780000
+// R1010: AN 8 MB COPRO DATA REGION (2C; Sega Ski Super G, whose TGPx4 reads
+// 0x900000-0x9FFFFF from the race on): the whole 8 MB at byte 0x6000000, just
+// above its 16 MB of polygons, appended to the large layout's image at
+// 0x52C0000 (the loader's third remap is linear to the top). Only a game with
+// a2_copro8 reads there; every other copro read keeps GAME_COPRO_2A, bit 20
+// dropped as before.
+localparam logic [SDR_AW:1] GAME_COPRO8    = SDR_AW'(32'h3000000);   // byte 0x6000000
 // R897: THE LARGE 2A LAYOUT -- Sky Target, Pilot Kids, Dynamite Cop, Hanguk Pro
 // Yagu 98, Motor Raid, Dead or Alive (a2_big below) -- ON THE 128 MB MODULE
 // (R891). Sega Rally's whole image with one change, then two regions more:
@@ -1231,6 +1238,7 @@ localparam logic [SDR_AW:1] GAME_SNDRAM_2A = SDR_AW'(32'h12C0000);   // byte 0x2
 wire        tgp_tbl_req, tgp_dat_req;
 wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
 wire        tgp_dat_is_prog, tgp_bufw_is_prog;   // R924: the TGPx4's program copy (2C)
+wire        tgp_dat_hi;                          // R1010: copro data bit 20 (2C)
 // The geometrizer walks its display list once a frame, on the same vblank
 // edge the frame counter uses. The reference gates it on videocontrol bit 0
 // or an even frame; that gate is not modelled yet, so it walks every frame.
@@ -1747,8 +1755,8 @@ always_comb begin
 	// PORT 9 IS THE COPROCESSOR'S ALONE (R167). The walker moved to port 4.
 	p_req[9]  = tgp_dat_req_r;
 	p_addr[9] = ((C2 && tgp_dat_is_prog_r) ? GAME_X4PROG   // R924: the TGPx4's program copy
-	          : tgp_dat_is_buf_r ? GAME_BUFFER : (M2A ? GAME_COPRO_2A : GAME_COPRO))   // R862
-	          + SDR_AW'({tgp_dat_addr_r, tgp_dat_half_r});
+	          : tgp_dat_is_buf_r ? GAME_BUFFER : (M2A ? (a2_copro8 ? GAME_COPRO8 : GAME_COPRO_2A) : GAME_COPRO))   // R862; R1010
+	          + SDR_AW'({tgp_dat_hi_r, tgp_dat_addr_r, tgp_dat_half_r});   // R1010: hi only for a2_copro8
 	// port 9 is READ ONLY. Buffer-RAM writes go out on the shared write port,
 	// which keeps p_we/p_din out of the arbiter's command decode.
 	p_req[7]  = pcm2_req;   // gate removed, see port 6
@@ -2317,6 +2325,7 @@ localparam int unsigned WRK_WORDS = M2A ? 32'h80000 : 0;
 localparam int unsigned BRD_WORDS = M2A ? 32'h20000 : 0;
 localparam int unsigned BI_W      = M2A ? 20 : 17;
 logic            a2_big;   // R897 / R900: assigned with the game decodes below
+logic            a2_copro8;   // R1010: the 8 MB copro data region (GAME_COPRO8), assigned there too
 logic            bi_run, bi_req, bi_done;
 logic [SDR_AW:1] bi_addr;
 logic [15:0]     bi_din;
@@ -3049,6 +3058,14 @@ wire is_stcc    = C2 && (game_id[6:0] == 7'h1D);
 wire is_wave    = C2 && (game_id[6:0] == 7'h1E);
 wire is_wski    = C2 && (game_id[6:0] == 7'h1F);
 wire is_bel     = C2 && (game_id[6:0] == 7'h20);
+// R1010: and 0x21 Sega Ski Super G (skisuprg), 0x22 Top Skater (topskatr),
+// 0x23 Dynamite Cop (USA, Model 2C) (dynamcopc), 0x24 Royal Ascot II
+// (rascot2): the large layout; copro data for the first two (skisuprg's 8 MB
+// region: the slot's 4 MB, R1010); 0x23 / 0x24 are the DIGITAL profile.
+wire is_skis    = C2 && (game_id[6:0] == 7'h21);
+wire is_tops    = C2 && (game_id[6:0] == 7'h22);
+wire is_dc2c    = C2 && (game_id[6:0] == 7'h23);
+wire is_ra2     = C2 && (game_id[6:0] == 7'h24);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
 // are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
 // ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
@@ -3066,13 +3083,14 @@ wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copr
 // every 2A game past VF2 -- an MRA with a 512 KB program carries the slot as
 // zeros (MAME's region reads 0 there), so the decode needs no list.
 wire prog_ext  = M2A ? is_2ax : (is_vcop | is_desert);
-assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev | is_stcc | is_wave | is_wski);   // R887: the analog profile's lines; R928; R933; R1010
+assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev | is_stcc | is_wave | is_wski | is_skis | is_tops);   // R887: the analog profile's lines; R928; R933; R1010
 // R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
 // other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
 // R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
 // same slot).
 logic a2_copro_rom;
-always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_stcc | is_wave | is_wski | is_bel;   // R924; R933; R1010
+always_ff @(posedge clk_sys) a2_copro8 <= C2 && is_skis;
+always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_stcc | is_wave | is_wski | is_bel | is_skis | is_tops;   // R924; R933; R1010
 // R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
 // 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
 // Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
@@ -3081,7 +3099,8 @@ always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_s
 always_ff @(posedge clk_sys)   // (declared with the boot sweep, R900)
 	a2_big <= is_2a1x && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
 	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA)
-	                  || is_hotd || is_stcc) || is_wave || is_wski || is_bel;   // R924; R933; R1010
+	                  || is_hotd || is_stcc) || is_wave || is_wski || is_bel
+	        || is_skis || is_tops || is_dc2c || is_ra2;   // R924; R933; R1010
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -4763,6 +4782,7 @@ logic [15:0] tgp_tbl_addr_r;
 logic [19:0] tgp_dat_addr_r;
 logic        tgp_dat_we_r, tgp_dat_is_buf_r, tgp_dat_half_r;
 logic        tgp_dat_is_prog_r;   // R924
+logic        tgp_dat_hi_r;        // R1010
 logic [15:0] tgp_dat_wdata_r;
 always_ff @(posedge clk_sys) begin
 	tgp_tbl_ack_r   <= p_ack[8];
@@ -4801,6 +4821,7 @@ always_ff @(posedge clk_sys) begin
 	tgp_dat_wdata_r <= tgp_dat_wdata;
 	tgp_dat_is_buf_r<= tgp_dat_is_buf;
 	tgp_dat_is_prog_r <= C2 & tgp_dat_is_prog;   // R924
+	tgp_dat_hi_r      <= C2 & tgp_dat_hi & a2_copro8;   // R1010: only an 8 MB game's
 	tgp_dat_half_r  <= tgp_dat_half;
 	geo_rd_req_r    <= gc_req;          // R214: the walker's misses only
 	geo_rd_addr_r   <= geo_rd_addr;
@@ -4925,6 +4946,7 @@ m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
 	.dat_req(tgp_dat_req), .dat_addr(tgp_dat_addr),
 	.dat_we(tgp_dat_we), .dat_wdata(tgp_dat_wdata), .dat_is_buf(tgp_dat_is_buf),
 	.dat_is_prog(tgp_dat_is_prog), .bufw_is_prog(tgp_bufw_is_prog),   // R924
+	.dat_hi(tgp_dat_hi),                                               // R1010
 	.dat_half(tgp_dat_half),
 	.bufw_req(tgp_bufw_req), .bufw_addr(tgp_bufw_addr), .bufw_data(tgp_bufw_data),
 	.bufw_ack(tgp_bufw_ack_r),

@@ -1,5 +1,31 @@
 # Handoff
 
+## 2026-11-14 (night): new-2c-games (local, not pushed) -- seven 2C sets on their own game IDs (R1010)
+
+Study R1010 has the record. Branch new-2c-games off stcc-sound-2c ea3ba75d.
+Nothing fitted; quartus_map not run.
+
+  * IDs (2C only): 0x1E Wave Runner, 0x1F Sega Water Ski, 0x20 Behind Enemy
+    Lines, 0x21 Sega Ski Super G, 0x22 Top Skater, 0x23 Dynamite Cop (USA,
+    Model 2C), 0x24 Royal Ascot II. Next free 0x25. MRAs in mra/ with [15kHz
+    CRT] variants; build/gen_rel.py (git-ignored) writes them.
+  * Inputs from MAME's ports per game (m2_2a_inputs C2G), the 315-5649's
+    channel 3 (an3). The board's stuck steering was the borrowed profile's
+    channels (accelerator on AN0).
+  * Ski Super G's race reads its copro data above 4 MB (0x900000-0x9786A5):
+    the black screen. GAME_COPRO8 (byte 0x6000000) and m2_tgpx4 dat_hi, live
+    for 0x21 only.
+  * Dynamite Cop 2C: dynamcop's six 315-5881 patches at +0x7F0, proved in MAME
+    (240 s byte-identical to the chip). The board's SCROLL ALLOCATION ERROR
+    was not reproduced (inferred: the check's penalty).
+  * Top Skater: its own geometrizer program (MAME's note; MAME itself aborts
+    at the first 3D frame). Not fixable here. Royal Ascot II: needs its
+    SegaNet hub; MAME stops on the title too.
+
+REMAINS: a fit; the board (Behind Enemy Lines' aim direction -- the game has
+a GUN CALIBRATION screen; Ski Super G's luma, eight ranges at 1.78 of 63);
+Water Ski's other courses above 4 MB (300 s of MAME read none).
+
 ## 2026-11-14 (later): stcc-speed -- R1006 re-timed for 80 MHz (R1009), quartus_map only
 
 R1006 missed clk_sys by 1.4-2.2 ns on every 2C seed (s2520-s2522 DSB off,

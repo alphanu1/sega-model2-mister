@@ -161,6 +161,16 @@ module m2_luma_map #(
       5'h0E: starts = OREV ? {8'd150, 8'd135, 8'd131, 8'd126, 8'd117, 8'd116, 8'd115, 8'd100} : '0;
       5'h0F: starts = OREV ? {8'd136, 8'd131, 8'd118, 8'd117, 8'd115, 8'd109, 8'd105, 8'd100} : '0;
       5'h10: starts = OREV ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;
+      // R1010: Sega Ski Super G (0x21): 23 dumps over a race, 55 drawn rows
+      // of 0-227 -- eight ranges leave mean |err| 1.78 of 63, 16% of pixels
+      // more than 4 off (a 32-slot table, Over Rev's mechanism, would give
+      // 0.03; not built: it is area). Dynamite Cop 2C (0x23): 29 dumps, 15
+      // rows, 0.013 -- dynamcop's rows with 106 / 131-134 / 141 / 144 added.
+      // Top Skater (0x22) and Royal Ascot II (0x24): no dumps (MAME stops at
+      // Top Skater's first 3D frame; Royal Ascot stays on its title), so
+      // every row takes row 0's table.
+      5'h11: starts = OREV ? {8'd211, 8'd200, 8'd197, 8'd190, 8'd122, 8'd100, 8'd96, 8'd0} : '0;
+      5'h13: starts = OREV ? {8'd142, 8'd140, 8'd139, 8'd100, 8'd96, 8'd76, 8'd7, 8'd6} : '0;
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction

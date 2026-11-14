@@ -128,6 +128,7 @@ module m2_copro #(
   output logic [15:0] dat_wdata,
   output logic        dat_is_buf,
   output logic        dat_is_prog,  // R924: the TGPx4's program copy (TGPX4 only; 0 otherwise)
+  output logic        dat_hi,       // R1010: the TGPx4's copro data ROM bit 20 (TGPX4 only; 0 otherwise)
   output logic        dat_half,
   output logic        bufw_req,
   output logic [18:0] bufw_addr,
@@ -545,6 +546,7 @@ module m2_copro #(
       .dbg_hs(dbg_tgp_hs), .dbg_out_refused(dbg_tgp_out_refused)   // R923
     );
     assign dat_is_prog = 1'b0;
+    assign dat_hi = 1'b0;   // R1010
     assign bufw_is_prog = 1'b0;
     assign x4_up_busy = 1'b0;
     assign x4_fi_clr = 1'b0; assign x4_fo_clr = 1'b0;   // R933
@@ -564,6 +566,7 @@ module m2_copro #(
       .fo_data(tgp_out_data), .fo_push(tgp_out_push), .fo_full(fout_full), .fo_empty(fout_empty),
       .fi_clr(x4_fi_clr), .fo_clr(x4_fo_clr),   // R933: CLRF
       .dat_req(dat_req), .dat_addr(dat_addr), .dat_is_buf(dat_is_buf), .dat_is_prog(dat_is_prog),
+      .dat_hi(dat_hi),   // R1010
       .dat_rdata(dat_rdata), .dat_ack(dat_ack),
       .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data), .bufw_is_prog(bufw_is_prog),
       .bufw_ack(bufw_ack), .wq_busy(),

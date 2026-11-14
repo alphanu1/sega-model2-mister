@@ -49823,7 +49823,9 @@ IN2 0xF7 (bit 3, an active-high IPT_CUSTOM nothing drives, reads 0).
 Behind Enemy Lines' axis directions were NOT checked against its picture
 (MAME holds the aim with no visible change in attract; its GUN CALIBRATION
 was not walked): the mapping follows MAME's ports (gunblade's PORT_MODIFY
-replaces rchase2's reversed fields), low = left / up.
+replaces rchase2's reversed fields), low = left / up. The game's own GUN
+CALIBRATION ("PUSH GUN 1 TO THE LOWER-LEFT STOPS, PULL TRIGGER", raw X / Y
+shown) records each gun's stops, so a reversed axis is set right there once.
 
 *THE CORE (all behind C2; a 2A build is unchanged):*
   1. Model2.sv: is_wave 0x1E, is_wski 0x1F, is_bel 0x20 -- a2_big (the
@@ -49872,3 +49874,133 @@ Revision A) 0x1F, 0x62C0000; Behind Enemy Lines 0x20, 0x52C0000 (textures
 bits). A Lua read tap on the TGPx4's external space over 0x900000-0x9FFFFF:
 0 reads in 120 s of attract (demo play) while 0x800000-0x8FFFFF took
 558,467. The MRA loads the first 4 MB; see the follow-up below for play.
+
+**R1010, CONTINUED -- THE OTHER FOUR: SKI SUPER G (0x21), TOP SKATER (0x22),
+DYNAMITE COP 2C (0x23), ROYAL ASCOT II (0x24). EACH BOARD SYMPTOM FIRST
+LOOKED FOR IN MAME 0.289 (m2lod, headless, the boot / attract / play
+scripted).**
+
+*WATER SKI's UPPER 4 MB, ANSWERED:* the tap over 300 s with a game played
+(Palm Beach, beginner course, and the attract's demo play): 1,233,473 copro
+ROM reads, every one below 0x900000. The MRA's 4 MB stays; a course this
+session did not reach might still read above 4 MB (not seen).
+
+*SEGA SKI SUPER G (skisuprg):*
+  * DRIVE BOARD TROUBLE CODE FF at boot: MAME's too (MAME has no drive
+    board for this set). Test passes it in both. Nothing to fix without the
+    drive board's protocol (no oracle).
+  * LEFT / RIGHT DEAD: the borrowed 0x1A put the accelerator on AN0 and the
+    brake on AN1; skisuprg's channels are SWING (0, AD_STICK_Y) and
+    INCLINING (1, AD_STICK_X), its IN2 the foot sensors (ACTIVE HIGH: 0xF0
+    left, 0x0F right; 0x00 at rest -- MAME plays with them off). Its own
+    profile, 0x21 (m2_2a_inputs above).
+  * BLACK SCREEN WHEN A GAME STARTS -- CAUSE: ITS 8 MB OF COPRO DATA. A tap
+    on the TGPx4's external space: nothing reads copro ROM until the race;
+    from 48.48 s (the race's start) the TGPx4 reads 0x900000-0x9786A5 --
+    331,764 reads above 4 MB by 60 s, 1,597,795 by 120 s, against 2,365,582
+    below. The core's TGPx4 port carried 20 dword bits (m2_tgpx4 x_rom
+    decodes 0x800000-0x9FFFFF but dat_addr kept ext_addr[19:0]), so every
+    upper read returned the lower half's word.
+    THE FIX (2C only, this game only): m2_tgpx4 / m2_copro gain dat_hi
+    (ext_addr[20] of a ROM read); Model2.sv's port 9 adds it as offset bit
+    21 only while a2_copro8 (is_skis), and that game's base is GAME_COPRO8,
+    word 0x3000000 (byte 0x6000000: just above its 16 MB of polygons). Its
+    MRA appends the whole 8 MB at image 0x52C0000 (the loader's third remap
+    is linear: image 0x52C0000 -> SDRAM byte 0x6000000); the 2A slot still
+    carries the first 4 MB (so mra_vs_mame's slot check holds), unused by
+    this game. Every other game: a2_copro8 0, the address exactly as before.
+    PROOF: tb_tgpx4_replay serves the ROM with dat_hi (new --no-hi serves it
+    as the core did before), on a MAME capture of skisuprg (R924_CAP, boot
+    to 56 s: Test at 20 s, coins, Select 1, the race from ~48 s; 86.6 MB of
+    events, MAME's verbatim interpreter in lockstep, 4096-line cache):
+      --no-hi (the core before): LOCKSTEP FAILS at word 24,286,715 (pc
+        0x804: AB0 / AB6 hold the lower half's words), 3 bad -- the board's
+        black screen, reproduced.
+      with dat_hi: 58,154,982 words, i960 events 4,139,775 / 4,139,775,
+        outputs 1,973,206 / 1,973,206 equal, lockstep 0 bad, 3.51 clk / word.
+      House of the Dead's capture (R924) on the same build, 40 M words: 0
+        differ, lockstep 0 bad (its reads never set bit 20).
+    The game's other 2C peers' bit 20 is masked in Model2.sv, so their
+    addresses are unchanged by construction.
+  * MAME plays it (MACHINE_NOT_WORKING, "protection unemulated"): the race
+    runs in MAME's snapshots (ski_play, 36-95 s); no protection read seen
+    stopping it in 150 s.
+  * Luma: 23 dumps over a race, 55 drawn rows of 0-227. Eight ranges (0 96
+    100 122 190 197 200 211) leave mean |err| 1.78 of 63, 16% of pixels on
+    a row more than 4 off -- Over Rev's R928 class. A 32-slot table (R932's
+    mechanism) would give 0.03 (luma_fit.py, 32 representatives): NOT
+    BUILT, it is area (a second 256-entry table); the next step if the
+    board shows banded lighting.
+
+*TOP SKATER (topskatr) -- NOT FIXABLE HERE, AND MAME CANNOT SAY:*
+  * MAME 0.289 (stock /usr/bin/mame and m2lod alike) aborts at ~17 s, the
+    first 3D frame after the title: "stack smashing detected" in
+    model2_3d_process_polygon<4> under geo_parse (gdb backtrace) -- the
+    clipper overruns its vertex array on the geometry it was handed.
+  * model2_v.cpp's own note: "Top Skater seem to use a slightly different
+    geometry code that has a secondary transformation matrix." 2B / 2C
+    games upload a geometrizer program through 0x00804000 (geo_prg_w, which
+    MAME counts and discards; MAME and this core both run a fixed HLE
+    geometrizer). Measured (write taps, 8 s of boot): every 2C set uploads
+    8,192 words there; House of the Dead's and Behind Enemy Lines' are
+    identical, STCC's differs from them in 431 words (and runs), Top
+    Skater's in 1,149 and it alone sends a further 2,567 words (from
+    ip 0x482c4). So Top Skater's random coloured triangles are the HLE
+    geometrizer running data meant for a different program: the fix is the
+    geometrizer DSP itself (or an HLE of Top Skater's variant), with no
+    oracle to check either against. Out of scope; its own ID and inputs
+    (0x22) are in so a later fix needs no MRA change. DSB2 music: not
+    built (noted only).
+
+*DYNAMITE COP 2C (dynamcopc) -- THE 315-5881, AS ON 2A:*
+  * MAME with the real chip runs (attract, play). With the decrypt reads
+    zeroed (PL_ZERO, this core's empty window), and again with EVERY read of
+    0x01d80000-0x01d9ffff zeroed: the first session at 10.27 s fails and the
+    screen becomes a tile pattern (12-40 s) -- broken, but MAME never prints
+    the board's "SCROLL ALLOCATION ERROR!! 00510ce0 18" (a read tap on its
+    format string at 0xa42b0: no reads). The message is the scroll
+    allocator's (0xa4360: no free run of 0x18 entries in the 128-byte table
+    at 0x54eba0, which MAME never fills past 26). INFERRED, NOT REPRODUCED:
+    the board's failure is the check's penalty corrupting the game's state
+    a different way than MAME's zeroed window does; the whole-core bench
+    would need ~11 s of game (~48 min at ~4.4 s a frame) to show it, past
+    this session's 25-minute limit.
+  * THE CHECKER IS dynamcop's, MOVED: a displacement-insensitive match of
+    dynamcop's 0x66a00-0x66b80 finds it at 0x671f0 in dynamcopc (+0x7F0; 96
+    of 96 words; the ten that differ are addresses). So R887's six patches
+    at +0x7F0: 0x67240 0x67258 0x67270 0x67288 (3aad0010 -> 08000010),
+    0x67304 0x67344 (3aad0038 -> 08000038). PROOF: zeroed decrypt reads +
+    the six words against the real chip, 240 s each (two coins at 30 / 120
+    s, the dig script): the three sessions at the same times (10, 40, 142
+    s) and all nine snapshots (0-240 s) byte-identical. The MRA's image
+    differs from MAME's program in exactly those six words.
+  * Its own ID 0x23 (the large layout, DIGITAL profile, no copro data),
+    luma ranges from 29 dumps (dynamcop's rows plus 106, 131-134, 141,
+    144): 6 7 76 96 100 139 140 142, mean |err| 0.013 of 63.
+
+*ROYAL ASCOT II (rascot2) -- NEEDS ITS NETWORK:* MAME shows the same: a
+SegaNet wait ("Model2 Waiting SegaNet Connect Over 15Sec, Check SegaNet
+Board, Cable And Main Hub !!"; Shot 1 skips it, "System Start Game Mode
+Without SegaNetCom"), then the title screen for good -- coins and starts do
+nothing in 150 s. From 30-60 s the i960 sits in its frame loop (0xd3ec-
+0xd400, polling 0x98000c) and reads neither the comm board (0x01a00000-
+0x01a1ffff) nor the UART. A satellite terminal of a networked horse-race
+system: it needs its main unit, which no ROM set here holds. ID 0x24
+(DIGITAL) and an MRA marked NOT WORKING.
+
+*IDs (R1010 in full):* 0x1E Wave Runner, 0x1F Water Ski, 0x20 Behind Enemy
+Lines, 0x21 Ski Super G, 0x22 Top Skater, 0x23 Dynamite Cop 2C, 0x24 Royal
+Ascot II -- all 2C only (C2); next free 0x25. Luma keys {ID bit 5, ID 3:0}
+(5'h11 Ski Super G, 5'h13 Dynamite Cop 2C; Top Skater and Royal Ascot have
+no dumps and take row 0's table).
+
+*BENCHES (this part):* tb_m2_2a_inputs with 0x21 / 0x22 (and 0x23 / 0x24
+drawn as digital IDs): 20 M cycles, 425.8 M checks, 0 mismatches; planted
+Ski Super G's foot sensors swapped (FAIL) and Top Skater's Select Left /
+Right swapped (FAIL). test_m2_luma_map 2A and 2C: 0 fails. lint_top 2A and
+M2_2C + M2_2C_DSB clean (-DM2_NO_2A fails on macros this change does not
+touch: M2_2C_DSB_LEAN, M2_2A_SND_TIMER). MRAs: rom_csum --out +
+mra_vs_mame --layout=2a PASS for Top Skater and Royal Ascot; Ski Super G
+PASS on the image up to 0x52C0000 and its appended 8 MB byte-equal to
+MAME's copro_data; Dynamite Cop 2C differs from MAME's program in exactly
+the six patch words.

@@ -84,6 +84,7 @@ module m2_tgpx4 #(
   output logic [19:0] dat_addr,
   output logic        dat_is_buf,
   output logic        dat_is_prog,
+  output logic        dat_hi,       // R1010: a copro data ROM read's dword bit 20 (0x900000-0x9FFFFF: the 8 MB region's upper half)
   input  logic [31:0] dat_rdata,
   input  logic        dat_ack,
   // the shared write port: buffer RAM, program copy (16-bit halves)
@@ -184,7 +185,7 @@ module m2_tgpx4 #(
     if (!rst_n) begin
       q <= Q_IDLE; q_ext <= 1'b0; f_hi <= 1'b0; f_lo <= 32'd0; w_hi <= 1'b0;
       w_data <= 32'd0; w_addr <= 19'd0; w_prog <= 1'b0;
-      dat_req <= 1'b0; dat_addr <= 20'd0; dat_is_buf <= 1'b0; dat_is_prog <= 1'b0;
+      dat_req <= 1'b0; dat_addr <= 20'd0; dat_is_buf <= 1'b0; dat_is_prog <= 1'b0; dat_hi <= 1'b0;
       bufw_req <= 1'b0; bufw_addr <= 19'd0; bufw_data <= 16'd0; bufw_is_prog <= 1'b0;
       ext_ack <= 1'b0; ext_rdata <= 32'd0; ext_done <= 1'b0;
       pf_ack <= 1'b0; pf_data <= 64'd0;
@@ -211,13 +212,14 @@ module m2_tgpx4 #(
             if (x_buf || x_rom) begin
               dat_req <= 1'b1; dat_is_buf <= x_buf; dat_is_prog <= 1'b0;
               dat_addr <= x_buf ? {5'd0, ext_addr[14:0]} : ext_addr[19:0];
+              dat_hi   <= x_rom & ext_addr[20];   // R1010
               q <= Q_RD;
             end else begin                            // unmapped: 0
               ext_rdata <= 32'd0; ext_ack <= 1'b1; ext_done <= 1'b1; q <= Q_GAP;
             end
           end else if (pf_req && !pf_ack) begin
             q_ext <= 1'b0;
-            dat_req <= 1'b1; dat_is_buf <= 1'b0; dat_is_prog <= 1'b1;
+            dat_req <= 1'b1; dat_is_buf <= 1'b0; dat_is_prog <= 1'b1; dat_hi <= 1'b0;
             dat_addr <= {7'd0, pf_addr, f_hi};
             q <= Q_RD;
           end else if (wq_n != '0) begin              // R1006: a queued write

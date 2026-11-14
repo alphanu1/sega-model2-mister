@@ -1,0 +1,120 @@
+<misterromdescription>
+    <!--
+      Sega Model 2 core for MiSTer FPGA - Copyright (C) 2026 alphanu1
+      SPDX-License-Identifier: GPL-3.0-or-later
+
+      Top Skater (Export, Revision A) (Model 2C-CRX). Derived from MAME 0.289 model2.cpp
+      ROM_START(topskatr). For the Model 2C build of the 2A core (Model2.sv
+      M2_2C); the 2A and original cores cannot run it. Study R1010.
+
+      NEEDS THE 128 MB SDRAM MODULE (R891). THE LARGE 2A LAYOUT (R897,
+      written by tools/mra_2a_big.py's functions):
+        0x0000000  i960 program 0-512 KB
+        0x0080000  main_data, 32 MB (MAME's 0x02000000 window, ROM_COPY
+                   mirrors written out)
+        0x2080000  4 MB of zeros (the 2C core keeps the TGPx4's program copy
+                   at its start, written by the upload)
+        0x2480000  256 KB of zeros (the 2A TGP's tables; 2C has none)
+        0x24C0000  68000 sound program, 512 KB
+        0x2540000  SCSP samples, 8 MB
+        0x2D40000  i960 program 512 KB-2 MB
+        0x2EC0000  copro data, 4 MB: its 4 MB of copro data (the TGPx4's external ROM)
+        0x32C0000  texture-coordinate ROM, 16 MB (MAME's region tiled, as its
+                   mask reads it)
+        0x42C0000  polygons, 4 MB
+      Image: 0x46C0000 bytes. NOT LOADED: the music board (DSB2, a 68000 MPEG board): no music.
+
+      Index 4, the game ID: 0x22 (R1010). Bit 7 is SET in this MRA (0xA2): the
+      15 kHz CRT flag (R795), which starts the core in 15 kHz interlaced
+      whatever the OSD says (R908).
+    -->
+    <name>Top Skater (Export, Revision A) [15kHz CRT]</name>
+    <setname>topskatr</setname>
+    <rbf>Model2C</rbf>
+    <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
+         93C46 EEPROM (128 bytes): the game's settings. -->
+    <nvram index="2" size="16520"/>
+    <rom index="4" md5="none">
+        <part>A2 00</part>
+    </rom>
+    <mameversion>0289</mameversion>
+    <year>1997</year>
+    <manufacturer>Sega</manufacturer>
+    <category>Sports</category>
+
+    <rom index="0" zip="topskatr.zip" md5="none">
+
+        <!-- 0x0000000  i960 program 0-512 KB -->
+        <interleave output="32">
+            <part name="epr-19755a.15" crc="b80633b9" map="0021" offset="0x000000" length="0x040000"/>
+            <part name="epr-19756a.16" crc="472046a2" map="2100" offset="0x000000" length="0x040000"/>
+        </interleave>
+
+        <!-- 0x0080000  i960 data, 32 MB (MAME's 0x02000000 window, mirrors written out) -->
+        <interleave output="32">
+            <part name="mpr-19735.11" crc="8e509266" map="0021"/>
+            <part name="mpr-19736.12" crc="094e0a0d" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-19737.9" crc="281a7dde" map="0021"/>
+            <part name="mpr-19738.10" crc="f688327e" map="2100"/>
+        </interleave>
+        <part repeat="16777216">00</part>
+
+        <!-- 0x2080000  4 MB of zeros, to the fixed slots -->
+        <part repeat="4194304">00</part>
+
+        <!-- 0x2480000  TGP math tables, 256 KB: none on 2C -->
+        <part repeat="262144">00</part>
+
+        <!-- 0x24C0000  68000 sound program, 512 KB (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="mpr-19759.31" crc="573530f2" map="12"/>
+        </interleave>
+
+        <!-- 0x2540000  SCSP samples, 8 MB (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="mpr-19745.32" crc="7082a0af" map="12"/>
+        </interleave>
+        <interleave output="16">
+            <part name="mpr-19746.34" crc="657b5977" map="12"/>
+        </interleave>
+
+        <!-- 0x2D40000  i960 program 512 KB-2 MB (R862) -->
+        <interleave output="32">
+            <part name="epr-19755a.15" crc="b80633b9" map="0021" offset="0x040000" length="0x040000"/>
+            <part name="epr-19756a.16" crc="472046a2" map="2100" offset="0x040000" length="0x040000"/>
+        </interleave>
+        <part repeat="1048576">00</part>
+
+        <!-- 0x2EC0000  copro data, 4 MB (R862, R924) -->
+        <interleave output="32">
+            <part name="mpr-19743.29" crc="d41a41bf" map="0021"/>
+            <part name="mpr-19744.30" crc="84f203bf" map="2100"/>
+        </interleave>
+
+        <!-- 0x32C0000  texture-coordinate ROM, 16 MB (R897) -->
+        <interleave output="32">
+            <part name="mpr-19740.27" crc="b20f508b" map="0021"/>
+            <part name="mpr-19739.25" crc="8120cfd8" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-19740.27" crc="b20f508b" map="0021"/>
+            <part name="mpr-19739.25" crc="8120cfd8" map="2100"/>
+        </interleave>
+
+        <!-- 0x42C0000  polygons, 4 MB (R897) -->
+        <interleave output="32">
+            <part name="mpr-19741.17" crc="111a6e29" map="0021"/>
+            <part name="mpr-19742.21" crc="28510aff" map="2100"/>
+        </interleave>
+
+    </rom>
+
+    <!-- KNOWN NOT WORKING: the 3D is wrong. Top Skater uploads its own
+         geometrizer program (MAME's note: a second transformation matrix),
+         which neither MAME nor this core runs (study R1010). Curving and
+         slide (both the stick's X in MAME) on either stick, the paddle or
+         the d-pad. -->
+    <buttons names="Coin,Start,Test,Service,Jump Front,Jump Tail,Select Left,Select Right"/>
+</misterromdescription>

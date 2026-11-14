@@ -97,6 +97,21 @@
 //          0x11..0xAE: each player's left stick as an ABSOLUTE position (a
 //          light gun's convention, R846), u = a + 128 onto min + u * (span +
 //          1) / 256 -- u 0 the minimum, 255 the maximum.
+//     0x21 Sega Ski Super G (skisuprg): J 4 Coin 5 Select 1 (Start) 6 Test
+//          7 Service 8 Select 2 9 Select 3 10 Zoom In 11 Zoom Out 12 Foot
+//          Sensor L 13 Foot Sensor R. IN0 0x01 COIN1 0x04 TEST 0x08 SERVICE
+//          0x10 Select 3 0x20 Zoom In 0x40 Select 1 0x80 Select 2; IN1 0x01
+//          Zoom Out; IN2 ACTIVE HIGH, 0xF0 Foot Sensor (L) 0x0F (R), 0x00 at
+//          rest. AN0 SWING (AD_STICK_Y) = 0x80 + the left stick's Y (Sky
+//          Target's); AN1 INCLINING (AD_STICK_X) = the widened steering.
+//     0x22 Top Skater (topskatr): J 4 Coin 5 Start 6 Test 7 Service 8 Jump
+//          Front 9 Jump Tail 10 Select Left 11 Select Right. IN0 0x01 COIN1
+//          0x04 TEST 0x08 SERVICE 0x10 Select Right 0x20 Jump Front 0x40
+//          START1 0x80 Select Left; IN1 0x01 Jump Tail; IN2 0xFF. AN0
+//          CURVING and AN1 SLIDE (both AD_STICK_X in MAME) = the widened
+//          steering.
+//     (0x23 Dynamite Cop 2C and 0x24 Royal Ascot II are DIGITAL: dynamcop's
+//          and model2crx's ports, VF2's order.)
 //   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
 //     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
@@ -111,7 +126,7 @@ module m2_2a_inputs #(
   parameter bit          GUN     = 1'b0,  // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
   parameter bit          MOTION  = 1'b0,  // R892: Manx TT's motion base answered on PD (M2_2A_MANX_MOTION)
   parameter bit          OREV    = 1'b0,  // R928: Over Rev's profile (0x1C; 2C builds); R933: and STCC's (0x1D)
-  parameter bit          C2G     = 1'b0   // R1010: Wave Runner, Water Ski, Behind Enemy Lines (0x1E-0x20; 2C builds)
+  parameter bit          C2G     = 1'b0   // R1010: Wave Runner, Water Ski, Behind Enemy Lines, Ski Super G, Top Skater (0x1E-0x22; 2C builds)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
@@ -157,6 +172,8 @@ module m2_2a_inputs #(
   wire p_wave   = C2G & ANALOG & (game == 7'h1E);   // R1010: Wave Runner
   wire p_wski   = C2G & ANALOG & (game == 7'h1F);   // R1010: Sega Water Ski
   wire p_bel    = C2G & (game == 7'h20);            // R1010: Behind Enemy Lines
+  wire p_skis   = C2G & ANALOG & (game == 7'h21);   // R1010: Sega Ski Super G
+  wire p_tops   = C2G & ANALOG & (game == 7'h22);   // R1010: Top Skater
   // (Model2.sv shows the analog OSD lines for 0x10 and 0x18-0x1B alike)
 
   // R879: a pad's left analogue stick drives the digital directions too, past
@@ -282,6 +299,12 @@ module m2_2a_inputs #(
   wire [7:0] wv_in1 = ~{7'd0, j0[8]};
   wire [7:0] ws_in1 = ~{4'd0, j0[11], j0[10], j0[9], j0[8]};
   wire [7:0] wv_pitch = {joy_analog[15], ~joy_analog[14:8]};   // 0xFF - (0x80 + y)
+  // R1010: Ski Super G / Top Skater's buttons
+  wire [7:0] sk_in0 = ~{j0[8], j0[5], j0[10], j0[9], j0[7], j0[6], 1'b0, j0[4]};
+  wire [7:0] sk_in1 = ~{7'd0, j0[11]};
+  wire [7:0] sk_in2 = {{4{j0[12]}}, {4{j0[13]}}};                // active high
+  wire [7:0] ts_in0 = ~{j0[10], j0[5], j0[8], j0[11], j0[7], j0[6], 1'b0, j0[4]};
+  wire [7:0] ts_in1 = ~{7'd0, j0[9]};
 
   always_ff @(posedge clk) begin
     an3 <= p_wave ? wv_pitch : p_bel ? bl_v[3] : 8'hFF;   // R1010
@@ -291,6 +314,12 @@ module m2_2a_inputs #(
     end else if (p_wski) begin                        // R1010
       in0 <= or_in0; in1 <= ws_in1; in2 <= 8'hFF;
       an0 <= or_str; an1 <= 8'hFF; an2 <= 8'hFF;
+    end else if (p_skis) begin                        // R1010
+      in0 <= sk_in0; in1 <= sk_in1; in2 <= sk_in2;
+      an0 <= sky_y; an1 <= or_str; an2 <= 8'hFF;
+    end else if (p_tops) begin                        // R1010
+      in0 <= ts_in0; in1 <= ts_in1; in2 <= 8'hFF;
+      an0 <= or_str; an1 <= or_str; an2 <= 8'hFF;
     end else if (p_bel) begin                         // R1010
       in0 <= bl_in0; in1 <= bl_in1; in2 <= 8'hFF;
       an0 <= bl_v[0]; an1 <= bl_v[1]; an2 <= bl_v[2];

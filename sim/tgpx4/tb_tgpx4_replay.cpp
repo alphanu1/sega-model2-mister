@@ -92,6 +92,7 @@ int main(int argc, char **argv)
   bool stprof = false;                                                  // R1006
   uint32_t ck_frame = UINT32_MAX;                                       // R1006: checkpoint start
   uint32_t tm_from = UINT32_MAX, tm_to = UINT32_MAX; uint64_t vbl_cyc = 1391304;
+  bool no_hi = false;   // R1010
   for (int i = 2; i < argc; i++) {
     std::string a = argv[i];
     auto nx = [&]() { return (i + 1 < argc) ? strtoull(argv[++i], nullptr, 0) : 0ull; };
@@ -115,6 +116,7 @@ int main(int argc, char **argv)
     else if (a == "--pcprof") pcprof_path = argv[++i];
     else if (a == "--stprof") stprof = true;                          // R1006
     else if (a == "--ck-frame") ck_frame = uint32_t(nx());            // R1006
+    else if (a == "--no-hi") no_hi = true;                            // R1010: serve the ROM as the core did before (bit 20 dropped)
   }
   Capture cap;
   if (!cap.load(dir, 0)) return 2;
@@ -160,7 +162,10 @@ int main(int argc, char **argv)
         uint32_t a = top->dat_addr, v;
         if (top->dat_is_prog) v = progcopy[(2 * a) & 0x3fff] | (uint32_t(progcopy[(2 * a + 1) & 0x3fff]) << 16);
         else if (top->dat_is_buf) v = bufh[(2 * a) & 0xffff] | (uint32_t(bufh[(2 * a + 1) & 0xffff]) << 16);
-        else v = (a < cap.cdata.size()) ? cap.cdata[a] : 0;
+        else {   // R1010: dat_hi is the copro data ROM's dword bit 20 (an 8 MB region)
+          const uint32_t ra = a | (no_hi ? 0u : uint32_t(top->dat_hi) << 20);
+          v = (ra < cap.cdata.size()) ? cap.cdata[ra] : 0;
+        }
         top->dat_rdata = v; top->dat_ack = 1; dat_cnt = -2;
       } else if (dat_cnt > 0) dat_cnt--;
     } else dat_cnt = -1;
