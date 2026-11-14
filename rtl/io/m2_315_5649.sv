@@ -34,7 +34,8 @@
 //   14    mode                       15 analog: read = channel, auto-
 //         increments; write = select. R862: channels 0-2 are an0..an2
 //         (Sega Rally's STEER / ACCEL / BRAKE; 0xFF for a game with none,
-//         MAME's unbound default), 3-7 read 0xFF.
+//         MAME's unbound default), 3-7 read 0xFF. R1010: channel 3 is an3
+//         (Wave Runner's PITCH, Behind Enemy Lines' P2_Y; 0xFF otherwise).
 //   other reads 0xFF.
 // model2a's callbacks: PA out -> eeprom_w (bit 0 ctrlmode, 5 DI, 6 CS, 7 CLK);
 // PB in -> in0_r (ctrlmode: 0xC0 | DO << 5 | 0x10 | IN0[3:0], else IN0);
@@ -75,6 +76,7 @@ module m2_315_5649 #(
   input  logic  [7:0] an0,          // R862: analog channels 0-2
   input  logic  [7:0] an1,
   input  logic  [7:0] an2,
+  input  logic  [7:0] an3,          // R1010: channel 3
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic  [9:0] gun_p1x, gun_p1y, gun_p2x, gun_p2y,   // R870 (GUN): game units
   input  logic  [1:0] gun_off,      // {P2, P1} off-screen
@@ -140,7 +142,7 @@ module m2_315_5649 #(
       4'hc:       rd = gun_byte;          // R870
       4'hd:       rd = 8'h0c;
       4'hf:       rd = (an_ch == 3'd0) ? an0 : (an_ch == 3'd1) ? an1
-                     : (an_ch == 3'd2) ? an2 : 8'hff;   // R862
+                     : (an_ch == 3'd2) ? an2 : (an_ch == 3'd3) ? an3 : 8'hff;   // R862; R1010
       default:    rd = 8'hff;
     endcase
   endfunction

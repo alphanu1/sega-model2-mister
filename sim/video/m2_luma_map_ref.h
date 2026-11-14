@@ -9,6 +9,7 @@
 // Dead, a2_big) and 0x1C (Over Rev, is_orev) take ranges too; R933: and 0x1D
 // (STCC, a2_big)
 static inline bool m2_luma_big(int game, bool c2 = false) {
+  if (c2 && (game == 0x1E || game == 0x1F || game == 0x20)) return true;   // R1010
   if (((game >> 4) & 7) != 1) return false;
   const int n = game & 15;
   return n == 3 || n == 4 || n == 5 || n == 6 || n == 8 || n == 10 || (c2 && (n == 7 || n == 12 || n == 13));
@@ -52,9 +53,12 @@ static inline int m2_luma_map_ref(int game, int r, bool c2 = false) {
     {0x17, {0, 40, 60, 76, 94, 96, 100, 120}},       // R924: The House of the Dead (2C)
     {0x1C, {0, 10, 14, 22, 129, 139, 176, 178}},     // R928: Over Rev (2C)
     {0x1D, {0, 1, 2, 3, 4, 5, 6, 7}},                // R933: STCC (2C): rows 0 and 1 drawn
+    {0x1E, {100, 115, 116, 117, 126, 131, 135, 150}},  // R1010: Wave Runner (2C)
+    {0x1F, {100, 105, 109, 115, 117, 118, 131, 136}},  // R1010: Sega Water Ski (2C)
+    {0x20, {0, 1, 2, 3, 4, 5, 6, 7}},                // R1010: Behind Enemy Lines (2C): rows 0 and 1 drawn
   };
   if (m2_luma_big(game, c2))
-    for (const T &e : tab) if ((e.id & 15) == (game & 15)) {
+    for (const T &e : tab) if (e.id == game) {
       int k = 0; for (int i = 1; i < 8; i++) if (r >= e.s[i]) k = i;
       return ((r == e.s[k]) ? 32 : 0) | k;
     }

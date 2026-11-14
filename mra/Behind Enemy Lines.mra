@@ -1,0 +1,151 @@
+<misterromdescription>
+    <!--
+      Sega Model 2 core for MiSTer FPGA - Copyright (C) 2026 alphanu1
+      SPDX-License-Identifier: GPL-3.0-or-later
+
+      Behind Enemy Lines (Model 2C-CRX). Derived from MAME 0.289 model2.cpp
+      ROM_START(bel). For the Model 2C build of the 2A core (Model2.sv
+      M2_2C); the 2A and original cores cannot run it. Study R1010.
+
+      NEEDS THE 128 MB SDRAM MODULE (R891). THE LARGE 2A LAYOUT (R897,
+      written by tools/mra_2a_big.py's functions):
+        0x0000000  i960 program 0-512 KB
+        0x0080000  main_data, 32 MB (MAME's 0x02000000 window, ROM_COPY
+                   mirrors written out)
+        0x2080000  4 MB of zeros (the 2C core keeps the TGPx4's program copy
+                   at its start, written by the upload)
+        0x2480000  256 KB of zeros (the 2A TGP's tables; 2C has none)
+        0x24C0000  68000 sound program, 512 KB
+        0x2540000  SCSP samples, 8 MB
+        0x2D40000  i960 program 512 KB-2 MB
+        0x2EC0000  copro data, 4 MB: its 4 MB of copro data (the TGPx4's external ROM)
+        0x32C0000  texture-coordinate ROM, 16 MB (MAME's region tiled, as its
+                   mask reads it)
+        0x42C0000  polygons, 16 MB
+      Image: 0x52C0000 bytes. NOT LOADED: nothing else.
+
+      Index 4, the game ID: 0x20 (R1010). Bit 7 would be the 15 kHz CRT flag.
+    -->
+    <name>Behind Enemy Lines</name>
+    <setname>bel</setname>
+    <rbf>Model2C</rbf>
+    <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
+         93C46 EEPROM (128 bytes): the game's settings. -->
+    <nvram index="2" size="16520"/>
+    <rom index="4" md5="none">
+        <part>20 00</part>
+    </rom>
+    <mameversion>0289</mameversion>
+    <year>1997</year>
+    <manufacturer>Sega / EPL Productions</manufacturer>
+    <category>Shooter</category>
+
+    <rom index="0" zip="bel.zip" md5="none">
+
+        <!-- 0x0000000  i960 program 0-512 KB -->
+        <interleave output="32">
+            <part name="epr-20225.15" crc="4abc6b59" map="0021"/>
+            <part name="epr-20226.16" crc="43e05b3a" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="epr-20223.13" crc="61b1be98" map="0021"/>
+            <part name="epr-20224.14" crc="eb2d7dbf" map="2100"/>
+        </interleave>
+
+        <!-- 0x0080000  i960 data, 32 MB (MAME's 0x02000000 window, mirrors written out) -->
+        <interleave output="32">
+            <part name="mpr-20233.11" crc="3e079a3b" map="0021"/>
+            <part name="mpr-20234.12" crc="58bde826" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20231.9" crc="b3393e93" map="0021"/>
+            <part name="mpr-20232.10" crc="da4a2e11" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20229.7" crc="cdec7bf4" map="0021"/>
+            <part name="mpr-20230.8" crc="a166fa87" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20227.5" crc="1277686e" map="0021"/>
+            <part name="mpr-20228.6" crc="49cb5568" map="2100"/>
+        </interleave>
+        <part repeat="16777216">00</part>
+
+        <!-- 0x2080000  4 MB of zeros, to the fixed slots -->
+        <part repeat="4194304">00</part>
+
+        <!-- 0x2480000  TGP math tables, 256 KB: none on 2C -->
+        <part repeat="262144">00</part>
+
+        <!-- 0x24C0000  68000 sound program, 512 KB (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="mpr-20249.31" crc="dc24f13d" map="12"/>
+        </interleave>
+        <part repeat="393216">00</part>
+
+        <!-- 0x2540000  SCSP samples, 8 MB (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="mpr-20250.32" crc="91b735d3" map="12"/>
+        </interleave>
+        <interleave output="16">
+            <part name="mpr-20251.33" crc="703a947b" map="12"/>
+        </interleave>
+        <interleave output="16">
+            <part name="mpr-20252.34" crc="8f48f375" map="12"/>
+        </interleave>
+        <interleave output="16">
+            <part name="mpr-20253.35" crc="ca6aa17c" map="12"/>
+        </interleave>
+
+        <!-- 0x2D40000  i960 program 512 KB-2 MB (R862) -->
+        <part repeat="1572864">00</part>
+
+        <!-- 0x2EC0000  copro data, 4 MB (R862, R924) -->
+        <interleave output="32">
+            <part name="mpr-20236.29" crc="8de9a3c2" map="0021"/>
+            <part name="mpr-20235.30" crc="78fa11ef" map="2100"/>
+        </interleave>
+
+        <!-- 0x32C0000  texture-coordinate ROM, 16 MB (R897) -->
+        <interleave output="32">
+            <part name="mpr-20247.27" crc="00b0417d" map="0021"/>
+            <part name="mpr-20245.25" crc="36490a08" map="2100"/>
+        </interleave>
+        <part repeat="4194304">00</part>
+        <interleave output="32">
+            <part name="mpr-20248.28" crc="0ace6bef" map="0021"/>
+            <part name="mpr-20246.26" crc="250d6ca1" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20247.27" crc="00b0417d" map="0021"/>
+            <part name="mpr-20245.25" crc="36490a08" map="2100"/>
+        </interleave>
+
+        <!-- 0x42C0000  polygons, 16 MB (R897) -->
+        <interleave output="32">
+            <part name="mpr-20244.17" crc="9d2a8660" map="0021"/>
+            <part name="mpr-20240.21" crc="51615908" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20243.18" crc="48671f7c" map="0021"/>
+            <part name="mpr-20239.22" crc="6cd8d8a5" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20242.19" crc="e7f86ac7" map="0021"/>
+            <part name="mpr-20238.23" crc="0a480c7c" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-20241.20" crc="51974b98" map="0021"/>
+            <part name="mpr-20237.24" crc="89b5d8b6" map="2100"/>
+        </interleave>
+
+    </rom>
+
+    <!-- Two mounted guns: each player's left stick is the gun's position,
+         ABSOLUTE (a light gun's convention): gunblade's ranges, P1 yaw
+         0x69-0xFF, P2 yaw 0x00-0x96, pitch 0x11-0xAE. Player 1 on
+         joystick 1, player 2 on joystick 2, the same buttons; Test and
+         Service are player 1's (the game swaps them on IN0, as MAME says).
+         The game has its own GUN CALIBRATION in the test menu. -->
+    <buttons names="Trigger,Missile,Start,Coin,Test,Service"/>
+</misterromdescription>

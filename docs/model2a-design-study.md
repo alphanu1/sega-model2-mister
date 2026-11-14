@@ -49787,3 +49787,88 @@ draining buffer writes.
   * The FP result wait (21% of clocks on the scoreboard) and the two-clock
     fetch floor are the structure's: a shorter FP unit or a two-ahead fetch
     with one-clock words, each a redesign, not a small bit.
+
+**R1010 -- WAVE RUNNER, SEGA WATER SKI AND BEHIND ENEMY LINES (2C) ON THEIR
+OWN GAME IDs: 0x1E, 0x1F, 0x20. MAME's PORTS FOR EACH, A FOURTH ADC CHANNEL,
+THEIR LUMA ROWS. BRANCH new-2c-games (OFF stcc-sound-2c ea3ba75d).**
+(Coordinator, from Ben's board test of seven 2C sets on borrowed IDs: give
+each its own ID and its proper inputs; these three first, for a release.)
+
+*What was believed:* the seven test MRAs (build/, borrowing Motor Raid's
+0x1A, Sky Target's 0x18, Hanguk Pro Yagu's 0x13 and Dynamite Cop's 0x14)
+showed what each set needs beyond an MRA. On the board: Wave Runner
+steering stuck full left, Water Ski always steering one way and no input but
+coin / start, Behind Enemy Lines no aim and no fire.
+
+*CAUSE, ALL THREE: THE BORROWED PROFILE'S CHANNELS.* MAME 0.289's machine
+configs: waverunr's 315-5649 channels are HANDLE, ROLL, THROTTLE, PITCH
+(0-3); segawski's only SLIDE (0); bel's P1_X, P2_X, P1_Y, P2_Y (0-3, gunblade's
+ports). Under 0x1A AN0 is the accelerator (0x20 at rest) -- Wave Runner's
+handle bar and Water Ski's slide, hard over -- and the digital bits are
+Motor Raid's (IN1 0x10 / 0x20), not these games'. The core's 315-5649 read
+channel 3 as 0xFF: two of the three need it.
+
+*THE GAMES' OWN CALIBRATION (MAME 0.289 m2lod, the test menus walked by
+script):* Water Ski's VOLUME SETTING holds SLIDE MIN 0x38 / NEU 0x80 / MAX
+0xC8; in play SLIDE 0x00 turns the skier left, 0xFF right (snapshots at 51-84 s
+with the port held) -- MAME's AD_STICK_X sense, left low. Wave Runner's
+THROTTLE LEVER VOLUME SETTING: MIN 0x40, MAX 0xE0 -- the lever released is
+the low end, so the core's throttle rests at 0x00 (STCC's pedal line), NOT
+MAME's reversed stick (which rests at 0x80, half throttle). WRONG FIRST CUT,
+KEEP: the first build reversed it as Over Rev's pedals (rest 0xFF = full
+throttle); the calibration screen corrected it before any board. Input test
+screens show every channel raw (HANDLE BAR / ROLL / THROTTLE / PITCH; SLIDE;
+GUN YAW / GUN PITCH per player) and Wave Runner's SAFETY SENSOR "OFF" with
+IN2 0xF7 (bit 3, an active-high IPT_CUSTOM nothing drives, reads 0).
+Behind Enemy Lines' axis directions were NOT checked against its picture
+(MAME holds the aim with no visible change in attract; its GUN CALIBRATION
+was not walked): the mapping follows MAME's ports (gunblade's PORT_MODIFY
+replaces rchase2's reversed fields), low = left / up.
+
+*THE CORE (all behind C2; a 2A build is unchanged):*
+  1. Model2.sv: is_wave 0x1E, is_wski 0x1F, is_bel 0x20 -- a2_big (the
+     large layout), a2_copro_rom (copro data from the 2A slot), the analog
+     OSD lines for the first two. is_2ax now also takes 0x20-0x2F on 2C
+     (program extension, vc_en), via is_2a1x for the a2_big list so 0x23 /
+     0x24 ... do not alias the 2A games' low nibbles.
+  2. m2_315_5649: an3, channel 3 (0xFF from every other caller).
+  3. m2_2a_inputs (C2G): Wave Runner -- IN0 coin / test / service / START1
+     at 0x40, IN1 0x01 View, IN2 0xF7; HANDLE and ROLL the widened steering
+     (Over Rev's line; MAME binds both to the stick's X), THROTTLE the
+     widened accelerator (0x00 released), PITCH 0x7F - the left stick's Y.
+     Water Ski -- IN0 with Select (Down) at 0x40 (its start), IN1 Set /
+     Select Up / Pitch Left / Pitch Right on 0x01-0x08, SLIDE the widened
+     steering. Behind Enemy Lines -- IN0 with SERVICE 0x04 / TEST 0x08
+     swapped (MAME), IN1 the two triggers 0x01 / 0x02 and missiles 0x10 /
+     0x20; each player's left stick as an absolute gun position onto
+     gunblade's PORT_MINMAX, min + (a + 128) * (span + 1) / 256, the four
+     channels through one constant multiply in turn (three stages).
+  4. m2_luma_map: the game key is {ID bit 5, ID 3:0}; 0x1E / 0x1F / 0x20
+     ranges (OREV only). From MAME walk dumps every 8 s over 240 s
+     (sim/video/luma_fit.py's reader; ranges by exhaustive search): Wave
+     Runner 31 drawn rows of 100-157 -> starts 100 115 116 117 126 131 135
+     150, mean |err| 0.36 of 63; Water Ski 22 rows of 100-155 -> 100 105 109
+     115 117 118 131 136, 0.14; Behind Enemy Lines rows 0 and 1 only, exact.
+
+*BENCHES:* tb_m2_2a_inputs (C2G on the OREV copy, every ID; the C2G-0 copies
+read 0x1E / 0x1F / 0x20 as digital, an3 0xFF): 20 M cycles, 426.8 M checks,
+0 mismatches; Behind Enemy Lines' four channels exact against MAME's
+PORT_MINMAX line and inside it, min / stick centre / max each reached;
+Wave Runner's throttle at 0x00 and 0xFF, pitch at both ends. PLANTED: P1_X
+min 0x68 (FAIL), the Y multiplier on the wrong channel (FAIL), Wave Runner's
+pitch unreversed (FAIL), Water Ski given Wave Runner's IN1 (FAIL).
+test_m2_luma_map 2A and 2C 262,144 checks each, 0 fails; planted (one Wave
+Runner start 115 -> 114) FAIL. test_m2_315_5649 2 M operations PASS (the
+reference's channel 3 now driven). lint_top 2A and M2_2C + M2_2C_DSB clean.
+
+*MRAs (mra/, + [15kHz CRT] with bit 7):* Wave Runner (Japan, Revision A)
+0x1E, image 0x61C0000 (its 1 MB of copro data); Sega Water Ski (Japan,
+Revision A) 0x1F, 0x62C0000; Behind Enemy Lines 0x20, 0x52C0000 (textures
+12 MB tiled to 16). tools/rom_csum.py --out + tools/mra_vs_mame.py
+--layout=2a PASS for all three.
+
+*WATER SKI's 8 MB OF COPRO DATA:* MAME maps the TGPx4's 0x800000-0x9FFFFF
+(2 M dwords); the core's slot and the TGPx4's port carry 4 MB (20 dword
+bits). A Lua read tap on the TGPx4's external space over 0x900000-0x9FFFFF:
+0 reads in 120 s of attract (demo play) while 0x800000-0x8FFFFF took
+558,467. The MRA loads the first 4 MB; see the follow-up below for play.

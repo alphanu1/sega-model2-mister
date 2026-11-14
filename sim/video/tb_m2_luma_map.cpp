@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
 #else
       const bool c2 = false;                                  // R932: the 2A build has no C2
 #endif
-      d->game_id = g & 15; d->big = m2_luma_big(g, c2); d->zg = (g == 0x12);
+      d->game_id = ((g >> 1) & 16) | (g & 15); d->big = m2_luma_big(g, c2); d->zg = (g == 0x12);
       d->orev = c2 && (g == 0x1C);                            // R932: Model2.sv is_orev
       tick(); tick();
       for (int r = 0; r < 256; r++) {

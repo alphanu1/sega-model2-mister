@@ -42,20 +42,20 @@ module tb_m2_vcop2_top #(
     .c1x, .c2x, .c1y, .c2y, .c_on
   );
 
-  logic [7:0] in0, in1, in2, an0, an1, an2, lamps, dbg_pa, dbg_dir, pe_q;
+  logic [7:0] in0, in1, in2, an0, an1, an2, an3, lamps, dbg_pa, dbg_dir, pe_q;
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b0), .GUN(1'b1)) inputs (
     .clk, .rst_n, .game(7'h11),   // R887: Virtua Cop 2's ID, the GUN profile
     .joystick_0({16'd0, joy0}), .joystick_1({16'd0, joy1}),
     .joy_analog(16'd0), .joy_ranalog(16'd0), .joy_analog_1(16'd0), .paddle(8'd0),
     .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0), .st_wheel(2'd0), .trig_rt(8'd0), .trig_lt(8'd0),
     .gun_in1(g_in1), .pe(8'hFF),
-    .in0, .in1, .in2, .an0, .an1, .an2
+    .in0, .in1, .in2, .an0, .an1, .an2, .an3
   );
 
   wire [15:0] ee_dump_q;   // R945: unused here
   m2_315_5649 #(.GUN(1'b1)) io (
     .clk, .por_n, .rst_n, .sel, .we, .word, .be, .wdata, .rdata,
-    .in0, .in1, .in2, .sw(8'hFF), .an0, .an1, .an2,
+    .in0, .in1, .in2, .sw(8'hFF), .an0, .an1, .an2, .an3,
     .gun_p1x(p1x), .gun_p1y(p1y), .gun_p2x(p2x), .gun_p2y(p2y), .gun_off(goff),
     .lamps(lamps), .pe(pe_q), .ee_ld_we(1'b0), .ee_ld_a(6'd0), .ee_ld_d(16'd0),   // R897
     .ee_dump_a(6'd0), .ee_dump_q(ee_dump_q),                                   // R945

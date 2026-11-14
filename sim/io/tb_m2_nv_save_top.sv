@@ -92,7 +92,7 @@ module tb_m2_nv_save_top (
     .clk, .por_n, .rst_n,
     .sel, .we, .word, .be, .wdata, .rdata,
     .in0(8'hff), .in1(8'hff), .in2(8'hff), .sw(8'hff),
-    .an0(8'hff), .an1(8'hff), .an2(8'hff),
+    .an0(8'hff), .an1(8'hff), .an2(8'hff), .an3(8'hff),
     .gun_p1x(10'd0), .gun_p1y(10'd0), .gun_p2x(10'd0), .gun_p2y(10'd0), .gun_off(2'd0),
     .lamps(), .pe(),
     .ee_ld_we, .ee_ld_a, .ee_ld_d, .ee_dump_a, .ee_dump_q,

@@ -3038,6 +3038,17 @@ wire is_orev    = C2 && (game_id[6:0] == 7'h1C);
 // OREV, the pedals not reversed). Its comm board needs no answer: it writes
 // CN / FG 0 once and polls one share-RAM byte nobody writes (0 in MAME too).
 wire is_stcc    = C2 && (game_id[6:0] == 7'h1D);
+// R1010: THE NEXT THREE 2C GAMES, each its own ID (they had borrowed Motor
+// Raid's and Sky Target's for a first board test): 0x1E Wave Runner
+// (waverunr), 0x1F Sega Water Ski (segawski), 0x20 Behind Enemy Lines (bel)
+// -- the large layout (a2_big), their copro data (the TGPx4's external ROM)
+// in the 2A copro-data slot (a2_copro_rom), MAME's ports for each in
+// m2_2a_inputs (C2G). 0x20-0x2F count as 2A games past VF2 in a 2C build
+// (is_2ax: the program extension, vc_en) as 0x10-0x1F do; a 2A build is
+// unchanged (C2 0).
+wire is_wave    = C2 && (game_id[6:0] == 7'h1E);
+wire is_wski    = C2 && (game_id[6:0] == 7'h1F);
+wire is_bel     = C2 && (game_id[6:0] == 7'h20);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
 // are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
 // ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
@@ -3046,7 +3057,8 @@ wire is_stcc    = C2 && (game_id[6:0] == 7'h1D);
 //   0x18 Sky Target (skytargt)          0x19 Manx TT (manxtt)
 //   0x1A Motor Raid (motoraid)
 // (only those with an MRA are loadable; the others are reserved, R887.)
-wire is_2ax     = M2A && (game_id[6:4] == 3'b001);    // 0x10-0x1F
+wire is_2a1x    = M2A && (game_id[6:4] == 3'b001);    // 0x10-0x1F
+wire is_2ax     = is_2a1x || (C2 && (game_id[6:4] == 3'b010));   // R1010: and 0x20-0x2F on 2C
 wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copro data
 // R726 / R835: program 0x40000-0x7FFFF from GAME_POLYX. R852: the 2A board
 // reads its 512 KB slot linearly; R862: and 0x80000-0x1FFFFF from the
@@ -3054,22 +3066,22 @@ wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copr
 // every 2A game past VF2 -- an MRA with a 512 KB program carries the slot as
 // zeros (MAME's region reads 0 there), so the decode needs no list.
 wire prog_ext  = M2A ? is_2ax : (is_vcop | is_desert);
-assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev | is_stcc);   // R887: the analog profile's lines; R928; R933
+assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev | is_stcc | is_wave | is_wski);   // R887: the analog profile's lines; R928; R933; R1010
 // R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
 // other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
 // R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
 // same slot).
 logic a2_copro_rom;
-always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_stcc;   // R924; R933
+always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_stcc | is_wave | is_wski | is_bel;   // R924; R933; R1010
 // R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
 // 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
 // Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
 // from the upper 64 MB, linear in MAME's regions; everything else as before.
 // Quasi-static (the ID is written before the image).
 always_ff @(posedge clk_sys)   // (declared with the boot sweep, R900)
-	a2_big <= is_2ax && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
+	a2_big <= is_2a1x && ((game_id[3:0] == 4'h3) || (game_id[3:0] == 4'h4) || (game_id[3:0] == 4'h5)
 	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA)
-	                  || is_hotd || is_stcc);   // R924; R933
+	                  || is_hotd || is_stcc) || is_wave || is_wski || is_bel;   // R924; R933; R1010
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see
@@ -6784,9 +6796,9 @@ end else begin : g_noioboard
 		// Gunner) is m2_2a_inputs -- MAME's INPUT_PORTS for each, the buttons
 		// in each MRA's <buttons names> order; VF2's map exactly as it was
 		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
-		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2;
+		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2, a2_an3;   // R1010: an3
 		wire [7:0] a2_pe;   // R892: PE's latch, Manx TT's motion-base command
-		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT), .OREV(C2)) u_2a_inputs (   // R928: OREV
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT), .OREV(C2), .C2G(C2)) u_2a_inputs (   // R928: OREV; R1010: C2G
 			.clk(clk_sys), .rst_n(cpu_rst_n),
 			.game(M2A ? (is_hotd ? 7'h11 : game_id[6:0]) : 7'd0),   // R887: the profile from the game ID; R924: HOTD is Virtua Cop 2's
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
@@ -6797,7 +6809,7 @@ end else begin : g_noioboard
 			.gun_in1(vc_in1),                            // R870: the guns' triggers
 			.pe(a2_pe),                                  // R892
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
-			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2)
+			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2), .an3(a2_an3)
 		);
 		wire [31:0] a2_rdata;
 		// R870: Virtua Cop 2's guns on its serial channel 2 (GUN)
@@ -6809,7 +6821,7 @@ end else begin : g_noioboard
 			.word(cpu_io_addr[4:2]), .be(cpu_io_be), .wdata(cpu_io_wdata),
 			.rdata(a2_rdata),
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q), .sw(8'hFF),
-			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2),
+			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2), .an3(a2_an3),   // R1010
 			.gun_p1x(vc_p1x), .gun_p1y(vc_p1y), .gun_p2x(vc_p2x), .gun_p2y(vc_p2y), .gun_off(vc_off),
 			.lamps(), .pe(a2_pe),
 			.ee_ld_we(ee_ld_we), .ee_ld_a(ee_ld_a), .ee_ld_d(ee_ld_d),   // R897
@@ -7888,7 +7900,7 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 	/* verilator lint_on UNUSEDSIGNAL */
 	wire [R3D_LSB:0] w_ls;
 	wire [SDR_AW:1] w_luma = cpu_sd_addr - GAME_LUMA;
-	m2_luma_map #(.LSB(R3D_LSB), .OREV(C2)) u_lmap (.clk(clk_sys), .game_id(game_id[3:0]), .big(a2_big | is_orev), .zg(is_zerogun),   // R928: Over Rev's ranges
+	m2_luma_map #(.LSB(R3D_LSB), .OREV(C2)) u_lmap (.clk(clk_sys), .game_id({game_id[5], game_id[3:0]}), .big(a2_big | is_orev), .zg(is_zerogun),   // R928: Over Rev's ranges
 	                    .orev(is_orev),                                                                                   // R932: its table
 	                    .q_row(q3d_trow), .q_ls(q_ls), .w_row(w_luma[15:8]), .w_ls(w_ls));
 	assign r3d_qtex = {q_ls[R3D_LSB-1:0], q3d_tex[23:12], q3d_tex[0] ? q3d_col[0] : 1'b0, q3d_tex[10:0]};

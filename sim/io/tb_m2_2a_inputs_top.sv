@@ -16,6 +16,8 @@
 // (OREV 0) see 0x1C as a digital ID, as a 2A build does.
 // R958: st_wheel (Analog control) on every copy; cab0 is the block at
 // Standard, Sky Target's reference.
+// R1010: C2G on dut_or (Wave Runner 0x1E, Water Ski 0x1F, Behind Enemy Lines
+// 0x20); dut / dut_nm (C2G 0) must read those IDs as digital. an3 on each.
 
 `timescale 1ns/1ps
 
@@ -40,6 +42,7 @@ module tb_m2_2a_inputs_top (
   input  logic  [7:0] pe,             // R892: the 315-5649's PE latch
   output logic  [7:0] o_in0, output logic [7:0] o_in1, output logic [7:0] o_in2,   // R928: OREV 1
   output logic  [7:0] o_an0, output logic [7:0] o_an1, output logic [7:0] o_an2,
+  output logic  [7:0] o_an3, output logic [7:0] n_an3, output logic [7:0] an3,   // R1010
   output logic  [7:0] n_in0, output logic [7:0] n_in1, output logic [7:0] n_in2,   // R892: MOTION 0
   output logic  [7:0] n_an0, output logic [7:0] n_an1, output logic [7:0] n_an2,
   output logic  [7:0] in0, output logic [7:0] in1, output logic [7:0] in2,
@@ -52,16 +55,16 @@ module tb_m2_2a_inputs_top (
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1)) dut (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
-    .gun_in1(8'hFF), .pe, .in0, .in1, .in2, .an0, .an1, .an2);
+    .gun_in1(8'hFF), .pe, .in0, .in1, .in2, .an0, .an1, .an2, .an3);
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b0)) dut_nm (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
-    .gun_in1(8'hFF), .pe, .in0(n_in0), .in1(n_in1), .in2(n_in2), .an0(n_an0), .an1(n_an1), .an2(n_an2));
+    .gun_in1(8'hFF), .pe, .in0(n_in0), .in1(n_in1), .in2(n_in2), .an0(n_an0), .an1(n_an1), .an2(n_an2), .an3(n_an3));
 
-  m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1), .OREV(1'b1)) dut_or (   // R928
+  m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1), .OREV(1'b1), .C2G(1'b1)) dut_or (   // R928; R1010 C2G
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
-    .gun_in1(8'hFF), .pe, .in0(o_in0), .in1(o_in1), .in2(o_in2), .an0(o_an0), .an1(o_an1), .an2(o_an2));
+    .gun_in1(8'hFF), .pe, .in0(o_in0), .in1(o_in1), .in2(o_in2), .an0(o_an0), .an1(o_an1), .an2(o_an2), .an3(o_an3));
 
   // Model2.sv at 9fb631d, g_5649 -- verbatim
   wire [7:0] a2_in0 = ~{2'b00, joystick_1[7], joystick_0[7], joystick_0[10],

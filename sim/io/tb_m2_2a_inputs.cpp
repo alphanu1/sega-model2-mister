@@ -64,6 +64,29 @@
 //                 INPUT_PORTS_START(indy500) -- Over Rev's above with the
 //                 pedals NOT reversed ((v - 0x20) * 255 / 192: released 0x00).
 //                 The OREV 0 builds read 0x1D as a digital ID too.
+//     R1010 (C2G, 2C builds; dut_or), MAME 0.289's ports:
+//       0x1E Wave Runner INPUT_PORTS_START(waverunr) (J 4 Coin 5 Start
+//                 6 Test 7 Service 8 View 10 Throttle): IN0 0x01 COIN1 0x04
+//                 TEST 0x08 SERVICE 0x40 START1, the rest 1; IN1 0x01 View;
+//                 IN2 0xF7; AN0 HANDLE = AN1 ROLL = Over Rev's steering line;
+//                 AN2 THROTTLE = STCC's pedal line (released 0x00); AN3 PITCH
+//                 = 0xFF - (0x80 + the left stick's Y) (AD_STICK_Y, REVERSE).
+//       0x1F Sega Water Ski INPUT_PORTS_START(segawski) (J 4 Coin 5 Select
+//                 Down 6 Test 7 Service 8 Set 9 Select Up 10 Pitch Left
+//                 11 Pitch Right): IN0 as Wave Runner's; IN1 0x01 Set 0x02
+//                 Select Up 0x04 Pitch Left 0x08 Pitch Right; IN2 0xFF; AN0
+//                 SLIDE = the steering line; AN1-AN3 0xFF.
+//       0x20 Behind Enemy Lines INPUT_PORTS_START(bel) (gunblade's; J 4
+//                 Trigger 5 Missile 6 Start 7 Coin 8 Test 9 Service, P2 on
+//                 joystick 1): IN0 0x01/0x02 coins 0x04 SERVICE 0x08 TEST
+//                 0x10/0x20 starts; IN1 0x01/0x02 triggers 0x10/0x20
+//                 missiles; IN2 0xFF; AN0 P1_X 0x69..0xFF, AN1 P2_X
+//                 0x00..0x96, AN2 P1_Y 0x11..0xAE, AN3 P2_Y 0x11..0xAE --
+//                 min + floor((a + 128) * (span + 1) / 256), exact, of any of
+//                 the last 8 stick samples (four channels share a multiply);
+//                 the extremes and the MAME range checked separately.
+//       The C2G 0 builds (dut, dut_nm) read all three as digital IDs; an3 is
+//       0xFF on every other ID and build.
 
 #include "Vtb_m2_2a_inputs_top.h"
 #include "verilated.h"
@@ -93,10 +116,10 @@ static uint32_t adir(uint16_t a) {
   return (x > 48 ? 1u : 0u) | (x < -48 ? 2u : 0u) | (y > 48 ? 4u : 0u) | (y < -48 ? 8u : 0u);
 }
 // the game index the bench switches between, and the ID it drives
-enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_STCC, G_N };
+enum { G_VF2, G_RALLY, G_VCOP2, G_ZG, G_DIG, G_SKY, G_BIKE, G_MANX, G_OREV, G_STCC, G_WAVE, G_WSKI, G_BEL, G_N };
 static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunner / Pilot Kids", "other digital",
                                  "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)", "Over Rev (0x1C)",
-                                 "STCC (0x1D)"};
+                                 "STCC (0x1D)", "Wave Runner (0x1E)", "Water Ski (0x1F)", "Behind Enemy Lines (0x20)"};
 static int game_id(int g) {
   static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x7f};
   switch (g) {
@@ -105,6 +128,7 @@ static int game_id(int g) {
     case G_SKY: return 0x18; case G_BIKE: return 0x1a + rnd(2); case G_MANX: return 0x19;
     case G_OREV: return 0x1c;
     case G_STCC: return 0x1d;   // R933
+    case G_WAVE: return 0x1e; case G_WSKI: return 0x1f; case G_BEL: return 0x20;   // R1010
     default: return dig[rnd(int(sizeof dig / sizeof dig[0]))];
   }
 }
@@ -120,6 +144,10 @@ static Want want_orev() {
   w.in2 = 0xff; w.an0 = w.an1 = w.an2 = -1;   // the channels: near() below
   return w;
 }
+// R1010: Behind Enemy Lines' axes, exact from a stick byte
+static const int BEL_MIN[4] = {0x69, 0x00, 0x11, 0x11}, BEL_MAX[4] = {0xff, 0x96, 0xae, 0xae};
+static int bel_axis(int ch, int a) { int u = (a + 128) & 0xff; return BEL_MIN[ch] + (u * (BEL_MAX[ch] - BEL_MIN[ch] + 1)) / 256; }
+static uint64_t bel_ends[4][3] = {}, c2g_checks = 0, wave_pitch_ends[2] = {0, 0}, wave_thr_ends[2] = {0, 0}, wski_sl_ends[2] = {0, 0};
 static uint64_t orev_near = 0, orev_ends[4] = {0, 0, 0, 0}, stcc_ends[4] = {0, 0, 0, 0};
 // R928: the RTL takes the three channels in turn through one multiply, so an
 // output may lag its input by up to 5 clocks: accept the line of any of the
@@ -134,7 +162,7 @@ static void near(const char *n, uint64_t cyc, int got, const double *h) {
 static int sky_y(uint16_t la) { return (0x80 + int8_t(la >> 8)) & 0xff; }   // 0x80 + y
 static Want want_now(int game, bool motion) {
   uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
-  if (game == G_OREV || game == G_STCC) game = G_DIG;   // R928 / R933: an OREV 0 build reads 0x1C / 0x1D as digital
+  if (game == G_OREV || game == G_STCC || game >= G_WAVE) game = G_DIG;   // R1010: and the C2G IDs   // R928 / R933: an OREV 0 build reads 0x1C / 0x1D as digital
   if (game == G_ZG || game == G_DIG || game == G_VF2) { j0 |= adir(t->joy_analog); j1 |= adir(t->joy_analog_1); }
   Want w;
   if (game == G_RALLY) {   // Sega Rally
@@ -270,7 +298,56 @@ int main(int argc, char **argv) {
     cmp("nm an1", game, c, t->n_an1, wn.an1);
     cmp("nm an2", game, c, t->n_an2, wn.an2);
     // R928: the OREV build -- Over Rev on 0x1C, every other ID as dut
-    if (t->game == 0x1c || t->game == 0x1d) {   // G_OREV / G_STCC, or G_DIG's draw of 0x1C / 0x1D
+    // R1010: the 2C-only C2G build's new IDs (dut_or); C2G 0 builds as digital above; an3 0xFF on those
+    cmp("an3", game, c, t->an3, 0xff);
+    cmp("nm an3", game, c, t->n_an3, 0xff);
+    static int bh[4][8];   // R1010: bel's stick history per channel (newest [0])
+    for (int ch = 0; ch < 4; ++ch) { for (int k = 7; k > 0; --k) bh[ch][k] = bh[ch][k - 1]; }
+    // (sampled before the edge: joy_analog P1, joy_analog_1 P2; X low byte, Y high)
+    bh[0][0] = int8_t(t->joy_analog & 0xff); bh[1][0] = int8_t(t->joy_analog_1 & 0xff);
+    bh[2][0] = int8_t(t->joy_analog >> 8);   bh[3][0] = int8_t(t->joy_analog_1 >> 8);
+    if (t->game == 0x1e || t->game == 0x1f || t->game == 0x20) {
+      uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
+      ++c2g_checks;
+      if (t->game == 0x20) {
+        cmp("bel in0", game, c, t->o_in0, lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 9) << 2 | b(j0, 8) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5));
+        cmp("bel in1", game, c, t->o_in1, lo(b(j0, 4) << 0 | b(j1, 4) << 1 | b(j0, 5) << 4 | b(j1, 5) << 5));
+        cmp("bel in2", game, c, t->o_in2, 0xff);
+        const int got[4] = {t->o_an0, t->o_an1, t->o_an2, t->o_an3};
+        static const char *nm[4] = {"bel P1_X", "bel P2_X", "bel P1_Y", "bel P2_Y"};
+        if (since > 8) for (int ch = 0; ch < 4; ++ch) {
+          bool ok = false;
+          for (int k = 0; k < 8; ++k) if (got[ch] == bel_axis(ch, bh[ch][k])) ok = true;
+          ++checks;
+          if (got[ch] < BEL_MIN[ch] || got[ch] > BEL_MAX[ch]) ok = false;   // MAME's PORT_MINMAX
+          if (!ok && mism++ < 25) std::printf("  MISMATCH %s cyc %llu: dut %02x want %02x\n", nm[ch], (unsigned long long)c, got[ch], bel_axis(ch, bh[ch][0]));
+          if (got[ch] == BEL_MIN[ch]) ++bel_ends[ch][0];
+          if (got[ch] == BEL_MAX[ch]) ++bel_ends[ch][2];
+          if (bh[ch][0] == 0 && got[ch] == bel_axis(ch, 0)) ++bel_ends[ch][1];
+        }
+      } else {
+        cmp("c2g in0", game, c, t->o_in0, lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 5) << 6));
+        if (t->game == 0x1e) {
+          cmp("wave in1", game, c, t->o_in1, lo(b(j0, 8)));
+          cmp("wave in2", game, c, t->o_in2, 0xf7);
+          if (since > 6) { near("wave an0", c, t->o_an0, hs); near("wave an1", c, t->o_an1, hs); near("wave an2", c, t->o_an2, sa); }
+          // the pitch is registered once from the stick: the sample before the edge
+          static int py_d = 0x7f; int py = 0xff - ((0x80 + int8_t(t->joy_analog >> 8)) & 0xff);
+          (void)py_d; cmp("wave an3", game, c, t->o_an3, py);
+          if (t->o_an3 == 0x00) ++wave_pitch_ends[0];
+          if (t->o_an3 == 0xff) ++wave_pitch_ends[1];
+          if (t->o_an2 == 0x00) ++wave_thr_ends[0];
+          if (t->o_an2 == 0xff) ++wave_thr_ends[1];
+        } else {
+          cmp("wski in1", game, c, t->o_in1, lo(b(j0, 8) << 0 | b(j0, 9) << 1 | b(j0, 10) << 2 | b(j0, 11) << 3));
+          cmp("wski in2", game, c, t->o_in2, 0xff);
+          if (since > 6) near("wski an0", c, t->o_an0, hs);
+          cmp("wski an1", game, c, t->o_an1, 0xff); cmp("wski an2", game, c, t->o_an2, 0xff); cmp("wski an3", game, c, t->o_an3, 0xff);
+          if (t->o_an0 <= 0x01) ++wski_sl_ends[0];
+          if (t->o_an0 == 0xff) ++wski_sl_ends[1];
+        }
+      }
+    } else if (t->game == 0x1c || t->game == 0x1d) {   // G_OREV / G_STCC, or G_DIG's draw of 0x1C / 0x1D
       const bool st = (t->game == 0x1d);          // R933: STCC, the pedals not reversed
       cmp("or in0", game, c, t->o_in0, o.in0);
       cmp("or in1", game, c, t->o_in1, o.in1);
@@ -293,6 +370,7 @@ int main(int argc, char **argv) {
       cmp("or an1", game, c, t->o_an1, w.an1);
       cmp("or an2", game, c, t->o_an2, w.an2);
     }
+    if (t->game != 0x1e && t->game != 0x20) cmp("or an3", game, c, t->o_an3, 0xff);   // R1010
   }
   std::printf("  %llu cycles, %llu checks; per game:", (unsigned long long)N, (unsigned long long)checks);
   for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game[g], g + 1 < G_N ? "," : "\n");
@@ -307,6 +385,13 @@ int main(int argc, char **argv) {
   std::printf("  STCC (R933): accel 0x00 %llu / 0xFF %llu cycles, steering <= 0x01 %llu / 0xFF %llu\n",
               (unsigned long long)stcc_ends[0], (unsigned long long)stcc_ends[1],
               (unsigned long long)stcc_ends[2], (unsigned long long)stcc_ends[3]);
+  std::printf("  R1010: %llu C2G cycles; Wave Runner throttle released 0x00 %llu / floored 0xFF %llu, pitch 0x00 %llu / 0xFF %llu; Water Ski slide <= 0x01 %llu / 0xFF %llu\n",
+              (unsigned long long)c2g_checks, (unsigned long long)wave_thr_ends[0], (unsigned long long)wave_thr_ends[1],
+              (unsigned long long)wave_pitch_ends[0], (unsigned long long)wave_pitch_ends[1],
+              (unsigned long long)wski_sl_ends[0], (unsigned long long)wski_sl_ends[1]);
+  std::printf("  R1010 Behind Enemy Lines cycles at min / stick centre / max:");
+  for (int ch = 0; ch < 4; ++ch) std::printf(" ch%d %llu/%llu/%llu", ch, (unsigned long long)bel_ends[ch][0], (unsigned long long)bel_ends[ch][1], (unsigned long long)bel_ends[ch][2]);
+  std::printf("\n");
   std::printf("  R958 Analog control Wheel A / B cycles per game:");
   for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game_wheel[g], g + 1 < G_N ? "," : "\n");
   std::printf("  Sky Target in a wheel mode: %llu cycles where the wheel-mode block's steering differs and Sky Target kept Standard's\n",

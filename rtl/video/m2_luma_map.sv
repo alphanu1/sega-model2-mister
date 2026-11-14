@@ -39,7 +39,7 @@ module m2_luma_map #(
   parameter bit          OREV = 1'b0    // R932: Over Rev's table (needs LSB 5)
 ) (
   input  logic           clk,
-  input  logic [3:0]     game_id,   // its low four bits (the table is used only with big)
+  input  logic [4:0]     game_id,   // R1010: {ID bit 5, ID bits 3:0} (the table is used only with big)
   input  logic           big,       // the large layout's games (Model2.sv a2_big)
   input  logic           zg,        // Zero Gunner (R867's own map)
   input  logic           orev,      // R932: Over Rev (Model2.sv is_orev; used with OREV)
@@ -124,19 +124,19 @@ module m2_luma_map #(
   endfunction
 
   // the first row of each slot's range, s[7] down to s[0]
-  function automatic logic [7:0][7:0] starts(input logic [3:0] g);
+  function automatic logic [7:0][7:0] starts(input logic [4:0] g);
     case (g)
-      4'h3: starts = {8'd100, 8'd96, 8'd92, 8'd76, 8'd54, 8'd52, 8'd51, 8'd47};     // Hanguk Pro Yagu 98
-      4'h4: starts = {8'd142, 8'd138, 8'd132, 8'd100, 8'd96, 8'd76, 8'd7, 8'd6};     // Dynamite Cop
-      4'h5: starts = {8'd255, 8'd254, 8'd253, 8'd252, 8'd251, 8'd250, 8'd249, 8'd0}; // Pilot Kids
-      4'h6: starts = {8'd255, 8'd254, 8'd100, 8'd98, 8'd92, 8'd89, 8'd72, 8'd6};     // Dead or Alive
-      4'h8: starts = {8'd107, 8'd96, 8'd94, 8'd76, 8'd22, 8'd18, 8'd7, 8'd6};       // Sky Target
-      4'hA: starts = {8'd151, 8'd137, 8'd133, 8'd131, 8'd126, 8'd125, 8'd115, 8'd100}; // Motor Raid
+      5'h03: starts = {8'd100, 8'd96, 8'd92, 8'd76, 8'd54, 8'd52, 8'd51, 8'd47};     // Hanguk Pro Yagu 98
+      5'h04: starts = {8'd142, 8'd138, 8'd132, 8'd100, 8'd96, 8'd76, 8'd7, 8'd6};     // Dynamite Cop
+      5'h05: starts = {8'd255, 8'd254, 8'd253, 8'd252, 8'd251, 8'd250, 8'd249, 8'd0}; // Pilot Kids
+      5'h06: starts = {8'd255, 8'd254, 8'd100, 8'd98, 8'd92, 8'd89, 8'd72, 8'd6};     // Dead or Alive
+      5'h08: starts = {8'd107, 8'd96, 8'd94, 8'd76, 8'd22, 8'd18, 8'd7, 8'd6};       // Sky Target
+      5'h0A: starts = {8'd151, 8'd137, 8'd133, 8'd131, 8'd126, 8'd125, 8'd115, 8'd100}; // Motor Raid
       // R924: The House of the Dead (2C, 0x17): MAME 0.289's attract, six
       // dumps over 3D frames 300-2000 use rows 0, 40, 76, 94, 96, 100 (76 and
       // 100 equal); the luma RAM is constant after boot. 60 and 120 are
       // guesses for play (rows with content no attract polygon names).
-      4'h7: starts = {8'd120, 8'd100, 8'd96, 8'd94, 8'd76, 8'd60, 8'd40, 8'd0};
+      5'h07: starts = {8'd120, 8'd100, 8'd96, 8'd94, 8'd76, 8'd60, 8'd40, 8'd0};
       // R928: Over Rev (2C, 0x1C; Sega Rally's layout, so Model2.sv passes
       // big for it): MAME 0.289's 39 walk dumps over 160 s (attract, menus,
       // a race) use 98 rows of 0-51 and 128-195 with 95 distinct contents;
@@ -144,12 +144,23 @@ module m2_luma_map #(
       // first row is written). R900's DP: polygon-weighted mean |diff| 2.0 of
       // the game's 0..63 luma (16 slots would give 1.1); 14% of polygons on
       // rows more than 4 off (row 51 the worst, 25).
-      4'hC: starts = {8'd178, 8'd176, 8'd139, 8'd129, 8'd22, 8'd14, 8'd10, 8'd0};
+      5'h0C: starts = {8'd178, 8'd176, 8'd139, 8'd129, 8'd22, 8'd14, 8'd10, 8'd0};
       // R933: Sega Touring Car Championship (2C, 0x1D; the large layout, so
       // big): MAME 0.289's walk dumps over attract, qualifying and a race draw
       // textured polygons on rows 0 and 1 only -- each its own slot, exact.
       // OREV (the 2C build) only: the 2A build's logic is unchanged.
-      4'hD: starts = OREV ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;
+      5'h0D: starts = OREV ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;
+      // R1010: Wave Runner (2C, 0x1E), Sega Water Ski (0x1F), Behind Enemy
+      // Lines (0x20): MAME 0.289 walk dumps every 8 s over 240 s of attract
+      // and play (28 / 25 / 28 dumps). Wave Runner draws 31 rows of 100-157,
+      // Water Ski 22 of 100-155: the eight ranges an exhaustive search over
+      // the drawn rows picks (area-weighted per-pixel mean |luma error| 0.36
+      // and 0.14 of 63; 2.0% and 1.0% of drawn pixels on a row more than 4
+      // off). Behind Enemy Lines draws rows 0 and 1 only: exact, as STCC.
+      // OREV (the 2C build) only.
+      5'h0E: starts = OREV ? {8'd150, 8'd135, 8'd131, 8'd126, 8'd117, 8'd116, 8'd115, 8'd100} : '0;
+      5'h0F: starts = OREV ? {8'd136, 8'd131, 8'd118, 8'd117, 8'd115, 8'd109, 8'd105, 8'd100} : '0;
+      5'h10: starts = OREV ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction
