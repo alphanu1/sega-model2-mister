@@ -48994,7 +48994,7 @@ the module itself; the estimate is the whole core's):*
      go to M10K. Clip -175 ALUT, -803 registers; engine -62 registers;
      +7 M10K, -13 + 10 LABs; estimate -371. sim/miter/geo.sh: tb_m2_geometry
      plain and MIPZ (MIPZ with -GM10K_ROOM=1), the geodiff walks r5701 /
-     r6601 (2A) and w4000 / w9000 (main): 0 cycles differing in 3.5 M, the
+     r6601 (2A) and w4000 / w9000 (main): 0 cycles differing in 4.1 M, the
      pool's operand hash unchanged on every walk; the clipper's own bench
      (tb_clip_top, 2,003 random quads against MAME's clipper transcribed)
      through a miter: 3,280,961 cycles, 0 differing.
