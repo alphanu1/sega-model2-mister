@@ -49787,3 +49787,209 @@ draining buffer writes.
   * The FP result wait (21% of clocks on the scoreboard) and the two-clock
     fetch floor are the structure's: a shorter FP unit or a two-ahead fetch
     with one-clock words, each a redesign, not a small bit.
+
+**R1011 -- THE CORE'S i960 ON STCC'S RACE, MEASURED: s = 1.38 (LATENCY 6) /
+1.55 (12), NOT R1005's INFERRED 2.1-2.6; ITS CLOCKS BY CAUSE; FOUR TIMING
+CHANGES, EVERY BUS ACCESS AND ITS ORDER UNCHANGED, TAKE THE RACE'S CPI 7.48
+-> 6.89 (-7.9%) AT LATENCY 12 AND SEGA RALLY'S 10.14 -> 9.78 (-3.5%); THE
+LAST SLOWDOWN FRAME (6966) IS THE i960's OWN AND THE MODEL PUTS IT UNDER A
+VBLANK NOW (19.3 -> 17.1 ms, LATENCY 12). NOT FITTED, NOT ON A BOARD.**
+Branch i960-cpi (off stcc-sound-2c ea3ba75d), 2026-11-14.
+
+*What was believed (R1005, R1009):* s, the core's i960 time per MAME's, was
+never measured on STCC: inferred 2.1-2.6 from R927's CPIs on other games
+(Rally 7.18 / 8.18, VF2 9.63, Manx 10.14) against "MAME's CPI ~2.4". R1009:
+the last race slowdown (frame 6966) is the TGPx4's only if s <= ~2.2, above
+~2.4 the i960's. R927's remaining list: 2-way i-cache ~-7%, fills from the
+bridge's line ~-7%, store buffer ~-5%, the displacement from a second i-cache
+port ~-7%, the CPU on clk_sys the largest.
+
+*THE INSTRUMENT (new, committed): THE i960 FROM A MAME CHECKPOINT.*
+  * tools/mame_i960_ck.lua (MAME 0.289, -debug -debugger none): a breakpoint
+    at a MAIN-LOOP address after time CK_T (STCC 0x1164, the return from its
+    flip-and-wait 0x76380; Sega Rally 0x5a2250), where no return can go above
+    the frame, so MAME's register cache (not visible to Lua) is never needed.
+    A periodic callback (MAME runs those while the debugger is stopped) writes
+    the registers and the memory, and read / write taps on the whole space log
+    every access after it with the i960's ip, pip and local time. A read at
+    the ip is a fetch (taps see opcode fetches).
+  * sim/i960ck/ck_prep.py: the instruction stream; each MEM instruction's own
+    words (four byte accesses for an unaligned word, as MAME and i960_lsu
+    split them); MAME's burst-stall resumes merged (a FIFO read MAME found
+    empty is re-executed from its first word, i960_stall); a load interrupted
+    while stalled dropped (the take's vector read carries ip = the load: it
+    had not executed); interrupt entries found where the handler starts.
+  * m2_i960_ck_harness + tb_i960_ck (make ck_i960; CK_G for 2A): i960_top as
+    Model2.sv builds it (2C: ring of 8, 1 KB data cache, VC/FR/F2A/C2; 2A
+    Rally: + m2_waitst), the real m2_cpu_bridge (2:1 clocks, FAST_ACK 0), a
+    memory model on its SDRAM port at LAT clk_sys cycles (R927's LAT 6 / 12),
+    tile RAM / palette on chip. A stub boots the RTL into MAME's state (ROM
+    words 0 / 4 / 12 patched in the bench's image; synmov ICR, modac, modpc,
+    g0-g14, then ret into MAME's frame written to memory with rip = the
+    checkpoint ip). Every accepted ip, every LSU access (aligned address,
+    lanes, direction, value) and every I/O access is compared with MAME's in
+    order; the bridge's I/O port is answered from MAME's reads AT ONCE, so the
+    time is the i960's own (no TGPx4 wait). Interrupts are raised on their
+    line once the RTL has accepted the instructions MAME ran before them.
+    Profile: clk_i960 cycles by sequencer state, LSU waits by region / hit,
+    i-cache fills, per game frame with the spin loop apart, and MAME's own
+    time per instruction (its fixed per-opcode charge: the shortest gap seen
+    after that ip) -- s per frame. Three digests (instructions, LSU, I/O
+    streams, each in its own order) for A / B identity.
+  * STCC race start, 121.03 s (the countdown's "1", R1005's start frames),
+    0.6 s: 4,772,816 instructions, 35 game frames, all MAME's -- PC, every
+    LSU access and every I/O access -- with 473 LSU values that differ (below).
+    Rally race (AP as R927), 35.03 s, 0.5 s: 28 frames identical; the window's
+    last 0.15 M instructions fail on a prep edge (a FIFO load around an
+    interrupt) identically in every build. Run times ~1 min.
+  * sim/tgpx4/x4_pace_model --scale-file: s by game frame (the bench's frame
+    k is the model's 6946 + k: the light / transitional / heavy pattern of
+    MAME's own time lines up at 6965 / 6966).
+
+*WHAT WAS MEASURED (STCC race, base = ea3ba75d's i960; busy = all but the
+flip-wait spin; per busy instruction):*
+
+                               LAT 6     LAT 12
+    CPI                        6.653     7.477
+    s (core / MAME own)        1.383     1.554    start frames 1.44 / 1.62
+    T_FETCH + T_EXEC           2.000     2.000    the floor: one accept, one execute
+    fetch wait, i-cache fill   1.13      1.53     ~97-104 k fills, 65 / 1000 instr., 36-38 cycles each
+    fetch wait, no fill        0.52      0.52     T_FETCH2_W 2 cycles a two-word (21% of instr.), redirects
+    T_MEM_W                    2.38      2.66     below
+    FP                         0.45      0.45
+  LSU (LAT 12): program ROM reads 99 k at 11 (literal pools), board RAM read
+  misses 80 k at 9.8 / hits 88 k at 2.1, data ROM 72 k at 5.8-9.5, stores
+  ~270 k at 3-14 (FIFO pushes 3.8, board RAM 6, buffer / char RAM 14: two
+  16-bit SDRAM writes each, serialised), comm / I/O board reads 52 k at 5.
+  MAME's own CPI on this code is 3.0 cycles of 25 MHz (193 ms / 1.608 M), not
+  2.4. Frame 6966 (bench frame 20) is not like the rest: MAME's own 8.5 ms,
+  the core's 17.8 / 20.6 ms (s 2.1 / 2.4) -- a glyph upload: ldq from the
+  data ROM at a halfword address (16 byte reads each) into char RAM (stq, 9.8
+  -14 cycles a word), 4.4 CPI of its 10.3. Sega Rally (LAT 6 / 12): CPI 8.65
+  / 10.14, s 1.46 / 1.71; its code runs from work RAM and misses the 8 KB
+  i-cache 136 times a 1000 instructions (2.8 CPI of fill wait at LAT 12).
+
+*THE CHANGES (rtl/cpu/i960; i960_top parameters, Model2.sv M2_2A_I960_R1011,
+default 1, the 2A board and its 2C build only -- the original board's core
+is unchanged):*
+  1. IC_PAIR (i960_icache PAIR): the data array in two banks by word parity,
+     each read at its own address, so an answer from the array carries the
+     line's next word too. A two-word instruction then has its displacement
+     at its accept and goes straight to T_EXEC (prefetching ip+8 there), not
+     two cycles of T_FETCH2_W. Not for a line's last word or an early-restart
+     answer. STCC CPI -3.1% / -2.7%.
+  2. DC_ROMS (i960_dcache ROMS): the program and data ROMs' reads cached too.
+     Nothing writes them while the CPU runs and the bridge drops a CPU write
+     (is_rom), so a write there leaves a held word alone. Tag addr[25:IW+4].
+     Hits: program ROM 51 k of 99 k, data ROM 52 k of 72 k. -2.6% / -2.3%.
+  3. LSU_ST1 (i960_lsu ST1): a store's first word on the bus the cycle after
+     its request -- the source was already being read from T_EXEC; S_OPD only
+     for a later word of stl / stt / stq. -1.9% / -1.7%.
+  4. LSU_POST (i960_lsu POST): a one-word aligned store retires the cycle its
+     request goes out; its data held in wd_q; the LSU finishes it behind the
+     next instructions, and a load or store that finds it busy waits in
+     T_EXEC. The request holds the arbiter's grant from its first cycle, so
+     every other master (frame spills, the interrupt path, i-cache fills)
+     still follows it. -1.7% / -1.4%.
+
+*MEASURED (each step's digests equal to the base's at LAT 6 and 12; final
+= 7b9a493e):*
+
+                         STCC LAT 6        STCC LAT 12       Rally LAT 6      Rally LAT 12
+    base                 6.653 (s 1.383)   7.477 (s 1.554)   8.648 (1.459)    10.139 (1.711)
+    + PAIR               6.444             7.273
+    + ROMS               6.275             7.108
+    + ST1                6.153             6.989
+    + POST (final)       6.049 (s 1.257)   6.890 (s 1.432)   8.273 (1.396)    9.780 (1.650)
+                         -9.1%             -7.9%             -4.3%            -3.5%
+  Frame 6966: 17.85 -> 14.88 ms (LAT 6), 20.59 -> 17.63 ms (LAT 12); start
+  frames 6.33 -> 5.81 / 7.15 -> 6.65 ms. THE GAME'S FRAME (x4_pace_model,
+  R1009's TGPx4 profile race_v12, s by frame from these runs, the window's
+  median elsewhere, from 6427): LAT 6 0 frames over a vblank before and after
+  (6966 17.24 -> 15.03 ms); LAT 12 base 1 over (6966 19.28 ms, 2 vblanks),
+  final 0 (6966 17.07 ms -- 0.3 ms inside 17.39). So at the measured s the
+  board's last race slowdown is the i960's own glyph-upload frame, not the
+  TGPx4's; these changes move it inside a vblank at latency 12 with little
+  margin. The board's latency is not known (R927: 12 is the guess).
+
+*IDENTITY, HOW PROVEN:* the checkpoint bench (STCC 4.77 M instructions,
+Rally 4.2 M: three digests equal in every build, both latencies); the
+lockstep suite (test_i960_top, _irq, _lat, _c2, _fx, _fr, _vc, _ring, _dc,
+test_i960_lsu, _icache, _icache_r817 with a fifth configuration PAIR 0 and a
+second-word check, _dcache with two ROMS configurations whose ROM words are
+seeded and whose ROM writes are dropped) all PASS. Planted faults: data2
+from the wrong bank (BAD SECOND WORD), the line's last word paired, the
+dcache updating a ROM word on a write, the ROMS tag narrowed, the store
+source not read in T_EXEC, the T_EXEC hold removed (stall), the posted data
+not held -- all caught by the unit / lockstep benches; the displacement
+taken from the instruction word, and the AGU operand lost while waiting on a
+posted store, SURVIVE every lockstep run (its generator's programs miss in
+the i-cache and never wait in T_EXEC) and are caught only by the checkpoint
+bench (STCC in 41 instructions; the second only by Rally, at 4,043).
+
+*WRONG FIRST, KEPT:*
+  * POST first changed T_EXEC's port-1 read to the store source in every
+    cycle; a load held there behind a posted store then computed its address
+    from its destination register. The lockstep passed; Rally's checkpoint
+    failed at 4,043 instructions (ldq 0x2864b40[g5*16] after st g14,(g4)).
+    Port 1 now keeps the address operand while the LSU is busy.
+  * test_i960_top compared memory after each retire, which a posted store may
+    not have reached yet (lat 3 / 7): the bench lays the in-flight store's
+    bytes over its copy for that compare.
+  * One digest over the interleaved streams changed with POST and with the
+    latency (a posted store completes after later accepts); one per stream.
+  * MAME's instruction time first taken as the gap to the next instruction:
+    stalls on the FIFO counted as work (s 1.31 over the window at LAT 6); its
+    fixed per-opcode charge (the shortest gap after that ip) gives 1.38.
+  * Every ldq / stall rule in the prep was found by the PC compare failing:
+    unaligned words are four accesses, a stalled load interrupted is not an
+    instruction, a stalled read is the attempt's last FIFO read.
+
+*FOUND ON THE WAY (not changed; flagged):*
+  * MAME maps 2C's 0x804000 (geo_prg) and 0x880000 (function port) WITHOUT
+    i960 BURST; i960_memmap steps the address there (the 2A map). The core
+    decodes 0x804000-0x807fff as one push port, so the 19,977 stepped geo
+    writes in STCC's window land the same; a multi-word store to the function
+    port would form different command codes (fn_code is address bits 11:4) --
+    none in this window. i960_memmap C2 should follow MAME's 2C map.
+  * STCC's race carries subnormals (0x202638 = 0x8000089c, 0xa788-0xa7cc):
+    the RTL's FP units flush them (8.1), MAME keeps them -- 473 LSU values a
+    0.6 s window differ from MAME's, never an address or the control flow.
+    R998's "nothing measured puts a subnormal in a game" no longer holds.
+  * STCC's ldq 0x40(fp) at 0x52054 reads a stack word nothing wrote: its value
+    differs from MAME's (the ring's save areas, R927) and is overwritten
+    before use.
+
+*REJECTED / NOT DONE (STCC LAT 12 unless said):*
+  * A 2-way 8 KB i-cache: modelled on the captures, STCC fills -16%, Rally
+    -1% (capacity, not conflict: 16 KB -15%, 32 KB -36% for Rally); ~-3.5%
+    on STCC for twice the tag MLABs and R817's machinery. 16 / 32 KB: +8 /
+    +24 M10K, no room.
+  * THE NEXT LEVER, NOT BUILT: a fill's first word is ~21 cycles at LAT 12
+    because the bridge reads a line as two 4-word SDRAM bursts in sequence;
+    m2_sdram's 8-word p_long on port 1 (R787 / R817's suggestion) would save
+    one burst (~6-7 cycles a fill: est. -5% STCC, -8% Rally), but it is the
+    shared CDC and bridge, and this bench's SDRAM is a latency model.
+  * FAST_ACK (R730): the board's lock (R753) is unexplained.
+  * A data-cache hit in one cycle (index from the AGU in T_EXEC): ~-1.7%, a
+    new path from the AGU into the M10K address; 2 KB data cache ~-1% (+1
+    M10K), 4 KB ~-1.7% (+3).
+  * Unaligned word loads as aligned pairs (frame 6966's ldq: 16 byte reads):
+    changes the LSU's access stream (MAME reads bytes); not done.
+  * Overlapping fetch and execute: the i-cache answers two cycles after a
+    request, which is the 2-CPI floor; a front-end redesign.
+  * VF2 not captured (time); its coroutine switch needs a main-loop
+    checkpoint like the others.
+
+*AREA (quartus_map 17.0, the whole 2C core as this branch's QSF builds it,
+DSB on):* base ea3ba75d 39,672 ALM, 3,906,220 block bits; PAIR + ROMS + ST1
+39,644 (-28: the map's noise), block bits identical, +35 registers; final
+(7b9a493e) 39,701 (+29 on the base), 45,709 registers (+69), block bits
+identical. M10K by shape: the i-cache's 2048 x 32 (7 M10K at 2048 x 5) is
+now two 1024 x 32 (4 + 4 at 1024 x 10): +1 M10K (530 -> 531 of 553 on
+s2540's count).
+
+*NOT SETTLED:* the board's s (the bench's memory is a latency model with
+no other masters; R927's LAT 12 is the board guess); timing at 40 MHz of the
+three-way i-cache output mux (one LUT, as before with two) and of lsu_busy
+into port 1's address; whether the changes move the board's slowdown.

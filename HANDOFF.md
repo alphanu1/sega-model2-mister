@@ -1,5 +1,35 @@
 # Handoff
 
+## 2026-11-14 (late): i960-cpi -- the i960's CPI on STCC's race measured and cut ~8% (R1011), quartus_map only
+
+Branch `i960-cpi` off stcc-sound-2c ea3ba75d. Study R1011 has the record.
+Not fitted, not on the board.
+
+  * New bench: the RTL i960 started from a MAME checkpoint inside a game's
+    race (tools/mame_i960_ck.lua, sim/i960ck/, `make ck_i960`), checked
+    against MAME's instruction, load / store and I/O stream, with cycles by
+    cause and s per game frame. STCC race start: 4.77 M instructions all
+    MAME's; Sega Rally race: 4.2 M.
+  * s on STCC's race is 1.38 (latency 6) / 1.55 (12) -- not R1005's inferred
+    2.1-2.6. The last slowdown frame (6966) is the i960's own glyph upload
+    (s 2.1-2.4 on that frame), not the TGPx4.
+  * Four timing changes, 2A / 2C only (Model2.sv M2_2A_I960_R1011, default
+    1): the displacement with its instruction word (two-bank i-cache), the
+    ROMs' reads in the data cache, a store's first word a cycle sooner,
+    one-word stores posted. Digests equal to the base's; lockstep suite and
+    planted faults pass / caught. STCC CPI 7.48 -> 6.89 (LAT 12, -7.9%),
+    Rally 10.14 -> 9.78 (-3.5%). Pace model with the measured s: frame 6966
+    19.3 -> 17.1 ms at LAT 12 (0 frames over a vblank; 1 before).
+  * Map (whole 2C core, DSB on): 39,672 -> 39,701 ALM (+29), +69 registers,
+    block bits identical; +1 M10K by shape (the i-cache in two banks).
+  * Flagged, not changed: MAME's 2C map has 0x804000 / 0x880000 non-BURST,
+    i960_memmap steps them; STCC's race has subnormals the RTL flushes.
+
+REMAINS: a fit (clk_i960 paths: the i-cache's 3:1 output mux, lsu_busy into
+the register file's port-1 address); the board. Next lever: line fills as
+one 8-word SDRAM burst (est. -5% STCC, -8% Rally; shared CDC / bridge).
+VF2 not captured.
+
 ## 2026-11-14 (later): stcc-speed -- R1006 re-timed for 80 MHz (R1009), quartus_map only
 
 R1006 missed clk_sys by 1.4-2.2 ns on every 2C seed (s2520-s2522 DSB off,
