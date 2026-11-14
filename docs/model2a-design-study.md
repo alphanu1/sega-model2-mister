@@ -49670,3 +49670,120 @@ the module itself; the estimate is the whole core's):*
 *Not settled:* the fit (LABs, clk_sys, HDMI), the board; M10K ~479 of 553
 by shape (R1004's ~459 + 20); whether the 2,543 registers fewer pack into
 LABs as the R984-R988 savings did.
+
+**R1009 -- R1006 MISSED clk_sys BY 1.4-2.2 ns ON EVERY 2C SEED, ALL IN
+tgpx4_core, AND ITS FITTED COST WAS +1,794 ALM, NOT THE MAP'S +642. THE
+BOARD (s2540) RUNS STCC "GREAT", ONE OR TWO SLOWDOWNS LEFT IN THE BUSY
+RACE. RE-TIMED: EVERY DECISION S_DEC AND THE TAKE ACT ON IS NOW REGISTERS
+OR A SHORT DECODE OF THEM; THE SPEED IS KEPT (RACE 3.27 clk / word AGAINST
+R1006's 3.22). NOT FITTED.** Branch stcc-speed, 2026-11-14.
+
+*The fits (the coordinator's, Quartus 17.0, 80 MHz):* DSB off (576856d0)
+s2520 / s2521 / s2522 clk_sys -1.356 / -2.213 / -2.025, 41,351-41,489 ALM
+fitted, 494 M10K (s2301, the base, 39,556: R1006 +1,794 fitted -- the
+TGPx4 2,802 -> 3,586, the rest spread over modules R1006 did not touch);
+with area-2c and dsb-shrink (stcc-sound-2c) s2540 / s2541 / s2560 / s2561
+-1.426 / -1.656 / -2.232 (the fill's mul_n there) / -1.784, ~41,100 ALM,
+530 / 553 M10K. ON THE BOARD (Ben, s2540, clk_sys -1.426 in the cache paths,
+everything else clean but gen3 recovery -0.120): STCC runs great, "maybe 1 or
+2 slowdowns" left in the busy race; the ROM cache stays.
+
+*THE PATHS (quartus_sta on the seeds' databases, full paths read; sm2-builds/
+stcc-speed/sta):* two families, one cone.
+  1. aop_q / fp_add out_valid -> a_int_arr -> the writer's candidate mux ->
+     bank_cf -> "written this clock" -> pend_l -> the scoreboard lookups ->
+     dec_hz -> the S_DEC state and every S_DEC enable (ar, rpc, ext_addr,
+     pcs, xd): 14.07 ns on s2521 (-2.213). R1006 decided in the arrival clock
+     whether a result was written then, and the scoreboard's relaxation and
+     the forwarding hung on that decision.
+  2. The ROM cache's tag (xt_mem) and data M10K outputs -> xc_hit -> the
+     hold (xa_more) -> the same writer cone, and xc_hit -> S_XA's word end
+     -> acc -> rpc, nx_ir, lpc, modr (-1.356 to -2.0).
+  Behind them (s2521, other start points): ir[59] -> the issue rules ->
+  dec_hz -> acc -> rpc -0.496; s.S_XA -> the special-register read -> mv_val
+  -0.592 (+1.231 in s2301, the base: R1006's longer mv_val mux); xd.sk[1] ->
+  the hold -> ar -1.550. In the base fit the TGPx4's worst was +0.660.
+
+*THE CHANGES (rtl/tgpx4; each lockstep-clean on the race window first; race
+clk / word, 20 M clocks from frame 6900, R1006 = 3.212):*
+  * THE WRITER ON A SCHEDULE DECIDED A CLOCK AHEAD (a_wq / m_wq, a_ws / m_ws,
+    wrm_q): which result each bank port writes, from the result register or
+    straight from the arriving unit, is a register. fp_add, the converter,
+    fp_mul and the integer multiply answer a fixed number of clocks after the
+    go pulse (4 / 6 / 4 / 2 -- the bench now stops if any arrival is not the
+    one predicted), so each queued op counts down (acnt / mcnt) and the
+    clock before it arrives is known from registers; FRCP / FRSQ and the
+    integer ALU are registered and written from there. The scoreboard's
+    "written by the end of this clock" is pend & ~wrm_q, and forwarding
+    selects on the registered schedule: the data still comes from the unit
+    in the arrival clock, so a word on its predecessor's FP result starts in
+    that clock, as in R1006. First tried with every result registered and
+    written a clock later (simpler): 3.475 -- the FP dependency a clock
+    longer, and the go rule below. Kept the schedule instead.
+  * NO HOLD: a result is written at the earliest the clock after the go
+    pulse, so a register-file source read in S_XA (that clock) or S_XB (the
+    next) still sees the value before -- MAME's sources-before-ALU -- and the
+    go waits only when an external read in S_XA holds a source B back. No op
+    writes a special register a source B can name (0x20-0x3f). First tried
+    as "go only once every source is read": 3.475 -> 3.460 when relaxed.
+  * THE CACHE'S WORD TAKEN ON TRUST: S_XA takes the M10K data and moves on,
+    the tag compare is registered (xc_hq), and S_WXA (an external source
+    always has a destination) writes only if it hit; a miss writes nothing,
+    goes back to S_XA and to memory, a clock later than R1006. First tried
+    as a registered compare before acting (a clock on every hit): 3.460 ->
+    3.410 when made speculative.
+  * The S_DEC word end (w_dec1), the S_DEC register-file source decision
+    (xs_q) and the special-register read's phase (spc_mq: S_XA's state bit
+    had all its fanout on that path) registered with the word.
+  * Result: 3.257 (this window); race 150 M clocks from frame 7000 3.265
+    (R1006 3.221, base 6.484: 1.99x).
+
+*MEASURED (final = 28acab4d):*
+  * STCC race window: 46.0 M words, 376,169 outputs 0 differ, lockstep 0
+    bad. HOTD / Over Rev first 60 M words: 3.179 / 3.435 clk / word (base
+    5.707 / 5.747; R1006 3.119 / 3.354), 2,751,773 / 2,206,240 outputs 0
+    differ, lockstep 0 bad. Latency 1 / 40 + 0-20: 3.204 / 4.942, 0 differ, 0
+    bad; 120 + 0-80: 10.328, 29,908 outputs 0 differ, 0 bad; HOTD / Over Rev
+    at 60 + 0-60 (30 M words): 3.187 / 3.426, 0 differ, 0 bad.
+  * PARAMETERS KEPT FOR AREA / SPEED CHOICES (m2_copro X4_FWD, X4_WQ, X4_XSRF,
+    X4_QD2, X4_CTLD; Model2.sv M2_2C_X4FWD / M2_2C_X4WQ), race window from
+    frame 6900, 20 M clocks, on the first re-timed version (3.475): no
+    forwarding 3.660 (+5.3%); one op of a class in flight 3.829 (+10%); the
+    control word's effect in S_WXA, not S_DEC, 3.754 (+8%); the S_DEC
+    register-file source off 3.581 (+3%); no ROM cache 3.972 (+14%); a 4-deep
+    write queue 3.536 (+1.8%). At latency 40 a 32- or 64-deep write queue
+    gains nothing (4.942 each): the writes are drain-bound, each a pair of
+    16-bit port writes with an idle clock between (R133's rule).
+  * AREA (quartus_map 17.0, DSB off, base 39,263): R1006 39,905; re-timed
+    (first) 39,776; final 39,823 (+560), 47,220 registers, TGPx4 52 M10K by
+    shape as R1006, m2_copro 5,069 ALUTs (R1006 4,987, base 4,073). On the
+    first: no forwarding -40, no cache -49, 4-deep queue +42 (out of MLAB);
+    on the final: no forwarding +6, 4-deep queue -19. Every option is within
+    the map's noise of tens of ALM; the fitted +1,794 is placement, not any
+    one feature, and none of them is worth its speed in ALM.
+
+*WHERE THE BOARD'S LAST SLOWDOWNS ARE (x4_pace_model, the final's race
+profile, from 112 s):* at s = 1.84 none; at s = 2.2, 2.4, 2.5, 2.6 one frame,
+6966; at 2.8 three (6966, 6967, 7024). Frame 6966 at s = 2.2: 17.85 ms, the
+i960's own 14.75, waiting for results 2.41, on a full input FIFO 0.39 (MAME's
+own frame there 11.67 ms, its slowest). What a faster TGPx4 does to it (the
+R1006 profile with every word's cost scaled): at s = 2.2 x0.88 clears it
+(0.9 does not: 17.42 ms); at s = 2.4 it takes x0.5; at s = 2.6 nothing does
+-- the i960 alone is 17.43 ms. So the TGPx4 still holds the last frame only
+if the board's s is ~2.2 or less; above ~2.4 it is the i960. s on the board
+is still unmeasured (R1005's open point: the M2_WHY build with WHY_SYNC0 =
+0x76380 gives it). On the board the TGPx4 is also slower than this bench's
+latency 6: at latency 40 it runs 4.94 clk / word, ~one fifth of its time
+draining buffer writes.
+
+*WHAT A "SMALL BIT MORE" COULD BE, AND WHAT IT COSTS (not built):*
+  * THE BUFFER WRITES AS ONE 32-BIT WRITE: the largest at board latency (at
+    40, 20% of the TGPx4's clocks wait on the write queue, and a deeper queue
+    buys nothing). It is the shared write path (m2_wr_arb, the SDRAM CDC),
+    16-bit with an idle clock between owners' requests, not the TGPx4's:
+    a two-beat write there is shared logic for every game.
+  * ST forwarded into S_DEC's condition (ST hazards 3.2% of clocks): ~1%,
+    a path from the writer's flags into cond -> take, the kind just removed.
+  * The FP result wait (21% of clocks on the scoreboard) and the two-clock
+    fetch floor are the structure's: a shorter FP unit or a two-ahead fetch
+    with one-clock words, each a redesign, not a small bit.

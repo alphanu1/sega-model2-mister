@@ -277,6 +277,15 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2C_XCACHE
 `define M2_2C_XCACHE 12
 `endif
+// R1009: M2_2C_X4FWD, the TGPx4's operand forwarding (1; 0 = a word on its
+// predecessor's result waits a clock more); M2_2C_X4WQ, its posted buffer
+// write queue, 2^n deep (4 = 16)
+`ifndef M2_2C_X4FWD
+`define M2_2C_X4FWD 1
+`endif
+`ifndef M2_2C_X4WQ
+`define M2_2C_X4WQ 4
+`endif
 `endif
 // R979: M2_2C_DSB, SEGA TOURING CAR CHAMPIONSHIP'S MUSIC -- the Z80 Digital
 // Sound Board (MAME dsbz80; rtl/sound/dsb_board.sv, from Model 1's Star Wars
@@ -676,11 +685,15 @@ localparam bit M2A = 1'b0;
 localparam bit          C2        = M2A;
 localparam int unsigned C2_PLINES = `M2_2C_PLINES;
 localparam int unsigned C2_XCACHE = `M2_2C_XCACHE;   // R1006
+localparam bit          C2_X4FWD  = (`M2_2C_X4FWD != 0);   // R1009
+localparam int unsigned C2_X4WQ   = `M2_2C_X4WQ;
 localparam bit          DSB       = M2A && (`M2_2C_DSB != 0);   // R979
 `else
 localparam bit          C2        = 1'b0;
 localparam int unsigned C2_PLINES = 1024;
 localparam int unsigned C2_XCACHE = 0;
+localparam bit          C2_X4FWD  = 1'b1;
+localparam int unsigned C2_X4WQ   = 4;
 localparam bit          DSB       = 1'b0;
 `endif
 // R891: VERILOG_MACRO "M2_MEMTEST=1" (with "M2_PROBE=1"; or -DM2_MEMTEST to
@@ -4876,7 +4889,7 @@ end
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
 m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
-           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE)) u_copro (   // R852, R888; R924, R931
+           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE), .X4_FWD(C2_X4FWD), .X4_WQ(C2_X4WQ)) u_copro (   // R852, R888; R924, R931
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),

@@ -1,5 +1,28 @@
 # Handoff
 
+## 2026-11-14 (later): stcc-speed -- R1006 re-timed for 80 MHz (R1009), quartus_map only
+
+R1006 missed clk_sys by 1.4-2.2 ns on every 2C seed (s2520-s2522 DSB off,
+s2540-s2561 with the sound board), all in tgpx4_core. Ben ran s2540 on the
+board anyway: STCC great, 1-2 slowdowns left in the busy race; the ROM cache
+stays. Study R1009 has the record.
+
+  * The two path families (the writer's same-clock decision feeding the
+    scoreboard and S_DEC; the cache's M10K outputs feeding the sequencer) are
+    gone: the writer's schedule is decided a clock ahead from per-op
+    countdowns (results still written as they arrive), the cache's word is
+    taken on trust and a miss recovered from S_WXA, and S_DEC's own word end,
+    source-read choice and special-read phase are registered.
+  * Speed kept: race 3.265 clk / word (R1006 3.221, base 6.484); HOTD 3.179,
+    Over Rev 3.435 (base 5.71 / 5.75). All benches 0 differ, lockstep 0 bad,
+    latency 1 / 40 / 120.
+  * quartus_map DSB off: 39,823 ALM (R1006 39,905), 52 M10K in the TGPx4.
+  * The last slowdown (frame 6966) is the TGPx4's only if the board's s is
+    <= ~2.2 (a further x0.88 clears it); above ~2.4 it is the i960's own
+    time. s on the board is not measured (M2_WHY, WHY_SYNC0 = 0x76380).
+
+REMAINS: a fit of 28acab4d (DSB off and the combined branch); the board.
+
 ## 2026-11-14: stcc-speed (local, not pushed) -- the TGPx4 2x faster on STCC's race (R1006), quartus_map only
 
 Study R1006 has the record. Not fitted, not on the board.
