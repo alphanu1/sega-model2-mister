@@ -48515,3 +48515,149 @@ bus's real latency under the scaler and Linux (R351 measured 130-500 ns);
 whether STCC's title list's +0.71% is visible (it is 0.32 video frames of
 draw); the textured picture's timing dependence in the texel path, which
 this change will exercise differently on the board.
+
+*R1003 CONTINUED (2026-11-14, after Ben: "if its slower we dont want it --
+STCC already drops to 30 fps"). THE RULE IS NOW: NO LIST DRAWS SLOWER THAN
+THE RELEASE STORE, textured and untextured, at DDR3 latency 40 and 400.
+RESULT: TEXTURED, EVERY LIST IS EQUAL OR FASTER AT 40 AND 400. UNTEXTURED
+(OSD textures Off), SEVEN CASES ARE STILL SLOWER, BY 28 TO 2,870 CYCLES
+(+0.01% TO +0.65%): STCC 1500 / 4500 / 6000 at 40, HOTD 1808 (alone and
+behind 1500), STCC 1500 and 4500 at 400; THE CAUSE IS NAMED BELOW AND IS NOT IN THE
+PAYLOAD PATH. NOT SHIPPABLE UNDER THE RULE AS IT STANDS -- STOPPED HERE.*
+
+*Changed (both measured, both kept):*
+  1. m2_ddram_mux's grant is decided IN THE CYCLE, frame buffer first (it was
+     Model 1's registered alternation): m2_ddr3's command goes straight to
+     the bus unless a payload command is already on it (left under BUSY, or
+     a write burst part done); b_busy says whether B WOULD be granted, since
+     the payload raises a command only after a cycle of !BUSY. m2_ddr3
+     "command held" by the mux: 1,621 cycles -> 0 in STCC 1500 at 40, and
+     that list -66 cycles where it was +2,735. tb_m2_ddram_mux 1,020,496
+     checks, 0 fails, 0 protocol errors at every configuration.
+  2. PAY_HOLD 0: the payload is no longer held off while the scanout has a
+     line to fetch (Model 1's hold_b, R655). With the in-cycle grant the hold
+     protects nothing -- a line read about to go out wins the port, one
+     already out is ahead of later payload reads -- and at a 400-cycle round
+     trip the scanout is hungry for most of a heavy band: in STCC 1500 the
+     fill waited on the store 2,413 + 1,426 cycles in bands 22-23 and the
+     list drew +2,483 at 400 with it, -948 without.
+
+*Tried and REMOVED (each measured, each made it no better or worse):*
+  * "A first" as a registered grant: 1,614 held cycles, the same draw -- the
+    edge is lost either way; only the in-cycle decision removes it.
+  * Keeping the payload off the bus the cycle before m2_ddr3 presents (a
+    `soon` from m2_ddr3): hostile-bus STCC 1500 over six model seeds +1,390
+    mean with it, +684 without.
+  * A quiet window before each scanout line (no payload read in the last Q
+    cycles of the line period): payload bursts owed ahead of frame-buffer
+    reads 302 -> 121 in HOTD 1808 untextured at 400, the draw 443,320 ->
+    442,845 -- still +2,395. Replies ahead of line reads were not the cause.
+  * PAY_DEPTH 32 / 64 (earlier): no change.
+
+*WHY THE REMAINING CASES ARE SLOWER (measured):* every one is a draw paced to
+its end by the frame buffer's clear (R813: the clear runs under the draw and
+a window waits until the clear has passed its line) -- clr_y is exactly 8 x
+the band at every band end. The window goes to the writer BEFORE a clear
+chunk, so when the fill delivers its spans earlier or in a different
+pattern -- which is what a store that no longer waits does (HOTD 1808
+untextured at 400: fill waiting on the store 19,666 -> 1,463 cycles) -- the
+clear is pushed back and the end of the draw with it. The writer's work is
+IDENTICAL (192,988 write beats both builds), the mux holds m2_ddr3 0 cycles,
+band 0 is identical; the whole +2,870 lands in bands 20-24 and is carried
+flat to the end. The release store shows the same sensitivity to timing:
+STCC 4500 untextured draws 378,602 at latency 40 and 379,437 / 379,279 /
+378,692 / 378,712 at 38 / 39 / 41 / 42 (at 400 it is stable to a cycle). So
+at 40 the +28 / +29 / +90 are inside the release's own spread; at 400 they
+are systematic. The lever is the writer's window-before-clear priority
+(m2_fb_wcomb, R813) -- a change to the release's behaviour too, so a
+decision, not taken here.
+
+*Hostile bus (BUSY runs on ~56% of cycles, 20% of beats held):* 12 of 22
+cases slower, up to +5,312 (+0.67%, Over Rev d2 untextured). Over six model
+seeds STCC 1500 is +1,390 mean (release spread across seeds 630,115 -
+635,126). On a saturated bridge the payload's commands (2.4-8.5% of beats)
+take acceptances the frame buffer would use, and a payload command left
+under BUSY must be taken before the frame buffer's -- an Avalon rule, not a
+choice.
+
+*The full table, draw cycles, release store (ad6c8081's store, DDRAM_IN,
+same DDR3 model) against the payload in DDR3 (94f61f60 + PAY_HOLD 0). 40 /
+400 = latency; b = hostile; nt = untextured. * = quad files: untextured is
+the same run (NOTEX applies to MAME lists only). The store's output stream
+is identical in all 73.*
+
+    list                      setting   release      DDR3       delta      %
+    HOTD 1808                 40        454,730   445,159    -9,571  -2.10
+    HOTD 1808                 400       494,309   485,699    -8,610  -1.74
+    HOTD 1808                 40b       709,284   704,859    -4,425  -0.62
+    HOTD 1808                 40nt      405,354   405,354        +0  +0.00
+    HOTD 1808                 400nt     440,450   443,320    +2,870  +0.65
+    HOTD 1808                 40bnt     720,158   721,004      +846  +0.12
+    HOTD 1500                 40        553,852   553,020      -832  -0.15
+    HOTD 1500                 400       610,006   609,891      -115  -0.02
+    HOTD 1500                 40b       761,997   763,272    +1,275  +0.17
+    HOTD 1500                 40nt      438,856   438,393      -463  -0.11
+    HOTD 1500                 400nt     485,775   484,515    -1,260  -0.26
+    HOTD 1500                 40bnt     779,604   780,018      +414  +0.05
+    HOTD 900 (spill)          40        801,794   784,362   -17,432  -2.17
+    HOTD 900 (spill)          400       871,998   854,789   -17,209  -1.97
+    HOTD 900 (spill)          40b       959,345   959,061      -284  -0.03
+    HOTD 900 (spill)          40nt      527,542   514,049   -13,493  -2.56
+    HOTD 900 (spill)          400nt     559,467   553,063    -6,404  -1.14
+    HOTD 900 (spill)          40bnt     796,755   796,395      -360  -0.05
+    Over Rev d1               40        609,288   604,738    -4,550  -0.75
+    Over Rev d1               400       654,810   651,261    -3,549  -0.54
+    Over Rev d1               40b       794,079   788,888    -5,191  -0.65
+    Over Rev d1               40nt      541,539   540,743      -796  -0.15
+    Over Rev d1               400nt     585,160   584,487      -673  -0.12
+    Over Rev d1               40bnt     868,665   867,108    -1,557  -0.18
+    Over Rev d2               40        499,251   495,812    -3,439  -0.69
+    Over Rev d2               400       537,608   531,643    -5,965  -1.11
+    Over Rev d2               40b       688,505   686,427    -2,078  -0.30
+    Over Rev d2               40nt      478,742   477,563    -1,179  -0.25
+    Over Rev d2               400nt     521,101   519,116    -1,985  -0.38
+    Over Rev d2               40bnt     787,181   792,493    +5,312  +0.67
+    STCC 1500 (title)         40        386,778   386,712       -66  -0.02
+    STCC 1500 (title)         400       415,991   415,043      -948  -0.23
+    STCC 1500 (title)         40b       634,796   636,319    +1,523  +0.24
+    STCC 1500 (title)         40nt      374,236   374,265       +29  +0.01
+    STCC 1500 (title)         400nt     412,173   414,072    +1,899  +0.46
+    STCC 1500 (title)         40bnt     697,849   698,323      +474  +0.07
+    STCC 3000                 40        471,808   469,729    -2,079  -0.44
+    STCC 3000                 400       507,723   504,753    -2,970  -0.58
+    STCC 3000                 40b       663,408   663,855      +447  +0.07
+    STCC 3000                 40nt      405,492   402,161    -3,331  -0.82
+    STCC 3000                 400nt     440,031   439,991       -40  -0.01
+    STCC 3000                 40bnt     711,423   711,250      -173  -0.02
+    STCC 4500                 40        456,135   447,513    -8,622  -1.89
+    STCC 4500                 400       492,722   484,041    -8,681  -1.76
+    STCC 4500                 40b       650,063   653,780    +3,717  +0.57
+    STCC 4500                 40nt      378,602   378,630       +28  +0.01
+    STCC 4500                 400nt     418,553   420,134    +1,581  +0.38
+    STCC 4500                 40bnt     690,575   695,539    +4,964  +0.72
+    STCC 6000 (start)         40        393,165   384,277    -8,888  -2.26
+    STCC 6000 (start)         400       422,754   413,280    -9,474  -2.24
+    STCC 6000 (start)         40b       616,954   617,514      +560  +0.09
+    STCC 6000 (start)         40nt      302,490   302,580       +90  +0.03
+    STCC 6000 (start)         400nt     334,877   334,183      -694  -0.21
+    STCC 6000 (start)         40bnt     609,082   607,121    -1,961  -0.32
+    HOTD 1808 behind 1500     40        453,769   445,159    -8,610  -1.90
+    HOTD 1808 behind 1500     400       494,309   485,699    -8,610  -1.74
+    HOTD 1808 behind 1500     40b       704,129   704,924      +795  +0.11
+    HOTD 1808 behind 1500     40nt      405,354   405,354        +0  +0.00
+    HOTD 1808 behind 1500     400nt     440,450   443,320    +2,870  +0.65
+    HOTD 1808 behind 1500     40bnt     716,651   716,616       -35  -0.00
+    HOTD 900 behind 900       40        801,794   784,362   -17,432  -2.17
+    HOTD 900 behind 900       400       869,128   854,789   -14,339  -1.65
+    HOTD 900 behind 900       40b       957,550   953,472    -4,078  -0.43
+    HOTD 900 behind 900       40nt      527,542   514,049   -13,493  -2.56
+    HOTD 900 behind 900       400nt     559,467   553,063    -6,404  -1.14
+    HOTD 900 behind 900       40bnt     797,043   796,381      -662  -0.08
+    VCop 7506 behind 7482*    40        423,692   403,367   -20,325  -4.80
+    VCop 7506 behind 7482*    400       449,496   425,445   -24,051  -5.35
+    VCop 7506 behind 7482*    40b       669,704   672,705    +3,001  +0.45
+    4,587 quads (cap)*        40        614,115   590,986   -23,129  -3.77
+    4,587 quads (cap)*        400       643,924   622,049   -21,875  -3.40
+    4,587 quads (cap)*        40b       840,919   840,136      -783  -0.09
+*Not settled:* the clear/window priority (above), and everything left from
+the first part of this entry (fit, board, real HPS latency).

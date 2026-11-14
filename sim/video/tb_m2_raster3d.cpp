@@ -32,7 +32,8 @@
 #ifdef R3D_DDRAM
 #include "../mem/ddr3_model.h"
 static Ddr3Model<Vm2_raster3d> g_dm;
-static long g_dw_fa = 0, g_dw_hungry = 0, g_dw_wreq = 0, g_dw_cyc = 0;   // over draws: m2_ddr3 waiting, scanout hungry, FB writer asking
+static long g_dw_fa = 0, g_dw_hungry = 0, g_dw_wreq = 0, g_dw_cyc = 0;
+static long g_lr_n = 0, g_lr_owed = 0;   // R1003: frame-buffer reads taken, and payload bursts owed ahead of them   // over draws: m2_ddr3 waiting, scanout hungry, FB writer asking
 #endif
 
 // R640: M2_R3D_FB -- the DDR3 side of FB_DDR3 (build with -GFB_DDR3=1 -GFTB=0).
@@ -563,6 +564,10 @@ int main(int argc, char **argv) {
             && r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__fa_busy) g_dw_fa++;
         if (r->m2_raster3d__DOT__g_fb__DOT__fbr_hungry) g_dw_hungry++;
         if (r->m2_raster3d__DOT__g_fb__DOT__w_req) g_dw_wreq++;
+#ifdef R3D_PAYQ
+        if (r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__fa_rd && !r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__fa_busy) {
+          g_lr_n++; g_lr_owed += r->m2_raster3d__DOT__g_fb__DOT__g_ddr_in__DOT__g_pay__DOT__u_pay__DOT__owed; }
+#endif
       } }
 #endif
     static const bool SCANMEM = std::getenv("M2_R3D_SCANMEM") != nullptr;
@@ -1324,6 +1329,7 @@ int main(int argc, char **argv) {
                 (unsigned)d->dbg_pay_wait, (unsigned)d->dbg_fb_late);
     std::printf("  R1003 during draws (%ld cycles): m2_ddr3 command held %ld, scanout hungry %ld, FB writer asking %ld\n",
                 g_dw_cyc, g_dw_fa, g_dw_hungry, g_dw_wreq);
+    std::printf("  R1003 frame-buffer reads in draws %ld, payload bursts owed ahead of them %ld (x5 beats)\n", g_lr_n, g_lr_owed);
 #endif
     g_rec = false;
     FILE *fo = std::fopen((dir + "/fetch.txt").c_str(), "w");
