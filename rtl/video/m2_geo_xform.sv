@@ -141,7 +141,17 @@ module m2_geo_xform #(
   // ------------------------------------------------------------ product bank
   // Two banks of nine products: one being filled by the multiplier for point N
   // while the other is being summed for point N-1.
-  logic [31:0] r [2][9];
+  // R1008: IN LUT RAM, BY COLUMN, NOT 576 FLIP-FLOPS. The adder reads a
+  // triple {3k, 3k+1, 3k+2} of one bank at a time (R566), so product i lives
+  // in column i % 3 at {bank, i / 3}: three MLABs, each read asynchronously
+  // at {sum_bank, k} -- the word written at an edge is read from the next
+  // cycle, as the flops were. Nothing reads a bank before the multiplier has
+  // filled it (the adder runs only on a full bank), so the reset to zero the
+  // flops had was never seen. The 2:1 bank and 3:1 triple selects of 96 bits
+  // and the write decode go with the flops.
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] r_c0 [8];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] r_c1 [8];
+  (* ramstyle = "MLAB, no_rw_check" *) logic [31:0] r_c2 [8];
   logic        fill_bank;      // bank the multiplier is writing
   logic        sum_bank;       // bank the adder is reading
   logic        bank_full;      // fill_bank holds a complete set of nine
@@ -208,21 +218,35 @@ module m2_geo_xform #(
   // each a 3:1 mux. a_comp == 3 cannot matter here: add_req is gated on a_slot.
   logic [31:0] rsel0, rsel1, rsel2, matsel;
   assign matsel = mat_aq;
-  always_comb begin
-    case (a_comp[1:0])
-      2'd0: begin
-        rsel0 = r[sum_bank][0]; rsel1 = r[sum_bank][1]; rsel2 = r[sum_bank][2];
-        mat_ara = 4'd9;
-      end
-      2'd1: begin
-        rsel0 = r[sum_bank][3]; rsel1 = r[sum_bank][4]; rsel2 = r[sum_bank][5];
-        mat_ara = 4'd10;
-      end
-      default: begin
-        rsel0 = r[sum_bank][6]; rsel1 = r[sum_bank][7]; rsel2 = r[sum_bank][8];
-        mat_ara = 4'd11;
-      end
+  // R1008: the triple k (0 for a_comp 0, 1 for 1, 2 otherwise -- the case
+  // R566 wrote), read from the three columns at {sum_bank, k}
+  wire [1:0] r_k  = (a_comp[1:0] == 2'd0) ? 2'd0 : (a_comp[1:0] == 2'd1) ? 2'd1 : 2'd2;
+  wire [2:0] r_ra = {sum_bank, r_k};
+  assign rsel0   = r_c0[r_ra];
+  assign rsel1   = r_c1[r_ra];
+  assign rsel2   = r_c2[r_ra];
+  assign mat_ara = 4'd9 + 4'(r_k);
+  // R1008: the product's column and row (got % 3, got / 3), and its write,
+  // where the flops were loaded
+  logic [1:0] g_col, g_row;
+  always_comb
+    case (got)
+      4'd0: begin g_col = 2'd0; g_row = 2'd0; end
+      4'd1: begin g_col = 2'd1; g_row = 2'd0; end
+      4'd2: begin g_col = 2'd2; g_row = 2'd0; end
+      4'd3: begin g_col = 2'd0; g_row = 2'd1; end
+      4'd4: begin g_col = 2'd1; g_row = 2'd1; end
+      4'd5: begin g_col = 2'd2; g_row = 2'd1; end
+      4'd6: begin g_col = 2'd0; g_row = 2'd2; end
+      4'd7: begin g_col = 2'd1; g_row = 2'd2; end
+      default: begin g_col = 2'd2; g_row = 2'd2; end   // 8 (a write needs got < 9)
     endcase
+  wire       r_we = mul_out_valid && (got < 4'd9);
+  wire [2:0] r_wa = {fill_bank, g_row};
+  always_ff @(posedge clk) begin
+    if (r_we && g_col == 2'd0) r_c0[r_wa] <= mul_result;
+    if (r_we && g_col == 2'd1) r_c1[r_wa] <= mul_result;
+    if (r_we && g_col == 2'd2) r_c2[r_wa] <= mul_result;
   end
   assign add_a = (a_round == 2'd0) ? rsel0 : t[a_comp[1:0]];
   assign add_b = (a_round == 2'd0) ? rsel1 :
@@ -265,15 +289,13 @@ module m2_geo_xform #(
       bank_trans <= 1'b0; atrans <= 1'b0;
       px <= '0; py <= '0; pz <= '0; ptrans <= 1'b0;
       out_valid <= 1'b0; out_x <= '0; out_y <= '0; out_z <= '0;
-      for (int b = 0; b < 2; b++)
-        for (int i = 0; i < 9; i++) r[b][i] <= '0;
       for (int i = 0; i < 3; i++) t[i] <= '0;
     end else begin
       out_valid <= 1'b0;
 
       // Results come back in issue order, so a counter places them.
       if (mul_out_valid && got < 4'd9) begin
-        r[fill_bank][got] <= mul_result;
+        // (the product itself: r_c* above, R1008)
         got               <= got + 4'd1;
       end
       if (add_out_valid && a_total < 4'd9) begin
