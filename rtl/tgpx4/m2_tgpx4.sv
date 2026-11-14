@@ -34,12 +34,23 @@
 // request at a time, with an idle clock between requests (the shared port
 // takes a level, acknowledges it once, and needs it to fall: m2_tgp's own
 // finding, R133).
+//
+// R1006: THE CORE'S BUFFER RAM WRITES ARE POSTED. A write is taken into a
+// 16-deep queue (MLAB) and acknowledged at once; the sequencer drains the
+// queue when nothing else wants the ports. Order is kept where anything can
+// see it: a buffer RAM read waits for the queue to drain (copro data ROM
+// reads and cache refills do not -- another memory), and the core holds an
+// output FIFO write while the queue is not empty (`wq_busy`), so by the time
+// the i960 reads a result -- and may start the geometrizer on the buffer --
+// every write before it has reached the port, as before. STCC writes the
+// buffer in bursts of 4-15 words (R1006), ~2.5% of its words.
 
 `timescale 1ns/1ps
 
 module m2_tgpx4 #(
   parameter int unsigned PLINES  = 1024,
-  parameter bit          SUBNORM = 1'b1
+  parameter bit          SUBNORM = 1'b1,
+  parameter int unsigned XC_AW   = 12       // R1006: tgpx4_core's ROM read cache
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -76,6 +87,7 @@ module m2_tgpx4 #(
   output logic [15:0] bufw_data,
   output logic        bufw_is_prog,
   input  logic        bufw_ack,
+  output logic        wq_busy,      // R1006: a posted write not yet through the port
 
   output logic [11:0] dbg_pc,
   output logic        dbg_retire,
@@ -94,14 +106,14 @@ module m2_tgpx4 #(
   logic [23:0] ext_addr;
   logic [31:0] ext_wdata, ext_rdata;
 
-  tgpx4_core #(.PLINES(PLINES), .SUBNORM(SUBNORM)) u_core (
+  tgpx4_core #(.PLINES(PLINES), .SUBNORM(SUBNORM), .XC_AW(XC_AW)) u_core (
     .clk(clk), .rst_n(rst_n), .run(run),
     .prog_we(prog_we), .prog_addr(prog_addr), .prog_data(prog_data),
     .pf_req(pf_req), .pf_addr(pf_addr), .pf_data(pf_data), .pf_ack(pf_ack),
     .fi_data(fi_data), .fi_valid(fi_valid), .fi_full(fi_full), .fi_pop(fi_pop), .fi_clr(fi_clr),
     .fo_data(fo_data), .fo_push(fo_push), .fo_full(fo_full), .fo_empty(fo_empty), .fo_clr(fo_clr),
     .ext_req(ext_req), .ext_we(ext_we), .ext_addr(ext_addr), .ext_wdata(ext_wdata),
-    .ext_rdata(ext_rdata), .ext_ack(ext_ack),
+    .ext_rdata(ext_rdata), .ext_ack(ext_ack), .wq_busy(wq_busy),
     .dbg_pc(dbg_pc), .dbg_retire(dbg_retire), .dbg_pdr(dbg_pdr), .dbg_bad(dbg_bad)
   );
 
@@ -141,10 +153,26 @@ module m2_tgpx4 #(
   logic [18:0] w_addr;                 // without the half bit
   logic        w_prog;
 
+  // R1006: the posted-write queue
+  localparam int WQ_AW = 4;
+  (* ramstyle = "MLAB, no_rw_check" *) logic [46:0] wq_mem [0:(1<<WQ_AW)-1];
+  logic [WQ_AW-1:0] wq_wp, wq_rp;
+  logic [WQ_AW:0]   wq_n;
+  logic             wq_push, wq_pop, wq_full, wq_dr;   // wq_dr: a queued write is going through the port
+  logic [46:0]      wq_q;
+  assign wq_full = (wq_n == (WQ_AW+1)'(1 << WQ_AW));
+  assign wq_q    = wq_mem[wq_rp];
+  always_ff @(posedge clk) if (wq_push) wq_mem[wq_wp] <= {ext_addr[14:0], ext_wdata};
+  assign wq_busy = (wq_n != '0) || wq_dr;
+
   // the core's external address
   wire x_buf = (ext_addr[23:22] == 2'b01);                      // 0x400000-0x7fffff
   wire x_rom = (ext_addr[23:21] == 3'b100);                     // 0x800000-0x9fffff
   logic ext_done;                                               // acknowledged, until req falls
+  // R1006: queue in, queue out (the sequencer's Q_IDLE choice, below)
+  wire core_rd = ext_req && !ext_done && !ext_we && !(x_buf && wq_n != '0);
+  assign wq_push = ext_req && ext_we && !ext_done && x_buf && !wq_full;
+  assign wq_pop  = (q == Q_IDLE) && !core_rd && !(pf_req && !pf_ack) && (wq_n != '0);
 
   assign up_busy = upw_v | up_we;   // the dword in this clock counts (m2_copro presents the next a clock later)
 
@@ -157,25 +185,26 @@ module m2_tgpx4 #(
       ext_ack <= 1'b0; ext_rdata <= 32'd0; ext_done <= 1'b0;
       pf_ack <= 1'b0; pf_data <= 64'd0;
       upw_v <= 1'b0; upw_idx <= 13'd0; upw_data <= 32'd0;
+      wq_wp <= '0; wq_rp <= '0; wq_n <= '0; wq_dr <= 1'b0;
     end else begin
       ext_ack <= 1'b0; pf_ack <= 1'b0;
       if (!ext_req) ext_done <= 1'b0;
       if (up_we) begin upw_v <= 1'b1; upw_idx <= up_idx; upw_data <= up_data; end
+      // R1006: a core write is taken at once -- into the queue (buffer RAM) or
+      // dropped (unmapped / ROM)
+      if (ext_req && ext_we && !ext_done && (!x_buf || !wq_full)) begin
+        ext_ack <= 1'b1; ext_done <= 1'b1;
+      end
+      if (wq_push) wq_wp <= wq_wp + 1'b1;
+      if (wq_pop)  wq_rp <= wq_rp + 1'b1;
+      wq_n <= wq_n + {{WQ_AW{1'b0}}, wq_push} - {{WQ_AW{1'b0}}, wq_pop};
 
       case (q)
         Q_IDLE: begin
-          if (ext_req && !ext_done) begin
+          // R1006: core reads first -- a buffer RAM read after the queue drains
+          if (core_rd) begin
             q_ext <= 1'b1;
-            if (ext_we) begin
-              if (x_buf) begin
-                w_data <= ext_wdata; w_addr <= {3'd0, ext_addr[14:0], 1'b0}; w_prog <= 1'b0; w_hi <= 1'b0;
-                bufw_req <= 1'b1; bufw_addr <= {3'd0, ext_addr[14:0], 1'b0}; bufw_data <= ext_wdata[15:0];
-                bufw_is_prog <= 1'b0;
-                q <= Q_WR;
-              end else begin                          // unmapped / ROM: dropped
-                ext_ack <= 1'b1; ext_done <= 1'b1; q <= Q_GAP;
-              end
-            end else if (x_buf || x_rom) begin
+            if (x_buf || x_rom) begin
               dat_req <= 1'b1; dat_is_buf <= x_buf; dat_is_prog <= 1'b0;
               dat_addr <= x_buf ? {5'd0, ext_addr[14:0]} : ext_addr[19:0];
               q <= Q_RD;
@@ -187,6 +216,12 @@ module m2_tgpx4 #(
             dat_req <= 1'b1; dat_is_buf <= 1'b0; dat_is_prog <= 1'b1;
             dat_addr <= {7'd0, pf_addr, f_hi};
             q <= Q_RD;
+          end else if (wq_n != '0) begin              // R1006: a queued write
+            q_ext <= 1'b0; wq_dr <= 1'b1;
+            w_data <= wq_q[31:0]; w_addr <= {3'd0, wq_q[46:32], 1'b0}; w_prog <= 1'b0; w_hi <= 1'b0;
+            bufw_req <= 1'b1; bufw_addr <= {3'd0, wq_q[46:32], 1'b0}; bufw_data <= wq_q[15:0];
+            bufw_is_prog <= 1'b0;
+            q <= Q_WR;
           end else if (upw_v) begin
             q_ext <= 1'b0;
             w_data <= upw_data; w_addr <= {5'd0, upw_idx, 1'b0}; w_prog <= 1'b1; w_hi <= 1'b0;
@@ -213,7 +248,7 @@ module m2_tgpx4 #(
             q <= Q_GAP;                               // the high half after a gap
           end else begin
             w_hi <= 1'b0;
-            if (q_ext) begin ext_ack <= 1'b1; ext_done <= 1'b1; end
+            if (wq_dr) wq_dr <= 1'b0;                 // R1006: the queued write is through
             else upw_v <= up_we;                      // (a new dword in this clock stays)
             q <= Q_GAP;
           end

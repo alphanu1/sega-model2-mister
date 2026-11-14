@@ -69,6 +69,8 @@ module m2_copro #(
   // bufw_is_prog name that region to the top level). 0 = the TGP, unchanged.
   parameter bit          TGPX4     = 1'b0,
   parameter int unsigned X4_PLINES = 1024,
+  // R1006: the TGPx4's copro data ROM read cache, 2^X4_XCACHE words (0 = none)
+  parameter int unsigned X4_XCACHE = 12,
   // R931: a full output FIFO holds the TGP (m2_tgp OUT_STALL); 0 drops (R146)
   parameter bit OUT_STALL = 1'b0
 ) (
@@ -549,7 +551,7 @@ module m2_copro #(
       else if (fifo_wr && uploading && !up_hold) x4_up_idx <= 13'(coprocnt);
     logic [11:0] x4_pc;
     logic        x4_retire;
-    m2_tgpx4 #(.PLINES(X4_PLINES), .SUBNORM(1'b1)) u_x4 (
+    m2_tgpx4 #(.PLINES(X4_PLINES), .SUBNORM(1'b1), .XC_AW(X4_XCACHE)) u_x4 (
       .clk(clk), .rst_n(rst_n), .run(!halted),
       .up_we(uc_we), .up_idx(x4_up_idx), .up_data(uc_data), .up_busy(x4_up_busy),
       .fi_data(fin_q), .fi_valid(fin_valid), .fi_full(fin_full), .fi_pop(tgp_in_pop),
@@ -558,7 +560,7 @@ module m2_copro #(
       .dat_req(dat_req), .dat_addr(dat_addr), .dat_is_buf(dat_is_buf), .dat_is_prog(dat_is_prog),
       .dat_rdata(dat_rdata), .dat_ack(dat_ack),
       .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data), .bufw_is_prog(bufw_is_prog),
-      .bufw_ack(bufw_ack),
+      .bufw_ack(bufw_ack), .wq_busy(),
       .dbg_pc(x4_pc), .dbg_retire(x4_retire), .dbg_pdr(dbg_tgp_op), .dbg_bad(dbg_tgp_unimpl)
     );
     // what the TGP's debug ports carried, as far as the TGPx4 has them

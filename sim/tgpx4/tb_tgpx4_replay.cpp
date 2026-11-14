@@ -67,11 +67,14 @@
 #include "verilated.h"
 #include "mame/mb86235.h"
 #include "cap.h"
+#include "x4_xdec.h"
 #include <cinttypes>
 #include <random>
 
 #define C(x) (top->rootp->m2_copro__DOT__g_tgpx4__DOT__u_x4__DOT__u_core__DOT__##x)
-#define RF0(i) (top->rootp->m2_copro__DOT__g_tgpx4__DOT__u_x4__DOT__u_core__DOT__g_rf__BRA__0__KET____DOT__u_rf__DOT__mem[i])
+// R1006: the register file in two banks of 16, two read copies each: A = AA / AB, M = MA / MB
+#define RFA(n, i) (top->rootp->m2_copro__DOT__g_tgpx4__DOT__u_x4__DOT__u_core__DOT__g_rfa__BRA__##n##__KET____DOT__u_rf__DOT__mem[i])
+#define RFM(n, i) (top->rootp->m2_copro__DOT__g_tgpx4__DOT__u_x4__DOT__u_core__DOT__g_rfm__BRA__##n##__KET____DOT__u_rf__DOT__mem[i])
 
 static Vm2_copro *top;
 static uint64_t cyc = 0;
@@ -86,6 +89,8 @@ int main(int argc, char **argv)
   bool lockstep = true, quiet = false;
   bool frames_on = true; uint64_t idle_need = 64, frame_cyc = 1391304;   // R933
   std::string tm_dir, flog_path, pcprof_path; double tm_scale = 1.0;    // R1005
+  bool stprof = false;                                                  // R1006
+  uint32_t ck_frame = UINT32_MAX;                                       // R1006: checkpoint start
   uint32_t tm_from = UINT32_MAX, tm_to = UINT32_MAX; uint64_t vbl_cyc = 1391304;
   for (int i = 2; i < argc; i++) {
     std::string a = argv[i];
@@ -108,6 +113,8 @@ int main(int argc, char **argv)
     else if (a == "--flog") flog_path = argv[++i];
     else if (a == "--vbl") vbl_cyc = nx();
     else if (a == "--pcprof") pcprof_path = argv[++i];
+    else if (a == "--stprof") stprof = true;                          // R1006
+    else if (a == "--ck-frame") ck_frame = uint32_t(nx());            // R1006
   }
   Capture cap;
   if (!cap.load(dir, 0)) return 2;
@@ -188,6 +195,57 @@ int main(int argc, char **argv)
       }
       i++;
     } }
+  // R1006: THE CHECKPOINT START (--ck-frame N). The first capture vblank at or
+  // after N at which MAME's two FIFOs are empty is found; the reference runs
+  // (as in the lockstep) up to the first word after it that reads the input
+  // FIFO, and that word must not sit in a delay slot or a repeat, and the
+  // reference must have pushed no output the i960 had not read by then. The
+  // RTL boots as usual; at its first idle clock it is restarted at that word
+  // (tgpx4_core's dbg_restart), the reference's state written into it, and
+  // the i960's events resume after that vblank.
+  size_t ck_ie = SIZE_MAX; uint32_t ck_pc = 0, ck_fnum = 0; bool ck_done = false;
+  if (ck_frame != UINT32_MAX) {
+    // pushes discarded by CLRF: align the pops with the pushes by value (x4_pace_model's way)
+    std::vector<uint32_t> pushv, popv;
+    for (size_t i = cap.boot_ev + 1; i < cap.ev.size(); i++) {
+      if (cap.ev[i].t == 'I' || cap.ev[i].t == 'N') pushv.push_back(cap.ev[i].b);
+      if (cap.ev[i].t == 'P') popv.push_back(cap.ev[i].b);
+    }
+    long poff = -1;
+    for (long k = 0; k < 8 && poff < 0; k++) {
+      bool ok = true; size_t n = std::min<size_t>(popv.size(), 200000);
+      for (size_t j = popv.size() - n; j < popv.size() && ok; j++) if (j + k >= pushv.size() || pushv[j + k] != popv[j]) ok = false;
+      if (ok) poff = k;
+    }
+    if (poff < 0) { printf("CK: cannot align pops with pushes\n"); return 2; }
+    uint64_t npush = 0, npop = 0, nout = 0, nxr = 0; uint32_t nf = 0; size_t found = SIZE_MAX;
+    for (size_t i = cap.boot_ev + 1; i < cap.ev.size() && found == SIZE_MAX; i++) {
+      const CapEv &e = cap.ev[i];
+      switch (e.t) { case 'I': case 'N': npush++; break; case 'P': npop++; break; case 'O': nout++; break; case 'X': nxr++; break; default: break; }
+      if (e.t != 'F') continue;
+      nf = e.a;
+      if (nf < ck_frame || npop + uint64_t(poff) != npush || nout != nxr) continue;
+      // run the reference up to the first word that reads the input FIFO after pop npop
+      bool bad = false;
+      while (!ref_end) {
+        if (rpop > npop) { bad = true; break; }
+        if (rpop == npop && !ref.m_core->delay_slot) {
+          Xd x = xdec(ref.prog[ref.m_core->pc & 0xfff]);
+          bool rfi = false;
+          for (int m = 0; m < 2; m++) if (x.sk[m] == K_REG && x.sc[m] == 0x31) rfi = true;
+          if (rfi) break;
+        }
+        ref.execute_one();
+      }
+      if (bad || ref_end) { printf("CK: lost the reference at frame %u\n", nf); return 2; }
+      if (ref_outs != nout || (ref.m_core->st & 0x4000)) continue;   // an unread output, or a repeat: try the next vblank
+      found = i; ck_pc = ref.m_core->pc & 0xfff; ck_fnum = nf;
+    }
+    if (found == SIZE_MAX) { printf("CK: no checkpoint at or after frame %u\n", ck_frame); return 2; }
+    for (size_t k = 0; k < cpu.size(); k++) if (cpu[k] > &cap.ev[found]) { ck_ie = k; break; }
+    printf("CK: frame %u (capture event %zu): pc %03x, pops %zu, outputs %" PRIu64 ", i960 event %zu of %zu\n",
+           ck_fnum, found, ck_pc, rpop, ref_outs, ck_ie, cpu.size());
+  }
   // R1005: MAME's i960 gaps, one record per entry of `cpu`
   struct TmRec { double gap; uint32_t frame, flags; };
   std::vector<TmRec> tmg; std::vector<double> tml, tmw;
@@ -223,11 +281,11 @@ int main(int argc, char **argv)
     int bad = 0;
     char n[16];
     for (int i = 0; i < 8; i++) {
-      // RF index {sel1, sel0, n}: 00 MA, 01 AA, 10 MB, 11 AB
-      snprintf(n, sizeof n, "MA%d", i); bad += field(n, RF0(0  + i), c->ma[i]);
-      snprintf(n, sizeof n, "AA%d", i); bad += field(n, RF0(8  + i), c->aa[i]);
-      snprintf(n, sizeof n, "MB%d", i); bad += field(n, RF0(16 + i), c->mb[i]);
-      snprintf(n, sizeof n, "AB%d", i); bad += field(n, RF0(24 + i), c->ab[i]);
+      // R1006: bank A {sel1, n} = AA / AB, bank M = MA / MB; both copies
+      snprintf(n, sizeof n, "MA%d", i); bad += field(n, RFM(0, i), c->ma[i]);     bad += field(n, RFM(1, i), c->ma[i]);
+      snprintf(n, sizeof n, "AA%d", i); bad += field(n, RFA(0, i), c->aa[i]);     bad += field(n, RFA(1, i), c->aa[i]);
+      snprintf(n, sizeof n, "MB%d", i); bad += field(n, RFM(0, 8 + i), c->mb[i]); bad += field(n, RFM(1, 8 + i), c->mb[i]);
+      snprintf(n, sizeof n, "AB%d", i); bad += field(n, RFA(0, 8 + i), c->ab[i]); bad += field(n, RFA(1, 8 + i), c->ab[i]);
       snprintf(n, sizeof n, "AR%d", i); bad += field(n, C(ar)[i], c->ar[i]);
     }
     // the accept has applied the next word's repeat step; the reference
@@ -262,10 +320,40 @@ int main(int argc, char **argv)
   uint32_t last_pc[16] = {}; int lp = 0;
   std::vector<uint64_t> pp_n(4096), pp_c(4096); uint64_t pp_last = 0, pp_wait = 0; uint32_t pp_pc = 0; bool pp_have = false;   // R1005
   uint64_t uf_w0 = 0;
+  uint64_t st_hist[16] = {}, st_fifo = 0, st_extr = 0, st_extw = 0;   // R1006
+  uint64_t ls_cmp = 0, ls_skip = 0, st_hz = 0, st_hzk[5] = {};                                     // R1006: lockstep compares made / not
   int pend = 0;          // an access is on the bus
   const CapEv *cur = nullptr;
   bool done = false;
   while (!done) {
+    // R1006: the checkpoint start, at the RTL's first idle clock after its boot
+    if (ck_ie != SIZE_MAX && !ck_done && !pend && ie < cpu.size() && postboot[ie]) {
+      if (C(s) == 2 && C(dec_stall) && C(nx_v) && C(ops_idle) && !top->dat_req && !top->bufw_req) {
+        C(dbg_restart) = 1; C(dbg_restart_pc) = ck_pc;
+        tick();
+        C(dbg_restart) = 0;
+        // the FIFO clear lands a clock after the restart: no push before it; the
+        // NOP's own end (its retire) may fall in these clocks
+        bool ck_ret = false;
+        tick(); ck_ret |= C(dbg_retire) != 0; tick(); ck_ret |= C(dbg_retire) != 0;
+        const auto *c = ref.m_core;
+        for (int i = 0; i < 8; i++) {
+          RFA(0, i) = RFA(1, i) = c->aa[i]; RFA(0, 8 + i) = RFA(1, 8 + i) = c->ab[i];
+          RFM(0, i) = RFM(1, i) = c->ma[i]; RFM(0, 8 + i) = RFM(1, 8 + i) = c->mb[i];
+          C(ar)[i] = c->ar[i] & 0x3fff;
+        }
+        C(st) = c->st; C(rpc) = c->rpc & 0xffff; C(lpc) = c->lpc & 0xffff; C(eb) = c->eb & 0xffffff; C(eo) = c->eo & 0xffffff;
+        C(sp) = c->sp & 0x3ff; C(modr) = c->mod & 0xffff; C(pdr) = c->pdr; C(ddr) = c->ddr; C(prp) = c->prp; C(pwp) = c->pwp;
+        C(pcp) = c->pcp & 3; for (int i = 0; i < 4; i++) C(pcs)[i] = c->pcs[i] & 0xfff;
+        for (int i = 0; i < 24; i++) C(prq)[i] = c->pr[i];
+        for (int i = 0; i < 1024; i++) { C(ram_a)[i] = ref.m_dataa.m[i]; C(ram_b)[i] = ref.m_datab.m[i]; }
+        ie = ck_ie; fdone = fbefore[ie]; fstart = cyc; idle_run = 0; active = ck_ret; ck_done = true;
+        printf("CK: restarted at cycle %" PRIu64 "\n", cyc);
+        continue;
+      }
+      tick();
+      continue;
+    }
     // R933: pass the capture's vblanks before the next i960 access
     const bool waiting_in = C(needs_fi) && !C(fi_valid);
     idle_run = waiting_in ? idle_run + 1 : 0;
@@ -296,7 +384,7 @@ int main(int argc, char **argv)
         // nothing to simulate: the TGPx4 sits in S_DEC on a FIFO (needs_fi alone is
         // not enough -- it stays set for the rest of the word that popped) and its
         // memory ports are quiet
-        if (C(s) == 2 && C(dec_stall) && !top->dat_req && !top->bufw_req && !top->tbl_req) { tm_skip += tm_e - cyc; cyc = tm_e; gated = false; }
+        if (C(s) == 2 && C(dec_stall) && C(ops_idle) && !top->dat_req && !top->bufw_req && !top->tbl_req) { tm_skip += tm_e - cyc; cyc = tm_e; gated = false; }
       }
       if (!gated) tm_pres = cyc;
     } else if (frames_on && !pend && ie < cpu.size() && postboot[ie] && fbefore[ie] > fdone) {
@@ -338,16 +426,27 @@ int main(int argc, char **argv)
       pend = 0; ie++;
     }
     if (C(s) == 2 && C(dec_stall)) pp_wait++;   // R1005: S_DEC held on a FIFO
+    if (stprof && active) {                      // R1006: clocks by sequencer state, FIFO waits apart
+      if (C(s) == 2 && C(dec_stall)) st_fifo++;
+      else { st_hist[C(s) & 15]++; if (C(s) == 2 && C(dec_hz)) {
+        st_hz++;
+        if (C(hz_reg)) st_hzk[0]++; else if (C(hz_st)) st_hzk[1]++;
+        else if (C(alu_op) && !C(a_issue_ok)) st_hzk[2]++; else if (C(mul_op) && !C(m_issue_ok)) st_hzk[3]++; else st_hzk[4]++; } }
+      if (C(ext_req)) { if (C(ext_we)) st_extw++; else st_extr++; }
+    }
     if (C(dbg_retire) && !pcprof_path.empty()) {
       if (pp_have) { uint64_t c = cyc - pp_last - pp_wait; pp_n[pp_pc & 0xfff]++; pp_c[pp_pc & 0xfff] += c; }
       pp_have = true; pp_last = cyc; pp_wait = 0; pp_pc = C(ir_pc);
     }
-    // the lockstep
-    if (C(dbg_retire)) {
+    // the lockstep (R1006: with a checkpoint, from the restart on)
+    if (C(dbg_retire) && (ck_ie == SIZE_MAX || ck_done)) {
       if (active && lockstep) {
         try { ref.execute_one(); } catch (const std::exception &e) { printf("REF FATAL %s\n", e.what()); done = true; }
         words++;
-        int b = compare(words);
+        // R1006: results may still be in flight at a word's end; the state is
+        // compared at the words where every one has been written
+        int b = 0;
+        if (C(ops_idle)) { b = compare(words); ls_cmp++; } else ls_skip++;
         if (b) {
           if (lbad < 30) {
             printf("LOCKSTEP word %" PRIu64 " (cyc %" PRIu64 "): %d fields differ; ref executed pc %03x, rtl now at %03x; recent rtl pcs:", words, cyc, b, ref.m_core->ppc, C(ir_pc));
@@ -375,7 +474,16 @@ int main(int argc, char **argv)
                                                cyc / 1000000, words, ie, cpu.size(), xs, xbad);
     if (C(dbg_bad) && !frames) { printf("RTL dbg_bad raised at word %" PRIu64 ", pc %03x\n", words, C(ir_pc)); frames = 1; }
   }
-  size_t nx = 0; for (auto *e : cpu) if (e->t == 'X') nx++;
+  size_t nx = 0; for (size_t k = (ck_ie != SIZE_MAX ? ck_ie : 0); k < cpu.size(); k++) if (cpu[k]->t == 'X') nx++;
+  if (stprof) {   // R1006
+    uint64_t tot = st_fifo; for (auto v : st_hist) tot += v;
+    printf("STPROF (clocks by state, %% of %" PRIu64 "; FIFO waits apart):", tot);
+    for (int i = 0; i < 16; i++) if (st_hist[i]) printf(" s%d %.2f%%", i, 100.0 * st_hist[i] / tot);
+    printf(" (of s2 hazard holds %.2f%%) fifo %.2f%%; ext read pending %.2f%%, ext write pending %.2f%%; per word: %.3f clk (FIFO waits out)\n",
+           100.0 * st_hz / tot, 100.0 * st_fifo / tot, 100.0 * st_extr / tot, 100.0 * st_extw / tot, words ? double(tot - st_fifo) / words : 0.0);
+    if (st_hz) printf("HAZARDS (R1006, %% of all clocks): register %.2f%%, ST %.2f%%, ALU issue %.2f%%, multiplier issue %.2f%%, PR2 %.2f%%\n",
+                      100.0 * st_hzk[0] / tot, 100.0 * st_hzk[1] / tot, 100.0 * st_hzk[2] / tot, 100.0 * st_hzk[3] / tot, 100.0 * st_hzk[4] / tot);
+  }
   if (!pcprof_path.empty()) {
     FILE *pf = fopen(pcprof_path.c_str(), "w");
     for (int i = 0; i < 4096; i++) if (pp_n[i]) fprintf(pf, "%03x %" PRIu64 " %" PRIu64 "\n", i, pp_n[i], pp_c[i]);
@@ -389,6 +497,7 @@ int main(int argc, char **argv)
   }
   if (frames_on) printf("FRAMES (R933): %u vblanks passed, %" PRIu64 " with the TGPx4 idle, %" PRIu64 " at the frame cap; %" PRIu64 " clocks held for them (%.2f clk/word without)\n",
                         fdone, fpassed_idle, fpassed_cap, gate_cyc, words ? double(cyc - gate_cyc) / words : 0.0);
+  if (lockstep) printf("LOCKSTEP (R1006): state compared at %" PRIu64 " words, %" PRIu64 " ended with results in flight\n", ls_cmp, ls_skip);
   printf("RESULT: %" PRIu64 " cycles, %" PRIu64 " words (%.2f clk/word), i960 events %zu/%zu, outputs %" PRIu64 "/%zu checked, %" PRIu64 " differ (%.4f%% match), lockstep %s %" PRIu64 " bad\n",
          cyc, words, words ? double(cyc) / words : 0.0, ie, cpu.size(), xs, nx, xbad, xs ? 100.0 * (xs - xbad) / xs : 0.0,
          lockstep ? "on" : "off", lbad);

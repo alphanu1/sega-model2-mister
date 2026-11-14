@@ -39,23 +39,42 @@
 //   S_WXA    destination A written (RF, RAM, special, FIFO out, external);
 //            control flow resolved
 //   S_WXB    destination B written
-//   S_WAIT   until the FP units are done (they started at the end of S_DEC);
-//            a result counts in the clock it arrives
-//   S_WA     ALU result and flags
-//   S_FIN    multiplier result and flags
+//   S_WAIT   one clock, for the words that may not end in S_WXA (control
+//            words, a write to ST) and the words with operations alone
 //
 // The word ends in whichever of these is its last (eow), and the next word,
 // already fetched, is accepted in the same clock.
 //
-// States a word does not need are skipped. An ALU + multiply + one transfer
-// word takes 8 clocks (FP latency 4 under the transfer), a transfer alone 3,
-// an integer op 3 (R920's measured table): 10-27 M words a second against
-// the chip's 20.
+// R1006: THE ALU AND MULTIPLIER RESULTS ARE WRITTEN BEHIND THE SEQUENCER. A
+// word's operations start in the clock after S_DEC; the word ends when its
+// transfers are done, whether or not its results have arrived, and the next
+// word runs while they are in flight. A result is registered as it arrives
+// (alu_r / mul_r, with its descriptor: where it goes, which flags) and written
+// to the register file and ST in a later clock by the writer below, not by a
+// state. MAME's order is kept by a scoreboard and three rules, checked in
+// S_DEC (dec_hz): a word does not start while any register it reads or writes
+// (operands, transfer sources and destinations, its own results' targets) has
+// a result still to be written; a word that reads or writes ST does not start
+// while any result is still to be written; and an operation is issued only
+// when the operations of its class (ALU, multiplier) still in flight are on
+// the same pipelined unit (so they arrive in issue order, two or more clocks
+// apart), with FRCP / FRSQ alone. A word's own result is held until its
+// transfer sources have been read (MAME reads every source before the ALU),
+// and a transfer to the same register, or the multiply to the ALU's register,
+// wins over it (MAME's order) -- decided from the decode. MAME's NaN bits ride
+// with the operation (the operand registers are reloaded by later words).
+// The ALU NOP is not an operation at all here (it was a full ALU pass).
 //
-// The register file is MAME's AA0-7 / AB0-7 / MA0-7 / MB0-7 as one 32 x 32
-// array, written through one port and read through four MLAB copies (one
-// per ALU / multiplier operand). Index {sel1, sel0, n}: 00 MA, 01 AA, 10 MB,
-// 11 AB.
+// States a word does not need are skipped. Before R1006 an ALU + multiply +
+// one transfer word took 8 clocks (FP latency under the transfer), a
+// transfer alone 3, an integer op 3 (R920's measured table).
+//
+// The register file is MAME's AA0-7 / AB0-7 / MA0-7 / MB0-7, index {sel1,
+// sel0, n}: 00 MA, 01 AA, 10 MB, 11 AB. R1006: two banks of 16, AA / AB (the
+// ALU's operands) and MA / MB (the multiplier's), each with its own write port
+// and two MLAB read copies -- the same four 2-MLAB copies as the single 32 x
+// 32 file had, now with two writes a clock. A transfer source reads both banks
+// and takes the one its code names.
 //
 // The shared units: fp_add and fp_mul (rtl/tgp, the 2A TGP's, SUBNORM as
 // MAME's host floats), fp_div (FRCP = 1 / x, and FRSQ = 1 / sqrt), the new
@@ -73,7 +92,10 @@ module tgpx4_core #(
   // program memory: 4096 = all on chip; 1024 / 2048 = cache lines over SDRAM
   parameter int unsigned PLINES  = 1024,
   // subnormal results as MAME's host floats give them (fp_add / fp_mul)
-  parameter bit          SUBNORM = 1'b1
+  parameter bit          SUBNORM = 1'b1,
+  // R1006: the copro data ROM's read cache, 2^XC_AW words direct-mapped in
+  // M10K (12: 4 K words, 21 M10K); 0 = none
+  parameter int unsigned XC_AW   = 12
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -109,6 +131,7 @@ module tgpx4_core #(
   output logic [31:0] ext_wdata,
   input  logic [31:0] ext_rdata,
   input  logic        ext_ack,
+  input  logic        wq_busy,      // R1006: the wrapper's posted buffer RAM writes not all through
 
   output logic [11:0] dbg_pc,
   output logic        dbg_retire,
@@ -167,6 +190,11 @@ module tgpx4_core #(
   assign alu_one = ir[63];
   assign alu_en  = !is_imm && (!alu_one || ir[41]);
   assign mul_en  = !is_imm && (!alu_one || !ir[41]);
+  // R1006: the operations that do something -- MAME's ALU NOP (0x07) changes
+  // nothing (its operands are still read, so a PR operand still steps PR)
+  logic alu_op, mul_op;
+  assign alu_op = alu_en && (ir[60:56] != 5'h07);
+  assign mul_op = mul_en;
 
   logic [4:0] aop, ai2, ao, mi2, mo, m2s, mdst;
   logic [3:0] ai1, mi1, m1s;
@@ -194,19 +222,31 @@ module tgpx4_core #(
   assign mul_pr = mul_en && (m2s[4:3] == 2'd2);
 
   // ======================================================== register file
-  // four read copies, one write port
-  logic        rf_we;
-  logic [4:0]  rf_wa;
-  logic [31:0] rf_wd;
-  logic [4:0]  rf_ra [0:3];
-  logic [31:0] rf_rd [0:3];
+  // R1006: two banks of 16 -- A (AA / AB, index sel0 = 1) and M (MA / MB) --
+  // each one write port and two read copies. In a bank, {sel1, n}.
+  // rf_rd[0] / [1]: the ALU's operands (bank A); [2] / [3] the multiplier's
+  // (bank M); in S_XA / S_XB copy 0 / 1 of both banks read transfer source A
+  // / B, and the source's own bank is taken (xa_rd / xb_rd).
+  logic        rfa_we, rfm_we;
+  logic [3:0]  rfa_wa, rfm_wa;
+  logic [31:0] rfa_wd, rfm_wd;
+  logic [3:0]  rfa_ra [0:1], rfm_ra [0:1];
+  logic [31:0] rfa_rd [0:1], rfm_rd [0:1];
+  logic [31:0] rf_rd  [0:3];
 
   genvar gi;
   generate
-    for (gi = 0; gi < 4; gi++) begin : g_rf
-      tgpx4_rf u_rf (.clk(clk), .we(rf_we), .wa(rf_wa), .wd(rf_wd), .ra(rf_ra[gi]), .rd(rf_rd[gi]));
+    for (gi = 0; gi < 2; gi++) begin : g_rfa
+      tgpx4_rf #(.AW(4)) u_rf (.clk(clk), .we(rfa_we), .wa(rfa_wa), .wd(rfa_wd), .ra(rfa_ra[gi]), .rd(rfa_rd[gi]));
+    end
+    for (gi = 0; gi < 2; gi++) begin : g_rfm
+      tgpx4_rf #(.AW(4)) u_rf (.clk(clk), .we(rfm_we), .wa(rfm_wa), .wd(rfm_wd), .ra(rfm_ra[gi]), .rd(rfm_rd[gi]));
     end
   endgenerate
+  assign rf_rd[0] = rfa_rd[0];
+  assign rf_rd[1] = rfa_rd[1];
+  assign rf_rd[2] = rfm_rd[0];
+  assign rf_rd[3] = rfm_rd[1];
 
   // PR queue, 24 deep
   logic        pr_we;
@@ -256,6 +296,51 @@ module tgpx4_core #(
     if (rb_we) ram_b[rb_wa] <= rb_wd;
     rb_q <= ram_b[rb_ra];
   end
+
+  // ======================================================== R1006: the ROM read cache
+  // The external reads of every 2C game so far are all copro data ROM
+  // (0x800000-0x9fffff, R924 / R928 / R933), read-only, and the games read
+  // the same tables over and over: STCC's race, 4 K words direct-mapped by
+  // word, 84% hits (x4_deps on R1006's capture). A read's address (EB + EO)
+  // is known in S_DEC: the cache is read there and answers in S_XA's first
+  // clock; a miss goes to memory from there (one clock later than before) and
+  // fills the line as it comes back. The ROM never changes under a running
+  // game, so there is nothing to invalidate -- but a reset (a new game) sweeps
+  // every line invalid, one a clock (4 K clocks; the TGPx4 boots milliseconds
+  // later), through the write port: the array is never cleared in reset.
+  localparam bit XC = (XC_AW != 0);
+  localparam int XA_W = (XC_AW != 0) ? XC_AW : 1;
+  localparam int XT_W = 20 - XA_W;               // tag: the rest of port 9's 20 address bits
+  logic            xc_pend, xc_fill, xc_hit, xf_busy;
+  logic [XA_W-1:0] xf_cnt;
+  logic [31:0]     xc_q;
+  logic [XT_W:0]   xc_tq;                        // {valid, tag}
+  logic [23:0]     x_dec_a;                      // the read's address, in S_DEC
+  logic            x_dec_rom;
+  assign x_dec_a   = eb + eo;
+  assign x_dec_rom = XC && (x_dec_a[23:21] == 3'b100) && !xf_busy;
+  logic            xc_we;
+  logic [XA_W-1:0] xc_wa;
+  generate if (XC) begin : g_xc
+    (* ramstyle = "M10K, no_rw_check" *) logic [31:0]   xd_mem [0:(1<<XA_W)-1];
+    (* ramstyle = "M10K, no_rw_check" *) logic [XT_W:0] xt_mem [0:(1<<XA_W)-1];
+    always_ff @(posedge clk) begin
+      if (xc_we) begin
+        xd_mem[xc_wa] <= ext_rdata;
+        xt_mem[xc_wa] <= xf_busy ? '0 : {1'b1, ext_addr[19:XA_W]};
+      end
+      xc_q  <= xd_mem[x_dec_a[XA_W-1:0]];
+      xc_tq <= xt_mem[x_dec_a[XA_W-1:0]];
+    end
+  end else begin : g_noxc
+    assign xc_q = 32'd0; assign xc_tq = '0;
+  end endgenerate
+  assign xc_hit = XC && xc_tq[XT_W] && (xc_tq[XT_W-1:0] == ext_addr[19:XA_W]);
+  assign xc_we  = XC && (xf_busy || (s == S_XA && ext_req && ext_ack && xc_fill));
+  assign xc_wa  = xf_busy ? xf_cnt : ext_addr[XA_W-1:0];
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) begin xf_busy <= XC; xf_cnt <= '0; end
+    else if (xf_busy) begin xf_cnt <= xf_cnt + 1'b1; if (&xf_cnt) xf_busy <= 1'b0; end
 
   // ======================================================== transfer decode
   // Each word moves at most two values, A and B, each from a source to a
@@ -597,7 +682,7 @@ module tgpx4_core #(
   logic [31:0] opb_n;
   assign opb_n = !alu_src2 ? 32'd0 :
                  (ai2[4:3] == 2'd2) ? pr_rd :
-                 (ai2[4:3] == 2'd3) ? cst(ai2[2:0], !aop[4]) : rf_rd[1];
+                 (ai2[4:3] == 2'd3) ? cst(ai2[2:0], !aop[4]) : rfo[1];   // R1006: forwarded
   wire dec_swap = aop[1] || (aop == 5'h04);
   assign cv_go   = alu_go && a_cvt;
   assign sq_go   = alu_go && a_frsq;
@@ -648,21 +733,61 @@ module tgpx4_core #(
     i_az = (ires == 32'd0);
   end
 
-  // ======================================================== ALU / MUL results
-  logic        alu_pend, alu_done, mul_pend, mul_done;
+  // ======================================================== ALU / MUL results (R1006)
+  // THE DESCRIPTOR of an operation: where its result goes (we, idx), whether
+  // it sets flags (fl: not when its word writes ST by a transfer -- the
+  // transfer came after the op in MAME), its opcode (the flags it sets), cur
+  // (issued by the word still in the sequencer), and MAME's NaN: nan set when
+  // an operand is a NaN, ov that operand quieted ({sign, fraction[21:0]};
+  // the first operand first, as MAME's host makes it -- R924).
+  typedef struct packed {
+    logic        we;
+    logic [4:0]  idx;
+    logic        fl;
+    logic [4:0]  aop;      // ALU: the opcode; multiplier: bit 0 = FMUL
+    logic        cur;
+    logic        nan;
+    logic [22:0] ov;
+  } odesc_t;
+  // (built by a function: Quartus 17.0 reads a named assignment pattern's
+  // "aop:" as the signal aop)
+  function automatic odesc_t mkd(input logic we_i, input logic [4:0] idx_i, input logic fl_i,
+                                 input logic [4:0] op_i, input logic cur_i, input logic nan_i, input logic [22:0] ov_i);
+    odesc_t d;
+    d.we = we_i; d.idx = idx_i; d.fl = fl_i; d.aop = op_i; d.cur = cur_i; d.nan = nan_i; d.ov = ov_i;
+    mkd = d;
+  endfunction
+  function automatic logic [31:0] ov32(input logic [22:0] o);
+    ov32 = {o[22], 8'hff, 1'b1, o[21:0]};
+  endfunction
+
+  // the static parts, registered as the word leaves S_DEC; the go pulses
+  // (alu_go / mul_go) follow in the next clock and the units take aop_q,
+  // the operand registers and these
+  logic        aq_we, aq_fl, mq_we, mq_fl, mq_isf;
+  logic [4:0]  aq_idx, mq_idx;
+
+  // in flight: issued, not arrived (two each, oldest first); a2u: their unit
+  odesc_t      af [0:1], mf [0:1];
+  logic [1:0]  af_n, mf_n;
+  logic [1:0]  a_unit;                 // 0 fp_add, 1 tgpx4_cvt, 2 FRCP / FRSQ
+  logic        m_unit;                 // 0 fp_mul, 1 the integer multiply
+  // arrived, not written: the result, its descriptor, its flags
+  logic        ar_v, mr_v;
+  odesc_t      ard, mrd;
   logic [31:0] alu_r, mul_r;
-  logic        alu_wr;               // the op has a register result
-  // flags as computed, applied by opcode class at S_WA / S_FIN
   logic        fa_an, fa_az, fa_zc, fa_x, fa_au, fa_av;   // fa_x: ZD / NR
   logic        fa_upd, fa_zcu;
   logic        fm_n, fm_z, fm_d, fm_v, fm_u;
+  // registers with a result still to be written
+  logic [31:0] pend;
+  logic        mpri;                   // the multiplier lost a bank conflict last clock
 
-  assign fmul_go = mul_go && isfmul;
+  assign fmul_go = mul_go && mq_isf;
   logic [31:0] fmul_n;
-  assign fmul_n = m1nan ? (opm1 | 32'h0040_0000) : m2nan ? (opm2 | 32'h0040_0000)
-                : f_nan(fmul_r) ? 32'hffc0_0000 : fmul_r;    // nanfix(fmul_r, opm1, opm2), R924 / R934
-  logic fm_opnan;
-  assign fm_opnan = m1nan || m2nan;
+  logic        fm_opnan;
+  assign fm_opnan = mf[0].nan;
+  assign fmul_n = fm_opnan ? ov32(mf[0].ov) : f_nan(fmul_r) ? 32'hffc0_0000 : fmul_r;   // nanfix(fmul_r, opm1, opm2)
 
   function automatic logic f_neg(input logic [31:0] f);
     f_neg = f[31] && (f[30:0] != 31'd0) && !(f[30:23] == 8'hff && f[22:0] != 23'd0);
@@ -686,35 +811,29 @@ module tgpx4_core #(
     else               nanfix = r;
   endfunction
 
-  // R934: THE OPERANDS' NaN TESTS ARE REGISTERED, a clock after the operands
-  // load (S_DEC; opm2 also S_PR2) -- the units take four clocks and the
-  // operands hold until the word ends, so the flags are settled long before
-  // a result. The flags of the result are taken from the unit's result and
-  // those two bits, not by testing nanfix()'s output: add_bq -> nanfix ->
-  // f_neg -> the clamp -> f_zero -> fa_az was on all four 2C seeds' lists.
-  // Exactly nanfix(): a NaN operand makes a NaN, which is neither negative
-  // nor zero; a NaN result is neither either.
-  logic add_anan, add_bnan, m1nan, m2nan;
-  always_ff @(posedge clk) begin
-    add_anan <= f_nan(add_aq); add_bnan <= f_nan(add_bq);
-    m1nan    <= f_nan(opm1);   m2nan    <= f_nan(opm2);
-  end
+  // R934 / R1006: THE OPERANDS' NaN TESTS ARE MADE AT THE GO PULSE, from the
+  // operand registers (loaded in S_DEC, opm2 also in S_PR2), and ride with
+  // the operation in its descriptor -- the operand registers belong to the
+  // next word by the time the result arrives. The flags of the result are
+  // taken from the unit's result and that bit, not by testing nanfix()'s
+  // output (add_bq -> nanfix -> f_neg -> the clamp -> f_zero -> fa_az was on
+  // all four 2C seeds' lists). Exactly nanfix(): a NaN operand makes a NaN,
+  // which is neither negative nor zero; a NaN result is neither either.
+  logic        go_anan, go_bnan, go_m1nan, go_m2nan;
+  assign go_anan  = f_nan(add_aq);  assign go_bnan  = f_nan(add_bq);
+  assign go_m1nan = f_nan(opm1);    assign go_m2nan = f_nan(opm2);
   logic        add_zc, add_zop, add_rneg, add_rzero;
   logic [31:0] add_d;
   logic [31:0] add_n;
-  assign add_n     = add_anan ? (add_a | 32'h0040_0000) : add_bnan ? (add_b | 32'h0040_0000)
-                   : f_nan(add_r) ? 32'hffc0_0000 : add_r;   // nanfix(add_r, add_a, add_b), R924
-  assign add_rneg  = !add_anan && !add_bnan && f_neg(add_r);      // f_neg(add_n)
-  assign add_rzero = !add_anan && !add_bnan && f_zero(add_r);     // f_zero(add_n)
-  assign add_zop   = aop_q[0] && !aop_q[2];
+  assign add_n     = af[0].nan ? ov32(af[0].ov) : f_nan(add_r) ? 32'hffc0_0000 : add_r;   // nanfix(add_r, add_a, add_b), R924
+  assign add_rneg  = !af[0].nan && f_neg(add_r);      // f_neg(add_n)
+  assign add_rzero = !af[0].nan && f_zero(add_r);     // f_zero(add_n)
+  assign add_zop   = af[0].aop[0] && !af[0].aop[2];
   assign add_zc    = add_zop && add_rneg;                    // FADDZ / FSUBZ clamp
   assign add_d     = add_zc ? 32'd0 : add_n;
 
   // ======================================================== moves in flight
   logic [31:0] mv_val [0:1];
-  logic        xw_rf_v [0:1];
-  logic [4:0]  xw_rf_i [0:1];
-  logic        xw_st;
   logic        ctl_take;
   logic [11:0] ctl_tgt;
 
@@ -723,18 +842,25 @@ module tgpx4_core #(
   always_comb begin
     pm_req  = 1'b0;
     pm_addr = pc;
-    rf_ra[0] = {ai1[3], 1'b1, ai1[2:0]};
-    rf_ra[1] = {ai2[3], 1'b1, ai2[2:0]};
-    rf_ra[2] = {m1s[3], 1'b0, m1s[2:0]};
-    rf_ra[3] = {m2s[3], 1'b0, m2s[2:0]};
-    if (s == S_XA) rf_ra[0] = rf_idx(sc[0]);
-    if (s == S_XB) rf_ra[1] = rf_idx(sc[1]);
+    rfa_ra[0] = {ai1[3], ai1[2:0]};
+    rfa_ra[1] = {ai2[3], ai2[2:0]};
+    rfm_ra[0] = {m1s[3], m1s[2:0]};
+    rfm_ra[1] = {m2s[3], m2s[2:0]};
+    // R1006: a register-file source read in S_DEC through its free bank's copy 0
+    if (s == S_DEC && !alu_op) rfa_ra[0] = {sc[0][5], sc[0][2:0]};
+    if (s == S_DEC && !mul_op) rfm_ra[0] = {sc[0][5], sc[0][2:0]};
+    if (s == S_XA) begin rfa_ra[0] = {sc[0][5], sc[0][2:0]}; rfm_ra[0] = {sc[0][5], sc[0][2:0]}; end
+    if (s == S_XB) begin rfa_ra[1] = {sc[1][5], sc[1][2:0]}; rfm_ra[1] = {sc[1][5], sc[1][2:0]}; end
     agu_m   = (s == S_XA || s == S_WXB) ? 1'b1 : 1'b0;
     agu_dst = (s == S_WXA || s == S_WXB);
     ra_ra = is_ctl ? ctl_ea[9:0] : g_ea[9:0];
     rb_ra = (is_ctl && (cop == 5'h05)) ? sp : (is_ctl ? ctl_ea[9:0] : g_ea[9:0]);
     if ((s == S_DEC && !pf_sent) || (s == S_HALT && run)) pm_req = 1'b1;
   end
+  // a transfer source from the register file, from its own bank (sel0 = code bit 3)
+  logic [31:0] xa_rd, xb_rd;
+  assign xa_rd = sc[0][3] ? rfa_rd[0] : rfm_rd[0];
+  assign xb_rd = sc[1][3] ? rfa_rd[1] : rfm_rd[1];
 
   // ONE special-register read, for source A in S_DEC and source B in S_XA.
   // PR is read at S_DEC's prp for both (MAME reads every transfer source
@@ -770,33 +896,263 @@ module tgpx4_core #(
   logic [15:0] ar_bt;
   assign ar_bt = {2'b00, g_ary};
 
+  // R1006: A CONTROL WORD WITH NOTHING TO FETCH (no PUSH / POP, no jump
+  // target in a register or RAM) TAKES ITS EFFECT IN S_DEC -- the condition,
+  // the target and every register it changes are known there -- and ends a
+  // clock later (S_WAIT), so its delay slot / REP is in place for the take.
+  // The same decisions S_DEC registers (ctl_take, ctl_tgt) and S_WXA uses.
+  logic        ctl_dec, take_d;
+  logic [11:0] tgt_d, ctl_t_d;
+  assign ctl_dec = is_ctl && sk[0] == K_NONE;
+  always_comb begin
+    case (cop)
+      5'h10: take_d = cond;
+      5'h11: take_d = !cond;
+      5'h12, 5'h1a, 5'h1b: take_d = 1'b1;
+      5'h13: take_d = st[F_LP];
+      5'h14: take_d = !ar_bt[ir[19:16]];
+      5'h15: take_d =  ar_bt[ir[19:16]];
+      5'h18: take_d = cond;
+      5'h19: take_d = !cond;
+      default: take_d = 1'b0;
+    endcase
+    case (ir[15:13])
+      3'd0: tgt_d = ir[11:0];
+      3'd1: tgt_d = g_arx[11:0];
+      default: tgt_d = 12'd0;
+    endcase
+    case (cop)
+      5'h13, 5'h14, 5'h15: ctl_t_d = pc + ir[11:0];
+      5'h1b:               ctl_t_d = pcs[pcp - 2'd1];
+      default:             ctl_t_d = ir[12] ? (pc + tgt_d) : tgt_d;
+    endcase
+  end
+  // R1006: A SOURCE ALREADY IN HAND AT S_DEC NEEDS NO S_XA -- an immediate, a
+  // special register (read there anyway), or a register-file source when its
+  // bank's first read copy is free in S_DEC (the word has no operation on
+  // that bank's unit); one source only
+  logic xs_rf_dec, xa_skip;
+  assign xs_rf_dec = sk[0] == K_REG && is_rf(sc[0]) && (sc[0][3] ? !alu_op : !mul_op);
+  assign xa_skip   = sk[1] == K_NONE && (sk[0] == K_IMM || (sk[0] == K_REG && !is_rf(sc[0])) || xs_rf_dec);
+
+  // ---------------------------------------------------------------- R1006: the results' writer
+  // A result is written in the clock it arrives -- to its bank's write port,
+  // ahead of the sequencer -- or, when it cannot be, registered (ar_v /
+  // mr_v) and written from there. It cannot be when it is its own word's and
+  // that word still has a transfer source to read after this clock (in S_XA
+  // with an external read pending or a source B to come: MAME reads every
+  // source before the ALU), or when the ALU's and the multiplier's results
+  // want the same bank in one clock: the ALU's goes first and the
+  // multiplier's the next clock (mpri), so neither waits more than one --
+  // which is what lets the issue rules space arrivals two clocks apart.
+  // The candidate of each class: the registered result if there is one,
+  // else the one arriving (the integer ALU's at the go pulse).
+  logic a_int_arr, a_arr, m_arr;
+  assign a_int_arr = alu_go && (a_int || a_flog);
+  assign a_arr     = add_v || cv_v || div_v || a_int_arr;
+  assign m_arr     = fmul_v || imul_v;
+  // arriving now
+  odesc_t      a_cd_arr;
+  logic [31:0] a_cv_arr, m_cv_arr;
+  logic        a_aupd, a_aan, a_aaz, a_azcu, a_azc, a_aau, a_aav, a_ax;
+  logic        m_an, m_az, m_ad, m_av, m_au;
+  always_comb begin
+    // the ALU's (MAME decode_aluop)
+    a_cd_arr = a_int_arr ? mkd(aq_we, aq_idx, aq_fl, aop_q, 1'b1, 1'b0, 23'd0) : af[0];
+    a_cv_arr = ires; a_aupd = i_flags; a_aan = i_an; a_aaz = i_az; a_azcu = i_zc_upd; a_azc = i_zc;
+    a_aau = 1'b0; a_aav = 1'b0; a_ax = 1'b0;
+    if (alu_go && a_flog) begin a_cv_arr = 32'd0; a_aupd = 1'b0; a_azcu = 1'b0; end
+    if (add_v) begin
+      a_cv_arr = add_d; a_aupd = 1'b1; a_aan = add_rneg && !add_zop; a_aaz = add_zc || add_rzero;   // R934: f_neg / f_zero(add_d)
+      a_azcu = add_zop; a_azc = add_zc;
+    end
+    if (cv_v) begin
+      a_cv_arr = cv_r; a_aupd = 1'b1; a_azcu = 1'b0; a_aan = cv_an; a_aaz = cv_az; a_aau = cv_au; a_aav = cv_av;
+    end
+    if (div_v) begin
+      a_cv_arr = div_n; a_aupd = 1'b1; a_azcu = 1'b0; a_aan = f_neg(div_n); a_aaz = f_zero(div_n);
+      a_ax = frsq_pend ? (f_zero(opa) || f_neg(opa)) : f_zero(opa);
+    end
+    // the multiplier's (MAME decode_mulop: MD = isnan, MV = isinf, MU = |res|
+    // < FLT_MIN -- so an exact zero sets MU too, R924 -- from the result and
+    // the operands' NaN bit, R934)
+    m_cv_arr = imul_r; m_an = imul_r[31]; m_az = (imul_r == 32'd0); m_ad = 1'b0; m_av = 1'b0; m_au = 1'b0;
+    if (fmul_v) begin
+      m_cv_arr = fmul_n; m_an = !fm_opnan && f_neg(fmul_r); m_az = !fm_opnan && f_zero(fmul_r);
+      m_ad = fm_opnan || f_nan(fmul_r);
+      m_av = !fm_opnan && (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] == 23'd0);
+      m_au = !fm_opnan && (fmul_r[30:23] == 8'h00);
+    end
+  end
+  // the candidates: the registered result first
+  odesc_t      a_cd, m_cd;
+  logic [31:0] a_cv, m_cv;
+  logic        a_cupd, a_can, a_caz, a_czcu, a_czc, a_cau, a_cav, a_cx;
+  logic        m_cn, m_cz, m_cdd, m_cvv, m_cu;
+  assign a_cd   = ar_v ? ard    : a_cd_arr;
+  assign a_cv   = ar_v ? alu_r  : a_cv_arr;
+  assign a_cupd = ar_v ? fa_upd : a_aupd;
+  assign a_can  = ar_v ? fa_an  : a_aan;
+  assign a_caz  = ar_v ? fa_az  : a_aaz;
+  assign a_czcu = ar_v ? fa_zcu : a_azcu;
+  assign a_czc  = ar_v ? fa_zc  : a_azc;
+  assign a_cau  = ar_v ? fa_au  : a_aau;
+  assign a_cav  = ar_v ? fa_av  : a_aav;
+  assign a_cx   = ar_v ? fa_x   : a_ax;
+  assign m_cd   = mr_v ? mrd    : mf[0];
+  assign m_cv   = mr_v ? mul_r  : m_cv_arr;
+  assign m_cn   = mr_v ? fm_n   : m_an;
+  assign m_cz   = mr_v ? fm_z   : m_az;
+  assign m_cdd  = mr_v ? fm_d   : m_ad;
+  assign m_cvv  = mr_v ? fm_v   : m_av;
+  assign m_cu   = mr_v ? fm_u   : m_au;
+  logic a_cand, m_cand, a_hold, m_hold, a_req, m_req, bank_cf, a_wr, m_wr, res_a_busy, res_m_busy;
+  assign a_cand  = ar_v || a_arr;
+  assign m_cand  = mr_v || m_arr;
+  logic xa_more;                        // S_XA has a source to read after this clock
+  assign xa_more = ext_req || (xc_pend && !xc_hit) || sk[1] != K_NONE;
+  assign a_hold  = a_cd.cur && s == S_XA && xa_more;
+  assign m_hold  = m_cd.cur && s == S_XA && xa_more;
+  assign a_req   = a_cand && a_cd.we && !a_hold;
+  assign m_req   = m_cand && m_cd.we && !m_hold;
+  assign bank_cf = a_req && m_req && (a_cd.idx[3] == m_cd.idx[3]);
+  assign a_wr    = a_cand && !a_hold && !(bank_cf && mpri);
+  assign m_wr    = m_cand && !m_hold && !(bank_cf && !mpri);
+  assign res_a_busy = (a_wr && a_cd.we && a_cd.idx[3]) || (m_wr && m_cd.we && m_cd.idx[3]);
+  assign res_m_busy = (a_wr && a_cd.we && !a_cd.idx[3]) || (m_wr && m_cd.we && !m_cd.idx[3]);
+  // R1006: S_DEC's operands FORWARDED from the results written this clock --
+  // the register file has them only after this clock's edge, and a word that
+  // needs its predecessor's result would otherwise wait one clock more. The
+  // same for a transfer source read in S_DEC (xs_rf_dec).
+  logic [4:0]  op_idx [0:3];
+  logic [31:0] rfo [0:3], xa_rdo;
+  assign op_idx[0] = {ai1[3], 1'b1, ai1[2:0]};
+  assign op_idx[1] = {ai2[3], 1'b1, ai2[2:0]};
+  assign op_idx[2] = {m1s[3], 1'b0, m1s[2:0]};
+  assign op_idx[3] = {m2s[3], 1'b0, m2s[2:0]};
+  always_comb begin
+    for (int k = 0; k < 4; k++) begin
+      rfo[k] = rf_rd[k];
+      if (a_wr && a_cd.we && a_cd.idx == op_idx[k]) rfo[k] = a_cv;
+      if (m_wr && m_cd.we && m_cd.idx == op_idx[k]) rfo[k] = m_cv;
+    end
+    xa_rdo = xa_rd;
+    if (a_wr && a_cd.we && a_cd.idx == rf_idx(sc[0])) xa_rdo = a_cv;
+    if (m_wr && m_cd.we && m_cd.idx == rf_idx(sc[0])) xa_rdo = m_cv;
+  end
+  // the in-flight queues: pushed at the go pulse, popped as the unit answers
+  logic a_push, a_pop, m_pop, a_wi, m_wi;
+  logic [1:0] a_wi2, m_wi2;
+  assign a_push = alu_go && !(a_int || a_flog);
+  assign a_pop  = add_v || cv_v || div_v;
+  assign m_pop  = fmul_v || imul_v;
+  assign a_wi2  = af_n - {1'b0, a_pop};
+  assign m_wi2  = mf_n - {1'b0, m_pop};
+  assign a_wi   = a_wi2[0];
+  assign m_wi   = m_wi2[0];
+  logic ops_idle;                      // nothing in flight and nothing to write (the bench's lockstep)
+  assign ops_idle = (af_n == 2'd0) && !ar_v && (mf_n == 2'd0) && !mr_v;
+
+  // ---------------------------------------------------------------- R1006: hazards at S_DEC
+  logic [4:0] ao_idx, mo_idx;
+  assign ao_idx  = {ao[3], ao[4], ao[2:0]};
+  assign mo_idx  = {mdst[3], mdst[4], mdst[2:0]};
+  // the word's transfers into the register file, and whether one writes ST
+  logic       tx_rf0, tx_rf1, st_wr_s;
+  assign tx_rf0  = dk[0] == K_REG && is_rf(dc[0]);
+  assign tx_rf1  = dk[1] == K_REG && is_rf(dc[1]);
+  assign st_wr_s = (dk[0] == K_REG && dc[0] == 6'h15) || (dk[1] == K_REG && dc[1] == 6'h15);
+  // a transfer to the op's register came after the op in MAME, and the
+  // multiply after the ALU: the op's result is dropped (decided here, so its
+  // arrival time does not matter)
+  logic       alu_sup_s, mul_sup_s, alu_wr_s;
+  assign alu_sup_s = (tx_rf0 && rf_idx(dc[0]) == ao_idx) || (tx_rf1 && rf_idx(dc[1]) == ao_idx) ||
+                     (mul_op && mo_idx == ao_idx);
+  assign mul_sup_s = (tx_rf0 && rf_idx(dc[0]) == mo_idx) || (tx_rf1 && rf_idx(dc[1]) == mo_idx);
+  // MAME's ALU ops with a register result: all but FCMP, FABC, NOP and CMP
+  assign alu_wr_s  = !(aop == 5'h04 || aop == 5'h06 || aop == 5'h07 || aop == 5'h14);
+  // the ALU op's unit (a_fadd / a_cvt / ... on aop, before it is registered)
+  logic       d_fadd, d_div, d_cvt, d_imm;
+  logic [1:0] d_unit;
+  assign d_fadd = (aop[4:3] == 2'b00) && (aop[2:0] != 3'd5) && (aop[2:0] != 3'd7);
+  assign d_div  = (aop == 5'h0a) || (aop == 5'h0b);
+  assign d_cvt  = (aop == 5'h0d) || (aop == 5'h0e) || (aop == 5'h0f) || (aop[4:2] == 3'b111);
+  assign d_imm  = !d_fadd && !d_div && !d_cvt;          // the integer ALU and FLOG: the result at the go pulse
+  assign d_unit = d_div ? 2'd2 : d_cvt ? 2'd1 : 2'd0;
+  // ISSUE: an op of a class may go while others of its class are in flight
+  // only on the same pipelined unit (so they arrive in order, two or more
+  // clocks apart) with room in the queue; FRCP / FRSQ and the integer ALU
+  // only with nothing in flight -- and then the result register must be free
+  // by the time it arrives
+  logic a_issue_ok, m_issue_ok;
+  assign a_issue_ok = (af_n == 2'd0) ? (!ar_v || a_wr) :
+                      (af_n == 2'd1) ? (!d_div && !d_imm && d_unit == a_unit && a_unit != 2'd2) : 1'b0;
+  assign m_issue_ok = (mf_n == 2'd0) ? (!mr_v || m_wr) :
+                      (mf_n == 2'd1) ? (m_unit == !isfmul) : 1'b0;
+  // RAW / WAW on the scoreboard: a register is free once its result is
+  // written by the end of this clock (pend_l) -- S_DEC's own reads take the
+  // value forwarded (rfo / xa_rdo), later states read the register file.
+  logic [31:0] wr_now, pend_l;
+  always_comb begin
+    wr_now = 32'd0;
+    if (a_wr && a_cd.we) wr_now[a_cd.idx] = 1'b1;
+    if (m_wr && m_cd.we) wr_now[m_cd.idx] = 1'b1;
+  end
+  assign pend_l = pend & ~wr_now;
+  logic hz_reg, hz_st, rd_st;
+  always_comb begin
+    hz_reg = 1'b0;
+    if (alu_op) begin
+      if (pend_l[{ai1[3], 1'b1, ai1[2:0]}]) hz_reg = 1'b1;
+      if (alu_src2 && !ai2[4] && pend_l[{ai2[3], 1'b1, ai2[2:0]}]) hz_reg = 1'b1;
+      if (alu_wr_s && pend_l[ao_idx]) hz_reg = 1'b1;
+    end
+    if (mul_op) begin
+      if (pend_l[{m1s[3], 1'b0, m1s[2:0]}]) hz_reg = 1'b1;
+      if (!m2s[4] && pend_l[{m2s[3], 1'b0, m2s[2:0]}]) hz_reg = 1'b1;
+      if (pend_l[mo_idx]) hz_reg = 1'b1;
+    end
+    if (sk[0] == K_REG && is_rf(sc[0]) && pend_l[rf_idx(sc[0])]) hz_reg = 1'b1;
+    if (sk[1] == K_REG && is_rf(sc[1]) && pend_l[rf_idx(sc[1])]) hz_reg = 1'b1;
+    for (int m = 0; m < 2; m++)
+      if (dk[m] == K_REG && is_rf(dc[m]) && pend_l[rf_idx(dc[m])]) hz_reg = 1'b1;
+  end
+  // ST read (a condition on the flags, a transfer from ST) or written
+  assign rd_st = (is_ctl && (cop == 5'h10 || cop == 5'h11 || cop == 5'h18 || cop == 5'h19) && ef1[4:0] < 5'd20) ||
+                 (sk[0] == K_REG && sc[0] == 6'h15) || (sk[1] == K_REG && sc[1] == 6'h15) || st_wr_s;
+  assign hz_st = rd_st && !ops_idle;
+  logic dec_hz;
+  assign dec_hz = hz_reg || hz_st || (alu_op && !a_issue_ok) || (mul_op && !m_issue_ok) ||
+                  (alu_pr && mul_pr && !ops_idle) ||     // S_PR2 issues a clock late: nothing in flight
+                  (needs_fo && wq_busy);                 // an output after every posted write (m2_tgpx4)
+
   // ---------------------------------------------------------------- word end
   logic dec_stall, eow, acc;
   logic [63:0] acc_word;
-  logic alu_arr, mul_arr;
   assign dec_stall    = (needs_fi && !fi_valid) || (needs_fo && fo_full);
-  logic wx_maybe_ext;
+  logic wx_maybe_ext, wx_hold, seq_rf;
   assign wx_maybe_ext = (dk[wm] == K_MEM && !dbus[wm] && !dmask[wm]) || (dk[wm] == K_EXT);
-  assign alu_arr = add_v | cv_v | div_v | (alu_go & (a_int | a_flog));
-  assign mul_arr = fmul_v | imul_v;
+  // R1006: a transfer into the register file waits a clock when a result
+  // takes its bank's write port
+  assign seq_rf  = (s == S_WXA || s == S_WXB) && !ext_req && dk[wm] == K_REG && is_rf(wc);
+  assign wx_hold = seq_rf && (wc[3] ? res_a_busy : res_m_busy);
   always_comb begin
     case (s)
-      S_DEC:  eow = !dec_stall && !(alu_pr && mul_pr) && sk[0] == K_NONE && dk[0] == K_NONE &&
-                    !is_ctl && !alu_en && !mul_en;
-      S_XA:   eow = !ext_req && sk[1] == K_NONE && dk[0] == K_NONE && !is_ctl && !alu_pend && !mul_pend;
+      S_DEC:  eow = !dec_stall && !dec_hz && !(alu_pr && mul_pr) && sk[0] == K_NONE && dk[0] == K_NONE &&
+                    !is_ctl && !alu_op && !mul_op;
+      S_XA:   eow = !ext_req && !(xc_pend && !xc_hit) && sk[1] == K_NONE && dk[0] == K_NONE && !is_ctl;
       S_WXA, S_WXB:
-              // never a control word (it always has an ALU or multiply op,
-              // so its delay slot / REP is in place before the next word is
-              // taken), and never a write to ST (the take reads ST's RP)
+              // never a control word (its delay slot / REP must be in place
+              // before the next word is taken: it ends in S_WAIT), and never a
+              // write to ST (the take reads ST's RP)
               // R924: !wx_ext_start (the AGU's sum) became a decode-only test: an A-bus memory
               // destination (internal or external by its address, the AGU's
               // sum) ends the word in a later state instead. That took the
               // AGU off s1312's worst path (ir -> AGU -> eow -> acc -> rpc,
               // -1.525 ns); HOTD writes the A bus ~600 times in 1 G words.
-              eow = (ext_req ? ext_ack : !wx_maybe_ext) && !(s == S_WXA && dk[1] != K_NONE) &&
-                    !alu_pend && !mul_pend && !(dk[wm] == K_REG && wc == 6'h15);
-      S_WA:   eow = !mul_pend;
-      S_FIN:  eow = 1'b1;
+              eow = !wx_hold && (ext_req ? ext_ack : !wx_maybe_ext) && !(s == S_WXA && dk[1] != K_NONE) &&
+                    !is_ctl && !(dk[wm] == K_REG && wc == 6'h15);
+      S_WAIT: eow = 1'b1;
       default: eow = 1'b0;
     endcase
   end
@@ -806,44 +1162,51 @@ module tgpx4_core #(
   // THE INTERNAL WRITE PORTS ARE DRIVEN IN THE CLOCK THAT DECIDES THEM, so a
   // write lands at that clock's edge and the next word -- which may start in
   // the very next clock -- reads it. (Registered, they landed a clock late,
-  // and the first prefetching version read stale registers: R920.) One data
-  // path serves the RF, PR and both RAMs; only one of them writes a clock.
-  logic [4:0] ao_idx, mo_idx;
-  logic       alu_sup, mul_sup;
-  assign ao_idx  = {ao[3], ao[4], ao[2:0]};
-  assign mo_idx  = {mdst[3], mdst[4], mdst[2:0]};
-  // a transfer to the same register came after the op in MAME
-  assign alu_sup = (xw_rf_v[0] && xw_rf_i[0] == ao_idx) || (xw_rf_v[1] && xw_rf_i[1] == ao_idx);
-  assign mul_sup = (xw_rf_v[0] && xw_rf_i[0] == mo_idx) || (xw_rf_v[1] && xw_rf_i[1] == mo_idx);
-
-  logic [31:0] wd;
+  // and the first prefetching version read stale registers: R920.) The
+  // sequencer's data path serves PR, both RAMs and the register file's free
+  // bank; the results' writer has the banks first.
   always_comb begin
-    rf_we = 1'b0; rf_wa = ao_idx;
+    rfa_we = 1'b0; rfa_wa = {a_cd.idx[4], a_cd.idx[2:0]}; rfa_wd = a_cv;
+    rfm_we = 1'b0; rfm_wa = {m_cd.idx[4], m_cd.idx[2:0]}; rfm_wd = m_cv;
+    if (a_wr && a_cd.we) begin
+      if (a_cd.idx[3]) begin rfa_we = 1'b1; rfa_wa = {a_cd.idx[4], a_cd.idx[2:0]}; rfa_wd = a_cv; end
+      else             begin rfm_we = 1'b1; rfm_wa = {a_cd.idx[4], a_cd.idx[2:0]}; rfm_wd = a_cv; end
+    end
+    if (m_wr && m_cd.we) begin
+      if (m_cd.idx[3]) begin rfa_we = 1'b1; rfa_wa = {m_cd.idx[4], m_cd.idx[2:0]}; rfa_wd = m_cv; end
+      else             begin rfm_we = 1'b1; rfm_wa = {m_cd.idx[4], m_cd.idx[2:0]}; rfm_wd = m_cv; end
+    end
+    if (seq_rf && !wx_hold) begin
+      if (wc[3]) begin rfa_we = 1'b1; rfa_wa = {wc[5], wc[2:0]}; rfa_wd = wv; end
+      else       begin rfm_we = 1'b1; rfm_wa = {wc[5], wc[2:0]}; rfm_wd = wv; end
+    end
+  end
+  always_comb begin
     pr_we = 1'b0; pr_wa = pwp;
     ra_we = 1'b0; ra_wa = g_ea[9:0];
     rb_we = 1'b0; rb_wa = g_ea[9:0];
-    wd    = wv;
-    case (s)
-      S_WXA, S_WXB: if (!ext_req) begin
-        if (dk[wm] == K_REG && is_rf(wc)) begin rf_we = 1'b1; rf_wa = rf_idx(wc); end
-        if (dk[wm] == K_REG && wc == 6'h30) pr_we = 1'b1;
-        if (dk[wm] == K_MEM) begin
-          if (dbus[wm])                               rb_we = 1'b1;
-          else if (dmask[wm] || g_ea[13:10] == 4'd0)  ra_we = 1'b1;
-        end
-        if (s == S_WXA && is_ctl && cop == 5'h04) begin   // PUSH
-          rb_we = 1'b1; rb_wa = sp - 10'd1;
-        end
+    if ((s == S_WXA || s == S_WXB) && !ext_req && !wx_hold) begin
+      if (dk[wm] == K_REG && wc == 6'h30) pr_we = 1'b1;
+      if (dk[wm] == K_MEM) begin
+        if (dbus[wm])                               rb_we = 1'b1;
+        else if (dmask[wm] || g_ea[13:10] == 4'd0)  ra_we = 1'b1;
       end
-      S_WA:  if (alu_wr && !alu_sup)  begin rf_we = 1'b1; rf_wa = ao_idx; wd = alu_r; end
-      S_FIN: if (mul_pend && !mul_sup) begin rf_we = 1'b1; rf_wa = mo_idx; wd = mul_r; end
-      default: ;
-    endcase
+      if (s == S_WXA && is_ctl && cop == 5'h04) begin   // PUSH
+        rb_we = 1'b1; rb_wa = sp - 10'd1;
+      end
+    end
   end
-  assign rf_wd = wd;
-  assign pr_wd = wd;
-  assign ra_wd = wd;
-  assign rb_wd = wd;
+  assign pr_wd = wv;
+  assign ra_wd = wv;
+  assign rb_wd = wv;
+
+`ifdef VERILATOR
+  // R1006: the checkpoint start's controls, written by the bench only
+  logic        dbg_restart    /*verilator public_flat_rw*/;
+  logic [11:0] dbg_restart_pc /*verilator public_flat_rw*/;
+  initial begin dbg_restart = 1'b0; dbg_restart_pc = 12'd0; end
+  localparam logic [63:0] X4_NOP = 64'hC700_0200_0000_0000;   // control NOP, ALU NOP
+`endif
 
   integer k;
   always_ff @(posedge clk or negedge rst_n) begin
@@ -856,16 +1219,18 @@ module tgpx4_core #(
       opa <= 32'd0; opb <= 32'd0; opm1 <= 32'd0; opm2 <= 32'd0;
       add_aq <= 32'd0; add_bq <= 32'd0; add_subq <= 1'b0;
       alu_go <= 1'b0; mul_go <= 1'b0; aop_q <= 5'd0; imm5_q <= 5'd0;
-      alu_pend <= 1'b0; alu_done <= 1'b0; mul_pend <= 1'b0; mul_done <= 1'b0;
-      alu_r <= 32'd0; mul_r <= 32'd0; alu_wr <= 1'b0;
+      alu_r <= 32'd0; mul_r <= 32'd0;
+      aq_we <= 1'b0; aq_fl <= 1'b0; aq_idx <= 5'd0; mq_we <= 1'b0; mq_fl <= 1'b0; mq_idx <= 5'd0; mq_isf <= 1'b0;
+      af[0] <= '0; af[1] <= '0; mf[0] <= '0; mf[1] <= '0; af_n <= 2'd0; mf_n <= 2'd0;
+      a_unit <= 2'd0; m_unit <= 1'b0; ar_v <= 1'b0; mr_v <= 1'b0; ard <= '0; mrd <= '0;
+      pend <= 32'd0; mpri <= 1'b0;
       fa_an <= 1'b0; fa_az <= 1'b0; fa_zc <= 1'b0; fa_x <= 1'b0; fa_au <= 1'b0; fa_av <= 1'b0;
       fa_upd <= 1'b0; fa_zcu <= 1'b0;
       fm_n <= 1'b0; fm_z <= 1'b0; fm_d <= 1'b0; fm_v <= 1'b0; fm_u <= 1'b0;
       imul_p1 <= 32'd0; imul_r <= 32'd0; imul_v1 <= 1'b0; imul_v <= 1'b0;
       frsq_pend <= 1'b0;
       mv_val[0] <= 32'd0; mv_val[1] <= 32'd0; pr_dec <= 32'd0; ctl_ary <= 14'd0;
-      xw_rf_v[0] <= 1'b0; xw_rf_v[1] <= 1'b0; xw_rf_i[0] <= 5'd0; xw_rf_i[1] <= 5'd0;
-      xw_st <= 1'b0; ctl_take <= 1'b0; ctl_tgt <= 12'd0;
+      ctl_take <= 1'b0; ctl_tgt <= 12'd0; xc_pend <= 1'b0; xc_fill <= 1'b0;
       fi_pop <= 1'b0; fi_clr <= 1'b0; fo_push <= 1'b0; fo_data <= 32'd0; fo_clr <= 1'b0;
       ext_req <= 1'b0; ext_we <= 1'b0; ext_addr <= 24'd0; ext_wdata <= 32'd0;
       dbg_retire <= 1'b0; dbg_bad <= 1'b0;
@@ -874,51 +1239,68 @@ module tgpx4_core #(
       fi_pop <= 1'b0; fi_clr <= 1'b0; fo_push <= 1'b0; fo_clr <= 1'b0;
       dbg_retire <= 1'b0;
 
-      // ---------------------------------------------- unit completion
-      imul_v1 <= mul_go && !isfmul;
+      // ---------------------------------------------- R1006: results written
+      // (the writer's decisions are combinational, above; the bank ports too)
+      if (a_wr) begin
+        ar_v <= 1'b0;
+        if (a_cd.we) pend[a_cd.idx] <= 1'b0;
+        if (a_cd.fl) begin
+          if (a_cupd && a_cd.aop != 5'h0f) begin st[F_AN] <= a_can; st[F_AZ] <= a_caz; end
+          if (a_cd.aop == 5'h0f) begin                 // CFIB: AZ, and AU / AV only set
+            st[F_AZ] <= a_caz; if (a_cau) st[F_AU] <= 1'b1; if (a_cav) st[F_AV] <= 1'b1;
+          end
+          if (a_czcu) st[F_ZC] <= a_czc;
+          if (a_cd.aop == 5'h0a) st[F_ZD] <= a_cx;
+          if (a_cd.aop == 5'h0b) st[F_NR] <= a_cx;
+        end
+      end
+      if (m_wr) begin
+        mr_v <= 1'b0;
+        if (m_cd.we) pend[m_cd.idx] <= 1'b0;
+        if (m_cd.fl) begin                             // FMUL: MV / MU only set
+          st[F_MN] <= m_cn; st[F_MZ] <= m_cz; if (m_cd.aop[0]) st[F_MD] <= m_cdd;
+          if (m_cvv) st[F_MV] <= 1'b1; if (m_cu) st[F_MU] <= 1'b1;
+        end
+      end
+      // an arriving result not written now is registered (the held one, if
+      // any, is written this clock: the issue rules space arrivals so)
+      if (a_arr && (ar_v || !a_wr)) begin
+        ar_v <= 1'b1; alu_r <= a_cv_arr; ard <= a_cd_arr; if (acc) ard.cur <= 1'b0;
+        fa_upd <= a_aupd; fa_an <= a_aan; fa_az <= a_aaz; fa_zcu <= a_azcu; fa_zc <= a_azc;
+        fa_au <= a_aau; fa_av <= a_aav; fa_x <= a_ax;
+      end
+      if (m_arr && (mr_v || !m_wr)) begin
+        mr_v <= 1'b1; mul_r <= m_cv_arr; mrd <= mf[0]; if (acc) mrd.cur <= 1'b0;
+        fm_n <= m_an; fm_z <= m_az; fm_d <= m_ad; fm_v <= m_av; fm_u <= m_au;
+      end
+      mpri <= bank_cf ? !mpri : (m_wr ? 1'b0 : mpri);
+
+      // ---------------------------------------------- issue (the go pulse)
+      // the integer ALU's result is there at once; every other op's
+      // descriptor queues until its unit answers
+      if (a_push) begin
+        af[a_wi] <= mkd(aq_we, aq_idx, aq_fl, aop_q, !acc,
+            go_anan || go_bnan, go_anan ? {add_aq[31], add_aq[21:0]} : {add_bq[31], add_bq[21:0]});
+        a_unit <= a_cvt ? 2'd1 : (a_frcp || a_frsq) ? 2'd2 : 2'd0;
+      end
+      if (mul_go) begin
+        mf[m_wi] <= mkd(mq_we, mq_idx, mq_fl, {4'd0, mq_isf}, !acc,
+            go_m1nan || go_m2nan, go_m1nan ? {opm1[31], opm1[21:0]} : {opm2[31], opm2[21:0]});
+        m_unit <= !mq_isf;
+      end
+      af_n <= af_n + {1'b0, a_push} - {1'b0, a_pop};
+      mf_n <= mf_n + {1'b0, mul_go} - {1'b0, m_pop};
+      if (a_pop && af_n == 2'd2) af[0] <= af[1];
+      if (m_pop && mf_n == 2'd2) mf[0] <= mf[1];
+
+      // ---------------------------------------------- the units
+      imul_v1 <= mul_go && !mq_isf;
       imul_p1 <= opm1 * opm2;
       imul_v  <= imul_v1;
       imul_r  <= imul_p1;
-
-      if (alu_go && a_int) begin
-        alu_done <= 1'b1; alu_r <= ires; alu_wr <= i_wr;
-        fa_upd <= i_flags; fa_an <= i_an; fa_az <= i_az; fa_zcu <= i_zc_upd; fa_zc <= i_zc;
-      end
-      if (alu_go && a_flog) begin
-        alu_done <= 1'b1; alu_r <= 32'd0; alu_wr <= 1'b1;
-        fa_upd <= 1'b0; fa_zcu <= 1'b0; dbg_bad <= 1'b1;
-      end
-      if (add_v) begin
-        alu_done <= 1'b1; alu_r <= add_d; alu_wr <= !aop_q[2];
-        fa_upd <= 1'b1; fa_an <= add_rneg && !add_zop; fa_az <= add_zc || add_rzero;   // R934: f_neg / f_zero(add_d)
-        fa_zcu <= aop_q[0] && !aop_q[2]; fa_zc <= add_zc;
-      end
-      if (cv_v) begin
-        alu_done <= 1'b1; alu_r <= cv_r; alu_wr <= 1'b1;
-        fa_upd <= 1'b1; fa_zcu <= 1'b0;
-        fa_an <= cv_an; fa_az <= cv_az; fa_au <= cv_au; fa_av <= cv_av;
-      end
-      if (div_v) begin
-        alu_done <= 1'b1; alu_r <= div_n; alu_wr <= 1'b1;
-        fa_upd <= 1'b1; fa_zcu <= 1'b0; fa_an <= f_neg(div_n); fa_az <= f_zero(div_n);
-        fa_x <= frsq_pend ? (f_zero(opa) || f_neg(opa)) : f_zero(opa);
-        frsq_pend <= 1'b0;
-      end
+      if (alu_go && a_flog) dbg_bad <= 1'b1;
+      if (div_v) frsq_pend <= 1'b0;
       if (sq_go) frsq_pend <= 1'b1;
-      if (fmul_v) begin
-        mul_done <= 1'b1; mul_r <= fmul_n;
-        // MAME decode_mulop: MD = isnan, MV = isinf, MU = |res| < FLT_MIN --
-        // so an exact zero sets MU too (R924), from the result, not the unit's flags
-        // R934: of fmul_n, from fmul_r and the operands' NaN bits
-        fm_n <= !fm_opnan && f_neg(fmul_r); fm_z <= !fm_opnan && f_zero(fmul_r);
-        fm_d <= fm_opnan || f_nan(fmul_r);
-        fm_v <= !fm_opnan && (fmul_r[30:23] == 8'hff) && (fmul_r[22:0] == 23'd0);
-        fm_u <= !fm_opnan && (fmul_r[30:23] == 8'h00);
-      end
-      if (imul_v) begin
-        mul_done <= 1'b1; mul_r <= imul_r;
-        fm_n <= imul_r[31]; fm_z <= (imul_r == 32'd0); fm_d <= 1'b0; fm_v <= 1'b0; fm_u <= 1'b0;
-      end
 
       case (s)
         // ------------------------------------------------------------ halted
@@ -935,27 +1317,34 @@ module tgpx4_core #(
         // ------------------------------------------------------------ decode
         S_DEC: begin
           pf_sent <= 1'b1;
-          if (dec_stall) begin
+          if (dec_stall || dec_hz) begin
             s <= S_DEC;                               // stall: nothing done yet
           end else begin
-            // ALU / multiplier operands
-            opa  <= rf_rd[0];
-            opb  <= opb_n;
-            add_aq   <= dec_swap ? ((aop == 5'h06) ? {1'b0, opb_n[30:0]} : opb_n) : rf_rd[0];
-            add_bq   <= dec_swap ? ((aop == 5'h06) ? {1'b0, rf_rd[0][30:0]} : rf_rd[0]) : opb_n;
-            add_subq <= dec_swap;
-            opm1 <= rf_rd[2];
-            opm2 <= (m2s[4:3] == 2'd2) ? pr_rd :
-                    (m2s[4:3] == 2'd3) ? cst(m2s[2:0], isfmul) : rf_rd[3];
-            aop_q  <= aop;
-            imm5_q <= ai2;
+            // ALU / multiplier operands -- R1006: only for a word with the
+            // operation (FRCP / FRSQ read opa until they answer)
+            if (alu_op) begin
+              opa  <= rfo[0];
+              opb  <= opb_n;
+              add_aq   <= dec_swap ? ((aop == 5'h06) ? {1'b0, opb_n[30:0]} : opb_n) : rfo[0];
+              add_bq   <= dec_swap ? ((aop == 5'h06) ? {1'b0, rfo[0][30:0]} : rfo[0]) : opb_n;
+              add_subq <= dec_swap;
+              aop_q  <= aop;
+              imm5_q <= ai2;
+              aq_we  <= alu_wr_s && !alu_sup_s; aq_idx <= ao_idx; aq_fl <= !st_wr_s;
+              if (alu_wr_s && !alu_sup_s) pend[ao_idx] <= 1'b1;
+            end
+            if (mul_op) begin
+              opm1 <= rfo[2];
+              opm2 <= (m2s[4:3] == 2'd2) ? pr_rd :
+                      (m2s[4:3] == 2'd3) ? cst(m2s[2:0], isfmul) : rfo[3];
+              mq_we  <= !mul_sup_s; mq_idx <= mo_idx; mq_fl <= !st_wr_s; mq_isf <= isfmul;
+              if (!mul_sup_s) pend[mo_idx] <= 1'b1;
+            end
             if (alu_pr) prp <= prp_step(prp, ai2[2:0]);
             else if (mul_pr) prp <= prp_step(prp, m2s[2:0]);
-            alu_pend <= alu_en;
-            mul_pend <= mul_en;
             if (!(alu_pr && mul_pr)) begin
-              alu_go <= alu_en;
-              mul_go <= mul_en;
+              alu_go <= alu_op;
+              mul_go <= mul_op;
             end
             // source A: special registers now (MAME reads them before the ALU)
             pr_dec <= pr_rd;
@@ -964,12 +1353,15 @@ module tgpx4_core #(
               if (sc[0] == 6'h31) fi_pop <= 1'b1;
             end
             if (sk[0] == K_IMM) mv_val[0] <= imm;
+            if (xs_rf_dec) mv_val[0] <= xa_rdo;        // R1006: no S_XA for it
             // source A's address, and its AR update
             if (sk[0] == K_MEM && !is_ctl) begin
               if (g_we) ar[g_sely ? g_ry : g_rx] <= g_arw;
             end
             if (sk[0] == K_EXT) begin
-              ext_req <= 1'b1; ext_we <= 1'b0; ext_addr <= eb + eo;
+              ext_we <= 1'b0; ext_addr <= x_dec_a;
+              if (x_dec_rom) xc_pend <= 1'b1;           // R1006: the cache answers in S_XA
+              else ext_req <= 1'b1;
             end else if (sk[0] == K_MEM && !sbus[0] && !smask[0] && !is_ctl && (g_ea[13:10] != 4'd0)) begin
               ext_req <= 1'b1; ext_we <= 1'b0; ext_addr <= {eb[23:14], g_ea};
             end
@@ -993,9 +1385,36 @@ module tgpx4_core #(
                 default: ctl_tgt <= 12'd0;
               endcase
             end
+            // R1006: a control word with nothing to fetch, now (as S_WXA does)
+            if (ctl_dec) begin
+              case (cop)
+                5'h01: begin st[F_RP] <= 1'b1; rpc <= (ef1 == 6'h3f) ? {2'd0, g_ary} : ef2; end
+                5'h02: begin st[F_LP] <= 1'b1; lpc <= (ef1 == 6'h3f) ? {2'd0, g_ary} : ef2; end
+                5'h03: begin fi_clr <= ef1[0]; fo_clr <= ef1[1]; end
+                5'h08: modr <= ef2;
+                5'h09: modr <= (modr & ~16'h7000) | ef2;
+                5'h0a: modr <= (modr & ~16'h0e00) | ef2;
+                5'h0b: modr <= (modr & ~16'h0080) | ef2;
+                5'h0c: modr <= (modr & ~16'h0010) | ef2;
+                5'h0d: modr <= (modr & ~16'h0007) | ef2;
+                5'h13: begin
+                  lpc <= lpc - 16'd1;
+                  if (lpc == 16'd2) st[F_LP] <= 1'b0;
+                end
+                default: ;
+              endcase
+              if (take_d) begin
+                delay_slot <= 1'b1;
+                delay_pc   <= ctl_t_d;
+                if (cop == 5'h18 || cop == 5'h19 || cop == 5'h1a) begin
+                  pcs[pcp] <= pc + 12'd1; pcp <= pcp + 2'd1;
+                end
+                if (cop == 5'h1b) pcp <= pcp - 2'd1;
+              end
+            end
             if (alu_pr && mul_pr)                     s <= S_PR2;
-            else if (sk[0] != K_NONE)                 s <= S_XA;
-            else if (dk[0] != K_NONE || is_ctl)       s <= S_WXA;
+            else if (sk[0] != K_NONE && !xa_skip)     s <= S_XA;
+            else if (dk[0] != K_NONE || (is_ctl && !ctl_dec)) s <= S_WXA;
             else                                      s <= S_WAIT;
           end
         end
@@ -1003,19 +1422,22 @@ module tgpx4_core #(
         S_PR2: begin
           opm2 <= pr_rd;
           prp  <= prp_step(prp, m2s[2:0]);
-          alu_go <= alu_en;
-          mul_go <= mul_en;
-          if (sk[0] != K_NONE)                        s <= S_XA;
-          else if (dk[0] != K_NONE || is_ctl)         s <= S_WXA;
+          alu_go <= alu_op;
+          mul_go <= mul_op;
+          if (sk[0] != K_NONE && !xa_skip)            s <= S_XA;
+          else if (dk[0] != K_NONE || (is_ctl && !ctl_dec)) s <= S_WXA;
           else                                        s <= S_WAIT;
         end
 
         // ------------------------------------------------------------ sources
         S_XA: begin
-          if (ext_req) begin
-            if (ext_ack) begin ext_req <= 1'b0; mv_val[0] <= ext_rdata; end
+          if (xc_pend && !xc_hit) begin
+            xc_pend <= 1'b0; ext_req <= 1'b1; xc_fill <= 1'b1;   // R1006: a miss, to memory
+          end else if (ext_req) begin
+            if (ext_ack) begin ext_req <= 1'b0; mv_val[0] <= ext_rdata; xc_fill <= 1'b0; end
           end else begin
-            if (sk[0] == K_REG && is_rf(sc[0])) mv_val[0] <= rf_rd[0];
+            if (xc_pend) begin xc_pend <= 1'b0; mv_val[0] <= xc_q; end   // R1006: a hit
+            if (sk[0] == K_REG && is_rf(sc[0])) mv_val[0] <= xa_rd;
             if (sk[0] == K_MEM) mv_val[0] <= sbus[0] ? rb_q : ra_q;
             // source B: a special register, or its address
             if (sk[1] == K_REG && !is_rf(sc[1])) begin
@@ -1030,7 +1452,7 @@ module tgpx4_core #(
         end
 
         S_XB: begin
-          if (sk[1] == K_REG && is_rf(sc[1])) mv_val[1] <= rf_rd[1];
+          if (sk[1] == K_REG && is_rf(sc[1])) mv_val[1] <= xb_rd;
           if (sk[1] == K_MEM) mv_val[1] <= rb_q;
           s <= S_WXA;
         end
@@ -1043,19 +1465,17 @@ module tgpx4_core #(
               if (eo_upd) eo <= eo + {{18{eo_disp[5]}}, eo_disp};
               s <= (s == S_WXA && dk[1] != K_NONE) ? S_WXB : S_WAIT;
             end
-          end else begin
+          end else if (!wx_hold) begin                // R1006: else its bank's port is a result's this clock
             case (dk[wm])
               K_REG: begin
-                if (is_rf(wc)) begin
-                  xw_rf_v[wm] <= 1'b1; xw_rf_i[wm] <= rf_idx(wc);
-                end else begin
+                if (!is_rf(wc)) begin                 // the register file: the write-port block
                   case (wc)
                     6'h10: eb <= wv[23:0];
                     6'h11: eb <= {wv[9:0], eb[13:0]};
                     6'h12: eb <= {wv[9:0], 14'd0};   // MAME: (eb & 0xffc000) | (wv << 14)
                     6'h13: eo <= wv[23:0];
                     6'h14: sp <= wv[9:0];
-                    6'h15: begin st <= wv; xw_st <= 1'b1; end
+                    6'h15: st <= wv;                  // R1006: the word's own ops' flags are dropped (aq_fl / mq_fl)
                     6'h16: modr <= wv[15:0];
                     6'h17: lpc <= wv[15:0];
                     6'h30: begin pwp <= (pwp == 5'd23) ? 5'd0 : pwp + 5'd1; end
@@ -1120,36 +1540,9 @@ module tgpx4_core #(
           end
         end
 
-        // ------------------------------------------------------------ results
-        S_WAIT: begin
-          if ((!alu_pend || alu_done || alu_arr) && (!mul_pend || mul_done || mul_arr))
-            s <= alu_pend ? S_WA : S_FIN;
-        end
-
-        S_WA: begin
-          // the register write is in the write-port block; a transfer to ST
-          // came after the op's flags in MAME
-          if (!xw_st) begin
-            if (fa_upd && aop_q != 5'h0f) begin st[F_AN] <= fa_an; st[F_AZ] <= fa_az; end
-            if (aop_q == 5'h0f) begin                    // CFIB: AZ, and AU / AV only set
-              st[F_AZ] <= fa_az; if (fa_au) st[F_AU] <= 1'b1; if (fa_av) st[F_AV] <= 1'b1;
-            end
-            if (fa_zcu) st[F_ZC] <= fa_zc;
-            if (aop_q == 5'h0a) st[F_ZD] <= fa_x;
-            if (aop_q == 5'h0b) st[F_NR] <= fa_x;
-          end
-          s <= S_FIN;
-        end
-
-        S_FIN: begin
-          if (mul_pend) begin
-            if (!xw_st) begin                            // FMUL: MV / MU only set
-              st[F_MN] <= fm_n; st[F_MZ] <= fm_z; if (isfmul) st[F_MD] <= fm_d;
-              if (fm_v) st[F_MV] <= 1'b1; if (fm_u) st[F_MU] <= 1'b1;
-            end
-          end
-          s <= run ? S_FETCH : S_HALT;
-        end
+        // ------------------------------------------------------------ the end
+        // S_WAIT ends the word (eow); R1006: the results are the writer's
+        S_WAIT: ;
 
         default: s <= S_HALT;
       endcase
@@ -1171,14 +1564,39 @@ module tgpx4_core #(
         end else begin
           pc <= pc + 12'd1;
         end
-        alu_pend <= 1'b0; alu_done <= 1'b0; mul_pend <= 1'b0; mul_done <= 1'b0;
-        xw_rf_v[0] <= 1'b0; xw_rf_v[1] <= 1'b0; xw_st <= 1'b0; ctl_take <= 1'b0;
+        ctl_take <= 1'b0;
+        // R1006: the operations still in flight are no longer the word's in the sequencer
+        af[0].cur <= 1'b0; af[1].cur <= 1'b0; mf[0].cur <= 1'b0; mf[1].cur <= 1'b0;
+        ard.cur <= 1'b0; mrd.cur <= 1'b0;
         s <= S_DEC;
       end
+`ifdef VERILATOR
+      // R1006: THE BENCH'S CHECKPOINT START (tb_tgpx4_replay --ck-frame): the
+      // word in hand becomes a NOP (a control word, ALU NOP, no transfer) and
+      // the next one is fetched from dbg_restart_pc; the FIFOs are emptied. The
+      // bench then writes the reference's state into the registers and RAMs.
+      if (dbg_restart) begin
+        s <= S_DEC; ir <= X4_NOP; xd <= xdec(X4_NOP); ir_pc <= dbg_restart_pc;
+        pc <= dbg_restart_pc; nx_v <= 1'b0; pf_sent <= 1'b0; delay_slot <= 1'b0;
+        ctl_take <= 1'b0; ext_req <= 1'b0; fi_clr <= 1'b1; fo_clr <= 1'b1; xc_pend <= 1'b0; xc_fill <= 1'b0;
+        af_n <= 2'd0; mf_n <= 2'd0; ar_v <= 1'b0; mr_v <= 1'b0; pend <= 32'd0; mpri <= 1'b0;
+      end
+`endif
     end
   end
 
 `ifdef VERILATOR
+  // R1006: the queues never overflow, a unit never answers with nothing in
+  // flight, and a result never lands on one not yet written
+  /* verilator lint_off SYNCASYNCNET */
+  always_ff @(posedge clk)
+    if (rst_n && ((a_push && a_wi2 > 2'd1) || (mul_go && m_wi2 > 2'd1) || (a_pop && af_n == 2'd0) ||
+                  (m_pop && mf_n == 2'd0) ||
+                  (ar_v && !a_wr && (a_pop || (alu_go && (a_int || a_flog)))) || (mr_v && !m_wr && m_pop))) begin
+      $display("tgpx4_core: R1006 queue fault at pc %03x (af_n %0d mf_n %0d ar_v %0d mr_v %0d)", ir_pc, af_n, mf_n, ar_v, mr_v);
+      $stop;
+    end
+  /* verilator lint_on SYNCASYNCNET */
   // R934: the registered decode is the decode of ir, every clock
   /* verilator lint_off SYNCASYNCNET */
   always_ff @(posedge clk)
