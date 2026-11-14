@@ -50,7 +50,9 @@
 module m2_tgpx4 #(
   parameter int unsigned PLINES  = 1024,
   parameter bit          SUBNORM = 1'b1,
-  parameter int unsigned XC_AW   = 12       // R1006: tgpx4_core's ROM read cache
+  parameter int unsigned XC_AW   = 12,      // R1006: tgpx4_core's ROM read cache
+  parameter bit          FWD     = 1'b1,    // R1009: tgpx4_core's operand forwarding
+  parameter int unsigned WQ_AW   = 4        // R1009: the posted-write queue, 2^WQ_AW deep
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -106,7 +108,7 @@ module m2_tgpx4 #(
   logic [23:0] ext_addr;
   logic [31:0] ext_wdata, ext_rdata;
 
-  tgpx4_core #(.PLINES(PLINES), .SUBNORM(SUBNORM), .XC_AW(XC_AW)) u_core (
+  tgpx4_core #(.PLINES(PLINES), .SUBNORM(SUBNORM), .XC_AW(XC_AW), .FWD(FWD)) u_core (
     .clk(clk), .rst_n(rst_n), .run(run),
     .prog_we(prog_we), .prog_addr(prog_addr), .prog_data(prog_data),
     .pf_req(pf_req), .pf_addr(pf_addr), .pf_data(pf_data), .pf_ack(pf_ack),
@@ -154,7 +156,6 @@ module m2_tgpx4 #(
   logic        w_prog;
 
   // R1006: the posted-write queue
-  localparam int WQ_AW = 4;
   (* ramstyle = "MLAB, no_rw_check" *) logic [46:0] wq_mem [0:(1<<WQ_AW)-1];
   logic [WQ_AW-1:0] wq_wp, wq_rp;
   logic [WQ_AW:0]   wq_n;
