@@ -19,7 +19,10 @@
 # a load is the ALU passing the read data (ysel dat). The ALU field also
 # carries the instructions that are only an action (EXX, EX AF, EI, DI).
 #
-#   python3 tools/dsb/gen_z80_ucode.py [--uent-logic] > rtl/sound/dsb_z80_ucode.svh
+#   python3 tools/dsb/gen_z80_ucode.py [--uent-logic] [--union] > rtl/sound/dsb_z80_ucode.svh
+#
+# R1004: without --union only STCC's 128 opcodes are dispatched (SWA_ONLY
+# below); the checked-in file is that build (--uent-logic, no --union).
 #
 # --uent-logic also emits the dispatch table as a function, uent_f(), which
 # dsb_z80 uses instead of the 1024 x 8 ROM when DSB_UENT_LOGIC is defined. The
@@ -210,6 +213,22 @@ ins('push_iy',  [u(asrc='IY', awb='TMP'),
 ins('trap_m',   [u(nxt='trap', t=4)], [])
 ins('trap_x',   [u(nxt='trap', t=8)], [])
 
+# ---- R1004: STCC'S OPCODES ONLY, unless --union. Model 2C runs one DSB
+# program, STCC's; Star Wars is a Model 1 game. The 17 opcodes above that only
+# Star Wars' program reaches (z80_census.py on both) are taken out of the
+# dispatch -- they trap like any other unlisted opcode -- and a routine left
+# with no opcode is not assembled. --union keeps all 145 (Star Wars and STCC).
+SWA_ONLY = [(M, 0x1b), (M, 0x34), (M, 0x35), (M, 0x4e), (M, 0x66), (M, 0x69), (M, 0x80),
+            (M, 0xb3), (M, 0xc4), (M, 0xc6), (M, 0xd0), (CB, 0x07), (CB, 0x27), (CB, 0x4a),
+            (CB, 0x67), (ED, 0x4d), (ED, 0x79)]
+UNION = '--union' in sys.argv
+if not UNION:
+    for c in SWA_ONLY:
+        del entry[c]
+    live = set(entry.values()) | {'int_im1', 'trap_m', 'trap_x'}
+    for label in [l for l in prog if l not in live]:
+        del prog[label]
+
 # ---- assemble
 rom, addr = [], {}
 for label, ops in prog.items():
@@ -225,6 +244,7 @@ if __name__ == '__main__':
                ', '.join(f'{n}[{b}]' for n, b in LAYOUT))
     out.append(f'localparam int UW = {WIDTH};')
     out.append(f"localparam logic [7:0] U_INT = 8'd{addr['int_im1']};   // the IM 1 interrupt's first micro-op")
+    out.append(f"localparam bit U_UNION = 1'b{int(UNION)};   // 1: Star Wars' opcodes too (--union); 0: STCC's only (R1004)")
     # an initialised array, which is what Quartus turns into an M10K ROM --
     # or, with DSB_UROM_LOGIC (Model 2, R979: an M10K back), into LUTs; the
     # read stays registered (uw), so the two are cycle-identical
@@ -249,7 +269,7 @@ if __name__ == '__main__':
             out.append(f"  uent[{p*256+o}] = 8'd{addr[lab]};")
     out.append('end')
     out.append('`else')
-    out.append('// the same table as logic: the opcodes both programs reach, and the two traps')
+    out.append('// the same table as logic: the opcodes dispatched, and the two traps')
     out.append('function automatic logic [7:0] uent_f(input logic [9:0] a);')
     out.append('  case (a)')
     for (p, o) in sorted(entry):

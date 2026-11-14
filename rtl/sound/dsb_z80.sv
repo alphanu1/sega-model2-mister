@@ -25,13 +25,17 @@
 //   - IY (ld iy,nn; push / pop / inc iy; (iy+d) loads, stores, add / adc / cp);
 //   - the S flag (jp m after or a), adc, sub, sbc hl,de, rr / rrca / rra, cpl,
 //     JP (HL) into a jump table, RST 08, and more loads, incs, jrs and bits.
-// This core executes the UNION of the two programs, 145 opcodes; anything
-// else TRAPS -- counted, its PC kept, run as a no-op of 4 or 8 T. Star Wars'
-// program is a subset and runs exactly as it did.
+// R979's core executed the UNION of the two programs, 145 opcodes. R1004:
+// Model 2C runs STCC's program only, so the generated microcode
+// (gen_z80_ucode.py without --union, U_UNION 0) dispatches STCC's 128 and the
+// datapath drops what only Star Wars used (out (c),a; sla; bit 7's S);
+// anything else TRAPS -- counted, its PC kept, run as a no-op of 4 or 8 T.
+// Generated with --union (U_UNION 1) it is R979's core, and Star Wars'
+// program runs exactly as it did.
 //
 // MICROCODED. A regular datapath -- seven 8-bit registers and their
 // alternates, PC, SP, IY, a 16-bit TMP, one 16-bit address adder, one 8-bit
-// ALU -- is driven by 173 40-bit micro-ops in one M10K
+// ALU -- is driven by 153 40-bit micro-ops (173 with --union) in one M10K
 // (tools/dsb/gen_z80_ucode.py writes them), dispatched by a 1024 x 8 table
 // ({prefix, opcode}; prefix 0 none, 1 CB, 2 ED, 3 FD) in another M10K or, with
 // DSB_UENT_LOGIC defined, as logic with the same one-cycle registered output.
@@ -211,13 +215,20 @@ module dsb_z80 (
         end
       end
       A_IRROT: begin
-        case (grp)
-          3'd0: begin alu_r = {Y[6:0], Y[7]}; alu_c = Y[7]; end     // rlc
-          3'd1: begin alu_r = {Y[0], Y[7:1]}; alu_c = Y[0]; end     // rrc
-          3'd2: begin alu_r = {Y[6:0], fC};   alu_c = Y[7]; end     // rl
-          3'd3: begin alu_r = {fC, Y[7:1]};   alu_c = Y[0]; end     // rr
-          default: begin alu_r = {Y[6:0], 1'b0}; alu_c = Y[7]; end  // sla
-        endcase
+        if (U_UNION) begin
+          case (grp)
+            3'd0: begin alu_r = {Y[6:0], Y[7]}; alu_c = Y[7]; end     // rlc
+            3'd1: begin alu_r = {Y[0], Y[7:1]}; alu_c = Y[0]; end     // rrc
+            3'd2: begin alu_r = {Y[6:0], fC};   alu_c = Y[7]; end     // rl
+            3'd3: begin alu_r = {fC, Y[7:1]};   alu_c = Y[0]; end     // rr
+            default: begin alu_r = {Y[6:0], 1'b0}; alu_c = Y[7]; end  // sla
+          endcase
+        end else begin
+          // R1004: STCC rotates by rlc (rlca), rrc (rrca) and rr (rra) only
+          if (!grp[0])      begin alu_r = {Y[6:0], Y[7]}; alu_c = Y[7]; end   // rlc
+          else if (!grp[1]) begin alu_r = {Y[0], Y[7:1]}; alu_c = Y[0]; end   // rrc
+          else              begin alu_r = {fC, Y[7:1]};   alu_c = Y[0]; end   // rr
+        end
         fl_v = alu_r;
       end
       A_INC:   begin alu_r = Y + 8'd1; fl_v = alu_r; end
@@ -233,7 +244,9 @@ module dsb_z80 (
   logic alu_z, alu_sgn;
   always_comb begin
     case (f_alu)
-      A_BIT:   begin alu_z = !Y[IR[5:3]]; alu_sgn = (IR[5:3] == 3'd7) && Y[7]; end
+      // R1004: neither program tests bit 7 (STCC bits 0-4), so on the STCC
+      // build bit's S is 0 -- what the Z80 gives for every bit it tests
+      A_BIT:   begin alu_z = !Y[IR[5:3]]; alu_sgn = U_UNION && (IR[5:3] == 3'd7) && Y[7]; end
       A_SBC16: begin alu_z = (asum[15:0] == 16'd0); alu_sgn = asum[15]; end
       default: begin alu_z = (fl_v == 8'd0); alu_sgn = fl_v[7]; end
     endcase
@@ -340,7 +353,7 @@ module dsb_z80 (
             addT = 12'(f_tst);
             case (f_io)
               3'd1: begin io_addr <= dat;  io_wdata <= R[7]; end
-              3'd2: begin io_addr <= R[1]; io_wdata <= R[7]; end
+              3'd2: if (U_UNION) begin io_addr <= R[1]; io_wdata <= R[7]; end   // out (c),a: Star Wars only
               3'd3: begin io_addr <= R[1]; io_wdata <= dat;  end
               default: io_addr <= dat;
             endcase
