@@ -792,6 +792,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_char_x2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_i8251.sv
 # R979: STCC's Digital Sound Board (elaborated only with M2_2C_DSB)
 set_global_assignment -name SEARCH_PATH rtl/sound
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/m2_dsb_2c.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/dsb_board.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/dsb_z80.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sound/dsb_mpeg.sv

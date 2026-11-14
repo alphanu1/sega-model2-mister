@@ -3245,3 +3245,12 @@ test_dsb_board:
 	  $(DSB_FORM) sim/sound/dsb_board_harness.sv $(DSB_RTL) sim/sound/tb_dsb_board.cpp \
 	  -CFLAGS "-I$(CURDIR)/tools/dsb -O2" -o tb_dsb_board --Mdir obj_dsb_board
 	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) DSB_VOLMAME=1 ./obj_dsb_board/tb_dsb_board
+# R1004: the board as Model2.sv wires it (m2_dsb_2c): for any other game held,
+# no SDRAM request, the speaker the SCSP's bit for bit; for STCC the mix is
+# clamp16(SCSP + board). DSB_SECS of STCC (default 20).
+.PHONY: test_m2_dsb_2c
+test_m2_dsb_2c:
+	$(VBUILD) -O2 -Wno-fatal -Wno-lint -Wno-style --public-flat-rw -Irtl/sound --top-module m2_dsb_2c \
+	  rtl/sound/m2_dsb_2c.sv $(DSB_RTL) sim/sound/tb_m2_dsb_2c.cpp \
+	  -CFLAGS "-O2" -o tb_m2_dsb_2c --Mdir obj_m2_dsb_2c
+	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) ./obj_m2_dsb_2c/tb_m2_dsb_2c

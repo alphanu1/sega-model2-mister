@@ -3645,12 +3645,12 @@ end
 
 wire signed [15:0] snd_l, snd_r;
 wire signed [15:0] s2a_l, s2a_r;   // R979: the 2A sound board's, before the DSB's mix
-// R979: THE DIGITAL SOUND BOARD (M2_2C_DSB, STCC's music). Its input is the
-// i8251's transmit line as the SCSP's MIDI in gets it: m2_sound_link's B side
-// raises b_rx_valid the moment a byte lands, one character time after the
-// i960 wrote it, and every byte is such an edge (the link holds the next one
-// until the last is taken). Reset: the game's, and only for STCC.
-wire signed [15:0] dsb_l, dsb_r;
+// R979: THE DIGITAL SOUND BOARD (M2_2C_DSB, STCC's music), with its input,
+// its reset gate and its mix into the SCSP's output in m2_dsb_2c (R1004: moved
+// there unchanged, so that tb_m2_dsb_2c drives the RTL built here). Held in
+// reset unless the game is STCC; then its output is 0 and the mix is the
+// SCSP's bit for bit.
+wire signed [15:0] dsb_mix_l, dsb_mix_r;   // the SCSP's and the board's, summed
 wire               dsb_s_req, dsb_s_we;
 wire [SDR_AW:1]    dsb_s_addr;
 wire [15:0]        dsb_s_din;
@@ -3658,32 +3658,25 @@ wire  [1:0]        dsb_s_be;
 wire               dsb_trap;
 wire [15:0]        dsb_frames;
 generate if (DSB) begin : g_dsb
-	logic dsb_rst_n, dsb_rx_tog, b_rx_v_d;
-	always_ff @(posedge clk_sys) dsb_rst_n <= cpu_rst_n & mem_rst_n & cp_done & is_stcc;
-	always_ff @(posedge clk_sys or negedge mem_rst_n)
-		if (!mem_rst_n) begin dsb_rx_tog <= 1'b0; b_rx_v_d <= 1'b0; end
-		else begin b_rx_v_d <= b_rx_v; if (b_rx_v && !b_rx_v_d) dsb_rx_tog <= ~dsb_rx_tog; end
 	// SDRAM (word addresses), above STCC's polygons (byte 0x5000000, 16 MB),
 	// where the MRA's appended stream lands through the loader's third remap:
 	//   MRA 0x52C0000  MPEG data, 8 MB    -> byte 0x6000000
 	//   MRA 0x5AC0000  epr-19275.2s, 128 KB -> byte 0x6800000
 	//   byte 0x6820000  the Z80's 32 KB of RAM (never loaded; its boot test writes it)
-	dsb_board #(.AW(SDR_AW), .ROM_BASE(SDR_AW'(32'h3400000)), .MPEG_BASE(SDR_AW'(32'h3000000)),
-	            .RAM_BASE(SDR_AW'(32'h3410000)), .MAW(22),
-	            .T_NUM(1), .T_DEN(SYS_MHZ / 4), .TICK_NUM(4), .TICK_DEN(SYS_MHZ * 125),
+	m2_dsb_2c #(.AW(SDR_AW), .ROM_BASE(SDR_AW'(32'h3400000)), .MPEG_BASE(SDR_AW'(32'h3000000)),
+	            .RAM_BASE(SDR_AW'(32'h3410000)), .SYS_MHZ(SYS_MHZ),
 	            .WRAM_MLAB(`M2_2C_DSB_LEAN != 0), .FIFO_MLAB(`M2_2C_DSB_FIFO_MLAB != 0),
-	            .TBL_PACK(`M2_2C_DSB_TBL_PACK != 0)) u_dsb (
-		.clk(clk_sys), .rst_n(dsb_rst_n),
-		.rx_tog(dsb_rx_tog), .rx_byte(b_rx_d),
-		.vol_mame(1'b1),   // MAME's reading of e8 (every write is the volume)
+	            .TBL_PACK(`M2_2C_DSB_TBL_PACK != 0)) u_dsb2c (
+		.clk(clk_sys), .mem_rst_n(mem_rst_n), .run(cpu_rst_n & mem_rst_n & cp_done & is_stcc),
+		.b_rx_v(b_rx_v), .b_rx_d(b_rx_d),
+		.in_l(s2a_l), .in_r(s2a_r), .out_l(dsb_mix_l), .out_r(dsb_mix_r),
 		.s_req(dsb_s_req), .s_we(dsb_s_we), .s_addr(dsb_s_addr), .s_din(dsb_s_din), .s_be(dsb_s_be),
 		.s_ack(p_ack[8]), .s_dout(p_dout[8][15:0]),
-		.out_l(dsb_l), .out_r(dsb_r), .out_stb(),
 		.dbg_trap(dsb_trap), .dbg_frames(dsb_frames)
 	);
 end else begin : g_nodsb
 	assign {dsb_s_req, dsb_s_we, dsb_s_addr, dsb_s_din, dsb_s_be} = '0;
-	assign dsb_l = 16'sd0; assign dsb_r = 16'sd0;
+	assign dsb_mix_l = s2a_l; assign dsb_mix_r = s2a_r;
 	assign dsb_trap = 1'b0; assign dsb_frames = 16'd0;
 end endgenerate
 // R829: THE OSD VOLUME. status[49:46] indexes 80, 90, 100, 0, 10 .. 70 %;
@@ -3816,16 +3809,9 @@ end else if (SND2A) begin : g_2asnd
 		.dbg_selftest(snd_selftest), .dbg_mvol(snd_mvol), .dbg_w400(snd_w400), .dbg_w418(snd_w418),
 		.dbg_sums(snd_sums)
 	);
-	// R979: the Digital Sound Board's 32 kHz output, held, summed with the
-	// SCSP's at unity (MAME routes both to the speaker at 1.0), clamped
-	if (DSB) begin : g_dsbmix
-		wire signed [16:0] mix_l = 17'(s2a_l) + 17'(dsb_l);
-		wire signed [16:0] mix_r = 17'(s2a_r) + 17'(dsb_r);
-		assign snd_l = (mix_l[16] != mix_l[15]) ? (mix_l[16] ? 16'sh8000 : 16'sh7fff) : mix_l[15:0];
-		assign snd_r = (mix_r[16] != mix_r[15]) ? (mix_r[16] ? 16'sh8000 : 16'sh7fff) : mix_r[15:0];
-	end else begin : g_nodsbmix
-		assign snd_l = s2a_l; assign snd_r = s2a_r;
-	end
+	// R979: the Digital Sound Board's output summed with the SCSP's at unity
+	// (m2_dsb_2c); without the board (DSB 0) dsb_mix_* is s2a_* itself
+	assign snd_l = dsb_mix_l; assign snd_r = dsb_mix_r;
 	assign snd_pc[31:24] = 8'd0;
 	assign snd_rom_req = 1'b0; assign snd_rom_addr = '0;
 	assign pcm1_req = 1'b0; assign pcm1_addr = '0;
