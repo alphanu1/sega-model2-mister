@@ -50210,3 +50210,34 @@ s2540's count).
 no other masters; R927's LAT 12 is the board guess); timing at 40 MHz of the
 three-way i-cache output mux (one LUT, as before with two) and of lsu_busy
 into port 1's address; whether the changes move the board's slowdown.
+
+**R1012 -- THE REAL i960KB DOES NOT FLUSH SUBNORMALS IN THE MODE STCC RUNS:
+IT TAKES THEM AS OPERANDS AND PRODUCES THEM. THE CORE'S FLUSH (§8.1, R998)
+IS A DEVIATION FROM THE SILICON, NOT FROM MAME ALONE.** R1011 found STCC's
+race making subnormal floats (0x202638) that the core's FP units flush to
+zero where MAME keeps them: 473 value differences in 0.6 s, no address or
+control-flow difference. §8.1 recorded the flush as a known difference from
+MAME's host floats; it never said what the part does.
+  * The 80960KB Programmer's Reference Manual (Intel, March 1988; bitsavers
+    80960KB_Programmers_Reference_Manual_Mar88.pdf), §3 Arithmetic Controls
+    and §12 "Normalizing Mode": AC bit 29 is the normalizing-mode flag. Set,
+    "the processor operates on valid floating-point operands, regardless of
+    whether they are normalized or denormalized values"; clear, a
+    denormalized source operand raises a floating reserved-encoding fault
+    and stores no result. "In either mode, denormalized numbers are
+    produced if the underflow exception is masked" (mask bit 25). The part
+    has no flush-to-zero mode.
+  * STCC's AC in MAME's state at the race checkpoint (R1011's capture,
+    state.txt): 0x3F001004 -- bit 29 set (normalizing mode), FP masks
+    24-28 all set (underflow masked), rounding 00 (nearest). So on the
+    board the i960 both consumes and produces subnormals here, as MAME's
+    host doubles do. MAME is right for this case by accident: its i960
+    ignores AC bit 29 (no reserved-encoding fault is modelled either).
+  * Consequence: the 473 differences are the core's, not MAME's. Fixing
+    them means subnormal support in the i960's FP units (as the TGP's
+    fp_mul / fp_add got it for VF2, R852-era), at an area cost not yet
+    measured; a game running with bit 29 clear would instead need the
+    reserved-encoding fault. Not changed in this release: no address or
+    control-flow effect was seen. Established by reading the manual
+    (pdftotext of the bitsavers scan) and R1011's captured AC; the board
+    was not involved.
