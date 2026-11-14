@@ -21,6 +21,12 @@
 #
 #   python3 tools/dsb/gen_z80_ucode.py [--uent-logic] [--union] > rtl/sound/dsb_z80_ucode.svh
 #
+# R1007: the fields now name register-file rows and ports (see dsb_z80.sv);
+# the instruction list below is unchanged, and u() works out from each
+# micro-op what port B must read (rb), what a store takes (wsrc) and which
+# byte it writes (wt), and asserts that no micro-op needs two things from one
+# port.
+#
 # R1004: without --union only STCC's 128 opcodes are dispatched (SWA_ONLY
 # below); the checked-in file is that build (--uent-logic, no --union).
 #
@@ -30,13 +36,20 @@
 import sys
 
 # ---- field encodings (must match dsb_z80.sv)
+# R1007: the 16-bit registers live in a two-port register file (M10K), not in
+# flops. Pairs are numbered as the file's rows: BC DE HL (banked by EXX), PC,
+# SP, IY, TMP. A and the flags stay in flops. Each micro-op reads one row on
+# port A (the address base, asrc) and at most one on port B (rb: an offset
+# pair, a register to store or test, the ALU's Y), and writes at most one row
+# 16 bits wide on port A (awb) and one byte on port B (wt).
 MEM = dict(none=0, rd=1, wr=2)
-ASRC = dict(PC=0, SP=1, BC=2, DE=3, HL=4, TMP=5, IY=6, RSTV=7)
+ASRC = dict(BC=0, DE=1, HL=2, PC=3, SP=4, IY=5, TMP=6, RSTV=7)
 AOFF = {'0': 0, '+1': 1, '-1': 2, '-2': 3, 'DE': 4, 'e': 5, 'BC': 6, 'HL': 7}
-AWB = dict(none=0, PC=1, SP=2, BC=3, DE=4, HL=5, TMP=6, IY=7)
-WSRC = dict(reg=0, PCh=1, PCl=2, alu=3, TMPh=4, TMPl=5)
-RMODE = dict(none=0, IR53=1, IR20=2, idx=3, TMPlo=4, TMPhi=5)
+AWB = dict(BC=0, DE=1, HL=2, PC=3, SP=4, IY=5, TMP=6, none=7)
+WS = dict(alu=0, A=1, hi=2, lo=3)               # what a memory write stores
+RB = dict(BC=0, DE=1, HL=2, PC=3, TMP=4, none=6, Y=7)   # Y: the pair of ysel's register
 REG = dict(B=0, C=1, D=2, E=3, H=4, L=5, A=7)
+PAIR = dict(B='BC', C='BC', D='DE', E='DE', H='HL', L='HL')
 ALU = dict(PASS=0, IRALU=1, IRROT=2, INC=3, DEC=4, BIT=5, AGUC=6, CPL=7,
            SBC16=8, EXX=9, EXAF=10, EI=11, DI=12)
 YSEL = dict(IR20=0, IR53=1, dat=2, B=3)
@@ -45,9 +58,9 @@ CSEL = dict(IRcc=0, Bnz=1, BCnz=2, always=3)
 IO = dict(none=0, out_n_a=1, out_c_a=2, out_c_dat=3, in_a_n=4)
 
 LAYOUT = [  # (name, bits) MSB first
-    ('mem', 2), ('asrc', 3), ('aoff', 3), ('awb', 3), ('wsrc', 3),
-    ('rmode', 3), ('ridx', 3), ('alu', 4), ('ysel', 2),
-    ('fz', 1), ('fc', 1), ('nxt', 2), ('csel', 2), ('io', 3), ('tst', 5),
+    ('mem', 2), ('asrc', 3), ('aoff', 3), ('awb', 3), ('wsrc', 2),
+    ('wt', 4), ('alu', 4), ('ysel', 2), ('fz', 1), ('fc', 1),
+    ('nxt', 2), ('csel', 2), ('io', 3), ('tst', 5), ('rb', 3),
 ]
 WIDTH = sum(b for _, b in LAYOUT)
 assert WIDTH <= 40, WIDTH   # one M10K at 256 x 40
@@ -60,10 +73,35 @@ def u(mem='none', asrc='PC', aoff='0', awb='none', wsrc='reg', rmode='none',
     if rmode != 'none' and rsrc == 'data':   # a load: the ALU passes the read data
         assert alu == 'PASS', (alu, rmode)
         ysel = 'dat'
+    # the byte written (port B): 1 IR[5:3], 2 IR[2:0], 3 TMP low, 4 TMP high,
+    # 8 + n register n (7 is A, a flop)
+    wt = dict(none=0, IR53=1, IR20=2, TMPlo=3, TMPhi=4)[rmode] if rmode != 'idx' else 8 + REG[ridx]
+    # what port B must read
+    need = set()
+    if aoff in ('DE', 'BC', 'HL'): need.add(aoff)
+    if nxt == 'cend' and csel in ('Bnz', 'BCnz'): need.add('BC')
+    if io in ('out_c_a', 'out_c_dat'): need.add('BC')
+    ws = 'alu'
+    if mem == 'wr':
+        if wsrc == 'reg':
+            if ridx == 'A': ws = 'A'
+            else: need.add(PAIR[ridx]); ws = 'lo' if REG[ridx] & 1 else 'hi'
+        elif wsrc in ('PCh', 'PCl'): need.add('PC'); ws = 'hi' if wsrc == 'PCh' else 'lo'
+        elif wsrc in ('TMPh', 'TMPl'): need.add('TMP'); ws = 'hi' if wsrc == 'TMPh' else 'lo'
+        else: assert wsrc == 'alu'
+    y_used = (rmode != 'none') or (mem == 'wr' and wsrc == 'alu') or alu in ('BIT', 'INC', 'DEC', 'CPL') \
+        or (fz and alu not in ('SBC16',)) or (fc and alu in ('IRALU', 'IRROT'))
+    if y_used and ysel != 'dat': need.add('Y')
+    assert len(need) <= 1, need
+    rb = RB[need.pop()] if need else RB['none']
+    # the two writes of one micro-op never meet in one row
+    if awb != 'none' and wt:
+        trow = 'TMP' if wt in (3, 4) else (None if wt in (1, 2) else PAIR.get([k for k, v in REG.items() if v == wt - 8][0]))
+        assert trow != awb, (awb, wt)
+        assert wt not in (1, 2) or awb in ('PC', 'SP', 'TMP', 'IY'), (awb, wt)
     v = dict(mem=MEM[mem], asrc=ASRC[asrc], aoff=AOFF[aoff], awb=AWB[awb],
-             wsrc=WSRC[wsrc], rmode=RMODE[rmode], ridx=REG[ridx],
-             alu=ALU[alu], ysel=YSEL[ysel],
-             fz=fz, fc=fc, nxt=NXT[nxt], csel=CSEL[csel], io=IO[io], tst=t)
+             wsrc=WS[ws], wt=wt, alu=ALU[alu], ysel=YSEL[ysel],
+             fz=fz, fc=fc, nxt=NXT[nxt], csel=CSEL[csel], io=IO[io], tst=t, rb=rb)
     w = 0
     for name, bits in LAYOUT:
         assert 0 <= v[name] < (1 << bits), (name, v[name])
