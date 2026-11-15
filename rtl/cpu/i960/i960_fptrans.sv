@@ -22,7 +22,8 @@
 // microcode would.
 //
 // The machine: 128 x 64-bit registers in M10K (the first 73 hold the
-// constants -- LOG's program 75 -- initialised and never written), a 512-word microcode ROM, a
+// constants -- LOG's program 76, which uses all 128 since R1019 --
+// initialised and never written), a 512-word microcode ROM, a
 // four-deep return stack, and two operand registers that drive the adder,
 // multiplier and divider i960_top already has (it muxes them in while `act`).
 //
@@ -50,7 +51,8 @@
 // order, and the same register-file writes: the results are R845's bit for
 // bit (tb_i960_fptrans_ab runs both side by side).
 
-// R935: LOG -- the 2C build's program (i960_fptrans_rom_log.svh, 465 words):
+// R935: LOG -- the 2C build's program (i960_fptrans_rom_log.svh, 465 words,
+// 492 since R1019):
 // the same four (their Horner steps through one subroutine, the same
 // operations) plus logrl (entry 4: y * log2 x, House of the Dead from its
 // stone-wall section), and two loads that take x apart for it: LDE (op 11)
@@ -61,6 +63,10 @@
 // register read; they leave D straight to the adder), with LDE's b MAGIC.
 // tb_i960_fptrans_ab runs this beside R935's sequencer (the 2C build's before
 // R998, sim/i960/i960_fptrans_r935.sv) with LOG = 1.
+// R1019: a subnormal x has exponent field 0, so LDE / LDM do not take it
+// apart (they give -1023 and 1.f); the LOG program tests e + 1023 = 0 and
+// normalises f on the units itself (tools/i960_fptrans.py, LG_SN). No
+// change here: LDE / LDM are as they were, a normal x's cycles unchanged.
 module i960_fptrans #(
   parameter bit LOG = 1'b0
 ) (

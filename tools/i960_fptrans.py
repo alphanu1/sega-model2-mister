@@ -41,7 +41,9 @@ OPS = {'ADD': 0, 'SUB': 1, 'MUL': 2, 'DIV': 3, 'BR': 4, 'JMP': 5, 'CALL': 6,
 # R935 (--log only): LDE d = the exponent of x, unbiased, as a double -- the
 # adder's MAGIC + (e - 1023) - MAGIC, exact; LDM d = x's mantissa as a double
 # in [1, 2) (sign clear, exponent 0x3ff). Both are wiring on the operand the
-# adder takes; x must be normal (the program branches away the rest first).
+# adder takes; x must be normal (the program branches away the rest first;
+# R1019: a subnormal is caught after them, as e + 1023 = 0, and normalised
+# on the units -- LG_SN).
 MAGIC_U = 0x4338000000000000
 CONDS = {'NEG': 0, 'ZERO': 1, 'NAN': 2, 'INF': 3, 'BIT0': 4, 'BIT1': 5}
 MOD = {'': 0, '-': 1, '|': 2, '-|': 3}       # none, negate, abs, -abs
@@ -539,6 +541,7 @@ def build_log(p, horner):
     l2 = Fraction(2) / Fraction(Decimal(2).ln())          # 2 / ln 2
     hi = float(l2); lo = float(l2 - Fraction(hi))
     p.const('L2EH', hi); p.const('L2EL', lo)
+    p.const('E1023', 1023.0)                 # R1019: the 128th register
     p.label('KATAN')
     horner('A', [None] * 14, 4, 'KH', 'KL', True)
     p.ret()
@@ -552,13 +555,20 @@ def build_log(p, horner):
     p.br('INF', 'X', 'LG_MUL')                # log2(+inf) = +inf: X itself
     p.lde('QN'); p.ldm('FN')
     p.mul('T0', 'FN', 'TWO'); p.sub('T0', 'T0', 'FOUR'); p.add('T0', 'T0', 'ONE')   # 2m - 3, exact
+    # R1019: e + 1023, 0 only for a subnormal x (its exponent field is 0, so
+    # LDE / LDM gave -1023 and 1.f, which is not x). Tested at LG_R below.
+    # Both sit where the pipeline waits anyway: a normal operand's cycles
+    # are R998's exactly (measured; one slot earlier or later costs 1-3).
+    p.add('AX', 'QN', 'E1023')
     p.br('NEG', 'T0', 'LG_R')
     p.br('ZERO', 'T0', 'LG_R')
     p.div('FN', 'FN', 'TWO'); p.add('QN', 'QN', 'ONE')
     p.label('LG_R')
     # f = (m - 1) / (m + 1): m - 1 exact (Sterbenz); m + 1 as a two_sum
     p.sub('NU', 'FN', 'ONE')
-    p.add('S', 'FN', 'ONE'); p.sub('T0', 'S', 'FN'); p.sub('T1', 'S', 'T0')
+    p.add('S', 'FN', 'ONE')
+    p.br('ZERO', 'AX', 'LG_SN')               # R1019: a subnormal x
+    p.sub('T0', 'S', 'FN'); p.sub('T1', 'S', 'T0')
     p.sub('T1', 'FN', 'T1'); p.sub('T0', 'ONE', 'T0'); p.add('DE', 'T1', 'T0')
     p.mov('AH', 'NU'); p.mov('AL', 'ZERO'); p.mov('BH', 'S'); p.mov('BL', 'DE')
     p.call('DDDIV'); p.mov('TH', 'DH'); p.mov('TL', 'DL')
@@ -580,6 +590,25 @@ def build_log(p, horner):
     p.div('X', 'ONE', 'ZERO'); p.sub('X', 'X', 'X'); p.jmp('LG_MUL')
     p.label('LG_NAN')
     p.add('X', 'X', 'X'); p.jmp('LG_MUL')
+    # R1019: x subnormal, x = f 2^-1022 with f = 0.fraction in [2^-52, 1).
+    # LDM again (FN may have been halved) gives 1 + f, so f = FN - 1 exactly;
+    # normalise it to [1, 2) on the units -- times 16 while 16 f < 2, then
+    # times 2 while f < 1, every step exact, e counted down from -1022 --
+    # and run the halving test and the rest as for a normal x. AX = 1 so
+    # LG_R's test passes. At most 13 + 3 steps.
+    p.label('LG_SN')
+    p.ldm('FN'); p.lde('QN'); p.mov('AX', 'ONE')
+    p.sub('FN', 'FN', 'ONE'); p.add('QN', 'QN', 'ONE'); p.mul('AY', 'FOUR', 'FOUR')
+    p.label('LG_S16')
+    p.mul('T0', 'FN', 'AY'); p.sub('T1', 'T0', 'TWO'); p.br('NEG', 'T1', 'LG_S2', inv=True)
+    p.mov('FN', 'T0'); p.sub('QN', 'QN', 'FOUR'); p.jmp('LG_S16')
+    p.label('LG_S2')
+    p.sub('T1', 'FN', 'ONE'); p.br('NEG', 'T1', 'LG_SM', inv=True)
+    p.mul('FN', 'FN', 'TWO'); p.sub('QN', 'QN', 'ONE'); p.jmp('LG_S2')
+    p.label('LG_SM')
+    p.mul('T0', 'FN', 'TWO'); p.sub('T0', 'T0', 'FOUR'); p.add('T0', 'T0', 'ONE')
+    p.br('NEG', 'T0', 'LG_R'); p.br('ZERO', 'T0', 'LG_R')
+    p.div('FN', 'FN', 'TWO'); p.add('QN', 'QN', 'ONE'); p.jmp('LG_R')
 
 
 # --------------------------------------------------------------- assembler
@@ -611,6 +640,7 @@ def assemble(p):
 
 # --------------------------------------------------------------- interpreter
 maxdepth = [0]
+last_regs = [None]     # R1019: the register file at END (check_log's margin)
 
 
 def run(p, words, addr, names, entry, x, y=0.0, trace=None):
@@ -641,6 +671,7 @@ def run(p, words, addr, names, entry, x, y=0.0, trace=None):
             r = fop(nm, va, vb)
             nops += 1
             if op == 10:
+                last_regs[0] = R
                 return r, nops
             R[d] = r
         elif op == 4:
@@ -727,6 +758,8 @@ def log_operand(k):
         return 1.0 + random.uniform(-1, 1) * 2.0 ** random.randint(-60, -1)
     if k < 0.9:
         return random.uniform(1, 2) * 2.0 ** random.randint(-1022, 1023)
+    if k < 0.95:                    # R1019: a subnormal, every leading-zero count
+        return u2d((random.getrandbits(52) >> random.randint(0, 51)) | 1)
     return random.choice([0.0, -0.0, 1.0, 2.0, 0.5, 1.5, 0.75, -1.0, -3e10, math.inf, -math.inf, math.nan,
                           2.0 ** -1022, 1.7976931348623157e308, 1e-310])
 
@@ -787,6 +820,13 @@ def edge_args(log=False):
         for k in list(range(-1022, 1024, 37)) + [-1, 0, 1, 1023]:
             lx += [nxt(1.5 * 2.0 ** k, d) for d in (-2, -1, 0, 1, 2) if 1.5 * 2.0 ** k < math.inf]
         lx += [nxt(1.7976931348623157e308, -d) for d in range(4)] + [4095.9, 0.001, 1.25, 0.75]
+        # R1019: subnormals -- every power of 2 from 2^-1074 and its
+        # neighbours, every all-ones fraction, 1.5 x 2^k (the halving
+        # threshold after normalising) +- 2 ulp, the largest subnormals
+        for k in range(-1074, -1022):
+            lx += [nxt(2.0 ** k, d) for d in (-1, 0, 1, 2)]
+            lx += [nxt(1.5 * 2.0 ** k, d) for d in (-2, -1, 0, 1, 2)] if k > -1074 else []
+        lx += [u2d((1 << j) - 1) for j in range(1, 53)] + [u2d((1 << 52) - 1 - d) for d in range(4)]
         ly = [1.0, 0.0, -0.0, math.inf, -math.inf, math.nan, u2d(0xfff4000000000000), u2d(1),
               u2d((1 << 63) | 1), -3.0, 1e300, 2.0 ** -1000]
         out += [(4, xv, 1.0) for xv in lx]
@@ -828,7 +868,7 @@ def vectors(p, words, addr, names, path, n, log=False):
 
 
 def cr_log2(x):
-    """The correctly rounded log2 of a positive normal double (decimal at 60
+    """The correctly rounded log2 of a positive finite double (decimal at 60
     digits, then the nearest double by exact rationals)."""
     from decimal import Decimal, getcontext
     from fractions import Fraction
@@ -839,31 +879,70 @@ def cr_log2(x):
     return h
 
 
+def dd_err(addr, x, c):
+    """R1019: the margin -- |DH + DL - log2 x| of the last run, the
+    double-double sum before its one rounding, in ulps of the result c (a
+    finite, non-zero log2 only). The programs aim far below 2^-20 ulp; a
+    lost step shows here long before it costs a correctly rounded result."""
+    from decimal import Decimal, getcontext
+    from fractions import Fraction
+    if c == 0.0 or not math.isfinite(c):
+        return 0.0
+    getcontext().prec = 60
+    t = Fraction(Decimal(x).ln() / Decimal(2).ln())
+    R = last_regs[0]
+    v = Fraction(R[addr['DH']]) + Fraction(R[addr['DL']])
+    return float(abs(v - t) / Fraction(math.ulp(c)))
+
+
 def check_log(p, words, addr, names, n):
     """R935: log2 against the correctly rounded value and the host's libm
     (MAME's log2), then y * log2(x) against the host's product."""
     random.seed(5)
     for name, gen in [('[0, 4096)', lambda: random.uniform(1e-3, 4096.0)),
                       ('near 1', lambda: 1.0 + random.uniform(-1, 1) * 2.0 ** random.randint(-50, -1)),
-                      ('all exponents', lambda: random.uniform(1, 2) * 2.0 ** random.randint(-1022, 1023))]:
+                      ('all exponents', lambda: random.uniform(1, 2) * 2.0 ** random.randint(-1022, 1023)),
+                      # R1019: subnormals over 2^-1074..2^-1022, every leading-zero
+                      # count equally, and the normals just past them
+                      ('subnormals', lambda: u2d((random.getrandbits(52) >> random.randint(0, 51)) | 1)),
+                      ('2^-1022..2^-900', lambda: random.uniform(1, 2) * 2.0 ** random.randint(-1022, -900))]:
         notcr = nolibm = libmcr = 0
         maxops = 0
+        dderr = 0.0
         for _ in range(n):
             x = gen()
             r, nops = run(p, words, addr, names, 'log', x, 1.0)
             maxops = max(maxops, nops)
             c = cr_log2(x); h = math.log2(x)
             notcr += r != c; nolibm += r != h; libmcr += h != c
+            dderr = max(dderr, dd_err(addr, x, c))
         print('log2 %-14s not correctly rounded %d / %d   differs from host libm %d   (libm itself not CR %d)  max ops %d'
-              % (name, notcr, n, nolibm, libmcr, maxops))
-    bad = 0
-    for _ in range(n):
-        x = random.uniform(1e-3, 4096.0); y = random.uniform(-100, 100)
-        r, _ = run(p, words, addr, names, 'log', x, y)
-        bad += r != y * math.log2(x)
-    print('y * log2(x): %d / %d differ from the host (MAME: t2f * log2(t1f))' % (bad, n))
+              '   double-double error <= 2^%.1f ulp'
+              % (name, notcr, n, nolibm, libmcr, maxops, math.log2(dderr) if dderr else -999))
+    # R1019: every subnormal edge of the bench (edge_args), the most
+    # instructions a subnormal takes, and y * log2(x) on subnormals
+    ex = [x for e, x, y in edge_args(True) if e == 4 and is_sub(x) and x > 0]
+    notcr = nolibm = maxops = 0
+    dderr = 0.0
+    for x in ex:
+        r, nops = run(p, words, addr, names, 'log', x, 1.0)
+        maxops = max(maxops, nops)
+        c = cr_log2(x)
+        notcr += r != c; nolibm += r != math.log2(x)
+        dderr = max(dderr, dd_err(addr, x, c))
+    print('log2 %-14s not correctly rounded %d / %d   differs from host libm %d  max ops %d   double-double error <= 2^%.1f ulp'
+          % ('subnormal edges', notcr, len(ex), nolibm, maxops, math.log2(dderr) if dderr else -999))
+    for name, gen in [('[1e-3, 4096)', lambda: random.uniform(1e-3, 4096.0)),
+                      ('subnormal', lambda: u2d((random.getrandbits(52) >> random.randint(0, 51)) | 1))]:
+        bad = 0
+        for _ in range(n):
+            x = gen(); y = random.uniform(-100, 100)
+            r, _ = run(p, words, addr, names, 'log', x, y)
+            bad += r != y * math.log2(x)
+        print('y * log2(x), x %s: %d / %d differ from the host (MAME: t2f * log2(t1f))' % (name, bad, n))
     for x, y in [(0.0, 1.0), (-0.0, 2.0), (-1.0, 1.0), (math.inf, 1.0), (math.inf, 0.0), (0.0, 0.0),
-                 (math.nan, 1.0), (1.0, 5.0), (2.0 ** -1022, 1.0), (1.7976931348623157e308, -1.0)]:
+                 (math.nan, 1.0), (1.0, 5.0), (2.0 ** -1022, 1.0), (1.7976931348623157e308, -1.0),
+                 (5e-324, 1.0), (1e-310, -2.0), (u2d((1 << 52) - 1), 1.0), (-5e-324, 1.0)]:
         r, _ = run(p, words, addr, names, 'log', x, y)
         try: h = y * math.log2(x)
         except ValueError: h = y * -math.inf if x == 0 else math.nan
