@@ -339,8 +339,20 @@ module m2_geo_clip (
   // R587: registered in K_TEST, which always waits a cycle for the multiplier
   // grant, so K_TESTW's float compare starts from a register instead of ti's
   // 4:1 vertex mux (s317: ti -> test_v -> fkey -> is_out, -0.406 ns at 70).
-  logic [31:0] test_v_q;
-  always_ff @(posedge clk) if (kst == K_TEST) test_v_q <= test_v;
+  // R1021: registered as its compare key, and the plane's direction folded in,
+  // so K_TESTW is one unsigned compare against the product's key instead of
+  // two compares and a select (s2922: test_v_q -> is_out, 9 levels, -0.625).
+  // fgt(a, b) is fkey(a) > fkey(b), and ~ reverses an unsigned order, so
+  // fgt(p, t) == (~fkey(t) > ~fkey(p)): one compare, both keys inverted when
+  // the plane is not a greater-than plane. lvl does not move in K_TEST or
+  // K_TESTW, so the direction registered in K_TEST is K_TESTW's.
+  logic [31:0] test_k_q;                     // fkey(test_v), inverted for !plane_gt
+  logic        test_inv_q;                   // !plane_gt
+  always_ff @(posedge clk) if (kst == K_TEST) begin
+    test_k_q   <= fkey(test_v) ^ {32{!plane_gt}};
+    test_inv_q <= !plane_gt;
+  end
+  wire [31:0] mul_k = fkey(mul_res) ^ {32{test_inv_q}};
 
   // A child vertex is named rather than copied: bit 2 says "from a temporary",
   // bits 1:0 index the quad or the temporaries.
@@ -530,7 +542,7 @@ module m2_geo_clip (
         end
         K_TEST:  if (mul_gnt) kst <= K_TESTW;
         K_TESTW: if (mul_rsp) begin
-          is_out[ti] <= plane_gt ? fgt(test_v_q, mul_res) : fgt(mul_res, test_v_q);   // R587
+          is_out[ti] <= test_k_q > mul_k;   // R587, R1021: plane_gt ? fgt(test_v, mul_res) : fgt(mul_res, test_v)
           if (ti == 2'd3) begin
             // Decided on the last vertex, so the whole flag word is ready one
             // cycle later - which is why the decision lives in K_ROT.
