@@ -7958,27 +7958,16 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
 	wire [SDR_AW:1] w_xlat = cpu_sd_addr - GAME_XLAT3D;
 	wire            sd_wr  = cpu_sd_req && cpu_sd_we && p_ack[1];
-	// R1018: on 2C the three windows by compare, not by subtract-and-compare.
-	// GAME_LUMA and GAME_PAL3D have sixteen zero bits under them, so w_luma /
-	// w_pal's low bits are the address's own and "below the size" is the bits
-	// above it equal to the base's; GAME_XLAT3D has twelve, so its window
-	// (0x1731000-0x1736fff) is the bits above 16 equal and [16:13] in 1..6.
-	// The same windows, the same w_* bits used inside them.
-	wire luma_in = C2 ? (cpu_sd_addr[SDR_AW:16] == GAME_LUMA[SDR_AW:16])  : (w_luma < SDR_AW'(32'h8000));
-	wire pal_in  = C2 ? (cpu_sd_addr[SDR_AW:11] == GAME_PAL3D[SDR_AW:11]) : (w_pal  < SDR_AW'(32'h400));
-	wire xlat_in = C2 ? ((cpu_sd_addr[SDR_AW:17] == GAME_XLAT3D[SDR_AW:17])
-	                     && (cpu_sd_addr[16:13] >= 4'd1) && (cpu_sd_addr[16:13] <= 4'd6))
-	                  : (w_xlat < SDR_AW'(32'h6000));
 	always_ff @(posedge clk_sys) begin
 		r3d_lut_we   <= 1'b0;
 		r3d_lut_data <= cpu_sd_din;
-		if (sd_wr && luma_in && w_ls[R3D_LSB]) begin       // a captured row
+		if (sd_wr && w_luma < SDR_AW'(32'h8000) && w_ls[R3D_LSB]) begin       // a captured row
 			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd0; r3d_lut_addr <= 13'({w_ls[R3D_LSB-1:0], w_luma[7:1]});   // R932
 		end
-		if (sd_wr && pal_in) begin
+		if (sd_wr && w_pal < SDR_AW'(32'h400)) begin
 			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd1; r3d_lut_addr <= 13'(w_pal[10:1]);
 		end
-		if (sd_wr && xlat_in && w_xlat[8:7] == 2'd0) begin   // luma 0-63
+		if (sd_wr && w_xlat < SDR_AW'(32'h6000) && w_xlat[8:7] == 2'd0) begin   // luma 0-63
 			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd2;
 			r3d_lut_addr <= {w_xlat[15:14], w_xlat[13:9], w_xlat[6:1]};
 		end
