@@ -50618,3 +50618,230 @@ test_i960_top_c2 now builds FP_SUBN 1 with the reference at I960_SUBN 1):*
   The pre-subnormal branch (0f157ce6) passes the same seeds; +vc +fx on
   obj_i960_top_vc fails there too (a VC build has no F2A: +fx is not its
   mix), so that row says nothing.
+
+**R1018 -- AREA FOR FP_SUBN 2 AND BEHIND ENEMY LINES' GUNS ON 2C: 807 ALM
+OFF THE MAP, OUTPUT-IDENTICAL, NO CYCLE MOVED. quartus_map of the whole 2C
+core (new-2c-games d787c68f -> area2-2c 7eb58d68, M2_2C, M2_2C_DSB): FP_SUBN 1
+40,152 -> 39,345 (-807); ALUTs 58,818 -> 57,647 (-1,171); registers 45,837
+-> 45,220 (-617); M10K by shape 452 (=), MLAB by shape 124 -> 128 LABs (+4);
+DSP 110 (=). FP_SUBN 2 40,501 -> 39,867 (-634; ALUTs 59,328 -> 58,336,
+registers 45,897 -> 45,279), under FP_SUBN 0's 39,904. Every change behind
+the 2C build (C2 / M2_2C); the 2A build's map unchanged (38,803 both) and
+its netlist equal to d787c68f's. BRANCH area2-2c, LOCAL, NOT FITTED, NOT ON
+THE BOARD.** 2026-11-15.
+
+(Section: §10. Authority: none needed -- nothing the game sees moves.)
+*Why:* s2702 fitted 41,411 of 41,910 ALM at a map near FP_SUBN 0's; FP_SUBN
+2 (R1017: +597 by map over 0, +349 over 1) and Behind Enemy Lines' gun input
+must fit with timing closing. The target was 800 ALM by map at FP_SUBN 1.
+*Believed (R1008's method):* spend M10K to save LABs -- flip-flop arrays
+read a word at a time into LUT RAM, registered MLABs into M10K, duplicated
+logic shared -- with M10K to spare (531 of 553 after s2702's fit).
+*Found:* the map's estimate barely sees an MLAB moving to M10K (R1008
+change 5) and a register costs it about 0.15 ALM (change 4 below: 256
+registers, -43); what moves it is LUTs. So the larger part of this is not
+memory at all: shifters and decoders the FP units computed beside the
+one they needed, and two flip-flop valid vectors (256 and 128 bits) with a
+flash clear. No M10K was
+spent.
+*The census (new, sm2-builds/area2-2c-maps):* quartus_cdb --vqm of the
+mapped netlist, then (cone.py) every LUT's output split equally over its
+fanout and carried forward to the registers / RAM ports it ends in -- the
+logic each register group pays for. regcensus.py / lutcensus.py count
+registers and LUTs by name. The cone of a group is a guide only: the FIFO
+heads and the clipper's operand select (both below, not kept) were read
+off it and both measured worse.
+
+*Taken, in order (the whole core's estimate after each; ALUT and registers
+of the module; each proven before its map):*
+  1. i960_fpadd LEAN (i960_top C2): the alignment's sticky bit from a mask
+     of the bits below the shift (bit i set when i < sh) ANDed with the
+     unshifted operand, where `lost` was a second 56-bit barrel shifter (the
+     left shift by 56 - sh moves exactly those bits to the top). 40,152 ->
+     39,940 (-212): fpadd -101 ALUT, the i960's own logic -175 (Quartus
+     folds across the boundary). Standalone SUBNORM 0 / 1: 777 / 795 ->
+     706 / 704 ALM.
+  2. i960_fpmisc LEAN: roundr's result without the 57-bit leading-one search
+     and renormalising shift -- past the NaN / inf / eu >= 52 and eu < 0
+     branches a is normal and r2_rounded is its significand with the
+     fraction cleared (+ 2^fbits rounding up), so the top bit is 52 (rexp =
+     a's exponent field, rman = r2_rounded[51:0]) or the carry made it
+     exactly 2^53 (exponent + 1, fraction 0); the fraction mask by compare,
+     not a shift and a 56-bit subtract; cvtri's shift at the width it can
+     reach (only eu <= 31 reaches int_abs and ovf's shift terms, where fbits
+     >= 21 and the integer is under 2^33: a fixed >> 21 and a 36-bit shift).
+     -> 39,843 (-97: fpmisc -254 ALUT, the i960's own +130). Standalone 888
+     / 885 -> 666 / 652 ALM.
+  3. m2_geo_engine CCV_LUT (m2_geometry M10K_ROOM): the colour cache's 256
+     valid bits -- one read (E_CC) and one set (E_CW) at cc_idx, cleared all
+     at once on col_inval, a tex_lum or a gamma_sel change -- as sixteen
+     group flags and a 16 x 16 MLAB: bit i = flag[i / 16] && word[i / 16][i
+     % 16]; a clear drops the flags; a set writes the group's word (the word
+     if its flag is up, else zero) with its bit added and raises the flag; a
+     clear at the same edge as a set wins, as the flops' later assignment
+     did. -> 39,601 (-242): engine -343 ALUT, -241 registers; +1 MLAB LAB.
+  4. m2_geometry UV_HELD: the u/v reduction without its two copy stages (wu
+     / wv, wu_d / wv_d, 256 flops). The clipper holds its quad through
+     K_EMIT (qwu / qwv are written only in K_IDLE and K_POPR) and q_valid
+     comes C_AGE = 5 cycles after it appears, so every stage sees one input
+     for five cycles: ru / rv settle two cycles sooner to the same values
+     and q_valid does not move. -> 39,558 (-43: -256 registers, -26 ALUT).
+  5. i960_memmap (C2): the burst regions as the 24 aligned blocks their
+     union is made of, each an equality on the address bits above the block;
+     i960_alu LEAN: shrdi's lost-bits mask by compare. Standalone -18 and
+     -11 ALM; the whole core's map read +43 (39,601) -- untouched modules
+     moved by more (the geometry +36 ALUT, fpmisc +23). Kept: both are
+     exact by construction and smaller standalone.
+  6. fp_add LEAN, the TGPx4's adder (tgpx4_core; the TGPx4 is the 2C build's
+     alone; the 2A TGP and the geometry pool keep LEAN 0): with SUBNORM one
+     normalising shifter whose amount is selected (s1_exp - 1 or lzc - 1)
+     in place of two shifters and a select after them. -> 39,566 (-35:
+     u_add -77 ALUT). Standalone SUBNORM 1: 411 -> 344 ALM.
+  7. m2_raster3d / m2_span_tex MKV_LUT (C2): the fill mask's 128 valid bits
+     (cleared at C_REPLAY, set at mk_we, read at mk_rdi here and mk_ri in
+     the span unit) as eight row flags and 8 x 16 MLAB words, change 3's
+     form with three copies of the words (the set's own read at mk_pwi,
+     mk_rdi's, and the span unit's, written beside its mask copy). A word
+     written at an edge is read from the next cycle, as mk_a's and the span
+     copy's words are. -> 39,366 (-200: raster3d -194 ALUT, -120 registers);
+     +3 MLAB LABs.
+  8. i960_fpmisc LEAN, more: the round add as (fa_w | frac_mask) + 1 when it
+     rounds up (int_part's low fbits are zero, so int_part + 2^fbits is
+     that), one add of a per-bit select with no 2^fbits decoder; a fraction
+     non-zero exactly when its half bit or a bit below it is set. -> 39,345
+     (-21: fpmisc -117 ALUT, the i960's own +79). Standalone 666 / 652 ->
+     616 / 605 ALM.
+  Over all eight: the i960 -564 ALUT, the geometry -357 ALUT and -497
+  registers, the renderer -176 / -120, the TGPx4 -70.
+
+*Proved (each before its map; sim/miter/miter.py old against new, every
+output on every cycle, unless said):*
+  1. fpadd: a random-stimulus miter (scratch tb_fprand: requests 70% of
+     cycles, operands drawn with exponents near each other, near 1023,
+     subnormal and special, trailing-zero / trailing-one fractions),
+     SUBNORM 0 and 1 x 2 seeds x 4 M cycles: 0 differing; tb_i960_fpadd
+     through the miter, SUBNORM 1 (2.64 M cycles) and 0 with TB_FLUSH (2.61
+     M): 0, PASS. Planted: the mask missing bits 3-11 -- 6,353 of 2 M
+     cycles; the highest lost bit missed for shifts over 30 -- 20 of 2 M.
+     (A mask taking bit sh too is NOT a fault: bit sh is the LSB the sum
+     keeps, and the sticky ORs into it.)
+  2 / 8. fpmisc: the same driver with op, rmode and ai random (ai small 3
+     times in 4), STAGED 1 SCALE 0 (i960_top's), SUBNORM 0 and 1, 4 seeds x
+     4 M cycles: 0; tb_i960_fpmisc through the miter (its defaults, LEAN 1):
+     70,080,262 cycles, 0, PASS. Planted: the carry bit taken from [52] --
+     36,931 of 1 M; the carry ignored -- 565; cvtri's fixed shift 22 --
+     5,682; the mask one bit wide at 30 -- 2,654; the round-up OR with half
+     the mask -- 92,655; frac_nz without the half bit -- 263.
+  3. sim/miter/geo.sh (scratch copy: the clipper / engine / projector /
+     transform renamed, -GM10K_ROOM=1 on every build, geodiff_top given
+     M10K_ROOM and a CLRX switch): tb_m2_geometry plain and MIPZ, the
+     geodiff walks r5701 / r6601 (2A) and w4000 / w3910 (main): 0 differing
+     in 3.9 M cycles, the pool hashes as before. Neither bench nor the walks
+     ever clear the cache (col_inval tied 0, tex_lum / gamma_sel constant),
+     so the walks were rerun with CLRX: an LFSR pulsing col_inval one cycle
+     in 4,096 and changing tex_lum / gamma_sel one in 65,536: 0 differing.
+     Planted: no clear on col_inval -- 446,071 of 450,602 cycles (w4000;
+     0 without CLRX, which is why it exists); the set dropping its group's
+     other bits -- 401,255; the bit select off by one -- 452,547; a set
+     beating a same-edge clear -- 412,188 on w3910 (0 on the other three).
+  4. geo.sh with UV_HELD: q_u0-3 / q_v0-3 / q_uvs compared under q_valid,
+     the other 41 outputs every cycle (R1008's xform bench took the same
+     exception for operands nothing reads): 0 differing over the six runs.
+     Unmasked they differ on 1,217 (w4000) and 4,332 (r5701) cycles, all
+     with q_valid low; the store reads them only at q_take (its RAMs' and
+     the payload queue's write enables, R1003's wq_push), checked in the
+     RTL. Planted: wu_d taking the neighbour vertex's u -- 157 and 1,164
+     cycles, tb_m2_geometry FAIL.
+  5. memmap: all 2^32 addresses, the block form against the table (C2's
+     ranges in): 0 differ (69,419,012 burst); planted block 0x11400000 at
+     2^15: 32,768. ALU: 20 M random input sets (208,034 shrdi) through an
+     old / new pair: 0 differ; the mask taking i <= sh: 2,383.
+  6. fp_add (32-bit operands, exponents 0-5 in 6 of 16 draws): SUBNORM 1 x
+     2 seeds and PIPE_A2 1, 3 M cycles each: 0. Planted: the subnormal shift
+     one too far, the subnormal exponent 2: 214,857 of 3 M each. The TGPx4
+     replay (tgpx4_replay, MAME's interpreter in lockstep) old and new side
+     by side: House of the Dead boot 20 M cycles and play 150 M cycles (46.5
+     M words, 2,175,210 outputs checked against MAME, 0 differ) -- logs
+     byte-identical, 3.23 clk / word both.
+  7. tb_m2_raster3d at the 2C build's parameters with DDRAM_IN / PAY_DDR3
+     (r3d_2c's set, R1003's runs) on the MAME lists hotd_1808, stcc_f1500,
+     orev_d1 at latency 40 and stcc_f4500 at 400, d787c68f's RTL against
+     this: logs byte-identical (PX md5s cc8cb9536d55 / 6ab7b024364d /
+     edb66c9ef08c / ac186f593079; draws 445,159 / 386,712 / 604,738 /
+     484,041 cycles, R1003's for the first two). Planted: the writer-side
+     bit select off by one -- draw 444,043, PX differs; the span copy never
+     valid -- draw 476,752, PX differs; the flags never cleared -- PX
+     differs, draw 270,228; the span copy ignoring its flags -- identical
+     (not reached on these lists: no stale word under a dropped flag is
+     queried before its row is painted again).
+  End to end, the i960 changes together: STCC's race checkpoint (R1011's
+  harness, ck_race, LAT 12) at FP_SUBN 1 and 2: PASS, 4,772,816
+  instructions, 21,867,390 clk_i960 cycles, CPI 6.890, digests
+  596f4b35a8fdd5c3 / 0a02091f1a1ad1bb, LSU 373 -- R1017's exactly, and at
+  FP_SUBN 2 the log byte-identical to d787c68f's. test_i960_top_c2 (+vc +fx
+  +c2, the reference at I960_SUBN 1) seeds 2-13: PASS; seeds 2 / 5 / 9 / 13
+  x 2,000 programs: 0 mismatches. lint_top clean with M2_2C / M2_2C_DSB and
+  without.
+
+  The other builds: the 2A build (this branch's qsf less M2_2C, M2_2C_DSB
+  and M2_NO_2A_MANX_MOTION), d787c68f against 7eb58d68: 38,803 ALM, 56,025
+  ALUT, 44,979 registers, 4,601,424 block bits and 101 DSP both; the
+  mapped netlists (quartus_cdb --vqm, 1,567,757 lines sorted) equal once
+  Quartus's generated node numbers are normalised (the engine's Mux102 is
+  Mux0 now: the valid read moved into a generate branch). The Model 2
+  configuration (M2_NO_2A) does not elaborate from this branch --
+  d787c68f fails the same way (Model2.sv:3748) -- so it was not mapped;
+  every changed line there is behind C2, which is 0 in it as in 2A.
+
+*Tried and REVERTED (measured):*
+  * m2_fifo_m10k HEAD_RAM: the head word in the M10K's output latch (read
+    with an enable at rd_pending, at rp - 1; old-data read during write),
+    not a DW-bit register after it -- the span queue (263), the push queue
+    and the copro's two FIFOs. Proven (random miter, depths 32 and 4, 0 in
+    8 M cycles; four plants caught, the read-during-write one 795,212
+    cycles). Measured +93 (-430 registers, +204 ALUT): the head's reset
+    value needs a mask (q = loaded ? latch : 0), and Quartus 17 builds an
+    async-cleared latch from LUTs too (a test module: 265 ALUT for 264
+    bits). Without the mask the module differs before the first word; the
+    copro's output FIFO is read by the i960 when empty, so not taken.
+  * The 3D table mirror's three address windows (Model2.sv, R932's luma /
+    palette / translate writes) as compares instead of subtract-and-compare
+    (exhaustive over 2^26 addresses: equal): the map moved by noise only
+    (ALUT +12). Quartus had already folded the constant subtract.
+  * Not committed: the clipper's pool operands selected index first (one
+    20:1 select a port instead of one per source): standalone +29 ALUT --
+    the per-source 4:1 vertex selects are shared with other ports, so the
+    cone the census showed (344 LUTs into mul_a_q) was not its own. fpadd's
+    add / subtract as one adder with the operand XORed: +28 ALM standalone
+    (Quartus already shares it). fpadd's operand order as one 64-bit compare:
+    +14 / -7 standalone (SUBNORM 0 / 1). fp_mul's (TGPx4) right-shift
+    sticky by compare: -3 ALUT.
+
+*Rejected (looked at):* the SDRAM controller's per-port p_dout (688
+registers) and addr_p (271): ports read p_dout across clock domains between
+their acknowledges, and several ports latch addr_p in one cycle. fx68k's
+register file (two writes a cycle; third-party, unmodified). The timers'
+four counters (all decrement together). The i960 icache's tag MLAB -> M10K
+(R1008's reason, and the estimate does not see it). The strip-cache pixels
+in m2_geometry (csx / csy): already pruned -- the cache is off (R230).
+fp_mul's p_nsh from p_sh (its comment keeps the path into s2_exp short).
+
+*Timing (not fitted) -- what to read in a fit:*
+  * clk_i960: none of the i960 changes is on a register-to-register path
+    the units did not have; each takes a shifter out. fpmisc's stage 2 is
+    shorter (no leading-one search).
+  * clk_sys, the TGPx4 adder's stage s1 -> sC: the amount select now sits in
+    front of the shifter (lzc -> compare -> 5-bit select -> shift), where
+    the select of results came after. Not among R1009's families (those run
+    from the adder's out_valid, not its data).
+  * clk_sys, the fill mask: mk_rdi -> MLAB word -> bit select -> mk_pword
+    (-> fbw_rword) where a 128:1 select of flops was; the span copy's mk_ri
+    -> mq_full the same. Near m2_fb_wcomb (whose ib -> vlo failed on some
+    2C seeds): read the writer's paths.
+  * clk_sys, the colour cache: cc_idx -> MLAB -> ccv_hit -> E_CC's decision.
+  * clk_sys, the geometry: pu_r and wu_dd now load from the clipper's qwu /
+    qwv registers directly (a register to a compare / round, as before, one
+    module boundary further).
+*Not settled:* the fit; the board; the 2A build's identity beyond its map
+(its map and netlist above; the Model 2 build not mappable from here); whether FP_SUBN 2 now fits with timing (s2702 fitted at a
+map near FP_SUBN 0's, 39,904; FP_SUBN 2 now maps 39,867).
