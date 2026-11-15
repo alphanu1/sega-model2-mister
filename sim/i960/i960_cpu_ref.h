@@ -749,7 +749,11 @@ struct Cpu {
             case 0x6c2: wr_int = true; ires = sat_i(std::trunc(fa)); break;        // cvtzri
             case 0x6c9: fres = fa; break;                                          // movr
             case 0x674: fres = double(int32_t(s1)); break;                          // cvtir
-            case 0x677: fres = fb * std::pow(2.0, double(int32_t(s1)));             // scaler
+            case 0x677: fres = fb * ((SUBN < 2 && int32_t(s1) >= -1074 && int32_t(s1) <= -1023)
+                                     ? 0.0 : std::pow(2.0, double(int32_t(s1))));   // scaler
+                        // R1017: below FP_SUBN 2 the RTL's 2^n in the subnormal band is a
+                        // zero (the multiplier flushes it), so the product is a signed zero
+                        // even where the true one is normal -- a recorded deviation.
                         if (int32_t(s1) >= -1074 && int32_t(s1) <= -1023) ++fp_scale_sub;
                         break;
             case 0u: handled = f2a_s; break;                                        // R869

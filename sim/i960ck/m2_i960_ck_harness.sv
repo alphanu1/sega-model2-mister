@@ -34,6 +34,7 @@ module m2_i960_ck_harness #(
   parameter bit          LSU_ST1 = 1'b1,
   parameter bit          DC_ROMS = 1'b1,
   parameter bit          LSU_POST = 1'b1,
+  parameter int unsigned FP_SUBN = 2,      // R1013: i960_top FP_SUBN (2C builds 1, R1017)
   parameter int unsigned AW      = 26
 ) (
   input  logic        clk_cpu,
@@ -79,7 +80,7 @@ module m2_i960_ck_harness #(
   i960_top #(.VC(VC), .FR(FR), .F2A(F2A), .C2(C2), .IC_LINES(ICL),
              .RC_RING(RING), .RC_FRAMES(FRAMES),
              .DC_LINES(DCL), .DC_2A(A2), .DC_LANES(1'b0),
-             .IC_PAIR(IC_PAIR), .LSU_ST1(LSU_ST1), .DC_ROMS(DC_ROMS), .LSU_POST(LSU_POST)) u_cpu (
+             .IC_PAIR(IC_PAIR), .LSU_ST1(LSU_ST1), .DC_ROMS(DC_ROMS), .LSU_POST(LSU_POST), .FP_SUBN(FP_SUBN)) u_cpu (
     .clk(clk_cpu), .rst_n(rst_n), .vc_en(VC || F2A || FR),
     .bus_req(cpu_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),
     .bus_wdata(bus_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),

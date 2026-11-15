@@ -50567,3 +50567,54 @@ Quartus's map estimate, which moves +-30 between near-identical maps):*
 *NOT SETTLED:* a fit (clk_i960 slack: Model 2 +1.350 ns, 2C +0.990, 2A
 +0.267 in the 20261113 releases); the board; the ports to 2A / 2C (fprem,
 the 2C area at ~800 ALM from full).
+
+**R1017 -- R1013's SUBNORMALS ON 2C: FP_SUBN 1 BY DEFAULT ON THE 2C BUILD,
+2 EVERYWHERE ELSE; STCC's RACE CHECKPOINT LOSES ITS 100 SUBNORMAL
+DIFFERENCES, CYCLE-IDENTICAL; THE STCC MRAs BACK TO THEIR RELEASED NAMES.
+NOT FITTED.** Branch new-2c-games, 2026-11-15.
+
+*Why:* Ben -- the subnormals go into every core for accuracy, "even if it
+does not change anything". R1013 (cherry-picked: the conflicts were C2's
+parameters beside the subnormal ones, as on 2A in R1014).
+
+*AREA (quartus_map 17.0, the whole 2C core with the DSB):* FP_SUBN 0
+39,904, 1 40,152 (+248), 2 40,501 (+597); block bits 3,906,220 and DSP 110
+all three. s2702 fitted 41,411 of 41,910 at a map near FP_SUBN 0's, and 2A's
+map-to-fit ratio for the i960's growth was ~1.3 (R1014): 2 would land past
+the device, 1 near 41,750. So Model2.sv's M2_I960_SUBN defaults to 1 under
+M2_2C, 2 otherwise. 1 is every subnormal a single-precision value can be
+(the r forms on general registers -- all STCC's 100); 2 adds doubles below
+2^-1022, which no game measured reaches. FP_SUBN 2 on 2C needs room first.
+
+*CHECKED:* STCC's race checkpoint (ck_race, LAT 12, the 2C harness now
+passing FP_SUBN through): PASS, 4,772,816 instructions, 21,867,390
+clk_i960 cycles, CPI 6.890 -- R1011's exactly; instruction / I/O digests
+596f4b35a8fdd5c3 / 0a02091f1a1ad1bb (R1011's), LSU values differing from
+MAME 373 (were 473): the 100 subnormals gone, the 373 the ring's dead quad
+tails (R1013). The i960 suite on the branch (see HANDOFF); lint_top with
+M2_2C=1 M2_2C_DSB=1 clean.
+
+*THE STCC MRAs:* Ben, "put the STCC MRA name back to the released name to
+make it easier for users": dff37923 reverted -- "Sega Touring Car
+Championship (newer)[ [15kHz CRT]].mra", as released since Model2C_20261023,
+so players' MRAs and their NVRAM files (config/nvram/<MRA name>.nvm, MiSTer
+Main's mra_loader) carry over. Board's _Model2C folder changed to match.
+
+*WHAT SETTING 1 STILL DOES NOT DO (found by the C2 lockstep on more seeds;
+test_i960_top_c2 now builds FP_SUBN 1 with the reference at I960_SUBN 1):*
+  * scaler by 2^n with n in -1074..-1023 returns a signed zero even where
+    the true product is normal (2^n is materialised as a double and the
+    SUBNORM 0 multiplier flushes it) -- the core's behaviour since R815,
+    now a recorded deviation; the reference models it below SUBN 2. Seeds
+    4, 5, 6 of +vc +fx +c2 and seed 5 of test_i960_top_subn failed on it
+    before the reference said so; seeds 2-13 x 2,000 programs now PASS in
+    both. FP_SUBN 2 does it right (the multiplier takes the subnormal 2^n).
+  * At FP_SUBN 2 on the C2 build, logrl of a subnormal double is wrong
+    (test_i960_top_c2's default seed, IP 0x100: -1022.99 for -1028.3): the
+    sequencer's log takes the exponent field as it stands. Not reached at
+    FP_SUBN 1 (the units flush the operand, as the reference does there).
+    Must be fixed before 2C goes to FP_SUBN 2.
+  Neither is seen in any game: STCC's race reaches neither.
+  The pre-subnormal branch (0f157ce6) passes the same seeds; +vc +fx on
+  obj_i960_top_vc fails there too (a VC build has no F2A: +fx is not its
+  mix), so that row says nothing.

@@ -389,8 +389,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 // R1013: M2_I960_SUBN, the i960 FP units' subnormals (i960_top FP_SUBN): 2
 // as the 80960KB in normalizing mode with underflow masked (every unit), 1
 // the single-precision conversions only, 0 the flush the core had before.
+// R1017: 1 on the 2C build -- 2 maps +597 ALM there (39,904 -> 40,501)
+// against s2702's fitted 41,411 of 41,910; 1 is +248. 2 needs room first.
 `ifndef M2_I960_SUBN
+`ifdef M2_2C
+`define M2_I960_SUBN 1
+`else
 `define M2_I960_SUBN 2
+`endif
 `endif
 localparam CONF_STR = {
 `ifdef M2_2A
