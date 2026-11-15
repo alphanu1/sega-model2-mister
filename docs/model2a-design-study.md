@@ -51841,3 +51841,22 @@ and 4 (lastbrnx, scene changes) in its own play window):*
     here; pp. 2-11 to 2-16 were read on ManualsLib's copy (its text
     extraction can scramble tables).
   * overrevb (2B Over Rev) not run: one ROM differs from 0.289's.
+
+**R1026 -- R1024's M10K DECISION: DATA MEMORY 8 K ON CHIP, THE REST IN SDRAM
+BEHIND A SMALL CACHE.** 2026-11-15. Ben, on R1024's ~14 M10K over: "ok
+sdram with a small cache will have to do!"
+
+*Decided:* the SHARC's data memory is 8 K x 32 on chip (32 M10K, not
+R1024's 64); words 8 K-16 K (and schamp's writes to 0x75ff) live in SDRAM
+behind a small read cache with posted writes, as the data ROM and buffer
+RAM do. Budget by R1024's parts: PM 39 + DM 32 + ROM cache 5 + buffer
+cache 5 + FIFOs 2 + the DM cache's lines (~2-5) = ~85-88 M10K of the ~101
+a 2B build frees: ~13-16 spare. Only fvipers (to 0x826, on chip),
+schamp (reads to 0x3300) and lastbrnx (to 0x3fb5) reach above 2 K; only
+the last two above 8 K. R1024 measured lastbrnx at ~2,260 misses a vblank
+with 8 K on chip; the cache's size and line are set by measurement in the
+census (sim/sharc) before RTL fixes them, and the speed model rerun with
+the cost.
+
+*Not settled:* the cache's geometry; whether schamp / lastbrnx stay at
+MAME's lateness with it (R1024's s 1.5 table, re-run).
