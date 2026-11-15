@@ -723,7 +723,8 @@ module i960_top #(
     assign tr_sub = 1'b0; assign tr_sel_add = 1'b0; assign tr_sel_mul = 1'b0;
     assign tr_sel_div = 1'b0; assign tr_fin = 1'b0;
   end endgenerate
-  i960_fpadd  #(.SUBNORM(SUBN_D)) u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
+  // R1018: LEAN on the 2C build -- the same sums, the sticky from a mask.
+  i960_fpadd  #(.SUBNORM(SUBN_D), .LEAN(C2)) u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
                         .sub(tr_on ? tr_sub : fadd_sub), .a(u_a), .b(u_b),
                         .y(fadd_y), .done(fadd_done));
   i960_fpmul  #(.SUBNORM(SUBN_D)) u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (TRB && tr_mul_req)),

@@ -40,7 +40,10 @@
 // SUBNORM 0 is the flush this unit had before.
 
 module i960_fpadd #(
-  parameter bit SUBNORM = 1'b1
+  parameter bit SUBNORM = 1'b1,
+  // R1018: the alignment's sticky bit from a mask of the bits shifted out,
+  // not a second shifter (the C2 build; 0 is the unit as it was)
+  parameter bit LEAN    = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -116,7 +119,18 @@ module i960_fpadd #(
   assign big_w     = {f_big,   3'd0};
   assign small_w   = {f_small, 3'd0};
   assign small_al  = small_w >> sh;
-  assign lost      = (sh == 6'd0) ? 56'd0 : (small_w << (7'd56 - {1'b0, sh}));
+  // R1018: LEAN -- the bits small_al drops are small_w's below sh, so the
+  // sticky is small_w AND a mask of (i < sh): a compare a bit against the
+  // shift distance, where `lost` was a second 56-bit barrel shifter (the
+  // left shift by 56 - sh moves exactly those bits to the top). sh is at
+  // most 56, where both take every bit; at 0, neither takes any.
+  generate if (LEAN) begin : g_lean
+    logic [55:0] lo_mask;
+    always_comb for (int i = 0; i < 56; i++) lo_mask[i] = (6'(i) < sh);
+    assign lost = small_w & lo_mask;
+  end else begin : g_shift
+    assign lost = (sh == 6'd0) ? 56'd0 : (small_w << (7'd56 - {1'b0, sh}));
+  end endgenerate
   assign sticky_al = |lost;
 
   logic [55:0] small_s;
