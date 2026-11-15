@@ -18,9 +18,11 @@
 # to well past 2^-60 and round once.
 #
 # Every operation the program performs is an IEEE double add, subtract,
-# multiply or divide, round to nearest even, subnormals flushed -- what the
-# RTL units do -- so this file's interpreter IS the reference for the RTL
-# sequencer: tb_i960_fptrans compares the two word for word.
+# multiply or divide, round to nearest even, with gradual underflow -- what
+# the RTL units do (R1013: subnormal operands and results, as the 80960KB in
+# normalizing mode; --flush models the units built SUBNORM 0, which flush)
+# -- so this file's interpreter IS the reference for the RTL sequencer:
+# tb_i960_fptrans compares the two word for word.
 #
 #   tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
 #   tools/i960_fptrans.py --log --rom rtl/cpu/i960/i960_fptrans_rom_log.svh
@@ -55,8 +57,13 @@ def u2d(u):
     return struct.unpack('<d', struct.pack('<Q', u & 0xffffffffffffffff))[0]
 
 
+FLUSH = False      # R1013: True models the units built SUBNORM 0 (--flush)
+
+
 def flush(x):
-    """The units flush subnormal operands and results to a signed zero."""
+    """SUBNORM 0 units flush subnormal results to a signed zero."""
+    if not FLUSH:
+        return x
     u = d2u(x)
     if (u >> 52) & 0x7ff == 0 and (u & ((1 << 52) - 1)):
         return u2d(u & (1 << 63))
@@ -78,9 +85,14 @@ def fop(op, a, b):
     # never subnormal -- the RTL multiplier and divider zero a subnormal's
     # significand without treating it as a zero (the exponent is used), so
     # that is asserted, not modelled.
-    if op in ('MUL', 'DIV'):
+    #
+    # R1013: units built SUBNORM 1 (the default) take a subnormal operand as
+    # a value and deliver subnormal results: plain IEEE double arithmetic,
+    # which is what Python's floats are (no flush-to-zero). The rules above
+    # are the SUBNORM 0 units' (--flush).
+    if FLUSH and op in ('MUL', 'DIV'):
         assert not is_sub(a) and not is_sub(b), 'a subnormal reaches the %s' % op
-    else:
+    elif FLUSH:
         a = 0.0 if is_sub(a) else a
         b = 0.0 if is_sub(b) else b
     try:
@@ -688,6 +700,8 @@ def main():
     p = build(log)
     words, addr, names = assemble(p)
     assert len(words) <= 512, len(words)
+    global FLUSH
+    FLUSH = '--flush' in a
     if '--rom' in a:
         rom_svh(p, words, addr, names, a[a.index('--rom') + 1], log)
         print('%d words, %d registers (%d constants)' % (len(words), len(names), len(p.consts)))

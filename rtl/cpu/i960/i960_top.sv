@@ -106,7 +106,16 @@ module i960_top #(
   // (nothing writes them while the CPU runs; the bridge drops a CPU write).
   parameter bit          DC_ROMS  = 1'b1,
   // R924: the 2C-CRX memory map's burst regions (i960_memmap C2)
-  parameter bit C2     = 1'b0
+  parameter bit C2     = 1'b0,
+  // R1013: SUBNORMALS AS THE 80960KB HAS THEM IN NORMALIZING MODE WITH THE
+  // UNDERFLOW MASK SET (PRM §12; every game measured runs AC bit 29 and the
+  // FP masks set): a subnormal operand is a value and a subnormal result is
+  // delivered, rounded, not flushed. 2: everywhere -- the single forms'
+  // conversions (i960_fpcvt) and the double units (add, multiply, divide,
+  // sqrt, fpmisc, scaler's 2^n). 1: the conversions only, so the r forms on
+  // general registers get IEEE singles while a double below 2^-1022 (an rl
+  // form, or fp0-fp3) still flushes. 0: the flush everywhere, as before.
+  parameter int unsigned FP_SUBN   = 2
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -618,12 +627,19 @@ module i960_top #(
   logic [63:0] fp_a_wide, fp_b_wide, fp_res_wide;
   logic [31:0] fp_res_single;
 
-  i960_fpcvt u_cvt_a (.s_in(rd1), .d_out(fp_a_wide),
+  // R1013: WREG -- a subnormal single's widening (a leading-zero count and
+  // shift) comes from a register of the previous cycle's rd1, which is this
+  // instruction's operand: rd1 / rd2 hold from T_EXEC through T_FP (ra1 / ra2
+  // default to d_src1 / d_src2 there), and the units take their operands in
+  // T_FP. The count and shift so stay off the operand path into the units.
+  localparam bit SUBN_S = (FP_SUBN >= 1);
+  localparam bit SUBN_D = (FP_SUBN >= 2);
+  i960_fpcvt #(.SUBNORM(SUBN_S), .WREG(1'b1)) u_cvt_a (.clk(clk), .s_in(rd1), .d_out(fp_a_wide),
                       .d_in(fp_res_wide), .s_out(fp_res_single));
   // Only the widening half of this instance is used — the narrowing path
   // belongs to u_cvt_a, which sees the result. Named explicitly rather than
   // left empty so the intent is visible.
-  i960_fpcvt u_cvt_b (.s_in(rd2), .d_out(fp_b_wide),
+  i960_fpcvt #(.SUBNORM(SUBN_S), .WREG(1'b1)) u_cvt_b (.clk(clk), .s_in(rd2), .d_out(fp_b_wide),
                       .d_in(64'd0), .s_out(cvt_b_dead));
 
   function automatic logic [63:0] fp_lit(input logic [4:0] idx,
@@ -707,13 +723,13 @@ module i960_top #(
     assign tr_sub = 1'b0; assign tr_sel_add = 1'b0; assign tr_sel_mul = 1'b0;
     assign tr_sel_div = 1'b0; assign tr_fin = 1'b0;
   end endgenerate
-  i960_fpadd  u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
+  i960_fpadd  #(.SUBNORM(SUBN_D)) u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
                         .sub(tr_on ? tr_sub : fadd_sub), .a(u_a), .b(u_b),
                         .y(fadd_y), .done(fadd_done));
-  i960_fpmul  u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (TRB && tr_mul_req)),
+  i960_fpmul  #(.SUBNORM(SUBN_D)) u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (TRB && tr_mul_req)),
                         .a(u_a), .b((fp_is_scale && !tr_on) ? pow2 : u_b),
                         .y(fmul_y), .done(fmul_done));
-  i960_fpdiv  u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req | (TRB && tr_div_req)),
+  i960_fpdiv  #(.SUBNORM(SUBN_D)) u_fpdiv  (.clk(clk), .rst_n(rst_n), .req(fdiv_req | (TRB && tr_div_req)),
                         .a(u_a), .b(u_b), .y(fdiv_y),
                         .busy(fdiv_busy), .done(fdiv_done));
   // R869: remr -- fmod(src2, src1), exact; its operands held on fp_b / fp_a
@@ -729,7 +745,7 @@ module i960_top #(
   end else begin : g_norem
     assign frem_y = 64'd0; assign frem_done = 1'b0;
   end endgenerate
-  i960_fpsqrt u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
+  i960_fpsqrt #(.SUBNORM(SUBN_D)) u_fpsqrt (.clk(clk), .rst_n(rst_n), .req(fsqrt_req),
                         .a(fp_a), .y(fsqrt_y),
                         .busy(fsqrt_busy), .done(fsqrt_done));
 
@@ -744,13 +760,18 @@ module i960_top #(
   // where adding to the exponent returns zero. So 2^n is materialised as a
   // double and pushed through the multiplier, which already handles every
   // special case correctly.
+  //
+  // R1013: with SUBN_D, 2^n for n in -1074..-1023 is the subnormal pow()
+  // returns (fraction bit n + 1074), not zero; the multiplier takes it.
   logic signed [12:0] pow2_exp;
   logic [63:0]        pow2;
+  logic [5:0]         pow2_sb;
   assign pow2_exp = $signed(src1_val[12:0]) + 13'sd1023;
+  assign pow2_sb  = 6'(src1_val[12:0] + 13'd1074);
   assign pow2 = ($signed(src1_val) >  32'sd1023) ? {1'b0, 11'h7ff, 52'd0}
               : ($signed(src1_val) < -32'sd1074) ? 64'd0
               : (pow2_exp >= 13'sd2047)          ? {1'b0, 11'h7ff, 52'd0}
-              : (pow2_exp <= 13'sd0)             ? 64'd0
+              : (pow2_exp <= 13'sd0)             ? (SUBN_D ? {12'd0, 52'd1 << pow2_sb} : 64'd0)
                                                  : {1'b0, pow2_exp[10:0], 52'd0};
 
   logic [2:0] fmisc_op;
@@ -771,7 +792,7 @@ module i960_top #(
   // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
   localparam bit FPMISC_STAGED = 1'b1;
   // R952: SCALE 0 -- fmisc_op is never 6 (scaler is the multiply by pow2).
-  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
+  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0), .SUBNORM(SUBN_D)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
                         .a(fp_a), .b(fp_b), .ai(src1_val),
                         .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
 

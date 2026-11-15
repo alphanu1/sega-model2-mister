@@ -1,5 +1,32 @@
 # Handoff
 
+## 2026-11-15: i960-subnorm -- the i960 FP units take and deliver subnormals (R1013), quartus_map only
+
+Branch `i960-subnorm` off main 2f61c2d1. Study R1013 has the record. Not
+fitted, not on the board, not pushed. To be ported to model2a / model2c.
+
+  * Every unit (fpadd, fpmul, fpdiv, fpsqrt, fpmisc, fpcvt) has SUBNORM
+    (default 1; 0 is the old flush). i960_top FP_SUBN / Model2.sv
+    M2_I960_SUBN: 2 every unit (main's default), 1 the single-precision
+    conversions only, 0 the flush. No added latency on normal operands;
+    divide / sqrt take lz + 1 more cycles only for a subnormal operand.
+  * Every game's AC in MAME (19 sets): 0x3F0010xx once running -- bit 29
+    (normalizing mode) and all FP masks set. The NM-clear reserved-encoding
+    fault and the unmasked underflow fault are not modelled (no fault
+    machinery in the core).
+  * STCC race checkpoint (i960-cpi's bench in the scratchpad, 2C build):
+    473 -> 373 LSU differences; the 100 subnormal ones go, the 373 are the
+    register ring's stack words (RING 0 build: 0). FP_SUBN 1 also 0.
+    Digests / CPI unchanged.
+  * Model 2 map: base 39,052 ALM; FP_SUBN 1 39,292 (+240); FP_SUBN 2 39,707
+    (+655). 0 DSP, 0 M10K. For 2C (~800 from full) use FP_SUBN 1.
+  * Post-map STA: fpmul's stage 2 and the write-back grow (+4.8 / +1.5 ns
+    post-map); the operand paths do not.
+
+REMAINS: a fit of each core; the board; the 2A / 2C ports (i960_fprem still
+flushes a double subnormal; 2C's i960_top has F2A / fprem and the dcache --
+the FP plumbing edit is the same few lines).
+
 ## 2026-11-14 (night): new-2c-games (local, not pushed) -- seven 2C sets on their own game IDs (R1010)
 
 Study R1010 has the record. Branch new-2c-games off stcc-sound-2c ea3ba75d.
