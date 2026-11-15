@@ -302,6 +302,7 @@ const char *rn(int i) {
 }
 
 uint64_t denorm_skips = 0;
+uint64_t sub_in_tot = 0, sub_out_tot = 0, scale_sub_tot = 0;   // R1013
 uint64_t nan_stops    = 0;
 bool     probe_fp     = false;
 
@@ -547,6 +548,7 @@ int main(int argc, char **argv) {
   const uint8_t REG5A[] = {0x0,0x1,0x2,0x3,0x4,0x5,0x6,0x7,0xc,0xe};
 
   std::mt19937_64 rng(seed);
+  std::mt19937_64 srng(seed ^ 0x5b5b);   // R1013: register-seeding choices only
   uint64_t total_retires = 0, trapped_progs = 0;
 
   for (uint64_t p = 0; p < progs && fails == 0; ++p) {
@@ -555,6 +557,7 @@ int main(int argc, char **argv) {
   dequeued_total += ref.intr_dequeued;
     intr_total += ref.intr_taken; queued_total += ref.intr_queued;
     dequeued_total += ref.intr_dequeued;
+    sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub;   // R1013
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
     ref.ref_vc = use_vc;
 
@@ -631,6 +634,12 @@ int main(int argc, char **argv) {
         // R839: cvtzril writes dst and dst + 1, unmasked, never a literal
         // (MAME fatalerrors): dst <= 30, as emul's.
         if (sel == 0x6c3u) insn = (insn & ~0x00f82000u) | ((rng() % 31) << 19);
+        // R1013: scaler, half the time (decided by the seeding generator, so
+        // the main stream is unchanged), with a register n and src2 and an
+        // fp0-fp3 destination -- where a 2^n in the subnormal band is not
+        // narrowed away to a single zero.
+        if (sel == 0x677u && (srng() & 1))
+          insn = (insn & ~(0x0800u | 0x1000u | 0x00e00000u)) | 0x2000u;
       } else if (cls == 8) {                           // mov / bit scan / modac
         static const uint8_t B64[] = {0x0,0x1,0x4,0x5};
         const bool use5c = (rng() & 1);
@@ -979,13 +988,21 @@ int main(int argc, char **argv) {
     }
     for (int i = 0; i < 32; i++) {
       uint32_t v = uint32_t(rng());
-      // Keep every register a NORMAL single when read as a float. The FP units
-      // flush subnormals and the host does not, which is a recorded deviation
-      // (§8.1) rather than a bug — but a randomly seeded register hits it
-      // often, and then the suite measures the deviation instead of the design.
-      // Same discipline as excluding the zero divisor and the overlapping mov.
+      // Keep a register a NORMAL single when read as a float (exponent 0 or
+      // 0xff made 0x7f) -- except for the R1013 choices below. This was all
+      // of it while the FP units flushed subnormals (§8.1, a deviation the
+      // suite should not measure); the reference now models FP_SUBN.
       const uint32_t e = (v >> 23) & 0xff;
-      if (e == 0x00 || e == 0xff) v = (v & 0x807fffffu) | (0x7fu << 23);
+      // R1013: with the units taking subnormals (FP_SUBN, the reference's
+      // SUBN), seed them on purpose instead: a subnormal single, a small
+      // integer (scaler's n, -1090..-1011 -- the subnormal 2^n band is
+      // -1074..-1023 -- and NaNs as singles), the high word of a subnormal double pair. Drawn from
+      // a second generator, so the programs themselves are the same as before.
+      const uint32_t k = uint32_t(srng() % 16);
+      if (i960ref::Cpu::SUBN >= 1 && k == 0)                 v &= 0x807fffffu;
+      else if (i960ref::Cpu::SUBN >= 1 && k == 1)            v = uint32_t(int32_t(srng() % 80) - 1090);
+      else if (i960ref::Cpu::SUBN >= 2 && k == 2 && (i & 1)) v &= 0x800fffffu;
+      else if (e == 0x00 || e == 0xff) v = (v & 0x807fffffu) | (0x7fu << 23);
       ref.rf.r[i] = v;
       if (i < 16) dut->rootp->i960_top__DOT__u_regs__DOT__loc[i] = v;
       else        dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16] = v;
@@ -1510,6 +1527,9 @@ int main(int argc, char **argv) {
                           (unsigned long long)vctr[0], (unsigned long long)vctr[1], (unsigned long long)vctr[2],
                           (unsigned long long)vctr[3], (unsigned long long)trans_ulp);
   std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
+  sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub;
+  std::printf("  R1013: FP retires with a subnormal operand %llu, with a subnormal result %llu, scaler by a subnormal 2^n %llu (FP_SUBN %d)\n",
+              (unsigned long long)sub_in_tot, (unsigned long long)sub_out_tot, (unsigned long long)scale_sub_tot, i960ref::Cpu::SUBN);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
               ", %llu: self-modifying code, %llu: IP left the program"
               "  (all recorded deviations)\n",

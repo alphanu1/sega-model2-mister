@@ -22,10 +22,26 @@
 // width; the split is deliberately left until there is a measurement asking
 // for it, rather than paid for in advance.
 //
-// Deviations, the same set the multiplier carries: subnormals flushed,
-// exponent overflow to infinity, underflow to zero.
+// Exponent overflow goes to infinity.
+//
+// R1013: SUBNORMALS, as the 80960KB has them in normalizing mode with the
+// underflow mask set (PRM §12): SUBNORM 1 takes a subnormal operand as the
+// value 0.m * 2^-1022 -- no hidden bit, effective exponent 1 -- and delivers
+// a subnormal result. Neither needs a new shifter here:
+//   * the alignment shift is the exponent difference less one when exactly
+//     one operand has exponent field 0 (its effective exponent is 1);
+//   * the normalising left shift must not take the exponent below 1, so a
+//     marker bit at 55 - (exponent - 1), registered with the sum, stops the
+//     leading-zero count there; a result whose leading one is still under
+//     bit 55 after the shift is subnormal and gets exponent field 0.
+// A sum or difference whose result is subnormal is always exact (both
+// operands are then below 2^-1021 and aligned within the guard bits), so the
+// rounding below never acts on one; it is written for the general case anyway.
+// SUBNORM 0 is the flush this unit had before.
 
-module i960_fpadd (
+module i960_fpadd #(
+  parameter bit SUBNORM = 1'b1
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        req,
@@ -58,10 +74,13 @@ module i960_fpadd (
   assign a_nan  = (ea == 11'h7ff) && (ma != 52'd0);
   assign b_nan  = (eb == 11'h7ff) && (mb != 52'd0);
 
-  // Subnormals are flushed to zero; see the header.
+  // SUBNORM 0 flushes a subnormal to a zero significand; see the header.
+  logic        a_ez, b_ez;
   logic [52:0] fa, fb;
-  assign fa = (ea == 11'd0) ? 53'd0 : {1'b1, ma};
-  assign fb = (eb == 11'd0) ? 53'd0 : {1'b1, mb};
+  assign a_ez = (ea == 11'd0);
+  assign b_ez = (eb == 11'd0);
+  assign fa = a_ez ? (SUBNORM ? {1'b0, ma} : 53'd0) : {1'b1, ma};
+  assign fb = b_ez ? (SUBNORM ? {1'b0, mb} : 53'd0) : {1'b1, mb};
 
   // --------------------------------------------- order by magnitude
   //
@@ -80,9 +99,15 @@ module i960_fpadd (
   assign s_small = a_bigger ? sb : sa;
 
   // Shift is capped: past 56 bits the smaller operand contributes only sticky.
+  // R1013: the raw exponents order the operands correctly (field 0 is below
+  // every normal), but a subnormal's effective exponent is 1, so with exactly
+  // one exponent field 0 -- that one is the smaller -- the distance is one
+  // less. Both 0: both effective 1, distance 0 either way.
   logic [10:0] ediff_raw;
   logic [5:0]  sh;
-  assign ediff_raw = (a_bigger ? ea : eb) - (a_bigger ? eb : ea);
+  logic        e_corr;
+  assign e_corr    = SUBNORM && (a_ez ^ b_ez);
+  assign ediff_raw = (a_bigger ? ea : eb) - (a_bigger ? eb : ea) - {10'd0, e_corr};
   assign sh        = (ediff_raw > 11'd56) ? 6'd56 : ediff_raw[5:0];
 
   // Three guard bits below the mantissa carry guard, round and sticky.
@@ -107,11 +132,12 @@ module i960_fpadd (
 
   logic [56:0]        s1_sum;
   logic [10:0]        s1_exp;
+  logic [55:0]        s1_mk;          // R1013: the normalising shift's floor
   logic               s1_sign, s1_nan, s1_inf, s1_zero, done_q;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      s1_sum <= 57'd0; s1_exp <= 11'd0; s1_sign <= 1'b0;
+      s1_sum <= 57'd0; s1_exp <= 11'd0; s1_sign <= 1'b0; s1_mk <= 56'd0;
       s1_nan <= 1'b0; s1_inf <= 1'b0; s1_zero <= 1'b0;
       done_q <= 1'b0; done <= 1'b0; y <= 64'd0;
     end else begin
@@ -120,7 +146,14 @@ module i960_fpadd (
 
       if (req) begin
         s1_sum  <= sum_raw;
-        s1_exp  <= e_big;
+        // R1013: the effective exponent (field 0 is exponent 1), and a marker
+        // at bit 55 - (e - 1) that stops the leading-zero count from taking
+        // the exponent below 1. e - 1 > 55 needs no marker: lz <= 55.
+        s1_exp  <= (SUBNORM && (e_big == 11'd0)) ? 11'd1 : e_big;
+        s1_mk   <= !SUBNORM ? 56'd0
+                 : (e_big <= 11'd1) ? (56'd1 << 55)
+                 : ((e_big - 11'd1) <= 11'd55) ? (56'd1 << (6'd55 - 6'(e_big - 11'd1)))
+                 : 56'd0;
         s1_sign <= s_big;
         // inf - inf is NaN; inf + anything else is inf.
         s1_nan  <= a_nan | b_nan | (a_inf & b_inf & (sa ^ sb));
@@ -137,7 +170,7 @@ module i960_fpadd (
         else if (s1_zero)                  y <= {s1_sign & s_small_q, 63'd0};
         else if (s1_sum == 57'd0)          y <= 64'd0;   // exact cancellation
         else if (res_exp_s >= 13'sd2047)   y <= {s1_sign, 11'h7ff, 52'd0};
-        else if (res_exp_s <= 13'sd0)      y <= {s1_sign, 63'd0};
+        else if (res_exp_s <= 13'sd0 && !SUBNORM) y <= {s1_sign, 63'd0};   // flushed
         else                               y <= {s1_sign, res_exp_s[10:0], res_man};
         done <= 1'b1;
       end
@@ -156,11 +189,14 @@ module i960_fpadd (
   // The shift needed to place the leading one at bit 55, which is where the
   // hidden bit belongs given the mantissa is taken from [54:3]. Bit 56 is the
   // carry-out case and is handled separately, so the loop stops at 55.
+  // R1013: the marker s1_mk ORed in floors the shift at e - 1.
+  logic [55:0] lz_in;
+  assign lz_in = s1_sum[55:0] | s1_mk;
   logic [5:0] lz;
   always_comb begin
     lz = 6'd55;
     for (int i = 0; i < 56; i++)
-      if (s1_sum[i]) lz = 6'(55 - i);
+      if (lz_in[i]) lz = 6'(55 - i);
   end
 
   // norm[56:55] are 1 and 0 by construction after normalising — the loop above
@@ -192,6 +228,11 @@ module i960_fpadd (
   assign sticky   = |norm[1:0];
   assign round_up = guard & (sticky | man_t[0]);
 
+  // R1013: a result whose leading one is not at bit 55 after the shift (the
+  // marker stopped it) is subnormal: exponent field 0. exp_n is 1 there.
+  logic signed [12:0] exp_f;
+  assign exp_f = (SUBNORM && !norm[55]) ? 13'sd0 : exp_n;
+
   logic [52:0]        man_r;
   logic [51:0]        res_man;
   logic signed [12:0] res_exp_s;
@@ -201,6 +242,6 @@ module i960_fpadd (
   // man_r is exactly 2^52 in that case, so the low 52 bits are already zero and
   // one expression covers both paths.
   assign res_man   = man_r[51:0];
-  assign res_exp_s = man_r[52] ? (exp_n + 13'sd1) : exp_n;
+  assign res_exp_s = man_r[52] ? (exp_f + 13'sd1) : exp_f;
 
 endmodule

@@ -496,6 +496,13 @@ zero. The host implements subnormals properly, so a program that produces one
 multiplier rather than a known difference. Rounding is round-to-nearest-even
 only, which is what the reference's host mode does.
 
+*Superseded by study R1013 (2026-11-15):* the 80960KB has no flush mode --
+in normalizing mode (AC bit 29, set by every game measured) with the
+underflow mask set it takes subnormal operands as values and delivers
+subnormal results. The units now do the same (`SUBNORM` 1, i960_top
+`FP_SUBN` 2) and the benches compare subnormals against the host; the flush
+is still there as `SUBNORM` 0 / `FP_SUBN` 0.
+
 ### 8.2 Transcendentals — the oracle runs out a third time
 
 **The reference computes transcendentals with the host's `libm`**:

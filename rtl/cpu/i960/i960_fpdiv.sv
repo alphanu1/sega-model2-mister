@@ -18,10 +18,26 @@
 // A faster radix-4 or Newton-Raphson unit would cost DSP blocks, and M2-E
 // showed a comparable renderer already wanting 61 of the 112.
 //
-// Same deviations as the adder and multiplier: subnormals flushed, overflow to
-// infinity, underflow to zero, round-to-nearest-even only.
+// Overflow goes to infinity; round-to-nearest-even only.
+//
+// R1013: SUBNORMALS, as the 80960KB has them in normalizing mode with the
+// underflow mask set (PRM §12). SUBNORM 1:
+//   * A subnormal operand (no hidden bit, effective exponent 1) is
+//     normalised in S_NORM before the divide, one bit a cycle for each
+//     operand at once, the exponent adjusted as it goes: max(lz) + 1 cycles,
+//     only when an operand is subnormal. Normal operands go straight to S_DIV
+//     as before, the same 58 cycles.
+//   * A quotient below 2^-1022 is produced at its denormalised alignment:
+//     with exp_q <= 0 the divide stops 1 - exp_q steps early, so the LSB that
+//     comes out is the subnormal's, and the remainder is the sticky as usual
+//     (fewer cycles, not more). exp_q = 1 with the first quotient bit clear is
+//     subnormal at the full length. Either way the exponent field is 0, and a
+//     rounding carry makes the result 2^-1022.
+// SUBNORM 0 is the flush this unit had before.
 
-module i960_fpdiv (
+module i960_fpdiv #(
+  parameter bit SUBNORM = 1'b1
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        req,
@@ -50,11 +66,25 @@ module i960_fpdiv (
   assign a_nan  = (ea == 11'h7ff) && (ma != 52'd0);
   assign b_nan  = (eb == 11'h7ff) && (mb != 52'd0);
 
-  logic [52:0] fa, fb;
-  assign fa = (ea == 11'd0) ? 53'd0 : {1'b1, ma};
-  assign fb = (eb == 11'd0) ? 53'd0 : {1'b1, mb};
+  logic a_sub, b_sub;
+  assign a_sub = (ea == 11'd0) && (ma != 52'd0);
+  assign b_sub = (eb == 11'd0) && (mb != 52'd0);
 
-  typedef enum logic [1:0] { S_IDLE, S_DIV, S_FIN } state_e;
+  logic [52:0] fa, fb;
+  assign fa = (ea == 11'd0) ? (SUBNORM ? {1'b0, ma} : 53'd0) : {1'b1, ma};
+  assign fb = (eb == 11'd0) ? (SUBNORM ? {1'b0, mb} : 53'd0) : {1'b1, mb};
+
+  // A subnormal's effective exponent is 1 (SUBNORM 1).
+  logic [10:0] ea_e, eb_e;
+  assign ea_e = (SUBNORM && a_sub) ? 11'd1 : ea;
+  assign eb_e = (SUBNORM && b_sub) ? 11'd1 : eb;
+
+  // The result is a special (NaN, infinity, zero): the divide's value is not
+  // used, so a subnormal operand is not normalised either.
+  logic sp_any;
+  assign sp_any = a_nan | b_nan | a_inf | b_inf | a_zero | b_zero;
+
+  typedef enum logic [1:0] { S_IDLE, S_DIV, S_FIN, S_NORM } state_e;
   state_e state;
   assign busy = (state != S_IDLE);
 
@@ -97,12 +127,22 @@ module i960_fpdiv (
           r_nan  <= a_nan | b_nan | (a_zero & b_zero) | (a_inf & b_inf);
           r_inf  <= (a_inf & ~b_inf & ~b_nan) | (b_zero & ~a_zero & ~a_nan);
           r_zero <= (a_zero & ~b_zero & ~b_nan) | (b_inf & ~a_inf & ~a_nan);
-          exp_q  <= $signed({2'b0, ea}) - $signed({2'b0, eb}) + 13'sd1023;
+          exp_q  <= $signed({2'b0, ea_e}) - $signed({2'b0, eb_e}) + 13'sd1023;
           rem    <= {1'b0, fa};
           dsr    <= fb;
           quot   <= 56'd0;
           cnt    <= 6'd0;
-          state  <= S_DIV;
+          state  <= (SUBNORM && (a_sub || b_sub) && !sp_any) ? S_NORM : S_DIV;
+        end
+
+        // R1013: normalise a subnormal dividend and / or divisor, one bit a
+        // cycle each. A dividend shifted up is a smaller exponent, a divisor
+        // shifted up a larger quotient exponent.
+        S_NORM: begin
+          if (!rem[52]) rem <= {rem[52:0], 1'b0};
+          if (!dsr[52]) dsr <= {dsr[51:0], 1'b0};
+          exp_q <= exp_q - (rem[52] ? 13'sd0 : 13'sd1) + (dsr[52] ? 13'sd0 : 13'sd1);
+          if (rem[52] && dsr[52]) state <= S_DIV;
         end
 
         S_DIV: begin
@@ -115,7 +155,18 @@ module i960_fpdiv (
             rem  <= {rem[52:0], 1'b0};
             quot <= {quot[54:0], 1'b0};
           end
+          // R1013: a quotient below 2^-1022 (exp_q <= 0) needs 1 - exp_q
+          // fewer steps: decided at the first, from the settled exp_q. With
+          // d = 1 - exp_q, the steps are 56 - d: the first now, then cnt
+          // from d + 1 to 55. d >= 55 leaves only this one, which lands in the
+          // sticky (such a quotient is under half the smallest subnormal).
+          // Not for a special result (0 / x, x / inf, ...): its steps are not
+          // used, and it keeps the 58 cycles it always took.
           if (cnt == 6'd55) state <= S_FIN;
+          else if (SUBNORM && (cnt == 6'd0) && (exp_q <= 13'sd0) && !(r_nan | r_inf | r_zero)) begin
+            if (exp_q <= -13'sd54) state <= S_FIN;
+            else                   cnt   <= 6'(13'sd2 - exp_q);
+          end
           else              cnt   <= cnt + 6'd1;
         end
 
@@ -124,7 +175,7 @@ module i960_fpdiv (
           else if (r_inf)                 y <= {sgn, 11'h7ff, 52'd0};
           else if (r_zero)                y <= {sgn, 63'd0};
           else if (res_exp >= 13'sd2047)  y <= {sgn, 11'h7ff, 52'd0};
-          else if (res_exp <= 13'sd0)     y <= {sgn, 63'd0};
+          else if (res_exp <= 13'sd0 && !SUBNORM) y <= {sgn, 63'd0};   // flushed
           else                            y <= {sgn, res_exp[10:0], res_man};
           done  <= 1'b1;
           state <= S_IDLE;
@@ -149,20 +200,31 @@ module i960_fpdiv (
   assign qn = quot[55] ? quot : {quot[54:0], 1'b0};
   assign en = quot[55] ? exp_q : (exp_q - 13'sd1);
 
+  // R1013: subnormal -- the quotient as it stands (already at its
+  // denormalised alignment when exp_q <= 0; exp_q = 1 with quot[55] clear
+  // needs no 1-bit normalise), exponent field 0.
+  logic        is_sub;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [55:0] qf;                     // [55] is the hidden bit, not stored
+  /* verilator lint_on UNUSEDSIGNAL */
+  assign is_sub = SUBNORM && ((exp_q <= 13'sd0) || ((exp_q == 13'sd1) && !quot[55]));
+  assign qf     = is_sub ? quot : qn;
+
   logic [51:0] man_t;
   logic        guard, sticky, round_up;
-  assign man_t    = qn[54:3];
-  assign guard    = qn[2];
+  assign man_t    = qf[54:3];
+  assign guard    = qf[2];
   // Everything below the guard bit, plus a non-zero final remainder — the
   // division is not exact when rem != 0 and that must reach the round decision.
-  assign sticky   = |qn[1:0] | (rem != 54'd0);
+  assign sticky   = |qf[1:0] | (rem != 54'd0);
   assign round_up = guard & (sticky | man_t[0]);
 
   logic [52:0]        man_r;
   logic [51:0]        res_man;
-  logic signed [12:0] res_exp;
+  logic signed [12:0] res_exp, exp_f;
+  assign exp_f   = is_sub ? 13'sd0 : en;
   assign man_r   = {1'b0, man_t} + {52'd0, round_up};
   assign res_man = man_r[51:0];
-  assign res_exp = man_r[52] ? (en + 13'sd1) : en;
+  assign res_exp = man_r[52] ? (exp_f + 13'sd1) : exp_f;
 
 endmodule

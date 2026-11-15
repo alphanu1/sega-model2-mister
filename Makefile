@@ -562,6 +562,40 @@ obj_i960_fpcvt/Vi960_fpcvt: $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 	$(VBUILD) --top-module i960_fpcvt -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpcvt -o Vi960_fpcvt $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 
+# R1013: the units' subnormal paths. test_i960_fpcvt_wreg: the registered
+# widening i960_top builds (WREG 1), its operand held a clock as rd1 is.
+# test_i960_fp_flush: every unit built SUBNORM 0 against its bench with
+# -DTB_FLUSH -- the flush the core had before, still there for FP_SUBN 0.
+.PHONY: test_i960_fpcvt_wreg test_i960_fp_flush
+test_i960_fpcvt_wreg: obj_i960_fpcvt_wreg/Vi960_fpcvt
+	@echo "== test i960_fpcvt WREG 1"
+	./obj_i960_fpcvt_wreg/Vi960_fpcvt +wreg $(TEST_ARGS)
+
+obj_i960_fpcvt_wreg/Vi960_fpcvt: $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
+	$(VBUILD) --top-module i960_fpcvt -GWREG=1 -CFLAGS "-O2 -I../$(TB)" \
+	  --Mdir obj_i960_fpcvt_wreg -o Vi960_fpcvt $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
+
+FP_FLUSH_UNITS := fpadd fpmul fpdiv fpsqrt fpmisc fpcvt
+test_i960_fp_flush: $(foreach u,$(FP_FLUSH_UNITS),obj_i960_$(u)_flush/Vflush)
+	@set -e; for u in $(FP_FLUSH_UNITS); do echo "== test i960_$$u SUBNORM 0"; \
+	  ./obj_i960_$${u}_flush/Vflush $(TEST_ARGS); done
+
+# R1013: the whole-CPU lockstep on i960_top FP_SUBN 1 (the conversions only)
+# and 0 (the flush), each against the reference built the same way.
+.PHONY: test_i960_top_subn
+test_i960_top_subn: obj_i960_top_subn1/Vi960_top obj_i960_top_subn0/Vi960_top
+	@echo "== test i960_top FP_SUBN 1 (single-precision subnormals only)"
+	./obj_i960_top_subn1/Vi960_top $(TEST_ARGS)
+	@echo "== test i960_top FP_SUBN 0 (the flush)"
+	./obj_i960_top_subn0/Vi960_top $(TEST_ARGS)
+obj_i960_top_subn%/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GFP_SUBN=$* --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DI960_SUBN=$*" \
+	  --Mdir obj_i960_top_subn$* -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+obj_i960_%_flush/Vflush: $(I960)/i960_%.sv $(TB)/tb_i960_%.cpp
+	$(VBUILD) --top-module i960_$* -GSUBNORM=0 -CFLAGS "-O2 -I../$(TB) -DTB_FLUSH" \
+	  --Mdir obj_i960_$*_flush -o Vflush $(I960)/i960_$*.sv $(TB)/tb_i960_$*.cpp
+
 # The controller against a device MODEL, lifted with it. This is how the ROM
 # readback gets diagnosed without spending a 25-minute build per hypothesis.
 test_m2_sdram: obj_m2_sdram/Vm2_sdram_harness

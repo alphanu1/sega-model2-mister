@@ -156,6 +156,12 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_I960_RING
 `define M2_I960_RING 1
 `endif
+// R1013: M2_I960_SUBN, the i960 FP units' subnormals (i960_top FP_SUBN): 2
+// as the 80960KB in normalizing mode with underflow masked (every unit), 1
+// the single-precision conversions only, 0 the flush the core had before.
+`ifndef M2_I960_SUBN
+`define M2_I960_SUBN 2
+`endif
 localparam CONF_STR = {
 	"Model2;;",
 	"-;",
@@ -2586,7 +2592,8 @@ logic [1:0] vc_fpu_s;
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], VCOP_FPU & is_vcop};
 // R997: the register ring (M2_I960_RING, above), for every game on the board
 localparam bit I960_RING = (`M2_I960_RING != 0);
-i960_top #(.VC(VCOP_FPU), .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4)) u_i960 (
+i960_top #(.VC(VCOP_FPU), .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4),
+           .FP_SUBN(`M2_I960_SUBN)) u_i960 (
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),

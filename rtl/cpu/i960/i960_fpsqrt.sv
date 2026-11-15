@@ -29,7 +29,17 @@
 // and if so subtracting it, which is the standard shift-and-subtract form with
 // no multiplier anywhere.
 
-module i960_fpsqrt (
+// R1013: SUBNORMALS, as the 80960KB has them in normalizing mode (PRM §12).
+// SUBNORM 1: a positive subnormal operand is a value, 0.m * 2^-1022; its
+// square root is a normal double (>= 2^-537). It is normalised in S_NORM, one
+// bit a cycle (lz + 1 cycles, only for a subnormal), and then enters S_ITER
+// as a normal operand would. A negative subnormal is NaN, as any negative
+// non-zero is. SUBNORM 0 is what this unit did before: a subnormal's
+// significand taken as zero.
+
+module i960_fpsqrt #(
+  parameter bit SUBNORM = 1'b1
+) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        req,
@@ -55,7 +65,10 @@ module i960_fpsqrt (
   logic [52:0] fa;
   assign fa = (ea == 11'd0) ? 53'd0 : {1'b1, ma};
 
-  typedef enum logic [1:0] { S_IDLE, S_ITER, S_FIN } state_e;
+  logic a_sub;
+  assign a_sub = (ea == 11'd0) && (ma != 52'd0);
+
+  typedef enum logic [1:0] { S_IDLE, S_ITER, S_FIN, S_NORM } state_e;
   state_e state;
   assign busy = (state != S_IDLE);
 
@@ -113,6 +126,32 @@ module i960_fpsqrt (
           rem   <= 59'd0;
           cnt   <= 6'd0;
           state <= S_ITER;
+          // R1013: a positive subnormal: normalise first. root holds the
+          // significand meanwhile and exp_r the BIASED exponent (1, less
+          // one a shift); S_NORM loads radicand and exp_r as above.
+          if (SUBNORM && a_sub && !sa) begin
+            root  <= {3'd0, 1'b0, ma};
+            exp_r <= 13'sd1;
+            state <= S_NORM;
+          end
+        end
+
+        S_NORM: begin
+          if (!root[52]) begin
+            root  <= {root[54:0], 1'b0};
+            exp_r <= exp_r - 13'sd1;
+          end else begin
+            // exp_r is <= 0 here, biased: the same parity rule as S_IDLE.
+            if (exp_r[0]) begin
+              radicand <= {1'b0, root[52:0], 58'd0};
+              exp_r    <= (exp_r - 13'sd1023) >>> 1;
+            end else begin
+              radicand <= {root[52:0], 59'd0};
+              exp_r    <= (exp_r - 13'sd1023 - 13'sd1) >>> 1;
+            end
+            root  <= 56'd0;
+            state <= S_ITER;
+          end
         end
 
         S_ITER: begin

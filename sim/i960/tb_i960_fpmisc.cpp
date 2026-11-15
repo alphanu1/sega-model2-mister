@@ -31,6 +31,16 @@ union U { double d; uint64_t u; };
 // built on it silently fails.
 inline double asd(uint64_t b) { U t; t.u = b; return t.d; }
 bool is_sub(double x) { return x != 0.0 && std::fabs(x) < 2.2250738585072014e-308; }
+// R1013: SUBNORM 1 takes a subnormal operand as a value in logb, round, cvtri
+// and cvtzri (compare always did); -DTB_FLUSH checks a SUBNORM 0 unit and
+// skips them, as before. Scale (op 6, not used by i960_top) still flushes, so
+// its subnormals stay excluded either way.
+#ifdef TB_FLUSH
+const bool FLUSH = true;
+#else
+const bool FLUSH = false;
+#endif
+uint64_t n_sub = 0;
 
 enum { OP_CMP=0, OP_LOGB=1, OP_CVTIR=2, OP_CVTRI=3, OP_CVTZRI=4, OP_ROUND=5, OP_SCALE=6 };
 
@@ -64,7 +74,8 @@ void chk_cmp(double A, double B) {
   ++checks; if (dut->cc != want) fail("cmp", "cc", dut->cc, want);
 }
 void chk_logb(double A) {
-  if (is_sub(A)) return;
+  if (FLUSH && is_sub(A)) return;
+  if (is_sub(A)) ++n_sub;
   set(OP_LOGB, A, 0, 0, 0);
   const double want = std::logb(A);
   ++checks; if (dut->y != U{want}.u && !(std::isnan(want) && std::isnan(asd(dut->y))))
@@ -76,7 +87,8 @@ void chk_cvtir(int32_t I) {
   ++checks; if (dut->y != U{want}.u) fail("cvtir", "y", dut->y, U{want}.u);
 }
 void chk_cvtri(double A, int rm, bool trunc_mode) {
-  if (is_sub(A)) return;
+  if (FLUSH && is_sub(A)) return;
+  if (is_sub(A)) ++n_sub;
   if (std::isnan(A) || std::isinf(A)) {
     // NaN stores 0x8000_0000 (12-23); an infinity is the largest overflow
     // there is and saturates by sign (11-50).
@@ -101,7 +113,8 @@ void chk_cvtri(double A, int rm, bool trunc_mode) {
   }
 }
 void chk_round(double A, int rm) {
-  if (is_sub(A)) return;
+  if (FLUSH && is_sub(A)) return;
+  if (is_sub(A)) ++n_sub;
   set(OP_ROUND, A, 0, 0, rm);
   const double want = (std::isnan(A) || std::isinf(A)) ? A : rti(A, rm);
   ++checks; if (dut->y != U{want}.u && !(std::isnan(want) && std::isnan(asd(dut->y))))
@@ -208,6 +221,31 @@ int main(int argc, char **argv) {
   }
   std::printf("  random                              : %llu rounds (seed %llu)\n",
               (unsigned long long)n, (unsigned long long)seed);
+
+  // R1013: subnormals of every leading-zero count, both signs: compare
+  // (against each other, zeros, the smallest normals), logb, round and the
+  // conversions in every mode.
+  {
+    std::mt19937_64 r4(seed ^ 0x5b);
+    const double edge[] = {0.0, -0.0, 4.9406564584124654e-324, -4.9406564584124654e-324,
+                           2.2250738585072009e-308, -2.2250738585072009e-308,
+                           2.2250738585072014e-308, -2.2250738585072014e-308};
+    for (double A : edge) {
+      chk_logb(A);
+      for (double B : edge) chk_cmp(A, B);
+      for (int rm = 0; rm < 4; ++rm) { chk_round(A, rm); chk_cvtri(A, rm, false); chk_cvtri(A, rm, true); }
+    }
+    for (uint64_t k = 0; k < n; ++k) {
+      U x; x.u = (r4() & 0xfffffffffffffull) >> (r4() % 53); x.u |= (r4() & 1ull) << 63;
+      U z; z.u = (r4() & 0xfffffffffffffull) >> (r4() % 53); z.u |= (r4() & 1ull) << 63;
+      if (k & 1) z.u = x.u + (r4() % 5) - 2;               // neighbours
+      chk_cmp(x.d, z.d); chk_cmp(z.d, x.d); chk_logb(x.d);
+      const int rm = int(r4() & 3);
+      chk_round(x.d, rm); chk_cvtri(x.d, rm, false); chk_cvtri(x.d, rm, true);
+    }
+    std::printf("  subnormals (every leading-zero count): %llu checks with a subnormal operand\n",
+                (unsigned long long)n_sub);
+  }
 
   dut->final(); delete dut;
   std::printf("  %llu checks, %llu mismatches\n",

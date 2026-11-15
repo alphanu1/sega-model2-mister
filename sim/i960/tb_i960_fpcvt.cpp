@@ -3,6 +3,14 @@
 //
 // Harness for i960_fpcvt against the host's own float/double conversions,
 // which is exactly what the reference's u2f and f2u do.
+//
+// R1013: subnormal singles in and subnormal single results out are compared
+// too (SUBNORM 1); -DTB_FLUSH checks a SUBNORM 0 unit and skips them, as
+// before. The unit is built WREG 0 (combinational) here; +wreg drives a
+// WREG 1 build: s_in held for a clock before d_out is read, as i960_top
+// holds rd1 from T_EXEC into T_FP -- and the value is checked again after a
+// clock with a DIFFERENT s_in in between, so a register that held the
+// wrong cycle's operand shows.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -22,10 +30,20 @@ inline float  asf(uint32_t b) { Uf t; t.u = b; return t.f; }
 
 bool sub_d(double x) { return x != 0.0 && std::fabs(x) < 2.2250738585072014e-308; }
 bool sub_f(float x)  { return x != 0.0f && std::fabs(x) < 1.17549435e-38f; }
+#ifdef TB_FLUSH
+const bool FLUSH = true;
+#else
+const bool FLUSH = false;
+#endif
+bool wreg = false;
+uint64_t n_sub_w = 0, n_sub_n = 0;
+void clk() { dut->clk = 0; dut->eval(); dut->clk = 1; dut->eval(); }
 
 void chk_widen(uint32_t sbits) {
   const float f = asf(sbits);
-  if (sub_f(f)) return;                       // flushed here, not by the host
+  if (FLUSH && sub_f(f)) return;              // flushed here, not by the host
+  if (sub_f(f)) ++n_sub_w;
+  if (wreg) { dut->s_in = sbits ^ 0x00155555u; clk(); dut->s_in = sbits; clk(); }
   dut->s_in = sbits; dut->eval();
   Ud want; want.d = (double)f;
   ++checks;
@@ -39,9 +57,9 @@ void chk_widen(uint32_t sbits) {
 
 void chk_narrow(uint64_t dbits) {
   const double d = asd(dbits);
-  if (sub_d(d)) return;
   const float wf = (float)d;
-  if (sub_f(wf)) return;                      // subnormal single result flushed
+  if (FLUSH && (sub_d(d) || sub_f(wf))) return;   // subnormal single result flushed
+  if (sub_f(wf) || sub_d(d)) ++n_sub_n;
   dut->d_in = dbits; dut->eval();
   Uf want; want.f = wf;
   ++checks;
@@ -60,6 +78,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     if (!std::strncmp(argv[i], "+random=", 8)) n = std::strtoull(argv[i]+8, nullptr, 10);
     if (!std::strncmp(argv[i], "+seed=", 6))   seed = std::strtoull(argv[i]+6, nullptr, 10);
+    if (!std::strcmp(argv[i], "+wreg"))        wreg = true;
   }
   dut = new Vi960_fpcvt;
   std::printf("i960_fpcvt vs the host float/double conversions\n");
@@ -93,12 +112,46 @@ int main(int argc, char **argv) {
   }
   std::printf("  narrowing tie cases (round to even)\n");
 
+  // R1013: narrowing into and across the subnormal range: every double
+  // exponent from 2^-160 to 2^-120 (single's subnormals and 2^-126 with
+  // room either side) with random fractions, ties at each shift
+  // (exactly half an ulp of the subnormal, with and without a sticky bit),
+  // and every single subnormal widened (all 2^23 fractions, both signs).
+  {
+    std::mt19937_64 r5(seed ^ 0x51);
+    for (uint64_t e = 1023 - 160; e <= 1023 - 120; ++e)
+      for (int k = 0; k < 4000; ++k) {
+        const uint64_t m = r5() & 0xfffffffffffffull;
+        chk_narrow((uint64_t(k & 1) << 63) | (e << 52) | m);
+        // a tie at this exponent: the bit just below the single subnormal's
+        // LSB set, everything under it clear (or one more bit for sticky)
+        const int64_t sh = int64_t(29) + (int64_t(897) - int64_t(e) > 0 ? int64_t(897) - int64_t(e) : 0);
+        if (sh >= 1 && sh <= 52) {
+          const uint64_t keep = m & ~((1ull << sh) - 1);
+          chk_narrow((e << 52) | keep | (1ull << (sh - 1)));
+          chk_narrow((e << 52) | keep | (1ull << (sh - 1)) | 1ull);
+          // the sticky only in the bits the denormalising shift drops, above
+          // the double's bit 28 (nothing below it): a tie that is not a tie
+          if (sh >= 30) {
+            const uint64_t mid = (r5() & ((1ull << (sh - 1)) - 1)) & ~((1ull << 28) - 1);
+            chk_narrow((e << 52) | keep | (1ull << (sh - 1)) | (mid ? mid : (1ull << 28)));
+            chk_narrow((e << 52) | keep | (mid ? mid : (1ull << 28)));
+          }
+        }
+      }
+    for (uint64_t k = 0; k < 4000; ++k) chk_narrow(r5() & 0x800fffffffffffffull);   // double subnormals
+    for (uint32_t m = 1; m < (1u << 23); ++m) { chk_widen(m); if ((m & 7) == 0) chk_widen(0x80000000u | m); }
+    std::printf("  subnormal singles: every one widened; narrowing 2^-160 .. 2^-120 with ties\n");
+  }
+
   std::mt19937_64 rng(seed);
   for (uint64_t k = 0; k < n; ++k) { chk_widen((uint32_t)rng()); chk_narrow(rng()); }
   std::printf("  random                   : %llu each way (seed %llu)\n",
               (unsigned long long)n, (unsigned long long)seed);
 
   dut->final(); delete dut;
+  std::printf("  checks with a subnormal: widening %llu, narrowing %llu%s\n",
+              (unsigned long long)n_sub_w, (unsigned long long)n_sub_n, wreg ? " (WREG build)" : "");
   std::printf("  %llu checks, %llu mismatches\n",
               (unsigned long long)checks, (unsigned long long)fails);
   if (fails) { std::printf("FAIL\n"); return 1; }
