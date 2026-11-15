@@ -3,8 +3,7 @@
       Sega Model 2 core for MiSTer FPGA - Copyright (C) 2026 alphanu1
       SPDX-License-Identifier: GPL-3.0-or-later
 
-      Sega Touring Car Championship (Model 2C-CRX; MAME calls this parent set
-      "(newer)": a later program than Revisions A and B). Derived from MAME
+      Sega Touring Car Championship (newer) (Model 2C-CRX). Derived from MAME
       0.289 model2.cpp ROM_START(stcc), the parent set (epr-19570 / 19571).
       For the Model 2C build of the 2A core (branch model2c, Model2.sv M2_2C);
       the 2A and original cores cannot run it. Study R933.
@@ -37,7 +36,7 @@
       Index 4, the game ID: 0x1D (R933; 0x18-0x1B are the 2A analog games'
       decodes, 0x1C Over Rev). Bit 7 would be the 15 kHz CRT flag.
     -->
-    <name>Sega Touring Car Championship</name>
+    <name>Sega Touring Car Championship (newer)</name>
     <setname>stcc</setname>
     <rbf>Model2C</rbf>
     <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
