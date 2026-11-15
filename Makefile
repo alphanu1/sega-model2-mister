@@ -1294,7 +1294,7 @@ CK_G   ?=
 CK_DIR ?= obj_i960ck
 .PHONY: ck_i960
 ck_i960: $(CK_DIR)/Vm2_i960_ck_harness
-$(CK_DIR)/Vm2_i960_ck_harness: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh \
+$(CK_DIR)/Vm2_i960_ck_harness: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh \
 	  rtl/io/m2_cpu_bridge.sv rtl/io/m2_waitst.sv sim/i960ck/m2_i960_ck_harness.sv sim/i960ck/tb_i960_ck.cpp
 	$(VBUILD) -Wno-fatal -Wno-PINCONNECTEMPTY --public-flat-rw --top-module m2_i960_ck_harness $(CK_G) \
 	  -CFLAGS "-O2" --Mdir $(CK_DIR) -o Vm2_i960_ck_harness $(TOP_RTL) rtl/io/m2_cpu_bridge.sv rtl/io/m2_waitst.sv \

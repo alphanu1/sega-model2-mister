@@ -47959,3 +47959,40 @@ Quartus's map estimate, which moves +-30 between near-identical maps):*
 *NOT SETTLED:* a fit (clk_i960 slack: Model 2 +1.350 ns, 2C +0.990, 2A
 +0.267 in the 20261113 releases); the board; the ports to 2A / 2C (fprem,
 the 2C area at ~800 ALM from full).
+
+**R1014 -- R1011 AND R1013 ON 2A (BRANCH i960-2a OFF model2a 499f7ee1):
+SEGA RALLY'S RACE CHECKPOINT CYCLE-IDENTICAL TO R1011's OWN 2A RUN, THE
+i960 SUITE CLEAN, MAP +744 ALM. NOT FITTED, NOT ON A BOARD.** 2026-11-15.
+
+*What was ported:* R1011's four timing changes (IC_PAIR, DC_ROMS, LSU_ST1,
+LSU_POST behind M2_2A_I960_R1011, default 1) and R1013's subnormals at
+FP_SUBN 2 (M2_I960_SUBN), with the R1013 note on the 373 stack words. The
+conflicts were only where 2C's C2 parameter sits beside 2A's; 2A's i960_top,
+bridge and harness have no C2 (the bench's harness drops it; its Makefile
+rule drops the 2C-only logrl ROM). i960_fprem (remr, R869, 2A only) still
+flushes: R1013's units did not include it, and Rally / Zero Gunner's remr
+operands are angles and multiples (R869's game-like set), not subnormals.
+
+*How it was checked:*
+  * Sega Rally's race checkpoint (R1011's ck_rally, 35.03 s, -GVC=0
+    -GWAITST=1): LAT 12 20,919,552 clk_i960 cycles and LAT 6 19,677,682 --
+    both EXACTLY R1011's 2A runs; instruction / LSU / I/O digests equal
+    (81db39df765fd31d / fcb47c2a9a0cb85b / c431f82fc124c8e5), the same 407
+    LSU values and the same prep-edge stop as every build there. So the
+    port is R1011's i960 cycle for cycle, and FP_SUBN 2 changes nothing in
+    Rally's window (no subnormal reaches the units).
+  * The i960 suite on the branch: fpadd, fpmul, fpdiv, fpsqrt, fpmisc,
+    fpcvt, fpcvt_wreg, fp_flush, fprem, fptrans, fptrans_ab, lsu,
+    icache_r817, dcache, regs_ring, top, top_subn, top_irq, top_lat,
+    top_vc, top_fr, top_fx, top_ring, top_dc: all PASS, 0 mismatches.
+  * lint_top clean (with the qsf's missing rtl/video/m2_testpattern.sv left
+    out of the list: model2a's qsf names a file that is not there, which
+    quartus_map only warns about; not this change).
+  * quartus_map 17.0: 38,960 -> 39,704 ALMs needed (+744), block memory
+    bits 4,601,424 both, DSP 100 both. The 20261113 fit (s2232) was 39,474
+    ALM at a 38,960 map, so a fit near 40,200 (96%) is expected.
+
+*NOT SETTLED:* the fit -- 2A's clk_i960 slack was +0.267 ns in s2232, the
+smallest of the three cores, and R1013 lengthens the multiplier's second
+stage and the FP write-back; FP_SUBN 1 (+240 on Model 2) is the fallback if
+clk_i960 does not close. The board.

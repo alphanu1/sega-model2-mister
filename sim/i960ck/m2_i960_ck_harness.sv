@@ -20,7 +20,7 @@
 
 module m2_i960_ck_harness #(
   parameter bit          A2      = 1'b1,
-  parameter bit          C2      = 1'b1,
+  parameter bit          C2      = 1'b0,   // 2A branch: unused (no 2C map in i960_top or the bridge here)
   parameter bit          VC      = 1'b1,
   parameter bit          FR      = 1'b1,
   parameter bit          F2A     = 1'b1,
@@ -76,7 +76,7 @@ module m2_i960_ck_harness #(
   logic  [3:0] bus_be;
   logic [31:0] bus_wdata, cpu_rdata, b_rdata;
 
-  i960_top #(.VC(VC), .FR(FR), .F2A(F2A), .C2(C2), .IC_LINES(ICL),
+  i960_top #(.VC(VC), .FR(FR), .F2A(F2A), .IC_LINES(ICL),
              .RC_RING(RING), .RC_FRAMES(FRAMES),
              .DC_LINES(DCL), .DC_2A(A2), .DC_LANES(1'b0),
              .IC_PAIR(IC_PAIR), .LSU_ST1(LSU_ST1), .DC_ROMS(DC_ROMS), .LSU_POST(LSU_POST)) u_cpu (
@@ -119,7 +119,7 @@ module m2_i960_ck_harness #(
     oc_pal_q  <= pal[oc_addr];
   end
 
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BOARD_2C(C2), .BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0),
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0),
                   .DCACHE_EN(1'b1)) u_bridge (
     .dbg_dc_hits(), .dbg_dc_miss(),
     .char_wr(), .char_wr_addr(),
