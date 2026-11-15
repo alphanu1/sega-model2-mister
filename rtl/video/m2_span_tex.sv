@@ -124,16 +124,27 @@ module m2_span_tex #(
   parameter bit          UVCL   = 1'b0,
   parameter int unsigned SCR_W  = 496,
   parameter int unsigned BAND_H = 8,
+  // R1018: the mask's valid bits as group flags and a word per group in LUT
+  // RAM (m2_raster3d MKV_LUT; mkv_* below), or the MDEP-bit vector (0).
+  parameter bit          MKV_LUT = 1'b0,
   // Derived -- never overridden. PARAMETERS, not localparams: Quartus 17.0
   // rejects a localparam in the parameter port list, where Verilator takes it.
   parameter int unsigned MROW  = (SCR_W + 31) / 32,
   parameter int unsigned MDEP  = BAND_H * MROW,
-  parameter int unsigned MAW   = $clog2(MDEP)
+  parameter int unsigned MAW   = $clog2(MDEP),
+  parameter int unsigned MVG   = (MDEP + 15) / 16     // R1018: groups of 16 words
 ) (
   input  logic               clk,
   input  logic               rst_n,
   // R607: the fill mask -- written by m2_raster3d as the band paints.
   input  logic [MDEP-1:0]    mk_valid,
+  // R1018 (MKV_LUT): word i's valid bit is mkv_g[i / 16] && bit i % 16 of
+  // group i / 16's word, which m2_raster3d writes here (mkv_we) as it writes
+  // its own copy; mk_valid is then unused.
+  input  logic [MVG-1:0]     mkv_g,
+  input  logic               mkv_we,
+  input  logic [MAW-1:0]     mkv_wa,     // the word's index; its group is [MAW-1:4]
+  input  logic [15:0]        mkv_wd,
   input  logic               mk_we,
   input  logic [MAW-1:0]     mk_waddr,
   input  logic [31:0]        mk_wdata,
@@ -709,7 +720,16 @@ module m2_span_tex #(
   logic [MAW-1:0] cs_wi;                 // the word the cull reads
   wire            cs_port = CULL_OK && cs_run;
   wire [MAW-1:0]  mk_ri = cs_port ? cs_wi : mq_wi;
-  wire [31:0]     mk_rw = mk_valid[mk_ri] ? mk[mk_ri] : 32'd0;
+  logic           mk_ri_v;   // R1018: mk_valid[mk_ri], in either form
+  generate if (MKV_LUT) begin : g_mkv_lut
+    (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] mkv_mem [MVG];
+    always_ff @(posedge clk) if (mkv_we) mkv_mem[mkv_wa[MAW-1:4]] <= mkv_wd;
+    wire [15:0] mkv_w = mkv_mem[mk_ri[MAW-1:4]];
+    assign mk_ri_v = mkv_g[mk_ri[MAW-1:4]] && mkv_w[mk_ri[3:0]];
+  end else begin : g_mkv_ff
+    assign mk_ri_v = mk_valid[mk_ri];
+  end endgenerate
+  wire [31:0]     mk_rw = mk_ri_v ? mk[mk_ri] : 32'd0;
   always_comb begin
     automatic logic [31:0] w = mk_rw;
     if (mq_f1)        mq_full = 1'b1;
