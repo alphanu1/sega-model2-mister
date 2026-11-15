@@ -361,6 +361,24 @@ option) any later version". **That or-later clause is the only reason this
 combination is lawful** — it permits upgrading `sys/` to GPL-3. Code flows in
 from GPL-2-or-later cores and cannot flow back out to them.
 
+### ppriest/Arcade-KonamiHornet_MiSTer — GPL-3.0 (the SHARC, for Model 2B)
+*Verified 2026-11-15 (`gh api ... .license.spdx_id` GPL-3.0; file headers
+`SPDX-License-Identifier: GPL-3.0-or-later`) · reference clone at
+`tools/hornet-ref`, git-ignored, cloned from GitHub at **`87f9866`** -- one
+commit past **`91edb27`**, the release reviewed in R973, differing only in MRA
+files and `scripts/gen_mra.py` (nothing under `rtl/cpu/` or the SHARC scripts)*
+
+Paul Priest's Konami Hornet core, whose ADSP-21062 SHARC (MAME's interpreter
+transcribed as `rtl/cpu/sharc`, v1; a pipeline `rtl/cpu/sharc2`, v2; the float
+units `sharc_fadd` / `sharc_fmul`, bit-exact against MAME) is the source for
+this project's Model 2B. **Its author has given Ben permission to use it**
+(R973). The licence is the same as this project's.
+
+| Used | From | Note |
+|---|---|---|
+| The SHARC opcode classes and compute-operation names, restated as data in `sim/sharc/m2b_census.py` and used by `m2b_costmodel.py` (R1023) | `scripts/sharc_profile_report.py` (`OPS`, `COMPUTE_CLASSES`, `ALU` / `MUL` / `SHF` / `MULTI`, `op_class`, `compute_kind`) @ `87f9866` | A census tool, not RTL. Hornet's own tables are in turn read from MAME's `sharcops_table.cpp` / `compute.hxx`. |
+| PLANNED (R1023, not taken): `sharc_fadd.sv`, `sharc_fmul.sv` into `rtl/sharc/`; `rtl/cpu/sharc` (v1) as the simulation-only lockstep reference | `rtl/cpu/sharc2/`, `rtl/cpu/sharc/` @ `87f9866` | To be copied with this commit recorded and every change listed, when the RTL starts. v2 (`sharc2_core`) is not planned: ~10,900 ALM / 156 M10K in Hornet. |
+
 ### MAME — BSD-3-Clause *per file*
 The behavioural oracle throughout. Files depended on, with headers checked
 individually:
@@ -376,6 +394,7 @@ individually:
 | `src/mame/sega/model2.cpp` | BSD-3-Clause (checked at 0.289, R856) | R. Belmont, Olivier Galibert, ElSemi, Angelo Salese, Matthew Daniels | Board, memory map, the sound board's map |
 | `src/mame/sega/model2_v.cpp` | check before use | — | Renderer behaviour |
 | `src/mame/sega/315-5881_crypt.cpp`, `.h` | BSD-3-Clause (header checked at 0.289, R862) | Andreas Naive, Olivier Galibert, David Haywood | Zero Gunner's protection chip: `sim/prot/m2_5881_ref.h` is a standalone copy (bench oracle only, no RTL yet), below |
+| `src/devices/cpu/sharc/sharc.cpp`, `sharcinternal.ipp`, `sharcdma.hxx`, `sharc_dasm.cpp` | BSD-3-Clause (headers checked at 0.289, R1023) | Ville Linde | The 2B SHARC: `sim/sharc/mame_m2b_census.patch` (R1023) is a patch to them and `model2.cpp` / `model2.h` at 0.289 -- a census and pacing tool, never built into the core -- under those files' BSD-3 terms |
 
 **MAME is GPL-2.0 as a whole and individual files carry their own SPDX
 headers.** Check the header of every file you read. Do not rely on the
