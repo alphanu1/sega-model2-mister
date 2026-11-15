@@ -64,7 +64,10 @@
 // and importing anyway trips UNUSEDPARAM — which the Makefile deliberately does
 // not suppress, because an unused symbol is usually a field extracted and then
 // forgotten rather than harmless tidiness.
-module i960_alu (
+module i960_alu #(
+  // R1018: shrdi's lost-bits mask by compare, not a shift and a subtract (2C)
+  parameter bit LEAN = 1'b0
+) (
   input  logic [7:0]  op,         // 0x58 .. 0x5b
   input  logic [3:0]  op2,        // sub-opcode
   input  logic [31:0] src1,       // MAME t1
@@ -99,7 +102,11 @@ module i960_alu (
   // the arithmetic-shift result is incremented.
   logic [31:0] shrdi_lostmask;
   logic        shrdi_lost;
-  assign shrdi_lostmask = (32'd1 << sh) - 32'd1;
+  generate if (LEAN) begin : g_lostmask_cmp   // R1018: bit i set when i < sh
+    always_comb for (int i = 0; i < 32; i++) shrdi_lostmask[i] = (5'(i) < sh);
+  end else begin : g_lostmask_sub
+    assign shrdi_lostmask = (32'd1 << sh) - 32'd1;
+  end endgenerate
   assign shrdi_lost     = |(src2 & shrdi_lostmask);
 
   // Rotate masks to five bits — this one the reference does mask.

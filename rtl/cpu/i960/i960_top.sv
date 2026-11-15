@@ -586,7 +586,7 @@ module i960_top #(
   logic [31:0] alu_result, ac, alu_ac;
   logic        alu_we, alu_valid;
 
-  i960_alu u_alu (
+  i960_alu #(.LEAN(C2)) u_alu (   // R1018
     .op(alu_op), .op2(alu_op2), .src1(alu_s1), .src2(alu_s2), .ac_in(ac),
     .result(alu_result), .result_we(alu_we), .ac_out(alu_ac), .valid(alu_valid)
   );
