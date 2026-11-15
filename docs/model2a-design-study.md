@@ -50274,3 +50274,141 @@ Wave Runner's HANDLE, Ski Super G's INCLINING and Water Ski's SLIDE alike
 skier turning left at SLIDE 0x00 in MAME -- yet on the board Wave Runner
 steers right with the same or_str and the two ski games steer the wrong
 way. The board is the oracle here; why the games differ is not known.
+
+**R1016 -- BEHIND ENEMY LINES' GUNS: A BLANK EEPROM PINS THE AIM (MAME TOO);
+THE GAME TAKES THE LOWER STOP LOW, SO R1010's Y WAS UPSIDE DOWN; THE MOUSE
+AND A USB GUN THROUGH m2_vcop_guns; A CALIBRATED DEFAULT EEPROM IN THE MRA.
+BRANCH bel-gun (OFF new-2c-games 0f157ce6). BENCHED, NOT FITTED, NOT ON A
+BOARD.**
+
+*What was believed:* R1010 mapped each player's left stick onto gunblade's
+PORT_MINMAX as an absolute position, low = left / UP, and left the
+direction to the game's GUN CALIBRATION ("a reversed axis is set right there
+once"). Board (R1015's second report): the aim stuck in the bottom-left
+corner, only Coin and Start respond. The screenshot's "YOU MAY NOW PRESS
+START!" is player 2's join prompt over play (MAME shows it there too), not
+the attract title.
+
+*What is now known (MAME 0.289 m2lod, headless, -autoboot_script; fresh
+nvram unless stated; snapshots 496 x 384; the crosshair located by counting
+its green pixels per row and column):*
+  1. A BLANK EEPROM PINS THE AIM. Fresh nvram, coin, start, then P1_X /
+     P1_Y held 3 s each at b4/60, 69/60, ff/60, b4/11, b4/ae, 69/ae, ff/11,
+     00/00, ff/ff (ports read back as held, 00/00 clamped to 69/11 by
+     PORT_MINMAX): the crosshair never leaves the lower-left corner (x ~20-40,
+     y ~280-320). The game writes its factory settings on a blank 93C46
+     ("LMC!" at bytes 4-7, a checksum in word 0) but leaves the calibration
+     bytes 0xFF. The board's symptom, reproduced; not a core fault.
+  2. THE TRIGGERS FIRE WITHOUT CALIBRATION. Ten P1 Button 1 pulses at 40-44.5
+     s of play: the AMMO bar's lit pixels 333 -> 140 with a blank EEPROM and
+     with a calibrated one alike (the blank one even scored 50). So "only
+     Coin and Start" is not the calibration. The core's j0[4] -> IN1 0x01 is
+     benched (R1010, and below). INFERRED, NOT ESTABLISHED: the board was
+     fired with a mouse or USB gun, whose trigger reaches the core as the
+     MOUSE's button (R846) -- which Behind Enemy Lines never read -- or the
+     shots went into the pinned corner and looked like nothing.
+  3. WHAT GUN CALIBRATION STORES (Service x3 to GUN CALIBRATION, Test; each
+     gun's lower-left then upper-right stops, trigger; "SAVE CHANGES? YES"):
+     bytes 0x17 P1 X min, 0x18 P2 X min, 0x19 / 0x1A P1 / P2 Y min, 0x1B /
+     0x1C X span, 0x1D / 0x1E Y span (max - min, 8 bits), 0x26 = 1; word 0 =
+     0x000C + the sum of words 1-31 (little-endian; three images agree);
+     bytes 0x40-0x7F repeat 0x00-0x3F. The screen shows MIN / MAX, then MIN /
+     DEL per axis.
+  4. THE GAME TAKES THE LOWER STOP LOW. Calibrated as R1010's mapping would
+     do it (lower Y 0xAE, upper 0x11: stored min 0xAE, DEL 0x63), X then
+     follows (0x69 -> x 42, 0xFF -> x 456) but Y never leaves the bottom row
+     (y 288 at 0x11, 0x60 and 0xAE alike). Calibrated lower 0x11, upper 0xAE
+     (min 0x11, DEL 0x9D): Y 0x11 -> y 288 (bottom), 0x60 -> y 190 (centre),
+     0xAE -> the top (152 and above, under the HUD). So on the cabinet a gun
+     pointed down reads LOW; R1010's "low = up" put the stick upside down
+     against any calibration that works. WRONG FIRST CUT, KEEP.
+  5. With ONLY the calibrated EEPROM in a fresh nvram (no backup RAM), from
+     power-on: P1 centre b4/60 -> (248, 190), Y 0x11 -> 288, 0xAE -> top,
+     X 0x69 -> 42; player 2 (red crosshair, two-player start) 4b/60 centre,
+     4b/11 bottom, 4b/ae top, 00 left, 96 right.
+
+*THE CORE (all behind C2G / C2; a 2A build is unchanged):*
+  1. m2_2a_inputs: Behind Enemy Lines' four axes come from m2_vcop_guns'
+     screen pixels (c1x / c1y / c2x / c2y: its sx / sy of the left stick --
+     a USB light gun arrives there, R846 -- or its mouse accumulator for the
+     gun the OSD's Mouse line aims, the R846 / R924 path House of the Dead
+     uses). X = min + px * 78 >> 8 (P1 0x69, P2 0x00), Y = 0xAE - py * 211
+     >> 9, UP HIGH. 78 / 256 and 211 / 512 are the only 8- / 9-bit-shift
+     constants that put both a stick's +127 (px 494, py 382) and the mouse's
+     clamp (495, 383) exactly on the maximum without passing it. Stick
+     centre: 0xB4 / 0x5F (0x5F is MAME's own default). Still one constant
+     multiply taken by the four channels in turn, three stages. The mouse's
+     left / right buttons are the trigger / missile of gun 1, or gun 2 when
+     the Mouse line's bit 1 (status[63]) says so, OR'd with the joystick
+     buttons. m2_vcop_guns is unchanged; its en stays Virtua Cop 2 / HOTD, so
+     no overlay crosshair is drawn over the game's own.
+  2. Model2.sv: the ports wired; the OSD's Mouse line on a 2C build behind
+     menumask bit 3 = C2 & (vc_gun | v2_gun | is_bel) (`ifdef M2_2C: the 2A
+     build's CONF_STR is byte-identical, its bit 3 is 0).
+  3. THE DEFAULT EEPROM: both Behind Enemy Lines MRAs load, on index 5 (the
+     93C46's load port, R897), the image the game writes on a blank part with
+     GUN CALIBRATION done at the core's own ends (gun 1 X 0x69-0xFF, gun 2 X
+     0x00-0x96, both Y 0x11 lower / 0xAE upper). Rebuilt from MAME's blank
+     image by item 3's rule and compared: byte-identical to the .nv MAME
+     saved after the calibration in item 4. It is settings the program
+     writes, not ROM. It goes before the <nvram> element, so a saved .nvm
+     (R945) replaces it -- a board that has already saved Behind Enemy Lines'
+     settings keeps its blank calibration until the test menu's GUN
+     CALIBRATION is run (and saved) or the .nvm is deleted.
+  Latency: the stick passes the driver's two registers before the multiply:
+  two clk_sys (25 ns) more on a value the game reads once a frame.
+
+*BENCHES:*
+  * tb_m2_2a_inputs (dut_or, C2G, now fed by a real m2_vcop_guns V2 / HD as
+    the 2C build has it). NEW EXHAUSTIVE SWEEP first: every stick byte on all
+    four channels (four different permutations), then the mouse aiming gun 1
+    and gun 2 one pixel at a time across and down the whole screen, back, and
+    64 throws of +-255 far past each edge, each held 16 clocks and checked
+    exactly; the mouse buttons each way round for each gun: 15,792 exact
+    checks, 0 mismatches, every one of the 151 / 151 / 158 / 158 values
+    reached on each channel, both ends on all four. RANDOM (sticks, mouse
+    packets of every size, the Mouse line, resets, game switches): the
+    reference is the bench's own -- stick pixel u * 496 / 256 and u * 384 /
+    256, a mouse accumulator from the packets it sends (taken a clock late,
+    as the driver registers the word) -- then the axis exact, AND within 1
+    unit of the straight line from pixel 0 to the stick's +127, from nothing
+    the RTL shares (largest distance of an exact match 0.947 units). 20 M
+    cycles: 428.2 M checks, 0 mismatches. 200 M cycles: 4.34 G checks, 0 on
+    Behind Enemy Lines (665,833 mouse packets, 5.6 M cycles aimed by the
+    mouse, 10.5 M with a button down); 9 Over Rev / Wave Runner channel
+    mismatches -- PRE-EXISTING: the bench at new-2c-games 0f157ce6 run 200 M
+    cycles gives 5 of the same kind (different random stream); not
+    investigated. A first 200 M run caught a bench-model fault (the Mouse
+    line changed in the clock a packet arrived; the RTL's one-clock packet
+    register showed the old position, the model had none): fixed in the
+    model, not the RTL.
+  * PLANTED (each FAILS; the sweep, then 2 M random cycles): Y not reversed (R1010's sense, 7,892 sweep
+    mismatches); X constant 79 for 78 (6,409; P1_X 153 distinct values); the
+    mouse's buttons to gun 1 whatever the Mouse line says (3 sweep, 31,861
+    random); the P2_X / P1_Y pixel mux swapped (7,870); the mouse's right
+    button not the missile (2).
+  * test_m2_vcop2_guns 223,916 checks, test_m2_hotd_guns 191,757,
+    test_m2_vcop_guns 828,117: 0 failures (the driver is shared, unchanged).
+  * lint_top clean on 2A and on -DM2_2C=1 -DM2_2C_DSB=1
+    -DM2_NO_2A_MANX_MOTION=1 (LINTTOP_RTL without the absent
+    m2_testpattern.sv); quartus_map --analyze_file m2_2a_inputs.sv and
+    Model2.sv: 0 errors. tools/rom_csum.py + mra_vs_mame.py --layout=2a on
+    the MRA: PASS (the image is unchanged; index 5 is separate).
+
+*AREA:* Yosys synth_intel_alm (Cyclone V), m2_2a_inputs at the 2C build's
+parameters with m2_cab_inputs as a black box: new 341 LUT / 148 arith / 159
+FF against R1010's 314 / 117 / 157 -- about +30 ALMs. THE ONE quartus_map
+RUN DID NOT GIVE A DELTA: both versions in one project, and Quartus merged
+their identical logic across the two instances (the old copy's
+m2_cab_inputs vanished into the new copy's; 318 vs 118 ALUTs per entity is
+the merge, not the change). Not measured in the full core; 2C is at 99%.
+
+*NOT SETTLED:* the board has not run it. Whether the board's dead triggers
+were a mouse / USB gun or the pinned aim (item 2). A USB light gun maps the
+screen's edges to the stops: the game's crosshair window is x 42-456 (y 288
+at the bottom, the top under the HUD), so pointing at the screen's left edge
+puts the crosshair at x 42 -- not pixel-true as House of the Dead's R960
+mapping is; a pixel-true map would need the window measured and would leave
+the stick a dead band at the edges. The mapping onto PORT_MINMAX (the
+cabinet's stops) was kept. Gun 2's X sense rests on the game treating it as
+gun 1 (item 5 shows it does with this calibration).

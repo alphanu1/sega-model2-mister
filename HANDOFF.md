@@ -1,5 +1,38 @@
 # Handoff
 
+## 2026-11-15: bel-gun (local, not pushed) -- Behind Enemy Lines' aim and triggers (R1016)
+
+Study R1016 has the record. Branch bel-gun off new-2c-games 0f157ce6. Benched;
+not fitted, not on the board.
+
+  * CAUSE OF THE STUCK AIM: a blank 93C46. The game keeps each gun's stops in
+    its EEPROM and leaves them 0xFF on a blank part -- the aim pins to the
+    lower-left corner. MAME 0.289 shows exactly the same with fresh nvram.
+  * R1010's Y was upside down: the game's calibration only works with the
+    lower stop LOW (calibrated the other way the aim never leaves the bottom
+    row). Now up-high (stick up / top of the screen = 0xAE).
+  * The triggers fire in MAME without calibration (ammo bar 333 -> 140 px). The
+    board's dead triggers are INFERRED to be a mouse / USB gun (its trigger is
+    the mouse button, which BEL never read) or shots into the pinned corner.
+  * Now: BEL's aim comes from m2_vcop_guns' pixels (left stick, a USB gun on
+    the stick channel, or the mouse when the OSD's Mouse line aims that gun);
+    mouse left / right = that gun's Trigger / Missile. The Mouse line shows for
+    BEL on 2C (menumask bit 3). The MRAs load a calibrated default EEPROM on
+    index 5 (byte-identical to MAME's after calibrating at the core's ends).
+  * A board that has already SAVED BEL's settings keeps the blank calibration
+    (the .nvm overrides index 5): run GUN CALIBRATION in the test menu and
+    save, or delete that .nvm.
+  * Area: about +30 ALMs (Yosys estimate); the one quartus_map run gave no
+    usable delta (Quartus merged the old and new copies' common logic).
+  * Benches: tb_m2_2a_inputs with a real m2_vcop_guns, exhaustive sweep 15,792
+    exact checks + 20 M random cycles, 0 mismatches; 5 planted faults caught.
+    At 200 M cycles 9 Over Rev / Wave Runner channel mismatches appear --
+    pre-existing (the base commit gives 5 at 200 M), not investigated.
+
+REMAINS: the board (aim with stick, mouse and a USB gun; triggers; P2); a fit
+for the real area; whether a light gun wants a pixel-true map (the game's
+crosshair window is x 42-456, not the whole screen).
+
 ## 2026-11-14 (night): new-2c-games (local, not pushed) -- seven 2C sets on their own game IDs (R1010)
 
 Study R1010 has the record. Branch new-2c-games off stcc-sound-2c ea3ba75d.
