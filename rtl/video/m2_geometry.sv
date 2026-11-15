@@ -239,7 +239,7 @@ module m2_geometry #(
   logic [11:0] poly_dotp;                                // R828c: |normal . point|, exp + 4 bits
 
   logic [4:0] eng_dbg_st;   // R719: telemetry
-  m2_geo_engine #(.TEXLUT(TEXLUT), .TP_M10K(M10K_ROOM)) u_engine (   // R867; R1008
+  m2_geo_engine #(.TEXLUT(TEXLUT), .TP_M10K(M10K_ROOM), .CCV_LUT(M10K_ROOM)) u_engine (   // R867; R1008; R1018
     .tha(tha), .lit_x(lit_x), .lit_y(lit_y), .lit_z(lit_z),
     .tp_we(tp_we), .tp_idx(tp_idx), .tp_diffuse(tp_diffuse), .tp_ambient(tp_ambient),
     .col_inval(col_inval), .tex_lum(tex_lum), .gamma_sel(gamma_sel), .tex_off(tex_off), .mem_space(mem_space),
