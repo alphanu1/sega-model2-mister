@@ -130,16 +130,24 @@ module m2_scsp_regs #(
   assign mrg = {be[1] ? d[15:8] : q[15:8], be[0] ? d[7:0] : q[7:0]};
 
   wire [14:0] gnext = gcnt + 15'd1;
-  wire [14:0] tdue  = gcnt + 15'({7'd0, ~mrg[7:0]} << mrg[10:8]);    // now + (255 - count) << prescale
+  // R1021: the timers' word, mrg for a write to 0x418-0x41c and only there --
+  // the one place a timer reads it. q's arm for those three is ud_q with the
+  // low byte 0xff when that timer has fired, and ar[2:1] is the timer (0x0c,
+  // 0x0d, 0x0e), so this is mrg without the whole read case in front of the
+  // adders (s2922 / s2903: fired / ar -> q -> mrg -> due, -0.434 / -0.351).
+  wire        fired_a = (ar[2:1] == 2'd0) ? fired[0] : (ar[2:1] == 2'd1) ? fired[1] : fired[2];   // ar is [5:1]
+  wire [10:0] mrg_t   = {be[1] ? d[10:8] : ud_q[10:8],
+                         be[0] ? d[7:0]  : (fired_a ? 8'hff : ud_q[7:0])};
+  wire [14:0] tdue  = gcnt + 15'({7'd0, ~mrg_t[7:0]} << mrg_t[10:8]);    // now + (255 - count) << prescale
   // (a timer written this clock falls due at the next sample, tdue == gnext,
   // only for count 254 at prescale 0: tested directly, not through the adder
   // -- R859, timing)
-  wire        tone  = mrg[10:0] == 11'h0fe;
+  wire        tone  = mrg_t[10:0] == 11'h0fe;
   // R976: the arcade's -- the (256 - count)-th prescaled tick after the next
   // sample boundary, ticks where the free-running sample count is a multiple
   // of 2^prescale (mod 2^15, as gcnt)
   wire        arc   = (TIMER == 1) || (TIMER == 2 && tarc);
-  wire [14:0] tdue_a = 15'((15'(gnext >> mrg[10:8]) + 15'(9'd256 - {1'b0, mrg[7:0]})) << mrg[10:8]);
+  wire [14:0] tdue_a = 15'((15'(gnext >> mrg_t[10:8]) + 15'(9'd256 - {1'b0, mrg_t[7:0]})) << mrg_t[10:8]);
   logic [10:0] scipd_n, scipd_c, mcipd_n;
   logic  [4:0] mw_n, mr_n;
   logic  [2:0] arm_n, ex_n, fired_n, rep, clr;   // clr: {MIDI, timer B / C, timer A}
@@ -165,7 +173,7 @@ module m2_scsp_regs #(
         5'h0c, 5'h0d, 5'h0e: begin
           ex_n[tw] = 1'b0; fired_n[tw] = 1'b0; late_n[tw] = 1'b0;
           if (arc) begin arm_n[tw] = 1'b1; due_n[tw] = tdue_a; dph_n[tw] = 6'd0; wrt[tw] = 1'b1; end   // R976: every count
-          else if (mrg[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
+          else if (mrg_t[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
         end
         5'h0f: chk = 1'b1;                 // SCIEB
         5'h10: scipd_n = mrg[10:0];
