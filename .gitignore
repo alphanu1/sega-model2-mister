@@ -5,6 +5,10 @@ CLAUDE.md
 # A separate read-only clone of the Model 1 core, used as a source of portable
 # RTL. It has its own upstream and its own history.
 tools/model1-ref/
+# A read-only clone of Paul Priest's Konami Hornet core (ppriest/Arcade-
+# KonamiHornet_MiSTer, GPL-3.0): its SHARC float units, reference core and
+# census tools, for Model 2B. Pinned in THIRD_PARTY.md.
+tools/hornet-ref/
 
 # Upstream dependencies, fetched by tools/bootstrap.sh and pinned in deps.lock.
 # Never vendored into the repository: licence terms differ per dependency and
