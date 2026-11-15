@@ -18,6 +18,9 @@ for tb in tb_m2_geometry tb_m2_geodiff; do
       -e 's/delete d;/d->final(); delete d;/g' sim/video/$tb.cpp > $M/$tb.cpp
 done
 sed -i 's/{ d->rootp->geodiff_top__DOT__u_geometry__DOT__u_new__DOT__ct\[k++\] = (w >> 19) \& 0xfff;/{ d->rootp->geodiff_top__DOT__u_geometry__DOT__u_old__DOT__ct[k] = (w >> 19) \& 0xfff; d->rootp->geodiff_top__DOT__u_geometry__DOT__u_new__DOT__ct[k++] = (w >> 19) \& 0xfff;/' $M/tb_m2_geodiff.cpp
+# R1021: R972's texture-parameter table too, into both copies (it went into the
+# new copy only, and every M2GD_PRESET walk with "tp" lines differed on dbg_lum)
+sed -i 's/^\( *\)d->rootp->geodiff_top__DOT__u_geometry__DOT__u_new__DOT__u_engine__DOT__tp_tab\[ti\] = \(.*\);$/\1d->rootp->geodiff_top__DOT__u_geometry__DOT__u_old__DOT__u_engine__DOT__tp_tab[ti] = \2; d->rootp->geodiff_top__DOT__u_geometry__DOT__u_new__DOT__u_engine__DOT__tp_tab[ti] = \2;/' $M/tb_m2_geodiff.cpp
 W="-Wno-fatal -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-PINCONNECTEMPTY -Wno-DECLFILENAME -Wno-UNOPTFLAT -Wno-TIMESCALEMOD -Wno-WIDTHTRUNC -Wno-MULTITOP"
 GEO="$M/m2_geometry_miter.sv $M/m2_geometry_new.sv $M/m2_geometry_old.sv"
 for m in m2_geo_clip m2_geo_project m2_geo_engine; do GEO="$GEO $M/${m}_new.sv $M/${m}_old.sv"; done
