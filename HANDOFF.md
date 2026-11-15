@@ -16,7 +16,9 @@ fitted, not on the board, not pushed. To be ported to model2a / model2c.
     machinery in the core).
   * STCC race checkpoint (i960-cpi's bench in the scratchpad, 2C build):
     473 -> 373 LSU differences; the 100 subnormal ones go, the 373 are the
-    register ring's stack words (RING 0 build: 0). FP_SUBN 1 also 0.
+    register ring's stack words (RING 0 build: 0). FP_SUBN 1 also 0. The 373
+    are uninitialised fourth words of ldq vector fetches (dead garbage, the
+    digests equal): the ring of 8 stays; ring 4 is slower and buys nothing.
     Digests / CPI unchanged.
   * Model 2 map: base 39,052 ALM; FP_SUBN 1 39,292 (+240); FP_SUBN 2 39,707
     (+655). 0 DSP, 0 M10K. For 2C (~800 from full) use FP_SUBN 1.
