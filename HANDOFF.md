@@ -1,5 +1,52 @@
 # Handoff
 
+## 2026-11-15 (later): model2b -- every 2B set censused; R1023's plan revised (R1024), no RTL
+
+Branch `model2b`. Study R1024 has the record (a table for every set). Not
+pushed, not merged; no RTL. Ben's review of the revised plan comes first.
+
+  * 15 sets measured in MAME 0.289 (Ben's 0.232 split ROMs, read in place):
+    attract to a coin at 60 s, play to 200 s. Power Sled (powsled, powsledr,
+    powsledm) stops at its network screen: not measured. overrevb not run
+    (one ROM differs).
+  * What breaks R1023's sizing: programs to 6,958 words (Gunblade NY; R1023
+    said 4,096), data to 16 K words read (Last Bronx; Sonic Championship
+    writes 30 K, reads < 13 K). The AM2 fighters (fvipers, schamp) use dual
+    moves, PM-bus data in both blocks, the data ROM and the buffer RAM (~2.4 K
+    reads a vblank). Last Bronx uses the alternate register files, the fixed
+    multiplier / MR, dual add / subtract, short-word data, and boots through
+    EPB0 (external-port DMA), not the FIFO. Nobody uses interrupts, IDLE,
+    circular buffers or SHARC-side DMA.
+  * MODE1: every Sega-library set TRUNC + RND32 (0x18000); Pilot Kids and
+    Zero Gunner RND32 only. DECIDED (Ben): float rounding follows the
+    manual -- TRUNC rounds to zero, denormals flushed; the MAME benches model
+    it. Manual text quoted in R1024 (fixed-point MR rounds to nearest at bit
+    32, fractional only, not under TRUNC).
+  * Board: the texture upper MB must MIRROR on 2B (vstriker, fvipers, schamp
+    write only there; the 2C rule drops it). FLAG1 = out FIFO full at 16 deep
+    tested in MAME on Last Bronx (86 deep in stock MAME) and schamp: no
+    deadlock, frame unchanged.
+  * Speed (schamp, the heaviest): at s 1.5 (R1011's measured STCC value) MAME's
+    own lateness at k 2.5-3.3 with cached external reads; 10 late frames with
+    40-clock reads; 55 at k 5. At s 2.2 it needs k <= 2.5; at 2.6 the i960
+    loses frames whatever the SHARC does. Target now <= ~3 clk / word plus
+    read caches. Last Bronx is comfortable.
+  * Budget: ~4,100-4,300 ALM by parts against ~4,450; M10K ~115 against ~101
+    (PM 7 K = 39, DM 16 K = 64): ~14 over. Options listed in R1024; M10K is
+    the binding resource.
+
+FINDINGS THAT CHANGED ON THE WAY: R1023's s = 2.2-2.6 came from R1005's
+inference; R1011 had already measured 1.38-1.55 on STCC -- R1024's speed
+table adds s 1.5. The first "IOP 0x14" in Last Bronx's table is
+DM(0x14, I3) with I3 = 0, a data access, not an IOP register write.
+EPB0 upload words are single 16-bit host writes (MAME exempts IOP 0x04 from
+the host's 16-bit pairing), not pairs as first written.
+
+REMAINS (Ben's call): the M10K / ALM choice (DM 16 K on chip or 8 K + SDRAM,
+PM 7 K, caches, undoing 2C's M10K-for-LAB trades); s on a 2B game on the
+board; Power Sled past its network check; then the capture patch, the
+replay bench with a TRUNC model, the RTL.
+
 ## 2026-11-15: model2b -- the 2B SHARC measured and planned on Dead or Alive (R1023), no production RTL
 
 Branch `model2b` off the 2C release candidate 1871e21a (worktree

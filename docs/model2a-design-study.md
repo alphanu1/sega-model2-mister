@@ -51523,3 +51523,321 @@ to flip, budget 17.39 ms):*
     word are board questions MAME cannot answer.
   * MAME's 2B pacing (32 MHz, a word a cycle, the i960's 25 MHz) are MAME's
     numbers, not the hardware's.
+
+**R1024 -- EVERY MODEL 2B SET MEASURED BEFORE ANY RTL (Ben, on R1023: "sized
+on DOA and Zero Gunner only"): R1023's FIRST CUT DOES NOT HOLD FOR THE
+LIBRARY. THE PROGRAM REACHES 6,958 WORDS (Gunblade NY), THE DATA 30,208
+WORDS WRITTEN (Sonic Championship), AND THE AM2 FIGHTERS AND LAST BRONX USE
+WHAT R1023 LEFT OUT: DUAL MOVES, PM-BUS DATA, THE BUFFER RAM AND DATA ROM,
+ALTERNATE REGISTER FILES, THE FIXED MULTIPLIER, DUAL ADD / SUBTRACT,
+SHORT-WORD DATA AND EXTERNAL-PORT DMA BOOT. NO INTERRUPTS, IDLE, CIRCULAR
+BUFFERS OR SHARC-SIDE DMA ANYWHERE. EVERY SEGA PROGRAM SETS TRUNC + RND32;
+FP FOLLOWS THE MANUAL (DECIDED, Ben). THE TEXTURE UPPER MB IS A MIRROR THAT
+THREE GAMES DEPEND ON. PLAN ONLY -- NO RTL.** Branch model2b, 2026-11-15.
+
+(Section: §10, after R1023. Authority: MAME 0.289 for the board and the
+programs' behaviour; the ADSP-2106x User's Manual for float rounding
+(Ben's decision below); Model 1 has no SHARC.)
+
+*DECIDED (Ben, 2026-11-15, on R1023's TRUNCATE question): "FP aim towards
+accuracy!" -- the SHARC's floating point follows Analog Devices' manual, not
+MAME.* The text, from the ADSP-2106x SHARC Processor User's Manual rev 2.1
+(March 2004, 82-000795-03), as quoted in mamedev/mame issue #16655 and read
+here again on ManualsLib's copy of the same manual (pages 2-11 to 2-16; the
+analog.com PDF did not download from this machine):
+  * p. 2-5: "The rounding mode for all ALU operations and for floating-point
+    multiplier operations is determined by the TRUNC bit in the MODE1
+    register. If the TRUNC bit is set, the round-to-zero mode is selected;
+    otherwise, the round-to-nearest mode is used."
+  * p. 2-15 (2.6.4.1 / 2.6.4.2): "TRUNC (MODE1, bit 15): 1=Truncation;
+    0=Round to nearest" ... "If the TRUNC bit is set, the multiplier rounds a
+    floating-point result to zero (truncation). If the TRUNC bit is cleared,
+    the multiplier rounds to nearest." -- "RND32 (MODE1, bit 16): 1=Round to
+    32 bits; 0=Round to 40 bits" ... "If the RND32 bit is set, the eight LSBs
+    of each input operand are flushed to zeros before multiplication,
+    floating-point results are output in the 32-bit IEEE format, with the
+    lower eight bits of the 40-bit register file location cleared. The
+    mantissa of the result is rounded to 23 bits (not including the hidden
+    bit)."
+  * p. 2-14 (2.6.3.2, Round MR Register), FIXED-POINT: "Rounding of a
+    fixed-point result occurs either as part of a multiply or
+    multiply/accumulate operation or as an explicit operation on the MR
+    register ... rounds the 80-bit MR value to nearest at bit 32, i.e. at the
+    MR1-MR0 boundary. The rounding operation applies only to fractional
+    results (integer results are not affected)." -- and truncation of a
+    fractional result is done by taking MR1 and discarding MR0. So TRUNC is
+    NOT named for the fixed-point multiplier: its rounding is to nearest, on
+    request (the instruction's RND), fractional only.
+  * p. 2-3: "Denormal operands are flushed to zero when input to a
+    computation unit and do not generate an underflow exception. Any
+    denormal or underflow result from an arithmetic operation is flushed to
+    zero and an underflow exception is generated." "Round-to-nearest and
+    round-toward-zero modes are supported."
+  * Appendix B (B-37 / B-38, per #16655, not re-read here): with TRUNC = 1
+    FIX rounds toward minus infinity (MAME's floorf is right there); only the
+    TRUNC instruction rounds toward zero; TRUNC = 0 FIX rounds to nearest.
+  MAME (both cores) rounds every float add / subtract / multiply to nearest
+  whatever MODE1 holds, and its FMUL neither flushes denormal operands nor
+  results; Hornet's sharc_fadd / sharc_fmul are bit-exact to MAME (fmul's
+  header: "flushes neither operands nor result"). Issue #16655 measured
+  Sonic the Fighters' SHARC replies under round-toward-zero: 23.9% of the
+  first million differ from stock MAME's, by an ulp that builds up.
+  WHAT IT CHANGES IN THE PLAN: the float units get TRUNC (round-to-zero when
+  MODE1 bit 15 is set) and flush denormal operands and results in the
+  multiplier as in the adder -- which REMOVES fmul's slow path (Hornet's
+  four-clock denormal sequence exists only to be MAME-exact); FIX keeps the
+  manual's TRUNC = 1 toward minus infinity. The MAME benches get a TRUNC
+  model: the reference (Hornet's v1 and our replay of MAME's interpreter)
+  computes with MODE1's rounding (fesetround(FE_TOWARDZERO) around the
+  host float ops, or an integer model), so DOA's last-bit differences from
+  stock MAME are expected and checked against the manual-rounding model, not
+  reported as failures; a MAME-rounding parameter stays for the lockstep
+  against stock MAME's own captures.
+
+*THE INSTRUMENT:* R1023's census patch with more counters (committed):
+MODE1 / MODE2 every change (modes.txt), interrupts taken by number, circular
+post-modifies (L != 0), external-port DMA words (external_dma_write, both the
+FIFO upload and EPB0), a direct-mapped data cache of 512-16 K words on the
+instructions' internal DM accesses, and M2B_FLAG1FIX (below).
+sim/sharc/m2b_all.sh runs every set: attract to a coin at 60 s, play to 200 s
+(sim/io/mame_m2_2a_play.lua: dig = stick and buttons for the fighters,
+Virtua Striker, the baseball games, Pilot Kids, Dynamite Cop; vcop2 = the
+aim for Gunblade NY and Rail Chase 2; orev = wheel and pedals for INDY 500
+and Super GT 24h), a snapshot every 20 s. m2b_census.py table prints one
+block a game. ROMs: Ben's MAME 0.232 split set (CRC-matched to 0.289 by the
+coordinator; overrevb has one ROM that differs and was not run), read in
+place; everything written stays in the scratchpad.
+
+*THE GAMES (MAME 0.289, -nodrc; "work" = SHARC instructions a vblank that
+are not FIFO-flag polls, play 70-200 s unless said; MAME's chip is 556,288
+a vblank):*
+
+  set        MAME    ran?            upload (words, path)   exec / highest   DM words (top)          work p50 / p99 / max      fps (MAME)
+  doa        ok      fight (R1023)   4,096 FIFO             837 / 20d9d      186 (0x316)             74.0k / 82.8k / 87.2k     60
+  zerogun    ok      play (R1023)    4,096 FIFO             1,296 / 20dad    209 (0x316)             46.6k / 66.2k(p90) / --   60
+  vstriker   ok      match           2,285 FIFO             765 / 20860      177 (0x316)             49.0k / 145.0k / 233.3k   30
+  fvipers    NOT_W.  fight           4,351 FIFO             3,686 / 210fe    1,425 (0x826)           128.6k / 148.5k / 173.3k  60
+  gunblade   ok      play            6,958 FIFO             3,563 / 21b27    264 (0x316)             33.4k / 132.0k / 137.2k   60
+  von        NOT_W.  play            3,679 FIFO             1,709 / 20de0    200 (0x316)             63.7k / 70.2k / 77.3k     60
+  schamp     NOT_W.  fight           4,954 FIFO             4,240 / 21359    30,208 w / 2,902 r      135.5k / 150.3k / 190.0k  60
+                                                                             (writes to 0x75ff, reads to 0x32fc)
+  lastbrnx   NOT_W.  fight           6,566 EPB0 (IOP DMA)   5,425 / 218c4    14,736 (0x3fb5)         125.3k / 133.5k / 141.9k  60
+                                                                             + 1,068 short-word
+  sgt24h     NOT_W.  race            4,096 FIFO             649 / 20812      165 (0x316)             16.5k / 45.5k / 50.2k     60
+  indy500    NOT_W.  race            4,096 FIFO             2,229 / 20fcd    278 (0x316)             68.1k / 107.4k / 113.7k   60
+  dynabb     NOT_W.  play            4,096 FIFO             1,344 / 207fb    246 (0x316)             92.1k / 135.3k / 214.3k   60
+                                                                             (attract max 245.2k)
+  dynabb97   NOT_W.  play            4,096 FIFO             1,338 / 207fb    246 (0x316)             78.2k / 143.0k / 175.1k   60 (107 vbl late)
+                                                                             (attract max 244.0k)
+  rchase2    ok      play            3,112 FIFO             1,547 / 20ba7    174 (0x316)             32.2k / 95.9k / 102.1k    60
+  pltkids    ok      play            4,096 FIFO             1,191 / 20850    253 (0x316)             10.5k / 28.7k / 48.3k     60
+  dynamcopb  NOT_W.  play            4,096 FIFO             1,239 / 20b8a    248 (0x316)             58.1k / 123.8k / 162.8k   60
+                                                                             (attract max 258.5k)
+  powsled /  NOT_W.  NO: both stop   4,096 FIFO             194 / 20235      117                     59 a vblank (idle)        --
+  powsledr           at "Cannot find network main" (the relay / slave sets need the other cabinets); powsledm: see below.
+
+  (fps from the game's flips: one a vblank = 60. "ran?" from the snapshots:
+  a fight, a match, a race or a play screen at 120-200 s. NOT_W. =
+  MACHINE_NOT_WORKING in 0.289; every one of them boots and plays far enough
+  here except Power Sled.)
+
+  PER GAME, WHAT THE FIRST CUT LEFT OUT (0 = never seen in 200 s):
+    every set: no interrupts, no IDLE, no circular buffer (every L register
+    0), no SHARC-side DMA (the DMA controller is used only by the host
+    boot), no PM written after the boot.
+    fvipers: type-1 dual moves 19.7 M (1.6% of work; R4 = DM(I7,M1), R0 =
+      PM(I8,M9) -- both buses into block 1), PM-bus data at 133 addresses
+      (21f20-21f9f in BLOCK 0, past the code; 3036e-30379), the data ROM
+      (598 reads a vblank), the buffer RAM (1,922 reads, 2,917 writes a
+      vblank), BSET / BTST / FCLIP / NOT / OR / XOR.
+    schamp: as fvipers (the same engine: dual moves 21.7 M, PM-bus data
+      1,804 addresses, ROM 446 / buffer 1,907 r 2,838 w a vblank), and
+      13,824 DM words written above 16 K that are never read.
+    lastbrnx: ALTERNATE REGISTER FILES (MODE1 SRRFH / SRRFL set and cleared
+      34,507 times; the alternate DAGs, SRD1H..SRD2L, set once at boot to
+      load them), the FIXED MULTIPLIER (MUL UUI, MR -> reg, reg -> MR: 5.4 M),
+      dual add / subtract (fixed and float, 7.2 M) and FMUL || FADD, FSUB,
+      FAVG / FMIN / FMAX / MIN / MAX / FEXT / BCLR, short-word data (1,068
+      words), the buffer RAM written (5,246 a vblank, never read), the boot
+      by external-port DMA (below), and its out FIFO at 86 deep (below).
+    gunblade: the data ROM (4,181 reads a vblank, 16,092 at most), buffer
+      RAM written (1,139); FMUL || FABS. von: ROM 4, buffer written 1,317.
+    indy500: ROM 1,499 a vblank (5,043 max). rchase2: buffer written 1,371.
+    vstriker, sgt24h, dynabb, dynabb97, pltkids, dynamcopb, doa, zerogun:
+      nothing past R1023's list (dynamcopb XOR, pltkids OR).
+  MODE1: every Sega-library set (all but pltkids and zerogun) 0x18000 =
+    TRUNC + RND32 (lastbrnx adds SRRF bits on top); pltkids and zerogun
+    0x10000 = RND32 only. No set ever clears RND32 (no 40-bit results).
+    MODE2 0x60000 everywhere (FLAG2 / 3 outputs).
+
+  HOW THE PROGRAM ARRIVES: every set but one as R1023 found -- copro_ctl1
+  bit 31, ten host IOP writes at 0x008c0000 (DMAC6 0, II6 0x20000, IM6 1,
+  C6 = the word count, DMAC6 0xa1: DMA 6, 16-to-48 packing), then the words
+  as 16-bit FIFO writes. LAST BRONX instead (MAME's "external DMA port 0"):
+  the same DMA 6 set-up (C6 0x19a6 = 6,566 words) and IOP 0x0f = 0x6716,
+  then 19,698 writes to 0x008c0010 -- EPB0, IOP 0x04, which MAME's
+  external_iop_write exempts from the host's 16-bit pairing -- each one
+  16-bit part of a 48-bit word, three to a word, through the same packer
+  as the FIFO upload. No FIFO upload (copro_ctl1's counter stays 0). The host
+  IOP window must pass EPB0 writes to the packer.
+
+  POWER SLED (powsled, powsledr; MAME's own powsledm hack too): every set
+  stops at its network screen ("Cannot find network main" / "THIS IS
+  ????????") -- the SHARC runs 194-338 words and idles. NOT MEASURED; it
+  needs the linked cabinets (or a patch past the check, not attempted).
+
+  THE i960's 2B-ONLY ACCESSES, PER GAME (200 s):
+    i8251 at 0x009c0000: every set; status reads 0 (vstriker, fvipers,
+      schamp) to 4.07 M (indy500), writes 7 - 10,492. Four sets (fvipers,
+      schamp, dynabb, dynabb97) also write 0x01c80000 five times -- 2A's
+      address, unmapped on 2B: dropped.
+    IOP window: 10 writes each; lastbrnx 19,710 (the EPB0 boot).
+    Bank register 0x00980020: 2 writes, every set. Status 0x00980014:
+      fvipers 11,383 and schamp 11,326 reads; none elsewhere.
+    TEXTURE RAM, THE UPPER MB OF EACH WINDOW: vstriker 1.57 M, fvipers
+      5.50 M and schamp 2.62 M writes -- AND NONE TO THE LOWER MB; sgt24h
+      28. MAME's 2B map mirrors 0x111xxxxx / 0x113xxxxx onto the lower MB,
+      so those three draw from what they wrote there. This core's 2C rule
+      (R928: the upper MB DROPPED) would leave them untextured: a 2B build
+      must MIRROR (address bit 20 ignored), as MAME's 2B map does. Texture
+      reads: vstriker 4,864, dynabb 272.
+    Buffer RAM read by the i960: fvipers 3.57 M, schamp 3.65 M (the SHARC
+      writes its results there for the i960).
+    Protection window: doa 441 / 169 (317-0229), dynamcopb 142 / 61 and
+      pltkids 18 / 9 (315-5881), powsled 0 / 1,024 (writes only).
+
+  FLAG1 TESTED (M2B_FLAG1FIX=1: FLAG1 from the OUT FIFO's full, at MAME's
+  16): Last Bronx's out FIFO, 86 deep every frame in stock MAME (its FLAG1
+  polls, 84 of them before its output writes, read the IN FIFO's full),
+  stops at 16; the in FIFO peaks at 17 (the i960 waits on it a few us); no
+  deadlock, and the frame is unchanged (vblank to flip p50 6.63 ms, the
+  same flips, the same work). Sonic Championship: out FIFO 16 at most, the
+  frame the same. So the core's FLAG1 = out FIFO full at 16 deep, and the
+  out FIFO must also refuse (stall) a write when full. MAME's slip (R1023)
+  only made the FIFO look deeper. NOT SETTLED: the real FIFO depth.
+
+  DATA MEMORY WORKING SET (direct-mapped DM caches over the instructions'
+  internal accesses, 200 s; misses):
+                 accesses     4 K          8 K          16 K
+    schamp       378.9 M      7,481,513    5,805,606    139,222
+    lastbrnx     605.3 M      48,266,183   25,980,162   15,270 (cold)
+    fvipers      370.7 M      1,425 (cold) --           --
+    gunblade     170.1 M      264 (cold)
+  Every read any set makes is below 16 K words (schamp's 13,824 words above
+  16 K are written and never read in 200 s; lastbrnx reads up to 0x3fb5).
+  PROGRAM (direct-mapped program caches, every fetch): 4,096 lines miss
+  2.56 M (gunblade), 17.3 M (schamp), 25.2 M (lastbrnx) -- a 4 K cache
+  over SDRAM costs those games ~1,500-2,200 misses a vblank; the whole
+  uploaded program on chip (6,958 words at most) misses nothing.
+
+*THE SPEED MODEL ON THE HEAVIEST (sim/sharc/m2b_pace.sh: SHARC 80 MHz at k
+clk a word, i960 25 MHz / s; x = extra clk_sys charged a buffer-RAM or
+data-ROM read (M2B_XBUF / XROM), 40 = R1009's board-like latency, 0 = a
+cache that always hits; play 60-150 s = 5,177 vblanks; "late" = game
+frames that took more than one vblank; MAME itself (s 1) has 1 (schamp)
+and 4 (lastbrnx, scene changes) in its own play window):*
+
+  Sonic Championship (the most work: 135 k a vblank, 2,350 external reads)
+      s     k     x    vblank->flip p50 / p99 / max (ms)   late
+      1.5   2.5   40   12.03 / 13.37 / 17.13                  5
+      1.5   3.3   0    11.92 / 13.34 / 17.25                  5
+      1.5   3.3   40   13.13 / 14.50 / 17.14                 10
+      1.5   5     40   15.76 / 17.02 / 17.38                 55
+      2.2   1     0    13.07 / 14.54 / 17.01                 15
+      2.2   2.5   0    14.51 / 16.16 / 17.22                 15
+      2.2   3.3   0    15.45 / 16.99 / 17.37                 39
+      2.2   3.3   40   16.50 / 17.33 / 17.38                383
+      2.2   5     0    -- 30 fps (2,286 of 2,852 frames two vblanks)
+      2.6   1     0    15.32 / 16.94 / 17.37                 30
+      2.6   3.3   40   -- 30 fps (2,503 of 2,671)
+  Last Bronx (125 k a vblank, alternate registers, no external reads)
+      1.5   3.3   40    9.31 / 10.96 / 14.96                  4
+      1.5   5     40   11.64 / 13.33 / 17.19                  3
+      2.6   3.3   40   13.01 / 15.69 / 17.27                 11
+
+  s: R1023 took 2.2 / 2.6 from R1005's inference; R1011 then MEASURED the
+  core's i960 on STCC's race at s = 1.38 (latency 6) / 1.55 (12). DOA and
+  the 2B games were not measured; 1.5 is the measured neighbour.
+
+*VERDICT -- R1023's DESIGN DOES NOT HOLD FOR THE LIBRARY; WHAT CHANGES:*
+  1. PROGRAM: up to 6,958 words (Gunblade NY) and executed to 0x21b27, not
+     4,096: the program on chip is 7 K x 48 (4 K + 2 K + 1 K banks, 39
+     M10K) or 8 K (48), not 24. A 4 K cache over SDRAM is the fall-back
+     (1,500-2,200 misses a vblank on schamp / lastbrnx).
+  2. DATA: 16 K words (lastbrnx reads to 0x3fb5; schamp writes to 0x75ff,
+     reads below 0x3300): 16 K x 32 on chip = 64 M10K, with writes above it
+     dropped (and flagged on the overlay) or sent to an SDRAM page. 2 K (R1023)
+     serves 12 of the 15 measured sets, not fvipers (to 0x826), schamp or
+     lastbrnx.
+  3. NOW IN THE FIRST CUT (each used by at least one set): type-1 dual moves
+     (DM and PM bus in one word, both into block 1 -- a second clock on a
+     one-port RAM); PM-bus data in BLOCK 0 and block 1 (fvipers / schamp:
+     the PM RAM written by data, 32 bits at the top of the 48); the buffer
+     RAM (read and written) and the data ROM through the SDRAM, R1006's
+     posted writes and a read cache (the ROM's read-only; the buffer's
+     must drop a line on an i960 write to 0x900000-0x91ffff); alternate
+     register files (SRRFH / SRRFL; the DAG alternates loaded once);
+     the fixed multiplier and MR (MUL UUI, MR <-> R; DSP); dual add / subtract
+     (float and fixed; Hornet's ONE_FADD: a clock more on one adder); FAVG,
+     FMIN / FMAX, MIN / MAX, FCLIP, FEXT, BSET / BCLR / BTST, NOT / OR / XOR;
+     short-word addressing (lastbrnx 1,068 words; MODE1.SSE never set:
+     zero-extended); the EPB0 boot path; FLAG1 = out FIFO full and a stall
+     on a full out FIFO.
+     STILL OUT (0 in every set): interrupts, IDLE, circular buffers,
+     bit-reverse, SHARC-side DMA, 40-bit (RND32 = 0) results, PM written
+     after the boot -- each behind the unsupported-word flag.
+  4. FLOAT: the manual's rounding (DECIDED above) -- TRUNC = round to zero
+     in the adder and the multiplier, denormals flushed in and out of both
+     (fmul's slow path goes), FIX toward minus infinity under TRUNC; the
+     fixed-point MR rounding to nearest at bit 32, fractional only.
+  5. SPEED: the target tightens from <= 3.5 to <= ~3 clk_sys a word on the
+     fighters' mix (the cost model puts R1023's design A at 2.35-2.54 on
+     every set), AND external reads must hit a cache (~5 clocks, not 40):
+     at s 1.5 that keeps Sonic Championship at MAME's own lateness (5 of
+     5,177 at k 2.5-3.3 with fast reads; 10 with 40-clock reads; 55 at k 5).
+     At s 2.2 it needs k <= 2.5 and fast reads to stay near MAME (15 late);
+     at s 2.6 the i960 alone loses 30 frames and the SHARC cannot help. As
+     with STCC (R1005 / R1011), the i960 is the frame on the busy 2B games.
+     The light sets (vstriker, sgt24h, pltkids, rchase2, dynabb ...) have
+     2-10x the room.
+     R1023's plain-FSM fall-back (design B, ~5 clk) is out: k 5 costs
+     Sonic Championship 55 late frames even at s 1.5.
+  6. AREA AND M10K (ESTIMATES by parts, not mapped): R1023's ~3,150 ALM
+     plus the additions -- dual add / subtract on one adder ~60, fixed
+     multiplier + MR ~250 (+2-3 DSP), alternate register files ~80 (MLAB),
+     the extra ALU ops ~150, dual move / PM-bus data / short words ~150,
+     external ports, ROM and buffer read caches and posted writes ~350,
+     EPB0 / FLAG1 ~40 -- minus fmul's slow path ~-100: ~4,100-4,300 by parts,
+     4,000-5,500 fitted: AT OR OVER the ~4,450 ALM the TGPx4 and the DSB
+     leave (s2940). M10K: PM 39 + DM 64 + ROM cache (1 K words) 5 + buffer
+     cache (1 K) 5 + FIFOs 2 = ~115 against ~101 free in a 2B build (22 +
+     the TGPx4's 63 + the DSB's 16): ~14 OVER. Ways back, each a decision:
+     DM 8 K on chip with the rest in SDRAM behind a small cache (lastbrnx
+     2,260 misses a vblank at 8 K), the PM at 7 K exactly, the read caches in
+     MLAB, or R1008 / R1018's "M10K for LABs" trades (made for 2C) undone in
+     a 2B build where ALM allows. M10K, not ALM, is again the binding
+     resource (the Model 1 project's lesson).
+  7. BOARD (beyond R1023's list): the texture upper MB MIRRORED (three sets
+     draw from it); 0x01c80000 writes ignored; the status register at
+     0x00980014 (two sets poll it); the host IOP window feeding EPB0 to the
+     upload packer.
+
+*NOT SETTLED -- the risks, plainly:*
+  * The M10K budget is over by ~14 and the ALM estimate reaches the budget:
+    a 2B core with every set's needs may not fit beside the 2A board's
+    other parts without a choice above. Nothing here is mapped.
+  * s on the 2B games: unmeasured; 1.5 is STCC's. Sonic Championship and
+    the AM2 fighters are i960-bound above s ~2.
+  * The real out-FIFO depth and FLAG1's meaning (MAME guesses 16 and wires
+    FLAG1 to the wrong FIFO); FLAG1 = out full at 16 works for every set
+    measured.
+  * Power Sled (three sets) not measured: its network check.
+  * The buffer-RAM read cache's coherence with the i960 (fvipers / schamp
+    read back what the i960 and the SHARC both write); a line dropped on
+    every i960 write is the plan, not measured.
+  * schamp's never-read writes above 16 K: 200 s of play; a longer session
+    or another mode may read them.
+  * The manual quotes for p. 2-3 / 2-5 / B-37 are #16655's, not re-read
+    here; pp. 2-11 to 2-16 were read on ManualsLib's copy (its text
+    extraction can scramble tables).
+  * overrevb (2B Over Rev) not run: one ROM differs from 0.289's.
