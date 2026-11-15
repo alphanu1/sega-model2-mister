@@ -64,7 +64,9 @@ module m2_geo #(
   // 0x4000 / 0x6000 dwords, 3,322 with jumps, ends <= 3,033 dwords in), so
   // R638's rule held the NEXT list, filled the push queue and stopped the
   // i960 until the walk ended, every frame.
-  parameter int unsigned LIST_WIN = 0
+  parameter int unsigned LIST_WIN = 0,
+  // R1018: the push queue's head word in its M10K's output latch (2C)
+  parameter bit          PQ_HEAD  = 1'b0
 ) (
   input  logic          clk,
   input  logic          rst_n,
@@ -303,7 +305,7 @@ module m2_geo #(
   logic        q_full;
   logic        q_held;   // R747: a pushed word anywhere in the queue
 
-  m2_fifo_m10k #(.DW(52), .DEPTH(DEPTH)) u_pushq (
+  m2_fifo_m10k #(.DW(52), .DEPTH(DEPTH), .HEAD_RAM(PQ_HEAD)) u_pushq (   // R1018
     .clk(clk), .rst_n(rst_n), .clr(1'b0),
     .push(push_fire), .din({geo_wp, wdata}),
     .pop(q_pop), .q(q_data), .q_valid(q_valid),
