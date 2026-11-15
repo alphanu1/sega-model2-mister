@@ -222,19 +222,25 @@ module i960_fpmisc #(
   logic [1:0] eff_rmode;
   assign eff_rmode = (op == OP_CVTZRI) ? 2'd3 : rmode;
 
+  // R1018: LEAN -- a fraction is non-zero exactly when its half bit or a
+  // bit below it is set (fbits 0: neither, and no fraction).
+  wire frac_nz = LEAN ? (half_bit || below_half) : (frac_part != 56'd0);
   always_comb begin
     case (eff_rmode)
       2'd0:    inc = half_up;                                 // nearest, ties to even
-      2'd1:    inc = sa && (frac_part != 56'd0);              // floor
-      2'd2:    inc = !sa && (frac_part != 56'd0);             // ceil
+      2'd1:    inc = sa && frac_nz;                           // floor (R1018: frac_nz)
+      2'd2:    inc = !sa && frac_nz;                          // ceil
       default: inc = 1'b0;                                    // truncate
     endcase
   end
 
   logic [56:0] rounded;
   // R1018: LEAN -- frac_mask + 1 is 2^fbits, named as that.
-  assign rounded = {1'b0, int_part} +
-                   (inc ? (LEAN ? (57'd1 << fbits) : ({1'b0, frac_mask} + 57'd1)) : 57'd0);
+  // R1018: LEAN -- int_part has fbits zeros at the bottom, so int_part +
+  // 2^fbits is (fa_w | frac_mask) + 1: one add of a per-bit select (a, the
+  // mask and inc in the adder's own LUT), no 2^fbits decoder.
+  assign rounded = LEAN ? ({1'b0, inc ? (fa_w | frac_mask) : int_part} + {56'd0, inc})
+                 : ({1'b0, int_part} + (inc ? ({1'b0, frac_mask} + 57'd1) : 57'd0));
 
   // --------------------------------------------------- R575: the stage
   //
