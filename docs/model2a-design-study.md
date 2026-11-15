@@ -51262,3 +51262,11 @@ of a default EEPROM) + R1020's remr commits (cherry-picked from fprem-subn)
 the 39,904 FP_SUBN 0 map s2702 fitted at 41,411) and R1019's logrl,
 Model2.sv's M2_I960_SUBN is 2 on every build: the 2C default of 1 (R1017)
 is gone. Checks and the fit follow below as they are run.
+
+*FIRST FIT (R1022's branch at 1871e21a): s2940 clk_sys -1.511, s2960
+-1.718, both on the SAME path -- m2_geometry uvsel -> hv[k] -- R1018's
+change 4 (UV_HELD: the u/v reduction loading straight from the clipper's
+registers, which R1018 listed as a path for a fit to check). Two seeds on
+one path is the design, not placement. Change 4 is reverted on this branch
+(UV_HELD off: m2_geometry's two copy stages back; +43 ALM by R1018's map);
+test_m2_geometry 438 checks 0 fails, lint_top clean (2C macros).*
