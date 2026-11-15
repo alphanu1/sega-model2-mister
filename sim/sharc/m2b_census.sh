@@ -15,6 +15,7 @@
 #   M2B_PACE=1 M2B_SHARC_HZ=80000000 M2B_CPI=<clk a word> | M2B_COSTF=<file>
 #                the SHARC charged a small core's clocks, at clk_sys
 #   M2B_I960_HZ  the i960's clock (25 MHz in MAME), for the core's slower i960
+#   M2B_ROMPATH  MAME's -rompath (default /home/ben/roms/Model2;/home/ben/roms)
 #   PL_GAME / PL_COIN / PL_TEND  sim/io/mame_m2_2a_play.lua's session (dig = DOA)
 #   M2B_LUA      the autoboot script (default sim/sharc/mame_m2b_i960.lua, which
 #                logs the i960's 2B-only accesses to <outdir>/i960.txt over it)
@@ -28,7 +29,7 @@ export M2B_CENSUS=$O
 export M2B_I960_LOG=${M2B_I960_LOG:-$O/i960.txt}
 LUA=${M2B_LUA:-$HERE/mame_m2b_i960.lua}
 export PL_GAME=${PL_GAME:-dig} PL_TEND=${PL_TEND:-$T} PL_COIN=${PL_COIN:-}
-"$MAME" "$G" -rompath "/home/ben/roms/Model2;/home/ben/roms" -nodrc \
+"$MAME" "$G" -rompath "${M2B_ROMPATH:-/home/ben/roms/Model2;/home/ben/roms}" -nodrc \
   -cfg_directory "$O/cfg" -nvram_directory "$O/nv" -state_directory "$O/sta" \
   -snapshot_directory "$O/snap" -input_directory "$O/inp" \
   -share_directory "$O/share" -comment_directory "$O/comment" \

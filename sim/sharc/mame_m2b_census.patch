@@ -2,11 +2,12 @@ R1023: Model 2B SHARC census and pacing for MAME 0.289 (BSD-3-Clause files; this
 GPL-3.0-or-later as the project). Against sm2-builds/mame-r943 (MAME 0.289 with the
 R869 / R924 / R943 capture patches), applied with patch -p1 in a copy of that tree, built
 with `make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp`. Every hook is inert unless
-M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
+M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc. R1024 added the MODE log,
+IRQ / circular / external-DMA counts, a DM cache simulation and M2B_FLAG1FIX.
 
 --- a/src/devices/cpu/sharc/sharc.cpp
 +++ b/src/devices/cpu/sharc/sharc.cpp
-@@ -24,6 +24,230 @@
+@@ -24,6 +24,272 @@
  //#define VERBOSE 1
  #include "logmacro.h"
  
@@ -30,6 +31,11 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
 +int xbuf = 0, xrom = 0;
 +uint64_t pc_other = 0;
 +static double vb_t = 0;
++static uint64_t n_circ = 0, n_irq[32], n_xdma = 0;
++static int32_t dtag[6][16384];
++static uint64_t dmiss[6], dacc;
++static uint32_t mode_last[2] = { 0xffffffff, 0xffffffff };
++static FILE *fmode = nullptr; static unsigned nmode = 0;
 +struct frame_t { double flip_ms; uint64_t ins, spin, busy, idle, fin, fin_empty, fout, bufr, bufw, romr, iopr, iopw, dma, fctl, flips; double h_in, h_out; uint32_t in_max, out_max; };
 +frame_t F, T;
 +static double h_t0[2] = { -1, -1 };
@@ -93,6 +99,15 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
 +
 +// after the instruction: a marked PC whose successor is itself is waiting
 +// (a NOP or a direct / relative jump that goes to itself: a one-word wait loop)
++static inline void modes(uint32_t pc, uint32_t m1, uint32_t m2)
++{
++	if (m1 != mode_last[0] || m2 != mode_last[1])
++	{
++		mode_last[0] = m1; mode_last[1] = m2;
++		if (!fmode) fmode = fopen((dir + "/modes.txt").c_str(), "w");
++		if (fmode && nmode++ < 5000) fprintf(fmode, "f%llu %05x MODE1 %08x MODE2 %08x\n", (unsigned long long)frame, pc, m1, m2);
++	}
++}
 +static inline void ins_end(uint32_t pc, uint64_t op, uint32_t next, int c)
 +{
 +	if (pc >= 0x20000 && pc < 0x40000)
@@ -167,6 +182,12 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
 +			(unsigned long long)T.fin, (unsigned long long)T.fin_empty, (unsigned long long)T.fout, (unsigned long long)T.bufr, (unsigned long long)T.bufw,
 +			(unsigned long long)T.romr, (unsigned long long)T.iopr, (unsigned long long)T.iopw, (unsigned long long)T.dma, (unsigned long long)T.fctl,
 +			(unsigned long long)T.flips, T.h_in, T.h_out, T.in_max, T.out_max, nboot, up_n, up_t);
++		fprintf(f, "circ %llu xdma_words %llu irqs", (unsigned long long)n_circ, (unsigned long long)n_xdma);
++		for (int k = 0; k < 32; k++) if (n_irq[k]) fprintf(f, " %d:%llu", k, (unsigned long long)n_irq[k]);
++		fprintf(f, "\n");
++		if (fmode) fflush(fmode);
++		fprintf(f, "dcache accesses %llu misses 512:%llu 1024:%llu 2048:%llu 4096:%llu 8192:%llu 16384:%llu\n", (unsigned long long)dacc,
++			(unsigned long long)dmiss[0], (unsigned long long)dmiss[1], (unsigned long long)dmiss[2], (unsigned long long)dmiss[3], (unsigned long long)dmiss[4], (unsigned long long)dmiss[5]);
 +		fprintf(f, "pcache fetches %llu misses 256:%llu 512:%llu 1024:%llu 2048:%llu 4096:%llu\n", (unsigned long long)cfetch,
 +			(unsigned long long)cmiss[0], (unsigned long long)cmiss[1], (unsigned long long)cmiss[2], (unsigned long long)cmiss[3], (unsigned long long)cmiss[4]);
 +		fclose(f);
@@ -209,9 +230,28 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
 +	else if (h_t0[which] >= 0) { (which ? F.h_out : F.h_in) += t - h_t0[which]; h_t0[which] = -1; }
 +}
 +void m2b_depth(int which, unsigned n) { if (m2b::on) { auto &m = which ? m2b::F.out_max : m2b::F.in_max; if (n > m) m = n; } }
++// R1024: direct-mapped word caches of 512 .. 16 K words over the instructions' internal DM
++// accesses (normal-word addresses folded to the block and word; short-word to their word)
++namespace m2b {
++static bool dinit = false;
++static inline void dcache(uint32_t a)
++{
++	if (!dinit) { for (auto &x : dtag) for (auto &t : x) t = -1; dinit = true; }
++	uint32_t key;
++	if (a >= 0x40000) key = 0x10000 | ((a >> 1) & 0xffff);          // short word -> its 32-bit word
++	else key = (a & 0x18000) == 0 ? (a & 0x7fff) : (0x8000 | (a & 0x7fff));
++	dacc++;
++	for (int k = 0; k < 6; k++)
++	{
++		uint32_t n = 512u << k, ix = key & (n - 1);
++		if (dtag[k][ix] != int32_t(key)) { dtag[k][ix] = int32_t(key); dmiss[k]++; }
++	}
++}
++}
 +int m2b_dm(uint32_t a, int w)
 +{
 +	using namespace m2b;
++	if (a >= 0x20000 && a < 0x80000 && in_ins) dcache(a);
 +	if (a < 0x80000) { dmm[a] |= uint8_t(1 << (w + (in_ins ? 0 : 2))); if (a < 0x100) { if (w) F.iopw++; else F.iopr++; } return 0; }
 +	if (a >= 0x400000 && a < 0xc00000) { if (!w) F.fin++; return 0; }
 +	if (a >= 0xc00000 && a < 0x1400000) { if (w) F.fout++; return 0; }
@@ -224,6 +264,9 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
 +	using namespace m2b;
 +	if (a >= 0x20000 && a < 0x60000) pmm[a - 0x20000] |= uint8_t(1 << (kind + (in_ins ? 0 : 4)));
 +}
++void m2b_circ() { if (m2b::on) m2b::n_circ++; }
++void m2b_irq(int which) { if (m2b::on) m2b::n_irq[which & 31]++; }
++void m2b_xdma() { if (m2b::on) m2b::n_xdma++; }
 +void m2b_fin_empty() { if (m2b::on) m2b::F.fin_empty++; }
 +void m2b_dma(int ch, uint32_t src, uint32_t dst, int sc, int dc, int pmode, int chained)
 +{
@@ -237,7 +280,18 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  
  #define DISABLE_FAST_REGISTERS      1
  
-@@ -564,6 +788,8 @@
+@@ -514,8 +780,10 @@
+ 	}
+ }
+ 
++void m2b_xdma();
+ void adsp21062_device::external_dma_write(offs_t address, uint64_t data)
+ {
++	m2b_xdma();
+ 	/*
+ 	All addresses in the 17-bit index registers are offset by 0x0002 0000, the
+ 	first internal RAM location, before they are used by the DMA controller.
+@@ -564,6 +832,8 @@
  
  void adsp21062_device::device_start()
  {
@@ -246,7 +300,15 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  	assert(m_blocks[0].length() == m_blocks[1].length());
  	assert(std::has_single_bit(m_blocks[0].length()));
  
-@@ -1248,6 +1474,7 @@
+@@ -1221,6 +1491,7 @@
+ 		/* TODO: alter IMASKP */
+ 
+ 		m_core->active_irq_num = which;
++		m2b_irq(which);
+ 		m_core->irq_pending &= ~(1 << which);
+ 
+ 		m_core->interrupt_active = 1;
+@@ -1248,6 +1519,7 @@
  			debugger_wait_hook();
  
  			int dma_count = m_core->icount;
@@ -254,7 +316,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  
  			// run active DMAs even while idling
  			while ((dma_count > 0) && (m_core->dma_status & ((1 << 6) | (1 << 7))))
-@@ -1282,6 +1509,7 @@
+@@ -1282,6 +1554,7 @@
  			debugger_instruction_hook(m_core->pc);
  
  			m_core->opcode = m_program.read_qword(m_core->pc);
@@ -262,7 +324,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  
  			// handle looping
  			if (!(m_core->stky & LSEM) && (m_core->pc == m_core->laddr.addr))
-@@ -1334,7 +1562,11 @@
+@@ -1334,7 +1607,11 @@
  				}
  			}
  
@@ -270,11 +332,11 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
 +			if (m2b::on) { m2b_c = m2b::paced ? m2b::charge(m2b_pc) : 1; m2b::ins(m2b_pc, m_core->opcode, m2b_c); m2b::in_ins = true; }
  			(this->*m_sharc_op[(m_core->opcode >> 39) & 0x1ff])();
 +			m2b::in_ins = false;
-+			if (m2b::on) m2b::ins_end(m2b_pc, m_core->opcode, m_core->daddr, m2b_c);
++			if (m2b::on) { m2b::ins_end(m2b_pc, m_core->opcode, m_core->daddr, m2b_c); m2b::modes(m2b_pc, m_core->mode1, m_core->mode2); }
  
  
  			// System register latency effect
-@@ -1353,7 +1585,7 @@
+@@ -1353,7 +1630,7 @@
  				dma_run_cycle(7);
  			}
  
@@ -355,19 +417,44 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  		schedule_dma_op(channel, src, dst, src_modifier, dst_modifier, src_count, dst_count, pmode);
  	}
  }
+--- a/src/devices/cpu/sharc/sharcops.hxx
++++ b/src/devices/cpu/sharc/sharcops.hxx
+@@ -1,3 +1,4 @@
++void m2b_circ();
+ // license:BSD-3-Clause
+ // copyright-holders:Ville Linde
+ #define PM_REG_I(x)         (m_core->dag2.i[x])
+@@ -34,6 +35,7 @@
+ 	{                                                       \
+ 		if (PM_REG_L(x) != 0)                               \
+ 		{                                                   \
++			m2b_circ();                                     \
+ 			if (PM_REG_I(x) > PM_REG_B(x)+PM_REG_L(x))      \
+ 			{                                               \
+ 				PM_REG_I(x) -= PM_REG_L(x);                 \
+@@ -49,6 +51,7 @@
+ 	{                                                       \
+ 		if (DM_REG_L(x) != 0)                               \
+ 		{                                                   \
++			m2b_circ();                                     \
+ 			if (DM_REG_I(x) > DM_REG_B(x)+DM_REG_L(x))      \
+ 			{                                               \
+ 				DM_REG_I(x) -= DM_REG_L(x);                 \
 --- a/src/mame/sega/model2.cpp
 +++ b/src/mame/sega/model2.cpp
-@@ -96,6 +96,9 @@
+@@ -96,6 +96,11 @@
  #include "model1io2.lh"
  #include "segabill.lh"
  
 +// R1023 census / pacing hooks (sharc.cpp)
 +bool m2b_on(); void m2b_halt(int which, int state, double t); void m2b_depth(int which, unsigned n);
++// R1024: M2B_FLAG1FIX=1 -- the SHARC's FLAG1 from the OUT FIFO's full, MAME's callbacks read the in FIFO's
++static const bool m2b_flag1fix = getenv("M2B_FLAG1FIX") != nullptr;
 +
  /* Timers - these count down at 25 MHz and pull IRQ2 when they hit 0 */
  u32 model2_state::timers_r(offs_t offset)
  {
-@@ -238,18 +241,24 @@
+@@ -238,18 +243,24 @@
  						   [    ]() { },
  						   [    ]() { },
  						   [    ]() { },
@@ -387,8 +474,9 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  							[    ]() { },
  							[    ]() { },
 -							[this]() { m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); },
-+							[this]() { m2b_depth(1, m_copro_fifo_out->size()); m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); },
- 							[this]() { m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); });
+-							[this]() { m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); });
++							[this]() { m2b_depth(1, m_copro_fifo_out->size()); m_copro_adsp->set_flag_input(1, m2b_flag1fix ? m_copro_fifo_out->is_full() : m_copro_fifo_in->is_full()); },
++							[this]() { m_copro_adsp->set_flag_input(1, m2b_flag1fix ? m_copro_fifo_out->is_full() : m_copro_fifo_in->is_full()); });
 +	if (m2b_on())
 +	{
 +		if (const char *c = getenv("M2B_SHARC_HZ")) m_copro_adsp->set_unscaled_clock(u32(atof(c)));
@@ -398,7 +486,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  }
  
  void model2c_state::machine_start()
-@@ -415,8 +424,10 @@
+@@ -415,8 +426,10 @@
  	return m_colorxlat[offset];
  }
  
@@ -409,7 +497,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  	return m_copro_fifo_out->is_empty() ? 1 : 0;
  }
  
-@@ -663,6 +674,22 @@
+@@ -663,6 +676,22 @@
  
  // Coprocessor - SHARC
  
@@ -432,7 +520,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  u32 model2b_state::copro_sharc_buffer_r(offs_t offset)
  {
  	return m_bufferram[offset & 0x7fff];
-@@ -675,7 +702,7 @@
+@@ -675,7 +704,7 @@
  
  void model2b_state::copro_sharc_map(address_map &map)
  {
@@ -441,7 +529,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  	map(0x0c00000, 0x13fffff).w(m_copro_fifo_out, FUNC(generic_fifo_u32_device::write));
  	map(0x1400000, 0x1bfffff).rw(FUNC(model2b_state::copro_sharc_buffer_r), FUNC(model2b_state::copro_sharc_buffer_w));
  	map(0x1c00000, 0x1dfffff).rom().region("copro_data", 0);
-@@ -687,6 +714,7 @@
+@@ -687,6 +716,7 @@
  
  void model2b_state::copro_boot()
  {
@@ -449,7 +537,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  	m_copro_adsp->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
  }
  
-@@ -874,9 +902,11 @@
+@@ -874,9 +904,11 @@
  	return 0;
  }
  
@@ -461,7 +549,7 @@ M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
  
  	if (address < 0x1000)
  	{
-@@ -2479,6 +2509,7 @@
+@@ -2479,6 +2511,7 @@
  
  	m_framenum = m_screen->frame_number();
  	if (r924_on()) r924_ev('F', uint32_t(m_framenum), 0);
