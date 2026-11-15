@@ -51262,3 +51262,264 @@ of a default EEPROM) + R1020's remr commits (cherry-picked from fprem-subn)
 the 39,904 FP_SUBN 0 map s2702 fitted at 41,411) and R1019's logrl,
 Model2.sv's M2_I960_SUBN is 2 on every build: the 2C default of 1 (R1017)
 is gone. Checks and the fit follow below as they are run.
+
+**R1023 -- MODEL 2B MEASURED BEFORE ANY RTL: DEAD OR ALIVE'S SHARC PROGRAM
+IS SMALL AND IDLE -- 837 OF 4,096 UPLOADED WORDS EXECUTED, 186 DATA WORDS,
+NO DMA, NO INTERRUPTS, NO BUFFER RAM OR DATA ROM; ~74,000 WORKING
+INSTRUCTIONS A FRAME (13% OF MAME's 32 MHz CHIP), THE REST SPINNING ON THE
+FIFO FLAG. RUN IN MAME AT A SMALL CORE's SPEED, THE GAME KEEPS 60 FPS UP TO
+~5 clk_sys A WORD AT AN i960 SLOWDOWN OF 2.2-2.6 AND DROPS FRAMES FROM 8; THE
+FRAME IS THE i960's. A ONE-WORD-AT-A-TIME SHARC (R920 / R1009's shape) IS
+ENOUGH, AND THE TGPx4 IT REPLACES FREES 63 M10K, NOT ~20: THE PROGRAM CAN BE
+ON CHIP. PLAN ONLY -- NO PRODUCTION RTL.** Branch model2b (off the 2C
+release candidate 1871e21a), 2026-11-15.
+
+(R973 is in the model2a branch's copy of this study, not this branch's.)
+(Section: §10 and the 2B-CRX paragraph above. Authority: MAME 0.289 for the
+board and the instruction semantics; Hornet's SHARC (R973) for the units and
+the reference model; Model 1 has no SHARC, so it answers nothing here.)
+
+*What was believed (R973, the brief):* Hornet's SHARC (ppriest, GPL-3.0,
+permission given) is ~10,900 ALM / 156 M10K as built, too big; a new small
+core is wanted, TGPx4-style, with Hornet's float units and v1 as the lockstep
+reference. Speed, not area, the main risk: a SHARC word can be a multiply, an
+add and two moves at 32 MHz, and a one-at-a-time core at 80 MHz has ~2.5 clocks
+a word "to keep up". The room: ~4,500 ALM (the TGPx4 ~3,600 + STCC's sound
+board ~900) and very few M10K (~20).
+
+*THE INSTRUMENT (new, committed):*
+  * sim/sharc/mame_m2b_census.patch -- MAME 0.289 (on sm2-builds/mame-r943's
+    tree; built in sm2-builds/mame-m2b): per-PC counts with MAME's own
+    disassembly, the opcode a PC held (to catch overlays), DM / PM-data maps
+    (instruction vs host / DMA), IOP accesses, DMA starts, external accesses
+    by region, and one line a vblank: instructions, waiting, work, FIFO pops
+    and pushes, commands, the i960 halted on each FIFO, the FIFOs' depths, the
+    flips and the time from the vblank to the first flip; a direct-mapped
+    program cache of 256-4,096 lines simulated on the fetch stream. Waiting =
+    a NOP or a direct / relative jump whose successor is itself (the FIFO
+    polls); taken from MAME's daddr after the word, so a poll that falls
+    through counts as work. Inert unless M2B_CENSUS is set; needs -nodrc.
+    The PC is captured before the loop-end logic: MAME's CHANGE_PC at a loop
+    end rewrites m_core->pc before the word runs (the first census filed loop
+    ends under the loop top -- 852,875 "opcode changes" at 0x202ba, none real).
+  * The same patch PACES the SHARC: M2B_SHARC_HZ (80 MHz) with M2B_CPI (clk_sys
+    a word) or a per-address cost file, and M2B_I960_HZ (25 MHz / s, s = the
+    core's i960 time per MAME i960 time, R1005). MAME then couples the two as
+    it always does -- the speed model is MAME itself run at a small core's
+    rate, not a replay. sim/sharc/m2b_pace.sh sweeps (s, k).
+  * sim/sharc/mame_m2b_i960.lua: the i960's 2B-only accesses (IOP window,
+    bank register, both i8251 addresses, texture upper / lower MB, FIFO and
+    function port, protection window, buffer RAM).
+  * sim/sharc/m2b_census.py (spins / census / frames; Hornet's opcode tables
+    restated), sim/sharc/m2b_costmodel.py (clocks a word per address for a
+    proposed design, from the disassembly).
+  * Sessions: doa (Model 2B, Rev C) attract 180 s and play 240 s (PL_GAME=dig,
+    a coin at 30 s; a fight from ~110 s, snapshot checked), zerogun play 200 s
+    (PL_GAME=zg), 13 paced DOA play runs of 160 s. ROM-derived, all in the
+    scratchpad, none in the repository.
+
+*1. THE BOARD (MAME model2b_crx_mem / model2b_state, against 2A and 2C):*
+  * SHARC ADSP-21062 at 32 MHz, BOOT_MODE_HOST, data map: FIFO in (read)
+    0x0400000-0x0bfffff, FIFO out (write) 0x0c00000-0x13fffff, buffer RAM
+    0x1400000-0x1bfffff (32 K words, the i960's 0x900000), copro data ROM
+    0x1c00000-0x1dfffff. Both FIFOs 16 deep (2C: in 8; the 2A TGP: 8).
+    FLAG0 in = the in FIFO empty. FLAG1 in is MEANT as the out FIFO full, but
+    MAME's callbacks set it from m_copro_fifo_in->is_full() on out-FIFO
+    pushes / pops (a MAME slip, kept on record; DOA polls FLAG1 at 19 words,
+    and its out FIFO never passes 4 deep, 8 when paced, so it never matters
+    there). The out FIFO has no full callback: a SHARC can over-push it in
+    MAME (extra values); a core must stall it at 16. DOA drives FLAG3 (MODE2
+    0x60000: FLAG2 / 3 outputs) high while it waits for a command
+    (0x20121 / 0x20124, BIT SET / CLR ASTAT 0x400000); MAME wires it to
+    nothing -- whether the board routes it to the i960 is NOT known.
+  * The i960 side, beyond 2A's: 0x00880000 function port and 0x00884000 FIFO
+    as 2A / 2C (the upload: with copro_ctl1 bit 31 set, each FIFO write is a
+    16-bit external_dma_write -- 12,288 of them for DOA, packed three to a
+    48-bit word, 4,096 words); 0x008c0000-0x008c0fff the SHARC's IOP
+    registers written by the host in 16-bit halves (DOA at boot, 10 writes:
+    DMAC6 0, II6 0x20000, IM6 1, C6 0x1000, DMAC6 0xa1 -- DMA 6 enabled,
+    16-to-48 packing; ZG the same); 0x00980020 the bank register (two writes
+    of 0); 0x00980014 status (-1 while nothing is uploaded, as 2C); the i8251
+    at 0x009c0000 (data) / 0x009c0004 (status), byte 0 of each (umask32
+    0xff) -- NOT 2A / 2C's 0x01c80000 -- DOA 405,313 reads and 1,042 writes in
+    160 s, ZG 3.15 M / 9,438; texture RAM 0x11000000-0x113fffff with each
+    window's upper MB a MIRROR of the lower (2C maps 2 MB; this core drops the
+    upper MB, R928) -- DOA and ZG write the lower MB only (917,504 / 6.29 M
+    writes, 0 upper), so the 2C bridge's rule serves them; the luma RAM as
+    2C. copro_halt is empty and copro_boot clears HALT without a reset (as 2C).
+    MAME's reset PC is 0x20004 with the fetch queue at 0x20005: the first word
+    run is 0x20005 (DOA: JUMP 0x20080 (DB)); 0x20004 never runs in MAME.
+  * DOA 2B needs nothing the 2A DOA does not, protection included: the same
+    317-0229 (315-5838) map and hack mode (model2_0229_mem, init_doa). Its
+    program is 2A's moved down 0x1c0: the probe calls are at 0x5a0 and 0x5b8
+    (call 0x29c0 / 0x2a00; 2A 0x760 / 0x778), the flag at 0x54fadc (2A
+    0x54fabc). R887's patch, moved: 0x5a0 and 0x5b8 -> 5c801e01. MAME,
+    stock m2lod, 60 s, a coin at 30: with the chip 610 window accesses and the
+    flag 1 from the first second; patched 0 accesses and the flag 1 the same
+    (56 of 57 samples each, the first 0); a fight at 60 s. Not an equivalence
+    proof (the skipped polls move the boot), as R887 said of 2A.
+    The copro data ROM is EMPTY for doa (ROM_REGION ERASE00) and the SHARC
+    never reads it, nor the buffer RAM (0 reads / writes, DOA and ZG): the
+    SHARC's whole external world in both games is the two FIFOs.
+  * For a 2B build of this branch: m2_copro gets a SHARC variant in place of
+    the TGPx4 (16-deep FIFOs, the 16-bit upload packer, the IOP write window,
+    the bank register as a no-op, FLAG0 / FLAG1 / FLAG3); Model2.sv a B2 board
+    flag beside C2 (copro selects unchanged; 0x980014 for B2 too; the i8251
+    decoded at 0x009c0000 / 0x009c0004 byte 0 instead of 0x01c80000;
+    0x008c0000 and 0x00980020 decoded); the cpu bridge's 2C texture / luma /
+    0x12000000 rules taken for B2; the DSB off; 2B game IDs; the copro's
+    SDRAM ports (program copy, data ROM) unused by DOA / ZG (kept as
+    parameters for 2B games that read the data ROM).
+
+*2. THE CENSUS (MAME 0.289 -nodrc; DOA attract + play merged, 24,161 vblanks):*
+  * PROGRAM: 4,096 words uploaded once (0.84 s), never rewritten (0 opcode
+    changes at any PC). 837 words executed in 17 runs, highest 0x20d9d (word
+    3,485). Zero Gunner: 1,296 words, highest 0x20dad. The same command-
+    library shape in both (INFERRED: one supplied with the board): a jump
+    table at DM 0x30000 (DOA 89 entries, ZG 80), a command word whose code is
+    checked in three byte fields (DOA 0x20125-0x2012e), stored to IOP 0x08
+    (MSGR0), dispatched by CALL (M8, I15); 24 commands seen in DOA, the
+    busiest 0x11 (1.93 M calls), 0x19, 0x05 / 0x06 (matrix push / pop).
+  * DATA: 186 words of block 1 (0x30000-0x30058 the table, 0x30200-0x3023b
+    the matrix stack, 0x30300-0x30316 constants, 0x301f0-0x301fb, 0x30100);
+    ZG 209 (all below 0x30317). IOP 0x00 (SYSCON 0xa100), 0x02 (WAIT 0xc9400),
+    0x08 written; none read. No block-0 data, no short-word space, no PM-bus
+    data, no DMA, no interrupts or IDLE (IRPTEN never set), no circular
+    buffers (L0-L15 written 0), no alternate registers, no fixed multiplier,
+    no MR. DAG registers used: I0 I1 I2 I6 I7 I15, M0 M1 M7 M8 M9.
+  * MODE1: DOA 0x18000 (RND32 | TRUNCATE), ZG 0x10000 (RND32). See NOT
+    SETTLED: TRUNCATE.
+  * WORK: of 13.39 G instructions 11.87 G (88.7%) are the FIFO waits (0x20123,
+    the NOP of DO 0x20123 UNTIL NOT FLAG0_IN, alone 11.84 G); work 1.519 G.
+    By form (work): compute 21.7%, compute + DM postmod 14.9%, compute +
+    DM->dreg immmod 10.5%, NOP 8.0% (delay slots), jump relative 6.6%,
+    imm -> ureg 4.8%, jump direct 4.2%, imm shift 4.0%, compute + ureg<->ureg
+    3.4%, compute + DM premod 3.4%, BIT SET/CLR ASTAT 3.0%, RTS 2.7%, the rest
+    under 2.2% (22 forms in all; no type-1 dual moves). Compute: none 23.5%,
+    FMUL 10.9%, FADD 4.6%, AND 4.6%, FMUL || FADD 3.7%, COMP 3.5%, FMUL ||
+    FSUB 1.9%, FSUB 1.8%, FABS, FNEG, FLOAT, FPASS, FIX, SUB, DEC, RECIPS,
+    INC, FCOMP, PASS, LOGB, RSQRTS, NEG, ADD; shifts LSHIFT / ASHIFT / BTST.
+    Conditions: FLAG0_IN, FLAG1_IN, EQ, NE, LT, LE, GE, GT, NOT SZ. Data
+    accesses 0.37 a work word. ZG: the same ops (fewer RECIPS), 93.1% waits.
+  * PER FRAME (DOA, MAME's chip = 556,288 cycles a vblank):
+                         work p50 / p90 / p99 / max      FIFO in / out / cmds (p50)   i960 halted on out (p50)
+      attract 20-180 s   70,749 / 81,566 / 89,178 / 96,543   3,080 / 2,762 / 1,067       1.07 ms
+      fight 60-240 s     74,029 / 77,441 / 82,812 / 87,226   3,227 / 2,720 / 1,117       1.11 ms
+    One flip every vblank throughout (60 fps; 0 skipped in 19,558). The in
+    FIFO peaks at 13 (never full: the i960 never halts on it), the out at 4.
+    ZG play 60-200 s: work p50 46,557, p90 66,190; in FIFO 18 (the i960
+    halted on it 19 ms in 200 s), out 6. (ZG's p99 / max 228,852 is one value
+    repeated over the frames from 27.3 s -- not understood, not chased.)
+  * HOW THE i960 WAITS: by reading the out FIFO -- MAME halts it there until a
+    word arrives (fifo_control 0x980004 read once in the session), as R1005
+    found for the TGPx4. MAME's frame (s = 1): vblank to flip p50 5.32 ms, max
+    7.32; the i960 halted on results 1.1 ms of it.
+  * PROGRAM CACHE (direct-mapped, every fetch): DOA 2,048 lines = 837 misses
+    in 160 s (cold only; no two executed words share an index), 1,024 lines
+    30.6 M; ZG 2,048 lines 2.75 M (~240 a vblank), 4,096 lines 1,296.
+
+*3. THE SPEED MODEL (MAME paced: SHARC 80 MHz at k clk a word, i960 at
+25 MHz / s; DOA play, 110-160 s = 2,876 vblanks in the fight; frame = vblank
+to flip, budget 17.39 ms):*
+
+      s     k (clk_sys a word)   frame p50 / p99 / max (ms)   frames over   i960 halted on results p50
+      1     2.5 (= MAME)          5.32 /  6.49 /  7.32          0             1.15 ms
+      2.2   2.5                   9.64 / 11.87 / 14.35          0             0.64
+      2.2   5                    11.28 / 13.64 / 16.24          0             2.18
+      2.2   8                    13.92 / 16.33 / 17.34          3             4.52
+      2.2   12                   16.03 / 17.37 / 17.38        752 (2 vblanks)  7.66
+      2.2   20                   -- half rate: 1,423 of 1,451 frames take 2 vblanks
+      2.6   3.3                  11.89 / 14.24 / 16.06          0             0.95
+      2.6   4                    12.29 / 14.65 / 16.47          0             1.34
+      2.6   5                    12.96 / 15.31 / 17.15          0             1.95
+      2.6   8                    15.14 / 16.81 / 17.38         34             4.15
+      3.0   3.3                  13.24 / 15.90 / 17.22          6             0.82
+    Design A (below, per-address costs, 2.45 clk a work word): s 2.2 9.63 /
+    11.85 / 14.34, 0 over; s 2.6 11.43 / 13.79 / 15.60, 0 over. Design B (a
+    plain FSM, 5.06): s 2.2 11.42 / 13.80 / 16.41, 0 over; s 2.6 13.10 /
+    15.45 / 17.30, 0 over -- 0.09 ms from the vblank.
+  VERDICT: DOA's frame is the i960's. Each clock a word costs ~0.5-0.9 ms of
+  the frame; at s 2.2-2.6 the game holds 60 fps to k ~5 (the worst frame
+  then 0.2-1.2 ms from the vblank) and drops from k ~8. A core at the
+  TGPx4's measured 3.27 (R1009) leaves ~1.3 ms at s = 2.6; Hornet's v2 runs
+  2.32 (R973). At s = 3.0 frames drop at any k -- the i960, not the SHARC.
+  So "2.5 clocks to keep up" over-states it: the SHARC is 13% busy in MAME
+  and only the part of its work the i960 waits on costs frame time. The
+  target set here: <= 3.5 clk_sys a work word on DOA's mix, <= 5 the limit.
+  (ZG's work is ~60% of DOA's; it was not paced.)
+
+*4. THE PROPOSAL (not built; for Ben's review):*
+  * SHAPE: R920 / R1009's. One word at a time; the next word fetched while
+    this one runs (two clocks a word the floor); operand reads in S_DEC; the
+    float results written behind a scoreboard (R1006 / R1009's writer on a
+    schedule a clock ahead, the units' fixed latencies counted down); a
+    control word's effect in S_DEC. MAME's sequencing kept exactly: the fetch
+    queue (pc / daddr / faddr), delayed branches, the loop stack's end test
+    at fetch, MAME's ASTAT history for loop conditions (astat_old_old_old).
+  * UNITS: Hornet's sharc_fadd (511 ALM, 2 stages) and sharc_fmul (376 ALM, 2
+    DSP), copied with 87f9866 recorded; FMUL || FADD / FSUB on the two at
+    once. One ALU-side block for FIX / FLOAT (one shifter shared with
+    LSHIFT / ASHIFT / BTST), FABS / FNEG / FPASS / FCOMP / LOGB, RECIPS /
+    RSQRTS (MAME's seed tables); a 32-bit fixed ALU (AND / COMP / ADD / SUB /
+    INC / DEC / PASS / NEG). NOT built in the first cut (census: never run in
+    DOA or ZG): the fixed multiplier and MR, dual add / subtract, type-1 dual
+    moves, circular buffers, bit-reverse, alternate register sets,
+    interrupts, IDLE, DMA beyond the boot upload, short-word addressing,
+    PM-bus data. Each behind a parameter that flags an unsupported word
+    (Hornet's `unsup`), so another 2B game shows what it needs on the overlay.
+  * REGISTERS: R0-R15 as four 4-register MLAB banks (the multifunction groups
+    R0-3 / R4-7 / R8-11 / R12-15, one read port each, so FMUL || FADD reads its
+    four operands in one clock) plus a copy for the store / shifter port; DAG
+    I / M in MLAB with one address adder (pre / post modify), L / B kept as
+    registers for the unsupported-use flag; PC stack 30 x 24 and loop stack
+    6 deep in MLAB; ASTAT / STKY / MODE1 / MODE2 in flip-flops.
+  * MEMORY: THE PROGRAM ON CHIP, 4,096 x 48 = 24 M10K (no cache, no SDRAM
+    port, no miss: the 2K-line cache would be 10 M10K and 2.75 M misses on
+    ZG); DM 2,048 x 32 = 7 M10K (DOA / ZG use < 0x317; 32 K would be 128),
+    addresses above it flagged; FIFOs 16 deep in MLAB.
+  * BUDGET (s2940, the 2C release candidate's fit, 80 MHz): m2_copro 3,590
+    ALM / 63 M10K / 3 DSP (the TGPx4 3,502 / 61 / 3), the DSB 867 / 16 / 3;
+    device 41,388 ALM, 531 / 553 M10K, 110 / 112 DSP. A 2B build has ~4,450
+    ALM, ~100 M10K and ~8 DSP where those two were. ESTIMATE (by parts,
+    Hornet's fitted unit sizes, R920's skeleton as the yardstick; not
+    mapped): units ~1,450 (fadd 511, fmul 376, the rest ~550), fixed ALU /
+    shifter ~250, R file ~150, DAG ~200, sequencer and stacks ~450, decode and
+    the ureg mux ~400, upload / IOP / FIFO glue ~250: ~3,150 by parts,
+    3,000-4,000 fitted (R1009: the TGPx4 fitted +1,794 over its map) -- under
+    the budget, not by much at the top. M10K ~33 (24 + 7 + 2), DSP 2.
+  * VERIFICATION: (1) a capture patch (as R924's for the TGPx4): the upload,
+    every i960 push (data, function code) and every SHARC push, with MAME's
+    times; (2) a replay bench (tb_sharc_replay) feeding the core the capture
+    and checking every out-FIFO word against MAME's; (3) lockstep against
+    Hornet's v1 (rtl/cpu/sharc, MAME's interpreter transcribed; simulation
+    only) at every retired word -- PC, R0-R15, the DAG registers, ASTAT /
+    STKY, the stacks; (4) R1006's checkpoint start (MAME's state written in
+    at a vblank with both FIFOs empty) to reach a fight in minutes; (5) the
+    float units against Hornet's 9.2 M vectors, and planted faults as R1018;
+    (6) m2b_pace.sh with the RTL's measured per-address costs (--pcprof as
+    R1005) to re-check the frame. Then quartus_map; the fit is the user's.
+
+*NOT SETTLED -- the risks, plainly:*
+  * TRUNCATE. DOA sets MODE1.TRUNCATE. The ADSP-2106x User's Manual, AS
+    REMEMBERED (the PDF host was unreachable from here; not re-read), makes
+    TRUNCATE = 1 round-toward-zero for ALU and multiplier float results.
+    MAME (compute.hxx) uses it only for overflow (largest finite) and FIX
+    (floorf), rounding every result to nearest on the host -- and Hornet's
+    units are bit-exact to MAME. If the manual says what is remembered, DOA's
+    silicon geometry differs from MAME's in the last bit of every float op,
+    and a silicon-first core needs round-to-zero in fadd / fmul (cheap: drop
+    the round-up) with MAME-lockstep only in a MAME mode. ZG (TRUNCATE 0) is
+    unaffected. To read the manual before the units are copied.
+  * s FOR DOA ON THIS CORE is not measured (R1005's open point, again). At
+    s = 3.0 frames drop with any SHARC; the board could say (the M2_WHY
+    build's 'Y' with DOA 2B's flip-and-wait address).
+  * The area is by parts, not mapped. R1009's fitted surprise (+1,794 over the
+    map) is the warning; the decoder and the ureg mux are the soft numbers.
+  * Only DOA (and ZG's census) measured. Other 2B games (Virtua Striker,
+    Fighting Vipers, Virtual-On, Last Bronx -- not here; Last Bronx uploads
+    through external DMA port 0) may use DMA, interrupts, the data ROM or the
+    buffer RAM; the unsupported-word flag is the guard, not a guarantee.
+  * FLAG1 (MAME's slip), FLAG3 (unconnected in MAME), and the 0x20004 reset
+    word are board questions MAME cannot answer.
+  * MAME's 2B pacing (32 MHz, a word a cycle, the i960's 25 MHz) are MAME's
+    numbers, not the hardware's.

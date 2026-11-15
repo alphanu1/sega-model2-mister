@@ -1,5 +1,49 @@
 # Handoff
 
+## 2026-11-15: model2b -- the 2B SHARC measured and planned on Dead or Alive (R1023), no production RTL
+
+Branch `model2b` off the 2C release candidate 1871e21a (worktree
+sm2-builds/model2b). Study R1023 has the record. Not pushed, not merged; no
+RTL changed. Waiting on Ben's review of the plan before any RTL.
+
+  * Hornet's core cloned read-only to tools/hornet-ref at 87f9866 (= 91edb27
+    for every SHARC file); .gitignore and THIRD_PARTY.md updated (the author's
+    permission, R973). Nothing copied from it yet but its opcode tables, as
+    data, in sim/sharc/m2b_census.py.
+  * MAME census + pacing patch (sim/sharc/mame_m2b_census.patch; built in
+    sm2-builds/mame-m2b, a copy of mame-r943; needs -nodrc), run scripts
+    m2b_census.sh / m2b_pace.sh, the i960-side Lua, the census / frames report
+    and a per-design cost model. Captures in the scratchpad only.
+  * DOA 2B: 4,096 PM words uploaded, 837 executed (highest 0x20d9d), 186 data
+    words, no DMA / interrupts / circular buffers / buffer RAM / data ROM; 22
+    instruction forms, ~25 compute ops, FMUL || FADD / FSUB the only
+    multifunction. ~74 k working words a frame (13% of MAME's chip), 88.7% of
+    all its instructions spin on FLAG0. The i960 waits by reading the out
+    FIFO (~1.1 ms a frame in MAME). 60 fps throughout.
+  * Speed (MAME itself paced, SHARC at 80 MHz x k clk a word, i960 at
+    25 MHz / s): 60 fps holds to k ~5 at s 2.2-2.6; drops from k 8; at s 3.0
+    the i960 drops frames at any k. Target <= 3.5 (the TGPx4's 3.27 leaves
+    ~1.3 ms at s 2.6).
+  * Budget correction: the TGPx4 fitted at 3,502 ALM and 61 M10K on s2940
+    (m2_copro 3,590 / 63), the DSB 867 / 16 -- ~100 M10K and ~4,450 ALM free in
+    a 2B build, so the whole 4 K-word program goes on chip (24 M10K), DM 2 K
+    words (7). Estimate 3,000-4,000 ALM fitted, by parts (not mapped).
+  * Board: the 2B i8251 is at 0x009c0000 / 4 (not 0x01c80000), the host IOP
+    window 0x008c0000 and bank register 0x00980020 are new, 16-deep FIFOs,
+    16-bit upload packed 3 to 1. DOA 2B's protection patch is 2A's moved by
+    -0x1c0: 0x5a0 / 0x5b8 -> 5c801e01 (checked in MAME: flag 0x54fadc 1, no
+    window access, a fight at 60 s).
+
+FINDINGS THAT WERE WRONG ON THE WAY: the first census filed loop-end words
+under the loop top (MAME's CHANGE_PC rewrites pc before the word runs) and
+reported 852,875 "self-modifying" opcode changes -- none were real. The
+brief's "~20 M10K" counted the free blocks, not the TGPx4's own 61.
+
+REMAINS (Ben's call first): TRUNCATE -- DOA sets MODE1.TRUNCATE, which the
+manual (as remembered, not re-read) makes round-to-zero, and MAME / Hornet
+round to nearest: read the manual before copying the units; s for DOA on the
+board (unmeasured); then the capture patch, the replay bench, the RTL.
+
 ## 2026-11-15: fprem-subn -- remr (i960_fprem) takes and delivers subnormals, exact (R1020), quartus_map only
 
 Branch `fprem-subn` off i960-2a 0ecc3576 (the 2A build). Study R1020 has the
