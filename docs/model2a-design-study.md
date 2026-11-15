@@ -47666,3 +47666,277 @@ s2540's count).
 no other masters; R927's LAT 12 is the board guess); timing at 40 MHz of the
 three-way i-cache output mux (one LUT, as before with two) and of lsu_busy
 into port 1's address; whether the changes move the board's slowdown.
+
+**R1013 -- THE i960's FP UNITS TAKE AND DELIVER SUBNORMALS, AS THE 80960KB
+DOES IN NORMALIZING MODE WITH UNDERFLOW MASKED (R1012), WHICH EVERY GAME
+MEASURED RUNS. STCC's RACE CHECKPOINT: THE 100 SUBNORMAL VALUE DIFFERENCES
+GO TO 0, ADDRESSES, CONTROL FLOW AND CYCLES UNCHANGED. R1011's "473" WAS 100
+SUBNORMALS AND 373 STACK WORDS THE REGISTER RING NEVER WROTE. NO ADDED
+LATENCY ON A NORMAL OPERAND. MODEL 2 MAP: +655 ALM FOR EVERY UNIT (FP_SUBN
+2), +240 FOR THE SINGLE-PRECISION CONVERSIONS ALONE (FP_SUBN 1), WHICH IS
+ALL STCC NEEDS. 0 DSP. BENCH AND MAP ONLY; NOT FITTED, NOT ON A BOARD.**
+Branch i960-subnorm (off main 2f61c2d1), 2026-11-15.
+
+*What was believed:* §8.1 / the spike's "Deviations recorded": the FP units
+flush subnormal operands and results to zero, a known difference from MAME's
+host doubles only. R998: "nothing measured puts a subnormal in a game".
+R1011: 473 LSU value differences in STCC's 0.6 s race window, all put down
+to the flush. R1012 (branch new-2c-games): the manual says the part has no
+flush mode in the mode STCC runs.
+
+*What the manual says (80960KB PRM, Mar 1988; READ, kb.txt):*
+  * AC bit 29 (normalizing mode) set: "the processor operates on valid
+    floating-point operands, regardless of whether they are normalized or
+    denormalized" (§12 Normalizing Mode). Clear: a denormalized SOURCE
+    operand raises a floating reserved-encoding fault, "no result is
+    stored"; there is no flag or mask for it.
+  * "In either mode, denormalized numbers are produced if the underflow
+    exception is masked" (bit 25). Underflow (Floating Underflow
+    Exception, Figure 12-6): tininess is detected AFTER rounding; masked,
+    the result is denormalised and stored, the underflow and inexact flags
+    set only if the denormalised result is inexact. Unmasked: no result,
+    the extended value in the fault record, a floating underflow fault.
+  * logbnr of a denormal: "the unbiased exponent that src would have if the
+    format had unlimited exponent range" (11-69).
+  * Rounding is to the DESTINATION's precision (real / long real /
+    extended); the core holds fp0-fp3 as doubles (spike §8), unchanged here.
+
+*Every game's AC (MAME 0.289 m2lod, -nothrottle, sampled every 0.5 s for
+120 s of attract; RUN, scratch acscan/):* bel, daytona, dynamcop, hotd,
+manxtt, motoraid, pltkids, segawski, skisuprg, skytargt, vcopa, waverunr,
+zerogun 0x3F001004; doa, overrev, vcop2, vf2 0x00000004 for the first
+sample, then 0x3F001004;
+srallyc 0x00000001 then 0x3F001002; stcc 0x3F0010xx (the condition code
+moving); rascot2 0x3F001001; topskatr 0x3F001002 (MAME aborted later:
+exit 134). desert not run (its model1io ROM is not in ~/roms/Model2). So every one sets bit 29 (normalizing mode) and masks 24-28
+(all FP exceptions masked), rounding 00, once its start-up code has run; the
+pre-modac AC is the reset 0 (bit 29 clear) and no FP instruction runs there
+in these games as far as this sampling can say (READ: a sample every 0.5 s
+cannot see an instruction; an FP op between reset and the first modac is
+not ruled out).
+
+*THE CORE AND AC (READ):* i960_top reads only AC[31:30] (fpmisc's rounding)
+and the condition code. It has no fault machinery at all (§1 scoped faults
+out; fault<cc> traps), never sets the FP sticky flags (16-20), and ignores
+the masks and bit 29 -- as MAME does. So AC bit 29 clear (the
+reserved-encoding fault) and an unmasked underflow (the underflow fault) are
+NOT MODELLED: either needs the fault call (fault table, fault record) the
+core does not have, and no game measured runs that way. Recorded, not built.
+
+*BUILT (rtl/cpu/i960; each unit SUBNORM, default 1; 0 is the old flush --
+the same results, test_i960_fp_flush, not always the same netlist):*
+  * i960_fpcvt -- widening: a subnormal single (m x 2^-149) becomes a
+    normal double (23-bit leading-zero count and shift; exponent 896 - lz).
+    WREG 1 (i960_top) takes it from a register of the previous cycle's s_in:
+    rd1 / rd2 hold from T_EXEC through T_FP (ra1 / ra2 default to d_src1 /
+    d_src2), the units sample in T_FP, so the count and shift are not on the
+    register-file -> unit operand path (the clk_i960 critical path family,
+    R566 / R845). Narrowing: below 2^-126 (exponent <= 896) the significand
+    is shifted right by 897 - e (capped at 31) into the sticky before the
+    same round to nearest even; a rounding carry makes 2^-126.
+  * i960_fpadd -- a subnormal is 0.m with effective exponent 1: the
+    alignment distance is one less when exactly one exponent field is 0
+    (a carry-in on the existing subtract); the normalising left shift is
+    floored by a marker bit at 55 - (e - 1), registered with the sum and
+    ORed into the leading-zero count; a result still under bit 55 has
+    exponent field 0. No new shifter. (A subnormal sum is always exact.)
+  * i960_fpmul -- operands go to the DSPs as they are (no hidden bit for a
+    subnormal): nothing new in front of the multiply. The subnormal
+    operand's leading-zero count is computed beside it; stage 2 shifts the
+    product left by min(lz, max(e1, 0)) and, when e1 < 0, right by -e1
+    (capped at 63) with the lost bits in the sticky -- one funnel, as the
+    two never both act (AREA below); exponent field 0 when
+    E = e1 - lz < 0, or 0 with the top bit clear. Two subnormals need no
+    case of their own (e1 = -1021: all sticky, a signed zero).
+  * i960_fpdiv -- a subnormal dividend / divisor is normalised in S_NORM,
+    one bit a cycle each, the exponent adjusted (max(lz) + 1 cycles, only
+    then). A quotient below 2^-1022 is produced at its denormalised
+    alignment: with exp_q <= 0 the restoring loop stops 1 - exp_q steps
+    early (the remainder is the sticky as before) -- FEWER cycles, down to
+    3 -- and exp_q = 1 with the first bit clear skips the 1-bit normalise.
+    Not for a special result (0 / x, x / inf): those keep their 58.
+  * i960_fpsqrt -- a positive subnormal is normalised in S_NORM (lz + 1
+    cycles) and then iterates as a normal operand would; its root is normal.
+  * i960_fpmisc -- roundr / cvtri / cvtzri see a subnormal's non-zero
+    fraction (ceil / floor give +-1 as they should; they gave 0); logbnr
+    of a subnormal is -(1023 + lz), built directly as a double beside the
+    int-to-double path; compare was already right (raw-encoding compare).
+    The scale path (SCALE, op 6) i960_top does not use still flushes.
+  * i960_top -- FP_SUBN (Model2.sv M2_I960_SUBN, default 2): 2 every unit;
+    1 the conversions only (singles in general registers exact, a double
+    below 2^-1022 still flushed); 0 the old flush. scaler's 2^n for n in
+    -1074..-1023 is now the subnormal pow() gives (SUBN_D), not 0.
+  * Timing: add and multiply keep their 2 cycles; divide and sqrt keep 58
+    for normal operands and every special (benches check it). A subnormal
+    OPERAND costs divide / sqrt lz + 1 cycles; a subnormal QUOTIENT saves.
+    The manual's own subnormal timings were not looked for.
+  * NOT CHANGED, for the ports (2A / 2C): i960_fprem (remr, F2A) flushes a
+    double subnormal; with FP_SUBN >= 1 its single operands arrive as normal
+    doubles and a remainder of two singles is exact, so remr is right for
+    the r forms, not for a subnormal double operand. i960_fptrans differs on
+    2A / 2C (logrl) but uses the same three units.
+
+*PROVEN (all RUN):*
+  * Unit benches against the host's IEEE double / float (gradual underflow,
+    default mode), subnormals no longer excluded, new directed sets:
+      fpadd   880,268 checks, 364,315 with a subnormal operand, 71,200 with
+              a subnormal result (near-cancellation to subnormals, tiny
+              pairs, subnormal + random): 0 mismatches
+      fpmul   1,459,621 / 838,289 / 363,447 (products 2^-1090..2^-1010,
+              subnormal x normal / subnormal, ties m*2^-1074 x 1/2, 3/4 ...,
+              400,000 sparse-significand products): 0
+      fpdiv   474,775 / 206,071 / 57,664 (quotients 2^-1090..2^-1010, ties,
+              subnormal / subnormal); cycles: 58 for every non-subnormal
+              case incl. specials, 3..111 on the subnormal paths: 0
+      fpsqrt  404,843 / 176,350 (every leading-zero count, both signs,
+              subnormal perfect squares); 58 normal, 60..111 subnormal: 0
+      fpmisc  70,080,262 / 770,016 (every leading-zero count, compares of
+              neighbours, logb, round / cvtri / cvtzri in all modes): 0
+      fpcvt   10,831,449: every positive subnormal single widened (2^23,
+              and every eighth negative), narrowing over 2^-160..2^-120 with
+              ties and sticky-only-in-the-shifted-bits cases: 0; the WREG 1
+              build with s_in changed the cycle before: 0
+    and the SUBNORM 0 builds against the old exclusions (test_i960_fp_flush):
+    all PASS, so FP_SUBN 0 is the flush exactly.
+  * Transcendentals (test_i960_fptrans, RTL sequencer on the new units vs
+    tools/i960_fptrans.py, now plain IEEE -- --flush keeps the old model;
+    the ROM it writes is byte-identical): 23,933 vectors, 0 mismatches.
+    Against the old units on the same vectors: 129 results change, every
+    one with a subnormal argument or an atan2 ratio < 1e-60, and all 129
+    now equal glibc's sin / tan / atan2 bit for bit (0 did before) -- R998's
+    "sinrl of a negative subnormal is +0" is gone. 429 change cycles only
+    (subnormal intermediates; the divider's early stop). R845's sequencer
+    side by side (test_i960_fptrans_ab, 200,000): 0 / 0.
+  * Whole CPU (tb_i960_top + i960_cpu_ref.h, reference SUBN 2 = MAME's host
+    doubles, no flush): the register seeding no longer avoids subnormal
+    singles -- it seeds them, subnormal double pairs and scaler's n in the
+    subnormal 2^n band, and points half of scaler at fp0-fp3, from a
+    second generator so the programs are the same. test_i960_top, _irq,
+    _lat (5 runs), _vc, _ring (4), _ring4 (2), and _subn (new: FP_SUBN 1
+    and 0, each against the reference built the same way): PASS, 0 programs ended on a
+    subnormal operand (the VC runs' early ends are the cvtzril / sinrl range
+    rules). Seeds 1-10 x 1,000 programs, plain and VC: 0 mismatches,
+    10,624 FP retires with a subnormal operand, 2,019 with a subnormal
+    result. (The default run's CPI moves 25.94 -> 26.24: the seeded values
+    differ, not the programs.)
+  * STCC's race checkpoint (R1011's bench: i960-cpi 7b9a493e exported to
+    the scratchpad, these six units and the i960_top edit dropped in; 2C
+    build; capture ck_race, LAT 12): base 473 LSU values differ, new 373;
+    the 100 that went are the five FP instructions at 0xa768-0xad18 (20
+    frames x 5: 0x202638 / 0x20263c). Instruction and I/O digests equal
+    (596f4b35a8fdd5c3 / 0a02091f1a1ad1bb), 1,327,439 LSU accesses all at
+    MAME's addresses, CPI 6.890 both, 21,867,390 cycles both. The 373 left
+    are reads of stack words at 0x2009cc-0x200b0c (ips 0x52054, 0x8960,
+    0x66d34, 0x2300, 0x5d824) and 4 writes derived from them: the same build
+    with MAME's register-cache rule (RING 0, FRAMES 4) has 100 (base) and 0
+    (new) -- 1,327,439 of 1,327,439 LSU values MAME's; FP_SUBN 1 the same
+    0; LAT 6 373 (CPI 6.049, as R1011). So R1011's 473 was 100 subnormals
+    + 373 ring save-area words (R1011 flagged 0x52054 as one, but counted
+    all 473 against the flush).
+  * Planted faults (scratch mutsn/mut.py, one edit each, the bench named):
+    fpadd -- no distance correction (130,230 mismatches), no marker
+    (36,333), no exponent-0 field (71,200), effective exponent 1 dropped
+    (3,389); fpmul -- left shift not floored (13,180), right-shift sticky
+    dropped (15,925), the left / right sticky masks one bit long / short
+    (5,677 / 620), the right shift one short (196,224), the subnormal
+    test's E = 0 term (6,701), lz off by one (186,360) -- on the final
+    funnel; on the first version the right-shift sticky SURVIVED until the
+    400,000 sparse-significand products were added; fpdiv -- early
+    stop one step long (56,626), S_NORM exponent sign (154,198), the
+    exp_q = 1 term (1,154), early stop on a special (caught by the cycle
+    check); fpsqrt -- S_NORM parity, exponent not counted (87,571 each);
+    fpmisc -- logb lz off by one, the fraction zeroed (96,449); fpcvt --
+    narrowing shift 896 (286,868), its sticky (44,235), the sticky's window
+    one bit short (3,062), widening exponent
+    (9,438,748), the WREG register holding a stale cycle (5,243,624 on the
+    WREG bench; test_i960_top 1); i960_top -- FP_SUBN 1 / 0 against the
+    SUBN 2 reference (caught), scaler's 2^n off by one bit (SURVIVES the
+    default run; caught with +seed=2 +random=2000). All caught except as
+    said.
+
+*AREA (quartus_map 17.0 of the original Model 2 core, main, RUN; ALM is
+Quartus's map estimate, which moves +-30 between near-identical maps):*
+
+       build                      ALMs est.   registers   DSP   block bits
+       base (2f61c2d1)            39,052      48,002      102   4,691,504
+       FP_SUBN 1 (conversions)    39,292      48,061      102   the same
+       FP_SUBN 2 (every unit)     39,707      48,122      102   the same
+
+  So +240 ALM for the single-precision subnormals, +655 for all of them;
+  no DSP, no M10K. Per entity in the whole-core maps, combinational ALUTs /
+  registers, base -> FP_SUBN 2: fpmul 364 -> 928 / 295 -> 301; u_cvt_a
+  (widen + narrow) 111 -> 273 / 0 -> 29; u_cvt_b (widen) 11 -> 94 / 0 -> 29;
+  fpdiv 279 -> 385; fpsqrt 279 -> 332; fpmisc 1,205 -> 1,229; fpadd 1,098 ->
+  1,034 / 139 -> 194 (the marker register; its ALUTs are inside the noise);
+  i960_top's own logic 3,800 -> 3,802. i960_top in all: 11,149 -> 12,141
+  ALUT. Each unit alone (ALM est., old -> new): fpmul 335 -> 753, fpcvt
+  (both directions) 168 -> 304, fpsqrt 241 -> 336, fpdiv 305 -> 335, fpadd
+  786 -> 826, fpmisc (STAGED) 980 -> 977; i960_top alone (VC, ring of 8)
+  8,060 -> 8,899. SUBNORM 0 builds alone: fpadd and fpmul identical to the
+  old units, fpdiv +8, fpsqrt +2, fpcvt +23 ALM.
+  For 2C (~800 ALM from full, R1011's map 39,701): FP_SUBN 2 would take most
+  of the headroom; FP_SUBN 1 is the fit -- the checkpoint bench gives 0 LSU
+  differences with it too (below), because every subnormal STCC makes is a
+  single. A double below 2^-1022 needs long-real data near 1e-308 (the r
+  forms' operands and results, singles widened, never get there: two
+  singles multiply to >= 2^-298), and on the chip fp0-fp3 are EXTENDED
+  (exponent to 2^-16382), so a double subnormal in an fp register is the
+  core's §8 deviation either way; FP_SUBN 2 matches MAME's doubles there,
+  FP_SUBN 1 flushes. Model2.sv's default is 2 on main (room: the release
+  fit is 39,275 of 41,910).
+
+*TIMING (post-map STA of i960_top alone, 25 ns on clk; post-map delays are
+~2x a fit's -- the old units, which meet 40 MHz in the core, show -15 to
+-26 ns -- so only the differences mean anything; RUN):*
+
+       endpoint (worst path into)            old       new
+       fpmisc r2 (insn -> ...; the worst)    -25.8     -22.0
+       fpadd s1_sum (operands -> adder)      -22.4     -17.2
+       fpmul y (DSP product -> stage 2)      -15.7     -20.5
+       write-back wd (unit y -> f2u -> wd)    -4.9      -6.4
+       fpmul e1 / lz1 (operands -> LZC)      +6.8      +3.8 / +1.5
+       fpdiv exp_q (operands -> exponent)     +9.7      +4.4
+       u_cvt_a sub_q (rd1 -> widening reg)     --       +17.4
+
+  The worst path is the same one (decode -> fpmisc's round), and the
+  operand path into the adder is not longer: the widening's count and
+  shift sit behind a register. What grew: fpmul's stage 2 (+4.8 post-map:
+  the shift amount from e1 / lz1, a 7-level funnel, then the round) and the
+  write-back through the narrowing's shift (+1.5). Both start at registers
+  inside the FP path; a fit says whether they matter at 40 MHz (Model 2's
+  clk_i960 slack +1.350 ns, 2C +0.990, 2A +0.267 in the 20261113 releases).
+  If fpmul's stage 2 is short, lsh / rsh / the funnel amount can be
+  registered from stage 1 (they depend only on e1 and the LZC), moving
+  ~2 carry chains back beside the DSPs.
+
+*WRONG FIRST, KEPT:*
+  * The divider's early stop first fired on any exp_q <= 0, including a
+    special: 0 / x with |x| >= 1 then took 3 cycles, not 58. Found as
+    transcendental vectors with ordinary arguments (atan2(2, 1), tan(1e-300))
+    taking fewer cycles than before; gated on the special flags; the unit bench now checks every
+    non-subnormal case at 58.
+  * fpmul's "two subnormals are zero" special was dead logic (its mutant
+    survived): e1 = -1021 already shifts everything into the sticky.
+  * The narrowing's sticky and the multiplier's right-shift sticky were
+    first "caught" only by lint (an unused signal); with lint off for the
+    mutant, the multiplier's survived the bench until sparse significands
+    were added.
+
+  * fpmul's first stage 2 was a 106-bit left shift and a 106-bit right
+    shift with a 106-bit mask: +1,030 ALM for the whole change in the first
+    map. One funnel (the two shifts never both act) delivering only the 55
+    bits the rounding reads, the sticky from two small masks, and the
+    narrowing shifting only its 24 kept bits: +625 / +655.
+  * The funnel's sticky first counted "p1 below bit 51 - lsh + rsh" with 7
+    bits: at lsh = 52 that is -1 and wrapped to 127 -- every bit sticky.
+    3 mismatches in 1.46 M (a minimum subnormal times a 2^52 normal).
+  * The narrowing's tie vectors had nothing between the double's bit 28
+    and the guard, so after the window rewrite dropping the sticky of the
+    shifted-out bits SURVIVED the bench; vectors with only those bits set
+    were added (caught: 44,235).
+  * Quartus's ALM estimate for SUBNORM 0 builds alone is not always the old
+    unit's (fpcvt +23): the flush path is equivalent, not identical, logic.
+
+*NOT SETTLED:* a fit (clk_i960 slack: Model 2 +1.350 ns, 2C +0.990, 2A
++0.267 in the 20261113 releases); the board; the ports to 2A / 2C (fprem,
+the 2C area at ~800 ALM from full).

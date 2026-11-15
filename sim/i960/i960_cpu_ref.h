@@ -42,6 +42,11 @@ struct Cpu {
   // once the divisor flushes. Flagged rather than avoided, so the suite skips
   // exactly the deviation and still compares everything else on that retire.
   bool fp_denorm_operand = false;
+  // R1013: coverage -- FP instructions retired with a subnormal operand
+  // (single or double) and with a subnormal result, in the whole run.
+  uint64_t fp_sub_in = 0, fp_sub_out = 0, fp_scale_sub = 0;   // .. and scaler with 2^n subnormal
+  static bool sub_s(uint32_t v) { return ((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0; }
+  static bool sub_d(double d) { return std::fpclassify(d) == FP_SUBNORMAL; }
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   bool ref_fr = false;            // R865: i960_top FR with vc_en -- flushreg alone
@@ -77,13 +82,25 @@ struct Cpu {
   // two-line predicate written from the specification (§8.1) rather than read
   // off the RTL, so it does not agree with the design by construction: if a
   // unit flushes something it should not, this still diverges.
+  //
+  // R1013: i960_top FP_SUBN (I960_SUBN here, default 2 as the module's): 2
+  // models no flush at all -- subnormal singles and doubles are values, as
+  // on the 80960KB in normalizing mode with underflow masked and as MAME's
+  // host doubles have them; 1 flushes doubles only (the units), not singles
+  // (the conversions); 0 is the flush everywhere described above.
+  static constexpr int SUBN =
+#ifdef I960_SUBN
+    I960_SUBN;
+#else
+    2;
+#endif
   static double flush_s(uint32_t v) {
-    if (((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0)
+    if (SUBN < 1 && ((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0)
       return (v & 0x80000000u) ? -0.0 : 0.0;
     return u2f(v);
   }
   static double flush_d(double d) {
-    return (std::fpclassify(d) == FP_SUBNORMAL) ? std::copysign(0.0, d) : d;
+    return (SUBN < 2 && std::fpclassify(d) == FP_SUBNORMAL) ? std::copysign(0.0, d) : d;
   }
   double u2f_t(uint32_t v) { return flush_s(v); }
   static uint32_t f2u(double d) { float f = (float)d; uint32_t v; std::memcpy(&v, &f, 4); return v; }
@@ -592,13 +609,15 @@ struct Cpu {
             // module's move path does not flush); the arithmetic units flush
             // a subnormal operand where the host does not -- the recorded
             // deviation (§8.1), skipped as it is for the single forms.
-            if (k != 0x6d9 && k != 0x6e2 && (std::fpclassify(fa) == FP_SUBNORMAL || std::fpclassify(fb) == FP_SUBNORMAL))
+            // (R1013: not with SUBN 2, where the units take them.)
+            const bool dsub = SUBN < 2 && (std::fpclassify(fa) == FP_SUBNORMAL || std::fpclassify(fb) == FP_SUBNORMAL);
+            if (k != 0x6d9 && k != 0x6e2 && dsub)
               fp_denorm_operand = true;
-            if (k == 0x6e2 && std::fpclassify(fa) == FP_SUBNORMAL) fp_denorm_operand = true;
+            if (SUBN < 2 && k == 0x6e2 && std::fpclassify(fa) == FP_SUBNORMAL) fp_denorm_operand = true;
             // A subnormal moved is exact here, but it is the one way a subnormal
             // reaches fp0-fp3, and every later FP op that reads it meets the
             // deviation -- so the program ends at the move.
-            if (k == 0x6d9 && std::fpclassify(fa) == FP_SUBNORMAL)
+            if (SUBN < 2 && k == 0x6d9 && std::fpclassify(fa) == FP_SUBNORMAL)
               fp_denorm_operand = true;
             if (k == 0x695) {                                          // cmprl
               AC &= ~7u;
@@ -621,6 +640,8 @@ struct Cpu {
                              : (k == 0x6e2) ? ((fb >= 0.0) ? std::fabs(fa) : -std::fabs(fa))
                              : fa;
               const double fr = (k == 0x6d9 || k == 0x6e2) ? r : flush_d(r);
+              if (sub_d(fa) || (k != 0x6d9 && sub_d(fb))) ++fp_sub_in;
+              if (sub_d(r)) ++fp_sub_out;
               if (trans && fr != 0.0 && std::fabs(fr) < 1e-290) fp_denorm_operand = true;   // R845
               if (d.dst_lit) {
                 if (d.srcdst & 0x1c) { trapped = true; trap_op = d.op; break; }   // set_rifl: fatalerror
@@ -708,11 +729,16 @@ struct Cpu {
             case 0x6c2: wr_int = true; ires = sat_i(std::trunc(fa)); break;        // cvtzri
             case 0x6c9: fres = fa; break;                                          // movr
             case 0x674: fres = double(int32_t(s1)); break;                          // cvtir
-            case 0x677: fres = fb * std::pow(2.0, double(int32_t(s1))); break;      // scaler
+            case 0x677: fres = fb * std::pow(2.0, double(int32_t(s1)));             // scaler
+                        if (int32_t(s1) >= -1074 && int32_t(s1) <= -1023) ++fp_scale_sub;
+                        break;
             case 0u: handled = f2a_s; break;                                        // R869
             default: handled = false; break;
           }
           if (handled) {
+            if ((!d.src1_lit && sub_s(rf.r[d.src1])) || (d.src1_lit && sub_d(fa))
+                || (!d.src2_lit && sub_s(rf.r[d.src2])) || (d.src2_lit && sub_d(fb))) ++fp_sub_in;
+            if (!wr_cc && !wr_int && (d.dst_lit ? sub_d(fres) : sub_s(f2u(fres)))) ++fp_sub_out;
             if (!wr_cc) {
               if (wr_int)            rf.r[d.srcdst] = ires;
               else if (d.dst_lit)    fp[d.srcdst & 3] = flush_d(fres);
@@ -720,7 +746,7 @@ struct Cpu {
                 // The result flushes too, not only the operands: a pair of
                 // normal singles can divide to a subnormal one.
                 uint32_t u = f2u(fres);
-                if (((u >> 23) & 0xff) == 0 && (u & 0x7fffff) != 0)
+                if (SUBN < 1 && ((u >> 23) & 0xff) == 0 && (u & 0x7fffff) != 0)
                   u &= 0x80000000u;
                 rf.r[d.srcdst] = u;
                 fp_sdest       = d.srcdst;

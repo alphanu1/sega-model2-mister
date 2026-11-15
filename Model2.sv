@@ -297,6 +297,12 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_VCOP_GUN
 `define M2_VCOP_GUN
 `endif
+// R1013: M2_I960_SUBN, the i960 FP units' subnormals (i960_top FP_SUBN): 2
+// as the 80960KB in normalizing mode with underflow masked (every unit), 1
+// the single-precision conversions only, 0 the flush the core had before.
+`ifndef M2_I960_SUBN
+`define M2_I960_SUBN 2
+`endif
 localparam CONF_STR = {
 `ifdef M2_2A
 	"Model2A;;",   // R852: its own core name; its MRAs say <rbf>Model2A</rbf>
@@ -3025,7 +3031,8 @@ i960_top #(.VC(VCOP_FPU), .FR(FPU2A), .F2A(FPU2A),   // R869: F2A
            .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4),
            .DC_LINES(I960_DC), .DC_2A(M2A), .DC_LANES(1'b0),   // R927
            .IC_PAIR(I960_R1011), .DC_ROMS(I960_R1011),
-           .LSU_ST1(I960_R1011), .LSU_POST(I960_R1011)) u_i960 (   // R1011
+           .LSU_ST1(I960_R1011), .LSU_POST(I960_R1011),   // R1011
+           .FP_SUBN(`M2_I960_SUBN)) u_i960 (   // R1013
 	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),

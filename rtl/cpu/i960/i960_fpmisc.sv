@@ -49,7 +49,15 @@ module i960_fpmisc #(
   // exponent add, its clamps and the stage's 64-bit r2_scaled were logic no
   // instruction reached. Op 6 then reads as op 7 (a). 1 is the unit as it was
   // (the unit bench tests it).
-  parameter bit SCALE  = 1'b1
+  parameter bit SCALE  = 1'b1,
+  // R1013: SUBNORM 1 takes a subnormal operand as a value (80960KB PRM §12,
+  // normalizing mode): roundr / cvtri / cvtzri see a non-zero fraction (so
+  // floor / ceil give -1 / +1, as they should), and logbnr gives the exponent
+  // "src would have if the format had unlimited exponent range" (PRM 11-69),
+  // -1023 - lz. Compare was already right (it works on the raw encoding).
+  // The scale path (SCALE, op 6, which i960_top does not use) still flushes.
+  // SUBNORM 0: the significand of a subnormal is zero, as before.
+  parameter bit SUBNORM = 1'b1
 ) (
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic        clk,          // R575: used only when STAGED
@@ -169,7 +177,7 @@ module i960_fpmisc #(
   // every mode — the fraction is non-zero and below a half either way.
   logic [5:0]  fbits;
   logic [52:0] fa_full;
-  assign fa_full = (ea == 11'd0) ? 53'd0 : {1'b1, ma};
+  assign fa_full = (ea == 11'd0) ? (SUBNORM ? {1'b0, ma} : 53'd0) : {1'b1, ma};
   always_comb begin
     if (eu >= 13'sd52)      fbits = 6'd0;
     else if (eu <= -13'sd3) fbits = 6'd55;
@@ -345,9 +353,29 @@ module i960_fpmisc #(
 
   // R952: the conversion itself is i2d above, with n_in = logb_i on this op
   // (its zero case, logb_i == 0, is i2d's).
+  //
+  // R1013: a subnormal's logb is -(1023 + lz), lz its 52-bit fraction's
+  // leading zeros: -1023 .. -1074, built here as a double directly (beside
+  // the int-to-double path, not in front of it). v = 1023 + lz is 1023
+  // (2^9 * 1.998..: exponent 1032) or 1024..1074 (exponent 1033).
+  logic        a_sub;
+  logic [5:0]  mlz;
+  logic [10:0] lbv;
+  logic [63:0] logb_sub;
+  assign a_sub = (ea == 11'd0) && (ma != 52'd0);
+  always_comb begin
+    mlz = 6'd0;
+    for (int i = 0; i < 52; i++)
+      if (ma[i]) mlz = 6'(51 - i);
+  end
+  assign lbv      = 11'd1023 + {5'd0, mlz};
+  assign logb_sub = lbv[10] ? {1'b1, 11'd1033, lbv[9:0], 42'd0}
+                            : {1'b1, 11'd1032, lbv[8:0], 43'd0};
+
   assign logb_d = a_zero ? {1'b1, 11'h7ff, 52'd0}                 // logb(0) = -inf
                 : a_inf  ? {1'b0, 11'h7ff, 52'd0}
                 : a_nan  ? a
+                : (SUBNORM && a_sub) ? logb_sub
                 : i2d;
 
   // ------------------------------------------------------------- select

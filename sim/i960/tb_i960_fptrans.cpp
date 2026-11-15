@@ -21,8 +21,11 @@ static bool isnan64(uint64_t u) { return ((u >> 52) & 0x7ff) == 0x7ff && (u & ((
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   std::string vec = "fptrans_vec.txt";
-  for (int i = 1; i < argc; i++)
+  FILE *cf = nullptr;                // R1013: +cyc=FILE, each vector's cycles and result
+  for (int i = 1; i < argc; i++) {
     if (!std::strncmp(argv[i], "+vec=", 5)) vec = argv[i] + 5;
+    if (!std::strncmp(argv[i], "+cyc=", 5)) cf = std::fopen(argv[i] + 5, "w");
+  }
   FILE *f = std::fopen(vec.c_str(), "r");
   if (!f) { std::printf("no vectors (%s): run tools/i960_fptrans.py --vec\nFAIL\n", vec.c_str()); return 1; }
   auto *d = new Vi960_fptrans_harness;
@@ -42,6 +45,7 @@ int main(int argc, char **argv) {
                                 n, e, x, y, (unsigned long long)got, want);
       ++bad;
     }
+    if (cf) std::fprintf(cf, "%u %016llx %016llx %llu %016llx\n", e, x, y, c, (unsigned long long)got);
     cyc += c; if (c > maxc[e & 3]) maxc[e & 3] = c; sumc[e & 3] += c; cnt[e & 3]++;
     ++n;
   }
