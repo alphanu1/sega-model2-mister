@@ -222,7 +222,7 @@ int main(int argc, char **argv) {
     };
     uint64_t clocks = 0, words = 0, nwait = 0, dwait = 0, outs = 0, out_bad = 0, vouts = 0, vout_bad = 0;
     uint64_t tw = 0, tbad = 0, tcmp = 0, lock_n = 0, lock_bad = 0;
-    uint64_t st_cnt[8] = {0};
+    uint64_t st_cnt[8] = {0}, rf2w = 0;
     std::map<uint32_t, std::pair<uint64_t, uint64_t>> prof;   // pc -> (words, clocks)
     uint64_t last_ret_clk = 0;
     bool have_prev = false;
@@ -300,6 +300,7 @@ int main(int argc, char **argv) {
         t->clk = 1; t->eval();
         clocks++;
         st_cnt[t->dbg_st & 7]++;
+        rf2w += t->o_rf2w;
         if (pop && !fin.empty()) fin.pop_front();
         if (push) {
             uint32_t w;
@@ -406,6 +407,7 @@ int main(int argc, char **argv) {
     printf("clk_sys per word %.4f, per work word %.4f; D clocks %llu (waiting on the scoreboard %llu), X clocks %llu\n",
            double(clocks) / words, double(clocks) / (work ? work : 1),
            (unsigned long long)(st_cnt[2] + st_cnt[6]), (unsigned long long)st_cnt[6], (unsigned long long)st_cnt[3]);
+    printf("deferred R-file writes (a word writing two) %llu\n", (unsigned long long)rf2w);
     printf("out FIFO words %llu, %llu differ from MAME's\n", (unsigned long long)outs, (unsigned long long)out_bad);
     if (out_bad)
         printf("  the differences in ulps (same sign): 1: %llu, 2-3: %llu, 4-15: %llu, 16-255: %llu, 256-65535: %llu, "

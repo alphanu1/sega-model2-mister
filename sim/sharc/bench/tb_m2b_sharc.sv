@@ -5,7 +5,8 @@
 // beside it on its own copy of the FIFOs; the C++ compares them word by word.
 module tb_m2b_sharc #(
     parameter bit MAME_RND = 1'b1,
-    parameter bit LOCK = 1'b0
+    parameter bit LOCK = 1'b0,
+    parameter bit RF_ONES = 1'b0
 ) (
     input  logic        clk, reset, run,
     input  logic        host_iop_we,
@@ -32,6 +33,7 @@ module tb_m2b_sharc #(
     output logic [23:0] dbg_pc,
     output logic [47:0] dbg_op,
     output logic [2:0]  dbg_st,
+    output logic        o_rf2w,             // R1028: two R-file writes in this clock (a statistic)
     // the architectural state, for the hash and the lockstep
     output logic [31:0] o_r [16],
     output logic [31:0] o_i [16],
@@ -62,23 +64,24 @@ module tb_m2b_sharc #(
     output logic [31:0] v_m [16],
     output logic [31:0] v_astat, v_stky, v_mode1, v_curlcntr, v_lcntr, v_pcstk, v_pcstkp, v_lstkp
 );
-    m2b_sharc #(.MAME_RND(MAME_RND), .BENCH(1'b1)) u (
+    m2b_sharc #(.MAME_RND(MAME_RND), .BENCH(1'b1), .RF_ONES(RF_ONES)) u (
         .clk, .reset, .run, .host_iop_we, .host_iop_reg, .host_iop_data, .xdma_we, .xdma_phase, .xdma_data,
         .fin_empty, .fin_data, .fin_pop, .fout_full, .fout_push, .fout_data, .flag_out(),
         .ext_req, .ext_we, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata,
         .unsup, .unsup_pc, .unsup_op, .unsup_why, .dbg_ret, .dbg_pc, .dbg_op, .dbg_st);
-    assign o_r = u.rf;
-    assign o_i = u.ir;
-    assign o_m = u.mr;
+    assign o_r = u.g_rf[0].u.mem;               // R0-R15: the MLAB model (port A's copy)
+    assign o_i = u.u_iu.mem;
+    assign o_m = u.u_mu.mem;
+    assign o_rf2w = u.rf_pw;
     assign o_astat = u.astat;
     assign o_stky = u.stky;
     assign o_mode1 = u.mode1;
-    assign o_curlcntr = u.S.curlcntr;
-    assign o_lcntr = u.S.lcntr;
-    assign o_pcstk = u.S.pcstk;
-    assign o_pcstkp = u.S.pcstkp;
-    assign o_lstkp = u.S.lstkp;
-    assign o_daddr = u.S.daddr;
+    assign o_curlcntr = u.S_dbg.curlcntr;
+    assign o_lcntr = u.S_dbg.lcntr;
+    assign o_pcstk = u.S_dbg.pcstk;
+    assign o_pcstkp = u.S_dbg.pcstkp;
+    assign o_lstkp = u.S_dbg.lstkp;
+    assign o_daddr = u.S_dbg.daddr;
     assign o_xpc = u.x_pc;
 
     generate if (LOCK) begin : g_v1

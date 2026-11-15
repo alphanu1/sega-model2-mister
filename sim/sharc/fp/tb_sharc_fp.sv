@@ -11,7 +11,7 @@ module tb_sharc_fp (
     input  logic        en,
     input  logic [4:0]  op,
     input  logic [31:0] x, y, astat_in,
-    input  logic        trunc, sub,
+    input  logic        trunc, sub, avg,
     output logic        busy,
     // units, MAME / manual
     output logic [31:0] am_r, am_a, am_s, an_r, an_a, an_s,
@@ -22,9 +22,9 @@ module tb_sharc_fp (
 );
     import sharc_fp_pkg::*;
 
-    sharc_fadd #(.MAME_RND(1'b1)) u_am (.clk, .en, .x, .y, .sub, .trunc, .r(am_r), .astat(am_a), .stky(am_s),
+    sharc_fadd #(.MAME_RND(1'b1)) u_am (.clk, .en, .x, .y, .sub, .avg, .trunc, .r(am_r), .astat(am_a), .stky(am_s),
                                          .nan_in(), .inf_both());
-    sharc_fadd #(.MAME_RND(1'b0)) u_an (.clk, .en, .x, .y, .sub, .trunc, .r(an_r), .astat(an_a), .stky(an_s),
+    sharc_fadd #(.MAME_RND(1'b0)) u_an (.clk, .en, .x, .y, .sub, .avg, .trunc, .r(an_r), .astat(an_a), .stky(an_s),
                                          .nan_in(), .inf_both());
     sharc_fmul #(.MAME_RND(1'b1)) u_mm (.clk, .en, .restart(1'b0), .valid(1'b1), .x, .y, .trunc, .busy,
                                          .r(mm_r), .astat(mm_a), .stky(mm_s));

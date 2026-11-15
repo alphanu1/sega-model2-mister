@@ -8,7 +8,7 @@
 # float result goes to, a load or a move to the I register the same word post-modifies, ureg
 # writes to ASTAT in a word with a float compute, MODE1 TRUNC / ALUSAT changes, delayed jumps,
 # every condition. No FIFO traffic. Generated, not ROM-derived.
-#   m2b_randprog.py <seed> <out events.bin> [words]
+#   m2b_randprog.py <seed> <out events.bin> [words] [flat]   (flat: R1027's set, no nesting / calls)
 import random, struct, sys
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
@@ -73,6 +73,54 @@ def main():
     for k in range(16):
         emit((0x0f << 40) | (k << 32) | fval())
 
+    nest = len(sys.argv) <= 4 or sys.argv[4] != 'flat'
+    subs = []                                          # (index in prog of the CALL word, sub number)
+    NSUB = 4
+
+    def body(n):
+        for _ in range(n):
+            emit((0x02 << 39) | (0x1f << 33) | comp(False))
+
+    def nested(kind):
+        # R1028: nested counted loops, a loop abort (JUMP (LA)) out of a loop, a loop whose last
+        # word aborts it (two pops in one word), CALLs into subroutines that call each other
+        pc0 = base + len(prog)
+        if kind == 0:                                  # two loops, one inside the other
+            a = g.randrange(0, 3); li = g.randrange(1, 4); b = g.randrange(1, 3)
+            emit((0x0c << 40) | (g.randrange(1, 4) << 24) | (a + 1 + li + b))
+            body(a)
+            emit((0x0c << 40) | (g.randrange(1, 4) << 24) | li)
+            body(li); body(b)
+        elif kind == 1:                                # a conditional JUMP (LA) out of a loop
+            L = g.randrange(2, 6); at = g.randrange(1, L)    # not the last word (kind 2's)
+            emit((0x0c << 40) | (g.randrange(1, 5) << 24) | L)
+            for k in range(1, L + 1):
+                if k == at:                            # to the word after the loop's last
+                    emit((0x07 << 40) | (g.choice(CONDS_ASTAT + [0x1f]) << 33) | (1 << 38) | (L + 1 - k))
+                else: body(1)
+        elif kind == 2:                                # an outer loop round a loop whose last word aborts
+            wrap = g.getrandbits(1)                    # (in a third loop: the second pop leaves one)
+            li = g.randrange(1, 4)
+            if wrap: emit((0x0c << 40) | (g.randrange(1, 3) << 24) | (li + 5))
+            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | (li + 2))
+            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | li)
+            body(li - 1)
+            emit((0x07 << 40) | (g.choice(CONDS_ASTAT + [0x1f]) << 33) | (1 << 38) | 1)
+            body(1); body(1)
+            if wrap: body(1)
+        elif kind == 4:                                # a loop's last word a DO (a pop, then a push)
+            lx = g.randrange(1, 3); ly = g.randrange(1, 3)
+            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | (1 + lx + ly + 1))
+            emit((0x0c << 40) | (1 << 24) | lx)
+            body(lx - 1)
+            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | ly)
+            body(ly); body(1)
+        elif kind == 3:                                # a CALL (direct), delayed or not
+            j = g.getrandbits(1)
+            subs.append((len(prog), g.randrange(NSUB)))
+            emit((0x06 << 40) | (1 << 39) | (g.choice(CONDS_ASTAT + [0x1f, 0x1f]) << 33) | (j << 26))
+            if j: body(2)
+
     while len(prog) < nwords:
         r = g.random()
         pc = base + len(prog)
@@ -90,11 +138,14 @@ def main():
             post = g.getrandbits(1); i = g.randrange(8); m = g.randrange(8); d = g.getrandbits(1)
             if d: u = g.choice([g.randrange(16), 0x10 + g.randrange(8), 0x20 + g.randrange(8), 0x7c])
             else:
-                u = g.choice([g.randrange(16), g.randrange(16), 0x10 + i])    # R, or the I it modifies
+                # R, the I it modifies, another I (R1028: two I writes in one word), an M
+                u = g.choice([g.randrange(16), g.randrange(16), 0x10 + i, 0x10 + g.randrange(8), 0x20 + g.randrange(8)])
             emit((0b010 << 45) | (post << 44) | (i << 41) | (m << 38) | (cond() << 33) | (0 << 32) |
                  (d << 31) | (u << 23) | comp())
-            if not d and u == 0x10 + i:                    # the loaded I is data: back into block 1
-                emit((0x0f << 40) | ((0x10 + i) << 32) | (0x30100 + 0x100 * i))
+            if not d and 0x10 <= u < 0x18:                 # the loaded I is data: back into block 1
+                emit((0x0f << 40) | (u << 32) | (0x30100 + 0x100 * (u - 0x10)))
+            if not d and 0x20 <= u < 0x28:                 # the loaded M is data: a small modifier again
+                emit((0x0f << 40) | (u << 32) | (g.randrange(-2, 3) & 0xffffffff))
         elif r < 0.55:                                     # compute, ureg <-> ureg
             src = g.choice([g.randrange(16), 0x10 + g.randrange(8), 0x20 + g.randrange(8), 0x28 + g.randrange(8),
                             0x7c, 0x67, 0x64])
@@ -130,12 +181,36 @@ def main():
             emit((0x07 << 40) | (cond() << 33) | (j << 26) | k)
             for _ in range(k - 1):
                 emit((0x02 << 39) | (0x1f << 33) | comp(False))
-        elif r < 0.90:
+        elif r < 0.875:
             emit(0)                                        # NOP
+        elif r < 0.88:                                     # R1028: a system register bit operation
+            k = g.choice([0, 1, 2, 4, 5])
+            reg, m = g.choice([(0x0, g.getrandbits(32)), (0x1, g.getrandbits(32)), (0xc, g.getrandbits(32) & 0xff87ffff),
+                               (0xc, 1 << g.choice([0, 1, 2, 3, 18, 19])), (0xe, g.getrandbits(32)),
+                               (0xb, g.choice([0x2000, 0x8000]))])
+            if k == 5 and g.random() < 0.5: m = 0              # XOR against a register's value: equal sometimes
+            emit((0x14 << 40) | (k << 37) | (reg << 32) | m)
+        elif r < 0.90 and nest:                            # R1028: the stacks (PC, loop) deeper
+            nested(g.randrange(5))
         else:                                              # the I registers back into block 1
             k = g.randrange(8)
             emit((0x0f << 40) | ((0x10 + k) << 32) | (0x30100 + 0x100 * k + g.randrange(64)))
     emit((0x06 << 40) | (0x1f << 33) | base)               # JUMP back to the start
+    # the subroutines: a few words, a CALL to a later one (so they nest), RTS (delayed or not)
+    sub_at = []
+    calls = []
+    for k in range(NSUB):
+        sub_at.append(base + len(prog))
+        body(g.randrange(1, 4))
+        if k + 1 < NSUB and g.random() < 0.6:
+            calls.append((len(prog), g.randrange(k + 1, NSUB)))
+            emit((0x06 << 40) | (1 << 39) | (0x1f << 33))
+        j = g.getrandbits(1)
+        emit((0x0a << 40) | (g.choice([0x1f, 0x1f] + CONDS_ASTAT) << 33) | (j << 26) | comp())
+        if j: body(2)
+        emit((0x0a << 40) | (0x1f << 33))                  # an RTS that always returns
+    for at, k in subs + calls:
+        prog[at] |= sub_at[k]
     for k, w in enumerate(prog):
         pm[base + k] = w & 0xffffffffffff
     pm[0x20005] = (0x06 << 40) | (0x1f << 33) | base       # the reset word: JUMP (base)

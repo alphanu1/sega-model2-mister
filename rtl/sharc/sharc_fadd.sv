@@ -8,6 +8,9 @@
 // rounded toward zero, so an overflow gives the largest finite through the same finish. The
 // inputs and a denormal result are flushed in both. Nothing else differs: the near path is
 // exact and the far path cannot be tiny (study R1027).
+// CHANGED (R1028): `avg`, FAVG ((x + y) / 2) on the same paths, as sharc_fp_pkg's f_avg (MAME:
+// the sum rounded, then halved with round to nearest and flushed) and man_avg (the manual: the
+// exact sum's exponent less one, rounded once: tiny below 2^-126, flushed with AUS).
 //
 // Float add / subtract in two stages, bit-exact to sharc_fp_pkg::f_add / f_sub (MAME's host
 // arithmetic with the ALU's input and result flush). Stage 1 registers at `en`; the result
@@ -28,6 +31,7 @@ module sharc_fadd #(
     input  logic [31:0] x,
     input  logic [31:0] y,
     input  logic        sub,
+    input  logic        avg,            // FAVG (R1028): x + y halved (sub ignored)
     input  logic        trunc,          // MODE1.TRUNCATE: round to zero (MAME_RND 0); overflow gives the largest finite
     output logic [31:0] r,
     output logic [31:0] astat,          // AZ AV AN AI AF, to OR in after clearing the ALU group
@@ -73,8 +77,8 @@ endfunction
 
 always_comb begin
     xf = flush(x);
-    yf = flush(y) ^ (sub ? SIGN : 32'h0);
-    nan1 = sub ? nan_sub(x, y) : nan_add(x, y);
+    yf = flush(y) ^ (sub && !avg ? SIGN : 32'h0);
+    nan1 = (sub && !avg) ? nan_sub(x, y) : nan_add(x, y);
 
     ea = (xf[30:23] == 0) ? 8'd1 : xf[30:23];
     eb = (yf[30:23] == 0) ? 8'd1 : yf[30:23];
@@ -101,7 +105,7 @@ always_comb begin
     marker = (ex <= 8'd25) ? (25'h1 << (8'd25 - ex)) : 25'h0;
 end
 
-logic        v_nan, v_inf, v_near, v_trunc, v_sgn, v_nanin, v_infb;
+logic        v_nan, v_inf, v_near, v_trunc, v_sgn, v_nanin, v_infb, v_avg;
 logic [31:0] v_infr;
 logic [27:0] v_s;
 logic [24:0] v_n, v_mark;
@@ -115,6 +119,7 @@ always_ff @(posedge clk) if (en) begin
     v_infr <= is_inf(xf) ? xf : yf;
     v_near <= near;
     v_trunc <= trunc;
+    v_avg <= avg;
     v_sgn <= bx[31];
     v_s <= s_far;
     v_n <= n_near;
@@ -143,6 +148,10 @@ always_comb begin
         if (v_n == 0)   raw = 32'h0;
         else if (t[24]) raw = {v_sgn, v_e - {3'h0, lz}, t[23:1]};
         else            raw = {v_sgn, 8'h00, t[23:1]};
+        // the manual's FAVG: exact, so the exponent less one; below 2^-126 tiny (a denormal
+        // pattern, which the finish flushes with AUS)
+        if (!MAME_RND && v_avg && raw[30:0] != 0)
+            raw = (raw[30:23] >= 8'd2) ? {raw[31], raw[30:23] - 8'd1, raw[22:0]} : {raw[31], 31'h1};
     end else begin
         logic [26:0] s;
         logic [8:0]  e;
@@ -155,9 +164,26 @@ always_comb begin
         up = !(!MAME_RND && v_trunc) && s[2] && (s[1] || s[0] || s[3]);
         m = {1'b0, s[26:3]} + {24'h0, up};
         if (m[24]) begin m = m >> 1; e = e + 9'd1; end
-        if (e >= 9'd255)  raw = {v_sgn, INF[30:0]};
+        if (!MAME_RND && v_avg) begin
+            // the manual's FAVG: the rounded sum's exponent less one (rounding is the same)
+            if (e >= 9'd256)     raw = {v_sgn, INF[30:0]};
+            else if (!m[23])     raw = {v_sgn, 8'h00, m[22:0]};   // zero (both operands zero)
+            else if (e <= 9'd1)  raw = {v_sgn, 31'h1};      // tiny
+            else                 raw = {v_sgn, 8'(e - 9'd1), m[22:0]};
+        end
+        else if (e >= 9'd255)  raw = {v_sgn, INF[30:0]};
         else if (!m[23])  raw = {v_sgn, 8'h00, m[22:0]};
         else              raw = {v_sgn, e[7:0], m[22:0]};
+    end
+    // MAME's FAVG: the rounded sum times 0.5f, to nearest even (exact unless the half is denormal)
+    if (MAME_RND && v_avg && !is_inf(raw) && raw[30:0] != 0) begin
+        if (raw[30:23] >= 8'd2) raw = {raw[31], raw[30:23] - 8'd1, raw[22:0]};
+        else begin
+            logic [23:0] hm, hq;
+            hm = {raw[30:23] != 0, raw[22:0]};
+            hq = {1'b0, hm[23:1]} + {23'h0, hm[0] & hm[1]};
+            raw = {raw[31], 7'h0, hq};
+        end
     end
 
     // alu_fin (sharc_fp_pkg)

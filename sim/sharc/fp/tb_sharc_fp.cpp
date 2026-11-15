@@ -176,6 +176,8 @@ static uint32_t pick(std::mt19937 &g, uint32_t other) {
     case 14: { int eo = (other >> 23) & 0xff; int e = eo - int(g() % 61); if (e < 1) e = 1;
                return (r & 0x807fffff) | (uint32_t(e) << 23); }
     case 15: return (other & 0xff800000) ^ (r & SIGN) | (r & 0x7fffff);
+    // R1028: exactly 2^-126 / 2^-125 (FAVG's tiny edge, a mantissa with no bits)
+    case 16: return (r & SIGN) | (uint32_t(1 + ((r >> 1) & 1)) << 23);
     default: return r;
     }
 }
@@ -197,7 +199,8 @@ int main(int argc, char **argv) {
         uint32_t x = pick(g, 0), y = pick(g, x), a = g();
         bool trunc = (g() & 3) != 0;          // TRUNC is what every Sega program sets
         bool sub = g() & 1;
-        t->op = op; t->x = x; t->y = y; t->trunc = trunc; t->astat_in = a; t->sub = sub;
+        bool avg = (g() & 3) == 0;            // R1028: FAVG on the adder unit
+        t->op = op; t->x = x; t->y = y; t->trunc = trunc; t->astat_in = a; t->sub = sub; t->avg = avg;
         // the units: register stage 1 (held while MAME's multiplier is on its slow path)
         for (;;) {
             t->clk = 0; t->eval();
@@ -220,7 +223,8 @@ int main(int argc, char **argv) {
             printf("pkg manual %-16s x=%08X y=%08X trunc=%d: RTL %08X %08X a=%08X s=%08X ref %08X %08X a=%08X s=%08X\n",
                    NAMES[op], x, y, trunc, t->pn_r, t->pn_r2, t->pn_a, t->pn_s, en.r, en.r2, en.astat, en.stky);
         // units: FADD / FSUB and FMUL on every vector
-        Res wa_m = ref(sub ? 1 : 0, x, y, trunc, 0), wa_n = man_ref(sub ? 1 : 0, x, y, trunc, 0);
+        int aop = avg ? 2 : sub ? 1 : 0;
+        Res wa_m = ref(aop, x, y, trunc, 0), wa_n = man_ref(aop, x, y, trunc, 0);
         Res wm_m = ref(22, x, y, trunc, 0), wm_n = man_ref(22, x, y, trunc, 0);
         u_runs++;
         if ((wm_n.stky & MUS) && !(wm_n.r & 0x7fffffff)) tiny_seen++;
@@ -231,8 +235,8 @@ int main(int argc, char **argv) {
             {t->mm_r, t->mm_a, t->mm_s, wm_m}, {t->mn_r, t->mn_a, t->mn_s, wm_n}};
         for (int k = 0; k < 4; k++)
             if ((u[k].r != u[k].w.r || u[k].a != u[k].w.astat || u[k].s != u[k].w.stky) && u_bad[k]++ < 5)
-                printf("%-11s x=%08X y=%08X sub=%d trunc=%d: RTL %08X a=%08X s=%08X ref %08X a=%08X s=%08X\n",
-                       UN[k], x, y, sub, trunc, u[k].r, u[k].a, u[k].s, u[k].w.r, u[k].w.astat, u[k].w.stky);
+                printf("%-11s x=%08X y=%08X sub=%d avg=%d trunc=%d: RTL %08X a=%08X s=%08X ref %08X a=%08X s=%08X\n",
+                       UN[k], x, y, sub, avg, trunc, u[k].r, u[k].a, u[k].s, u[k].w.r, u[k].w.astat, u[k].w.stky);
     }
     long total = 0;
     printf("%-16s %9s %12s %12s\n", "package op", "vectors", "MAME bad", "manual bad");

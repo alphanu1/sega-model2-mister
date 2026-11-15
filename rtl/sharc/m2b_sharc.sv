@@ -12,13 +12,17 @@
 // TIMING. Each word is two clocks, D then X:
 //   D  the opcode (PM's registered output); the queue shift and loop end; decode and condition;
 //      operands read (R, I, M, the ureg source); the DM read address presented; the next
-//      word's fetch address computed (fetch_a). Nothing architectural changes in D.
+//      word's fetch address computed (fetch_a). At D's end the sequencer (S) and the PC / loop
+//      stacks are committed (R1028); nothing else.
 //   X  the fetch of the next word issued (PM read at fetch_a, ready for the next D); the fixed
-//      ALU / shifter result, loads, ureg writes, post-modify, DM / FIFO / IOP / external
-//      accesses, the sequencer and stacks: all committed at X's end. FIFO full / empty, an
-//      external access, MAME's slow multiply hold X.
-//   The float units (Hornet's sharc_fadd / sharc_fmul, and the package's other float functions)
-//   take their operands at D's end and register stage 1 at X's end; their results and ASTAT /
+//      ALU / shifter / misc float result (m2b_sharc_xu, one shared unit), loads, ureg writes
+//      (a sequencer register's into S), post-modify, DM / FIFO / IOP / external accesses: all
+//      committed at X's end. FIFO full / empty, an external access, MAME's slow multiply hold X.
+//   The register files are MLAB (R1028): R0-R15 five read copies of one write port (a word
+//   writing two R registers writes the second a clock later), I and M three each, the PC stack
+//   two and the loop stacks six (m2b_lutram).
+//   The float units (Hornet's sharc_fadd / sharc_fmul, FAVG on the adder; the misc functions
+//   in X) take their operands at D's end and register stage 1 at X's end; their results and ASTAT /
 //   STKY bits are written in the clock after X (the "landing", which is the next word's first D
 //   clock). The next word waits in D one clock if it reads a register or ASTAT being landed
 //   (the scoreboard). MAME's order inside a word is kept: a load or ureg move to the register a
@@ -50,7 +54,8 @@ module m2b_sharc #(
     parameter int PM_AW    = 13,            // program memory 2^PM_AW x 48 at 0x20000 (8 K: R1027)
     parameter int DM_AW    = 13,            // block-1 data on chip 2^DM_AW x 32 (8 K: R1026)
     parameter bit BENCH    = 1'b0,          // the DM starts all ones (unwritten memory reads 0xFFFF...)
-    parameter bit CLEAR    = 1'b1           // PM and DM cleared after reset, as MAME's device_reset
+    parameter bit CLEAR    = 1'b1,          // PM and DM cleared after reset, as MAME's device_reset
+    parameter bit RF_ONES  = 1'b0           // benches: the register and stack arrays start all ones
 ) (
     input  logic        clk,
     input  logic        reset,              // MAME's device_reset (host boot)
@@ -140,9 +145,40 @@ end endgenerate
 
 // ================================================================== architectural state
 
-logic [31:0] rf [16];                       // R0-R15
-logic [31:0] ir [16];                       // I0-I7 (DAG1), I8-I15 (DAG2)
-logic [31:0] mr [16];                       // M0-M15
+// R0-R15: MLAB, five copies of one write port each (m2b_lutram; R1028), read in D:
+//   port 0 (A): Rx, or R0-3 (the multiplier's X in a multifunction)
+//   port 1 (B): Ry, or R4-7
+//   port 2 (C): Rn (the shifter's OR forms), or R8-11 (the adder's X)
+//   port 3 (D): R12-15 (the adder's Y)
+//   port 4 (E): a store's data register, or the ureg source
+// One write a clock. A word that writes two (a fixed / shifter result and a load at X's end; a
+// multifunction's Rm and Ra at the landing) writes the second in the next clock (rf_pw): after
+// X's end that is the landing clock, which such a word does not use; after a landing, D does not
+// finish in the landing clock, so no X writes in the next. D reads in its clocks; a word read
+// in a clock that writes it is the scoreboard's (D waits and reads again), so no_rw_check's
+// undefined read is never used.
+logic [4:0][3:0]  rf_ra;
+logic [4:0][31:0] rf_rd;
+logic             rf_we;
+logic [3:0]       rf_wa;
+logic [31:0]      rf_wd;
+logic             rf_pw, rf_pl;                 // a deferred write this clock (rf_pl: a landing's)
+logic [3:0]       rf_pa;
+logic [31:0]      rf_pd;
+// I0-I15 and M0-M15: MLAB (m2b_lutram, one write port each; R1028). Three read ports each, all
+// read in D: DAG1's (I0-7 / M0-7: the address and post-modify of a data access, a modify), DAG2's
+// (I8-15 / M8-15: an indirect jump's target, a modify), and the ureg port (D's ureg source). The
+// writes are at X's end (a post-modify, a ureg write); a word that writes two different I
+// registers (a load to one, a post-modify of another) defers the ureg write one clock (ir_pw),
+// and D waits that clock, so D never reads a word in the clock it is written.
+logic [2:0]  i1_ra, i2_ra, m1_ra, m2_ra;
+logic [31:0] i1_rd, i2_rd, iu_rd, m1_rd, m2_rd, mu_rd;
+logic        ir_we, mr_we;
+logic [3:0]  ir_wa, mr_wa;
+logic [31:0] ir_wd, mr_wd;
+logic        ir_pw;                         // the deferred I write (this clock)
+logic [3:0]  ir_pa;
+logic [31:0] ir_pd;
 logic [15:0] lnz;                           // L != 0
 logic [31:0] astat, stky, mode1, mode2, irptl, imask, ustat1, ustat2, syscon;
 logic [47:0] px;
@@ -159,12 +195,19 @@ typedef struct packed {
     logic [31:0] stk;                       // STKY's stack bits (STK_BITS)
 } seq_t;
 seq_t S;
+seq_t S_dbg;                                // benches: S as the word that left X last left it
 
-logic [23:0] pcs [32];                      // PC stack (30 used)
-logic [31:0] lcs [6];                       // loop counter stack
-logic [31:0] las [6];                       // loop address stack (MAME's packed laddr)
+// the PC stack (30 used of 32) and the loop stacks (6 of 8): MLAB (m2b_lutram, R1028), the top
+// of each in S. One write each at X's end; the reads are D's, at addresses from S (the stack
+// pointers before the word): PCSTKP - 2 / - 3 (a pop, a second pop in the same word); LSTKP - 2 /
+// - 3 (the same), LSTKP + 1 / LSTKP (a DO's new LCNTR, after no pop / a pop). D reads after the
+// X that wrote, never in its clock.
+logic [23:0] pcs_p2, pcs_p3;
+logic [31:0] lcs_p2, lcs_p3, lcs_q0, lcs_q1, las_p2, las_p3;
 
-// MAME's ASTAT history: ah1 = after the last completed word, ah2, ah3 before it
+// MAME's ASTAT history: ah1 = after the last completed word, ah2, ah3 before it; only the bits a
+// condition reads are kept (R1028)
+localparam logic [31:0] AH_BITS = AZ | AV | AN | AC | AF | MN | MV | SV | SZ | BTF;
 logic [31:0] ah1, ah2, ah3;
 
 // DMA channel 6 (the host boot's registers) and the host IOP pairing
@@ -210,11 +253,11 @@ typedef struct packed {
     logic [7:0]  fix_op;
     logic        sh_on;                     // shifter
     logic [5:0]  sh_op;
-    logic        sh_imm;
-    logic [31:0] sh_val;
+    logic        sh_imm;                    // (the immediate is x_op's: {op[30:27], op[15:8]})
     logic [3:0]  rn;                        // the fixed / shifter result register
     logic        fl_on;                     // a float compute (lands after X)
     logic        fl_mul, fl_add, fl_sub, fl_misc, fl_absf, fl_comp;
+    logic        fl_avg;                    // FAVG: the adder's halved sum (R1028)
     logic [4:0]  misc_op;                   // tb_sharc_fp's numbering of the float functions
     logic        trunc;
     logic [3:0]  rm, ra;
@@ -232,15 +275,14 @@ typedef struct packed {
     logic        pmod;
     logic [3:0]  pmod_i;
     logic [31:0] pmod_m;
+    logic [31:0] pmod_b;                    // the I register's value (read in D)
     // ureg write with a value known in D
-    logic        uw;
+    logic        uw;                        // the value is acc_wd's (no data access in these forms)
     logic [7:0]  uw_reg;
-    logic [31:0] uw_val;
     // system register bit operation (X: on the register's value then)
     logic        bitop;
     logic [2:0]  bit_kind;
-    logic [3:0]  bit_reg;
-    logic [31:0] bit_val;
+    logic [3:0]  bit_reg;                   // (the mask is x_op[31:0])
     // the stacks: one write each
     logic        pcw;
     logic [4:0]  pcw_i;
@@ -250,7 +292,6 @@ typedef struct packed {
     logic [31:0] lcw_d, law_d;
 } xc_t;
 xc_t XC;
-seq_t SN;                                   // the sequencer after this word (committed at X end)
 logic [31:0] op_x, op_y, op_n;              // fixed / shifter operands: R[rx], R[ry], R[rn]
 logic [31:0] fa_x, fa_y, fm_x, fm_y;        // float operands
 logic [31:0] st_x;                          // store data / ureg source value
@@ -306,12 +347,13 @@ always_comb begin
     logic [47:0] o;
     logic [2:0]  k;
     o = pm_q;
-    ur_sel = (o[47:45] == 3'b010) ? o[30:23] : (o[47:44] == 4'b0111) ? o[43:36] : o[39:32];
+    ur_sel = (o[47:45] == 3'b010) ? o[30:23] : (o[47:44] == 4'b0111) ? o[43:36] :
+             (o[47:40] == 8'b00010100) ? {4'h7, o[35:32]} : o[39:32];     // the bit operation's register
     k = ur_sel[2:0];
     case (ur_sel[7:4])
-    4'h0: ur_v = rf[ur_sel[3:0]];
-    4'h1: ur_v = ir[{ur_sel[3], k}];
-    4'h2: ur_v = ur_sel[3] ? {{8{mr[{1'b1, k}][23]}}, mr[{1'b1, k}][23:0]} : mr[{1'b0, k}];
+    4'h0: ur_v = rf_rd[4];
+    4'h1: ur_v = iu_rd;
+    4'h2: ur_v = ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd;
     4'h7: ur_v = sys_rd(ur_sel[3:0], astat, mode1, mode2, stky, irptl, imask, ustat1, ustat2, flg);
     4'hd: case (ur_sel[3:0])
           4'hb: ur_v = px[31:0];
@@ -384,9 +426,16 @@ always_comb begin
     logic        mem_on;
     logic [31:0] mem_a;
     logic        mem_wr;
-    logic [23:0] pcs_p2, pcs_p3;
     logic        bad;
-    logic [31:0] rel6;
+    logic        mb_i;                          // the address is I + offset (else the offset)
+    logic [1:0]  mo_sel;                        // the offset: 0 none, 1 M (DAG1), 2 the 6-bit immediate, 3 the 32-bit
+    logic [1:0]  wd_sel;                        // store / ureg data: 0 R (port E), 1 the ureg, 2 the immediate
+    logic [1:0]  pm_sel;                        // post-modify by: 0 M (DAG1), 1 the 6-bit immediate, 2 M of op[38]'s DAG, 3 the 32-bit
+    logic [31:0] ur_all;                        // the ureg D names, the sequencer's included
+    logic [23:0] pc1, rel_t, ind_t, rts_v, tgt, qb;
+    logic        br, br_db;                     // a branch taken; delayed
+    logic [1:0]  tsel;                          // its target: 0 op[23:0], 1 PC + offset, 2 I + M (DAG2), 3 the PC stack's top
+    logic [4:0]  cnd;                           // the word's condition
 
     op = pm_q;
     s = S;
@@ -396,11 +445,11 @@ always_comb begin
     npop = 2'd0;
     nlpop = 1'b0;
     mem_on = 1'b0; mem_a = 32'h0; mem_wr = 1'b0;
+    mb_i = 1'b1; mo_sel = 2'd0; wd_sel = 2'd0; pm_sel = 2'd0;
+    br = 1'b0; br_db = 1'b0; tsel = 2'd0; rts_v = 24'h0;
     astat_d = astat;
     alusat = mode1[M1_ALUSAT];
     trunc = mode1[M1_TRUNC];
-    pcs_p2 = pcs[5'(S.pcstkp - 6'd2)];
-    pcs_p3 = pcs[5'(S.pcstkp - 6'd3)];
 
     // ---------------------------------------------------------------- the queue shift
     s.pc = S.daddr; s.daddr = S.faddr; s.faddr = S.nfaddr; s.nfaddr = S.nfaddr + 24'd1;
@@ -430,8 +479,8 @@ always_comb begin
             x.law = 1'b1; x.law_i = s.lstkp; x.law_d = la_pack(s.la_type, s.la_code, s.la_addr);
             if (s.lstkp != 3'd0) begin
                 logic [31:0] w;
-                s.curlcntr = lcs[3'(s.lstkp - 3'd1)];
-                w = las[3'(s.lstkp - 3'd1)];
+                s.curlcntr = lcs_p2;
+                w = las_p2;
                 s.la_addr = w[23:0]; s.la_code = w[28:24]; s.la_type = w[31:30];
             end else begin
                 s.curlcntr = 32'hFFFF_FFFF;
@@ -455,6 +504,8 @@ always_comb begin
         end
     end
     lce_ne1 = s.curlcntr != 32'd1;
+    // the ureg source (every form that reads one names it in ur_sel), after the loop end
+    ur_all = (ur_sel[7:4] == 4'h6) ? seq_rd(ur_sel[3:0], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v;
 
     // ---------------------------------------------------------------- the handler
     cond = op[37:33];
@@ -464,29 +515,36 @@ always_comb begin
     rx = comp[7:4]; ry = comp[3:0]; rnn = comp[11:8];
     comp_on = 1'b0;
 
-    // the condition reads ASTAT (or a flag / LCE); conditions 0x09-0x0c / 0x0f / 0x19-0x1c / 0x1e-
-    // 0x1f do not, but a flat rule is cheap
-    cok = if_cond(astat_d, flg, alusat, lce_ne1, cond);
+    // the condition (ureg <-> ureg has it at op[35:31]); D waits for a landing's ASTAT only if the
+    // condition reads ASTAT and the form has one (DO UNTIL's is the loop's, tested at its end)
+    cnd = (op[47:44] == 4'b0111) ? op[35:31] : cond;
+    cok = if_cond(astat_d, flg, alusat, lce_ne1, cnd);
+    if (op[47:44] == 4'b0100 || op[47:44] == 4'b0101 || op[47:44] == 4'b0110 || op[47:44] == 4'b0111 ||
+        op[47:44] == 4'b1000 || op[47:46] == 2'b11 || op[47:40] == 8'b00000001 || op[47:40] == 8'b00000010 ||
+        op[47:40] == 8'b00000100 || op[47:41] == 7'b0000011 || op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101)
+        d_need_astat |= cond_astat(cnd);
+    // the branch targets: PC + offset (one adder, DO's loop end too), I + M of DAG2
+    pc1 = s.pc;
+    rel_t = pc1 + ((op[47:42] == 6'b000010 || op[47:46] == 2'b11) ? 24'(sext6(op[32:27])) : op[23:0]);
+    ind_t = 24'(i2_rd + m2_rd);
 
     casez (op[47:39])
     9'b001??????: begin x.unsup = 1'b1; x.why = U_FORM; end   // type 1: dual moves
     9'b00000001?: begin                                         // compute
-        d_need_astat |= cond_astat(cond);
         comp_on = cok;
     end
     9'b0100?????, 9'b0101?????: begin                           // compute, ureg <-> DM|PM, pre / post
         logic g, dd, post;
         logic [7:0] u;
         g = op[32]; dd = op[31]; u = op[30:23]; post = op[44];
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
             comp_on = 1'b1;
             if (g) begin x.unsup = 1'b1; x.why = U_PM; end
             else begin
                 mem_on = 1'b1; mem_wr = dd;
-                mem_a = ir[{1'b0, ii}] + (post ? 32'h0 : mr[{1'b0, mm}]);
+                mo_sel = post ? 2'd0 : 2'd1;
                 if (dd) begin
-                    x.acc_wd = ((u[7:4] == 4'h6) ? seq_rd(u[3:0], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v);
+                    wd_sel = 2'd1;
                     d_rmask |= ureg_rmask(u);
                     if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
                     if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
@@ -494,7 +552,7 @@ always_comb begin
                     x.ld_u = 1'b1; x.ld_ureg = u;
                     if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
                 end
-                if (post) begin x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; x.pmod_m = mr[{1'b0, mm}]; end
+                if (post) begin x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; pm_sel = 2'd0; end
             end
         end
     end
@@ -504,26 +562,24 @@ always_comb begin
         logic [31:0] mv;
         upd = op[38]; g = op[40]; dd = op[39]; dr = op[26:23];
         mv = sext6(op[32:27]);
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
             comp_on = 1'b1;
             if (g) begin x.unsup = 1'b1; x.why = U_PM; end
             else begin
                 mem_on = 1'b1; mem_wr = dd;
-                mem_a = ir[{1'b0, ii}] + (upd ? 32'h0 : mv);
-                if (dd) begin x.acc_wd = rf[dr]; d_rmask |= 16'h1 << dr; end
+                mo_sel = upd ? 2'd0 : 2'd2;
+                if (dd) begin wd_sel = 2'd0; d_rmask |= 16'h1 << dr; end
                 else begin x.ld_r = 1'b1; x.ld_dst = dr; end
-                if (upd) begin x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; x.pmod_m = mv; end
+                if (upd) begin x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; pm_sel = 2'd1; end
             end
         end
     end
     9'b0111?????: begin                                         // compute, ureg <-> ureg
         logic [7:0] us, ud;
         us = op[43:36]; ud = op[30:23];
-        d_need_astat |= cond_astat(op[35:31]);
-        if (if_cond(astat_d, flg, alusat, lce_ne1, op[35:31])) begin
+        if (cok) begin
             comp_on = 1'b1;
-            x.uw = 1'b1; x.uw_reg = ud; x.uw_val = ((us[7:4] == 4'h6) ? seq_rd(us[3:0], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v);
+            x.uw = 1'b1; x.uw_reg = ud; wd_sel = 2'd1;
             d_rmask |= ureg_rmask(us);
             if (us[7:4] == 4'h7 && (us[3:0] == 4'hc || us[3:0] == 4'he)) d_need_astat = 1'b1;
             if (!ureg_ok(us, 1'b0) || !ureg_ok(ud, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
@@ -533,43 +589,37 @@ always_comb begin
         logic g, dd;
         logic [3:0] dr;
         g = op[32]; dd = op[31]; dr = op[26:23];
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
-            x.sh_on = 1'b1; x.sh_op = op[21:16]; x.sh_imm = 1'b1; x.sh_val = {20'h0, op[30:27], op[15:8]};
+            x.sh_on = 1'b1; x.sh_op = op[21:16]; x.sh_imm = 1'b1;
             x.rn = op[7:4]; rx = op[3:0]; rnn = op[7:4];
             d_rmask |= (16'h1 << op[3:0]) | (16'h1 << op[7:4]);
             if (!shift_ok(op[21:16])) begin x.unsup = 1'b1; x.why = U_COMP; end
             if (g) begin x.unsup = 1'b1; x.why = U_PM; end
             else begin
                 mem_on = 1'b1; mem_wr = dd;
-                mem_a = ir[{1'b0, ii}];
-                if (dd) begin x.acc_wd = rf[dr]; d_rmask |= 16'h1 << dr; end
+                if (dd) begin wd_sel = 2'd0; d_rmask |= 16'h1 << dr; end
                 else begin x.ld_r = 1'b1; x.ld_dst = dr; end
-                x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; x.pmod_m = mr[{1'b0, mm}];
+                x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; pm_sel = 2'd0;
             end
         end
     end
     9'b00000010?: begin                                         // immediate shift
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
-            x.sh_on = 1'b1; x.sh_op = op[21:16]; x.sh_imm = 1'b1; x.sh_val = {20'h0, op[30:27], op[15:8]};
+            x.sh_on = 1'b1; x.sh_op = op[21:16]; x.sh_imm = 1'b1;
             x.rn = op[7:4]; rx = op[3:0]; rnn = op[7:4];
             d_rmask |= (16'h1 << op[3:0]) | (16'h1 << op[7:4]);
             if (!shift_ok(op[21:16])) begin x.unsup = 1'b1; x.why = U_COMP; end
         end
     end
     9'b00000100?: begin                                         // compute, modify
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
             comp_on = 1'b1;
-            x.pmod = 1'b1; x.pmod_i = {op[38], op[32:30]}; x.pmod_m = mr[{op[38], op[29:27]}];
+            x.pmod = 1'b1; x.pmod_i = {op[38], op[32:30]}; pm_sel = 2'd2;
         end
     end
     9'b000001100, 9'b000001110: begin                           // direct / relative jump
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
-            logic [23:0] t;
-            t = op[40] ? s.pc + op[23:0] : op[23:0];
+            br = 1'b1; br_db = jdb; tsel = op[40] ? 2'd1 : 2'd0;
             if (ci) begin x.unsup = 1'b1; x.why = U_FORM; end
             if (la) begin
                 // POP_PC, POP_LOOP
@@ -587,8 +637,8 @@ always_comb begin
                 if (!x.law) begin x.law = 1'b1; x.law_i = s.lstkp; x.law_d = la_pack(s.la_type, s.la_code, s.la_addr); end
                 if (s.lstkp != 3'd0) begin
                     logic [31:0] w;
-                    s.curlcntr = lcs[3'(s.lstkp - 3'd1)];
-                    w = las[3'(s.lstkp - 3'd1)];
+                    s.curlcntr = nlpop ? lcs_p3 : lcs_p2;
+                    w = nlpop ? las_p3 : las_p2;
                     s.la_addr = w[23:0]; s.la_code = w[28:24]; s.la_type = w[31:30];
                 end else begin
                     s.curlcntr = 32'hFFFF_FFFF;
@@ -596,38 +646,30 @@ always_comb begin
                     s.stk = s.stk | LSEM;
                 end
             end
-            if (jdb) s.nfaddr = t;
-            else begin s.pc = t; s.daddr = t; s.faddr = t + 24'd1; s.nfaddr = t + 24'd2; end
         end
     end
     9'b000001101, 9'b000001111: begin                           // direct / relative call
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
-            logic [23:0] t, ret;
-            t = op[40] ? s.pc + op[23:0] : op[23:0];
-            ret = op[40] ? (jdb ? s.pc + 24'd3 : s.pc + 24'd1) : (jdb ? s.nfaddr : s.daddr);
+            logic [23:0] ret;
+            br = 1'b1; br_db = jdb; tsel = op[40] ? 2'd1 : 2'd0;
+            ret = op[40] ? (jdb ? pc1 + 24'd3 : pc1 + 24'd1) : (jdb ? s.nfaddr : s.daddr);
             // PUSH_PC
             if (s.pcstkp != 6'd0 && !x.pcw) begin x.pcw = 1'b1; x.pcw_i = 5'(s.pcstkp - 6'd1); x.pcw_d = s.pcstk; end
             s.pcstkp = s.pcstkp + 6'd1;
             s.stk = s.stk & ~PCEM;
             if (s.pcstkp >= 6'd30) s.stk = s.stk | PCFL;
             s.pcstk = ret;
-            if (jdb) s.nfaddr = t;
-            else begin s.pc = t; s.daddr = t; s.faddr = t + 24'd1; s.nfaddr = t + 24'd2; end
         end
     end
     9'b0000100??: begin                                         // indirect / relative jump or call, compute
-        logic [23:0] t;
         logic call, take;
         call = op[39];
-        rel6 = sext6(op[32:27]);
-        t = op[40] ? s.pc + rel6[23:0] : 24'(ir[{1'b1, op[32:30]}] + mr[{1'b1, op[29:27]}]);
-        d_need_astat |= cond_astat(cond);
         if (ci) begin x.unsup = 1'b1; x.why = U_FORM; end
         take = cok;
         if (ee) comp_on = !cok;
         else comp_on = cok;
         if (take) begin
+            br = 1'b1; br_db = jdb; tsel = op[40] ? 2'd1 : 2'd2;
             if (call) begin
                 logic [23:0] ret;
                 ret = jdb ? s.nfaddr : s.daddr;
@@ -639,38 +681,29 @@ always_comb begin
             end else if (la) begin
                 x.unsup = 1'b1; x.why = U_STK;      // loop abort on an indirect jump: not seen
             end
-            if (jdb) s.nfaddr = t;
-            else begin s.pc = t; s.daddr = t; s.faddr = t + 24'd1; s.nfaddr = t + 24'd2; end
         end
     end
     9'b11???????: begin                                         // indirect / relative jump, else compute, dreg <-> DM
         logic [3:0] dr;
         dr = op[26:23];
-        d_need_astat |= cond_astat(cond);
         if (cok) begin
-            logic [23:0] t;
-            rel6 = sext6(op[32:27]);
-            t = op[45] ? s.pc + rel6[23:0] : 24'(ir[{1'b1, op[32:30]}] + mr[{1'b1, op[29:27]}]);
-            s.pc = t; s.daddr = t; s.faddr = t + 24'd1; s.nfaddr = t + 24'd2;
+            br = 1'b1; tsel = op[45] ? 2'd1 : 2'd2;
         end else begin
             comp_on = 1'b1;
             mem_on = 1'b1; mem_wr = op[44];
-            mem_a = ir[{1'b0, op[43:41]}];
-            if (op[44]) begin x.acc_wd = rf[dr]; d_rmask |= 16'h1 << dr; end
+            if (op[44]) begin wd_sel = 2'd0; d_rmask |= 16'h1 << dr; end
             else begin x.ld_r = 1'b1; x.ld_dst = dr; end
-            x.pmod = 1'b1; x.pmod_i = {1'b0, op[43:41]}; x.pmod_m = mr[{1'b0, op[40:38]}];
+            x.pmod = 1'b1; x.pmod_i = {1'b0, op[43:41]}; pm_sel = 2'd0;
         end
     end
     9'b00001010?, 9'b00001011?: begin                           // RTS, RTI
         logic take;
-        d_need_astat |= cond_astat(cond);
         if (op[40]) begin x.unsup = 1'b1; x.why = U_FORM; end    // RTI
         take = cok;
         if (ee) comp_on = !cok; else comp_on = cok;
         if (take) begin
-            logic [23:0] v;
             if (s.pcstkp == 6'd0) begin x.unsup = 1'b1; x.why = U_STK; end
-            v = s.pcstk;
+            br = 1'b1; br_db = jdb; tsel = 2'd3; rts_v = s.pcstk;
             s.pcstkp = s.pcstkp - 6'd1;
             if (s.pcstkp < 6'd30) begin
                 if (!x.pcw) begin x.pcw = 1'b1; x.pcw_i = 5'(s.pcstkp); x.pcw_d = s.pcstk; end
@@ -678,8 +711,6 @@ always_comb begin
                 else begin s.pcstk = 24'hFFFFFF; s.stk = s.stk | PCEM; end
                 s.stk = s.stk & ~PCFL;
             end
-            if (jdb) s.nfaddr = v;
-            else begin s.pc = v; s.daddr = v; s.faddr = v + 24'd1; s.nfaddr = v + 24'd2; end
         end
     end
     9'b00001100?, 9'b00001101?, 9'b00001110?: begin             // DO UNTIL
@@ -689,7 +720,7 @@ always_comb begin
         ldist = off[31] ? -off[23:0] : off[23:0];
         if (op[42:40] == 3'b100) s.lcntr = {16'h0, op[39:24]};
         else if (op[42:40] == 3'b101) begin
-            s.lcntr = ((op[39:36] == 4'h6) ? seq_rd(op[35:32], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v);
+            s.lcntr = ur_all;
             d_rmask |= ureg_rmask(op[39:32]);
             if (op[39:36] == 4'h7 && (op[35:32] == 4'hc || op[35:32] == 4'he)) d_need_astat = 1'b1;
             if (!ureg_ok(op[39:32], 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
@@ -701,16 +732,17 @@ always_comb begin
         if (s.pcstkp >= 6'd30) s.stk = s.stk | PCFL;
         // PUSH_LOOP
         if (s.lstkp != 3'd0) begin
-            x.lcw = 1'b1; x.lcw_i = s.lstkp - 3'd1; x.lcw_d = s.curlcntr;
+            // after a loop-end pop this writes back the word the pop read: dropped (R1028)
+            x.lcw = !nlpop; x.lcw_i = s.lstkp - 3'd1; x.lcw_d = s.curlcntr;
             if (!x.law) begin x.law = 1'b1; x.law_i = s.lstkp - 3'd1; x.law_d = la_pack(s.la_type, s.la_code, s.la_addr); end
         end
         s.curlcntr = s.lcntr;
         s.lstkp = s.lstkp + 3'd1;
         if (s.lstkp == 3'd7) begin x.unsup = 1'b1; x.why = U_STK; end    // a seventh level
-        s.lcntr = (s.lstkp < 3'd6) ? lcs[s.lstkp] : 32'hFFFF_FFFF;
+        s.lcntr = (s.lstkp < 3'd6) ? (nlpop ? lcs_q0 : lcs_q1) : 32'hFFFF_FFFF;
         s.stk = s.stk & ~LSEM;
-        s.pcstk = s.pc + 24'd1;
-        s.la_addr = s.pc + off[23:0];
+        s.pcstk = pc1 + 24'd1;
+        s.la_addr = rel_t;
         if (op[42:40] == 3'b110) begin s.la_code = cond; s.la_type = 2'd0; end
         else begin
             s.la_code = 5'h0f;
@@ -718,7 +750,7 @@ always_comb begin
         end
     end
     9'b00001111?: begin                                         // immediate -> ureg
-        x.uw = 1'b1; x.uw_reg = op[39:32]; x.uw_val = op[31:0];
+        x.uw = 1'b1; x.uw_reg = op[39:32]; wd_sel = 2'd2;
         if (!ureg_ok(op[39:32], 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
     end
     9'b000100???: begin                                         // ureg <-> DM|PM, direct
@@ -726,9 +758,9 @@ always_comb begin
         u = op[39:32];
         if (op[41]) begin x.unsup = 1'b1; x.why = U_PM; end
         else begin
-            mem_on = 1'b1; mem_wr = op[40]; mem_a = op[31:0];
+            mem_on = 1'b1; mem_wr = op[40]; mb_i = 1'b0; mo_sel = 2'd3;
             if (op[40]) begin
-                x.acc_wd = ((u[7:4] == 4'h6) ? seq_rd(u[3:0], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v); d_rmask |= ureg_rmask(u);
+                wd_sel = 2'd1; d_rmask |= ureg_rmask(u);
                 if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
                 if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
             end else begin
@@ -742,9 +774,9 @@ always_comb begin
         u = op[39:32];
         if (op[44]) begin x.unsup = 1'b1; x.why = U_PM; end
         else begin
-            mem_on = 1'b1; mem_wr = op[40]; mem_a = ir[{1'b0, ii}] + op[31:0];
+            mem_on = 1'b1; mem_wr = op[40]; mo_sel = 2'd3;
             if (op[40]) begin
-                x.acc_wd = ((u[7:4] == 4'h6) ? seq_rd(u[3:0], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v); d_rmask |= ureg_rmask(u);
+                wd_sel = 2'd1; d_rmask |= ureg_rmask(u);
                 if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
                 if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
             end else begin
@@ -756,16 +788,18 @@ always_comb begin
     9'b1001?????: begin                                         // immediate data -> DM|PM
         if (op[37]) begin x.unsup = 1'b1; x.why = U_PM; end
         else begin
-            mem_on = 1'b1; mem_wr = 1'b1; mem_a = ir[{1'b0, ii}]; x.acc_wd = op[31:0];
-            x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; x.pmod_m = mr[{1'b0, mm}];
+            mem_on = 1'b1; mem_wr = 1'b1; wd_sel = 2'd2;
+            x.pmod = 1'b1; x.pmod_i = {1'b0, ii}; pm_sel = 2'd0;
         end
     end
     9'b00010100?: begin                                         // system register bit operation
-        x.bitop = 1'b1; x.bit_kind = op[39:37]; x.bit_reg = op[35:32]; x.bit_val = op[31:0];
+        // the register's value read in D (the ureg port), but ASTAT's and STKY's in X (a landing
+        // may change them in D's clock)
+        x.bitop = 1'b1; x.bit_kind = op[39:37]; x.bit_reg = op[35:32]; wd_sel = 2'd1;
         if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin x.unsup = 1'b1; x.why = U_UREG; end
     end
     9'b000101100: begin                                         // modify I by an immediate
-        x.pmod = 1'b1; x.pmod_i = {op[38], op[34:32]}; x.pmod_m = op[31:0];
+        x.pmod = 1'b1; x.pmod_i = {op[38], op[34:32]}; pm_sel = 2'd3;
     end
     9'b00010111?: begin                                         // push / pop the stacks
         x.unsup = 1'b1; x.why = U_STK;
@@ -773,6 +807,17 @@ always_comb begin
     9'b000000000: ;                                             // NOP
     default: begin x.unsup = 1'b1; x.why = U_FORM; end          // IDLE, bit-reverse, the rest
     endcase
+
+    // the queue: a taken branch (after a loop end's CHANGE_PC); delayed, only the fetch after next
+    case (tsel)
+    2'd0: tgt = op[23:0];
+    2'd1: tgt = rel_t;
+    2'd2: tgt = ind_t;
+    default: tgt = rts_v;
+    endcase
+    if (br && !br_db) begin
+        qb = tgt; s.pc = qb; s.daddr = qb; s.faddr = qb + 24'd1; s.nfaddr = qb + 24'd2;
+    end else if (br) s.nfaddr = tgt;
 
     // ---------------------------------------------------------------- the compute field
     if (comp_on && comp != 23'h0) begin
@@ -790,7 +835,7 @@ always_comb begin
                 3'd1: x.fl_sub = 1'b1;
                 3'd2: begin x.fl_misc = 1'b1; x.misc_op = 5'd17; end   // FLOAT BY (multi)
                 3'd3: begin x.fl_misc = 1'b1; x.misc_op = 5'd14; end   // FIX BY (multi)
-                3'd4: begin x.fl_misc = 1'b1; x.misc_op = 5'd2;  end   // FAVG
+                3'd4: begin x.fl_add = 1'b1; x.fl_avg = 1'b1; end    // FAVG
                 3'd5: begin x.fl_misc = 1'b1; x.misc_op = 5'd4;  end   // FABS
                 3'd6: begin x.fl_misc = 1'b1; x.misc_op = 5'd6;  end   // FMAX
                 default: begin x.fl_misc = 1'b1; x.misc_op = 5'd5; end // FMIN
@@ -815,7 +860,7 @@ always_comb begin
                     8'h82: x.fl_sub = 1'b1;
                     8'h91: begin x.fl_add = 1'b1; x.fl_absf = 1'b1; end
                     8'h92: begin x.fl_sub = 1'b1; x.fl_absf = 1'b1; end
-                    8'h89: begin x.fl_misc = 1'b1; x.misc_op = 5'd2; end
+                    8'h89: begin x.fl_add = 1'b1; x.fl_avg = 1'b1; end
                     8'h8a: begin x.fl_misc = 1'b1; x.misc_op = 5'd9; x.fl_comp = 1'b1; x.ra_we = 1'b0; end
                     8'ha1: begin x.fl_misc = 1'b1; x.misc_op = 5'd8; end
                     8'ha2: begin x.fl_misc = 1'b1; x.misc_op = 5'd7; end
@@ -855,6 +900,25 @@ always_comb begin
     end
     x.trunc = trunc;
 
+    // the data access's address (one adder), the store / ureg data, the post-modify amount
+    begin
+        logic [31:0] off;
+        case (mo_sel)
+        2'd1: off = m1_rd;
+        2'd2: off = sext6(op[32:27]);
+        2'd3: off = op[31:0];
+        default: off = 32'h0;
+        endcase
+        mem_a = (mb_i ? i1_rd : 32'h0) + off;
+    end
+    x.acc_wd = (wd_sel == 2'd0) ? rf_rd[4] : (wd_sel == 2'd1) ? ur_all : op[31:0];
+    case (pm_sel)
+    2'd0: x.pmod_m = m1_rd;
+    2'd1: x.pmod_m = sext6(op[32:27]);
+    2'd2: x.pmod_m = op[38] ? m2_rd : m1_rd;
+    default: x.pmod_m = op[31:0];
+    endcase
+
     // MAME's order: a load / ureg move to the float result's register wins
     if (x.ld_r && x.ld_dst == x.rm) x.rm_we = 1'b0;
     if (x.ld_r && x.ld_dst == x.ra) x.ra_we = 1'b0;
@@ -875,6 +939,7 @@ always_comb begin
     end
     // circular buffers (L != 0) are not done
     if (x.pmod && lnz[x.pmod_i]) begin x.unsup = 1'b1; x.why = U_DAG; end
+    x.pmod_b = x.pmod_i[3] ? i2_rd : i1_rd;
 
     // an unsupported word does nothing but move the queue (and is flagged)
     if (x.unsup) begin
@@ -892,17 +957,34 @@ always_comb begin
 
     dx = x;
     dsn = s;
-    d_opx = rf[rx]; d_opy = rf[ry]; d_opn = rf[rnn];
-    // the multifunction's four operands: R0-3, R4-7, R8-11, R12-15
-    if (comp[22]) begin
-        d_fmx = rf[{2'b00, comp[7:6]}]; d_fmy = rf[{2'b01, comp[5:4]}];
-        d_fax = rf[{2'b10, comp[3:2]}]; d_fay = rf[{2'b11, comp[1:0]}];
-    end else begin
-        d_fmx = rf[rx]; d_fmy = rf[ry]; d_fax = rf[rx]; d_fay = rf[ry];
-    end
+    d_opx = rf_rd[0]; d_opy = rf_rd[1]; d_opn = rf_rd[2];
+    // the multifunction's four operands: R0-3, R4-7, R8-11, R12-15 (the ports' addresses, below)
+    d_fmx = rf_rd[0]; d_fmy = rf_rd[1];
+    if (comp[22]) begin d_fax = rf_rd[2]; d_fay = rf_rd[3]; end
+    else begin d_fax = rf_rd[0]; d_fay = rf_rd[1]; end
     d_stx = x.acc_wd;
     d_dm_a = mem_a[DM_AW-1:0];
     d_dm_rd = mem_on && x.acc == A_DM && !mem_wr && !x.unsup;
+end
+
+// the R file's read addresses, from the opcode alone
+always_comb begin
+    logic [47:0] o;
+    logic        ish, mf;
+    logic [3:0]  rx, rnn;
+    o = pm_q;
+    ish = o[47:44] == 4'b1000 || o[47:40] == 8'b00000010;     // the immediate shifts
+    mf = o[22] && !ish;                                         // a multifunction compute field
+    rx = ish ? o[3:0] : o[7:4];
+    rnn = ish ? o[7:4] : o[11:8];
+    rf_ra[0] = mf ? {2'b00, o[7:6]} : rx;
+    rf_ra[1] = mf ? {2'b01, o[5:4]} : o[3:0];
+    rf_ra[2] = mf ? {2'b10, o[3:2]} : rnn;
+    rf_ra[3] = {2'b11, o[1:0]};
+    // a store's dreg (op[26:23]) or the ureg D names (ur_sel)
+    if (o[47:45] == 3'b010 || o[47:44] == 4'b0110 || o[47:44] == 4'b1000 || o[47:46] == 2'b11) rf_ra[4] = o[26:23];
+    else if (o[47:44] == 4'b0111) rf_ra[4] = o[39:36];
+    else rf_ra[4] = o[35:32];
 end
 
 // the scoreboard: a register or ASTAT being landed this clock
@@ -911,7 +993,9 @@ always_comb begin
     lm = 16'h0;
     if (ld_on && ld_mwe) lm |= 16'h1 << ld_rm;
     if (ld_on && ld_awe) lm |= 16'h1 << ld_ra;
-    d_wait = (d_rmask & lm) != 0 || (ld_on && d_need_astat);
+    if (rf_pw) lm |= 16'h1 << rf_pa;
+    // a landing that writes two R registers: D does not finish in it (the second write is next clock)
+    d_wait = (d_rmask & lm) != 0 || (ld_on && d_need_astat) || ir_pw || (ld_on && ld_mwe && ld_awe);
 end
 assign d_go = st == ST_D && !d_wait;
 
@@ -926,69 +1010,23 @@ logic [31:0] fa_r, fa_a, fa_s, fm_r, fm_a, fm_s;
 logic        x_ext_wait;
 logic        x_ext_on;
 
-always_comb begin
-    x_fix = alu_fixed(XC.fix_op, op_x, op_y, astat, mode1[M1_ALUSAT]);
-    x_sh = shifter(XC.sh_op, op_x, op_n, XC.sh_imm ? XC.sh_val : op_y, XC.sh_imm, astat);
-end
-
-// the misc float functions: computed in X from the operand registers, landed after
-always_comb begin
-    fres_t o;
-    o = '0;
-    if (MAME_RND)
-        case (XC.misc_op)
-        5'd2:  o = f_avg(fa_x, fa_y, XC.trunc);
-        5'd4:  o = f_abs(fa_x);
-        5'd5:  o = f_minmax(fa_x, fa_y, 1'b0);
-        5'd6:  o = f_minmax(fa_x, fa_y, 1'b1);
-        5'd7:  o = f_neg(fa_x);
-        5'd8:  o = f_pass(fa_x);
-        5'd9:  o = f_comp(fa_x, fa_y, astat & ~ALU_GRP);
-        5'd10: o = f_scalb(fa_x, fa_y);
-        5'd11: o = f_logb(fa_x);
-        5'd12: o = f_fix(fa_x, 1'b0, 32'h0, XC.trunc, 1'b0);
-        5'd13: o = f_fix(fa_x, 1'b1, fa_y, XC.trunc, 1'b0);
-        5'd14: o = f_fix(fa_x, 1'b1, fa_y, XC.trunc, 1'b1);
-        5'd15: o = f_float(fa_x, 1'b0, 32'h0, 1'b0);
-        5'd16: o = f_float(fa_x, 1'b1, fa_y, 1'b0);
-        5'd17: o = f_float(fa_x, 1'b1, fa_y, 1'b1);
-        5'd18: o = f_recips(fa_x);
-        5'd19: o = f_rsqrts(fa_x);
-        5'd20: o = f_copysign(fa_x, fa_y);
-        5'd21: o = f_clip(fa_x, fa_y);
-        default: o = '0;
-        endcase
-    else
-        case (XC.misc_op)
-        5'd2:  o = man_avg(fa_x, fa_y, XC.trunc);
-        5'd4:  o = f_abs(fa_x);
-        5'd5:  o = man_minmax(fa_x, fa_y, 1'b0);
-        5'd6:  o = man_minmax(fa_x, fa_y, 1'b1);
-        5'd7:  o = f_neg(fa_x);
-        5'd8:  o = f_pass(fa_x);
-        5'd9:  o = man_comp(fa_x, fa_y, astat & ~ALU_GRP);
-        5'd10: o = man_scalb(fa_x, fa_y);
-        5'd11: o = man_logb(fa_x);
-        5'd12: o = man_fix(fa_x, 1'b0, 32'h0, XC.trunc);
-        5'd13: o = man_fix(fa_x, 1'b1, fa_y, XC.trunc);
-        5'd14: o = man_fix(fa_x, 1'b1, fa_y, XC.trunc);
-        5'd15: o = man_float(fa_x, 1'b0, 32'h0, 1'b0, XC.trunc);
-        5'd16: o = man_float(fa_x, 1'b1, fa_y, 1'b0, XC.trunc);
-        5'd17: o = man_float(fa_x, 1'b1, fa_y, 1'b1, XC.trunc);
-        5'd18: o = man_recips(fa_x);
-        5'd19: o = man_rsqrts(fa_x);
-        5'd20: o = f_copysign(fa_x, fa_y);
-        5'd21: o = f_clip(fa_x, fa_y);
-        default: o = '0;
-        endcase
-    misc_d_r = o.r; misc_d_a = o.astat; misc_d_s = o.stky;
-end
+// the fixed ALU, the shifter and the misc float functions: one shared unit (R1028)
+logic [31:0] xu_fr, xu_sr, xu_fa, xu_sa, xu_fs;
+logic        xu_fw, xu_sw;
+m2b_sharc_xu #(.MAME_RND(MAME_RND)) u_xu (
+    .fix_on(XC.fix_on), .fix_op(XC.fix_op), .sh_on(XC.sh_on), .sh_op(XC.sh_op), .sh_imm(XC.sh_imm),
+    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .misc_on(XC.fl_misc), .misc_op(XC.misc_op),
+    .x(op_x), .y(op_y), .n(op_n), .fx(fa_x), .fy(fa_y), .astat, .alusat(mode1[M1_ALUSAT]), .trunc(XC.trunc),
+    .fix_r(xu_fr), .sh_r(xu_sr), .fix_we(xu_fw), .sh_we(xu_sw), .fix_astat(xu_fa),
+    .sh_astat(xu_sa), .fix_stky(xu_fs), .misc_r(misc_d_r), .misc_a(misc_d_a), .misc_s(misc_d_s));
+assign x_fix = {xu_fr, xu_fw, xu_fa, xu_fs};     // xres_t: r, we, astat, stky
+assign x_sh = {xu_sr, xu_sw, xu_sa, 32'h0};
 
 // the float units: operands from D, stage 1 at X's end, results in the landing clock
 logic fl_en, fm_restart;
 assign fl_en = st == ST_X && x_done;
 sharc_fadd #(.MAME_RND(MAME_RND)) u_fadd (
-    .clk, .en(fl_en), .x(fa_x), .y(fa_y), .sub(XC.fl_sub), .trunc(XC.trunc),
+    .clk, .en(fl_en), .x(fa_x), .y(fa_y), .sub(XC.fl_sub), .avg(XC.fl_avg), .trunc(XC.trunc),
     .r(fa_r), .astat(fa_a), .stky(fa_s), .nan_in(), .inf_both());
 sharc_fmul #(.MAME_RND(MAME_RND)) u_fmul (
     .clk, .en(fl_en), .restart(fm_restart),
@@ -1028,6 +1066,145 @@ assign ext_we = XC.acc_wr;
 assign ext_addr = XC.acc_addr;
 assign ext_wdata = XC.acc_wd;
 
+// the ureg write of a word in X (a load to a ureg, or a ureg move / immediate)
+logic        xu_w;
+logic [7:0]  xu_r;
+logic [31:0] xu_v;
+always_comb begin
+    xu_w = 1'b0; xu_r = 8'h0; xu_v = 32'h0;
+    if (XC.ld_u && x_ldv) begin xu_w = 1'b1; xu_r = XC.ld_ureg; xu_v = x_ld; end
+    if (XC.uw) begin xu_w = 1'b1; xu_r = XC.uw_reg; xu_v = XC.acc_wd; end
+end
+
+// the landing's Ra value: the adder's or the misc unit's, ABS(Fx +- Fy) made a magnitude
+logic [31:0] ld_rav, ld_raa, ld_ras;
+always_comb begin
+    ld_rav = ld_misc ? misc_r : fa_r;
+    ld_raa = ld_misc ? misc_a : fa_a;
+    ld_ras = ld_misc ? misc_s : fa_s;
+    if (ld_absf) begin
+        if ((ld_raa & AI) == 0) ld_rav = ld_rav & ~SIGN;
+        ld_raa = ld_raa & ~AN;
+    end
+end
+
+// the R file's write port: this clock's first write, or last clock's deferred second
+logic rx_c, rx_l, rx_done;
+always_comb begin
+    rx_done = st == ST_X && x_done;
+    rx_c = rx_done && ((XC.fix_on && x_fix.we) || (XC.sh_on && x_sh.we));     // the compute's
+    rx_l = rx_done && ((XC.ld_r && x_ldv) || (xu_w && xu_r[7:4] == 4'h0));    // a load / ureg move's
+    rf_we = 1'b0; rf_wa = XC.rn; rf_wd = XC.fix_on ? x_fix.r : x_sh.r;
+    if (rf_pw) begin rf_we = 1'b1; rf_wa = rf_pa; rf_wd = rf_pd; end
+    else if (ld_on && ld_mwe) begin rf_we = 1'b1; rf_wa = ld_rm; rf_wd = fm_r; end
+    else if (ld_on && ld_awe) begin rf_we = 1'b1; rf_wa = ld_ra; rf_wd = ld_rav; end
+    else if (rx_c) rf_we = 1'b1;
+    else if (rx_l) begin rf_we = 1'b1; rf_wa = XC.ld_r ? XC.ld_dst : xu_r[3:0]; rf_wd = XC.ld_r ? x_ld : xu_v; end
+end
+always_ff @(posedge clk) begin
+    // the second write: the landing's Ra after its Rm, a load after the compute (MAME's order:
+    // the later wins a register both write)
+    rf_pw <= !reset && ((ld_on && ld_mwe && ld_awe) || (rx_c && rx_l));
+    rf_pl <= ld_on && ld_mwe && ld_awe;
+    if (ld_on) begin rf_pa <= ld_ra; rf_pd <= ld_rav; end
+    else begin rf_pa <= XC.ld_r ? XC.ld_dst : xu_r[3:0]; rf_pd <= XC.ld_r ? x_ld : xu_v; end
+end
+genvar gp;                                  // (Quartus 17: not in the for)
+generate for (gp = 0; gp < 5; gp++) begin : g_rf
+    m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u (.clk, .we(rf_we), .wa(rf_wa), .wd(rf_wd), .ra(rf_ra[gp]), .rd(rf_rd[gp]));
+end endgenerate
+
+// I / M: D's read addresses from the opcode alone
+always_comb begin
+    logic [47:0] o;
+    logic        modf, modi;
+    o = pm_q;
+    modf = o[47:40] == 8'b00000100;            // compute, modify
+    modi = o[47:39] == 9'b000101100;           // modify by an immediate
+    i1_ra = modf ? o[32:30] : modi ? o[34:32] : o[43:41];
+    i2_ra = modi ? o[34:32] : o[32:30];
+    m1_ra = modf ? o[29:27] : o[40:38];
+    m2_ra = o[29:27];
+end
+
+// I / M: the writes at X's end, the deferred I write after
+always_comb begin
+    logic xdone, xi_u;
+    logic [3:0] iu;
+    logic [31:0] base;
+    xdone = st == ST_X && x_done;
+    xi_u = xu_w && (xu_r[7:4] == 4'h1 || xu_r[7:4] == 4'h4);
+    iu = {xu_r[3], xu_r[2:0]};
+    // post-modify after the load (a load to the same I is modified: MAME's apply_load then post_modify)
+    base = (xi_u && iu == XC.pmod_i) ? xu_v : XC.pmod_b;
+    ir_we = 1'b0; ir_wa = XC.pmod_i; ir_wd = base + XC.pmod_m;
+    if (ir_pw) begin ir_we = 1'b1; ir_wa = ir_pa; ir_wd = ir_pd; end
+    else if (xdone && XC.pmod) ir_we = 1'b1;
+    else if (xdone && xi_u) begin ir_we = 1'b1; ir_wa = iu; ir_wd = xu_v; end
+    mr_we = xdone && xu_w && xu_r[7:4] == 4'h2;
+    mr_wa = {xu_r[3], xu_r[2:0]};
+    mr_wd = xu_v;
+end
+always_ff @(posedge clk) begin
+    ir_pw <= !reset && st == ST_X && x_done && XC.pmod && xu_w && (xu_r[7:4] == 4'h1 || xu_r[7:4] == 4'h4) &&
+             {xu_r[3], xu_r[2:0]} != XC.pmod_i;
+    ir_pa <= {xu_r[3], xu_r[2:0]};
+    ir_pd <= xu_v;
+end
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra({1'b0, i1_ra}), .rd(i1_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i2 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra({1'b1, i2_ra}), .rd(i2_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_iu (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(ur_sel[3:0]), .rd(iu_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra({1'b0, m1_ra}), .rd(m1_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m2 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra({1'b1, m2_ra}), .rd(m2_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_mu (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(ur_sel[3:0]), .rd(mu_rd));
+
+// the system register bit operation: on the register's value (read in D; ASTAT and STKY now,
+// a landing may have changed them since -- a bit operation word has no compute of its own)
+logic [31:0] xb_v;
+logic        xb_t, xb_btf;
+always_comb begin
+    logic [31:0] d;
+    if (XC.bit_reg == 4'hc) xb_v = sys_rd(4'hc, astat, mode1, mode2, stky, irptl, imask, ustat1, ustat2, flg);
+    else if (XC.bit_reg == 4'he) xb_v = stky;
+    else xb_v = XC.acc_wd;
+    d = x_op[31:0];
+    xb_t = XC.bit_kind == 3'd4 || XC.bit_kind == 3'd5;
+    xb_btf = (XC.bit_kind == 3'd4) ? (xb_v & d) == d : xb_v == d;
+    case (XC.bit_kind)
+    3'd0: xb_v = xb_v | d;
+    3'd1: xb_v = xb_v & ~d;
+    3'd2: xb_v = xb_v ^ d;
+    default: ;
+    endcase
+end
+
+// IOP registers this core takes (the rest of 0x00-0x41 is flagged; 0x42-0x4f are DMA 7)
+function automatic logic iop_known(input logic [7:0] r);
+    case (r)
+    8'h00, 8'h02, 8'h08, 8'h09, 8'h0a, 8'h0b, 8'h0c, 8'h0d, 8'h0e, 8'h0f, 8'h14, 8'h17, 8'h20, 8'h40, 8'h41, 8'h1c:
+        return 1'b1;
+    default: return r >= 8'h42 && r <= 8'h4f;
+    endcase
+endfunction
+
+// an unsupported word in X: D's (it runs as a NOP), or one X finds at its end -- a MODE1 write
+// changing a swap bit (the alternate files), SHARC-side DMA (DMAC6 DEN), an unknown IOP register
+logic       us_go;
+logic [3:0] us_why;
+always_comb begin
+    logic iop_w, iop_r;
+    iop_w = XC.acc == A_IOP && XC.acc_wr;
+    iop_r = XC.acc == A_IOP && !XC.acc_wr;
+    us_go = 1'b0; us_why = XC.why;
+    if (st == ST_X && XC.unsup) us_go = 1'b1;
+    else if (st == ST_X && x_done) begin
+        if ((xu_w && !XC.bitop && xu_r == 8'h7b && ((xu_v ^ mode1) & M1_SWAPS) != 0) ||
+            (XC.bitop && XC.bit_reg == 4'hb && ((xb_v ^ mode1) & M1_SWAPS) != 0)) begin us_go = 1'b1; us_why = U_MODE; end
+        if ((iop_w && XC.acc_addr[7:0] == 8'h1c && XC.acc_wd[0]) || (iop_w && !iop_known(XC.acc_addr[7:0])) ||
+            (iop_r && XC.acc_addr[7:0] != 8'h00 && XC.acc_addr[7:0] != 8'h37)) begin us_go = 1'b1; us_why = U_IOP; end
+    end
+end
+
 // ================================================================== the clocked part
 
 
@@ -1055,34 +1232,25 @@ always_ff @(posedge clk) begin
         // the register files and stacks are not cleared (MAME's are zero from construction;
         // these are zero from configuration)
     end else begin
-        dbg_ret <= 1'b0;
+        dbg_ret <= rf_pw && rf_pl;
         fm_restart <= 1'b0;
 
         // ---------------------------------------------------------------- the landing
         if (ld_on) begin
-            logic [31:0] a, k, ra_v, ra_a, ra_s;
+            logic [31:0] a, k;
             a = astat; k = stky;
-            ra_v = ld_misc ? misc_r : fa_r;
-            ra_a = ld_misc ? misc_a : fa_a;
-            ra_s = ld_misc ? misc_s : fa_s;
-            if (ld_absf) begin
-                if ((ra_a & AI) == 0) ra_v = ra_v & ~SIGN;
-                ra_a = ra_a & ~AN;
-            end
             if (ld_mul) begin a = (a & ~MUL_GRP) | fm_a; k = k | fm_s; end
             if (ld_alu) begin
-                a = (a & ~ALU_GRP) | ra_a; k = k | ra_s;
+                a = (a & ~ALU_GRP) | ld_raa; k = k | ld_ras;
                 if (ld_comp) a = (a & 32'h00FF_FFFF) | (misc_r & 32'hFF00_0000);
             end
-            if (ld_mwe) rf[ld_rm] <= fm_r;
-            if (ld_awe) rf[ld_ra] <= ra_v;
             // a ureg write to ASTAT / STKY in the same word comes after the compute (MAME's order)
             if (ld_ua) a = ld_uv;
             if (ld_us) k = (k & STK_BITS) | (ld_uv & ~STK_BITS);
             astat <= a; stky <= k;
-            ah1 <= a; ah2 <= ah1; ah3 <= ah2;
+            ah1 <= a & AH_BITS; ah2 <= ah1; ah3 <= ah2;
             ld_on <= 1'b0;
-            dbg_ret <= 1'b1;
+            dbg_ret <= !(ld_mwe && ld_awe);         // (else after the deferred Ra write)
         end
 
         case (st)
@@ -1090,7 +1258,7 @@ always_ff @(posedge clk) begin
         ST_FETCH: st <= ST_D;
         ST_D: if (d_go) begin
             XC <= dx;
-            SN <= dsn;
+            S <= dsn;                               // the sequencer at D's end (R1028); X's ureg writes after
             x_op <= pm_q;
             x_pc <= S.daddr;
             op_x <= d_opx; op_y <= d_opy; op_n <= d_opn;
@@ -1099,61 +1267,45 @@ always_ff @(posedge clk) begin
             fm_restart <= 1'b1;
             x_ext_on <= 1'b1;
             st <= ST_X;
-            if (dx.unsup && !unsup) begin
-                unsup <= 1'b1; unsup_pc <= S.daddr; unsup_op <= pm_q; unsup_why <= dx.why;
-            end
         end
         ST_X: begin
             if (x_ext_on && ext_ack && XC.acc == A_EXT) x_ext_on <= 1'b0;
+            // an unsupported word (D's, or X's own below): one capture, of the word in X
+            if (us_go && !unsup) begin
+                unsup <= 1'b1; unsup_pc <= x_pc; unsup_op <= x_op; unsup_why <= us_why;
+            end
             if (x_done) begin
-                logic [31:0] a, k, uv, base;
+                logic [31:0] a, k, uv;
                 logic        uw;
                 logic [7:0]  ur;
                 seq_t sq;
                 a = astat; k = stky;
-                sq = SN;
+                sq = S;
                 // the fixed / shifter result
                 if (XC.fix_on) begin
                     a = x_fix.astat; k = k | x_fix.stky;
-                    if (x_fix.we) rf[XC.rn] <= x_fix.r;
                 end
                 if (XC.sh_on) begin
                     a = x_sh.astat;
-                    if (x_sh.we) rf[XC.rn] <= x_sh.r;
                 end
                 // loads and ureg moves
                 uw = 1'b0; ur = 8'h0; uv = 32'h0;
-                if (XC.ld_r && x_ldv) rf[XC.ld_dst] <= x_ld;
-                if (XC.ld_u && x_ldv) begin uw = 1'b1; ur = XC.ld_ureg; uv = x_ld; end
-                if (XC.uw) begin uw = 1'b1; ur = XC.uw_reg; uv = XC.uw_val; end
+                uw = xu_w; ur = xu_r; uv = xu_v;
                 // the system-register bit operation, on the register's value now
                 if (XC.bitop) begin
-                    logic [31:0] src, d;
-                    src = sys_rd(XC.bit_reg, a, mode1, mode2, stky, irptl, imask, ustat1, ustat2, flg);
-                    d = XC.bit_val;
-                    case (XC.bit_kind)
-                    3'd0: src = src | d;
-                    3'd1: src = src & ~d;
-                    3'd2: src = src ^ d;
-                    3'd4: if ((src & d) == d) a = a | BTF; else a = a & ~BTF;
-                    3'd5: if (src == d) a = a | BTF; else a = a & ~BTF;
-                    default: ;
-                    endcase
-                    uw = 1'b1; ur = {4'h7, XC.bit_reg}; uv = src;
+                    if (xb_t) a = xb_btf ? (a | BTF) : (a & ~BTF);
+                    uw = 1'b1; ur = {4'h7, XC.bit_reg}; uv = xb_v;
                 end
                 // post-modify: after the load (a load to the same I is modified)
-                base = ir[XC.pmod_i];
-                if (uw && (ur[7:4] == 4'h1 || ur[7:4] == 4'h4) && {ur[3], ur[2:0]} == XC.pmod_i) base = uv;
                 ld_ua <= 1'b0; ld_us <= 1'b0; ld_uv <= uv;
                 if (uw) begin
                     logic [2:0] kk;
                     kk = ur[2:0];
                     case (ur[7:4])
-                    4'h0: rf[ur[3:0]] <= uv;
-                    4'h1: ir[{ur[3], kk}] <= uv;
-                    4'h2: mr[{ur[3], kk}] <= uv;
+                    4'h0: ;                                 // R: the write port (rf_we)
+                    4'h1, 4'h2: ;                           // I, M: the write ports (ir_we, mr_we)
                     4'h3: lnz[{ur[3], kk}] <= uv != 32'h0;
-                    4'h4: ir[{ur[3], kk}] <= uv;           // B: I = B (B itself is not kept)
+                    4'h4: ;                                 // B: I = B (B itself is not kept; ir_we)
                     4'h6: case (ur[3:0])
                           4'h4: if (sq.pcstkp != 6'd0 && sq.pcstkp < 6'd31) sq.pcstk = uv[23:0];
                           4'h7: if (sq.lstkp != 3'd0 && sq.lstkp < 3'd7) sq.curlcntr = uv;
@@ -1167,9 +1319,6 @@ always_ff @(posedge clk) begin
                           4'ha: mode2 <= uv;
                           4'hb: begin
                               mode1 <= uv;
-                              if (((uv ^ mode1) & M1_SWAPS) != 0 && !unsup) begin
-                                  unsup <= 1'b1; unsup_pc <= x_pc; unsup_op <= x_op; unsup_why <= U_MODE;
-                              end
                           end
                           4'hc: if (XC.fl_on) begin ld_ua <= 1'b1; end else a = uv;
                           4'hd: imask <= uv;
@@ -1185,7 +1334,6 @@ always_ff @(posedge clk) begin
                     default: ;
                     endcase
                 end
-                if (XC.pmod) ir[XC.pmod_i] <= base + XC.pmod_m;
                 // the accesses' writes
                 if (XC.acc == A_IOP && XC.acc_wr) begin
                     case (XC.acc_addr[7:0])
@@ -1193,20 +1341,13 @@ always_ff @(posedge clk) begin
                     8'h02, 8'h08, 8'h09, 8'h0a, 8'h0b, 8'h0c, 8'h0d, 8'h0e, 8'h0f, 8'h14, 8'h17, 8'h20: ;
                     8'h40: ii6 <= XC.acc_wd;
                     8'h41: im6 <= XC.acc_wd;
-                    8'h1c: begin
-                        dmac6 <= XC.acc_wd;
-                        if (XC.acc_wd[0] && !unsup) begin unsup <= 1'b1; unsup_pc <= x_pc; unsup_op <= x_op; unsup_why <= U_IOP; end
-                    end
-                    default: if ((XC.acc_addr[7:0] < 8'h42 || XC.acc_addr[7:0] > 8'h4f) && !unsup) begin
-                        unsup <= 1'b1; unsup_pc <= x_pc; unsup_op <= x_op; unsup_why <= U_IOP;
-                    end
+                    8'h1c: dmac6 <= XC.acc_wd;
+                    default: ;
                     endcase
-                end
-                if (XC.acc == A_IOP && !XC.acc_wr && XC.acc_addr[7:0] != 8'h00 && XC.acc_addr[7:0] != 8'h37 && !unsup) begin
-                    unsup <= 1'b1; unsup_pc <= x_pc; unsup_op <= x_op; unsup_why <= U_IOP;
                 end
                 // the sequencer and STKY's stack bits
                 S <= sq;
+                if (BENCH) S_dbg <= sq;                 // the benches' view: S after this word
                 k = (k & ~STK_BITS) | (sq.stk & STK_BITS);
                 astat <= a; stky <= k;
                 // the float landing next clock
@@ -1220,7 +1361,7 @@ always_ff @(posedge clk) begin
                 ld_absf <= XC.fl_absf;
                 ld_comp <= XC.fl_comp;
                 misc_r <= misc_d_r; misc_a <= misc_d_a; misc_s <= misc_d_s;
-                dbg_pc <= x_pc; dbg_op <= x_op;
+                if (BENCH) begin dbg_pc <= x_pc; dbg_op <= x_op; end   // the benches' only
                 st <= ST_D;
             end
         end
@@ -1284,12 +1425,27 @@ end
 // X's first clock
 always_ff @(posedge clk) x_first <= d_go;
 
-// the stacks: one write each at X's end (no reset: the PC stack can be MLAB)
-always_ff @(posedge clk) if (!reset && st == ST_X && x_done) begin
-    if (XC.pcw) pcs[XC.pcw_i] <= XC.pcw_d;
-    if (XC.lcw) lcs[XC.lcw_i] <= XC.lcw_d;
-    if (XC.law) las[XC.law_i] <= XC.law_d;
-end
+// the stacks: one write each at X's end
+// written at D's end (R1028): D's reads in that clock are at other words (the one case that was
+// not, a DO after a loop-end pop rewriting what the pop read, writes nothing now)
+logic stk_we;
+assign stk_we = !reset && d_go;
+m2b_lutram #(.AW(5), .DW(24), .INIT1(RF_ONES)) u_pcs2 (.clk, .we(stk_we && dx.pcw), .wa(dx.pcw_i), .wd(dx.pcw_d),
+    .ra(5'(S.pcstkp - 6'd2)), .rd(pcs_p2));
+m2b_lutram #(.AW(5), .DW(24), .INIT1(RF_ONES)) u_pcs3 (.clk, .we(stk_we && dx.pcw), .wa(dx.pcw_i), .wd(dx.pcw_d),
+    .ra(5'(S.pcstkp - 6'd3)), .rd(pcs_p3));
+m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lcp2 (.clk, .we(stk_we && dx.lcw), .wa(dx.lcw_i), .wd(dx.lcw_d),
+    .ra(S.lstkp - 3'd2), .rd(lcs_p2));
+m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lcp3 (.clk, .we(stk_we && dx.lcw), .wa(dx.lcw_i), .wd(dx.lcw_d),
+    .ra(S.lstkp - 3'd3), .rd(lcs_p3));
+m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lcq0 (.clk, .we(stk_we && dx.lcw), .wa(dx.lcw_i), .wd(dx.lcw_d),
+    .ra(S.lstkp), .rd(lcs_q0));
+m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lcq1 (.clk, .we(stk_we && dx.lcw), .wa(dx.lcw_i), .wd(dx.lcw_d),
+    .ra(S.lstkp + 3'd1), .rd(lcs_q1));
+m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lap2 (.clk, .we(stk_we && dx.law), .wa(dx.law_i), .wd(dx.law_d),
+    .ra(S.lstkp - 3'd2), .rd(las_p2));
+m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lap3 (.clk, .we(stk_we && dx.law), .wa(dx.law_i), .wd(dx.law_d),
+    .ra(S.lstkp - 3'd3), .rd(las_p3));
 
 // MAME's device_reset clears both blocks (std::fill 0): Dead or Alive reads matrix-stack words
 // it has not written and sends them to the i960 (R1027), so the internal RAM is cleared here
