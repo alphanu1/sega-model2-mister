@@ -341,7 +341,7 @@ module m2_geo_clip (
   // 4:1 vertex mux (s317: ti -> test_v -> fkey -> is_out, -0.406 ns at 70).
   // R1021: registered as its compare key, and the plane's direction folded in,
   // so K_TESTW is one unsigned compare against the product's key instead of
-  // two compares and a select (s2922: test_v_q -> is_out, 9 levels, -0.625).
+  // two compares and a select (s2922: test_v_q -> is_out, 9 levels, -0.551).
   // fgt(a, b) is fkey(a) > fkey(b), and ~ reverses an unsigned order, so
   // fgt(p, t) == (~fkey(t) > ~fkey(p)): one compare, both keys inverted when
   // the plane is not a greater-than plane. lvl does not move in K_TEST or
@@ -353,6 +353,12 @@ module m2_geo_clip (
     test_inv_q <= !plane_gt;
   end
   wire [31:0] mul_k = fkey(mul_res) ^ {32{test_inv_q}};
+  // test_k_q > mul_k as the borrow of a subtract, so it is a carry chain and
+  // not a tree of LUTs (Quartus built `>` here as 9-10 LUT levels; the
+  // subtract, module alone post-map, is the key's LUT and the chain: 2)
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire [32:0] test_d = {1'b0, mul_k} - {1'b0, test_k_q};
+  /* verilator lint_on UNUSEDSIGNAL */
 
   // A child vertex is named rather than copied: bit 2 says "from a temporary",
   // bits 1:0 index the quad or the temporaries.
@@ -542,7 +548,7 @@ module m2_geo_clip (
         end
         K_TEST:  if (mul_gnt) kst <= K_TESTW;
         K_TESTW: if (mul_rsp) begin
-          is_out[ti] <= test_k_q > mul_k;   // R587, R1021: plane_gt ? fgt(test_v, mul_res) : fgt(mul_res, test_v)
+          is_out[ti] <= test_d[32];   // R587, R1021: test_k_q > mul_k, = plane_gt ? fgt(test_v, mul_res) : fgt(mul_res, test_v)
           if (ti == 2'd3) begin
             // Decided on the last vertex, so the whole flag word is ready one
             // cycle later - which is why the decision lives in K_ROT.
