@@ -1,5 +1,54 @@
 # Handoff
 
+## 2026-11-15 (night): model2b -- the 2B SHARC's first cut built and bit-exact on Dead or Alive (R1027), simulation + quartus_map only
+
+Branch `model2b`. Study R1027 has the record. Not pushed, not merged, not in
+Model2.sv, no fit, no board.
+
+  * rtl/sharc: Hornet's sharc_fadd / sharc_fmul / sharc_fp_pkg (87f9866) with
+    MAME_RND (1 = MAME bit-exact, 0 = the manual: TRUNC to zero, denormals
+    flushed in and out, fmul without its slow path; default 0); m2b_sharc.sv,
+    the core: D + X, two clocks a word, MAME's queue / loop stack / delayed
+    branches, float results landing a clock after X behind a scoreboard; PM 8 K
+    x 48 (fvipers / schamp PM data at 0x21f00-0x21fff justify 8 K), DM 8 K x 32,
+    the ext_ port for the rest, the host upload / IOP window / EPB0, FLAG0 / 1
+    from the FIFOs. Unsupported words set a sticky flag and run as NOPs.
+  * Verified: float units 100 M vectors x both roundings against MAME and a
+    long-double manual reference, 0 off, 16/16 planted faults; DOA's 150 s
+    (501.8 M words, boot to a fight) replayed from a MAME capture: 18.5 M
+    out-FIFO words and 70 M words of state hashes equal to MAME's; lockstep
+    against Hornet's v1 at every word, 0 differ, in MAME's rounding AND the
+    manual's (v1 copied with a MAN switch); random programs 24 M words, 0
+    differ; 17 planted core faults all caught (DOA's replay 11, random 15).
+  * Manual vs MAME on DOA: the same control flow and word count; 55% of out
+    words differ, mostly 1-15 ulps, a tail to 255+ (matrix chains, values near
+    zero). All explained by rounding (the manual v1 matches at every word).
+  * Speed: 2.2517 clk_sys a word (D 1.25, X 1.00). MAME paced with the RTL's
+    per-address costs: DOA 60 fps at s 1.5 / 2.2 / 2.6 (p99 8.55 / 11.80 /
+    13.73 ms).
+  * DM cache measured: 64 lines x 16 words (1 K words, 4 M10K) chosen; paced
+    lastbrnx +0.5 ms, schamp +0.2 ms a frame, no frames lost. NOT in RTL yet.
+  * AREA, mapped: 9,527 ALM, 4,590 registers, 80 M10K, 1 DSP -- about TWICE
+    the ~4,450 ALM budget (misc float functions ~1,360, PC stack in FFs ~550;
+    register files, I / M, stacks are flip-flops). M10K fits.
+
+FINDINGS THAT WERE WRONG ON THE WAY: DOA reads 12 matrix-stack words it never
+wrote and sends them to the i960 -- MAME's reset zeroes the RAM, so the core
+now clears PM / DM after reset (the bench's all-ones start found it); the
+first build fetched one word late and reported call targets as pcs; Quartus
+17 rejected a header import, a name in two packages, a double part-select and
+crashed (Verific internal error) on a function reading module arrays --
+Verilator accepted all of them, so analyse every RTL change in Quartus too.
+One map was started with three other Quartus processes running (a miscount).
+
+REMAINS: the area (MLAB register files and stacks, one shifter, the misc
+functions narrowed -- measure each); then a fit of the core alone for timing;
+the DM / buffer / ROM caches; R1024's other features; integration into
+Model2.sv (m2_copro's SHARC variant, the B2 board flag, R1024's board list).
+Benches: sim/sharc/fp (build.sh, fp_faults.py), sim/sharc/bench (build.sh
+<obj> <MAME_RND> <LOCK>, core_faults.py, m2b_randprog.py), captures in the
+scratchpad (m2b/cap_doa, cap_doa_b) via sim/sharc/mame_m2b_capture.patch.
+
 ## 2026-11-15 (later): model2b -- every 2B set censused; R1023's plan revised (R1024), no RTL
 
 Branch `model2b`. Study R1024 has the record (a table for every set). Not

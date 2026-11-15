@@ -51860,3 +51860,244 @@ the cost.
 
 *Not settled:* the cache's geometry; whether schamp / lastbrnx stay at
 MAME's lateness with it (R1024's s 1.5 table, re-run).
+
+**R1027 -- THE 2B SHARC's FIRST CUT IS BUILT AND RUNS DEAD OR ALIVE BIT-EXACT:
+EVERY ONE OF 501.8 M WORDS (150 s, BOOT TO A FIGHT) EQUAL TO HORNET's v1 IN
+LOCKSTEP, ALL 18.5 M OUT-FIFO WORDS EQUAL TO MAME's, 70 M WORDS' STATE HASHES
+EQUAL TO MAME's -- IN MAME ROUNDING; IN THE MANUAL's (THE DEFAULT) EQUAL TO A
+MANUAL-ROUNDING v1 AT EVERY WORD, MAME's CONTROL FLOW UNCHANGED, 55% OF THE
+OUT WORDS DIFFERENT FROM MAME's BY ROUNDING. 2.25 clk_sys A WORD MEASURED.
+DOA READS DATA IT NEVER WROTE (MAME CLEARS THE RAM): THE CORE CLEARS IT TOO.
+DM CACHE MEASURED AND SIZED (64 x 16 WORDS); NOT YET IN RTL.** Branch model2b,
+2026-11-15. Simulation and quartus_map only: no full build, no board, not
+integrated into Model2.sv.
+
+(Section: §10, after R1026. Authority: MAME 0.289 for the instruction semantics
+and the board; the ADSP-2106x manual for float rounding (R1024, Ben's
+decision); Hornet's v1 (MAME transcribed) as the lockstep partner. Model 1 has
+no SHARC.)
+
+*What was believed (R1023 section 4, R1024, R1026):* a one-word-at-a-time core
+-- fetch ahead, scoreboarded float results, MAME's sequencing -- reaches <= ~3
+clk a word; Hornet's sharc_fadd / sharc_fmul with the manual's rounding added;
+PM 7 K x 48; DM 8 K on chip plus an SDRAM port behind a small cache; ~3,150 ALM
+by parts for R1023's list, ~4,100-4,300 for R1024's.
+
+*BUILT (rtl/sharc, commits f34bda6a, 5c73cdf2, ac54c72d and this one):*
+  * sharc_fp_pkg.sv, sharc_fadd.sv, sharc_fmul.sv: Hornet's (87f9866,
+    THIRD_PARTY.md), with MAME_RND. 1 = his units unchanged (MAME, bit-exact).
+    0 (default) = the manual: fadd rounds toward zero under TRUNC (only the
+    round-up is gated -- the near path is exact and the far path cannot be
+    tiny with flushed inputs, so nothing else changes); fmul has a new branch:
+    operands flushed, a product below 2^-126 (after rounding at 24 bits,
+    exponent unbounded) flushed with MU / MUS, round toward zero under TRUNC,
+    an overflow the largest finite with MV / MVS; NO slow path (busy 0). The
+    package gains man_* functions (man_round / add / sub / avg / addsub / mul /
+    float / fix, and MAME's exact functions on flushed operands): FIX under
+    TRUNC toward minus infinity in BOTH forms (MAME's multifunction form is a
+    C cast); FLOAT rounds by TRUNC.
+  * m2b_sharc.sv (+ m2b_sharc_pkg.sv: v1's fixed ALU, shifter and conditions
+    restated as functions): D then X, two clocks a word. D: the opcode (PM's
+    registered output), MAME's queue shift and loop end, decode, condition,
+    operands, the DM read address, the next fetch address. Nothing
+    architectural changes in D. X: the next word's fetch issued in its first
+    clock (ready for the next D, so a taken branch costs nothing -- MAME's
+    queue decides it), the fixed ALU / shifter, loads, ureg writes,
+    post-modify, the accesses, the sequencer and stacks, all at X's end; FIFO
+    full / empty and an external access hold X. Float results (fadd, fmul and
+    the "misc" float functions, computed in X from operand registers) land in
+    the clock after X (the next word's first D clock); the next word waits
+    one clock in D if it reads a register or ASTAT being landed. MAME's order
+    inside a word is kept: a load or ureg move to the float result's register
+    wins; a ureg write to ASTAT / STKY in a word with a float compute is
+    applied at the landing, after the float flags; a load to the I register
+    the same word post-modifies is modified (MAME's apply_load then
+    post_modify). MAME's ASTAT history for long loop conditions is a
+    three-deep shift of each word's final ASTAT.
+  * PM 8 K x 48 on chip (three 16-bit lanes; the host's 16-bit upload writes
+    one, MSWF honoured), JUSTIFIED: fvipers and schamp use PM-bus data at
+    0x21f00-0x21fff (R1024's census, pmdata.bin, measured here), past 7 K. 7 K
+    plus a 256-word window there would save ~7 M10K (open, for Ben). DM block
+    1 8 K x 32 (two lanes) at its mirrors 0x28000 / 0x30000 / 0x38000; block-1
+    words from 8 K, the buffer RAM and data ROM go to an ext_ request / ack
+    port. FIFOs outside (fin_ / fout_), FLAG0 = in empty, FLAG1 = out full
+    (R1024), FLAG2 / 3 out as ASTAT when MODE2 says. The host side: the IOP
+    window with MAME's 16-bit pairing (SYSCON HPM), DMA6's II / IM / control,
+    EPB0 through the same 16-to-48 packer, the FIFO upload (xdma_*, phase =
+    the upload count mod 3), run = HALT released.
+  * UNSUPPORTED (sticky `unsup`, pc / opcode / reason; the word runs as a NOP
+    so the queue moves): type-1 dual moves, PM-bus data, short words, block-0
+    data, the fixed multiplier and MR, dual add / subtract, MODE1 swap bits
+    (alternate files), L != 0 on a post-modify (circular), RTI, CI, IDLE,
+    stack push / pop words, the status stack, PCSTKP written, SHARC-side DMA
+    (DMAC DEN), unknown IOP registers, RND32 = 0 on a float op, a seventh
+    loop level or a pop of an empty stack. DOA never set it.
+
+*FOUND ON THE WAY (each a fault the benches caught, kept on record):*
+  * DOA READS DATA MEMORY IT NEVER WROTE. The bench starts DM all ones (the
+    standing rule); 48 of the first 10 K out-FIFO words came out ffffffff
+    where MAME has 0 -- the routine at 0x202b8 copies 12 matrix-stack words
+    (DM(I7 = 0x30200..)) to the out FIFO before anything has written them.
+    MAME's device_reset fills both blocks with 0 (Hornet's v1 P_BOOT too).
+    The core now clears PM and DM after reset (one word a clock, 8 K clocks,
+    the core held in HALT; the upload starts 0.84 s later), and the bench's
+    all-ones start proves the clear (a planted fault removing it is caught).
+    What the real SHARC's RAM holds at power-up is NOT known; zero is MAME's
+    and a defined state. The i960 gets those 12 words in MAME's capture.
+  * The first build fetched a word late (the PM address registered twice --
+    D saw the previous opcode; the trace caught it at word 22) and reported a
+    taken call's target as its pc. Both fixed before any long run.
+  * Quartus 17.0's front end: a package import in the module header is a
+    syntax error; a name imported from two packages is invisible; a function
+    reading module arrays (get_ureg) crashed Verific's elaboration (internal
+    error, veriname_elab.cpp:836); a double part-select (a[39:32][7:4]) is
+    rejected. All fixed (one read port for D's ureg read, functions of their
+    arguments, localparams for the enums); Verilator took every one.
+
+*VERIFICATION (numbers):*
+  * FLOAT UNITS (sim/sharc/fp, tb_sharc_fp): both units at both MAME_RND, and
+    all 23 package float functions in MAME's (f_*) and the manual's (man_*)
+    form, against (a) Hornet's MAME reference (compute.hxx on host floats) and
+    (b) a manual reference written here with none of the RTL's structure (the
+    exact result in long double, rounded by frexpl / truncl / nearbyintl with
+    the exponent unbounded, then tiny / overflow judged). Operands biased past
+    the edges: denormals, zeros, infinities, NaNs, cancellation, products
+    near 2^-126 and 2^128, halfway cases, exponent differences 0-60, TRUNC on
+    3 vectors in 4. 4 seeds x 25 M vectors = 100 M: 0 mismatches; per seed
+    ~2.07 M products flushed tiny and ~3.65 M overflowed in manual mode, MAME's
+    slow multiply path 28.4 M clocks, and 3.82 M add / subtract results (15%)
+    where the manual differs from MAME. Planted faults (fp_faults.py, 1 M
+    vectors each): 16 of 16 caught (round to zero dropped / applied in MAME
+    mode, the alignment sticky in both adders, fmul flush / tiny threshold /
+    overflow / ties / MU, MAME fmul's bias, man_round, man_fix, man_float,
+    man_mul's MU, man_comp's flush, f_add's rounding).
+  * THE CAPTURE (sim/sharc/mame_m2b_capture.patch): R924's events.bin for 2B
+    (H IOP window, U upload, B boot, I / N pushes, P / O the SHARC's pops and
+    pushes, R / W buffer and ROM) and strace.bin, <pc, FNV hash of R / I / M /
+    ASTAT (less FLG0/1) / STKY / MODE1 / PCSTKP / LSTKP / CURLCNTR> for every
+    word that is not a one-word wait. DOA, play (coin at 30 s), 150 s: 501.77 M
+    work words, 22.17 M in-FIFO words, 18.54 M out; traces kept for words 0-40 M
+    (boot, attract) and 400-430 M (the fight). Deterministic: two runs gave the
+    same 501,767,270 words. ROM-derived, scratchpad only.
+  * REPLAY (sim/sharc/bench, tb_m2b_sharc): the boot through the core's own
+    host ports, the in FIFO kept full, the out FIFO drained, so every word is
+    work. MAME_RND 1, all 150 s: 501,777,271 words (9,976 waits at the end,
+    the stream spent), 18,541,146 out words, 0 differ from MAME's; the hash
+    trace 40 M + 30 M words, 0 differ. ~13 minutes a run.
+  * LOCKSTEP against v1 (sim/sharc/ref, Hornet's v1 copied with MAN and FLAG
+    pins; throttled to stay within 4 K words): PC, R0-R15, I0-I15, M0-M15,
+    ASTAT (less FLG0/1), STKY, MODE1, PCSTK / PCSTKP, LSTKP, CURLCNTR, LCNTR at
+    every word. MAME rounding: 501,777,271 words, 0 differ (v1's out words
+    also all equal to MAME's). Manual rounding (core MAME_RND 0, v1 MAN):
+    501,777,271 words, 0 differ.
+  * RANDOM PROGRAMS (m2b_randprog.py: the first cut's forms in combinations
+    DOA never makes -- condition loops longer than two words, counted loops,
+    a load to a float's register, a load to the I a word post-modifies, ASTAT
+    ureg writes beside a float compute, MODE1 TRUNC / ALUSAT changes, delayed
+    jumps, every condition) in lockstep with v1: 12 seeds x 1 M words in each
+    rounding, 0 differ, no unsupported word.
+  * PLANTED FAULTS in the core (core_faults.py, 17): DOA's replay (20 M
+    words, trace + out FIFO) catches 11, the random lockstep 15; together all
+    17. DOA alone misses the ASTAT history (no long condition loop exits in
+    DOA), the load-wins and same-I post-modify orders, LSHIFT by a negative
+    amount on a negative value, DAG2 M's sign extension; random alone misses
+    CALL's return address (no calls) and a store's data source (no FIFO). The
+    first ASTAT-history attempt in the random set also missed (the
+    decrement always first in the body: A three back equal to A two back);
+    with it anywhere in the body, caught.
+
+*MANUAL (TRUNC) AGAINST MAME, CHARACTERISED (DOA, all 150 s):*
+  * The control flow is MAME's: the same 501,777,271 words and the same
+    18,541,146 out words in both roundings; the PC trace equal to MAME's for
+    words 0-40 M and 400-430 M (the fight; 30 M words, 0 differ). The state hash first differs at
+    word 28,475,621 (rounding has accumulated by then).
+  * 10,280,834 of 18,541,146 out words (55%) differ from MAME's: by 1 ulp
+    3.46 M, 2-3 2.63 M, 4-15 2.97 M, 16-255 1.13 M, 256-65,535 85,065, more
+    832, a different exponent 1,762, a different sign 2,135; the core below
+    MAME 6.27 M, above 4.01 M (round to zero, chained). The large ones are
+    mostly the matrix stack's output words (0x202be: 934 K of its 13.2 M
+    pushes 16 ulps or more; then 0x20442 / 0x2043e / 0x204a6): products of
+    long chains of rounded matrices, and values that cancel near zero (the
+    sign and exponent cases). Every one is explained by the rounding alone:
+    v1 with the manual's functions matches the core at every word, and v1
+    differs from MAME only in its float functions. Issue #16655 saw the same
+    on Sonic the Fighters (23.9% of replies, ulps that build up). Whether DOA
+    looks different on screen is a board question.
+
+*SPEED:* 2.2517 clk_sys a word over DOA's 150 s (1,129,843,513 clocks; MAME
+rounding; the manual's 6,395 clocks fewer -- no slow multiply), of which D
+1.252 (0.252 waiting on a landing: 126.3 M of 501.8 M words), X 1.000. The
+dearest words 3.0 (a float result read by the next word). Against R1024's
+<= ~3 target: met; R1023's design A estimate was 2.45. MAME paced with the
+RTL's own per-address costs (m2b_rtl_costs.py: a tenth of a clock, SHARC at
+800 MHz x cost / 10), DOA's fight 110-160 s, 2,876 vblanks, one flip each at
+every s:
+      s     vblank -> flip p50 / p90 / p99 / max (ms)   i960 halted on results p50
+      1.5    6.96 /  7.65 /  8.55 / 10.23                  0.79
+      2.2    9.58 / 10.53 / 11.80 / 14.29                  0.58
+      2.6   11.38 / 12.10 / 13.73 / 15.54                  0.48
+(R1023's design A at s 2.6: 11.43 / 13.79 / 15.60.) The other sets were not
+run with RTL costs (their programs differ; the DOA profile does not apply).
+
+*THE DM CACHE (R1026), MEASURED FIRST (census patch: block 1 below 8 K on
+chip, everything else through direct-mapped and two-way caches of 16-512 lines
+x 1-16 words, reads that miss counted, writes posted):* only schamp and
+lastbrnx reach off chip. 200 s each:
+      lastbrnx: 81.0 M off-chip reads (~6,750 a vblank); misses 64 x 16 (1 K
+        words) 7.61 M (634 a vblank), 128 x 16 5.95 M, 256 x 16 3.07 M, 512 x
+        16 430 (cold); two-way a little better at 64 (6.64 M).
+      schamp: 11.6 M reads (~1,000 a vblank), a streaming pattern: 8- and
+        16-word lines both 2.42 M misses from 16 lines up; 4 K words or more
+        cold only.
+  CHOSEN: 64 lines x 16 words direct-mapped, 1 K words (4 M10K + tags),
+  write-through without allocate. Paced at s 1.5, k 3.3, buffer / ROM reads 40
+  clocks, a DM miss 56 (40 + the 16-word burst), 60-150 s, 5,177 vblanks:
+      lastbrnx  9.79 / 11.55 / 15.22 ms (R1024 with all DM on chip: 9.31 /
+                10.96 / 14.96); the same 4 late frames (MAME's own).
+      schamp   13.31 / 14.63 / 17.26 (R1024: 13.13 / 14.50 / 17.14); 7 late
+                (R1024: 10) -- noise.
+      128 x 16: lastbrnx 9.75 / 11.40 / 15.15; schamp unchanged.
+  So R1026's small cache costs ~0.2-0.5 ms a frame and no frames. The cache
+  is NOT in the RTL yet: DOA never reaches past 0x316; the core's ext_ port
+  carries those words, the cache belongs between it and the SDRAM with the
+  buffer RAM / ROM caches (the integration step).
+
+*AREA:* MAPPED, NOT FITTED (quartus_map 17.0 on m2b_sharc alone, MAME_RND 0,
+"Aggressive Area" as Model2.qsf; 44 s): 9,527 ALM needed, 13,278 ALUTs, 4,590
+registers, 80 M10K (PM 8 K x 48 = 48, DM 8 K x 32 = 32; 655,360 bits), 1 DSP,
+0 MLAB bits. Hornet's two units are 721 ALUTs of it. Two attribution maps:
+the misc float functions (FIX / FLOAT / SCALB / RECIPS / RSQRTS / COMP /
+MIN / MAX / CLIP / ..., his package functions combinational in X) ~1,360 ALM
+(8,165 without); the PC stack in flip-flops ~550 ALM and 798 registers (8,976
+without). THE FIRST CUT IS ABOUT TWICE THE BUDGET: ~4,450 ALM and ~101 M10K
+are what the TGPx4 and the DSB leave (R1023 / R1024); 80 M10K fits (plus the
+DM cache's 4 and the buffer / ROM caches R1024 counted), 9,527 ALM does not.
+R1023's ~3,150 by parts assumed MLAB register files and stacks and a shared
+shifter; this cut keeps R0-R15, I0-I15 / M0-M15, the PC and loop stacks and
+MAME's whole state in flip-flops with five-source write muxes, and every
+float function as its own logic. Where it goes next (not done, each to be
+measured): R / I / M and the PC stack in MLAB (R1023's banks; one write port
+each, a second write in a word an extra clock), one shifter for FIX / FLOAT
+/ LSHIFT, the misc functions narrowed to what R1024's list runs, the decode
+flattened. Correctness first was the order of this task; the speed (2.25) has
+room to give some clocks back for area.
+
+*NOT SETTLED:*
+  * Whether the SHARC's RAM is cleared at power-up on the board (MAME: yes;
+    the core: yes, by choice). DOA sends 12 never-written words to the i960.
+  * The manual's text for an infinite operand under TRUNC (kept MAME's: AV
+    and the largest finite), FIX out of range (kept MAME's 0x80000000), and
+    tininess before or after rounding in the multiplier (after, IEEE's
+    choice; the manual says only "flushed") -- not re-read.
+  * Timing: nothing fitted. The long paths to watch are D's (PM output ->
+    decode -> condition -> next fetch address register; the DM address
+    adder into the M10K) and the landing (fadd / fmul stage 2 straight into
+    R and ASTAT). The misc float functions are one combinational clock in X.
+  * The area: 9,527 ALM mapped against ~4,450 -- the next step's work
+    (see AREA); the fit, as ever, may add more (R1009: +1,794 over a map).
+  * Only DOA's program verified end to end; R1024's other features are
+    flagged, not built.
+  * The rule on Quartus processes: the second map attempt (an analysis
+    error after six seconds) was started while three other quartus_fit /
+    quartus_map processes were running -- a miscount; every later map waited
+    for fewer than three.
