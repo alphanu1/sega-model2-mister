@@ -417,7 +417,7 @@ Fighter 2 at the default 80%:
 
 ## Model 2C core — `Model2C.rbf` (BETA)
 
-The first Model 2C core: three games. The 2C board replaces the 2A's
+The first Model 2C core: eight games. The 2C board replaces the 2A's
 geometry chip with Sega's TGPx4 (Fujitsu MB86235), rebuilt here from
 scratch and checked against MAME output for output. It's a beta: please
 report anything you find, with the game and where.
@@ -444,9 +444,22 @@ ROM sets: MAME 0.289.
 |---|---|---|---|---|
 | The House of the Dead (Revision A) | `The House of the Dead (Revision A).mra` | `hotd.zip` | `hotd` | Plays at full speed, with guns from a mouse or stick. **Needs the 128 MB SDRAM module.** |
 | Over Rev (Model 2C, Revision A) | `Over Rev (Model 2C, Revision A).mra` | `overrev.zip` | `overrev` | Plays, with wheel and pedals |
-| Sega Touring Car Championship | `Sega Touring Car Championship (newer).mra` | `stcc.zip` | `stcc` | Boots and races. **Needs the 128 MB SDRAM module.** No music yet |
+| Sega Touring Car Championship | `Sega Touring Car Championship (newer).mra` | `stcc.zip` | `stcc` | Plays at full speed, with its music. **Needs the 128 MB SDRAM module.** |
+| Wave Runner (Japan, Revision A) | `Wave Runner (Japan, Revision A).mra` | `waverunr.zip` | `waverunr` | Plays. Mostly 30 fps for now. **Needs the 128 MB SDRAM module.** |
+| Sega Water Ski (Japan, Revision A) | `Sega Water Ski (Japan, Revision A).mra` | `segawski.zip` | `segawski` | Plays, with slowdowns. **Needs the 128 MB SDRAM module.** |
+| Behind Enemy Lines | `Behind Enemy Lines.mra` | `bel.zip` | `bel` | Plays, with guns from a stick, mouse or USB gun. **Calibrate the guns before the first game** (below). **Needs the 128 MB SDRAM module.** |
+| Sega Ski Super G | `Sega Ski Super G.mra` | `skisuprg.zip` | `skisuprg` | Plays. Shows "Drive board trouble Code FF" at boot (MAME does too): press Test to go on. **Needs the 128 MB SDRAM module.** |
+| Dynamite Cop (USA, Model 2C) | `Dynamite Cop (USA, Model 2C).mra` | `dynamcopc.zip`, `dynamcop.zip` | `dynamcopc` | Plays. **Needs the 128 MB SDRAM module.** |
 
 Each of these also has a `[15kHz CRT]` MRA.
+
+**Behind Enemy Lines: calibrate the guns before the first game, then save.**
+The game keeps each gun's calibration in its own settings, and on a new
+board they're blank, so the crosshair sits in the bottom-left corner and
+won't move (MAME does the same). Press Test, choose GUN CALIBRATION and
+follow the prompts for each gun (push to the stops, pull the trigger), then
+exit the test menu and use the OSD's "Save settings (NVRAM)". It's kept from
+then on.
 
 ### New in this build (`Model2C_20261113`)
 

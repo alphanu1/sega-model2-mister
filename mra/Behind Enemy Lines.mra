@@ -33,8 +33,9 @@
          its EEPROM, and a blank one (a new board's) pins the aim to the
          lower-left corner; MAME does the same. Before the first game:
          press Test, choose GUN CALIBRATION, follow the prompts for each gun
-         (push to the stops, pull the trigger), then save and exit. MiSTer
-         keeps it in the game's .nvm from then on (R1016). -->
+         (push to the stops, pull the trigger), exit the test menu, then
+         the OSD's "Save settings (NVRAM)". It is kept in the game's .nvm
+         from then on (R1016). -->
     <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
