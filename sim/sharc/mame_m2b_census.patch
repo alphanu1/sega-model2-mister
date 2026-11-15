@@ -1,0 +1,481 @@
+R1023: Model 2B SHARC census and pacing for MAME 0.289 (BSD-3-Clause files; this patch
+GPL-3.0-or-later as the project). Against sm2-builds/mame-r943 (MAME 0.289 with the
+R869 / R924 / R943 capture patches), applied with patch -p1 in a copy of that tree, built
+with `make SUBTARGET=m2lod SOURCES=src/mame/sega/model2.cpp`. Every hook is inert unless
+M2B_CENSUS is set; see sim/sharc/m2b_census.sh. Needs -nodrc.
+
+--- a/src/devices/cpu/sharc/sharc.cpp
++++ b/src/devices/cpu/sharc/sharc.cpp
+@@ -24,6 +24,230 @@
+ //#define VERBOSE 1
+ #include "logmacro.h"
+ 
++/* ---- R1023: Model 2B SHARC census and pacing (env-gated; off = MAME unchanged) ----
++   M2B_CENSUS=<dir>   per-PC counts, DM / PM-data maps, DMA log, one line a vblank
++   M2B_SPIN=<pc,pc..> PCs counted as waiting, not work (hex)
++   M2B_PACE=1         icount charged per instruction from M2B_COSTF (text "pc cost")
++                      or M2B_CPI (milli-cycles a word), at the device clock M2B_SHARC_HZ
++   M2B_XBUF / M2B_XROM  extra cycles per buffer-RAM / data-ROM read when paced  */
++namespace m2b {
++bool on = false, paced = false, in_ins = false;
++std::string dir;
++static uint64_t pcn[0x20000];
++static uint64_t pcop[0x20000];
++static uint32_t pcver[0x20000];
++static uint8_t spin[0x20000];
++uint8_t dmm[0x80000];
++uint8_t pmm[0x40000];
++static uint16_t cost[0x20000];
++static uint32_t cpi_milli = 1000, cpi_acc = 0;
++int xbuf = 0, xrom = 0;
++uint64_t pc_other = 0;
++static double vb_t = 0;
++struct frame_t { double flip_ms; uint64_t ins, spin, busy, idle, fin, fin_empty, fout, bufr, bufw, romr, iopr, iopw, dma, fctl, flips; double h_in, h_out; uint32_t in_max, out_max; };
++frame_t F, T;
++static double h_t0[2] = { -1, -1 };
++static FILE *flog = nullptr, *fdma = nullptr;
++static uint64_t frame = 0, ndma = 0;
++static double up_t = -1; static unsigned up_n = 0, nboot = 0;
++
++static void init()
++{
++	static bool done = false;
++	if (done) return;
++	done = true;
++	const char *d = getenv("M2B_CENSUS");
++	if (!d) return;
++	on = true;
++	dir = d;
++	flog = fopen((dir + "/frames.txt").c_str(), "w");
++	fdma = fopen((dir + "/dma.txt").c_str(), "w");
++	if (flog) fprintf(flog, "# frame t ins spin busy idle fin fin_empty fout bufr bufw romr iopr iopw dma fctl flips h_in_ms h_out_ms in_max out_max flip_ms\n");
++	if (const char *s = getenv("M2B_SPIN"))
++	{
++		std::string str(s);
++		size_t p = 0;
++		while (p < str.size())
++		{
++			size_t q = str.find(',', p);
++			if (q == std::string::npos) q = str.size();
++			unsigned long a = strtoul(str.substr(p, q - p).c_str(), nullptr, 16);
++			if (a >= 0x20000 && a < 0x40000) spin[a & 0x1ffff] = 1;
++			p = q + 1;
++		}
++	}
++	for (auto &c : cost) c = 1;
++	if (getenv("M2B_PACE"))
++	{
++		paced = true;
++		if (const char *c = getenv("M2B_CPI")) cpi_milli = unsigned(atof(c) * 1000.0 + 0.5);
++		if (const char *f = getenv("M2B_COSTF"))
++		{
++			FILE *cf = fopen(f, "r");
++			unsigned a, c;
++			if (cf) { while (fscanf(cf, "%x %u", &a, &c) == 2) if (a >= 0x20000 && a < 0x40000) cost[a & 0x1ffff] = uint16_t(c); fclose(cf); cpi_milli = 0; }
++		}
++		if (const char *x = getenv("M2B_XBUF")) xbuf = atoi(x);
++		if (const char *x = getenv("M2B_XROM")) xrom = atoi(x);
++	}
++}
++
++// the cycles an instruction is charged
++static inline int charge(uint32_t pc)
++{
++	if (cpi_milli)
++	{
++		cpi_acc += cpi_milli;
++		int n = int(cpi_acc / 1000);
++		cpi_acc -= unsigned(n) * 1000;
++		return n;
++	}
++	return cost[pc & 0x1ffff];
++}
++
++// after the instruction: a marked PC whose successor is itself is waiting
++// (a NOP or a direct / relative jump that goes to itself: a one-word wait loop)
++static inline void ins_end(uint32_t pc, uint64_t op, uint32_t next, int c)
++{
++	if (pc >= 0x20000 && pc < 0x40000)
++	{
++		unsigned top = unsigned(op >> 32) & 0xff80;
++		bool selfw = next == pc && ((op & 0xffffffffffffULL) == 0 || top == 0x0600 || top == 0x0700);
++		if (selfw || (spin[pc & 0x1ffff] && next == pc)) F.spin++; else F.busy += uint64_t(c);
++	}
++}
++
++// direct-mapped program caches of 256 .. 4096 lines on the fetch stream (every fetch, waits too)
++static int32_t ctag[5][4096];
++static uint64_t cmiss[5], cfetch;
++static bool cinit = false;
++static inline void pcache(uint32_t pc)
++{
++	if (!cinit) { for (auto &a : ctag) for (auto &t : a) t = -1; cinit = true; }
++	cfetch++;
++	for (int k = 0; k < 5; k++)
++	{
++		uint32_t n = 256u << k, ix = pc & (n - 1);
++		if (ctag[k][ix] != int32_t(pc)) { ctag[k][ix] = int32_t(pc); cmiss[k]++; }
++	}
++}
++
++static inline void ins(uint32_t pc, uint64_t op, int c)
++{
++	pcache(pc);
++	if (pc >= 0x20000 && pc < 0x40000)
++	{
++		uint32_t i = pc & 0x1ffff;
++		if (pcn[i] == 0 || pcop[i] != op)
++		{
++			static FILE *fv = nullptr; static unsigned nv = 0;
++			if (!fv) fv = fopen((dir + "/ver.txt").c_str(), "w");
++			if (fv && pcn[i] && nv++ < 20000) fprintf(fv, "f%llu %05x %012llx -> %012llx (%llu runs)\n", (unsigned long long)frame, pc, (unsigned long long)pcop[i], (unsigned long long)op, (unsigned long long)pcn[i]);
++			pcver[i]++; pcop[i] = op;
++		}
++		pcn[i]++;
++		F.ins++;
++	}
++	else
++		pc_other++;
++}
++
++static void dump()
++{
++	if (!on) return;
++	FILE *f = fopen((dir + "/pc.txt").c_str(), "w");
++	if (f)
++	{
++		sharc_disassembler d;
++		for (uint32_t i = 0; i < 0x20000; i++)
++		{
++			if (!pcn[i]) continue;
++			std::ostringstream s;
++			d.disassemble_one(s, 0x20000 + i, pcop[i]);
++			fprintf(f, "%05x %012llx %llu %u %s\n", 0x20000 + i, (unsigned long long)pcop[i], (unsigned long long)pcn[i], pcver[i], s.str().c_str());
++		}
++		fprintf(f, "# other %llu\n", (unsigned long long)pc_other);
++		fclose(f);
++	}
++	f = fopen((dir + "/dm.bin").c_str(), "wb");
++	if (f) { fwrite(dmm, 1, sizeof(dmm), f); fclose(f); }
++	f = fopen((dir + "/pmdata.bin").c_str(), "wb");
++	if (f) { fwrite(pmm, 1, sizeof(pmm), f); fclose(f); }
++	f = fopen((dir + "/totals.txt").c_str(), "w");
++	if (f)
++	{
++		fprintf(f, "frames %llu ins %llu spin %llu busy %llu idle %llu fin %llu fin_empty %llu fout %llu bufr %llu bufw %llu romr %llu iopr %llu iopw %llu dma %llu fctl %llu flips %llu h_in_s %.6f h_out_s %.6f in_max %u out_max %u boots %u last_upload %u at %.6f\n",
++			(unsigned long long)frame, (unsigned long long)T.ins, (unsigned long long)T.spin, (unsigned long long)T.busy, (unsigned long long)T.idle,
++			(unsigned long long)T.fin, (unsigned long long)T.fin_empty, (unsigned long long)T.fout, (unsigned long long)T.bufr, (unsigned long long)T.bufw,
++			(unsigned long long)T.romr, (unsigned long long)T.iopr, (unsigned long long)T.iopw, (unsigned long long)T.dma, (unsigned long long)T.fctl,
++			(unsigned long long)T.flips, T.h_in, T.h_out, T.in_max, T.out_max, nboot, up_n, up_t);
++		fprintf(f, "pcache fetches %llu misses 256:%llu 512:%llu 1024:%llu 2048:%llu 4096:%llu\n", (unsigned long long)cfetch,
++			(unsigned long long)cmiss[0], (unsigned long long)cmiss[1], (unsigned long long)cmiss[2], (unsigned long long)cmiss[3], (unsigned long long)cmiss[4]);
++		fclose(f);
++	}
++	if (flog) fclose(flog);
++	if (fdma) fclose(fdma);
++	flog = fdma = nullptr;
++}
++struct dumper { ~dumper() { dump(); } } s_dumper;
++} // namespace m2b
++
++// called from model2.cpp (model2b_state)
++bool m2b_on() { m2b::init(); return m2b::on; }
++void m2b_frame(double t)
++{
++	using namespace m2b;
++	if (!on) return;
++	for (int k = 0; k < 2; k++) if (h_t0[k] >= 0) { (k ? F.h_out : F.h_in) += t - h_t0[k]; h_t0[k] = t; }
++	if (flog)
++		fprintf(flog, "%llu %.6f %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %.4f %.4f %u %u %.4f\n",
++			(unsigned long long)frame, t, (unsigned long long)F.ins, (unsigned long long)F.spin, (unsigned long long)F.busy, (unsigned long long)F.idle,
++			(unsigned long long)F.fin, (unsigned long long)F.fin_empty, (unsigned long long)F.fout, (unsigned long long)F.bufr, (unsigned long long)F.bufw,
++			(unsigned long long)F.romr, (unsigned long long)F.iopr, (unsigned long long)F.iopw, (unsigned long long)F.dma, (unsigned long long)F.fctl,
++			(unsigned long long)F.flips, F.h_in * 1e3, F.h_out * 1e3, F.in_max, F.out_max, F.flips ? F.flip_ms : -1.0);
++	T.ins += F.ins; T.spin += F.spin; T.busy += F.busy; T.idle += F.idle; T.fin += F.fin; T.fin_empty += F.fin_empty; T.fout += F.fout;
++	T.bufr += F.bufr; T.bufw += F.bufw; T.romr += F.romr; T.iopr += F.iopr; T.iopw += F.iopw; T.dma += F.dma; T.fctl += F.fctl; T.flips += F.flips;
++	T.h_in += F.h_in; T.h_out += F.h_out; T.in_max = std::max(T.in_max, F.in_max); T.out_max = std::max(T.out_max, F.out_max);
++	F = frame_t();
++	frame++;
++	vb_t = t;
++}
++// the first flip after the vblank: the game's frame work, vblank to flip
++void m2b_flip(double t) { if (m2b::on) { if (!m2b::F.flips) m2b::F.flip_ms = (t - m2b::vb_t) * 1e3; m2b::F.flips++; } }
++void m2b_fctl() { if (m2b::on) m2b::F.fctl++; }
++void m2b_halt(int which, int state, double t)
++{
++	using namespace m2b;
++	if (!on) return;
++	if (state) { if (h_t0[which] < 0) h_t0[which] = t; }
++	else if (h_t0[which] >= 0) { (which ? F.h_out : F.h_in) += t - h_t0[which]; h_t0[which] = -1; }
++}
++void m2b_depth(int which, unsigned n) { if (m2b::on) { auto &m = which ? m2b::F.out_max : m2b::F.in_max; if (n > m) m = n; } }
++int m2b_dm(uint32_t a, int w)
++{
++	using namespace m2b;
++	if (a < 0x80000) { dmm[a] |= uint8_t(1 << (w + (in_ins ? 0 : 2))); if (a < 0x100) { if (w) F.iopw++; else F.iopr++; } return 0; }
++	if (a >= 0x400000 && a < 0xc00000) { if (!w) F.fin++; return 0; }
++	if (a >= 0xc00000 && a < 0x1400000) { if (w) F.fout++; return 0; }
++	if (a >= 0x1400000 && a < 0x1c00000) { if (w) { F.bufw++; return 0; } F.bufr++; return (paced && in_ins) ? xbuf : 0; }
++	if (a >= 0x1c00000 && a < 0x1e00000) { if (!w) F.romr++; return (paced && in_ins && !w) ? xrom : 0; }
++	return 0;
++}
++void m2b_pm(uint32_t a, int kind)
++{
++	using namespace m2b;
++	if (a >= 0x20000 && a < 0x60000) pmm[a - 0x20000] |= uint8_t(1 << (kind + (in_ins ? 0 : 4)));
++}
++void m2b_fin_empty() { if (m2b::on) m2b::F.fin_empty++; }
++void m2b_dma(int ch, uint32_t src, uint32_t dst, int sc, int dc, int pmode, int chained)
++{
++	using namespace m2b;
++	if (!on) return;
++	F.dma++;
++	if (fdma && ndma++ < 200000) fprintf(fdma, "DMA f%llu ch%d src %08x dst %08x sc %d dc %d pmode %d chain %d\n", (unsigned long long)frame, ch, src, dst, sc, dc, pmode, chained);
++}
++void m2b_upload(unsigned n, double t) { if (m2b::on) { m2b::up_n = n; m2b::up_t = t; m2b::nboot++; if (m2b::fdma) fprintf(m2b::fdma, "BOOT %u dwords at %.6f\n", n, t); } }
++
+ 
+ #define DISABLE_FAST_REGISTERS      1
+ 
+@@ -564,6 +788,8 @@
+ 
+ void adsp21062_device::device_start()
+ {
++	m2b::init();
++	if (m2b::on && m_enable_drc) printf("M2B: census needs -nodrc (the recompiler bypasses the hooks)\n");
+ 	assert(m_blocks[0].length() == m_blocks[1].length());
+ 	assert(std::has_single_bit(m_blocks[0].length()));
+ 
+@@ -1248,6 +1474,7 @@
+ 			debugger_wait_hook();
+ 
+ 			int dma_count = m_core->icount;
++			if (m2b::on) m2b::F.idle += uint64_t(m_core->icount > 0 ? m_core->icount : 0);
+ 
+ 			// run active DMAs even while idling
+ 			while ((dma_count > 0) && (m_core->dma_status & ((1 << 6) | (1 << 7))))
+@@ -1282,6 +1509,7 @@
+ 			debugger_instruction_hook(m_core->pc);
+ 
+ 			m_core->opcode = m_program.read_qword(m_core->pc);
++			const uint32_t m2b_pc = m_core->pc;   // R1023: before a loop end moves pc
+ 
+ 			// handle looping
+ 			if (!(m_core->stky & LSEM) && (m_core->pc == m_core->laddr.addr))
+@@ -1334,7 +1562,11 @@
+ 				}
+ 			}
+ 
++			int m2b_c = 1;
++			if (m2b::on) { m2b_c = m2b::paced ? m2b::charge(m2b_pc) : 1; m2b::ins(m2b_pc, m_core->opcode, m2b_c); m2b::in_ins = true; }
+ 			(this->*m_sharc_op[(m_core->opcode >> 39) & 0x1ff])();
++			m2b::in_ins = false;
++			if (m2b::on) m2b::ins_end(m2b_pc, m_core->opcode, m_core->daddr, m2b_c);
+ 
+ 
+ 			// System register latency effect
+@@ -1353,7 +1585,7 @@
+ 				dma_run_cycle(7);
+ 			}
+ 
+-			--m_core->icount;
++			m_core->icount -= m2b_c;
+ 		};
+ 	}
+ }
+--- a/src/devices/cpu/sharc/sharcinternal.ipp
++++ b/src/devices/cpu/sharc/sharcinternal.ipp
+@@ -241,35 +241,46 @@
+ 
+ // SHARC memory operations
+ 
++// R1023 census (sharc.cpp): addresses touched, external accesses counted, paced extra cycles
++namespace m2b { extern bool on; }
++int m2b_dm(uint32_t address, int write);
++void m2b_pm(uint32_t address, int kind);
++
+ // When PM bus is used to transfer 32-bit data, it is aligned to the upper 32 bits of the bus
+ inline uint32_t adsp21062_device::pm_read32(uint32_t address)
+ {
++	if (m2b::on) m2b_pm(address, 0);
+ 	return uint32_t(m_program.read_qword(address) >> 16);
+ }
+ 
+ inline void adsp21062_device::pm_write32(uint32_t address, uint32_t data)
+ {
++	if (m2b::on) m2b_pm(address, 1);
+ 	// TODO: mask should probably be set to all ones
+ 	m_program.write_qword(address, uint64_t(data) << 16, 0x0000ffff'ffff0000U);
+ }
+ 
+ inline uint64_t adsp21062_device::pm_read48(uint32_t address)
+ {
++	if (m2b::on) m2b_pm(address, 2);
+ 	return m_program.read_qword(address);
+ }
+ 
+ inline void adsp21062_device::pm_write48(uint32_t address, uint64_t data)
+ {
++	if (m2b::on) m2b_pm(address, 3);
+ 	m_program.write_qword(address, data);
+ }
+ 
+ inline uint32_t adsp21062_device::dm_read32(uint32_t address)
+ {
++	if (m2b::on) m_core->icount -= m2b_dm(address, 0);
+ 	return m_data.read_dword(address);
+ }
+ 
+ inline void adsp21062_device::dm_write32(uint32_t address, uint32_t data)
+ {
++	if (m2b::on) m_core->icount -= m2b_dm(address, 1);
+ 	m_data.write_dword(address, data);
+ }
+ 
+--- a/src/devices/cpu/sharc/sharcdma.hxx
++++ b/src/devices/cpu/sharc/sharcdma.hxx
+@@ -1,3 +1,4 @@
++void m2b_dma(int ch, uint32_t src, uint32_t dst, int sc, int dc, int pmode, int chained);
+ // license:BSD-3-Clause
+ // copyright-holders:Ville Linde
+ /* SHARC DMA operations */
+@@ -287,6 +288,7 @@
+ 	{
+ 		uint32_t dma_chain_ptr = m_core->dma[channel].chain_ptr & 0x1ffff;
+ 
++		m2b_dma(channel, dma_chain_ptr, 0, 0, 0, 0, 1);
+ 		schedule_chained_dma_op(channel, dma_chain_ptr, tran);
+ 	}
+ 	else
+@@ -316,6 +318,7 @@
+ 			pmode = DMA_PMODE_8_48;
+ 		}
+ 
++		m2b_dma(channel, src, dst, src_count, dst_count, pmode, 0);
+ 		schedule_dma_op(channel, src, dst, src_modifier, dst_modifier, src_count, dst_count, pmode);
+ 	}
+ }
+--- a/src/mame/sega/model2.cpp
++++ b/src/mame/sega/model2.cpp
+@@ -96,6 +96,9 @@
+ #include "model1io2.lh"
+ #include "segabill.lh"
+ 
++// R1023 census / pacing hooks (sharc.cpp)
++bool m2b_on(); void m2b_halt(int which, int state, double t); void m2b_depth(int which, unsigned n);
++
+ /* Timers - these count down at 25 MHz and pull IRQ2 when they hit 0 */
+ u32 model2_state::timers_r(offs_t offset)
+ {
+@@ -238,18 +241,24 @@
+ 						   [    ]() { },
+ 						   [    ]() { },
+ 						   [    ]() { },
+-						   [this]() { m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE); },
+-						   [this]() { m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE); },
+-						   [this]() { m_copro_adsp->set_flag_input(0, m_copro_fifo_in->is_empty()); },
++						   [this]() { m2b_halt(0, 1, machine().time().as_double()); m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE); },
++						   [this]() { m2b_halt(0, 0, machine().time().as_double()); m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE); },
++						   [this]() { m2b_depth(0, m_copro_fifo_in->size()); m_copro_adsp->set_flag_input(0, m_copro_fifo_in->is_empty()); },
+ 						   [this]() { m_copro_adsp->set_flag_input(0, m_copro_fifo_in->is_empty()); });
+ 	m_copro_fifo_out->setup(16,
+ 							[this]() { m_maincpu->i960_stall(); },
+-							[this]() { m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE); },
+-							[this]() { m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE); },
++							[this]() { m2b_halt(1, 1, machine().time().as_double()); m_maincpu->set_input_line(INPUT_LINE_HALT, ASSERT_LINE); },
++							[this]() { m2b_halt(1, 0, machine().time().as_double()); m_maincpu->set_input_line(INPUT_LINE_HALT, CLEAR_LINE); },
+ 							[    ]() { },
+ 							[    ]() { },
+-							[this]() { m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); },
++							[this]() { m2b_depth(1, m_copro_fifo_out->size()); m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); },
+ 							[this]() { m_copro_adsp->set_flag_input(1, m_copro_fifo_in->is_full()); });
++	if (m2b_on())
++	{
++		if (const char *c = getenv("M2B_SHARC_HZ")) m_copro_adsp->set_unscaled_clock(u32(atof(c)));
++		if (const char *c = getenv("M2B_I960_HZ")) m_maincpu->set_unscaled_clock(u32(atof(c)));
++		printf("M2B: census on, SHARC %u Hz, i960 %u Hz\n", m_copro_adsp->unscaled_clock(), m_maincpu->unscaled_clock());
++	}
+ }
+ 
+ void model2c_state::machine_start()
+@@ -415,8 +424,10 @@
+ 	return m_colorxlat[offset];
+ }
+ 
++void m2b_fctl();
+ u32 model2_state::fifo_control_r()
+ {
++	if (!machine().side_effects_disabled()) m2b_fctl();
+ 	return m_copro_fifo_out->is_empty() ? 1 : 0;
+ }
+ 
+@@ -663,6 +674,22 @@
+ 
+ // Coprocessor - SHARC
+ 
++// R1023 census / pacing (sharc.cpp); every hook a no-op unless M2B_CENSUS is set
++bool m2b_on();
++void m2b_frame(double t);
++void m2b_flip(double t);
++void m2b_fctl();
++void m2b_halt(int which, int state, double t);
++void m2b_depth(int which, unsigned n);
++void m2b_upload(unsigned n, double t);
++void m2b_fin_empty();
++
++u32 model2b_state::copro_sharc_fifo_in_r()
++{
++	if (m_copro_fifo_in->is_empty() && !machine().side_effects_disabled()) m2b_fin_empty();
++	return m_copro_fifo_in->read();
++}
++
+ u32 model2b_state::copro_sharc_buffer_r(offs_t offset)
+ {
+ 	return m_bufferram[offset & 0x7fff];
+@@ -675,7 +702,7 @@
+ 
+ void model2b_state::copro_sharc_map(address_map &map)
+ {
+-	map(0x0400000, 0x0bfffff).r(m_copro_fifo_in, FUNC(generic_fifo_u32_device::read));
++	map(0x0400000, 0x0bfffff).r(FUNC(model2b_state::copro_sharc_fifo_in_r));
+ 	map(0x0c00000, 0x13fffff).w(m_copro_fifo_out, FUNC(generic_fifo_u32_device::write));
+ 	map(0x1400000, 0x1bfffff).rw(FUNC(model2b_state::copro_sharc_buffer_r), FUNC(model2b_state::copro_sharc_buffer_w));
+ 	map(0x1c00000, 0x1dfffff).rom().region("copro_data", 0);
+@@ -687,6 +714,7 @@
+ 
+ void model2b_state::copro_boot()
+ {
++	m2b_upload(m_coprocnt, machine().time().as_double());
+ 	m_copro_adsp->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
+ }
+ 
+@@ -874,9 +902,11 @@
+ 	return 0;
+ }
+ 
++void m2b_flip(double t);
+ void model2_state::geo_w(offs_t offset, u32 data)
+ {
+ 	int address = offset * 4;
++	if (address == 0x3008) m2b_flip(machine().time().as_double());
+ 
+ 	if (address < 0x1000)
+ 	{
+@@ -2479,6 +2509,7 @@
+ 
+ 	m_framenum = m_screen->frame_number();
+ 	if (r924_on()) r924_ev('F', uint32_t(m_framenum), 0);
++	m2b_frame(machine().time().as_double());
+ 
+ 	// if 60 Hz mode or frame number is even, trigger geometrizer to start new frame
+ 	if ((m_videocontrol & 1) == 0 || (m_framenum & 1) == 0)
+--- a/src/mame/sega/model2.h
++++ b/src/mame/sega/model2.h
+@@ -557,6 +557,7 @@
+ 	u32 copro_fifo_r();
+ 	void copro_fifo_w(u32 data);
+ 	u32 copro_sharc_buffer_r(offs_t offset);
++	u32 copro_sharc_fifo_in_r();
+ 	void copro_sharc_buffer_w(offs_t offset, u32 data);
+ 
+ 	void model2b_crx_mem(address_map &map) ATTR_COLD;
