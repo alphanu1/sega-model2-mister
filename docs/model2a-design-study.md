@@ -51456,3 +51456,53 @@ paths' ~1 ns a level), so they leave the failing list; the seeds that
 failed on them (s2900, s2922 in part) would then fail, if at all, on the
 one-seed paths above or on HDMI, which fails 4 of these 6 seeds alone.
 The 2C build has the same three modules (not ported).
+
+**R1025 -- THE 2C RELEASE CANDIDATE DID NOT CLOSE IN TEN SEEDS AFTER R1022's
+REVERT; R1021's THREE RETIMES PORTED FROM 2A, PROVED AGAINST THE 2C BUILD
+AS IT WAS.** 2026-11-15, branch rel-2c-all (da5b08b5 + R1021's five code
+commits and its study text).
+
+*What was believed (R1022):* with change 4 reverted, the 2C candidate
+would close in a few seeds, as 2A's had before the retime.
+
+*What is known:* it did not. Ten seeds on da5b08b5 (setup worst, clk_sys
+unless noted): s3020 -0.263 (span_tex of_rp -> u_span_q rp), s3021 -0.524
+(geo_engine fx -> p0prev), s3022 HDMI -0.073 (clk_sys +0.012), s3023
+-0.329 (span_tex q_x1 -> mq_f1; uvsel -> hv -0.303), s3024 not recorded,
+s3025 Quartus STA internal error, s3026 clk_mem -0.603, s3027 -1.405, s3041
+-1.012, s3042 HDMI -0.482 (clk_sys +0.029). No path repeated as the worst;
+the fill is 531 of 553 M10K and 99% ALM. Ben: "9 seeds is enough to prove
+it does not close" -- R1021's retimes (the clipper's plane test as one
+registered compare on a carry chain, the projection's single rounding
+register, the SCSP timers' written count off the read mux) go in, as on
+2A, where they closed at s3004.
+
+*The port:* m2_geo_project.sv and m2_scsp_regs.sv were byte-identical to
+2A's before R1021 and are byte-identical after, so R1021's proofs of
+those two hold as they stand. m2_geo_clip.sv differs from 2A's in
+R1008's 2C storage (STK_M10K, the created points in MLAB); the plane test
+R1021 changes is common to both and the five commits applied without a
+conflict.
+
+*Proof (run; old = da5b08b5 in rel-2c-fit3, new = this branch, every
+output on every cycle, sim/miter/miter.py):*
+  * sim/miter/geo.sh, GEOMZ_G=-GM10K_ROOM=1: tb_m2_geometry 595,138 cycles
+    and _mipz (2C form) 913,234, PASS; geodiff walks r5701, r6601 and 2C's
+    r924geo w1200 as the 2A build's geometry, w1000, w4000, w9000, w3910
+    and w1200 as the main build's: 8 walks, 4,553,375 cycles, 0 with an
+    output differing. Walks on symlinked scratch copies (no ours.txt
+    written into build/geodiff). The miter's new clipper carries
+    test_k_q, its old copy does not (the comparison is of different code).
+  * test_m2_geo_clip 2,003 checks 0 fails; test_m2_geometry,
+    test_m2_geometry_mipz, test_m2_geo PASS; test_m2_geo_engine 0.
+  * sim/miter/scsp_regs.sh rand at TIMER 0, 1 and 2: 3 x 100 M cycles,
+    39.3 M timer writes, 1.05 M interrupt rises, 0 outputs and 0 state
+    differ. test_m2_scsp on House of the Dead's att1 capture: 441,000
+    samples, 0 from the reference, IPL 0 wrong, PASS. (test_m2_scsp and
+    test_m2_2a_sound with no capture given stop at "capture incomplete" /
+    "no images" -- inputs, not results.)
+  * lint_top clean (2C macros, LINTTOP_RTL without m2_testpattern.sv);
+    quartus_map --analyze_file 0 errors on all three files.
+
+*Not settled:* the fit (lanes 2C-rt-a s3060-3079, 2C-rt-b s3080-3099);
+the board.
