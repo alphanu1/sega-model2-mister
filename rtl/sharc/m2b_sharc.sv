@@ -689,7 +689,7 @@ always_comb begin
         ldist = off[31] ? -off[23:0] : off[23:0];
         if (op[42:40] == 3'b100) s.lcntr = {16'h0, op[39:24]};
         else if (op[42:40] == 3'b101) begin
-            s.lcntr = ((op[39:32][7:4] == 4'h6) ? seq_rd(op[39:32][3:0], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v);
+            s.lcntr = ((op[39:36] == 4'h6) ? seq_rd(op[35:32], s.pcstk, s.pcstkp, s.curlcntr, s.lcntr) : ur_v);
             d_rmask |= ureg_rmask(op[39:32]);
             if (op[39:36] == 4'h7 && (op[35:32] == 4'hc || op[35:32] == 4'he)) d_need_astat = 1'b1;
             if (!ureg_ok(op[39:32], 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
