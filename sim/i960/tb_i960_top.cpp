@@ -345,6 +345,7 @@ const char *rn(int i) {
 
 uint64_t denorm_skips = 0;
 uint64_t sub_in_tot = 0, sub_out_tot = 0, scale_sub_tot = 0;   // R1013
+uint64_t rem_subd_tot = 0;                                      // R1020
 uint64_t nan_stops    = 0;
 bool     probe_fp     = false;
 
@@ -624,7 +625,7 @@ int main(int argc, char **argv) {
   dequeued_total += ref.intr_dequeued;
     intr_total += ref.intr_taken; queued_total += ref.intr_queued;
     dequeued_total += ref.intr_dequeued;
-    sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub;   // R1013
+    sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub; rem_subd_tot += ref.fp_rem_subd;   // R1013
     mem.clear(); ref = i960ref::Cpu(); dut_stores.clear();
     ref.ref_vc = use_vc;
     ref.ref_fr = use_fr || use_fx;
@@ -728,6 +729,15 @@ int main(int argc, char **argv) {
         // narrowed away to a single zero.
         if (sel == 0x677u && (srng() & 1))
           insn = (insn & ~(0x0800u | 0x1000u | 0x00e00000u)) | 0x2000u;
+        // R1020: remr (i960_fprem) at FP_SUBN 2, half the time, reads fp0-fp3
+        // (seeded below with subnormal and small doubles) for each source with
+        // even odds, and writes one -- a subnormal remainder narrowed to a
+        // single register is a zero either way. The seeding generator again.
+        if (sel == 0x683u && use_fx && i960ref::Cpu::SUBN >= 2 && (srng() & 1)) {
+          if (srng() & 1) insn = (insn & ~0x1fu) | 0x0800u | uint32_t(srng() % 4);
+          if (srng() & 1) insn = (insn & ~(0x1fu << 14)) | 0x1000u | (uint32_t(srng() % 4) << 14);
+          insn = (insn & ~0x00e00000u) | 0x2000u;
+        }
       } else if (cls == 8) {                           // mov / bit scan / modac
         static const uint8_t B64[] = {0x0,0x1,0x4,0x5};
         const bool use5c = (rng() & 1);
@@ -1269,6 +1279,28 @@ int main(int argc, char **argv) {
     }
   }
 
+    // R1020: with +fx at FP_SUBN 2, fp0-fp3 start each program as a
+    // subnormal double (a random leading-zero count and sign), a double near
+    // the bottom of the normals (exponent field 1..60, remainders that go
+    // subnormal), a large double, or 0 as before -- remr's subnormal paths,
+    // which a widened single never reaches. Both sides; the seeding generator.
+    if (use_fx && i960ref::Cpu::SUBN >= 2) {
+      for (int i = 0; i < 4; ++i) {
+        uint64_t b = 0;
+        switch (srng() % 4) {
+          case 0: { const int lz = int(srng() % 52);
+                    b = (1ull << (51 - lz)) | (srng() & ((1ull << (51 - lz)) - 1)); break; }
+          case 1: b = (srng() & 0x000fffffffffffffull) | (uint64_t(1 + srng() % 60) << 52); break;
+          case 2: b = (srng() & 0x000fffffffffffffull) | (uint64_t(1023 + srng() % 1000) << 52); break;
+          default: break;
+        }
+        if (srng() & 1) b |= 0x8000000000000000ull;
+        if (b == 0x8000000000000000ull) b = 0;
+        dut->rootp->i960_top__DOT__fpr[i] = b;
+        std::memcpy(&ref.fp[i], &b, 8);
+      }
+    }
+
     // Run, comparing at each retire. The DUT retires when it re-enters fetch.
     const uint64_t budget = loop_mode ? steps * 5 : steps;
     uint64_t calls_prev = rf_call_cnt, rets_prev = rf_ret_cnt;
@@ -1658,9 +1690,10 @@ int main(int argc, char **argv) {
                           (unsigned long long)vctr[0], (unsigned long long)vctr[1], (unsigned long long)vctr[2],
                           (unsigned long long)vctr[3], (unsigned long long)trans_ulp);
   std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
-  sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub;
+  sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub; rem_subd_tot += ref.fp_rem_subd;
   std::printf("  R1013: FP retires with a subnormal operand %llu, with a subnormal result %llu, scaler by a subnormal 2^n %llu (FP_SUBN %d)\n",
               (unsigned long long)sub_in_tot, (unsigned long long)sub_out_tot, (unsigned long long)scale_sub_tot, i960ref::Cpu::SUBN);
+  if (use_fx) std::printf("  R1020: remr with a subnormal double operand or remainder %llu\n", (unsigned long long)rem_subd_tot);
   std::printf("  %llu ended early: subnormal FP operand, %llu: NaN result"
               ", %llu: self-modifying code, %llu: IP left the program"
               "  (all recorded deviations)\n",

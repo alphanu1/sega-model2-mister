@@ -45,6 +45,10 @@ struct Cpu {
   // R1013: coverage -- FP instructions retired with a subnormal operand
   // (single or double) and with a subnormal result, in the whole run.
   uint64_t fp_sub_in = 0, fp_sub_out = 0, fp_scale_sub = 0;   // .. and scaler with 2^n subnormal
+  // R1020: remr retired with a subnormal DOUBLE operand (fp0-fp3) or a
+  // subnormal double remainder -- i960_fprem's own subnormal paths (a
+  // widened subnormal single is a normal double and never was one).
+  uint64_t fp_rem_subd = 0;
   static bool sub_s(uint32_t v) { return ((v >> 23) & 0xff) == 0 && (v & 0x7fffff) != 0; }
   static bool sub_d(double d) { return std::fpclassify(d) == FP_SUBNORMAL; }
   bool unaligned_syn = false;     // R844: a synmov to 0xff000005..7 (see synmov)
@@ -696,13 +700,18 @@ struct Cpu {
           // misses are the recorded deviation the harness adopts, and sin
           // past the sequencer's exact reduction (|x| > 2^19) ends the
           // program as sinrl's does. fmod is exact on both sides.
+          // R1020: remr is exact fmod on subnormal doubles too at SUBN 2
+          // (i960_fprem SUBNORM, FP_SUBN >= 2); below that its double
+          // operands and remainder flush as the other units' do (fp0-fp3
+          // never hold a subnormal there, so this is the model, not a case).
           // R887: and tanr, set_rif(tan(t1f)), on the sequencer's tan entry
           // (Manx TT), bounded as sinr is. R903: and cosr, set_rif(cos(t1f)),
           // on the cos entry (Manx TT, a rider knocked down), bounded the same.
           const bool f2a_s = ref_f2a && (ks == 0x680 || ks == 0x68c || ks == 0x683 || ks == 0x68e || ks == 0x68d);
           if (f2a_s) {
             fres = (ks == 0x680) ? std::atan2(fb, fa) : (ks == 0x68c) ? std::sin(fa)
-                 : (ks == 0x68e) ? std::tan(fa) : (ks == 0x68d) ? std::cos(fa) : std::fmod(fb, fa);
+                 : (ks == 0x68e) ? std::tan(fa) : (ks == 0x68d) ? std::cos(fa) : flush_d(std::fmod(flush_d(fb), flush_d(fa)));
+            if (ks == 0x683 && (sub_d(fa) || sub_d(fb) || sub_d(std::fmod(fb, fa)))) ++fp_rem_subd;
             if (ks != 0x683) {
               fp_trans = true;
               if (d.dst_lit) fp_trans_fp = int(d.srcdst & 3); else fp_trans_s = int(d.srcdst);
