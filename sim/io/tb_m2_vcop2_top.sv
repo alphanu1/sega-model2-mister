@@ -49,6 +49,7 @@ module tb_m2_vcop2_top #(
     .joy_analog(16'd0), .joy_ranalog(16'd0), .joy_analog_1(16'd0), .paddle(8'd0),
     .st_pedswap(1'b0), .st_ssens(2'd0), .st_ssm(2'd0), .st_rsteer(1'b0), .st_wheel(2'd0), .trig_rt(8'd0), .trig_lt(8'd0),
     .gun_in1(g_in1), .pe(8'hFF),
+    .gun_c1x(9'd0), .gun_c1y(9'd0), .gun_c2x(9'd0), .gun_c2y(9'd0), .ms_btn(2'b00), .ms_gun2(1'b0),   // R1016
     .in0, .in1, .in2, .an0, .an1, .an2, .an3
   );
 

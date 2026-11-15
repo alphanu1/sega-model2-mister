@@ -81,10 +81,22 @@
 //                 joystick 1): IN0 0x01/0x02 coins 0x04 SERVICE 0x08 TEST
 //                 0x10/0x20 starts; IN1 0x01/0x02 triggers 0x10/0x20
 //                 missiles; IN2 0xFF; AN0 P1_X 0x69..0xFF, AN1 P2_X
-//                 0x00..0x96, AN2 P1_Y 0x11..0xAE, AN3 P2_Y 0x11..0xAE --
-//                 min + floor((a + 128) * (span + 1) / 256), exact, of any of
-//                 the last 8 stick samples (four channels share a multiply);
-//                 the extremes and the MAME range checked separately.
+//                 0x00..0x96, AN2 P1_Y 0x11..0xAE, AN3 P2_Y 0x11..0xAE.
+//                 R1016: through m2_vcop_guns (V2, HD, as the 2C build): the
+//                 reference pixel is the stick's, px = (a ^ 0x80) * 496 >> 8,
+//                 py = (a ^ 0x80) * 384 >> 8 (R846), or the mouse's -- the
+//                 bench's own accumulator of the packets it sends, 1:1,
+//                 clamped 0..495 / 0..383, for the gun the OSD's Mouse line
+//                 gives it (1: gun 1 aims, 3: gun 2). X = min + px * 78 >> 8,
+//                 Y = 0xAE - py * 211 >> 9 (UP HIGH: the game's calibration
+//                 takes the lower stop low), exact, of any of the last 12
+//                 reference samples (the guns' two registers, four channels
+//                 in turn through one multiply); AND, independently of those
+//                 constants, within 1 unit of the straight line from pixel 0
+//                 to pixel 494 (min .. max), never outside MAME's
+//                 PORT_MINMAX, every end reached. IN1: the mouse's left /
+//                 right buttons OR'd into the trigger / missile of gun 1 (or
+//                 gun 2 when the Mouse line's bit 1 is set).
 //       0x21 Sega Ski Super G INPUT_PORTS_START(skisuprg) (J 4 Coin 5 Select 1
 //                 6 Test 7 Service 8 Select 2 9 Select 3 10 Zoom In 11 Zoom
 //                 Out 12 Foot L 13 Foot R): IN0 0x01 COIN1 0x04 TEST 0x08
@@ -158,9 +170,25 @@ static Want want_orev() {
   w.in2 = 0xff; w.an0 = w.an1 = w.an2 = -1;   // the channels: near() below
   return w;
 }
-// R1010: Behind Enemy Lines' axes, exact from a stick byte
+// R1010 / R1016: Behind Enemy Lines' axes from a reference pixel (ch 0 P1_X,
+// 1 P2_X, 2 P1_Y, 3 P2_Y); Y up-high
 static const int BEL_MIN[4] = {0x69, 0x00, 0x11, 0x11}, BEL_MAX[4] = {0xff, 0x96, 0xae, 0xae};
-static int bel_axis(int ch, int a) { int u = (a + 128) & 0xff; return BEL_MIN[ch] + (u * (BEL_MAX[ch] - BEL_MIN[ch] + 1)) / 256; }
+static int bel_axis(int ch, int p) {
+  return ch < 2 ? BEL_MIN[ch] + (p * 78) / 256 : BEL_MAX[ch] - (p * 211) / 512;
+}
+// the straight line, from nothing the RTL shares: pixel 0 the X minimum / the
+// Y maximum (top), a stick's +127 (px 494, py 382) and beyond the other end
+static double bel_line(int ch, int p) {
+  const int e = ch < 2 ? 494 : 382;
+  double f = p >= e ? 1.0 : double(p) / e;
+  return ch < 2 ? BEL_MIN[ch] + f * (BEL_MAX[ch] - BEL_MIN[ch]) : BEL_MAX[ch] - f * (BEL_MAX[ch] - BEL_MIN[ch]);
+}
+static int stick_px(int a) { return ((a ^ 0x80) & 0xff) * 496 / 256; }   // R846: u * 496 / 256
+static int stick_py(int a) { return ((a ^ 0x80) & 0xff) * 384 / 256; }
+static int ms_x = 248, ms_y = 192, ms_tgl = 0;   // R1016: the bench's mouse, m2_vcop_guns' rest
+static uint32_t ms_prev = 0;                     // the word the driver has registered
+static double bel_dev = 0.0;
+static uint64_t bel_mouse_cyc = 0, bel_mouse_ends[4][2] = {}, bel_btn_cyc = 0, ms_packets = 0;
 static uint64_t bel_ends[4][3] = {}, c2g_checks = 0, wave_pitch_ends[2] = {0, 0}, wave_thr_ends[2] = {0, 0}, wski_sl_ends[2] = {0, 0};
 static uint64_t orev_near = 0, orev_ends[4] = {0, 0, 0, 0}, stcc_ends[4] = {0, 0, 0, 0};
 // R928: the RTL takes the three channels in turn through one multiply, so an
@@ -231,6 +259,75 @@ static void cmp(const char *n, int game, uint64_t cyc, int got, int want) {
     std::printf("  MISMATCH game %d cyc %llu %s: dut %02x want %02x\n", game, (unsigned long long)cyc, n, got, want);
 }
 
+// R1016: Behind Enemy Lines exhaustively, before the random run: every stick
+// byte on all four channels (P1 and P2, X and Y, each a different permutation
+// so no two channels carry the same value), then the mouse for gun 1 and
+// gun 2 over every pixel it can reach -- one-pixel steps right and down, one
+// up and left, and throws of +-255 far past each edge -- each value held 16
+// clocks and the last checked exactly; buttons each way round.
+static uint64_t sw_checks = 0, sw_mism = 0, sw_seen[4][256];
+static void tick() { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
+static void sw_cmp(const char *n, int got, int want, int px) {
+  ++sw_checks; ++checks;
+  if (got != want && mism++ < 25) std::printf("  SWEEP MISMATCH %s: dut %02x want %02x (pixel %d)\n", n, got, want, px);
+  if (got != want) ++sw_mism;
+}
+static void sw_check(int p1x, int p2x, int p1y, int p2y) {
+  for (int k = 0; k < 16; ++k) tick();
+  const int got[4] = {t->o_an0, t->o_an1, t->o_an2, t->o_an3}, px[4] = {p1x, p2x, p1y, p2y};
+  static const char *nm[4] = {"P1_X", "P2_X", "P1_Y", "P2_Y"};
+  for (int ch = 0; ch < 4; ++ch) { sw_cmp(nm[ch], got[ch], bel_axis(ch, px[ch]), px[ch]); ++sw_seen[ch][got[ch] & 0xff]; }
+}
+static void sw_packet(int dx, int dy, int btn) {
+  uint32_t m = t->ps2_mouse ^ (1u << 24);
+  t->ps2_mouse = (m & (1u << 24)) | (uint32_t(dy & 0xff) << 16) | (uint32_t(dx & 0xff) << 8)
+               | (dy < 0 ? 0x20u : 0u) | (dx < 0 ? 0x10u : 0u) | 0x08u | uint32_t(btn);
+  ms_x += dx; ms_y -= dy; ms_tgl ^= 1;
+  ms_x = ms_x < 0 ? 0 : ms_x > 495 ? 495 : ms_x;
+  ms_y = ms_y < 0 ? 0 : ms_y > 383 ? 383 : ms_y;
+  tick(); tick();   // the guns' driver takes one packet per toggle it sees
+}
+static void bel_sweep() {
+  t->game = 0x20; t->mouse_sel = 0; t->joystick_0 = 0; t->joystick_1 = 0;
+  for (int i = 0; i < 64; ++i) tick();
+  for (int a = 0; a < 256; ++a) {   // the sticks: a, and three permutations of it
+    const int x1 = a, x2 = (a * 37 + 11) & 0xff, y1 = (a * 101 + 200) & 0xff, y2 = 255 - a;
+    t->joy_analog = uint16_t(y1 << 8 | x1); t->joy_analog_1 = uint16_t(y2 << 8 | x2);
+    sw_check(stick_px(x1), stick_px(x2), stick_py(y1), stick_py(y2));
+  }
+  t->joy_analog = 0; t->joy_analog_1 = 0;
+  for (int g = 0; g < 2; ++g) {     // the mouse aiming gun 1, then gun 2 (the other gun on its centred stick)
+    t->mouse_sel = g ? 3 : 1;
+    for (int i = 0; i < 4; ++i) sw_packet(-255, 255, 0);   // to the top-left corner
+    for (int i = 0; i < 16; ++i) tick();
+    auto chk = [&]() {
+      if (g) sw_check(248, ms_x, 192, ms_y); else sw_check(ms_x, 248, ms_y, 192);
+    };
+    chk();
+    for (int x = 0; x < 500; ++x) { sw_packet(1, 0, 0); chk(); }     // right, one pixel at a time, past the edge
+    for (int y = 0; y < 390; ++y) { sw_packet(0, -1, 0); chk(); }    // down
+    for (int x = 0; x < 500; ++x) { sw_packet(-1, 0, 0); chk(); }    // left
+    for (int y = 0; y < 390; ++y) { sw_packet(0, 1, 0); chk(); }     // up
+    for (int i = 0; i < 64; ++i) { sw_packet(rnd(2) ? 255 : -255, rnd(2) ? 255 : -255, 0); chk(); }   // throws past the edges
+    for (int btn = 0; btn < 4; ++btn) {   // the buttons: this gun's trigger / missile, the other gun's untouched
+      sw_packet(0, 0, btn); for (int i = 0; i < 16; ++i) tick();
+      const int l = btn & 1, r = btn >> 1;
+      sw_cmp("in1 (mouse)", t->o_in1, lo((g ? l << 1 : l) | (g ? r << 5 : r << 4)), btn);
+    }
+    sw_packet(0, 0, 0);
+  }
+  t->mouse_sel = 0;
+  for (int i = 0; i < 16; ++i) tick();
+  ms_prev = t->ps2_mouse;
+  int ends = 0, vals[4] = {0, 0, 0, 0};
+  for (int ch = 0; ch < 4; ++ch) {
+    for (int v = 0; v < 256; ++v) if (sw_seen[ch][v]) ++vals[ch];
+    ends += sw_seen[ch][BEL_MIN[ch]] > 0 && sw_seen[ch][BEL_MAX[ch]] > 0;
+  }
+  std::printf("  R1016 sweep: %llu exact checks, %llu mismatches; distinct values P1_X %d P2_X %d P1_Y %d P2_Y %d (of 151 151 158 158); both ends on %d of 4 channels\n",
+              (unsigned long long)sw_checks, (unsigned long long)sw_mism, vals[0], vals[1], vals[2], vals[3], ends);
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t N = 20000000;
@@ -239,8 +336,11 @@ int main(int argc, char **argv) {
   t->clk = 0; t->rst_n = 0; t->game = 0;
   t->joystick_0 = 0; t->joystick_1 = 0; t->joy_analog = 0; t->joy_ranalog = 0; t->joy_analog_1 = 0; t->paddle = 0;
   t->st_pedswap = 0; t->st_ssens = 0; t->st_ssm = 0; t->st_rsteer = 0; t->st_wheel = 0; t->pe = 0xff;
+  t->ps2_mouse = 0; t->mouse_sel = 0;   // R1016
   for (int i = 0; i < 4; ++i) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
   t->rst_n = 1; gear = 0;
+  bel_sweep();   // R1016
+  t->game = 0;
   int game = 0;
   for (uint64_t c = 0; c < N; ++c) {
     static uint64_t since = 0;   // R933: clocks since the ID changed (the channels settle in three)
@@ -270,11 +370,24 @@ int main(int argc, char **argv) {
     if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); t->st_wheel = rnd(4); }
     if (rnd(64) == 0)   // R892: PE, the game's motion command -- 0x3D a third of the time, its neighbours often
       t->pe = rnd(3) == 0 ? 0x3d : rnd(3) == 0 ? (0x3d ^ (1 << rnd(8))) : uint8_t(rng());
+    // R1016: the mouse -- a packet now and then: moves of every size (beyond the
+    // screen many times over), the buttons; the OSD's Mouse line now and then
+    if (rnd(300) == 0) {
+      int dx = rnd(4) == 0 ? rnd(511) - 255 : rnd(31) - 15, dy = rnd(4) == 0 ? rnd(511) - 255 : rnd(31) - 15;
+      uint32_t m = t->ps2_mouse ^ (1u << 24);
+      m = (m & (1u << 24)) | (uint32_t(dy & 0xff) << 16) | (uint32_t(dx & 0xff) << 8)
+        | (dy < 0 ? 0x20u : 0u) | (dx < 0 ? 0x10u : 0u) | 0x08u | uint32_t(rnd(8));
+      t->ps2_mouse = m; ++ms_packets;
+    }
+    if (rnd(150000) == 0) t->mouse_sel = rnd(4);
     if (rnd(500000) == 0) t->rst_n = 0; else if (!t->rst_n && rnd(8) == 0) t->rst_n = 1;
     if (sky_sw) t->rst_n = 0;   // R958
     if (!t->rst_n) { gear = 0; gup_d = 0; gdn_d = 0; }   // asynchronous in the RTL
     t->eval();
     Want w = want_now(game, true), wn = want_now(game, false);
+    const int ms_btn_pre = int(t->ps2_mouse & 3), msel_pre = int(t->mouse_sel);   // R1016
+    static uint64_t rst_ok = 0;   // R1016: clocks since a reset (the guns' pixels restart)
+    rst_ok = t->rst_n ? rst_ok + 1 : 0;
     Want o = want_orev();   // R928: before the edge, as the others (the outputs are registered)
     static double hs[6], ha[6], hb[6], sa[6], sb[6];
     for (int k = 5; k > 0; --k) { hs[k] = hs[k - 1]; ha[k] = ha[k - 1]; hb[k] = hb[k - 1]; sa[k] = sa[k - 1]; sb[k] = sb[k - 1]; }
@@ -315,11 +428,31 @@ int main(int argc, char **argv) {
     // R1010: the 2C-only C2G build's new IDs (dut_or); C2G 0 builds as digital above; an3 0xFF on those
     cmp("an3", game, c, t->an3, 0xff);
     cmp("nm an3", game, c, t->n_an3, 0xff);
-    static int bh[4][8];   // R1010: bel's stick history per channel (newest [0])
-    for (int ch = 0; ch < 4; ++ch) { for (int k = 7; k > 0; --k) bh[ch][k] = bh[ch][k - 1]; }
-    // (sampled before the edge: joy_analog P1, joy_analog_1 P2; X low byte, Y high)
-    bh[0][0] = int8_t(t->joy_analog & 0xff); bh[1][0] = int8_t(t->joy_analog_1 & 0xff);
-    bh[2][0] = int8_t(t->joy_analog >> 8);   bh[3][0] = int8_t(t->joy_analog_1 >> 8);
+    // R1016: the reference pixel per channel. The mouse as m2_vcop_guns'
+    // spec says: a packet (a toggle of bit 24 since the last one taken) moves
+    // it 1:1, Y up-positive, clamped to the screen; reset puts it at 248, 192
+    // and forgets the toggle. Sampled after the edge (the RTL's registers
+    // stand a clock or two behind; the history absorbs them).
+    // The packet is taken a clock after it arrives (the driver registers the
+    // word first): the model does the same, so a Mouse-line change in the
+    // packet's clock sees the position before it, as the RTL does.
+    if (!t->rst_n) { ms_x = 248; ms_y = 192; ms_tgl = 0; }
+    else if (int((ms_prev >> 24) & 1) != ms_tgl) {
+      ms_tgl ^= 1;
+      int dx = int((ms_prev >> 8) & 0xff) - ((ms_prev & 0x10) ? 256 : 0);
+      int dy = int((ms_prev >> 16) & 0xff) - ((ms_prev & 0x20) ? 256 : 0);
+      ms_x += dx; ms_y -= dy;
+      ms_x = ms_x < 0 ? 0 : ms_x > 495 ? 495 : ms_x;
+      ms_y = ms_y < 0 ? 0 : ms_y > 383 ? 383 : ms_y;
+    }
+    ms_prev = t->ps2_mouse;
+    const bool m1 = (t->mouse_sel == 1), m2 = (t->mouse_sel == 3);
+    static int bh[4][12];   // R1010 / R1016: bel's reference pixel history per channel (newest [0])
+    for (int ch = 0; ch < 4; ++ch) { for (int k = 11; k > 0; --k) bh[ch][k] = bh[ch][k - 1]; }
+    bh[0][0] = m1 ? ms_x : stick_px(t->joy_analog & 0xff);
+    bh[1][0] = m2 ? ms_x : stick_px(t->joy_analog_1 & 0xff);
+    bh[2][0] = m1 ? ms_y : stick_py(t->joy_analog >> 8);
+    bh[3][0] = m2 ? ms_y : stick_py(t->joy_analog_1 >> 8);
     if (t->game == 0x21 || t->game == 0x22) {   // R1010: Ski Super G, Top Skater
       uint32_t j0 = t->joystick_0;
       ++c2g_checks;
@@ -343,19 +476,34 @@ int main(int argc, char **argv) {
       ++c2g_checks;
       if (t->game == 0x20) {
         cmp("bel in0", game, c, t->o_in0, lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 9) << 2 | b(j0, 8) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5));
-        cmp("bel in1", game, c, t->o_in1, lo(b(j0, 4) << 0 | b(j1, 4) << 1 | b(j0, 5) << 4 | b(j1, 5) << 5));
+        // R1016: the mouse's buttons (sampled before the edge, as the joysticks)
+        const int ml = ms_btn_pre & 1, mr = (ms_btn_pre >> 1) & 1, g2 = (msel_pre >> 1) & 1;
+        if (ms_btn_pre & 3) ++bel_btn_cyc;
+        cmp("bel in1", game, c, t->o_in1, lo((b(j0, 4) | (ml & !g2)) << 0 | (b(j1, 4) | (ml & g2)) << 1
+                                           | (b(j0, 5) | (mr & !g2)) << 4 | (b(j1, 5) | (mr & g2)) << 5));
         cmp("bel in2", game, c, t->o_in2, 0xff);
         const int got[4] = {t->o_an0, t->o_an1, t->o_an2, t->o_an3};
         static const char *nm[4] = {"bel P1_X", "bel P2_X", "bel P1_Y", "bel P2_Y"};
-        if (since > 8) for (int ch = 0; ch < 4; ++ch) {
-          bool ok = false;
-          for (int k = 0; k < 8; ++k) if (got[ch] == bel_axis(ch, bh[ch][k])) ok = true;
-          ++checks;
-          if (got[ch] < BEL_MIN[ch] || got[ch] > BEL_MAX[ch]) ok = false;   // MAME's PORT_MINMAX
-          if (!ok && mism++ < 25) std::printf("  MISMATCH %s cyc %llu: dut %02x want %02x\n", nm[ch], (unsigned long long)c, got[ch], bel_axis(ch, bh[ch][0]));
-          if (got[ch] == BEL_MIN[ch]) ++bel_ends[ch][0];
-          if (got[ch] == BEL_MAX[ch]) ++bel_ends[ch][2];
-          if (bh[ch][0] == 0 && got[ch] == bel_axis(ch, 0)) ++bel_ends[ch][1];
+        const bool mch[4] = {m1, m2, m1, m2};
+        if (m1 || m2) ++bel_mouse_cyc;
+        if (since > 12 && rst_ok > 12) for (int ch = 0; ch < 4; ++ch) {
+          bool ok = false, near1 = false;
+          for (int k = 0; k < 12; ++k) {
+            if (got[ch] == bel_axis(ch, bh[ch][k])) ok = true;
+            double d = got[ch] - bel_line(ch, bh[ch][k]);
+            if (d <= 1.0 && d >= -1.0) near1 = true;
+          }
+          { double d = got[ch] - bel_line(ch, bh[ch][0]); if (d < 0) d = -d; if (got[ch] == bel_axis(ch, bh[ch][0]) && d > bel_dev) bel_dev = d; }
+          checks += 2;
+          if (got[ch] < BEL_MIN[ch] || got[ch] > BEL_MAX[ch]) ok = near1 = false;   // MAME's PORT_MINMAX
+          if (!ok && mism++ < 25) std::printf("  MISMATCH %s cyc %llu: dut %02x want %02x (pixel %d%s)\n", nm[ch], (unsigned long long)c, got[ch], bel_axis(ch, bh[ch][0]), bh[ch][0], mch[ch] ? ", mouse" : "");
+          if (!near1 && mism++ < 25) std::printf("  OFF THE LINE %s cyc %llu: dut %02x line %.2f (pixel %d)\n", nm[ch], (unsigned long long)c, got[ch], bel_line(ch, bh[ch][0]), bh[ch][0]);
+          const int lo_end = ch < 2 ? BEL_MIN[ch] : BEL_MAX[ch], hi_end = ch < 2 ? BEL_MAX[ch] : BEL_MIN[ch];   // pixel 0 / the far edge
+          if (got[ch] == lo_end) ++bel_ends[ch][0];
+          if (got[ch] == hi_end) ++bel_ends[ch][2];
+          if (!mch[ch] && bh[ch][0] == bh[ch][11] && bh[ch][0] == (ch < 2 ? 248 : 192) && got[ch] == bel_axis(ch, bh[ch][0])) ++bel_ends[ch][1];
+          if (mch[ch] && got[ch] == lo_end) ++bel_mouse_ends[ch][0];
+          if (mch[ch] && got[ch] == hi_end) ++bel_mouse_ends[ch][1];
         }
       } else {
         cmp("c2g in0", game, c, t->o_in0, lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 5) << 6));
@@ -422,9 +570,12 @@ int main(int argc, char **argv) {
               (unsigned long long)c2g_checks, (unsigned long long)wave_thr_ends[0], (unsigned long long)wave_thr_ends[1],
               (unsigned long long)wave_pitch_ends[0], (unsigned long long)wave_pitch_ends[1],
               (unsigned long long)wski_sl_ends[0], (unsigned long long)wski_sl_ends[1]);
-  std::printf("  R1010 Behind Enemy Lines cycles at min / stick centre / max:");
+  std::printf("  R1016 Behind Enemy Lines cycles at pixel 0's end / stick centre / the far end:");
   for (int ch = 0; ch < 4; ++ch) std::printf(" ch%d %llu/%llu/%llu", ch, (unsigned long long)bel_ends[ch][0], (unsigned long long)bel_ends[ch][1], (unsigned long long)bel_ends[ch][2]);
-  std::printf("\n");
+  std::printf("\n  R1016 mouse: %llu packets, %llu Behind Enemy Lines cycles aimed by it, %llu with a button down; ends reached by the mouse:",
+              (unsigned long long)ms_packets, (unsigned long long)bel_mouse_cyc, (unsigned long long)bel_btn_cyc);
+  for (int ch = 0; ch < 4; ++ch) std::printf(" ch%d %llu/%llu", ch, (unsigned long long)bel_mouse_ends[ch][0], (unsigned long long)bel_mouse_ends[ch][1]);
+  std::printf("\n  R1016 largest distance of an exact match from the straight line: %.3f units\n", bel_dev);
   std::printf("  R958 Analog control Wheel A / B cycles per game:");
   for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game_wheel[g], g + 1 < G_N ? "," : "\n");
   std::printf("  Sky Target in a wheel mode: %llu cycles where the wheel-mode block's steering differs and Sky Target kept Standard's\n",

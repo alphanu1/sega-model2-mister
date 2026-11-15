@@ -663,7 +663,13 @@ localparam CONF_STR = {
 	// No "Gun reload": that was Virtua Cop's I/O board DSW; the 2A board
 	// has none (the game's own test menu holds its settings).
 	"h1O[57:56],Crosshair,Small,Large,Off;",
+`ifdef M2_2C
+	// R1016: the Mouse line for Behind Enemy Lines too (menumask bit 3: the
+	// guns' games and 0x20); a 2A build's string is as it was.
+	"h3O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
+`else
 	"h1O[63:62],Mouse,Gun 1 trigger,Gun 1 aim+trigger,Gun 2 trigger,Gun 2 aim+trigger;",
+`endif
 	// R1002: how close to an edge counts as off the screen (a reload). 4 px
 	// by default (O[79:78] never used before, so a saved config opens on 4).
 	"h1O[79:78],Off-screen edge,4 px,2 px,8 px,10 px;",
@@ -761,6 +767,7 @@ localparam bit EESAVE2A = M2A;                                // R945
 localparam bit EESAVE2A = 1'b0;
 `endif
 wire         a2_rally_menu;   // R862: is_srally, for the menu mask (assigned below)
+wire         a2_mouse_menu;   // R1016: the Mouse line (2C: the guns' games and Behind Enemy Lines)
 
 wire        forced_scandoubler;
 wire  [1:0] buttons;
@@ -801,7 +808,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({13'd0, a2_rally_menu, vc_gun | v2_gun, crt_mra}),   // R862: bit 2 Sega Rally's lines   // R801: the CRT MRA's own Video line; R839: the gun lines
+	.status_menumask({12'd0, a2_mouse_menu, a2_rally_menu, vc_gun | v2_gun, crt_mra}),   // R1016: bit 3   // R862: bit 2 Sega Rally's lines   // R801: the CRT MRA's own Video line; R839: the gun lines
 	.ps2_key(ps2_key),
 
 	.ioctl_download(ioctl_download),
@@ -3105,6 +3112,7 @@ wire is_2an     = M2A && (game_id[6:2] == 5'b00110);  // 0x18-0x1B: analog, copr
 // zeros (MAME's region reads 0 there), so the decode needs no list.
 wire prog_ext  = M2A ? is_2ax : (is_vcop | is_desert);
 assign a2_rally_menu = RALLY2A & (is_srally | is_2an | is_orev | is_stcc | is_wave | is_wski | is_skis | is_tops);   // R887: the analog profile's lines; R928; R933; R1010
+assign a2_mouse_menu = C2 & (vc_gun | v2_gun | is_bel);   // R1016: 0 on a 2A build (no h3 line there)
 // R862: the TGP's copro-data reads come from SDRAM only for Sega Rally (the
 // other 2A sets' region is ROMREGION_ERASE00 and reads 0). Quasi-static.
 // R887: and for Sky Target, Manx TT and Motor Raid (their 2-4 MB, in the
@@ -6859,6 +6867,9 @@ end else begin : g_noioboard
 			.trig_rt(joy_rt_q), .trig_lt(joy_lt_q),             // R981: the analogue triggers
 			.gun_in1(vc_in1),                            // R870: the guns' triggers
 			.pe(a2_pe),                                  // R892
+			// R1016: Behind Enemy Lines' aim -- the guns' pixels (stick or mouse) -- and the mouse's buttons
+			.gun_c1x(vc_c1x), .gun_c1y(vc_c1y), .gun_c2x(vc_c2x), .gun_c2y(vc_c2y),
+			.ms_btn(ps2_mouse[1:0]), .ms_gun2(status[63]),
 			.in0(a2_in0_q), .in1(a2_in1_q), .in2(a2_in2_q),
 			.an0(a2_an0), .an1(a2_an1), .an2(a2_an2), .an3(a2_an3)
 		);
