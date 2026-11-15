@@ -1,0 +1,298 @@
+R1027: Model 2B SHARC replay capture and R1026's data-memory cache model for MAME 0.289
+(BSD-3-Clause files; this patch GPL-3.0-or-later as the project). Applied with patch -p1 on
+top of mame_m2b_census.patch (sm2-builds/mame-m2b), built as that one is (SUBTARGET=m2lod).
+Everything is env-gated; with nothing set MAME runs as before.
+  R924_CAP=<dir>        <dir>/events.bin: the 2B board's copro traffic (model2.cpp's comment)
+  M2B_TRACE=<n> [M2B_TRACE_FROM=<k>]  <dir>/strace.bin: <pc, state hash> for n words past k
+                        that are not one-word waits (sharc.cpp's comment)
+  M2B_CENSUS + M2B_XDM=<clk> M2B_DMC=<lines>:<words>[:2]  R1026's DM: block 1 below 8 K on
+                        chip, the rest behind small caches, misses in totals.txt; paced, a
+                        read miss charged M2B_XDM cycles
+--- a/src/devices/cpu/sharc/sharc.cpp	2026-11-15 20:06:02.495640943 +0000
++++ b/src/devices/cpu/sharc/sharc.cpp	2026-11-15 20:06:02.507369547 +0000
+@@ -166,6 +166,7 @@
+ 		pc_other++;
+ }
+ 
++static void dmext_dump(FILE *f);
+ static void dump()
+ {
+ 	if (!on) return;
+@@ -203,6 +204,7 @@
+ 			(unsigned long long)dmiss[0], (unsigned long long)dmiss[1], (unsigned long long)dmiss[2], (unsigned long long)dmiss[3], (unsigned long long)dmiss[4], (unsigned long long)dmiss[5]);
+ 		fprintf(f, "pcache fetches %llu misses 256:%llu 512:%llu 1024:%llu 2048:%llu 4096:%llu\n", (unsigned long long)cfetch,
+ 			(unsigned long long)cmiss[0], (unsigned long long)cmiss[1], (unsigned long long)cmiss[2], (unsigned long long)cmiss[3], (unsigned long long)cmiss[4]);
++		dmext_dump(f);
+ 		fclose(f);
+ 	}
+ 	if (flog) fclose(flog);
+@@ -212,6 +214,35 @@
+ struct dumper { ~dumper() { dump(); } } s_dumper;
+ } // namespace m2b
+ 
++// ---- R1027: Model 2B replay capture, SHARC side (env-gated; off = MAME unchanged) ----
++// R924_CAP=<dir> (model2.cpp writes <dir>/events.bin); with it, M2B_TRACE=<n> writes
++// <dir>/strace.bin: for the first n words that are not one-word waits (a NOP or a
++// direct / relative jump whose successor is itself: R1023's spin rule), from word
++// M2B_TRACE_FROM on, <u32 pc, u32 FNV-1a hash of the state after the word> -- R0-R15,
++// ASTAT less FLG0 / FLG1 (inputs), STKY, MODE1, I0-I15, M0-M15 (DAG2's 24 bits), PCSTKP,
++// LSTKP, CURLCNTR. <dir>/strace_n.txt holds the word count at exit.
++namespace m2bt {
++static bool tried = false; static FILE *f = nullptr; static uint64_t from = 0, n = 0, idx = 0;
++static std::string dir;
++static bool on()
++{
++	if (!tried)
++	{
++		tried = true;
++		const char *d = getenv("R924_CAP"), *t = getenv("M2B_TRACE");
++		if (d && t)
++		{
++			dir = d; n = strtoull(t, nullptr, 0);
++			if (const char *q = getenv("M2B_TRACE_FROM")) from = strtoull(q, nullptr, 0);
++			f = fopen((dir + "/strace.bin").c_str(), "wb");
++		}
++	}
++	return f != nullptr;
++}
++struct closer { ~closer() { if (f) { fclose(f); FILE *c = fopen((dir + "/strace_n.txt").c_str(), "w"); if (c) { fprintf(c, "%llu\n", (unsigned long long)idx); fclose(c); } } } } s_closer;
++static inline uint32_t fnv(uint32_t h, uint32_t v) { for (int k = 0; k < 4; k++) { h ^= (v >> (8 * k)) & 0xff; h *= 16777619u; } return h; }
++}
++
+ // called from model2.cpp (model2b_state)
+ bool m2b_on() { m2b::init(); return m2b::on; }
+ void m2b_frame(double t)
+@@ -261,10 +292,77 @@
+ 	}
+ }
+ }
++// R1027: R1026's data memory -- block 1 words below 8 K on chip, every other internal word
++// (block 1 from 8 K, block 0's data words) in SDRAM behind a small read cache, writes posted
++// (write-through, a write updates a line it hits, no allocate). Direct-mapped caches of
++// 16 .. 512 lines of 1 .. 16 words and two-way LRU ones, counted over the instructions'
++// accesses; reads that miss, and the writes, per geometry, in totals.txt. Paced, M2B_XDM
++// cycles are charged a read miss of the geometry M2B_DMC=<lines>:<words>[:2] (default 64:8).
++namespace m2b {
++static const int NDL = 6, NDW = 4;
++static const unsigned dl_n[NDL] = { 16, 32, 64, 128, 256, 512 }, dw_n[NDW] = { 1, 4, 8, 16 };
++static int32_t xtag[NDL][NDW][512], xtag2[NDL][NDW][2][256]; static uint8_t xlru[NDL][NDW][256];
++static uint64_t xmiss[NDL][NDW], xmiss2[NDL][NDW], xrd = 0, xwr = 0, xall = 0;
++static bool xinit = false; static int xdm = 0, xsel_l = 2, xsel_w = 2, xsel_2 = 0;
++static inline int dmext(uint32_t key, int w)
++{
++	if (!xinit)
++	{
++		for (auto &a : xtag) for (auto &b : a) for (auto &t : b) t = -1;
++		for (auto &a : xtag2) for (auto &b : a) for (auto &c : b) for (auto &t : c) t = -1;
++		xinit = true;
++		if (const char *x = getenv("M2B_XDM")) xdm = atoi(x);
++		if (const char *c = getenv("M2B_DMC"))
++		{
++			unsigned l = 64, ww = 8, two = 0; sscanf(c, "%u:%u:%u", &l, &ww, &two);
++			for (int i = 0; i < NDL; i++) if (dl_n[i] == l) xsel_l = i;
++			for (int j = 0; j < NDW; j++) if (dw_n[j] == ww) xsel_w = j;
++			xsel_2 = two == 2;
++		}
++	}
++	xall++;
++	// on chip: block 1 (key bit 15) words below 8 K
++	if ((key & 0x8000) && (key & 0x7fff) < 0x2000) return 0;
++	if (w) xwr++; else xrd++;
++	int charge = 0;
++	for (int i = 0; i < NDL; i++)
++		for (int j = 0; j < NDW; j++)
++		{
++			uint32_t line = key / dw_n[j];
++			uint32_t ix = line & (dl_n[i] - 1);
++			bool hit = xtag[i][j][ix] == int32_t(line);
++			if (!w && !hit) { xtag[i][j][ix] = int32_t(line); xmiss[i][j]++; if (!xsel_2 && i == xsel_l && j == xsel_w) charge = xdm; }
++			// two-way, the same capacity: half the sets
++			uint32_t sets = dl_n[i] / 2, s2 = line & (sets - 1);
++			int way = xtag2[i][j][0][s2] == int32_t(line) ? 0 : xtag2[i][j][1][s2] == int32_t(line) ? 1 : -1;
++			if (way >= 0) xlru[i][j][s2] = uint8_t(way ^ 1);
++			else if (!w) { int v = xlru[i][j][s2]; xtag2[i][j][v][s2] = int32_t(line); xlru[i][j][s2] = uint8_t(v ^ 1); xmiss2[i][j]++; if (xsel_2 && i == xsel_l && j == xsel_w) charge = xdm; }
++		}
++	return charge;
++}
++static void dmext_dump(FILE *f)
++{
++	fprintf(f, "dmext accesses %llu offchip reads %llu writes %llu\n", (unsigned long long)xall, (unsigned long long)xrd, (unsigned long long)xwr);
++	for (int i = 0; i < NDL; i++)
++		for (int j = 0; j < NDW; j++)
++			fprintf(f, "dmext %u x %u (%u words) misses dm %llu 2way %llu\n", dl_n[i], dw_n[j], dl_n[i] * dw_n[j],
++				(unsigned long long)xmiss[i][j], (unsigned long long)xmiss2[i][j]);
++}
++}
+ int m2b_dm(uint32_t a, int w)
+ {
+ 	using namespace m2b;
+-	if (a >= 0x20000 && a < 0x80000 && in_ins) dcache(a);
++	int xc = 0;
++	if (a >= 0x20000 && a < 0x80000 && in_ins)
++	{
++		dcache(a);
++		uint32_t key;
++		if (a >= 0x40000) key = (a >= 0x50000 ? 0x8000 : 0) | ((a >> 1) & 0x7fff);
++		else key = (a & 0x18000) == 0 ? (a & 0x7fff) : (0x8000 | (a & 0x7fff));
++		xc = dmext(key, w);
++		if (!paced) xc = 0;
++		if (xc) { if (a < 0x80000) dmm[a] |= uint8_t(1 << (w + (in_ins ? 0 : 2))); return xc; }
++	}
+ 	if (a < 0x80000) { dmm[a] |= uint8_t(1 << (w + (in_ins ? 0 : 2))); if (a < 0x100) { if (w) F.iopw++; else F.iopr++; } return 0; }
+ 	if (a >= 0x400000 && a < 0xc00000) { if (!w) F.fin++; return 0; }
+ 	if (a >= 0xc00000 && a < 0x1400000) { if (w) F.fout++; return 0; }
+@@ -1624,6 +1722,34 @@
+ 				}
+ 			}
+ 
++			if (m2bt::on())
++			{
++				const uint64_t op48 = m_core->opcode & 0xffffffffffffULL;
++				const unsigned top = unsigned(op48 >> 32) & 0xff80;
++				const bool selfw = m_core->daddr == m2b_pc && (op48 == 0 || top == 0x0600 || top == 0x0700);
++				if (!selfw)
++				{
++					if (m2bt::idx >= m2bt::from && m2bt::idx - m2bt::from < m2bt::n)
++					{
++						uint32_t h = 2166136261u;
++						for (int k = 0; k < 16; k++) h = m2bt::fnv(h, m_core->r[k].r);
++						h = m2bt::fnv(h, m_core->astat & ~0x00180000u);
++						h = m2bt::fnv(h, m_core->stky);
++						h = m2bt::fnv(h, m_core->mode1);
++						for (int k = 0; k < 8; k++) h = m2bt::fnv(h, m_core->dag1.i[k]);
++						for (int k = 0; k < 8; k++) h = m2bt::fnv(h, m_core->dag2.i[k] & 0xffffff);
++						for (int k = 0; k < 8; k++) h = m2bt::fnv(h, m_core->dag1.m[k]);
++						for (int k = 0; k < 8; k++) h = m2bt::fnv(h, m_core->dag2.m[k] & 0xffffff);
++						h = m2bt::fnv(h, m_core->pcstkp);
++						h = m2bt::fnv(h, m_core->lstkp);
++						h = m2bt::fnv(h, m_core->curlcntr);
++						uint32_t rec[2] = { m2b_pc, h };
++						fwrite(rec, 4, 2, m2bt::f);
++					}
++					m2bt::idx++;
++				}
++			}
++
+ 			if (!m_core->write_stalled)
+ 			{
+ 				dma_run_cycle(6);
+--- a/src/mame/sega/model2.cpp	2026-11-15 20:06:02.490640988 +0000
++++ b/src/mame/sega/model2.cpp	2026-11-15 20:06:02.500640897 +0000
+@@ -686,28 +686,70 @@
+ void m2b_upload(unsigned n, double t);
+ void m2b_fin_empty();
+ 
++void r924_ev(int t, uint32_t a, uint32_t b);   // R924 capture, mb86235.cpp
++bool r924_on();
++const char *r924_dir();
++// R1027: the 2B replay capture (R924_CAP=<dir>): <dir>/events.bin, 9-byte records <u8 type,
++// u32 a, u32 b> in emulation order --
++//   C copro_ctl1 write (a = mask, b)   H host IOP-window write (a = dword offset, b)
++//   U upload word (a = n, b = the 16 bits)   B copro_boot (a = n)
++//   I i960 FIFO push (b)   N function-port push (a = offset, b = word pushed)
++//   P SHARC pop (a = n, b)   S SHARC read of an empty in FIFO (a = n)
++//   O SHARC push (a = n | 0x80000000 if the out FIFO already held 16, b)
++//   R buffer-RAM / data-ROM read by the SHARC (a = addr, b)   W buffer-RAM write (a, b)
++//   F vblank (a = frame)
++static uint32_t r1027_np = 0, r1027_no = 0;
+ u32 model2b_state::copro_sharc_fifo_in_r()
+ {
+ 	if (m_copro_fifo_in->is_empty() && !machine().side_effects_disabled()) m2b_fin_empty();
++	if (r924_on() && !machine().side_effects_disabled())
++	{
++		if (m_copro_fifo_in->is_empty()) { r924_ev('S', r1027_np, 0); return m_copro_fifo_in->read(); }
++		u32 v = m_copro_fifo_in->read();
++		r924_ev('P', r1027_np++, v);
++		return v;
++	}
+ 	return m_copro_fifo_in->read();
+ }
+ 
++void model2b_state::copro_sharc_fifo_out_w(u32 data)
++{
++	if (r924_on() && !machine().side_effects_disabled())
++		r924_ev('O', r1027_no++ | (m_copro_fifo_out->is_full() ? 0x80000000u : 0), data);
++	m_copro_fifo_out->write(data);
++}
++
++u32 model2b_state::copro_sharc_rom_r(offs_t offset)
++{
++	u32 v = m_copro_data->as_u32(offset & ((m_copro_data->bytes() >> 2) - 1));
++	if (r924_on() && !machine().side_effects_disabled()) r924_ev('R', 0x1c00000 + offset, v);
++	return v;
++}
++
++void model2b_state::copro_sharc_iop_w(offs_t offset, u32 data)
++{
++	if (r924_on()) r924_ev('H', offset, data);
++	m_copro_adsp->external_iop_write(offset, data);
++}
++
+ u32 model2b_state::copro_sharc_buffer_r(offs_t offset)
+ {
++	if (r924_on() && !machine().side_effects_disabled()) r924_ev('R', 0x1400000 + offset, m_bufferram[offset & 0x7fff]);
+ 	return m_bufferram[offset & 0x7fff];
+ }
+ 
+ void model2b_state::copro_sharc_buffer_w(offs_t offset, u32 data)
+ {
++	if (r924_on()) r924_ev('W', 0x1400000 + offset, data);
+ 	m_bufferram[offset & 0x7fff] = data;
+ }
+ 
+ void model2b_state::copro_sharc_map(address_map &map)
+ {
+ 	map(0x0400000, 0x0bfffff).r(FUNC(model2b_state::copro_sharc_fifo_in_r));
+-	map(0x0c00000, 0x13fffff).w(m_copro_fifo_out, FUNC(generic_fifo_u32_device::write));
++	map(0x0c00000, 0x13fffff).w(FUNC(model2b_state::copro_sharc_fifo_out_w));
+ 	map(0x1400000, 0x1bfffff).rw(FUNC(model2b_state::copro_sharc_buffer_r), FUNC(model2b_state::copro_sharc_buffer_w));
+-	map(0x1c00000, 0x1dfffff).rom().region("copro_data", 0);
++	map(0x1c00000, 0x1dfffff).r(FUNC(model2b_state::copro_sharc_rom_r));
+ }
+ 
+ void model2b_state::copro_halt()
+@@ -717,6 +759,7 @@
+ void model2b_state::copro_boot()
+ {
+ 	m2b_upload(m_coprocnt, machine().time().as_double());
++	if (r924_on()) r924_ev('B', m_coprocnt, 0);
+ 	m_copro_adsp->set_input_line(INPUT_LINE_HALT, CLEAR_LINE);
+ }
+ 
+@@ -727,6 +770,7 @@
+ 
+ void model2b_state::copro_fifo_w(u32 data)
+ {
++	if (r924_on()) r924_ev((m_coproctl & 0x80000000) ? 'U' : 'I', m_coprocnt, (m_coproctl & 0x80000000) ? (data & 0xffff) : data);
+ 	if (m_coproctl & 0x80000000)
+ 	{
+ 		m_copro_adsp->external_dma_write(m_coprocnt, data & 0xffff);
+@@ -743,6 +787,7 @@
+ 	u32 d = data & 0x800fffff;
+ 	u32 a = (offset >> 2) & 0xff;
+ 	d |= a << 23;
++	if (r924_on()) r924_ev('N', offset, d);
+ 
+ 	m_copro_fifo_in->push(u32(d));
+ }
+@@ -1476,7 +1521,7 @@
+ 
+ 	map(0x00880000, 0x00883fff).w(FUNC(model2b_state::copro_function_port_w));
+ 	map(0x00884000, 0x00887fff).rw(FUNC(model2b_state::copro_fifo_r), FUNC(model2b_state::copro_fifo_w));
+-	map(0x008c0000, 0x008c0fff).w(m_copro_adsp, FUNC(adsp21062_device::external_iop_write));
++	map(0x008c0000, 0x008c0fff).w(FUNC(model2b_state::copro_sharc_iop_w));
+ 
+ 	map(0x00980000, 0x00980003).rw(FUNC(model2b_state::copro_ctl1_r), FUNC(model2b_state::copro_ctl1_w));
+ 	map(0x00980008, 0x0098000b).w(FUNC(model2b_state::geo_ctl1_w));
+--- a/src/mame/sega/model2.h	2026-11-15 20:06:02.492640970 +0000
++++ b/src/mame/sega/model2.h	2026-11-15 20:06:02.502894286 +0000
+@@ -558,6 +558,9 @@
+ 	void copro_fifo_w(u32 data);
+ 	u32 copro_sharc_buffer_r(offs_t offset);
+ 	u32 copro_sharc_fifo_in_r();
++	void copro_sharc_fifo_out_w(u32 data);
++	u32 copro_sharc_rom_r(offs_t offset);
++	void copro_sharc_iop_w(offs_t offset, u32 data);
+ 	void copro_sharc_buffer_w(offs_t offset, u32 data);
+ 
+ 	void model2b_crx_mem(address_map &map) ATTR_COLD;
