@@ -557,7 +557,7 @@ obj_i960_fpdiv/Vi960_fpdiv: $(FPD_RTL) $(TB)/tb_i960_fpdiv.cpp
 # R869: remr's exact fmod unit against the host's fmod, 1,000,000 vectors
 .PHONY: test_i960_fprem
 test_i960_fprem: obj_i960_fprem/Vi960_fprem
-	@echo "== test i960_fprem (remr, R869)"
+	@echo "== test i960_fprem (remr, R869; subnormals R1020)"
 	./obj_i960_fprem/Vi960_fprem $(TEST_ARGS)
 
 obj_i960_fprem/Vi960_fprem: $(I960)/i960_fprem.sv $(TB)/tb_i960_fprem.cpp
@@ -601,7 +601,7 @@ obj_i960_fpcvt_wreg/Vi960_fpcvt: $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 	$(VBUILD) --top-module i960_fpcvt -GWREG=1 -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpcvt_wreg -o Vi960_fpcvt $(FPC_RTL) $(TB)/tb_i960_fpcvt.cpp
 
-FP_FLUSH_UNITS := fpadd fpmul fpdiv fpsqrt fpmisc fpcvt
+FP_FLUSH_UNITS := fpadd fpmul fpdiv fpsqrt fpmisc fpcvt fprem
 test_i960_fp_flush: $(foreach u,$(FP_FLUSH_UNITS),obj_i960_$(u)_flush/Vflush)
 	@set -e; for u in $(FP_FLUSH_UNITS); do echo "== test i960_$$u SUBNORM 0"; \
 	  ./obj_i960_$${u}_flush/Vflush $(TEST_ARGS); done
