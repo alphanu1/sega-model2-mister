@@ -47996,3 +47996,143 @@ operands are angles and multiples (R869's game-like set), not subnormals.
 smallest of the three cores, and R1013 lengthens the multiplier's second
 stage and the FP write-back; FP_SUBN 1 (+240 on Model 2) is the fallback if
 clk_i960 does not close. The board.
+
+**R1020 -- i960_fprem (remr, R869) TAKES SUBNORMAL OPERANDS AND DELIVERS
+SUBNORMAL REMAINDERS, EXACT fmod, BEHIND SUBNORM (i960_top FP_SUBN >= 2, AS
+THE OTHER DOUBLE UNITS). NORMAL OPERANDS: THE SAME RESULTS AND THE SAME
+CYCLES, EVERY VECTOR. UNIT +50 ALM (272 -> 322), 0 DSP, 0 M10K. BENCH AND
+MAP ONLY; NOT FITTED, NOT ON A BOARD.** Branch fprem-subn (off i960-2a
+0ecc3576), 2026-11-15.
+
+*What was believed:* R1013 / R1014: i960_fprem was the one FP unit left
+flushing -- a subnormal operand is zero, a subnormal remainder a zero of x's
+sign. R1014 put it down as harmless for the games (Rally / Zero Gunner's
+remr operands are angles and multiples), and with FP_SUBN >= 1 a single
+operand arrives as a normal double, so only a subnormal DOUBLE (fp0-fp3)
+reached the flush.
+
+*What is now known:* fmod is exact, so there is no rounding question and
+the machine only has to keep its invariant (one subtraction a step needs
+r < 2 my, my >= 2^52):
+  * a subnormal x is 0.f with exponent 1 -- no hidden bit, no shift; r <
+    2^52 < 2 my already. No new cycles.
+  * a subnormal y has to be normalised: it now sits in a register ym (53
+    bits) shifted left one bit a cycle in a new state S_YN, k (6 bits)
+    counting the L shifts. The loop then runs as for exponent 1 (ex' - 1
+    steps, ex' = max(ex, 1)), and its remainder, < my << L, is reduced the
+    rest of the way by L subtract-only steps with ym shifted back right
+    each time: (a mod (my << L)) mod (my << L-1) ... mod my. That leaves
+    the remainder exactly as a subnormal's fraction -- no right shift of r,
+    no second shifter. A normal y is loaded into ym in the same idle cycle,
+    so the loop reads a register instead of the register file's y (the
+    loop's subtractor input is shorter, not longer).
+  * a remainder whose leading one has not reached bit 52 when the exponent
+    reaches 1 is stored as it stands, exponent field 0 (q masks the
+    exponent with r[52]; that also covers a zero remainder and a zero /
+    subnormal x returned as itself, so f_zero is constant 0 at SUBNORM 1).
+  * SUBNORM 0 is the old unit: my is y as before, ym and k are unused.
+
+*Cycles (req to done, the bench's model, checked on every vector):*
+  * no subnormal operand, any special, any remainder (subnormal remainders
+    of normal pairs included -- the old unit flushed at the same step):
+    1 + (ex - ey + 1) + (r = 0 ? 1 : min(52 - p, ey - 1) + 1), or 1 for a
+    special / |x| < |y| -- the OLD unit's count, unchanged; max 2,048. The
+    same model was run against the old unit (the file before this change,
+    built in scratch) with the flush bench: 0 off on 1,189,933 and
+    3,189,933 vectors, so the model is the old machine.
+  * subnormal x, normal y: as a normal x of exponent 1 -- 1 cycle unless
+    ey = 1, no extra cycles (the old unit took 1, x being zero).
+  * subnormal y: ex' + 2L + 2, L = 1..52 the normalising shift: 5 at the
+    least, 2,152 at the most (x = 2^1023 class, y = 2^-1074). The old
+    unit took 1 (y zero, NaN).
+
+*How established (all RUN):*
+  * tb_i960_fprem against the host's fmod, bit for bit, cycles against the
+    model above. New directed sets: every subnormal x leading-zero count
+    against every subnormal y count, both signs (21,632); every subnormal
+    y count against every x exponent field 0..2046 -- x / y over the whole
+    2^2098 range (106,444); every subnormal x count against normal y
+    exponents 1..63 and a sample above (24,336); normal pairs near 2^-1022
+    whose remainders go subnormal (25,200); the largest x against every
+    subnormal y, exact multiples of subnormal y and their neighbours
+    (11,232); an operand in eight of the random doubles, multiples and
+    near-ratio classes made subnormal. Default run 1,189,933 vectors,
+    263,804 with a subnormal operand (x bands 52 / 52, y bands 52 / 52),
+    238,724 subnormal remainders: 0 mismatches, 0 cycles off the model.
+    Seeds 2-5 x 5,000,000 random (5,189,933 vectors each, ~664,000
+    subnormal operands and ~610,000 subnormal remainders each): 0 / 0.
+  * SUBNORM 0 (-GSUBNORM=0 -DTB_FLUSH, now in test_i960_fp_flush with the
+    other six units): 1,189,933 vectors, 0 / 0 against the old flush model;
+    the old unit itself on the same bench: 0 / 0.
+  * Whole CPU: the lockstep never reached the new paths -- the default
+    test_i960_top_fx run retired 13 remr, 0 with a subnormal double operand
+    or remainder. With +fx at FP_SUBN 2 the bench now starts every program
+    with fp0-fp3 each a subnormal double (random band and sign), a double
+    of exponent field 1..60, a large double, or 0, and points half of remr
+    at fp0-fp3 for each source (fp destination), all from the seeding
+    generator so the programs are the same. The reference's remr was
+    already exact fmod at SUBN 2 (std::fmod on doubles, no flush); its
+    double operands and result now pass flush_d below SUBN 2 (a no-op
+    there, fp0-fp3 never hold a subnormal) and it counts the cases.
+    test_i960_top_fx PASS (2 subnormal remr), test_i960_top_dc (all six
+    runs, DC16 included) PASS (27), test_i960_top_fx +seed=2..20
+    +random=2000 all PASS: 3,218 remr, 505 with a subnormal double operand
+    or remainder; test_i960_top and +seed=2..20 +random=2000 PASS (no
+    F2A: unchanged by construction, the new seeding is +fx only);
+    test_i960_top_subn PASS; and, in scratch, the F2A build at FP_SUBN 1
+    and 0 (fprem SUBNORM 0) against the reference built the same way,
+    default and +seed=3 +random=2000: PASS. Lint of i960_top with F2A at
+    FP_SUBN 2 and 1: nothing from fprem. quartus_map --analyze_file of
+    i960_fprem.sv and i960_top.sv: 0 errors.
+  * Planted faults (scratch fprem/mut/mut.py, one edit each, the unit
+    bench at +random=200000; mismatches / cycles off): no subtract-only
+    tail (119,080 / 35,834); S_YN stops a bit early (389,719 / 2);
+    subnormal x keeps exponent 0 (22,417 / 12,913); no r[52] exponent mask
+    (177,376 / 0); subnormal x given a hidden bit (29,819 / 0); a
+    subnormal y taken as zero (154,968 / 0); a subnormal x taken as zero
+    (22,417 / 12,913); the tail not shifting ym back (119,080 / 0);
+    subnormal y keeps exponent 0 (127,685 / 27,229); S_YN undercounting L
+    (61,445 / 93,469); S_NORM stopping at c = 0 not 1 (135,886 / 0); the
+    tail one step short (0 / 1 -- see below). Whole CPU: i960_top with
+    fprem built SUBNORM 0 at FP_SUBN 2 FAILS test_i960_top_fx, default
+    and +seed=2 +random=2000 (1 mismatch each; the run stops at the first).
+    All caught.
+
+*AREA (quartus_map 17.0, the unit alone, the project's synthesis settings,
+virtual pins; RUN):*
+
+       build                    ALMs est.   comb. ALUTs   registers
+       old unit (0ecc3576)        272          271           71
+       SUBNORM 1                  322          358          130
+       SUBNORM 0                  272          272           71
+
+  +50 ALM, +59 registers (ym 53, k 6). SUBNORM 0 is the old unit's size.
+  On 2C, if it builds FP_SUBN 1 (R1013's advice for its ~800 ALM headroom),
+  fprem is SUBNORM 0 and costs nothing.
+  Whole 2A core (quartus_map 17.0 of this branch, FP_SUBN 2): 39,709 ALMs
+  needed, 46,813 registers, 4,601,424 block memory bits, 100 DSP -- against
+  R1014's 39,704 for i960-2a, +5, inside the map's +-30 noise (the unit's
+  +50 is smaller than that noise in a whole-core estimate; no base map was
+  run beside it, so +5 is not a measurement of the unit). In the core
+  u_fprem is 268 combinational ALUTs / 130 registers.
+
+*WRONG FIRST, KEPT:*
+  * The reference was believed to need changing for SUBN 2. It did not:
+    it already computed std::fmod on the unflushed doubles. What was
+    missing was the bench reaching it -- 0 of 13 remr in the default F2A
+    run had a subnormal double -- so a unit that flushed passed the whole
+    CPU lockstep. A green lockstep there said nothing about remr's
+    subnormals until fp0-fp3 were seeded.
+  * The "tail one step short" fault (k_nz on k > 1) gave 0 value
+    mismatches and 1 cycle mismatch: k is not cleared at idle, so after
+    the first subnormal y it sits at 1, S_YN counts L + 1 and the short
+    tail does L steps -- right again. Caught only by the cycle check on
+    the first such vector after reset. k is 0 at every idle by
+    construction; clearing it on req would cost 6 LUT inputs and make
+    the fault loud. Not done -- recorded.
+
+*NOT SETTLED:* a fit (2A clk_i960 slack +0.267 ns in s2232; the change
+puts a register, not the register file, in front of the loop's subtractor,
+but adds S_YN / tail enables on ym, k, c, st); the board; whether any game
+ever hands remr a subnormal double (R869's form log saw none); the port to
+2C (only if it runs FP_SUBN 2) and Model 2 (no F2A, no fprem).
