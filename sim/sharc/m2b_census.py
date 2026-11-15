@@ -8,6 +8,8 @@
   m2b_census.py census <dir> [<dir>..]  program / data words used, the instruction forms
                                         executed (spins apart), external accesses, per frame
   m2b_census.py frames <dir> [from to]  per-vblank work, MAME's i960 waits, percentiles
+  m2b_census.py table  <dir> [<dir>..]  R1024: one block per game -- program, data, every feature
+                                        the first cut leaves out, MODE1 / MODE2, work, the i960
 
 The opcode classes and compute kinds are Hornet's (scripts/sharc_profile_report.py,
 ppriest/Arcade-KonamiHornet_MiSTer 91edb27, GPL-3.0), restated here.
@@ -297,6 +299,109 @@ def cmd_frames(d, lo=None, hi=None):
               f"p99 {pct(fm, 99):.2f}  max {max(fm):.2f}")
 
 
+def i960_counts(d):
+    c = {}
+    p = Path(d) / "i960.txt"
+    if p.exists():
+        for line in open(p):
+            if line.startswith("COUNT"):
+                _, k, v = line.split()
+                c[k] = int(v)
+    return c
+
+
+def extra_totals(d):
+    """totals.txt's later lines: circ / xdma / irqs and the program cache."""
+    out = {}
+    for line in open(Path(d) / "totals.txt"):
+        f = line.split()
+        if f and f[0] == "circ":
+            out["circ"], out["xdma"] = int(f[1]), int(f[3])
+            out["irqs"] = " ".join(f[5:]) or "none"
+        if f and f[0] == "pcache":
+            out["pcache"] = {k: int(v) for k, v in (x.split(":") for x in f[4:])}
+        if f and f[0] == "dcache":
+            out["dacc"] = int(f[2])
+            out["dcache"] = {k: int(v) for k, v in (x.split(":") for x in f[4:])}
+    return out
+
+
+def cmd_table(dirs, coin=60.0):
+    for d in dirs:
+        g = Path(d).name
+        if not (Path(d) / "totals.txt").exists():
+            print(f"== {g}: no totals (run did not finish)")
+            continue
+        t = totals(d)
+        x = extra_totals(d)
+        pcs = load_pc(d)
+        print(f"== {g}")
+        if not pcs:
+            print(f"   SHARC never ran: boots {t['boots']}, upload {t['last_upload']}, frames {t['frames']}")
+            continue
+        sp = spin_pcs(pcs)
+        waits = spin_waits(pcs, sp)
+        tot = sum(v[1] for v in pcs.values())
+        work = tot - sum(waits.values())
+        feats = collections.Counter()
+        kinds = collections.Counter()
+        for pc, (op, n, v, dis) in pcs.items():
+            w = n - waits.get(pc, 0)
+            bits, name = op_class(op)
+            if bits == 0x2000:
+                feats["dual move (type 1)"] += w
+            if name == "IDLE":
+                feats["IDLE"] += w
+            if name in ("push/pop stacks", "RTI (+compute)", "bit reverse"):
+                feats[name] += w
+            if bits in COMPUTE_CLASSES:
+                k = compute_kind(op & 0x7fffff)
+                if k:
+                    kinds[k] += w
+                    if k[0] == "multiplier" and k[1] == "fixed":
+                        feats["fixed multiply / MR"] += w
+                    if k[0] == "multifunction" and k[1] == "fixed":
+                        feats["fixed multifunction"] += w
+                    if "dual" in k[2]:
+                        feats["dual add/sub"] += w
+        dm = Path(d, "dm.bin").read_bytes()
+        pmd = Path(d, "pmdata.bin").read_bytes()
+        blk1 = [a for a in range(0x28000, 0x40000) if dm[a] & 3]
+        blk0 = [a for a in range(0x20000, 0x28000) if dm[a] & 3]
+        shortw = [a for a in range(0x40000, 0x80000) if dm[a] & 3]
+        iop = [a for a in range(0, 0x100) if dm[a] & 3]
+        pmdat = sum(1 for a in range(len(pmd)) if pmd[a] & 0xf)
+        modes = sorted({tuple(l.split()[3::2]) for l in open(Path(d) / "modes.txt")}) if (Path(d) / "modes.txt").exists() else []
+        frames = load_frames(d)
+        def win(lo, hi):
+            v = [r["busy"] for r in frames if lo <= r["t"] < hi]
+            return (f"p50 {pct(v, 50):,} p99 {pct(v, 99):,} max {max(v):,} ({len(v)} vbl)") if v else "-"
+        fl = [r for r in frames if r["t"] >= coin + 10]
+        skipped = sum(1 for r in fl if r["flips"] == 0)
+        i9 = i960_counts(d)
+        hi = max(pcs)
+        print(f"   program: upload {t['last_upload']} x16 (+ xdma words {x.get('xdma', '?')}), boots {t['boots']}; "
+              f"executed {len(pcs)} words, highest {hi:05x}; versions>1 {sum(1 for v in pcs.values() if v[2] > 1)}")
+        print(f"   data: block1 {len(blk1)} words (top {max(blk1):05x})" if blk1 else "   data: block1 none", end="")
+        print(f"; block0 {len(blk0)}; short {len(shortw)}; IOP {', '.join(f'{a:02x}' for a in iop)}; PM-bus data {pmdat}")
+        print(f"   modes: " + ", ".join(f"MODE1 {m[0]} MODE2 {m[1]}" for m in modes[:6]))
+        print(f"   left-out features: " + (", ".join(f"{k} {v:,}" for k, v in feats.items() if v) or "none") +
+              f"; DMA starts {t['dma']}; IRQs {x.get('irqs')}; circular {x.get('circ', 0):,}; idle cycles {int(t['idle']):,}")
+        print(f"   external: data ROM reads {int(t['romr']):,}; buffer RAM r/w {int(t['bufr']):,} / {int(t['bufw']):,}; "
+              f"FIFO in max {t['in_max']} out max {t['out_max']}")
+        print(f"   work/vblank: attract {win(20, coin)}; play {win(coin + 10, 1e9)}; waits {100 * (tot - work) / max(1, tot):.1f}%")
+        print(f"   flips: {sum(r['flips'] for r in fl)} in {len(fl)} vblanks after the coin, {skipped} vblanks without")
+        print(f"   pcache misses: {x.get('pcache')}")
+        if "dcache" in x:
+            print(f"   dcache (internal DM, {x['dacc']:,} accesses) misses: {x['dcache']}")
+        print(f"   i960: IOP {i9.get('IOP', 0)}, bank {i9.get('BANK', 0)}, UART 9c r/w {i9.get('UART9C_R', 0):,}/{i9.get('UART9C_W', 0):,}, "
+              f"UART 1c8 w {i9.get('UART1C8_W', 0)}, tex upper MB {i9.get('TEX_UPPER_MB', 0):,} lower {i9.get('TEX_LOWER_MB', 0):,}, "
+              f"tex reads {i9.get('TEX_READ', 0)}, status {i9.get('STATUS_R', 0)}, prot r/w {i9.get('PROT_R', 0)}/{i9.get('PROT_W', 0)}, "
+              f"buffer RAM w {i9.get('BUFRAM_W', 0):,} r {i9.get('BUFRAM_R', 0):,}")
+        ops = sorted({k[2] for k in kinds})
+        print(f"   compute ops: {', '.join(ops)}")
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     if not a:
@@ -305,6 +410,8 @@ if __name__ == "__main__":
         cmd_spins(a[1])
     elif a[0] == "census":
         cmd_census(a[1:])
+    elif a[0] == "table":
+        cmd_table(a[1:])
     elif a[0] == "frames":
         cmd_frames(a[1], float(a[2]) if len(a) > 2 else None, float(a[3]) if len(a) > 3 else None)
     else:
