@@ -740,7 +740,7 @@ module i960_top #(
   logic        frem_done;
   logic [63:0] frem_y;
   generate if (F2A) begin : g_rem
-    i960_fprem u_fprem (.clk(clk), .rst_n(rst_n), .req(frem_req),
+    i960_fprem #(.SUBNORM(SUBN_D)) u_fprem (.clk(clk), .rst_n(rst_n), .req(frem_req),
                         .x(fp_b), .y(fp_a), .q(frem_y), .done(frem_done));
   end else begin : g_norem
     assign frem_y = 64'd0; assign frem_done = 1'b0;
