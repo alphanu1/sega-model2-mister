@@ -956,12 +956,18 @@ obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960
 
 # R935: the 2C build's i960 (C2=1 with VC, FR, F2A: Model2.sv's M2_2C) -- the
 # VC and F2A mixes and logrl. Forced off: +c2 on obj_i960_top_vc (C2=0) must FAIL.
-# R1017: at FP_SUBN 1, the 2C build's (Model2.sv); at 2 logrl of a subnormal
-# double is wrong (the sequencer's log takes the exponent field as is) -- open.
+# R1017: at FP_SUBN 1, the 2C build's (Model2.sv). R1019: and at FP_SUBN 2
+# (every unit's subnormals, where 2C is going), logrl of a subnormal double
+# included -- both builds run, each against the reference built the same way.
 .PHONY: test_i960_top_c2
-test_i960_top_c2: obj_i960_top_c2/Vi960_top
-	@echo "== test i960_top C2 (the 2C build: + logrl, R935)"
+test_i960_top_c2: obj_i960_top_c2/Vi960_top obj_i960_top_c2s2/Vi960_top
+	@echo "== test i960_top C2 (the 2C build: + logrl, R935), FP_SUBN 1"
 	./obj_i960_top_c2/Vi960_top +vc +fx +c2 $(TEST_ARGS)
+	@echo "== test i960_top C2 at FP_SUBN 2 (R1019)"
+	./obj_i960_top_c2s2/Vi960_top +vc +fx +c2 $(TEST_ARGS)
+obj_i960_top_c2s2/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 -GFR=1 -GF2A=1 -GC2=1 -GFP_SUBN=2 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_SUBN=2" \
+	  --Mdir obj_i960_top_c2s2 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 obj_i960_top_c2/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top -GVC=1 -GFR=1 -GF2A=1 -GC2=1 -GFP_SUBN=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_SUBN=1" \
 	  --Mdir obj_i960_top_c2 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
