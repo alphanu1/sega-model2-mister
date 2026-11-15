@@ -2562,10 +2562,10 @@ test_m2_2a_inputs: obj_m2_2a_inputs/Vtb_m2_2a_inputs_top
 	@echo "== test m2_2a_inputs (the 2A cabinet per game, R862)"
 	@./obj_m2_2a_inputs/Vtb_m2_2a_inputs_top $(TEST_ARGS)
 
-obj_m2_2a_inputs/Vtb_m2_2a_inputs_top: rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv sim/io/tb_m2_2a_inputs_top.sv sim/io/tb_m2_2a_inputs.cpp
+obj_m2_2a_inputs/Vtb_m2_2a_inputs_top: rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv rtl/io/m2_vcop_guns.sv sim/io/tb_m2_2a_inputs_top.sv sim/io/tb_m2_2a_inputs.cpp
 	$(VBUILD) --top-module tb_m2_2a_inputs_top -Wno-UNUSEDSIGNAL \
 	  --Mdir obj_m2_2a_inputs -o Vtb_m2_2a_inputs_top -CFLAGS "-O2" \
-	  rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv sim/io/tb_m2_2a_inputs_top.sv sim/io/tb_m2_2a_inputs.cpp
+	  rtl/io/m2_2a_inputs.sv rtl/io/m2_cab_inputs.sv rtl/io/m2_vcop_guns.sv sim/io/tb_m2_2a_inputs_top.sv sim/io/tb_m2_2a_inputs.cpp
 
 # R945: the NVRAM file end to end -- Main_MiSTer's SPI words through the real
 # sys/hps_io.sv, m2_nv_port, m2_backup and the 315-5649's 93C46: the game's

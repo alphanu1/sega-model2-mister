@@ -18,6 +18,11 @@
 // Standard, Sky Target's reference.
 // R1010: C2G on dut_or (Wave Runner 0x1E, Water Ski 0x1F, Behind Enemy Lines
 // 0x20); dut / dut_nm (C2G 0) must read those IDs as digital. an3 on each.
+// R1016: Behind Enemy Lines' aim through the real chain -- m2_vcop_guns as
+// the 2C build has it (V2, HD) turns the sticks or the mouse into pixels,
+// dut_or maps them; its pixels are outputs (g_c1x ..) for the bench's
+// diagnosis only, the reference is computed from the sticks and mouse
+// packets. dut / dut_nm see the ports tied as a 2A build's harness would.
 
 `timescale 1ns/1ps
 
@@ -40,6 +45,9 @@ module tb_m2_2a_inputs_top (
   input  logic  [7:0] trig_rt,        // R981: the analogue triggers, on every copy
   input  logic  [7:0] trig_lt,
   input  logic  [7:0] pe,             // R892: the 315-5649's PE latch
+  input  logic [24:0] ps2_mouse,      // R1016: hps_io's mouse word
+  input  logic  [1:0] mouse_sel,      // R1016: the OSD's Mouse line (status[63:62])
+  output logic  [8:0] g_c1x, output logic [8:0] g_c1y, output logic [8:0] g_c2x, output logic [8:0] g_c2y,
   output logic  [7:0] o_in0, output logic [7:0] o_in1, output logic [7:0] o_in2,   // R928: OREV 1
   output logic  [7:0] o_an0, output logic [7:0] o_an1, output logic [7:0] o_an2,
   output logic  [7:0] o_an3, output logic [7:0] n_an3, output logic [7:0] an3,   // R1010
@@ -55,16 +63,32 @@ module tb_m2_2a_inputs_top (
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1)) dut (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
-    .gun_in1(8'hFF), .pe, .in0, .in1, .in2, .an0, .an1, .an2, .an3);
+    .gun_in1(8'hFF), .pe, .gun_c1x(9'd0), .gun_c1y(9'd0), .gun_c2x(9'd0), .gun_c2y(9'd0), .ms_btn(2'b00), .ms_gun2(1'b0),
+    .in0, .in1, .in2, .an0, .an1, .an2, .an3);
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b0)) dut_nm (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
-    .gun_in1(8'hFF), .pe, .in0(n_in0), .in1(n_in1), .in2(n_in2), .an0(n_an0), .an1(n_an1), .an2(n_an2), .an3(n_an3));
+    .gun_in1(8'hFF), .pe, .gun_c1x(9'd0), .gun_c1y(9'd0), .gun_c2x(9'd0), .gun_c2y(9'd0), .ms_btn(2'b00), .ms_gun2(1'b0),
+    .in0(n_in0), .in1(n_in1), .in2(n_in2), .an0(n_an0), .an1(n_an1), .an2(n_an2), .an3(n_an3));
 
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1), .OREV(1'b1), .C2G(1'b1)) dut_or (   // R928; R1010 C2G
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
-    .gun_in1(8'hFF), .pe, .in0(o_in0), .in1(o_in1), .in2(o_in2), .an0(o_an0), .an1(o_an1), .an2(o_an2), .an3(o_an3));
+    .gun_in1(8'hFF), .pe, .gun_c1x(g_c1x), .gun_c1y(g_c1y), .gun_c2x(g_c2x), .gun_c2y(g_c2y),   // R1016
+    .ms_btn(ps2_mouse[1:0]), .ms_gun2(mouse_sel[1]),
+    .in0(o_in0), .in1(o_in1), .in2(o_in2), .an0(o_an0), .an1(o_an1), .an2(o_an2), .an3(o_an3));
+
+  // R1016: the guns' driver as Model2.sv's u_vcop_guns on a 2C build (en is
+  // Virtua Cop 2 / HOTD only, so 0 here: Behind Enemy Lines draws its own cross)
+  wire [7:0] g_in0, g_in1;
+  wire [9:0] g_p1x, g_p1y, g_p2x, g_p2y;
+  wire [1:0] g_off, g_con;
+  m2_vcop_guns #(.TICK_LOG2(6), .V2(1'b1), .HD(1'b1)) guns (
+    .clk, .rst_n, .en(1'b0), .play(2'b00),
+    .joy0(joystick_0[15:0]), .joy1(joystick_1[15:0]), .ana0(joy_analog), .ana1(joy_analog_1),
+    .ps2_mouse, .mouse_sel, .edge_sel(2'd0),
+    .in0(g_in0), .in1(g_in1), .p1x(g_p1x), .p1y(g_p1y), .p2x(g_p2x), .p2y(g_p2y), .off(g_off),
+    .c1x(g_c1x), .c1y(g_c1y), .c2x(g_c2x), .c2y(g_c2y), .c_on(g_con));
 
   // Model2.sv at 9fb631d, g_5649 -- verbatim
   wire [7:0] a2_in0 = ~{2'b00, joystick_1[7], joystick_0[7], joystick_0[10],

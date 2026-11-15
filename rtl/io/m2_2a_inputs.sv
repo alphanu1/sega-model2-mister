@@ -94,9 +94,18 @@
 //          (MAME: "they reversed these two"); IN1 0x01 P1 trigger 0x02 P2
 //          trigger 0x10 P1 missile 0x20 P2 missile; IN2 0xFF. AN0 P1_X
 //          0x69..0xFF, AN1 P2_X 0x00..0x96, AN2 P1_Y 0x11..0xAE, AN3 P2_Y
-//          0x11..0xAE: each player's left stick as an ABSOLUTE position (a
-//          light gun's convention, R846), u = a + 128 onto min + u * (span +
-//          1) / 256 -- u 0 the minimum, 255 the maximum.
+//          0x11..0xAE.
+//          R1016: the aim is m2_vcop_guns' screen pixel (gun_c1x .. gun_c2y:
+//          the left stick as an ABSOLUTE position, R846 -- a USB light gun
+//          arrives so -- or the mouse, for the gun the OSD's Mouse line
+//          gives it), X = min + px * 78 / 256, Y = 0xAE - py * 211 / 512:
+//          pixel 0 the minimum, 494 (a stick's +127) and 495 (the mouse's
+//          edge) the maximum. Y is UP-HIGH: the game's GUN CALIBRATION takes
+//          the lower stops low (MAME, R1016 -- calibrated the other way the
+//          aim never leaves the bottom row), so the left stick's up (MiSTer's
+//          negative Y) and the top of the screen are 0xAE. The mouse's left
+//          / right buttons are that gun's trigger / missile (as Virtua Cop's
+//          trigger / reload), beside the joystick buttons.
 //     0x21 Sega Ski Super G (skisuprg): J 4 Coin 5 Select 1 (Start) 6 Test
 //          7 Service 8 Select 2 9 Select 3 10 Zoom In 11 Zoom Out 12 Foot
 //          Sensor L 13 Foot Sensor R. IN0 0x01 COIN1 0x04 TEST 0x08 SERVICE
@@ -147,6 +156,13 @@ module m2_2a_inputs #(
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic  [7:0] gun_in1,      // R870 (GUN): m2_vcop_guns in1, the triggers
   input  logic  [7:0] pe,           // R892 (MOTION): the 315-5649's PE latch
+  // R1016 (C2G): Behind Enemy Lines' aim and the mouse's buttons --
+  // m2_vcop_guns' pixels (registered there: the stick, or the mouse when the
+  // OSD gives it that gun), ps2_mouse[1:0] and the OSD's Mouse line bit 1
+  // (status[63]: the buttons are gun 2's), both registers in hps_io
+  input  logic  [8:0] gun_c1x, gun_c1y, gun_c2x, gun_c2y,
+  input  logic  [1:0] ms_btn,       // left, right
+  input  logic        ms_gun2,
   /* verilator lint_on UNUSEDSIGNAL */
   output logic  [7:0] in0,          // registered, as Model2.sv's were
   output logic  [7:0] in1,
@@ -271,30 +287,37 @@ module m2_2a_inputs #(
   wire [7:0] or_in0 = {an_in0[7:6], 1'b1, an_in0[4:0]};           // bit 5 unused
   wire [7:0] or_in1 = {2'b11, ~j0[13], ~j0[12], 2'b11, ~j0[9], ~j0[8]};
 
-  // ---- R1010: Behind Enemy Lines' four gun axes. Each player's left stick,
-  // u = a + 128, onto min + u * (span + 1) / 256 (X span 150, Y span 157:
-  // u * 151 / u * 158). The four in turn through one constant multiply, in
-  // three stages (the stick registered first, as R999's split): a channel
-  // every fourth clock, far faster than the game reads them.
-  logic [1:0] bl_ch, bl_ca, bl_cq;
-  logic [7:0] bl_u;
-  logic [15:0] bl_p;
-  logic [7:0] bl_v [4];
-  wire  [15:0] bl_a  = (bl_ch == 2'd0 || bl_ch == 2'd2) ? joy_analog : joy_analog_1;
-  wire  [7:0]  bl_s  = bl_ch[1] ? bl_a[15:8] : bl_a[7:0];   // ch 0 P1_X 1 P2_X 2 P1_Y 3 P2_Y
-  wire  [15:0] bl_u16 = {8'd0, bl_u};
-  // x 151 = 128 + 16 + 4 + 2 + 1 (X), x 158 = 128 + 16 + 8 + 4 + 2 (Y)
-  wire  [15:0] bl_m  = (bl_u16 << 7) + (bl_u16 << 4) + (bl_u16 << 2) + (bl_u16 << 1)
-                     + (bl_ca[1] ? (bl_u16 << 3) : bl_u16);
-  wire  [7:0]  bl_min = (bl_cq == 2'd0) ? 8'h69 : (bl_cq == 2'd1) ? 8'h00 : 8'h11;
+  // ---- R1010 / R1016: Behind Enemy Lines' four gun axes, from m2_vcop_guns'
+  // pixels (px 0..495, py 0..383): X min + px * 78 >> 8 (P1 0x69, P2 0x00;
+  // span 150), Y 0xAE - py * 211 >> 9 (span 157). 78 / 256 and 211 / 512
+  // are the only 8- / 9-bit-shift constants that put both pixel 494 (a
+  // stick's +127, sx / sy) and 495 / 383 (the mouse's clamp) on the maximum
+  // without passing it. The four in turn through one constant multiply, in
+  // three stages: a channel every fourth clock, far faster than the game
+  // reads them.
+  logic [1:0]  bl_ch, bl_ca, bl_cq;
+  logic [8:0]  bl_px;
+  logic [16:0] bl_p;
+  logic [7:0]  bl_v [4];
+  wire  [8:0]  bl_s  = (bl_ch == 2'd0) ? gun_c1x : (bl_ch == 2'd1) ? gun_c2x
+                     : (bl_ch == 2'd2) ? gun_c1y : gun_c2y;   // ch 0 P1_X 1 P2_X 2 P1_Y 3 P2_Y
+  wire  [16:0] bl_q  = {8'd0, bl_px};
+  // x 78 = 64 + 8 + 4 + 2 (X), x 211 = 128 + 64 + 16 + 2 + 1 (Y)
+  wire  [16:0] bl_m  = (bl_q << 6) + (bl_q << 1)
+                     + (bl_ca[1] ? (bl_q << 7) + (bl_q << 4) + bl_q : (bl_q << 3) + (bl_q << 2));
+  wire  [7:0]  bl_f  = bl_cq[1] ? bl_p[16:9] : bl_p[15:8];
+  wire  [7:0]  bl_b  = (bl_cq == 2'd0) ? 8'h69 : (bl_cq == 2'd1) ? 8'h00 : 8'hAE;
   always_ff @(posedge clk) begin
     bl_ch <= bl_ch + 2'd1;
-    bl_u  <= {~bl_s[7], bl_s[6:0]};  bl_ca <= bl_ch;   // u = a + 128
-    bl_p  <= bl_m;                   bl_cq <= bl_ca;
-    bl_v[bl_cq] <= bl_min + bl_p[15:8];
+    bl_px <= bl_s;  bl_ca <= bl_ch;
+    bl_p  <= bl_m;  bl_cq <= bl_ca;
+    bl_v[bl_cq] <= bl_cq[1] ? bl_b - bl_f : bl_b + bl_f;   // R1016: Y up-high
   end
   wire [7:0] bl_in0 = ~{2'b00, j1[6], j0[6], j0[8], j0[9], j1[7], j0[7]};   // 0x04 SERVICE, 0x08 TEST
-  wire [7:0] bl_in1 = ~{2'b00, j1[5], j0[5], 2'b00, j1[4], j0[4]};
+  // R1016: the mouse's buttons are gun 1's (or gun 2's): left the trigger, right the missile
+  wire [1:0] bl_m1 = ms_gun2 ? 2'b00 : ms_btn;
+  wire [1:0] bl_m2 = ms_gun2 ? ms_btn : 2'b00;
+  wire [7:0] bl_in1 = ~{2'b00, j1[5] | bl_m2[1], j0[5] | bl_m1[1], 2'b00, j1[4] | bl_m2[0], j0[4] | bl_m1[0]};
   // R1010: Wave Runner / Water Ski's buttons; Wave Runner's pitch, 0x7F - y
   wire [7:0] wv_in1 = ~{7'd0, j0[8]};
   wire [7:0] ws_in1 = ~{4'd0, j0[11], j0[10], j0[9], j0[8]};
