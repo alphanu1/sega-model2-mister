@@ -1,5 +1,34 @@
 # Handoff
 
+## 2026-11-15: fprem-subn -- remr (i960_fprem) takes and delivers subnormals, exact (R1020), quartus_map only
+
+Branch `fprem-subn` off i960-2a 0ecc3576 (the 2A build). Study R1020 has the
+record. Not fitted, not on the board, not pushed, not merged.
+
+  * i960_fprem SUBNORM (i960_top FP_SUBN >= 2 turns it on, as SUBN_D does
+    for the double units; 0 is the old unit). A subnormal x is 0.f at
+    exponent 1; a subnormal y is normalised in ym (S_YN, L cycles) and the
+    remainder reduced back down by L subtract-only steps with ym shifted
+    right -- no right shift of r. Subnormal remainders stored as they are.
+  * Cycles: normal operands exactly the old count on every vector (the
+    bench's model, also run against the old unit: 0 off); subnormal x no
+    extra; subnormal y ex' + 2L + 2 (5..2,152; the old unit gave NaN in 1).
+  * Unit bench: every subnormal band of x and y, x / y up to 2^2098,
+    1.19 M vectors default + 4 x 5.19 M seeds, 0 mismatches, 0 cycles off.
+    fprem added to test_i960_fp_flush (SUBNORM 0 = the old flush, 0 / 0).
+  * Whole CPU: the F2A lockstep never reached a subnormal double in remr
+    (0 of 13); with +fx at FP_SUBN 2 it now seeds fp0-fp3 and points half
+    of remr at them: top_fx, top_dc, top_fx seeds 2-20 (505 subnormal remr),
+    top seeds 2-20, top_subn, F2A at FP_SUBN 1 / 0: all PASS. fprem built
+    SUBNORM 0 at FP_SUBN 2 fails top_fx (caught). 12 unit faults planted,
+    all caught (one only by the cycle check).
+  * Area: unit alone 272 -> 322 ALM (+50), 71 -> 130 registers; SUBNORM 0
+    272. Whole 2A map 39,709
+    ALM (R1014: 39,704; inside the +-30 noise), 4,601,424 bits, 100 DSP.
+
+REMAINS: a fit (2A clk_i960 +0.267 ns in s2232); the board; 2C only if it
+runs FP_SUBN 2 (at FP_SUBN 1 fprem is SUBNORM 0, no cost).
+
 ## 2026-11-15: i960-subnorm -- the i960 FP units take and deliver subnormals (R1013), quartus_map only
 
 Branch `i960-subnorm` off main 2f61c2d1. Study R1013 has the record. Not
