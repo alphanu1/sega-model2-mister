@@ -185,7 +185,14 @@ def main():
                 else: emit((0x0f << 40) | (g.randrange(15) << 32) | fval())
         elif r < 0.87:                                     # a short forward jump, delayed or not
             k = g.randrange(3, 7); j = g.getrandbits(1)
-            emit((0x07 << 40) | (cond() << 33) | (j << 26) | k)
+            f = g.randrange(3)
+            if f == 0: emit((0x07 << 40) | (cond() << 33) | (j << 26) | k)
+            elif f == 1:                                   # R1028: the 6-bit relative form, with a compute
+                emit((0x09 << 40) | (cond() << 33) | ((k & 0x3f) << 27) | (j << 26) | comp())
+            else:                                          # R1028: IF cond JUMP (PC, k) ELSE compute, dreg <-> DM
+                i = g.randrange(8); m = g.randrange(8); d = g.getrandbits(1)
+                emit((0b11 << 46) | (1 << 45) | (d << 44) | (i << 41) | (m << 38) | (cond() << 33) |
+                     ((k & 0x3f) << 27) | (rreg() << 23) | comp())
             for _ in range(k - 1):
                 emit((0x02 << 39) | (0x1f << 33) | comp(False))
         elif r < 0.875:

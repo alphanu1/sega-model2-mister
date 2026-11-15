@@ -52101,3 +52101,278 @@ room to give some clocks back for area.
     error after six seconds) was started while three other quartus_fit /
     quartus_map processes were running -- a miscount; every later map waited
     for fewer than three.
+
+**R1028 -- THE 2B SHARC SHRUNK: 9,527 -> 3,876 ALM MAPPED (THE MODULE ALONE),
+STILL BIT-EXACT ON DEAD OR ALIVE IN BOTH ROUNDINGS AND ON RANDOM PROGRAMS;
+2.25 -> 2.28 clk_sys A WORD. THE REGISTER FILES AND STACKS ARE MLAB -- 34 MLAB
+LABS (~340 ALM OF LAB AREA) THAT THE MAP'S ALM FIGURE DOES NOT COUNT. THE
+FIXED ALU, SHIFTER AND MISC FLOAT FUNCTIONS ARE ONE SHARED UNIT; FAVG IS THE
+ADDER'S; THE SEQUENCER COMMITS AT D's END.** Branch model2b, 2026-11-15.
+Simulation and quartus_map only (module alone, Quartus 17.0, Aggressive
+Area, MAME_RND 0): no fit, no full build, no board.
+
+(Section: §10, after R1027. Authority: MAME 0.289 for the semantics, through
+the R1027 references -- Hornet's v1 in lockstep, m2b_sharc_pkg / sharc_fp_pkg
+as the unit references, MAME's capture; the manual for rounding (R1024).
+Model 1 has no SHARC. Hornet's sharc2 (87f9866) read for its technique --
+register arrays as their own modules in MLAB, one writer per element -- and
+nothing copied from it: m2b_lutram is this project's tgpx4_rf pattern.)
+
+*What was believed (R1027 AREA):* the first cut maps at 9,527 ALM because
+R0-R15, I / M, the PC and loop stacks and MAME's whole state are flip-flops
+with multi-source write muxes and every float function is its own logic in X;
+MLAB register files, one shifter and narrowed misc functions bring it toward
+R1023's ~3,150 by parts. Target set for this work: a module-alone map at or
+under ~3,800 (the ~4,450 ALM a 2B build frees, less a fit's growth over its
+map: the TGPx4 fitted +1,794, R1009).
+
+*THE STEPS (each mapped module-alone in its own directory, never more than
+three Quartus processes machine-wide; clk_sys a word on DOA's first 10 M
+words, MAME rounding, the bench as R1027's -- 2.2312 there for the first
+cut, 2.2517 over all 150 s):*
+
+      step                                        ALM    ALUT  mem ALUT  regs  MLAB bits  M10K DSP  clk/word
+      0  R1027's first cut                       9,527  13,278      0   4,590        0     80   1    2.2312
+      1  R0-R15 in MLAB (2 write ports, LVT)     7,989  11,418    320   4,030    5,120     80   1    2.2312
+      2  + I / M in MLAB (3 read copies each)    7,060  10,676    512   3,075    8,192     80   1    2.2312
+      3  + PC and loop stacks in MLAB            6,313   9,856    750   1,932   11,248     80   1    2.2312
+      4  + one shared X compute, FAVG on adder   4,625   7,002    750   1,932   11,248     80   1    2.2312
+      5  + D's data path, S at D's end           4,705   7,234    750   1,497   11,248     80   1    2.2312
+      6-7 + R file one write port, branches      4,456   6,859    590   1,519    8,688     80   1    2.2762
+      8  + one unsupported capture, bit ops      4,025   6,106    590   1,519    8,688     80   1    2.2762
+      9  (seed tables in M10K: REVERTED)          4,097   6,235    590   1,519    8,688     81   1        --
+      10 + 2 LCNTR copies, capture unreset        3,973   6,085    526   1,516    8,176     80   1    2.2762
+      11 + scoreboard by read port (FINAL)        3,876   5,911    526   1,516    8,176     80   1    2.2762
+      12 (fixed results landed: REVERTED)         3,858   5,883    526   1,512    8,176     80   1    2.3177
+
+  1. R0-R15 (rtl/sharc/m2b_lutram.sv: one MLAB copy, one write port, an
+     asynchronous read, `ramstyle "MLAB, no_rw_check"` -- R607's rule; its own
+     module, as tgpx4_rf, since an array written in a big module's generate
+     is not inferred). Five read ports in D: A Rx or R0-3, B Ry or R4-7, C Rn or
+     R8-11, D R12-15, E a store's register or the ureg source; addresses from
+     the opcode alone. First built with two write ports (a live-value table,
+     each port's own copies): -1,538.
+  2. I0-I15 / M0-M15: three read copies each (DAG1's, DAG2's, the ureg
+     port), one write port. A word that writes two different I registers (a
+     load to one, a post-modify of another) defers the load's write a clock
+     (ir_pw) and D waits that clock. DOA never does it (the clocks did not
+     move); the random set had no such word until this entry added it, and a
+     planted fault dropping the deferred write is caught there. The
+     post-modify base is D's read, latched (pmod_b). -929.
+  3. PC stack (32 x 24, reads PCSTKP - 2 / - 3), loop stacks (8 x 32; LCNTR
+     four copies, LADDR two), the tops in S as before. -747.
+  4. rtl/sharc/m2b_sharc_xu.sv: the fixed ALU, shifter and misc float
+     functions on one 33-bit adder (every fixed op as A + B + cin, AC its
+     carry, AV one formula; MIN / MAX / CLIP and COMP its compare; FLOAT's
+     |Rx|), one funnel shifter ({H, L, 0} >> k: every shift, the field
+     extracts / deposits, FIX's alignment with its round bit, FLOAT's
+     normalisation), one |x| : |y| compare (FMIN / FMAX / FCOMP / FCLIP), one
+     thermometer and one decoder. FAVG moved into sharc_fadd (`avg`: MAME's
+     rounded sum halved, round to nearest, then flushed; the manual's exact
+     sum with its exponent less one, tiny below 2^-126), so the misc unit no
+     longer carries a full adder (and, in MAME mode, a multiplier). -1,688.
+     What it replaced, by ablations of step 3's map: the misc functions
+     1,359 ALM, the fixed ALU + shifter 1,361 (the two float units 463).
+  5. D computes one ureg read (ur_all), one data address (I + offset), one
+     store / ureg data mux; XC loses the fields x_op holds (the shift
+     immediate, the bit mask, a ureg move's value in acc_wd); the sequencer
+     S and the stack writes commit at D's end (SN gone), X's ureg writes to
+     PCSTK / CURLCNTR / LCNTR modify S at X's end; dbg_pc / dbg_op only with
+     BENCH (they would be unconnected in Model2.sv anyway); MAME's ASTAT
+     history keeps only the ten bits a condition reads. 435 registers fewer
+     and +80 ALM -- registers were not what the ALMs were.
+  6-7. R0-R15 with ONE write port (five copies, not ten): the second write of
+     a word (a multifunction's Ra after its Rm; a load after a fixed result)
+     a clock later (rf_pw), D waiting for it as for a landing. +0.045
+     clk/word (581 K deferred writes in 10 M words); 20 MLAB copies fewer.
+     D's branches on one target mux (op[23:0], PC + offset -- one adder,
+     DO's loop end too -- I + M, the stack top) and one queue redirect,
+     where each form had its own adders and +1 / +2 incrementers; one
+     condition evaluation. -249.
+  8. Every unsupported word captured at one place (us_go / us_why, the word
+     in X), the bit operation's value combinational (xb_v; ASTAT / STKY
+     read in X, the rest in D). The capture's 72 bits had been an 8:1 mux
+     from five assignment sites. -431.
+  10. LCNTR's stack in two copies: a DO reads LSTKP + 1 / LSTKP and no popped
+     word, every other word LSTKP - 2 / - 3 (addresses from the opcode). The
+     one word that needs both -- a DO whose count is CURLCNTR at a loop end
+     that pops -- is now flagged unsupported (U_STK). unsup_pc / op / why
+     without a reset; DO's loop-length class from the offset. -52.
+  11. The scoreboard compares the five read ports' addresses with this
+     clock's writes, where it built 16-bit masks from ten decoders. -97.
+
+*TRIED AND REVERTED (measured, not kept):*
+  * RECIPS / RSQRTS's seed tables in one M10K, read at D's end: +72 ALM, +1
+    M10K (the unit alone had shown -49: in the core Quartus folds the
+    7-input table functions into the result mux more cheaply than it muxes
+    a registered table word).
+  * The fixed ALU / shifter results written at the landing, like float
+    results (the X-end write mux gone): -18 ALM -- inside the map's noise --
+    for +0.042 clk/word (2.2762 -> 2.3177). Not worth it.
+  * An ablation removing the unsupported word's sequencer override mapped
+    +47: that override is not where the area is. Changes under ~50 ALM are
+    not resolvable by one map (R998's +-50).
+
+*FOUND ON THE WAY:*
+  * THE MAP'S ALM ESTIMATE DOES NOT COUNT MLAB. m2b_rf2w (step 1's two-port
+    R file: 20 MLAB copies, 16 flip-flops, 71 ALUTs) mapped alone at 68 ALM.
+    The map reports MLAB as "Memory ALUT usage" (32-deep: one ALUT a bit
+    column); a fit counts each MLAB as a whole LAB (10 ALMs). Step 1's form
+    was 40 MLAB LABs for the R file alone -- hence step 6. FINAL: 526 memory
+    ALUTs in 34 MLAB LABs (R 10, I 6, M 6, PC stack 4, LCNTR 4, LADDR 4;
+    every 32-bit copy is two 20-bit MLABs, the 16- and 8-deep ones half or a
+    quarter used): ~340 ALM of LAB area on top of the map's 3,876.
+  * Quartus 17.0 rejected a `for (genvar p = ...)` (the genvar declared in
+    the loop) and a for-generate without the `generate` keyword; Verilator
+    took both. Both fixed (genvar outside, generate / endgenerate).
+  * With S committed at D's end the bench's "state after a word" (read at
+    dbg_ret, a clock after the landing) already held the next word's D:
+    S_dbg (BENCH only) is S as the word that left X left it.
+  * Reading a bit operation's register in D made D wait for every landing
+    before a BIT op on ASTAT (DOA's BIT SET / CLR ASTAT are 3% of its work,
+    R1023): +0.032 clk/word. ASTAT and STKY are read in X again, the
+    other system registers in D.
+  * A planted fault the benches do not catch: LCNTR after a DO that follows
+    a loop-end pop (the stale stack word at the new depth, MAME's quirk)
+    taken from the word above. In DOA and the random programs the two words
+    were equal whenever it mattered (instrumented: all 716 such DOs of two
+    seeds; a loop's last pass pushes CURLCNTR 1, so the stack's lower words
+    tend to agree). Not covered; recorded.
+  * The PC- and loop-stack second-pop faults were first missed too: the
+    second pop's word is read only when a third level remains; the random
+    set now nests three and five loops deep, and both are caught.
+  * DOA does not depend on what the register / stack arrays hold before it
+    writes them: built with every MLAB array starting all ones (RF_ONES), its
+    out FIFO is MAME's (below). On the device an MLAB starts as the
+    bitstream sets it (zero) and the arrays are not cleared at reset -- as
+    the first cut's flip-flops were not.
+
+*VERIFICATION (the final RTL, commit 0c1acfdc; numbers):*
+  * DOA REPLAY, MAME rounding, all 150 s: 501,777,270 words (501,767,295
+    work words, as R1027; the trailing one-word waits 9,975, one fewer --
+    the bench stops 20,000 clocks after the stream), 18,541,146 out-FIFO
+    words, 0 differ from MAME's; the state-hash trace, words 0-40 M, 0
+    differ. (R1027's second trace, 400-430 M, was not in the scratchpad.)
+  * LOCKSTEP against v1 at every word, MAME rounding: 501,777,270 words, 0
+    differ; v1's 18,541,146 out words all MAME's. The manual's (core MAME_RND
+    0, v1 MAN): 501,777,270 words, 0 differ; the out words different from
+    MAME's exactly R1027's (10,280,834; the same ulp histogram), the PC trace
+    0-40 M equal, the state hash first differing at word 28,475,621 (R1027's).
+  * ALL-ONES START (RF_ONES: every MLAB array -- R, I, M, both stacks -- all
+    ones; DM all ones as before): 150 s, 18,541,146 out words, 0 differ.
+  * RANDOM PROGRAMS (m2b_randprog.py, now also: nested loops two, three and
+    five deep, JUMP (LA) out of a loop, a loop whose last word aborts it, a
+    DO as a loop's last word, CALLs into subroutines that call each other and
+    return delayed or not, a load into one I register while another is
+    post-modified, loads into M, BIT SET / CLR / TGL / TST / XOR on USTAT,
+    ASTAT, STKY and MODE1's TRUNC / ALUSAT, LCNTR read by ureg moves, and
+    after the fault run the 6-bit relative branch forms, IF ... JUMP ELSE
+    compute + DM among them): 12 seeds x 1 M words in each rounding, 0
+    differ, no unsupported word (both before and after that last addition);
+    2.21-2.31 clk a word, ~100 K deferred R writes a seed.
+  * THE SHARED UNIT (sim/sharc/xu, new): m2b_sharc_xu at MAME_RND 1 and 0
+    against alu_fixed / shifter and every f_* / man_* function it replaces,
+    shift counts and field positions / lengths past 63 in both forms, the
+    fixed ops on their edge values, scale factors around 2^31 (MAME's int
+    wrap): 4 seeds x 25 M = 100 M vectors, 0 mismatches.
+  * FLOAT UNITS (sim/sharc/fp; FAVG now on the adder, a quarter of the unit
+    vectors; exactly 2^-126 / 2^-125 added to the operand mix): 4 x 25 M =
+    100 M vectors, 0 mismatches in every unit and package function.
+  * PLANTED FAULTS, core (core_faults.py, 27: R1027's 17 re-planted where
+    they moved -- the fixed ALU / shifter / FIX ones now in m2b_sharc_xu --
+    and 10 new): DOA's replay (20 M words, trace + out FIFO) catches 13; the
+    random lockstep (4 seeds x 500 K) 22, and with 12 seeds and the 6-bit
+    relative branches added to the generator after this run, 24; the
+    one-word unsupported programs (new `unsup` mode, m2b_unsupprog.py: a
+    dual move, MODE1 swap bits by a ureg write and by a bit operation, DMAC6
+    DEN, an unknown IOP register written and read) catch the
+    unreported-unsupported fault. Together 26 of 27; the one no bench
+    catches is the LCNTR-after-DO-after-pop fault above. DOA alone misses
+    what R1027 recorded (ASTAT history, load-wins, same-I post-modify,
+    LSHIFT negative, DAG2 M's sign) and also the deferred I write (DOA never
+    writes two I registers in a word), both second-pop faults (DOA's stack
+    never has a third level under a double pop), FAVG (not in DOA's first
+    20 M words), the bit operation's ASTAT read and the 6-bit relative
+    branch. Float (fp_faults.py, 20: R1027's 16 and 4 FAVG ones): 20 of 20.
+    The shared unit (six faults planted by hand: FIX's tie rounding, OR
+    LSHIFT's arithmetic right shift, the scale factor's sign bit dropped,
+    ASHIFT's clamp at 31, AN on a float min / max of -0, FIX's sticky bits):
+    6 of 6 (30 to 88,506 of 1 M vectors).
+  * LINT: Verilator 5 -Wall: no class of warning the first cut did not have
+    (LATCH in Hornet's adder, PINCONNECTEMPTY, TIMESCALEMOD, WIDTHEXPAND /
+    WIDTHTRUNC, VARHIDDEN in the adder); UNUSEDSIGNAL 30 -> 43 (XC fields no
+    longer read in X). Quartus 17.0 analyses and maps every step's RTL (the
+    two errors above fixed); every MLAB array inferred (MLAB, simple dual
+    port, in the RAM summary; "uninferred" only for Hornet's two seed
+    tables, logic as before), the 80 M10K as before.
+
+*SPEED:* 2.2940 clk_sys a word over DOA's 150 s (1,151,072,620 clocks) in
+MAME rounding, from 2.2517: +0.042, all of it the one-port R file's deferred
+writes (28,140,303 in 150 s; D waits for a landing that writes two). D
+1.294 (0.294 waiting), X 1.000. Manual rounding the same less 6,395 clocks.
+Against R1024's ceiling (~3.0): 0.71 of slack left.
+
+*AREA (final, module alone, MAME_RND 0):* 3,876 ALM needed, 5,911 ALUTs,
+1,516 registers, 80 M10K (PM 48, DM 32), 1 DSP; MLAB 8,176 bits = 526
+memory ALUTs in 34 MLAB LABs (~340 ALM of LAB area in a fit, not in the
+3,876). By entity (ALUTs): m2b_sharc_xu 2,025, sharc_fadd 676, sharc_fmul
+162, the core's own 3,048. Ablation maps of the final RTL (each one block
+removed; overlapping, so they do not add up):
+      the misc float functions (FIX / FLOAT / compares / LOGB / RECIPS ...)   508
+      the fixed ALU and the shifter                                          349
+      the two float units                                                    520
+      the sequencer beyond the queue shift (loops, branches, stacks)         727
+      the ureg read path (R / I / M / system / sequencer registers)          213
+      ureg writes, loads to a ureg, bit operations (cascades: MODE1 and
+        the system registers then constant)                                  452
+The rest (~1,100: decode, the data address and post-modify adders, the
+scoreboard, ASTAT / STKY, the landing, the R / I / M ports' muxes, FIFO /
+IOP / external glue, the host upload / IOP window, the RAM clear, the D / X
+control) is spread thin; its largest single muxes are the R write data
+(75:1 x 23 bits, the X compute's results merged into it), the ureg read
+(55:1 x 30 bits) and the PC stack top (58:1 x 23).
+AGAINST THE AIM: 3,876 against ~3,800 -- 76 over (2%); one map's noise is
+~+-50 (R998), so it is over, narrowly. With the 34 MLAB LABs, ~4,216 ALM
+before a fit's own packing, against the ~4,450 a 2B build frees: it fits
+only if the fit grows that by less than ~230 (the TGPx4 grew 1,794 over
+its map, R1009, its own MLAB register files included). UNSETTLED until a
+fit.
+
+*WHAT NEXT IF STILL OVER (each to be measured):* the adder and the shared
+unit share their aligner / adder / magnitude compare (a word uses one or the
+other, both in X; est. 60-100 ALM net); USTAT1 / USTAT2 / IRPTL / IMASK (read
+and written only by ureg moves) in one MLAB, four fewer ureg-read inputs
+(est. 40 net of its two MLABs); the misc functions in two X clocks where a
+second clock lets them share (FLOAT BY's scalb with SCALB's, FIX's increment
+with the adder; est. 60, +~0.05 clk/word); a double pop (a loop end and an
+RTS / JUMP (LA) in one word) in two D clocks (-8 MLAB LABs and the
+second-pop muxes); a multifunction word with a store reading its fifth R
+register in a second D clock (-2 MLAB LABs).
+
+*DIFFERENT FROM THE BRIEF / FROM R1027, PLAINLY:* (0) R0-R15 are five full
+16-word copies, not R1023's four 4-register banks: a bank has one read port,
+and Rx / Ry / Rn / a store's register can all sit in one bank, so each bank
+would need four copies -- more MLAB, not less; the float MIN / MAX / COMP /
+CLIP use the shared unit's |x| : |y| compare, not the adder's (the adder is
+Hornet's two-stage unit, its compare inside stage 1); there is no status
+stack to move (it is unsupported, as in R1027); (1) a DO whose count is
+CURLCNTR, at a loop end that pops, is now an unsupported word (the price of
+two LCNTR copies, not four); (2) unsup_pc / op / why are not cleared at
+reset; (3) dbg_pc / dbg_op are driven only with BENCH; (4) R0-R15 have one
+write port, so a word writing two R registers costs a clock; (5) the
+benches gained: the shared unit's bench, random-program forms, the
+unsupported programs, the RF_ONES all-ones start; m2b_randprog.py's seeds
+are not R1027's programs any more; (6) the brief's MLAB / ALM framing --
+"aim for a map at or under ~3,800" -- does not see MLAB: the 34 MLAB LABs
+are recorded beside it.
+
+*NOT SETTLED:*
+  * Timing: nothing fitted. D now reads MLAB copies through the address /
+    branch adders into S and fetch_a; the loop stacks' read addresses depend
+    on the opcode (is_do). The landing path (adder stage 2 into the R write
+    port, now 75:1) and the X compute (one clock: adder -> clz -> funnel ->
+    round -> scalb for FLOAT BY) are the long ones to watch.
+  * The fit's ALM (map + MLAB LABs + packing) against ~4,450.
+  * The uncovered fault (LCNTR after a DO after a loop-end pop).
+  * R1027's open items stand (power-up RAM, the manual's text for infinite
+    operands / FIX out of range / tininess, only DOA's program end to end).

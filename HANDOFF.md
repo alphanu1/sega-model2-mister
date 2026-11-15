@@ -1,5 +1,63 @@
 # Handoff
 
+## 2026-11-15 (late): model2b -- the 2B SHARC shrunk to 3,876 ALM mapped, still bit-exact (R1028), simulation + quartus_map only
+
+Branch `model2b`. Study R1028 has the record (a table of every step). Not
+pushed, not merged, not in Model2.sv, no fit, no board.
+
+  * AREA, module alone (quartus_map 17.0, Aggressive Area, MAME_RND 0):
+    9,527 -> 3,876 ALM, 13,278 -> 5,911 ALUTs, 4,590 -> 1,516 registers, 80
+    M10K (unchanged), 1 DSP. Against the ~3,800 aim: 76 over (2%; a map's
+    noise is ~+-50), so over, narrowly.
+  * MLAB: the map's ALM figure does NOT count MLAB (found here: a 20-copy
+    register file maps at 68 ALM). Final 8,176 MLAB bits / 526 memory ALUTs
+    in 34 MLAB LABs (~340 ALM of LAB area a fit will add): R0-R15 five read
+    copies of one write port, I / M three each, PC stack two, LCNTR two,
+    LADDR two.
+  * What changed: rtl/sharc/m2b_lutram.sv (one MLAB copy); m2b_sharc_xu.sv
+    (fixed ALU + shifter + misc float functions on one adder / one funnel
+    shifter / one compare); sharc_fadd.sv gained `avg` (FAVG); the core's D
+    computes one ureg read / one address adder / one branch target, commits
+    S and the stacks at D's end, captures unsupported words at one place,
+    scoreboards by read port; a word writing two R registers writes the
+    second a clock later.
+  * SPEED: DOA 2.2517 -> 2.2940 clk_sys a word over 150 s (+0.045 from the
+    one-port R file; nothing else moved a clock).
+  * VERIFIED: DOA's 150 s replayed: 18,541,146 out words and the 0-40 M
+    trace equal to MAME's; lockstep against v1 at every one of 501,777,270
+    words in MAME's rounding AND the manual's, 0 differ (the manual's out
+    words differ from MAME's exactly as R1027's); with every MLAB array
+    starting all ones, the out FIFO still MAME's; random programs 12 seeds x
+    1 M words x both roundings, 0 differ; the shared unit 100 M vectors and
+    the float units 100 M vectors (FAVG on the adder), 0 off; planted faults
+    26 of 27 in the core (DOA, random and the new one-word unsupported
+    programs together; the one missed is LCNTR after a DO that follows a
+    loop-end pop), 20 of 20 in the float units.
+  * Behaviour changes, plainly: a DO whose count is CURLCNTR at a loop end
+    that pops is now flagged unsupported (the LCNTR stack has two copies,
+    not four); unsup_pc / op / why are not cleared at reset (loaded with the
+    flag); dbg_pc / dbg_op are driven only with BENCH.
+
+FINDINGS THAT WERE WRONG OR NEW ON THE WAY: the map's ALM estimate excludes
+MLAB (so step 1's two-write-port R file, 40 MLAB LABs, was replaced); the
+seed tables in M10K mapped LARGER (+72, reverted); landing the fixed results
+saved nothing measurable for +0.04 clk/word (reverted); reading a bit
+operation's ASTAT in D cost +0.03 clk/word (ASTAT / STKY read in X again);
+S at D's end needed a bench-only view of S after a word; Quartus 17 rejects a
+genvar declared in its for and a for-generate without `generate`. One planted
+fault no bench catches: LCNTR after a DO that follows a loop-end pop.
+
+REMAINS: a fit of the core alone (timing: D now reads MLAB copies through
+adders into S and the fetch address; the true ALM with MLAB LABs); if still
+over, R1028's list (the fadd and m2b_sharc_xu sharing their aligner / adder /
+compare, the ureg-only system registers in one MLAB, two-clock misc
+functions, double pops in two D clocks); then R1027's remains (DM / buffer /
+ROM caches, R1024's other features, Model2.sv integration).
+Benches: sim/sharc/xu (new: the shared unit against the package functions),
+sim/sharc/fp (FAVG on the adder), sim/sharc/bench (build.sh, core_faults.py
+with `rand` / `unsup` modes, m2b_randprog.py now with nesting, calls, bit
+operations, two I writes; m2b_unsupprog.py).
+
 ## 2026-11-15 (night): model2b -- the 2B SHARC's first cut built and bit-exact on Dead or Alive (R1027), simulation + quartus_map only
 
 Branch `model2b`. Study R1027 has the record. Not pushed, not merged, not in

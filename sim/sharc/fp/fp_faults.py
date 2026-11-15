@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Sega Model 2 core for MiSTer FPGA -- R1027: planted faults for tb_sharc_fp. Each fault is
+# Sega Model 2 core for MiSTer FPGA -- R1027 / R1028: planted faults for tb_sharc_fp. Each fault is
 # one edit to a copy of rtl/sharc in <work>/<n>; the bench is built from the copy and run, and
 # must FAIL. The real rtl/sharc is never touched.
 #   fp_faults.py <work dir> [vectors]
@@ -12,6 +12,15 @@ RTL = os.path.join(ROOT, 'rtl', 'sharc')
 
 # (name, file, old, new, which occurrence (0 = first))
 FAULTS = [
+    # R1028: FAVG on the adder
+    ('fadd MAME FAVG: a denormal half rounded up on a tie', 'sharc_fadd.sv',
+     "hq = {1'b0, hm[23:1]} + {23'h0, hm[0] & hm[1]};", "hq = {1'b0, hm[23:1]} + {23'h0, hm[0]};", 0),
+    ('fadd manual FAVG: near path tiny one exponent low', 'sharc_fadd.sv',
+     "raw = (raw[30:23] >= 8'd2) ?", "raw = (raw[30:23] >= 8'd1) ?", 0),
+    ('fadd manual FAVG: far path tiny threshold one low', 'sharc_fadd.sv',
+     "else if (e <= 9'd1)  raw = {v_sgn, 31'h1};", "else if (e <= 9'd0)  raw = {v_sgn, 31'h1};", 0),
+    ('fadd manual FAVG: overflow judged before the halving', 'sharc_fadd.sv',
+     "            if (e >= 9'd256)     raw = {v_sgn, INF[30:0]};", "            if (e >= 9'd255)     raw = {v_sgn, INF[30:0]};", 0),
     ('fadd: round to zero not applied (manual)', 'sharc_fadd.sv',
      "up = !(!MAME_RND && v_trunc) && s[2]", "up = s[2]", 0),
     ('fadd: round to zero in MAME mode too', 'sharc_fadd.sv',
