@@ -47833,6 +47833,25 @@ the same results, test_i960_fp_flush, not always the same netlist):*
     0; LAT 6 373 (CPI 6.049, as R1011). So R1011's 473 was 100 subnormals
     + 373 ring save-area words (R1011 flagged 0x52054 as one, but counted
     all 473 against the flush).
+  * WHAT THE 373 ARE (MAME's dasm of the five ips, later the same day): a
+    compiler idiom, not a read of saved registers. Each routine stores
+    three words of a vector to its own locals at 0x40(fp) (just past its
+    save area, sp bumped 16 at entry) and fetches them back with ONE ldq
+    -- the fourth word was never written. 0x52054: st 0x40/0x44/0x48,
+    ldq 0x40(fp),r4; r7 is overwritten by "mov g2,r7" the next instruction
+    but one. 0x66d34 the same into r8-r11. 0x5d824: two words stored, ldq
+    (g3),r4, r6 overwritten. 0x2300 / 0x8960: stl + st, ldq into g0-g3. The
+    unwritten word lands on whatever was last left there, and that address
+    (0x2009cc = 0x2009c0 + 12, r3's slot) is a save area of an earlier,
+    deeper call chain -- which the 80960KB writes at depth 5 and the ring
+    of 8 does not. So it is dead stack garbage on both: the instruction
+    and I/O digests above are equal with the ring, 20 frames of the race,
+    and the manual says outright that save areas read through memory "may
+    not" hold the registers (PRM ch. 4, "Mapping the Local Registers to
+    the Procedure Stack"). R927's ring stands; R927's "0 reads on HOTD"
+    was true of HOTD, and STCC's reads are uninitialised quad tails, not
+    a dependence. RING 4 (MAME's depth) is not wanted: it is slower and
+    buys nothing a game can see.
   * Planted faults (scratch mutsn/mut.py, one edit each, the bench named):
     fpadd -- no distance correction (130,230 mismatches), no marker
     (36,333), no exponent-0 field (71,200), effective exponent 1 dropped
