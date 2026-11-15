@@ -1,5 +1,31 @@
 # Handoff
 
+## 2026-11-15: logrl-subn -- logrl of a subnormal double right at FP_SUBN 2 (R1019), bench only
+
+Branch `logrl-subn` off new-2c-games d787c68f. Study R1019 has the record.
+Not mapped, not fitted, not on the board, not pushed, not merged.
+
+  * The fix is in the LOG program only (tools/i960_fptrans.py, ROM
+    regenerated): e + 1023 = 0 caught after LDE, the fraction normalised on
+    the units (x16 then x2 steps), then the normal path. No RTL change; the
+    2A ROM is byte-identical.
+  * A normal operand's cycles are R998's exactly (0 of 32,143 vectors
+    differ; the slots were measured, most cost 1-7 cycles). Subnormal x:
+    1,300-1,545 cycles (normal 1,237-1,303). All 128 sequencer registers
+    are now in use (one constant, 1023).
+  * Correctly rounded on every subnormal checked (20,000 random, 557
+    edges) and the normals past them. --check has a new column, the
+    double-double error before rounding (subnormals 2^-32.6 ulp).
+  * test_i960_top_c2 runs FP_SUBN 1 and 2 (new obj_i960_top_c2s2): seeds
+    2-30 x 2,000 PASS both; the old ROM fails 28 of 29 at 2. STCC's race
+    checkpoint at FP_SUBN 2 unchanged (CPI 6.890, 373).
+  * One planted fault survived the result benches (skipping the halving
+    test after normalising: 1 in 20,000 not CR); the margin column catches
+    it (2^-10.4 ulp).
+
+REMAINS: 2C to FP_SUBN 2 still needs the room (R1017, +597 ALM); a fit; the
+board.
+
 ## 2026-11-15: i960-subnorm -- the i960 FP units take and deliver subnormals (R1013), quartus_map only
 
 Branch `i960-subnorm` off main 2f61c2d1. Study R1013 has the record. Not

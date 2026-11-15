@@ -50618,3 +50618,127 @@ test_i960_top_c2 now builds FP_SUBN 1 with the reference at I960_SUBN 1):*
   The pre-subnormal branch (0f157ce6) passes the same seeds; +vc +fx on
   obj_i960_top_vc fails there too (a VC build has no F2A: +fx is not its
   mix), so that row says nothing.
+
+**R1019 -- R1017's OPEN ITEM: logrl OF A SUBNORMAL DOUBLE AT FP_SUBN 2.
+THE LOG PROGRAM NOW CATCHES e + 1023 = 0 AND NORMALISES THE FRACTION ON THE
+UNITS ITSELF BEFORE THE REDUCTION -- NO RTL CHANGE, A NORMAL OPERAND'S
+CYCLES R998's EXACTLY, EVERY SUBNORMAL CORRECTLY ROUNDED. THE C2 LOCKSTEP
+NOW RUNS AT FP_SUBN 2 AS WELL AS 1. BENCH ONLY; NOT MAPPED, NOT FITTED.**
+Branch logrl-subn (off new-2c-games d787c68f), 2026-11-15.
+
+*What was believed (R1017):* at FP_SUBN 2 on the C2 build, logrl of a
+subnormal double is wrong because the sequencer's log takes the exponent
+field as it stands; to be fixed before 2C goes to FP_SUBN 2.
+
+*What is known:* exactly that. LDE / LDM take x apart by its fields, so a
+subnormal (field 0) became e = -1023, m = 1.f -- log2((1 + f) 2^-1023) for
+log2(f 2^-1022). Reproduced: test_i960_top_c2's build at -GFP_SUBN=2 with
+the reference at I960_SUBN=2, default seed, IP 0x100, insn 69c59101,
+g9:g8 c08ff7dd65fc80fd (-1022.983) for c09011a152f13ec4 (-1028.408). On the
+same build, +seed=2..30 +random=2000: 28 of 29 seeds fail. Nothing was
+wrong at FP_SUBN 1 / 0: the double units flush the operand, LDX makes it
++0, and the program never reaches LDE (as R1017 said).
+
+*THE FIX (tools/i960_fptrans.py build_log, i960_fptrans_rom_log.svh; the
+RTL, the 2A program and the 2A ROM are unchanged -- the 2A ROM regenerates
+byte-identical):*
+  * Detection: AX = QN + 1023 after LDE (0 only for a subnormal; zero and
+    the other specials have branched away already), tested with one BR at
+    LG_R. Both instructions sit where the pipeline waits anyway. The
+    placement was MEASURED, not reasoned: AX and the BR at every slot of
+    the threshold block and LG_R's prologue (scratch search, the RTL
+    harness's +cyc per vector) cost 0 to 7 cycles; this pair (AX between
+    "add T0" and "br NEG T0", the BR after "add S") is one of three that
+    cost 0 on every path (m < 1.5, m = 1.5, m > 1.5) and on the specials.
+    One constant (E1023): the LOG program now uses all 128 registers
+    (76 constants; was 127 / 75).
+  * LG_SN: LDM again (FN may have been halved by then) and LDE; f = FN - 1
+    (exact, [2^-52, 1)); e = -1022; times 16 while 16 f < 2 (e - 4), then
+    times 2 while f < 1 (e - 1) -- every step an exact multiply on the
+    existing multiplier, at most 13 + 3 steps; then the halving test and
+    the rest of the normal path. AX = 1 so LG_R's test does not fire again.
+    492 of 512 words (was 465).
+  * The brief suggested a pre-scale of x by 2^k through the multiplier;
+    that does not work here: LDE / LDM read the sequencer's x port, not a
+    register, so a scaled x cannot be taken apart again. Normalising
+    f = FN - 1 instead needs no new op and no datapath. A branch condition
+    "exponent field 0" (a few LUTs on the cond mux) would have cost the
+    normal path nothing by construction, but it changes the RTL, needs the
+    R935 reference sequencer of tb_i960_fptrans_ab changed too, and moves
+    +-0's cycles; not needed once a zero-cost slot was measured.
+
+*CYCLES (RTL harness, +cyc, the same 32,143 vectors with a normal x or a
+special, all five entries, before and after):* 0 of 32,143 differ. logrl,
+normal x: 1,237-1,303 both (mean 1,259); +-0 80, NaN / inf 19-22, x < 0
+19-84, unchanged. Subnormal x: 1,300-1,545 (mean 1,417; it was 1,237-1,303
+and wrong): +63 at lz 0 to ~+240 at lz 48-51 (about 3.5 cycles a leading
+zero, the 16x loop), the halving's divide (58) on about half.
+
+*ACCURACY (tools/i960_fptrans.py --log --check, decimal at 60 digits --
+mpmath is not installed on this machine; an independent decimal-at-100
+check gave the same):*
+       x                          n        not CR   host libm differs   max ops
+       subnormals, every lz       20,000   0        0                   483
+       subnormal edges (557)      557      0        0                   483
+       2^-1022 .. 2^-900          20,000   0        0                   414
+       every exponent             20,000   0        1 (libm not CR)     414
+       [1e-3, 4096) / near 1      20,000   0        0 / 16 (libm)       414
+  max error before the final rounding (new in --check: |DH + DL - log2 x|
+  in ulps of the result): subnormals 2^-32.6, tiny normals 2^-32.4, every
+  exponent 2^-27.1, near 1 2^-22.7. Max error after rounding 0.4999 ulp
+  over 20,000 random subnormals, 5,000 uniform-bit subnormals, 5,000
+  2^-1022..2^-1000 (the decimal-at-100 check). y * log2(x) equals the
+  host's product on 20,000 / 20,000 subnormal x. The subnormal edges (also
+  in the bench's vectors now): every 2^k from 2^-1074 and its neighbours,
+  1.5 x 2^k +- 2 ulp for every subnormal k, every all-ones fraction, the
+  largest subnormals.
+
+*BENCHES (all RUN, PASS):* test_i960_fptrans_log (32,757 vectors, 839 of
+them logrl of a subnormal; 0 mismatches); test_i960_fptrans_ab_log and
+test_i960_fptrans_ab (200,000 each, 0 result / 0 write-sequence
+mismatches); test_i960_fptrans (2A, 23,933: 0); test_i960_top,
+test_i960_top_vc, test_i960_top_fx, test_i960_top_subn (FP_SUBN 1 and 0);
+test_i960_top_c2, which now builds and runs both FP_SUBN 1
+(obj_i960_top_c2) and FP_SUBN 2 (obj_i960_top_c2s2), each against the
+reference built the same way: default seed PASS both; +seed=2..30
++random=2000: 29 / 29 PASS at FP_SUBN 1, 29 / 29 at FP_SUBN 2 (logrl
+retired 2,940 and 3,548). The flush model (--flush, the
+SUBNORM 0 units of FP_SUBN 1 / 0): old and new programs give the same
+results on 10,824 logrl arguments (2,589 subnormal x). STCC's race
+checkpoint (ck_race, 2C harness -GFP_SUBN=2, LAT 12): PASS, 4,772,816
+instructions, 21,867,390 cycles, CPI 6.890, digests 596f4b35a8fdd5c3 /
+0a02091f1a1ad1bb, 373 LSU value differences (R1013's dead quad tails) --
+R1017's figures exactly; STCC does not reach logrl. quartus_map 17.0
+--analyze_file of i960_fptrans.sv (with the new ROM): 0 errors.
+
+*PLANTED FAULTS (scratch mut/mut.py; each one edit to the program, its ROM
+regenerated, the RTL on it run against the CORRECT reference's 10,757
+vectors, and --check on the faulty program):*
+  * one ROM word only, the reference left alone (the 16x loop's exponent
+    step FOUR -> TWO): 514 RTL mismatches.
+  * LG_SN's e = -1022 step dropped: 555 RTL mismatches; --check 300 / 300
+    subnormals not CR.
+  * 16x loop counts e by 2: 514; 284 / 300.
+  * LDM reload dropped: RTL HANG (a halved FN makes f negative, and the
+    16x loop never exits); --check asserts.
+  * detection constant 1022 (e = 1 taken for subnormal, subnormals
+    missed): RTL HANG; --check 300 / 300 subnormals, and 2 / 300 of
+    2^-1022..2^-900, not CR.
+  * AX = 1 dropped from LG_SN: RTL HANG (re-detects at n = 1).
+  * detection BR removed: 543 RTL mismatches; 300 / 300 not CR.
+  * LG_S2 exiting to LG_R (skipping the halving test, m in (1.5, 2) on
+    atanh's series at |f| up to 1/3): SURVIVED the RTL bench (0 mismatches)
+    and --check's correctly-rounded counts (0 / 300, 0 / 557); 1 in 20,000
+    targeted subnormals (normalised m > 1.5) is then not correctly rounded.
+    Caught by the margin column added to --check for this: 2^-10.4 ulp on
+    subnormals and 2^-9.4 on the edges, for 2^-32.6 / 2^-32.3.
+
+*AREA:* not mapped. The RTL is unchanged; the ROM and the register file's
+initial contents change. new-2c's map has both as altsyncram (Ram0_rtl_0
+512 x 32 ROM from a .mif, rf_rtl_0 128 x 64), 0 ALM in the hierarchy, so
+this costs no ALM or M10K by construction; the FP_SUBN 2 area itself is
+R1017's (+597 ALM over FP_SUBN 0 on the 2C map) and still needs room.
+
+*NOT SETTLED:* 2C's move to FP_SUBN 2 (area: R1017); a fit; the board.
+Subnormal logrl timing on the 80960KB itself not looked for (the core's
++63..+240 cycles are its own). No game measured reaches a subnormal logrl.
