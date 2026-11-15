@@ -1,5 +1,36 @@
 # Handoff
 
+## 2026-11-15: retime-2a -- the 2A seeds' near-critical paths measured, three retimed (R1021), quartus_map only
+
+Branch `retime-2a` off i960-2a 65350e0d (the 2A release candidate). Study
+R1021 has the record. Not fitted, not on the board, not pushed, not merged.
+
+  * Survey: quartus_sta on the six kept fits (s2761 s2900 s2901 s2903
+    s2921 s2922), every clock, setup and hold, every pair under +0.4 ns at
+    Slow 100C (the build's only corner). No clk_sys path fails more than
+    one seed; the same path moves 2-3 ns between seeds, 55-97% of it
+    routing. The one recurring group is the SCSP timer write. HDMI
+    (ascal / osd, sys/) is under +0.4 in all six and fails four on its own
+    -- s2901 fails on nothing else.
+  * Retimed, no cycle or output changed: m2_geo_clip's plane test (a
+    registered key, one compare, as a subtract's borrow: 9 levels -> 2
+    module-alone); m2_geo_project's mag8 (sx_f / sy_f one register, no
+    select; 6 -> 5); m2_scsp_regs' timer write (no read mux in front of
+    the due adders; 7 -> 5).
+  * Proof: geometry miter, tb_m2_geometry + _mipz and 60 MAME walk runs,
+    42.3 M cycles, 0 differ; SCSP regs random miter 3.0 G cycles (TIMER
+    0/1/2) with internal timer state compared, and the HOTD capture
+    1.39 G cycles, 0 differ; planted faults caught. geo.sh fixed (R972's
+    tp table into both copies). A first SCSP edit (ar[1:0] on an [5:1]
+    vector) was caught by the random miter.
+  * Area: whole 2A map 39,709 -> 39,702 ALM, 46,813 -> 46,782 registers
+    (with the clipper's first, `>` form; the carry-chain form is 33 ALM
+    smaller again module alone).
+
+REMAINS: a fit (seed sweep); the one-seed paths left (clip stack MLAB,
+eng_ra, fill lbq / dvdx, span_tex ub_ra, quad_store -> fill, io_intreq,
+s2922's l_data -> lb hold) and HDMI; the same three changes on 2C.
+
 ## 2026-11-15: fprem-subn -- remr (i960_fprem) takes and delivers subnormals, exact (R1020), quartus_map only
 
 Branch `fprem-subn` off i960-2a 0ecc3576 (the 2A build). Study R1020 has the
