@@ -29,31 +29,12 @@
     <name>Behind Enemy Lines</name>
     <setname>bel</setname>
     <rbf>Model2C</rbf>
-    <!-- R1016: THE GUNS CALIBRATED. The game keeps each gun's stops in its
-         93C46 (GUN CALIBRATION in the test menu); a blank part, as a new
-         board's, leaves them 0xFF and pins the aim to the lower-left corner
-         (MAME 0.289 shows the same). This is the EEPROM the game writes on
-         a blank part (its factory settings) with GUN CALIBRATION done at the
-         core's own ends: gun 1 X 0x69-0xFF, gun 2 X 0x00-0x96, both Y
-         0x11 (lower) to 0xAE (upper); bytes 0x17-0x1E (X min 1 / 2, Y min
-         1 / 2, X span 1 / 2, Y span 1 / 2), 0x26 the calibrated flag, word 0
-         0x000C + the sum of words 1-31; the second 64 bytes repeat the
-         first. MAME's calibrated .nv, byte for byte; MAME's .nv layout, as
-         index 5 is (R897). It loads before the <nvram> element, so a saved
-         .nvm (R945) replaces it: recalibrate in the test menu and "Save
-         settings" to keep your own. -->
-    <rom index="5" md5="none">
-        <part>
-            e6 2f 01 00 4c 4d 43 21 00 00 00 01 01 01 00 01
-            01 ff ff 01 01 01 00 69 00 11 11 96 96 9d 9d ff
-            05 05 05 05 05 05 01 00 ff ff ff ff ff ff ff ff
-            ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
-            e6 2f 01 00 4c 4d 43 21 00 00 00 01 01 01 00 01
-            01 ff ff 01 01 01 00 69 00 11 11 96 96 9d 9d ff
-            05 05 05 05 05 05 01 00 ff ff ff ff ff ff ff ff
-            ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
-        </part>
-    </rom>
+    <!-- FIRST PLAY: CALIBRATE THE GUNS. The game keeps each gun's stops in
+         its EEPROM, and a blank one (a new board's) pins the aim to the
+         lower-left corner; MAME does the same. Before the first game:
+         press Test, choose GUN CALIBRATION, follow the prompts for each gun
+         (push to the stops, pull the trigger), then save and exit. MiSTer
+         keeps it in the game's .nvm from then on (R1016). -->
     <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>

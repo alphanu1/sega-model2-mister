@@ -50412,3 +50412,9 @@ mapping is; a pixel-true map would need the window measured and would leave
 the stick a dead band at the edges. The mapping onto PORT_MINMAX (the
 cabinet's stops) was kept. Gun 2's X sense rests on the game treating it as
 gun 1 (item 5 shows it does with this calibration).
+
+*DECIDED (Ben, same day):* no default EEPROM in the MRAs -- the calibrated
+image (49b41df0) is taken out again, and both BEL MRAs carry a note
+instead: calibrate the guns in the test menu (GUN CALIBRATION) and save
+before the first game. The game's own EEPROM, saved in the .nvm (R945),
+keeps it from then on. The release notes say the same.
