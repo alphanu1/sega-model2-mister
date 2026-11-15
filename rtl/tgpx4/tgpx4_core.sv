@@ -647,7 +647,8 @@ module tgpx4_core #(
   logic        add_v;
   logic [31:0] add_r;
   logic        add_ov, add_un, add_inv;
-  fp_add #(.SUBNORM(SUBNORM)) u_add (
+  // R1018: LEAN, one normalising shifter (the TGPx4 is the 2C build's alone)
+  fp_add #(.SUBNORM(SUBNORM), .LEAN(1'b1)) u_add (
     .clk(clk), .rst_n(rst_n), .in_valid(add_go), .a(add_a), .b(add_b), .sub(add_sub),
     .out_valid(add_v), .result(add_r), .overflow(add_ov), .underflow(add_un), .invalid(add_inv)
   );

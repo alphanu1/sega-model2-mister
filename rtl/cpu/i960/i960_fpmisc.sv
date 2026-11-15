@@ -57,7 +57,11 @@ module i960_fpmisc #(
   // -1023 - lz. Compare was already right (it works on the raw encoding).
   // The scale path (SCALE, op 6, which i960_top does not use) still flushes.
   // SUBNORM 0: the significand of a subnormal is zero, as before.
-  parameter bit SUBNORM = 1'b1
+  parameter bit SUBNORM = 1'b1,
+  // R1018: LEAN 1 (the C2 build) forms roundr's result without the
+  // leading-one search and renormalising shift (below); 0 is the unit as it
+  // was.
+  parameter bit LEAN    = 1'b0
 ) (
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic        clk,          // R575: used only when STAGED
@@ -186,7 +190,13 @@ module i960_fpmisc #(
 
   logic [55:0] fa_w, frac_mask, frac_part, int_part;
   assign fa_w      = {3'd0, fa_full};
-  assign frac_mask = (56'd1 << fbits) - 56'd1;
+  // R1018: LEAN -- the mask as a compare a bit against fbits (<= 55), the
+  // same bits as the shift and subtract.
+  generate if (LEAN) begin : g_mask_lean
+    always_comb for (int i = 0; i < 56; i++) frac_mask[i] = (6'(i) < fbits);
+  end else begin : g_mask
+    assign frac_mask = (56'd1 << fbits) - 56'd1;
+  end endgenerate
   assign frac_part = fa_w & frac_mask;
   assign int_part  = fa_w & ~frac_mask;
 
@@ -212,18 +222,25 @@ module i960_fpmisc #(
   logic [1:0] eff_rmode;
   assign eff_rmode = (op == OP_CVTZRI) ? 2'd3 : rmode;
 
+  // R1018: LEAN -- a fraction is non-zero exactly when its half bit or a
+  // bit below it is set (fbits 0: neither, and no fraction).
+  wire frac_nz = LEAN ? (half_bit || below_half) : (frac_part != 56'd0);
   always_comb begin
     case (eff_rmode)
       2'd0:    inc = half_up;                                 // nearest, ties to even
-      2'd1:    inc = sa && (frac_part != 56'd0);              // floor
-      2'd2:    inc = !sa && (frac_part != 56'd0);             // ceil
+      2'd1:    inc = sa && frac_nz;                           // floor (R1018: frac_nz)
+      2'd2:    inc = !sa && frac_nz;                          // ceil
       default: inc = 1'b0;                                    // truncate
     endcase
   end
 
   logic [56:0] rounded;
-  assign rounded = {1'b0, int_part} +
-                   (inc ? ({1'b0, frac_mask} + 57'd1) : 57'd0);
+  // R1018: LEAN -- frac_mask + 1 is 2^fbits, named as that.
+  // R1018: LEAN -- int_part has fbits zeros at the bottom, so int_part +
+  // 2^fbits is (fa_w | frac_mask) + 1: one add of a per-bit select (a, the
+  // mask and inc in the adder's own LUT), no 2^fbits decoder.
+  assign rounded = LEAN ? ({1'b0, inc ? (fa_w | frac_mask) : int_part} + {56'd0, inc})
+                 : ({1'b0, int_part} + (inc ? ({1'b0, frac_mask} + 57'd1) : 57'd0));
 
   // --------------------------------------------------- R575: the stage
   //
@@ -262,7 +279,16 @@ module i960_fpmisc #(
   // rounds to 2^32 -- and the truncated result is then 0, which looks like r2_a
   // small in-range value and passes any test that only inspects bit 31.
   logic [56:0] shifted;
-  assign shifted = r2_rounded >> r2_fbits;
+  // R1018: LEAN -- only eu <= 31 reaches int_abs and ovf's shift terms (past
+  // it ovf is set and yi saturates), and there fbits >= 21 (52 - eu, or 55
+  // below 2^-3) and r2_rounded <= 2^53, so the integer is under 2^33: a fixed
+  // shift by 21 and a 36-bit one by fbits - 21 give its 33 bits, and the
+  // bits above them are zero as they are in the full shift.
+  generate if (LEAN) begin : g_shift_lean
+    assign shifted = {24'd0, 33'((r2_rounded >> 21) >> (r2_fbits - 6'd21))};
+  end else begin : g_shift
+    assign shifted = r2_rounded >> r2_fbits;
+  end endgenerate
 
   logic [31:0] int_abs;
   always_comb begin
@@ -328,9 +354,20 @@ module i960_fpmisc #(
     // depends on and produced r2_a nonsense exponent.
     else if (r2_eu < 13'sd0)                  round_d = r2_inc ? {r2_sa, 11'd1023, 52'd0}
                                                          : {r2_sa, 63'd0};
-    else if (r2_rounded == 57'd0)             round_d = {r2_sa, 63'd0};
+    else if (!LEAN && r2_rounded == 57'd0)    round_d = {r2_sa, 63'd0};
+    else if (LEAN)                         round_d = {r2_sa, r2_a[62:52] + {10'd0, r2_rounded[53]},
+                                                      r2_rounded[51:0]};
     else                                   round_d = {r2_sa, rexp[10:0], rman};
   end
+  // R1018: LEAN. Past the two branches above, 0 <= eu <= 51: a is normal
+  // and fbits = 52 - eu clears its fraction bits, so r2_rounded is the
+  // significand with them cleared, plus 2^fbits when it rounds up. Its top
+  // bit is then 52 -- rlz = 52, rexp = eu + 1023 = a's own exponent field,
+  // rman = r2_rounded[51:0] -- or, when the round-up carries out of the
+  // significand, r2_rounded is exactly 2^53: the exponent field one more
+  // and a zero fraction, which r2_rounded[51:0] is. It is never zero here
+  // (the hidden bit is at 52, at or above fbits), so that branch is not
+  // reached. rlz, rexp and rnorm's 57-bit shifter are then unused.
 
   // ------------------------------------------------------------- scale
   //

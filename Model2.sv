@@ -4628,7 +4628,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH), .M10K_ROOM(C2)) u_geometry (   // R828c, R867, R889, R940, R1008
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH), .M10K_ROOM(C2), .UV_HELD(C2)) u_geometry (   // R828c, R867, R889, R940, R1008
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -8007,7 +8007,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH),   // R940
               .QNX(M2A ? 512 : 0),   // R962
-              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY)) u_raster3d (   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
+              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2)) u_raster3d (   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),

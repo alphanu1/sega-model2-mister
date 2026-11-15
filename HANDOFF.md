@@ -55,6 +55,43 @@ Not mapped, not fitted, not on the board, not pushed, not merged.
 REMAINS: 2C to FP_SUBN 2 still needs the room (R1017, +597 ALM); a fit; the
 board.
 
+## 2026-11-15: area2-2c -- 807 ALM off the 2C map, output-identical (R1018), quartus_map only
+
+Branch `area2-2c` off new-2c-games d787c68f (local, not pushed, not merged).
+Study R1018 has the record. Not fitted, not on the board.
+
+  * Whole 2C core (M2_2C, M2_2C_DSB) by quartus_map: FP_SUBN 1 40,152 ->
+    39,345 (-807); FP_SUBN 2 40,501 -> 39,867 (-634), below FP_SUBN 0's
+    39,904 that s2702 fitted at 41,411. M10K by shape 452 (=, none spent);
+    MLAB +4 LABs; DSP 110.
+  * Eight changes, each a parameter the 2C build sets (C2 / M2_2C; the
+    TGPx4's adder is 2C-only hardware): the i960's FP add (sticky by mask),
+    FP misc (roundr without renormalising, masks by compare, cvtri's shift
+    narrowed, the round add without a decoder), memory map (aligned blocks)
+    and ALU (shrdi mask); the engine's colour-cache valid bits and the fill
+    mask's valid bits as group flags + LUT RAM; the geometry's u/v
+    reduction without its two copy stages; the TGPx4 adder with one
+    normalising shifter.
+  * Proven: old-against-new miters on each module (planted faults caught),
+    the geometry miter with the MAME walks (and an LFSR driving the cache
+    clears the benches never drive), tb_m2_raster3d at the 2C parameters on
+    four MAME lists (logs byte-identical), the TGPx4 replay against MAME
+    (HOTD boot 20 M / play 150 M cycles, logs byte-identical), STCC's race
+    checkpoint (cycle-identical, R1017's digests) at FP_SUBN 1 and 2,
+    test_i960_top_c2 seeds 2-13. The u/v change is identical whenever the
+    store takes the quad (q_valid); its outputs differ while q_valid is low,
+    where nothing reads them.
+  * Tried and reverted: the FIFO heads in the M10K latch (+93: the reset
+    value needs a mask); the 3D table mirror's windows by compare (no
+    change). The census tools (quartus_cdb --vqm + cone.py) are in
+    sm2-builds/area2-2c-maps; their cone sizes misled twice.
+  * The 2A build: map unchanged (38,803) and its mapped netlist equal to
+    d787c68f's (generated node numbers normalised).
+
+REMAINS: a 2C fit at FP_SUBN 2 with the BEL gun change (read clk_sys at the
+TGPx4 adder's normalise stage, the fill mask's reads near m2_fb_wcomb, and
+the colour cache); the board.
+
 ## 2026-11-15: i960-subnorm -- the i960 FP units take and deliver subnormals (R1013), quartus_map only
 
 Branch `i960-subnorm` off main 2f61c2d1. Study R1013 has the record. Not

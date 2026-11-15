@@ -176,6 +176,8 @@ module m2_raster3d #(
   // heavy band: STCC's title list starved the store 3,839 cycles and drew
   // 2,483 cycles slower than the release with it, 948 faster without.
   parameter bit PAY_HOLD = 1'b0,
+  // R1018: the fill mask's valid bits as group flags and LUT RAM (2C)
+  parameter bit MKV_LUT = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -850,19 +852,25 @@ module m2_raster3d #(
   localparam int unsigned MROW = (SCR_W + 31) / 32;
   localparam int unsigned MDEP = BAND_H * MROW;
   localparam int unsigned MAW  = $clog2(MDEP);
-  logic [MDEP-1:0]       mk_valid;
+  logic [MDEP-1:0]       mk_valid;   // R1018: unread (and not built) with MKV_LUT
+  localparam int unsigned MVG = (MDEP + 15) / 16;
+  logic [MVG-1:0]        mkv_g;
+  logic                  mkv_we;
+  logic [15:0]           mkv_wd;
   logic                  mk_we;
   logic [MAW-1:0]        mk_pwi;
   logic [31:0]           mk_wd;
   logic signed [15:0]    mk_y0;
 
   m2_span_tex #(.PIXSTEP(PIXSTEP), .TXK(TXK), .FTB(FTB), .GC(PXC), .SCR_W(SCR_W), .BAND_H(BAND_H),
-                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .LSB(LSB), .UVSH(UVSH), .UVCL(UVCL)) u_spantex (   // R633, R791, R828, R867; R932; R940
+                .REUSE(TXREUSE), .UZF(UZF), .MIP(MIP), .TEXLUT(TEXLUT), .LSB(LSB), .UVSH(UVSH), .UVCL(UVCL),
+                .MKV_LUT(MKV_LUT)) u_spantex (   // R1018   // R633, R791, R828, R867; R932; R940
     .clk(clk), .rst_n(rst_n),
     .pxk(tex_pxk),   // R650
     .gamma_sel(tex_gamma),   // R784
     .lut_we(lut_we), .lut_sel(lut_sel), .lut_addr(lut_addr), .lut_data(lut_data),   // R867
     .mk_valid(mk_valid), .mk_we(mk_we), .mk_waddr(mk_pwi), .mk_wdata(mk_wd),   // R607
+    .mkv_g(mkv_g), .mkv_we(mkv_we), .mkv_wa(mk_pwi), .mkv_wd(mkv_wd),         // R1018
     .mk_band_y0(mk_y0),
     .in_valid(sq_qve), .in_ready(sq_rdy), .busy(spantex_busy),   // R951: and its box
     // m2_span_tex still carries these as 32; the fill and the queue are what
@@ -1580,10 +1588,20 @@ module m2_raster3d #(
   wire [$clog2(BAND_H)-1:0] mk_rrow = ($clog2(BAND_H))'(fbw_ry - 9'(mk_y0));
   wire [MAW-1:0] mk_rdi = FB_DDR3 ? (MAW'(mk_rrow) * MAW'(MROW) + MAW'(fbw_rx0 >> 5)) : mk_pwi;
   logic [31:0] mk_pword;
+  // R1018: MKV_LUT -- THE VALID BITS IN LUT RAM, CLEARED BY GROUP (the engine's
+  // colour cache's form, m2_geo_engine CCV_LUT). Word i is valid when its
+  // group's flag mkv_g[i / 16] is up and bit i % 16 of the group's word is
+  // set. C_REPLAY drops the flags (the 128 flops' clear); a set (mk_we
+  // outside C_REPLAY, as the flops took it) writes the group's word -- read
+  // now at mk_pwi if the flag is up, else zero -- with its bit added, into
+  // two copies here (its own read at mk_pwi, and mk_rdi's) and m2_span_tex's
+  // (mk_ri's), and raises the flag. A word written at an edge is read from
+  // the next cycle, as mk_a's and the span copy's own words are.
+  logic mk_rdi_v;
   always_comb begin
     if      (mk_b1_v && (mk_b1_a == mk_rdi)) mk_pword = mk_b1_d;
     else if (mk_b2_v && (mk_b2_a == mk_rdi)) mk_pword = mk_b2_d;
-    else if (mk_valid[mk_rdi])               mk_pword = mk_a[mk_rdi];
+    else if (mk_rdi_v)                       mk_pword = mk_a[mk_rdi];
     else                                     mk_pword = 32'd0;
   end
   assign fbw_rword = mk_pword;
@@ -1812,6 +1830,28 @@ module m2_raster3d #(
   typedef enum logic [2:0] { C_IDLE, C_CLR, C_CLRW, C_REPLAY, C_FILL, C_FILLW, C_DONE } cstate_t;
   pstate_t pst;
   cstate_t cst /*verilator public_flat_rd*/;   // R539: the bench histograms it
+  // R1018: MKV_LUT (described at mk_pword, above)
+  wire  mkv_set = mk_we && !(cst == C_REPLAY);
+  generate if (MKV_LUT) begin : g_mkv_lut
+    (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] mkv_p [MVG];
+    (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] mkv_r [MVG];
+    wire [15:0] mkv_pw = mkv_p[mk_pwi[MAW-1:4]];
+    wire [15:0] mkv_rw = mkv_r[mk_rdi[MAW-1:4]];
+    assign mkv_wd = (mkv_g[mk_pwi[MAW-1:4]] ? mkv_pw : 16'd0) | (16'd1 << mk_pwi[3:0]);
+    assign mkv_we = mkv_set;
+    always_ff @(posedge clk) if (mkv_we) begin
+      mkv_p[mk_pwi[MAW-1:4]] <= mkv_wd;
+      mkv_r[mk_pwi[MAW-1:4]] <= mkv_wd;
+    end
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n)                mkv_g <= '0;
+      else if (cst == C_REPLAY)  mkv_g <= '0;
+      else if (mkv_set)          mkv_g[mk_pwi[MAW-1:4]] <= 1'b1;
+    assign mk_rdi_v = mkv_g[mk_rdi[MAW-1:4]] && mkv_rw[mk_rdi[3:0]];
+  end else begin : g_mkv_ff
+    assign mkv_g = '0; assign mkv_we = 1'b0; assign mkv_wd = 16'd0;
+    assign mk_rdi_v = mk_valid[mk_rdi];
+  end endgenerate
   assign dbg_pipe = {pst, cst, fb_busy, fb_complete, 1'b0};   // measurement build
   // R607: the fill mask's valid bits and bypass (declared with it, above).
   always_ff @(posedge clk or negedge rst_n) begin

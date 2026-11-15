@@ -47,32 +47,63 @@ module i960_memmap #(
   logic [31:0] a;
   assign a = addr;
 
+  // R1018: ON THE 2C BUILD THE SAME SET AS ALIGNED BLOCKS -- the union of
+  // the table below (with the 2C ranges) cut into the 24 power-of-two blocks
+  // it is made of, each an equality on the address bits above the block:
+  // no magnitude compares. The other builds keep the table as it is.
+  logic burst_tbl, burst_blk;
+  assign burst_blk =
+      (a[31:21] == 11'h0) ||
+      (a[31:18] == 14'h8) ||
+      (a[31:20] == 12'h5) ||
+      (a[31:14] == 18'h201) ||
+      (a[31:14] == 18'h220) ||
+      (a[31:19] == 13'h12) ||
+      (a[31:16] == 16'h100) ||
+      (a[31:2] == 30'h408000) ||
+      (a[31:19] == 13'h21) ||
+      (a[31:16] == 16'h111) ||
+      (a[31:19] == 13'h23) ||
+      (a[31:14] == 18'h600) ||
+      (a[31:15] == 17'h302) ||
+      (a[31:14] == 18'h606) ||
+      (a[31:14] == 18'h680) ||
+      (a[31:14] == 18'h684) ||
+      (a[31:14] == 18'h740) ||
+      (a[31:25] == 7'h1) ||
+      (a[31:24] == 8'h6) ||
+      (a[31:22] == 10'h44) ||
+      (a[31:16] == 16'h1140) ||
+      (a[31:20] == 12'h116) ||
+      (a[31:23] == 9'h24) ||
+      (a[31:17] == 15'h940);
+  assign is_burst = C2 ? burst_blk : burst_tbl;
   always_comb begin
-    is_burst = 1'b0;
+    burst_tbl = 1'b0;
 
     // Mirrors are folded in where the reference declares them, because the
     // burst property follows the region rather than the primary address.
-    if      (a <  32'h0020_0000)                            is_burst = 1'b1; // program ROM
-    else if (a >= 32'h0020_0000 && a <  32'h0024_0000)      is_burst = 1'b1; // 2A-CRX RAM
-    else if (a >= 32'h0050_0000 && a <  32'h0060_0000)      is_burst = 1'b1; // work RAM
-    else if (a >= 32'h0080_4000 && a <  32'h0080_8000)      is_burst = 1'b1; // geo program
-    else if (a >= 32'h0088_0000 && a <  32'h0088_4000)      is_burst = 1'b1; // copro function port
+    if      (a <  32'h0020_0000)                            burst_tbl = 1'b1; // program ROM
+    else if (a >= 32'h0020_0000 && a <  32'h0024_0000)      burst_tbl = 1'b1; // 2A-CRX RAM
+    else if (a >= 32'h0050_0000 && a <  32'h0060_0000)      burst_tbl = 1'b1; // work RAM
+    else if (a >= 32'h0080_4000 && a <  32'h0080_8000)      burst_tbl = 1'b1; // geo program
+    else if (a >= 32'h0088_0000 && a <  32'h0088_4000)      burst_tbl = 1'b1; // copro function port
     // 0x00884000-0x00887fff is the copro FIFO and is deliberately NOT burst.
-    else if (a >= 32'h0090_0000 && a <  32'h0098_0000)      is_burst = 1'b1; // buffer RAM + mirror
-    else if (a >= 32'h0100_0000 && a <  32'h0101_0000)      is_burst = 1'b1; // tilemap
-    else if (a >= 32'h0111_0000 && a <  32'h0112_0000)      is_burst = 1'b1; // tilemap mirror
-    else if (a >= 32'h0102_0000 && a <  32'h0102_0004)      is_burst = 1'b1; // ABSEL
-    else if (a >= 32'h0108_0000 && a <  32'h0110_0000)      is_burst = 1'b1; // char RAM
-    else if (a >= 32'h0118_0000 && a <  32'h0120_0000)      is_burst = 1'b1; // char RAM mirror
-    else if (a >= 32'h0180_0000 && a <  32'h0180_4000)      is_burst = 1'b1; // palette
-    else if (a >= 32'h0181_0000 && a <  32'h0181_c000)      is_burst = 1'b1; // colour translate
-    else if (a >= 32'h01a0_0000 && a <  32'h01a0_4000)      is_burst = 1'b1; // m2comm share
-    else if (a >= 32'h01a1_0000 && a <  32'h01a1_4000)      is_burst = 1'b1; // m2comm mirror
-    else if (a >= 32'h01d0_0000 && a <  32'h01d0_4000)      is_burst = 1'b1; // backup SRAM
-    else if (a >= 32'h0200_0000 && a <  32'h0400_0000)      is_burst = 1'b1; // main data ROM
-    else if (a >= 32'h0600_0000 && a <  32'h0700_0000)      is_burst = 1'b1; // extra data ROM
-    else if (a >= 32'h1160_0000 && a <  32'h1170_0000)      is_burst = 1'b1; // framebuffer A/B
-    else if (C2 && a >= 32'h1100_0000 && a < 32'h1141_0000) is_burst = 1'b1; // R924: 2C texture + luma RAM
+    else if (a >= 32'h0090_0000 && a <  32'h0098_0000)      burst_tbl = 1'b1; // buffer RAM + mirror
+    else if (a >= 32'h0100_0000 && a <  32'h0101_0000)      burst_tbl = 1'b1; // tilemap
+    else if (a >= 32'h0111_0000 && a <  32'h0112_0000)      burst_tbl = 1'b1; // tilemap mirror
+    else if (a >= 32'h0102_0000 && a <  32'h0102_0004)      burst_tbl = 1'b1; // ABSEL
+    else if (a >= 32'h0108_0000 && a <  32'h0110_0000)      burst_tbl = 1'b1; // char RAM
+    else if (a >= 32'h0118_0000 && a <  32'h0120_0000)      burst_tbl = 1'b1; // char RAM mirror
+    else if (a >= 32'h0180_0000 && a <  32'h0180_4000)      burst_tbl = 1'b1; // palette
+    else if (a >= 32'h0181_0000 && a <  32'h0181_c000)      burst_tbl = 1'b1; // colour translate
+    else if (a >= 32'h01a0_0000 && a <  32'h01a0_4000)      burst_tbl = 1'b1; // m2comm share
+    else if (a >= 32'h01a1_0000 && a <  32'h01a1_4000)      burst_tbl = 1'b1; // m2comm mirror
+    else if (a >= 32'h01d0_0000 && a <  32'h01d0_4000)      burst_tbl = 1'b1; // backup SRAM
+    else if (a >= 32'h0200_0000 && a <  32'h0400_0000)      burst_tbl = 1'b1; // main data ROM
+    else if (a >= 32'h0600_0000 && a <  32'h0700_0000)      burst_tbl = 1'b1; // extra data ROM
+    else if (a >= 32'h1160_0000 && a <  32'h1170_0000)      burst_tbl = 1'b1; // framebuffer A/B
+    else if (C2 && a >= 32'h1100_0000 && a < 32'h1141_0000) burst_tbl = 1'b1; // R924: 2C texture + luma RAM
     // R905: TO 0x12800000. Both sheets carry .mirror(0x200000) with the BURST
     // flag (model2_tgp_mem: 0x12000000-0x121fffff and 0x12400000-0x125fffff),
     // so sheet 1's mirror 0x12600000-0x127fffff is a burst region too. It
@@ -80,8 +111,8 @@ module i960_memmap #(
     // its first address: Dynamite Cop, Dead or Alive, Sky Target and Motor
     // Raid upload sheet 1 with stq through that mirror -- three texel words
     // in four never written, the board's vertical stripes.
-    else if (a >= 32'h1200_0000 && a <  32'h1280_0000)      is_burst = 1'b1; // texture RAM + mirrors
-    else if (a >= 32'h1280_0000 && a <  32'h1282_0000)      is_burst = 1'b1; // luma RAM
+    else if (a >= 32'h1200_0000 && a <  32'h1280_0000)      burst_tbl = 1'b1; // texture RAM + mirrors
+    else if (a >= 32'h1280_0000 && a <  32'h1282_0000)      burst_tbl = 1'b1; // luma RAM
   end
 
 endmodule

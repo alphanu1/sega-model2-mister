@@ -48,7 +48,11 @@ module fp_add #(
   // shift at exponent 1 and packs what is left as a subnormal -- exact, since
   // a sum of numbers on the subnormal grid is on it too. Model 2A's TGP
   // (Virtua Fighter 2 accumulates subnormal products).
-  parameter bit SUBNORM = 1'b0
+  parameter bit SUBNORM = 1'b0,
+  // R1018: with SUBNORM, one normalising shifter and its amount selected
+  // (s1_exp - 1 or lzc - 1) in place of two shifters and a select after
+  // them. 0 is the unit as it was. (The TGPx4, 2C.)
+  parameter bit LEAN    = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -290,12 +294,19 @@ module fp_add #(
       if (s1_sum[i]) lzc = 5'(27 - i);
   end
 
+  wire n_sub = ({2'b00, s1_exp} < {5'd0, lzc});   // R1018 (LEAN)
   always_comb begin
     if (s1_sum[27]) begin
       // Carry out of the significand: shift right one, exponent up one.
       shifted  = s1_sum >> 1;
       lost_bit = s1_sum[0];
       exp_adj  = $signed({2'b00, s1_exp}) + 10'sd1;
+    end else if (SUBNORM && LEAN) begin
+      // R1018: the two cases below, one shift. When the subnormal case
+      // holds s1_exp < lzc <= 27, so s1_exp - 1 fits the five bits.
+      shifted  = s1_sum << (n_sub ? 5'(s1_exp - 8'd1) : (lzc - 5'd1));
+      lost_bit = 1'b0;
+      exp_adj  = n_sub ? 10'sd1 : ($signed({2'b00, s1_exp}) - $signed({5'd0, lzc}) + 10'sd1);
     end else if (SUBNORM && ({2'b00, s1_exp} < {5'd0, lzc})) begin
       // R852: the full shift would take the exponent below 1 -- shift only to
       // exponent 1 (s1_exp >= 1, so by at most 25); bit 26 stays clear and

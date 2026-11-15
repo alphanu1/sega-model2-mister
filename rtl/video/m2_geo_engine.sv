@@ -76,7 +76,10 @@ module m2_geo_engine #(
   // R1008: the texture-parameter table in M10K (1) or MLAB (0). Its read is
   // registered (tp_rd), so the two are the same circuit; a build with M10K
   // to spare (2C) takes the block and gets the four LABs back as logic.
-  parameter bit TP_M10K = 1'b0
+  parameter bit TP_M10K = 1'b0,
+  // R1018: the colour cache's 256 valid bits as sixteen group flags and a
+  // 16 x 16 LUT RAM (1), or 256 flip-flops (0) -- the same bit at every read.
+  parameter bit CCV_LUT = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -358,7 +361,7 @@ module m2_geo_engine #(
   logic [1:0]  xspace;
   logic        cc_wait;
   logic [7:0]  cc_idx;
-  logic [255:0] cc_valid;
+  logic [255:0] cc_valid;   // R1018: unread (and so not built) with CCV_LUT
   logic         cc_dirty;   // R698: the colours changed while this entry's reads were in flight
   logic [7:0]   xl_raw;     // R718: a translation byte, before its gamma
   logic [1:0]   xl_i;
@@ -424,6 +427,37 @@ module m2_geo_engine #(
     endcase
   endfunction
   wire         cc_we  = (st == E_CW);
+  // R1018: CCV_LUT -- THE VALID BITS IN LUT RAM, CLEARED BY GROUP. The cache
+  // reads one valid bit (E_CC, at cc_idx) and sets one (E_CW, at cc_idx); it
+  // clears all 256 at once (col_inval, a tex_lum or gamma_sel change), which
+  // is why they were flip-flops. Here bit i is ccv_g[i / 16] AND bit i % 16
+  // of word i / 16 of a 16 x 16 RAM: a clear drops the sixteen group flags; a
+  // set writes its group's word -- the word read now if the group's flag is
+  // up, else zero -- with its bit added, and raises the flag. A clear at the
+  // same edge as a set still wins (the flag drops; the word is then never
+  // read before the next set rewrites it), as the flops' later assignment
+  // did. The RAM is read asynchronously at the same registered address the
+  // flops were selected by, so ccv_hit is cc_valid[cc_idx] in every cycle.
+  logic        ccv_hit;
+  logic        ccv_set;      // E_CW's set (cc_valid[cc_idx] <= 1)
+  logic        ccv_clr;      // any of the three clears this cycle
+  generate if (CCV_LUT) begin : g_ccv_lut
+    (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] ccv_mem [16];
+    logic [15:0] ccv_g;
+    wire  [15:0] ccv_w = ccv_mem[cc_idx[7:4]];
+    assign ccv_hit = ccv_g[cc_idx[7:4]] && ccv_w[cc_idx[3:0]];
+    always_ff @(posedge clk)
+      if (ccv_set) ccv_mem[cc_idx[7:4]] <= (ccv_g[cc_idx[7:4]] ? ccv_w : 16'd0)
+                                         | (16'd1 << cc_idx[3:0]);
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n)       ccv_g <= 16'd0;
+      else if (ccv_clr) ccv_g <= 16'd0;
+      else if (ccv_set) ccv_g[cc_idx[7:4]] <= 1'b1;
+  end else begin : g_ccv_ff
+    assign ccv_hit = cc_valid[cc_idx];
+  end endgenerate
+  assign ccv_set = (st == E_CW) && !cc_dirty;
+  assign ccv_clr = col_inval || (tex_lum != tex_lum_d) || (gamma_sel != gam_d);
   // R784: the slope, g * lt / 256. Stored as 565 (m2_quad_store), so a
   // non-zero component under Off or Mild keeps at least one LSB: the pedestal
   // m2_span_tex adds is only right where the table is not zero, and a slope
@@ -900,7 +934,7 @@ module m2_geo_engine #(
         // ---- R222: the colour cache, then the palette and the three
         //      translation reads on a miss.
         E_CC: if (!cc_wait) cc_wait <= 1'b1;         // cc_rd is one cycle behind cc_idx
-        else if (cc_valid[cc_idx] && (cc_rd[40:24] == cc_key)) begin
+        else if (ccv_hit && (cc_rd[40:24] == cc_key)) begin
           poly_col <= cc_rd[23:0];
           st <= E_EMIT;
         end else begin

@@ -586,7 +586,7 @@ module i960_top #(
   logic [31:0] alu_result, ac, alu_ac;
   logic        alu_we, alu_valid;
 
-  i960_alu u_alu (
+  i960_alu #(.LEAN(C2)) u_alu (   // R1018
     .op(alu_op), .op2(alu_op2), .src1(alu_s1), .src2(alu_s2), .ac_in(ac),
     .result(alu_result), .result_we(alu_we), .ac_out(alu_ac), .valid(alu_valid)
   );
@@ -723,7 +723,8 @@ module i960_top #(
     assign tr_sub = 1'b0; assign tr_sel_add = 1'b0; assign tr_sel_mul = 1'b0;
     assign tr_sel_div = 1'b0; assign tr_fin = 1'b0;
   end endgenerate
-  i960_fpadd  #(.SUBNORM(SUBN_D)) u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
+  // R1018: LEAN on the 2C build -- the same sums, the sticky from a mask.
+  i960_fpadd  #(.SUBNORM(SUBN_D), .LEAN(C2)) u_fpadd  (.clk(clk), .rst_n(rst_n), .req(fadd_req | (TRB && tr_add_req)),
                         .sub(tr_on ? tr_sub : fadd_sub), .a(u_a), .b(u_b),
                         .y(fadd_y), .done(fadd_done));
   i960_fpmul  #(.SUBNORM(SUBN_D)) u_fpmul  (.clk(clk), .rst_n(rst_n), .req(fmul_req | (TRB && tr_mul_req)),
@@ -792,7 +793,9 @@ module i960_top #(
   // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
   localparam bit FPMISC_STAGED = 1'b1;
   // R952: SCALE 0 -- fmisc_op is never 6 (scaler is the multiply by pow2).
-  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0), .SUBNORM(SUBN_D)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
+  // R1018: LEAN on the 2C build -- roundr without the renormalising shift,
+  // the fraction mask by compare, cvtri's shift at the width it can reach.
+  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0), .SUBNORM(SUBN_D), .LEAN(C2)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
                         .a(fp_a), .b(fp_b), .ai(src1_val),
                         .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
 
