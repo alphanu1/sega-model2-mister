@@ -78,9 +78,7 @@ module m2_copro #(
   parameter bit          X4_CTLD   = 1'b1,
   parameter int unsigned X4_WQ     = 4,
   // R931: a full output FIFO holds the TGP (m2_tgp OUT_STALL); 0 drops (R146)
-  parameter bit OUT_STALL = 1'b0,
-  // R1018: the two FIFOs' head words in their M10Ks' output latches (2C)
-  parameter bit FIFO_HEAD = 1'b0
+  parameter bit OUT_STALL = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -389,14 +387,14 @@ module m2_copro #(
   wire [31:0] fin_din  = fn_wr ? fn_word : wdata;
   wire        fout_pop = fifo_rd && fout_valid && !tgp_wq_busy;   // R888
 
-  m2_fifo_m10k #(.DW(32), .DEPTH(FD_IN), .HEAD_RAM(FIFO_HEAD)) u_fin (   // R1018
+  m2_fifo_m10k #(.DW(32), .DEPTH(FD_IN)) u_fin (
     .clk(clk), .rst_n(rst_n), .clr(x4_fi_clr),   // R933: the TGPx4's CLRF (0 on the TGP)
     .push(fin_push), .din(fin_din),
     .pop(tgp_in_pop), .q(fin_q), .q_valid(fin_valid),
     .full(fin_full), .count(fin_count), .dropped(dbg_in_dropped), .held()
   );
 
-  m2_fifo_m10k #(.DW(32), .DEPTH(FD_OUT), .HEAD_RAM(FIFO_HEAD)) u_fout (   // R1018
+  m2_fifo_m10k #(.DW(32), .DEPTH(FD_OUT)) u_fout (
     .clk(clk), .rst_n(rst_n), .clr(x4_fo_clr),
     .push(tgp_out_push), .din(tgp_out_data),
     .pop(fout_pop), .q(fout_q), .q_valid(fout_valid),

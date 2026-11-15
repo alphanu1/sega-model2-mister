@@ -4356,7 +4356,7 @@ localparam int unsigned R826_DEPTH = 2;   // copies (2 or 3)
 // four lists are 8,192 dwords apart and jump inside each; R638's window held
 // the next list and stopped the i960 every frame). 0: R638 unchanged.
 localparam int unsigned GEO_LIST_WIN = M2A ? 4096 : 0;
-m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIST_WIN), .PQ_HEAD(C2)) u_geo (   // R1018: PQ_HEAD
+m2_geo #(.AW(SDR_AW), .DEPTH(128), .AFTER_STRICT(R826_STRICT), .LIST_WIN(GEO_LIST_WIN)) u_geo (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.wr_ctl(geo_wr_ctl), .wr_setwp(geo_wr_setwp), .wr_setrp(geo_wr_setrp),
 	.trig_mode(wtrig_s2),
@@ -4951,7 +4951,7 @@ end
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
 m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
-           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE), .X4_FWD(C2_X4FWD), .X4_WQ(C2_X4WQ), .FIFO_HEAD(C2)) u_copro (   // R852, R888; R924, R931
+           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE), .X4_FWD(C2_X4FWD), .X4_WQ(C2_X4WQ)) u_copro (   // R852, R888; R924, R931
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
@@ -7996,7 +7996,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH),   // R940
               .QNX(M2A ? 512 : 0),   // R962
-              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .SQ_HEAD(C2)) u_raster3d (   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
+              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY)) u_raster3d (   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),

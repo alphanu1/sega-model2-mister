@@ -176,8 +176,6 @@ module m2_raster3d #(
   // heavy band: STCC's title list starved the store 3,839 cycles and drew
   // 2,483 cycles slower than the release with it, 948 faster without.
   parameter bit PAY_HOLD = 1'b0,
-  // R1018: the span queue's head word in its M10K's output latch (2C)
-  parameter bit SQ_HEAD = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -733,7 +731,7 @@ module m2_raster3d #(
   // R684: BACK TO M10K (7 blocks). R332's reason -- the quad store short of
   // block RAM -- is gone (538 of 553 used at s637), and these 13 MLAB LABs are
   // what R683's fill mask needs: s638-s640 were 23-28 LABs short.
-  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("M10K"), .HEAD_RAM(SQ_HEAD)) u_span_q (   // R1018
+  m2_fifo_m10k #(.DW(SQ_DW), .DEPTH(32), .RAMSTYLE("M10K")) u_span_q (
     .clk(clk), .rst_n(rst_n), .clr(1'b0),
     .push(fl_span_valid && fl_span_ready), .din(sq_din),   // R951: ready, not the queue's alone
     .pop(sq_qve && sq_rdy), .q(sq_q), .q_valid(sq_qv),

@@ -53,11 +53,8 @@ module m2_fifo_m10k #(
   // It also means ONLY THE QUARTUS RAM SUMMARY can confirm the style took;
   // no local test can.
   /* verilator lint_off UNUSEDPARAM */
-  parameter RAMSTYLE = "M10K",
+  parameter RAMSTYLE = "M10K"
   /* verilator lint_on UNUSEDPARAM */ 
-  // R1018: 1 holds the head word in the block RAM's own output latch rather
-  // than a DW-bit register after it (below); 0 is the FIFO as it was.
-  parameter bit HEAD_RAM = 1'b0
 ) (
   input  logic          clk,
   input  logic          rst_n,
@@ -104,38 +101,15 @@ module m2_fifo_m10k #(
   wire head_free = !q_valid || pop;
   wire do_read   = head_free && !rd_pending && mem_avail;
 
-  // R1018: HEAD_RAM -- THE HEAD IS THE RAM's OUTPUT LATCH. The head register
-  // takes rdq when rd_pending, the cycle after do_read read mem[rp] and moved
-  // rp on; so the RAM is read at that cycle instead, at rp - 1 (the same
-  // word), and holds its output until the next such read. A push cannot
-  // write that word at the do_read cycle (the FIFO would have been empty or
-  // full there); one at the rd_pending cycle (it was full) is a write at the
-  // read's own edge, which reads the word as it was -- as rdq did, a cycle
-  // earlier. Until the first such read after a reset q is zero, the head
-  // register's reset value.
-  logic [DW-1:0] q_r;
-  generate if (HEAD_RAM) begin : g_head_ram
-    logic h_ld;
-    always_ff @(posedge clk) begin
-      if (push && !mem_full) mem[wp] <= din;     // never cleared in reset
-      if (rd_pending) rdq <= mem[rp - AW'(1)];
-    end
-    always_ff @(posedge clk or negedge rst_n)
-      if (!rst_n)          h_ld <= 1'b0;
-      else if (rd_pending) h_ld <= 1'b1;
-    assign q = h_ld ? rdq : '0;
-  end else begin : g_head_reg
-    always_ff @(posedge clk) begin
-      if (push && !mem_full) mem[wp] <= din;     // never cleared in reset
-      rdq <= mem[rp];
-    end
-    assign q = q_r;
-  end endgenerate
+  always_ff @(posedge clk) begin
+    if (push && !mem_full) mem[wp] <= din;     // never cleared in reset
+    rdq <= mem[rp];
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       wp <= '0; rp <= '0; mem_cnt <= '0;
-      q_r <= '0; q_valid <= 1'b0; rd_pending <= 1'b0;
+      q <= '0; q_valid <= 1'b0; rd_pending <= 1'b0;
       dropped <= 32'd0;
     end else begin
       // ---- push
@@ -163,7 +137,7 @@ module m2_fifo_m10k #(
 
       // ---- the read lands
       if (rd_pending) begin
-        q_r     <= rdq;
+        q       <= rdq;
         q_valid <= 1'b1;
       end
 
