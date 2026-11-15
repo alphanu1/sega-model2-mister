@@ -313,7 +313,10 @@ module m2_2a_inputs #(
       an0 <= or_str; an1 <= or_str; an2 <= or_acc;
     end else if (p_wski) begin                        // R1010
       in0 <= or_in0; in1 <= ws_in1; in2 <= 8'hFF;
-      an0 <= or_str; an1 <= 8'hFF; an2 <= 8'hFF;
+      // Ben, board (s2702): swapped as Ski Super G's -- MAME's AD_STICK_X
+      // sense (0x00 left) is the mirror of or_str's (Over Rev's reversed
+      // port), so SLIDE is mirrored about the centre too.
+      an0 <= 8'd0 - or_str; an1 <= 8'hFF; an2 <= 8'hFF;
     end else if (p_skis) begin                        // R1010
       in0 <= sk_in0; in1 <= sk_in1; in2 <= sk_in2;
       // Ben, board (s2702): left and right swapped with MAME's sense

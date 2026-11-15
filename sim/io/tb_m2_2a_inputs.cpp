@@ -373,7 +373,8 @@ int main(int argc, char **argv) {
         } else {
           cmp("wski in1", game, c, t->o_in1, lo(b(j0, 8) << 0 | b(j0, 9) << 1 | b(j0, 10) << 2 | b(j0, 11) << 3));
           cmp("wski in2", game, c, t->o_in2, 0xff);
-          if (since > 6) near("wski an0", c, t->o_an0, hs);
+          if (since > 6) { double hm[6]; for (int k = 0; k < 6; ++k) hm[k] = 256.0 - hs[k];   // mirrored (board, s2702)
+                           near("wski an0", c, t->o_an0, hm); }
           cmp("wski an1", game, c, t->o_an1, 0xff); cmp("wski an2", game, c, t->o_an2, 0xff); cmp("wski an3", game, c, t->o_an3, 0xff);
           if (t->o_an0 <= 0x01) ++wski_sl_ends[0];
           if (t->o_an0 == 0xff) ++wski_sl_ends[1];

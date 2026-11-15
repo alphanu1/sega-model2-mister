@@ -50263,3 +50263,14 @@ last slow frame 0.3 ms inside a vblank); Dynamite Cop 2C good (past R1010's
 Scroll Allocation Error, the protection patches); Ski Super G good apart
 from the swap; Wave Runner good, "runs mostly at 30 fps" -- not yet known
 whether that is the game's own rate or ours (open).
+
+*SECOND BOARD REPORT (Ben, same day):* Sega Water Ski's directions are
+swapped too, and it has many 30 fps slowdowns; Behind Enemy Lines' aim is
+stuck in the bottom-left corner and only Coin and Start respond. Water
+Ski's SLIDE (AN0) is now mirrored as Ski Super G's INCLINING is (bench
+updated, PASS). NOTE, AND IT IS A CONTRADICTION LEFT OPEN: MAME declares
+Wave Runner's HANDLE, Ski Super G's INCLINING and Water Ski's SLIDE alike
+(AD_STICK_X, 0x00-0xFF, no PORT_REVERSE), and R1010 read Water Ski's
+skier turning left at SLIDE 0x00 in MAME -- yet on the board Wave Runner
+steers right with the same or_str and the two ski games steer the wrong
+way. The board is the oracle here; why the games differ is not known.
