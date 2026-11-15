@@ -50241,3 +50241,25 @@ MAME's host floats; it never said what the part does.
     control-flow effect was seen. Established by reading the manual
     (pdftotext of the bitsavers scan) and R1011's captured AC; the board
     was not involved.
+
+**R1015 -- 2C BOARD TEST OF s2702 (Ben, 2026-11-15): STCC FULL SPEED;
+DYNAMITE COP 2C, SKI SUPER G AND WAVE RUNNER RUN; SKI SUPER G's LEFT AND
+RIGHT SWAPPED, NOW MIRRORED.**
+
+*What was believed (R1010):* Ski Super G's AN1 INCLINING is MAME's
+AD_STICK_X with no PORT_REVERSE -- 0x00 left, 0xFF right -- so the core sent
+the widened steering (or_str) as it is, as Wave Runner's and STCC's.
+
+*What the board says:* left and right are swapped. So the game's sense is
+the mirror of MAME's port as MAME declares it (MAME's own default, not the
+cabinet's, as R933 found for Over Rev's pedals). m2_2a_inputs now sends
+0x100 - or_str on AN1 for 0x21 (0x80 + m -> 0x80 - m; or_str is 0x01-0xFF,
+so the mirror never wraps); SWING (AN0) and the foot sensors unchanged.
+test_m2_2a_inputs expects the mirrored line: PASS, 0 mismatches; the old
+sense planted back: caught (skis an1 mismatches from the first check).
+
+*The rest of the test:* STCC "seems full speed now" (R1011's model put the
+last slow frame 0.3 ms inside a vblank); Dynamite Cop 2C good (past R1010's
+Scroll Allocation Error, the protection patches); Ski Super G good apart
+from the swap; Wave Runner good, "runs mostly at 30 fps" -- not yet known
+whether that is the game's own rate or ours (open).

@@ -316,7 +316,10 @@ module m2_2a_inputs #(
       an0 <= or_str; an1 <= 8'hFF; an2 <= 8'hFF;
     end else if (p_skis) begin                        // R1010
       in0 <= sk_in0; in1 <= sk_in1; in2 <= sk_in2;
-      an0 <= sky_y; an1 <= or_str; an2 <= 8'hFF;
+      // Ben, board (s2702): left and right swapped with MAME's sense
+      // (INCLINING AD_STICK_X, 0x00 left), so the steering is mirrored
+      // about the centre: 0x80 + m -> 0x80 - m.
+      an0 <= sky_y; an1 <= 8'd0 - or_str; an2 <= 8'hFF;
     end else if (p_tops) begin                        // R1010
       in0 <= ts_in0; in1 <= ts_in1; in2 <= 8'hFF;
       an0 <= or_str; an1 <= or_str; an2 <= 8'hFF;

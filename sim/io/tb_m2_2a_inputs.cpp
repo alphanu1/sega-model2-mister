@@ -328,7 +328,8 @@ int main(int argc, char **argv) {
         cmp("skis in1", game, c, t->o_in1, lo(b(j0, 11)));
         cmp("skis in2", game, c, t->o_in2, (b(j0, 12) ? 0xf0 : 0) | (b(j0, 13) ? 0x0f : 0));
         cmp("skis an0", game, c, t->o_an0, sky_y(t->joy_analog));
-        if (since > 6) near("skis an1", c, t->o_an1, hs);
+        if (since > 6) { double hm[6]; for (int k = 0; k < 6; ++k) hm[k] = 256.0 - hs[k];   // mirrored (board, s2702)
+                         near("skis an1", c, t->o_an1, hm); }
         cmp("skis an2", game, c, t->o_an2, 0xff); cmp("skis an3", game, c, t->o_an3, 0xff);
       } else {
         cmp("tops in0", game, c, t->o_in0, lo(b(j0, 4) << 0 | b(j0, 6) << 2 | b(j0, 7) << 3 | b(j0, 11) << 4 | b(j0, 8) << 5 | b(j0, 5) << 6 | b(j0, 10) << 7));
