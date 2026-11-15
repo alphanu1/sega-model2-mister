@@ -51253,3 +51253,12 @@ fp_mul's p_nsh from p_sh (its comment keeps the path into s2_exp short).
 *Not settled:* the fit; the board; the 2A build's identity beyond its map
 (its map and netlist above; the Model 2 build not mappable from here); whether FP_SUBN 2 now fits with timing (s2702 fitted at a
 map near FP_SUBN 0's, 39,904; FP_SUBN 2 now maps 39,867).
+
+**R1022 -- THE 2C RELEASE CANDIDATE'S BRANCH (rel-2c-all): FP_SUBN 2 ON
+EVERY BUILD.** 2026-11-15. new-2c-games (R1015, R1017, the STCC MRAs back
+to "(newer)") + logrl-subn (R1019) + bel-gun (R1016, its MRA note in place
+of a default EEPROM) + R1020's remr commits (cherry-picked from fprem-subn)
++ area2-2c (R1018). With R1018's room (2C maps 39,867 at FP_SUBN 2, below
+the 39,904 FP_SUBN 0 map s2702 fitted at 41,411) and R1019's logrl,
+Model2.sv's M2_I960_SUBN is 2 on every build: the 2C default of 1 (R1017)
+is gone. Checks and the fit follow below as they are run.
