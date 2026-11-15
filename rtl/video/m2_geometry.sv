@@ -104,7 +104,10 @@ module m2_geometry #(
   // texture-parameter table -- both read through a register -- go to M10K
   // in place of MLAB: the same circuit, thirteen LABs back as logic. 0
   // keeps them in MLAB for a build short of M10K (2A).
-  parameter bit M10K_ROOM = 1'b0
+  parameter bit M10K_ROOM = 1'b0,
+  // R1018: the u/v reduction without its two copy stages (wu / wv, wu_d /
+  // wv_d) -- see the stage. 0 is the pipeline as it was. (2C.)
+  parameter bit UV_HELD = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -1008,7 +1011,20 @@ module m2_geometry #(
   // R952: f2uvw(cu / cv) as the clipper keeps it (out_wu / out_wv), not eight
   // converters here on every cycle -- the same value on every cycle.
   logic [15:0] cwu [4], cwv [4];
-  always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= cwu[k]; wv[k] <= cwv[k]; end
+  // R1018: UV_HELD -- THE COPY STAGES ARE NOT NEEDED TO HOLD ANYTHING. The
+  // clipper holds the quad (its qwu / qwv, cwu / cwv here, are written only
+  // in K_IDLE and K_POPR, never in K_EMIT), and q_valid comes C_AGE cycles
+  // after it first appears, so every stage below sees the same input for
+  // C_AGE cycles before ru / rv / q_uvs are taken (q_take, the store's only
+  // read of them). wu / wv and wu_d / wv_d were each a copy of the stage
+  // before; without them ru / rv settle two cycles sooner, to the same
+  // values, and q_valid is where it was. While q_valid is low q_u* / q_v*
+  // / q_uvs may differ from the full pipeline's (no one reads them then).
+  generate if (UV_HELD) begin : g_uv_held
+    always_comb for (int k = 0; k < 4; k++) begin wu[k] = cwu[k]; wv[k] = cwv[k]; end
+  end else begin : g_uv_copy
+    always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu[k] <= cwu[k]; wv[k] <= cwv[k]; end
+  end endgenerate
   wire  [15:0] uper = (16'd256 << ctex[3:1]) - 16'd1;   // 2 x width, quarter-texels, less one
   wire  [15:0] vper = (16'd256 << ctex[6:4]) - 16'd1;
   // R739: the minimum in two rounds a stage apart -- the pairs registered
@@ -1048,11 +1064,15 @@ module m2_geometry #(
   endfunction
   logic [15:0] wu_d [4], wv_d [4];   // R791: eighths
   logic [14:0] wu_dd [4], wv_dd [4];   // R739: a stage more, beside the minimum's
+  generate if (UV_HELD) begin : g_uvd_held   // R1018
+    always_comb for (int k = 0; k < 4; k++) begin wu_d[k] = wu[k]; wv_d[k] = wv[k]; end
+  end else begin : g_uvd_copy
+    always_ff @(posedge clk) for (int k = 0; k < 4; k++) begin wu_d[k] <= wu[k]; wv_d[k] <= wv[k]; end
+  end endgenerate
   always_ff @(posedge clk) begin
     uoff_r <= uoff;
     voff_r <= voff;
     for (int k = 0; k < 4; k++) begin
-      wu_d[k] <= wu[k];     wv_d[k] <= wv[k];
       // R791: the rounding, in a stage that was a plain copy. 0xffff (the
       // clamp) stays at the top of the 15-bit range rather than wrapping.
       wu_dd[k] <= rnd8(wu_d[k]);  wv_dd[k] <= rnd8(wv_d[k]);
