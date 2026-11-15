@@ -115,6 +115,13 @@ def main():
             body(lx - 1)
             emit((0x0c << 40) | (g.randrange(1, 3) << 24) | ly)
             body(ly); body(1)
+        elif kind == 5:                                # five loops deep (the stack's lower words)
+            d = 5
+            for k in range(d):
+                emit((0x0c << 40) | (g.randrange(1, 4) << 24) | (2 * (d - k) - 1))
+                if k == d - 1: body(1)
+            for k in range(d):
+                body(1)
         elif kind == 3:                                # a CALL (direct), delayed or not
             j = g.getrandbits(1)
             subs.append((len(prog), g.randrange(NSUB)))
@@ -148,7 +155,7 @@ def main():
                 emit((0x0f << 40) | (u << 32) | (g.randrange(-2, 3) & 0xffffffff))
         elif r < 0.55:                                     # compute, ureg <-> ureg
             src = g.choice([g.randrange(16), 0x10 + g.randrange(8), 0x20 + g.randrange(8), 0x28 + g.randrange(8),
-                            0x7c, 0x67, 0x64])
+                            0x7c, 0x67, 0x64, 0x68])
             dst = g.choice([g.randrange(16), g.randrange(16), g.randrange(16), 0x7c])
             emit((0b0111 << 44) | (src << 36) | (cond() << 31) | (dst << 23) | comp())
         elif r < 0.63:                                     # immediate -> ureg
@@ -191,7 +198,7 @@ def main():
             if k == 5 and g.random() < 0.5: m = 0              # XOR against a register's value: equal sometimes
             emit((0x14 << 40) | (k << 37) | (reg << 32) | m)
         elif r < 0.90 and nest:                            # R1028: the stacks (PC, loop) deeper
-            nested(g.randrange(5))
+            nested(g.randrange(6))
         else:                                              # the I registers back into block 1
             k = g.randrange(8)
             emit((0x0f << 40) | ((0x10 + k) << 32) | (0x30100 + 0x100 * k + g.randrange(64)))
