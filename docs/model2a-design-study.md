@@ -51270,3 +51270,189 @@ registers, which R1018 listed as a path for a fit to check). Two seeds on
 one path is the design, not placement. Change 4 is reverted on this branch
 (UV_HELD off: m2_geometry's two copy stages back; +43 ALM by R1018's map);
 test_m2_geometry 438 checks 0 fails, lint_top clean (2C macros).*
+
+**R1021 -- THE 2A SEEDS' NEAR-CRITICAL PATHS, MEASURED ACROSS SIX FITS: NO
+clk_sys GROUP FAILS MORE THAN ONE SEED; THE ONE THAT RECURS IS THE SCSP
+TIMERS' WRITE. THREE PATHS RETIMED (CLIPPER PLANE TEST, PROJECTION ROUNDING
+SHIFT, SCSP TIMER DUE), NO CYCLE OR OUTPUT CHANGED, -7 ALM. MAP ONLY; NOT
+FITTED.** Branch retime-2a off i960-2a 65350e0d (the 2A release candidate).
+
+*What was believed:* that the 2A core at 99% ALM fails most seeds on a set
+of pre-existing marginal clk_sys (80 MHz, general[1]) paths -- the clipper's
+test_v_q -> is_out, the SCSP's fired -> ..., the projection's S_RND -> mx_r,
+the clipper's stack MLAB, the read-ahead's idx_q -> s_arr, the fill's dvdx
+-> bp_v -- that placement swings by ~1.2 ns between seeds.
+
+*THE SURVEY (run; quartus_sta 17.0 on the six kept fits in
+sm2-builds/i960-2a/build/seeds, the same RTL as 65350e0d, every clock,
+setup and hold, every from/to pair under +0.4 ns; Slow 1100mV 100C, the
+only corner the build checks -- TIMEQUEST_MULTICORNER_ANALYSIS is OFF; the
+-40C slow corner is 0.05-0.15 ns worse on most of these and was looked at
+but is not the build's criterion). The worst slack per clock (ns):*
+
+       seed    clk_sys    clk_i960   clk_mem    hdmi      i960 hold
+       s2761   +0.404     +1.605     +0.930     +0.038    +0.279   (passed)
+       s2900   -0.436     +1.377     +0.521     +0.048    +0.200
+       s2901   +0.414     +1.893     +0.489     -0.338    +0.279
+       s2903   -0.267     -0.176     -0.094     -0.139    +0.263
+       s2921   -0.583     +1.349     +0.457     -0.081    +0.262
+       s2922   -0.551     +1.060     +0.273     -0.675    -0.319
+
+  The named paths in every seed (slack / logic levels / % of the data
+  delay that is routing; Slow 100C; a dash is the path not under +0.4):
+
+    from -> to                          s2761   s2900   s2901   s2903   s2921   s2922
+    scsp_regs fired -> due             +0.93/8 +0.46/8 +1.28/8 +0.60/8 +0.89/8 -0.31/8 (56%)
+    scsp_regs ar -> due                +0.84/8 +0.61/8 +1.06/8 +0.10/8 +0.82/8 -0.23/8
+    geo_project sst.S_RND -> mx_r      +2.16/7 -0.44/8 +1.07/7 +2.24/8 +0.34/7 +1.62/7 (70%)
+    geo_project sx_f -> mx_r           +2.53/7 -0.17/8 +1.51/7 +3.69/8 +1.62/7 +2.40/7
+    geo_clip test_v_q -> is_out        +0.66/10 +1.86/11 +1.11/9 +2.53/7 +1.46/7 -0.55/9 (64%)
+    geo_clip sk_mem (MLAB) -> qy       +2.68/6 +3.49/4 +3.55/6 +1.32/5 -0.58/1 +4.25/4 (97%)
+    eng_ra idx_q -> s_arr              +1.96/8 +1.48/9 +1.24/9 +1.33/8 -0.35/9 +1.69/9 (77%)
+    raster_fill dvdx -> bp_v (DSP)     +3.33/2 +2.63/2 +2.29/2 -0.27/2 +1.23/2 +2.46/3
+    raster_fill lbq -> span_valid      +1.25/10 +2.47/11 +1.77/11 +1.60/11 +2.04/11 -0.08/10
+    raster_fill walk_y -> s1_cl        +1.65/7 +2.32/7 +1.88/7 +3.03/7 +0.36/7 +0.02/7
+    span_tex ub_ra -> texel_cdc q_tex  +1.10/9 +1.39/8 +1.60/9 +1.09/8 +0.31/9 -0.11/9
+    quad_store uvt_0 (M10K) -> fill x01_r +1.70/8 +1.49/8 +1.21/8 +1.25/8 +1.32/8 +0.09/8
+    scsp_dsp efreg -> scsp st (M10K)   +0.40/7 +0.23/9 +1.60/9 +0.67/8 +1.58/8 +0.14/9
+    mb86233 S_FETCH_W -> fifo M10K     +2.77/7 +1.89/7 +1.35/7 +3.32/7 +2.20/7 +0.01/7
+    io_intreq -> i960 intr_step (1->3) +1.62/9 +1.66/8 +1.89/10 -0.18/8 +1.35/8 +1.53/10
+    tile_fetch lb_masked -> lbuf (clk_mem) +4.93/1 +4.14/1 +5.84/1 -0.09/1 +4.19/1 +2.92/1 (90%)
+
+  By module pair, the groups under +0.4 in three or more seeds: the HDMI
+  scaler (ascal -> ascal in 6 of 6, worst -0.478 on s2922; osd -> osd 6 of
+  6, worst -0.136; plus osd -> vga_out -0.675 and shadowmask -> ascal
+  -0.378 on s2922 -- framework sys/, reported, not touched), m2_scsp_regs
+  (3 of 6), m2_raster_fill (3, a DIFFERENT path in each), m2_span_tex ->
+  m2_span_tex (3, cs_run -> sh_m / cs_wi, worst +0.070, never failing),
+  m2_quad_store -> m2_raster_fill (3, worst +0.092). The one hold: s2922's
+  m2_cpu_bridge l_data -> lb (clk_sys -> clk_i960, 0 levels, the capture
+  clock 0.85 ns late), -0.319, no other seed under +0.1.
+
+*What is known now:*
+  * NO clk_sys PATH FAILS MORE THAN ONE SEED. Each failing seed fails on a
+    different one, and the same path moves by 2-3 ns between seeds, not
+    1.2: test_v_q -> is_out +2.53 / -0.55, the stack MLAB -> qy +4.25 /
+    -0.58 (one level, 97% routing: pure placement), eng_ra +1.96 / -0.35.
+    The swing is routing (55-97% of each failing data delay) on long
+    LUT-tree paths. So the remedy is not one fix: it is fewer levels on
+    every path that has failed, so a bad placement of any of them has
+    room.
+  * THE ONE GROUP THAT RECURS is m2_scsp_regs' timer write (fired / ar ->
+    q -> mrg -> due): under +0.65 in four seeds, failing in one, and the
+    worst SCSP path in all six.
+  * s2901 FAILS ONLY ON HDMI (-0.338, ascal). Nothing in clk_sys would
+    have passed it; hdmi fails 4 of 6 seeds by itself (R959 said the same
+    of earlier 2A/2C seeds). Even a perfect clk_sys leaves the scaler.
+  * s2922 is a congested placement: fourteen of the paths above are at
+    their worst there.
+
+*THE CHANGES (each from registers the FSM already loads, no state added
+that changes a cycle; module-alone quartus_map 17.0 with the project's
+synthesis settings and post-map timing, levels and slack against 12.5 ns
+-- post-map, so the slack is an estimate, the levels are not):*
+  1. m2_geo_clip, the plane test (R587's path). K_TEST registers, instead
+     of the tested coordinate, its compare key fkey(test_v) inverted when
+     the plane is not a greater-than plane, and !plane_gt beside it
+     (test_k_q, test_inv_q; test_v_q gone). fgt(p, t) == (~fkey(t) >
+     ~fkey(p)), so K_TESTW is ONE compare, test_k_q > (fkey(mul_res) ^
+     inv), where it was two compares and a select -- and it is written as
+     the borrow of a 33-bit subtract, so Quartus builds a carry chain:
+     with `>` it built a 10-level LUT tree. lvl does not move in K_TEST /
+     K_TESTW (it moves in K_IDLE, K_POPR, K_ROT), so the direction
+     registered in K_TEST is the one K_TESTW used. Module alone: 9 levels
+     (+4.24 post-map) -> 2 (key LUT, chain); 3,385 -> 3,352 ALM (-33). A
+     first version with `>` kept 10 levels (+4.59): recorded, replaced.
+  2. m2_geo_project, the rounding shift (R756 / R952's one mag8). sx_f and
+     sy_f were read only by mag8 and for their signs, so they are one
+     register, s_f, loaded with each of S_A1's two sums as it lands: x's
+     on every cycle mx_r is written (S_A1, n_got 1), y's in S_RND, the one
+     cycle my_r is. The 2:1 select from sst.S_RND in front of the shifter
+     goes, and mag8's zero test `E == 0 || E - 124 < 0` is the one
+     compare E < 124 (E = 0 is inside it); m8_bad `E == 255 || E - 124 >
+     30` is E > 154, the same set. Module alone: 6 levels (+3.78) -> 5
+     (+5.99); 849 -> 829 ALM, 603 -> 571 registers.
+  3. m2_scsp_regs, the timer write (R859 / R976's tdue, tdue_a, tone). A
+     timer reads mrg only for a write to 0x418-0x41c, and q's arm there is
+     ud_q with the low byte 0xff once that timer has fired, so the timers
+     take mrg_t = {be ? d : ud_q} with fired[ar[2:1]] forcing the low
+     byte -- mrg without the whole 13-arm read case in front of the
+     adders. Module alone: fired -> due 7 levels (+2.21) -> 5 (+3.00); ar
+     -> due 7 (-0.01) -> 5 (+1.58); 329 -> 324 ALM. (ar -> lines, 13 -> 12
+     levels, is the module's worst post-map either way; in the six fits
+     it is +0.237 at worst, any corner.)
+
+*WRONG FIRST, KEPT:* the first m2_scsp_regs edit selected the timer with
+ar[1:0]. ar is declared [5:1], so ar[0] does not exist; Verilator took it
+without a fatal warning. The random miter (below) failed it on its first
+2 M cycles: 563-1,639 cycles of q / ipl differing and 20-24 k cycles of
+timer state differing per run, at TIMER 0, 1 and 2. ar[2:1] is the timer.
+
+*PROOF (run; old = 65350e0d, new = this branch, sim/miter/miter.py, every
+output compared on every cycle):*
+  * Geometry (m2_geometry with the clipper, projection and engine both
+    copies; sim/miter/geo.sh): tb_m2_geometry 595,138 cycles and _mipz
+    913,234, 0 differ, the benches PASS; geodiff on 30 MAME walks (Daytona
+    build/geodiff w1000-w9000, r5701, r6601, sel/, the miplod Daytona,
+    Rally and cs93 walks, Virtua Cop prof7502, 2C r924geo w1200), each as
+    the main build's geometry and as the 2A build's (CRTC_Y 127, WINKEY,
+    MZX, UVSH, M2GD_PRESET): 60 runs, 40,811,209 cycles, 0 differ.
+    geo.sh itself was wrong: R972's texture-parameter table (state.txt
+    "tp") went into the new copy only, so every M2GD_PRESET walk differed
+    on dbg_lum from cycle 533 -- old against old would have too. Fixed
+    (both copies); the runs above are after the fix. NOTE: geodiff writes
+    ours.txt into the walk directory; the first run wrote into
+    build/geodiff w1000 / w5000 / w9000 and model2c's r924geo w400 /
+    w1200; the rest ran on symlinked copies in the scratchpad.
+  * test_m2_geo_clip 2,003 checks 0 fails, test_m2_geo_project 20,437 / 0,
+    test_m2_geometry 438 / 0, _mipz 2,254 / 0.
+  * Planted faults (one-shot, in the new copy only): the clipper's 500th
+    plane test inverted -- tb_m2_geometry 64,779 cycles differ, walks
+    w1000 / w5000 / Rally t5701 894,233 / 858,195 / 820,927; the
+    projection's 500th my_r off by 8 -- 174 / 302 / 1,609 / 175. The plane
+    test as >= (differs only when the vertex key equals the plane
+    product): tb_m2_geometry 38,553 cycles, but 0 on the three walks -- the
+    equal-key edge is reached only by the synthetic bench.
+  * m2_scsp_regs (new sim/miter/scsp_regs.sh): a random-stimulus bench
+    (sim/miter/tb_scsp_regs_rand.cpp: every input random every clock,
+    half the accesses a timer's, writes with random data and byte
+    enables, tick44 1 in 8, random write phase, exact and tarc toggled),
+    which besides the miter's 10 outputs compares the two copies' due,
+    tarm, texp, fired, late, dph, scipd, mcipd and lines every clock: TIMER
+    0, 1 and 2, two seeds each, 500 M cycles each -- 3,000,000,000 cycles,
+    392 M timer writes, 10.5 M interrupt rises, 0 outputs and 0 state
+    differ. tb_m2_scsp with the miter as u_regs, House of the Dead's
+    attract capture (hotd-dsp att1), 30 s: 1,394,136,665 cycles, 0 differ,
+    the bench's own PASS (0 of 1,323,000 samples from the reference).
+    A planted fault (the 1,000th timer write's due off by one): the state
+    compare 51 cycles; the outputs 0 in 20 M cycles -- the random writes
+    re-arm a timer before it fires, so it is the state compare that makes
+    this bench a proof of due.
+  * lint_top clean (LINTTOP_RTL without the absent m2_testpattern.sv);
+    Verilator -Wall warnings per module unchanged (clip 4, project 1,
+    regs 2); lint_idx 113 lines, none new in these modules; quartus_map
+    --analyze_file 0 errors on all three.
+
+*AREA (quartus_map 17.0, whole 2A core, this branch with the clipper's
+first version -- item 1 with `>`):* 39,709 -> 39,702 ALMs needed (-7,
+inside the map's +-30), registers 46,813 -> 46,782 (-31: s_f's 32, +1
+test_inv_q), 4,601,424 block bits and 100 DSP unchanged. Per instance:
+u_clip 1,541 -> 1,556 ALUTs, u_project 376 -> 340, u_regs 377 -> 390.
+The carry-chain clipper was measured module alone only (33 ALM under the
+first version); one whole-core map was the brief.
+
+*NOT DONE, and why:* the stack MLAB -> qy (one level, 97% routing; only a
+pipeline stage would move it, a cycle on every pop); eng_ra idx_q ->
+s_arr, fill lbq -> span_valid, span_tex ub_ra -> q_tex, quad_store ->
+fill x01_r (the SPLIT_TRI select from an unregistered M10K output): one
+seed each, each a larger change in a module the 2C area pass may touch;
+fill dvdx -> bp_v (two DSPs and an add, 2 levels); io_intreq -> intr_step
+(clk_sys -> clk_i960, one seed); s2922's l_data -> lb hold (a skew, not
+logic; the fitter pads holds when it can); HDMI (sys/, not ours).
+
+*NOT SETTLED:* a fit. The expectation, unmeasured: the three paths lose
+~3-5 levels between them (clipper 9 -> ~3 with the chain, at the fitted
+paths' ~1 ns a level), so they leave the failing list; the seeds that
+failed on them (s2900, s2922 in part) would then fail, if at all, on the
+one-seed paths above or on HDMI, which fails 4 of these 6 seeds alone.
+The 2C build has the same three modules (not ported).
