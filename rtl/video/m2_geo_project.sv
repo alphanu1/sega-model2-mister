@@ -141,7 +141,7 @@ module m2_geo_project (
   typedef enum logic [2:0] { S_IDLE, S_M0, S_M1, S_A0, S_A1, S_OUT, S_RND } sstate_t;   // R756: S_RND
   sstate_t sst;
 
-  logic [31:0] sx_f, sy_f, sxx, syy, sr, sx_in, sy_in;
+  logic [31:0] s_f, sxx, syy, sr, sx_in, sy_in;   // R1021: s_f, one register for sx_f and sy_f
   logic        s_behind;
   logic [31:0] s_z;
   logic [2:0]  step;
@@ -180,7 +180,7 @@ module m2_geo_project (
     logic [23:0]       m;
     e = $signed({2'b0, f[30:23]}) - 10'sd124;          // exponent of 8|x|
     m = {1'b1, f[22:0]};
-    if (f[30:23] == 8'd0 || e < 10'sd0) mag8 = 32'd0;   // |8x| < 1, denormals
+    if (f[30:23] < 8'd124)              mag8 = 32'd0;   // |8x| < 1, denormals (e < 0; R1021: one compare, E == 0 is in it)
     else if (e >= 10'sd23)              mag8 = 32'(m) << (e[4:0] - 5'd23);
     else                                mag8 = 32'(m) >> (5'd23 - e[4:0]);
   endfunction
@@ -190,9 +190,15 @@ module m2_geo_project (
   // select in front. mx_r is written on every cycle of the wait (at least
   // one: y lands no earlier than the cycle after x) and my_r in S_RND, so
   // S_OUT reads the values S_RND used to form; nothing else reads them.
-  wire  [31:0] m8_in = (sst == S_RND) ? sy_f : sx_f;
+  // R1021: and no select. sx_f and sy_f were read only here and for their
+  // signs, so they are one register, s_f, that takes each of S_A1's two sums
+  // as it lands: x's until y lands (every cycle mx_r is written), y's from
+  // then (S_RND, the one cycle my_r is written). The select from sst.S_RND and
+  // its fanout came off the front of the shifter (s2900: sst.S_RND -> mx_r,
+  // 8 levels, -0.436), and the |8x| < 1 test is the one compare E < 124.
+  wire  [31:0] m8_in = s_f;
   wire  [31:0] m8    = mag8(m8_in);
-  wire         m8_bad = (m8_in[30:23] == 8'hff) || ($signed({2'b0, m8_in[30:23]}) - 10'sd124 > 10'sd30);
+  wire         m8_bad = m8_in[30:23] > 8'd154;   // NaN / infinity (255), or e = E - 124 > 30
   logic        sgx_r, sgy_r;        // signs
   logic        qx_bad, qy_bad;      // NaN, infinity, or past 2^30 quarters
   wire  [31:0] kx = (mx_r + 32'd1) >> 1, ky = (my_r + 32'd1) >> 1;
@@ -241,7 +247,7 @@ module m2_geo_project (
       div_started <= 1'b0;
       sx_in <= '0; sy_in <= '0; sr <= '0; sxx <= '0; syy <= '0;
       mx_r <= '0; my_r <= '0; sgx_r <= 1'b0; sgy_r <= 1'b0; qx_bad <= 1'b0; qy_bad <= 1'b0;   // R756
-      sx_f <= '0; sy_f <= '0; s_behind <= 1'b0; s_z <= '0;
+      s_f <= '0; s_behind <= 1'b0; s_z <= '0;
       step <= '0; n_got <= '0;
       out_valid <= 1'b0; out_sx <= '0; out_sy <= '0; out_z <= '0; out_invz <= '0;
       out_fx <= 2'd0; out_fy <= 2'd0;
@@ -309,13 +315,13 @@ module m2_geo_project (
         S_A0, S_A1: begin
           if (step < 3'd2 && add_gnt) step <= step + 3'd1;
           if ((sst == S_A1) && (n_got == 2'd1)) begin   // R952: x's, from sx_f
-            mx_r <= m8; sgx_r <= sx_f[31]; qx_bad <= m8_bad;
+            mx_r <= m8; sgx_r <= s_f[31]; qx_bad <= m8_bad;
           end
           if (add_out_valid) begin
             if (n_got == 2'd0) begin
-              if (sst == S_A0) sxx <= add_result; else sx_f <= add_result;
+              if (sst == S_A0) sxx <= add_result; else s_f <= add_result;   // R1021: x's
             end else begin
-              if (sst == S_A0) syy <= add_result; else sy_f <= add_result;
+              if (sst == S_A0) syy <= add_result; else s_f <= add_result;   // R1021: y's
             end
             n_got <= n_got + 2'd1;
             if (n_got == 2'd1) begin
@@ -329,7 +335,7 @@ module m2_geo_project (
         // R756: the rounding's own cycle -- an increment and a negate behind
         // the converter's shifter, at 80 MHz.
         S_RND: begin
-          my_r <= m8; sgy_r <= sy_f[31]; qy_bad <= m8_bad;   // R952: y's (mx_r in S_A1)
+          my_r <= m8; sgy_r <= s_f[31]; qy_bad <= m8_bad;   // R952: y's (mx_r in S_A1)
           sst  <= S_OUT;
         end
 
