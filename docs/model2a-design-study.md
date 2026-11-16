@@ -52376,3 +52376,263 @@ are recorded beside it.
   * The uncovered fault (LCNTR after a DO after a loop-end pop).
   * R1027's open items stand (power-up RAM, the manual's text for infinite
     operands / FIX out of range / tininess, only DOA's program end to end).
+
+**R1029 -- THE 2B SHARC MEETS 80 MHz ALONE: SLOW 100C SETUP -18.066 -> +0.651 NS
+(-40C +0.405, FAST +5.785 / +6.902), 4,355 -> 4,301 ALM FITTED, 80 M10K, 1 DSP,
+STILL BIT-EXACT; 2.2940 -> 2.5196 clk_sys A WORD ON DEAD OR ALIVE'S 150 S. THE SEQUENCER'S
+NEXT STATE MOVES TO X'S FIRST CLOCK, EVERY COMPUTE RESULT LANDS, FIX / FLOAT / FADD / SHIFTS
+TAKE MORE X CLOCKS, AND D'S DECISIONS TAKE THE CONDITION LAST.** Branch model2b, 2026-11-16.
+Module alone, Quartus 17.0, Aggressive Area, all ports VIRTUAL_PIN, clk 12.5 ns, MAME_RND 0;
+simulation and fits only: no full build, no board.
+
+(Section: §10, after R1028. Authority as R1027 / R1028: MAME 0.289 for the semantics through
+Hornet's v1 in lockstep, the package functions for the units; nothing here changes what the
+core computes. Model 1 has no SHARC. The design rule kept throughout: a structural change is
+checked against the structure it replaced, by the benches and, where the benches cannot reach,
+by a bench-only comparison against R1028's form of the same signal.)
+
+*What was believed (R1028 NOT SETTLED):* nothing fitted; "D now reads MLAB copies through the
+address / branch adders into S and fetch_a ... the landing path and the X compute are the long
+ones to watch". The first fit (the starting point, R1028's final RTL `bea4530f`):
+
+      4,355 ALM fitted (340 of it the 34 MLAB LABs; 193 the virtual pins'), 1,469 registers,
+      80 M10K, 1 DSP. Setup slack: slow 100C -18.066, slow -40C -19.027, fast 100C -2.515,
+      fast -40C -0.616; TNS -41,175 ns; Fmax 32.7 MHz. Worst: fa_x -> misc_s (30.4 ns: the
+      shared X unit's FLOAT BY -- adder, clz, funnel, round, scalb -- into one register), then
+      the sequencer (S.pcstk -> S.curlcntr -14.7: the loop end's length test, its condition,
+      the pop, LCE, the word's condition, the branch adders, the PM bound, the unsupported
+      override, all in D), then the landing (fadd stage 2 -> the R write port, -12.6).
+
+Two findings set the plan. (1) d_go, the clock enable of every register D loads, was itself on
+the loop end -> condition -> scoreboard path (the read ports a word "uses" were decided under
+its condition), so the whole of D's fan-out sat behind the sequencer. (2) The M10K's output is
+~4.8 ns after the clock at the slow corner: D has ~7.5 ns of logic after the opcode, so nothing
+that can wait for X may stay in D.
+
+*THE STEPS (each fitted; clk_sys a word on DOA's first 10 M words, MAME rounding, unless marked
+150 s; slack slow 100C / slow -40C / fast 100C / fast -40C, ns):*
+
+      step                                                ALM    regs   slow100  slow-40  fast100  fast-40      TNS  clk/word
+      0  R1028's final (bea4530f)                        4,355  1,469  -18.066  -19.027   -2.515   -0.616  -41,175  2.2762 (150 s 2.2940)
+      1  S in X's first clock; d_ru / d_need_astat
+         from the opcode                                 4,390  1,484  -17.331  -18.525   -2.220   -0.475  -14,961  2.2762
+      2  D's registers load every D clock; FIX / FLOAT
+         three X clocks, fadd three stages (an add two
+         X clocks), fmul's exponent tests in stage 1     4,394  1,690   -7.740   -7.056   +1.668   +3.365   -2,438  2.4225 (150 s 2.4385)
+      3  fixed / shift results land; shifts two X
+         clocks; the R write port by state; DAG1 reads
+         from the opcode's bits; dm_kind as bit tests    (PM's upper lane in flip-flops: 78,192 ALM -- see FOUND)
+      3b + DAG1 read addresses gated by st == D          4,450  1,826   -2.114   -2.160   +4.607   +5.885     -158  2.5073
+      4  the shifter's controls registered; MIN / MAX
+         flags from the operands; fadd aligned by the
+         exponents' order; uw / bitop gated in X; the
+         near path's clz in stage 1; the offset select   4,479  1,803   -2.734   -2.942   +4.573   +5.746     -157  2.5073
+      5  the shifter's result one AND-OR; the address's
+         selects decoded directly; the compute decode
+         and the load-wins rule off the condition        4,427  1,809   -2.200   -1.854   +4.541   +5.551      -70  2.5073 (150 s 2.5181)
+      6  LCNTR stack's 33rd bit (LCE without a compare);
+         both condition fields in parallel; the DAG
+         test's index from the opcode; d >= 27 beside
+         the select; sequencer ureg writes the clock
+         after X; FEXT SE's sign registered; scalb's
+         range as bit tests                              4,386  1,805   -0.994   -1.081   +5.201   +6.214      -34  2.5073
+      7  CLIP's compare without the negation; fixed
+         AN / AZ landed; scalb on one adder; FIX's tests
+         on the exponent; the unsupported capture a
+         clock later; fadd aligned by raw exponents      4,349  1,811   -0.858   -1.161   +5.194   +6.410      -14  2.5073
+      8  one-hot adder operands (fix_k); FLOAT's own
+         |Rx|; the funnel's source registered; one SZ
+         test; |x| : |y| by two subtracts; the pointer
+         tests from S; the denormal bound as a min       4,359  1,829   -0.835   -0.663   +5.425   +6.515     -3.7  2.5073
+      9  is_do a register; the near path's subtracts
+         both ways; the sequencer's form one-hot (as an
+         if-chain: +220 ALUTs, see FOUND)                4,488  1,835   -0.466   -0.370   +5.091   +6.293     -3.9  2.5073
+      10 ... as a parallel case; the stacks' one write
+         from S; LCE for both pops; the access cleared
+         by the opcode's DAG test; NaN from the raw
+         operands                                        4,310  1,839   -1.332   -1.085   +5.361   +6.361     -4.2  2.5073
+      11 the access kind with the condition last         4,336  1,847   +0.101   +0.352   +5.817   +6.739        0  2.5073
+      12 the DAG / address-map tests condition-last      4,329  1,830   -0.669   -0.755   +5.545   +6.502     -1.2  2.5073
+      13 the unsupported flag / reason condition-last    4,291  1,840   -0.508   -0.060   +4.919   +6.181     -1.8  2.5073
+      14 the handler's data fields from the opcode       4,271  1,828   +0.404   +0.319   +5.730   +6.842        0  2.5073
+         (fitter seed 2)                                 4,271  1,839   +0.070   +0.085   +5.479   +6.459        0
+      15 x_cnt cleared outside X; the sequencer's ureg
+         read with the pop last                          4,284  1,836   +0.206   +0.058   +5.768   +6.735        0  2.5073
+      16 predicates on the raw operands; FLOAT's count
+         stored; fadd's dead swap gone; a flat clz       4,273  1,836   +0.210   +0.020   +5.560   +6.648        0  2.5073
+      17 the ureg port's I / M copies at a registered
+         address (a word reading I / M waits a clock
+         unless the clock before was its own)            4,312  1,852   -0.159   -0.289   +5.512   +6.488     -0.2  2.5085
+      18 the address map's reason out of XC.unsup (X
+         ORs it in)                                      4,350  1,853   +0.387   +0.245   +5.518   +6.597        0  2.5085
+         (fitter seed 2)                                 4,331  1,843   +0.470   +0.377   +5.663   +6.642        0
+      19 the store / ureg data one AND-OR                4,316  1,863   +0.284   +0.322   +5.784   +6.832        0  2.5085
+      20 the DM address by state                         4,316  1,853   +0.547   +0.464   +5.730   +6.873        0  2.5085
+         (fitter seed 2)                                 4,279  1,853   +0.025   -0.121   +5.433   +6.497        0
+      21 the scoreboard a registered 16-bit mask; X's
+         controls loaded every D clock, not on d_go; the
+         sticky thermometer's select registered (FINAL)  4,301  1,874   +0.651   +0.405   +5.785   +6.902        0  2.5085 (150 s 2.5196)
+         (fitter seed 2)                                 4,303  1,860   +0.114   +0.357   +5.320   +6.582        0
+
+  Hold, FINAL (seed 1): +0.416 / +0.342 / +0.180 / +0.165; minimum pulse width +4.77 or more.
+  M10K 80 throughout (PM 48, DM 32), 1 DSP, 34 MLAB LABs (340 ALM of the fitted figure; MLAB
+  bits 8,176 -> 8,184: LCNTR's stack word gained a bit, in the same MLABs). Every fit's RAM
+  summary as R1028's (every m2b_lutram MLAB, simple dual port; PM / DM M10K) except step 3's.
+
+*WHAT CHANGED, BY STRUCTURE (rtl/sharc):*
+  1. THE SEQUENCER IN X'S FIRST CLOCK. D decides -- the loop end (le), its pop (done), the
+     word's condition (cok) -- and registers the decisions in XC with the form's one-hot class
+     (sqc), the PC-relative offset's select (b6) and DAG2's I + M (ind_t). X's first clock makes
+     S's next state (s_x1) from S, x_op and those -- R1028's sequencing text, moved, the
+     condition and the pop taken from XC -- and the next fetch is issued from s_x1.daddr in
+     that clock (fetch_a is gone). The PM-bound check (U_PM, a flag only, R1027) is made there.
+     The stacks' one write each moves to X's first clock's end, its address and data always
+     the top in S at PCSTKP - 1 / LSTKP - 1 (a bench check proves it at every write), only the
+     enable X's. The loop end's length test, done and LCE are computed in D for both histories /
+     both pops in parallel, the choice last. LCNTR's stack word carries a 33rd bit (bit 0 and !=
+     1) so LCE after a pop is one XNOR -- right for all-zero and all-one words too.
+  2. D'S REGISTERS LOAD IN EVERY D CLOCK (XC, the operands, x_op, x_pc; the last, d_go's,
+     stays); d_go drives only st and x_first. The read ports a word may use (d_ru) and D's
+     ASTAT need are decided from the opcode and S alone, not the condition: a word under a false
+     condition can wait where R1028's did not. The scoreboard is a 16-bit mask of the registers
+     written this clock, registered the clock before. The data address's selects are decoded
+     from the opcode's bits directly; DAG1's read addresses are the opcode's (gated by D, see
+     FOUND); modify forms read their I / M on DAG2's copies. The access kind, the DAG and the
+     address-map tests and the unsupported flag / reason are computed for the condition true
+     and false and selected by it last, exactly as R1028's (bench checks: below); the
+     address-map reason (mbad) is registered apart and X ORs it in. The ureg port's I / M copies
+     are read at last clock's field: a word reading I or M through it waits a clock unless the
+     clock before was its own (+0.0012 clk/word).
+  3. EVERY COMPUTE RESULT LANDS. The fixed ALU's and the shifter's result, ASTAT and STKY go
+     through misc_r / misc_a / misc_s and are written in the landing clock, as float results;
+     a written fixed result's AN / AZ are made there from misc_r. A load or ureg move to the
+     result's register in the same word wins (rn_we, MAME's order, as for floats). The R write
+     port is selected by state: X writes only loads / ureg moves; the deferred second write
+     remains only for a multifunction's Rm then Ra.
+  4. X'S LENGTH (x_need): one clock; two for a float add (fadd's stage 2a) and a shift (its
+     funnel operands and controls registered); three for FIX / FIX BY / FLOAT / FLOAT BY
+     (m2b_sharc_xu's stages A and B). An external access is requested in X's last clock. A
+     ureg write to PCSTK / CURLCNTR / LCNTR modifies S in the clock after X (us_pw), D waiting.
+  5. m2b_sharc_xu: stage A (FIX's scaled operand and alignment on the exponent, FLOAT's |Rx| on
+     its own negation and its leading-zero tree), stage B (the shared funnel, FIX's rounding,
+     FLOAT's rounding and exponent), the finish; the shifter's funnel operands and controls
+     registered and its result one AND-OR; the fixed ALU's adder operands one-hot (fix_k, from
+     m2b_sharc_pkg::fix_k_of, decoded in D); CLIP's x < -|y| as x - y / x + y by y's sign (no
+     negation before the adder); |x| : |y| by two subtracts; MIN / MAX zero flags from the
+     operands; the tests of NaN / zero / infinity on the raw operands.
+  6. sharc_fadd: three stages -- 1 (aligned by the raw exponents' order: a zero operand's is the
+     one shifted, or both are zero; the sticky bit from a mask; |x| : |y| on the carry chain; the
+     near path's subtract both ways and its leading-zero count, the denormal bound as a min), 2a
+     (normalise, round, registered), 2b (alu_fin, MAME's FAVG halving). R1028's swap for equal
+     exponents was dead logic: an effective subtract within one exponent is always the near
+     path. sharc_fmul: the exponent's tiny / overflow tests for its three outcomes in stage 1.
+  7. The unsupported capture is a clock later, from registers, of the word still in x_pc /
+     x_op: D's reason first (a DAG's, the address map's, the opcode's), then the PM bound, then
+     X's end's own -- R1028's priority.
+
+*SPEED:* 2.5196 clk_sys a word over DOA's 150 s (1,264,270,732 clocks for 501,777,265
+words; the work words 501,767,295, R1027's / R1028's), from 2.2940: +0.2256, 0.48 under R1024's
+ceiling (~3.0). X 594,270,922 clocks (R1028 501,783,666): +0.1843 a word -- a float add's and a
+shift's second X clock, FIX / FLOAT's two more. D 669,999,809, of which 168,222,542 waiting (R1028
+147,511,682): +0.0413 -- the fixed and shifter results now land and are scoreboarded (R1028
+measured that alone at +0.042), the read ports decided without the condition, the ureg port's
+I / M wait (+0.0012 at 10 M words). The deferred R writes 28,140,303 -> 27,666,088 (only a
+multifunction's two remain). Manual rounding: 6,395 clocks fewer, R1028's difference exactly.
+Random programs: 2.5428 (M2B_RP_SEQ 2.5314) in MAME's rounding, 2.4975 (2.4974) in the manual's.
+
+*TRIED AND REVERTED / FOUND ON THE WAY:*
+  * AN MLAB READ ADDRESS STRAIGHT FROM pm_q TAKES pm_q INTO THE MLAB as its read-address
+    register (altdpram RDADDRESS_REG = OUTCLOCK), which leaves PM's M10K without its output
+    register: "RAM logic pm2 is uninferred due to asynchronous read logic" and PM's upper lane
+    built in flip-flops -- 78,192 ALM, 132,862 registers; the fit ran ~10 minutes before failing.
+    One gate (st == D) on the address fixes it. qfit.sh now stops after the map if a RAM is
+    uninferred or the block memory bits change.
+  * A ONE-HOT FORM SELECT WRITTEN AS SIX if-BLOCKS cost +220 ALUTs (+129 fitted ALM): each block
+    modifies the sequencer state the one before left, so synthesis chained them. As a full-value
+    parallel case it is smaller than R1028's casez.
+  * THE RANDOM PROGRAMS HAD NO UREG WRITE TO PCSTK / CURLCNTR / LCNTR. Step 6's deferred write
+    first read the word's ureg target before it was assigned (always no write); DOA, the replay
+    and R1028's random set all passed it. m2b_randprog.py gained M2B_RP_SEQ=1 (LCNTR = any value,
+    CURLCNTR = 1-3, PCSTK = PCSTK, in ureg moves and immediates; without it the programs are
+    R1028's, byte for byte); the bug failed at once on every seed run (6), R1028's core passes them
+    (seeds 1 and 2 run on it),
+    and they are part of every check since.
+  * FITTER SEED SPREAD: the same RTL fitted at seed 1 and 2 differed by up to 0.54 ns at slow
+    100C (step 21: +0.651 / +0.114; step 20: +0.547 / +0.025). One fit is a sample: the final
+    RTL meets 80 MHz at every corner at both seeds, and +0.3 ns at slow 100C at seed 1 only.
+  * The fit's ALM includes 193 ALM "unavailable due to virtual I/Os" (the ports) that the
+    module will not have inside a core; R1028's 4,355 included them too.
+  * Dead structures found: fadd's equal-exponent swap (above); R1028's DM read enable
+    depended on the access kind (D now reads DM for every read form -- dm_q is used only by an
+    A_DM access); the R file's X-side deferred write (a fixed result and a load) disappears with
+    the landing.
+  * Aggressive Area builds magnitude compares and priority encoders as LUT chains (a 31-bit
+    compare as 15 LUTs, a clz25 as 12): every one on a path was rewritten as a carry-chain
+    subtract or a tree.
+
+*BENCH-ONLY CHECKS (BENCH = 1, $fatal on a difference; not synthesised):* at every D clock /
+d_go: the access kind, the DAG and address-map tests, the unsupported flag and reason, the
+sequencer's ureg read, the store / ureg data and the scoreboard, each against R1028's form of
+the same signal; at every stack write, the address and data against X's first clock's
+sequencing. They held over DOA's 150 s, all random programs and 120 fuzz programs of random
+words (scratchpad, not committed), whose first unsupported capture (pc, word, reason) was also
+R1028's core's on 60 of 60.
+
+*VERIFICATION (the final RTL; numbers):*
+  * DOA REPLAY, MAME rounding, all 150 s: 501,777,265 words (501,767,295 work words as R1027 /
+    R1028; the trailing one-word waits 9,970 -- the bench stops 20,000 clocks after the stream),
+    18,541,146 out-FIFO words, 0 differ from MAME's; the state-hash trace, words 0-40 M, 0 differ.
+  * LOCKSTEP against v1 at every word, MAME rounding: 501,777,265 words, 0 differ; v1's
+    18,541,146 out words all MAME's. The manual's (core MAME_RND 0, v1 MAN): 501,777,265 words, 0
+    differ; the out words different from MAME's 10,280,834 -- R1027's / R1028's, the same ulp
+    histogram.
+  * ALL-ONES START (RF_ONES): 150 s, 18,541,146 out words, 0 differ.
+  * RANDOM PROGRAMS: R1028's set, 12 seeds x 1 M words in each rounding, 0 differ, no
+    unsupported word; the M2B_RP_SEQ set, 12 x 1 M x both roundings, 0 differ (R1028's core passes
+    seeds 1 and 2 of it).
+  * THE SHARED UNIT (sim/sharc/xu, now clocked as the core clocks it: misc_x / sh_x more clocks,
+    the inputs held, the stage registers holding the last vector's values): 4 seeds x 25 M =
+    100 M vectors, 0 mismatches.
+  * FLOAT UNITS (sim/sharc/fp, each vector advanced twice: fadd's stage 2a): 4 x 25 M = 100 M
+    vectors for each unit, 0 mismatches in every unit and package function.
+  * PLANTED FAULTS, core (core_faults.py, 37: R1028's 27 re-pointed where they moved, 10 new):
+    DOA's replay (20 M words) catches 18, the random lockstep (12 seeds x 500 K) 30, with
+    M2B_RP_SEQ 32, the one-word unsupported programs (7: a jump outside the PM added, R1028's core
+    flagging it the same) 2. Together 35 of 37. Not caught: R1028's (LCNTR after a DO after a
+    loop-end pop) and a new one -- LCE after a pop from the 33rd bit alone, wrong only for an
+    IF LCE in the word of a loop-end pop whose popped CURLCNTR is odd. Float (fp_faults.py, 22:
+    R1028's 20 with four re-pointed, the near / far / overflow / tiny tests at their new sites,
+    three new for the three-stage adder, the equal-exponent swap's removed with the dead logic):
+    22 of 22.
+  * BENCH-ONLY CHECKS (above): none fired.
+  * LINT: Verilator 5 -Wall: LATCH 9 -> 6 (the adder's branch locals), VARHIDDEN 1, the other
+    classes as R1028's; UNUSEDSIGNAL 41 -> 71 (bench-only references, XC fields X does not read).
+    Quartus 17.0 analyses and maps every step's RTL.
+
+*AREA (final, module alone):* 4,301 ALM fitted (340 MLAB, 193 virtual pins), 5,695 ALUTs,
+1,874 registers (+405: the pipeline), 80 M10K, 1 DSP. By entity (fitted ALM): m2b_sharc_xu
+1,016 (R1028 1,273), sharc_fadd 435 (432), sharc_fmul 67 (83), the core's own 2,440 (2,227:
+the sequencer in X's first clock beside D's decisions, the landing's muxes, the condition-last
+forms). Map: 4,011 ALM estimated (R1028's same project 4,068). Against the ~4,450 budget: 149
+under.
+
+*DIFFERENT FROM THE BRIEF, PLAINLY:* (0) +0.3 ns at slow 100C holds at fitter seed 1 (the
+brief's method) and not at seed 2 (+0.114; every corner still positive); (1) a word under a
+false condition can now wait in D where R1028's did not (d_ru from the opcode), and a word
+reading I or M through the ureg port waits a clock after a one-clock X; (2) unsupported words
+are captured a clock later (same pc / word / reason); (3) the benches gained bench-only
+comparisons against R1028's forms and the M2B_RP_SEQ programs; core_faults.py's patterns were
+re-pointed at the new sites and 10 faults added, fp_faults.py's 4 re-pointed, 3 added and 1
+removed with its dead logic; m2b_unsupprog.py gained a jump outside the PM; (4)
+fixed / shifter results now land a clock after X (R1028 tried and reverted this for area at
++0.042 clk/word; here it is for timing).
+
+*NOT SETTLED:*
+  * The margin inside a congested core: seed 2's +0.114 says the module alone has ~0.1-0.6 ns
+    depending on placement. The near-critical families: the misc functions' one-clock results
+    (fa_x / fa_y -> misc_r), the DM read address (pm -> I + offset -> M10K), fadd stage 1,
+    fmul's stage 2 into the R port, the shifter's funnel operands. Each has a known next step
+    (the misc functions two X clocks, +~0.05 clk/word; the DM address registered with a D clock
+    for pre-modify only; fadd's alignment split).
+  * The uncovered fault from R1028 (LCNTR after a DO after a loop-end pop) stands.
+  * R1027's open items stand.

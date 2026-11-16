@@ -1,5 +1,48 @@
 # Handoff
 
+## 2026-11-16: model2b -- the 2B SHARC meets 80 MHz on its own (R1029), simulation + module-alone fits only
+
+Branch `model2b`. Study R1029 has the record (a table of all 21 steps, each fitted; step 3's fit failed on a RAM inference, see there). Not
+pushed, not merged, not in Model2.sv, no full build, no board.
+
+  * TIMING, module alone (Quartus 17.0, Aggressive Area, ports VIRTUAL_PIN, 12.5 ns, MAME_RND 0):
+    setup slack slow 100C -18.066 -> +0.651 ns, slow -40C -19.027 -> +0.405, fast 100C -2.515
+    -> +5.785, fast -40C -0.616 -> +6.902; hold +0.416 / +0.342 / +0.180 / +0.165. Fitter seed 2 of the same
+    RTL: +0.114 / +0.357 / +5.320 / +6.582 -- every corner positive, but not +0.3 at slow 100C.
+  * AREA: 4,355 -> 4,301 ALM fitted (340 of it the 34 MLAB LABs, 193 the virtual pins'),
+    1,469 -> 1,874 registers, 80 M10K, 1 DSP (unchanged). Budget ~4,450: 149 under.
+  * SPEED: DOA 2.2940 -> 2.5196 clk_sys a word over 150 s (budget ~3.0).
+  * What changed: the sequencer's next state is made in X's first clock from D's registered
+    decisions (the fetch issued from it); D's registers load every D clock (d_go drives only st /
+    x_first); D's waits, access kind, DAG / address-map tests and unsupported flag are decided
+    with the condition last; the fixed / shifter results land like float results; FIX / FLOAT
+    take three X clocks, a float add and a shift two; sharc_fadd is three stages; the
+    scoreboard is a registered mask; sequencer ureg writes apply the clock after X.
+  * VERIFIED: DOA's 150 s replayed: 18,541,146 out words and the 0-40 M trace equal to
+    MAME's; lockstep against v1 at every one of 501,777,265 words in MAME's rounding AND the
+    manual's, 0 differ (the manual's out words differ from MAME's exactly as R1027's); all-ones
+    start the same; random programs 12 seeds x 1 M words x both roundings, R1028's set and the
+    new M2B_RP_SEQ set, 0 differ; the shared unit 100 M vectors and the float units 100 M vectors,
+    0 off; planted faults 35 of 37 in the core (the new miss: LCE from the stack's 33rd bit alone),
+    22 of 22 in the float units; BENCH-only comparisons against R1028's forms never fired.
+  * Behaviour changes, plainly: a word under a false condition can wait in D (d_ru from the
+    opcode); a word reading I / M through the ureg port waits a clock after a one-clock X; the
+    unsupported capture is a clock later (same pc / word / reason); results are unchanged.
+
+FINDINGS THAT WERE WRONG OR NEW ON THE WAY: an MLAB read address straight from pm_q is taken
+into the MLAB as its address register and leaves PM's M10K without an output register (PM's
+upper lane in flip-flops, 78,192 ALM) -- qfit.sh now stops on any RAM inference change; six
+one-hot if-blocks cost +220 ALUTs over a parallel case; the random programs never wrote PCSTK /
+CURLCNTR / LCNTR by a ureg, so a real bug in the deferred write passed DOA and them --
+m2b_randprog.py M2B_RP_SEQ=1 adds them; fadd's equal-exponent swap (R1028) was dead logic; the
+fitter seed moves the slow-100C slack by up to 0.54 ns.
+
+REMAINS: margin in a congested core (the near-critical families and their next steps are in
+R1029 NOT SETTLED); then R1028's area list and R1027's remains (DM / buffer / ROM caches,
+R1024's other features, Model2.sv integration).
+Benches: as R1028, plus M2B_RP_SEQ=1 programs; BENCH-only $fatal checks of the restructured
+signals against R1028's forms; fit scripts in the scratchpad (qfit.sh SEED=, groups.tcl).
+
 ## 2026-11-15 (late): model2b -- the 2B SHARC shrunk to 3,876 ALM mapped, still bit-exact (R1028), simulation + quartus_map only
 
 Branch `model2b`. Study R1028 has the record (a table of every step). Not
