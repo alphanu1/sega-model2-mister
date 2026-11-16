@@ -125,7 +125,7 @@ module m2_video #(
   // drawn (window mode 1's other map, the far side of a mode 2/3 split, the
   // row mask) is not fetched. 0: unchanged.
   parameter bit          MASK_SKIP = 1'b0,
-  // R1029: COPIES OF THE PALETTE ADDRESS REGISTER, one per lane of a palette
+  // R1030: COPIES OF THE PALETTE ADDRESS REGISTER, one per lane of a palette
   // built as m2_tdp_ram2c_lanes, on pal_addr_c (lane-major). Each copy is the
   // same register as pal_addr_q -- the same D, the same edge -- kept apart
   // (dont_merge) so the fitter can put each beside its own blocks. pal_addr
@@ -163,7 +163,7 @@ module m2_video #(
 
   // Palette RAM, on chip. The V60 owns the other port.
   output logic [11:0] pal_addr,
-  output logic [PAL_COPIES*12-1:0] pal_addr_c,   // R1029: the copies, lane-major
+  output logic [PAL_COPIES*12-1:0] pal_addr_c,   // R1030: the copies, lane-major
   input  logic [15:0] pal_data,
 
   // Video out
@@ -1300,7 +1300,7 @@ module m2_video #(
   // register at E+2, pal_addr_q E+3, the palette RAM E+4, pal_data_q E+5,
   // and the next ce is E+6 at the earliest -- exactly in time.
   //
-  // R1029: AND EACH LAYER'S HIT REGISTERED IN PLACE OF ITS THREE FLAGS. With
+  // R1030: AND EACH LAYER'S HIT REGISTERED IN PLACE OF ITS THREE FLAGS. With
   // the palette address copied (PAL_COPIES), each copy sits by its palette
   // blocks and the mixer's route to them is longer; the mixer was six LUT
   // levels (module-alone fit: 7.6 ns of data path). m2_tile_mixer's first
@@ -1357,7 +1357,7 @@ module m2_video #(
   // the palette RAM at E+3, its data register at E+4, and vid_r takes it at
   // the next ce edge, E+6 at the earliest.
   //
-  // R1029: AND COPIED, PAL_COPIES TIMES. pal_addr_q -> the palette M10K is a
+  // R1030: AND COPIED, PAL_COPIES TIMES. pal_addr_q -> the palette M10K is a
   // route with no logic in it, and it still failed clk_mem on three 2C seeds
   // (-3.824 ns on s3076, 13.0 ns of route to sixteen blocks the fitter had
   // spread out). Every copy is registered from `mixed` on the same edge, so

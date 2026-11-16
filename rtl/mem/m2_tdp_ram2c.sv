@@ -95,7 +95,7 @@ module m2_tdp_ram2c #(
 
 endmodule
 
-// R1029: THE SAME MEMORY AS B_LANES SIDE-BY-SIDE m2_tdp_ram2c's, each holding
+// R1030: THE SAME MEMORY AS B_LANES SIDE-BY-SIDE m2_tdp_ram2c's, each holding
 // DW / B_LANES of the data bits, with port B's address taken PER LANE.
 //
 // The palette is 8,192 x 16 -- sixteen M10K, one data bit each (8K x 1) --

@@ -2744,7 +2744,7 @@ m2_tdp_ram2c #(.DW(16), .AW(15)) u_tram (
 	.b_addr(tram_addr), .b_q(tram_q_vid)
 );
 
-// R1029: FOUR LANES OF FOUR DATA BITS, each with its own copy of the video's
+// R1030: FOUR LANES OF FOUR DATA BITS, each with its own copy of the video's
 // address register (m2_video PAL_COPIES): pal_addr_q -> these sixteen blocks
 // was a logic-free route that failed clk_mem on three seeds. The same blocks,
 // the same cycles; see m2_tdp_ram2c_lanes.
@@ -7625,7 +7625,7 @@ wire cwr_inval = cwr_s[1] || (cwr_tail != 4'd0);
 // overruns a frame -- the tile rows Ben still sees repeat.
 // R823: no sibling fetch -- with the line-buffer ring it measured 0 overruns to
 // a port-3 latency of ~60 cycles, against ~45 with it (tb_m2_video_ovr).
-// R1029: LANES 4 -- the data array as four 16-bit lanes and the tag array,
+// R1030: LANES 4 -- the data array as four 16-bit lanes and the tag array,
 // each addressed from a registered copy of the request index; m2_tile_fetch
 // holds char_addr two cycles before char_req rises, which is what it needs.
 m2_char_cache #(.IDX_BITS(13), .SIBLING(1'b0), .LANES(4)) u_char_cache (

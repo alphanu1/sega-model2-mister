@@ -1,4 +1,4 @@
-// R1029: the 2C tilemap path, old against new (m2_vid2c_miter.sv). Two clocks
+// R1030: the 2C tilemap path, old against new (m2_vid2c_miter.sv). Two clocks
 // as the core has them -- clk_mem 100 MHz, clk_sys 80 MHz -- the CPU writing
 // tile RAM, palette and the translation table on clk_sys, port 3 answering
 // each side's glyph cache after a latency drawn per transaction (the same for

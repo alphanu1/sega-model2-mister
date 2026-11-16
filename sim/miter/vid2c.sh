@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# R1029: the 2C tilemap path (m2_video, m2_char_cache, the palette and tile
+# R1030: the 2C tilemap path (m2_video, m2_char_cache, the palette and tile
 # RAMs as Model2.sv wires them) old against new, every output on every clock
 # (m2_vid2c_miter.sv, tb_m2_vid2c_miter.cpp).
 #

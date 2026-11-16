@@ -330,7 +330,7 @@ module m2_scan15 #(
   wire  [4:0]  w1   = {r_c, 2'b00};
   wire  [4:0]  wcur = (ph == 4'd2) ? w0 : w1;
 
-  // R1029: AND acc COPIED A CLOCK BEFORE THE MULTIPLY. acc_r -> the 3277 DSP
+  // R1030: AND acc COPIED A CLOCK BEFORE THE MULTIPLY. acc_r -> the 3277 DSP
   // -> blend_q still failed clk_mem on two 2C seeds (-0.319); acc also feeds
   // its own adder, so the DSP could not take it as an input register. acc_q
   // has the multiply as its only reader. blend_q is now two clocks behind

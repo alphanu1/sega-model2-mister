@@ -89,7 +89,7 @@ static uint32_t read_word(uint32_t addr, int latency, int *cycles = nullptr) {
   addr = EVEN(addr);
   mem_lat = latency;
 #ifdef TB_ADDR_EARLY
-  // R1029: LANES needs the address a cycle before the request, as
+  // R1030: LANES needs the address a cycle before the request, as
   // m2_tile_fetch gives it (two cycles there).
   d->v_addr = addr; tick();
 #endif

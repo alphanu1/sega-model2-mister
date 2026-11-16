@@ -73,7 +73,7 @@ module m2_char_cache #(
   // miss then costs two round trips instead of one. Measured on MAME's Daytona
   // scenes (tb_m2_video_ovr): see the study's R823.
   parameter bit          SIBLING = 1'b1,
-  // R1029: 0 = the arrays addressed from the live request (unchanged). N = the
+  // R1030: 0 = the arrays addressed from the live request (unchanged). N = the
   // data array as N lanes of 64 / N bits, each -- and the tag array -- with
   // its address in A REGISTER OF ITS OWN, set a cycle early, and the fill
   // written from `hold`. See ADDRESS LANES below for why that is the same
@@ -240,7 +240,7 @@ module m2_char_cache #(
   logic [1:0]          bg_n;
 
   wire bg_busy = (bgst != BG_IDLE);
-  // R1029: SIBLING in it, so that a build without the sibling folds it away:
+  // R1030: SIBLING in it, so that a build without the sibling folds it away:
   // bgst never leaves BG_IDLE then (bg_arm is only ever set to SIBLING), but
   // Quartus 17.0 keeps the state machine and with it every mux bg_wr selects
   // -- 52 ALUTs in front of the four address lanes.
@@ -266,7 +266,7 @@ module m2_char_cache #(
   logic [TAG_BITS:0] ct_q;
   logic              cd_we, ct_we;
   /* verilator lint_off UNUSEDSIGNAL */
-  logic [IDX_BITS-1:0] mem_addr;      // R1029: LANES 0 only
+  logic [IDX_BITS-1:0] mem_addr;      // R1030: LANES 0 only
   /* verilator lint_on UNUSEDSIGNAL */
   logic [63:0]         cd_din;
   logic [TAG_BITS:0]   ct_din;
@@ -277,7 +277,7 @@ module m2_char_cache #(
     mem_addr = req_idx;
     cd_we    = 1'b0;
     ct_we    = 1'b0;
-    // R1029: with lanes the fill is written from `hold`, which took m_data on
+    // R1030: with lanes the fill is written from `hold`, which took m_data on
     // the acknowledge. The two are the same word: the fill is written in
     // S_FILL, the cycle after it, and the port's data cannot move before the
     // next request this cache makes (m2_sdram's p_dout[3] changes only on a
@@ -312,7 +312,7 @@ module m2_char_cache #(
   end
 
   // ------------------------------------------------------------------------
-  // R1029: ADDRESS LANES.
+  // R1030: ADDRESS LANES.
   //
   // f_char_addr_q (m2_tile_fetch) -> the address mux above -> 64 data blocks
   // and 4 tag blocks, every one of them on both ports, was one clk_mem cycle
@@ -552,7 +552,7 @@ module m2_char_cache #(
 
 endmodule
 
-// R1029: one lane of the glyph cache's data array: one address, read and
+// R1030: one lane of the glyph cache's data array: one address, read and
 // written on one clock, the read registered -- what cdata was, narrower.
 module m2_cc_ram #(
   parameter int unsigned W  = 16,

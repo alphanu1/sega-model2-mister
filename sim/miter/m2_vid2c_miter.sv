@@ -2,11 +2,11 @@
 //
 // Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1
 //
-// R1029: THE 2C TILEMAP PATH, OLD AGAINST NEW. Each side is m2_video, its
+// R1030: THE 2C TILEMAP PATH, OLD AGAINST NEW. Each side is m2_video, its
 // glyph cache, its palette and its tile RAM wired as Model2.sv wires them
 // (u_tilemap, u_char_cache, u_pal, u_tram, at the 2C build's parameters); the
-// old side is the tree before R1029 (m2_video_old, m2_char_cache_old, one
-// m2_tdp_ram2c for the palette), the new side R1029's (PAL_COPIES 4 into
+// old side is the tree before R1030 (m2_video_old, m2_char_cache_old, one
+// m2_tdp_ram2c for the palette), the new side R1030's (PAL_COPIES 4 into
 // m2_tdp_ram2c_lanes, LANES 4). Both take the same inputs -- the CPU's
 // writes to tile RAM and palette on clk_sys, the glyph port's answers, the
 // invalidates, the pixel enable -- and the bench (tb_m2_vid2c_miter.cpp)
