@@ -109,6 +109,10 @@ int main(int argc, char **argv) {
             t->fy = spick(g);
         t->astat = g(); t->alusat = g() & 1; t->trunc = (g() & 3) != 0;
         t->eval();
+        // R1029: the result after the clocks the core gives it, the inputs held (the stage
+        // registers hold the last vector's values until then)
+        { int nk = cls == 2 ? t->misc_x : cls == 1 ? t->sh_x : 0;
+          for (int k = 0; k < nk; k++) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); } }
         int op = cls == 0 ? t->fix_op : cls == 1 ? t->sh_op : t->misc_op;
         runs[cls][op]++;
         // a result the core does not write is not compared

@@ -201,14 +201,17 @@ int main(int argc, char **argv) {
         bool sub = g() & 1;
         bool avg = (g() & 3) == 0;            // R1028: FAVG on the adder unit
         t->op = op; t->x = x; t->y = y; t->trunc = trunc; t->astat_in = a; t->sub = sub; t->avg = avg;
-        // the units: register stage 1 (held while MAME's multiplier is on its slow path)
-        for (;;) {
-            t->clk = 0; t->eval();
-            t->en = !t->busy;
-            if (t->busy) stalls++;
-            t->clk = 1; t->eval();
-            if (t->en) break;
-        }
+        // the units: register stage 1 (held while MAME's multiplier is on its slow path); twice,
+        // the operands held (R1029: the adder's stage 2a is a second advance; the multiplier's
+        // stage 1 loads the same product again)
+        for (int adv = 0; adv < 2; adv++)
+            for (;;) {
+                t->clk = 0; t->eval();
+                t->en = !t->busy;
+                if (t->busy) stalls++;
+                t->clk = 1; t->eval();
+                if (t->en) break;
+            }
         t->clk = 0; t->eval();
         // package (combinational on the same inputs)
         Res em = ref(op, x, y, trunc, a), en = man_ref(op, x, y, trunc, a);

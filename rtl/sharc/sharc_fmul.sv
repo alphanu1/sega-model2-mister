@@ -177,12 +177,23 @@ always_comb begin
     esum = {2'b0, xf[30:23]} + {2'b0, yf[30:23]};
 end
 
+// the exponent's three outcomes (esum - 127, - 126, - 125: no carry, the product's top bit, and
+// the rounding's carry on top), each tiny / out of range, decided here (R1029: off stage 2's
+// path)
+logic [2:0]  tiny1, ovf1;
+always_comb begin
+    for (int i = 0; i < 3; i++) begin
+        tiny1[i] = esum < 10'(128 - i);                  // esum - 127 + i < 1
+        ovf1[i] = esum >= 10'(382 - i);                  // esum - 127 + i >= 255
+    end
+end
 logic        v_nan, v_inf, v_zero, v_sg, v_trunc;
 logic [47:0] v_p;
 logic [9:0]  v_esum;
+logic [2:0]  v_tiny, v_ovf;
 always_ff @(posedge clk) if (en) begin
     v_nan <= nan1; v_inf <= inf1; v_zero <= zero1; v_sg <= sg; v_trunc <= trunc;
-    v_p <= p; v_esum <= esum;
+    v_p <= p; v_esum <= esum; v_tiny <= tiny1; v_ovf <= ovf1;
 end
 assign busy = 1'b0;
 logic unused_m;
@@ -191,18 +202,22 @@ assign unused_m = restart ^ valid;
 // ---------------------------------------------------------------- stage 2
 always_comb begin
     logic [26:0] s;
-    logic signed [11:0] e;
+    logic [7:0]  e;
     logic [24:0] m;
     logic        up, tiny, ovf;
+    logic [1:0]  ei;
     logic [31:0] res;
-    // the exponent of the product, unbounded: esum - 127 (+1 when the product's top bit is set)
-    if (v_p[47]) begin s = {v_p[47:22], v_p[21:0] != 0}; e = $signed({2'b0, v_esum}) - 12'sd126; end
-    else         begin s = {v_p[46:21], v_p[20:0] != 0}; e = $signed({2'b0, v_esum}) - 12'sd127; end
+    // the exponent of the product, unbounded: esum - 127 (+1 when the product's top bit is set,
+    // +1 for the rounding's carry); its tests from stage 1
+    if (v_p[47]) s = {v_p[47:22], v_p[21:0] != 0};
+    else         s = {v_p[46:21], v_p[20:0] != 0};
     up = !v_trunc && s[2] && (s[1] || s[0] || s[3]);
     m = {1'b0, s[26:3]} + {24'h0, up};
-    if (m[24]) begin m = m >> 1; e = e + 12'sd1; end
-    tiny = e < 12'sd1;
-    ovf  = e >= 12'sd255;
+    ei = {1'b0, v_p[47]} + {1'b0, m[24]};
+    if (m[24]) m = m >> 1;
+    e = 8'(v_esum[7:0] - 8'd127 + {6'h0, ei});
+    tiny = v_tiny[ei];
+    ovf  = v_ovf[ei];
     res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]}) : tiny ? {v_sg, 31'h0}
                 : {v_sg, e[7:0], m[22:0]};
     if (v_nan) begin

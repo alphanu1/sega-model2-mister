@@ -4,7 +4,8 @@
 // both roundings, for tb_sharc_fp.cpp (which holds the references).
 //
 //   the units: sharc_fadd / sharc_fmul at MAME_RND 1 (MAME) and 0 (the manual), fed the same
-//     operands every advancing clock; stage 2's result is read in the clock after en.
+//     operands every advancing clock; the result is read in the clock after the second en (R1029:
+//     the adder's stage 2a).
 //   the package: every float function, MAME's (f_*) and the manual's (man_*), combinational.
 module tb_sharc_fp (
     input  logic        clk,

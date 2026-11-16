@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Sega Model 2 core for MiSTer FPGA -- R1027 / R1028: planted faults for tb_sharc_fp. Each fault is
+# Sega Model 2 core for MiSTer FPGA -- R1027 / R1028 / R1029: planted faults for tb_sharc_fp. Each fault is
 # one edit to a copy of rtl/sharc in <work>/<n>; the bench is built from the copy and run, and
 # must FAIL. The real rtl/sharc is never touched.
 #   fp_faults.py <work dir> [vectors]
@@ -16,21 +16,26 @@ FAULTS = [
     ('fadd MAME FAVG: a denormal half rounded up on a tie', 'sharc_fadd.sv',
      "hq = {1'b0, hm[23:1]} + {23'h0, hm[0] & hm[1]};", "hq = {1'b0, hm[23:1]} + {23'h0, hm[0]};", 0),
     ('fadd manual FAVG: near path tiny one exponent low', 'sharc_fadd.sv',
-     "raw = (raw[30:23] >= 8'd2) ?", "raw = (raw[30:23] >= 8'd1) ?", 0),
+     "raw_c = (raw_c[30:23] >= 8'd2) ?", "raw_c = (raw_c[30:23] >= 8'd1) ?", 0),
     ('fadd manual FAVG: far path tiny threshold one low', 'sharc_fadd.sv',
-     "else if (e <= 9'd1)  raw = {v_sgn, 31'h1};", "else if (e <= 9'd0)  raw = {v_sgn, 31'h1};", 0),
+     "else if (e <= 9'd1)  raw_c = {v_sgn, 31'h1};", "else if (e <= 9'd0)  raw_c = {v_sgn, 31'h1};", 0),
     ('fadd manual FAVG: overflow judged before the halving', 'sharc_fadd.sv',
-     "            if (e >= 9'd256)     raw = {v_sgn, INF[30:0]};", "            if (e >= 9'd255)     raw = {v_sgn, INF[30:0]};", 0),
+     "            if (e >= 9'd256)     raw_c = {v_sgn, INF[30:0]};", "            if (e >= 9'd255)     raw_c = {v_sgn, INF[30:0]};", 0),
     ('fadd: round to zero not applied (manual)', 'sharc_fadd.sv',
      "up = !(!MAME_RND && v_trunc) && s[2]", "up = s[2]", 0),
     ('fadd: round to zero in MAME mode too', 'sharc_fadd.sv',
      "up = !(!MAME_RND && v_trunc) && s[2]", "up = !v_trunc && s[2]", 0),
+    # R1029: the three-stage adder's own structures
+    ('fadd: the leading-zero bound at the denormal boundary dropped', 'sharc_fadd.sv',
+     "lz1 = (ex <= 8'd25 && {3'h0, c} > ex - 8'd1) ? 5'(ex - 8'd1) : c;", "lz1 = c;", 0),
+    ('fadd: shift of 27 or more not cleared', 'sharc_fadd.sv',
+     "sye = align(mye, d, e_ge ? rab[7:0] >= 8'd27 : rba[7:0] >= 8'd27);", "sye = align(mye, d, 1'b0);", 0),
     ('fadd: alignment sticky bit dropped', 'sharc_fadd.sv',
      "return {v[26:1], v[0] | st};", "return {v[26:1], v[0]};", 0),
     ('fmul manual: denormal operand not flushed', 'sharc_fmul.sv',
      "xf = flush(x);", "xf = x;", 0),
     ('fmul manual: tiny threshold one low', 'sharc_fmul.sv',
-     "tiny = e < 12'sd1;", "tiny = e < 12'sd0;", 0),
+     "tiny1[i] = esum < 10'(128 - i);", "tiny1[i] = esum < 10'(127 - i);", 0),
     ('fmul manual: overflow under TRUNC gives infinity', 'sharc_fmul.sv',
      "res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]})", "res  = ovf ? ({v_sg, INF[30:0]})", 0),
     ('fmul manual: ties rounded down', 'sharc_fmul.sv',

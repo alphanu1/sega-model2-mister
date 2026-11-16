@@ -297,4 +297,27 @@ function automatic xres_t shifter(input logic [5:0] sop, input logic [31:0] x, i
     return o;
 endfunction
 
+// R1029: the fixed ALU's adder operands, one-hot from the op (decoded in D, registered, so X's
+// adder select is an AND-OR): B = y, ~y, 0, 1, ~0, ~1; ABS (A = x or 0, B = 0 or ~x by x's sign);
+// NEG (A = 0, B = ~x); CLIP (B = ~y or y by y's sign, the carry y's sign); the carry 1 or AC
+function automatic logic [10:0] fix_k_of(input logic [7:0] op);
+    logic [10:0] k;
+    k = 11'h0;
+    case (op)
+    8'h01: k[0] = 1'b1;
+    8'h05: begin k[0] = 1'b1; k[10] = 1'b1; end
+    8'h25: begin k[2] = 1'b1; k[10] = 1'b1; end
+    8'h29: k[3] = 1'b1;
+    8'h02, 8'h0a, 8'h61, 8'h62: begin k[1] = 1'b1; k[9] = 1'b1; end
+    8'h06: begin k[1] = 1'b1; k[10] = 1'b1; end
+    8'h26: begin k[4] = 1'b1; k[10] = 1'b1; end
+    8'h2a: begin k[5] = 1'b1; k[9] = 1'b1; end
+    8'h22: begin k[7] = 1'b1; k[9] = 1'b1; end
+    8'h30: k[6] = 1'b1;
+    8'h63: k[8] = 1'b1;
+    default: k[0] = 1'b1;                   // (the rest: A + B, unused)
+    endcase
+    return k;
+endfunction
+
 endpackage

@@ -9,7 +9,11 @@
 # writes to ASTAT in a word with a float compute, MODE1 TRUNC / ALUSAT changes, delayed jumps,
 # every condition. No FIFO traffic. Generated, not ROM-derived.
 #   m2b_randprog.py <seed> <out events.bin> [words] [flat]   (flat: R1027's set, no nesting / calls)
-import random, struct, sys
+# M2B_RP_SEQ=1 (R1029): also ureg writes to the sequencer -- LCNTR = any value, CURLCNTR = 1-3,
+# PCSTK = PCSTK -- which the core applies the clock after X; without it the programs are R1028's.
+import os, random, struct, sys
+
+SEQ = os.environ.get('M2B_RP_SEQ') == '1'
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
          0x40, 0x41, 0x42, 0x43, 0x61, 0x62, 0x63]
@@ -157,11 +161,15 @@ def main():
             src = g.choice([g.randrange(16), 0x10 + g.randrange(8), 0x20 + g.randrange(8), 0x28 + g.randrange(8),
                             0x7c, 0x67, 0x64, 0x68])
             dst = g.choice([g.randrange(16), g.randrange(16), g.randrange(16), 0x7c])
+            if SEQ and g.random() < 0.3:
+                src, dst = g.choice([(src, 0x68), (0x64, 0x64), (g.randrange(16), 0x68)])
             emit((0b0111 << 44) | (src << 36) | (cond() << 31) | (dst << 23) | comp())
         elif r < 0.63:                                     # immediate -> ureg
             u = g.choice([g.randrange(16)] * 4 + [0x20 + g.randrange(8), 0x7b])
             v = fval() if u < 16 else (g.randrange(-2, 3) & 0xffffffff) if u < 0x30 else \
                 g.choice([0x18000, 0x10000, 0x12000, 0x1a000])
+            if SEQ and g.random() < 0.3:
+                u, v = g.choice([(0x68, g.getrandbits(32)), (0x67, g.randrange(1, 4))])
             emit((0x0f << 40) | (u << 32) | v)
         elif r < 0.68:                                     # immediate shift
             sop = g.choice(SHIFT); data = g.randrange(-40, 40) & 0xfff if sop < 0x10 else g.getrandbits(12)

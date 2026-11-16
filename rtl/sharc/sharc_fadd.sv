@@ -12,9 +12,14 @@
 // the sum rounded, then halved with round to nearest and flushed) and man_avg (the manual: the
 // exact sum's exponent less one, rounded once: tiny below 2^-126, flushed with AUS).
 //
-// Float add / subtract in two stages, bit-exact to sharc_fp_pkg::f_add / f_sub (MAME's host
-// arithmetic with the ALU's input and result flush). Stage 1 registers at `en`; the result
-// and flags are stage 2's, combinational, in the clock after.
+// CHANGED (R1029, timing at 80 MHz): three stages. Stage 1's magnitude compare on the carry
+// chain and the alignment's sticky bit from a mask beside the shifter; stage 2 split -- 2a the
+// normalise and rounding to the result's bits, registered; 2b the finish (alu_fin, MAME's FAVG
+// halving), combinational. Stages 1 and 2a load at every `en` (the operands are held while
+// `en` lasts, two clocks at least), so 2b's result is valid in the clock after an `en` of two.
+//
+// Float add / subtract, bit-exact to sharc_fp_pkg::f_add / f_sub (MAME's host
+// arithmetic with the ALU's input and result flush).
 //
 // The inputs are flushed, so each operand is zero, normal or infinite. Two paths:
 //   far:  effective add, or subtract with exponent difference >= 2, or subtract with no
@@ -53,24 +58,23 @@ logic [7:0]  d;
 logic        esub;
 logic [26:0] sx, sy;
 logic [27:0] s_far;
-logic [24:0] n_near, marker;
+logic [24:0] n_near;
 logic        near;
+logic [4:0]  lz1;
 
-function automatic logic [26:0] align(input logic [23:0] m, input logic [7:0] d);
-    // {m, 3'b000} >> d with the bits shifted out ORed into bit 0
-    logic [26:0] v;
+function automatic logic [26:0] align(input logic [23:0] m, input logic [7:0] d, input logic big);
+    // {m, 3'b000} >> d with the bits shifted out ORed into bit 0: the sticky bit from the mask
+    // of the bits below d, beside the shifter (R1029; the same bits as the stepwise form)
+    logic [26:0] v, mk;
     logic        st;
     v = {m, 3'b000};
-    st = 1'b0;
-    if (d >= 8'd27) begin
+    for (int i = 0; i < 27; i++) mk[i] = 5'(i) < d[4:0];
+    if (big) begin                                      // d >= 27 (the caller's, R1029)
         st = m != 0;
         v = '0;
     end else begin
-        for (int k = 0; k < 5; k++)
-            if (d[k]) begin
-                st = st | ((v & ((27'h1 << (1 << k)) - 27'h1)) != 0);
-                v = v >> (1 << k);
-            end
+        st = (v & mk) != 0;
+        v = v >> d[4:0];
     end
     return {v[26:1], v[0] | st};
 endfunction
@@ -86,29 +90,74 @@ always_comb begin
     mb = {yf[30:23] != 0, yf[22:0]};
     dab = {1'b0, ea} - {1'b0, eb};
     dba = {1'b0, eb} - {1'b0, ea};
-    big_ab = xf[30:0] >= yf[30:0];
+    // on the carry chain (Aggressive Area builds a compare as a chain of LUTs)
+    begin
+        logic [31:0] dd;
+        dd = {1'b0, xf[30:0]} - {1'b0, yf[30:0]};
+        big_ab = !dd[31];
+    end
     bx = big_ab ? xf : yf;
     by = big_ab ? yf : xf;
-    ex = big_ab ? ea : eb;
     mx = big_ab ? ma : mb;
     my = big_ab ? mb : ma;
-    d  = big_ab ? dab[7:0] : dba[7:0];
-    esub = bx[31] ^ by[31];
-
-    sx = {mx, 3'b000};
-    sy = align(my, d);
+    esub = xf[31] ^ yf[31];
+    // the alignment by the exponents' order alone (R1029: the magnitude compare off its path):
+    // they differ only when the exponents are equal, where the shift is 0 and the adder's
+    // operands are swapped instead
+    begin
+        logic        e_ge;
+        logic [23:0] mxe, mye;
+        logic [26:0] sye;
+        logic [8:0]  rab, rba;
+        // the shift from the raw exponents (R1029: no flush test before the subtract). It
+        // differs from dab / dba only where an operand is zero (exponent 0, flushed), and then
+        // that operand is the one aligned (a zero, shifted by anything) or both are zero
+        rab = {1'b0, xf[30:23]} - {1'b0, yf[30:23]};
+        rba = {1'b0, yf[30:23]} - {1'b0, xf[30:23]};
+        e_ge = !rab[8];
+        ex = (!dab[8]) ? ea : eb;
+        d  = e_ge ? rab[7:0] : rba[7:0];
+        mxe = e_ge ? ma : mb;
+        mye = e_ge ? mb : ma;
+        // d >= 27 from both differences, beside the select (R1029)
+        sye = align(mye, d, e_ge ? rab[7:0] >= 8'd27 : rba[7:0] >= 8'd27);
+        // (R1028 swapped them by magnitude where the exponents are equal: dead logic -- an effective
+        // subtract with exponents within one is always the near path, an add has no order)
+        sx = {mxe, 3'b000};
+        sy = sye;
+    end
     s_far = esub ? {1'b0, sx} - {1'b0, sy} : {1'b0, sx} + {1'b0, sy};
 
-    n_near = {mx, 1'b0} - (d[0] ? {1'b0, my} : {my, 1'b0});
+    // both orders, the magnitude compare choosing after (R1029: off the subtract's path); d[0]
+    // is the raw exponents' low bits' difference
+    begin
+        logic [24:0] nab, nba;
+        logic        d0;
+        d0 = xf[23] ^ yf[23];
+        nab = {ma, 1'b0} - (d0 ? {1'b0, mb} : {mb, 1'b0});
+        nba = {mb, 1'b0} - (d0 ? {1'b0, ma} : {ma, 1'b0});
+        n_near = big_ab ? nab : nba;
+    end
     near = esub && d <= 8'd1 && !n_near[24];
-    // a one at bit 25 - ex bounds the leading-zero count at ex - 1 (the denormal boundary)
-    marker = (ex <= 8'd25) ? (25'h1 << (8'd25 - ex)) : 25'h0;
+    // the leading-zero count is bounded at ex - 1 (the denormal boundary; R1028's marker bit)
+    // the near path's leading zeros, here (R1029: off stage 2a's path); a tree -- the top 9
+    // bits' count, else 9 + the low 16's
+    // R1029: the marker's bound as min(clz(n_near), ex - 1) beside the count, not ORed in before
+    begin
+        logic [4:0]  h, l, c;
+        h = 5'd0; l = 5'd25;
+        for (int i = 0; i < 9; i++) if (n_near[16 + i]) h = 5'(8 - i);
+        for (int i = 0; i < 16; i++) if (n_near[i]) l = 5'(24 - i);      // (9 + the low half's)
+        c = (n_near[24:16] != 9'h0) ? h : l;                 // clz(n_near), 25 for zero
+        lz1 = (ex <= 8'd25 && {3'h0, c} > ex - 8'd1) ? 5'(ex - 8'd1) : c;
+    end
 end
 
 logic        v_nan, v_inf, v_near, v_trunc, v_sgn, v_nanin, v_infb, v_avg;
 logic [31:0] v_infr;
 logic [27:0] v_s;
-logic [24:0] v_n, v_mark;
+logic [24:0] v_n;
+logic [4:0]  v_lz;
 logic [7:0]  v_e;
 
 always_ff @(posedge clk) if (en) begin
@@ -123,35 +172,33 @@ always_ff @(posedge clk) if (en) begin
     v_sgn <= bx[31];
     v_s <= s_far;
     v_n <= n_near;
-    v_mark <= marker;
+    v_lz <= lz1;
     v_e <= ex;
 end
 
 // ---------------------------------------------------------------- stage 2
 
-function automatic logic [4:0] clz25(input logic [24:0] v);
-    clz25 = 5'd25;
-    for (int i = 0; i < 25; i++) if (v[i]) clz25 = 5'(24 - i);
-endfunction
 
-logic [31:0] raw, fr;
+logic [31:0] raw_c, raw, fr;
 logic [31:0] fa, fs;
+logic        w_nan, w_nanin, w_infb, w_trunc, w_avg;
 
+// stage 2a: the result's bits
 always_comb begin
-    raw = '0;
-    if (v_inf) raw = v_infr;
+    raw_c = '0;
+    if (v_inf) raw_c = v_infr;
     else if (v_near) begin
         logic [4:0]  lz;
         logic [24:0] t;
-        lz = clz25(v_n | v_mark);
+        lz = v_lz;
         t = v_n << lz;
-        if (v_n == 0)   raw = 32'h0;
-        else if (t[24]) raw = {v_sgn, v_e - {3'h0, lz}, t[23:1]};
-        else            raw = {v_sgn, 8'h00, t[23:1]};
+        if (v_n == 0)   raw_c = 32'h0;
+        else if (t[24]) raw_c = {v_sgn, v_e - {3'h0, lz}, t[23:1]};
+        else            raw_c = {v_sgn, 8'h00, t[23:1]};
         // the manual's FAVG: exact, so the exponent less one; below 2^-126 tiny (a denormal
         // pattern, which the finish flushes with AUS)
-        if (!MAME_RND && v_avg && raw[30:0] != 0)
-            raw = (raw[30:23] >= 8'd2) ? {raw[31], raw[30:23] - 8'd1, raw[22:0]} : {raw[31], 31'h1};
+        if (!MAME_RND && v_avg && raw_c[30:0] != 0)
+            raw_c = (raw_c[30:23] >= 8'd2) ? {raw_c[31], raw_c[30:23] - 8'd1, raw_c[22:0]} : {raw_c[31], 31'h1};
     end else begin
         logic [26:0] s;
         logic [8:0]  e;
@@ -166,44 +213,55 @@ always_comb begin
         if (m[24]) begin m = m >> 1; e = e + 9'd1; end
         if (!MAME_RND && v_avg) begin
             // the manual's FAVG: the rounded sum's exponent less one (rounding is the same)
-            if (e >= 9'd256)     raw = {v_sgn, INF[30:0]};
-            else if (!m[23])     raw = {v_sgn, 8'h00, m[22:0]};   // zero (both operands zero)
-            else if (e <= 9'd1)  raw = {v_sgn, 31'h1};      // tiny
-            else                 raw = {v_sgn, 8'(e - 9'd1), m[22:0]};
+            if (e >= 9'd256)     raw_c = {v_sgn, INF[30:0]};
+            else if (!m[23])     raw_c = {v_sgn, 8'h00, m[22:0]};   // zero (both operands zero)
+            else if (e <= 9'd1)  raw_c = {v_sgn, 31'h1};      // tiny
+            else                 raw_c = {v_sgn, 8'(e - 9'd1), m[22:0]};
         end
-        else if (e >= 9'd255)  raw = {v_sgn, INF[30:0]};
-        else if (!m[23])  raw = {v_sgn, 8'h00, m[22:0]};
-        else              raw = {v_sgn, e[7:0], m[22:0]};
+        else if (e >= 9'd255)  raw_c = {v_sgn, INF[30:0]};
+        else if (!m[23])  raw_c = {v_sgn, 8'h00, m[22:0]};
+        else              raw_c = {v_sgn, e[7:0], m[22:0]};
     end
+end
+
+always_ff @(posedge clk) if (en) begin
+    raw <= raw_c;
+    w_nan <= v_nan; w_nanin <= v_nanin; w_infb <= v_infb; w_trunc <= v_trunc; w_avg <= v_avg;
+end
+
+// stage 2b: the finish
+always_comb begin
+    logic [31:0] q;
+    q = raw;
     // MAME's FAVG: the rounded sum times 0.5f, to nearest even (exact unless the half is denormal)
-    if (MAME_RND && v_avg && !is_inf(raw) && raw[30:0] != 0) begin
-        if (raw[30:23] >= 8'd2) raw = {raw[31], raw[30:23] - 8'd1, raw[22:0]};
+    if (MAME_RND && w_avg && !is_inf(q) && q[30:0] != 0) begin
+        if (q[30:23] >= 8'd2) q = {q[31], q[30:23] - 8'd1, q[22:0]};
         else begin
             logic [23:0] hm, hq;
-            hm = {raw[30:23] != 0, raw[22:0]};
+            hm = {q[30:23] != 0, q[22:0]};
             hq = {1'b0, hm[23:1]} + {23'h0, hm[0] & hm[1]};
-            raw = {raw[31], 7'h0, hq};
+            q = {q[31], 7'h0, hq};
         end
     end
 
     // alu_fin (sharc_fp_pkg)
-    fr = raw; fa = AF; fs = '0;
-    if (is_inf(raw)) begin
+    fr = q; fa = AF; fs = '0;
+    if (is_inf(q)) begin
         fa |= AV; fs |= AVS;
-        if (v_trunc) fr = (raw & SIGN) | 32'h7F7F_FFFF;
-    end else if (is_den_or_zero(raw)) begin
+        if (w_trunc) fr = (q & SIGN) | 32'h7F7F_FFFF;
+    end else if (is_den_or_zero(q)) begin
         fa |= AZ;
-        if (raw[22:0] != 0) fs |= AUS;
-        fr = raw & SIGN;
+        if (q[22:0] != 0) fs |= AUS;
+        fr = q & SIGN;
     end
     if (fr[31]) fa |= AN;
 end
 
 always_comb begin
-    if (v_nan) begin r = NAN; astat = AI | AF; stky = AIS; end
+    if (w_nan) begin r = NAN; astat = AI | AF; stky = AIS; end
     else       begin r = fr;  astat = fa;      stky = fs;  end
-    nan_in = v_nanin;
-    inf_both = v_infb;
+    nan_in = w_nanin;
+    inf_both = w_infb;
 end
 
 endmodule

@@ -5,6 +5,8 @@
 // as Hornet's v1 restates it) and sharc_fp_pkg's f_* (MAME_RND 1) and man_* (MAME_RND 0) -- those
 // checked against MAME and the manual by sim/sharc/fp. Both roundings are built side by side.
 module tb_m2b_xu (
+    input  logic        clk,                // R1029: FIX / FLOAT take misc_x more clocks, a shift sh_x, inputs held
+    output logic [1:0]  misc_x, sh_x,
     input  logic [1:0]  cls,                // 0 fixed ALU, 1 shifter, 2 misc float
     input  logic [7:0]  fix_op,
     input  logic [5:0]  sh_op,
@@ -26,19 +28,22 @@ module tb_m2b_xu (
     logic [31:0] fr1, sr1, fa1, sa1, fs1, mr1, ma1, ms1, fr0, sr0, fa0, sa0, fs0, mr0, ma0, ms0;
     logic        fw1, sw1, fw0, sw0;
     m2b_sharc_xu #(.MAME_RND(1'b1)) u1 (
-        .fix_on(cls == 2'd0), .fix_op, .sh_on(cls == 2'd1), .sh_op, .sh_imm, .sh_val,
+        .clk, .misc_x, .sh_x, .fix_on(cls == 2'd0), .fix_op, .fix_k(fix_k_of(fix_op)), .sh_on(cls == 2'd1), .sh_op, .sh_imm, .sh_val,
         .misc_on(cls == 2'd2), .misc_op, .x, .y, .n, .fx, .fy, .astat, .alusat, .trunc,
         .fix_r(fr1), .sh_r(sr1), .fix_we(fw1), .sh_we(sw1), .fix_astat(fa1), .sh_astat(sa1), .fix_stky(fs1),
         .misc_r(mr1), .misc_a(ma1), .misc_s(ms1));
     m2b_sharc_xu #(.MAME_RND(1'b0)) u0 (
-        .fix_on(cls == 2'd0), .fix_op, .sh_on(cls == 2'd1), .sh_op, .sh_imm, .sh_val,
+        .clk, .misc_x(), .sh_x(), .fix_on(cls == 2'd0), .fix_op, .fix_k(fix_k_of(fix_op)), .sh_on(cls == 2'd1), .sh_op, .sh_imm, .sh_val,
         .misc_on(cls == 2'd2), .misc_op, .x, .y, .n, .fx, .fy, .astat, .alusat, .trunc,
         .fix_r(fr0), .sh_r(sr0), .fix_we(fw0), .sh_we(sw0), .fix_astat(fa0), .sh_astat(sa0), .fix_stky(fs0),
         .misc_r(mr0), .misc_a(ma0), .misc_s(ms0));
 
     always_comb begin
         case (cls)
-        2'd0: begin u1_r = fr1; u1_we = fw1; u1_a = fa1; u1_s = fs1; u0_r = fr0; u0_we = fw0; u0_a = fa0; u0_s = fs0; end
+        // (R1029: a written result's AN / AZ are the core's landing's, from the result)
+        2'd0: begin u1_r = fr1; u1_we = fw1; u1_s = fs1; u0_r = fr0; u0_we = fw0; u0_s = fs0;
+                    u1_a = fa1 | (fw1 ? ((fr1[31] ? AN : 32'h0) | (fr1 == 32'h0 ? AZ : 32'h0)) : 32'h0);
+                    u0_a = fa0 | (fw0 ? ((fr0[31] ? AN : 32'h0) | (fr0 == 32'h0 ? AZ : 32'h0)) : 32'h0); end
         2'd1: begin u1_r = sr1; u1_we = sw1; u1_a = sa1; u1_s = 32'h0; u0_r = sr0; u0_we = sw0; u0_a = sa0; u0_s = 32'h0; end
         default: begin u1_r = mr1; u1_we = 1'b1; u1_a = ma1; u1_s = ms1; u0_r = mr0; u0_we = 1'b1; u0_a = ma0; u0_s = ms0; end
         endcase

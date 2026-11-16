@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Sega Model 2 core for MiSTer FPGA -- R1028: one-word programs the core must flag as unsupported
+# Sega Model 2 core for MiSTer FPGA -- R1028 / R1029: one-word programs the core must flag as unsupported
 # (tb_m2b_sharc +lock +noidle prints "UNSUPPORTED word at <pc>: <op> (reason <n>)"). Each is a
 # MODE1 set-up, the words given, then the unsupported word at 0x20084 and a jump back. Generated,
 # not ROM-derived.
@@ -14,6 +14,7 @@ CASES = [   # (name, words before, the word, reason)
     ('SHARC-side DMA (DMAC6 DEN)', [0x0f0000000001], 0x11000000001c, 7),
     ('an unknown IOP register written', [], 0x110000000055, 7),
     ('an unknown IOP register read', [], 0x101000000055, 7),
+    ('a jump outside the PM (R1029: its flag from X\'s first clock)', [], (0x06 << 40) | (0x1f << 33) | 0x30000, 9),
 ]
 
 
