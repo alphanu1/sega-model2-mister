@@ -1,5 +1,24 @@
 # Handoff
 
+## 2026-11-16: rel-2c-slack2 -- the 2C candidate's recurring near-critical paths retimed (R1030), seeds running
+
+Branch `rel-2c-slack2` = rel-2c-all cf6916e3 + three areas' retimes (geometry + TGPx4,
+rasteriser, clk_mem video), each proved against cf6916e3 by miter, every output every
+cycle, 0 differing; no output cycle changed. Study R1030 has the record. Not pushed,
+not merged, not on the board.
+
+  * Why: 50 seeds of the 2C candidate failed (s3020-3043, s3060-3099); area only +53
+    ALM over s2702, which passed on 1 of 4. The same path families recur (R1030).
+  * Branches: slack-2c-geo, slack-2c-ras, slack-2c-vid (the areas' own, tagged R1029-2C
+    in their commits); rel-2c-slack (geo + ras, renumbered R1030); rel-2c-slack2 (all three).
+  * Seeds: 2C-sl-a s3100-3109 and 2C-sl-b s3120-3129 on rel-2c-slack; 2C-sl2-a
+    s3140-3149 on rel-2c-slack2.
+  * Not done (each a cycle): fill mul_n -> mul_q_r, fp_add -> engine xhalf, project ->
+    E_DONE, zero-logic routes; m2_sdram sd_a (the controller's).
+  * Found on the way: the Makefile's test_m2_raster3d does not compile (old tree too);
+    span_tex's own benches fail lint with MKV_LUT 0 (R1018's mkv_* ports); with
+    SIBLING=0 Quartus kept char_cache's dead sibling machine (now gated).
+
 ## 2026-11-15: fprem-subn -- remr (i960_fprem) takes and delivers subnormals, exact (R1020), quartus_map only
 
 Branch `fprem-subn` off i960-2a 0ecc3576 (the 2A build). Study R1020 has the

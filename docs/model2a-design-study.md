@@ -51506,3 +51506,638 @@ output on every cycle, sim/miter/miter.py):*
 
 *Not settled:* the fit (lanes 2C-rt-a s3060-3079, 2C-rt-b s3080-3099);
 the board.
+
+**R1030 -- THE 2C CANDIDATE'S RECURRING NEAR-CRITICAL PATHS, COUNTED ACROSS
+58 SEEDS AND RETIMED IN THREE AREAS (GEOMETRY + TGPx4, THE RASTERISER, THE
+clk_mem VIDEO SIDE); NO OUTPUT CYCLE CHANGED ANYWHERE.** 2026-11-16, branch
+rel-2c-slack2 (rel-2c-all cf6916e3 + the three areas' commits).
+
+*What was believed:* that the 2C candidate (cf6916e3, R1025) would close
+with seeds once R1021's three retimes were in, as 2A's did.
+
+*What is now known:* it did not. 40 seeds of b16ef7d7 (s3060-3099) and 10
+of da5b08b5 (s3020-3043) all failed, and even s2702 (the STCC speed
+build, which passed) passed on one seed of four. Area is not the cause:
+cf6916e3's fit is 41,464 ALM against s2702's 41,411 (+53), M10K 531 /
+553 in both. The core sits at the edge, and the worst path moves from
+block to block each seed, with HDMI failing inside the framework's ascal
+and osd (sys/, not ours) whenever the core takes the room around it.
+
+*How it was established:* every kept seed's worst_paths.txt (the top ~25
+setup paths per clock) was read and the paths grouped by their two ends
+(scratchpad agg_paths.py; 58 seeds; counted under +0.3 ns). The same
+families recur: uvsel -> hu / hv (13 / 10 seeds, worst -4.476), span_tex
+sh_p -> the texel M10K (16, -1.241), the fill's sn_r / szm1_r -> mul_n (7
+/ 6, -2.29), the frame writer's windows, the clipper's operands, the
+TGPx4 writer's schedule, and on clk_mem the palette address (3, -3.824)
+and the glyph cache address (3, -1.226). Each area was retimed on its own
+branch off cf6916e3 (slack-2c-geo, slack-2c-ras, slack-2c-vid), proved
+against cf6916e3 by miter on every output on every cycle, and merged here.
+The three sections below are the areas' own records.
+
+*Left on the table, each costing a cycle and so not done:* the fill's
+mul_n -> mul_q_r (6 seeds, -1.755; +1 cycle of ~129 per textured quad),
+fp_add result -> the engine's xhalf and the projection -> E_DONE (a cycle
+per polygon), and the zero-logic routes (xform out_z -> raw_z, fp_mul ->
+dprod, fp_add -> the clipper's tx MLAB) that only a pipeline register
+would fix. m2_sdram's sd_a pin mux (-0.044, 2 seeds) is the controller's
+and is left.
+
+*Result:* the seeds (2C-sl-a / 2C-sl-b on geometry + rasteriser,
+2C-sl2-a on all three) are the measure; recorded below when they finish.
+
+
+**R1030 (GEOMETRY AND TGPx4) -- THE RECURRING clk_sys PATHS IN m2_geometry,
+m2_geo_clip AND tgpx4_core RETIMED: THE PAIRS' CONVERSION A STAGE FROM hu /
+hv, THE CLIPPER'S INTERPOLATION OPERAND REGISTERED A CYCLE AHEAD, THE TGPx4
+WRITER'S SCHEDULE SHANNON-SPLIT ON src_ok. NO OUTPUT CYCLE CHANGED; hu / hv
+INTERNALLY A CYCLE LATER. +62 ALM MODULE ALONE (THE CLIPPER'S +64). MAP ONLY;
+NOT FITTED.** Branch slack-2c-geo off rel-2c-all cf6916e3, 2026-11-16.
+
+*What was believed:* that the geometry's and the TGPx4's near-critical paths
+across the 2C seeds (agg_2c_paths.txt, 58 seeds, under +0.3 ns) were logic
+depth: uvsel -> hu (13 seeds, worst -4.476) and -> hv (10, -1.718), the
+clipper's cp_a / cp_b -> the pool's mul_a_q (5 / 4, -0.436 / -0.282), the
+TGPx4's xd.sk / s.S_DEC -> wrm_q (5 / 4, -0.599 / -0.235).
+
+*THE PATHS, READ (quartus_sta 17.0 full paths on the kept databases of s3060,
+s3062, s3066, s3069, s3074, s3075, s3076, s3087; Slow 1100mV 100C):*
+  * uvsel -> hu / hv: 9 levels in every seed (u2f's priority loop: e~10 ..
+    e~19, ShiftLeft0, u2f~51), -0.55..-0.66 (s3066 -0.652, s3075 -0.661,
+    s3087 -0.545, s3069 -0.549); s3076 -4.476 with the last hop to hu[2][21]
+    6.35 ns of route (74% of the data delay routing). hu / hv sit by the
+    clipper; the converter by puv.
+  * cp_a -> mul_a_q: 6-7 levels (cp_a fanout 97 -> the 4:1 vertex mux -> the
+    5:1 axis mux -> three operand selects -> the pool's client mux), 1-3 ns a
+    hop: s3074 -0.436, s3076 -0.877, s3087 -0.367.
+  * xd.sk -> wrm_q: 10 levels: Equal123 (sk[1] != K_NONE) -> src_ok ->
+    alu_go -> a_keep (fanout 53) -> ar_vn -> cad_n.we -> cf_n -> m_wqn ->
+    the wrm_n decode. s.S_DEC -> wrm_q is the same cone from src_ok. s3066
+    -0.599, s3076 -0.577.
+  * ZERO-LEVEL, ROUTE ONLY (not logic; nothing in RTL removes them without a
+    cycle): xform out_z -> raw_z (s3076 -1.239: one 12.6 ns route to an
+    asdata port), out_z -> dpz, fp_mul result -> dprod (s3069 -2.018, 0
+    levels), fp_add result -> the clipper's tz / ty MLAB (s3076 -0.935,
+    s3074 -0.434), p1cur -> p0prev (1 level). The same paths are +3..+8 ns
+    in other seeds.
+  * s3076 is a congested placement: K_CLIP -> add_a_q -5.105 at 3 levels
+    (an 8 ns route of add_win, fanout 128), S_RND -> add_a_q -4.149; both
+    +2..+4 in the other seeds.
+
+*THE CHANGES:*
+  1. m2_geometry (1d624774). uvf_u / uvf_v / uvf_i / uvf_ok: the converted
+     pair registered beside the converter, hu / hv written from it a cycle
+     later in the same order. hu / hv are final five cycles after Q_IDLE
+     takes the polygon (four before); the clipper reads them only on
+     clip_in_valid, no earlier than the eighth (Q_MM, Q_MM2, Q_CHK, four
+     Q_ISS, an answer), and a refused polygon's walk and the next one's
+     writes keep their order. u2f rewritten as a normalising shift (top 8 /
+     4 / 2 / 1 bits zero: shift up), exponent 142 - shift: the same value
+     for all 65,536 inputs.
+  2. m2_geo_clip (ea96af5b). ip_a_q / ip_b_q: cs 8's axis of a and cs 9's
+     axis of b, registered every clock on ax_n -- c_axis + 1 while K_CLIPW
+     waits on the coordinate's add (cs > 9), c_axis otherwise. K_CLIP at cs
+     8 / 9 is entered only from K_CLIPW (cs 7, cs 8, the coordinate's add)
+     or from itself, never from K_SET, and cp_a / cp_b / the vertices move
+     only in K_SET / K_IDLE / K_POPR, so every K_CLIP cycle at cs 8 / 9
+     sees the old mux's value.
+  3. tgpx4_core (f1830f3d). The writer's next schedule (ar_vn, a_wqn, m_wqn,
+     wrm_n) as a function wsched, evaluated twice -- alu_go fixed 0 (a_keep0,
+     af[0]) and fixed ag_p (a_keep1, a_cd_g) -- and src_ok picks. Exactly
+     the old function (Shannon on src_ok); a_keep and a_cd_arr (the result
+     register's loads) unchanged.
+
+*MODULE ALONE (quartus_map 17.0, Model2.qsf's synthesis settings -- AGGRESSIVE
+AREA, MUX_RESTRUCTURE, register packing -- then post-map STA at 12.5 ns; the
+slack is an estimate, the levels are not):*
+  * m2_geometry, 2C parameters (MIPZ, MIPZ_B 3, TEXLUT, WINKEY, UVSH,
+    M10K_ROOM): uvsel -> hu 6 levels (+5.56) -> uvsel -> uvf 7 (+5.55) and
+    uvf -> hu 1 (+8.99); cp_a -> mul_a_q 5 (+4.06) -> cp_a -> ip_a_q 2
+    (+5.89); cp_b -> mul_a_q 5 -> 4 (cs 0's bz; +4.13 -> +4.83).
+  * m2_tgpx4 (PLINES 4096, the 2C build's m2_copro defaults): xd.sk -> wrm_q
+    11 levels (+1.096) -> 7 (+5.869); s.S_DEC 10 (+1.392) -> 6 (+6.165);
+    s.S_XA 10 -> 6. aop_q -> wrm_q stays 10 (-0.130 -> +1.785): the
+    schedule's own cone, not on any fitted list.
+
+*AREA (same maps, ALMs needed / registers):* m2_geometry 5,784 / 7,172 ->
+5,842 / 7,285 (+58 / +113): the m2_geometry change alone 5,780 (-4; the
+stage's 49 registers against the smaller u2f), the clipper's alone 5,848
+(+64, of which u_clip +85 ALUTs, the pool -6). Block bits 15,776 and 3 DSP
+unchanged. m2_tgpx4 3,339 -> 3,343 (+4), 2,840 registers, 495,616 block bits,
+3 DSP unchanged. The clipper's +64 is the one cost of note at 41,464 / 41,910:
+it is its own commit and can be dropped alone.
+
+*TRIED AND NOT KEPT:*
+  * u2f's loop kept with the stage: 5,881 ALM (+39 on the shift form), 7
+    levels into uvf as well. The shift form kept for area, not depth (module
+    alone both are 7; fitted the loop was 9).
+  * The clipper's operand as ONE register, its endpoint chosen a cycle ahead
+    (ep_b = K_CLIPW ? cs == 8 : cs == 9): u_clip -14 ALUTs but the pool's
+    operand mux +94 (5,844 ALM), and cp_a -> ip_q 4 levels (+1.97). Two
+    registers kept.
+  * The TGPx4's FLOG zero moved after the unit overrides (each override sets
+    all three fields FLOG clears), so alu_go meets a_cv_arr at its last gate
+    (xd.sk -> alu_go -> a_cv_arr -> a_wv -> rfm_wd: 8 levels, s3062 -0.581):
+    module alone still 10 levels (+2.715 -> +2.155) -- Quartus rebuilt the
+    mux tree with the term inside it. Reverted; never committed.
+
+*PROOF (run; old = cf6916e3 exported to the scratchpad, new = this branch):*
+  * Geometry miter (sim/miter/geo.sh with M10K_ROOM passed into geodiff_top,
+    every build -GM10K_ROOM=1, the 2C form): tb_m2_geometry 595,138 cycles,
+    _mipz 913,234, 0 with an output differing, PASS; walks r5701, r6601,
+    r924geo w1200 as the 2A build's geometry and w1000, w4000, w9000, w3910,
+    w1200 as the main build's: 8 runs, 4,553,375 cycles, 0 differing; every
+    walk's pool hash (the pool's every operand, every cycle) equal to
+    R1025's (r5701 123cd4737845917f, w1000 83db18ed1827f0ea, ...). Again in
+    R1025's exact form (GEOMZ_G only): the same. Walks on R1025's symlinked
+    scratch copies.
+  * Planted (new copy only): ip registered on c_axis instead of ax_n --
+    tb_m2_geometry 356,683 cycles differing, r5701 653,159, w1000 845,663;
+    hu[3] written from uvf_v -- 39,142 / 32,073 / 56,725.
+  * u2f: all 65,536 inputs against the loop, 0 differ (iverilog); planted
+    (the top-2 test inverted) 30,583 differ.
+  * test_m2_geo_clip 2,003 checks 0 fails, test_m2_geometry 438 / 0 PASS,
+    _mipz 2,254 / 0 PASS, test_m2_geo 144 / 0 PASS, test_m2_geo_engine 70 /
+    0: the same before and after.
+  * TGPx4 (tb_tgpx4_replay, old and new built side by side, TGPX4 = 1,
+    PLINES 4096): every log identical bar the wall time, and --pcprof (each
+    word's own clocks, by program address) md5-identical -- the same cycle
+    for every word:
+      STCC race window, frame 6900, 20 M clk: 6,066,051 words, 40,908
+        outputs 0 differ, lockstep 0 bad, 3.257 clk / word;
+      race, frame 7000, 150 M clk: 45,805,601 words, 376,169 outputs 0
+        differ, 0 bad, 3.265 (R1009's);
+      latency 40 + 0-20 (seed 7), 60 M clk: 11,953,230 words, 99,588
+        outputs, 0, 0, 4.936;
+      House of the Dead first 60 M words: 191,337,148 clk, 2,751,773 outputs
+        0 differ, 0 bad, 3.179; Over Rev 60 M words: 207,699,517 clk,
+        2,206,240 outputs 0 differ, 0 bad, 3.435.
+    Planted: ws1 given af[0] for the integer ALU's descriptor -- 6,026,973
+    words in the 20 M window (39,078 fewer), pcprof different, outputs and
+    lockstep still clean (the descriptor only steers the schedule: the
+    cycle compare is what catches it); ws1 given a_keep0 (the integer
+    result not kept) -- the 20 M window did not finish in 600 s (61 s
+    clean): wedged. A third (FLOG dropped from ws1) changed nothing: FLOG
+    does not occur in the window (dbg_bad flags it).
+  * lint_top clean (M2_2C, M2_2C_DSB, M2_NO_2A_MANX_MOTION; LINTTOP_RTL
+    without m2_testpattern.sv); lint_idx 101 lines before and after, the
+    only difference wrm_n[cad_n.idx] now w[cad.idx] (the same select, in
+    wsched); Verilator -Wall per module m2_geometry 20 -> 19, m2_geo_clip
+    4 -> 4, tgpx4_core 30 -> 30 (cad_n / cmd_n's unused bits now wsched's
+    cad / cmd); quartus_map --analyze_file 0 errors on all three.
+    analyze_file appended the stray QSF lines again (m2_testpattern.sv and
+    six FAST_* assignments, R1004's); Model2.qsf restored from git.
+
+*CYCLES:* none at any module boundary. Inside m2_geometry, hu / hv are
+written one cycle later (the clipper reads them at least three cycles after
+their last write, as before at least four).
+
+*NOT DONE, and why:*
+  * fp_add result -> m2_geo_engine xhalf (8-9 levels: the dot's 31-bit zero
+    test -> the cull -> the next state's enables; s2780 -1.608, s3020
+    -0.069, +0.7..+2.8 elsewhere): the decision is on the add's result in
+    its arrival clock; taking it a clock later is a cycle on every polygon.
+  * m2_geo_project step -> m2_geo_engine st.E_DONE (11 levels, s3087
+    -0.694, 5 seeds): another client's add request -> the pool's arbiter ->
+    the engine's fadd_gnt -> its one-hot next state. Combinational grants
+    are the pool's contract (R959); registering any side is a cycle.
+  * The zero-level routes above, K_CLIP -> add_a_q (s3076 only, routing),
+    tgpx4 S_WXB / single_two -> ext_addr (s3060 -1.126 only, 7 levels with
+    the AGU's carry chain), xd.sk -> the register file's write data (see
+    TRIED), m2_pair_cache -> m2_geo tp_ambient (s3069 -3.073; m2_geo, not
+    this area).
+
+**R1030 (m2_raster3d) -- THE RASTERISER'S RECURRING 2C PATHS: THE TEXEL
+REQUEST'S BOX READ A STAGE EARLY, FOUR FLAGS IN REGISTERS, FOUR COMPARE
+CHAINS SIDE BY SIDE, THE FILL'S NUMERATOR SHIFT SPLIT ACROSS ITS TWO STAGES.
+NO CYCLE CHANGED, EVERY OUTPUT IDENTICAL ON EVERY CYCLE. MODULE-ALONE MAP
+AND POST-MAP TIMING; NOT FITTED.** 2026-11-16, branch slack-2c-ras off
+rel-2c-all cf6916e3.
+
+*What was believed:* that the 2C candidate's clk_sys failures in
+m2_raster3d were placement swings on long paths, as R1021 found on 2A --
+"a different path in each" seed.
+
+*THE SURVEY (run; the digest of 58 failed 2C seeds, paths under +0.3 ns,
+and quartus_sta 17.0 full paths on two kept fits, s3060 and s3099, Slow
+1100mV 100C; seeds / worst slack / logic levels / where the time goes):*
+
+    span_tex sh_p -> texel_cdc q_tex (M10K datain)   16 / -1.241 /  9  s3060: 9.6 of 13.2 ns routing
+      sh_p[6] -> ub_ra's slot select -> m2_raster3d's box MLAB (asynchronous
+      read) -> uv_cl's subtract and compares -> tx_v -> the 32-way mirror-bit
+      select -> tx_tex[28] -> the request queue's M10K input register
+    fill sn_r / szm1_r -> mul_n                       7 / -2.268 / 2-3 ~12 ns of routing; nn_c -> sn_r +3.3 / +4.9
+    fill mul_n -> mul_q_r                             6 / -1.755 /  3  DSP, partial-product sum, negate
+    span_tex of_rp -> u_span_q rp                     6 / -0.408 / 10  of_wp - of_rp, != TXK, cons_take, pipe_en,
+                                                                      ld_over, in_ready, the queue's read
+    fb_wcomb ib -> vlo / vhi, wlo -> vlo           5,3 / -1.589 / 10  ib's fan-out and select, key and bound
+                                                                      compares, c_fits, c_wb, 128 valid-bit enables
+    g_ubq.ub_wp -> span_tex (multiplier ENA, tex_p)   4 / -4.257 /  6  ub_wp - ub_rp, != 0 (ub_qv), sq_qve, ld_cold,
+                                                                      every pipeline enable (282 of the 400 worst
+                                                                      paths into span_tex's DSP enables on s3060)
+    fill qoz -> oz_emax                               4 / -1.503 /  9  two 8-bit compares in series, as LUT trees
+    persp_recip s1_dn / s1_r0 -> s2_e                 2 / -2.174 /  1  DSP, 18-bit subtract (+2.6, +4.8 elsewhere)
+    fill oz_v / oz_n -> qv                            2 / -0.504 /  0  DSP output to a register array: placement
+    span_tex q_x1 -> mq_f1 / mq_f0                  3,2 / -0.329 / 11  min, then min, then a compare, in series
+    texel_bl fl_h / fl_v -> rs_nib (clk_mem)          2 / -0.382 /  5  the slot store's address select, MLAB read
+
+*What is known now:* the most frequent path is not placement alone. Of its
+nine levels the first four are a slot select and an MLAB's asynchronous
+read whose address is known a stage earlier: the box index is a slot
+parameter, fixed while any group of its span is in flight (R490). Three
+others are a pointer subtract and a compare in front of a decision that
+could have been a flop (R762's s_full, again): of_room, ub_qv, ub_full. And
+three are compares built as LUT trees and placed in series where the same
+answer is available from parallel compares or carry chains (R1021's lesson,
+again).
+
+*THE CHANGES (no cycle changed at any module boundary; each the same value
+in every cycle it is read):*
+  1. m2_span_tex, THE BOX READ A STAGE EARLY (ub_q). ub_ra is
+     ubi_p[sh_p[PIPE_D-2]] and the read is registered as the group moves to
+     PIPE_D-1, in the same branch as sh_p's shift (pipe_en && !ld_cold), so
+     ub_q is always the box of the group standing at the fetch. The same
+     word: the slot's ubi_p is not reloaded while a group of its span is in
+     flight (R490), and the box queue never overwrites a word a slot may
+     still name -- read earlier, it has only moved less. Quartus puts ub_q in
+     the box MLAB's own output register (the map: 45 registers inside
+     g_ubq.ub_mem's altdpram, none outside). The texture word likewise
+     (t_q <= tex_p[sh_p[PIPE_D-2]]), as R739's q_x1.
+  2. m2_span_tex, THE MIRROR BIT OF EACH CLAMP ANSWER, PICKED LAST. The
+     32-way bit select read tx_u, after the clamp's subtracts, compares and
+     select. The clamp's three candidates (as divided, the floor's
+     {lo, 01}, the top's {hm, FF}) each have their bit selected beside the
+     clamp's test (uv_hit, R951's uv_cl split into its test), and the test
+     picks one: (c ? a : b)[i] == c ? a[i] : b[i].
+  3. m2_span_tex, of_full IN A REGISTER: the next pointers' difference
+     compared with TXK; of_room = !of_full. of_wp moves only on cons_take,
+     of_rp only on rt_take, both carrying st == T_RUN.
+  4. m2_raster3d, ub_qv AND ub_full IN REGISTERS: the next pointers'
+     difference compared with 0 and with 31.
+  5. m2_span_tex, THE MASK QUERY'S CLAMPS SIDE BY SIDE. xb = min(qe, qx1,
+     QXMAX) with its three compares at once, and xb < xa -- min(...) <
+     max(qx, 0) -- as "any of the three is below qx or below 0", no compare
+     in series. Every compare is a 17-bit subtract's borrow (slt16).
+  6. m2_fb_wcomb, EACH WINDOW'S FIT FROM ITS OWN REGISTERS, ib LAST:
+     w_fits[k] for both windows at once, c_fits = w_fits[ib].
+  7. m2_raster_fill, THE EXPONENT TOURNAMENT ON CARRY CHAINS: gt8(a, b), the
+     borrow of b - a, for the three compares.
+  8. m2_raster_fill, THE NUMERATOR SHIFT IN TWO HALVES. sn_r takes nn_c
+     already shifted by 8 x (z - 1)[4:3] (the stage had 3.3-4.9 ns spare on
+     s3060 / s3099); only the shift by (z - 1)[2:0] is left in front of
+     mul_n; the pass-through (z 0, or 32) is a shift of 0 in both halves.
+     (n <<< 8a) <<< b == n <<< (8a + b) in 32 bits. And mul_n LOADS EVERY
+     CYCLE (its hold select was a third level and a hop): its only reader is
+     mul_q, taken into mul_q_r only in Q1 to Q3W, each the cycle after one of
+     the six loads (NRM's last, Q1 .. Q3) -- the states run one a cycle, so
+     in every cycle mul_n is read it holds what it held before.
+
+*MODULE ALONE (run; quartus_map 17.0, m2_raster3d at Model2.sv's 2C
+parameters, the project's synthesis settings, post-map timing against
+12.5 / 10 ns -- post-map, so the slack is an estimate; the levels are not):*
+
+    path                               old levels / slack     new
+    sh_p -> q_tex (worst into q_tex)       9 / -1.188         gone; worst into q_tex d4_v, 5 / +4.660
+    ub_wp -> span_tex                      6 / -9.043         gone (ub_qv a flop)
+    ub_wp -> fill (ub_full)                5 / +0.585         gone
+    of_rp / of_wp -> u_span_q rp           7 / +3.858, +3.146 gone; worst into rp 4 / +3.706 (was 7 / +3.075)
+    fb_wcomb ib -> vhi / vlo               9 / +2.878, +2.902 7 / +3.548, 7 / +4.592
+    fb_wcomb wlo -> vlo                    9 / +4.094         8 / +4.307
+    fill qoz -> oz_emax                    7 / +5.999         4 / +3.923 (two 9-bit chains; post-map
+                                                              charges a chain cell 0.06-0.07 ns and a hop
+                                                              0.5-1 ns, so a chain reads slower here)
+    fill sn_r -> mul_n                     4 / +8.504         2 / +10.134
+    span_tex q_x1 -> mq_f*                11 / +3.833         6 / +2.227 (the 16-bit subtract chain)
+    fill mul_n -> mul_q_r                  3 / -4.704         3 / -4.704 (unchanged, see NOT DONE)
+
+  Area: 8,042 -> 8,050 ALMs needed (+8, inside the map's noise: the
+  untouched m2_texel_bl moved 1,929 -> 2,032 ALUTs between the two maps),
+  11,772 -> 11,887 ALUTs (span_tex +25, fb_wcomb +11, raster_fill -22,
+  texel_bl +103 of noise), registers 9,701 -> 9,769 (+68: ub_q 45, in the
+  MLAB; t_q 24; of_full; ub_qv / ub_full already counted as logic),
+  817,980 block bits and 52 DSP unchanged. THE RAM SUMMARY IS IDENTICAL:
+  45 memories, every name, type (29 M10K, 13 MLAB, 3 AUTO), mode and size.
+
+*PROOF (run; old = cf6916e3, new = this branch; the whole-rasteriser miter
+is the new sim/miter/r3d.sh, the expression bench sim/miter/eq_r1029.sv):*
+  * THE WHOLE RASTERISER AS A MITER: sim/miter/miter.py on m2_raster3d with
+    all fifteen modules under it and m2_fifo_m10k renamed old / new, every
+    one of its 70 outputs (frame-buffer and DDRAM ports, texel ports, every
+    dbg counter) compared on every clk_sys edge, under tb_m2_raster3d at
+    Model2.sv's 2C parameters (LSB 5, KW 20, TEXLUT, UVSH, UVCL, MIP,
+    QNX 512, DDRAM_IN, PAY_DDR3, MKV_LUT, RECIP_M10K 0) on MAME's display
+    lists: STCC f1500 / f3000 / f4500 / f6000, House of the Dead 1808 /
+    g1500 / g900, Over Rev d1 / d2, Virtua Cop beg2, and two stressed runs
+    (STCC f3000 with DDR3 BUSY 150/1000, beats held 10%, texel latency 40;
+    House of the Dead 1808 with BUSY 250, held 20%, texel latency 3):
+    12 runs, 58,603,903 cycles, 0 with an output differing -- and the
+    bench's whole log (every painted pixel of the last frame, 1.8 M PX
+    lines; the per-frame cycle statistics, band and fill-state counts,
+    DDR3 and wait totals; the pixel hashes) byte-identical to the old
+    build's, all 12. The same miter at the non-2C parameters (LSB 3, no
+    DDRAM payload, MKV_LUT 0 -- the shared files' other builds): STCC
+    f3000, House of the Dead g1500, Over Rev d2, Virtua Cop beg2, 19,507,786
+    cycles, 0 differ.
+  * THE REWRITTEN EXPRESSIONS ALONE, old form against new (a Verilator
+    bench of the two forms, 200 M random vectors each, biased to the edges):
+    the clamp and the mirror bits (32.6 M with the clamp active, 58,189 of
+    them where the clamp moves the mirror bit), the mask query's xb / mq_f1
+    / mq_f0 / mq_need (16-bit operands both in the screen's range and fully
+    random, so the adds wrap), the fill's two-stage shift (counts 0-69,
+    INT_MIN and 0 included), and gt8 against `>` on all 65,536 pairs:
+    0 differ. The bench's own planted faults are seen: the mirror bit taken
+    from the unclamped coordinate, 5,783 of 20 M; the QXMAX term dropped,
+    825,454; the fine shift's bit 0 dropped, 4,686,667.
+  * m2_raster_fill alone, sim/miter/fill.sh (every output, every cycle):
+    tb_m2_raster_fill 52,211,088 cycles, MIP 54,784,527, M2COV 614,406,
+    0 differ; the benches' own verdicts (152,373 / 1,989,828 checks, 0
+    fails) unchanged.
+  * The module benches, old and new, outputs byte-identical:
+    test_m2_span_tex, _mip, _uvcl, _ftb PASS; _gc FAIL in both, the same
+    lines (pre-existing); test_m2_raster_fill and _mip; test_m2_texel_cdc
+    and _cdc16 PASS; test_m2_fb_wcomb PASS. (test_m2_span_tex, _mip, _gc
+    and _uvcl stop at lint on the old tree too -- R1018's mkv_* ports unused
+    with MKV_LUT 0 -- so both trees ran with -Wno-fatal. test_m2_raster3d's
+    Makefile build does not compile on either tree -- it reads u_fbw's
+    clr_y / cl_on without FB_WCOMB -- and the 2C-parameter build above is
+    the raster bench.)
+  * PLANTED FAULTS (one each, in the new copy only, the whole-rasteriser
+    miter on STCC f1500 / House of the Dead 1808 / Virtua Cop beg2, cycles
+    with an output differing of ~4.88 M each):
+      F2 of_full from the current pointers (a cycle stale): the walk
+        overruns its queue and nothing is painted; 3,646,551 / 3,624,286 /
+        3,646,814.
+      F3 the window's upper bound without its + 1: 3,650,520 / 3,649,641 /
+        3,648,635.
+      F4 the fine shift's bit 0 dropped: 3,646,929 / 3,649,690 / 3,648,667.
+      F8 the box read a stage late (ub_ra from sh_p[PIPE_D-1]): 3,645,953 /
+        3,351,743 / 3,586,794.
+    and four the lists cannot reach -- 0 / 0 / 0 each, recorded so that no
+    one takes these benches for a proof of them:
+      F1 ub_q loaded every cycle, not with the shadow: differs only when the
+        pipeline stalls with the groups at PIPE_D-1 and PIPE_D-2 from
+        different quads' spans and the clamp hitting. Right by construction
+        (the shift's own branch).
+      F5 ub_qv from the current pointers (a cycle stale): the box is pushed
+        with a quad's first span and the span queue (an M10K FIFO, two
+        cycles at least) is always behind it, so ub_qv is set long before
+        the span reaches the head. Right by construction (the next-state).
+      F6 the u mirror bit always the unclamped coordinate's: needs a
+        mirrored texture whose box edge is the texture's own edge and a
+        near-miss coordinate there -- none in these lists. The expression
+        bench above covers it (58,189 cases, 0 differ; the fault, 5,783).
+      F7 the "QXMAX below qx" term dropped: a group starting past x 495;
+        the fill clips spans to the screen. The expression bench covers it.
+  * Lint: the whole core (2C macros, LINTTOP_RTL without the absent
+    m2_testpattern.sv) 1,125 -Wall warnings old and new, per module
+    unchanged (span_tex 2, raster3d 50, raster_fill 16, fb_wcomb 0); lint_top
+    clean; idxcheck 98 lines old and new, identical (none in these changes).
+    The module-alone quartus_map parsed and mapped all four files.
+
+*NOT DONE, and why:*
+  * fill mul_n -> mul_q_r (6 seeds, -1.755) and persp_recip out_q -> mul_q_r
+    (1, -1.032). One state's multiply: 33 x 33 bits over several DSPs, the
+    partial products summed in the fabric, then rquo's negate, into mul_q_r,
+    and the first operand's reciprocal lands exactly in S_PF_Q1 (R466/R731).
+    A register after the DSP moves every gradient one state and S_PF_B one
+    cycle: +1 cycle of ~129 per textured quad, a throughput change, not
+    taken. The negate cannot move to the next stage: mul_q_r -> sc_r is
+    itself -0.129 on s3060. Folding the sign into the operand (-a x b +
+    2^30 - 1, which is exact) trades the negate chain for an add into the
+    partial-product sum: no level saved.
+  * persp_recip s1 -> s2_e (2 seeds; +2.6 / +4.8 on s3060 / s3099): one DSP
+    and an 18-bit subtract. Moving the subtract into the next stage (r0 x e
+    = r0 << 17 - r0 x p) moves the same DSP-then-chain shape there.
+  * fill oz_v / oz_n -> qv (2): a DSP output into a 4-entry register array,
+    0 levels -- placement only.
+  * texel_bl fl_h / fl_v -> rs_nib (2, clk_mem): the one LUT before the slot
+    store's read address could be a register only by computing it from the
+    next-state of fl_v / fl_s / fl_h and the pick (hv_s), and the pick's
+    cone into hq_m is already -0.05 on one seed; not clearly a gain.
+  * The single-seed paths (span_ooz -> u_span_q M10K, rt_col -> e_pl, the
+    raster_div q_fast paths, wcomb cl_on -> span_tex enables, the HPS and
+    geometry ports into the payload).
+
+*NOT SETTLED:* a fit. The expectation, unmeasured: sh_p -> q_tex loses the
+3.8 ns of slot select and MLAB read before its clamp (s3060), and the path
+that was second into q_tex there (d4_v, +0.837) loses two levels; the ub /
+of flags take 3-3.5 ns off every path into span_tex's enables and the span
+queue's read pointer; the fill's sn_r -> mul_n keeps its routing but has
+two levels where it had three. The fill's multiply stays where it was.
+
+*Commits (slack-2c-ras):* 29096ec4 span walk and box queue (changes 1-5),
+c4f7ee91 frame writer (6), 15e24686 fill (7, 8), 1ccc3e61 the two benches.
+
+**R1030 (video) -- THE 2D SIDE'S RECURRING clk_mem PATHS: THE PALETTE
+ADDRESS AND THE GLYPH CACHE ADDRESS WERE ROUTES TO M10K THE FITTER HAD
+SPREAD OUT. ONE REGISTER COPIED PER GROUP OF BLOCKS, THE CACHE'S ADDRESS
+MADE A REGISTER A CYCLE EARLY, THE SCAN15 BLEND ONE STAGE LONGER. NO CYCLE
+CHANGED AT ANY RAM OR OUTPUT; -42 ALM MODULE ALONE. MAP AND MODULE FIT
+ONLY; NOT FITTED IN THE CORE.** Branch slack-2c-vid off rel-2c-all cf6916e3.
+
+*What was believed:* that pal_addr_q -> the palette M10K (R570's register,
+already one cycle with no logic in it) and f_char_addr_q -> the glyph cache
+(R570 too) had been retimed as far as they go, and that the 2C seeds'
+failures there were placement noise.
+
+*THE PATHS (the 58 2C seeds in rel-2c-fit3/build/seeds, the top 25 setup
+paths per clock; Slow 1100mV 100C; general[0] = clk_mem 100 MHz):*
+
+    from -> to                                   under +0.3     worst    listed in
+    m2_video pal_addr_q -> u_pal M10K            3 seeds        -3.824   6 seeds
+      (s3076 -3.824, 13.010 ns of data path to ram_block1a1, all of it
+       route; s3075 -0.308; s3073 -0.307; elsewhere +0.54..+0.94)
+    m2_tile_fetch f_char_addr_q -> u_char_cache  3 seeds        -1.226   9 seeds
+      cdata M10K (s3076 -1.226, 10.457 ns; s3026 -0.443; s3065 +0.271)
+    m2_scan15 acc_r -> blend_q (the 3277 DSP)    2 seeds        -0.319   2 seeds
+      (s3084 -0.319, s2800 +0.248)
+    m2_sdram p_dout[3] -> u_char_cache cdata     2 seeds        -0.113   3 seeds
+      datain (s2940 -0.113, s3098 +0.283; p_dout[3] -> hold -0.237 s2940)
+
+  The rest of general[0] outside ascal / sys / raster3d that recurs in two
+  or more seeds is m2_sdram's own: state.S_MISS / S_ACT / ras_ok -> sd_a
+  (2 seeds each, -0.044, +0.053, +0.137) -- see NOT DONE.
+
+*The cause, both M10K paths:* pal_addr_q fans out, with no logic, to the
+palette's sixteen blocks (8,192 x 16 as 8K x 1 each), and the fitter
+spreads them: 8.2-9.6 ns of route on most seeds, 13.0 on s3076. The cache's
+index goes through the address mux (S_INIT sweep / S_LOOK and S_FILL idx_r
+/ sibling / invalidate) and then to 64 data blocks and 4 tag blocks, both
+ports of each. A single register (or mux) has to reach blocks the placer
+put wherever their other nets pulled them. Model 1 (tools/model1-ref
+0d062e0, m1_mainram / m1_integrated) has the same shape -- one registered
+address into a dual-clock palette RAM -- on clk_sys, slower than our
+clk_mem; there is nothing there to lift.
+
+*Why not a pipeline stage on the palette:* there is no spare cycle. R648's
+accounting -- line buffer E+1, rd_qq E+2, pal_addr_q E+3, palette M10K E+4,
+pal_data_q E+5, xlat E+6, gamma (pr_q) E+7, taken at ce_dd, E+8 at the
+earliest -- has the colour arriving one cycle before it is taken on a
+six-cycle pixel. A stage would move vid_* by a cycle or drop pixels.
+
+*THE CHANGES:*
+  1. THE PALETTE AS FOUR LANES, EACH WITH ITS OWN ADDRESS REGISTER.
+     m2_tdp_ram2c_lanes (new, in m2_tdp_ram2c.sv): B_LANES side-by-side
+     m2_tdp_ram2c's of DW / B_LANES data bits, port A shared, port B's
+     address per lane. u_pal is four lanes of 4 bits (4 x 4 blocks, 8K x 1,
+     as before). m2_video PAL_COPIES 4: pal_addr_q is four registers, each
+     `<= mixed` on the same edge, (* dont_merge *), on pal_addr_c; pal_addr
+     is copy 0. Every lane sees the address it saw, on the cycle it saw it.
+  2. THE MIXER ONE LEVEL SHORTER, to pay for the copies' longer route
+     (module alone, the copies placed by their blocks took rd_qq -> mixer
+     -> copy from +2.570 to +1.808; the mixer was six LUT levels, 7.6 ns).
+     m2_tile_mixer's first level reads only its own layer's three flags, so
+     with PAL_COPIES > 1 rd_qq holds each layer's two hits instead
+     (h1 = !masked && prio && !transparent; h0 = !masked && !prio &&
+     (!transparent || layer >= 2)) as flags the mixer turns back into the
+     same two hits: masked' = !(h1 | h0), prio' = h1, transparent' = 0
+     (h1 and h0 are never both set). The same pixel and the same source on
+     every cycle. Module alone: rd_qq -> copy +1.808 -> +2.465; line buffer
+     -> rd_qq +4.467 -> +3.217.
+  3. THE GLYPH CACHE'S ADDRESS A REGISTER, ONE PER LANE. m2_char_cache
+     LANES 4 (Model2.sv; 0 = as before): the data array as four 16-bit
+     lanes (m2_cc_ram, a module of its own -- an array declared in a
+     generate loop is only recovered from registers by Quartus 17.0, and
+     came out ramstyle AUTO: R818's finding again) and the tag array, each
+     addressed from `ra <= req_idx`, (* dont_merge *). The arrays' read
+     counts on two kinds of edge: S_IDLE taking v_req, where ra holds the
+     index of the cycle before; and S_LOOK / S_FILL, where idx_r is that
+     same index because v_req and v_addr are held to the acknowledge (the
+     cache's contract from the start). The one new requirement: v_addr is
+     stable for the cycle before v_req rises. m2_tile_fetch meets it by two
+     cycles (f_char_addr_q written in F_CADDR, char_req raised from F_CHAR).
+     The data lanes are not written by the sweep or the invalidate (cd_we 0
+     for both), so they need neither address: with SIBLING 0 a data lane's
+     address is the register itself, no logic between it and its 16 blocks.
+     The tag lane keeps the sweep and the invalidate in front. A
+     Verilator-only check stops the simulation if the register ever holds an
+     address the live mux would not have given on an edge that counts.
+  4. THE FILL WRITTEN FROM `hold` (LANES only). hold took m_data on the
+     acknowledge; S_FILL wrote m_data the cycle after. The same word:
+     p_dout[3] changes only on a delivery to port 3, which needs this
+     cache's next request. p_dout[3] -> cdata datain goes (and the old code
+     depended on the same hold).
+  5. bg_wr gated with SIBLING. With SIBLING 0 bgst never leaves BG_IDLE
+     (bg_arm is set only to SIBLING), but Quartus 17.0 kept the state machine
+     and every mux bg_wr selects -- found when the lanes' address muxes came
+     out at 52 ALUTs; the gate folds them, the sibling's bg_idx / bg_tag /
+     bg_data registers, and the old mux's sibling leg.
+  6. m2_scan15: acc copied into acc_{r,g,b}_q a clock before the 3277
+     multiply, which becomes its only reader (acc also feeds its own adder,
+     so the DSP could not take acc as an input register). blend_q is two
+     clocks behind acc; acc last moves 6 or more edges before any ce_out
+     (R968's argument), so blend_q == blend at every ce_out still.
+
+*WRONG FIRST, KEPT:*
+  * The first cache lanes put the full address mux behind each lane's
+    register copy (ri <= req_idx; a = pick(ri, sweep, idx_r, bg_idx,
+    inval_idx)): module-alone quartus_map 209 -> 314 ALUTs in m2_char_cache
+    (+105), and the mux still between the register and the blocks.
+  * The second registered `ra <= (st == S_LOOK || st == S_MISS) ? idx_r :
+    req_idx`: Quartus duplicated the 2:1 mux into every copy's LUT (+51
+    ALUTs). Under the cache's own contract idx_r equals the index of the
+    cycle before in every state that reads, so `ra <= req_idx` is the same
+    and costs flip-flops only. (A miter mutant that drops S_MISS from that
+    hold passes -- equivalent in-system, as the contract says.)
+  * The first m2_cc_ram-less lanes declared cdata inside the generate loop:
+    Quartus recovered it as "g_lanes.g_lane[0].cdata[0][15]__1", type AUTO.
+    Moved into m2_cc_ram: M10K, as every other array here.
+
+*PROOF (run; old = cf6916e3 exported, new = this branch):*
+  * THE MITER (sim/miter/vid2c.sh, m2_vid2c_miter.sv,
+    tb_m2_vid2c_miter.cpp): the 2C tilemap path as Model2.sv wires it --
+    m2_video at u_tilemap's parameters, m2_char_cache at u_char_cache's,
+    the palette and the tile RAM as m2_tdp_ram2c -- old beside new, clk_mem
+    100 MHz and clk_sys 80 MHz, the CPU loading tile RAM and palette and
+    then writing them and the translation table at random, port 3 answered
+    per side after a latency drawn per transaction (the same for both), the
+    acknowledge 1 or 2 cycles, invalidates pulsed 1-16 cycles (half on the
+    line just fetched), the R826 scroll inputs and gamma moving. Every
+    video output, the palette's address (and that all four copies agree),
+    its video and CPU read data, the tile RAM address, the glyph request,
+    address, acknowledge and data, port 3's requests, the overrun and
+    fetch counters and the cache's hit / miss / fill counters compared on
+    every edge. 36 configurations: four scenes (r928 boot3, HOTD
+    f003600 and f003656 from MAME, random memories) x pixel enable (the
+    core's 6,6,6,7; random 6-7; random 1-70) x port-3 latency 1 / 40 / 400
+    x ack hold x interlace x CPU writes (none, 1 in 20, 1 in 3 clk_sys) x
+    invalidates (none, 1 in 3,000, 1 in 100), SIBLING 0 and (9 runs) 1:
+    144,000,000 clk_mem cycles, 60 frames, 1,217,825 glyph requests,
+    954,254 port-3 misses, 457,255 invalidates: 0 differences of any kind,
+    and the contract check never fired.
+  * The miter catches what it should (mutants, 3 M cycles each): lane 2's
+    address three cycles old -> 38,511 output differences; copy 3 of the
+    palette address a cycle late -> 397,461 (and 98,056 copy mismatches);
+    one data bit of the fill inverted -> 1,512,795; the opaque-pass term
+    dropped from h0 -> 1,499,500 on random memories (0 on the three real
+    scenes -- they never show a layer 2/3 category-0 pen-0 pixel);
+    m2_tile_fetch moving char_addr on the edge char_req rises -> the
+    contract check stops the run.
+  * test_m2_char_cache (LANES 0, unchanged bench): output identical to
+    cf6916e3's, PASS, checks=10393 fails=0. test_m2_char_cache_lanes (new
+    target): LANES 4 and LANES 0 built with the address a cycle before the
+    request (TB_ADDR_EARLY) -- the same text as each other and as the
+    original bench, SIBLING 1 (the bench's default), so the sibling paths
+    through the lanes are run too.
+  * tb_m2_video_frame at defaults and at the 2C build's parameters (LB_RING
+    1, MASK_SKIP 1, PAL_COPIES 4 against cf6916e3 with LB_RING 1 MASK_SKIP
+    1), +charlat 20 +charjit 7, r928 boot3 and HOTD f003600 / f003656: the
+    ppm and the category image byte-identical to cf6916e3's
+    (cf009f38..., edb349aa..., 0e883e3d...).
+  * Output text identical to cf6916e3's, every one PASS:
+    test_m2_tile_fetch (checks=609 fails=0, both builds),
+    test_m2_video_ovr (both builds, 0 failures), test_m2_video_r826 (both
+    builds), test_m2_video_xlat (7,598,080 cycles compared, 5,229,229 with
+    a lit pixel, 71,214 table writes, 0 fails). These run m2_video and
+    m2_char_cache at their defaults (PAL_COPIES 1, LANES 0); the 2C
+    parameters are the miter's and the frame bench's above.
+  * m2_scan15 (sim/video/run_scan15.sh, modes 0-4 and the random cadence
+    +rnd=1 +slip3=20 +seed=7): output hash identical to cf6916e3's in every
+    one (cba99e13695a0880 / e8314cb1ac87d800 / 63e3b0ec40b59e80 /
+    1d9010d432ebc400 / f0a9825a55892400 over 2.24-2.33 M output pixels),
+    all PASS.
+  * lint_top clean (one new PINCONNECTEMPTY: u_tilemap's pal_addr, left
+    open now the copies are used); lint_idx: the same 114 lines as
+    cf6916e3; quartus_map --analyze_file clean on Model2.sv, m2_video,
+    m2_char_cache, m2_tdp_ram2c, m2_scan15.
+
+*AREA AND MODULE-ALONE TIMING (Quartus 17.0, the project's synthesis
+settings -- AGGRESSIVE AREA, register duplication off -- on a wrapper of
+m2_video + m2_char_cache + u_pal + u_tram as Model2.sv wires them, fitted
+alone on 5CSEBA6U23I7, Slow 100C, 10 ns; an empty chip, so the slacks show
+the structure, not the core's congestion):*
+
+                                    cf6916e3   R1030
+    ALM                             1,066      1,024   (-42)
+    registers                       1,176      1,197   (+21)
+    M10K                            164        164     (u_pal 16, cdata 64, ctag 4: unchanged)
+    DSP                             3          3
+    pal address -> palette M10K     +3.408     +4.412
+    mixer (rd_qq) -> pal address    +2.570     +2.465
+    line buffer -> rd_qq            +4.467     +3.217
+    f_char_addr_q -> cache M10K     +2.067     (gone)
+    f_char_addr_q -> ra             --         +5.415
+    ra -> cdata M10K                --         +3.986
+    worst into any cache M10K       +2.067     +3.436 (st.S_INIT -> write enable)
+    worst clk_mem in the wrapper    +1.356     +1.950 (elsewhere, untouched)
+
+  m2_scan15 alone (quartus_map): 158 -> 197 registers (the three 13-bit
+  copies), DSP 6 = 6, block memory the same.
+
+*Cycle changes: none at any RAM's output or at any module output.* The
+cache's arrays read a different line on edges whose read is never used
+(S_IDLE without a request, S_MISS, S_ACK); no write moves.
+
+*NOT DONE:*
+  * m2_sdram state.S_MISS / S_ACT / ras_ok -> sd_a (2 seeds each, worst
+    -0.044): the pin-side address register's D mux. sd_a is don't-care only
+    while cmd is NOP and A12:A11 are the DQM with MASK_ON_A, so the cheap
+    rewrite (dropping the hold leg) would change pins in NOP cycles; any
+    real retime belongs with the controller's owner and its formal check
+    (sim/miter/sdram_eq.sh). Left alone.
+  * u_tram -> m2_video mask_r (2 seeds, +0.234 worst, never failing):
+    tile RAM read data through win_mode / cur_layer[0] into mask_r. Not
+    touched.
+  * m2_scan15 acc_r -> acc_r (one seed, s3076 -1.973) and tile_fetch
+    lb_addr -> the line buffer (one seed, s3076 -2.214): single-seed, both
+    on s3076, which is congested around the whole video block.
