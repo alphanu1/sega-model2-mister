@@ -1913,6 +1913,7 @@ int main(int argc, char **argv) {
       // completes.
       else if (a >= 0x884000 && a <= 0x887fff)               { if (d->obs_copro_stall) { kind = 0; g_rd_pend = true; } else { kind = 'R'; val = d->obs_io_rdata; } }
       else if (a == 0x980000 && d->obs_io_we)                  kind = 'C';
+      else if (a >= 0x8c0000 && a <= 0x8c0fff && d->obs_io_we) kind = 'H';   // R1031: 2B's host IOP window
       if (kind)
         std::fprintf(g_copro_trace, "%c %llu %08x %08x %08x\n", kind,
                      (unsigned long long)g_frames_done, a, val, (unsigned)d->obs_ip);   // the fifth field: the i960's IP (R232)

@@ -98,7 +98,8 @@ module m2b_sharc #(
     output logic        dbg_ret,            // this clock the state is that after word dbg_pc
     output logic [23:0] dbg_pc,
     output logic [47:0] dbg_op,
-    output logic [2:0]  dbg_st              // 0 halt, 1 fetch, 2 D, 3 X; bit 2: D waiting
+    output logic [2:0]  dbg_st,             // 0 halt, 1 fetch, 2 D, 3 X; bit 2: D waiting
+    output logic [23:0] obs_pc              // R1031: the pc of the word in X (the probe's 'C' record)
 );
 
 import sharc_fp_pkg::*;
@@ -1418,7 +1419,9 @@ logic [1:0] x_cnt, x_need;
 assign x_need = (XC.fl_on && XC.fl_misc) ? xu_mx :
                 (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0;
 assign x_done = st == ST_X && x_cnt >= x_need && !x_ext_wait && !(XC.fl_on && XC.fl_mul && fm_busy);
-assign ext_req = st == ST_X && XC.acc == A_EXT && x_ext_on && x_cnt >= x_need;
+// (R1031: not while MAME's slow multiply holds X -- an acknowledge in those clocks would clear
+// x_ext_on without finishing the word; MAME_RND 0 has no slow path)
+assign ext_req = st == ST_X && XC.acc == A_EXT && x_ext_on && x_cnt >= x_need && !(XC.fl_on && XC.fl_mul && fm_busy);
 assign ext_we = XC.acc_wr;
 assign ext_addr = XC.acc_addr;
 assign ext_wdata = XC.acc_wd;
@@ -1932,6 +1935,7 @@ end
 
 assign flag_out = {mode2[18] & astat[22], mode2[17] & astat[21]};
 assign dbg_st = {st == ST_D && d_wait, st};
+assign obs_pc = x_pc;
 
 // unused
 logic unused_ok;

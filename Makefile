@@ -1949,6 +1949,35 @@ $(BOOT_2C_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp
 	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
 	  sim/io/tb_m2_boot.cpp
 
+# R1031: THE 2B BOOT (Dead or Alive, MAME doa): the 2C harness with B2 -- m2_copro's
+# SHARC (rtl/sharc), its DM page modelled in the harness (all ones until m2b_dmc
+# clears it; BOOT_2B_LAT clocks a transaction), the host IOP window, the i8251 at
+# 0x009c0000, the texture windows' upper MB mirrored:
+#   M2_A2=1 M2_A2X=1 M2_C2=1 M2_BOOT_IMAGE=<doa2b.bin> ./obj_boot_2b/Vm2_boot_harness +insn=<n>
+# (the image from tools/rom_csum.py on the doa 2B MRA with --out).
+BOOT_2B_DIR ?= obj_boot_2b
+BOOT_2B_LAT ?= 12
+BOOT_2B_RND ?= 1   # MAME's rounding: the out words comparable with MAME's capture
+BOOT_2B_G   ?=
+SHARC_RTL := rtl/sharc/sharc_fp_pkg.sv rtl/sharc/m2b_sharc_pkg.sv rtl/sharc/m2b_lutram.sv rtl/sharc/sharc_fadd.sv \
+             rtl/sharc/sharc_fmul.sv rtl/sharc/m2b_sharc_xu.sv rtl/sharc/m2b_sharc.sv rtl/sharc/m2b_dmc.sv rtl/sharc/m2b_xbus.sv
+$(BOOT_2B_DIR)/Vm2_boot_harness: sim/io/m2_boot_harness.sv sim/io/tb_m2_boot.cpp $(BOOT_2A_RTL) $(SHARC_RTL) \
+                           rtl/io/m2_cpu_bridge.sv rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv \
+                           rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) $(wildcard rtl/tgpx4/*.sv) $(wildcard rtl/cpu/tv80/*.v) \
+                           rtl/mem/m2_char_cdc.sv $(wildcard rtl/video/*.sv) \
+                           $(wildcard rtl/cpu/i960/*.sv) rtl/cpu/i960/i960_fptrans_rom.svh
+	$(VBUILD) --top-module m2_boot_harness -Wno-SIMILARNAME -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM \
+	  -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-PINMISSING -Wno-LATCH -Wno-CASEINCOMPLETE \
+	  --Mdir $(BOOT_2B_DIR) -o Vm2_boot_harness \
+	  -GBUFFERRAM_EN=$(BOOT_BUFFERRAM) -GA2=1 -GA2X=1 -GC2=1 -GB2=1 -GSH_LAT=$(BOOT_2B_LAT) -GSH_MAME_RND=$(BOOT_2B_RND) -GAW=26 $(BOOT_2B_G) \
+	  -GTGP_PROG=4096 -GGEO_LIST_WIN=4096 \
+	  -CFLAGS "-O2" $(SHARC_RTL) sim/io/m2_boot_harness.sv rtl/io/m2_cpu_bridge.sv $(BOOT_2A_RTL) \
+	  rtl/io/m2_ioboard.sv rtl/io/m2_backup.sv rtl/mem/m2_tdp_ram.sv rtl/io/m2_ioz80.sv $(wildcard rtl/tgp/*.sv) \
+	  $(filter-out rtl/tgpx4/tgpx4_rf.sv,$(wildcard rtl/tgpx4/*.sv)) rtl/tgpx4/tgpx4_rf.sv \
+	  $(wildcard rtl/cpu/tv80/*.v) rtl/mem/m2_char_cdc.sv \
+	  $(wildcard rtl/video/*.sv) $(wildcard rtl/cpu/i960/*.sv) \
+	  sim/io/tb_m2_boot.cpp
+
 # R844: the same boot as Virtua Cop (game ID 1): VCOP=1, the vcopa image from
 # tools/rom_csum.py --out in M2_BOOT_IMAGE, M2_VCOP=1, EPR-17181 in M2_IOFW,
 # and M2_ROMPATH at a directory whose daytona93/ holds only the two program

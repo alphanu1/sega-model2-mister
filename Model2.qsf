@@ -968,6 +968,17 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_cvt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_pmem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/tgpx4_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tgpx4/m2_tgpx4.sv
+# R1031: the 2B board's SHARC (elaborated only in an M2_2B build: m2_copro SHARC);
+# the two packages first
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/sharc_fp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/m2b_sharc_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/m2b_lutram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/sharc_fadd.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/sharc_fmul.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/m2b_sharc_xu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/m2b_sharc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/m2b_dmc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sharc/m2b_xbus.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/m2_geo.sv
 # The geometry pipeline. m2_geometry ties these together; the arithmetic stages
 # are Model 1's, pinned in THIRD_PARTY.md, and m2_geo_engine/m2_geo_screen are
@@ -1025,6 +1036,10 @@ set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|
 set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to "emu:emu|pll:pll|pll_core:pll_inst|altera_pll:altera_pll_i|outclk_wire[4]"
 
 set_global_assignment -name VERILOG_MACRO "M2_2C=1"
+# R1031: the 2B board (branch model2b): the SHARC in the copro slot, on 2C's
+# CRX map with 2B's differences (Model2.sv M2_2B); no Digital Sound Board
+# (M2_2B forces DSB off whatever M2_2C_DSB says)
+set_global_assignment -name VERILOG_MACRO "M2_2B=1"
 # R979 / R1004: Sega Touring Car Championship's Digital Sound Board (its
 # music), in its all-M10K form (Model2.sv lists the other forms)
 set_global_assignment -name VERILOG_MACRO "M2_2C_DSB=1"

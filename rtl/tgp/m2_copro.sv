@@ -78,7 +78,28 @@ module m2_copro #(
   parameter bit          X4_CTLD   = 1'b1,
   parameter int unsigned X4_WQ     = 4,
   // R931: a full output FIFO holds the TGP (m2_tgp OUT_STALL); 0 drops (R146)
-  parameter bit OUT_STALL = 1'b0
+  parameter bit OUT_STALL = 1'b0,
+  // R1031: THE 2B BOARD -- an ADSP-21062 SHARC (rtl/sharc/m2b_sharc) in place of
+  // the TGP, wired as MAME 0.289's model2b_state does it (below, g_sharc):
+  // the upload through the FIFO port while copro_ctl1 bit 31 is set
+  // (external_dma_write, one 16-bit part a store, the part the upload count
+  // mod 3), the host IOP window at 0x008c0000 (external_iop_write, sel_iop),
+  // FLAG0 = the in FIFO empty, FLAG1 = the out FIFO full at MAME's 16 (R1024),
+  // copro_halt doing nothing and copro_boot releasing HALT only. SH_DM_AW: the
+  // SHARC's on-chip block-1 words (R1026: 8 K); the rest in the SDRAM page
+  // behind m2b_dmc (SH_LN_AW lines x SH_WD_AW words, R1027: 64 x 16) on the
+  // sdm_ port (Model2.sv port 8). SH_EPB: the host's EPB0 writes (IOP 0x04,
+  // 0x008c0010) reach the upload packer -- Last Bronx's boot (R1024), which
+  // needs more than this (alternate register files, the fixed multiplier ...)
+  // and is not yet run; 0 drops them. Takes precedence over TGPX4.
+  parameter bit          SHARC    = 1'b0,
+  parameter int unsigned SH_DM_AW = 13,
+  parameter int unsigned SH_LN_AW = 6,
+  parameter int unsigned SH_WD_AW = 4,
+  parameter bit          SH_EPB   = 1'b1,
+  // R1031: the SHARC's float rounding -- 0 the ADSP-2106x manual's (R1024, Ben's
+  // decision: the build), 1 MAME's (benches comparing the out words with MAME's)
+  parameter bit          SH_MAME_RND = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -104,6 +125,10 @@ module m2_copro #(
   input  logic        sel_fn,
   input  logic  [7:0] fn_code,      // cpu_io_addr[11:4]
   input  logic        sel_fifoctl,  // 0x00980004, fifo_control
+  // R1031: the 2B host IOP window, 0x008c0000-0x008c0fff (SHARC only; tie 0
+  // otherwise): iop_reg is the dword offset, cpu_io_addr[11:2]
+  input  logic        sel_iop,
+  input  logic  [9:0] iop_reg,
   input  logic        we,
   input  logic [31:0] wdata,
   output logic [31:0] rdata,
@@ -137,6 +162,14 @@ module m2_copro #(
   input  logic        bufw_ack,
   input  logic [31:0] dat_rdata,
   input  logic        dat_ack,
+  // R1031: the SHARC's DM page (SHARC only; 0 otherwise): m2b_dmc's port --
+  // a level held to sdm_ack, halfword-addressed in the 128 KB page
+  output logic        sdm_req,
+  output logic        sdm_we,
+  output logic [15:0] sdm_addr,
+  output logic [15:0] sdm_din,
+  input  logic        sdm_ack,
+  input  logic [31:0] sdm_dout,
 
   // ---- for the debug channel
   output logic [31:0] dbg_ctl,
@@ -215,7 +248,7 @@ module m2_copro #(
 );
 
   // ------------------------------------------------------------ control
-  localparam int unsigned CW = TGPX4 ? 13 : 12;   // R924: 8,192 dwords on 2C
+  localparam int unsigned CW = SHARC ? 16 : TGPX4 ? 13 : 12;   // R924: 8,192 dwords on 2C; R1031: 2B's 16-bit parts (Gunblade NY 20,874)
   logic [31:0] coproctl;
   logic [CW-1:0] coprocnt;
   logic        halted;
@@ -394,6 +427,10 @@ module m2_copro #(
     .full(fin_full), .count(fin_count), .dropped(dbg_in_dropped), .held()
   );
 
+  // R1031: the 2B board's out FIFO is MAME's 16 deep: FLAG1, and a SHARC store
+  // into it waits, at 16 words (R1024)
+  wire        sh_fout_full = SHARC && (fout_count >= 16'd16);
+
   m2_fifo_m10k #(.DW(32), .DEPTH(FD_OUT)) u_fout (
     .clk(clk), .rst_n(rst_n), .clr(x4_fo_clr),
     .push(tgp_out_push), .din(tgp_out_data),
@@ -418,7 +455,7 @@ module m2_copro #(
         if (bit31_ch) begin
           if (wdata[31]) begin           // start upload
             coprocnt <= '0;
-            if (!TGPX4) halted <= 1'b1;  // R924: 2C's copro_halt does nothing
+            if (!TGPX4 && !SHARC) halted <= 1'b1;  // R924: 2C's copro_halt does nothing; R1031: nor 2B's
           end else begin                 // boot
             halted   <= 1'b0;
           end
@@ -511,7 +548,78 @@ module m2_copro #(
   // the consumer stops draining results. Ours drains synchronously -- see the
   // `stall` line above -- so it cannot; and if it ever does, the signature is
   // everything freezing at once, not the frame-1 hang this replaces.
-  generate if (!TGPX4) begin : g_tgp
+  generate if (SHARC) begin : g_sharc
+    // R1031: THE 2B BOARD (MAME 0.289 model2b_state). machine_reset holds the
+    // SHARC in HALT (`halted` from reset) and device_reset clears its RAM
+    // (m2b_sharc CLEAR, m2b_dmc's page); copro_boot (bit 31 falling) releases
+    // HALT and nothing else; copro_halt (bit 31 rising) does nothing but zero
+    // the upload count. The SHARC waits in HALT for the DM page's clear.
+    logic [1:0]  sh_ph;          // the upload count mod 3 (external_dma_write's `address % 3`)
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) sh_ph <= 2'd0;
+      else if (bit31_ch && wdata[31]) sh_ph <= 2'd0;
+      else if (fifo_wr && uploading) sh_ph <= (sh_ph == 2'd2) ? 2'd0 : sh_ph + 2'd1;
+    // external_iop_write: the dword offset is the IOP register; offsets past
+    // 0xff land outside the IOP space and are dropped. EPB0 (0x04) behind SH_EPB.
+    wire sh_iop_we = sel_iop && we && iop_reg[9:8] == 2'd0 && (SH_EPB || iop_reg[7:0] != 8'h04);
+    logic        sh_busy, sh_unsup, sh_ret, sh_fin_pop, sh_fout_push;
+    logic [23:0] sh_unsup_pc, sh_pc;
+    logic [47:0] sh_unsup_op;
+    logic [3:0]  sh_unsup_why;
+    logic [31:0] sh_fout_data;
+    logic        x_req, x_we, x_ack;
+    logic [31:0] x_addr, x_wd, x_rd;
+    m2b_sharc #(.MAME_RND(SH_MAME_RND), .DM_AW(SH_DM_AW)) u_sh (
+      .clk(clk), .reset(!rst_n), .run(!halted && !sh_busy),
+      .host_iop_we(sh_iop_we), .host_iop_reg(iop_reg[7:0]), .host_iop_data(wdata),
+      .xdma_we(fifo_wr && uploading), .xdma_phase(sh_ph), .xdma_data(wdata[15:0]),
+      .fin_empty(!fin_valid), .fin_data(fin_q), .fin_pop(sh_fin_pop),
+      .fout_full(sh_fout_full), .fout_push(sh_fout_push), .fout_data(sh_fout_data),
+      .flag_out(),
+      .ext_req(x_req), .ext_we(x_we), .ext_addr(x_addr), .ext_wdata(x_wd), .ext_ack(x_ack), .ext_rdata(x_rd),
+      .unsup(sh_unsup), .unsup_pc(sh_unsup_pc), .unsup_op(sh_unsup_op), .unsup_why(sh_unsup_why),
+      .dbg_ret(sh_ret), .dbg_pc(), .dbg_op(), .dbg_st(), .obs_pc(sh_pc));
+    m2b_xbus #(.DM_AW(SH_DM_AW), .LN_AW(SH_LN_AW), .WD_AW(SH_WD_AW)) u_xb (
+      .clk(clk), .reset(!rst_n), .busy(sh_busy),
+      .ext_req(x_req), .ext_we(x_we), .ext_addr(x_addr), .ext_wdata(x_wd), .ext_ack(x_ack), .ext_rdata(x_rd),
+      .dat_req(dat_req), .dat_addr(dat_addr), .dat_is_buf(dat_is_buf), .dat_hi(dat_hi),
+      .dat_ack(dat_ack), .dat_rdata(dat_rdata),
+      .bufw_req(bufw_req), .bufw_addr(bufw_addr), .bufw_data(bufw_data), .bufw_ack(bufw_ack),
+      .wq_busy(tgp_wq_busy),   // R888: the i960's pops wait for the SHARC's buffer-RAM stores
+      .sdm_req(sdm_req), .sdm_we(sdm_we), .sdm_addr(sdm_addr), .sdm_din(sdm_din),
+      .sdm_ack(sdm_ack), .sdm_dout(sdm_dout),
+      .st_fill(), .st_wait());
+    assign tgp_in_pop   = sh_fin_pop;
+    assign tgp_out_push = sh_fout_push;
+    assign tgp_out_data = sh_fout_data;
+    assign dat_is_prog = 1'b0; assign bufw_is_prog = 1'b0;
+    assign x4_up_busy = 1'b0;
+    assign x4_fi_clr = 1'b0; assign x4_fo_clr = 1'b0;
+    assign ram_req_w = 1'b0;
+    assign tbl_req = 1'b0; assign tbl_addr = 16'd0;
+    assign dat_we = 1'b0; assign dat_wdata = 16'd0; assign dat_half = 1'b0;
+    // the TGP's debug ports, as far as the SHARC has them: THE UNSUPPORTED WORD
+    // (R1027's sticky flag) is dbg_tgp_unimpl, and dbg_tgp_pc its pc once set
+    // (else the pc of the word running); dbg_tgp_op {reason, 4'd0, its pc}
+    logic [15:0] sh_ret_n;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) sh_ret_n <= 16'd0; else if (sh_ret) sh_ret_n <= sh_ret_n + 16'd1;
+    assign dbg_tgp_retires = sh_ret_n;
+    assign dbg_tgp_pc     = sh_unsup ? sh_unsup_pc[15:0] : sh_pc[15:0];
+    assign dbg_tgp_unimpl = sh_unsup;
+    assign dbg_tgp_op     = {sh_unsup_why, 4'd0, sh_unsup_pc};
+    assign dbg_tgp_st     = {16'd0, sh_unsup_op[47:32]};
+    assign dbg_tgp_a      = sh_unsup_op[31:0];
+    assign dbg_tgp_hs = 32'd0; assign dbg_tgp_out_refused = 16'd0;
+    assign dbg_tgp_hold = 32'd0; assign dbg_tgp_wr_n = 32'd0; assign dbg_tgp_wr_addr = 17'd0;
+    assign dbg_tgp_wr_data = 32'd0; assign dbg_tgp_b = 32'd0; assign dbg_tgp_d = 32'd0;
+    assign dbg_tgp_io_addr = 16'd0; assign dbg_tgp_io_rd = 1'b0; assign dbg_tgp_io_wr = 1'b0;
+    assign dbg_tgp_io_ack = 1'b0;
+    assign dbg_ff_math = 16'd0; assign dbg_ff_rom = 16'd0; assign dbg_ff_buf = 16'd0; assign dbg_rd_total = 16'd0;
+    assign dbg_tgp_fifo_rd = sh_fin_pop; assign dbg_tgp_fifo_wr = sh_fout_push; assign dbg_tgp_bank = 32'd0;
+    logic unused_sh;
+    assign unused_sh = ^tbl_rdata ^ tbl_ack ^ fout_full;
+  end else if (!TGPX4) begin : g_tgp
     m2_tgp #(.EMPTY_FIFO_READS_ZERO(1'b0), .PROG_WORDS(PROG_WORDS), .SUBNORM(SUBNORM), .EARLY_ALU(EARLY_ALU),
              .BUFW_Q(BUFW_Q), .OUT_STALL(OUT_STALL)) u_tgp (
       .clk(clk), .rst_n(rst_n & ~halted),
@@ -549,6 +657,7 @@ module m2_copro #(
     assign dat_hi = 1'b0;   // R1010
     assign bufw_is_prog = 1'b0;
     assign x4_up_busy = 1'b0;
+    assign sdm_req = 1'b0; assign sdm_we = 1'b0; assign sdm_addr = 16'd0; assign sdm_din = 16'd0;   // R1031
     assign x4_fi_clr = 1'b0; assign x4_fo_clr = 1'b0;   // R933
   end else begin : g_tgpx4
     // R924: the MB86235. `uc_we` is the upload dword (coprocnt was its index);
@@ -574,6 +683,7 @@ module m2_copro #(
     );
     // what the TGP's debug ports carried, as far as the TGPx4 has them
     assign ram_req_w = 1'b0;
+    assign sdm_req = 1'b0; assign sdm_we = 1'b0; assign sdm_addr = 16'd0; assign sdm_din = 16'd0;   // R1031
     assign tbl_req = 1'b0; assign tbl_addr = 16'd0;
     assign dat_we = 1'b0; assign dat_wdata = 16'd0; assign dat_half = 1'b0;
     assign tgp_wq_busy = 1'b0;

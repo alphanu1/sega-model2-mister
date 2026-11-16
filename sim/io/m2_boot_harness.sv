@@ -93,6 +93,13 @@ module m2_boot_harness #(
   // the SDRAM copy the tb keeps at word 0x1040000), the bridge's 2C texture /
   // luma map, the copro status register; tb_m2_boot under M2_C2=1
   parameter bit          C2              = 1'b0,
+  // R1031: the Model 2B board as Model2.sv builds it with M2_2B (with C2, A2 and
+  // A2X): m2_copro's SHARC, its DM page served here (below), the host IOP window,
+  // the i8251 at 0x009c0000, the texture windows' upper MB mirrored; tb_m2_boot
+  // under M2_B2=1. SH_LAT: the DM page's transaction latency in clocks.
+  parameter bit          B2              = 1'b0,
+  parameter int unsigned SH_LAT          = 12,
+  parameter bit          SH_MAME_RND     = 1'b0,   // R1031: 1 = MAME's float rounding (out words comparable with MAME's)
   parameter int unsigned X4_PLINES       = 1024,
   // R927: the board's clock ratios (tb_m2_boot M2_BOARDCLK=1): the 2A
   // timers count 25 MHz from an 80 MHz clk_mem (5/16) instead of from 48
@@ -754,7 +761,7 @@ module m2_boot_harness #(
     assign br_req = bus_req; assign bus_rdata = br_rdata; assign bus_ack = br_ack;
   end endgenerate
 
-  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BOARD_2C(C2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (   // R924
+  m2_cpu_bridge #(.AW(AW), .BOARD_2A(A2), .BOARD_2C(C2), .BOARD_2B(B2), .BUFFERRAM(BUFFERRAM_EN)) u_bridge (   // R924; R1031
     .dbg_dc_hits(obs_dc_hits), .dbg_dc_miss(obs_dc_miss),
     .char_wr(), .char_wr_addr(),
     .clk_cpu(clk_cpu), .rst_n_cpu(rst_n),
@@ -848,7 +855,34 @@ module m2_boot_harness #(
   wire        copro_ctl_sel  = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980000);
   wire        copro_fctl_sel = cpu_io_sel && (cpu_io_addr[23:0]  == 24'h980004);
   wire        copro_sel      = copro_fifo_sel | copro_ctl_sel | copro_fctl_sel;
+  wire        copro_iop_sel  = B2 && cpu_io_sel && (cpu_io_addr[31:12] == 20'h008c0);   // R1031, as Model2.sv
   wire [31:0] copro_rdata;
+  // R1031: THE SHARC'S DM PAGE (Model2.sv port 8), modelled here: 32 K words that
+  // START ALL ONES (unwritten memory reads 0xFFFF...; m2b_dmc clears its part after
+  // reset, as MAME's device_reset clears the SHARC's RAM), each transaction
+  // answered SH_LAT clocks after its request, the acknowledge held while the
+  // request stands (m2_sdram_cdc's contract, R162).
+  wire        sdm_req, sdm_we;
+  wire [15:0] sdm_addr, sdm_din;
+  logic       sdm_ack;
+  logic [31:0] sdm_dout;
+  logic [15:0] sdm_mem [65536];
+  initial for (int k = 0; k < 65536; k++) sdm_mem[k] = 16'hFFFF;
+  logic [15:0] sdm_cnt;
+  logic        sdm_busy;
+  always_ff @(posedge clk_m) begin
+    if (!rst_n || !sdm_req) begin
+      sdm_ack <= 1'b0; sdm_busy <= 1'b0; sdm_cnt <= 16'd0;
+    end else if (!sdm_ack && !sdm_busy) begin
+      sdm_busy <= 1'b1; sdm_cnt <= 16'(SH_LAT);
+    end else if (sdm_busy) begin
+      if (sdm_cnt <= 16'd1) begin
+        sdm_busy <= 1'b0; sdm_ack <= 1'b1;
+        if (sdm_we) sdm_mem[sdm_addr] <= sdm_din;
+        else sdm_dout <= {sdm_mem[sdm_addr + 16'd1], sdm_mem[sdm_addr]};
+      end else sdm_cnt <= sdm_cnt - 16'd1;
+    end
+  end
   wire        copro_stall;
   assign obs_copro_stall = copro_stall;
   assign obs_push_stall  = A2 && geo_push_stall;   // R854
@@ -885,10 +919,12 @@ module m2_boot_harness #(
   end
 
   m2_copro #(.PROG_WORDS(TGP_PROG), .SUBNORM(A2), .EARLY_ALU(A2), .BUFW_Q(A2 ? 32 : 0), .OUT_STALL(A2),
-             .TGPX4(C2), .X4_PLINES(X4_PLINES)) u_copro (   // R888: as Model2.sv; R924, R931
+             .TGPX4(C2 && !B2), .X4_PLINES(X4_PLINES), .SHARC(B2), .SH_MAME_RND(SH_MAME_RND)) u_copro (   // R888: as Model2.sv; R924, R931; R1031
     .clk(clk_m), .rst_n(rst_n),
     .sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
     .sel_fifoctl(copro_fctl_sel),
+    .sel_iop(copro_iop_sel), .iop_reg(cpu_io_addr[11:2]),   // R1031
+    .sdm_req(sdm_req), .sdm_we(sdm_we), .sdm_addr(sdm_addr), .sdm_din(sdm_din), .sdm_ack(sdm_ack), .sdm_dout(sdm_dout),
     .sel_fn(copro_fn_sel), .fn_code(cpu_io_addr[11:4]),
     .we(cpu_io_we), .wdata(cpu_io_wdata), .rdata(copro_rdata),
     .stall(copro_stall),
@@ -1181,6 +1217,13 @@ module m2_boot_harness #(
     assign obs_tgpx_d     = u_copro.g_tgp.u_tgp.core.u_regs.reg_d;
     assign obs_tgp_ram69  = u_copro.g_tgp.u_tgp.core.u_mem.ram0[8'h69];
     assign obs_tgp_ram6a  = u_copro.g_tgp.u_tgp.core.u_mem.ram0[8'h6a];
+  end else if (B2) begin : g_sh_obs
+    // R1031: the SHARC -- a retire per word, the pc of the word in X
+    assign tgp_rom_rd = 1'b0; assign tgp_rom_adr = '0;
+    assign obs_tgp_retire = u_copro.g_sharc.sh_ret;
+    assign obs_tgp_rpc    = u_copro.g_sharc.sh_pc[15:0];
+    assign obs_tgpx_a = 32'd0; assign obs_tgpx_d = 32'd0;
+    assign obs_tgp_ram69 = 32'd0; assign obs_tgp_ram6a = 32'd0;
   end else begin : g_x4_obs
     assign tgp_rom_rd = 1'b0; assign tgp_rom_adr = '0;
     assign obs_tgp_retire = u_copro.g_tgpx4.u_x4.u_core.dbg_retire;
@@ -1237,7 +1280,8 @@ module m2_boot_harness #(
     // on a list the bench itself had malformed.
     (cpu_io_addr[23:0] == 24'h802008) ? geo_wp_o :
     (cpu_io_addr[23:0] == 24'h803008) ? geo_rp_o :
-    (A2 && cpu_io_addr[23:2] == 22'h32_0000) ? {8'd0, a2_uart_stat, 8'd0, a2_uart_data} :   // R852
+    (A2 && !B2 && cpu_io_addr[23:2] == 22'h32_0000) ? {8'd0, a2_uart_stat, 8'd0, a2_uart_data} :   // R852
+    (B2 && cpu_io_addr[31:3] == 29'h0013_8000) ? {24'd0, cpu_io_addr[2] ? a2_uart_stat : a2_uart_data} :   // R1031
     (A2 && cpu_io_addr[23:4] == 20'hf0000)   ? a2_tmr_rdata :
     (A2 && iob_sel)                   ? ((cpu_io_addr[11:5] == 7'd0) ? a2_io_rdata : 32'd0) :
     iob_sel                           ? iob_rdata :
@@ -1333,17 +1377,19 @@ module m2_boot_harness #(
     );
     // the i8251 at 0x01c80000, as Model2.sv: data in byte 0, status/command
     // in byte 2; the far end is the silent stand-in (31.25 kbaud, 48 MHz)
-    wire uart_sel = cpu_io_sel && (cpu_io_addr[23:2] == 22'h32_0000);
-    wire uart_ctl = uart_sel && cpu_io_be[2];
-    wire uart_dat = uart_sel && cpu_io_be[0];
-    wire uart_rd_dat = uart_sel && !cpu_io_we && cpu_io_be[0] && !cpu_io_be[2];
+    // R1031: on 2B at 0x009c0000 (data) / 0x009c0004 (status / command), byte 0 each
+    wire uart_sel = B2 ? (cpu_io_sel && (cpu_io_addr[31:3] == 29'h0013_8000))
+                       : (cpu_io_sel && (cpu_io_addr[23:2] == 22'h32_0000));
+    wire uart_ctl = uart_sel && (B2 ? (cpu_io_addr[2] && cpu_io_be[0]) : cpu_io_be[2]);
+    wire uart_dat = uart_sel && (B2 ? (!cpu_io_addr[2] && cpu_io_be[0]) : cpu_io_be[0]);
+    wire uart_rd_dat = uart_sel && !cpu_io_we && (B2 ? uart_dat : (cpu_io_be[0] && !cpu_io_be[2]));
     wire [7:0] a_tx_d, a_rx_d, b_tx_d, b_rx_d;
     wire a_tx_v, a_tx_a, a_rx_v, a_rx_a, b_tx_v, b_tx_a, b_rx_v, b_rx_a;
     m2_i8251 u_uart (
       .clk(clk_m), .rst_n(rst_n),
       .sel((cpu_io_we && (uart_dat | uart_ctl)) || uart_rd_dat),
       .we(cpu_io_we), .addr(uart_ctl & ~uart_dat),
-      .din(uart_ctl & ~uart_dat ? cpu_io_wdata[23:16] : cpu_io_wdata[7:0]),
+      .din((!B2 && uart_ctl && !uart_dat) ? cpu_io_wdata[23:16] : cpu_io_wdata[7:0]),
       .dout(), .data_o(a2_uart_data), .stat_o(a2_uart_stat),
       .tx_data(a_tx_d), .tx_valid(a_tx_v), .tx_ack(a_tx_a),
       .rx_data(a_rx_d), .rx_valid(a_rx_v), .rx_ack(a_rx_a),

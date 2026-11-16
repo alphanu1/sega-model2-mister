@@ -109,6 +109,22 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_VCOP_GUN
 `define M2_NO_VCOP_GUN
 `endif
+// R1031: M2_2B, THE MODEL 2B-CRX BOARD (branch model2b only): 2A's board with
+// an ADSP-21062 SHARC as the coprocessor (m2_copro SHARC: rtl/sharc), on the
+// CRX map 2B shares with 2C -- so it builds on M2_2C (texture / luma RAM at
+// 0x11000000 / 0x11400000, copro_status_r at 0x00980014), with 2B's own
+// differences from MAME 0.289's model2b_crx_mem: the texture windows' upper
+// MB a MIRROR of the lower (R1024: three games draw from it; 2C drops it,
+// R928), the i8251 at 0x009c0000 (umask32 0x000000ff; 0x01c80000 unmapped),
+// the SHARC's host IOP window at 0x008c0000, its DM page on SDRAM port 8 (the
+// TGP tables' port; no Digital Sound Board on 2B). VERILOG_MACRO "M2_2B=1"
+// (or -DM2_2B to lint) builds it; a 2B build runs 2B games only (Dead or
+// Alive, game ID 0x16 as its 2A set).
+`ifdef M2_2B
+`ifndef M2_2C
+`define M2_2C
+`endif
+`endif
 // R859: M2_2A_SOUND, the 2A sound board (its 68000 and the SCSP, m2_2a_sound)
 // on the i8251's far end -- 1 by default; 0 puts R852's silent stand-in back.
 `ifndef M2_2A_SOUND
@@ -711,8 +727,15 @@ localparam int unsigned C2_PLINES = `M2_2C_PLINES;
 localparam int unsigned C2_XCACHE = `M2_2C_XCACHE;   // R1006
 localparam bit          C2_X4FWD  = (`M2_2C_X4FWD != 0);   // R1009
 localparam int unsigned C2_X4WQ   = `M2_2C_X4WQ;
-localparam bit          DSB       = M2A && (`M2_2C_DSB != 0);   // R979
+`ifdef M2_2B
+localparam bit          B2        = M2A;   // R1031: the 2B board (the SHARC); C2 is its CRX map
+localparam bit          DSB       = 1'b0;  // R1031: no Digital Sound Board on 2B
 `else
+localparam bit          B2        = 1'b0;
+localparam bit          DSB       = M2A && (`M2_2C_DSB != 0);   // R979
+`endif
+`else
+localparam bit          B2        = 1'b0;
 localparam bit          C2        = 1'b0;
 localparam int unsigned C2_PLINES = 1024;
 localparam int unsigned C2_XCACHE = 0;
@@ -1264,6 +1287,16 @@ wire        tgp_tbl_req, tgp_dat_req;
 wire        tgp_dat_we, tgp_dat_is_buf, tgp_dat_half;
 wire        tgp_dat_is_prog, tgp_bufw_is_prog;   // R924: the TGPx4's program copy (2C)
 wire        tgp_dat_hi;                          // R1010: copro data bit 20 (2C)
+// R1031: THE 2B SHARC'S DM PAGE -- block-1 words past its on-chip 8 K, behind
+// m2b_dmc's 64 x 16 cache (R1026 / R1027) -- on PORT 8, the TGP tables' port
+// (a 2B build has no TGP and no Digital Sound Board, so the port is idle):
+// reads and the cache's write-through on one port, so a read never passes a
+// write (the DSB's reason, R979). 128 KB at byte 0x2080000, GAME_X4PROG's
+// place in the large layout's 4 MB of MRA zeros (2B has no TGPx4); the cache
+// clears its part after reset as MAME's device_reset does.
+wire        sh_dm_req, sh_dm_we;
+wire [15:0] sh_dm_addr, sh_dm_din;
+localparam logic [SDR_AW:1] GAME_SHDM = SDR_AW'(32'h1040000);   // byte 0x2080000
 // The geometrizer walks its display list once a frame, on the same vblank
 // edge the frame counter uses. The reference gates it on videocontrol bit 0
 // or an even frame; that gate is not modelled yet, so it walks every frame.
@@ -1762,6 +1795,11 @@ always_comb begin
 	if (DSB) begin
 		p_req[8]  = dsb_s_req;   p_addr[8] = dsb_s_addr;
 		p_we[8]   = dsb_s_we;    p_din[8]  = dsb_s_din;   p_be[8] = dsb_s_be;
+	end
+	// R1031: ON 2B PORT 8 IS THE SHARC'S DM PAGE (m2_copro sdm_, above)
+	if (B2) begin
+		p_req[8]  = sh_dm_req;   p_addr[8] = GAME_SHDM + SDR_AW'(sh_dm_addr);
+		p_we[8]   = sh_dm_we;    p_din[8]  = sh_dm_din;   p_be[8] = 2'b11;
 	end
 	// PORT 9 REACHES TWO REGIONS NOW, chosen by the coprocessor's bank register
 	// (R133). The reference's banked window is the copro data ROM when the
@@ -3324,7 +3362,7 @@ wire  [1:0] cpu_sd_be;
 wire [31:0] cpu_dbg_rd, cpu_dbg_wr, cpu_dbg_unmapped;
 
 m2_cpu_bridge #(.BUFFERRAM(1'b1), .BUFFERRAM_WRONLY(1'b0)
-                  , .AW(SDR_AW), .BOARD_2A(M2A), .BOARD_2C(C2), .DCACHE_EN(1'b1)) u_cpu_bridge (   // R852; R924
+                  , .AW(SDR_AW), .BOARD_2A(M2A), .BOARD_2C(C2), .BOARD_2B(B2), .DCACHE_EN(1'b1)) u_cpu_bridge (   // R852; R924; R1031
 	.dbg_dc_hits(dc_hits), .dbg_dc_miss(dc_miss),
 	.char_wr(cpu_char_wr), .char_wr_addr(cpu_char_wr_addr),
 	.clk_cpu(clk_i960), .rst_n_cpu(cpu_rst_n),
@@ -3541,14 +3579,18 @@ end
 // would look exactly like a broken UART. The byte COUNT and the last byte are
 // reported over the serial channel, so the board can be checked against the
 // reference's 59 bytes before any of that arrives.
-wire        uart_sel = cpu_io_sel && (cpu_io_addr[23:2] == 22'h32_0000);
-wire        uart_ctl = uart_sel && cpu_io_be[2];      // byte 2: status/command
-wire        uart_dat = uart_sel && cpu_io_be[0];      // byte 0: data
+// R1031: ON 2B AT 0x009c0000, umask32 0x000000ff (MAME model2b_crx_mem): data
+// in byte 0 of 0x009c0000, status / command in byte 0 of 0x009c0004; 2A's
+// 0x01c80000 is unmapped there (four 2B sets write it five times, R1024).
+wire        uart_sel = B2 ? (cpu_io_sel && (cpu_io_addr[31:3] == 29'h0013_8000))
+                          : (cpu_io_sel && (cpu_io_addr[23:2] == 22'h32_0000));
+wire        uart_ctl = uart_sel && (B2 ? (cpu_io_addr[2] && cpu_io_be[0]) : cpu_io_be[2]);   // byte 2: status/command
+wire        uart_dat = uart_sel && (B2 ? (!cpu_io_addr[2] && cpu_io_be[0]) : cpu_io_be[0]);  // byte 0: data
 wire  [7:0] uart_dout, uart_data_byte, uart_status_byte;
 // A read consumes the data byte, so `sel` is asserted for a read only when the
 // access names byte 0 ALONE. Status polls are wider or name byte 2 and must
 // leave the received byte where it is.
-wire        uart_rd_dat = uart_sel && !cpu_io_we && cpu_io_be[0] && !cpu_io_be[2];
+wire        uart_rd_dat = uart_sel && !cpu_io_we && (B2 ? uart_dat : (cpu_io_be[0] && !cpu_io_be[2]));
 wire [31:0] snd_bytes, snd_sig;
 wire  [7:0] snd_last;
 
@@ -3576,7 +3618,7 @@ m2_i8251 u_uart_main (
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel((cpu_io_we && (uart_dat | uart_ctl)) || uart_rd_dat),
 	.we(cpu_io_we), .addr(uart_ctl & ~uart_dat),
-	.din(uart_ctl & ~uart_dat ? cpu_io_wdata[23:16] : cpu_io_wdata[7:0]),
+	.din((!B2 && uart_ctl && !uart_dat) ? cpu_io_wdata[23:16] : cpu_io_wdata[7:0]),   // R1031: 2B a byte 0 each
 	.dout(uart_dout), .data_o(uart_data_byte), .stat_o(uart_status_byte),
 	.tx_data(a_tx_d), .tx_valid(a_tx_v), .tx_ack(a_tx_a),
 	.rx_data(a_rx_d), .rx_valid(a_rx_v), .rx_ack(a_rx_a),
@@ -4012,8 +4054,10 @@ assign cpu_io_rdata =
 	(cpu_io_addr[23:0] == 24'h803008) ? geo_rd_rp :
 	// The sound UART, byte 0 = data and byte 2 = status. Read as a dword the
 	// i960 gets both, which is what .umask16(0x00ff) presents.
-	(cpu_io_addr[23:2] == 22'h32_0000)
+	(!B2 && cpu_io_addr[23:2] == 22'h32_0000)
 		? {8'd0, uart_status_byte, 8'd0, uart_data_byte} :
+	(B2 && cpu_io_addr[31:3] == 29'h0013_8000)   // R1031: 2B's, a byte a dword
+		? {24'd0, cpu_io_addr[2] ? uart_status_byte : uart_data_byte} :
 	// THE WORD ADDRESS, ignoring the low two bits. The boot reads BOTH byte
 	// 0x01c00040 and byte 0x01c00042 -- the DPRAM is eight bits wide at bytes 0
 	// and 2 of the SAME dword -- and comparing the raw byte address matches only
@@ -4114,6 +4158,9 @@ wire        copro_fifo_sel = cpu_io_sel && (cpu_io_addr[23:14] == 10'h221);
 // command code is the address: MAME takes (offset >> 2) & 0xff of a dword
 // offset, which is bits 11:4 of the byte address.
 wire        copro_fn_sel   = cpu_io_sel && (cpu_io_addr[23:14] == 10'h220);
+// R1031: 2B's host IOP window, 0x008c0000-0x008c0fff (MAME: the SHARC's
+// external_iop_write), the full address
+wire        copro_iop_sel  = B2 && cpu_io_sel && (cpu_io_addr[31:12] == 20'h008c0);
 // ------------------------------------------------------------- GEOMETRIZER
 // The front door only: two pointers and the push path. The reference DISCARDS
 // the microcode upload and hardcodes the pipeline, so there is no program
@@ -4956,10 +5003,14 @@ end
 // coprocessor that can be measured, and one behind an unsynchronised crossing
 // is neither.
 m2_copro #(.PROG_WORDS(M2A ? 4096 : 2048), .SUBNORM(M2A), .EARLY_ALU(M2A),
-           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE), .X4_FWD(C2_X4FWD), .X4_WQ(C2_X4WQ)) u_copro (   // R852, R888; R924, R931
+           .BUFW_Q(M2A ? 32 : 0), .OUT_STALL(M2A), .TGPX4(C2 && !B2), .X4_PLINES(C2_PLINES), .X4_XCACHE(C2_XCACHE), .X4_FWD(C2_X4FWD), .X4_WQ(C2_X4WQ),
+           .SHARC(B2)) u_copro (   // R852, R888; R924, R931; R1031
 	.clk(clk_sys), .rst_n(cpu_rst_n),
 	.sel_ctl(copro_ctl_sel), .sel_fifo(copro_fifo_sel),
 	.sel_fifoctl(copro_fctl_sel),
+	.sel_iop(copro_iop_sel), .iop_reg(cpu_io_addr[11:2]),              // R1031
+	.sdm_req(sh_dm_req), .sdm_we(sh_dm_we), .sdm_addr(sh_dm_addr), .sdm_din(sh_dm_din),
+	.sdm_ack(p_ack[8]), .sdm_dout(p_dout[8][31:0]),
 	.sel_fn(copro_fn_sel), .fn_code(cpu_io_addr[11:4]),
 	.we(cpu_io_we), .wdata(cpu_io_wdata), .rdata(copro_rdata),
 	.stall(copro_stall),
@@ -6370,7 +6421,7 @@ end else begin : g_nodbg
 		        (pb_sel == 3'd3) ? {snd_selftest, 12'd0, snd_mvol} :
 		        (pb_sel == 3'd4) ? snd_sums[{rs_i, 5'd0} +: 32] :
 		        (pb_sel == 3'd5) ? {sl_w5[19:4], sl_slow} :
-		        {copro_stall, tgp_unimpl, 14'd0, tgp_pc}),
+		        {copro_stall, tgp_unimpl, 10'd0, B2 ? tgp_op[31:28] : 4'd0, tgp_pc}),   // R1031: the SHARC's reason
 		.b_valid(1'b0), .b_addr(32'd0), .b_data(32'd0),
 		.a_tag(mi_take ? 8'h4D : mt_take ? ((mt_i == 5'd16) ? 8'h62 : 8'h42) : (pb_sel == 3'd1) ? 8'h53 : (pb_sel == 3'd2) ? 8'h54 : (pb_sel == 3'd3) ? 8'h55 : (pb_sel == 3'd4) ? 8'h52 :
 		       (pb_sel == 3'd5) ? 8'h4c : 8'h43),

@@ -72,6 +72,12 @@ module m2_cpu_bridge #(
   // plain 32-bit RAM, the luma RAM at 0x11400000 a byte per halfword, and the
   // 2A windows at 0x12000000-0x1281ffff unmapped (MAME model2c_crx_mem)
   parameter bit          BOARD_2C = 0,
+  // R1031: 1 = 2B-CRX (with BOARD_2C): the same map but for the texture
+  // windows' upper MB, which 2B MIRRORS onto the lower (MAME model2b_crx_mem
+  // maps 0x11100000 / 0x11300000 onto the shares of 0x11000000 / 0x11200000;
+  // Virtua Striker, Fighting Vipers and Sonic Championship write only there,
+  // R1024) where 2C drops it (R928)
+  parameter bit          BOARD_2B = 0,
   // R576: 1 when clk_cpu is NOT an exact /2 of clk_mem (the i960 at 35.3 MHz
   // against a 60 MHz core): R460's two synchroniser flops each way, as the
   // i960 at 30 against 50 had. 0 keeps R464's single flop, sound only at 2:1.
@@ -781,7 +787,7 @@ module m2_cpu_bridge #(
       sd_word = base_pal3d + AW'(ra[10:1]);
     end else if (r_addr >= 32'h0180_0000 && r_addr < 32'h0180_4000) begin
       tgt = T_PAL;
-    end else if (BOARD_2C && r_addr >= 32'h1100_0000 && r_addr < 32'h1140_0000 && r_addr[20]) begin
+    end else if (BOARD_2C && !BOARD_2B && r_addr >= 32'h1100_0000 && r_addr < 32'h1140_0000 && r_addr[20]) begin
       // R928: THE UPPER MB OF EACH 2 MB WINDOW IS DROPPED, NOT MIRRORED. Over
       // Rev uploads all 2 MB of both sheets at boot (MAME 0.289: 0x11000000-
       // 0x110fffff, then 0x11100000-0x111fffff, then sheet 1 the same, 2.57-
@@ -798,6 +804,7 @@ module m2_cpu_bridge #(
       // MAME 0.289 maps each window as 2 MB of RAM (2B: 1 MB and a mirror); its
       // renderer reads only the first 1 MB (2048 x 1024 texels at 4 bits), so
       // the upper MB was taken as the mirror 2B's map has (R928: dropped, above).
+      // R1031: on 2B (BOARD_2B) it is that mirror: ra[20] is not in the index.
       tgt = T_SDRAM; tex_region = 1'b1;
       sd_word = (r_addr[21] ? base_texs1 : base_texs0) + AW'(ra[19:1]);
     end else if (BOARD_2C && r_addr >= 32'h1140_0000 && r_addr < 32'h1141_0000) begin

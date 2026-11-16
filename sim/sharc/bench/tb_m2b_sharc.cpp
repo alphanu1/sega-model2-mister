@@ -17,8 +17,15 @@
 //     upload (MAME's external_dma_write), on its own FIFOs; PC, R0-R15, I0-I15, M0-M15, ASTAT,
 //     STKY, MODE1, the stacks' pointers and tops, CURLCNTR, LCNTR compared at every word.
 //
+//   * R1031: the board's side of the external bus (m2b_xbus) is in the bench: the DM page's port
+//     and the buffer RAM / ROM ports served by a model here, each transaction answered after a
+//     random latency in [lo, hi] clocks (+lat=lo:hi, +seed=<n>), the page and the buffer RAM
+//     starting all ones (unwritten memory reads 0xFFFF...), the ROM 0 (DOA's region is
+//     ERASE00). Built with a small DM_AW, Dead or Alive's data words above 2^DM_AW go through
+//     the cache.
+//
 //   tb_m2b_sharc +ev=<events.bin> [+trace=<strace.bin>] [+tfrom=<k>] [+words=<n>] [+lock]
-//                [+prof=<file>] [+tdiff=<n>] [+quiet]
+//                [+prof=<file>] [+tdiff=<n>] [+quiet] [+lat=<lo>:<hi>] [+seed=<n>]
 #include "Vtb_m2b_sharc.h"
 #include "verilated.h"
 #include <cstdint>
@@ -132,13 +139,59 @@ int main(int argc, char **argv) {
 
     Vtb_m2b_sharc *t = new Vtb_m2b_sharc;
     t->clk = 0; t->reset = 1; t->run = 0; t->host_iop_we = 0; t->xdma_we = 0;
-    t->fin_empty = 1; t->fout_full = 0; t->ext_ack = 0; t->v_ce = 0; t->v_ext_ack = 0;
+    t->fin_empty = 1; t->fout_full = 0; t->v_ce = 0; t->v_ext_ack = 0;
+    t->sdm_ack = 0; t->dat_ack = 0; t->bufw_ack = 0;
     t->v_pm_we = 0; t->v_we = 0; t->v_flag = 0;
-    auto tick = [&]() { t->clk = 0; t->eval(); t->clk = 1; t->eval(); };
+
+    // R1031: the SDRAM side -- the DM page (64 K halfwords), the buffer RAM (32 K words), the ROM
+    unsigned lat_lo = 1, lat_hi = 1;
+    if (const char *l = arg("lat=")) { if (sscanf(l, "%u:%u", &lat_lo, &lat_hi) != 2) lat_hi = lat_lo = atoi(l); }
+    if (lat_hi < lat_lo) lat_hi = lat_lo;
+    uint64_t rng = arg("seed=") ? strtoull(arg("seed="), nullptr, 0) * 0x9e3779b97f4a7c15ULL + 1 : 0x1234567ULL;
+    auto rnd = [&]() { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; };
+    auto lat = [&]() -> uint64_t { return lat_lo + (lat_hi > lat_lo ? rnd() % (lat_hi - lat_lo + 1) : 0); };
+    std::vector<uint16_t> page(65536, 0xffff);
+    std::vector<uint16_t> bufram(65536, 0xffff);
+    uint64_t sclk = 0, sdm_rd = 0, sdm_wr = 0, x_rd = 0, x_wr = 0;
+    struct Port { bool busy = false, done = false; uint64_t due = 0; };
+    Port psdm, pdat, pbw;
+    auto serve = [&]() {      // the low half of a clock: answer the ports (inputs for this edge)
+        // the DM page
+        if (!t->sdm_req) { psdm.done = false; t->sdm_ack = 0; }
+        else if (!psdm.busy && !psdm.done) { psdm.busy = true; psdm.due = sclk + lat(); }
+        if (psdm.busy && sclk >= psdm.due) {
+            unsigned a = t->sdm_addr;
+            if (t->sdm_we) { page[a] = t->sdm_din; sdm_wr++; }
+            else { t->sdm_dout = page[a] | uint32_t(page[(a + 1) & 0xffff]) << 16; sdm_rd++; }
+            psdm.busy = false; psdm.done = true;
+        }
+        if (t->sdm_req && psdm.done) t->sdm_ack = 1;      // sticky while the request stands (R162)
+        // buffer RAM / ROM reads
+        if (!t->dat_req) { pdat.done = false; t->dat_ack = 0; }
+        else if (!pdat.busy && !pdat.done) { pdat.busy = true; pdat.due = sclk + lat(); }
+        if (pdat.busy && sclk >= pdat.due) {
+            uint32_t a = t->dat_addr;
+            t->dat_rdata = t->dat_is_buf ? (bufram[(2 * a) & 0xffff] | uint32_t(bufram[(2 * a + 1) & 0xffff]) << 16) : 0;
+            x_rd++;
+            pdat.busy = false; pdat.done = true;
+        }
+        if (t->dat_req && pdat.done) t->dat_ack = 1;
+        // buffer RAM writes
+        if (!t->bufw_req) { pbw.done = false; t->bufw_ack = 0; }
+        else if (!pbw.busy && !pbw.done) { pbw.busy = true; pbw.due = sclk + lat(); }
+        if (pbw.busy && sclk >= pbw.due) { bufram[t->bufw_addr & 0xffff] = t->bufw_data; x_wr++; pbw.busy = false; pbw.done = true; }
+        if (t->bufw_req && pbw.done) t->bufw_ack = 1;
+        sclk++;
+    };
+    auto tick = [&]() { t->clk = 0; t->eval(); serve(); t->eval(); t->clk = 1; t->eval(); };
     for (int k = 0; k < 4; k++) tick();
     t->reset = 0;
-    // the core clears its RAM after reset (MAME's device_reset); the i960's upload comes long after
+    // the core clears its RAM after reset (MAME's device_reset), and m2b_dmc the DM page's part; the
+    // i960's upload comes long after
     for (int k = 0; k < 8200; k++) tick();
+    uint64_t clr_clk = 0;
+    while (t->o_busy) { tick(); clr_clk++; }
+    printf("DM page cleared %llu clocks after the core's RAM (latency %u-%u)\n", (unsigned long long)clr_clk, lat_lo, lat_hi);
 
     // ---------------------------------------------------------------- the boot
     // MAME's external_dma_write, for v1's PM (16/48 packing as DOA sets it: DMAC6 0xa1)
@@ -222,7 +275,7 @@ int main(int argc, char **argv) {
     };
     uint64_t clocks = 0, words = 0, nwait = 0, dwait = 0, outs = 0, out_bad = 0, vouts = 0, vout_bad = 0;
     uint64_t tw = 0, tbad = 0, tcmp = 0, lock_n = 0, lock_bad = 0;
-    uint64_t st_cnt[8] = {0}, rf2w = 0;
+    uint64_t st_cnt[8] = {0}, rf2w = 0, dm_fill = 0, dm_wait = 0, dm_acc = 0, dm_wr = 0;
     std::map<uint32_t, std::pair<uint64_t, uint64_t>> prof;   // pc -> (words, clocks)
     uint64_t last_ret_clk = 0;
     bool have_prev = false;
@@ -270,6 +323,8 @@ int main(int argc, char **argv) {
             t->v_ce = theirs.size() < 4096;
         }
         t->clk = 0; t->eval();
+        serve();
+        t->eval();
         // the combinational outputs of this clock
         bool pop = t->fin_pop, push = t->fout_push;
         uint32_t pushd = t->fout_data;
@@ -301,6 +356,7 @@ int main(int argc, char **argv) {
         clocks++;
         st_cnt[t->dbg_st & 7]++;
         rf2w += t->o_rf2w;
+        dm_fill += t->o_fill; dm_wait += t->o_wait; dm_acc += t->o_dm_acc; dm_wr += t->o_dm_wr;
         if (pop && !fin.empty()) fin.pop_front();
         if (push) {
             uint32_t w;
@@ -408,6 +464,10 @@ int main(int argc, char **argv) {
            double(clocks) / words, double(clocks) / (work ? work : 1),
            (unsigned long long)(st_cnt[2] + st_cnt[6]), (unsigned long long)st_cnt[6], (unsigned long long)st_cnt[3]);
     printf("deferred R-file writes (a word writing two) %llu\n", (unsigned long long)rf2w);
+    printf("DM page (R1031): %llu accesses through the cache (%llu writes), %llu fills, %llu clocks a read waited for its word;"
+           " port: %llu reads, %llu writes; buffer / ROM: %llu reads, %llu writes\n",
+           (unsigned long long)dm_acc, (unsigned long long)dm_wr, (unsigned long long)dm_fill, (unsigned long long)dm_wait,
+           (unsigned long long)sdm_rd, (unsigned long long)sdm_wr, (unsigned long long)x_rd, (unsigned long long)x_wr);
     printf("out FIFO words %llu, %llu differ from MAME's\n", (unsigned long long)outs, (unsigned long long)out_bad);
     if (out_bad)
         printf("  the differences in ulps (same sign): 1: %llu, 2-3: %llu, 4-15: %llu, 16-255: %llu, 256-65535: %llu, "

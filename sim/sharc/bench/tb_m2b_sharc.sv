@@ -6,7 +6,12 @@
 module tb_m2b_sharc #(
     parameter bit MAME_RND = 1'b1,
     parameter bit LOCK = 1'b0,
-    parameter bit RF_ONES = 1'b0
+    parameter bit RF_ONES = 1'b0,
+    // R1031: the core's on-chip block-1 words and the DM cache's shape (m2b_xbus / m2b_dmc); a
+    // small DM_AW sends Dead or Alive's data words through the cache and the C++ SDRAM model
+    parameter int DM_AW = 13,
+    parameter int LN_AW = 6,
+    parameter int WD_AW = 4
 ) (
     input  logic        clk, reset, run,
     input  logic        host_iop_we,
@@ -21,10 +26,21 @@ module tb_m2b_sharc #(
     input  logic        fout_full,
     output logic        fout_push,
     output logic [31:0] fout_data,
-    output logic        ext_req, ext_we,
-    output logic [31:0] ext_addr, ext_wdata,
-    input  logic        ext_ack,
-    input  logic [31:0] ext_rdata,
+    // R1031: the board's side of the external bus (m2b_xbus): the DM page, buffer RAM / ROM
+    output logic        o_busy,
+    output logic        sdm_req, sdm_we,
+    output logic [15:0] sdm_addr, sdm_din,
+    input  logic        sdm_ack,
+    input  logic [31:0] sdm_dout,
+    output logic        dat_req, dat_is_buf, dat_hi,
+    output logic [19:0] dat_addr,
+    input  logic        dat_ack,
+    input  logic [31:0] dat_rdata,
+    output logic        bufw_req,
+    output logic [18:0] bufw_addr,
+    output logic [15:0] bufw_data,
+    input  logic        bufw_ack,
+    output logic        o_fill, o_wait, o_dm_acc, o_dm_wr,
     output logic        unsup,
     output logic [23:0] unsup_pc,
     output logic [47:0] unsup_op,
@@ -64,11 +80,22 @@ module tb_m2b_sharc #(
     output logic [31:0] v_m [16],
     output logic [31:0] v_astat, v_stky, v_mode1, v_curlcntr, v_lcntr, v_pcstk, v_pcstkp, v_lstkp
 );
-    m2b_sharc #(.MAME_RND(MAME_RND), .BENCH(1'b1), .RF_ONES(RF_ONES)) u (
-        .clk, .reset, .run, .host_iop_we, .host_iop_reg, .host_iop_data, .xdma_we, .xdma_phase, .xdma_data,
+    logic        ext_req, ext_we, ext_ack;
+    logic [31:0] ext_addr, ext_wdata, ext_rdata;
+    m2b_sharc #(.MAME_RND(MAME_RND), .DM_AW(DM_AW), .BENCH(1'b1), .RF_ONES(RF_ONES)) u (
+        .clk, .reset, .run(run && !o_busy), .host_iop_we, .host_iop_reg, .host_iop_data, .xdma_we, .xdma_phase, .xdma_data,
         .fin_empty, .fin_data, .fin_pop, .fout_full, .fout_push, .fout_data, .flag_out(),
         .ext_req, .ext_we, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata,
-        .unsup, .unsup_pc, .unsup_op, .unsup_why, .dbg_ret, .dbg_pc, .dbg_op, .dbg_st);
+        .unsup, .unsup_pc, .unsup_op, .unsup_why, .dbg_ret, .dbg_pc, .dbg_op, .dbg_st, .obs_pc());
+    m2b_xbus #(.DM_AW(DM_AW), .LN_AW(LN_AW), .WD_AW(WD_AW), .BENCH(1'b1)) u_x (
+        .clk, .reset, .busy(o_busy),
+        .ext_req, .ext_we, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata,
+        .dat_req, .dat_addr, .dat_is_buf, .dat_hi, .dat_ack, .dat_rdata,
+        .bufw_req, .bufw_addr, .bufw_data, .bufw_ack, .wq_busy(),
+        .sdm_req, .sdm_we, .sdm_addr, .sdm_din, .sdm_ack, .sdm_dout,
+        .st_fill(o_fill), .st_wait(o_wait));
+    assign o_dm_acc = u_x.u_dmc.c_ack;
+    assign o_dm_wr  = u_x.u_dmc.c_ack && ext_we;
     assign o_r = u.g_rf[0].u.mem;               // R0-R15: the MLAB model (port A's copy)
     assign o_i = u.u_iu.mem;
     assign o_m = u.u_mu.mem;
