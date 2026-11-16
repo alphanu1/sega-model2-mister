@@ -330,9 +330,17 @@ module m2_scan15 #(
   wire  [4:0]  w1   = {r_c, 2'b00};
   wire  [4:0]  wcur = (ph == 4'd2) ? w0 : w1;
 
-  (* multstyle = "dsp" *) wire [24:0] mul_r = acc_r * 12'd3277;
-  (* multstyle = "dsp" *) wire [24:0] mul_g = acc_g * 12'd3277;
-  (* multstyle = "dsp" *) wire [24:0] mul_b = acc_b * 12'd3277;
+  // R1029: AND acc COPIED A CLOCK BEFORE THE MULTIPLY. acc_r -> the 3277 DSP
+  // -> blend_q still failed clk_mem on two 2C seeds (-0.319); acc also feeds
+  // its own adder, so the DSP could not take it as an input register. acc_q
+  // has the multiply as its only reader. blend_q is now two clocks behind
+  // acc, and acc last moved 6 or more edges before any enable (below), so at
+  // every ce_out blend_q is still exactly blend of the pixel's acc.
+  logic [12:0] acc_r_q, acc_g_q, acc_b_q;
+  always_ff @(posedge clk) begin acc_r_q <= acc_r; acc_g_q <= acc_g; acc_b_q <= acc_b; end
+  (* multstyle = "dsp" *) wire [24:0] mul_r = acc_r_q * 12'd3277;
+  (* multstyle = "dsp" *) wire [24:0] mul_g = acc_g_q * 12'd3277;
+  (* multstyle = "dsp" *) wire [24:0] mul_b = acc_b_q * 12'd3277;
   wire [23:0] blend = {mul_r[23:16], mul_g[23:16], mul_b[23:16]};
   // R968: THE BLEND IN A REGISTER, a clock behind acc. acc is written on the edges where ph is 2 and 3 and then holds
   // until the next pixel enable starts the next pair; ce_out's enables are at least 9 clk_mem apart (861/8692 at the
