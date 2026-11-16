@@ -184,9 +184,9 @@ module m2_span_tex #(
   // whole texels) is a word of m2_raster3d's box queue: in_ubi says which,
   // valid with every textured span (the queue keeps a quad's word until the
   // next quad's first span has gone, and the word before that unwritten while
-  // a slot may still name it). The clamp reads it back at the coordinate's
-  // stage -- ub_ra out, ub_rd in, an MLAB's asynchronous read -- so a slot
-  // carries 5 bits, not 45.
+  // a slot may still name it). The clamp reads it back a stage before the
+  // coordinate's (R1029: registered into ub_q) -- ub_ra out, ub_rd in, an
+  // MLAB's asynchronous read -- so a slot carries 5 bits, not 45.
   input  logic [4:0]         in_ubi,
   output logic [4:0]         ub_ra,
   input  logic [44:0]        ub_rd,
@@ -687,19 +687,40 @@ module m2_span_tex #(
   // of its span is in flight (R490), and these move only with the pipe.
   logic signed [15:0] q_x1, q_y;
   logic signed [15:0] q_sm1;   // R742: stp(k) - 1, latched with k (s795: q_k -> mq_f0 -0.236)
+  // R1029: signed a < b as the borrow of a 17-bit subtract (a carry chain)
+  function automatic logic slt16(input logic signed [15:0] a, input logic signed [15:0] b);
+    /* verilator lint_off UNUSEDSIGNAL */   // only the borrow is read
+    logic [16:0] d;
+    /* verilator lint_on UNUSEDSIGNAL */
+    begin
+      d     = {a[15], a} - {b[15], b};   // a - b, exact in 17 bits
+      slt16 = d[16];
+    end
+  endfunction
   always_comb begin
     // R742: the step less one comes latched (q_sm1)
     automatic logic signed [15:0] qx   = sh_x[PIPE_D-3][15:0];
     automatic logic signed [15:0] qx1  = q_x1;
     automatic logic signed [15:0] qy   = q_y;
     automatic logic signed [15:0] qe   = qx + q_sm1;   // R650: qx + step - 1
-    automatic logic signed [15:0] qxe  = (qe > qx1) ? qx1 : qe;
     automatic logic signed [15:0] qrow = qy - mk_band_y0;
     automatic logic signed [15:0] xa   = (qx  < 16'sd0) ? 16'sd0 : qx;
-    automatic logic signed [15:0] xb   = (qxe > QXMAX) ? QXMAX : qxe;
+    // R1029: THE CLAMPS' COMPARES SIDE BY SIDE (q_x1 -> mq_f1: 3 of 58 2C
+    // seeds under +0.3, -0.329; -> mq_f0 2, -0.153; eleven levels). xb was
+    // min(min(qe, qx1), QXMAX), a compare after a compare; it is the same
+    // three-way minimum with its three compares at once (c_ex: qe > qx1,
+    // c_em: qe > QXMAX, c_xm: qx1 > QXMAX). And xb < xa -- min(qe, qx1,
+    // QXMAX) < max(qx, 0) -- is "any of the three is below qx or below 0",
+    // with no compare in series. Every compare is a 17-bit subtract's
+    // borrow, a carry chain. The same values.
+    automatic logic c_ex = slt16(qx1, qe);
+    automatic logic c_em = slt16(QXMAX, qe);
+    automatic logic c_xm = slt16(QXMAX, qx1);
+    automatic logic signed [15:0] xb   = (c_ex ? c_xm : c_em) ? QXMAX : (c_ex ? qx1 : qe);
+    automatic logic x_lt = slt16(qe, qx) || qe[15] || slt16(qx1, qx) || qx1[15] || slt16(QXMAX, qx);
     mp_wi   = MAW'(qrow) * MAW'(MROW) + MAW'(xa[15:5]);
     mp_need = (32'hFFFF_FFFF << xa[4:0]) & (32'hFFFF_FFFF >> (5'd31 - xb[4:0]));
-    mp_f1   = (qrow < 16'sd0) || (qrow >= QBH) || (xb < xa);
+    mp_f1   = (qrow < 16'sd0) || (qrow >= QBH) || x_lt;   // x_lt == (xb < xa)
     mp_f0   = !mp_f1 && (xa[15:5] != xb[15:5]);
   end
   // R813: the span cull's shape (its check is below)
@@ -877,7 +898,13 @@ module m2_span_tex #(
   // R539: a result is issued as a fetch whenever a credit is free -- no longer
   // only when the previous fetch has come back. The retire slot is not
   // reserved here; the answer waits in the adapter until it is free.
-  wire of_room   = ((of_wp - of_rp) != OW'(TXK));
+  // R1029: "FULL" KEPT IN A REGISTER (R762's s_full, here). of_room was the
+  // pointers' subtract and a compare in front of cons_take, and so of the
+  // span queue's read (of_rp -> u_span_q rp: 6 of 58 2C seeds under +0.3,
+  // -0.408). of_full is the next pointers' difference compared with TXK and
+  // registered: of_room leaves a flop with the value it always had.
+  logic of_full;
+  wire of_room   = !of_full;   // was ((of_wp - of_rp) != OW'(TXK)), the same value
   // R607: a skipped group takes a queue slot but no credit and no fetch, and
   // leaves the queue without an answer once it is at the head -- the answers
   // still come back in the order the real fetches were made.
@@ -891,6 +918,13 @@ module m2_span_tex #(
   wire rt_take   = (head_skip || head_reuse || tx_ack) && (of_wp != of_rp) && (!rt_valid || rt_frees)
                 && (st == T_RUN);
   assign tx_take = rt_take && !head_skip && !head_reuse;   // R607, R633
+  // R1029: of_wp moves on cons_take and of_rp on rt_take, each only in T_RUN
+  // (both carry st == T_RUN) -- the FSM below, and reset, are their only writers.
+  wire [OW-1:0] of_wp_n = of_wp + OW'(cons_take);
+  wire [OW-1:0] of_rp_n = of_rp + OW'(rt_take);
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) of_full <= 1'b0;
+    else        of_full <= ((of_wp_n - of_rp_n) == OW'(TXK));
   // R551: WHY THE WALK IS BUSY, for the bench only (nothing reads it, so the
   // fitter drops it). 1 the band painter is not taking the emitted group,
   // 2 fetches are out and the oldest has not been answered, 3 a result is
@@ -951,15 +985,14 @@ module m2_span_tex #(
   // coordinate's bit at the level's width, (u >> L) & ((w >> L) << 8) in
   // model2rd.ipp, i.e. bit 13 + code - L of the level's u. A 4096-wide
   // texture's bit is 20, past the coordinate: never mirrored, as before.
-  wire [23:0] mt_t  = tex_p[res_p];
-  wire [31:0] mt_u  = {12'd0, tx_u};   // 32 wide: every 5-bit index is in range (R807)
-  wire [31:0] mt_v  = {12'd0, tx_v};
-  wire [4:0]  mt_bu = 5'd13 + {2'd0, mt_t[3:1]} - {2'd0, d4_L};
-  wire [4:0]  mt_bv = 5'd13 + {2'd0, mt_t[6:4]} - {2'd0, d4_L};
-  wire        mt_fu = mt_t[9]  && mt_u[mt_bu];
-  wire        mt_fv = mt_t[10] && mt_v[mt_bv];
-  assign tx_tex = MIP ? {3'd0, mt_fv, mt_fu, d4_L, mt_t[23:13], mt_t[12] ^ d4_L[0], mt_t[11:0]}
-                      : {8'd0, tex_p[res_p]};
+  // R1029: the group's texture word, selected from its slot a stage early
+  // (sh_p[PIPE_D-2]) and registered as the group moves to PIPE_D-1 -- as ub_q
+  // below and q_x1 (R739): the slot select is off the mirror bits' path into
+  // m2_texel_cdc's request M10K. Read only with a fetch (res_valid).
+  logic [23:0] t_q;
+  always_ff @(posedge clk) if (pipe_en && !ld_cold) t_q <= tex_p[sh_p[PIPE_D-2]];
+  wire [23:0] mt_t  = t_q;
+  // (R1029: the mirror bits and tx_tex follow the clamp, below.)
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   // R951: AND KEPT INSIDE THE QUAD'S OWN TEXELS. Every pixel the fill covers
   // is inside the quad, so in exact arithmetic its u and v lie in the box of
@@ -980,26 +1013,64 @@ module m2_span_tex #(
   // Whole texels: a box edge the game draws is a whole texel; a clipped
   // corner's fraction only loosens it. TIMING: ub_ra -> m2_raster3d's MLAB
   // (an asynchronous read) -> the two subtracts -> the select -> m2_texel_x2's
-  // request registers, on clk_sys -- the fit's report is the check.
-  function automatic logic [19:0] uv_cl(input logic [19:0] t, input logic [10:0] lo, input logic [10:0] hm);
+  // request registers, on clk_sys -- the fit's report is the check. R1029:
+  // the MLAB read is a stage earlier, into ub_q, and the path starts there.
+  // R1029: the clamp's test alone, {to the top, to the floor}; its answers
+  // are {1'b0, lo, 8'h01} and {1'b0, hm, 8'hFF} (R951's uv_cl, split so the
+  // mirror bit above can be selected from each answer beside the test).
+  function automatic logic [1:0] uv_hit(input logic [19:0] t, input logic [10:0] lo, input logic [10:0] hm);
     logic [12:0] ti, dl, dh;      // 13 bits: a difference never wraps onto 0 or 1
+    logic        l;
     begin
       ti = 13'(t[19:8]);
       dl = 13'(lo) - ti;          // 1: t in the texel under lo; 0: in lo's
       dh = ti - 13'(hm);          // 1: t in the texel over hm
-      if ((dl == 13'd1) || ((dl == 13'd0) && (t[7:0] == 8'd0)))
-        uv_cl = {1'b0, lo, 8'h01};
-      else if (dh == 13'd1)
-        uv_cl = {1'b0, hm, 8'hFF};
-      else
-        uv_cl = t;
+      l  = (dl == 13'd1) || ((dl == 13'd0) && (t[7:0] == 8'd0));
+      uv_hit = {!l && (dh == 13'd1), l};
     end
   endfunction
-  assign ub_ra = ubi_p[res_p];
-  wire [44:0] ub_r  = ub_rd;
+  // R1029: THE BOX READ A STAGE EARLY. sh_p[PIPE_D-1] -> the slot's box index
+  // -> the MLAB's asynchronous read -> uv_cl -> the mirror bit's select ->
+  // m2_texel_cdc's request M10K was the most frequent failing core path of
+  // the 2C seeds (sh_p -> q_tex, 16 of 58 seeds under +0.3, -1.241). The box
+  // is read for the group at PIPE_D-2 and registered as the group moves to
+  // PIPE_D-1, so the clamp starts from a flop. The same word: the slot's
+  // ubi_p is not reloaded while a group of its span is in flight (R490), and
+  // the box queue never overwrites a word a slot may still name (it only
+  // moves further from that the earlier it is read). ub_q follows the shadow
+  // exactly (the same branch as sh_p's shift), so it is always the box of
+  // the group at PIPE_D-1 whenever that group is valid.
+  logic [44:0] ub_q;
+  assign ub_ra = ubi_p[sh_p[PIPE_D-2]];
+  always_ff @(posedge clk) if (pipe_en && !ld_cold) ub_q <= ub_rd;
+  wire [44:0] ub_r  = ub_q;
   wire        ub_on = UVCL && !ub_r[44] && (!MIP || (d4_L == 3'd0));
-  assign tx_u   = ub_on ? uv_cl(to_tx(d4_u), ub_r[43:33], ub_r[32:22]) : to_tx(d4_u);
-  assign tx_v   = ub_on ? uv_cl(to_tx(d4_v), ub_r[21:11], ub_r[10:0])  : to_tx(d4_v);
+  wire [19:0] tx_ut = to_tx(d4_u), tx_vt = to_tx(d4_v);           // as divided
+  wire [19:0] tx_ul = {1'b0, ub_r[43:33], 8'h01}, tx_uh = {1'b0, ub_r[32:22], 8'hFF};
+  wire [19:0] tx_vl = {1'b0, ub_r[21:11], 8'h01}, tx_vh = {1'b0, ub_r[10:0],  8'hFF};
+  wire [1:0]  hit_u = uv_hit(tx_ut, ub_r[43:33], ub_r[32:22]);
+  wire [1:0]  hit_v = uv_hit(tx_vt, ub_r[21:11], ub_r[10:0]);
+  wire        cl_ul = ub_on && hit_u[0], cl_uh = ub_on && hit_u[1];
+  wire        cl_vl = ub_on && hit_v[0], cl_vh = ub_on && hit_v[1];
+  // was ub_on ? uv_cl(to_tx(d4_u), lo, hm) : to_tx(d4_u) -- the same value
+  assign tx_u   = cl_ul ? tx_ul : cl_uh ? tx_uh : tx_ut;
+  assign tx_v   = cl_vl ? tx_vl : cl_vh ? tx_vh : tx_vt;
+  wire [4:0]  mt_bu = 5'd13 + {2'd0, mt_t[3:1]} - {2'd0, d4_L};
+  wire [4:0]  mt_bv = 5'd13 + {2'd0, mt_t[6:4]} - {2'd0, d4_L};
+  // R1029: THE MIRROR BIT OF EACH OF THE CLAMP'S THREE ANSWERS, PICKED LAST.
+  // The bit select read tx_u -- the clamp's subtracts, its compares and its
+  // select, then a 32-way select -- in series (d4_v -> q_tex was +0.837 on
+  // s3060, the path left once ub_q took the box read off). The coordinate's
+  // three candidates (as divided, the floor's, the top's) each have their bit
+  // selected beside the clamp's test, and the test picks one: tx_u[i] is
+  // (c ? a : b)[i] == c ? a[i] : b[i]. mt_u's 32 bits keep every 5-bit index
+  // in range (R807). The same bits.
+  wire [31:0] mt_ut = {12'd0, tx_ut}, mt_ul = {12'd0, tx_ul}, mt_uh = {12'd0, tx_uh};
+  wire [31:0] mt_vt = {12'd0, tx_vt}, mt_vl = {12'd0, tx_vl}, mt_vh = {12'd0, tx_vh};
+  wire        mt_fu = mt_t[9]  && (cl_ul ? mt_ul[mt_bu] : cl_uh ? mt_uh[mt_bu] : mt_ut[mt_bu]);
+  wire        mt_fv = mt_t[10] && (cl_vl ? mt_vl[mt_bv] : cl_vh ? mt_vh[mt_bv] : mt_vt[mt_bv]);
+  assign tx_tex = MIP ? {3'd0, mt_fv, mt_fu, d4_L, mt_t[23:13], mt_t[12] ^ d4_L[0], mt_t[11:0]}
+                      : {8'd0, t_q};
   assign tx_req = cons_take && !res_skip && !res_reuse;   // R607, R633
   // R615: THE 3D FRAME DIFFERENTIAL'S PROBE -- every real fetch, with the
   // pixel group and texture it is for. Read by tb_m2_raster3d through

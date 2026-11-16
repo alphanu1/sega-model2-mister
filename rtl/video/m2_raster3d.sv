@@ -675,23 +675,32 @@ module m2_raster3d #(
   generate if (UVCL) begin : g_ubq
     (* ramstyle = "MLAB, no_rw_check" *) logic [44:0] ub_mem [32];   // never cleared in reset; never read where it is being written
     logic [5:0] ub_wp, ub_rp;
-    wire [5:0] ub_n    = ub_wp - ub_rp;
     wire       ub_push = fl_span_valid && fl_span_ready && fl_span_nq;
     wire       ub_pop  = sq_qv && sq_nq && ub_qv && ub_used;
+    // R1029: "NOT EMPTY" AND "FULL" KEPT IN REGISTERS (R762's pattern). ub_qv
+    // was the pointers' subtract and a compare in front of sq_qve, and so of
+    // every slot load in m2_span_tex (ub_wp -> span_tex's multiplier enable
+    // and tex_p: 4 of 58 2C seeds under +0.3, -4.257). Both are the next
+    // pointers' difference, compared and registered: the same values, cycle
+    // for cycle, from flops.
+    wire [5:0] ub_wp_n = ub_wp + 6'(ub_push);
+    wire [5:0] ub_rp_n = ub_rp + 6'(ub_pop);
+    wire [5:0] ub_n_n  = ub_wp_n - ub_rp_n;
     always_ff @(posedge clk) if (ub_push) ub_mem[ub_wp[4:0]] <= fl_span_ub;
     always_ff @(posedge clk or negedge rst_n)
       if (!rst_n) begin
         ub_wp <= '0; ub_rp <= '0; ub_used <= 1'b0;
+        ub_qv <= 1'b0; ub_full <= 1'b0;   // R1029
       end else begin
-        if (ub_push) ub_wp <= ub_wp + 6'd1;
-        if (ub_pop) begin
-          ub_rp <= ub_rp + 6'd1; ub_used <= 1'b0;
-        end else if (sq_qve && sq_rdy && sq_nq) ub_used <= 1'b1;
+        ub_wp <= ub_wp_n;
+        ub_rp <= ub_rp_n;
+        ub_qv   <= (ub_n_n != 6'd0);    // was (ub_wp - ub_rp) != 0
+        ub_full <= (ub_n_n >= 6'd31);   // was (ub_wp - ub_rp) >= 31
+        if (ub_pop) ub_used <= 1'b0;
+        else if (sq_qve && sq_rdy && sq_nq) ub_used <= 1'b1;
       end
     assign ub_head = ub_rp[4:0];
     assign ub_rd   = ub_mem[ub_ra];
-    assign ub_qv   = (ub_n != 6'd0);
-    assign ub_full = (ub_n >= 6'd31);
   end else begin : g_noubq
     assign ub_head = 5'd0; assign ub_rd = 45'd0;
     assign ub_qv = 1'b0; assign ub_used = 1'b0; assign ub_full = 1'b0;
