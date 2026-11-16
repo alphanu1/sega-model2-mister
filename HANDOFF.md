@@ -12,6 +12,12 @@ TRUNCATED TOWARD ZERO WHATEVER TRUNC HOLDS. Ben, 2026-11-16: "we will want to ad
   * Then re-run: the unit benches (xu, fp), the manual-mode lockstep against v1, the DOA
     replay, random programs and planted faults; the manual-vs-MAME histogram of R1027 again.
   * When: with the rest of the 2B work, after a clean 2C RC (Ben: 2C, then 2B, then Hornet).
+  * ALSO DECIDED (Ben, 2026-11-16, "stick with the manual"): wherever R1027 kept MAME's
+    behaviour because the manual pages read then did not say -- an infinite operand under
+    TRUNC, FIX out of range, tininess before / after rounding, FAVG's overflow and flags,
+    the flags generally -- read each op's own Appendix B entry and follow the manual. Only a
+    case the manual truly does not cover stays MAME's, and it is listed in the study.
+    The Hornet branch (sharc-manual-fp) is doing this first; port its findings.
 
 ## 2026-11-16 (later): model2b -- the SHARC in the copro slot (M2_2B), its DM cache built and proven, a doa 2B MRA (R1031), simulation + analyze_file only
 
