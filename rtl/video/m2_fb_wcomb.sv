@@ -203,10 +203,20 @@ module m2_fb_wcomb #(
   wire           hi_on = hi_in && !(FTB && b_fill[1]);
   wire           c_any = lo_on || hi_on;
   // Belongs in window ib: the same window, and on or beside the words it holds.
-  wire           c_fits = !dirty[ib] ||
-                          ((wkey[ib] == ckey) &&
-                           ({1'b0, cidx} + (LW+1)'(1) >= {1'b0, wlo[ib]}) &&
-                           ({1'b0, cidx} <= {1'b0, whi[ib]} + (LW+1)'(1)));
+  // R1029: EACH WINDOW'S TEST FROM ITS OWN REGISTERS, ib LAST. The test read
+  // wkey[ib] / wlo[ib] / whi[ib] / dirty[ib], so ib's fan-out and a 2:1
+  // select stood in front of the key compare and both bound compares, and
+  // c_fits then fans out to every valid bit's enable (ib -> vhi: 5 of 58 2C
+  // seeds under +0.3, -1.589; ib -> vlo 5, wlo -> vlo 4). Both windows are
+  // tested at once and ib picks the answer: the same value.
+  logic [1:0]    w_fits;
+  always_comb
+    for (int k = 0; k < 2; k++)
+      w_fits[k] = !dirty[k] ||
+                  ((wkey[k] == ckey) &&
+                   ({1'b0, cidx} + (LW+1)'(1) >= {1'b0, wlo[k]}) &&
+                   ({1'b0, cidx} <= {1'b0, whi[k]} + (LW+1)'(1)));
+  wire           c_fits = w_fits[ib];
   wire           other_free = !pend[~ib];
   // The window this word is written to: ib, or the other one once ib is closed.
   wire           c_wb  = c_fits ? ib : ~ib;
