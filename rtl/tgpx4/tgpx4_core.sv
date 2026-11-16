@@ -1090,22 +1090,51 @@ module tgpx4_core #(
   // on a bank conflict the multiplier's goes first only from its register
   // (it has waited a clock: the arriving one is written as it arrives
   // otherwise), so neither waits more than one
-  logic   ar_vn, mr_vn, cf_n, a_wqn, m_wqn, ca_n, cm_n;
-  odesc_t ardn, mrdn, cad_n, cmd_n;
+  // R1029-2C: THE SCHEDULE WORKED OUT FOR BOTH VALUES OF src_ok, THEN PICKED.
+  // src_ok (the state, ext_req and the word's source B) is the last input to
+  // arrive: it gated alu_go -> the integer ALU's arrival -> a_keep -> ar_vn ->
+  // the bank-conflict test -> a_wqn / m_wqn -> the wrm_n decode, 10 levels
+  // (xd.sk -> wrm_q -0.60 on s3066, -0.58 s3076; s.S_DEC -> wrm_q). Each half
+  // below is that same logic with alu_go fixed (0, or ag_p), from registers
+  // only; src_ok then picks between two finished answers. The same function
+  // of the same inputs: no cycle and no value changes. m2_tgpx4 alone,
+  // post-map: xd.sk -> wrm_q 11 -> 7 levels, s.S_DEC 10 -> 6, +4 ALM.
+  function automatic logic [34:0] wsched(input logic keep, input odesc_t cd_arr,
+      input logic arv, input logic awq, input logic aws, input odesc_t ard_i,
+      input logic pan, input odesc_t pad, input logic mrvn, input logic cmn, input odesc_t cmd);
+    logic   arvn, can, cf, awqn, mwqn;
+    odesc_t ardn_l, cad;
+    logic [31:0] w;
+    begin
+      arvn   = (arv && !(awq && !aws)) || keep;
+      ardn_l = keep ? cd_arr : ard_i;
+      can    = arvn || pan;  cad = arvn ? ardn_l : pad;
+      cf     = can && cmn && cad.we && cmd.we && (cad.idx[3] == cmd.idx[3]);
+      awqn   = can && !(cf && mrvn);
+      mwqn   = cmn && !(cf && !mrvn);
+      w = 32'd0;
+      if (awqn && cad.we) w[cad.idx] = 1'b1;
+      if (mwqn && cmd.we) w[cmd.idx] = 1'b1;
+      wsched = {arvn, awqn, mwqn, w};
+    end
+  endfunction
+  logic   ar_vn, mr_vn, a_wqn, m_wqn, cm_n;
+  odesc_t mrdn, cmd_n;
   logic [31:0] wrm_n;
+  logic        a_int_g, a_keep0, a_keep1;   // the ALU's arrival if no op goes / if ag_p's does
+  odesc_t      a_cd_g;
+  logic [34:0] ws0, ws1;
+  assign a_int_g = ag_p && (a_int || a_flog);
+  assign a_cd_g  = a_int_g ? mkd(aq_we, aq_idx, aq_fl, aop_q, 1'b0, 1'b0, 23'd0) : af[0];
   always_comb begin
-    ar_vn = (ar_v && !(a_wq && !a_ws)) || a_keep;
     mr_vn = (mr_v && !(m_wq && !m_ws)) || m_keep;
-    ardn  = a_keep ? a_cd_arr : ard;
     mrdn  = m_keep ? mf[0]    : mrd;
-    ca_n  = ar_vn || pa_n;  cad_n = ar_vn ? ardn : pad_n;
     cm_n  = mr_vn || pm_n;  cmd_n = mr_vn ? mrdn : pmd_n;
-    cf_n  = ca_n && cm_n && cad_n.we && cmd_n.we && (cad_n.idx[3] == cmd_n.idx[3]);
-    a_wqn = ca_n && !(cf_n && mr_vn);
-    m_wqn = cm_n && !(cf_n && !mr_vn);
-    wrm_n = 32'd0;
-    if (a_wqn && cad_n.we) wrm_n[cad_n.idx] = 1'b1;
-    if (m_wqn && cmd_n.we) wrm_n[cmd_n.idx] = 1'b1;
+    a_keep0 = (add_v || cv_v || div_v) && !(a_wq && a_ws);
+    a_keep1 = (add_v || cv_v || div_v || a_int_g) && !(a_wq && a_ws);
+    ws0 = wsched(a_keep0, af[0],  ar_v, a_wq, a_ws, ard, pa_n, pad_n, mr_vn, cm_n, cmd_n);
+    ws1 = wsched(a_keep1, a_cd_g, ar_v, a_wq, a_ws, ard, pa_n, pad_n, mr_vn, cm_n, cmd_n);
+    {ar_vn, a_wqn, m_wqn, wrm_n} = src_ok ? ws1 : ws0;
   end
   // R1006: S_DEC's operands FORWARDED from the results written this clock --
   // the register file has them only after this clock's edge. R1009: from the
