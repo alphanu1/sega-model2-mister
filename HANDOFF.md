@@ -1,5 +1,18 @@
 # Handoff
 
+## 2026-11-16: model2b -- TO DO, DECIDED (Ben): FLOAT as the manual has it (R1032)
+
+The 2B SHARC's manual mode has three of the manual's four float rules (TRUNC rounding of
+add / sub / mul, the multiplier's denormal flush, FIX toward minus infinity in both forms),
+but FLOAT is wrong: man_float / man_i2f round the conversion by TRUNC at 24 bits. Per
+p. B-38 FLOAT rounds to a 40-bit boundary, so the result is exact and its 32-bit view is
+TRUNCATED TOWARD ZERO WHATEVER TRUNC HOLDS. Ben, 2026-11-16: "we will want to add 4 as well".
+  * Change: man_i2f / man_float (rtl/sharc/sharc_fp_pkg.sv), FLOAT's rounding step in
+    m2b_sharc_xu.sv, and v1's manual-mode function to match; MAME_RND = 1 unchanged.
+  * Then re-run: the unit benches (xu, fp), the manual-mode lockstep against v1, the DOA
+    replay, random programs and planted faults; the manual-vs-MAME histogram of R1027 again.
+  * When: with the rest of the 2B work, after a clean 2C RC (Ben: 2C, then 2B, then Hornet).
+
 ## 2026-11-16 (later): model2b -- the SHARC in the copro slot (M2_2B), its DM cache built and proven, a doa 2B MRA (R1031), simulation + analyze_file only
 
 Branch `model2b`. Study R1031 has the record. Not pushed, not merged, no map / fit / build, no board.

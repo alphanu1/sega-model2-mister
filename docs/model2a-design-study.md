@@ -52854,8 +52854,8 @@ changed (the slow-multiply ext_req gate, obs_pc).
 **R1032 -- THE MANUAL RE-READ FOR THE FLOAT UNITS: R1024'S QUOTES HOLD, BUT
 FLOAT DOES NOT ROUND BY TRUNC AT 24 BITS. IT ROUNDS TO A 40-BIT BOUNDARY
 WHATEVER RND32 SAYS, SO ITS RESULT IS EXACT IN THE REGISTER AND ITS 32-BIT
-VIEW IS TRUNCATED TOWARD ZERO. THE 2B CORE'S man_float IS WRONG. NOT YET
-CHANGED.** Branch model2b, 2026-11-16. Doc only.
+VIEW IS TRUNCATED TOWARD ZERO. THE 2B CORE'S man_float IS WRONG; TO BE
+CHANGED (DECIDED, Ben: "we will want to add 4 as well").** Branch model2b, 2026-11-16. Doc only.
 
 *Source:* ADSP-2106x SHARC Processor User's Manual rev 2.1 (March 2004,
 82-000795-03), read page by page on ManualsLib's copy,
