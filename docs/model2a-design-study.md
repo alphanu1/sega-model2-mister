@@ -52850,3 +52850,60 @@ changed (the slow-multiply ext_req gate, obs_pc).
   * The whole-core run past MAME's frame 545 (the SHARC's first data, its output into the
     geometrizer) -- longer than the 25-minute bench limit; and why the core's boot takes about
     twice MAME's frames to each checkpoint (the i960's instructions a frame, not measured here).
+
+**R1032 -- THE MANUAL RE-READ FOR THE FLOAT UNITS: R1024'S QUOTES HOLD, BUT
+FLOAT DOES NOT ROUND BY TRUNC AT 24 BITS. IT ROUNDS TO A 40-BIT BOUNDARY
+WHATEVER RND32 SAYS, SO ITS RESULT IS EXACT IN THE REGISTER AND ITS 32-BIT
+VIEW IS TRUNCATED TOWARD ZERO. THE 2B CORE'S man_float IS WRONG. NOT YET
+CHANGED.** Branch model2b, 2026-11-16. Doc only.
+
+*Source:* ADSP-2106x SHARC Processor User's Manual rev 2.1 (March 2004,
+82-000795-03), read page by page on ManualsLib's copy,
+https://www.manualslib.com/manual/1290781/Analog-Devices-Adsp-2106x-Sharc.html
+(viewer page = printed page + 42 in chapter 2, + 502 in appendix B). The
+analog.com PDFs and the PSI mirror did not load from this machine.
+
+*Confirmed, as R1024 had them from issue #16655:*
+  * p. 2-3: denormal operands flushed on input, no underflow; a denormal or
+    underflow result flushed with an underflow exception; round-to-nearest
+    and round-toward-zero only.
+  * p. 2-7 (2.5.2.2): the ALU rounds to zero under TRUNC, else to nearest.
+    p. 2-15 (2.6.4.1): the same for the floating-point multiplier.
+  * p. 2-7 / 2-15 (rounding boundary): under RND32 the eight LSBs of each
+    input operand are flushed and results are 32-bit with the low eight
+    bits cleared.
+  * p. B-37 (FIX): TRUNC = 1 truncates toward minus infinity, TRUNC = 0
+    rounds to nearest; the TRUNC instruction is not affected by the bit.
+    p. B-81 (Table B.7) lists "Fa=FIX F11-8 by R15-12" among the
+    multifunction ALU operations with no other rule, so the multifunction
+    FIX rounds the same way (MAME's C cast does not).
+  * p. B-34 (SCALB) and B-38 (FLOAT): overflow gives +-Infinity under
+    round-to-nearest, +-NORM.MAX under round-to-zero; underflow +-Zero.
+
+*NEW, and against R1027's man_float ("FLOAT rounds by TRUNC"):* p. B-38:
+"Rounding is to nearest (IEEE) or by truncation, as defined by the rounding
+mode, to a 40-bit boundary, regardless of the values of the rounding
+boundary bits in MODE1." The 40-bit format carries 31 mantissa bits and the
+hidden bit, so FLOAT of any 32-bit integer is exact in the register file
+(and FLOAT BY Ry too, short of overflow or underflow). p. 2-4: the units
+read 32-bit operands "ignoring the 8 LSBs"; under RND32 the float units
+flush them. So what the next float operation sees is the exact value
+truncated toward zero at 24 bits, WHATEVER TRUNC holds -- not rounded by
+TRUNC (R1027), and not to nearest (MAME). A core with 32-bit registers
+models that as truncation; on silicon a FLOAT result kept in a 40-bit path
+(a register move, a 48-bit PM store, an RND32 = 0 operation) keeps eight
+more bits, which a 32-bit core cannot.
+
+*What it changes:* the 2B core's man_float (rtl/sharc/sharc_fp_pkg.sv) and
+the matching v1 function should truncate; DOA's manual-mode lockstep and
+out-word histograms (R1027-R1031) were taken with the wrong FLOAT and are
+re-run after the change. Not done yet: 2B work waits for a clean 2C RC
+(Ben, 2026-11-16). The same correction goes into the Hornet PR prepared on
+the fork (alphanu1/Arcade-KonamiHornet_MiSTer, branch sharc-manual-fp),
+where the default stays MAME's (his repo's rule) and the manual is a
+parameter.
+
+*Not settled:* how a 32-bit DM store of a 40-bit register is taken
+(upper 32 bits assumed; the data-transfer chapter not re-read); an
+infinite operand under TRUNC, FIX out of range and tininess before or
+after rounding stay MAME's (R1027).
