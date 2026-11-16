@@ -2640,7 +2640,6 @@ wire [15:0] pal_q_cpu, pal_q_vid;
 logic [31:0] vrd_cnt, vrd_nz;    // renderer reads: total, and non-zero
 logic [31:0] pl_cnt, pl_nz;      // palette reads: total, and non-zero
 wire [14:0] tram_addr;
-wire [11:0] pal_addr;
 // THE MEMORY'S OWN REGISTERED OUTPUT IS THE ONE CYCLE, not a stage before it.
 //
 // This was `tram_data <= tram[tram_addr]`: one cycle from address to data.
@@ -2745,11 +2744,19 @@ m2_tdp_ram2c #(.DW(16), .AW(15)) u_tram (
 	.b_addr(tram_addr), .b_q(tram_q_vid)
 );
 
-m2_tdp_ram2c #(.DW(16), .AW(13)) u_pal (
+// R1029: FOUR LANES OF FOUR DATA BITS, each with its own copy of the video's
+// address register (m2_video PAL_COPIES): pal_addr_q -> these sixteen blocks
+// was a logic-free route that failed clk_mem on three seeds. The same blocks,
+// the same cycles; see m2_tdp_ram2c_lanes.
+localparam int unsigned PAL_LANES = 4;
+wire [PAL_LANES*12-1:0] pal_addr_c;
+logic [PAL_LANES*13-1:0] pal_b_addr;
+always_comb for (int l = 0; l < PAL_LANES; l++) pal_b_addr[l*13 +: 13] = {1'b0, pal_addr_c[l*12 +: 12]};
+m2_tdp_ram2c_lanes #(.DW(16), .AW(13), .B_LANES(PAL_LANES)) u_pal (
 	.a_clk(clk_sys),
 	.a_addr(ocb_addr[12:0]), .a_din(ocb_din), .a_we(ocb_pal_we), .a_q(pal_q_cpu),
 	.b_clk(clk_mem),
-	.b_addr({1'b0, pal_addr}), .b_q(pal_q_vid)
+	.b_addr(pal_b_addr), .b_q(pal_q_vid)
 );
 
 // Same on the CPU side: the memory's output is already a cycle behind its
@@ -7618,7 +7625,10 @@ wire cwr_inval = cwr_s[1] || (cwr_tail != 4'd0);
 // overruns a frame -- the tile rows Ben still sees repeat.
 // R823: no sibling fetch -- with the line-buffer ring it measured 0 overruns to
 // a port-3 latency of ~60 cycles, against ~45 with it (tb_m2_video_ovr).
-m2_char_cache #(.IDX_BITS(13), .SIBLING(1'b0)) u_char_cache (
+// R1029: LANES 4 -- the data array as four 16-bit lanes and the tag array,
+// each addressed from a registered copy of the request index; m2_tile_fetch
+// holds char_addr two cycles before char_req rises, which is what it needs.
+m2_char_cache #(.IDX_BITS(13), .SIBLING(1'b0), .LANES(4)) u_char_cache (
 	.clk(clk_mem), .rst_n(cc_rst_n_s),
 	.v_req(ccf_req), .v_addr(ccf_addr),
 	.v_ack(ccf_ack), .v_data(ccf_data),
@@ -8159,7 +8169,8 @@ wire cc_rst_n_s  = cc_rst_sync[1];
 // both were fetched across the whole line and overran every line from ~35
 // cycles of port-3 latency. Pixel for pixel the same picture.
 m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
-           .SCR_STEP(R826_STEP), .SCR_DEPTH(R826_DEPTH), .MASK_SKIP(1'b1)) u_tilemap (
+           .SCR_STEP(R826_STEP), .SCR_DEPTH(R826_DEPTH), .MASK_SKIP(1'b1),
+           .PAL_COPIES(PAL_LANES)) u_tilemap (
 		// cal_done too: on a GAME image game_image short-circuits cp_done without
 	// reading anything, so the character fetch on port 3 would otherwise issue
 	// at CL+0 until the calibration caught up. Those are live re-reads rather
@@ -8184,7 +8195,7 @@ m2_video #(.LB_RING(1'b1), .HSCR_FIX(R826_HSCR), .SCR_SYNC(R826_SYNC),
 	.tram_addr(tram_addr), .tram_data(tram_data),
 	.char_req(char_req), .char_addr(char_addr),
 	.char_data(char_data), .char_ack(char_ack),
-	.pal_addr(pal_addr), .pal_data(pal_data),
+	.pal_addr(), .pal_addr_c(pal_addr_c), .pal_data(pal_data),
 	.vid_cat1(tile_cat1), .vid_r(tile_r), .vid_g(tile_g), .vid_b(tile_b),
 	.vid_hs(tile_hs), .vid_vs(tile_vs), .vid_hb(tile_hb), .vid_vb(tile_vb),
 	.vblank_irq(), .dbg_fetches(vid_fetches), .dbg_overruns(vid_overruns),

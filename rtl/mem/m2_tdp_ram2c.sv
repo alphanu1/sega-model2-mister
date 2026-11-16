@@ -94,3 +94,48 @@ module m2_tdp_ram2c #(
 `endif
 
 endmodule
+
+// R1029: THE SAME MEMORY AS B_LANES SIDE-BY-SIDE m2_tdp_ram2c's, each holding
+// DW / B_LANES of the data bits, with port B's address taken PER LANE.
+//
+// The palette is 8,192 x 16 -- sixteen M10K, one data bit each (8K x 1) --
+// and its video address came from one register, m2_video's pal_addr_q, which
+// had to reach all sixteen blocks wherever the fitter put them: a route with
+// no logic in it, 8.2-9.6 ns on most 2C seeds and 13.0 ns on s3076 (-3.824).
+// Split by data bit, each lane's blocks have a b_addr of their own, so the
+// video side can give each its own copy of the register, placed beside them.
+//
+// Nothing else changes: the same blocks (a lane of DW / B_LANES bits at
+// 2^AW words is that many 8K x 1 blocks here), the same registered address
+// on both ports, the same unregistered output, the same cycle. Port A is
+// shared by every lane, as the CPU's single address always was. b_addr is
+// lane-major: lane l's address is b_addr[l*AW +: AW].
+module m2_tdp_ram2c_lanes #(
+  parameter int unsigned DW = 16,
+  parameter int unsigned AW = 13,
+  parameter int unsigned B_LANES = 4
+) (
+  input  logic                  a_clk,
+  input  logic [AW-1:0]         a_addr,
+  input  logic [DW-1:0]         a_din,
+  input  logic                  a_we,
+  output logic [DW-1:0]         a_q,
+
+  input  logic                  b_clk,
+  input  logic [B_LANES*AW-1:0] b_addr,
+  output logic [DW-1:0]         b_q
+);
+  localparam int unsigned LW = DW / B_LANES;
+
+  genvar l;
+  generate
+    for (l = 0; l < B_LANES; l++) begin : g_lane
+      m2_tdp_ram2c #(.DW(LW), .AW(AW)) u_ram (
+        .a_clk(a_clk),
+        .a_addr(a_addr), .a_din(a_din[l*LW +: LW]), .a_we(a_we), .a_q(a_q[l*LW +: LW]),
+        .b_clk(b_clk),
+        .b_addr(b_addr[l*AW +: AW]), .b_q(b_q[l*LW +: LW])
+      );
+    end
+  endgenerate
+endmodule

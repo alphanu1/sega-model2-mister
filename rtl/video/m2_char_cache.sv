@@ -72,7 +72,14 @@ module m2_char_cache #(
   // full-screen picture layer entering a new 4-row group of its tiles) each
   // miss then costs two round trips instead of one. Measured on MAME's Daytona
   // scenes (tb_m2_video_ovr): see the study's R823.
-  parameter bit          SIBLING = 1'b1
+  parameter bit          SIBLING = 1'b1,
+  // R1029: 0 = the arrays addressed from the live request (unchanged). N = the
+  // data array as N lanes of 64 / N bits, each -- and the tag array -- with
+  // its address in A REGISTER OF ITS OWN, set a cycle early, and the fill
+  // written from `hold`. See ADDRESS LANES below for why that is the same
+  // read on every cycle that reads it, and the one thing it asks of the
+  // requester.
+  parameter int unsigned LANES = 0
 ) (
   input  logic                   clk,
   input  logic                   rst_n,
@@ -151,9 +158,6 @@ module m2_char_cache #(
   // and the misses cost ~14 cycles each -- enough that about 5% of scanlines
   // overrun their fetch budget, repeat, and show as flicker.
   localparam int unsigned TAG_BITS = ADDR_BITS - IDX_BITS - 2;
-
-  (* ramstyle = "M10K" *) logic [63:0]         cdata [LINES];
-  (* ramstyle = "M10K" *) logic [TAG_BITS:0]   ctag  [LINES];   // {valid, tag}
 
   wire [IDX_BITS-1:0]  req_idx = v_addr[IDX_BITS+1:2];
   wire [TAG_BITS-1:0]  req_tag = v_addr[ADDR_BITS-1:IDX_BITS+2];
@@ -236,7 +240,11 @@ module m2_char_cache #(
   logic [1:0]          bg_n;
 
   wire bg_busy = (bgst != BG_IDLE);
-  wire bg_wr   = (bgst == BG_WR) && !bg_kill;
+  // R1029: SIBLING in it, so that a build without the sibling folds it away:
+  // bgst never leaves BG_IDLE then (bg_arm is only ever set to SIBLING), but
+  // Quartus 17.0 keeps the state machine and with it every mux bg_wr selects
+  // -- 52 ALUTs in front of the four address lanes.
+  wire bg_wr   = SIBLING && (bgst == BG_WR) && !bg_kill;
 
   logic [IDX_BITS-1:0] sweep;
   logic [IDX_BITS-1:0] idx_r;
@@ -257,16 +265,11 @@ module m2_char_cache #(
   logic [63:0]       cd_q;
   logic [TAG_BITS:0] ct_q;
   logic              cd_we, ct_we;
-  logic [IDX_BITS-1:0] mem_addr;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [IDX_BITS-1:0] mem_addr;      // R1029: LANES 0 only
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [63:0]         cd_din;
   logic [TAG_BITS:0]   ct_din;
-
-  always_ff @(posedge clk) begin
-    cd_q <= cdata[mem_addr];
-    ct_q <= ctag [mem_addr];
-    if (cd_we) cdata[mem_addr] <= cd_din;
-    if (ct_we) ctag [mem_addr] <= ct_din;
-  end
 
   always_comb begin
     // Default: point the arrays at the incoming request so a hit costs one
@@ -274,7 +277,13 @@ module m2_char_cache #(
     mem_addr = req_idx;
     cd_we    = 1'b0;
     ct_we    = 1'b0;
-    cd_din   = m_data;
+    // R1029: with lanes the fill is written from `hold`, which took m_data on
+    // the acknowledge. The two are the same word: the fill is written in
+    // S_FILL, the cycle after it, and the port's data cannot move before the
+    // next request this cache makes (m2_sdram's p_dout[3] changes only on a
+    // delivery to port 3). It takes the SDRAM's p_dout off the M10K data
+    // inputs (p_dout[3] -> cdata, -0.113 ns on two 2C seeds).
+    cd_din   = (LANES != 0) ? hold : m_data;
     ct_din   = {1'b1, tag_r};
     case (st)
       S_INIT: begin mem_addr = sweep; ct_we = 1'b1; ct_din = '0; end
@@ -301,6 +310,95 @@ module m2_char_cache #(
       cd_we    = 1'b0;
     end
   end
+
+  // ------------------------------------------------------------------------
+  // R1029: ADDRESS LANES.
+  //
+  // f_char_addr_q (m2_tile_fetch) -> the address mux above -> 64 data blocks
+  // and 4 tag blocks, every one of them on both ports, was one clk_mem cycle
+  // (-1.226 ns on two 2C seeds, 10.4 ns of route). With LANES the address is
+  // a REGISTER instead, one copy per lane (dont_merge) so that each can sit
+  // beside its own blocks, holding the request's index from the cycle before:
+  //
+  //   ra <= req_idx
+  //
+  // The arrays are read to some purpose on two kinds of edge, and written on
+  // four:
+  //   * S_IDLE taking v_req (the lookup): the live index then. ra holds the
+  //     index of the cycle before -- the same, if v_addr did not change in
+  //     that cycle. v_req was either high already (v_addr is held with it:
+  //     this cache's contract from the start) or rising, which is the one new
+  //     requirement,
+  //
+  //       v_addr IS STABLE FOR THE CYCLE BEFORE v_req RISES.
+  //
+  //     m2_tile_fetch meets it by two cycles: f_char_addr_q is written in
+  //     F_CADDR and char_req rises from F_CHAR, two states later.
+  //   * S_LOOK (the read) and S_FILL (the write): idx_r. idx_r is the index
+  //     S_IDLE took, and v_req is held, with v_addr, until the acknowledge --
+  //     which S_LOOK or S_FILL gives -- so the index of the cycle before is
+  //     idx_r in both.
+  //   * the sibling (BG_WR), the reset sweep and the invalidate: their own
+  //     address, in front of the register as before. The data array is not
+  //     written by the sweep or the invalidate (cd_we is 0 for both) and so
+  //     its lanes need neither; with SIBLING 0 a data lane's address is the
+  //     register itself, with no logic between it and its blocks.
+  // A lookup the invalidate or the sibling stole reads another line, as it
+  // always did, and is asked again (steal_d). On every other edge the
+  // arrays' output is unread, and a different line there is invisible. The
+  // requirement is checked in simulation below.
+  logic [63:0]       cd_q_w;
+  logic [TAG_BITS:0] ct_q_w;
+  assign cd_q = cd_q_w;
+  assign ct_q = ct_q_w;
+  genvar gl;
+  generate
+    if (LANES == 0) begin : g_one
+      (* ramstyle = "M10K" *) logic [63:0]         cdata [LINES];
+      (* ramstyle = "M10K" *) logic [TAG_BITS:0]   ctag  [LINES];   // {valid, tag}
+      always_ff @(posedge clk) begin
+        cd_q_w <= cdata[mem_addr];
+        ct_q_w <= ctag [mem_addr];
+        if (cd_we) cdata[mem_addr] <= cd_din;
+        if (ct_we) ctag [mem_addr] <= ct_din;
+      end
+    end else begin : g_lanes
+      localparam int unsigned LW = 64 / LANES;
+      wire                bgw  = bg_wr && st != S_INIT;
+      wire [63:0] lq;
+      assign cd_q_w = lq;
+      for (gl = 0; gl < LANES; gl++) begin : g_lane
+        (* dont_merge *) logic [IDX_BITS-1:0] ra;
+        always_ff @(posedge clk) ra <= req_idx;
+        // A module of its own: an array declared in this loop is not inferred
+        // by Quartus 17.0, only recovered from registers after elaboration,
+        // and its ramstyle is lost (AUTO) -- m2_video's line buffers met the
+        // same thing (R818).
+        m2_cc_ram #(.W(LW), .AW(IDX_BITS)) u_ram (
+          .clk(clk), .a(bgw ? bg_idx : ra), .we(cd_we), .d(cd_din[gl*LW +: LW]), .q(lq[gl*LW +: LW])
+        );
+      end
+      // The tag array: its own copy, and the sweep and the invalidate in front.
+      (* dont_merge *) logic [IDX_BITS-1:0] ra_t;
+      always_ff @(posedge clk) ra_t <= req_idx;
+      wire [IDX_BITS-1:0] a_t = (inval && st != S_INIT) ? inval_idx :
+                                (st == S_INIT)          ? sweep     :
+                                bgw                     ? bg_idx    : ra_t;
+      (* ramstyle = "M10K" *) logic [TAG_BITS:0] ctag [LINES];   // {valid, tag}
+      always_ff @(posedge clk) begin
+        ct_q_w <= ctag[a_t];
+        if (ct_we) ctag[a_t] <= ct_din;
+      end
+`ifdef VERILATOR
+      // Checked: on every edge where the arrays' read or write counts, the
+      // register holds the address the live mux would have given.
+      always_ff @(posedge clk)
+        if (!inval && !bgw && ((st == S_IDLE && v_req && ra_t != req_idx) ||
+                               ((st == S_LOOK || st == S_FILL) && ra_t != idx_r)))
+          $error("m2_char_cache LANES: the request's index moved under it (v_addr changed the cycle before v_req, or while it was held)");
+`endif
+    end
+  endgenerate
 
   // THE LOOKUP THAT WAS ANSWERED BY SOMEBODY ELSE'S ADDRESS.
   //
@@ -452,4 +550,23 @@ module m2_char_cache #(
   // The row the requester asked for, out of the pair the line holds.
   assign v_data = sel_r ? hold[63:32] : hold[31:0];
 
+endmodule
+
+// R1029: one lane of the glyph cache's data array: one address, read and
+// written on one clock, the read registered -- what cdata was, narrower.
+module m2_cc_ram #(
+  parameter int unsigned W  = 16,
+  parameter int unsigned AW = 13
+) (
+  input  logic          clk,
+  input  logic [AW-1:0] a,
+  input  logic          we,
+  input  logic [W-1:0]  d,
+  output logic [W-1:0]  q
+);
+  (* ramstyle = "M10K" *) logic [W-1:0] mem [1 << AW];
+  always_ff @(posedge clk) begin
+    q <= mem[a];
+    if (we) mem[a] <= d;
+  end
 endmodule

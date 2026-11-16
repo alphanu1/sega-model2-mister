@@ -124,7 +124,13 @@ module m2_video #(
   // R906: m2_tile_fetch MASK_SKIP -- a column none of whose pixels can be
   // drawn (window mode 1's other map, the far side of a mode 2/3 split, the
   // row mask) is not fetched. 0: unchanged.
-  parameter bit          MASK_SKIP = 1'b0
+  parameter bit          MASK_SKIP = 1'b0,
+  // R1029: COPIES OF THE PALETTE ADDRESS REGISTER, one per lane of a palette
+  // built as m2_tdp_ram2c_lanes, on pal_addr_c (lane-major). Each copy is the
+  // same register as pal_addr_q -- the same D, the same edge -- kept apart
+  // (dont_merge) so the fitter can put each beside its own blocks. pal_addr
+  // is copy 0. 1: one register, as before.
+  parameter int unsigned PAL_COPIES = 1
 ) (
   input  logic        clk,
   input  logic        ce_pix,
@@ -157,6 +163,7 @@ module m2_video #(
 
   // Palette RAM, on chip. The V60 owns the other port.
   output logic [11:0] pal_addr,
+  output logic [PAL_COPIES*12-1:0] pal_addr_c,   // R1029: the copies, lane-major
   input  logic [15:0] pal_data,
 
   // Video out
@@ -1292,8 +1299,31 @@ module m2_video #(
   // cycles (R570): hcnt moves at E, the line buffer answers at E+1, this
   // register at E+2, pal_addr_q E+3, the palette RAM E+4, pal_data_q E+5,
   // and the next ce is E+6 at the earliest -- exactly in time.
+  //
+  // R1029: AND EACH LAYER'S HIT REGISTERED IN PLACE OF ITS THREE FLAGS. With
+  // the palette address copied (PAL_COPIES), each copy sits by its palette
+  // blocks and the mixer's route to them is longer; the mixer was six LUT
+  // levels (module-alone fit: 7.6 ns of data path). m2_tile_mixer's first
+  // level is per layer and reads only that layer's flags --
+  //   hit_cat1 = !masked && prio && !transparent
+  //   hit_cat0 = !masked && !prio && (!transparent || layer >= 2)
+  // -- so it is taken here, before rd_qq, beside the layer's own lanes, and
+  // the mixer is given flags that reproduce the two hits exactly:
+  //   masked' = !(h1 | h0), prio' = h1, transparent' = 0
+  // which give hit_cat1' = h1 and hit_cat0' = !h1 && (h1 | h0) = h0 (the two
+  // are never both set: one needs prio, the other !prio). The same pixel and
+  // the same source on every cycle; one level off the mixer's cycle and onto
+  // the line buffer's. PAL_COPIES 1 keeps the flags as they were.
   logic [14:0] rd_qq [4];
-  always_ff @(posedge clk) for (int L = 0; L < 4; L++) rd_qq[L] <= rd_q[L];
+  always_ff @(posedge clk)
+    for (int L = 0; L < 4; L++) begin
+      if (PAL_COPIES > 1) begin
+        automatic logic h1 = !rd_q[L][14] &&  rd_q[L][13] && !rd_q[L][12];
+        automatic logic h0 = !rd_q[L][14] && !rd_q[L][13] && (!rd_q[L][12] || L >= 2);
+        rd_qq[L] <= {!(h1 || h0), h1, 1'b0, rd_q[L][11:0]};
+      end else
+        rd_qq[L] <= rd_q[L];
+    end
   always_comb begin
     for (int L = 0; L < 4; L++) begin
       mix_pal[L]    = rd_qq[L][11:0];
@@ -1326,8 +1356,26 @@ module m2_video #(
   // moves at a ce edge E, the line buffer answers at E+1, this register at E+2,
   // the palette RAM at E+3, its data register at E+4, and vid_r takes it at
   // the next ce edge, E+6 at the earliest.
+  //
+  // R1029: AND COPIED, PAL_COPIES TIMES. pal_addr_q -> the palette M10K is a
+  // route with no logic in it, and it still failed clk_mem on three 2C seeds
+  // (-3.824 ns on s3076, 13.0 ns of route to sixteen blocks the fitter had
+  // spread out). Every copy is registered from `mixed` on the same edge, so
+  // every lane of the palette sees exactly the address it saw before, on the
+  // same cycle; only the wire to it is shorter. There is no spare cycle here
+  // to pipeline into (R648's accounting: the colour is in pr_q from E+7 and
+  // taken at ce_dd, E+8 at the earliest), which is why it is a copy and not
+  // a stage.
   logic [11:0] pal_addr_q;
-  always_ff @(posedge clk) pal_addr_q <= mixed;
+  genvar gpc;
+  generate
+    for (gpc = 0; gpc < PAL_COPIES; gpc++) begin : g_pal_copy
+      (* dont_merge *) logic [11:0] pa_q;
+      always_ff @(posedge clk) pa_q <= mixed;
+      assign pal_addr_c[gpc*12 +: 12] = pa_q;
+    end
+  endgenerate
+  assign pal_addr_q = pal_addr_c[11:0];
   assign pal_addr = pal_addr_q;
   logic [15:0] pal_data_q;
   always_ff @(posedge clk) pal_data_q <= pal_data;
