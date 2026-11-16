@@ -2205,6 +2205,19 @@ obj_texel/Vm2_texel: rtl/video/m2_texel.sv rtl/video/m2_texel_addr.sv sim/video/
 test_m2_char_cache: obj_charcache/Vm2_char_cache
 	@./obj_charcache/Vm2_char_cache
 
+# R1029: LANES 4 (the 2C build's) against LANES 0, both with the address set a
+# cycle before the request (TB_ADDR_EARLY, which LANES asks of the requester).
+# The two outputs must be the same text.
+test_m2_char_cache_lanes: obj_charcache_e0/Vm2_char_cache obj_charcache_e4/Vm2_char_cache
+	@./obj_charcache_e0/Vm2_char_cache > obj_charcache_e0/out.txt; ./obj_charcache_e4/Vm2_char_cache > obj_charcache_e4/out.txt
+	@tail -1 obj_charcache_e4/out.txt
+	@cmp -s obj_charcache_e0/out.txt obj_charcache_e4/out.txt && echo "LANES 4 output identical to LANES 0" || { echo "LANES 4 differs from LANES 0"; exit 1; }
+
+obj_charcache_e%/Vm2_char_cache: rtl/video/m2_char_cache.sv sim/video/tb_m2_char_cache.cpp
+	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_char_cache -GLANES=$* \
+	  --Mdir obj_charcache_e$* -o Vm2_char_cache -CFLAGS "-O2 -DTB_ADDR_EARLY" \
+	  rtl/video/m2_char_cache.sv sim/video/tb_m2_char_cache.cpp
+
 obj_charcache/Vm2_char_cache: rtl/video/m2_char_cache.sv sim/video/tb_m2_char_cache.cpp
 	$(VERILATOR) --cc --exe --build -j 0 $(VFLAGS) --top-module m2_char_cache \
 	  --Mdir obj_charcache -o Vm2_char_cache -CFLAGS -O2 \

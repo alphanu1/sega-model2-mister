@@ -88,6 +88,11 @@ static void settle(int n = 200) { for (int i = 0; i < n; ++i) tick(); }
 static uint32_t read_word(uint32_t addr, int latency, int *cycles = nullptr) {
   addr = EVEN(addr);
   mem_lat = latency;
+#ifdef TB_ADDR_EARLY
+  // R1029: LANES needs the address a cycle before the request, as
+  // m2_tile_fetch gives it (two cycles there).
+  d->v_addr = addr; tick();
+#endif
   d->v_req = 1; d->v_addr = addr;
   uint32_t got = 0;
   int n = 0;
@@ -308,6 +313,9 @@ int main(int argc, char **argv) {
     if (read_word(X, 3) != ref(X)) { std::printf("  FAIL: priming read\n"); ++fails; }
     settle();
 
+#ifdef TB_ADDR_EARLY
+    d->v_addr = A; tick();
+#endif
     d->v_req = 1; d->v_addr = A;
     d->inval_idx = (LINE(X) >> 2) & ((1u << 13) - 1);
     d->inval = 1;
