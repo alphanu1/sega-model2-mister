@@ -1,5 +1,48 @@
 # Handoff
 
+## 2026-11-16 (later): model2b -- the SHARC in the copro slot (M2_2B), its DM cache built and proven, a doa 2B MRA (R1031), simulation + analyze_file only
+
+Branch `model2b`. Study R1031 has the record. Not pushed, not merged, no map / fit / build, no board.
+
+  * WIRED: m2_copro SHARC (g_sharc: m2b_sharc + rtl/sharc/m2b_xbus + rtl/sharc/m2b_dmc) as MAME's
+    model2b_state -- HALT from reset, copro_halt empty, copro_boot releases HALT; the upload as
+    external_dma_write (count mod 3); the host IOP window 0x008c0000 (external_iop_write; EPB0
+    behind SH_EPB, Last Bronx's hook); FLAG0 in-FIFO empty, FLAG1 / store wait at 16 out words;
+    buffer RAM / data ROM on dat / bufw; the DM page on a new sdm_ port. Model2.sv M2_2B
+    (Model2.qsf sets it on this branch): B2 on 2C's CRX build, port 8 = the DM page at byte
+    0x2080000, DSB off, i8251 at 0x009c0000, texture upper MB mirrored (bridge BOARD_2B), the
+    probe 'C' record with the SHARC's reason / pc. Every term B2-gated.
+  * NOT WIRED: ROM / buffer read caches (R1024); Last Bronx's other forms; FLAG2 / 3 outputs.
+  * THE DM CACHE: 64 x 16 direct-mapped, write-through, no allocate; critical word first, the
+    line filling behind; a 16-deep posted write queue; port order clear > writes > fill; the
+    page cleared after reset (49,152 halfword writes). 4 M10K + 5 MLAB LABs.
+  * VERIFIED: production shape DOA 150 s 18,541,146 out words / trace 0-40 M equal to MAME's,
+    2.5196 clk/word (R1029's; DOA never reaches the page). DM_AW 8 (DOA's data through the
+    cache): 150 M words in lockstep with v1 and against MAME's out FIFO / trace, 0 differ, 4.47
+    clk/word at latency 1-60; 4 x 4 thrashing at latency 1-600, 0 differ; random programs and a
+    new directed program in lockstep, 0 differ; planted cache faults 12 of 12.
+  * WHOLE CORE (obj_boot_2b, doa): the upload's 12,288 words and the first command (0x04000808)
+    equal to MAME's, the SHARC takes and runs it and spins on FLAG0 as MAME's does; run to frame 616 in
+    24.8 min with no data yet (MAME's first at its frame 545; the core's boot reaches each
+    checkpoint in about twice MAME's frames). NOT REACHED: the SHARC fed data / its output.
+  * M10K: the 2B copro slot 86 (SHARC 80 + cache 4 + FIFOs 2) of ~101 freed. ALM ~4,550-4,650
+    by parts against ~4,450 (not mapped).
+
+FINDINGS THAT WERE WRONG OR NEW ON THE WAY: R1027's 56-clock miss assumed a burst -- ports 8 / 9
+give one dword a transaction (hence critical word first); R1027 costed only read misses -- a
+write-through write is two transactions and DOA with 256 words on chip is port-bound (4.87
+clk/word at 1-60); neither DOA nor the random programs write a word whose fill read is in flight
+(two planted faults passed both; m2b_dmcprog.py added); the core could lose an ext_ ack under
+MAME's slow multiply (fixed: ext_req gated); doa 2B's 317-0229 routines are at 0x29c0 / 0x2a00
+(checksum 0x570-0x5e4 = 0x5901 at 0x8fd90); the on-screen overlay has been gone since R411.
+
+REMAINS: the page's write rate on Last Bronx / Sonic Championship (write-back or combining if
+port-bound); the ROM / buffer read caches; a map of the 2B build (M10K / ALM for real); the
+whole-core run past the SHARC's first data (MAME frame 545; the core had none by 616, 25 min);
+Last Bronx.
+Benches: sim/sharc/bench (build.sh DM_AW / LN_AW / WD_AW; +lat=lo:hi +seed; dmc_faults.py;
+m2b_dmcprog.py); sim/sharc/m2b_evcmp.py; make obj_boot_2b (BOOT_2B_DIR / LAT / RND).
+
 ## 2026-11-16: model2b -- the 2B SHARC meets 80 MHz on its own (R1029), simulation + module-alone fits only
 
 Branch `model2b`. Study R1029 has the record (a table of all 21 steps, each fitted; step 3's fit failed on a RAM inference, see there). Not

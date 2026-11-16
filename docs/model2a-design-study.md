@@ -52636,3 +52636,217 @@ fixed / shifter results now land a clock after X (R1028 tried and reverted this 
     for pre-modify only; fadd's alignment split).
   * The uncovered fault from R1028 (LCNTR after a DO after a loop-end pop) stands.
   * R1027's open items stand.
+
+**R1031 -- THE 2B SHARC IN THE COPROCESSOR SLOT (Model2.sv M2_2B), ITS DATA-MEMORY CACHE BUILT
+AND PROVEN, A DEAD OR ALIVE 2B MRA, AND THE WHOLE-CORE BENCH BOOTING doa TO ITS FIRST COMMAND
+(THE UPLOAD AND THE COMMAND EQUAL TO MAME's) -- NOT YET TO THE SHARC's FIRST DATA.
+DOA'S 150 S REPLAY UNCHANGED AT 2.5196 clk_sys A WORD (IT NEVER REACHES THE PAGE); WITH THE
+ON-CHIP DM CUT TO 256 WORDS SO THAT IT DOES, EVERY OUT WORD AND TRACE HASH STILL MAME'S AND
+EVERY WORD STILL v1's, AT SDRAM LATENCIES TO 600 CLOCKS A TRANSACTION. 12 PLANTED CACHE
+FAULTS, 12 CAUGHT.** Branch model2b, 2026-11-16. Simulation and quartus_map --analyze_file
+only: no map, no fit, no board.
+
+(Section: §10, after R1029 (R1030 is another branch's). Authority: MAME 0.289 model2.cpp for the
+2B board -- model2b_state's machine_start / machine_reset, copro_halt / copro_boot,
+copro_fifo_w, model2b_crx_mem, copro_sharc_map -- and sharc.cpp for the host side
+(external_iop_write, external_dma_write) and the internal map (block 1 at 0x20000-0x27fff
+mirrored by 0x18000); R1024 / R1026 / R1027 for the decisions this builds; R920 / R924 / R1010
+for how 2C put the TGPx4 in the slot, which this follows. Model 1 has no SHARC.)
+
+*What was believed (R1026, R1027):* block-1 words past the on-chip 8 K live in SDRAM behind a
+64-line x 16-word direct-mapped cache, write-through without allocate, a miss ~56 clocks (40
++ the 16-word burst); writes posted; "the cache belongs between [the core's ext_ port] and
+the SDRAM with the buffer RAM / ROM caches (the integration step)". The 2B board is 2A's plus
+the SHARC (R1024 section 7: the texture upper MB mirrored, 0x01c80000 ignored, the status
+register, the IOP window feeding EPB0).
+
+*BUILT:*
+  * rtl/sharc/m2b_dmc.sv -- THE DM CACHE. 2^LN_AW lines x 2^WD_AW words (6 / 4: R1027's 64 x
+    16, 1 K words), direct-mapped, write-through, no allocate. Line store M10K (two 16-bit
+    lanes), tags MLAB (m2b_lutram), valid bits flip-flops (reset; not an array). A read hit is
+    answered the clock after the request from the line store's output register (the core's
+    own DM read, one clock later). A MISS FILLS CRITICAL WORD FIRST and answers as soon as its
+    word lands; the rest of the line fills behind it, round the line, a word a transaction --
+    a later read of a landed word hits, one not landed waits for it; a miss on another line
+    waits for the read in flight, then abandons that fill (the line stays invalid). WRITES go
+    into a 16-deep posted queue (MLAB), answered the clock after the request unless it is
+    full; a write to a valid line or to the filling line also updates the line store, and on
+    the filling line marks the word landed, so the fill's own read of it -- if already in
+    flight it returns the old value -- is dropped. The port's order: the clear, the queued
+    writes, the fill's reads; a fill read issued after a write reads what it left. A 32-bit
+    write is two 16-bit port writes. THE CLEAR: MAME's device_reset zeroes both blocks and DOA
+    reads block-1 words it never wrote (R1027); the core clears its on-chip part, the cache
+    the page from 2^DM_AW up (49,152 halfword writes) after reset, the SHARC held in HALT until
+    it is done. BENCH-only $fatal checks: no fill starts with a fill read in flight, no word
+    lands without a fill, no on-chip index reaches the cache.
+  * rtl/sharc/m2b_xbus.sv -- THE BOARD'S SIDE OF THE SHARC'S EXTERNAL BUS (MAME
+    copro_sharc_map): block 1 past the on-chip words -> m2b_dmc; buffer RAM 0x1400000-
+    0x1bfffff (m_bufferram[offset & 0x7fff]) and copro_data 0x1c00000-0x1dfffff (writes
+    ignored) on m2_copro's existing dat / bufw pair as the TGPx4's go (one dword a read on port
+    9, an idle clock after each; buffer writes posted in a 16-deep MLAB queue, two halves each
+    on the shared write port; a buffer read waits for the queue; `wq_busy` holds the i960's
+    out-FIFO pops until the stores are through, R888). No ROM / buffer read caches yet.
+  * m2b_sharc: ext_req is no longer raised while MAME's slow multiply holds X (MAME_RND 1
+    only): an acknowledge in those clocks cleared x_ext_on without finishing the word -- a
+    hang for a DM / external access in a word whose FMUL takes the slow path, latent until
+    words reached ext_ (MAME_RND 0, the build, has no slow path). obs_pc: the pc of the word
+    in X (the probe).
+  * rtl/tgp/m2_copro.sv SHARC (generate g_sharc, taking precedence over TGPX4), as MAME's
+    model2b_state: machine_reset holds HALT (`halted` from reset); device_reset is the core's
+    reset (RAM clear); copro_ctl1 bit 31 rising zeroes the upload count and does NOT halt
+    (copro_halt is empty on 2B, as on 2C); bit 31 falling releases HALT and nothing else
+    (copro_boot). The upload: FIFO-port writes while bit 31 is set are external_dma_write
+    (the 16-bit part, the upload count mod 3 as `address % 3`; 16-bit count, Gunblade NY's
+    20,874). sel_iop / iop_reg: the host IOP window, 0x008c0000-0x008c0fff, external_iop_write
+    with the dword offset as the register (offsets past 0xff dropped); EPB0 (0x04, Last
+    Bronx's boot, R1024) reaches the upload packer behind SH_EPB (1) -- THE HOOK: Last Bronx
+    needs more than this (alternate register files, the fixed multiplier ...) and is not run.
+    FLAG0 = the in FIFO empty; FLAG1 and a SHARC store's wait = the out FIFO at 16 words
+    (MAME's depth, R1024), on the 128-deep M10K FIFO; the in FIFO stays 2A's 128 + push hold
+    (MAME: 16 plus the overflow queue until the sync). The DM page on a new sdm_ port. The TGP's
+    debug ports carry the SHARC's: dbg_tgp_unimpl = unsup (sticky), dbg_tgp_pc = its pc once
+    set (else the pc in X), dbg_tgp_op = {reason, 0, pc}, dbg_tgp_st / dbg_tgp_a the word.
+    SH_DM_AW / SH_LN_AW / SH_WD_AW the memory shape; SH_MAME_RND the rounding (0, the
+    manual's, R1024; 1 for benches comparing with MAME).
+  * Model2.sv M2_2B (VERILOG_MACRO "M2_2B=1"; Model2.qsf on this branch now sets it): B2 =
+    M2A, on top of M2_2C's CRX map (C2), with 2B's differences from model2b_crx_mem --
+    m2_copro .SHARC(B2) .TGPX4(C2 && !B2); port 8 the SHARC's DM page (GAME_SHDM = word
+    0x1040000, byte 0x2080000: GAME_X4PROG's place in the large layout's 4 MB of MRA zeros --
+    2B has no TGPx4 -- reads and the write-through on one port so a read never passes a write,
+    the DSB's reason, R979); DSB forced off; the i8251 at 0x009c0000 (data) / 0x009c0004
+    (status / command), byte 0 each (umask32 0x000000ff), 0x01c80000 unmapped; the IOP window
+    decoded on the full address; m2_cpu_bridge BOARD_2B: the texture windows' upper MB
+    MIRRORED onto the lower (R1024; R928's drop is 2C's); the probe's 'C' record carries the
+    SHARC's reason in bits 19:16 beside its unsupported flag and pc. Everything else 2B shares
+    with the 2C build (copro_status_r at 0x00980014, texture / luma RAM, the i960's VC forms).
+    Every term is B2-gated: B2 = 0 folds to the 2C / 2A builds as they were.
+  * sim/io/m2_boot_harness.sv B2 (with C2): the same wiring, the DM page modelled in the
+    harness (all ones until the cache clears it; SH_LAT clocks a transaction, the ack held
+    while the request stands -- m2_sdram_cdc's contract); Makefile obj_boot_2b (BOOT_2B_LAT,
+    BOOT_2B_RND = 1: MAME rounding, so the out words are comparable with MAME's capture);
+    tb_m2_boot's M2_COPRO_TRACE logs the IOP window ('H'). sim/sharc/m2b_evcmp.py: the
+    core's trace against a MAME capture (uploads, pushes, SHARC pushes, in order).
+  * mra/Dead or Alive (Model 2B, Revision C).mra (+ [15kHz CRT]): MAME doa (the parent), the
+    large layout (tools/mra_2a_big.py), <rbf>Model2B</rbf>, game ID 0x16 (the 2A set's: same
+    layout, inputs, protection), the TGP-tables and copro-data slots zeros. THE 317-0229
+    PATCH MOVES: in epr-19379c / 19380c the boot's two routines are at 0x29c0 / 0x2a00 (the
+    2A set's 0x2b90 / 0x2bd0, byte-identical), called from 0x5a0 / 0x5b8, and the tamper
+    checksum is over 0x570-0x5e4 (sum 0x5901 against the word at 0x8fd90, the 2A set's
+    0x730-0x7a4 / 0x87fe0 shifted by 0x1c0) -- so R921's rule holds: the routines patched,
+    the calls not. tools/mra_vs_mame.py --layout=2a: every slot equal to MAME's regions but
+    the program at +0x29c0 (the patch). No ROM bytes in the tree.
+
+*FOUND ON THE WAY:*
+  * R1027'S MISS COST ASSUMED A BURST; THE PORT HAS NONE. Ports 8 and 9 return one dword a
+    transaction (m2_sdram blen 2), so a 16-word line is 16 transactions. Critical word first
+    with the fill behind makes the SHARC wait one transaction a miss, not sixteen.
+  * R1027 COSTED READS ONLY ("reads that miss counted, writes posted"). A write-through write
+    is two port transactions. With the on-chip DM cut to 256 words DOA writes the page in 7%
+    of its words and becomes port-bound: 2.52 -> 4.87 clk_sys a word at 1-60 clocks a
+    transaction, 3.98 at 8-40, the clocks in X (the queue full), not in misses (12,785
+    clocks waited on a read in 4 M words). Whether Last Bronx / Sonic Championship write the
+    page that often is not measured (NOT SETTLED).
+  * NEITHER DOA NOR THE RANDOM PROGRAMS WRITE A WORD WHOSE FILL READ IS IN FLIGHT. Two planted
+    faults on that path (a landing overwriting a written word; a write not marking its word
+    landed) passed DOA (both shapes, latency to 600) and 12 random-program runs; the line is
+    abandoned before the stale word is read again. sim/sharc/bench/m2b_dmcprog.py (directed:
+    read word c of a new line, write c + 1 while its read is in flight, read it, write and
+    read c + 2, wait for c + 3, read c + 1 again) catches both.
+  * The core's DM clear (R1027) and the page's clear: the replay's DM page writes at the
+    production shape are exactly the clear's 49,152 -- DOA never touches the page.
+  * THE ON-SCREEN OVERLAY IS GONE (R411): the "overlay" the brief names is the probe's UART
+    'C' record (M2_PROBE), which now carries the SHARC's unsupported flag, reason and pc.
+  * make lint_idx on the 2B build lists three selects new to it, all in R1027-R1029's SHARC
+    RTL and all bounded: lnz[x.pmod_i] (a 4-bit field the tool could not range) and
+    sharc_fmul's v_tiny[ei] / v_ovf[ei] (ei = carry + carry <= 2 of a 3-entry vector).
+
+*VERIFICATION (numbers; the replay bench now carries m2b_xbus and an SDRAM model, every
+transaction answered after a random latency, the page and buffer RAM starting all ones):*
+  * PRODUCTION SHAPE (DM_AW 13, 64 x 16), MAME rounding, DOA's 150 s, latency 8-40:
+    501,777,265 words, 18,541,146 out words 0 differ from MAME's, trace 0-40 M 0 differ,
+    2.5196 clk_sys a word (R1029's exactly); page traffic: the clear only. 17.6 min.
+  * DOA THROUGH THE CACHE (DM_AW 8: 256 words on chip, every data word from 0x30100 off chip):
+      64 x 16, manual rounding, lockstep with v1: 2 M words at latency 1-600 (43.9 clk a
+        word), 4 M at 1-60 (4.87) and 8-40 (3.98): 0 differ.
+      64 x 16, MAME rounding, lockstep with v1 AND out FIFO + trace against MAME's, 150 M
+        words (to 33 s into the session) at latency 1-60: 0 differ against v1, 5,493,004 out
+        words and the trace 0-40 M 0 differ against MAME; 38,846,552 page accesses (9,705,601
+        writes), 93 fills, 26,813 clocks waited on a read; 4.4671 clk_sys a word. 11.9 min.
+      4 x 4 (thrashing: 102,944 fills in 3 M words), MAME rounding, out FIFO + trace: 3 M
+        words at 1-60 (9.41 clk a word) and at 1-600 (77.6): 0 out words and 0 trace words
+        differ.
+  * RANDOM PROGRAMS (m2b_randprog.py, DM_AW 8: their block-1 pointers from 0x30100), MAME
+    rounding, lockstep, 1 M words, latency 1-200: R1028's set seed 1 and M2B_RP_SEQ seed 2 at
+    64 x 16 and at 4 x 4, 0 differ (24,825-27,601 fills a run).
+  * THE DIRECTED PROGRAM (m2b_dmcprog.py), lockstep: 200 K words at 300 fixed and 1-600, both
+    shapes, 0 differ.
+  * PLANTED FAULTS (sim/sharc/bench/dmc_faults.py, 12): DOA at 4 x 4, 3 M words, 1-60 clocks,
+    catches 10 (the page not cleared: 48 out words ffffffff where MAME has 0; fills ahead of
+    queued writes; a hit before the word lands; a line valid while it refills; no tag compare;
+    a write not written into a valid line; a write's high half as its low; a word landing one
+    along; a fill started with a read in flight (the bench check); an acknowledge a clock
+    early); the directed program at 64 x 16, 300 clocks, the other 2. 12 of 12.
+  * The cache and bus: Verilator -Wall clean (one unused-bits warning fixed); quartus_map 17.0
+    --analyze_file: m2b_dmc, m2b_xbus, m2b_sharc, m2_copro,
+    m2_cpu_bridge, Model2.sv, 0 errors. make lint_top with -DM2_2B and without: no syntax
+    errors, no wiring faults.
+
+*THE WHOLE-CORE BENCH (obj_boot_2b: A2 A2X C2 B2, AW 26, MAME rounding, the doa image from
+rom_csum.py; Verilator -O3, one thread; MAME 0.289 -nodrc headless with the R1027 capture
+patch for the checkpoints):*
+  * THE CHECKPOINTS, against MAME's capture (the R1027 events.bin, and two short MAME runs with
+    coins at 2 s / 4 s, which change nothing before the attract's first 3D):
+      MAME  frame 46 the IOP window (10 writes), the upload (12,288 16-bit words), 47 copro_boot,
+            58 one function-port command (0x04000808, 0x00880080) and the SHARC's pop of it;
+            then nothing on either FIFO until frame 545, where the data and the SHARC's
+            output start (the frame 545 with coins at 2 s and 4 s too); every frame the SHARC
+            spins on FLAG0 (556,271 of 556,288 words one-word waits).
+      CORE  frame 96 copro_ctl1 bit 31, the upload: 12,288 words, ALL EQUAL TO MAME's; 97 the
+            boot; 114 the same command (0x04000808), and in frame 115 the SHARC's word count
+            dips by one -- it took and ran it; every other frame from the boot it retires a
+            word every two clocks (its FLAG0 spin). Run to frame 616 (24.8 min, the limit):
+            414 flips and 2,975 geometrizer writes by the i960, NO further copro traffic --
+            MAME's first data at its frame 545 is 487 frames after the command; the core's frame
+            616 is 502 after its own, and its boot reached each checkpoint in about twice MAME's
+            frames (the upload at 96 against 46): the boot is compute-bound and the core's i960
+            retires ~67-110 K instructions a frame, so the attract's frame count does not carry
+            over. NOT REACHED: the SHARC fed with data and its output into the geometrizer.
+  * The 2B i8251 at 0x009c0000 carries the boot's first sound byte (0xff, frame 86); the image
+    reads as the MRA builds it (the bench's ROM-shadow check flags 0x90000-0x904ff only
+    because it compares the program's second half with the image's linear word, not the
+    extension slot -- the core read the program's own words there).
+
+*AREA AND M10K (by parts: the brief allows analysis, not a map):* the SHARC 80 M10K (PM 48,
+DM 32) + the line store 4 (1 K x 32 as two 1 K x 16 lanes, 2 M10K each) + the two FIFOs 2 (as
+the TGP's) = 86 M10K in the 2B copro slot, against the ~101 a 2B build frees (22 + the TGPx4's
+63 + the DSB's 16): ~15 left for R1024's ROM and buffer read caches (~5 each). MLAB: the tags
+(64 x 5, 2), the two write queues (16 x 47, 3 each): 8 MLAB LABs, ~80 ALM of LAB area. Logic
+(estimate): the cache ~200-250 ALM, the bus ~100-150, the slot's glue ~50; with R1029's 4,108
+fitted (4,301 less the 193 virtual-pin ALM) and the MLAB, ~4,550-4,650 against R1028's ~4,450:
+AT OR ~150 OVER. Not mapped.
+
+*DIFFERENT FROM THE BRIEF, PLAINLY:* (0) the M2_2B build is M2_2C's CRX build plus B2 (MAME's
+model2b_crx_mem is model2c_crx_mem with the differences above), not 2A's map plus the SHARC; Model2.qsf on this branch now sets
+M2_2B=1 (and keeps M2_2C=1 / M2_2C_DSB=1, which M2_2B overrides); (1) the "debug overlay" is
+the probe's UART 'C' record -- the on-screen overlay was removed in R411; (2) the DM page is
+on port 8 (the TGP tables' / DSB's port), not port 9 with the buffer / ROM, so its reads and
+writes stay ordered on one port; (3) the miss is critical-word-first with the fill behind,
+because the port has no burst (R1027's 56 clocks assumed one); (4) the latency stress is per
+transaction (to 600, and 300 fixed), ten times R1027's whole-miss figure; (5) the 2B game ID
+is the 2A set's 0x16, not a new one; (6) the whole-core boot stops at a checkpoint (below) --
+the frame where MAME first feeds the SHARC data is past the 25-minute limit; (7) the ROM and
+buffer read caches R1024 / R1026 budgeted are not built (DOA uses neither); (8) m2b_sharc
+changed (the slow-multiply ext_req gate, obs_pc).
+
+*NOT SETTLED:*
+  * The page's write cost on the games that use it (Last Bronx, Sonic Championship): R1027's
+    pacing counted only read misses; with write-through each write is two port transactions.
+    A write-back line or write combining in the queue are the next steps if they are
+    port-bound.
+  * Port 8's real latency on the board (the bench models 8-40 and a fixed 12 in the harness).
+  * Area: by parts only, at or over the budget.
+  * The ROM / buffer read caches, their coherence with the i960; Last Bronx's boot (EPB0 is
+    wired, the rest of its forms are not).
+  * The whole-core run past MAME's frame 545 (the SHARC's first data, its output into the
+    geometrizer) -- longer than the 25-minute bench limit; and why the core's boot takes about
+    twice MAME's frames to each checkpoint (the i960's instructions a frame, not measured here).
