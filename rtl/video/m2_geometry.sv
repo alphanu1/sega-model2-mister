@@ -650,7 +650,7 @@ module m2_geometry #(
   // u16* -- so the conversion is unsigned, and it is a normalise rather than
   // arithmetic: the top set bit gives the exponent and what follows it is the
   // mantissa.
-  // R1029-2C: AS A NORMALISING SHIFT, NOT A PRIORITY LOOP. The loop (the top
+  // R1030: AS A NORMALISING SHIFT, NOT A PRIORITY LOOP. The loop (the top
   // set bit found by "if (n[b] && e == 0)" from bit 15 down, then n << 15 - e)
   // was uvsel -> hu at 9 levels fitted (s3066-s3087 -0.55..-0.66, s3076
   // -4.48). Four steps of "top 8 / 4 / 2 / 1 bits zero: shift up by that
@@ -681,7 +681,7 @@ module m2_geometry #(
   // Q_CHK, four Q_ISS grants, an answer). A polygon refused in Q_CHK and the
   // next one taken restart the walk. The raw pairs are also the clipper's
   // in_wu / in_wv: f2uvw(u2f(n)) is n for every 16-bit n.
-  // R1029-2C: AND A STAGE MORE (uvsel -> uvf -> hu / hv). The conversion went
+  // R1030: AND A STAGE MORE (uvsel -> uvf -> hu / hv). The conversion went
   // straight into hu / hv, which sit by the clipper: s3076's last hop to
   // hu[2][21] was 6.35 ns of route after the conversion's 9 levels (fitted;
   // under +0.3 ns in 13 of the 58 2C seeds). uvf is the converted pair
@@ -758,7 +758,7 @@ module m2_geometry #(
       qst <= Q_IDLE; qi <= 2'd0; clip_in_valid <= 1'b0; hzmin <= 32'd0; hzmax <= 32'd0;
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; puv[k] <= 32'd0; end
       uvsel <= 32'd0; uvk <= 2'd0; uvsel_i <= 2'd0; uvrun <= 1'b0; uvsel_v <= 1'b0;   // R952
-      uvf_u <= 32'd0; uvf_v <= 32'd0; uvf_i <= 2'd0; uvf_ok <= 1'b0;                  // R1029-2C
+      uvf_u <= 32'd0; uvf_v <= 32'd0; uvf_i <= 2'd0; uvf_ok <= 1'b0;                  // R1030
       ptex <= 32'd0; plum <= 8'd0; pdotp <= 12'd0; pmipz <= 1'b0;   // R828c
       pcoef <= 12'd0;                                              // R905
       c_bad <= 1'b0; c_zmode <= 2'd0;
@@ -782,7 +782,7 @@ module m2_geometry #(
         uvk <= uvk + 2'd1;
         if (uvk == 2'd3) uvrun <= 1'b0;
       end
-      uvf_u  <= u2f(uvsel[15:0]);                // R1029-2C: converted here,
+      uvf_u  <= u2f(uvsel[15:0]);                // R1030: converted here,
       uvf_v  <= u2f(uvsel[31:16]);
       uvf_i  <= uvsel_i;
       uvf_ok <= uvsel_v;

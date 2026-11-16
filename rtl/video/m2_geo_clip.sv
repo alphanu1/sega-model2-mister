@@ -369,7 +369,7 @@ module m2_geo_clip #(
   wire [31:0] av = qv[cp_a], bv = qv[cp_b];
   wire [31:0] a_v = plane_x ? ax : ay;
   wire [31:0] b_v = plane_x ? bx : by;
-  // R1029-2C: THE INTERPOLATION'S OPERANDS (cs 8 and 9) REGISTERED A CYCLE
+  // R1030: THE INTERPOLATION'S OPERANDS (cs 8 and 9) REGISTERED A CYCLE
   // AHEAD. They were cp_a / cp_b -> the 4:1 vertex mux -> the 5:1 axis mux
   // -> the cs / kst operand select -> the pool's 3:1 client mux -> mul_a_q,
   // 7 levels (2C seeds: cp_a -> mul_a_q -0.44 on s3074, -0.88 s3076; cp_b
@@ -471,7 +471,7 @@ module m2_geo_clip #(
         4'd5: begin add_req = 1'b1; add_a = c_den; add_b = c_m1;  add_sub = 1'b1; end
         4'd6: begin div_req = 1'b1; div_a = c_num; div_b = c_den; end
         4'd7: begin add_req = 1'b1; add_a = F_ONE; add_b = c_t;   add_sub = 1'b1; end
-        4'd8: begin mul_req = 1'b1; mul_a = ip_a_q; mul_b = c_t; end   // R1029-2C: the axis of a
+        4'd8: begin mul_req = 1'b1; mul_a = ip_a_q; mul_b = c_t; end   // R1030: the axis of a
         4'd9: begin mul_req = 1'b1; mul_a = ip_b_q; mul_b = c_u; end   // and of b, registered
         default: begin add_req = 1'b1; add_a = c_m1; add_b = c_m2; end
       endcase

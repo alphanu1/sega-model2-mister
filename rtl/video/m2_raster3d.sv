@@ -677,7 +677,7 @@ module m2_raster3d #(
     logic [5:0] ub_wp, ub_rp;
     wire       ub_push = fl_span_valid && fl_span_ready && fl_span_nq;
     wire       ub_pop  = sq_qv && sq_nq && ub_qv && ub_used;
-    // R1029: "NOT EMPTY" AND "FULL" KEPT IN REGISTERS (R762's pattern). ub_qv
+    // R1030: "NOT EMPTY" AND "FULL" KEPT IN REGISTERS (R762's pattern). ub_qv
     // was the pointers' subtract and a compare in front of sq_qve, and so of
     // every slot load in m2_span_tex (ub_wp -> span_tex's multiplier enable
     // and tex_p: 4 of 58 2C seeds under +0.3, -4.257). Both are the next
@@ -690,7 +690,7 @@ module m2_raster3d #(
     always_ff @(posedge clk or negedge rst_n)
       if (!rst_n) begin
         ub_wp <= '0; ub_rp <= '0; ub_used <= 1'b0;
-        ub_qv <= 1'b0; ub_full <= 1'b0;   // R1029
+        ub_qv <= 1'b0; ub_full <= 1'b0;   // R1030
       end else begin
         ub_wp <= ub_wp_n;
         ub_rp <= ub_rp_n;

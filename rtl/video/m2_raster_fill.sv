@@ -401,7 +401,7 @@ module m2_raster_fill #(
   // because emax has to be known before the first vertex is rewritten.
   // R731: now off the latched copies, in S_OZ's first cycle (oz_pre). They
   // are qoz exactly as accepted: nothing rewrites qoz before stage two.
-  // R1029: each compare as the borrow of a 9-bit subtract, so it is a carry
+  // R1030: each compare as the borrow of a 9-bit subtract, so it is a carry
   // chain: written with `>` Quartus built each as a four-level LUT tree, and
   // the tournament was nine levels (qoz -> oz_emax: 4 of 58 2C seeds under
   // +0.3, -1.503). gt8(a, b) is a > b, the same answers.
@@ -1189,7 +1189,7 @@ module m2_raster_fill #(
       default:  begin nn_c = nxu; nz_c = nxu_z; end
     endcase
   end
-  // R1029: THE SHIFT IN TWO HALVES, ONE A STAGE. sn_r -> the 32-bit shift ->
+  // R1030: THE SHIFT IN TWO HALVES, ONE A STAGE. sn_r -> the 32-bit shift ->
   // mul_n was 7 of 58 2C seeds under +0.3 (-2.268; szm1_r 6, -2.288), two or
   // three LUT levels and ~12 ns of routing between the operand flops and the
   // multiplier, while nn_c -> sn_r had 3.3-4.9 ns to spare (s3060, s3099). So
@@ -1307,7 +1307,7 @@ module m2_raster_fill #(
         3'd4:    nxo_z <= clz_join(nz_h, nz_l);   // R441
         default: nyo_z <= clz_join(nz_h, nz_l);
       endcase
-      // R1029: MUL_N LOADS EVERY CYCLE, not only in NRM's last cycle and Q1 to
+      // R1030: MUL_N LOADS EVERY CYCLE, not only in NRM's last cycle and Q1 to
       // Q3 -- the select that held it was a third LUT level, and a routing hop,
       // on sn_r -> mul_n. Its only reader is mul_q, and mul_q is taken (into
       // mul_q_r) only in Q1 to Q3W, each the cycle after one of those six
@@ -1487,7 +1487,7 @@ module m2_raster_fill #(
           // R952: the counts come from the shared normaliser (below the case).
         end else begin
           nrm_wait <= 3'd0;
-          // R457/R458: mul_n <= mul_n_c, now every cycle (R1029, above)
+          // R457/R458: mul_n <= mul_n_c, now every cycle (R1030, above)
           mul_z <= sz_r;
           mul_q_r <= '0; mul_zr <= 6'd0; b_wait <= 1'b0; b_w2 <= 1'b0; b_w3 <= 1'b0;   // R450/R594/R727
           oz_w_v <= 1'b0; oz_last <= 1'b0; b_prod <= 1'b0; // R566
@@ -1498,28 +1498,28 @@ module m2_raster_fill #(
         // is ready the cycle after the operands are.
         // R442: present the next numerator, latch the previous gradient.
         S_PF_Q1: begin
-          mul_z <= sz_r;   // R1029: mul_n loads every cycle (above)
+          mul_z <= sz_r;   // R1030: mul_n loads every cycle (above)
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q1W;
         end
 
         S_PF_Q1W: begin
-          mul_z <= sz_r;   // R1029: mul_n loads every cycle (above)
+          mul_z <= sz_r;   // R1030: mul_n loads every cycle (above)
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2;
         end
 
         S_PF_Q2: begin
-          mul_z <= sz_r;   // R1029: mul_n loads every cycle (above)
+          mul_z <= sz_r;   // R1030: mul_n loads every cycle (above)
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           pf_st <= S_PF_Q2W;
         end
 
         S_PF_Q2W: begin
-          mul_z <= sz_r;   // R1029: mul_n loads every cycle (above)
+          mul_z <= sz_r;   // R1030: mul_n loads every cycle (above)
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudx  <= sc_s;   // R594, R727
@@ -1534,7 +1534,7 @@ module m2_raster_fill #(
         // the same cycle as the shift, which is R418's fix applied to the round
         // R337 wrote before R418 existed.
         S_PF_Q3: begin
-          mul_z <= sz_r;   // R1029: mul_n loads every cycle (above)
+          mul_z <= sz_r;   // R1030: mul_n loads every cycle (above)
           mul_q_r <= mul_q; mul_zr <= mul_z;   // R450
           net_r <= NET0 - 9'(mul_z) - 9'(den_sh); zbig_r <= (mul_z >= 6'd32);   // R459, R626
           dudy  <= sc_s;

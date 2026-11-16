@@ -1090,7 +1090,7 @@ module tgpx4_core #(
   // on a bank conflict the multiplier's goes first only from its register
   // (it has waited a clock: the arriving one is written as it arrives
   // otherwise), so neither waits more than one
-  // R1029-2C: THE SCHEDULE WORKED OUT FOR BOTH VALUES OF src_ok, THEN PICKED.
+  // R1030: THE SCHEDULE WORKED OUT FOR BOTH VALUES OF src_ok, THEN PICKED.
   // src_ok (the state, ext_req and the word's source B) is the last input to
   // arrive: it gated alu_go -> the integer ALU's arrival -> a_keep -> ar_vn ->
   // the bank-conflict test -> a_wqn / m_wqn -> the wrm_n decode, 10 levels

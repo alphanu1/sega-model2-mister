@@ -1,5 +1,5 @@
-// R1029-2C: the rasteriser's rewritten expressions, old form (cf6916e3) against
-// new, on random and edge-biased inputs. verilator --binary --top-module eq eq_r1029.sv
+// R1030: the rasteriser's rewritten expressions, old form (cf6916e3) against
+// new, on random and edge-biased inputs. verilator --binary --top-module eq eq_r1030.sv
 module eq;
   // ---- span_tex: the clamp and the mirror bits (UVCL, MIP)
   function automatic logic [19:0] to_tx(input logic signed [31:0] q);

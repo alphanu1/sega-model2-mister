@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# R1029-2C: m2_raster3d and every module under it, old against new, every
+# R1030: m2_raster3d and every module under it, old against new, every
 # output on every cycle, under tb_m2_raster3d at Model2.sv's 2C parameters on
 # MAME's display lists (M2_R3D_LIST). The miter presents the new copy's
 # outputs, so the bench's own log is the new build's: compare it with an

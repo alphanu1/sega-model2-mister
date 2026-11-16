@@ -185,7 +185,7 @@ module m2_span_tex #(
   // valid with every textured span (the queue keeps a quad's word until the
   // next quad's first span has gone, and the word before that unwritten while
   // a slot may still name it). The clamp reads it back a stage before the
-  // coordinate's (R1029: registered into ub_q) -- ub_ra out, ub_rd in, an
+  // coordinate's (R1030: registered into ub_q) -- ub_ra out, ub_rd in, an
   // MLAB's asynchronous read -- so a slot carries 5 bits, not 45.
   input  logic [4:0]         in_ubi,
   output logic [4:0]         ub_ra,
@@ -687,7 +687,7 @@ module m2_span_tex #(
   // of its span is in flight (R490), and these move only with the pipe.
   logic signed [15:0] q_x1, q_y;
   logic signed [15:0] q_sm1;   // R742: stp(k) - 1, latched with k (s795: q_k -> mq_f0 -0.236)
-  // R1029: signed a < b as the borrow of a 17-bit subtract (a carry chain)
+  // R1030: signed a < b as the borrow of a 17-bit subtract (a carry chain)
   function automatic logic slt16(input logic signed [15:0] a, input logic signed [15:0] b);
     /* verilator lint_off UNUSEDSIGNAL */   // only the borrow is read
     logic [16:0] d;
@@ -705,7 +705,7 @@ module m2_span_tex #(
     automatic logic signed [15:0] qe   = qx + q_sm1;   // R650: qx + step - 1
     automatic logic signed [15:0] qrow = qy - mk_band_y0;
     automatic logic signed [15:0] xa   = (qx  < 16'sd0) ? 16'sd0 : qx;
-    // R1029: THE CLAMPS' COMPARES SIDE BY SIDE (q_x1 -> mq_f1: 3 of 58 2C
+    // R1030: THE CLAMPS' COMPARES SIDE BY SIDE (q_x1 -> mq_f1: 3 of 58 2C
     // seeds under +0.3, -0.329; -> mq_f0 2, -0.153; eleven levels). xb was
     // min(min(qe, qx1), QXMAX), a compare after a compare; it is the same
     // three-way minimum with its three compares at once (c_ex: qe > qx1,
@@ -898,7 +898,7 @@ module m2_span_tex #(
   // R539: a result is issued as a fetch whenever a credit is free -- no longer
   // only when the previous fetch has come back. The retire slot is not
   // reserved here; the answer waits in the adapter until it is free.
-  // R1029: "FULL" KEPT IN A REGISTER (R762's s_full, here). of_room was the
+  // R1030: "FULL" KEPT IN A REGISTER (R762's s_full, here). of_room was the
   // pointers' subtract and a compare in front of cons_take, and so of the
   // span queue's read (of_rp -> u_span_q rp: 6 of 58 2C seeds under +0.3,
   // -0.408). of_full is the next pointers' difference compared with TXK and
@@ -918,7 +918,7 @@ module m2_span_tex #(
   wire rt_take   = (head_skip || head_reuse || tx_ack) && (of_wp != of_rp) && (!rt_valid || rt_frees)
                 && (st == T_RUN);
   assign tx_take = rt_take && !head_skip && !head_reuse;   // R607, R633
-  // R1029: of_wp moves on cons_take and of_rp on rt_take, each only in T_RUN
+  // R1030: of_wp moves on cons_take and of_rp on rt_take, each only in T_RUN
   // (both carry st == T_RUN) -- the FSM below, and reset, are their only writers.
   wire [OW-1:0] of_wp_n = of_wp + OW'(cons_take);
   wire [OW-1:0] of_rp_n = of_rp + OW'(rt_take);
@@ -985,14 +985,14 @@ module m2_span_tex #(
   // coordinate's bit at the level's width, (u >> L) & ((w >> L) << 8) in
   // model2rd.ipp, i.e. bit 13 + code - L of the level's u. A 4096-wide
   // texture's bit is 20, past the coordinate: never mirrored, as before.
-  // R1029: the group's texture word, selected from its slot a stage early
+  // R1030: the group's texture word, selected from its slot a stage early
   // (sh_p[PIPE_D-2]) and registered as the group moves to PIPE_D-1 -- as ub_q
   // below and q_x1 (R739): the slot select is off the mirror bits' path into
   // m2_texel_cdc's request M10K. Read only with a fetch (res_valid).
   logic [23:0] t_q;
   always_ff @(posedge clk) if (pipe_en && !ld_cold) t_q <= tex_p[sh_p[PIPE_D-2]];
   wire [23:0] mt_t  = t_q;
-  // (R1029: the mirror bits and tx_tex follow the clamp, below.)
+  // (R1030: the mirror bits and tx_tex follow the clamp, below.)
   // R339: the DIVIDED coordinates, not u/z and v/z themselves.
   // R951: AND KEPT INSIDE THE QUAD'S OWN TEXELS. Every pixel the fill covers
   // is inside the quad, so in exact arithmetic its u and v lie in the box of
@@ -1013,9 +1013,9 @@ module m2_span_tex #(
   // Whole texels: a box edge the game draws is a whole texel; a clipped
   // corner's fraction only loosens it. TIMING: ub_ra -> m2_raster3d's MLAB
   // (an asynchronous read) -> the two subtracts -> the select -> m2_texel_x2's
-  // request registers, on clk_sys -- the fit's report is the check. R1029:
+  // request registers, on clk_sys -- the fit's report is the check. R1030:
   // the MLAB read is a stage earlier, into ub_q, and the path starts there.
-  // R1029: the clamp's test alone, {to the top, to the floor}; its answers
+  // R1030: the clamp's test alone, {to the top, to the floor}; its answers
   // are {1'b0, lo, 8'h01} and {1'b0, hm, 8'hFF} (R951's uv_cl, split so the
   // mirror bit above can be selected from each answer beside the test).
   function automatic logic [1:0] uv_hit(input logic [19:0] t, input logic [10:0] lo, input logic [10:0] hm);
@@ -1029,7 +1029,7 @@ module m2_span_tex #(
       uv_hit = {!l && (dh == 13'd1), l};
     end
   endfunction
-  // R1029: THE BOX READ A STAGE EARLY. sh_p[PIPE_D-1] -> the slot's box index
+  // R1030: THE BOX READ A STAGE EARLY. sh_p[PIPE_D-1] -> the slot's box index
   // -> the MLAB's asynchronous read -> uv_cl -> the mirror bit's select ->
   // m2_texel_cdc's request M10K was the most frequent failing core path of
   // the 2C seeds (sh_p -> q_tex, 16 of 58 seeds under +0.3, -1.241). The box
@@ -1057,7 +1057,7 @@ module m2_span_tex #(
   assign tx_v   = cl_vl ? tx_vl : cl_vh ? tx_vh : tx_vt;
   wire [4:0]  mt_bu = 5'd13 + {2'd0, mt_t[3:1]} - {2'd0, d4_L};
   wire [4:0]  mt_bv = 5'd13 + {2'd0, mt_t[6:4]} - {2'd0, d4_L};
-  // R1029: THE MIRROR BIT OF EACH OF THE CLAMP'S THREE ANSWERS, PICKED LAST.
+  // R1030: THE MIRROR BIT OF EACH OF THE CLAMP'S THREE ANSWERS, PICKED LAST.
   // The bit select read tx_u -- the clamp's subtracts, its compares and its
   // select, then a 32-way select -- in series (d4_v -> q_tex was +0.837 on
   // s3060, the path left once ub_q took the box read off). The coordinate's
