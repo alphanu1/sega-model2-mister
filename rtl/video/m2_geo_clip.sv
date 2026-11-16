@@ -369,6 +369,27 @@ module m2_geo_clip #(
   wire [31:0] av = qv[cp_a], bv = qv[cp_b];
   wire [31:0] a_v = plane_x ? ax : ay;
   wire [31:0] b_v = plane_x ? bx : by;
+  // R1029-2C: THE INTERPOLATION'S OPERANDS (cs 8 and 9) REGISTERED A CYCLE
+  // AHEAD. They were cp_a / cp_b -> the 4:1 vertex mux -> the 5:1 axis mux
+  // -> the cs / kst operand select -> the pool's 3:1 client mux -> mul_a_q,
+  // 7 levels (2C seeds: cp_a -> mul_a_q -0.44 on s3074, -0.88 s3076; cp_b
+  // -0.28). ax_n is the axis the NEXT cycle uses: c_axis + 1 while K_CLIPW
+  // waits for the add that lands a coordinate (its answer moves on to cs 8
+  // with c_axis + 1), c_axis otherwise. cp_a / cp_b and the vertices do not
+  // move between K_SET and K_CHILD (they are written only in K_IDLE /
+  // K_POPR), and K_CLIP at cs 8 / 9 is entered only from K_CLIPW (cs 7,
+  // cs 8 or the coordinate's add) or from itself, never from K_SET -- so in
+  // every K_CLIP cycle at cs 8 / 9 the registered value is the one the old
+  // mux gave. m2_geometry alone, post-map: cp_a now ends at ip_a_q (2
+  // levels), cp_b -> mul_a_q 5 -> 4 levels (cs 0's bz); +64 ALM (the map's
+  // estimate; a single register for both, selected by the endpoint, cost
+  // the same in the pool's operand mux and was 4 levels: not kept).
+  wire [2:0] ax_n = ((kst == K_CLIPW) && (cs > 4'd9)) ? (c_axis + 3'd1) : c_axis;
+  logic [31:0] ip_a_q, ip_b_q;
+  always_ff @(posedge clk) begin
+    ip_a_q <= (ax_n == 3'd0) ? ax : (ax_n == 3'd1) ? ay : (ax_n == 3'd2) ? az : (ax_n == 3'd3) ? au : av;
+    ip_b_q <= (ax_n == 3'd0) ? bx : (ax_n == 3'd1) ? by : (ax_n == 3'd2) ? bz : (ax_n == 3'd3) ? bu : bv;
+  end
   wire [31:0] test_v = plane_x ? qx[ti] : qy[ti];
   // R587: registered in K_TEST, which always waits a cycle for the multiplier
   // grant, so K_TESTW's float compare starts from a register instead of ti's
@@ -450,14 +471,8 @@ module m2_geo_clip #(
         4'd5: begin add_req = 1'b1; add_a = c_den; add_b = c_m1;  add_sub = 1'b1; end
         4'd6: begin div_req = 1'b1; div_a = c_num; div_b = c_den; end
         4'd7: begin add_req = 1'b1; add_a = F_ONE; add_b = c_t;   add_sub = 1'b1; end
-        4'd8: begin mul_req = 1'b1;
-                    mul_a = (c_axis == 3'd0) ? ax : (c_axis == 3'd1) ? ay
-                          : (c_axis == 3'd2) ? az : (c_axis == 3'd3) ? au : av;
-                    mul_b = c_t; end
-        4'd9: begin mul_req = 1'b1;
-                    mul_a = (c_axis == 3'd0) ? bx : (c_axis == 3'd1) ? by
-                          : (c_axis == 3'd2) ? bz : (c_axis == 3'd3) ? bu : bv;
-                    mul_b = c_u; end
+        4'd8: begin mul_req = 1'b1; mul_a = ip_a_q; mul_b = c_t; end   // R1029-2C: the axis of a
+        4'd9: begin mul_req = 1'b1; mul_a = ip_b_q; mul_b = c_u; end   // and of b, registered
         default: begin add_req = 1'b1; add_a = c_m1; add_b = c_m2; end
       endcase
       default: ;
