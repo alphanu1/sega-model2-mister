@@ -650,7 +650,7 @@ module tgpx4_core #(
   // R1018: LEAN, one normalising shifter (the TGPx4 is the 2C build's alone)
   fp_add #(.SUBNORM(SUBNORM), .LEAN(1'b1)) u_add (
     .clk(clk), .rst_n(rst_n), .in_valid(add_go), .a(add_a), .b(add_b), .sub(add_sub),
-    .out_valid(add_v), .result(add_r), .overflow(add_ov), .underflow(add_un), .invalid(add_inv)
+    .out_valid(add_v), .result(add_r), .result_cp(), .overflow(add_ov), .underflow(add_un), .invalid(add_inv)
   );
 
   // fp_mul
@@ -660,7 +660,7 @@ module tgpx4_core #(
   logic        fmul_ov, fmul_un, fmul_inv;
   fp_mul #(.SUBNORM(SUBNORM)) u_mul (
     .clk(clk), .rst_n(rst_n), .in_valid(fmul_go), .a(opm1), .b(opm2),
-    .out_valid(fmul_v), .result(fmul_r), .overflow(fmul_ov), .underflow(fmul_un), .invalid(fmul_inv)
+    .out_valid(fmul_v), .result(fmul_r), .result_cp(), .overflow(fmul_ov), .underflow(fmul_un), .invalid(fmul_inv)
   );
 
   // fp_div: FRCP, and the second half of FRSQ

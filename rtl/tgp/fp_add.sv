@@ -52,7 +52,13 @@ module fp_add #(
   // R1018: with SUBNORM, one normalising shifter and its amount selected
   // (s1_exp - 1 or lzc - 1) in place of two shifters and a select after
   // them. 0 is the unit as it was. (The TGPx4, 2C.)
-  parameter bit LEAN    = 1'b0
+  parameter bit LEAN    = 1'b0,
+  // R1036: NCP copies of the result register, result_cp[i] == result on every
+  // cycle (the same next value, the same reset), each kept apart from the
+  // others (dont_merge) so the fitter can put each beside its own reader. For
+  // m2_fp_pool, whose one result fans out to every client; 1 and unconnected
+  // everywhere else, where synthesis removes it.
+  parameter int NCP     = 1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -64,6 +70,7 @@ module fp_add #(
 
   output logic        out_valid,
   output logic [31:0] result,
+  output logic [NCP-1:0][31:0] result_cp,   // R1036
   output logic        overflow,
   output logic        underflow,
   output logic        invalid       // inf - inf, or NaN operand
@@ -379,6 +386,37 @@ module fp_add #(
   assign unf            = (exp_rnd <= 10'sd0);
   assign is_zero_result = sC_zero_result;
 
+  // R1036: the pack as a next value, so result and its copies take the same
+  // one. The chain is the one that stood here, unchanged.
+  logic [31:0] res_d;
+  logic        ovf_d, unf_d;
+  always_comb begin
+    ovf_d = 1'b0;
+    unf_d = 1'b0;
+    if (sC_nan) begin
+      res_d = 32'h7fc00000;
+    end else if (sC_inf) begin
+      res_d = {sC_sign, 8'hff, 23'd0};
+    end else if (sC_both_zero) begin
+      // -0 + -0 = -0; every other zero pairing gives +0.
+      res_d = {sC_zero_sign, 8'h00, 23'd0};
+    end else if (sC_exact_cancel || is_zero_result) begin
+      res_d = 32'h00000000;
+    end else if (SUBNORM && sC_exp_adj == 10'sd1 && !sC_shifted[26]) begin
+      // R852: a subnormal (exponent field 0), or -- rounded up out of it --
+      // the smallest normal (exponent 1, fraction 0)
+      res_d = {sC_sign, 7'd0, frac_rnd[23], frac_final};
+    end else if (ovf) begin
+      res_d = {sC_sign, 8'hff, 23'd0};
+      ovf_d = s1_valid;
+    end else if (unf) begin
+      res_d = {sC_sign, 8'h00, 23'd0};
+      unf_d = sC_valid;
+    end else begin
+      res_d = {sC_sign, exp_rnd[7:0], frac_final};
+    end
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       out_valid <= 1'b0;
@@ -389,32 +427,22 @@ module fp_add #(
     end else begin
       out_valid <= sC_valid;
       invalid   <= sC_valid & sC_invalid;
-      overflow  <= 1'b0;
-      underflow <= 1'b0;
-
-      if (sC_nan) begin
-        result <= 32'h7fc00000;
-      end else if (sC_inf) begin
-        result <= {sC_sign, 8'hff, 23'd0};
-      end else if (sC_both_zero) begin
-        // -0 + -0 = -0; every other zero pairing gives +0.
-        result <= {sC_zero_sign, 8'h00, 23'd0};
-      end else if (sC_exact_cancel || is_zero_result) begin
-        result <= 32'h00000000;
-      end else if (SUBNORM && sC_exp_adj == 10'sd1 && !sC_shifted[26]) begin
-        // R852: a subnormal (exponent field 0), or -- rounded up out of it --
-        // the smallest normal (exponent 1, fraction 0)
-        result <= {sC_sign, 7'd0, frac_rnd[23], frac_final};
-      end else if (ovf) begin
-        result   <= {sC_sign, 8'hff, 23'd0};
-        overflow <= s1_valid;
-      end else if (unf) begin
-        result    <= {sC_sign, 8'h00, 23'd0};
-        underflow <= sC_valid;
-      end else begin
-        result <= {sC_sign, exp_rnd[7:0], frac_final};
-      end
+      result    <= res_d;
+      overflow  <= ovf_d;
+      underflow <= unf_d;
     end
   end
+
+  // R1036: the copies. dont_merge, or synthesis folds them back into result.
+  genvar c;
+  generate
+  for (c = 0; c < NCP; c = c + 1) begin : g_cp
+    (* dont_merge *) logic [31:0] cp;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) cp <= 32'd0;
+      else        cp <= res_d;
+    assign result_cp[c] = cp;
+  end
+  endgenerate
 
 endmodule

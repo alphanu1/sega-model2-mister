@@ -104,7 +104,11 @@ module m2_geometry #(
   // texture-parameter table -- both read through a register -- go to M10K
   // in place of MLAB: the same circuit, thirteen LABs back as logic. 0
   // keeps them in MLAB for a build short of M10K (2A).
-  parameter bit M10K_ROOM = 1'b0
+  parameter bit M10K_ROOM = 1'b0,
+  // R1036: each pool client reads the multiply and add results from its own
+  // copy of the result register (m2_fp_pool RES_CP) -- the same value on the
+  // same cycle, no cycle added. 0: every client reads the one register (2A).
+  parameter bit RES_CP = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -216,13 +220,14 @@ module m2_geometry #(
   logic [NC-1:0]  div_req, div_gnt, div_rsp;
   logic [31:0]    mul_a [NC], mul_b [NC], add_a [NC], add_b [NC], div_a [NC], div_b [NC];
   logic [31:0]    mul_res, add_res, div_res;
+  logic [NC-1:0][31:0] mul_res_c, add_res_c;   // R1036: one copy per client
 
-  m2_fp_pool #(.NC(NC)) u_pool (
+  m2_fp_pool #(.NC(NC), .RES_CP(RES_CP)) u_pool (
     .clk(clk), .rst_n(rst_n),
     .mul_req(mul_req), .mul_a(mul_a), .mul_b(mul_b),
-    .mul_gnt(mul_gnt), .mul_rsp(mul_rsp), .mul_res(mul_res),
+    .mul_gnt(mul_gnt), .mul_rsp(mul_rsp), .mul_res(mul_res), .mul_res_c(mul_res_c),
     .add_req(add_req), .add_a(add_a), .add_b(add_b), .add_sub(add_sub),
-    .add_gnt(add_gnt), .add_rsp(add_rsp), .add_res(add_res),
+    .add_gnt(add_gnt), .add_rsp(add_rsp), .add_res(add_res), .add_res_c(add_res_c),
     .div_req(div_req), .div_a(div_a), .div_b(div_b),
     .div_gnt(div_gnt), .div_rsp(div_rsp), .div_res(div_res)
   );
@@ -255,12 +260,12 @@ module m2_geometry #(
     .mem_req(mem_req), .mem_addr(mem_addr), .mem_data(mem_data), .mem_ack(mem_ack),
     .fmul_req(mul_req[1]), .fmul_a(mul_a[1]), .fmul_b(mul_b[1]),
     .fadd_req(add_req[1]), .fadd_a(add_a[1]), .fadd_b(add_b[1]),
-    .fadd_gnt(add_gnt[1]), .fadd_rsp(add_rsp[1]), .fadd_res(add_res),
-    .fmul_gnt(mul_gnt[1]), .fmul_rsp(mul_rsp[1]), .fmul_res(mul_res),
+    .fadd_gnt(add_gnt[1]), .fadd_rsp(add_rsp[1]), .fadd_res(add_res_c[1]),
+    .fmul_gnt(mul_gnt[1]), .fmul_rsp(mul_rsp[1]), .fmul_res(mul_res_c[1]),
     .mul_req(mul_req[0]), .mul_a(mul_a[0]), .mul_b(mul_b[0]),
-    .mul_gnt(mul_gnt[0]), .mul_rsp(mul_rsp[0]), .mul_res(mul_res),
+    .mul_gnt(mul_gnt[0]), .mul_rsp(mul_rsp[0]), .mul_res(mul_res_c[0]),
     .add_req(add_req[0]), .add_a(add_a[0]), .add_b(add_b[0]), .add_sub(add_sub[0]),
-    .add_gnt(add_gnt[0]), .add_rsp(add_rsp[0]), .add_res(add_res),
+    .add_gnt(add_gnt[0]), .add_rsp(add_rsp[0]), .add_res(add_res_c[0]),
     .poly_valid(poly_valid), .poly_ready(poly_ready),
     .v0x(v0x), .v0y(v0y), .v0z(v0z), .v1x(v1x), .v1y(v1y), .v1z(v1z),
     .v2x(v2x), .v2y(v2y), .v2z(v2z), .v3x(v3x), .v3y(v3y), .v3z(v3z),
@@ -360,9 +365,9 @@ module m2_geometry #(
     .in_valid(pj_valid), .in_ready(pj_ready),
     .in_x(pj_x), .in_y(pj_y), .in_z(pj_z),
     .mul_req(mul_req[3]), .mul_a(mul_a[3]), .mul_b(mul_b[3]),
-    .mul_gnt(mul_gnt[3]), .mul_rsp(mul_rsp[3]), .mul_res(mul_res),
+    .mul_gnt(mul_gnt[3]), .mul_rsp(mul_rsp[3]), .mul_res(mul_res_c[3]),
     .add_req(add_req[3]), .add_a(add_a[3]), .add_b(add_b[3]), .add_sub(add_sub[3]),
-    .add_gnt(add_gnt[3]), .add_rsp(add_rsp[3]), .add_res(add_res),
+    .add_gnt(add_gnt[3]), .add_rsp(add_rsp[3]), .add_res(add_res_c[3]),
     .div_req(div_req[3]), .div_a(div_a[3]), .div_b(div_b[3]),
     .div_gnt(div_gnt[3]), .div_rsp(div_rsp[3]), .div_res(div_res),
     .out_valid(pj_out_valid), .out_sx(pj_out_sx), .out_sy(pj_out_sy),
@@ -1170,9 +1175,9 @@ module m2_geometry #(
     .in_tex(ptex), .in_lum(plum),                            // R271
     .in_mipz(pmipz), .out_mipz(q_mipz),                      // R828c
     .mul_req(mul_req[2]), .mul_a(mul_a[2]), .mul_b(mul_b[2]),
-    .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res),
+    .mul_gnt(mul_gnt[2]), .mul_rsp(mul_rsp[2]), .mul_res(mul_res_c[2]),
     .add_req(add_req[2]), .add_a(add_a[2]), .add_b(add_b[2]), .add_sub(add_sub[2]),
-    .add_gnt(add_gnt[2]), .add_rsp(add_rsp[2]), .add_res(add_res),
+    .add_gnt(add_gnt[2]), .add_rsp(add_rsp[2]), .add_res(add_res_c[2]),
     .div_req(div_req[2]), .div_a(div_a[2]), .div_b(div_b[2]),
     .div_gnt(div_gnt[2]), .div_rsp(div_rsp[2]), .div_res(div_res),
     .pj_valid(k_pj_valid), .pj_ready(k_granted),

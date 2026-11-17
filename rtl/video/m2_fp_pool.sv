@@ -63,7 +63,13 @@ module m2_fp_pool #(
   parameter int unsigned NC = 3,         // clients
   // R740: the adder's mid-stage register (fp_add PIPE_A2) -- the add latency
   // is 6 with it, and m2_geo_xform's FP_ADD_LAT must say so (its default does).
-  parameter bit          ADD_A2 = 1'b1
+  parameter bit          ADD_A2 = 1'b1,
+  // R1036: 1 = each client reads the multiply and add results from its own
+  // copy of the unit's result register (mul_res_c[i], add_res_c[i]), equal to
+  // mul_res / add_res on every cycle. One register read by every client drew
+  // them all to wherever it sat; a copy each lets each sit by its reader.
+  // 0 = every copy is mul_res / add_res itself.
+  parameter bit          RES_CP = 1'b0
 ) (
   input  logic                clk,
   input  logic                rst_n,
@@ -75,6 +81,7 @@ module m2_fp_pool #(
   output logic [NC-1:0]       mul_gnt,
   output logic [NC-1:0]       mul_rsp,
   output logic [31:0]         mul_res,
+  output logic [NC-1:0][31:0] mul_res_c,   // R1036
 
   // ---- add / subtract
   input  logic [NC-1:0]       add_req,
@@ -84,6 +91,7 @@ module m2_fp_pool #(
   output logic [NC-1:0]       add_gnt,
   output logic [NC-1:0]       add_rsp,
   output logic [31:0]         add_res,
+  output logic [NC-1:0][31:0] add_res_c,   // R1036
 
   // ---- divide
   input  logic [NC-1:0]       div_req,
@@ -277,18 +285,21 @@ module m2_fp_pool #(
     end
   end
 
-  fp_mul u_mul (
+  localparam int unsigned NCP = RES_CP ? NC : 1;
+  logic [NCP-1:0][31:0] m_res_cp, a_res_cp;
+
+  fp_mul #(.NCP(NCP)) u_mul (
     .clk(clk), .rst_n(rst_n),
     .in_valid(mul_v_q), .a(mul_a_q), .b(mul_b_q),
-    .out_valid(m_valid), .result(m_res),
+    .out_valid(m_valid), .result(m_res), .result_cp(m_res_cp),
     .overflow(m_ovf), .underflow(m_unf), .invalid(m_inv)
   );
 
-  fp_add #(.PIPE_A2(ADD_A2)) u_add (
+  fp_add #(.PIPE_A2(ADD_A2), .NCP(NCP)) u_add (
     .clk(clk), .rst_n(rst_n),
     .in_valid(add_v_q), .a(add_a_q), .b(add_b_q),
     .sub(add_sub_q),
-    .out_valid(a_valid), .result(a_res),
+    .out_valid(a_valid), .result(a_res), .result_cp(a_res_cp),
     .overflow(a_ovf), .underflow(a_unf), .invalid(a_inv)
   );
 
@@ -329,6 +340,15 @@ module m2_fp_pool #(
   assign mul_res = m_res;
   assign add_res = a_res;
   assign div_res = d_res;
+
+  genvar c;
+  generate
+  for (c = 0; c < NC; c = c + 1) begin : g_res_c
+    assign mul_res_c[c] = RES_CP ? m_res_cp[RES_CP ? c : 0] : m_res;
+    assign add_res_c[c] = RES_CP ? a_res_cp[RES_CP ? c : 0] : a_res;
+  end
+  endgenerate
+  wire unused_cp = &{1'b0, RES_CP ? 1'b0 : ^{m_res_cp, a_res_cp}};
 
   always_comb begin
     mul_rsp = '0;
