@@ -3403,3 +3403,14 @@ test_hps_cfgstr:
 	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -E '^hps_io' ; \
 	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -q "^$$w" || { echo "  expected $$w"; exit 1; }; echo "  $$w as expected"; done
 	@rm -r obj_cfgstr
+
+# R1039: m2_persp_recip's table in logic against its M10K form (M2_RECIP_M10K, the 2B build), out_q
+# every clock over every 16-bit input and random resets; then the M10K read a clock late must differ.
+.PHONY: test_m2_persp_recip_m10k
+test_m2_persp_recip_m10k:
+	@echo "== test m2_persp_recip, logic table vs M10K (R1039)"
+	@for p in 0 1; do $(VERILATOR) --binary --timing -j 2 -Wno-fatal -Wno-lint -Wno-style -GPLANT=$$p \
+	    --top-module tb_m2_persp_recip_m10k --Mdir obj_prm$$p rtl/video/m2_persp_recip.sv sim/video/tb_m2_persp_recip_m10k.sv >/dev/null 2>&1 || exit 1; \
+	  ./obj_prm$$p/Vtb_m2_persp_recip_m10k | grep -E '^m2_persp|^PASS|^FAIL' | tr '\n' ' '; echo; done
+	@./obj_prm0/Vtb_m2_persp_recip_m10k | grep -q '^PASS' && ./obj_prm1/Vtb_m2_persp_recip_m10k | grep -q '^FAIL' && echo "  0 differ; the planted fault caught"
+	@rm -r obj_prm0 obj_prm1
