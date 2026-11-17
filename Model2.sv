@@ -124,6 +124,14 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_2C
 `define M2_2C
 `endif
+// R1035: no 2B game has Virtua Cop 2's light guns (MAME 0.289: Gunblade NY
+// and Rail Chase 2 aim with IPT_AD_STICK on the analog inputs, every other
+// set has none), so a 2B build leaves the guns, their crosshairs, the gun
+// flash, the Sinden border and their OSD lines out, as "M2_NO_2A_VCOP2_GUN=1"
+// does on any build.
+`ifndef M2_NO_2A_VCOP2_GUN
+`define M2_NO_2A_VCOP2_GUN
+`endif
 `endif
 // R859: M2_2A_SOUND, the 2A sound board (its 68000 and the SCSP, m2_2a_sound)
 // on the i8251's far end -- 1 by default; 0 puts R852's silent stand-in back.
@@ -3096,7 +3104,10 @@ wire is_zerogun = M2A && (game_id[6:0] == 7'h12);
 // fold away): 0x17 The House of the Dead (hotd, Revision A) -- the large layout
 // (a2_big: 32 MB main_data, 16 MB textures, 32 MB polygons), its 1 MB of copro
 // data in the 2A copro-data slot, Virtua Cop 2's guns on serial channel 2.
-wire is_hotd    = C2 && (game_id[6:0] == 7'h17);
+// R1035: on a 2B build (B2) the 2C-only games' IDs below are never live: no
+// 2B set is one of them, so each decode folds to 0 there -- Over Rev keeps its
+// ID and profile (overrevb is a 2B set too).
+wire is_hotd    = C2 && !B2 && (game_id[6:0] == 7'h17);
 assign mipoff_game = is_hotd;   // R990: HOTD's mip rule is Off (GitHub #41)
 // R928: 0x1C Over Rev (overrev, Revision A) -- Sega Rally's 2A layout (no
 // copro data: MAME's region is empty), indy500's steering / pedals / shifter
@@ -3109,7 +3120,7 @@ wire is_orev    = C2 && (game_id[6:0] == 7'h1C);
 // 2A copro-data slot, indy500's steering / pedals / shifter (m2_2a_inputs
 // OREV, the pedals not reversed). Its comm board needs no answer: it writes
 // CN / FG 0 once and polls one share-RAM byte nobody writes (0 in MAME too).
-wire is_stcc    = C2 && (game_id[6:0] == 7'h1D);
+wire is_stcc    = C2 && !B2 && (game_id[6:0] == 7'h1D);
 // R1010: THE NEXT THREE 2C GAMES, each its own ID (they had borrowed Motor
 // Raid's and Sky Target's for a first board test): 0x1E Wave Runner
 // (waverunr), 0x1F Sega Water Ski (segawski), 0x20 Behind Enemy Lines (bel)
@@ -3118,17 +3129,17 @@ wire is_stcc    = C2 && (game_id[6:0] == 7'h1D);
 // m2_2a_inputs (C2G). 0x20-0x2F count as 2A games past VF2 in a 2C build
 // (is_2ax: the program extension, vc_en) as 0x10-0x1F do; a 2A build is
 // unchanged (C2 0).
-wire is_wave    = C2 && (game_id[6:0] == 7'h1E);
-wire is_wski    = C2 && (game_id[6:0] == 7'h1F);
-wire is_bel     = C2 && (game_id[6:0] == 7'h20);
+wire is_wave    = C2 && !B2 && (game_id[6:0] == 7'h1E);
+wire is_wski    = C2 && !B2 && (game_id[6:0] == 7'h1F);
+wire is_bel     = C2 && !B2 && (game_id[6:0] == 7'h20);
 // R1010: and 0x21 Sega Ski Super G (skisuprg), 0x22 Top Skater (topskatr),
 // 0x23 Dynamite Cop (USA, Model 2C) (dynamcopc), 0x24 Royal Ascot II
 // (rascot2): the large layout; copro data for the first two (skisuprg's 8 MB
 // region: the slot's 4 MB, R1010); 0x23 / 0x24 are the DIGITAL profile.
-wire is_skis    = C2 && (game_id[6:0] == 7'h21);
-wire is_tops    = C2 && (game_id[6:0] == 7'h22);
-wire is_dc2c    = C2 && (game_id[6:0] == 7'h23);
-wire is_ra2     = C2 && (game_id[6:0] == 7'h24);
+wire is_skis    = C2 && !B2 && (game_id[6:0] == 7'h21);
+wire is_tops    = C2 && !B2 && (game_id[6:0] == 7'h22);
+wire is_dc2c    = C2 && !B2 && (game_id[6:0] == 7'h23);
+wire is_ra2     = C2 && !B2 && (game_id[6:0] == 7'h24);
 // R887: THE OTHER 2A GAMES, BY WHAT THEY NEED RATHER THAN BY NAME. 0x10-0x1F
 // are the 2A games past VF2; m2_2a_inputs picks the cabinet profile from the
 // ID itself (DIGITAL by default, ANALOG 0x10 and 0x18-0x1B, GUN 0x11):
@@ -6905,7 +6916,7 @@ end else begin : g_noioboard
 		// here (tb_m2_2a_inputs). SW3 is 0xFF for every game.
 		wire [7:0] a2_in0_q, a2_in1_q, a2_in2_q, a2_an0, a2_an1, a2_an2, a2_an3;   // R1010: an3
 		wire [7:0] a2_pe;   // R892: PE's latch, Manx TT's motion-base command
-		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT), .OREV(C2), .C2G(C2)) u_2a_inputs (   // R928: OREV; R1010: C2G
+		m2_2a_inputs #(.SYS_MHZ(SYS_MHZ), .ANALOG(RALLY2A), .GUN(VCOP2GUN), .MOTION(MANXMOT), .OREV(C2), .C2G(C2 && !B2)) u_2a_inputs (   // R928: OREV; R1010: C2G; R1035: not on 2B
 			.clk(clk_sys), .rst_n(cpu_rst_n),
 			.game(M2A ? (is_hotd ? 7'h11 : game_id[6:0]) : 7'd0),   // R887: the profile from the game ID; R924: HOTD is Virtua Cop 2's
 			.joystick_0(joystick_0), .joystick_1(joystick_1),
