@@ -41966,6 +41966,131 @@ clk_sys 80 MHz; the rest removes block-RAM paths or adds MLAB ones. The
 fitter's packing of the remaining RAMs can move the count a few blocks
 either way: one seed confirms it.
 
+**R910 -- THE WINDOW PROBE (R902's NEXT STEP): AN 'X' RECORD ON THE M2_PROBE
+STREAM COUNTS, FOR ONE DISPLAY-LIST WALK AT A TIME, EVERY WINDOW'S QUADS INTO
+THE STORE AND ONE WINDOW'S POLYGONS AT EVERY STAGE. ON MAME's RALLY LISTS IT
+READS R902's MIRROR: WINDOW 3 (0xC) 1, WINDOW 4 (0xB) 50 / 29. WITH R907's
+AREA THE PROBE BUILD MAPS 323 ALM UNDER THE PROBE BUILD BEFORE IT. NOT
+FITTED, NOT ON A BOARD.**
+
+*Why:* R902 drew the mirror from MAME's lists at every stage and could not
+make it black on any bench; it asked for a build that counts, per walk, the
+window nibbles the store accepts (0xC: 1, 0xB: 29-96). 0xB at 0 puts the loss
+before the store (walk, engine, clipper, camera values); 0xB present puts it
+in the raster.
+
+*What (rtl/dbg/m2_win_probe.sv; Model2.sv's M2_PROBE block; branch
+m2a-win-probe on model2a 75ee3a2):* the nibble is m2_geo's obj_win as the key
+carries it (15 - windows opened before the object: 0xE window 1 ... 0xB window
+4), read at every stage -- the walk waits for the whole geometry to go idle
+between objects (R760), so obj_win belongs to the object until its last quad
+has left the clipper; registered with each quad for the store's verdict a
+cycle later. Taps, all behind `ifdef M2_PROBE` (ports included), clk_sys:
+  - m2_geometry dbg_wev: polygon taken from the engine; refused by the engine
+    (dbg_culled's low bit -- back face, link type 0, untextured translucent);
+    non-finite and behind-the-eye at Q_CHK; "drop" = a polygon into the
+    clipper that came out as nothing. NOT m2_geo_clip's dbg_dropped, which
+    counts every wholly-outside sub-polygon and saturates: walk 3282 has 167
+    of those and 149 polygons with no quad (in 1,373, out 1,245 quads: 21
+    polygons made two).
+  - m2_quad_store dbg_ev (through m2_raster3d dbg_store_ev): {in, tiny, room}
+    as the count acts on them a cycle after in_valid.
+  - m2_geo win_cnt (window commands; its difference over the walk is the
+    window count), walk_started, and q3d_end.
+One walk is sampled (counters cleared at its start), sent, then the next
+starting walk is sampled; nothing is double-buffered. The focus nibble steps
+F, E, ... 15 - windows, round again (Rally's bumper view: F E D C B).
+
+Record 'X' (a = {k, walk(12), p(16)}, d), ten a sample, k = 0-9:
+  k0 p {windows(8), focus(4), got_v, got_q, 0, 0}   d {objects, objects in focus}
+  k1-k3 quads the store took per nibble (16 x 8 bits, saturating) and in all
+  k4 take | cull, bad    k5 behind | drop, gout    k6 tiny | full, acc
+  k7 v0z[31:16] | v0x    k8 v0z[15:0] | v0y  (the focus's first polygon, view space)
+  k9 box round vertex 0 of the focus's accepted quads (12-bit fields, screen px)
+They take every other free probe slot while a sample waits (an M or B slot
+keeps its turn; the turn of C/S/T/U/R waits): ~200 X records/s, a sample
+every ~49 ms, nibble 0xB in focus every ~0.25 s. tools/decode_why.py groups
+samples by window count and prints, for walks with 4+ windows, the mirror's
+verdict (where 0xB is lost, or "the store holds them"). M2_PROBE_NO_X=1
+leaves the record out.
+
+*Benches (verified):*
+  - make geodiff_2a_probe GDP_CY=128 (geodiff_top + sim/video/wprobe_bench.sv:
+    an m2_quad_store built as m2_raster3d's, sixteen probes held one on each
+    nibble and one rotating as the board's), R902's MAME walks:
+
+        walk   nib   objs  take  cull  bad  behind  drop  gout  tiny  acc   box of v0 (px)
+        3282   E     155   1658  1057    0     414    66  1193   102  1091  0..496 x 0..384
+               D       1      1     0    0       0     0     1     0     1
+               C       1      1     0    0       0     0     1     0     1  (370, 74)
+               B       5    190   139    0      63    83    50     0    50  128..368 x 32..72
+        3457   E     112   2130  1287    0     215   245  1694    12  1682
+               B       6    199   147    0     130    46    29     0    29  128..368 x 32..72
+               (C, D as 3282)
+
+    0xB 50 and 29, 0xC 1: R902's counts and geodiff's ours.txt (50 / 29 quads
+    with z nibble b), inside W4's viewport (R902: x 128-368, rows 32-72).
+    Stage totals reconcile with the walk's own counters (cull 1,196 = 1,057
+    + 139; behind 477 = 414 + 63; clip in 1,373; quads out 1,245). ours.txt
+    identical to R902's on every walk (R907's viewport converter too).
+  - The harness's own list (R902's frame 3060 buffer, through geodiff):
+    window 1 and 4 every polygon NON-FINITE (1,765 / 167), vertex 0 (nan,
+    nan, nan), nothing to the store but the HUD (D) and the backing (C) --
+    the decoder's verdict: "LOST BEFORE THE RASTER: NaN/Inf in the vertices".
+    That is the record's other answer, shown on a real list.
+  - THE WHOLE-CORE HARNESS (make obj_boot_2ax_probe/Vm2_boot_harness
+    BOOT_2AX_DIR=obj_boot_2ax_probe BOOT_2AX_PROBE=1; srallyc image, R902's
+    input schedule now committed as M2_INSCHED: three coins, start, VR at
+    2700 and 3000; M2_WPROBE from frame 1300; ~2 h 46 min to the bumper
+    view on a loaded machine): the rotating probe, as the board's, took 1,257
+    samples -- walks with 0 / 1 / 2 / 3 / 4 windows: 142 / 272 / 421 / 355 /
+    67 -- and stepped its focus F E D C B on the 4-window walks (period 5,
+    walks w9a9-w9b5). On every 4-window walk (67 rotating, 1,072 held
+    samples): nibble C 1, nibble D 1 (the HUD), nibble B 0 -- B's 4 objects
+    hand on 167 polygons, all 167 NON-FINITE, vertex 0 (nan, nan, nan);
+    window 1 the same (1,765 of 1,765). Verdict printed: "LOST BEFORE THE
+    RASTER: NaN/Inf in the vertices". This is R902's harness finding (NaN
+    translations: analog inputs 0xFF, stub sound), now read off the record.
+    The harness's geometry is not the core's (no WINKEY, a fixed full-screen
+    viewport and centre, so C lands at (496, 342), not (370, 74)).
+  - lint_top clean: 2A, -DM2_NO_DEBUG -DM2_PROBE=1, the same with
+    -DM2_PROBE_NO_X=1, -DM2_NO_2A, -DM2_NO_2A -DM2_NO_DEBUG -DM2_PROBE=1; no
+    -Wall warning on any probe signal. lint_idx (default and probe): nothing
+    from the probe (m2_video's xlat candidate gone, R907). quartus_map
+    --analyze_file with M2_PROBE=1 on the four changed RTL files: 0 errors.
+    test_m2_quad_store, _geometry, _geo_clip, _video_timing PASS.
+
+*R907 brought in (rtl/video/m2_geo_view.sv, m2_video.sv byte-identical to
+m2a-ws-r907 / m2a-scan15; its benches tb_m2_geo_view.cpp, test_m2_geo_view_live,
+test_m2_video_xlat from m2a-scan15):* test_m2_geo_view PASS (37), _live 5.39 M
+checks 0 fails, _xlat 7.6 M cycles 0 fails.
+
+*Area (quartus_map 17.0, whole design, model2a QSF, M2_2A_WAITST off):*
+
+                                     ALMs    ALUT    regs    block bits
+    75ee3a2 keeper (R908)           40,433  58,122  47,988   4,467,205
+    75ee3a2 + M2_PROBE=1            41,125  59,224  48,764   4,467,333
+    this, M2_PROBE=1                40,802  58,659  48,448   4,467,333
+    this, keeper                    39,710  57,012  47,087   4,467,205
+    75ee3a2 + R907's two files      39,710  57,012  47,087   4,467,205
+
+  m2_win_probe: 500 ALUT, 568 registers, no RAM. The keeper's map summary is
+  identical to 75ee3a2 + R907 alone: without M2_PROBE nothing of this exists.
+  No block bits added, so no M10K (R908's binding resource).
+
+*How to read the board's capture:* the "WALKS WITH 4 WINDOWS" section is the
+bumper view (Rally's chase views have 2). Nibble C should be 1. Then
+  - B at 0: the focus-B row says where -- take 0 (objs > 0): the engine;
+    objs 0: the walk; bad: the camera (R902's harness had NaN translations);
+    behind / drop: the camera or W4's clip planes (vertex and box show which);
+    tiny / full: the store.
+  - B at 29-96 and the mirror black: the store has them; the raster loses
+    them (R902: the draw, not the sort -- the key would put them in front).
+
+*NOT ESTABLISHED:* anything about the board. The harness geometry is not the
+core's (no WINKEY, a fixed full-screen viewport, no rasteriser), so its store
+counts are for the full-screen clip.
+
 **R911 -- DEAD OR ALIVE'S "WRONG TEXTURES ON SCENERY" (s1259) ARE THE
 CORE'S MIP LEVELS, WHICH MAME NEVER DRAWS FOR THIS GAME: R828c's NO-MIP FLAG
 ASSUMED DAYTONA'S lod AND coef. THE FLAG NOW TAKES THE GAME'S OWN
@@ -44769,6 +44894,120 @@ f19e275), LOCAL, NOT PUSHED, NOT FITTED. quartus_map 17.0, ALMs needed: 2A
 MLAB read into m2_texel_x2's request registers; 2C near the projector /
 clipper states).
 
+**R953 -- THE BOARD'S OWN SOUND, RECORDED (BEN'S HDMI CAPTURES), AGAINST
+MAME AND THE BENCH AT THE SAME MOMENT: THE BOARD'S MIX IS NOT THE BENCH'S.
+DYNAMITE COP's DSP RETURN ON THE BOARD HAS MAME's SHAPE (NO R914 DELAY TAPS),
+ITS DRY HITS SIT 5 dB LOWER AGAINST THE MUSIC THAN MAME's AND ITS BOX / PLANT
+BREAK 8 dB HIGHER. THE FRAMEWORK PATH, CLIPPING AND SDRAM LATENCY ARE RULED
+OUT; THE WHOLE-BOARD BENCH ON MAME's MIDI GIVES R914's MIX, NOT THE BOARD's.
+NOT REPRODUCED, SO NOT FIXED. HOUSE OF THE DEAD's HIGH-PITCHED LAYER AT 7:47
+IS R949's 48 kHz HOLD ALIASING (m2_snd_lerp, NOT YET ON THE BOARD).**
+
+*Believed (R949):* the board's imbalance is upstream of the SCSP (the i960's
+MIDI), in the framework (vol_boost) or in the arcade itself; the next step
+was a board recording held against the same moment in MAME.
+
+*The recordings:* (a) Ben's DCOP_envBreakSound.mp4, 22.55 s, 2A s1447
+(bridge-r937-2a, rbf md5 2ce93917), Volume at its default (80%): the
+attract -- the ship intro, then the cabin demo from 6.7 s (hits, a plant /
+box break at 18.8 s). (b) "Hotd_Sound issue.mp4", 575.6 s, 2C before
+OVERLAP (the s1377 era); 440-500 s taken. Ben: the same HOTD problem on
+s1449 WITH R947's OVERLAP, so (b) stands for the current 2C build. OBS AAC
+192 kb/s (it cuts at ~17 kHz).
+
+*Measured -- Dynamite Cop (board L; dBFS of the HDMI 16-bit stream):*
+  1. Peak -13.85 L / -16.88 R, RMS -38.96 / -42.26. 0 samples at or above
+     0.95 FS, no flat tops, DC 2e-5. Nothing clips.
+  2. R = 0.682 x L (-3.32 dB), flat 50 Hz-10 kHz and second by second
+     (-3.25 .. -3.37 dB); recording (b) is -3.30 dB too. A uniform channel
+     gain in the capture chain (OBS / the capture device), not the core: the
+     bench's and MAME's L and R agree within 0.25 dB. Everything below is L.
+  3. Located in MAME 0.289 (plain, -wavwrite, no coin): board 0 s = MAME
+     38.34 s (envelope correlation 0.91; the 10 ms envelopes of the break
+     line up to 10 ms over 22 s -- the board's sound board kept real time).
+     And in a new p16 capture of the same attract (hotd-mix build/scsp/
+     dcop_att, 62 s, no coin; git-ignored), replayed through scsp_ref.h with
+     R914 (the core) and with MAME's mirror, split by ISEL (the direct sends
+     and the DSP return each input makes).
+  4. Board against MAME's own output, 100 ms windows:
+       the music (the DSP return of the IMXL 5 / 6 voices), 8-17 s, 20-22 s:
+         -5.8 dB, sd 0.4-0.9 dB -- the board's gain on everything; the
+         reference for the rest
+       dry hits (TL 8-28, DISDL 3, IMXL 1, ISEL 0) at 11.0 s and 18.2 s:
+         -10.9 / -11.1 dB -- 5.0 dB under the reference
+       the break (18.8-19.1 s; sounds 0x0f / 0x41 on channel 0x11: TL 13 /
+         25, DISDL 3, ISEL 1, IMXL 0 / 1 / 3): +2.0 .. +2.5 dB -- 7.7-8.3 dB
+         over the reference
+       the break's bands: board - MAME +1.9 dB at 0-250 Hz rising to +8.2 dB
+         at 12-16 kHz; board / the ISEL 1 voices' DRY send alone (replay)
+         flat, +5 .. +9 dB, 0-16 kHz: the excess is the dry break, brighter
+         and louder, not its low-passed EFREG2 return.
+  5. WHICH DSP: board against the replays in the music windows -- MAME's
+     mirror (MADRS 0: in this program the ring reads then add nothing) sd
+     0.89 dB, R914 sd 3.01 dB. The board's music has MAME's fine structure,
+     without R914's reverb taps.
+  6. Grouped fits (scratch: board 50 ms band energies against the replay's
+     voices grouped by one attribute, log domain): by slot number all within
+     0.8 dB (not slot-dependent); by TL / DISDL no pattern; the ISEL 1 /
+     IMXL 3 voices +11 .. +15 dB over the music return; the IMXL 1 dry hits
+     -8 dB. Scratch variants of scsp_ref.h: MIXS x 4 (every DSP input +12
+     dB) fits the music (sd 0.61) and the hits (0.1 dB) but leaves the break
+     +10.6 dB; DISDL / IMXL swapped either way, or TL off the MIXS send:
+     worse. No single mixer change tried reproduces all three.
+
+*Measured -- the bench at the board's moment:* tb_m2_2a_sound (fx68k + the
+SCSP + SDRAM at random latency, MAME's MIDI; SND_SHIFT 30 after 40 s with
+SND_MIDI_DROP, 33 s). Latency 6-40: PASS, 99.5% of the writes in MAME's
+order, 0 underruns; scored against the board it equals R914's replay to 0.3
+dB (music sd 2.99, hits -3.1, break +10.1 dB) -- NOT the board. Latency
+20-400: the engine saturates (691,154 of 1,455,300 samples made, the FIFO
+empty 65,535+ times, the 68000 waiting 82% of clocks): it would play at half
+speed, which the recording rules out (item 3). tb_m2_scsp (the SCSP alone on
+MAME's writes): latency 6-400, all 62 s, 2,734,000 samples and 18,834,603
+slot samples, 0 wrong (engine mean 4,145 clocks a sample); 100-1,000, 40 s,
+0 wrong (stopped there). The RTL in Verilator is exact at any latency.
+
+*Ruled out:* the framework path -- AUDIO_L / R is m2_volume's clamped
+product (80%: -1.94 dB); audio_out takes it at 48 kHz (filter off, R788);
+DC_blocker (~15 Hz high-pass); aud_mix_top (ALSA off, mix 0), vol_boost's
+waveshaper (x2 below 0.43 FS / x4 below 0.23 FS of its input, then 4:1 /
+8:1), the 6 dB att steps, a clamp. All linear at these levels (the recording
+peaks at 0.20 FS; even with boost on its input stayed under the knee), and
+nothing linear makes one sound 13 dB louder against another of the same
+spectrum. Clipping (item 1). SDRAM starvation (the board keeps real time).
+A game setting: Dynamite Cop's test menu has no sound option but Advertise
+Sound (on); "a0 10 xx" (the DSP effect select; xx = 00 / 05 / 11 in this
+capture) writes identical COEF / MADRS for every xx seen.
+What is left is board-only: the MIDI the board's i960 sends (the bench has
+MAME's), or the board's sound board doing what its simulation does not.
+
+*House of the Dead (b), 440-500 s:* peak -5.95 dBFS L, RMS -22.9 (10 dB over
+the hotd_ch2 clips: Ben's 2C Volume was higher), a smooth amplitude tail
+(one sample over 0.50 FS): no clipping. 440-480 s carries a steady comb of
+lines on 150 + 300k Hz across 4-17 kHz (14,250 Hz +36.8 dB over the floor;
+10,350, 6,448, 9,149, 13,049, 16,948 ...: f +- 3,900 Hz, and 300 Hz =
+gcd(44,100, 48,000)); the 12-16 kHz band holds -14.0 dB of the total. The
+hold-at-48 kHz model of hotd_ch2_510-590s_CORE_R914.wav makes the same two
+strongest lines (14,250 +20.8, 10,350.6 +15.6 dB); linear interpolation
+(m2_snd_lerp) cuts them to +7.5 / +1.2 dB. That is R949's tinny layer, in
+the output path, which OVERLAP (R947) cannot touch -- consistent with Ben
+hearing it on s1449. Ben's play is not MAME's scripted run, so the shots
+against the music could not be aligned; HOTD's gun is dry (IMXL 0) and its
+music goes through the DSP -- the two classes that moved apart in Dynamite
+Cop. Whether they move the same way in HOTD is not measured.
+
+*To settle it (board data; the first two need no new fit):* (1) the in-game
+SOUND TEST on the board, the same numbers recorded in MAME -- one fixed
+command each: if the board still differs, the i960 is cleared and the sound
+board is at fault; (2) a probe build's 'M' record (R880) over Dynamite Cop's
+attract against dcop_att/midi.txt; (3) Ben's MiSTer.ini audio lines and the
+OSD Volume / Raw Sound Boost of each session, and OBS's balance for the
+-3.3 dB right channel.
+
+*NOT CHANGED:* no RTL; no fit; no board. Branch board-mix (off hotd-mix
+4cdb9c1), LOCAL ONLY. Captures and bench outputs git-ignored (hotd-mix
+build/).
+
 **R957 -- R944'S EDGE DILATION BEHIND AN OSD SWITCH, "SEAM FILL", OFF BY
 DEFAULT: EVERY CAR IN SEGA RALLY GOT WHITE DOTS FROM IT.** Ben, on the board,
 2026-10-24, on the released Model2A_20261024 (s1468): dotted white lines along
@@ -45586,6 +45825,125 @@ so its proofs carry over; rerun here anyway.
     quad store array inferred as M10K.
   * Not checked in the combined tree: the board, and timing (R959's paths and
     R962's new muxes on clk_sys are unfitted together).
+
+**R964 -- THE ~2 s 3D FREEZE AT THE END OF VIRTUA COP 2's FIRST TRAIN (combo-2a,
+s1503, seen once): NOT FOUND IN THE CORE. R962's HOLD IS BOUNDED BY ONE DRAW
+AND NEVER ENGAGES ON THE TRAIN; THE SPAN CULL AND THE SPILL ARE PICTURE-
+IDENTICAL ACROSS CONSECUTIVE FRAMES AT THE BOARD'S PACE; THE GEOMETRY IS
+UNCHANGED BY MID-LIST STALLS; MAME DRAWS EVERY VBLANK THERE. NO 3D TIMEOUT
+IN THE DESIGN IS LONGER THAN ~13 us. Bench tools added; no RTL change.**
+Branch vc2-freeze (off combo-2a 3e883c2), 2026-10-25.
+(Ben, board, s1503: near the end of the expert stage's first train the 3D
+stopped ~2 s once, then ran at 57.5 fps; a second run did not repeat it. A
+504 ms gap in a later m2-fps.py log was a death and the continue screen.
+Also reported on s1503: Manx TT road missing after a crest -- the released
+Model2A_20261024b shows the same, so PRE-EXISTING, not combo-2a; and with
+s1506 (SPCULL 0) the same, so not the cull. Rally AI cars flashing ~1 s in
+race 2 and VF2 Jacky / Sarah slowdowns: release comparison pending.)
+
+*What was suspected.* R962's hold (a list behind a spilled one, or one
+reaching 2,046 quads, waits at q_ready until the drawn list's fb_complete)
+waiting far longer than a draw -- two holds waiting on each other (R652's
+list_hold), fb_complete never rising, a spill behind a spill, an empty list
+behind a spill -- or a watchdog breaking a hang after ~2 s; R954's cull
+consulting a stale mask.
+
+*NOW KNOWN (MEASURED unless marked):*
+  * NO LONG TIMEOUT EXISTS in the 3D path. Every one, with its period:
+    m2_geo drain_wait 1,023 clk_sys (12.8 us, a walk without a flip);
+    m2_geo fs_since_flip 4 vblanks (70 ms, the vblank fallback); m2_geo
+    walk bound 32,767 opcodes (a count, not a time); m2_geometry pj_wait
+    1,023 clk_sys (12.8 us, a lost projection); m2_texel / m2_texel_bl
+    ms_to 1,023 clk_mem (10.2 us a miss slot); m2_texel_x2 / m2_texel_cdc
+    TO_CYC 1,023 clk_mem (10.2 us). R652's hold, R962's hold and
+    m2_ddr3_arb (R372 removed its watchdog) have none. Nothing here can
+    "recover after 2 s"; a 2 s stall would need ~200,000 back-to-back
+    texel timeouts, and R280 already sweeps the texel cache once a frame,
+    not once a texture write.
+  * R962's HOLD, by construction: it ends at the drawn list's fb_complete;
+    the draw does not depend on the collection (only C_IDLE's dvalid /
+    !fb_complete / fb_clear_req); list_hold needs pst == P_READY, which a
+    held list (P_COLLECT) is not, so the two holds cannot wait on each
+    other, and the game is not held while the walk is.
+  * THE TRAIN NEVER REACHES IT. MAME 0.289 (sim/io/mame_m2_vcop2_expert.lua,
+    to 209 s): the train's lists peak at 1,942 polygons (the store holds
+    1,964 quads of that one), below the 2,046 where the hold starts; the
+    end of the first train (~160-162 s, frames ~9,215-9,310, out of the
+    carriage onto the roof) is 400-1,000 polygons a list.
+  * MAME'S CADENCE THERE: one flip every vblank from 40 s to 209 s except
+    single-vblank jitter at the continue screen (163.1-163.6 s) -- the game
+    does not pause its 3D at the end of the first train. Texture RAM is
+    written only at the two stage loads (11.8 s, 35.5 s; 1,048,576 stores
+    each), none at the train's end. (The continue screen holds the world
+    still with lists flipping -- the "504 ms" class.)
+  * A BOARD-PACED RUN OF LISTS (tb_m2_raster3d M2_R3D_SEQ, new: a vblank of
+    TPL x 424 cycles, frame_start withheld while list_hold is high as
+    Model2.sv does, a walk per vblank after the last, a quad every QGAP
+    cycles; the 2A raster build with QNX 512, SPCULL, NEGZ, DIL, UVCL, UVSH;
+    textured at the board's settings). Every run at the board's vblank drew a
+    new frame every vblank and held none:
+      ranking walks 4498-4530 (2,243-2,247 quads, back-to-back spills), with
+      empty walks between, and 4,496-quad lists behind spills: spill holds
+      up to 958,344 cycles (12.0 ms) in a vblank -- the draw in progress --
+      0 refused below 2,560; train walks 7453 / 9016 and 7453+9016 (3,166
+      quads) with slow texel memory (TEXLAT 60): hold 864,042 cycles max;
+      a vblank of 1,000 / 1,500 x 424 cycles (draws longer than a vblank,
+      R652's hold and the spill hold in the same run): vblanks held 1 / 4,
+      longest gap between new frames 3 vblanks, every non-empty list drawn,
+      longest single q_ready wait 1.24 M cycles (15.5 ms).
+    An empty walk's q_end that arrives while the previous list sorts
+    (pst P_SORTW) is lost -- harmless, nothing was collected (Model2.sv's
+    q3d_end is a pulse); a non-empty list's cannot be (its first quad needs
+    P_COLLECT, which only its own q_end leaves).
+  * THE CULL AND THE SPILL ACROSS CONSECUTIVE FRAMES (the displayed picture
+    hashed every vblank): Rally walks 4074-4082 (9 frames), VF2 2704 walks
+    3510-3519 (10), VCop2 4462-4514 (14): SPCULL 1 and 0 give the same hash
+    in every frame, also with the board's bus modelled (JIT 300, WQ 3,
+    SCALER 100, TEXJIT 30; the cull keeps Rally at one frame a vblank where
+    without it some take two -- 15 vs 20 vblanks for the 9 lists). An
+    occluder switched on and off between frames (two flat quads over 47%
+    of the screen, nearest, on Rally walk 4078: Q,P,Q,P,P,Q,Q,P,Q): every Q
+    frame identical, cull or not, fast walk or slow. Two >2,048 lists
+    alternated (Rally 4074+4075 and 4076+4079, 2,897 / 2,900 quads; spill
+    holds 5.9 M cycles in all): each list's picture repeats exactly given
+    the same R769 state. The only difference from the release build's
+    picture on these frames is NEGZ's 1 pixel a frame (R955).
+  * THE GEOMETRY UNDER MID-LIST STALLS (new regime: before R962 q_ready
+    fell only between lists). geodiff 2A (read-ahead build, LAT 12, PRESET)
+    with q_ready low 1,500 of every 2,000 cycles, 90,000 of every 100,000,
+    and 5 of every 7: walks 7453 (1,814 quads), Rally 4078 (1,446) and
+    ranking 4514 (2,246) hand over the same quads, md5-identical, as with
+    q_ready high.
+  * FOUND ON THE WAY (bench): tb_m2_geodiff logged a quad AFTER the clock
+    edge with q_valid and q_ready as they stood then -- right only while
+    q_ready never drops. Under stalls it reported 1,128 of 1,814 quads "out",
+    a bench artefact. It now logs at the edge where the quad is taken;
+    unstalled output is md5-identical to the old bench on 7453 / 4078 /
+    4514.
+  * R959 rerun here: pool_eq NC 4 PROVEN (2,554 cells), NC 3 PROVEN (2,546);
+    sdram_eq main / 2a-age / np5 PROVEN (2,373 / 2,524 / 1,293).
+  * s1503's timing: every core clock positive; only pll_hdmi's setup at
+    -0.890 (the framework's, -0.3..-1.6 on every seed back to s1403).
+
+*List sizes against the store (MAME 0.289 m2lod, scripted sessions):*
+Manx TT race (mame_m2_manx_motion.lua MX_MODE answer, 200 s): 10,997 lists,
+p50 741, p90 1,174, max 1,767 -- QNX never engages. Sega Rally
+(mame_m2_2a_play.lua, 300 s): 14,707 lists, max 2,097, 31 over 2,046 (the
+hold), 1,717 at or over 1,792 in 22 runs of 15-260 lists. R769's threshold
+(need >= NQ - NQ/8 = 1,792 makes the NEXT list drop quads under 4 px past z
+0x3000) is therefore on for 1-4 s at a time in a Rally race -- far, small
+quads (distant cars) vanish for that long. PRE-EXISTING (the release has the
+same rule); R962 left the threshold at 2,048's 1,792 though the store now
+holds 2,560. INFERRED as a candidate for "AI cars flash ~1 s"; not built.
+
+*NOT EXPLAINED:* the one-off 2 s freeze. Not reproduced by any bench; MAME
+says the game draws there. A board probe is the next step: latch, at the
+first run of >= 30 vblanks with no new 3D frame, pst / cst / fb_busy /
+fb_complete / qs_stall, m2_geo's wst / flip_pend / frame_pend, the i960's
+IP and cpu_io_stall, and show them on the overlay.
+*Tools (committed):* tb_m2_raster3d M2_R3D_SEQ (+ M2_R3D_QGAP,
+M2_R3D_SEQTAIL, M2_R3D_SEQPX; per-vblank R964 V / SHOW lines);
+tb_m2_geodiff M2GD_QSTALL=<period>,<len>.
 
 **R965 -- GUN FLASH OFF FOR VIRTUA COP 2 (2A) AND THE HOUSE OF THE DEAD (2C):
 BOTH GAMES FLASH AS VIRTUA COP DOES, AND MODEL 2's OFF PATH PORTS AS IT IS.
