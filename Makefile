@@ -3372,8 +3372,8 @@ test_m2_dsb_2c:
 	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) ./obj_m2_dsb_2c/tb_m2_dsb_2c
 
 # R1039: the 2B build's game ID register (m2b_gameid) against the plain byte it replaced,
-# every cycle, with the ID list read from the 2B MRAs; then a planted fault (Rail Chase 2's
-# ID decoded wrong) must fail.
+# every cycle, with the ID list read from the 2B MRAs (each must send index 4 first: vc_en);
+# then two planted faults (Rail Chase 2's ID decoded wrong; an MRA's index 4 last) must fail.
 .PHONY: test_m2b_gameid
 test_m2b_gameid:
 	@echo "== test m2b_gameid (R1039: the 2B MRAs' IDs read back exactly, every cycle)"
@@ -3385,4 +3385,6 @@ test_m2b_gameid:
 	@sed "s/4'd13: dec = 7'h29/4'd13: dec = 7'h2B/" rtl/io/m2b_gameid.sv > obj_m2b_gameid/plant.sv \
 	  && iverilog -g2012 -o obj_m2b_gameid/tbp obj_m2b_gameid/plant.sv sim/io/tb_m2b_gameid.sv \
 	  && vvp -n obj_m2b_gameid/tbp +IDS=obj_m2b_gameid/ids.hex | grep -v finish | tail -2 | tee obj_m2b_gameid/plant.txt
-	@grep -q '^FAIL' obj_m2b_gameid/plant.txt && echo "  planted fault caught" && rm -rf obj_m2b_gameid
+	@grep -q '^FAIL' obj_m2b_gameid/plant.txt && echo "  planted fault caught"
+	@echo "== planted fault: a 2B MRA with its index 4 after the ROMs (must be refused)"
+	@python3 sim/io/m2b_mra_ids.py --plant mra && echo "  planted fault caught" && rm -rf obj_m2b_gameid

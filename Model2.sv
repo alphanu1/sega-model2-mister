@@ -3275,6 +3275,12 @@ logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
                                            | (FPU2A & is_2ax)};   // R887: every 2A game past VF2
+// R1039: ON FOR EVERY GAME IN A 2B BUILD. vc_en only matters while the i960
+// runs, and it runs only with cpu_rst_n high -- rom_loaded, after a download
+// whose first part is the MRA's index 4 (every Model2B MRA sends it first,
+// make test_m2b_gameid). So the ID is a 2B set's, 0x12-0x29, and is_2ax
+// is 1 for every one of them: vc_en is 1 whenever it is read. The 0 a 2B build
+// held at game ID 0 (no download yet) was never seen by a running i960.
 // R928: a 2C build has VC's long-real transcendentals too -- Over Rev runs
 // atanrl, sinrl and cosrl from 12.3 s (MAME's form log), which F2A leaves out;
 // the sequencer is F2A's, so VC adds their decode. vc_en as before (0x10-0x1F).
@@ -3301,7 +3307,7 @@ i960_top #(.VC(VCOP_FPU || C2), .FR(FPU2A), .F2A(FPU2A), .C2(C2),   // R869: F2A
            .IC_PAIR(I960_R1011), .DC_ROMS(I960_R1011),
            .LSU_ST1(I960_R1011), .LSU_POST(I960_R1011),   // R1011
            .FP_SUBN(`M2_I960_SUBN)) u_i960 (   // R1013
-	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
+	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(B2 | vc_fpu_s[1]),   // R1039: always on in a 2B build
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 	.irq(cpu_irq),
