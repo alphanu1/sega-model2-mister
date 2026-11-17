@@ -53156,3 +53156,144 @@ clock, not a unit):*
 the TGPx4; R1029's SHARC 4,108 fitted against 3,876 mapped); R952's timing finding for the
 reciprocal table, unmeasured on 2B; Last Bronx's short words and EPB0 boot unverified; pltkidsj
 not dumped; Power Sled's program has COPYSIGN / FLOAT BY multi (kept).
+
+**R1039 -- MORE ROOM IN THE 2B BUILD, ALL OF IT OUTPUT-NEUTRAL: THE GAME ID KEPT TO THE 2B SETS', NO
+STKY / CURLCNTR / LCNTR READS IN THE SHARC, THE i960's vc_en TIED ON, THE OSD STRING AND THE FILL's
+PERSPECTIVE TABLE IN M10K. quartus_map 39,382 -> 39,133 ALM NEEDED (-249), 57,733 -> 57,358 ALUTs,
++2 M10K, 0 DSP. Five things that would save more change behaviour or timing and are Ben's: the
+15 kHz converter (-237), the pool's result copies (-129), the SCSP overlap (-109), one SCSP timer
+period (-83), the framework video blocks optimised for area (-66).** Branch 2b-area2 (off model2b
+8f90de51, which holds R1037 and R1038), 2026-11-17. quartus_map and simulation only: no fit, no
+board.
+
+(Section: §10, after R1038. Authority: R1038's census (every 2B set's uploaded SHARC program,
+29 sets, sim/sharc/m2b_sclass.py's decode) for what the SHARC programs name; the Model2B MRAs for
+the game IDs and their download order; Template_MiSTer's hps_io (sys/, unmodified) for
+CONF_STR_BRAM; MAME 0.289 / Hornet's v1 through the R1027 / R1028 benches for the SHARC. Model 1
+has no SHARC and no game-ID register of this shape. Scope from Ben mid-pass: Last Bronx stays out
+of the next 2B build; the room is for Fighting Vipers / Sonic Championship / Sonic the Fighters'
+PM-bus data and type-1 dual moves (230-320 ALM, no read caches) and Virtual-On's roundrl /
+scalerl / exprl.)
+
+*What was believed (R1038):* ~630 ALM to 100% and ~420 to 99.5% after R1038's two savings, from a
+map of 39,258; every 2B-only decode (R1035) and every C2 "M10K for LABs" trade already taken; what
+remained was either a speed mode, a user-visible choice, or SHARC sharing that was not
+cycle-identical. Model2b's head (R1037 merged: five sets on their own IDs) maps at 39,382 -- R1037's
+decodes, inputs and Super GT 24h's luma table took 124 of that room.
+
+*TAKEN (each commit's proof; ALM by quartus_map 17.0, the whole 2B build, taken in order):*
+  1. 6163a50d m2b_gameid (rtl/io, 2B builds only): the game-ID register holds which of the 2B
+     MRAs' 13 IDs (and 0x00) was sent, four bits and the CRT flag, and gives the byte back --
+     every decode downstream sees the same value on the same cycle, and synthesis sees game_id
+     take 14 values, so every compare against another ID folds. An ID outside the list reads
+     0x00. make test_m2b_gameid: the ID list read from every <rbf>Model2B</rbf> MRA, 2 M cycles of
+     random writes and resets against the plain register, 0 differ; a planted wrong decode
+     (0x29 -> 0x2B) 15,737 differ. 39,382 -> 39,368 (-14; -46 ALUTs: R1035 had already gated
+     most decodes on B2, so little was left).
+  2. e41989c0 m2b_sharc SKLR (0 in m2_copro, 1 on the benches): a ureg move or bit operation that
+     READS STKY, CURLCNTR or LCNTR is an unsupported word. No image of the 29 names any of the
+     three as a source (a census of every ureg field by direction over each dump: STKY read 0
+     sets, CURLCNTR read 0, LCNTR read 0; STKY's bit operations 0 sets), so STKY -- written, never
+     read -- is not built and the two counters leave the ureg read port. Writes are done as
+     before (the counters run the loops). Proof as R1038's PXIM: Dead or Alive's 150 s replay at
+     SKLR 0 (MAME rounding, the R1027 capture): 501,777,265 words, 18,541,146 out words and the
+     30 M-word trace (400-430 M) 0 differ, 1,264,270,732 clocks -- R1038's numbers exactly;
+     random programs (m2b_randprog.py seeds 1-4, 1 M words, M2B_RP_SKLR0=1: the counter sources
+     and STKY's bit operations moved to ASTAT) in lockstep with v1 at SKLR 0 and 1, 0 differ and
+     the same clock counts (2,524,760 / 2,564,769 / 2,518,188 / 2,532,283); m2b_unsupprog.py
+     --sklr0 (STKY / CURLCNTR / LCNTR read by a ureg move, STKY bit test, STKY bit set) flagged
+     reason 8 at SKLR 0 and run in lockstep at SKLR 1. Without the flag the random programs do
+     read the counters (seed 1's word 0x767f85da6d1c at 0x200ad): the bench reaches the change.
+     The bit-operation test sits in two places (D's decode and the R1028 reference check); the
+     first build had only one, and the bench's own cross-check stopped on it. 39,368 -> 39,299
+     (-69; m2b_sharc 5,922 -> 5,834 ALUTs, -35 registers).
+  3. 540bdd9d vc_en tied on in a 2B build (Model2.sv: B2 | vc_fpu_s[1]). vc_en is read only by the
+     i960's decode, the i960 runs only with cpu_rst_n high (rom_loaded), every Model2B MRA sends
+     index 4 FIRST, and every 2B ID (0x12-0x29) has is_2ax 1 -- so the 0 it held at game ID 0
+     was never seen by a running i960. make test_m2b_gameid now refuses an MRA whose index 4 is
+     not its first <rom> (planted: index 4 moved last, refused) and checks is_2ax for every kept
+     ID (204,383 cycles). An upper bound first: 0x00 made unrepresentable maps at -46 over
+     SKLR; vc_en alone takes -43 of it (i960_top -85 ALUTs). prog_ext tied the same way mapped
+     +5 and was not taken. 39,299 -> 39,256.
+  4. c1894954 hps_io CONF_STR_BRAM = B2 (the framework's own option, set on our instance; sys/
+     unchanged): the 962-byte OSD string in one M10K instead of a logic ROM. hps_io reads it a
+     clock after byte_cnt moves; sys_top's io_strobe is ~rack & io_clk, so strobes are at least
+     two clk_sys apart and every byte the HPS reads is the same. make test_hps_cfgstr: both forms
+     on one bus driven as sys_top drives it, random spacing >= 2, 32,810 byte reads, io_dout every
+     clock, 0 differ; planted: one byte of the ROM's string changed, 113 differ; strobes one clock
+     apart (closer than sys_top allows), 45,696 differ. 39,256 -> 39,149 (-107; hps_io 809 -> 683
+     ALUTs; +7,696 bits).
+  5. 80256725 m2_persp_recip M10K (with M2_RECIP_M10K, so the 2B build only): the 128 x 17 table
+     read on the clock that loads sa_dn (its address is sa_dn's next value; 0 in reset, as sa_dn),
+     so its output is rtab[sa_dn] through the cycle s1_r0 takes it. make test_m2_persp_recip_m10k:
+     every 16-bit input (held 1-3 clocks, shuffled) and 400,000 random ones with random
+     asynchronous resets, 931,221 clocks, out_q 0 differ; the M10K read a clock late, 459,052
+     differ. The map's ROM init file checked (entry 0 = 65,536, entry 127 = 32,897: R444's
+     dropped-contents failure is not here). 39,149 -> 39,133 (m2_persp_recip 184 -> 145 ALUTs,
+     m2_raster_fill -35; +2,176 bits).
+  lint_top (2B form) and lint_idx: no new findings against model2b's; 2C and 2A forms: the same
+  warnings as model2b's.
+
+*MAP NOISE, MEASURED:* the framework's audio IIR filter (sys/audio_out, untouched) mapped at 701 /
+800 / 800 / 701 ALUTs across four of these maps with no change near it -- +-99 ALUTs, about +-50
+ALM, of run-to-run placement in synthesis. So the per-step ALM above carry that much; the
+per-entity ALUTs (-46, -88, -85, -126, -39) do not, and the total (-249 ALM, -375 ALUTs) is
+between two maps whose IIR filter is the same (701).
+
+*AREA (quartus_map, the whole 2B build):*
+                         ALMs needed   ALUTs    registers  block bits   DSP
+    model2b 8f90de51     39,382        57,733   43,234     4,031,404    101
+    after 80256725       39,133        57,358   43,198     4,041,276    101
+                         (-249)        (-375)   (-36)      (+9,872)
+
+*PROPOSALS, NOT TAKEN -- each mapped alone on 8f90de51 (Ben's call):*
+  proposal                                       ALM    ALUTs   regs   other            why it is a decision
+  15 kHz converter out of the 2B build           -237   -309    -183   -24 M10K, -6 DSP the 15 kHz picture and its MRAs go
+    (vid_scan 0: m2_scan15 unbuilt)
+  the pool's result copies off on 2B             -129   -163    -192                    output-neutral (the copies equal the
+    (m2_geometry RES_CP 0)                                                                result every cycle), but R1036 put
+                                                                                          them in to close clk_sys on 2C (three
+                                                                                          seeds of five): needs a 2B fit to judge
+  SCSP overlap off (M2_2A_SND_OVL 0)             -109   -230    -67                     a speed mode; bit-identical only if no
+                                                                                          2B set's DSP program + slots overrun
+                                                                                          1,814 clocks a sample -- unmeasured
+  one SCSP timer period (M2_2A_SND_TIMER 1)      -83    -180    -25                     the OSD's Arcade / MAME A/B goes
+  ascal / both OSDs at OPTIMIZATION AREA,        -66    -126    0                       the qsf keeps the video output at
+    resource sharing on (qsf only)                                                        SPEED for its timing (R-note above
+                                                                                          its lines); needs a fit
+  With RES_CP alone the neutral total would be -378.
+
+*CANDIDATES NOT TAKEN, AND WHY:*
+  * Synthesis settings: STATE_MACHINE_PROCESSING "MINIMAL BITS" -3 ALM (-331 registers, the ALMs
+    did not follow); ALLOW_ANY_RAM / ROM_SIZE_FOR_RECOGNITION -3; ALLOW_ANY_SHIFT_REGISTER_SIZE
+    + AUTO_SHIFT_REGISTER_RECOGNITION ALWAYS +58. Nothing.
+  * prog_ext tied on (the vc_en argument holds: only the i960's accesses read it): +5 mapped.
+  * SHARC reads of USTAT1 / USTAT2 / IRPTL / MODE2 / PCSTK / PCSTKP: each named as a source only in
+    dynabb / dynabb97 / Power Sled's images (the never-executed words R1038 found) -- not proven
+    dead, kept, as R1038 kept the registers.
+  * The SHARC's RECIPS / RSQRTS seed tables in M10K (the persp_recip trick, ~30-40 ALUTs est.):
+    in rtl/sharc's datapath, where the 2b-sharc branch is adding the PM-bus / type-1 forms; not
+    built here to keep that merge clean.
+  * m2_luma_map's tables (orev_tab / sgt_tab, ~100 ALUTs est.) in M10K: q_row is ctex[31:24] from
+    m2_geometry's submodule output and w_row the CPU's live address -- neither has its next value
+    a cycle early without restructuring two other modules. Not built.
+  * m2_raster_div's restoring fallback: |den| reaches ~600 (vertices -104..495, unclipped) against
+    TN 256 -- used.
+  * More game-ID folding: with m2b_gameid the only ID-dependent logic left is what tells 0x00 from
+    the 2B IDs (the upper bound -46, of which vc_en is -43).
+
+*FIT (does it fit afterwards):* by R1038's offset (s3412: fit 41,531 for map 39,512, +2,019), the
+map's 39,133 puts the next fit near 41,150 ALM of 41,910: ~760 to 100% and ~550 to 99.5% (R1038's
+figures were ~630 / ~420 before R1037 took 124; on model2b's head they were ~510 / ~300). M10K:
+R1038's 13 spare, now ~11. The scoped next build -- Fighting Vipers / Sonic's PM-bus data and
+type-1 dual moves (230-320) and Virtual-On's roundrl / scalerl / exprl (part of R1038's 20-80
+i960 line) -- is ~250-400 ALM: it lands near 98.8-99.2% with ~150-300 to 99.5%, which is the
+margin for R1009 / R1029's fit-over-map growth. Last Bronx (not in the next build) would still
+need R1038's (b): fixed multiply, MR0F, dual add / subtract, alternate register files and DAGs,
+short words -- 360-570 ALM and 2-3 DSP -- plus the i960's logepr (20-40): with the proposals
+above (up to -624 together) it could fit beside the others; without them it does not.
+
+*NOT SETTLED:* no fit (the per-step map noise above; R952's timing for the reciprocal tables in
+M10K, now two tables, unmeasured on 2B); the vc_en argument rests on the MRA order and
+cpu_rst_n's rom_loaded term -- a future 2B MRA must send index 4 first (the test enforces it) and
+a non-2B ID on the 2B core now reads 0x00 (such an MRA does not run on the 2B board anyway).
