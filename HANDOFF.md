@@ -1,5 +1,31 @@
 # Handoff
 
+## 2026-11-17: model2c -- the 2C candidate's work merged (R1003-R1030, R1036); still no clean 2C seed, not released
+
+`model2c` fast-forwarded to geo-dup: rel-2c-all + rel-2c-slack2 (R1030) + R1036 (each
+geometry pool client reads its own copy of the multiply / add result register,
+RES_CP, 2C and 2B only, no cycle added). Pushed so it is not lost; releases/ is
+unchanged.
+
+  * Best 2C seeds (geo-dup, unpinned; clk_sys / clk_mem / HDMI): s3142 +0.425 / +0.261 /
+    -0.070, s3260 +0.122 / +0.359 / -0.469, s3144 +0.101 / +0.402 / -0.653. Only HDMI
+    fails, inside ascal's output side. s3141 fails clk_sys in the DDR3 payload; s3145
+    is a bad seed. Seeds s3500-s3511 queued in sm2-builds/geo-dup.
+  * Study R1033 (SDC margin while fitting: 16 seeds, none clean, dropped), R1034 (the
+    second retimes: every piece worse at s3260, dropped), R1036 (placement: the
+    floorplans, pinning measured, RES_CP proved and measured).
+  * Pinning (sm2-builds/exp-2c-anchor, not merged): per-atom pins work in Lite, LogicLock
+    does not; all 510 hard blocks over-constrain (55 min route, then a crash); the
+    scaler / OSD alone fix HDMI but pack geometry denser and 2 of 7 seeds do not route.
+    One pinned run with RES_CP is still going (sm2-builds/geo-dup-pin s3260).
+  * Found on the way: a 27 GB python3 inside VS Code's scope was OOM-killed at 09:57 and
+    took VS Code, the fits and an agent with it -- fits now run as their own systemd
+    units (MemoryMax 12G). Quartus 17 crashed on three seeds (TDC, TDB, CUT internal
+    errors); quartus_map --analyze_file rewrites Model2.qsf (restore it before a commit).
+  * 2B (branch model2b): RES_CP took 2B from -5.3 to -0.78 ns; s3412 on the board: Zero
+    Gunner and Pilot Kids draw 3D, Dead or Alive does not (R1036, model2b HANDOFF).
+  * Sound on 2A and 2B far too quiet even at 400% (Ben); parked.
+
 ## 2026-11-16: rel-2c-slack2 -- the 2C candidate's recurring near-critical paths retimed (R1030), seeds running
 
 Branch `rel-2c-slack2` = rel-2c-all cf6916e3 + three areas' retimes (geometry + TGPx4,
