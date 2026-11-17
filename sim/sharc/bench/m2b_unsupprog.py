@@ -4,7 +4,8 @@
 # (tb_m2b_sharc +lock +noidle prints "UNSUPPORTED word at <pc>: <op> (reason <n>)"). Each is a
 # MODE1 set-up, the words given, then the unsupported word at 0x20084 and a jump back. Generated,
 # not ROM-derived.
-#   m2b_unsupprog.py <out dir>      writes u<k>.bin and cases.txt (<file> <pc> <reason>)
+#   m2b_unsupprog.py <out dir> [--pxim0]   writes u<k>.bin and cases.txt (<file> <pc> <reason>);
+#   --pxim0 adds the words only the 2B build's core (PXIM 0, R1038) flags
 import os, struct, sys
 
 CASES = [   # (name, words before, the word, reason)
@@ -15,6 +16,14 @@ CASES = [   # (name, words before, the word, reason)
     ('an unknown IOP register written', [], 0x110000000055, 7),
     ('an unknown IOP register read', [], 0x101000000055, 7),
     ('a jump outside the PM (R1029: its flag from X\'s first clock)', [], (0x06 << 40) | (0x1f << 33) | 0x30000, 9),
+]
+# R1038: unsupported only in the 2B build's core (m2b_sharc PXIM 0: no PX, no IMASK); with
+# --pxim0 these are written too, and with PXIM 1 the same programs run (supported)
+PXIM0_CASES = [
+    ('PX1 written (immediate)', [], 0x0fdc00001234, 8),
+    ('PX read by a ureg move (R0 = PX, IF TRUE)', [], 0x7dbf80000000, 8),
+    ('IMASK written (immediate)', [], 0x0f7d00000003, 8),
+    ('IMASK bit set', [], 0x140d00000001, 8),
 ]
 
 
@@ -44,7 +53,8 @@ def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
     lines = []
-    for k, (name, pre, word, why) in enumerate(c for c in CASES if c[3]):
+    cases = CASES + (PXIM0_CASES if '--pxim0' in sys.argv[2:] else [])
+    for k, (name, pre, word, why) in enumerate(c for c in cases if c[3]):
         p = os.path.join(out, 'u%d.bin' % k)
         open(p, 'wb').write(prog_events(pre, word))
         lines.append('%s 20084 %d %s' % (p, why, name))
