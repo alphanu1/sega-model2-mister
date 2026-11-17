@@ -1,5 +1,20 @@
 # Handoff
 
+## 2026-11-17: main -- i960-subnorm merged (R1013); the Model 2 release candidate is s2823, not released yet
+
+`main` fast-forwarded to i960-subnorm e8e768ea (R1013: the i960 FP units take and
+deliver subnormals as the 80960KB does, FP_SUBN 2). Pushed. releases/ is unchanged:
+the rbf is not released yet (Ben: release later, with 2C).
+
+  * Release candidate: Model 2 s2823 (sm2-builds/i960-subnorm/build/seeds/s2823),
+    md5 82f2e6121833b2c801e430014215f461. Worst over every corner: clk_sys +0.250,
+    clk_mem +0.591, clk_i960 +1.652, HDMI +0.019, hold +0.135. On the board as
+    Model2.rbf; Ben: ready for release.
+  * The 2026-11-15 entry below says "quartus_map only": it was fitted and
+    board-tested after it was written (8 seeds s2820-s2843; s2823 the one clean).
+  * Not in this candidate, for the next release: R1019 (logrl of a subnormal),
+    R1020 (remr subnormals) and R1021's geometry retimes, which main shares.
+
 ## 2026-11-15: i960-subnorm -- the i960 FP units take and deliver subnormals (R1013), quartus_map only
 
 Branch `i960-subnorm` off main 2f61c2d1. Study R1013 has the record. Not
