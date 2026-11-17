@@ -1,5 +1,31 @@
 # Handoff
 
+## 2026-11-17: model2b -- first board test of 2B (s3412, RES_CP); 26 sets with MRAs (c2359efa, 56159236)
+
+Board: Model2B.rbf = model2b s3412 (7fdd6b11 + dc682ef8 RTL; clk_sys -0.782, clk_mem -0.244,
+HDMI -0.011, every hold positive), md5 3c01d692. MRAs in /media/fat/_Arcade/_Model2B (54
+files), zips in games/mame (md5-checked). Ben's results:
+
+  | set | result | note |
+  |---|---|---|
+  | doa | boots, attract, 2D scrolls, NO 3D | protection ruled out in MAME (patched + zeroed run identical to stock for 200 s; flag 0x54fadc = 1). DOA alone runs MODE1 TRUNC; 2B's sharc_fp_pkg is older than the Hornet PR's (15 man_* differ) -- bench comparison running |
+  | zerogun, pltkids | 3D works | made from the 2A MRAs, 5881 patches moved |
+  | overrevb | boots, 3D works | own ID 0x1C |
+  | dynamcopb | boots, 3D works | own ID 0x14, patches moved |
+  | dynabb | boots, 3D works | borrowed 0x13 (bat swing on AN0/AN1 reads 0xFF) |
+  | vstriker | boots, 3D works | borrowed 0x17 |
+  | indy500 | boots, 3D; road and background textures wrong | borrowed 0x1A (Motor Raid); controls wrong |
+  | sgt24h | boots, 3D; locks up; road textures wrong, some transparent ones black | borrowed 0x1C (Over Rev) |
+  | gunblade | boots, 3D; lighting broken, most polygons black | borrowed 0x18 (Sky Target); its data ROM is 8 MB in a 4 MB slot |
+  | rchase2 | stops at boot: "checking network", NET_BAD | borrowed 0x11; the drive-board port reads 0xFF |
+  | von | does not boot: "Model 2 bcrx" in green, bottom left | borrowed 0x16; its data-ROM reads return 0 on 0x16 |
+  | sfight | no 3D, sound runs, maybe locked | expected: dual moves / PM-bus data not in m2b_sharc |
+  | schamp | locks just before 3D | expected, as sfight |
+  | fvipers | boots, locks (around the first Sega logo) | expected, as sfight |
+  | lastbrnx | black screen | expected: EPB0 boot form, alternate register files etc. not done |
+
+Sound on 2A and 2B far too quiet even at 400% (Ben: "same as 2a"); parked.
+
 ## 2026-11-16: model2b -- TO DO, DECIDED (Ben): FLOAT as the manual has it (R1032)
 
 The 2B SHARC's manual mode has three of the manual's four float rules (TRUNC rounding of
