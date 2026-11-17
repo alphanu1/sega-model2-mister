@@ -132,6 +132,17 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `ifndef M2_NO_2A_VCOP2_GUN
 `define M2_NO_2A_VCOP2_GUN
 `endif
+// R1038: the fill's reciprocal table in two M10K (R948's form, as
+// "M2_RECIP_M10K=1" gives any build): ~280 ALUTs fewer for 2 M10K, the same
+// data on the same cycle (make test_m2_raster_div_lat: both tables side by
+// side, every port, every cycle). R952 put the LUT form back on 2A / 2C for
+// timing; a 2B build has the M10K to spare and needs the ALMs (the SHARC's
+// missing forms). "M2_RECIP_LOGIC=1" keeps the LUT form on 2B.
+`ifndef M2_RECIP_LOGIC
+`ifndef M2_RECIP_M10K
+`define M2_RECIP_M10K
+`endif
+`endif
 `endif
 // R859: M2_2A_SOUND, the 2A sound board (its 68000 and the SCSP, m2_2a_sound)
 // on the i8251's far end -- 1 by default; 0 puts R852's silent stand-in back.
