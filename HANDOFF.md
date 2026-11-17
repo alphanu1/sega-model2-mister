@@ -1,5 +1,25 @@
 # Handoff
 
+## 2026-11-17: model2a -- retime-2a merged (R1011, R1013, R1014, R1020, R1021); the 2A release candidate is s3004, not released yet
+
+`model2a` fast-forwarded to retime-2a 9426d78a: i960-2a's R1011 (i960 timing),
+R1013 (subnormals), R1014 (checkpoint bench), R1020 (remr subnormals) and R1021
+(the clipper's plane test, the projection's rounding register, the SCSP timer
+write; no cycle changed). Pushed. releases/ is unchanged: the rbf is not
+released yet (Ben: release later, with 2C).
+
+  * Release candidate: Model 2A s3004 (sm2-builds/retime-2a/build/seeds/s3004),
+    md5 1e9c20228f38429a71fdb6e34a0fb2ad. Worst over every corner: clk_sys +0.472,
+    clk_mem +0.383, clk_i960 +1.441, HDMI +0.058, hold +0.211. On the board as
+    Model2A.rbf; Ben: ready for release. (The previous candidate, i960-2a s2761,
+    is kept on the board as Model2A.rbf.prev_s2761.)
+  * The 2026-11-15 entry below says "quartus_map only": it was fitted after it
+    was written (11 seeds s2980-s3004; s3004 the one clean).
+  * Not in this candidate, for the next release: R1019 (logrl of a subnormal).
+  * Open, both 2A and 2B: the sound is far too quiet even at 400% (Ben,
+    2026-11-17, "same as 2a"); parked. First suspect when it is picked up: the
+    SCSP DSP's return (most of a 2A mix; the direct sends are DISDL 3).
+
 ## 2026-11-15: retime-2a -- the 2A seeds' near-critical paths measured, three retimed (R1021), quartus_map only
 
 Branch `retime-2a` off i960-2a 65350e0d (the 2A release candidate). Study
