@@ -14,6 +14,9 @@
 import os, random, struct, sys
 
 SEQ = os.environ.get('M2B_RP_SEQ') == '1'
+# M2B_RP_SKLR0=1 (R1039): the ureg moves' CURLCNTR / LCNTR sources and STKY's bit operations go to
+# ASTAT instead (the same random draws otherwise), for the 2B build's core (m2b_sharc SKLR 0, which flags those reads)
+SKLR0 = os.environ.get('M2B_RP_SKLR0') == '1'
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
          0x40, 0x41, 0x42, 0x43, 0x61, 0x62, 0x63]
@@ -160,6 +163,7 @@ def main():
         elif r < 0.55:                                     # compute, ureg <-> ureg
             src = g.choice([g.randrange(16), 0x10 + g.randrange(8), 0x20 + g.randrange(8), 0x28 + g.randrange(8),
                             0x7c, 0x67, 0x64, 0x68])
+            if SKLR0 and src in (0x67, 0x68): src = 0x7c
             dst = g.choice([g.randrange(16), g.randrange(16), g.randrange(16), 0x7c])
             if SEQ and g.random() < 0.3:
                 src, dst = g.choice([(src, 0x68), (0x64, 0x64), (g.randrange(16), 0x68)])
@@ -211,6 +215,7 @@ def main():
                                (0xc, 1 << g.choice([0, 1, 2, 3, 18, 19])), (0xe, g.getrandbits(32)),
                                (0xb, g.choice([0x2000, 0x8000]))])
             if k == 5 and g.random() < 0.5: m = 0              # XOR against a register's value: equal sometimes
+            if SKLR0 and reg == 0xe: reg = 0xc               # R1039: STKY's bit operations on ASTAT
             emit((0x14 << 40) | (k << 37) | (reg << 32) | m)
         elif r < 0.90 and nest:                            # R1028: the stacks (PC, loop) deeper
             nested(g.randrange(6))

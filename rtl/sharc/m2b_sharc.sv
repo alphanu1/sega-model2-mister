@@ -61,7 +61,13 @@ module m2b_sharc #(
     // R1038: PX and IMASK. 1 = as MAME has them (the benches' default); 0 = neither register is
     // built and a ureg move or bit operation naming one is an unsupported word -- no Model 2B
     // program names either (every set's uploaded program, read whole: the study's R1038)
-    parameter bit PXIM     = 1'b1
+    parameter bit PXIM     = 1'b1,
+    // R1039: reads of STKY, CURLCNTR and LCNTR. 1 = as MAME (the benches' default); 0 = a ureg
+    // move or bit operation that READS one is an unsupported word, so STKY (written, never read)
+    // is not built and the two counters leave the ureg read port -- no Model 2B program reads
+    // any of the three (every set's uploaded program, read whole: the study's R1039). Writes are
+    // done as before; the counters still run the loops.
+    parameter bit SKLR     = 1'b1
 ) (
     input  logic        clk,
     input  logic        reset,              // MAME's device_reset (host boot)
@@ -188,6 +194,7 @@ logic [3:0]  ir_pa;
 logic [31:0] ir_pd;
 logic [15:0] lnz;                           // L != 0
 logic [31:0] astat, stky, mode1, mode2, irptl, imask, ustat1, ustat2, syscon;
+wire  [31:0] stky_rd = SKLR ? stky : 32'h0;   // R1039: STKY as the ureg port reads it
 logic [47:0] px;
 
 typedef struct packed {
@@ -350,8 +357,8 @@ function automatic logic [31:0] seq_rd(input logic [3:0] r, input logic [23:0] p
     case (r)
     4'h4: return {8'h0, pcstk};
     4'h5: return {26'h0, pcstkp};
-    4'h7: return curlcntr;
-    4'h8: return lcntr;
+    4'h7: return SKLR ? curlcntr : 32'h0;   // R1039
+    4'h8: return SKLR ? lcntr : 32'h0;
     default: return 32'h0;
     endcase
 endfunction
@@ -373,7 +380,7 @@ always_comb begin
     4'h0: ur_v = rf_rd[4];
     4'h1: ur_v = iu_rd;
     4'h2: ur_v = ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd;
-    4'h7: ur_v = sys_rd(ur_sel[3:0], astat, mode1, mode2, stky, irptl, imask, ustat1, ustat2, flg);
+    4'h7: ur_v = sys_rd(ur_sel[3:0], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg);
     4'hd: case (ur_sel[3:0])
           4'hb: ur_v = px[31:0];
           4'hc: ur_v = {16'h0, px[15:0]};
@@ -390,9 +397,9 @@ function automatic logic ureg_ok(input logic [7:0] u, input logic wr);
     4'h0, 4'h1, 4'h2: return 1'b1;
     4'h3: return wr;                        // L: written (L != 0 flagged at use), not read
     4'h4: return wr;                        // B: written (also sets I), not read
-    4'h6: return u[3:0] == 4'h4 || u[3:0] == 4'h7 || u[3:0] == 4'h8 || (!wr && u[3:0] == 4'h5);
+    4'h6: return u[3:0] == 4'h4 || ((SKLR || wr) && (u[3:0] == 4'h7 || u[3:0] == 4'h8)) || (!wr && u[3:0] == 4'h5);
     4'h7: return u[3:0] == 4'h0 || u[3:0] == 4'h1 || u[3:0] == 4'h9 || u[3:0] == 4'ha ||
-                 u[3:0] == 4'hb || u[3:0] == 4'hc || (PXIM && u[3:0] == 4'hd) || u[3:0] == 4'he;
+                 u[3:0] == 4'hb || u[3:0] == 4'hc || (PXIM && u[3:0] == 4'hd) || ((SKLR || wr) && u[3:0] == 4'he);
     4'hd: return PXIM && (u[3:0] == 4'hb || u[3:0] == 4'hc || u[3:0] == 4'hd);
     default: return 1'b0;
     endcase
@@ -765,7 +772,7 @@ always_comb begin
         // the register's value read in D (the ureg port), but ASTAT's and STKY's in X (a landing
         // may change them in D's clock)
         x.bitop = 1'b1; x.bit_kind = op[39:37]; x.bit_reg = op[35:32]; wd_sel = 2'd1;
-        if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin x.unsup = 1'b1; x.why = U_UREG; end
+        if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || !ureg_ok({4'h7, op[35:32]}, 1'b0) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin x.unsup = 1'b1; x.why = U_UREG; end   // R1039: and read
     end
     9'b000101100: begin                                         // modify I by an immediate
         x.pmod = 1'b1; pm_sel = 2'd3;
@@ -889,7 +896,7 @@ always_comb begin
         x.acc_wd = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
                    ({32{w1 && gr == 4'h1}} & iu_rd) |
                    ({32{w1 && gr == 4'h2}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
-                   ({32{w1 && gr == 4'h7}} & sys_rd(ur_sel[3:0], astat, mode1, mode2, stky, irptl, imask, ustat1, ustat2, flg)) |
+                   ({32{w1 && gr == 4'h7}} & sys_rd(ur_sel[3:0], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
                    ({32{w1 && gr == 4'hd}} & ((ur_sel[3:0] == 4'hb) ? px[31:0] : (ur_sel[3:0] == 4'hc) ? {16'h0, px[15:0]} :
                                                (ur_sel[3:0] == 4'hd) ? px[47:16] : 32'h0)) |
                    ({32{w1 && gr == 4'h6}} & ur_sq) |
@@ -1045,7 +1052,7 @@ always_comb begin
             else if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
         end
         9'b1001?????: if (op[37]) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
-        9'b00010100?: if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin
+        9'b00010100?: if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || !ureg_ok({4'h7, op[35:32]}, 1'b0) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin
             u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
         9'b000101100: ;
         9'b00010111?: begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
@@ -1541,8 +1548,8 @@ logic [31:0] xb_v;
 logic        xb_t, xb_btf;
 always_comb begin
     logic [31:0] d;
-    if (XC.bit_reg == 4'hc) xb_v = sys_rd(4'hc, astat, mode1, mode2, stky, irptl, imask, ustat1, ustat2, flg);
-    else if (XC.bit_reg == 4'he) xb_v = stky;
+    if (XC.bit_reg == 4'hc) xb_v = sys_rd(4'hc, astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg);
+    else if (XC.bit_reg == 4'he) xb_v = stky_rd;
     else xb_v = XC.acc_wd;
     d = x_op[31:0];
     xb_t = XC.bit_kind == 3'd4 || XC.bit_kind == 3'd5;
