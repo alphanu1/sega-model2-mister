@@ -155,6 +155,12 @@ int main(int argc, char **argv) {
     uint64_t sclk = 0, sdm_rd = 0, sdm_wr = 0, x_rd = 0, x_wr = 0;
     struct Port { bool busy = false, done = false; uint64_t due = 0; };
     Port psdm, pdat, pbw;
+    // R1042: the buffer RAM / data ROM reads answered with the capture's own values ('R', in
+    // MAME's order: the i960 writes the buffer RAM too, which the capture does not hold), each
+    // read's address checked against MAME's; without 'R' records the model above (DOA reads none)
+    Reader rbr, rvbr; rbr.open(evp); rvbr.open(evp);
+    uint64_t r_n = 0, r_bad = 0, vr_n = 0, vr_bad = 0;
+    auto next_r = [&](Reader &rd, Ev &x) -> bool { while (rd.next(x)) if (x.t == 'R') return true; return false; };
     auto serve = [&]() {      // the low half of a clock: answer the ports (inputs for this edge)
         // the DM page
         if (!t->sdm_req) { psdm.done = false; t->sdm_ack = 0; }
@@ -172,6 +178,14 @@ int main(int argc, char **argv) {
         if (pdat.busy && sclk >= pdat.due) {
             uint32_t a = t->dat_addr;
             t->dat_rdata = t->dat_is_buf ? (bufram[(2 * a) & 0xffff] | uint32_t(bufram[(2 * a + 1) & 0xffff]) << 16) : 0;
+            Ev x;
+            if (next_r(rbr, x)) {
+                uint32_t ca = t->dat_is_buf ? (0x1400000u + (a & 0x7fff)) : (0x1c00000u + (uint32_t(t->dat_hi) << 20 | a));
+                uint32_t ma = (x.a >= 0x1400000u && x.a < 0x1c00000u) ? (0x1400000u + ((x.a - 0x1400000u) & 0x7fff)) : x.a;
+                r_n++;
+                if (ca != ma && r_bad++ < 5) printf("buffer / ROM read #%llu at %07x, MAME's at %07x\n", (unsigned long long)r_n, ca, x.a);
+                t->dat_rdata = x.b;
+            }
             x_rd++;
             pdat.busy = false; pdat.done = true;
         }
@@ -349,6 +363,16 @@ int main(int argc, char **argv) {
                 uint32_t w;
                 vouts++;
                 if (!vwant_out(w) || w != vwd) { if (vout_bad++ < 5) printf("v1 out #%llu: %08x, MAME %08x\n", (unsigned long long)vouts, vwd, w); }
+            } else if (vaddr >= 0x1400000 && vaddr < 0x1e00000 && !vwe) {     // R1042: as the core's, from 'R'
+                Ev x;
+                t->v_ext_ack = 1; t->v_ext_rdata = 0xffffffffu;
+                if (next_r(rvbr, x)) {
+                    uint32_t ca = vaddr < 0x1c00000 ? 0x1400000u + ((vaddr - 0x1400000u) & 0x7fff) : vaddr;
+                    uint32_t ma = (x.a >= 0x1400000u && x.a < 0x1c00000u) ? (0x1400000u + ((x.a - 0x1400000u) & 0x7fff)) : x.a;
+                    vr_n++;
+                    if (ca != ma && vr_bad++ < 5) printf("v1 buffer / ROM read #%llu at %07x, MAME's at %07x\n", (unsigned long long)vr_n, ca, x.a);
+                    t->v_ext_rdata = x.b;
+                }
             } else { t->v_ext_ack = 1; t->v_ext_rdata = 0xffffffffu; }
             t->eval();
         }
@@ -469,6 +493,8 @@ int main(int argc, char **argv) {
            (unsigned long long)dm_acc, (unsigned long long)dm_wr, (unsigned long long)dm_fill, (unsigned long long)dm_wait,
            (unsigned long long)sdm_rd, (unsigned long long)sdm_wr, (unsigned long long)x_rd, (unsigned long long)x_wr);
     printf("out FIFO words %llu, %llu differ from MAME's\n", (unsigned long long)outs, (unsigned long long)out_bad);
+    printf("buffer / ROM reads from the capture (R1042): core %llu (%llu at another address), v1 %llu (%llu)\n",
+           (unsigned long long)r_n, (unsigned long long)r_bad, (unsigned long long)vr_n, (unsigned long long)vr_bad);
     if (out_bad)
         printf("  the differences in ulps (same sign): 1: %llu, 2-3: %llu, 4-15: %llu, 16-255: %llu, 256-65535: %llu, "
                "more: %llu, exponent-wide: %llu; sign differs: %llu; core above MAME %llu, below %llu\n",
@@ -495,7 +521,7 @@ int main(int argc, char **argv) {
         for (auto &kv : prof) fprintf(pf, "%05x %llu %llu\n", kv.first, (unsigned long long)kv.second.first, (unsigned long long)kv.second.second);
         fclose(pf);
     }
-    bool fail = (out_bad && !outok) || (vout_bad && !outok) || tbad || lock_bad || unsup_seen;
+    bool fail = (out_bad && !outok) || (vout_bad && !outok) || tbad || lock_bad || unsup_seen || (r_bad && !outok) || (vr_bad && !outok);
     printf(fail ? "FAIL\n" : "PASS\n");
     delete t;
     return fail;

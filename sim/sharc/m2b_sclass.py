@@ -4,6 +4,9 @@
 # rtl/sharc/m2b_sharc.sv does not do (its unsupported tests restated). Input: R1024 census pc.txt
 # files (executed words with counts), or mame_m2b_pmdump.lua dumps ("<addr> <word>" lines).
 #   m2b_sclass.py <pc.txt> ...
+# R1042: type-1 dual moves and PM-bus data are done (m2b_sharc's second pass, the PM RAM's port B);
+# what of them is not -- PX over the PM bus (MAME's 48-bit transfer) -- is still flagged. A PM-bus
+# address outside the on-chip PM / block 1 is the core's flag at run time (an address), not here.
 import sys, collections
 FIX_OK={0x01,0x05,0x25,0x29,0x02,0x06,0x26,0x2a,0x0a,0x21,0x22,0x30,0x40,0x41,0x42,0x43,0x61,0x62,0x63}
 FLT_OK={0x81,0x82,0x91,0x92,0x89,0x8a,0xa1,0xa2,0xb0,0xbd,0xc1,0xc4,0xc5,0xc9,0xca,0xd9,0xda,0xe0,0xe1,0xe2,0xe3}
@@ -38,23 +41,20 @@ def comp_class(c):
 def classify(op):
     r=[]; t=b(op,47,39); top3=b(op,47,45); top4=b(op,47,44)
     comp=None
-    if top3==1: r.append('type1_dual_move'); comp=b(op,22,0)
+    if top3==1: comp=b(op,22,0)                              # R1042: done
     elif t>>1==0b00000001: comp=b(op,22,0)
     elif top4 in (4,5):
         comp=b(op,22,0)
-        if b(op,32,32): r.append('pm_bus')
-        else:
-            u=b(op,30,23)
-            if not ureg_ok(u, not b(op,31,31)): r.append('ureg_%02x'%u)
+        u=b(op,30,23)
+        if not ureg_ok(u, not b(op,31,31)): r.append('ureg_%02x'%u)
+        if b(op,32,32) and u==0xdb: r.append('pm_bus_px')
     elif top4==6:
         comp=b(op,22,0)
-        if b(op,40,40): r.append('pm_bus')
     elif top4==7:
         comp=b(op,22,0); us=b(op,43,36); ud=b(op,30,23)
         if not ureg_ok(us,False): r.append('ureg_%02x'%us)
         if not ureg_ok(ud,True): r.append('ureg_%02x'%ud)
     elif top4==8:
-        if b(op,32,32): r.append('pm_bus')
         so=b(op,21,16)
         if so not in SH_OK: r.append('shift_%02x'%so)
     elif t>>1==0b00000010:
@@ -68,13 +68,13 @@ def classify(op):
         if b(op,40,40): r.append('rti')
     elif t>>1==0b00010111: r.append('push_pop_stacks')
     elif t>>3==0b000100:
-        if b(op,41,41): r.append('pm_bus')
-        elif not ureg_ok(b(op,39,32), not b(op,40,40)): r.append('ureg_%02x'%b(op,39,32))
+        if not ureg_ok(b(op,39,32), not b(op,40,40)): r.append('ureg_%02x'%b(op,39,32))
+        if b(op,41,41) and b(op,39,32)==0xdb: r.append('pm_bus_px')
     elif top3==0b101:
-        if b(op,44,44): r.append('pm_bus')
-        elif not ureg_ok(b(op,39,32), not b(op,40,40)): r.append('ureg_%02x'%b(op,39,32))
+        if not ureg_ok(b(op,39,32), not b(op,40,40)): r.append('ureg_%02x'%b(op,39,32))
+        if b(op,44,44) and b(op,39,32)==0xdb: r.append('pm_bus_px')
     elif top4==9:
-        if b(op,37,37): r.append('pm_bus')
+        pass
     elif t>>1==0b00001111:
         if not ureg_ok(b(op,39,32),True): r.append('ureg_%02x'%b(op,39,32))
     elif t>>1==0b00010100:

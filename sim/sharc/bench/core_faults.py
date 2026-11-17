@@ -54,6 +54,23 @@ FAULTS = [
     ('a shift ends in one X clock', F, "(XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1", "(XC.fl_on && (XC.fl_add || XC.fl_sub)) ? 2'd1"),
     ('LCE after a pop: the stack word\'s 33rd bit alone', F, "assign lcs_p2ne1 = !(lcs_a[32] ^ lcs_a[0]);", "assign lcs_p2ne1 = !lcs_a[32];"),
     ('the PM bound not reported', F, "    uc_pm <= x_first ? x1_pmbad : x_pmbad;", "    uc_pm <= 1'b0;"),
+    # R1042: PM-bus data and type-1 dual moves (the random programs with M2B_RP_PM=1)
+    ('R1042: PM-bus access on DAG1 (I0-7 / M0-7)', F, "i1_ra = (st == ST_D) ? {pg, o[43:41]} : 4'd0;", "i1_ra = (st == ST_D) ? {1'b0, o[43:41]} : 4'd0;"),
+    ('R1042: PM-bus post-modify by DAG1\'s M', F, "m1_ra = (st == ST_D) ? {pg, o[40:38]} : 4'd0;", "m1_ra = (st == ST_D) ? {1'b0, o[40:38]} : 4'd0;"),
+    ('R1042: PM read: the two halves swapped', F, "    A_PM:  begin x_ld = pmb_q;", "    A_PM:  begin x_ld = {pmb_q[15:0], pmb_q[31:16]};"),
+    ('R1042: PM store: the high half from the low', F, "pm_we = 3'b110; pm_wa = XC.acc_addr[PM_AW-1:0]; pm_wd2 = XC.acc_wd;", "pm_we = 3'b110; pm_wa = XC.acc_addr[PM_AW-1:0]; pm_wd2 = {XC.acc_wd[15:0], XC.acc_wd[15:0]};"),
+    ('R1042: a block-1 PM-bus word in the PM RAM', F, "    if (a[23:18] == 6'h0 && a[17:15] >= 3'd5) return {1'b0, (a[14:DM_AW] == '0) ? A_DM : A_EXT};",
+     "    if (a[23:18] == 6'h0 && a[17:15] >= 3'd5) return {1'b0, A_PM};"),
+    ('R1042: type 1: no second pass', F, "assign x_p2go = x_done && XC.dual && !x_p2 && !x_uns;", "assign x_p2go = 1'b0 && XC.dual && !x_p2 && !x_uns;"),
+    ('R1042: type 1: the PM post-modify dropped', F, "if (x_p2) begin ir_wa = {1'b1, x_op[32:30]}; ir_wd = XC.ind_t; end", ""),
+    ('R1042: type 1: the PM store reads the DM move\'s register', F, "if (st == ST_X) rf_ra[4] = x_op[26:23];", "if (st == ST_X) rf_ra[4] = x_op[36:33];"),
+    ('R1042: type 1: the PM store reads its register after the DM load', F, "XC.acc_wd <= rf_rd[4];", "XC.acc_wd <= (XC.ld_r && XC.ld_dst == x_op[26:23]) ? x_ld : rf_rd[4];"),
+    ('R1042: type 1: the PM load wins over the DM load', F, "x.ld2_r = t1p && !(t1d && op[36:33] == op[26:23]);", "x.ld2_r = t1p;"),
+    ('R1042: type 1: the PM load loses to the multiplier', F, "if (t1p && op[26:23] == x.rm) x.rm_we = 1'b0;", ""),
+    ('R1042: type 1: the DM load loses to the ALU', F, "if (t1d && op[36:33] == x.ra) x.ra_we = 1'b0;", ""),
+    ('R1042: type 1: the second DM-RAM read not waited for', F, "x_p2w <= (XC.acc2 == A_DM && !XC.acc2_wr) || XC.acc2 == A_EXT;", "x_p2w <= XC.acc2 == A_EXT;"),
+    ('R1042: type 1: the second DM-RAM read not issued', F,
+     "    else if (st == ST_X && x_p2w && XC.acc == A_DM) dm_en = 1'b1;", "    else if (st == ST_X && x_p2w && XC.acc == A_DM && 1'b0) dm_en = 1'b1;"),
 ]
 
 

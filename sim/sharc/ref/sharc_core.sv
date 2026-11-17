@@ -6,7 +6,10 @@
 // rtl/cpu/sharc/sharc_core.sv @ 87f9866, GPL-3.0-or-later, used with his permission;
 // THIRD_PARTY.md). CHANGED: the parameter MAN (the ADSP-2106x manual's float rounding, through
 // sharc_core_ops.svh's x_* functions; 0 = MAME's, as Hornet's), and flag_in, FLAG0 / FLAG1's
-// input pins (the 2B board's FIFO flags), written into the state every clock. Nothing else.
+// input pins (the 2B board's FIFO flags), written into the state every clock; R1042: the parameter
+// MAN_ORD (a type-1 word's two accesses in the manual's order, DM first; 0 = MAME's, PM first),
+// a PM-bus data address taken as 24 bits (MAME's program space; v1 had all 32), and a PM-bus store
+// to block 1 writing the register's word (v1 wrote its low 16 bits shifted up). Nothing else.
 //
 // ADSP-21062 SHARC, transcribed from MAME's interpreter (src/devices/cpu/sharc: sharc.cpp
 // execute_run, sharcops.hxx, compute.hxx through sharc_fp_pkg, sharcdma.hxx), instruction for
@@ -47,7 +50,8 @@
 module sharc_core #(
     parameter int PM_WORDS = 20480,     // 0x20000-0x24FFF
     parameter int DM_WORDS = 32768,     // block 1
-    parameter bit MAN = 1'b0            // R1027: the manual's float rounding
+    parameter bit MAN = 1'b0,           // R1027: the manual's float rounding
+    parameter bit MAN_ORD = 1'b0        // R1042: a type-1 word's DM access first (the manual's order)
 ) (
     input  logic        clk,
     input  logic        reset,
@@ -467,7 +471,8 @@ task automatic issue_acc(input acc_t a);
     end else if (is_dm1(a.addr)) begin
         dm_addr_i <= 15'(a.addr - 32'h28000);
         if (a.kind == A_DM_WR || a.kind == A_PM_WR32) begin
-            dm_we_i <= 1'b1; dm_wdata_i <= a.wdata[31:0];
+            // R1042 (this project): a PM-bus store's word is wdata[47:16] (v1 wrote [31:0])
+            dm_we_i <= 1'b1; dm_wdata_i <= (a.kind == A_PM_WR32) ? a.wdata[47:16] : a.wdata[31:0];
         end
     end else if (a.addr >= 32'h100) begin       // below: IOP registers, in P_MEMWAIT
         x_req <= 1'b1;

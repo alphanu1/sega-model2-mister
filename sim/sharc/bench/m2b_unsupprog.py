@@ -9,7 +9,12 @@
 import os, struct, sys
 
 CASES = [   # (name, words before, the word, reason)
-    ('type-1 dual move', [], 0x200000000000, 1),
+    # R1042: type 1 and PM-bus data are done; what of the PM bus is not
+    ('PM-bus data past the on-chip PM (R0 = PM(0x22000))', [], (0b000100 << 42) | (1 << 41) | 0x22000, 3),
+    ('PM-bus data in external PM (PM(I8, M8) = R0, I8 = 0x400000)', [0x0f1800400000, 0x0f2800000000],
+     (0b010 << 45) | (1 << 44) | (1 << 32) | (1 << 31) | (0x1f << 33), 3),
+    ('type 1 with its PM move outside the PM (I8 = 0x22000)', [0x0f1800022000, 0x0f1000030100], 0x200000000000, 3),
+    ('PX over the PM bus (48-bit in MAME: PX = PM(0x21000))', [], (0b000100 << 42) | (1 << 41) | (0xdb << 32) | 0x21000, 9),
     ('MODE1 swap bit by a ureg write', [], 0x0f7b00018400, 5),
     ('MODE1 swap bit by a bit operation', [], 0x140b00000400, 5),
     ('SHARC-side DMA (DMAC6 DEN)', [0x0f0000000001], 0x11000000001c, 7),
