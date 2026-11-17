@@ -24,7 +24,8 @@ module geodiff_top #(
   parameter bit UVSH   = 1'b0,  // R940: m2_geometry's UVSH (Model2.sv: the 2A build)
   parameter bit TEXLUT = 1'b0,  // R951: m2_geometry's TEXLUT (Model2.sv: the 2A build) -- q_col as the 2A core packs it
   parameter bit M10K_ROOM = 1'b0,  // R1008: m2_geometry's M10K_ROOM (Model2.sv: C2)
-  parameter bit RES_CP    = 1'b0   // R1036: m2_geometry's RES_CP (Model2.sv: C2)
+  parameter bit RES_CP    = 1'b0,  // R1036: m2_geometry's RES_CP (Model2.sv: C2)
+  parameter bit UV_HELD   = 1'b0   // R1018: m2_geometry's UV_HELD (Model2.sv: C2 on this branch)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -196,7 +197,7 @@ module geodiff_top #(
   assign geo_eng_busy = eng_busy;
 `endif
 
-  m2_geometry #(.MIPZ(1'b1), .MIPZ_B(3), .WINKEY(WINKEY), .UVSH(UVSH), .TEXLUT(TEXLUT), .M10K_ROOM(M10K_ROOM), .RES_CP(RES_CP)) u_geometry (   // R940   // R828c: the flag, as the core builds it
+  m2_geometry #(.MIPZ(1'b1), .MIPZ_B(3), .WINKEY(WINKEY), .UVSH(UVSH), .TEXLUT(TEXLUT), .M10K_ROOM(M10K_ROOM), .RES_CP(RES_CP), .UV_HELD(UV_HELD)) u_geometry (   // R940   // R828c: the flag, as the core builds it
     .clk(clk), .rst_n(rst_n),
     .start(obj_valid), .oba(obj_oba), .obc(obj_obc), .busy(eng_busy),
     .mat_we(mat_we), .mat_idx(mat_idx), .mat_data(mat_data),
