@@ -39,6 +39,7 @@ uint64_t vcfl = 0;                                // R844: flushreg retired
 uint64_t syn_unal_stops = 0;                      // R844: programs ended at a synmov to 0xff000005..7
 uint64_t vctr[4] = {0, 0, 0, 0};                  // R845: sinrl cosrl tanrl atanrl retired
 uint64_t c2_log = 0;                              // R935: logrl retired (+c2)
+uint64_t b2_n[3] = {};                             // R1040: scalerl, exprl, roundrl retired (+b2)
 uint32_t exec_ip = 0, exec_insn = 0;   // the instruction just retired
 uint64_t checks = 0, fails = 0, ticks = 0, retires = 0;
 int lat_max = 0, lat_wait = 0;                // +lat=N, see tick()
@@ -114,6 +115,7 @@ bool loop_mode = false;
 bool no_trans = false;  // R845: +notrans -- the same programs with cmprl for each transcendental
 bool use_fr = false;   // R865: +fr -- an FR=1 build (VC=0); vc_en high; flushreg live, the VC FP forms still trap
 bool use_c2 = false;   // R935: +c2 -- a C2 build (with +vc +fx): logrl in the mix
+bool use_b2 = false;   // R1040: +b2 -- an F2B build (with +vc +fx +c2): scalerl, exprl, roundrl in the mix
 bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
 // R869: +fx -- an F2A=1 build (the 2A core: FR=1, VC=0); vc_en high; cvtzril,
 // cpysre, atanr, sinr, remr and flushreg in the mix, and a quarter of the
@@ -593,6 +595,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+nomvre"))    no_mvre = true; // R897
     if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
     if (!std::strcmp (argv[i], "+c2"))        use_c2 = true;  // R935
+    if (!std::strcmp (argv[i], "+b2"))        use_b2 = true;  // R1040
     if (!std::strcmp (argv[i], "+fr"))        use_fr = true;  // R865
     if (!std::strcmp (argv[i], "+fx"))        use_fx = true;  // R869
     if (!std::strcmp (argv[i], "+notrans"))   no_trans = true;  // R845
@@ -621,6 +624,7 @@ int main(int argc, char **argv) {
 
   std::mt19937_64 rng(seed);
   std::mt19937_64 srng(seed ^ 0x5b5b);   // R1013: register-seeding choices only
+  std::mt19937_64 brng(seed ^ 0x1040);   // R1040: +b2's choices only (the other streams unchanged)
   uint64_t total_retires = 0, trapped_progs = 0;
 
   for (uint64_t p = 0; p < progs && fails == 0; ++p) {
@@ -635,6 +639,7 @@ int main(int argc, char **argv) {
     ref.ref_fr = use_fr || use_fx;
     ref.ref_f2a = use_fx;
     ref.ref_c2 = use_c2;   // R935
+    ref.ref_f2b = use_b2;  // R1040
 
     // Generate a straight-line program of REG and COBR forms. Work RAM at
     // 0x00500000 is burst-flagged; the program sits at 0.
@@ -707,6 +712,9 @@ int main(int argc, char **argv) {
         static const uint32_t FXOPS[] = { 0x6e2u, 0x6c3u, 0x680u, 0x68cu, 0x683u, 0x683u, 0x66du, 0x68eu,
                                           0x68du, 0x675u, 0x6e1u, 0x6e1u, 0x698u };   // R930: cvtilr (Over Rev)
         if (use_fx && (rng() % 3) == 0) sel = FXOPS[rng() % (no_mvre ? 10 : 13)];
+        // R1040: with +b2, a third of the FP mix is Virtual-On's three
+        static const uint32_t B2OPS[] = { 0x676u, 0x699u, 0x69bu };
+        if (use_b2 && (brng() % 3) == 0) sel = B2OPS[brng() % 3];
         if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
@@ -1118,6 +1126,17 @@ int main(int argc, char **argv) {
                                          0xc3b40000u, 0x47800000u, 0x4b800000u, 0x3fc90fdbu };
         v = EDGE[rng() % (sizeof EDGE / sizeof EDGE[0])];
       }
+      // R1040: +b2 -- a pair's high word with |x| <= 0.6 (exprl's range and
+      // past it; roundrl's ties at +-0.5 come from the low word 0), or a
+      // small integer (scalerl's n, -40..40), in a quarter of the registers
+      if (use_b2 && (brng() % 4) == 0) {
+        if (i & 1) {
+          const double x = (brng() % 4) ? (double(brng() % 2000001) - 1000000.0) * 6e-7
+                                        : double(int(brng() % 7) - 3) + 0.5;   // a tie with a zero low word
+          uint64_t u; std::memcpy(&u, &x, 8); v = uint32_t(u >> 32);
+        } else if (brng() & 1) v = uint32_t(int32_t(brng() % 81) - 40);
+        else v = 0;
+      }
       ref.rf.r[i] = v;
       wreg(i, v);
     }
@@ -1497,6 +1516,7 @@ int main(int argc, char **argv) {
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
           else if (k == 0x66d) vcfl++;
           else if (k == 0x692) c2_log++;   // R935
+          else if (k == 0x676) b2_n[0]++; else if (k == 0x699) b2_n[1]++; else if (k == 0x69b) b2_n[2]++;   // R1040
           else if (k == 0x675) fx_cvil++;   // R930
           else if (k == 0x680) fx_at++; else if (k == 0x68c) fx_sin++; else if (k == 0x683) fx_rem++; else if (k == 0x68e) fx_tan++; else if (k == 0x68d) fx_cos++;
           if (use_fx && k == 0x698) fx_sq++;
@@ -1700,6 +1720,8 @@ int main(int argc, char **argv) {
                           (unsigned long long)vctr[3], (unsigned long long)trans_ulp);
   std::printf("  module-only traps (R836): %llu\n", (unsigned long long)dut_only_traps);
   if (use_c2) std::printf("  R935 logrl retired: %llu\n", (unsigned long long)c2_log);
+  if (use_b2) std::printf("  R1040 retired: scalerl %llu exprl %llu roundrl %llu\n", (unsigned long long)b2_n[0],
+                          (unsigned long long)b2_n[1], (unsigned long long)b2_n[2]);
   sub_in_tot += ref.fp_sub_in; sub_out_tot += ref.fp_sub_out; scale_sub_tot += ref.fp_scale_sub; rem_subd_tot += ref.fp_rem_subd;
   std::printf("  R1013: FP retires with a subnormal operand %llu, with a subnormal result %llu, scaler by a subnormal 2^n %llu (FP_SUBN %d)\n",
               (unsigned long long)sub_in_tot, (unsigned long long)sub_out_tot, (unsigned long long)scale_sub_tot, i960ref::Cpu::SUBN);

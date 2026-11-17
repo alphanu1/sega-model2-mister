@@ -53156,3 +53156,137 @@ clock, not a unit):*
 the TGPx4; R1029's SHARC 4,108 fitted against 3,876 mapped); R952's timing finding for the
 reciprocal table, unmeasured on 2B; Last Bronx's short words and EPB0 boot unverified; pltkidsj
 not dumped; Power Sled's program has COPYSIGN / FLOAT BY multi (kept).
+
+**R1040 -- VIRTUAL-ON's THREE i960 FORMS ON THE 2B BUILD (i960_top F2B): roundrl, scalerl AND
+exprl. exprl IS A NEW SEQUENCER PROGRAM (i960_fptrans EXP, 2^x - 1 CORRECTLY ROUNDED: MAME's
+pow(2, x) - 1 IS NOT, AND IS NOT THE SILICON); roundrl / scalerl ARE roundr's AND scaler's UNITS
+ON THE PAIR. VON's FORM LOG: 2B TRAPS ON 0 OF 163 FORMS (WAS 3). logepr LEFT OUT BY BEN's
+DECISION (LAST BRONX DEFERRED). quartus_map 2B 39,382 -> 39,348 ALM NEEDED (NOISE), +2 M10K.**
+Branch 2b-i960 (off model2b 8f90de51), 2026-11-17. Simulation and quartus_map only: no fit, no board.
+
+(Section: §10, after R1038 (R1039 is another branch's). Authority: MAME 0.289 i960.cpp for what
+each form computes (sm2-builds/mame-m2b, read only); the 80960KB Programmer's Reference Manual
+(Mar 1988, bitsavers 80960KB_Programmers_Reference_Manual_Mar88.pdf -- NOT in the repo: pages
+11-60 expr, 11-72 logepr, 11-104 roundr, 11-105 scaler, 3-11 Table 3-4, 12-12 rounding, 12-20 NaNs,
+12-22 invalid operation) where the two disagree. Model 1 has no i960.)
+
+*What was believed (R1038):* Virtual-On traps on scalerl (0x67.6), exprl (0x69.9) and roundrl
+(0x69.b), 2,048 each at 0.208 s (a table built at boot, pc 0x29640-0x296b4); Last Bronx on logepr
+(0x68.1), which "fits the fptrans entry with 47 ROM words free", 20-40 ALM.
+
+*WHAT IS NOW KNOWN:*
+  1. THE ROM HAD 20 WORDS FREE, NOT 47: the 2C program (i960_fptrans_rom_log.svh) is 492 of 512.
+     exprl alone is 88 words (580 in all), so the 2B program is a 1,024-word ROM -- 4 M10K where
+     the 2C build's is 2. Its first 492 words are the 2C program's word for word (asserted by the
+     generator, as are its 128 registers: no new constant, no new register), so the 2C program's
+     cycles are unchanged on it (below). (logepr, written and checked first, was 93 words more.)
+  2. exprl -- PRM 11-60: "an approximation of ... 2 to the src power, minus 1", src in [-0.5,
+     0.5], "if the src value is outside this range, the result is undefined"; the 80960KB computes
+     in extended and rounds once to the destination. MAME: set_rifl(pow(2.0, t1f) - 1.0), which
+     rounds 2^x to 53 bits first and then subtracts exactly (Sterbenz): the result keeps 2^x's
+     absolute precision, not the result's. THE TWO PART on 4,079 of 5,000 random x in [-0.5, 0.5]
+     and on 183 OF VIRTUAL-ON's 230 DISTINCT OPERANDS. THE CORE FOLLOWS THE SILICON: correctly
+     rounded 2^x - 1 (the brief's order: the manual where MAME is host-float loose). What it
+     changes downstream: the table's next step is 1 + exprl (scalerl's src2 is exactly 1.0 + MAME's
+     exprl result on all 229 finite entries); 1 + exprl rounds differently on 29 of 229 (one ulp
+     each: 1 + CR(2^x - 1) is a double rounding of 2^x where MAME's is a single one); carried
+     through MAME's own ratio to the cvtzril at 0x296b4, the table's integers differ on 0 of 229
+     (an estimate on MAME's chain, not a run of the game's code).
+     The program (tools/i960_fptrans.py build_exp): y = x ln 2 as a double-double (x over L2E / 2,
+     the existing 2 / ln 2 constant halved exactly), z = -y^2, and the existing sin / cos kernels
+     on that z -- KCOS's 1 + z(C0 + z(C1 ...)) is cosh y, KSIN's y(1 + z(S0 ...)) is sinh y with
+     every term positive -- so 2^x - 1 = (cosh y - 1) + sinh y, rounded once. |x| < 2^-900: x ln 2
+     on x 2^200 and scaled back once (TSCALE: the double-double's products underflow below
+     ~2^-1018 -- 56 of 3,000 tiny operands were not correctly rounded before it, 0 after).
+     Outside the PRM's range ("undefined"): k = round(x), P = 2^k by squaring, P(2^f - 1) + (P - 1)
+     as a double-double -- correctly rounded there too, where MAME (pow - 1) parts on 16 of 5,000
+     in [-70, 1030]; x >= 1024 +inf, x <= -64 -1; +-0 and NaN themselves; +inf +inf and -inf -1
+     (MAME's pow there: the manual's range excludes both).
+  3. roundrl -- PRM 11-104 "rounds src to the nearest integral value, depending on the rounding
+     mode"; Table 3-4 mode 00 is "round to nearest (even)". MAME's round_to_int is C round() in
+     mode 0, half AWAY from zero: they part only on an exact n + 1/2. roundr already follows the
+     manual (R972, i960_fpmisc op 5); roundrl is that op on the pair. Virtual-On's 230 operands
+     (-4.397..0, one -inf): 0 exact halves, module = MAME on 230 of 230 (-0 for |x| < 1/2 negative).
+  4. scalerl -- PRM 11-105 "multiplies src2 by 2 to the power of src1", the table: +-0, +-inf,
+     NaN unchanged for every n. MAME: t2f * pow(2.0, (int32_t)t1). The core's scaler is MAME's
+     (the multiplier by a materialised 2^n, R1013 subnormal 2^n), exact wherever 2^n is a double
+     (n in [-1074, 1023]); scalerl is the same on the pair, src1 kept on its own register (not
+     the pair). OUTSIDE that n THEY PART FROM THE MANUAL: 0 * 2^2000 is NaN (MAME and the core),
+     the manual's +0; inf * 2^-2000 NaN against inf; 2^-1000 * 2^1500 inf against 2^500. NOT
+     BUILT: Virtual-On's n are -4..0 and one -2^31 with a NaN src2 (NaN either way), and the fix
+     would be shared with scaler (every build). Module = MAME on 230 of 230.
+  5. logepr (for when Last Bronx is taken up): PRM 11-72 restricts src1 to 1/sqrt 2 <= src1 + 1
+     <= sqrt 2 and lists any other src1 as an invalid operation; chapter 12's invalid-operation
+     list (12-22) names only "log epsilon of (y, x), if y is inf and x is 0". Last Bronx's table
+     (pc 0x7114) runs src1 = k / 32768, k = 0..32767, up to 1 - 2^-15 -- 59% of it outside the
+     11-72 range, so the silicon cannot be raising the masked invalid (its QNaN) there, or the
+     table would be NaN: the 12-22 reading. A program for it (93 words, log2(1 + x) from x / (2 + x)
+     exactly in range, scaled outside it) was written and checked: 0 of the 32,768 Last Bronx
+     operands and 0 of 41,700 edges not correctly rounded; MAME's log2(x + 1.0) differs on 94 of
+     the 32,768 as doubles. TAKEN OUT of this branch (Ben: Last Bronx stays out of the 2B build
+     for now); the program is in this branch's history only as this description.
+  6. NOT CHANGED, FOUND: Virtual-On's first table entry is log2(0) = -inf -> roundrl -inf ->
+     -inf - -inf = NaN -> exprl NaN -> ... -> cvtzril at 0x296b4. The core's cvtzril of a NaN
+     writes 0xffffffff_80000000 (cvtzri's 0x80000000 sign-extended, R839); MAME and the PRM
+     (12-23: "the maximum negative integer") give 0x80000000_00000000 for the 64-bit destination.
+     One entry; not fixed here (VC's form, every build).
+
+*THE RTL (every term behind F2B, so the 2A / 2C / main builds are what they were):*
+  * i960_fptrans EXP (needs LOG): the ROM as an initialised array (romstyle M10K) -- the
+    1,024-entry case function alone quartus_map built in LUTs (+712 ALUTs, first map), the array
+    it infers (1024 x 32 ROM, M10K); ten address bits; exr starts it at UX_EXP. EXP = 0 elaborates
+    the nine-bit sequencer and the case-function ROMs exactly as before.
+  * i960_top F2B (Model2.sv .F2B(B2), the 2B build only; live with vc_en, needs VC, F2A, C2):
+    exprl is_rl + the sequencer (tr_exr); roundrl is_rl + fpmisc op 5; scalerl is_rl + the
+    multiplier with fp_is_scale, and fp_is_sclrl keeps ra1 on src1 (the integer n) through T_EXEC
+    / T_RLLO / T_FP where the pair forms move it to the pair's even / odd words. No existing
+    instruction's path or cycle count changes.
+
+*PROOF (Verilator 5.052, -j 2, MemoryMax 5G):*
+  * tools/i960_fptrans.py --exp --check 5000 (Python's Decimal at 120 digits / exact rationals
+    as the correctly rounded reference): exprl not correctly rounded on 0 of 5,000 in [-0.5, 0.5],
+    0 of 5,000 tiny (|x| < 2^-30, to 2^-1070), 0 of 5,000 subnormal, 0 of 5,000 in [-70, 1030], 0 of
+    18,689 finite edges (x = 54: 2^54 - 1 is a tie, rounded to even); at most 602 micro-ops.
+  * make test_i960_fptrans_exp: the RTL sequencer on the RTL units against the interpreter, 66,456
+    vectors (38,699 exprl: its edges -- +-0, subnormal corners, inf, NaNs, +-1/2 +- 2 ulp, every
+    k and k +- 1/2 from -70 to 1030 +- 2 ulp, 1023.5, 1024 - ulp, -64, every +-2^-k -- and 20,000
+    random), 0 mismatches; exprl 1,622 cycles mean, 1,867 max. THEN the 2C bench's 32,757 vectors
+    through the LOG and the EXP sequencers: every vector's cycle count and result identical (cmp).
+  * make test_i960_fptrans_exp_fault (ROM word 508, exprl's BL = L2EL * -C0H, b field zeroed:
+    1 / ln 2's low half lost): 2,165 of the 66,456 differ (one ulp) -- caught.
+  * make test_i960_top_b2 (C2 + F2B at FP_SUBN 2, the reference's ref_f2b: scalerl and roundrl
+    as MAME / R972, exprl in long double, one ulp adopted as for the other transcendentals),
+    +random=30000, seeds 1-4 (1-3 on the first, case-function ROM; 4 on the array): 3,974,150 retires, 0 mismatches; scalerl 24,545, exprl 22,282,
+    roundrl 25,701 retired. Forced off: +b2 on obj_i960_top_c2s2 (F2B 0) FAILS (module trap at the
+    first scalerl), and without +b2 it passes. Planted faults (test_i960_top_b2_fault):
+    I960_FAULT_SCLRL (n from the pair's odd word) fails at retire 5, fp0 got 8000000000010000
+    want fff0000000000000; I960_FAULT_RNDRL (roundrl as the single form) fails at retire 39.
+  * Unchanged builds: test_i960_top, _vc, _fx, _c2 (both SUBN), test_i960_fptrans, _log, _ab
+    (200,000 vectors, 0 result / 0 write-sequence mismatches), _ab_log: PASS.
+  * VIRTUAL-ON'S OWN OPERANDS (R1038's form log, MAME 0.289, 240 s; sim/io/mame_i960_formlog.py
+    now checks the three): scalerl 0 of 230 differ from MAME, roundrl 0 of 230, exprl 183 of 230
+    (point 2: the manual's rounding, not MAME's).
+  * sim/io/i960_formcheck.cpp has a 2B column (the 2C one + F2B): VIRTUAL-ON 0 of 163 forms and 0
+    of 416 variants trap on 2B (2C: 3 -- scalerl, exprl, roundrl). Last Bronx 1 (logepr, deferred).
+    Every other 2B set's log (doa, dynabb, dynabb97, dynamcopb, fvipers, gunblade, indy500,
+    overrevb, pltkids, rchase2, schamp, sfight, sgt24h, vstriker, zerogun) and the 2C logs (r924,
+    r928, r930): 0, and none runs any of the three -- no other build needs F2B.
+  * lint_top (-DM2_2C -DM2_2B, -DM2_2C, default): clean. lint_idx in the three: nothing in
+    i960_top or i960_fptrans. quartus_map --analyze_file i960_fptrans.sv, i960_top.sv, Model2.sv:
+    0 errors.
+
+*AREA (quartus_map 17.0, the whole 2B build, model2b 8f90de51 against this branch):*
+                      ALMs needed   ALUTs    registers  block bits   DSP
+    model2b           39,382        57,733   43,234     4,031,404    101
+    2b-i960           39,348        57,696   43,239     4,047,788    101
+                      (-34, noise)  (-37)    (+5)       (+16,384)
+  i960_top 11,596 -> 11,579 ALUTs, 4,244 -> 4,249 registers; the ROM 1024 x 32 (32,768 bits, 4
+  M10K) for 512 x 32 (2): +2 M10K. i960_fptrans alone (Cyclone V, LOG 1): EXP 0 298 ALM / 374 ALUTs
+  / 251 registers on both trees (the 2C path unchanged); EXP 1 314 / 393 / 256 (+16 ALM). (R1038's
+  "39,258" for the same model2b RTL: 124 apart across two maps of one netlist -- map noise.)
+
+*NOT SETTLED:* the whole-core 2B boot bench (obj_boot_2b, R1037's von image) not rerun past frame
+29: what Virtual-On does after the table is not known; no fit, no board; the 80960KB's own exprl
+microcode is assumed to round correctly (the PRM gives no error bound); MAME's pow - 1 is what the
+attract has been checked against, so a table entry that a one-ulp 1 + exprl moves (none found)
+would show only on the board.

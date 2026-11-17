@@ -67,14 +67,23 @@
 // apart (they give -1023 and 1.f); the LOG program tests e + 1023 = 0 and
 // normalises f on the units itself (tools/i960_fptrans.py, LG_SN). No
 // change here: LDE / LDM are as they were, a normal x's cycles unchanged.
+// R1040: EXP -- the 2B build's program (i960_fptrans_rom_x.svh, 580 words in
+// a 1,024-word ROM, ten address bits): LOG's 492 words word for word, then
+// exprl (exr: 2^x - 1, Virtual-On), started at its own address (UX_EXP). No
+// new register, no new operation: the register file is LOG's. EXP = 0 is
+// the sequencer exactly as it was (nine address bits; exr unused). Needs LOG.
 module i960_fptrans #(
-  parameter bit LOG = 1'b0
+  parameter bit LOG = 1'b0,
+  parameter bit EXP = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
   input  logic        start,        // one cycle; entry and x / y valid from here
   input  logic  [1:0] entry,        // 0 sin, 1 cos, 2 tan, 3 atan (y = src2, x = src1)
   input  logic        lg,           // R935 (LOG only): logrl -- entry 4, y * log2 x
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        exr,          // R1040 (EXP only): exprl -- 2^x - 1
+  /* verilator lint_on UNUSEDSIGNAL */
   input  logic [63:0] x,
   input  logic [63:0] y,
   output logic        act,          // the units' operands are opa / opb
@@ -90,6 +99,8 @@ module i960_fptrans #(
 
   `include "i960_fptrans_rom.svh"
   `include "i960_fptrans_rom_log.svh"
+  `include "i960_fptrans_rom_x.svh"      // R1040
+  localparam int AW = EXP ? 10 : 9;      // the ROM's address bits
 
   // ------------------------------------------------------------ storage
   (* ramstyle = "M10K" *) logic [63:0] rf [128];
@@ -104,10 +115,21 @@ module i960_fptrans #(
     q <= rf[raddr];
   end
 
-  logic [8:0]  fa;           // the ROM address this cycle: uw is ucode(fa) next cycle
-  logic [8:0]  pc;           // the address uw came from
+  logic [AW-1:0] fa;         // the ROM address this cycle: uw is ucode(fa) next cycle
+  logic [AW-1:0] pc;         // the address uw came from
   logic [31:0] uw;
-  generate if (LOG) begin : g_rom_log
+  generate if (EXP) begin : g_rom_x
+    // R1040: an initialised array (as rf), so quartus_map infers the M10K ROM
+    // -- the 1,024-entry case function alone it built in LUTs (+712 ALUTs).
+    (* romstyle = "M10K" *) logic [31:0] rom_x [1024];
+    initial for (int i = 0; i < 1024; i++) rom_x[i] = ucode_x(10'(i));
+`ifdef I960_FAULT_XW
+    // R1040: a planted fault for the bench -- one word's b field zeroed
+    always_ff @(posedge clk) uw <= rom_x[fa] & ((fa == AW'(`I960_FAULT_XW)) ? ~32'h0000_3f80 : ~32'd0);
+`else
+    always_ff @(posedge clk) uw <= rom_x[fa];
+`endif
+  end else if (LOG) begin : g_rom_log
     always_ff @(posedge clk) uw <= ucode_log(fa);
   end else begin : g_rom
     always_ff @(posedge clk) uw <= ucode(fa);
@@ -122,7 +144,7 @@ module i960_fptrans #(
   wire [1:0] f_mb = uw[4:3];
   wire [2:0] f_c  = uw[27:25];
   wire       f_i  = uw[24];
-  wire [8:0] f_t  = uw[8:0];
+  wire [AW-1:0] f_t = uw[AW-1:0];   // R1040: BR / JMP / CALL words have bits 13:9 clear
 
   wire is_br   = (op == 4'd4);
   wire is_jmp  = (op == 4'd5);
@@ -189,7 +211,7 @@ module i960_fptrans #(
   logic        dv_busy;
   logic [6:0]  dv_d;
 
-  logic [8:0]  ras [4];
+  logic [AW-1:0] ras [4];
   logic [1:0]  sp;
   logic        bph;          // BR: its register read is in flight
   // the operand slots of the instruction in D: not yet read, read last
@@ -235,9 +257,11 @@ module i960_fptrans #(
 
   assign raddr = (is_br || (need_a && sa == SL_NEW && !hl_a && !hn_a)) ? f_a : f_b;
 
-  wire [8:0] pc1 = pc + 9'd1;
+  wire [AW-1:0] pc1 = pc + AW'(1);
   always_comb begin
-    if (st == S_IDLE)                  fa = (LOG && lg) ? 9'd4 : {7'd0, entry};
+    if (st == S_IDLE)                  fa = (LOG && lg) ? AW'(4)
+                                          : (EXP && exr) ? AW'(UX_EXP)      // R1040
+                                          : AW'(entry);
     else if (!adv)                     fa = pc;
     else if (is_jmp || is_call)        fa = f_t;
     else if (is_ret)                   fa = ras[sp - 2'd1];
@@ -304,7 +328,7 @@ module i960_fptrans #(
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      st <= S_IDLE; pc <= 9'd0; sp <= 2'd0; bph <= 1'b0;
+      st <= S_IDLE; pc <= '0; sp <= 2'd0; bph <= 1'b0;
       sa <= SL_NEW; sb <= SL_NEW;
       opa <= 64'd0; opb <= 64'd0;
       add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0; sub <= 1'b0;
@@ -315,7 +339,7 @@ module i960_fptrans #(
       p1_v <= 1'b0; p1_w <= 1'b0; p1_mul <= 1'b0; p1_end <= 1'b0; p1_d <= 7'd0;
       p2_v <= 1'b0; p2_w <= 1'b0; p2_mul <= 1'b0; p2_d <= 7'd0;
       dv_busy <= 1'b0; dv_d <= 7'd0;
-      for (int i = 0; i < 4; i++) ras[i] <= 9'd0;
+      for (int i = 0; i < 4; i++) ras[i] <= '0;
     end else begin
       pc <= fa;
       add_req <= 1'b0; mul_req <= 1'b0; div_req <= 1'b0;

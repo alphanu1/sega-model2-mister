@@ -36,7 +36,7 @@ module i960_fptrans_ab_harness #(
   /* verilator lint_on UNUSEDSIGNAL */
 
   i960_fptrans #(.LOG(LOG)) u_n (
-    .clk(clk), .rst_n(rst_n), .start(start), .entry(entry), .lg(lg), .x(x), .y(y),
+    .clk(clk), .rst_n(rst_n), .start(start), .entry(entry), .lg(lg), .exr(1'b0), .x(x), .y(y),
     .act(n_act), .opa(n_opa), .opb(n_opb),
     .add_req(n_add_req), .mul_req(n_mul_req), .div_req(n_div_req), .sub(n_sub),
     .sel_add(n_sel_add), .sel_mul(n_sel_mul), .sel_div(n_sel_div),

@@ -55,6 +55,7 @@ struct Cpu {
   bool ref_vc = false;            // R839: i960_top VC with vc_en -- sqrtrl, cpysre, cvtzril
   bool ref_fr = false;            // R865: i960_top FR with vc_en -- flushreg alone
   bool ref_c2 = false;            // R935: i960_top C2 (with VC, vc_en) -- logrl
+  bool ref_f2b = false;           // R1040: i960_top F2B with vc_en -- roundrl, scalerl, exprl (2B)
   bool ref_f2a = false;           // R869: i960_top F2A with vc_en -- cvtzril, cpysre, atanr, sinr, remr; R887 tanr; R903 cosr
   // R845: sinrl / cosrl / tanrl / atanrl computed with the host's libm, as
   // MAME does. The module returns the correctly rounded value; libm is not
@@ -622,10 +623,40 @@ struct Cpu {
             IP = ip_next;
             break;
           }
+          // R1040 (i960_top F2B, live while vc_en): scalerl 0x67.6, MAME's
+          // set_rifl(t2f * pow(2.0, (double)(int32_t)t1)) -- src1 the one
+          // integer register (or literal), src2 the pair or fp0-fp3. As scaler's.
+          if (ref_f2b && k == 0x676) {
+            const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
+            const int32_t n = int32_t(s1);
+            const double r = flush_d(fb * ((SUBN < 2 && n >= -1074 && n <= -1023) ? 0.0 : std::pow(2.0, double(n))));
+            if (sub_d(fb)) ++fp_sub_in;
+            if (sub_d(r)) ++fp_sub_out;
+            if (d.dst_lit) {
+              if (d.srcdst & 0x1c) { trapped = true; trap_op = d.op; break; }   // set_rifl: fatalerror
+              fp[d.srcdst & 3] = r;
+            } else {
+              uint64_t v; std::memcpy(&v, &r, 8);
+              rf.r[d.srcdst & 0x1e]       = uint32_t(v);
+              rf.r[(d.srcdst & 0x1e) + 1] = uint32_t(v >> 32);
+              fp_sdest = int(d.srcdst & 0x1e); fp_rl = true;
+            }
+            if (std::isnan(r)) fp_nan_result = true;
+            IP = ip_next;
+            break;
+          }
           // R935: and logrl (0x69.2, set_rifl(t2f * log2(t1f))) on the 2C build
-          const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690 || (ref_c2 && k == 0x692));
+          // R1040: and exprl (0x69.9) on the 2B build -- 2^x - 1, the module
+          // correctly rounded (MAME's pow(2.0, x) - 1.0 is not: it rounds 2^x
+          // first; the PRM's "approximation of 2 to the src power, minus 1" is
+          // the 80960KB's extended microcode rounded once). Here in long double
+          // (expm1l of x ln 2 for |x| <= 1, exp2l(x) - 1 beyond), a one-ulp
+          // difference the adopted deviation as for the others.
+          const bool trans = ref_vc && (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690 || (ref_c2 && k == 0x692)
+                                        || (ref_f2b && k == 0x699));
           if (k == 0x79f || k == 0x79d || k == 0x79c || k == 0x79b || k == 0x695 || k == 0x6d9
-              || ((ref_vc || ref_f2a) && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans) {   // R897: sqrtrl under F2A
+              || ((ref_vc || ref_f2a) && k == 0x698) || ((ref_vc || ref_f2a) && k == 0x6e2) || trans
+              || (ref_f2b && k == 0x69b)) {   // R897: sqrtrl under F2A; R1040: roundrl
             const double fa = d.src1_lit ? fp_lit(d.src1) : pair(d.src1);
             const double fb = d.src2_lit ? fp_lit(d.src2) : pair(d.src2);
             // movrl copies the pair as MAME does, subnormal or not (the
@@ -653,13 +684,25 @@ struct Cpu {
               // ulp -- recorded deviations that end the program.
               if (trans) {
                 fp_trans = true;
-                if (k != 0x690 && std::fabs(fa) > 524288.0) fp_denorm_operand = true;
+                if (k != 0x690 && k != 0x699 && std::fabs(fa) > 524288.0) fp_denorm_operand = true;
               }
+              // R1040: roundrl, AC[31:30] as roundr's (mode 0 ties to even, R972)
+              auto rtil = [&](double v) {
+                switch (int((AC >> 30) & 3)) { case 0: return std::nearbyint(v); case 1: return std::floor(v);
+                                               case 2: return std::ceil(v);  default: return std::trunc(v); }
+              };
+              auto ex2m1 = [](double v) -> double {
+                if (std::isnan(v) || v == 0.0) return v;
+                if (std::fabs(v) <= 1.0) return double(std::expm1l((long double)v * 0.693147180559945309417232121458176568L));
+                return double(std::exp2l((long double)v) - 1.0L);
+              };
               const double r = (k == 0x79f) ? fb + fa : (k == 0x79d) ? fb - fa
                              : (k == 0x79c) ? fb * fa : (k == 0x79b) ? fb / fa
                              : (k == 0x69c) ? std::sin(fa) : (k == 0x69d) ? std::cos(fa)
                              : (k == 0x69e) ? std::tan(fa) : (k == 0x690) ? std::atan2(fb, fa)
                              : (k == 0x692) ? fb * std::log2(fa)
+                             : (k == 0x699) ? ex2m1(fa)                 // R1040: exprl
+                             : (k == 0x69b) ? rtil(fa)                  // R1040: roundrl
                              : (k == 0x698) ? std::sqrt(fa)
                              : (k == 0x6e2) ? ((fb >= 0.0) ? std::fabs(fa) : -std::fabs(fa))
                              : fa;

@@ -173,7 +173,7 @@ def split_mod(s):
 # Subroutines take their operands in fixed registers and return in DH, DL.
 #   DDMUL  (AH,AL) x (BH,BL)      DDADD  (AH,AL) + (BH,BL)
 #   DDDIV  (AH,AL) / (BH,BL)
-def build(log=False):
+def build(log=False, exp=False):
     p = Prog()
     p.const('ZERO', 0.0)
     p.const('ONE', 1.0)
@@ -524,6 +524,8 @@ def build(log=False):
     p.add('Y', 'X', 'YY'); p.end('Y')
     if log:
         build_log(p, horner)
+    if exp:
+        build_exp(p)
     return p
 
 
@@ -609,6 +611,118 @@ def build_log(p, horner):
     p.mul('T0', 'FN', 'TWO'); p.sub('T0', 'T0', 'FOUR'); p.add('T0', 'T0', 'ONE')
     p.br('NEG', 'T0', 'LG_R'); p.br('ZERO', 'T0', 'LG_R')
     p.div('FN', 'FN', 'TWO'); p.add('QN', 'QN', 'ONE'); p.jmp('LG_R')
+
+
+def build_exp(p):
+    """R1040: the 2B build's exprl (--exp, which implies --log; entry 6), after
+    everything --log assembles, so the 2C program's 492 words and its 128
+    registers stay where they are -- no new constant and no new register,
+    the words appended past 511 (a 1,024-word ROM). (logepr was written here
+    too and left out: Ben deferred Last Bronx.)
+
+    exprl -- 80960KB PRM 11-60: dst = 2^src - 1, src in [-0.5, 0.5] (outside
+    it "undefined"); MAME's set_rifl(pow(2.0, t1f) - 1.0). y = x ln 2 as a
+    double-double ((x, 0) / (L2E / 2), L2E = 2 / ln 2 halved exactly), z = -y^2,
+    and the sin / cos kernels on that z: KCOS's 1 + z (C0 + z (C1 ...)) is
+    cosh y and KSIN's y (1 + z (S0 ...)) is sinh y, every term positive, so
+    2^x - 1 = (cosh y - 1) + sinh y, one rounding. |x| < 2^-900: x ln 2 on
+    x 2^200, scaled back by TSCALE (the double-double's products would
+    underflow). Outside [-0.5, 0.5]: k = round(x) (MAGIC), f = x - k exactly,
+    P = 2^k by squaring (k clamped to 1023), 2^x - 1 = P (2^f - 1) + (P - 1)
+    as a double-double; x >= 1024 is +inf, x <= -64 is -1, +-0 and NaN
+    themselves, +inf +inf, -inf -1 (MAME's pow there)."""
+    # X = (DH + DL) 2^-200 rounded once, (DH, DL) a normal double-double
+    # (DH its correctly rounded double): q = DH 2^-200 rounded. q exact (a
+    # normal result, or DL far below a subnormal's quantum): X = q. Otherwise
+    # the result is subnormal: the rest of DH + DL past q (DH - q 2^200 exact,
+    # within a quantum) scaled and rounded to 0 or one quantum, then added --
+    # exactly, both on the subnormal grid.
+    p.label('TSCALE')
+    p.mul('T0', 'DH', 'DOWN'); p.mul('T1', 'T0', 'UP')
+    p.sub('T1', 'DH', 'T1')
+    p.br('ZERO', 'T1', 'TS_Q')
+    p.add('T1', 'T1', 'DL')
+    p.mul('T1', 'T1', 'DOWN'); p.add('X', 'T0', 'T1')
+    p.ret()
+    p.label('TS_Q')
+    p.mov('X', 'T0')
+    p.ret()
+
+    # ------------------------------------------------------------- exprl
+    p.entry('exp')
+    p.ldx('X')
+    p.br('NAN', 'X', 'EX_NAN')
+    p.br('ZERO', 'X', 'EX_X')
+    p.br('INF', 'X', 'EX_INF')
+    p.sub('T0', '|X', '-C0H')                 # |x| - 1/2
+    p.mul('BH', 'L2EH', '-C0H')               # (BH, BL) = 1 / ln 2, exactly L2E / 2
+    p.mul('BL', 'L2EL', '-C0H')
+    p.br('NEG', 'T0', 'EX_IN')
+    p.br('ZERO', 'T0', 'EX_IN')
+    # |x| > 1/2
+    p.sub('T0', 'X', 'E1023'); p.sub('T0', 'T0', 'ONE')
+    p.br('NEG', 'T0', 'EX_OV', inv=True)      # x >= 1024: +inf
+    p.mul('T1', 'FOUR', 'FOUR'); p.mul('T1', 'T1', 'FOUR'); p.add('T1', 'X', 'T1')
+    p.br('NEG', 'T1', 'EX_M1'); p.br('ZERO', 'T1', 'EX_M1')   # x <= -64: -1
+    p.add('T0', 'X', 'MAGIC'); p.sub('QN', 'T0', 'MAGIC')      # k = round(x)
+    p.sub('T1', 'QN', 'E1023')
+    p.br('NEG', 'T1', 'EX_K')
+    p.mov('QN', 'E1023')                      # k <= 1023 (f then up to 1)
+    p.label('EX_K')
+    p.mov('FN', '|QN'); p.mov('NL', 'TWO'); p.mov('NH', 'ONE')   # P = 2^|k|
+    p.label('EX_PL')
+    p.add('T0', 'FN', 'MAGIC')
+    p.br('BIT0', 'T0', 'EX_PE', inv=True)
+    p.mul('NH', 'NH', 'NL'); p.sub('FN', 'FN', 'ONE')
+    p.label('EX_PE')
+    p.mul('FN', 'FN', '-C0H')
+    p.br('ZERO', 'FN', 'EX_PD')
+    p.mul('NL', 'NL', 'NL')
+    p.jmp('EX_PL')
+    p.label('EX_PD')
+    p.br('NEG', 'QN', 'EX_PP', inv=True)
+    p.div('NH', 'ONE', 'NH')                  # k < 0: 2^k (k >= -64, exact)
+    p.label('EX_PP')
+    p.sub('AH', 'X', 'QN')                    # f = x - k, exact
+    p.jmp('EX_Y')
+    p.label('EX_IN')
+    p.sub('T1', '|X', 'SMALL')
+    p.br('NEG', 'T1', 'EX_TN')                # |x| < 2^-900
+    p.mov('QN', 'ZERO'); p.mov('AH', 'X')
+    p.label('EX_Y')                           # (DH, DL) = 2^f - 1, f in AH
+    p.mov('AL', 'ZERO')
+    p.call('DDDIV')
+    p.mov('RH', 'DH'); p.mov('RL', 'DL')      # y = f ln 2
+    p.call('KZSQ')
+    p.mov('ZH', '-ZH'); p.mov('ZL', '-ZL')    # z = -y^2
+    p.call('KCOS')                            # (CH, CL) = cosh y
+    p.call('KSIN')                            # (SH, SL) = sinh y
+    p.sub('AH', 'CH', 'ONE'); p.mov('AL', 'CL'); p.mov('BH', 'SH'); p.mov('BL', 'SL')
+    p.call('DDADD')
+    p.br('ZERO', 'QN', 'EX_D')
+    # P (2^f - 1) + (P - 1)
+    p.mul('AH', 'NH', 'DH'); p.mul('AL', 'NH', 'DL')
+    p.sub('BH', 'NH', 'ONE')
+    p.sub('T0', 'BH', 'NH'); p.sub('T1', 'BH', 'T0')
+    p.sub('T1', 'NH', 'T1'); p.sub('T0', '-ONE', 'T0'); p.add('BL', 'T1', 'T0')
+    p.call('DDADD')
+    p.label('EX_D')
+    p.end('DH')
+    p.label('EX_TN')                          # 2^x - 1 = x ln 2 rounded (as LE_TN)
+    p.mul('AH', 'X', 'UP'); p.mov('AL', 'ZERO')
+    p.call('DDDIV')
+    p.call('TSCALE')
+    p.end('X')
+    p.label('EX_OV')
+    p.div('T0', 'ONE', 'ZERO'); p.end('T0')
+    p.label('EX_INF')
+    p.br('NEG', 'X', 'EX_M1')
+    p.label('EX_X')
+    p.end('X')
+    p.label('EX_M1')
+    p.end('-ONE')
+    p.label('EX_NAN')
+    p.add('Y', 'X', 'X'); p.end('Y')
 
 
 # --------------------------------------------------------------- assembler
@@ -705,10 +819,12 @@ def modv(v, m):
 ENTRY_ORDER = ['sin', 'cos', 'tan', 'atan']
 
 
-def rom_svh(p, words, addr, names, path, log=False):
+def rom_svh(p, words, addr, names, path, log=False, exp=False):
     # R935: the 2C program (--log) as ucode_log / uconst_log, ten address bits
     sfx, aw = ('_log', 9) if log else ('', 9)
     order = ENTRY_ORDER + (['log'] if log else [])
+    if exp:
+        return rom_svh_exp(p, words, addr, names, path)
     with open(path, 'w') as f:
         f.write('// SPDX-License-Identifier: GPL-3.0-or-later\n')
         f.write('// Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1\n')
@@ -725,28 +841,64 @@ def rom_svh(p, words, addr, names, path, log=False):
         f.write("    default: uconst%s = 64'h0;\n  endcase\nendfunction\n" % sfx)
 
 
+def rom_svh_exp(p, words, addr, names, path):
+    """R1040: the 2B program (--exp) as ucode_x, a 1,024-word ROM (ten address
+    bits) whose first words are the --log program's word for word, with the
+    two new entries' addresses as localparams. Its registers ARE --log's
+    (asserted: the same names at the same addresses, no new constant), so
+    the register file keeps uconst_log."""
+    q = build(True)
+    lw, la, ln = assemble(q)
+    assert words[:len(lw)] == lw, 'the --log words moved'
+    assert names == ln and addr == la and p.consts == q.consts, 'the --log registers moved'
+    assert len(words) <= 1024, len(words)
+    with open(path, 'w') as f:
+        f.write('// SPDX-License-Identifier: GPL-3.0-or-later\n')
+        f.write('// Sega Model 2 core for MiSTer FPGA -- Copyright (C) 2026 alphanu1\n')
+        f.write('// GENERATED by tools/i960_fptrans.py --exp -- do not edit. R845, R935, R1040.\n')
+        f.write('// %d microinstructions (words 0-%d the --log program\'s), %d registers (%d constants:\n'
+                '// uconst_log).\n' % (len(words), len(lw) - 1, len(names), len(p.consts)))
+        f.write('// Entries: %s\n' % ', '.join('%s %d' % (e, p.entries[e])
+                                               for e in ENTRY_ORDER + ['log', 'exp']))
+        f.write("localparam logic [9:0] UX_EXP = 10'd%d;   // exprl\n" % p.entries['exp'])
+        f.write('function automatic logic [31:0] ucode_x(input logic [9:0] a);\n  case (a)\n')
+        for i, w in enumerate(words):
+            f.write("    10'd%d: ucode_x = 32'h%08x;\n" % (i, w))
+        f.write("    default: ucode_x = 32'h%08x;\n  endcase\nendfunction\n" % (OPS['END'] << 28))
+
+
 def main():
     a = sys.argv[1:]
-    log = '--log' in a
-    p = build(log)
+    exp = '--exp' in a
+    log = '--log' in a or exp
+    p = build(log, exp)
     words, addr, names = assemble(p)
-    assert len(words) <= 512, len(words)
+    assert len(words) <= (1024 if exp else 512), len(words)
     global FLUSH
     FLUSH = '--flush' in a
     if '--rom' in a:
-        rom_svh(p, words, addr, names, a[a.index('--rom') + 1], log)
+        rom_svh(p, words, addr, names, a[a.index('--rom') + 1], log, exp)
         print('%d words, %d registers (%d constants)' % (len(words), len(names), len(p.consts)))
     if '--listing' in a:
         inv = {v: k for k, v in p.labels.items()}
         for i, (op, f) in enumerate(p.code):
             print('%3d %-8s %-5s %s' % (i, inv.get(i, ''), op, f))
-    if '--check' in a:
+    if '--check' in a and not exp:
         if log:
             check_log(p, words, addr, names, int(a[a.index('--check') + 1]))
         else:
             check(p, words, addr, names, int(a[a.index('--check') + 1]))
+    if '--faultwords' in a and exp:
+        # R1040: the planted faults' words (test_i960_fptrans_exp_fault)
+        def find(e, op, **fl):
+            for i in range(p.entries[e], len(p.code)):
+                if p.code[i][0] == op and all(p.code[i][1].get(k) == v for k, v in fl.items()):
+                    return i
+        print(find('exp', 'MUL', d='BL', a='L2EL', b='-C0H'))
+    if '--check' in a and exp:
+        check_exp(p, words, addr, names, int(a[a.index('--check') + 1]))
     if '--vec' in a:
-        vectors(p, words, addr, names, a[a.index('--vec') + 1], int(a[a.index('--vec') + 2]), log)
+        vectors(p, words, addr, names, a[a.index('--vec') + 1], int(a[a.index('--vec') + 2]), log, exp)
 
 
 def log_operand(k):
@@ -838,12 +990,16 @@ def edge_args(log=False):
     return out
 
 
-def vectors(p, words, addr, names, path, n, log=False):
+def vectors(p, words, addr, names, path, n, log=False, exp=False):
     """Test vectors for the RTL bench: entry, x, y, expected (hex); n random,
-    then edge_args()."""
+    then edge_args(). R1040: with exp, the --log file's vectors exactly as
+    --log writes them (entries 0-4 on the 2B ROM), then exprl's
+    edges (entry 5) and n random of its."""
     random.seed(7)
     order = ENTRY_ORDER + (['log'] if log else [])
     with open(path, 'w') as f:
+        if exp:
+            exp_vectors(p, words, addr, names, f, n)
         for e, x, y in edge_args(log):
             r, _ = run(p, words, addr, names, order[e], x, y)
             f.write('%d %016x %016x %016x\n' % (e, d2u(x), d2u(y), d2u(r)))
@@ -865,6 +1021,114 @@ def vectors(p, words, addr, names, path, n, log=False):
                 y = 0.0
             r, _ = run(p, words, addr, names, e, x, y)
             f.write('%d %016x %016x %016x\n' % (order.index(e), d2u(x), d2u(y), d2u(r)))
+
+
+def exp_edge_args():
+    """R1040: exprl's edges (entry 5): +-0, subnormals' corners, +-inf, NaNs
+    (quiet, signalling, negative), +-1/2 +- 2 ulp (the PRM range's ends), every
+    integer -70..1030 and every k +- 1/2 (the rounding to k, its ties) +- 2
+    ulp, 1023.5, 1024 - ulp, -64 / -54 / -53 +- ulp, +-2^-k for every k, the
+    largest and smallest doubles."""
+    def nxt(v, k):
+        for _ in range(abs(k)):
+            v = math.nextafter(v, math.inf if k > 0 else -math.inf)
+        return v
+    sp = [0x0, 1 << 63, 1, (1 << 63) | 1, (1 << 52) - 1, (1 << 63) | ((1 << 52) - 1),
+          1 << 52, (1 << 63) | (1 << 52), 0x7ff0000000000000, 0xfff0000000000000,
+          0x7ff8000000000000, 0xfff8000000000000, 0x7ff0000000000001, 0xfff4000000000000,
+          0x7fffffffffffffff, 0x7fefffffffffffff, 0xffefffffffffffff]
+    ex = [u2d(u) for u in sp] + [nxt(v, d) for v in (-0.5, 0.5) for d in range(-2, 3)]
+    for k in range(-70, 1031):
+        for v in (float(k), k + 0.5, k - 0.5):
+            ex += [nxt(v, d) for d in range(-2, 3)]
+    ex += [1023.5, nxt(1024.0, -1), 1023.9999, -63.999, -64.0001, 1e5, -1e5, 1e300, -1e300]
+    ex += [s * 2.0 ** -k for k in range(1, 1075) for s in (1.0, -1.0)]
+    return [(5, x, 0.0) for x in ex]
+
+
+def exp_vectors(p, words, addr, names, f, n):
+    """R1040: entry 5 -- the edges, then n random."""
+    for e, x, y in exp_edge_args():
+        r, _ = run(p, words, addr, names, 'exp', x, y)
+        f.write('%d %016x %016x %016x\n' % (e, d2u(x), d2u(y), d2u(r)))
+    rnd = random.Random(1040)
+    for i in range(n):
+        k = rnd.random()
+        x = rnd.uniform(-0.5, 0.5) if k < 0.5 else rnd.choice((1, -1)) * 2.0 ** rnd.uniform(-1074, -1) \
+            if k < 0.7 else rnd.uniform(-70, 1030) if k < 0.95 else rnd.uniform(-1, 1) * 2.0 ** rnd.randint(-1074, 1023)
+        r, _ = run(p, words, addr, names, 'exp', x, 0.0)
+        f.write('5 %016x %016x %016x\n' % (d2u(x), 0, d2u(r)))
+
+
+def _series(x, kind):
+    """Exact-rational series for tiny |x| (< 2^-30): 2^x - 1, eight terms,
+    far below 2^-150 relative."""
+    from fractions import Fraction
+    from decimal import Decimal, getcontext
+    getcontext().prec = 120
+    ln2 = Fraction(Decimal(2).ln())
+    y = Fraction(x) * ln2
+    s, t = Fraction(0), Fraction(1)
+    for i in range(1, 9):
+        t = t * y / i; s += t
+    return s
+
+
+def _tofloat(v):
+    try:
+        return float(v)
+    except OverflowError:
+        return math.inf if v > 0 else -math.inf
+
+
+def cr_exp2m1(x):
+    """The correctly rounded 2^x - 1, x finite."""
+    from decimal import Decimal, getcontext
+    from fractions import Fraction
+    if abs(x) < 2.0 ** -30:
+        return _tofloat(_series(x, 'exp')) if x != 0.0 else x
+    if x >= 1024.0:
+        return math.inf
+    if x <= -1100.0:
+        return -1.0
+    if x == int(x):                       # exact: 2^k - 1 can be a tie (k = 54)
+        return _tofloat(Fraction(2) ** int(x) - 1)
+    getcontext().prec = 120
+    return _tofloat(Fraction((Decimal(x) * Decimal(2).ln()).exp() - 1))
+
+
+def check_exp(p, words, addr, names, n):
+    """R1040: exprl's 2^x - 1 against the correctly rounded value and against
+    the host's (MAME's) pow(2.0, x) - 1.0; the most microinstructions."""
+    rnd = random.Random(5)
+    for name, gen in [('[-1/2, 1/2] (PRM range)', lambda: rnd.uniform(-0.5, 0.5)),
+                      ('tiny |x| < 2^-30', lambda: rnd.choice((1, -1)) * 2.0 ** rnd.uniform(-1070, -30)),
+                      ('subnormal', lambda: rnd.choice((1, -1)) * u2d(rnd.getrandbits(52) >> rnd.randint(0, 51) | 1)),
+                      ('[-70, 1030] (out of range)', lambda: rnd.uniform(-70, 1030))]:
+        notcr = nohost = hostcr = maxops = 0
+        for _ in range(n):
+            x = gen()
+            r, nops = run(p, words, addr, names, 'exp', x, 0.0)
+            maxops = max(maxops, nops)
+            c = cr_exp2m1(x)
+            try:
+                h = math.pow(2.0, x) - 1.0
+            except OverflowError:
+                h = math.inf
+            notcr += r != c; nohost += r != h; hostcr += h != c
+        print('exprl %-28s not correctly rounded %d / %d   differs from host pow(2, x) - 1 %d (host itself not CR %d)  max ops %d'
+              % (name, notcr, n, nohost, hostcr, maxops))
+    bad = tot = 0
+    for e, x, y in exp_edge_args():
+        if not math.isfinite(x) or x == 0.0:
+            continue
+        r, _ = run(p, words, addr, names, 'exp', x, 0.0)
+        tot += 1; bad += r != cr_exp2m1(x)
+    print('exprl edges (finite, non-zero): not correctly rounded %d / %d' % (bad, tot))
+    for x in [0.0, -0.0, math.inf, -math.inf, math.nan, u2d(0xfff8000000000000), 0.5, -0.5, 1024.0,
+              -64.0, 1.0, 54.0, 5e-324, -5e-324]:
+        r, nops = run(p, words, addr, names, 'exp', x, 0.0)
+        print('  x %-24r -> %-24r (%016x)  %d ops' % (x, r, d2u(r), nops))
 
 
 def cr_log2(x):

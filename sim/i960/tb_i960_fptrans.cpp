@@ -32,9 +32,10 @@ int main(int argc, char **argv) {
   auto tick = [&]() { d->clk = 0; d->eval(); d->clk = 1; d->eval(); };
   d->rst_n = 0; d->start = 0; tick(); tick(); d->rst_n = 1; tick();
   unsigned e; unsigned long long x, y, want;
-  long n = 0, bad = 0; unsigned long long cyc = 0, maxc[5] = {}, sumc[5] = {}, cnt[5] = {};   // R935: [4] logrl
+  long n = 0, bad = 0; unsigned long long cyc = 0, maxc[6] = {}, sumc[6] = {}, cnt[6] = {};   // R935: [4] logrl
   while (std::fscanf(f, "%u %llx %llx %llx", &e, &x, &y, &want) == 4) {
     d->entry = e & 3; d->lg = (e == 4);   // R935: 4 = logrl
+    d->exr = (e == 5);   // R1040: 5 = exprl
     d->x = x; d->y = y; d->start = 1; tick(); d->start = 0;
     unsigned long long c = 1;
     while (!d->fin) { tick(); if (++c > 200000) { std::printf("HANG at vector %ld\nFAIL\n", n); return 1; } }
@@ -47,12 +48,12 @@ int main(int argc, char **argv) {
       ++bad;
     }
     if (cf) std::fprintf(cf, "%u %016llx %016llx %llu %016llx\n", e, x, y, c, (unsigned long long)got);
-    cyc += c; { const unsigned k = e > 4 ? 0 : e; if (c > maxc[k]) maxc[k] = c; sumc[k] += c; cnt[k]++; }
+    cyc += c; { const unsigned k = e > 5 ? 0 : e; if (c > maxc[k]) maxc[k] = c; sumc[k] += c; cnt[k]++; }
     ++n;
   }
-  static const char *nm[5] = {"sin", "cos", "tan", "atan", "log"};
-  for (int i = 0; i < 5; i++)
-    if (cnt[i]) std::printf("  %-4s %llu vectors, cycles mean %llu max %llu\n", nm[i], cnt[i], sumc[i] / cnt[i], maxc[i]);
+  static const char *nm[6] = {"sin", "cos", "tan", "atan", "log", "exp"};
+  for (int i = 0; i < 6; i++)
+    if (cnt[i]) std::printf("  %-5s %llu vectors, cycles mean %llu max %llu\n", nm[i], cnt[i], sumc[i] / cnt[i], maxc[i]);
   std::printf("  %ld vectors, %ld mismatches\n", n, bad);
   std::printf(bad || !n ? "FAIL\n" : "PASS\n");
   return bad || !n;

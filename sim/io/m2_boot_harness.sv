@@ -668,7 +668,7 @@ module m2_boot_harness #(
     end
   end
 
-  i960_top #(.VC(VCOP || C2), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES), .C2(C2),   // R924: C2; R869: FR, F2A; R928: VC with C2 (Model2.sv)
+  i960_top #(.VC(VCOP || C2), .FR(A2X), .F2A(A2X && A2X_F2A), .IC_LINES(IC_LINES), .C2(C2), .F2B(B2),   // R924: C2; R869: FR, F2A; R928: VC with C2 (Model2.sv); R1040: F2B
              .RC_RING(RC_RING), .RC_FRAMES(RC_FRAMES), .DC_LINES(DC_LINES), .DC_2A(A2), .DC_LANES(DC_LANES)) u_cpu (   // R927: RC_*
     .clk(clk_cpu), .rst_n(rst_n & ~cpu_hold), .vc_en(VCOP | A2X),   // R839
     .bus_req(bus_req), .bus_ifetch(bus_ifetch), .bus_we(bus_we), .bus_addr(bus_addr), .bus_be(bus_be),

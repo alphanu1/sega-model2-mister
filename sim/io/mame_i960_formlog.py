@@ -17,6 +17,14 @@
 #   cosr     R903: as sinr, the sequencer's cos entry (Manx TT)
 #   cvtzril  the module's cvtzri, sign-extended (exact while |x| < 2^31)
 #   cpysre   |src1| with src2's sign as MAME tests it (src2 >= 0.0)
+#   R1040 (2B, Virtual-On), the module's own result beside MAME's -- the two
+#   are expected to part where the manual and MAME do:
+#   scalerl  src2 (pair) * 2^(int32)src1, scaler's multiply (MAME's)
+#   roundrl  nearest-even in mode 0 (PRM 12-12, R972); MAME's C round() is
+#            half away -- they part only on an exact n + 1/2
+#   exprl    2^x - 1 correctly rounded (the EXP program, tools/i960_fptrans.py
+#            --exp); MAME's pow(2, x) - 1 rounds 2^x first. Also: 1 + exprl
+#            (the table's next step, addrl) compared, both ways rounded
 #
 #   mame_i960_formlog.py <forms.txt> [...]
 import math, os, struct, sys
@@ -61,6 +69,16 @@ def trans(entry, x, y=0.0):
     return T.run(p, words, addr, names, entry, x, y)[0]
 
 
+_PX = None
+def trans_x(x):
+    """R1040: exprl on the 2B program."""
+    global _PX
+    if _PX is None:
+        p = T.build(True, True); _PX = (p,) + T.assemble(p)
+    p, words, addr, names = _PX
+    return T.run(p, words, addr, names, 'exp', x, 0.0)[0]
+
+
 def main():
     pcs, insn_of = defaultdict(list), {}
     V = defaultdict(list)
@@ -82,6 +100,7 @@ def main():
         bad = 0; srcs = defaultdict(int); classes = defaultdict(int)
         lo, hi = math.inf, -math.inf
         ediff = 0; ratio = 0.0; negs = [0, 0]
+        ties = 0; plus1 = 0
         for pc, m, a, b, res, t in vs:
             ins = insn_of.get(pc, 0)
             m1, m2, m3 = int(m[1]), int(m[2]), int(m[3])
@@ -115,6 +134,26 @@ def main():
                 lo, hi = min(lo, x1), max(hi, x1)
                 v = int(x1) if not (math.isnan(x1) or math.isinf(x1)) else 0
                 ok = abs(x1) < 2147483648.0 and (res == (v & 0xffffffffffffffff))
+            elif k in (0x676, 0x699, 0x69b):               # R1040: the pair forms (m3 0: the pair)
+                got = res
+                if k != 0x676:
+                    lo, hi = min(lo, x1), max(hi, x1)
+                if k == 0x676:                             # (the range printed is src2's)
+                    n = a & 0xffffffff
+                    n = n - (1 << 32) if n >> 31 else n
+                    try:
+                        r = x2 * math.pow(2.0, n)
+                    except OverflowError:
+                        r = math.copysign(math.inf, x2) if x2 != 0.0 else math.nan
+                    lo, hi = min(lo, x2), max(hi, x2)
+                elif k == 0x69b:
+                    r = x1 if not math.isfinite(x1) else math.copysign(float(round(x1)), x1)   # ties to even, the sign kept
+                    ties += math.isfinite(x1) and abs(x1 - math.floor(x1)) == 0.5
+                else:
+                    r = trans_x(x1)
+                    mame = u2d(res)
+                    plus1 += (1.0 + r) != (1.0 + mame) and not (math.isnan(r) and math.isnan(mame))
+                ok = (d2u(r) == got) or (math.isnan(r) and math.isnan(u2d(got)))
             elif k == 0x6e2:                               # cpysre
                 r = abs(x1) if x2 >= 0.0 else -abs(x1)
                 lo, hi = min(lo, x1), max(hi, x1)
@@ -132,6 +171,10 @@ def main():
         elif lo <= hi:
             print('   src1 range %.9g .. %.9g' % (lo, hi))
         print('   module != MAME on %d of %d' % (bad, len(vs)))
+        if k == 0x69b:
+            print('   exact n + 1/2 operands (where MAME and the manual part): %d' % ties)
+        if k == 0x699:
+            print('   1 + exprl (the next step) differs on %d of %d' % (plus1, len(vs)))
 
 
 if __name__ == '__main__':

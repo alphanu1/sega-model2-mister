@@ -84,6 +84,15 @@ module i960_top #(
   // without it the i960 traps there and the game freezes mid-race.
 
   parameter bit F2A    = 1'b0,
+  // R1040: THE FORMS VIRTUAL-ON RUNS (2B; its boot builds a table with them at
+  // pc 0x29640-0x296b4, 2,048 of each, and this core trapped on the first):
+  // roundrl (0x69.b, roundr's fpmisc on the pair), scalerl (0x67.6, scaler's
+  // multiply by 2^n with the pair src2 and a pair destination, src1 the one
+  // integer register) and exprl (0x69.9, 2^x - 1 on the sequencer's EXP
+  // program, i960_fptrans). Live while vc_en, as VC / F2A are. Needs VC, F2A
+  // and C2 (the sequencer's LOG program, which EXP extends). 0: they trap as
+  // before.
+  parameter bit F2B    = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
   parameter int unsigned IC_LINES = 512,
@@ -708,8 +717,8 @@ module i960_top #(
   wire  [63:0] u_a     = tr_on ? tr_opa : fp_b;
   wire  [63:0] u_b     = tr_on ? tr_opb : fp_a;
   generate if (TRB) begin : g_trans
-    i960_fptrans #(.LOG(C2)) u_trans (   // R935: LOG, logrl on the 2C build
-      .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry), .lg(tr_log),
+    i960_fptrans #(.LOG(C2), .EXP(F2B)) u_trans (   // R935: LOG, logrl on the 2C build; R1040: EXP, exprl on 2B
+      .clk(clk), .rst_n(rst_n), .start(tr_start), .entry(tr_entry), .lg(tr_log), .exr(tr_exr),
       .x(fp_a), .y(fp_b),
       .act(tr_act), .opa(tr_opa), .opb(tr_opb),
       .add_req(tr_add_req), .mul_req(tr_mul_req), .div_req(tr_div_req), .sub(tr_sub),
@@ -754,7 +763,9 @@ module i960_top #(
   // every other fpmisc operation which reads src1. Feeding it fp_a silently
   // scaled the wrong value.
   logic fp_is_scale;
-  assign fp_is_scale = (d_op == 8'h67) && (d_op2 == 4'h7);
+  wire  b2_on = F2B && VC && F2A && C2 && RL && vc_en;   // R1040: Virtual-On's forms
+  logic fp_is_sclrl;                             // R1040: scalerl -- src1 is one register, not a pair
+  assign fp_is_scale = (d_op == 8'h67) && ((d_op2 == 4'h7) || (b2_on && (d_op2 == 4'h6)));   // R1040: scalerl
 
   // scaler is `t2f * pow(2.0, n)` in the reference — a genuine multiply, not an
   // exponent add. The difference shows when pow overflows: 0 * inf is NaN,
@@ -809,6 +820,7 @@ module i960_top #(
   /* verilator lint_off UNUSEDSIGNAL */
   logic [1:0] tr_entry;                          // read only when TRB
   logic       tr_log;                            // R935: logrl (C2 only)
+  logic       tr_exr;                            // R1040: exprl (F2B only)
   /* verilator lint_on UNUSEDSIGNAL */
   wire  vc_on = VC && RL && vc_en;
   wire  fr_on = (VC || FR) && vc_en;               // R865: flushreg's dispatch
@@ -817,7 +829,7 @@ module i960_top #(
     fp_is_add = 1'b0; fp_is_mul = 1'b0; fp_is_div = 1'b0;
     fp_is_sqrt = 1'b0; fp_is_misc = 1'b0; fadd_sub = 1'b0;
     fp_is_cpys = 1'b0; fp_is_cvtl = 1'b0;
-    fp_is_trans = 1'b0; tr_entry = 2'd0; tr_log = 1'b0;
+    fp_is_trans = 1'b0; tr_entry = 2'd0; tr_log = 1'b0; tr_exr = 1'b0; fp_is_sclrl = 1'b0;
     fp_is_rem = 1'b0;
     fp_is_mvre = 1'b0;
     fp_is_cvtil = 1'b0;
@@ -840,6 +852,21 @@ module i960_top #(
     if (C2 && vc_on && d_op == 8'h69 && d_op2 == 4'h2) begin
       is_rl = 1'b1; fp_is_trans = 1'b1; tr_log = 1'b1;
     end
+    // R1040: Virtual-On's three (2B). exprl: set_rifl(2^t1f - 1) -- the
+    // sequencer's EXP entry on the pair, the pair written as logrl's.
+    // roundrl: set_rifl(round_to_int(get_1_rifl)) -- roundr's fpmisc op 5 on
+    // the pair (AC[31:30]: mode 0 ties to even, R972, the manual's; MAME's C
+    // round() is half away). scalerl: set_rifl(t2f * pow(2.0, (int32_t)t1))
+    // -- scaler's multiply by pow2 (fp_is_scale), the src2 pair in, the pair
+    // out; src1 the one integer register (fp_is_sclrl keeps ra1 on it).
+    if (b2_on && d_op == 8'h69 && d_op2 == 4'h9) begin is_rl = 1'b1; fp_is_trans = 1'b1; tr_exr = 1'b1; end
+`ifdef I960_FAULT_RNDRL
+    // R1040: the planted fault -- roundrl as the single form (no pair)
+    if (b2_on && d_op == 8'h69 && d_op2 == 4'hb) begin fp_is_misc = 1'b1; fmisc_op = 3'd5; end
+`else
+    if (b2_on && d_op == 8'h69 && d_op2 == 4'hb) begin is_rl = 1'b1; fp_is_misc = 1'b1; fmisc_op = 3'd5; end
+`endif
+    if (b2_on && d_op == 8'h67 && d_op2 == 4'h6) begin is_rl = 1'b1; fp_is_mul = 1'b1; fp_is_sclrl = 1'b1; end
     // R839: get_1_rifl -> sqrt -> set_rifl; cpysre: |src1| with src2's
     // "sign" as MAME tests it (src2 >= 0.0, so -0.0 counts as positive and a
     // NaN as negative); cvtzril: get_1_rif (the single-form operand) ->
@@ -1382,9 +1409,16 @@ module i960_top #(
     // R836: a long-real op reads its pairs' low words in T_RLLO (addresses
     // presented in T_EXEC) and holds the high words from T_RLLO through T_FP.
     if (is_rl && (d_fmt == 2'd2)) begin
+      // R1040: scalerl's src1 is one integer register (pow2's n): ra1 stays on it
+`ifdef I960_FAULT_SCLRL
       if (ts == T_EXEC) begin ra1 = {d_src1[4:1], 1'b0}; ra2 = {d_src2[4:1], 1'b0}; end
       else if ((ts == T_RLLO) || (ts == T_FP)) begin
-        ra1 = {d_src1[4:1], 1'b1};
+        ra1 = {d_src1[4:1], 1'b1};   // R1040: the planted fault -- the pair's odd word
+`else
+      if (ts == T_EXEC) begin ra1 = fp_is_sclrl ? d_src1 : {d_src1[4:1], 1'b0}; ra2 = {d_src2[4:1], 1'b0}; end
+      else if ((ts == T_RLLO) || (ts == T_FP)) begin
+        ra1 = fp_is_sclrl ? d_src1 : {d_src1[4:1], 1'b1};
+`endif
         // R897: movre has no src2; its port reads the source triple's third word
         ra2 = (F2A && fp_is_mvre) ? {d_src1[4:1] + 4'd1, 1'b0} : {d_src2[4:1], 1'b1};
       end

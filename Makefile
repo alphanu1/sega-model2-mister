@@ -918,6 +918,43 @@ obj_i960_fptrans_log/Vi960_fptrans_harness: $(I960)/i960_fptrans.sv $(I960)/i960
 	$(VBUILD) --top-module i960_fptrans_harness -GLOG=1 -CFLAGS "-O2" --Mdir obj_i960_fptrans_log -o Vi960_fptrans_harness \
 	  $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
 # The ROM is generated: tools/i960_fptrans.py --rom rtl/cpu/i960/i960_fptrans_rom.svh
+# R1040: the 2B build's program (EXP: + exprl, Virtual-On), 1,024 words: the
+# LOG bench's vectors unchanged (entries 0-4 on the new ROM), then exprl's
+# edges and FPTRANS_EXP_N random, against the interpreter; then
+# the LOG vectors through the LOG and EXP sequencers side by side, every
+# vector's cycle count and result compared (no added latency on 0-4).
+# FPTRANS_EXP_FAULT: the planted fault (a ROM word's b field zeroed) -- must FAIL.
+FPTRANS_EXP_N ?= 20000
+FPTRANS_X_SRC := $(I960)/i960_fptrans.sv $(FPA_RTL) $(FPM_RTL) $(FPD_RTL) sim/i960/i960_fptrans_harness.sv $(TB)/tb_i960_fptrans.cpp
+FPTRANS_X_DEP := $(FPTRANS_X_SRC) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(I960)/i960_fptrans_rom_x.svh
+.PHONY: test_i960_fptrans_exp test_i960_fptrans_exp_fault
+test_i960_fptrans_exp: obj_i960_fptrans_exp/Vi960_fptrans_harness obj_i960_fptrans_log/Vi960_fptrans_harness
+	@echo "== test i960_fptrans EXP (the 2B program: + exprl, R1040)"
+	@python3 -I tools/i960_fptrans.py --exp --vec obj_i960_fptrans_exp/vec.txt $(FPTRANS_EXP_N)
+	@./obj_i960_fptrans_exp/Vi960_fptrans_harness +vec=obj_i960_fptrans_exp/vec.txt
+	@echo "== the LOG vectors on LOG and EXP: every cycle count and result equal"
+	@python3 -I tools/i960_fptrans.py --log --vec obj_i960_fptrans_exp/veclog.txt $(FPTRANS_LOG_N)
+	@./obj_i960_fptrans_log/Vi960_fptrans_harness +vec=obj_i960_fptrans_exp/veclog.txt +cyc=obj_i960_fptrans_exp/cyc_log.txt > /dev/null
+	@./obj_i960_fptrans_exp/Vi960_fptrans_harness +vec=obj_i960_fptrans_exp/veclog.txt +cyc=obj_i960_fptrans_exp/cyc_exp.txt > /dev/null
+	@wc -l < obj_i960_fptrans_exp/cyc_log.txt
+	@cmp obj_i960_fptrans_exp/cyc_log.txt obj_i960_fptrans_exp/cyc_exp.txt && echo "  identical: PASS"
+obj_i960_fptrans_exp/Vi960_fptrans_harness: $(FPTRANS_X_DEP)
+	$(VBUILD) --top-module i960_fptrans_harness -GLOG=1 -GEXP=1 -CFLAGS "-O2" --Mdir obj_i960_fptrans_exp -o Vi960_fptrans_harness $(FPTRANS_X_SRC)
+# the fault word: exprl's BL = L2EL * -C0H (1 / ln 2's low half lost)
+FPTRANS_EXP_FAULT ?= $(shell python3 -I tools/i960_fptrans.py --exp --faultwords)
+test_i960_fptrans_exp_fault: obj_i960_fptrans_exp/vec.txt
+	@for w in $(FPTRANS_EXP_FAULT); do \
+	  echo "== planted fault: ROM word $$w's b field zeroed -- must FAIL"; \
+	  $(VBUILD) --top-module i960_fptrans_harness -GLOG=1 -GEXP=1 -CFLAGS "-O2" +define+I960_FAULT_XW=$$w \
+	    --Mdir obj_i960_fptrans_xf$$w -o Vi960_fptrans_harness $(FPTRANS_X_SRC) > /dev/null || exit 1; \
+	  ./obj_i960_fptrans_xf$$w/Vi960_fptrans_harness +vec=obj_i960_fptrans_exp/vec.txt > obj_i960_fptrans_xf$$w/run.txt; \
+	  st=$$?; tail -2 obj_i960_fptrans_xf$$w/run.txt; \
+	  if [ $$st -eq 0 ]; then echo "  NOT CAUGHT"; exit 1; else echo "  caught"; fi; \
+	done
+obj_i960_fptrans_exp/vec.txt:
+	@mkdir -p obj_i960_fptrans_exp
+	@python3 -I tools/i960_fptrans.py --exp --vec $@ $(FPTRANS_EXP_N)
+
 
 # R998: the pipelined sequencer against the one before it side by side: the
 # same result and the same register-file writes for every instruction, on
@@ -971,6 +1008,27 @@ obj_i960_top_c2s2/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i96
 obj_i960_top_c2/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top -GVC=1 -GFR=1 -GF2A=1 -GC2=1 -GFP_SUBN=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_SUBN=1" \
 	  --Mdir obj_i960_top_c2 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R1040: the 2B build's i960 (C2 + F2B, FP_SUBN 2 as Model2.sv's 2B build):
+# Virtual-On's scalerl, exprl, roundrl in the mix (+b2) with the 2C forms.
+# Forced off: +b2 on obj_i960_top_c2s2 (F2B=0) must FAIL (they trap there).
+# The planted faults (I960_FAULT_SCLRL: scalerl's n from the pair's odd word;
+# I960_FAULT_RNDRL: roundrl as the single form) must FAIL too.
+.PHONY: test_i960_top_b2 test_i960_top_b2_fault
+test_i960_top_b2: obj_i960_top_b2/Vi960_top
+	@echo "== test i960_top B2 (the 2B build: + scalerl exprl roundrl, R1040)"
+	./obj_i960_top_b2/Vi960_top +vc +fx +c2 +b2 $(TEST_ARGS)
+obj_i960_top_b2/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(I960)/i960_fptrans_rom_log.svh $(I960)/i960_fptrans_rom_x.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 -GFR=1 -GF2A=1 -GC2=1 -GF2B=1 -GFP_SUBN=2 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_SUBN=2" \
+	  --Mdir obj_i960_top_b2 -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+test_i960_top_b2_fault: obj_i960_top_b2fs/Vi960_top obj_i960_top_b2fr/Vi960_top
+	@echo "== planted fault: scalerl's n from the pair's odd word -- must FAIL"
+	@if ./obj_i960_top_b2fs/Vi960_top +vc +fx +c2 +b2 $(TEST_ARGS) > obj_i960_top_b2fs/run.txt; then tail -3 obj_i960_top_b2fs/run.txt; echo "  NOT CAUGHT"; exit 1; else tail -3 obj_i960_top_b2fs/run.txt; echo "  caught"; fi
+	@echo "== planted fault: roundrl as the single form -- must FAIL"
+	@if ./obj_i960_top_b2fr/Vi960_top +vc +fx +c2 +b2 $(TEST_ARGS) > obj_i960_top_b2fr/run.txt; then tail -3 obj_i960_top_b2fr/run.txt; echo "  NOT CAUGHT"; exit 1; else tail -3 obj_i960_top_b2fr/run.txt; echo "  caught"; fi
+obj_i960_top_b2f%/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom_x.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 -GFR=1 -GF2A=1 -GC2=1 -GF2B=1 -GFP_SUBN=2 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC -DI960_SUBN=2" \
+	  $(if $(filter s,$*),+define+I960_FAULT_SCLRL,+define+I960_FAULT_RNDRL) --Mdir obj_i960_top_b2f$* -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # R865: flushreg alone (FR=1, VC=0) with vc_en high (+fr): the 2A games' form
 .PHONY: test_i960_top_fr
