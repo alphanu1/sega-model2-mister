@@ -1,0 +1,121 @@
+<misterromdescription>
+    <!--
+      Sega Model 2 core for MiSTer FPGA - Copyright (C) 2026 alphanu1
+      SPDX-License-Identifier: GPL-3.0-or-later
+
+      Super GT 24h (Model 2B-CRX). Derived from MAME 0.289 model2.cpp
+      ROM_START(sgt24h), the parent set. For the Model 2B build
+      (branch model2b, Model2.sv M2_2B: the ADSP-21062 SHARC as the
+      coprocessor); the 2A and 2C cores cannot run it. Study R1024
+      (this set's census), R1031.
+
+      MAME 0.289: MACHINE_NOT_WORKING, but R1024's census raced it: a
+      4,096-word SHARC program, 165 DM words, nothing past the first
+      cut's list; 28 writes to the texture windows' upper MB (mirrored
+      on 2B). MAME's init_sgt24h has its two patches commented out:
+      none here. The comms program (MAME's cpu4) is not loaded. No
+      protection.
+
+      THE 2A LAYOUT (VF2's MRA; no 128 MB module needed), each slot
+      zero-padded to its size:
+        0x0000000  i960 program 0-512 KB (MAME maincpu 0x000000)
+        0x0080000  main_data, 16 MB
+        0x1080000  textures, 8 MB (MAME's 0-4 MB and 8-12 MB; 4 MB loaded)
+        0x1880000  polygons, 12 MB (8 MB loaded). The 2B core keeps the
+                   SHARC's DM page at SDRAM byte 0x2080000, this slot's 8 MB
+                   mark, so a 2B set in this layout can have at most 8 MB
+        0x2480000  256 KB of zeros (the 2A TGP's tables; 2B has none)
+        0x24C0000  68000 sound program, 512 KB
+        0x2540000  SCSP samples, 8 MB          -> SDRAM byte 0x3400000
+        0x2D40000  i960 program 512 KB-2 MB    -> SDRAM byte 0x2600000
+                   (the rest 0 as MAME's region)
+      Image: 0x2EC0000 bytes.
+
+      Index 4, the game ID: 0x1C, BORROWED from Over Rev (R928): the
+      normal layout and Over Rev's profile, which is MAME's sgt24h
+      ports exactly (indy500's with both pedals PORT_REVERSE; IN1 bit
+      0 View 1, bit 1 unused here), from the same developer (Jaleco).
+      What it implies: Over Rev's comm-board answer at 0x01a04000
+      (R928), which this game may or may not poll the same way (not
+      measured), and Over Rev's luma table (R932), not one measured on
+      this game, so the shading of textured polygons may be off. Bit 7
+      is SET in this MRA (0x9C): the 15 kHz CRT flag (R795), which
+      starts the core in 15 kHz interlaced whatever the OSD says
+      (R908).
+    -->
+    <name>Super GT 24h [15kHz CRT]</name>
+    <setname>sgt24h</setname>
+    <rbf>Model2B</rbf>
+    <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
+         93C46 EEPROM (128 bytes): the game's settings. -->
+    <nvram index="2" size="16520"/>
+    <rom index="4" md5="none">
+        <part>9C 00</part>
+    </rom>
+    <mameversion>0289</mameversion>
+    <year>1996</year>
+    <manufacturer>Jaleco</manufacturer>
+    <category>Driving</category>
+
+    <rom index="0" zip="sgt24h.zip" md5="none">
+
+        <!-- 0x0000000  i960 program 0-512 KB -->
+        <interleave output="32">
+            <part name="epr-19155.15" crc="593952fd" map="0021" offset="0x000000" length="0x040000"/>
+            <part name="epr-19156.16" crc="a91fc4ee" map="2100" offset="0x000000" length="0x040000"/>
+        </interleave>
+
+        <!-- 0x0080000  i960 data, 16 MB -->
+        <interleave output="32">
+            <part name="mpr-19146.11" crc="d66b5b0f" map="0021"/>
+            <part name="mpr-19147.12" crc="d5558f48" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-19148.9" crc="a14c86db" map="0021"/>
+            <part name="mpr-19149.10" crc="94ef5849" map="2100"/>
+        </interleave>
+
+        <!-- 0x1080000  textures, 8 MB (MAME's 0-4 MB, then its 8-12 MB) -->
+        <interleave output="32">
+            <part name="mpr-19153.27" crc="136adfd0" map="0021"/>
+            <part name="mpr-19152.25" crc="363769a2" map="2100"/>
+        </interleave>
+        <part repeat="4194304">00</part>
+
+        <!-- 0x1880000  polygons, 12 MB (8 MB loaded; the SHARC's DM page is at
+                     SDRAM byte 0x2080000, the slot's 8 MB mark) -->
+        <interleave output="32">
+            <part name="mpr-19150.17" crc="e0ad870e" map="0021"/>
+            <part name="mpr-19151.21" crc="e2a1b125" map="2100"/>
+        </interleave>
+        <part repeat="4194304">00</part>
+
+        <!-- 0x2480000  TGP math tables, 256 KB: none on 2B (no TGP) -->
+        <part repeat="262144">00</part>
+
+        <!-- 0x24C0000  68000 sound program, 512 KB (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="epr-19157.31" crc="8ffea0cf" map="12"/>
+        </interleave>
+
+        <!-- 0x2540000  SCSP samples, 8 MB (16-bit, byte-swapped); moved by the
+                     loader to SDRAM byte 0x3400000 -->
+        <interleave output="16">
+            <part name="mpr-19154.32" crc="7cd9e679" map="12"/>
+        </interleave>
+        <part repeat="4194304">00</part>
+
+        <!-- 0x2D40000  i960 program 512 KB-2 MB (R862) -->
+        <interleave output="32">
+            <part name="epr-19155.15" crc="593952fd" map="0021" offset="0x040000" length="0x040000"/>
+            <part name="epr-19156.16" crc="a91fc4ee" map="2100" offset="0x040000" length="0x040000"/>
+        </interleave>
+        <part repeat="1048576">00</part>
+
+    </rom>
+
+    <!-- BORROWED ID: Over Rev (Model 2C)'s profile (R928): steering on either
+         stick, pedals on the right stick's Y or Accel / Brake (reversed, as
+         MAME's sgt24h ports), Shift Up / Down, View 1. -->
+    <buttons names="Coin,Start,Test,Service,View 1,-,Accel,Brake,Shift Up,Shift Down"/>
+</misterromdescription>

@@ -49,7 +49,7 @@
       Index 4, the game ID: 0x15 (R887). Bit 7 is SET in this MRA (0x95): the 15 kHz CRT flag (R795), which
       starts the core in 15 kHz interlaced whatever the OSD says (R908).
     -->
-    <name>Pilot Kids (Model 2A) [15kHz CRT]</name>
+    <name>Pilot Kids (Model 2B, Revision A) [15kHz CRT]</name>
     <setname>pltkids</setname>
     <rbf>Model2B</rbf>
     <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the

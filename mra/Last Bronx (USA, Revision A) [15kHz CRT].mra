@@ -1,0 +1,123 @@
+<misterromdescription>
+    <!--
+      Sega Model 2 core for MiSTer FPGA - Copyright (C) 2026 alphanu1
+      SPDX-License-Identifier: GPL-3.0-or-later
+
+      Last Bronx (USA, Revision A) (Model 2B-CRX). Derived from MAME
+      0.289 model2.cpp ROM_START(lastbrnxu), a clone of lastbrnx. For
+      the Model 2B build (branch model2b, Model2.sv M2_2B: the
+      ADSP-21062 SHARC as the coprocessor); the 2A and 2C cores cannot
+      run it. Study R1024 (this set's census), R1031.
+
+      MAME 0.289: MACHINE_NOT_WORKING. The USA program (epr-19059a /
+      19060a); every other ROM is the export set's. EXPECTED NOT TO
+      RUN: as lastbrnx (R1024: alternate register files, the fixed
+      multiplier, dual add / subtract, short words; not in m2b_sharc).
+      No protection, no patches.
+
+      THE 2A LAYOUT (VF2's MRA; no 128 MB module needed), each slot
+      zero-padded to its size:
+        0x0000000  i960 program 0-512 KB (MAME maincpu 0x000000)
+        0x0080000  main_data, 16 MB
+        0x1080000  textures, 8 MB (MAME's 0-4 MB and 8-12 MB; 4 MB loaded)
+        0x1880000  polygons, 12 MB (8 MB loaded). The 2B core keeps the
+                   SHARC's DM page at SDRAM byte 0x2080000, this slot's 8 MB
+                   mark, so a 2B set in this layout can have at most 8 MB
+        0x2480000  256 KB of zeros (the 2A TGP's tables; 2B has none)
+        0x24C0000  68000 sound program, 512 KB
+        0x2540000  SCSP samples, 8 MB          -> SDRAM byte 0x3400000
+        0x2D40000  i960 program 512 KB-2 MB    -> SDRAM byte 0x2600000
+                   (the rest 0 as MAME's region)
+      Image: 0x2EC0000 bytes.
+
+      Index 4, the game ID: 0x17, BORROWED - this set has no ID of its
+      own. 0x17 is The House of the Dead's on the 2C build (R924); on
+      the 2B build every 0x17 decode is folded off (R1035), so it
+      means only what any 0x10-0x1F ID without a decode of its own
+      means there: a 2A game past VF2 (the program extension, R862;
+      the i960's extra float forms, R865), the normal layout, the
+      DIGITAL three-button profile in VF2's order (R887) and R867's
+      fixed luma-row map. What it implies: the luma map is the generic
+      one, not one measured on this game, so the shading of textured
+      polygons may be off; and if 0x17 is ever given a 2B decode, this
+      MRA must move. Bit 7 is SET in this MRA (0x97): the 15 kHz CRT
+      flag (R795), which starts the core in 15 kHz interlaced whatever
+      the OSD says (R908).
+    -->
+    <name>Last Bronx (USA, Revision A) [15kHz CRT]</name>
+    <setname>lastbrnxu</setname>
+    <rbf>Model2B</rbf>
+    <!-- R945: the NVRAM file is the backup RAM (16 KB), "M2EEPROM" and the
+         93C46 EEPROM (128 bytes): the game's settings. -->
+    <nvram index="2" size="16520"/>
+    <rom index="4" md5="none">
+        <part>97 00</part>
+    </rom>
+    <mameversion>0289</mameversion>
+    <year>1996</year>
+    <manufacturer>Sega</manufacturer>
+    <category>Fighter</category>
+
+    <rom index="0" zip="lastbrnxu.zip|lastbrnx.zip" md5="none">
+
+        <!-- 0x0000000  i960 program 0-512 KB -->
+        <interleave output="32">
+            <part name="epr-19059a.15" crc="25478257" map="0021" offset="0x000000" length="0x040000"/>
+            <part name="epr-19060a.16" crc="c48906b2" map="2100" offset="0x000000" length="0x040000"/>
+        </interleave>
+
+        <!-- 0x0080000  i960 data, 16 MB -->
+        <interleave output="32">
+            <part name="mpr-19050.11" crc="e6af2b61" map="0021"/>
+            <part name="mpr-19051.12" crc="14b88961" map="2100"/>
+        </interleave>
+        <interleave output="32">
+            <part name="mpr-19048.9" crc="02180215" map="0021"/>
+            <part name="mpr-19049.10" crc="db7eecd6" map="2100"/>
+        </interleave>
+
+        <!-- 0x1080000  textures, 8 MB (MAME's 0-4 MB, then its 8-12 MB) -->
+        <interleave output="32">
+            <part name="mpr-19055.27" crc="85a57d49" map="0021"/>
+            <part name="mpr-19054.25" crc="05366277" map="2100"/>
+        </interleave>
+        <part repeat="4194304">00</part>
+
+        <!-- 0x1880000  polygons, 12 MB (8 MB loaded; the SHARC's DM page is at
+                     SDRAM byte 0x2080000, the slot's 8 MB mark) -->
+        <interleave output="32">
+            <part name="mpr-19052.17" crc="d7f27216" map="0021"/>
+            <part name="mpr-19053.21" crc="1f328465" map="2100"/>
+        </interleave>
+        <part repeat="4194304">00</part>
+
+        <!-- 0x2480000  TGP math tables, 256 KB: none on 2B (no TGP) -->
+        <part repeat="262144">00</part>
+
+        <!-- 0x24C0000  68000 sound program, 512 KB (16-bit, byte-swapped) -->
+        <interleave output="16">
+            <part name="mpr-19056.31" crc="22a22918" map="12"/>
+        </interleave>
+
+        <!-- 0x2540000  SCSP samples, 8 MB (16-bit, byte-swapped); moved by the
+                     loader to SDRAM byte 0x3400000 -->
+        <interleave output="16">
+            <part name="mpr-19057.32" crc="64809438" map="12"/>
+        </interleave>
+        <interleave output="16">
+            <part name="mpr-19058.34" crc="e237c11c" map="12"/>
+        </interleave>
+
+        <!-- 0x2D40000  i960 program 512 KB-2 MB (R862) -->
+        <interleave output="32">
+            <part name="epr-19059a.15" crc="25478257" map="0021" offset="0x040000" length="0x040000"/>
+            <part name="epr-19060a.16" crc="c48906b2" map="2100" offset="0x040000" length="0x040000"/>
+        </interleave>
+        <part repeat="1048576">00</part>
+
+    </rom>
+
+    <!-- Player 1 on joystick 1, player 2 on joystick 2, the same buttons
+         (VF2's order: R887's three-button profile). -->
+    <buttons names="Punch,Kick,Guard,Start,Coin,Test,Service"/>
+</misterromdescription>
