@@ -569,7 +569,7 @@ module m2_copro #(
     logic [31:0] sh_fout_data;
     logic        x_req, x_we, x_ack;
     logic [31:0] x_addr, x_wd, x_rd;
-    m2b_sharc #(.MAME_RND(SH_MAME_RND), .DM_AW(SH_DM_AW)) u_sh (
+    m2b_sharc #(.MAME_RND(SH_MAME_RND), .DM_AW(SH_DM_AW), .PXIM(1'b0)) u_sh (   // R1038: no PX / IMASK
       .clk(clk), .reset(!rst_n), .run(!halted && !sh_busy),
       .host_iop_we(sh_iop_we), .host_iop_reg(iop_reg[7:0]), .host_iop_data(wdata),
       .xdma_we(fifo_wr && uploading), .xdma_phase(sh_ph), .xdma_data(wdata[15:0]),

@@ -7,6 +7,7 @@ module tb_m2b_sharc #(
     parameter bit MAME_RND = 1'b1,
     parameter bit LOCK = 1'b0,
     parameter bit RF_ONES = 1'b0,
+    parameter bit PXIM = 1'b1,         // R1038: m2b_sharc PXIM (0 = the 2B build's: no PX / IMASK)
     // R1031: the core's on-chip block-1 words and the DM cache's shape (m2b_xbus / m2b_dmc); a
     // small DM_AW sends Dead or Alive's data words through the cache and the C++ SDRAM model
     parameter int DM_AW = 13,
@@ -82,7 +83,7 @@ module tb_m2b_sharc #(
 );
     logic        ext_req, ext_we, ext_ack;
     logic [31:0] ext_addr, ext_wdata, ext_rdata;
-    m2b_sharc #(.MAME_RND(MAME_RND), .DM_AW(DM_AW), .BENCH(1'b1), .RF_ONES(RF_ONES)) u (
+    m2b_sharc #(.MAME_RND(MAME_RND), .DM_AW(DM_AW), .BENCH(1'b1), .RF_ONES(RF_ONES), .PXIM(PXIM)) u (
         .clk, .reset, .run(run && !o_busy), .host_iop_we, .host_iop_reg, .host_iop_data, .xdma_we, .xdma_phase, .xdma_data,
         .fin_empty, .fin_data, .fin_pop, .fout_full, .fout_push, .fout_data, .flag_out(),
         .ext_req, .ext_we, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata,

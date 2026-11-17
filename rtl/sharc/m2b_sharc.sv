@@ -57,7 +57,11 @@ module m2b_sharc #(
     parameter int DM_AW    = 13,            // block-1 data on chip 2^DM_AW x 32 (8 K: R1026)
     parameter bit BENCH    = 1'b0,          // the DM starts all ones (unwritten memory reads 0xFFFF...)
     parameter bit CLEAR    = 1'b1,          // PM and DM cleared after reset, as MAME's device_reset
-    parameter bit RF_ONES  = 1'b0           // benches: the register and stack arrays start all ones
+    parameter bit RF_ONES  = 1'b0,          // benches: the register and stack arrays start all ones
+    // R1038: PX and IMASK. 1 = as MAME has them (the benches' default); 0 = neither register is
+    // built and a ureg move or bit operation naming one is an unsupported word -- no Model 2B
+    // program names either (every set's uploaded program, read whole: the study's R1038)
+    parameter bit PXIM     = 1'b1
 ) (
     input  logic        clk,
     input  logic        reset,              // MAME's device_reset (host boot)
@@ -388,8 +392,8 @@ function automatic logic ureg_ok(input logic [7:0] u, input logic wr);
     4'h4: return wr;                        // B: written (also sets I), not read
     4'h6: return u[3:0] == 4'h4 || u[3:0] == 4'h7 || u[3:0] == 4'h8 || (!wr && u[3:0] == 4'h5);
     4'h7: return u[3:0] == 4'h0 || u[3:0] == 4'h1 || u[3:0] == 4'h9 || u[3:0] == 4'ha ||
-                 u[3:0] == 4'hb || u[3:0] == 4'hc || u[3:0] == 4'hd || u[3:0] == 4'he;
-    4'hd: return u[3:0] == 4'hb || u[3:0] == 4'hc || u[3:0] == 4'hd;
+                 u[3:0] == 4'hb || u[3:0] == 4'hc || (PXIM && u[3:0] == 4'hd) || u[3:0] == 4'he;
+    4'hd: return PXIM && (u[3:0] == 4'hb || u[3:0] == 4'hc || u[3:0] == 4'hd);
     default: return 1'b0;
     endcase
 endfunction
@@ -1710,14 +1714,14 @@ always_ff @(posedge clk) begin
                               mode1 <= uv;
                           end
                           4'hc: if (XC.fl_on || XC.fix_on || XC.sh_on) begin ld_ua <= 1'b1; end else a = uv;
-                          4'hd: imask <= uv;
+                          4'hd: if (PXIM) imask <= uv;
                           4'he: if (XC.fl_on || XC.fix_on || XC.sh_on) begin ld_us <= 1'b1; end else k = (k & STK_BITS) | (uv & ~STK_BITS);
                           default: ;
                           endcase
                     4'hd: case (ur[3:0])
-                          4'hc: px <= {px[47:16], uv[15:0]};
-                          4'hd: px <= {uv, px[15:0]};
-                          4'hb: px <= {px[47:32], uv};
+                          4'hc: if (PXIM) px <= {px[47:16], uv[15:0]};
+                          4'hd: if (PXIM) px <= {uv, px[15:0]};
+                          4'hb: if (PXIM) px <= {px[47:32], uv};
                           default: ;
                           endcase
                     default: ;

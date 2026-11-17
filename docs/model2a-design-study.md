@@ -53004,3 +53004,155 @@ on the 0x1C / 0x1D / C2G lines, and model2b's unchanged bench shows 9 of the sam
 pre-existing, not this change's. lint_top (2B form) and lint_idx: no new findings against
 model2b's. quartus_map --analyze_file (17.0): Model2.sv (also with M2_2B / M2_2C), m2_2a_inputs,
 m2_luma_map, 0 errors.
+
+**R1038 -- ROOM IN THE 2B BUILD FOR THE SHARC's MISSING FORMS, AND WHAT THOSE FORMS COST.
+EVERY 2B PROGRAM READ WHOLE (29 SETS) AND CLASSIFIED WORD BY WORD AGAINST m2b_sharc's
+DECODE: FIGHTING VIPERS / SONIC CHAMPIONSHIP / SONIC THE FIGHTERS NEED ONLY PM-BUS DATA AND
+TYPE-1 DUAL MOVES; LAST BRONX NEEDS THE FIXED MULTIPLIER, MR0F, DUAL ADD / SUBTRACT, ALTERNATE
+REGISTER FILES AND SHORT WORDS -- AND ITS i960 TRAPS ON logepr (VIRTUAL-ON's ON scalerl /
+exprl / roundrl). TWO SAVINGS TAKEN, BOTH CYCLE-IDENTICAL: THE FILL's RECIPROCAL TABLE IN
+M10K ON 2B (R948's form) AND NO PX / IMASK IN THE 2B SHARC. quartus_map 39,512 -> 39,258 ALM NEEDED (-254), 57,849 -> 57,565 ALUTs.** Branch 2b-area
+(off model2b baddebde), 2026-11-17. quartus_map and simulation only: no fit, no board.
+
+(Section: §10, after R1036 (R1037 is another branch's). Authority: MAME 0.289 for the
+programs (the R1024 census build, sim/sharc/mame_m2b_census.patch + the R869 form log) and
+the SHARC's semantics; m2b_sharc's own decode for what is supported; R948 / R952 for the
+reciprocal table. Model 1 has no SHARC.)
+
+*What was believed (R1024 / R1027, the 2026-11-17 board test):* the AM2 fighters and Last
+Bronx need "dual moves, PM-bus data, the buffer RAM and data ROM, alternate register files,
+the fixed multiplier, dual add / subtract, short-word data and external-port DMA boot"; the
+2B build has ~380 ALM to 100% (s3412: 41,531 of 41,910 needed; 538 / 553 M10K; 101 / 112
+DSP) -- not enough for that list -- and R1035 had already taken the guns and 2C-only decodes.
+
+*THE METHOD:*
+  * Every 2B set's SHARC program memory dumped from MAME 0.289 30 s after the upload
+    (sim/sharc/mame_m2b_pmdump.lua: :copro_adsp's program space, words 0x20000-0x21fff): 17 sets
+    and 12 clones (doab, dyndeka2b, fvipersb, lastbrnxj / u, overrevba, vonj / u,
+    vstrikero, zerogunj, powsled / powsledr; pltkidsj did not load). Clones equal their
+    parents but for 0-3 words.
+  * A classifier (sim/sharc/m2b_sclass.py) restating m2b_sharc's unsupported tests: the form
+    (type 1, PM-bus g bits, RTI, push / pop, the ureg tables), the compute field (fixed /
+    float ALU op lists, the multiplier's 0x30, the shifter list, the multifunction 011xxx
+    group). Run over R1024's executed-PC census (pc.txt, every word run in 200 s, with
+    counts) for the dynamic answer, and over the dumped images for the static one (data
+    decoded as code only adds uses). Checked first on doa / zerogun / pltkids / vstriker /
+    sgt24h / dynabb / dynabb97 / dynamcopb / rchase2 / von / indy500 / gunblade: 0 words
+    flagged, as the board (they run) and R1024 say.
+  * The i960: R869's form log over attract + play, 300 s each (sim/sharc/mame_m2b_i960.lua
+    with sim/io/mame_m2_2a_play.lua, MAME's DRC on: the i960 has none), formcheck's 2C
+    column = the 2B build's i960 (FR, VC, F2A, C2).
+
+*WHAT EACH SET RUNS THAT m2b_sharc DOES NOT (executed, 200 s; words / distinct PCs):*
+  fvipers   PM-bus data 54.1 M / 46 (PM(0x21F38) = R15 ...); type-1 dual moves 19.7 M / 21
+            (Fm = Fx * Fy, Fa = Fa + Fb, R6 = DM(I7, M1), PM(I9, M9) = R10 -- a multifunction
+            compute WITH both moves: up to four register writes, two stores, two post-modifies)
+  schamp    PM-bus data 64.0 M / 50; type-1 21.7 M / 21. sfight's image is schamp's word for word.
+  lastbrnx  fixed multiply Rn = Rx * Ry (UUI, op 0x40) 5.44 M / 35; dual add / subtract fixed
+            4.81 M / 6; FMUL with dual add / subtract (mop 0x3e) 1.25 M / 3; float dual add /
+            subtract 1.19 M / 2; MR0F = R4 and R15 = MR0F 22,595 each / 1 (no other MR form
+            anywhere); MODE1: 0x18078 once at boot (SRD1H / L, SRD2H / L: L0-L15 = 0 written
+            under the alternate DAGs, cleared at 0x2002a), SRRFL 1,379 and SRRFH 1,809 times
+            (0x20b54-0x20b68, 0x210ff-0x21101); short words 1,068 (R1024, dynamic).
+  everything else: nothing.
+  Statically no set's image holds a status-stack push / pop, interrupt, circular or DMA form
+  that is executed; the ops never present in any of the 29 images: SCALB, FLOAT BY (single
+  form), |Fx +- Fy|, BTGL; COPYSIGN and the multifunction FLOAT BY / FMAX only in Power Sled's.
+  No image names PX or IMASK in any ureg move or bit operation; USTAT1 / USTAT2 / IRPTL only in
+  dynabb / dynabb97's uploaded but never executed words above 0x207fb (never read as PM data:
+  R1024's pmdata.bin) -- not proven dead, kept.
+
+*THE i960 (R869 form log, formcheck 2C column):* 0 traps on fvipers, schamp, sfight, vstriker,
+gunblade, sgt24h, indy500, overrevb, dynabb, dynabb97, rchase2, pltkids, dynamcopb, doa and
+zerogun (15 of the 17 sets, 300 s each). LAST BRONX TRAPS on 0x68.1 (logepr, MAME's set_rif(t2f * log2(t1f + 1.0));
+32,768 times from 1.19 s, pc 0x7114): with the SHARC done the i960 still halts
+there. VIRTUAL-ON traps on 0x67.6 scalerl (t2 * 2^t1), 0x69.9 exprl (2^t1 - 1) and 0x69.b roundrl
+(2,048 each at 0.208 s, a table built at boot, pc 0x29640-0x296b4) and also runs logrl there (2,048: so the
+2C build's LOG stays on 2B). The trig / sqrt / remr forms: lastbrnx atanr / sinr / cosr / tanr
+/ sqrtrl, vstriker atanrl / sinrl / cosrl / tanrl -- F2A and VC both needed on 2B.
+
+*COST OF EACH MISSING FORM IN m2b_sharc (estimates by parts, R1028's style: MLAB files are
+16 deep in 32-deep MLABs, so a second bank is free; a second pass on an existing unit costs a
+clock, not a unit):*
+  form                                   sets               ALM        M10K  DSP   note
+  PM-bus data (block 0 = the PM RAM's     fvipers, schamp,   80-120     0     0     port B read (TDP, same M10K
+    port B; block 1 = the DM RAM)         sfight                                    count), 32 of the 48 bits
+  type-1 dual moves (two accesses in X,   fvipers, schamp,   150-200    0-2*  0     *a 2nd store-register read: a
+    2nd post-modify, 2-4 R writes)        sfight                                    2nd D clock, or 2 MLAB
+  dual add / subtract, fixed              lastbrnx           50-70      0     0     a 2nd pass on the xu adder
+  dual add / subtract, float; FMUL ||     lastbrnx           70-110     0     0     the adder twice (2 landings)
+    dual (mop 0x3e)
+  fixed multiply UUI + MN / MV / MU       lastbrnx           70-120     0     2-3   64-bit product (MV)
+  MR0F (alone: no MRF multiply runs)      lastbrnx           20-30      0     0
+  alternate R files (SRRFH / SRRFL)       lastbrnx           50-70      0     0     bank bit on 5 ports + landing
+  alternate DAGs (L only at boot)         lastbrnx           30-50      0     0
+  short words (block 1, zero-extended)    lastbrnx           50-80      0     0     per-lane DM writes
+  EPB0 boot                               lastbrnx           0          0     0     wired (R1031 SH_EPB), unproven
+  i960 logepr (fptrans entry, 47 ROM      lastbrnx           20-40      0     0     the i960, not the SHARC
+    words free)
+  ROM / buffer read caches (speed only,   fvipers, schamp    250-370    4-8   0     R1024: needed only above s ~1.5
+    R1024)
+  status stack, circular, DMA, IRQ, IDLE  none               --         --    --    stay flagged
+  (a) fvipers + schamp / sfight: 230-320 ALM, 0-2 MLAB (no caches); with the caches 480-690, 4-8 M10K.
+  (b) lastbrnx: 360-570 ALM, 2-3 DSP, 0 M10K (+ the i960's logepr).
+
+*TAKEN (each commit's proof):*
+  1. The fill's reciprocal table in M10K on 2B (Model2.sv `ifdef M2_2B: M2_RECIP_M10K unless
+     M2_RECIP_LOGIC): R948's form, R952's reason for leaving it (timing on 2C, s1457-s1462) noted;
+     the 2B build has the M10K. make test_m2_raster_div_lat (both tables, both ports, every
+     cycle): 218,015 divides, 0 results and 0 cycles differ; a planted fault (bit 0 of port A's
+     M10K data) 5,522 differ. 2A / 2C: the block is inside `ifdef M2_2B, unchanged.
+  2. m2b_sharc PXIM (1 default, benches; 0 in m2_copro): no PX, no IMASK, a ureg move or bit
+     operation naming either an unsupported word (U_UREG). Module-alone map 3,819 -> 3,780 ALM,
+     5,695 -> 5,651 ALUTs, 1,883 -> 1,803 registers. Proof: no 2B image names either (above);
+     DOA's 150 s replay at PXIM 0 (MAME rounding, against the R1027 capture): 501,777,265 words,
+     18,541,146 out words and the 30 M-word trace (400-430 M) 0 differ, 1,264,270,732 clocks =
+     2.5196 clk_sys a word, R1031's exactly; random programs (m2b_randprog.py seeds 1-4, 1 M words,
+     lockstep with v1) 0 differ, and seed 1's clock count equal at PXIM 0 and 1 (2,519,019);
+     m2b_unsupprog.py --pxim0 (new: PX1 written, PX read, IMASK written, IMASK bit set) flagged
+     reason 8 at PXIM 0, run in lockstep with v1 at PXIM 1 -- the bench reaches the change.
+  lint_top: the 2B form (M2_2C M2_2B M2_2C_DSB M2_NO_2A_MANX_MOTION M2_NO_DEBUG M2_NO_OVERLAY),
+  2C and 2A: clean.
+
+*AREA (quartus_map 17.0, the whole 2B build, 2b-area as cut and after):*
+                         ALMs needed   ALUTs    registers  block bits   DSP
+    as cut (baddebde)    39,512        57,849   43,369     4,023,212    101
+    after b057bd88 +     39,258        57,565   43,225     4,031,404    101
+      b4b584a0           (-254)        (-284)   (-144)     (+8,192)
+    by entity: m2_recip_rom 276 ALUTs / 64 registers -> 0 / 0 (8,192 bits; m2_raster_fill
+    4,647 -> 4,375); m2b_sharc 5,979 / 1,765 -> 5,926 / 1,685. s3412 (the same RTL as cut)
+    fitted 41,531 of 41,910 ALM needed, 538 / 553 M10K: the map's -254 puts the next fit near
+    ~41,280 (98.5%) with 540 M10K (R948's two for the table).
+  The biggest entities of the 2B map (ALUTs): emu 48,536 -- i960_top 11,576, m2_raster3d
+    10,244 (m2_raster_fill 4,647), m2_copro 6,536 (m2b_sharc 5,979, m2b_xbus 447), m2_2a_sound
+    6,144 (fx68k 2,865, m2_scsp 2,697), m2_geometry 5,889, m2_video 1,192, m2_sdram 1,014,
+    m2_cpu_bridge 928; the framework ascal 2,483, two osd 1,681, pll_hdmi_adj 684, audio_out
+    1,500. No TGPx4, no DSB, no m2_tgp, no guns on the map (R1031 / R1035). Every C2 "M10K for
+    LABs" trade (R1008 / R1018: SCSP_M10K, PR_M10K, M10K_ROOM, EE_M10K, RC_M10K, LEAN, MKV_LUT,
+    the DDR3 payload) already rides into 2B with C2; R948's table was the one left out.
+
+*CANDIDATES NOT TAKEN, AND WHY:*
+  * i960 LOG (logrl) off on 2B: Virtual-On runs logrl -- no.
+  * i960 fprem (remr) apart from F2A: R948 measured -135 ALUTs / total +6 (noise); not run.
+  * F2A or VC off on 2B: Last Bronx runs atanr / sinr / cosr / tanr; Virtua Striker the rl trig.
+  * SCALB / FLOAT BY / |x +- y| / BTGL out of the SHARC: never in any image, but their logic is
+    shared (FIX BY keeps the scalb); a result-mux input each, below a map's resolution.
+  * USTAT1 / USTAT2 / IRPTL out (~60 ALM est.): named only in dynabb's never-executed upload --
+    not proven dead. In one MLAB instead (R1028's idea, ~40 net): cycle-exact in principle, not built.
+  * M2_2A_SND_OVL off on 2B (R947: +117 ALM on 2C): a speed mode, not unused -- needs each 2B
+    set's SCSP DSP length and ring traffic against the 1,814-clock sample first.
+  * M2_2A_SND_TIMER 2 -> 1 (one SCSP timer period, no OSD A/B): a user-visible choice, Ben's.
+  * The SHARC's adder / shared-unit sharing (R1028, 60-100 est.): not cycle-identical as sketched.
+
+*FIT (does it fit afterwards):* by the map, ~630 ALM to 100% and ~420 to 99.5% after this (from ~380
+  / ~170), 13 M10K and 11 DSP spare. (a) fvipers + schamp / sfight at 230-320 ALM fits, at
+  ~99.3-99.5%, WITHOUT the read caches (R1024's s 1.5 table says MAME's lateness holds without
+  them; with them, 480-690, it does not). (b) Last Bronx at 380-610 (with the i960's logepr)
+  reaches or passes 99.5% alone. (a) and (b) together, 610-930: DO NOT FIT on what is here --
+  another ~200-500 ALM is needed (the candidates below, or Ben's choices: the SCSP overlap, one
+  timer period, the 15 kHz converter's or the OSD's options).
+
+*NOT SETTLED:* the costs are by parts, not built; the fit grows over a map (R1009: +1,794 on
+the TGPx4; R1029's SHARC 4,108 fitted against 3,876 mapped); R952's timing finding for the
+reciprocal table, unmeasured on 2B; Last Bronx's short words and EPB0 boot unverified; pltkidsj
+not dumped; Power Sled's program has COPYSIGN / FLOAT BY multi (kept).
