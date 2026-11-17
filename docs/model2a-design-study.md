@@ -52141,3 +52141,151 @@ cache's arrays read a different line on edges whose read is never used
   * m2_scan15 acc_r -> acc_r (one seed, s3076 -1.973) and tile_fetch
     lb_addr -> the line buffer (one seed, s3076 -2.214): single-seed, both
     on s3076, which is congested around the whole video block.
+
+**R1033 -- EXTRA SETUP UNCERTAINTY WHILE THE FITTER RUNS DOES NOT CLOSE
+THE 2C CANDIDATE: 16 SEEDS, NONE CLEAN. DROPPED.** Branch rel-2c-oc
+(ea6b9057, on rel-2c-slack2 97e2a2a0), 2026-11-16. Not merged.
+
+(Section: §10, after R1030. Authority: the fits themselves, Quartus 17.0.)
+
+*Tried:* Model2.sdc adds set_clock_uncertainty -setup on HDMI, clk_sys and
+clk_mem under `if {$::TimeQuestInfo(nameofexecutable) eq "quartus_fit"}`,
+so the fitter aims past the real constraint and STA reports against the
+real one. *Measured* (worst over every corner, clk_sys / clk_mem / HDMI /
+hold; s3162, s3168, s3183 and s3188 have no result -- s3183 a Quartus
+internal error, CUT):
+
+  s3160 -1.373 +0.220 -0.999 +0.205    s3180 -0.431 +0.233 -0.500 +0.236
+  s3161 +0.290 -0.219 +0.062 +0.100    s3181 -1.279 -0.569 -0.315 -0.323
+  s3163 -1.158 +0.936 -1.139 +0.157    s3182 -0.118 +0.266 -0.196 +0.169
+  s3164 -5.268 -2.129 -0.549 +0.212    s3184 -0.420 +0.710 -1.034 +0.241
+  s3165 -0.232 +0.131 -0.187 +0.243    s3185 -0.899 -0.749 -0.122 +0.146
+  s3166 -0.271 +0.176 -0.678 +0.233    s3186 -2.471 +0.518 -0.165 -0.439
+  s3167 +0.035 +0.589 -0.176 +0.242    s3187 -1.871 +0.684 -0.408 +0.239
+
+No seed clean; the spread is the same as without the margin (R1030).
+The failing families are the ones R1030 counted (geometry puv / hu / hv into
+the clipper, the engine's xhalf, the fill's walk and perspective divide,
+the TGPx4 sequencer). The margin moves where the fitter spends effort and
+pays for it elsewhere: it is not a lever on this design.
+
+**R1034 -- A SECOND ROUND OF RETIMES ON THE 2C CANDIDATE (GEOMETRY,
+RASTERISER, VIDEO / TGPx4), EVERY PIECE WORSE AT THE SAME SEED. DROPPED.**
+Branches slack3-geo, slack3-ras, slack3-vid, rel-2c-slack3 (all three),
+rel-2c-geras (geo + ras), rel-2c-slack3-cc4 (the glyph cache at R1030's
+four lanes), each on rel-2c-slack2 97e2a2a0, 2026-11-16. Not merged.
+
+*The pieces* (each proved against 97e2a2a0 by miter or yosys equivalence,
+no output cycle changed): the engine's strip carry staged beside p0prev /
+p1prev, the read-ahead's stream decisions made with flush last (slack3-geo);
+the span's 1/z mantissa at its 24 bits (one DSP), the fill's stage-two
+products in their DSPs, the frame writer's window bounds registered
+(slack3-ras); the TGPx4's S_DEC forwarding and AGU, the glyph cache's data
+lanes two cycles ahead (slack3-vid).
+
+*Measured at s3260* (worst over every corner, clk_sys / clk_mem / HDMI;
+rel-2c-slack2 itself -0.295 / +0.632 / -1.090):
+
+  slack3-geo         -1.278 / +0.838 / -0.645
+  slack3-ras         -1.012 / +0.562 / -0.564
+  slack3-vid         -3.061 / +0.868 / -1.615
+  rel-2c-geras       -0.375 / +0.508 / -1.126
+  rel-2c-slack3-cc4  -0.770 / +0.219 / -0.907
+  rel-2c-slack3      s3200 -8.506 / -3.440 / -0.272 (s3201-s3260 no result)
+
+Every piece moves clk_sys the wrong way at the seed where the base nearly
+closes. Ben (2026-11-16): "we have to stop blaming ALM. we have cores that
+close at 99.5% full" -- the question moved from logic depth to placement
+(R1036).
+
+**R1036 -- THE 2C CANDIDATE'S FAILURES ARE PLACEMENT: THE FRAMEWORK'S
+SCALER AND OSD LANDED IN GEOMETRY'S CORNER, AND GEOMETRY'S SHARED POOL
+RESULT DREW ITS CLIENTS TOGETHER. PINNING HELPS HDMI AND HURTS ROUTING; A
+COPY OF THE POOL'S RESULT REGISTER PER CLIENT (RES_CP) CLOSES clk_sys ON
+THREE OF FIVE SEEDS, NO CYCLE ADDED.** Branch geo-dup (e309fe2b, on
+rel-2c-slack2 97e2a2a0), 2026-11-17.
+
+(Section: §10, after R1034. Authority: the fits and their floorplans
+(Paul Priest's floorplan.py / floorplan.tcl from hornet-sharc, GPL-3, run
+from the scratchpad, not copied into the tree); Model 1's fp pool for the
+circuit; MAME untouched -- the change is output-identical.)
+
+*THE FLOORPLANS* (atoms per group by location, release s2137 and the clean
+s2702 against failing s3260 / s3141): the router's peak congestion is
+always X11-X21, Y46-Y57, and in every fit that box is geometry's own (the
+release 2,455 of 2,639 atoms there geometry's; s2702 2,303 of 2,764). In
+the failing s3260 geometry has only 1,570 of 3,318 there: the framework's
+scaler (ascal, 512 atoms), the HDMI OSD (482) and a framework divider
+(191) sit in it. The scaler's centroid moved from (60, 35) at the release
+to (30, 63), between the fill and geometry; the TGPx4 and the i960 swapped
+sides; the DSB (new) sits at (83, 8). Centroid distances alone do not
+separate passing from failing seeds (s1980 passed with ascal at (26, 34)).
+
+*LOGICLOCK IS NOT AVAILABLE ON THIS LICENCE* (R201's Critical Warning
+140003); per-atom set_location_assignment IS honoured. Pinning in our own
+Model2.qsf, the framework's instances included, is allowed (Ben: "if its in
+our code its fine as this is not editing the framework").
+
+*Pinning, measured* (sm2-builds/exp-2c-anchor; worst clk_sys / clk_mem /
+HDMI, unpinned -> pinned):
+  * All 510 RAM / DSP blocks at s2702's sites (s3141): routing 55 min
+    (16 normal), average interconnect 49% (43%), peak 70% (58%); the fitter
+    then crashed before saving. Over-constrained.
+  * The scaler's 48 M10K / DSP blocks only, at s2702's (right side):
+      s3260 -0.295 / +0.632 / -1.090 -> -0.688 / +0.449 / -0.251
+      s3141 -1.706 / -1.352 / -0.198 -> -0.558 / +0.283 / -0.083
+      s3142 +0.205 / +0.198 / -0.489 -> -0.958 / -0.133 / -0.088
+      s3145 -0.265 / +0.289 / -0.135 -> -0.340 / +0.509 / -0.077
+      s3144 +0.23 / +0.207 / -0.634 -> did not route (peak 72%)
+  * The scaler and the HDMI OSD's four buffer M10K (s2702's X76 Y7-10):
+      s3270 did not route (peak 68%); s3271 -1.001 / +0.508 / -0.228.
+  HDMI improves on every seed (the OSD's h_cnt -> osd_en and the scaler's
+  output side are what is left); clk_sys moves to whichever block is
+  squeezed, and with the framework out of the box geometry packs denser in
+  it (17-18% of its logic, against 14% in the clean fits) and two of seven
+  seeds do not route. Pinning the framework is not the fix. Pinning
+  geometry's own blocks is not either: it is ~15,000 cells with 8 M10K and
+  3 DSP, too few anchors to steer it.
+*Also tried:* M10K_ROOM 0 on 2C (R1008's clip stack and texture-parameter
+table back in MLAB): 4,201 / 4,203 LABs needed of 4,191 -- does not place.
+
+*THE LINK:* every failing geometry path starts at one register of the shared
+pool -- fp_add's result into the projector's syy / s_f and the clipper's tu /
+tv, fp_mul's into the transform -- read by all four clients (transform,
+focus, clipper, projector). One register read by everyone pulls everyone to
+wherever it sits.
+
+*THE CHANGE* (m2_geometry RES_CP, Model2.sv sets it from C2: 2C and 2B; 0 on
+2A and Model 2, whose netlists are unchanged): fp_add / fp_mul NCP copies of
+the result register, each taking the same next value as `result` on the
+same edge, (* dont_merge *) so synthesis keeps them apart; m2_fp_pool RES_CP
+gives client i add_res_c[i] / mul_res_c[i]. ~200 registers, no cycle, no
+output changed. (Not Quartus's global register duplication: R194 measured
+that and it costs nothing here because it does nothing.) Quartus 17 needs
+the copies in an explicit generate / genvar block (for (genvar ...) failed
+analyze_file).
+*PROOF:* yosys equiv old against new fp_add and fp_mul (every output; the
+copy port dropped) PROVEN; each copy equal to `result` on every cycle by
+induction (sat -tempinduct) for both units; m2_fp_pool old against new at
+RES_CP 0 and 1, PROVEN. Geometry miter (sim/miter/geo.sh, the 2C form
+-GM10K_ROOM=1 -GRES_CP=1): tb_m2_geometry 595,138 cycles and _mipz 913,234,
+walks r5701, r6601 (2A geometry) and w1000, w4000, w9000, w3910 (main):
+5.6 M cycles, 0 with an output differing, pool hashes equal to R1025's.
+Planted (the clipper's add copy, one bit): _mipz 79,034 cycles differ,
+w1000 2,049. lint_top clean in the 2A and 2C forms.
+*MEASURED* (unpinned, against rel-2c-slack2 at the same seed; clk_sys /
+clk_mem / HDMI):
+  s3260 -0.295 / +0.632 / -1.090 -> +0.122 / +0.359 / -0.469
+  s3142 +0.205 / +0.198 / -0.489 -> +0.425 / +0.261 / -0.070
+  s3144 +0.23 / +0.207 / -0.634  -> +0.101 / +0.402 / -0.653
+  s3141 -1.706 / -1.352 / -0.198 -> -0.804 / +0.135 / -0.243
+  s3145 -0.265 / +0.289 / -0.135 -> -2.854 / -1.969 / -0.517
+  41,430-41,513 ALM (99%). Geometry is on no failing path at any of the
+  five seeds; the peak congestion left geometry's box (s3260: 59% at
+  X22-X32). s3141's clk_sys is the DDR3 payload reading the HPS port; the
+  remaining failure everywhere else is HDMI, inside ascal. On 2B (model2b
+  7fdd6b11, s3412): clk_sys -5.277 -> -0.782, clk_mem -3.746 -> -0.244,
+  HDMI -0.644 -> -0.011, every hold positive -- the first 2B fit good
+  enough for a board test (R1031).
+*OPEN:* HDMI on 2C (the scaler's output side); a seed sweep (s3500-s3511
+queued).
