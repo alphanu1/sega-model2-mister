@@ -326,6 +326,8 @@ task automatic q_acc(inout acc_t a [2], inout logic [1:0] n, input acc_kind_t ki
                      input logic [31:0] pmv);
     acc_t e;
     e.valid = 1'b1; e.kind = kind; e.addr = addr; e.wdata = wdata;
+    // R1042 (this project): a PM-bus address is 24 bits (MAME's program space masks it), as MAME's
+    if (kind == A_PM_RD32 || kind == A_PM_WR32 || kind == A_PM_RD48 || kind == A_PM_WR48) e.addr = {8'h0, addr[23:0]};
     e.dest_kind = dkind; e.dest = dest;
     e.post_mod = pmod; e.post_pm = ppm; e.post_i = pi; e.post_m = pmv;
     a[n[0]] = e;
@@ -785,10 +787,21 @@ task automatic execute_op(inout st_t s, input logic [47:0] op, inout acc_t a [2]
         pmd_r = op[26:23]; dmd_r = op[36:33];
         pv = s.r[pmd_r]; dv = s.r[dmd_r];
         if (comp != 0) apply_compute(s, sc);
+        if (MAN_ORD) begin
+            // R1042 (this project): the manual's order -- the DM access first, the PM access in
+            // the next cycle when both are in one block (p. 5-8); a register both load gets the
+            // DM bus's word (p. 11-42's precedence), so the PM load's write is dropped
+            if (op[44]) q_acc(a, n, A_DM_WR, s.i1[dmi], {16'h0, dv}, 2'd3, 8'h0, 1'b1, 1'b0, dmi, s.m1[dmm]);
+            else        q_acc(a, n, A_DM_RD, s.i1[dmi], 48'h0, 2'd0, {4'h0, dmd_r}, 1'b1, 1'b0, dmi, s.m1[dmm]);
+            if (op[37]) q_acc(a, n, A_PM_WR32, s.i2[pmi], {pv, 16'h0}, 2'd3, 8'h0, 1'b1, 1'b1, pmi, s.m2[pmm]);
+            else        q_acc(a, n, A_PM_RD32, s.i2[pmi], 48'h0, (!op[44] && dmd_r == pmd_r) ? 2'd3 : 2'd0,
+                              {4'h0, pmd_r}, 1'b1, 1'b1, pmi, s.m2[pmm]);
+        end else begin
         if (op[37]) q_acc(a, n, A_PM_WR32, s.i2[pmi], {pv, 16'h0}, 2'd3, 8'h0, 1'b1, 1'b1, pmi, s.m2[pmm]);
         else        q_acc(a, n, A_PM_RD32, s.i2[pmi], 48'h0, 2'd0, {4'h0, pmd_r}, 1'b1, 1'b1, pmi, s.m2[pmm]);
         if (op[44]) q_acc(a, n, A_DM_WR, s.i1[dmi], {16'h0, dv}, 2'd3, 8'h0, 1'b1, 1'b0, dmi, s.m1[dmm]);
         else        q_acc(a, n, A_DM_RD, s.i1[dmi], 48'h0, 2'd0, {4'h0, dmd_r}, 1'b1, 1'b0, dmi, s.m1[dmm]);
+        end
     end
     // compute
     9'b000000010, 9'b000000011: if (if_cond(s, cond) && comp != 0) apply_compute(s, sc);

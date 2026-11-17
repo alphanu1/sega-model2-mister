@@ -9,6 +9,10 @@ module tb_m2b_sharc #(
     parameter bit RF_ONES = 1'b0,
     parameter bit PXIM = 1'b1,         // R1038: m2b_sharc PXIM (0 = the 2B build's: no PX / IMASK)
     parameter bit SKLR = 1'b1,         // R1039: m2b_sharc SKLR (0 = the 2B build's: no STKY / CURLCNTR / LCNTR reads)
+    // R1042: m2b_sharc PMB1_MAME (1: a block-1 PM-bus word as MAME's pm_r<1>, to compare with a
+    // MAME capture; 0: the manual's, as v1); v1's MAN_ORD (1: type 1's DM access first, the core's)
+    parameter bit PMB1_MAME = 1'b0,
+    parameter bit MAN_ORD = 1'b1,
     // R1031: the core's on-chip block-1 words and the DM cache's shape (m2b_xbus / m2b_dmc); a
     // small DM_AW sends Dead or Alive's data words through the cache and the C++ SDRAM model
     parameter int DM_AW = 13,
@@ -84,7 +88,7 @@ module tb_m2b_sharc #(
 );
     logic        ext_req, ext_we, ext_ack;
     logic [31:0] ext_addr, ext_wdata, ext_rdata;
-    m2b_sharc #(.MAME_RND(MAME_RND), .DM_AW(DM_AW), .BENCH(1'b1), .RF_ONES(RF_ONES), .PXIM(PXIM), .SKLR(SKLR)) u (
+    m2b_sharc #(.MAME_RND(MAME_RND), .DM_AW(DM_AW), .BENCH(1'b1), .RF_ONES(RF_ONES), .PXIM(PXIM), .SKLR(SKLR), .PMB1_MAME(PMB1_MAME)) u (
         .clk, .reset, .run(run && !o_busy), .host_iop_we, .host_iop_reg, .host_iop_data, .xdma_we, .xdma_phase, .xdma_data,
         .fin_empty, .fin_data, .fin_pop, .fout_full, .fout_push, .fout_data, .flag_out(),
         .ext_req, .ext_we, .ext_addr, .ext_wdata, .ext_ack, .ext_rdata,
@@ -114,7 +118,7 @@ module tb_m2b_sharc #(
     assign o_xpc = u.x_pc;
 
     generate if (LOCK) begin : g_v1
-        sharc_core #(.PM_WORDS(8192), .DM_WORDS(32768), .MAN(!MAME_RND)) v (
+        sharc_core #(.PM_WORDS(8192), .DM_WORDS(32768), .MAN(!MAME_RND), .MAN_ORD(MAN_ORD)) v (
             .clk, .reset, .ce(v_ce), .boot(1'b0), .flag_in(v_flag),
             .ext_req(v_ext_req), .ext_we(v_ext_we), .ext_addr(v_ext_addr), .ext_wdata(v_ext_wdata),
             .ext_ack(v_ext_ack), .ext_rdata(v_ext_rdata),

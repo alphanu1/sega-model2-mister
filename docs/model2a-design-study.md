@@ -53431,3 +53431,223 @@ each form computes (sm2-builds/mame-m2b, read only); the 80960KB Programmer's Re
 microcode is assumed to round correctly (the PRM gives no error bound); MAME's pow - 1 is what the
 attract has been checked against, so a table entry that a one-ulp 1 + exprl moves (none found)
 would show only on the board.
+
+**R1042 -- THE 2B SHARC DOES PM-BUS DATA AND TYPE-1 DUAL MOVES: FIGHTING VIPERS AND SONIC
+CHAMPIONSHIP REPLAY BIT-EXACT AGAINST MAME (500 M WORDS EACH: EVERY OUT WORD, THE FIRST 20 M
+WORDS' STATE HASHES), DEAD OR ALIVE UNCHANGED TO THE CLOCK (1,264,270,732). quartus_map, THE
+WHOLE 2B BUILD: 39,382 -> 39,483 ALM NEEDED (+101), 57,733 -> 57,883 ALUTs (+150), +43
+REGISTERS, 0 BLOCK BITS, 0 DSP, 0 MLAB. TWO PLACES THE MANUAL AND MAME DIFFER: WHICH BLOCK-1
+WORD A 32-BIT PM-BUS ACCESS NAMES (THE BUILD TAKES THE MANUAL's; SONIC CHAMPIONSHIP's ROUTINE AT
+0x20926 SEES IT, NOT REACHED IN THE REPLAYED WORDS), AND THE ORDER OF A TYPE-1 WORD's TWO
+ACCESSES (THE MANUAL's, DM FIRST; NO REPLAYED WORD SEES IT).** Branch 2b-sharc (off model2b
+8f90de51), 2026-11-17. Simulation and quartus_map only: no fit, no board.
+
+(Section: §10, after R1038. Authority, as the brief set it: the ADSP-2106x SHARC User's Manual
+rev 2.1 (82-000795-03), ManualsLib's copy as R1032 read it, wherever it speaks -- p. 5-3 (5.1.1
+Dual Data Accesses), 5-4 (5.1.2), 5-8 (5.1.5 Memory Block Accesses & Conflicts), 5-20 / 5-21 /
+5-23 (5.3: word size, columns, mixing), 4-12 (4.4.1), 11-42 (11.7.5 Two Writes To Register
+File), E-24 (SYSCON), A-16 (Compute / dreg<->DM / dreg<->PM); MAME 0.289 (sharcops.hxx,
+sharcinternal.ipp, sharc.cpp) for the programs' behaviour; Hornet's v1 (our copy, sim/sharc/ref)
+as the lockstep partner. Model 1 has no SHARC. Nothing lifted from tools/hornet-ref: sharc2's
+second E1 clock for a type-1 word was read, not copied.)
+
+*What was believed (R1038):* fvipers / schamp / sfight need only PM-bus data (54.1 M / 64.0 M
+words over 200 s, 46 / 50 PCs) and type-1 dual moves (19.7 M / 21.7 M, 21 PCs each): 230-320 ALM
+by parts, 0-2 MLAB; block 0 on the PM RAM's port B ("a TDP M10K at the same count"), block 1 on
+the DM RAM, a type-1 word's second store-register read a second D clock or a second MLAB bank.
+
+*WHAT THE MANUAL SAYS, AND WHERE MAME DIFFERS:*
+  1. WHICH WORD A 32-BIT PM-BUS ACCESS NAMES. p. 5-20: "Read/writes using normal word
+     addressing are either 32-bit words or 48-bit words, depending on how the block of memory is
+     configured in the SYSCON register"; p. 5-21: "When an address is applied to memory for a
+     read or write, the particular columns selected depends upon the word width of the access";
+     p. E-24: IMDW0 / IMDW1 (bits 8 / 9) "0=32-bit data, 1=40-bit data", and "After reset the
+     SYSCON register is initialized to 0x0000 0010." Nothing on the 2B board writes SYSCON: the
+     host's IOP-window writes in DOA's capture are DMAC6 / II6 / IM6 / 0x42 only, and no word of
+     fvipers' or schamp's program stores to IOP 0x00. So by the manual a PM-bus data access is the
+     32-bit word at that address -- the word a DM-bus access to the same address names. MAME
+     (pm_read32 / pm_write32) takes bits 47:16 of the 48-bit word at that address, through
+     pm_r<N>'s column layout.
+       * BLOCK 1 -- they differ, and the program says which it means. schamp's routine at 0x20926
+         (1,862 calls in R1024's 200 s): R2 = 0x00032314, R3 = 0x20 x R6 (a DO of R3 = R3 + R6),
+         I8 = R2 + R3, then CALL 0x201ea -- the type-1 matrix words (R4 = DM(I7, M1), R0 = PM(I8,
+         M9) ...). Its records are 0x20 words written over the DM bus at 0x32300-0x375ff (R1024's
+         dm.bin); I8 = 0x32314 + 0x20k is record k's words 0x14-0x1f. By the manual those are
+         what PM(I8, M9) reads; by MAME's layout (48-bit word w of the block at 32-bit word
+         (w & 0xfff) + (w >> 13) x 0x3000 + ((w >> 12) & 1) x 0x2000) 0x32314 + 0x20k reads 32-bit
+         word 0x33314 + 0x20k (record k + 0x80) for block offsets 0x2000-0x2fff and 0x35014 + ...
+         (+0x2000) for 0x3000-0x32ff -- another record's same field, in written memory, so MAME's
+         game runs, with (if the manual is right) another object's matrix there. fvipers' block-1
+         PM reads (0x3036e-0x30379) are in the block's first 4 K words, where the two agree.
+         THE BUILD TAKES THE MANUAL's (m2b_sharc PMB1_MAME 0, the default); PMB1_MAME 1 gives
+         MAME's, for benches comparing with a capture. Hornet's v1 had the manual's already (its
+         block 1 is its DM array).
+       * BLOCK 0 -- the core keeps MAME's (bits 47:16 of the 48-bit word, bits 15:0 kept on a
+         store). The literal 32-bit reading with the column layout MAME models (and Figure 5.9a
+         as far as its text survived extraction: 48-bit groups "H, M, L", 32-bit "H, L, H",
+         both from 0x20000) puts 32-bit word 0x21f38 in columns 2-3 -- column 2 being bits 15:0
+         of instruction 0x20f38 -- and both games execute 0x20f00-0x20f27 while storing
+         PM(0x21F18) / PM(0x21F38) = R15 throughout (schamp 16.05 M times at 0x2014e alone): a
+         program that runs on silicon cannot be doing that, so that reading is not what the chip
+         does with these programs. MAME's placement is observably the same as any that does not
+         collide: no 2B image makes a DM-bus access to block 0, and the uploads end at 0x210fe
+         (fvipers) / 0x21359 (schamp), so the data words start 0 either way. Not settled (the figure's geometry did
+         not survive the text extraction).
+  2. THE ORDER OF TYPE 1's TWO ACCESSES. p. 5-8: "A conflict occurs, however, when two core
+     accesses to a single block are attempted in the same cycle ... the DM bus access completes
+     first and the PM bus access completes in the following (extra) cycle." (p. 5-3: one
+     instruction's two words from one block cost an extra cycle.) MAME's handler does the PM move
+     with its post-modify, then the DM move. They differ only when both moves name one word of
+     block 1: a DM read with a PM write of it (the manual's DM read gets the old word, MAME's the
+     new), a DM write with a PM read (the manual's PM read gets the new word, MAME's the old),
+     two writes (the manual leaves the PM's word, MAME the DM's). THE CORE DOES THE MANUAL's, and
+     so does v1 with its new MAN_ORD. The game replays (MAME's order on MAME's side, 0 differ in
+     500 M words each) show neither game makes such a word in those words.
+  3. TWO WRITES TO ONE REGISTER. p. 11-42: "If two writes to the same register file location take
+     place in the same cycle, only the write with higher precedence actually occurs ... from
+     highest to lowest, the precedence is: Data memory (DM bus) or universal register; Program
+     memory (PM bus); ALU; Multiplier; Shifter." MAME agrees (COMPUTE, then the PM load, then the
+     DM load: the last write wins). The core: both loads over the compute's results (R1027's
+     load-wins rule, now for either load), the DM load over the PM load, the ALU's Ra over the
+     multiplier's Rm as before.
+  4. READS BEFORE WRITES: MAME saves parallel_pm_dreg / parallel_dm_dreg before COMPUTE; the core
+     reads both store registers before any of the word's writes (the PM store's in X's first pass,
+     before its end writes the DM load). A-16 adds only "Pre-modify offset addressing is not
+     supported" and the DAG restrictions' pointer (p. 4-12: they concern DAG register transfers;
+     type 1 moves only data registers).
+
+*BUILT (rtl/sharc/m2b_sharc.sv; nothing else in rtl/ changed):*
+  * PM-BUS DATA, every form with a g bit (010x, 0110, 1000, 000100 direct, 101 indirect, 1001
+    immediate store -- the games use 000100, 010x and one 0110): the address is DAG2's -- I8-15 /
+    M8-15 read on DAG1's MLAB copies with the opcode's g bit as the read address's bit 3 (those
+    copies already hold all sixteen; no new MLAB) -- and 24 bits wide (MAME's program space).
+    pm_kind: block 0 in the on-chip PM -> A_PM, the PM RAM's port B (lanes 2:1 = bits 47:16; lane
+    0 kept on a store); block 1 (0x28000-0x3ffff) -> A_DM / A_EXT at the DM-bus address of the
+    same word (pm_b1: the address itself, or MAME's layout with PMB1_MAME); anything else (PM past
+    the on-chip 8 K, external PM) an unsupported word (U_MEM); PX over the PM bus (MAME's 48-bit
+    transfer) unsupported (U_PM). Port B reads in every D clock (D's address) and every X clock
+    (the word's), so its output holds the word through X; a host write has the port and D waits
+    for it (one in X is not arbitrated: uploads are made with the SHARC halted, R1031). A PM-bus
+    access costs what its DM form costs.
+  * TYPE 1: decoded as a compute with a DM move (I0-7 + M0-7, post-modify; the DM store's register
+    on port E in D; the DM load to op[36:33]) plus XC.acc2 -- the PM move's kind, address (DAG2's I
+    from the copy D already reads for indirect jumps) and load register; XC.ind_t (that copy's
+    I + M, the indirect target's adder) widened to 32 bits is its post-modify. X's first pass
+    (x_done) is the DM move; then (x_p2go) XC's access fields reload from acc2 and the same
+    machinery runs the PM move (x_p2: the load on the one R write port, the post-modify on the one
+    I write port, the store's data the register port E read during the first pass, rf_ra[4] =
+    x_op[26:23] in X); the word ends at x_fin. The second pass waits one clock before a DM-RAM read
+    or an external request (x_p2w: the read issued; m2b_xbus takes a new request only after the
+    last falls). The compute, the landing, the sequencer and any ureg effect happen once, at
+    x_fin; an IOP write moved to its own pass's end. The DAG test covers both I's L; a bad PM
+    address makes the word unsupported (mbad). No new MLAB: the "second store-register read" is a
+    port-E read in X, not a second bank or a second D clock.
+  * FOUND ON THE WAY -- QUARTUS 17.0 INFERS A TRUE DUAL PORT ONLY FROM ITS TEMPLATE. The first form
+    (a read enable on port B) mapped lanes 1 and 2 as two simple-dual-port copies each: block bits
+    4,031,404 -> 4,293,548 (+32 M10K), 39,484 ALM. A four-form test project: port B with no enable
+    (read in every clock it does not write, the written word on a write), port A with or without
+    its enable -> "True Dual Port"; port B with an enable, or its read under an enable -> two
+    copies. Recoded so: pm1 / pm2 "True Dual Port" in the RAM summary, the block bits as before.
+  * The bench side: tb_m2b_sharc serves buffer-RAM / data-ROM reads from the capture's 'R' records
+    in order, checking each read's address against MAME's (the i960 writes the buffer RAM, which
+    a capture does not hold; DOA reads neither); PMB1_MAME / MAN_ORD parameters; v1 (sim only,
+    THIRD_PARTY.md) gained MAN_ORD and two fixes against MAME found by the new random programs --
+    a PM-bus address taken as 24 bits (v1 took 32: I + 0xfffff8 left the space) and a PM-bus store
+    into block 1 writing the register's word (v1 wrote bits 31:0 of the 48-bit bus word, the
+    register's low half shifted up).
+
+*VERIFICATION (numbers; every bench under 25 minutes):*
+  * FIGHTING VIPERS AND SONIC CHAMPIONSHIP AGAINST MAME. New captures by R1027's method
+    (sim/sharc/m2b_census.sh on R1027's build of MAME 0.289, R924_CAP and M2B_TRACE = 20 M, play
+    "dig", coin at 30 s, 120 s each; 758 MB / 914 MB of events; ROM-derived, outside the repository
+    in sm2-builds/2b-sharc-cap): fvipers 694,313,430 work words, schamp 765,069,859. The core at
+    MAME_RND 1, PXIM 0 (the build's), PMB1_MAME 1, the first 500 M words each (~78 s of game):
+      fvipers  500,000,000 words, 1,277,257,981 clocks; 4,371,719 out words, 0 differ; trace 20 M
+               words, 0 differ; 9,835,940 buffer / ROM reads, all at MAME's addresses; 18.2 min
+      schamp   500,000,000 words, 1,279,552,477 clocks; 7,424,012 out words, 0 differ; trace 20 M,
+               0 differ; 7,479,724 buffer / ROM reads at MAME's addresses; 6,316,461 DM-page
+               accesses through the cache (896,896 fills); 18.0 min
+    No unsupported word in either. WITH THE MANUAL's BLOCK 1 (PMB1_MAME 0, the build's) and v1 in
+    lockstep, 250 M words each: fvipers and schamp 0 out words differ from MAME's, trace 0 differ,
+    lockstep 0 differ (v1's out words also all MAME's). THE ROUTINE WHERE THE TWO DIFFER (schamp
+    0x20926) DID NOT RUN in the 500 M words (0 executions in the profile; type-1 0x201ea ran
+    250,387 times from other callers): the capture holds no evidence either way, and the build's
+    difference from MAME there is the manual's reading, by the argument above, unmeasured.
+  * DEAD OR ALIVE, all 150 s (R1027's capture, the 400-430 M trace, PXIM 0, MAME rounding):
+    501,777,265 words, 1,264,270,732 clocks (R1029 / R1031 / R1038's exactly), 18,541,146 out
+    words 0 differ, the 30 M-word trace 0 differ; 18.3 min.
+  * RANDOM PROGRAMS, NEW SET (m2b_randprog.py M2B_RP_PM=1; without it R1029's programs byte for
+    byte, checked on seeds 1-3): every g form; type 1 in all four read / write mixes, its two
+    loads to one register, a load to the compute's result register (single and multifunction),
+    a store of the register the other move loads, and both moves at one word of block 1 (the word
+    before copies I(dmi) into I(8 + pmi)) in all four mixes; block 0 data at 0x21d00-0x21eff, past
+    the program. 12 programs (seeds 1-6, and 101-106 with M2B_RP_SEQ) x 1 M words in lockstep with
+    v1 (MAN_ORD 1): 0 differ in MAME's rounding and 0 in the manual's (core MAME_RND 0, v1 MAN);
+    executed over the 12 M words (m2b_pmcov.py, new): 431,282 type-1 words (108,760 / 112,381 /
+    104,749 / 105,392 DM r-PM r / r-w / w-r / w-w; both loads one register 35,145; a load to a
+    compute result 109,269; a store of the other's load 73,494; one word of block 1 27,576 /
+    27,893 / 24,266 / 27,049 by mix; multifunction 86,041), and 350,332 one-move PM-bus words
+    (54-62 K of each form). At DM_AW 8 (block 1 past 256 words through the DM cache, latency
+    1-200), seeds 1-3 x 1 M: 0 differ, 111-132 K page accesses a run.
+  * THE OLD RANDOM SETS: R1029's seeds 1-4 and M2B_RP_SEQ 1-4 x 1 M, lockstep: 0 differ; seed 1's
+    2,519,019 clocks (R1038's).
+  * UNSUPPORTED WORDS (m2b_unsupprog.py): its type-1 case replaced by four still not done -- PM
+    data at 0x22000, in external PM (I8 = 0x400000), a type-1 PM move at 0x22000 (reason 3 each),
+    PX over the PM bus (reason 9) -- all flagged at 0x20084 with their reasons, as are the six
+    old cases and (at PXIM 0) R1038's four.
+  * PLANTED FAULTS (core_faults.py, 14 new, "R1042:"): the random lockstep (4 seeds x 500 K)
+    catches 14 of 14 -- PM access on DAG1's I or M, the PM read's halves swapped, a store's high
+    half from its low, a block-1 PM word in the PM RAM, no second pass, its post-modify dropped,
+    its store reading the DM move's register or its own after the DM load, the PM load over the DM
+    load, the PM load losing to the multiplier, the DM load losing to the ALU, the second DM read
+    not issued or not waited for. fvipers' replay (20 M words, on the first port-B form) catches 9:
+    it misses DAG1's M (its M8-15 and M0-7 agree there) and the four precedence / order faults
+    (fvipers makes no such word). R1027-R1031's 37 faults were not re-run; their patterns all
+    still apply (checked).
+  * THE CLASSIFIER (sim/sharc/m2b_sclass.py, restated for the two forms): R1024's executed words of
+    fvipers and schamp, nothing flagged; the uploaded images of fvipers / schamp / sfight, only the
+    vector table's 112 RTIs (never executed; R1038's "rti"); lastbrnx as R1038.
+  * LINT: Verilator -Wall on the module, no new class; make lint_top for 2B (M2_2C M2_2B), 2C and
+    2A clean; make lint_idx (2B) lists R1031's three SHARC selects, nothing new; quartus_map
+    --analyze_file on sharc_fp_pkg / m2b_sharc_pkg / m2b_sharc, 0 errors; both maps complete.
+
+*AREA (quartus_map 17.0, the whole 2B build, model2b 8f90de51 and this branch):*
+                         ALMs needed   ALUTs    registers  memory ALUTs  block bits   DSP
+    model2b 8f90de51     39,382        57,733   43,234     2,487         4,031,404    101
+    R1042                39,483        57,883   43,277     2,487         4,031,404    101
+                         (+101)        (+150)   (+43)      (0)           (0)          (0)
+  By entity: m2b_sharc 5,950 -> 6,078 ALUTs (its own logic 3,384 -> 3,517), 1,685 -> 1,728
+  registers; m2_copro 6,510 -> 6,635. R1038's 230-320 ALM estimate: under it (the TDP port and the
+  reuse of X's access machinery for the second pass). model2b's map is 124 over R1038's 2b-area
+  figure (39,258): R1037's games. Fit not run: R1038's s3412 (41,531 fitted of 41,910 at a 39,512
+  map) puts this near ~41,500 (99.0%), with the usual caveat that a fit grows over its map.
+
+*SPEED (clk_sys a word, the replay bench, MAME rounding):* DOA 2.5196, unchanged to the clock;
+fvipers 2.5545 and schamp 2.5591 over 500 M words. Type-1 words 4.01 / 4.04 clk on average
+(8,202,883 / 8,509,782 of them: DM r-PM r 3.55, r-w 4.33, w-r 5.31 -- the second pass, plus a
+float landing's scoreboard waits; no game makes a DM-RAM read in the second pass), one-move
+PM-bus words 2.0-2.8 (direct 2.00, 010x 2.54 / 2.60), as their DM forms. R1024's ~3.0 ceiling
+holds for both games' averages.
+
+*DIFFERENT FROM THE BRIEF, PLAINLY:* (0) block 1's PM-bus words follow the manual, not MAME (the
+brief's rule) -- so the build differs from MAME in schamp's 0x20926 routine, which no replayed word
+reached; PMB1_MAME = 1 is MAME's, one parameter in m2_copro if Ben wants it; (1) a type-1 word's
+order is the manual's, DM first; (2) the second store-register read is neither a second D clock
+nor an MLAB bank: port E is free in X, and the first pass's end has not yet written anything;
+(3) all six PM-bus forms are done, not only the three the games use; (4) v1 was changed (MAN_ORD,
+and two of its bugs against MAME fixed); (5) the captures are 120 s with the coin at 30 s and the
+replays the first 500 M words (the 25-minute rule; the brief's 150 s DOA replay is DOA's own),
+the state-hash trace the first 20 M words; (6) R1027-R1031's 37 planted faults were not re-run
+(patterns checked); (7) the "before" map is model2b 8f90de51 (39,382), not R1038's 2b-area 39,258;
+(8) sim/sharc/bench/build.sh's Verilator cap 8 G -> 4 G (the brief's).
+
+*NOT SETTLED:*
+  * Block 1: the manual against MAME, by the program's arithmetic, not measured -- no capture
+    here reaches schamp's 0x20926; a later capture (R1024's session ran it 1,862 times in 200 s)
+    or the board (a wrong matrix would show as a misplaced object) settles it.
+  * Block 0: the figure that would place the 32-bit columns did not survive extraction.
+  * Timing: nothing fitted. New paths: the g bit into DAG1's MLAB read address (one LUT before
+    R1029's DM address path), the PM RAM's port-B address (D: the DAG2 copy or the data address;
+    X: a 13-bit select), x_done into XC's reload.
+  * A host write to PM while a word is in X is not arbitrated.
+  * Sonic the Fighters was classified (its image is schamp's), not replayed.

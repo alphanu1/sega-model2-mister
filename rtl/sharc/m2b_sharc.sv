@@ -39,10 +39,26 @@
 //
 // THE FIRST CUT (R1027) does Dead or Alive's set and the rest of R1024's list that is cheap.
 // Every word it does not do sets `unsup` (sticky, with the word's pc / opcode / a reason) and
-// runs as a NOP: type-1 dual moves, PM-bus data, short words, block-0 data, the fixed
-// multiplier and MR, dual add / subtract, alternate register files (a MODE1 swap bit), circular
-// buffers (L != 0 on a post-modify), interrupts and IDLE, RTI, the status stack, SHARC-side DMA,
-// RND32 = 0 on a float op, PCSTKP written, unknown compute / IOP registers.
+// runs as a NOP: short words, block-0 data over the DM bus, the fixed multiplier and MR, dual
+// add / subtract, alternate register files (a MODE1 swap bit), circular buffers (L != 0 on a
+// post-modify), interrupts and IDLE, RTI, the status stack, SHARC-side DMA, RND32 = 0 on a float
+// op, PCSTKP written, unknown compute / IOP registers; PX over the PM bus and a PM-bus address
+// outside the on-chip PM and block 1.
+//
+// R1042: PM-BUS DATA AND TYPE-1 DUAL MOVES (Fighting Vipers, Sonic Championship / the Fighters).
+// A PM-bus access uses DAG2 (I8-15 / M8-15, read on DAG1's copies with the g bit as the address's
+// bit 3), a 24-bit address: block 0's words are bits 47:16 of the 48-bit word there, on the PM
+// RAM's port B (lane 0 kept on a store: MAME's pm_write32); block 1's go to the DM RAM / page as
+// the DM-bus access to the same address would (the manual's normal-word addressing, SYSCON IMDW1
+// = 0; PMB1_MAME = 1 gives MAME's pm_r<1> word instead, for the benches). A type-1 word's compute
+// always runs; its DM move is X's first pass (the access fields as any DM access), its PM move a
+// second pass on the same machinery (XC.acc2: the kind, address, load register; the store's
+// register read on port E during the first pass, before any of the word's writes; the post-modify
+// I + M from D's DAG2 copies). DM first: the manual's order (p. 5-8, the DM access completes first
+// when both are in one block) -- MAME's is PM first. Loads over compute results, and the DM load
+// over the PM load to one register (p. 11-42's precedence: DM, PM, ALU, multiplier, shifter).
+// The second pass waits one clock before a DM-RAM read or an external request; nothing else
+// changes for the other forms.
 //
 // Units: Hornet's sharc_fadd / sharc_fmul (rtl/sharc, copied with R1027's rounding) and his
 // sharc_fp_pkg functions. MAME_RND = 1 gives MAME's float arithmetic bit for bit (the lockstep
@@ -67,7 +83,12 @@ module m2b_sharc #(
     // is not built and the two counters leave the ureg read port -- no Model 2B program reads
     // any of the three (every set's uploaded program, read whole: the study's R1039). Writes are
     // done as before; the counters still run the loops.
-    parameter bit SKLR     = 1'b1
+    parameter bit SKLR     = 1'b1,
+    // R1042: which block-1 word a 32-bit PM-bus access names. 0 = the manual's (and Hornet's v1):
+    // the 32-bit word at that address, the word a DM-bus access to it names (SYSCON IMDW1 = 0,
+    // its reset value); 1 = MAME's pm_r<1>, the upper 32 bits of the 48-bit word there in its
+    // column layout (benches comparing with a MAME capture)
+    parameter bit PMB1_MAME = 1'b0
 ) (
     input  logic        clk,
     input  logic        reset,              // MAME's device_reset (host boot)
@@ -124,22 +145,34 @@ localparam logic [3:0] U_FORM = 4'd1, U_COMP = 4'd2, U_MEM = 4'd3, U_DAG = 4'd4,
 
 // ================================================================== memories
 
-// PM: three 16-bit lanes; A = fetch, B = the host's upload
+// PM: three 16-bit lanes; port A = the fetch; port B = the host's upload, the clear and (R1042)
+// PM-bus data: a 32-bit word is bits 47:16 of the 48-bit word at its address (MAME's
+// pm_read32 / pm_write32; bits 15:0 kept on a write), so lanes 1 and 2 read and write on port B
+// and lane 0 only takes the upload -- the same M10K count (TDP at 8 K x 1 is what SDP is)
 (* ramstyle = "M10K" *) logic [15:0] pm0 [PMW];
 (* ramstyle = "M10K" *) logic [15:0] pm1 [PMW];
 (* ramstyle = "M10K" *) logic [15:0] pm2 [PMW];
 logic [PM_AW-1:0] pm_ra, pm_wa;
 logic             pm_re;
 logic [2:0]       pm_we;
-logic [15:0]      pm_wd;
+logic [15:0]      pm_wd;                    // the host's / the clear's 16 bits (lane 0, and 1 / 2)
+logic [31:0]      pm_wd2;                   // lanes 2:1's data (a PM-bus store's word, or {pm_wd, pm_wd})
 logic [47:0]      pm_q;
+logic [31:0]      pmb_q;                    // port B's read: bits 47:16 of the word at pm_wa last clock
 always_ff @(posedge clk) if (pm_re) begin
     pm_q[15:0] <= pm0[pm_ra]; pm_q[31:16] <= pm1[pm_ra]; pm_q[47:32] <= pm2[pm_ra];
 end
+// (port B as Quartus 17's true-dual-port template: a read in every clock it does not write, the
+// written data on a write, no enable -- with a read enable Quartus 17.0 makes a second copy of the
+// lane instead, +32 M10K, measured R1042)
+always_ff @(posedge clk) if (pm_we[0]) pm0[pm_wa] <= pm_wd;
 always_ff @(posedge clk) begin
-    if (pm_we[0]) pm0[pm_wa] <= pm_wd;
-    if (pm_we[1]) pm1[pm_wa] <= pm_wd;
-    if (pm_we[2]) pm2[pm_wa] <= pm_wd;
+    if (pm_we[1]) begin pm1[pm_wa] <= pm_wd2[15:0]; pmb_q[15:0] <= pm_wd2[15:0]; end
+    else pmb_q[15:0] <= pm1[pm_wa];
+end
+always_ff @(posedge clk) begin
+    if (pm_we[2]) begin pm2[pm_wa] <= pm_wd2[31:16]; pmb_q[31:16] <= pm_wd2[31:16]; end
+    else pmb_q[31:16] <= pm2[pm_wa];
 end
 
 // DM block 1: two 16-bit lanes, one port
@@ -183,7 +216,7 @@ logic [31:0]      rf_pd;
 // writes are at X's end (a post-modify, a ureg write); a word that writes two different I
 // registers (a load to one, a post-modify of another) defers the ureg write one clock (ir_pw),
 // and D waits that clock, so D never reads a word in the clock it is written.
-logic [2:0]  i1_ra, m1_ra;
+logic [3:0]  i1_ra, m1_ra;                 // (R1042: bit 3 the PM bus's, DAG2's I8-15 / M8-15)
 logic [3:0]  i2_ra, m2_ra;
 logic [31:0] i1_rd, i2_rd, iu_rd, m1_rd, m2_rd, mu_rd;
 logic        ir_we, mr_we;
@@ -261,7 +294,8 @@ logic [CLR_AW:0] clr_n;
 logic            clr_on;
 
 // D -> X
-localparam logic [2:0] A_NONE = 3'd0, A_DM = 3'd1, A_FIN = 3'd2, A_FOUT = 3'd3, A_IOP = 3'd4, A_EXT = 3'd5;
+localparam logic [2:0] A_NONE = 3'd0, A_DM = 3'd1, A_FIN = 3'd2, A_FOUT = 3'd3, A_IOP = 3'd4, A_EXT = 3'd5,
+                       A_PM = 3'd6;         // R1042: block 0, the PM RAM's port B (PM-bus data)
 typedef struct packed {
     logic        unsup;
     logic [3:0]  why;                       // the opcode's reason (a DAG's / a data address's below)
@@ -306,7 +340,16 @@ typedef struct packed {
     // the sequencer's decisions, made in D, taken by X's first clock (R1029)
     logic        le, done;                  // a loop end; it pops
     logic        cok;                       // the word's condition
-    logic [23:0] ind_t;                     // I + M of DAG2 (an indirect branch's target)
+    logic [31:0] ind_t;                     // I + M of DAG2 (an indirect branch's target; R1042: a
+                                            // type-1 word's PM post-modify, all 32 bits)
+    // R1042: a type-1 word's second access, its PM-bus one (X's second pass; the first is its DM
+    // access, in the fields above -- the manual's order, the DM bus first)
+    logic        dual;
+    logic [2:0]  acc2;
+    logic        acc2_wr;
+    logic [23:0] acc2_a;
+    logic        ld2_r;                     // a load to R[ld2_dst] (not where the DM load is: DM wins)
+    logic [3:0]  ld2_dst;
     logic        b6;                        // the PC-relative offset is the 6-bit one (op[32:27])
     logic [5:0]  sqc;                       // the sequencing form, one-hot: jump, call, indirect /
                                             // relative jump-call, IF-JUMP-ELSE, RTS, DO (R1029)
@@ -419,6 +462,9 @@ logic [4:0]  d_ru;                          // the R file's read ports (rf_ra) t
 logic        d_need_astat;                  // D reads ASTAT / STKY (from the opcode and S alone)
 logic [DM_AW-1:0] d_dm_a;
 logic        d_dm_rd;
+logic        d_pmb;                         // R1042: the word may read the PM RAM's port B
+logic [PM_AW-1:0] d_pb_a;                  // ... at this word
+logic        pm_host;                       // the host writes PM this clock
 logic [2:0]  d_acc_ref;                     // benches: the access kind as R1028 cleared it
 logic        d_dag_ref, d_mbad_ref;         // ... and its DAG and address-map tests
 logic [31:0] d_urall_ref;                   // benches: the ureg source as R1028 read it
@@ -445,6 +491,29 @@ function automatic logic [3:0] dm_kind(input logic [31:0] a, input logic wr);
     if (z24 && ((!a[24] && a[23:22] == 2'd3) || (a[24] && a[23:22] == 2'd0))) return {!wr, A_FOUT};  // -0x13FFFFF
     if (z24 && a[24] && a[23:21] >= 3'd2 && a[23:21] <= 3'd6) return {1'b0, A_EXT};          // 0x1400000-0x1DFFFFF
     return {1'b1, A_NONE};                  // block 0 data, short words, unmapped
+endfunction
+
+// R1042: a PM-bus data access, its 24-bit address (DAG2's; MAME's program space is 24 bits):
+// block 0 in the on-chip PM -> the PM RAM's port B; block 1 (0x28000-0x3FFFF) -> the DM RAM or
+// the page, as a DM-bus access to the same word; anything else (PM past the on-chip words,
+// external PM) unsupported. {unsupported, kind}
+function automatic logic [3:0] pm_kind(input logic [23:0] a);
+    if (a[23:PM_AW] == 24'(32'h20000 >> PM_AW)) return {1'b0, A_PM};
+    if (a[23:18] == 6'h0 && a[17:15] >= 3'd5) return {1'b0, (a[14:DM_AW] == '0) ? A_DM : A_EXT};
+    return {1'b1, A_NONE};
+endfunction
+
+// R1042: the DM-bus address a block-1 PM-bus access goes to. The manual's: the same address
+// (normal-word addressing, SYSCON IMDW1 = 0). MAME's (PMB1_MAME, benches): pm_r<1>'s column
+// layout -- 48-bit word w of the block at 32-bit word (w & 0xfff) + (w >> 13) * 0x3000 +
+// ((w >> 12) & 1) * 0x2000, its upper 32 bits being that whole word; past 0x4fff unmapped
+function automatic logic [24:0] pm_b1(input logic [23:0] a);
+    logic [14:0] w;
+    logic [2:0]  sl;
+    if (!PMB1_MAME || !(a[23:18] == 6'h0 && a[17:15] >= 3'd5)) return {1'b0, a};
+    w = a[14:0]; sl = w[14:12];
+    return {sl > 3'd4, 24'h28000 + 24'({3'b000, w[11:0]} + (sl[2:1] == 2'd0 ? 15'h0 : sl[2:1] == 2'd1 ? 15'h3000 : 15'h6000) +
+                                        (sl[0] ? 15'h2000 : 15'h0))};
 endfunction
 
 // D (R1029): the word's decisions -- the loop end's, the condition -- and everything X needs:
@@ -479,9 +548,20 @@ always_comb begin
     logic [4:0]  cnd;                           // the word's condition
     logic [2:0]  akind;
     logic [3:0]  why0;
+    logic        pmb;                           // R1042: the word's one access is on the PM bus (DAG2)
+    logic        t1;                            // R1042: type 1 (compute, DM and PM moves)
+    logic        bad2;                          // ... its PM access's address unsupported
+    logic [2:0]  akind2;
+    logic [24:0] pa2;                           // ... its DM-bus address (pm_b1)
+    logic        pxpm;                          // a PX transfer over the PM bus (48-bit in MAME: not done)
 
     op = pm_q;
     x = '0;
+    t1 = op[47:45] == 3'b001;
+    pmb = (op[47:45] == 3'b010 && op[32]) || (op[47:44] == 4'b0110 && op[40]) || (op[47:44] == 4'b1000 && op[32]) ||
+          (op[47:42] == 6'b000100 && op[41]) || (op[47:45] == 3'b101 && op[44]) || (op[47:44] == 4'b1001 && op[37]);
+    pxpm = pmb && (((op[47:45] == 3'b010) ? op[30:23] : op[39:32]) == 8'hdb) &&
+           (op[47:45] == 3'b010 || op[47:42] == 6'b000100 || op[47:45] == 3'b101);
     d_ru = 5'h0;
     d_need_astat = 1'b0;
     mem_f = 1'b0; mem_on = 1'b0; mem_a = 32'h0; mem_wr = 1'b0;
@@ -566,12 +646,21 @@ always_comb begin
     // the data fields the handler's enables use, from the opcode whatever the condition (R1029:
     // off D's path from it; R1028 set them with the enables, which alone are cleared otherwise)
     x.ld_ureg = (op[47:45] == 3'b010) ? op[30:23] : op[39:32];
-    x.ld_dst = op[26:23];
+    x.ld_dst = t1 ? op[36:33] : op[26:23];
     x.uw_reg = (op[47:44] == 4'b0111) ? op[30:23] : op[39:32];
     x.pmod_i = (op[47:40] == 8'b00000100) ? {op[38], op[32:30]} : (op[47:39] == 9'b000101100) ? {op[38], op[34:32]}
-                                                                 : {1'b0, op[43:41]};
+                                                                 : {pmb, op[43:41]};
     casez (op[47:39])
-    9'b001??????: begin x.unsup = 1'b1; x.why = U_FORM; end   // type 1: dual moves
+    9'b001??????: begin                                         // type 1: compute, dreg <-> DM, dreg <-> PM
+        // (R1042) no condition: the compute always; the DM move is this word's access (X's first
+        // pass), the PM move its second (XC.acc2: X's second pass). Post-modify only.
+        comp_on = 1'b1; comp_f = 1'b1;
+        mem_f = 1'b1; mem_on = 1'b1; mem_wr = op[44];
+        pm_sel = 2'd0;
+        if (op[44]) begin wd_sel = 2'd0; d_ru[4] = 1'b1; end
+        else x.ld_r = 1'b1;
+        x.pmod = 1'b1;
+    end
     9'b00000001?: begin                                         // compute
         comp_on = cok; comp_f = 1'b1;
     end
@@ -580,7 +669,7 @@ always_comb begin
         logic [7:0] u;
         g = op[32]; dd = op[31]; u = op[30:23]; post = op[44];
         comp_f = 1'b1;
-        mem_f = !g; mem_wr = dd;
+        mem_f = 1'b1; mem_wr = dd;              // (R1042: g, the PM bus, as the DM's with DAG2)
         pm_sel = 2'd0;
         if (dd) begin
             wd_sel = 2'd1;
@@ -589,17 +678,15 @@ always_comb begin
         end
         if (cok) begin
             comp_on = 1'b1;
-            if (g) begin x.unsup = 1'b1; x.why = U_PM; end
-            else begin
-                mem_on = 1'b1;
-                if (dd) begin
-                    if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
-                end else begin
-                    x.ld_u = 1'b1;
-                    if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
-                end
-                if (post) begin x.pmod = 1'b1; end
+            mem_on = 1'b1;
+            if (dd) begin
+                if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
+            end else begin
+                x.ld_u = 1'b1;
+                if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
             end
+            if (pxpm) begin x.unsup = 1'b1; x.why = U_PM; end
+            if (post) begin x.pmod = 1'b1; end
         end
     end
     9'b0110?????: begin                                         // compute, dreg <-> DM|PM, imm modify
@@ -607,17 +694,14 @@ always_comb begin
         logic [3:0] dr;
         upd = op[38]; g = op[40]; dd = op[39]; dr = op[26:23];
         comp_f = 1'b1;
-        mem_f = !g; mem_wr = dd;
+        mem_f = 1'b1; mem_wr = dd;
         pm_sel = 2'd1;
         if (dd) begin wd_sel = 2'd0; d_ru[4] = 1'b1; end
         if (cok) begin
             comp_on = 1'b1;
-            if (g) begin x.unsup = 1'b1; x.why = U_PM; end
-            else begin
-                mem_on = 1'b1;
-                if (!dd) begin x.ld_r = 1'b1; end
-                if (upd) begin x.pmod = 1'b1; end
-            end
+            mem_on = 1'b1;
+            if (!dd) begin x.ld_r = 1'b1; end
+            if (upd) begin x.pmod = 1'b1; end
         end
     end
     9'b0111?????: begin                                         // compute, ureg <-> ureg
@@ -637,7 +721,7 @@ always_comb begin
         logic g, dd;
         logic [3:0] dr;
         g = op[32]; dd = op[31]; dr = op[26:23];
-        mem_f = !g; mem_wr = dd;
+        mem_f = 1'b1; mem_wr = dd;
         pm_sel = 2'd0;
         d_ru[0] = 1'b1; d_ru[2] = 1'b1;
         if (dd) begin wd_sel = 2'd0; d_ru[4] = 1'b1; end
@@ -645,12 +729,9 @@ always_comb begin
         if (cok) begin
             x.sh_on = 1'b1;
             if (!shift_ok(op[21:16])) begin x.unsup = 1'b1; x.why = U_COMP; end
-            if (g) begin x.unsup = 1'b1; x.why = U_PM; end
-            else begin
-                mem_on = 1'b1;
-                if (!dd) begin x.ld_r = 1'b1; end
-                x.pmod = 1'b1;
-            end
+            mem_on = 1'b1;
+            if (!dd) begin x.ld_r = 1'b1; end
+            x.pmod = 1'b1;
         end
     end
     9'b00000010?: begin                                         // immediate shift
@@ -730,43 +811,36 @@ always_comb begin
         logic [7:0] u;
         u = op[39:32];
         mem_wr = op[40];
-        if (op[41]) begin x.unsup = 1'b1; x.why = U_PM; end
-        else begin
-            mem_f = 1'b1; mem_on = 1'b1;
-            if (op[40]) begin
-                wd_sel = 2'd1; d_ru[4] |= u[7:4] == 4'h0;
-                if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
-                if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
-            end else begin
-                x.ld_u = 1'b1;
-                if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
-            end
+        mem_f = 1'b1; mem_on = 1'b1;            // (R1042: op[41], the PM bus, as the DM's)
+        if (op[40]) begin
+            wd_sel = 2'd1; d_ru[4] |= u[7:4] == 4'h0;
+            if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
+            if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
+        end else begin
+            x.ld_u = 1'b1;
+            if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
         end
+        if (pxpm) begin x.unsup = 1'b1; x.why = U_PM; end
     end
     9'b101??????: begin                                         // ureg <-> DM|PM, indirect
         logic [7:0] u;
         u = op[39:32];
         mem_wr = op[40];
-        if (op[44]) begin x.unsup = 1'b1; x.why = U_PM; end
-        else begin
-            mem_f = 1'b1; mem_on = 1'b1;
-            if (op[40]) begin
-                wd_sel = 2'd1; d_ru[4] |= u[7:4] == 4'h0;
-                if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
-                if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
-            end else begin
-                x.ld_u = 1'b1;
-                if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
-            end
+        mem_f = 1'b1; mem_on = 1'b1;            // (R1042: op[44], the PM bus, with DAG2)
+        if (op[40]) begin
+            wd_sel = 2'd1; d_ru[4] |= u[7:4] == 4'h0;
+            if (u[7:4] == 4'h7 && (u[3:0] == 4'hc || u[3:0] == 4'he)) d_need_astat = 1'b1;
+            if (!ureg_ok(u, 1'b0)) begin x.unsup = 1'b1; x.why = U_UREG; end
+        end else begin
+            x.ld_u = 1'b1;
+            if (!ureg_ok(u, 1'b1)) begin x.unsup = 1'b1; x.why = U_UREG; end
         end
+        if (pxpm) begin x.unsup = 1'b1; x.why = U_PM; end
     end
     9'b1001?????: begin                                         // immediate data -> DM|PM
         mem_wr = 1'b1; wd_sel = 2'd2; pm_sel = 2'd0;
-        if (op[37]) begin x.unsup = 1'b1; x.why = U_PM; end
-        else begin
-            mem_f = 1'b1; mem_on = 1'b1;
-            x.pmod = 1'b1;
-        end
+        mem_f = 1'b1; mem_on = 1'b1;            // (R1042: op[37], the PM bus, with DAG2)
+        x.pmod = 1'b1;
     end
     9'b00010100?: begin                                         // system register bit operation
         // the register's value read in D (the ureg port), but ASTAT's and STKY's in X (a landing
@@ -922,42 +996,79 @@ always_comb begin
         lw = op[47:44] == 4'b0111 && op[30:27] == 4'h0;                     // a ureg move to R
         kv = lr || lu || lw;
         k = lr ? op[26:23] : op[26:23];                                     // (the three put it at op[26:23])
-        if (kv && k == x.rm) x.rm_we = 1'b0;
-        if (kv && k == x.ra) x.ra_we = 1'b0;
-        if (x.fl_mul && x.rm_we && x.ra_we && x.rm == x.ra && !x.fl_comp) x.rm_we = 1'b0;  // Ra written after Rm
-        // the fixed / shifter result lands after X (R1029), after the word's load: a load or ureg
-        // move to its register wins (MAME's order), as for a float result
-        x.rn_we = !(kv && k == x.rn);
+        // R1042: type 1's loads, the DM bus's (op[36:33]) and the PM bus's (op[26:23]): the
+        // manual's precedence (p. 11-42: DM, PM, ALU, multiplier, shifter) -- both over the compute
+        begin
+            logic t1d, t1p;
+            t1d = t1 && !op[44]; t1p = t1 && !op[37];
+            if (kv && k == x.rm) x.rm_we = 1'b0;
+            if (kv && k == x.ra) x.ra_we = 1'b0;
+            if (t1p && op[26:23] == x.rm) x.rm_we = 1'b0;
+            if (t1p && op[26:23] == x.ra) x.ra_we = 1'b0;
+            if (t1d && op[36:33] == x.rm) x.rm_we = 1'b0;
+            if (t1d && op[36:33] == x.ra) x.ra_we = 1'b0;
+            if (x.fl_mul && x.rm_we && x.ra_we && x.rm == x.ra && !x.fl_comp) x.rm_we = 1'b0;  // Ra written after Rm
+            // the fixed / shifter result lands after X (R1029), after the word's load: a load or ureg
+            // move to its register wins (MAME's order), as for a float result
+            x.rn_we = !(kv && k == x.rn);
+            if ((t1p && op[26:23] == x.rn) || (t1d && op[36:33] == x.rn)) x.rn_we = 1'b0;
+            // the PM load, unless the DM load is to the same register (DM's precedence)
+            x.ld2_r = t1p && !(t1d && op[36:33] == op[26:23]);
+            x.ld2_dst = op[26:23];
+        end
     end
 
     // the memory access: its kind from the address (the one late decision of D)
-    {bad, akind} = dm_kind(mem_a, mem_wr);
+    // (R1042: a PM-bus access by the PM space's map, its block-1 words at the DM-bus address of
+    // the same word)
+    begin
+        logic [24:0] pa;
+        pa = pm_b1(mem_a[23:0]);
+        if (pmb) begin
+            {bad, akind} = pm_kind(pa[23:0]);
+            bad = bad || pa[24];
+            x.acc_addr = (akind == A_PM) ? {8'h0, mem_a[23:0]} : {8'h0, pa[23:0]};
+        end else begin
+            {bad, akind} = dm_kind(mem_a, mem_wr);
+            x.acc_addr = mem_a;
+        end
+    end
+    // R1042: type 1's PM access (DAG2: I8-15 by op[32:30], M8-15 by op[29:27], DAG2's copies)
+    pa2 = pm_b1(i2_rd[23:0]);
+    {bad2, akind2} = pm_kind(pa2[23:0]);
+    bad2 = t1 && (bad2 || pa2[24]);
+    x.dual = t1;
+    x.acc2 = akind2;
+    x.acc2_wr = op[37];
+    x.acc2_a = (akind2 == A_PM) ? i2_rd[23:0] : pa2[23:0];
     // (mem_on and x.pmod are the condition's, through the handler; the same tests from the
     // opcode with the condition last below, R1029)
     begin
         logic exm;
         exm = (op[47:46] == 2'b11) ? !cok :
               (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
-        mbad = exm && mem_f && bad;
+        mbad = (exm && mem_f && bad) || bad2;
     end
-    d_mbad_ref = mem_on && bad;                 // (R1028's, for the benches' check)
+    d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
     x.acc_wr = mem_wr;
-    x.acc_addr = mem_a;
     // circular buffers (L != 0) are not done
     // (the index from the opcode alone, R1029: x.pmod_i is the same where x.pmod is set)
     begin
         logic [3:0] pmi;
         pmi = (op[47:40] == 8'b00000100) ? {op[38], op[32:30]} : (op[47:39] == 9'b000101100) ? {op[38], op[34:32]}
-                                                                : {1'b0, op[43:41]};
-        // the forms that post-modify where they run (the 11 form's where its condition fails)
-        dag_f = lnz[pmi] && ((op[47:45] == 3'b010 && op[44] && !op[32]) || (op[47:44] == 4'b0110 && op[38] && !op[40]) ||
-                             (op[47:44] == 4'b1000 && !op[32]) || op[47:46] == 2'b11 || (op[47:44] == 4'b1001 && !op[37]) ||
-                             op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100);
+                                                                : {pmb, op[43:41]};
+        // the forms that post-modify where they run (the 11 form's where its condition fails;
+        // R1042: the PM bus's too, on DAG2's L, and type 1's two)
+        dag_f = (lnz[pmi] && ((op[47:45] == 3'b010 && op[44]) || (op[47:44] == 4'b0110 && op[38]) ||
+                              op[47:44] == 4'b1000 || op[47:46] == 2'b11 || op[47:44] == 4'b1001 ||
+                              op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100 || t1)) ||
+                (t1 && lnz[{1'b1, op[32:30]}]);
         // x.pmod && lnz[pmi], the condition last: every post-modifying form's modify runs on its
-        // condition (the 11 form's on its failing; the modify-by-immediate and immediate-store forms' always)
-        dag = dag_f && ((op[47:46] == 2'b11) ? !cok : (op[47:39] == 9'b000101100 || op[47:44] == 4'b1001) ? 1'b1 : cok);
+        // condition (the 11 form's on its failing; the modify-by-immediate, immediate-store and
+        // type-1 forms' always)
+        dag = dag_f && ((op[47:46] == 2'b11) ? !cok : (op[47:39] == 9'b000101100 || op[47:44] == 4'b1001 || t1) ? 1'b1 : cok);
     end
-    d_dag_ref = x.pmod && lnz[x.pmod_i];        // (R1028's, for the benches' check)
+    d_dag_ref = (x.pmod && lnz[x.pmod_i]) || (t1 && lnz[{1'b1, op[32:30]}]);   // (R1028's, for the benches' check)
     x.pmod_b = (op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100) ? i2_rd : i1_rd;
 
     // an unsupported word does nothing but move the queue (and is flagged): X's first clock
@@ -978,7 +1089,7 @@ always_comb begin
         ub = (op[47:45] == 3'b010) ? !ureg_ok(u, !op[31]) :
              (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(u, !op[40]) : 1'b0;
         rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || (comp_f && comp != 23'h0 && cbad) ||
-             (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f;
+             (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm || bad2;
         ex = (op[47:46] == 2'b11) ? !cok :
              (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
         x.acc = (ex && mem_f && !bad && !rz) ? akind : A_NONE;
@@ -1000,21 +1111,20 @@ always_comb begin
         // the compute field's condition: true (cp1), false (cp0)
         cp1 = 1'b0; cp0 = 1'b0;
         casez (op[47:39])
-        9'b001??????: begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
+        9'b001??????: begin cp1 = 1'b1; cp0 = 1'b1; end            // (R1042: type 1, no condition)
         9'b00000001?: cp1 = 1'b1;
         9'b0100?????, 9'b0101?????: begin
             u = op[30:23]; cp1 = 1'b1;
-            if (op[32]) begin u1 = 1'b1; w1 = U_PM; end
-            else if (!ureg_ok(u, !op[31])) begin u1 = 1'b1; w1 = U_UREG; end
+            if (!ureg_ok(u, !op[31])) begin u1 = 1'b1; w1 = U_UREG; end
+            if (pxpm) begin u1 = 1'b1; w1 = U_PM; end
         end
-        9'b0110?????: begin cp1 = 1'b1; if (op[40]) begin u1 = 1'b1; w1 = U_PM; end end
+        9'b0110?????: cp1 = 1'b1;
         9'b0111?????: begin
             cp1 = 1'b1;
             if (!ureg_ok(op[43:36], 1'b0) || !ureg_ok(op[30:23], 1'b1)) begin u1 = 1'b1; w1 = U_UREG; end
         end
         9'b1000?????: begin
             if (!shift_ok(op[21:16])) begin u1 = 1'b1; w1 = U_COMP; end
-            if (op[32]) begin u1 = 1'b1; w1 = U_PM; end
         end
         9'b00000010?: if (!shift_ok(op[21:16])) begin u1 = 1'b1; w1 = U_COMP; end
         9'b00000100?: cp1 = 1'b1;
@@ -1044,14 +1154,14 @@ always_comb begin
         end
         9'b00001111?: if (!ureg_ok(op[39:32], 1'b1)) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
         9'b000100???: begin
-            if (op[41]) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
-            else if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+            if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+            if (pxpm) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
         end
         9'b101??????: begin
-            if (op[44]) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
-            else if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+            if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+            if (pxpm) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
         end
-        9'b1001?????: if (op[37]) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
+        9'b1001?????: ;
         9'b00010100?: if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || !ureg_ok({4'h7, op[35:32]}, 1'b0) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin
             u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
         9'b000101100: ;
@@ -1080,7 +1190,7 @@ always_comb begin
     x.sqc[3] = op[47:46] == 2'b11;
     x.sqc[4] = op[47:41] == 7'b0000101;
     x.sqc[5] = op[47:41] == 7'b0000110 || op[47:41] == 7'b0000111 && !op[40];
-    x.ind_t = 24'(i2_rd + m2_rd);
+    x.ind_t = i2_rd + m2_rd;
 
     dx = x;
     dx.unsup = d_unsup_x; dx.why = d_why_x;     // (R1029: the same as x.unsup / x.why, benches check)
@@ -1091,10 +1201,13 @@ always_comb begin
     if (comp[22]) begin d_fax = rf_rd[2]; d_fay = rf_rd[3]; end
     else begin d_fax = rf_rd[0]; d_fay = rf_rd[1]; end
     d_stx = x.acc_wd;
-    d_dm_a = mem_a[DM_AW-1:0];
+    d_dm_a = x.acc_addr[DM_AW-1:0];         // (R1042: a PM-bus block-1 word's, PMB1_MAME's remap)
     // the DM read is presented for any read form, whatever its condition or address (it has no
     // effect but dm_q, which only an A_DM access reads)
     d_dm_rd = mem_f && !mem_wr;
+    // R1042: the PM RAM's port B read: type 1's PM move, else the word's one access
+    d_pmb = pmb || t1;
+    d_pb_a = t1 ? i2_rd[PM_AW-1:0] : mem_a[PM_AW-1:0];
 end
 
 // the word in X is unsupported: D's reasons, or its data address outside the map (R1029: the
@@ -1289,7 +1402,7 @@ always_comb begin
     case (tsel)
     2'd0: tgt = op[23:0];
     2'd1: tgt = rel_t;
-    2'd2: tgt = XC.ind_t;
+    2'd2: tgt = XC.ind_t[23:0];
     default: tgt = rts_v;
     endcase
     if (br && !br_db) begin
@@ -1327,7 +1440,12 @@ always_comb begin
     // a store's dreg (op[26:23]) or the ureg D names (ur_sel)
     if (o[47:45] == 3'b010 || o[47:44] == 4'b0110 || o[47:44] == 4'b1000 || o[47:46] == 2'b11) rf_ra[4] = o[26:23];
     else if (o[47:44] == 4'b0111) rf_ra[4] = o[39:36];
+    else if (o[47:45] == 3'b001) rf_ra[4] = o[36:33];          // R1042: type 1's DM store
     else rf_ra[4] = o[35:32];
+    // R1042: in X, type 1's PM store register, read before its first pass ends (the word's loads
+    // are written at a pass's end, so this is the register as the word found it: MAME's
+    // parallel_pm_dreg, the manual's read before write) and kept for the second pass
+    if (st == ST_X) rf_ra[4] = x_op[26:23];
 end
 
 // the scoreboard: a read port at a register written this clock (the landing's Rm / Ra, a
@@ -1345,12 +1463,15 @@ always_comb begin
     d_hit_ref = hr;
     // a landing that writes two R registers: D does not finish in it (the second write is next clock)
     d_wait = hit || (ld_on && d_need_astat) || ir_pw || (ld_on && ld_mwe && ld_awe) || us_pw || (d_urim && !ur_ok);
+    if (pm_host && d_pmb) d_wait = 1'b1;    // (R1042: the host's PM write has port B this clock)
 end
 assign d_go = st == ST_D && !d_wait;
 
 // ================================================================== X
 
 logic        x_done;
+logic        x_fin, x_p2go;                 // R1042: the word's end; type 1's second pass begins
+logic        x_p2, x_p2w;                   // ... in the second pass; its first clock waits
 logic [31:0] x_ld;                          // the loaded word
 logic        x_ldv;
 xres_t       x_fix, x_sh;
@@ -1376,7 +1497,7 @@ assign x_sh = {xu_sr, xu_sw, xu_sa, 32'h0};
 // end the landing's Rm / Ra, at the landing its deferred Ra -- so a read port's test is a lookup)
 always_ff @(posedge clk) begin
     if (reset) rbusy <= 16'h0;
-    else if (st == ST_X && x_done) rbusy <=
+    else if (st == ST_X && x_fin) rbusy <=
         ((XC.fl_on && XC.fl_mul && XC.rm_we && !x_uns) ? 16'h1 << XC.rm : 16'h0) |
         ((((XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && XC.ra_we) ||
            (((XC.fix_on && x_fix.we) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns) ? 16'h1 << (XC.fl_on ? XC.ra : XC.rn) : 16'h0);
@@ -1387,7 +1508,7 @@ end
 // the float units: operands from D; the multiplier's stage 1 at X's end, the adder's stages 1
 // and 2a at every X clock (R1029: an add's X is two clocks); results in the landing clock
 logic fl_en, fm_restart;
-assign fl_en = st == ST_X && x_done;
+assign fl_en = st == ST_X && x_fin;
 sharc_fadd #(.MAME_RND(MAME_RND)) u_fadd (
     .clk, .en(st == ST_X), .x(fa_x), .y(fa_y), .sub(XC.fl_sub), .avg(XC.fl_avg), .trunc(XC.trunc),
     .r(fa_r), .astat(fa_a), .stky(fa_s), .nan_in(), .inf_both());
@@ -1406,6 +1527,7 @@ always_comb begin
     fout_data = XC.acc_wd;
     case (XC.acc)
     A_DM:  begin x_ld = dm_q; x_ldv = !XC.acc_wr; end
+    A_PM:  begin x_ld = pmb_q; x_ldv = !XC.acc_wr; end    // (R1042: read on port B in D)
     A_FIN: begin
         x_ext_wait = fin_empty;
         x_ld = fin_data; x_ldv = 1'b1;
@@ -1429,10 +1551,14 @@ end
 logic [1:0] x_cnt, x_need;
 assign x_need = (XC.fl_on && XC.fl_misc) ? xu_mx :
                 (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0;
-assign x_done = st == ST_X && x_cnt >= x_need && !x_ext_wait && !(XC.fl_on && XC.fl_mul && fm_busy);
+assign x_done = st == ST_X && x_cnt >= x_need && !x_ext_wait && !(XC.fl_on && XC.fl_mul && fm_busy) && !x_p2w;
+// R1042: x_done ends an access (a pass); x_fin the word. A type-1 word's first pass (its DM move)
+// is followed by a second (its PM move, XC.acc2), unless the word is unsupported
+assign x_p2go = x_done && XC.dual && !x_p2 && !x_uns;
+assign x_fin = x_done && !x_p2go;
 // (R1031: not while MAME's slow multiply holds X -- an acknowledge in those clocks would clear
 // x_ext_on without finishing the word; MAME_RND 0 has no slow path)
-assign ext_req = st == ST_X && XC.acc == A_EXT && x_ext_on && x_cnt >= x_need && !(XC.fl_on && XC.fl_mul && fm_busy);
+assign ext_req = st == ST_X && XC.acc == A_EXT && x_ext_on && x_cnt >= x_need && !(XC.fl_on && XC.fl_mul && fm_busy) && !x_p2w;
 assign ext_we = XC.acc_wr;
 assign ext_addr = XC.acc_addr;
 assign ext_wdata = XC.acc_wd;
@@ -1487,7 +1613,7 @@ end endgenerate
 // I / M: D's read addresses from the opcode alone
 always_comb begin
     logic [47:0] o;
-    logic        modf, modi;
+    logic        modf, modi, pg;
     o = pm_q;
     modf = o[47:40] == 8'b00000100;            // compute, modify
     modi = o[47:39] == 9'b000101100;           // modify by an immediate
@@ -1496,9 +1622,13 @@ always_comb begin
     // (gated by D: an address straight from pm_q is taken into the MLAB as its read-address
     // register, which leaves the M10K without its output register -- PM's upper lane was then
     // built in flip-flops, R1029)
-    i1_ra = (st == ST_D) ? o[43:41] : 3'd0;
+    // R1042: a PM-bus access (one move, not type 1's) reads DAG2's I / M on these copies: the
+    // opcode's g bit is the address's bit 3
+    pg = (o[47:45] == 3'b010 && o[32]) || (o[47:44] == 4'b0110 && o[40]) || (o[47:44] == 4'b1000 && o[32]) ||
+         (o[47:45] == 3'b101 && o[44]) || (o[47:44] == 4'b1001 && o[37]);
+    i1_ra = (st == ST_D) ? {pg, o[43:41]} : 4'd0;
     i2_ra = {(modf || modi) ? o[38] : 1'b1, modi ? o[34:32] : o[32:30]};
-    m1_ra = (st == ST_D) ? o[40:38] : 3'd0;
+    m1_ra = (st == ST_D) ? {pg, o[40:38]} : 4'd0;
     m2_ra = {modf ? o[38] : 1'b1, o[29:27]};
 end
 
@@ -1513,6 +1643,8 @@ always_comb begin
     // post-modify after the load (a load to the same I is modified: MAME's apply_load then post_modify)
     base = (xi_u && iu == XC.pmod_i) ? xu_v : XC.pmod_b;
     ir_we = 1'b0; ir_wa = XC.pmod_i; ir_wd = base + XC.pmod_m;
+    // R1042: type 1's second pass post-modifies DAG2's I (op[32:30]) by D's I + M (XC.ind_t)
+    if (x_p2) begin ir_wa = {1'b1, x_op[32:30]}; ir_wd = XC.ind_t; end
     if (ir_pw) begin ir_we = 1'b1; ir_wa = ir_pa; ir_wd = ir_pd; end
     else if (xdone && XC.pmod && !x_uns) ir_we = 1'b1;
     else if (xdone && xi_u) begin ir_we = 1'b1; ir_wa = iu; ir_wd = xu_v; end
@@ -1526,7 +1658,7 @@ always_ff @(posedge clk) begin
     ir_pa <= {xu_r[3], xu_r[2:0]};
     ir_pd <= xu_v;
 end
-m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra({1'b0, i1_ra}), .rd(i1_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i1_ra), .rd(i1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i2 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i2_ra), .rd(i2_rd));
 // the ureg port's I / M copies read at last clock's ureg field (R1029: a register, off the
 // opcode's path); a word reading I or M through it waits in D until that is its own (ur_ok: the
@@ -1538,7 +1670,7 @@ always_ff @(posedge clk) begin
     ur_ok <= st == ST_D || (st == ST_X && !x_first);
 end
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_iu (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(ur_aq), .rd(iu_rd));
-m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra({1'b0, m1_ra}), .rd(m1_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m1_ra), .rd(m1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m2 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m2_ra), .rd(m2_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_mu (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(ur_aq), .rd(mu_rd));
 
@@ -1679,8 +1811,17 @@ always_ff @(posedge clk) begin
         ST_X: begin
             if (x_ext_on && ext_ack && XC.acc == A_EXT) x_ext_on <= 1'b0;
             // an unsupported word (D's, or X's own below): one capture, of the word in X
-            if (x_first && !x_done) S <= s_x1;      // (X's end below otherwise)
-            if (x_done) begin
+            if (x_first && !x_fin) S <= s_x1;       // (X's end below otherwise)
+            // R1042: type 1's second pass, its PM move: the access fields from XC.acc2, the store
+            // data the register read in the first (port E at x_op[26:23]); a DM-RAM read or an
+            // external access first waits a clock (x_p2w: the read issued; the request dropped once)
+            if (x_p2go) begin
+                XC.acc <= XC.acc2; XC.acc_wr <= XC.acc2_wr; XC.acc_addr <= {8'h0, XC.acc2_a};
+                XC.acc_wd <= rf_rd[4];
+                XC.ld_r <= XC.ld2_r; XC.ld_dst <= XC.ld2_dst;
+                x_ext_on <= 1'b1;
+            end
+            if (x_fin) begin
                 logic [31:0] a, k, uv;
                 logic        uw;
                 logic [7:0]  ur;
@@ -1734,17 +1875,6 @@ always_ff @(posedge clk) begin
                     default: ;
                     endcase
                 end
-                // the accesses' writes
-                if (XC.acc == A_IOP && XC.acc_wr) begin
-                    case (XC.acc_addr[7:0])
-                    8'h00: syscon <= XC.acc_wd;
-                    8'h02, 8'h08, 8'h09, 8'h0a, 8'h0b, 8'h0c, 8'h0d, 8'h0e, 8'h0f, 8'h14, 8'h17, 8'h20: ;
-                    8'h40: ii6 <= XC.acc_wd;
-                    8'h41: im6 <= XC.acc_wd;
-                    8'h1c: dmac6 <= XC.acc_wd;
-                    default: ;
-                    endcase
-                end
                 // the sequencer and STKY's stack bits
                 S <= sq;
                 if (BENCH) S_dbg <= sq;                 // the benches' view: S after this word
@@ -1770,6 +1900,17 @@ always_ff @(posedge clk) begin
                 else begin misc_r <= x_sh.r; misc_a <= x_sh.astat; misc_s <= 32'h0; end
                 if (BENCH) begin dbg_pc <= x_pc; dbg_op <= x_op; end   // the benches' only
                 st <= ST_D;
+            end
+            // the accesses' writes: an IOP register (R1042: at its pass's end, type 1's DM move)
+            if (x_done && XC.acc == A_IOP && XC.acc_wr) begin
+                case (XC.acc_addr[7:0])
+                8'h00: syscon <= XC.acc_wd;
+                8'h02, 8'h08, 8'h09, 8'h0a, 8'h0b, 8'h0c, 8'h0d, 8'h0e, 8'h0f, 8'h14, 8'h17, 8'h20: ;
+                8'h40: ii6 <= XC.acc_wd;
+                8'h41: im6 <= XC.acc_wd;
+                8'h1c: dmac6 <= XC.acc_wd;
+                default: ;
+                endcase
             end
         end
         default: st <= ST_HALT;
@@ -1831,6 +1972,19 @@ always_comb begin
     pm_we = 3'b000;
     if (en && dmac6[7:6] == 2'd2 && idx < 32'h20000 + PMW) pm_we = 3'b001 << w;
     else if (clr_on && clr_n < PMW) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
+    // R1042: port B's other users, after the host's: a PM-bus store at its pass's end (lanes 2:1,
+    // bits 47:16; lane 0 kept, as MAME's mask); the word a PM-bus access names, read in every D
+    // clock (D's address) and every X clock (the word's own: its one access's, or type 1's second),
+    // so pmb_q holds the word through X. The host's write has the port: D waits (d_wait); a host
+    // write while a word is in X is not arbitrated (the upload is made with the SHARC halted)
+    pm_host = pm_we != 3'b000;
+    pm_wd2 = {pm_wd, pm_wd};
+    if (!pm_host) begin
+        if (st == ST_X && x_done && XC.acc == A_PM && XC.acc_wr) begin
+            pm_we = 3'b110; pm_wa = XC.acc_addr[PM_AW-1:0]; pm_wd2 = XC.acc_wd;
+        end else if (st == ST_D) pm_wa = d_pb_a;
+        else if (st == ST_X) pm_wa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
+    end
 end
 
 // DM: the read address in D, the write at X's end
@@ -1841,11 +1995,22 @@ always_comb begin
     if (clr_on) begin dm_en = clr_n < DMW; dm_we = 1'b1; dm_wd = 32'h0; end
     else if (st == ST_D && d_dm_rd) dm_en = 1'b1;                          // every D clock (the last stays)
     else if (st == ST_X && x_done && XC.acc == A_DM && XC.acc_wr) begin dm_en = 1'b1; dm_we = 1'b1; end
+    else if (st == ST_X && x_p2w && XC.acc == A_DM) dm_en = 1'b1;          // (R1042: type 1's second read)
 end
 
 // X's first clock; the PM bound found in it, held for X's later clocks
 always_ff @(posedge clk) begin
     x_first <= d_go;
+    // R1042: type 1's second pass; its first clock waits for a DM-RAM read or before an
+    // external request (m2b_xbus takes a new request after the last one falls)
+    if (reset || st != ST_X) begin x_p2 <= 1'b0; x_p2w <= 1'b0; end
+    else begin
+        x_p2w <= 1'b0;
+        if (x_p2go) begin
+            x_p2 <= 1'b1;
+            x_p2w <= (XC.acc2 == A_DM && !XC.acc2_wr) || XC.acc2 == A_EXT;
+        end
+    end
     if (st != ST_X) x_cnt <= 2'd0;                      // (R1029: in every D clock, not on d_go)
     else if (x_cnt != 2'd3) x_cnt <= x_cnt + 2'd1;
     if (x_first) x_pmbad <= x1_pmbad;
