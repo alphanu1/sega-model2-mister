@@ -823,7 +823,12 @@ wire [10:0] ps2_key;
 // zero-extends a byte, and the ROM lands in SDRAM as garbage — which read back
 // from the board as an address-independent 000000FF and cost two hardware builds
 // chasing the SDRAM capture phase, which was never involved.
-hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+// R1039: CONF_STR_BRAM on a 2B build -- the framework's own option, the string
+// (962 bytes) in one M10K instead of a ~126-ALUT logic ROM. hps_io reads it one
+// clock after byte_cnt moves, and sys_top's io_strobe (~rack & io_clk) is at
+// least two clk_sys apart, so every byte the HPS reads is the same
+// (make test_hps_cfgstr: both forms on one bus, every clock). 2A / 2C keep 0.
+hps_io #(.CONF_STR(CONF_STR), .CONF_STR_BRAM(B2), .WIDE(1)) hps_io
 (
 	// clk_sys, NOT clk_vid, AND THAT IS THE WHOLE POINT.
 	//
