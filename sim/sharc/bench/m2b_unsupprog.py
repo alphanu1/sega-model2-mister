@@ -5,7 +5,8 @@
 # MODE1 set-up, the words given, then the unsupported word at 0x20084 and a jump back. Generated,
 # not ROM-derived.
 #   m2b_unsupprog.py <out dir> [--pxim0]   writes u<k>.bin and cases.txt (<file> <pc> <reason>);
-#   --pxim0 adds the words only the 2B build's core (PXIM 0, R1038) flags
+#   --pxim0 adds the words only the 2B build's core (PXIM 0, R1038) flags; --sklr0 those its
+#   SKLR 0 flags (R1039: STKY, CURLCNTR and LCNTR read)
 import os, struct, sys
 
 CASES = [   # (name, words before, the word, reason)
@@ -24,6 +25,16 @@ PXIM0_CASES = [
     ('PX read by a ureg move (R0 = PX, IF TRUE)', [], 0x7dbf80000000, 8),
     ('IMASK written (immediate)', [], 0x0f7d00000003, 8),
     ('IMASK bit set', [], 0x140d00000001, 8),
+]
+
+# R1039: unsupported only with m2b_sharc SKLR 0 (no STKY / CURLCNTR / LCNTR reads); with SKLR 1
+# the same programs run in lockstep with v1. The writes stay supported at SKLR 0.
+SKLR0_CASES = [
+    ('STKY read by a ureg move (R0 = STKY)', [], 0x77ef80000000, 8),
+    ('CURLCNTR read by a ureg move (R0 = CURLCNTR)', [], 0x767f80000000, 8),
+    ('LCNTR read by a ureg move (R0 = LCNTR)', [], 0x768f80000000, 8),
+    ('STKY bit test', [], 0x148e00000001, 8),
+    ('STKY bit set (a read-modify-write)', [], 0x140e00000001, 8),
 ]
 
 
@@ -53,7 +64,7 @@ def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
     lines = []
-    cases = CASES + (PXIM0_CASES if '--pxim0' in sys.argv[2:] else [])
+    cases = CASES + (PXIM0_CASES if '--pxim0' in sys.argv[2:] else []) + (SKLR0_CASES if '--sklr0' in sys.argv[2:] else [])
     for k, (name, pre, word, why) in enumerate(c for c in cases if c[3]):
         p = os.path.join(out, 'u%d.bin' % k)
         open(p, 'wb').write(prog_events(pre, word))

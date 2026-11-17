@@ -3428,3 +3428,47 @@ test_m2_dsb_2c:
 	  rtl/sound/m2_dsb_2c.sv $(DSB_RTL) sim/sound/tb_m2_dsb_2c.cpp \
 	  -CFLAGS "-O2" -o tb_m2_dsb_2c --Mdir obj_m2_dsb_2c
 	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) ./obj_m2_dsb_2c/tb_m2_dsb_2c
+
+# R1039: the 2B build's game ID register (m2b_gameid) against the plain byte it replaced,
+# every cycle, with the ID list read from the 2B MRAs (each must send index 4 first: vc_en);
+# then two planted faults (Rail Chase 2's ID decoded wrong; an MRA's index 4 last) must fail.
+.PHONY: test_m2b_gameid
+test_m2b_gameid:
+	@echo "== test m2b_gameid (R1039: the 2B MRAs' IDs read back exactly, every cycle)"
+	@mkdir -p obj_m2b_gameid && python3 sim/io/m2b_mra_ids.py mra obj_m2b_gameid/ids.hex \
+	  && iverilog -g2012 -o obj_m2b_gameid/tb rtl/io/m2b_gameid.sv sim/io/tb_m2b_gameid.sv \
+	  && vvp -n obj_m2b_gameid/tb +IDS=obj_m2b_gameid/ids.hex | grep -v finish | tee obj_m2b_gameid/run.txt
+	@grep -q '^PASS' obj_m2b_gameid/run.txt
+	@echo "== planted fault: 4'd13 decodes to 0x2B, not 0x29 (must FAIL)"
+	@sed "s/4'd13: dec = 7'h29/4'd13: dec = 7'h2B/" rtl/io/m2b_gameid.sv > obj_m2b_gameid/plant.sv \
+	  && iverilog -g2012 -o obj_m2b_gameid/tbp obj_m2b_gameid/plant.sv sim/io/tb_m2b_gameid.sv \
+	  && vvp -n obj_m2b_gameid/tbp +IDS=obj_m2b_gameid/ids.hex | grep -v finish | tail -2 | tee obj_m2b_gameid/plant.txt
+	@grep -q '^FAIL' obj_m2b_gameid/plant.txt && echo "  planted fault caught"
+	@echo "== planted fault: a 2B MRA with its index 4 after the ROMs (must be refused)"
+	@python3 sim/io/m2b_mra_ids.py --plant mra && echo "  planted fault caught" && rm -rf obj_m2b_gameid
+
+# R1039: hps_io's configuration string in logic (CONF_STR_BRAM 0) against the ROM form (1, the 2B
+# build's) on one HPS bus driven as sys_top.v drives it, io_dout every clock; then the planted
+# faults -- one byte of the ROM's string changed, and strobes one clock apart (closer than
+# sys_top's ~rack & io_clk allows) -- must differ.
+.PHONY: test_hps_cfgstr
+test_hps_cfgstr:
+	@echo "== test hps_io CONF_STR_BRAM 0 vs 1 (R1039)"
+	@mkdir -p obj_cfgstr && python3 sim/io/cfgstr_test.py obj_cfgstr/cfgstr_test.svh
+	@for c in 2:0:PASS 2:1:FAIL 1:0:FAIL; do g=$${c%%:*}; r=$${c#*:}; p=$${r%%:*}; w=$${r#*:}; \
+	  $(VERILATOR) --binary --timing -j 2 -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE -GGAP=$$g -GPLANT=$$p \
+	    -Iobj_cfgstr -Isys --top-module tb_hps_cfgstr --Mdir obj_cfgstr/o$$g$$p sys/hps_io.sv sim/io/tb_hps_cfgstr.sv >/dev/null 2>&1 || exit 1; \
+	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -E '^hps_io' ; \
+	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -q "^$$w" || { echo "  expected $$w"; exit 1; }; echo "  $$w as expected"; done
+	@rm -r obj_cfgstr
+
+# R1039: m2_persp_recip's table in logic against its M10K form (M2_RECIP_M10K, the 2B build), out_q
+# every clock over every 16-bit input and random resets; then the M10K read a clock late must differ.
+.PHONY: test_m2_persp_recip_m10k
+test_m2_persp_recip_m10k:
+	@echo "== test m2_persp_recip, logic table vs M10K (R1039)"
+	@for p in 0 1; do $(VERILATOR) --binary --timing -j 2 -Wno-fatal -Wno-lint -Wno-style -GPLANT=$$p \
+	    --top-module tb_m2_persp_recip_m10k --Mdir obj_prm$$p rtl/video/m2_persp_recip.sv sim/video/tb_m2_persp_recip_m10k.sv >/dev/null 2>&1 || exit 1; \
+	  ./obj_prm$$p/Vtb_m2_persp_recip_m10k | grep -E '^m2_persp|^PASS|^FAIL' | tr '\n' ' '; echo; done
+	@./obj_prm0/Vtb_m2_persp_recip_m10k | grep -q '^PASS' && ./obj_prm1/Vtb_m2_persp_recip_m10k | grep -q '^FAIL' && echo "  0 differ; the planted fault caught"
+	@rm -r obj_prm0 obj_prm1

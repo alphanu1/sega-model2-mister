@@ -823,7 +823,12 @@ wire [10:0] ps2_key;
 // zero-extends a byte, and the ROM lands in SDRAM as garbage — which read back
 // from the board as an address-independent 000000FF and cost two hardware builds
 // chasing the SDRAM capture phase, which was never involved.
-hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
+// R1039: CONF_STR_BRAM on a 2B build -- the framework's own option, the string
+// (962 bytes) in one M10K instead of a ~126-ALUT logic ROM. hps_io reads it one
+// clock after byte_cnt moves, and sys_top's io_strobe (~rack & io_clk) is at
+// least two clk_sys apart, so every byte the HPS reads is the same
+// (make test_hps_cfgstr: both forms on one bus, every clock). 2A / 2C keep 0.
+hps_io #(.CONF_STR(CONF_STR), .CONF_STR_BRAM(B2), .WIDE(1)) hps_io
 (
 	// clk_sys, NOT clk_vid, AND THAT IS THE WHOLE POINT.
 	//
@@ -3092,9 +3097,17 @@ wire [7:0]  cpu_trap_op;
 // sees exactly the core it always did.
 localparam logic [15:0] GAMEID_INDEX = 16'd4;
 logic [7:0] game_id;
+`ifdef M2_2B
+// R1039: a 2B build keeps only the 2B sets' IDs (m2b_gameid): the same byte for
+// each of them, on the same cycle, and every decode of another game folds away.
+m2b_gameid u_gameid (.clk(clk_sys), .rst_n(mem_rst_n),
+	.we(ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)), .din(ioctl_dout[7:0]),
+	.game_id(game_id));
+`else
 always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
 	if (!mem_rst_n) game_id <= 8'd0;
 	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
+`endif
 // R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);
@@ -3267,6 +3280,12 @@ logic [1:0] vc_fpu_s;
 // R865: and the 2A games that run them (not VF2, game 0: its core unchanged).
 always_ff @(posedge clk_i960) vc_fpu_s <= {vc_fpu_s[0], (VCOP_FPU & is_vcop)
                                            | (FPU2A & is_2ax)};   // R887: every 2A game past VF2
+// R1039: ON FOR EVERY GAME IN A 2B BUILD. vc_en only matters while the i960
+// runs, and it runs only with cpu_rst_n high -- rom_loaded, after a download
+// whose first part is the MRA's index 4 (every Model2B MRA sends it first,
+// make test_m2b_gameid). So the ID is a 2B set's, 0x12-0x29, and is_2ax
+// is 1 for every one of them: vc_en is 1 whenever it is read. The 0 a 2B build
+// held at game ID 0 (no download yet) was never seen by a running i960.
 // R928: a 2C build has VC's long-real transcendentals too -- Over Rev runs
 // atanrl, sinrl and cosrl from 12.3 s (MAME's form log), which F2A leaves out;
 // the sequencer is F2A's, so VC adds their decode. vc_en as before (0x10-0x1F).
@@ -3294,7 +3313,7 @@ i960_top #(.VC(VCOP_FPU || C2), .FR(FPU2A), .F2A(FPU2A), .C2(C2), .F2B(B2),   //
            .IC_PAIR(I960_R1011), .DC_ROMS(I960_R1011),
            .LSU_ST1(I960_R1011), .LSU_POST(I960_R1011),   // R1011
            .FP_SUBN(`M2_I960_SUBN)) u_i960 (   // R1013
-	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(vc_fpu_s[1]),
+	.clk(clk_i960), .rst_n(cpu_rst_n), .vc_en(B2 | vc_fpu_s[1]),   // R1039: always on in a 2B build
 	.bus_req(cpu_req), .bus_ifetch(cpu_ifetch), .bus_we(cpu_we), .bus_addr(cpu_addr), .bus_be(cpu_be),
 	.bus_wdata(cpu_wdata), .bus_rdata(cpu_rdata), .bus_ack(cpu_ack),
 	.irq(cpu_irq),
