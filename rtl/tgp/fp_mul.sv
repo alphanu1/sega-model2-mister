@@ -45,7 +45,9 @@ module fp_mul #(
   // result below 2^-126 right into a subnormal before rounding (stage 3).
   // Virtua Fighter 2's TGP program multiplies subnormals on purpose (integers
   // carried as subnormal floats; 152 of 28,787 outputs in a 31-frame window).
-  parameter bit SUBNORM          = 1'b0
+  parameter bit          SUBNORM          = 1'b0,
+  // R1036: NCP copies of the result register (see fp_add's NCP).
+  parameter int          NCP              = 1
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -56,6 +58,7 @@ module fp_mul #(
 
   output logic        out_valid,
   output logic [31:0] result,
+  output logic [NCP-1:0][31:0] result_cp,   // R1036
   output logic        overflow,
   output logic        underflow,
   output logic        invalid      // inf * 0, or NaN operand
@@ -257,6 +260,31 @@ module fp_mul #(
   end
 
   // ------------------------------------------------------- stage 4: pack
+  // R1036: the pack as a next value, so result and its copies take the same
+  // one. The chain is the one that stood here, unchanged.
+  logic [31:0] res_d;
+  logic        ovf_d, unf_d;
+  always_comb begin
+    ovf_d = 1'b0;
+    unf_d = 1'b0;
+    if (s3_nan) begin
+      res_d = 32'h7fc00000;                    // quiet NaN
+    end else if (s3_inf) begin
+      res_d = {s3_sign, 8'hff, 23'd0};
+    end else if (s3_zero) begin
+      res_d = {s3_sign, 8'h00, 23'd0};
+    end else if (s3_ovf) begin
+      res_d = {s3_sign, 8'hff, 23'd0};
+      ovf_d = s3_valid;
+    end else if (s3_unf) begin
+      // Denormal output path not built: flush. See OPEN QUESTION above.
+      res_d = {s3_sign, 8'h00, 23'd0};
+      unf_d = s3_valid;
+    end else begin
+      res_d = {s3_sign, s3_exp[7:0], s3_frac};
+    end
+  end
+
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       out_valid <= 1'b0;
@@ -267,26 +295,22 @@ module fp_mul #(
     end else begin
       out_valid <= s3_valid;
       invalid   <= s3_valid & s3_invalid;
-      overflow  <= 1'b0;
-      underflow <= 1'b0;
-
-      if (s3_nan) begin
-        result <= 32'h7fc00000;                    // quiet NaN
-      end else if (s3_inf) begin
-        result <= {s3_sign, 8'hff, 23'd0};
-      end else if (s3_zero) begin
-        result <= {s3_sign, 8'h00, 23'd0};
-      end else if (s3_ovf) begin
-        result   <= {s3_sign, 8'hff, 23'd0};
-        overflow <= s3_valid;
-      end else if (s3_unf) begin
-        // Denormal output path not built: flush. See OPEN QUESTION above.
-        result    <= {s3_sign, 8'h00, 23'd0};
-        underflow <= s3_valid;
-      end else begin
-        result <= {s3_sign, s3_exp[7:0], s3_frac};
-      end
+      result    <= res_d;
+      overflow  <= ovf_d;
+      underflow <= unf_d;
     end
   end
+
+  // R1036: the copies. dont_merge, or synthesis folds them back into result.
+  genvar c;
+  generate
+  for (c = 0; c < NCP; c = c + 1) begin : g_cp
+    (* dont_merge *) logic [31:0] cp;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) cp <= 32'd0;
+      else        cp <= res_d;
+    assign result_cp[c] = cp;
+  end
+  endgenerate
 
 endmodule

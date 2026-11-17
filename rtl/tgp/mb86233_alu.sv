@@ -180,14 +180,14 @@ module mb86233_alu #(
   fp_mul #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN), .SUBNORM(SUBNORM)) u_mul (
     .clk(clk), .rst_n(rst_n),
     .in_valid(opr_valid), .a(opr_mul_a), .b(opr_mul_b),
-    .out_valid(mul_ovalid), .result(mul_result),
+    .out_valid(mul_ovalid), .result(mul_result), .result_cp(),
     .overflow(mul_ovf), .underflow(mul_unf), .invalid(mul_inv)
   );
 
   fp_add #(.FLUSH_DENORM_IN(FLUSH_DENORM_IN), .SUBNORM(SUBNORM)) u_add (
     .clk(clk), .rst_n(rst_n),
     .in_valid(opr_valid), .a(opr_add_a), .b(opr_add_b), .sub(opr_sub),
-    .out_valid(add_ovalid), .result(add_result),
+    .out_valid(add_ovalid), .result(add_result), .result_cp(),
     .overflow(add_ovf), .underflow(add_unf), .invalid(add_inv)
   );
 

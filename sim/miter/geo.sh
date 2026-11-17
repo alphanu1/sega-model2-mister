@@ -11,6 +11,8 @@
 # does not have off its instance (R1008's M10K_ROOM); GEOMZ_G / GD2A_G add
 # -G flags to those builds (GEOMZ_G=-GM10K_ROOM=1 elaborates the 2C form).
 #
+# R1036: GD_G adds -G flags to the main-build walk (as GD2A_G to the 2A one).
+#
 # GD2A walks run the 2A build's geometry (geodiff_2a: CRTC_Y 127, WINKEY,
 # MZX, UVSH, M2GD_PRESET's coef table loaded into BOTH copies); GD walks the
 # main build's. geodiff writes ours.txt into each dump directory.
@@ -35,7 +37,7 @@ b() { local n=$1; shift; rm -rf $M/obj_$n
 b geo --top-module m2_geometry -CFLAGS "-O2" $GEO $M/tb_m2_geometry.cpp &
 b geomz --top-module m2_geometry -GMIPZ=1 ${GEOMZ_G:-} -CFLAGS "-O2 -DTB_MIPZ" $GEO $M/tb_m2_geometry.cpp &
 b gd2a --top-module geodiff_top ${GD2A_G:-} -GCRTC_Y=127 -GWINKEY=1 -GMZX=1 -GUVSH=1 -CFLAGS "-O2" $WALK $GEO $M/tb_m2_geodiff.cpp &
-b gd --top-module geodiff_top -CFLAGS "-O2" $WALK $GEO $M/tb_m2_geodiff.cpp &
+b gd --top-module geodiff_top ${GD_G:-} -CFLAGS "-O2" $WALK $GEO $M/tb_m2_geodiff.cpp &
 wait
 r() { local n=$1 lab=$2; shift 2; [ -x $M/obj_$n/V ] || return; env "$@" $M/obj_$n/V > $M/run_$lab.log 2>&1
       echo "$lab: exit $? | $(grep -hE 'PASS|FAIL|pool hash' $M/run_$lab.log | tail -1) | $(grep -h '^MITER' $M/run_$lab.log | tail -1)"; }
