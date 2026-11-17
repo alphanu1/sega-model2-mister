@@ -3092,9 +3092,17 @@ wire [7:0]  cpu_trap_op;
 // sees exactly the core it always did.
 localparam logic [15:0] GAMEID_INDEX = 16'd4;
 logic [7:0] game_id;
+`ifdef M2_2B
+// R1039: a 2B build keeps only the 2B sets' IDs (m2b_gameid): the same byte for
+// each of them, on the same cycle, and every decode of another game folds away.
+m2b_gameid u_gameid (.clk(clk_sys), .rst_n(mem_rst_n),
+	.we(ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)), .din(ioctl_dout[7:0]),
+	.game_id(game_id));
+`else
 always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
 	if (!mem_rst_n) game_id <= 8'd0;
 	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
+`endif
 // R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);

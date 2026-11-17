@@ -3370,3 +3370,19 @@ test_m2_dsb_2c:
 	  rtl/sound/m2_dsb_2c.sv $(DSB_RTL) sim/sound/tb_m2_dsb_2c.cpp \
 	  -CFLAGS "-O2" -o tb_m2_dsb_2c --Mdir obj_m2_dsb_2c
 	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) ./obj_m2_dsb_2c/tb_m2_dsb_2c
+
+# R1039: the 2B build's game ID register (m2b_gameid) against the plain byte it replaced,
+# every cycle, with the ID list read from the 2B MRAs; then a planted fault (Rail Chase 2's
+# ID decoded wrong) must fail.
+.PHONY: test_m2b_gameid
+test_m2b_gameid:
+	@echo "== test m2b_gameid (R1039: the 2B MRAs' IDs read back exactly, every cycle)"
+	@mkdir -p obj_m2b_gameid && python3 sim/io/m2b_mra_ids.py mra obj_m2b_gameid/ids.hex \
+	  && iverilog -g2012 -o obj_m2b_gameid/tb rtl/io/m2b_gameid.sv sim/io/tb_m2b_gameid.sv \
+	  && vvp -n obj_m2b_gameid/tb +IDS=obj_m2b_gameid/ids.hex | grep -v finish | tee obj_m2b_gameid/run.txt
+	@grep -q '^PASS' obj_m2b_gameid/run.txt
+	@echo "== planted fault: 4'd13 decodes to 0x2B, not 0x29 (must FAIL)"
+	@sed "s/4'd13: dec = 7'h29/4'd13: dec = 7'h2B/" rtl/io/m2b_gameid.sv > obj_m2b_gameid/plant.sv \
+	  && iverilog -g2012 -o obj_m2b_gameid/tbp obj_m2b_gameid/plant.sv sim/io/tb_m2b_gameid.sv \
+	  && vvp -n obj_m2b_gameid/tbp +IDS=obj_m2b_gameid/ids.hex | grep -v finish | tail -2 | tee obj_m2b_gameid/plant.txt
+	@grep -q '^FAIL' obj_m2b_gameid/plant.txt && echo "  planted fault caught" && rm -rf obj_m2b_gameid
