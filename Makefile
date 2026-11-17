@@ -1650,11 +1650,16 @@ r3d_2c:
 	  $(R3D_2C_RTL) sim/video/tb_m2_raster3d.cpp
 
 # R900: the luma-row map (the large layout's games' row ranges) against its reference.
-test_m2_luma_map: obj_luma_map/Vm2_luma_map obj_luma_map_2c/Vm2_luma_map
+test_m2_luma_map: obj_luma_map/Vm2_luma_map obj_luma_map_2c/Vm2_luma_map obj_luma_map_2b/Vm2_luma_map
 	@echo "== test m2_luma_map (R900: every game ID, every row)"
 	@./obj_luma_map/Vm2_luma_map $(TEST_ARGS)
 	@echo "== test m2_luma_map 2C (R932: LSB 5, Over Rev's table)"
 	@./obj_luma_map_2c/Vm2_luma_map $(TEST_ARGS)
+	@echo "== test m2_luma_map 2B (R1037: LSB 5, B2L, the 2B games' ranges)"
+	@./obj_luma_map_2b/Vm2_luma_map $(TEST_ARGS)
+obj_luma_map_2b/Vm2_luma_map: rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp sim/video/m2_luma_map_ref.h
+	$(VBUILD) --top-module m2_luma_map -GLSB=5 -GOREV=1 -GB2L=1 --Mdir obj_luma_map_2b -o Vm2_luma_map -CFLAGS "-O2 -DLMAP_2B -I$(abspath sim/video)" \
+	  rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp
 obj_luma_map_2c/Vm2_luma_map: rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp sim/video/m2_luma_map_ref.h
 	$(VBUILD) --top-module m2_luma_map -GLSB=5 -GOREV=1 --Mdir obj_luma_map_2c -o Vm2_luma_map -CFLAGS "-O2 -DLMAP_2C -I$(abspath sim/video)" \
 	  rtl/video/m2_luma_map.sv sim/video/tb_m2_luma_map.cpp

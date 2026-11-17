@@ -146,7 +146,8 @@ static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunn
                                  "Sky Target", "Motor Raid (0x1A-0x1B)", "Manx TT (0x19)", "Over Rev (0x1C)",
                                  "STCC (0x1D)", "Wave Runner (0x1E)", "Water Ski (0x1F)", "Behind Enemy Lines (0x20)", "Ski Super G (0x21)", "Top Skater (0x22)"};
 static int game_id(int g) {
-  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x23, 0x24, 0x7f};
+  static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x23, 0x24, 0x7f,
+                            0x25, 0x26, 0x27, 0x28, 0x29, 0x29, 0x25, 0x26, 0x27};   // R1037: the 2B IDs, digital on every non-B2G copy
   switch (g) {
     case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
     case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
@@ -250,6 +251,32 @@ static void gear_edge() {
 }
 
 static uint64_t per_game[G_N] = {}, gear_moves = 0, gear_seen[5] = {0, 0, 0, 0, 0};
+// R1037: THE 2B GAMES (dut_b2), from MAME 0.289's INPUT_PORTS and machine
+// configs: gunblade (rchase2's IN0 / IN1; AN0 P1_X AN1 P2_X AN2 P1_Y AN3
+// P2_Y), rchase2 (AN0 P2_X AN1 P1_X AN2 P2_Y AN3 P1_Y, all PORT_REVERSE; PD
+// rchase2_drive_board_r of the last PE write). A stick is 0x80 + s.
+static const uint8_t RC2_CMD[8] = {0xe0, 0x0e, 0xd0, 0x0d, 0xb0, 0x0b, 0x70, 0x07};
+static uint64_t b2_checks = 0, b2_pd_low[4] = {0, 0, 0, 0}, b2_seen[2] = {0, 0};
+static int rc2_pd(int cmd) {   // MAME's rchase2_drive_board_r, verbatim
+  int d = 0xff;
+  if (cmd == 0xe0 || cmd == 0x0e) d &= ~1;
+  if (cmd == 0xd0 || cmd == 0x0d) d &= ~2;
+  if (cmd == 0xb0 || cmd == 0x0b) d &= ~4;
+  if (cmd == 0x70 || cmd == 0x07) d &= ~8;
+  return d;
+}
+struct W4 { int in0, in1, in2, an[4]; };
+static W4 want_b2g(int id) {
+  uint32_t j0 = t->joystick_0, j1 = t->joystick_1;
+  W4 w;
+  w.in0 = lo(b(j0, 7) << 0 | b(j1, 7) << 1 | b(j0, 8) << 2 | b(j0, 9) << 3 | b(j0, 6) << 4 | b(j1, 6) << 5);
+  w.in1 = lo(b(j0, 4) << 0 | b(j1, 4) << 1);
+  const int x1 = (0x80 + int8_t(t->joy_analog & 0xff)) & 0xff, y1 = (0x80 + int8_t(t->joy_analog >> 8)) & 0xff;
+  const int x2 = (0x80 + int8_t(t->joy_analog_1 & 0xff)) & 0xff, y2 = (0x80 + int8_t(t->joy_analog_1 >> 8)) & 0xff;
+  if (id == 0x25) { w.in2 = 0xff; w.an[0] = x1; w.an[1] = x2; w.an[2] = y1; w.an[3] = y2; }
+  else { w.in2 = rc2_pd(t->pe); w.an[0] = 0xff - x2; w.an[1] = 0xff - x1; w.an[2] = 0xff - y2; w.an[3] = 0xff - y1; }
+  return w;
+}
 static uint64_t manx_ce = 0, manx_cd = 0;   // R892: Manx TT cycles answered 0xCE / 0xCD
 static uint64_t per_game_wheel[G_N] = {}, sky_wdiff = 0, sky_skip = 0;   // R958
 
@@ -369,7 +396,8 @@ int main(int argc, char **argv) {
     if (rnd(2500) == 0) { t->trig_rt = (rnd(3) == 0) ? 0 : uint8_t(rng()); t->trig_lt = (rnd(3) == 0) ? 0 : uint8_t(rng()); }   // R981
     if (rnd(20000) == 0) { t->st_pedswap = rnd(2); t->st_ssens = rnd(4); t->st_ssm = rnd(4); t->st_rsteer = rnd(2); t->st_wheel = rnd(4); }
     if (rnd(64) == 0)   // R892: PE, the game's motion command -- 0x3D a third of the time, its neighbours often
-      t->pe = rnd(3) == 0 ? 0x3d : rnd(3) == 0 ? (0x3d ^ (1 << rnd(8))) : uint8_t(rng());
+      t->pe = rnd(3) == 0 ? 0x3d : rnd(3) == 0 ? (0x3d ^ (1 << rnd(8)))
+            : rnd(2) == 0 ? RC2_CMD[rnd(8)] ^ (rnd(4) == 0 ? (1 << rnd(8)) : 0) : uint8_t(rng());   // R1037: Rail Chase 2's commands
     // R1016: the mouse -- a packet now and then: moves of every size (beyond the
     // screen many times over), the buttons; the OSD's Mouse line now and then
     if (rnd(300) == 0) {
@@ -389,6 +417,7 @@ int main(int argc, char **argv) {
     static uint64_t rst_ok = 0;   // R1016: clocks since a reset (the guns' pixels restart)
     rst_ok = t->rst_n ? rst_ok + 1 : 0;
     Want o = want_orev();   // R928: before the edge, as the others (the outputs are registered)
+    const W4 wb = want_b2g(t->game);   // R1037
     static double hs[6], ha[6], hb[6], sa[6], sb[6];
     for (int k = 5; k > 0; --k) { hs[k] = hs[k - 1]; ha[k] = ha[k - 1]; hb[k] = hb[k - 1]; sa[k] = sa[k - 1]; sb[k] = sb[k - 1]; }
     hs[0] = orev_str(t->c_steer); ha[0] = orev_ped(t->c_accel); hb[0] = orev_ped(t->c_brake);
@@ -533,7 +562,10 @@ int main(int argc, char **argv) {
       cmp("or in0", game, c, t->o_in0, o.in0);
       cmp("or in1", game, c, t->o_in1, o.in1);
       cmp("or in2", game, c, t->o_in2, o.in2);
-      if (since > 6) {   // R933: a pedal registered under 0x1C's sense may stand for three clocks after 0x1D
+      // R1037: and not in the clocks after a reset (R958's Sky Target switch holds
+      // one for 8 clocks; the channels restart behind it) -- a bench gap the
+      // 2B IDs' extra random draws exposed (a switch 0x18 -> 0x1C, an1 0xFF)
+      if (since > 6 && rst_ok > 6) {   // R933: a pedal registered under 0x1C's sense may stand for three clocks after 0x1D
         near("or an0", c, t->o_an0, hs);
         near(st ? "st an1" : "or an1", c, t->o_an1, st ? sa : ha);
         near(st ? "st an2" : "or an2", c, t->o_an2, st ? sb : hb);
@@ -552,6 +584,34 @@ int main(int argc, char **argv) {
       cmp("or an2", game, c, t->o_an2, w.an2);
     }
     if (t->game != 0x1e && t->game != 0x20) cmp("or an3", game, c, t->o_an3, 0xff);   // R1010
+    // R1037: the 2B build's copy. Its own IDs against MAME's ports; INDY 500 /
+    // Super GT 24h on STCC's / Over Rev's lines; Over Rev and STCC as the OREV
+    // copy; the C2G IDs digital (no C2G on 2B); everything else as the MOTION 0 copy.
+    if (t->game == 0x25 || t->game == 0x29) {
+      ++b2_checks; ++b2_seen[t->game == 0x29];
+      cmp("b2 in0", game, c, t->b_in0, wb.in0); cmp("b2 in1", game, c, t->b_in1, wb.in1);
+      cmp("b2 in2", game, c, t->b_in2, wb.in2);
+      if (t->game == 0x29) for (int k = 0; k < 4; ++k) if (!((wb.in2 >> k) & 1)) ++b2_pd_low[k];
+      cmp("b2 an0", game, c, t->b_an0, wb.an[0]); cmp("b2 an1", game, c, t->b_an1, wb.an[1]);
+      cmp("b2 an2", game, c, t->b_an2, wb.an[2]); cmp("b2 an3", game, c, t->b_an3, wb.an[3]);
+    } else if (t->game == 0x1c || t->game == 0x1d || t->game == 0x26 || t->game == 0x27) {
+      const bool st = (t->game == 0x1d || t->game == 0x26);
+      cmp("b2 or in0", game, c, t->b_in0, o.in0);
+      cmp("b2 or in1", game, c, t->b_in1, o.in1);
+      cmp("b2 or in2", game, c, t->b_in2, o.in2);
+      if (since > 6 && rst_ok > 6) {
+        near("b2 or an0", c, t->b_an0, hs);
+        near(st ? "b2 st an1" : "b2 or an1", c, t->b_an1, st ? sa : ha);
+        near(st ? "b2 st an2" : "b2 or an2", c, t->b_an2, st ? sb : hb);
+      }
+      cmp("b2 an3", game, c, t->b_an3, 0xff);
+      ++b2_checks;
+    } else {
+      cmp("b2 in0", game, c, t->b_in0, wn.in0); cmp("b2 in1", game, c, t->b_in1, wn.in1);
+      cmp("b2 in2", game, c, t->b_in2, wn.in2);
+      cmp("b2 an0", game, c, t->b_an0, wn.an0); cmp("b2 an1", game, c, t->b_an1, wn.an1);
+      cmp("b2 an2", game, c, t->b_an2, wn.an2); cmp("b2 an3", game, c, t->b_an3, 0xff);
+    }
   }
   std::printf("  %llu cycles, %llu checks; per game:", (unsigned long long)N, (unsigned long long)checks);
   for (int g = 0; g < G_N; ++g) std::printf(" %s %llu%s", GNAME[g], (unsigned long long)per_game[g], g + 1 < G_N ? "," : "\n");
@@ -581,6 +641,9 @@ int main(int argc, char **argv) {
   std::printf("  Sky Target in a wheel mode: %llu cycles where the wheel-mode block's steering differs and Sky Target kept Standard's\n",
               (unsigned long long)sky_wdiff);
   std::printf("  (%llu clocks skipped in the sync after a switch to or from Sky Target)\n", (unsigned long long)sky_skip);
+  std::printf("  R1037 2B copy: %llu own-ID / Over Rev line cycles (gunblade %llu, rchase2 %llu); rchase2 PD bits 0-3 low %llu %llu %llu %llu cycles\n",
+              (unsigned long long)b2_checks, (unsigned long long)b2_seen[0], (unsigned long long)b2_seen[1],
+              (unsigned long long)b2_pd_low[0], (unsigned long long)b2_pd_low[1], (unsigned long long)b2_pd_low[2], (unsigned long long)b2_pd_low[3]);
   std::printf("  %llu mismatches\n%s\n", (unsigned long long)mism, mism ? "FAIL" : "PASS");
   delete t;
   return mism ? 1 : 0;

@@ -31,19 +31,25 @@
       Image: 0x52C0000 bytes. Every stretch MAME's region does not load is
       written as MAME's fill (0, or 0xFF where the region is ERASEFF).
 
-      Index 4, the game ID: 0x16, BORROWED from Dead or Alive (R887):
-      the large layout and the DIGITAL three-button profile (VF2's
-      order), which this set needs. What it implies: Dead or Alive's
-      eight luma-row ranges (R900), not ranges measured on this game,
-      so the shading of textured polygons may be off. On 2B the
-      SHARC's data-ROM reads (0x1c00000) come from the copro-data slot
-      only for IDs 0x10 and 0x18-0x1B (Model2.sv a2_copro_rom); for
-      every other ID they read 0. von reads the data ROM 4 times a
-      vblank (R1024); those reads are 0 here. The twin sticks: IN1 =
-      joystick 1 (left lever, Left Shot J4, Left Dash J5), IN2 =
-      joystick 2 (right lever, J4 / J5). Bit 7 is SET in this MRA
-      (0x96): the 15 kHz CRT flag (R795), which starts the core in 15
-      kHz interlaced whatever the OSD says (R908).
+      Index 4, the game ID: 0x28, the Virtual-On sets' own (R1037; the 2B
+      build only): the large layout; the SHARC's data-ROM reads from the
+      copro-data slot (Model2.sv a2_copro_rom; MAME 0.289 reads only its
+      first 2.25 MB); the DIGITAL three-button profile (VF2's order), which
+      this set needs; its luma rows (0, 1, 52 and 56, exact; measured on
+      von, the parent). Before (0x16, Dead or Alive's, borrowed): the
+      data-ROM reads were 0 (in MAME that leaves the attract with no 3D,
+      R1037) and DOA's luma ranges drew all four rows with other rows'
+      tables. NOT EXPLAINED BY THE ID: the board stopped at the boot screen
+      ("MODEL2 BCRX", the COPRO / GEO / texture loading lines); MAME passes
+      that screen by 6 s with the data ROM read as 0, and with the comm
+      window (which this set polls about 60 times a second) read as 0, so
+      that stop is the core's, not this ID's: the 2B boot bench's i960 traps
+      at ip 0x29664 on roundrl, which the core does not decode yet (study
+      R1037); this set will not boot until it does. The twin sticks:
+      IN1 = joystick 1 (left lever, Left Shot J4, Left Dash J5), IN2 =
+      joystick 2 (right lever, J4 / J5). Bit 7 is SET in this MRA (0xA8):
+      the 15 kHz CRT flag (R795), which starts the core in 15 kHz interlaced
+      whatever the OSD says (R908).
     -->
     <name>Cyber Troopers Virtual-On - Twin (Japan, Revision B) [15kHz CRT]</name>
     <setname>vonj</setname>
@@ -52,7 +58,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>96 00</part>
+        <part>A8 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1995</year>
@@ -140,7 +146,7 @@
 
     </rom>
 
-    <!-- BORROWED ID: R887's three-button profile; the left lever on joystick
-         1, the right lever on joystick 2 (its J4 / J5 Right Shot / Right Dash). -->
+    <!-- R887's three-button profile; the left lever on joystick 1, the
+         right lever on joystick 2 (its J4 / J5 Right Shot / Right Dash). -->
     <buttons names="Left Shot,Left Dash,-,Start,Coin,Test,Service"/>
 </misterromdescription>

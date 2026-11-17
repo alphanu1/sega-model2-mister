@@ -31,25 +31,18 @@
       Image: 0x52C0000 bytes. Every stretch MAME's region does not load is
       written as MAME's fill (0, or 0xFF where the region is ERASEFF).
 
-      Index 4, the game ID: 0x1A, BORROWED from Motor Raid (R887),
-      because it is one of the two IDs that give both the large layout
-      and the SHARC's data ROM (on 2B the SHARC's data-ROM reads
-      (0x1c00000) come from the copro-data slot only for IDs 0x10 and
-      0x18-0x1B (Model2.sv a2_copro_rom); for every other ID they read
-      0; this set reads it 1,499 times a vblank, R1024; with a digital
-      ID those reads would be 0). What it implies: Motor Raid's ANALOG
-      profile, not this game's controls - IN0 coin J4, test J6,
-      service J7, J5 on bit 6 and J8 on bit 5; IN1 only bits 4 / 5
-      (J12 / J13); AN0 the accelerator, AN1 the brake, AN2 the
-      steering reversed - and Motor Raid's luma-row ranges (R900). For
-      INDY 500 the buttons fit (IN0's START1 is its bit 6; Shift Up /
-      Down are IN1 bits 4 / 5) but the three analog channels do not:
-      MAME's AN0 STEER gets the accelerator, AN1 ACCEL the brake and
-      AN2 BRAKE the steering reversed, so it is NOT DRIVABLE; View 1 /
-      2 (IN1 bits 0 / 1) are not wired. An ID of its own (large
-      layout, data ROM, its own profile) is RTL work. Bit 7 is SET in
-      this MRA (0x9A): the 15 kHz CRT flag (R795), which starts the
-      core in 15 kHz interlaced whatever the OSD says (R908).
+      Index 4, the game ID: 0x26, this set's own (R1037; the 2B build only):
+      the large layout; the SHARC's data-ROM reads from the copro-data slot
+      (Model2.sv a2_copro_rom; MAME 0.289 reads only its first 1 MB, R1037);
+      MAME's indy500 ports (STCC's, R933: AN0 steering, AN1 accelerator, AN2
+      brake, the pedals not reversed; IN1 View 1 / View 2 and Shift Up /
+      Down); its luma rows (0-6 and 100, exact). Before (0x1A, Motor Raid's,
+      borrowed): Motor Raid's luma ranges drew rows 0-6 with row 100's table
+      (MAME's walk dumps: mean error 4.2 of 63, 27% of textured pixels more
+      than 4 off: the road and background) and Motor Raid's analog
+      channels (not drivable). Bit 7 is SET in this MRA (0xA6): the 15 kHz
+      CRT flag (R795), which starts the core in 15 kHz interlaced whatever
+      the OSD says (R908).
     -->
     <name>INDY 500 Twin (Revision A, Newer) [15kHz CRT]</name>
     <setname>indy500</setname>
@@ -58,7 +51,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>9A 00</part>
+        <part>A6 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1995</year>
@@ -212,9 +205,9 @@
 
     </rom>
 
-    <!-- BORROWED ID: the analog profile's order (J4 Coin, J5 Start, J6 Test,
-         J7 Service, J8 View, J9 Hand Brake, J10 Accel, J11 Brake, J12 Gear Up,
-         J13 Gear Down), named by what each reaches in this game; "-" reaches
-         nothing it reads. -->
-    <buttons names="Coin,Start,Test,Service,-,-,Steering (AN0),Gas (AN1),Shift Up,Shift Down"/>
+    <!-- Steering on either stick (or the paddle); pedals on the right
+         stick's Y or the Accel / Brake buttons, over MAME's whole 0x00-0xFF
+         (indy500's ports: released 0x00, not reversed); Shift Up / Shift
+         Down; View 1 (zoom in) / View 2 (zoom out). STCC's profile (R933). -->
+    <buttons names="Coin,Start,Test,Service,View 1,View 2,Accel,Brake,Shift Up,Shift Down"/>
 </misterromdescription>

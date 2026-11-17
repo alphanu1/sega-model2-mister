@@ -121,6 +121,26 @@
 //          steering.
 //     (0x23 Dynamite Cop 2C and 0x24 Royal Ascot II are DIGITAL: dynamcop's
 //          and model2crx's ports, VF2's order.)
+//     R1037, THE 2B GAMES' OWN IDs (B2G, 2B builds only; MAME 0.289's ports):
+//     0x25 Gunblade NY (gunblade: rchase2's IN0 / IN1, its four AD_STICKs):
+//          J 4 Trigger 6 Start 7 Coin 8 Test 9 Service (P2 on joystick 1, as
+//          Virtua Cop 2's order). IN0 model2's; IN1 0x01 P1 trigger 0x02 P2
+//          trigger; IN2 0xFF. AN0 P1_X, AN1 P2_X, AN2 P1_Y, AN3 P2_Y: each
+//          player's left stick as 0x80 + s (the whole 0x00..0xFF; MAME's
+//          MINMAX are the cabinet's stops, which the game's GUN ADJUSTMENT
+//          takes from its EEPROM -- a stick covers every pair of them).
+//     0x26 INDY 500 (indy500): STCC's above -- MAME's indy500 ports, which
+//          STCC's are; the pedals not reversed.
+//     0x27 Super GT 24h (sgt24h): Over Rev's above -- MAME's sgt24h ports
+//          are overrev's (indy500's, both pedals PORT_REVERSE).
+//     0x28 Cyber Troopers Virtual-On (von): DIGITAL (VF2's order): IN1 the
+//          left lever (P1 directions, Left Shot J4, Left Dash J5), IN2 the
+//          right lever (joystick 1's directions, J4 / J5).
+//     0x29 Rail Chase 2 (rchase2): gunblade's buttons; AN0 P2_X, AN1 P1_X,
+//          AN2 P2_Y, AN3 P1_Y, each PORT_REVERSE (0x7F - s). PD (IN2) is
+//          the seats' drive board as MAME answers it (rchase2_drive_board_r):
+//          0xFF with bit 0 low while PE holds 0xE0 / 0x0E, bit 1 for 0xD0 /
+//          0x0D, bit 2 for 0xB0 / 0x0B, bit 3 for 0x70 / 0x07.
 //   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
 //     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
@@ -135,7 +155,8 @@ module m2_2a_inputs #(
   parameter bit          GUN     = 1'b0,  // R870: Virtua Cop 2's IN1 from the guns (M2_2A_VCOP2_GUN)
   parameter bit          MOTION  = 1'b0,  // R892: Manx TT's motion base answered on PD (M2_2A_MANX_MOTION)
   parameter bit          OREV    = 1'b0,  // R928: Over Rev's profile (0x1C; 2C builds); R933: and STCC's (0x1D)
-  parameter bit          C2G     = 1'b0   // R1010: Wave Runner, Water Ski, Behind Enemy Lines, Ski Super G, Top Skater (0x1E-0x22; 2C builds)
+  parameter bit          C2G     = 1'b0,  // R1010: Wave Runner, Water Ski, Behind Enemy Lines, Ski Super G, Top Skater (0x1E-0x22; 2C builds)
+  parameter bit          B2G     = 1'b0   // R1037: Gunblade NY, INDY 500, Super GT 24h, Rail Chase 2 (0x25-0x29; 2B builds)
 ) (
   input  logic        clk,          // clk_sys
   input  logic        rst_n,        // cpu_rst_n: the game reset
@@ -183,8 +204,10 @@ module m2_2a_inputs #(
   wire p_sky    = p_an2 & (game[1:0] == 2'b00);     // 0x18
   wire p_dig2   = (game == 7'h12) | (game == 7'h15);  // Zero Gunner, Pilot Kids
   wire p_manx   = MOTION & (game == 7'h19);         // R892: Manx TT's motion base
-  wire p_orev   = OREV & ANALOG & (game == 7'h1C);  // R928: Over Rev (2C)
-  wire p_stcc   = OREV & ANALOG & (game == 7'h1D);  // R933: STCC (2C): Over Rev's, pedals not reversed
+  wire p_orev   = OREV & ANALOG & ((game == 7'h1C) | (B2G & (game == 7'h27)));  // R928: Over Rev (2C); R1037: Super GT 24h (2B)
+  wire p_stcc   = OREV & ANALOG & ((game == 7'h1D) | (B2G & (game == 7'h26)));  // R933: STCC (2C): Over Rev's, pedals not reversed; R1037: INDY 500 (2B)
+  wire p_gunb   = B2G & (game == 7'h25);            // R1037: Gunblade NY (2B)
+  wire p_rc2    = B2G & (game == 7'h29);            // R1037: Rail Chase 2 (2B)
   wire p_wave   = C2G & ANALOG & (game == 7'h1E);   // R1010: Wave Runner
   wire p_wski   = C2G & ANALOG & (game == 7'h1F);   // R1010: Sega Water Ski
   wire p_bel    = C2G & (game == 7'h20);            // R1010: Behind Enemy Lines
@@ -329,9 +352,21 @@ module m2_2a_inputs #(
   wire [7:0] ts_in0 = ~{j0[10], j0[5], j0[8], j0[11], j0[7], j0[6], 1'b0, j0[4]};
   wire [7:0] ts_in1 = ~{7'd0, j0[9]};
 
+  // ---- R1037: Gunblade NY / Rail Chase 2 -- each player's left stick as an
+  // AD_STICK: 0x80 + s (the sign bit inverted), PORT_REVERSE 0x7F - s
+  wire [7:0] sk1x = {~joy_analog[7],   joy_analog[6:0]};
+  wire [7:0] sk1y = {~joy_analog[15],  joy_analog[14:8]};
+  wire [7:0] sk2x = {~joy_analog_1[7], joy_analog_1[6:0]};
+  wire [7:0] sk2y = {~joy_analog_1[15], joy_analog_1[14:8]};
+  wire [7:0] rc_in2 = {4'hF, ~((pe == 8'h70) | (pe == 8'h07)), ~((pe == 8'hB0) | (pe == 8'h0B)),
+                       ~((pe == 8'hD0) | (pe == 8'h0D)), ~((pe == 8'hE0) | (pe == 8'h0E))};
+
   always_ff @(posedge clk) begin
-    an3 <= p_wave ? wv_pitch : p_bel ? bl_v[3] : 8'hFF;   // R1010
-    if (p_wave) begin                                 // R1010
+    an3 <= p_wave ? wv_pitch : p_bel ? bl_v[3] : p_gunb ? sk2y : p_rc2 ? ~sk1y : 8'hFF;   // R1010; R1037
+    if (p_gunb | p_rc2) begin                         // R1037
+      in0 <= gn_in0; in1 <= ~{6'b000000, j1[4], j0[4]}; in2 <= p_rc2 ? rc_in2 : 8'hFF;
+      an0 <= p_rc2 ? ~sk2x : sk1x; an1 <= p_rc2 ? ~sk1x : sk2x; an2 <= p_rc2 ? ~sk2y : sk1y;
+    end else if (p_wave) begin                        // R1010
       in0 <= or_in0; in1 <= wv_in1; in2 <= 8'hF7;
       an0 <= or_str; an1 <= or_str; an2 <= or_acc;
     end else if (p_wski) begin                        // R1010

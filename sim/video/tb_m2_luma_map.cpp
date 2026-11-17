@@ -19,24 +19,29 @@ int main(int argc, char **argv) {
   for (int pass = 0; pass < 4; pass++)
     for (int gi = 0; gi < 128; gi++) {
       const int g = (pass & 1) ? (gi * 53 + 7) & 127 : gi;   // the odd passes in another order
-#ifdef LMAP_2C
+#if defined(LMAP_2B)
+      const bool c2 = true, b2 = pass >= 2;                   // R1037: passes 0-1 the module's 2B copy at 2C IDs, 2-3 as a 2B build
+#elif defined(LMAP_2C)
       const bool c2 = pass >= 2;                              // R928: passes 2-3 as a 2C build
+      const bool b2 = false;
 #else
       const bool c2 = false;                                  // R932: the 2A build has no C2
+      const bool b2 = false;
 #endif
-      d->game_id = ((g >> 1) & 16) | (g & 15); d->big = m2_luma_big(g, c2); d->zg = (g == 0x12);
+      d->game_id = ((g >> 1) & 16) | (g & 15); d->big = m2_luma_big(g, c2, b2); d->zg = (g == 0x12);
       d->orev = c2 && (g == 0x1C);                            // R932: Model2.sv is_orev
+      d->sgt = b2 && (g == 0x27);                             // R1037: Model2.sv is_sgt (B2 only)
       tick(); tick();
       for (int r = 0; r < 256; r++) {
         const int w = (r * 37 + 11) & 255;
         d->q_row = r; d->w_row = w; d->eval();
-#ifdef LMAP_2C
+#if defined(LMAP_2C) || defined(LMAP_2B)
         const int SB = 5;
 #else
         const int SB = 3;
 #endif
         const int M = (1 << SB) - 1;
-        const int qe = m2_luma_map_ref(g, r, c2) & 31, wr = m2_luma_map_ref(g, w, c2);
+        const int qe = m2_luma_map_ref(g, r, c2, b2) & 31, wr = m2_luma_map_ref(g, w, c2, b2);
         const int we = ((wr >> 5) << SB) | (wr & 31);
         const int qg = d->q_ls & M, wg = d->w_ls;
         checks += 2;

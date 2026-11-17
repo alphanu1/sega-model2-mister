@@ -23,6 +23,9 @@
 // dut_or maps them; its pixels are outputs (g_c1x ..) for the bench's
 // diagnosis only, the reference is computed from the sticks and mouse
 // packets. dut / dut_nm see the ports tied as a 2A build's harness would.
+// R1037: dut_b2 is the 2B build's (B2G 1: Gunblade NY 0x25, INDY 500 0x26,
+// Super GT 24h 0x27, Rail Chase 2 0x29; MOTION 0, C2G 0); every other copy
+// must read 0x25-0x29 as digital IDs.
 
 `timescale 1ns/1ps
 
@@ -58,8 +61,17 @@ module tb_m2_2a_inputs_top (
   output logic  [7:0] r_in0, output logic [7:0] r_in1, output logic [7:0] r_in2,
   output logic  [7:0] c_in1, output logic [7:0] c_steer,
   output logic  [7:0] c_accel, output logic [7:0] c_brake,
-  output logic  [7:0] c0_steer        // R958: the block at Standard (Sky Target's)
+  output logic  [7:0] c0_steer,       // R958: the block at Standard (Sky Target's)
+  output logic  [7:0] b_in0, output logic [7:0] b_in1, output logic [7:0] b_in2,   // R1037: the 2B build (B2G 1)
+  output logic  [7:0] b_an0, output logic [7:0] b_an1, output logic [7:0] b_an2, output logic [7:0] b_an3
 );
+  // R1037: the 2B build's copy -- ANALOG, OREV, B2G; no MOTION (M2_NO_2A_MANX_MOTION),
+  // no C2G (R1035), no guns (the pixels tied as a build without them)
+  m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b0), .OREV(1'b1), .C2G(1'b0), .B2G(1'b1)) dut_b2 (
+    .clk, .rst_n, .game, .joystick_0, .joystick_1,
+    .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,
+    .gun_in1(8'hFF), .pe, .gun_c1x(9'd0), .gun_c1y(9'd0), .gun_c2x(9'd0), .gun_c2y(9'd0), .ms_btn(2'b00), .ms_gun2(1'b0),
+    .in0(b_in0), .in1(b_in1), .in2(b_in2), .an0(b_an0), .an1(b_an1), .an2(b_an2), .an3(b_an3));
   m2_2a_inputs #(.SYS_MHZ(80), .ANALOG(1'b1), .MOTION(1'b1)) dut (
     .clk, .rst_n, .game, .joystick_0, .joystick_1,
     .joy_analog, .joy_ranalog, .joy_analog_1, .paddle, .st_pedswap, .st_ssens, .st_ssm, .st_rsteer, .st_wheel, .trig_rt, .trig_lt,

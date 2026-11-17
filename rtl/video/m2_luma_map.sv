@@ -36,13 +36,15 @@
 // eight slots, zero-extended when LSB > 3.
 module m2_luma_map #(
   parameter int unsigned LSB  = 3,      // R932: slot bits (3 the 2A build, 5 the 2C build)
-  parameter bit          OREV = 1'b0    // R932: Over Rev's table (needs LSB 5)
+  parameter bit          OREV = 1'b0,   // R932: Over Rev's table (needs LSB 5)
+  parameter bit          B2L  = 1'b0    // R1037: the 2B games' own ranges (0x25-0x29; 2B builds)
 ) (
   input  logic           clk,
   input  logic [4:0]     game_id,   // R1010: {ID bit 5, ID bits 3:0} (the table is used only with big)
   input  logic           big,       // the large layout's games (Model2.sv a2_big)
   input  logic           zg,        // Zero Gunner (R867's own map)
   input  logic           orev,      // R932: Over Rev (Model2.sv is_orev; used with OREV)
+  input  logic           sgt,       // R1037: Super GT 24h (Model2.sv is_sgt; used with B2L and OREV)
   input  logic [7:0]     q_row,
   output logic [LSB:0]   q_ls,
   input  logic [7:0]     w_row,
@@ -116,6 +118,78 @@ module m2_luma_map #(
     endcase
   endfunction
 
+  // R1037: Super GT 24h (2B, 0x27; B2L), row -> {representative, slot[4:0]}:
+  // R932's mechanism and sim/video/luma_fit.py's k-medoids fit over MAME
+  // 0.289's walk dumps (34, every 8 s over 300 s of attract and a race; 99
+  // rows drawn): per-pixel mean |luma error| 0.076 of 63, 0.02% of drawn
+  // pixels more than 4 off (eight ranges: 1.81, 15.9%; Over Rev's table,
+  // which the borrowed ID 0x1C gave it: 24.4, 65%)
+  function automatic logic [5:0] sgt_tab(input logic [7:0] r);
+    case (r)
+      8'd21, 8'd23, 8'd163: sgt_tab = 6'h00;
+      8'd25, 8'd46, 8'd47, 8'd48, 8'd50, 8'd132: sgt_tab = 6'h01;
+      8'd42, 8'd43, 8'd44, 8'd45, 8'd49, 8'd101, 8'd133, 8'd134, 8'd145, 8'd146: sgt_tab = 6'h02;
+      8'd3, 8'd9, 8'd10, 8'd11, 8'd12: sgt_tab = 6'h03;
+      8'd6: sgt_tab = 6'h04;
+      8'd13, 8'd53, 8'd54, 8'd55: sgt_tab = 6'h05;
+      8'd8: sgt_tab = 6'h06;
+      8'd20, 8'd56, 8'd58, 8'd65: sgt_tab = 6'h07;
+      8'd22, 8'd26, 8'd28, 8'd135, 8'd137, 8'd158, 8'd178: sgt_tab = 6'h08;
+      8'd69, 8'd79, 8'd113, 8'd174: sgt_tab = 6'h09;
+      8'd72, 8'd114, 8'd141, 8'd167: sgt_tab = 6'h0a;
+      8'd33: sgt_tab = 6'h0b;
+      8'd27, 8'd52, 8'd110: sgt_tab = 6'h0c;
+      8'd16, 8'd17, 8'd18, 8'd138, 8'd150: sgt_tab = 6'h0d;
+      8'd103, 8'd104, 8'd106: sgt_tab = 6'h10;
+      8'd15: sgt_tab = 6'h11;
+      8'd67, 8'd77, 8'd80, 8'd112, 8'd140, 8'd159, 8'd165: sgt_tab = 6'h12;
+      8'd32, 8'd75, 8'd82, 8'd84, 8'd118, 8'd162: sgt_tab = 6'h14;
+      8'd36, 8'd83, 8'd90, 8'd120: sgt_tab = 6'h15;
+      8'd30, 8'd59, 8'd68, 8'd70, 8'd73, 8'd74, 8'd115, 8'd131, 8'd168: sgt_tab = 6'h16;
+      8'd38, 8'd41, 8'd95, 8'd97, 8'd98, 8'd123, 8'd129, 8'd130, 8'd144, 8'd155, 8'd156, 8'd170, 8'd171, 8'd176: sgt_tab = 6'h17;
+      8'd29, 8'd63, 8'd66, 8'd107, 8'd108, 8'd111, 8'd148, 8'd160, 8'd161: sgt_tab = 6'h18;
+      8'd37, 8'd91, 8'd143, 8'd175: sgt_tab = 6'h19;
+      8'd39, 8'd94, 8'd99, 8'd127, 8'd177: sgt_tab = 6'h1a;
+      8'd81, 8'd116, 8'd117, 8'd166: sgt_tab = 6'h1b;
+      8'd87, 8'd88, 8'd122, 8'd142: sgt_tab = 6'h1c;
+      8'd100, 8'd102, 8'd105, 8'd136, 8'd147, 8'd149, 8'd157, 8'd172, 8'd179, 8'd180, 8'd181, 8'd182, 8'd183, 8'd184, 8'd185, 8'd186, 8'd187, 8'd188, 8'd189, 8'd190, 8'd191, 8'd192, 8'd193, 8'd194, 8'd195, 8'd196, 8'd197, 8'd198, 8'd199, 8'd200, 8'd201, 8'd202, 8'd203, 8'd204, 8'd205, 8'd206, 8'd207, 8'd208, 8'd209, 8'd210, 8'd211, 8'd212, 8'd213, 8'd214, 8'd215, 8'd216, 8'd217, 8'd218, 8'd219, 8'd220, 8'd221, 8'd222, 8'd223, 8'd224, 8'd225, 8'd226, 8'd227, 8'd228, 8'd229, 8'd230, 8'd231, 8'd232, 8'd233, 8'd234, 8'd235, 8'd236, 8'd237, 8'd238, 8'd239, 8'd240, 8'd241, 8'd242, 8'd243, 8'd244, 8'd245, 8'd246, 8'd247, 8'd248, 8'd249, 8'd250, 8'd251, 8'd252, 8'd253, 8'd254, 8'd255: sgt_tab = 6'h1d;
+      8'd40, 8'd92, 8'd93, 8'd121, 8'd124, 8'd125, 8'd152, 8'd154: sgt_tab = 6'h1e;
+      8'd0: sgt_tab = 6'h20;
+      8'd1: sgt_tab = 6'h21;
+      8'd2: sgt_tab = 6'h22;
+      8'd4: sgt_tab = 6'h23;
+      8'd5: sgt_tab = 6'h24;
+      8'd7: sgt_tab = 6'h25;
+      8'd14: sgt_tab = 6'h26;
+      8'd19: sgt_tab = 6'h27;
+      8'd24: sgt_tab = 6'h28;
+      8'd31: sgt_tab = 6'h29;
+      8'd34: sgt_tab = 6'h2a;
+      8'd35: sgt_tab = 6'h2b;
+      8'd51: sgt_tab = 6'h2c;
+      8'd57: sgt_tab = 6'h2d;
+      8'd60: sgt_tab = 6'h2e;
+      8'd61: sgt_tab = 6'h2f;
+      8'd62: sgt_tab = 6'h30;
+      8'd64: sgt_tab = 6'h31;
+      8'd76: sgt_tab = 6'h32;
+      8'd78: sgt_tab = 6'h33;
+      8'd85: sgt_tab = 6'h34;
+      8'd86: sgt_tab = 6'h35;
+      8'd89: sgt_tab = 6'h36;
+      8'd96: sgt_tab = 6'h37;
+      8'd109: sgt_tab = 6'h38;
+      8'd119: sgt_tab = 6'h39;
+      8'd126: sgt_tab = 6'h3a;
+      8'd151: sgt_tab = 6'h3b;
+      8'd153: sgt_tab = 6'h3c;
+      8'd164: sgt_tab = 6'h3d;
+      8'd169: sgt_tab = 6'h3e;
+      8'd173: sgt_tab = 6'h3f;
+      default: sgt_tab = 6'h1f;
+    endcase
+  endfunction
+
   function automatic logic [3:0] lslot(input logic [7:0] r, input logic z);   // R867
     if (z)
       lslot = (r <= 8'd5) ? {1'b1, r[2:0]} : (r == 8'd9) ? 4'b1110 : (r == 8'd100) ? 4'b1111 : {1'b0, r[2:0]};
@@ -171,15 +245,22 @@ module m2_luma_map #(
       // every row takes row 0's table.
       5'h11: starts = OREV ? {8'd211, 8'd200, 8'd197, 8'd190, 8'd122, 8'd100, 8'd96, 8'd0} : '0;
       5'h13: starts = OREV ? {8'd142, 8'd140, 8'd139, 8'd100, 8'd96, 8'd76, 8'd7, 8'd6} : '0;
+      // R1037: THE 2B GAMES' OWN IDs (B2L, the 2B build only; ID 0x25, 0x26, 0x28
+      // -> 5'h15, 5'h16, 5'h18; Super GT 24h, 0x27, by its table above; Rail
+      // Chase 2, 0x29, draws rows 0 and 1 only: R867's fixed map, exact). MAME 0.289 walk dumps every 8 s over attract and play;
+      // the eight ranges are the exhaustive best (sim range fit, study R1037).
+      5'h15: starts = B2L ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;   // Gunblade NY: rows 0 and 1 drawn (Sky Target's put them on row 6's table)
+      5'h16: starts = B2L ? {8'd100, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;   // INDY 500: rows 0-6 and 100 drawn, exact (Motor Raid's put 0-6 on row 100's)
+      5'h18: starts = B2L ? {8'd56, 8'd52, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;   // Virtual-On: rows 0, 1, 52, 56 drawn (DOA's ranges, the borrowed 0x16's, put all four on other rows' tables)
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction
 
   logic       lr_on;
   /* verilator lint_off UNUSEDSIGNAL */   // R932: read only with OREV
-  logic       or_on;
+  logic       or_on, sg_on;
   /* verilator lint_on UNUSEDSIGNAL */
-  always_ff @(posedge clk) begin lr_on <= big; or_on <= OREV && orev; end
+  always_ff @(posedge clk) begin lr_on <= big; or_on <= OREV && orev; sg_on <= B2L && OREV && sgt; end
   wire [7:0][7:0] s = starts(game_id);
 
   // the polygon's slot: how many of s[1..7] its row reaches
@@ -199,11 +280,11 @@ module m2_luma_map #(
   wire [3:0] w8 = lr_on ? {w_hit, w_rs} : lslot(w_row, zg);
   generate if (OREV && LSB >= 5) begin : g_orev
     /* verilator lint_off UNUSEDSIGNAL */   // q_t[5]: a polygon's row is drawn captured or not
-    wire [5:0] q_t = orev_tab(q_row);
+    wire [5:0] q_t = sg_on ? sgt_tab(q_row) : orev_tab(q_row);   // R1037: Super GT 24h's table (B2L)
     /* verilator lint_on UNUSEDSIGNAL */
-    wire [5:0] w_t = orev_tab(w_row);
-    assign q_ls = or_on ? {1'b1, (LSB)'(q_t[4:0])} : {q8[3], (LSB)'(q8[2:0])};
-    assign w_ls = or_on ? {w_t[5], (LSB)'(w_t[4:0])} : {w8[3], (LSB)'(w8[2:0])};
+    wire [5:0] w_t = sg_on ? sgt_tab(w_row) : orev_tab(w_row);
+    assign q_ls = (or_on | sg_on) ? {1'b1, (LSB)'(q_t[4:0])} : {q8[3], (LSB)'(q8[2:0])};
+    assign w_ls = (or_on | sg_on) ? {w_t[5], (LSB)'(w_t[4:0])} : {w8[3], (LSB)'(w8[2:0])};
   end else begin : g_r8
     assign q_ls = {q8[3], (LSB)'(q8[2:0])};
     assign w_ls = {w8[3], (LSB)'(w8[2:0])};

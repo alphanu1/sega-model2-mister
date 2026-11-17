@@ -237,6 +237,16 @@ def main():
         got = img[io:io + size]
         if len(got) < size:
             print(f"  {name:18s} image ends inside the slot"); bad += 1; continue
+        # R1037: the texture ROM is read through MAME's mask (model2_v.cpp
+        # texture_rom_mask, the region's size): past a power-of-two region the
+        # read wraps, so a slot written as the region again is MAME's read too
+        reg = regions.get(tag, b"")
+        if got != want and tag == "textures" and roff >= len(reg) > 0 and (len(reg) & (len(reg) - 1)) == 0:
+            o = roff % len(reg)
+            wrap = (bytes(reg) * ((o + size) // len(reg) + 1))[o:o + size]
+            if got == wrap:
+                print(f"  {name:18s} 0x{io:07X} +0x{size:06X}  == MAME {tag}[0x{roff:X}..] through its mask (the region again)")
+                continue
         if got == want:
             nz = sum(1 for i in range(0, size, 4096) if any(got[i:i + 4096]))
             print(f"  {name:18s} 0x{io:07X} +0x{size:06X}  == MAME {tag}[0x{roff:X}..]   ({nz} of {size // 4096} 4K pages non-zero)")

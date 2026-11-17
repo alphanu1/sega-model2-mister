@@ -16,9 +16,8 @@
       0xFF. The motion seats' Z80 (iocpu) has no dump in MAME and is
       not loaded. MAME answers the drive board's checks on the
       315-5649's port D (rchase2_drive_board_r: each command's bit
-      low); this core's profile reads port D as 0xFF, so the boot's
-      drive-board check sees no answer - whether the game stops there
-      or goes on is not measured. No protection, no patches.
+      low), and so does this set's ID (below). No protection, no
+      patches.
 
       THE 2A LAYOUT (VF2's MRA; no 128 MB module needed), each slot
       zero-padded to its size:
@@ -37,18 +36,20 @@
                    so the slot is 0xFF
       Image: 0x32C0000 bytes.
 
-      Index 4, the game ID: 0x11, BORROWED from Virtua Cop 2 (R862,
-      R870): the normal layout and the GUN profile, whose IN0 is
-      model2's (coins, test, service, both starts) and whose IN1 bits
-      0 / 1 are the two players' J4 - Rail Chase 2's two triggers
-      exactly. What it implies: the 2B build has no light guns
-      (R1035), so the four analog channels (MAME: AN0 P2_X, AN1 P1_X,
-      AN2 P2_Y, AN3 P1_Y) read 0xFF and BOTH AIMS ARE PINNED (past
-      MAME's 0xca / 0xcb maxima); R867's fixed luma-row map, not one
-      measured on this game. An ID of its own (the aim from the
-      sticks, the drive board's answers) is RTL work. Bit 7 is SET in
-      this MRA (0x91): the 15 kHz CRT flag (R795), which starts the
-      core in 15 kHz interlaced whatever the OSD says (R908).
+      Index 4, the game ID: 0x29, this set's own (R1037; the 2B build only):
+      the 2A layout; MAME's rchase2 ports (m2_2a_inputs B2G): IN0 model2's,
+      IN1 bits 0 / 1 the two triggers, AN0 P2_X, AN1 P1_X, AN2 P2_Y, AN3
+      P1_Y from each player's left stick, each PORT_REVERSE (0x7F-s); port D
+      the seats' drive board as MAME answers it (rchase2_drive_board_r: 0xFF
+      with one bit low for each command on port E). The boot's CHECKING
+      NETWORK NOW (main board - drive board) waits for that answer: MAME
+      with port D held at 0xFF shows NET_BAD and stays there for 40 s
+      (R1037), as the board did on the borrowed ID; MAME's own answer
+      reaches NET_GOOD in 9 s. Luma rows 0 and 1 only: R867's fixed map,
+      exact. Before (0x11, Virtua Cop 2's, borrowed): port D 0xFF, both aims
+      pinned. Bit 7 is SET in this MRA (0xA9): the 15 kHz CRT flag (R795),
+      which starts the core in 15 kHz interlaced whatever the OSD says
+      (R908).
     -->
     <name>Rail Chase 2 (Revision A) [15kHz CRT]</name>
     <setname>rchase2</setname>
@@ -57,7 +58,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>91 00</part>
+        <part>A9 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1994</year>
@@ -143,7 +144,7 @@
 
     </rom>
 
-    <!-- Player 1 on joystick 1, player 2 on joystick 2: Virtua Cop 2's order
-         (R870), the trigger on J4; the aim is not wired on the 2B build. -->
+    <!-- Player 1 on joystick 1, player 2 on joystick 2: Virtua Cop 2's
+         order (R870), the trigger on J4; each player's left stick aims. -->
     <buttons names="Trigger,-,Start,Coin,Test,Service"/>
 </misterromdescription>

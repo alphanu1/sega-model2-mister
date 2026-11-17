@@ -16,7 +16,8 @@
       FABS. MAME's copro_data region is 8 MB; the 2B build's slot is 4
       MB (the 8 MB slot is 2C's Ski Super G's only, a2_copro8), so the
       upper 4 MB are not loaded and a read there returns the word 4 MB
-      below it. Which half gunblade reads is not measured. No
+      below it. MAME 0.289 (R1037: 300 s of attract and play, a tap on
+      the SHARC's reads) reads only the first 256 KB. No
       protection, no patches.
 
       NEEDS THE 128 MB SDRAM MODULE (R891). THE LARGE 2A LAYOUT (R897,
@@ -36,23 +37,18 @@
       Image: 0x52C0000 bytes. Every stretch MAME's region does not load is
       written as MAME's fill (0, or 0xFF where the region is ERASEFF).
 
-      Index 4, the game ID: 0x18, BORROWED from Sky Target (R887),
-      because it is one of the two IDs that give both the large layout
-      and the SHARC's data ROM (on 2B the SHARC's data-ROM reads
-      (0x1c00000) come from the copro-data slot only for IDs 0x10 and
-      0x18-0x1B (Model2.sv a2_copro_rom); for every other ID they read
-      0; Gunblade NY reads it 4,181 times a vblank, 16,092 at most,
-      R1024; with a digital or the gun ID those reads would be 0).
-      What it implies: Sky Target's ANALOG profile, not this game's -
-      IN0 coin J4, test J6, service J7, but no Start 1 (bit 4 is not
-      driven; J8 is bit 5, START2); IN1 bits 0 / 1 (the triggers)
-      never pressed; AN0 (P1_X) the left stick's Y, AN1 (P2_X) 0xFF,
-      AN2 (P1_Y) the steering reversed (the left stick's X): player
-      1's aim on the left stick with the axes swapped, player 2's
-      pinned. ATTRACT ONLY. Also Sky Target's luma-row ranges (R900)
-      and its "Texture filter Auto = point" default (R950). An ID of
-      its own (large layout, data ROM, gunblade's ports) is RTL work.
-      Bit 7 would be the 15 kHz CRT flag.
+      Index 4, the game ID: 0x25, this set's own (R1037; the 2B build only):
+      the large layout; the SHARC's data-ROM reads from the copro-data slot
+      (Model2.sv a2_copro_rom); MAME's gunblade ports (m2_2a_inputs B2G):
+      IN0 model2's, IN1 bits 0 / 1 the two triggers, AN0 P1_X, AN1 P2_X, AN2
+      P1_Y, AN3 P2_Y from each player's left stick as 0x80 + s (the stops
+      MAME's MINMAX gives are the cabinet's; the game's gun adjustment in
+      the test menu takes them, and a stick covers every pair); its luma
+      rows, 0 and 1, exact. Before (0x18, Sky Target's, borrowed): Sky
+      Target's luma ranges drew both rows with row 6's table, MAME's walk
+      dumps scoring a mean error of 32 of 63 on every textured pixel (the
+      black polygons), and Sky Target's analog profile. Bit 7 would be the
+      15 kHz CRT flag.
     -->
     <name>Gunblade NY (Revision A)</name>
     <setname>gunblade</setname>
@@ -61,7 +57,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>18 00</part>
+        <part>25 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1995</year>
@@ -144,9 +140,9 @@
 
     </rom>
 
-    <!-- BORROWED ID: the analog profile's order (J4 Coin, J5 Start, J6 Test,
-         J7 Service, J8 View, J9 Hand Brake, J10 Accel, J11 Brake, J12 Gear Up,
-         J13 Gear Down), named by what each reaches in this game; "-" reaches
-         nothing it reads. -->
-    <buttons names="Coin,-,Test,Service,Start 2,-,-,-,-,-"/>
+    <!-- Player 1 on joystick 1, player 2 on joystick 2: the trigger on J4,
+         Start J6, Coin J7, Test J8, Service J9 (Virtua Cop 2's order); each
+         player's left stick aims (calibrate in the test menu's gun
+         adjustment). -->
+    <buttons names="Trigger,-,Start,Coin,Test,Service"/>
 </misterromdescription>

@@ -52907,3 +52907,100 @@ parameter.
 (upper 32 bits assumed; the data-transfer chapter not re-read); an
 infinite operand under TRUNC, FIX out of range and tininess before or
 after rounding stay MAME's (R1027).
+
+**R1037 -- FIVE 2B SETS ON THEIR OWN GAME IDs (0x25-0x29, THE 2B BUILD ONLY): WHAT EACH BORROWED
+ID GOT WRONG, MEASURED IN MAME; AND WHAT WAS NOT THE ID (VIRTUAL-ON'S i960 TRAPS ON roundrl,
+SUPER GT 24h'S LOCK-UP UNEXPLAINED).** Branch 2b-games (off model2b baddebde), 2026-11-17.
+Simulation + analyze_file only; no map, no fit, no board.
+
+(Section: §10, after R1032 (R1033-R1036 are other branches'). Authority: MAME 0.289 model2.cpp /
+model2_v.cpp for what each set's board has; R867 / R900 / R932 for the luma-row mechanisms;
+R928 for the comm-board answer; R1035 for the 2B build's inputs. Nothing here contradicts an
+earlier entry; it replaces c2359efa's borrowed IDs, which its MRAs called provisional.)
+
+*Board (Ben, s3412):* gunblade (borrowed 0x18) mostly black polygons; indy500 (0x1A) road and
+background textures wrong, controls wrong; sgt24h (0x1C) road textures wrong, some transparent
+ones black, locks up; von (0x16) stops on its boot screen ("MODEL2 BCRX"); rchase2 (0x11) stops
+at "CHECKING NETWORK", NET_BAD.
+
+*Method:* MAME 0.289 (sm2-builds/mame-m2b/m2lod, unmodified) headless, -nodrc, with a Lua script
+(taps only): the SHARC's data-space reads of 0x1c00000-0x1dfffff by 256 KB block, the i960's
+accesses to the comm window (0x01a00000-0x01a1ffff) and the 315-5649, luma / texture-RAM writes,
+a walk dump (M2GEO_TRIG, R887's p14b) every 8 s from 20 s, a snapshot every 3-15 s; the play
+script sim/io/mame_m2_2a_play.lua (coins at 40 s and 150-170 s; orev for indy500 / sgt24h, dig
+for von, vcop2 for gunblade / rchase2). 240-300 s each; the attract and play reached in all five
+(indy500 and sgt24h raced). Luma: R900's cost (per-pixel mean |luma error| of 63, drawn rows
+weighted by screen area, each dump's own luma RAM) for the eight-range mechanism by an exhaustive
+DP over the range starts, and sim/video/luma_fit.py for a 32-slot table. The symptoms reproduced
+in MAME by forcing the core's answer through the same taps (MS_PDFF / MS_ZROM / MS_COMM0).
+
+*Per set (data-ROM blocks: the 256 KB blocks of MAME's 8 MB copro_data the SHARC read):*
+  * gunblade -> 0x25. Data ROM: block 0 only (79 M reads in 300 s) -- the 4 MB slot holds it; the
+    8 MB region (a2_copro8) is NOT needed (the MRA's "which half is not measured" answered).
+    Luma: rows 0 and 1 only (29 dumps). Sky Target's ranges put both on row 6's table: mean
+    error 32.0 of 63, 100% of textured pixels more than 4 off -- the black polygons. Now
+    {0..7}, exact. Inputs: MAME's gunblade ports (rchase2's IN0 / IN1, AN0 P1_X AN1 P2_X AN2
+    P1_Y AN3 P2_Y) from each player's left stick as 0x80 + s (the game's gun adjustment
+    calibrates; R1016's pixel mapping needs m2_vcop_guns, which 2B leaves out, R1035). Comm
+    window not read.
+  * indy500 -> 0x26. Data ROM: blocks 0-3 (MAME's 1 MB). Luma: rows 0-6 and 100 (32 dumps,
+    the race reached). Motor Raid's ranges drew 0-6 with row 100's table: mean error 4.24,
+    26.6% of pixels more than 4 off -- the road and background. Now {0-6, 100}, exact.
+    Inputs: STCC's profile (R933: MAME's indy500 ports, pedals not reversed). Comm: CN / FG
+    written 0 once, never read.
+  * sgt24h -> 0x27. No data ROM (ERASE00). Luma: 99 rows drawn (34 dumps, a race). Over Rev's
+    table (what 0x1C gave it) scores 24.4 of 63, 65% more than 4 off -- consistent with the
+    road and the black transparent textures; eight ranges at best 1.81 / 15.9%; a
+    32-slot table of its own (R932's mechanism, k-medoids) 0.076 / 0.02% -- built (sgt_tab).
+    Comm: CN / FG written 0 and read 4 times at boot, 0x380 bytes of share RAM written twice,
+    none read: R928's answer, kept (comm_sel takes is_sgt). Texture ROM: MAME's region is 4 MB
+    and texture_rom_mask wraps there, so the 2A slot's upper 4 MB (MAME's 8-12 MB, the core's
+    a[22]) now holds the 4 MB again (it held 0); tools/mra_vs_mame.py accepts a slot that is the
+    region again through its mask. Inputs: Over Rev's (MAME's sgt24h ports are overrev's).
+    MAME ran 300 s (attract, menus, a race) without stopping.
+  * von -> 0x28. Data ROM: blocks 0, 5, 8 (to 2.25 MB). Luma: rows 0, 1, 52, 56 (26 dumps);
+    DOA's ranges: 32.0 / 100% off. Now {0, 1, 2, 3, 4, 5, 52, 56}, exact. Comm: CN read 13,638
+    times in 240 s (about 60 a second), MAME answering 0 -- the core's window reads 0 too.
+    DIGITAL profile, as before.
+  * rchase2 -> 0x29. "CHECKING NETWORK NOW" is MAIN BD <-> DRIVE BD: the seats' drive board on
+    the 315-5649's PE (commands) / PD (status). MAME's rchase2_drive_board_r shows NET_GOOD by
+    12 s; with PD forced to 0xFF through the tap (what the borrowed ID read) MAME shows NET_BAD
+    and stays on that screen for the 40 s run -- the board's symptom reproduced. Now PD is
+    MAME's function of the PE latch (m2_2a_inputs rc_in2). Comm window not read. Luma: rows 0
+    and 1: R867's fixed map, already exact. AN0 P2_X, AN1 P1_X, AN2 P2_Y, AN3 P1_Y from the
+    sticks, each PORT_REVERSE.
+
+*NOT THE ID -- Virtual-On's stop is an i960 gap (a core bug, not fixed here):* MAME passes the
+boot screen by 6 s with the data-ROM reads forced to 0 (the attract then has no 3D: a blue
+background) and with the comm reads forced to 0; neither reproduces the stop. The 2B whole-core
+boot bench (obj_boot_2b, von's image, the large layout) TRAPS AND HALTS at frame 29, 3,478,911
+instructions, ip 0x29664: the word there is 0x69a01596, REG opcode 0x69B = roundrl, which
+i960_top decodes for no build (roundr 0x68B is there; MAME i960.cpp implements roundrl, case
+0xb under 0x69). By then ip 0x1d300 had written 42 characters of the boot screen's text. The
+trap does not depend on the ID (no ID enables a 0x69B decode), so 0x28 alone will not boot it:
+roundrl (MAME's set_rifl of the rounded get_1_rifl, i960_fpmisc's roundr on a double) is the
+next step, then the bench again past frame 29.
+
+*NOT ESTABLISHED -- Super GT 24h's lock-up:* MAME runs; the borrowed ID differed only in the luma
+table and the texture-ROM upper half (both changed here), so whether either was the cause, or the
+SHARC, is open. Not reproduced on a bench (no long whole-core runs).
+
+*RTL (every term behind B2, so the 2A / 2C builds fold to what they were):* Model2.sv is_gunb /
+is_indy / is_sgt / is_von (rchase2 needs only m2_2a_inputs) into a2_big, a2_copro_rom,
+a2_rally_menu, comm_sel and the luma map's sgt; m2_2a_inputs B2G (p_gunb, p_rc2, rc_in2, the
+stick channels; INDY 500 / Super GT 24h onto the STCC / Over Rev lines); m2_luma_map B2L (three
+range rows, sgt_tab). Cost by parts, not mapped: inputs ~35-45 ALM, decodes ~5, ranges ~10-20,
+sgt_tab ~40-70 (two 256 x 6 lookups and the mux with orev_tab) -- ~90-140 ALM on a build at
+99%. If it does not fit, sgt24h's eight ranges {0, 2, 5, 60, 86, 89, 91, 173} (1.81 of 63) are
+the cheaper fallback.
+
+*Proof:* make test_m2_luma_map (2A, 2C, and a new 2B build: 262,144 checks each, 0 fails; two
+planted entries caught on 2B, the 2C build unaffected); test_m2_2a_inputs with a 2B copy
+(dut_b2: gunblade / rchase2 exact against MAME's ports and rchase2_drive_board_r, 0x26 / 0x27 on
+STCC's / Over Rev's lines, every other ID as the MOTION 0 copy; 20 M cycles 0 mismatches). The
+bench's own gap found on the way: a switch into 0x1C under R958's reset hold checked a channel
+in reset (guarded by rst_ok); at 10x length (200 M) the bench shows 9 analog-history mismatches
+on the 0x1C / 0x1D / C2G lines, and model2b's unchanged bench shows 9 of the same class --
+pre-existing, not this change's. lint_top (2B form) and lint_idx: no new findings against
+model2b's. quartus_map --analyze_file (17.0): Model2.sv (also with M2_2B / M2_2C), m2_2a_inputs,
+m2_luma_map, 0 errors.
