@@ -31,6 +31,8 @@ CURL = os.environ.get('M2B_RP_CURL') == '1'
 # M2B_RP_CURLM=1 (R1048; with CURL): some of those body words are also DM moves (compute, dreg <-> DM,
 # immediate modify) under IF NOT LCE, so a loop end's pop decides the access. Without it CURL's programs.
 CURLM = os.environ.get('M2B_RP_CURLM') == '1'
+# M2B_RP_ASTL=1 (R1048): some ureg loads from DM go to ASTAT (0x7c). Without it the programs as before.
+ASTL = os.environ.get('M2B_RP_ASTL') == '1'
 PM0 = 0x21d00                                         # block 0's data words (past the program)
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
@@ -227,6 +229,7 @@ def main():
             else:
                 # R, the I it modifies, another I (R1028: two I writes in one word), an M
                 u = g.choice([g.randrange(16), g.randrange(16), 0x10 + i, 0x10 + g.randrange(8), 0x20 + g.randrange(8)])
+                if ASTL and g.random() < 0.15: u = 0x7c       # R1048: a load to ASTAT (M2B_RP_ASTL)
             emit((0b010 << 45) | (post << 44) | (i << 41) | (m << 38) | (cond() << 33) | (0 << 32) |
                  (d << 31) | (u << 23) | comp())
             if not d and 0x10 <= u < 0x18:                 # the loaded I is data: back into block 1
