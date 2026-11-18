@@ -153,6 +153,8 @@ localparam logic [3:0] U_FORM = 4'd1, U_COMP = 4'd2, U_MEM = 4'd3, U_DAG = 4'd4,
 (* ramstyle = "M10K" *) logic [15:0] pm1 [PMW];
 (* ramstyle = "M10K" *) logic [15:0] pm2 [PMW];
 logic [PM_AW-1:0] pm_ra, pm_wa;
+logic [PM_AW-1:0] pm_wb [3];                // R1048: port B's address per lane (pm_wa: the benches' reference)
+logic [PM_AW-1:0] pm_ha, pm_hidx;           // ... the host's / the clear's, and the host's window index
 logic             pm_re;
 logic [2:0]       pm_we;
 logic [15:0]      pm_wd;                    // the host's / the clear's 16 bits (lane 0, and 1 / 2)
@@ -165,14 +167,14 @@ end
 // (port B as Quartus 17's true-dual-port template: a read in every clock it does not write, the
 // written data on a write, no enable -- with a read enable Quartus 17.0 makes a second copy of the
 // lane instead, +32 M10K, measured R1042)
-always_ff @(posedge clk) if (pm_we[0]) pm0[pm_wa] <= pm_wd;
+always_ff @(posedge clk) if (pm_we[0]) pm0[pm_wb[0]] <= pm_wd;
 always_ff @(posedge clk) begin
-    if (pm_we[1]) begin pm1[pm_wa] <= pm_wd2[15:0]; pmb_q[15:0] <= pm_wd2[15:0]; end
-    else pmb_q[15:0] <= pm1[pm_wa];
+    if (pm_we[1]) begin pm1[pm_wb[1]] <= pm_wd2[15:0]; pmb_q[15:0] <= pm_wd2[15:0]; end
+    else pmb_q[15:0] <= pm1[pm_wb[1]];
 end
 always_ff @(posedge clk) begin
-    if (pm_we[2]) begin pm2[pm_wa] <= pm_wd2[31:16]; pmb_q[31:16] <= pm_wd2[31:16]; end
-    else pmb_q[31:16] <= pm2[pm_wa];
+    if (pm_we[2]) begin pm2[pm_wb[2]] <= pm_wd2[31:16]; pmb_q[31:16] <= pm_wd2[31:16]; end
+    else pmb_q[31:16] <= pm2[pm_wb[2]];
 end
 
 // DM block 1: two 16-bit lanes, one port
@@ -181,9 +183,9 @@ end
 logic [DM_AW-1:0] dm_a;
 logic             dm_en, dm_we;
 logic [31:0]      dm_wd, dm_q;
-// R1048: each lane's address its own copy of dm_a's select (kept), so the last gate drives 16
-// blocks, not 32 (s4901: the select -> 32 M10K, 3.594 ns of route)
-(* keep *) logic [DM_AW-1:0] dm_a0, dm_a1;
+// R1048: each lane's address its own (dm_as below, one adder per lane), so the last stage drives
+// 16 blocks, not 32 (s4901: the select -> 32 M10K, 3.594 ns of route); dm_a is the benches'
+logic [DM_AW-1:0] dm_a0, dm_a1;
 always_ff @(posedge clk) if (dm_en) begin
     if (dm_we) begin dm0[dm_a0] <= dm_wd[15:0]; dm1[dm_a1] <= dm_wd[31:16]; end
     else begin dm_q[15:0] <= dm0[dm_a0]; dm_q[31:16] <= dm1[dm_a1]; end
@@ -2197,6 +2199,7 @@ always_comb begin
     // so pmb_q holds the word through X. The host's write has the port: D waits (d_wait); a host
     // write while a word is in X is not arbitrated (the upload is made with the SHARC halted)
     pm_host = pm_we != 3'b000;
+    pm_ha = pm_wa; pm_hidx = PM_AW'(idx - 32'h20000);
     pm_wd2 = {pm_wd, pm_wd};
     if (!pm_host) begin
         if (st == ST_X && x_done && XC.acc == A_PM && XC.acc_wr) begin
@@ -2206,13 +2209,64 @@ always_comb begin
     end
 end
 
+// R1048: THE DM RAM's ADDRESS, ONE ADDER PER LANE WITH THE STATE's CHOICE IN ITS OPERANDS. dm_a
+// was the D address (mem_a's low bits, through the access decode's x.acc_addr) or X's / the
+// clear's, selected after the adder -- a LUT and a hop between the carry chain and 32 M10K. Here
+// in D the operands are mem_a's own ({!sd} & I) and off, and otherwise the X / clear address and
+// 0, so the sum is the address and goes straight to the RAM. Outside D, X and the clear dm_en is
+// low and the address unused. The same bits: mem_a's low DM_AW (x.acc_addr's, PMB1_MAME off), as
+// g_dma_check checks at every enabled clock.
+logic [DM_AW-1:0] dm_as [2];
+(* keep *) logic [DM_AW-1:0] dm_ia [2], dm_ob [2];   // (kept per lane: two adders, 16 M10K each)
+logic [DM_AW-1:0] dm_xa;
+logic             dm_dsel;
+// ... and the PM RAM's port B the same way, one adder per lane: in D the operands are d_pb_a's
+// (type 1: i4 and 0; else mem_a's), in X the access's address and 0, otherwise the host window's
+// index and 0; the host's / the clear's write (pm_host) chooses after the adder, as before
+(* keep *) logic [PM_AW-1:0] pm_ia [3], pm_ob [3];
+logic [PM_AW-1:0] pm_cs [3], pm_xa;
+always_comb begin
+    logic [47:0] o;
+    logic        s1, s2, s3, sd, t1;
+    o = pm_q;
+    s1 = o[47:45] == 3'b010 && !o[44];
+    s2 = o[47:44] == 4'b0110 && !o[38];
+    sd = o[47:42] == 6'b000100;
+    s3 = sd || o[47:45] == 3'b101;
+    dm_dsel = st == ST_D && !clr_on;
+    dm_xa = clr_on ? clr_n[DM_AW-1:0] : XC.acc_addr[DM_AW-1:0];
+    t1 = o[47:45] == 3'b001;
+    pm_xa = (x_done && XC.acc == A_PM && XC.acc_wr) ? XC.acc_addr[PM_AW-1:0] :
+            (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
+    for (int k = 0; k < 3; k++) begin
+        pm_ia[k] = (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
+                   (st == ST_X) ? pm_xa : pm_hidx;
+        pm_ob[k] = ({PM_AW{st == ST_D && !t1 && s1 && !d_pg}} & m1_rd[PM_AW-1:0]) | ({PM_AW{st == ST_D && !t1 && s1 && d_pg}} & m3_rd[PM_AW-1:0]) |
+                   ({PM_AW{st == ST_D && !t1 && s2}} & PM_AW'(sext6(o[32:27]))) | ({PM_AW{st == ST_D && !t1 && s3}} & o[PM_AW-1:0]);
+        pm_cs[k] = pm_ia[k] + pm_ob[k];
+        pm_wb[k] = pm_host ? pm_ha : pm_cs[k];
+    end
+    for (int k = 0; k < 2; k++) begin
+        dm_ia[k] = dm_dsel ? ({DM_AW{!sd}} & (d_pg ? i3_rd[DM_AW-1:0] : i1_rd[DM_AW-1:0])) : dm_xa;
+        dm_ob[k] = ({DM_AW{dm_dsel && s1 && !d_pg}} & m1_rd[DM_AW-1:0]) | ({DM_AW{dm_dsel && s1 && d_pg}} & m3_rd[DM_AW-1:0]) |
+                   ({DM_AW{dm_dsel && s2}} & DM_AW'(sext6(o[32:27]))) | ({DM_AW{dm_dsel && s3}} & o[DM_AW-1:0]);
+        dm_as[k] = dm_ia[k] + dm_ob[k];
+    end
+end
+generate if (BENCH && !PMB1_MAME) begin : g_dma_check
+    always_ff @(posedge clk) if (dm_en && (dm_as[0] != dm_a || dm_as[1] != dm_a)) $fatal(1, "DM address %h %h, the select's %h", dm_as[0], dm_as[1], dm_a);
+    always_ff @(posedge clk) if (pm_wb[0] != pm_wa || pm_wb[1] != pm_wa || pm_wb[2] != pm_wa) $fatal(1, "PM port B %h %h %h, the select's %h", pm_wb[0], pm_wb[1], pm_wb[2], pm_wa);
+end endgenerate
+
 // DM: the read address in D, the write at X's end
 always_comb begin
     dm_en = 1'b0; dm_we = 1'b0; dm_wd = XC.acc_wd;
     // the address by state alone (R1029: no decode before the M10K's address register)
     dm_a = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
-    dm_a0 = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
-    dm_a1 = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
+    // R1048: each lane's address its own sum, the D / X / clear choice made in the adder's
+    // operands (dm_ao), not after it; PMB1_MAME (benches) keeps the select after the remap
+    dm_a0 = PMB1_MAME ? (clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a) : dm_as[0];
+    dm_a1 = PMB1_MAME ? (clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a) : dm_as[1];
     if (clr_on) begin dm_en = clr_n < DMW; dm_we = 1'b1; dm_wd = 32'h0; end
     // R1044: the read in EVERY D clock, whatever the word (the last stays): only an A_DM read
     // access reads dm_q, in X, and its value then is the last D clock's read at d_dm_a, as before;
