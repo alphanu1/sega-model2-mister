@@ -249,16 +249,11 @@ typedef struct packed {
 } seq_t;
 seq_t S;
 seq_t S_dbg;                                // benches: S as the word that left X last left it
-// R1044: the loop end's compares on S, made where S is written and registered beside it (D used
-// to make them from S, before the loop end, its pop and the word's condition): S.daddr ==
-// S.la_addr and S.daddr - S.pcstk > 2 (BENCH checks them in D)
-logic sf_le, sf_long;
-// (CURLCNTR's two compares stay D's own, from S: made from s_x1 they were the slower -- s3431's
-// first fit, x_op -> sf_c2 -1.425 ns through the pops' select)
+// R1044: the loop end's compares on S, D's own. Registered where S is written (from s_x1) they
+// were the slower paths: s3431's first fit x_op -> sf_c2 -1.425 ns, s3435's fifth S.pcstkp ->
+// sf_le / sf_long -1.994 -- the whole sequencer in front of a 24- / 32-bit compare
+wire  sf_le = S.daddr == S.la_addr, sf_long = S.daddr - S.pcstk > 24'd2;
 wire  sf_c1 = S.curlcntr == 32'd1, sf_c2 = S.curlcntr == 32'd2;
-function automatic logic [1:0] s_flags(input seq_t s);
-    return {s.daddr == s.la_addr, s.daddr - s.pcstk > 24'd2};
-endfunction
 
 // the PC stack (30 used of 32) and the loop stacks (6 of 8): MLAB (m2b_lutram, R1028), the top
 // of each in S. One write each at X's end; the reads are D's, at addresses from S (the stack
@@ -1656,10 +1651,6 @@ logic [1:0] x_cnt, x_need;
 // (R1044: from D's registers, XC.need_fl, not through the misc unit's decode; the old form is
 // the benches' check)
 assign x_need = XC.fl_on ? XC.need_fl : XC.sh_on ? 2'd1 : 2'd0;
-generate if (BENCH) begin : g_sflag_check
-    always_ff @(posedge clk) if (!reset && st == ST_D && {sf_le, sf_long} != s_flags(S))
-        $fatal(1, "S's flags %b, S's compares %b", {sf_le, sf_long}, s_flags(S));
-end endgenerate
 generate if (BENCH) begin : g_need_check
     always_ff @(posedge clk) if (st == ST_X && x_need != ((XC.fl_on && XC.fl_misc) ? xu_mx :
                                  (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0))
@@ -1885,7 +1876,6 @@ always_ff @(posedge clk) begin
         S.curlcntr <= 32'hFFFF_FFFF; S.lcntr <= 32'h0;
         S.la_addr <= 24'hFFFFFF; S.la_code <= 5'h1f; S.la_type <= 2'd3;
         S.stk <= PCEM | SSEM | LSEM;
-        {sf_le, sf_long} <= 2'b01;   // s_flags of the above (0x20005 - 0xFFFFFF > 2)
         stky <= PCEM | SSEM | LSEM;
         astat <= 32'h0; mode1 <= 32'h0; mode2 <= 32'h0; irptl <= 32'h0; imask <= 32'h3;
         ustat1 <= 32'h0; ustat2 <= 32'h0; syscon <= 32'h10; px <= 48'h0;
@@ -1954,7 +1944,7 @@ always_ff @(posedge clk) begin
             else if (XC.fix_on) begin misc_r <= x_fix.r; misc_a <= x_fix.astat; misc_s <= x_fix.stky; end
             else begin misc_r <= x_sh.r; misc_a <= x_sh.astat; misc_s <= 32'h0; end
             // an unsupported word (D's, or X's own below): one capture, of the word in X
-            if (x_first && !x_fin) begin S <= s_x1; {sf_le, sf_long} <= s_flags(s_x1); end   // (X's end below otherwise)
+            if (x_first && !x_fin) begin S <= s_x1; end   // (X's end below otherwise)
             // R1042: type 1's second pass, its PM move: the access fields from XC.acc2, the store
             // data the register read in the first (port E at x_op[26:23]); a DM-RAM read or an
             // external access first waits a clock (x_p2w: the read issued; the request dropped once)
@@ -2020,7 +2010,6 @@ always_ff @(posedge clk) begin
                 end
                 // the sequencer and STKY's stack bits
                 S <= sq;
-                if (x_first) {sf_le, sf_long} <= s_flags(s_x1);   // (sq is S otherwise)
                 if (BENCH) S_dbg <= sq;                 // the benches' view: S after this word
                 k = (k & ~STK_BITS) | (sq.stk & STK_BITS);
                 astat <= a; stky <= k;
@@ -2067,7 +2056,6 @@ always_ff @(posedge clk) begin
             default: if (sw.lstkp < 3'd6) sw.lcntr = us_pv;
             endcase
             S <= sw;
-            {sf_le, sf_long} <= s_flags(sw);
             if (BENCH) S_dbg <= sw;
             us_pw <= 1'b0;
         end
