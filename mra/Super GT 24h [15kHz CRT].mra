@@ -32,7 +32,9 @@
       Image: 0x2EC0000 bytes.
 
       Index 4, the game ID: 0x27, this set's own (R1037; the 2B build only):
-      the 2A layout; Over Rev's ports (MAME's sgt24h ports are overrev's)
+      the 2A layout; Over Rev's ports (MAME's sgt24h ports are overrev's,
+      but for IN1 0x02, Over Rev's View 2, which is unused here and held 1:
+      R1046)
       and its comm-board answer (the same EPR-18643A program; MAME shows the
       same accesses); its own luma table (32 slots, R932's mechanism, fitted
       to MAME's walk dumps of the attract and a race: mean error 0.08 of

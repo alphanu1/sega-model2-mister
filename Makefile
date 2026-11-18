@@ -3432,6 +3432,20 @@ test_m2_dsb_2c:
 # R1039: the 2B build's game ID register (m2b_gameid) against the plain byte it replaced,
 # every cycle, with the ID list read from the 2B MRAs (each must send index 4 first: vc_en);
 # then two planted faults (Rail Chase 2's ID decoded wrong; an MRA's index 4 last) must fail.
+# R1046: the colour path's shadows from the game ID and the CPU's writes, as a 2B build forms
+# them (m2b_gameid and m2_luma_map RTL, Model2.sv's decodes and g_r3d_lut snoop), against the
+# tables tb_m2_raster3d fills from MAME's dumps. LUT_DIR holds a MAME capture from
+# sim/video/mame_m2_colwrites.lua (ROM-derived: outside the repo); LUT_IDS the IDs to try.
+LUT_DIR ?=
+LUT_IDS ?= 16 96
+.PHONY: test_m2_lut_snoop
+test_m2_lut_snoop: obj_lut_snoop/V
+	@echo "== test m2_lut_snoop (R1046: the colour-path shadows from the ID and MAME's CPU writes)"
+	@./obj_lut_snoop/V $(LUT_DIR) $(LUT_IDS)
+obj_lut_snoop/V: rtl/io/m2b_gameid.sv rtl/video/m2_luma_map.sv sim/video/tb_m2_lut_snoop_top.sv sim/video/tb_m2_lut_snoop.cpp sim/video/m2_luma_map_ref.h
+	$(VBUILD) --top-module tb_m2_lut_snoop_top -Wno-UNUSEDSIGNAL --Mdir obj_lut_snoop -o V -CFLAGS "-O2 -I$(abspath sim/video)" \
+	  rtl/io/m2b_gameid.sv rtl/video/m2_luma_map.sv sim/video/tb_m2_lut_snoop_top.sv sim/video/tb_m2_lut_snoop.cpp
+
 .PHONY: test_m2b_gameid
 test_m2b_gameid:
 	@echo "== test m2b_gameid (R1039: the 2B MRAs' IDs read back exactly, every cycle)"

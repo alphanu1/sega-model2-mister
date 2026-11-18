@@ -29,17 +29,15 @@
                    (the rest 0 as MAME's region)
       Image: 0x2EC0000 bytes.
 
-      Index 4, the game ID: 0x17, BORROWED - this set has no ID of its
-      own. 0x17 is The House of the Dead's on the 2C build (R924); on
-      the 2B build every 0x17 decode is folded off (R1035), so it
-      means only what any 0x10-0x1F ID without a decode of its own
-      means there: a 2A game past VF2 (the program extension, R862;
-      the i960's extra float forms, R865), the normal layout, the
-      DIGITAL three-button profile in VF2's order (R887) and R867's
-      fixed luma-row map. What it implies: the luma map is the generic
-      one, not one measured on this game, so the shading of textured
-      polygons may be off; and if 0x17 is ever given a 2B decode, this
-      MRA must move. Bit 7 would be the 15 kHz CRT flag.
+      Index 4, the game ID: 0x2C, the Virtua Striker sets' own (R1046; the
+      2B build only): the 2A layout, no copro data (MAME's region is
+      ERASE00); the DIGITAL three-button profile, MAME's vstriker ports (IN1
+      / IN2 bit 0 Long Pass, bit 1 Shoot, bit 2 Short Pass); R867's fixed
+      luma map, which holds its rows (0, 1 and 2 over MAME's walk dumps)
+      exactly. Before (0x17, borrowed: The House of the Dead's on the 2C
+      build, with no 2B decode): the same profile and the same luma map, so
+      on the board nothing changes but the ID; it is its own so that no
+      later 0x17 decode can reach it. Bit 7 would be the 15 kHz CRT flag.
     -->
     <name>Virtua Striker</name>
     <setname>vstrikero</setname>
@@ -48,7 +46,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>17 00</part>
+        <part>2C 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1994</year>

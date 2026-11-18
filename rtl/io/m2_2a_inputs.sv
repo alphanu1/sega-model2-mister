@@ -141,6 +141,24 @@
 //          the seats' drive board as MAME answers it (rchase2_drive_board_r):
 //          0xFF with bit 0 low while PE holds 0xE0 / 0x0E, bit 1 for 0xD0 /
 //          0x0D, bit 2 for 0xB0 / 0x0B, bit 3 for 0x70 / 0x07.
+//     R1046, THE REST OF THE 2B SETS (B2G, 2B builds only; MAME 0.289's ports):
+//     0x2A Fighting Vipers (vf2's ports), 0x2B Sonic Championship / the
+//          Fighters (schamp's), 0x2C Virtua Striker (vstriker's), 0x2E Last
+//          Bronx (vf2's): DIGITAL as it is (no decode here).
+//     0x2D Dynamite Baseball / '97 (dynabb): J 4 B1 5 B2 6 Swing 7 Start
+//          8 Coin 9 Test 10 Service (P2 on joystick 1). IN0 model2's (VF2's
+//          order); IN1 / IN2 model2's with 0x0c unused (1); AN0 BAT1, AN1
+//          BAT2 (IPT_PEDAL / PEDAL2: 0x00 at rest): 0xFF while that player's
+//          Swing is held, else 0x00 -- player 1's right analogue trigger
+//          (R981) gives AN0 a partial swing too; AN2 / AN3 0xFF.
+//     0x28 Virtual-On, the right lever (R1046): MAME's von puts BOTH levers
+//          and all four buttons on player 1 (IN2 JOYSTICKRIGHT_*, BUTTON3
+//          Right Shot, BUTTON4 Right Dash). IN2 is joystick 1's lever and
+//          J4 / J5 as before (two sticks seen as two joysticks), OR player
+//          1's right analogue stick past R879's dead zone and player 1's J6
+//          (Right Shot) / J11 (Right Dash); IN1 bit 2 (unused there) 1.
+//     0x27 Super GT 24h (R1046): IN1 0x02 is unused in MAME's sgt24h (Over
+//          Rev's View 2): held 1.
 //   GUN (0x11, Virtua Cop 2) -- R870: Virtua Cop's buttons (its driver,
 //     m2_vcop_guns, reads the same bits) and, with GUN, IN1 from the driver:
 //     J  4 Trigger 5 Reload 6 Start 7 Coin 8 Test 9 Service (P2: joystick 1)
@@ -208,6 +226,9 @@ module m2_2a_inputs #(
   wire p_stcc   = OREV & ANALOG & ((game == 7'h1D) | (B2G & (game == 7'h26)));  // R933: STCC (2C): Over Rev's, pedals not reversed; R1037: INDY 500 (2B)
   wire p_gunb   = B2G & (game == 7'h25);            // R1037: Gunblade NY (2B)
   wire p_rc2    = B2G & (game == 7'h29);            // R1037: Rail Chase 2 (2B)
+  wire p_von    = B2G & (game == 7'h28);            // R1046: Virtual-On's right lever from player 1 too
+  wire p_dybb   = B2G & (game == 7'h2D);            // R1046: Dynamite Baseball's bats (2B)
+  wire p_sgt    = B2G & (game == 7'h27);            // R1046: Super GT 24h's IN1 0x02 unused
   wire p_wave   = C2G & ANALOG & (game == 7'h1E);   // R1010: Wave Runner
   wire p_wski   = C2G & ANALOG & (game == 7'h1F);   // R1010: Sega Water Ski
   wire p_bel    = C2G & (game == 7'h20);            // R1010: Behind Enemy Lines
@@ -308,7 +329,7 @@ module m2_2a_inputs #(
     endcase
   end
   wire [7:0] or_in0 = {an_in0[7:6], 1'b1, an_in0[4:0]};           // bit 5 unused
-  wire [7:0] or_in1 = {2'b11, ~j0[13], ~j0[12], 2'b11, ~j0[9], ~j0[8]};
+  wire [7:0] or_in1 = {2'b11, ~j0[13], ~j0[12], 2'b11, ~(j0[9] & ~p_sgt), ~j0[8]};   // R1046: sgt24h's 0x02 unused
 
   // ---- R1010 / R1016: Behind Enemy Lines' four gun axes, from m2_vcop_guns'
   // pixels (px 0..495, py 0..383): X min + px * 78 >> 8 (P1 0x69, P2 0x00;
@@ -358,12 +379,26 @@ module m2_2a_inputs #(
   wire [7:0] sk1y = {~joy_analog[15],  joy_analog[14:8]};
   wire [7:0] sk2x = {~joy_analog_1[7], joy_analog_1[6:0]};
   wire [7:0] sk2y = {~joy_analog_1[15], joy_analog_1[14:8]};
+  // ---- R1046: Virtual-On's right lever -- joystick 1, or player 1's right
+  // stick and J6 / J11 (MAME's von: both levers and four buttons on player 1)
+  wire [3:0] vr  = d1[3:0] | adir(joy_ranalog);
+  wire [7:0] vo_in1 = {dg_in1[7:3], 1'b1, dg_in1[1:0]};
+  wire [7:0] vo_in2 = ~{vr[1], vr[0], vr[3], vr[2], 2'b00, j1[5] | j0[11], j1[4] | j0[6]};
+  // ---- R1046: Dynamite Baseball's bats (BAT1 / BAT2, pedals at rest 0x00)
+  wire [7:0] db_bat1 = j0[6] ? 8'hFF : trig_rt;
+  wire [7:0] db_bat2 = j1[6] ? 8'hFF : 8'h00;
   wire [7:0] rc_in2 = {4'hF, ~((pe == 8'h70) | (pe == 8'h07)), ~((pe == 8'hB0) | (pe == 8'h0B)),
                        ~((pe == 8'hD0) | (pe == 8'h0D)), ~((pe == 8'hE0) | (pe == 8'h0E))};
 
   always_ff @(posedge clk) begin
     an3 <= p_wave ? wv_pitch : p_bel ? bl_v[3] : p_gunb ? sk2y : p_rc2 ? ~sk1y : 8'hFF;   // R1010; R1037
-    if (p_gunb | p_rc2) begin                         // R1037
+    if (p_dybb) begin                                 // R1046
+      in0 <= dg_in0; in1 <= d2_in1; in2 <= d2_in2;
+      an0 <= db_bat1; an1 <= db_bat2; an2 <= 8'hFF;
+    end else if (p_von) begin                         // R1046
+      in0 <= dg_in0; in1 <= vo_in1; in2 <= vo_in2;
+      an0 <= 8'hFF; an1 <= 8'hFF; an2 <= 8'hFF;
+    end else if (p_gunb | p_rc2) begin                // R1037
       in0 <= gn_in0; in1 <= ~{6'b000000, j1[4], j0[4]}; in2 <= p_rc2 ? rc_in2 : 8'hFF;
       an0 <= p_rc2 ? ~sk2x : sk1x; an1 <= p_rc2 ? ~sk1x : sk2x; an2 <= p_rc2 ? ~sk2y : sk1y;
     end else if (p_wave) begin                        // R1010

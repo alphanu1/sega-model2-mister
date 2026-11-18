@@ -10,10 +10,9 @@
       (this set's census), R1031.
 
       MAME 0.289: MACHINE_NOT_WORKING, but R1024's census fought it.
-      EXPECTED NOT TO RUN ON THE CURRENT 2B CORE: the SHARC program
-      (4,954 words) is Fighting Vipers' engine - type-1 dual moves
-      (21.7 M) and PM-bus data (1,804 addresses), which m2b_sharc does
-      not do (R1027) - and writes DM to 0x75ff, reads to 0x32fc (the
+      The SHARC program (4,954 words) is Fighting Vipers' engine -
+      type-1 dual moves (21.7 M) and PM-bus data (1,804 addresses),
+      which m2b_sharc does since R1042 - and writes DM to 0x75ff, reads to 0x32fc (the
       DM page, R1026 / R1031); the data ROM 446 reads, the buffer RAM
       1,907 reads / 2,838 writes a vblank. Textures to the upper MB
       only (mirrored on 2B). No protection, no patches.
@@ -35,22 +34,20 @@
       Image: 0x52C0000 bytes. Every stretch MAME's region does not load is
       written as MAME's fill (0, or 0xFF where the region is ERASEFF).
 
-      Index 4, the game ID: 0x1A, BORROWED from Motor Raid (R887),
-      because it is one of the two IDs that give both the large layout
-      and the SHARC's data ROM (on 2B the SHARC's data-ROM reads
-      (0x1c00000) come from the copro-data slot only for IDs 0x10 and
-      0x18-0x1B (Model2.sv a2_copro_rom); for every other ID they read
-      0; this set reads it 446 times a vblank, R1024; with a digital
-      ID those reads would be 0). What it implies: Motor Raid's ANALOG
-      profile, not this game's controls - IN0 coin J4, test J6,
-      service J7, J5 on bit 6 and J8 on bit 5; IN1 only bits 4 / 5
-      (J12 / J13); AN0 the accelerator, AN1 the brake, AN2 the
-      steering reversed - and Motor Raid's luma-row ranges (R900). For
-      a fighter that means NO STICK OR BUTTONS and NO START 1: attract
-      only. An ID of its own (large layout, data ROM, its own profile)
-      is RTL work. Bit 7 is SET in this MRA (0x9A): the 15 kHz CRT
-      flag (R795), which starts the core in 15 kHz interlaced whatever
-      the OSD says (R908).
+      Index 4, the game ID: 0x2B, Sonic Championship's and Sonic the
+      Fighters' own (R1046; the 2B build only; the two sets share every ROM
+      but the program and data EPROMs, and MAME gives both the schamp
+      ports): the large layout; the SHARC's data-ROM reads from the
+      copro-data slot (Model2.sv a2_copro_rom); the DIGITAL three-button
+      profile in VF2's order, which is MAME's schamp ports (Punch, Kick,
+      Barrier on IN1 / IN2 bits 0-2); its luma rows (14 of rows 0-68 drawn;
+      eight ranges, a mean error of 0.04 of 63 over MAME's walk dumps of
+      schamp and sfight). Before (0x1A, Motor Raid's, borrowed): Motor
+      Raid's luma ranges, a mean error of 46.9 of 63 on every textured pixel
+      - the black 3D the board showed - and Motor Raid's analog profile (no
+      stick, no buttons, no Start 1). Bit 7 is SET in this MRA (0xAB): the
+      15 kHz CRT flag (R795), which starts the core in 15 kHz interlaced
+      whatever the OSD says (R908).
     -->
     <name>Sonic Championship (USA) [15kHz CRT]</name>
     <setname>schamp</setname>
@@ -59,7 +56,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>9A 00</part>
+        <part>AB 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1996</year>
@@ -211,9 +208,7 @@
 
     </rom>
 
-    <!-- BORROWED ID: the analog profile's order (J4 Coin, J5 Start, J6 Test,
-         J7 Service, J8 View, J9 Hand Brake, J10 Accel, J11 Brake, J12 Gear Up,
-         J13 Gear Down), named by what each reaches in this game; "-" reaches
-         nothing it reads. -->
-    <buttons names="Coin,-,Test,Service,Start 2,-,-,-,Down,Up"/>
+    <!-- Player 1 on joystick 1, player 2 on joystick 2, the same buttons
+         (VF2's order: R887's three-button profile; MAME's schamp ports). -->
+    <buttons names="Punch,Kick,Barrier,Start,Coin,Test,Service"/>
 </misterromdescription>
