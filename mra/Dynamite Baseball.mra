@@ -32,16 +32,18 @@
       Image: 0x52C0000 bytes. Every stretch MAME's region does not load is
       written as MAME's fill (0, or 0xFF where the region is ERASEFF).
 
-      Index 4, the game ID: 0x13, BORROWED from Hanguk Pro Yagu 98
-      (R887), the other baseball game: the large layout and the
-      DIGITAL three-button profile (this game reads two buttons, IN1 /
-      IN2 bits 0 and 1). What it implies: the two BAT SWING inputs
-      (MAME's BAT1 / BAT2 on AN0 / AN1, pedals resting at 0x00) read
-      0xFF, swing held, on every digital profile - batting is not
-      expected to work; and Hanguk Pro Yagu 98's luma-row ranges
-      (R900), not ones measured on this game. No 2B ID reads the swing
-      from a stick; that is RTL work. Bit 7 would be the 15 kHz CRT
-      flag.
+      Index 4, the game ID: 0x2D, the Dynamite Baseball sets' own (R1046;
+      the 2B build only): the large layout, no copro data (MAME's region is
+      ERASE00); MAME's dynabb ports: two buttons a player (IN1 / IN2 bits 0
+      / 1, bits 2 / 3 unused) and the BAT SWING on AN0 (player 1) and AN1
+      (player 2), MAME's BAT1 / BAT2 pedals, 0x00 at rest: 0xFF while that
+      player's Swing (J6) is held, player 1's right analogue trigger a
+      partial swing; its luma rows (16 of rows 66-100 drawn; eight ranges, a
+      mean error of 0.05 of 63 over MAME's walk dumps). Before (0x13, Hanguk
+      Pro Yagu 98's, borrowed): both bats read 0xFF, a swing held all the
+      time, and Hanguk Pro Yagu 98's luma ranges (a mean error of 2.2 of 63
+      on this game's rows, 14.5% of textured pixels more than 4 off). Bit 7
+      would be the 15 kHz CRT flag.
     -->
     <name>Dynamite Baseball</name>
     <setname>dynabb</setname>
@@ -50,7 +52,7 @@
          93C46 EEPROM (128 bytes): the game's settings. -->
     <nvram index="2" size="16520"/>
     <rom index="4" md5="none">
-        <part>13 00</part>
+        <part>2D 00</part>
     </rom>
     <mameversion>0289</mameversion>
     <year>1996</year>
@@ -142,6 +144,6 @@
     </rom>
 
     <!-- Player 1 on joystick 1, player 2 on joystick 2, the same buttons
-         (VF2's order: R887's three-button profile). -->
-    <buttons names="Button 1,Button 2,-,Start,Coin,Test,Service"/>
+         (VF2's order; J6 is that player's bat swing, AN0 / AN1). -->
+    <buttons names="Button 1,Button 2,Swing,Start,Coin,Test,Service"/>
 </misterromdescription>

@@ -37,7 +37,7 @@
 module m2_luma_map #(
   parameter int unsigned LSB  = 3,      // R932: slot bits (3 the 2A build, 5 the 2C build)
   parameter bit          OREV = 1'b0,   // R932: Over Rev's table (needs LSB 5)
-  parameter bit          B2L  = 1'b0    // R1037: the 2B games' own ranges (0x25-0x29; 2B builds)
+  parameter bit          B2L  = 1'b0    // R1037: the 2B games' own ranges (0x25-0x29; R1046: 0x2A-0x2D; 2B builds)
 ) (
   input  logic           clk,
   input  logic [4:0]     game_id,   // R1010: {ID bit 5, ID bits 3:0} (the table is used only with big)
@@ -252,6 +252,14 @@ module m2_luma_map #(
       5'h15: starts = B2L ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;   // Gunblade NY: rows 0 and 1 drawn (Sky Target's put them on row 6's table)
       5'h16: starts = B2L ? {8'd100, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;   // INDY 500: rows 0-6 and 100 drawn, exact (Motor Raid's put 0-6 on row 100's)
       5'h18: starts = B2L ? {8'd56, 8'd52, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;   // Virtual-On: rows 0, 1, 52, 56 drawn (DOA's ranges, the borrowed 0x16's, put all four on other rows' tables)
+      // R1046: THE REST OF THE 2B SETS' OWN IDs (B2L; 0x2A, 0x2B, 0x2D -> 5'h1A,
+      // 5'h1B, 5'h1D). MAME 0.289 walk dumps every 8 s over 240 s of attract and
+      // play; the eight ranges the exhaustive search picks (study R1046). Virtua
+      // Striker (0x2C, rows 0-2) and Last Bronx (0x2E) are not the large layout
+      // and keep R867's fixed map.
+      5'h1A: starts = B2L ? {8'd7, 8'd6, 8'd5, 8'd4, 8'd3, 8'd2, 8'd1, 8'd0} : '0;     // Fighting Vipers: rows 0-3, exact (Motor Raid's put all four on row 100's: mean error 29.9 of 63)
+      5'h1B: starts = B2L ? {8'd67, 8'd54, 8'd41, 8'd28, 8'd16, 8'd8, 8'd1, 8'd0} : '0;   // Sonic Championship / the Fighters (fitted on both): 15 rows of 0-68, mean error 0.08 / 0.04 (Motor Raid's: 46.9, every pixel)
+      5'h1D: starts = B2L ? {8'd96, 8'd94, 8'd92, 8'd86, 8'd79, 8'd76, 8'd66, 8'd51} : '0; // Dynamite Baseball / '97 (fitted on both): 16 / 28 rows of 51-113, 0.32 / 0.71 (Hanguk Pro Yagu 98's: 2.2 / 2.3, 14.5% / 15.9% of pixels more than 4 off)
       default: starts = '0;   // not used (big is 0)
     endcase
   endfunction

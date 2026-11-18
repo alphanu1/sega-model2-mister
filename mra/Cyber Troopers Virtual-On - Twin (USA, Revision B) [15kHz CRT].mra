@@ -34,22 +34,19 @@
       Index 4, the game ID: 0x28, the Virtual-On sets' own (R1037; the 2B
       build only): the large layout; the SHARC's data-ROM reads from the
       copro-data slot (Model2.sv a2_copro_rom; MAME 0.289 reads only its
-      first 2.25 MB); the DIGITAL three-button profile (VF2's order), which
-      this set needs; its luma rows (0, 1, 52 and 56, exact; measured on
+      first 2.25 MB); its luma rows (0, 1, 52 and 56, exact; measured on
       von, the parent). Before (0x16, Dead or Alive's, borrowed): the
       data-ROM reads were 0 (in MAME that leaves the attract with no 3D,
       R1037) and DOA's luma ranges drew all four rows with other rows'
-      tables. NOT EXPLAINED BY THE ID: the board stopped at the boot screen
-      ("MODEL2 BCRX", the COPRO / GEO / texture loading lines); MAME passes
-      that screen by 6 s with the data ROM read as 0, and with the comm
-      window (which this set polls about 60 times a second) read as 0, so
-      that stop is the core's, not this ID's: the 2B boot bench's i960 traps
-      at ip 0x29664 on roundrl, which the core does not decode yet (study
-      R1037); this set will not boot until it does. The twin sticks:
-      IN1 = joystick 1 (left lever, Left Shot J4, Left Dash J5), IN2 =
-      joystick 2 (right lever, J4 / J5). Bit 7 is SET in this MRA (0xA8):
-      the 15 kHz CRT flag (R795), which starts the core in 15 kHz interlaced
-      whatever the OSD says (R908).
+      tables. The i960 forms it boots on (roundrl, scalerl, exprl) are in
+      the 2B build since R1040. THE TWIN STICKS (R1046): MAME's von puts
+      both levers and all four buttons on player 1. IN1 is joystick 1's
+      stick (the left lever) with Left Shot J4 and Left Dash J5; IN2, the
+      right lever, is joystick 2 (its stick, J4 Right Shot, J5 Right Dash:
+      two sticks seen as two joysticks) or player 1's right analogue stick
+      with Right Shot J6 and Right Dash J11 (one pad). Bit 7 is SET in this
+      MRA (0xA8): the 15 kHz CRT flag (R795), which starts the core in 15
+      kHz interlaced whatever the OSD says (R908).
     -->
     <name>Cyber Troopers Virtual-On - Twin (USA, Revision B) [15kHz CRT]</name>
     <setname>vonu</setname>
@@ -146,7 +143,8 @@
 
     </rom>
 
-    <!-- R887's three-button profile; the left lever on joystick 1, the
-         right lever on joystick 2 (its J4 / J5 Right Shot / Right Dash). -->
-    <buttons names="Left Shot,Left Dash,-,Start,Coin,Test,Service"/>
+    <!-- The left lever on joystick 1 (or a pad's left stick), the right lever
+         on joystick 2 or player 1's right stick; Right Shot / Right Dash on
+         J6 / J11 (or joystick 2's J4 / J5). MAME's von ports (R1046). -->
+    <buttons names="Left Shot,Left Dash,Right Shot,Start,Coin,Test,Service,Right Dash"/>
 </misterromdescription>

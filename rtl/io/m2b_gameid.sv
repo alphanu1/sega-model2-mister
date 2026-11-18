@@ -34,30 +34,34 @@ module m2b_gameid (
 	input  logic [7:0] din,
 	output logic [7:0] game_id
 );
-	// 0x00 (no ID yet), then each 2B set's ID (R887 / R1031 / R1037):
-	//   0x12 Zero Gunner (2B)       0x13 Dynamite Baseball / '97
-	//   0x14 Dynamite Cop / Deka 2  0x15 Pilot Kids (2B)
-	//   0x16 Dead or Alive (2B)     0x17 Last Bronx, Virtua Striker
-	//   0x1A Fighting Vipers, Sonic Championship / the Fighters
+	// 0x00 (no ID yet), then each 2B set's ID (R887 / R1031 / R1037 / R1046):
+	//   0x12 Zero Gunner (2B)       0x14 Dynamite Cop / Deka 2
+	//   0x15 Pilot Kids (2B)        0x16 Dead or Alive (2B)
 	//   0x1C Over Rev (2B)          0x25 Gunblade NY   0x26 INDY 500
 	//   0x27 Super GT 24h           0x28 Virtual-On    0x29 Rail Chase 2
+	//   0x2A Fighting Vipers        0x2B Sonic Championship / the Fighters
+	//   0x2C Virtua Striker         0x2D Dynamite Baseball / '97
+	//   0x2E Last Bronx
+	// (R1046: 0x13, 0x17 and 0x1A, which those sets had borrowed, are no 2B
+	// MRA's now; their slots 2, 6 and 7 hold 0x2D, 0x2C and 0x2A. Sixteen
+	// values with 0x00: the four bits are full.)
 	function automatic logic [3:0] enc(input logic [6:0] g);
 		case (g)
-			7'h12: enc = 4'd1;   7'h13: enc = 4'd2;   7'h14: enc = 4'd3;
-			7'h15: enc = 4'd4;   7'h16: enc = 4'd5;   7'h17: enc = 4'd6;
-			7'h1A: enc = 4'd7;   7'h1C: enc = 4'd8;   7'h25: enc = 4'd9;
+			7'h12: enc = 4'd1;   7'h2D: enc = 4'd2;   7'h14: enc = 4'd3;
+			7'h15: enc = 4'd4;   7'h16: enc = 4'd5;   7'h2C: enc = 4'd6;
+			7'h2A: enc = 4'd7;   7'h1C: enc = 4'd8;   7'h25: enc = 4'd9;
 			7'h26: enc = 4'd10;  7'h27: enc = 4'd11;  7'h28: enc = 4'd12;
-			7'h29: enc = 4'd13;
+			7'h29: enc = 4'd13;  7'h2B: enc = 4'd14;  7'h2E: enc = 4'd15;
 			default: enc = 4'd0;
 		endcase
 	endfunction
 	function automatic logic [6:0] dec(input logic [3:0] i);
 		case (i)
-			4'd1:  dec = 7'h12;  4'd2:  dec = 7'h13;  4'd3:  dec = 7'h14;
-			4'd4:  dec = 7'h15;  4'd5:  dec = 7'h16;  4'd6:  dec = 7'h17;
-			4'd7:  dec = 7'h1A;  4'd8:  dec = 7'h1C;  4'd9:  dec = 7'h25;
+			4'd1:  dec = 7'h12;  4'd2:  dec = 7'h2D;  4'd3:  dec = 7'h14;
+			4'd4:  dec = 7'h15;  4'd5:  dec = 7'h16;  4'd6:  dec = 7'h2C;
+			4'd7:  dec = 7'h2A;  4'd8:  dec = 7'h1C;  4'd9:  dec = 7'h25;
 			4'd10: dec = 7'h26;  4'd11: dec = 7'h27;  4'd12: dec = 7'h28;
-			4'd13: dec = 7'h29;
+			4'd13: dec = 7'h29;  4'd14: dec = 7'h2B;  4'd15: dec = 7'h2E;
 			default: dec = 7'h00;
 		endcase
 	endfunction

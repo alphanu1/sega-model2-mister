@@ -14,6 +14,7 @@
 // table (is_sgt); 0x29 (Rail Chase 2, rows 0 / 1) keeps R867's fixed map
 static inline bool m2_luma_big(int game, bool c2 = false, bool b2 = false) {
   if (b2 && (game == 0x25 || game == 0x26 || game == 0x28)) return true;
+  if (b2 && (game == 0x2A || game == 0x2B || game == 0x2D)) return true;   // R1046: a2_big (Model2.sv is_fvip / is_schp / is_dybb)
   if (b2 && (game == 0x17 || (game >= 0x1D && game <= 0x24))) return false;
   if (c2 && game >= 0x1E && game <= 0x24) return true;   // R1010
   if (((game >> 4) & 7) != 1) return false;
@@ -92,6 +93,10 @@ static inline int m2_luma_map_ref(int game, int r, bool c2 = false, bool b2 = fa
     {0x25, {0, 1, 2, 3, 4, 5, 6, 7}},              // Gunblade NY: rows 0 and 1 drawn
     {0x26, {0, 1, 2, 3, 4, 5, 6, 100}},            // INDY 500: rows 0-6, 100
     {0x28, {0, 1, 2, 3, 4, 5, 52, 56}},            // Virtual-On: rows 0, 1, 52, 56
+    // R1046: the rest of the 2B sets' own IDs (2B builds), MAME 0.289 walk dumps every 8 s
+    {0x2A, {0, 1, 2, 3, 4, 5, 6, 7}},              // Fighting Vipers: rows 0-3
+    {0x2B, {0, 1, 8, 16, 28, 41, 54, 67}},         // Sonic Championship / the Fighters: 15 rows of 0-68 (both sets)
+    {0x2D, {51, 66, 76, 79, 86, 92, 94, 96}},      // Dynamite Baseball / '97: 16 / 28 rows of 51-113 (both sets)
   };
   if (m2_luma_big(game, c2, b2))
     for (const T &e : tab) if (e.id == game) {

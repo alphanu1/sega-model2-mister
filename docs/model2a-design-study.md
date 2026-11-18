@@ -53942,3 +53942,170 @@ touched; (5) MAX_FANOUT is a qsf assignment, not RTL; (6) no HANDOFF.md update (
 *NOT SETTLED:* a clean seed; the projection / engine state, the frame writer's window test and
 the fill-clear -> span_tex enable families (each worst on one fit); the board.
 
+**R1046 -- THE REST OF THE 2B SETS ON IDs OF THEIR OWN (0x2A-0x2E, THE 2B BUILD ONLY): FIGHTING
+VIPERS' DARK AND SONIC'S BLACK 3D WERE MOTOR RAID'S LUMA RANGES; EVERY 2B SET'S INPUTS AGAINST
+MAME'S PORTS (DYNAMITE BASEBALL'S BATS AND VIRTUAL-ON'S RIGHT LEVER FIXED); DEAD OR ALIVE'S
+MISSING TEXTURED 3D IS NOT ITS ID -- EVERY INPUT THE ID GIVES THE TEXTURED PATH IS MAME'S.**
+Branch 2b-ids (off model2b b246dcc5), 2026-11-18. Simulation, analyze_file and quartus_map only;
+no fit, no board.
+
+(Section: §10, after R1042 (R1041 is branch 2b-doa's, unmerged; R1043-R1045 other branches').
+Authority: MAME 0.289 model2.cpp (INPUT_PORTS, machine configs, ROM regions) and model2_v.cpp for
+what each set's board has; R867 / R900 for the luma-row mechanisms; R1037 for the method; R1039
+for m2b_gameid. Nothing here contradicts an earlier entry; it replaces c2359efa's remaining
+borrowed IDs, which their MRAs called provisional, and it answers R1041's open item (c).)
+
+*Board (Ben, model2b b246dcc5, s3431):* Fighting Vipers (borrowed 0x1A) runs, very dark 3D;
+Sonic Championship / Sonic the Fighters (0x1A) run, the 3D all black; Dead or Alive (0x16) no 3D,
+flat polygons with the OSD's Textures Off; Virtual-On, Gunblade, INDY 500, Rail Chase 2 fine; Super
+GT 24h good picture, still locks up early (not here). Inputs untested on every 2B set.
+
+*Method (R1037's):* MAME 0.289 (sm2-builds/mame-m2b/m2lod, unmodified) headless, -nodrc, Lua taps
+only: a walk dump (M2GEO_TRIG) every 8 s from 20 s, 240 s each, sim/io/mame_m2_2a_play.lua's dig
+profile (coins at 60 s / 200 s); fvipers, schamp, sfight, vstriker, vstrikero, dynabb, dynabb97,
+lastbrnx and doa, 28 dumps each, the attract and play reached in all nine. The luma cost is R900's
+(per-pixel mean |luma error| of 63, drawn rows weighted by screen area, each dump's own luma RAM),
+the eight ranges by the exhaustive DP (scratch range_fit.py, R1037's). Also counted: the SHARC's
+data-ROM reads by 256 KB block, the 315-5649's registers, write masks into texture, luma, palette
+and colour-table RAM.
+
+*Per set:*
+  * fvipers / fvipersb -> 0x2A. Large layout; data ROM blocks 0-3 read (1 MB of the 4 MB slot:
+    a2_copro_rom). Luma: rows 0-3 only. Motor Raid's ranges put all four on row 100's table:
+    mean error 29.9 of 63, 100% of textured pixels more than 4 off -- the dark 3D. Now {0..7},
+    exact. Inputs: vf2's (Punch / Kick / Guard) = the DIGITAL profile. Before: Motor Raid's
+    analog profile, no stick, no buttons, no Start 1. (fvipersb not run: its textures,
+    polygons and data ROM are fvipers'.)
+  * schamp / sfight -> 0x2B, ONE ID: MAME's regions differ only in the program and data EPROMs
+    (textures, polygons, copro data CRC for CRC equal), both sets take INPUT_PORTS(schamp).
+    Data ROM blocks 0-3. Luma: schamp 14 rows of 0-68, sfight 13 (row 8 sfight's, 34 / 41
+    schamp's). One fit over both sets' 55 dumps: {0, 1, 8, 16, 28, 41, 54, 67}, mean error 0.075
+    (schamp) / 0.040 (sfight), 0% more than 4 off (each set's own best: 0.036 / 0.032). Motor
+    Raid's ranges: 46.9 of 63, every pixel -- the black 3D. Inputs: Punch / Kick / Barrier =
+    DIGITAL.
+  * vstriker / vstrikero -> 0x2C. 2A layout, copro data ERASE00 (no reads). Luma: rows 0-2,
+    which R867's fixed map captures one a slot: exact already, so the ID needs no decode at all
+    (it was 0x17's generic path, the same thing; it is its own so no later 0x17 decode reaches
+    it). Inputs: vstriker's (Long Pass / Shoot / Short Pass on IN1 bits 0-2) = DIGITAL.
+  * dynabb / dynabb97 -> 0x2D, ONE ID (m2b_gameid's four bits are full; see below). Large
+    layout, copro data ERASE00 (no reads). Luma: dynabb 16 rows of 66-100, dynabb97 28 of 51-113
+    -- the two do differ. One fit over both: {51, 66, 76, 79, 86, 92, 94, 96}, 0.32 / 0.71 of
+    63, 1.2% / 3.3% more than 4 off (each alone: 0.05 / 0.43). Hanguk Pro Yagu 98's ranges (the
+    borrowed 0x13): 2.32 / 2.22 of 63, 15.9% / 14.5% -- so its ID was NOT exact for them, and its
+    profile was wrong too: MAME's dynabb reads only the 315-5649's analog register for channels
+    0 and 1 each frame (13,705 channel selects, 27,410 reads in 240 s) -- BAT1 / BAT2, IPT_PEDAL,
+    0x00 at rest -- which every digital profile answers 0xFF: a swing held from power on. Now two
+    buttons a player (IN1 / IN2 bits 2 / 3 unused, 1) and AN0 / AN1 0xFF while that player's
+    Swing (J6) is held, else 0x00, player 1's right analogue trigger (R981) the partial swing on
+    AN0. Not established: how the game times a swing from a 0 -> 0xFF step (MAME's keyboard
+    ramps it in ~5 frames); the board will say.
+  * lastbrnx (-u, -j) -> 0x2E. 2A layout, copro data ERASE00. Luma: rows 0 and 1 only (MAME
+    draws its 3D despite MACHINE_NOT_WORKING): R867's fixed map, exact; no decode. Inputs: vf2's
+    = DIGITAL. Still expected not to run (its SHARC forms and logepr are out, R1039 / R1040).
+  * doa / doab stay 0x16 -- see below.
+
+*THE IDs (m2b_gameid, rtl/io):* 0x13, 0x17 and 0x1A are no 2B MRA's now; their slots 2, 6 and 7
+hold 0x2D, 0x2C and 0x2A, and 14 / 15 take 0x2B / 0x2E. With 0x00 that is sixteen values: the
+register's four bits are FULL. A further 2B ID (a Dead or Alive ID of its own, a dynabb97 one, Power
+Sled) costs a fifth bit. make test_m2b_gameid: 16 IDs read from the Model2B MRAs, 251,227 cycles
+equal to the plain register, 0 differ; R1039's two planted faults still caught (15,737 differ; an
+index 4 moved last refused).
+
+*INPUTS, EVERY 2B SET (MAME 0.289's INPUT_PORTS and machine config against m2_2a_inputs at the
+set's ID; every 2B set is model2b's 315-5649: PB IN0 (coin 1 / 2, test, service, start 1 / 2), PC
+IN1, PD IN2, PG the DIP switches (0xFF), AN0-AN3 only where the config binds them):*
+    set(s)                ID    MAME's ports                          the core                          status
+    zerogun, zerogunj     0x12  2 buttons + stick a player            DIGITAL two-button (R862)         match
+    dynamcopb, dyndeka2b  0x14  Punch / Kick / Jump                   DIGITAL                           match
+    pltkids               0x15  2 buttons (zerogun's)                 DIGITAL two-button                match
+    doa, doab             0x16  Hold / Punch / Kick                   DIGITAL                           match
+    overrevb, overrevba   0x1C  wheel, pedals PORT_REVERSE, View 1/2,  Over Rev's (R928)                 match
+                                shift up / down, start on IN0 bit 6
+    gunblade              0x25  rchase2's buttons, 4 AD sticks        B2G (R1037)                       match
+    indy500               0x26  indy500's (pedals not reversed)       STCC's lines (R933)               match
+    sgt24h                0x27  overrev's, but IN1 0x02 UNUSED        Over Rev's: J9 drove 0x02          FIXED: 0x02 held 1
+    von, vonj, vonu       0x28  BOTH levers and 4 buttons on PLAYER 1 right lever only on joystick 2     FIXED: joystick 2 OR
+                                (IN2 JOYSTICKRIGHT, BUTTON3 / 4)      (its J4 / J5); J6 on IN1 bit 2    P1's right stick + J6 /
+                                                                      (unused)                          J11; IN1 bit 2 held 1
+    rchase2               0x29  sticks PORT_REVERSE, drive board PD   B2G (R1037)                       match
+    fvipers, fvipersb     0x2A  Punch / Kick / Guard                  was Motor Raid's analog profile   FIXED: DIGITAL
+    schamp, sfight        0x2B  Punch / Kick / Barrier                was Motor Raid's analog profile   FIXED: DIGITAL
+    vstriker, vstrikero   0x2C  Long Pass / Shoot / Short Pass        DIGITAL                           match
+    dynabb, dynabb97      0x2D  2 buttons, BAT1 / BAT2 on AN0 / AN1   was 3 buttons, bats 0xFF (held)   FIXED: J6 swing, trigger
+    lastbrnx (3 sets)     0x2E  Punch / Kick / Guard (vf2's)          DIGITAL                           match
+  The OSD's button line (J1) in the 2B build is the 2A build's "Punch,Kick,Guard,Start,Coin,Test,
+  Service" -- a fallback only: every Model2B MRA carries <buttons names>, which Main_MiSTer shows
+  instead, so each set's names are its MRA's (updated here for the six that changed). Not changed
+  (the string is in an M10K, R1039; nothing reads it).
+
+*DEAD OR ALIVE: WHAT ITS ID SELECTS ON 2B, CHECKED PIECE BY PIECE AGAINST MAME -- NOTHING WRONG:*
+  * Luma: MAME's doa (the 2B parent) draws rows 6, 72, 89, 92, 98, 100 (27 dumps, attract and
+    play); 0x16's ranges {6, 72, 89, 92, 98, 100, 254, 255} score 0.000 of 63 -- exact.
+  * Layout: doa's regions are the 2A sets' sizes (8 MB textures, written twice into the 16 MB
+    slot as MAME's mask mirrors it; 24 MB polygons; copro data ERASE00, and the SHARC reads none);
+    a2_big, as Pilot Kids (0x15) and Dynamite Cop (0x14), which draw on the same build.
+  * Inputs: INPUT_PORTS(doa) = DIGITAL.
+  * The colour tables AS THE CPU WRITES THEM (R1041's (c), which no bench had run): new bench
+    make test_m2_lut_snoop -- MAME's own stream of doa's CPU writes to the luma RAM, the 3D
+    palette and the colour table over 60 s (sim/video/mame_m2_colwrites.lua: 50,084 writes),
+    mapped to SDRAM words as the 2B bridge maps them, through m2b_gameid and m2_luma_map (RTL)
+    and Model2.sv's decodes and g_r3d_lut snoop (copied verbatim), into the shadows as
+    m2_span_tex writes them; then against the tables tb_m2_raster3d's REALCOL fill writes from
+    MAME's final contents (R1041's bench): ID 0x16 and 0x96, 8 captured rows, the palette and the
+    colour table, 16,384 checks, 0 differ (and the same bench on schamp's 265,120 writes at 0x2B /
+    0xAB and fvipers' 91,654 at 0x2A / 0xAA: 0 differ). Planted: DOA's range start 72 -> 71, 95 differ; the
+    colour-table snoop missing one address bit, 2,850 differ.
+  * The texture sheets AS THE CORE'S CPU WRITES THEM: R1041's whole-core 2B bench (its binary,
+    the fast doa image) run to video frame 403 with M2_TEXDUMP: 655,360 words uploaded, and every
+    one EQUALS MAME's texture RAM at its frame 1611 (0 differ where the core had written; the
+    rest of MAME's ~786 K words not yet uploaded by frame 403 of the shortened image). MAME
+    shows doa uploading with 32-bit stores at 23.5 s, zerogun with halfword stores at 0.9 s --
+    a real difference, but the bridge's dword path lands both halves correctly.
+  So the quads (R1041 stage 3), the texture RAM, the luma / palette / colour-table shadows and
+  the luma slot each polygon names are, for ID 0x16 on 2B, what R1041's raster bench drew
+  correctly. A Dead or Alive ID of its own would change nothing; none was made. The board's
+  fault is in something only the board has (R1041's (a) timing, (b) the real SDRAM / DDR3 --
+  the texel path is the one Textures Off removes). For the board, cheapest first: the overlay
+  page that shows fb_pub / fb_drop (O[16:14] probe, R650) on DOA with Textures On and Off --
+  frames dropped only with textures on would put it in the texel fetch's time; frames
+  published but empty would not.
+
+*RTL (every term behind B2 / B2G / B2L, so the 2A and 2C builds fold to what they were):*
+  * rtl/io/m2b_gameid.sv: the list (above).
+  * Model2.sv: is_fvip / is_schp / is_dybb (0x2A / 0x2B / 0x2D) into a2_big (all three) and
+    a2_copro_rom (0x2A / 0x2B) -- two OR terms; no other line. 0x2C / 0x2E need no decode.
+  * rtl/video/m2_luma_map.sv (B2L): three range rows, 5'h1A / 5'h1B / 5'h1D.
+  * rtl/io/m2_2a_inputs.sv (B2G): p_dybb (IN1 / IN2 the two-button form, AN0 / AN1 the bats),
+    p_von (IN2 from joystick 1 or player 1's right stick past R879's dead zone, Right Shot J6,
+    Right Dash J11; IN1 bit 2 held 1), p_sgt (IN1 0x02 held 1). Registered as every channel
+    was: no added latency.
+  * MRAs: 28 rewritten (both the 31 kHz and 15 kHz MRA of fvipers, fvipersb, schamp, sfight,
+    vstriker, vstrikero, dynabb, dynabb97, lastbrnx, lastbrnxu, lastbrnxj and the three
+    Virtual-On sets): the ID byte, the ID paragraph, the buttons; Fighting Vipers' and Sonic's
+    stale "EXPECTED NOT TO RUN" (R1042 did the forms) corrected; Super GT 24h's paragraph notes
+    IN1 0x02.
+
+*Proof:* make test_m2_luma_map (2A, 2C, 2B: 262,144 checks each, 0 fails; planted Sonic start 41
+-> 40, 6 fails on the 2B build); make test_m2_2a_inputs (dut_b2 now checks 0x2D and 0x28 against
+models written from MAME's dynabb / von ports, and 0x27's IN1; every non-B2G copy reads
+0x2A-0x2E as digital): 20 M cycles, 571 M checks, 0 mismatches; at 10x (200 M) dynabb 1.56 M
+cycles and Virtual-On 0.60 M checked, 0 mismatches on the 2B copy -- 3 analog-history mismatches
+on the 2C copy's Wave Runner / Ski Super G lines, R1037's known pre-existing class (it saw 9 on
+model2b's unchanged bench); planted: BAT2 from J5 (caught: dybb an1), Right Dash from J11 dropped
+(caught: von in2). make test_m2b_gameid, make test_m2_lut_snoop (above). lint_top (2B, 2C, 2A
+forms) and lint_idx (2B): identical to model2b's. quartus_map --analyze_file (17.0): Model2.sv,
+m2b_gameid, m2_2a_inputs, m2_luma_map, 0 errors.
+
+*AREA (quartus_map 17.0, the whole 2B build; both maps here, the same session):*
+                         ALMs needed   ALUTs    registers  block bits   DSP
+    model2b b246dcc5     39,212        57,500   43,242     4,057,660    101
+    2b-ids 3398a65d      39,205        57,509   43,239     4,057,660    101
+                         (-7)          (+9)     (-3)       (0)
+  By entity (ALUTs): m2_2a_inputs 204 -> 210 own (558 -> 560 with m2_cab_inputs, which moved
+  354 -> 350), m2_luma_map 243 -> 240, m2b_gameid 13 -> 11. The ALM difference is inside
+  R1039's measured map noise (+-50); the change is area-neutral: the borrowed IDs' decodes it
+  takes away (0x13 / 0x17 / 0x1A are no longer representable) pay for the new ones.
+
+*Tools (committed):* sim/video/tb_m2_lut_snoop_top.sv / .cpp (make test_m2_lut_snoop LUT_DIR=<a
+mame_m2_colwrites.lua capture>), sim/video/mame_m2_colwrites.lua. The walk dumps, captures and
+texture dumps are ROM-derived and stay in scratch.

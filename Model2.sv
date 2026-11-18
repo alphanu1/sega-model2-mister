@@ -3183,6 +3183,23 @@ wire is_gunb    = B2 && (game_id[6:0] == 7'h25);
 wire is_indy    = B2 && (game_id[6:0] == 7'h26);
 wire is_sgt     = B2 && (game_id[6:0] == 7'h27);
 wire is_von     = B2 && (game_id[6:0] == 7'h28);
+// R1046: AND THE REST OF THE 2B SETS THAT HAD BORROWED (2B builds only), each
+// with what MAME 0.289's set has (study R1046):
+//   0x2A Fighting Vipers (fvipers, fvipersb)  the large layout; its copro data
+//        (the SHARC's data ROM, 4 MB); its luma rows; DIGITAL (vf2's ports)
+//   0x2B Sonic Championship / Sonic the Fighters (schamp, sfight: the same
+//        textures, polygons, data ROM and ports; only the program and data
+//        EPROMs differ)  as Fighting Vipers, its own rows
+//   0x2D Dynamite Baseball / '97 (dynabb, dynabb97)  the large layout; no copro
+//        data (ERASE00); its luma rows; two buttons and the BAT SWING on AN0 /
+//        AN1 (m2_2a_inputs B2G)
+//   0x2C Virtua Striker (vstriker, vstrikero) and 0x2E Last Bronx (lastbrnx,
+//        -u, -j) need no decode: the 2A layout, no copro data, DIGITAL, and
+//        R867's fixed luma map holds their rows (0-2; 0-1) exactly. (Last
+//        Bronx still stops: its SHARC and i960 forms are left out, R1039.)
+wire is_fvip    = B2 && (game_id[6:0] == 7'h2A);
+wire is_schp    = B2 && (game_id[6:0] == 7'h2B);
+wire is_dybb    = B2 && (game_id[6:0] == 7'h2D);
 wire is_skis    = C2 && !B2 && (game_id[6:0] == 7'h21);
 wire is_tops    = C2 && !B2 && (game_id[6:0] == 7'h22);
 wire is_dc2c    = C2 && !B2 && (game_id[6:0] == 7'h23);
@@ -3214,7 +3231,7 @@ assign a2_mouse_menu = C2 & (vc_gun | v2_gun | is_bel);   // R1016: 0 on a 2A bu
 logic a2_copro_rom;
 always_ff @(posedge clk_sys) a2_copro8 <= C2 && is_skis;
 always_ff @(posedge clk_sys) a2_copro_rom <= is_srally | is_2an | is_hotd | is_stcc | is_wave | is_wski | is_bel | is_skis | is_tops
-                                           | is_gunb | is_indy | is_von;   // R924; R933; R1010; R1037
+                                           | is_gunb | is_indy | is_von | is_fvip | is_schp;   // R924; R933; R1010; R1037; R1046
 // R897: THE LARGE LAYOUT'S GAMES (GAME_TEX_BIG above): 0x13 Hanguk Pro Yagu
 // 98, 0x14 Dynamite Cop, 0x15 Pilot Kids, 0x16 Dead or Alive, 0x18 Sky
 // Target, 0x1A Motor Raid. Their texture-coordinate ROM and polygons are read
@@ -3225,7 +3242,7 @@ always_ff @(posedge clk_sys)   // (declared with the boot sweep, R900)
 	                  || (game_id[3:0] == 4'h6) || (game_id[3:0] == 4'h8) || (game_id[3:0] == 4'hA)
 	                  || is_hotd || is_stcc) || is_wave || is_wski || is_bel
 	        || is_skis || is_tops || is_dc2c || is_ra2
-	        || is_gunb || is_indy || is_von;   // R924; R933; R1010; R1037
+	        || is_gunb || is_indy || is_von || is_fvip || is_schp || is_dybb;   // R924; R933; R1010; R1037; R1046
 // R839: VIRTUA COP'S HARDWARE, EACH PIECE BEHIND A COMPILE-TIME SWITCH (Ben:
 // off-able for the Model 2A/2B/2C branches) AND, IN A BUILD THAT HAS IT,
 // SELECTED BY THE GAME ID AT RUN TIME -- Daytona (0) and Desert Tank (2) see

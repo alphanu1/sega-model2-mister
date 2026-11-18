@@ -147,7 +147,8 @@ static const char *GNAME[G_N] = {"VF2", "Sega Rally", "Virtua Cop 2", "Zero Gunn
                                  "STCC (0x1D)", "Wave Runner (0x1E)", "Water Ski (0x1F)", "Behind Enemy Lines (0x20)", "Ski Super G (0x21)", "Top Skater (0x22)"};
 static int game_id(int g) {
   static const int dig[] = {0x13, 0x14, 0x16, 0x17, 0x01, 0x0f, 0x1c, 0x1d, 0x1f, 0x20, 0x23, 0x24, 0x7f,
-                            0x25, 0x26, 0x27, 0x28, 0x29, 0x29, 0x25, 0x26, 0x27};   // R1037: the 2B IDs, digital on every non-B2G copy
+                            0x25, 0x26, 0x27, 0x28, 0x29, 0x29, 0x25, 0x26, 0x27,    // R1037: the 2B IDs, digital on every non-B2G copy
+                            0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2d, 0x28, 0x2d, 0x28};   // R1046: and the rest of the 2B sets
   switch (g) {
     case G_VF2: return 0x00; case G_RALLY: return 0x10; case G_VCOP2: return 0x11;
     case G_ZG: return rnd(2) ? 0x12 : 0x15;               // R887: Pilot Kids takes Zero Gunner's order
@@ -275,6 +276,30 @@ static W4 want_b2g(int id) {
   const int x2 = (0x80 + int8_t(t->joy_analog_1 & 0xff)) & 0xff, y2 = (0x80 + int8_t(t->joy_analog_1 >> 8)) & 0xff;
   if (id == 0x25) { w.in2 = 0xff; w.an[0] = x1; w.an[1] = x2; w.an[2] = y1; w.an[3] = y2; }
   else { w.in2 = rc2_pd(t->pe); w.an[0] = 0xff - x2; w.an[1] = 0xff - x1; w.an[2] = 0xff - y2; w.an[3] = 0xff - y1; }
+  return w;
+}
+// R1046: Dynamite Baseball (dynabb: model2's IN0, IN1 / IN2 with 0x0c unused,
+// AN0 BAT1 / AN1 BAT2 -- 0xFF while J6 is held, else 0x00, player 1's
+// trigger the partial swing) and Virtual-On (von: both levers and four
+// buttons on player 1 -- IN2 from joystick 1, or player 1's right stick and
+// J6 / J11), written from MAME 0.289's ports, not from the RTL
+static uint64_t b2n_seen[3] = {0, 0, 0}, dybb_bat[2][2] = {{0, 0}, {0, 0}}, von_r[2] = {0, 0};
+static W4 want_b2n(int id) {
+  uint32_t j0 = t->joystick_0 | adir(t->joy_analog), j1 = t->joystick_1 | adir(t->joy_analog_1);
+  W4 w;
+  w.in0 = lo(b(j0, 8) << 0 | b(j1, 8) << 1 | b(j0, 9) << 2 | b(j0, 10) << 3 | b(j0, 7) << 4 | b(j1, 7) << 5);
+  auto dirs = [&](uint32_t j) { return b(j, 2) << 4 | b(j, 3) << 5 | b(j, 0) << 6 | b(j, 1) << 7; };
+  w.an[0] = w.an[1] = w.an[2] = w.an[3] = 0xff;
+  if (id == 0x2d) {
+    w.in1 = lo(b(j0, 4) << 0 | b(j0, 5) << 1 | dirs(j0));
+    w.in2 = lo(b(j1, 4) << 0 | b(j1, 5) << 1 | dirs(j1));
+    w.an[0] = b(j0, 6) ? 0xff : t->trig_rt;
+    w.an[1] = b(j1, 6) ? 0xff : 0x00;
+  } else {   // 0x28
+    const uint32_t r = j1 | adir(t->joy_ranalog);
+    w.in1 = lo(b(j0, 4) << 0 | b(j0, 5) << 1 | dirs(j0));
+    w.in2 = lo((b(j1, 4) | b(t->joystick_0, 6)) << 0 | (b(j1, 5) | b(t->joystick_0, 11)) << 1 | dirs(r));
+  }
   return w;
 }
 static uint64_t manx_ce = 0, manx_cd = 0;   // R892: Manx TT cycles answered 0xCE / 0xCD
@@ -418,6 +443,7 @@ int main(int argc, char **argv) {
     rst_ok = t->rst_n ? rst_ok + 1 : 0;
     Want o = want_orev();   // R928: before the edge, as the others (the outputs are registered)
     const W4 wb = want_b2g(t->game);   // R1037
+    const W4 wn2 = want_b2n(t->game);  // R1046
     static double hs[6], ha[6], hb[6], sa[6], sb[6];
     for (int k = 5; k > 0; --k) { hs[k] = hs[k - 1]; ha[k] = ha[k - 1]; hb[k] = hb[k - 1]; sa[k] = sa[k - 1]; sb[k] = sb[k - 1]; }
     hs[0] = orev_str(t->c_steer); ha[0] = orev_ped(t->c_accel); hb[0] = orev_ped(t->c_brake);
@@ -594,10 +620,20 @@ int main(int argc, char **argv) {
       if (t->game == 0x29) for (int k = 0; k < 4; ++k) if (!((wb.in2 >> k) & 1)) ++b2_pd_low[k];
       cmp("b2 an0", game, c, t->b_an0, wb.an[0]); cmp("b2 an1", game, c, t->b_an1, wb.an[1]);
       cmp("b2 an2", game, c, t->b_an2, wb.an[2]); cmp("b2 an3", game, c, t->b_an3, wb.an[3]);
+    } else if (t->game == 0x2d || t->game == 0x28) {   // R1046
+      const int k = (t->game == 0x28);
+      ++b2_checks; ++b2n_seen[k];
+      cmp(k ? "von in0" : "dybb in0", game, c, t->b_in0, wn2.in0);
+      cmp(k ? "von in1" : "dybb in1", game, c, t->b_in1, wn2.in1);
+      cmp(k ? "von in2" : "dybb in2", game, c, t->b_in2, wn2.in2);
+      cmp(k ? "von an0" : "dybb an0", game, c, t->b_an0, wn2.an[0]); cmp(k ? "von an1" : "dybb an1", game, c, t->b_an1, wn2.an[1]);
+      cmp("b2n an2", game, c, t->b_an2, 0xff); cmp("b2n an3", game, c, t->b_an3, 0xff);
+      if (!k) { ++dybb_bat[0][t->b_an0 == 0xff]; ++dybb_bat[1][t->b_an1 == 0xff]; }
+      else if ((~t->b_in2 & 0xf3) && !(t->joystick_1 & 0x33)) ++von_r[(~t->b_in2 & 0xf0) ? 0 : 1];   // the right lever / buttons from player 1 alone
     } else if (t->game == 0x1c || t->game == 0x1d || t->game == 0x26 || t->game == 0x27) {
       const bool st = (t->game == 0x1d || t->game == 0x26);
       cmp("b2 or in0", game, c, t->b_in0, o.in0);
-      cmp("b2 or in1", game, c, t->b_in1, o.in1);
+      cmp("b2 or in1", game, c, t->b_in1, o.in1 | (t->game == 0x27 ? 0x02 : 0));   // R1046: sgt24h's 0x02 unused
       cmp("b2 or in2", game, c, t->b_in2, o.in2);
       if (since > 6 && rst_ok > 6) {
         near("b2 or an0", c, t->b_an0, hs);
@@ -644,6 +680,10 @@ int main(int argc, char **argv) {
   std::printf("  R1037 2B copy: %llu own-ID / Over Rev line cycles (gunblade %llu, rchase2 %llu); rchase2 PD bits 0-3 low %llu %llu %llu %llu cycles\n",
               (unsigned long long)b2_checks, (unsigned long long)b2_seen[0], (unsigned long long)b2_seen[1],
               (unsigned long long)b2_pd_low[0], (unsigned long long)b2_pd_low[1], (unsigned long long)b2_pd_low[2], (unsigned long long)b2_pd_low[3]);
+  std::printf("  R1046 2B copy: Dynamite Baseball %llu cycles (BAT1 0x00-or-trigger / 0xFF %llu / %llu, BAT2 0x00 / 0xFF %llu / %llu), Virtual-On %llu (right lever / buttons from player 1 alone %llu / %llu)\n",
+              (unsigned long long)b2n_seen[0], (unsigned long long)dybb_bat[0][0], (unsigned long long)dybb_bat[0][1],
+              (unsigned long long)dybb_bat[1][0], (unsigned long long)dybb_bat[1][1], (unsigned long long)b2n_seen[1],
+              (unsigned long long)von_r[0], (unsigned long long)von_r[1]);
   std::printf("  %llu mismatches\n%s\n", (unsigned long long)mism, mism ? "FAIL" : "PASS");
   delete t;
   return mism ? 1 : 0;
