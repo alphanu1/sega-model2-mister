@@ -1115,7 +1115,33 @@ always_comb begin
              (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm || bad2;
         ex = (op[47:46] == 2'b11) ? !cok :
              (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
-        x.acc = (ex && mem_f && !bad && !rz) ? akind : A_NONE;
+        // R1044: each bit of the kind as an OR of its regions' tests on the sum, the form's gate
+        // last -- no "unsupported, else the kind" select after the adder. dm_kind's / pm_kind's
+        // regions are disjoint and a region that is unsupported (FIN written, FOUT read, outside
+        // the map) sets no bit, so this is (ex && mem_f && !bad && !rz) ? akind : A_NONE exactly
+        // (A_DM 001, A_FIN 010, A_FOUT 011, A_IOP 100, A_EXT 101, A_PM 110; d_acc_ref checks it)
+        begin
+            logic        g, z24, z18, h_iop, h_dm, h_dx, h_fin, h_fout, h_ext, p_pm, p_dm, p_dx;
+            logic [31:0] a;
+            logic [24:0] pa;
+            a = mem_a;
+            pa = pm_b1(mem_a[23:0]);
+            z24 = a[31:25] == 7'h0;
+            z18 = z24 && a[24:18] == 7'h0;
+            h_iop = z18 && a[17:8] == 10'h0;
+            h_dm = z18 && a[17:15] >= 3'd5 && a[14:DM_AW] == '0;
+            h_dx = z18 && a[17:15] >= 3'd5 && a[14:DM_AW] != '0;
+            h_fin = z24 && !a[24] && (a[23:22] == 2'd1 || a[23:22] == 2'd2) && !mem_wr;
+            h_fout = z24 && ((!a[24] && a[23:22] == 2'd3) || (a[24] && a[23:22] == 2'd0)) && mem_wr;
+            h_ext = z24 && a[24] && a[23:21] >= 3'd2 && a[23:21] <= 3'd6;
+            p_pm = !pa[24] && pa[23:PM_AW] == 24'(32'h20000 >> PM_AW);
+            p_dm = !pa[24] && pa[23:18] == 6'h0 && pa[17:15] >= 3'd5 && pa[14:DM_AW] == '0;
+            p_dx = !pa[24] && pa[23:18] == 6'h0 && pa[17:15] >= 3'd5 && pa[14:DM_AW] != '0;
+            g = ex && mem_f && !rz;
+            x.acc[0] = g && (pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout));
+            x.acc[1] = g && (pmb ? p_pm : (h_fin || h_fout));
+            x.acc[2] = g && (pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext));
+        end
         d_acc_ref = (mem_on && !bad && !x.unsup) ? akind : A_NONE;    // (R1028's, for the benches' check)
     end
     x.why = why0; x.dag = dag; x.mbad = mbad;   // (the reason chosen at the capture, R1029)
