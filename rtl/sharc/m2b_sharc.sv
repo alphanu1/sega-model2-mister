@@ -219,6 +219,12 @@ logic [31:0]      rf_pd;
 logic [3:0]  i1_ra, m1_ra;                 // (R1042: bit 3 the PM bus's, DAG2's I8-15 / M8-15)
 logic [3:0]  i2_ra, m2_ra;
 logic [31:0] i1_rd, i2_rd, iu_rd, m1_rd, m2_rd, mu_rd;
+// R1044: DAG1's copies read I0-7 / M0-7 at the opcode's field with no select; I8-15 / M8-15 (a
+// PM-bus access's DAG2 registers, the g bit) on copies of their own (u_i3 / u_m3), the g bit
+// choosing after the read (i1x_rd / m1x_rd) -- off the path from the opcode into the MLAB
+logic [3:0]  i3_ra, m3_ra;
+logic [31:0] i3_rd, m3_rd, i1x_rd, m1x_rd;
+logic        d_pg;                          // the g bit: the word's one access is DAG2's
 logic        ir_we, mr_we;
 logic [3:0]  ir_wa, mr_wa;
 logic [31:0] ir_wd, mr_wd;
@@ -353,6 +359,15 @@ typedef struct packed {
     logic        b6;                        // the PC-relative offset is the 6-bit one (op[32:27])
     logic [5:0]  sqc;                       // the sequencing form, one-hot: jump, call, indirect /
                                             // relative jump-call, IF-JUMP-ELSE, RTS, DO (R1029)
+    // R1044: the next fetch's address, its candidates made in D (S and the opcode are D's) so
+    // that X's first clock only selects (pm_ra): PC + offset from S.daddr and from S.pcstk (a
+    // loop end's CHANGE_PC), the top after a loop end's pop (an RTS's target then), the target's
+    // select one-hot, whether the form branches and whether its branch is delayed
+    logic [PM_AW-1:0] f_reld, f_relp, f_rts;
+    logic [3:0]  f_ts;
+    logic        f_br, f_db;
+    // R1044: X's length if the word's float compute runs (the misc functions' from their op)
+    logic [1:0]  need_fl;
 } xc_t;
 xc_t XC;
 logic [31:0] op_x, op_y, op_n;              // fixed / shifter operands: R[rx], R[ry], R[rn]
@@ -958,8 +973,9 @@ always_comb begin
         s2 = op[47:44] == 4'b0110 && !op[38];               // compute, dreg <-> DM, pre-modify: the 6-bit
         sd = op[47:42] == 6'b000100;                        // ureg <-> DM direct: the 32-bit, no I
         s3 = sd || op[47:45] == 3'b101;                     // ... and indirect: I + the 32-bit
-        off = ({32{s1}} & m1_rd) | ({32{s2}} & sext6(op[32:27])) | ({32{s3}} & op[31:0]);
-        mem_a = ({32{!sd}} & i1_rd) + off;
+        // (R1044: M from either DAG's copy, the g bit in the select, beside the read)
+        off = ({32{s1 && !d_pg}} & m1_rd) | ({32{s1 && d_pg}} & m3_rd) | ({32{s2}} & sext6(op[32:27])) | ({32{s3}} & op[31:0]);
+        mem_a = ({32{!sd}} & i1x_rd) + off;
     end
     // (R1029: as one AND-OR over the sources, the selects from the opcode beside the reads; the
     // same as (wd_sel == 0) ? R : (wd_sel == 1) ? ur_all : the immediate, wd_sel being 0-2)
@@ -979,7 +995,7 @@ always_comb begin
     end
     dx_urall = ur_all;
     case (pm_sel)
-    2'd0: x.pmod_m = m1_rd;
+    2'd0: x.pmod_m = m1x_rd;
     2'd1: x.pmod_m = sext6(op[32:27]);
     2'd2: x.pmod_m = m2_rd;                                    // (the modify forms: DAG2's copy)
     default: x.pmod_m = op[31:0];
@@ -1069,7 +1085,7 @@ always_comb begin
         dag = dag_f && ((op[47:46] == 2'b11) ? !cok : (op[47:39] == 9'b000101100 || op[47:44] == 4'b1001 || t1) ? 1'b1 : cok);
     end
     d_dag_ref = (x.pmod && lnz[x.pmod_i]) || (t1 && lnz[{1'b1, op[32:30]}]);   // (R1028's, for the benches' check)
-    x.pmod_b = (op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100) ? i2_rd : i1_rd;
+    x.pmod_b = (op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100) ? i2_rd : i1x_rd;
 
     // an unsupported word does nothing but move the queue (and is flagged): X's first clock
     // moves the queue on XC.unsup, and X writes no compute result (fixed, shifter or float), no
@@ -1191,6 +1207,27 @@ always_comb begin
     x.sqc[4] = op[47:41] == 7'b0000101;
     x.sqc[5] = op[47:41] == 7'b0000110 || op[47:41] == 7'b0000111 && !op[40];
     x.ind_t = i2_rd + m2_rd;
+    // R1044: the next fetch's candidates (X's first clock selects among them, pm_ra), from the
+    // opcode and S -- s_x1's own terms: rel_t for each loop-end outcome, rts_v after a pop, tsel
+    // one-hot, br's forms (taken on XC.cok) and br_db
+    begin
+        logic [23:0] off;
+        logic [5:0]  pp;
+        off = x.b6 ? 24'(sext6(op[32:27])) : op[23:0];
+        x.f_reld = PM_AW'(S.daddr + off);
+        x.f_relp = PM_AW'(S.pcstk + off);
+        pp = S.pcstkp - 6'd1;
+        x.f_rts = (pp < 6'd30) ? ((pp != 6'd0) ? pcs_p2[PM_AW-1:0] : {PM_AW{1'b1}}) : S.pcstk[PM_AW-1:0];
+        x.f_ts = (x.sqc[0] || x.sqc[1]) ? (op[40] ? 4'b0010 : 4'b0001) :
+                 x.sqc[2] ? (op[40] ? 4'b0010 : 4'b0100) :
+                 x.sqc[3] ? (op[45] ? 4'b0010 : 4'b0100) : 4'b1000;
+        x.f_br = |x.sqc[4:0];
+        x.f_db = op[26] && !x.sqc[3];
+    end
+    // R1044: X's length if the float compute runs (x_need's terms from the opcode alone; a word's
+    // float and shifter computes are exclusive -- one compute field)
+    x.need_fl = x.fl_misc ? ((x.misc_op >= 5'd12 && x.misc_op <= 5'd17) ? 2'd2 : 2'd0) :
+                (x.fl_add || x.fl_sub) ? 2'd1 : 2'd0;
 
     dx = x;
     dx.unsup = d_unsup_x; dx.why = d_why_x;     // (R1029: the same as x.unsup / x.why, benches check)
@@ -1549,8 +1586,14 @@ end
 // funnel), three for FIX and FLOAT (m2b_sharc_xu's stages); an external access is requested in
 // the last
 logic [1:0] x_cnt, x_need;
-assign x_need = (XC.fl_on && XC.fl_misc) ? xu_mx :
-                (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0;
+// (R1044: from D's registers, XC.need_fl, not through the misc unit's decode; the old form is
+// the benches' check)
+assign x_need = XC.fl_on ? XC.need_fl : XC.sh_on ? 2'd1 : 2'd0;
+generate if (BENCH) begin : g_need_check
+    always_ff @(posedge clk) if (st == ST_X && x_need != ((XC.fl_on && XC.fl_misc) ? xu_mx :
+                                 (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0))
+        $fatal(1, "x_need %d, the misc unit's form differs", x_need);
+end endgenerate
 assign x_done = st == ST_X && x_cnt >= x_need && !x_ext_wait && !(XC.fl_on && XC.fl_mul && fm_busy) && !x_p2w;
 // R1042: x_done ends an access (a pass); x_fin the word. A type-1 word's first pass (its DM move)
 // is followed by a second (its PM move, XC.acc2), unless the word is unsupported
@@ -1589,14 +1632,28 @@ end
 // otherwise the landing's, or its deferred second (Ra after Rm). The selects are registers.
 logic rx_l;
 always_comb begin
+    logic sx, x_aw, s_xa, s_xl, s_pd, s_fm, s_ra;
     rx_l = st == ST_X && x_done && ((XC.ld_r && x_ldv) || (xu_w && xu_r[7:4] == 4'h0));
     if (st == ST_X) begin
-        rf_we = rx_l; rf_wa = XC.ld_r ? XC.ld_dst : xu_r[3:0]; rf_wd = XC.ld_r ? x_ld : xu_v;
+        rf_we = rx_l; rf_wa = XC.ld_r ? XC.ld_dst : xu_r[3:0];
     end else if (rf_pw) begin
-        rf_we = 1'b1; rf_wa = rf_pa; rf_wd = rf_pd;
+        rf_we = 1'b1; rf_wa = rf_pa;
     end else begin
-        rf_we = ld_on && (ld_mwe || ld_awe); rf_wa = ld_mwe ? ld_rm : ld_ra; rf_wd = ld_mwe ? fm_r : ld_rav;
+        rf_we = ld_on && (ld_mwe || ld_awe); rf_wa = ld_mwe ? ld_rm : ld_ra;
     end
+    // R1044: the data as one AND-OR, its five selects from registers beside the data, so the
+    // multiplier's and the adder's results are one level from the write port. Where X writes,
+    // the value is xu_v's (a ureg move's XC.acc_wd) or x_ld's (a load, to R or through the ureg
+    // port): (XC.ld_r ? x_ld : xu_v) wherever rf_we is set in X
+    sx = st == ST_X;
+    x_aw = XC.uw && !x_uns && !XC.ld_r;
+    s_xa = sx && x_aw;
+    s_xl = sx && !x_aw;
+    s_pd = !sx && rf_pw;
+    s_fm = !sx && !rf_pw && ld_mwe;
+    s_ra = !sx && !rf_pw && !ld_mwe;
+    rf_wd = ({32{s_fm}} & fm_r) | ({32{s_ra}} & ld_rav) |
+            ({32{s_xa}} & XC.acc_wd) | ({32{s_xl}} & x_ld) | ({32{s_pd}} & rf_pd);
 end
 always_ff @(posedge clk) begin
     // the second write: the landing's Ra after its Rm (MAME's order: the later wins a register
@@ -1626,9 +1683,15 @@ always_comb begin
     // opcode's g bit is the address's bit 3
     pg = (o[47:45] == 3'b010 && o[32]) || (o[47:44] == 4'b0110 && o[40]) || (o[47:44] == 4'b1000 && o[32]) ||
          (o[47:45] == 3'b101 && o[44]) || (o[47:44] == 4'b1001 && o[37]);
-    i1_ra = (st == ST_D) ? {pg, o[43:41]} : 4'd0;
+    // (R1044: bit 3 fixed in each copy, the g bit choosing after the read: i1x_rd / m1x_rd)
+    i1_ra = (st == ST_D) ? {1'b0, o[43:41]} : 4'd0;
+    i3_ra = (st == ST_D) ? {1'b1, o[43:41]} : 4'd8;
     i2_ra = {(modf || modi) ? o[38] : 1'b1, modi ? o[34:32] : o[32:30]};
-    m1_ra = (st == ST_D) ? {pg, o[40:38]} : 4'd0;
+    m1_ra = (st == ST_D) ? {1'b0, o[40:38]} : 4'd0;
+    m3_ra = (st == ST_D) ? {1'b1, o[40:38]} : 4'd8;
+    d_pg = pg;
+    i1x_rd = pg ? i3_rd : i1_rd;
+    m1x_rd = pg ? m3_rd : m1_rd;
     m2_ra = {modf ? o[38] : 1'b1, o[29:27]};
 end
 
@@ -1660,6 +1723,7 @@ always_ff @(posedge clk) begin
 end
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i1_ra), .rd(i1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i2 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i2_ra), .rd(i2_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i3 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i3_ra), .rd(i3_rd));
 // the ureg port's I / M copies read at last clock's ureg field (R1029: a register, off the
 // opcode's path); a word reading I or M through it waits in D until that is its own (ur_ok: the
 // clock before was this word's D, or an X clock after the first, when pm_q is already this word)
@@ -1672,6 +1736,7 @@ end
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_iu (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(ur_aq), .rd(iu_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m1_ra), .rd(m1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m2 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m2_ra), .rd(m2_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m3 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m3_ra), .rd(m3_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_mu (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(ur_aq), .rd(mu_rd));
 
 // the system register bit operation: on the register's value (read in D; ASTAT and STKY now,
@@ -1993,7 +2058,10 @@ always_comb begin
     // the address by state alone (R1029: no decode before the M10K's address register)
     dm_a = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
     if (clr_on) begin dm_en = clr_n < DMW; dm_we = 1'b1; dm_wd = 32'h0; end
-    else if (st == ST_D && d_dm_rd) dm_en = 1'b1;                          // every D clock (the last stays)
+    // R1044: the read in EVERY D clock, whatever the word (the last stays): only an A_DM read
+    // access reads dm_q, in X, and its value then is the last D clock's read at d_dm_a, as before;
+    // in any other word dm_q is never read, so the enable leaves the opcode's path
+    else if (st == ST_D) dm_en = 1'b1;
     else if (st == ST_X && x_done && XC.acc == A_DM && XC.acc_wr) begin dm_en = 1'b1; dm_we = 1'b1; end
     else if (st == ST_X && x_p2w && XC.acc == A_DM) dm_en = 1'b1;          // (R1042: type 1's second read)
 end
@@ -2102,12 +2170,31 @@ end
 
 // the fetch: the first word from HALT, then each next word in X's first clock (its data is
 // pm_q in the following clock, the next D)
+// R1044: X's first clock's address is s_x1.daddr's, selected here from D's registered
+// candidates (XC.f_*) and S with the selects s_x1 uses -- not through the sequencer's next
+// state (BENCH checks it against s_x1.daddr at every read)
+logic [PM_AW-1:0] pm_ra_x;
+always_comb begin
+    logic             take, chg;
+    logic [PM_AW-1:0] rel, rts, tg;
+    take = !x_uns && XC.cok && XC.f_br && !XC.f_db;       // br && !br_db
+    chg = !x_uns && XC.le && !XC.done;                    // the loop end's CHANGE_PC(TOP_PC)
+    rel = (XC.le && !XC.done) ? XC.f_relp : XC.f_reld;
+    rts = (XC.le && XC.done) ? XC.f_rts : S.pcstk[PM_AW-1:0];
+    tg = ({PM_AW{XC.f_ts[0]}} & x_op[PM_AW-1:0]) | ({PM_AW{XC.f_ts[1]}} & rel) |
+         ({PM_AW{XC.f_ts[2]}} & XC.ind_t[PM_AW-1:0]) | ({PM_AW{XC.f_ts[3]}} & rts);
+    pm_ra_x = take ? tg : chg ? S.pcstk[PM_AW-1:0] : S.faddr[PM_AW-1:0];
+end
 always_comb begin
     pm_re = 1'b0;
-    pm_ra = PM_AW'(s_x1.daddr - 24'h20000);   // X's first clock: the next word (R1029)
+    pm_ra = pm_ra_x - PM_AW'(24'h20000);       // X's first clock: the next word (R1029)
     if (st == ST_FETCH) begin pm_re = 1'b1; pm_ra = PM_AW'(S.daddr - 24'h20000); end
     else if (st == ST_X && x_first) pm_re = 1'b1;
 end
+generate if (BENCH) begin : g_fetch_check
+    always_ff @(posedge clk) if (pm_re && pm_ra != PM_AW'(((st == ST_FETCH) ? S.daddr : s_x1.daddr) - 24'h20000))
+        $fatal(1, "fetch address %h, s_x1's %h", pm_ra, PM_AW'(s_x1.daddr - 24'h20000));
+end endgenerate
 
 assign flag_out = {mode2[18] & astat[22], mode2[17] & astat[21]};
 assign dbg_st = {st == ST_D && d_wait, st};

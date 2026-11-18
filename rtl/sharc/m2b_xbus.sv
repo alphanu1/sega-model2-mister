@@ -158,6 +158,10 @@ always_ff @(posedge clk) begin
 end
 
 assign ext_ack   = c_ack | x_ack;
-assign ext_rdata = x_dm ? c_rd : x_rd;
+// R1044: chosen by which side acknowledged, not by the address's decode (off the path from the
+// core's address register into its load paths). The core reads ext_rdata only in the clock of
+// ext_ack (X ends on it), when c_ack is set exactly if the access was the DM page's (x_dm): the
+// same word in every clock it is used
+assign ext_rdata = c_ack ? c_rd : x_rd;
 
 endmodule
