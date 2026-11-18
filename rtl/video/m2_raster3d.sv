@@ -179,6 +179,7 @@ module m2_raster3d #(
   // R1018: the fill mask's valid bits as group flags and LUT RAM (2C)
   parameter bit MKV_LUT = 1'b0,
   parameter bit FBW_WD = 1'b0,   // R1044: m2_fb_wcomb WD_NOGO (the 2B build)
+  parameter bit RECIP_EARLY = 1'b0,   // R1048: m2_raster_fill RECIP_EARLY (the 2B build)
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -786,7 +787,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .RECIP_M10K(RECIP_M10K), .UVCL(UVCL)) u_fill (   // R951   // R948   // R828   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .RECIP_M10K(RECIP_M10K), .RECIP_EARLY(RECIP_EARLY), .UVCL(UVCL)) u_fill (   // R951   // R948   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
