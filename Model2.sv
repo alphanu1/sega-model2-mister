@@ -8091,6 +8091,28 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 	wire [SDR_AW:1] w_pal  = cpu_sd_addr - GAME_PAL3D;
 	wire [SDR_AW:1] w_xlat = cpu_sd_addr - GAME_XLAT3D;
 	wire            sd_wr  = cpu_sd_req && cpu_sd_we && p_ack[1];
+	if (B2) begin : g_lutw_b2
+	// R1044 (the 2B build): THE WRITE'S ADDRESS AND SELECT LOADED IN EVERY CLOCK, CHOSEN BY THE
+	// RANGES ALONE. m2_span_tex writes its tables only on lut_we, so lut_sel / lut_addr matter
+	// only in a clock after r3d_lut_we was set -- and the three windows (3D palette 0x1730000 +
+	// 0x400 words, colour xlat 0x1731000 + 0x6000, luma 0x1860000 + 0x8000) are disjoint, so
+	// where the old form set r3d_lut_we the range picks the same window it did. The enable no
+	// longer gates them: s3435's -1.015 ns was sd_addr -> the luma map's row -> w_ls -> the
+	// enable of r3d_lut_addr. r3d_lut_we and r3d_lut_data are made exactly as before
+	// (sim/video/tb_m2_lutw: both forms, every cycle).
+	always_ff @(posedge clk_sys) begin
+		r3d_lut_we   <= (sd_wr && w_luma < SDR_AW'(32'h8000) && w_ls[R3D_LSB]) || (sd_wr && w_pal < SDR_AW'(32'h400)) ||
+		                (sd_wr && w_xlat < SDR_AW'(32'h6000) && w_xlat[8:7] == 2'd0);
+		r3d_lut_data <= cpu_sd_din;
+		if (w_xlat < SDR_AW'(32'h6000)) begin
+			r3d_lut_sel <= 2'd2; r3d_lut_addr <= {w_xlat[15:14], w_xlat[13:9], w_xlat[6:1]};
+		end else if (w_pal < SDR_AW'(32'h400)) begin
+			r3d_lut_sel <= 2'd1; r3d_lut_addr <= 13'(w_pal[10:1]);
+		end else begin
+			r3d_lut_sel <= 2'd0; r3d_lut_addr <= 13'({w_ls[R3D_LSB-1:0], w_luma[7:1]});
+		end
+	end
+	end else begin : g_lutw
 	always_ff @(posedge clk_sys) begin
 		r3d_lut_we   <= 1'b0;
 		r3d_lut_data <= cpu_sd_din;
@@ -8104,6 +8126,7 @@ generate if (R3D_TEXLUT) begin : g_r3d_lut
 			r3d_lut_we <= 1'b1; r3d_lut_sel <= 2'd2;
 			r3d_lut_addr <= {w_xlat[15:14], w_xlat[13:9], w_xlat[6:1]};
 		end
+	end
 	end
 end else begin : g_r3d_lin
 	assign r3d_qcol = q3d_col;
