@@ -958,7 +958,10 @@ always_comb begin
     end
     // decoded whatever the condition (R1029: the result-register rules below off the condition's
     // path); the enables and the reasons only if it runs
-    if (comp_f && comp != 23'h0) begin
+    // R1048: without the 23-bit zero test in front: every form below but the fixed ALU's
+    // unsupported one has a nonzero field bit in its own test (comp[22], cu != 0, or a nonzero
+    // ALU opcode), so a zero field (the NOP) reaches only that branch, which now tests it itself
+    if (comp_f) begin
         logic [7:0] cop;
         logic [1:0] cu;
         cop = comp[19:12]; cu = comp[21:20];
@@ -985,7 +988,9 @@ always_comb begin
             case (cu)
             2'd0: begin
                 if (!cop[7]) begin
-                    if (cop[7:4] == 4'h7 || !alu_fixed_ok(cop)) begin x.unsup |= comp_on; cbad = 1'b1; if (comp_on) x.why = U_COMP; end
+                    if (cop[7:4] == 4'h7 || !alu_fixed_ok(cop)) begin
+                        if (comp != 23'h0) begin x.unsup |= comp_on; cbad = 1'b1; if (comp_on) x.why = U_COMP; end
+                    end
                     else begin x.fix_on = comp_on; x.fix_op = cop; x.fix_k = fix_k_of(cop); x.rn = rnn; end
                 end else if (cop[7:4] == 4'hf) begin
                     x.unsup |= comp_on; cbad = 1'b1; if (comp_on) x.why = U_COMP;   // float dual add / subtract
