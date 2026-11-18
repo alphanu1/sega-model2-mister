@@ -28,6 +28,9 @@ PM = os.environ.get('M2B_RP_PM') == '1'
 # the core applies it the clock after X) and its words test condition 0x0f (CURLCNTR != 1), so a loop end and an IF
 # LCE meet a CURLCNTR just written. Without it the programs are R1042's, byte for byte.
 CURL = os.environ.get('M2B_RP_CURL') == '1'
+# M2B_RP_CURLM=1 (R1048; with CURL): some of those body words are also DM moves (compute, dreg <-> DM,
+# immediate modify) under IF NOT LCE, so a loop end's pop decides the access. Without it CURL's programs.
+CURLM = os.environ.get('M2B_RP_CURLM') == '1'
 PM0 = 0x21d00                                         # block 0's data words (past the program)
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
@@ -257,6 +260,11 @@ def main():
             if CURL and g.random() < 0.5:              # R1044: CURLCNTR written in the body
                 ws = []
                 for _ in range(L):
+                    if CURLM and g.random() < 0.4:
+                        i = g.randrange(8); d = g.getrandbits(1)
+                        ws.append((0b0110 << 44) | (i << 41) | (d << 39) | (1 << 38) | (g.choice([0x0f, 0x0f, 0x1f]) << 33) |
+                                  (rreg() << 23) | comp(False))      # (modify 0: I stays where the program keeps it)
+                        continue
                     if g.random() < 0.35: ws.append((0x0f << 40) | (0x67 << 32) | g.randrange(1, 4))
                     else: ws.append((0x02 << 39) | (g.choice([0x0f, 0x0f, 0x1f]) << 33) | comp(False))   # 0x0f: IF NOT LCE (CURLCNTR != 1)
                 emit((0x0c << 40) | (n << 24) | len(ws))

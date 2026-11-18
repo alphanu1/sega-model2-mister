@@ -43,6 +43,8 @@ module m2b_sharc_xu #(
     input  logic [31:0] sh_val,         // the immediate (sh_imm) or R[ry]
     input  logic [5:0]  pre_l,          // PRE: min(sh_val[11:6], 32)
     input  logic [4:0]  pre_dj,         // PRE: the decoder's bit (below)
+    input  logic        pre_fxz,        // PRE: fx[30:23] == 0 (R1048)
+    input  logic        pre_fyz,        // PRE: fy[30:23] == 0
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -134,8 +136,9 @@ end
 
 // ---- the float operands, flushed in the manual's rounding where man_* flushes them
 logic [31:0] xin, yin;
-assign xin = MAME_RND ? fx : flush(fx);
-assign yin = MAME_RND ? fy : flush(fy);
+// (R1048: with PRE the zero tests are the caller's registers -- the same as flush(fx) / flush(fy))
+assign xin = MAME_RND ? fx : (PRE ? pre_fxz : fx[30:23] == 8'h00) ? (fx & SIGN) : fx;
+assign yin = MAME_RND ? fy : (PRE ? pre_fyz : fy[30:23] == 8'h00) ? (fy & SIGN) : fy;
 
 // ---- scalb on xin (SCALB, FIX BY) and on FLOAT's result (FLOAT BY): exponent + Ry
 function automatic logic [31:0] scalb_r(input logic [31:0] f, input logic [31:0] ry);
@@ -439,8 +442,8 @@ assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m[22:0]};
 // the operands' tests from fx / fy (R1029: off the flush's path; a flush keeps the sign, the
 // exponent and a NaN, and makes a denormal a zero)
 logic xz, yz;
-assign xz = MAME_RND ? is_zero(fx) : is_den_or_zero(fx);    // is_zero(xin)
-assign yz = MAME_RND ? is_zero(fy) : is_den_or_zero(fy);
+assign xz = MAME_RND ? is_zero(fx) : PRE ? pre_fxz : is_den_or_zero(fx);    // is_zero(xin)
+assign yz = MAME_RND ? is_zero(fy) : PRE ? pre_fyz : is_den_or_zero(fy);
 // the compare: |x| against |y| (flushed in the manual's rounding)
 logic cm_lt, cm_eq, cm_zx, cm_zy, cm_ltxy, cm_ltyx, cm_eqxy, cm_nan;
 always_comb begin
@@ -470,7 +473,7 @@ always_comb begin
     M_ABS: begin
         if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
         else begin
-            if (is_den_or_zero(fx)) begin r = 32'h0; a = AZ; end
+            if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = 32'h0; a = AZ; end
             else r = fx & ~SIGN;
             if (fx[31]) a |= AS;
         end
@@ -488,7 +491,7 @@ always_comb begin
     M_NEG: begin
         if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
         else begin
-            if (is_den_or_zero(fx)) begin r = ~fx & SIGN; a = AZ; end
+            if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = ~fx & SIGN; a = AZ; end
             else r = fx ^ SIGN;
             if (r[31]) a |= AN;
         end
@@ -496,7 +499,7 @@ always_comb begin
     M_PASS: begin
         if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
         else begin
-            if (is_den_or_zero(fx)) begin r = fx & SIGN; a = AZ; end
+            if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = fx & SIGN; a = AZ; end
             else r = fx;
             if (r[31]) a |= AN;
         end
@@ -571,14 +574,14 @@ always_comb begin
         else begin
             r = fy & SIGN;
             if (r != 0) a |= AN;
-            if (is_den_or_zero(fx)) a |= AZ;
+            if (PRE ? pre_fxz : is_den_or_zero(fx)) a |= AZ;
             else r |= fx & ~SIGN;
         end
     end
     M_CLIP: begin
         if (is_nan(fx) || is_nan(fy)) begin r = NAN; a = AI; k = AIS; end
         else begin
-            if (is_den_or_zero(fx) || is_den_or_zero(fy)) begin r = fx & SIGN; a = AZ; end
+            if ((PRE ? pre_fxz : is_den_or_zero(fx)) || (PRE ? pre_fyz : is_den_or_zero(fy))) begin r = fx & SIGN; a = AZ; end
             else begin
                 // std::clamp(x, -|y|, |y|): |x| > |y| clamps to the bound of x's sign
                 r = (!cm_lt && !cm_eq) ? (fx[31] ? (fy | SIGN) : (fy & ~SIGN)) : fx;

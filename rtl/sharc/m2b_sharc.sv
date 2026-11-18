@@ -221,6 +221,8 @@ logic [31:0]      rf_pd;
 // and D waits that clock, so D never reads a word in the clock it is written.
 logic [3:0]  i1_ra, m1_ra;                 // (R1042: bit 3 the PM bus's, DAG2's I8-15 / M8-15)
 logic [3:0]  i2_ra, m2_ra;
+logic [3:0]  i4_ra, m4_ra;                 // R1048: type 1's DAG2 I / M, on copies read at the opcode's fields
+logic [31:0] i4_rd, m4_rd;
 logic [31:0] i1_rd, i2_rd, iu_rd, m1_rd, m2_rd, mu_rd;
 // R1044: DAG1's copies read I0-7 / M0-7 at the opcode's field with no select; I8-15 / M8-15 (a
 // PM-bus access's DAG2 registers, the g bit) on copies of their own (u_i3 / u_m3), the g bit
@@ -502,7 +504,11 @@ logic [31:0] d_accwd_ref;
 (* keep *) logic [31:0] d_accwd_b;          // R1044: the store / ureg data but the sequencer's source
 logic [31:0] d_ursq1, d_ursq0, d_accwd_chk;
 logic        d_cok_ref;                     // benches: the condition as R1029 evaluated it
-(* keep *) logic [2:0] d_acc_nc;             // R1044: D's access kind before its condition
+logic        d_cok1, d_cok0;                // R1048: cok if the loop end pops / if it does not
+logic [2:0] d_acc_nc;                        // R1044: D's access kind before its condition (now the bench's)
+(* keep *) logic [2:0] d_acc_hit;            // R1048: ... before any gate
+logic        d_rzb;
+logic [2:0]  d_acc_chk;
 (* keep *) logic       d_mbad_nc;            // ... and the address map's test
 logic        d_unsup_x;                     // D's flag and reason, the condition last (R1029)
 logic [3:0]  d_why_x;
@@ -681,6 +687,7 @@ always_comb begin
         c1 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l1, op[35:31]) : if_cond(astat, 4'h0, alusat, l1, cond);
         c0 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l0, op[35:31]) : if_cond(astat, 4'h0, alusat, l0, cond);
         cok = isf ? fv : done ? c1 : c0;
+        d_cok1 = isf ? fv : c1; d_cok0 = isf ? fv : c0;   // (R1048: for each outcome of the loop end's pop)
         d_cok_ref = done ? ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond))
                          : ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l0, op[35:31]) : if_cond(astat, flg, alusat, l0, cond));
     end
@@ -1091,13 +1098,13 @@ always_comb begin
         end
     end
     // R1042: type 1's PM access (DAG2: I8-15 by op[32:30], M8-15 by op[29:27], DAG2's copies)
-    pa2 = pm_b1(i2_rd[23:0]);
+    pa2 = pm_b1(i4_rd[23:0]);
     {bad2, akind2} = pm_kind(pa2[23:0]);
     bad2 = t1 && (bad2 || pa2[24]);
     x.dual = t1;
     x.acc2 = akind2;
     x.acc2_wr = op[37];
-    x.acc2_a = (akind2 == A_PM) ? i2_rd[23:0] : pa2[23:0];
+    x.acc2_a = (akind2 == A_PM) ? i4_rd[23:0] : pa2[23:0];
     // (mem_on and x.pmod are the condition's, through the handler; the same tests from the
     // opcode with the condition last below, R1029)
     begin
@@ -1105,7 +1112,13 @@ always_comb begin
         exm = (op[47:46] == 2'b11) ? !cok :
               (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
         d_mbad_nc = mem_f && bad;                // (R1044: kept; the condition in the last gate)
-        mbad = (exm && d_mbad_nc) || bad2;
+        // (R1048: the loop end's pop chooses between the two outcomes' tests, last)
+        begin
+            logic e1, e0;
+            e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
+            e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
+            mbad = (done ? (e1 && d_mbad_nc) : (e0 && d_mbad_nc)) || bad2;
+        end
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
     x.acc_wr = mem_wr;
@@ -1148,6 +1161,8 @@ always_comb begin
              (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(u, !op[40]) : 1'b0;
         rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || (comp_f && comp != 23'h0 && cbad) ||
              (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm || bad2;
+        d_rzb = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || (comp_f && comp != 23'h0 && cbad) ||
+                dag_f || pxpm || bad2;           // (R1048: rz but the loop end's stack test)
         ex = (op[47:46] == 2'b11) ? !cok :
              (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
         // R1044: each bit of the kind as an OR of its regions' tests on the sum, the form's gate
@@ -1178,7 +1193,20 @@ always_comb begin
             d_acc_nc[0] = g && (pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout));
             d_acc_nc[1] = g && (pmb ? p_pm : (h_fin || h_fout));
             d_acc_nc[2] = g && (pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext));
-            x.acc = d_acc_nc & {3{ex}};
+            // R1048: the regions' bits without the gate (kept), the gate for each outcome of the
+            // loop end's pop -- its stack test (in rz) and the condition -- and the pop last
+            d_acc_hit[0] = pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout);
+            d_acc_hit[1] = pmb ? p_pm : (h_fin || h_fout);
+            d_acc_hit[2] = pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext);
+            begin
+                logic e1, e0, g1, g0;
+                e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
+                e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
+                g1 = mem_f && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1;
+                g0 = mem_f && !d_rzb && e0;
+                x.acc = done ? (d_acc_hit & {3{g1}}) : (d_acc_hit & {3{g0}});
+            end
+            d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
         d_acc_ref = (mem_on && !bad && !x.unsup) ? akind : A_NONE;    // (R1028's, for the benches' check)
     end
@@ -1277,7 +1305,7 @@ always_comb begin
     x.sqc[3] = op[47:46] == 2'b11;
     x.sqc[4] = op[47:41] == 7'b0000101;
     x.sqc[5] = op[47:41] == 7'b0000110 || op[47:41] == 7'b0000111 && !op[40];
-    x.ind_t = i2_rd + m2_rd;
+    x.ind_t = i4_rd + m4_rd;                 // (R1048: type 1's copies)
     // R1044: the next fetch's candidates (X's first clock selects among them, pm_ra), from the
     // opcode and S -- s_x1's own terms: rel_t for each loop-end outcome, rts_v after a pop, tsel
     // one-hot, br's forms (taken on XC.cok) and br_db
@@ -1328,7 +1356,7 @@ always_comb begin
     d_dm_rd = mem_f && !mem_wr;
     // R1042: the PM RAM's port B read: type 1's PM move, else the word's one access
     d_pmb = pmb || t1;
-    d_pb_a = t1 ? i2_rd[PM_AW-1:0] : mem_a[PM_AW-1:0];
+    d_pb_a = t1 ? i4_rd[PM_AW-1:0] : mem_a[PM_AW-1:0];   // (R1048: i4, no decode before its read)
 end
 
 // the word in X is unsupported: D's reasons, or its data address outside the map (R1029: the
@@ -1607,7 +1635,7 @@ logic        xu_fw, xu_sw;
 logic [1:0]  xu_mx, xu_sx;
 m2b_sharc_xu #(.MAME_RND(MAME_RND), .PRE(1'b1)) u_xu (
     .clk, .fix_on(XC.fix_on), .fix_op(XC.fix_op), .fix_k(XC.fix_k), .sh_on(XC.sh_on), .sh_op(XC.sh_op), .sh_imm(XC.sh_imm),
-    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .pre_l(sh_pl), .pre_dj(sh_pdj),
+    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .pre_l(sh_pl), .pre_dj(sh_pdj), .pre_fxz(fa_xz), .pre_fyz(fa_yz),
     .misc_on(XC.fl_misc), .misc_op(XC.misc_op),
     .x(op_x), .y(op_y), .n(op_n), .fx(fa_x), .fy(fa_y), .astat, .alusat(mode1[M1_ALUSAT]), .trunc(XC.trunc),
     .fix_r(xu_fr), .sh_r(xu_sr), .fix_we(xu_fw), .sh_we(xu_sw), .fix_astat(xu_fa),
@@ -1808,6 +1836,10 @@ always_comb begin
     i1x_rd = pg ? i3_rd : i1_rd;
     m1x_rd = pg ? m3_rd : m1_rd;
     m2_ra = {modf ? o[38] : 1'b1, o[29:27]};
+    // R1048: type 1's I8-15 / M8-15 (op[32:30] / op[29:27]) on their own copies, the fields with
+    // no decode (R1042 read them on DAG2's copies, behind the modify forms' compares)
+    i4_ra = (st == ST_D) ? {1'b1, o[32:30]} : 4'd8;
+    m4_ra = (st == ST_D) ? {1'b1, o[29:27]} : 4'd8;
 end
 
 // I / M: the writes at X's end, the deferred I write after
@@ -1839,6 +1871,7 @@ end
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i1_ra), .rd(i1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i2 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i2_ra), .rd(i2_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i3 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i3_ra), .rd(i3_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i4 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i4_ra), .rd(i4_rd));
 // the ureg port's I / M copies read at last clock's ureg field (R1029: a register, off the
 // opcode's path); a word reading I or M through it waits in D until that is its own (ur_ok: the
 // clock before was this word's D, or an X clock after the first, when pm_q is already this word)
@@ -1852,6 +1885,7 @@ m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_iu (.clk, .we(ir_we), .wa(ir_wa
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m1_ra), .rd(m1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m2 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m2_ra), .rd(m2_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m3 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m3_ra), .rd(m3_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m4 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m4_ra), .rd(m4_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_mu (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(ur_aq), .rd(mu_rd));
 
 // the system register bit operation: on the register's value (read in D; ASTAT and STKY now,
@@ -2264,6 +2298,7 @@ generate if (BENCH) begin : g_stk_check
         if (h != d_hit_ref) $fatal(1, "scoreboard %b, R1028's %b", h, d_hit_ref);
     end
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
+    always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
     always_ff @(posedge clk) if (d_go && ur_sel[7:4] == 4'h6 && d_urall_ref != dx_urall)
