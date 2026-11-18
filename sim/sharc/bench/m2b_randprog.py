@@ -24,6 +24,10 @@ SKLR0 = os.environ.get('M2B_RP_SKLR0') == '1'
 # word of block 1 (I12-15 = I0-3 copied first) in all four read / write mixes. Without it the
 # programs are R1029's, byte for byte.
 PM = os.environ.get('M2B_RP_PM') == '1'
+# M2B_RP_CURL=1 (R1044): a counted loop's body also writes CURLCNTR (1-3, an immediate -> ureg, so
+# the core applies it the clock after X) and its words test condition 0x0f (CURLCNTR != 1), so a loop end and an IF
+# LCE meet a CURLCNTR just written. Without it the programs are R1042's, byte for byte.
+CURL = os.environ.get('M2B_RP_CURL') == '1'
 PM0 = 0x21d00                                         # block 0's data words (past the program)
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
@@ -250,6 +254,14 @@ def main():
                  (g.randrange(8) << 27) | comp())
         elif r < 0.77:                                     # a counted loop of 1-5 words
             n = g.randrange(1, 5); L = g.randrange(1, 6)
+            if CURL and g.random() < 0.5:              # R1044: CURLCNTR written in the body
+                ws = []
+                for _ in range(L):
+                    if g.random() < 0.35: ws.append((0x0f << 40) | (0x67 << 32) | g.randrange(1, 4))
+                    else: ws.append((0x02 << 39) | (g.choice([0x0f, 0x0f, 0x1f]) << 33) | comp(False))   # 0x0f: IF NOT LCE (CURLCNTR != 1)
+                emit((0x0c << 40) | (n << 24) | len(ws))
+                for w in ws: emit(w)
+                continue
             emit((0x0c << 40) | (n << 24) | L)
             for _ in range(L):
                 emit((0x02 << 39) | (0x1f << 33) | comp(False))
