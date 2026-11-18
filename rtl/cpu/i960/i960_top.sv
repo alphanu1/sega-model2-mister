@@ -670,6 +670,8 @@ module i960_top #(
   /* verilator lint_on UNUSEDSIGNAL */
   logic [63:0] fadd_y, fmul_y, fdiv_y, fsqrt_y, fmisc_y;
   logic [31:0] fmisc_yi;
+  logic [31:0] fmisc_yh;         // R1045: cvtzril's high word
+  logic        fp_is_cvtl;       // R839: cvtzril (declared here for u_fpmisc's lng, R1045)
   logic [2:0]  fmisc_cc;
   // R566: FPMISC'S RESULT IS REGISTERED, AND ITS INSTRUCTIONS TAKE TWO CYCLES
   // IN T_FP. The i960's worst path at 25 MHz (s297, +3.105 ns of 40) was one
@@ -683,11 +685,13 @@ module i960_top #(
   // logb and scale.
   logic [63:0] fmisc_y_q;
   logic [31:0] fmisc_yi_q;
+  logic [31:0] fmisc_yh_q;       // R1045
   logic [2:0]  fmisc_cc_q;
   logic [1:0]  misc_ph;          // T_FP cycles spent on an fpmisc instruction
   always_ff @(posedge clk) begin
     fmisc_y_q  <= fmisc_y;
     fmisc_yi_q <= fmisc_yi;
+    fmisc_yh_q <= fmisc_yh;
     fmisc_cc_q <= fmisc_cc;
   end
   logic        fadd_sub;
@@ -790,13 +794,15 @@ module i960_top #(
   // i960 can run at 35 MHz (R565's list: fpmisc is the only path over 28 ns).
   localparam bit FPMISC_STAGED = 1'b1;
   // R952: SCALE 0 -- fmisc_op is never 6 (scaler is the multiply by pow2).
-  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0), .SUBNORM(SUBN_D)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
-                        .a(fp_a), .b(fp_b), .ai(src1_val),
-                        .y(fmisc_y), .yi(fmisc_yi), .cc(fmisc_cc));
+  // R1045: LONG, cvtzril's 64-bit integer, wherever cvtzril decodes (VC or F2A).
+  i960_fpmisc #(.STAGED(FPMISC_STAGED), .SCALE(1'b0), .SUBNORM(SUBN_D),
+                .LONG((VC || F2A) && RL)) u_fpmisc (.clk(clk), .op(fmisc_op), .rmode(ac[31:30]),
+                        .a(fp_a), .b(fp_b), .ai(src1_val), .lng(fp_is_cvtl),
+                        .y(fmisc_y), .yi(fmisc_yi), .yh(fmisc_yh), .cc(fmisc_cc));
 
   // Which unit an opcode belongs to, and whether it is wired at all.
   logic fp_is_add, fp_is_mul, fp_is_div, fp_is_sqrt, fp_is_misc, fp_valid;
-  logic fp_is_cpys, fp_is_cvtl;                  // R839: cpysre, cvtzril
+  logic fp_is_cpys;                              // R839: cpysre (cvtzril's fp_is_cvtl: above, R1045)
   logic fp_is_trans;                             // R845: sinrl cosrl tanrl atanrl
   logic fp_is_rem;                               // R869: remr
   logic fp_is_mvre;                              // R897: movre (Dead or Alive)
@@ -1999,11 +2005,16 @@ module i960_top #(
             end else if (fp_writes_int) begin
               wa <= d_srcdst; wd <= fmisc_yi_q; we <= 1'b1;
               if (fp_is_cvtl) begin
-                // R839: cvtzril -- (int64_t) of a value cvtzri converts; the
-                // high word is the sign. Exact while |x| < 2^31: Virtua Cop's
-                // results measured -57,796..39,835 (MAME, 300 s with a game).
+                // R839: cvtzril -- the pair dst, dst + 1. R1045: the 64-bit
+                // integer from fpmisc's LONG path (it was cvtzri's 32-bit
+                // result sign-extended: a NaN gave 0xFFFF_FFFF_8000_0000,
+                // the PRM's 0x8000_0000_0000_0000; |x| >= 2^31 saturated).
                 mw_base <= d_srcdst;
-                rl_lo1  <= {32{fmisc_yi_q[31]}};
+`ifdef I960_FAULT_CVTL
+                rl_lo1  <= {32{fmisc_yi_q[31]}};   // R1045: the planted fault, the old high word
+`else
+                rl_lo1  <= fmisc_yh_q;
+`endif
                 rl_wb   <= 1'b1;
               end
             end else if (d_dst_lit) begin

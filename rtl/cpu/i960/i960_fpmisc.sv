@@ -36,6 +36,9 @@
 // An unrepresentable cvtri / cvtzri result stores the maximum positive or
 // maximum negative integer by the operand's sign (PRM 11-50); NaN stores
 // 0x8000_0000 (12-23).
+// R1045: LONG builds the 64-bit integer result (cvtzril, the lng input) to
+// the same rules at 64 bits: 0x7FFF_FFFF_FFFF_FFFF / 0x8000_0000_0000_0000
+// by sign for an unrepresentable value, 0x8000_0000_0000_0000 for a NaN.
 
 module i960_fpmisc #(
   // R575: 1 puts a register after the round add, splitting the unit's ~25 ns
@@ -57,7 +60,10 @@ module i960_fpmisc #(
   // -1023 - lz. Compare was already right (it works on the raw encoding).
   // The scale path (SCALE, op 6, which i960_top does not use) still flushes.
   // SUBNORM 0: the significand of a subnormal is zero, as before.
-  parameter bit SUBNORM = 1'b1
+  parameter bit SUBNORM = 1'b1,
+  // R1045: LONG 1 adds the 64-bit integer conversion (yi / yh while lng):
+  // cvtzril's. 0 is the unit as it was (yh 0, lng unused).
+  parameter bit LONG    = 1'b0
 ) (
   /* verilator lint_off UNUSEDSIGNAL */
   input  logic        clk,          // R575: used only when STAGED
@@ -67,8 +73,12 @@ module i960_fpmisc #(
   input  logic [63:0] a,            // FP operand
   input  logic [63:0] b,            // FP operand for compare
   input  logic [31:0] ai,           // integer operand for cvtir / scale
+  /* verilator lint_off UNUSEDSIGNAL */
+  input  logic        lng,          // R1045: a 64-bit integer destination (LONG)
+  /* verilator lint_on UNUSEDSIGNAL */
   output logic [63:0] y,            // FP result
-  output logic [31:0] yi,           // integer result
+  output logic [31:0] yi,           // integer result (the low word while lng)
+  output logic [31:0] yh,           // R1045: the high word of a 64-bit one (LONG)
   output logic [2:0]  cc            // condition code for compare
 );
 
@@ -231,9 +241,15 @@ module i960_fpmisc #(
   // already finished (compare, int-to-double, scale, logb -- computed below
   // from the operands and registered with the rest).
   logic [56:0]        r2_rounded;
-  logic [5:0]         r2_fbits;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [5:0]         r2_fbits;                  // R1045: not read when LONG
+  logic [5:0]         r2_lsh;                    // R1045: read only when LONG
+  /* verilator lint_on UNUSEDSIGNAL */
   logic signed [12:0] r2_eu;
   logic               r2_sa, r2_a_nan, r2_a_inf, r2_inc;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic               r2_lng;                    // R1045: read only when LONG
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [63:0]        r2_a, r2_nd, r2_scaled;   // R952: r2_nd, cvtir's or logb's
   logic [2:0]         r2_op;
   logic [63:0]        scaled, logb_d;       // declared here, computed below
@@ -243,53 +259,94 @@ module i960_fpmisc #(
         r2_rounded <= rounded; r2_fbits <= fbits; r2_eu <= eu;
         r2_sa <= sa; r2_a_nan <= a_nan; r2_a_inf <= a_inf; r2_inc <= inc;
         r2_a <= a; r2_nd <= (op == OP_LOGB) ? logb_d : i2d; r2_scaled <= SCALE ? scaled : 64'd0;
-        r2_op <= op; cc <= cc_c;
+        r2_op <= op; cc <= cc_c; r2_lng <= LONG && lng; r2_lsh <= 6'd62 - 6'(eu);
       end
     end else begin : g_comb
       always_comb begin
         r2_rounded = rounded; r2_fbits = fbits; r2_eu = eu;
         r2_sa = sa; r2_a_nan = a_nan; r2_a_inf = a_inf; r2_inc = inc;
         r2_a = a; r2_nd = (op == OP_LOGB) ? logb_d : i2d; r2_scaled = SCALE ? scaled : 64'd0;
-        r2_op = op; cc = cc_c;
+        r2_op = op; cc = cc_c; r2_lng = LONG && lng; r2_lsh = 6'd62 - 6'(eu);
       end
     end
   endgenerate
 
-  // Integer result: shift the significand down to the units position. No
-  // short-circuit on r2_a negative exponent — 0.5 rounds to 1, not to 0.
-  // Keep the shift at full width. Truncating it to 32 bits first destroys the
-  // evidence: rounding can carry the magnitude up past 2^32 -- 4294967295.5
-  // rounds to 2^32 -- and the truncated result is then 0, which looks like r2_a
-  // small in-range value and passes any test that only inspects bit 31.
-  logic [56:0] shifted;
-  assign shifted = r2_rounded >> r2_fbits;
+  // R1045: THE 64-BIT INTEGER (cvtzril). It was cvtzri's 32-bit result with
+  // its sign bit copied into the high word, so a NaN gave 0xFFFF_FFFF_8000_0000
+  // and every |x| >= 2^31 a saturated 32-bit value; the 80960KB PRM gives
+  // 0x8000_0000_0000_0000 for a NaN (12-23, "the maximum negative integer"),
+  // the maximum positive or negative 64-bit value by sign for one out of
+  // range or an infinity (11-50), and the integer itself in between.
+  // The rounded significand r2_rounded is the value times 2^fbits for
+  // 0 <= eu <= 51 (fbits = 52 - eu, the round already applied) and the
+  // significand itself for eu >= 52 (fbits 0), so the value for every
+  // 0 <= eu <= 62 is one right shift of it placed at the top of 64 bits,
+  // by 62 - eu (r2_lsh, formed before the stage). Below 2^0 the value is the
+  // round's increment, 0 or 1. From eu 63 (and the infinities, eu 1024)
+  // nothing is representable except -2^63 itself, whose encoding is the
+  // negative saturation anyway.
+  // ONE SHIFT AND ONE NEGATE FOR BOTH WIDTHS: with LONG the 32-bit result
+  // (cvtri, cvtzri) is taken from the same 64-bit magnitude -- it is exact
+  // for every eu <= 31, and the low word of its two's complement is the
+  // 32-bit one -- so the unit does not carry a second shifter (the first
+  // LONG build had both: +266 to +324 ALUTs in i960_fpmisc).
+  generate if (LONG) begin : g_long
+    wire [63:0] lwin = {r2_rounded[53:0], 10'd0};
+    wire [63:0] lmag = (r2_eu < 13'sd0) ? {63'd0, r2_inc} : (lwin >> r2_lsh);
+    wire [63:0] lneg = ~lmag + 64'd1;
+    wire        lovf = (r2_eu > 13'sd62);
+    // the 32-bit overflow, as the shift form's below (-2^31 representable)
+    wire        ovf  = (r2_eu > 13'sd31) || (|lmag[63:32]) ||
+                       (lmag[31] && !(r2_sa && (lmag[30:0] == 31'd0)));
+    wire [31:0] yi32 = r2_a_nan ? 32'h8000_0000
+                     : ovf      ? (r2_sa ? 32'h8000_0000 : 32'h7FFF_FFFF)
+                     :            (r2_sa ? lneg[31:0] : lmag[31:0]);
+    wire [63:0] lval = r2_a_nan ? 64'h8000_0000_0000_0000
+                     : lovf     ? (r2_sa ? 64'h8000_0000_0000_0000 : 64'h7FFF_FFFF_FFFF_FFFF)
+                     :            (r2_sa ? lneg : lmag);
+    assign yi = r2_lng ? lval[31:0] : yi32;
+    assign yh = lval[63:32];
+  end else begin : g_int
+    // Integer result: shift the significand down to the units position. No
+    // short-circuit on r2_a negative exponent — 0.5 rounds to 1, not to 0.
+    // Keep the shift at full width. Truncating it to 32 bits first destroys the
+    // evidence: rounding can carry the magnitude up past 2^32 -- 4294967295.5
+    // rounds to 2^32 -- and the truncated result is then 0, which looks like r2_a
+    // small in-range value and passes any test that only inspects bit 31.
+    logic [56:0] shifted;
+    assign shifted = r2_rounded >> r2_fbits;
 
-  logic [31:0] int_abs;
-  always_comb begin
-    if (r2_eu > 13'sd31) int_abs = 32'h8000_0000;
-    else              int_abs = shifted[31:0];
-  end
+    logic [31:0] int_abs;
+    always_comb begin
+      if (r2_eu > 13'sd31) int_abs = 32'h8000_0000;
+      else              int_abs = shifted[31:0];
+    end
 
-  // Overflow is NOT `r2_eu > 31`. An exponent of exactly 31 covers magnitudes in
-  // [2^31, 2^32), all of which are out of int32 range -- except -2^31, which is
-  // representable. Testing the exponent alone silently wrapped -3.18e9 to r2_a
-  // positive value and agreed with nothing.
-  //
-  // The out-of-range value saturates by sign (R972, PRM 11-50: "the maximum
-  // positive or maximum negative value is stored ... depending on whether the
-  // real value was positive or negative"): 0x7FFF_FFFF for positive overflow
-  // and +inf, 0x8000_0000 for negative overflow and -inf; NaN 0x8000_0000
-  // (12-23). It was 0x8000_0000 for both signs, from MAME's int32_t cast
-  // (x86's indefinite value), and R12 recorded the manual as giving "the
-  // truncated low 32 bits" -- this manual does not say that (R970). No logged
-  // game session reached a positive overflow.
-  logic ovf;
-  assign ovf = (r2_eu > 13'sd31) || (|shifted[56:32]) ||
-               (shifted[31] && !(r2_sa && (shifted[30:0] == 31'd0)));
+    // Overflow is NOT `r2_eu > 31`. An exponent of exactly 31 covers magnitudes in
+    // [2^31, 2^32), all of which are out of int32 range -- except -2^31, which is
+    // representable. Testing the exponent alone silently wrapped -3.18e9 to r2_a
+    // positive value and agreed with nothing.
+    //
+    // The out-of-range value saturates by sign (R972, PRM 11-50: "the maximum
+    // positive or maximum negative value is stored ... depending on whether the
+    // real value was positive or negative"): 0x7FFF_FFFF for positive overflow
+    // and +inf, 0x8000_0000 for negative overflow and -inf; NaN 0x8000_0000
+    // (12-23). It was 0x8000_0000 for both signs, from MAME's int32_t cast
+    // (x86's indefinite value), and R12 recorded the manual as giving "the
+    // truncated low 32 bits" -- this manual does not say that (R970). No logged
+    // game session reached a positive overflow.
+    logic ovf;
+    assign ovf = (r2_eu > 13'sd31) || (|shifted[56:32]) ||
+                 (shifted[31] && !(r2_sa && (shifted[30:0] == 31'd0)));
 
-  assign yi = r2_a_nan ? 32'h8000_0000
-            : ovf      ? (r2_sa ? 32'h8000_0000 : 32'h7FFF_FFFF)
-            :            (r2_sa ? (~int_abs + 32'd1) : int_abs);
+    logic [31:0] yi32;
+    assign yi32 = r2_a_nan ? 32'h8000_0000
+                : ovf      ? (r2_sa ? 32'h8000_0000 : 32'h7FFF_FFFF)
+                :            (r2_sa ? (~int_abs + 32'd1) : int_abs);
+
+    assign yi = yi32;
+    assign yh = 32'd0;
+  end endgenerate
 
   // Integral double result. The integral value is r2_rounded * 2^(r2_eu-52), so it
   // is renormalised rather than pasted back under the original exponent —

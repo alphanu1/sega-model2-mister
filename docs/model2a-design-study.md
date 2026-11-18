@@ -48680,3 +48680,150 @@ paths' ~1 ns a level), so they leave the failing list; the seeds that
 failed on them (s2900, s2922 in part) would then fail, if at all, on the
 one-seed paths above or on HDMI, which fails 4 of these 6 seeds alone.
 The 2C build has the same three modules (not ported).
+
+**R1045 -- cvtzril's 64-BIT RESULT IS THE 80960KB PRM's ON EVERY LINE: A NaN STORES
+0x8000_0000_0000_0000 (IT WAS 0xFFFF_FFFF_8000_0000), |x| >= 2^31 ITS OWN INTEGER (IT WAS cvtzri's
+SATURATED 32 BITS SIGN-EXTENDED), OUT OF RANGE THE 64-BIT MAXIMUM BY SIGN. i960_fpmisc LONG. THE
+32-BIT FORMS WERE ALREADY THE MANUAL's (R972) AND ARE UNCHANGED. NO CYCLE CHANGES.**
+Branches i960-nan-main (off main 04cce434), i960-nan-2a (off model2a 918120c2), i960-nan-2c (off
+6653b2ac, geo-dup), i960-nan-2b (off model2b b246dcc5), 2026-11-18; the same RTL on each, applied by
+hand. Simulation and quartus_map only: no fit, no board.
+
+(Section: §10, the i960's FP group (R839, R972, R1040 point 6). Authority: the 80960KB Programmer's
+Reference Manual (Mar 1988, bitsavers 80960KB_Programmers_Reference_Manual_Mar88.pdf, NOT in the
+repo): 11-50 cvtri / cvtril / cvtzri / cvtzril ("If the magnitude of the result cannot be
+represented in the destination, an integer-overflow fault is raised, and the maximum positive or
+maximum negative value is stored in the destination (depending on whether the real value was
+positive or negative, respectively)"), 12-22 / 12-23 floating invalid-operation ("Conversion of a NaN
+from floating-point format to integer format"; masked, "When the result is an integer, the maximum
+negative integer is stored in the destination and the floating invalid-operation flag is set"),
+12-21 ("The floating overflow exception cannot occur on a conversion from floating-point format to
+integer format (although an integer overflow exception can occur)"), 3-9 the AC flags and masks.
+MAME 0.289 i960.cpp 0x6c.0-0x6c.3 (sm2-builds/mame-m2b, read only) where it agrees. Model 1 has no
+i960.)
+
+*What was believed (R839, R1040 point 6):* cvtzril is cvtzri's 32-bit result with its sign copied
+into the high word, "exact while |x| < 2^31" (Virtua Cop's results, -57,796..39,835). Outside that
+the lockstep reference ended the program as a recorded deviation, so no bench ever compared a
+cvtzril of a NaN or of |x| >= 2^31. R1040 found Virtual-On's table entry log2(0) -> ... -> cvtzril
+of a NaN writing 0xFFFF_FFFF_8000_0000 where the manual and MAME give 0x8000_0000_0000_0000.
+
+*WHAT IS NOW KNOWN:*
+  1. THE MANUAL's TABLE, at both widths (a register source is a real, widened; fp0-fp3 whole):
+                              32-bit (cvtri, cvtzri)   64-bit (cvtril, cvtzril)
+       NaN, either kind/sign  0x8000_0000              0x8000_0000_0000_0000    12-23
+       +inf, >= 2^31 / 2^63   0x7FFF_FFFF              0x7FFF_FFFF_FFFF_FFFF    11-50
+       -inf, < -2^31 / -2^63  0x8000_0000              0x8000_0000_0000_0000    11-50
+       in range, +-0, subn.   the integer (cvtz*: toward zero; cvtri*: AC[31:30]'s mode)
+     -2^31 / -2^63 themselves are representable and are the negative saturation's encoding.
+  2. THE CORE BEFORE: the 32-bit forms already were this table (R972; checked again here, every
+     row, every mode: unchanged). cvtzril was right only for |x| < 2^31: a NaN gave
+     0xFFFF_FFFF_8000_0000; 2^31 <= x (and +inf) 0x0000_0000_7FFF_FFFF; x <= -2^31 - 1 (and -inf)
+     0xFFFF_FFFF_8000_0000 -- 3e9 converted to 2,147,483,647.
+  3. MANUAL AGAINST MAME. MAME's set_ri64((int64_t)t1f) is the host's cast (x86-64 cvttsd2si: the
+     "integer indefinite" 0x8000_0000_0000_0000 for every NaN and every out-of-range value; the cast
+     is undefined in C). So MAME = the manual on a NaN, on negative overflow and -inf, and in
+     range; MAME != the manual on POSITIVE OVERFLOW AND +inf (MAME 0x8000_0000_0000_0000, the manual
+     0x7FFF_FFFF_FFFF_FFFF) -- R972's 32-bit difference, at 64 bits. The core follows the manual.
+     (cvtril: MAME's round_to_int is C round(), half away from zero, in mode 0, the manual's mode 00
+     ties to even -- R972 again; moot here, below.)
+  4. WHERE GAMES MEET IT (R1038's MAME form logs of the 17 2B sets, every distinct cvtzril
+     operand with MAME's destination): Virtual-On 1,219, one a NaN (pc 0x296b4, R1040's table
+     entry); Rail Chase 2 47,523, one a NaN (pc 0xba1f4) -- a second game R1040 did not name; doa,
+     dynabb, dynabb97, dynamcopb, gunblade, indy500, lastbrnx, overrevb, sgt24h, vstriker,
+     zerogun 0 NaN; fvipers, pltkids, schamp, sfight run no cvtzril. No logged operand has
+     |x| >= 2^31. So the fix changes 2 results in the logs, both NaNs, and both are MAME's value
+     too: module = manual = MAME on all 294,004. (No 2A / 2C / Model 2 operand log was on hand.)
+  5. cvtril (0x6c.1) IS NOT DECODED ON ANY LINE (it traps, as before) and no 2B log runs it. The
+     unit's 64-bit path takes AC's mode on op 3, so it is cvtril's arithmetic too, checked in the
+     unit bench in all four modes; wiring it is one decode line if a game ever needs it.
+  6. FLAGS. The manual raises the integer-overflow fault on an unrepresentable result (masked: the
+     AC integer-overflow flag, bit 8, set; mask bit 12) and the floating invalid-operation fault on
+     a NaN (masked: its flag in AC 16-20 set; masks 24-28); with the mask clear the silicon faults
+     and stores nothing. The core raises neither for any conversion, 32- or 64-bit -- no FP
+     instruction writes AC's flags, only cc -- and MAME none either. The 64-bit forms therefore do
+     what the 32-bit ones already did: not changed, recorded (a deviation shared by every FP form).
+
+*THE RTL (the same on all four lines):*
+  * i960_fpmisc LONG (default 0: the unit as it was, yh 0, lng unused): a lng input and a yh
+    output. In the second stage, from r2_rounded (the significand with the round applied: the value
+    times 2^fbits for 0 <= eu <= 51, the value itself for eu >= 52), the 64-bit magnitude is
+    {r2_rounded[53:0], 10'b0} >> (62 - eu) for 0 <= eu <= 62, the round's increment below 2^0;
+    eu >= 63 (and the infinities) saturate by sign, a NaN 0x8000_0000_0000_0000; then the
+    two's complement by sign. yi is its low word while lng. ONE SHIFT, ONE NEGATE: with LONG the
+    32-bit result (cvtri, cvtzri) comes from the same 64-bit magnitude (exact for every
+    eu <= 31; the low word of its complement is the 32-bit complement), and the shift by fbits
+    (and, under LEAN, R1018's shorter one) is not built -- the first LONG build kept both and
+    cost i960_fpmisc +266 to +324 ALUTs, this one +89 to +200 (AREA). The shift amount
+    62 - eu is formed before the stage (r2_lsh, 6 registers), as fbits was. LONG 0 is the unit
+    exactly as it was, both shifts included.
+  * i960_top: .LONG((VC || F2A) && RL) (main: VC && RL) -- wherever cvtzril decodes; fmisc_yh_q
+    registered beside fmisc_yi_q; cvtzril's high word (rl_lo1, written in T_PAIR) is fmisc_yh_q,
+    where it was {32{fmisc_yi_q[31]}}; .lng(fp_is_cvtl), declared before u_fpmisc. No state, decode
+    or cycle changes; cvtri / cvtzri see lng 0.
+  * Benches: sim/i960/i960_cpu_ref.h's cvtzril is the manual's table (it was R839's sign-extended
+    cvtzri, ending the program outside |x| < 2^31). tb_i960_fpmisc.cpp -DTB_LONG checks the 64-bit
+    result beside every 32-bit check, and adds the conversion table directed (+-qNaN, +-sNaN with
+    one and every payload bit, NaN singles as widened, +-inf, +-DBL_MAX, +-FLT_MAX, the int32 and
+    int64 boundaries and their neighbours, +-0, +-subnormals, the smallest normal) and every
+    exponent from 2^-1080 to 2^80 with its neighbours, every form, every mode; +ref=mame64 (MAME's
+    positive overflow) must FAIL. tb_i960_top.cpp +cvtl: a third of the FP mix the conversions
+    (cvtzril twice, cvtri, cvtzri), half from fp0-fp3, a quarter of the registers and fp0-fp3 the
+    table's singles and doubles, from a stream of its own (every other run unchanged).
+    I960_FAULT_CVTL plants the old high word. make test_i960_fpmisc_long, test_i960_top_cvtl,
+    test_i960_top_cvtl_fault.
+
+*PROOF on model2a (Model 2A, the 2A build; LONG = VC || F2A), branch i960-nan-2a (Verilator 5.052, -j 2, MemoryMax 5G; every
+bench under 2 minutes, the line's whole set under 10):*
+  * make test_i960_fpmisc_long (LONG, LONG STAGED): 71,230,550 checks each, 0 mismatches -- the
+    conversion table and every exponent 149,808 (every form, every mode), 1,075,384 checks of the
+    64-bit integer, and every R972 / R1013 32-bit check (ties to 2^24 exhaustively, the int32
+    boundary, subnormals, 200,000 random) on the LONG unit's shared path. +ref=mame64 FAILS (70,422
+    mismatches, the first +inf -> 7fffffffffffffff against MAME's 8000000000000000): the sweep sees
+    the one manual-vs-MAME row. (+ref=mame on the LONG unit fails on the 32-bit rows too.)
+  * make test_i960_fpmisc (LONG 0, the unit as before): 70,155,166 checks (the conversion table's
+    32-bit rows included, 74,904), 0 mismatches. make test_i960_fpcvt: 10,831,449, 0 mismatches.
+  * test_i960_top, _vc, _fx, _fr: PASS, 0 mismatches.
+  * make test_i960_top_cvtl -- the conversions through the CPU against the reference's table:
+    +cvtl, +random=4000, on the VC and the F2A builds: 275,962 retires, 2,938 cvtzril (1,581 from fp0-fp3; 133 of a NaN, 741 of |x| >= 2^31), 0 mismatches.
+  * Planted fault (make test_i960_top_cvtl_fault, I960_FAULT_CVTL, the old high word) fails at retire 3: cvtzril of r9 = 0x6998cfdc (2.3e25), r1 got ffffffff want 7fffffff
+    -- caught.
+  * NO CYCLE CHANGE: the base commit's own benches (its tb and reference) built on this line's new
+    i960 RTL give byte-identical output to the same benches on the base RTL -- every per-state
+    cycle count, the CPI, the retire and check totals -- on test_i960_top, its interrupt soak, _vc, _fx, _fr. (The old reference ends a
+    program at a cvtzril of |x| >= 2^31 or a NaN, so those runs time every cvtzril up to there.)
+    No state, transition or decode changed: cvtzril is T_FP (fpmisc's two cycles) then T_PAIR,
+    as before.
+  * make lint_top (default: M2_2A): clean. quartus_map --analyze_file i960_fpmisc.sv, i960_top.sv: 0 errors
+    (Model2.qsf restored after).
+
+*AREA (quartus_map 17.0, the 2A build, model2a 918120c2 against this branch; no fit):*
+                      ALMs needed   ALUTs    registers   i960_top ALUTs   i960_fpmisc ALUTs / regs
+    base              39,637        57,062   46,778      11,989           1,227 / 209
+    this branch       39,724        57,187   46,812      12,095           1,342 / 210
+                      (+87)        (+125)    (+34)       (+106)          (+115 / +1)
+  Block bits and DSP unchanged. The +32 registers are fmisc_yh_q. The first LONG build (a second
+  64-bit shifter and negate beside the 32-bit ones) mapped at 39,855 ALMs (+218), fpmisc
+  1,551 ALUTs (+324); folding the 32-bit path onto the 64-bit one took that to the
+  figures above. (Two maps of one netlist have differed by 124 ALMs, R1040: the fpmisc ALUT
+  count is the firmer number.)
+
+*DIFFERENT FROM THE BRIEF, PLAINLY:* (1) cvtril is not added: it is not decoded on any line and no
+logged game runs it (point 5); the unit computes it and is tested for it. (2) No AC flags or
+integer-overflow / invalid-operation faults: the core raises none for any FP form (point 6), so
+the 64-bit forms match the 32-bit ones in that, as asked; recorded, not built. (3) The directed
+table is in the unit bench (every form, every mode, both parameter forms) and through the CPU by
++cvtl, not a separate directed program. (4) "Cycle counts unchanged" is shown by running the base
+commit's benches on the new RTL (byte-identical output), not by a new counter. (5) The 32-bit
+conversions' datapath changed in LONG builds (one shared shifter, point THE RTL), to cut area;
+their results are bit-identical (every 32-bit check above passes on the LONG unit). (6) The
+Rail Chase 2 NaN (pc 0xba1f4) and the 294,004-operand census are from R1038's logs, beyond the
+brief's Virtual-On case.
+
+*NOT SETTLED:* no fit and no board on any line. Timing: in LONG builds fpmisc's second stage
+is now a 64-bit shift by a registered amount, a 64-bit two's complement and the result select into
+fmisc_yi_q / fmisc_yh_q on clk_i960, where the 32-bit path had a 57-bit shift (LEAN: R1018's
+shorter one) and a 32-bit complement -- one adder 32 bits longer on a path R575 measured at ~9 ns;
+not measured here. The silicon converts from an 80-bit extended fp register, the core from a
+double (§8, unchanged: every logged operand is a widened single or a double either way). The
+flags and the unmasked faults (point 6) stay a deviation of every FP form.
