@@ -2266,20 +2266,44 @@ always_ff @(posedge clk) begin
 end
 
 // the host's PM writes (external_dma_write, 16/48 packing; MSWF picks the order)
+// R1048: REGISTERED ONCE ON THIS SIDE (hq_*): the request -- lane, address, data -- is made from
+// the host's strobes as before, and the RAM is written the clock after. The host's strobes come
+// from the i960 bridge's decode across the chip, and their path into the PM RAM's 48 addresses
+// was the SHARC's worst cross-block one (2b-place s5181 / s5141). Nothing can see the clock: the
+// host writes PM only while the SHARC is in HALT and its clear is over (the upload, and the IOP
+// window's EPB0 words, are made before copro_boot) -- g_hq_check asserts both at every request
+// -- so no fetch, port-B read or D wait meets a pending word, and the index registers (ii6,
+// epb_shift) still step on the request's clock. There is no host read of PM.
+logic [2:0]       hr_we, hq_we = 3'b000;
+logic [PM_AW-1:0] hr_wa, hq_wa;
+logic [15:0]      hr_wd, hq_wd;
 always_comb begin
     logic [1:0] w;
     logic       en;
     logic [31:0] idx;
     en = 1'b0; w = 2'd0;
-    pm_wd = 16'h0;
-    if (xdma_we) begin en = 1'b1; w = xdma_phase; pm_wd = xdma_data; end
-    else if (host_iop_we && host_iop_reg == 8'h04) begin en = 1'b1; w = epb_shift; pm_wd = host_iop_data[15:0]; end
+    hr_wd = 16'h0;
+    if (xdma_we) begin en = 1'b1; w = xdma_phase; hr_wd = xdma_data; end
+    else if (host_iop_we && host_iop_reg == 8'h04) begin en = 1'b1; w = epb_shift; hr_wd = host_iop_data[15:0]; end
     if (dmac6[8]) w = 2'd2 - w;
     idx = (ii6 & 32'h1FFFF) | 32'h20000;
-    pm_wa = PM_AW'(idx - 32'h20000);
-    pm_we = 3'b000;
-    if (en && dmac6[7:6] == 2'd2 && idx < 32'h20000 + PMW) pm_we = 3'b001 << w;
-    else if (clr_on && clr_n < PMW) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
+    hr_wa = PM_AW'(idx - 32'h20000);
+    hr_we = (en && dmac6[7:6] == 2'd2 && idx < 32'h20000 + PMW) ? 3'b001 << w : 3'b000;
+end
+always_ff @(posedge clk) begin hq_we <= hr_we; hq_wa <= hr_wa; hq_wd <= hr_wd; end
+generate if (BENCH) begin : g_hq_check
+    always_ff @(posedge clk) if (hr_we != 3'b000 && (st != ST_HALT || clr_on || run))
+        $fatal(1, "a host PM write outside HALT / during the clear / with run (st %0d clr %b run %b)", st, clr_on, run);
+    always_ff @(posedge clk) if (hq_we != 3'b000 && (st != ST_HALT || clr_on))
+        $fatal(1, "the registered host PM write lands outside HALT (st %0d clr %b)", st, clr_on);
+end endgenerate
+always_comb begin
+    logic [31:0] idx;
+    idx = (ii6 & 32'h1FFFF) | 32'h20000;
+    pm_wd = hq_wd;
+    pm_wa = hq_wa;
+    pm_we = hq_we;
+    if (hq_we == 3'b000 && clr_on && clr_n < PMW) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
     // R1042: port B's other users, after the host's: a PM-bus store at its pass's end (lanes 2:1,
     // bits 47:16; lane 0 kept, as MAME's mask); the word a PM-bus access names, read in every D
     // clock (D's address) and every X clock (the word's own: its one access's, or type 1's second),
