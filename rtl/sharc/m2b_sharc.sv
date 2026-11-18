@@ -497,6 +497,7 @@ logic [31:0] dx_urall;
 logic [31:0] d_accwd_ref;
 (* keep *) logic [31:0] d_accwd_b;          // R1044: the store / ureg data but the sequencer's source
 logic [31:0] d_ursq1, d_ursq0, d_accwd_chk;
+logic        d_cok_ref;                     // benches: the condition as R1029 evaluated it
 logic        d_unsup_x;                     // D's flag and reason, the condition last (R1029)
 logic [3:0]  d_why_x;
 logic        d_unsup_ref;                   // benches: R1028's form of them
@@ -661,11 +662,21 @@ always_comb begin
     // pop, the pop choosing: R1029)
     begin
         logic l1, l0, c1, c0;
+        logic isf, fv;
+        logic [4:0] cc;
         l1 = (S.lstkp != 3'd1) ? lcs_p2ne1 : 1'b1;                  // after a pop
         l0 = (le && le_cnt) ? !sf_c2 : !sf_c1;
-        c1 = (op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond);
-        c0 = (op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l0, op[35:31]) : if_cond(astat, flg, alusat, l0, cond);
-        cok = done ? c1 : c0;
+        // R1044: a flag-pin condition (9-12, FLAG0-3 in: the FIFOs' empty / full) is its pin, negated
+        // by bit 4, chosen last -- the FIFOs' flags come from the copro's counters, late; every
+        // other condition is if_cond's without them (if_cond reads flg only for 9-12)
+        cc = (op[47:44] == 4'b0111) ? op[35:31] : cond;
+        isf = cc[3:0] >= 4'h9 && cc[3:0] <= 4'hc;
+        fv = flg[2'(cc[3:0] - 4'h9)] ^ cc[4];
+        c1 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l1, op[35:31]) : if_cond(astat, 4'h0, alusat, l1, cond);
+        c0 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l0, op[35:31]) : if_cond(astat, 4'h0, alusat, l0, cond);
+        cok = isf ? fv : done ? c1 : c0;
+        d_cok_ref = done ? ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond))
+                         : ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l0, op[35:31]) : if_cond(astat, flg, alusat, l0, cond));
     end
     if (op[47:44] == 4'b0100 || op[47:44] == 4'b0101 || op[47:44] == 4'b0110 || op[47:44] == 4'b0111 ||
         op[47:44] == 4'b1000 || op[47:46] == 2'b11 || op[47:40] == 8'b00000001 || op[47:40] == 8'b00000010 ||
@@ -2202,6 +2213,7 @@ generate if (BENCH) begin : g_stk_check
         if (h != d_hit_ref) $fatal(1, "scoreboard %b, R1028's %b", h, d_hit_ref);
     end
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
+    always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
     always_ff @(posedge clk) if (d_go && ur_sel[7:4] == 4'h6 && d_urall_ref != dx_urall)
         $fatal(1, "sequencer ureg read %h, R1028's %h", dx_urall, d_urall_ref);

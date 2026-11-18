@@ -559,3 +559,25 @@ if {[get_collection_size $sk_from] == 0 || [get_collection_size $sk_to] == 0} {
     set_multicycle_path -setup -end 2 -from $sk_from -to $sk_to
     set_multicycle_path -hold  -end 1 -from $sk_from -to $sk_to
 }
+
+# ---- R1044: THE SAME FOR THE 2B BUILD'S SOUND 68000 (the 2A sound board, m2_2a_sound u_cpu).
+#
+# A 2B build has no Model 1 sound board, so R743's names match nothing there and s3431's
+# second R1044 fit failed Ir -> nanoAddr at -0.797 ns. It is the same fx68k, so Ir and
+# microAddr / nanoAddr still load only on enT1; m2_2a_sound issues a phase enable only when
+# none was issued the clock before (EXACT: `!enPhi1 && !enPhi2` in issue; EXACT 0: due, a
+# 2 x 11.2896 MHz accumulator against clk_sys, never two in a row), so enT1s are at least
+# four enables -- eight clocks -- apart and the path has two cycles. Applied only where the 2B
+# SHARC exists, so no other build's constraints change (2C and 2A have u_snd2a too).
+set s2b_sh   [get_registers -nowarn {*g_sharc.u_sh|st[*]}]
+set s2b_from [get_registers -nowarn {*u_snd2a|u_cpu|Ir[*]}]
+set s2b_to   [get_registers -nowarn {*u_snd2a|u_cpu|nanoAddr[*] *u_snd2a|u_cpu|microAddr[*]}]
+if {[get_collection_size $s2b_sh] != 0} {
+    if {[get_collection_size $s2b_from] == 0 || [get_collection_size $s2b_to] == 0} {
+        post_message -type critical_warning \
+          "Model2.sdc: the 2B sound 68000's Ir / nanoAddr registers did not match -- R1044's exception is not applied."
+    } else {
+        set_multicycle_path -setup -end 2 -from $s2b_from -to $s2b_to
+        set_multicycle_path -hold  -end 1 -from $s2b_from -to $s2b_to
+    }
+}
