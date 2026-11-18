@@ -23,6 +23,9 @@ pushed, not merged, not on the board.
   * Clean: sm2-builds/r43-eff/build/seeds/s4711 -- clk_sys +0.341, clk_mem
     +0.551, clk_i960 +1.102, HDMI +0.003, h2f +1.187, hold +0.245, all 43 STA
     figures >= 0; output_files/Model2.rbf (md5 fda042eca70b99205a14539e08f260af).
+    And s4712, the next seed: clk_sys +0.055, clk_mem +0.610, clk_i960 +1.554,
+    HDMI +0.324, hold +0.081, 43 of 43 >= 0 (rbf md5 6ad5193a...).
+    Two of two seeds clean.
   * Found on the way: quartus_map (full, not only --analyze_file) rewrites
     Model2.qsf too; LINT_DEFS needs values (-DM2_2C=1 -DM2_2C_DSB=1); a seed
     number does not pair two netlists, so same-seed A/B says nothing.

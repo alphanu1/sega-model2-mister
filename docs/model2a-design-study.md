@@ -52877,10 +52877,16 @@ clk_sys / clk_mem / HDMI / hold, all corners):*
      sm2-builds/r43-eff/build/seeds/s4711, output_files/Model2.rbf (quartus_asm
      run in the seed dir; md5 fda042eca70b99205a14539e08f260af). The tree is
      2c-fix 173d8acb (r43-eff's qsf differs from it by two comment lines).
-  HDMI's +0.003 is as thin as the release's clk_sys (+0.013 on s2137).
+     And the next seed of the same tree:
+       s4712  clk_sys +0.055  clk_mem +0.610  clk_i960 +1.554  HDMI +0.324
+              h2f +1.230  hold +0.081 -- 43 of 43 >= 0; Model2.rbf md5
+              6ad5193ac23dbcbf08b4cc3c29a60bb0.
+     Two seeds of two clean. HDMI's +0.003 on s4711 is as thin as the
+     release's clk_sys (+0.013 on s2137); s4712 has HDMI's margin and the thin
+     clock is clk_sys.
 
-*NOT SETTLED:* how often step 3 closes (more seeds of 173d8acb queued:
-r43-eff s4712, s4801, s4802, s4811-s4813); the board (this build is not
+*NOT SETTLED:* how often step 3 closes past two seeds (queued in r43-eff:
+s4801, s4802, s4811-s4813); the board (this build is not
 tested on hardware); whether the anchors still bind if the DSB or the
 framework's scaler change -- an assignment to a name that no longer exists is
 a warning, not an error (fit.log Warning 15706), so a stale anchor fails
