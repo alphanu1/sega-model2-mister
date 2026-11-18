@@ -1133,3 +1133,10 @@ set_location_assignment M10K_X38_Y16_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb
 set_location_assignment DSP_X32_Y2_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|Mult0~mac"
 set_location_assignment DSP_X32_Y4_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|Mult1~8"
 set_location_assignment DSP_X32_Y6_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|Mult2~8"
+
+# R1043: fitter effort -- placement and routing work harder for timing; no design change.
+# With the anchors above, the first seed fitted this way (s4711) closed every clock.
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM
+set_global_assignment -name ROUTER_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
