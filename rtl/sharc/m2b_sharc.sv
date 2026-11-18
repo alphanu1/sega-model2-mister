@@ -251,10 +251,13 @@ seq_t S;
 seq_t S_dbg;                                // benches: S as the word that left X last left it
 // R1044: the loop end's compares on S, made where S is written and registered beside it (D used
 // to make them from S, before the loop end, its pop and the word's condition): S.daddr ==
-// S.la_addr, S.daddr - S.pcstk > 2, S.curlcntr == 1, S.curlcntr == 2 (BENCH checks them in D)
-logic sf_le, sf_long, sf_c1, sf_c2;
-function automatic logic [3:0] s_flags(input seq_t s);
-    return {s.daddr == s.la_addr, s.daddr - s.pcstk > 24'd2, s.curlcntr == 32'd1, s.curlcntr == 32'd2};
+// S.la_addr and S.daddr - S.pcstk > 2 (BENCH checks them in D)
+logic sf_le, sf_long;
+// (CURLCNTR's two compares stay D's own, from S: made from s_x1 they were the slower -- s3431's
+// first fit, x_op -> sf_c2 -1.425 ns through the pops' select)
+wire  sf_c1 = S.curlcntr == 32'd1, sf_c2 = S.curlcntr == 32'd2;
+function automatic logic [1:0] s_flags(input seq_t s);
+    return {s.daddr == s.la_addr, s.daddr - s.pcstk > 24'd2};
 endfunction
 
 // the PC stack (30 used of 32) and the loop stacks (6 of 8): MLAB (m2b_lutram, R1028), the top
@@ -492,6 +495,8 @@ logic        d_dag_ref, d_mbad_ref;         // ... and its DAG and address-map t
 logic [31:0] d_urall_ref;                   // benches: the ureg source as R1028 read it
 logic [31:0] dx_urall;
 logic [31:0] d_accwd_ref;
+(* keep *) logic [31:0] d_accwd_b;          // R1044: the store / ureg data but the sequencer's source
+logic [31:0] d_ursq1, d_ursq0, d_accwd_chk;
 logic        d_unsup_x;                     // D's flag and reason, the condition last (R1029)
 logic [3:0]  d_why_x;
 logic        d_unsup_ref;                   // benches: R1028's form of them
@@ -601,7 +606,8 @@ always_comb begin
         logic dl, ds;
         // the condition on ASTAT three words back for a loop longer than two (MAME); both
         // evaluated, the loop's length choosing (R1029: the length's compare is the late one)
-        dl = do_cond((st == ST_D && ld_on) ? ah2 : ah3, flg, alusat, !sf_c1, S.la_code);
+        // (R1044: ld_on alone -- D's decisions are used only in D, so st == ST_D adds nothing)
+        dl = do_cond(ld_on ? ah2 : ah3, flg, alusat, !sf_c1, S.la_code);
         ds = do_cond(astat, flg, alusat, !sf_c1, S.la_code);
         done = le_long ? dl : ds;
     end
@@ -633,6 +639,7 @@ always_comb begin
         q0 = seq_rd(ur_sel[3:0], S.pcstk, S.pcstkp, cd, S.lcntr);
         ur_all = (ur_sel[7:4] == 4'h6) ? (done ? q1 : q0) : ur_v;
         ur_sq = done ? q1 : q0;
+        d_ursq1 = q1; d_ursq0 = q0;
         // (R1028's form, for the benches' check)
         d_urall_ref = (ur_sel[7:4] == 4'h6) ? seq_rd(ur_sel[3:0], pcstk1, pcstkp1, curl1, lcntr1) : ur_v;
     end
@@ -990,7 +997,17 @@ always_comb begin
         logic       w1;
         logic [3:0] gr;
         w1 = wd_sel == 2'd1; gr = ur_sel[7:4];
-        x.acc_wd = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
+        // R1044: everything but the sequencer's source first (d_accwd_b, kept as a node), the
+        // loop end's pop (done, the late one) choosing that source in the last gate
+        d_accwd_b = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
+                   ({32{w1 && gr == 4'h1}} & iu_rd) |
+                   ({32{w1 && gr == 4'h2}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
+                   ({32{w1 && gr == 4'h7}} & sys_rd(ur_sel[3:0], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
+                   ({32{w1 && gr == 4'hd}} & ((ur_sel[3:0] == 4'hb) ? px[31:0] : (ur_sel[3:0] == 4'hc) ? {16'h0, px[15:0]} :
+                                               (ur_sel[3:0] == 4'hd) ? px[47:16] : 32'h0)) |
+                   ({32{wd_sel == 2'd2}} & op[31:0]);
+        x.acc_wd = d_accwd_b | ({32{w1 && gr == 4'h6}} & (done ? d_ursq1 : d_ursq0));
+        d_accwd_chk = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
                    ({32{w1 && gr == 4'h1}} & iu_rd) |
                    ({32{w1 && gr == 4'h2}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
                    ({32{w1 && gr == 4'h7}} & sys_rd(ur_sel[3:0], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
@@ -1623,8 +1640,8 @@ logic [1:0] x_cnt, x_need;
 // the benches' check)
 assign x_need = XC.fl_on ? XC.need_fl : XC.sh_on ? 2'd1 : 2'd0;
 generate if (BENCH) begin : g_sflag_check
-    always_ff @(posedge clk) if (!reset && st == ST_D && {sf_le, sf_long, sf_c1, sf_c2} != s_flags(S))
-        $fatal(1, "S's flags %b, S's compares %b", {sf_le, sf_long, sf_c1, sf_c2}, s_flags(S));
+    always_ff @(posedge clk) if (!reset && st == ST_D && {sf_le, sf_long} != s_flags(S))
+        $fatal(1, "S's flags %b, S's compares %b", {sf_le, sf_long}, s_flags(S));
 end endgenerate
 generate if (BENCH) begin : g_need_check
     always_ff @(posedge clk) if (st == ST_X && x_need != ((XC.fl_on && XC.fl_misc) ? xu_mx :
@@ -1851,7 +1868,7 @@ always_ff @(posedge clk) begin
         S.curlcntr <= 32'hFFFF_FFFF; S.lcntr <= 32'h0;
         S.la_addr <= 24'hFFFFFF; S.la_code <= 5'h1f; S.la_type <= 2'd3;
         S.stk <= PCEM | SSEM | LSEM;
-        {sf_le, sf_long, sf_c1, sf_c2} <= 4'b0100;   // s_flags of the above (0x20005 - 0xFFFFFF > 2)
+        {sf_le, sf_long} <= 2'b01;   // s_flags of the above (0x20005 - 0xFFFFFF > 2)
         stky <= PCEM | SSEM | LSEM;
         astat <= 32'h0; mode1 <= 32'h0; mode2 <= 32'h0; irptl <= 32'h0; imask <= 32'h3;
         ustat1 <= 32'h0; ustat2 <= 32'h0; syscon <= 32'h10; px <= 48'h0;
@@ -1920,7 +1937,7 @@ always_ff @(posedge clk) begin
             else if (XC.fix_on) begin misc_r <= x_fix.r; misc_a <= x_fix.astat; misc_s <= x_fix.stky; end
             else begin misc_r <= x_sh.r; misc_a <= x_sh.astat; misc_s <= 32'h0; end
             // an unsupported word (D's, or X's own below): one capture, of the word in X
-            if (x_first && !x_fin) begin S <= s_x1; {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(s_x1); end   // (X's end below otherwise)
+            if (x_first && !x_fin) begin S <= s_x1; {sf_le, sf_long} <= s_flags(s_x1); end   // (X's end below otherwise)
             // R1042: type 1's second pass, its PM move: the access fields from XC.acc2, the store
             // data the register read in the first (port E at x_op[26:23]); a DM-RAM read or an
             // external access first waits a clock (x_p2w: the read issued; the request dropped once)
@@ -1986,7 +2003,7 @@ always_ff @(posedge clk) begin
                 end
                 // the sequencer and STKY's stack bits
                 S <= sq;
-                if (x_first) {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(s_x1);   // (sq is S otherwise)
+                if (x_first) {sf_le, sf_long} <= s_flags(s_x1);   // (sq is S otherwise)
                 if (BENCH) S_dbg <= sq;                 // the benches' view: S after this word
                 k = (k & ~STK_BITS) | (sq.stk & STK_BITS);
                 astat <= a; stky <= k;
@@ -2033,7 +2050,7 @@ always_ff @(posedge clk) begin
             default: if (sw.lstkp < 3'd6) sw.lcntr = us_pv;
             endcase
             S <= sw;
-            {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(sw);
+            {sf_le, sf_long} <= s_flags(sw);
             if (BENCH) S_dbg <= sw;
             us_pw <= 1'b0;
         end
@@ -2185,6 +2202,7 @@ generate if (BENCH) begin : g_stk_check
         if (h != d_hit_ref) $fatal(1, "scoreboard %b, R1028's %b", h, d_hit_ref);
     end
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
+    always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
     always_ff @(posedge clk) if (d_go && ur_sel[7:4] == 4'h6 && d_urall_ref != dx_urall)
         $fatal(1, "sequencer ureg read %h, R1028's %h", dx_urall, d_urall_ref);
     always_ff @(posedge clk) if (d_go && ((dx.unsup || dx.mbad) != d_unsup_ref || (d_unsup_ref && !dx.dag && !dx.mbad && dx.why != d_why_ref)))
