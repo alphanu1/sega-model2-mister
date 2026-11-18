@@ -557,11 +557,16 @@ struct Cpu {
           if ((ref_vc || ref_f2a) && k == 0x6c3) {
             const double fa = d.src1_lit ? fp_lit(d.src1) : u2f_t(rf.r[d.src1]);
             if (d.dst_lit) { trapped = true; trap_op = d.op; break; }   // set_ri64: fatalerror
-            // The module converts through cvtzri and sign-extends: exact for
-            // |x| < 2^31 (Virtua Cop's own values); outside that MAME's
-            // (int64_t) differs, a recorded deviation that ends the program.
-            if (std::isnan(fa) || fa >= 2147483648.0 || fa <= -2147483649.0) fp_denorm_operand = true;
-            const int64_t v = std::isnan(fa) ? 0 : (fa >= 9.2e18 || fa <= -9.2e18) ? 0 : int64_t(fa);
+            // R1045: the 80960KB PRM's result, not MAME's (int64_t) (x86's
+            // indefinite 0x8000_0000_0000_0000 for every NaN and overflow):
+            // a NaN is the maximum negative integer (12-23); out of range
+            // or an infinity, the maximum positive or negative by sign
+            // (11-50); in range, truncated toward zero. (It was R839's
+            // sign-extended cvtzri, with |x| >= 2^31 and NaN ending the run.)
+            const int64_t v = std::isnan(fa) ? INT64_MIN
+                            : (fa >= 9223372036854775808.0) ? INT64_MAX
+                            : (fa < -9223372036854775808.0) ? INT64_MIN
+                            : int64_t(std::trunc(fa));
             rf.r[d.srcdst]     = uint32_t(uint64_t(v));
             rf.r[d.srcdst + 1] = uint32_t(uint64_t(v) >> 32);
             IP = ip_next;
