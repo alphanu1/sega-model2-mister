@@ -1,5 +1,35 @@
 # Handoff
 
+## 2026-11-18: 2c-fix -- a 2C build clean on every clock again (R1043), not on the board
+
+Branch `2c-fix` off model2c / geo-dup 6653b2ac. Study R1043 has the record. Not
+pushed, not merged, not on the board.
+
+  * The cause: the DSB (R1004) took ~860 ALM by map and three of the last five
+    DSP blocks, put the map over the line where the fitter packs the device full
+    (fit 94-95 % below a ~39,300 map, 98-99 % from ~39,600: release 38,997,
+    geo-dup 39,977) -- clk_sys / clk_mem -- and took the bottom-right corner the
+    scaler had in the release -- HDMI (with the scaler above row 50 HDMI has
+    never closed, 0 of 51 seeds). Release lane 2 clean of 20, geo-dup 0 of 20.
+  * Kept: f831d30f hps_io CONF_STR_BRAM on 2C; 286a263d m2c_gameid (the game ID
+    kept to the Model2C MRAs' IDs); a9f22020 the scaler's / OSD's M10K and DSP
+    at s2137's sites and the DSB's M10K and DSP bottom-left (location
+    assignments only); 173d8acb fitter effort (placement x4, router timing max,
+    router effort x4, final placement always).
+  * Dropped: the reciprocal tables in M10K (66666e86, reverted by 1fdb6e22: the
+    M10K -> divider path missed clk_sys on all five seeds that had it, R952
+    again); vc_en tied on (-14 ALUT); pinning the scaler's registers (does not
+    fit, or worse); RES_CP 0.
+  * Clean: sm2-builds/r43-eff/build/seeds/s4711 -- clk_sys +0.341, clk_mem
+    +0.551, clk_i960 +1.102, HDMI +0.003, h2f +1.187, hold +0.245, all 43 STA
+    figures >= 0; output_files/Model2.rbf (md5 fda042eca70b99205a14539e08f260af).
+  * Found on the way: quartus_map (full, not only --analyze_file) rewrites
+    Model2.qsf too; LINT_DEFS needs values (-DM2_2C=1 -DM2_2C_DSB=1); a seed
+    number does not pair two netlists, so same-seed A/B says nothing.
+
+REMAINS: the board; more seeds of 173d8acb (queued in r43-eff); Ben's
+proposals in R1043 (FP_SUBN 1 puts the map at 39,224 and the fit at 95 %).
+
 ## 2026-11-17: model2c -- the 2C candidate's work merged (R1003-R1030, R1036); still no clean 2C seed, not released
 
 `model2c` fast-forwarded to geo-dup: rel-2c-all + rel-2c-slack2 (R1030) + R1036 (each

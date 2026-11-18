@@ -52647,3 +52647,241 @@ clk_mem / HDMI):
   enough for a board test (R1031).
 *OPEN:* HDMI on 2C (the scaler's output side); a seed sweep (s3500-s3511
 queued).
+
+**R1043 -- WHAT TOOK THE 2C CLEAN RATE FROM ABOUT 1 IN 10 TO 0: THE RELEASE
+LANE CLOSED EVERY CLOCK ON 2 OF ITS 20 FITTED SEEDS (s1980, s2137 -- THE
+RELEASED BUILD), geo-dup ON 0 OF 20 AND THE RC LANES BEFORE IT ON 1 OF 59.
+TWO INDEPENDENT THINGS MOVED: clk_sys / clk_mem FOLLOW THE FITTER'S PACKING
+REGIME, WHICH THE MAP SIZE SETS (94-95 % BELOW A ~39,300-ALM MAP, 98-99 % FROM
+~39,600; THE RELEASE MAPPED 38,997, geo-dup 39,977); HDMI FOLLOWS WHERE THE
+SCALER LANDS (ABOVE ROW 50 IT HAS NEVER PASSED, 0 OF 51 SEEDS). THE RECIPROCAL
+TABLE IN M10K FAILS ON EVERY SEED (R952 AGAIN) AND IS OUT; THE OUTPUT-NEUTRAL
+ROOM LEFT IS ~100 ALM. WHAT CLOSES IT: THE SCALER'S HARD BLOCKS BACK IN THE
+RELEASE'S CORNER, THE SOUND BOARD'S MOVED OUT OF IT, AND THE FITTER'S EFFORT
+RAISED -- s4711 CLEAN ON EVERY CLOCK, NOTHING IN THE DESIGN CHANGED BUT TWO
+OUTPUT-IDENTICAL SAVINGS.** Branch 2c-fix (off geo-dup 6653b2ac), 2026-11-18. Not merged, not pushed.
+
+(Section: §10, after R1036 (R1037-R1042 are other branches'). Authority: the
+fits themselves -- Quartus 17.0, every kept seed's STA report and its fitted
+netlist read back with quartus_cdb; R1039 for the ported savings; R952 for the
+reciprocal table. No circuit question, so neither Model 1 nor MAME is the
+reference here: every change kept is output-identical.)
+
+*What was believed (Ben, 2026-11-18):* "before the new changes everything
+closed on the last release, so our changes have caused it"; logic went from
+94 % to 99 % and crowds the scaler and the critical paths.
+
+*WHAT THE SEEDS SAY.* Every kept seed of every 2C build since 10-31, worst
+setup over all corners (ns), "pass" >= 0 (scratchpad slacks.sh):
+
+  build (fitted ALM; map)              seeds clean  clk_sys pass/median  clk_mem pass  HDMI pass/median
+  model2c 10-31 (39.3k; 39,064)            6    0       2 / -0.120          6            2 / -0.261
+  release, d7432f47 (39.4k)               12    1       5 / -0.053         12            2 / -0.447
+  release, 0db403d2 = ad6c8081 (39.4k;    8    1       2 / -0.095          8            2 / -0.284
+    38,997)
+  ddr3p 212250fc (39.6k; 39,263)           2    0       2 / +0.146          2            0 / -0.464
+  area-2c 5f89cd25 (39.8k; 39,300)         3    0       2 / +0.045          3            0 / -0.846
+  RC acbffd87..efad744a (41.4k; 39,775)    6    1       2 / -0.340          6            1 / -0.669
+  RC efad744a..1871e21a (41.4k)            6    0       0 / -0.455          4            0 / -0.261
+  RC da5b08b5 (41.5k; 39,920)              9    0       2 / -0.474          5            1 / -0.180
+  RC b16ef7d7 (R1025) (41.5k; 39,913)     38    0       5 / -0.475         28            4 / -0.379
+  geo-dup 6653b2ac (41.5k; 39,977)        20    0       5 / -0.706         15            0 / -0.585
+
+  The released build (s2137) closed every clock; its lane closed 2 seeds in
+  20, about 1 in 10, as every 2C release has been found by a seed sweep. The
+  clean rate is what fell: 1 in 59 over the RC lanes, 0 in 20 on geo-dup.
+  HDMI is the clock that went first (release lane 4 of 20 passing it,
+  geo-dup 0 of 20), clk_sys the second (9 of 20 to 5 of 20).
+  The release RTL refitted at the seed numbers geo-dup is quoted on
+  (sm2-builds/r43-rel at ad6c8081; clk_sys / clk_mem / HDMI / hold):
+    s3142 +0.024 / +0.085 / -0.316 / +0.243     s3260 -0.356 / +0.484 / -0.619 / +0.167
+    s3144 -0.236 / +0.494 / -0.498 / +0.246     s3511 Quartus PDB internal error
+  all 94 % -- none clean, HDMI failing on all three.
+
+*CAUSE 1 -- clk_sys AND clk_mem: THE FITTER'S PACKING REGIME, SET BY THE MAP.*
+quartus_map's "ALMs needed" estimate is deterministic for a netlist (39,977
+on all 23 geo-dup seeds). Against the fit:
+    map 39,064 / 38,997 / 39,263 / 39,116 / 39,224 / 39,300
+      -> fit 39,328-39,916 (94-95 %, map + 300-800)
+    map 39,591 -> 41,089-41,320 (98 %)
+    map 39,775-39,996 -> 41,315-41,539 (99 %, map + 1,400-1,600)
+  Below ~39,300 the fitter spreads; from ~39,600 it packs the device full
+  ("Cannot fit -- retrying with increased optimization" on routing in many).
+  The release mapped 980 ALM under geo-dup: the DSB (R1004, ~860 by map,
+  3 DSP) and the TGPx4's speed (R1006 / R1009) took the build over the line
+  at the stcc-sound-2c merge (area-2c with the DSB still mapped 39,300 and
+  fitted 95 %). Above the line clk_sys's failures have no family -- across
+  geo-dup's 20 seeds 40 from/to pairs under 0, none in more than 3 seeds, from
+  -0.2 to -9.3 ns, in geometry, the fill, the TGPx4, the DDR3 payload's HPS
+  read, the SCSP -- congestion, not a path. clk_mem passes 100 % of small-build
+  seeds and ~75 % of large.
+  THE TEST (a behaviour change, an experiment only -- sm2-builds/r43-nodsb,
+  geo-dup with M2_2C_DSB 0): map 39,116, fitted 39,802-39,916 (95 %); seeds
+  3142 / 3144 / 3260 / 3511: clk_sys +0.193 / +0.079 / -0.213 / +0.002, clk_mem
+  +0.643 / +0.634 / +0.959 / +0.932, HDMI -0.211 / -0.502 / -0.388 / -0.913,
+  hold +0.194 / -0.035 / +0.194 / +0.171. clk_sys and clk_mem back to the
+  release's distribution; HDMI not fixed (Ben: the sound board is not the
+  cause alone -- it is not the HDMI cause at all, see 2).
+  And the same with FP_SUBN 1 (sm2-builds/r43-subn1, behaviour, Ben's: map
+  39,224, -367 from FP_SUBN 2): fitted 39,776 (95 %), s3142 clk_sys -1.161 on
+  one path (st_state -> m2_wr_arb pick_r, the SDRAM self-test's FSM), clk_mem
+  +0.391, HDMI -0.171; s3260 and s4401 were Quartus crashes (segfault).
+
+*CAUSE 2 -- HDMI: WHERE ascal LANDS.* Every seed's fitted atoms read back
+(quartus_cdb, the scratchpad's locs.tcl; ascal_loc.py): with the scaler's
+register centroid above row 50, 51 seeds over every build, 0 pass, median
+-0.808 (to -2.415); below row 50, 50 seeds, 9 pass, median about -0.2. It
+does not move clk_sys (small builds: median -0.041 low, -0.013 high; large
+-0.479 / -0.588). geo-dup put it high on 13 of 20 seeds, the RC 26 of 59, the
+release 8 of 16. High, the failure is the polyphase filter: o_h_poly_t /
+o_v_poly_t (DSP outputs) -> o_*_poly_pix (8 of geo-dup's 20 seeds), the DSPs
+25-50 rows from their adders' registers (s3510: DSP_X32_Y14 -> FF_X35_Y39,
+4.3 ns of 7.2 routing, clock skew -0.76). DSP blocks are 110 of 112 since the
+DSB: in s2137 the scaler had column X86 rows 2-24 to itself, in geo-dup it
+shares X54 / X86 with the i960 and the DSB, and in s3510 it is spread over
+X20 / X32 / X54. Low, what fails is plain counters (o_hcpt -> o_vcpt,
+o_acpt4 -> o_shift, o_vacpt -> o_vpixq_pre) by -0.07 to -0.5: local routing.
+  Bisecting HDMI over commits is below the noise: a point needs ~20 seeds to
+  tell 20 % from 10 % pass. The points there are: ddr3p (b9553518's tree)
+  -0.383 / -0.545, 2c-mpeg (R1004's first DSB fits, clk_sys broken by the
+  DSB's mix) -0.004 / -1.336 / -0.142 / +0.064 / -1.811, area-2c -0.698 /
+  -0.855 / -0.846, then the RC's 1 in 6 (s2702 +0.093). No single commit
+  stands out of that noise; the slide is the share of seeds with the scaler
+  high (release 8 / 16, RC 26 / 59, geo-dup 13 / 20) and, low, its DSPs'
+  spread since the DSB took three of the last five DSP blocks.
+
+*AND WHAT TOOK THE SCALER'S PLACE: THE SOUND BOARD.* In the release the
+scaler sat bottom-right (s2137: centroid (61, 34), its polyphase DSPs in
+column X86 rows 2-24). In every large build since, the DSB sits there: its
+register centroid over 63 seeds of rel-2c-fit3 / geo-dup is x 70-85, y 4-34
+in all but none. With the corner taken the scaler goes high-left (HDMI never
+passes) or low-left (x 25-34, y 26-36). Low-left with y <= 28 is the best place
+it has in a large build: s3021 +0.169, s3065 +0.138, s3069 +0.070, s3073
++0.056, s3098 +0.018, s3093 -0.073, s2860 -0.114, s3080 -0.151, s3141 -0.243,
+s3145 -0.517, s3508 -0.519 -- 5 passing of 11. Pinning the scaler's hard
+blocks back to the release's sites (s2137; r43-hb) puts it bottom-right again,
+on top of the DSB (DSB (70-81, 23-31), scaler (64-67, 33-35)): HDMI -0.375 /
+-0.425 / -0.222 / -0.622 / -0.239 (s4501 / s4511 / s4503 / s4504 / s4513;
+s4502 and s4512 Quartus TDC internal errors), clk_sys +0.369 / -0.037 / -0.054
+/ -2.423 / +0.192 -- what fails is now the HDMI OSD's h_cnt compares and the
+scaler's line-buffer counters (o_acpt4 -> o_shift, o_vacpt -> o_vpixq_pre),
+local routing in the shared corner.
+
+*TRIED, MEASURED, DROPPED:*
+  * Pinning the HDMI side (Model2.qsf location assignments, sys/ untouched):
+    - every ascal / HDMI OSD / shadowmask atom at s2137's exact sites (7,695):
+      "Cannot place N nodes into a single ALM" -- the netlist's combinational
+      cells and carry chains do not match the release's;
+    - the same at LAB level: carry-chain sublocations illegal;
+    - registers only, at LAB level (4,290 + 56 hard blocks): "no legal
+      sublocation" in the LAB holding avl_address;
+    - registers + hard blocks at s2702's exact sites (4,346): "Fitter requires
+      4,195 LABs ... the device contains only 4,191" -- an FF pinned to a site
+      takes its ALM out of packing;
+    - only the output side (ascal o_*, the OSD, the shadowmask; 3,043 from
+      s2702): fits, and is worse -- s3260 clk_sys -3.375, clk_mem -2.741, HDMI
+      -1.282 (routing retried, 47 % / 66 % interconnect); with RES_CP 0 too,
+      s3142 -1.697 / -0.185 / HDMI -1.279 (o_hcpt -> o_hcpt: the counter's
+      carry chain re-placed by physical synthesis beside its pinned
+      registers, 7.7 ns of data).
+    Registers are the wrong thing to pin: hard blocks only (R1036's way)
+    steer the scaler without costing packing, and are what step 1 below uses.
+  * The fill's reciprocal table in M10K (M2_RECIP_M10K, R948's form, with
+    m2_persp_recip's table, R1039's): -386 ALM by map with the two commits
+    below (39,977 -> 39,591; fitted 98 %), output-identical (test_m2_raster_
+    div_lat 218,015 divides, 0 differ; a table bit flipped differs 5;
+    make test_m2_persp_recip_m10k 931,221 clocks, 0 differ). But the path
+    M10K -> m2_raster_div q_fast missed clk_sys on EVERY seed that had it:
+    s3142 -0.616, s3260 -0.198, s4301 -0.542, s4302 -0.476, and the
+    game-ID-plus-table build's s3142 -0.904; the LUT form +2.8 to +3.3 on the
+    same seeds (scratchpad chg.tcl: worst setup through each changed block).
+    R952 found it with two seeds; this is five of five. Reverted (1fdb6e22).
+    m2_persp_recip's M10K address path was +0.43 to +2.6 -- not a failure,
+    but it went with the table it reads the same macro as.
+  * The i960's vc_en tied on in a 2C build (R1039's 2B argument holds on 2C):
+    -14 ALUT in i960_top -- not worth the diff; not committed.
+  * RES_CP 0 (the pool's result copies, R1036): -56 ALM by map; tried only
+    under the pins above.
+
+*KEPT (2c-fix; each output-neutral, each proved, none on a failing path --
+worst setup through the changed logic +3.6 ns or better on every seed):*
+  1. f831d30f hps_io CONF_STR_BRAM on the 2C build (R1039's, with C2): the
+     1,201-byte OSD string in M10K. make test_hps_cfgstr CFGSTR_N=1201: 42,140
+     byte reads, 0 differ; one byte changed differs 123, strobes a clock apart
+     57,024. hps_io 878 -> 714 ALUTs, +9,608 bits (2 M10K). Its M10K paths:
+     +5.4 to +8.0 ns.
+  2. 286a263d m2c_gameid: the game ID kept to the Model2C MRAs' IDs (0x00,
+     0x17, 0x1C-0x24 and the CRT bit), so the 2A decodes fold. make
+     test_m2c_gameid: 2 M cycles of random writes and resets, 0 differ; a
+     wrong decode 16,113; an MRA with index 4 after its ROMs refused; the
+     released MRAs' IDs a subset of mra/'s. Model2.sdc's R842 false path
+     follows the register (u_gameid|gid_q). m2_luma_map 204 -> 156 ALUTs,
+     m2_2a_inputs -5. The whole map: game ID alone 39,996, with 1 39,917 (and
+     39,822 with vc_en as well) against geo-dup's 39,977 -- the ALM total moves
+     inside the +-50-100 the map varies between netlists; the ALUTs by entity
+     are the measure (-212 together).
+  Neither moves the build across the packing line. lint_top (2C and main
+  forms) clean; lint_idx: no new finding but the persp table's init loop,
+  the form R1039 accepted (reverted with it).
+
+*A/B ON THE SAME SEED NUMBERS (Ben's check; worst clk_sys / clk_mem / HDMI):*
+                                 s3142                      s3260
+  geo-dup                     +0.425 / +0.261 / -0.070   +0.122 / +0.359 / -0.469
+  game ID only                -2.557 / -0.075 / -0.370   -1.953 / +0.803 / -0.856
+  game ID + CONF_STR_BRAM     (Quartus A2T internal err) -0.812 / +0.535 / -0.590
+  game ID + recip M10K        -2.071 / +0.264 / +0.096   (stopped: reverted)
+  all three                   -2.654 / +0.429 / -0.480   -0.660 / +0.418 / -1.388
+  A seed number does not pair two netlists: the game-ID-only build (no M10K
+  at all, 50 ALUTs fewer) is as far from geo-dup as the others, on paths in
+  the TGPx4 (aop_q -> opb) and the DDR3 payload. geo-dup's numbers at these
+  two seeds are the best of its 20 -- they were picked by R1036 for being
+  good. What separates the forms is the path through the change itself
+  (above), and only the reciprocal table's failed.
+
+*PROPOSALS (Ben's -- each changes behaviour or what a user sees):*
+  * FP_SUBN 1 on 2C (R1017's setting before R1022): map -367 to 39,224, fit
+    95 % (measured, s3142). Puts clk_sys / clk_mem back in the release's
+    regime; costs subnormal results in remr / logrl at FP_SUBN 2 (R1019,
+    R1020).
+  * More DSP room for the scaler: the guns' four multiplies (m2_vcop_guns,
+    HOTD / BEL), m2_scan15's six, the 15 kHz converter (R1039: -237 ALM, -6
+    DSP on 2B) -- each a cycle or a feature to look at.
+  * The DSB in its smaller-ALM forms is already taken (R1007 / R1008); the
+    board itself is the ~860 ALM that crossed the line.
+
+*THE FIX, IN THREE STEPS (each fitted on the tree as it then was; worst
+clk_sys / clk_mem / HDMI / hold, all corners):*
+  1. The scaler's 56 M10K / DSP blocks (ascal, the HDMI OSD, the shadowmask)
+     at s2137's sites (r43-hb): the scaler is back bottom-right, but the DSB
+     sits on it -- see above; HDMI -0.222 to -0.622 on five seeds.
+  1b. The same at the sites of s3021 (the best low-left large-build seed,
+     r43-hbl): HDMI -0.063 / -0.275 / -0.290 / -0.308 / -0.392; clk_sys +0.000
+     to -1.502.
+  2. Step 1 plus the DSB's 16 M10K and 3 DSP pinned bottom-left (M10K column
+     X38 rows 1-16, DSP X32 rows 2-6; a9f22020): the DSB's logic follows them
+     (centroid (29, 7)), the scaler keeps the corner (67, 31). Eight seeds:
+       s4701 +0.384 / +0.245 / -0.324 / +0.237   s4711 -0.001 / +0.039 / -0.179 / +0.242
+       s4702 -0.446 / +0.160 / -0.201 / +0.236   s4712 -0.113 / +0.488 / -0.022 / -0.061
+       s4703 -0.596 / +0.621 / -0.515 / +0.171   s4713 -0.142 / +0.048 / -0.206 / +0.171
+       s4704 -1.309 / +0.051 / -0.269 / +0.133   s4714 -0.682 / +0.319 / -0.551 / +0.157
+     (s4715, s4721 stopped). HDMI's failures are now the OSD's h_cnt compares
+     (h_cnt == h_osd_start -> osd_de / f1, five LUT levels along the bottom
+     row) and the scaler's line counters, 0.02-0.3 ns short.
+  3. Step 2 plus the fitter's effort (173d8acb: PLACEMENT_EFFORT_MULTIPLIER 4,
+     ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM, ROUTER_EFFORT_MULTIPLIER 4,
+     FINAL_PLACEMENT_OPTIMIZATION ALWAYS -- never tried on this core before):
+       s4711  clk_sys +0.341  clk_mem +0.551  clk_i960 (40 MHz) +1.102
+              HDMI +0.003  h2f +1.187  hold +0.245 -- every one of the STA
+              report's 43 setup / hold / recovery / removal / pulse-width
+              figures >= 0. 41,442 ALM (99 %), 533 M10K, 110 DSP. Fit 25 min.
+     sm2-builds/r43-eff/build/seeds/s4711, output_files/Model2.rbf (quartus_asm
+     run in the seed dir; md5 fda042eca70b99205a14539e08f260af). The tree is
+     2c-fix 173d8acb (r43-eff's qsf differs from it by two comment lines).
+  HDMI's +0.003 is as thin as the release's clk_sys (+0.013 on s2137).
+
+*NOT SETTLED:* how often step 3 closes (more seeds of 173d8acb queued:
+r43-eff s4712, s4801, s4802, s4811-s4813); the board (this build is not
+tested on hardware); whether the anchors still bind if the DSB or the
+framework's scaler change -- an assignment to a name that no longer exists is
+a warning, not an error (fit.log Warning 15706), so a stale anchor fails
+silently.
