@@ -581,3 +581,25 @@ if {[get_collection_size $s2b_sh] != 0} {
         set_multicycle_path -hold  -end 1 -from $s2b_from -to $s2b_to
     }
 }
+
+# ---- R1048: AND ITS NANO LATCH INTO THE ALU's LATCHES, TWO CYCLES (the 2B build only, as above).
+#
+# fx68k loads nanoLatch only on enT3 = enPhi1 & (tState == T2), on rstUrom = enPhi1 & enErrClk,
+# or under extReset; the ALU's aluLatch, ccrCore and pswCcr load only on enT3 (pswCcr also on
+# pwrUp, a constant). Every change of nanoLatch outside reset is on an enPhi1, every sample on an
+# enPhi1, and m2_2a_sound never issues two phase enables on consecutive clocks (the R1044 entry
+# above), so two enPhi1s are at least four clocks apart: nanoLatch -> the PLA's decode -> the
+# ALU -> its latches has at least two cycles. (Under extReset the 68000 is held; nothing it
+# latches then is used before its reset sequence rewrites it.) s4902: nanoLatch -> aluLatch /
+# ccrCore / pswCcr -1.290 ns.
+set s2n_from [get_registers -nowarn {*u_snd2a|u_cpu|nanoLatch[*]}]
+set s2n_to   [get_registers -nowarn {*u_snd2a|u_cpu|excUnit|alu|aluLatch[*] *u_snd2a|u_cpu|excUnit|alu|ccrCore[*] *u_snd2a|u_cpu|excUnit|alu|pswCcr[*]}]
+if {[get_collection_size $s2b_sh] != 0} {
+    if {[get_collection_size $s2n_from] == 0 || [get_collection_size $s2n_to] == 0} {
+        post_message -type critical_warning \
+          "Model2.sdc: the 2B sound 68000's nanoLatch / ALU latches did not match -- R1048's exception is not applied."
+    } else {
+        set_multicycle_path -setup -end 2 -from $s2n_from -to $s2n_to
+        set_multicycle_path -hold  -end 1 -from $s2n_from -to $s2n_to
+    }
+}

@@ -73,7 +73,11 @@ module m2_raster_div #(
   //
   // Only |den| >= TN falls back to the restoring divider, so the unit stays
   // correct for every input the way it always was.
-  parameter bit FAST = 1'b1
+  parameter bit FAST = 1'b1,
+  // R1048: the table read a clock EARLIER, from den's next value (den_nx), through a ROM with its
+  // output registered (m2_recip_rom EARLY): rom_data is recip[|den|] in the same clocks as before
+  // (S_MUL's, the only one that reads it), the M10K's output now a register. 0: from den.
+  parameter bit EARLY = 1'b0
 ) (
   input  logic               clk,
   input  logic               rst_n,
@@ -88,6 +92,7 @@ module m2_raster_div #(
   input  logic               in_valid,
   input  logic signed [31:0] num,
   input  logic signed [31:0] den,
+  input  logic signed [31:0] den_nx,      // EARLY: den's value next clock
   output logic               ready,       // idle, will accept in_valid
 
   output logic               out_valid,   // one cycle
@@ -125,7 +130,8 @@ module m2_raster_div #(
   // 1,024 x 32 table out of logic, 3,733 ALM for the fill unit against 2,4xx.
   // The divider's operands are held by m2_raster_fill until it takes them,
   // so a free-running read is the same value one cycle later.
-  assign rom_addr = d_abs[7:0];
+  wire [31:0] d_abs_nx = den_nx[31] ? (~den_nx + 32'd1) : den_nx;
+  assign rom_addr = EARLY ? d_abs_nx[7:0] : d_abs[7:0];
   wire [31:0] recip_q = rom_data;
 
   logic [31:0] rq;          // the reciprocal, or the quotient under correction

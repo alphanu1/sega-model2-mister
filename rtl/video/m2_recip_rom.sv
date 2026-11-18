@@ -19,7 +19,8 @@ module m2_recip_rom #(
   // R948: 1 = the table in M10K, one true-dual-port ROM (256 x 32: two
   // blocks); 0 = the two LUT copies below. The same table and the same
   // timing either way: data one cycle after the address.
-  parameter bit          M10K = 1'b0
+  parameter bit          M10K = 1'b0,
+  parameter bit          EARLY = 1'b0     // R1048 (with M10K): the read registered twice (the M10K's output register)
 ) (
   input  logic        clk,
   input  logic [$clog2(TN)-1:0] a_addr,
@@ -65,9 +66,17 @@ module m2_recip_rom #(
         recip[d] = 32'((({32'd0, 32'h8000_0000} << 1) + longint'(d) - 1) / longint'(d));
       end
     end
-    always_ff @(posedge clk) begin
-      a_data <= recip[a_addr];
-      b_data <= recip[b_addr];
+    if (EARLY) begin : g_early
+      logic [31:0] a_r, b_r;
+      always_ff @(posedge clk) begin
+        a_r <= recip[a_addr]; b_r <= recip[b_addr];
+        a_data <= a_r; b_data <= b_r;
+      end
+    end else begin : g_one
+      always_ff @(posedge clk) begin
+        a_data <= recip[a_addr];
+        b_data <= recip[b_addr];
+      end
     end
   end else begin : g_logic
     (* romstyle = "logic" *) logic [31:0] recip_a [TN];

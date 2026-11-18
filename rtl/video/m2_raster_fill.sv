@@ -142,6 +142,9 @@ module m2_raster_fill #(
   // R948: the reciprocal table in M10K (m2_recip_rom M10K, two blocks, the
   // same timing). 0: its LUT form.
   parameter bit RECIP_M10K = 1'b0,
+  // R1048: the dividers' table read a clock early, from their denominators' next values, through
+  // the M10K's output register (m2_raster_div / m2_recip_rom EARLY; with RECIP_M10K). (2B.)
+  parameter bit RECIP_EARLY = 1'b0,
   // R951: THE QUAD'S OWN TEXEL BOX, for m2_span_tex's clamp. A textured
   // quad's u and v ranges -- the least and greatest of its four corners, in
   // whole texels (11 bits: the corners are 11.2), the least rounded down and
@@ -931,34 +934,38 @@ module m2_raster_fill #(
   logic [7:0]  rom_a_addr, rom_b_addr;
   wire [31:0]  rom_a_data, rom_b_data;
 
-  m2_recip_rom #(.M10K(RECIP_M10K)) u_recip (   // R948
+  // R1048: div_den / divb_den's next values, as the state machine below loads them (S_DIVA; 0 in reset)
+  wire                div_ld_ok  = (state == S_DIVA) && div_ready && !div_start && divb_ready && !divb_start;
+  wire signed [31:0]  div_den_nx  = !rst_n ? 32'sd0 : (div_ld_ok && need_a) ? 32'(cury - ya_next) : div_den;
+  wire signed [31:0]  divb_den_nx = !rst_n ? 32'sd0 : (div_ld_ok && need_b) ? 32'(cury - yb_next) : divb_den;
+  m2_recip_rom #(.M10K(RECIP_M10K), .EARLY(RECIP_EARLY && RECIP_M10K)) u_recip (   // R948
     .clk(clk),
     .a_addr(rom_a_addr), .a_data(rom_a_data),
     .b_addr(rom_b_addr), .b_data(rom_b_data)
   );
 
-  m2_raster_div u_div (
+  m2_raster_div #(.EARLY(RECIP_EARLY && RECIP_M10K)) u_div (
     .clk       (clk),
     .rst_n     (rst_n),
     .rom_addr  (rom_a_addr),
     .rom_data  (rom_a_data),
     .in_valid  (div_start),
     .num       (div_num),
-    .den       (div_den),
+    .den       (div_den), .den_nx(div_den_nx),
     .ready     (div_ready),
     .out_valid (div_valid),
     .quo       (div_quo),
     .div0      (div0_unused)
   );
 
-  m2_raster_div u_divb (
+  m2_raster_div #(.EARLY(RECIP_EARLY && RECIP_M10K)) u_divb (
     .clk       (clk),
     .rst_n     (rst_n),
     .rom_addr  (rom_b_addr),
     .rom_data  (rom_b_data),
     .in_valid  (divb_start),
     .num       (divb_num),
-    .den       (divb_den),
+    .den       (divb_den), .den_nx(divb_den_nx),
     .ready     (divb_ready),
     .out_valid (divb_valid),
     .quo       (divb_quo),

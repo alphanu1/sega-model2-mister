@@ -27,7 +27,11 @@
 `timescale 1ns/1ps
 
 module m2b_sharc_xu #(
-    parameter bit MAME_RND = 1'b0
+    parameter bit MAME_RND = 1'b0,
+    // R1048: the field length (s_l) and the decoder's bit (dj) from the caller's registers, made a
+    // clock earlier from the value sh_val is loaded with (pre_l / pre_dj equal them in every clock
+    // they are used); 0 makes them here from sh_val
+    parameter bit PRE = 1'b0
 ) (
     input  logic        clk,
     input  logic        fix_on,
@@ -37,6 +41,8 @@ module m2b_sharc_xu #(
     input  logic [5:0]  sh_op,          // the shifter's op
     input  logic        sh_imm,         // the immediate form
     input  logic [31:0] sh_val,         // the immediate (sh_imm) or R[ry]
+    input  logic [5:0]  pre_l,          // PRE: min(sh_val[11:6], 32)
+    input  logic [4:0]  pre_dj,         // PRE: the decoder's bit (below)
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -213,12 +219,12 @@ always_comb begin
     s_amt_r = 5'h0 - s_sh[4:0];
     s_bitn = sh_val[5:0];
     s_len = sh_val[11:6];
-    s_l = (s_len > 6'd32) ? 6'd32 : s_len;
+    s_l = PRE ? pre_l : (s_len > 6'd32) ? 6'd32 : s_len;
     s_fz = s_len == 6'd0 || s_bitn >= 6'd32;
     // the thermometer: the field's length (the funnel operands, X's first clock)
     for (int i = 0; i < 32; i++) th1[i] = 6'(i) < s_l;
     // the decoder: the bit of BSET / BCLR / BTGL / BTST, or the field's top bit (its sign)
-    dj = (sh_op[5:4] == 2'b11) ? sh_val[4:0] : 5'(s_l - 6'd1);
+    dj = PRE ? pre_dj : (sh_op[5:4] == 2'b11) ? sh_val[4:0] : 5'(s_l - 6'd1);
     dec1 = 32'h1 << dj;
     sx_v = x & th1;
     if (s_l < 6'd32 && (x & dec1) != 0) sx_v = sx_v | ~th1;

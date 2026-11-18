@@ -181,9 +181,12 @@ end
 logic [DM_AW-1:0] dm_a;
 logic             dm_en, dm_we;
 logic [31:0]      dm_wd, dm_q;
+// R1048: each lane's address its own copy of dm_a's select (kept), so the last gate drives 16
+// blocks, not 32 (s4901: the select -> 32 M10K, 3.594 ns of route)
+(* keep *) logic [DM_AW-1:0] dm_a0, dm_a1;
 always_ff @(posedge clk) if (dm_en) begin
-    if (dm_we) begin dm0[dm_a] <= dm_wd[15:0]; dm1[dm_a] <= dm_wd[31:16]; end
-    else begin dm_q[15:0] <= dm0[dm_a]; dm_q[31:16] <= dm1[dm_a]; end
+    if (dm_we) begin dm0[dm_a0] <= dm_wd[15:0]; dm1[dm_a1] <= dm_wd[31:16]; end
+    else begin dm_q[15:0] <= dm0[dm_a0]; dm_q[31:16] <= dm1[dm_a1]; end
 end
 generate if (BENCH) begin : g_dm_init
     initial for (int k = 0; k < DMW; k++) begin dm0[k] = 16'hFFFF; dm1[k] = 16'hFFFF; end
@@ -377,6 +380,12 @@ typedef struct packed {
 xc_t XC;
 logic [31:0] op_x, op_y, op_n;              // fixed / shifter operands: R[rx], R[ry], R[rn]
 logic [31:0] fa_x, fa_y, fm_x, fm_y;        // float operands
+logic        fa_xz, fa_yz;                  // R1048: fa_x / fa_y [30:23] == 0, loaded with them (sharc_fadd PRE)
+logic [5:0]  sh_pl;                         // R1048: the shifter's field length and decoder bit, from D's
+logic [4:0]  sh_pdj;                        // sh_val (m2b_sharc_xu PRE)
+logic [5:0]  d_shpl;
+logic [4:0]  d_shpdj;
+logic        d_faxz, d_fayz;
 logic [31:0] st_x;                          // store data / ureg source value
 logic [47:0] x_op;
 logic [23:0] x_pc;
@@ -1299,6 +1308,19 @@ always_comb begin
     d_fmx = rf_rd[0]; d_fmy = rf_rd[1];
     if (comp[22]) begin d_fax = rf_rd[2]; d_fay = rf_rd[3]; end
     else begin d_fax = rf_rd[0]; d_fay = rf_rd[1]; end
+    // R1048: their zero-exponent tests, each port's before the select
+    d_faxz = comp[22] ? rf_rd[2][30:23] == 8'h00 : rf_rd[0][30:23] == 8'h00;
+    // R1048: the shifter's field length and decoder bit from D's sh_val (as m2b_sharc_xu makes
+    // them from XC.sh_imm ? x_op's immediate : op_y, the values those registers are loaded with)
+    begin
+        logic [31:0] sv;
+        logic [5:0]  ln;
+        sv = x.sh_imm ? {20'h0, op[30:27], op[15:8]} : rf_rd[1];
+        ln = sv[11:6];
+        d_shpl = (ln > 6'd32) ? 6'd32 : ln;
+        d_shpdj = (x.sh_op[5:4] == 2'b11) ? sv[4:0] : 5'(d_shpl - 6'd1);
+    end
+    d_fayz = comp[22] ? rf_rd[3][30:23] == 8'h00 : rf_rd[1][30:23] == 8'h00;
     d_stx = x.acc_wd;
     d_dm_a = x.acc_addr[DM_AW-1:0];         // (R1042: a PM-bus block-1 word's, PMB1_MAME's remap)
     // the DM read is presented for any read form, whatever its condition or address (it has no
@@ -1583,9 +1605,10 @@ logic        x_ext_on;
 logic [31:0] xu_fr, xu_sr, xu_fa, xu_sa, xu_fs;
 logic        xu_fw, xu_sw;
 logic [1:0]  xu_mx, xu_sx;
-m2b_sharc_xu #(.MAME_RND(MAME_RND)) u_xu (
+m2b_sharc_xu #(.MAME_RND(MAME_RND), .PRE(1'b1)) u_xu (
     .clk, .fix_on(XC.fix_on), .fix_op(XC.fix_op), .fix_k(XC.fix_k), .sh_on(XC.sh_on), .sh_op(XC.sh_op), .sh_imm(XC.sh_imm),
-    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .misc_on(XC.fl_misc), .misc_op(XC.misc_op),
+    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .pre_l(sh_pl), .pre_dj(sh_pdj),
+    .misc_on(XC.fl_misc), .misc_op(XC.misc_op),
     .x(op_x), .y(op_y), .n(op_n), .fx(fa_x), .fy(fa_y), .astat, .alusat(mode1[M1_ALUSAT]), .trunc(XC.trunc),
     .fix_r(xu_fr), .sh_r(xu_sr), .fix_we(xu_fw), .sh_we(xu_sw), .fix_astat(xu_fa),
     .sh_astat(xu_sa), .fix_stky(xu_fs), .misc_r(misc_d_r), .misc_a(misc_d_a), .misc_s(misc_d_s), .misc_x(xu_mx), .sh_x(xu_sx));
@@ -1608,8 +1631,8 @@ end
 // and 2a at every X clock (R1029: an add's X is two clocks); results in the landing clock
 logic fl_en, fm_restart;
 assign fl_en = st == ST_X && x_fin;
-sharc_fadd #(.MAME_RND(MAME_RND)) u_fadd (
-    .clk, .en(st == ST_X), .x(fa_x), .y(fa_y), .sub(XC.fl_sub), .avg(XC.fl_avg), .trunc(XC.trunc),
+sharc_fadd #(.MAME_RND(MAME_RND), .PRE(1'b1)) u_fadd (
+    .clk, .en(st == ST_X), .x(fa_x), .y(fa_y), .xz(fa_xz), .yz(fa_yz), .sub(XC.fl_sub), .avg(XC.fl_avg), .trunc(XC.trunc),
     .r(fa_r), .astat(fa_a), .stky(fa_s), .nan_in(), .inf_both());
 sharc_fmul #(.MAME_RND(MAME_RND)) u_fmul (
     .clk, .en(fl_en), .restart(fm_restart),
@@ -1677,6 +1700,36 @@ always_comb begin
     if (XC.ld_u && x_ldv) begin xu_w = 1'b1; xu_r = XC.ld_ureg; xu_v = x_ld; end
     if (XC.uw && !x_uns) begin xu_w = 1'b1; xu_r = XC.uw_reg; xu_v = XC.acc_wd; end
 end
+// R1048: xu_v != 0 (an L register's "nonzero" flag, lnz) with each source's own zero test first and
+// the access kind's select after -- not one 32-bit test after x_ld's and xu_v's selects. The same
+// value wherever xu_w is set (the only clock lnz is written)
+logic xu_vnz;
+always_comb begin
+    logic nz_ld;
+    case (XC.acc)
+    A_DM:    nz_ld = dm_q != 32'h0;
+    A_PM:    nz_ld = pmb_q != 32'h0;
+    A_FIN:   nz_ld = fin_data != 32'h0;
+    A_EXT:   nz_ld = ext_rdata != 32'h0;
+    default: nz_ld = 1'b0;                  // (A_IOP's x_ld is 0; the others load nothing)
+    endcase
+    xu_vnz = (XC.uw && !x_uns) ? XC.acc_wd != 32'h0 : nz_ld;
+end
+generate if (BENCH) begin : g_pre_check
+    always_ff @(posedge clk) if (st == ST_X && (fa_xz != (fa_x[30:23] == 8'h00) || fa_yz != (fa_y[30:23] == 8'h00)))
+        $fatal(1, "fadd zero tests %b %b", fa_xz, fa_yz);
+    always_ff @(posedge clk) if (st == ST_X && XC.sh_on) begin : chk_sh
+        logic [31:0] sv;
+        logic [5:0]  l;
+        sv = XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y;
+        l = (sv[11:6] > 6'd32) ? 6'd32 : sv[11:6];
+        if (sh_pl != l || sh_pdj != ((XC.sh_op[5:4] == 2'b11) ? sv[4:0] : 5'(l - 6'd1)))
+            $fatal(1, "shifter field %d / %d", sh_pl, sh_pdj);
+    end
+end endgenerate
+generate if (BENCH) begin : g_vnz_check
+    always_ff @(posedge clk) if (st == ST_X && xu_w && xu_vnz != (xu_v != 32'h0)) $fatal(1, "xu_v's zero test %b", xu_vnz);
+end endgenerate
 
 // the landing's Ra value: the adder's or the misc unit's, ABS(Fx +- Fy) made a magnitude
 logic [31:0] ld_rav, ld_raa, ld_ras;
@@ -1930,6 +1983,8 @@ always_ff @(posedge clk) begin
             x_pc <= S.daddr;
             op_x <= d_opx; op_y <= d_opy; op_n <= d_opn;
             fa_x <= d_fax; fa_y <= d_fay; fm_x <= d_fmx; fm_y <= d_fmy;
+            fa_xz <= d_faxz; fa_yz <= d_fayz;   // (R1048)
+            sh_pl <= d_shpl; sh_pdj <= d_shpdj;
             // (R1029: in every D clock, not on d_go)
             fm_restart <= 1'b1;
             x_ext_on <= 1'b1;
@@ -1983,7 +2038,7 @@ always_ff @(posedge clk) begin
                     case (ur[7:4])
                     4'h0: ;                                 // R: the write port (rf_we)
                     4'h1, 4'h2: ;                           // I, M: the write ports (ir_we, mr_we)
-                    4'h3: lnz[{ur[3], kk}] <= uv != 32'h0;
+                    4'h3: lnz[{ur[3], kk}] <= xu_vnz;   // (R1048: uv is xu_v here -- a bit operation names 0x7x)
                     4'h4: ;                                 // B: I = B (B itself is not kept; ir_we)
                     4'h6: ;                                 // PCSTK / CURLCNTR / LCNTR: below
                     4'h7: case (ur[3:0])
@@ -2122,6 +2177,8 @@ always_comb begin
     dm_en = 1'b0; dm_we = 1'b0; dm_wd = XC.acc_wd;
     // the address by state alone (R1029: no decode before the M10K's address register)
     dm_a = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
+    dm_a0 = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
+    dm_a1 = clr_on ? clr_n[DM_AW-1:0] : (st == ST_X) ? XC.acc_addr[DM_AW-1:0] : d_dm_a;
     if (clr_on) begin dm_en = clr_n < DMW; dm_we = 1'b1; dm_wd = 32'h0; end
     // R1044: the read in EVERY D clock, whatever the word (the last stays): only an A_DM read
     // access reads dm_q, in X, and its value then is the last D clock's read at d_dm_a, as before;
