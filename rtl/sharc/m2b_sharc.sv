@@ -498,6 +498,8 @@ logic [31:0] d_accwd_ref;
 (* keep *) logic [31:0] d_accwd_b;          // R1044: the store / ureg data but the sequencer's source
 logic [31:0] d_ursq1, d_ursq0, d_accwd_chk;
 logic        d_cok_ref;                     // benches: the condition as R1029 evaluated it
+(* keep *) logic [2:0] d_acc_nc;             // R1044: D's access kind before its condition
+(* keep *) logic       d_mbad_nc;            // ... and the address map's test
 logic        d_unsup_x;                     // D's flag and reason, the condition last (R1029)
 logic [3:0]  d_why_x;
 logic        d_unsup_ref;                   // benches: R1028's form of them
@@ -1098,7 +1100,8 @@ always_comb begin
         logic exm;
         exm = (op[47:46] == 2'b11) ? !cok :
               (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
-        mbad = (exm && mem_f && bad) || bad2;
+        d_mbad_nc = mem_f && bad;                // (R1044: kept; the condition in the last gate)
+        mbad = (exm && d_mbad_nc) || bad2;
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
     x.acc_wr = mem_wr;
@@ -1165,10 +1168,13 @@ always_comb begin
             p_pm = !pa[24] && pa[23:PM_AW] == 24'(32'h20000 >> PM_AW);
             p_dm = !pa[24] && pa[23:18] == 6'h0 && pa[17:15] >= 3'd5 && pa[14:DM_AW] == '0;
             p_dx = !pa[24] && pa[23:18] == 6'h0 && pa[17:15] >= 3'd5 && pa[14:DM_AW] != '0;
-            g = ex && mem_f && !rz;
-            x.acc[0] = g && (pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout));
-            x.acc[1] = g && (pmb ? p_pm : (h_fin || h_fout));
-            x.acc[2] = g && (pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext));
+            // (R1044: the condition in the last gate -- the kind without it, d_acc_nc, kept as a
+            // node; ex is cok, !cok or 1 by the form, its selects from the opcode)
+            g = mem_f && !rz;
+            d_acc_nc[0] = g && (pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout));
+            d_acc_nc[1] = g && (pmb ? p_pm : (h_fin || h_fout));
+            d_acc_nc[2] = g && (pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext));
+            x.acc = d_acc_nc & {3{ex}};
         end
         d_acc_ref = (mem_on && !bad && !x.unsup) ? akind : A_NONE;    // (R1028's, for the benches' check)
     end
