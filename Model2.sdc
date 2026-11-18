@@ -503,7 +503,13 @@ if {[get_collection_size $gam_from] == 0} {
 # nothing that reads it -- is_vcop / is_desert / the type-2 I/O board's
 # decode in m2_ioz80 (s1115: game_id -> the Z80's IR) -- is a one-cycle path
 # from it.
-set gid_from [get_registers -nowarn {game_id[*] *|game_id[*]}]
+# R1044: on a 2B build (M2_2B) the game ID is m2b_gameid's register, q[*] (R1039), which the
+# names above do not match -- so the false path silently stopped covering it, and s3435 failed
+# clk_sys at -2.439 ns on q -> r3d_lut_addr. Its decode is combinational from q exactly as it was
+# from game_id, q is written by the same strobe (index 4 of a download) and held the same way, so
+# R842's argument is unchanged: added here. (No other build has a u_gameid: the pattern matches
+# nothing there.)
+set gid_from [get_registers -nowarn {game_id[*] *|game_id[*] *|u_gameid|q[*]}]
 if {[get_collection_size $gid_from] == 0} {
     post_message -type critical_warning \
       "Model2.sdc: the game ID registers did not match -- R842's false path is not applied."
