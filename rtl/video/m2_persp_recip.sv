@@ -21,15 +21,7 @@
 //   q   = r1 << s                  undo the normalise
 `timescale 1ns/1ps
 
-module m2_persp_recip #(
-  // R1039: 1 = the 128-entry table in an M10K, read on the clock that loads
-  // sa_dn (its address is sa_dn's next value), so its output IS rtab[sa_dn]
-  // through the cycle s1_r0 takes it -- the same data on the same cycle. While
-  // rst_n is low the address is 0, as sa_dn is, so the first s1_r0 after a
-  // reset is rtab[0] in both forms. 0 = the logic table (every build before;
-  // the 2B build sets it with M2_RECIP_M10K's other table).
-  parameter bit M10K = 1'b0
-) (
+module m2_persp_recip (
   input  logic        clk,
   input  logic        rst_n,
   input  logic [15:0] in_d,        // 1..65535; zero returns the maximum
@@ -80,20 +72,6 @@ module m2_persp_recip #(
 
   wire [3:0]  s0_s  = clz16(in_d);
   wire [15:0] s0_dn = in_d << s0_s;        // [2^15, 2^16), or 0 when in_d == 0
-  // R1039: the M10K form (M10K): the same contents, its read on sa_dn's clock
-  logic [16:0] m_r0;
-  generate if (M10K) begin : g_m10k
-    (* romstyle = "M10K" *) logic [16:0] mtab [128];
-    initial begin
-      for (int i = 128; i < 256; i++) begin
-        mtab[i-128] = 17'(((longint'(1) << 23) + longint'(i) - longint'(1)) / longint'(i));
-      end
-    end
-    wire [6:0] m_a = rst_n ? s0_dn[14:8] : 7'd0;
-    always_ff @(posedge clk) m_r0 <= mtab[m_a];
-  end else begin : g_logic
-    assign m_r0 = 17'd0;
-  end endgenerate
 
   // R599: THE ENCODE-AND-SHIFT REGISTERED BEFORE THE TABLE. clz16, the
   // variable shift and the 128-entry table read were one cycle into the
@@ -132,7 +110,7 @@ module m2_persp_recip #(
       s1_dn   <= sa_dn;
       s1_s    <= sa_s;
       s1_zero <= sa_zero;
-      s1_r0   <= M10K ? m_r0 : rtab[sa_dn[14:8]];   // top byte less its always-set bit; R1039
+      s1_r0   <= rtab[sa_dn[14:8]];        // top byte less its always-set bit
 
       // ---- stage 1: one Newton step, then undo the normalise.
       //
