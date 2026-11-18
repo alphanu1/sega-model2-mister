@@ -111,6 +111,12 @@ uint64_t gate_arms = 0;
 // mix exists to cover instruction forms. Use it for fetch and cache work.
 bool loop_mode = false;
 bool no_trans = false;  // R845: +notrans -- the same programs with cmprl for each transcendental
+// R1045: +cvtl (with +vc or +fx) -- a third of the FP mix the conversions
+// (cvtzril twice, cvtri, cvtzri), a quarter of the registers and fp0-fp3
+// seeded with the conversion table's edges (NaNs of both kinds and signs, the
+// infinities, the int32 / int64 boundaries), from a stream of its own
+bool use_cvtl = false;
+uint64_t cv_nan = 0, cv_big = 0, cv_fpr = 0;   // R1045: cvtzril of a NaN, of |x| >= 2^31, from fp0-fp3
 bool use_vc = false;   // R839: +vc -- a VC=1 build; vc_en high; sqrtrl / cpysre / cvtzril in the mix
 bool no_rl = false;   // R836: +norl -- leave the long-real forms out of the FP mix
 std::vector<std::pair<uint32_t,uint32_t>> dut_stores;
@@ -523,6 +529,7 @@ int main(int argc, char **argv) {
     if (!std::strcmp (argv[i], "+loops"))     loop_mode = true;
     if (!std::strcmp (argv[i], "+norl"))      no_rl = true;   // R836
     if (!std::strcmp (argv[i], "+vc"))        use_vc = true;  // R839
+    if (!std::strcmp (argv[i], "+cvtl"))      use_cvtl = true;  // R1045
     if (!std::strcmp (argv[i], "+notrans"))   no_trans = true;  // R845
     if (!std::strcmp (argv[i], "+directed"))  directed  = true;
     if (!std::strcmp (argv[i], "+dtrace"))    dtrace    = true;
@@ -548,7 +555,8 @@ int main(int argc, char **argv) {
   const uint8_t REG5A[] = {0x0,0x1,0x2,0x3,0x4,0x5,0x6,0x7,0xc,0xe};
 
   std::mt19937_64 rng(seed);
-  std::mt19937_64 srng(seed ^ 0x5b5b);   // R1013: register-seeding choices only
+  std::mt19937_64 srng(seed ^ 0x5b5b);
+  std::mt19937_64 crng(seed ^ 0x1045);   // R1045: +cvtl's choices only   // R1013: register-seeding choices only
   uint64_t total_retires = 0, trapped_progs = 0;
 
   for (uint64_t p = 0; p < progs && fails == 0; ++p) {
@@ -624,6 +632,9 @@ int main(int argc, char **argv) {
         // R845: and the transcendentals sinrl cosrl tanrl atanrl; R844: flushreg
         static const uint32_t VCOPS[] = { 0x698u, 0x6e2u, 0x6c3u, 0x69cu, 0x69du, 0x69eu, 0x690u, 0x66du };
         uint32_t sel = (use_vc && (rng() % 3) == 0) ? VCOPS[rng() % 8] : FPOPS[rng() % nfp];
+        // R1045: +cvtl -- the conversions, cvtzril twice
+        static const uint32_t CVOPS[] = { 0x6c3u, 0x6c3u, 0x6c0u, 0x6c2u };
+        if (use_cvtl && (crng() % 3) == 0) sel = CVOPS[crng() % 4];
         if (no_trans && (sel >> 4) == 0x69u && sel != 0x698u && sel != 0x695u) sel = 0x695u;   // +notrans: cmprl instead
         insn = (((sel >> 4) & 0xffu) << 24) | ((rng() % 32) << 19)
              | ((rng() % 32) << 14) | ((sel & 0xf) << 7) | (rng() % 32);
@@ -634,6 +645,9 @@ int main(int argc, char **argv) {
         // R839: cvtzril writes dst and dst + 1, unmasked, never a literal
         // (MAME fatalerrors): dst <= 30, as emul's.
         if (sel == 0x6c3u) insn = (insn & ~0x00f82000u) | ((rng() % 31) << 19);
+        // R1045: +cvtl -- half the conversions from fp0-fp3 (whole doubles)
+        if (use_cvtl && (sel == 0x6c3u || sel == 0x6c0u || sel == 0x6c2u) && (crng() & 1))
+          insn = (insn & ~0x1fu) | 0x0800u | uint32_t(crng() % 4);
         // R1013: scaler, half the time (decided by the seeding generator, so
         // the main stream is unchanged), with a register n and src2 and an
         // fp0-fp3 destination -- where a 2^n in the subnormal band is not
@@ -1003,6 +1017,19 @@ int main(int argc, char **argv) {
       else if (i960ref::Cpu::SUBN >= 1 && k == 1)            v = uint32_t(int32_t(srng() % 80) - 1090);
       else if (i960ref::Cpu::SUBN >= 2 && k == 2 && (i & 1)) v &= 0x800fffffu;
       else if (e == 0x00 || e == 0xff) v = (v & 0x807fffffu) | (0x7fu << 23);
+      // R1045: +cvtl -- the conversion table's singles in a quarter of the
+      // registers: +-qNaN, +-sNaN, +-inf, +-FLT_MAX, +-2^31 and its
+      // neighbours, +-2^63 and its neighbours, +-0, +-subnormal, halves
+      if (use_cvtl && (crng() % 4) == 0) {
+        static const uint32_t CEDGE[] = { 0x7fc00000u, 0xffc00000u, 0x7f800001u, 0xff800001u,
+                                          0x7fbfffffu, 0xffffffffu, 0x7f800000u, 0xff800000u,
+                                          0x7f7fffffu, 0xff7fffffu, 0x4f000000u, 0xcf000000u,
+                                          0x4f000001u, 0xcf000001u, 0x4effffffu, 0xceffffffu,
+                                          0x5f000000u, 0xdf000000u, 0x5effffffu, 0xdeffffffu,
+                                          0x5f000001u, 0xdf000001u, 0x00000000u, 0x80000000u,
+                                          0x00000001u, 0x80000001u, 0x3f000000u, 0xbfc00000u };
+        v = CEDGE[crng() % (sizeof CEDGE / sizeof CEDGE[0])];
+      }
       ref.rf.r[i] = v;
       if (i < 16) dut->rootp->i960_top__DOT__u_regs__DOT__loc[i] = v;
       else        dut->rootp->i960_top__DOT__u_regs__DOT__glb[i-16] = v;
@@ -1170,6 +1197,30 @@ int main(int argc, char **argv) {
       dut->rootp->i960_top__DOT__fpr[2] = 0;
     }
   }
+
+    // R1045: +cvtl -- fp0-fp3 start each program as one of the conversion
+    // table's doubles (or a random one in the int64 band) half the time.
+    // Both sides; +cvtl's own stream.
+    if (use_cvtl) {
+      static const uint64_t DEDGE[] = {
+        0x7ff8000000000000ull, 0xfff8000000000000ull, 0x7ff0000000000001ull, 0xfff0000000000001ull,
+        0x7ff0000000000000ull, 0xfff0000000000000ull, 0x7fefffffffffffffull, 0xffefffffffffffffull,
+        0x43e0000000000000ull, 0xc3e0000000000000ull,     // +-2^63
+        0x43dfffffffffffffull, 0xc3dfffffffffffffull,     // +-(2^63 - 1024)
+        0x43e0000000000001ull, 0xc3e0000000000001ull,     // +-(2^63 + 2048)
+        0x41e0000000100000ull, 0xc1e0000000100000ull,     // +-(2^31 + 0.5)
+        0x41dfffffffe00000ull, 0xc1dfffffffe00000ull,     // +-(2^31 - 1)
+        0x4330000000000001ull, 0xc330000000000001ull,     // +-(2^52 + 1)
+        0x0000000000000000ull, 0x3fe0000000000000ull, 0xbff8000000000000ull };
+      for (int i = 0; i < 4; ++i) {
+        uint64_t b;
+        if (crng() & 1) continue;
+        if (crng() % 4) b = DEDGE[crng() % (sizeof DEDGE / sizeof DEDGE[0])];
+        else b = (crng() & 0x800fffffffffffffull) | (uint64_t(1023 + crng() % 70) << 52);
+        dut->rootp->i960_top__DOT__fpr[i] = b;
+        std::memcpy(&ref.fp[i], &b, 8);
+      }
+    }
 
     // Run, comparing at each retire. The DUT retires when it re-enters fetch.
     const uint64_t budget = loop_mode ? steps * 5 : steps;
@@ -1355,6 +1406,16 @@ int main(int argc, char **argv) {
       { const uint32_t iw = exec_insn; const uint32_t o = iw>>24;
         if (o==0x78||o==0x68||o==0x6c||o==0x67||o==0x79||o==0x69||o==0x6d) fpany++;
         if (o==0x79||o==0x69||o==0x6d) rlany++;   // R836
+        // R1045: what the cvtzrils converted -- the source read after the
+        // retire, so one that was its own destination counts as its result
+        if (use_cvtl && ((o << 4) | ((iw >> 7) & 0xf)) == 0x6c3) {
+          const uint32_t s1 = iw & 0x1f;
+          double xa;
+          if (iw & 0x0800) xa = ref.fp_lit(s1);
+          else { const uint32_t rv = ref.rf.r[s1]; float f; std::memcpy(&f, &rv, 4); xa = f; }
+          if ((iw & 0x0800) && s1 < 4) cv_fpr++;
+          if (std::isnan(xa)) cv_nan++; else if (std::fabs(xa) >= 2147483648.0) cv_big++;
+        }
         { const uint32_t k = (o << 4) | ((iw >> 7) & 0xf);   // R839
           if (k == 0x698) vcsq++; else if (k == 0x6e2) vccp++; else if (k == 0x6c3) vccv++;
           else if (k == 0x69c || k == 0x69d || k == 0x69e || k == 0x690) vctr[k == 0x690 ? 3 : k - 0x69c]++;
@@ -1523,6 +1584,8 @@ int main(int argc, char **argv) {
   if (use_vc) std::printf("  R844 flushreg retired: %llu\n", (unsigned long long)vcfl);
   if (syn_unal_stops) std::printf("  %llu ended at a synmov to 0xff000005..7 (recorded deviation, R844)\n", (unsigned long long)syn_unal_stops);
   if (use_vc) std::printf("  R839 forms retired: sqrtrl %llu, cpysre %llu, cvtzril %llu\n", (unsigned long long)vcsq, (unsigned long long)vccp, (unsigned long long)vccv);
+  if (use_cvtl) std::printf("  R1045 cvtzril retired from fp0-fp3 %llu; of a NaN %llu, of |x| >= 2^31 %llu (sources read at retire)\n",
+                            (unsigned long long)cv_fpr, (unsigned long long)cv_nan, (unsigned long long)cv_big);
   if (use_vc) std::printf("  R845 forms retired: sinrl %llu, cosrl %llu, tanrl %llu, atanrl %llu; one-ulp libm differences taken %llu\n",
                           (unsigned long long)vctr[0], (unsigned long long)vctr[1], (unsigned long long)vctr[2],
                           (unsigned long long)vctr[3], (unsigned long long)trans_ulp);
