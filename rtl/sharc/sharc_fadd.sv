@@ -149,7 +149,16 @@ always_comb begin
         for (int i = 0; i < 9; i++) if (n_near[16 + i]) h = 5'(8 - i);
         for (int i = 0; i < 16; i++) if (n_near[i]) l = 5'(24 - i);      // (9 + the low half's)
         c = (n_near[24:16] != 9'h0) ? h : l;                 // clz(n_near), 25 for zero
-        lz1 = (ex <= 8'd25 && {3'h0, c} > ex - 8'd1) ? 5'(ex - 8'd1) : c;
+        // R1044: c > ex - 1 is "n_near's top ex bits all zero" (ex >= 1, the denormal boundary's
+        // test), a mask from ex beside the count rather than a compare after it -- the same
+        // bound: for ex <= 25, clz(n_near) >= ex exactly when n_near[24 : 25 - ex] == 0
+        begin
+            logic [24:0] tm;
+            logic        over;
+            for (int i = 0; i < 25; i++) tm[i] = 8'(24 - i) < ex;   // bit i among the top ex bits
+            over = ex <= 8'd25 && (n_near & tm) == 25'h0;
+            lz1 = over ? 5'(ex - 8'd1) : c;
+        end
     end
 end
 

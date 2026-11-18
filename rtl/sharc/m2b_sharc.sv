@@ -1887,6 +1887,12 @@ always_ff @(posedge clk) begin
         end
         ST_X: begin
             if (x_ext_on && ext_ack && XC.acc == A_EXT) x_ext_on <= 1'b0;
+            // the misc / fixed / shifter result for the landing: loaded in every X clock (R1044:
+            // not on x_fin, off its path), so it holds X's last clock's -- x_fin's -- value; only
+            // the landing (the clock after x_fin, never an X clock) reads misc_r / misc_a / misc_s
+            if (XC.fl_misc) begin misc_r <= misc_d_r; misc_a <= misc_d_a; misc_s <= misc_d_s; end
+            else if (XC.fix_on) begin misc_r <= x_fix.r; misc_a <= x_fix.astat; misc_s <= x_fix.stky; end
+            else begin misc_r <= x_sh.r; misc_a <= x_sh.astat; misc_s <= 32'h0; end
             // an unsupported word (D's, or X's own below): one capture, of the word in X
             if (x_first && !x_fin) begin S <= s_x1; {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(s_x1); end   // (X's end below otherwise)
             // R1042: type 1's second pass, its PM move: the access fields from XC.acc2, the store
@@ -1973,9 +1979,6 @@ always_ff @(posedge clk) begin
                 ld_misc <= XC.fl_misc || XC.fix_on || XC.sh_on;
                 ld_absf <= XC.fl_absf;
                 ld_comp <= XC.fl_comp;
-                if (XC.fl_misc) begin misc_r <= misc_d_r; misc_a <= misc_d_a; misc_s <= misc_d_s; end
-                else if (XC.fix_on) begin misc_r <= x_fix.r; misc_a <= x_fix.astat; misc_s <= x_fix.stky; end
-                else begin misc_r <= x_sh.r; misc_a <= x_sh.astat; misc_s <= 32'h0; end
                 if (BENCH) begin dbg_pc <= x_pc; dbg_op <= x_op; end   // the benches' only
                 st <= ST_D;
             end
