@@ -3048,9 +3048,24 @@ wire [7:0]  cpu_trap_op;
 // sees exactly the core it always did.
 localparam logic [15:0] GAMEID_INDEX = 16'd4;
 logic [7:0] game_id;
+`ifdef M2_2C
+`ifndef M2_2B
+`define M2_GAMEID_2C
+`endif
+`endif
+`ifdef M2_GAMEID_2C
+// R1043 (R1039's 2B idea): a 2C build keeps only the 2C sets' IDs (m2c_gameid):
+// the same byte for each of them, on the same cycle, and every decode of a
+// game the 2C board does not run (the 2A ones, live on 2C since M2A is 1)
+// folds away. make test_m2c_gameid checks the list against the MRAs.
+m2c_gameid u_gameid (.clk(clk_sys), .rst_n(mem_rst_n),
+	.we(ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)), .din(ioctl_dout[7:0]),
+	.game_id(game_id));
+`else
 always_ff @(posedge clk_sys or negedge mem_rst_n)   // cleared on PLL lock, as Model 1 does
 	if (!mem_rst_n) game_id <= 8'd0;
 	else if (ioctl_download && ioctl_wr && (ioctl_index == GAMEID_INDEX)) game_id <= ioctl_dout[7:0];
+`endif
 // R795: bit 7 is the CRT MRA's flag ("Daytona USA ... [15kHz CRT].mra"
 // sends 80); bits 6:0 are the game.
 wire is_vcop = (game_id[6:0] == 7'd1);

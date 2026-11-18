@@ -503,7 +503,7 @@ if {[get_collection_size $gam_from] == 0} {
 # nothing that reads it -- is_vcop / is_desert / the type-2 I/O board's
 # decode in m2_ioz80 (s1115: game_id -> the Z80's IR) -- is a one-cycle path
 # from it.
-set gid_from [get_registers -nowarn {game_id[*] *|game_id[*]}]
+set gid_from [get_registers -nowarn {game_id[*] *|game_id[*] *|u_gameid|gid_q[*]}]   ;# R1043: m2c_gameid's register on 2C
 if {[get_collection_size $gid_from] == 0} {
     post_message -type critical_warning \
       "Model2.sdc: the game ID registers did not match -- R842's false path is not applied."

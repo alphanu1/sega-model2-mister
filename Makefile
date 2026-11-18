@@ -3365,3 +3365,23 @@ test_hps_cfgstr:
 	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -E '^hps_io' ; \
 	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -q "^$$w" || { echo "  expected $$w"; exit 1; }; echo "  $$w as expected"; done
 	@rm -r obj_cfgstr
+
+# R1043 (R1039's m2b_gameid, on 2C): m2c_gameid against the plain game ID register, every cycle,
+# for the IDs every <rbf>Model2C</rbf> MRA sends (mra/ and releases/mra/, index 4 first in each);
+# then the planted faults -- a wrong decode, and an MRA with its index 4 after the ROMs -- must fail.
+.PHONY: test_m2c_gameid
+test_m2c_gameid:
+	@echo "== test m2c_gameid (R1043: the 2C MRAs' IDs read back exactly, every cycle)"
+	@mkdir -p obj_m2c_gameid && python3 sim/io/m2c_mra_ids.py mra obj_m2c_gameid/ids.hex \
+	  && python3 sim/io/m2c_mra_ids.py releases/mra obj_m2c_gameid/rel.hex \
+	  && paste -d' ' obj_m2c_gameid/ids.hex obj_m2c_gameid/rel.hex | awk '$$2==1 && $$1!=1{bad=1} END{if(bad){print "  a released 2C MRA sends an ID mra/ does not"; exit 1}}' \
+	  && iverilog -g2012 -o obj_m2c_gameid/tb rtl/io/m2c_gameid.sv sim/io/tb_m2c_gameid.sv \
+	  && vvp -n obj_m2c_gameid/tb +IDS=obj_m2c_gameid/ids.hex | grep -v finish | tee obj_m2c_gameid/run.txt
+	@grep -q '^PASS' obj_m2c_gameid/run.txt
+	@echo "== planted fault: 4'd10 decodes to 0x25, not 0x24 (must FAIL)"
+	@sed "s/4'd10: dec = 7'h24/4'd10: dec = 7'h25/" rtl/io/m2c_gameid.sv > obj_m2c_gameid/plant.sv \
+	  && iverilog -g2012 -o obj_m2c_gameid/tbp obj_m2c_gameid/plant.sv sim/io/tb_m2c_gameid.sv \
+	  && vvp -n obj_m2c_gameid/tbp +IDS=obj_m2c_gameid/ids.hex | grep -v finish | tail -2 | tee obj_m2c_gameid/plant.txt
+	@grep -q '^FAIL' obj_m2c_gameid/plant.txt && echo "  planted fault caught"
+	@echo "== planted fault: a 2C MRA with its index 4 after the ROMs (must be refused)"
+	@python3 sim/io/m2c_mra_ids.py --plant mra && echo "  planted fault caught" && rm -rf obj_m2c_gameid
