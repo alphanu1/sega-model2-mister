@@ -3349,3 +3349,19 @@ test_m2_dsb_2c:
 	  rtl/sound/m2_dsb_2c.sv $(DSB_RTL) sim/sound/tb_m2_dsb_2c.cpp \
 	  -CFLAGS "-O2" -o tb_m2_dsb_2c --Mdir obj_m2_dsb_2c
 	DSB_SECS=$(DSB_SECS) DSB_LAT=$(DSB_LAT) ./obj_m2_dsb_2c/tb_m2_dsb_2c
+
+# R1039 (R1043 on 2C, CFGSTR_N=1201 -- the 2C string's length): hps_io's configuration string in logic (CONF_STR_BRAM 0) against the ROM form (1, the 2B
+# build's) on one HPS bus driven as sys_top.v drives it, io_dout every clock; then the planted
+# faults -- one byte of the ROM's string changed, and strobes one clock apart (closer than
+# sys_top's ~rack & io_clk allows) -- must differ.
+CFGSTR_N ?= 962
+.PHONY: test_hps_cfgstr
+test_hps_cfgstr:
+	@echo "== test hps_io CONF_STR_BRAM 0 vs 1 (R1039)"
+	@mkdir -p obj_cfgstr && python3 sim/io/cfgstr_test.py obj_cfgstr/cfgstr_test.svh $(CFGSTR_N)
+	@for c in 2:0:PASS 2:1:FAIL 1:0:FAIL; do g=$${c%%:*}; r=$${c#*:}; p=$${r%%:*}; w=$${r#*:}; \
+	  $(VERILATOR) --binary --timing -j 2 -Wno-fatal -Wno-lint -Wno-style -Wno-PROCASSWIRE -GGAP=$$g -GPLANT=$$p \
+	    -Iobj_cfgstr -Isys --top-module tb_hps_cfgstr --Mdir obj_cfgstr/o$$g$$p sys/hps_io.sv sim/io/tb_hps_cfgstr.sv >/dev/null 2>&1 || exit 1; \
+	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -E '^hps_io' ; \
+	  ./obj_cfgstr/o$$g$$p/Vtb_hps_cfgstr | grep -q "^$$w" || { echo "  expected $$w"; exit 1; }; echo "  $$w as expected"; done
+	@rm -r obj_cfgstr
