@@ -53651,3 +53651,294 @@ the state-hash trace the first 20 M words; (6) R1027-R1031's 37 planted faults w
     X: a 13-bit select), x_done into XC's reload.
   * A host write to PM while a word is in X is not arbitrated.
   * Sonic the Fighters was classified (its image is schamp's), not replayed.
+
+**R1044 -- THE 2B BUILD's clk_sys FAILURES, FAMILY BY FAMILY: THE SHARC's D AND FIRST X CLOCK
+RETIMED WITH NO CLOCK MOVED (EVERY OUTPUT THE SAME ON EVERY CLOCK, OLD AGAINST NEW), THE GAME ID's
+FALSE PATH MADE TO MATCH m2b_gameid, THE 2C LINE's R1021 / R1030 RETIMES PORTED, THE 3D TABLES'
+AND THE FRAME WRITER's MASK WRITES TAKEN OFF THEIR ENABLES. s3431 clk_sys -1.763 -> -1.135 (THE HEAD, 4e7bc07e) NS;
+FAILING clk_sys PATHS 20,000+ -> 4,996. DOA / FVIPERS / SCHAMP CLOCK COUNTS UNCHANGED TO THE CLOCK
+(1,264,270,732 / 1,277,257,981 / 1,279,552,477).** Branch 2b-retime (off model2b b246dcc5),
+2026-11-18. Simulation and Quartus 17.0 fits; no board.
+
+(Section: §10, after R1042. Authority: the fits (Quartus 17.0, quartus_sta's own path reports,
+slow 100C unless named) for where the time goes; the benches of R1027-R1042 and the 2C line's
+R1021 / R1030 miters for "the same output on the same clock"; MAME 0.289 only through those
+benches. Model 1 has no SHARC; it was not consulted. Nothing in sys/ touched.)
+
+*What was believed (the brief, R1029, R1042):* the SHARC met 80 MHz alone (R1029: +0.1 to +0.65
+ns at slow 100C, all ports virtual); in the whole 2B build it would land "near-critical" on the
+families R1029 named. model2b b246dcc5 failed clk_sys on every completed seed: s3412 -0.782, s3422
+-1.596, s3424 -1.545, s3425 -1.594, s3426 -1.604, s3430 -5.581, s3431 -1.763, s3435 -2.439
+(s3432-s3434 crashed); HDMI -0.011 to -1.168 on every one but none of it ours (sys/ ascal, osd).
+
+*WHAT THE FAILING PATHS ARE (quartus_sta -less_than_slack 0, every path, five baseline seeds):*
+  * The SHARC's D: the opcode out of the PM M10K (its tco ~2.6 ns after the clock at the M10K)
+    through D's decode into XC.acc / XC.mbad / XC.unsup, the DM RAM's read enable and address,
+    the PM RAM's port-B address -- 16,876 paths in s3431 from pm2 alone, -1.42 to -1.76 on
+    every seed. 60 % of each path is routing: the SHARC's 80 M10K sit in five M10K columns
+    (X38-X69, Y1-Y24) on a device with 544 of 553 M10K used, and every hop across them is ~1.3
+    ns. The opcode's g bit (R1042) was one LUT in front of DAG1's MLAB address; the DM read
+    enable was the access decode; the access kind was four LUTs after the address adder.
+  * The SHARC's first X clock: XC.sqc / XC.b6 / S -> s_x1.daddr -> the PM fetch address, whose
+    last hop fans out to 48 M10K (4.1 ns of route in s3431).
+  * S -> D's loop-end decisions (S.curlcntr / S.daddr / S.la_addr / S.lstkp / astat / ld_on / st ->
+    done / cok -> XC.acc, XC.acc_wd): -0.5 to -1.6.
+  * The game ID: m2b_gameid's q[*] -> r3d_lut_addr / r3d_lut_sel (s3435 -2.439, s3431 -0.946):
+    R842's false path names game_id[*], and R1039's register is q[*] -- the exception silently
+    stopped covering it (no warning: other game_id registers still matched).
+  * The 2C families R1021 / R1030 had already retimed on the 2C line but model2b (cut from the
+    2C RC 1871e21a) did not have: uvsel -> hv / hu (-0.80 to -1.84), the clipper's operands
+    into the pool (-0.57 to -2.13), the span walk's box read into the texel queue (-1.01 to
+    -1.31), the SCSP timers' ar -> due (-0.62 to -1.30), the fill.
+  * Seed-dependent placement: s3430's qst -> hy (-5.58, +2.9 on s3435), the tile RAM's writes.
+
+*THE CHANGES (commit; what moved; each the same value wherever it is read, no clock added):*
+  SHARC (rtl/sharc; the 2B build is its only user):
+  1. 92ff6cdb. (a) The DM RAM read in EVERY D clock: dm_q is read only by an A_DM read access in
+     X, and holds the last D clock's read at d_dm_a as before; the enable leaves the opcode's
+     decode (s3431: 1,432 paths into the DM's re, -1.763). (b) DAG1's I8-15 / M8-15 on two new
+     MLAB copies (u_i3 / u_m3), the g bit choosing after the read: no LUT between the opcode and
+     DAG1's read address. (c) The next fetch's address (pm_ra) selected in X's first clock from
+     candidates made in D (PC + offset from S.daddr and from S.pcstk, the popped top for an RTS,
+     tsel one-hot, the branch / delayed flags: XC.f_*), not through s_x1's sequencer; BENCH
+     checks it against s_x1.daddr at every read. (d) The R file's write data one AND-OR with its
+     five selects from registers, fm_r / ld_rav one gate from the port. (e) x_need from
+     XC.need_fl (made in D from the opcode) instead of the misc unit's decode; BENCH checks it.
+     (f) m2b_xbus's read data chosen by which side acknowledged (c_ack) rather than the address
+     decode (x_dm): the core reads ext_rdata only in the ack's clock, when c_ack == x_dm.
+  2. 75c2a989, taken back by 47756941 and 4e7bc07e. The loop end's four compares on S
+     (S.daddr == S.la_addr, S.daddr - S.pcstk > 2, S.curlcntr == 1, == 2) were registered beside S
+     wherever S is written. Made from s_x1 they put the whole sequencer in front of a 24- / 32-bit
+     compare and were each fit's worse path: f1 s3431 x_op -> sf_c2 -1.425, f5 s3435 S.pcstkp ->
+     sf_le / sf_long -1.994 (that fit's worst). Net: D's compares are model2b's.
+  3. 37cee54f. sharc_fadd's denormal bound (lz1 = min(clz, ex - 1)) as "n_near's top ex bits are
+     zero", a mask from ex beside the count; misc_r / misc_a / misc_s loaded in every X clock
+     (only the landing reads them, the clock after x_fin).
+  4. 434f2928. D's access kind as each bit's OR of its address regions, the form's gate last
+     (no "unsupported, else kind" select after the adder); d_acc_ref checks it at every d_go.
+  5. 47756941. The store / ureg data's sequencer source (ur_sq) picked by the loop end's pop
+     (done) in the last gate (d_accwd_b kept as a node); dl's history select by ld_on alone.
+  6. 684ca5f7. A flag-pin condition (9-12: FLAG0 = the in FIFO empty, FLAG1 = the out FIFO at
+     16) is its pin, chosen last; every other condition through if_cond without the pins (it
+     reads them only for 9-12). d_cok_ref checks it at every d_go.
+  Build-wide, 2B-gated:
+  7. 9f56c0bb Model2.sdc: R842's game ID false path also names *|u_gameid|q[*] (matches nothing
+     on 2C / 2A). The proof is R842's, unchanged: q is written only on index 4 of a download
+     (ioctl_download && ioctl_wr && ioctl_index == 4), which every Model2B MRA sends first
+     (test_m2b_gameid refuses one that does not); at that time rom_loaded is 0 (the loader's
+     reset on mem_rst_n; rom_loaded rises only after the ROM stream ends and drains), so
+     cpu_rst_n = ... & rom_loaded & ... holds the i960 -- the only master that writes the 3D
+     tables (sd_wr needs cpu_sd_req) -- and every consumer R842 listed in reset for millions of
+     clocks after q's last change. The decode from q is combinational exactly as it was from
+     game_id; only the register's name changed in R1039.
+  8. 7c9f4a61 Model2.sv (B2 only): the 3D tables' CPU write (luma / 3D palette / colour xlat ->
+     m2_span_tex's lr / pal / xr-xb MLABs) takes r3d_lut_addr / r3d_lut_sel in every clock,
+     chosen by the windows' ranges; r3d_lut_we and r3d_lut_data as before. m2_span_tex writes
+     only on lut_we and the three windows are disjoint, so wherever the write happens the address
+     and select are the old ones. sim/video/tb_m2_lutw (new): both forms, every clock.
+  9. 0e8f7a60 m2_fb_wcomb WD_NOGO (m2_raster3d FBW_WD = B2): the mask word (pg_wd, and b_mk's
+     a_same update) from the pixels' own enables, not gated by c_go; both are read only where
+     c_go holds (pg_we needs b_wr; a_same needs c_go).
+  10. 05dca690 Model2.qsf: MAX_FANOUT on the CPU bridge's oc_tram_we / oc_pal_we (16) and half
+     (8): synthesis duplicates the register, the same value on the same clock.
+  11. 684ca5f7 Model2.sdc: R743's two-cycle Ir -> microAddr / nanoAddr for the 2B build's sound
+     68000 (m2_2a_sound u_cpu), applied only where the 2B SHARC exists. R743 named the Model 1
+     sound board's 68000, absent on 2B (critical warning in every 2B fit; s3431's second fit
+     -0.797 on it). Same fx68k: Ir and the micro / nano addresses load only on enT1 = enPhi1 & T4
+     & ~wClk; m2_2a_sound issues a phase enable only when none was issued the clock before
+     (EXACT 1: `!enPhi1 && !enPhi2` in issue; EXACT 0: a 2 x 11.2896 MHz accumulator), so enT1s are
+     at least eight clocks apart.
+  Ported from the 2C line, unchanged (R1021: bd200336 ca5b6e6d de64a13b c0f0eb36 0e31b0bc, from
+  fab2c9b9 8bbb958e 656285f7 6bcd1c54 563e86de; R1030: 0089d9b6 63a6dd36 61a9124e 60eb2114
+  df27afd2 ccc6e110, from 0e792ee1 b19e8269 88ef6ac8 a73877b3 b461397f e794ae24): the clipper's
+  plane test and interpolation operands, the projection's select, the SCSP timers' due adders, the
+  pairs' u2f as a normalising shift a stage before hu / hv (it replaces my own two-stage u2f,
+  c8864590, dropped before any fit used it), the span walk's box read a stage early and its queue
+  flags in registers, the frame writer's window test, the fill's 1/z tournament and numerator
+  shift. These are 2C's own commits; they are unconditional there, so they are here.
+
+*PROOF (every bench under 25 minutes on the loaded machine; numbers):*
+  * THE MITER (scratchpad tool mk_miter.py, the method of sim/miter/miter.py made for the SHARC so
+    the bench's hierarchical peeks still resolve): the new rtl/sharc beside model2b's (every module
+    and package renamed *_old) inside m2b_sharc and m2b_xbus, every output of both compared on
+    every clock edge ($fatal on the first difference; xbus's ext_rdata only in ext_ack's clock,
+    the one stated don't-care). Built into tb_m2b_sharc, so every bench below runs it.
+  * RANDOM PROGRAMS, lockstep with v1, PXIM 0 SKLR 0, 1 M words each: M2B_RP_PM / SKLR0 seeds
+    1-6, + SEQ 101-106, + SEQ + CURL (new) 201-206 -- 18 programs, MAME's rounding and the
+    manual's: 0 miter differences, 0 lockstep differences, every clock count model2b's (seed 1
+    2,589,533; 101 2,570,837; 201 2,599,970 ...). DM_AW 8 (the DM page through the cache, latency
+    1-200): seeds 1-3, 101, 201, 0 differ. The unsupported words: 19 of 19 flagged at 0x20084
+    with their reasons; --negcond's three out-of-map accesses under a false condition: not
+    flagged, 0 differ.
+  * BENCH-ONLY CHECKS added (none fired): the fetch address against s_x1.daddr at every read;
+    x_need against the misc unit's form; (while they existed) the registered loop-end flags
+    against S in every D clock; the access
+    kind (d_acc_ref, R1029's), the condition (d_cok_ref) and the store data's AND-OR at every d_go.
+  * THE GAME REPLAYS (the head, 4e7bc07e -- and 72c8c2bf, 684ca5f7, 47756941 before it, the same
+    numbers; MAME rounding, PXIM 0, SKLR 0):
+      Dead or Alive, all 150 s (R1027's capture, the 400-430 M trace in cap_doa_b): 501,777,265
+      words, 1,264,270,732 clocks, 2.5196 clk_sys a word (R1042's to the clock); 18,541,146 out
+      words, 0 differ; trace 30 M words, 0 differ; 19.8 min.
+      Fighting Vipers (PMB1_MAME 1), 500 M words: 1,277,257,981 clocks, 2.5545; 4,371,719 out
+      words 0 differ; 9,835,940 buffer / ROM reads at MAME's addresses; trace 20 M, 0 differ.
+      Sonic Championship, 500 M words: 1,279,552,477 clocks, 2.5591; 7,424,012 out words 0 differ;
+      7,479,724 reads at MAME's addresses; trace 20 M, 0 differ.
+      With the miter, the first 200 M words of each: 0 differences (DOA 503,745,104 clocks,
+      fvipers 510,558,056, schamp 506,338,721), 12-14 min each. The same runs passed on every
+      intermediate RTL (rounds 1-4).
+  * FLOAT UNITS: sharc_fadd 4 x 25 M vectors each rounding, 0 mismatches.
+  * PORTED 2C RETIMES at the 2B parameters, against model2b: m2_geometry (with the clipper and
+    the projection) miter under tb_m2_geometry, its MIPZ form and four MAME walks (w1000 / w3910
+    / w4000 / w9000; M10K_ROOM UV_HELD RES_CP 1): 595,138 / 913,234 / 902,738 / 512,404 /
+    450,389 / 624,590 cycles, 0 with an output differing. m2_raster3d miter (RECIP_M10K 1, and
+    FBW_WD 1 for change 9) on stcc_f3000, hotd_1808, orev_d1 and stcc_f1500 at DDR busy 150 /
+    hold 10 / texel latency 40: 4.88-4.90 M cycles each, 0 differing, PX md5s equal to the
+    unmodified build's. m2_scsp_regs random miter at TIMER 0 / 1 / 2, 4 M cycles each: 0.
+  * tb_m2_lutw (change 8): 4 x 10 M clocks, ~440 K table writes each, 0 differ.
+  * PLANTED FAULTS, each caught: SHARC -- DM read dropped in D, I8-15 or M8-15 from DAG1's
+    copy, fm_r replaced by ld_rav in the R port, the 11 form's br_db, x_need for FSUB, sf_c1 /
+    sf_c2 wrong (the registered flags, since taken back; sf_c2 caught only by the CURL programs: the old set never met CURLCNTR == 2 at a
+    loop end with an LCE condition), a ureg write not refreshing the flags (likewise CURL only),
+    the X1 write not refreshing them, xbus's read data from x_rd alone (DM_AW 8), the condition
+    gate dropped from the access kind, the address-map test without its condition (--negcond
+    only), a flag condition without its negation (DOA's replay, d_cok_ref at once), sharc_fadd's
+    mask off by one (11 + 11 of 2 M vectors). Ported -- u2f's first step's exponent bit (39,144 /
+    45,230 cycles differ), the span walk's box read a stage late (3,646,046), a fired timer's
+    count (1,180 / 284 / 791), the frame writer's two pixels swapped (3,650,393); tb_m2_lutw's
+    luma address bits shifted (8,015).
+  * LINT: make lint_top clean for 2B (M2_2C M2_2B), 2C and 2A; make lint_idx (2B) the same list
+    as model2b's but for line numbers. quartus_map --analyze_file on m2b_sharc / m2b_xbus /
+    the packages (0 errors); every fit's map is the analysis of the rest.
+
+*THE FITS (Quartus 17.0 Lite, the whole 2B build, seed-sweep one at a time in its own snapshot
+worktree; slack ns, worst over the four corners; clk_sys = general[1]; "paths" = clk_sys paths
+under 0 ns, quartus_sta -less_than_slack 0, capped at 20,000):*
+      fit (tree)                      seed   clk_sys  clk_mem  clk_x    HDMI     hold    ALM fitted   paths
+      model2b b246dcc5 (baseline)     s3431  -1.763   +0.336   +1.504   -0.425   +0.212  41,277      20,000+
+                                      s3435  -2.439   +0.497   +1.598   -0.443   +0.189  41,130      20,000+
+                                      s3430  -5.581   +0.060   +1.420   -0.405   +0.163  41,202      20,000+
+      f1 ccc6e110 (SHARC 1-2, SDC, ports)  s3431  -1.591  +0.786  +1.374  -0.594  +0.203  41,369  12,239
+                                      s3435  Quartus 17.0 fitter crash (segment violation)
+      f2 05dca690 (+3-5, MAX_FANOUT)  s3431  -1.402   +0.201   +2.073   -0.872   +0.182  41,436       1,713
+      f3 0e8f7a60 (+8, 9)             s3431  -1.644   +0.616   +1.416   -0.548   +0.247  41,388       2,415
+      f4 684ca5f7 (+6, 11)            s3431  fitter crash
+      f5 37b9f6d1 (+the gate last)    s3431  -1.552   +0.657   +2.069   -0.576   +0.162  41,451       1,753
+                                      s3435  -1.994   +0.555   +2.173   -0.689   +0.171  41,400      11,733
+      f6 4e7bc07e (address flags back in D; THE BRANCH's HEAD)
+                                      s3431  -1.135   +0.742   +1.216   -0.824   +0.229  41,374       4,996
+                                      s3435  -1.918   +0.532   +1.558   -0.516   +0.213  41,366       6,008
+                                      s3436  -2.191   -0.237   +1.158   +0.126   +0.128  41,329      15,829
+      ab2 = head + CONF_STR_BRAM 0    s3431  -1.649   +0.328   +1.871   -1.282   +0.185  41,452
+                                      s3435  -0.998   +0.853   +1.269   -0.293   +0.183  41,487
+                                      s3436  fitter crash
+      ab1 = head + M2_RECIP_LOGIC     s3431  internal error (STA) / s3435 routing past 90 min, killed / s3436 crash
+  (general[0] is clk_mem, general[3] the other core clock; HDMI is sys/'s ascal and osd -- not
+  this core's RTL and not touched.)
+
+*WHAT IS LEFT, AND WHY ONE NUMBER STAYS NEAR -1 TO -2:* the failing set shrank by an order of
+magnitude, but each fit's single worst path is a different family: f2's frame writer (b_idx ->
+vhi, -1.402), f3's fill-clear into span_tex's DSP enables (cl_on, one path, -1.644), f5's
+projection's state into the engine's (sst -> st, 15 paths, -1.552) -- each positive or absent in
+the other fits. That is placement on a 99 % ALM / 98 % M10K device, R1033's 2C finding again.
+The SHARC's own worst on the head: -0.927 (s3431; baseline -1.763), -0.986 (s3435; baseline
+-1.426), -1.613 (s3436, pm2 -> the DM address, that seed's poor placement of the SHARC). The head's
+worst paths are the frame writer's window test (s3431, b_key / b_idx -> vhi, -1.135), the frame
+clear into the texel queue's read pointer (s3435, 2 paths, 5.3 ns of route to one enable, -1.918)
+and the engine's state (s3436, E_STORE -> p0cur, -2.191).
+
+*THE TEXTURE / TILE RAM WRITE PATHS (the coordinator's lead mid-pass: oc_tram_we -> u_tram, s3422
+-1.596, as a suspect for Dead or Alive's untextured board picture):* u_tram is the TILE RAM
+(m2_cpu_bridge T_TRAM, 0x01000000-0x0101ffff, 64 M10K), not the texture RAM: the 2B / 2C
+texture sheets are SDRAM (T_SDRAM, 0x11000000-), written through the bridge's sd_* port. The
+textured polygons' colour path the CPU writes is the 3D tables -- luma, 3D palette, colour xlat
+-- through Model2.sv's r3d_lut_* into m2_span_tex's MLABs. Worst setup / hold per fit (ns):
+      fit / seed        bridge -> u_tram   bridge -> u_pal   bridge -> r3d_lut   r3d_lut -> raster3d
+      model2b s3412     +1.098 / +1.317    +0.979 / +1.715   +2.722 / +0.497     +5.122 / +0.516
+              s3422     -1.596 / +0.853    +1.300 / +1.649   +1.195 / +0.493     +2.141 / +0.552
+              s3424     +1.239 / +1.876    +2.124 / +1.658   +1.029 / +0.795     +6.092 / +0.607
+              s3425     +2.384 / +0.834    +2.055 / +1.558   +0.869 / +0.834     +5.049 / +0.552
+              s3426     +1.776 / +1.383    +3.376 / +1.366   +1.278 / +0.477     +4.423 / +0.621
+              s3430     -0.709 / +0.902    +0.328 / +1.749   +1.530 / +0.525     -1.336 / +0.514
+              s3431     +3.936 / +0.761    +3.830 / +1.212   -0.084 / +0.492     +2.872 / +0.714
+              s3435     +2.344 / +1.101    +3.135 / +0.888   -1.015 / +0.494     +3.264 / +0.547
+      f1 s3431          +1.619 / +1.138    +2.112 / +1.562   +1.152 / +0.493     +4.452 / +0.492
+      f2 s3431          +2.273 / +0.843    +2.243 / +0.675   +0.465 / +0.494     +2.096 / +0.608
+      f3 s3431          +2.664 / +0.745    +2.503 / +1.248   +2.538 / +0.440     +2.648 / +0.688
+      f5 s3431          +3.069 / +0.807    +2.646 / +1.321   +1.981 / +0.491     +4.766 / +0.604
+      f5 s3435          +3.394 / +0.880    +3.283 / +1.023   +2.241 / +0.493     +5.526 / +0.603
+      f6 s3431          +2.960 / +0.778    +3.236 / +1.429   +2.462 / +0.820     +2.739 / +0.601
+      f6 s3435          +3.354 / +0.821    +2.952 / +1.096   +1.533 / +0.762     +2.658 / +0.568
+      f6 s3436          +0.818 / +1.257    +2.524 / +1.106   +1.919 / +0.496     +3.841 / +0.573
+  So the tile RAM's write failed on two baseline seeds of eight (13 ns of route on one register,
+  s3422; half -> oc_din on s3430) -- placement -- and the 3D tables' write failed on the
+  baseline s3431 (-0.084) and s3435 (-1.015): sd_addr -> the luma map's row decode -> w_ls -> the
+  enable of r3d_lut_addr. If the board's Dead or Alive rbf was one of those, its luma / palette /
+  xlat writes may land at the wrong entry; the gameid -> r3d_lut "failures" on the same seeds
+  (-0.946 / -2.439) are false (game_id never changes while the i960 writes). Changes 8 and 10 are
+  for these; the board is Ben's to try.
+
+*THE AREA PASS's M10K MOVES, A / B (asked mid-pass: model2b went -0.782 at s3412, before R1038 /
+R1039, to ~-1.6 at s3422 with them; R952 had found the fill's reciprocal table in M10K slower on
+2C). On the branch's head 4e7bc07e, the same seeds, each piece alone, not committed:*
+  * ab1: M2_RECIP_LOGIC=1 (the fill's reciprocal and m2_persp_recip's tables back in LUTs, R1038 /
+    R1039 undone): quartus_map 39,425 -> 39,645 ALM needed (+220), block bits -10,368. NO FIT
+    COMPLETED IN THREE: s3431 Quartus internal error (STA sub-system, sta_scc.cpp:1041) after
+    18 min; s3435 still routing at 90 min, killed (the head's s3435 routed in ~20); s3436 fitter
+    segment violation. The head's three seeds all completed.
+  * ab2: hps_io CONF_STR_BRAM 0 (the OSD string back in logic, R1039 change 4 undone): map 39,425
+    -> 39,450 (+25; R1039 measured -107 for the move, inside its own +-50 map noise). Fitted
+    41,452 (s3431), 41,487 (s3435) -- 423-458 ALM to 100 %, positive; s3436 fitter segfault.
+        seed    clk_sys head / ab2     HDMI head / ab2     hold head / ab2
+        s3431   -1.135 / -1.649        -0.824 / -1.282     +0.229 / +0.185
+        s3435   -1.918 / -0.998        -0.516 / -0.293     +0.213 / +0.183
+        s3436   -2.191 / (crash)       +0.126 / -          +0.128 / -
+    ab2 s3435's worst: its own placement; the head's s3435 worst (cl_on -> the texel queue's
+    read pointer, 5.3 ns of route to one enable) is absent there, and s3431's ab2 worst is
+    elsewhere again.
+  So: neither move is shown to be the cause. The string's move is noise in both directions (-0.51
+  and +0.92 ns on two seeds, the map +25 ALM) and stays in M10K. The tables' move back to logic
+  could not be fitted at all in three tries (+220 ALM on a 99 % device: one try never finished
+  routing), so on this tree it is not an available fix either way; R1038's M10K form stays.
+  The s3412 -> s3422 step the coordinator saw also carried R1037's games and R1042 (the SHARC's
+  PM-bus forms, the new D paths this entry retimed) -- the A / B here does not separate those.
+  The m2b_gameid narrowing was not reverted: its only timing effect was the false path's name
+  (change 7), and branch 2b-ids edits that module.
+
+*AREA:* fitted 41,277 (baseline s3431) -> 41,369 / 41,436 / 41,388 / 41,451 / 41,374 (f1 / f2 / f3 / f5 /
+the head, s3431; the head's s3435 / s3436 41,366 / 41,329), of 41,910 -- 536-581 to 100 %; M10K 544 / 553 throughout (no RAM added: the four new SHARC copies are MLAB).
+
+*TRIED AND TAKEN BACK / FOUND ON THE WAY:*
+  * The loop end's compares registered from s_x1 (75c2a989) moved the failure, not removed it:
+    CURLCNTR's (x_op[38] / S.lstkp -> s_x1.curlcntr -> a 32-bit compare -> sf_c1 / sf_c2, -1.425
+    in f1) went back to D in 47756941; the address ones (sf_le / sf_long, -0.4 to -0.6 in f2-f5
+    s3431, then -1.994 and the worst path in f5 s3435) in 4e7bc07e. Net: model2b's D form.
+  * My own two-stage u2f (UV2, c8864590) duplicated R1030's 0e792ee1; dropped for 2C's.
+  * The DOA trace: the 400-430 M words' strace is cap_doa_b/strace.bin (30 M records), not
+    cap_doa's (40 M from word 0). The first full replay compared against the wrong file (every
+    word "differs"); rerun right.
+  * The random programs never wrote CURLCNTR inside a loop (M2B_RP_SEQ's writes land at the top
+    level, where the write is dropped) nor met CURLCNTR == 2 at a loop end with an LCE test; the
+    "LCE" conditions I first wrote (0x0e / 0x1e) are FALSE / TRUE -- LCE is 0x0f. M2B_RP_CURL fixes
+    both; two planted faults were caught only after it.
+  * R743's sound-68000 exception and R842's game ID false path had both silently stopped
+    applying on 2B (different hierarchy / register name); the other critical warnings in a 2B fit
+    (the Z80, the YM3438) name logic a 2B build does not have.
+  * Quartus 17.0 crashed (fitter segment violation / internal error) on f1 s3435, f4 s3431,
+    ab1 s3431 and s3436, ab2 s3436 -- six of eighteen launches.
+  * Physical synthesis settings and LogicLock were not tried: R194 (duplication costs nothing
+    here) and R201 (LogicLock is a subscription feature in Lite) already answer them.
+
+*DIFFERENT FROM THE BRIEF, PLAINLY:* (0) no clean 2B build: every completed seed of every tree fails clk_sys -- the best are -0.998 (ab2 s3435, not
+committed) and -1.135 (the head, s3431); HDMI fails on all but f6 s3436 (+0.126, whose clk_sys is -2.191); (1) the R1021 / R1030 retimes are
+2C's own commits, ported as they are (unconditional, as on model2c) rather than B2-gated -- the 2C
+line is unchanged by them, but this tree's 2C / 2A forms now match model2c's in those files; every
+NEW shared change (8, 9, MAX_FANOUT, the 68000 SDC) is 2B-gated; (2) the miters are new tools in
+the scratchpad (mk_miter.py, geo_mit.sh, r3d2b.sh, the fault runners), not committed -- the
+committed benches are tb_m2_lutw, M2B_RP_CURL and --negcond; (3) the replays with the miter run
+the first 200 M words of each game (25-minute rule with the old core beside); the full replays run
+without it; (4) the HDMI clock fails on every fit but one (-0.29 to -1.28) in sys/'s ascal / osd, not
+touched; (5) MAX_FANOUT is a qsf assignment, not RTL; (6) no HANDOFF.md update (nothing pushed).
+
+*NOT SETTLED:* a clean seed; the projection / engine state, the frame writer's window test and
+the fill-clear -> span_tex enable families (each worst on one fit); the board.
+
