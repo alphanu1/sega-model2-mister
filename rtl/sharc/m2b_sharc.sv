@@ -508,10 +508,14 @@ logic [31:0] d_ursq1, d_ursq0, d_accwd_chk;
 logic        d_cok_ref;                     // benches: the condition as R1029 evaluated it
 logic        d_cok1, d_cok0;                // R1048: cok if the loop end pops / if it does not
 logic [2:0] d_acc_nc;                        // R1044: D's access kind before its condition (now the bench's)
-(* keep *) logic [2:0] d_acc_hit;            // R1048: ... before any gate
+logic [2:0]  d_acc_hit;                     // R1048: ... before any gate
+logic [31:0] d_sum_i, d_sum_o;              // R1048: the 32-bit offset's sum and the others'
+logic        d_s3;
+logic        d_bad_x;                       // (the benches': D's bad)
+(* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
-(* keep *) logic       d_mbad_nc;            // ... and the address map's test
+logic        d_mbad_nc;                     // ... and the address map's test
 logic        d_unsup_x;                     // D's flag and reason, the condition last (R1029)
 logic [3:0]  d_why_x;
 logic        d_unsup_ref;                   // benches: R1028's form of them
@@ -556,6 +560,32 @@ function automatic logic [24:0] pm_b1(input logic [23:0] a);
     w = a[14:0]; sl = w[14:12];
     return {sl > 3'd4, 24'h28000 + 24'({3'b000, w[11:0]} + (sl[2:1] == 2'd0 ? 15'h0 : sl[2:1] == 2'd1 ? 15'h3000 : 15'h6000) +
                                         (sl[0] ? 15'h2000 : 15'h0))};
+endfunction
+
+// R1048: an address's access-kind bits (d_acc_hit's, the gate apart) and its map test (bad), as
+// D made them from mem_a -- here a function, so D can make them from each form's sum and choose
+// by the form last (acc_sum_i / acc_sum_o below)
+function automatic logic [3:0] acc_bits(input logic [31:0] a, input logic pmb, input logic wr);
+    logic z24, z18, h_iop, h_dm, h_dx, h_fin, h_fout, h_ext, p_pm, p_dm, p_dx, bd;
+    logic [24:0] pa;
+    logic [3:0]  k;
+    pa = pm_b1(a[23:0]);
+    z24 = a[31:25] == 7'h0;
+    z18 = z24 && a[24:18] == 7'h0;
+    h_iop = z18 && a[17:8] == 10'h0;
+    h_dm = z18 && a[17:15] >= 3'd5 && a[14:DM_AW] == '0;
+    h_dx = z18 && a[17:15] >= 3'd5 && a[14:DM_AW] != '0;
+    h_fin = z24 && !a[24] && (a[23:22] == 2'd1 || a[23:22] == 2'd2) && !wr;
+    h_fout = z24 && ((!a[24] && a[23:22] == 2'd3) || (a[24] && a[23:22] == 2'd0)) && wr;
+    h_ext = z24 && a[24] && a[23:21] >= 3'd2 && a[23:21] <= 3'd6;
+    p_pm = !pa[24] && pa[23:PM_AW] == 24'(32'h20000 >> PM_AW);
+    p_dm = !pa[24] && pa[23:18] == 6'h0 && pa[17:15] >= 3'd5 && pa[14:DM_AW] == '0;
+    p_dx = !pa[24] && pa[23:18] == 6'h0 && pa[17:15] >= 3'd5 && pa[14:DM_AW] != '0;
+    if (pmb) begin k = pm_kind(pa[23:0]); bd = k[3] || pa[24]; end
+    else begin k = dm_kind(a, wr); bd = k[3]; end
+    return {bd, pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext),
+                pmb ? p_pm : (h_fin || h_fout),
+                pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout)};
 endfunction
 
 // D (R1029): the word's decisions -- the loop end's, the condition -- and everything X needs:
@@ -1015,7 +1045,13 @@ always_comb begin
         s3 = sd || op[47:45] == 3'b101;                     // ... and indirect: I + the 32-bit
         // (R1044: M from either DAG's copy, the g bit in the select, beside the read)
         off = ({32{s1 && !d_pg}} & m1_rd) | ({32{s1 && d_pg}} & m3_rd) | ({32{s2}} & sext6(op[32:27])) | ({32{s3}} & op[31:0]);
-        mem_a = ({32{!sd}} & i1x_rd) + off;
+        // R1048: the 32-bit offset's forms (s3) on an adder of their own, its immediate straight
+        // from the opcode, and the others' (M / the 6-bit / none) on the other; the form chooses
+        // after the sums -- mem_a is the same value ((s1 / s2) and s3 are never both)
+        d_sum_i = ({32{!sd}} & i1x_rd) + op[31:0];
+        d_sum_o = i1x_rd + (({32{s1 && !d_pg}} & m1_rd) | ({32{s1 && d_pg}} & m3_rd) | ({32{s2}} & sext6(op[32:27])));
+        d_s3 = s3;
+        mem_a = s3 ? d_sum_i : d_sum_o;
     end
     // (R1029: as one AND-OR over the sources, the selects from the opcode beside the reads; the
     // same as (wd_sel == 0) ? R : (wd_sel == 1) ? ur_all : the immediate, wd_sel being 0-2)
@@ -1084,6 +1120,9 @@ always_comb begin
         end
     end
 
+    // R1048: the kind's bits and the map test of each sum (the form chooses last, below)
+    d_kb_i = acc_bits(d_sum_i, pmb, mem_wr);
+    d_kb_o = acc_bits(d_sum_o, pmb, mem_wr);
     // the memory access: its kind from the address (the one late decision of D)
     // (R1042: a PM-bus access by the PM space's map, its block-1 words at the DM-bus address of
     // the same word)
@@ -1113,16 +1152,18 @@ always_comb begin
         logic exm;
         exm = (op[47:46] == 2'b11) ? !cok :
               (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
-        d_mbad_nc = mem_f && bad;                // (R1044: kept; the condition in the last gate)
+        d_mbad_nc = mem_f && bad;                // (R1044's; the benches' since R1048)
         // (R1048: the loop end's pop chooses between the two outcomes' tests, last)
         begin
             logic e1, e0;
             e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
             e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
-            mbad = (done ? (e1 && d_mbad_nc) : (e0 && d_mbad_nc)) || bad2;
+            // (R1048: the map test of each sum, the form and the pop choosing last; d_mbad_nc the benches')
+            mbad = (done ? (e1 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3])) : (e0 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]))) || bad2;
         end
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
+    d_bad_x = bad;
     x.acc_wr = mem_wr;
     // circular buffers (L != 0) are not done
     // (the index from the opcode alone, R1029: x.pmod_i is the same where x.pmod is set)
@@ -1206,7 +1247,8 @@ always_comb begin
                 e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
                 g1 = mem_f && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1;
                 g0 = mem_f && !d_rzb && e0;
-                x.acc = done ? (d_acc_hit & {3{g1}}) : (d_acc_hit & {3{g0}});
+                // (R1048: each sum's bits, d_kb_i / d_kb_o, the form choosing in the same last gate)
+                x.acc = done ? ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1}}) : ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}});
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
@@ -2353,6 +2395,8 @@ generate if (BENCH) begin : g_stk_check
     end
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
+    always_ff @(posedge clk) if (st == ST_D && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
+        $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
     always_ff @(posedge clk) if (d_go && ur_sel[7:4] == 4'h6 && d_urall_ref != dx_urall)
