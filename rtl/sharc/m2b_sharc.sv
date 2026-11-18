@@ -351,6 +351,7 @@ typedef struct packed {
     // ureg write with a value known in D
     logic        uw;                        // the value is acc_wd's (no data access in these forms)
     logic [7:0]  uw_reg;
+    logic        ld_ast, uw_ast;            // R1048: ld_ureg / uw_reg is ASTAT (0x7c), from D
     // system register bit operation (X: on the register's value then)
     logic        bitop;
     logic [2:0]  bit_kind;
@@ -734,6 +735,7 @@ always_comb begin
     x.ld_ureg = (op[47:45] == 3'b010) ? op[30:23] : op[39:32];
     x.ld_dst = t1 ? op[36:33] : op[26:23];
     x.uw_reg = (op[47:44] == 4'b0111) ? op[30:23] : op[39:32];
+    x.ld_ast = x.ld_ureg == 8'h7c; x.uw_ast = x.uw_reg == 8'h7c;     // (R1048: X's ASTAT write, decoded here)
     x.pmod_i = (op[47:40] == 8'b00000100) ? {op[38], op[32:30]} : (op[47:39] == 9'b000101100) ? {op[38], op[34:32]}
                                                                  : {pmb, op[43:41]};
     casez (op[47:39])
@@ -958,7 +960,10 @@ always_comb begin
     end
     // decoded whatever the condition (R1029: the result-register rules below off the condition's
     // path); the enables and the reasons only if it runs
-    if (comp_f && comp != 23'h0) begin
+    // R1048: without the 23-bit zero test in front: every form below but the fixed ALU's
+    // unsupported one has a nonzero field bit in its own test (comp[22], cu != 0, or a nonzero
+    // ALU opcode), so a zero field (the NOP) reaches only that branch, which now tests it itself
+    if (comp_f) begin
         logic [7:0] cop;
         logic [1:0] cu;
         cop = comp[19:12]; cu = comp[21:20];
@@ -985,7 +990,9 @@ always_comb begin
             case (cu)
             2'd0: begin
                 if (!cop[7]) begin
-                    if (cop[7:4] == 4'h7 || !alu_fixed_ok(cop)) begin x.unsup |= comp_on; cbad = 1'b1; if (comp_on) x.why = U_COMP; end
+                    if (cop[7:4] == 4'h7 || !alu_fixed_ok(cop)) begin
+                        if (comp != 23'h0) begin x.unsup |= comp_on; cbad = 1'b1; if (comp_on) x.why = U_COMP; end
+                    end
                     else begin x.fix_on = comp_on; x.fix_op = cop; x.fix_k = fix_k_of(cop); x.rn = rnn; end
                 end else if (cop[7:4] == 4'hf) begin
                     x.unsup |= comp_on; cbad = 1'b1; if (comp_on) x.why = U_COMP;   // float dual add / subtract
@@ -2143,7 +2150,7 @@ always_ff @(posedge clk) begin
                           4'hb: begin
                               mode1 <= uv;
                           end
-                          4'hc: if (XC.fl_on || XC.fix_on || XC.sh_on) begin ld_ua <= 1'b1; end else a = uv;
+                          4'hc: if (XC.fl_on || XC.fix_on || XC.sh_on) begin ld_ua <= 1'b1; end   // (a: below, R1048)
                           4'hd: if (PXIM) imask <= uv;
                           4'he: if (XC.fl_on || XC.fix_on || XC.sh_on) begin ld_us <= 1'b1; end else k = (k & STK_BITS) | (uv & ~STK_BITS);
                           default: ;
@@ -2156,6 +2163,15 @@ always_ff @(posedge clk) begin
                           endcase
                     default: ;
                     endcase
+                end
+                // R1048: ASTAT written by this word's bit operation / ureg move / load -- the same as
+                // uw && ur == 0x7c above, from D's decodes (ld_ast / uw_ast) and the bit operation's
+                // register, not through ur's select and decode
+                begin
+                    logic as;
+                    as = (XC.bitop && !x_uns) ? XC.bit_reg == 4'hc : (XC.uw && !x_uns) ? XC.uw_ast : (XC.ld_u && x_ldv && XC.ld_ast);
+                    if (BENCH && as != (uw && ur == 8'h7c)) $fatal(1, "ASTAT write %b, ur's %b", as, uw && ur == 8'h7c);
+                    if (as && !(XC.fl_on || XC.fix_on || XC.sh_on)) a = uv;
                 end
                 // the sequencer and STKY's stack bits
                 S <= sq;
