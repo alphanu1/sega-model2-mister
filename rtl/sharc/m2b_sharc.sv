@@ -514,6 +514,7 @@ logic [31:0] d_sum_i, d_sum_o;              // R1048: the 32-bit offset's sum an
 logic        d_s3;
 logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
+logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
@@ -1143,9 +1144,15 @@ always_comb begin
         end
     end
 
-    // R1048: the kind's bits and the map test of each sum (the form chooses last, below)
-    d_kb_i = acc_bits(d_sum_i, pmb, mem_wr);
-    d_kb_o = acc_bits(d_sum_o, pmb, mem_wr);
+    // R1048: the kind's bits and the map test of each sum (the form chooses last, below), the
+    // direction from the opcode's bits directly (d_wrf) -- the handler's mem_wr is a case's select,
+    // five LUTs deep; the two are the same wherever the form has an access (mem_f; benches check)
+    d_wrf = op[47] ? (op[46] ? op[44] : op[45] ? op[40] : op[44] ? 1'b1 : op[31])     // 11: op[44]; 101: op[40]; 1001: 1; 1000: op[31]
+                   : (op[46] ? (op[45] ? op[39] : op[31])                              // 0110: op[39]; 010: op[31]
+                             : (op[45] ? op[44] : op[40]));                            // 001: op[44]; 000100: op[40]
+    d_wrf_ref = mem_wr; d_memf_x = mem_f;
+    d_kb_i = acc_bits(d_sum_i, pmb, d_wrf);
+    d_kb_o = acc_bits(d_sum_o, pmb, d_wrf);
     // the memory access: its kind from the address (the one late decision of D)
     // (R1042: a PM-bus access by the PM space's map, its block-1 words at the DM-bus address of
     // the same word)
@@ -2436,7 +2443,8 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
-    always_ff @(posedge clk) if (st == ST_D && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
+    always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
+    always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
