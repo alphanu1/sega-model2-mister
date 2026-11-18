@@ -111,7 +111,12 @@ module m2_geometry #(
   // R1036: each pool client reads the multiply and add results from its own
   // copy of the result register (m2_fp_pool RES_CP) -- the same value on the
   // same cycle, no cycle added. 0: every client reads the one register (2A).
-  parameter bit RES_CP = 1'b0
+  parameter bit RES_CP = 1'b0,
+  // R1048: the pairs' u2f over two stages (the 8- and 4-bit steps, then the rest), so hu / hv are
+  // final six cycles after Q_IDLE's take, not five -- still three before the clipper's earliest
+  // read (clip_in_valid, the ninth), which latches them; a restarted walk's writes still land
+  // after the old one's. 0: R1030's one stage. (The 2B build.)
+  parameter bit UV3 = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -704,6 +709,26 @@ module m2_geometry #(
   logic [31:0] uvf_u, uvf_v;
   logic [1:0]  uvf_i;
   logic        uvf_ok;
+  // R1048 (UV3): the first two normalising steps' result, registered
+  logic [15:0] uva_mu, uva_mv;
+  logic [1:0]  uva_zu, uva_zv, uva_i;
+  logic        uva_nu, uva_nv, uva_ok;
+  function automatic logic [18:0] u2f_a(input logic [15:0] n);   // {n != 0, z[3:2], m}
+    logic [15:0] m;
+    logic [1:0]  z;
+    m = n; z = 2'd0;
+    if (m[15:8] == 8'd0) begin m = {m[7:0], 8'd0};   z[1] = 1'b1; end
+    if (m[15:12] == 4'd0) begin m = {m[11:0], 4'd0}; z[0] = 1'b1; end
+    return {n != 16'd0, z, m};
+  endfunction
+  function automatic logic [31:0] u2f_b(input logic nz, input logic [1:0] zh, input logic [15:0] mi);
+    logic [15:0] m;
+    logic [3:0]  z;
+    m = mi; z = {zh, 2'b00};
+    if (m[15:14] == 2'd0) begin m = {m[13:0], 2'd0}; z[1] = 1'b1; end
+    if (!m[15])           begin m = {m[14:0], 1'b0}; z[0] = 1'b1; end
+    return nz ? {1'b0, 8'(8'd142 - {4'd0, z}), m[14:0], 8'd0} : 32'd0;
+  endfunction
   logic [31:0] ptex;  logic [7:0] plum;
   // R828c: the polygon's |dotp| (latched with it) and its no-mip flag, set in
   // Q_CHK from hzmax and handed to the clipper with the texture state.
@@ -767,6 +792,7 @@ module m2_geometry #(
       for (int k = 0; k < 4; k++) begin hu[k] <= 32'd0; hv[k] <= 32'd0; puv[k] <= 32'd0; end
       uvsel <= 32'd0; uvk <= 2'd0; uvsel_i <= 2'd0; uvrun <= 1'b0; uvsel_v <= 1'b0;   // R952
       uvf_u <= 32'd0; uvf_v <= 32'd0; uvf_i <= 2'd0; uvf_ok <= 1'b0;                  // R1029-2C
+      uva_mu <= '0; uva_mv <= '0; uva_zu <= '0; uva_zv <= '0; uva_i <= '0; uva_nu <= 1'b0; uva_nv <= 1'b0; uva_ok <= 1'b0;   // R1048
       ptex <= 32'd0; plum <= 8'd0; pdotp <= 12'd0; pmipz <= 1'b0;   // R828c
       pcoef <= 12'd0;                                              // R905
       c_bad <= 1'b0; c_zmode <= 2'd0;
@@ -790,10 +816,15 @@ module m2_geometry #(
         uvk <= uvk + 2'd1;
         if (uvk == 2'd3) uvrun <= 1'b0;
       end
-      uvf_u  <= u2f(uvsel[15:0]);                // R1029-2C: converted here,
-      uvf_v  <= u2f(uvsel[31:16]);
-      uvf_i  <= uvsel_i;
-      uvf_ok <= uvsel_v;
+      // R1048 (UV3): the first two steps a stage before the rest
+      {uva_nu, uva_zu, uva_mu} <= u2f_a(uvsel[15:0]);
+      {uva_nv, uva_zv, uva_mv} <= u2f_a(uvsel[31:16]);
+      uva_i  <= uvsel_i;
+      uva_ok <= uvsel_v;
+      uvf_u  <= UV3 ? u2f_b(uva_nu, uva_zu, uva_mu) : u2f(uvsel[15:0]);   // R1029-2C: converted here,
+      uvf_v  <= UV3 ? u2f_b(uva_nv, uva_zv, uva_mv) : u2f(uvsel[31:16]);
+      uvf_i  <= UV3 ? uva_i : uvsel_i;
+      uvf_ok <= UV3 ? uva_ok : uvsel_v;
       if (uvf_ok) begin                          // written a cycle on
         hu[uvf_i] <= uvf_u;
         hv[uvf_i] <= uvf_v;
