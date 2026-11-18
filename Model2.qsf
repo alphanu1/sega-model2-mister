@@ -1045,3 +1045,12 @@ set_global_assignment -name VERILOG_MACRO "M2_2B=1"
 # music), in its all-M10K form (Model2.sv lists the other forms)
 set_global_assignment -name VERILOG_MACRO "M2_2C_DSB=1"
 set_global_assignment -name VERILOG_MACRO "M2_NO_2A_MANX_MOTION=1"
+
+# R1044: the CPU bridge's tile / palette RAM write enables and its halfword select (the address
+# and data selects into u_tram / u_pal, 64 + 16 M10K wherever the fitter finds them on a 98%
+# M10K device) at most 16 sinks each: synthesis duplicates the register, the same value on the
+# same cycle. s3422: oc_tram_we -> u_tram 12.99 ns of route alone (-1.596); s3430: half ->
+# oc_din -> u_tram -0.709.
+set_instance_assignment -name MAX_FANOUT 16 -to "emu:emu|m2_cpu_bridge:u_cpu_bridge|oc_tram_we"
+set_instance_assignment -name MAX_FANOUT 16 -to "emu:emu|m2_cpu_bridge:u_cpu_bridge|oc_pal_we"
+set_instance_assignment -name MAX_FANOUT 8 -to "emu:emu|m2_cpu_bridge:u_cpu_bridge|half"
