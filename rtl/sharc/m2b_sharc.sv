@@ -2294,8 +2294,10 @@ always_comb begin
     dm_dsel = st == ST_D && !clr_on;
     dm_xa = clr_on ? clr_n[DM_AW-1:0] : XC.acc_addr[DM_AW-1:0];
     t1 = o[47:45] == 3'b001;
-    pm_xa = (x_done && XC.acc == A_PM && XC.acc_wr) ? XC.acc_addr[PM_AW-1:0] :
-            (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
+    // (X: the old select's store term, x_done && A_PM && write -> XC.acc_addr, is the same address
+    // -- a PM-bus store is never type 1's first pass, whose access is the DM move's (dm_kind:
+    // never A_PM) -- so x_done stays off the address; the bench check below compares every clock)
+    pm_xa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
     for (int k = 0; k < 3; k++) begin
         pm_ia[k] = (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
                    (st == ST_X) ? pm_xa : pm_hidx;
