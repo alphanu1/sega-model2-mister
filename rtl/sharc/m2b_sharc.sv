@@ -1407,13 +1407,19 @@ always_comb begin
     d_faxz = comp[22] ? rf_rd[2][30:23] == 8'h00 : rf_rd[0][30:23] == 8'h00;
     // R1048: the shifter's field length and decoder bit from D's sh_val (as m2b_sharc_xu makes
     // them from XC.sh_imm ? x_op's immediate : op_y, the values those registers are loaded with)
+    // (R1048: for the immediate and for R[ry] apart, the form's sh_imm choosing last -- the decode
+    // no longer in front of the clamp)
     begin
-        logic [31:0] sv;
-        logic [5:0]  ln;
-        sv = x.sh_imm ? {20'h0, op[30:27], op[15:8]} : rf_rd[1];
-        ln = sv[11:6];
-        d_shpl = (ln > 6'd32) ? 6'd32 : ln;
-        d_shpdj = (x.sh_op[5:4] == 2'b11) ? sv[4:0] : 5'(d_shpl - 6'd1);
+        logic [31:0] si, sr;
+        logic [5:0]  li, lr, pli, plr;
+        logic [4:0]  dji, djr;
+        si = {20'h0, op[30:27], op[15:8]}; sr = rf_rd[1];
+        li = si[11:6]; lr = sr[11:6];
+        pli = (li > 6'd32) ? 6'd32 : li; plr = (lr > 6'd32) ? 6'd32 : lr;
+        dji = (x.sh_op[5:4] == 2'b11) ? si[4:0] : 5'(pli - 6'd1);
+        djr = (x.sh_op[5:4] == 2'b11) ? sr[4:0] : 5'(plr - 6'd1);
+        d_shpl = x.sh_imm ? pli : plr;
+        d_shpdj = x.sh_imm ? dji : djr;
     end
     d_fayz = comp[22] ? rf_rd[3][30:23] == 8'h00 : rf_rd[1][30:23] == 8'h00;
     d_stx = x.acc_wd;
