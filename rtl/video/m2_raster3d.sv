@@ -178,6 +178,7 @@ module m2_raster3d #(
   parameter bit PAY_HOLD = 1'b0,
   // R1018: the fill mask's valid bits as group flags and LUT RAM (2C)
   parameter bit MKV_LUT = 1'b0,
+  parameter bit FBW_WD = 1'b0,   // R1044: m2_fb_wcomb WD_NOGO (the 2B build)
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -1208,7 +1209,7 @@ module m2_raster3d #(
       end
 
       if (FB_WCOMB) begin : g_wcomb
-        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512), .FTB(FTB)) u_fbw (
+        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512), .FTB(FTB), .WD_NOGO(FBW_WD)) u_fbw (
           .clk(clk), .rst_n(rst_n),
           .fb_sel(fb_draw),
           .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),

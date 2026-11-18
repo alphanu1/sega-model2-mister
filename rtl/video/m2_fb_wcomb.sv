@@ -60,7 +60,13 @@ module m2_fb_wcomb #(
   // R683: FRONT TO BACK. The word being written asks the fill mask about its
   // two pixels (pg_*) and writes only the ones not yet painted -- first write
   // wins, model2rd.ipp's `if (fill[x] == 0)`. 0: every pixel is written.
-  parameter bit          FTB    = 1'b0
+  parameter bit          FTB    = 1'b0,
+  // R1044: the mask word written (pg_wd) and kept (b_mk on a_same) with the
+  // pixels' own enables, not gated by c_go: both are read only where c_go
+  // holds (pg_we needs b_wr, b_wr needs c_go; a_same needs c_go), so the
+  // value is the same wherever it is used, and the window test leaves the
+  // path into the fill mask's MLABs. 0: gated as before. (The 2B build.)
+  parameter bit          WD_NOGO = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -226,7 +232,7 @@ module m2_fb_wcomb #(
   wire           c_go  = b_v && (!(lo_in || hi_in) || c_fits || other_free);
   wire           c_wr  = c_go && c_any;
   wire  [1:0]    b_wr  = c_go ? {hi_on, lo_on} : 2'b00;
-  wire  [31:0]   b_wd  = b_mk | (32'(b_wr) << {b_off, 1'b0});
+  wire  [31:0]   b_wd  = b_mk | (32'(WD_NOGO ? {hi_on, lo_on} : b_wr) << {b_off, 1'b0});
   // A moves a word into B when B is empty or is emptying this cycle
   wire           a_go   = (ist == I_RUN) && (!b_v || c_go);
   // R808: A takes its next span when idle, or as its last word leaves --

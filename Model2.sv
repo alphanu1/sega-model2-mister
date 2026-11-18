@@ -8152,7 +8152,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH),   // R940
               .QNX(M2A ? 512 : 0),   // R962
-              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2)) u_raster3d (   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
+              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2), .FBW_WD(B2)) u_raster3d (   // R1044: FBW_WD   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
