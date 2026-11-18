@@ -640,7 +640,7 @@ module m2_raster_fill #(
   // saves.
   logic [15:0] den_a;
   wire [31:0] den_rcp;
-  m2_persp_recip u_denr (.clk(clk), .rst_n(rst_n), .in_d(den_a), .out_q(den_rcp));
+  m2_persp_recip #(.M10K(RECIP_M10K)) u_denr (.clk(clk), .rst_n(rst_n), .in_d(den_a), .out_q(den_rcp));   // R1039: its table too
 
   // R442: ONE MULTIPLIER, MUXED -- NOT SIX.
   //

@@ -4615,6 +4615,17 @@ localparam bit R3D_UVSH = M2A;
 // fits s1457-s1462 ran with "M2_RECIP_LOGIC=1" (the LUT form) and timed
 // better. VERILOG_MACRO "M2_RECIP_M10K=1" puts the two blocks back;
 // "M2_RECIP_LOGIC=1" is now the default and changes nothing.
+// R1043: THE M10K FORM ON 2C AGAIN (and with it m2_persp_recip's table, R1039),
+// for the room: the 2C fitter packs the device full above a ~39,300-ALM map
+// (R1043), and R952's timing finding was two seeds. "M2_RECIP_LOGIC=1" keeps
+// the LUT form on 2C.
+`ifdef M2_2C
+`ifndef M2_RECIP_LOGIC
+`ifndef M2_RECIP_M10K
+`define M2_RECIP_M10K
+`endif
+`endif
+`endif
 `ifdef M2_RECIP_M10K
 localparam bit R3D_RECIP_M10K = M2A;
 `else
