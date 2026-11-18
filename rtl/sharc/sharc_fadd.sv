@@ -29,12 +29,18 @@
 //         1), then a leading-zero shift clamped at the denormal boundary (stage 2). Exact.
 
 module sharc_fadd #(
-    parameter bit MAME_RND = 1'b0       // 1: MAME's (host) rounding, round to nearest always
+    parameter bit MAME_RND = 1'b0,      // 1: MAME's (host) rounding, round to nearest always
+    // R1048: the operands' zero-exponent tests (the input flush) from the caller's registers, made
+    // a clock earlier from the values x / y are loaded with (xz == (x[30:23] == 0) in every clock
+    // x is used); 0 makes them here
+    parameter bit PRE = 1'b0
 ) (
     input  logic        clk,
     input  logic        en,             // advance the pipeline
     input  logic [31:0] x,
     input  logic [31:0] y,
+    input  logic        xz,             // PRE: x[30:23] == 0
+    input  logic        yz,             // PRE: y[30:23] == 0
     input  logic        sub,
     input  logic        avg,            // FAVG (R1028): x + y halved (sub ignored)
     input  logic        trunc,          // MODE1.TRUNCATE: round to zero (MAME_RND 0); overflow gives the largest finite
@@ -80,14 +86,15 @@ function automatic logic [26:0] align(input logic [23:0] m, input logic [7:0] d,
 endfunction
 
 always_comb begin
-    xf = flush(x);
-    yf = flush(y) ^ (sub && !avg ? SIGN : 32'h0);
+    // (R1048: flush with the zero tests possibly a register: the same as flush(x) / flush(y))
+    xf = (PRE ? xz : x[30:23] == 8'h00) ? (x & SIGN) : x;
+    yf = ((PRE ? yz : y[30:23] == 8'h00) ? (y & SIGN) : y) ^ (sub && !avg ? SIGN : 32'h0);
     nan1 = (sub && !avg) ? nan_sub(x, y) : nan_add(x, y);
 
-    ea = (xf[30:23] == 0) ? 8'd1 : xf[30:23];
-    eb = (yf[30:23] == 0) ? 8'd1 : yf[30:23];
-    ma = {xf[30:23] != 0, xf[22:0]};
-    mb = {yf[30:23] != 0, yf[22:0]};
+    ea = (PRE ? xz : xf[30:23] == 0) ? 8'd1 : xf[30:23];
+    eb = (PRE ? yz : yf[30:23] == 0) ? 8'd1 : yf[30:23];
+    ma = {PRE ? !xz : xf[30:23] != 0, xf[22:0]};
+    mb = {PRE ? !yz : yf[30:23] != 0, yf[22:0]};
     dab = {1'b0, ea} - {1'b0, eb};
     dba = {1'b0, eb} - {1'b0, ea};
     // on the carry chain (Aggressive Area builds a compare as a chain of LUTs)
