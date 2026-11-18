@@ -25,6 +25,7 @@ Vi960_fpmisc *dut = nullptr;
 uint64_t checks = 0, fails = 0;
 const int MAX_REPORT = 14;
 bool ref_mame = false;           // +ref=mame: MAME's rule, expected to FAIL now
+bool ref_mame64 = false;         // R1045 +ref=mame64: MAME's 64-bit overflow alone, the same
 union U { double d; uint64_t u; };
 // Reinterpret raw bits as a double. `U{x}.d` initialises the FIRST member, so
 // for an integer x it CONVERTS rather than reinterprets and every NaN check
@@ -41,6 +42,14 @@ const bool FLUSH = true;
 const bool FLUSH = false;
 #endif
 uint64_t n_sub = 0;
+// R1045: -DTB_LONG checks a LONG 1 unit's 64-bit integer (cvtzril's; lng
+// high) against the PRM at 64 bits, beside every 32-bit check.
+#ifdef TB_LONG
+const bool LONGI = true;
+#else
+const bool LONGI = false;
+#endif
+uint64_t n_long = 0;
 
 enum { OP_CMP=0, OP_LOGB=1, OP_CVTIR=2, OP_CVTRI=3, OP_CVTZRI=4, OP_ROUND=5, OP_SCALE=6 };
 
@@ -54,7 +63,7 @@ void fail(const char *w, const char *f, uint64_t g, uint64_t want) {
 void set(int op, double A, double B, int32_t I, int rm) {
   U ua{A}, ub{B};
   dut->op = op; dut->a = ua.u; dut->b = ub.u;
-  dut->ai = (uint32_t)I; dut->rmode = rm; dut->eval();
+  dut->ai = (uint32_t)I; dut->rmode = rm; dut->lng = 0; dut->eval();
   // R575: one clock edge, so the STAGED build's register takes the operands.
   // The combinational build ignores clk and reads the same thing.
   dut->clk = 0; dut->eval(); dut->clk = 1; dut->eval();
@@ -112,6 +121,40 @@ void chk_cvtri(double A, int rm, bool trunc_mode) {
     fail(trunc_mode ? "cvtzri" : "cvtri", "yi", dut->yi, want);
   }
 }
+// R1045: the 64-bit integer (cvtzril; cvtri's mode-rounded form too, which
+// is cvtril's arithmetic though i960_top does not decode cvtril). PRM 12-23:
+// a NaN stores the maximum negative integer; 11-50: an unrepresentable value
+// (an infinity included) the maximum positive or negative by sign. MAME's
+// (int64_t) is x86's indefinite, 0x8000_0000_0000_0000, for all of them.
+uint64_t want64(double A, int rm) {
+  if (std::isnan(A)) return 0x8000000000000000ull;
+  const double r = rti(A, rm);
+  if (r >= 9223372036854775808.0) return (ref_mame || ref_mame64) ? 0x8000000000000000ull : 0x7fffffffffffffffull;
+  if (r < -9223372036854775808.0) return 0x8000000000000000ull;
+  return uint64_t(int64_t(r));
+}
+void chk_cvtl(double A, int rm, bool trunc_mode) {
+  if (!LONGI || (FLUSH && is_sub(A))) return;
+  U ua{A};
+  dut->op = trunc_mode ? OP_CVTZRI : OP_CVTRI; dut->a = ua.u; dut->b = 0;
+  dut->ai = 0; dut->rmode = rm; dut->lng = 1; dut->eval();
+  dut->clk = 0; dut->eval(); dut->clk = 1; dut->eval();
+  const uint64_t got = (uint64_t(dut->yh) << 32) | dut->yi;
+  const uint64_t want = want64(A, trunc_mode ? 3 : rm);
+  ++checks; ++n_long;
+  if (got != want) {
+    if (fails < MAX_REPORT) std::printf("    [cvtl in] A=%.17g (%016llx) rm=%d trunc=%d\n", A,
+                                        (unsigned long long)ua.u, rm, trunc_mode);
+    fail(trunc_mode ? "cvtzril" : "cvtril", "yh:yi", got, want);
+  }
+  dut->lng = 0;
+}
+void chk_cvt_all(double A) {     // every conversion form, every mode
+  for (int rm = 0; rm < 4; ++rm) {
+    chk_cvtri(A, rm, false); chk_cvtri(A, rm, true);
+    chk_cvtl(A, rm, false);  chk_cvtl(A, rm, true);
+  }
+}
 void chk_round(double A, int rm) {
   if (FLUSH && is_sub(A)) return;
   if (is_sub(A)) ++n_sub;
@@ -138,6 +181,7 @@ int main(int argc, char **argv) {
     if (!std::strncmp(argv[i], "+random=", 8)) n = std::strtoull(argv[i]+8, nullptr, 10);
     if (!std::strncmp(argv[i], "+seed=", 6))   seed = std::strtoull(argv[i]+6, nullptr, 10);
     if (!std::strcmp(argv[i], "+ref=mame"))    ref_mame = true;
+    if (!std::strcmp(argv[i], "+ref=mame64"))  ref_mame64 = true;
     if (!std::strncmp(argv[i], "+ties=", 6))   tie_span = std::strtoll(argv[i]+6, nullptr, 10);
   }
   dut = new Vi960_fpmisc;
@@ -205,8 +249,53 @@ int main(int argc, char **argv) {
     for (double d : {-1.5, -0.5, 0.0, 0.5, 1.5})
       for (int rm = 0; rm < 4; ++rm) {
         chk_cvtri(b + d, rm, false); chk_cvtri(b + d, rm, true);
+        chk_cvtl(b + d, rm, false);  chk_cvtl(b + d, rm, true);
       }
   std::printf("  int32 boundary walked, both directions, all rounding modes\n");
+
+  // R1045: THE CONVERSION TABLE (PRM 11-50, 12-23), directed: quiet and
+  // signalling NaNs of both signs (doubles, and singles as i960_top widens
+  // them), the infinities, the largest double and single, just past the
+  // int32 and int64 ranges both ways, the zeros, subnormals and the
+  // smallest normal -- each in every conversion form and rounding mode.
+  {
+    const uint64_t c0 = checks, f0 = fails;
+    const uint64_t bits[] = {
+      0x7ff8000000000000ull, 0xfff8000000000000ull,     // +-qNaN
+      0x7ff0000000000001ull, 0xfff0000000000001ull,     // +-sNaN
+      0x7ff7ffffffffffffull, 0xfff7ffffffffffffull,     // +-sNaN, every payload bit
+      0x7fffffffffffffffull, 0xffffffffffffffffull,     // +-qNaN, every payload bit
+      0x7ff0000020000000ull, 0xfff0000020000000ull,     // +-sNaN single 0x7f800001 widened
+      0x7ffc000000000000ull,                            // a qNaN single 0x7fe00000 widened
+      0x7ff0000000000000ull, 0xfff0000000000000ull,     // +-inf
+      0x7fefffffffffffffull, 0xffefffffffffffffull,     // +-DBL_MAX
+      0x47efffffe0000000ull, 0xc7efffffe0000000ull,     // +-FLT_MAX
+      0x0000000000000000ull, 0x8000000000000000ull,     // +-0
+      0x0000000000000001ull, 0x8000000000000001ull,     // +-smallest subnormal
+      0x000fffffffffffffull, 0x800fffffffffffffull,     // +-largest subnormal
+      0x0010000000000000ull, 0x8010000000000000ull,     // +-smallest normal
+    };
+    for (uint64_t b : bits) chk_cvt_all(asd(b));
+    const double two31 = 2147483648.0, two63 = 9223372036854775808.0;
+    for (double v : {two31, two31 - 1.0, two31 + 1.0, two31 - 0.5, two31 + 0.5,
+                     4294967295.5, 4294967296.0, 4503599627370495.5, 4503599627370496.0,
+                     9007199254740992.0, 9007199254740994.0, 1e18,
+                     two63, std::nextafter(two63, 0.0), std::nextafter(two63, INFINITY),
+                     2.0 * two63, two63 / 2.0, std::nextafter(two63 / 2.0, INFINITY),
+                     9.3e18, 1e19, 1e300, 0.5, 1.5, 2.5, 0.49999999999999994})
+      for (double sg : {1.0, -1.0}) chk_cvt_all(sg * v);
+    // every exponent from below the subnormals to past int64, each power of
+    // two and its neighbours one ulp either side, both signs
+    for (int e = -1080; e <= 80; ++e)
+      for (double sg : {1.0, -1.0}) {
+        const double p = sg * std::ldexp(1.0, e);
+        chk_cvt_all(p); chk_cvt_all(std::nextafter(p, INFINITY)); chk_cvt_all(std::nextafter(p, -INFINITY));
+        chk_cvt_all(p * 1.5);
+      }
+    std::printf("  R1045 conversion table + every exponent      : %llu checks, %llu mismatches%s\n",
+                (unsigned long long)(checks - c0), (unsigned long long)(fails - f0),
+                LONGI ? "" : " (32-bit forms; built without TB_LONG)");
+  }
 
   for (int64_t I : {0LL,1LL,-1LL,2147483647LL,-2147483648LL,12345678LL,-12345678LL}) chk_cvtir((int32_t)I);
 
@@ -215,7 +304,8 @@ int main(int argc, char **argv) {
     U x; x.u = rng(); U z; z.u = rng();
     const int rm = int(rng() & 3);
     chk_cmp(x.d, z.d); chk_logb(x.d);
-    chk_round(x.d, rm); chk_cvtri(x.d, rm, rng() & 1);
+    chk_round(x.d, rm);
+    { const bool t = rng() & 1; chk_cvtri(x.d, rm, t); chk_cvtl(x.d, rm, t); }
     chk_cvtir((int32_t)rng());
     chk_scale(x.d, int32_t(rng() % 200) - 100);
   }
@@ -242,9 +332,22 @@ int main(int argc, char **argv) {
       chk_cmp(x.d, z.d); chk_cmp(z.d, x.d); chk_logb(x.d);
       const int rm = int(r4() & 3);
       chk_round(x.d, rm); chk_cvtri(x.d, rm, false); chk_cvtri(x.d, rm, true);
+      chk_cvtl(x.d, rm, false); chk_cvtl(x.d, rm, true);
     }
     std::printf("  subnormals (every leading-zero count): %llu checks with a subnormal operand\n",
                 (unsigned long long)n_sub);
+  }
+
+  // R1045: random doubles across the whole int64 band (exponents 0..70), the
+  // 64-bit forms' every shift
+  if (LONGI) {
+    std::mt19937_64 r5(seed ^ 0x1045);
+    for (uint64_t k = 0; k < n; ++k) {
+      U x; x.u = (r5() & 0x800fffffffffffffull) | (uint64_t(1023 + r5() % 71) << 52);
+      const int rm = int(r5() & 3);
+      chk_cvtl(x.d, rm, true); chk_cvtl(x.d, rm, false);
+    }
+    std::printf("  R1045 64-bit: %llu checks of the 64-bit integer in all\n", (unsigned long long)n_long);
   }
 
   dut->final(); delete dut;

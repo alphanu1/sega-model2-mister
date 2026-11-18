@@ -554,6 +554,24 @@ obj_i960_fpmisc/Vi960_fpmisc: $(FPX_RTL) $(TB)/tb_i960_fpmisc.cpp
 	$(VBUILD) --top-module i960_fpmisc -CFLAGS "-O2 -I../$(TB)" \
 	  --Mdir obj_i960_fpmisc -o Vi960_fpmisc $(FPX_RTL) $(TB)/tb_i960_fpmisc.cpp
 
+# R1045: the 64-bit integer (cvtzril) -- LONG 1, combinational and as
+# i960_top builds it (STAGED 1); every 32-bit check too.
+# +ref=mame64 must FAIL (MAME's 0x8000_0000_0000_0000 for a positive overflow).
+.PHONY: test_i960_fpmisc_long
+test_i960_fpmisc_long: obj_i960_fpmisc_long/Vi960_fpmisc obj_i960_fpmisc_longs/Vi960_fpmisc
+	@echo "== test i960_fpmisc LONG (R1045)"
+	./obj_i960_fpmisc_long/Vi960_fpmisc $(TEST_ARGS)
+	@echo "== test i960_fpmisc LONG STAGED (R1045)"
+	./obj_i960_fpmisc_longs/Vi960_fpmisc $(TEST_ARGS)
+	@echo "== test i960_fpmisc LONG against MAME's 64-bit overflow rule -- must FAIL"
+	@if ./obj_i960_fpmisc_long/Vi960_fpmisc +ref=mame64 > obj_i960_fpmisc_long/mame.txt; then tail -2 obj_i960_fpmisc_long/mame.txt; echo "  NOT SEEN"; exit 1; else grep -m2 -A1 'cvtl in' obj_i960_fpmisc_long/mame.txt; tail -2 obj_i960_fpmisc_long/mame.txt; echo "  seen"; fi
+obj_i960_fpmisc_long/Vi960_fpmisc: $(FPX_RTL) $(TB)/tb_i960_fpmisc.cpp
+	$(VBUILD) --top-module i960_fpmisc -GLONG=1 -CFLAGS "-O2 -I../$(TB) -DTB_LONG" \
+	  --Mdir obj_i960_fpmisc_long -o Vi960_fpmisc $(FPX_RTL) $(TB)/tb_i960_fpmisc.cpp
+obj_i960_fpmisc_longs/Vi960_fpmisc: $(FPX_RTL) $(TB)/tb_i960_fpmisc.cpp
+	$(VBUILD) --top-module i960_fpmisc -GLONG=1 -GSTAGED=1 -CFLAGS "-O2 -I../$(TB) -DTB_LONG" \
+	  --Mdir obj_i960_fpmisc_longs -o Vi960_fpmisc $(FPX_RTL) $(TB)/tb_i960_fpmisc.cpp
+
 test_i960_fpcvt: obj_i960_fpcvt/Vi960_fpcvt
 	@echo "== test i960_fpcvt"
 	./obj_i960_fpcvt/Vi960_fpcvt $(TEST_ARGS)
@@ -855,6 +873,21 @@ test_i960_top_vc: obj_i960_top_vc/Vi960_top
 obj_i960_top_vc/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
 	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
 	  --Mdir obj_i960_top_vc -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
+
+# R1045: the conversions through the whole CPU (+cvtl: cvtzril, cvtri,
+# cvtzri on the conversion table's singles and doubles) on every build that
+# decodes cvtzril, against the reference's PRM rule; and the planted fault
+# (I960_FAULT_CVTL: cvtzril's high word cvtzri's sign again) -- must FAIL.
+.PHONY: test_i960_top_cvtl test_i960_top_cvtl_fault
+test_i960_top_cvtl: obj_i960_top_vc/Vi960_top
+	@echo "== test i960_top VC +cvtl (R1045)"
+	./obj_i960_top_vc/Vi960_top +vc +cvtl +random=4000 $(TEST_ARGS)
+test_i960_top_cvtl_fault: obj_i960_top_cvf/Vi960_top
+	@echo "== planted fault: cvtzril's high word cvtzri's sign (the old result) -- must FAIL"
+	@if ./obj_i960_top_cvf/Vi960_top +vc +cvtl $(TEST_ARGS) > obj_i960_top_cvf/run.txt; then tail -3 obj_i960_top_cvf/run.txt; echo "  NOT CAUGHT"; exit 1; else grep -m3 -i mismatch obj_i960_top_cvf/run.txt; tail -3 obj_i960_top_cvf/run.txt; echo "  caught"; fi
+obj_i960_top_cvf/Vi960_top: $(TOP_RTL) $(I960)/i960_fptrans_rom.svh $(TB)/tb_i960_top.cpp $(TB)/i960_cpu_ref.h
+	$(VBUILD) --top-module i960_top -GVC=1 --public-flat-rw -CFLAGS "-O2 -I../$(TB) -DTB_VC" \
+	  +define+I960_FAULT_CVTL --Mdir obj_i960_top_cvf -o Vi960_top $(TOP_RTL) $(TB)/tb_i960_top.cpp
 
 # R997 (2A's R927): the Model 2 core's i960 as Model2.sv builds it (VC=1)
 # with the chip's register ring (RC_RING=1, RC_FRAMES=8) against the
