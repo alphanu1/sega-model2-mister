@@ -43,6 +43,19 @@ SKLR0_CASES = [
 ]
 
 
+# R1044: words that must NOT be flagged -- a data address outside the map under a FALSE condition
+# (the access is not made, so neither is the address map's test). --negcond writes them as
+# n<k>.bin, listed in negcases.txt; run them +lock and expect "unsupported: none".
+NEG_CASES = [
+    ('IF FALSE R0 = DM(I0, M0) (pre-modify), I0 = 0x200000 outside the map',
+     [0x0f1000200000, 0x0f2000000000], (0b010 << 45) | (0x0e << 33), 0),
+    ('IF FALSE R1 = DM(I1, 2) (immediate modify, pre), I1 = 0x200000',
+     [0x0f1100200000], (0b0110 << 44) | (1 << 41) | (0x0e << 33) | (2 << 27) | (1 << 23), 0),
+    ('IF FALSE DM(I2, M2) = R2 (post-modify), I2 = 0x01e00000 outside the map',
+     [0x0f1201e00000, 0x0f2200000000], (0b010 << 45) | (1 << 44) | (2 << 41) | (2 << 38) | (0x0e << 33) | (1 << 31) | (2 << 23), 0),
+]
+
+
 def prog_events(pre, word):
     base = 0x20080
     prog = [(0x0f << 40) | (0x7b << 32) | 0x18000] + pre
@@ -75,6 +88,13 @@ def main():
         open(p, 'wb').write(prog_events(pre, word))
         lines.append('%s 20084 %d %s' % (p, why, name))
     open(os.path.join(out, 'cases.txt'), 'w').write('\n'.join(lines) + '\n')
+    if '--negcond' in sys.argv[2:]:
+        neg = []
+        for k, (name, pre, word, why) in enumerate(NEG_CASES):
+            p = os.path.join(out, 'n%d.bin' % k)
+            open(p, 'wb').write(prog_events(pre, word))
+            neg.append('%s %s' % (p, name))
+        open(os.path.join(out, 'negcases.txt'), 'w').write('\n'.join(neg) + '\n')
     print('%d programs' % len(lines))
 
 
