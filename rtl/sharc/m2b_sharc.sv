@@ -512,6 +512,7 @@ logic [2:0]  d_acc_hit;                     // R1048: ... before any gate
 logic [31:0] d_sum_i, d_sum_o;              // R1048: the 32-bit offset's sum and the others'
 logic        d_s3;
 logic        d_bad_x;                       // (the benches': D's bad)
+logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
@@ -1110,6 +1111,21 @@ always_comb begin
             if (t1d && op[36:33] == x.rm) x.rm_we = 1'b0;
             if (t1d && op[36:33] == x.ra) x.ra_we = 1'b0;
             if (x.fl_mul && x.rm_we && x.ra_we && x.rm == x.ra && !x.fl_comp) x.rm_we = 1'b0;  // Ra written after Rm
+            // R1048: the same enable from each of Rm's two sources apart -- the multifunction's
+            // comp[15:12] (with Ra = comp[11:8]) and the single FMUL's comp[11:8] -- each with its
+            // own compares, the form choosing last (it was: the form -> x.rm -> the compares)
+            begin
+                logic wa, wb, ca, cb, raa;
+                logic [3:0] ma, mb;
+                ma = comp[15:12]; mb = comp[11:8];
+                wa = comp_f && comp != 23'h0 && comp[22] && comp[21:19] == 3'b011;
+                wb = comp_f && comp != 23'h0 && !comp[22] && comp[21:20] == 2'd1 && comp[19:12] == 8'h30;
+                ca = (kv && k == ma) || (t1p && op[26:23] == ma) || (t1d && op[36:33] == ma);
+                cb = (kv && k == mb) || (t1p && op[26:23] == mb) || (t1d && op[36:33] == mb);
+                raa = !((kv && k == mb) || (t1p && op[26:23] == mb) || (t1d && op[36:33] == mb));   // Ra = comp[11:8]
+                d_rmwe_ref = x.rm_we;
+                x.rm_we = (wa && !ca && !(raa && ma == mb && !x.fl_comp)) || (wb && !cb);
+            end
             // the fixed / shifter result lands after X (R1029), after the word's load: a load or ureg
             // move to its register wins (MAME's order), as for a float result
             x.rn_we = !(kv && k == x.rn);
@@ -2278,8 +2294,10 @@ always_comb begin
     dm_dsel = st == ST_D && !clr_on;
     dm_xa = clr_on ? clr_n[DM_AW-1:0] : XC.acc_addr[DM_AW-1:0];
     t1 = o[47:45] == 3'b001;
-    pm_xa = (x_done && XC.acc == A_PM && XC.acc_wr) ? XC.acc_addr[PM_AW-1:0] :
-            (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
+    // (X: the old select's store term, x_done && A_PM && write -> XC.acc_addr, is the same address
+    // -- a PM-bus store is never type 1's first pass, whose access is the DM move's (dm_kind:
+    // never A_PM) -- so x_done stays off the address; the bench check below compares every clock)
+    pm_xa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
     for (int k = 0; k < 3; k++) begin
         pm_ia[k] = (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
                    (st == ST_X) ? pm_xa : pm_hidx;
@@ -2395,6 +2413,7 @@ generate if (BENCH) begin : g_stk_check
     end
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
+    always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
     always_ff @(posedge clk) if (st == ST_D && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
