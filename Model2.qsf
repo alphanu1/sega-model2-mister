@@ -1113,27 +1113,6 @@ set_location_assignment M10K_X49_Y36_N0 -to "ascal:ascal|altsyncram:o_dpram_rtl_
 set_location_assignment M10K_X58_Y35_N0 -to "ascal:ascal|altsyncram:o_dpram_rtl_0|altsyncram_32k1:auto_generated|ram_block1a8"
 set_location_assignment M10K_X58_Y34_N0 -to "ascal:ascal|altsyncram:o_dpram_rtl_0|altsyncram_32k1:auto_generated|ram_block1a0"
 
-# R1043: the sound board's M10K and DSP blocks bottom left, out of the scaler's corner
-set_location_assignment M10K_X38_Y1_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|altsyncram:chip_rtl_0|altsyncram_56p1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y2_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:g_fifo.fifo_l_rtl_0|altsyncram_ftr1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y3_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:g_fifo.fifo_r_rtl_0|altsyncram_ftr1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y4_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:g_wram.wl0_rtl_0|altsyncram_r0p1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y5_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:g_wram.wl1_rtl_0|altsyncram_r0p1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y6_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:g_wram.wl2_rtl_0|altsyncram_r0p1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y7_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:g_wram.wl3_rtl_0|altsyncram_t0p1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y8_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:misc_rtl_0|altsyncram_1ve1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y9_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:vram_rtl_0|altsyncram_19p1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y10_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:vram_rtl_0|altsyncram_19p1:auto_generated|ram_block1a10"
-set_location_assignment M10K_X38_Y11_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:vram_rtl_0|altsyncram_19p1:auto_generated|ram_block1a20"
-set_location_assignment M10K_X38_Y12_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|altsyncram:win_rtl_0|altsyncram_0ve1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y13_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_z80:u_z80|altsyncram:rf_h_rtl_0|altsyncram_ut22:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y14_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_z80:u_z80|altsyncram:rf_l_rtl_0|altsyncram_vt22:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y15_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_z80:u_z80|altsyncram:uent_rtl_0|altsyncram_hqe1:auto_generated|ram_block1a0"
-set_location_assignment M10K_X38_Y16_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_z80:u_z80|altsyncram:urom_rtl_0|altsyncram_9pe1:auto_generated|ram_block1a0"
-set_location_assignment DSP_X32_Y2_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|Mult0~mac"
-set_location_assignment DSP_X32_Y4_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|Mult1~8"
-set_location_assignment DSP_X32_Y6_N0 -to "emu:emu|m2_dsb_2c:g_dsb.u_dsb2c|dsb_board:u_dsb|dsb_mpeg:u_mpeg|Mult2~8"
-
 # R1043: fitter effort -- placement and routing work harder for timing; no design change.
 # With the anchors above, the first seed fitted this way (s4711) closed every clock.
 set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
