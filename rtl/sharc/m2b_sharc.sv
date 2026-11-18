@@ -249,6 +249,13 @@ typedef struct packed {
 } seq_t;
 seq_t S;
 seq_t S_dbg;                                // benches: S as the word that left X last left it
+// R1044: the loop end's compares on S, made where S is written and registered beside it (D used
+// to make them from S, before the loop end, its pop and the word's condition): S.daddr ==
+// S.la_addr, S.daddr - S.pcstk > 2, S.curlcntr == 1, S.curlcntr == 2 (BENCH checks them in D)
+logic sf_le, sf_long, sf_c1, sf_c2;
+function automatic logic [3:0] s_flags(input seq_t s);
+    return {s.daddr == s.la_addr, s.daddr - s.pcstk > 24'd2, s.curlcntr == 32'd1, s.curlcntr == 32'd2};
+endfunction
 
 // the PC stack (30 used of 32) and the loop stacks (6 of 8): MLAB (m2b_lutram, R1028), the top
 // of each in S. One write each at X's end; the reads are D's, at addresses from S (the stack
@@ -586,16 +593,16 @@ always_comb begin
 
     // ---------------------------------------------------------------- the loop end (S alone, its condition)
     // s.pc after the queue shift is S.daddr
-    le = (S.stk & LSEM) == 0 && S.daddr == S.la_addr;
+    le = (S.stk & LSEM) == 0 && sf_le;
     le_cnt = S.la_type != 2'd0;
-    le_long = S.daddr - S.pcstk > 24'd2;
-    if (le_cnt) done = S.curlcntr == 32'd1;                     // CURLCNTR - 1 == 0
+    le_long = sf_long;
+    if (le_cnt) done = sf_c1;                                   // CURLCNTR - 1 == 0
     else begin
         logic dl, ds;
         // the condition on ASTAT three words back for a loop longer than two (MAME); both
         // evaluated, the loop's length choosing (R1029: the length's compare is the late one)
-        dl = do_cond((st == ST_D && ld_on) ? ah2 : ah3, flg, alusat, S.curlcntr != 32'd1, S.la_code);
-        ds = do_cond(astat, flg, alusat, S.curlcntr != 32'd1, S.la_code);
+        dl = do_cond((st == ST_D && ld_on) ? ah2 : ah3, flg, alusat, !sf_c1, S.la_code);
+        ds = do_cond(astat, flg, alusat, !sf_c1, S.la_code);
         done = le_long ? dl : ds;
     end
     if (le && !le_cnt && !le_long) d_need_astat |= cond_astat(S.la_code);
@@ -614,8 +621,8 @@ always_comb begin
     pcstk1 = (done && S.pcstkp != 6'd0 && S.pcstkp <= 6'd30) ? (!pz1 ? pcs_p2 : 24'hFFFFFF) : S.pcstk;
     // CURLCNTR != 1 after the loop end, the three cases compared in parallel
     if (done) lce_ne1 = !lz1 ? lcs_p2ne1 : 1'b1;
-    else if (le && le_cnt) lce_ne1 = S.curlcntr != 32'd2;
-    else lce_ne1 = S.curlcntr != 32'd1;
+    else if (le && le_cnt) lce_ne1 = !sf_c2;
+    else lce_ne1 = !sf_c1;
     // the ureg source (every form that reads one names it in ur_sel), after the loop end: the
     // sequencer's for both outcomes of its pop, the pop choosing (R1029: last)
     begin
@@ -648,7 +655,7 @@ always_comb begin
     begin
         logic l1, l0, c1, c0;
         l1 = (S.lstkp != 3'd1) ? lcs_p2ne1 : 1'b1;                  // after a pop
-        l0 = (le && le_cnt) ? S.curlcntr != 32'd2 : S.curlcntr != 32'd1;
+        l0 = (le && le_cnt) ? !sf_c2 : !sf_c1;
         c1 = (op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond);
         c0 = (op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l0, op[35:31]) : if_cond(astat, flg, alusat, l0, cond);
         cok = done ? c1 : c0;
@@ -1589,6 +1596,10 @@ logic [1:0] x_cnt, x_need;
 // (R1044: from D's registers, XC.need_fl, not through the misc unit's decode; the old form is
 // the benches' check)
 assign x_need = XC.fl_on ? XC.need_fl : XC.sh_on ? 2'd1 : 2'd0;
+generate if (BENCH) begin : g_sflag_check
+    always_ff @(posedge clk) if (!reset && st == ST_D && {sf_le, sf_long, sf_c1, sf_c2} != s_flags(S))
+        $fatal(1, "S's flags %b, S's compares %b", {sf_le, sf_long, sf_c1, sf_c2}, s_flags(S));
+end endgenerate
 generate if (BENCH) begin : g_need_check
     always_ff @(posedge clk) if (st == ST_X && x_need != ((XC.fl_on && XC.fl_misc) ? xu_mx :
                                  (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0))
@@ -1814,6 +1825,7 @@ always_ff @(posedge clk) begin
         S.curlcntr <= 32'hFFFF_FFFF; S.lcntr <= 32'h0;
         S.la_addr <= 24'hFFFFFF; S.la_code <= 5'h1f; S.la_type <= 2'd3;
         S.stk <= PCEM | SSEM | LSEM;
+        {sf_le, sf_long, sf_c1, sf_c2} <= 4'b0100;   // s_flags of the above (0x20005 - 0xFFFFFF > 2)
         stky <= PCEM | SSEM | LSEM;
         astat <= 32'h0; mode1 <= 32'h0; mode2 <= 32'h0; irptl <= 32'h0; imask <= 32'h3;
         ustat1 <= 32'h0; ustat2 <= 32'h0; syscon <= 32'h10; px <= 48'h0;
@@ -1876,7 +1888,7 @@ always_ff @(posedge clk) begin
         ST_X: begin
             if (x_ext_on && ext_ack && XC.acc == A_EXT) x_ext_on <= 1'b0;
             // an unsupported word (D's, or X's own below): one capture, of the word in X
-            if (x_first && !x_fin) S <= s_x1;       // (X's end below otherwise)
+            if (x_first && !x_fin) begin S <= s_x1; {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(s_x1); end   // (X's end below otherwise)
             // R1042: type 1's second pass, its PM move: the access fields from XC.acc2, the store
             // data the register read in the first (port E at x_op[26:23]); a DM-RAM read or an
             // external access first waits a clock (x_p2w: the read issued; the request dropped once)
@@ -1942,6 +1954,7 @@ always_ff @(posedge clk) begin
                 end
                 // the sequencer and STKY's stack bits
                 S <= sq;
+                if (x_first) {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(s_x1);   // (sq is S otherwise)
                 if (BENCH) S_dbg <= sq;                 // the benches' view: S after this word
                 k = (k & ~STK_BITS) | (sq.stk & STK_BITS);
                 astat <= a; stky <= k;
@@ -1991,6 +2004,7 @@ always_ff @(posedge clk) begin
             default: if (sw.lstkp < 3'd6) sw.lcntr = us_pv;
             endcase
             S <= sw;
+            {sf_le, sf_long, sf_c1, sf_c2} <= s_flags(sw);
             if (BENCH) S_dbg <= sw;
             us_pw <= 1'b0;
         end
