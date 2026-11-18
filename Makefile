@@ -3359,6 +3359,26 @@ obj_snd2a$(SCSP_SFX)/Vm2_2a_sound: $(SND2A_RTL) $(SCSP_DIR)/scsp_uc.svh $(SCSP_H
 	  -GPHI_NUM=225792 -GPHI_DEN=$(SND2A_MHZ)0000 -GT44_NUM=441 -GT44_DEN=$(SND2A_MHZ)0000 -CFLAGS -DCLK_MHZ=$(SND2A_MHZ) \
 	  $(SCSP_DEFS) --top-module m2_2a_sound --Mdir obj_snd2a$(SCSP_SFX) $(SND2A_RTL) sim/sound/tb_m2_2a_sound.cpp
 
+# R1048: test_m2_2a_sound with sim/sound/fx68k_nano_chk.sv bound into fx68k -- the proof of
+# Model2.sdc's two-cycle nanoLatch -> ALU-latch exception (no enT3 the clock after nanoLatch
+# changes, no two enPhi1 in a row). Same SND_IMG / SCSP_CAP / SND_S as test_m2_2a_sound.
+.PHONY: test_m2_2a_nano
+test_m2_2a_nano: obj_snd2a_nano/Vm2_2a_sound
+	@echo "== test m2_2a_sound with the nanoLatch two-cycle check (R1048)"
+	@cp -f rtl/sound/fx68k/microrom.mem rtl/sound/fx68k/nanorom.mem $(SCSP_HEX) obj_snd2a_nano/
+	@cd obj_snd2a_nano && SND_IMG=$(abspath $(SND_IMG)) SCSP_CAP=$(abspath $(SCSP_CAP)) ./Vm2_2a_sound | grep -E 'nano_chk|PASS|FAIL'
+
+obj_snd2a_nano/Vm2_2a_sound: $(SND2A_RTL) $(SCSP_DIR)/scsp_uc.svh $(SCSP_HEX) sim/sound/tb_m2_2a_sound.cpp sim/sound/fx68k_nano_chk.sv
+	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-DECLFILENAME -Wno-fatal -I$(SCSP_DIR) -Irtl/sound/fx68k \
+	  -CFLAGS "-O2 -std=c++17" -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-WIDTHEXPAND -Wno-SYNCASYNCNET \
+	  -Wno-PINCONNECTEMPTY -Wno-VARHIDDEN -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
+	  -Wno-UNOPTFLAT -Wno-MULTIDRIVEN -Wno-LATCH -Wno-BLKANDNBLK -Wno-ALWCOMBORDER --no-assert-case \
+	  -Wno-WIDTH -Wno-UNSIGNED -Wno-CMPCONST -Wno-REALCVT -Wno-SELRANGE -Wno-IMPLICIT -Wno-ASCRANGE \
+	  -Wno-SIDEEFFECT -Wno-EOFNEWLINE -Wno-PROCASSINIT -Wno-GENUNNAMED \
+	  -GRAM_BASE=25\'h12C0000 -GROM_BASE=25\'h1260000 -GSMP_BASE=25\'h1A00000 -GTIMER=2 \
+	  -GPHI_NUM=225792 -GPHI_DEN=$(SND2A_MHZ)0000 -GT44_NUM=441 -GT44_DEN=$(SND2A_MHZ)0000 -CFLAGS -DCLK_MHZ=$(SND2A_MHZ) \
+	  $(SCSP_DEFS) --top-module m2_2a_sound --Mdir obj_snd2a_nano $(SND2A_RTL) sim/sound/fx68k_nano_chk.sv sim/sound/tb_m2_2a_sound.cpp
+
 # R859: THE 2A BOOT WITH SOUND: as test_m2_boot_2a, and the 2A sound board
 # (A2_SOUND: the 68000 on VF2's sound program and the SCSP) on the i8251's far
 # end instead of the silent stand-in, as Model2.sv builds it. Runs inside its
