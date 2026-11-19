@@ -42,7 +42,11 @@ module m2_fb_read #(
   // draw) and the reads queue behind those writes inside the HPS controller.
   // Four buffers, fetched LA lines ahead: LA-1 lines of slack.
   parameter int unsigned LA     = 3,
-  parameter int unsigned V_TOTAL = 424
+  parameter int unsigned V_TOTAL = 424,
+  // R1048: the target's successor (tgt_n) for each scan mode kept in registers loaded with tgt_y,
+  // il choosing between them -- the same tgt_n (no add and compare between tgt_y and pend /
+  // hungry). 0: as before. (The 2B build.)
+  parameter bit          TGTN = 1'b0
 ) (
   input  logic        clk,        // DDR3 side
   input  logic        rd_clk,     // video side -- the mixer reads here
@@ -188,7 +192,8 @@ module m2_fb_read #(
   // >= , not ==: the reset target (383) is past a field's last line (191), and
   // chasing it fetched a whole field of lines after every switch into
   // interlace (tb_m2_raster3d M2_R3D_IL: 192 lines landed late at start)
-  wire  [8:0] tgt_n = (tgt_y >= last) ? 9'd0 : tgt_y + 9'd1;
+  logic [8:0] tgtn_p, tgtn_i;            // R1048 (TGTN): tgt_n progressive / interlaced
+  wire  [8:0] tgt_n = TGTN ? (il ? tgtn_i : tgtn_p) : ((tgt_y >= last) ? 9'd0 : tgt_y + 9'd1);
   wire        pend  = (next_y != tgt_n);
   assign hungry = pend || busy;
   typedef enum logic [1:0] { R_IDLE, R_REQ, R_FILL } st_t;
@@ -201,6 +206,7 @@ module m2_fb_read #(
       st <= R_IDLE; m_req <= 1'b0; wp <= 9'd0; y_r <= 9'd0;
       busy <= 1'b0; have <= 1'b0;
       next_y <= 9'd0; tgt_y <= 9'(SCR_LINES - 1); f_r <= 1'b0; tgt_f <= 1'b0;
+      tgtn_p <= 9'd0; tgtn_i <= 9'd0;      // (383's successors: 0 either way)
       dbg_lines <= '0; dbg_late <= '0; dbg_acks_seen <= 16'd0;
     end else begin
       if (m_ack && !(&dbg_acks_seen)) dbg_acks_seen <= dbg_acks_seen + 16'd1;   // R370
@@ -219,7 +225,11 @@ module m2_fb_read #(
       // in order until the fetches catch up with it. (R362's drop lost the
       // line outright -- on the board the first lines of every frame, whose
       // requests come one a line while the writer is flooding the bridge.)
-      if (line_req) begin tgt_y <= line_y; tgt_f <= line_f; have <= 1'b0; end
+      if (line_req) begin
+        tgt_y <= line_y; tgt_f <= line_f; have <= 1'b0;
+        tgtn_p <= (line_y >= 9'(SCR_LINES - 1)) ? 9'd0 : line_y + 9'd1;
+        tgtn_i <= (line_y >= 9'(SCR_LINES / 2 - 1)) ? 9'd0 : line_y + 9'd1;
+      end
 
       case (st)
         R_IDLE: if (pend) begin
@@ -290,4 +300,8 @@ module m2_fb_read #(
     end
   end
 
+`ifdef VERILATOR
+  always_ff @(posedge clk) if (rst_n && TGTN && tgt_n != ((tgt_y >= last) ? 9'd0 : tgt_y + 9'd1))
+    $fatal(1, "m2_fb_read: tgt_n %0d, tgt_y's %0d", tgt_n, (tgt_y >= last) ? 9'd0 : tgt_y + 9'd1);
+`endif
 endmodule

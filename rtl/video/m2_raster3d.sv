@@ -1301,7 +1301,7 @@ module m2_raster3d #(
         end
       end
 
-      m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512), .LA(FB_LA), .V_TOTAL(V_TOT)) u_fbr (
+      m2_fb_read #(.WIDTH(SCR_W), .STRIDE(512), .LA(FB_LA), .V_TOTAL(V_TOT), .TGTN(FBW_WD)) u_fbr (   // R1048: TGTN with the 2B build's FBW_WD
         .clk(clk), .rd_clk(scan_clk), .rst_n(rst_n),
         .fb_sel(fb_show),
         .line_req(line_pulse), .line_y(fl_line_c), .line_ready(), .hungry(fbr_hungry),   // R655

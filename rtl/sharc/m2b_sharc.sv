@@ -387,6 +387,9 @@ xc_t XC;
 logic [31:0] op_x, op_y, op_n;              // fixed / shifter operands: R[rx], R[ry], R[rn]
 logic [31:0] fa_x, fa_y, fm_x, fm_y;        // float operands
 logic        fa_xz, fa_yz;                  // R1048: fa_x / fa_y [30:23] == 0, loaded with them (sharc_fadd PRE)
+logic        fa_xn, fa_yn;                  // R1048: is_nan(fa_x) / is_nan(fa_y), loaded with them (m2b_sharc_xu PRE)
+logic        d_faxn, d_fayn;
+logic [8:0]  fa_ysc, d_faysc;               // R1048: scalb_cls(fa_y), loaded with it (m2b_sharc_xu PRE)
 logic [5:0]  sh_pl;                         // R1048: the shifter's field length and decoder bit, from D's
 logic [4:0]  sh_pdj;                        // sh_val (m2b_sharc_xu PRE)
 logic [5:0]  d_shpl;
@@ -1508,6 +1511,10 @@ always_comb begin
         d_shpdj = x.sh_imm ? dji : djr;
     end
     d_fayz = comp[22] ? rf_rd[3][30:23] == 8'h00 : rf_rd[1][30:23] == 8'h00;
+    // R1048: and their NaN tests, each port's before the select (the shared unit's misc operands)
+    d_faxn = comp[22] ? is_nan(rf_rd[2]) : is_nan(rf_rd[0]);
+    d_fayn = comp[22] ? is_nan(rf_rd[3]) : is_nan(rf_rd[1]);
+    d_faysc = comp[22] ? scalb_cls(rf_rd[3]) : scalb_cls(rf_rd[1]);   // (R1048: SCALB's ry classes)
     d_stx = x.acc_wd;
     d_dm_a = x.acc_addr[DM_AW-1:0];         // (R1042: a PM-bus block-1 word's, PMB1_MAME's remap)
     // the DM read is presented for any read form, whatever its condition or address (it has no
@@ -1794,7 +1801,7 @@ logic        xu_fw, xu_sw;
 logic [1:0]  xu_mx, xu_sx;
 m2b_sharc_xu #(.MAME_RND(MAME_RND), .PRE(1'b1)) u_xu (
     .clk, .fix_on(XC.fix_on), .fix_op(XC.fix_op), .fix_k(XC.fix_k), .sh_on(XC.sh_on), .sh_op(XC.sh_op), .sh_imm(XC.sh_imm),
-    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .pre_l(sh_pl), .pre_dj(sh_pdj), .pre_fxz(fa_xz), .pre_fyz(fa_yz),
+    .sh_val(XC.sh_imm ? {20'h0, x_op[30:27], x_op[15:8]} : op_y), .pre_l(sh_pl), .pre_dj(sh_pdj), .pre_fxz(fa_xz), .pre_fyz(fa_yz), .pre_fxn(fa_xn), .pre_fyn(fa_yn), .pre_fysc(fa_ysc),
     .misc_on(XC.fl_misc), .misc_op(XC.misc_op),
     .x(op_x), .y(op_y), .n(op_n), .fx(fa_x), .fy(fa_y), .astat, .alusat(mode1[M1_ALUSAT]), .trunc(XC.trunc),
     .fix_r(xu_fr), .sh_r(xu_sr), .fix_we(xu_fw), .sh_we(xu_sw), .fix_astat(xu_fa),
@@ -1908,6 +1915,9 @@ end
 generate if (BENCH) begin : g_pre_check
     always_ff @(posedge clk) if (st == ST_X && (fa_xz != (fa_x[30:23] == 8'h00) || fa_yz != (fa_y[30:23] == 8'h00)))
         $fatal(1, "fadd zero tests %b %b", fa_xz, fa_yz);
+    always_ff @(posedge clk) if (st == ST_X && (fa_xn != is_nan(fa_x) || fa_yn != is_nan(fa_y)))
+        $fatal(1, "the misc unit's NaN tests %b %b", fa_xn, fa_yn);
+    always_ff @(posedge clk) if (st == ST_X && fa_ysc != scalb_cls(fa_y)) $fatal(1, "SCALB's ry classes %b", fa_ysc);
     always_ff @(posedge clk) if (st == ST_X && XC.sh_on) begin : chk_sh
         logic [31:0] sv;
         logic [5:0]  l;
@@ -2180,6 +2190,7 @@ always_ff @(posedge clk) begin
             op_x <= d_opx; op_y <= d_opy; op_n <= d_opn;
             fa_x <= d_fax; fa_y <= d_fay; fm_x <= d_fmx; fm_y <= d_fmy;
             fa_xz <= d_faxz; fa_yz <= d_fayz;   // (R1048)
+            fa_xn <= d_faxn; fa_yn <= d_fayn; fa_ysc <= d_faysc;
             sh_pl <= d_shpl; sh_pdj <= d_shpdj;
             // (R1029: in every D clock, not on d_go)
             fm_restart <= 1'b1;

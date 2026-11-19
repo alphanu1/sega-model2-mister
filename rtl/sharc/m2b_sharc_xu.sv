@@ -45,6 +45,9 @@ module m2b_sharc_xu #(
     input  logic [4:0]  pre_dj,         // PRE: the decoder's bit (below)
     input  logic        pre_fxz,        // PRE: fx[30:23] == 0 (R1048)
     input  logic        pre_fyz,        // PRE: fy[30:23] == 0
+    input  logic        pre_fxn,        // PRE: is_nan(fx) (R1048)
+    input  logic        pre_fyn,        // PRE: is_nan(fy)
+    input  logic [8:0]  pre_fysc,       // PRE: scalb_cls(fy) (R1048)
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -151,8 +154,25 @@ function automatic logic [31:0] scalb_r(input logic [31:0] f, input logic [31:0]
     if (e[31] && (e[30:7] != 24'hFF_FFFF || e[6:0] <= 7'h01)) return f & SIGN;
     return {f[31], 8'(e + 32'sd127), f[22:0]};
 endfunction
+// R1048: SCALB's exponent sum e = ry + (exp - 127) without the 32-bit carry: ry's bits above 8
+// (T) are known in D, so their three possible values after the low part's carry (T - 1, T, T + 1)
+// are classed there -- sign, the rest zero, the rest all ones, {T-1's, T's, T+1's} -- and here
+// only ry[8:0] + (exp - 127) is added; the range tests and the result as scalb_r's (MAME's C int,
+// wrapping at 32 bits)
+function automatic logic [31:0] scalb_p(input logic [31:0] f, input logic [8:0] lo, input logic [8:0] cls);
+    logic signed [10:0] s;
+    logic [2:0] c;
+    logic       sg, zr, on;
+    s = $signed({2'b00, lo}) + 11'(signed'({~f[30], f[29:23]})) + 11'sd1;
+    c = s[10] ? cls[8:6] : (s[9] ? cls[2:0] : cls[5:3]);       // borrow: T - 1; carry: T + 1
+    sg = c[2]; zr = c[1]; on = c[0];
+    if (!sg && (!zr || s[8:7] != 2'b00)) return (f & SIGN) | INF;
+    if (sg && (!on || s[8:7] != 2'b11 || s[6:0] <= 7'h01)) return f & SIGN;
+    return {f[31], 8'(s[7:0] + 8'd127), f[22:0]};
+endfunction
+
 logic [31:0] sc_in;
-assign sc_in = scalb_r(xin, fy);
+assign sc_in = PRE ? scalb_p(xin, fy[8:0], pre_fysc) : scalb_r(xin, fy);   // (R1048: PRE, fy's classes from D)
 
 // ---- FIX: the operand and its alignment (stage A: computed in X's first clock, registered)
 logic [23:0] fm;
@@ -442,6 +462,10 @@ assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m[22:0]};
 // the operands' tests from fx / fy (R1029: off the flush's path; a flush keeps the sign, the
 // exponent and a NaN, and makes a denormal a zero)
 logic xz, yz;
+// R1048: the operands' NaN tests from the caller's registers (PRE), made in D beside the zero tests
+logic nan_x, nan_y;
+assign nan_x = PRE ? pre_fxn : is_nan(fx);
+assign nan_y = PRE ? pre_fyn : is_nan(fy);
 assign xz = MAME_RND ? is_zero(fx) : PRE ? pre_fxz : is_den_or_zero(fx);    // is_zero(xin)
 assign yz = MAME_RND ? is_zero(fy) : PRE ? pre_fyz : is_den_or_zero(fy);
 // the compare: |x| against |y| (flushed in the manual's rounding)
@@ -461,7 +485,7 @@ always_comb begin
     else if (!xin[31]) begin cm_ltxy = cm_lt; cm_ltyx = !cm_lt && !cm_eq; end
     else begin cm_ltxy = !cm_lt && !cm_eq; cm_ltyx = cm_lt; end
     cm_eqxy = (cm_zx && cm_zy) || xin == yin;
-    cm_nan = is_nan(fx) || is_nan(fy);                  // (a flush leaves a NaN one: R1029, off its path)
+    cm_nan = nan_x || nan_y;                  // (a flush leaves a NaN one: R1029, off its path)
 end
 
 always_comb begin
@@ -471,7 +495,7 @@ always_comb begin
     r = 32'h0; a = 32'h0; k = 32'h0; acc = 32'h0; eu = 10'sd0; es = 10'sd0; sel = 1'b0; z = 1'b0;
     case (misc_op)
     M_ABS: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = 32'h0; a = AZ; end
             else r = fx & ~SIGN;
@@ -489,7 +513,7 @@ always_comb begin
         end
     end
     M_NEG: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = ~fx & SIGN; a = AZ; end
             else r = fx ^ SIGN;
@@ -497,7 +521,7 @@ always_comb begin
         end
     end
     M_PASS: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = fx & SIGN; a = AZ; end
             else r = fx;
@@ -513,7 +537,7 @@ always_comb begin
         r = acc;
     end
     M_SCALB: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             r = sc_in;
             if (r[31]) a |= AN;
@@ -524,7 +548,7 @@ always_comb begin
     M_LOGB: begin
         if (is_inf(fx))       begin r = INF; a = AV; end
         else if (xz) begin r = SIGN | INF; a = AV; end
-        else if (is_nan(fx))  begin r = NAN; a = AI; k = AIS; end
+        else if (nan_x)  begin r = NAN; a = AI; k = AIS; end
         else begin
             r = {24'h0, xin[30:23]} - 32'd127;
             if (r[31]) a |= AN;
@@ -536,18 +560,18 @@ always_comb begin
         if (r[31]) a |= AN;
         if (r == 0) a |= AZ;
         if (MAME_RND && fb_den) k |= AUS;
-        if (is_nan(fx)) a |= AI;
+        if (nan_x) a |= AI;
     end
     M_FLOAT, M_FLOATBY, M_FLOATBYM: begin
         r = fl_r;
-        if (misc_op != M_FLOAT) r = scalb_r(r, fy);
+        if (misc_op != M_FLOAT) r = PRE ? scalb_p(r, fy[8:0], pre_fysc) : scalb_r(r, fy);
         if (misc_op == M_FLOATBYM) begin if (r[31] && !is_zero(r)) a |= AN; end
         else if (r[31]) a |= AN;
         if (is_den_or_zero(r)) a |= AZ;
         if (is_den(r)) k |= AUS;
     end
     M_RECIPS: begin
-        if (is_nan(fx))       begin r = NAN; a = AI; k = AIS; end
+        if (nan_x)       begin r = NAN; a = AI; k = AIS; end
         else if (xz) begin r = (xin & SIGN) | INF; a = AV; end
         else begin
             // e = 126 - exp: the result's biased exponent 253 - exp, out of range for exp 0 and 253-255
@@ -558,7 +582,7 @@ always_comb begin
         end
     end
     M_RSQRTS: begin
-        if ((fx[31] && !xz) || is_nan(fx)) r = NAN;              // (xin > SIGN)
+        if ((fx[31] && !xz) || nan_x) r = NAN;              // (xin > SIGN)
         else begin
             eu = $signed({2'b0, xin[30:23]}) - 10'sd127;
             es = -(eu >>> 1) - 10'sd1;
@@ -567,10 +591,10 @@ always_comb begin
         if (fx[31] && xz) a |= AN;                              // (xin == SIGN)
         if (is_zero(r)) a |= AZ;
         if (xz) a |= AV;
-        if (is_nan(fx) || fx[31]) begin a |= AI; k |= AIS; end
+        if (nan_x || fx[31]) begin a |= AI; k |= AIS; end
     end
     M_COPYSIGN: begin
-        if (is_nan(fx) || is_nan(fy)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x || nan_y) begin r = NAN; a = AI; k = AIS; end
         else begin
             r = fy & SIGN;
             if (r != 0) a |= AN;
@@ -579,7 +603,7 @@ always_comb begin
         end
     end
     M_CLIP: begin
-        if (is_nan(fx) || is_nan(fy)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x || nan_y) begin r = NAN; a = AI; k = AIS; end
         else begin
             if ((PRE ? pre_fxz : is_den_or_zero(fx)) || (PRE ? pre_fyz : is_den_or_zero(fy))) begin r = fx & SIGN; a = AZ; end
             else begin
@@ -597,4 +621,8 @@ always_comb begin
     misc_s = k;
 end
 
+`ifdef VERILATOR
+// R1048: scalb_p on D's classes is scalb_r wherever they are fy's
+always_ff @(posedge clk) if (PRE && pre_fysc == scalb_cls(fy) && (scalb_p(xin, fy[8:0], pre_fysc) != scalb_r(xin, fy))) $fatal(1, "scalb_p %h, scalb_r %h", scalb_p(xin, fy[8:0], pre_fysc), scalb_r(xin, fy));
+`endif
 endmodule

@@ -31,6 +31,9 @@ CURL = os.environ.get('M2B_RP_CURL') == '1'
 # M2B_RP_CURLM=1 (R1048; with CURL): some of those body words are also DM moves (compute, dreg <-> DM,
 # immediate modify) under IF NOT LCE, so a loop end's pop decides the access. Without it CURL's programs.
 CURLM = os.environ.get('M2B_RP_CURLM') == '1'
+# M2B_RP_LE11=1 (R1048): some counted loops are one pass and end in an 11 form (IF NOT LCE JUMP ELSE
+# compute, dreg <-> DM) with a fixed ALU op, so the loop end's pop decides the compute. Without it as before.
+LE11 = os.environ.get('M2B_RP_LE11') == '1'
 # M2B_RP_ASTL=1 (R1048): some ureg loads from DM go to ASTAT (0x7c). Without it the programs as before.
 ASTL = os.environ.get('M2B_RP_ASTL') == '1'
 PM0 = 0x21d00                                         # block 0's data words (past the program)
@@ -260,6 +263,17 @@ def main():
                  (g.randrange(8) << 27) | comp())
         elif r < 0.77:                                     # a counted loop of 1-5 words
             n = g.randrange(1, 5); L = g.randrange(1, 6)
+            if LE11 and g.random() < 0.5:              # R1048: a one-pass loop ending in an 11 form's fixed op
+                ws = [(0x02 << 39) | (0x1f << 33) | comp(False) for _ in range(L - 1)]
+                i = g.randrange(8); m = g.randrange(8); d = g.getrandbits(1)
+                fx = (g.choice(FIXED) << 12) | (rreg() << 8) | (rreg() << 4) | rreg()
+                # IF NOT LCE JUMP (PC, 1) ELSE compute, dreg <-> DM: one pass, so LCE holds at the
+                # end and the else runs -- the word's compute under the loop end's pop
+                ws.append((0b11 << 46) | (1 << 45) | (d << 44) | (i << 41) | (m << 38) | (0x0f << 33) |
+                          (1 << 27) | (rreg() << 23) | fx)
+                emit((0x0c << 40) | (1 << 24) | len(ws))
+                for w in ws: emit(w)
+                continue
             if CURL and g.random() < 0.5:              # R1044: CURLCNTR written in the body
                 ws = []
                 for _ in range(L):
