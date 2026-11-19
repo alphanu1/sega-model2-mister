@@ -521,6 +521,9 @@ logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
 logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
+logic        d_l1, d_cok1t, d_cok1f;        // R1048: l1 (the popped LCE), cok after the pop at l1 = 1 / 0
+(* keep *) logic [2:0] d_acc1t, d_acc1f;     // R1048: d_acc1 at l1 = 1 / 0
+(* keep *) logic       d_mb1t, d_mb1f;       // ... and d_mb1
 logic        d_compf, d_compf_x;            // R1048: comp_f from the opcode's bits; the benches' comp_f
 logic [12:0] d_fix_ref;                     // (the benches': the handler's fix_on / fix_wr / fix_k)
 logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old guard, and without)
@@ -734,6 +737,11 @@ always_comb begin
         c0 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l0, op[35:31]) : if_cond(astat, 4'h0, alusat, l0, cond);
         cok = isf ? fv : done ? c1 : c0;
         d_cok1 = isf ? fv : c1; d_cok0 = isf ? fv : c0;   // (R1048: for each outcome of the loop end's pop)
+        // (R1048: and the popped outcome's for each value of l1 -- the LCE after the pop, an MLAB
+        // read at S.lstkp's neighbour -- which chooses after them)
+        d_l1 = l1;
+        d_cok1t = isf ? fv : (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, 1'b1, op[35:31]) : if_cond(astat, 4'h0, alusat, 1'b1, cond);
+        d_cok1f = isf ? fv : (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, 1'b0, op[35:31]) : if_cond(astat, 4'h0, alusat, 1'b0, cond);
         d_cok_ref = done ? ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond))
                          : ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l0, op[35:31]) : if_cond(astat, flg, alusat, l0, cond));
     end
@@ -1239,7 +1247,14 @@ always_comb begin
             // (R1048: the map test of each sum, the form and the pop choosing last; d_mbad_nc the benches')
             d_mb1 = e1 && d_memf && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
             d_mb0 = e0 && d_memf && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
-            mbad = (done ? d_mb1 : d_mb0) || bad2;
+            begin
+                logic e1t, e1f;
+                e1t = (op[47:46] == 2'b11) ? !d_cok1t : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1t : 1'b1;
+                e1f = (op[47:46] == 2'b11) ? !d_cok1f : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1f : 1'b1;
+                d_mb1t = e1t && d_memf && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+                d_mb1f = e1f && d_memf && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            end
+            mbad = (done ? (d_l1 ? d_mb1t : d_mb1f) : d_mb0) || bad2;   // (R1048: l1 in the last gates)
         end
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
@@ -1348,7 +1363,17 @@ always_comb begin
                 d_acc0 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}};
                 // (R1048: type 1's PM-address test, bad2 -- an MLAB read and a compare -- in the
                 // last gate too)
-                x.acc = (done ? d_acc1 : d_acc0) & {3{!bad2}};
+                begin
+                    logic e1t, e1f, g1t, g1f;
+                    e1t = (op[47:46] == 2'b11) ? !d_cok1t : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1t : 1'b1;
+                    e1f = (op[47:46] == 2'b11) ? !d_cok1f : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1f : 1'b1;
+                    g1t = d_memf && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1t;
+                    g1f = d_memf && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1f;
+                    d_acc1t = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1t}};
+                    d_acc1f = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1f}};
+                end
+                // (R1048: l1, the popped LCE, in the last gates too; d_acc1 the benches')
+                x.acc = (done ? (d_l1 ? d_acc1t : d_acc1f) : d_acc0) & {3{!bad2}};
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
@@ -2570,6 +2595,8 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (st == ST_D && {dx.fix_on, dx.fix_wr, dx.fix_k} != d_fix_ref)
         $fatal(1, "the fixed ALU's fields %b, the handler's %b", {dx.fix_on, dx.fix_wr, dx.fix_k}, d_fix_ref);
     always_ff @(posedge clk) if (st == ST_D && d_compf != d_compf_x) $fatal(1, "d_compf %b, comp_f %b", d_compf, d_compf_x);
+    always_ff @(posedge clk) if (st == ST_D && ((d_l1 ? d_acc1t : d_acc1f) != d_acc1 || (d_l1 ? d_mb1t : d_mb1f) != d_mb1 || (d_l1 ? d_cok1t : d_cok1f) != d_cok1))
+        $fatal(1, "the popped outcome by l1 differs");
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
