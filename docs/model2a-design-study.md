@@ -54844,3 +54844,127 @@ multicycle had stopped matching retimed copies -- multicorner on), slow 100C / s
   copy addressed {g, field} instead would remove four memory LABs but put the g decode in front of
   the read address -- R1044's regression) and i4 / m4 (R1042 read type 1's DAG2 on i2 / m2 behind
   the modify forms' compares; the pm2 -> pm0 address family still fails, so they stay for now).
+
+**R1052 -- THE 2B BUILD's clk_sys, ROUND THREE: EACH FIT's WORST FAMILY RETIMED IN TURN, EVERY
+CHANGE THE SAME OUTPUT ON THE SAME CLOCK (OLD AGAINST NEW, EVERY OUTPUT EVERY CLOCK) AND GATED TO
+2B. THE ROUNDING CARRIES (MULTIPLIER, ADDER, FLOAT) TESTED BESIDE THEIR INCREMENTS; THE FILL's
+EMPTINESS TEST AND s1_y's ENABLE; THE QUAD STORE's EMPTY-BANK TEST; THE CLIPPER's POOL REQUEST;
+COMP's ZERO TEST; THE MISC UNIT's NaN TESTS IN D AGAIN.** Branch 2b-rt2 (from 786168d3),
+2026-11-19 evening onward. Simulation, quartus_map and the 2b-place lane's fits (2b-pl-u); no board.
+
+(Section: §10, after R1050. Authority as R1044 / R1048: the fits' own full-path reports for where
+the time goes; the benches for "the same output on the same clock". Model 1 has no SHARC and none
+of these blocks' 2B forms; MAME is reached only through the replays. Nothing in sys/ touched.)
+
+*What was believed (R1050's close):* s5271 (9b72ab35) failed clk_sys on the SHARC multiplier's
+stage 2 into the R file (-0.777 at slow -40C) and the fill's xbh -> s1_valid (-0.487); 5c22d68e's
+pm2 / la_addr targets unfitted. Each fit since has had a different worst family (seed spread ~0.4
+ns), so the method is: take each fit's families, read the full path, remove the logic the path
+shows, prove, hand the head to the lane.
+
+*THE CHANGES (commit; the family and its fit; what moved):*
+  1. f99e1d5c (SHARC sharc_fmul, MAME_RND 0 only). s5271 v_p -> up -> the 24-bit increment's carry
+     -> the m[24] / ei select -> r -> rf_wd -> g_rf, -0.777 at -40C. The carry out of the 24 bits is
+     up && (the 24 bits all ones), tested beside the increment; after a carry the sum is exactly
+     2^24, so the mantissa field is the increment's low 23 bits with no shift; the exponent's two
+     values made from v_esum, the carry choosing. The product of two 24-bit mantissas with their top
+     bits set is at most (2^24 - 1)^2 < 2^48 - 2^24, so the top bit and the carry never come
+     together: esum - 125 is never reached and its two stage-1 tests are gone.
+  2. dee29c65 (fill, OKPAR = RECIP_EARLY = B2). s5271 xbh -> rb1 -> the clamp -> crb -> cla <= crb
+     -> s1_valid, -0.487. max(l, x1) <= min(r - 1, x2) as l <= r - 1 && l <= x2 && x1 <= r - 1 &&
+     x1 <= x2, compares of registers; r - 1 wraps only at r = -32768 (never under sab; under !sab at
+     rxa = -32768, where both of its tests hold). view_x1 / view_x2 are the constants 0 / SCR_W - 1.
+  3. ff2d3309 (SHARC xu). s5301 fn_sel -> the funnel -> up -> the increment's carry -> e + 1 -> fb_e,
+     -0.627 at -40C: FLOAT's carry the same way as 1 (fb_m keeps the increment's low 23 bits, all
+     fl_r reads). s5302 fix_k -> the adder -> ad_s == 0 -> AN -> misc_a, -0.567 at -40C: COMP's zero
+     test (its only reader) on the operands, x == y (COMP's fix_k is A + ~B + 1, so the sum is 0
+     exactly when x == y), and AN from ad_lt alone (x < y already means x != y). Checked against the
+     sum's test every clock in simulation.
+  4. 32c489d5 (quad store, CNZ = RECIP_EARLY = B2). s5302 bank -> count[rbank] != 0 -> s_band, -0.714:
+     each bank's count != 0 in a register beside the count, set by its increment and cleared with it
+     (the count stops at MAXL = NQ + NX = 2,560 < 2^12, so it never wraps to 0); the replayed bank's
+     emptiness a 2:1 select of registers. Checked against the count every clock in simulation.
+  5. b645d982 (fill, S1Y = RECIP_EARLY = B2). s5301 walk_y >= walk_end -> s1_y's enable -> the DSP's
+     input register, -0.323: S_FS_WALK loads s1_y whenever stage 1 is free and the plane fit idle,
+     not only on a row it emits. s1_y is read only while s1_valid (the span's y, the plane's products
+     at s1_adv); the walk's last test sets no s1_valid. The plane-fit-idle term matters (planted
+     without it: 3,650,503 cycles differ): S_PF_B's corner products also use s1_y.
+  6. f1ebde57 (geometry clip, KREQ = NEARF = B2). s5301 cs -> the clipper's request -> the pool's
+     grant -> kst (six LUTs of next-state select), -0.429: the request kind (multiply / add /
+     divide) in a register beside cs, set wherever cs is (each assignment is a constant); K_CLIP's
+     requests from it; K_CLIP leaves on any grant -- in K_CLIP the clipper asks for exactly one kind,
+     and the pool grants only a requester (rr_oh picks a requesting client whenever any requests;
+     the divider's winner is an eligible requester), so the only grant it can see is the one it
+     asked for. Checked against cs every clock in simulation.
+  7. 9282636a (SHARC sharc_fadd). s5303 raw (retimed: raw[12]_OTERM) -> the finish's zero test -> fr
+     -> ld_rav -> rf_wd -> g_rf, -0.419: the far path's carry as 1, its exponent's three range tests
+     made for both values of the carry; and in the manual's rounding (where the finish takes raw
+     unchanged) the finish's tests -- is_inf, is_den_or_zero, a nonzero mantissa -- made on raw_c and
+     registered with raw. MAME_RND 1 keeps them in the finish (MAME's FAVG changes q there).
+  8. d2fd1da4 (SHARC). s5303 fa_x -> is_nan -> cm_nan -> misc_r, -0.486 at -40C: b9857549's NaN tests
+     in D again (2879b4b2 had taken them out because s5262's path was SCALB's; this one is theirs).
+
+*PROOF (each change; benches under the gate, Verilator under the 5 GB cap):*
+  * SHARC (1, 3, 7, 8): the miter against 2b-rc's SHARC (rtl_rc) at MAME_RND 0 and 1 -- the 33
+    random programs, negcond n0-n3, the 26 unsupported cases (26 / 26 flagged at their words) -- 0
+    differ, every clock count the same (MAME_RND 1: r1 2,589,533, r101 2,570,837, r201 2,599,970,
+    r306 2,499,985). tb_sharc_fp: 4 x 25 M vectors per unit at both roundings, 0 mismatches.
+    tb_m2b_xu: 4 x 10 M, 0 mismatches. The replays (MAME rounding, PXIM 0, SKLR 0) on ff2d3309 and
+    again on d2fd1da4: DOA 150 s 1,264,270,732 clocks (2.5196 a word), fvipers 500 M words
+    1,277,257,981 (2.5545), schamp 1,279,552,477 (2.5591); out FIFOs and the MAME traces (30 M / 20
+    M / 20 M words) 0 differ; with the miter, 200 M words of each, 0 differ. THE MANUAL ROUNDING
+    (the board's, SH_MAME_RND 0) on DOA's whole capture in lockstep with v1 MAN, on f99e1d5c + the
+    FLOAT carry and again on d2fd1da4: 501,777,265 words, 0 differ, 1,264,264,337 clocks (2.5196),
+    10,280,834 out words differ from MAME's (R1048's figure, the manual's rounding).
+  * NEW DIRECTED VECTORS in tb_sharc_fp (committed): products just under a power of two (the other
+    operand's mantissa's reciprocal, rounded down), ~18 k round-ups to a power of two in 25 M; and
+    all-ones mantissas beside the other's exponent for the adder, ~650 sums rounded up to one. THE
+    OLD BENCH MISSED THE MULTIPLIER's CARRY FAULT (the exponent's carry dropped): 2 x 25 M vectors,
+    0 mismatches; with the new case, 2,904 of 4 M.
+  * PLANTED, each caught: fmul -- the carry dropped from the exponent (2,904 / 4 M), up dropped from
+    the carry (28,853); fadd -- the carry dropped from the exponent and from m23 (2,705 / 4 M each),
+    the finish's zero test wrong (123,855), its mantissa test wrong (70,388), the carry dropped at
+    SHARC level (MAME_RND 0, r2); xu -- FLOAT's carry dropped (17,473 / 4 M), COMP's AN wrong
+    (35,796); the NaN test of x wired to y's (the miter, r1).
+  * FILL (2, 5): an exhaustive C check of the emptiness test against R739's (every rxa, rxb at eight
+    view windows including the 16-bit extremes: 34,359,738,368 cases, 0 differ; the wrap term
+    dropped: 7 differ). m2_raster3d miter against 2b-rc (RECIP_EARLY, FBW_WD 1) on stcc_f3000,
+    hotd_1808, orev_d1: 4.88 M cycles each, 0 differing. Planted: a zero-width span made nonempty
+    (3,647,474 cycles differ), the test forced (3,650,515). MISSED, and why: the clamp-bound faults
+    (one view edge off by one, the right-edge bound from the wrong end) -- the geometry clips the
+    quads to the view before the fill, so no list puts a span's end on the view's edge; the
+    exhaustive check is the proof for those terms.
+  * QUAD STORE (4): the raster3d miter (as above), 0 differing; tb_m2_quad_store_ext at EXT_PAY 1 /
+    CNZ 1 against EXT_PAY 0: 500 band streams identical, with cnz checked against the count every
+    clock. Planted: the wrong bank's flag (both benches: 3,650,608 cycles differ / the streams
+    differ); cnz not cleared on a clear -- caught by the bench's check only (an empty bank with its
+    flag left set replays nothing, so the streams are the same; the coordinator accepted this).
+  * GEOMETRY (6): the m2_geometry miter against 2b-rc (2B parameters) on tb_m2_geometry plain and
+    MIPZ and the MAME walks w1000 / w3910 / w4000 / w9000 (copied from build/geodiff into the
+    scratchpad): 595,138 / 913,234 / 902,738 / 512,404 / 450,389 / 624,590 cycles, 0 differing --
+    R1044's counts. Planted: cs 6's kind made add, the check off (356,009 cycles differ); with the
+    check on it fires.
+  * quartus_map --analyze_file on every changed file (0 errors); make lint_top (2B) clean.
+
+*AREA (the SHARC mapped alone, sharea.sh; ALMs needed / LUTs / registers):* 786168d3 4,132 / 6,229
+/ 1,905; f99e1d5c 4,123 / 6,258 / 1,903; ff2d3309 4,119 / 6,255 / 1,902; d2fd1da4 4,148 / 6,248 /
+1,906. The fit's figures are the lane's.
+
+*THE FITS (2b-pl-u: 2b-place's settings with 2b-rt2's head merged; slow 100C / slow -40C):*
+    s5301  786168d3  clk_sys -0.511 / -0.627  HDMI -0.284 / -0.120  hold >= +0.088   xu fn_sel -> fb_e; clip cs -> kst; fill walk_y -> s1_y; cab steer
+    s5302  786168d3  clk_sys -0.714 / -0.567  HDMI -0.375           hold +0.094      quad store bank -> s_band; XC.fix_k -> misc_a; pm2 -> XC.acc
+    s5303  dee29c65  clk_sys -0.419 / -0.486  HDMI +0.000           hold +0.082      fa_x -> misc_r; fadd raw -> g_rf; project step -> engine st
+    s5305  32c489d5  clk_sys -0.450 / -0.618  HDMI +0.049           hold +0.099      fa_xz -> misc_r (SCALB); S.daddr -> XC.acc; SCSP sreg -> st; clip -> eng_ra
+    s5306  f1ebde57  clk_sys -0.784 / -0.894  HDMI +0.179           hold +0.078      pm2 port B -> XC.acc_wd; quad store a_lo01 -> b_band; SCSP DSP
+  The fmul and fill families of s5271 are gone from s5303 on.
+
+*FOUND ON THE WAY:*
+  * Quartus 17 does not infer a RAM whose registered read has a select in front of the register
+    (st_q <= hit ? d : st[ra]): the SCSP's 256 x 32 state RAM went to flip-flops (the sound board
+    alone 3,848 -> 8,741 ALM, 8,192 block bits fewer). The read in the plain template and the
+    select after it keeps the M10K (3,854 ALM, the same bits).
+  * Waiting with pgrep -f matched its own shell (a bench waited for ever) -- the memory's rule.
+  * Two of my jobs missed the gate: DOA's manual lockstep was gated only before its build, so its
+    run started inside s5303's first 15 minutes; and one script's `make -f - ` (to read a Makefile
+    variable) ran the Makefile's default goal -- a Verilator lint, uncapped and ungated, a few
+    seconds before it failed. Both scripts were fixed (the run gated; the variable copied).

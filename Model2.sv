@@ -4615,7 +4615,7 @@ m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 // write's acknowledge -- the write has landed -- drops both streams; no copy
 // outlives an object (`active`). tb_m2_geodiff: 25-26% off a heavy list's walk.
 wire eng_ra_busy;
-m2_eng_ra #(.AW(SDR_AW-1), .PR_M10K(C2)) u_eng_ra (   // R1008
+m2_eng_ra #(.AW(SDR_AW-1), .PR_M10K(C2), .GDEM(B2)) u_eng_ra (   // R1008; R1052: GDEM
 	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .active(eng_busy),
 	.inval(geo_sd_req & wr_ack_geo),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]),

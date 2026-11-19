@@ -550,7 +550,7 @@ module m2_raster3d #(
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
                   .RAWCOL(TEXLUT), .VX(TEXLUT), .VXN(LSB - 2), .CW(TEXLUT ? 17 : 16), .TXW(STW),
                   .NX(FB_DDR3 ? QNX : 0),   // R962   // R607, R626, R828c, R867; R932: VXN; R940: STW
-                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH), .PRE_NEAR(PRE_NEAR), .CNZ(RECIP_EARLY)) u_store (   // R1003; R1048; R1052: CNZ with the 2B build's RECIP_EARLY
+                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH), .PRE_NEAR(PRE_NEAR), .CNZ(RECIP_EARLY), .BPAR(RECIP_EARLY)) u_store (   // R1003; R1048; R1052: CNZ / BPAR with the 2B build's RECIP_EARLY
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .ofree(qs_ofree), .in_stall(qs_stall),   // R962
