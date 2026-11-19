@@ -321,6 +321,7 @@ typedef struct packed {
     // compute
     logic        fix_on;                    // fixed ALU
     logic [7:0]  fix_op;
+    logic        fix_wr;                    // R1048: the fixed op writes Rn (m2b_sharc_xu's fix_we), from D
     logic [10:0] fix_k;                     // the adder's operands, one-hot (m2b_sharc_pkg::fix_k_of, R1029)
     logic        sh_on;                     // shifter
     logic [5:0]  sh_op;
@@ -514,7 +515,10 @@ logic [31:0] d_sum_i, d_sum_o;              // R1048: the 32-bit offset's sum an
 logic        d_s3;
 logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
+logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
+(* keep *) logic [2:0] d_acc1, d_acc0;       // R1048: the kind for each outcome of the loop end's pop
+(* keep *) logic       d_mb1, d_mb0;         // ... and the map test's
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
 logic        d_mbad_nc;                     // ... and the address map's test
@@ -1040,6 +1044,14 @@ always_comb begin
         if (fl_d && !mode1[M1_RND32]) cbad = 1'b1;
     end
     x.trunc = trunc;
+    // R1048: the fixed ALU's result-write flag (m2b_sharc_xu's set_r: every op it decodes but
+    // COMP), a function of fix_op alone, made here so X's register-busy mask and the landing's
+    // enables do not wait on the unit's decode
+    case (x.fix_op)
+    8'h01, 8'h05, 8'h25, 8'h29, 8'h02, 8'h06, 8'h26, 8'h2a, 8'h21, 8'h22, 8'h30,
+    8'h40, 8'h41, 8'h42, 8'h43, 8'h61, 8'h62, 8'h63: x.fix_wr = 1'b1;
+    default: x.fix_wr = 1'b0;
+    endcase
 
     // the data access's address (one adder), the store / ureg data, the post-modify amount
     // (R1029: the selects decoded here from the opcode's bits, an AND-OR, not through the
@@ -1143,9 +1155,15 @@ always_comb begin
         end
     end
 
-    // R1048: the kind's bits and the map test of each sum (the form chooses last, below)
-    d_kb_i = acc_bits(d_sum_i, pmb, mem_wr);
-    d_kb_o = acc_bits(d_sum_o, pmb, mem_wr);
+    // R1048: the kind's bits and the map test of each sum (the form chooses last, below), the
+    // direction from the opcode's bits directly (d_wrf) -- the handler's mem_wr is a case's select,
+    // five LUTs deep; the two are the same wherever the form has an access (mem_f; benches check)
+    d_wrf = op[47] ? (op[46] ? op[44] : op[45] ? op[40] : op[44] ? 1'b1 : op[31])     // 11: op[44]; 101: op[40]; 1001: 1; 1000: op[31]
+                   : (op[46] ? (op[45] ? op[39] : op[31])                              // 0110: op[39]; 010: op[31]
+                             : (op[45] ? op[44] : op[40]));                            // 001: op[44]; 000100: op[40]
+    d_wrf_ref = mem_wr; d_memf_x = mem_f;
+    d_kb_i = acc_bits(d_sum_i, pmb, d_wrf);
+    d_kb_o = acc_bits(d_sum_o, pmb, d_wrf);
     // the memory access: its kind from the address (the one late decision of D)
     // (R1042: a PM-bus access by the PM space's map, its block-1 words at the DM-bus address of
     // the same word)
@@ -1182,7 +1200,9 @@ always_comb begin
             e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
             e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
             // (R1048: the map test of each sum, the form and the pop choosing last; d_mbad_nc the benches')
-            mbad = (done ? (e1 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3])) : (e0 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]))) || bad2;
+            d_mb1 = e1 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            d_mb0 = e0 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            mbad = (done ? d_mb1 : d_mb0) || bad2;
         end
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
@@ -1271,7 +1291,11 @@ always_comb begin
                 g1 = mem_f && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1;
                 g0 = mem_f && !d_rzb && e0;
                 // (R1048: each sum's bits, d_kb_i / d_kb_o, the form choosing in the same last gate)
-                x.acc = done ? ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1}}) : ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}});
+                // (R1048: each outcome kept as a node, so the pop -- done, S's late compares --
+                // is the last gate's select and not folded in front of the region bits)
+                d_acc1 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1}};
+                d_acc0 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}};
+                x.acc = done ? d_acc1 : d_acc0;
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
@@ -1407,13 +1431,19 @@ always_comb begin
     d_faxz = comp[22] ? rf_rd[2][30:23] == 8'h00 : rf_rd[0][30:23] == 8'h00;
     // R1048: the shifter's field length and decoder bit from D's sh_val (as m2b_sharc_xu makes
     // them from XC.sh_imm ? x_op's immediate : op_y, the values those registers are loaded with)
+    // (R1048: for the immediate and for R[ry] apart, the form's sh_imm choosing last -- the decode
+    // no longer in front of the clamp)
     begin
-        logic [31:0] sv;
-        logic [5:0]  ln;
-        sv = x.sh_imm ? {20'h0, op[30:27], op[15:8]} : rf_rd[1];
-        ln = sv[11:6];
-        d_shpl = (ln > 6'd32) ? 6'd32 : ln;
-        d_shpdj = (x.sh_op[5:4] == 2'b11) ? sv[4:0] : 5'(d_shpl - 6'd1);
+        logic [31:0] si, sr;
+        logic [5:0]  li, lr, pli, plr;
+        logic [4:0]  dji, djr;
+        si = {20'h0, op[30:27], op[15:8]}; sr = rf_rd[1];
+        li = si[11:6]; lr = sr[11:6];
+        pli = (li > 6'd32) ? 6'd32 : li; plr = (lr > 6'd32) ? 6'd32 : lr;
+        dji = (x.sh_op[5:4] == 2'b11) ? si[4:0] : 5'(pli - 6'd1);
+        djr = (x.sh_op[5:4] == 2'b11) ? sr[4:0] : 5'(plr - 6'd1);
+        d_shpl = x.sh_imm ? pli : plr;
+        d_shpdj = x.sh_imm ? dji : djr;
     end
     d_fayz = comp[22] ? rf_rd[3][30:23] == 8'h00 : rf_rd[1][30:23] == 8'h00;
     d_stx = x.acc_wd;
@@ -1717,7 +1747,7 @@ always_ff @(posedge clk) begin
     else if (st == ST_X && x_fin) rbusy <=
         ((XC.fl_on && XC.fl_mul && XC.rm_we && !x_uns) ? 16'h1 << XC.rm : 16'h0) |
         ((((XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && XC.ra_we) ||
-           (((XC.fix_on && x_fix.we) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns) ? 16'h1 << (XC.fl_on ? XC.ra : XC.rn) : 16'h0);
+           (((XC.fix_on && XC.fix_wr) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns) ? 16'h1 << (XC.fl_on ? XC.ra : XC.rn) : 16'h0);
     else if (ld_on && ld_mwe && ld_awe) rbusy <= 16'h1 << ld_ra;
     else rbusy <= 16'h0;
 end
@@ -1769,6 +1799,9 @@ logic [1:0] x_cnt, x_need;
 // (R1044: from D's registers, XC.need_fl, not through the misc unit's decode; the old form is
 // the benches' check)
 assign x_need = XC.fl_on ? XC.need_fl : XC.sh_on ? 2'd1 : 2'd0;
+generate if (BENCH) begin : g_fixwr_check
+    always_ff @(posedge clk) if (st == ST_X && XC.fix_on && XC.fix_wr != xu_fw) $fatal(1, "fix_wr %b, the unit's %b", XC.fix_wr, xu_fw);
+end endgenerate
 generate if (BENCH) begin : g_need_check
     always_ff @(posedge clk) if (st == ST_X && x_need != ((XC.fl_on && XC.fl_misc) ? xu_mx :
                                  (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0))
@@ -2184,12 +2217,12 @@ always_ff @(posedge clk) begin
                 ld_on <= 1'b1;
                 ld_mwe <= XC.fl_on && XC.fl_mul && XC.rm_we && !x_uns;
                 ld_awe <= ((XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && XC.ra_we) ||
-                           (((XC.fix_on && x_fix.we) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns;
+                           (((XC.fix_on && XC.fix_wr) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns;
                 ld_rm <= XC.rm; ld_ra <= XC.fl_on ? XC.ra : XC.rn;
                 ld_mul <= XC.fl_on && XC.fl_mul && !x_uns;
                 ld_alu <= XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && !x_uns;
                 ld_fix <= (XC.fix_on || XC.sh_on) && !x_uns;
-                ld_fz <= XC.fix_on && x_fix.we;
+                ld_fz <= XC.fix_on && XC.fix_wr;
                 ld_misc <= XC.fl_misc || XC.fix_on || XC.sh_on;
                 ld_absf <= XC.fl_absf;
                 ld_comp <= XC.fl_comp;
@@ -2253,20 +2286,44 @@ always_ff @(posedge clk) begin
 end
 
 // the host's PM writes (external_dma_write, 16/48 packing; MSWF picks the order)
+// R1048: REGISTERED ONCE ON THIS SIDE (hq_*): the request -- lane, address, data -- is made from
+// the host's strobes as before, and the RAM is written the clock after. The host's strobes come
+// from the i960 bridge's decode across the chip, and their path into the PM RAM's 48 addresses
+// was the SHARC's worst cross-block one (2b-place s5181 / s5141). Nothing can see the clock: the
+// host writes PM only while the SHARC is in HALT and its clear is over (the upload, and the IOP
+// window's EPB0 words, are made before copro_boot) -- g_hq_check asserts both at every request
+// -- so no fetch, port-B read or D wait meets a pending word, and the index registers (ii6,
+// epb_shift) still step on the request's clock. There is no host read of PM.
+logic [2:0]       hr_we, hq_we = 3'b000;
+logic [PM_AW-1:0] hr_wa, hq_wa;
+logic [15:0]      hr_wd, hq_wd;
 always_comb begin
     logic [1:0] w;
     logic       en;
     logic [31:0] idx;
     en = 1'b0; w = 2'd0;
-    pm_wd = 16'h0;
-    if (xdma_we) begin en = 1'b1; w = xdma_phase; pm_wd = xdma_data; end
-    else if (host_iop_we && host_iop_reg == 8'h04) begin en = 1'b1; w = epb_shift; pm_wd = host_iop_data[15:0]; end
+    hr_wd = 16'h0;
+    if (xdma_we) begin en = 1'b1; w = xdma_phase; hr_wd = xdma_data; end
+    else if (host_iop_we && host_iop_reg == 8'h04) begin en = 1'b1; w = epb_shift; hr_wd = host_iop_data[15:0]; end
     if (dmac6[8]) w = 2'd2 - w;
     idx = (ii6 & 32'h1FFFF) | 32'h20000;
-    pm_wa = PM_AW'(idx - 32'h20000);
-    pm_we = 3'b000;
-    if (en && dmac6[7:6] == 2'd2 && idx < 32'h20000 + PMW) pm_we = 3'b001 << w;
-    else if (clr_on && clr_n < PMW) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
+    hr_wa = PM_AW'(idx - 32'h20000);
+    hr_we = (en && dmac6[7:6] == 2'd2 && idx < 32'h20000 + PMW) ? 3'b001 << w : 3'b000;
+end
+always_ff @(posedge clk) begin hq_we <= hr_we; hq_wa <= hr_wa; hq_wd <= hr_wd; end
+generate if (BENCH) begin : g_hq_check
+    always_ff @(posedge clk) if (hr_we != 3'b000 && (st != ST_HALT || clr_on || run))
+        $fatal(1, "a host PM write outside HALT / during the clear / with run (st %0d clr %b run %b)", st, clr_on, run);
+    always_ff @(posedge clk) if (hq_we != 3'b000 && (st != ST_HALT || clr_on))
+        $fatal(1, "the registered host PM write lands outside HALT (st %0d clr %b)", st, clr_on);
+end endgenerate
+always_comb begin
+    logic [31:0] idx;
+    idx = (ii6 & 32'h1FFFF) | 32'h20000;
+    pm_wd = hq_wd;
+    pm_wa = hq_wa;
+    pm_we = hq_we;
+    if (hq_we == 3'b000 && clr_on && clr_n < PMW) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
     // R1042: port B's other users, after the host's: a PM-bus store at its pass's end (lanes 2:1,
     // bits 47:16; lane 0 kept, as MAME's mask); the word a PM-bus access names, read in every D
     // clock (D's address) and every X clock (the word's own: its one access's, or type 1's second),
@@ -2430,7 +2487,8 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
-    always_ff @(posedge clk) if (st == ST_D && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
+    always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
+    always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
