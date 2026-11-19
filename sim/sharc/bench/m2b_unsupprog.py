@@ -22,6 +22,12 @@ CASES = [   # (name, words before, the word, reason)
     ('an unknown IOP register written', [], 0x110000000055, 7),
     ('an unknown IOP register read', [], 0x101000000055, 7),
     ('a jump outside the PM (R1029: its flag from X\'s first clock)', [], (0x06 << 40) | (0x1f << 33) | 0x30000, 9),
+    # R1048: a loop end's pop leaving a stack empty for the word's own pop (the reasons D decides
+    # for both outcomes of the pop): RTS as a one-pass loop's last word, the loop's PC entry
+    # popped first; a loop-abort JUMP there, the loop's entry popped first
+    ('RTS at a one-pass loop\'s end (the loop end empties PCSTK)', [(0x0c << 40) | (1 << 24) | 3], (0x0a << 40) | (0x1f << 33), 6),
+    ('JUMP (LA) at a one-pass loop\'s end (the loop end empties the loop stack)', [(0x0c << 40) | (1 << 24) | 3],
+     (0x06 << 40) | (1 << 38) | (0x1f << 33) | 0x20080, 6),
 ]
 # R1038: unsupported only in the 2B build's core (m2b_sharc PXIM 0: no PX, no IMASK); with
 # --pxim0 these are written too, and with PXIM 1 the same programs run (supported)
