@@ -116,7 +116,12 @@ module m2_geometry #(
   // final six cycles after Q_IDLE's take, not five -- still three before the clipper's earliest
   // read (clip_in_valid, the ninth), which latches them; a restarted walk's writes still land
   // after the old one's. 0: R1030's one stage. (The 2B build.)
-  parameter bit UV3 = 1'b0
+  parameter bit UV3 = 1'b0,
+  // R1048: THE QUAD STORE's TINY TESTS, their twelve pair tests (near_t at 4 and 2 on each x / y
+  // pair) registered here every clock from the clipper's held outputs: the clipper holds a quad
+  // C_AGE (>= 4) clocks before q_valid, so at the take they are the held quad's (g_near_check).
+  // The store then only ANDs them (m2_quad_store PRE_NEAR). 0: q_n4 / q_n2 are 0. (The 2B build.)
+  parameter bit NEARF = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -173,6 +178,7 @@ module m2_geometry #(
   input  logic        q_ready,
   output logic signed [15:0] q_x0, q_y0, q_x1, q_y1,
   output logic signed [15:0] q_x2, q_y2, q_x3, q_y3,
+  output logic [11:0] q_n4, q_n2,          // R1048 (NEARF): x01 x02 x03 x12 x13 x23, then y's
   // R270/R273: the quad's texture coordinates, clipped with it. FLOATS INSIDE
   // THE CLIPPER, TEXELS ON THE WAY OUT: the store keeps 11.2 texels a
   // component, so the conversion happens here, once, where the float still
@@ -1193,6 +1199,29 @@ module m2_geometry #(
   assign c_seen = (c_age == C_AGE);   // R739: four stages now; R940: five with UVSH
   assign q_valid = c_valid && c_seen;
   assign c_ready = q_ready && c_seen;
+  // R1048 (NEARF): the store's near_t (m2_quad_store) on each pair, registered every clock
+  function automatic logic g_near(input logic signed [15:0] a, input logic signed [15:0] b, input int unsigned t);
+    logic [15:0] d;
+    d = 16'(a - b);
+    g_near = (d <= 16'(t - 1)) || (d >= 16'(32'h1_0000 - (t - 1)));
+  endfunction
+  function automatic logic [11:0] g_pairs(input logic signed [15:0] x0, x1, x2, x3, y0, y1, y2, y3, input int unsigned t);
+    g_pairs = {g_near(y2, y3, t), g_near(y1, y3, t), g_near(y1, y2, t), g_near(y0, y3, t), g_near(y0, y2, t), g_near(y0, y1, t),
+               g_near(x2, x3, t), g_near(x1, x3, t), g_near(x1, x2, t), g_near(x0, x3, t), g_near(x0, x2, t), g_near(x0, x1, t)};
+  endfunction
+  generate if (NEARF) begin : g_nearf
+    always_ff @(posedge clk) begin
+      q_n4 <= g_pairs(q_x0, q_x1, q_x2, q_x3, q_y0, q_y1, q_y2, q_y3, 4);
+      q_n2 <= g_pairs(q_x0, q_x1, q_x2, q_x3, q_y0, q_y1, q_y2, q_y3, 2);
+    end
+`ifdef VERILATOR
+    always_ff @(posedge clk) if (q_valid && (q_n4 != g_pairs(q_x0, q_x1, q_x2, q_x3, q_y0, q_y1, q_y2, q_y3, 4) ||
+                                             q_n2 != g_pairs(q_x0, q_x1, q_x2, q_x3, q_y0, q_y1, q_y2, q_y3, 2)))
+      $fatal(1, "m2_geometry: q_n4 / q_n2 are not the held quad's");
+`endif
+  end else begin : g_no_nearf
+    assign q_n4 = 12'd0; assign q_n2 = 12'd0;
+  end endgenerate
   assign q_u0 = ru[0]; assign q_v0 = rv[0];
   assign q_u1 = ru[1]; assign q_v1 = rv[1];
   assign q_u2 = ru[2]; assign q_v2 = rv[2];

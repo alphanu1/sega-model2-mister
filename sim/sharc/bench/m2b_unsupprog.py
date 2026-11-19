@@ -28,6 +28,12 @@ CASES = [   # (name, words before, the word, reason)
     ('RTS at a one-pass loop\'s end (the loop end empties PCSTK)', [(0x0c << 40) | (1 << 24) | 3], (0x0a << 40) | (0x1f << 33), 6),
     ('JUMP (LA) at a one-pass loop\'s end (the loop end empties the loop stack)', [(0x0c << 40) | (1 << 24) | 3],
      (0x06 << 40) | (1 << 38) | (0x1f << 33) | 0x20080, 6),
+    # R1048: a circular buffer (L != 0) under a post-modify, on DAG1 and on the PM bus's DAG2 (L's
+    # nonzero flag read at the form's index)
+    ('a DM post-modify with L0 = 4 (R0 = DM(I0, M0))', [0x0f3000000004, 0x0f1000030100],
+     (0b010 << 45) | (1 << 44) | (0x1f << 33), 4),
+    ('a PM-bus post-modify with L8 = 4 (R0 = PM(I8, M8))', [0x0f3800000004, 0x0f1800020100],
+     (0b010 << 45) | (1 << 44) | (0x1f << 33) | (1 << 32), 4),
 ]
 # R1038: unsupported only in the 2B build's core (m2b_sharc PXIM 0: no PX, no IMASK); with
 # --pxim0 these are written too, and with PXIM 1 the same programs run (supported)

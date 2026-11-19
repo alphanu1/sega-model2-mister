@@ -4676,6 +4676,7 @@ wire        cpu_tex_inval;   // R275: the CPU wrote a texture sheet
 // with no texture input at all, so shape comes first and shading second.
 wire        q3d_valid, q3d_ready;
 wire signed [15:0] q3d_x0, q3d_y0, q3d_x1, q3d_y1, q3d_x2, q3d_y2, q3d_x3, q3d_y3;
+wire        [11:0] q3d_n4, q3d_n2;   // R1048: the quad's pair tests (m2_geometry NEARF, the 2B build)
 wire        [15:0] q3d_frac;   // R626: the quarter pixel below each vertex
 /* verilator lint_off UNUSEDSIGNAL */
 wire [12:0] q3d_u0, q3d_v0, q3d_u1, q3d_v1, q3d_u2, q3d_v2, q3d_u3, q3d_v3;   // R273
@@ -4761,7 +4762,7 @@ always_ff @(posedge clk_sys or negedge mem_rst_n) begin
 	end
 end
 
-m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH), .M10K_ROOM(C2), .UV_HELD(C2), .RES_CP(C2), .UV3(B2)) u_geometry (   // R828c, R867, R889, R940, R1008, R1036
+m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(R3D_WINKEY), .UVSH(R3D_UVSH), .M10K_ROOM(C2), .UV_HELD(C2), .RES_CP(C2), .UV3(B2), .NEARF(B2)) u_geometry (   // R828c, R867, R889, R940, R1008, R1036
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.start(geo_obj_valid), .oba(geo_obj_oba), .obc(geo_obj_obc), .busy(eng_busy),
 	.mat_we(geo_mat_we), .mat_idx(geo_mat_idx), .mat_data(geo_mat_data),
@@ -4789,6 +4790,7 @@ m2_geometry #(.MIPZ(R3D_MIP), .MIPZ_B(R3D_MIPZ_B), .TEXLUT(R3D_TEXLUT), .WINKEY(
 	.col_inval(cpu_col_inval), .tex_lum(tex_lum_s2), .gamma_sel(gam_s2), .tex_off(texoff_s[2]), .mem_space(eng_mem_space), .dbg_col_miss(),   // R867
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0), .q_x1(q3d_x1), .q_y1(q3d_y1),
+	.q_n4(q3d_n4), .q_n2(q3d_n2),   // R1048
 	.q_x2(q3d_x2), .q_y2(q3d_y2), .q_x3(q3d_x3), .q_y3(q3d_y3),
 	// R270: the clipped texture coordinates. The rasteriser side lands next --
 	// they are named here rather than left empty so the width is checked and
@@ -8169,7 +8171,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH),   // R940
               .QNX(M2A ? 512 : 0),   // R962
-              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2), .FBW_WD(B2), .RECIP_EARLY(B2)) u_raster3d (   // R1044: FBW_WD   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
+              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2), .FBW_WD(B2), .RECIP_EARLY(B2), .PRE_NEAR(B2)) u_raster3d (   // R1044: FBW_WD   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
@@ -8178,6 +8180,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
 	// (x2,y0) top-right -- the same v0..v3 cycle the geometry engine emits.
 	.q_valid(q3d_valid), .q_ready(q3d_ready),
 	.q_x0(q3d_x0), .q_y0(q3d_y0),
+	.q_n4(q3d_n4), .q_n2(q3d_n2),   // R1048
 	.q_x1(q3d_x1), .q_y1(q3d_y1),
 	.q_x2(q3d_x2), .q_y2(q3d_y2),
 	.q_x3(q3d_x3), .q_y3(q3d_y3),

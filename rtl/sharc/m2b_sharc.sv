@@ -517,6 +517,8 @@ logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
+logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
+logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old guard, and without)
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 (* keep *) logic [2:0] d_acc1, d_acc0;       // R1048: the kind for each outcome of the loop end's pop
 (* keep *) logic       d_mb1, d_mb0;         // ... and the map test's
@@ -1222,7 +1224,16 @@ always_comb begin
                                                                 : {pmb, op[43:41]};
         // the forms that post-modify where they run (the 11 form's where its condition fails;
         // R1042: the PM bus's too, on DAG2's L, and type 1's two)
-        dag_f = (lnz[pmi] && ((op[47:45] == 3'b010 && op[44]) || (op[47:44] == 4'b0110 && op[38]) ||
+        // (R1048: L's flag read at each of pmi's three indexes, the form choosing after the reads
+        // -- the same lnz[pmi]; the decode was in front of the 16-way select)
+        begin
+            logic la, lb, lc;
+            la = lnz[{op[38], op[32:30]}]; lb = lnz[{op[38], op[34:32]}];
+            lc = pmb ? lnz[{1'b1, op[43:41]}] : lnz[{1'b0, op[43:41]}];
+            d_lnzp = (op[47:40] == 8'b00000100) ? la : (op[47:39] == 9'b000101100) ? lb : lc;
+            d_lnzp_ref = lnz[pmi];
+        end
+        dag_f = (d_lnzp && ((op[47:45] == 3'b010 && op[44]) || (op[47:44] == 4'b0110 && op[38]) ||
                               op[47:44] == 4'b1000 || op[47:46] == 2'b11 || op[47:44] == 4'b1001 ||
                               op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100 || t1)) ||
                 (t1 && lnz[{1'b1, op[32:30]}]);
@@ -1249,12 +1260,17 @@ always_comb begin
         logic ex, rz, ub;
         logic [7:0] u;
         u = (op[47:45] == 3'b010) ? op[30:23] : op[39:32];
-        ub = (op[47:45] == 3'b010) ? !ureg_ok(u, !op[31]) :
-             (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(u, !op[40]) : 1'b0;
-        rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || (comp_f && comp != 23'h0 && cbad) ||
+        // (R1048: each form's ureg field tested apart, the form choosing after the tests -- it
+        // was the field's select in front of ureg_ok; u is op[30:23] for 010, else op[39:32])
+        ub = (op[47:45] == 3'b010) ? !ureg_ok(op[30:23], !op[31]) :
+             (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(op[39:32], !op[40]) : 1'b0;
+        // (R1048: cbad is set only inside the compute decode's `if (comp_f)`, and never for a zero
+        // field (cf996899), so it stands for comp_f && comp != 0 && cbad)
+        rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || cbad ||
              (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm || bad2;
-        d_rzb = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || (comp_f && comp != 23'h0 && cbad) ||
-                dag_f || pxpm || bad2;           // (R1048: rz but the loop end's stack test)
+        d_rzb = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || cbad ||
+                dag_f || pxpm;                   // (R1048: rz but the loop end's stack test and bad2, both last)
+        d_cbad_ref = comp_f && comp != 23'h0 && cbad; d_cbad_x = cbad;
         ex = (op[47:46] == 2'b11) ? !cok :
              (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
         // R1044: each bit of the kind as an OR of its regions' tests on the sum, the form's gate
@@ -1301,7 +1317,9 @@ always_comb begin
                 // is the last gate's select and not folded in front of the region bits)
                 d_acc1 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1}};
                 d_acc0 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}};
-                x.acc = done ? d_acc1 : d_acc0;
+                // (R1048: type 1's PM-address test, bad2 -- an MLAB read and a compare -- in the
+                // last gate too)
+                x.acc = (done ? d_acc1 : d_acc0) & {3{!bad2}};
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
@@ -1392,7 +1410,7 @@ always_comb begin
             default: begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
             endcase
             // the compute field's (U_COMP, then U_RND: cbad's), where it runs
-            if (comp_f && comp != 23'h0 && cbad) begin
+            if (cbad) begin                     // (R1048: comp_f && comp != 0 && cbad, as rz's)
                 logic [3:0] wc;
                 wc = (fl_d && !mode1[M1_RND32]) ? U_RND : U_COMP;
                 if (cp1) begin u1 = 1'b1; w1 = wc; end
@@ -2510,6 +2528,8 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
+    always_ff @(posedge clk) if (st == ST_D && d_cbad_ref != d_cbad_x) $fatal(1, "cbad without its guard differs");
+    always_ff @(posedge clk) if (st == ST_D && d_lnzp != d_lnzp_ref) $fatal(1, "lnz[pmi] by index %b, %b", d_lnzp, d_lnzp_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
