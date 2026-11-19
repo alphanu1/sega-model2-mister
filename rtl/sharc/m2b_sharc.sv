@@ -517,6 +517,7 @@ logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
+logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
 logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old guard, and without)
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 (* keep *) logic [2:0] d_acc1, d_acc0;       // R1048: the kind for each outcome of the loop end's pop
@@ -1223,7 +1224,16 @@ always_comb begin
                                                                 : {pmb, op[43:41]};
         // the forms that post-modify where they run (the 11 form's where its condition fails;
         // R1042: the PM bus's too, on DAG2's L, and type 1's two)
-        dag_f = (lnz[pmi] && ((op[47:45] == 3'b010 && op[44]) || (op[47:44] == 4'b0110 && op[38]) ||
+        // (R1048: L's flag read at each of pmi's three indexes, the form choosing after the reads
+        // -- the same lnz[pmi]; the decode was in front of the 16-way select)
+        begin
+            logic la, lb, lc;
+            la = lnz[{op[38], op[32:30]}]; lb = lnz[{op[38], op[34:32]}];
+            lc = pmb ? lnz[{1'b1, op[43:41]}] : lnz[{1'b0, op[43:41]}];
+            d_lnzp = (op[47:40] == 8'b00000100) ? la : (op[47:39] == 9'b000101100) ? lb : lc;
+            d_lnzp_ref = lnz[pmi];
+        end
+        dag_f = (d_lnzp && ((op[47:45] == 3'b010 && op[44]) || (op[47:44] == 4'b0110 && op[38]) ||
                               op[47:44] == 4'b1000 || op[47:46] == 2'b11 || op[47:44] == 4'b1001 ||
                               op[47:40] == 8'b00000100 || op[47:39] == 9'b000101100 || t1)) ||
                 (t1 && lnz[{1'b1, op[32:30]}]);
@@ -2519,6 +2529,7 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
     always_ff @(posedge clk) if (st == ST_D && d_cbad_ref != d_cbad_x) $fatal(1, "cbad without its guard differs");
+    always_ff @(posedge clk) if (st == ST_D && d_lnzp != d_lnzp_ref) $fatal(1, "lnz[pmi] by index %b, %b", d_lnzp, d_lnzp_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
