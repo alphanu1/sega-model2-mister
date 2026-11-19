@@ -518,6 +518,8 @@ logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
 logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
+logic        d_compf, d_compf_x;            // R1048: comp_f from the opcode's bits; the benches' comp_f
+logic [12:0] d_fix_ref;                     // (the benches': the handler's fix_on / fix_wr / fix_k)
 logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old guard, and without)
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 (* keep *) logic [2:0] d_acc1, d_acc0;       // R1048: the kind for each outcome of the loop end's pop
@@ -1055,6 +1057,30 @@ always_comb begin
     8'h40, 8'h41, 8'h42, 8'h43, 8'h61, 8'h62, 8'h63: x.fix_wr = 1'b1;
     default: x.fix_wr = 1'b0;
     endcase
+    // R1048: THE FIXED ALU's FIELDS FROM THE OPCODE's BITS DIRECTLY, the loop end's pop last: the
+    // form has a compute field (d_compf, the handler's comp_f), the field is a fixed ALU op the
+    // core does (d_fb), and the field runs (comp_on: 1, the condition or its inverse by the form)
+    // for each outcome of the pop -- the same fix_on / fix_k / fix_wr as the handler's case
+    // (g_fix_check), which had the form's case, the field's case and the condition in a row
+    begin
+        logic       fb, con1, con0, ee_;
+        logic [7:0] cp;
+        cp = op[19:12]; ee_ = op[25];
+        d_compf = op[47:45] == 3'b001 || op[47:40] == 8'h01 || op[47:45] == 3'b010 || op[47:44] == 4'b0110 ||
+                  op[47:44] == 4'b0111 || op[47:40] == 8'h04 || op[47:41] == 7'b0000100 || op[47:46] == 2'b11 ||
+                  op[47:41] == 7'b0000101;
+        fb = d_compf && !op[22] && op[21:20] == 2'd0 && !cp[7] && cp[7:4] != 4'h7 && alu_fixed_ok(cp);
+        con1 = (op[47:45] == 3'b001) ? 1'b1 :
+               (op[47:46] == 2'b11) ? !d_cok1 :
+               (op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101) ? (ee_ ? !d_cok1 : d_cok1) : d_cok1;
+        con0 = (op[47:45] == 3'b001) ? 1'b1 :
+               (op[47:46] == 2'b11) ? !d_cok0 :
+               (op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101) ? (ee_ ? !d_cok0 : d_cok0) : d_cok0;
+        d_fix_ref = {x.fix_on, x.fix_wr, x.fix_k}; d_compf_x = comp_f;
+        x.fix_on = done ? (fb && con1) : (fb && con0);
+        x.fix_k = {11{fb}} & fix_k_of(cp);
+        x.fix_wr = fb && cp != 8'h0a;
+    end
 
     // the data access's address (one adder), the store / ureg data, the post-modify amount
     // (R1029: the selects decoded here from the opcode's bits, an AND-OR, not through the
@@ -2530,6 +2556,9 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
     always_ff @(posedge clk) if (st == ST_D && d_cbad_ref != d_cbad_x) $fatal(1, "cbad without its guard differs");
     always_ff @(posedge clk) if (st == ST_D && d_lnzp != d_lnzp_ref) $fatal(1, "lnz[pmi] by index %b, %b", d_lnzp, d_lnzp_ref);
+    always_ff @(posedge clk) if (st == ST_D && {dx.fix_on, dx.fix_wr, dx.fix_k} != d_fix_ref)
+        $fatal(1, "the fixed ALU's fields %b, the handler's %b", {dx.fix_on, dx.fix_wr, dx.fix_k}, d_fix_ref);
+    always_ff @(posedge clk) if (st == ST_D && d_compf != d_compf_x) $fatal(1, "d_compf %b, comp_f %b", d_compf, d_compf_x);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
