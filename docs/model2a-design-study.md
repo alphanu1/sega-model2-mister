@@ -54109,3 +54109,239 @@ m2b_gameid, m2_2a_inputs, m2_luma_map, 0 errors.
 *Tools (committed):* sim/video/tb_m2_lut_snoop_top.sv / .cpp (make test_m2_lut_snoop LUT_DIR=<a
 mame_m2_colwrites.lua capture>), sim/video/mame_m2_colwrites.lua. The walk dumps, captures and
 texture dumps are ROM-derived and stay in scratch.
+
+**R1048 -- THE 2B BUILD's clk_sys, ROUND TWO: THE SHARC ALONE HAD REGRESSED (R1042's PM-BUS
+ADDRESS IN D), AND D's ADDRESS / ACCESS-KIND PATHS ARE REBUILT SO EACH FORM HAS ITS OWN SUM AND
+THE CHOICE COMES AFTER IT. NOT CLOSED: THE BEST SEEDS -0.432 (s4932, slow 100C; -0.654 at -40C) AND -0.402 AT -40C (s4991, -0.446 at 100C), 44-55 FAILING PATHS WHERE 2b-rc HAD THOUSANDS; WHAT FAILS IS NOW ROUTING. DOA / FVIPERS / SCHAMP CLOCK COUNTS UNCHANGED (2.5196 /
+2.5545 / 2.5591 clk_sys A WORD).** Branch 2b-rt2 (off 2b-rc 817f0d7f), 2026-11-18. Simulation and
+Quartus 17.0 fits; no board.
+
+(Section: §10, after R1046. Authority as R1044: the fits for where the time goes; the R1027-R1044
+benches and miters for "the same output on the same clock". Model 1 has no SHARC. Nothing in sys/
+touched; Model2.qsf not touched -- the 2B placement work is a separate branch, 2b-place.)
+
+*What was believed (R1044, the round-two brief):* the remaining clk_sys failures were families to
+retime one by one and seeds to sweep. 2b-rc (model2b + 2b-retime + 2b-ids + R1043's qsf) failed on
+every seed: s4901 -1.547, s4902 -1.405, s4903 -1.106, s4904 -1.243 (HDMI -0.218 .. +0.157). The
+first round-two tree (d064ed1c, rt2-f1) fitted at -2.004 with 3,627 failing SHARC paths. Ben:
+"clk_sys won't close, something needs fixing. Seeding alone won't help." -- and the numbers agreed:
+model2b at 8f90de51 had mapped 39,512 ALM and fitted s3412 at -0.78; 2b-rc mapped SMALLER (39,293)
+and fitted worse. Area down, slack down: a design regression, not packing.
+
+*WHAT REGRESSED -- THE BLOCKS ALONE (R1029's method: the module alone, 5CSEBA6U23I7, Aggressive
+Area, every port a virtual pin, clk 12.5 ns, I/O cut; the core's parameters, MAME_RND 0, DM_AW 13,
+PXIM 0, SKLR 0; setup slow 100C / slow -40C / fast 100C / fast -40C, ns):*
+
+    block                       tree              seed  ALM    setup                               hold
+    m2b_sharc                   8f90de51 (R1041)  1     4,453  +0.444 / +0.308 / +5.547 / +6.753   +0.165
+    m2b_sharc                   2b-rc             1     --     -0.120 / +0.123 / +5.407 / +6.463   +0.158
+    m2b_sharc                   2b-rc             2     4,431  +0.172 / -0.049 / +5.552 / +6.556   +0.162
+    m2b_sharc                   rt2 d064ed1c+     1     4,502  -0.398 / -0.247 / +5.220 / +6.280   +0.118
+    m2b_sharc                   rt2 e972fc8c      1     4,569  -0.472 / -0.209 / +5.329 / +6.367   +0.166
+    m2b_sharc                   rc + i4/m4 + pop  1     4,535  -0.056 / -0.443 / +5.354 / +6.460   +0.165
+    m2_2a_inputs + cab_inputs   8f90de51          1     466    +3.433 / +3.159 / +7.991 / +8.652   +0.187
+    m2_2a_inputs + cab_inputs   2b-rc             1     477    +3.636 / +3.196 / +7.840 / +8.525   +0.178
+
+  * THE INPUTS ARE NOT A REGRESSION. +3.4 ns alone. s4904's m2_cab_inputs steer_lim[0] -> [1]
+    (-1.243) is an 8-bit increment with 12.99 ns of data delay: placement at 99 %, nothing in R1046.
+  * THE SHARC IS. 8f90de51's worst alone was the float adder (+0.444, seven paths under +0.6);
+    2b-rc's is R1042's PM-bus port-B address in D -- the opcode out of the PM M10K, the modify
+    forms' 9-bit compare (modi) into i2_ra, DAG2's I MLAB, the PM RAM's port-B address: ~2.8 ns of
+    decode in front of the MLAB read -- with 121 paths under +0.6. The same opcode -> I / M MLAB ->
+    address adder -> DM / PM RAM address family sat at 0.0 to +0.4 alone.
+  * A SEED ALONE MOVES ~0.5 ns (2b-rc: -0.120 at seed 1, +0.172 at seed 2), so one standalone fit
+    is not a measurement of a 0.2 ns change. The table's trend is what it shows: every D-stage
+    addition made the block worse alone, whatever it did in context.
+  * +1.0 ns ALONE IS NOT IN REACH WITHOUT A CLOCK. D's budget is set by the PM M10K: its output is
+    ~2.6 ns after the clock at the RAM (1.598 tco + 1.022 out), every D decision starts there,
+    and the words that follow a one-clock X have their D the very next clock. 8f90de51 itself was
+    +0.444. The only structural way past it is a pipeline register on the opcode (a clock more for
+    a word after a one-clock X: DOA's 2.5196 clk/word would rise) -- not done; Ben's decision.
+
+*THE CHANGES (commit; what moved; all the same value on the same clock, 2B-only modules or
+B2-gated parameters):*
+  1. d3fda5e1 + f3d9e562. Model2.sdc: the 2B sound 68000's nanoLatch -> excUnit|alu|aluLatch /
+     ccrCore / pswCcr two cycles (s4902 -1.290). THE PROOF (as R743's): nanoLatch loads under
+     extReset, rstUrom (= enPhi1 & enErrClk) or enT3 (= enPhi1 & tState == T2); the three ALU
+     latches load only under enT3 (pswCcr also under pwrUp, a constant). A two-cycle path is safe
+     iff no destination loads on the clock after the source changes. A change by rstUrom / enT3
+     needs enPhi1 that clock, and m2_2a_sound never issues enPhi1 on two consecutive clocks (EXACT
+     1: issue needs !enPhi1 && !enPhi2 and the phase alternates; EXACT 0: R743's accumulator); a
+     change by extReset comes with pwrUp (both !cpu_go), which holds tState at T0, so enT3 is low
+     the next clock and through the reset. THE BENCH: sim/sound/fx68k_nano_chk.sv bound into fx68k
+     (make test_m2_2a_nano), on Dead or Alive's sound program at 80 MHz, 2 s: 160 M clocks, 22.6 M
+     enPhi1, 9.65 M enT3, 4.25 M nanoLatch changes -- 0 enT3 the clock after a nanoLatch load
+     enable or change, 0 consecutive enPhi1, 0 ALU-latch changes without enT3. Planted: enPhi1 on
+     every issue -- fails at once.
+  2. d064ed1c (SHARC). L's nonzero flag (lnz) from each load source's own zero test; the float
+     adder's operand zero tests (fa_xz / fa_yz) and the shifter's field length / decoder bit
+     (sh_pl / sh_pdj) made in D and registered with the operands; the DM RAM's address one copy
+     per lane.
+  3. 4178a380 (geometry, UV3 = B2). The pairs' u2f in two stages (the 8- and 4-bit steps into
+     uva_*, the 2 / 1 steps and the pack into uvf_*), still written before the clipper reads them
+     (s4904 uvsel[14] -> uvf_u[16] -0.976).
+  4. 665198fe (fill, RECIP_EARLY = B2). The reciprocal table read a clock early from the
+     denominators' next values (div_den_nx), through the M10K's output register: the same entry
+     on the same cycle (2b-rc s4901-s4904: recip ROM -> q_fast -0.57 .. -0.77 on every seed).
+  5. e972fc8c (SHARC). (a) Type 1's DAG2 I / M on their own MLAB copies (u_i4 / u_m4) read at
+     op[32:30] / op[29:27] directly -- R1042 read them through u_i2 / u_m2, behind the modify
+     forms' compares: the PM port-B address's worst path alone, and the type-1 second pass's acc2
+     / ind_t. (b) The shared unit's float zero tests from D's fa_xz / fa_yz (PRE). (c) D's access
+     kind and address-map test with the loop end's pop chosen last: both outcomes' gates (the
+     stack test, each outcome's condition) beside the region bits, done picking.
+  6. f905d280 (SHARC). The DM RAM's and the PM RAM's port-B addresses: one adder per lane (2 /
+     3), the D / X / clear choice made in the adder's operands (D: mem_a's operands, or type 1's
+     I and 0; X: the access's address and 0; otherwise the host window's index), not after the
+     sum; the host's / the clear's write still chooses last. The select had been a LUT and a
+     hop between the carry chain and 16-48 M10K.
+  7. 8abddc9b (SHARC). The access kind's region bits and the address-map test (acc_bits, a
+     function of D's old tests) from each form's own sum -- the 32-bit offset's forms (s3) on an
+     adder of their own with the immediate straight in, the others' (M / the 6-bit / none) on
+     the other -- and the form chosen in the last gate with the pop and the condition. mem_a,
+     XC.acc_addr and every bench reference are the same value. s4932: the immediate's decode
+     (s3, 34 fan-out) and two gating LUTs stood in front of the adder: pm2 -> XC.acc -0.432.
+  8. 574cec16 (SHARC). The float multiply's Rm write enable from each of Rm's two sources apart
+     (the multifunction's comp[15:12], the single FMUL's comp[11:8]), each with its own load-wins
+     compares, the form last (it was form -> x.rm -> the compares: pm -> XC.rm_we -0.29 .. -0.66).
+  9. 6106a7f1 (SHARC). Port B's X address without the old select's store term: x_done && A_PM &&
+     write -> XC.acc_addr is the same address (a PM-bus store is never type 1's first pass,
+     whose access is the DM move's, dm_kind: never A_PM). s4941: st -> x_done -> port B -0.770.
+  10. cf996899 (SHARC). The compute field's decode without the 23-bit zero test in front: every
+     form but the fixed ALU's unsupported one has a nonzero bit in its own test (comp[22], cu !=
+     0, a nonzero ALU opcode), so only that branch can see a NOP field, and it tests it itself.
+  11. b2e0a3ab (SHARC). X's ASTAT write by a bit operation / ureg move / load decided from D's
+     ld_ast / uw_ast (ld_ureg / uw_reg == 0x7c) and the bit operation's register, not through
+     the ureg select's decode at X's end (s4942: XC.acc -> mr_wa (165 fan-out) -> astat -0.549).
+  12. 0d8c01dc (SHARC). The shifter's field length / decoder bit made for the immediate and for
+     R[ry] apart, sh_imm choosing last (s4942: pm2 -> sh_pdj -0.354).
+  13. 0f80c4df (SHARC). The access kind's and map test's direction (FIN read / FOUT write) from
+     the opcode's bits directly (d_wrf), not the handler's mem_wr select, five LUTs deep (s4961:
+     pm2 -> Decoder / Selector x5 -> dm_kind -> XC.mbad -0.667).
+  14. 4b0dc9e8 (SHARC). THE HOST's PM WRITE REGISTERED ONCE ON THE SHARC's SIDE (hq_we / hq_wa /
+     hq_wd), the RAM written the clock after the strobe -- the 2b-place agent's request: with the
+     SHARC compact, m2_cpu_bridge io_sel / io_we -> the PM's port address was the worst
+     cross-block path (s5181 -0.557, s5141 -0.621; here s4961 -0.364, s4962 -0.563), the bridge
+     20-30 rows from the PM. THE PROOF THAT NOTHING SEES THE CLOCK: the host writes PM only
+     through two strobes, the upload (xdma_we, external_dma_write) and the IOP window's EPB0
+     register (0x04); both make the request on the strobe's clock exactly as before (lane,
+     address from ii6, data), and ii6 / epb_shift still step on that clock; there is no host
+     read of PM. g_hq_check asserts, at every request, st == HALT, the clear over and run low,
+     and at every landing st == HALT and the clear over -- so no fetch (FETCH / X), no port-B
+     read in D / X and no D wait can meet a pending word, and the clear never meets one (it
+     ends 2^13 clocks after reset). Benches: the 30 random programs' uploads (18,450-18,469
+     words each, lockstep with v1) and the same four programs re-booted through EPB0 (every 'U'
+     record an IOP write to 0x04: 18,450-18,469 IOP writes, the same clock counts as their
+     xdma boots, 2,589,533 / 2,570,837 / 2,599,970 / 2,999,576) -- old against new, every output
+     every clock, 0 differ, the assertions silent; the DOA / fvipers / schamp captures' real
+     uploads (on 4b0dc9e8: DOA 2.5196, fvipers 2.5545, schamp 2.5591 clk_sys a word, 0 out words and 0 trace words different from MAME; old against new on 200 M words of each, 0 differ). Planted: the address unregistered while the enable and data are
+     (caught by the miter at the boot's first word, dbg_op 000000020080 against 063e00020080);
+     a write landing in X (caught by g_hq_check).
+  15. adb233a1 (SHARC). The fixed ALU's result-write flag made in D from fix_op (the unit's
+     set_r: every op but COMP), so X's register-busy mask (rbusy) and the landing's enables do not
+     wait on the unit's decode (s4971: XC.fix_op -> the unit's decode -> set_r -> rbusy -0.786,
+     the build's only SHARC path worse than -0.13).
+  16. 4d503ea6 (SHARC). The access kind's and the map test's two outcomes of the loop end's pop
+     kept as nodes (d_acc1 / d_acc0, d_mb1 / d_mb0), so the pop is the last gate's select; s4962
+     had S.daddr -> sf_long -> done folded three LUTs before the end (-0.959).
+  17. f7700888 (SHARC). Port B's host / clear address chosen in the adders' operands too (pm_host
+     is a register since 14), so each lane's sum goes straight to its 16 M10K.
+  18. 490559ee (SHARC). D's unsupported flag and reason (d_unsup_x / d_why_x, R1029's
+     condition-last form) made for each outcome of the loop end's pop -- the pointer tests pz1 /
+     lz1 / l71 and the pop's own U_STK terms per outcome -- the pop and then the condition
+     choosing last (s4991: S.daddr -> sf_long -> done -> XC.unsup -0.302).
+  19. c495f78f (SCSP, FDUE = B2: m2_scsp_regs, m2_scsp, m2_2a_sound parameters, default off, so
+     the 2A / 2C builds are unchanged). The arcade timers' due time (TIMER 1 / 2, the 2B build's
+     2): ((gnext >> p) + (256 - c)) << p mod 2^15 is (gnext & ~(2^p - 1)) + (256 << p) - (c << p);
+     the first two are made from gcnt for each of the eight prescales, so after the write there
+     is c << p and one subtract where there were a subtract, an add and a shift (s4991: the
+     register MLAB ud -> due -0.446, the build's worst path).
+  Tried and NOT kept: the data address's low bits as six parallel per-form sums with the form
+  choosing after them (d_lo, +114 ALM alone): alone it came out -0.514 / -0.823 (the select after
+  the adders put a LUT back on the RAM's path); dropped for (6).
+
+*PROOF:* every SHARC change against 2b-rc's SHARC in the miter (old and new side by side, every
+output every clock, ext_rdata where acked): the R1042 / R1044 random programs (1-6, 101-106
+SEQ, 201-206 CURL), 301-306 (new, m2b_randprog M2B_RP_CURLM: DM moves under IF NOT LCE in
+CURL's loop bodies), 311-313 (new, M2B_RP_ASTL: ureg loads to ASTAT), the three negcond programs, the 19 unsupported cases (each flagged at its
+word with its reason): all pass with identical clock counts (1: 2,589,533 ... 306: 2,499,985).
+Bench-only checks against the old form at every clock: the access kind (R1044's d_acc_chk), the
+per-sum kind bits against mem_a's, the DM and PM port-B addresses against the old selects, the
+float zero tests and shifter precomputes (g_pre_check), lnz (g_vnz_check). The replays on
+e972fc8c: DOA 150 s 2.5196 clk/word, 18,541,146 out words and the 30 M-word trace 0 differ from
+MAME's; fvipers 500 M words 2.5545, schamp 2.5591, 0 differ; the miter on the three captures 200
+M words each, 0 differ -- and the same, to the clock and the word, on b2e0a3ab, 4b0dc9e8, 4d503ea6
+and the final SHARC (490559ee onward). Planted faults, each caught: type 1's I / M field (i4_ra bit 3, m4_ra
+bit 0), the shared unit's zero test (pre_fyz for pre_fxz, twice), the per-lane DM sum (sext6
+dropped; the clear's address dropped), the PM sum (type 1's I wrong), the per-sum kind (the
+immediate form's bits from the other sum; sd's I not dropped), Rm's enable (the Ra-after-Rm term dropped; the DM move's compare dropped), the compute field's zero test (forced), ASTAT's write (uw_reg compared with MODE1's code), the shifter precompute (R[ry]'s length from the immediate's), the direction (0110's bit from op[38]), the fixed write flag (COMP made a writer), the pop's two outcomes swapped at the last gate. NOT caught, and why: the loop-end
+pop's two outcomes swapped (acc / mbad) -- c1 and c0 differ only at a nested loop's end whose
+outer counter has expired, which no program reaches (a probe: 0 such D clocks in r301-r303;
+single-level loop ends have c1 == c0); the PM store's address term in pm_xa (equivalent: a store
+with dual && !x_p2 never has XC.acc == A_PM); the immediate form's FIFO write bit (no program
+has FIFO traffic). Geometry UV3: geo_mit3 (old against new, 50 outputs) on geo / geomz and the
+w1000 / w3910 / w4000 / w9000 walks, 0 cycles differing; planted, 39,144. RECIP_EARLY:
+m2_raster3d miter on stcc_f3000, stcc_f1500, hotd_1808, orev_d1, 0 cycles differing; planted
+(the table at the old address), 3,650,515. The SCSP timers (FDUE): sim/miter/scsp_regs.sh's random-stimulus miter, old (2b-rc) against
+new with FDUE 1, TIMER 1 and 2, seeds 1-3 x 20 M cycles: 2.61 M timer writes a run, 0 cycles
+with an output differing and 0 timer / interrupt state differences; planted (256 -> 255 in fdk),
+36,990 cycles differing in 2 M. The unsupported cases now 21 (m2b_unsupprog: RTS and a loop-abort
+JUMP at a one-pass loop's end, U_STK at their word); the per-outcome unsupported flag's planted
+faults (the done = 1 outcome's flags taken for done = 0's; pzd's pop outcome dropped) are caught
+there and nowhere else -- no valid program reaches them. lint_top (2B and 2C) clean.
+
+*THE FITS (Quartus 17.0, the whole 2B build, R1043's qsf; ns, worst of all corners):*
+
+    tree (2b-rt2)  seed   clk_sys slow100 / slow-40   HDMI 100 / -40     clk_mem  i960    h2f     hold min  ALM     failing (clk_sys)
+    2b-rc 817f0d7f s4901  -1.547                      -0.218             --       --      --      --        --      SHARC D
+                   s4902  -1.405                      -0.075                                                       SHARC; sound 68000 nanoLatch -1.290
+                   s4903  -1.106                      -0.129                                                       SHARC fa_x -> fadd
+                   s4904  -1.243                      +0.157                                                       cab_inputs (placement), geometry uv
+    d064ed1c       s4912  -2.004                      -0.323             +0.522   +0.908          -0.008    --      3,627 SHARC (fa_x -> misc, D)
+    e972fc8c       s4931  -0.798                      +0.105             +0.320   +2.118  +1.218  +0.239    41,341  142 (SHARC D 141, clip 1)
+                   s4932  -0.432 / -0.654             +0.073 / -0.077    +0.166   +0.769  +1.997  +0.092    41,327  52, all SHARC D
+    8abddc9b       s4941  -1.451                      -0.153             +0.235   +1.834  +1.654  +0.244    41,440  1,354 (SCSP M10K state 667, SHARC 651)
+                   s4942  -0.549                      -0.060             +0.781   +1.423  +1.980  +0.179    41,318  118 (SHARC X acc -> astat, D)
+    6106a7f1       s4951  -0.984                      +0.076             +0.281   +1.104  +0.853  +0.155    41,377  783 (span_tex -> texel_x2 50, SHARC 719)
+                   s4952  fitter internal error (TDB)
+    b2e0a3ab       s4961  -0.667                      -0.564             +0.436   +0.845  +0.396  +0.010    41,399  246 (SHARC 207, bridge io_we 23)
+                   s4962  -1.178 / -1.178             -0.156 / -0.418    +0.218   +1.347  +1.565  +0.092    41,392  1,182 (SHARC 1,032)
+    0d8c01dc       s4971  -0.786 / -0.356             -0.124 / -0.295    +0.048   +1.984  +1.451  +0.099    41,396  55 (SHARC 50: fix_op -> rbusy 19)
+                   s4972  fitter crash
+    adb233a1       s4981  fitter internal error (DYN); s4982, s4983 fitter segment violations
+    4d503ea6       s4991  -0.446 / -0.402             -0.117 / -0.316    +0.157   +1.776  +0.948  +0.016    41,502  44 (SCSP timers 6, SHARC 37, clip 1)
+                   s4992, s4993, s4994, s4995: fitter segment violations
+    490559ee       s5001  stopped (a lane of mine killed with its unit); s5004 stopped (a fourth Quartus job)
+    c495f78f       s5011-s5016: Analysis & Synthesis error (FDUE's cast under ~, Quartus 17; fixed 1b8ba5eb)
+    1b8ba5eb       s5025  -0.868 / -0.693             +0.036 / -0.179    +0.136   +1.887  +1.525  +0.115    41,412  30 (one: HPS f2sdram rd_data -> m2_ddr3 dout,
+                                                                                                          11.7 ns of route; SHARC 29, worst -0.540)
+                   s5021, s5022: fitter segment violations (STA_MASK_MGR)
+  (hold: the minimum over every clock and corner where all four corners were run, else slow 100C.
+  R1043's qsf has TIMEQUEST_MULTICORNER_ANALYSIS OFF, so the fitter's own summary is slow 100C
+  only; the -40C column is quartus_sta's, run on the finished netlist.)
+
+*FOUND:*
+  * The full build's SHARC failures are D's, and they track the block's standalone slack: 8f
+    +0.44 alone / -0.78 in context; 2b-rc ~0.0 / -0.9 .. -1.5; d064ed1c ~-0.4 / -2.0. At 99 %
+    ALM and 98 % M10K the context costs ~1.2 ns, so every D-stage addition shows up.
+  * D's real cost is decode in front of an adder or a RAM address: a select after the carry chain
+    is a LUT plus a long hop (the RAMs are columns away); moving the select into the adder's
+    operands, or giving each form its own adder and choosing after the tests, removes it.
+  * THE FITTER IS THE LIMIT ON EVIDENCE. The same RTL moves 0.4-1.1 ns between seeds (e972fc8c
+    -0.432 / -0.798; 8abddc9b -0.549 / -1.451) and which block is worst moves with it (the SHARC,
+    the SCSP's state RAMs, span_tex -> texel_x2), so a change of 0.2-0.3 ns cannot be ranked on
+    one or two seeds; and from 23:40 Quartus 17's fitter died on most of these seeds, four
+    minutes in, at ~6 GB peak (far under the units' 14 GB): nine of eleven stack traces are in
+    the timing analyser's exception masks (STA_MASK_MGR::place_mask_on_all_fanout_edges /
+    fanin_edges, from read_sdc's rebuild of the timing netlist during placement), the others in
+    TDB / DYN. The 2b-place lanes died the same way, including lane A at 2b-rc's own 817f0d7f
+    (s5101-s5103), so it is not R1048's SDC exception; which of the SDC's exceptions it is was
+    not found. A full fit costs ~25 minutes when it lives.
+  * TWO LANES OF MINE MAY NOT EACH CHECK FOR A FREE SLOT: both saw two jobs and launched (four
+    Quartus jobs, once). rt/lane2.sh takes one lock for the check and the launch and holds it
+    until the new job is visible. And quartus_map --analyze_file is not optional: FDUE's
+    `~15'(...)` linted and simulated and is a syntax error to Quartus 17 -- six seeds lost.
+  * R1029's standalone method still answers "did the block regress" (2b-rc's SHARC: the PM-bus
+    address, ~2.8 ns of decode) but not "will it close": its seed spread alone is ~0.5 ns, and in
+    context the SHARC's remaining paths are 70 % routing (s4951: 2.7 ns of logic, 7.6 ns of
+    route from an M10K at X38_Y14 through an MLAB at X28_Y8 to an M10K at X38_Y1). What is left
+    is placement: the 2b-place agent's anchors.
