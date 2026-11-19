@@ -54559,3 +54559,22 @@ ports wrote one register, <m> with different values.)
   Proof: the miter against 2b-rc's SHARC (33 programs, negcond n0-n3, the 26 unsupported cases);
   planted: fix_op's bit 0 flipped (caught), l1 swapped in d_ag1 (caught, r301), bad2 dropped from
   d_ag0 (caught, the type-1 PM move outside the PM).
+*R1048 / R1050, where things stand (2026-11-19 08:00, before a planned power cut):* the fits on
+2b-place's lanes (anchors, retiming off in every instance with an SDC exception -- R1044's nanoAddr
+multicycle had stopped matching retimed copies -- multicorner on), slow 100C / slow -40C:
+    s5267  5081ccf9   clk_sys -0.509 / -0.422  clk_mem +0.455  HDMI +0.007 / -0.201  hold positive
+    s5268  5081ccf9   clk_sys -1.465 (span_tex: seed noise)
+    s5271  9b72ab35   clk_sys -0.395 / -0.777  HDMI -0.373 / -0.146, everything else and hold clean;
+                      quartus_map 39,074 ALM needed (051b02ea: 39,647)
+  s5271's clk_sys families: the SHARC multiplier's stage 2 (sharc_fmul g_man.v_p) into the R
+  file's MLAB write (-0.777 at -40C, new); the fill's xbh -> s1_valid (-0.487 at -40C); pm2 port B
+  -> XC.fix_op (-0.395; 5c22d68e's fix_op is aimed at it, not yet fitted); the geometry's project ->
+  clip (-0.134). The placement agent's finding on area: every 2B fit uses every LAB -- "recoverable
+  by dense packing" ~500 ALM whatever the settings (2C: ~1,900-2,000) -- because 2B has 167 memory
+  LABs (2C 123; a memory LAB is a whole LAB no logic shares, ~+440 ALM) and ~+1,190 combinational
+  ALUTs. quartus_map's "ALMs needed" does not see a memory LAB's cost: s5267 -> s5271 fitted
+  41,482 -> 41,410 ALMs for -492 on the map. So area is judged by the fit's numbers from here, and
+  no more flip-flop state goes into MLAB for area (R1050's register file stays: -340 registers and
+  -620 ALUTs). Open: 5c22d68e's replays (queued at the cut), the fmul and fill families, the SHARC's
+  MLAB copies (R ports x 5, the I / M copies of R1044 / e972fc8c) checked against what still needs
+  them.
