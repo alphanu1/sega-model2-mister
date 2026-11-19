@@ -173,6 +173,11 @@ module m2_quad_store #(
   // TINY 4, in_n2 at TINY_FINE 2: near_t of each x / y pair below, m2_geometry NEARF), so the
   // store ANDs them: no subtracts between the clipper's coordinates and a_tiny. (The 2B build.)
   parameter bit          PRE_NEAR = 1'b0,
+  // R1052: each bank's count != 0 kept in a register beside the count (set by its increment,
+  // cleared with it), so the replayed bank's emptiness is a 2:1 select of registers, not a
+  // select of two counts and a zero test (s5302: bank -> count[rbank] != 0 -> s_band -0.714).
+  // The count never wraps (it stops at MAXL < 2^(IW+1)). 0: the zero test. (The 2B build.)
+  parameter bit          CNZ = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here): the
   // payload's width, the vertex word and the texture word.
   parameter int unsigned PAYW   = 4 * 2 * XW + (VX ? VXN : 0) + 4 * 2 * UVW + TXW + 4 * OZW + (MZ ? 1 : 0)
@@ -406,6 +411,13 @@ module m2_quad_store #(
   wire           a_inc  = a_v && a_room && !a_tiny && (a_bank == wbank);
   wire  [IW:0]  wcount = count[wbank] + {{IW{1'b0}}, a_inc};
   wire  [IW:0]  rcount = count[rbank];
+  logic [NBANK-1:0] cnz;                           // R1052 (CNZ): count[b] != 0
+  wire          rnz = CNZ ? cnz[rbank] : (rcount != 0);
+`ifdef VERILATOR
+  always_ff @(posedge clk) if (CNZ && rst_n)
+    for (int b = 0; b < int'(NBANK); b++)
+      if (cnz[b] != (count[b] != 0)) $fatal(1, "m2_quad_store: cnz[%0d] %b against count %0d", b, cnz[b], count[b]);
+`endif
   assign dbg_count = {{(16-IW-1){1'b0}}, wcount};
 
   // The capacity test, written once. count is one bit wider than an index so it
@@ -599,10 +611,11 @@ module m2_quad_store #(
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       for (int b = 0; b < int'(NBANK); b++) count[b] <= '0;
+      cnz <= '0;
       wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       fine <= 1'b1; need <= '0;
     end else if (clear) begin
-      count[wbank] <= '0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
+      count[wbank] <= '0; cnz[wbank] <= 1'b0; wi <= '0; dbg_dropped <= '0; dbg_tiny <= '0;
       // R769: the list just ended decides the next one's threshold.
       // R993: against the list's real room, NQ + NX (R962's spill), not NQ.
       // At NQ alone Virtua Cop's van scene (2,013-2,158 passing quads a list)
@@ -655,6 +668,7 @@ module m2_quad_store #(
           if (dbg_tiny != 16'hffff) dbg_tiny <= dbg_tiny + 16'd1;
         end else if (a_room) begin
           count[a_bank] <= count[a_bank] + 1'b1;
+          cnz[a_bank] <= 1'b1;
         end else if (dbg_dropped != 16'hffff) begin
           dbg_dropped <= dbg_dropped + 16'd1;
         end
@@ -1131,7 +1145,7 @@ module m2_quad_store #(
     end else if (replay_start) begin
       // A band starts only when the previous one has drained (the sequencer
       // waits on replay_busy), so nothing is lost here.
-      sc_run <= (rcount != 0);
+      sc_run <= rnz;
       pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
       hq_wp <= '0; hq_rp <= '0; e_st <= E_IDLE; out_valid <= 1'b0;
     end else begin
@@ -1289,7 +1303,7 @@ module m2_quad_store #(
           // will not come round again to start it, and without this every
           // second band paid the round trip (tb_m2_quad_store_ext: la 0 at a
           // restart after a long gap).
-          if (!sc_run && replay_ahead && rcount != 0) begin
+          if (!sc_run && replay_ahead && rnz) begin
             ahead <= 1'b1; la <= 1'b1; bnd <= cwp;
             s_band <= s_band + 1'b1;
             sc_run <= 1'b1; pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
@@ -1302,7 +1316,7 @@ module m2_quad_store #(
           sc_run <= 1'b0; v1 <= 1'b0; v2 <= 1'b0;
         end else begin
           pend <= 1'b0;
-          sc_run <= (rcount != 0); s_band <= replay_band;
+          sc_run <= rnz; s_band <= replay_band;
           pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
         end
       end else if (!drop) begin
@@ -1323,7 +1337,7 @@ module m2_quad_store #(
         end
         if (drained) begin
           // this band's scan is done; the next band's begins at once
-          if (!ahead && replay_ahead && rcount != 0) begin
+          if (!ahead && replay_ahead && rnz) begin
             ahead <= 1'b1; la <= 1'b1; bnd <= cwp;
             s_band <= s_band + 1'b1;
             pi <= '0; v1 <= 1'b0; v2 <= 1'b0;
