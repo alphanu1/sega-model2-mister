@@ -54575,6 +54575,33 @@ multicycle had stopped matching retimed copies -- multicorner on), slow 100C / s
   ALUTs. quartus_map's "ALMs needed" does not see a memory LAB's cost: s5267 -> s5271 fitted
   41,482 -> 41,410 ALMs for -492 on the map. So area is judged by the fit's numbers from here, and
   no more flip-flop state goes into MLAB for area (R1050's register file stays: -340 registers and
-  -620 ALUTs). Open: 5c22d68e's replays (queued at the cut), the fmul and fill families, the SHARC's
+  -620 ALUTs). 5c22d68e's replays: DOA / fvipers / schamp 2.5196 / 2.5545 / 2.5591 clk_sys a
+  word, the MAME traces (30 M / 20 M / 20 M words) and out FIFOs 0 differ. Open: the fmul and fill families, the SHARC's
   MLAB copies (R ports x 5, the I / M copies of R1044 / e972fc8c) checked against what still needs
   them.
+  s5271's two new families, full paths (STA on s5271's database, slow 100C / -40C; next steps,
+  nothing built yet):
+  * sharc_fmul (manual rounding) stage 2 -> the R file: g_man.v_p (the product, registered in the
+    DSP: Mult0~mac resulta, 0.7 ns) -> the round-up bit (two LUTs: the sticky OR of v_p[21:0] and
+    the guard / round bits) -> the 24-bit increment (Add1) -> the m[24] / ei select (Mux1) -> r's
+    special-case select (two LUTs) -> rf_wd's AND-OR -> g_rf[4]'s MLAB write register: 12.0 / 12.4
+    ns of data. Candidates: the sticky from the operands' trailing zeros made in stage 1 beside the
+    multiply (tz(x) + tz(y) >= 22 / 23, registered: two LUT levels off stage 2, but ~30 LUTs more);
+    or the rounding carry's m[24] as up && (the selected 24 bits all ones), tested in parallel with
+    the increment, and the mantissa after a carry as zero instead of m >> 1 (a select less, no area).
+  * m2_raster_fill xbh -> s1_valid: xbh[31:16] - 1 (Add33) -> the right clamp's compare (LessThan6,
+    two LUTs) -> crb -> the emptiness compare cla <= crb (LessThan7, three LUTs) -> the state's
+    select -> s1_valid: 12.7 ns. The emptiness test can be made on the unclamped values in parallel:
+    max(rxa, x1) <= min(rxb - 1, x2) is rxa < rxb && x1 < rxb && rxa <= x2 && x1 <= x2 (and the
+    mirror for the other pairing) -- four compares from registers, no subtract or clamp in front;
+    the clamped values still go to stage 1's registers, off s1_valid's path. About as many compares
+    as it removes.
+  The SHARC's MLAB copies (s5271's map, each 16 x 32 = two memory LABs): R0-R15 x 5 (g_rf[0-4], one
+  per read port: Rx, Ry, the multifunction's two more, port E -- all needed); I x 5 and M x 5 (u_i1
+  / u_m1 and u_i3 / u_m3: R1044's DAG1 / DAG2 split so the g bit chooses after the read; u_i2 / u_m2
+  the modify forms'; u_i4 / u_m4 e972fc8c's type-1 DAG2 reads at fixed fields; u_iu / u_mu the ureg
+  read); the stacks u_pcs2 / u_pcs3, u_lca / u_lcb, u_lap2 / u_lap3 (two read addresses each: a pop's
+  word and the second pop's -- needed). Timing-only, and the only candidates: i3 / m3 (one 16-deep
+  copy addressed {g, field} instead would remove four memory LABs but put the g decode in front of
+  the read address -- R1044's regression) and i4 / m4 (R1042 read type 1's DAG2 on i2 / m2 behind
+  the modify forms' compares; the pm2 -> pm0 address family still fails, so they stay for now).
