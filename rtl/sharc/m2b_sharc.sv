@@ -2372,12 +2372,15 @@ always_comb begin
     // never A_PM) -- so x_done stays off the address; the bench check below compares every clock)
     pm_xa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
     for (int k = 0; k < 3; k++) begin
-        pm_ia[k] = (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
+        // (R1048: the host's / the clear's write -- registered since 4b0dc9e8, so pm_host is
+        // early -- chooses in the operands too: its address and 0; the sum goes to the RAM)
+        pm_ia[k] = pm_host ? pm_ha :
+                   (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
                    (st == ST_X) ? pm_xa : pm_hidx;
-        pm_ob[k] = ({PM_AW{st == ST_D && !t1 && s1 && !d_pg}} & m1_rd[PM_AW-1:0]) | ({PM_AW{st == ST_D && !t1 && s1 && d_pg}} & m3_rd[PM_AW-1:0]) |
-                   ({PM_AW{st == ST_D && !t1 && s2}} & PM_AW'(sext6(o[32:27]))) | ({PM_AW{st == ST_D && !t1 && s3}} & o[PM_AW-1:0]);
+        pm_ob[k] = ({PM_AW{!pm_host && st == ST_D && !t1 && s1 && !d_pg}} & m1_rd[PM_AW-1:0]) | ({PM_AW{!pm_host && st == ST_D && !t1 && s1 && d_pg}} & m3_rd[PM_AW-1:0]) |
+                   ({PM_AW{!pm_host && st == ST_D && !t1 && s2}} & PM_AW'(sext6(o[32:27]))) | ({PM_AW{!pm_host && st == ST_D && !t1 && s3}} & o[PM_AW-1:0]);
         pm_cs[k] = pm_ia[k] + pm_ob[k];
-        pm_wb[k] = pm_host ? pm_ha : pm_cs[k];
+        pm_wb[k] = pm_cs[k];
     end
     for (int k = 0; k < 2; k++) begin
         dm_ia[k] = dm_dsel ? ({DM_AW{!sd}} & (d_pg ? i3_rd[DM_AW-1:0] : i1_rd[DM_AW-1:0])) : dm_xa;
