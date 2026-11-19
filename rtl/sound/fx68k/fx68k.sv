@@ -1660,6 +1660,16 @@ localparam REG_DT = 17;
 	// synthesis translate_off
 	// Every read the buses can take must match the flip-flop file (registers 0-17).
 	int rf_bad = 0;
+	// both ports writing one register in one T3: how often, and how often with different values
+	// (the only case where Ry's precedence decides anything)
+	longint rf_both = 0, rf_both_diff = 0;
+	always_ff @( posedge Clks.clk)
+		if( actualRx == actualRy && ((wLx && wLy) || (wHx && wHy))) begin
+			rf_both <= rf_both + 1;
+			if( (wLx && wLy && (dLx[7:0] != dLy[7:0] || (wMx && wMy && dLx[15:8] != dLy[15:8]))) || (wHx && wHy && dHx != dHy))
+				rf_both_diff <= rf_both_diff + 1;
+		end
+	final $display( "FX68K RF: %0d clocks both ports wrote one register, %0d with different values", rf_both, rf_both_diff);
 	always_ff @( posedge Clks.clk) begin
 		if( (actualRx < 18 && (rfL_rx !== regs68L[ actualRx] || rfH_rx !== regs68H[ actualRx])) ||
 		    (actualRy < 18 && (rfL_ry !== regs68L[ actualRy] || rfH_ry !== regs68H[ actualRy]))) begin

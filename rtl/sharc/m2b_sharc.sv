@@ -521,9 +521,10 @@ logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three inde
 logic        d_l1, d_cok1t, d_cok1f;        // R1048: l1 (the popped LCE), cok after the pop at l1 = 1 / 0
 // R1048: the access kind's and the map test's gate with the loop end's pop chosen in it (done,
 // l1: early beside the sums), so the sums' bits pass one gate after acc_bits, not two
-(* keep *) logic       d_accg, d_mbg;
+(* keep *) logic       d_ag1, d_ag0, d_mbg;   // R1050: the kind's gate for each outcome of the pop, bad2 in it
 logic        d_compf, d_compf_x;            // R1048: comp_f from the opcode's bits; the benches' comp_f
 logic [12:0] d_fix_ref;                     // (the benches': the handler's fix_on / fix_wr / fix_k)
+logic [7:0]  d_fixop_h;                     // (the benches': the handler's fix_op)
 logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old guard, and without)
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 logic        d_rzb;
@@ -1064,6 +1065,7 @@ always_comb begin
     8'h40, 8'h41, 8'h42, 8'h43, 8'h61, 8'h62, 8'h63: x.fix_wr = 1'b1;
     default: x.fix_wr = 1'b0;
     endcase
+    d_fixop_h = x.fix_op;
     // R1048: THE FIXED ALU's FIELDS FROM THE OPCODE's BITS DIRECTLY, the loop end's pop last: the
     // form has a compute field (d_compf, the handler's comp_f), the field is a fixed ALU op the
     // core does (d_fb), and the field runs (comp_on: 1, the condition or its inverse by the form)
@@ -1077,6 +1079,9 @@ always_comb begin
                   op[47:44] == 4'b0111 || op[47:40] == 8'h04 || op[47:41] == 7'b0000100 || op[47:46] == 2'b11 ||
                   op[47:41] == 7'b0000101;
         fb = d_compf && !op[22] && op[21:20] == 2'd0 && !cp[7] && cp[7:4] != 4'h7 && alu_fixed_ok(cp);
+        // R1050: the op too, from fb -- the handler's select sat behind the form's case (s5267's
+        // worst path, pm2 -> XC.fix_op -0.509); the same value in every clock (benches check)
+        x.fix_op = {8{fb}} & cp;
         con1 = (op[47:45] == 3'b001) ? 1'b1 :
                (op[47:46] == 2'b11) ? !d_cok1 :
                (op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101) ? (ee_ ? !d_cok1 : d_cok1) : d_cok1;
@@ -1350,8 +1355,12 @@ always_comb begin
                 g1t = d_memf && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1t;
                 g1f = d_memf && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1f;
                 g0 = d_memf && !d_rzb && e0;
-                d_accg = done ? (d_l1 ? g1t : g1f) : g0;
-                x.acc = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{d_accg && !bad2}};
+                // (R1050: the pop's done last again, beside the sums' bits -- six inputs a bit, one
+                // gate: s5267's S.la_addr -> the loop end's compare -> done -> XC.acc[2]; l1 and
+                // bad2 go in the gates, early beside the kind bits)
+                d_ag1 = (d_l1 ? g1t : g1f) && !bad2;
+                d_ag0 = g0 && !bad2;
+                x.acc = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{done ? d_ag1 : d_ag0}};
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
@@ -2565,6 +2574,7 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (st == ST_D && {dx.fix_on, dx.fix_wr, dx.fix_k} != d_fix_ref)
         $fatal(1, "the fixed ALU's fields %b, the handler's %b", {dx.fix_on, dx.fix_wr, dx.fix_k}, d_fix_ref);
     always_ff @(posedge clk) if (st == ST_D && d_compf != d_compf_x) $fatal(1, "d_compf %b, comp_f %b", d_compf, d_compf_x);
+    always_ff @(posedge clk) if (st == ST_D && dx.fix_op != d_fixop_h) $fatal(1, "fix_op %h, the handler's %h", dx.fix_op, d_fixop_h);
     always_ff @(posedge clk) if (st == ST_D && (d_l1 ? d_cok1t : d_cok1f) != d_cok1)
         $fatal(1, "the popped outcome by l1 differs");
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))

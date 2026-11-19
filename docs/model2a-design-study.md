@@ -54529,3 +54529,33 @@ exceptions (Ir -> nanoAddr / microAddr, nanoLatch -> the ALU latches) name nothi
     family of it an exception covers is nanoLatch -> the read address -> the ALU latches, which
     R1048's proof covers whatever the path holds (the latches load on enT3 only, never the clock
     after nanoLatch changes).
+*R1050, the planted fault that was missed (the high word's bypass with Rx's write before Ry's):*
+a directed 68000 program for the bench, sim/sound/fx68k_rf2w.py (hand-assembled, 150 words, looped
+with a counter mixed in): every form that can write one register through both ports -- MOVEA.L /
+.W (An)+,An and -(An),An, ADDA / SUBA .L / .W from (An)+ / -(An) into An, CMPM .L / .W, ADDX, SUBX
+and ABCD with both operands on one An, MOVEM.L of a list holding its base, EXG Dn,Dn / An,An /
+Dx,Dy / Dx,Ay, LINK / UNLK on A6 and on A7, MOVEA.L (A7)+,A7 -- each followed by stores of what it
+wrote (the RAM after 0.4 s shows the whole log written). In lockstep with the unmodified fx68k: 40 M
+clocks, 0 differ, 0 RF mismatches. The bypass-order fault is NOT caught by it either, and a counter
+in the bench says why: fx68k wrote one register through both ports in the same T3 on 2,498 clocks
+of the directed program (0 in Dead or Alive's sound program), and on none of them with different
+values -- the only two-port writes to one register are EXG Rn,Rn's. Where the two values are equal
+the order cannot show; the fault is unobservable for every form the 68000 has that writes a
+register twice, not a gap in the test. (The counter stays in the bench: FX68K RF: <n> clocks both
+ports wrote one register, <m> with different values.)
+
+*R1050, s5267's SHARC families (5081ccf9: clk_sys -0.509 slow 100C, -0.422 -40C):*
+  * pm2 -> XC.fix_op, -0.509 (the worst): the fixed ALU's op was the handler's select behind the
+    form's case. Now x.fix_op = fb ? op[19:12] : 0, from fb (28f5be7d's direct decode) -- the same
+    value in every D clock (checked; the bench stops on a difference). A first form, op[19:12]
+    unconditionally (the unit's results are taken only under fix_on), mapped +46 ALM / +25 LUTs and
+    was not kept. The SHARC alone: 4,117 -> 4,132 ALM (inside the estimate's noise), 6,238 -> 6,229
+    LUTs, 1,906 -> 1,905 registers.
+  * S.la_addr -> XC.acc[2], -0.375 at -40C: C (8e5903f2) had moved done into the gate; the loop
+    end's compare (S.daddr == S.la_addr) is late, so done is back in the last gate: x.acc =
+    kind bits & (done ? d_ag1 : d_ag0), d_ag1 = (l1 ? g1t : g1f) && !bad2, d_ag0 = g0 && !bad2 --
+    six inputs a bit, one gate; l1 and bad2 in the gates, early beside the kind bits. The SHARC
+    alone maps exactly as before (4,117 / 6,238 / 1,906).
+  Proof: the miter against 2b-rc's SHARC (33 programs, negcond n0-n3, the 26 unsupported cases);
+  planted: fix_op's bit 0 flipped (caught), l1 swapped in d_ag1 (caught, r301), bad2 dropped from
+  d_ag0 (caught, the type-1 PM move outside the PM).
