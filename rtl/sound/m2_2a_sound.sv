@@ -51,7 +51,8 @@ module m2_2a_sound #(
   parameter bit          OVERLAP  = 1'b0,  // R946: the SCSP's DSP run alongside the next sample's slots (m2_scsp OVERLAP)
   parameter int          TIMER    = 0,     // R976: the SCSP's timers -- 0 MAME's, 1 the arcade's, 2 snd_tarc selects
   parameter bit          LERP     = 1'b0,  // R949: the output linearly interpolated between samples (m2_snd_lerp)
-  parameter bit          SCSP_M10K = 1'b0  // R1008: m2_scsp RAM_M10K (M10K to spare: 2C)
+  parameter bit          SCSP_M10K = 1'b0, // R1008: m2_scsp RAM_M10K (M10K to spare: 2C)
+  parameter bit          SCSP_FDUE = 1'b0  // R1048: m2_scsp FDUE (the 2B build)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -253,7 +254,7 @@ module m2_2a_sound #(
   logic        sm_req, dm_req, dm_we;
   logic [15:0] sm_line, dm_wdata;
   logic [18:1] dm_addr;
-  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT), .OVERLAP(OVERLAP), .TIMER(TIMER), .RAM_M10K(SCSP_M10K)) u_scsp (   // R1008
+  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT), .OVERLAP(OVERLAP), .TIMER(TIMER), .RAM_M10K(SCSP_M10K), .FDUE(SCSP_FDUE)) u_scsp (   // R1008; R1048
     .clk(clk), .rst_n(rst_n),
     .cpu_req(s_req), .cpu_we(!rwn), .cpu_addr(addr[11:1]), .cpu_din(oedb), .cpu_be({!udsn, !ldsn}),
     .cpu_ack(s_ack), .cpu_dout(s_dout), .ipl(ipl),

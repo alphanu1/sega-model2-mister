@@ -48,7 +48,8 @@
 
 module m2_scsp_regs #(
   parameter bit MIDI_OUT = 1'b1,
-  parameter int TIMER    = 0             // R976: 0 MAME's timers, 1 the arcade's, 2 tarc selects
+  parameter int TIMER    = 0,            // R976: 0 MAME's timers, 1 the arcade's, 2 tarc selects
+  parameter bit FDUE     = 1'b0          // R1048: the arcade's due time with one adder after the write (the 2B build)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -147,7 +148,15 @@ module m2_scsp_regs #(
   // sample boundary, ticks where the free-running sample count is a multiple
   // of 2^prescale (mod 2^15, as gcnt)
   wire        arc   = (TIMER == 1) || (TIMER == 2 && tarc);
-  wire [14:0] tdue_a = 15'((15'(gnext >> mrg_t[10:8]) + 15'(9'd256 - {1'b0, mrg_t[7:0]})) << mrg_t[10:8]);
+  // R1048 (FDUE): the same value as ((gnext >> p) + (256 - c)) << p mod 2^15, written
+  // (gnext with its low p bits clear) + (256 << p) - (c << p): the first two from gcnt for each
+  // of the eight prescales (fdk, off the write's path), the write's c << p and one subtract after
+  // it -- it was a subtract, an add and a shift in a row behind ud_q (s4991 ud -> due -0.446)
+  wire [14:0] tdue_r = 15'((15'(gnext >> mrg_t[10:8]) + 15'(9'd256 - {1'b0, mrg_t[7:0]})) << mrg_t[10:8]);
+  logic [7:0][14:0] fdk;
+  always_comb for (int p = 0; p < 8; p++) fdk[p] = 15'((gnext & ~15'((1 << p) - 1)) + 15'(16'd256 << p));
+  wire [14:0] tdue_f = 15'(fdk[mrg_t[10:8]] - 15'({7'd0, mrg_t[7:0]} << mrg_t[10:8]));
+  wire [14:0] tdue_a = FDUE ? tdue_f : tdue_r;
   logic [10:0] scipd_n, scipd_c, mcipd_n;
   logic  [4:0] mw_n, mr_n;
   logic  [2:0] arm_n, ex_n, fired_n, rep, clr;   // clr: {MIDI, timer B / C, timer A}

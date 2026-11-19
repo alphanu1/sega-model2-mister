@@ -77,7 +77,8 @@ module m2_scsp #(
   // R1008: M10K to spare (2C). The FM ring and the DSP's COEF / MADRS, all
   // read through registers, go to M10K in place of MLAB: the same circuit,
   // eight LABs back as logic. 0 keeps them in MLAB.
-  parameter bit RAM_M10K  = 1'b0
+  parameter bit RAM_M10K  = 1'b0,
+  parameter bit FDUE      = 1'b0   // R1048: m2_scsp_regs FDUE (the 2B build)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -1052,7 +1053,7 @@ module m2_scsp #(
   // =====================================================================
   // common registers, timers, interrupts, MIDI
   // =====================================================================
-  m2_scsp_regs #(.MIDI_OUT(MIDI_OUT), .TIMER(TIMER)) u_regs (
+  m2_scsp_regs #(.MIDI_OUT(MIDI_OUT), .TIMER(TIMER), .FDUE(FDUE)) u_regs (
     .clk(clk), .rst_n(rst_n),
     .a(o_addr[5:1]), .we(cw_en), .d(o_data), .be(o_be), .q(regs_q), .mi_pop(mi_pop), .mon(mon),
     .tick44(tick44), .exact(!step_mode), .tph(tph), .tarc(tarc),
