@@ -45,6 +45,8 @@ module m2b_sharc_xu #(
     input  logic [4:0]  pre_dj,         // PRE: the decoder's bit (below)
     input  logic        pre_fxz,        // PRE: fx[30:23] == 0 (R1048)
     input  logic        pre_fyz,        // PRE: fy[30:23] == 0
+    input  logic        pre_fxn,        // PRE: is_nan(fx) (R1052, as b9857549)
+    input  logic        pre_fyn,        // PRE: is_nan(fy)
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -456,10 +458,12 @@ assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m};
 // the operands' tests from fx / fy (R1029: off the flush's path; a flush keeps the sign, the
 // exponent and a NaN, and makes a denormal a zero)
 logic xz, yz;
-// the operands' NaN tests (R1048: made here again -- in D they cost area for a path that was SCALB's)
+// the operands' NaN tests. R1048 (b9857549) made them in D and 2879b4b2 put them back here (the
+// path it was aimed at was SCALB's); R1052: in D again, from the caller's registers -- s5303's
+// worst is this one, fa_x -> is_nan -> cm_nan -> misc_r -0.486 at slow -40C
 logic nan_x, nan_y;
-assign nan_x = is_nan(fx);
-assign nan_y = is_nan(fy);
+assign nan_x = PRE ? pre_fxn : is_nan(fx);
+assign nan_y = PRE ? pre_fyn : is_nan(fy);
 assign xz = MAME_RND ? is_zero(fx) : PRE ? pre_fxz : is_den_or_zero(fx);    // is_zero(xin)
 assign yz = MAME_RND ? is_zero(fy) : PRE ? pre_fyz : is_den_or_zero(fy);
 // the compare: |x| against |y| (flushed in the manual's rounding)
