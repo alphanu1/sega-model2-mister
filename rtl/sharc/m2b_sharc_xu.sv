@@ -47,6 +47,7 @@ module m2b_sharc_xu #(
     input  logic        pre_fyz,        // PRE: fy[30:23] == 0
     input  logic        pre_fxn,        // PRE: is_nan(fx) (R1048)
     input  logic        pre_fyn,        // PRE: is_nan(fy)
+    input  logic [8:0]  pre_fysc,       // PRE: scalb_cls(fy) (R1048)
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -153,8 +154,25 @@ function automatic logic [31:0] scalb_r(input logic [31:0] f, input logic [31:0]
     if (e[31] && (e[30:7] != 24'hFF_FFFF || e[6:0] <= 7'h01)) return f & SIGN;
     return {f[31], 8'(e + 32'sd127), f[22:0]};
 endfunction
+// R1048: SCALB's exponent sum e = ry + (exp - 127) without the 32-bit carry: ry's bits above 8
+// (T) are known in D, so their three possible values after the low part's carry (T - 1, T, T + 1)
+// are classed there -- sign, the rest zero, the rest all ones, {T-1's, T's, T+1's} -- and here
+// only ry[8:0] + (exp - 127) is added; the range tests and the result as scalb_r's (MAME's C int,
+// wrapping at 32 bits)
+function automatic logic [31:0] scalb_p(input logic [31:0] f, input logic [8:0] lo, input logic [8:0] cls);
+    logic signed [10:0] s;
+    logic [2:0] c;
+    logic       sg, zr, on;
+    s = $signed({2'b00, lo}) + 11'(signed'({~f[30], f[29:23]})) + 11'sd1;
+    c = s[10] ? cls[8:6] : (s[9] ? cls[2:0] : cls[5:3]);       // borrow: T - 1; carry: T + 1
+    sg = c[2]; zr = c[1]; on = c[0];
+    if (!sg && (!zr || s[8:7] != 2'b00)) return (f & SIGN) | INF;
+    if (sg && (!on || s[8:7] != 2'b11 || s[6:0] <= 7'h01)) return f & SIGN;
+    return {f[31], 8'(s[7:0] + 8'd127), f[22:0]};
+endfunction
+
 logic [31:0] sc_in;
-assign sc_in = scalb_r(xin, fy);
+assign sc_in = PRE ? scalb_p(xin, fy[8:0], pre_fysc) : scalb_r(xin, fy);   // (R1048: PRE, fy's classes from D)
 
 // ---- FIX: the operand and its alignment (stage A: computed in X's first clock, registered)
 logic [23:0] fm;
@@ -546,7 +564,7 @@ always_comb begin
     end
     M_FLOAT, M_FLOATBY, M_FLOATBYM: begin
         r = fl_r;
-        if (misc_op != M_FLOAT) r = scalb_r(r, fy);
+        if (misc_op != M_FLOAT) r = PRE ? scalb_p(r, fy[8:0], pre_fysc) : scalb_r(r, fy);
         if (misc_op == M_FLOATBYM) begin if (r[31] && !is_zero(r)) a |= AN; end
         else if (r[31]) a |= AN;
         if (is_den_or_zero(r)) a |= AZ;
@@ -603,4 +621,8 @@ always_comb begin
     misc_s = k;
 end
 
+`ifdef VERILATOR
+// R1048: scalb_p on D's classes is scalb_r wherever they are fy's
+always_ff @(posedge clk) if (PRE && pre_fysc == scalb_cls(fy) && (scalb_p(xin, fy[8:0], pre_fysc) != scalb_r(xin, fy))) $fatal(1, "scalb_p %h, scalb_r %h", scalb_p(xin, fy[8:0], pre_fysc), scalb_r(xin, fy));
+`endif
 endmodule

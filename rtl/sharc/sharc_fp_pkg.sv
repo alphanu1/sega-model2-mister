@@ -907,4 +907,13 @@ function automatic fres_t man_rsqrts(input logic [31:0] x);
     return f_rsqrts(flush(x));
 endfunction
 
+// R1048: SCALB's ry classed in D (m2b_sharc_xu scalb_p): {T-1, T, T+1} for T = ry[31:9], each
+// {sign, the rest zero, the rest all ones}
+function automatic logic [8:0] scalb_cls(input logic [31:0] ry);
+    logic [22:0] t, tm, tp;
+    t = ry[31:9]; tm = t - 23'd1; tp = t + 23'd1;
+    return {tm[22], tm[21:0] == 22'h0, tm[21:0] == 22'h3F_FFFF,
+            t[22],  t[21:0] == 22'h0,  t[21:0] == 22'h3F_FFFF,
+            tp[22], tp[21:0] == 22'h0, tp[21:0] == 22'h3F_FFFF};
+endfunction
 endpackage
