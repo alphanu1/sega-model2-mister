@@ -54468,3 +54468,64 @@ machine at a time (quartus_sta counted as a job), 2b-place running the queue on 
   The M10K-sourced paths' "skew" (pm2 -> XC.mbad's -1.539): the M10K's clock pin cell is 1.598 ns,
   a LAB register's 0.480; every path that starts at an M10K's registers carries it, wherever the
   block is placed.
+
+**R1050 -- THE 2B BUILD's SOUND 68000 KEEPS ITS REGISTER FILE IN MLAB, MODEL 1's FORM (sega-model1-mister
+0d062e0): fx68k RF_MLAB, SET ONLY ON THE 2B BUILD's u_snd2a. SAME VALUES ON THE SAME CYCLES. m2_2a_sound MAPPED ALONE WITH THE 2B PARAMETERS: 4,504 -> 3,848 ALM NEEDED (-656), 6,557 -> 5,934 ALUTs, 3,845 -> 3,503 REGISTERS, +128 MEMORY ALUTs (MLAB), NO M10K. RF_MLAB 0 MAPS EXACTLY AS THE UNMODIFIED FILE.**
+Branch 2b-rt2, 2026-11-19. Simulation and quartus_map; the fit decides timing.
+
+(Section: §10, after R1048. Authority, the project rules' order: Model 1's RTL first -- the same author's
+fx68k, the same part, measured there -- then the 68000 as fx68k models it. MAME is not involved: the
+register file's contents are fx68k's own. R1049 is the placement branch's.)
+
+*What was believed:* after R1038 / R1039 every output-neutral saving in the 2B build was taken, and
+what was left (the 15 kHz converter, the pool's result copies, the SCSP overlap and a timer period,
+the framework video for area) changes behaviour and is Ben's. R1048 then took the map to 39,647
+(two failed fits, congestion), and the target became ~39,300 with nothing removed.
+
+*What is now known:* Model 1's area pass (its docs/findings.md, "What each change was worth") had
+already measured one more on the same fx68k: the 68000's register file -- regs68L / regs68H, 576
+flip-flops and the 18:1 read muxes on six buses -- built in MLAB as a live-value table, -526 ALM
+and -357 registers on Model 1's whole design at 80 MHz clk_sys. Model 2's copy of fx68k
+(0602ee4, unmodified until now) differed from Model 1's in that block only. In the 2B map
+(s5264) excUnit was 1,524 own ALUTs and 1,105 registers.
+
+*The change:* fx68k and excUnit take RF_MLAB (default 0). At 0 the reads go through four wires
+(rfL_rx / rfL_ry / rfH_rx / rfH_ry) from the flip-flop file -- the same logic as upstream; the 2A
+and 2C builds (and the 2B build's anything else: it has no other 68000) keep it. At 1 Model 1's
+file, copied: a bank per write port (Rx and Ry, both at T3, Ry applied second), a copy of each bank
+per read address, the low word in two byte lanes, one bit per register and lane naming the newest
+bank, the previous clock's writes bypassed. m2_2a_sound CPU_RF_MLAB, Model2.sv B2. The flip-flop
+file is still written: synthesis drops it (nothing reads it at 1), and in simulation every read
+the buses can take is checked against it every clock (FX68K RF MISMATCH). The SDC's sound-68000
+exceptions (Ir -> nanoAddr / microAddr, nanoLatch -> the ALU latches) name nothing in the file.
+
+*Proof:* the 2A sound bench (tb_m2_2a_sound: m2_2a_sound on Dead or Alive's sound program, no MIDI,
+2 s = 160 M clk_sys at 80 MHz):
+  * The unmodified fx68k, RF_MLAB 0 and RF_MLAB 1: 2,083,730 68000 bus cycles, 88,206 samples, the
+    same WAV (md5 cdb02cf8cd38), 0 FX68K RF MISMATCH (every read checked against the flip-flop file
+    every clock; the bench stops on 16).
+  * Lockstep: the unmodified fx68k (0602ee4, every module, type, enum and file-scope constant
+    renamed o_*) beside the RF_MLAB 1 one on the same inputs, the new one driving the board, every
+    output (eRWn, ASn, LDSn, UDSn, E, VMAn, FC0-2, BGn, oRESETn, oHALTEDn, oEdb, eab) compared every
+    clock: 160,000,000 clocks, 0 differ.
+  * In Verilator an MLAB's cells are written a clock late, as the device writes them (its write
+    address, data and enable are registered at the edge and the cell written in the following
+    cycle), so the bypass is exercised. Without that model the first planted fault was missed --
+    Verilator's arrays take the write at the edge, and the bypass did nothing in simulation.
+  * Planted: the byte lanes' bypass dropped -- 732,319 reads differ (and the WAV is the same: the
+    68000 latches no register in the clock after a write, so it is the MLAB's undefined read the
+    bypass covers, not a value the board uses); Ry's claim of the low lane written as Rx's -- 120 M
+    reads differ, the WAV differs; the high word's bypass with Rx before Ry -- MISSED: no Dead or
+    Alive word writes one register through both ports in one T3 with different values (EXG Rn,Rn
+    writes the same value twice), so the order of the two bypasses is not reached by this program.
+    The order is Model 1's and the flip-flop original's (Ry's assignment after Rx's).
+  * quartus_map: m2_2a_sound alone, the 2B build's parameters (AW 26, POST_WR, EXACT, OVERLAP, TIMER
+    2, LERP, SCSP_M10K, SCSP_FDUE): unmodified 4,504 ALM / 6,557 ALUTs / 3,845 registers / 120
+    memory ALUTs; RF_MLAB 0 the same four numbers; RF_MLAB 1 3,848 / 5,934 / 3,503 / 248, block bits
+    231,840 in all three. quartus_map --analyze_file: fx68k.sv, m2_2a_sound.sv, Model2.sv, 0 errors.
+  * The whole-build map and the fit are still to come; the SDC's exception targets on u_snd2a (Ir,
+    nanoAddr, microAddr, nanoLatch, aluLatch / ccrCore / pswCcr) are not touched by the change and
+    are to be checked by name on its first fit. No exception names the register file; the one path
+    family of it an exception covers is nanoLatch -> the read address -> the ALU latches, which
+    R1048's proof covers whatever the path holds (the latches load on enT3 only, never the clock
+    after nanoLatch changes).
