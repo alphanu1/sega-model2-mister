@@ -54387,14 +54387,84 @@ machine at a time (quartus_sta counted as a job), 2b-place running the queue on 
   2b-place s5251 (c495f78f with its SHARC M10K anchors and register retiming): clk_sys -0.259 /
   -0.336, HDMI +0.252 / +0.264, clk_mem +0.265 / +0.506, hold positive -- the best 2B fit of
   the night; its paths are what 21, 23 and 24 were aimed at.
-  25. ba57784f (SHARC). The shared unit's NaN tests on its float operands (is_nan(fx) / is_nan(fy),
+  25. b9857549 (SHARC). The shared unit's NaN tests on its float operands (is_nan(fx) / is_nan(fy),
      the first test of every misc op) made in D beside the zero tests and registered with fa_x /
      fa_y (pre_fxn / pre_fyn) -- aimed at 2b-place s5262's fm_y -> misc_r (-0.665 at -40C; fm_y
      feeds only the multiplier, so the fitter has it merged with fa_y). Miter at MAME_RND 1 and
      0, all programs, the same clocks; planted (fy's test wired to fx's), caught.
-  26. b9857549 (frame reader, TGTN = FBW_WD = B2). The target line's successor for each scan mode
+  26. ba57784f (frame reader, TGTN = FBW_WD = B2). The target line's successor for each scan mode
      in registers loaded with tgt_y, il choosing (s5262: tgt_y -> the DDR3 arbiter's st -0.166).
      Raster3d miter progressive (three frames) and interlaced (M2_R3D_IL, stcc_f3000), 0 cycles
      differing; planted (the interlaced bound off by one), 3,153,840.
   2b-place s5262 (18d8accf + anchors + retiming + multicorner ON): clk_sys -0.504 / -0.665, clk_mem
   +0.573 / +0.591, HDMI -0.031 / -0.330, hold positive on every corner.
+  (25 and 26 had each other's hashes until this entry; corrected.)
+  27. 0d0e93be (SHARC). SCALB / FIX BY / FLOAT BY's exponent sum without the 32-bit carry: ry's
+     bits above 8 classed in D for the three carries the low part can make (scalb_cls, registered
+     with fa_y), ry[8:0] + the exponent added in X and the class chosen by its carry (s5262: fm_y
+     -> misc_r -0.504, the 32-bit add in front of the range tests). The same result as scalb_r on
+     38 M cases including both 32-bit wraps (0 differ), and checked against it in every clock.
+  28. 051b02ea (SHARC). The access kind's and the map test's popped outcome made for both values
+     of the popped LCE (l1, an MLAB read at S.lstkp's neighbour), l1 choosing in the last gate
+     (s5262: S.lstkp -> XC.acc -0.432); SCALB's low underflow test (e[6:0] <= 1) as a bit test,
+     s[6:1] == 0 -- Quartus had built it as a 7-LUT compare chain. The planted l1 fault was at
+     first missed: no program ended a one-pass loop inside another's last pass, so m2b_randprog
+     LE11 now nests them, and the fault is caught.
+  29. 8e5903f2 (SHARC). The access kind's and the map test's gate with the loop end's pop chosen inside it
+     (d_accg / d_mbg, kept nodes: done and l1 between the three outcomes' gates), so each sum's
+     kind bits pass one gate after acc_bits, not two (s5262, full paths: pm2's DMI / DMM bits ->
+     the I / M MLAB -> the sum -> XC.mbad -0.461 / XC.acc[2] -0.333; the kind bits at 19.0 ns, l1
+     at about 12.5, d_cok1 at 16.7). It removes the per-outcome copies (d_acc1t / f, d_acc0, d_mb1t
+     / f, d_mb0, and the benches' kept d_acc1 / d_mb1). What the s5262 report showed of the family:
+     about 4.6 ns of every path is fixed before any logic -- the M10K's clock cell (1.598 ns, a LAB
+     register's 0.480: the -1.54 to -1.63 "skew"), its data out (1.022) with 97-123 loads (a
+     1.3-1.8 ns route), the read-address gate's 32-64 loads (0.93-0.98) and the MLAB read
+     (0.45-0.71); the DM / PM-B address paths are about half interconnect. Not routing distance:
+     the blocks are within ten columns. Two candidates were made and set aside: the ureg test (ub)
+     beside bad2 in the last gate (not on any of the 80 worst PM-sourced paths in s5262; it was in
+     s5025's, before 026fadb8), and a carry select of the map test on the sums' bits 31:8 (about
+     0.2 ns on XC.mbad only, four adders and two acc_bits more). Planting a fault in the first
+     showed a test gap: no case had an unsupported ureg in a form with an access, so the access
+     gate's ub could be dropped unseen -- m2b_unsupprog adds DM(I0, M0) = STKY and DM(0x1400000) =
+     STKY (an external address, so a store made anyway shows on the bus). And C's l1 fault in the
+     map test was missed by every program (none has an unmapped address under a condition at a
+     nested loop end): it adds IF LCE R1 = DM(I1, 2) at a one-pass loop's end in the first of an
+     outer loop's two passes (flagged) and in its last pass (NEG: the condition after the pop
+     fails, not flagged).
+  30. 2879b4b2 (SHARC, area). 0d0e93be's SCALB split and b9857549's NaN tests in D taken out again, SCALB's
+     underflow bit test (e[6:1] == 0 for e[6:0] <= 1, 051b02ea's) kept in scalb_r. Both were aimed
+     at s5262's fm_y -> misc_r (-0.504 slow 100C, -0.665 at -40C), and its full path (fmy_29) is
+     fm_y[1] -> the sum's low bits (1.8 ns) -> a seven-LUT LessThan chain (5.8 ns) -> misc_r: the
+     compare, which the bit test removes. The 32-bit carry (0d0e93be) and the NaN tests (b9857549)
+     were not on it -- the same endpoints at -40C are the same path. Together they had cost 56
+     ALMs, 82 LUTs and 10 registers (the SHARC mapped alone, below); with them out the SHARC maps
+     at 4,117 ALMs (C's tree: 4,214). Miter at MAME_RND 1 and 0, every program and case; the bit
+     test is the compare it replaces on all 128 values of e[6:0].
+  The area trend (the placement agent's, quartus_map's "ALMs needed" for the whole design):
+  39,293 (2b-rc), 39,495 (c495f78f), 39,526 (18d8accf), 39,647 (051b02ea). The last +121 came
+  with two failed fits in a row, both congested in the geometry box (s5263: 68% interconnect in
+  X11-21 / Y35-45, a 26-minute route, clk_sys -8.5; s5264: routing gave up, 63% peak in X11-21 /
+  Y46-57, "Can't fit design"). R1043's finding again: above about 39,300-39,600 mapped, the fitter
+  packs to 99% and congestion decides. So the SHARC alone was mapped at every R1048 commit
+  (sharea.sh: PXIM 0, SKLR 0, DM_AW 13, MAME_RND 0; ALMs needed / LUTs / registers):
+    2b-rc 3918 / 5868 / 1858; d064ed1c +114 / +233 / +13 (the shifter's field length, lnz and the
+    fadd zero tests in D, DM address per lane -- its target, XC.sh_imm -> shf_h, was 2b-rc's worst
+    family, 1,562 paths, and has not failed since); e972fc8c -17 / -42; f905d280 +54 / +82 (the
+    per-lane address adders: dm1 / pm0 still fail, kept); 8abddc9b to 0d8c01dc within +-15
+    (b2e0a3ab +55 LUTs, +1 ALM); 0f80c4df +50 / +39 and 4b0dc9e8 -30 / -34 / +32 registers;
+    adb233a1 to 28f5be7d within +-21; b9857549 +20 / +36 / +2; 0d0e93be +36 / +46 / +8; 051b02ea
+    +11 / +63; C +31 / -8 (fewer LUTs, the packing estimate up: the estimate moves +-30 between
+    trees that differ by a few LUTs, so single small deltas say nothing). Whole SHARC 2b-rc ->
+    051b02ea: +265 ALMs. Nothing else grew: NEARF moved about 300 LUTs from raster3d to the
+    geometry (+10 net), the SCSP's FDUE -7.
+  No retime has a fit-measured slack gain apart from seed noise -- the same tree spreads +-0.5 ns
+  over seeds (s4931 / s4932, s4961 / s4962) -- so reverts are chosen by whether the change's
+  target is still on a failing path, not by a gain: item 30 is the one whose target path is shown
+  by its own full report to be elsewhere.
+  Fits since: s5263 (28f5be7d, 2b-place) collapsed, s5264 (051b02ea) did not route, s5265 and
+  s5266 crashed alone (STA_MASK_MGR, then TDB at the timing netlist's rebuild after physical
+  synthesis -- memory pressure on a machine whose /tmp is RAM and whose swap was at 16 GB), so no
+  Verilator build or replay runs in a fit's first 15 minutes from here.
+  The M10K-sourced paths' "skew" (pm2 -> XC.mbad's -1.539): the M10K's clock pin cell is 1.598 ns,
+  a LAB register's 0.480; every path that starts at an M10K's registers carries it, wherever the
+  block is placed.
