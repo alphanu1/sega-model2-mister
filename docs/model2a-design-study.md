@@ -54469,6 +54469,245 @@ machine at a time (quartus_sta counted as a job), 2b-place running the queue on 
   a LAB register's 0.480; every path that starts at an M10K's registers carries it, wherever the
   block is placed.
 
+**R1049 -- THE 2B PLACEMENT, AND NOT CLOSED: R1043's CORNER RECIPE DOES NOT CARRY OVER. THE 2C
+BUILD HAD ONE BLOCK IN THE SCALER's CORNER TO MOVE; ON 2B THE SHARC, SOUND, i960 AND GEOMETRY TRADE
+THE DIE SEED BY SEED, AND NO ANCHOR SET MOVED clk_sys BY MORE THAN THE SEED SPREAD (0.4-1.0 NS). WHAT
+DID: REGISTER RETIMING (A FITTER SETTING) -- BEST s5251, ONLY clk_sys FAILING (-0.336 AT SLOW -40C),
+HDMI +0.252 ON EVERY CORNER. THREE THINGS THE NIGHT FOUND: THE PROJECT's STA READ ONE CORNER
+(MULTICORNER WAS OFF: EVERY "ALL CORNERS" FIGURE IN R1043-R1048 IS SLOW 100C, AND -40C IS 0.1-0.4 NS
+WORSE); RETIMING MOVES REGISTERS AN SDC EXCEPTION NAMES (THE 2B 68000's nanoAddr, THREE SEEDS) AND IS
+NOW OFF PER INSTANCE THERE, CHECKED; AND THE 2B FIT's 99 % IS ITS CONTENT (MLAB AND LUT-ONLY ALMs),
+NOT ANY SETTING.****
+Branch 2b-place (off 2b-rc 817f0d7f, 2b-rt2 merged at each of its heads), 2026-11-18/19. Quartus
+17.0 fits and their fitted netlists read back (quartus_cdb, quartus_sta); no RTL; no board.
+
+(Section: §10, after R1048. Authority: the fits themselves. No circuit question: every change is
+a location assignment or a fitter setting, so neither Model 1 nor MAME is the reference. Nothing
+in sys/ touched; location assignments on our own instances only.)
+
+*What was believed (the brief, from R1043):* the 2C recipe -- the scaler's hard blocks at the
+release's sites, the conflicting block's moved out of its corner, the effort settings -- would close
+2B as it closed 2C; on 2B the SHARC's M10K and DSPs wanted to be together and near its logic.
+
+*WHAT THE SIX 2b-rc SEEDS SAY (s4901-s4906, read back with R1043's locs.tcl; scratchpad grp.py: FF
+centroid and spread, M10K / DSP columns per block; fam.tcl: worst slack into each block):*
+  * The device: M10K columns X5 (46 sites), X14 / X26 / X38 / X41 / X49 (80, rows 1-80), X58 / X69
+    / X76 (36, rows 1-36 -- the HPS above); DSP X20 / X32 (rows 2-79), X54 / X86 (rows 2-35). The
+    scaler's 56 anchors take 28 of the corner's 108 M10K and 13 of its 34 DSPs.
+  * The SHARC (6,021 ALUT, 1,741 FF, 80 M10K: pm0 / pm1 / pm2 / dm0 / dm1, sixteen 1-bit-wide blocks
+    each, 1 DSP) sat in the scaler's corner on five seeds, its M10K spread over six columns
+    (X38-X76, rows 5-35), its logic at (67-73, 14-24); on s4902 it sat bottom-left, compact (X26-X49
+    rows 1-24) and the sound took the corner. The sound (44 M10K, 6 DSP) moved between bottom-left,
+    bottom-centre and the corner; the i960 was bottom-left on all six.
+  * What failed, per block, on every seed: the SHARC (PM -> D -> DM address -0.36 to -1.55, fadd -0.70
+    to -1.24, xu -0.33 to -1.27), the fill's reciprocal M10K (-0.89 to -1.45; R952 again, retimed in
+    R1048 by RECIP_EARLY), the geometry (-0.09 to -1.44), the sound (-0.10 to -1.29), the 2B inputs
+    (+0.73 to -1.24). The PM -> DM path (s4906): the M10K's tco 2.6 ns, the opcode bit's fanout to
+    74-140 loads (1.45 ns), the DAG adder, the address select driving 64 loads into 32 M10K (2.1-2.5
+    ns), clock skew -1.3 to -1.5 between the two M10K. Fanout, not distance: RTL's (R1048's per-lane
+    address copies and adders answer it).
+  * The 19 DSB anchors R1043 added named nothing on 2B (Warning 15706 x 19): dropped (7d9accd3).
+
+*THE ANCHOR VARIANTS (each fitted; clk_sys / clk_mem / HDMI / hold at slow 100C unless named; tree
+in brackets; seeds of one row are one qsf):*
+  A  the sound's 50 hard blocks at s4711's sites (the 2C clean seed: bottom-left)  [2b-rc]
+       s5101-s5103: three fitter crashes in register packing (STA_MASK_MGR::place_mask_on_all_
+       fanout_edges); without its six DSPs (A', M10K only) s5104 -1.103 / +0.302 / -0.119 / +0.242 --
+       the SHARC -0.622, its best on that RTL; the worst geometry clip -> m2_eng_ra.
+  B  the SHARC compact in the corner, dm0 / dm1 one column (X58 rows 1-32)  [2b-rc]
+       s5111 -1.908 / -0.115 / +0.131 / +0.186: the DM address 3.09 ns from row 19 to row 1 of a
+       32-row column. One column per DM lane is wrong while one register drives both lanes.
+  E  the SHARC's and its bus's 85 blocks at s4902's sites  [665198fe]
+       s5121 Quartus TDC internal error; s5122 -0.569 / +0.321 / -0.262 / +0.196 (the frame
+       writer's b_idx -> vhi; the SHARC -0.478 from the copro's output FIFO).
+  F  A' on the merged RTL  [665198fe]  s5131 -0.550 / +0.483 / -0.288 / +0.176 (S.pcstk -> XC.mbad);
+     F2 [d51577b0] s5151 -0.515 / +0.481 / -0.210 / +0.147, s5152 -0.749 / +0.207 / -0.361 / +0.177.
+     With the sound pinned bottom-left the SHARC goes left of centre and the i960 into the corner.
+  G  A' plus the SHARC's, bus's and i960's blocks at s5131's sites  [c1c1f2c5 / d51577b0]
+       s5141 -0.621 / -0.139 / -0.098 / +0.136 (the bridge's io_sel -> PM port A, the host's PM
+       write across the die); s5161 crash; s5162 -0.839 / +0.449 / -0.246 / +0.218.
+  J  every core hard block (567, not the sound's DSPs) at s4932's sites, the retime's best
+     unanchored seed  [ee8a6257]  s5171 -1.431 / +0.614 / -0.313 / +0.238 (SHARC st -> xbus;
+     the sound -0.888). The hard blocks of a good seed do not bring its logic placement with them.
+  K  the SHARC's 80 M10K packed by hand: pm0 / pm1 / pm2 at X38 / X41 / X49 rows 1-16, dm0 at X38
+     17-27 + X41 17-21, dm1 at X41 22-27 + X49 17-26, the fmul DSP at X54_Y12; the sound's M10K at
+     s4932's corner sites  [ee8a6257]
+       s5181 -0.575 / -0.010 / +0.072 / +0.224; s5182 -1.092 / +0.354 / -0.088 / +0.159.
+  L  K plus the i960 bridge's data-cache M10K beside the SHARC (X26 rows 10-26)  [ee8a6257]
+       s5191 -1.125 / +0.239 / -0.317 / +0.240.  (The host PM write was registered in RTL meanwhile,
+       4b0dc9e8.)
+  N  K  [3ad09e20]  s5201, s5202 register-packing crashes; s5203 -0.838 / +0.024 / -0.078 / -0.308
+       (hold: emu io_intreq -> i960 irq_prev, clk_sys -> clk_i960).
+  The retime agent's unanchored fits on the same heads: e972fc8c -0.798 / -0.432, 6106a7f1 -0.984,
+  b2e0a3ab -0.667 / -1.178, 0d8c01dc -0.786, 8abddc9b -1.451 (the SCSP's M10K in the corner).
+  Fifteen anchored completions -0.515 to -1.908; nine unanchored -0.432 to -1.451. No anchor set
+  moved the distribution by more than its seed-to-seed spread (0.4-1.0 ns).
+
+*FITTER SETTINGS (each one variable on K's anchors, 3ad09e20 unless named):*
+  M  PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON as an instance assignment on the SHARC: s5211
+     -1.000 / +0.066 / -0.105 / +0.155 -- and no duplicate made in the SHARC: as an instance
+     assignment it does nothing. (Globally it is R385 / R405's SDRAM-IOE problem: not tried.)
+  O  PHYSICAL_SYNTHESIS_EFFORT EXTRA: s5231 -0.967 / +0.352 / +0.172 / +0.241.
+  P  PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON: s5221, s5222 crashes; s5223 -0.460 / +0.383 / +0.007
+     / +0.130 (only the SHARC's pm2 -> D and the sound's -0.110 under zero).
+  R  retiming alone, no new anchors  [96aefc27 = rt2 c495f78f]: s5241 -0.336 / -0.118 / -0.519 /
+     +0.131 (slow -40C: -0.619 / -0.308 / -0.641).
+  P2 K + retiming  [96aefc27]: s5251, ALL CORNERS --
+          slow 100C   clk_sys -0.259  clk_mem +0.265  clk_i960 +1.039  HDMI +0.252  h2f +0.625  hold +0.181
+          slow -40C   clk_sys -0.336  clk_mem +0.506  clk_i960 +1.270  HDMI +0.264  h2f +0.841  hold +0.164
+          fast 100C   setup >= +3.039 on every clock                                          hold +0.099
+          fast -40C   setup >= +3.663                                                         hold +0.078
+       Only clk_sys fails: at -40C the SHARC's pm2 port B -> D (-0.336) and the geometry clip's qsx ->
+       quad_store (-0.114); at 100C the frame writer's b_idx -> vhi (-0.259). 41,453 ALM.
+  The fitter's own estimate for its first retiming pass: +4.15 to +4.95 ns. It moved 677-829
+  registers (texel_bl, i960 fpadd / fpcvt, SCSP, the geometry pool, tile fetch, fill, m2_geo's
+  pushq, a few in the SDRAM arbiter) -- none in the SHARC on s5223, 65 on s5251. The gain is
+  everywhere else: the blocks that were 0.1-0.4 ns short stop being so, and the SHARC's D stage is
+  left as each seed's worst path.
+
+*THE CORNERS:* TIMEQUEST_MULTICORNER_ANALYSIS OFF (since 45f10d94, P1.5) made the flow's STA, and
+the scratchpad's slacks.sh / slack1.sh, report slow 100C only, and the fitter optimise for it only.
+Read back at all four (corners.tcl): slow -40C is 0.08-0.3 ns worse than slow 100C on clk_sys,
+clk_mem and HDMI on every seed measured (2b-rc s4904 HDMI +0.157 at 100C, -0.027 at -40C; s5241
+clk_sys -0.336 / -0.619); the fast corners pass setup by 2.6 ns or more and are where hold is
+thinnest (+0.016 .. +0.099). R1043's "43 of 43 >= 0" for s4711 / s4712 is slow 100C. Turned ON
+(4efa9b13) so the fitter sees every corner.
+
+*RETIMING AND CLOCK-DOMAIN CROSSINGS (s5251; cdc.tcl, cdc2.tcl, nbclk.tcl in the scratchpad):* the
+fit report lists 1,366 "Retimed Register" nodes; 829 are registers in the final timing netlist
+(the rest are _RTM combinational cells and _OTERM registers a later pass retimed away). Their
+clocks: clk_mem 373, clk_sys 330, clk_i960 126; all under emu:emu, none in sys/. Every synchronous
+fanin and fanout keeper of each (145,810 edges; 1,185 neighbours outside the register's own block,
+each neighbour's clock looked up): neighbours only on clk_mem / clk_sys / clk_i960. The 195 edges
+whose two ends differ in clock are all clk_sys <-> clk_i960 -- group B, one PLL, an exact 2:1,
+TIMED by design (R460, R586): m2_cpu_bridge r_addr / r_wdata[31] (clk_i960, under R586's two-cycle
+multicycle, which names the clock, not the register) into m2_geo's pushq, and emu io_intreq into
+the i960's interrupt logic. None across the asynchronous group A (clk_mem, SDRAM) / group B cut,
+none on HDMI / video / audio / h2f / FPGA_CLK. get_timing_paths -false_path from / to the 829: 0.
+No neighbour is an altera_std_synchronizer; the synchronisers next to a retimed register are
+upstream of it on its own clock and were not moved (texpt_s[2], R620; vbl_d / vbl_dd, R564;
+m2_texel_cdc f_tex; m2_sdram_cdc's ports). On s5251 no retimed register is in a Model2.sdc exception's
+collection (game_id, gam_s2 / m2, the 68000's Ir / nanoLatch sets; the YM / Z80 sets are not in
+the 2B build); sys_top.sdc's name only sys/ nodes. BUT SEE BELOW: on s5262 / s5267 / s5268 it was. Synchronizer Identification is Auto -- Quartus
+17.0 refuses a global OFF (message 18330) -- and Auto keeps identified chains out of physical
+synthesis, so no dont_retime / preserve was added. The check is to be rerun on the build that
+ships: it is per netlist.
+
+
+*ONE FIT AT A TIME (from 02:50; the coordinator's rule after the retime agent's solo rerun of a
+crashed seed survived), anchors + retiming + multicorner ON, each on the retime agent's newest head:*
+  s5261  2b4d7c1b (rt2 fe086f1f)  TDC internal error after routing (tdc_accessories_delay_slack_
+         module.cpp:215) -- alone; lane E's s5121 died the same way with multicorner OFF and no
+         retiming, so it does not follow either setting.
+  s5262  18d6f3f4 (rt2 18d8accf)  slow 100C / -40C: clk_sys -0.504 / -0.665 (the SHARC's fm_y ->
+         misc_r, then pm2 -> D), clk_mem +0.573 / +0.591, clk_i960 +2.437 / +2.494, HDMI -0.031 /
+         -0.330, h2f +1.541 / +1.454; fast setup >= +2.795; hold >= +0.076.
+  s5263  5ca1ea60 (rt2 28f5be7d)  routing collapse: 26 min routing, 68 % interconnect in X11-21 /
+         Y35-45, clk_sys -8.516 (clip ti -> qsy), clk_mem -2.832, HDMI -4.440, hold -0.447. Read back
+         against s5262 (the qsf identical but for SEED, every anchor bound in both): the geometry
+         had left the raster's side -- logic (24, 56) spread 15 -> (22, 27) spread 22, its M10K from
+         rows 46-62 to 7-23, its DSPs to X20_Y20 / X32_Y12-14 -- and the i960 had moved up into the
+         congested box (1,842 cells there against 441).
+  s5264  9c462c54 (rt2 051b02ea)  did not route ("routing phase terminated due to routing
+         congestion", 63 % in X11-21 / Y46-57, the geometry / char-cache area).
+  quartus_map's ALMs needed over the night: 39,293 (2b-rc) -> 39,495 (c495f78f) -> 39,526
+  (18d8accf) -> 39,647 (051b02ea); the last +120 came with both routing failures.
+  3025fd03: the geometry's 13 hard blocks (clip stack, engine cc_mem and tp_tab M10K, m2_geo's
+  push queue, the pool's fp_mul and the engine's two multipliers) at s5262's sites. The engine's
+  multipliers sit 20-30 rows from the engine's logic on every seed read, but have +6.8 ns or more
+  into them at every corner (dsp.tcl), and X20 / X32 are full from row 18 up with the raster's 52
+  DSPs, so they were pinned where s5262 had them rather than displacing the raster.
+  s5265  3025fd03  register-packing STA_MASK_MGR segfault -- ALONE on the machine.
+  s5266  3025fd03  TDB internal error (tdb_node.cpp:2080, clean_up_dangling_fanin_edges in
+         sta_rebuild_and_preprocess_tdb) at the same step, alone. Both: retiming ON, multicorner
+         ON, the SHARC / sound / scaler / geometry anchors. The step is the timing netlist's rebuild
+         after physical synthesis; it has also crashed without retiming (N s5201 / s5202, the retime
+         agent's unanchored s4972 / s4983) and passed with it (s5241, s5251, s5262).
+  Memory: the coordinator recalls the same TDB / TDC / STA errors at the same steps on 2026-10-11
+  with /tmp (RAM) holding 12 GB beside three fits; tonight Verilator replays (~5 GB each) ran
+  beside the fits and swap stood at 16 GB used. From s5267 each launch logs free -g and df /tmp
+  at launch and at register packing.
+
+*RETIMING AND THE SDC's EXCEPTIONS (found on s5268, 07:05):* the same check on s5262, s5267 and
+s5268 found retiming had moved the 2B sound 68000's nanoAddr[3] / [4] / [6] -- the targets of
+R1044 / R1048's Ir -> nanoAddr two-cycle multicycle -- into nanoAddr[4]_NEW_REG336 and the like,
+which {*u_snd2a|u_cpu|nanoAddr[*]} no longer matches: the exception silently fell off those bits
+and s5268 reported Ir[2] -> nanoAddr[4]_OTERM339 at -0.577 against one cycle. That direction is
+only pessimistic; the other one is not -- logic moved across a register that still matches a
+pattern would be timed under an exception it does not have. An exception is valid only on the RTL's
+own register, so widening the pattern is not the fix: f0fad900 turns retiming OFF per instance on
+every instance that holds a register a Model2.sdc exception names -- the 2B sound 68000 (u_cpu), the
+game ID (u_gameid), the gamma select's synchronisers (gam_s1 / s2 / m1 / m2), the CPU bridge (R586's
+payload) and the payload's first reader (m2_geo's u_pushq); the YM / Z80 / Model 1 68000 sets are
+not in the 2B build. Quartus 17.0 honours it: s5271 retimed 747 registers, 0 under those instances
+(s5268: 16), and the 68000's exception targets are all there by their RTL names (Ir 16, nanoAddr 9,
+microAddr 10, nanoLatch 66, aluLatch 16, ccrCore 2, pswCcr 5; excheck.sh / names.sh). The CDC check
+(cdc2 / nbclk) is per netlist and is to be rerun on whichever seed goes to the board.
+
+  s5267  b237a32b (rt2 5081ccf9), multicorner OFF in the fitter, corners by a separate STA:
+         100C / -40C clk_sys -0.509 / -0.422 (the SHARC's pm2 -> D, the SCSP's st M10K, S.la_addr
+         -> XC.acc), clk_mem +0.455 / +0.525, HDMI +0.007 / -0.201, hold >= +0.086. The geometry
+         is off the failing list.
+  s5268  same: clk_sys -1.465 / -1.326 (span_tex e_x -> lp2_x; the 68000's lost multicycle above),
+         clk_mem +0.278 / +0.231, HDMI +0.267 / +0.158, hold >= +0.076.
+  s5269  same: TDC internal error after routing, multicorner OFF, 22 GB free: the TDC crash
+         follows neither multicorner nor memory.
+  s5270  f0fad900 (rt2 9b72ab35, the 68000's register file in MLAB; map ALMs needed 39,074, from
+         39,566): register-packing STA_MASK_MGR crash, 23 GB free.
+  s5271  f0fad900: clk_sys -0.395 / -0.777 (the SHARC's fmul v_p -> its R-file MLAB at -40C; pm2 ->
+         D at 100C; the fill's xbh -> s1_valid -0.487), clk_mem +0.658 / +0.486, clk_i960 +1.976,
+         HDMI -0.373 / -0.146, h2f +1.805, hold >= +0.087. With multicorner OFF the fitter ignores
+         -40C, which is now 0.38 ns worse than 100C (0.16 with it ON on s5262): ON again from s5273.
+  s5272  f0fad900, multicorner OFF: segfault in routing (sta_post_process_dqs_delay_chain, as G2
+         s5161). The last launch before the 09:00 power cut.
+
+*WHY THE 2B FIT SAYS 99 % (fit reports; ALMs needed = A used - B recoverable by dense packing + C
+unavailable):* every fit, 2B or 2C, uses 4,180-4,190 of the 4,191 LABs -- the fitter always spreads
+over the die; the 95 / 99 % is B, how much of the spread it could squeeze back. 2B: B ~420-590
+whatever the settings (no effort settings and no anchors, 2b-rt-f6 s3431: 554; R1043's effort and
+anchors, 2b-rc s4903: ~590; these anchors, s5203: 539; with retiming, s5251: 494). 2C with a small
+map: area-2c s2501 (map 39,300) needed 39,790 with B 1,891; ddr3p s2301 (39,263) 39,557 with B
+2,042. s5267 against s2501: memory ALUTs 2,615 / 1,946 (167 / 123 memory LABs, +440 ALM -- a memory
+LAB is a whole LAB), LUT-only ALMs 19,532 / 18,884, combinational ALUTs 59,146 / 57,953, registers
+41,306 / 42,875. quartus_map's estimate does not see that content: at the same map figure 2B needs
+~1,500 ALM more in the fit, so R1043's ~39,300 line is a 2C number. More state moved to MLAB cuts
+the map figure and costs whole LABs.
+
+*KEPT (2b-place):* 7d9accd3 (R1043's DSB anchors dropped: they named nothing on 2B); 4efa9b13
+(the SHARC's 80 M10K packed into X38 / X41 / X49 rows 1-27 with its fmul DSP at X54_Y12, the sound's
+M10K at s4932's corner sites, retiming ON, multicorner ON); 3025fd03 (the geometry's 13 hard blocks
+at s5262's sites); f0fad900 (retiming OFF per exception-holding instance). The anchors are kept
+because they cost nothing measured, hold the SHARC to one compact block, and the geometry's stopped
+the two routing failures' pattern (s5267 / s5268 / s5271 routed in 4-6 min, the geometry off the
+failing list) -- each on too few seeds to separate it from the seed spread. 2b-rt2 merged at every
+head (last 9b72ab35, merge 2316e593).
+
+*CRASHES:* Quartus 17.0 crashed on 15 of 39 launches (s5264 completed but did not route). Two kinds. Early, at the timing netlist's
+rebuild after physical synthesis ("Starting register packing"): STA_MASK_MGR segfaults and TDB
+internal errors -- with and without retiming, anchors or multicorner, alone on the machine (s5265,
+s5266, s5270) and beside other jobs. Late, after routing: TDC internal errors
+(tdc_accessories_delay_slack_module.cpp:215: s5121, s5261, s5269 -- multicorner OFF / ON / OFF,
+retiming OFF / ON / ON) and segfaults in sta_post_process_dqs_delay_chain (s5161, s5272). Pinning the sound's DSP blocks crashed register packing 3 of 3; nothing
+else was repeatable. The coordinator's earlier finding -- that running Quartus jobs concurrently
+raises the rate (one fit machine-wide from 02:50) -- did not stop the solo crashes; memory was
+logged at launch and at register packing from s5267 (7-9 GB used of 31, /tmp 6.1 of 16) and was
+never short.
+
+*NOT SETTLED:* a clean seed (target: every clock but HDMI -0.09 or better at all four corners, hold
+positive). The failing set is now the SHARC's D stage (pm2 -> D, S.la_addr / S.daddr -> XC.acc,
+fmul -> R-file MLAB) plus one placement-dependent path per seed (fill, span_tex, frame writer,
+geometry clip). Next: seeds on the newest 2b-rt2 head with multicorner ON, the CDC / exception check
+on any seed proposed for the board, and the board itself -- nothing here has run on hardware, and a
+retimed netlist is not the RTL's register for register.
+
+*TOOLS (scratchpad, copied to sm2-builds/scratch-save/r1049/ -- they name /tmp paths inside):* grp.py
+(block centroids / M10K / DSP columns), fam.tcl (worst slack into each block, every corner),
+corners.tcl / csum.sh (four-corner setup and hold per clock), pin_from.py (a block's hard blocks at
+another netlist's sites, names normalised), sharc_pins.py / col_pins.py (hand layouts), cdc.tcl /
+cdc2.tcl / nbclk.tcl (retimed registers' clocks and neighbours), excheck.sh / names.sh (retiming
+inside the exception instances; the exception targets by name), dsp.tcl, lane1-3.sh (one fit
+machine-wide, memory logged), post.sh.
+
 **R1050 -- THE 2B BUILD's SOUND 68000 KEEPS ITS REGISTER FILE IN MLAB, MODEL 1's FORM (sega-model1-mister
 0d062e0): fx68k RF_MLAB, SET ONLY ON THE 2B BUILD's u_snd2a. SAME VALUES ON THE SAME CYCLES. m2_2a_sound MAPPED ALONE WITH THE 2B PARAMETERS: 4,504 -> 3,848 ALM NEEDED (-656), 6,557 -> 5,934 ALUTs, 3,845 -> 3,503 REGISTERS, +128 MEMORY ALUTs (MLAB), NO M10K. RF_MLAB 0 MAPS EXACTLY AS THE UNMODIFIED FILE.**
 Branch 2b-rt2, 2026-11-19. Simulation and quartus_map; the fit decides timing.
