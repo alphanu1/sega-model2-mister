@@ -263,6 +263,15 @@ def main():
                  (g.randrange(8) << 27) | comp())
         elif r < 0.77:                                     # a counted loop of 1-5 words
             n = g.randrange(1, 5); L = g.randrange(1, 6)
+            if LE11 and g.random() < 0.3:              # R1048: a one-pass loop's end inside another's last pass
+                # LCNTR = 1, DO (3) { LCNTR = 1, DO (1) { IF NOT LCE dreg <-> DM }, NOP }: at the inner
+                # end the pop leaves the outer's counter, 1, so the word's LCE is the popped one's
+                i = g.randrange(8); d = g.getrandbits(1)
+                emit((0x0c << 40) | (1 << 24) | 3)
+                emit((0x0c << 40) | (1 << 24) | 1)
+                emit((0b0110 << 44) | (i << 41) | (d << 39) | (1 << 38) | (0x0f << 33) | (rreg() << 23) | comp(False))
+                emit((0x02 << 39) | (0x1f << 33))
+                continue
             if LE11 and g.random() < 0.5:              # R1048: a one-pass loop ending in an 11 form's fixed op
                 ws = [(0x02 << 39) | (0x1f << 33) | comp(False) for _ in range(L - 1)]
                 i = g.randrange(8); m = g.randrange(8); d = g.getrandbits(1)

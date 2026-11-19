@@ -167,7 +167,7 @@ function automatic logic [31:0] scalb_p(input logic [31:0] f, input logic [8:0] 
     c = s[10] ? cls[8:6] : (s[9] ? cls[2:0] : cls[5:3]);       // borrow: T - 1; carry: T + 1
     sg = c[2]; zr = c[1]; on = c[0];
     if (!sg && (!zr || s[8:7] != 2'b00)) return (f & SIGN) | INF;
-    if (sg && (!on || s[8:7] != 2'b11 || s[6:0] <= 7'h01)) return f & SIGN;
+    if (sg && (!on || s[8:7] != 2'b11 || s[6:1] == 6'h00)) return f & SIGN;   // (s[6:0] <= 1 as a bit test: a compare is a LUT chain here, s5262)
     return {f[31], 8'(s[7:0] + 8'd127), f[22:0]};
 endfunction
 
