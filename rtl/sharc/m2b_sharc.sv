@@ -1250,8 +1250,10 @@ always_comb begin
         logic ex, rz, ub;
         logic [7:0] u;
         u = (op[47:45] == 3'b010) ? op[30:23] : op[39:32];
-        ub = (op[47:45] == 3'b010) ? !ureg_ok(u, !op[31]) :
-             (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(u, !op[40]) : 1'b0;
+        // (R1048: each form's ureg field tested apart, the form choosing after the tests -- it
+        // was the field's select in front of ureg_ok; u is op[30:23] for 010, else op[39:32])
+        ub = (op[47:45] == 3'b010) ? !ureg_ok(op[30:23], !op[31]) :
+             (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(op[39:32], !op[40]) : 1'b0;
         // (R1048: cbad is set only inside the compute decode's `if (comp_f)`, and never for a zero
         // field (cf996899), so it stands for comp_f && comp != 0 && cbad)
         rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || cbad ||
