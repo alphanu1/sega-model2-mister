@@ -45,9 +45,6 @@ module m2b_sharc_xu #(
     input  logic [4:0]  pre_dj,         // PRE: the decoder's bit (below)
     input  logic        pre_fxz,        // PRE: fx[30:23] == 0 (R1048)
     input  logic        pre_fyz,        // PRE: fy[30:23] == 0
-    input  logic        pre_fxn,        // PRE: is_nan(fx) (R1048)
-    input  logic        pre_fyn,        // PRE: is_nan(fy)
-    input  logic [8:0]  pre_fysc,       // PRE: scalb_cls(fy) (R1048)
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -151,28 +148,13 @@ function automatic logic [31:0] scalb_r(input logic [31:0] f, input logic [31:0]
     e = $signed(ry) + 32'(signed'({~f[30], f[29:23]})) + 32'sd1;
     // e > 127, e < -126 as bit tests (R1029: Aggressive Area builds the compares as chains)
     if (!e[31] && e[30:7] != 24'h0) return (f & SIGN) | INF;
-    if (e[31] && (e[30:7] != 24'hFF_FFFF || e[6:0] <= 7'h01)) return f & SIGN;
+    // (R1048: e[6:0] <= 1 as e[6:1] == 0 -- a compare is a seven-LUT chain here, s5262 fm_y -> misc_r)
+    if (e[31] && (e[30:7] != 24'hFF_FFFF || e[6:1] == 6'h00)) return f & SIGN;
     return {f[31], 8'(e + 32'sd127), f[22:0]};
-endfunction
-// R1048: SCALB's exponent sum e = ry + (exp - 127) without the 32-bit carry: ry's bits above 8
-// (T) are known in D, so their three possible values after the low part's carry (T - 1, T, T + 1)
-// are classed there -- sign, the rest zero, the rest all ones, {T-1's, T's, T+1's} -- and here
-// only ry[8:0] + (exp - 127) is added; the range tests and the result as scalb_r's (MAME's C int,
-// wrapping at 32 bits)
-function automatic logic [31:0] scalb_p(input logic [31:0] f, input logic [8:0] lo, input logic [8:0] cls);
-    logic signed [10:0] s;
-    logic [2:0] c;
-    logic       sg, zr, on;
-    s = $signed({2'b00, lo}) + 11'(signed'({~f[30], f[29:23]})) + 11'sd1;
-    c = s[10] ? cls[8:6] : (s[9] ? cls[2:0] : cls[5:3]);       // borrow: T - 1; carry: T + 1
-    sg = c[2]; zr = c[1]; on = c[0];
-    if (!sg && (!zr || s[8:7] != 2'b00)) return (f & SIGN) | INF;
-    if (sg && (!on || s[8:7] != 2'b11 || s[6:1] == 6'h00)) return f & SIGN;   // (s[6:0] <= 1 as a bit test: a compare is a LUT chain here, s5262)
-    return {f[31], 8'(s[7:0] + 8'd127), f[22:0]};
 endfunction
 
 logic [31:0] sc_in;
-assign sc_in = PRE ? scalb_p(xin, fy[8:0], pre_fysc) : scalb_r(xin, fy);   // (R1048: PRE, fy's classes from D)
+assign sc_in = scalb_r(xin, fy);
 
 // ---- FIX: the operand and its alignment (stage A: computed in X's first clock, registered)
 logic [23:0] fm;
@@ -462,10 +444,10 @@ assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m[22:0]};
 // the operands' tests from fx / fy (R1029: off the flush's path; a flush keeps the sign, the
 // exponent and a NaN, and makes a denormal a zero)
 logic xz, yz;
-// R1048: the operands' NaN tests from the caller's registers (PRE), made in D beside the zero tests
+// the operands' NaN tests (R1048: made here again -- in D they cost area for a path that was SCALB's)
 logic nan_x, nan_y;
-assign nan_x = PRE ? pre_fxn : is_nan(fx);
-assign nan_y = PRE ? pre_fyn : is_nan(fy);
+assign nan_x = is_nan(fx);
+assign nan_y = is_nan(fy);
 assign xz = MAME_RND ? is_zero(fx) : PRE ? pre_fxz : is_den_or_zero(fx);    // is_zero(xin)
 assign yz = MAME_RND ? is_zero(fy) : PRE ? pre_fyz : is_den_or_zero(fy);
 // the compare: |x| against |y| (flushed in the manual's rounding)
@@ -564,7 +546,7 @@ always_comb begin
     end
     M_FLOAT, M_FLOATBY, M_FLOATBYM: begin
         r = fl_r;
-        if (misc_op != M_FLOAT) r = PRE ? scalb_p(r, fy[8:0], pre_fysc) : scalb_r(r, fy);
+        if (misc_op != M_FLOAT) r = scalb_r(r, fy);
         if (misc_op == M_FLOATBYM) begin if (r[31] && !is_zero(r)) a |= AN; end
         else if (r[31]) a |= AN;
         if (is_den_or_zero(r)) a |= AZ;
@@ -621,8 +603,4 @@ always_comb begin
     misc_s = k;
 end
 
-`ifdef VERILATOR
-// R1048: scalb_p on D's classes is scalb_r wherever they are fy's
-always_ff @(posedge clk) if (PRE && pre_fysc == scalb_cls(fy) && (scalb_p(xin, fy[8:0], pre_fysc) != scalb_r(xin, fy))) $fatal(1, "scalb_p %h, scalb_r %h", scalb_p(xin, fy[8:0], pre_fysc), scalb_r(xin, fy));
-`endif
 endmodule
