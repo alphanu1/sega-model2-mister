@@ -321,6 +321,7 @@ typedef struct packed {
     // compute
     logic        fix_on;                    // fixed ALU
     logic [7:0]  fix_op;
+    logic        fix_wr;                    // R1048: the fixed op writes Rn (m2b_sharc_xu's fix_we), from D
     logic [10:0] fix_k;                     // the adder's operands, one-hot (m2b_sharc_pkg::fix_k_of, R1029)
     logic        sh_on;                     // shifter
     logic [5:0]  sh_op;
@@ -1041,6 +1042,14 @@ always_comb begin
         if (fl_d && !mode1[M1_RND32]) cbad = 1'b1;
     end
     x.trunc = trunc;
+    // R1048: the fixed ALU's result-write flag (m2b_sharc_xu's set_r: every op it decodes but
+    // COMP), a function of fix_op alone, made here so X's register-busy mask and the landing's
+    // enables do not wait on the unit's decode
+    case (x.fix_op)
+    8'h01, 8'h05, 8'h25, 8'h29, 8'h02, 8'h06, 8'h26, 8'h2a, 8'h21, 8'h22, 8'h30,
+    8'h40, 8'h41, 8'h42, 8'h43, 8'h61, 8'h62, 8'h63: x.fix_wr = 1'b1;
+    default: x.fix_wr = 1'b0;
+    endcase
 
     // the data access's address (one adder), the store / ureg data, the post-modify amount
     // (R1029: the selects decoded here from the opcode's bits, an AND-OR, not through the
@@ -1730,7 +1739,7 @@ always_ff @(posedge clk) begin
     else if (st == ST_X && x_fin) rbusy <=
         ((XC.fl_on && XC.fl_mul && XC.rm_we && !x_uns) ? 16'h1 << XC.rm : 16'h0) |
         ((((XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && XC.ra_we) ||
-           (((XC.fix_on && x_fix.we) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns) ? 16'h1 << (XC.fl_on ? XC.ra : XC.rn) : 16'h0);
+           (((XC.fix_on && XC.fix_wr) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns) ? 16'h1 << (XC.fl_on ? XC.ra : XC.rn) : 16'h0);
     else if (ld_on && ld_mwe && ld_awe) rbusy <= 16'h1 << ld_ra;
     else rbusy <= 16'h0;
 end
@@ -1782,6 +1791,9 @@ logic [1:0] x_cnt, x_need;
 // (R1044: from D's registers, XC.need_fl, not through the misc unit's decode; the old form is
 // the benches' check)
 assign x_need = XC.fl_on ? XC.need_fl : XC.sh_on ? 2'd1 : 2'd0;
+generate if (BENCH) begin : g_fixwr_check
+    always_ff @(posedge clk) if (st == ST_X && XC.fix_on && XC.fix_wr != xu_fw) $fatal(1, "fix_wr %b, the unit's %b", XC.fix_wr, xu_fw);
+end endgenerate
 generate if (BENCH) begin : g_need_check
     always_ff @(posedge clk) if (st == ST_X && x_need != ((XC.fl_on && XC.fl_misc) ? xu_mx :
                                  (XC.fl_on && (XC.fl_add || XC.fl_sub)) || XC.sh_on ? 2'd1 : 2'd0))
@@ -2197,12 +2209,12 @@ always_ff @(posedge clk) begin
                 ld_on <= 1'b1;
                 ld_mwe <= XC.fl_on && XC.fl_mul && XC.rm_we && !x_uns;
                 ld_awe <= ((XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && XC.ra_we) ||
-                           (((XC.fix_on && x_fix.we) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns;
+                           (((XC.fix_on && XC.fix_wr) || (XC.sh_on && x_sh.we)) && XC.rn_we)) && !x_uns;
                 ld_rm <= XC.rm; ld_ra <= XC.fl_on ? XC.ra : XC.rn;
                 ld_mul <= XC.fl_on && XC.fl_mul && !x_uns;
                 ld_alu <= XC.fl_on && (XC.fl_add || XC.fl_sub || XC.fl_misc) && !x_uns;
                 ld_fix <= (XC.fix_on || XC.sh_on) && !x_uns;
-                ld_fz <= XC.fix_on && x_fix.we;
+                ld_fz <= XC.fix_on && XC.fix_wr;
                 ld_misc <= XC.fl_misc || XC.fix_on || XC.sh_on;
                 ld_absf <= XC.fl_absf;
                 ld_comp <= XC.fl_comp;
