@@ -52,7 +52,8 @@ module m2_2a_sound #(
   parameter int          TIMER    = 0,     // R976: the SCSP's timers -- 0 MAME's, 1 the arcade's, 2 snd_tarc selects
   parameter bit          LERP     = 1'b0,  // R949: the output linearly interpolated between samples (m2_snd_lerp)
   parameter bit          SCSP_M10K = 1'b0, // R1008: m2_scsp RAM_M10K (M10K to spare: 2C)
-  parameter bit          SCSP_FDUE = 1'b0  // R1048: m2_scsp FDUE (the 2B build)
+  parameter bit          SCSP_FDUE = 1'b0, // R1048: m2_scsp FDUE (the 2B build)
+  parameter bit          CPU_RF_MLAB = 1'b0 // R1050: the 68000's register file in MLAB (fx68k RF_MLAB, Model 1's; the 2B build)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -140,7 +141,7 @@ module m2_2a_sound #(
   wire as   = !asn;
   wire ds   = !ldsn || !udsn;
   wire iack = as && fc == 3'b111;
-  fx68k u_cpu (
+  fx68k #(.RF_MLAB(CPU_RF_MLAB)) u_cpu (
     .clk(clk), .HALTn(1'b1),
     .extReset(!cpu_go), .pwrUp(!cpu_go),
     .enPhi1(enPhi1), .enPhi2(enPhi2),

@@ -251,9 +251,21 @@ MAME's captured write stream and random programming) and by
 to jt12's board every cycle). Daytona never voices the FM (R819, R833).
 
 ### ijor/fx68k — GPL-3.0
-*IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · UNMODIFIED*
+*IN USE 2026-08-29 · `rtl/sound/fx68k/` @ **`0602ee4`** · MODIFIED 2026-11-19 (R1050): one
+parameter, off by default*
 
-**Copied byte for byte, and it stays that way.** The earlier assessment below
+**Modified (R1050), one change, marked in the file.** `fx68k` and `excUnit` take a parameter
+`RF_MLAB` (default 0). At 0 the register file (`regs68L` / `regs68H`) is upstream's flip-flops,
+read through four wires instead of in place -- the same logic; every build but the 2B one uses
+it. At 1 (`m2_2a_sound CPU_RF_MLAB`, set only on the 2B build's sound board) the file is built
+in MLAB as a live-value table, **copied from Sega Model 1 MiSTer `0d062e0`** (its fx68k.sv,
+"MODIFIED FOR THE SEGA MODEL 1 CORE, 2026-10-28", the same author's; GPL-3 to GPL-3): a bank
+per write port, a copy per read address, one bit per register and lane naming the newest bank,
+the previous clock's writes bypassed. Same values on the same cycles; the flip-flop file is still
+written (synthesis drops it) and in simulation every read is checked against it (`FX68K RF
+MISMATCH`). Model 1 measured it at -526 ALM on its full design.
+
+**Before R1050 it was copied byte for byte, and the note was that it stays that way.** The earlier assessment below
 said this needs "a two-word change" — packing `s_irdecod` and `s_nanod` so
 Verilator accepts their mixed blocking/non-blocking writes. **That is withdrawn.**
 `-Wno-BLKANDNBLK` accepts the construct as it stands, and an unmodified file has
