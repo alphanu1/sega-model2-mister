@@ -54768,3 +54768,79 @@ exceptions (Ir -> nanoAddr / microAddr, nanoLatch -> the ALU latches) name nothi
     family of it an exception covers is nanoLatch -> the read address -> the ALU latches, which
     R1048's proof covers whatever the path holds (the latches load on enT3 only, never the clock
     after nanoLatch changes).
+*R1050, the planted fault that was missed (the high word's bypass with Rx's write before Ry's):*
+a directed 68000 program for the bench, sim/sound/fx68k_rf2w.py (hand-assembled, 150 words, looped
+with a counter mixed in): every form that can write one register through both ports -- MOVEA.L /
+.W (An)+,An and -(An),An, ADDA / SUBA .L / .W from (An)+ / -(An) into An, CMPM .L / .W, ADDX, SUBX
+and ABCD with both operands on one An, MOVEM.L of a list holding its base, EXG Dn,Dn / An,An /
+Dx,Dy / Dx,Ay, LINK / UNLK on A6 and on A7, MOVEA.L (A7)+,A7 -- each followed by stores of what it
+wrote (the RAM after 0.4 s shows the whole log written). In lockstep with the unmodified fx68k: 40 M
+clocks, 0 differ, 0 RF mismatches. The bypass-order fault is NOT caught by it either, and a counter
+in the bench says why: fx68k wrote one register through both ports in the same T3 on 2,498 clocks
+of the directed program (0 in Dead or Alive's sound program), and on none of them with different
+values -- the only two-port writes to one register are EXG Rn,Rn's. Where the two values are equal
+the order cannot show; the fault is unobservable for every form the 68000 has that writes a
+register twice, not a gap in the test. (The counter stays in the bench: FX68K RF: <n> clocks both
+ports wrote one register, <m> with different values.)
+
+*R1050, s5267's SHARC families (5081ccf9: clk_sys -0.509 slow 100C, -0.422 -40C):*
+  * pm2 -> XC.fix_op, -0.509 (the worst): the fixed ALU's op was the handler's select behind the
+    form's case. Now x.fix_op = fb ? op[19:12] : 0, from fb (28f5be7d's direct decode) -- the same
+    value in every D clock (checked; the bench stops on a difference). A first form, op[19:12]
+    unconditionally (the unit's results are taken only under fix_on), mapped +46 ALM / +25 LUTs and
+    was not kept. The SHARC alone: 4,117 -> 4,132 ALM (inside the estimate's noise), 6,238 -> 6,229
+    LUTs, 1,906 -> 1,905 registers.
+  * S.la_addr -> XC.acc[2], -0.375 at -40C: C (8e5903f2) had moved done into the gate; the loop
+    end's compare (S.daddr == S.la_addr) is late, so done is back in the last gate: x.acc =
+    kind bits & (done ? d_ag1 : d_ag0), d_ag1 = (l1 ? g1t : g1f) && !bad2, d_ag0 = g0 && !bad2 --
+    six inputs a bit, one gate; l1 and bad2 in the gates, early beside the kind bits. The SHARC
+    alone maps exactly as before (4,117 / 6,238 / 1,906).
+  Proof: the miter against 2b-rc's SHARC (33 programs, negcond n0-n3, the 26 unsupported cases);
+  planted: fix_op's bit 0 flipped (caught), l1 swapped in d_ag1 (caught, r301), bad2 dropped from
+  d_ag0 (caught, the type-1 PM move outside the PM).
+*R1048 / R1050, where things stand (2026-11-19 08:00, before a planned power cut):* the fits on
+2b-place's lanes (anchors, retiming off in every instance with an SDC exception -- R1044's nanoAddr
+multicycle had stopped matching retimed copies -- multicorner on), slow 100C / slow -40C:
+    s5267  5081ccf9   clk_sys -0.509 / -0.422  clk_mem +0.455  HDMI +0.007 / -0.201  hold positive
+    s5268  5081ccf9   clk_sys -1.465 (span_tex: seed noise)
+    s5271  9b72ab35   clk_sys -0.395 / -0.777  HDMI -0.373 / -0.146, everything else and hold clean;
+                      quartus_map 39,074 ALM needed (051b02ea: 39,647)
+  s5271's clk_sys families: the SHARC multiplier's stage 2 (sharc_fmul g_man.v_p) into the R
+  file's MLAB write (-0.777 at -40C, new); the fill's xbh -> s1_valid (-0.487 at -40C); pm2 port B
+  -> XC.fix_op (-0.395; 5c22d68e's fix_op is aimed at it, not yet fitted); the geometry's project ->
+  clip (-0.134). The placement agent's finding on area: every 2B fit uses every LAB -- "recoverable
+  by dense packing" ~500 ALM whatever the settings (2C: ~1,900-2,000) -- because 2B has 167 memory
+  LABs (2C 123; a memory LAB is a whole LAB no logic shares, ~+440 ALM) and ~+1,190 combinational
+  ALUTs. quartus_map's "ALMs needed" does not see a memory LAB's cost: s5267 -> s5271 fitted
+  41,482 -> 41,410 ALMs for -492 on the map. So area is judged by the fit's numbers from here, and
+  no more flip-flop state goes into MLAB for area (R1050's register file stays: -340 registers and
+  -620 ALUTs). 5c22d68e's replays: DOA / fvipers / schamp 2.5196 / 2.5545 / 2.5591 clk_sys a
+  word, the MAME traces (30 M / 20 M / 20 M words) and out FIFOs 0 differ. Open: the fmul and fill families, the SHARC's
+  MLAB copies (R ports x 5, the I / M copies of R1044 / e972fc8c) checked against what still needs
+  them.
+  s5271's two new families, full paths (STA on s5271's database, slow 100C / -40C; next steps,
+  nothing built yet):
+  * sharc_fmul (manual rounding) stage 2 -> the R file: g_man.v_p (the product, registered in the
+    DSP: Mult0~mac resulta, 0.7 ns) -> the round-up bit (two LUTs: the sticky OR of v_p[21:0] and
+    the guard / round bits) -> the 24-bit increment (Add1) -> the m[24] / ei select (Mux1) -> r's
+    special-case select (two LUTs) -> rf_wd's AND-OR -> g_rf[4]'s MLAB write register: 12.0 / 12.4
+    ns of data. Candidates: the sticky from the operands' trailing zeros made in stage 1 beside the
+    multiply (tz(x) + tz(y) >= 22 / 23, registered: two LUT levels off stage 2, but ~30 LUTs more);
+    or the rounding carry's m[24] as up && (the selected 24 bits all ones), tested in parallel with
+    the increment, and the mantissa after a carry as zero instead of m >> 1 (a select less, no area).
+  * m2_raster_fill xbh -> s1_valid: xbh[31:16] - 1 (Add33) -> the right clamp's compare (LessThan6,
+    two LUTs) -> crb -> the emptiness compare cla <= crb (LessThan7, three LUTs) -> the state's
+    select -> s1_valid: 12.7 ns. The emptiness test can be made on the unclamped values in parallel:
+    max(rxa, x1) <= min(rxb - 1, x2) is rxa < rxb && x1 < rxb && rxa <= x2 && x1 <= x2 (and the
+    mirror for the other pairing) -- four compares from registers, no subtract or clamp in front;
+    the clamped values still go to stage 1's registers, off s1_valid's path. About as many compares
+    as it removes.
+  The SHARC's MLAB copies (s5271's map, each 16 x 32 = two memory LABs): R0-R15 x 5 (g_rf[0-4], one
+  per read port: Rx, Ry, the multifunction's two more, port E -- all needed); I x 5 and M x 5 (u_i1
+  / u_m1 and u_i3 / u_m3: R1044's DAG1 / DAG2 split so the g bit chooses after the read; u_i2 / u_m2
+  the modify forms'; u_i4 / u_m4 e972fc8c's type-1 DAG2 reads at fixed fields; u_iu / u_mu the ureg
+  read); the stacks u_pcs2 / u_pcs3, u_lca / u_lcb, u_lap2 / u_lap3 (two read addresses each: a pop's
+  word and the second pop's -- needed). Timing-only, and the only candidates: i3 / m3 (one 16-deep
+  copy addressed {g, field} instead would remove four memory LABs but put the g decode in front of
+  the read address -- R1044's regression) and i4 / m4 (R1042 read type 1's DAG2 on i2 / m2 behind
+  the modify forms' compares; the pm2 -> pm0 address family still fails, so they stay for now).
