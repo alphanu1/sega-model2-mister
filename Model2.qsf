@@ -1268,6 +1268,21 @@ set_location_assignment DSP_X20_Y47_N0 -to "emu:emu|m2_geometry:u_geometry|m2_fp
 # crossing (none touches the clk_mem / clk_sys asynchronous cut, sys/ or a synchroniser chain).
 # Synchronizer identification stays at its default, Auto, which keeps identified chains out of it.
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING ON
+# ... but never on a register a Model2.sdc exception names: an exception is valid only for the RTL's
+# own register. Retimed, it drops out of the pattern (nanoAddr[4]_NEW_REG336, s5262 / s5267 / s5268:
+# timed at one cycle), or logic moves across it and comes under the exception. One per instance or
+# register set: the 2B sound 68000 (R1044 / R1048's Ir -> nanoAddr / microAddr and nanoLatch -> ALU
+# latch two-cycle paths), the game ID (R842's false path), the gamma select's two synchronisers
+# (R731's false path), the CPU bridge (R586's payload multicycle) and the payload's first reader,
+# m2_geo's push queue. (The YM / Z80 / Model 1 68000 sets are not in the 2B build.) (R1049)
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|m2_2a_sound:g_2asnd.u_snd2a|fx68k:u_cpu"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|m2b_gameid:u_gameid"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|gam_s1[*]"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|gam_s2[*]"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|gam_m1[*]"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|gam_m2[*]"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|m2_cpu_bridge:u_cpu_bridge"
+set_instance_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF -to "emu:emu|m2_geo:u_geo|m2_fifo_m10k:u_pushq"
 
 # R1043: fitter effort -- placement and routing work harder for timing; no design change.
 # With the anchors above, the first seed fitted this way (s4711) closed every clock.
