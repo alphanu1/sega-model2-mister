@@ -45,6 +45,8 @@ module m2b_sharc_xu #(
     input  logic [4:0]  pre_dj,         // PRE: the decoder's bit (below)
     input  logic        pre_fxz,        // PRE: fx[30:23] == 0 (R1048)
     input  logic        pre_fyz,        // PRE: fy[30:23] == 0
+    input  logic        pre_fxn,        // PRE: is_nan(fx) (R1048)
+    input  logic        pre_fyn,        // PRE: is_nan(fy)
     input  logic        misc_on,
     input  logic [4:0]  misc_op,        // tb_sharc_fp's numbering (2 FAVG is the adder's)
     input  logic [31:0] x, y, n,        // fixed / shifter: R[rx], R[ry], R[rn]
@@ -442,6 +444,10 @@ assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m[22:0]};
 // the operands' tests from fx / fy (R1029: off the flush's path; a flush keeps the sign, the
 // exponent and a NaN, and makes a denormal a zero)
 logic xz, yz;
+// R1048: the operands' NaN tests from the caller's registers (PRE), made in D beside the zero tests
+logic nan_x, nan_y;
+assign nan_x = PRE ? pre_fxn : is_nan(fx);
+assign nan_y = PRE ? pre_fyn : is_nan(fy);
 assign xz = MAME_RND ? is_zero(fx) : PRE ? pre_fxz : is_den_or_zero(fx);    // is_zero(xin)
 assign yz = MAME_RND ? is_zero(fy) : PRE ? pre_fyz : is_den_or_zero(fy);
 // the compare: |x| against |y| (flushed in the manual's rounding)
@@ -461,7 +467,7 @@ always_comb begin
     else if (!xin[31]) begin cm_ltxy = cm_lt; cm_ltyx = !cm_lt && !cm_eq; end
     else begin cm_ltxy = !cm_lt && !cm_eq; cm_ltyx = cm_lt; end
     cm_eqxy = (cm_zx && cm_zy) || xin == yin;
-    cm_nan = is_nan(fx) || is_nan(fy);                  // (a flush leaves a NaN one: R1029, off its path)
+    cm_nan = nan_x || nan_y;                  // (a flush leaves a NaN one: R1029, off its path)
 end
 
 always_comb begin
@@ -471,7 +477,7 @@ always_comb begin
     r = 32'h0; a = 32'h0; k = 32'h0; acc = 32'h0; eu = 10'sd0; es = 10'sd0; sel = 1'b0; z = 1'b0;
     case (misc_op)
     M_ABS: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = 32'h0; a = AZ; end
             else r = fx & ~SIGN;
@@ -489,7 +495,7 @@ always_comb begin
         end
     end
     M_NEG: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = ~fx & SIGN; a = AZ; end
             else r = fx ^ SIGN;
@@ -497,7 +503,7 @@ always_comb begin
         end
     end
     M_PASS: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             if (PRE ? pre_fxz : is_den_or_zero(fx)) begin r = fx & SIGN; a = AZ; end
             else r = fx;
@@ -513,7 +519,7 @@ always_comb begin
         r = acc;
     end
     M_SCALB: begin
-        if (is_nan(fx)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x) begin r = NAN; a = AI; k = AIS; end
         else begin
             r = sc_in;
             if (r[31]) a |= AN;
@@ -524,7 +530,7 @@ always_comb begin
     M_LOGB: begin
         if (is_inf(fx))       begin r = INF; a = AV; end
         else if (xz) begin r = SIGN | INF; a = AV; end
-        else if (is_nan(fx))  begin r = NAN; a = AI; k = AIS; end
+        else if (nan_x)  begin r = NAN; a = AI; k = AIS; end
         else begin
             r = {24'h0, xin[30:23]} - 32'd127;
             if (r[31]) a |= AN;
@@ -536,7 +542,7 @@ always_comb begin
         if (r[31]) a |= AN;
         if (r == 0) a |= AZ;
         if (MAME_RND && fb_den) k |= AUS;
-        if (is_nan(fx)) a |= AI;
+        if (nan_x) a |= AI;
     end
     M_FLOAT, M_FLOATBY, M_FLOATBYM: begin
         r = fl_r;
@@ -547,7 +553,7 @@ always_comb begin
         if (is_den(r)) k |= AUS;
     end
     M_RECIPS: begin
-        if (is_nan(fx))       begin r = NAN; a = AI; k = AIS; end
+        if (nan_x)       begin r = NAN; a = AI; k = AIS; end
         else if (xz) begin r = (xin & SIGN) | INF; a = AV; end
         else begin
             // e = 126 - exp: the result's biased exponent 253 - exp, out of range for exp 0 and 253-255
@@ -558,7 +564,7 @@ always_comb begin
         end
     end
     M_RSQRTS: begin
-        if ((fx[31] && !xz) || is_nan(fx)) r = NAN;              // (xin > SIGN)
+        if ((fx[31] && !xz) || nan_x) r = NAN;              // (xin > SIGN)
         else begin
             eu = $signed({2'b0, xin[30:23]}) - 10'sd127;
             es = -(eu >>> 1) - 10'sd1;
@@ -567,10 +573,10 @@ always_comb begin
         if (fx[31] && xz) a |= AN;                              // (xin == SIGN)
         if (is_zero(r)) a |= AZ;
         if (xz) a |= AV;
-        if (is_nan(fx) || fx[31]) begin a |= AI; k |= AIS; end
+        if (nan_x || fx[31]) begin a |= AI; k |= AIS; end
     end
     M_COPYSIGN: begin
-        if (is_nan(fx) || is_nan(fy)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x || nan_y) begin r = NAN; a = AI; k = AIS; end
         else begin
             r = fy & SIGN;
             if (r != 0) a |= AN;
@@ -579,7 +585,7 @@ always_comb begin
         end
     end
     M_CLIP: begin
-        if (is_nan(fx) || is_nan(fy)) begin r = NAN; a = AI; k = AIS; end
+        if (nan_x || nan_y) begin r = NAN; a = AI; k = AIS; end
         else begin
             if ((PRE ? pre_fxz : is_den_or_zero(fx)) || (PRE ? pre_fyz : is_den_or_zero(fy))) begin r = fx & SIGN; a = AZ; end
             else begin
