@@ -54387,3 +54387,14 @@ machine at a time (quartus_sta counted as a job), 2b-place running the queue on 
   2b-place s5251 (c495f78f with its SHARC M10K anchors and register retiming): clk_sys -0.259 /
   -0.336, HDMI +0.252 / +0.264, clk_mem +0.265 / +0.506, hold positive -- the best 2B fit of
   the night; its paths are what 21, 23 and 24 were aimed at.
+  25. ba57784f (SHARC). The shared unit's NaN tests on its float operands (is_nan(fx) / is_nan(fy),
+     the first test of every misc op) made in D beside the zero tests and registered with fa_x /
+     fa_y (pre_fxn / pre_fyn) -- aimed at 2b-place s5262's fm_y -> misc_r (-0.665 at -40C; fm_y
+     feeds only the multiplier, so the fitter has it merged with fa_y). Miter at MAME_RND 1 and
+     0, all programs, the same clocks; planted (fy's test wired to fx's), caught.
+  26. b9857549 (frame reader, TGTN = FBW_WD = B2). The target line's successor for each scan mode
+     in registers loaded with tgt_y, il choosing (s5262: tgt_y -> the DDR3 arbiter's st -0.166).
+     Raster3d miter progressive (three frames) and interlaced (M2_R3D_IL, stcc_f3000), 0 cycles
+     differing; planted (the interlaced bound off by one), 3,153,840.
+  2b-place s5262 (18d8accf + anchors + retiming + multicorner ON): clk_sys -0.504 / -0.665, clk_mem
+  +0.573 / +0.591, HDMI -0.031 / -0.330, hold positive on every corner.
