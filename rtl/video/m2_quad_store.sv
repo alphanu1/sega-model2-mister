@@ -169,6 +169,10 @@ module m2_quad_store #(
   // spill do not change; att, key, key_x and the index arrays stay here.
   parameter bit          EXT_PAY = 1'b0,
   parameter int unsigned XD     = 16,      // the colour queue: = m2_ddram_payload's DEPTH
+  // R1048: the tiny tests' twelve pair tests made by the caller from the held quad (in_n4 at
+  // TINY 4, in_n2 at TINY_FINE 2: near_t of each x / y pair below, m2_geometry NEARF), so the
+  // store ANDs them: no subtracts between the clipper's coordinates and a_tiny. (The 2B build.)
+  parameter bit          PRE_NEAR = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here): the
   // payload's width, the vertex word and the texture word.
   parameter int unsigned PAYW   = 4 * 2 * XW + (VX ? VXN : 0) + 4 * 2 * UVW + TXW + 4 * OZW + (MZ ? 1 : 0)
@@ -183,6 +187,7 @@ module m2_quad_store #(
   input  logic        ofree,                 // R962: rbank's list is drawn and done with (NX only)
   output logic        in_stall,              // R962: hold the next quad (NX only)
   input  logic        in_valid,
+  input  logic [11:0] in_n4, in_n2,          // R1048 (PRE_NEAR): x01 x02 x03 x12 x13 x23, then y's, at 4 and 2
   input  logic signed [15:0] in_x0, in_y0, in_x1, in_y1,
   input  logic signed [15:0] in_x2, in_y2, in_x3, in_y3,
   input  logic [23:0] in_col,
@@ -510,8 +515,15 @@ module m2_quad_store #(
           && near_t(in_y0, in_y1, t) && near_t(in_y0, in_y2, t) && near_t(in_y0, in_y3, t)
           && near_t(in_y1, in_y2, t) && near_t(in_y1, in_y3, t) && near_t(in_y2, in_y3, t);
   endfunction
-  wire is_tiny   = tiny_t(TINY);
-  wire is_tiny_f = tiny_t(TINY_FINE);
+  wire is_tiny   = PRE_NEAR ? &in_n4 : tiny_t(TINY);
+  wire is_tiny_f = PRE_NEAR ? &in_n2 : tiny_t(TINY_FINE);
+  generate if (PRE_NEAR && (TINY != 4 || TINY_FINE != 2)) begin : g_pre_near_t
+    PRE_NEAR_is_made_for_TINY_4_and_TINY_FINE_2 u_error ();   // no such module: elaboration stops
+  end endgenerate
+`ifdef VERILATOR
+  always_ff @(posedge clk) if (PRE_NEAR && in_valid && (is_tiny != tiny_t(TINY) || is_tiny_f != tiny_t(TINY_FINE)))
+    $fatal(1, "m2_quad_store: PRE_NEAR's pair tests %b %b against the store's %b %b", is_tiny, is_tiny_f, tiny_t(TINY), tiny_t(TINY_FINE));
+`endif
   // R769: `fine` is a register, so the select folds into the last LUT of
   // the two trees rather than lengthening either.
   logic          fine;

@@ -180,6 +180,7 @@ module m2_raster3d #(
   parameter bit MKV_LUT = 1'b0,
   parameter bit FBW_WD = 1'b0,   // R1044: m2_fb_wcomb WD_NOGO (the 2B build)
   parameter bit RECIP_EARLY = 1'b0,   // R1048: m2_raster_fill RECIP_EARLY (the 2B build)
+  parameter bit PRE_NEAR = 1'b0,      // R1048: m2_quad_store PRE_NEAR, q_n4 / q_n2 from m2_geometry (the 2B build)
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -196,6 +197,7 @@ module m2_raster3d #(
   output logic        q_ready,
   input  logic signed [15:0] q_x0, q_y0, q_x1, q_y1,
   input  logic signed [15:0] q_x2, q_y2, q_x3, q_y3,
+  input  logic [11:0] q_n4, q_n2,            // R1048 (PRE_NEAR): the quad's pair tests
   input  logic [23:0] q_col,
   input  logic [31:0] q_z,
   input  logic        q_moire,
@@ -548,11 +550,12 @@ module m2_raster3d #(
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
                   .RAWCOL(TEXLUT), .VX(TEXLUT), .VXN(LSB - 2), .CW(TEXLUT ? 17 : 16), .TXW(STW),
                   .NX(FB_DDR3 ? QNX : 0),   // R962   // R607, R626, R828c, R867; R932: VXN; R940: STW
-                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH)) u_store (   // R1003
+                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH), .PRE_NEAR(PRE_NEAR)) u_store (   // R1003; R1048
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .ofree(qs_ofree), .in_stall(qs_stall),   // R962
     .in_valid(q_take),
+    .in_n4(q_n4), .in_n2(q_n2),   // R1048
     .in_x0(q_x0), .in_y0(q_y0), .in_x1(q_x1), .in_y1(q_y1),
     .in_x2(q_x2), .in_y2(q_y2), .in_x3(q_x3), .in_y3(q_y3),
     .in_col(q_col), .in_z(q_z), .in_moire(q_moire),
