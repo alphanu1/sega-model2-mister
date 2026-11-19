@@ -145,6 +145,9 @@ module m2_raster_fill #(
   // R1048: the dividers' table read a clock early, from their denominators' next values, through
   // the M10K's output register (m2_raster_div / m2_recip_rom EARLY; with RECIP_M10K). (2B.)
   parameter bit RECIP_EARLY = 1'b0,
+  // R1052: M2COV's emptiness test on the unclamped ends, each of its four bounds a compare of
+  // registers, not through the -1 and the clamps (2B: m2_raster3d passes RECIP_EARLY). 0: as R739.
+  parameter bit OKPAR = 1'b0,
   // R951: THE QUAD'S OWN TEXEL BOX, for m2_span_tex's clamp. A textured
   // quad's u and v ranges -- the least and greatest of its four corners, in
   // whole texels (11 bits: the corners are 11.2), the least rounded down and
@@ -1137,7 +1140,17 @@ module m2_raster_fill #(
       emit_xr = sab ? rb1 : ra1;
       emit_cl = sab ? cla : clb;
       emit_cr = sab ? crb : cra;
-      emit_ok = sab ? (cla <= crb) : (clb <= cra);
+      if (OKPAR) begin
+        // R1052: max(l, x1) <= min(r - 1, x2) is l <= r - 1 && l <= x2 && x1 <= r - 1 && x1 <= x2,
+        // each a compare of registers (s5271: xbh -> rb1 -> the clamp -> crb -> cla <= crb ->
+        // s1_valid, -0.487 at slow -40C). r - 1 wraps only at r = -32768: never under sab (rxa <
+        // rxb), and under !sab at rxa = -32768, where ra1 = 32767 and both of its tests hold.
+        automatic logic amin = (rxa == -16'sd32768);
+        emit_ok = (view_x1 <= view_x2) &&
+                  (sab ? ((rxa <= view_x2) && (view_x1 < rxb))
+                       : ((rxb < rxa || amin) && (rxb <= view_x2) && (view_x1 < rxa || amin)));
+      end else
+        emit_ok = sab ? (cla <= crb) : (clb <= cra);
     end else begin
       emit_xl = 16'(emit_l >>> 16);
       emit_xr = 16'(emit_r >>> 16);
