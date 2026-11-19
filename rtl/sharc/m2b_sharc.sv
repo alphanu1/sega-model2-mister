@@ -1307,84 +1307,96 @@ always_comb begin
     // condition). Each reason of R1028's handler, in its order (the last wins), evaluated for the
     // condition true (u1 / w1) and false (u0 / w0); x.unsup / x.why above are R1028's form of the
     // same, which the benches check this against.
+    // R1048: the whole of it for each outcome of the loop end's pop (dn), the pop and then the
+    // word's condition choosing last -- done (S's compares) had stood in front of the pointer
+    // tests and the reasons' order (s4991: S.daddr -> XC.unsup -0.302)
     begin
-        logic       u1, u0, cp1, cp0;
+        logic       u1, u0, cp1, cp0, dn, pzd, lzd, l7d;
         logic [3:0] w1, w0;
         logic [7:0] u;
-        u1 = 1'b0; u0 = 1'b0; w1 = 4'd0; w0 = 4'd0;
-        // the loop end's pops
-        if (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
-        // the compute field's condition: true (cp1), false (cp0)
-        cp1 = 1'b0; cp0 = 1'b0;
-        casez (op[47:39])
-        9'b001??????: begin cp1 = 1'b1; cp0 = 1'b1; end            // (R1042: type 1, no condition)
-        9'b00000001?: cp1 = 1'b1;
-        9'b0100?????, 9'b0101?????: begin
-            u = op[30:23]; cp1 = 1'b1;
-            if (!ureg_ok(u, !op[31])) begin u1 = 1'b1; w1 = U_UREG; end
-            if (pxpm) begin u1 = 1'b1; w1 = U_PM; end
-        end
-        9'b0110?????: cp1 = 1'b1;
-        9'b0111?????: begin
-            cp1 = 1'b1;
-            if (!ureg_ok(op[43:36], 1'b0) || !ureg_ok(op[30:23], 1'b1)) begin u1 = 1'b1; w1 = U_UREG; end
-        end
-        9'b1000?????: begin
-            if (!shift_ok(op[21:16])) begin u1 = 1'b1; w1 = U_COMP; end
-        end
-        9'b00000010?: if (!shift_ok(op[21:16])) begin u1 = 1'b1; w1 = U_COMP; end
-        9'b00000100?: cp1 = 1'b1;
-        9'b000001100, 9'b000001110: begin
-            if (op[24]) begin u1 = 1'b1; w1 = U_FORM; end
-            if (op[38] && pz1) begin u1 = 1'b1; w1 = U_STK; end
-            if (op[38] && lz1) begin u1 = 1'b1; w1 = U_STK; end
-        end
-        9'b000001101, 9'b000001111: ;
-        9'b0000100??: begin
-            if (op[24]) begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
-            if (op[25]) cp0 = 1'b1; else cp1 = 1'b1;
-            if (!op[39] && op[38]) begin u1 = 1'b1; w1 = U_STK; end
-        end
-        9'b11???????: cp0 = 1'b1;
-        9'b00001010?, 9'b00001011?: begin
-            if (op[40]) begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
-            if (op[25]) cp0 = 1'b1; else cp1 = 1'b1;
-            if (pz1) begin u1 = 1'b1; w1 = U_STK; end
-        end
-        9'b00001100?, 9'b00001101?, 9'b00001110?: begin
-            if (op[42:40] == 3'b101) begin
-                if (done && op[39:32] == 8'h67) begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
-                if (!ureg_ok(op[39:32], 1'b0)) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+        logic [1:0] u1a, u0a;
+        logic [1:0][3:0] w1a, w0a;
+        for (int dd = 0; dd < 2; dd++) begin
+            dn = dd[0];
+            lzd = dn ? S.lstkp == 3'd1 : S.lstkp == 3'd0;
+            pzd = dn ? S.pcstkp == 6'd1 : S.pcstkp == 6'd0;
+            l7d = dn ? S.lstkp == 3'd7 : S.lstkp == 3'd6;
+            u1 = 1'b0; u0 = 1'b0; w1 = 4'd0; w0 = 4'd0;
+            // the loop end's pops
+            if (dn && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
+            // the compute field's condition: true (cp1), false (cp0)
+            cp1 = 1'b0; cp0 = 1'b0;
+            casez (op[47:39])
+            9'b001??????: begin cp1 = 1'b1; cp0 = 1'b1; end            // (R1042: type 1, no condition)
+            9'b00000001?: cp1 = 1'b1;
+            9'b0100?????, 9'b0101?????: begin
+                u = op[30:23]; cp1 = 1'b1;
+                if (!ureg_ok(u, !op[31])) begin u1 = 1'b1; w1 = U_UREG; end
+                if (pxpm) begin u1 = 1'b1; w1 = U_PM; end
             end
-            if (l71) begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
-        end
-        9'b00001111?: if (!ureg_ok(op[39:32], 1'b1)) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
-        9'b000100???: begin
-            if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
-            if (pxpm) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
-        end
-        9'b101??????: begin
-            if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
-            if (pxpm) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
-        end
-        9'b1001?????: ;
-        9'b00010100?: if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || !ureg_ok({4'h7, op[35:32]}, 1'b0) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin
-            u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
-        9'b000101100: ;
-        9'b00010111?: begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
-        9'b000000000: ;
-        default: begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
-        endcase
-        // the compute field's (U_COMP, then U_RND: cbad's), where it runs
-        if (comp_f && comp != 23'h0 && cbad) begin
-            logic [3:0] wc;
-            wc = (fl_d && !mode1[M1_RND32]) ? U_RND : U_COMP;
-            if (cp1) begin u1 = 1'b1; w1 = wc; end
-            if (cp0) begin u0 = 1'b1; w0 = wc; end
+            9'b0110?????: cp1 = 1'b1;
+            9'b0111?????: begin
+                cp1 = 1'b1;
+                if (!ureg_ok(op[43:36], 1'b0) || !ureg_ok(op[30:23], 1'b1)) begin u1 = 1'b1; w1 = U_UREG; end
+            end
+            9'b1000?????: begin
+                if (!shift_ok(op[21:16])) begin u1 = 1'b1; w1 = U_COMP; end
+            end
+            9'b00000010?: if (!shift_ok(op[21:16])) begin u1 = 1'b1; w1 = U_COMP; end
+            9'b00000100?: cp1 = 1'b1;
+            9'b000001100, 9'b000001110: begin
+                if (op[24]) begin u1 = 1'b1; w1 = U_FORM; end
+                if (op[38] && pzd) begin u1 = 1'b1; w1 = U_STK; end
+                if (op[38] && lzd) begin u1 = 1'b1; w1 = U_STK; end
+            end
+            9'b000001101, 9'b000001111: ;
+            9'b0000100??: begin
+                if (op[24]) begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
+                if (op[25]) cp0 = 1'b1; else cp1 = 1'b1;
+                if (!op[39] && op[38]) begin u1 = 1'b1; w1 = U_STK; end
+            end
+            9'b11???????: cp0 = 1'b1;
+            9'b00001010?, 9'b00001011?: begin
+                if (op[40]) begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
+                if (op[25]) cp0 = 1'b1; else cp1 = 1'b1;
+                if (pzd) begin u1 = 1'b1; w1 = U_STK; end
+            end
+            9'b00001100?, 9'b00001101?, 9'b00001110?: begin
+                if (op[42:40] == 3'b101) begin
+                    if (dn && op[39:32] == 8'h67) begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
+                    if (!ureg_ok(op[39:32], 1'b0)) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+                end
+                if (l7d) begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
+            end
+            9'b00001111?: if (!ureg_ok(op[39:32], 1'b1)) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+            9'b000100???: begin
+                if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+                if (pxpm) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
+            end
+            9'b101??????: begin
+                if (!ureg_ok(op[39:32], !op[40])) begin u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+                if (pxpm) begin u1 = 1'b1; w1 = U_PM; u0 = 1'b1; w0 = U_PM; end
+            end
+            9'b1001?????: ;
+            9'b00010100?: if (!ureg_ok({4'h7, op[35:32]}, 1'b1) || !ureg_ok({4'h7, op[35:32]}, 1'b0) || op[39:37] == 3'd3 || op[39:37] > 3'd5) begin
+                u1 = 1'b1; w1 = U_UREG; u0 = 1'b1; w0 = U_UREG; end
+            9'b000101100: ;
+            9'b00010111?: begin u1 = 1'b1; w1 = U_STK; u0 = 1'b1; w0 = U_STK; end
+            9'b000000000: ;
+            default: begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
+            endcase
+            // the compute field's (U_COMP, then U_RND: cbad's), where it runs
+            if (comp_f && comp != 23'h0 && cbad) begin
+                logic [3:0] wc;
+                wc = (fl_d && !mode1[M1_RND32]) ? U_RND : U_COMP;
+                if (cp1) begin u1 = 1'b1; w1 = wc; end
+                if (cp0) begin u0 = 1'b1; w0 = wc; end
+            end
+            u1a[dd] = u1; u0a[dd] = u0; w1a[dd] = w1; w0a[dd] = w0;
         end
         // (an address outside the map, mbad, is XC.mbad: X ORs it in, x_uns -- off this path)
-        d_unsup_x = (cok ? u1 : u0) || dag;
-        d_why_x = cok ? w1 : w0;
+        d_unsup_x = (done ? (d_cok1 ? u1a[1] : u0a[1]) : (d_cok0 ? u1a[0] : u0a[0])) || dag;
+        d_why_x = done ? (d_cok1 ? w1a[1] : w0a[1]) : (d_cok0 ? w1a[0] : w0a[0]);
     end
 
     // the decisions X's first clock makes the sequencer from
