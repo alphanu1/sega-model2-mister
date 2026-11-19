@@ -11,6 +11,8 @@
 // CHANGED (R1028): `avg`, FAVG ((x + y) / 2) on the same paths, as sharc_fp_pkg's f_avg (MAME:
 // the sum rounded, then halved with round to nearest and flushed) and man_avg (the manual: the
 // exact sum's exponent less one, rounded once: tiny below 2^-126, flushed with AUS).
+// CHANGED (R1052, timing): the far path's rounding carry tested beside the increment (the same
+// result in both roundings).
 //
 // CHANGED (R1029, timing at 80 MHz): three stages. Stage 1's magnitude compare on the carry
 // chain and the alignment's sticky bit from a mask beside the shifter; stage 2 split -- 2a the
@@ -216,32 +218,51 @@ always_comb begin
         if (!MAME_RND && v_avg && raw_c[30:0] != 0)
             raw_c = (raw_c[30:23] >= 8'd2) ? {raw_c[31], raw_c[30:23] - 8'd1, raw_c[22:0]} : {raw_c[31], 31'h1};
     end else begin
+        // R1052: the rounding's carry out of the 24 bits as up && (the 24 bits all ones), tested
+        // beside the increment, not read from its top bit (s5303: the sum -> the increment's
+        // carry -> e + 1 -> the range tests -> raw, retimed into the finish -> the R file, -0.419);
+        // the exponent's tests made for both values of the carry, which chooses last. After a
+        // carry the sum is exactly 2^24: the shifted mantissa's low 23 bits are 0, as are the
+        // sum's, and its bit 23 is 1 (m23)
         logic [26:0] s;
-        logic [8:0]  e;
+        logic [8:0]  e, e1, ef;
         logic [24:0] m;
-        logic        up;
+        logic        up, cy, m23;
+        logic        ov255, ov256, tiny;
         e = {1'b0, v_e};
         if (v_s[27])       begin s = {v_s[27:2], v_s[1] | v_s[0]}; e = e + 9'd1; end
         else if (!v_s[26]) begin s = {v_s[25:0], 1'b0}; e = e - 9'd1; end
         else                     s = v_s[26:0];
         up = !(!MAME_RND && v_trunc) && s[2] && (s[1] || s[0] || s[3]);
+        cy = up && (&s[26:3]);
         m = {1'b0, s[26:3]} + {24'h0, up};
-        if (m[24]) begin m = m >> 1; e = e + 9'd1; end
+        m23 = m[23] || cy;
+        e1 = e + 9'd1;
+        ef = cy ? e1 : e;
+        ov255 = cy ? (e1 >= 9'd255) : (e >= 9'd255);
+        ov256 = cy ? (e1 >= 9'd256) : (e >= 9'd256);
+        tiny  = cy ? (e1 <= 9'd1)   : (e <= 9'd1);
         if (!MAME_RND && v_avg) begin
             // the manual's FAVG: the rounded sum's exponent less one (rounding is the same)
-            if (e >= 9'd256)     raw_c = {v_sgn, INF[30:0]};
-            else if (!m[23])     raw_c = {v_sgn, 8'h00, m[22:0]};   // zero (both operands zero)
-            else if (e <= 9'd1)  raw_c = {v_sgn, 31'h1};      // tiny
-            else                 raw_c = {v_sgn, 8'(e - 9'd1), m[22:0]};
+            if (ov256)           raw_c = {v_sgn, INF[30:0]};
+            else if (!m23)       raw_c = {v_sgn, 8'h00, m[22:0]};   // zero (both operands zero)
+            else if (tiny)       raw_c = {v_sgn, 31'h1};      // tiny
+            else                 raw_c = {v_sgn, 8'(ef - 9'd1), m[22:0]};
         end
-        else if (e >= 9'd255)  raw_c = {v_sgn, INF[30:0]};
-        else if (!m[23])  raw_c = {v_sgn, 8'h00, m[22:0]};
-        else              raw_c = {v_sgn, e[7:0], m[22:0]};
+        else if (ov255)   raw_c = {v_sgn, INF[30:0]};
+        else if (!m23)    raw_c = {v_sgn, 8'h00, m[22:0]};
+        else              raw_c = {v_sgn, ef[7:0], m[22:0]};
     end
 end
 
+// R1052: the finish's tests on the result (is_inf, is_den_or_zero, a mantissa) made on raw_c and
+// registered with it, for the manual's rounding, where the finish takes raw as it is (s5303: raw
+// -> the zero test -> fr -> the landing's select -> the R file -0.419). MAME's FAVG changes q in
+// the finish, so MAME_RND 1 tests q there as before
+logic        raw_inf, raw_dz, raw_mnz;
 always_ff @(posedge clk) if (en) begin
     raw <= raw_c;
+    raw_inf <= is_inf(raw_c); raw_dz <= is_den_or_zero(raw_c); raw_mnz <= raw_c[22:0] != 0;
     w_nan <= v_nan; w_nanin <= v_nanin; w_infb <= v_infb; w_trunc <= v_trunc; w_avg <= v_avg;
 end
 
@@ -262,12 +283,12 @@ always_comb begin
 
     // alu_fin (sharc_fp_pkg)
     fr = q; fa = AF; fs = '0;
-    if (is_inf(q)) begin
+    if (MAME_RND ? is_inf(q) : raw_inf) begin
         fa |= AV; fs |= AVS;
         if (w_trunc) fr = (q & SIGN) | 32'h7F7F_FFFF;
-    end else if (is_den_or_zero(q)) begin
+    end else if (MAME_RND ? is_den_or_zero(q) : raw_dz) begin
         fa |= AZ;
-        if (q[22:0] != 0) fs |= AUS;
+        if (MAME_RND ? q[22:0] != 0 : raw_mnz) fs |= AUS;
         fr = q & SIGN;
     end
     if (fr[31]) fa |= AN;
