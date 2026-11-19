@@ -178,6 +178,15 @@ static uint32_t pick(std::mt19937 &g, uint32_t other) {
     case 15: return (other & 0xff800000) ^ (r & SIGN) | (r & 0x7fffff);
     // R1028: exactly 2^-126 / 2^-125 (FAVG's tiny edge, a mantissa with no bits)
     case 16: return (r & SIGN) | (uint32_t(1 + ((r >> 1) & 1)) << 23);
+    // R1052: a product just under a power of two (mantissas' product just under 2^47), so its top
+    // 24 bits are all ones and rounding to nearest carries out of them; the exponent near the
+    // other's complement so the result lands anywhere from tiny to overflow
+    case 17: { uint64_t mo = (other & 0x7fffff) | 0x800000;
+               uint64_t m = ((1ull << 47) - 1) / mo - (g() % 3);
+               if (m >= (1u << 24)) m = (1u << 24) - 1;
+               if (m < (1u << 23)) m = 1u << 23;
+               int eo = (other >> 23) & 0xff; int e = 254 - eo + int(g() % 260) - 130; e = std::clamp(e, 1, 254);
+               return (r & SIGN) | (uint32_t(e) << 23) | uint32_t(m & 0x7fffff); }
     default: return r;
     }
 }
@@ -191,7 +200,7 @@ int main(int argc, char **argv) {
     std::mt19937 g(seed);
     Vtb_sharc_fp *t = new Vtb_sharc_fp;
     long pm_bad[NOPS] = {0}, pn_bad[NOPS] = {0}, runs[NOPS] = {0};
-    long u_bad[4] = {0}, u_runs = 0, stalls = 0, tiny_seen = 0, ovf_seen = 0, rz_diff = 0;
+    long u_bad[4] = {0}, u_runs = 0, stalls = 0, tiny_seen = 0, ovf_seen = 0, rz_diff = 0, carry_seen = 0;
     const char *UN[4] = {"fadd MAME", "fadd manual", "fmul MAME", "fmul manual"};
     t->clk = 0; t->en = 1; t->eval();
     for (long i = 0; i < n; i++) {
@@ -232,6 +241,8 @@ int main(int argc, char **argv) {
         u_runs++;
         if ((wm_n.stky & MUS) && !(wm_n.r & 0x7fffffff)) tiny_seen++;
         if (wm_n.stky & MVS) ovf_seen++;
+        if (!trunc && !(wm_n.stky & (MVS | MUS)) && !is_nan(wm_n.r) && (wm_n.r & 0x7fffff) == 0 && (wm_n.r & INF) &&
+            fabsl(LD(flush(x)) * LD(flush(y))) < fabsl(LD(wm_n.r))) carry_seen++;
         if (wa_n.r != wa_m.r) rz_diff++;
         struct { uint32_t r, a, s; Res w; } u[4] = {
             {t->am_r, t->am_a, t->am_s, wa_m}, {t->an_r, t->an_a, t->an_s, wa_n},
@@ -249,7 +260,8 @@ int main(int argc, char **argv) {
     }
     for (int k = 0; k < 4; k++) { printf("unit %-11s %9ld vectors, %ld mismatches\n", UN[k], u_runs, u_bad[k]); total += u_bad[k]; }
     printf("MAME fmul slow-path clocks %ld; manual products flushed tiny %ld, overflowed %ld; "
-           "add/sub results where the manual differs from MAME %ld\n", stalls, tiny_seen, ovf_seen, rz_diff);
+           "add/sub results where the manual differs from MAME %ld; manual products rounded up to a power of two %ld\n",
+           stalls, tiny_seen, ovf_seen, rz_diff, carry_seen);
     printf(total ? "FAIL: %ld mismatches\n" : "PASS\n", total);
     delete t;
     return total ? 1 : 0;
