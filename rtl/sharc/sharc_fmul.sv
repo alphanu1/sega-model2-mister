@@ -9,6 +9,8 @@
 // below 2^-126 (after rounding, exponent unbounded) flushed to a signed zero with MU / MUS,
 // round toward zero under `trunc` (MODE1.TRUNC) where an overflow gives the largest finite
 // (MV / MVS either way). It has no slow path: `busy` is 0.
+// CHANGED (R1052, MAME_RND 0 only): stage 2's rounding carry tested beside the increment, not
+// taken from its top bit (the same result in every case; see g_man).
 //
 // His description of the MAME unit:
 // Float multiply in two stages, bit-exact to sharc_fp_pkg::f_mul (the multiplier flushes
@@ -177,12 +179,14 @@ always_comb begin
     esum = {2'b0, xf[30:23]} + {2'b0, yf[30:23]};
 end
 
-// the exponent's three outcomes (esum - 127, - 126, - 125: no carry, the product's top bit, and
-// the rounding's carry on top), each tiny / out of range, decided here (R1029: off stage 2's
-// path)
-logic [2:0]  tiny1, ovf1;
+// the exponent's two outcomes (esum - 127 and - 126: no carry, and the product's top bit or the
+// rounding's carry), each tiny / out of range, decided here (R1029: off stage 2's path). R1052:
+// the product of two 24-bit mantissas with their top bits set is at most (2^24 - 1)^2 < 2^48 -
+// 2^24, so when its top bit is set its top 24 bits are never all ones and the rounding cannot
+// carry: the top bit and the carry never come together, and esum - 125 is never reached
+logic [1:0]  tiny1, ovf1;
 always_comb begin
-    for (int i = 0; i < 3; i++) begin
+    for (int i = 0; i < 2; i++) begin
         tiny1[i] = esum < 10'(128 - i);                  // esum - 127 + i < 1
         ovf1[i] = esum >= 10'(382 - i);                  // esum - 127 + i >= 255
     end
@@ -190,7 +194,7 @@ end
 logic        v_nan, v_inf, v_zero, v_sg, v_trunc;
 logic [47:0] v_p;
 logic [9:0]  v_esum;
-logic [2:0]  v_tiny, v_ovf;
+logic [1:0]  v_tiny, v_ovf;
 always_ff @(posedge clk) if (en) begin
     v_nan <= nan1; v_inf <= inf1; v_zero <= zero1; v_sg <= sg; v_trunc <= trunc;
     v_p <= p; v_esum <= esum; v_tiny <= tiny1; v_ovf <= ovf1;
@@ -200,26 +204,31 @@ logic unused_m;
 assign unused_m = restart ^ valid;
 
 // ---------------------------------------------------------------- stage 2
+// R1052: the rounding's carry out of the 24 bits is up && (the 24 bits all ones), tested beside the
+// increment rather than read from its top bit (s5271: v_p -> up -> the 24-bit increment's carry ->
+// the m[24] / ei select -> r -> rf_wd -> the R file's MLAB, -0.777 at slow -40C). After a carry the
+// sum is exactly 2^24, so the mantissa field is 0 whether or not it is shifted: the field is the
+// low 23 bits of the increment, with no shift and no select. The exponent's two values are made from
+// v_esum beside it and the carry chooses.
 always_comb begin
     logic [26:0] s;
     logic [7:0]  e;
-    logic [24:0] m;
-    logic        up, tiny, ovf;
-    logic [1:0]  ei;
+    logic [22:0] mf;
+    logic        up, cy, ei, tiny, ovf;
     logic [31:0] res;
-    // the exponent of the product, unbounded: esum - 127 (+1 when the product's top bit is set,
-    // +1 for the rounding's carry); its tests from stage 1
+    // the exponent of the product, unbounded: esum - 127 (+1 when the product's top bit is set or
+    // the rounding carries -- never both); its tests from stage 1
     if (v_p[47]) s = {v_p[47:22], v_p[21:0] != 0};
     else         s = {v_p[46:21], v_p[20:0] != 0};
     up = !v_trunc && s[2] && (s[1] || s[0] || s[3]);
-    m = {1'b0, s[26:3]} + {24'h0, up};
-    ei = {1'b0, v_p[47]} + {1'b0, m[24]};
-    if (m[24]) m = m >> 1;
-    e = 8'(v_esum[7:0] - 8'd127 + {6'h0, ei});
+    cy = up && (&s[26:3]);
+    mf = s[25:3] + {22'h0, up};
+    ei = v_p[47] || cy;
+    e = ei ? 8'(v_esum[7:0] - 8'd126) : 8'(v_esum[7:0] - 8'd127);
     tiny = v_tiny[ei];
     ovf  = v_ovf[ei];
     res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]}) : tiny ? {v_sg, 31'h0}
-                : {v_sg, e[7:0], m[22:0]};
+                : {v_sg, e[7:0], mf};
     if (v_nan) begin
         r = NAN; astat = MI; stky = MIS;
     end else if (v_inf) begin
