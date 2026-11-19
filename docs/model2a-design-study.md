@@ -54345,3 +54345,45 @@ there and nowhere else -- no valid program reaches them. lint_top (2B and 2C) cl
     context the SHARC's remaining paths are 70 % routing (s4951: 2.7 ns of logic, 7.6 ns of
     route from an M10K at X38_Y14 through an MLAB at X28_Y8 to an M10K at X38_Y1). What is left
     is placement: the 2b-place agent's anchors.
+
+*R1048, LATER THE SAME NIGHT (to 03:40 on 2026-11-19).* Changes (each as above: 2B-only modules or
+B2-gated parameters, old against new, a bench check against the old form, planted faults):
+  20. 8e34c59b (SHARC). The access gate's mem_f from op[47:42] directly (one LUT; the handler's
+     case built a wide OR), checked against mem_f in every D clock.
+  21. d04a92ce (frame writer, IDX1 = FBW_WD = B2). The word's index + 1 and each window's top + 1
+     kept in registers beside them, the index one-hot: no adders before the window test's
+     compares, no decode in a valid bit's enable (2b-place s5251: b_idx -> vhi -0.259). Raster3d
+     miter against 2b-rc on stcc_f3000, hotd_1808, orev_d1, stcc_f1500: 0 cycles differing;
+     planted (whi1 not moved on an extension), 3,650,394.
+  22. fe086f1f (qsf). TIMEQUEST_MULTICORNER_ANALYSIS ON: the fitter had worked on slow 100C alone,
+     and every slack quoted before this item is that corner's unless a -40C figure is given.
+  23. 7a7cead8 (geometry NEARF / quad store PRE_NEAR, both B2). The store's two tiny tests (TINY 4,
+     TINY_FINE 2) as the AND of twelve pair tests that m2_geometry registers every clock off the
+     clipper's held outputs: the clipper holds a quad C_AGE (>= 4) clocks before q_valid, so at the
+     take the tests are the held quad's (g_near_check at every q_valid). The clipper is not
+     changed. Geometry miter on the plain, MIPZ and four MAME walks, 0 cycles differing (the new
+     outputs tied in the compare, checked by g_near_check); planted (the 4-test made at 3), the
+     walk stops at once.
+  24. f8c0e2ab, 026fadb8, 28e3019c, 28f5be7d (SHARC D). cbad's guard (comp_f && comp != 0, which
+     it implies) dropped and bad2 put in the access kind's last gate; the ureg validity test made
+     on each form's field, the form after; L's nonzero flag read at each of its three indexes, the
+     form after; the fixed ALU's fix_on / fix_k / fix_wr from the opcode's bits with the pop last
+     (s5031's only failing family: pm2 -> XC.fix_on -0.245). New tests where none reached the
+     faults: m2b_unsupprog's circular buffers under a post-modify on DAG1 and the PM bus (U_DAG,
+     caught the lnz fault, 18d8accf), m2b_randprog M2B_RP_LE11 (one-pass loops ending in an 11
+     form's fixed op: caught the pop-inverted fix_on fault, 7925dbb1). The replays on 18d8accf:
+     DOA 2.5196, fvipers 2.5545, schamp 2.5591 clk_sys a word, 0 out / trace words differ.
+
+*The crashes were concurrency.* With Quartus jobs alongside, 13 of 16 seeds died in the fitter's
+timing-exception code; s5022 rerun on the same tree with nothing else on the machine fitted
+(clk_sys -0.869 / -0.765, the seed's own result, no crash). From here one Quartus fit runs on the
+machine at a time (quartus_sta counted as a job), 2b-place running the queue on 2b-rt2's heads.
+
+*More fits (four corners: slow 100C / slow -40C):*
+    8e34c59b  s5031  clk_sys -0.245 / -0.448   HDMI -0.214 / -0.654   clk_mem +0.334 / +0.417
+                     hold +0.113; 19 failing at 100C, all SHARC (pm2 -> XC.fix_on / fix_wr / fix_k)
+    1b8ba5eb  s5023  clk_sys -0.911 / -0.607   clk_mem +0.061 / -0.307   (alongside other jobs)
+              s5022  (alone) clk_sys -0.869 / -0.765   HDMI -0.774 / -0.759   clk_mem -0.059 / +0.211
+  2b-place s5251 (c495f78f with its SHARC M10K anchors and register retiming): clk_sys -0.259 /
+  -0.336, HDMI +0.252 / +0.264, clk_mem +0.265 / +0.506, hold positive -- the best 2B fit of
+  the night; its paths are what 21, 23 and 24 were aimed at.
