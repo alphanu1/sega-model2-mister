@@ -100,7 +100,12 @@ module m2_geo_clip #(
   // two are the same circuit; R684 had it in M10K and R909 moved it back to
   // MLAB for the 2A core's M10K. A build with M10K to spare (2C) sets 1 and
   // gets its nine LABs back as logic.
-  parameter bit STK_M10K = 1'b0
+  parameter bit STK_M10K = 1'b0,
+  // R1052: K_CLIP's request kind (multiply, add, divide) kept in a register beside cs, set with
+  // it, so the pool's requests do not decode cs; and K_CLIP leaves on any grant, since the one
+  // kind it asks for is the only one it can be granted (s5301: cs -> the request -> the pool's
+  // grant -> the kind's select -> kst -0.429). 0: from cs, as before. (The 2B build.)
+  parameter bit KREQ = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -328,6 +333,19 @@ module m2_geo_clip #(
   logic [1:0] cp_dst;                        // which temporary
   logic       second_child;
   logic [3:0] cs;
+  logic [1:0] csk;                                 // R1052 (KREQ): cs's request kind
+  localparam logic [1:0] CK_MUL = 2'd0, CK_ADD = 2'd1, CK_DIV = 2'd2;
+  function automatic logic [1:0] ck_of(input logic [3:0] c);
+    case (c)
+      4'd0, 4'd3, 4'd8, 4'd9: ck_of = CK_MUL;
+      4'd6:                   ck_of = CK_DIV;
+      default:                ck_of = CK_ADD;
+    endcase
+  endfunction
+`ifdef VERILATOR
+  always_ff @(posedge clk) if (KREQ && rst_n && csk != ck_of(cs))
+    $fatal(1, "m2_geo_clip: csk %0d against cs %0d's %0d", csk, cs, ck_of(cs));
+`endif
   logic [2:0] c_axis;          // R270: 0=x 1=y 2=z 3=u 4=v
   logic [31:0] c_num, c_den, c_t, c_u, c_m1, c_m2;
   logic [23:0] a_col;
@@ -477,6 +495,11 @@ module m2_geo_clip #(
       endcase
       default: ;
     endcase
+    // R1052 (KREQ): K_CLIP's requests from csk, the same kind cs's case gives (the operands stay
+    // cs's: they are not in front of the grant)
+    if (KREQ && kst == K_CLIP) begin
+      mul_req = csk == CK_MUL; add_req = csk == CK_ADD; div_req = csk == CK_DIV;
+    end
   end
 
   assign in_ready  = (kst == K_IDLE);
@@ -528,7 +551,7 @@ module m2_geo_clip #(
       kst <= K_IDLE; sp <= '0; lvl <= '0; is_out <= '0; ti <= '0; sv_i <= 2'd0; pcnt <= 3'd0;
       rot <= '0; ccase <= '0; cn <= '0; cn_last <= '0;
       cp_a <= '0; cp_b <= '0; cp_dst <= '0; second_child <= 1'b0;
-      cs <= '0; c_axis <= '0;
+      cs <= '0; csk <= CK_MUL; c_axis <= '0;
       c_num <= '0; c_den <= '0; c_t <= '0; c_u <= '0; c_m1 <= '0; c_m2 <= '0;
       a_col <= '0; a_z <= '0; a_moire <= 1'b0; a_tex <= '0; a_lum <= '0; a_mipz <= 1'b0;
       dbg_in <= '0; dbg_out <= '0; dbg_dropped <= '0;
@@ -645,28 +668,30 @@ module m2_geo_clip #(
             cp_b <= edge_b(ccase, cn);
           end
           cp_dst <= cn;
-          cs     <= '0;
+          cs     <= '0; csk <= CK_MUL;
           c_axis <= 3'd0;
           kst    <= K_CLIP;
         end
 
-        K_CLIP: case (cs)
+        K_CLIP: if (KREQ) begin
+          if (mul_gnt || add_gnt || div_gnt) kst <= K_CLIPW;   // R1052: a grant is of the kind asked
+        end else case (cs)
           4'd0, 4'd3, 4'd8, 4'd9: if (mul_gnt) kst <= K_CLIPW;
           4'd6:                   if (div_gnt) kst <= K_CLIPW;
           default:                if (add_gnt) kst <= K_CLIPW;
         endcase
 
         K_CLIPW: case (cs)
-          4'd0: if (mul_rsp) begin c_num <= mul_res; cs <= 4'd1; kst <= K_CLIP; end
-          4'd1: if (add_rsp) begin c_num <= add_res; cs <= 4'd2; kst <= K_CLIP; end
-          4'd2: if (add_rsp) begin c_den <= add_res; cs <= 4'd3; kst <= K_CLIP; end
-          4'd3: if (mul_rsp) begin c_den <= mul_res; cs <= 4'd4; kst <= K_CLIP; end
-          4'd4: if (add_rsp) begin c_m1  <= add_res; cs <= 4'd5; kst <= K_CLIP; end
-          4'd5: if (add_rsp) begin c_den <= add_res; cs <= 4'd6; kst <= K_CLIP; end
-          4'd6: if (div_rsp) begin c_t   <= div_res; cs <= 4'd7; kst <= K_CLIP; end
-          4'd7: if (add_rsp) begin c_u   <= add_res; cs <= 4'd8; kst <= K_CLIP; end
-          4'd8: if (mul_rsp) begin c_m1  <= mul_res; cs <= 4'd9; kst <= K_CLIP; end
-          4'd9: if (mul_rsp) begin c_m2  <= mul_res; cs <= 4'd10; kst <= K_CLIP; end
+          4'd0: if (mul_rsp) begin c_num <= mul_res; cs <= 4'd1; csk <= CK_ADD; kst <= K_CLIP; end
+          4'd1: if (add_rsp) begin c_num <= add_res; cs <= 4'd2; csk <= CK_ADD; kst <= K_CLIP; end
+          4'd2: if (add_rsp) begin c_den <= add_res; cs <= 4'd3; csk <= CK_MUL; kst <= K_CLIP; end
+          4'd3: if (mul_rsp) begin c_den <= mul_res; cs <= 4'd4; csk <= CK_ADD; kst <= K_CLIP; end
+          4'd4: if (add_rsp) begin c_m1  <= add_res; cs <= 4'd5; csk <= CK_ADD; kst <= K_CLIP; end
+          4'd5: if (add_rsp) begin c_den <= add_res; cs <= 4'd6; csk <= CK_DIV; kst <= K_CLIP; end
+          4'd6: if (div_rsp) begin c_t   <= div_res; cs <= 4'd7; csk <= CK_ADD; kst <= K_CLIP; end
+          4'd7: if (add_rsp) begin c_u   <= add_res; cs <= 4'd8; csk <= CK_MUL; kst <= K_CLIP; end
+          4'd8: if (mul_rsp) begin c_m1  <= mul_res; cs <= 4'd9; csk <= CK_MUL; kst <= K_CLIP; end
+          4'd9: if (mul_rsp) begin c_m2  <= mul_res; cs <= 4'd10; csk <= CK_ADD; kst <= K_CLIP; end
           default: if (add_rsp) begin
             // R1008: the point's coordinate is written by t_we (below)
             if (c_axis == 3'd4) begin
@@ -674,7 +699,7 @@ module m2_geo_clip #(
               // camera coordinates and is projected when its quad is emitted.
               if (cn == cn_last) kst <= K_CHILD;
               else begin cn <= cn + 2'd1; kst <= K_SET; end
-            end else begin c_axis <= c_axis + 3'd1; cs <= 4'd8; kst <= K_CLIP; end
+            end else begin c_axis <= c_axis + 3'd1; cs <= 4'd8; csk <= CK_MUL; kst <= K_CLIP; end
           end
         endcase
 

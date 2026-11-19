@@ -148,6 +148,11 @@ module m2_raster_fill #(
   // R1052: M2COV's emptiness test on the unclamped ends, each of its four bounds a compare of
   // registers, not through the -1 and the clamps (2B: m2_raster3d passes RECIP_EARLY). 0: as R739.
   parameter bit OKPAR = 1'b0,
+  // R1052: S_FS_WALK loads s1_y whenever stage 1 is free and the plane fit idle, not only on a row
+  // it emits: s1_y is read only while s1_valid (the span's y and the plane's products at s1_adv),
+  // and on the walk's last test, where no row is emitted, s1_valid is not set (s5301: walk_y >=
+  // walk_end -> s1_y's enable -> the DSP's input register -0.323). (2B: with RECIP_EARLY.)
+  parameter bit S1Y = 1'b0,
   // R951: THE QUAD'S OWN TEXEL BOX, for m2_span_tex's clamp. A textured
   // quad's u and v ranges -- the least and greatest of its four corners, in
   // whole texels (11 bits: the corners are 11.2), the least rounded down and
@@ -1899,6 +1904,7 @@ module m2_raster_fill #(
         end
 
         S_FS_WALK: begin
+          if (S1Y && s1_free && pf_st == S_IDLE) s1_y <= walk_y;   // R1052
           if (walk_y >= walk_end) begin
             state <= S_FS_END;
           end else if (s1_free && pf_st == S_IDLE) begin   // R544; R715
@@ -1907,7 +1913,7 @@ module m2_raster_fill #(
             // stage-1 flop (s792 at 80 MHz: xah -> s1_col -0.519, s1_moire).
             // Stage 1's data is read only while s1_valid.
             s1_valid   <= emit_ok;   // R715: stage 1; the plane next cycle
-            s1_y       <= walk_y;
+            if (!S1Y) s1_y <= walk_y;
             s1_cl      <= emit_cl;
             s1_cr      <= emit_cr;
             s1_col     <= col;

@@ -1233,7 +1233,7 @@ module m2_geometry #(
   assign q_oz2 = coz[2]; assign q_oz3 = coz[3];
 
   // ------------------------------------------------------------- the clipper
-  m2_geo_clip #(.STK_M10K(M10K_ROOM)) u_clip (   // R1008
+  m2_geo_clip #(.STK_M10K(M10K_ROOM), .KREQ(NEARF)) u_clip (   // R1008; R1052: KREQ with the 2B build's NEARF
     .clk(clk), .rst_n(rst_n),
     .a_left(a_left), .a_right(a_right), .a_bottom(a_bottom), .a_top(a_top),
     .in_valid(clip_in_valid), .in_ready(clip_in_ready),
