@@ -154,7 +154,13 @@ module m2_scsp_regs #(
   // it -- it was a subtract, an add and a shift in a row behind ud_q (s4991 ud -> due -0.446)
   wire [14:0] tdue_r = 15'((15'(gnext >> mrg_t[10:8]) + 15'(9'd256 - {1'b0, mrg_t[7:0]})) << mrg_t[10:8]);
   logic [7:0][14:0] fdk;
-  always_comb for (int p = 0; p < 8; p++) fdk[p] = 15'((gnext & ~15'((1 << p) - 1)) + 15'(16'd256 << p));
+  always_comb
+    for (int p = 0; p < 8; p++) begin
+      logic [14:0] lo, k;
+      lo = 15'((1 << p) - 1);
+      k  = 15'(16'd256 << p);
+      fdk[p] = (gnext & ~lo) + k;
+    end
   wire [14:0] tdue_f = 15'(fdk[mrg_t[10:8]] - 15'({7'd0, mrg_t[7:0]} << mrg_t[10:8]));
   wire [14:0] tdue_a = FDUE ? tdue_f : tdue_r;
   logic [10:0] scipd_n, scipd_c, mcipd_n;
