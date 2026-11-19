@@ -34,6 +34,13 @@ CASES = [   # (name, words before, the word, reason)
      (0b010 << 45) | (1 << 44) | (0x1f << 33), 4),
     ('a PM-bus post-modify with L8 = 4 (R0 = PM(I8, M8))', [0x0f3800000004, 0x0f1800020100],
      (0b010 << 45) | (1 << 44) | (0x1f << 33) | (1 << 32), 4),
+    # R1048: a data address outside the map under IF LCE at a one-pass loop's end, nested in an
+    # outer loop: the condition after the pop reads the outer loop's counter (l1). In the first of
+    # the outer loop's two passes it holds and the access is made (flagged); in its last pass it
+    # fails (NEG_CASES). I1 = 0x200000, the address I1 + 2
+    ('IF LCE R1 = DM(I1, 2) at a one-pass loop\'s end in the first of an outer loop\'s two passes',
+     [0x0f1100200000, (0x0c << 40) | (2 << 24) | 3, (0x0c << 40) | (1 << 24) | 1],
+     (0b0110 << 44) | (1 << 41) | (0x0f << 33) | (2 << 27) | (1 << 23), 3),
 ]
 # R1038: unsupported only in the 2B build's core (m2b_sharc PXIM 0: no PX, no IMASK); with
 # --pxim0 these are written too, and with PXIM 1 the same programs run (supported)
@@ -52,6 +59,11 @@ SKLR0_CASES = [
     ('LCNTR read by a ureg move (R0 = LCNTR)', [], 0x768f80000000, 8),
     ('STKY bit test', [], 0x148e00000001, 8),
     ('STKY bit set (a read-modify-write)', [], 0x140e00000001, 8),
+    # R1048: an unsupported ureg in a form with an access (D's ub): the access is not made -- the
+    # address external, so a store made anyway shows on the bus (ub in the kind's last gate)
+    ('DM(I0, M0) = STKY, I0 = 0x1400000 external (ureg <-> DM, post-modify)', [0x0f1001400000, 0x0f2000000000],
+     (0b010 << 45) | (1 << 44) | (0x1f << 33) | (1 << 31) | (0x7e << 23), 8),
+    ('DM(0x1400000) = STKY (ureg <-> DM direct, external)', [], (0b000100 << 42) | (1 << 40) | (0x7e << 32) | 0x1400000, 8),
 ]
 
 
@@ -65,6 +77,9 @@ NEG_CASES = [
      [0x0f1100200000], (0b0110 << 44) | (1 << 41) | (0x0e << 33) | (2 << 27) | (1 << 23), 0),
     ('IF FALSE DM(I2, M2) = R2 (post-modify), I2 = 0x01e00000 outside the map',
      [0x0f1201e00000, 0x0f2200000000], (0b010 << 45) | (1 << 44) | (2 << 41) | (2 << 38) | (0x0e << 33) | (1 << 31) | (2 << 23), 0),
+    ('IF LCE R1 = DM(I1, 2) at a one-pass loop\'s end in an outer loop\'s last pass (R1048: the condition after the pop fails)',
+     [0x0f1100200000, (0x0c << 40) | (1 << 24) | 3, (0x0c << 40) | (1 << 24) | 1],
+     (0b0110 << 44) | (1 << 41) | (0x0f << 33) | (2 << 27) | (1 << 23), 0),
 ]
 
 
