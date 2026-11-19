@@ -1245,6 +1245,24 @@ set_location_assignment M10K_X58_Y33_N0 -to "emu:emu|m2_2a_sound:g_2asnd.u_snd2a
 set_location_assignment M10K_X76_Y22_N0 -to "emu:emu|m2_2a_sound:g_2asnd.u_snd2a|m2_scsp:u_scsp|m2_scsp_level:u_level|altsyncram:from_rtl_0|altsyncram_4gf1:auto_generated|ram_block1a0"
 set_location_assignment M10K_X76_Y23_N0 -to "emu:emu|m2_2a_sound:g_2asnd.u_snd2a|m2_scsp:u_scsp|m2_scsp_level:u_level|altsyncram:from_rtl_0|altsyncram_4gf1:auto_generated|ram_block1a20"
 
+# R1049: the geometry's M10K and DSP blocks (and m2_geo's push queue) at s5262's sites, beside the
+# raster, top left. Unanchored, s5263 pulled the geometry down to (22, 27), split it (spread 22 LABs)
+# and failed clk_sys by -8.5 ns; s5264 did not route (63 % interconnect in X11-21 / Y46-57). The
+# engine's two multipliers have +6.8 ns or more into them at every corner, so their far sites cost nothing.
+set_location_assignment M10K_X26_Y52_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_engine:u_engine|altsyncram:cc_mem_rtl_0|altsyncram_54p1:auto_generated|ram_block1a0"
+set_location_assignment M10K_X26_Y59_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_clip:u_clip|altsyncram:g_stk_m10k.sk_mem_rtl_0|altsyncram_fjk1:auto_generated|ram_block1a64"
+set_location_assignment DSP_X32_Y28_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_engine:u_engine|Mult0~8"
+set_location_assignment M10K_X26_Y62_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_clip:u_clip|altsyncram:g_stk_m10k.sk_mem_rtl_0|altsyncram_fjk1:auto_generated|ram_block1a108"
+set_location_assignment DSP_X20_Y20_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_engine:u_engine|Mult1~8"
+set_location_assignment M10K_X26_Y39_N0 -to "emu:emu|m2_geo:u_geo|m2_fifo_m10k:u_pushq|altsyncram:mem_rtl_0|altsyncram_14p1:auto_generated|ram_block1a0"
+set_location_assignment M10K_X26_Y41_N0 -to "emu:emu|m2_geo:u_geo|m2_fifo_m10k:u_pushq|altsyncram:mem_rtl_0|altsyncram_14p1:auto_generated|ram_block1a24"
+set_location_assignment M10K_X26_Y46_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_engine:u_engine|altsyncram:g_tp_m10k.tp_tab_rtl_0|altsyncram_90p1:auto_generated|ram_block1a0"
+set_location_assignment M10K_X26_Y60_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_clip:u_clip|altsyncram:g_stk_m10k.sk_mem_rtl_0|altsyncram_fjk1:auto_generated|ram_block1a5"
+set_location_assignment M10K_X14_Y60_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_clip:u_clip|altsyncram:g_stk_m10k.sk_mem_rtl_0|altsyncram_fjk1:auto_generated|ram_block1a0"
+set_location_assignment M10K_X14_Y46_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_engine:u_engine|altsyncram:g_tp_m10k.tp_tab_rtl_0|altsyncram_90p1:auto_generated|ram_block1a31"
+set_location_assignment M10K_X14_Y59_N0 -to "emu:emu|m2_geometry:u_geometry|m2_geo_clip:u_clip|altsyncram:g_stk_m10k.sk_mem_rtl_0|altsyncram_fjk1:auto_generated|ram_block1a23"
+set_location_assignment DSP_X20_Y47_N0 -to "emu:emu|m2_geometry:u_geometry|m2_fp_pool:u_pool|fp_mul:u_mul|Mult0~8"
+
 # R1049: the fitter's register retiming (physical synthesis). It moves registers across logic
 # within one clock; s5251's 829 moved registers were checked against every clock-domain
 # crossing (none touches the clk_mem / clk_sys asynchronous cut, sys/ or a synchroniser chain).
