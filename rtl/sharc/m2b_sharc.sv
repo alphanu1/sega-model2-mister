@@ -517,6 +517,8 @@ logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
+(* keep *) logic [2:0] d_acc1, d_acc0;       // R1048: the kind for each outcome of the loop end's pop
+(* keep *) logic       d_mb1, d_mb0;         // ... and the map test's
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
 logic        d_mbad_nc;                     // ... and the address map's test
@@ -1198,7 +1200,9 @@ always_comb begin
             e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
             e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
             // (R1048: the map test of each sum, the form and the pop choosing last; d_mbad_nc the benches')
-            mbad = (done ? (e1 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3])) : (e0 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]))) || bad2;
+            d_mb1 = e1 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            d_mb0 = e0 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            mbad = (done ? d_mb1 : d_mb0) || bad2;
         end
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
@@ -1287,7 +1291,11 @@ always_comb begin
                 g1 = mem_f && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1;
                 g0 = mem_f && !d_rzb && e0;
                 // (R1048: each sum's bits, d_kb_i / d_kb_o, the form choosing in the same last gate)
-                x.acc = done ? ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1}}) : ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}});
+                // (R1048: each outcome kept as a node, so the pop -- done, S's late compares --
+                // is the last gate's select and not folded in front of the region bits)
+                d_acc1 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g1}};
+                d_acc0 = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{g0}};
+                x.acc = done ? d_acc1 : d_acc0;
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
