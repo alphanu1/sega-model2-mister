@@ -516,6 +516,7 @@ logic        d_s3;
 logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
+logic        d_memf;                        // R1048: mem_f from op[47:42]
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 (* keep *) logic [2:0] d_acc1, d_acc0;       // R1048: the kind for each outcome of the loop end's pop
 (* keep *) logic       d_mb1, d_mb0;         // ... and the map test's
@@ -1162,6 +1163,11 @@ always_comb begin
                    : (op[46] ? (op[45] ? op[39] : op[31])                              // 0110: op[39]; 010: op[31]
                              : (op[45] ? op[44] : op[40]));                            // 001: op[44]; 000100: op[40]
     d_wrf_ref = mem_wr; d_memf_x = mem_f;
+    // R1048: the form has an access (the handler's mem_f) from op[47:42] directly: type 1, the
+    // ureg / dreg <-> DM|PM forms (010x, 0110, 1000, 11xx, 000100, 101, 1001) -- one LUT, not the
+    // case's wide OR (benches check it against mem_f in every D clock)
+    d_memf = op[47:45] == 3'b001 || op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000 ||
+             op[47:46] == 2'b11 || op[47:42] == 6'b000100 || op[47:45] == 3'b101 || op[47:44] == 4'b1001;
     d_kb_i = acc_bits(d_sum_i, pmb, d_wrf);
     d_kb_o = acc_bits(d_sum_o, pmb, d_wrf);
     // the memory access: its kind from the address (the one late decision of D)
@@ -1200,8 +1206,8 @@ always_comb begin
             e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
             e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
             // (R1048: the map test of each sum, the form and the pop choosing last; d_mbad_nc the benches')
-            d_mb1 = e1 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
-            d_mb0 = e0 && mem_f && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            d_mb1 = e1 && d_memf && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
+            d_mb0 = e0 && d_memf && (d_s3 ? d_kb_i[3] : d_kb_o[3]);
             mbad = (done ? d_mb1 : d_mb0) || bad2;
         end
     end
@@ -1288,8 +1294,8 @@ always_comb begin
                 logic e1, e0, g1, g0;
                 e1 = (op[47:46] == 2'b11) ? !d_cok1 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1 : 1'b1;
                 e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
-                g1 = mem_f && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1;
-                g0 = mem_f && !d_rzb && e0;
+                g1 = d_memf && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1;
+                g0 = d_memf && !d_rzb && e0;
                 // (R1048: each sum's bits, d_kb_i / d_kb_o, the form choosing in the same last gate)
                 // (R1048: each outcome kept as a node, so the pop -- done, S's late compares --
                 // is the last gate's select and not folded in front of the region bits)
@@ -2503,6 +2509,7 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
+    always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && ((d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) != d_acc_hit || (d_s3 ? d_kb_i[3] : d_kb_o[3]) != d_bad_x))
         $fatal(1, "R1048's per-sum kind bits %b, mem_a's %b / %b", d_s3 ? d_kb_i : d_kb_o, d_acc_hit, d_bad_x);
     always_ff @(posedge clk) if (d_go && dx.cok != d_cok_ref) $fatal(1, "condition %b, R1029's %b", dx.cok, d_cok_ref);
