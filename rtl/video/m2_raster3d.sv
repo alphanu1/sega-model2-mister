@@ -1210,7 +1210,7 @@ module m2_raster3d #(
       end
 
       if (FB_WCOMB) begin : g_wcomb
-        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512), .FTB(FTB), .WD_NOGO(FBW_WD)) u_fbw (
+        m2_fb_wcomb #(.SCR_W(SCR_W), .SCR_H(SCR_H), .STRIDE(512), .FTB(FTB), .WD_NOGO(FBW_WD), .IDX1(FBW_WD)) u_fbw (   // R1048: IDX1 with the 2B build's FBW_WD
           .clk(clk), .rst_n(rst_n),
           .fb_sel(fb_draw),
           .clear_req(fb_clear_req), .clear_busy(fb_clear_busy),

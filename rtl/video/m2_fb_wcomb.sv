@@ -66,7 +66,12 @@ module m2_fb_wcomb #(
   // holds (pg_we needs b_wr, b_wr needs c_go; a_same needs c_go), so the
   // value is the same wherever it is used, and the window test leaves the
   // path into the fill mask's MLABs. 0: gated as before. (The 2B build.)
-  parameter bit          WD_NOGO = 1'b0
+  parameter bit          WD_NOGO = 1'b0,
+  // R1048: the word's index + 1 and each window's top + 1 kept in registers beside them, and the
+  // index one-hot, so the window test has no adders in front of its compares and a valid bit's
+  // enable no decode -- the same values (b_idx1 == b_idx + 1, whi1 == whi + 1, b_oh == 1 << b_idx
+  // wherever they are read; g_idx1_check). 0: as before. (The 2B build.)
+  parameter bit          IDX1    = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -148,6 +153,7 @@ module m2_fb_wcomb #(
   logic [WBURST-1:0] vlo [2], vhi [2];     // which halves hold a pixel
   logic [1:0]        dirty, pend;          // holds pixels / closed, to be written
   logic [LW-1:0]     wlo [2], whi [2];     // the contiguous words it holds
+  logic [LW:0]       whi1 [2];             // R1048 (IDX1): whi + 1
   // STRIDE/2 words a row is a power of two, so an address is a concatenation
   // -- {buffer, line, window, word} -- and a window is named by its key.
   logic [KW-1:0]     wkey [2];
@@ -194,6 +200,8 @@ module m2_fb_wcomb #(
   logic          b_v;                      // B holds a word
   logic [KW-1:0] b_key;
   logic [LW-1:0] b_idx;
+  logic [LW:0]   b_idx1;                   // R1048 (IDX1): b_idx + 1
+  logic [WBURST-1:0] b_oh;                 // ... and 1 << b_idx
   logic          b_lo, b_hi;               // the pixels the span covers
   logic [31:0]   b_px;
   logic [8:0]    b_y;
@@ -220,8 +228,8 @@ module m2_fb_wcomb #(
     for (int k = 0; k < 2; k++)
       w_fits[k] = !dirty[k] ||
                   ((wkey[k] == ckey) &&
-                   ({1'b0, cidx} + (LW+1)'(1) >= {1'b0, wlo[k]}) &&
-                   ({1'b0, cidx} <= {1'b0, whi[k]} + (LW+1)'(1)));
+                   ((IDX1 ? b_idx1 : {1'b0, cidx} + (LW+1)'(1)) >= {1'b0, wlo[k]}) &&
+                   ({1'b0, cidx} <= (IDX1 ? whi1[k] : {1'b0, whi[k]} + (LW+1)'(1))));
   wire           c_fits = w_fits[ib];
   wire           other_free = !pend[~ib];
   // The window this word is written to: ib, or the other one once ib is closed.
@@ -308,10 +316,10 @@ module m2_fb_wcomb #(
       dirty <= 2'b00; pend <= 2'b00; ridx <= '0; addr_r <= '0;
       m_req <= 1'b0; m_blen <= 8'd1;
       for (int k = 0; k < 2; k++) begin
-        vlo[k] <= '0; vhi[k] <= '0; wlo[k] <= '0; whi[k] <= '0; wkey[k] <= '0;
+        vlo[k] <= '0; vhi[k] <= '0; wlo[k] <= '0; whi[k] <= '0; wkey[k] <= '0; whi1[k] <= (LW+1)'(1);
       end
       dbg_pixels <= '0; dbg_clears <= 16'd0;
-      b_v <= 1'b0; b_key <= '0; b_idx <= '0; b_lo <= 1'b0; b_hi <= 1'b0; b_px <= '0;
+      b_v <= 1'b0; b_key <= '0; b_idx <= '0; b_idx1 <= (LW+1)'(1); b_oh <= WBURST'(1); b_lo <= 1'b0; b_hi <= 1'b0; b_px <= '0;
       b_y <= '0; b_mw <= '0; b_off <= '0; b_mk <= '0;
     end else begin
       // ---- R808: the held span. Its payload is written on every take (no
@@ -381,12 +389,20 @@ module m2_fb_wcomb #(
           wkey[c_wb]  <= ckey;
           wlo[c_wb]   <= cidx;
           whi[c_wb]   <= cidx;
+          whi1[c_wb]  <= b_idx1;
         end else begin
           if (cidx < wlo[ib]) wlo[ib] <= cidx;
-          if (cidx > whi[ib]) whi[ib] <= cidx;
+          if (cidx > whi[ib]) begin whi[ib] <= cidx; whi1[ib] <= b_idx1; end
         end
-        if (lo_on) vlo[c_wb][cidx] <= 1'b1;
-        if (hi_on) vhi[c_wb][cidx] <= 1'b1;
+        if (IDX1) begin
+          for (int j = 0; j < WBURST; j++) begin
+            if (lo_on && b_oh[j]) vlo[c_wb][j] <= 1'b1;
+            if (hi_on && b_oh[j]) vhi[c_wb][j] <= 1'b1;
+          end
+        end else begin
+          if (lo_on) vlo[c_wb][cidx] <= 1'b1;
+          if (hi_on) vhi[c_wb][cidx] <= 1'b1;
+        end
         // R358: PIXELS PAINTED, counted as they are taken -- a pixel painted
         // twice inside one window reaches DDR3 once but was drawn twice
         if (!(&dbg_pixels)) dbg_pixels <= dbg_pixels + 32'(lo_on) + 32'(hi_on);
@@ -395,6 +411,8 @@ module m2_fb_wcomb #(
         b_v   <= 1'b1;
         b_key <= {sel_r, y_r, a_cw[RW-1:LW]};
         b_idx <= a_cw[LW-1:0];
+        b_idx1 <= {1'b0, a_cw[LW-1:0]} + (LW+1)'(1);
+        b_oh  <= WBURST'(1) << a_cw[LW-1:0];
         b_lo  <= a_lo;
         b_hi  <= a_hi;
         b_px  <= px_r;
@@ -451,4 +469,11 @@ module m2_fb_wcomb #(
     end
   end
 
+`ifdef VERILATOR
+  // R1048: the IDX1 registers are their sources' values wherever read
+  always_ff @(posedge clk) if (rst_n && IDX1 && b_v) begin
+    if (b_idx1 != {1'b0, b_idx} + (LW+1)'(1) || b_oh != WBURST'(1) << b_idx) $fatal(1, "m2_fb_wcomb: b_idx1 / b_oh");
+    for (int k = 0; k < 2; k++) if (dirty[k] && whi1[k] != {1'b0, whi[k]} + (LW+1)'(1)) $fatal(1, "m2_fb_wcomb: whi1[%0d]", k);
+  end
+`endif
 endmodule
