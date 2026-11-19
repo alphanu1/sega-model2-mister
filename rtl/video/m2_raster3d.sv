@@ -790,7 +790,7 @@ module m2_raster3d #(
   wire signed [15:0] band_y1 = 16'(fill_band) * 16'(BAND_H);
   wire signed [15:0] band_y2 = band_y1 + 16'(BAND_H) - 16'sd1;
 
-  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .RECIP_M10K(RECIP_M10K), .RECIP_EARLY(RECIP_EARLY), .OKPAR(RECIP_EARLY), .UVCL(UVCL)) u_fill (   // R1052: OKPAR with the 2B build's RECIP_EARLY   // R951   // R948   // R828   // R616, R626, R658, R791
+  m2_raster_fill #(.PXC(PXC), .FRB(FRB), .M2COV(M2COV), .UZF(UZF), .MIP(MIP), .RECIP_M10K(RECIP_M10K), .RECIP_EARLY(RECIP_EARLY), .OKPAR(RECIP_EARLY), .S1Y(RECIP_EARLY), .UVCL(UVCL)) u_fill (   // R1052: OKPAR / S1Y with the 2B build's RECIP_EARLY   // R951   // R948   // R828   // R616, R626, R658, R791
     .clk(clk), .rst_n(rst_n),
     .in_valid(fl_in_valid), .in_ready(fl_in_ready),
     // R327: no sign extension. m2_quad_store already saturates these to 13
