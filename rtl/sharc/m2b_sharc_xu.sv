@@ -131,8 +131,15 @@ always_comb begin
     {ad_co, ad_s} = {1'b0, ad_a} + {1'b0, ad_b} + {32'h0, ad_ci};
     ad_v = (~(ad_a ^ ad_b) & (ad_a ^ ad_s)) >> 31 != 0;
     ad_lt = ad_s[31] ^ ad_v;                             // signed A < ~B + 1 (the compares)
-    ad_eq = ad_s == 32'h0;
+    // R1052: COMP's (the only reader's) zero test on its operands, not on the sum: its fix_k is A
+    // + ~B + 1, so the sum is 0 exactly when x == y (s5302: fix_k -> the adder -> ad_s == 0 -> AN
+    // -> misc_a -0.567 at slow -40C). AN is ad_lt alone: x < y already means x != y
+    ad_eq = x == y;
 end
+`ifdef VERILATOR
+always_ff @(posedge clk) if (k_cmp && (ad_eq != (ad_s == 32'h0)))
+    $fatal(1, "m2b_sharc_xu: COMP's operand test %b against the sum's %b (fix_k %b)", ad_eq, ad_s == 32'h0, fix_k);
+`endif
 
 // ---- the float operands, flushed in the manual's rounding where man_* flushes them
 logic [31:0] xin, yin;
@@ -315,7 +322,7 @@ always_comb begin
     end else if (k_cmp) begin
         set_r = 1'b0;
         if (ad_eq) a |= AZ;
-        else if (ad_lt) a |= AN;
+        if (ad_lt) a |= AN;
         acc = (a >> 1) & 32'h7F00_0000;
         if ((a & (AZ | AN)) == 0) acc |= 32'h8000_0000;
         a = (a & 32'h00FF_FFFF) | acc;
@@ -414,13 +421,12 @@ end
 // (X's third clock) from it
 logic [31:0] fb_q;
 logic        fb_up, fb_ng, fb_big, fb_den;
-logic [24:0] fb_m;
+logic [22:0] fb_m;
 logic [7:0]  fb_e;
 logic        fb_zero, fb_sg;
 always_ff @(posedge clk) begin
-    logic        half, rest, up;
+    logic        half, rest, up, cy;
     logic [24:0] m;
-    logic [7:0]  e;
     // FIX: the rounding, to nearest even, or under TRUNC toward minus infinity (MAME: the
     // multifunction form a C cast, toward zero)
     fb_q <= f_tiny ? 32'h0 : fn_o;
@@ -430,16 +436,22 @@ always_ff @(posedge clk) begin
     else if (MAME_RND && misc_op == M_FIXBYM) fb_up <= 1'b0;
     else fb_up <= f_sgn && (half || rest);
     fb_ng <= f_sgn; fb_big <= f_big; fb_den <= f_den;
-    // FLOAT: the rounding and the exponent
+    // FLOAT: the rounding and the exponent. R1052: the rounding's carry out of the 24 bits is up
+    // && (the 24 bits all ones), tested beside the increment, not read from its top bit (s5301:
+    // fn_sel -> the funnel -> up -> the increment's carry -> e + 1 -> fb_e, -0.627 at slow -40C);
+    // the exponent's two values from fl_lz beside it, the carry choosing. After a carry the sum
+    // is exactly 2^24, so its low 23 bits -- all fl_r reads of the mantissa -- are 0 shifted or
+    // not: fb_m keeps those bits of the increment, with no shift
     up = (MAME_RND || !trunc) && fn_o[7] && (fn_o[6] || fn_o[5:0] != 0 || fn_o[8]);
+    cy = up && (&fn_o[31:8]);
     m = {1'b0, fn_o[31:8]} + {24'h0, up};
-    e = 8'(8'd158 - {2'b00, fl_lz});
-    if (m[24]) begin m = m >> 1; e = e + 8'd1; end
-    fb_m <= m; fb_e <= e; fb_zero <= fl_zero; fb_sg <= fx[31];
+    fb_m <= m[22:0];
+    fb_e <= cy ? 8'(8'd159 - {2'b00, fl_lz}) : 8'(8'd158 - {2'b00, fl_lz});
+    fb_zero <= fl_zero; fb_sg <= fx[31];
 end
 logic [31:0] fx_r, fl_r;
 assign fx_r = fb_big ? 32'h8000_0000 : (fb_ng ? ~fb_q : fb_q) + {31'h0, fb_ng ^ fb_up};
-assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m[22:0]};
+assign fl_r = fb_zero ? 32'h0 : {fb_sg, fb_e, fb_m};
 
 // the operands' tests from fx / fy (R1029: off the flush's path; a flush keeps the sign, the
 // exponent and a NaN, and makes a denormal a zero)
