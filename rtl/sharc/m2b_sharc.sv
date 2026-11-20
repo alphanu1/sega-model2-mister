@@ -748,7 +748,6 @@ always_comb begin
         fv = flg[2'(cc[3:0] - 4'h9)] ^ cc[4];
         c1 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l1, op[35:31]) : if_cond(astat, 4'h0, alusat, l1, cond);
         c0 = (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, l0, op[35:31]) : if_cond(astat, 4'h0, alusat, l0, cond);
-        cok = isf ? fv : done ? c1 : c0;
         d_cok1 = isf ? fv : c1; d_cok0 = isf ? fv : c0;   // (R1048: for each outcome of the loop end's pop)
         // (R1048: and the popped outcome's for each value of l1 -- the LCE after the pop, an MLAB
         // read at S.lstkp's neighbour -- which chooses after them)
@@ -757,6 +756,11 @@ always_comb begin
         lceq = le ? (dn_le ? l1 : lc_le) : !sf_c1;
         d_cok1t = isf ? fv : (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, 1'b1, op[35:31]) : if_cond(astat, 4'h0, alusat, 1'b1, cond);
         d_cok1f = isf ? fv : (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, 1'b0, op[35:31]) : if_cond(astat, 4'h0, alusat, 1'b0, cond);
+        // R1052: the word's condition itself with le last -- isf ? fv : done ? c1 : c0 is the
+        // condition at LCE's input lceq, so every consumer (the handler's enables, XC.cok, x.uw
+        // ...) is two gates from the loop end's compare, not behind l0 -> if_cond (s5325: S.daddr
+        // -> le -> the condition -> XC.uw -1.078 at slow 100C). R1029's d_cok_ref checks it at d_go
+        cok = lceq ? d_cok1t : d_cok1f;
         d_cok_ref = done ? ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond))
                          : ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l0, op[35:31]) : if_cond(astat, flg, alusat, l0, cond));
     end
