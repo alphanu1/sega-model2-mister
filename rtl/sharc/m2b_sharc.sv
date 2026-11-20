@@ -2494,7 +2494,25 @@ always_comb begin
     hr_we = (en && dmac6[7:6] == 2'd2 && idx < 32'h20000 + PMW) ? 3'b001 << w : 3'b000;
 end
 always_ff @(posedge clk) begin hq_we <= hr_we; hq_wa <= hr_wa; hq_wd <= hr_wd; end
+// R1052: pm_host (the host's or the clear's write has port B) and "the clear has it" as registers
+// made from their next values (s5321: hq_we[2] / clr_n[13] -> pm_host -> the operands -> the adder
+// -> pm2's address -0.675 at slow 100C). pm_we != 0 is hq_we != 0 or the clear's (clr_on && clr_n
+// < PMW); with CLR_AW == PM_AW (the 2B build's 13 / 13) clr_n < PMW holds wherever clr_on does
+// (the clear stops at 2^CLR_AW - 1), so it is hq_we != 0 || clr_on, and both are registers loaded
+// from hr_we and the clear's own next state. Other shapes keep the compare (PMHQ 0).
+localparam bit PMHQ = CLR_AW == PM_AW;
+logic pmh_q, pmc_q;
+always_ff @(posedge clk) begin
+    logic con;
+    con = reset ? CLEAR : (clr_on && clr_n != (CLR_AW + 1)'((1 << CLR_AW) - 1));
+    pmh_q <= hr_we != 3'b000 || con;
+    pmc_q <= hr_we == 3'b000 && con;
+end
 generate if (BENCH) begin : g_hq_check
+    // R1052: the registered forms against the old tests, every clock
+    always_ff @(posedge clk) if (PMHQ && !reset && (pmh_q != ((hq_we != 3'b000) || (clr_on && clr_n < PMW)) ||
+                                                    pmc_q != (hq_we == 3'b000 && clr_on && clr_n < PMW)))
+        $fatal(1, "pm_host %b / the clear %b, the tests' %b / %b", pmh_q, pmc_q, (hq_we != 3'b000) || (clr_on && clr_n < PMW), hq_we == 3'b000 && clr_on && clr_n < PMW);
     always_ff @(posedge clk) if (hr_we != 3'b000 && (st != ST_HALT || clr_on || run))
         $fatal(1, "a host PM write outside HALT / during the clear / with run (st %0d clr %b run %b)", st, clr_on, run);
     always_ff @(posedge clk) if (hq_we != 3'b000 && (st != ST_HALT || clr_on))
@@ -2506,13 +2524,13 @@ always_comb begin
     pm_wd = hq_wd;
     pm_wa = hq_wa;
     pm_we = hq_we;
-    if (hq_we == 3'b000 && clr_on && clr_n < PMW) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
+    if (PMHQ ? pmc_q : (hq_we == 3'b000 && clr_on && clr_n < PMW)) begin pm_we = 3'b111; pm_wa = clr_n[PM_AW-1:0]; pm_wd = 16'h0; end
     // R1042: port B's other users, after the host's: a PM-bus store at its pass's end (lanes 2:1,
     // bits 47:16; lane 0 kept, as MAME's mask); the word a PM-bus access names, read in every D
     // clock (D's address) and every X clock (the word's own: its one access's, or type 1's second),
     // so pmb_q holds the word through X. The host's write has the port: D waits (d_wait); a host
     // write while a word is in X is not arbitrated (the upload is made with the SHARC halted)
-    pm_host = pm_we != 3'b000;
+    pm_host = PMHQ ? pmh_q : pm_we != 3'b000;
     pm_ha = pm_wa; pm_hidx = PM_AW'(idx - 32'h20000);
     pm_wd2 = {pm_wd, pm_wd};
     if (!pm_host) begin
