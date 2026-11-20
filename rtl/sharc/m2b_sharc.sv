@@ -517,6 +517,7 @@ logic [31:0] d_sum_i, d_sum_o;              // R1048: the 32-bit offset's sum an
 logic        d_s3;
 logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
+logic        d_rnwe_ref;                    // (the benches': rn_we as it was before R1057)
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
 logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
@@ -1164,9 +1165,11 @@ always_comb begin
         // R1042: type 1's loads, the DM bus's (op[36:33]) and the PM bus's (op[26:23]): the
         // manual's precedence (p. 11-42: DM, PM, ALU, multiplier, shifter) -- both over the compute
         begin
-            logic t1d, t1p;
+            logic t1d, t1p, h11;
             t1d = t1 && !op[44]; t1p = t1 && !op[37];
             if (kv && k == x.rm) x.rm_we = 1'b0;
+            // (R1057: h11, a load to op[11:8] -- the compute field's Rn's test)
+            h11 = (kv && k == op[11:8]) || (t1p && op[26:23] == op[11:8]) || (t1d && op[36:33] == op[11:8]);
             if (kv && k == x.ra) x.ra_we = 1'b0;
             if (t1p && op[26:23] == x.rm) x.rm_we = 1'b0;
             if (t1p && op[26:23] == x.ra) x.ra_we = 1'b0;
@@ -1190,8 +1193,18 @@ always_comb begin
             end
             // the fixed / shifter result lands after X (R1029), after the word's load: a load or ureg
             // move to its register wins (MAME's order), as for a float result
-            x.rn_we = !(kv && k == x.rn);
-            if ((t1p && op[26:23] == x.rn) || (t1d && op[36:33] == x.rn)) x.rn_we = 1'b0;
+            d_rnwe_ref = !(kv && k == x.rn) && !((t1p && op[26:23] == x.rn) || (t1d && op[36:33] == x.rn));
+            // R1057 (R1052's 15, reduced): Rn's two places compared apart, the form last. x.rn is
+            // set inside the compute field's decode (s5346: pm2 -> Decoder3 -> sh_on -> WideOr3 ->
+            // dx.rn -> rn_we -> XC.rn_we -0.757 at slow -40C). The enable is read only with a fixed
+            // ALU or shifter result (fix_on && fix_wr, or sh_on): in a compute field Rn is op[11:8];
+            // in the immediate shifts op[7:4], where 1000's only load is its own (op[31] clear, to
+            // op[26:23]: no type 1) and 00000010's has none -- for which wn is 1 already
+            begin
+                logic wi;
+                wi = !(!op[31] && op[26:23] == op[7:4]);
+                x.rn_we = (op[47:44] == 4'b1000) ? wi : !h11;
+            end
             // the PM load, unless the DM load is to the same register (DM's precedence)
             x.ld2_r = t1p && !(t1d && op[36:33] == op[26:23]);
             x.ld2_dst = op[26:23];
@@ -2575,6 +2588,8 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
+    // R1057: rn_we wherever the landing reads it
+    always_ff @(posedge clk) if (st == ST_D && ((dx.fix_on && dx.fix_wr) || dx.sh_on) && dx.rn_we != d_rnwe_ref) $fatal(1, "rn_we %b, the old %b", dx.rn_we, d_rnwe_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
     always_ff @(posedge clk) if (st == ST_D && d_cbad_ref != d_cbad_x) $fatal(1, "cbad without its guard differs");
