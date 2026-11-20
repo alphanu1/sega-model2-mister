@@ -55522,3 +55522,42 @@ y[30:23]. Both paths are removed here with the same output on the same clock.
 
 *So:* 7ccd13e5 is the base plus these two, proven; whether they help is a seed question (R1054:
 one fit is not evidence at a 0.4-0.9 ns spread). Not fitted here.
+
+**R1056 -- THE 2B BUILD's clk_sys AND HDMI, 2026-11-20 EVENING: R1055's ADDER CHANGES DO NOT MOVE THE
+SEEDS; A GOOD SEED's PLACEMENT CANNOT BE CARRIED TO A NEW BUILD; QUARTUS LITE HAS NO LOGICLOCK; THE
+SOUND ANCHORS BACK GIVE NOTHING CLEAR. THE SHARC's PM PORT B -> XC IS THE ONE FAMILY ON NEARLY EVERY
+SEED.** Lane 2b-pl-u at dd5e52fe (model2b + R1055). Fits only; no board.
+
+(Section: §10, after R1055. Authority: the fits' own reports and Quartus's own messages.)
+
+*What was believed:* (a) R1055's two adder changes, each removing a family a base seed failed on, would
+move the seeds toward clean; (b) s5334's placement (HDMI +0.197, one real clk_sys family) could be kept
+for a build with R1055 by back-annotating it; (c) the scaler's HDMI-side logic could be held in its
+corner with a placement region; (d) the 44 sound-board anchors e5fc6fe4 dropped were what gave s5308
+its clk_sys.
+
+*What is now known:*
+  (a) R1055's seeds: s5338 clk_sys -0.487 / HDMI -0.178; s5342 -0.909 / -0.555; s5343 -0.859 / -0.078;
+      s5339, s5340, s5341 crashed (segfault, PDB, DYN). The base's (b5b7438b): -0.066 (s5308, with the
+      sound anchors), -0.249, -1.352, -0.570. No gain; the adder's stage 1 still fails from fa_x[23]
+      (s5343 -0.418): exponent subtract -> align -> 28-bit add is long in one 12.5 ns clock whichever
+      leg starts it. Kept (output-identical, area-neutral: 477 ALMs either way) but not a lever.
+  (b) quartus_cdb --back_annotate=lab is illegal on Cyclone V ("Demotion type lab ... is illegal");
+      =lc writes 103,093 node locations. Applied to a new synthesis it fails four ways, each attempt
+      freeing what the last refused: combinational names (Mux68~0) bound to two cells (44); registers
+      s5334 packed into M10K output registers (430, Error 11943); the SDRAM DDIO duplicates; then
+      register pairs in m2_texel_bl the new netlist cannot share an ALM (11, then 5 more, Error
+      170208). A new synthesis differs even in modules nobody touched, so a cell-level placement does
+      not carry over. Dropped (Ben).
+  (c) Quartus Prime Lite 17.0 has no LogicLock: "Critical Warning (140003): Current license file
+      does not support LogicLock regions ... removes all the LogicLock regions" -- and the fit goes on
+      without them (s5344: clk_sys -0.677, HDMI -0.806; just another seed). Region constraints are not
+      available to this project; only per-node location assignments are.
+  (d) s5346 (R1055 + the 44 anchors back; s5345 segfaulted 4 min in, alone): clk_sys -0.649 / -0.757,
+      HDMI -0.187 / -0.314, hold +0.048. Nothing clear from one seed.
+
+*The family on nearly every seed, base and R1055 alike:* the SHARC's PM port B (pm2_rtl_0 portb_we_reg)
+into XC (acc, acc_wd, mbad, ra_we, rn_we) and into pm0 / pm1's address: s5335 -0.65, s5337, s5338
+-0.24, s5342 -0.91, s5343 -0.86, s5344 -0.62, s5346 -0.76 at slow -40C. R1052 attacked it with logic
+and the area went up; a fix that adds no logic is the remaining RTL lever. Two fits may run at once
+(Ben), the second from the first's 15th minute; crashes this evening: 5 of 9 fits, one of them alone.
