@@ -55035,7 +55035,7 @@ new form against the old in every clock where it is read.
      v9 costs about +65. Fit 41,395 (550 recoverable), clk_sys -1.078 / -0.751, HDMI +0.038,
      hold +0.074; only SHARC families: S.daddr[8] -> XC.uw -1.078 (new worst), st[0] / pm2 -> pm0's
      address -0.38 / -0.19, pm2 -> dm0's -0.008. fmul -> g_rf gone from the list.
-  31. (SHARC, v11; under proof) the word's condition itself with le last: cok was still isf ? fv :
+  31. (SHARC, v11) the word's condition itself with le last: cok was still isf ? fv :
      done ? c1 : c0, l0 (le's) in front of if_cond, so every cok consumer -- the handler's enables,
      x.uw, XC.cok -- sat behind the loop end's compare (s5325: S.daddr -> le -> the condition ->
      XC.uw). cok = lceq ? d_cok1t : d_cok1f is the same value; R1029's d_cok_ref checks it at d_go.
@@ -55044,3 +55044,10 @@ new form against the old in every clock where it is read.
      words differ, the 200 M-word miters 0 differ; the manual DOA lockstep 501,777,265 words, 0
      differ, 1,264,264,337 clocks; quartus_map --analyze_file 0 errors. PLANTED: the 32-bit
      offset's select also on the 6-bit form (r1, g_dma_check: DM address 06ff, the select's 06fd).
+  PROOF (31, v11 = v10 + 31): the miter at MAME_RND 1 and 0, 39 programs, negcond, 28 / 28, 0 differ,
+     the same clocks; the replays and the manual lockstep to the clock as v10's (1,264,270,732 /
+     1,277,257,981 / 1,279,552,477; 501,777,265 words, 0 differ, 1,264,264,337); analyze 0 errors.
+     PLANTED: the condition's LCE without the pop's l1 (r331, g_stk_check's access kind).
+  s5326 (2fa54888 + v9) -0.361 / -0.429, HDMI -0.453, map 39,178: pm2 -> XC.acc_wd[22] / [23],
+     pm2 -> pm0's address -0.065, the inputs' joy_ranalog_q -> or_aq -0.023. acc_wd recurs (s5306,
+     s5320, s5326).
