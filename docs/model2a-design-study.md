@@ -55443,3 +55443,82 @@ the operands' raw exponent fields (equal to the flushed fields wherever the zero
 which the core already checks every clock), so fa_yz gates only the mantissa -- proven before
 any fit. The cpu_bridge l_data / l_ok / r_rdata -> clk_i960 hold-only exception (R1052's
 proposal, protocol-proven) is Ben's decision and not applied.
+
+**R1055 -- THE 2B SHARC ADDER's TWO FAILING PATHS ON THE s5308 BASE, OUTPUT-IDENTICAL AND NO LOGIC
+ADDED: R1052's INFINITY TEST BROUGHT BACK ALONE, AND THE SHIFT AMOUNT TAKEN FROM THE RAW EXPONENT
+FIELDS SO THE ZERO TESTS NO LONGER FEED THE ALIGNMENT.** Branch 2b-fadd (from model2b 696a2aca),
+2026-11-20. Simulation and quartus_map only; no fit, no board.
+
+(Section: §10, after R1054. Authority as R1052: the fits' full-path reports for where the time goes;
+the benches for "the same output on the same clock". Model 1 has no SHARC; MAME is reached only
+through the replays. Nothing in sys/ touched. sharc_fadd is instantiated only by m2b_sharc -- the
+2B build; main / model2a / model2c have no sharc_fadd at all -- so nothing is gated.)
+
+*What was believed (R1054):* the base b5b7438b (s5308's RTL) fails on one family, the adder's stage
+1 (s5334: fa_yz -> v_s[21], -0.079 slow 100C / -0.249 slow -40C), and R1052's retimes come back
+one at a time, each only if seeds show it helps; new fixes must not add logic.
+
+*What is now known:* the base's seeds s5335 and s5337 failed on v_lz[*] -> raw_inf (-0.033 / -0.495
+at slow -40C) -- the path R1052's change 21 removed -- and s5334's full path runs fa_yz -> the
+exponent subtract (Add2) -> the near / shift-range tests -> the align shifter (sye) -> s_far (Add5)
+-> v_s[21]. yz reaches the shift amount only because rab / rba were made from yf[30:23] = yz ? 0 :
+y[30:23]. Both paths are removed here with the same output on the same clock.
+
+*THE CHANGES (7ccd13e5, rtl/sharc/sharc_fadd.sv):*
+  1. raw_inf <= v_inf || (!v_near && far_inf), far_inf = (!MAME_RND && v_avg) ? ov256 : ov255 from
+     the far path's range tests -- R1052's change 21 exactly (the hunk of 4f183072..d35563ef, with
+     its Verilator-only check that raw_inf == is_inf(raw) wherever !w_nan), not is_inf(raw_c).
+     Identical by R1052's argument: an infinite operand gives an infinite result, the near path's
+     never is, the far path's is exactly its range test. (Only the manual's rounding reads it;
+     MAME_RND 1 tests q in the finish as before.) far_inf is 0 outside the far branch, so the
+     !v_near term is redundant as well as harmless.
+  2. rab / rba (the shift amount, e_ge and the >= 27 test) and d0 (the near path's d[0]) from
+     x[30:23] / y[30:23] instead of xf / yf's. xf[30:23] = (PRE ? xz : x[30:23] == 0) ? 0 :
+     x[30:23]: at PRE 0 that is x[30:23] for every x; at PRE 1 wherever xz == (x[30:23] == 0),
+     which m2b_sharc's g_pre_check $fatals on in every ST_X clock -- the adder's en is exactly
+     st == ST_X. Likewise y (sub / avg flip bit 31 only). xz / yz still gate the mantissas (ma / mb:
+     a denormal's fraction is not zero, so those are NOT the same bits), ea / eb, ex, dab / dba and
+     the magnitude compare (dd / big_ab), all unchanged. The other stage-1 terms checked: esub
+     (xf[31] = x[31] for every input -- the flush keeps the sign, synthesis already folds it);
+     v_inf / v_infr's is_inf(xf) (equal to is_inf(x) under the invariant, but a register, not on
+     the shift / far-sum path -- left); nan1 / v_nanin / v_infb already use x / y. No other term
+     on the path qualified.
+  AREA (sharc_fadd mapped alone, PRE 1, MAME_RND 0, Aggressive Area; ALMs / LUTs / registers):
+     base 477 / 819 / 145; change 1 alone 478 / 820 / 145; both 477 / 818 / 145. (R1052 measured
+     change 1 at about +18 LUTs in the whole build's per-entity map; synthesis variation of that
+     size is R1054's point, so only a fit says what it costs there.)
+
+*PROOF (benches under the 8 G / 4 G caps, -j 2; rtl/sharc frozen; old = 696a2aca's rtl/sharc):*
+  * tb_sharc_fp (sim/sharc/fp/build.sh, both roundings in one run): 4 x 25 M vectors (seeds 1-4),
+    0 mismatches in every unit and package op (~18.7 k products and ~650 sums rounded up to a
+    power of two a run). A scratch copy with two more adders at PRE 1, xz / yz the zero tests, 4 x
+    25 M and 4 x 250 M (seeds 11-14, ten times the usual run): 0 mismatches, PRE 0 and PRE 1, both
+    roundings. (The committed bench has no PRE 1 instance; the core benches below are its proof
+    in place.)
+  * PLANTED (tb_sharc_fp, the scratch PRE 1 copy, 4 M vectors, seed 7, the raw_inf check taken
+    out): far_inf = ov256 always (27,738 manual mismatches per adder), far_inf = ov255 always (FAVG:
+    9,363 -- R1052's figure), raw_inf without v_inf (303,181 -- R1052's), rab from xf[30:24] with
+    bit 23 dropped (75,109 MAME / 73,823 manual), rba with x's bit 23 replaced by y's (45,113 /
+    44,827), d0 from x[24] (91,992 / 91,720): all CAUGHT, PRE 0 and PRE 1 alike. In the core
+    (the miter into the lockstep bench, the check out): raw_inf without v_inf at MAME_RND 0
+    (r1: v1's lockstep, word 353 differs), rab's bit dropped at MAME_RND 0 (r1, word 666), d0
+    from x[24] at MAME_RND 1 (r1, word 17,420): CAUGHT; r201 passes all three (no float adds).
+  * THE CORE: the miter (new against old, every output every clock) in the lockstep bench at
+    MAME_RND 1 and 0 -- the 42 random programs (1-6 ... 361-363), negcond n0-n3, and at MAME_RND 1
+    the 28 unsupported cases (28 / 28 at their words): 0 differ, every clock count R1052's (MAME_RND
+    1: r1 2,589,533, r101 2,570,837, r201 2,599,970, r306 2,499,985, r361 2,566,827; MAME_RND 0: r1
+    2,523,059, r361 2,527,710), g_pre_check and the raw_inf check silent.
+  * THE REPLAYS (MAME rounding, PXIM 0, SKLR 0) on the new core: DOA 150 s 1,264,270,732 clocks
+    (2.5196 a word), fvipers 500 M words 1,277,257,981 (2.5545), schamp 1,279,552,477 (2.5591) --
+    R1052's to the clock; out FIFOs and the MAME traces (30 M / 20 M / 20 M words) 0 differ. Under
+    the miter (new against old), 200 M words of each: 0 differ (503,745,104 / 510,558,056 /
+    506,338,721 clocks). Added here, as change 1 is read only at the manual's rounding: DOA 200 M
+    words under the miter at MAME_RND 0, 0 differ (503,743,519 clocks; 3,731,838 out words differ
+    from MAME's, the manual's rounding). THE MANUAL ROUNDING (SH_MAME_RND 0) on DOA's whole capture
+    in lockstep with v1 MAN: 501,777,265 words, 0 differ, 1,264,264,337 clocks, 10,280,834 out
+    words differ from MAME's (R1048's figure).
+  * quartus_map --analyze_file (17.0, a scratch project as make syn_check): 0 errors (1 warning,
+    the processor count -- the base's file the same).
+
+*So:* 7ccd13e5 is the base plus these two, proven; whether they help is a seed question (R1054:
+one fit is not evidence at a 0.4-0.9 ns spread). Not fitted here.
