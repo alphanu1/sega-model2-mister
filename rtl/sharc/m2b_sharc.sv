@@ -519,6 +519,12 @@ logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_rnwe_ref;                    // (the benches': rn_we as it was before R1057)
 logic        d_rawe_ref;                    // (the benches': ra_we as it was before R1057)
+(* keep *) wire d_e11p, d_e11d, d_e15p, d_e15d;    // R1057: op[26:23] / op[36:33] against op[11:8] / op[15:12]
+assign d_e11p = pm_q[26:23] == pm_q[11:8]; assign d_e11d = pm_q[36:33] == pm_q[11:8];
+assign d_e15p = pm_q[26:23] == pm_q[15:12]; assign d_e15d = pm_q[36:33] == pm_q[15:12];
+(* keep *) wire d_lpa, d_z27;                       // R1057: lr (the dreg loads' forms), op[30:27] == 0
+assign d_lpa = (pm_q[47:44] == 4'b0110 && !pm_q[39]) || (pm_q[47:44] == 4'b1000 && !pm_q[31]) || (pm_q[47:46] == 2'b11 && !pm_q[44]);
+assign d_z27 = pm_q[30:27] == 4'h0;
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
 logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
@@ -1166,7 +1172,7 @@ always_comb begin
         // R1042: type 1's loads, the DM bus's (op[36:33]) and the PM bus's (op[26:23]): the
         // manual's precedence (p. 11-42: DM, PM, ALU, multiplier, shifter) -- both over the compute
         begin
-            logic t1d, t1p, h11;
+            logic t1d, t1p, h11, lp;
             t1d = t1 && !op[44]; t1p = t1 && !op[37];
             if (kv && k == x.rm) x.rm_we = 1'b0;
             // R1057: Ra's compares on op[11:8], not x.ra: the decode sets ra_we only where it sets
@@ -1175,7 +1181,13 @@ always_comb begin
             // clock, the compute field's decode no longer in front of the compares (s5335: pm2 ->
             // XC.ra_we -0.610 at slow 100C)
             // (h11: a load to op[11:8] -- Ra's, and the compute field's Rn's, test)
-            h11 = (kv && k == op[11:8]) || (t1p && op[26:23] == op[11:8]) || (t1d && op[36:33] == op[11:8]);
+            // R1057: the registers' compares from the fields alone (d_e11p / d_e11d, kept wires),
+            // the forms last: kv or t1p (a load to op[26:23] -- k is op[26:23] in every kv form) as
+            // lp, its dreg forms (lr) and op[30:27] == 0 kept beside it, and t1d (a load to
+            // op[36:33]). Quartus had built kv || t1p as a chain of three behind a form compare in
+            // front of h11 (post-map: pm2 -> Equal3 -> h11~0 -> ~1 -> ~2 -> h11 -> rm / ra / rn_we)
+            lp = d_lpa || (op[47:45] == 3'b010 && !op[31] && d_z27) || (op[47:44] == 4'b0111 && d_z27) || t1p;   // kv || t1p
+            h11 = (lp && d_e11p) || (t1d && d_e11d);
             d_rawe_ref = x.ra_we && !(kv && k == x.ra) && !(t1p && op[26:23] == x.ra) && !(t1d && op[36:33] == x.ra);
             if (h11) x.ra_we = 1'b0;
             if (t1p && op[26:23] == x.rm) x.rm_we = 1'b0;
@@ -1190,9 +1202,10 @@ always_comb begin
                 ma = comp[15:12]; mb = comp[11:8];
                 wa = comp_f && comp != 23'h0 && comp[22] && comp[21:19] == 3'b011;
                 wb = comp_f && comp != 23'h0 && !comp[22] && comp[21:20] == 2'd1 && comp[19:12] == 8'h30;
-                ca = (kv && k == ma) || (t1p && op[26:23] == ma) || (t1d && op[36:33] == ma);
-                cb = (kv && k == mb) || (t1p && op[26:23] == mb) || (t1d && op[36:33] == mb);
-                raa = !((kv && k == mb) || (t1p && op[26:23] == mb) || (t1d && op[36:33] == mb));   // Ra = comp[11:8]
+                // (R1057: the same tests from the fields' compares, the forms last, as h11)
+                ca = (lp && d_e15p) || (t1d && d_e15d);
+                cb = h11;
+                raa = !h11;                     // Ra = comp[11:8]
                 d_rmwe_ref = x.rm_we;
                 x.rm_we = (wa && !ca && !(raa && ma == mb && !x.fl_comp)) || (wb && !cb);
             end
