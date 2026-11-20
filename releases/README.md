@@ -56,6 +56,14 @@ hardware as possible:
   of times a fight for the fighters' joint angles, Daytona a little and
   Virtua Cop 2 now and then. Too small to see, but the CPU now computes what
   the arcade board computes. (`*_20261030`.)
+- **The i960 keeps very small numbers, as Intel's chip does (all three
+  cores).** Every Model 2 game sets the 80960KB's floating point to keep
+  numbers too small for the normal format (subnormals) rather than turn them
+  into zero. MAME's CPU keeps them too; the cores used to flush them to zero.
+  Every floating-point unit, the remainder included, now takes and gives them
+  exactly, with no extra time on ordinary numbers. Too small to see, but the
+  CPU now computes what the arcade board computes. (`Model2_20261120`,
+  `Model2A_20261120`, `Model2C_20261120`.)
 - **Sega Rally's hi-hats play in time with the music (Model 2A and 2C).** Checked against a recording of a real Sega Rally
   cabinet: the music plays at exactly the same pitch, but the arcade's
   sequencer runs 2.2% slower than MAME's. The sound chip's timer, which
@@ -90,7 +98,23 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261113`)
+### New in this build (`Model2A_20261120`)
+
+- **A faster i960.** Four timing changes in the CPU's caches and memory
+  unit, with every memory access the same and in the same order: Sega
+  Rally's race needs 3.5% fewer CPU clocks for the same work.
+- **The i960 keeps very small numbers as Intel's chip does** (see *Not just
+  a MAME port* above).
+- **The i960's 64-bit float-to-integer conversion follows Intel's manual.**
+  A NaN, a value too big for 32 bits and a value out of range now give
+  the 80960KB's results instead of a clamped 32-bit value.
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included.** Earlier releases were checked at the hot
+  corner only. Three long paths (in the 3D clipper, the projection and the
+  sound chip's timers) were split, with no added delay and nothing else
+  changed.
+
+### Earlier in `Model2A_20261113`
 
 - **Busy scenes keep their small polygons.** When the 3D list is nearly
   full, the core starts leaving out the tiniest polygons so the big ones
@@ -340,7 +364,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261120.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -348,7 +372,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261113.rbf` has the md5 `2308a87056dc842407bd9ac150b662a5`. As with
+`Model2A_20261120.rbf` has the md5 `5758a1bd22435e21149aad1a6b68aa3c`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -417,7 +441,7 @@ Fighter 2 at the default 80%:
 
 ## Model 2C core — `Model2C.rbf` (BETA)
 
-The first Model 2C core: eight games. The 2C board replaces the 2A's
+The first Model 2C core: seven games. The 2C board replaces the 2A's
 geometry chip with Sega's TGPx4 (Fujitsu MB86235), rebuilt here from
 scratch and checked against MAME output for output. It's a beta: please
 report anything you find, with the game and where.
@@ -426,10 +450,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261120.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261113.rbf` has the md5 `4da5cea2f2be436dc746350828fb4196`. Keep
+`Model2C_20261120.rbf` has the md5 `6ad5193ac23dbcbf08b4cc3c29a60bb0`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -445,23 +469,27 @@ ROM sets: MAME 0.289.
 | The House of the Dead (Revision A) | `The House of the Dead (Revision A).mra` | `hotd.zip` | `hotd` | Plays at full speed, with guns from a mouse or stick. **Needs the 128 MB SDRAM module.** |
 | Over Rev (Model 2C, Revision A) | `Over Rev (Model 2C, Revision A).mra` | `overrev.zip` | `overrev` | Plays, with wheel and pedals |
 | Sega Touring Car Championship | `Sega Touring Car Championship (newer).mra` | `stcc.zip` | `stcc` | Plays at full speed, with its music. **Needs the 128 MB SDRAM module.** |
-| Wave Runner (Japan, Revision A) | `Wave Runner (Japan, Revision A).mra` | `waverunr.zip` | `waverunr` | Plays. Mostly 30 fps for now. **Needs the 128 MB SDRAM module.** |
-| Sega Water Ski (Japan, Revision A) | `Sega Water Ski (Japan, Revision A).mra` | `segawski.zip` | `segawski` | Plays, with slowdowns. **Needs the 128 MB SDRAM module.** |
-| Behind Enemy Lines | `Behind Enemy Lines.mra` | `bel.zip` | `bel` | Plays, with guns from a stick, mouse or USB gun. **Calibrate the guns before the first game** (below). **Needs the 128 MB SDRAM module.** |
+| Wave Runner (Japan, Revision A) | `Wave Runner (Japan, Revision A).mra` | `waverunr.zip` | `waverunr` | Plays. Mostly 30 fps for now, with some stretches at 60. **Needs the 128 MB SDRAM module.** |
+| Sega Water Ski (Japan, Revision A) | `Sega Water Ski (Japan, Revision A).mra` | `segawski.zip` | `segawski` | Plays. Mostly 30 fps for now. **Needs the 128 MB SDRAM module.** |
 | Sega Ski Super G | `Sega Ski Super G.mra` | `skisuprg.zip` | `skisuprg` | Plays. Shows "Drive board trouble Code FF" at boot (MAME does too): press Test to go on. **Needs the 128 MB SDRAM module.** |
 | Dynamite Cop (USA, Model 2C) | `Dynamite Cop (USA, Model 2C).mra` | `dynamcopc.zip`, `dynamcop.zip` | `dynamcopc` | Plays. **Needs the 128 MB SDRAM module.** |
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-**Behind Enemy Lines: calibrate the guns before the first game, then save.**
-The game keeps each gun's calibration in its own settings, and on a new
-board they're blank, so the crosshair sits in the bottom-left corner and
-won't move (MAME does the same). Press Test, choose GUN CALIBRATION and
-follow the prompts for each gun (push to the stops, pull the trigger), then
-exit the test menu and use the OSD's "Save settings (NVRAM)". It's kept from
-then on.
+### New in this build (`Model2C_20261120`)
 
-### New in this build (`Model2C_20261113`)
+- **Sega Touring Car Championship at full speed, with its music.** The
+  Digital Sound Board, the MPEG music board STCC carries, is now in the
+  core, sample for sample as MAME plays it, and races hold 60 fps. **Use the
+  new STCC MRAs from this folder**: the old ones don't load the music.
+- **Four more games:** Wave Runner, Sega Water Ski, Sega Ski Super G and
+  Dynamite Cop (USA, Model 2C). All four need the 128 MB SDRAM module.
+- **The i960 keeps very small numbers** (subnormals), as above.
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included.** Earlier releases were checked at the hot
+  corner only.
+
+### Earlier in `Model2C_20261113`
 
 - **House of the Dead's busy scenes keep all their polygons.** The 3D list
   ran out of room in the heaviest scenes and dropped up to 79 polygons a
@@ -588,9 +616,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 ### Known bugs
 
-- **Sega Touring Car Championship has no music.** Its music board plays
-  MPEG audio, which the core doesn't have yet. Engine sounds and effects
-  play. The pedals work, but races still drop to 30 fps in places.
+- **Wave Runner and Sega Water Ski** run mostly at 30 fps for now.
 - **Over Rev** slows down a few times in a race, sometimes for a few
   seconds, and a row of dark blue dots can show in the sky along one line.
 - No link play for Over Rev or Sega Touring Car Championship yet.
@@ -601,7 +627,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261120.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -640,7 +666,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261113.rbf` has the md5 `584e19efaa932e01ff4593ff05fe72bc`.
+**Check you're running the right file.** `Model2_20261120.rbf` has the md5 `0b691a0237e655bdbaacaca51ab333c3`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -674,6 +700,14 @@ anything you find.
 
 ### New in this release
 
+- **The i960 keeps very small numbers as Intel's chip does** (see *Not just
+  a MAME port* at the top). (`Model2_20261120`.)
+- **The i960's 64-bit float-to-integer conversion follows Intel's manual.**
+  A NaN, a value too big for 32 bits and a value out of range now give
+  the 80960KB's results instead of a clamped 32-bit value. (`Model2_20261120`.)
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included.** Earlier releases were checked at the hot
+  corner only. (`Model2_20261120`.)
 - **Virtua Cop's van scene is fixed** (stage 1, GitHub #28). The boss who
   jumps out of the back of the van has his head and arms again: his head is
   about 100 tiny polygons, and the core was leaving the smallest out to save
