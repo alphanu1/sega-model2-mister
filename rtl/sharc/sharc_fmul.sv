@@ -196,9 +196,24 @@ logic        v_nan, v_inf, v_zero, v_sg, v_trunc;
 logic [47:0] v_p;
 logic [9:0]  v_esum;
 logic [1:0]  v_tiny, v_ovf;
+// R1052 (v15): the result's overrides decided here for each exponent outcome k -- the word is the
+// product's (v_n[k]) or a constant whose mantissa is all ones or zero (v_cm[k]: NaN, or the largest
+// finite on a truncated overflow) and whose exponent is FF, FE or 00 (v_ce[k] bits 7:1, v_ce0[k]
+// bit 0); the sign is 1 for the NaN, else the product's. Stage 2 then takes each bit as one select
+// on the carry ei of these registers and the product's field (s5329: v_p[45] -> ei -> the overrides'
+// select rebuilt as a 46-load node, two levels -> the field -> r -> rf_wd -> g_rf -0.898 at -40C)
+logic [1:0]  v_n, v_cm, v_ce, v_ce0;
+logic        v_rs;
 always_ff @(posedge clk) if (en) begin
     v_nan <= nan1; v_inf <= inf1; v_zero <= zero1; v_sg <= sg; v_trunc <= trunc;
     v_p <= p; v_esum <= esum; v_tiny <= tiny1; v_ovf <= ovf1;
+    for (int k = 0; k < 2; k++) begin
+        v_n[k]   <= !nan1 && !inf1 && !zero1 && !ovf1[k] && !tiny1[k];
+        v_cm[k]  <= nan1 || (!inf1 && !zero1 && ovf1[k] && trunc);
+        v_ce[k]  <= nan1 || inf1 || (!zero1 && ovf1[k]);
+        v_ce0[k] <= nan1 || inf1 || (!zero1 && ovf1[k] && !trunc);
+    end
+    v_rs <= nan1 || sg;
 end
 assign busy = 1'b0;
 logic unused_m;
@@ -219,6 +234,14 @@ assign unused_m = restart ^ valid;
 // there the round-up needs no sticky bit (below) (s5312: v_p[5] -> the sticky OR -> up -> ei ->
 // ovf -> r -> rf_wd -> the R file's MLAB, -0.856 at slow 100C). The same fields, exponent and
 // tests as up / s / mf above.
+logic [31:0] r_old;                     // (v15: the word as it was, the benches compare)
+`ifdef VERILATOR
+// (from stage 2's first load: before it the two forms read registers never loaded, and no word
+// is taken -- a result is read only after its multiply's en)
+logic r_ld = 1'b0;
+always_ff @(posedge clk) if (en) r_ld <= 1'b1;
+always_ff @(posedge clk) if (r_ld && r != r_old) $fatal(1, "sharc_fmul: the word %h, the overrides' select %h", r, r_old);
+`endif
 always_comb begin
     logic [22:0] mf, mt1, mt0, mi1, mi0;
     logic [7:0]  e;
@@ -262,7 +285,16 @@ always_comb begin
                 sk[k] = (ovf ? MVS : 32'h0) | (tiny ? MUS : 32'h0);
             end
         end
-        r = ei ? rk[1] : rk[0]; astat = ei ? ak[1] : ak[0]; stky = ei ? sk[1] : sk[0];
+        r_old = ei ? rk[1] : rk[0]; astat = ei ? ak[1] : ak[0]; stky = ei ? sk[1] : sk[0];
+    end
+    // (v15) the word: each field bit the product's or its constant, for each k, ei choosing
+    begin
+        logic [7:0] e1, e0, c1, c0;
+        e1 = 8'(v_esum[7:0] - 8'd126); e0 = 8'(v_esum[7:0] - 8'd127);
+        c1 = {{7{v_ce[1]}}, v_ce0[1]}; c0 = {{7{v_ce[0]}}, v_ce0[0]};
+        r[31] = v_rs;
+        r[30:23] = ei ? (v_n[1] ? e1 : c1) : (v_n[0] ? e0 : c0);
+        r[22:0]  = ei ? (v_n[1] ? mf : {23{v_cm[1]}}) : (v_n[0] ? mf : {23{v_cm[0]}});
     end
 end
 
