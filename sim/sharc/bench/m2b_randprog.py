@@ -44,6 +44,9 @@ ISH22 = os.environ.get('M2B_RP_ISH22') == '1'
 # DO loops take LCNTR from one of them (op 0x0d: LCNTR = ureg, DO) in place of an immediate count of
 # 1-4 -- the ureg read form of DO, which no program had. Without it the programs as before.
 DOU = os.environ.get('M2B_RP_DOU') == '1'
+# M2B_RP_PSP=1 (R1052): some ureg moves read PCSTKP (0x65), the PC stack's depth -- a sequencer source
+# no program read (PCSTK and the counters only). Without it the programs as before.
+PSP = os.environ.get('M2B_RP_PSP') == '1'
 PM0 = 0x21d00                                         # block 0's data words (past the program)
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
@@ -261,6 +264,7 @@ def main():
             src = g.choice([g.randrange(16), 0x10 + g.randrange(8), 0x20 + g.randrange(8), 0x28 + g.randrange(8),
                             0x7c, 0x67, 0x64, 0x68])
             if SKLR0 and src in (0x67, 0x68): src = 0x7c
+            if PSP and g.random() < 0.25: src = 0x65
             dst = g.choice([g.randrange(16), g.randrange(16), g.randrange(16), 0x7c])
             if SEQ and g.random() < 0.3:
                 src, dst = g.choice([(src, 0x68), (0x64, 0x64), (g.randrange(16), 0x68)])
