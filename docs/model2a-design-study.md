@@ -55561,3 +55561,135 @@ into XC (acc, acc_wd, mbad, ra_we, rn_we) and into pm0 / pm1's address: s5335 -0
 -0.24, s5342 -0.91, s5343 -0.86, s5344 -0.62, s5346 -0.76 at slow -40C. R1052 attacked it with logic
 and the area went up; a fix that adds no logic is the remaining RTL lever. Two fits may run at once
 (Ben), the second from the first's 15th minute; crashes this evening: 5 of 9 fits, one of them alone.
+
+**R1057 -- THE 2B SHARC's PM PORT B FAMILY (pm2's word -> XC.* AND pm0 / pm1's ADDRESS), OUTPUT-IDENTICAL
+AND NO LOGIC ADDED: R1052's rn_we (15), PORT 1's ADDRESS (13) AND PM PORT B's OPERANDS (12) BACK; ra_we's
+COMPARES AND THE LOAD FORMS' DECODE TAKEN OFF THE THREE ENABLES. m2b_sharc's OWN LOGIC 3,764 -> 3,734
+LUTs. R1052's 20, 29 AND 30 NOT BROUGHT BACK: EACH ADDS 21-63 LUTs.** Branch 2b-pmb (from fa685109),
+2026-11-20. Simulation, quartus_map and post-map timing only; no fit, no board.
+
+(Section: §10, after R1056. Authority as R1052 / R1055: the fits' full-path reports for where the time
+goes; the benches for "the same output on the same clock"; Ben's rule for area -- no added logic. Model 1
+has no SHARC; MAME is reached only through the replays. Nothing in sys/ touched; m2b_sharc is the 2B
+build's alone, so nothing is gated.)
+
+*What was believed (R1056):* the one family on nearly every seed is pm2_rtl_0's fetched word (an M10K
+read with no output register) decoded in the same clock into XC (acc, acc_wd, mbad, ra_we, rn_we) and
+into pm0 / pm1's port-A address; R1052 attacked it with logic and the area went up, so a fix that adds
+no logic is the remaining lever. R1054's audit had m2b_sharc's own logic flat through R1052's rounds.
+
+*What is now known:* the endpoints split three ways. (a) The enables -- s5346's full path, -0.757 at slow
+-40C: pm2 -> Decoder3 -> x.sh_on (three) -> WideOr3 -> dx.rn -> rn_we (two) -> XC.rn_we, the compute
+field's decode in front of the load compares; ra_we and rm_we the same shape. (b) The MLAB routes --
+s5343 / s5346: pm2 -> i3_ra / i4_ra -> the I MLAB -> pm_ia (one / two LUTs) -> the adder -> pm0 / pm1's
+address, -0.352 / -0.410; and s5335 / s5346's sh_pdj: pm2 -> ish -> rf_ra[1] -> g_rf[1]. (c) The data
+address's kind and map test -- s5343: pm2 -> i3_ra -> MLAB -> the 32-bit adder (Add3) -> Equal81 ->
+acc_bits (two) -> x.acc[2], -0.859 at -40C (and XC.mbad on s5342 / s5344); and the store data, pm2 ->
+the form compare -> ur_sel -> the system registers' mux -> acc_wd (s5335 -0.601, s5342 -0.815 at 100C).
+(a) and (b) come out with less logic; (c) does not -- the store data's forms tried all cost LUTs, and
+the kind / map test is already at its depth after the sum.
+  R1054's flat own-logic figure does not hold change by change. Mapped alone on this base (below),
+R1052's 12 is -10 LUTs, but 12 with its follow-up 29 is +21 (+31 against 12 alone), its 20 (the store
+data one-hot) +63 and 30 (the DM operands, in 12's form) +23: the flat total hid gains and losses in the
+same file.
+
+*A TOOL, NEW HERE: TIMING ON THE POST-MAP NETLIST.* quartus_sta -t with create_timing_netlist -post_map
+on the SHARC mapped alone (3 s a run) gives each family's logic levels without a fit. Its delays are not
+the fit's (no placement; carry chains unpacked, 32-bit sums ~7 ns), so only the levels and the
+differences between two maps of the same block are read from it. It found what the text did not show:
+in change 5's base, Quartus built kv || t1p (the load forms) as three LUTs in a chain after a form
+compare, in front of all three enables. It also shows the noise: paths no change touched move by a
+level between two maps (across the six commits' maps, pm2 -> XC.unsup 10-11 levels, fix_on 6-7, sh_on
+7-8, rm_we 5-7), so a level gained or lost on one map is not evidence; and m2b_sharc_xu, untouched,
+maps 1,696-1,717 LUTs across these runs.
+
+*THE CHANGES (rtl/sharc/m2b_sharc.sv; own LUTs of m2b_sharc mapped alone at the build's settings --
+PXIM 0, SKLR 0, DM_AW 13, MAME_RND 0, Aggressive Area / AREA, resource sharing, mux restructure,
+redundant-cell removal; each commit's own tree; registers 1,445 own / 1,906 total and 655,360 block bits
+in every map):*
+  base fa685109: own 3,764; the SHARC 6,267 LUTs, 4,147 ALMs needed.
+  1. 71b2fe9d (R1052's 15, reduced) XC.rn_we: Rn's two places compared apart, the form last -- the
+     immediate shift with a move (1000) compares op[26:23] with op[7:4] when op[31] is clear (its own
+     load, no type 1); every other form uses h11, the load tests against op[11:8]. Read only with a
+     fixed ALU or shifter result (fix_on && fix_wr, or sh_on: the landing's enable and the busy mask);
+     there Rn is op[11:8] in a compute field and op[7:4] in the immediate shifts, and 00000010 has no
+     load, so !h11 is 1 for it already. g_stk_check compares it with the old enable wherever it is
+     read. Own 3,764 (0); post-map rn_we 7 -> 6 levels.
+  2. ca4d6071 XC.ra_we: its three load compares on op[11:8], not x.ra. The decode sets ra_we only where
+     it sets Ra to comp[11:8] (the multifunction's, and the single float ops' rnn), so where ra_we is set
+     the two are the same and elsewhere it stays 0: the same ra_we in every clock (checked every D
+     clock), and h11 shared with rn_we and rm_we's cb / raa. Own 3,746 (-18); post-map ra_we 6 levels
+     before and after (the form decode still ahead of h11 -- 5 is what takes it out).
+  3. 5b5bd6b3 (R1052's 13) the R file's port-1 read address on op[22] alone, not op[22] && !ish: the
+     immediate shifts read no port 1 (d_ru[0] / d_ru[2] only; their shifter value is the immediate),
+     so the port's word is never taken there and pm2's form decode leaves the read address. Own 3,745
+     (-1); post-map sh_pdj 10 -> 9 levels (8 at the head).
+  4. 3ab82f57 (R1052's 12, its first form) PM port B's operands: each MLAB read (i1 / i3 / i4, m1 / m3)
+     one AND-OR from the adder, its select from the opcode beside the read; the offsets and, outside D
+     or for the host, the whole address one early term, pm_oe, on the other operand (ia 0 there). s1 /
+     s2 / s3 are disjoint, so the sum is the old one; g_dma_check compares it with the select's every
+     clock. Own 3,735 (-10); post-map i1 / i3 / i4 -> pm address 5 / 5 / 4 -> 4 / 4 / 3 levels, the
+     form-decode path -> pm_oe -> pm_ob -> the adder four LUTs as the base's.
+  5. bc76a36e the load-target tests from the fields' compares, the load forms last: op[26:23] /
+     op[36:33] against op[11:8] / op[15:12] as kept wires on pm_q, kv || t1p as lp with its dreg forms
+     (lr) and op[30:27] == 0 kept beside it, then h11 = (lp && e11p) || (t1d && e11d), and rm_we's ca
+     the same with op[15:12]. k is op[26:23] in every kv form, so these are the old tests. Own 3,734
+     (-1); post-map rn_we 6 -> 5, ra_we 6 -> 5 levels (base 7 / 6); rm_we 6 (5 to 7 across the
+     commits, the noise above: its final LUT also takes wa / wb / fl_comp and op[15:12] == op[11:8]).
+  TOTAL: own 3,764 -> 3,734 (-30); the SHARC 6,267 -> 6,259 LUTs, 4,147 -> 4,141 ALMs needed (xu's
+  +21 is the map noise above).
+
+*NOT BROUGHT BACK, AND WHY (each mapped on this base):*
+  * R1052's 29 (pm_oe's sources as their own terms of pm_ob): 12 + 29 as f306bb90..4006ca93 left them
+    3,766 own against 3,745 before 4 (+21) and 12's 3,735 (+31); written with the early terms one AND-OR
+    shared by the lanes, 3,758 (+13 / +23). Post-map the I paths are the same as 12's. R1052 added it for
+    s5322's pm2 -> Decoder3 -> pm_oe -> pm_ob -> the adder (-0.609); in 12's map here that path is four
+    LUTs (a form compare, the offset select, pm_oe, pm_ob), the same count as before 4 (the compare, the
+    select, pm_ob in two).
+  * R1052's 30, the DM operands (in 12's form, not 30's): +23 own, and post-map i3 -> dm address one level
+    longer (4 -> 5). Dropped.
+  * R1052's 20 (the store data's system / PX registers one-hot from the opcode's fields): +63 own, no
+    level fewer post-map (7). 32 (the sequencer's source the same way) needs 20's one-hots; not tried
+    alone. acc_wd is left: its path is the form compare -> ur_sel (two, the minimum for three fields
+    under a 4-bit form) -> the 16-way register mux; taking the mux off ur_sel is 33's three selects
+    (+255, R1052) or 20's AND-OR.
+  * R1052's 16 / 31 (the loop end's compare last) and 25 (pm_host registered): their paths start at
+    S.daddr / S.la_addr and hq_we / clr_n, not pm2's word -- other families, and 16 / 31 add logic.
+  * XC.acc / XC.mbad (c): after the sum the kind bits need a zero test of up to 24 of its bits (two LUTs
+    from its last bit), the region / pmb choice (one) and the form's select and gate (one): four, which
+    the fit has (Equal81 -> acc_bits (two) -> x.acc). A level fewer needs the zero tests from the operands
+    (A + B == K without the carry), new logic on two 32-bit sums. Left.
+  * XC.misc_op (s5335 -0.355): the unit reads misc_op outside misc_on too (m_scaled -> fv), so an
+    ungated decode is not visibly the same; one seed. Left.
+
+*PROOF (benches under the 4 G cap, -j 2; rtl/sharc frozen as bc76a36e; old = fa685109's rtl/sharc):*
+  * THE CORE: the miter (new against old, every output every clock) in the lockstep bench at MAME_RND 1
+    and 0 -- the 42 random programs (1-6 ... 361-363, ISH22 / DOU / PSP among them), negcond n0-n3, the 28
+    unsupported cases at both roundings (28 / 28 at their words each): 0 differ, every clock count R1055's
+    (MAME_RND 1: r1 2,589,533, r101 2,570,837, r201 2,599,970, r306 2,499,985, r341 2,584,583, r361
+    2,566,827; MAME_RND 0: r1 2,523,059, r341 2,544,110, r361 2,527,710), the new checks (rn_we where read,
+    ra_we every D clock) and the old ones (rm_we, g_dma_check, R1044's store data) silent.
+  * THE REPLAYS (MAME rounding, PXIM 0, SKLR 0) on the new core: DOA 150 s 1,264,270,732 clocks
+    (2.5196 a word), fvipers 500 M words 1,277,257,981 (2.5545), schamp 1,279,552,477 (2.5591) -- R1052's
+    and R1055's to the clock; out FIFOs and the MAME traces (30 M / 20 M / 20 M words) 0 differ. Under the
+    miter (new against old), 200 M words of each: 0 differ (503,745,104 / 510,558,056 / 506,338,721
+    clocks), and DOA 200 M words under the miter at MAME_RND 0: 0 differ (503,743,519 clocks; 3,731,838
+    out words differ from MAME's, the manual's rounding). THE MANUAL ROUNDING (SH_MAME_RND 0) on DOA's
+    whole capture in lockstep with v1 MAN: 501,777,265 words, 0 differ, 1,264,264,337 clocks, 10,280,834
+    out words differ from MAME's (R1048's figure).
+  * PLANTED (each copy with the change's own bench check taken out, so v1's lockstep or the miter must see
+    it; 10 programs, 300 k words, MAME_RND 1): (1) the immediate shift's Rn compared at op[11:8]: CAUGHT on
+    r1 (the miter: dbg_st new 6 old 2), r2, r3, r101, r341, r361 (v1's lockstep), not r201 / r301 / r342 /
+    r351. (2) ra_we without type 1's DM-load test (lp && e11p only): CAUGHT on 8 of 10 (r3, r341, r351 the
+    miter; r1, r2, r101, r342, r361 the lockstep). (3) port 0 from port 1 in the immediate shifts: CAUGHT on
+    r341 / r342 only (the lockstep, within r341's first 53 words) -- equal to the old wherever op[22] is clear, so only
+    the ISH22 programs reach it, as R1052 found. (4) pm_t3 by !d_pg (port B's M from the wrong DAG copy):
+    CAUGHT on 8 of 10. (5) lp without the ureg move to R (0111): CAUGHT on 9 of 10.
+  * quartus_map --analyze_file (17.0) on m2b_sharc.sv: 0 errors (1 warning, the processor count; the
+    base's the same). make lint_top LINT_DEFS=-DM2_2B (under the 8 G cap): clean.
+
+*So:* bc76a36e is fa685109 plus five changes, proven the same output on the same clock, with 30 fewer
+LUTs of m2b_sharc's own logic. They take the decode out of the enables (rn_we 8 levels in s5346's fit
+path) and a LUT out of PM port B's MLAB routes; whether a seed shows it is the lane's question (R1054: one
+fit is not evidence at a 0.4-0.9 ns spread). The data address's kind / map test and the store data are
+what this family still has, and neither has a fix without logic. Not fitted here.
