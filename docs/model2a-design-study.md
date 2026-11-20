@@ -55355,3 +55355,39 @@ new form against the old in every clock where it is read.
      Model2.sv). As R1030's F5 recorded, the lists cannot reach a stale ub_qv, so the exhaustive
      case bench is the proof of the flags and the miter the proof of the wiring. Area: three
      6-bit compares and two selects, a few LUTs.
+  s5329 (v13, 0cb87222) map 39,298 ALMs needed (v11's 39,177: +121), fit 41,555 (the highest yet,
+     454 recoverable), clk_sys -2.639 / -1.733, clk_mem -0.268, HDMI -0.392, hold +0.073: failing
+     almost everywhere -- m2_geo win_cen -> win_c0 -2.319, span_tex y_p -> q_y -2.169, geo_view
+     -1.573, the clipper -1.359, the bridge -1.153, eng_ra -1.096, the SHARC's fmul -> g_rf -0.766 and
+     pm2 -> XC.mbad -0.947; acc_wd gone. Families clean on s5308-s5320 broke.
+  WHERE THE AREA WENT (own LUTs per entity from each seed's map report, s5308 d2fd1da4 / s5320
+     d71bd069 / s5325 v9 / s5328 v11 / s5329 v13; fit ALMs needed 41,223 / 41,258 / 41,398 / 41,462 /
+     41,555): m2b_sharc 3,853 / 3,860 / 3,846 / 3,821 / 4,076 -- flat to v11, +255 with v13;
+     m2_geometry 1,712 / 1,724 / 1,870 / 1,872 / 1,873 -- +146 between s5320 and s5325 with no
+     geometry RTL changed at all (2fa54888 reverts GOH exactly; registers, DSP blocks (101) and the
+     pool unchanged): Quartus building the same RTL bigger, which stayed; eng_ra +62 (GDEM) and
+     fmul +46 / xu +42 before d71bd069. Nothing else moved by 20.
+  33 TAKEN OUT AGAIN (v14): +255 LUTs for one family, against a +50 limit, on a fit that has run out
+     of room; 32 (the sequencer's one-hot, small) stays. The system registers are gq[7] && iq[k]'s
+     AND-OR again, exactly as v11 and v12 had them.
+  PROOF (v14 = v13 - 33): the miter at MAME_RND 1 and 0, 39 programs and 361-363, negcond, 28 / 28,
+     0 differ, every clock count v13's (r361 2,566,827 at MAME_RND 1); the replays DOA / fvipers /
+     schamp 1,264,270,732 / 1,277,257,981 / 1,279,552,477 clocks, 0 out / trace words differ, the
+     three 200 M-word miters 0 differ; the manual-rounding DOA lockstep 501,777,265 words, 0 differ,
+     1,264,264,337 clocks; quartus_map --analyze_file 0 errors (run with no fit on the machine: the
+     2B lane on HOLD, the release lane finished -- the coordinator's ruling that nothing is left for
+     it to collide with). 33's planted fault no longer applies; 32's (PCSTKP off by one) stays caught
+     by r361 as before. Expected own LUTs: v11's 3,821 plus 32's few.
+  s5330 (v13 + 34, 3c7aa783) map 39,346 ALMs needed, then STA died (Internal Error). Its per-entity
+     map against s5329: m2_raster3d's own logic +12 LUTs (34), the whole build's LUTs 57,915 ->
+     57,897 -- the +48 in ALMs needed is packing, not logic.
+  35. (SHARC sharc_fmul, v15) s5329's full path showed Quartus had folded 28's "ei last" back:
+     v_p[45] -> ei (three LUTs) -> r[0]~1 -> r[0]~6 (46 loads: the overrides' select, rebuilt from
+     ei and the eight flags) -> the field -> r[14] -> rf_wd -> g_rf, -0.898 at -40C. The overrides
+     are now decided in stage 1 for each exponent outcome k, from the flags it makes already, and
+     registered: v_n[k] (the product's word), v_cm[k] (the constant's mantissa all ones: the NaN, or
+     the largest finite on a truncated overflow), v_ce[k] / v_ce0[k] (its exponent FF, FE or 00),
+     v_rs (the sign: 1 for the NaN, else the product's). Each result bit is then one select on ei of
+     these registers and the field: r[22:0] = ei ? (v_n[1] ? mf : cm1) : (v_n[0] ? mf : cm0), the
+     exponent likewise with e1 / e0. Nine flops; the flags and sticky bits as before. An in-module
+     check compares the word with the old select every clock.

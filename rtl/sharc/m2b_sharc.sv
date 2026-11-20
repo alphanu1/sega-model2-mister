@@ -1177,20 +1177,11 @@ always_comb begin
             w2x = op[47:40] == 8'b00001111 || op[47:44] == 4'b1001;
             w0x = !w1x && !w2x;
             d_wsel_x = {w2x, w1x}; d_wsel_ref = wd_sel;
-            // R1052 (later): the system registers read at each form's own index field first (three
-            // 16-way selects of registers, their selects straight from the opcode's bits), the
-            // form's group test choosing among the three -- not gq[7] && iq[k] in front of a
-            // one-hot AND-OR (s5326: pm2 -> the form's compare -> gq[7] (47 loads) -> the
-            // register's select -> acc_wd[23] -0.429 at -40C). The same value: for 010 the field
-            // at op[26:23] under group op[30:27]; for 0111 op[39:36] under op[43:40]; otherwise
-            // op[35:32] under the bit op's 7 or op[39:36]
-            begin
-                logic ga7, gb7, gc7;
-                ga7 = fa && op[30:27] == 4'h7; gb7 = fb && op[43:40] == 4'h7; gc7 = !fa && !fb && (fc || op[39:36] == 4'h7);
-                sv = ({32{ga7}} & sys_rd(op[26:23], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
-                     ({32{gb7}} & sys_rd(op[39:36], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
-                     ({32{gc7}} & sys_rd(op[35:32], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg));
-            end
+            // (R1052: 33, the three index-field selects, taken out again -- s5329's map put v13's
+            // m2b_sharc at +255 LUTs over v11's; the one-hot AND-OR as before)
+            sv = 32'h0;
+            for (int k = 0; k < 16; k++)
+                sv |= {32{gq[7] && iq[k]}} & sys_rd(4'(k), astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg);
             pv = ({32{gq[13] && iq[11]}} & px[31:0]) | ({32{gq[13] && iq[12]}} & {16'h0, px[15:0]}) | ({32{gq[13] && iq[13]}} & px[47:16]);
             d_accwd_b = ({32{w0x || (w1x && gq[0])}} & rf_rd[4]) |
                        ({32{w1x && gq[1]}} & iu_rd) |
