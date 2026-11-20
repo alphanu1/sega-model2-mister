@@ -47,11 +47,7 @@
 
 module m2_wr_arb #(
   parameter int unsigned N  = 5,
-  parameter int unsigned AW = 25,
-  // R1052: the rotation's order a constant for each value of `last` (a mux of 2^OW fixed
-  // priority encoders), not (last + k) % N made from `last` -- the same pick and any for every
-  // last (s5316, the 2B build: last -> pick_r -0.562, 12.9 ns for a function of eight bits)
-  parameter bit          RCF = 1'b0
+  parameter int unsigned AW = 25
 )(
   input  logic              clk,
   input  logic              rst_n,
@@ -81,24 +77,13 @@ module m2_wr_arb #(
   logic [OW-1:0] last;
   logic          any;
   logic [OW-1:0] pick;
-  generate if (RCF) begin : g_rcf
-    always_comb begin
-      any  = 1'b0;
-      pick = '0;
-      for (int l = 0; l < (1 << OW); l++)
-        if (last == OW'(l))
-          for (int k = N; k >= 1; k--)
-            if (want[(l + k) % N]) begin any = 1'b1; pick = OW'((l + k) % N); end
+  always_comb begin
+    any  = 1'b0;
+    pick = '0;
+    for (int k = N; k >= 1; k--) begin
+      if (want[(int'(last) + k) % N]) begin any = 1'b1; pick = OW'((int'(last) + k) % N); end
     end
-  end else begin : g_rot
-    always_comb begin
-      any  = 1'b0;
-      pick = '0;
-      for (int k = N; k >= 1; k--) begin
-        if (want[(int'(last) + k) % N]) begin any = 1'b1; pick = OW'((int'(last) + k) % N); end
-      end
-    end
-  end endgenerate
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

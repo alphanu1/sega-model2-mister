@@ -163,11 +163,7 @@ function automatic logic [31:0] scalb_r(input logic [31:0] f, input logic [31:0]
 endfunction
 
 logic [31:0] sc_in;
-// R1052: the manual's flush chosen after SCALB's exponent sum, not in front of it: xin is fx or
-// (when its zero test holds) fx & SIGN, so scalb_r(xin) is the select of the two scalb_r's (s5305:
-// fa_xz -> xin -> the sum -> the range tests -> misc_r -0.618 at slow -40C, -> f_km1 -0.280)
-assign sc_in = MAME_RND ? scalb_r(xin, fy)
-             : ((PRE ? pre_fxz : fx[30:23] == 8'h00) ? scalb_r(fx & SIGN, fy) : scalb_r(fx, fy));
+assign sc_in = scalb_r(xin, fy);
 
 // ---- FIX: the operand and its alignment (stage A: computed in X's first clock, registered)
 logic [23:0] fm;
@@ -177,11 +173,11 @@ logic        th_fix;                                     // the thermometer is F
 logic [5:0]  f_k;
 logic [23:0] fm_c;
 logic        f_big_c, f_tiny_c, f_left_c, f_sgn_c, f_den_c;
-logic [5:0]  f_k_c, f_km1_c;
+logic [5:0]  f_k_c;
 always_comb begin
     logic [31:0] fv;
     logic [7:0]  fe, fee;
-    logic [8:0]  kk, km1;
+    logic [8:0]  kk;
     fv = m_scaled ? sc_in : xin;
     fe = fv[30:23];
     fee = (fe == 8'h00) ? 8'd1 : fe;
@@ -189,10 +185,8 @@ always_comb begin
     f_big_c = fe == 8'hFF || fe >= 8'd158;
     f_left_c = fe >= 8'd150;                             // left by fee - 150 (0-7)
     kk = 9'd150 - {1'b0, fee};                           // right by 1-149
-    km1 = 9'd149 - {1'b0, fee};                          // R1052: kk - 1, its own subtract (f_km1)
     f_tiny_c = fe < 8'd118;                              // (= !f_left && kk > 32, on the exponent: R1029)
     f_k_c = kk[5:0] ^ {f_left_c, 5'h0};                  // (32 - (fee - 150) = kk + 32, mod 64)
-    f_km1_c = km1[5:0] ^ {f_left_c, 5'h0};               // (f_k_c - 1: the XOR is + 32 mod 64)
     f_sgn_c = fv[31];
     f_den_c = is_den(fv);
 end
@@ -214,7 +208,7 @@ always_comb begin
     fl_lz_c = (h != 5'd16) ? {1'b0, h} : 6'd16 + {1'b0, l};
 end
 always_ff @(posedge clk) begin
-    fm <= fm_c; f_big <= f_big_c; f_tiny <= f_tiny_c; f_left <= f_left_c; f_k <= f_k_c; f_km1 <= f_km1_c;
+    fm <= fm_c; f_big <= f_big_c; f_tiny <= f_tiny_c; f_left <= f_left_c; f_k <= f_k_c; f_km1 <= 6'(f_k_c - 6'd1);
     f_sgn <= f_sgn_c; f_den <= f_den_c;
     fl_m <= fl_abs; fl_lz <= fl_lz_c; fl_k <= 6'(6'd32 - fl_lz_c); fl_zero <= fl_abs == 32'h0;
 end
@@ -287,16 +281,9 @@ always_comb begin
     endcase
 end
 logic [1:0]  fn_sel;                                    // 0 the shifter's, 1 FLOAT's, 2 FIX left, 3 FIX right
-// R1052: the funnel's count chosen here, in stage A, and registered (fn_kr): fn_sel's select of it
-// sat between the count registers and the shift's first level, 65 loads (s5320: shf_k[1] -> the
-// count's select -> the funnel -> rf -> misc_r -0.243 at slow 100C). Its selects are misc_on and
-// m_float, the source registers load every clock, so fn_kr is the selected count every clock
-// (f_k for FIX left and right alike). The benches compare it with the old select.
-logic [5:0]  fn_kr;
 always_ff @(posedge clk) begin
     shf_h <= sf_h; shf_l <= sf_l; shf_k <= sf_k;
     fn_sel <= !misc_on ? 2'd0 : m_float ? 2'd1 : f_left_c ? 2'd2 : 2'd3;
-    fn_kr <= !misc_on ? sf_k : m_float ? 6'(6'd32 - fl_lz_c) : f_k_c;
     th_fix <= m_fix;
 end
 
@@ -314,13 +301,10 @@ always_comb begin
     2'd2: begin fn_h = {8'h0, fm}; fn_l = 32'h0; fn_k = f_k; end
     default: begin fn_h = 32'h0; fn_l = {8'h0, fm}; fn_k = f_k; end
     endcase
-    w = {fn_h, fn_l, 1'b0} >> fn_kr;
+    w = {fn_h, fn_l, 1'b0} >> fn_k;
     fn_o = w[32:1];
     fn_g = w[0];
 end
-`ifdef VERILATOR
-always_ff @(posedge clk) if (fn_kr != fn_k) $fatal(1, "m2b_sharc_xu: the funnel's count %0d, the select's %0d", fn_kr, fn_k);
-`endif
 
 // ============================================================ the fixed ALU
 always_comb begin
@@ -487,14 +471,10 @@ logic cm_lt, cm_eq, cm_zx, cm_zy, cm_ltxy, cm_ltyx, cm_eqxy, cm_nan;
 always_comb begin
     begin                                                // both orders on the carry chain (R1029)
         logic [31:0] dd, de;
-        // R1052: on the unflushed operands, the zero tests choosing after the carry chain: xz /
-        // yz say |xin| / |yin| is 0 (in both roundings), and where it is not, xin is fx (yin fy)
-        // -- so a zero operand's order is the other's zero test, and the subtract waits for
-        // neither flush (s5305: fa_xz -> xin -> the subtract -> misc_r -0.618 at slow -40C)
-        dd = {1'b0, fx[30:0]} - {1'b0, fy[30:0]};
-        de = {1'b0, fy[30:0]} - {1'b0, fx[30:0]};
-        cm_lt = xz ? !yz : yz ? 1'b0 : dd[31];
-        cm_eq = xz ? yz : yz ? 1'b0 : (!dd[31] && !de[31]);
+        dd = {1'b0, xin[30:0]} - {1'b0, yin[30:0]};
+        de = {1'b0, yin[30:0]} - {1'b0, xin[30:0]};
+        cm_lt = dd[31];
+        cm_eq = !dd[31] && !de[31];
     end
     cm_zx = xz; cm_zy = yz;
     // f_lt(x, y) and f_lt(y, x), f_eq(x, y) (sharc_fp_pkg)
@@ -502,7 +482,7 @@ always_comb begin
     else if (xin[31] != yin[31]) begin cm_ltxy = xin[31]; cm_ltyx = yin[31]; end
     else if (!xin[31]) begin cm_ltxy = cm_lt; cm_ltyx = !cm_lt && !cm_eq; end
     else begin cm_ltxy = !cm_lt && !cm_eq; cm_ltyx = cm_lt; end
-    cm_eqxy = (cm_zx && cm_zy) || (!cm_zx && !cm_zy && fx == fy);   // (R1052: xin == yin, as above)
+    cm_eqxy = (cm_zx && cm_zy) || xin == yin;
     cm_nan = nan_x || nan_y;                  // (a flush leaves a NaN one: R1029, off its path)
 end
 

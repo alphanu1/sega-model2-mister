@@ -85,11 +85,6 @@ module m2_scsp_regs #(
   // held through it, so everything but the old word's read takes this copy
   logic  [5:1] ar;
   always_ff @(posedge clk) ar <= a;
-  // R1052 (FDUE, the 2B build): ar's decode as a one-hot register loaded from a, as ar is -- arh[k]
-  // is ar == k on every clock -- so the write's register tests start at a flop (s5321: ar[2] ->
-  // the register's compare -> the timers' write -> go -> SCIPD -> the IRQ level -> lines -0.972)
-  logic [31:0] arh;
-  always_ff @(posedge clk) arh <= 32'h1 << a;
 
   // ---- MAME's udata, as written
   (* ramstyle = "MLAB" *) logic [15:0] ud [32];
@@ -122,14 +117,6 @@ module m2_scsp_regs #(
   // r16: the word, with what MAME's UpdateRegR and its hardware bits put there
   always_comb begin
     q = ud_q;
-    if (FDUE) begin                                   // R1052: from arh (one bit), the same words
-      if (arh[5'h02]) q = {ud_q[15:8], mf_head};
-      if (arh[5'h04]) q = mon;
-      if ((arh[5'h0c] && fired[0]) || (arh[5'h0d] && fired[1]) || (arh[5'h0e] && fired[2])) q[7:0] = 8'hff;
-      if (arh[5'h10]) q = {ud_q[15:11], scipd};
-      if (arh[5'h16]) q = {5'd0, mcipd};
-      if (arh[31:24] != 8'h0) q = 16'd0;
-    end else
     case (ar)
       5'h02: q = {ud_q[15:8], mf_head};                          // MIBUF
       5'h04: q = mon;                                            // 0x408
@@ -149,25 +136,14 @@ module m2_scsp_regs #(
   // low byte 0xff when that timer has fired, and ar[2:1] is the timer (0x0c,
   // 0x0d, 0x0e), so this is mrg without the whole read case in front of the
   // adders (s2922 / s2903: fired / ar -> q -> mrg -> due, -0.434 / -0.351).
-  // (FDUE: the same timer's flag wherever a timer word is written, the only place mrg_t is read)
-  wire        fired_a = FDUE ? ((arh[12] & fired[0]) | (arh[13] & fired[1]) | (arh[14] & fired[2]))
-                             : (ar[2:1] == 2'd0) ? fired[0] : (ar[2:1] == 2'd1) ? fired[1] : fired[2];   // ar is [5:1]
+  wire        fired_a = (ar[2:1] == 2'd0) ? fired[0] : (ar[2:1] == 2'd1) ? fired[1] : fired[2];   // ar is [5:1]
   wire [10:0] mrg_t   = {be[1] ? d[10:8] : ud_q[10:8],
                          be[0] ? d[7:0]  : (fired_a ? 8'hff : ud_q[7:0])};
   wire [14:0] tdue  = gcnt + 15'({7'd0, ~mrg_t[7:0]} << mrg_t[10:8]);    // now + (255 - count) << prescale
   // (a timer written this clock falls due at the next sample, tdue == gnext,
   // only for count 254 at prescale 0: tested directly, not through the adder
   // -- R859, timing)
-  // R1052 (FDUE, the 2B build): the write's two count tests with the fired timer's select last --
-  // where the low byte is the old word's and that timer has fired it reads 0xff, so it is not
-  // 0xfe and is 255: the same tests, each byte's compare ahead of fired_a (s5320: fired[2] ->
-  // fired_a -> mrg_t -> the tests -> arm_n -> go -> SCIPD -> the IRQ level -> lines -0.088 at
-  // slow -40C)
-  wire        tone_r = mrg_t[10:0] == 11'h0fe;
-  wire        tone_f = mrg_t[10:8] == 3'd0 && (be[0] ? d[7:0] == 8'hfe : (!fired_a && ud_q[7:0] == 8'hfe));
-  wire        n255_f = be[0] ? d[7:0] != 8'hff : (!fired_a && ud_q[7:0] != 8'hff);
-  wire        tone  = FDUE ? tone_f : tone_r;
-  wire        n255  = FDUE ? n255_f : mrg_t[7:0] != 8'hff;
+  wire        tone  = mrg_t[10:0] == 11'h0fe;
   // R976: the arcade's -- the (256 - count)-th prescaled tick after the next
   // sample boundary, ticks where the free-running sample count is a multiple
   // of 2^prescale (mod 2^15, as gcnt)
@@ -196,7 +172,6 @@ module m2_scsp_regs #(
   wire   [5:0] wph = (exact && !tick44) ? tph : 6'd0;   // a write in the tick's clock counts as on it
   logic        chk;
   logic  [2:0] wrt;                              // the timer written this clock
-  generate if (!FDUE) begin : g_wr
   always_comb begin
     logic [1:0] tw;
     logic [2:0] go;                              // a timer fires this clock
@@ -213,7 +188,7 @@ module m2_scsp_regs #(
         5'h0c, 5'h0d, 5'h0e: begin
           ex_n[tw] = 1'b0; fired_n[tw] = 1'b0; late_n[tw] = 1'b0;
           if (arc) begin arm_n[tw] = 1'b1; due_n[tw] = tdue_a; dph_n[tw] = 6'd0; wrt[tw] = 1'b1; end   // R976: every count
-          else if (n255) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
+          else if (mrg_t[7:0] != 8'hff) begin arm_n[tw] = 1'b1; due_n[tw] = tdue; dph_n[tw] = wph; wrt[tw] = 1'b1; end   // MAME re-arms below 255
         end
         5'h0f: chk = 1'b1;                 // SCIEB
         5'h10: scipd_n = mrg[10:0];
@@ -251,69 +226,15 @@ module m2_scsp_regs #(
     scipd_c = scipd_n;
     for (int t = 0; t < 3; t++) if (rep[t] && ex_n[t]) scipd_n[6 + t] = 1'b1;
   end
-  end else begin : g_wrh
-  // R1052: the same, the register's tests from arh
-  always_comb begin
-    logic [2:0] go;                              // a timer fires this clock
-    scipd_n = scipd; mcipd_n = mcipd; mw_n = mw; mr_n = mr;
-    arm_n = tarm; ex_n = texp; fired_n = fired; due_n = due; late_n = late; dph_n = dph;
-    chk = 1'b0; rep = 3'b000; clr = 3'b000; wrt = 3'b000;
-    if (we) begin
-      // (one register a write: arh's one bit, each case of the old case (ar) its own test)
-      if (arh[5'h02]) begin                // MIBUF: r16 pops it first
-        if (mw_n != mr_n) mr_n = mr_n + 5'd1;
-        if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
-      end
-      for (int w = 0; w < 3; w++)
-        if (arh[12 + w]) begin             // 0x0c-0x0e, timer w
-          ex_n[w] = 1'b0; fired_n[w] = 1'b0; late_n[w] = 1'b0;
-          if (arc) begin arm_n[w] = 1'b1; due_n[w] = tdue_a; dph_n[w] = 6'd0; wrt[w] = 1'b1; end
-          else if (n255) begin arm_n[w] = 1'b1; due_n[w] = tdue; dph_n[w] = wph; wrt[w] = 1'b1; end
-        end
-      if (arh[5'h0f]) chk = 1'b1;          // SCIEB
-      if (arh[5'h10]) scipd_n = mrg[10:0];
-      if (arh[5'h11]) begin                // SCIRE
-        scipd_n = scipd_n & ~mrg[10:0];
-        clr = {mrg[3], mrg[7] | mrg[8], mrg[6]};
-        chk = 1'b1; rep = 3'b111;
-      end
-      if (arh[5'h16]) if (mrg[5]) mcipd_n[5] = 1'b1;
-      if (arh[5'h17]) mcipd_n = mcipd_n & ~mrg[10:0];
-    end
-    if (mi_pop) begin
-      if (mw_n != mr_n) mr_n = mr_n + 5'd1;
-      if (mw_n == mr_n) begin clr[2] = 1'b1; scipd_n[3] = 1'b0; end
-    end
-    if (midi_valid && !midi_ack) begin mw_n = mw_n + 5'd1; chk = 1'b1; end
-    go = 3'b000;
-    for (int t = 0; t < 3; t++) begin
-      // the count due at this tick: now if written on a tick, else once the
-      // phase reaches the write's (a phase past this sample's last clock fires
-      // at the next tick)
-      if (tick44 && arm_n[t] && (wrt[t] ? tone && !arc : due[t] == gnext)) begin
-        if (wrt[t] || dph[t] == 6'd0) go[t] = 1'b1; else late_n[t] = 1'b1;
-      end else if (late[t] && !wrt[t] && (tick44 || tph >= dph[t])) begin
-        go[t] = 1'b1; late_n[t] = 1'b0;
-      end
-      if (go[t]) begin
-        arm_n[t] = 1'b0; ex_n[t] = 1'b1; fired_n[t] = 1'b1; scipd_n[6 + t] = 1'b1; chk = 1'b1;
-        if (t == 0) mcipd_n[6] = 1'b1;
-      end
-    end
-    if (chk && mw_n != mr_n) scipd_n[3] = 1'b1;
-    scipd_c = scipd_n;
-    for (int t = 0; t < 3; t++) if (rep[t] && ex_n[t]) scipd_n[6 + t] = 1'b1;
-  end
-  end endgenerate
 
   // the lines: CheckPendingIRQ sets one level after all of this clock's clears
-  wire  [2:0] lv_ta_n = (we && (FDUE ? arh[5'h12] : ar == 5'h12)) ? {lv_ta[2:1], mrg[6]} : (we && (FDUE ? arh[5'h13] : ar == 5'h13)) ? {lv_ta[2], mrg[6], lv_ta[0]} :
-                        (we && (FDUE ? arh[5'h14] : ar == 5'h14)) ? {mrg[6], lv_ta[1:0]} : lv_ta;
-  wire  [2:0] lv_tb_n = (we && (FDUE ? arh[5'h12] : ar == 5'h12)) ? {lv_tb[2:1], mrg[7]} : (we && (FDUE ? arh[5'h13] : ar == 5'h13)) ? {lv_tb[2], mrg[7], lv_tb[0]} :
-                        (we && (FDUE ? arh[5'h14] : ar == 5'h14)) ? {mrg[7], lv_tb[1:0]} : lv_tb;
-  wire  [2:0] lv_mi_n = (we && (FDUE ? arh[5'h12] : ar == 5'h12)) ? {lv_mi[2:1], mrg[3]} : (we && (FDUE ? arh[5'h13] : ar == 5'h13)) ? {lv_mi[2], mrg[3], lv_mi[0]} :
-                        (we && (FDUE ? arh[5'h14] : ar == 5'h14)) ? {mrg[3], lv_mi[1:0]} : lv_mi;
-  wire  [3:0] eb_n    = (we && (FDUE ? arh[5'h0f] : ar == 5'h0f)) ? {mrg[8:6], mrg[3]} : eb;
+  wire  [2:0] lv_ta_n = (we && ar == 5'h12) ? {lv_ta[2:1], mrg[6]} : (we && ar == 5'h13) ? {lv_ta[2], mrg[6], lv_ta[0]} :
+                        (we && ar == 5'h14) ? {mrg[6], lv_ta[1:0]} : lv_ta;
+  wire  [2:0] lv_tb_n = (we && ar == 5'h12) ? {lv_tb[2:1], mrg[7]} : (we && ar == 5'h13) ? {lv_tb[2], mrg[7], lv_tb[0]} :
+                        (we && ar == 5'h14) ? {mrg[7], lv_tb[1:0]} : lv_tb;
+  wire  [2:0] lv_mi_n = (we && ar == 5'h12) ? {lv_mi[2:1], mrg[3]} : (we && ar == 5'h13) ? {lv_mi[2], mrg[3], lv_mi[0]} :
+                        (we && ar == 5'h14) ? {mrg[3], lv_mi[1:0]} : lv_mi;
+  wire  [3:0] eb_n    = (we && ar == 5'h0f) ? {mrg[8:6], mrg[3]} : eb;
   wire  [7:0] dec_ta  = 8'(1) << lv_ta;
   wire  [7:0] dec_tb  = 8'(1) << lv_tb;
   wire  [7:0] dec_mi  = 8'(1) << lv_mi;

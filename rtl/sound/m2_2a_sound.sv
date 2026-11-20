@@ -255,7 +255,7 @@ module m2_2a_sound #(
   logic        sm_req, dm_req, dm_we;
   logic [15:0] sm_line, dm_wdata;
   logic [18:1] dm_addr;
-  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT), .OVERLAP(OVERLAP), .TIMER(TIMER), .RAM_M10K(SCSP_M10K), .FDUE(SCSP_FDUE), .STPW(SCSP_FDUE), .CWQ(SCSP_FDUE), .DSP_PKE(SCSP_FDUE)) u_scsp (   // R1008; R1048; R1052: STPW, CWQ and DSP_PKE with the 2B build's FDUE
+  m2_scsp #(.FM(FM), .MIDI_OUT(MIDI_OUT), .OVERLAP(OVERLAP), .TIMER(TIMER), .RAM_M10K(SCSP_M10K), .FDUE(SCSP_FDUE)) u_scsp (   // R1008; R1048
     .clk(clk), .rst_n(rst_n),
     .cpu_req(s_req), .cpu_we(!rwn), .cpu_addr(addr[11:1]), .cpu_din(oedb), .cpu_be({!udsn, !ldsn}),
     .cpu_ack(s_ack), .cpu_dout(s_dout), .ipl(ipl),

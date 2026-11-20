@@ -181,7 +181,6 @@ module m2_raster3d #(
   parameter bit FBW_WD = 1'b0,   // R1044: m2_fb_wcomb WD_NOGO (the 2B build)
   parameter bit RECIP_EARLY = 1'b0,   // R1048: m2_raster_fill RECIP_EARLY (the 2B build)
   parameter bit PRE_NEAR = 1'b0,      // R1048: m2_quad_store PRE_NEAR, q_n4 / q_n2 from m2_geometry (the 2B build)
-  parameter bit UBQ_SEL = 1'b0,       // R1052: the box queue's flags from the current count, push / pop last (the 2B build)
   // Derived -- never overridden (Quartus 17 takes no localparam here).
   parameter int unsigned QTW = TEXLUT ? 24 + LSB : 24
 ) (
@@ -551,7 +550,7 @@ module m2_raster3d #(
                   .FTB(FTB), .FRB(FRB), .MZ(MIP), .KW(KW),   // R889
                   .RAWCOL(TEXLUT), .VX(TEXLUT), .VXN(LSB - 2), .CW(TEXLUT ? 17 : 16), .TXW(STW),
                   .NX(FB_DDR3 ? QNX : 0),   // R962   // R607, R626, R828c, R867; R932: VXN; R940: STW
-                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH), .PRE_NEAR(PRE_NEAR), .CNZ(RECIP_EARLY), .BPAR(RECIP_EARLY)) u_store (   // R1003; R1048; R1052: CNZ / BPAR with the 2B build's RECIP_EARLY
+                  .EXT_PAY(PAY_ON), .XD(PAY_DEPTH), .PRE_NEAR(PRE_NEAR), .CNZ(RECIP_EARLY)) u_store (   // R1003; R1048; R1052: CNZ with the 2B build's RECIP_EARLY
     .clk(clk), .rst_n(rst_n),
     .clear(qs_clear), .wbank(bank), .rbank(~bank),
     .ofree(qs_ofree), .in_stall(qs_stall),   // R962
@@ -692,20 +691,6 @@ module m2_raster3d #(
     wire [5:0] ub_wp_n = ub_wp + 6'(ub_push);
     wire [5:0] ub_rp_n = ub_rp + 6'(ub_pop);
     wire [5:0] ub_n_n  = ub_wp_n - ub_rp_n;
-    // R1052 (UBQ_SEL): the same two flags with the push and the pop chosen last -- each
-    // outcome's compare made from the pointers alone (n, n + 1, n - 1), so the queue's
-    // full -> ready -> push path is one select from the flops (s5328 u_span_q mem_cnt[2]
-    // -> ub_qv -0.531 at slow -40C)
-    wire [5:0] ub_n    = ub_wp - ub_rp;
-    wire [5:0] ub_np   = ub_n + 6'd1, ub_nm = ub_n - 6'd1;
-    wire       ub_qv_n   = !UBQ_SEL ? (ub_n_n != 6'd0) :
-                           (ub_push == ub_pop) ? (ub_n != 6'd0) : ub_push ? (ub_np != 6'd0) : (ub_nm != 6'd0);
-    wire       ub_full_n = !UBQ_SEL ? (ub_n_n >= 6'd31) :
-                           (ub_push == ub_pop) ? (ub_n >= 6'd31) : ub_push ? (ub_np >= 6'd31) : (ub_nm >= 6'd31);
-`ifdef VERILATOR
-    always_ff @(posedge clk) if (ub_qv_n != (ub_n_n != 6'd0) || ub_full_n != (ub_n_n >= 6'd31))
-      $fatal(1, "the box queue's flags (UBQ_SEL)");
-`endif
     always_ff @(posedge clk) if (ub_push) ub_mem[ub_wp[4:0]] <= fl_span_ub;
     always_ff @(posedge clk or negedge rst_n)
       if (!rst_n) begin
@@ -714,8 +699,8 @@ module m2_raster3d #(
       end else begin
         ub_wp <= ub_wp_n;
         ub_rp <= ub_rp_n;
-        ub_qv   <= ub_qv_n;     // (ub_n_n != 0) -- was (ub_wp - ub_rp) != 0
-        ub_full <= ub_full_n;   // (ub_n_n >= 31) -- was (ub_wp - ub_rp) >= 31
+        ub_qv   <= (ub_n_n != 6'd0);    // was (ub_wp - ub_rp) != 0
+        ub_full <= (ub_n_n >= 6'd31);   // was (ub_wp - ub_rp) >= 31
         if (ub_pop) ub_used <= 1'b0;
         else if (sq_qve && sq_rdy && sq_nq) ub_used <= 1'b1;
       end

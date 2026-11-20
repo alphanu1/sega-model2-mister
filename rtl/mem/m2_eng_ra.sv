@@ -64,13 +64,7 @@ module m2_eng_ra #(
   // R1008: the pair store in M10K (1) or MLAB (0). It is read only through
   // rd_q (a register, loaded on a hit), so the two are the same circuit; a
   // build with M10K to spare (2C) takes two blocks for the four LABs.
-  parameter bit          PR_M10K = 1'b0,
-  // R1052: a stream fetch's "for the waiting read" test (g_dem) made for each stream from its own
-  // head and fill -- registers -- and the stream the port picks choosing after the compares, so
-  // the engine's request (want, through the clipper's in_ready) is not in front of an adder and a
-  // compare (s5305: kst.K_IDLE -> want -> g_s -> s_head + fill -> == idx -> f_dem -0.266). 0: the
-  // compare on the picked stream's sum. (The 2B build.)
-  parameter bit          GDEM = 1'b0
+  parameter bit          PR_M10K = 1'b0
 )(
   input  logic          clk,
   input  logic          rst_n,
@@ -181,12 +175,7 @@ module m2_eng_ra #(
   wire        g_s       = (pref ? cand1 : !cand0) ? 1'b1 : 1'b0;   // pref if it can, else the other
   wire [AW-1:0] g_idx   = s_head[g_s] + AW'({s_fill[g_s], 1'b0});
   wire [1:0]  g_ph      = s_rp[g_s] + s_fill[g_s][1:0];
-  wire [AW-1:0] gi0     = s_head[0] + AW'({s_fill[0], 1'b0});
-  wire [AW-1:0] gi1     = s_head[1] + AW'({s_fill[1], 1'b0});
-  wire        gd0       = gi0 == {idx_q[AW-1:1], 1'b0};
-  wire        gd1       = gi1 == {idx_q[AW-1:1], 1'b0};
-  wire        g_dem     = want && strm && (g_s == sid_q) &&
-                          (GDEM ? (g_s ? gd1 : gd0) : (g_idx == {idx_q[AW-1:1], 1'b0}));
+  wire        g_dem     = want && strm && (g_s == sid_q) && (g_idx == {idx_q[AW-1:1], 1'b0});
 
   wire        pr_we = (pst == P_REQ) && p_rise && !f_pass && f_keep && !flush;
 

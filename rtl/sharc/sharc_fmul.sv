@@ -10,8 +10,7 @@
 // round toward zero under `trunc` (MODE1.TRUNC) where an overflow gives the largest finite
 // (MV / MVS either way). It has no slow path: `busy` is 0.
 // CHANGED (R1052, MAME_RND 0 only): stage 2's rounding carry tested beside the increment, not
-// taken from its top bit, and the round-up choosing after the increments, not feeding one (the
-// same result in every case; see g_man).
+// taken from its top bit (the same result in every case; see g_man).
 //
 // His description of the MAME unit:
 // Float multiply in two stages, bit-exact to sharc_fp_pkg::f_mul (the multiplier flushes
@@ -196,24 +195,9 @@ logic        v_nan, v_inf, v_zero, v_sg, v_trunc;
 logic [47:0] v_p;
 logic [9:0]  v_esum;
 logic [1:0]  v_tiny, v_ovf;
-// R1052 (v15): the result's overrides decided here for each exponent outcome k -- the word is the
-// product's (v_n[k]) or a constant whose mantissa is all ones or zero (v_cm[k]: NaN, or the largest
-// finite on a truncated overflow) and whose exponent is FF, FE or 00 (v_ce[k] bits 7:1, v_ce0[k]
-// bit 0); the sign is 1 for the NaN, else the product's. Stage 2 then takes each bit as one select
-// on the carry ei of these registers and the product's field (s5329: v_p[45] -> ei -> the overrides'
-// select rebuilt as a 46-load node, two levels -> the field -> r -> rf_wd -> g_rf -0.898 at -40C)
-logic [1:0]  v_n, v_cm, v_ce, v_ce0;
-logic        v_rs;
 always_ff @(posedge clk) if (en) begin
     v_nan <= nan1; v_inf <= inf1; v_zero <= zero1; v_sg <= sg; v_trunc <= trunc;
     v_p <= p; v_esum <= esum; v_tiny <= tiny1; v_ovf <= ovf1;
-    for (int k = 0; k < 2; k++) begin
-        v_n[k]   <= !nan1 && !inf1 && !zero1 && !ovf1[k] && !tiny1[k];
-        v_cm[k]  <= nan1 || (!inf1 && !zero1 && ovf1[k] && trunc);
-        v_ce[k]  <= nan1 || inf1 || (!zero1 && ovf1[k]);
-        v_ce0[k] <= nan1 || inf1 || (!zero1 && ovf1[k] && !trunc);
-    end
-    v_rs <= nan1 || sg;
 end
 assign busy = 1'b0;
 logic unused_m;
@@ -226,75 +210,35 @@ assign unused_m = restart ^ valid;
 // sum is exactly 2^24, so the mantissa field is 0 whether or not it is shifted: the field is the
 // low 23 bits of the increment, with no shift and no select. The exponent's two values are made from
 // v_esum beside it and the carry chooses.
-// R1052 (later): the rounding's decision no longer feeds the increment. Both fields -- the
-// truncated one and the one plus one -- are made from v_p for each position of the product's top
-// bit (four values, the increments straight from the register), and the round-up and the top bit
-// choose after them; the round-up of each position from its own guard / sticky bits. The carry
-// (only without the top bit, as above) is that position's round-up and its 24 bits all ones, and
-// there the round-up needs no sticky bit (below) (s5312: v_p[5] -> the sticky OR -> up -> ei ->
-// ovf -> r -> rf_wd -> the R file's MLAB, -0.856 at slow 100C). The same fields, exponent and
-// tests as up / s / mf above.
-logic [31:0] r_old;                     // (v15: the word as it was, the benches compare)
-`ifdef VERILATOR
-// (from stage 2's first load: before it the two forms read registers never loaded, and no word
-// is taken -- a result is read only after its multiply's en)
-logic r_ld = 1'b0;
-always_ff @(posedge clk) if (en) r_ld <= 1'b1;
-always_ff @(posedge clk) if (r_ld && r != r_old) $fatal(1, "sharc_fmul: the word %h, the overrides' select %h", r, r_old);
-`endif
 always_comb begin
-    logic [22:0] mf, mt1, mt0, mi1, mi0;
+    logic [26:0] s;
     logic [7:0]  e;
-    logic        up1, up0, ei, tiny, ovf;
+    logic [22:0] mf;
+    logic        up, cy, ei, tiny, ovf;
     logic [31:0] res;
     // the exponent of the product, unbounded: esum - 127 (+1 when the product's top bit is set or
     // the rounding carries -- never both); its tests from stage 1
-    // (top bit set: s = {v_p[47:22], |v_p[21:0]}; clear: s = {v_p[46:21], |v_p[20:0]}; up is
-    // !trunc && s[2] && (s[1] || s[0] || s[3]), the field s[25:3] + up)
-    up1 = !v_trunc && v_p[23] && (v_p[22] || (v_p[21:0] != 0) || v_p[24]);
-    up0 = !v_trunc && v_p[22] && (v_p[21] || (v_p[20:0] != 0) || v_p[23]);
-    mt1 = v_p[46:24]; mi1 = v_p[46:24] + 23'd1;
-    mt0 = v_p[45:23]; mi0 = v_p[45:23] + 23'd1;
-    mf = v_p[47] ? (up1 ? mi1 : mt1) : (up0 ? mi0 : mt0);
-    // the carry, top bit clear: s[26:3] = v_p[46:23] all ones and up0; with the top bit set ei is 1.
-    // Where v_p[46:23] is all ones, v_p[23] (s[3]) is set, so up0 is !trunc && v_p[22]: the carry
-    // needs no sticky bit, and the exponent / range selects are off the sticky OR (s5312's path: the
-    // sticky -> up -> ei -> ovf (33 loads) -> r)
-    ei = v_p[47] || (!v_trunc && v_p[22] && (&v_p[46:23]));
-    // R1052 (later still): the result, its flags and its sticky bits made for both values of ei and
-    // ei choosing last -- the range tests (ovf, tiny) and the exponent were ei's selects in front
-    // of the result's 46-load select (s5322: v_p[37] -> the carry's AND -> ei -> ovf -> r's select
-    // -> r -> rf_wd -> g_rf -0.476 at slow 100C); the field mf does not depend on ei
-    begin
-        logic [31:0] rk [2], ak [2], sk [2];
-        for (int k = 0; k < 2; k++) begin
-            e = 8'(v_esum[7:0] - 8'(127 - k));
-            tiny = v_tiny[k];
-            ovf  = v_ovf[k];
-            res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]}) : tiny ? {v_sg, 31'h0}
-                        : {v_sg, e[7:0], mf};
-            if (v_nan) begin
-                rk[k] = NAN; ak[k] = MI; sk[k] = MIS;
-            end else if (v_inf) begin
-                rk[k] = {v_sg, INF[30:0]}; ak[k] = MV | (v_sg ? MN : 32'h0); sk[k] = MVS;
-            end else if (v_zero) begin
-                rk[k] = {v_sg, 31'h0}; ak[k] = v_sg ? MN : 32'h0; sk[k] = '0;
-            end else begin
-                rk[k] = res;
-                ak[k] = (v_sg ? MN : 32'h0) | (ovf ? MV : 32'h0) | (tiny ? MU : 32'h0);
-                sk[k] = (ovf ? MVS : 32'h0) | (tiny ? MUS : 32'h0);
-            end
-        end
-        r_old = ei ? rk[1] : rk[0]; astat = ei ? ak[1] : ak[0]; stky = ei ? sk[1] : sk[0];
-    end
-    // (v15) the word: each field bit the product's or its constant, for each k, ei choosing
-    begin
-        logic [7:0] e1, e0, c1, c0;
-        e1 = 8'(v_esum[7:0] - 8'd126); e0 = 8'(v_esum[7:0] - 8'd127);
-        c1 = {{7{v_ce[1]}}, v_ce0[1]}; c0 = {{7{v_ce[0]}}, v_ce0[0]};
-        r[31] = v_rs;
-        r[30:23] = ei ? (v_n[1] ? e1 : c1) : (v_n[0] ? e0 : c0);
-        r[22:0]  = ei ? (v_n[1] ? mf : {23{v_cm[1]}}) : (v_n[0] ? mf : {23{v_cm[0]}});
+    if (v_p[47]) s = {v_p[47:22], v_p[21:0] != 0};
+    else         s = {v_p[46:21], v_p[20:0] != 0};
+    up = !v_trunc && s[2] && (s[1] || s[0] || s[3]);
+    cy = up && (&s[26:3]);
+    mf = s[25:3] + {22'h0, up};
+    ei = v_p[47] || cy;
+    e = ei ? 8'(v_esum[7:0] - 8'd126) : 8'(v_esum[7:0] - 8'd127);
+    tiny = v_tiny[ei];
+    ovf  = v_ovf[ei];
+    res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]}) : tiny ? {v_sg, 31'h0}
+                : {v_sg, e[7:0], mf};
+    if (v_nan) begin
+        r = NAN; astat = MI; stky = MIS;
+    end else if (v_inf) begin
+        r = {v_sg, INF[30:0]}; astat = MV | (v_sg ? MN : 32'h0); stky = MVS;
+    end else if (v_zero) begin
+        r = {v_sg, 31'h0}; astat = v_sg ? MN : 32'h0; stky = '0;
+    end else begin
+        r = res;
+        astat = (v_sg ? MN : 32'h0) | (ovf ? MV : 32'h0) | (tiny ? MU : 32'h0);
+        stky  = (ovf ? MVS : 32'h0) | (tiny ? MUS : 32'h0);
     end
 end
 

@@ -178,12 +178,6 @@ module m2_quad_store #(
   // select of two counts and a zero test (s5302: bank -> count[rbank] != 0 -> s_band -0.714).
   // The count never wraps (it stops at MAXL < 2^(IW+1)). 0: the zero test. (The 2B build.)
   parameter bit          CNZ = 1'b0,
-  // R1052: the band word (b_band) from each pair's own clamp and band, the pairs' min / max taken
-  // on the 6-bit bands after them: clamping to the screen and dividing by BAND_H are monotone, so
-  // band(min(a, b)) is min(band(a), band(b)) with both clamped to [0, SCR_H - 1], and the "never"
-  // test is each pair's (s5306: a_lo01 -> the 16-bit min -> the clamp -> b_band -0.405). 0: as R740.
-  // (The 2B build.)
-  parameter bit          BPAR = 1'b0,
   // Derived -- never overridden (Quartus 17 takes no localparam here): the
   // payload's width, the vertex word and the texture word.
   parameter int unsigned PAYW   = 4 * 2 * XW + (VX ? VXN : 0) + 4 * 2 * UVW + TXW + 4 * OZW + (MZ ? 1 : 0)
@@ -483,22 +477,6 @@ module m2_quad_store #(
     end
   endfunction
 
-  // R1052 (BPAR): band_of(min(l1, l2), max(h1, h2)) from the four pair values, each clamped and
-  // divided on its own (see BPAR)
-  function automatic logic [BW-1:0] bnd_c(input logic signed [15:0] v);
-    logic signed [15:0] c;
-    c = (v < 0) ? 16'sd0 : (v > $signed(16'(SCR_H - 1))) ? $signed(16'(SCR_H - 1)) : v;
-    bnd_c = BW'(int'(c) / int'(BAND_H));
-  endfunction
-  function automatic [2*BW-1:0] band_par(input logic signed [15:0] l1, l2, h1, h2);
-    logic [BW-1:0] bl1, bl2, bh1, bh2;
-    bl1 = bnd_c(l1); bl2 = bnd_c(l2); bh1 = bnd_c(h1); bh2 = bnd_c(h2);
-    if ((h1 < 0 && h2 < 0) || (l1 > $signed(16'(SCR_H - 1)) && l2 > $signed(16'(SCR_H - 1))))
-      band_par = {BW'(0), BW'(NBANDS-1)};
-    else
-      band_par = {(bh1 > bh2) ? bh1 : bh2, (bl1 < bl2) ? bl1 : bl2};
-  endfunction
-
   // R246: THE KEY IS NO LONGER MADE HERE. It used to be a monotone transform
   // of the float z, complemented; m2_geometry now hands over the reference's
   // own 16-bit z value (model2_v.cpp's float_to_zval), which is coarse on
@@ -622,7 +600,7 @@ module m2_quad_store #(
       a_lo01  <= smin(in_y0, in_y1);  a_lo23 <= smin(in_y2, in_y3);   // R579 balanced; R739 split
       b_v     <= a_v && a_room;                                   // R740: the att word, finished
       b_bank  <= a_pb;  b_slot <= a_slot;  b_moire <= a_moire;  b_col <= a_col;   // R962: b_bank physical
-      b_band  <= BPAR ? band_par(a_lo01, a_lo23, a_hi01, a_hi23) : band_of(a_lo, a_hi);
+      b_band  <= band_of(a_lo, a_hi);
       a_hi01  <= smax(in_y0, in_y1);  a_hi23 <= smax(in_y2, in_y3);
       a_moire <= in_moire;
       a_col   <= c565(in_col);

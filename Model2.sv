@@ -1961,7 +1961,7 @@ wire wr_ack_tgp = wa_own_ack[2];
 wire wr_ack_geo = wa_own_ack[3];
 wire wr_ack_ldr = wa_own_ack[4];
 
-m2_wr_arb #(.N(5), .AW(SDR_AW), .RCF(B2)) u_wr_arb (   // R1052: RCF on the 2B build
+m2_wr_arb #(.N(5), .AW(SDR_AW)) u_wr_arb (
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.req(wa_own_req), .addr(wa_own_addr), .din(wa_own_din), .ack(wa_own_ack),
 	.s_req(wa_req), .s_addr(wa_addr), .s_din(wa_din), .s_ack(ldr_wr_ack)
@@ -4615,7 +4615,7 @@ m2_pair_cache #(.AW(SDR_AW-1), .COL_BITS(SDR_COL)) u_geo_pc (
 // write's acknowledge -- the write has landed -- drops both streams; no copy
 // outlives an object (`active`). tb_m2_geodiff: 25-26% off a heavy list's walk.
 wire eng_ra_busy;
-m2_eng_ra #(.AW(SDR_AW-1), .PR_M10K(C2), .GDEM(B2)) u_eng_ra (   // R1008; R1052: GDEM
+m2_eng_ra #(.AW(SDR_AW-1), .PR_M10K(C2)) u_eng_ra (   // R1008
 	.clk(clk_sys), .rst_n(mem_rst_n), .bypass(pair_off_s2), .active(eng_busy),
 	.inval(geo_sd_req & wr_ack_geo),
 	.req(eng_mem_req), .idx(eng_wa[SDR_AW:2]),
@@ -8171,7 +8171,7 @@ m2_raster3d #(.SCR_W(496), .SCR_H(384), .BAND_H(8), .NBUF(6), .FTB(1'b1), .FB_DD
               .RECIP_M10K(R3D_RECIP_M10K),   // R948
               .UVSH(R3D_UVSH),   // R940
               .QNX(M2A ? 512 : 0),   // R962
-              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2), .FBW_WD(B2), .RECIP_EARLY(B2), .PRE_NEAR(B2), .UBQ_SEL(B2)) u_raster3d (   // R1044: FBW_WD   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
+              .DDRAM_IN(R3D_PAY), .PAY_DDR3(R3D_PAY), .MKV_LUT(C2), .FBW_WD(B2), .RECIP_EARLY(B2), .PRE_NEAR(B2)) u_raster3d (   // R1044: FBW_WD   // R1018: MKV_LUT   // R1003: the quad payload in DDR3 on 2C   // R962: a list to 2,560 quads (VCop2's ranking 2,248)   // R564: scan on clk_mem; R867; R889
 	// R318: clk_mem carries m2_texel, which runs at 100 MHz inside this module.
 	.clk(clk_sys), .clk_mem(clk_mem), .rst_n(mem_rst_n),
 	.frame_start(geo_walk_start),
