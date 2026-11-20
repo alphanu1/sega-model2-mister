@@ -520,6 +520,7 @@ logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
 logic        d_rnwe_ref;                    // (the benches': rn_we as it was before R1052)
 logic        d_fixon_ref, d_mbg_ref, d_accg_ref, d_accg_new;   // (the benches': R1052's le-last gates as they were)
 logic        d_unsx_ref;                    // (... and the unsupported flag; its reason d_why_ref2)
+logic [31:0] d_accwd_s;                    // R1052: the sequencer's source of the store data
 logic [1:0]  d_wsel_x, d_wsel_ref;          // R1052: wd_sel from the opcode's bits (the benches compare with the handler's)
 logic [3:0]  d_why_ref2;
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
@@ -1176,17 +1177,42 @@ always_comb begin
             w2x = op[47:40] == 8'b00001111 || op[47:44] == 4'b1001;
             w0x = !w1x && !w2x;
             d_wsel_x = {w2x, w1x}; d_wsel_ref = wd_sel;
-            sv = 32'h0;
-            for (int k = 0; k < 16; k++)
-                sv |= {32{gq[7] && iq[k]}} & sys_rd(4'(k), astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg);
+            // R1052 (later): the system registers read at each form's own index field first (three
+            // 16-way selects of registers, their selects straight from the opcode's bits), the
+            // form's group test choosing among the three -- not gq[7] && iq[k] in front of a
+            // one-hot AND-OR (s5326: pm2 -> the form's compare -> gq[7] (47 loads) -> the
+            // register's select -> acc_wd[23] -0.429 at -40C). The same value: for 010 the field
+            // at op[26:23] under group op[30:27]; for 0111 op[39:36] under op[43:40]; otherwise
+            // op[35:32] under the bit op's 7 or op[39:36]
+            begin
+                logic ga7, gb7, gc7;
+                ga7 = fa && op[30:27] == 4'h7; gb7 = fb && op[43:40] == 4'h7; gc7 = !fa && !fb && (fc || op[39:36] == 4'h7);
+                sv = ({32{ga7}} & sys_rd(op[26:23], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
+                     ({32{gb7}} & sys_rd(op[39:36], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
+                     ({32{gc7}} & sys_rd(op[35:32], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg));
+            end
             pv = ({32{gq[13] && iq[11]}} & px[31:0]) | ({32{gq[13] && iq[12]}} & {16'h0, px[15:0]}) | ({32{gq[13] && iq[13]}} & px[47:16]);
             d_accwd_b = ({32{w0x || (w1x && gq[0])}} & rf_rd[4]) |
                        ({32{w1x && gq[1]}} & iu_rd) |
                        ({32{w1x && gq[2]}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
                        ({32{w1x}} & (sv | pv)) |
                        ({32{w2x}} & op[31:0]);
+            // R1052 (later): the sequencer's source the same way -- its group and register from
+            // gq / iq, the values for each outcome of the loop end's pop (seq_rd's arguments for
+            // q1 / q0), the pop last -- not seq_rd on ur_sel behind the handler's wd_sel (s5326:
+            // pm2 -> acc_wd[22] / [23], PCSTK's top bits)
+            begin
+                logic [31:0] sq1, sq0, cdv;
+                cdv = (le && le_cnt) ? S.curlcntr - 32'd1 : S.curlcntr;
+                sq1 = ({32{iq[4]}} & {8'h0, (S.pcstkp != 6'd0 && S.pcstkp <= 6'd30) ? ((S.pcstkp != 6'd1) ? pcs_p2 : 24'hFFFFFF) : S.pcstk}) |
+                      ({32{iq[5]}} & {26'h0, 6'(S.pcstkp - 6'd1)}) |
+                      ({32{SKLR && iq[7]}} & ((S.lstkp != 3'd1) ? lcs_p2 : 32'hFFFF_FFFF)) | ({32{SKLR && iq[8]}} & cdv);
+                sq0 = ({32{iq[4]}} & {8'h0, S.pcstk}) | ({32{iq[5]}} & {26'h0, S.pcstkp}) |
+                      ({32{SKLR && iq[7]}} & cdv) | ({32{SKLR && iq[8]}} & S.lcntr);
+                d_accwd_s = {32{w1x && gq[6]}} & (done ? sq1 : sq0);
+            end
         end
-        x.acc_wd = d_accwd_b | ({32{w1 && gr == 4'h6}} & (done ? d_ursq1 : d_ursq0));
+        x.acc_wd = d_accwd_b | d_accwd_s;
         d_accwd_chk = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
                    ({32{w1 && gr == 4'h1}} & iu_rd) |
                    ({32{w1 && gr == 4'h2}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
