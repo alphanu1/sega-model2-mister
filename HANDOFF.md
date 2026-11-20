@@ -1,5 +1,23 @@
 # Handoff
 
+## 2026-11-20: model2b -- the RTL back to s5308's, the placement kept (R1054); first push of model2b
+
+`model2b` fast-forwarded to the 2b-pl-u lane (2b-rt2's R1048-R1052 work and the 2b-place settings,
+R1049), then b5b7438b: the RTL and Model2.sv checked out from 4f183072 (s5308's), Model2.qsf and
+Model2.sdc as the lane has them. Pushed to GitHub for the first time. Not released.
+
+  * Why: R1052's retimes each removed their path, but the lane got worse -- no seed after s5308
+    beat it, area grew (fit 41,223 -> up to 41,555 of 41,910), and two seeds failed to route.
+  * s5334 of this tree: clk_sys -0.079 / -0.249 (100C / -40C), HDMI +0.197 (clean), clk_mem
+    +0.583, hold +0.093, fit 41,144. Only the SHARC adder's stage 1 (fa_yz -> v_s), the SCSP DSP
+    M10K (-0.087) and one geometry -> payload path (-0.035) are under zero.
+  * Board: Model2B.rbf is s5308 (4f183072), md5 164869dd0186d54791caab9586105942, with the own-ID
+    MRAs. Every lighting fault gone; Super GT 24h still locks up (stays out of a release, with
+    Last Bronx); inputs not fully checked.
+  * Running: s5335-s5337 of b5b7438b. If none closes, a no-added-logic fix for the adder's stage 1
+    (the shift amount from the raw exponent fields), proven before any fit.
+  * Open for Ben: the cpu_bridge hold-only exception (R1052 / R1054).
+
 ## 2026-11-17: model2b -- first board test of 2B (s3412, RES_CP); 26 sets with MRAs (c2359efa, 56159236)
 
 Board: Model2B.rbf = model2b s3412 (7fdd6b11 + dc682ef8 RTL; clk_sys -0.782, clk_mem -0.244,

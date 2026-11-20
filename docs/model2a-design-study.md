@@ -55403,3 +55403,43 @@ new form against the old in every clock where it is read.
      the truncated overflow's exponent bit 0 without !trunc (253,843 of 4 M manual fmul vectors),
      v_n without the tiny test (403,923), e1 from esum - 127 (620,423). quartus_map
      --analyze_file 0 errors.
+
+**R1054 -- THE 2B BUILD's clk_sys: R1052's RETIMES MADE THE BUILD WORSE, NOT BETTER. THE RTL IS BACK
+TO s5308's (4f183072) WITH THE PLACEMENT AS IT IS NOW, AND THAT IS THE STARTING POINT: s5334, ONE
+FAILING FAMILY, HDMI CLEAN.** Branch 2b-pl-u -> model2b, 2026-11-20. Fits only; no board.
+
+(Section: §10, after R1052. Authority, the project rules' order: the fits' own reports. Nothing in
+sys/ touched.)
+
+*What was believed (R1052):* each retime removes its fit's worst family with the same output on
+the same clock, so the lane moves toward clean one family at a time.
+
+*What is now known:* every retime did remove its own path, but the lane got worse. From s5308
+(4f183072, the best 2B fit) to s5333, 25 seeds: 11 crashed in Quartus, 2 stopped in routing, and of
+the 12 that timed none beat s5308 -- clk_sys from -0.285 (s5320) to -2.639 (s5329), HDMI from
++0.038 to -0.686, one hold miss (s5328, -0.473). Area moved the wrong way the whole time: map
+ALMs 39,053 (s5308) -> 39,113-39,346; fit 41,223 -> 41,256-41,555 of 41,910. Own LUTs (the
+per-entity maps): m2_geometry +146-161 with no geometry RTL change (synthesis variation, not
+bisected), eng_ra +62, fmul +49, xu +42, fadd +18, R1052's 33 +255 (taken out again as v14).
+At 99 % fit the router began to fail: s5329, s5331 and s5332 report 188005 (hold padding against
+routing demand), s5331 / s5332 did not finish routing. The paths each retime removed were real,
+but at this fill the seed spread (0.4-0.9 ns) and the extra area outweigh any one of them.
+
+*The test (Ben's call):* the RTL and Model2.sv checked out from 4f183072, Model2.qsf / Model2.sdc
+left at d35563ef (the 2b-place settings less the 44 sound-board anchors e5fc6fe4 dropped), commit
+b5b7438b. One seed, s5334: clk_sys -0.079 slow 100C / -0.249 slow -40C, clk_mem +0.583, clk_i960
++0.989, HDMI +0.197, h2f +1.801, hold +0.093 at every corner; map 39,053 (s5308's exactly), fit
+41,144 (the lowest of the lane); no 188005. The only families under zero: the SHARC adder's
+stage 1, fa_yz -> sharc_fadd v_s[21] (-0.079 / -0.249), the SCSP DSP's madrs M10K (-0.087 at
+-40C), the geometry clipper -> the 3D payload M10K (-0.035 at 100C). HDMI closed for the first
+time on 2B: the one placement change against s5308 is the sound board's anchors gone, so the
+scaler's corner is free (R1043's mechanism, the 2B form).
+
+*So:* b5b7438b is the 2B base. R1052's changes stay in the history (2b-rt2) and in this study,
+proven, and come back only one at a time, each kept only if real seeds show it helps -- one fit
+is not evidence either way at a 0.4-0.9 ns spread. New fixes must not add logic. Next: three
+seeds of b5b7438b (s5335-s5337); if none closes, the adder's stage 1 -- its shift amount from
+the operands' raw exponent fields (equal to the flushed fields wherever the zero tests hold,
+which the core already checks every clock), so fa_yz gates only the mantissa -- proven before
+any fit. The cpu_bridge l_data / l_ok / r_rdata -> clk_i960 hold-only exception (R1052's
+proposal, protocol-proven) is Ben's decision and not applied.
