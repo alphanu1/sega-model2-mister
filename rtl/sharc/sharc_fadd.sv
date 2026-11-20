@@ -13,6 +13,12 @@
 // exact sum's exponent less one, rounded once: tiny below 2^-126, flushed with AUS).
 // CHANGED (R1052, timing): the far path's rounding carry tested beside the increment (the same
 // result in both roundings).
+// CHANGED (R1055, timing, the manual's rounding): the finish's infinity test (raw_inf) from the
+// operands' and the far path's range tests, not from the result's bits (the same test; R1052's
+// change 21 brought back alone on the s5308 base: s5335 / s5337 v_lz -> raw_inf).
+// CHANGED (R1055, timing): stage 1's shift amount (rab / rba) and d0 from the operands' raw
+// exponent fields, not the flushed ones (the same bits: the flush zeroes a field that is already
+// zero), so the PRE zero tests no longer feed the alignment.
 //
 // CHANGED (R1029, timing at 80 MHz): three stages. Stage 1's magnitude compare on the carry
 // chain and the alignment's sticky bit from a mask beside the shifter; stage 2 split -- 2a the
@@ -121,8 +127,14 @@ always_comb begin
         // the shift from the raw exponents (R1029: no flush test before the subtract). It
         // differs from dab / dba only where an operand is zero (exponent 0, flushed), and then
         // that operand is the one aligned (a zero, shifted by anything) or both are zero
-        rab = {1'b0, xf[30:23]} - {1'b0, yf[30:23]};
-        rba = {1'b0, yf[30:23]} - {1'b0, xf[30:23]};
+        // CHANGED (R1055, timing): from x / y's exponent fields, not xf / yf's. xf[30:23] is
+        // x[30:23] with a zero field flushed to zero -- the same bits for every x at PRE 0, and
+        // at PRE 1 wherever xz == (x[30:23] == 0), which m2b_sharc checks every ST_X clock (every
+        // en); likewise y (sub / avg touch only bit 31). So xz / yz gate only the mantissas,
+        // ea / eb and the magnitude compare, not the shift (s5334: fa_yz -> the exponent
+        // subtract -> d -> the align shifter -> s_far -> v_s[21] -0.249 at slow -40C)
+        rab = {1'b0, x[30:23]} - {1'b0, y[30:23]};
+        rba = {1'b0, y[30:23]} - {1'b0, x[30:23]};
         e_ge = !rab[8];
         ex = (!dab[8]) ? ea : eb;
         d  = e_ge ? rab[7:0] : rba[7:0];
@@ -142,7 +154,7 @@ always_comb begin
     begin
         logic [24:0] nab, nba;
         logic        d0;
-        d0 = xf[23] ^ yf[23];
+        d0 = x[23] ^ y[23];                 // CHANGED (R1055, timing): the raw fields, as rab
         nab = {ma, 1'b0} - (d0 ? {1'b0, mb} : {mb, 1'b0});
         nba = {mb, 1'b0} - (d0 ? {1'b0, ma} : {ma, 1'b0});
         n_near = big_ab ? nab : nba;
@@ -198,12 +210,14 @@ end
 
 
 logic [31:0] raw_c, raw, fr;
+logic        far_inf;                       // R1055 (R1052): the far path's result is infinite (its range test)
 logic [31:0] fa, fs;
 logic        w_nan, w_nanin, w_infb, w_trunc, w_avg;
 
 // stage 2a: the result's bits
 always_comb begin
     raw_c = '0;
+    far_inf = 1'b0;
     if (v_inf) raw_c = v_infr;
     else if (v_near) begin
         logic [4:0]  lz;
@@ -242,6 +256,7 @@ always_comb begin
         ov255 = cy ? (e1 >= 9'd255) : (e >= 9'd255);
         ov256 = cy ? (e1 >= 9'd256) : (e >= 9'd256);
         tiny  = cy ? (e1 <= 9'd1)   : (e <= 9'd1);
+        far_inf = (!MAME_RND && v_avg) ? ov256 : ov255;
         if (!MAME_RND && v_avg) begin
             // the manual's FAVG: the rounded sum's exponent less one (rounding is the same)
             if (ov256)           raw_c = {v_sgn, INF[30:0]};
@@ -262,9 +277,21 @@ end
 logic        raw_inf, raw_dz, raw_mnz;
 always_ff @(posedge clk) if (en) begin
     raw <= raw_c;
-    raw_inf <= is_inf(raw_c); raw_dz <= is_den_or_zero(raw_c); raw_mnz <= raw_c[22:0] != 0;
+    // CHANGED (R1055, timing; R1052's argument): is_inf(raw_c) without raw_c: an infinite
+    // operand's result is infinite; the near path's never is (its exponent is ex - lz, lz
+    // bounded at ex - 1, ex <= 254 for finite operands -- with a NaN operand the finish takes
+    // w_nan and reads none of these); the far path's is exactly its range test (ov255, the
+    // manual's FAVG ov256: below them the exponent is under 255). So the near path's shift is
+    // off the test (s5316: v_n -> the shift -> raw_c -> is_inf -> raw_inf -0.178 at slow -40C;
+    // s5335 / s5337: v_lz -> raw_inf -0.033 / -0.495)
+    raw_inf <= v_inf || (!v_near && far_inf); raw_dz <= is_den_or_zero(raw_c); raw_mnz <= raw_c[22:0] != 0;
     w_nan <= v_nan; w_nanin <= v_nanin; w_infb <= v_infb; w_trunc <= v_trunc; w_avg <= v_avg;
 end
+
+`ifdef VERILATOR
+// (the benches: the test is is_inf(raw) wherever the finish reads it)
+always_ff @(posedge clk) if (!MAME_RND && !w_nan && raw_inf != is_inf(raw)) $fatal(1, "sharc_fadd: raw_inf %b, is_inf(raw) %b (raw %h)", raw_inf, is_inf(raw), raw);
+`endif
 
 // stage 2b: the finish
 always_comb begin
