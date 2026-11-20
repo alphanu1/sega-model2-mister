@@ -2464,6 +2464,8 @@ logic             dm_dsel;
 // index and 0; the host's / the clear's write (pm_host) chooses after the adder, as before
 (* keep *) logic [PM_AW-1:0] pm_ia [3], pm_ob [3];
 logic [PM_AW-1:0] pm_cs [3], pm_xa;
+(* keep *) logic             pm_s1, pm_s3, pm_s4, pm_t1, pm_t3;   // R1057 (R1052's 12): the operands' selects, early
+logic [PM_AW-1:0]            pm_oe;                               // ... and everything but the MLAB reads, one term
 always_comb begin
     logic [47:0] o;
     logic        s1, s2, s3, sd, t1;
@@ -2479,14 +2481,26 @@ always_comb begin
     // -- a PM-bus store is never type 1's first pass, whose access is the DM move's (dm_kind:
     // never A_PM) -- so x_done stays off the address; the bench check below compares every clock)
     pm_xa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
+    // R1057 (R1052's 12): the MLAB reads (I in D on i1 / i3 / i4, M on m1 / m3) each one AND-OR
+    // from its read to the adder, the selects made from the opcode beside the reads; everything
+    // that is not a read -- the 6-bit / 32-bit offsets in D and, outside D or for the host, the
+    // whole address -- one term on the other operand (pm_oe). In D (not the host) the operands
+    // are the old ones; elsewhere the old ia (the host's, X's or the window's address) moves to ob
+    // and ia is 0: the same sum (s1 / s2 / s3 are disjoint forms; g_dma_check compares the sum
+    // with the old select every clock). (s5343 / s5346: pm2 -> i3_ra / i4_ra -> the MLAB ->
+    // pm_ia, one / two LUTs -> the adder -> pm0 / pm1's address -0.352 / -0.410 at slow -40C.)
+    // R1052's 29 (the offsets as their own terms of pm_ob) is not taken: +21 LUTs here
+    begin
+        logic dn;
+        dn = !pm_host && st == ST_D;
+        pm_s1 = dn && !t1 && !sd && !d_pg; pm_s3 = dn && !t1 && !sd && d_pg; pm_s4 = dn && t1;
+        pm_t1 = dn && !t1 && s1 && !d_pg; pm_t3 = dn && !t1 && s1 && d_pg;
+        pm_oe = dn ? ((t1 || !(s2 || s3)) ? '0 : s2 ? PM_AW'(sext6(o[32:27])) : o[PM_AW-1:0])
+                   : pm_host ? pm_ha : (st == ST_X) ? pm_xa : pm_hidx;
+    end
     for (int k = 0; k < 3; k++) begin
-        // (R1048: the host's / the clear's write -- registered since 4b0dc9e8, so pm_host is
-        // early -- chooses in the operands too: its address and 0; the sum goes to the RAM)
-        pm_ia[k] = pm_host ? pm_ha :
-                   (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
-                   (st == ST_X) ? pm_xa : pm_hidx;
-        pm_ob[k] = ({PM_AW{!pm_host && st == ST_D && !t1 && s1 && !d_pg}} & m1_rd[PM_AW-1:0]) | ({PM_AW{!pm_host && st == ST_D && !t1 && s1 && d_pg}} & m3_rd[PM_AW-1:0]) |
-                   ({PM_AW{!pm_host && st == ST_D && !t1 && s2}} & PM_AW'(sext6(o[32:27]))) | ({PM_AW{!pm_host && st == ST_D && !t1 && s3}} & o[PM_AW-1:0]);
+        pm_ia[k] = ({PM_AW{pm_s1}} & i1_rd[PM_AW-1:0]) | ({PM_AW{pm_s3}} & i3_rd[PM_AW-1:0]) | ({PM_AW{pm_s4}} & i4_rd[PM_AW-1:0]);
+        pm_ob[k] = ({PM_AW{pm_t1}} & m1_rd[PM_AW-1:0]) | ({PM_AW{pm_t3}} & m3_rd[PM_AW-1:0]) | pm_oe;
         pm_cs[k] = pm_ia[k] + pm_ob[k];
         pm_wb[k] = pm_cs[k];
     end
