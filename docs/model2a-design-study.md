@@ -54993,3 +54993,35 @@ new form against the old in every clock where it is read.
      manual-rounding DOA lockstep 501,777,265 words, 0 differ, 1,264,264,337 clocks. The 2B
      geometry fault (the grant without its any-request gate) stops every walk at once. make
      lint_top LINT_DEFS=-DM2_2B clean.
+  COMMITS (round four, second hand-off): bc0e4728 (SCSP regs, 26), 1bb55d34 (the pool's grants, 27),
+     3a518fab (SHARC v8: 24, 25), 7f7c0338 (study) -- the proven head sent at 06:05.
+  28. (SHARC sharc_fmul, v9) s5322's full path: v_p[37] (the DSP's output register) ->
+     the carry's AND tree (ei~1) -> ei -> ovf -> r's select (46 loads) -> an adder cell -> r ->
+     rf_wd -> g_rf, -0.476 at 100C. The result, its flags and its sticky bits made for both values
+     of ei (each with its exponent, range tests and the NaN / infinity / zero overrides), ei
+     choosing last; the field mf does not depend on ei.
+  29. (SHARC, v9) pm_oe's three sources as their own terms of pm_ob's AND-OR -- the
+     6-bit offset (s2), the 32-bit (s3), outside D the host's / X's / the window's address --
+     not a select in front of it (s5322: pm2 -> the form's decode (Decoder3, 33 loads) -> pm_oe
+     -> pm_ob -> the adder -> pm0's address -0.609 at -40C). s2 / s3 are disjoint: the same
+     operand, g_dma_check comparing the sum with the old select every clock.
+  s5324 (7f7c0338) -2.127 / -1.373, HDMI -0.230, hold +0.083, ALMs needed 41,514 (442 recoverable;
+     d71bd069's seeds 41,256-41,261, 545-593): the fill's oz_u[8]~_Duplicate_1 -> kf_u[8] -2.127 (a
+     physical-synthesis duplicate: placement), pm2 -> XC.unsup / XC.acc -0.73 / -0.83, pm2 -> pm0 /
+     dm1 addresses -0.62 / -0.53, fmul v_p[33] -> g_rf -0.56, SCSP o_be -> lines -0.28.
+  27 TAKEN OUT AGAIN (2fa54888). The whole-build maps (s5322 on d71bd069 against s5324): ALMs needed
+     (map) 39,113 -> 39,422, combinational ALUTs 57,449 -> 58,242, registers +14; m2_geometry +655
+     LUTs, +584 of them in its own logic (1,724 -> 2,308; the pool +4, the clipper +44, the engine
+     +22); m2b_sharc, its xu and m2_scsp_regs each within 10 LUTs. i960_top also moved +133 with no
+     RTL change, so part of it is map noise, but the geometry jump sits on 27, the only RTL change
+     under it, and 27's s5321 target did not recur. The next seed's map number is the check.
+  PROOF (28, 29: v9 = v8 + 28 + 29): tb_sharc_fp 4 x 25 M at both roundings, 0 mismatches; the miter
+     at MAME_RND 1 and 0, 39 programs, negcond, 28 / 28 cases, 0 differ, the same clocks; the
+     replays DOA / fvipers / schamp 1,264,270,732 / 1,277,257,981 / 1,279,552,477 clocks, 0 out /
+     trace words differ, the 200 M-word miters 0 differ; the manual-rounding DOA lockstep 501,777,265
+     words, 0 differ, 1,264,264,337 clocks. quartus_map --analyze_file 0 errors. PLANTED: the range
+     test taken at the other ei (11,484 / 4 M manual fmul mismatches); the 32-bit offset's select
+     also on the 6-bit form (r1, g_dma_check: port B 06ff, the select's 06fd).
+  AREA: not mapped alone for v8 / v9 (the SHARC-alone maps were refused this time); s5324's
+     per-entity map puts the SHARC within 10 LUTs of d71bd069's for v8. The lane's map lines are
+     the measure for v9.
