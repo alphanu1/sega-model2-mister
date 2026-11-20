@@ -54946,9 +54946,44 @@ shows, prove, hand the head to the lane.
     check on it fires.
   * quartus_map --analyze_file on every changed file (0 errors); make lint_top (2B) clean.
 
+  9. 61345354 (engine read-ahead, GDEM = B2). s5305 kst.K_IDLE -> want -> g_s -> s_head + fill -> ==
+     idx -> f_dem, -0.266: a stream fetch's "for the waiting read" test made for each stream from its
+     own head and fill (registers), the picked stream choosing after the compares. m2_eng_ra miter
+     against 2b-rc under tb_m2_eng_ra: 509,600 cycles, 0 differing, the bench's 13.9 M checks pass;
+     planted (the streams' tests swapped): the miter and the bench both fail.
+  10. c7c06f89 (quad store, BPAR = RECIP_EARLY = B2). s5306 a_lo01 -> the 16-bit min -> the clamp ->
+     b_band, -0.405: band_of(min(l1, l2), max(h1, h2)) as min / max of each pair's own clamped band
+     (the clamp to [0, SCR_H - 1] and the divide by BAND_H are monotone; the never-drawn test is each
+     pair's). Exhaustive C check against band_of: 68,719,581,712 cases (every pair of each half at
+     eight fixed values of the other, and all four around the edges), 0 differ. tb_m2_quad_store_ext
+     500 streams identical; raster3d miter 0 differing on the three lists; planted (max for the low
+     band) the streams differ.
+  11. ae975ed8 (SHARC xu). s5305 fa_xz -> xin -> SCALB's 32-bit sum -> the range tests -> misc_r
+     (-0.618 at -40C) and -> fv -> f_km1 (-0.280): the |x| / |y| compare on the unflushed operands
+     with the zero tests choosing after the carry chain (xz / yz say |xin| / |yin| is 0 in both
+     roundings, and where they do not, xin is fx); SCALB's flush chosen after the sum (scalb_r of
+     fx & SIGN and of fx, the zero test choosing); f_km1 from its own subtract (149 - fee, not f_k
+     - 1). tb_m2b_xu 2 x 4 x 10 M, 0 mismatches; planted: f_km1 off by one (390 / 4 M), the y-zero
+     order (15,536), SCALB's flush dropped (2,710); one planted fault (the both-zero order) is
+     equivalent -- the both-zero case overrides it. SHARC miter 37 / 37 + 26 / 26 at both roundings;
+     replays and the manual lockstep as above, to the clock.
+  STPW (SCSP, not yet committed: m2_scsp STPW = m2_2a_sound SCSP_FDUE = B2). s5305 sreg -> b_v -> the
+     ALU -> st_wd -> the state RAM, -0.418: the state RAM's write registered once and written the
+     clock after; its one read port (st_ra -> st_q) takes the pending word where it reads the pending
+     address. THE FIRST BENCH PROVED NOTHING: tb_m2_2a_sound on Dead or Alive's sound program with an
+     empty MIDI capture keys no slot -- 160 M cycles 0 differing, and two planted faults passed it.
+     Under tb_m2_scsp on scsp_randcap's synthetic captures (random registers keying slots on; the
+     bench checks every sample against scsp_ref.h, MAME 0.289's scsp.cpp): four captures of 60,000
+     to 100,000 samples, 37.6-64.3 M cycles each, 0 differing, 0 off the reference, the bypass taken
+     746 k-1.38 M times a capture. Planted: the write enable a clock early -- 2,955,650 cycles differ.
+     The bypass dropped: MISSED (206,702 pending reads, 0 differing) -- under investigation. No real
+     MIDI capture exists on disk (none under /home/ben/source).
+
 *AREA (the SHARC mapped alone, sharea.sh; ALMs needed / LUTs / registers):* 786168d3 4,132 / 6,229
 / 1,905; f99e1d5c 4,123 / 6,258 / 1,903; ff2d3309 4,119 / 6,255 / 1,902; d2fd1da4 4,148 / 6,248 /
-1,906. The fit's figures are the lane's.
+1,906; ae975ed8 4,192 / 6,348 / 1,906 (the second SCALB sum and the compare, +44 / +100). The sound
+board alone (sndarea.sh) with STPW: 3,854 ALM (R1050's 3,848), the same block bits. The fit's
+figures are the lane's.
 
 *THE FITS (2b-pl-u: 2b-place's settings with 2b-rt2's head merged; slow 100C / slow -40C):*
     s5301  786168d3  clk_sys -0.511 / -0.627  HDMI -0.284 / -0.120  hold >= +0.088   xu fn_sel -> fb_e; clip cs -> kst; fill walk_y -> s1_y; cab steer
@@ -54956,7 +54991,15 @@ shows, prove, hand the head to the lane.
     s5303  dee29c65  clk_sys -0.419 / -0.486  HDMI +0.000           hold +0.082      fa_x -> misc_r; fadd raw -> g_rf; project step -> engine st
     s5305  32c489d5  clk_sys -0.450 / -0.618  HDMI +0.049           hold +0.099      fa_xz -> misc_r (SCALB); S.daddr -> XC.acc; SCSP sreg -> st; clip -> eng_ra
     s5306  f1ebde57  clk_sys -0.784 / -0.894  HDMI +0.179           hold +0.078      pm2 port B -> XC.acc_wd; quad store a_lo01 -> b_band; SCSP DSP
-  The fmul and fill families of s5271 are gone from s5303 on.
+    s5308  d2fd1da4  clk_sys -0.051 / -0.066  HDMI -0.134 / -0.123  hold >= +0.104   ONLY pm2 port B -> the pm0 / pm1 port A address -- Ben's minimum target met
+    s5311  c7c06f89  clk_sys -0.391 / -0.207  HDMI -0.686           hold +0.085      dmc ls0 -> u_i2; pm2 -> pm0 address; pm2 -> sh_pdj
+    s5312  ae975ed8  clk_sys -0.856 / -0.912  HDMI -0.073           hold +0.025      fmul v_p -> g_rf (back); pm2 -> XC.rn_we; SCSP op_rd -> lines
+  (s5304, s5307, s5309, s5310 crashed in Quartus; from ~20:45 six of eleven fits in both lanes did.)
+  The fmul and fill families of s5271 are gone from s5303 on; s5312 shows the fmul one again on the
+  same RTL, so the seed spread (~0.8 ns between s5308 and s5312) decides which family a seed shows.
+  The one family on every seed is the SHARC's D stage: pm2's word -> a decode or an MLAB read -> an
+  adder or a select -> a D register or a RAM address.
+  HDMI on s5308 / s5312 is ascal's own o_hcpt -> o_vcpt* (sys/): none of the core's logic.
 
 *FOUND ON THE WAY:*
   * Quartus 17 does not infer a RAM whose registered read has a select in front of the register
@@ -54968,3 +55011,167 @@ shows, prove, hand the head to the lane.
     run started inside s5303's first 15 minutes; and one script's `make -f - ` (to read a Makefile
     variable) ran the Makefile's default goal -- a Verilator lint, uncapped and ungated, a few
     seconds before it failed. Both scripts were fixed (the run gated; the variable copied).
+  * THE GATE, AGAIN (21:00): my SHARC miter builds started in the same second as s5308's map, in an
+    idle gap between seeds (s5307 / s5402 had crashed). From then: a Verilator or Quartus job starts
+    only while a quartus_fit is running and is at least 15 minutes old -- never on an idle machine;
+    Quartus jobs (analyze, the block maps: 5-30 s) only up to 16.5 minutes into a fit, so they end
+    inside the window (the fits ran 16.8-24.7 minutes). Rewriting gate.sh in place while two of my
+    scripts read it gave each a syntax error and let them through once (an analyze and a bench,
+    ~21:00): the gate is now replaced by a rename, never edited in place.
+  * From ~23:50 the coordinator paused all my benches for two fits, to see whether the overlap of
+    long benches with fits is what crashes them.
+
+*R1052, ROUND FOUR (2026-11-20 from 01:45, a second agent on the same brief; the fits are the
+2b-pl-u lane's, none mine).* Each change gated to the 2B build (a 2B-only module, or a parameter
+m2_2a_sound sets from SCSP_FDUE = B2), the same output on the same clock, with a bench check of the
+new form against the old in every clock where it is read.
+  12. (SHARC, the previous agent's; proven here) PM port B's adder operands: each MLAB read (I on
+     i1 / i3 / i4, M on m1 / m3) one AND-OR from the adder, its select from the opcode beside the
+     read; everything that is not a read (the 6-bit / 32-bit offsets in D; outside D or for the
+     host the whole address, moved from ia to ob with ia 0) one early term, pm_oe. s1 / s2 / s3 /
+     t1 are disjoint opcode classes, so the old OR of their terms is the new select; g_dma_check
+     compares the sum with the old select every clock. (s5308 / s5311: pm2 -> i4 -> the operand
+     select -> the adder -> pm0's address -0.066 / -0.253.)
+  13. (SHARC, the previous agent's) port 1's read address on o[22] alone, not mf = o[22] && !ish.
+     They differ only for an immediate shift with op[22] set, and an immediate shift takes no
+     port-1 word: its forms set d_ru[0] / d_ru[2] only (no scoreboard wait on port 1), the shifter
+     takes the immediate (sh_imm), and op_y / fm_y / fa_y and their precomputes are read only by
+     the fixed ALU, the multiplier, the adder and the misc unit, none of which runs in an immediate
+     shift (one compute field). NO PROGRAM REACHED IT: no random program set op[22] in an
+     immediate shift (the shift's op is op[21:16]; MAME and v1 ignore bit 22), so m2b_randprog.py
+     gained M2B_RP_ISH22 (seeds 341-343, with PM / SKLR0 / SEQ: the immediate shifts set op[22];
+     without it every program is byte for byte as before -- r1, r101, r201 regenerated and
+     compared). (s5311: pm2 -> ish -> rf_ra[1] -> g_rf[1] -> the shifter's precompute -> sh_pdj
+     -0.207 at -40C.)
+  14. (SHARC, sharc_fmul MAME_RND 0) s5312's full path was not the increment's carry: v_p[5] (in
+     the DSP block's own output register) -> the sticky OR (four LUTs) -> up -> ei -> ovf (33
+     loads) -> r -> rf_wd -> g_rf, -0.856 at 100C. The carry needs no sticky bit: it needs
+     v_p[46:23] all ones, so v_p[23] (s[3]) is set and up0 is !trunc && v_p[22]; ei = v_p[47] ||
+     (!trunc && v_p[22] && &v_p[46:23]), and the exponent and the range selects (ovf, tiny) leave
+     the sticky OR. The field: the truncated and the incremented value for each position of the
+     top bit (the increments straight from v_p), each position's round-up choosing after them.
+  15. (SHARC) XC.rn_we: Rn's two places compared apart -- the immediate shifts' op[7:4], every
+     other fixed / shifter form's op[11:8] -- the form (two opcode compares) choosing last. x.rn
+     is set inside the compute field's decode; s5312's path was pm2 -> Decoder3 -> WideOr3 (four
+     LUTs) -> dx.rn -> rn_we (three), -0.912 at -40C. The same enable wherever it is read (fix_on
+     && fix_wr, or sh_on: the landing's and the scoreboard's only terms); elsewhere x.rn is 0 and
+     the old enable compared a load target with R0, unread. Checked against the old in every D
+     clock where it is read.
+  16. (SHARC) THE LOOP END's COMPARE LAST (s5316: S.la_addr -> le (S.daddr == S.la_addr, 24
+     bits) -> LCE's input l0 -> the condition -> the access gate -> XC.acc, -0.685 at -40C;
+     s5305's S.daddr -> XC.acc -0.418 is the same path). R1050 put done last in the gate, but the
+     gate for done = 0 still took the condition at l0 = (le && le_cnt) ? !sf_c2 : !sf_c1. d_cok1
+     / d_cok0 are the condition at LCE's input l1 / l0 -- d_cok1t / d_cok1f, l choosing -- so each
+     consumer is made for le = 1 (the pop dn_le; l0 = lc_le) and for le = 0 (no pop; l0 = !sf_c1)
+     and le chooses in the last gate: the access gate, the map test's gate, the fixed ALU's
+     enable, and D's unsupported flag and reason (with dag, the DAG's gating of the condition).
+     Each checked against its old form in every D clock.
+  PROOF (12-16 together, rtl/sharc frozen as v3): the miter against 2b-rc at MAME_RND 1 and 0 --
+     the 33 programs and 341-343, negcond n0-n3, the 26 unsupported cases (26 / 26 at their
+     words) -- 0 differ, every clock count R1052's (MAME_RND 1: r1 2,589,533, r101 2,570,837,
+     r201 2,599,970, r306 2,499,985; r341-343 2,584,583 / 2,537,010 / 2,547,782); the bench checks
+     silent. tb_sharc_fp 4 x 25 M vectors per unit at both roundings, 0 mismatches (~18.7 k
+     products rounded up to a power of two a run). quartus_map --analyze_file: 0 errors.
+     (Planted faults, the replays and the manual lockstep: below.)
+  17. (SCSP, STPW -- the previous agent's, finished here) the slot-state RAM's write a clock late,
+     WITHOUT the bypass. The planted fault "the bypass dropped" was missed because the bypass is
+     never needed. Instrumented (the writer and the reader microinstruction of every pending read,
+     and the words' differing bits), the 1.45 M pending reads of a capture are all of five pairs:
+     (76, 78), (115, 117), (103, 105), (64, 66) -- a slot tail's CUR write and the word two later
+     -- and (39, 41), the sweep's StartSlot; every reader has no st / streg (st_ra then names row
+     CUR), and E takes no st_q from it. scsp_uasm.py's latencies: a row written by k is read by k+2
+     at the earliest (k+3 after an EG, which writes in its second clock), and the pending clock is
+     exactly F(k+2) / F(k+3); the checker now enforces that the word there reads no row it was
+     written (an STPW rule on every path it checks, plus the sweep both ways, word 5 and the
+     monitor call, sw's SWINC taken into account -- planted k+2 and EG k+3 reads are flagged,
+     another slot's and k+3 are not). A hold re-reads the same word (the only held word with a
+     row, the FETCHED wait's STREG, follows no write); a call's first word is two clocks after its
+     window. So the read is the plain template (st_q <= st[st_ra]) with no select after the RAM,
+     and g_stpw_chk (simulation) fails on any pending read whose value E takes.
+  18. (SCSP, CWQ) cw_en (op_busy && !op_rd && oc == 1 && o_com_r) made a clock ahead into a
+     register: it is high exactly the clock after the common-register write's oc 0 -> 1 step,
+     which keeps op_busy / op_rd / o_addr. (s5312: op_rd -> cw_en (24 loads) -> the timers' arm /
+     expiry -> go -> SCIPD -> the IRQ level -> lines, -0.531 at 100C.) Checked every clock.
+  19. (SCSP DSP, PKE) PACK's exponent registered every clock and taken at ph 3 from the register:
+     ph 3 always follows ph 2 by one clock, and neither ACC (ph 4, a run's start) nor SHFT (the
+     step's microword) moves between them. (s5306: acc -> the clamp -> the priority -> pk_e ->
+     mul_b, -0.115 at 100C.) Checked at every ph 3.
+  PROOF (17-19): tb_m2_scsp on scsp_randcap's four captures, old (2b-rt2 HEAD) against new (STPW
+     1, CWQ 1, FDUE 1), every output every clock: 65.4 M / 67.2 M / 64.3 M / 63.9 M cycles, 0
+     differing, the reference's samples all right, 1.32-1.45 M pending reads a capture (all but
+     ~40 a different word from the RAM's), none taken; CWQ's check silent. m2_scsp_dsp old
+     against new (PKE 1) under tb_m2_scsp_dsp's random programs (DSP_RANDOM 200, seeds 1-3):
+     243.6 M / 298.2 M / 274.2 M cycles, 0 differing, the ph 3 check silent.
+  20. (SHARC, v4) XC.acc_wd's ureg sources selected one-hot from the opcode's fields: the group
+     and the register of the system / PX reads for each form's own field positions (010: op[30:27]
+     / op[26:23]; 0111: op[43:40] / op[39:36]; the bit op: 7 / op[35:32]; else op[39:36] /
+     op[35:32]), an AND-OR over the registers; and wd_sel from the opcode's bits, not the
+     handler's case. (s5306: pm2 -> the form's compare (Equal3) -> ur_sel -> the system
+     registers' select (Mux24, 29 loads) -> acc_wd -0.894 at -40C.) Checked against R1044's
+     AND-OR and wd_sel against the handler's in every D clock.
+  21. (SHARC sharc_fadd, the manual's rounding) raw_inf -- is_inf of the result's bits, after the
+     near path's shift -- from the operands' test and the far path's range test: an infinite
+     operand's result is infinite; the near path's never is (exponent ex - lz, lz bounded at
+     ex - 1, ex <= 254 for finite operands; with a NaN operand the finish takes w_nan and reads
+     none of the tests); the far path's exactly when ov255 (the manual's FAVG: ov256). (s5316:
+     v_n -> the shift -> raw_c -> is_inf -> raw_inf -0.178 at -40C.) Checked against is_inf(raw)
+     every clock where the finish reads it.
+  22. (m2_wr_arb, RCF = B2) s5316's clk_sys failures at 100C were mostly here -- last[1] ->
+     pick_r[2] -0.562, ten paths under -0.3 -- and the full path shows why: Quartus 17 built
+     `(int'(last) + k) % N` as a divider (Mod1|divider: two carry chains and a stage select, 12.9
+     ns for a function of eight bits). With RCF the order is a constant for each value of last
+     (a mux of eight fixed priority encoders). Old against new (both in one bench, the same
+     random requests and acknowledges, every output and the internal pick / any every clock):
+     3 x 20 M cycles, 0 differing, all 160 reachable (last, want) pairs seen.
+  PROOF (v4 = 12-16 + 20 + 21): the miter at MAME_RND 1 and 0 as for v3, 0 differ, the same clock
+     counts; tb_sharc_fp 4 x 25 M at both roundings, 0 mismatches. THE REPLAYS (MAME rounding, PXIM
+     0, SKLR 0) on v4: DOA 150 s 1,264,270,732 clocks (2.5196 a word), fvipers 500 M words
+     1,277,257,981 (2.5545), schamp 1,279,552,477 (2.5591) -- R1052's to the clock; out FIFOs and
+     the MAME traces (30 M / 20 M / 20 M words) 0 differ; under the miter 200 M words of each, 0
+     differ. THE MANUAL ROUNDING (SH_MAME_RND 0) on DOA's whole capture in lockstep with v1 MAN:
+     501,777,265 words, 0 differ, 1,264,264,337 clocks, 10,280,834 out words differ from MAME's
+     (R1048's figure).
+  PLANTED (v3 / v4; the new bench checks taken out of the planted copy unless said, so the miter or
+     an older check must see it): pm_t3 by !d_pg (r1, g_dma_check: port B 1d49, the select's
+     1d46); pm_oe's 6-bit offset dropped (r1, g_dma_check); port 0 taken from port 1 in the
+     immediate shifts (CAUGHT on r341 -- v1's lockstep, 1 word differs -- and MISSED on r1-6 /
+     101-103, where op[22] is clear and port 1 names Rx: the case is reached only by the new
+     programs); rn_we's immediate-shift compare made op[11:8]'s (r1, the miter: dbg_st new 6 old
+     2); lceq's le = 0 branch inverted (r1, g_stk_check's fix_on); gl1's no-pop select inverted
+     (r301, g_stk_check's access kind); lc_le as !sf_c1 (r201, g_stk_check's fix_on); the
+     store data's register field of 0111 from op[35:32] (r1, the miter: fout_data); the fadd's
+     FAVG range test as ov255 (9,363 / 4 M) and its infinite-operand term dropped (303,181 / 4 M).
+     MISSED, and why: (a) wd_sel 1's DO-from-ureg term dropped -- NO PROGRAM HAD THE FORM (op 0x0d,
+     LCNTR = ureg, DO): every random DO took an immediate count. m2b_randprog.py gained
+     M2B_RP_DOU (USTAT1 / USTAT2 = 2 / 3 at the start -- nothing else writes them -- and the DOs
+     whose count was drawn at random take LCNTR from one of them half the time; the one-pass DOs
+     keep their immediate, a first cut that also converted them overflowed the loop stack: U_STK
+     at r351's word 20674). Seeds 351-353 (84 such DOs in r351): the v4 miter at both roundings,
+     0 differ (MAME_RND 1: 2,167,325 / 2,500,160 / 2,999,144 clocks). The planted fault is CAUGHT on r351 (the
+     miter: fout_data new 80000000 old 00000002). (b) the unsupported flag's
+     no-pop condition select inverted (c0x1): it differs only for a word at a loop end that does
+     not pop, with an unsupported reason that depends on its condition and a condition on LCE --
+     no program or case had one (MISSED with the le-last check left in too). m2b_unsupprog.py gained
+     the two cases: IF LCE / IF NOT LCE (a fixed multiply, U_COMP) as a two-pass loop's last word --
+     the core flags the first in its second (popping) pass and the second in its first, so the
+     miter sees which pass is flagged. v4: 28 / 28 at their words (the 26 and the two). The planted
+     fault is then CAUGHT on the first (R1028's unsupported-flag check: 1 / 0 in the first pass).
+  AREA (the SHARC mapped alone, sharea.sh: ALMs needed / LUTs / registers): ae975ed8 (HEAD) 4,192
+     / 6,348 / 1,906; v3 4,248 / 6,402 / 1,906; v4 4,236 / 6,385 / 1,906 (v4's one-hot store data
+     is smaller than the ur_sel form it replaces).
+  PROOF (17-19, the SCSP's planted faults; 2B lint): the write enable a clock early (14.4 M of 15.2 M
+     cycles differ); the EG's write address dropped (68.0 M); CWQ without !op_rd (54.4 M, its check
+     taken out). The write TWO clocks late: 0 differ -- the microcode's earliest real read of a
+     written row is later than k+3 too, so a second clock of delay is not visible either; not a
+     fault in the change. DSP PKE: the exponent from two clocks back (7.4 M of 273 M cycles
+     differ: ph 1's is not ph 3's, so the one-clock claim is exact) and the exponent plus one (49.1
+     M). The arbiter: the order forced for one (last, want) pair, 2.1 M of 20 M cycles differ.
+     make lint_top LINT_DEFS=-DM2_2B: clean. quartus_map --analyze_file on every changed file: 0
+     errors.
+  COMMITS: 48be567f (SCSP: STPW, CWQ, DSP_PKE), 0a5b90ea (the arbiter, RCF), f306bb90 (SHARC v4: 12-16,
+     20, 21; m2b_randprog ISH22 / DOU, m2b_unsupprog's two loop-end cases).
+  THE GATE, AGAIN: s5317 / s5318 / s5319 (ae975ed8) died in STA / TDC within minutes of their fits
+     with none of my jobs running (swap 11-12 GB in use throughout), and the release fit s5408 at
+     03:35 the same; the coordinator stopped both lanes at 03:36 and handed me the idle machine
+     until my head is ready (gate.sh then returns on an idle machine too -- gate_idle, swapped in
+     by a rename, the old gate restored when the lanes restart).

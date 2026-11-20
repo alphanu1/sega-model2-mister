@@ -10,7 +10,8 @@
 // round toward zero under `trunc` (MODE1.TRUNC) where an overflow gives the largest finite
 // (MV / MVS either way). It has no slow path: `busy` is 0.
 // CHANGED (R1052, MAME_RND 0 only): stage 2's rounding carry tested beside the increment, not
-// taken from its top bit (the same result in every case; see g_man).
+// taken from its top bit, and the round-up choosing after the increments, not feeding one (the
+// same result in every case; see g_man).
 //
 // His description of the MAME unit:
 // Float multiply in two stages, bit-exact to sharc_fp_pkg::f_mul (the multiplier flushes
@@ -210,20 +211,33 @@ assign unused_m = restart ^ valid;
 // sum is exactly 2^24, so the mantissa field is 0 whether or not it is shifted: the field is the
 // low 23 bits of the increment, with no shift and no select. The exponent's two values are made from
 // v_esum beside it and the carry chooses.
+// R1052 (later): the rounding's decision no longer feeds the increment. Both fields -- the
+// truncated one and the one plus one -- are made from v_p for each position of the product's top
+// bit (four values, the increments straight from the register), and the round-up and the top bit
+// choose after them; the round-up of each position from its own guard / sticky bits. The carry
+// (only without the top bit, as above) is that position's round-up and its 24 bits all ones, and
+// there the round-up needs no sticky bit (below) (s5312: v_p[5] -> the sticky OR -> up -> ei ->
+// ovf -> r -> rf_wd -> the R file's MLAB, -0.856 at slow 100C). The same fields, exponent and
+// tests as up / s / mf above.
 always_comb begin
-    logic [26:0] s;
+    logic [22:0] mf, mt1, mt0, mi1, mi0;
     logic [7:0]  e;
-    logic [22:0] mf;
-    logic        up, cy, ei, tiny, ovf;
+    logic        up1, up0, ei, tiny, ovf;
     logic [31:0] res;
     // the exponent of the product, unbounded: esum - 127 (+1 when the product's top bit is set or
     // the rounding carries -- never both); its tests from stage 1
-    if (v_p[47]) s = {v_p[47:22], v_p[21:0] != 0};
-    else         s = {v_p[46:21], v_p[20:0] != 0};
-    up = !v_trunc && s[2] && (s[1] || s[0] || s[3]);
-    cy = up && (&s[26:3]);
-    mf = s[25:3] + {22'h0, up};
-    ei = v_p[47] || cy;
+    // (top bit set: s = {v_p[47:22], |v_p[21:0]}; clear: s = {v_p[46:21], |v_p[20:0]}; up is
+    // !trunc && s[2] && (s[1] || s[0] || s[3]), the field s[25:3] + up)
+    up1 = !v_trunc && v_p[23] && (v_p[22] || (v_p[21:0] != 0) || v_p[24]);
+    up0 = !v_trunc && v_p[22] && (v_p[21] || (v_p[20:0] != 0) || v_p[23]);
+    mt1 = v_p[46:24]; mi1 = v_p[46:24] + 23'd1;
+    mt0 = v_p[45:23]; mi0 = v_p[45:23] + 23'd1;
+    mf = v_p[47] ? (up1 ? mi1 : mt1) : (up0 ? mi0 : mt0);
+    // the carry, top bit clear: s[26:3] = v_p[46:23] all ones and up0; with the top bit set ei is 1.
+    // Where v_p[46:23] is all ones, v_p[23] (s[3]) is set, so up0 is !trunc && v_p[22]: the carry
+    // needs no sticky bit, and the exponent / range selects are off the sticky OR (s5312's path: the
+    // sticky -> up -> ei -> ovf (33 loads) -> r)
+    ei = v_p[47] || (!v_trunc && v_p[22] && (&v_p[46:23]));
     e = ei ? 8'(v_esum[7:0] - 8'd126) : 8'(v_esum[7:0] - 8'd127);
     tiny = v_tiny[ei];
     ovf  = v_ovf[ei];

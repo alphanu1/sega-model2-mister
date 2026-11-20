@@ -1961,7 +1961,7 @@ wire wr_ack_tgp = wa_own_ack[2];
 wire wr_ack_geo = wa_own_ack[3];
 wire wr_ack_ldr = wa_own_ack[4];
 
-m2_wr_arb #(.N(5), .AW(SDR_AW)) u_wr_arb (
+m2_wr_arb #(.N(5), .AW(SDR_AW), .RCF(B2)) u_wr_arb (   // R1052: RCF on the 2B build
 	.clk(clk_sys), .rst_n(mem_rst_n),
 	.req(wa_own_req), .addr(wa_own_addr), .din(wa_own_din), .ack(wa_own_ack),
 	.s_req(wa_req), .s_addr(wa_addr), .s_din(wa_din), .s_ack(ldr_wr_ack)

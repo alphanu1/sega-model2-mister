@@ -64,7 +64,14 @@ module m2_scsp_dsp #(
   // queue goes out in order, and a cache fill waits until it is empty -- so a
   // read still sees every earlier write and no later one, as before. The port
   // time stays (one SDRAM transaction a write) but runs under the steps.
-  parameter bit WPOST = 1'b0
+  parameter bit WPOST = 1'b0,
+  // R1052: PACK's exponent (pk_e, the leading sign bits of SHIFTED) registered every clock and
+  // taken from the register at ph 3: ph 3 follows ph 2 on the next clock, and neither ACC (written
+  // in ph 4 and at a run's start) nor the microword's SHFT (held through the step) moves between
+  // them, so the register holds ph 3's own value. The multiplier's operand (1 << e) and the packed
+  // word's exponent then start at a flop (s5306: acc -> the clamp -> the priority -> pk_e -> mul_b
+  // -0.115 at slow 100C). (2B.)
+  parameter bit PKE = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -361,6 +368,20 @@ module m2_scsp_dsp #(
     pk_e = 4'd12;
     for (int i = 11; i >= 0; i--) if (t[23 - i]) pk_e = 4'(i);
   end
+  // (R1052 PKE: the clock before's, which at ph 3 is the same -- see the parameter; the benches
+  // check it at every ph 3)
+  logic [3:0] pk_e_x;
+  generate if (PKE) begin : g_pke
+    logic [3:0] pk_e_q;
+    always_ff @(posedge clk) pk_e_q <= pk_e;
+    assign pk_e_x = pk_e_q;
+`ifdef VERILATOR
+    always_ff @(posedge clk) if (rst_n && dst == D_RUN && ph == 3'd3 && pk_e_q != pk_e)
+      $fatal(1, "m2_scsp_dsp PKE: ph 3's exponent %0d, the clock before's %0d", pk_e, pk_e_q);
+`endif
+  end else begin : g_pkn
+    assign pk_e_x = pk_e;
+  end endgenerate
 
   // ------------------------------------------------------------------ memory
   logic        lk_req, lk_hit, fill_req, fill_done;
@@ -442,7 +463,7 @@ module m2_scsp_dsp #(
       endcase
     end else if (pk_go) begin
       mul_a <= {shifted[23], shifted};
-      mul_b <= $signed(13'(1) << ((pk_e == 4'd12) ? 4'd11 : pk_e));
+      mul_b <= $signed(13'(1) << ((pk_e_x == 4'd12) ? 4'd11 : pk_e_x));
     end else if (up_go) begin
       mul_a <= {up_u[23], up_u};
       mul_b <= $signed(13'(1) << up_sh);
@@ -569,7 +590,7 @@ module m2_scsp_dsp #(
             end
             3'd3: begin
               ph <= 3'd4;
-              if (pk_go) begin pk_s <= shifted[23]; pk_e_r <= pk_e; end
+              if (pk_go) begin pk_s <= shifted[23]; pk_e_r <= pk_e_x; end
             end
             3'd4: begin
 `ifdef SCSP_DEBUG
