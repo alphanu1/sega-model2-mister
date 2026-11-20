@@ -517,13 +517,19 @@ logic [31:0] d_sum_i, d_sum_o;              // R1048: the 32-bit offset's sum an
 logic        d_s3;
 logic        d_bad_x;                       // (the benches': D's bad)
 logic        d_rmwe_ref;                    // (the benches': R1042's rm_we)
+logic        d_rnwe_ref;                    // (the benches': rn_we as it was before R1052)
+logic        d_fixon_ref, d_mbg_ref, d_accg_ref, d_accg_new;   // (the benches': R1052's le-last gates as they were)
+logic        d_unsx_ref;                    // (... and the unsupported flag; its reason d_why_ref2)
+logic [1:0]  d_wsel_x, d_wsel_ref;          // R1052: wd_sel from the opcode's bits (the benches compare with the handler's)
+logic [3:0]  d_why_ref2;
 logic        d_wrf, d_wrf_ref, d_memf_x;    // R1048: the access's direction from the opcode; the benches' mem_wr / mem_f
 logic        d_memf;                        // R1048: mem_f from op[47:42]
 logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three indexes; the benches' lnz[pmi]
 logic        d_l1, d_cok1t, d_cok1f;        // R1048: l1 (the popped LCE), cok after the pop at l1 = 1 / 0
 // R1048: the access kind's and the map test's gate with the loop end's pop chosen in it (done,
 // l1: early beside the sums), so the sums' bits pass one gate after acc_bits, not two
-(* keep *) logic       d_ag1, d_ag0, d_mbg;   // R1050: the kind's gate for each outcome of the pop, bad2 in it
+(* keep *) logic       d_mbg;                 // R1050: the map test's gate, bad2 in it
+logic                  d_ag1, d_ag0;          // R1050: the kind's gate for each outcome of the pop (R1052: the benches')
 logic        d_compf, d_compf_x;            // R1048: comp_f from the opcode's bits; the benches' comp_f
 logic [12:0] d_fix_ref;                     // (the benches': the handler's fix_on / fix_wr / fix_k)
 logic [7:0]  d_fixop_h;                     // (the benches': the handler's fix_op)
@@ -619,6 +625,7 @@ always_comb begin
     logic [3:0]  rnn;
     logic        lce_ne1;
     logic        le, le_cnt, le_long, done;
+    logic        dn_le, lc_le, lceq;            // R1052: done if the loop end is here; LCE's input then if no pop; LCE's input
     logic [2:0]  lstkp1;
     logic        lz1, pz1, l71;
     logic [5:0]  pcstkp1;
@@ -673,6 +680,13 @@ always_comb begin
         done = le_long ? dl : ds;
     end
     if (le && !le_cnt && !le_long) d_need_astat |= cond_astat(S.la_code);
+    // R1052: the loop end's compare (le: S.daddr == S.la_addr, 24 bits) chosen last in the access
+    // gate, the map test and the fixed ALU's enable: what they need of the loop end for le = 1
+    // (dn_le, and LCE's input lc_le where it does not pop) and for le = 0 (no pop, LCE's input
+    // !sf_c1) made beside the compare (s5316: S.la_addr -> le -> LCE -> the condition -> the gate
+    // -> XC.acc -0.685 at slow -40C; s5305: S.daddr, the same, -0.418)
+    dn_le = done;
+    lc_le = le_cnt ? !sf_c2 : !sf_c1;
     done = le && done;
     // the sequencer after the loop end, as far as D needs it (the stack checks, the ureg read, LCE)
     lstkp1 = S.lstkp - {2'b00, done};
@@ -739,6 +753,8 @@ always_comb begin
         // (R1048: and the popped outcome's for each value of l1 -- the LCE after the pop, an MLAB
         // read at S.lstkp's neighbour -- which chooses after them)
         d_l1 = l1;
+        // (R1052: LCE's input to the word's condition -- l1 after a pop, l0 otherwise -- with le last)
+        lceq = le ? (dn_le ? l1 : lc_le) : !sf_c1;
         d_cok1t = isf ? fv : (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, 1'b1, op[35:31]) : if_cond(astat, 4'h0, alusat, 1'b1, cond);
         d_cok1f = isf ? fv : (op[47:44] == 4'b0111) ? if_cond(astat, 4'h0, alusat, 1'b0, op[35:31]) : if_cond(astat, 4'h0, alusat, 1'b0, cond);
         d_cok_ref = done ? ((op[47:44] == 4'b0111) ? if_cond(astat, flg, alusat, l1, op[35:31]) : if_cond(astat, flg, alusat, l1, cond))
@@ -1091,7 +1107,17 @@ always_comb begin
                (op[47:46] == 2'b11) ? !d_cok0 :
                (op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101) ? (ee_ ? !d_cok0 : d_cok0) : d_cok0;
         d_fix_ref = {x.fix_on, x.fix_wr, x.fix_k}; d_compf_x = comp_f;
-        x.fix_on = done ? (fb && con1) : (fb && con0);
+        // (R1052: con1 / con0 are one gating of d_cok1 / d_cok0, which are the condition at LCE's
+        // input l1 / l0: so the enable is that gating of d_cok1t / d_cok1f, lceq -- le last -- choosing)
+        begin
+            logic cont, conf;
+            cont = (op[47:45] == 3'b001) ? 1'b1 : (op[47:46] == 2'b11) ? !d_cok1t :
+                   (op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101) ? (ee_ ? !d_cok1t : d_cok1t) : d_cok1t;
+            conf = (op[47:45] == 3'b001) ? 1'b1 : (op[47:46] == 2'b11) ? !d_cok1f :
+                   (op[47:41] == 7'b0000100 || op[47:41] == 7'b0000101) ? (ee_ ? !d_cok1f : d_cok1f) : d_cok1f;
+            d_fixon_ref = done ? (fb && con1) : (fb && con0);
+            x.fix_on = fb && (lceq ? cont : conf);
+        end
         x.fix_k = {11{fb}} & fix_k_of(cp);
         x.fix_wr = fb && cp != 8'h0a;
     end
@@ -1124,13 +1150,38 @@ always_comb begin
         w1 = wd_sel == 2'd1; gr = ur_sel[7:4];
         // R1044: everything but the sequencer's source first (d_accwd_b, kept as a node), the
         // loop end's pop (done, the late one) choosing that source in the last gate
-        d_accwd_b = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
-                   ({32{w1 && gr == 4'h1}} & iu_rd) |
-                   ({32{w1 && gr == 4'h2}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
-                   ({32{w1 && gr == 4'h7}} & sys_rd(ur_sel[3:0], astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg)) |
-                   ({32{w1 && gr == 4'hd}} & ((ur_sel[3:0] == 4'hb) ? px[31:0] : (ur_sel[3:0] == 4'hc) ? {16'h0, px[15:0]} :
-                                               (ur_sel[3:0] == 4'hd) ? px[47:16] : 32'h0)) |
-                   ({32{wd_sel == 2'd2}} & op[31:0]);
+        // R1052: the selects from the opcode's fields directly, each form's own -- the group and
+        // the register of the system / PX reads one-hot, an AND-OR over the registers, not the
+        // ureg field's select (ur_sel) and then a decode of it in front of a 16-way mux; and the
+        // form's data select (wd_sel) from the opcode's bits, not the handler's case (s5306: pm2
+        // -> the form's compare -> ur_sel -> the system registers' select -> acc_wd -0.894 at
+        // -40C). The same value: g_accwd_check (the select's form against the old in every D clock)
+        begin
+            logic        fa, fb, fc, w1x, w2x, w0x;
+            logic [15:0] gq;                     // gq[g]: the ureg's group is g
+            logic [15:0] iq;                     // iq[r]: its register is r
+            logic [31:0] sv, pv;
+            fa = op[47:45] == 3'b010; fb = op[47:44] == 4'b0111; fc = op[47:40] == 8'b00010100;
+            for (int k = 0; k < 16; k++) begin
+                gq[k] = fa ? op[30:27] == 4'(k) : fb ? op[43:40] == 4'(k) : fc ? k == 7 : op[39:36] == 4'(k);
+                iq[k] = fa ? op[26:23] == 4'(k) : fb ? op[39:36] == 4'(k) : op[35:32] == 4'(k);
+            end
+            // wd_sel 1: 010 storing, 0111, DO UNTIL with LCNTR from a ureg, 000100 / 101 storing, the bit op
+            w1x = (fa && op[31]) || fb || op[47:40] == 8'b00001101 || ((op[47:42] == 6'b000100 || op[47:45] == 3'b101) && op[40]) || fc;
+            // wd_sel 2: immediate -> ureg, immediate data -> DM|PM
+            w2x = op[47:40] == 8'b00001111 || op[47:44] == 4'b1001;
+            w0x = !w1x && !w2x;
+            d_wsel_x = {w2x, w1x}; d_wsel_ref = wd_sel;
+            sv = 32'h0;
+            for (int k = 0; k < 16; k++)
+                sv |= {32{gq[7] && iq[k]}} & sys_rd(4'(k), astat, mode1, mode2, stky_rd, irptl, imask, ustat1, ustat2, flg);
+            pv = ({32{gq[13] && iq[11]}} & px[31:0]) | ({32{gq[13] && iq[12]}} & {16'h0, px[15:0]}) | ({32{gq[13] && iq[13]}} & px[47:16]);
+            d_accwd_b = ({32{w0x || (w1x && gq[0])}} & rf_rd[4]) |
+                       ({32{w1x && gq[1]}} & iu_rd) |
+                       ({32{w1x && gq[2]}} & (ur_sel[3] ? {{8{mu_rd[23]}}, mu_rd[23:0]} : mu_rd)) |
+                       ({32{w1x}} & (sv | pv)) |
+                       ({32{w2x}} & op[31:0]);
+        end
         x.acc_wd = d_accwd_b | ({32{w1 && gr == 4'h6}} & (done ? d_ursq1 : d_ursq0));
         d_accwd_chk = ({32{wd_sel == 2'd0 || (w1 && gr == 4'h0)}} & rf_rd[4]) |
                    ({32{w1 && gr == 4'h1}} & iu_rd) |
@@ -1190,8 +1241,19 @@ always_comb begin
             end
             // the fixed / shifter result lands after X (R1029), after the word's load: a load or ureg
             // move to its register wins (MAME's order), as for a float result
-            x.rn_we = !(kv && k == x.rn);
-            if ((t1p && op[26:23] == x.rn) || (t1d && op[36:33] == x.rn)) x.rn_we = 1'b0;
+            d_rnwe_ref = !(kv && k == x.rn) && !((t1p && op[26:23] == x.rn) || (t1d && op[36:33] == x.rn));
+            // R1052: Rn's two places compared apart -- the immediate shifts' op[7:4], every other
+            // fixed / shifter form's op[11:8] -- and the form choosing last, so the compute field's
+            // decode (x.rn is set inside it) is off the enable (s5312: pm2 -> XC.rn_we -0.912 at slow
+            // -40C). The same enable wherever it is read (the fixed ALU's or the shifter's result:
+            // fix_on && fix_wr, or sh_on -- g_rnwe_check); elsewhere x.rn is 0 and the enable unread
+            begin
+                logic ishf, wn, wi;
+                ishf = op[47:44] == 4'b1000 || op[47:40] == 8'b00000010;
+                wn = !(kv && k == op[11:8]) && !((t1p && op[26:23] == op[11:8]) || (t1d && op[36:33] == op[11:8]));
+                wi = !(kv && k == op[7:4]) && !((t1p && op[26:23] == op[7:4]) || (t1d && op[36:33] == op[7:4]));
+                x.rn_we = ishf ? wi : wn;
+            end
             // the PM load, unless the DM load is to the same register (DM's precedence)
             x.ld2_r = t1p && !(t1d && op[36:33] == op[26:23]);
             x.ld2_dst = op[26:23];
@@ -1249,7 +1311,9 @@ always_comb begin
             e1t = (op[47:46] == 2'b11) ? !d_cok1t : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1t : 1'b1;
             e1f = (op[47:46] == 2'b11) ? !d_cok1f : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1f : 1'b1;
             e0 = (op[47:46] == 2'b11) ? !d_cok0 : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok0 : 1'b1;
-            d_mbg = d_memf && (done ? (d_l1 ? e1t : e1f) : e0);
+            // (R1052: e0 is e1t / e1f at LCE's input l0, so the gate is lceq's -- le last)
+            d_mbg_ref = d_memf && (done ? (d_l1 ? e1t : e1f) : e0);
+            d_mbg = d_memf && (lceq ? e1t : e1f);
             mbad = ((d_s3 ? d_kb_i[3] : d_kb_o[3]) && d_mbg) || bad2;
         end
     end
@@ -1362,7 +1426,17 @@ always_comb begin
                 // bad2 go in the gates, early beside the kind bits)
                 d_ag1 = (d_l1 ? g1t : g1f) && !bad2;
                 d_ag0 = g0 && !bad2;
-                x.acc = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{done ? d_ag1 : d_ag0}};
+                // R1052: the gate for le = 1 and for le = 0 (no pop: LCE's input !sf_c1, so g0 is
+                // g0t / g0f by it), le -- the 24-bit compare -- choosing in the last gate
+                begin
+                    logic g0t, g0f, gl1, gl0;
+                    g0t = d_memf && !d_rzb && e1t; g0f = d_memf && !d_rzb && e1f;
+                    gl1 = (dn_le ? (d_l1 ? g1t : g1f) : (lc_le ? g0t : g0f)) && !bad2;
+                    gl0 = (!sf_c1 ? g0t : g0f) && !bad2;
+                    d_accg_ref = done ? d_ag1 : d_ag0;
+                    d_accg_new = le ? gl1 : gl0;
+                    x.acc = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{le ? gl1 : gl0}};
+                end
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
@@ -1462,8 +1536,27 @@ always_comb begin
             u1a[dd] = u1; u0a[dd] = u0; w1a[dd] = w1; w0a[dd] = w0;
         end
         // (an address outside the map, mbad, is XC.mbad: X ORs it in, x_uns -- off this path)
-        d_unsup_x = (done ? (d_cok1 ? u1a[1] : u0a[1]) : (d_cok0 ? u1a[0] : u0a[0])) || dag;
-        d_why_x = done ? (d_cok1 ? w1a[1] : w0a[1]) : (d_cok0 ? w1a[0] : w0a[0]);
+        d_unsx_ref = (done ? (d_cok1 ? u1a[1] : u0a[1]) : (d_cok0 ? u1a[0] : u0a[0])) || dag;
+        d_why_ref2 = done ? (d_cok1 ? w1a[1] : w0a[1]) : (d_cok0 ? w1a[0] : w0a[0]);
+        // R1052: le last here too. d_cok1 / d_cok0 are the condition at LCE's input l1 / l0
+        // (d_cok1t / d_cok1f, l choosing), and dag is its form's gating of the word's condition
+        // (lceq choosing between the gatings of d_cok1t / d_cok1f); for le = 0 there is no pop and
+        // l0 is !sf_c1, for le = 1 the pop is dn_le and l0 lc_le
+        begin
+            logic dgt, dgf, c1x, c0x1, c0x0, ul1, ul0;
+            logic [3:0] wl1, wl0;
+            dgt = dag_f && ((op[47:46] == 2'b11) ? !d_cok1t : (op[47:39] == 9'b000101100 || op[47:44] == 4'b1001 || t1) ? 1'b1 : d_cok1t);
+            dgf = dag_f && ((op[47:46] == 2'b11) ? !d_cok1f : (op[47:39] == 9'b000101100 || op[47:44] == 4'b1001 || t1) ? 1'b1 : d_cok1f);
+            c1x = d_l1 ? d_cok1t : d_cok1f;                 // (d_cok1)
+            c0x1 = lc_le ? d_cok1t : d_cok1f;               // (d_cok0 where le)
+            c0x0 = !sf_c1 ? d_cok1t : d_cok1f;              // (d_cok0 where not)
+            ul1 = dn_le ? ((c1x ? u1a[1] : u0a[1]) || (d_l1 ? dgt : dgf)) : ((c0x1 ? u1a[0] : u0a[0]) || (lc_le ? dgt : dgf));
+            ul0 = (c0x0 ? u1a[0] : u0a[0]) || (!sf_c1 ? dgt : dgf);
+            wl1 = dn_le ? (c1x ? w1a[1] : w0a[1]) : (c0x1 ? w1a[0] : w0a[0]);
+            wl0 = c0x0 ? w1a[0] : w0a[0];
+            d_unsup_x = le ? ul1 : ul0;
+            d_why_x = le ? wl1 : wl0;
+        end
     end
 
     // the decisions X's first clock makes the sequencer from
@@ -1762,7 +1855,12 @@ always_comb begin
     rx = ish ? o[3:0] : o[7:4];
     rnn = ish ? o[7:4] : o[11:8];
     rf_ra[0] = mf ? {2'b00, o[7:6]} : rx;
-    rf_ra[1] = mf ? {2'b01, o[5:4]} : o[3:0];
+    // R1052: port 1's address on o[22] alone, not mf (o[22] && !ish): the immediate shifts read no
+    // port 1 (their forms set d_ru[0] / d_ru[2] only, and their shifter value is the immediate),
+    // so for them the port's word is never taken -- and the 12-bit form decode is off the R file's
+    // read address (s5311: pm2 -> ish -> rf_ra[1] -> g_rf[1] -> the shifter's precompute -> sh_pdj
+    // -0.207 at slow -40C)
+    rf_ra[1] = o[22] ? {2'b01, o[5:4]} : o[3:0];
     rf_ra[2] = mf ? {2'b10, o[3:2]} : rnn;
     rf_ra[3] = {2'b11, o[1:0]};
     // a store's dreg (op[26:23]) or the ureg D names (ur_sel)
@@ -2441,6 +2539,8 @@ logic             dm_dsel;
 // index and 0; the host's / the clear's write (pm_host) chooses after the adder, as before
 (* keep *) logic [PM_AW-1:0] pm_ia [3], pm_ob [3];
 logic [PM_AW-1:0] pm_cs [3], pm_xa;
+(* keep *) logic             pm_s1, pm_s3, pm_s4, pm_t1, pm_t3;   // R1052: the operands' selects, early
+(* keep *) logic [PM_AW-1:0] pm_oe;                                // R1052: everything but the MLAB reads
 always_comb begin
     logic [47:0] o;
     logic        s1, s2, s3, sd, t1;
@@ -2456,14 +2556,26 @@ always_comb begin
     // -- a PM-bus store is never type 1's first pass, whose access is the DM move's (dm_kind:
     // never A_PM) -- so x_done stays off the address; the bench check below compares every clock)
     pm_xa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
+    // R1052: the MLAB reads (I in D on i1 / i3 / i4, M on m1 / m3) each one AND-OR from its read to
+    // the adder, the selects made from the opcode beside the reads; everything that is not a read
+    // -- the 6-bit / 32-bit offsets in D and, outside D or for the host, the whole address --
+    // folded into one early term on the other operand (pm_oe). In D (not the host) the operands
+    // are the old ones; elsewhere the old ia (the host's, X's or the window's address) moves to
+    // ob and ia is 0: the same sum (s5308 / s5311: pm2 -> i4 -> the operand select -> the adder ->
+    // pm0's address -0.066 / -0.253)
+    begin
+        logic dn;
+        dn = !pm_host && st == ST_D;
+        pm_s1 = dn && !t1 && !sd && !d_pg; pm_s3 = dn && !t1 && !sd && d_pg; pm_s4 = dn && t1;
+        pm_t1 = dn && !t1 && s1 && !d_pg; pm_t3 = dn && !t1 && s1 && d_pg;
+        pm_oe = dn ? ((t1 || !(s2 || s3)) ? '0 : s2 ? PM_AW'(sext6(o[32:27])) : o[PM_AW-1:0])
+                   : pm_host ? pm_ha : (st == ST_X) ? pm_xa : pm_hidx;
+    end
     for (int k = 0; k < 3; k++) begin
         // (R1048: the host's / the clear's write -- registered since 4b0dc9e8, so pm_host is
         // early -- chooses in the operands too: its address and 0; the sum goes to the RAM)
-        pm_ia[k] = pm_host ? pm_ha :
-                   (st == ST_D) ? (t1 ? i4_rd[PM_AW-1:0] : ({PM_AW{!sd}} & (d_pg ? i3_rd[PM_AW-1:0] : i1_rd[PM_AW-1:0]))) :
-                   (st == ST_X) ? pm_xa : pm_hidx;
-        pm_ob[k] = ({PM_AW{!pm_host && st == ST_D && !t1 && s1 && !d_pg}} & m1_rd[PM_AW-1:0]) | ({PM_AW{!pm_host && st == ST_D && !t1 && s1 && d_pg}} & m3_rd[PM_AW-1:0]) |
-                   ({PM_AW{!pm_host && st == ST_D && !t1 && s2}} & PM_AW'(sext6(o[32:27]))) | ({PM_AW{!pm_host && st == ST_D && !t1 && s3}} & o[PM_AW-1:0]);
+        pm_ia[k] = ({PM_AW{pm_s1}} & i1_rd[PM_AW-1:0]) | ({PM_AW{pm_s3}} & i3_rd[PM_AW-1:0]) | ({PM_AW{pm_s4}} & i4_rd[PM_AW-1:0]);
+        pm_ob[k] = ({PM_AW{pm_t1}} & m1_rd[PM_AW-1:0]) | ({PM_AW{pm_t3}} & m3_rd[PM_AW-1:0]) | pm_oe;
         pm_cs[k] = pm_ia[k] + pm_ob[k];
         pm_wb[k] = pm_cs[k];
     end
@@ -2575,6 +2687,14 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
     always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
+    // R1052: rn_we wherever the landing reads it; the le-last gates every D clock
+    always_ff @(posedge clk) if (st == ST_D && (dx.fix_on != d_fixon_ref || d_mbg != d_mbg_ref || d_accg_new != d_accg_ref))
+        $fatal(1, "le last: fix_on %b / %b, the map gate %b / %b, the access gate %b / %b", dx.fix_on, d_fixon_ref, d_mbg, d_mbg_ref, d_accg_new, d_accg_ref);
+    always_ff @(posedge clk) if (st == ST_D && d_wsel_x != d_wsel_ref) $fatal(1, "wd_sel %0d, the handler's %0d", d_wsel_x, d_wsel_ref);
+    always_ff @(posedge clk) if (st == ST_D && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1044's AND-OR %h", dx.acc_wd, d_accwd_chk);
+    always_ff @(posedge clk) if (st == ST_D && (d_unsup_x != d_unsx_ref || d_why_x != d_why_ref2))
+        $fatal(1, "le last: unsupported %b / %b, reason %0d / %0d", d_unsup_x, d_unsx_ref, d_why_x, d_why_ref2);
+    always_ff @(posedge clk) if (st == ST_D && ((dx.fix_on && dx.fix_wr) || dx.sh_on) && dx.rn_we != d_rnwe_ref) $fatal(1, "rn_we %b, the old %b", dx.rn_we, d_rnwe_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
     always_ff @(posedge clk) if (st == ST_D && d_cbad_ref != d_cbad_x) $fatal(1, "cbad without its guard differs");

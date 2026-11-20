@@ -41,6 +41,14 @@ CASES = [   # (name, words before, the word, reason)
     ('IF LCE R1 = DM(I1, 2) at a one-pass loop\'s end in the first of an outer loop\'s two passes',
      [0x0f1100200000, (0x0c << 40) | (2 << 24) | 3, (0x0c << 40) | (1 << 24) | 1],
      (0b0110 << 44) | (1 << 41) | (0x0f << 33) | (2 << 27) | (1 << 23), 3),
+    # R1052: an unsupported compute (a fixed multiply) under an LCE condition as a counted loop's
+    # last word, in a pass that does not pop: the flag reads the condition at LCE's input for no
+    # pop (CURLCNTR != 2's), D's le-last outcome for le = 1 without the pop. LCE: flagged in the
+    # second (popping) pass; NOT LCE: in the first. The miter sees the pass it is flagged in.
+    ('IF LCE (fixed multiply) as a two-pass loop\'s last word (flagged in its second pass)',
+     [(0x0c << 40) | (2 << 24) | 3], (0x01 << 40) | (0x0f << 33) | (1 << 20) | (0x40 << 12), 2),
+    ('IF NOT LCE (fixed multiply) as a two-pass loop\'s last word (flagged in its first pass)',
+     [(0x0c << 40) | (2 << 24) | 3], (0x01 << 40) | (0x1f << 33) | (1 << 20) | (0x40 << 12), 2),
 ]
 # R1038: unsupported only in the 2B build's core (m2b_sharc PXIM 0: no PX, no IMASK); with
 # --pxim0 these are written too, and with PXIM 1 the same programs run (supported)

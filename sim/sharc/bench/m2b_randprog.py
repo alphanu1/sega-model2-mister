@@ -36,6 +36,14 @@ CURLM = os.environ.get('M2B_RP_CURLM') == '1'
 LE11 = os.environ.get('M2B_RP_LE11') == '1'
 # M2B_RP_ASTL=1 (R1048): some ureg loads from DM go to ASTAT (0x7c). Without it the programs as before.
 ASTL = os.environ.get('M2B_RP_ASTL') == '1'
+# M2B_RP_ISH22=1 (R1052): the immediate shifts (with and without a dreg <-> DM|PM move) also set op[22],
+# which the shift ignores (MAME's and v1's shift op is op[21:16]) -- the core's port-1 read address
+# then names R4-7 for them, a value no immediate shift takes. Without it the programs as before.
+ISH22 = os.environ.get('M2B_RP_ISH22') == '1'
+# M2B_RP_DOU=1 (R1052): USTAT1 / USTAT2 set to 2 / 3 at the start (nothing else writes them), and some
+# DO loops take LCNTR from one of them (op 0x0d: LCNTR = ureg, DO) in place of an immediate count of
+# 1-4 -- the ureg read form of DO, which no program had. Without it the programs as before.
+DOU = os.environ.get('M2B_RP_DOU') == '1'
 PM0 = 0x21d00                                         # block 0's data words (past the program)
 
 FIXED = [0x01, 0x05, 0x25, 0x29, 0x02, 0x06, 0x26, 0x2a, 0x0a, 0x21, 0x22, 0x30,
@@ -102,6 +110,9 @@ def main():
         emit((0x0f << 40) | ((0x28 + k) << 32) | (g.randrange(-3, 4) & 0xffffff))   # M8-15, 24 bits
     for k in range(16):
         emit((0x0f << 40) | (k << 32) | fval())
+    if DOU:
+        emit((0x0f << 40) | (0x70 << 32) | 2)
+        emit((0x0f << 40) | (0x71 << 32) | 3)
     if PM:                                             # I8-11 into block 0's data, I12-15 onto I0-3's
         for k in range(8):
             emit((0x0f << 40) | ((0x18 + k) << 32) | pm_anchor(k))
@@ -139,7 +150,8 @@ def main():
             sop = g.choice(SHIFT); data = g.randrange(-40, 40) & 0xfff if sop < 0x10 else g.getrandbits(12)
             u = rreg()
             emit((0b1000 << 44) | (i << 41) | (m << 38) | (cond() << 33) | (1 << 32) | (d << 31) | (u << 23) |
-                 (((data >> 8) & 15) << 27) | (sop << 16) | ((data & 0xff) << 8) | (rreg() << 4) | rreg())
+                 (((data >> 8) & 15) << 27) | (sop << 16) | ((data & 0xff) << 8) | (rreg() << 4) | rreg() |
+                 ((1 << 22) if ISH22 else 0))
         elif f == 3:                                   # ureg <-> PM, direct
             a = g.choice([PM0 + g.randrange(0x200), 0x30100 + g.randrange(0x800)])
             u = g.choice([g.randrange(16), g.randrange(16), 0x18 + g.randrange(8), 0x7c]) if d else \
@@ -160,6 +172,12 @@ def main():
     subs = []                                          # (index in prog of the CALL word, sub number)
     NSUB = 4
 
+    def do_w(cnt, off):
+        # a DO of cnt passes (an immediate), or under DOU sometimes of USTAT1's 2 / USTAT2's 3
+        if DOU and g.random() < 0.5:
+            return (0x0d << 40) | ((0x70 if g.getrandbits(1) else 0x71) << 32) | (off & 0xffffff)
+        return (0x0c << 40) | (cnt << 24) | (off & 0xffffff)
+
     def body(n):
         for _ in range(n):
             emit((0x02 << 39) | (0x1f << 33) | comp(False))
@@ -170,13 +188,13 @@ def main():
         pc0 = base + len(prog)
         if kind == 0:                                  # two loops, one inside the other
             a = g.randrange(0, 3); li = g.randrange(1, 4); b = g.randrange(1, 3)
-            emit((0x0c << 40) | (g.randrange(1, 4) << 24) | (a + 1 + li + b))
+            emit(do_w(g.randrange(1, 4), (a + 1 + li + b)))
             body(a)
-            emit((0x0c << 40) | (g.randrange(1, 4) << 24) | li)
+            emit(do_w(g.randrange(1, 4), li))
             body(li); body(b)
         elif kind == 1:                                # a conditional JUMP (LA) out of a loop
             L = g.randrange(2, 6); at = g.randrange(1, L)    # not the last word (kind 2's)
-            emit((0x0c << 40) | (g.randrange(1, 5) << 24) | L)
+            emit(do_w(g.randrange(1, 5), L))
             for k in range(1, L + 1):
                 if k == at:                            # to the word after the loop's last
                     emit((0x07 << 40) | (g.choice(CONDS_ASTAT + [0x1f]) << 33) | (1 << 38) | (L + 1 - k))
@@ -184,24 +202,24 @@ def main():
         elif kind == 2:                                # an outer loop round a loop whose last word aborts
             wrap = g.getrandbits(1)                    # (in a third loop: the second pop leaves one)
             li = g.randrange(1, 4)
-            if wrap: emit((0x0c << 40) | (g.randrange(1, 3) << 24) | (li + 5))
-            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | (li + 2))
-            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | li)
+            if wrap: emit(do_w(g.randrange(1, 3), (li + 5)))
+            emit(do_w(g.randrange(1, 3), (li + 2)))
+            emit(do_w(g.randrange(1, 3), li))
             body(li - 1)
             emit((0x07 << 40) | (g.choice(CONDS_ASTAT + [0x1f]) << 33) | (1 << 38) | 1)
             body(1); body(1)
             if wrap: body(1)
         elif kind == 4:                                # a loop's last word a DO (a pop, then a push)
             lx = g.randrange(1, 3); ly = g.randrange(1, 3)
-            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | (1 + lx + ly + 1))
+            emit(do_w(g.randrange(1, 3), (1 + lx + ly + 1)))
             emit((0x0c << 40) | (1 << 24) | lx)
             body(lx - 1)
-            emit((0x0c << 40) | (g.randrange(1, 3) << 24) | ly)
+            emit(do_w(g.randrange(1, 3), ly))
             body(ly); body(1)
         elif kind == 5:                                # five loops deep (the stack's lower words)
             d = 5
             for k in range(d):
-                emit((0x0c << 40) | (g.randrange(1, 4) << 24) | (2 * (d - k) - 1))
+                emit(do_w(g.randrange(1, 4), (2 * (d - k) - 1)))
                 if k == d - 1: body(1)
             for k in range(d):
                 body(1)
@@ -257,7 +275,7 @@ def main():
         elif r < 0.68:                                     # immediate shift
             sop = g.choice(SHIFT); data = g.randrange(-40, 40) & 0xfff if sop < 0x10 else g.getrandbits(12)
             emit((0b000000100 << 39) | (cond() << 33) | (((data >> 8) & 15) << 27) | (sop << 16) |
-                 ((data & 0xff) << 8) | (rreg() << 4) | rreg())
+                 ((data & 0xff) << 8) | (rreg() << 4) | rreg() | ((1 << 22) if ISH22 else 0))
         elif r < 0.72:                                     # compute, modify
             emit((0b000001000 << 39) | (cond() << 33) | (0 << 38) | (g.randrange(8) << 30) |
                  (g.randrange(8) << 27) | comp())

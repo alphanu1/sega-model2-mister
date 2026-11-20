@@ -13,6 +13,8 @@
 // exact sum's exponent less one, rounded once: tiny below 2^-126, flushed with AUS).
 // CHANGED (R1052, timing): the far path's rounding carry tested beside the increment (the same
 // result in both roundings).
+// CHANGED (R1052, timing, the manual's rounding): the finish's infinity test (raw_inf) from the
+// operands' and the far path's range tests, not from the result's bits (the same test).
 //
 // CHANGED (R1029, timing at 80 MHz): three stages. Stage 1's magnitude compare on the carry
 // chain and the alignment's sticky bit from a mask beside the shifter; stage 2 split -- 2a the
@@ -198,12 +200,14 @@ end
 
 
 logic [31:0] raw_c, raw, fr;
+logic        far_inf;                       // R1052: the far path's result is infinite (its range test)
 logic [31:0] fa, fs;
 logic        w_nan, w_nanin, w_infb, w_trunc, w_avg;
 
 // stage 2a: the result's bits
 always_comb begin
     raw_c = '0;
+    far_inf = 1'b0;
     if (v_inf) raw_c = v_infr;
     else if (v_near) begin
         logic [4:0]  lz;
@@ -242,6 +246,7 @@ always_comb begin
         ov255 = cy ? (e1 >= 9'd255) : (e >= 9'd255);
         ov256 = cy ? (e1 >= 9'd256) : (e >= 9'd256);
         tiny  = cy ? (e1 <= 9'd1)   : (e <= 9'd1);
+        far_inf = (!MAME_RND && v_avg) ? ov256 : ov255;
         if (!MAME_RND && v_avg) begin
             // the manual's FAVG: the rounded sum's exponent less one (rounding is the same)
             if (ov256)           raw_c = {v_sgn, INF[30:0]};
@@ -262,9 +267,20 @@ end
 logic        raw_inf, raw_dz, raw_mnz;
 always_ff @(posedge clk) if (en) begin
     raw <= raw_c;
-    raw_inf <= is_inf(raw_c); raw_dz <= is_den_or_zero(raw_c); raw_mnz <= raw_c[22:0] != 0;
+    // R1052: is_inf(raw_c) without raw_c: an infinite operand's result is infinite; the near path's
+    // never is (its exponent is ex - lz, lz bounded at ex - 1, ex <= 254 for finite operands --
+    // with a NaN operand the finish takes w_nan and reads none of these); the far path's is
+    // exactly its range test (ov255, the manual's FAVG ov256: below them the exponent is under
+    // 255). So the near path's shift is off the test (s5316: v_n -> the shift -> raw_c -> is_inf
+    // -> raw_inf -0.178 at slow -40C)
+    raw_inf <= v_inf || (!v_near && far_inf); raw_dz <= is_den_or_zero(raw_c); raw_mnz <= raw_c[22:0] != 0;
     w_nan <= v_nan; w_nanin <= v_nanin; w_infb <= v_infb; w_trunc <= v_trunc; w_avg <= v_avg;
 end
+
+`ifdef VERILATOR
+// (the benches: the test is is_inf(raw) wherever the finish reads it)
+always_ff @(posedge clk) if (!MAME_RND && !w_nan && raw_inf != is_inf(raw)) $fatal(1, "sharc_fadd: raw_inf %b, is_inf(raw) %b (raw %h)", raw_inf, is_inf(raw), raw);
+`endif
 
 // stage 2b: the finish
 always_comb begin
