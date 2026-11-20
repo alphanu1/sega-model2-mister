@@ -238,21 +238,31 @@ always_comb begin
     // needs no sticky bit, and the exponent / range selects are off the sticky OR (s5312's path: the
     // sticky -> up -> ei -> ovf (33 loads) -> r)
     ei = v_p[47] || (!v_trunc && v_p[22] && (&v_p[46:23]));
-    e = ei ? 8'(v_esum[7:0] - 8'd126) : 8'(v_esum[7:0] - 8'd127);
-    tiny = v_tiny[ei];
-    ovf  = v_ovf[ei];
-    res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]}) : tiny ? {v_sg, 31'h0}
-                : {v_sg, e[7:0], mf};
-    if (v_nan) begin
-        r = NAN; astat = MI; stky = MIS;
-    end else if (v_inf) begin
-        r = {v_sg, INF[30:0]}; astat = MV | (v_sg ? MN : 32'h0); stky = MVS;
-    end else if (v_zero) begin
-        r = {v_sg, 31'h0}; astat = v_sg ? MN : 32'h0; stky = '0;
-    end else begin
-        r = res;
-        astat = (v_sg ? MN : 32'h0) | (ovf ? MV : 32'h0) | (tiny ? MU : 32'h0);
-        stky  = (ovf ? MVS : 32'h0) | (tiny ? MUS : 32'h0);
+    // R1052 (later still): the result, its flags and its sticky bits made for both values of ei and
+    // ei choosing last -- the range tests (ovf, tiny) and the exponent were ei's selects in front
+    // of the result's 46-load select (s5322: v_p[37] -> the carry's AND -> ei -> ovf -> r's select
+    // -> r -> rf_wd -> g_rf -0.476 at slow 100C); the field mf does not depend on ei
+    begin
+        logic [31:0] rk [2], ak [2], sk [2];
+        for (int k = 0; k < 2; k++) begin
+            e = 8'(v_esum[7:0] - 8'(127 - k));
+            tiny = v_tiny[k];
+            ovf  = v_ovf[k];
+            res  = ovf ? (v_trunc ? {v_sg, MAXF[30:0]} : {v_sg, INF[30:0]}) : tiny ? {v_sg, 31'h0}
+                        : {v_sg, e[7:0], mf};
+            if (v_nan) begin
+                rk[k] = NAN; ak[k] = MI; sk[k] = MIS;
+            end else if (v_inf) begin
+                rk[k] = {v_sg, INF[30:0]}; ak[k] = MV | (v_sg ? MN : 32'h0); sk[k] = MVS;
+            end else if (v_zero) begin
+                rk[k] = {v_sg, 31'h0}; ak[k] = v_sg ? MN : 32'h0; sk[k] = '0;
+            end else begin
+                rk[k] = res;
+                ak[k] = (v_sg ? MN : 32'h0) | (ovf ? MV : 32'h0) | (tiny ? MU : 32'h0);
+                sk[k] = (ovf ? MVS : 32'h0) | (tiny ? MUS : 32'h0);
+            end
+        end
+        r = ei ? rk[1] : rk[0]; astat = ei ? ak[1] : ak[0]; stky = ei ? sk[1] : sk[0];
     end
 end
 

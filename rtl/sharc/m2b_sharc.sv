@@ -2558,7 +2558,8 @@ logic             dm_dsel;
 (* keep *) logic [PM_AW-1:0] pm_ia [3], pm_ob [3];
 logic [PM_AW-1:0] pm_cs [3], pm_xa;
 (* keep *) logic             pm_s1, pm_s3, pm_s4, pm_t1, pm_t3;   // R1052: the operands' selects, early
-(* keep *) logic [PM_AW-1:0] pm_oe;                                // R1052: everything but the MLAB reads
+(* keep *) logic             pm_t6, pm_t32, pm_tn;                // R1052: ... the D offsets' and the rest's
+logic [PM_AW-1:0]            pm_oe, pm_nd;                        // R1052: everything but the MLAB reads; outside D
 always_comb begin
     logic [47:0] o;
     logic        s1, s2, s3, sd, t1;
@@ -2588,12 +2589,20 @@ always_comb begin
         pm_t1 = dn && !t1 && s1 && !d_pg; pm_t3 = dn && !t1 && s1 && d_pg;
         pm_oe = dn ? ((t1 || !(s2 || s3)) ? '0 : s2 ? PM_AW'(sext6(o[32:27])) : o[PM_AW-1:0])
                    : pm_host ? pm_ha : (st == ST_X) ? pm_xa : pm_hidx;
+        // R1052 (later): pm_oe's three sources as terms of pm_ob's one AND-OR, each with its own
+        // select -- the 6-bit offset (s2), the 32-bit (s3), outside D the host's / X's / the
+        // window's address (registers) -- not a select in front of it (s5322: pm2 -> the form's
+        // decode -> pm_oe -> pm_ob -> the adder -> pm0's address -0.609 at slow -40C). s2 and s3 are
+        // disjoint, so the same operand (the benches compare pm_ob's sum with the select's)
+        pm_t6 = dn && !t1 && s2; pm_t32 = dn && !t1 && s3; pm_tn = !dn;
+        pm_nd = pm_host ? pm_ha : (st == ST_X) ? pm_xa : pm_hidx;
     end
     for (int k = 0; k < 3; k++) begin
         // (R1048: the host's / the clear's write -- registered since 4b0dc9e8, so pm_host is
         // early -- chooses in the operands too: its address and 0; the sum goes to the RAM)
         pm_ia[k] = ({PM_AW{pm_s1}} & i1_rd[PM_AW-1:0]) | ({PM_AW{pm_s3}} & i3_rd[PM_AW-1:0]) | ({PM_AW{pm_s4}} & i4_rd[PM_AW-1:0]);
-        pm_ob[k] = ({PM_AW{pm_t1}} & m1_rd[PM_AW-1:0]) | ({PM_AW{pm_t3}} & m3_rd[PM_AW-1:0]) | pm_oe;
+        pm_ob[k] = ({PM_AW{pm_t1}} & m1_rd[PM_AW-1:0]) | ({PM_AW{pm_t3}} & m3_rd[PM_AW-1:0]) |
+                   ({PM_AW{pm_t6}} & PM_AW'(sext6(o[32:27]))) | ({PM_AW{pm_t32}} & o[PM_AW-1:0]) | ({PM_AW{pm_tn}} & pm_nd);
         pm_cs[k] = pm_ia[k] + pm_ob[k];
         pm_wb[k] = pm_cs[k];
     end
