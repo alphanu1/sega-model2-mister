@@ -55324,3 +55324,34 @@ new form against the old in every clock where it is read.
      clocks; the replays and the manual lockstep to the clock as before (0 differ); analyze 0
      errors. PLANTED: 33's last group test without !fb (r1, the miter: fout_data); 32's PCSTKP
      value off by one (CAUGHT on r361 by the miter, fout_data -- MISSED on every older program).
+  s5328 (v11, c3c6fa54; no sound anchors) map 39,177 ALMs needed (v10's 39,244), fit 41,462 (470
+     recoverable), clk_sys -0.910 / -0.796, HDMI -0.460, hold -0.473 (clk_i960: m2_cpu_bridge l_data
+     -> lb, a placement-only hold miss on a short crossing, +0.07 to +0.11 on other seeds). Families:
+     eng_ra data[6] -> the engine's poly_uv3 / 2 / 1 -0.910 (new), fmul v_p[10] -> g_rf -0.643, pm2
+     -> XC.acc[2] -0.630, pm2 -> fa_xn -0.617 (-0.796 at -40C), span_q mem_cnt[2] -> ub_qv -0.531.
+     HDMI's worst path is now osd h_cnt -> osd_en, with the i960's fpsqrt / fptrans / fprem beside
+     it and no SCSP.
+  THE TWO FULL PATHS, LEFT AS THEY ARE: (a) eng_ra data[6] -> the engine's w mux (one LUT) ->
+     poly_uv3[22]'s asdata with 9.58 ns of interconnect on that hop -- placement, no logic to take
+     out, seen on this seed alone. (b) pm2 (138 loads) -> ish's partial -> rf_ra[2][2] (33 loads) ->
+     2.47 ns to the R file's MLAB address -> the MLAB -> the NaN test and comp[22]'s select (three
+     LUTs) -> fa_xn: both sides at their least depth (ish needs eight opcode bits beside o[22] /
+     o[6] / o[10]; the 31-bit test is two levels a port and the select). What would shorten it
+     costs: a NaN bit kept in the R file puts the test on the write data (s5328's own fmul -> g_rf
+     path), a select-first read port is another MLAB, and registering the test's halves moves a
+     level into X's nan_x, which drives every misc result. 2 of 28 seeds (s5305 -0.410).
+  34. (m2_raster3d, UBQ_SEL = B2) the box queue's flags with the push and the pop chosen last:
+     ub_qv / ub_full were (wp + push) - (rp + pop) compared, behind fl_span_ready's push (s5328:
+     u_span_q mem_cnt[2] -> full -> ready -> push -> the subtract -> ub_qv -0.531 at -40C). Now
+     each outcome's compare from the pointers alone (n, n + 1, n - 1 for n = wp - rp) and the push /
+     pop selecting: the same flags (a VERILATOR check against the old form every clock).
+  PROOF (34): the two forms against each other on every case -- all 64 x 64 pointer pairs with each
+     push / pop, 16,384 cases, 0 differ (iverilog); planted there, n + 1 taken as n (192 differ), n
+     - 1 as n (192), the push / pop select never "neither or both" (256). The whole rasteriser as a
+     miter (sim/miter/r3d.sh, old = HEAD's file with the parameter declared, new at UBQ_SEL 1, the
+     2C parameters otherwise), STCC f1500, House of the Dead 1808, Virtua Cop beg2, Over Rev d2:
+     4,882,749 / 4,879,413 / 4,888,389 / 4,878,177 cycles, 0 with any of the 70 outputs differing,
+     and the in-module check silent. quartus_map --analyze_file 0 errors (m2_raster3d.sv,
+     Model2.sv). As R1030's F5 recorded, the lists cannot reach a stale ub_qv, so the exhaustive
+     case bench is the proof of the flags and the miter the proof of the wiring. Area: three
+     6-bit compares and two selects, a few LUTs.
