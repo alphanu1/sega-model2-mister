@@ -287,9 +287,16 @@ always_comb begin
     endcase
 end
 logic [1:0]  fn_sel;                                    // 0 the shifter's, 1 FLOAT's, 2 FIX left, 3 FIX right
+// R1052: the funnel's count chosen here, in stage A, and registered (fn_kr): fn_sel's select of it
+// sat between the count registers and the shift's first level, 65 loads (s5320: shf_k[1] -> the
+// count's select -> the funnel -> rf -> misc_r -0.243 at slow 100C). Its selects are misc_on and
+// m_float, the source registers load every clock, so fn_kr is the selected count every clock
+// (f_k for FIX left and right alike). The benches compare it with the old select.
+logic [5:0]  fn_kr;
 always_ff @(posedge clk) begin
     shf_h <= sf_h; shf_l <= sf_l; shf_k <= sf_k;
     fn_sel <= !misc_on ? 2'd0 : m_float ? 2'd1 : f_left_c ? 2'd2 : 2'd3;
+    fn_kr <= !misc_on ? sf_k : m_float ? 6'(6'd32 - fl_lz_c) : f_k_c;
     th_fix <= m_fix;
 end
 
@@ -307,10 +314,13 @@ always_comb begin
     2'd2: begin fn_h = {8'h0, fm}; fn_l = 32'h0; fn_k = f_k; end
     default: begin fn_h = 32'h0; fn_l = {8'h0, fm}; fn_k = f_k; end
     endcase
-    w = {fn_h, fn_l, 1'b0} >> fn_k;
+    w = {fn_h, fn_l, 1'b0} >> fn_kr;
     fn_o = w[32:1];
     fn_g = w[0];
 end
+`ifdef VERILATOR
+always_ff @(posedge clk) if (fn_kr != fn_k) $fatal(1, "m2b_sharc_xu: the funnel's count %0d, the select's %0d", fn_kr, fn_k);
+`endif
 
 // ============================================================ the fixed ALU
 always_comb begin

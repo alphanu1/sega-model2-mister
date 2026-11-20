@@ -55175,3 +55175,60 @@ new form against the old in every clock where it is read.
      03:35 the same; the coordinator stopped both lanes at 03:36 and handed me the idle machine
      until my head is ready (gate.sh then returns on an idle machine too -- gate_idle, swapped in
      by a rename, the old gate restored when the lanes restart).
+  23. (SHARC, v5) TRIED AND SET ASIDE: item 16 "balanced" -- done, then le, choosing last -- to bring
+     the loop end's length test (sf_long, a subtract and a compare on the carry chain) as close
+     to the end as R1050's done had it. Counted again, it is not closer: done is le && dn_le in
+     one LUT with dn_le's own inputs, so sf_long is three LUTs from XC.acc in both forms, and the
+     balanced form puts le (s5316's family) two LUTs from the end where item 16 had it one. Its
+     proof passed (the miter at both roundings, 0 differ; three planted faults caught: the
+     access gate's order (r301), lceq's (r201), the flag's (the new loop-end case)), but it is
+     not in any head: v8 = v4 + 24 + 25.
+  THE FITS ON d71bd069 (2b-pl-u 22b66314): s5320 clk_sys -0.243 / -0.285 (slow 100C / -40C), HDMI
+     -0.020, hold +0.085, ALMs needed 41,261 -- the best 2B seed after s5308, ~12 failing paths;
+     every family aimed at from s5305 / s5311 / s5312 / s5316 gone from its list. Left: xu shf_k
+     -> misc_r (-0.243), pm2 -> XC.acc_wd (-0.285), the SCSP's lines (-0.088). s5321 (the same
+     tree) -0.972 / -0.863, HDMI -0.673: SCSP u_regs ar[2] -> lines -0.972, hq_we / clr_n -> PM
+     port B's address -0.675, pm2 -> XC.acc -0.708 at -40C, projection -> clip -0.325. The same
+     tree 0.7 ns apart again.
+  24. (SHARC xu, in v8) the funnel's count chosen in stage A and registered (fn_kr): s5320's path
+     was shf_k[1] -> fn_sel's select of the count (65 loads) -> the shift -> rf -> misc_r. Its
+     selects are misc_on and m_float (FIX left and right both take f_k); the count registers load
+     every clock, so fn_kr is the selected count on every clock (checked every clock).
+  25. (SHARC, in v8) pm_host and "the clear has port B" as registers from their next values (s5321:
+     hq_we[2] / clr_n[13] -> pm_host -> the operands -> the adder -> pm2's address -0.675).
+     pm_we != 0 is hq_we != 0 or (clr_on && clr_n < PMW); with CLR_AW == PM_AW (13 / 13 on the 2B
+     build) the clear stops at 2^CLR_AW - 1, so clr_n < PMW wherever clr_on: pm_host is hq_we != 0
+     || clr_on, loaded from hr_we and the clear's next state (checked every clock).
+  26. (SCSP m2_scsp_regs, FDUE = B2) the write's register tests from a one-hot register (arh,
+     loaded from a as ar is: arh[k] is ar == k on every clock) -- the state logic's case (ar), the
+     levels' and SCIEB's tests, the read word's case, the fired timer's select -- and the timer
+     write's count tests (0xfe: fires now; 0xff: no re-arm) with the fired flag last (s5320:
+     fired[2] -> fired_a -> mrg_t -> the tests -> arm -> go -> SCIPD -> the level -> lines
+     -0.088; s5321: ar[2] -> the same chain -0.972). The 2A / 2C text unchanged (generate).
+  27. (geometry m2_fp_pool, GOH = NEARF = B2) the multiply and add grants straight from the winner's
+     one-hot (rr_oh, gated by any request), not its index (oh_idx) decoded again into mul_gnt:
+     s5321's path was the projection's sst.S_A0 -> its request -> the winner's index (67 loads)
+     -> mul_gnt -> the clipper's next state, -0.325 at 100C. rr_oh is the winner's one bit
+     wherever a client asks, so the grant is the same.
+  s5322 (d71bd069) -0.476 / -0.609: only fmul v_p[37] -> g_rf and pm2 -> pm0's port-A address.
+  PROOF (24-27): SHARC v8 (v4 + 24 + 25) -- the miter at MAME_RND 1 and 0, 39 programs, negcond,
+     28 / 28 cases, 0 differ, the same clocks; the xu bench 4 x 10 M, 0 mismatches. SCSP regs
+     (26): sim/miter/scsp_regs.sh old (d71bd069) against new at FDUE 1 -- random stimulus at TIMER
+     1 and 2, 3 x 20 M cycles each (2.61 M timer writes a run), 0 differing and 0 timer / IRQ
+     state differences, and two captures with the miter in u_regs's place (65.4 M / 67.2 M
+     cycles, 0 differing). The geometry (27): the m2_geometry miter against 2b-rc, plain / MIPZ /
+     w1000 / w3910 / w4000 / w9000, 595,138 / 913,234 / 902,738 / 512,404 / 450,389 / 624,590
+     cycles (R1052's), 0 differing. quartus_map --analyze_file: 0 errors on every file.
+  PLANTED: the funnel count's two sources swapped (the xu bench's check: count 55 against 9);
+     pm_host from lane 0's write alone (r1, g_dma_check); the regs' timer write on the wrong
+     timer (q differs, 115 k-144 k cycles a run) and SCIPD read at SCIRE's address (8.4 M a
+     run); both caught on the captures too (7.7 M / 17.8 M cycles). EQUIVALENT, and why: (a) the
+     0xfe test's !fired_a -- the test is read only where the write re-arms (wrt, not arc), which
+     needs n255, which with the old low byte needs !fired_a already; (b) the clear's claim
+     without "no host write" (pmc_q) -- no host write comes during the clear (g_hq_check asserts
+     every host request sees the clear over).
+  THE REPLAYS on v8: DOA 1,264,270,732 clocks (2.5196), fvipers 1,277,257,981 (2.5545), schamp
+     1,279,552,477 (2.5591), 0 out / trace words differ; the three 200 M-word miters 0 differ; the
+     manual-rounding DOA lockstep 501,777,265 words, 0 differ, 1,264,264,337 clocks. The 2B
+     geometry fault (the grant without its any-request gate) stops every walk at once. make
+     lint_top LINT_DEFS=-DM2_2B clean.
