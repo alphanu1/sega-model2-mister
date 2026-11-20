@@ -54707,9 +54707,44 @@ shows, prove, hand the head to the lane.
     check on it fires.
   * quartus_map --analyze_file on every changed file (0 errors); make lint_top (2B) clean.
 
+  9. 61345354 (engine read-ahead, GDEM = B2). s5305 kst.K_IDLE -> want -> g_s -> s_head + fill -> ==
+     idx -> f_dem, -0.266: a stream fetch's "for the waiting read" test made for each stream from its
+     own head and fill (registers), the picked stream choosing after the compares. m2_eng_ra miter
+     against 2b-rc under tb_m2_eng_ra: 509,600 cycles, 0 differing, the bench's 13.9 M checks pass;
+     planted (the streams' tests swapped): the miter and the bench both fail.
+  10. c7c06f89 (quad store, BPAR = RECIP_EARLY = B2). s5306 a_lo01 -> the 16-bit min -> the clamp ->
+     b_band, -0.405: band_of(min(l1, l2), max(h1, h2)) as min / max of each pair's own clamped band
+     (the clamp to [0, SCR_H - 1] and the divide by BAND_H are monotone; the never-drawn test is each
+     pair's). Exhaustive C check against band_of: 68,719,581,712 cases (every pair of each half at
+     eight fixed values of the other, and all four around the edges), 0 differ. tb_m2_quad_store_ext
+     500 streams identical; raster3d miter 0 differing on the three lists; planted (max for the low
+     band) the streams differ.
+  11. ae975ed8 (SHARC xu). s5305 fa_xz -> xin -> SCALB's 32-bit sum -> the range tests -> misc_r
+     (-0.618 at -40C) and -> fv -> f_km1 (-0.280): the |x| / |y| compare on the unflushed operands
+     with the zero tests choosing after the carry chain (xz / yz say |xin| / |yin| is 0 in both
+     roundings, and where they do not, xin is fx); SCALB's flush chosen after the sum (scalb_r of
+     fx & SIGN and of fx, the zero test choosing); f_km1 from its own subtract (149 - fee, not f_k
+     - 1). tb_m2b_xu 2 x 4 x 10 M, 0 mismatches; planted: f_km1 off by one (390 / 4 M), the y-zero
+     order (15,536), SCALB's flush dropped (2,710); one planted fault (the both-zero order) is
+     equivalent -- the both-zero case overrides it. SHARC miter 37 / 37 + 26 / 26 at both roundings;
+     replays and the manual lockstep as above, to the clock.
+  STPW (SCSP, not yet committed: m2_scsp STPW = m2_2a_sound SCSP_FDUE = B2). s5305 sreg -> b_v -> the
+     ALU -> st_wd -> the state RAM, -0.418: the state RAM's write registered once and written the
+     clock after; its one read port (st_ra -> st_q) takes the pending word where it reads the pending
+     address. THE FIRST BENCH PROVED NOTHING: tb_m2_2a_sound on Dead or Alive's sound program with an
+     empty MIDI capture keys no slot -- 160 M cycles 0 differing, and two planted faults passed it.
+     Under tb_m2_scsp on scsp_randcap's synthetic captures (random registers keying slots on; the
+     bench checks every sample against scsp_ref.h, MAME 0.289's scsp.cpp): four captures of 60,000
+     to 100,000 samples, 37.6-64.3 M cycles each, 0 differing, 0 off the reference, the bypass taken
+     746 k-1.38 M times a capture. Planted: the write enable a clock early -- 2,955,650 cycles differ.
+     The bypass dropped: MISSED (206,702 pending reads, 0 differing) -- under investigation. No real
+     MIDI capture exists on disk (none under /home/ben/source).
+
 *AREA (the SHARC mapped alone, sharea.sh; ALMs needed / LUTs / registers):* 786168d3 4,132 / 6,229
 / 1,905; f99e1d5c 4,123 / 6,258 / 1,903; ff2d3309 4,119 / 6,255 / 1,902; d2fd1da4 4,148 / 6,248 /
-1,906. The fit's figures are the lane's.
+1,906; ae975ed8 4,192 / 6,348 / 1,906 (the second SCALB sum and the compare, +44 / +100). The sound
+board alone (sndarea.sh) with STPW: 3,854 ALM (R1050's 3,848), the same block bits. The fit's
+figures are the lane's.
 
 *THE FITS (2b-pl-u: 2b-place's settings with 2b-rt2's head merged; slow 100C / slow -40C):*
     s5301  786168d3  clk_sys -0.511 / -0.627  HDMI -0.284 / -0.120  hold >= +0.088   xu fn_sel -> fb_e; clip cs -> kst; fill walk_y -> s1_y; cab steer
@@ -54717,7 +54752,15 @@ shows, prove, hand the head to the lane.
     s5303  dee29c65  clk_sys -0.419 / -0.486  HDMI +0.000           hold +0.082      fa_x -> misc_r; fadd raw -> g_rf; project step -> engine st
     s5305  32c489d5  clk_sys -0.450 / -0.618  HDMI +0.049           hold +0.099      fa_xz -> misc_r (SCALB); S.daddr -> XC.acc; SCSP sreg -> st; clip -> eng_ra
     s5306  f1ebde57  clk_sys -0.784 / -0.894  HDMI +0.179           hold +0.078      pm2 port B -> XC.acc_wd; quad store a_lo01 -> b_band; SCSP DSP
-  The fmul and fill families of s5271 are gone from s5303 on.
+    s5308  d2fd1da4  clk_sys -0.051 / -0.066  HDMI -0.134 / -0.123  hold >= +0.104   ONLY pm2 port B -> the pm0 / pm1 port A address -- Ben's minimum target met
+    s5311  c7c06f89  clk_sys -0.391 / -0.207  HDMI -0.686           hold +0.085      dmc ls0 -> u_i2; pm2 -> pm0 address; pm2 -> sh_pdj
+    s5312  ae975ed8  clk_sys -0.856 / -0.912  HDMI -0.073           hold +0.025      fmul v_p -> g_rf (back); pm2 -> XC.rn_we; SCSP op_rd -> lines
+  (s5304, s5307, s5309, s5310 crashed in Quartus; from ~20:45 six of eleven fits in both lanes did.)
+  The fmul and fill families of s5271 are gone from s5303 on; s5312 shows the fmul one again on the
+  same RTL, so the seed spread (~0.8 ns between s5308 and s5312) decides which family a seed shows.
+  The one family on every seed is the SHARC's D stage: pm2's word -> a decode or an MLAB read -> an
+  adder or a select -> a D register or a RAM address.
+  HDMI on s5308 / s5312 is ascal's own o_hcpt -> o_vcpt* (sys/): none of the core's logic.
 
 *FOUND ON THE WAY:*
   * Quartus 17 does not infer a RAM whose registered read has a select in front of the register
@@ -54729,3 +54772,12 @@ shows, prove, hand the head to the lane.
     run started inside s5303's first 15 minutes; and one script's `make -f - ` (to read a Makefile
     variable) ran the Makefile's default goal -- a Verilator lint, uncapped and ungated, a few
     seconds before it failed. Both scripts were fixed (the run gated; the variable copied).
+  * THE GATE, AGAIN (21:00): my SHARC miter builds started in the same second as s5308's map, in an
+    idle gap between seeds (s5307 / s5402 had crashed). From then: a Verilator or Quartus job starts
+    only while a quartus_fit is running and is at least 15 minutes old -- never on an idle machine;
+    Quartus jobs (analyze, the block maps: 5-30 s) only up to 16.5 minutes into a fit, so they end
+    inside the window (the fits ran 16.8-24.7 minutes). Rewriting gate.sh in place while two of my
+    scripts read it gave each a syntax error and let them through once (an analyze and a bench,
+    ~21:00): the gate is now replaced by a rename, never edited in place.
+  * From ~23:50 the coordinator paused all my benches for two fits, to see whether the overlap of
+    long benches with fits is what crashes them.
