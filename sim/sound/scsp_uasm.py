@@ -307,9 +307,10 @@ for lab, mi in sample_head_ov(): place(lab, mi)
 if len(rom) > 256: raise SystemExit('microcode too long: %d' % len(rom))
 
 # ===================================================================== the checker
-def check(name, seq):
+def check(name, seq, stpw_only=False):
     err = []
     regw, stw, mul, tadr = {}, {}, [], []     # last writer index; multiplies (k, name); table loads
+    stwp = {}                                 # R1052 STPW: the clock each row's write is pending, as an index
     flag_set, lat_set = {}, {}
     for k, mi in enumerate(seq):
         for port in ('ra', 'rb'):
@@ -319,6 +320,14 @@ def check(name, seq):
                     err.append('%d: %s=%s written by %d (needs Q)' % (k, port, r, k - 1))
         if 'st' in mi and mi['st'] in stw and stw[mi['st']] == k - 1:
             err.append('%d: state row %s written by %d' % (k, mi['st'], k - 1))
+        # R1052 (m2_scsp STPW, the 2B build): a write lands a clock late, so the word that reads in the
+        # clock it is pending -- k+2 after a write by k, k+3 after an EG's (written in its second clock)
+        # -- may not read that row (m2_scsp has no bypass; its g_stpw_chk checks this in simulation)
+        # (a row is the slot's or, idx SW, the sweep's slot sw -- which SWINC in E(j) moves for F(j+2) on)
+        swv = sum(1 for j in range(k - 1) if seq[j].get('s2') == 'SWINC') if mi.get('idx') == 'SW' else -1
+        for r in ([mi['st']] if 'st' in mi else []) + (['RAR', 'RD1', 'RD2', 'RRR'] if mi.get('streg') else []):
+            if stwp.get((r, swv)) == k:
+                err.append('%d: state row %s read while its write is pending (STPW)' % (k, r))
         if 'P' in mi:
             vis = [j for j, _ in mul if j <= k - 2]
             if not vis: err.append('%d: P %s: no multiply' % (k, mi['P']))
@@ -340,10 +349,14 @@ def check(name, seq):
         # writes
         if 'rd' in mi: regw[mi['rd']] = k
         if 'stw' in mi: stw[mi['stw']] = k
+        if 'stw' in mi:
+            wv = sum(1 for j in range(k - 1) if seq[j].get('s2') == 'SWINC') if mi.get('idx') == 'SW' else -1
+            stwp[(mi['stw'], wv)] = k + (3 if mi.get('op') == 'EG' else 2)
         if 'mul' in mi: mul.append((k, mi['mul'][2]))
         s1 = mi.get('s1')
         if s1 in ('TADRP', 'TADRA'): tadr.append((k, s1[-1]))
         if s1 == 'TADRE': tadr.append((k + 1, 'E'))      # (the envelope's second clock)
+    if stpw_only: err = [e for e in err if 'STPW' in e]   # (the paths below are checked for R1052's rule alone)
     for e in err: print('%s: %s' % (name, e))
     return len(err)
 
@@ -362,6 +375,12 @@ nerr = sum(check(n, s) for n, s in paths.items())
 nerr += check('head', [mi for _, mi in sample_head()][7:])     # from the boost (R894) on
 nerr += check('head_ov', [mi for _, mi in sample_head_ov()][8:])   # R946: from the returns on
 nerr += check('sweep', [mi for _, mi in sweep()][6:])
+# R1052 (STPW): the sweep's loop both ways (a slot started, and not), and the calls
+_sw = [mi for _, mi in sweep()]
+nerr += check('sweep_loop', _sw[0:3] + _sw[3:5] + _sw[0:3], True)
+nerr += check('sweep_start', _sw[0:3] + _sw[6:] + _sw[3:5] + _sw[0:3], True)
+nerr += check('word5', [mi for _, mi in word5()], True)
+nerr += check('mon', [mi for _, mi in moncall()], True)
 
 # ===================================================================== encode
 def enc(fields, vals):

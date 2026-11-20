@@ -78,7 +78,17 @@ module m2_scsp #(
   // read through registers, go to M10K in place of MLAB: the same circuit,
   // eight LABs back as logic. 0 keeps them in MLAB.
   parameter bit RAM_M10K  = 1'b0,
-  parameter bit FDUE      = 1'b0   // R1048: m2_scsp_regs FDUE (the 2B build)
+  parameter bit FDUE      = 1'b0,  // R1048: m2_scsp_regs FDUE (the 2B build)
+  // R1052: the slot-state RAM's write registered once and written the clock after (no read the
+  // microcode uses meets a pending write: g_stpw below). The write's data path (the register
+  // RAM's word -> b_v -> the ALU -> st_wd) then ends at a LAB register, not the M10K's input (s5305: sreg -> the ALU -> st -0.418 at slow -40C). (2B.)
+  parameter bit STPW      = 1'b0,
+  // R1052: the common registers' write enable (cw_en, op_busy && !op_rd && oc == 1 && o_com_r)
+  // made a clock ahead into a register -- the same value every clock -- so the 24 loads of
+  // m2_scsp_regs' write decode start at a flop (s5312: op_rd -> cw_en -> the timers' arm / expiry
+  // -> go -> SCIPD -> the IRQ level -> lines -0.531 at slow 100C). (2B.)
+  parameter bit CWQ       = 1'b0,
+  parameter bit DSP_PKE   = 1'b0   // R1052: m2_scsp_dsp PKE (the 2B build)
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -488,10 +498,49 @@ module m2_scsp #(
   logic        st_we;
   logic [31:0] st_wd;
   (* ramstyle = "M10K" *) logic [31:0] st [256];
-  always_ff @(posedge clk) begin
-    if (st_we) st[st_wa2] <= st_wd;
-    st_q <= st[st_ra];
-  end
+  generate if (STPW) begin : g_stpw
+    // the write a clock late (R1052). No bypass: a read the clock the write is pending gets the
+    // RAM's old word, and no microinstruction that uses its state row reads it then. A row written
+    // by k is read by k+2 at the earliest (scsp_uasm.py's latencies: k+1 reads the old), and by
+    // k+3 after an EG (the envelope writes its row in the clock after); the pending clock is
+    // F(k+2) (F(k+3)), and in every path of the microcode (scsp_uasm.py's checker, STPW rule) the
+    // word there reads no row it uses -- it has no st / streg, so it reads CUR, and E takes no
+    // st_q. A hold re-reads the same word (the one held word with a row, the FETCHED wait's
+    // STREG, follows no write) and a call starts two clocks after its window. The benches check
+    // every pending read that E consumes against the word being written (g_stpw_chk).
+    logic        sp_we;
+    logic  [7:0] sp_wa;
+    logic [31:0] sp_wd;
+    always_ff @(posedge clk) begin
+      sp_we <= st_we; sp_wa <= st_wa2; sp_wd <= st_wd;
+      if (sp_we) st[sp_wa] <= sp_wd;
+      st_q <= st[st_ra];
+    end
+`ifdef VERILATOR
+    // g_stpw_chk: a read of the pending word whose value E takes (the word had st / streg, or E
+    // reads st_q: A_ST / A_CSH, KBREL, LATEG, FETCH1, MON1-3, an EG) must not differ from it
+    logic        sp_hit, f_st_d, e_ok_d;
+    logic [31:0] sp_wd_d;
+    longint unsigned n_hit = 0, n_dif = 0;
+    always_ff @(posedge clk) begin
+      sp_hit <= sp_we && sp_wa == st_ra; sp_wd_d <= sp_wd;
+      f_st_d <= uf[`UF_ST]; e_ok_d <= !e_bub;
+      if (sp_hit) n_hit <= n_hit + 1;
+      if (sp_hit && sp_wd_d != st_q) n_dif <= n_dif + 1;
+      if (rst_n && sp_hit && e_ok_d && sp_wd_d != st_q &&
+          (f_st_d || e_a == 3'(A_ST) || e_a == 3'(A_CSH) || e_fset == 3'(FSET_KBREL) || e_s1 == 4'(S1_LATEG) ||
+           e_s1 == 4'(S1_FETCH1) || e_s2 == 4'(S2_MON1) || e_s2 == 4'(S2_MON2) || e_s2 == 4'(S2_MON3) ||
+           e_op == 4'(OP_EG)))
+        $fatal(1, "m2_scsp STPW: E (upc %0d) takes the state row %0d while its write is pending", upc, st_ra);
+    end
+    final $display("m2_scsp STPW: %0d reads of the pending state word, %0d of them a different word, none taken", n_hit, n_dif);
+`endif
+  end else begin : g_stw
+    always_ff @(posedge clk) begin
+      if (st_we) st[st_wa2] <= st_wd;
+      st_q <= st[st_ra];
+    end
+  end endgenerate
 
   // the register file: two copies, one per read port. (R909: NOT MLAB. Its
   // read address is a field of the microinstruction register uf, an MLAB
@@ -924,7 +973,7 @@ module m2_scsp #(
 
   assign mix_we  = e_s2 == 4'(S2_MIXW);
   assign mix_val = p_lo[29:10];                       // (sample x level 2) >> (SHIFT - 2)
-  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST), .ABORT_MERGE(ABORT_MERGE), .COEF_M10K(RAM_M10K)) u_dsp (   // R1008
+  m2_scsp_dsp #(.MADRS_MIRROR(MADRS_MIRROR), .OVERLAP(OVERLAP), .WPOST(WPOST), .ABORT_MERGE(ABORT_MERGE), .COEF_M10K(RAM_M10K), .PKE(DSP_PKE)) u_dsp (   // R1008; R1052
     .clk(clk), .rst_n(rst_n),
     .go(dsp_go), .done(dsp_done), .busy(dsp_busy),
     .rbl(rbl), .rbp(rbp),
@@ -962,7 +1011,22 @@ module m2_scsp #(
   wire   o_com = o_addr >= 11'h200 && o_addr < 11'h218;
   logic  o_com_r;                                        // (o_addr is held: a clock later, R859)
   always_ff @(posedge clk) o_com_r <= o_com;
-  assign cw_en = op_busy && !op_rd && oc == 3'd1 && o_com_r;   // (the old word read at oc 0)
+  // (R1052 CWQ: cw_en is high the one clock after the write branch's oc 0 -> 1 step below, which
+  // sets wq_pop and oc and keeps op_busy, op_rd and o_addr; o_com_r is then o_com. Nothing else
+  // moves oc off 0 while op_busy and !op_rd: op_start needs !op_busy, and every other branch
+  // that writes oc is the slot words' (o_addr < 0x200, never o_com). The benches check it.)
+  wire   cw_now = op_busy && !op_rd && oc == 3'd1 && o_com_r;   // (the old word read at oc 0)
+  generate if (CWQ) begin : g_cwq
+    logic cw_q;
+    always_ff @(posedge clk or negedge rst_n)
+      if (!rst_n) cw_q <= 1'b0; else cw_q <= op_busy && !op_rd && oc == 3'd0 && o_com;
+    assign cw_en = cw_q;
+`ifdef VERILATOR
+    always_ff @(posedge clk) if (rst_n && cw_q != cw_now) $fatal(1, "m2_scsp CWQ: cw_q %b, cw_en %b", cw_q, cw_now);
+`endif
+  end else begin : g_cwn
+    assign cw_en = cw_now;
+  end endgenerate
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
