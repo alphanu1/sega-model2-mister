@@ -55390,4 +55390,16 @@ new form against the old in every clock where it is read.
      v_rs (the sign: 1 for the NaN, else the product's). Each result bit is then one select on ei of
      these registers and the field: r[22:0] = ei ? (v_n[1] ? mf : cm1) : (v_n[0] ? mf : cm0), the
      exponent likewise with e1 / e0. Nine flops; the flags and sticky bits as before. An in-module
-     check compares the word with the old select every clock.
+     check compares the word with the old select every clock from stage 2's first load (before
+     it both forms read registers never loaded -- 0 against 40800000 at clock 0, the check's first
+     run -- and no word is taken: a result is read only after its multiply's en).
+  s5331 (v14, d2d199f8) map 39,200 ALMs needed; m2b_sharc's own logic 3,823 LUTs (v11's 3,821; 32 is
+     2), m2_geometry 1,868, m2_raster3d 259; the fit stopped in routing (congestion), no STA.
+  PROOF (35, v15 = v14 + 35): tb_sharc_fp 4 x 25 M at both roundings, 0 mismatches; the miter at
+     MAME_RND 0, 39 programs and 361-363, negcond, 0 differ, every clock count v14's (the MAME_RND 1
+     unit is not touched: its miter and the replays at MAME rounding, DOA / fvipers / schamp to the
+     clock, 0 differ, the three 200 M-word miters 0 differ); the manual-rounding DOA lockstep
+     501,777,265 words, 0 differ, 1,264,264,337 clocks. PLANTED (the in-module check off):
+     the truncated overflow's exponent bit 0 without !trunc (253,843 of 4 M manual fmul vectors),
+     v_n without the tiny test (403,923), e1 from esum - 127 (620,423). quartus_map
+     --analyze_file 0 errors.
