@@ -236,7 +236,7 @@ module m2_geometry #(
   logic [31:0]    mul_res, add_res, div_res;
   logic [NC-1:0][31:0] mul_res_c, add_res_c;   // R1036: one copy per client
 
-  m2_fp_pool #(.NC(NC), .RES_CP(RES_CP)) u_pool (
+  m2_fp_pool #(.NC(NC), .RES_CP(RES_CP), .GOH(NEARF)) u_pool (   // R1052: GOH with the 2B build's NEARF
     .clk(clk), .rst_n(rst_n),
     .mul_req(mul_req), .mul_a(mul_a), .mul_b(mul_b),
     .mul_gnt(mul_gnt), .mul_rsp(mul_rsp), .mul_res(mul_res), .mul_res_c(mul_res_c),
