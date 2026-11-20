@@ -1,5 +1,40 @@
 # Handoff
 
+## 2026-11-20: Releases Model2_20261120, Model2A_20261120, Model2C_20261120 -- every clock clean at all four corners; 2B not released
+
+One joint release, board-tested by me, pushed on main, model2a and model2c with
+the same releases/. Model 2B is not released: it is waiting on a clean build.
+
+  * TIMEQUEST_MULTICORNER_ANALYSIS had been off project-wide, so every earlier
+    "clean" was the slow 100C corner only. With it on, s2823 (Model 2) failed at
+    -40C and s4711 (2C) failed HDMI by 0.082 at -40C. All three cores here are
+    clean at slow 100C, slow -40C, fast 100C and fast -40C.
+  * Model 2 s5409, main e0b7788f (the R1045 cvtzril NaN fix, multicorner on,
+    R1043's scaler/OSD/shadowmask anchors and fitter effort): worst setup
+    +0.063 (HDMI -40C), hold +0.075. md5 0b691a0237e655bdbaacaca51ab333c3.
+  * Model 2A s5515, model2a ffa4deba (the same three on top of retime-2a):
+    worst setup +0.013 (HDMI -40C), hold +0.071.
+    md5 5758a1bd22435e21149aad1a6b68aa3c. Built without the TGP fp_mul compare
+    fix (R1053, branch rel-2a-fix cd40c09b, 2A only, sim-proven, never fitted):
+    s5513's only failure was that path, and s5515 closed without it.
+  * Model 2C s4712, model2c a9f22020 + the 173d8acb effort settings (R1043):
+    clk_sys +0.055, HDMI +0.116 at -40C, hold +0.081.
+    md5 6ad5193ac23dbcbf08b4cc3c29a60bb0. s4711 (the earlier candidate) was
+    dropped for its -40C HDMI miss.
+  * Left out of releases/mra: Behind Enemy Lines, Royal Ascot II, Top Skater
+    (2C); and for 2B when it goes out, Super GT 24h (locks up) and Last Bronx.
+
+2B: best is s5308 (2b-pl-u 4f183072): clk_sys -0.051 / -0.066 (100C / -40C),
+HDMI -0.134 / -0.123, all else and hold positive. On the board: every lighting
+fault is gone with the own-ID MRAs (3398a65d); Super GT 24h still locks up;
+inputs not fully checked. The RTL work (2b-rt2, R1048-R1052) found area growth
+pushing the fit to 41,555 ALM (s5329); v13's 33 (+255 LUT) was taken out (v14,
+8e42c41e); v15 (fmul override registered) is in proof.
+
+Next release: outstanding GitHub issues and games not running. The fp_mul fix
+goes to 2A, then Model 2 / 2C / 2B, each fit-tested; Last Bronx, the Super GT
+24h lock-up and the Rail Chase 2 flicker.
+
 ## 2026-11-17: main -- i960-subnorm merged (R1013); the Model 2 release candidate is s2823, not released yet
 
 `main` fast-forwarded to i960-subnorm e8e768ea (R1013: the i960 FP units take and
