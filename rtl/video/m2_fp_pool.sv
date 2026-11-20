@@ -69,12 +69,7 @@ module m2_fp_pool #(
   // mul_res / add_res on every cycle. One register read by every client drew
   // them all to wherever it sat; a copy each lets each sit by its reader.
   // 0 = every copy is mul_res / add_res itself.
-  parameter bit          RES_CP = 1'b0,
-  // R1052: 1 = the multiply and add grants straight from the winner's one-hot (rr_oh, gated by
-  // any request), not its index decoded again -- the same grant (rr_oh is the winner's one bit
-  // wherever a client asks). s5321, the 2B build: the projection's request -> the winner's
-  // index -> mul_gnt -> the clipper's next state -0.325. 0 = as before.
-  parameter bit          GOH = 1'b0
+  parameter bit          RES_CP = 1'b0
 ) (
   input  logic                clk,
   input  logic                rst_n,
@@ -326,13 +321,8 @@ module m2_fp_pool #(
     mul_gnt = '0;
     add_gnt = '0;
     div_gnt = '0;
-    if (GOH) begin
-      mul_gnt = rr_oh(mul_req, mul_rr) & {NC{mul_any}};
-      add_gnt = rr_oh(add_req, add_rr) & {NC{add_any}};
-    end else begin
-      if (mul_any) mul_gnt[mul_win] = 1'b1;
-      if (add_any) add_gnt[add_win] = 1'b1;
-    end
+    if (mul_any) mul_gnt[mul_win] = 1'b1;
+    if (add_any) add_gnt[add_win] = 1'b1;
     if (div_issue) div_gnt[div_win] = 1'b1;
   end
 
