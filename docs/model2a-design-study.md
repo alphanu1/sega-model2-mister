@@ -55051,3 +55051,37 @@ new form against the old in every clock where it is read.
   s5326 (2fa54888 + v9) -0.361 / -0.429, HDMI -0.453, map 39,178: pm2 -> XC.acc_wd[22] / [23],
      pm2 -> pm0's address -0.065, the inputs' joy_ranalog_q -> or_aq -0.023. acc_wd recurs (s5306,
      s5320, s5326).
+  COMMITS (fourth / fifth hand-offs): 269ce45c (v10: 30), 13eabdb7 (study); 10d431ff (v11: 31),
+     bcb6c82b (study). Ben (via the coordinator, ~08:20): carry on past 09:00, toward a 2B fit with
+     every clock passing at all four corners.
+  32. (SHARC, in v13) the store data's sequencer source the way 20 did the system / PX
+     ones: its group and register from the per-form one-hots (gq / iq), the values for each outcome
+     of the loop end's pop (seq_rd's own arguments for q1 / q0), the pop last -- it was seq_rd on
+     ur_sel behind the handler's wd_sel and ur_sel's group compare (s5326: pm2 -> XC.acc_wd[22] /
+     [23], PCSTK's top bits). The same value; R1044's AND-OR checks it every D clock.
+  s5326's full path (-40C) showed the store data's system-register term, not the sequencer's: pm2
+     -> ur_sel[7]'s form compare (shared with gq) -> gq[7] (47 loads) -> gq[7] && iq[k] (22 loads)
+     -> the AND-OR (three LUTs) -> XC.acc_wd[23], -0.429. 32 stays (same value, small).
+  33. (SHARC, v13) the system registers read at each form's own index field first --
+     three 16-way selects of registers (sys_rd at op[26:23], op[39:36], op[35:32]) whose selects
+     are the opcode's bits straight from the M10K -- and the form's group test (010 under
+     op[30:27], 0111 under op[43:40], otherwise the bit op's 7 or op[39:36]) choosing among the
+     three: the same value as gq[7] && iq[k], the select tree no longer behind the group decode.
+  HDMI (Ben's question; from each seed's locs.txt, the cells within 3 of the worst HDMI path's two
+     ascal endpoints): s5321 (HDMI -0.673) ascal 747, audio_out 537, m2_scsp 340; s5326 (-0.453)
+     m2_scsp 2,016, ascal 1,986; s5320 (-0.020) ascal 1,073, m2_scsp 19; s5325 (+0.038) ascal
+     1,251, m2_scsp 4. On both failing seeds the 2B SCSP lies through the scaler's output side
+     (X65-83, Y15-35); on the passing ones it does not. Over the scaler's whole region (X45-85,
+     Y6-60) the SCSP has ~4.7 k cells on every seed (the SHARC 3-4.5 k, fx68k 1.6-3 k): it is the
+     local mixing at ascal's o_* registers that differs. Passed to the coordinator for 2b-place.
+  s5327 (v10, e5fc6fe4: 2b-place without the 44 sound-board M10K anchors that sat beside the
+     scaler's) map 39,244 ALMs needed (v9's 39,178: v10 +66), then died in TDC (no STA).
+  32's planted fault (PCSTKP's value off by one where the loop end does not pop) was MISSED on every
+     program: none read PCSTKP (0x65) through the ureg port -- the SEQ moves read PCSTK and the
+     counters. m2b_randprog.py gained M2B_RP_PSP (a quarter of the ureg moves read PCSTKP; without
+     it byte for byte as before): seeds 361-363.
+  PROOF (32, 33: v13 = v11 + 32 + 33): the miter at MAME_RND 1 and 0, 39 programs and 361-363 (PSP:
+     2,566,827 / 2,530,046 / 2,530,825 clocks at MAME_RND 1), negcond, 28 / 28, 0 differ, the same
+     clocks; the replays and the manual lockstep to the clock as before (0 differ); analyze 0
+     errors. PLANTED: 33's last group test without !fb (r1, the miter: fout_data); 32's PCSTKP
+     value off by one (CAUGHT on r361 by the miter, fout_data -- MISSED on every older program).
