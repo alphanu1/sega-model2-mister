@@ -1780,7 +1780,12 @@ always_comb begin
     rx = ish ? o[3:0] : o[7:4];
     rnn = ish ? o[7:4] : o[11:8];
     rf_ra[0] = mf ? {2'b00, o[7:6]} : rx;
-    rf_ra[1] = mf ? {2'b01, o[5:4]} : o[3:0];
+    // R1057 (R1052's 13): port 1's address on o[22] alone, not mf (o[22] && !ish): the immediate
+    // shifts read no port 1 (their forms set d_ru[0] / d_ru[2] only, and their shifter value is
+    // the immediate), so for them the port's word is never taken -- and the form decode (pm2's
+    // lane) is off the R file's read address (s5335 / s5346: pm2 -> ish -> rf_ra[1] -> g_rf[1] ->
+    // the shifter's precompute -> sh_pdj -0.418 / -0.307 at slow 100C)
+    rf_ra[1] = o[22] ? {2'b01, o[5:4]} : o[3:0];
     rf_ra[2] = mf ? {2'b10, o[3:2]} : rnn;
     rf_ra[3] = {2'b11, o[1:0]};
     // a store's dreg (op[26:23]) or the ureg D names (ur_sel)
