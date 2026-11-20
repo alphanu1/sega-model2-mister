@@ -2550,6 +2550,7 @@ end
 // g_dma_check checks at every enabled clock.
 logic [DM_AW-1:0] dm_as [2];
 (* keep *) logic [DM_AW-1:0] dm_ia [2], dm_ob [2];   // (kept per lane: two adders, 16 M10K each)
+(* keep *) logic             dm_s1, dm_s3, dm_t1, dm_t3, dm_t6, dm_t32, dm_tn;   // R1052: the operands' selects, early
 logic [DM_AW-1:0] dm_xa;
 logic             dm_dsel;
 // ... and the PM RAM's port B the same way, one adder per lane: in D the operands are d_pb_a's
@@ -2606,10 +2607,17 @@ always_comb begin
         pm_cs[k] = pm_ia[k] + pm_ob[k];
         pm_wb[k] = pm_cs[k];
     end
+    // R1052 (as PM port B's): each MLAB read one AND-OR from the adder, its select from the opcode
+    // beside the read; the offsets and, outside D, the X / clear address (moved from ia to ob, ia
+    // 0) their own terms on the other operand -- the same sum (s5324: pm2 -> the operand selects ->
+    // the adder -> dm1's address -0.525). g_dma_check compares it with dm_a at every enabled clock
+    dm_s1 = dm_dsel && !sd && !d_pg; dm_s3 = dm_dsel && !sd && d_pg;
+    dm_t1 = dm_dsel && s1 && !d_pg; dm_t3 = dm_dsel && s1 && d_pg;
+    dm_t6 = dm_dsel && s2; dm_t32 = dm_dsel && s3; dm_tn = !dm_dsel;
     for (int k = 0; k < 2; k++) begin
-        dm_ia[k] = dm_dsel ? ({DM_AW{!sd}} & (d_pg ? i3_rd[DM_AW-1:0] : i1_rd[DM_AW-1:0])) : dm_xa;
-        dm_ob[k] = ({DM_AW{dm_dsel && s1 && !d_pg}} & m1_rd[DM_AW-1:0]) | ({DM_AW{dm_dsel && s1 && d_pg}} & m3_rd[DM_AW-1:0]) |
-                   ({DM_AW{dm_dsel && s2}} & DM_AW'(sext6(o[32:27]))) | ({DM_AW{dm_dsel && s3}} & o[DM_AW-1:0]);
+        dm_ia[k] = ({DM_AW{dm_s1}} & i1_rd[DM_AW-1:0]) | ({DM_AW{dm_s3}} & i3_rd[DM_AW-1:0]);
+        dm_ob[k] = ({DM_AW{dm_t1}} & m1_rd[DM_AW-1:0]) | ({DM_AW{dm_t3}} & m3_rd[DM_AW-1:0]) |
+                   ({DM_AW{dm_t6}} & DM_AW'(sext6(o[32:27]))) | ({DM_AW{dm_t32}} & o[DM_AW-1:0]) | ({DM_AW{dm_tn}} & dm_xa);
         dm_as[k] = dm_ia[k] + dm_ob[k];
     end
 end

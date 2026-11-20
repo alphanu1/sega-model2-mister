@@ -55264,3 +55264,22 @@ new form against the old in every clock where it is read.
   AREA: not mapped alone for v8 / v9 (the SHARC-alone maps were refused this time); s5324's
      per-entity map puts the SHARC within 10 LUTs of d71bd069's for v8. The lane's map lines are
      the measure for v9.
+  COMMITS (third hand-off): 2fa54888 (GOH out), 4006ca93 (SHARC v9: 28, 29), 77b3e656 (study).
+  30. (SHARC, v10, 269ce45c) the DM RAM's address operands as PM port B's (12):
+     each MLAB read one AND-OR from the adder with its select from the opcode beside the read, the
+     offsets and, outside D, the X / clear address (moved from ia to ob, ia 0) as their own terms
+     (s5324: pm2 -> the operand selects -> the adder -> dm1's address -0.525). The same sum;
+     g_dma_check compares it with dm_a at every enabled clock.
+  s5325 (2fa54888 + v9) map 39,178 ALMs needed (s5324 39,422; d71bd069's 39,113): GOH was the +309,
+     v9 costs about +65. Fit 41,395 (550 recoverable), clk_sys -1.078 / -0.751, HDMI +0.038,
+     hold +0.074; only SHARC families: S.daddr[8] -> XC.uw -1.078 (new worst), st[0] / pm2 -> pm0's
+     address -0.38 / -0.19, pm2 -> dm0's -0.008. fmul -> g_rf gone from the list.
+  31. (SHARC, v11; under proof) the word's condition itself with le last: cok was still isf ? fv :
+     done ? c1 : c0, l0 (le's) in front of if_cond, so every cok consumer -- the handler's enables,
+     x.uw, XC.cok -- sat behind the loop end's compare (s5325: S.daddr -> le -> the condition ->
+     XC.uw). cok = lceq ? d_cok1t : d_cok1f is the same value; R1029's d_cok_ref checks it at d_go.
+  PROOF (30, v10 = v9 + 30): the miter at MAME_RND 1 and 0, 39 programs, negcond, 28 / 28, 0 differ,
+     the same clocks; the replays 1,264,270,732 / 1,277,257,981 / 1,279,552,477 clocks, 0 out / trace
+     words differ, the 200 M-word miters 0 differ; the manual DOA lockstep 501,777,265 words, 0
+     differ, 1,264,264,337 clocks; quartus_map --analyze_file 0 errors. PLANTED: the 32-bit
+     offset's select also on the 6-bit form (r1, g_dma_check: DM address 06ff, the select's 06fd).
