@@ -112,7 +112,17 @@ module i960_regs #(
   // (rc_q), so the two are the same circuit; the header's reason for MLAB
   // (M10K the resource under pressure) does not hold on a build with M10K to
   // spare (2C), which takes the blocks and gets the LABs back as logic.
-  parameter bit          RC_M10K      = 1'b0
+  parameter bit          RC_M10K      = 1'b0,
+  // R1059: THE FRAME ROW READ ON PORT 2's COPY (1) OR A THIRD COPY OF ITS OWN
+  // (0). The row is read only in S_CALL_SAVE (rc_wdata, and the word a spill
+  // writes out), and in every busy cycle the sequencer is in T_FRAME or T_INTR
+  // waiting for !busy, where rd2 is not read -- so port 2's copy takes the
+  // row's address in S_CALL_SAVE and the third copy (four banks, eight memory
+  // LABs) is not built. rd2 differs from the flip-flop file's only in a busy
+  // cycle and the one after (still busy: S_CALL_FIN follows the last save);
+  // i960_top's outputs are the same on every clock (the i960_top miter). The
+  // 2B build only (i960_top RF_SHARE).
+  parameter bit          RF_SHARE     = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -213,15 +223,20 @@ module i960_regs #(
   wire  [2:0]   bk_ra1 = {ra1[4], ra1[3:2]};
   wire  [2:0]   bk_ra2 = {ra2[4], ra2[3:2]};
   logic [2:0]   bk_rar;                        // {0, idx[3:2]}, below idx
+  // R1059 (RF_SHARE): port 2's copy is read at the frame row in S_CALL_SAVE
+  logic         rar_on;
+  wire  [2:0]   bk_ra2s = (RF_SHARE && rar_on) ? bk_rar : bk_ra2;
 
   genvar gb;
   generate for (gb = 0; gb < 4; gb = gb + 1) begin : g_bank
     i960_rf_bank u_b1 (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
                        .ra(bk_ra1), .q(bk_q1[gb*32 +: 32]));
     i960_rf_bank u_b2 (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
-                       .ra(bk_ra2), .q(bk_q2[gb*32 +: 32]));
-    i960_rf_bank u_br (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
-                       .ra(bk_rar), .q(bk_qr[gb*32 +: 32]));
+                       .ra(bk_ra2s), .q(bk_q2[gb*32 +: 32]));
+    if (!RF_SHARE) begin : g_br
+      i960_rf_bank u_br (.clk(clk), .we(bk_we[gb]), .wa(bk_wa), .wd(bk_wd[gb*32 +: 32]),
+                         .ra(bk_rar), .q(bk_qr[gb*32 +: 32]));
+    end
   end endgenerate
 
   // A register by number from a bank row, the four flops taking their own.
@@ -382,6 +397,10 @@ module i960_regs #(
   logic [1:0]  fl_word;      // word within the row being flushed
   assign rc_wr_idx = {slot, idx[3:2]};
   assign bk_rar    = {1'b0, idx[3:2]};
+  assign rar_on    = (state == S_CALL_SAVE);
+  generate if (RF_SHARE) begin : g_rf_share
+    assign bk_qr = bk_q2;
+  end endgenerate
   assign rc_fl_idx = {fl_frame[SW-1:0], idx[3:2]};
 
   // Memory port drive. Combinational from state so the array block above stays

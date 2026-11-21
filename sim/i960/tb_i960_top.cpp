@@ -292,15 +292,21 @@ void tick() {
 //
 // R866: r0-r2 and g15 are flops (r_pfp, r_sp, r_rip, g_fp); the other 28 are
 // four banks by number [1:0], eight words at {g, row}, in three copies that
-// are always written alike (u_b1, u_b2, u_br).
+// are always written alike (u_b1, u_b2, g_br.u_br). R1059: with RF_SHARE
+// (build with -DTB_RF_SHARE) there is no third copy; its pokes go to u_b2 again.
 #define RFQ(x) dut->rootp->i960_top__DOT__u_regs__DOT__##x
 #define RFB(b, c) RFQ(g_bank__BRA__##b##__KET____DOT__u_##c##__DOT__mem)
+#ifdef TB_RF_SHARE
+#define RFBR(b) RFB(b, b2)
+#else
+#define RFBR(b) RFQ(g_bank__BRA__##b##__KET____DOT__g_br__DOT__u_br__DOT__mem)
+#endif
 static IData &rf_cell(int b, int c, int a) {
   switch (b * 3 + c) {
-  case 0: return RFB(0, b1)[a];  case 1: return RFB(0, b2)[a];  case 2: return RFB(0, br)[a];
-  case 3: return RFB(1, b1)[a];  case 4: return RFB(1, b2)[a];  case 5: return RFB(1, br)[a];
-  case 6: return RFB(2, b1)[a];  case 7: return RFB(2, b2)[a];  case 8: return RFB(2, br)[a];
-  case 9: return RFB(3, b1)[a];  case 10: return RFB(3, b2)[a]; default: return RFB(3, br)[a];
+  case 0: return RFB(0, b1)[a];  case 1: return RFB(0, b2)[a];  case 2: return RFBR(0)[a];
+  case 3: return RFB(1, b1)[a];  case 4: return RFB(1, b2)[a];  case 5: return RFBR(1)[a];
+  case 6: return RFB(2, b1)[a];  case 7: return RFB(2, b2)[a];  case 8: return RFBR(2)[a];
+  case 9: return RFB(3, b1)[a];  case 10: return RFB(3, b2)[a]; default: return RFBR(3)[a];
   }
 }
 uint32_t dreg(int i) {
