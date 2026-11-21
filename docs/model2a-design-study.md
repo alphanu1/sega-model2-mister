@@ -55693,3 +55693,163 @@ LUTs of m2b_sharc's own logic. They take the decode out of the enables (rn_we 8 
 path) and a LUT out of PM port B's MLAB routes; whether a seed shows it is the lane's question (R1054: one
 fit is not evidence at a 0.4-0.9 ns spread). The data address's kind / map test and the store data are
 what this family still has, and neither has a fix without logic. Not fitted here.
+
+**R1059 -- 2B AREA WITHOUT A BEHAVIOUR CHANGE, ROUND THREE: THE WHOLE 2B MAP SURVEYED (PER ENTITY, EVERY
+REGISTER AND LUT OF THE MAPPED NETLIST BY NAME, EVERY MLAB BY SHAPE). THE OUTPUT-NEUTRAL LOGIC SAVINGS
+R1008 / R1018 / R1038 / R1039 / R1050 LISTED ARE ALL IN; WHAT IS LEFT IS MEMORY LABs. TWO TAKEN, BOTH
+i960: THE CALL SAVE's FRAME ROW READ ON PORT 2's BANK COPY (RF_SHARE, EIGHT MEMORY LABs) AND EACH FRAME's
+ADDRESS IN ITS OWN M10K ROWS (RC_FA, TWO). quartus_map 39,112 -> 39,022 ALM NEEDED (-90), MEMORY ALUTs
+2,743 -> 2,589 (-154), MLAB BITS 52,136 -> 50,904, M10K 0 BY SHAPE.** Branch 2b-alm (from model2b
+32a08061), 2026-11-21. Simulation and quartus_map only; no fit, no board.
+
+(Section: §10, after R1057 (R1058 is the program-memory branch's). Authority: Ben's rule for this pass --
+every output the same on the same clock, nothing removed or reduced, no extra cycle, no timing exception,
+M10K the binding resource; Model 1's area pass (sega-model1-mister 0ac55df's findings: 86927fb, 7d95cdd,
+29a5fa0, b274b79, 833301b, 16e6d88, d1669a9, a5c905c, e643842, 957fba3, a7abcbf) for the techniques;
+R1050 for how the fit charges a memory LAB; the i960_top lockstep bench (tb_i960_top, the MAME-derived
+reference CPU) through an old-against-new i960_top miter for the proof. sys/, tools/ and rtl/sharc (the
+2b-pmo branch's) not touched.)
+
+*What was believed (the brief):* the 2B map is ~39,045 ALM needed and its fits 41,350-41,450 of 41,910
+(98.7-98.9 %), timing swinging ~1 ns seed to seed; Model 1 and Model 2 closed at 99.5 % after their area
+passes; Model 1's techniques (storage into MLAB, register files as MLAB banks with a bypass, duplicated
+arithmetic built once, idle registers shared, FIFOs out of flops) should find more here.
+
+*What is now known:*
+  * The base (32a08061) maps at 39,112 ALM needed, 57,443 logic ALUTs, 2,743 memory ALUTs, 43,350
+    registers, 4,057,660 block bits, 52,136 MLAB bits, 101 DSP. Mapped twice (base, base2): identical to
+    the ALUT, so quartus_map is deterministic for one tree; the run-to-run variation R1039 measured is
+    BETWEEN trees -- modules no change touches move (here i960_fpmul -41 ALUTs, i960_alu +6 across
+    commits that edit neither) -- so a whole-build delta under ~50 ALM is not a measurement, and the
+    changed entity's own ALUTs / memory ALUTs / MLAB bits are quoted beside it.
+  * The map's "ALMs needed" does count MLABs (change 1: -80 ALM for -128 memory ALUTs and +6 logic ALUTs
+    of its own; the other -66 logic ALUTs are untouched modules, fpmul's -41 among them). The fit charges more: a memory LAB is
+    a whole LAB no logic shares (R1050), and quartus_map's memory ALUTs are width x ceil(depth / 32) --
+    a 32-bit word is 1.6 LABs to the map and two to the fitter. So the map under-reads both changes here.
+  * Model 1's patterns, checked one by one against the 2B build: every flip-flop array read a word at a
+    time that R1008 / R1018 found is already MLAB; the 68000's register file is Model 1's LVT (R1050); the
+    duplicated arithmetic R952 found is shared (one normaliser, one adder per accumulator, the fill's
+    plane products, the SHARC's one funnel shifter); the inlined-function sites (Model 1's movc_finish
+    pattern) were all checked -- every function called at four or more sites (m2_quad_store sb / satf,
+    the fill's rq / p4 / clz_join, the clipper's f2uvw / fkey, m2_geometry g_pairs ...) is either called
+    with the same argument (Quartus already shares it) or small. Register sharing paid Model 1 -6 / -8 ALM
+    and R1018 measured a register at ~0.15 ALM in this map: not pursued.
+
+*THE SURVEY (quartus_map, the whole 2B build at 32a08061; ALUTs / registers own to the entity):*
+    entity                                     own ALUTs  own regs   what is in it, what was checked
+    i960_top (own logic)                          4,096     1,561    the write-data select wd (333:1), ip, boot_addr (41:1),
+                                                                     fp_res_wide / fp_a / fp_b: R1008 measured restructuring
+                                                                     wd at -37; fpr[0:3] (256, reset; three read ports)
+    m2b_sharc (own)                               3,842     1,329    2b-pmo's branch -- not touched here
+    m2_raster_fill                                3,048     2,772    R952 shared; the corner arrays read four at a time; the
+                                                                     two dividers concurrent (R1008: one would add latency)
+    m2_geometry (own)                             1,709     1,708    hx..hv / puv / mm_k [4] (four at a time); RES_CP's copies
+                                                                     (R1036, timing: Ben's, R1039)
+    m2_texel_bl                                   1,699     1,352    R798 / R1008 done; rs_* entries ~40 ALM (R1008)
+    m2b_sharc_xu                                  1,697       248    one funnel, one ALU adder: shared already
+    m2_geo_clip                                   1,436     1,637    q* [4] in flops (written four at a time in K_IDLE); the
+                                                                     push's 5:1 (sk_wd, 324 LUTs) -- see below
+    m2_span_tex                                   1,414     1,709    sh_x / sh_v delay line (seven taps read)
+    m2_geo_engine                                 1,314     1,933    strip vertices (read four at a time), R1018 CCV_LUT done
+    m2_scsp                                       1,240       822    R1008 SCSP_M10K done
+    m2_sdram                                      1,013     1,807    p_dout (704) and addr_p (265): per port, read across
+                                                                     clock domains (R1008 / R1018)
+    i960_fpadd / fpmul / fpmisc                   989 / 969 / 857    R1018 LEAN done; fpmul's 55-bit funnel (315 LUTs) already
+                                                                     one shifter for both subnormal directions
+    fx68k excUnit (RF_MLAB)                         969       571    R1050; the PLA (542, uaddrDecode) is a 16-bit decode
+    m2_cpu_bridge                                   917       569    lb / l_data (256): the CDC's two sides
+    i960_regs                                       886       349    three 4 x 8 x 32 MLAB bank copies -> change 1
+    m2_geo (own)                                    716       968    pointers; dbg_* counters resource-shared into a live adder
+    framework (sys/: ascal 2,464 / 3,997, the two OSDs 1,682, pll_hdmi_adj 716): untouched
+  The netlist census (quartus_cdb --vqm of the map, every register and LUT by name; scratchpad
+  census.py / dead.py): the largest register groups are m2_sdram's p_dout (704) and addr_p (265),
+  tile_fetch's cc_addr (272, the glyph CAM), the span queue's head (263, R1018's HEAD_RAM +93), fpr (256),
+  ascal (sys/), the i960 fpmul's multiplier pipeline (212), sv_c (176, four-at-a-time), the pool's RES_CP copies
+  (2 x 128) -- every one already looked at and kept for a reason on record. A reachability pass over the
+  mapped netlist (registers / LUTs from which no path reaches an I/O, RAM, DSP or PLL) found 1 register and
+  1 LUT (the SHARC's XC.b6) -- Quartus leaves nothing dead. The release build's debug counters m2_geo's
+  dbg_mtx_n / dbg_walk_objs (no reader with M2_NO_DEBUG) survive only because Quartus shared their
+  incrementer with dbg_walk_frames' (live: q3d_end); 16-32 registers, not taken.
+  THE MLABs (the map's RAM summary, 88 RAMs, ~179 memory LABs by ceil(width / 20) x ceil(depth / 32);
+  R1050's fit counted 167): the SHARC and its bus 50 LABs (2b-pmo's), the i960 44 (the i-cache tag 16 --
+  its hit is a compare at the request, R1008; the register banks 24; the d-cache tag 2; the frame
+  addresses 2), the renderer's fill masks 2 x 8 and fb_wcomb 8, the 68000's LVT 12, the clipper's created
+  points 10 (five 4 x 32), the transform's products / matrix 10, the rest 1-4 each. Most are under-filled
+  (8- and 16-deep in 32-deep cells, 32-bit words in 20-bit columns); the two that could go are below.
+
+*TAKEN (each commit's proof; the whole build's map after each, in order):*
+  1. 522418a1 i960_regs RF_SHARE (i960_top RF_SHARE, Model2.sv B2): the frame row a call saves is read on
+     port 2's bank copy, the third copy (u_br, four 8 x 32 MLABs) not built. The row is read only in
+     S_CALL_SAVE (rc_wdata, and the word a spill writes out); in every busy cycle the sequencer waits in
+     T_FRAME or T_INTR and reads no operand, so port 2's copy takes the row's address there (bk_ra2s =
+     state == S_CALL_SAVE ? {0, idx[3:2]} : bk_ra2). rd2 differs from the old file's only in a busy cycle
+     and the one after (S_CALL_FIN follows the last save, still busy) -- i960_regs' own outputs are NOT
+     the same (the miter counts it); i960_top's are, on every clock.
+     Map: 39,112 -> 39,032 (-80); memory ALUTs 2,743 -> 2,615 (-128); MLAB bits -1,024; logic ALUTs -60
+     (i960_regs own +6: the address select; fpmul -41 untouched -- the between-trees variation); 8 memory
+     LABs by shape.
+  2. fbdf2c7e i960_regs RC_FA (with RC_M10K; i960_top RC_FA, Model2.sv B2): each saved frame's address
+     (spill_base, [31:6]) is written with every row of the frame into the M10K frame cache -- 128 -> 154
+     bits a row -- and the flush reads it from rc_q in S_FLUSH_WR (the row it is writing out, held there
+     as its words are) where the 8 x 26 MLAB was read at fl_frame. (* max_depth = 256 *) keeps the block
+     shape at 256 x 40: four blocks for 154 bits as for 128 (the map: WIDTH_A 154, MAXIMUM_DEPTH 256;
+     the fit's M10K count to confirm). Map: 39,032 -> 39,022 (-10); memory ALUTs -26; MLAB bits -208;
+     block bits +832; logic ALUTs +4 (i960_alu +6 untouched); 2 memory LABs.
+  TOTAL: 39,112 -> 39,022 ALM needed (-90), memory ALUTs -154, logic ALUTs -56, registers 0, MLAB bits
+  -1,232, block bits +832, DSP 0, M10K 0 by shape; ten memory LABs, ~100 ALM of LAB space in a fit by
+  R1050's accounting, of which the map shows 90. 2A and 2C: RF_SHARE 0 / RC_FA 0 -- the same RAMs and
+  logic (the only change at 0 is the frame-address MLAB's hierarchy name, g_fa_mlab).
+
+*PROOF (benches under the 8 G cap, -j 2; sim/miter/area_r1059/i960mit.sh: sim/miter/miter.py on i960_top with
+i960_regs renamed in each copy, tb_i960_top unchanged but for its register pokes, which now poke both
+copies (area_r1059/tbpatch.py); every one of i960_top's 28 outputs compared every clock):*
+  * Change 1, against 32a08061, the B2 build (VC FR F2A C2 F2B, FP_SUBN 2): +vc +fx +c2 +b2 at the
+    default, +seed=2 +random=2000, +steps=400 +seed=7 +strictcov, +noirq +lat=7 +seed=3 +random=3000,
+    +loops +steps=400 +lat=40 +random=300: PASS (the reference CPU's lockstep), 0 differ in 16,252,274
+    clocks; internally rd1 / rd2 differ on 202,759 of them (0 on the +noirq run) -- the bench reaches the
+    change -- and S_CALL_SAVE ran 2,867,638 clocks. With the ring of eight (RC_RING, the 2B build's): the
+    same five forms (seed 11 for the second), 0 differ in 15,543,378 clocks, rd1 / rd2 differing on 7,747.
+    The 2C form at RF_SHARE 0 (two runs, 2,501,492 clocks): 0 differ, 0 internal.
+  * Change 2, against change 1's RTL: the ring of eight, five forms, 0 differ in 15,543,378 clocks; on the three runs
+    counted, 151,968 flush words written out (1,392 / 18,144 / 132,432); MAME's rule (ring 0), three
+    forms, 0 differ in 3,053,669 clocks, 8,160 flush words; the 2A form (RF_SHARE 0, RC_FA 0, RC_M10K 0,
+    the ring) +fx and +strictcov: 0 differ in 583,817 clocks.
+  * PLANTED (each a copy of the new i960_regs.sv): (1) the row's address a state late (rar_on in
+    S_CALL_FIN): FAIL at 2,431 clocks (the lockstep: the saved frame is the wrong row). (2) the row's
+    address in S_CALL_FIN as well as S_CALL_SAVE: NOT a fault -- PASS, 0 differ on three runs (rd2's extra
+    stale value is the one the sequencer holds in the cycle it leaves T_FRAME, where it reads no operand); it shows the
+    margin, not a gap. (3) the row's address also in S_IDLE (idx[0] set): FAIL, the miter differs at clock
+    11,421. (4) RC_FA's frame address written with bit 6 cleared: FAIL at 11,647 clocks, the miter 72
+    differing (the flush's addresses).
+  * Lint: i960_top at RF_SHARE / RC_FA 1 (the 2B parameters) and 0 (2C, 2A), -Wall: 0 warnings each;
+    make lint_top LINT_DEFS=-DM2_2B, the 2A form and -DM2_2C: clean. make test_i960_top_b2 (the
+    defaults, RF_SHARE 0): PASS. tb_i960_top alone at the 2B parameters (RF_SHARE, RC_FA, the ring of
+    eight, -DTB_RF_SHARE): PASS at the default, +seed=21 +random=3000 and +strictcov (4,157,195 clocks).
+
+*TRIED AND DROPPED:*
+  * MLAB words packed with a write enable per byte (the clipper's five 4 x 32 created-point arrays as one
+    4 x 160 -- one write address, one read address, a coordinate a write: 8 LABs for 10; the same shape
+    fits the i960 bank copies (8 x 128, 7 for 8 a copy), the transform's three product columns (8 x 96, 5
+    for 6) and the 68000 LVT's 8-bit lanes): built and benched (tb_clip_top through the clipper miter,
+    3,280,961 clocks 0 differ, a byte lane given the wrong enable caught on 1,692,008), but Quartus 17.0
+    does not infer an MLAB with byte enables from a packed-byte array -- a test module mapped to 640
+    registers and no RAM, with no message (scratchpad bet/). Two more forms
+    (each byte written by its own if, with the no_rw_check asynchronous read and with a registered read)
+    mapped to 128 / 160 registers likewise. Reverted, not committed.
+    Only a direct altdpram instance (and a simulation model) would do it: ~9 LABs over the four sites.
+  * The SCSP's registered-read MLABs (ud 32 x 16, mfifo / mo_fifo 32 x 8, efreg 16 x 16, mixs / mixs_b
+    16 x 20: six LABs) into M10K, R1008's trade: one M10K for one LAB each, and M10K is what binds.
+    Proposal only: 6 M10K for ~60 ALM.
+  * The clipper's push select (sk_wd, 5:1 on 160 bits, 324 LUTs) as one MLAB read (the quad's vertices as
+    entries 4-7 of the created-point arrays): K_IDLE loads all four vertices at once, so the copy needs
+    the same 4:1 select it removes.
+  * The i960 banks or the transform matrix copies as one copy: both read in the same clock (two
+    operands; the multiply and add stages of two points at once). The i-cache tag into M10K: R1008's no.
+  * dmc's 64 valid bits (CCV_LUT's form, ~20 ALM against a new memory LAB): no gain.
+  * i960_regs' bank write data (128 LUTs, three sources) and rc_wdata (96): the sources are the three
+    writes the file has.
+
+*NOT SETTLED:* no fit. The ten memory LABs and the M10K shape (four 256 x 40 blocks for rcache) are by
+the map; the fit says what they free. Timing: change 1 puts one 2:1 in front of port 2's bank address
+(ra2 -> bk_ra2s -> the MLAB -> pick -> rd2, clk_i960, +0.98 ns on s5334); change 2 moves the flush's
+address source from an MLAB read to rc_q (an M10K output register, as mem_wdata's in the same state).
