@@ -122,7 +122,14 @@ module i960_regs #(
   // cycle and the one after (still busy: S_CALL_FIN follows the last save);
   // i960_top's outputs are the same on every clock (the i960_top miter). The
   // 2B build only (i960_top RF_SHARE).
-  parameter bit          RF_SHARE     = 1'b0
+  parameter bit          RF_SHARE     = 1'b0,
+  // R1059: A FRAME's ADDRESS IN ITS OWN ROWS OF THE M10K FRAME CACHE (1, with RC_M10K), NOT
+  // IN AN 8 x 26 MLAB BESIDE IT (0). The call's save writes the address with every row it
+  // writes (the same spill_base all four), and the flush reads it in S_FLUSH_WR from rc_q --
+  // the row it is writing out, valid there as its words are -- where the MLAB was read at
+  // fl_frame, the slot those rows belong to. The 128-bit rows become 154 of the M10K's 160
+  // (four 256 x 40 blocks either way: max_depth 256). Two memory LABs. The 2B build.
+  parameter bit          RC_FA        = 1'b0
 ) (
   input  logic        clk,
   input  logic        rst_n,
@@ -274,27 +281,42 @@ module i960_regs #(
   // defeat the inference. The two never touch it in the same cycle (S_CALL_SAVE
   // writes, S_FLUSH_WR reads), and no slot is read before a call has written
   // it, so its power-up contents are never seen.
-  (* ramstyle = "MLAB, no_rw_check" *)
-  logic [31:6] rcache_frame_addr [0:CACHE_FRAMES-1];
+  // (R1059: the array itself is in g_fa_mlab, below its write's signals; with RC_FA it is not built)
+  localparam bit FA_RC = RC_FA && RC_M10K;
+  /* verilator lint_off UNUSEDSIGNAL */        // fa_wd / rc_fa_q: read only with FA_RC
+  logic [31:6]     fa_wd;                      // the frame's address, written with its rows (spill_base)
+  /* verilator lint_on UNUSEDSIGNAL */
+  logic [31:6]     fa_rd;                      // the flushed frame's address
 
   logic            rc_we;
   logic [SW+1:0]   rc_waddr;
   logic [SW+1:0]   rc_raddr;
   logic [W*32-1:0] rc_wdata;
   logic [W*32-1:0] rc_q;
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [31:6]     rc_fa_q;                    // FA_RC: the row's frame address, beside rc_q
+  /* verilator lint_on UNUSEDSIGNAL */
 
-  generate if (RC_M10K) begin : g_rc_m10k
+  generate if (FA_RC) begin : g_rc_m10k_fa
+    (* ramstyle = "M10K", max_depth = 256 *) logic [W*32+25:0] rcache [0:CACHE_SZ-1];
+    always_ff @(posedge clk) begin
+      if (rc_we) rcache[rc_waddr] <= {fa_wd, rc_wdata};
+      {rc_fa_q, rc_q} <= rcache[rc_raddr];
+    end
+  end else if (RC_M10K) begin : g_rc_m10k
     (* ramstyle = "M10K" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
     always_ff @(posedge clk) begin
       if (rc_we) rcache[rc_waddr] <= rc_wdata;
       rc_q <= rcache[rc_raddr];
     end
+    assign rc_fa_q = '0;
   end else begin : g_rc_mlab
     (* ramstyle = "MLAB" *) logic [W*32-1:0] rcache [0:CACHE_SZ-1];
     always_ff @(posedge clk) begin
       if (rc_we) rcache[rc_waddr] <= rc_wdata;
       rc_q <= rcache[rc_raddr];
     end
+    assign rc_fa_q = '0;
   end endgenerate
 
   // Depth counter, exactly MAME's m_rcache_pos. Signed, because do_ret_0
@@ -385,10 +407,18 @@ module i960_regs #(
   // lint correctly flagged as a field extracted and then forgotten.
   logic [SW-1:0] slot;
 
-  // R952: rcache_frame_addr's write port (the array is declared above).
-  always_ff @(posedge clk)
-    if ((state == S_CALL_SAVE) && !to_memory)
-      rcache_frame_addr[slot] <= spill_base;
+  // R952: rcache_frame_addr's write port. R1059: the array here, built without FA_RC.
+  assign fa_wd = spill_base;
+  generate if (FA_RC) begin : g_fa_rc
+    assign fa_rd = rc_fa_q;
+  end else begin : g_fa_mlab
+    (* ramstyle = "MLAB, no_rw_check" *)
+    logic [31:6] rcache_frame_addr [0:CACHE_FRAMES-1];
+    always_ff @(posedge clk)
+      if ((state == S_CALL_SAVE) && !to_memory)
+        rcache_frame_addr[slot] <= spill_base;
+    assign fa_rd = rcache_frame_addr[fl_frame[SW-1:0]];
+  end endgenerate
 
   // Flattened cache index. ROWS is a power of two, so frame*ROWS + row is a
   // concatenation rather than a multiply.
@@ -660,7 +690,7 @@ module i960_regs #(
         S_FLUSH_WR: begin
           mem_req   <= 1'b1;
           mem_we    <= 1'b1;
-          mem_addr  <= {rcache_frame_addr[fl_frame[SW-1:0]], idx[3:2], fl_word, 2'b00};
+          mem_addr  <= {fa_rd, idx[3:2], fl_word, 2'b00};
           mem_wdata <= rc_q[{fl_word, 5'd0} +: 32];
           if (mem_ack) begin
             mem_req <= 1'b0;

@@ -96,6 +96,9 @@ module i960_top #(
   // R1059: i960_regs RF_SHARE -- the frame row a call saves read on port 2's
   // bank copy, no third copy (eight memory LABs). The 2B build.
   parameter bit RF_SHARE = 1'b0,
+  // R1059: i960_regs RC_FA -- each saved frame's address in its own rows of
+  // the M10K frame cache (with C2), not in an MLAB beside it. The 2B build.
+  parameter bit RC_FA = 1'b0,
   // R854: THE I-CACHE'S SIZE in 16-byte lines. 512 (8 KB, R815) is the
   // original core's; the 2A core has the M10K for more.
   parameter int unsigned IC_LINES = 512,
@@ -535,7 +538,7 @@ module i960_top #(
   logic        rf_mem_req, rf_mem_we;
   logic [31:0] rf_mem_addr, rf_mem_wdata;
 
-  i960_regs #(.CACHE_FRAMES(RC_FRAMES), .RING(RC_RING), .RC_M10K(C2), .RF_SHARE(RF_SHARE)) u_regs (   // R927; R1008; R1059
+  i960_regs #(.CACHE_FRAMES(RC_FRAMES), .RING(RC_RING), .RC_M10K(C2), .RF_SHARE(RF_SHARE), .RC_FA(RC_FA)) u_regs (   // R927; R1008; R1059
     .clk(clk), .rst_n(rst_n),
     .ra1(ra1), .ra2(ra2), .rd1(rd1), .rd2(rd2),
     .wa(wa), .wd(wd), .we(we),

@@ -3324,7 +3324,7 @@ localparam bit I960_R1011 = M2A && (`M2_2A_I960_R1011 != 0);
 localparam bit I960_R1011 = 1'b0;
 `endif
 // R1040: F2B, Virtual-On's roundrl / scalerl / exprl -- the 2B build only (B2)
-i960_top #(.VC(VCOP_FPU || C2), .FR(FPU2A), .F2A(FPU2A), .C2(C2), .F2B(B2), .RF_SHARE(B2),   // R869: F2A; R924: C2; R1040: F2B; R1059
+i960_top #(.VC(VCOP_FPU || C2), .FR(FPU2A), .F2A(FPU2A), .C2(C2), .F2B(B2), .RF_SHARE(B2), .RC_FA(B2),   // R869: F2A; R924: C2; R1040: F2B; R1059
            .RC_RING(I960_RING), .RC_FRAMES(I960_RING ? 8 : 4),
            .DC_LINES(I960_DC), .DC_2A(M2A), .DC_LANES(1'b0),   // R927
            .IC_PAIR(I960_R1011), .DC_ROMS(I960_R1011),
