@@ -55694,6 +55694,116 @@ path) and a LUT out of PM port B's MLAB routes; whether a seed shows it is the l
 fit is not evidence at a 0.4-0.9 ns spread). The data address's kind / map test and the store data are
 what this family still has, and neither has a fix without logic. Not fitted here.
 
+**R1058 -- THE 2B SHARC's FETCHED WORD (pm2_rtl_0 PORT B, READ UNREGISTERED): THE READ CANNOT MOVE A CLOCK
+EARLIER ONTO THE M10K's OUTPUT REGISTER -- THE NEXT FETCH's ADDRESS IS FINAL ONLY IN X's FIRST CLOCK. WHAT
+COULD COME OFF WITHOUT LOGIC: THE D GATE IN FRONT OF DAG1's I / M MLABs AND THEIR DAG2 TWINS, THE COPIES
+MADE EXPLICIT altdpram SO THE GATE IS NOT NEEDED. m2b_sharc's OWN LOGIC 3,734 -> 3,734 LUTs.** Branch 2b-pmo
+(from 32a08061, 2b-pmb), 2026-11-21. Simulation, quartus_map, post-map timing and STA of existing fits only;
+no fit, no board.
+
+(Section: §10, after R1057. Authority as R1057: the fits' full-path reports for where the time goes; the
+benches for "the same output on the same clock"; Ben's rules for area and for the build -- no added logic,
+no extra clock, no extra M10K bit, no constraint exception. Model 1 has no SHARC; MAME (the 2B tree, read
+only) only for its fetch model. Nothing in sys/ touched; m2b_sharc / m2b_lutram are the 2B build's alone.)
+
+*What was believed (R1056 / R1057, and the brief):* the one family on nearly every 2B seed starts at
+pm2_rtl_0's port B -- in the fits that is the FETCH port (pm_q[47:32] <= pm2[pm_ra]; Quartus names the
+PM-bus data port A): its data leaves the M10K ~2.7 ns after the clock (1.6 the block's clock, 1.07 to
+portbdataout) into ~110-128 loads. If the read address of the word D takes in clock N were final a clock
+earlier, the read could be issued then and taken from the M10K's output register in the same clock N
+(~0.6 ns, the same cycle counts).
+
+*What is now known:*
+  (a) THE EARLY READ IS NOT POSSIBLE. The word after word n is read in X's first clock at
+      pm_ra_x = take ? tg : chg ? S.pcstk : S.faddr, take = !x_uns && XC.cok && XC.f_br && !XC.f_db,
+      chg = !x_uns && XC.le && !XC.done, tg the one-hot of x_op / XC.f_rel* / XC.ind_t / XC.f_rts, x_uns =
+      XC.unsup || XC.mbad (m2b_sharc.sv, the fetch's always_comb at the end; x_uns at 1575). Every select
+      is XC, loaded from dx at D's last clock, and x_first <= d_go (2552): the address is a register value
+      only from X's first clock. A clock earlier it is D's own decode of pm_q -- the condition, the loop
+      end, the branch form, and mbad, which is the data address's sum and map test (the -0.40 to -1.56 ns
+      family itself). Measured on s5347 / s5348 / s5350 (slow -40C): pm2 -> XC.cok +1.9 / +3.2 / +3.0,
+      -> XC.mbad -0.40 / -0.23 / +0.00, -> XC.unsup +0.02 / +0.67 / -0.40; X's first clock XC.cok ->
+      pm*'s fetch address +2.9 / +3.2 / +3.6, XC.mbad / unsup -> it +3.0 / +2.9 / +2.7, worst into it
+      +2.5-2.7. Chained into one clock with the ~2.1 ns the output register saves: about 1.9 + 2.9 - 12.5
+      + 2.1 = -5.6 ns through cok and -0.4 + 3.0 - 12.5 + 2.1 = -7.8 ns through mbad. On top: D waits
+      (d_wait: the scoreboard, the landing's ASTAT, ur_ok) would need the output register's enable on
+      d_go -- itself late from the same word -- or a mux back to x_op on pm_q (added logic); a PM-bus store
+      in X to the next word would be read a clock before it is written (MAME reads the opcode at pc at
+      the start of each step, after the last word's store). MAME's own fetch model (sharc.cpp: pc <-
+      daddr <- faddr <- nfaddr each step, CHANGE_PC setting daddr in the step) has the same dependency:
+      only the sequential and delayed-branch next address is known early, and one port cannot serve both
+      an early sequential read and a late branch target without a second read path.
+  (b) THE FAMILY's TWO SHAPES ON THESE SEEDS: through the compute field's decode -- s5347 -1.556 /
+      s5350 -0.763: pm2 -> Decoder3 -> WideOr3 / d_unsup_x -> cbad -> the access gates (d_ag1 / d_ag0) ->
+      XC.acc, no MLAB in it -- and through the MLAB copies -- s5343 -0.859, s5347's mbad -0.402, s5348
+      -0.491: pm2 -> i3_ra / m3_ra (the D gate, one LUT, fanout 64: i1 and i3 share it) -> the MLAB ->
+      the sums -> Equal / dm_kind -> XC.acc / XC.mbad, and s5343 / s5346 -> pm0 / pm1's address.
+  (c) THE D GATE ON THE MLAB READ ADDRESSES EXISTS ONLY FOR INFERENCE (R1029: an inferred MLAB read
+      straight from pm_q takes pm_q in as its read-address register and leaves pm2 with an asynchronous
+      read). Every user of i1 / i3 / m1 / m3's reads is D's: dx (XC loads only in D), d_pb_a (pm_wa in
+      D), pm_ia / pm_ob (pm_s* / pm_t* carry dn), dm_ia / dm_ob (dm_dsel). An explicit altdpram with the
+      inferred one's settings (RDADDRESS_REG / OUTDATA_REG UNREGISTERED, mixed-port DONT_CARE -- what
+      no_rw_check gave) has nothing to absorb, so the field goes to the MLAB with no gate. Mapped alone:
+      pm0 / pm1 / pm2 still M10K (altsyncram_v6s1 / dl22, the names Model2.qsf's 80 location assignments
+      use), the six copies MLAB (dpram_h712), 655,360 block bits.
+  (d) THE AREA IS NOT ADDITIVE, AND ONLY ONE SUBSET IS NEUTRAL (m2b_sharc mapped alone at the build's
+      settings, own LUTs / total LUTs / ALMs needed; base 32a08061: 3,734 / 6,259 / 4,141):
+        all six copies explicit, gates kept ............ 3,737 / 6,247 / 4,144 (the instance alone ~0)
+        i4 / m4 ungated (explicit) ...................... 3,738 / 6,259 / 4,154 (+4 own: not taken)
+        i1 / i3 / m1 / m3 ungated (explicit) ............ 3,734 / 6,251 / 4,125 (TAKEN)
+        all six ungated ................................. 4,040 / 6,540 / 4,276 (+306: not taken)
+      Registers 1,906 (1,445 own) in every map. The two halves cost ~0 each and +306 together -- the map's
+      restructuring, not the gates (R1054 / R1057's noise is ~+-20; this is not noise).
+  (e) cbad AS ITS OWN LAST TERM of d_ag1 / d_ag0 (out of d_rzb; the same function) maps to the same
+      counts (own 4,040 on the six-copy tree with and without it, and every post-map path the same): Quartus already builds that cone its own way, so no RTL rewrite of it moves the fit. The
+      cbad -> XC.acc shape (s5347's worst) is left: taking the decode off it needs the access gated by
+      x_uns at each of its users in X (dm_en, ext_req, the PM store, the IOP write, the waits) -- added
+      logic -- or the compute field's unsupported test made apart from the decode, which R1052 / R1057
+      found is more logic.
+
+*THE CHANGE (rtl/sharc/m2b_lutram.sv, rtl/sharc/m2b_sharc.sv):*
+  1. 62badc16: m2b_lutram gains RAW (default 0, every other instance unchanged -- their inferred names
+     too): outside Verilator an explicit altdpram, the inferred array then written and never read
+     (dropped). u_i1 / u_i3 / u_m1 / u_m3 take RAW, and i1_ra / i3_ra / m1_ra / m3_ra are {0|1, op[43:41]}
+     / {0|1, op[40:38]} with no (st == ST_D) gate. In D the address is the old one; outside D the read is
+     not taken by anything (c above). i4 / m4 keep their gate (d: +4 alone). Own LUTs 3,734 -> 3,734,
+     total 6,259 -> 6,251, ALMs needed 4,141 -> 4,125, registers 1,906 / 1,445 both, block bits 655,360
+     both. Post-map levels (base -> new): pm2 -> pm address 5 -> 4, -> dm address 5 -> 4, -> XC.acc 8 -> 7;
+     through i3 to pm / dm address 4 -> 3, i1 4 -> 3, m1 / m3 5 -> 4, m3 to dm 5 -> 4; i3 -> XC.acc /
+     XC.mbad 9 -> 7, m3 -> XC.acc 9 -> 7. Untouched paths moved by a level both ways (cbad -> XC.acc 4 -> 5,
+     sh_pdj 8 -> 9, misc_op 4 -> 5: R1057's noise). The post-map delays are not the fit's (R1057), so only
+     the levels are read. Simulation cannot see this change's synthesis half (Verilator uses the inferred
+     form); the map's RAM summary is its check.
+
+*PROOF (benches under the 4 G cap, -j 2; new = 62badc16's rtl/sharc, old = 32a08061's):*
+  * THE CORE: the miter (new against old, every output every clock) in the lockstep bench at MAME_RND 1
+    and 0 -- the 42 random programs, negcond n0-n3, the 28 unsupported cases (28 / 28 at their words at
+    both roundings): 0 differ, every clock count R1057's (MAME_RND 1: r1 2,589,533, r101 2,570,837, r201
+    2,599,970, r306 2,499,985, r341 2,584,583, r361 2,566,827; MAME_RND 0: r1 2,523,059, r341 2,544,110,
+    r361 2,527,710), every bench check silent.
+  * THE REPLAYS: (MAME rounding, PXIM 0, SKLR 0) on the new core: DOA 150 s 1,264,270,732 clocks
+    (2.5196 a word), fvipers 500 M words 1,277,257,981 (2.5545), schamp 1,279,552,477 (2.5591) -- R1057's
+    to the clock; out FIFOs and the MAME traces (30 M / 20 M / 20 M words) 0 differ. Under the miter (new
+    against old), 200 M words of each: 0 differ (503,745,104 / 510,558,056 / 506,338,721 clocks), and DOA
+    200 M words under the miter at MAME_RND 0: 0 differ (503,743,519 clocks; 3,731,838 out words differ
+    from MAME's, the manual's rounding). THE MANUAL ROUNDING (SH_MAME_RND 0) on DOA's whole capture in
+    lockstep with v1 MAN: 501,777,265 words, 0 differ, 1,264,264,337 clocks, 10,280,834 out words differ
+    from MAME's (R1048's figure).
+  * PLANTED (each copy with the bench check that would name it taken out, so the miter or v1's lockstep
+    must see it; 10 programs, 300 k words, MAME_RND 1): (1) i1's ungated read taken in X (pm_s1 by
+    dn || st == ST_X; g_dma_check's PM line out): CAUGHT on 9 of 10 (r1, r2, r3, r101, r301, r341, r342,
+    r351, r361 stop at 316-3,302 clocks; r201 runs out its words, 779,970 clocks). (2) the DM address's
+    I taken in X (dm_ia by dm_dsel || X; g_dma_check's DM line out): CAUGHT on 9 of 10 (188-693 clocks;
+    r201 the same). (1) on r1 run alone in full: v1's lockstep, word 165 of 165 differs.
+  * quartus_map --analyze_file (17.0): 0 errors on m2b_lutram.sv and m2b_sharc.sv (1 warning each, the processor count). make lint_top LINT_DEFS=-DM2_2B (under the 8 G cap): clean.
+
+*So:* the fetched word's clock-to-out stays: the read cannot move earlier without the next address in one
+clock with the decode that makes it (-5.6 ns at best), and the port cannot both read early and late. What
+comes off without logic is the D gate in front of DAG1's MLABs -- one LUT and one hop on the MLAB-route
+shape (s5343, s5347's mbad, s5348) and PM / DM port B's address -- at the same own LUT count and 16 ALMs
+fewer. The cbad -> XC.acc shape (s5347 -1.556, s5350 -0.763) and the store data (acc_wd) have no fix
+without logic found here. Not fitted; whether a seed shows it is the lane's question (R1054).
+
 **R1059 -- 2B AREA WITHOUT A BEHAVIOUR CHANGE, ROUND THREE: THE WHOLE 2B MAP SURVEYED (PER ENTITY, EVERY
 REGISTER AND LUT OF THE MAPPED NETLIST BY NAME, EVERY MLAB BY SHAPE). THE OUTPUT-NEUTRAL LOGIC SAVINGS
 R1008 / R1018 / R1038 / R1039 / R1050 LISTED ARE ALL IN; WHAT IS LEFT IS MEMORY LABs. TWO TAKEN, BOTH

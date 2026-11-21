@@ -2039,19 +2039,26 @@ always_comb begin
     modi = o[47:39] == 9'b000101100;           // modify by an immediate
     // R1029: DAG1's copies read the opcode's fields with no select (the data address's path);
     // the modify forms read their I / M (either DAG, op[38]) on DAG2's copies
-    // (gated by D: an address straight from pm_q is taken into the MLAB as its read-address
-    // register, which leaves the M10K without its output register -- PM's upper lane was then
-    // built in flip-flops, R1029)
+    // (R1029 gated these by D: an address straight from pm_q, inferred, is taken into the MLAB
+    // as its read-address register and leaves PM's M10K with an asynchronous read -- PM's upper
+    // lane in flip-flops. R1058: DAG1's copies and their DAG2 twins (i1 / i3, m1 / m3) are
+    // explicit MLABs (m2b_lutram RAW), so op[43:41] / op[40:38] go to the MLAB with no gate --
+    // s5343 / s5347 / s5348: pm2 -> i3_ra / m3_ra -> the MLAB -> the sums -> XC.acc / XC.mbad and
+    // PM port B's address. Outside D these reads are never taken -- every user is D's: dx (XC
+    // loads only in D), d_pb_a (pm_wa in D), pm_ia / pm_ob (pm_s* / pm_t* by dn), dm_ia / dm_ob
+    // (dm_dsel) -- so the ungated value there is not read; the miter checks every output every
+    // clock. Type 1's i4 / m4 keep the gate: ungated as well (alone +4 LUTs, with these +306,
+    // mapped alone) they are not area-neutral)
     // R1042: a PM-bus access (one move, not type 1's) reads DAG2's I / M on these copies: the
     // opcode's g bit is the address's bit 3
     pg = (o[47:45] == 3'b010 && o[32]) || (o[47:44] == 4'b0110 && o[40]) || (o[47:44] == 4'b1000 && o[32]) ||
          (o[47:45] == 3'b101 && o[44]) || (o[47:44] == 4'b1001 && o[37]);
     // (R1044: bit 3 fixed in each copy, the g bit choosing after the read: i1x_rd / m1x_rd)
-    i1_ra = (st == ST_D) ? {1'b0, o[43:41]} : 4'd0;
-    i3_ra = (st == ST_D) ? {1'b1, o[43:41]} : 4'd8;
+    i1_ra = {1'b0, o[43:41]};
+    i3_ra = {1'b1, o[43:41]};
     i2_ra = {(modf || modi) ? o[38] : 1'b1, modi ? o[34:32] : o[32:30]};
-    m1_ra = (st == ST_D) ? {1'b0, o[40:38]} : 4'd0;
-    m3_ra = (st == ST_D) ? {1'b1, o[40:38]} : 4'd8;
+    m1_ra = {1'b0, o[40:38]};
+    m3_ra = {1'b1, o[40:38]};
     d_pg = pg;
     i1x_rd = pg ? i3_rd : i1_rd;
     m1x_rd = pg ? m3_rd : m1_rd;
@@ -2088,9 +2095,9 @@ always_ff @(posedge clk) begin
     ir_pa <= {xu_r[3], xu_r[2:0]};
     ir_pd <= xu_v;
 end
-m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i1_ra), .rd(i1_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES), .RAW(1'b1)) u_i1 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i1_ra), .rd(i1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i2 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i2_ra), .rd(i2_rd));
-m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i3 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i3_ra), .rd(i3_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES), .RAW(1'b1)) u_i3 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i3_ra), .rd(i3_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_i4 (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(i4_ra), .rd(i4_rd));
 // the ureg port's I / M copies read at last clock's ureg field (R1029: a register, off the
 // opcode's path); a word reading I or M through it waits in D until that is its own (ur_ok: the
@@ -2102,9 +2109,9 @@ always_ff @(posedge clk) begin
     ur_ok <= st == ST_D || (st == ST_X && !x_first);
 end
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_iu (.clk, .we(ir_we), .wa(ir_wa), .wd(ir_wd), .ra(ur_aq), .rd(iu_rd));
-m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m1_ra), .rd(m1_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES), .RAW(1'b1)) u_m1 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m1_ra), .rd(m1_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m2 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m2_ra), .rd(m2_rd));
-m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m3 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m3_ra), .rd(m3_rd));
+m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES), .RAW(1'b1)) u_m3 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m3_ra), .rd(m3_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_m4 (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(m4_ra), .rd(m4_rd));
 m2b_lutram #(.AW(4), .DW(32), .INIT1(RF_ONES)) u_mu (.clk, .we(mr_we), .wa(mr_wa), .wd(mr_wd), .ra(ur_aq), .rd(mu_rd));
 
