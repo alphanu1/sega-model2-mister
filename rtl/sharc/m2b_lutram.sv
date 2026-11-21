@@ -10,13 +10,22 @@
 // value (each says why at its instance). INIT1 (benches): the array starts all ones, so a read
 // of a word never written shows (the standing rule); on the device an MLAB is configuration
 // memory and starts as the bitstream sets it (zero).
+//
+// RAW (R1058): the read address comes straight from an inferred M10K's read data (the SHARC's
+// fetched word, pm_q). Inferred, Quartus 17.0 takes that word into the MLAB as its read-address
+// register and the M10K is left with an asynchronous read ("uninferred", PM's upper lane in
+// flip-flops: R1029), so those reads were gated by a LUT. Here the MLAB is an explicit altdpram
+// with the inferred one's settings (unregistered read address and data, mixed-port read during
+// write DONT_CARE -- no_rw_check's), so nothing is absorbed and no gate is needed. Simulation
+// (Verilator) uses the inferred form; the two are the same array.
 
 `timescale 1ns/1ps
 
 module m2b_lutram #(
     parameter int AW = 4,
     parameter int DW = 32,
-    parameter bit INIT1 = 1'b0
+    parameter bit INIT1 = 1'b0,
+    parameter bit RAW = 1'b0
 ) (
     input  logic          clk,
     input  logic          we,
@@ -30,5 +39,29 @@ module m2b_lutram #(
         initial for (int k = 0; k < (1 << AW); k++) mem[k] = '1;
     end endgenerate
     always_ff @(posedge clk) if (we) mem[wa] <= wd;
+`ifdef VERILATOR
     assign rd = mem[ra];
+`else
+    // (RAW: mem is written and never read, so synthesis drops it; the altdpram is the array)
+    generate if (RAW) begin : g_raw
+        altdpram #(
+            .width (DW), .widthad (AW), .numwords (1 << AW),
+            .indata_reg ("INCLOCK"), .indata_aclr ("OFF"),
+            .wraddress_reg ("INCLOCK"), .wraddress_aclr ("OFF"),
+            .wrcontrol_reg ("INCLOCK"), .wrcontrol_aclr ("OFF"),
+            .rdaddress_reg ("UNREGISTERED"), .rdaddress_aclr ("OFF"),
+            .rdcontrol_reg ("UNREGISTERED"), .rdcontrol_aclr ("OFF"),
+            .outdata_reg ("UNREGISTERED"), .outdata_aclr ("OFF"),
+            .use_eab ("ON"), .intended_device_family ("Cyclone V"), .ram_block_type ("MLAB"),
+            .read_during_write_mode_mixed_ports ("DONT_CARE"), .lpm_type ("altdpram")
+        ) u_ram (
+            .inclock (clk), .inclocken (1'b1), .wren (we), .wraddress (wa), .data (wd),
+            .rdaddress (ra), .q (rd),
+            .outclock (1'b1), .outclocken (1'b1), .rden (1'b1), .aclr (1'b0), .sclr (1'b0),
+            .wraddressstall (1'b0), .rdaddressstall (1'b0), .byteena (1'b1)
+        );
+    end else begin : g_inf
+        assign rd = mem[ra];
+    end endgenerate
+`endif
 endmodule
