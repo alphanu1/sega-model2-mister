@@ -55963,3 +55963,48 @@ copies (area_r1059/tbpatch.py); every one of i960_top's 28 outputs compared ever
 the map; the fit says what they free. Timing: change 1 puts one 2:1 in front of port 2's bank address
 (ra2 -> bk_ra2s -> the MLAB -> pick -> rd2, clk_i960, +0.98 ns on s5334); change 2 moves the flush's
 address source from an MLAB read to rc_q (an M10K output register, as mem_wdata's in the same state).
+
+**R1060 -- THE 2B SHARC's UNSUPPORTED-FORM TEST (cbad) A CLOCK LATE: ONE EXTRA D CLOCK ONLY FOR A WORD
+WHOSE COMPUTE FIELD IS A FORM THIS CORE DOES NOT DO AND RUNS -- WHICH NO GAME TAKES. THE COMPUTE
+DECODE IS OFF D's PATHS INTO XC.acc AND XC.unsup.** Branch 2b-ucb (from c42a5b84), 2026-11-22. Ben
+approved the one extra clock for that case only. Simulation, maps; no fit, no board.
+
+(Section: §10, after R1059. Authority: the core's benches and the MAME replays.)
+
+*What was believed (R1058):* the family that fails on s5347 (-1.556) and s5350 (-0.763) -- pm2's
+fetched word -> the compute decode -> cbad -> the access gates d_ag* -> XC.acc -- had no logic-free fix:
+taking the decode off it needs the unsupported test elsewhere.
+
+*THE COUNT FIRST (the old core, c42a5b84, Verilator-only counters):* DOA 1,264,270,732 clocks /
+501,777,265 words, fvipers 1,277,257,981 / 500 M, schamp 1,279,552,477 / 500 M (all against the MAME
+traces, 0 differ), and DOA's manual-rounding lockstep (501,777,265 words): unsupported words for any
+reason 0, cbad words 0 -- not one word with a cbad form, run or not. The 42 random programs and
+negcond n0-n3 have none either; of the 28 unsupported cases only u15 and u16 have a cbad word.
+
+*THE CHANGE (rtl/sharc/m2b_sharc.sv):* d_cbr <= st == ST_D && d_cbad_x, the word's cbad from its
+previous D clock (0 in a word's first D clock; pm_q holds the word through D). d_cbr takes cbad's
+place in rz, d_rzb and the U_COMP / U_RND reason of d_unsup_x / d_why_x. d_cbu = cbad && comp_on (the
+field runs); if (d_cbu && !d_cbr) d_wait = 1: such a word waits its first D clock and then goes
+exactly as before, a clock later (another D wait absorbs it). A cbad field that does not run changes
+nothing (its access runs on the same condition), so that word and every other go on the same clock.
+Added: 1 register, an AND, an OR term into d_wait. Two bench checks (d_cbr belongs to this word; a
+cbad word never goes in its first D clock). m2b_unsupprog.py: negcond n4-n6 (a fixed-multiply field
+whose condition fails: alone, with an in-map load, before a running compute); the existing .bins
+regenerate byte-identical.
+
+*AREA (m2b_sharc alone, the build's settings):* own LUTs 3,734 -> 3,744, total 6,251 -> 6,251, ALMs
+4,125 -> 4,119, registers 1,906 -> 1,907, block bits 655,360 unchanged. (The stall term written as
+(done ? d_cok1 : d_cok0) ? cp1 : cp0 mapped +51 / +47 ALM; with comp_on, the same function, +10 / -6.)
+Post-map levels: no path from pm2 through a cbad node reaches XC.acc or XC.unsup any more (before 5
+and 7); cbad's paths end at st (5), x_first (4), d_cbr (4); pm2 -> st 11 -> 10, -> x_first 10 -> 9.
+
+*PROOF (new against c42a5b84):* the core miter at MAME_RND 1 and 0: the 42 programs and n0-n6, 0 differ,
+every clock count unchanged; the unsupported cases 26/28 identical, u15 / u16 differing only from the
+stall clock -- the word-by-word comparison: fields the same, +1 clock at the end, one step at word
+20084, both roundings. Replays to the clock, the same counts as R1058: DOA 1,264,270,732, fvipers
+1,277,257,981, schamp 1,279,552,477 (MAME traces and out FIFOs 0 differ); the 200 M-word miters 0
+differ (503,745,104 / fvipers / 506,338,721 clocks; MAME_RND 0 503,743,519); the manual-rounding DOA
+lockstep 501,777,265 words 0 differ, 1,264,264,337 clocks. PLANTED, each caught: f1 the stall skipped
+(u15 / u16: the flag lost, fields differ); f2 the flag carried into the next word (n6 fails, fields
+differ); f3 every cbad field stalled run or not (n4-n6 +25 clocks, u15 +2). quartus_map
+--analyze_file 0 errors; lint_top -DM2_2B clean.
