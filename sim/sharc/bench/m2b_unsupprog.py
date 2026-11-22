@@ -88,6 +88,16 @@ NEG_CASES = [
     ('IF LCE R1 = DM(I1, 2) at a one-pass loop\'s end in an outer loop\'s last pass (R1048: the condition after the pop fails)',
      [0x0f1100200000, (0x0c << 40) | (1 << 24) | 3, (0x0c << 40) | (1 << 24) | 1],
      (0b0110 << 44) | (1 << 41) | (0x0f << 33) | (2 << 27) | (1 << 23), 0),
+    # R1060: a compute field of a form the core does not do (a fixed multiply), its condition
+    # false: not flagged, and on the same clock as before (D's extra clock is only for such a
+    # field that runs); alone, and with a load whose address is in the map
+    ('IF FALSE (fixed multiply)', [], (0x01 << 40) | (0x0e << 33) | (1 << 20) | (0x40 << 12), 0),
+    ('IF FALSE R1 = DM(I1, 2) (immediate modify, pre) with a fixed multiply, I1 = 0x30000',
+     [0x0f1100030000], (0b0110 << 44) | (1 << 41) | (0x0e << 33) | (2 << 27) | (1 << 23) | (1 << 20) | (0x40 << 12), 0),
+    # ... and straight before a word whose compute runs (R2 = R0 + R1): nothing of the one before
+    # reaches it
+    ('IF FALSE (fixed multiply), then R2 = R0 + R1', [0, 0, (0x01 << 40) | (0x0e << 33) | (1 << 20) | (0x40 << 12)],
+     (0x01 << 40) | (0x1f << 33) | (0x01 << 12) | (2 << 8) | 1, 0),
 ]
 
 

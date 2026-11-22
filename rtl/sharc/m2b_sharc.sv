@@ -43,7 +43,8 @@
 // add / subtract, alternate register files (a MODE1 swap bit), circular buffers (L != 0 on a
 // post-modify), interrupts and IDLE, RTI, the status stack, SHARC-side DMA, RND32 = 0 on a float
 // op, PCSTKP written, unknown compute / IOP registers; PX over the PM bus and a PM-bus address
-// outside the on-chip PM and block 1.
+// outside the on-chip PM and block 1. (R1060: a word flagged for its compute field's form -- the
+// fixed multiplier / MR, dual add / subtract, an unknown op, RND32 = 0 -- first waits a D clock.)
 //
 // R1042: PM-BUS DATA AND TYPE-1 DUAL MOVES (Fighting Vipers, Sonic Championship / the Fighters).
 // A PM-bus access uses DAG2 (I8-15 / M8-15, read on DAG1's copies with the g bit as the address's
@@ -536,6 +537,14 @@ logic        d_compf, d_compf_x;            // R1048: comp_f from the opcode's b
 logic [12:0] d_fix_ref;                     // (the benches': the handler's fix_on / fix_wr / fix_k)
 logic [7:0]  d_fixop_h;                     // (the benches': the handler's fix_op)
 logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old guard, and without)
+// R1060: cbad (the compute field a form this core does not do) a clock late. d_cbr is the word's
+// cbad from the D clock before -- 0 in a word's first D clock, its own in every later one (pm_q
+// holds the word through D) -- and is what the access gate, the flag and the reason use, so the
+// compute field's decode is off D's paths into XC.acc / XC.unsup. A word whose field is such a
+// form and runs (d_cbu) waits in its first D clock (d_wait), so it goes as before, a clock later;
+// where the field does not run cbad changes nothing (the access runs on the same condition), so
+// every other word goes on the same clock as before
+logic        d_cbr, d_cbu;
 (* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
@@ -1337,9 +1346,11 @@ always_comb begin
              (op[47:42] == 6'b000100 || op[47:45] == 3'b101) ? !ureg_ok(op[39:32], !op[40]) : 1'b0;
         // (R1048: cbad is set only inside the compute decode's `if (comp_f)`, and never for a zero
         // field (cf996899), so it stands for comp_f && comp != 0 && cbad)
-        rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || cbad ||
+        // (R1060: cbad a clock late, d_cbr: in a word's first D clock it is 0, where the word goes
+        // only if its field does not run -- and then neither does the access)
+        rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || d_cbr ||
              (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm || bad2;
-        d_rzb = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || cbad ||
+        d_rzb = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || d_cbr ||
                 dag_f || pxpm;                   // (R1048: rz but the loop end's stack test and bad2, both last)
         d_cbad_ref = comp_f && comp != 23'h0 && cbad; d_cbad_x = cbad;
         ex = (op[47:46] == 2'b11) ? !cok :
@@ -1484,7 +1495,8 @@ always_comb begin
             default: begin u1 = 1'b1; w1 = U_FORM; u0 = 1'b1; w0 = U_FORM; end
             endcase
             // the compute field's (U_COMP, then U_RND: cbad's), where it runs
-            if (cbad) begin                     // (R1048: comp_f && comp != 0 && cbad, as rz's)
+            // (R1060: d_cbr, cbad a clock late, as rz's)
+            if (d_cbr) begin                    // (R1048: comp_f && comp != 0 && cbad, as rz's)
                 logic [3:0] wc;
                 wc = (fl_d && !mode1[M1_RND32]) ? U_RND : U_COMP;
                 if (cp1) begin u1 = 1'b1; w1 = wc; end
@@ -1495,6 +1507,11 @@ always_comb begin
         // (an address outside the map, mbad, is XC.mbad: X ORs it in, x_uns -- off this path)
         d_unsup_x = (done ? (d_cok1 ? u1a[1] : u0a[1]) : (d_cok0 ? u1a[0] : u0a[0])) || dag;
         d_why_x = done ? (d_cok1 ? w1a[1] : w0a[1]) : (d_cok0 ? w1a[0] : w0a[0]);
+        // R1060: the field is cbad's and runs: the handler's comp_on -- in every form with a compute
+        // field the condition the selects above choose cp1 / cp0 by (cbad's term of d_unsup_x;
+        // g_stk_check's unsupported check holds the two equal at d_go). Mapped alone it is +10 own
+        // LUTs; the same term as (done ? d_cok1 : d_cok0) ? cp1 : cp0 mapped +51
+        d_cbu = cbad && comp_on;
     end
 
     // the decisions X's first clock makes the sequencer from
@@ -1828,8 +1845,11 @@ always_comb begin
     // a landing that writes two R registers: D does not finish in it (the second write is next clock)
     d_wait = hit || (ld_on && d_need_astat) || ir_pw || (ld_on && ld_mwe && ld_awe) || us_pw || (d_urim && !ur_ok);
     if (pm_host && d_pmb) d_wait = 1'b1;    // (R1042: the host's PM write has port B this clock)
+    if (d_cbu && !d_cbr) d_wait = 1'b1;     // (R1060: cbad's word, its first D clock)
 end
 assign d_go = st == ST_D && !d_wait;
+// R1060: cbad of this D clock's word, for its next D clock (0 after any other clock)
+always_ff @(posedge clk) d_cbr <= st == ST_D && d_cbad_x;
 
 // ================================================================== X
 
@@ -2638,6 +2658,9 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (st == ST_D && d_memf_x && d_wrf != d_wrf_ref) $fatal(1, "the direction %b, mem_wr %b", d_wrf, d_wrf_ref);
     always_ff @(posedge clk) if (st == ST_D && d_memf != d_memf_x) $fatal(1, "d_memf %b, mem_f %b", d_memf, d_memf_x);
     always_ff @(posedge clk) if (st == ST_D && d_cbad_ref != d_cbad_x) $fatal(1, "cbad without its guard differs");
+    // R1060: d_cbr is this word's own cbad, and cbad's word never goes in its first D clock
+    always_ff @(posedge clk) if (st == ST_D && d_cbr && !d_cbad_x) $fatal(1, "the registered cbad is another word's");
+    always_ff @(posedge clk) if (d_go && d_cbu && !d_cbr) $fatal(1, "cbad's word went in its first D clock");
     always_ff @(posedge clk) if (st == ST_D && d_lnzp != d_lnzp_ref) $fatal(1, "lnz[pmi] by index %b, %b", d_lnzp, d_lnzp_ref);
     always_ff @(posedge clk) if (st == ST_D && {dx.fix_on, dx.fix_wr, dx.fix_k} != d_fix_ref)
         $fatal(1, "the fixed ALU's fields %b, the handler's %b", {dx.fix_on, dx.fix_wr, dx.fix_k}, d_fix_ref);
