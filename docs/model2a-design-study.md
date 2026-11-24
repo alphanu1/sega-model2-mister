@@ -56008,3 +56008,164 @@ lockstep 501,777,265 words 0 differ, 1,264,264,337 clocks. PLANTED, each caught:
 (u15 / u16: the flag lost, fields differ); f2 the flag carried into the next word (n6 fails, fields
 differ); f3 every cbad field stalled run or not (n4-n6 +25 clocks, u15 +2). quartus_map
 --analyze_file 0 errors; lint_top -DM2_2B clean.
+
+**R1062 -- THE 2B SHARC: A DATA ACCESS OUTSIDE THE MAP COMPLETES, AS ON THE BOARD. D NO LONGER TESTS
+THE ADDRESS AGAINST THE MAP; X TESTS THE REGISTERED ADDRESS WHERE EACH KIND ACTS, AND WHAT NOTHING
+DECODES IS DROPPED -- A WRITE LOST, A READ 0, MAME's UNMAPPED VALUE -- AND THE WORD RUNS. THE FLAG
+(REASON 3) STAYS, FOR THE OVERLAY ONLY.** Branch 2b-oom (from a0a5b104), 2026-11-24. Ben approved the
+behaviour change. Simulation, maps; no fit, no board.
+
+(Section: §10, after R1060. Authority: MAME's memory system for the unmapped value -- there is no
+silicon reference here beyond "nothing answers"; the core's benches and the MAME replays for "the same
+output on the same clock". Model 1 has no SHARC. Nothing in sys/ touched; m2b_sharc is the 2B build's
+alone, so nothing is gated.)
+
+*What was believed:* (a) R1027 / R1028's guard: a data address outside the core's map flags the word
+(U_MEM, reason 3) and runs it as a NOP -- no access, no compute result, no post-modify, no loop end --
+R1029 registering the test apart (XC.mbad, ORed into x_uns). (b) R1061 (branch 2b-mbl, 971c113b /
+a6b71b15, not merged): the same guard with the map test a clock late, a word whose access runs outside
+the map waiting one D clock. On the lane: s5920, s5921 and s5923 crashed in Quartus; s5922 gave clk_sys
+-0.770 at slow -40C, the worst path pm2 port B -> the map test -> d_wait -> SH|st[0]. The stall decision
+kept the map test in D, so R1061 was dropped and the lane reset to a0a5b104. What R1061 established
+stands: its count (no game makes such an access, below) and its path analysis (every stage after the
+sum on the failing family is the map / region test).
+
+*What the hardware does:* the ADSP-2106x has no "outside the map" test. An access outside its internal
+memory goes to the external bus, and on the 2B board an address nothing decodes simply completes: a
+write is lost, a read returns whatever the bus holds. The CPU does not skip the instruction. MAME's
+value for "whatever the bus holds": copro_sharc_map (model2.cpp 747-753: the in FIFO read-only
+0x400000-0xbfffff, the out FIFO write-only 0xc00000-0x13fffff, buffer RAM 0x1400000-0x1bfffff, the
+data ROM read-only 0x1c00000-0x1dfffff) over the device's data_2m (sharc.cpp 459-469: IOP 0x0-0xff,
+block 0 0x20000-0x27fff, block 1 mirrored to 0x3ffff, short words 0x40000-0x7ffff) and pgm_2m (447-451);
+the DRC's dm_read32 / dm_write32 (sharcdrc.cpp 321-412) and pm_read32 (296-300) send everything else to
+UML_READ / UML_WRITE on the space. Anything unmapped there is handler_entry_read_unmapped::read
+(emumem_heun.cpp 8-18), which returns m_space->unmap(); that is 0 -- address_map's m_unmapval starts 0
+(addrmap.cpp 771), neither map calls unmap_value_high, so emumem_aspace.cpp 731 sets m_unmap = 0. The
+write handler (emumem_heun.cpp 62-72) only logs. Both log ("unmapped data memory read from ...") only
+with -log, -oslog or the debugger (emumem.cpp 316-319). So: a read 0, a write dropped, no wait.
+
+Outside this core's map but not the board's: block-0 data over the DM bus (0x20000-0x27fff), short
+words (0x40000-0x7ffff) and PM past the core's 8 K words (0x22000-0x24fff) are the SHARC's own RAM in
+MAME and on the chip; the core has none of it (R1027), so it answers them as nothing too -- a read 0, a
+write lost, flagged. Before, they were NOPs. No game makes any of these accesses (the count).
+
+*THE COUNT (R1061's, on a0a5b104, Verilator-only counters):* DOA 501,777,265 words / 184,824,191
+accesses that run, fvipers 500 M / 225,146,171, schamp 500 M / 220,075,722, DOA's manual-rounding
+lockstep 501,777,265 / 184,824,191: the map test true 0, mbad 0, bad2 0, unsupported for any reason 0.
+Of the 29 unsupported cases five make such an access: u0, u1, u2 (bad2), u14, u28.
+
+*THE CHANGE (rtl/sharc/m2b_sharc.sv only):*
+  D. No map test. The kind X gets is acc_kind_in (new): the region the form's sum names as if it were
+     inside the map, from a few of its bits -- DM bus a[24], a[23:22], a[17], a[14:DM_AW]; PM bus
+     pm_b1's pa[16:15] and pa[14:DM_AW] -- no zero tests, no direction (a FIN written / FOUT read is
+     X's). x.acc = (d_s3 ? d_kk_i : d_kk_o) & the gate; bad2 out of the gates (d_ag1 / d_ag0) and of
+     rz; type 1's PM kind (x.acc2) the same function of i4. mbad, bad2, dm_kind / pm_kind / acc_bits'
+     map bit stay as the benches' references only (synthesis removes them). XC.mbad is gone; x_uns =
+     XC.unsup. An access outside the map now goes to X like any other, its word with it: compute,
+     post-modify, loop end, branch.
+  X. Each kind's region test on the registered address where that kind acts (x_dmin: block 1's
+     on-chip words; x_pmin: the on-chip PM; x_iopin: a[31:8] zero; x_finin / x_foutin: a[31:25] zero
+     and read / written): outside it the DM / PM write, the IOP write, the FIFO pop / push and the FIFO
+     wait are not made, and a read loads UNMAPPED (32'h0, MAME's). x_ldv is !XC.acc_wr for every kind
+     (inside the map a FIN access is a read and a FOUT one a write, as their old 1 / 0; a FOUT read is
+     outside it and now loads). An external address is m2b_xbus's to decode, unchanged: its unmapped
+     case already answers 0 and drops a write, so no X gate (a PM-bus address is 24 bits and can name
+     only block 1's page there; PMB1_MAME's past-the-columns bit is carried in acc_addr[24] /
+     acc2_a[24], 0 in the build).
+  The flag. x_oom / x_oomf (the same tests in one place, x_oomf adding the external addresses no
+     region decodes) feed only uc_m, registered a clock later beside uc_u / uc_pm / uc_x, which sets
+     unsup / unsup_pc / unsup_op with reason 3 (U_MEM) as before. They feed nothing else. A word both
+     outside the map and unsupported for another reason now shows that other reason (its access is
+     gated off, so there is no address to test) -- before, U_MEM won over the opcode's reason.
+  No change to m2b_xbus / m2b_dmc. sim/sharc/bench/m2b_unsupprog.py: R1061's negcond n7 / n8 and u28
+  (a read of the out FIFO's window) added -- the 35 existing .bins regenerate byte-identical, the three
+  byte-identical to R1061's -- and --oomloop writes o0.bin, a loop of every kind of access outside the
+  map, each read after R0 = 0x0BADF00D, the stores aimed where a landing would show (DM 0x28010 read
+  back, the loop's own jump through a PM-bus alias); --oomcheck checks a run of it word by word, the
+  out FIFO and buffer / ROM counts and the flag.
+
+*FIRST FORMS, DROPPED:* (1) x_oom as one test gating x_ld, x_ldv, the FIFO waits and ext_req.
+Post-map it put XC.acc_addr -> the zero tests -> x_oom -> x_ldv in front of the ureg / R / I / M writes:
+XC.acc_addr -> lnz 10 levels, -> the R file 7, -> u_mu 7, -> st 7 (the base's deepest into each 7 / 4 /
+4 / 5, from XC.mbad / XC.acc). The per-kind form above takes x_ldv off the test and leaves only the
+loaded data and the write enables on it. (2) That form with an ext_pm port telling m2b_xbus a PM-bus
+access (the buffer RAM / ROM decode gated by it): not needed -- a PM-bus address is 24 bits and cannot
+reach those windows; its planted fault (the gate taken out) changed nothing, which is how that was
+found. m2b_xbus is as it was.
+
+*AREA (the build's settings, each mapped alone; base a0a5b104 -> new):* m2b_sharc own LUTs 3,744 ->
+3,694, total 6,251 -> 6,195, ALMs needed 4,119 -> 4,118, registers 1,907 -> 1,907, block bits 655,360
+unchanged. m2b_xbus / m2b_dmc not touched (form (2)'s port mapped 357 -> 358 ALM there).
+
+*LEVELS (post-map, from pm2's port B; the worst path's, and in brackets the most over the 2,000 worst;
+base -> new):* XC.acc 7 [8] -> 6 [7]; XC.mbad 7 -> no such register; XC.unsup 10 [11] -> 10 [11];
+XC.why 10 [11] -> 9 [10]; x_first 9 [9] -> 9 [9]; st 10 [10] -> 11 [11]; d_cbr 4 -> 3; XC.acc_addr 3
+[4] -> 4 [4]. Through the map test: in the base pm2 -> dm_kind -> XC.acc 7, -> pm_kind 8, -> acc_bits
+7, -> mbad -> XC.mbad 7, -> bad2 -> XC.acc 9; new: none of those nodes is in the netlist, and no path
+from pm2 passes x_oom (or any x_*in test, all from XC.acc_addr). st's eleventh level is the ASTAT
+scoreboard's (pm2 -> the opcode's need -> d_need_astat -> d_wait -> d_go -> st), logic this change does
+not touch -- the map's own restructuring (the base's worst there was the same path at 10); not a map
+test. The post-map delays are not the fit's (R1057); only levels.
+In X (from XC's registers): the region tests are new paths -- XC.acc_addr -> the I file's write data
+8, -> lnz 8, -> astat 8, -> st 6, -> the R file / u_mu 5, -> the DM / PM write 2 / 4 (unchanged); into
+lnz and astat that is one more than the base's deepest there (7, from XC.mbad / XC.acc). X's deepest
+overall was 8 before (XC.mbad -> the I file, through x_uns) and is 8 now (XC.unsup, the same path
+without XC.mbad's OR).
+
+*PROOF (new against a0a5b104):* the core miter (every output every clock, m2b_sharc and m2b_xbus) in
+the lockstep bench at MAME_RND 1 and 0: the 42 random programs and negcond n0-n8, 0 differ, every clock
+count R1061's (MAME_RND 1: r1 2,589,533, r101 2,570,837, r201 2,599,970, r306 2,499,985, r341
+2,584,583, r361 2,566,827; MAME_RND 0: r1 2,523,059, r341 2,544,110, r361 2,527,710; n0-n7 2,000,003,
+n8 2,090,912 both). The 29 unsupported cases: 24 not outside the map identical (miter, and every word
+the same in the word-by-word comparison, both roundings). The five outside it, word by word (both
+cores apart, both roundings): u0 (R0 = PM(0x22000)), u1 (PM(I8, M8) = R0, I8 = 0x400000), u28 (R0 =
+DM(0x1000000)): every output every clock the same and every word's fields the same (the flag, reason
+3, on the same clock; R0 is 0 before the word, so its load of 0 does not show -- o0 below is where it
+does; u1's post-modify is by M8 = 0; u28 pushes nothing); u2 (type 1, its PM move at 0x22000): the
+second pass now runs, +1 clock a pass (+25 over 200 words), R0 the DM move's (DM over PM, as inside
+the map); u14 (IF LCE R1 = DM(I1, 2) at a one-pass loop's end, I1 + 2 = 0x200002): the word's
+loop-stack pop is now made, so the outer loop's end at 0x20085 loops back to 0x20083 (the old NOP left
+the inner loop on the stack, and 0x20085 fell through to 0x20086); R1 loads 0. Each flags reason 3 at
+word 5, as before.
+THE LOOP (o0, 35 words a pass: every kind outside the map read after R0 = 0x0BADF00D and written --
+block-0 data over the DM bus at 0x20010, which the in-map kind names the on-chip word 0x28010 holding
+0x12345678; the FIFO windows (0x1000000 read, 0x400000 written, 0x2400000 read, 0x2C00000 written); PM
+past the on-chip words (0x22088 / 0x420088 read, a store aliasing the loop's own jump); external PM
+(0x400000, 0x40A000 read and written); 0x1E00000 and 0x40028010 read and written; 0x10000 written; a
+post-modify read at 0x20010; type 1 with its PM move at 0x22088), against the expected value of every
+read word: 200,000 words (5,714 passes, 428,573 clocks) 0 differ -- every read 0, 0x28010 still
+0x12345678, the jump intact, out FIFO words 0, buffer / ROM 0 reads 0 writes, I0 0x20011 after the
+post-modify, the flag pc 0x20089 reason 3; 10,000,000 words (285,714 passes, 21,428,573 clocks, 22 s)
+run to the end, nothing pushed or written out. The old core on it: 7,425 of 20,000 words differ -- R0
+left 0x0BADF00D at every read (0x1E00000's too: outside R1028's map), I0 left 0x20010 (no
+post-modify), and the type-1 word's DM move not made (R1 0).
+REPLAYS (MAME rounding, PXIM 0, SKLR 0) to the clock: DOA 1,264,270,732, fvipers 1,277,257,981,
+schamp 1,279,552,477 (MAME traces 30 M / 20 M / 20 M words and out FIFOs 0 differ, unsupported none --
+so no word in them is outside the map, the flag being set by any); the 200 M-word miters 0 differ
+(503,745,104 / 510,558,056 / 506,338,721 clocks; MAME_RND 0 503,743,519, 3,731,838 out words differ from
+MAME's, the manual's rounding); the manual-rounding DOA lockstep (SH_MAME_RND 0, with v1 MAN):
+501,777,265 words, 0 differ, 1,264,264,337 clocks, 10,280,834 out words differ from MAME's (R1048's
+figure). All R1061's counts.
+PLANTED (o0 checked word by word at 20,000 words under a 60 s limit, and the five cases' flag lines),
+each caught: f1 the unmapped read 0xFFFFFFFF (5,141 words differ); f2 an in-FIFO-window access
+outside the map waiting for the empty FIFO (hung, 0 words); f3 the flag not set (o0 and u0 / u1 / u2 /
+u14 / u28: no flag); f4 a DM write outside the map landing (1,143 differ: 0x28010 overwritten); f5 the
+FIFO windows' test without bit 25 (the bench check: X's test 0, D's old 1 at 0x2400000); f6 a PM-bus
+store past the on-chip PM landing (the loop's jump overwritten: 408 passes, 5,711 differ); f7 the in
+FIFO's window without the direction (the bench check, at 0x400000); f8 f7 with the bench checks taken
+out (hung); f9 a read of the out FIFO's window not loaded (572 differ); f10 the on-chip PM's test
+without the bits above 17 (the bench check, at 0x420088). Bench checks added: the in-map kind is
+acc_bits' wherever its map test is clear (each sum) and type 1's PM kind pm_kind's wherever bad2 is
+clear; X's test (x_oomf) is D's old one of the same word in every X clock (the sum's map test where
+the access runs; bad2 in the second pass); x_oom is x_oomf but for the external kind; R1028's kind
+where the map test is clear, and outside it the access running exactly where R1028's would have.
+quartus_map --analyze_file 0 errors (rtl/sharc/m2b_sharc.sv; 1 warning, the processor count); make
+lint_top LINT_DEFS=-DM2_2B clean; lint_idx lists no line of this change (m2b_sharc's one is the base's
+bench-only d_dag_ref index); Verilator -Wall on the core the base's 18 warnings, none new.
+
+*So:* the map test is out of D. No path from pm2 to a D-clock register passes a test of the address
+against the map: XC.mbad is gone, XC.acc is the region read from six bits (a level fewer), and the test
+is made in X, on XC.acc_addr, only where each kind acts. The behaviour is the board's as MAME has it: an
+access nothing decodes completes, a read 0, a write lost, the word run; the flag still names it, for
+the overlay. No game makes such an access. Not fitted; whether a seed shows it is the lane's question
+(R1054).
