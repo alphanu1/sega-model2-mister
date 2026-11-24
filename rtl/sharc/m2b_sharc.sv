@@ -42,9 +42,12 @@
 // runs as a NOP: short words, block-0 data over the DM bus, the fixed multiplier and MR, dual
 // add / subtract, alternate register files (a MODE1 swap bit), circular buffers (L != 0 on a
 // post-modify), interrupts and IDLE, RTI, the status stack, SHARC-side DMA, RND32 = 0 on a float
-// op, PCSTKP written, unknown compute / IOP registers; PX over the PM bus and a PM-bus address
-// outside the on-chip PM and block 1. (R1060: a word flagged for its compute field's form -- the
-// fixed multiplier / MR, dual add / subtract, an unknown op, RND32 = 0 -- first waits a D clock.)
+// op, PCSTKP written, unknown compute / IOP registers; PX over the PM bus. (R1060: a word flagged
+// for its compute field's form -- the fixed multiplier / MR, dual add / subtract, an unknown op,
+// RND32 = 0 -- first waits a D clock.) R1062: a data address outside this core's map (the board's
+// unmapped addresses; block-0 data, short words and PM past the on-chip words, which the core does
+// not have) is not a NOP: the access completes as nothing answering -- a write lost, a read 0,
+// MAME's unmapped value -- the word runs, and `unsup` is set (reason 3) for the overlay only.
 //
 // R1042: PM-BUS DATA AND TYPE-1 DUAL MOVES (Fighting Vipers, Sonic Championship / the Fighters).
 // A PM-bus access uses DAG2 (I8-15 / M8-15, read on DAG1's copies with the g bit as the address's
@@ -318,7 +321,7 @@ localparam logic [2:0] A_NONE = 3'd0, A_DM = 3'd1, A_FIN = 3'd2, A_FOUT = 3'd3, 
 typedef struct packed {
     logic        unsup;
     logic [3:0]  why;                       // the opcode's reason (a DAG's / a data address's below)
-    logic        dag, mbad;
+    logic        dag;
     // compute
     logic        fix_on;                    // fixed ALU
     logic [7:0]  fix_op;
@@ -337,9 +340,9 @@ typedef struct packed {
     logic [3:0]  rm, ra;
     logic        rm_we, ra_we;
     // memory
-    logic [2:0]  acc;
+    logic [2:0]  acc;                       // R1062: the kind as if the address were in the map (X tests it)
     logic        acc_wr;
-    logic [31:0] acc_addr;
+    logic [31:0] acc_addr;                  // (R1062: a PM-bus access's bit 24 is pm_b1's past-the-columns bit)
     logic [31:0] acc_wd;
     logic        ld_r;                      // load to R[ld_dst]
     logic        ld_u;                      // load to ureg ld_ureg
@@ -368,7 +371,7 @@ typedef struct packed {
     logic        dual;
     logic [2:0]  acc2;
     logic        acc2_wr;
-    logic [23:0] acc2_a;
+    logic [24:0] acc2_a;                    // (R1062: bit 24 pm_b1's past-the-columns bit, as acc_addr's)
     logic        ld2_r;                     // a load to R[ld2_dst] (not where the DM load is: DM wins)
     logic [3:0]  ld2_dst;
     logic        b6;                        // the PC-relative offset is the 6-bit one (op[32:27])
@@ -532,7 +535,8 @@ logic        d_lnzp, d_lnzp_ref;            // R1048: lnz[pmi] by its three inde
 logic        d_l1, d_cok1t, d_cok1f;        // R1048: l1 (the popped LCE), cok after the pop at l1 = 1 / 0
 // R1048: the access kind's and the map test's gate with the loop end's pop chosen in it (done,
 // l1: early beside the sums), so the sums' bits pass one gate after acc_bits, not two
-(* keep *) logic       d_ag1, d_ag0, d_mbg;   // R1050: the kind's gate for each outcome of the pop, bad2 in it
+(* keep *) logic       d_ag1, d_ag0;          // R1050: the kind's gate for each outcome of the pop (R1062: bad2 not in it)
+logic        d_mbg;                         // (the benches': the access runs, as the map test's gate was)
 logic        d_compf, d_compf_x;            // R1048: comp_f from the opcode's bits; the benches' comp_f
 logic [12:0] d_fix_ref;                     // (the benches': the handler's fix_on / fix_wr / fix_k)
 logic [7:0]  d_fixop_h;                     // (the benches': the handler's fix_op)
@@ -545,7 +549,16 @@ logic        d_cbad_ref, d_cbad_x;          // (the benches': cbad with its old 
 // where the field does not run cbad changes nothing (the access runs on the same condition), so
 // every other word goes on the same clock as before
 logic        d_cbr, d_cbu;
-(* keep *) logic [3:0] d_kb_i, d_kb_o;       // R1048: acc_bits of each sum
+logic [3:0]  d_kb_i, d_kb_o;                // R1048: acc_bits of each sum (R1062: the benches')
+// R1062: AN ACCESS OUTSIDE THE MAP COMPLETES, AS ON THE BOARD. D no longer tests the data address
+// against the map (R1028's guard: the word flagged and run as a NOP): the kind X gets is the
+// region the address names if it is inside the map (acc_kind_in: a few of the sum's bits, no zero
+// tests), and X tests the registered address (x_oom): an access no region decodes is dropped -- a
+// write lost, a read loading MAME's unmapped value, 0 -- and the word runs as any other. The flag
+// for the overlay (U_MEM) is set a clock later from X's registers and changes nothing
+(* keep *) logic [2:0] d_kk_i, d_kk_o;      // R1062: the kind of each sum as if inside the map
+logic        d_bd_ref, d_bad2_ref, d_run_ref;   // (the benches': the old map test, bad2, the access running)
+logic [2:0]  d_k2_ref;                      // (the benches': type 1's PM kind by pm_kind)
 logic        d_rzb;
 logic [2:0]  d_acc_chk;
 logic        d_mbad_nc;                     // ... and the address map's test
@@ -619,6 +632,27 @@ function automatic logic [3:0] acc_bits(input logic [31:0] a, input logic pmb, i
     return {bd, pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext),
                 pmb ? p_pm : (h_fin || h_fout),
                 pmb ? (p_dm || p_dx) : (h_dm || h_dx || h_ext || h_fout)};
+endfunction
+
+// R1062: an address's access kind as if it were inside the map -- acc_bits' kind wherever its map
+// test is clear (benches check), the direction aside (a FIN written / FOUT read is outside the
+// map: X's test). Inside the map the region is told by a few bits. DM bus: a[24] and a[23:22]
+// (below 0x400000: IOP / the block; FIN; FOUT; EXT), a[17] between the IOP registers and the
+// block, a[14:DM_AW] between the on-chip words and the page. PM bus (pm_b1's address): pa[16:15]
+// between the on-chip PM (0x20000 + 2^PM_AW words, pa[17:15] = 4) and block 1 (pa[17:15] >= 5)
+function automatic logic [2:0] acc_kind_in(input logic [31:0] a, input logic pmb);
+    logic [24:0] pa;
+    logic        lo, iop, dm, ext, fin, fout, pp;
+    pa = pm_b1(a[23:0]);
+    pp = pa[16:15] == 2'b00;
+    if (pmb) return {pp || pa[14:DM_AW] != '0, pp, !pp};               // A_PM 110, A_DM 001, A_EXT 101
+    lo = !a[24] && a[23:22] == 2'd0;
+    iop = lo && !a[17];
+    dm = lo && a[17] && a[14:DM_AW] == '0;
+    ext = (lo && a[17] && a[14:DM_AW] != '0) || (a[24] && a[23:22] != 2'd0);
+    fin = !a[24] && (a[23:22] == 2'd1 || a[23:22] == 2'd2);
+    fout = (!a[24] && a[23:22] == 2'd3) || (a[24] && a[23:22] == 2'd0);
+    return {iop || ext, fin || fout, dm || fout || ext};
 endfunction
 
 // D (R1029): the word's decisions -- the loop end's, the condition -- and everything X needs:
@@ -1252,6 +1286,8 @@ always_comb begin
              op[47:46] == 2'b11 || op[47:42] == 6'b000100 || op[47:45] == 3'b101 || op[47:44] == 4'b1001;
     d_kb_i = acc_bits(d_sum_i, pmb, d_wrf);
     d_kb_o = acc_bits(d_sum_o, pmb, d_wrf);
+    d_kk_i = acc_kind_in(d_sum_i, pmb);         // (R1062: the kind, no map test)
+    d_kk_o = acc_kind_in(d_sum_o, pmb);
     // the memory access: its kind from the address (the one late decision of D)
     // (R1042: a PM-bus access by the PM space's map, its block-1 words at the DM-bus address of
     // the same word)
@@ -1261,20 +1297,24 @@ always_comb begin
         if (pmb) begin
             {bad, akind} = pm_kind(pa[23:0]);
             bad = bad || pa[24];
-            x.acc_addr = (akind == A_PM) ? {8'h0, mem_a[23:0]} : {8'h0, pa[23:0]};
+            // (R1062: pa[24], PMB1_MAME's word past the columns, in bit 24 for X's map test; 0 in
+            // the build, where pa is the address and the select below is none)
+            x.acc_addr = (akind == A_PM) ? {8'h0, mem_a[23:0]} : {7'h0, pa[24], pa[23:0]};
         end else begin
             {bad, akind} = dm_kind(mem_a, mem_wr);
             x.acc_addr = mem_a;
         end
     end
     // R1042: type 1's PM access (DAG2: I8-15 by op[32:30], M8-15 by op[29:27], DAG2's copies)
+    // (R1062: its kind as if inside the map, X's second pass testing the address; bad2, the old
+    // test, the benches')
     pa2 = pm_b1(i4_rd[23:0]);
     {bad2, akind2} = pm_kind(pa2[23:0]);
     bad2 = t1 && (bad2 || pa2[24]);
     x.dual = t1;
-    x.acc2 = akind2;
+    x.acc2 = acc_kind_in(i4_rd, 1'b1);
     x.acc2_wr = op[37];
-    x.acc2_a = (akind2 == A_PM) ? i4_rd[23:0] : pa2[23:0];
+    x.acc2_a = (akind2 == A_PM) ? {1'b0, i4_rd[23:0]} : pa2;
     // (mem_on and x.pmod are the condition's, through the handler; the same tests from the
     // opcode with the condition last below, R1029)
     begin
@@ -1284,6 +1324,7 @@ always_comb begin
         d_mbad_nc = mem_f && bad;                // (R1044's; the benches' since R1048)
         // (R1048: the loop end's pop and the condition chosen in the gate, the sums' map test --
         // the form choosing -- last; d_mbad_nc the benches')
+        // (R1062: the map test's old form, mbad, the benches' only: X tests the address now)
         begin
             logic e1t, e1f, e0;
             e1t = (op[47:46] == 2'b11) ? !d_cok1t : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1t : 1'b1;
@@ -1295,6 +1336,7 @@ always_comb begin
     end
     d_mbad_ref = (mem_on && bad) || bad2;       // (R1028's, for the benches' check)
     d_bad_x = bad;
+    d_bd_ref = d_s3 ? d_kb_i[3] : d_kb_o[3]; d_bad2_ref = bad2; d_k2_ref = akind2;
     x.acc_wr = mem_wr;
     // circular buffers (L != 0) are not done
     // (the index from the opcode alone, R1029: x.pmod_i is the same where x.pmod is set)
@@ -1328,10 +1370,11 @@ always_comb begin
     // an unsupported word does nothing but move the queue (and is flagged): X's first clock
     // moves the queue on XC.unsup, and X writes no compute result (fixed, shifter or float), no
     // post-modify, no ureg and no bit operation on it; here only the access is cleared (R1029:
-    // the rest is gated in X, off D's path). MAME's order: a data address outside the map over
-    // the opcode's reason, a DAG's over both.
+    // the rest is gated in X, off D's path). MAME's order: a DAG's reason over the opcode's.
+    // (R1062: a data address outside the map no longer makes the word unsupported -- mbad is the
+    // benches'; the access goes to X, which completes it as nothing answering)
     why0 = x.why;
-    if (x.unsup || dag || mbad) x.unsup = 1'b1;
+    if (x.unsup || dag) x.unsup = 1'b1;
     // The access (R1029: the condition last, a select). In every form with one the reasons that
     // depend on the condition share the access's, so the access is made where the condition holds
     // and none of the opcode's reasons, as if it ran, is there -- nor the loop end's stack test, the
@@ -1349,9 +1392,9 @@ always_comb begin
         // (R1060: cbad a clock late, d_cbr: in a word's first D clock it is 0, where the word goes
         // only if its field does not run -- and then neither does the access)
         rz = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || d_cbr ||
-             (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm || bad2;
+             (done && (S.lstkp == 3'd0 || S.pcstkp == 6'd0)) || dag_f || pxpm;   // (R1062: not bad2)
         d_rzb = ub || (op[47:44] == 4'b1000 && !shift_ok(op[21:16])) || d_cbr ||
-                dag_f || pxpm;                   // (R1048: rz but the loop end's stack test and bad2, both last)
+                dag_f || pxpm;                   // (R1048: rz but the loop end's stack test, last)
         d_cbad_ref = comp_f && comp != 23'h0 && cbad; d_cbad_x = cbad;
         ex = (op[47:46] == 2'b11) ? !cok :
              (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? cok : 1'b1;
@@ -1360,6 +1403,8 @@ always_comb begin
         // regions are disjoint and a region that is unsupported (FIN written, FOUT read, outside
         // the map) sets no bit, so this is (ex && mem_f && !bad && !rz) ? akind : A_NONE exactly
         // (A_DM 001, A_FIN 010, A_FOUT 011, A_IOP 100, A_EXT 101, A_PM 110; d_acc_ref checks it)
+        // (R1062: that form, d_acc_nc / d_acc_hit, is the benches' now; x.acc below is the kind
+        // as if inside the map, A_NONE only where the access does not run)
         begin
             logic        g, z24, z18, h_iop, h_dm, h_dx, h_fin, h_fout, h_ext, p_pm, p_dm, p_dx;
             logic [31:0] a;
@@ -1390,7 +1435,7 @@ always_comb begin
             d_acc_hit[2] = pmb ? (p_pm || p_dx) : (h_iop || h_dx || h_ext);
             // (R1048: the gate for each outcome of the loop end's pop -- its stack test and the
             // condition -- and the pop chosen among the gates (done, l1: early), the sums' bits
-            // -- the form choosing -- and bad2 in the one last gate)
+            // -- the form choosing -- in the one last gate)
             begin
                 logic e1t, e1f, e0, g1t, g1f, g0;
                 e1t = (op[47:46] == 2'b11) ? !d_cok1t : (op[47:45] == 3'b010 || op[47:44] == 4'b0110 || op[47:44] == 4'b1000) ? d_cok1t : 1'b1;
@@ -1400,17 +1445,20 @@ always_comb begin
                 g1f = d_memf && !(d_rzb || S.lstkp == 3'd0 || S.pcstkp == 6'd0) && e1f;
                 g0 = d_memf && !d_rzb && e0;
                 // (R1050: the pop's done last again, beside the sums' bits -- six inputs a bit, one
-                // gate: s5267's S.la_addr -> the loop end's compare -> done -> XC.acc[2]; l1 and
-                // bad2 go in the gates, early beside the kind bits)
-                d_ag1 = (d_l1 ? g1t : g1f) && !bad2;
-                d_ag0 = g0 && !bad2;
-                x.acc = (d_s3 ? d_kb_i[2:0] : d_kb_o[2:0]) & {3{done ? d_ag1 : d_ag0}};
+                // gate: s5267's S.la_addr -> the loop end's compare -> done -> XC.acc[2]; l1 goes
+                // in the gates, early beside the kind bits)
+                // (R1062: the kind as if inside the map, d_kk_*, and bad2 out of the gates: an
+                // address outside the map is X's to find)
+                d_ag1 = d_l1 ? g1t : g1f;
+                d_ag0 = g0;
+                x.acc = (d_s3 ? d_kk_i : d_kk_o) & {3{done ? d_ag1 : d_ag0}};
             end
             d_acc_chk = d_acc_nc & {3{ex}};      // (R1044's form, the bench's check)
         end
         d_acc_ref = (mem_on && !bad && !x.unsup) ? akind : A_NONE;    // (R1028's, for the benches' check)
+        d_run_ref = mem_on && !x.unsup;          // (R1062: the benches': the access runs)
     end
-    x.why = why0; x.dag = dag; x.mbad = mbad;   // (the reason chosen at the capture, R1029)
+    x.why = why0; x.dag = dag;                  // (the reason chosen at the capture, R1029)
 
     // The opcode's reason and the flag again, the condition last (R1029: off D's path from the
     // condition). Each reason of R1028's handler, in its order (the last wins), evaluated for the
@@ -1504,7 +1552,7 @@ always_comb begin
             end
             u1a[dd] = u1; u0a[dd] = u0; w1a[dd] = w1; w0a[dd] = w0;
         end
-        // (an address outside the map, mbad, is XC.mbad: X ORs it in, x_uns -- off this path)
+        // (R1062: an address outside the map is not a reason here: X completes the access)
         d_unsup_x = (done ? (d_cok1 ? u1a[1] : u0a[1]) : (d_cok0 ? u1a[0] : u0a[0])) || dag;
         d_why_x = done ? (d_cok1 ? w1a[1] : w0a[1]) : (d_cok0 ? w1a[0] : w0a[0]);
         // R1060: the field is cbad's and runs: the handler's comp_on -- in every form with a compute
@@ -1586,10 +1634,46 @@ always_comb begin
     d_pb_a = t1 ? i4_rd[PM_AW-1:0] : mem_a[PM_AW-1:0];   // (R1048: i4, no decode before its read)
 end
 
-// the word in X is unsupported: D's reasons, or its data address outside the map (R1029: the
-// latter registered apart, XC.mbad, off D's path)
+// the word in X is unsupported: D's reasons (R1062: a data address outside the map is not one)
 logic x_uns;
-assign x_uns = XC.unsup || XC.mbad;
+assign x_uns = XC.unsup;
+
+// R1062: THE MAP TEST, IN X ON THE REGISTERED ADDRESS. The ADSP-2106x has no "outside the map"
+// test: an access outside its internal memory goes to the external bus, and on the 2B board an
+// address nothing decodes simply completes -- MAME's copro_sharc_map / data_2m leave it unmapped,
+// so a write is lost and a read returns the space's unmap value, 0 (emumem_aspace.cpp: m_unmap is
+// 0 unless the map asks unmap_value_high, which neither does; handler_entry_read_unmapped returns
+// it, logging only under -log / the debugger). XC.acc is the kind the address names as if it were
+// in the map; each kind's own region test (x_*in) is applied where that kind acts: outside it the
+// access is dropped (no RAM / PM / IOP / FIFO effect, no wait), a read loads UNMAPPED, and the word
+// -- compute, post-modify, sequencing -- runs as any other. An external address (either bus) is
+// m2b_xbus's to decode, as before: its unmapped case answers 0 and drops a write (a PM-bus address
+// is 24 bits, bit 24 PMB1_MAME's past-the-columns bit, so it can name only block 1's page there).
+// x_oom / x_oomf (the overlay flag's, with the external addresses nothing decodes) are the tests in
+// one place, for the flag and the benches only.
+localparam logic [31:0] UNMAPPED = 32'h0;
+logic x_z25, x_blk, x_dmin, x_pmin, x_iopin, x_finin, x_foutin;
+logic x_oom, x_oomf;
+always_comb begin
+    logic [31:0] a;
+    a = XC.acc_addr;
+    x_z25 = a[31:25] == 7'h0;
+    x_blk = a[31:18] == 14'h0 && a[17:15] >= 3'd5;   // block 1 and its mirrors, 0x28000-0x3FFFF
+    x_dmin = x_blk && a[14:DM_AW] == '0;              // A_DM: the on-chip words
+    x_pmin = a[31:PM_AW] == 32'(32'h20000 >> PM_AW); // A_PM: the on-chip PM
+    x_iopin = a[31:8] == 24'h0;                       // A_IOP: the registers
+    x_finin = x_z25 && !XC.acc_wr;                    // A_FIN / A_FOUT (the kind holds a[24:22]'s
+    x_foutin = x_z25 && XC.acc_wr;                    // region): read / written only
+    case (XC.acc)
+    A_DM:    x_oom = !x_dmin;
+    A_PM:    x_oom = !x_pmin;
+    A_IOP:   x_oom = !x_iopin;
+    A_FIN:   x_oom = !x_finin;
+    A_FOUT:  x_oom = !x_foutin;
+    default: x_oom = 1'b0;
+    endcase
+    x_oomf = x_oom || (XC.acc == A_EXT && !x_blk && !(x_z25 && a[24] && a[23:21] >= 3'd2 && a[23:21] <= 3'd6));
+end
 
 // X's first clock (R1029): the sequencer's next state from S, the word (x_op) and D's
 // decisions (XC.le / done / cok), and the stacks' one write each -- exactly R1028's sequencing,
@@ -1910,20 +1994,24 @@ always_comb begin
     fin_pop = 1'b0;
     fout_push = 1'b0;
     fout_data = XC.acc_wd;
+    // (R1062: each kind's region test where it acts -- outside it nothing answers: no wait, no pop
+    // / push, a read loads UNMAPPED. x_ldv is !XC.acc_wr for every kind: inside the map a FIN
+    // access is a read and a FOUT one a write, as their 1 / 0 were; a FOUT read is outside it)
     case (XC.acc)
-    A_DM:  begin x_ld = dm_q; x_ldv = !XC.acc_wr; end
-    A_PM:  begin x_ld = pmb_q; x_ldv = !XC.acc_wr; end    // (R1042: read on port B in D)
+    A_DM:  begin x_ld = x_dmin ? dm_q : UNMAPPED; x_ldv = !XC.acc_wr; end
+    A_PM:  begin x_ld = x_pmin ? pmb_q : UNMAPPED; x_ldv = !XC.acc_wr; end    // (R1042: read on port B in D)
     A_FIN: begin
-        x_ext_wait = fin_empty;
-        x_ld = fin_data; x_ldv = 1'b1;
-        fin_pop = x_done;
+        x_ext_wait = fin_empty && x_finin;
+        x_ld = x_finin ? fin_data : UNMAPPED; x_ldv = !XC.acc_wr;
+        fin_pop = x_done && x_finin;
     end
     A_FOUT: begin
-        x_ext_wait = fout_full;
-        fout_push = x_done;
+        x_ext_wait = fout_full && x_foutin;
+        x_ld = UNMAPPED; x_ldv = !XC.acc_wr;
+        fout_push = x_done && x_foutin;
     end
     A_IOP: begin
-        x_ld = (XC.acc_addr[7:0] == 8'h37) ? 32'h0 : 32'h0;   // SYSCON reads 0 in MAME; DMA status 0
+        x_ld = x_iopin ? 32'h0 : UNMAPPED;   // SYSCON reads 0 in MAME; DMA status 0
         x_ldv = !XC.acc_wr;
     end
     A_EXT: begin x_ext_wait = !ext_ack; x_ld = ext_rdata; x_ldv = !XC.acc_wr; end
@@ -1972,12 +2060,12 @@ end
 logic xu_vnz;
 always_comb begin
     logic nz_ld;
-    case (XC.acc)
-    A_DM:    nz_ld = dm_q != 32'h0;
-    A_PM:    nz_ld = pmb_q != 32'h0;
-    A_FIN:   nz_ld = fin_data != 32'h0;
+    case (XC.acc)                           // (R1062: outside a kind's region, UNMAPPED's)
+    A_DM:    nz_ld = x_dmin ? dm_q != 32'h0 : UNMAPPED != 32'h0;
+    A_PM:    nz_ld = x_pmin ? pmb_q != 32'h0 : UNMAPPED != 32'h0;
+    A_FIN:   nz_ld = x_finin ? fin_data != 32'h0 : UNMAPPED != 32'h0;
     A_EXT:   nz_ld = ext_rdata != 32'h0;
-    default: nz_ld = 1'b0;                  // (A_IOP's x_ld is 0; the others load nothing)
+    default: nz_ld = UNMAPPED != 32'h0;     // (A_IOP's x_ld is 0, a FOUT read's UNMAPPED; the others load nothing)
     endcase
     xu_vnz = (XC.uw && !x_uns) ? XC.acc_wd != 32'h0 : nz_ld;
 end
@@ -2170,8 +2258,8 @@ logic       ux_go;                          // X's end finds the word unsupporte
 logic [3:0] ux_why;
 always_comb begin
     logic iop_w, iop_r;
-    iop_w = XC.acc == A_IOP && XC.acc_wr;
-    iop_r = XC.acc == A_IOP && !XC.acc_wr;
+    iop_w = XC.acc == A_IOP && XC.acc_wr && x_iopin;    // (R1062: inside the map)
+    iop_r = XC.acc == A_IOP && !XC.acc_wr && x_iopin;
     ux_go = 1'b0; ux_why = U_MODE;
     if (st == ST_X && x_done) begin
         if ((xu_w && !XC.bitop && xu_r == 8'h7b && ((xu_v ^ mode1) & M1_SWAPS) != 0) ||
@@ -2182,18 +2270,20 @@ always_comb begin
 end
 // the capture a clock later, from registers (R1029: off the paths it ends), of the word still
 // in x_pc / x_op (the next D's end replaces them): D's reason first (MAME's order there: a DAG's,
-// a data address's, the opcode's), then the PM bound X's first clock found, then X's end's own
-logic       uc_v, uc_u, uc_pm, uc_x;
+// the opcode's), then (R1062) a data address outside the map, X's x_oomf -- the overlay's flag
+// only, the access completed -- then the PM bound X's first clock found, then X's end's own
+logic       uc_v, uc_u, uc_m, uc_pm, uc_x;
 logic [3:0] uc_xwhy;
 always_ff @(posedge clk) begin
     uc_v <= !reset && st == ST_X;
     uc_u <= x_uns;
+    uc_m <= x_oomf;
     uc_pm <= x_first ? x1_pmbad : x_pmbad;
     uc_x <= ux_go; uc_xwhy <= ux_why;
     if (reset) unsup <= 1'b0;
-    else if (uc_v && !unsup && (uc_u || uc_pm || uc_x)) begin
+    else if (uc_v && !unsup && (uc_u || uc_m || uc_pm || uc_x)) begin
         unsup <= 1'b1; unsup_pc <= x_pc; unsup_op <= x_op;
-        unsup_why <= uc_u ? (XC.dag ? U_DAG : XC.mbad ? U_MEM : XC.why) : uc_pm ? U_PM : uc_xwhy;
+        unsup_why <= uc_u ? (XC.dag ? U_DAG : XC.why) : uc_m ? U_MEM : uc_pm ? U_PM : uc_xwhy;
     end
 end
 
@@ -2286,7 +2376,7 @@ always_ff @(posedge clk) begin
             // data the register read in the first (port E at x_op[26:23]); a DM-RAM read or an
             // external access first waits a clock (x_p2w: the read issued; the request dropped once)
             if (x_p2go) begin
-                XC.acc <= XC.acc2; XC.acc_wr <= XC.acc2_wr; XC.acc_addr <= {8'h0, XC.acc2_a};
+                XC.acc <= XC.acc2; XC.acc_wr <= XC.acc2_wr; XC.acc_addr <= {7'h0, XC.acc2_a};
                 XC.acc_wd <= rf_rd[4];
                 XC.ld_r <= XC.ld2_r; XC.ld_dst <= XC.ld2_dst;
                 x_ext_on <= 1'b1;
@@ -2378,7 +2468,7 @@ always_ff @(posedge clk) begin
                 st <= ST_D;
             end
             // the accesses' writes: an IOP register (R1042: at its pass's end, type 1's DM move)
-            if (x_done && XC.acc == A_IOP && XC.acc_wr) begin
+            if (x_done && XC.acc == A_IOP && XC.acc_wr && x_iopin) begin   // (R1062: inside the map)
                 case (XC.acc_addr[7:0])
                 8'h00: syscon <= XC.acc_wd;
                 8'h02, 8'h08, 8'h09, 8'h0a, 8'h0b, 8'h0c, 8'h0d, 8'h0e, 8'h0f, 8'h14, 8'h17, 8'h20: ;
@@ -2481,7 +2571,7 @@ always_comb begin
     pm_ha = pm_wa; pm_hidx = PM_AW'(idx - 32'h20000);
     pm_wd2 = {pm_wd, pm_wd};
     if (!pm_host) begin
-        if (st == ST_X && x_done && XC.acc == A_PM && XC.acc_wr) begin
+        if (st == ST_X && x_done && XC.acc == A_PM && XC.acc_wr && x_pmin) begin   // (R1062: inside the map)
             pm_we = 3'b110; pm_wa = XC.acc_addr[PM_AW-1:0]; pm_wd2 = XC.acc_wd;
         end else if (st == ST_D) pm_wa = d_pb_a;
         else if (st == ST_X) pm_wa = (XC.dual && !x_p2) ? XC.acc2_a[PM_AW-1:0] : XC.acc_addr[PM_AW-1:0];
@@ -2570,7 +2660,7 @@ always_comb begin
     // access reads dm_q, in X, and its value then is the last D clock's read at d_dm_a, as before;
     // in any other word dm_q is never read, so the enable leaves the opcode's path
     else if (st == ST_D) dm_en = 1'b1;
-    else if (st == ST_X && x_done && XC.acc == A_DM && XC.acc_wr) begin dm_en = 1'b1; dm_we = 1'b1; end
+    else if (st == ST_X && x_done && XC.acc == A_DM && XC.acc_wr && x_dmin) begin dm_en = 1'b1; dm_we = 1'b1; end   // (R1062: inside the map)
     else if (st == ST_X && x_p2w && XC.acc == A_DM) dm_en = 1'b1;          // (R1042: type 1's second read)
 end
 
@@ -2642,7 +2732,10 @@ m2b_lutram #(.AW(3), .DW(32), .INIT1(RF_ONES)) u_lap3 (.clk, .we(stk_we && x1_la
 // benches: the one write of each stack is the one X's first clock's sequencing names, and D's
 // access is R1028's (R1029)
 generate if (BENCH) begin : g_stk_check
-    always_ff @(posedge clk) if (d_go && dx.acc != d_acc_ref) $fatal(1, "access kind %d, R1028's %d", dx.acc, d_acc_ref);
+    // (R1062: R1028's kind where its map test is clear; outside the map the access runs where
+    // R1028's would have, had the address been inside)
+    always_ff @(posedge clk) if (d_go && !d_bad_x && dx.acc != d_acc_ref) $fatal(1, "access kind %d, R1028's %d", dx.acc, d_acc_ref);
+    always_ff @(posedge clk) if (d_go && d_bad_x && (dx.acc != A_NONE) != d_run_ref) $fatal(1, "an access outside the map: kind %d, R1028's runs %b", dx.acc, d_run_ref);
     always_ff @(posedge clk) if (st == ST_D && !reset) begin : chk_sb
         logic h;
         h = 1'b0;
@@ -2650,7 +2743,7 @@ generate if (BENCH) begin : g_stk_check
         if (h != d_hit_ref) $fatal(1, "scoreboard %b, R1028's %b", h, d_hit_ref);
     end
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_ref) $fatal(1, "store / ureg data %h, %h", dx.acc_wd, d_accwd_ref);
-    always_ff @(posedge clk) if (d_go && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
+    always_ff @(posedge clk) if (d_go && !d_bad_x && dx.acc != d_acc_chk) $fatal(1, "access kind %d, R1044's %d", dx.acc, d_acc_chk);
     always_ff @(posedge clk) if (st == ST_D && dx.rm_we != d_rmwe_ref) $fatal(1, "rm_we %b, R1042's %b", dx.rm_we, d_rmwe_ref);
     // R1057: ra_we in every D clock; rn_we wherever the landing reads it
     always_ff @(posedge clk) if (st == ST_D && dx.ra_we != d_rawe_ref) $fatal(1, "ra_we %b, the old %b", dx.ra_we, d_rawe_ref);
@@ -2674,10 +2767,27 @@ generate if (BENCH) begin : g_stk_check
     always_ff @(posedge clk) if (d_go && dx.acc_wd != d_accwd_chk) $fatal(1, "store / ureg data %h, R1029's AND-OR %h", dx.acc_wd, d_accwd_chk);
     always_ff @(posedge clk) if (d_go && ur_sel[7:4] == 4'h6 && d_urall_ref != dx_urall)
         $fatal(1, "sequencer ureg read %h, R1028's %h", dx_urall, d_urall_ref);
-    always_ff @(posedge clk) if (d_go && ((dx.unsup || dx.mbad) != d_unsup_ref || (d_unsup_ref && !dx.dag && !dx.mbad && dx.why != d_why_ref)))
+    always_ff @(posedge clk) if (d_go && (dx.unsup != d_unsup_ref || (d_unsup_ref && !dx.dag && dx.why != d_why_ref)))
         $fatal(1, "unsupported %b why %d, R1028's %b %d", dx.unsup, dx.why, d_unsup_ref, d_why_ref);
-    always_ff @(posedge clk) if (d_go && (dx.dag != d_dag_ref || dx.mbad != d_mbad_ref))
-        $fatal(1, "DAG / address test %b %b, R1028's %b %b", dx.dag, dx.mbad, d_dag_ref, d_mbad_ref);
+    always_ff @(posedge clk) if (d_go && dx.dag != d_dag_ref)
+        $fatal(1, "DAG test %b, R1028's %b", dx.dag, d_dag_ref);
+    // R1062: the kind as if inside the map is acc_bits' wherever its map test is clear (each sum),
+    // and type 1's PM kind pm_kind's wherever bad2 is clear
+    always_ff @(posedge clk) if (st == ST_D && ((!d_kb_i[3] && d_kk_i != d_kb_i[2:0]) || (!d_kb_o[3] && d_kk_o != d_kb_o[2:0])))
+        $fatal(1, "the kind inside the map %b / %b, acc_bits' %b / %b", d_kk_i, d_kk_o, d_kb_i, d_kb_o);
+    always_ff @(posedge clk) if (st == ST_D && dx.dual && !d_bad2_ref && dx.acc2 != d_k2_ref)
+        $fatal(1, "type 1's PM kind %d, pm_kind's %d", dx.acc2, d_k2_ref);
+    // ... and X's map test is D's old one, of the same word: in the first pass the form's sum's
+    // where the access runs (R1028's mbad), in type 1's second pass bad2 (XC, these: every D clock)
+    logic r_bd, r_b2;
+    always_ff @(posedge clk) if (st == ST_D) begin r_bd <= d_bd_ref; r_b2 <= d_bad2_ref; end
+    always_ff @(posedge clk) if (st == ST_X && !x_p2 && x_oomf != (r_bd && XC.acc != A_NONE))
+        $fatal(1, "X's map test %b, D's old %b (kind %d, address %h)", x_oomf, r_bd, XC.acc, XC.acc_addr);
+    always_ff @(posedge clk) if (st == ST_X && x_p2 && x_oomf != r_b2)
+        $fatal(1, "X's map test of the PM move %b, bad2 %b (kind %d, address %h)", x_oomf, r_b2, XC.acc, XC.acc_addr);
+    // ... and x_oom is x_oomf but for the external addresses, which m2b_xbus answers itself
+    always_ff @(posedge clk) if (st == ST_X && x_oom != (x_oomf && XC.acc != A_EXT))
+        $fatal(1, "x_oom %b, x_oomf %b", x_oom, x_oomf);
     always_ff @(posedge clk) if (stk_we) begin
         if (x1_pcw && (x1_pcw_i != pcw_a || x1_pcw_d != S.pcstk)) $fatal(1, "PC stack write: %h %h", x1_pcw_i, x1_pcw_d);
         if (x1_lcw && (x1_lcw_i != lsw_a || x1_lcw_d != lcw_dv)) $fatal(1, "LCNTR stack write: %h %h", x1_lcw_i, x1_lcw_d);
