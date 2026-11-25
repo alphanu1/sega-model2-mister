@@ -1,5 +1,13 @@
 # Handoff
 
+## 2026-11-25: Release Model2B_20261125 -- the first Model 2B release (early beta)
+
+Added to releases/ on main, model2a, model2b and model2c (the same folder on all four): Model2B_20261125.rbf
+(s5962, model2b 3fcdeb1b, clean at all four corners, board-tested), the 46 2B MRAs (23 sets, each with its
+[15kHz CRT] MRA; Super GT 24h and Last Bronx left out), and the README's 2B section (games, SDRAM, known bugs:
+Sonic at 30 fps, Gunblade NY's crosshair resting bottom-left, DOA's textures-off start, Rail Chase 2's
+flicker) plus the SHARC's manual rounding under "Not just a MAME port". md5 378ac77c484b85778e325d8f6494fb61.
+
 ## 2026-11-20: Releases Model2_20261120, Model2A_20261120, Model2C_20261120 -- every clock clean at all four corners; 2B not released
 
 One joint release, board-tested by me, pushed on main, model2a and model2c with

@@ -1,16 +1,18 @@
 # Sega Model 2 — releases
 
-There are three cores: **Model 2** (`Model2.rbf`) for the original Model 2
-board, **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board, and **Model
-2C** (`Model2C.rbf`, beta) for the Model 2C-CRX board. Each game's MRA names
-the core it runs on, so all three can sit in `cores/` side by side.
+There are four cores: **Model 2** (`Model2.rbf`) for the original Model 2
+board, **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board, **Model 2B**
+(`Model2B.rbf`, early beta) for the Model 2B-CRX board, and **Model 2C**
+(`Model2C.rbf`, beta) for the Model 2C-CRX board. Each game's MRA names the
+core it runs on, so all four can sit in `cores/` side by side.
 
 | in this folder | what it is |
 |---|---|
 | `Model2_*.rbf` | the Model 2 core |
 | `Model2A_*.rbf` | the Model 2A core |
+| `Model2B_*.rbf` | the Model 2B core (early beta) |
 | `Model2C_*.rbf` | the Model 2C core (beta) |
-| `mra/` | every MRA for all three cores, including the `[15kHz CRT]` versions |
+| `mra/` | every MRA for all four cores, including the `[15kHz CRT]` versions |
 | `helpers/m2link/` | only for Daytona link play (experimental) -- see the Model 2 notes |
 | `scripts/` | a force feedback test for steering wheels: copy both files to `/media/fat/Scripts` and run `ffb_wheel_test` from the Scripts menu |
 
@@ -27,6 +29,13 @@ chips, the sound boards and the I/O boards), and where the real board behaves
 differently from MAME, fixes have been added to get as close to the real
 hardware as possible:
 
+- **The SHARC's floating point follows Analog Devices' manual (Model 2B).**
+  MAME rounds every SHARC result to nearest with the PC's own maths. The
+  ADSP-21062 rounds toward zero in its truncate mode, which Dead or Alive
+  runs in, and flushes very small numbers in and out of its adder and
+  multiplier the way the manual says. The core does what the chip does: on
+  Dead or Alive alone about 10 million of the SHARC's output values differ
+  from MAME's, each by a hair. (`Model2B_20261125`.)
 - **Dead or Alive's bass drone is gone (Model 2A).** MAME runs the sound
   chip's effects processor with its delay taps at zero, which turns Dead or
   Alive's reverb into a constant low drone (MAME's own 20 Hz filter hides it).
@@ -620,6 +629,83 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 - **Over Rev** slows down a few times in a race, sometimes for a few
   seconds, and a row of dark blue dots can show in the sky along one line.
 - No link play for Over Rev or Sega Touring Car Championship yet.
+
+## Model 2B core — `Model2B.rbf` (EARLY BETA)
+
+The first Model 2B core: fifteen games. The 2B board replaces the 2A's TGP
+geometry chip with an Analog Devices ADSP-21062 SHARC DSP. The core's SHARC is
+built from scratch to the ADSP-2106x manual and checked word for word
+against MAME on the games' own programs; Paul Priest's Hornet core was the
+starting point for its float units and tools. **It's an early beta:** there
+will be bugs, and some games aren't fully right yet. Please report anything
+you find, with the game and where.
+
+### What to copy
+
+| file | where it goes on the SD card |
+|---|---|
+| `Model2B_20261125.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2B.rbf`** |
+| the 2B MRAs, from `mra/` | `/media/fat/_Arcade/` |
+
+`Model2B_20261125.rbf` has the md5 `378ac77c484b85778e325d8f6494fb61`. Keep
+exactly one `Model2B*.rbf` in `cores/`.
+
+### Games
+
+ROM sets: MAME 0.289.
+
+| Game | MRA | ROM zips | MAME set | State |
+|---|---|---|---|---|
+| Cyber Troopers Virtual-On (Export) | `Cyber Troopers Virtual-On - Twin (Export).mra` | `von.zip` | `von` | Plays, with both levers. **Needs the 128 MB SDRAM module.** |
+| Cyber Troopers Virtual-On (USA, Revision B) | `Cyber Troopers Virtual-On - Twin (USA, Revision B).mra` | `vonu.zip`, `von.zip` | `vonu` | Plays. **Needs the 128 MB SDRAM module.** |
+| Cyber Troopers Virtual-On (Japan, Revision B) | `Cyber Troopers Virtual-On - Twin (Japan, Revision B).mra` | `vonj.zip`, `von.zip` | `vonj` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dead or Alive (Revision C) | `Dead or Alive (Model 2B, Revision C).mra` | `doa.zip` | `doa` | Plays (see Known bugs). **Needs the 128 MB SDRAM module.** |
+| Dead or Alive (Revision B) | `Dead or Alive (Model 2B, Revision B).mra` | `doab.zip`, `doa.zip` | `doab` | Plays (see Known bugs). **Needs the 128 MB SDRAM module.** |
+| Fighting Vipers (Revision D) | `Fighting Vipers (Revision D).mra` | `fvipers.zip` | `fvipers` | Plays. **Needs the 128 MB SDRAM module.** |
+| Fighting Vipers (Revision B) | `Fighting Vipers (Revision B).mra` | `fvipersb.zip`, `fvipers.zip` | `fvipersb` | Plays. **Needs the 128 MB SDRAM module.** |
+| Sonic Championship (USA) | `Sonic Championship (USA).mra` | `schamp.zip` | `schamp` | Plays, at 30 fps for now. **Needs the 128 MB SDRAM module.** |
+| Sonic the Fighters (Japan) | `Sonic the Fighters (Japan).mra` | `sfight.zip`, `schamp.zip` | `sfight` | Plays, at 30 fps for now. **Needs the 128 MB SDRAM module.** |
+| Gunblade NY (Revision A) | `Gunblade NY (Revision A).mra` | `gunblade.zip` | `gunblade` | Plays, aiming from the sticks (see Known bugs). **Needs the 128 MB SDRAM module.** |
+| INDY 500 Twin (Revision A, Newer) | `INDY 500 Twin (Revision A, Newer).mra` | `indy500.zip` | `indy500` | Plays, with wheel and pedals. **Needs the 128 MB SDRAM module.** |
+| Dynamite Baseball | `Dynamite Baseball.mra` | `dynabb.zip` | `dynabb` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Baseball '97 (Revision A) | `Dynamite Baseball 97 (Revision A).mra` | `dynabb97.zip` | `dynabb97` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Cop (Export, Model 2B) | `Dynamite Cop (Export, Model 2B).mra` | `dynamcopb.zip`, `dynamcop.zip` | `dynamcopb` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Deka 2 (Japan, Model 2B) | `Dynamite Deka 2 (Japan, Model 2B).mra` | `dyndeka2b.zip`, `dynamcop.zip` | `dyndeka2b` | Plays. **Needs the 128 MB SDRAM module.** |
+| Pilot Kids (Model 2B, Revision A) | `Pilot Kids (Model 2B, Revision A).mra` | `pltkids.zip` | `pltkids` | Plays. **Needs the 128 MB SDRAM module.** |
+| Over Rev (Model 2B, Revision B) | `Over Rev (Model 2B, Revision B).mra` | `overrevb.zip`, `overrev.zip` | `overrevb` | Plays, with wheel and pedals |
+| Over Rev (Model 2B, Revision A) | `Over Rev (Model 2B, Revision A).mra` | `overrevba.zip`, `overrev.zip` | `overrevba` | Plays, with wheel and pedals |
+| Rail Chase 2 (Revision A) | `Rail Chase 2 (Revision A).mra` | `rchase2.zip` | `rchase2` | Plays (see Known bugs) |
+| Virtua Striker (Revision A) | `Virtua Striker (Revision A).mra` | `vstriker.zip` | `vstriker` | Plays |
+| Virtua Striker | `Virtua Striker.mra` | `vstrikero.zip`, `vstriker.zip` | `vstrikero` | Plays |
+| Zero Gunner (Export, Model 2B) | `Zero Gunner (Export, Model 2B).mra` | `zerogun.zip` | `zerogun` | Plays |
+| Zero Gunner (Japan, Model 2B) | `Zero Gunner (Japan, Model 2B).mra` | `zerogunj.zip`, `zerogun.zip` | `zerogunj` | Plays |
+
+Each of these also has a `[15kHz CRT]` MRA.
+
+**Not in this release:** Super GT 24h (locks up early) and Last Bronx (needs
+SHARC and i960 instructions that aren't in yet).
+
+### New in this build (`Model2B_20261125`)
+
+- **The first Model 2B release.**
+- **The SHARC's floating point follows Analog Devices' manual** (see *Not
+  just a MAME port* at the top).
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included,** as on the Model 2, 2A and 2C cores. 2B is the
+  fullest of the four (about 98% of the chip); every change made to get it
+  there is bit-identical and on the same clock for everything the games run.
+- **An access outside the SHARC's memory map completes as on the board** (a
+  write is lost, a read gives 0, as MAME gives) instead of being skipped. No
+  game does this in normal play.
+
+### Known bugs
+
+- **Sonic Championship and Sonic the Fighters** run at 30 fps for now.
+- **Gunblade NY:** the crosshair rests in the bottom-left corner; aiming and
+  the controls work.
+- **Dead or Alive:** if the 3D textures don't show, start it with `Textures`
+  Off in the OSD, then switch them back on once it's running.
+- **Rail Chase 2** can flicker when the screen is busy.
 
 ## Model 2 core release notes
 
