@@ -1,16 +1,18 @@
 # Sega Model 2 — releases
 
-There are three cores: **Model 2** (`Model2.rbf`) for the original Model 2
-board, **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board, and **Model
-2C** (`Model2C.rbf`, beta) for the Model 2C-CRX board. Each game's MRA names
-the core it runs on, so all three can sit in `cores/` side by side.
+There are four cores: **Model 2** (`Model2.rbf`) for the original Model 2
+board, **Model 2A** (`Model2A.rbf`) for the Model 2A-CRX board, **Model 2B**
+(`Model2B.rbf`, early beta) for the Model 2B-CRX board, and **Model 2C**
+(`Model2C.rbf`, beta) for the Model 2C-CRX board. Each game's MRA names the
+core it runs on, so all four can sit in `cores/` side by side.
 
 | in this folder | what it is |
 |---|---|
 | `Model2_*.rbf` | the Model 2 core |
 | `Model2A_*.rbf` | the Model 2A core |
+| `Model2B_*.rbf` | the Model 2B core (early beta) |
 | `Model2C_*.rbf` | the Model 2C core (beta) |
-| `mra/` | every MRA for all three cores, including the `[15kHz CRT]` versions |
+| `mra/` | every MRA for all four cores, including the `[15kHz CRT]` versions |
 | `helpers/m2link/` | only for Daytona link play (experimental) -- see the Model 2 notes |
 | `scripts/` | a force feedback test for steering wheels: copy both files to `/media/fat/Scripts` and run `ffb_wheel_test` from the Scripts menu |
 
@@ -27,6 +29,13 @@ chips, the sound boards and the I/O boards), and where the real board behaves
 differently from MAME, fixes have been added to get as close to the real
 hardware as possible:
 
+- **The SHARC's floating point follows Analog Devices' manual (Model 2B).**
+  MAME rounds every SHARC result to nearest with the PC's own maths. The
+  ADSP-21062 rounds toward zero in its truncate mode, which Dead or Alive
+  runs in, and flushes very small numbers in and out of its adder and
+  multiplier the way the manual says. The core does what the chip does: on
+  Dead or Alive alone about 10 million of the SHARC's output values differ
+  from MAME's, each by a hair. (`Model2B_20261125`.)
 - **Dead or Alive's bass drone is gone (Model 2A).** MAME runs the sound
   chip's effects processor with its delay taps at zero, which turns Dead or
   Alive's reverb into a constant low drone (MAME's own 20 Hz filter hides it).
@@ -56,6 +65,14 @@ hardware as possible:
   of times a fight for the fighters' joint angles, Daytona a little and
   Virtua Cop 2 now and then. Too small to see, but the CPU now computes what
   the arcade board computes. (`*_20261030`.)
+- **The i960 keeps very small numbers, as Intel's chip does (all three
+  cores).** Every Model 2 game sets the 80960KB's floating point to keep
+  numbers too small for the normal format (subnormals) rather than turn them
+  into zero. MAME's CPU keeps them too; the cores used to flush them to zero.
+  Every floating-point unit, the remainder included, now takes and gives them
+  exactly, with no extra time on ordinary numbers. Too small to see, but the
+  CPU now computes what the arcade board computes. (`Model2_20261120`,
+  `Model2A_20261120`, `Model2C_20261120`.)
 - **Sega Rally's hi-hats play in time with the music (Model 2A and 2C).** Checked against a recording of a real Sega Rally
   cabinet: the music plays at exactly the same pitch, but the arcade's
   sequencer runs 2.2% slower than MAME's. The sound chip's timer, which
@@ -90,7 +107,23 @@ Each of these also has a `[15kHz CRT]` MRA.
 All eleven games below boot and play. A few known bugs remain (listed
 below). Please report anything you find, and say which game and where.
 
-### New in this build (`Model2A_20261113`)
+### New in this build (`Model2A_20261120`)
+
+- **A faster i960.** Four timing changes in the CPU's caches and memory
+  unit, with every memory access the same and in the same order: Sega
+  Rally's race needs 3.5% fewer CPU clocks for the same work.
+- **The i960 keeps very small numbers as Intel's chip does** (see *Not just
+  a MAME port* above).
+- **The i960's 64-bit float-to-integer conversion follows Intel's manual.**
+  A NaN, a value too big for 32 bits and a value out of range now give
+  the 80960KB's results instead of a clamped 32-bit value.
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included.** Earlier releases were checked at the hot
+  corner only. Three long paths (in the 3D clipper, the projection and the
+  sound chip's timers) were split, with no added delay and nothing else
+  changed.
+
+### Earlier in `Model2A_20261113`
 
 - **Busy scenes keep their small polygons.** When the 3D list is nearly
   full, the core starts leaving out the tiniest polygons so the big ones
@@ -340,7 +373,7 @@ fix below needs them, and the old MRAs don't work with this core's save file.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2A_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
+| `Model2A_20261120.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2A.rbf`** |
 | the 2A MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
 **SDRAM:** Virtua Fighter 2, Sega Rally, Virtua Cop 2, Zero Gunner and Manx
@@ -348,7 +381,7 @@ TT run on a 64 MB or 128 MB module. Pilot Kids, Hanguk Pro Yagu 98, Sky
 Target, Dynamite Cop, Motor Raid and Dead or Alive have more than 64 MB of
 ROM, so **they need the 128 MB module**.
 
-`Model2A_20261113.rbf` has the md5 `2308a87056dc842407bd9ac150b662a5`. As with
+`Model2A_20261120.rbf` has the md5 `5758a1bd22435e21149aad1a6b68aa3c`. As with
 the Model 2 core, keep exactly one `Model2A*.rbf` in `cores/`.
 
 ### Games
@@ -417,7 +450,7 @@ Fighter 2 at the default 80%:
 
 ## Model 2C core — `Model2C.rbf` (BETA)
 
-The first Model 2C core: eight games. The 2C board replaces the 2A's
+The first Model 2C core: seven games. The 2C board replaces the 2A's
 geometry chip with Sega's TGPx4 (Fujitsu MB86235), rebuilt here from
 scratch and checked against MAME output for output. It's a beta: please
 report anything you find, with the game and where.
@@ -426,10 +459,10 @@ report anything you find, with the game and where.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2C_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
+| `Model2C_20261120.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2C.rbf`** |
 | the 2C MRAs, from `mra/` | `/media/fat/_Arcade/` |
 
-`Model2C_20261113.rbf` has the md5 `4da5cea2f2be436dc746350828fb4196`. Keep
+`Model2C_20261120.rbf` has the md5 `6ad5193ac23dbcbf08b4cc3c29a60bb0`. Keep
 exactly one `Model2C*.rbf` in `cores/`.
 
 **The game's settings now save.** Change them in the test menu, then use the
@@ -445,23 +478,27 @@ ROM sets: MAME 0.289.
 | The House of the Dead (Revision A) | `The House of the Dead (Revision A).mra` | `hotd.zip` | `hotd` | Plays at full speed, with guns from a mouse or stick. **Needs the 128 MB SDRAM module.** |
 | Over Rev (Model 2C, Revision A) | `Over Rev (Model 2C, Revision A).mra` | `overrev.zip` | `overrev` | Plays, with wheel and pedals |
 | Sega Touring Car Championship | `Sega Touring Car Championship (newer).mra` | `stcc.zip` | `stcc` | Plays at full speed, with its music. **Needs the 128 MB SDRAM module.** |
-| Wave Runner (Japan, Revision A) | `Wave Runner (Japan, Revision A).mra` | `waverunr.zip` | `waverunr` | Plays. Mostly 30 fps for now. **Needs the 128 MB SDRAM module.** |
-| Sega Water Ski (Japan, Revision A) | `Sega Water Ski (Japan, Revision A).mra` | `segawski.zip` | `segawski` | Plays, with slowdowns. **Needs the 128 MB SDRAM module.** |
-| Behind Enemy Lines | `Behind Enemy Lines.mra` | `bel.zip` | `bel` | Plays, with guns from a stick, mouse or USB gun. **Calibrate the guns before the first game** (below). **Needs the 128 MB SDRAM module.** |
+| Wave Runner (Japan, Revision A) | `Wave Runner (Japan, Revision A).mra` | `waverunr.zip` | `waverunr` | Plays. Mostly 30 fps for now, with some stretches at 60. **Needs the 128 MB SDRAM module.** |
+| Sega Water Ski (Japan, Revision A) | `Sega Water Ski (Japan, Revision A).mra` | `segawski.zip` | `segawski` | Plays. Mostly 30 fps for now. **Needs the 128 MB SDRAM module.** |
 | Sega Ski Super G | `Sega Ski Super G.mra` | `skisuprg.zip` | `skisuprg` | Plays. Shows "Drive board trouble Code FF" at boot (MAME does too): press Test to go on. **Needs the 128 MB SDRAM module.** |
 | Dynamite Cop (USA, Model 2C) | `Dynamite Cop (USA, Model 2C).mra` | `dynamcopc.zip`, `dynamcop.zip` | `dynamcopc` | Plays. **Needs the 128 MB SDRAM module.** |
 
 Each of these also has a `[15kHz CRT]` MRA.
 
-**Behind Enemy Lines: calibrate the guns before the first game, then save.**
-The game keeps each gun's calibration in its own settings, and on a new
-board they're blank, so the crosshair sits in the bottom-left corner and
-won't move (MAME does the same). Press Test, choose GUN CALIBRATION and
-follow the prompts for each gun (push to the stops, pull the trigger), then
-exit the test menu and use the OSD's "Save settings (NVRAM)". It's kept from
-then on.
+### New in this build (`Model2C_20261120`)
 
-### New in this build (`Model2C_20261113`)
+- **Sega Touring Car Championship at full speed, with its music.** The
+  Digital Sound Board, the MPEG music board STCC carries, is now in the
+  core, sample for sample as MAME plays it, and races hold 60 fps. **Use the
+  new STCC MRAs from this folder**: the old ones don't load the music.
+- **Four more games:** Wave Runner, Sega Water Ski, Sega Ski Super G and
+  Dynamite Cop (USA, Model 2C). All four need the 128 MB SDRAM module.
+- **The i960 keeps very small numbers** (subnormals), as above.
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included.** Earlier releases were checked at the hot
+  corner only.
+
+### Earlier in `Model2C_20261113`
 
 - **House of the Dead's busy scenes keep all their polygons.** The 3D list
   ran out of room in the heaviest scenes and dropped up to 79 polygons a
@@ -588,12 +625,87 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 ### Known bugs
 
-- **Sega Touring Car Championship has no music.** Its music board plays
-  MPEG audio, which the core doesn't have yet. Engine sounds and effects
-  play. The pedals work, but races still drop to 30 fps in places.
+- **Wave Runner and Sega Water Ski** run mostly at 30 fps for now.
 - **Over Rev** slows down a few times in a race, sometimes for a few
   seconds, and a row of dark blue dots can show in the sky along one line.
 - No link play for Over Rev or Sega Touring Car Championship yet.
+
+## Model 2B core — `Model2B.rbf` (EARLY BETA)
+
+The first Model 2B core: fifteen games. The 2B board replaces the 2A's TGP
+geometry chip with an Analog Devices ADSP-21062 SHARC DSP. The core's SHARC is
+built from scratch to the ADSP-2106x manual and checked word for word
+against MAME on the games' own programs; Paul Priest's Hornet core was the
+starting point for its float units and tools. **It's an early beta:** there
+will be bugs, and some games aren't fully right yet. Please report anything
+you find, with the game and where.
+
+### What to copy
+
+| file | where it goes on the SD card |
+|---|---|
+| `Model2B_20261125.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2B.rbf`** |
+| the 2B MRAs, from `mra/` | `/media/fat/_Arcade/` |
+
+`Model2B_20261125.rbf` has the md5 `378ac77c484b85778e325d8f6494fb61`. Keep
+exactly one `Model2B*.rbf` in `cores/`.
+
+### Games
+
+ROM sets: MAME 0.289.
+
+| Game | MRA | ROM zips | MAME set | State |
+|---|---|---|---|---|
+| Cyber Troopers Virtual-On (Export) | `Cyber Troopers Virtual-On - Twin (Export).mra` | `von.zip` | `von` | Plays, with both levers. **Needs the 128 MB SDRAM module.** |
+| Cyber Troopers Virtual-On (USA, Revision B) | `Cyber Troopers Virtual-On - Twin (USA, Revision B).mra` | `vonu.zip`, `von.zip` | `vonu` | Plays. **Needs the 128 MB SDRAM module.** |
+| Cyber Troopers Virtual-On (Japan, Revision B) | `Cyber Troopers Virtual-On - Twin (Japan, Revision B).mra` | `vonj.zip`, `von.zip` | `vonj` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dead or Alive (Revision C) | `Dead or Alive (Model 2B, Revision C).mra` | `doa.zip` | `doa` | Plays (see Known bugs). **Needs the 128 MB SDRAM module.** |
+| Dead or Alive (Revision B) | `Dead or Alive (Model 2B, Revision B).mra` | `doab.zip`, `doa.zip` | `doab` | Plays (see Known bugs). **Needs the 128 MB SDRAM module.** |
+| Fighting Vipers (Revision D) | `Fighting Vipers (Revision D).mra` | `fvipers.zip` | `fvipers` | Plays. **Needs the 128 MB SDRAM module.** |
+| Fighting Vipers (Revision B) | `Fighting Vipers (Revision B).mra` | `fvipersb.zip`, `fvipers.zip` | `fvipersb` | Plays. **Needs the 128 MB SDRAM module.** |
+| Sonic Championship (USA) | `Sonic Championship (USA).mra` | `schamp.zip` | `schamp` | Plays, at 30 fps for now. **Needs the 128 MB SDRAM module.** |
+| Sonic the Fighters (Japan) | `Sonic the Fighters (Japan).mra` | `sfight.zip`, `schamp.zip` | `sfight` | Plays, at 30 fps for now. **Needs the 128 MB SDRAM module.** |
+| Gunblade NY (Revision A) | `Gunblade NY (Revision A).mra` | `gunblade.zip` | `gunblade` | Plays, aiming from the sticks (see Known bugs). **Needs the 128 MB SDRAM module.** |
+| INDY 500 Twin (Revision A, Newer) | `INDY 500 Twin (Revision A, Newer).mra` | `indy500.zip` | `indy500` | Plays, with wheel and pedals. **Needs the 128 MB SDRAM module.** |
+| Dynamite Baseball | `Dynamite Baseball.mra` | `dynabb.zip` | `dynabb` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Baseball '97 (Revision A) | `Dynamite Baseball 97 (Revision A).mra` | `dynabb97.zip` | `dynabb97` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Cop (Export, Model 2B) | `Dynamite Cop (Export, Model 2B).mra` | `dynamcopb.zip`, `dynamcop.zip` | `dynamcopb` | Plays. **Needs the 128 MB SDRAM module.** |
+| Dynamite Deka 2 (Japan, Model 2B) | `Dynamite Deka 2 (Japan, Model 2B).mra` | `dyndeka2b.zip`, `dynamcop.zip` | `dyndeka2b` | Plays. **Needs the 128 MB SDRAM module.** |
+| Pilot Kids (Model 2B, Revision A) | `Pilot Kids (Model 2B, Revision A).mra` | `pltkids.zip` | `pltkids` | Plays. **Needs the 128 MB SDRAM module.** |
+| Over Rev (Model 2B, Revision B) | `Over Rev (Model 2B, Revision B).mra` | `overrevb.zip`, `overrev.zip` | `overrevb` | Plays, with wheel and pedals |
+| Over Rev (Model 2B, Revision A) | `Over Rev (Model 2B, Revision A).mra` | `overrevba.zip`, `overrev.zip` | `overrevba` | Plays, with wheel and pedals |
+| Rail Chase 2 (Revision A) | `Rail Chase 2 (Revision A).mra` | `rchase2.zip` | `rchase2` | Plays (see Known bugs) |
+| Virtua Striker (Revision A) | `Virtua Striker (Revision A).mra` | `vstriker.zip` | `vstriker` | Plays |
+| Virtua Striker | `Virtua Striker.mra` | `vstrikero.zip`, `vstriker.zip` | `vstrikero` | Plays |
+| Zero Gunner (Export, Model 2B) | `Zero Gunner (Export, Model 2B).mra` | `zerogun.zip` | `zerogun` | Plays |
+| Zero Gunner (Japan, Model 2B) | `Zero Gunner (Japan, Model 2B).mra` | `zerogunj.zip`, `zerogun.zip` | `zerogunj` | Plays |
+
+Each of these also has a `[15kHz CRT]` MRA.
+
+**Not in this release:** Super GT 24h (locks up early) and Last Bronx (needs
+SHARC and i960 instructions that aren't in yet).
+
+### New in this build (`Model2B_20261125`)
+
+- **The first Model 2B release.**
+- **The SHARC's floating point follows Analog Devices' manual** (see *Not
+  just a MAME port* at the top).
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included,** as on the Model 2, 2A and 2C cores. 2B is the
+  fullest of the four (about 98% of the chip); every change made to get it
+  there is bit-identical and on the same clock for everything the games run.
+- **An access outside the SHARC's memory map completes as on the board** (a
+  write is lost, a read gives 0, as MAME gives) instead of being skipped. No
+  game does this in normal play.
+
+### Known bugs
+
+- **Sonic Championship and Sonic the Fighters** run at 30 fps for now.
+- **Gunblade NY:** the crosshair rests in the bottom-left corner; aiming and
+  the controls work.
+- **Dead or Alive:** if the 3D textures don't show, start it with `Textures`
+  Off in the OSD, then switch them back on once it's running.
+- **Rail Chase 2** can flicker when the screen is busy.
 
 ## Model 2 core release notes
 
@@ -601,7 +713,7 @@ OSD → Save settings). A calibration saved on an earlier core is now off.
 
 | file | where it goes on the SD card |
 |---|---|
-| `Model2_20261113.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
+| `Model2_20261120.rbf` | `/media/fat/_Arcade/cores/`, then **rename it to `Model2.rbf`** |
 | `mra/Daytona USA (Revision A).mra` | `/media/fat/_Arcade/` — the 1994 version |
 | `mra/Daytona USA (Deluxe 93).mra` | `/media/fat/_Arcade/` |
 | `mra/Desert Tank.mra` | `/media/fat/_Arcade/` |
@@ -640,7 +752,7 @@ Virtua Cop has its own I/O board, and its ROM, `epr-17181.6`, is inside
 The TGP coprocessor's microcode is not a separate download. It sits inside
 the game's data ROM and the core pulls it out.
 
-**Check you're running the right file.** `Model2_20261113.rbf` has the md5 `584e19efaa932e01ff4593ff05fe72bc`.
+**Check you're running the right file.** `Model2_20261120.rbf` has the md5 `0b691a0237e655bdbaacaca51ab333c3`.
 If yours doesn't match, the usual reason is a second core file in `cores/`.
 MiSTer picks the name that sorts last, and `_` sorts after `.`, so a spare
 `Model2_old.rbf` quietly wins over `Model2.rbf`. Keep exactly one, and keep
@@ -674,6 +786,14 @@ anything you find.
 
 ### New in this release
 
+- **The i960 keeps very small numbers as Intel's chip does** (see *Not just
+  a MAME port* at the top). (`Model2_20261120`.)
+- **The i960's 64-bit float-to-integer conversion follows Intel's manual.**
+  A NaN, a value too big for 32 bits and a value out of range now give
+  the 80960KB's results instead of a clamped 32-bit value. (`Model2_20261120`.)
+- **Timing closes on every clock at all four timing corners (hot, cold, fast
+  and slow), HDMI included.** Earlier releases were checked at the hot
+  corner only. (`Model2_20261120`.)
 - **Virtua Cop's van scene is fixed** (stage 1, GitHub #28). The boss who
   jumps out of the back of the van has his head and arms again: his head is
   about 100 tiny polygons, and the core was leaving the smallest out to save
