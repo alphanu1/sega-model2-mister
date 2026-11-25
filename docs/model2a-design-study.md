@@ -56169,3 +56169,43 @@ is made in X, on XC.acc_addr, only where each kind acts. The behaviour is the bo
 access nothing decodes completes, a read 0, a write lost, the word run; the flag still names it, for
 the overlay. No game makes such an access. Not fitted; whether a seed shows it is the lane's question
 (R1054).
+
+**R1063 -- THE FIRST 2B BUILD CLEAN ON EVERY CLOCK AT ALL FOUR CORNERS: s5962, e41672a6 (R1055-R1062) WITH
+OUR OWN M10K BLOCKS AT s5570's SITES. BOARD-TESTED: EVERYTHING GOOD BUT SONIC'S 30 FPS.** model2b,
+2026-11-24 / 25. Fits and the board.
+
+(Section: §10, after R1062. Authority: the fits' own reports, the board.)
+
+*What was believed (R1054-R1062):* the main clock (clk_sys) failed on ~95% of fits on the SHARC's
+fetched-word family; HDMI failed on most of the rest, inside the framework's scaler.
+
+*What closed it, in order:* R1057 / R1058 (D's decode levels and DAG MLAB reads), R1059 (area: ~100 fit
+ALM), R1060 (cbad a clock late), R1062 (an access outside the map completes in X as on the board, so no
+map test in D -- R1061's stall form moved the failure to st[0] and was dropped). After R1062 no single
+clk_sys family repeats: the worst path differs seed to seed (an SHARC load enable, the write arbiter,
+the wheel input, the host queue), 0.03-0.50 ns.
+
+*HDMI:* the failing paths are inside sys/ascal (o_vcpt_pre3, o_adrs -> o_off, ...), short in distance
+but slow in routing. Tried and not taken: LogicLock (Lite has none: Critical Warning 140003, the regions
+are dropped); the scaler's 3,463 registers pinned at s5334's sites (Error 170012: 4,189 of 4,191 LABs,
+8 of 10 seeds unfittable); 391 output-side registers pinned (places, HDMI worse: -0.750 / -1.584);
+FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY (R131's fix; routing failed on s5910, no
+gain); the sound board's M10K bottom-left (s5950 / s5952 HDMI -0.088 / -0.213); a cell-level copy of
+s5334's placement (a new synthesis differs even in untouched modules: four ways to fail). What the
+corner held on failing seeds: m2_backup's M10K (15-16) beside the character cache (41) or the sound
+board (47); on passing ones the 15 kHz converter's. Taken: OUR M10K blocks (3,181 ram_block sites:
+raster3d, sound, i960, geometry, video, scan15, char cache, ...) at s5570's sites (HDMI +0.142 there),
+back-annotated with quartus_cdb --back_annotate=lc and kept to M10K ram_block lines (no cells, no
+registers): s5960 -1.928, s5961 -0.164 / HDMI -0.169, s5962 CLEAN, s5963 crashed.
+
+*s5962 (SEED 5962, this Model2.qsf):* slow 100C clk_sys +0.175, clk_mem +0.659, clk_i960 +0.898, HDMI
++0.108, h2f +2.352, hold +0.197; slow -40C clk_sys +0.367, clk_mem +0.675, clk_i960 +1.174, HDMI +0.084,
+h2f +2.442, hold +0.157; fast 100C setup >= +3.016, hold +0.130; fast -40C setup >= +3.563, hold +0.097.
+691 retimed registers, none in an SDC-exception instance. ALMs needed 41,233 / 41,910. Model2B.rbf md5
+378ac77c484b85778e325d8f6494fb61.
+
+*Board (Ben, 2026-11-25):* everything good, but Sonic the Fighters and Sonic Championship run at 30 fps
+(known, for a later release). Super GT 24h (locks up) and Last Bronx stay out of the release.
+
+*Crashes:* Quartus 17 crashed on about a third of the 2B fits (STA_MASK_MGR / TDB / TDC / DYN / CUT /
+VPR20KMAIN internal errors), alone as well as two at a time.

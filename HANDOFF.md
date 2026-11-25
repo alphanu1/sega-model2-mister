@@ -1,5 +1,21 @@
 # Handoff
 
+## 2026-11-25: model2b -- the first 2B build clean at all four corners (s5962, R1063), board-tested; not released
+
+`model2b` fast-forwarded to the lane's e41672a6 (R1055-R1062), then Model2.qsf: SEED 5962 and our own
+M10K blocks at s5570's sites (R1063). Pushed. Not released (Ben: a video first).
+
+  * Build: s5962, every clock setup and hold positive at slow 100C / slow -40C / fast 100C / fast -40C
+    (worst: clk_sys +0.175, HDMI +0.084, hold +0.097). Model2B.rbf md5 378ac77c484b85778e325d8f6494fb61
+    (Quartus writes Model2.rbf; the 2B file is named Model2B.rbf for the MRAs' <rbf>Model2B</rbf>).
+  * Board: everything good except Sonic the Fighters and Sonic Championship at 30 fps (to note in the
+    release; fix later). Super GT 24h and Last Bronx stay out (on the board in _Model2B/_notworking).
+  * Behaviour change (R1062): an access outside the SHARC's map completes as on the board (write lost,
+    read 0, MAME's value) instead of running as a NOP; no game in the replays makes one.
+  * What did not work, and why, is in R1054-R1063: per-path retimes at 98.5 % fill, scaler pinning,
+    LogicLock (not in Lite), the routability option, a cell-level placement copy, R1061's stall form.
+  * Next: Ben's video, then the release (README: 2B section, Sonic 30 fps, the out-of-map note).
+
 ## 2026-11-20: model2b -- the RTL back to s5308's, the placement kept (R1054); first push of model2b
 
 `model2b` fast-forwarded to the 2b-pl-u lane (2b-rt2's R1048-R1052 work and the 2b-place settings,
