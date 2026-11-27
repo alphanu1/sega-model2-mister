@@ -145,5 +145,5 @@
     <!-- The left lever on joystick 1 (or a pad's left stick), the right lever
          on joystick 2 or player 1's right stick; Right Shot / Right Dash on
          J6 / J11 (or joystick 2's J4 / J5). MAME's von ports (R1046). -->
-    <buttons names="Left Shot,Left Dash,Right Shot,Start,Coin,Test,Service,Right Dash"/>
+    <buttons names="Left Shot,Left Dash,Right Shot,Start,Coin,Test,Service,Right Dash,Right Lever Up,Right Lever Down,Right Lever Left,Right Lever Right"/>
 </misterromdescription>

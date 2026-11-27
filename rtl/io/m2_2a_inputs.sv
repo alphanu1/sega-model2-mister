@@ -381,7 +381,9 @@ module m2_2a_inputs #(
   wire [7:0] sk2y = {~joy_analog_1[15], joy_analog_1[14:8]};
   // ---- R1046: Virtual-On's right lever -- joystick 1, or player 1's right
   // stick and J6 / J11 (MAME's von: both levers and four buttons on player 1)
-  wire [3:0] vr  = d1[3:0] | adir(joy_ranalog);
+  // P1 digital right lever: J12 Up, J13 Down, J14 Left, J15 Right.
+  wire [3:0] vr_digital = {j0[12], j0[13], j0[14], j0[15]};
+  wire [3:0] vr  = d1[3:0] | adir(joy_ranalog) | vr_digital;
   wire [7:0] vo_in1 = {dg_in1[7:3], 1'b1, dg_in1[1:0]};
   wire [7:0] vo_in2 = ~{vr[1], vr[0], vr[3], vr[2], 2'b00, j1[5] | j0[11], j1[4] | j0[6]};
   // ---- R1046: Dynamite Baseball's bats (BAT1 / BAT2, pedals at rest 0x00)
