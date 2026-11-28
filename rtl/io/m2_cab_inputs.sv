@@ -70,9 +70,21 @@ assign in0 = ~{joystick_0[15], joystick_0[14], joystick_0[8],
 // count, because the real shifter is a set of microswitches and the game reads
 // their pattern. A gamepad has no shifter, so Gear Up and Gear Down step
 // through the five positions and the same table converts.
-logic [2:0] gear;                    // 0=N, 1..4
+// DIRECT GEARS (GitHub #42): Gear 1..Gear 4 (joystick_0[19:16], the J1 line's
+// last four) follow an H-shifter. While one is held that gear is engaged, and
+// with none held the shifter is between gates: neutral. Neutral is therefore
+// a circumstance of the lever, not a button (Sega Rally's practice-mode code
+// for its fourth track needs it). If two are held on the same cycle the lower
+// gear wins. Gear Up / Down keep their own stepping gear, neutral out of
+// reset, and it is what the gearbox reads whenever no direct button is held:
+// a pad user, who has no direct buttons, gets the stepping gearbox exactly as
+// before, and an H-shifter user who never presses Gear Up / Down gets neutral
+// between gates. Someone using both paddles and an H-shifter sees the
+// stepping gear between gates.
+logic [2:0] gear;                    // the stepping gear: 0=N, 1..4
 wire        gup   = joystick_0[12];
 wire        gdn   = joystick_0[13];
+wire  [3:0] gsel  = joystick_0[19:16];
 logic       gup_d, gdn_d;
 always_ff @(posedge clk or negedge rst_n) begin
 	if (!rst_n) begin
@@ -83,9 +95,17 @@ always_ff @(posedge clk or negedge rst_n) begin
 		if (gdn && !gdn_d && gear != 3'd0) gear <= gear - 3'd1;
 	end
 end
+logic [2:0] gear_eng;                // the gear the gearbox reports
+always_comb begin
+	if      (gsel[0]) gear_eng = 3'd1;
+	else if (gsel[1]) gear_eng = 3'd2;
+	else if (gsel[2]) gear_eng = 3'd3;
+	else if (gsel[3]) gear_eng = 3'd4;
+	else              gear_eng = gear;
+end
 logic [2:0] gearval;
 always_comb begin
-	case (gear)
+	case (gear_eng)
 		3'd1:    gearval = 3'd2;
 		3'd2:    gearval = 3'd1;
 		3'd3:    gearval = 3'd6;
