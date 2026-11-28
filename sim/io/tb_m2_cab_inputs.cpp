@@ -535,7 +535,108 @@ int main(int argc, char **argv) {
   printf("   %llu trigger cases, %llu checks, %llu failures\n", (unsigned long long)trig_n,
          (unsigned long long)(checks - k2), (unsigned long long)(mism - c4));
 
-  bool ok = (mism == 0) && n_wa > 100000 && n_wb > 100000 && n_wcheck > 100000 && d > 1000 && m80.n_tstep > 10 && m1.n_tstep > 1000 && m1.n_slew > 1000
+  // Part G: GitHub #42, direct gear buttons that follow an H-shifter. Gear 1..Gear 4
+  // are joystick_0[16..19]. Daytona's in1 bits 6:4 carry MAME's gearvalue[] =
+  // {0, 2, 1, 6, 5} for N, 1, 2, 3, 4. Written from the request, not from the
+  // RTL: while a direct button is held that gear is engaged; with none held the
+  // lever is between gates and the gearbox reports the stepping gear (Gear Up /
+  // Down, neutral out of reset), so a lever that never uses Gear Up / Down gets
+  // neutral between gates; two held on one cycle give the lower gear; bit 20 is
+  // not a button. Desert Tank's in1 and Daytona's in0 must not move at all.
+  printf("== part G: direct gear buttons follow the shifter (GitHub #42)\n");
+  uint64_t g_n = 0, g_fail = 0, g0 = mism;
+  auto gearv = [&]() { return int((t->in1 >> 4) & 7); };
+  static const int GV[5] = {0, 2, 1, 6, 5};
+  auto gwant = [&](const char *n, int got, int w, int a, int b) {
+    ++checks; ++g_n;
+    if (got != w) { ++mism; if (g_fail++ < 20)
+      printf("   FAIL %s (%d,%d): in1 gear field %d, want %d\n", n, a, b, got, w); }
+  };
+  auto greset = [&](uint32_t held) {   // the RTL's reset is asynchronous; `held` is already down
+    t->is_desert = 0; t->joystick_0 = held;
+    t->rst_n = 0; t->eval(); areset(); edge(false); t->rst_n = 1; settle(false);
+  };
+  const uint32_t UP = 1u << 12, DN = 1u << 13;
+  auto gb = [&](int g) { return 1u << (15 + g); };                 // gear 1..4
+  auto press = [&](uint32_t b) { t->joystick_0 = b; settle(false); t->joystick_0 = 0; settle(false); };
+  greset(0);
+  gwant("out of reset: neutral", gearv(), GV[0], 0, 0);
+  // each gate: engaged while held, neutral when the lever leaves it
+  for (int g = 1; g <= 4; ++g) {
+    greset(0);
+    t->joystick_0 = gb(g); settle(false);
+    gwant("held: engaged", gearv(), GV[g], g, 0);
+    t->joystick_0 = 0; settle(false);
+    gwant("released: neutral", gearv(), GV[0], g, 0);
+  }
+  // the lever moving from any gate to any gate, straight across and through neutral
+  for (int from = 1; from <= 4; ++from)
+    for (int to = 1; to <= 4; ++to) {
+      greset(0);
+      t->joystick_0 = gb(from); settle(false);
+      t->joystick_0 = gb(to); settle(false);
+      gwant("gate to gate", gearv(), GV[to], from, to);
+      t->joystick_0 = 0; settle(false);
+      gwant("then neutral", gearv(), GV[0], from, to);
+      t->joystick_0 = gb(from); settle(false);
+      t->joystick_0 = 0; settle(false);
+      gwant("through neutral", gearv(), GV[0], from, to);
+      t->joystick_0 = gb(to); settle(false);
+      gwant("into the next gate", gearv(), GV[to], from, to);
+      t->joystick_0 = 0; settle(false);
+    }
+  // two held on one cycle: the lower gear wins
+  for (int a = 1; a <= 4; ++a)
+    for (int b = a + 1; b <= 4; ++b) {
+      greset(0); t->joystick_0 = gb(a) | gb(b); settle(false);
+      gwant("two held: lower wins", gearv(), GV[a], a, b);
+      t->joystick_0 = 0; settle(false);
+    }
+  // held through reset: engaged at once
+  for (int g = 1; g <= 4; ++g) {
+    greset(gb(g));
+    gwant("held at reset", gearv(), GV[g], g, 0);
+    t->joystick_0 = 0; settle(false);
+    gwant("then released: neutral", gearv(), GV[0], g, 0);
+  }
+  // Gear Up / Down keep their stepping gear; a direct button overrides it while held,
+  // and it shows again between gates
+  for (int trial = 0; trial < 40; ++trial) {
+    greset(0);
+    int cur = 0;
+    for (int k = 0; k < 12; ++k) {
+      int what = rnd(3);
+      if (what == 0) { press(UP); cur = std::min(cur + 1, 4); }
+      else if (what == 1) { press(DN); cur = std::max(cur - 1, 0); }
+      else {
+        int g = 1 + rnd(4);
+        t->joystick_0 = gb(g); settle(false);
+        gwant("stepping gear overridden while held", gearv(), GV[g], trial, k);
+        t->joystick_0 = gb(g) | UP; settle(false);           // a step while a gate is held
+        gwant("held gate beats a step", gearv(), GV[g], trial, k);
+        cur = std::min(cur + 1, 4);
+        t->joystick_0 = 0; settle(false);
+      }
+      gwant("between gates: the stepping gear", gearv(), GV[cur], trial, k);
+    }
+  }
+  // joystick_0[20] is not a button; Desert Tank's in1 and Daytona's in0 do not move
+  for (int is_d = 0; is_d < 2; ++is_d) {
+    greset(0); t->is_desert = is_d; t->joystick_0 = 0; settle(is_d != 0);
+    int base_in1 = t->in1, base_in0 = t->in0;
+    for (uint32_t m = 1; m < 32; ++m) {
+      t->joystick_0 = m << 16; settle(is_d != 0);
+      if (is_d) gwant("Desert Tank in1 unchanged", t->in1, base_in1, int(m), 0);
+      gwant("in0 unchanged", t->in0, base_in0, int(m), is_d);
+    }
+    t->joystick_0 = 0;
+  }
+  greset(0); t->joystick_0 = 1u << 20; settle(false);
+  gwant("bit 20 is not a button", gearv(), GV[0], 20, 0);
+  t->is_desert = 0; t->joystick_0 = 0; settle(false);
+  printf("   %llu gear checks, %llu failures\n", (unsigned long long)g_n, (unsigned long long)(mism - g0));
+
+  bool ok = (mism == 0) && g_n > 300 && n_wa > 100000 && n_wb > 100000 && n_wcheck > 100000 && d > 1000 && m80.n_tstep > 10 && m1.n_tstep > 1000 && m1.n_slew > 1000
             && n_tuse > 100000 && n_wheel > 100000 && n_setrev > 100 && n_vr4 > 10;
   printf("%s\n", ok ? "PASS" : "FAIL");
   delete t;

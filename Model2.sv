@@ -425,7 +425,7 @@ localparam CONF_STR = {
 	// between the two R items it silently broke everything after it -- the OSD
 	// Reset stopped pulsing status[0], measured as a reset-edge counter that
 	// ignored the button entirely.
-	"J1,Coin,Start,Test,Service,VR1 Red,VR4 Green,Accel,Brake,Gear Up,Gear Down,VR2 Blue,VR3 Yellow;",
+	"J1,Coin,Start,Test,Service,VR1 Red,VR4 Green,Accel,Brake,Gear Up,Gear Down,VR2 Blue,VR3 Yellow,Gear 1,Gear 2,Gear 3,Gear 4;",
 	"v,0;",
 	"V,v",`BUILD_DATE
 };

@@ -991,7 +991,7 @@ sky; the "G" of GAME OVER is back; and 15 kHz CRT support with its own MRAs.
 |---|---|
 | Steer | left stick, the d-pad, or a wheel (see below) |
 | Accelerate / brake | right stick up / down, or the `Accel` and `Brake` buttons |
-| Gears | `Gear Up` / `Gear Down` |
+| Gears | `Gear Up` / `Gear Down` step through the gears. `Gear 1` to `Gear 4` follow an H-shifter (GitHub #42): map the four gates in MiSTer's *Define joystick buttons*, they come last in the list. While one is held that gear is engaged, and with none held the lever is between gates, which is neutral. If two are held the lower gear wins. `Gear Up` / `Gear Down` keep their own stepping gear, neutral at power-up, and the gearbox reads it whenever no direct button is held, so a pad is unchanged and someone using both paddles and an H-shifter sees the stepping gear between gates. An MRA that names its own buttons (Desert Tank, Virtua Cop, Sega Rally) only shows the buttons it lists, so the four don't appear in *Define joystick buttons* for those games until their `<buttons names>` list is extended. |
 | View buttons | `VR1 Red`, `VR2 Blue`, `VR3 Yellow`, `VR4 Green` |
 | Start, Coin | `Start`, `Coin` |
 | Test, Service | can be mapped in MiSTer's input settings |
