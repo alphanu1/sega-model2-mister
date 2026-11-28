@@ -296,7 +296,9 @@ static W4 want_b2n(int id) {
     w.an[0] = b(j0, 6) ? 0xff : t->trig_rt;
     w.an[1] = b(j1, 6) ? 0xff : 0x00;
   } else {   // 0x28
-    const uint32_t r = j1 | adir(t->joy_ranalog);
+    const uint32_t r = j1 | adir(t->joy_ranalog) |
+                       (b(j0, 12) << 3) | (b(j0, 13) << 2) |
+                       (b(j0, 14) << 1) | b(j0, 15);
     w.in1 = lo(b(j0, 4) << 0 | b(j0, 5) << 1 | dirs(j0));
     w.in2 = lo((b(j1, 4) | b(t->joystick_0, 6)) << 0 | (b(j1, 5) | b(t->joystick_0, 11)) << 1 | dirs(r));
   }
@@ -380,6 +382,39 @@ static void bel_sweep() {
               (unsigned long long)sw_checks, (unsigned long long)sw_mism, vals[0], vals[1], vals[2], vals[3], ends);
 }
 
+// Virtual-On: exercise every digital right-lever combination and both legacy paths.
+static void von_digital_lever() {
+  t->game = 0x28;
+  t->joystick_1 = 0;
+  t->joy_analog = t->joy_analog_1 = t->joy_ranalog = 0;
+  const int masks[4] = {0x20, 0x10, 0x80, 0x40};
+  for (int n = 0; n < 16; ++n) {
+    int mask = 0;
+    for (int k = 0; k < 4; ++k) if (n & (1 << k)) mask |= masks[k];
+    t->joystick_0 = (uint32_t(n) << 12) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 11);
+    tick();
+    cmp("von digital right", 0x28, n, t->b_in2, 0xff ^ (mask | 3));
+    cmp("von independent left", 0x28, n, t->b_in1, 0xdc);
+  }
+  t->joystick_0 = 0;
+  t->joystick_1 = 1u << 1;
+  tick();
+  cmp("von P2 left", 0x28, 0, t->b_in2, 0x7f);
+  t->joystick_1 = 0;
+  t->joy_ranalog = 0x8000;
+  tick();
+  cmp("von right analog up", 0x28, 0, t->b_in2, 0xdf);
+  t->joystick_0 = 1u << 15;
+  tick();
+  cmp("von mixed right inputs", 0x28, 0, t->b_in2, 0x9f);
+  t->joy_ranalog = 0;
+  t->game = 0x00;
+  tick();
+  cmp("non-von ignores J15", 0x00, 0, t->b_in2, 0xff);
+  t->joystick_0 = 0;
+  tick();
+}
+
 int main(int argc, char **argv) {
   Verilated::commandArgs(argc, argv);
   uint64_t N = 20000000;
@@ -391,6 +426,7 @@ int main(int argc, char **argv) {
   t->ps2_mouse = 0; t->mouse_sel = 0;   // R1016
   for (int i = 0; i < 4; ++i) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
   t->rst_n = 1; gear = 0;
+  von_digital_lever();
   bel_sweep();   // R1016
   t->game = 0;
   int game = 0;
